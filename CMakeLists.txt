@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GoSurvey LANGUAGES CXX C)
+project(GoSurvey VERSION 0.2.0 LANGUAGES CXX C)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -86,7 +86,7 @@ endif()
 target_compile_definitions(GoSurvey PRIVATE GLEW_STATIC)
 
 if(WIN32)
-  set_target_properties(GoSurvey PROPERTIES WIN32_EXECUTABLE TRUE)
+  set_target_properties(GoSurvey PROPERTIES OUTPUT_NAME "GoSurvey-${PROJECT_VERSION}" WIN32_EXECUTABLE TRUE)
   if(MSVC)
     target_link_options(GoSurvey PRIVATE /ENTRY:mainCRTStartup)
   elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
