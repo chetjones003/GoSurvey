@@ -5356,7 +5356,7 @@ bool LoadApplicationFont() {
   cfg.OversampleH = 2;
   cfg.OversampleV = 1;
   for (const char* path : candidates) {
-    ImFont* f = io.Fonts->AddFontFromFileTTF(path, 17.f, &cfg);
+    ImFont* f = io.Fonts->AddFontFromFileTTF(path, 18.5f, &cfg);
     if (f) {
       io.FontDefault = f;
       return true;

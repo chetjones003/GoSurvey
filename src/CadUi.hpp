@@ -29,13 +29,15 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
 /// Writes framebuffer pixel size and cursor world position. When object snap finds a hit, cursor and
 /// \p out_snap reflect the snapped point; otherwise raw hover coordinates.
 void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, std::vector<std::string>& log,
-                         float* panX, float* panY, float* zoom, float* outCursorX, float* outCursorY,
-                         float* outCursorRawX, float* outCursorRawY, int* outFbW, int* outFbH,
+                         char* cmdBuf, int cmdBufSize, float* panX, float* panY, float* zoom, float* outCursorX,
+                         float* outCursorY, float* outCursorRawX, float* outCursorRawY, int* outFbW, int* outFbH,
                          bool object_snap_enabled, CadSnap::Hit* out_snap);
 
 void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 
 void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
+
+void DrawSettingsPanel(AppCommandState& cmd);
 
 void DrawImportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 
