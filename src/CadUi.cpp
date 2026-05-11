@@ -1753,8 +1753,6 @@ void DrawPropertiesPanel(AppCommandState& cmd) {
 namespace {
 
 static bool gPolarTrackingEnabled = false;
-static bool gLayer0SurveyVisible = true;
-static bool gLayerSvyFieldVisible = true;
 
 void PushModeToggleButtonColors(bool on) {
   if (on) {
@@ -2049,7 +2047,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   ImGui::SetNextItemWidth(std::max(64.f, inputAvailW - sendBtnW - st.ItemSpacing.x));
   ImGuiInputTextFlags flags =
       ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
-  const bool exec = ImGui::InputTextWithHint("CommandLineInput", CommandInputHint(cmd), cmdBuf,
+  const bool exec = ImGui::InputTextWithHint("##CommandLineInput", CommandInputHint(cmd), cmdBuf,
                                              static_cast<size_t>(cmdBufSize), flags, CommandLineInputCallback, nullptr);
   ImGui::SetItemDefaultFocus();
   ImGui::SameLine(0, st.ItemSpacing.x);
@@ -2157,24 +2155,6 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     PopModeToggleButtonColors(on);
     ItemHelpTooltip("Polar tracking (UI only for now)");
     ImGui::SameLine(0, 4);
-  }
-  {
-    const bool on = gLayer0SurveyVisible;
-    PushModeToggleButtonColors(on);
-    if (ImGui::Button("0", ImVec2(0.f, statusBtnH)))
-      gLayer0SurveyVisible = !gLayer0SurveyVisible;
-    PopModeToggleButtonColors(on);
-    ItemHelpTooltip("Layer 0 — survey (quick toggle; placeholder)");
-    ImGui::SameLine(0, 4);
-  }
-  {
-    const bool on = gLayerSvyFieldVisible;
-    PushModeToggleButtonColors(on);
-    if (ImGui::Button("SVY", ImVec2(0.f, statusBtnH)))
-      gLayerSvyFieldVisible = !gLayerSvyFieldVisible;
-    PopModeToggleButtonColors(on);
-    ItemHelpTooltip("SVY — field (quick toggle; placeholder)");
-    ImGui::SameLine(0, 6);
   }
 
   DrawPlotScaleCombo(cmd);
