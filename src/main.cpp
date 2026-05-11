@@ -731,8 +731,9 @@ int main() {
 
     std::vector<float> surveyMarkers;
     if (!cmd.surveyPoints.empty()) {
-      const float halfH = (1.f / std::max(zoom, 1.e-4f)) * 50.f;
-      AppendAllSurveyPointMarkers(halfH, fbH, cmd.surveyPoints, &surveyMarkers);
+      const float surveyCrossHalf =
+          SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
+      AppendAllSurveyPointMarkers(surveyCrossHalf, cmd.surveyPoints, &surveyMarkers);
     }
 
     CadExtendedGeometryInput ext{};

@@ -263,6 +263,44 @@ struct AppCommandState {
 
   float defaultPlottedTextHeightInches = 0.125f;
 
+  /// Survey point X marker: horizontal span on paper (inches) → world half-extent = 0.5 × span × MUP (not zoom).
+
+  float surveyPointCrossSpanPlottedInches = 0.14f;
+
+  bool surveyPointShowIdInViewport = false;
+
+  /// Plotted text height (inches) for survey point ID labels when \ref surveyPointShowIdInViewport is true.
+
+  float surveyPointLabelPlottedHeightInches = 0.10f;
+
+  /// Viewport screen-size clamps for TEXT annotation rendering (from paper height × MUP).
+
+  float viewportTextMinPx = 8.f;
+
+  float viewportTextMaxPx = 160.f;
+
+  /// Viewport clamps for MTEXT box content.
+
+  float viewportMtextMinPx = 8.f;
+
+  float viewportMtextMaxPx = 128.f;
+
+  /// Viewport clamps for aligned dimension value text.
+
+  float viewportDimTextMinPx = 8.f;
+
+  float viewportDimTextMaxPx = 160.f;
+
+  /// Dimension extension / dimension line stroke width in screen pixels.
+
+  float viewportDimExtLinePx = 1.0f;
+
+  float viewportDimDimLinePx = 1.25f;
+
+  /// Scales arrow length derived from annotation height (1 = default).
+
+  float viewportDimArrowScale = 1.f;
+
 
 
   /// World XY added on DXF export when CAD was shifted to a local origin for rendering precision (large imports).

@@ -8,10 +8,10 @@
 #include <cstring>
 #include <fstream>
 
-float SurveyCrossHalfExtentWorld(float orthoHalfHeightWorld, int fbHeightPx, float pixelHalfArm) {
-  const float vph = std::max(static_cast<float>(fbHeightPx), 1.f);
-  const float worldPerPixel = (2.f * orthoHalfHeightWorld) / vph;
-  return pixelHalfArm * worldPerPixel;
+float SurveyPointCrossHalfWorldFromPaper(float crossSpanPlottedInches, float modelUnitsPerPlottedInch) {
+  const float mup = std::max(modelUnitsPerPlottedInch, 1.e-6f);
+  const float span = std::max(crossSpanPlottedInches, 1.e-6f);
+  return 0.5f * span * mup;
 }
 
 void AppendSurveyPointCrossVertices(float easting, float northing, float elevationZ, float halfExtentWorld,
@@ -36,12 +36,12 @@ void AppendSurveyPointCrossVertices(float easting, float northing, float elevati
   outLines->push_back(z);
 }
 
-void AppendAllSurveyPointMarkers(float orthoHalfHeightWorld, int fbHeightPx,
-                                 const std::vector<SurveyPoint>& pts, std::vector<float>* outLines) {
+void AppendAllSurveyPointMarkers(float crossHalfWorld, const std::vector<SurveyPoint>& pts,
+                                 std::vector<float>* outLines) {
   if (!outLines || pts.empty())
     return;
   constexpr float kBaseZ = 0.055f;
-  const float h = SurveyCrossHalfExtentWorld(orthoHalfHeightWorld, fbHeightPx);
+  const float h = std::max(crossHalfWorld, 1.e-8f);
   for (const auto& p : pts) {
     const float z = kBaseZ + p.elevation * 1.e-6f;
     AppendSurveyPointCrossVertices(p.easting, p.northing, z, h, outLines);

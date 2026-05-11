@@ -1717,12 +1717,11 @@ void DrawAnnotationGeometryOnly(const AppCommandState& cmd, const std::vector<Se
   ImGui::TextDisabled("Select a single TEXT or MTEXT to edit content and box here.");
 }
 
-int PickSurveyPointIndex(const std::vector<SurveyPoint>& pts, float wx, float wy, float orthoHalfHeightWorld,
-                         float viewportHeightPx) {
+int PickSurveyPointIndex(const std::vector<SurveyPoint>& pts, float wx, float wy, float surveyCrossHalfWorld,
+                         float viewportHeightPx, float orthoHalfHeightWorld) {
   if (pts.empty())
     return -1;
-  const int fbH = static_cast<int>(std::max(1.f, std::floor(viewportHeightPx)));
-  const float arm = SurveyCrossHalfExtentWorld(orthoHalfHeightWorld, fbH);
+  const float arm = std::max(surveyCrossHalfWorld, 1.e-8f);
   const float tol = CadSnap::WorldToleranceFromPixels(viewportHeightPx, orthoHalfHeightWorld, 12.f);
   const float radius = std::max(arm, tol) * 1.38f;
   const float r2 = radius * radius;
@@ -2495,6 +2494,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const float worldRight = halfW + *panX;
   const float worldBottom = -halfH + *panY;
   const float worldTop = halfH + *panY;
+  const float surveyCrossHalfW =
+      SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
 
   if (cmd.mtextGripAnnotationIndex >= 0 && hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
     const float u = mx / std::max(avail.x, 1.f);
@@ -2649,7 +2650,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const int hitIx =
           cmd.surveyPoints.empty()
               ? -1
-              : PickSurveyPointIndex(cmd.surveyPoints, rawPickX, rawPickY, halfH, avail.y);
+              : PickSurveyPointIndex(cmd.surveyPoints, rawPickX, rawPickY, surveyCrossHalfW, avail.y, halfH);
       if (hitIx >= 0) {
         ClearCadSelection(cmd);
         ApplySurveyPointClickSelection(cmd, hitIx, keyShift, &log);
@@ -2790,7 +2791,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
       if (!handled) {
         if (!cmd.surveyPoints.empty()) {
-          const int hitIx = PickSurveyPointIndex(cmd.surveyPoints, rawPickX, rawPickY, halfH, avail.y);
+          const int hitIx = PickSurveyPointIndex(cmd.surveyPoints, rawPickX, rawPickY, surveyCrossHalfW, avail.y, halfH);
           if (hitIx >= 0) {
             ClearCadSelection(cmd);
             ApplySurveyPointClickSelection(cmd, hitIx, keyShift, &log);
@@ -2845,7 +2846,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (a.kind == CadAnnotation::Kind::Text) {
         ImVec2 sp{};
         worldToScreen(a.insX, a.insY, &sp);
-        const float fontPx = std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), 10.f, 160.f);
+        const float fontPx =
+            std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), cmd.viewportTextMinPx, cmd.viewportTextMaxPx);
         float rgba[4];
         if (attrPtr)
           ResolveEntityColorForViewport(*attrPtr, 230 / 255.f, 232 / 255.f, 238 / 255.f, rgba);
@@ -2882,11 +2884,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           o->x = imgPos.x + u * avail.x;
           o->y = imgPos.y + v * avail.y;
         };
-        const float fontPx = std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), 10.f, 160.f);
-        // Extension lines: fixed screen thickness (never scales with annotation). Dimension segment + arrows use
-        // separate stroke so arrow outline weight can track text if needed later.
-        constexpr float kDimExtLinePx = 1.0f;
-        constexpr float kDimDimLinePx = 1.25f;
+        const float fontPx =
+            std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), cmd.viewportDimTextMinPx, cmd.viewportDimTextMaxPx);
+        const float extPx = std::clamp(cmd.viewportDimExtLinePx, 0.25f, 16.f);
+        const float dimLnPx = std::clamp(cmd.viewportDimDimLinePx, 0.25f, 16.f);
         const float gap = std::clamp(0.012f * meas, 1.e-5f * meas, 0.12f * meas);
         const float over = std::clamp(0.02f * meas, 1.e-5f * meas, 0.1f * meas);
         const float leg1 = std::hypot(sx1 - a.dimExt1X, sy1 - a.dimExt1Y);
@@ -2900,12 +2901,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImVec2 A{}, B{};
         ws(ex1, ey1, &A);
         ws(sx1 + nx * over, sy1 + ny * over, &B);
-        dl->AddLine(A, B, lineCol, kDimExtLinePx);
+        dl->AddLine(A, B, lineCol, extPx);
         ws(ex2, ey2, &A);
         ws(sx2 + nx * over, sy2 + ny * over, &B);
-        dl->AddLine(A, B, lineCol, kDimExtLinePx);
+        dl->AddLine(A, B, lineCol, extPx);
         // Arrow length in world units tracks annotation height (drawing scale); tiny floor from meas for readability.
-        const float alenW = std::max(0.32f * hWorld, 0.012f * meas);
+        const float alenW =
+            std::max(cmd.viewportDimArrowScale * 0.32f * hWorld, cmd.viewportDimArrowScale * 0.012f * meas);
         const float dlen = std::hypot(sx2 - sx1, sy2 - sy1);
         if (dlen > 1.e-6f) {
           const float ux = (sx2 - sx1) / dlen;
@@ -2926,7 +2928,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           if (std::hypot(base2x - base1x, base2y - base1y) > 1.e-5f) {
             ws(base1x, base1y, &A);
             ws(base2x, base2y, &B);
-            dl->AddLine(A, B, lineCol, kDimDimLinePx);
+            dl->AddLine(A, B, lineCol, dimLnPx);
           }
           const float hw = alenUse * 0.48f;
           const float ox = -uy * hw;
@@ -2955,7 +2957,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float ry0 = std::min(sa.y, sb.y);
         const float rx1 = std::max(sa.x, sb.x);
         const float ry1 = std::max(sa.y, sb.y);
-        const float fontPx = std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), 10.f, 128.f);
+        const float fontPx =
+            std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), cmd.viewportMtextMinPx, cmd.viewportMtextMaxPx);
         const float wrapW = std::max(8.f, rx1 - rx0 - 8.f);
         ImU32 col = colFallback;
         if (attrPtr) {
@@ -3069,6 +3072,32 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         dl->AddRect(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf), kGripBorder,
                     0.f, 0, 1.f);
       }
+    }
+  }
+
+  if (!cmd.surveyPoints.empty() && cmd.surveyPointShowIdInViewport) {
+    ImDrawList* dlS = ImGui::GetWindowDrawList();
+    const float worldPerPxYL = (worldTop - worldBottom) / std::max(avail.y, 1.f);
+    const float hWorldL =
+        cmd.surveyPointLabelPlottedHeightInches * std::max(cmd.modelUnitsPerPlottedInch, 1.e-6f);
+    const float fontPxL =
+        std::clamp(hWorldL / std::max(worldPerPxYL, 1.e-6f), cmd.viewportTextMinPx, cmd.viewportTextMaxPx);
+    ImFont* fontL = ImGui::GetFont();
+    constexpr ImU32 kPtIdCol = IM_COL32(255, 248, 200, 255);
+    auto wts = [&](float wx, float wy, ImVec2* o) {
+      const float denx = worldRight - worldLeft + 1e-12f;
+      const float deny = worldTop - worldBottom + 1e-12f;
+      const float u = (wx - worldLeft) / denx;
+      const float v = (worldTop - wy) / deny;
+      o->x = imgPos.x + u * avail.x;
+      o->y = imgPos.y + v * avail.y;
+    };
+    for (const auto& p : cmd.surveyPoints) {
+      ImVec2 sp{};
+      wts(p.easting, p.northing, &sp);
+      char idb[32];
+      std::snprintf(idb, sizeof(idb), "%d", p.id);
+      dlS->AddText(fontL, fontPxL, ImVec2(sp.x + 6.f, sp.y - fontPxL * 0.35f), kPtIdCol, idb);
     }
   }
 
@@ -3247,7 +3276,7 @@ void DrawSettingsPanel(AppCommandState& cmd) {
   if (!cmd.showSettingsWindow)
     return;
 
-  ImGui::SetNextWindowSize(ImVec2(520, 400), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(560, 460), ImGuiCond_FirstUseEver);
   bool open = cmd.showSettingsWindow;
   if (!ImGui::Begin("Settings", &open)) {
     cmd.showSettingsWindow = open;
@@ -3256,22 +3285,67 @@ void DrawSettingsPanel(AppCommandState& cmd) {
   }
   cmd.showSettingsWindow = open;
 
-  ImGui::TextUnformatted("Viewport (Drawing1)");
-  ImGui::Separator();
-  ImGui::TextUnformatted("CAD crosshair");
-  float xc[3] = {cmd.viewportCrosshairR, cmd.viewportCrosshairG, cmd.viewportCrosshairB};
-  if (ImGui::ColorEdit3("Color##xhair", xc)) {
-    cmd.viewportCrosshairR = xc[0];
-    cmd.viewportCrosshairG = xc[1];
-    cmd.viewportCrosshairB = xc[2];
+  if (ImGui::BeginTabBar("##settings_tabs")) {
+    if (ImGui::BeginTabItem("Crosshair")) {
+      ImGui::TextUnformatted("CAD crosshair (Drawing1 viewport)");
+      ImGui::Separator();
+      float xc[3] = {cmd.viewportCrosshairR, cmd.viewportCrosshairG, cmd.viewportCrosshairB};
+      if (ImGui::ColorEdit3("Color##xhair", xc)) {
+        cmd.viewportCrosshairR = xc[0];
+        cmd.viewportCrosshairG = xc[1];
+        cmd.viewportCrosshairB = xc[2];
+      }
+      ImGui::DragFloat("Reach X (fraction of viewport width)", &cmd.viewportCrosshairArmFracX, 0.002f, 0.002f, 0.5f,
+                       "%.3f");
+      ImGui::DragFloat("Reach Y (fraction of viewport height)", &cmd.viewportCrosshairArmFracY, 0.002f, 0.002f, 0.5f,
+                       "%.3f");
+      ImGui::DragFloat("Pickbox half-width (px)", &cmd.viewportCrosshairPickHalfPxX, 0.15f, 1.f, 32.f, "%.1f");
+      ImGui::DragFloat("Pickbox half-height (px)", &cmd.viewportCrosshairPickHalfPxY, 0.15f, 1.f, 32.f, "%.1f");
+      ImGui::DragFloat("Line thickness (px)", &cmd.viewportCrosshairHairPx, 0.05f, 0.75f, 4.f, "%.2f");
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Survey points")) {
+      ImGui::TextUnformatted(
+          "Markers use plot scale (Drawing scale / PSCALE), not zoom — same idea as annotation height.");
+      ImGui::Separator();
+      ImGui::DragFloat("Cross span (plotted inches)", &cmd.surveyPointCrossSpanPlottedInches, 0.002f, 0.02f, 2.f,
+                       "%.3f");
+      ItemHelpTooltip("Horizontal span of the X on paper: world size = span × model units per plotted inch.");
+      ImGui::Checkbox("Show point ID in viewport", &cmd.surveyPointShowIdInViewport);
+      ImGui::DragFloat("ID label height (plotted inches)", &cmd.surveyPointLabelPlottedHeightInches, 0.001f, 0.04f,
+                       0.5f, "%.3f");
+      ImGui::TextDisabled("ID label screen size also uses TEXT min/max px (Text & MTEXT tab).");
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Text & MTEXT")) {
+      ImGui::TextUnformatted(
+          "After paper height is converted to pixels, clamp keeps labels readable at extreme zoom.");
+      ImGui::Separator();
+      ImGui::DragFloat("TEXT min px", &cmd.viewportTextMinPx, 0.25f, 4.f, 48.f, "%.1f");
+      ImGui::DragFloat("TEXT max px", &cmd.viewportTextMaxPx, 0.5f, 24.f, 320.f, "%.1f");
+      if (cmd.viewportTextMaxPx < cmd.viewportTextMinPx)
+        cmd.viewportTextMaxPx = cmd.viewportTextMinPx;
+      ImGui::DragFloat("MTEXT min px", &cmd.viewportMtextMinPx, 0.25f, 4.f, 48.f, "%.1f");
+      ImGui::DragFloat("MTEXT max px", &cmd.viewportMtextMaxPx, 0.5f, 24.f, 320.f, "%.1f");
+      if (cmd.viewportMtextMaxPx < cmd.viewportMtextMinPx)
+        cmd.viewportMtextMaxPx = cmd.viewportMtextMinPx;
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Dimensions")) {
+      ImGui::TextUnformatted("Aligned dimension viewport appearance (screen pixels unless noted).");
+      ImGui::Separator();
+      ImGui::DragFloat("Extension line px", &cmd.viewportDimExtLinePx, 0.05f, 0.25f, 8.f, "%.2f");
+      ImGui::DragFloat("Dimension line px", &cmd.viewportDimDimLinePx, 0.05f, 0.25f, 8.f, "%.2f");
+      ImGui::DragFloat("Arrow size scale", &cmd.viewportDimArrowScale, 0.02f, 0.2f, 4.f, "%.2f");
+      ItemHelpTooltip("Multiplies arrow length derived from dimension text height (paper × plot scale).");
+      ImGui::DragFloat("Value text min px", &cmd.viewportDimTextMinPx, 0.25f, 4.f, 48.f, "%.1f");
+      ImGui::DragFloat("Value text max px", &cmd.viewportDimTextMaxPx, 0.5f, 24.f, 320.f, "%.1f");
+      if (cmd.viewportDimTextMaxPx < cmd.viewportDimTextMinPx)
+        cmd.viewportDimTextMaxPx = cmd.viewportDimTextMinPx;
+      ImGui::EndTabItem();
+    }
+    ImGui::EndTabBar();
   }
-  ImGui::DragFloat("Reach X (fraction of viewport width)", &cmd.viewportCrosshairArmFracX, 0.002f, 0.002f, 0.5f,
-                   "%.3f");
-  ImGui::DragFloat("Reach Y (fraction of viewport height)", &cmd.viewportCrosshairArmFracY, 0.002f, 0.002f, 0.5f,
-                   "%.3f");
-  ImGui::DragFloat("Pickbox half-width (px)", &cmd.viewportCrosshairPickHalfPxX, 0.15f, 1.f, 32.f, "%.1f");
-  ImGui::DragFloat("Pickbox half-height (px)", &cmd.viewportCrosshairPickHalfPxY, 0.15f, 1.f, 32.f, "%.1f");
-  ImGui::DragFloat("Line thickness (px)", &cmd.viewportCrosshairHairPx, 0.05f, 0.75f, 4.f, "%.2f");
 
   ImGui::End();
 }

@@ -27,15 +27,16 @@ struct CreatePointsOptions {
 
 struct AppCommandState;
 
-/// Half-length of each diagonal arm of the X marker in world units (constant apparent size on screen).
-float SurveyCrossHalfExtentWorld(float orthoHalfHeightWorld, int fbHeightPx, float pixelHalfArm = 9.f);
+/// Half of horizontal span of the X in world units from paper span (inches) and plot scale (MUP).
+
+float SurveyPointCrossHalfWorldFromPaper(float crossSpanPlottedInches, float modelUnitsPerPlottedInch);
 
 /// Appends two GL_LINES segments (x,y,z triplets) forming an X centered at the point.
 void AppendSurveyPointCrossVertices(float easting, float northing, float elevationZ, float halfExtentWorld,
                                     std::vector<float>* outLines);
 
-void AppendAllSurveyPointMarkers(float orthoHalfHeightWorld, int fbHeightPx,
-                                 const std::vector<SurveyPoint>& pts, std::vector<float>* outLines);
+void AppendAllSurveyPointMarkers(float crossHalfWorld, const std::vector<SurveyPoint>& pts,
+                                 std::vector<float>* outLines);
 
 void ResetCreatePointsNextIdFromSettings(AppCommandState& st);
 
