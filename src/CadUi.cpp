@@ -172,6 +172,8 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
   }
   if (ImGui::BeginMenu("View")) {
     ImGui::MenuItem("Reset layout", nullptr);
+    if (ImGui::MenuItem("Settings...", nullptr))
+      cmd.showSettingsWindow = true;
     ImGui::EndMenu();
   }
 }
@@ -3058,6 +3060,46 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     }
   }
 
+  // CAD-style crosshair (viewport only): OS cursor hidden; pickbox + arms from Settings.
+  if (hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
+    ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+    const ImVec2 imgMin = imgPos;
+    const ImVec2 imgMax(imgPos.x + avail.x, imgPos.y + avail.y);
+    const float cx = mouse.x;
+    const float cy = mouse.y;
+    const float phx = std::clamp(cmd.viewportCrosshairPickHalfPxX, 1.f, 64.f);
+    const float phy = std::clamp(cmd.viewportCrosshairPickHalfPxY, 1.f, 64.f);
+    const float hair = std::clamp(cmd.viewportCrosshairHairPx, 0.5f, 4.f);
+    const float frx = std::clamp(cmd.viewportCrosshairArmFracX, 0.001f, 0.5f);
+    const float fry = std::clamp(cmd.viewportCrosshairArmFracY, 0.001f, 0.5f);
+    const float armX = frx * avail.x;
+    const float armY = fry * avail.y;
+    const float cr = std::clamp(cmd.viewportCrosshairR, 0.f, 1.f);
+    const float cg = std::clamp(cmd.viewportCrosshairG, 0.f, 1.f);
+    const float cb = std::clamp(cmd.viewportCrosshairB, 0.f, 1.f);
+    const ImU32 kCad =
+        IM_COL32(static_cast<int>(cr * 255.f), static_cast<int>(cg * 255.f), static_cast<int>(cb * 255.f), 255);
+    ImDrawList* fg = ImGui::GetForegroundDrawList();
+    fg->PushClipRect(imgMin, imgMax, true);
+    const float xl = std::max(imgMin.x, cx - phx - armX);
+    const float xr = std::min(imgMax.x, cx + phx + armX);
+    const float yt = std::max(imgMin.y, cy - phy - armY);
+    const float yb = std::min(imgMax.y, cy + phy + armY);
+    fg->AddLine(ImVec2(xl, cy), ImVec2(cx - phx, cy), kCad, hair);
+    fg->AddLine(ImVec2(cx + phx, cy), ImVec2(xr, cy), kCad, hair);
+    fg->AddLine(ImVec2(cx, yt), ImVec2(cx, cy - phy), kCad, hair);
+    fg->AddLine(ImVec2(cx, cy + phy), ImVec2(cx, yb), kCad, hair);
+    const float l = cx - phx;
+    const float r = cx + phx;
+    const float t = cy - phy;
+    const float b = cy + phy;
+    fg->AddLine(ImVec2(l, t), ImVec2(r, t), kCad, hair);
+    fg->AddLine(ImVec2(r, t), ImVec2(r, b), kCad, hair);
+    fg->AddLine(ImVec2(r, b), ImVec2(l, b), kCad, hair);
+    fg->AddLine(ImVec2(l, b), ImVec2(l, t), kCad, hair);
+    fg->PopClipRect();
+  }
+
   *outFbW = static_cast<int>(std::max(1.f, std::floor(avail.x)));
   *outFbH = static_cast<int>(std::max(1.f, std::floor(avail.y)));
 
@@ -3123,6 +3165,39 @@ void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
   ImGui::SameLine();
   if (ImGui::Button("Load from file"))
     LoadSurveyPointsFromJsonFile(cmd, pathBuf, log);
+
+  ImGui::End();
+}
+
+void DrawSettingsPanel(AppCommandState& cmd) {
+  if (!cmd.showSettingsWindow)
+    return;
+
+  ImGui::SetNextWindowSize(ImVec2(520, 400), ImGuiCond_FirstUseEver);
+  bool open = cmd.showSettingsWindow;
+  if (!ImGui::Begin("Settings", &open)) {
+    cmd.showSettingsWindow = open;
+    ImGui::End();
+    return;
+  }
+  cmd.showSettingsWindow = open;
+
+  ImGui::TextUnformatted("Viewport (Drawing1)");
+  ImGui::Separator();
+  ImGui::TextUnformatted("CAD crosshair");
+  float xc[3] = {cmd.viewportCrosshairR, cmd.viewportCrosshairG, cmd.viewportCrosshairB};
+  if (ImGui::ColorEdit3("Color##xhair", xc)) {
+    cmd.viewportCrosshairR = xc[0];
+    cmd.viewportCrosshairG = xc[1];
+    cmd.viewportCrosshairB = xc[2];
+  }
+  ImGui::DragFloat("Reach X (fraction of viewport width)", &cmd.viewportCrosshairArmFracX, 0.002f, 0.002f, 0.5f,
+                   "%.3f");
+  ImGui::DragFloat("Reach Y (fraction of viewport height)", &cmd.viewportCrosshairArmFracY, 0.002f, 0.002f, 0.5f,
+                   "%.3f");
+  ImGui::DragFloat("Pickbox half-width (px)", &cmd.viewportCrosshairPickHalfPxX, 0.15f, 1.f, 32.f, "%.1f");
+  ImGui::DragFloat("Pickbox half-height (px)", &cmd.viewportCrosshairPickHalfPxY, 0.15f, 1.f, 32.f, "%.1f");
+  ImGui::DragFloat("Line thickness (px)", &cmd.viewportCrosshairHairPx, 0.05f, 0.75f, 4.f, "%.2f");
 
   ImGui::End();
 }

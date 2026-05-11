@@ -37,6 +37,8 @@ void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 
 void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 
+void DrawSettingsPanel(AppCommandState& cmd);
+
 void DrawImportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 
 void DrawExportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);

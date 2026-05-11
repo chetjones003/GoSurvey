@@ -630,6 +630,18 @@ struct AppCommandState {
 
   bool showViewPointsWindow = false;
 
+  bool showSettingsWindow = false;
+
+  /// Viewport CAD crosshair (Drawing1): RGB 0–1, arm length as fraction of viewport width/height, pickbox half-size in px.
+  float viewportCrosshairR = 1.f;
+  float viewportCrosshairG = 0.8392157f;
+  float viewportCrosshairB = 0.f;
+  float viewportCrosshairArmFracX = 0.05f;
+  float viewportCrosshairArmFracY = 0.05f;
+  float viewportCrosshairPickHalfPxX = 4.f;
+  float viewportCrosshairPickHalfPxY = 4.f;
+  float viewportCrosshairHairPx = 1.f;
+
   bool createPointsPlacementActive = false;
 
   /// Editable ID strings for VIEWPOINTS table rows (synced from point IDs when empty).
