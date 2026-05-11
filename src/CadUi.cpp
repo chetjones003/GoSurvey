@@ -10,6 +10,7 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <set>
 #include <cmath>
 #include <cctype>
 #include <cstdlib>
@@ -175,116 +176,253 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
   }
 }
 
-static void RibbonToolGroup(const char* label, float ribbonInnerHeight, AppCommandState& cmd,
-                            std::vector<std::string>& log) {
-  ImGui::BeginGroup();
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.15f, 0.16f, 1.f));
-  ImGui::BeginChild(label, ImVec2(0, ribbonInnerHeight + ImGui::GetFrameHeightWithSpacing()), true,
-                    ImGuiWindowFlags_NoScrollbar);
-  const float btn = ImGui::GetFrameHeight() * 1.65f;
-  if (ImGui::Button("Mv", ImVec2(btn, btn)))
-    StartMoveCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Cp", ImVec2(btn, btn)))
-    StartCopyCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Ro", ImVec2(btn, btn)))
-    StartRotateCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Dl", ImVec2(btn, btn)))
-    StartDeleteCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Jo", ImVec2(btn, btn)))
-    StartJoinCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Tr", ImVec2(btn, btn)))
-    StartTrimCommand(cmd, log);
-  ImGui::SameLine();
-  const char* rest[] = {"Sc", "Mi"};
-  for (const char* t : rest) {
-    ImGui::Button(t, ImVec2(btn, btn));
-    ImGui::SameLine();
+static void CollectAllDrawingLayers(const AppCommandState& cmd, std::vector<std::string>* outSortedUnique) {
+  std::set<std::string> layers;
+  layers.insert("0");
+  auto add = [&layers](const std::string& s) {
+    if (!s.empty())
+      layers.insert(s);
+  };
+  for (const auto& a : cmd.userLineAttrs)
+    add(a.layer);
+  for (const auto& a : cmd.userCircleAttrs)
+    add(a.layer);
+  for (const auto& a : cmd.userArcAttrs)
+    add(a.layer);
+  for (const auto& a : cmd.userEllAttrs)
+    add(a.layer);
+  for (const auto& a : cmd.userPolylineAttrs)
+    add(a.layer);
+  for (const auto& a : cmd.cadAnnotationAttrs)
+    add(a.layer);
+  outSortedUnique->assign(layers.begin(), layers.end());
+}
+
+static float RibbonSectionWidthPx(int nCols, float cellW) {
+  const ImGuiStyle& st = ImGui::GetStyle();
+  if (nCols <= 0)
+    return cellW + 16.f;
+  return static_cast<float>(nCols) * cellW + static_cast<float>(std::max(0, nCols - 1)) * st.ItemSpacing.x + 16.f;
+}
+
+/// One size for all buttons in a ribbon section: fits the widest and tallest label (with padding).
+static ImVec2 RibbonButtonCellMetrics(std::initializer_list<const char*> labels) {
+  const ImGuiStyle& st = ImGui::GetStyle();
+  float maxTw = 0.f;
+  float maxTh = 0.f;
+  for (const char* s : labels) {
+    if (!s || !s[0])
+      continue;
+    const ImVec2 tz = ImGui::CalcTextSize(s, nullptr, true);
+    maxTw = std::max(maxTw, tz.x);
+    maxTh = std::max(maxTh, tz.y);
   }
+  const float minW = ImGui::GetFrameHeight() * 1.2f;
+  const float minH = ImGui::GetFrameHeight() * 1.2f;
+  const float w = std::max(minW, maxTw + st.FramePadding.x * 2.f + 8.f);
+  const float h = std::max(minH, maxTh + st.FramePadding.y * 2.f + 6.f);
+  return ImVec2(w, h);
+}
+
+static void RibbonSectionBegin(const char* childId, const char* title, float width, float height) {
+  ImGui::BeginGroup();
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.13f, 0.14f, 0.16f, 1.f));
+  ImGui::BeginChild(childId, ImVec2(width, height), true, ImGuiWindowFlags_NoScrollbar);
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.64f, 0.72f, 1.f));
+  ImGui::TextUnformatted(title);
+  ImGui::PopStyleColor();
+  ImGui::Separator();
+}
+
+static void RibbonSectionEnd() {
   ImGui::EndChild();
   ImGui::PopStyleColor();
-  ImGui::TextUnformatted(label);
   ImGui::EndGroup();
 }
 
-static void RibbonDrawGroup(float ribbonInnerHeight, AppCommandState& cmd, std::vector<std::string>& log) {
-  ImGui::BeginGroup();
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.15f, 0.16f, 1.f));
-  ImGui::BeginChild("RibbonDrawStrip", ImVec2(0, ribbonInnerHeight + ImGui::GetFrameHeightWithSpacing()), true,
-                    ImGuiWindowFlags_NoScrollbar);
-  const float btn = ImGui::GetFrameHeight() * 1.65f;
-  ImGui::Button("Pt", ImVec2(btn, btn));
-  ImGui::SameLine();
-  if (ImGui::Button("Ln", ImVec2(btn, btn)))
-    StartLineCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Ci", ImVec2(btn, btn)))
-    StartCircleCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Ze", ImVec2(btn, btn)))
-    StartZoomExtentsCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Zw", ImVec2(btn, btn)))
-    StartZoomWindowCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Pl", ImVec2(btn, btn)))
-    StartPolylineCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Arc", ImVec2(btn, btn)))
-    StartArcCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("El", ImVec2(btn, btn)))
-    StartEllipseCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Dim", ImVec2(btn, btn)))
-    StartDimAlignedCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Tx", ImVec2(btn, btn)))
-    StartTextCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Mt", ImVec2(btn, btn)))
-    StartMtextCommand(cmd, log);
-  ImGui::EndChild();
-  ImGui::PopStyleColor();
-  ImGui::TextUnformatted("Draw");
-  ImGui::EndGroup();
+static void RibbonItemHelp(const char* text, ImGuiHoveredFlags extraFlags = 0) {
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | extraFlags) && ImGui::BeginTooltip()) {
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 26.f);
+    ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos();
+    ImGui::EndTooltip();
+  }
 }
 
 void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>& log) {
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 4));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6, 6));
   ImGui::BeginChild("RibbonStrip", ImVec2(0, height), true,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-  static int ribbonTab = 0;
-  const char* tabs[] = {"Home", "Edit", "Draw", "Survey", "Annotate", "Layers"};
-  for (int i = 0; i < 6; ++i) {
-    if (i > 0)
-      ImGui::SameLine();
-    if (ImGui::Selectable(tabs[i], ribbonTab == i, 0, ImVec2(72, 0)))
-      ribbonTab = i;
+  const ImGuiStyle& st = ImGui::GetStyle();
+  const float panelH = height - st.WindowPadding.y * 2.f;
+  constexpr float kLayerPanelW = 500.f;
+
+  const ImVec2 drawCell = RibbonButtonCellMetrics(
+      {"Line", "Circle", "PLine", "Arc", "Ellipse", "Dim", "Text", "Mtext"});
+  const ImVec2 modCell =
+      RibbonButtonCellMetrics({"Move", "Copy", "Rotate", "Erase", "Join", "Trim"});
+  const ImVec2 viewCell = RibbonButtonCellMetrics({"Z extents", "Z window"});
+  const ImVec2 inqCell = RibbonButtonCellMetrics({"Scale", "Mirror"});
+  const ImVec2 srvCell = RibbonButtonCellMetrics({"Point"});
+  const ImVec2 layBtnCell = RibbonButtonCellMetrics({"LAY"});
+  const float layerRowBtnH =
+      std::max({drawCell.y, modCell.y, viewCell.y, inqCell.y, srvCell.y, layBtnCell.y});
+
+  ImGui::BeginChild("RibbonToolsLeft", ImVec2(-kLayerPanelW - st.ItemSpacing.x, panelH), false,
+                    ImGuiWindowFlags_HorizontalScrollbar);
+
+  const int drawCols = 4;
+  const int modCols = 4;
+  const float wDraw = RibbonSectionWidthPx(drawCols, drawCell.x);
+  const float wMod = RibbonSectionWidthPx(modCols, modCell.x);
+  const float wView = RibbonSectionWidthPx(2, viewCell.x);
+  const float wInq = RibbonSectionWidthPx(2, inqCell.x);
+  const float wSrv = RibbonSectionWidthPx(1, srvCell.x);
+
+  auto gridSameLine = [](int idx) {
+    constexpr int kCols = 4;
+    if (idx % kCols != 0)
+      ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x);
+  };
+
+  RibbonSectionBegin("RibbonSecDraw", "Draw", wDraw, panelH);
+  {
+    int i = 0;
+    gridSameLine(i++);
+    if (ImGui::Button("Line", ImVec2(drawCell.x, drawCell.y)))
+      StartLineCommand(cmd, log);
+    RibbonItemHelp("Line (L)");
+    gridSameLine(i++);
+    if (ImGui::Button("Circle", ImVec2(drawCell.x, drawCell.y)))
+      StartCircleCommand(cmd, log);
+    gridSameLine(i++);
+    if (ImGui::Button("PLine", ImVec2(drawCell.x, drawCell.y)))
+      StartPolylineCommand(cmd, log);
+    gridSameLine(i++);
+    if (ImGui::Button("Arc", ImVec2(drawCell.x, drawCell.y)))
+      StartArcCommand(cmd, log);
+    gridSameLine(i++);
+    if (ImGui::Button("Ellipse", ImVec2(drawCell.x, drawCell.y)))
+      StartEllipseCommand(cmd, log);
+    gridSameLine(i++);
+    if (ImGui::Button("Dim", ImVec2(drawCell.x, drawCell.y)))
+      StartDimAlignedCommand(cmd, log);
+    gridSameLine(i++);
+    if (ImGui::Button("Text", ImVec2(drawCell.x, drawCell.y)))
+      StartTextCommand(cmd, log);
+    gridSameLine(i++);
+    if (ImGui::Button("Mtext", ImVec2(drawCell.x, drawCell.y)))
+      StartMtextCommand(cmd, log);
   }
+  RibbonSectionEnd();
+  ImGui::SameLine(0, 10);
 
+  RibbonSectionBegin("RibbonSecModify", "Modify", wMod, panelH);
+  {
+    int i = 0;
+    auto g = [](int idx) {
+      constexpr int kCols = 4;
+      if (idx % kCols != 0)
+        ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x);
+    };
+    g(i++);
+    if (ImGui::Button("Move", ImVec2(modCell.x, modCell.y)))
+      StartMoveCommand(cmd, log);
+    g(i++);
+    if (ImGui::Button("Copy", ImVec2(modCell.x, modCell.y)))
+      StartCopyCommand(cmd, log);
+    g(i++);
+    if (ImGui::Button("Rotate", ImVec2(modCell.x, modCell.y)))
+      StartRotateCommand(cmd, log);
+    g(i++);
+    if (ImGui::Button("Erase", ImVec2(modCell.x, modCell.y)))
+      StartDeleteCommand(cmd, log);
+    g(i++);
+    if (ImGui::Button("Join", ImVec2(modCell.x, modCell.y)))
+      StartJoinCommand(cmd, log);
+    g(i++);
+    if (ImGui::Button("Trim", ImVec2(modCell.x, modCell.y)))
+      StartTrimCommand(cmd, log);
+  }
+  RibbonSectionEnd();
+  ImGui::SameLine(0, 10);
+
+  RibbonSectionBegin("RibbonSecView", "View", wView, panelH);
+  {
+    if (ImGui::Button("Z extents", ImVec2(viewCell.x, viewCell.y)))
+      StartZoomExtentsCommand(cmd, log);
+    ImGui::SameLine(0, st.ItemSpacing.x);
+    if (ImGui::Button("Z window", ImVec2(viewCell.x, viewCell.y)))
+      StartZoomWindowCommand(cmd, log);
+  }
+  RibbonSectionEnd();
+  ImGui::SameLine(0, 10);
+
+  RibbonSectionBegin("RibbonSecInquiry", "Inquiry", wInq, panelH);
+  {
+    ImGui::BeginDisabled();
+    ImGui::Button("Scale", ImVec2(inqCell.x, inqCell.y));
+    RibbonItemHelp("Not available yet", ImGuiHoveredFlags_AllowWhenDisabled);
+    ImGui::SameLine(0, st.ItemSpacing.x);
+    ImGui::Button("Mirror", ImVec2(inqCell.x, inqCell.y));
+    RibbonItemHelp("Not available yet", ImGuiHoveredFlags_AllowWhenDisabled);
+    ImGui::EndDisabled();
+  }
+  RibbonSectionEnd();
+  ImGui::SameLine(0, 10);
+
+  RibbonSectionBegin("RibbonSecSurvey", "Survey", wSrv, panelH);
+  {
+    ImGui::BeginDisabled();
+    ImGui::Button("Point", ImVec2(srvCell.x, srvCell.y));
+    RibbonItemHelp("Survey point placement (coming soon)", ImGuiHoveredFlags_AllowWhenDisabled);
+    ImGui::EndDisabled();
+  }
+  RibbonSectionEnd();
+
+  ImGui::EndChild();
+
+  ImGui::SameLine(0, st.ItemSpacing.x);
+  ImGui::BeginChild("RibbonLayerStrip", ImVec2(kLayerPanelW, panelH), true, ImGuiWindowFlags_NoScrollbar);
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.64f, 0.72f, 1.f));
+  ImGui::TextUnformatted("Layer");
+  ImGui::PopStyleColor();
   ImGui::Separator();
-  const float innerH = height - ImGui::GetFrameHeightWithSpacing() * 2.4f;
-  ImGui::BeginChild("RibbonTools", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
 
-  RibbonDrawGroup(innerH, cmd, log);
-  ImGui::SameLine();
-  ImGui::Dummy(ImVec2(10, 1));
-  ImGui::SameLine();
-  RibbonToolGroup("Modify", innerH, cmd, log);
-  ImGui::SameLine();
-  ImGui::Dummy(ImVec2(10, 1));
-  ImGui::SameLine();
-  RibbonToolGroup("Inquiry", innerH, cmd, log);
+  static std::string ribbonActiveLayer = "0";
+  std::vector<std::string> layerList;
+  CollectAllDrawingLayers(cmd, &layerList);
+  if (std::find(layerList.begin(), layerList.end(), ribbonActiveLayer) == layerList.end())
+    layerList.insert(layerList.begin(), ribbonActiveLayer);
+
+  const float layerBtnW = layBtnCell.x;
+  if (ImGui::Button("LAY", ImVec2(layerBtnW, layerRowBtnH))) {
+    log.push_back("LAYER — layer manager table (coming soon).");
+  }
+  RibbonItemHelp("Open layer manager (LAYER) — table of all layers");
+  ImGui::SameLine(0, st.ItemSpacing.x);
+  ImGui::SetNextItemWidth(std::max(80.f, kLayerPanelW - layerBtnW - st.ItemSpacing.x - st.WindowPadding.x * 2.f));
+  const char* preview = ribbonActiveLayer.empty() ? "0" : ribbonActiveLayer.c_str();
+  ImGui::PushID("RibbonLayerCombo");
+  if (ImGui::BeginCombo("##ribbonlayerpick", preview, ImGuiComboFlags_HeightLargest)) {
+    for (const auto& L : layerList) {
+      const bool sel = L == ribbonActiveLayer;
+      if (ImGui::Selectable(L.c_str(), sel))
+        ribbonActiveLayer = L;
+      if (sel)
+        ImGui::SetItemDefaultFocus();
+    }
+    ImGui::EndCombo();
+  }
+  ImGui::PopID();
+  RibbonItemHelp("Current layer for new geometry (full wiring later)");
 
   ImGui::EndChild();
+
   ImGui::EndChild();
-  ImGui::PopStyleVar();
+  ImGui::PopStyleVar(2);
 }
 
 namespace {

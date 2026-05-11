@@ -470,7 +470,7 @@ int main() {
   int fbH = 650;
 
   bool dockLayoutDone = false;
-  const float ribbonH = 122.f;
+  const float ribbonH = 130.f;
   bool objectSnapEnabled = true;
   bool orthoEnabled = true;
   bool gridVisible = true;

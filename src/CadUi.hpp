@@ -14,7 +14,7 @@ void ApplyCadDarkTheme();
 void SetupMainDockLayout(ImGuiID dockspace_id);
 
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log);
-/// Ribbon strip under the menu bar (tabs + tool groups).
+/// Ribbon under the menu bar: sectioned tool grids (Draw, Modify, View, …) plus a fixed-width layer strip.
 void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>& log);
 
 void DrawPropertiesPanel(AppCommandState& cmd);
