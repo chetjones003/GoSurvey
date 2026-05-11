@@ -382,11 +382,28 @@ struct AppCommandState {
 
   float mtxtX2 = 0.f, mtxtY2 = 0.f;
 
+  /// Multiline MTEXT editor over the box (new placement or double-click edit). Not command-line text.
+  bool mtextRichEditorOpen = false;
+
+  bool mtextRichEditorPlacement = false;
+
+  int mtextRichEditorAnnIndex = -1;
+
+  std::string mtextRichEditorBuf;
+
+  bool mtextRichEditorFocusRequest = false;
+
+  int mtextRichEditorCursor = 0;
+
+  int mtextRichEditorSelStart = 0;
+
+  int mtextRichEditorSelEnd = 0;
+
+  bool mtextRichEditorTypingAllCaps = false;
+
 
 
   enum class DimPhase { WaitExt1, WaitExt2, WaitDimLinePt } dimPhase = DimPhase::WaitExt1;
-
-
 
   float dimE1x = 0.f, dimE1y = 0.f;
 
@@ -561,7 +578,7 @@ struct AppCommandState {
 
 
 
-  /// MTEXT corner grip drag (viewport): fixed diagonal corner while resizing box.
+  /// MTEXT box corner grips (viewport): two-click edit — fixed diagonal corner while resizing box.
 
   int mtextGripAnnotationIndex = -1;
 
@@ -570,6 +587,13 @@ struct AppCommandState {
   float mtextGripFixedCornerX = 0.f;
 
   float mtextGripFixedCornerY = 0.f;
+
+  /// True after first click on an MTEXT box grip until second click commits (or RMB / ESC cancels).
+
+  bool mtextGripMoveActive = false;
+
+  float mtextGripOrigBoxMinX = 0.f, mtextGripOrigBoxMaxX = 0.f, mtextGripOrigBoxMinY = 0.f,
+      mtextGripOrigBoxMaxY = 0.f;
 
 
 
@@ -600,6 +624,40 @@ struct AppCommandState {
   float dimGripTextAlongN = 0.f;
 
   float dimGripTextAlongT = 0.f;
+
+  // --- CAD ENTITY GRIPS (viewport direct edit) ---
+  // When an entity is selected (single selection), its grip points become draggable in the viewport.
+  // RMB cancels and restores originals.
+  bool entityGripMoveActive = false;
+
+  SelectedEntity::Type entityGripType = SelectedEntity::Type::LineSeg;
+
+  int entityGripEntityIndex = -1;
+
+  int entityGripWhich = -1; ///< meaning depends on type:
+                             // line(0=start/1=end),
+                             // circle(0=center/1=radius),
+                             // polyline(vertex local idx),
+                             // arc(0=center/1=start/2=end),
+                             // ellipse(0=center/1=major/2=minor)
+
+  // Originals for RMB cancel.
+  float entityGripOrigX0 = 0.f, entityGripOrigY0 = 0.f, entityGripOrigX1 = 0.f, entityGripOrigY1 = 0.f; // line
+  float entityGripOrigCx = 0.f, entityGripOrigCy = 0.f, entityGripOrigR = 0.f; // circle/arc
+  float entityGripOrigStartRad = 0.f, entityGripOrigSweepRad = 0.f; // arc
+
+  // Polyline: moved vertex's global index into userPolylineVerts (x coordinate).
+  int entityGripOrigPolylineXIdx = -1;
+  float entityGripOrigPolyVertX = 0.f, entityGripOrigPolyVertY = 0.f;
+
+  // Ellipse originals.
+  float entityGripOrigEllMajVx = 0.f, entityGripOrigEllMajVy = 0.f;
+  float entityGripOrigEllRatio = 0.f;
+
+  float entityGripOrigEllCx = 0.f, entityGripOrigEllCy = 0.f;
+
+  float entityGripDownWorldX = 0.f; // reserved
+  float entityGripDownWorldY = 0.f; // reserved
 
 
 
@@ -750,12 +808,45 @@ inline void BumpCadGpuCache(AppCommandState& st) { ++st.cadGpuRevision; }
 
 
 
+inline void RestoreMtextGripOriginal(AppCommandState& st) {
+  if (!st.mtextGripMoveActive)
+    return;
+  const int aix = st.mtextGripAnnotationIndex;
+  if (aix < 0 || static_cast<size_t>(aix) >= st.cadAnnotations.size())
+    return;
+  CadAnnotation& ann = st.cadAnnotations[static_cast<size_t>(aix)];
+  if (ann.kind != CadAnnotation::Kind::Mtext)
+    return;
+  ann.boxMinX = st.mtextGripOrigBoxMinX;
+  ann.boxMaxX = st.mtextGripOrigBoxMaxX;
+  ann.boxMinY = st.mtextGripOrigBoxMinY;
+  ann.boxMaxY = st.mtextGripOrigBoxMaxY;
+  ann.insX = ann.boxMinX;
+  ann.insY = ann.boxMinY;
+}
+
 inline void ClearMtextGripInteraction(AppCommandState& st) {
-
+  st.mtextGripMoveActive = false;
   st.mtextGripAnnotationIndex = -1;
-
   st.mtextGripCorner = -1;
+}
 
+/// Cancel in-progress MTEXT grip edit and restore the box (selection change, new command, fence, etc.).
+inline void AbortMtextGripInteraction(AppCommandState& st) {
+  RestoreMtextGripOriginal(st);
+  ClearMtextGripInteraction(st);
+}
+
+inline void CloseMtextRichEditorUi(AppCommandState& st) {
+  st.mtextRichEditorOpen = false;
+  st.mtextRichEditorPlacement = false;
+  st.mtextRichEditorAnnIndex = -1;
+  st.mtextRichEditorBuf.clear();
+  st.mtextRichEditorFocusRequest = false;
+  st.mtextRichEditorCursor = 0;
+  st.mtextRichEditorSelStart = 0;
+  st.mtextRichEditorSelEnd = 0;
+  st.mtextRichEditorTypingAllCaps = false;
 }
 
 
@@ -775,6 +866,75 @@ inline void ClearDimGripInteraction(AppCommandState& st) {
 }
 
 
+
+inline void ClearEntityGripInteraction(AppCommandState& st) {
+  st.entityGripMoveActive = false;
+  st.entityGripEntityIndex = -1;
+  st.entityGripWhich = -1;
+  st.entityGripDownWorldX = 0.f;
+  st.entityGripDownWorldY = 0.f;
+}
+
+inline void RestoreEntityGripOriginal(AppCommandState& st) {
+  if (!st.entityGripMoveActive)
+    return;
+  const int idx = st.entityGripEntityIndex;
+  switch (st.entityGripType) {
+  case SelectedEntity::Type::LineSeg: {
+    if (idx < 0 || static_cast<size_t>(idx) * 6 + 5 >= st.userLinesFlat.size())
+      return;
+    const size_t k = static_cast<size_t>(idx) * 6;
+    st.userLinesFlat[k] = st.entityGripOrigX0;
+    st.userLinesFlat[k + 1] = st.entityGripOrigY0;
+    st.userLinesFlat[k + 3] = st.entityGripOrigX1;
+    st.userLinesFlat[k + 4] = st.entityGripOrigY1;
+    break;
+  }
+  case SelectedEntity::Type::Circle: {
+    if (idx < 0 || static_cast<size_t>(idx) * 3 + 2 >= st.userCirclesCxCyR.size())
+      return;
+    const size_t k = static_cast<size_t>(idx) * 3;
+    st.userCirclesCxCyR[k] = st.entityGripOrigCx;
+    st.userCirclesCxCyR[k + 1] = st.entityGripOrigCy;
+    st.userCirclesCxCyR[k + 2] = st.entityGripOrigR;
+    break;
+  }
+  case SelectedEntity::Type::Polyline: {
+    if (st.entityGripOrigPolylineXIdx < 0)
+      return;
+    const size_t xIdx = static_cast<size_t>(st.entityGripOrigPolylineXIdx);
+    if (xIdx + 1 >= st.userPolylineVerts.size())
+      return;
+    st.userPolylineVerts[xIdx] = st.entityGripOrigPolyVertX;
+    st.userPolylineVerts[xIdx + 1] = st.entityGripOrigPolyVertY;
+    break;
+  }
+  case SelectedEntity::Type::Arc: {
+    if (idx < 0 || static_cast<size_t>(idx) >= st.userArcs.size())
+      return;
+    CadArc& a = st.userArcs[static_cast<size_t>(idx)];
+    a.cx = st.entityGripOrigCx;
+    a.cy = st.entityGripOrigCy;
+    a.r = st.entityGripOrigR;
+    a.startRad = st.entityGripOrigStartRad;
+    a.sweepRad = st.entityGripOrigSweepRad;
+    break;
+  }
+  case SelectedEntity::Type::Ellipse: {
+    if (idx < 0 || static_cast<size_t>(idx) >= st.userEllipses.size())
+      return;
+    CadEllipse& el = st.userEllipses[static_cast<size_t>(idx)];
+    el.cx = st.entityGripOrigEllCx;
+    el.cy = st.entityGripOrigEllCy;
+    el.majVx = st.entityGripOrigEllMajVx;
+    el.majVy = st.entityGripOrigEllMajVy;
+    el.ratio = st.entityGripOrigEllRatio;
+    break;
+  }
+  default:
+    break;
+  }
+}
 
 inline void ResetSegmentAngleLock(AppCommandState& st) {
 
@@ -867,6 +1027,14 @@ void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartTextCommand(AppCommandState& st, std::vector<std::string>& log);
 
 void StartMtextCommand(AppCommandState& st, std::vector<std::string>& log);
+
+void OpenMtextRichEditorForPlacement(AppCommandState& st, std::vector<std::string>* log);
+
+void OpenMtextRichEditorForAnnotation(AppCommandState& st, int annIndex, std::vector<std::string>* log);
+
+void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log);
+
+void CancelMtextRichEditor(AppCommandState& st, std::vector<std::string>* log);
 
 void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log);
 

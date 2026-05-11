@@ -458,7 +458,7 @@ int main() {
       "LINE/L … SURVEY: CREATEPOINTS (CRTPTS), VIEWPOINTS (VWPTS), IMPORTPOINTS (IMPPTS), EXPORTPOINTS (EXPPTS), "
       "JSON database — idle: two-click select. MMB "
       "pan.");
-  char cmdBuf[512]{};
+  char cmdBuf[4096]{};
 
   float panX = 0.f;
   float panY = 0.f;
@@ -496,6 +496,20 @@ int main() {
       if (cmd.copySurveyDupModalOpen) {
         ApplyCopySurveyDuplicateModalResult(cmd, false, cmdLog);
         cmdBuf[0] = '\0';
+      } else if (cmd.mtextRichEditorOpen) {
+        CancelMtextRichEditor(cmd, &cmdLog);
+        cmdBuf[0] = '\0';
+      } else if (cmd.mtextGripMoveActive) {
+        AbortMtextGripInteraction(cmd);
+        BumpCadGpuCache(cmd);
+        cmdBuf[0] = '\0';
+        cmdLog.push_back("MTEXT grip edit canceled.");
+      } else if (cmd.entityGripMoveActive) {
+        RestoreEntityGripOriginal(cmd);
+        ClearEntityGripInteraction(cmd);
+        BumpCadGpuCache(cmd);
+        cmdBuf[0] = '\0';
+        cmdLog.push_back("Grip edit canceled.");
       } else if (cmd.active != AppCommandState::Kind::None) {
         using SAP = AppCommandState::SegmentAnglePickPhase;
         if ((cmd.active == AppCommandState::Kind::Line || cmd.active == AppCommandState::Kind::Polyline) &&

@@ -65,6 +65,7 @@ add_executable(GoSurvey
   src/ViewportRenderer.cpp
   src/CadUi.cpp
   src/CadCommands.cpp
+  src/MtextRichFormat.cpp
   src/CadSnap.cpp
   src/SurveyPoints.cpp
   src/SurveyCsv.cpp

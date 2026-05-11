@@ -1,4 +1,5 @@
 #include "CadUi.hpp"
+#include "MtextRichFormat.hpp"
 
 #include "DxfIo.hpp"
 #include "SurveyCsv.hpp"
@@ -27,6 +28,47 @@ std::string TrimCopyUi(std::string s) {
   while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())))
     s.pop_back();
   return s;
+}
+
+static int MtextRichEditorInputCallback(ImGuiInputTextCallbackData* data) {
+  auto* cmd = static_cast<AppCommandState*>(data->UserData);
+  if (!cmd)
+    return 0;
+  if (data->EventFlag == ImGuiInputTextFlags_CallbackAlways) {
+    cmd->mtextRichEditorCursor = data->CursorPos;
+    int a = data->SelectionStart;
+    int b = data->SelectionEnd;
+    if (a > b)
+      std::swap(a, b);
+    cmd->mtextRichEditorSelStart = a;
+    cmd->mtextRichEditorSelEnd = b;
+  }
+  if (data->EventFlag == ImGuiInputTextFlags_CallbackCharFilter && cmd->mtextRichEditorTypingAllCaps) {
+    const unsigned c = static_cast<unsigned>(data->EventChar);
+    if (c >= static_cast<unsigned>('a') && c <= static_cast<unsigned>('z'))
+      data->EventChar = static_cast<ImWchar>(c - static_cast<unsigned>('a' - 'A'));
+  }
+  return 0;
+}
+
+static void MtextRichInsertAtCaret(AppCommandState& cmd, const char* utf8) {
+  int pos = cmd.mtextRichEditorCursor;
+  if (cmd.mtextRichEditorSelStart != cmd.mtextRichEditorSelEnd)
+    pos = cmd.mtextRichEditorSelStart;
+  pos = std::clamp(pos, 0, static_cast<int>(cmd.mtextRichEditorBuf.size()));
+  cmd.mtextRichEditorBuf.insert(static_cast<size_t>(pos), utf8);
+}
+
+static void MtextRichWrapSelection(AppCommandState& cmd, const char* open, const char* close) {
+  std::string& s = cmd.mtextRichEditorBuf;
+  int a = cmd.mtextRichEditorSelStart;
+  int b = cmd.mtextRichEditorSelEnd;
+  if (a > b)
+    std::swap(a, b);
+  a = std::clamp(a, 0, static_cast<int>(s.size()));
+  b = std::clamp(b, 0, static_cast<int>(s.size()));
+  const std::string mid = s.substr(static_cast<size_t>(a), static_cast<size_t>(b - a));
+  s.replace(static_cast<size_t>(a), static_cast<size_t>(b - a), std::string(open) + mid + close);
 }
 
 /// Shell steals keyboard via SetKeyboardFocusHere() → navigation activation → InputText selects the
@@ -323,7 +365,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     gridSameLine(i++);
     if (ImGui::Button("Mtext", ImVec2(drawCell.x, drawCell.y)))
       StartMtextCommand(cmd, log);
-    RibbonItemHelp("Mtext — multiline paragraph in a frame.\nCommand bar: MTEXT or MT");
+    RibbonItemHelp("Mtext — multiline in a frame; after box, edit in the on-drawing editor (Ctrl+Enter reformats; Save to place). Double-click MTEXT to edit.\nCommand bar: MTEXT or MT");
   }
   RibbonSectionEnd();
   ImGui::SameLine(0, 10);
@@ -1632,6 +1674,8 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
   ImGui::Spacing();
   ImGui::TextUnformatted("Content");
   ImGui::InputTextMultiline("##anntxtmul", &ann.text, ImVec2(-FLT_MIN, 96.f));
+  if (ann.kind == CadAnnotation::Kind::Mtext)
+    ImGui::TextDisabled("MTEXT wire: [[b]],[[i]],[[u]],[[caps]] with matching [[/…]]; DXF export is plain text.");
   if (ImGui::IsItemDeactivatedAfterEdit())
     BumpCadGpuCache(cmd);
 
@@ -2071,7 +2115,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     case AppCommandState::MtextPhase::WaitCorner2:
       return "MTEXT corner 2:";
     case AppCommandState::MtextPhase::WaitString:
-      return "MTEXT text:";
+      return "MTEXT — edit in drawing box (Ctrl+Enter reformats; Save to place):";
     }
   }
   if (cmd.active == AppCommandState::Kind::DimAligned) {
@@ -2212,7 +2256,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
 
   ImGuiIO& io = ImGui::GetIO();
   const bool cmdInputOnViewport =
-      cmd.active != AppCommandState::Kind::None && cmd.viewportDrawingHovered;
+      cmd.active != AppCommandState::Kind::None && cmd.viewportDrawingHovered && !cmd.mtextRichEditorOpen;
   if (!io.WantTextInput && io.InputQueueCharacters.Size > 0 && !cmdInputOnViewport) {
     RouteQueuedCharsToCmdBuf(cmdBuf, cmdBufSize, io);
     ImGui::SetKeyboardFocusHere(0);
@@ -2220,9 +2264,9 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
 
   const float inputAvailW = ImGui::GetContentRegionAvail().x;
   if (!cmdInputOnViewport) {
-    ImGui::SetNextItemWidth(std::max(64.f, inputAvailW - sendBtnW - st.ItemSpacing.x));
     ImGuiInputTextFlags flags =
         ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
+    ImGui::SetNextItemWidth(std::max(64.f, inputAvailW - sendBtnW - st.ItemSpacing.x));
     const bool exec = ImGui::InputTextWithHint("##CommandLineInput", CommandInputHint(cmd), cmdBuf,
                                                static_cast<size_t>(cmdBufSize), flags, CommandLineInputCallback, nullptr);
     ImGui::SetItemDefaultFocus();
@@ -2428,6 +2472,171 @@ static int HitTestMtextGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 
   return -1;
 }
 
+static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::string>& log, float worldLeft,
+                                       float worldRight, float worldBottom, float worldTop, ImVec2 imgPos,
+                                       ImVec2 avail) {
+  if (!cmd.mtextRichEditorOpen)
+    return;
+  using AK = AppCommandState::Kind;
+  using AMP = AppCommandState::MtextPhase;
+  float bx0 = 0.f, bx1 = 0.f, by0 = 0.f, by1 = 0.f;
+  if (cmd.mtextRichEditorPlacement) {
+    if (cmd.active != AK::Mtext || cmd.mtextPhase != AMP::WaitString)
+      return;
+    bx0 = std::min(cmd.mtxtX1, cmd.mtxtX2);
+    bx1 = std::max(cmd.mtxtX1, cmd.mtxtX2);
+    by0 = std::min(cmd.mtxtY1, cmd.mtxtY2);
+    by1 = std::max(cmd.mtxtY1, cmd.mtxtY2);
+  } else {
+    if (cmd.mtextRichEditorAnnIndex < 0 ||
+        static_cast<size_t>(cmd.mtextRichEditorAnnIndex) >= cmd.cadAnnotations.size())
+      return;
+    const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(cmd.mtextRichEditorAnnIndex)];
+    if (a.kind != CadAnnotation::Kind::Mtext)
+      return;
+    bx0 = a.boxMinX;
+    bx1 = a.boxMaxX;
+    by0 = a.boxMinY;
+    by1 = a.boxMaxY;
+  }
+
+  const float denx = worldRight - worldLeft + 1e-12f;
+  const float deny = worldTop - worldBottom + 1e-12f;
+  auto ws = [&](float wx, float wy, ImVec2* o) {
+    const float u = (wx - worldLeft) / denx;
+    const float v = (worldTop - wy) / deny;
+    o->x = imgPos.x + u * avail.x;
+    o->y = imgPos.y + v * avail.y;
+  };
+  ImVec2 p00{}, p01{}, p10{}, p11{};
+  ws(bx0, by0, &p00);
+  ws(bx1, by0, &p01);
+  ws(bx0, by1, &p10);
+  ws(bx1, by1, &p11);
+  const float sx0 = std::min({p00.x, p01.x, p10.x, p11.x});
+  const float sx1 = std::max({p00.x, p01.x, p10.x, p11.x});
+  const float sy0 = std::min({p00.y, p01.y, p10.y, p11.y});
+
+  const ImVec2 imgMin(imgPos.x, imgPos.y);
+  const ImVec2 imgMax(imgPos.x + avail.x, imgPos.y + avail.y);
+  constexpr float kPad = 3.f;
+  const float boxScreenW = std::max(140.f, sx1 - sx0 - 2.f * kPad);
+  float w = std::max(300.f, boxScreenW);
+  w = std::min(w, imgMax.x - imgMin.x - 4.f);
+
+  const ImGuiStyle& ist = ImGui::GetStyle();
+  const float innerW = std::max(24.f, w - ist.WindowPadding.x * 2.f);
+  static const char kMtextHelp[] =
+      "Tags: [[b]]…[[/b]], [[i]]…[[/i]], [[u]]…[[/u]], [[caps]]…[[/caps]]. Ctrl+Enter reformats (normalize). "
+      "Save places or updates; Esc cancels.";
+  const float helpH = ImGui::CalcTextSize(kMtextHelp, nullptr, false, innerW).y + 4.f;
+  const float previewBodyH =
+      std::clamp(MtextRichWrappedHeight(ImGui::GetFont(), ImGui::GetFontSize(), innerW, cmd.mtextRichEditorBuf) + 6.f,
+                 36.f, 420.f);
+  const float previewH = previewBodyH + ist.FramePadding.y * 2.f;
+  int editorLineCount = 1;
+  for (unsigned char ch : cmd.mtextRichEditorBuf) {
+    if (ch == '\n')
+      ++editorLineCount;
+  }
+  const float lh = ImGui::GetTextLineHeightWithSpacing();
+  const float editorH = std::clamp(static_cast<float>(editorLineCount) * lh + ist.FramePadding.y * 2.f + 12.f, 72.f,
+                                   520.f);
+  const float toolbarH = ImGui::GetFrameHeightWithSpacing() * 2.f + ist.ItemSpacing.y;
+  const float btnRowH = ImGui::GetFrameHeightWithSpacing() + 6.f;
+  const float sepExtra = ist.ItemSpacing.y + 2.f;
+  const float hContent = ist.WindowPadding.y * 2.f + helpH + ist.ItemSpacing.y + previewH + toolbarH + sepExtra +
+                         editorH + btnRowH + ist.ItemSpacing.y;
+
+  float wxp = sx0 + kPad;
+  float wyp = sy0 + kPad;
+  wxp = std::clamp(wxp, imgMin.x + 2.f, imgMax.x - w - 2.f);
+  const float maxChildH = imgMax.y - imgMin.y - 4.f;
+  float h = std::min(hContent, maxChildH);
+  wyp = std::clamp(wyp, imgMin.y + 2.f, imgMax.y - h - 2.f);
+
+  ImGui::SetCursorScreenPos(ImVec2(wxp, wyp));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
+  ImGuiWindowFlags editorWinFlags = 0;
+  if (hContent > h + 0.5f)
+    editorWinFlags |= ImGuiWindowFlags_AlwaysVerticalScrollbar;
+  if (ImGui::BeginChild("##MtextRichEditor", ImVec2(w, h), ImGuiChildFlags_Borders, editorWinFlags)) {
+    ImGui::TextWrapped("%s", kMtextHelp);
+    if (ImGui::BeginChild("##mtext_rte_preview", ImVec2(0, previewH), true,
+                          ImGuiWindowFlags_NoNavInputs | ImGuiWindowFlags_NoNavFocus)) {
+      ImDrawList* pdl = ImGui::GetWindowDrawList();
+      const ImVec2 p0 = ImGui::GetCursorScreenPos();
+      const float pw = std::max(24.f, ImGui::GetContentRegionAvail().x);
+      const ImU32 prevCol = ImGui::GetColorU32(ImGuiCol_Text);
+      MtextRichDrawWrapped(pdl, ImGui::GetFont(), ImGui::GetFontSize(), p0, pw, prevCol, cmd.mtextRichEditorBuf);
+      ImGui::Dummy(ImVec2(pw, previewBodyH));
+      ImGui::EndChild();
+    }
+    ImGui::PushID("mtext_rte_tb");
+    if (ImGui::SmallButton("B"))
+      MtextRichWrapSelection(cmd, "[[b]]", "[[/b]]");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("I"))
+      MtextRichWrapSelection(cmd, "[[i]]", "[[/i]]");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("U"))
+      MtextRichWrapSelection(cmd, "[[u]]", "[[/u]]");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("CAPS"))
+      MtextRichWrapSelection(cmd, "[[caps]]", "[[/caps]]");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(std::max(120.f, ImGui::GetContentRegionAvail().x * 0.38f));
+    static const struct {
+      const char* label;
+      const char* utf8;
+    } kMathPick[] = {
+        {"\xCF\x80 pi", "\xCF\x80"},           // U+03C0
+        {"\xCE\xA3 Sigma", "\xCE\xA3"},       // U+03A3
+        {"\xE2\x88\x9E infinity", "\xE2\x88\x9E"}, // U+221E
+        {"\xE2\x89\xA4 leq", "\xE2\x89\xA4"}, // U+2264
+        {"\xE2\x89\xA5 geq", "\xE2\x89\xA5"}, // U+2265
+        {"\xC2\xB1 plus-minus", "\xC2\xB1"},   // U+00B1
+        {"\xE2\x88\x9A sqrt", "\xE2\x88\x9A"}, // U+221A
+        {"\xE2\x88\xAB integral", "\xE2\x88\xAB"}, // U+222B
+        {"\xC3\x97 times", "\xC3\x97"},       // U+00D7
+        {"\xC2\xB7 dot", "\xC2\xB7"},         // U+00B7
+        {"\xCE\xB1 alpha", "\xCE\xB1"},       // U+03B1
+        {"\xCE\xB8 theta", "\xCE\xB8"},       // U+03B8
+        {"\xC2\xB0 degrees", "\xC2\xB0"},     // U+00B0
+    };
+    if (ImGui::BeginCombo("##mtext_math_ins", "Insert math…")) {
+      for (const auto& e : kMathPick) {
+        if (ImGui::Selectable(e.label))
+          MtextRichInsertAtCaret(cmd, e.utf8);
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::Checkbox("Type ALL CAPS (ASCII)", &cmd.mtextRichEditorTypingAllCaps);
+    ImGui::PopID();
+    ImGui::Separator();
+    if (cmd.mtextRichEditorFocusRequest) {
+      ImGui::SetKeyboardFocusHere(0);
+      cmd.mtextRichEditorFocusRequest = false;
+    }
+    ImGuiInputTextFlags flags = ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackAlways |
+                                ImGuiInputTextFlags_CallbackCharFilter;
+    ImGui::InputTextMultiline("##mtext_rte_body", &cmd.mtextRichEditorBuf, ImVec2(-FLT_MIN, editorH), flags,
+                              MtextRichEditorInputCallback, static_cast<void*>(&cmd));
+    const ImGuiID bodyId = ImGui::GetItemID();
+    ImGuiIO& io = ImGui::GetIO();
+    if (ImGui::GetActiveID() == bodyId && io.KeyCtrl &&
+        (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)))
+      cmd.mtextRichEditorBuf = MtextRichNormalize(cmd.mtextRichEditorBuf);
+    if (ImGui::Button(cmd.mtextRichEditorPlacement ? "Place##mtext_rte_ok" : "Save##mtext_rte_ok"))
+      CommitMtextRichEditor(cmd, log);
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel##mtext_rte_cancel"))
+      CancelMtextRichEditor(cmd, &log);
+  }
+  ImGui::EndChild();
+  ImGui::PopStyleColor();
+}
+
 void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, std::vector<std::string>& log,
                          char* cmdBuf, int cmdBufSize, float* panX, float* panY, float* zoom, float* outCursorX,
                          float* outCursorY, float* outCursorRawX, float* outCursorRawY, int* outFbW, int* outFbH,
@@ -2497,32 +2706,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const float surveyCrossHalfW =
       SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
 
-  if (cmd.mtextGripAnnotationIndex >= 0 && hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
-    const float u = mx / std::max(avail.x, 1.f);
-    const float v = my / std::max(avail.y, 1.f);
-    const float curWx = worldLeft + u * (worldRight - worldLeft);
-    const float curWy = worldTop - v * (worldTop - worldBottom);
-    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
-      ClearMtextGripInteraction(cmd);
-      BumpCadGpuCache(cmd);
-    } else if (ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-      const size_t gi = static_cast<size_t>(cmd.mtextGripAnnotationIndex);
-      if (gi < cmd.cadAnnotations.size()) {
-        CadAnnotation& ann = cmd.cadAnnotations[gi];
-        if (ann.kind == CadAnnotation::Kind::Mtext) {
-          const float fx = cmd.mtextGripFixedCornerX;
-          const float fy = cmd.mtextGripFixedCornerY;
-          ann.boxMinX = std::min(fx, curWx);
-          ann.boxMaxX = std::max(fx, curWx);
-          ann.boxMinY = std::min(fy, curWy);
-          ann.boxMaxY = std::max(fy, curWy);
-          ann.insX = ann.boxMinX;
-          ann.insY = ann.boxMinY;
-        }
-      }
-    }
-  }
-
   if (out_snap)
     *out_snap = {};
 
@@ -2540,8 +2723,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     CadSnap::Hit snap{};
     if (object_snap_enabled) {
       const float tol = CadSnap::WorldToleranceFromPixels(avail.y, halfH, 14.f);
-      const bool midCmd =
-          cmd.active != AppCommandState::Kind::None || cmd.dimGripMoveActive;
+      const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.dimGripMoveActive ||
+                          cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
       snap = CadSnap::FindBest(rawX, rawY, cmd, midCmd, tol);
     }
 
@@ -2555,6 +2738,28 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       *outCursorX = rawX;
       *outCursorY = rawY;
     }
+  }
+
+  // MTEXT box grips: first click arms; snapped cursor updates box live; second LMB commits (like dim / entity grips).
+  if (cmd.mtextGripMoveActive && cmd.mtextGripAnnotationIndex >= 0 && outCursorX && outCursorY && hovered &&
+      mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
+    const float curWx = *outCursorX;
+    const float curWy = *outCursorY;
+    const size_t gi = static_cast<size_t>(cmd.mtextGripAnnotationIndex);
+    if (gi < cmd.cadAnnotations.size()) {
+      CadAnnotation& ann = cmd.cadAnnotations[gi];
+      if (ann.kind == CadAnnotation::Kind::Mtext) {
+        const float fx = cmd.mtextGripFixedCornerX;
+        const float fy = cmd.mtextGripFixedCornerY;
+        ann.boxMinX = std::min(fx, curWx);
+        ann.boxMaxX = std::max(fx, curWx);
+        ann.boxMinY = std::min(fy, curWy);
+        ann.boxMaxY = std::max(fy, curWy);
+        ann.insX = ann.boxMinX;
+        ann.insY = ann.boxMinY;
+      }
+    }
+    BumpCadGpuCache(cmd);
   }
 
   if (cmd.dimGripMoveActive && cmd.dimGripAnnotationIndex >= 0 && outCursorX && outCursorY && hovered &&
@@ -2597,6 +2802,170 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     BumpCadGpuCache(cmd);
   }
 
+  // Entity grips: first click arms (stores originals); cursor updates geometry live; second LMB commits
+  // (same pattern as dim grips). RMB / ESC restore originals.
+  if (cmd.entityGripMoveActive && cmd.entityGripEntityIndex >= 0 && outCursorX && outCursorY && hovered &&
+      mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
+    const float curWx = *outCursorX;
+    const float curWy = *outCursorY;
+    const int idx = cmd.entityGripEntityIndex;
+    switch (cmd.entityGripType) {
+      case SelectedEntity::Type::LineSeg: {
+        if (idx < 0 || static_cast<size_t>(idx) * 6 + 5 >= cmd.userLinesFlat.size())
+          break;
+        const size_t k = static_cast<size_t>(idx) * 6;
+        if (cmd.entityGripWhich == 0) {
+          cmd.userLinesFlat[k] = curWx;
+          cmd.userLinesFlat[k + 1] = curWy;
+        } else if (cmd.entityGripWhich == 1) {
+          cmd.userLinesFlat[k + 3] = curWx;
+          cmd.userLinesFlat[k + 4] = curWy;
+        }
+        break;
+      }
+      case SelectedEntity::Type::Circle: {
+        if (idx < 0 || static_cast<size_t>(idx) * 3 + 2 >= cmd.userCirclesCxCyR.size())
+          break;
+        const size_t k = static_cast<size_t>(idx) * 3;
+        float& cx = cmd.userCirclesCxCyR[k];
+        float& cy = cmd.userCirclesCxCyR[k + 1];
+        float& r = cmd.userCirclesCxCyR[k + 2];
+        if (cmd.entityGripWhich == 0) {
+          cx = curWx;
+          cy = curWy;
+        } else if (cmd.entityGripWhich == 1) {
+          r = std::hypot(curWx - cx, curWy - cy);
+        }
+        break;
+      }
+      case SelectedEntity::Type::Polyline: {
+        const int np = cmd.userPolylineOffsets.size() > 0 ? static_cast<int>(cmd.userPolylineOffsets.size() - 1) : 0;
+        if (idx < 0 || idx >= np)
+          break;
+        const int startV = cmd.userPolylineOffsets[static_cast<size_t>(idx)];
+        const int viLocal = cmd.entityGripWhich;
+        const int globalV = startV + viLocal;
+        const size_t xIdx = static_cast<size_t>(globalV) * 3;
+        if (xIdx + 1 >= cmd.userPolylineVerts.size())
+          break;
+        cmd.userPolylineVerts[xIdx] = curWx;
+        cmd.userPolylineVerts[xIdx + 1] = curWy;
+        break;
+      }
+      case SelectedEntity::Type::Arc: {
+        if (idx < 0 || static_cast<size_t>(idx) >= cmd.userArcs.size())
+          break;
+        CadArc& a = cmd.userArcs[static_cast<size_t>(idx)];
+        if (cmd.entityGripWhich == 0) {
+          a.cx = curWx;
+          a.cy = curWy;
+        } else if (cmd.entityGripWhich == 1) {
+          a.r = std::hypot(curWx - a.cx, curWy - a.cy);
+          a.startRad = std::atan2(curWy - a.cy, curWx - a.cx);
+        } else if (cmd.entityGripWhich == 2) {
+          a.r = std::hypot(curWx - a.cx, curWy - a.cy);
+          const float endRad = std::atan2(curWy - a.cy, curWx - a.cx);
+          a.sweepRad = endRad - a.startRad;
+        }
+        break;
+      }
+      case SelectedEntity::Type::Ellipse: {
+        if (idx < 0 || static_cast<size_t>(idx) >= cmd.userEllipses.size())
+          break;
+        CadEllipse& el = cmd.userEllipses[static_cast<size_t>(idx)];
+        if (cmd.entityGripWhich == 0) {
+          el.cx = curWx;
+          el.cy = curWy;
+        } else if (cmd.entityGripWhich == 1) {
+          el.majVx = curWx - el.cx;
+          el.majVy = curWy - el.cy;
+        } else if (cmd.entityGripWhich == 2) {
+          const float majLen2 = el.majVx * el.majVx + el.majVy * el.majVy;
+          if (majLen2 < 1e-12f)
+            break;
+          const float dx = curWx - el.cx;
+          const float dy = curWy - el.cy;
+          const float perpX = -el.majVy;
+          const float perpY = el.majVx;
+          const float ratioNew = std::clamp((dx * perpX + dy * perpY) / majLen2, 0.f, 1.f);
+          el.ratio = ratioNew;
+        }
+        break;
+      }
+      default:
+        break;
+    }
+
+    BumpCadGpuCache(cmd);
+  }
+
+  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mx >= 0 && mx < avail.x && my >= 0 &&
+      my < avail.y && cmd.entityGripMoveActive && cmd.entityGripEntityIndex >= 0) {
+    const int idx = cmd.entityGripEntityIndex;
+    switch (cmd.entityGripType) {
+    case SelectedEntity::Type::LineSeg: {
+      if (idx < 0 || static_cast<size_t>(idx) * 6 + 5 >= cmd.userLinesFlat.size())
+        break;
+      const size_t k = static_cast<size_t>(idx) * 6;
+      cmd.userLinesFlat[k] = cmd.entityGripOrigX0;
+      cmd.userLinesFlat[k + 1] = cmd.entityGripOrigY0;
+      cmd.userLinesFlat[k + 3] = cmd.entityGripOrigX1;
+      cmd.userLinesFlat[k + 4] = cmd.entityGripOrigY1;
+      break;
+    }
+    case SelectedEntity::Type::Circle: {
+      if (idx < 0 || static_cast<size_t>(idx) * 3 + 2 >= cmd.userCirclesCxCyR.size())
+        break;
+      const size_t k = static_cast<size_t>(idx) * 3;
+      cmd.userCirclesCxCyR[k] = cmd.entityGripOrigCx;
+      cmd.userCirclesCxCyR[k + 1] = cmd.entityGripOrigCy;
+      cmd.userCirclesCxCyR[k + 2] = cmd.entityGripOrigR;
+      break;
+    }
+    case SelectedEntity::Type::Polyline: {
+      if (cmd.entityGripOrigPolylineXIdx >= 0 &&
+          static_cast<size_t>(cmd.entityGripOrigPolylineXIdx + 1) < cmd.userPolylineVerts.size()) {
+        cmd.userPolylineVerts[static_cast<size_t>(cmd.entityGripOrigPolylineXIdx)] = cmd.entityGripOrigPolyVertX;
+        cmd.userPolylineVerts[static_cast<size_t>(cmd.entityGripOrigPolylineXIdx) + 1] = cmd.entityGripOrigPolyVertY;
+      }
+      break;
+    }
+    case SelectedEntity::Type::Arc: {
+      if (idx < 0 || static_cast<size_t>(idx) >= cmd.userArcs.size())
+        break;
+      CadArc& a = cmd.userArcs[static_cast<size_t>(idx)];
+      a.cx = cmd.entityGripOrigCx;
+      a.cy = cmd.entityGripOrigCy;
+      a.r = cmd.entityGripOrigR;
+      a.startRad = cmd.entityGripOrigStartRad;
+      a.sweepRad = cmd.entityGripOrigSweepRad;
+      break;
+    }
+    case SelectedEntity::Type::Ellipse: {
+      if (idx < 0 || static_cast<size_t>(idx) >= cmd.userEllipses.size())
+        break;
+      CadEllipse& el = cmd.userEllipses[static_cast<size_t>(idx)];
+      el.cx = cmd.entityGripOrigEllCx;
+      el.cy = cmd.entityGripOrigEllCy;
+      el.majVx = cmd.entityGripOrigEllMajVx;
+      el.majVy = cmd.entityGripOrigEllMajVy;
+      el.ratio = cmd.entityGripOrigEllRatio;
+      break;
+    }
+    default:
+      break;
+    }
+
+    ClearEntityGripInteraction(cmd);
+    BumpCadGpuCache(cmd);
+  }
+
+  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mx >= 0 && mx < avail.x && my >= 0 &&
+      my < avail.y && cmd.mtextGripMoveActive && cmd.mtextGripAnnotationIndex >= 0) {
+    AbortMtextGripInteraction(cmd);
+    BumpCadGpuCache(cmd);
+  }
+
   if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mx >= 0 && mx < avail.x && my >= 0 &&
       my < avail.y && cmd.dimGripMoveActive && cmd.dimGripAnnotationIndex >= 0) {
     const size_t gi = static_cast<size_t>(cmd.dimGripAnnotationIndex);
@@ -2624,6 +2993,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     if (cmd.dimGripMoveActive) {
       cmd.dimGripMoveActive = false;
       ClearDimGripInteraction(cmd);
+      BumpCadGpuCache(cmd);
+    } else if (cmd.entityGripMoveActive) {
+      ClearEntityGripInteraction(cmd);
+      BumpCadGpuCache(cmd);
+    } else if (cmd.mtextGripMoveActive) {
+      ClearMtextGripInteraction(cmd);
       BumpCadGpuCache(cmd);
     } else {
     using K = AppCommandState::Kind;
@@ -2748,26 +3123,285 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           cmd.dimGripDownWorldY = wyPick;
         }
         cmd.dimGripMoveActive = true;
-        ClearMtextGripInteraction(cmd);
+        AbortMtextGripInteraction(cmd);
         handled = true;
       } else if (gripCorner >= 0) {
         const int aix = cmd.selection[0].index;
+        CadAnnotation& ann = cmd.cadAnnotations[static_cast<size_t>(aix)];
+        cmd.mtextGripOrigBoxMinX = ann.boxMinX;
+        cmd.mtextGripOrigBoxMaxX = ann.boxMaxX;
+        cmd.mtextGripOrigBoxMinY = ann.boxMinY;
+        cmd.mtextGripOrigBoxMaxY = ann.boxMaxY;
         cmd.mtextGripAnnotationIndex = aix;
         cmd.mtextGripCorner = gripCorner;
+        cmd.mtextGripMoveActive = true;
         static const int kOpp[4] = {2, 3, 0, 1};
         const int opp = kOpp[gripCorner];
-        const CadAnnotation& ann = cmd.cadAnnotations[static_cast<size_t>(aix)];
         const float cx[4] = {ann.boxMinX, ann.boxMaxX, ann.boxMaxX, ann.boxMinX};
         const float cy[4] = {ann.boxMinY, ann.boxMinY, ann.boxMaxY, ann.boxMaxY};
         cmd.mtextGripFixedCornerX = cx[opp];
         cmd.mtextGripFixedCornerY = cy[opp];
         ClearDimGripInteraction(cmd);
+        ClearEntityGripInteraction(cmd);
         handled = true;
       }
+
+      if (!handled && cmd.selection.size() == 1) {
+        const SelectedEntity sel = cmd.selection[0];
+        const float denx = worldRight - worldLeft + 1e-12f;
+        const float deny = worldTop - worldBottom + 1e-12f;
+        auto wtsRel = [&](float wx, float wy) -> ImVec2 {
+          const float u = (wx - worldLeft) / denx;
+          const float v = (worldTop - wy) / deny;
+          return ImVec2(u * avail.x, v * avail.y); // relative to image top-left
+        };
+
+        const float gripHitPx = 10.f;
+        const float r2 = gripHitPx * gripHitPx;
+        float bestD2 = r2;
+        int bestWhich = -1;
+
+        switch (sel.type) {
+        case SelectedEntity::Type::LineSeg: {
+          const size_t k = static_cast<size_t>(sel.index) * 6;
+          if (k + 5 < cmd.userLinesFlat.size()) {
+            const float x0 = cmd.userLinesFlat[k];
+            const float y0 = cmd.userLinesFlat[k + 1];
+            const float x1 = cmd.userLinesFlat[k + 3];
+            const float y1 = cmd.userLinesFlat[k + 4];
+            {
+              ImVec2 p0 = wtsRel(x0, y0);
+              const float dx = mx - p0.x, dy = my - p0.y;
+              const float d2 = dx * dx + dy * dy;
+              if (d2 <= bestD2) {
+                bestD2 = d2;
+                bestWhich = 0;
+              }
+            }
+            {
+              ImVec2 p1 = wtsRel(x1, y1);
+              const float dx = mx - p1.x, dy = my - p1.y;
+              const float d2 = dx * dx + dy * dy;
+              if (d2 <= bestD2) {
+                bestD2 = d2;
+                bestWhich = 1;
+              }
+            }
+          }
+          break;
+        }
+        case SelectedEntity::Type::Circle: {
+          const size_t k = static_cast<size_t>(sel.index) * 3;
+          if (k + 2 < cmd.userCirclesCxCyR.size()) {
+            const float cx = cmd.userCirclesCxCyR[k];
+            const float cy = cmd.userCirclesCxCyR[k + 1];
+            const float r = cmd.userCirclesCxCyR[k + 2];
+            {
+              ImVec2 pc = wtsRel(cx, cy);
+              const float dx = mx - pc.x, dy = my - pc.y;
+              const float d2 = dx * dx + dy * dy;
+              if (d2 <= bestD2) {
+                bestD2 = d2;
+                bestWhich = 0;
+              }
+            }
+            {
+              ImVec2 pr = wtsRel(cx + r, cy);
+              const float dx = mx - pr.x, dy = my - pr.y;
+              const float d2 = dx * dx + dy * dy;
+              if (d2 <= bestD2) {
+                bestD2 = d2;
+                bestWhich = 1;
+              }
+            }
+          }
+          break;
+        }
+        case SelectedEntity::Type::Polyline: {
+          const int np = cmd.userPolylineOffsets.size() > 0 ? static_cast<int>(cmd.userPolylineOffsets.size() - 1) : 0;
+          if (sel.index >= 0 && sel.index < np) {
+            const int startV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index)];
+            const int endV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index + 1)];
+            const int nV = std::max(0, endV - startV);
+            for (int vi = 0; vi < nV; ++vi) {
+              const size_t xIdx = static_cast<size_t>(startV + vi) * 3;
+              if (xIdx + 1 >= cmd.userPolylineVerts.size())
+                continue;
+              const float x = cmd.userPolylineVerts[xIdx];
+              const float y = cmd.userPolylineVerts[xIdx + 1];
+              ImVec2 p = wtsRel(x, y);
+              const float dx = mx - p.x, dy = my - p.y;
+              const float d2 = dx * dx + dy * dy;
+              if (d2 <= bestD2) {
+                bestD2 = d2;
+                bestWhich = vi;
+              }
+            }
+          }
+          break;
+        }
+        case SelectedEntity::Type::Arc: {
+          if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
+            const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
+            const float startX = a.cx + a.r * std::cos(a.startRad);
+            const float startY = a.cy + a.r * std::sin(a.startRad);
+            const float endRad = a.startRad + a.sweepRad;
+            const float endX = a.cx + a.r * std::cos(endRad);
+            const float endY = a.cy + a.r * std::sin(endRad);
+            {
+              ImVec2 pc = wtsRel(a.cx, a.cy);
+              const float dx = mx - pc.x, dy = my - pc.y;
+              const float d2 = dx * dx + dy * dy;
+              if (d2 <= bestD2) {
+                bestD2 = d2;
+                bestWhich = 0;
+              }
+            }
+            {
+              ImVec2 ps = wtsRel(startX, startY);
+              const float dx = mx - ps.x, dy = my - ps.y;
+              const float d2 = dx * dx + dy * dy;
+              if (d2 <= bestD2) {
+                bestD2 = d2;
+                bestWhich = 1;
+              }
+            }
+            {
+              ImVec2 pe = wtsRel(endX, endY);
+              const float dx = mx - pe.x, dy = my - pe.y;
+              const float d2 = dx * dx + dy * dy;
+              if (d2 <= bestD2) {
+                bestD2 = d2;
+                bestWhich = 2;
+              }
+            }
+          }
+          break;
+        }
+        case SelectedEntity::Type::Ellipse: {
+          if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
+            const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
+            const ImVec2 pC = wtsRel(el.cx, el.cy);
+            const float dxC = mx - pC.x, dyC = my - pC.y;
+            const float d2c = dxC * dxC + dyC * dyC;
+            if (d2c <= bestD2) {
+              bestD2 = d2c;
+              bestWhich = 0;
+            }
+
+            const float majX = el.cx + el.majVx;
+            const float majY = el.cy + el.majVy;
+            {
+              ImVec2 pM = wtsRel(majX, majY);
+              const float dx = mx - pM.x, dy = my - pM.y;
+              const float d2 = dx * dx + dy * dy;
+              if (d2 <= bestD2) {
+                bestD2 = d2;
+                bestWhich = 1;
+              }
+            }
+            const float perpX = -el.majVy;
+            const float perpY = el.majVx;
+            const float minX = el.cx + perpX * el.ratio;
+            const float minY = el.cy + perpY * el.ratio;
+            {
+              ImVec2 pN = wtsRel(minX, minY);
+              const float dx = mx - pN.x, dy = my - pN.y;
+              const float d2 = dx * dx + dy * dy;
+              if (d2 <= bestD2) {
+                bestD2 = d2;
+                bestWhich = 2;
+              }
+            }
+          }
+          break;
+        }
+        default:
+          break;
+        }
+
+        if (bestWhich >= 0) {
+          cmd.entityGripMoveActive = true;
+          cmd.entityGripType = sel.type;
+          cmd.entityGripEntityIndex = sel.index;
+          cmd.entityGripWhich = bestWhich;
+
+          // Store originals for RMB cancel.
+          switch (sel.type) {
+          case SelectedEntity::Type::LineSeg: {
+            const size_t k = static_cast<size_t>(sel.index) * 6;
+            cmd.entityGripOrigX0 = cmd.userLinesFlat[k];
+            cmd.entityGripOrigY0 = cmd.userLinesFlat[k + 1];
+            cmd.entityGripOrigX1 = cmd.userLinesFlat[k + 3];
+            cmd.entityGripOrigY1 = cmd.userLinesFlat[k + 4];
+            break;
+          }
+          case SelectedEntity::Type::Circle: {
+            const size_t k = static_cast<size_t>(sel.index) * 3;
+            cmd.entityGripOrigCx = cmd.userCirclesCxCyR[k];
+            cmd.entityGripOrigCy = cmd.userCirclesCxCyR[k + 1];
+            cmd.entityGripOrigR = cmd.userCirclesCxCyR[k + 2];
+            break;
+          }
+          case SelectedEntity::Type::Polyline: {
+            const int startV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index)];
+            const int globalV = startV + bestWhich;
+            const size_t xIdx = static_cast<size_t>(globalV) * 3;
+            cmd.entityGripOrigPolylineXIdx = static_cast<int>(xIdx);
+            cmd.entityGripOrigPolyVertX = cmd.userPolylineVerts[xIdx];
+            cmd.entityGripOrigPolyVertY = cmd.userPolylineVerts[xIdx + 1];
+            break;
+          }
+          case SelectedEntity::Type::Arc: {
+            const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
+            cmd.entityGripOrigCx = a.cx;
+            cmd.entityGripOrigCy = a.cy;
+            cmd.entityGripOrigR = a.r;
+            cmd.entityGripOrigStartRad = a.startRad;
+            cmd.entityGripOrigSweepRad = a.sweepRad;
+            break;
+          }
+          case SelectedEntity::Type::Ellipse: {
+            const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
+            cmd.entityGripOrigEllCx = el.cx;
+            cmd.entityGripOrigEllCy = el.cy;
+            cmd.entityGripOrigEllMajVx = el.majVx;
+            cmd.entityGripOrigEllMajVy = el.majVy;
+            cmd.entityGripOrigEllRatio = el.ratio;
+            break;
+          }
+          default:
+            break;
+          }
+
+          AbortMtextGripInteraction(cmd);
+          ClearDimGripInteraction(cmd);
+          handled = true;
+        }
+      }
+
+      if (!handled && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        const int dIx = PickCadAnnotationAt(rawPickX, rawPickY, cmd, halfH, avail.y);
+        if (dIx >= 0 && static_cast<size_t>(dIx) < cmd.cadAnnotations.size() &&
+            cmd.cadAnnotations[static_cast<size_t>(dIx)].kind == CadAnnotation::Kind::Mtext) {
+          AbortMtextGripInteraction(cmd);
+          ClearDimGripInteraction(cmd);
+          ClearCadSelection(cmd);
+          SelectedEntity se;
+          se.type = SelectedEntity::Type::Annotation;
+          se.index = dIx;
+          cmd.selection.push_back(se);
+          EnsureAttrCounts(cmd);
+          OpenMtextRichEditorForAnnotation(cmd, dIx, &log);
+          cmd.selBoxWaitingSecond = false;
+          handled = true;
+        }
+      }
+
       if (!handled) {
         const int annIx = PickCadAnnotationAt(rawPickX, rawPickY, cmd, halfH, avail.y);
         if (annIx >= 0) {
-          ClearMtextGripInteraction(cmd);
+          AbortMtextGripInteraction(cmd);
           ClearDimGripInteraction(cmd);
           SelectedEntity se;
           se.type = SelectedEntity::Type::Annotation;
@@ -2818,7 +3452,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   using AMP = AppCommandState::MtextPhase;
   using ADP = AppCommandState::DimPhase;
   const bool showMtextCmdDraft =
-      cmd.active == AK::Mtext && cmd.mtextPhase == AMP::WaitString;
+      cmd.active == AK::Mtext && cmd.mtextPhase == AMP::WaitString && !cmd.mtextRichEditorOpen;
   const bool showDimAlignedDraft =
       cmd.active == AK::DimAligned && cmd.dimPhase == ADP::WaitDimLinePt && outCursorX && outCursorY;
 
@@ -2968,7 +3602,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                          static_cast<int>(rgba[2] * 255.f), static_cast<int>(rgba[3] * 255.f));
         }
         dl->PushClipRect(ImVec2(rx0, ry0), ImVec2(rx1, ry1), true);
-        dl->AddText(font, fontPx, ImVec2(rx0 + 4.f, ry0 + 4.f), col, a.text.c_str(), nullptr, wrapW);
+        MtextRichDrawWrapped(dl, font, fontPx, ImVec2(rx0 + 4.f, ry0 + 4.f), wrapW, col, a.text);
         dl->PopClipRect();
       }
     };
@@ -3101,6 +3735,83 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     }
   }
 
+  // --- CAD ENTITY GRIPS (viewport direct edit) ---
+  if (cmd.selection.size() == 1) {
+    const SelectedEntity sel = cmd.selection[0];
+    if (sel.type == SelectedEntity::Type::LineSeg || sel.type == SelectedEntity::Type::Circle ||
+        sel.type == SelectedEntity::Type::Polyline || sel.type == SelectedEntity::Type::Arc ||
+        sel.type == SelectedEntity::Type::Ellipse) {
+      ImDrawList* dlG = ImGui::GetWindowDrawList();
+      constexpr float gripHalf = 4.f;
+      constexpr ImU32 kGripFill = IM_COL32(255, 255, 255, 255);
+      constexpr ImU32 kGripBorder = IM_COL32(60, 120, 220, 255);
+
+      const float denx = worldRight - worldLeft + 1e-12f;
+      const float deny = worldTop - worldBottom + 1e-12f;
+      auto wts = [&](float wx, float wy, ImVec2* o) {
+        const float u = (wx - worldLeft) / denx;
+        const float v = (worldTop - wy) / deny;
+        o->x = imgPos.x + u * avail.x;
+        o->y = imgPos.y + v * avail.y;
+      };
+
+      auto drawGrip = [&](float wx, float wy) {
+        ImVec2 gp{};
+        wts(wx, wy, &gp);
+        dlG->AddRectFilled(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf),
+                            kGripFill);
+        dlG->AddRect(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf),
+                     kGripBorder, 0.f, 0, 1.f);
+      };
+
+      if (sel.type == SelectedEntity::Type::LineSeg) {
+        const size_t k = static_cast<size_t>(sel.index) * 6;
+        if (k + 5 < cmd.userLinesFlat.size()) {
+          drawGrip(cmd.userLinesFlat[k], cmd.userLinesFlat[k + 1]);        // start
+          drawGrip(cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4]);    // end
+        }
+      } else if (sel.type == SelectedEntity::Type::Circle) {
+        const size_t k = static_cast<size_t>(sel.index) * 3;
+        if (k + 2 < cmd.userCirclesCxCyR.size()) {
+          const float cx = cmd.userCirclesCxCyR[k];
+          const float cy = cmd.userCirclesCxCyR[k + 1];
+          const float r = cmd.userCirclesCxCyR[k + 2];
+          drawGrip(cx, cy);       // center
+          drawGrip(cx + r, cy);  // radius handle (along +X)
+        }
+      } else if (sel.type == SelectedEntity::Type::Polyline) {
+        const int np = cmd.userPolylineOffsets.size() > 0 ? static_cast<int>(cmd.userPolylineOffsets.size() - 1) : 0;
+        if (sel.index >= 0 && sel.index < np) {
+          const int startV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index)];
+          const int endV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index + 1)];
+          for (int vi = 0; vi < endV - startV; ++vi) {
+            const size_t xIdx = static_cast<size_t>(startV + vi) * 3;
+            if (xIdx + 1 >= cmd.userPolylineVerts.size())
+              break;
+            drawGrip(cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1]);
+          }
+        }
+      } else if (sel.type == SelectedEntity::Type::Arc) {
+        if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
+          const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
+          drawGrip(a.cx, a.cy); // center
+          drawGrip(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad)); // start
+          const float endRad = a.startRad + a.sweepRad;
+          drawGrip(a.cx + a.r * std::cos(endRad), a.cy + a.r * std::sin(endRad));       // end
+        }
+      } else if (sel.type == SelectedEntity::Type::Ellipse) {
+        if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
+          const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
+          drawGrip(el.cx, el.cy); // center
+          drawGrip(el.cx + el.majVx, el.cy + el.majVy); // major endpoint
+          const float perpX = -el.majVy;
+          const float perpY = el.majVx;
+          drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio); // minor endpoint
+        }
+      }
+    }
+  }
+
   using VK = AppCommandState::Kind;
   const bool inImage = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y;
 
@@ -3119,7 +3830,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   }
 
   const bool showViewportCmdPalette =
-      cmd.active != VK::None && cmd.viewportCmdPaletteEngaged && cmdBuf && cmdBufSize > 0;
+      cmd.active != VK::None && cmd.viewportCmdPaletteEngaged && cmdBuf && cmdBufSize > 0 &&
+      !cmd.mtextRichEditorOpen;
   cmd.viewportDrawingHovered = showViewportCmdPalette;
 
   if (showViewportCmdPalette) {
@@ -3148,16 +3860,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.88f, 0.96f, 1.f));
     ImGui::TextWrapped("%s", CommandInputHint(cmd));
     ImGui::PopStyleColor();
-    ImGui::SetNextItemWidth(std::clamp(360.f * io.FontGlobalScale, 200.f, mainViewport->WorkSize.x * 0.48f));
-    ImGui::PushID("viewport_cmd_repl");
     ImGuiInputTextFlags itf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
+    ImGui::SetNextItemWidth(std::clamp(360.f * io.FontGlobalScale, 200.f, mainViewport->WorkSize.x * 0.48f));
     const bool exec =
         ImGui::InputTextWithHint("##vp_cmd_buf", "Type value, Enter or Send", cmdBuf, static_cast<size_t>(cmdBufSize),
                                  itf, CommandLineInputCallback, nullptr);
     ImGui::SameLine(0.f, 8.f);
     if (ImGui::Button("Send##vp") || exec)
       ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
-    ImGui::PopID();
     ImGui::End();
     ImGui::PopStyleVar(2);
   }
@@ -3202,6 +3912,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     wdl->AddLine(ImVec2(l, b), ImVec2(l, t), kCad, hair);
     wdl->PopClipRect();
   }
+
+  DrawMtextRichEditorOverlay(cmd, log, worldLeft, worldRight, worldBottom, worldTop, imgPos, avail);
 
   *outFbW = static_cast<int>(std::max(1.f, std::floor(avail.x)));
   *outFbH = static_cast<int>(std::max(1.f, std::floor(avail.y)));
