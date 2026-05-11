@@ -91,6 +91,9 @@ struct CadAnnotation {
 
   float dimSignedOffset = 0.f;
 
+  /// If >= 0, this MTEXT is the viewport label for \c surveyPoints[this index] (bidirectional link).
+  int surveyPointLabelFor = -1;
+
 };
 
 
@@ -272,6 +275,34 @@ struct AppCommandState {
   /// Plotted text height (inches) for survey point ID labels when \ref surveyPointShowIdInViewport is true.
 
   float surveyPointLabelPlottedHeightInches = 0.10f;
+
+  SurveyLabelStyleTemplates surveyLabelTemplates;
+
+  /// Label MTEXT: east offset of label **centerline** from point (plotted inches × MUP → world).
+  float surveyLabelOffsetEastPlottedIn = 0.35f;
+
+  /// Optional north shift of label vertical center from point (plotted inches × MUP).
+  float surveyLabelOffsetNorthPlottedIn = 0.f;
+
+  /// Legacy fixed box (plotted inches); ignored for auto-sized survey-linked MTEXT labels.
+  float surveyLabelBoxWidthPlottedIn = 1.5f;
+
+  float surveyLabelBoxHeightPlottedIn = 0.75f;
+
+  /// Drawing viewport: survey index under cursor (-1 if none), for hover feedback.
+  int viewportHoverSurveyPointIndex = -1;
+
+  /// Last Drawing1 viewport metrics (match survey MTEXT box to on-screen font scaling).
+  float viewportLastSurveyLayoutOrthoHalfH = 50.f;
+
+  float viewportLastSurveyLayoutHeightPx = 600.f;
+
+  /// Last ortho half-height / viewport height / MUP used for survey MTEXT auto-layout (re-run when zoom/size/MUP changes).
+  float surveyLabelLayoutCacheHalfH = -1.f;
+
+  float surveyLabelLayoutCacheVpHeightPx = -1.f;
+
+  float surveyLabelLayoutCacheMup = -1.f;
 
   /// Viewport screen-size clamps for TEXT annotation rendering (from paper height × MUP).
 
@@ -1051,6 +1082,14 @@ void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log);
 
 /// Removes selected entities from the drawing and clears selection. No-op if selection empty.
+
+void EraseCadAnnotationAtIndex(AppCommandState& st, size_t annIndex);
+
+void DeleteSelectedSurveyPoints(AppCommandState& st, std::vector<std::string>& log);
+
+void SyncSurveyPointLinkedMtextSelection(AppCommandState& st, int surveyPointIndex);
+
+void ApplyLinkedSurveyForAnnotationPick(AppCommandState& st, int annIndex, bool keyShift);
 
 void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log);
 

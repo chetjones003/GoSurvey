@@ -1,6 +1,9 @@
 #include "SurveyPoints.hpp"
 
 #include "CadCommands.hpp"
+#include "MtextRichFormat.hpp"
+
+#include <imgui.h>
 
 #include <algorithm>
 #include <cmath>
@@ -165,6 +168,7 @@ bool TryPlaceSurveyPoint(AppCommandState& st, float easting, float northing, flo
     log.push_back("Survey point " + std::to_string(id) + " — E " + std::to_string(easting) + " N " +
                   std::to_string(northing) + " Z " + std::to_string(elevation));
     advanceSequential(id);
+    EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, &log);
   };
 
   if (!SurveyIdExists(st.surveyPoints, idTry)) {
@@ -197,6 +201,7 @@ bool TryPlaceSurveyPoint(AppCommandState& st, float easting, float northing, flo
     }
     log.push_back("Survey point " + std::to_string(idTry) + " merged (coordinates/description updated).");
     advanceSequential(idTry);
+    EnsureSurveyPointLabelMtext(st, static_cast<size_t>(ix), &log);
     return true;
   }
 
@@ -210,6 +215,7 @@ bool TryPlaceSurveyPoint(AppCommandState& st, float easting, float northing, flo
     p.description = opts.defaultDescription;
     log.push_back("Survey point " + std::to_string(idTry) + " overwritten.");
     advanceSequential(idTry);
+    EnsureSurveyPointLabelMtext(st, static_cast<size_t>(ix), &log);
     return true;
   }
   }
@@ -254,17 +260,21 @@ void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, floa
       }
       const int nid = NextFreeId(pts, srcId, step);
       copy.id = nid;
+      copy.labelMtextAnnIndex = -1;
       pts.push_back(std::move(copy));
       buffers.push_back(std::to_string(nid));
       ++added;
+      EnsureSurveyPointLabelMtext(st, pts.size() - 1, &log);
       break;
     }
     case SurveyDuplicatePolicy::Renumber: {
       const int nid = NextFreeId(pts, srcId, step);
       copy.id = nid;
+      copy.labelMtextAnnIndex = -1;
       pts.push_back(std::move(copy));
       buffers.push_back(std::to_string(nid));
       ++added;
+      EnsureSurveyPointLabelMtext(st, pts.size() - 1, &log);
       break;
     }
     case SurveyDuplicatePolicy::Merge: {
@@ -282,12 +292,15 @@ void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, floa
         if (!copy.layer.empty())
           tgt.layer = copy.layer;
         ++merged;
+        EnsureSurveyPointLabelMtext(st, static_cast<size_t>(other), &log);
       } else {
         const int nid = NextFreeId(pts, srcId, step);
         copy.id = nid;
+        copy.labelMtextAnnIndex = -1;
         pts.push_back(std::move(copy));
         buffers.push_back(std::to_string(nid));
         ++added;
+        EnsureSurveyPointLabelMtext(st, pts.size() - 1, &log);
       }
       break;
     }
@@ -298,12 +311,15 @@ void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, floa
         if (static_cast<size_t>(other) < buffers.size())
           buffers[static_cast<size_t>(other)] = std::to_string(copy.id);
         ++overwrote;
+        EnsureSurveyPointLabelMtext(st, static_cast<size_t>(other), &log);
       } else {
         const int nid = NextFreeId(pts, srcId, step);
         copy.id = nid;
+        copy.labelMtextAnnIndex = -1;
         pts.push_back(std::move(copy));
         buffers.push_back(std::to_string(nid));
         ++added;
+        EnsureSurveyPointLabelMtext(st, pts.size() - 1, &log);
       }
       break;
     }
@@ -384,17 +400,21 @@ void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float b
       }
       const int nid = NextFreeId(pts, srcId, step);
       copy.id = nid;
+      copy.labelMtextAnnIndex = -1;
       pts.push_back(std::move(copy));
       buffers.push_back(std::to_string(nid));
       ++added;
+      EnsureSurveyPointLabelMtext(st, pts.size() - 1, &log);
       break;
     }
     case SurveyDuplicatePolicy::Renumber: {
       const int nid = NextFreeId(pts, srcId, step);
       copy.id = nid;
+      copy.labelMtextAnnIndex = -1;
       pts.push_back(std::move(copy));
       buffers.push_back(std::to_string(nid));
       ++added;
+      EnsureSurveyPointLabelMtext(st, pts.size() - 1, &log);
       break;
     }
     case SurveyDuplicatePolicy::Merge: {
@@ -412,12 +432,15 @@ void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float b
         if (!copy.layer.empty())
           tgt.layer = copy.layer;
         ++merged;
+        EnsureSurveyPointLabelMtext(st, static_cast<size_t>(other), &log);
       } else {
         const int nid = NextFreeId(pts, srcId, step);
         copy.id = nid;
+        copy.labelMtextAnnIndex = -1;
         pts.push_back(std::move(copy));
         buffers.push_back(std::to_string(nid));
         ++added;
+        EnsureSurveyPointLabelMtext(st, pts.size() - 1, &log);
       }
       break;
     }
@@ -428,12 +451,15 @@ void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float b
         if (static_cast<size_t>(other) < buffers.size())
           buffers[static_cast<size_t>(other)] = std::to_string(copy.id);
         ++overwrote;
+        EnsureSurveyPointLabelMtext(st, static_cast<size_t>(other), &log);
       } else {
         const int nid = NextFreeId(pts, srcId, step);
         copy.id = nid;
+        copy.labelMtextAnnIndex = -1;
         pts.push_back(std::move(copy));
         buffers.push_back(std::to_string(nid));
         ++added;
+        EnsureSurveyPointLabelMtext(st, pts.size() - 1, &log);
       }
       break;
     }
@@ -467,17 +493,171 @@ void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float b
 void RemoveSurveyPointAt(AppCommandState& st, size_t index) {
   if (index >= st.surveyPoints.size())
     return;
+  int annIx = st.surveyPoints[index].labelMtextAnnIndex;
+  for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
+    if (st.cadAnnotations[ai].kind == CadAnnotation::Kind::Mtext &&
+        st.cadAnnotations[ai].surveyPointLabelFor == static_cast<int>(index))
+      annIx = static_cast<int>(ai);
+  }
+  if (annIx >= 0 && static_cast<size_t>(annIx) < st.cadAnnotations.size())
+    EraseCadAnnotationAtIndex(st, static_cast<size_t>(annIx));
+
+  for (CadAnnotation& a : st.cadAnnotations) {
+    if (a.surveyPointLabelFor > static_cast<int>(index))
+      --a.surveyPointLabelFor;
+    else if (a.surveyPointLabelFor == static_cast<int>(index))
+      a.surveyPointLabelFor = -1;
+  }
+
   st.surveyPoints.erase(st.surveyPoints.begin() + static_cast<std::ptrdiff_t>(index));
   if (index < st.surveyPointIdBuffers.size())
     st.surveyPointIdBuffers.erase(st.surveyPointIdBuffers.begin() + static_cast<std::ptrdiff_t>(index));
   auto& sv = st.selectedSurveyPointIndices;
-  sv.erase(std::remove_if(sv.begin(), sv.end(),
-                         [&](int i) { return i == static_cast<int>(index); }),
-           sv.end());
+  sv.erase(std::remove_if(sv.begin(), sv.end(), [&](int i) { return i == static_cast<int>(index); }), sv.end());
   for (int& i : sv) {
     if (i > static_cast<int>(index))
       --i;
   }
+  BumpCadGpuCache(st);
+}
+
+namespace {
+
+void ReplaceAll(std::string* s, const std::string& from, const std::string& to) {
+  if (from.empty())
+    return;
+  size_t pos = 0;
+  while ((pos = s->find(from, pos)) != std::string::npos) {
+    s->replace(pos, from.size(), to);
+    pos += to.size();
+  }
+}
+
+} // namespace
+
+std::string FormatSurveyPointLabelPlain(const SurveyPoint& p, SurveyPointLabelStyle style,
+                                       const SurveyLabelStyleTemplates& templates) {
+  if (style == SurveyPointLabelStyle::None)
+    return {};
+  const std::string* tpl = &templates.numberDesc;
+  switch (style) {
+  case SurveyPointLabelStyle::NumberDesc:
+    tpl = &templates.numberDesc;
+    break;
+  case SurveyPointLabelStyle::NumberOnly:
+    tpl = &templates.numberOnly;
+    break;
+  case SurveyPointLabelStyle::DescOnly:
+    tpl = &templates.descOnly;
+    break;
+  case SurveyPointLabelStyle::NumberElev:
+    tpl = &templates.numberElev;
+    break;
+  case SurveyPointLabelStyle::NumberElevDesc:
+    tpl = &templates.numberElevDesc;
+    break;
+  default:
+    tpl = &templates.numberDesc;
+    break;
+  }
+  std::string out = *tpl;
+  ReplaceAll(&out, "{id}", std::to_string(p.id));
+  ReplaceAll(&out, "{desc}", p.description);
+  char ebuf[64];
+  std::snprintf(ebuf, sizeof(ebuf), "%.3f", static_cast<double>(p.elevation));
+  ReplaceAll(&out, "{elev}", std::string(ebuf));
+  return out;
+}
+
+void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) {
+  if (pointIndex >= st.surveyPoints.size())
+    return;
+  const SurveyPoint& p = st.surveyPoints[pointIndex];
+  const int aix = p.labelMtextAnnIndex;
+  if (aix < 0 || static_cast<size_t>(aix) >= st.cadAnnotations.size())
+    return;
+  CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(aix)];
+  if (a.kind != CadAnnotation::Kind::Mtext)
+    return;
+
+  const float mup = std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+  const float hWorld = CadAnnotationHeightWorld(a, st.modelUnitsPerPlottedInch);
+  const float vpH = std::max(st.viewportLastSurveyLayoutHeightPx, 64.f);
+  const float halfH = std::max(st.viewportLastSurveyLayoutOrthoHalfH, 1.e-4f);
+  const float worldPerPxY = (2.f * halfH) / vpH;
+
+  ImFont* font = ImGui::GetFont();
+  const float fontPx =
+      std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), st.viewportMtextMinPx, st.viewportMtextMaxPx);
+
+  const std::string norm = MtextRichNormalize(a.text);
+  float pw = 8.f;
+  float ph = fontPx * 1.22f;
+  MtextRichNaturalContentPx(font, fontPx, norm, &pw, &ph);
+
+  constexpr float kPadPx = 8.f;
+  const float bw = (pw + 2.f * kPadPx) * worldPerPxY;
+  const float bh = (ph + 2.f * kPadPx) * worldPerPxY;
+
+  const float minDim = std::max(0.04f * hWorld, 1.e-4f * mup);
+  const float bwClamped = std::max(bw, minDim);
+  const float bhClamped = std::max(bh, minDim);
+
+  const float cx = p.easting + st.surveyLabelOffsetEastPlottedIn * mup;
+  const float cy = p.northing + st.surveyLabelOffsetNorthPlottedIn * mup;
+  a.boxMinX = cx - bwClamped * 0.5f;
+  a.boxMaxX = cx + bwClamped * 0.5f;
+  a.boxMinY = cy - bhClamped * 0.5f;
+  a.boxMaxY = cy + bhClamped * 0.5f;
+  a.insX = a.boxMinX;
+  a.insY = a.boxMinY;
+}
+
+void RepositionAllSurveyPointLabels(AppCommandState& st) {
+  for (size_t i = 0; i < st.surveyPoints.size(); ++i)
+    RepositionSurveyLabelMtextForPoint(st, i);
+}
+
+void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::vector<std::string>* log) {
+  if (pointIndex >= st.surveyPoints.size())
+    return;
+  SurveyPoint& p = st.surveyPoints[pointIndex];
+  if (p.labelStyle == SurveyPointLabelStyle::None) {
+    if (p.labelMtextAnnIndex >= 0 && static_cast<size_t>(p.labelMtextAnnIndex) < st.cadAnnotations.size())
+      EraseCadAnnotationAtIndex(st, static_cast<size_t>(p.labelMtextAnnIndex));
+    p.labelMtextAnnIndex = -1;
+    BumpCadGpuCache(st);
+    return;
+  }
+
+  const std::string body = FormatSurveyPointLabelPlain(p, p.labelStyle, st.surveyLabelTemplates);
+  if (p.labelMtextAnnIndex >= 0 && static_cast<size_t>(p.labelMtextAnnIndex) < st.cadAnnotations.size()) {
+    CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(p.labelMtextAnnIndex)];
+    if (a.kind == CadAnnotation::Kind::Mtext) {
+      a.text = body;
+      a.surveyPointLabelFor = static_cast<int>(pointIndex);
+      a.plottedHeightInches = std::max(st.surveyPointLabelPlottedHeightInches, 0.04f);
+      RepositionSurveyLabelMtextForPoint(st, pointIndex);
+      BumpCadGpuCache(st);
+      return;
+    }
+    p.labelMtextAnnIndex = -1;
+  }
+
+  CadAnnotation ann{};
+  ann.kind = CadAnnotation::Kind::Mtext;
+  ann.text = body;
+  ann.plottedHeightInches = std::max(st.surveyPointLabelPlottedHeightInches, 0.04f);
+  ann.rotationRad = 0.f;
+  ann.surveyPointLabelFor = static_cast<int>(pointIndex);
+  st.cadAnnotations.push_back(std::move(ann));
+  while (st.cadAnnotationAttrs.size() < st.cadAnnotations.size())
+    st.cadAnnotationAttrs.emplace_back();
+  p.labelMtextAnnIndex = static_cast<int>(st.cadAnnotations.size() - 1);
+  RepositionSurveyLabelMtextForPoint(st, pointIndex);
+  if (log)
+    log->push_back("Survey label MTEXT created for point " + std::to_string(p.id) + ".");
+  BumpCadGpuCache(st);
 }
 
 bool SaveSurveyPointsToJsonFile(const AppCommandState& st, const char* path, std::vector<std::string>& log) {
@@ -492,8 +672,8 @@ bool SaveSurveyPointsToJsonFile(const AppCommandState& st, const char* path, std
     if (i != 0)
       f << ',';
     f << "{\"id\":" << p.id << ",\"easting\":" << p.easting << ",\"northing\":" << p.northing
-      << ",\"elevation\":" << p.elevation << ",\"layer\":\"" << JsonEscape(p.layer) << "\",\"description\":\""
-      << JsonEscape(p.description) << "\"}";
+      << ",\"elevation\":" << p.elevation << ",\"labelStyle\":" << static_cast<int>(p.labelStyle)
+      << ",\"layer\":\"" << JsonEscape(p.layer) << "\",\"description\":\"" << JsonEscape(p.description) << "\"}";
   }
   f << "]}\n";
   log.push_back("Saved " + std::to_string(st.surveyPoints.size()) + " survey point(s) to " +
@@ -558,9 +738,18 @@ bool LoadSurveyPointsFromJsonFile(AppCommandState& st, const char* path, std::ve
       p.layer = "0";
     if (!ExtractJsonStringField(obj, "description", &p.description))
       p.description.clear();
+    int ls = static_cast<int>(SurveyPointLabelStyle::NumberDesc);
+    if (parseIntField(obj, "labelStyle", &ls)) {
+      if (ls < 0 || ls > static_cast<int>(SurveyPointLabelStyle::NumberElevDesc))
+        ls = static_cast<int>(SurveyPointLabelStyle::NumberDesc);
+      p.labelStyle = static_cast<SurveyPointLabelStyle>(ls);
+    }
     st.surveyPoints.push_back(std::move(p));
     search = objEnd + 1;
   }
+
+  for (size_t i = 0; i < st.surveyPoints.size(); ++i)
+    EnsureSurveyPointLabelMtext(st, i, &log);
 
   log.push_back("Loaded " + std::to_string(st.surveyPoints.size()) + " survey point(s) from " +
                 std::string(path));

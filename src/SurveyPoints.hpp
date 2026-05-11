@@ -1,7 +1,26 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
+
+enum class SurveyPointLabelStyle : uint8_t {
+  None = 0,
+  NumberDesc,
+  NumberOnly,
+  DescOnly,
+  NumberElev,
+  NumberElevDesc,
+};
+
+/// Placeholders: {id} {desc} {elev} — use a real newline in the string for line breaks.
+struct SurveyLabelStyleTemplates {
+  std::string numberDesc = "{id}\n{desc}";
+  std::string numberOnly = "{id}";
+  std::string descOnly = "{desc}";
+  std::string numberElev = "{id}\nZ={elev}";
+  std::string numberElevDesc = "{id}\nZ={elev}\n{desc}";
+};
 
 struct SurveyPoint {
   int id = 0;
@@ -10,8 +29,10 @@ struct SurveyPoint {
   float elevation = 0.f;
   std::string description;
   std::string layer;
+  SurveyPointLabelStyle labelStyle = SurveyPointLabelStyle::NumberDesc;
+  /// Index into \ref AppCommandState::cadAnnotations for linked MTEXT label, or -1.
+  int labelMtextAnnIndex = -1;
 };
-
 enum class SurveyDuplicatePolicy { Notify, Renumber, Merge, Overwrite };
 
 struct CreatePointsOptions {
@@ -54,6 +75,16 @@ void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float b
                                           SurveyDuplicatePolicy policy, std::vector<std::string>& log);
 
 void RemoveSurveyPointAt(AppCommandState& st, size_t index);
+
+[[nodiscard]] std::string FormatSurveyPointLabelPlain(const SurveyPoint& p, SurveyPointLabelStyle style,
+                                                      const SurveyLabelStyleTemplates& templates);
+
+void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::vector<std::string>* log);
+
+void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex);
+
+/// Repositions every linked survey MTEXT (e.g. after plot scale / PSCALE changes).
+void RepositionAllSurveyPointLabels(AppCommandState& st);
 
 bool SaveSurveyPointsToJsonFile(const AppCommandState& st, const char* path, std::vector<std::string>& log);
 

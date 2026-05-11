@@ -21,3 +21,6 @@ void MtextRichDrawWrapped(ImDrawList* dl, ImFont* font, float fontPx, ImVec2 ori
 
 /// Vertical size (px) of the same wrapped layout as \ref MtextRichDrawWrapped (no drawing).
 [[nodiscard]] float MtextRichWrappedHeight(ImFont* font, float fontPx, float maxWidth, const std::string& wire);
+
+/// Unwrapped content size in pixels (only hard newlines break lines; \p maxWidth should be very large).
+void MtextRichNaturalContentPx(ImFont* font, float fontPx, const std::string& wire, float* outW, float* outH);

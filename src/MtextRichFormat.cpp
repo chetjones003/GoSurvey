@@ -130,7 +130,9 @@ void SerializeRuns(const std::vector<RichRun>& runs, std::string* out) {
 }
 
 static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, ImVec2 origin, float maxWidth,
-                                   ImU32 baseRgb, const std::string& wire) {
+                                   ImU32 baseRgb, const std::string& wire, float* outMaxContentWidthPx) {
+  if (outMaxContentWidthPx)
+    *outMaxContentWidthPx = 0.f;
   if (!font || maxWidth < 4.f)
     return fontPx * 1.22f;
   std::vector<RichRun> runs;
@@ -142,6 +144,7 @@ static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, I
   ImVec2 pen = origin;
   const float x0 = origin.x;
   const float xMax = origin.x + std::max(8.f, maxWidth);
+  float lineStartX = pen.x;
 
   auto segColor = [&](const RichRun& r) -> ImU32 {
     ImVec4 fc = ImGui::ColorConvertU32ToFloat4(baseRgb);
@@ -171,7 +174,10 @@ static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, I
     const ImU32 col = segColor(r);
     while (s < end) {
       if (*s == '\n') {
+        if (outMaxContentWidthPx)
+          *outMaxContentWidthPx = std::max(*outMaxContentWidthPx, pen.x - lineStartX);
         pen.x = x0;
+        lineStartX = pen.x;
         pen.y += lineH;
         ++s;
         continue;
@@ -216,6 +222,8 @@ static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, I
       }
     }
   }
+  if (outMaxContentWidthPx)
+    *outMaxContentWidthPx = std::max(*outMaxContentWidthPx, pen.x - lineStartX);
   return std::max(maxInkY - origin.y, lineH);
 }
 
@@ -246,9 +254,22 @@ void MtextRichDrawWrapped(ImDrawList* dl, ImFont* font, float fontPx, ImVec2 ori
                           const std::string& wire) {
   if (!dl)
     return;
-  RichWrappedLayoutCore(dl, font, fontPx, origin, maxWidth, baseRgb, wire);
+  RichWrappedLayoutCore(dl, font, fontPx, origin, maxWidth, baseRgb, wire, nullptr);
 }
 
 float MtextRichWrappedHeight(ImFont* font, float fontPx, float maxWidth, const std::string& wire) {
-  return RichWrappedLayoutCore(nullptr, font, fontPx, ImVec2(0.f, 0.f), maxWidth, IM_COL32_WHITE, wire);
+  return RichWrappedLayoutCore(nullptr, font, fontPx, ImVec2(0.f, 0.f), maxWidth, IM_COL32_WHITE, wire, nullptr);
+}
+
+void MtextRichNaturalContentPx(ImFont* font, float fontPx, const std::string& wire, float* outW, float* outH) {
+  if (!outW || !outH)
+    return;
+  if (!font || fontPx < 1.f) {
+    *outW = 8.f;
+    *outH = std::max(fontPx * 1.22f, 4.f);
+    return;
+  }
+  float maxW = 0.f;
+  *outH = RichWrappedLayoutCore(nullptr, font, fontPx, ImVec2(0.f, 0.f), 1.e9f, IM_COL32_WHITE, wire, &maxW);
+  *outW = std::max(maxW, 8.f);
 }

@@ -1789,11 +1789,34 @@ void DrawSurveyPointPickProps(AppCommandState& cmd) {
     return;
 
   if (ixv.size() == 1) {
-    const SurveyPoint& p = cmd.surveyPoints[static_cast<size_t>(ixv.front())];
+    const int rowIx = ixv.front();
+    if (rowIx < 0 || static_cast<size_t>(rowIx) >= cmd.surveyPoints.size())
+      return;
+    SurveyPoint& p = cmd.surveyPoints[static_cast<size_t>(rowIx)];
     ImGui::TextUnformatted("Survey — 1 point");
     if (ImGui::BeginTable("props_pick_survey", 2, ImGuiTableFlags_SizingStretchProp)) {
       ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.42f);
       ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.58f);
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted("Label style");
+      ImGui::TableNextColumn();
+      {
+        int styleI = static_cast<int>(p.labelStyle);
+        styleI = std::clamp(styleI, 0, static_cast<int>(SurveyPointLabelStyle::NumberElevDesc));
+        const char* items =
+            "None\0"
+            "Point number and description\0"
+            "Point number only\0"
+            "Description only\0"
+            "Point number and elevation\0"
+            "Point number, elevation, and description\0\0";
+        if (ImGui::Combo("##svy_lbl_style", &styleI, items)) {
+          p.labelStyle = static_cast<SurveyPointLabelStyle>(styleI);
+          EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(rowIx), nullptr);
+          SyncSurveyPointLinkedMtextSelection(cmd, rowIx);
+        }
+      }
       PropRow("Point ID", std::to_string(p.id));
       char nbuf[64];
       std::snprintf(nbuf, sizeof(nbuf), "%.6f", static_cast<double>(p.northing));
@@ -2023,6 +2046,10 @@ static void DrawPlotScaleCombo(AppCommandState& cmd) {
       const bool isSel = (selected == i);
       if (ImGui::Selectable(kScales[i].label, isSel)) {
         cmd.modelUnitsPerPlottedInch = kScales[i].modelUnitsPerPlottedInch;
+        RepositionAllSurveyPointLabels(cmd);
+        cmd.surveyLabelLayoutCacheHalfH = cmd.viewportLastSurveyLayoutOrthoHalfH;
+        cmd.surveyLabelLayoutCacheVpHeightPx = cmd.viewportLastSurveyLayoutHeightPx;
+        cmd.surveyLabelLayoutCacheMup = cmd.modelUnitsPerPlottedInch;
         BumpCadGpuCache(cmd);
       }
       if (isSel)
@@ -2706,8 +2733,30 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const float surveyCrossHalfW =
       SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
 
-  if (out_snap)
-    *out_snap = {};
+  cmd.viewportLastSurveyLayoutOrthoHalfH = halfH;
+  cmd.viewportLastSurveyLayoutHeightPx = avail.y;
+
+  {
+    const float ch = cmd.surveyLabelLayoutCacheHalfH;
+    const float cy = cmd.surveyLabelLayoutCacheVpHeightPx;
+    const float cm = cmd.surveyLabelLayoutCacheMup;
+    const bool layoutCacheValid = ch >= 0.f && cy >= 0.f && cm >= 0.f;
+    const float relHalf = std::max(ch, 1.e-4f);
+    const bool zoomViewportChanged =
+        !layoutCacheValid || std::fabs(halfH - ch) > std::max(0.002f * relHalf, 1.e-5f) ||
+        std::fabs(avail.y - cy) > 0.5f ||
+        std::fabs(cmd.modelUnitsPerPlottedInch - cm) > 0.001f;
+    if (zoomViewportChanged && !cmd.surveyPoints.empty()) {
+      cmd.surveyLabelLayoutCacheHalfH = halfH;
+      cmd.surveyLabelLayoutCacheVpHeightPx = avail.y;
+      cmd.surveyLabelLayoutCacheMup = cmd.modelUnitsPerPlottedInch;
+      RepositionAllSurveyPointLabels(cmd);
+      BumpCadGpuCache(cmd);
+    }
+  }
+
+  cmd.viewportHoverSurveyPointIndex = -1;
+  *out_snap = {};
 
   if (hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
     const float u = mx / std::max(avail.x, 1.f);
@@ -2719,6 +2768,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       *outCursorRawX = rawX;
     if (outCursorRawY)
       *outCursorRawY = rawY;
+
+    using AK = AppCommandState::Kind;
+    const bool blockSurveyHover = cmd.active != AK::None || cmd.dimGripMoveActive || cmd.entityGripMoveActive ||
+                                  cmd.mtextGripMoveActive || cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond;
+    if (!cmd.surveyPoints.empty() && !blockSurveyHover)
+      cmd.viewportHoverSurveyPointIndex =
+          PickSurveyPointIndex(cmd.surveyPoints, rawX, rawY, surveyCrossHalfW, avail.y, halfH);
 
     CadSnap::Hit snap{};
     if (object_snap_enabled) {
@@ -3029,6 +3085,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (hitIx >= 0) {
         ClearCadSelection(cmd);
         ApplySurveyPointClickSelection(cmd, hitIx, keyShift, &log);
+        for (int svi : cmd.selectedSurveyPointIndices) {
+          if (svi >= 0 && static_cast<size_t>(svi) < cmd.surveyPoints.size())
+            SyncSurveyPointLinkedMtextSelection(cmd, svi);
+        }
       } else {
         TryPlaceSurveyPoint(cmd, *outCursorX, *outCursorY, cmd.createPointsOpts.defaultElevation, log);
       }
@@ -3392,6 +3452,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           se.index = dIx;
           cmd.selection.push_back(se);
           EnsureAttrCounts(cmd);
+          const CadAnnotation& da = cmd.cadAnnotations[static_cast<size_t>(dIx)];
+          if (da.kind == CadAnnotation::Kind::Mtext && da.surveyPointLabelFor >= 0) {
+            ApplyLinkedSurveyForAnnotationPick(cmd, dIx, false);
+            SyncSurveyPointLinkedMtextSelection(cmd, da.surveyPointLabelFor);
+          } else
+            cmd.selectedSurveyPointIndices.clear();
           OpenMtextRichEditorForAnnotation(cmd, dIx, &log);
           cmd.selBoxWaitingSecond = false;
           handled = true;
@@ -3403,6 +3469,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (annIx >= 0) {
           AbortMtextGripInteraction(cmd);
           ClearDimGripInteraction(cmd);
+          const CadAnnotation& pickedAnn = cmd.cadAnnotations[static_cast<size_t>(annIx)];
+          const bool linkedSurvey =
+              pickedAnn.kind == CadAnnotation::Kind::Mtext && pickedAnn.surveyPointLabelFor >= 0;
           SelectedEntity se;
           se.type = SelectedEntity::Type::Annotation;
           se.index = annIx;
@@ -3414,9 +3483,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
               cmd.selection.erase(it);
             else
               cmd.selection.push_back(se);
+            if (linkedSurvey)
+              ApplyLinkedSurveyForAnnotationPick(cmd, annIx, true);
           } else {
             ClearCadSelection(cmd);
+            if (linkedSurvey)
+              ApplyLinkedSurveyForAnnotationPick(cmd, annIx, false);
+            else
+              cmd.selectedSurveyPointIndices.clear();
             cmd.selection.push_back(se);
+            if (linkedSurvey)
+              SyncSurveyPointLinkedMtextSelection(cmd, pickedAnn.surveyPointLabelFor);
           }
           EnsureAttrCounts(cmd);
           cmd.selBoxWaitingSecond = false;
@@ -3429,6 +3506,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           if (hitIx >= 0) {
             ClearCadSelection(cmd);
             ApplySurveyPointClickSelection(cmd, hitIx, keyShift, &log);
+            for (int svi : cmd.selectedSurveyPointIndices) {
+              if (svi >= 0 && static_cast<size_t>(svi) < cmd.surveyPoints.size())
+                SyncSurveyPointLinkedMtextSelection(cmd, svi);
+            }
           } else if (!cmd.selBoxWaitingSecond)
             BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
           else
@@ -3593,7 +3674,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float ry1 = std::max(sa.y, sb.y);
         const float fontPx =
             std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), cmd.viewportMtextMinPx, cmd.viewportMtextMaxPx);
-        const float wrapW = std::max(8.f, rx1 - rx0 - 8.f);
         ImU32 col = colFallback;
         if (attrPtr) {
           float rgba[4];
@@ -3601,8 +3681,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           col = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
                          static_cast<int>(rgba[2] * 255.f), static_cast<int>(rgba[3] * 255.f));
         }
+        float drawX = rx0 + 4.f;
+        float drawY = ry0 + 4.f;
+        float wrapW = std::max(8.f, rx1 - rx0 - 8.f);
+        if (a.surveyPointLabelFor >= 0) {
+          float pw = 8.f;
+          float ph = fontPx * 1.22f;
+          MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph);
+          drawX = rx0 + 0.5f * ((rx1 - rx0) - pw);
+          drawY = ry0 + 0.5f * ((ry1 - ry0) - ph);
+          wrapW = std::max(pw, 8.f);
+        }
         dl->PushClipRect(ImVec2(rx0, ry0), ImVec2(rx1, ry1), true);
-        MtextRichDrawWrapped(dl, font, fontPx, ImVec2(rx0 + 4.f, ry0 + 4.f), wrapW, col, a.text);
+        MtextRichDrawWrapped(dl, font, fontPx, ImVec2(drawX, drawY), wrapW, col, a.text);
         dl->PopClipRect();
       }
     };
@@ -3707,6 +3798,24 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                     0.f, 0, 1.f);
       }
     }
+  }
+
+  if (cmd.viewportHoverSurveyPointIndex >= 0 &&
+      static_cast<size_t>(cmd.viewportHoverSurveyPointIndex) < cmd.surveyPoints.size()) {
+    const SurveyPoint& hp = cmd.surveyPoints[static_cast<size_t>(cmd.viewportHoverSurveyPointIndex)];
+    ImDrawList* dlHov = ImGui::GetWindowDrawList();
+    const float denxH = worldRight - worldLeft + 1e-12f;
+    const float denyH = worldTop - worldBottom + 1e-12f;
+    const float uH = (hp.easting - worldLeft) / denxH;
+    const float vH = (worldTop - hp.northing) / denyH;
+    const ImVec2 cH(imgPos.x + uH * avail.x, imgPos.y + vH * avail.y);
+    const float worldPerPxYH = (worldTop - worldBottom) / std::max(avail.y, 1.f);
+    const float armH =
+        SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
+    const float tolH = CadSnap::WorldToleranceFromPixels(avail.y, halfH, 12.f);
+    const float rWorldH = std::max(armH, tolH) * 1.38f;
+    const float rPxH = rWorldH / std::max(worldPerPxYH, 1e-6f);
+    dlHov->AddCircle(cH, std::max(rPxH, 4.f), IM_COL32(100, 215, 255, 230), 48, 2.25f);
   }
 
   if (!cmd.surveyPoints.empty() && cmd.surveyPointShowIdInViewport) {
@@ -3988,7 +4097,7 @@ void DrawSettingsPanel(AppCommandState& cmd) {
   if (!cmd.showSettingsWindow)
     return;
 
-  ImGui::SetNextWindowSize(ImVec2(560, 460), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(620, 560), ImGuiCond_FirstUseEver);
   bool open = cmd.showSettingsWindow;
   if (!ImGui::Begin("Settings", &open)) {
     cmd.showSettingsWindow = open;
@@ -4024,9 +4133,44 @@ void DrawSettingsPanel(AppCommandState& cmd) {
                        "%.3f");
       ItemHelpTooltip("Horizontal span of the X on paper: world size = span × model units per plotted inch.");
       ImGui::Checkbox("Show point ID in viewport", &cmd.surveyPointShowIdInViewport);
-      ImGui::DragFloat("ID label height (plotted inches)", &cmd.surveyPointLabelPlottedHeightInches, 0.001f, 0.04f,
-                       0.5f, "%.3f");
-      ImGui::TextDisabled("ID label screen size also uses TEXT min/max px (Text & MTEXT tab).");
+      if (ImGui::DragFloat("Survey label text height (plotted inches)", &cmd.surveyPointLabelPlottedHeightInches,
+                           0.001f, 0.04f, 0.5f, "%.3f")) {
+        for (size_t i = 0; i < cmd.surveyPoints.size(); ++i)
+          EnsureSurveyPointLabelMtext(cmd, i, nullptr);
+      }
+      ImGui::TextDisabled("Screen size also clamps with TEXT min/max px (Text & MTEXT tab).");
+      ImGui::Separator();
+      ImGui::TextWrapped(
+          "Linked survey MTEXT uses a tight box from the label text. East offset is the horizontal distance on paper "
+          "from the point to the label **centerline** (default 0.35 in). North offset shifts the label vertical center "
+          "from the point.");
+      const bool le = ImGui::DragFloat("Label center east of point (plotted in)", &cmd.surveyLabelOffsetEastPlottedIn,
+                                       0.002f, -2.f, 4.f, "%.3f");
+      const bool ln = ImGui::DragFloat("Label center north of point (plotted in)", &cmd.surveyLabelOffsetNorthPlottedIn,
+                                       0.002f, -2.f, 4.f, "%.3f");
+      if (le || ln) {
+        for (size_t i = 0; i < cmd.surveyPoints.size(); ++i)
+          RepositionSurveyLabelMtextForPoint(cmd, i);
+        BumpCadGpuCache(cmd);
+      }
+      ImGui::Separator();
+      ImGui::TextWrapped(
+          "Label style templates (Settings apply to all points). Placeholders: {id} {desc} {elev}. "
+          "Press Enter in a field or click Apply to refresh existing labels.");
+      ImGui::InputTextMultiline("Number + description##svy_tpl_nd", &cmd.surveyLabelTemplates.numberDesc,
+                                ImVec2(-FLT_MIN, 52.f));
+      ImGui::InputTextMultiline("Number only##svy_tpl_no", &cmd.surveyLabelTemplates.numberOnly, ImVec2(-FLT_MIN, 40.f));
+      ImGui::InputTextMultiline("Description only##svy_tpl_do", &cmd.surveyLabelTemplates.descOnly,
+                                ImVec2(-FLT_MIN, 40.f));
+      ImGui::InputTextMultiline("Number + elevation##svy_tpl_ne", &cmd.surveyLabelTemplates.numberElev,
+                                ImVec2(-FLT_MIN, 52.f));
+      ImGui::InputTextMultiline("Number + elevation + description##svy_tpl_ned",
+                                &cmd.surveyLabelTemplates.numberElevDesc, ImVec2(-FLT_MIN, 60.f));
+      if (ImGui::Button("Apply label templates to all survey points")) {
+        for (size_t i = 0; i < cmd.surveyPoints.size(); ++i)
+          EnsureSurveyPointLabelMtext(cmd, i, nullptr);
+        BumpCadGpuCache(cmd);
+      }
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("Text & MTEXT")) {
@@ -4137,26 +4281,39 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
             cmd.surveyPointIdBuffers[i] = std::to_string(nid);
           }
         }
+        EnsureSurveyPointLabelMtext(cmd, i, &log);
       }
       ImGui::TableNextColumn();
       double de = static_cast<double>(p.easting);
       ImGui::InputDouble("##e", &de, 0., 0., "%.6f");
-      if (ImGui::IsItemDeactivatedAfterEdit())
+      if (ImGui::IsItemDeactivatedAfterEdit()) {
         p.easting = static_cast<float>(de);
+        EnsureSurveyPointLabelMtext(cmd, i, &log);
+      }
       ImGui::TableNextColumn();
       double dn = static_cast<double>(p.northing);
       ImGui::InputDouble("##n", &dn, 0., 0., "%.6f");
-      if (ImGui::IsItemDeactivatedAfterEdit())
+      if (ImGui::IsItemDeactivatedAfterEdit()) {
         p.northing = static_cast<float>(dn);
+        EnsureSurveyPointLabelMtext(cmd, i, &log);
+      }
       ImGui::TableNextColumn();
       double dz = static_cast<double>(p.elevation);
       ImGui::InputDouble("##z", &dz, 0., 0., "%.4f");
-      if (ImGui::IsItemDeactivatedAfterEdit())
+      if (ImGui::IsItemDeactivatedAfterEdit()) {
         p.elevation = static_cast<float>(dz);
+        EnsureSurveyPointLabelMtext(cmd, i, &log);
+      }
       ImGui::TableNextColumn();
       ImGui::InputText("##layer", &p.layer);
+      if (ImGui::IsItemDeactivatedAfterEdit()) {
+        RepositionSurveyLabelMtextForPoint(cmd, i);
+        BumpCadGpuCache(cmd);
+      }
       ImGui::TableNextColumn();
       ImGui::InputTextMultiline("##desc", &p.description, ImVec2(-FLT_MIN, 52.f));
+      if (ImGui::IsItemDeactivatedAfterEdit())
+        EnsureSurveyPointLabelMtext(cmd, i, &log);
       ImGui::TableNextColumn();
       if (ImGui::SmallButton("X"))
         pendingDelete = static_cast<int>(i);

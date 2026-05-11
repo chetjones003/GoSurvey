@@ -1179,6 +1179,10 @@ static void ApplyTranslationToSelectedSurveyPoints(AppCommandState& st, float dx
       st.surveyPoints[static_cast<size_t>(i)].northing += dy;
     }
   }
+  for (int i : ix) {
+    if (i >= 0 && static_cast<size_t>(i) < st.surveyPoints.size())
+      RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(i));
+  }
 }
 
 static void ApplyRotationToSelectedSurveyPoints(AppCommandState& st, float bx, float by, float rad) {
@@ -1193,6 +1197,10 @@ static void ApplyRotationToSelectedSurveyPoints(AppCommandState& st, float bx, f
     RotateAroundBase(bx, by, rad, &x, &y);
     st.surveyPoints[static_cast<size_t>(i)].easting = x;
     st.surveyPoints[static_cast<size_t>(i)].northing = y;
+  }
+  for (int i : ix) {
+    if (i >= 0 && static_cast<size_t>(i) < st.surveyPoints.size())
+      RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(i));
   }
 }
 
@@ -1239,6 +1247,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.cadAnnotations.size()) {
         CadAnnotation c = st.cadAnnotations[k];
+        c.surveyPointLabelFor = -1;
         c.insX += dx;
         c.insY += dy;
         if (c.kind == CadAnnotation::Kind::Mtext) {
@@ -1381,6 +1390,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.cadAnnotations.size()) {
         CadAnnotation c = st.cadAnnotations[k];
+        c.surveyPointLabelFor = -1;
         RotateAroundBase(bx, by, rad, &c.insX, &c.insY);
         if (c.kind == CadAnnotation::Kind::Text) {
           c.rotationRad += rad;
@@ -3034,7 +3044,12 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
   const int ix = st.mtextRichEditorAnnIndex;
   if (ix >= 0 && static_cast<size_t>(ix) < st.cadAnnotations.size() &&
       st.cadAnnotations[static_cast<size_t>(ix)].kind == CadAnnotation::Kind::Mtext) {
-    st.cadAnnotations[static_cast<size_t>(ix)].text = MtextRichNormalize(st.mtextRichEditorBuf);
+    CadAnnotation& ann = st.cadAnnotations[static_cast<size_t>(ix)];
+    ann.text = MtextRichNormalize(st.mtextRichEditorBuf);
+    if (ann.surveyPointLabelFor >= 0 &&
+        static_cast<size_t>(ann.surveyPointLabelFor) < st.surveyPoints.size()) {
+      RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(ann.surveyPointLabelFor));
+    }
     BumpCadGpuCache(st);
     log.push_back("MTEXT updated.");
   }
@@ -3157,6 +3172,107 @@ static void ErasePolylineByIndex(AppCommandState& st, int pi) {
     st.userPolylineAttrs.erase(st.userPolylineAttrs.begin() + static_cast<std::ptrdiff_t>(pi));
 }
 
+void EraseCadAnnotationAtIndex(AppCommandState& st, size_t annIndex) {
+  if (annIndex >= st.cadAnnotations.size())
+    return;
+  const CadAnnotation& doomed = st.cadAnnotations[annIndex];
+  const int ownerPi = doomed.surveyPointLabelFor;
+  if (ownerPi >= 0 && static_cast<size_t>(ownerPi) < st.surveyPoints.size()) {
+    SurveyPoint& sp = st.surveyPoints[static_cast<size_t>(ownerPi)];
+    if (sp.labelMtextAnnIndex == static_cast<int>(annIndex))
+      sp.labelMtextAnnIndex = -1;
+  }
+  for (SurveyPoint& q : st.surveyPoints) {
+    if (q.labelMtextAnnIndex == static_cast<int>(annIndex))
+      q.labelMtextAnnIndex = -1;
+    else if (q.labelMtextAnnIndex > static_cast<int>(annIndex))
+      --q.labelMtextAnnIndex;
+  }
+  st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
+                                    [&](const SelectedEntity& e) {
+                                      return e.type == SelectedEntity::Type::Annotation &&
+                                             e.index == static_cast<int>(annIndex);
+                                    }),
+                     st.selection.end());
+  for (SelectedEntity& e : st.selection) {
+    if (e.type == SelectedEntity::Type::Annotation && e.index > static_cast<int>(annIndex))
+      --e.index;
+  }
+  st.cadAnnotations.erase(st.cadAnnotations.begin() + static_cast<std::ptrdiff_t>(annIndex));
+  if (annIndex < st.cadAnnotationAttrs.size())
+    st.cadAnnotationAttrs.erase(st.cadAnnotationAttrs.begin() + static_cast<std::ptrdiff_t>(annIndex));
+}
+
+void DeleteSelectedSurveyPoints(AppCommandState& st, std::vector<std::string>& log) {
+  std::vector<int> ix = st.selectedSurveyPointIndices;
+  std::sort(ix.begin(), ix.end(), std::greater<int>());
+  ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
+  size_t n = 0;
+  for (int i : ix) {
+    if (i >= 0 && static_cast<size_t>(i) < st.surveyPoints.size()) {
+      RemoveSurveyPointAt(st, static_cast<size_t>(i));
+      ++n;
+    }
+  }
+  st.selectedSurveyPointIndices.clear();
+  if (n > 0) {
+    BumpCadGpuCache(st);
+    log.push_back("Deleted " + std::to_string(n) + " survey point(s).");
+  }
+}
+
+void SyncSurveyPointLinkedMtextSelection(AppCommandState& st, int surveyPointIndex) {
+  if (surveyPointIndex < 0 || static_cast<size_t>(surveyPointIndex) >= st.surveyPoints.size())
+    return;
+  const bool selected =
+      std::find(st.selectedSurveyPointIndices.begin(), st.selectedSurveyPointIndices.end(), surveyPointIndex) !=
+      st.selectedSurveyPointIndices.end();
+  const int annIx = st.surveyPoints[static_cast<size_t>(surveyPointIndex)].labelMtextAnnIndex;
+  if (annIx < 0 || static_cast<size_t>(annIx) >= st.cadAnnotations.size())
+    return;
+  const auto hasAnnSel = [&]() {
+    return std::find_if(st.selection.begin(), st.selection.end(), [&](const SelectedEntity& e) {
+             return e.type == SelectedEntity::Type::Annotation && e.index == annIx;
+           }) != st.selection.end();
+  };
+  if (selected) {
+    if (!hasAnnSel()) {
+      SelectedEntity se{};
+      se.type = SelectedEntity::Type::Annotation;
+      se.index = annIx;
+      st.selection.push_back(se);
+    }
+  } else {
+    st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
+                                      [&](const SelectedEntity& e) {
+                                        return e.type == SelectedEntity::Type::Annotation && e.index == annIx;
+                                      }),
+                       st.selection.end());
+  }
+}
+
+void ApplyLinkedSurveyForAnnotationPick(AppCommandState& st, int annIndex, bool keyShift) {
+  if (annIndex < 0 || static_cast<size_t>(annIndex) >= st.cadAnnotations.size())
+    return;
+  const CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(annIndex)];
+  if (a.kind != CadAnnotation::Kind::Mtext || a.surveyPointLabelFor < 0)
+    return;
+  const int spi = a.surveyPointLabelFor;
+  if (static_cast<size_t>(spi) >= st.surveyPoints.size())
+    return;
+  auto& sv = st.selectedSurveyPointIndices;
+  const auto sit = std::find(sv.begin(), sv.end(), spi);
+  if (keyShift) {
+    if (sit != sv.end())
+      sv.erase(sit);
+    else
+      sv.push_back(spi);
+  } else {
+    sv.clear();
+    sv.push_back(spi);
+  }
+}
+
 void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) {
   if (st.selection.empty())
     return;
@@ -3218,14 +3334,8 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
 
   std::vector<int> av(annIx.begin(), annIx.end());
   std::sort(av.begin(), av.end(), std::greater<int>());
-  for (int idx : av) {
-    const size_t k = static_cast<size_t>(idx);
-    if (k >= st.cadAnnotations.size())
-      continue;
-    st.cadAnnotations.erase(st.cadAnnotations.begin() + static_cast<std::ptrdiff_t>(idx));
-    if (k < st.cadAnnotationAttrs.size())
-      st.cadAnnotationAttrs.erase(st.cadAnnotationAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
-  }
+  for (int idx : av)
+    EraseCadAnnotationAtIndex(st, static_cast<size_t>(idx));
 
   std::vector<int> arv(arcIx.begin(), arcIx.end());
   std::sort(arv.begin(), arv.end(), std::greater<int>());
@@ -4406,9 +4516,12 @@ void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  st.selectedSurveyPointIndices.clear();
   if (!st.selection.empty()) {
     ExecuteDeleteSelection(st, log);
+    return;
+  }
+  if (!st.selectedSurveyPointIndices.empty()) {
+    DeleteSelectedSurveyPoints(st, log);
     return;
   }
   st.active = AppCommandState::Kind::Delete;
@@ -4817,6 +4930,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         log.push_back("PLOTSCALE — usage: PLOTSCALE <model_units_per_plotted_inch> (example: 50 for 1\"=50').");
       else {
         st.modelUnitsPerPlottedInch = pv;
+        RepositionAllSurveyPointLabels(st);
+        st.surveyLabelLayoutCacheHalfH = st.viewportLastSurveyLayoutOrthoHalfH;
+        st.surveyLabelLayoutCacheVpHeightPx = st.viewportLastSurveyLayoutHeightPx;
+        st.surveyLabelLayoutCacheMup = st.modelUnitsPerPlottedInch;
+        BumpCadGpuCache(st);
         log.push_back("Plot scale: 1 plotted inch = " + std::to_string(pv) + " model units.");
       }
       cmdBuf[0] = '\0';

@@ -448,6 +448,7 @@ bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
     }
 
     st.surveyPoints.push_back(pr.pt);
+    EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, &log);
     ++imported;
     if (!hasId)
       autoId = counter;
