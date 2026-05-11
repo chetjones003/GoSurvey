@@ -10,6 +10,7 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <set>
 #include <cmath>
 #include <cctype>
 #include <cstdlib>
@@ -140,7 +141,6 @@ void SetupMainDockLayout(ImGuiID dockspace_id) {
   ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Down, 0.30f, &dock_bottom, &dock_center);
 
   ImGui::DockBuilderDockWindow("Properties", dock_left);
-  ImGui::DockBuilderDockWindow("Hot toggles", dock_right);
   ImGui::DockBuilderDockWindow("Reports", dock_right);
   ImGui::DockBuilderDockWindow("Command line", dock_bottom);
   ImGui::DockBuilderDockWindow("Drawing1", dock_center);
@@ -176,116 +176,272 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
   }
 }
 
-static void RibbonToolGroup(const char* label, float ribbonInnerHeight, AppCommandState& cmd,
-                            std::vector<std::string>& log) {
-  ImGui::BeginGroup();
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.15f, 0.16f, 1.f));
-  ImGui::BeginChild(label, ImVec2(0, ribbonInnerHeight + ImGui::GetFrameHeightWithSpacing()), true,
-                    ImGuiWindowFlags_NoScrollbar);
-  const float btn = ImGui::GetFrameHeight() * 1.65f;
-  if (ImGui::Button("Mv", ImVec2(btn, btn)))
-    StartMoveCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Cp", ImVec2(btn, btn)))
-    StartCopyCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Ro", ImVec2(btn, btn)))
-    StartRotateCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Dl", ImVec2(btn, btn)))
-    StartDeleteCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Jo", ImVec2(btn, btn)))
-    StartJoinCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Tr", ImVec2(btn, btn)))
-    StartTrimCommand(cmd, log);
-  ImGui::SameLine();
-  const char* rest[] = {"Sc", "Mi"};
-  for (const char* t : rest) {
-    ImGui::Button(t, ImVec2(btn, btn));
-    ImGui::SameLine();
+static void CollectAllDrawingLayers(const AppCommandState& cmd, std::vector<std::string>* outSortedUnique) {
+  std::set<std::string> layers;
+  layers.insert("0");
+  auto add = [&layers](const std::string& s) {
+    if (!s.empty())
+      layers.insert(s);
+  };
+  for (const auto& a : cmd.userLineAttrs)
+    add(a.layer);
+  for (const auto& a : cmd.userCircleAttrs)
+    add(a.layer);
+  for (const auto& a : cmd.userArcAttrs)
+    add(a.layer);
+  for (const auto& a : cmd.userEllAttrs)
+    add(a.layer);
+  for (const auto& a : cmd.userPolylineAttrs)
+    add(a.layer);
+  for (const auto& a : cmd.cadAnnotationAttrs)
+    add(a.layer);
+  outSortedUnique->assign(layers.begin(), layers.end());
+}
+
+static float RibbonSectionWidthPx(int nCols, float cellW) {
+  const ImGuiStyle& st = ImGui::GetStyle();
+  if (nCols <= 0)
+    return cellW + 16.f;
+  return static_cast<float>(nCols) * cellW + static_cast<float>(std::max(0, nCols - 1)) * st.ItemSpacing.x + 16.f;
+}
+
+/// One size for all buttons in a ribbon section: fits the widest and tallest label (with padding).
+static ImVec2 RibbonButtonCellMetrics(std::initializer_list<const char*> labels) {
+  const ImGuiStyle& st = ImGui::GetStyle();
+  float maxTw = 0.f;
+  float maxTh = 0.f;
+  for (const char* s : labels) {
+    if (!s || !s[0])
+      continue;
+    const ImVec2 tz = ImGui::CalcTextSize(s, nullptr, true);
+    maxTw = std::max(maxTw, tz.x);
+    maxTh = std::max(maxTh, tz.y);
   }
+  const float minW = ImGui::GetFrameHeight() * 1.2f;
+  const float minH = ImGui::GetFrameHeight() * 1.2f;
+  const float w = std::max(minW, maxTw + st.FramePadding.x * 2.f + 8.f);
+  const float h = std::max(minH, maxTh + st.FramePadding.y * 2.f + 6.f);
+  return ImVec2(w, h);
+}
+
+static void RibbonSectionBegin(const char* childId, const char* title, float width, float height) {
+  ImGui::BeginGroup();
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.13f, 0.14f, 0.16f, 1.f));
+  ImGui::BeginChild(childId, ImVec2(width, height), true, ImGuiWindowFlags_NoScrollbar);
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.64f, 0.72f, 1.f));
+  ImGui::TextUnformatted(title);
+  ImGui::PopStyleColor();
+  ImGui::Separator();
+}
+
+static void RibbonSectionEnd() {
   ImGui::EndChild();
   ImGui::PopStyleColor();
-  ImGui::TextUnformatted(label);
   ImGui::EndGroup();
 }
 
-static void RibbonDrawGroup(float ribbonInnerHeight, AppCommandState& cmd, std::vector<std::string>& log) {
-  ImGui::BeginGroup();
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.15f, 0.15f, 0.16f, 1.f));
-  ImGui::BeginChild("RibbonDrawStrip", ImVec2(0, ribbonInnerHeight + ImGui::GetFrameHeightWithSpacing()), true,
-                    ImGuiWindowFlags_NoScrollbar);
-  const float btn = ImGui::GetFrameHeight() * 1.65f;
-  ImGui::Button("Pt", ImVec2(btn, btn));
-  ImGui::SameLine();
-  if (ImGui::Button("Ln", ImVec2(btn, btn)))
-    StartLineCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Ci", ImVec2(btn, btn)))
-    StartCircleCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Ze", ImVec2(btn, btn)))
-    StartZoomExtentsCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Zw", ImVec2(btn, btn)))
-    StartZoomWindowCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Pl", ImVec2(btn, btn)))
-    StartPolylineCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Arc", ImVec2(btn, btn)))
-    StartArcCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("El", ImVec2(btn, btn)))
-    StartEllipseCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Dim", ImVec2(btn, btn)))
-    StartDimAlignedCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Tx", ImVec2(btn, btn)))
-    StartTextCommand(cmd, log);
-  ImGui::SameLine();
-  if (ImGui::Button("Mt", ImVec2(btn, btn)))
-    StartMtextCommand(cmd, log);
-  ImGui::EndChild();
-  ImGui::PopStyleColor();
-  ImGui::TextUnformatted("Draw");
-  ImGui::EndGroup();
+static void RibbonItemHelp(const char* text, ImGuiHoveredFlags extraFlags = 0) {
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | extraFlags) && ImGui::BeginTooltip()) {
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 26.f);
+    ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos();
+    ImGui::EndTooltip();
+  }
 }
 
 void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>& log) {
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 4));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 6));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6, 6));
   ImGui::BeginChild("RibbonStrip", ImVec2(0, height), true,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-  static int ribbonTab = 0;
-  const char* tabs[] = {"Home", "Edit", "Draw", "Survey", "Annotate", "Layers"};
-  for (int i = 0; i < 6; ++i) {
-    if (i > 0)
-      ImGui::SameLine();
-    if (ImGui::Selectable(tabs[i], ribbonTab == i, 0, ImVec2(72, 0)))
-      ribbonTab = i;
+  const ImGuiStyle& st = ImGui::GetStyle();
+  const float panelH = height - st.WindowPadding.y * 2.f;
+  constexpr float kLayerPanelW = 500.f;
+
+  const ImVec2 drawCell = RibbonButtonCellMetrics(
+      {"Line", "Circle", "PLine", "Arc", "Ellipse", "Dim", "Text", "Mtext"});
+  const ImVec2 modCell =
+      RibbonButtonCellMetrics({"Move", "Copy", "Rotate", "Erase", "Join", "Trim"});
+  const ImVec2 viewCell = RibbonButtonCellMetrics({"Z extents", "Z window"});
+  const ImVec2 inqCell = RibbonButtonCellMetrics({"Scale", "Mirror"});
+  const ImVec2 srvCell = RibbonButtonCellMetrics({"Point"});
+  const ImVec2 layBtnCell = RibbonButtonCellMetrics({"LAY"});
+  const float layerRowBtnH =
+      std::max({drawCell.y, modCell.y, viewCell.y, inqCell.y, srvCell.y, layBtnCell.y});
+
+  ImGui::BeginChild("RibbonToolsLeft", ImVec2(-kLayerPanelW - st.ItemSpacing.x, panelH), false,
+                    ImGuiWindowFlags_HorizontalScrollbar);
+
+  const int drawCols = 4;
+  const int modCols = 4;
+  const float wDraw = RibbonSectionWidthPx(drawCols, drawCell.x);
+  const float wMod = RibbonSectionWidthPx(modCols, modCell.x);
+  const float wView = RibbonSectionWidthPx(2, viewCell.x);
+  const float wInq = RibbonSectionWidthPx(2, inqCell.x);
+  const float wSrv = RibbonSectionWidthPx(1, srvCell.x);
+
+  auto gridSameLine = [](int idx) {
+    constexpr int kCols = 4;
+    if (idx % kCols != 0)
+      ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x);
+  };
+
+  RibbonSectionBegin("RibbonSecDraw", "Draw", wDraw, panelH);
+  {
+    int i = 0;
+    gridSameLine(i++);
+    if (ImGui::Button("Line", ImVec2(drawCell.x, drawCell.y)))
+      StartLineCommand(cmd, log);
+    RibbonItemHelp("Line — draw straight segments between points.\nCommand bar: LINE or L");
+    gridSameLine(i++);
+    if (ImGui::Button("Circle", ImVec2(drawCell.x, drawCell.y)))
+      StartCircleCommand(cmd, log);
+    RibbonItemHelp("Circle — center point and radius.\nCommand bar: CIRCLE or C");
+    gridSameLine(i++);
+    if (ImGui::Button("PLine", ImVec2(drawCell.x, drawCell.y)))
+      StartPolylineCommand(cmd, log);
+    RibbonItemHelp("Polyline — chain of segments; optional close.\nCommand bar: POLYLINE or PL");
+    gridSameLine(i++);
+    if (ImGui::Button("Arc", ImVec2(drawCell.x, drawCell.y)))
+      StartArcCommand(cmd, log);
+    RibbonItemHelp("Arc — three-point arc (start, mid, end).\nCommand bar: ARC");
+    gridSameLine(i++);
+    if (ImGui::Button("Ellipse", ImVec2(drawCell.x, drawCell.y)))
+      StartEllipseCommand(cmd, log);
+    RibbonItemHelp("Ellipse — center, axis endpoint, then ratio on command line.\nCommand bar: ELLIPSE or EL");
+    gridSameLine(i++);
+    if (ImGui::Button("Dim", ImVec2(drawCell.x, drawCell.y)))
+      StartDimAlignedCommand(cmd, log);
+    RibbonItemHelp("Aligned dimension — extension lines and text.\nCommand bar: DIMALIGNED or DAL");
+    gridSameLine(i++);
+    if (ImGui::Button("Text", ImVec2(drawCell.x, drawCell.y)))
+      StartTextCommand(cmd, log);
+    RibbonItemHelp("Text — single-line annotation at insertion.\nCommand bar: TEXT");
+    gridSameLine(i++);
+    if (ImGui::Button("Mtext", ImVec2(drawCell.x, drawCell.y)))
+      StartMtextCommand(cmd, log);
+    RibbonItemHelp("Mtext — multiline paragraph in a frame.\nCommand bar: MTEXT or MT");
   }
+  RibbonSectionEnd();
+  ImGui::SameLine(0, 10);
 
+  RibbonSectionBegin("RibbonSecModify", "Modify", wMod, panelH);
+  {
+    int i = 0;
+    auto g = [](int idx) {
+      constexpr int kCols = 4;
+      if (idx % kCols != 0)
+        ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x);
+    };
+    g(i++);
+    if (ImGui::Button("Move", ImVec2(modCell.x, modCell.y)))
+      StartMoveCommand(cmd, log);
+    RibbonItemHelp("Move — relocate selected entities by base point and offset.\nCommand bar: MOVE or M");
+    g(i++);
+    if (ImGui::Button("Copy", ImVec2(modCell.x, modCell.y)))
+      StartCopyCommand(cmd, log);
+    RibbonItemHelp("Copy — duplicate selection with base point and offset.\nCommand bar: COPY or CP");
+    g(i++);
+    if (ImGui::Button("Rotate", ImVec2(modCell.x, modCell.y)))
+      StartRotateCommand(cmd, log);
+    RibbonItemHelp("Rotate — turn selection around a base point by angle.\nCommand bar: ROTATE or RO");
+    g(i++);
+    if (ImGui::Button("Erase", ImVec2(modCell.x, modCell.y)))
+      StartDeleteCommand(cmd, log);
+    RibbonItemHelp("Erase — remove entities (window or crossing selection).\nCommand bar: DELETE or DEL");
+    g(i++);
+    if (ImGui::Button("Join", ImVec2(modCell.x, modCell.y)))
+      StartJoinCommand(cmd, log);
+    RibbonItemHelp("Join — merge colinear line segments.\nCommand bar: JOIN or J");
+    g(i++);
+    if (ImGui::Button("Trim", ImVec2(modCell.x, modCell.y)))
+      StartTrimCommand(cmd, log);
+    RibbonItemHelp("Trim — shorten segments to cutting edges or drawn trim line.\nCommand bar: TRIM or TR");
+  }
+  RibbonSectionEnd();
+  ImGui::SameLine(0, 10);
+
+  RibbonSectionBegin("RibbonSecView", "View", wView, panelH);
+  {
+    if (ImGui::Button("Z extents", ImVec2(viewCell.x, viewCell.y)))
+      StartZoomExtentsCommand(cmd, log);
+    RibbonItemHelp("Zoom extents — fit all drawing content in the view.\nCommand bar: ZOOMEXTENTS or ZE");
+    ImGui::SameLine(0, st.ItemSpacing.x);
+    if (ImGui::Button("Z window", ImVec2(viewCell.x, viewCell.y)))
+      StartZoomWindowCommand(cmd, log);
+    RibbonItemHelp("Zoom window — zoom to a rectangle you pick with two clicks.\nCommand bar: ZOOMWINDOW or ZW");
+  }
+  RibbonSectionEnd();
+  ImGui::SameLine(0, 10);
+
+  RibbonSectionBegin("RibbonSecInquiry", "Inquiry", wInq, panelH);
+  {
+    ImGui::BeginDisabled();
+    ImGui::Button("Scale", ImVec2(inqCell.x, inqCell.y));
+    RibbonItemHelp("Scale — resize selection relative to a base point (not implemented yet).\nCommand bar: (none yet)",
+                   ImGuiHoveredFlags_AllowWhenDisabled);
+    ImGui::SameLine(0, st.ItemSpacing.x);
+    ImGui::Button("Mirror", ImVec2(inqCell.x, inqCell.y));
+    RibbonItemHelp("Mirror — flip selection across a mirror line (not implemented yet).\nCommand bar: (none yet)",
+                   ImGuiHoveredFlags_AllowWhenDisabled);
+    ImGui::EndDisabled();
+  }
+  RibbonSectionEnd();
+  ImGui::SameLine(0, 10);
+
+  RibbonSectionBegin("RibbonSecSurvey", "Survey", wSrv, panelH);
+  {
+    ImGui::BeginDisabled();
+    ImGui::Button("Point", ImVec2(srvCell.x, srvCell.y));
+    RibbonItemHelp(
+        "Survey point — place field points in the drawing (coming soon).\nCommand bar: CREATEPOINTS or CRTPTS",
+        ImGuiHoveredFlags_AllowWhenDisabled);
+    ImGui::EndDisabled();
+  }
+  RibbonSectionEnd();
+
+  ImGui::EndChild();
+
+  ImGui::SameLine(0, st.ItemSpacing.x);
+  ImGui::BeginChild("RibbonLayerStrip", ImVec2(kLayerPanelW, panelH), true, ImGuiWindowFlags_NoScrollbar);
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.64f, 0.72f, 1.f));
+  ImGui::TextUnformatted("Layer");
+  ImGui::PopStyleColor();
   ImGui::Separator();
-  const float innerH = height - ImGui::GetFrameHeightWithSpacing() * 2.4f;
-  ImGui::BeginChild("RibbonTools", ImVec2(0, 0), false, ImGuiWindowFlags_HorizontalScrollbar);
 
-  RibbonDrawGroup(innerH, cmd, log);
-  ImGui::SameLine();
-  ImGui::Dummy(ImVec2(10, 1));
-  ImGui::SameLine();
-  RibbonToolGroup("Modify", innerH, cmd, log);
-  ImGui::SameLine();
-  ImGui::Dummy(ImVec2(10, 1));
-  ImGui::SameLine();
-  RibbonToolGroup("Inquiry", innerH, cmd, log);
+  static std::string ribbonActiveLayer = "0";
+  std::vector<std::string> layerList;
+  CollectAllDrawingLayers(cmd, &layerList);
+  if (std::find(layerList.begin(), layerList.end(), ribbonActiveLayer) == layerList.end())
+    layerList.insert(layerList.begin(), ribbonActiveLayer);
+
+  const float layerBtnW = layBtnCell.x;
+  if (ImGui::Button("LAY", ImVec2(layerBtnW, layerRowBtnH))) {
+    log.push_back("LAYER — layer manager table (coming soon).");
+  }
+  RibbonItemHelp("Open layer manager — table of all layers (coming soon).\nCommand bar: LAYER (planned)");
+  ImGui::SameLine(0, st.ItemSpacing.x);
+  ImGui::SetNextItemWidth(std::max(80.f, kLayerPanelW - layerBtnW - st.ItemSpacing.x - st.WindowPadding.x * 2.f));
+  const char* preview = ribbonActiveLayer.empty() ? "0" : ribbonActiveLayer.c_str();
+  ImGui::PushID("RibbonLayerCombo");
+  if (ImGui::BeginCombo("##ribbonlayerpick", preview, ImGuiComboFlags_HeightLargest)) {
+    for (const auto& L : layerList) {
+      const bool sel = L == ribbonActiveLayer;
+      if (ImGui::Selectable(L.c_str(), sel))
+        ribbonActiveLayer = L;
+      if (sel)
+        ImGui::SetItemDefaultFocus();
+    }
+    ImGui::EndCombo();
+  }
+  ImGui::PopID();
+  RibbonItemHelp("Current layer for new geometry (full wiring later).\nCommand bar: (set via properties for now)");
 
   ImGui::EndChild();
+
   ImGui::EndChild();
-  ImGui::PopStyleVar();
+  ImGui::PopStyleVar(2);
 }
 
 namespace {
@@ -1069,6 +1225,17 @@ void DrawEditableGeneralSection(AppCommandState& cmd, const std::vector<Selected
       ImGui::TextDisabled("(mixed)");
     }
 
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted("Default text height (in)");
+    ImGui::TableNextColumn();
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputFloat("##defplottxt", &cmd.defaultPlottedTextHeightInches, 0.005f, 0.02f, "%.4f");
+    if (cmd.defaultPlottedTextHeightInches <= 0.f)
+      cmd.defaultPlottedTextHeightInches = 0.0625f;
+    if (ImGui::IsItemDeactivatedAfterEdit())
+      BumpCadGpuCache(cmd);
+
     ImGui::EndTable();
   }
 
@@ -1740,53 +1907,79 @@ void DrawPropertiesPanel(AppCommandState& cmd) {
   ImGui::End();
 }
 
-void DrawHotTogglesPanel(bool* object_snap_enabled, bool* ortho_mode_enabled, AppCommandState* cmd_state,
-                         bool* grid_visible) {
-  ImGui::SetNextWindowSize(ImVec2(240, 420), ImGuiCond_FirstUseEver);
-  if (!ImGui::Begin("Hot toggles", nullptr)) {
-    ImGui::End();
-    return;
+namespace {
+
+static bool gPolarTrackingEnabled = false;
+
+void PushModeToggleButtonColors(bool on) {
+  if (on) {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.42f, 0.72f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.22f, 0.50f, 0.82f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.16f, 0.36f, 0.62f, 1.f));
   }
-
-  static bool snap = true;
-  static bool polar = false;
-  if (ortho_mode_enabled)
-    ImGui::Checkbox("Ortho mode", ortho_mode_enabled);
-  ImGui::Checkbox("Snap", &snap);
-  if (grid_visible)
-    ImGui::Checkbox("Grid", grid_visible);
-  if (object_snap_enabled)
-    ImGui::Checkbox("Object snap", object_snap_enabled);
-  ImGui::Checkbox("Polar tracking", &polar);
-
-  ImGui::Separator();
-  if (cmd_state) {
-    ImGui::TextDisabled("Plot / annotation scale");
-    ImGui::InputFloat("Model units per plotted inch##plotscale", &cmd_state->modelUnitsPerPlottedInch, 1.f, 10.f,
-                      "%.2f");
-    if (cmd_state->modelUnitsPerPlottedInch <= 0.f)
-      cmd_state->modelUnitsPerPlottedInch = 1.f;
-    if (ImGui::IsItemDeactivatedAfterEdit())
-      BumpCadGpuCache(*cmd_state);
-    ImGui::InputFloat("Default text height (inches on sheet)##txths", &cmd_state->defaultPlottedTextHeightInches,
-                      0.01f, 0.1f, "%.4f");
-    if (cmd_state->defaultPlottedTextHeightInches <= 0.f)
-      cmd_state->defaultPlottedTextHeightInches = 0.0625f;
-    if (ImGui::IsItemDeactivatedAfterEdit())
-      BumpCadGpuCache(*cmd_state);
-    ImGui::TextDisabled("(Example: 50 units/in with 0.125 in text → %.3f model height)",
-                        static_cast<double>(cmd_state->defaultPlottedTextHeightInches * cmd_state->modelUnitsPerPlottedInch));
-    ImGui::Separator();
-  }
-
-  ImGui::TextUnformatted("Layers quick");
-  static bool lay0 = true;
-  static bool laySvy = true;
-  ImGui::Checkbox("0 — survey", &lay0);
-  ImGui::Checkbox("SVY — field", &laySvy);
-
-  ImGui::End();
 }
+
+void PopModeToggleButtonColors(bool on) {
+  if (on)
+    ImGui::PopStyleColor(3);
+}
+
+static void ItemHelpTooltip(const char* text) {
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) && ImGui::BeginTooltip()) {
+    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.f);
+    ImGui::TextUnformatted(text);
+    ImGui::PopTextWrapPos();
+    ImGui::EndTooltip();
+  }
+}
+
+/// \p modelUnitsPerPlottedInch matches common civil notation (e.g. 50 → 1"=50' when model unit is feet).
+static void DrawPlotScaleCombo(AppCommandState& cmd) {
+  static constexpr struct {
+    const char* label;
+    float modelUnitsPerPlottedInch;
+  } kScales[] = {
+      {"1\" = 1'", 1.f},       {"1\" = 2'", 2.f},       {"1\" = 5'", 5.f},       {"1\" = 10'", 10.f},
+      {"1\" = 20'", 20.f},     {"1\" = 30'", 30.f},     {"1\" = 40'", 40.f},     {"1\" = 50'", 50.f},
+      {"1\" = 60'", 60.f},     {"1\" = 80'", 80.f},     {"1\" = 100'", 100.f},   {"1\" = 120'", 120.f},
+      {"1\" = 200'", 200.f},   {"1\" = 300'", 300.f},   {"1\" = 400'", 400.f},   {"1\" = 500'", 500.f},
+  };
+
+  constexpr int kN = static_cast<int>(sizeof(kScales) / sizeof(kScales[0]));
+  int selected = -1;
+  for (int i = 0; i < kN; ++i) {
+    if (std::fabs(cmd.modelUnitsPerPlottedInch - kScales[i].modelUnitsPerPlottedInch) < 0.051f) {
+      selected = i;
+      break;
+    }
+  }
+
+  char preview[96];
+  if (selected >= 0)
+    std::snprintf(preview, sizeof(preview), "%s", kScales[selected].label);
+  else
+    std::snprintf(preview, sizeof(preview), "1\" = %.3g' (custom)", static_cast<double>(cmd.modelUnitsPerPlottedInch));
+
+  ImGui::PushID("plotscalecombo");
+  ImGui::SetNextItemWidth(158.f);
+  if (ImGui::BeginCombo("##plotscale", preview, ImGuiComboFlags_HeightLargest)) {
+    for (int i = 0; i < kN; ++i) {
+      const bool isSel = (selected == i);
+      if (ImGui::Selectable(kScales[i].label, isSel)) {
+        cmd.modelUnitsPerPlottedInch = kScales[i].modelUnitsPerPlottedInch;
+        BumpCadGpuCache(cmd);
+      }
+      if (isSel)
+        ImGui::SetItemDefaultFocus();
+    }
+    ImGui::EndCombo();
+  }
+  ItemHelpTooltip("Drawing scale: model units per plotted inch (e.g. 50 for 1\" = 50'). "
+                  "Use PSCALE for values not in the list.");
+  ImGui::PopID();
+}
+
+} // namespace
 
 static const char* CommandInputHint(const AppCommandState& cmd) {
   if (cmd.active == AppCommandState::Kind::Line) {
@@ -1937,14 +2130,60 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
 }
 
 void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBufSize, AppCommandState& cmd,
-                          float cursorX, float cursorY, float cursorZ) {
-  ImGui::SetNextWindowSize(ImVec2(700, 220), ImGuiCond_FirstUseEver);
+                          float cursorX, float cursorY, float cursorZ, bool* object_snap_enabled,
+                          bool* ortho_mode_enabled, bool* grid_visible) {
+  ImGui::SetNextWindowSize(ImVec2(900, 220), ImGuiCond_FirstUseEver);
   if (!ImGui::Begin("Command line", nullptr)) {
     ImGui::End();
     return;
   }
 
-  const float footerH = ImGui::GetFrameHeightWithSpacing() * 2.f;
+  const char* circFooter = CircleCommandFooterHint(cmd);
+  const char* lineFooter = LineCommandFooterHint(cmd);
+  const char* modFooter = ModifyCommandFooterHint(cmd);
+  const char* rotFooter = RotateCommandFooterHint(cmd);
+  const char* delFooter = DeleteCommandFooterHint(cmd);
+  const char* joinFooter = JoinCommandFooterHint(cmd);
+  const char* trimFooter = TrimCommandFooterHint(cmd);
+  const char* zmFooter = ZoomCommandFooterHint(cmd);
+  const char* drawXFooter = DrawingExtrasFooterHint(cmd);
+
+  std::vector<std::string> fuzzMatches;
+  if (cmd.active == AppCommandState::Kind::None && cmdBuf[0] != '\0')
+    fuzzMatches = FuzzyCommandMatches(cmdBuf, 8);
+
+  auto footerNonEmpty = [](const char* s) { return s && s[0] != '\0'; };
+  int footerBudgetLines = 0;
+  if (footerNonEmpty(circFooter))
+    footerBudgetLines += 2;
+  if (footerNonEmpty(lineFooter))
+    footerBudgetLines += 2;
+  if (footerNonEmpty(modFooter))
+    footerBudgetLines += 2;
+  if (footerNonEmpty(rotFooter))
+    footerBudgetLines += 2;
+  if (footerNonEmpty(delFooter))
+    footerBudgetLines += 2;
+  if (footerNonEmpty(joinFooter))
+    footerBudgetLines += 2;
+  if (footerNonEmpty(trimFooter))
+    footerBudgetLines += 2;
+  if (footerNonEmpty(zmFooter))
+    footerBudgetLines += 2;
+  if (footerNonEmpty(drawXFooter))
+    footerBudgetLines += 2;
+  if (!fuzzMatches.empty())
+    footerBudgetLines += 2;
+  footerBudgetLines = std::min(footerBudgetLines, 28);
+
+  const ImGuiStyle& st = ImGui::GetStyle();
+  const float lineH = ImGui::GetTextLineHeightWithSpacing();
+  const float frameH = ImGui::GetFrameHeightWithSpacing();
+  const float statusStripH = ImGui::GetFrameHeight() + 2.f;
+  const float sendBtnW = ImGui::CalcTextSize("Send").x + st.FramePadding.x * 2.f + 8.f;
+  const float footerH = frameH * 2.15f + lineH * static_cast<float>(footerBudgetLines) + statusStripH +
+                          st.ItemSpacing.y * 2.f + 4.f;
+
   ImGui::BeginChild("CmdScroll", ImVec2(0, -footerH), true, ImGuiWindowFlags_HorizontalScrollbar);
   for (const auto& line : log)
     ImGui::TextUnformatted(line.c_str());
@@ -1954,7 +2193,6 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
 
   ImGui::Separator();
   ImGui::PushID("GoSurveyCmdPanel");
-  ImGui::PushItemWidth(-120);
 
   ImGuiIO& io = ImGui::GetIO();
   if (!io.WantTextInput && io.InputQueueCharacters.Size > 0) {
@@ -1962,93 +2200,131 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     ImGui::SetKeyboardFocusHere(0);
   }
 
+  const float inputAvailW = ImGui::GetContentRegionAvail().x;
+  ImGui::SetNextItemWidth(std::max(64.f, inputAvailW - sendBtnW - st.ItemSpacing.x));
   ImGuiInputTextFlags flags =
       ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
-  const bool exec =
-      ImGui::InputTextWithHint("CommandLineInput", CommandInputHint(cmd), cmdBuf, static_cast<size_t>(cmdBufSize),
-                               flags, CommandLineInputCallback, nullptr);
+  const bool exec = ImGui::InputTextWithHint("##CommandLineInput", CommandInputHint(cmd), cmdBuf,
+                                             static_cast<size_t>(cmdBufSize), flags, CommandLineInputCallback, nullptr);
   ImGui::SetItemDefaultFocus();
-  ImGui::SameLine();
-  if (ImGui::Button("Send") || exec)
+  ImGui::SameLine(0, st.ItemSpacing.x);
+  if (ImGui::Button("Send", ImVec2(sendBtnW, 0.f)) || exec)
     ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
 
-  const char* circFooter = CircleCommandFooterHint(cmd);
-  if (circFooter[0] != '\0') {
+  if (footerNonEmpty(circFooter)) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextWrapped("%s", circFooter);
     ImGui::PopStyleColor();
   }
-  const char* lineFooter = LineCommandFooterHint(cmd);
-  if (lineFooter[0] != '\0') {
+  if (footerNonEmpty(lineFooter)) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextWrapped("%s", lineFooter);
     ImGui::PopStyleColor();
   }
-  const char* modFooter = ModifyCommandFooterHint(cmd);
-  if (modFooter[0] != '\0') {
+  if (footerNonEmpty(modFooter)) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextWrapped("%s", modFooter);
     ImGui::PopStyleColor();
   }
-  const char* rotFooter = RotateCommandFooterHint(cmd);
-  if (rotFooter[0] != '\0') {
+  if (footerNonEmpty(rotFooter)) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextWrapped("%s", rotFooter);
     ImGui::PopStyleColor();
   }
-  const char* delFooter = DeleteCommandFooterHint(cmd);
-  if (delFooter[0] != '\0') {
+  if (footerNonEmpty(delFooter)) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextWrapped("%s", delFooter);
     ImGui::PopStyleColor();
   }
-  const char* joinFooter = JoinCommandFooterHint(cmd);
-  if (joinFooter[0] != '\0') {
+  if (footerNonEmpty(joinFooter)) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextWrapped("%s", joinFooter);
     ImGui::PopStyleColor();
   }
-  const char* trimFooter = TrimCommandFooterHint(cmd);
-  if (trimFooter[0] != '\0') {
+  if (footerNonEmpty(trimFooter)) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextWrapped("%s", trimFooter);
     ImGui::PopStyleColor();
   }
-  const char* zmFooter = ZoomCommandFooterHint(cmd);
-  if (zmFooter[0] != '\0') {
+  if (footerNonEmpty(zmFooter)) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextWrapped("%s", zmFooter);
     ImGui::PopStyleColor();
   }
-  const char* drawXFooter = DrawingExtrasFooterHint(cmd);
-  if (drawXFooter[0] != '\0') {
+  if (footerNonEmpty(drawXFooter)) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextWrapped("%s", drawXFooter);
     ImGui::PopStyleColor();
   }
 
-  if (cmd.active == AppCommandState::Kind::None && cmdBuf[0] != '\0') {
-    std::vector<std::string> fuzz = FuzzyCommandMatches(cmdBuf, 8);
-    if (!fuzz.empty()) {
-      std::string joined;
-      for (size_t i = 0; i < fuzz.size(); ++i) {
-        if (i)
-          joined += ", ";
-        joined += fuzz[i];
-      }
-      ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-      ImGui::TextWrapped("Matches: %s", joined.c_str());
-      ImGui::PopStyleColor();
+  if (!fuzzMatches.empty()) {
+    std::string joined;
+    for (size_t i = 0; i < fuzzMatches.size(); ++i) {
+      if (i)
+        joined += ", ";
+      joined += fuzzMatches[i];
     }
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("Matches: %s", joined.c_str());
+    ImGui::PopStyleColor();
   }
 
-  ImGui::PopItemWidth();
   ImGui::PopID();
 
   ImGui::Separator();
-  ImGui::Text("Cursor  X: %.3f  Y: %.3f  Z: %.3f   |   Osnap: endpoint / mid / center / perp (cmd)   |   UCS: "
-              "World",
-              cursorX, cursorY, cursorZ);
+  const float statusBtnH = ImGui::GetFrameHeight();
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+  ImGui::BeginChild("StatusBarStrip", ImVec2(0, statusBtnH), false, ImGuiWindowFlags_HorizontalScrollbar);
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3.f, 0.f));
+
+  if (object_snap_enabled) {
+    const bool on = *object_snap_enabled;
+    PushModeToggleButtonColors(on);
+    if (ImGui::Button("OSNAP", ImVec2(0.f, statusBtnH)))
+      *object_snap_enabled = !*object_snap_enabled;
+    PopModeToggleButtonColors(on);
+    ItemHelpTooltip("Object snap — endpoint, mid, center, perpendicular (F3)");
+    ImGui::SameLine(0, 4);
+  }
+  if (ortho_mode_enabled) {
+    const bool on = *ortho_mode_enabled;
+    PushModeToggleButtonColors(on);
+    if (ImGui::Button("ORTHO", ImVec2(0.f, statusBtnH)))
+      *ortho_mode_enabled = !*ortho_mode_enabled;
+    PopModeToggleButtonColors(on);
+    ItemHelpTooltip("Ortho mode — constrain to horizontal / vertical (F8)");
+    ImGui::SameLine(0, 4);
+  }
+  if (grid_visible) {
+    const bool on = *grid_visible;
+    PushModeToggleButtonColors(on);
+    if (ImGui::Button("GRID", ImVec2(0.f, statusBtnH)))
+      *grid_visible = !*grid_visible;
+    PopModeToggleButtonColors(on);
+    ItemHelpTooltip("Drawing grid");
+    ImGui::SameLine(0, 4);
+  }
+  {
+    const bool on = gPolarTrackingEnabled;
+    PushModeToggleButtonColors(on);
+    if (ImGui::Button("POLAR", ImVec2(0.f, statusBtnH)))
+      gPolarTrackingEnabled = !gPolarTrackingEnabled;
+    PopModeToggleButtonColors(on);
+    ItemHelpTooltip("Polar tracking (UI only for now)");
+    ImGui::SameLine(0, 4);
+  }
+
+  DrawPlotScaleCombo(cmd);
+  ImGui::SameLine(0, 10);
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextDisabled("|");
+  ImGui::SameLine(0, 8);
+  ImGui::AlignTextToFramePadding();
+  ImGui::Text("X %.3f  Y %.3f  Z %.3f  |  UCS: World", cursorX, cursorY, cursorZ);
+
+  ImGui::PopStyleVar();
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
 
   ImGui::End();
 }
