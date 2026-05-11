@@ -297,6 +297,13 @@ void AppendSnapCrossInSquare(std::vector<float>& out, float cx, float cy, float 
              {cx - h, cy, z, cx + h, cy, z, cx, cy - h, z, cx, cy + h, z});
 }
 
+/// Two diagonal segments (×); \p halfDiag is half the segment length along each diagonal from center.
+void AppendSnapDiagonalCross(std::vector<float>& out, float cx, float cy, float z, float halfDiag) {
+  const float h = halfDiag;
+  out.insert(out.end(),
+             {cx - h, cy - h, z, cx + h, cy + h, z, cx - h, cy + h, z, cx + h, cy - h, z});
+}
+
 void AppendWorldRectOutline(std::vector<float>& o, float xa, float ya, float xb, float yb, float z) {
   const float mnX = std::min(xa, xb);
   const float mxX = std::max(xa, xb);
@@ -332,7 +339,7 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, float halfWorld, int fbHeig
     return;
   const float zSnap = 0.045f;
   const float mh =
-      7.f * (2.f * halfWorld) / static_cast<float>(std::max(fbHeight, 1)); // ~7 px half-extent
+      15.f * (2.f * halfWorld) / static_cast<float>(std::max(fbHeight, 1)); // ~10 px half-extent
   switch (snap.kind) {
   case CadSnap::Kind::Endpoint:
     AppendSnapSquareOutline(out, snap.x, snap.y, zSnap, mh);
@@ -343,6 +350,13 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, float halfWorld, int fbHeig
   case CadSnap::Kind::Center:
     AppendCircleLineApprox(out, snap.x, snap.y, mh * 0.85f, 28, zSnap);
     break;
+  case CadSnap::Kind::SurveyCenter: {
+    const float R = mh * 0.62f;
+    AppendCircleLineApprox(out, snap.x, snap.y, R, 28, zSnap);
+    // × slightly larger than the circle (tips past radius R in diagonal directions).
+    AppendSnapDiagonalCross(out, snap.x, snap.y, zSnap, R * 0.78f);
+    break;
+  }
   case CadSnap::Kind::Perpendicular:
     AppendSnapSquareOutline(out, snap.x, snap.y, zSnap, mh);
     AppendSnapCrossInSquare(out, snap.x, snap.y, zSnap, mh * 0.55f);

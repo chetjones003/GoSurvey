@@ -1104,7 +1104,24 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
   if (includeSurveyPoints) {
     for (size_t si = 0; si < st.surveyPoints.size(); ++si) {
       const SurveyPoint& sp = st.surveyPoints[si];
-      if (PointInsideClosedRect(sp.easting, sp.northing, mnX, mxX, mnY, mxY))
+      const bool hitPoint = PointInsideClosedRect(sp.easting, sp.northing, mnX, mxX, mnY, mxY);
+      bool hitLabel = false;
+      const int lix = sp.labelMtextAnnIndex;
+      if (lix >= 0 && static_cast<size_t>(lix) < st.cadAnnotations.size()) {
+        const CadAnnotation& lab = st.cadAnnotations[static_cast<size_t>(lix)];
+        if (lab.kind == CadAnnotation::Kind::Mtext && lab.surveyPointLabelFor == static_cast<int>(si)) {
+          float amnX = 0.f;
+          float amnY = 0.f;
+          float amxX = 0.f;
+          float amxY = 0.f;
+          CadAnnotationRoughBounds(lab, st.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
+          if (windowMode)
+            hitLabel = amnX >= mnX && amxX <= mxX && amnY >= mnY && amxY <= mxY;
+          else
+            hitLabel = !(amxX < mnX || amnX > mxX || amxY < mnY || amnY > mxY);
+        }
+      }
+      if (hitPoint || hitLabel)
         surveyHits.push_back(static_cast<int>(si));
     }
   }
@@ -3087,6 +3104,141 @@ void ClearCadSelection(AppCommandState& st) {
   ClearDimGripInteraction(st);
 }
 
+void EnsureAttrCounts(AppCommandState& st) {
+  bool grew = false;
+  const size_t nl = st.userLinesFlat.size() / 6;
+  while (st.userLineAttrs.size() < nl) {
+    st.userLineAttrs.emplace_back();
+    grew = true;
+  }
+  const size_t nc = st.userCirclesCxCyR.size() / 3;
+  while (st.userCircleAttrs.size() < nc) {
+    st.userCircleAttrs.emplace_back();
+    grew = true;
+  }
+  while (st.userArcAttrs.size() < st.userArcs.size()) {
+    st.userArcAttrs.emplace_back();
+    grew = true;
+  }
+  while (st.userEllAttrs.size() < st.userEllipses.size()) {
+    st.userEllAttrs.emplace_back();
+    grew = true;
+  }
+  const size_t np = st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0;
+  while (st.userPolylineAttrs.size() < np) {
+    st.userPolylineAttrs.emplace_back();
+    grew = true;
+  }
+  const size_t na = st.cadAnnotations.size();
+  while (st.cadAnnotationAttrs.size() < na) {
+    st.cadAnnotationAttrs.emplace_back();
+    grew = true;
+  }
+  if (grew)
+    BumpCadGpuCache(st);
+}
+
+void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::string>* log) {
+  AbortMtextGripInteraction(st);
+  ClearDimGripInteraction(st);
+  ClearEntityGripInteraction(st);
+
+  if (!st.selection.empty()) {
+    st.selectedSurveyPointIndices.clear();
+    const SelectedEntity& lead = st.selection.front();
+    std::vector<SelectedEntity> next;
+    switch (lead.type) {
+    case SelectedEntity::Type::LineSeg: {
+      const size_t n = st.userLinesFlat.size() / 6;
+      for (size_t i = 0; i < n; ++i) {
+        SelectedEntity e{};
+        e.type = SelectedEntity::Type::LineSeg;
+        e.index = static_cast<int>(i);
+        next.push_back(e);
+      }
+      break;
+    }
+    case SelectedEntity::Type::Circle: {
+      const size_t n = st.userCirclesCxCyR.size() / 3;
+      for (size_t i = 0; i < n; ++i) {
+        SelectedEntity e{};
+        e.type = SelectedEntity::Type::Circle;
+        e.index = static_cast<int>(i);
+        next.push_back(e);
+      }
+      break;
+    }
+    case SelectedEntity::Type::Polyline: {
+      const int np =
+          st.userPolylineOffsets.size() > 1 ? static_cast<int>(st.userPolylineOffsets.size()) - 1 : 0;
+      for (int i = 0; i < np; ++i) {
+        SelectedEntity e{};
+        e.type = SelectedEntity::Type::Polyline;
+        e.index = i;
+        next.push_back(e);
+      }
+      break;
+    }
+    case SelectedEntity::Type::Arc: {
+      for (size_t i = 0; i < st.userArcs.size(); ++i) {
+        SelectedEntity e{};
+        e.type = SelectedEntity::Type::Arc;
+        e.index = static_cast<int>(i);
+        next.push_back(e);
+      }
+      break;
+    }
+    case SelectedEntity::Type::Ellipse: {
+      for (size_t i = 0; i < st.userEllipses.size(); ++i) {
+        SelectedEntity e{};
+        e.type = SelectedEntity::Type::Ellipse;
+        e.index = static_cast<int>(i);
+        next.push_back(e);
+      }
+      break;
+    }
+    case SelectedEntity::Type::Annotation: {
+      const int lix = lead.index;
+      if (lix < 0 || static_cast<size_t>(lix) >= st.cadAnnotations.size())
+        break;
+      const CadAnnotation::Kind want = st.cadAnnotations[static_cast<size_t>(lix)].kind;
+      for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
+        if (st.cadAnnotations[ai].kind == want) {
+          SelectedEntity e{};
+          e.type = SelectedEntity::Type::Annotation;
+          e.index = static_cast<int>(ai);
+          next.push_back(e);
+        }
+      }
+      break;
+    }
+    default:
+      break;
+    }
+    st.selection = std::move(next);
+    EnsureAttrCounts(st);
+    BumpCadGpuCache(st);
+    if (log)
+      log->push_back("Select similar — " + std::to_string(st.selection.size()) + " object(s).");
+    return;
+  }
+
+  if (!st.selectedSurveyPointIndices.empty()) {
+    ClearCadSelection(st);
+    st.selectedSurveyPointIndices.clear();
+    for (size_t i = 0; i < st.surveyPoints.size(); ++i)
+      st.selectedSurveyPointIndices.push_back(static_cast<int>(i));
+    for (int svi : st.selectedSurveyPointIndices) {
+      if (svi >= 0 && static_cast<size_t>(svi) < st.surveyPoints.size())
+        SyncSurveyPointLinkedMtextSelection(st, svi);
+    }
+    BumpCadGpuCache(st);
+    if (log)
+      log->push_back("Select similar — all " + std::to_string(st.surveyPoints.size()) + " survey point(s).");
+  } else if (log)
+    log->push_back("Select similar — nothing selected.");
+}
+
 void ClearCadGeometry(AppCommandState& st) {
   st.worldDocumentOriginX = 0.0;
   st.worldDocumentOriginY = 0.0;
@@ -3127,19 +3279,26 @@ void ClearSelection(AppCommandState& st) {
   st.selectedSurveyPointIndices.clear();
 }
 
-void ApplySurveyPointClickSelection(AppCommandState& st, int surveyPointIndex, bool shiftSubtract,
+void ApplySurveyPointClickSelection(AppCommandState& st, int surveyPointIndex, bool shiftModifier,
                                     std::vector<std::string>* log) {
   if (surveyPointIndex < 0 || static_cast<size_t>(surveyPointIndex) >= st.surveyPoints.size())
     return;
   auto& v = st.selectedSurveyPointIndices;
   const auto it = std::find(v.begin(), v.end(), surveyPointIndex);
-  if (shiftSubtract) {
+  if (shiftModifier) {
     if (it != v.end()) {
       v.erase(it);
       if (log)
         log->push_back("Survey point removed from selection.");
+    } else {
+      v.push_back(surveyPointIndex);
+      if (log)
+        log->push_back("Survey point added to selection.");
     }
   } else if (it == v.end()) {
+    v.push_back(surveyPointIndex);
+  } else {
+    v.clear();
     v.push_back(surveyPointIndex);
   }
 }

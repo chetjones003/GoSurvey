@@ -837,7 +837,8 @@ inline float DefaultAnnotationTextHeightWorld(const AppCommandState& st) {
 
 inline void BumpCadGpuCache(AppCommandState& st) { ++st.cadGpuRevision; }
 
-
+/// Keeps per-entity attribute vectors sized to match geometry counts (used by Properties and select-similar).
+void EnsureAttrCounts(AppCommandState& st);
 
 inline void RestoreMtextGripOriginal(AppCommandState& st) {
   if (!st.mtextGripMoveActive)
@@ -1126,6 +1127,9 @@ void ProcessPendingViewportZoom(AppCommandState& st, float* panX, float* panY, f
 /// Clears window-selection draft state and CAD entity selection only (not survey point pick).
 void ClearCadSelection(AppCommandState& st);
 
+/// Replace selection with all entities of the same kind as the first selected item (or all survey points).
+void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::string>* log);
+
 /// Removes all committed CAD lines/circles and clears CAD selection (survey points unchanged).
 void ClearCadGeometry(AppCommandState& st);
 
@@ -1135,7 +1139,9 @@ void ResetCadToolStateToIdle(AppCommandState& st);
 void ClearSelection(AppCommandState& st);
 
 /// Toggle survey point in multi-selection (additive unless \p shiftSubtract removes).
-void ApplySurveyPointClickSelection(AppCommandState& st, int surveyPointIndex, bool shiftSubtract,
+/// Survey marker picks: plain click adds an unselected point or, if the point is already selected, reduces the
+/// selection to that point only. Shift+click toggles membership (add if absent, remove if present).
+void ApplySurveyPointClickSelection(AppCommandState& st, int surveyPointIndex, bool shiftModifier,
                                     std::vector<std::string>* log);
 
 void BeginSelectionBoxCorner(AppCommandState& st, float wx, float wy, float anchorScreenX, float anchorScreenY);

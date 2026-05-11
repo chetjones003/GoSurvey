@@ -567,7 +567,7 @@ int main() {
     ImGui::End();
     ImGui::PopStyleVar(3);
 
-    DrawPropertiesPanel(cmd);
+    DrawPropertiesPanel(cmd, &cmdLog);
 
     CadSnap::Hit snapHit{};
     DrawDrawingViewport(viewport.ColorTexture(), cmd, cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), &panX,

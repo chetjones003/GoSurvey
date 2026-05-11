@@ -17,7 +17,7 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log);
 /// Ribbon under the menu bar: sectioned tool grids (Draw, Modify, View, …) plus a fixed-width layer strip.
 void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>& log);
 
-void DrawPropertiesPanel(AppCommandState& cmd);
+void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
 /// Command log, input, hints, and a single-line status bar (toggles, annotation-scale combo, cursor). Default
 /// plotted text height is under Properties → General.

@@ -217,6 +217,9 @@ Hit FindBest(float wx, float wy, const AppCommandState& cmd, bool commandActive,
     }
   }
 
+  for (const SurveyPoint& sp : cmd.surveyPoints)
+    Consider(wx, wy, sp.easting, sp.northing, Kind::SurveyCenter, tolWorld, &best, &bestDistSq, &bestPri);
+
   return best;
 }
 

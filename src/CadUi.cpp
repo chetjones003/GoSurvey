@@ -839,41 +839,6 @@ static bool gHintLayerMixed = false;
 static bool gHintLinetypeMixed = false;
 static uint64_t gPropsSelFingerprint = ~0ull;
 
-void EnsureAttrCounts(AppCommandState& cmd) {
-  bool grew = false;
-  const size_t nl = cmd.userLinesFlat.size() / 6;
-  while (cmd.userLineAttrs.size() < nl) {
-    cmd.userLineAttrs.emplace_back();
-    grew = true;
-  }
-  const size_t nc = cmd.userCirclesCxCyR.size() / 3;
-  while (cmd.userCircleAttrs.size() < nc) {
-    cmd.userCircleAttrs.emplace_back();
-    grew = true;
-  }
-  while (cmd.userArcAttrs.size() < cmd.userArcs.size()) {
-    cmd.userArcAttrs.emplace_back();
-    grew = true;
-  }
-  while (cmd.userEllAttrs.size() < cmd.userEllipses.size()) {
-    cmd.userEllAttrs.emplace_back();
-    grew = true;
-  }
-  const size_t np =
-      cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0;
-  while (cmd.userPolylineAttrs.size() < np) {
-    cmd.userPolylineAttrs.emplace_back();
-    grew = true;
-  }
-  const size_t na = cmd.cadAnnotations.size();
-  while (cmd.cadAnnotationAttrs.size() < na) {
-    cmd.cadAnnotationAttrs.emplace_back();
-    grew = true;
-  }
-  if (grew)
-    BumpCadGpuCache(cmd);
-}
-
 void RefreshMixedHintFlags(AppCommandState& cmd) {
   std::vector<std::string> layers, colors, ltypes;
   std::vector<float> lws, trans;
@@ -1783,16 +1748,23 @@ int PickSurveyPointIndex(const std::vector<SurveyPoint>& pts, float wx, float wy
   return best;
 }
 
-void DrawSurveyPointPickProps(AppCommandState& cmd) {
+void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* log) {
+  std::vector<std::string> discard;
+  if (!log)
+    log = &discard;
   const auto& ixv = cmd.selectedSurveyPointIndices;
   if (ixv.empty())
     return;
+
+  cmd.surveyPointIdBuffers.resize(cmd.surveyPoints.size());
 
   if (ixv.size() == 1) {
     const int rowIx = ixv.front();
     if (rowIx < 0 || static_cast<size_t>(rowIx) >= cmd.surveyPoints.size())
       return;
     SurveyPoint& p = cmd.surveyPoints[static_cast<size_t>(rowIx)];
+    if (cmd.surveyPointIdBuffers[static_cast<size_t>(rowIx)].empty())
+      cmd.surveyPointIdBuffers[static_cast<size_t>(rowIx)] = std::to_string(p.id);
     ImGui::TextUnformatted("Survey — 1 point");
     if (ImGui::BeginTable("props_pick_survey", 2, ImGuiTableFlags_SizingStretchProp)) {
       ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.42f);
@@ -1813,20 +1785,97 @@ void DrawSurveyPointPickProps(AppCommandState& cmd) {
             "Point number, elevation, and description\0\0";
         if (ImGui::Combo("##svy_lbl_style", &styleI, items)) {
           p.labelStyle = static_cast<SurveyPointLabelStyle>(styleI);
-          EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(rowIx), nullptr);
+          EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(rowIx), log);
           SyncSurveyPointLinkedMtextSelection(cmd, rowIx);
         }
       }
-      PropRow("Point ID", std::to_string(p.id));
-      char nbuf[64];
-      std::snprintf(nbuf, sizeof(nbuf), "%.6f", static_cast<double>(p.northing));
-      PropRow("Northing (Y)", std::string(nbuf));
-      std::snprintf(nbuf, sizeof(nbuf), "%.6f", static_cast<double>(p.easting));
-      PropRow("Easting (X)", std::string(nbuf));
-      std::snprintf(nbuf, sizeof(nbuf), "%.4f", static_cast<double>(p.elevation));
-      PropRow("Elevation", std::string(nbuf));
-      PropRow("Layer", p.layer.empty() ? std::string("—") : p.layer);
-      PropRow("Description", p.description.empty() ? std::string("—") : p.description);
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted("Point ID");
+      ImGui::TableNextColumn();
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      ImGui::InputText("##svy_id", &cmd.surveyPointIdBuffers[static_cast<size_t>(rowIx)]);
+      if (ImGui::IsItemDeactivatedAfterEdit()) {
+        std::string t = TrimCopyUi(cmd.surveyPointIdBuffers[static_cast<size_t>(rowIx)]);
+        char* end = nullptr;
+        const long v = std::strtol(t.c_str(), &end, 10);
+        const bool parsed =
+            end == t.c_str() + static_cast<std::ptrdiff_t>(t.size()) && end != t.c_str();
+        if (!parsed) {
+          log->push_back("Properties — point ID must be a whole number.");
+          cmd.surveyPointIdBuffers[static_cast<size_t>(rowIx)] = std::to_string(p.id);
+        } else {
+          const int nid = static_cast<int>(v);
+          bool dup = false;
+          for (size_t j = 0; j < cmd.surveyPoints.size(); ++j) {
+            if (j != static_cast<size_t>(rowIx) && cmd.surveyPoints[j].id == nid)
+              dup = true;
+          }
+          if (dup) {
+            log->push_back("Properties — duplicate point ID " + std::to_string(nid) + ".");
+            cmd.surveyPointIdBuffers[static_cast<size_t>(rowIx)] = std::to_string(p.id);
+          } else {
+            p.id = nid;
+            cmd.surveyPointIdBuffers[static_cast<size_t>(rowIx)] = std::to_string(nid);
+          }
+        }
+        EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(rowIx), log);
+      }
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted("Northing (Y)");
+      ImGui::TableNextColumn();
+      {
+        double dn = static_cast<double>(p.northing);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputDouble("##svy_n", &dn, 0., 0., "%.6f");
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+          p.northing = static_cast<float>(dn);
+          EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(rowIx), log);
+        }
+      }
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted("Easting (X)");
+      ImGui::TableNextColumn();
+      {
+        double de = static_cast<double>(p.easting);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputDouble("##svy_e", &de, 0., 0., "%.6f");
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+          p.easting = static_cast<float>(de);
+          EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(rowIx), log);
+        }
+      }
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted("Elevation");
+      ImGui::TableNextColumn();
+      {
+        double dz = static_cast<double>(p.elevation);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputDouble("##svy_z", &dz, 0., 0., "%.4f");
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+          p.elevation = static_cast<float>(dz);
+          EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(rowIx), log);
+        }
+      }
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted("Layer");
+      ImGui::TableNextColumn();
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      ImGui::InputText("##svy_layer", &p.layer);
+      if (ImGui::IsItemDeactivatedAfterEdit())
+        RepositionSurveyLabelMtextForPoint(cmd, static_cast<size_t>(rowIx));
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted("Description");
+      ImGui::TableNextColumn();
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      ImGui::InputTextMultiline("##svy_desc", &p.description, ImVec2(-FLT_MIN, 72.f));
+      if (ImGui::IsItemDeactivatedAfterEdit())
+        EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(rowIx), log);
       ImGui::EndTable();
     }
     return;
@@ -1834,15 +1883,230 @@ void DrawSurveyPointPickProps(AppCommandState& cmd) {
 
   ImGui::Text("Survey — %zu points", ixv.size());
   ImGui::Separator();
-  for (int ix : ixv) {
-    if (ix >= 0 && static_cast<size_t>(ix) < cmd.surveyPoints.size())
-      ImGui::BulletText("ID %d", cmd.surveyPoints[static_cast<size_t>(ix)].id);
+
+  static uint64_t gMultiFp = ~0ull;
+  static std::string gBufE, gBufN, gBufZ, gBufLayer, gBufDesc, gBufId;
+  static bool gSameStyle = true;
+  static int gStyleLead = 0;
+  static bool gSameId = true;
+  static bool gSameE = true, gSameN = true, gSameZ = true, gSameLayer = true, gSameDesc = true;
+
+  static const char* kLblStyleNames[] = {
+      "None",
+      "Point number and description",
+      "Point number only",
+      "Description only",
+      "Point number and elevation",
+      "Point number, elevation, and description",
+  };
+
+  constexpr float kHorizTol = 5e-5f;
+  constexpr float kElevTol = 5e-4f;
+  auto sameHoriz = [](float a, float b) { return std::fabs(a - b) <= kHorizTol; };
+  auto sameElev = [](float a, float b) { return std::fabs(a - b) <= kElevTol; };
+
+  const uint64_t fp = [&]() {
+    std::vector<int> sorted(ixv.begin(), ixv.end());
+    std::sort(sorted.begin(), sorted.end());
+    uint64_t h = 1469598103934665603ull;
+    h ^= sorted.size() * 0x9e3779b9u;
+    for (int ix : sorted) {
+      h ^= static_cast<uint64_t>(static_cast<uint32_t>(ix)) + 0x9e3779b97f4a7c15ull;
+      h *= 1099511628211ull;
+    }
+    return h;
+  }();
+  if (fp != gMultiFp) {
+    gMultiFp = fp;
+    const int i0 = ixv.front();
+    if (i0 >= 0 && static_cast<size_t>(i0) < cmd.surveyPoints.size()) {
+      const SurveyPoint& r = cmd.surveyPoints[static_cast<size_t>(i0)];
+      gStyleLead = static_cast<int>(r.labelStyle);
+      gSameStyle = true;
+      gSameId = true;
+      gSameE = gSameN = gSameZ = gSameLayer = gSameDesc = true;
+      char tmp[96];
+      for (int ix : ixv) {
+        if (ix < 0 || static_cast<size_t>(ix) >= cmd.surveyPoints.size())
+          continue;
+        const SurveyPoint& q = cmd.surveyPoints[static_cast<size_t>(ix)];
+        if (static_cast<int>(q.labelStyle) != gStyleLead)
+          gSameStyle = false;
+        if (q.id != r.id)
+          gSameId = false;
+        if (!sameHoriz(q.easting, r.easting))
+          gSameE = false;
+        if (!sameHoriz(q.northing, r.northing))
+          gSameN = false;
+        if (!sameElev(q.elevation, r.elevation))
+          gSameZ = false;
+        if (q.layer != r.layer)
+          gSameLayer = false;
+        if (q.description != r.description)
+          gSameDesc = false;
+      }
+      gBufId = gSameId ? std::to_string(r.id) : std::string("VARIES");
+      if (gSameE) {
+        std::snprintf(tmp, sizeof(tmp), "%.6f", static_cast<double>(r.easting));
+        gBufE = tmp;
+      } else
+        gBufE = "VARIES";
+      if (gSameN) {
+        std::snprintf(tmp, sizeof(tmp), "%.6f", static_cast<double>(r.northing));
+        gBufN = tmp;
+      } else
+        gBufN = "VARIES";
+      if (gSameZ) {
+        std::snprintf(tmp, sizeof(tmp), "%.4f", static_cast<double>(r.elevation));
+        gBufZ = tmp;
+      } else
+        gBufZ = "VARIES";
+      gBufLayer = gSameLayer ? r.layer : std::string("VARIES");
+      gBufDesc = gSameDesc ? r.description : std::string("VARIES");
+    }
+  }
+
+  if (ImGui::BeginTable("props_pick_survey_m", 2, ImGuiTableFlags_SizingStretchProp)) {
+    ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.42f);
+    ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.58f);
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted("Label style");
+    ImGui::TableNextColumn();
+    {
+      gStyleLead = std::clamp(gStyleLead, 0, static_cast<int>(SurveyPointLabelStyle::NumberElevDesc));
+      const char* preview = gSameStyle ? kLblStyleNames[gStyleLead] : "VARIES";
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      if (ImGui::BeginCombo("##svy_lbl_style_m", preview)) {
+        for (int si = 0; si <= static_cast<int>(SurveyPointLabelStyle::NumberElevDesc); ++si) {
+          const bool selected = gSameStyle && si == gStyleLead;
+          if (ImGui::Selectable(kLblStyleNames[si], selected)) {
+            for (int ix : ixv) {
+              if (ix < 0 || static_cast<size_t>(ix) >= cmd.surveyPoints.size())
+                continue;
+              cmd.surveyPoints[static_cast<size_t>(ix)].labelStyle = static_cast<SurveyPointLabelStyle>(si);
+              EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(ix), log);
+              SyncSurveyPointLinkedMtextSelection(cmd, ix);
+            }
+            gMultiFp = ~0ull;
+          }
+        }
+        ImGui::EndCombo();
+      }
+    }
+
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted("Point ID");
+    ImGui::TableNextColumn();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputText("##svy_id_m", &gBufId, ImGuiInputTextFlags_ReadOnly);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort) && ImGui::BeginTooltip()) {
+      ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.f);
+      ImGui::TextUnformatted(
+          "Point IDs must stay unique. Edit ID when only one survey point is selected, or use VIEWPOINTS (VWPTS) "
+          "for the table.");
+      ImGui::PopTextWrapPos();
+      ImGui::EndTooltip();
+    }
+
+    auto applyCoord = [&](const char* label, const char* idSame, const char* idVaries, std::string* buf,
+                          bool sameFlag, float SurveyPoint::* memb, const char* fmt) {
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(label);
+      ImGui::TableNextColumn();
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      if (sameFlag) {
+        const int refIx = ixv.front();
+        double dv = static_cast<double>(cmd.surveyPoints[static_cast<size_t>(refIx)].*memb);
+        ImGui::InputDouble(idSame, &dv, 0., 0., fmt);
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+          for (int ix : ixv) {
+            if (ix < 0 || static_cast<size_t>(ix) >= cmd.surveyPoints.size())
+              continue;
+            cmd.surveyPoints[static_cast<size_t>(ix)].*memb = static_cast<float>(dv);
+            EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(ix), log);
+          }
+          gMultiFp = ~0ull;
+        }
+      } else {
+        ImGui::InputText(idVaries, buf);
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+          std::string t = TrimCopyUi(*buf);
+          if (t == "VARIES" || t.empty()) {
+            log->push_back("Properties — enter a numeric value to apply to all selected points.");
+            gMultiFp = ~0ull;
+            return;
+          }
+          char* end = nullptr;
+          const double v = std::strtod(t.c_str(), &end);
+          if (end == t.c_str()) {
+            log->push_back(std::string("Properties — invalid number for ") + label + ".");
+            gMultiFp = ~0ull;
+            return;
+          }
+          for (int ix : ixv) {
+            if (ix < 0 || static_cast<size_t>(ix) >= cmd.surveyPoints.size())
+              continue;
+            cmd.surveyPoints[static_cast<size_t>(ix)].*memb = static_cast<float>(v);
+            EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(ix), log);
+          }
+          gMultiFp = ~0ull;
+        }
+      }
+    };
+
+    applyCoord("Northing (Y)", "##svy_m_n_d", "##svy_m_n", &gBufN, gSameN, &SurveyPoint::northing, "%.6f");
+    applyCoord("Easting (X)", "##svy_m_e_d", "##svy_m_e", &gBufE, gSameE, &SurveyPoint::easting, "%.6f");
+    applyCoord("Elevation", "##svy_m_z_d", "##svy_m_z", &gBufZ, gSameZ, &SurveyPoint::elevation, "%.4f");
+
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted("Layer");
+    ImGui::TableNextColumn();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputText("##svy_layer_m", &gBufLayer);
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+      std::string t = TrimCopyUi(gBufLayer);
+      if (t != "VARIES") {
+        for (int ix : ixv) {
+          if (ix < 0 || static_cast<size_t>(ix) >= cmd.surveyPoints.size())
+            continue;
+          cmd.surveyPoints[static_cast<size_t>(ix)].layer = t;
+          RepositionSurveyLabelMtextForPoint(cmd, static_cast<size_t>(ix));
+        }
+        BumpCadGpuCache(cmd);
+      }
+      gMultiFp = ~0ull;
+    }
+
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted("Description");
+    ImGui::TableNextColumn();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputTextMultiline("##svy_desc_m", &gBufDesc, ImVec2(-FLT_MIN, 72.f));
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+      std::string t = TrimCopyUi(gBufDesc);
+      if (t != "VARIES") {
+        for (int ix : ixv) {
+          if (ix < 0 || static_cast<size_t>(ix) >= cmd.surveyPoints.size())
+            continue;
+          cmd.surveyPoints[static_cast<size_t>(ix)].description = t;
+          EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(ix), log);
+        }
+      }
+      gMultiFp = ~0ull;
+    }
+
+    ImGui::EndTable();
   }
 }
 
 } // namespace
 
-void DrawPropertiesPanel(AppCommandState& cmd) {
+void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::SetNextWindowSize(ImVec2(320, 560), ImGuiCond_FirstUseEver);
   if (!ImGui::Begin("Properties", nullptr)) {
     ImGui::End();
@@ -1864,13 +2128,14 @@ void DrawPropertiesPanel(AppCommandState& cmd) {
     ImGui::Separator();
     ImGui::TextWrapped(
         "Fence: left→right = window (fully inside); right→left = crossing (touches fence). Includes COGO points. "
-        "Click a marker to tweak survey set; Shift subtracts. Shift+fence subtracts. ESC clears.");
+        "Survey markers: click to add to the set; Shift+click adds another or removes if already picked; click a "
+        "picked marker again (no Shift) to keep only that point. Shift+fence subtracts. ESC clears.");
     ImGui::End();
     return;
   }
 
   if (haveSurveyPick) {
-    DrawSurveyPointPickProps(cmd);
+    DrawSurveyPointPickProps(cmd, log);
     ImGui::Separator();
   }
 
@@ -2376,7 +2641,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     if (ImGui::Button("OSNAP", ImVec2(0.f, statusBtnH)))
       *object_snap_enabled = !*object_snap_enabled;
     PopModeToggleButtonColors(on);
-    ItemHelpTooltip("Object snap — endpoint, mid, center, perpendicular (F3)");
+    ItemHelpTooltip("Object snap — endpoint, mid, center, survey point, perpendicular (F3)");
     ImGui::SameLine(0, 4);
   }
   if (ortho_mode_enabled) {
@@ -2692,6 +2957,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   ImGui::Image(static_cast<ImTextureID>(static_cast<std::intptr_t>(viewportTextureId)), avail, ImVec2(0, 1),
                ImVec2(1, 0));
+
+  {
+    using AK = AppCommandState::Kind;
+    const bool ctxBlocked = cmd.active != AK::None || cmd.dimGripMoveActive || cmd.entityGripMoveActive ||
+                            cmd.mtextGripMoveActive || cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond;
+    const bool hasPick = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
+    if (ImGui::BeginPopupContextItem("##drawing1_vp_ctx", ImGuiPopupFlags_MouseButtonRight)) {
+      if (ImGui::MenuItem("Select similar", nullptr, false, hasPick && !ctxBlocked))
+        SelectSimilarToCurrentSelection(cmd, &log);
+      ImGui::EndPopup();
+    }
+  }
 
   const bool hovered = ImGui::IsItemHovered();
   const ImVec2 mouse = ImGui::GetIO().MousePos;
@@ -3137,9 +3414,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
     } else if (cmd.active == K::None) {
       bool handled = false;
+      if (cmd.selBoxWaitingSecond) {
+        SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
+        for (int svi : cmd.selectedSurveyPointIndices) {
+          if (svi >= 0 && static_cast<size_t>(svi) < cmd.surveyPoints.size())
+            SyncSurveyPointLinkedMtextSelection(cmd, svi);
+        }
+        BumpCadGpuCache(cmd);
+        handled = true;
+      }
       int gripCorner = -1;
       int dimGripHit = -1;
-      if (cmd.selection.size() == 1 && cmd.selection[0].type == SelectedEntity::Type::Annotation) {
+      if (!handled && cmd.selection.size() == 1 && cmd.selection[0].type == SelectedEntity::Type::Annotation) {
         const int aix = cmd.selection[0].index;
         if (aix >= 0 && static_cast<size_t>(aix) < cmd.cadAnnotations.size()) {
           const CadAnnotation& can = cmd.cadAnnotations[static_cast<size_t>(aix)];

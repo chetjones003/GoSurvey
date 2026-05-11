@@ -4,7 +4,7 @@
 
 namespace CadSnap {
 
-enum class Kind { Endpoint, Midpoint, Center, Perpendicular };
+enum class Kind { Endpoint, Midpoint, Center, Perpendicular, SurveyCenter };
 
 struct Hit {
   bool valid = false;
@@ -28,6 +28,8 @@ struct Hit {
   switch (k) {
   case Kind::Endpoint:
     return 3;
+  case Kind::SurveyCenter:
+    return 2; ///< Same tier as circle center; distance breaks ties
   case Kind::Center:
     return 2; ///< Circle centers beat segment midpoint when snap distances tie
   case Kind::Midpoint:
