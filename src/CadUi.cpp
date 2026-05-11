@@ -1999,6 +1999,8 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     using SAP = AppCommandState::SegmentAnglePickPhase;
     if (cmd.linePhase == AppCommandState::LinePhase::NeedFirstPoint)
       return "First point (click or X,Y):";
+    if (cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint && cmd.segmentAngleKeyboardAwaitBearing)
+      return "LINE bearing ° (CW from N); blank Enter cancels:";
     if (cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint && cmd.segmentAnglePickPhase == SAP::WaitP1)
       return "Bearing pick — first click:";
     if (cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint && cmd.segmentAnglePickPhase == SAP::WaitP2)
@@ -2016,6 +2018,8 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     using SAP = AppCommandState::SegmentAnglePickPhase;
     if (cmd.polylinePhase == AppCommandState::PolylinePhase::NeedFirstPoint)
       return "POLYLINE first point:";
+    if (cmd.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint && cmd.segmentAngleKeyboardAwaitBearing)
+      return "POLYLINE bearing ° (CW from N); blank Enter cancels:";
     if (cmd.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint && cmd.segmentAnglePickPhase == SAP::WaitP1)
       return "POLYLINE bearing pick — first click:";
     if (cmd.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint && cmd.segmentAnglePickPhase == SAP::WaitP2)

@@ -396,6 +396,11 @@ struct AppCommandState {
 
   float segmentLockUy = 0.f;
 
+  /// LINE/POLYLINE: user typed \c A / \c angle alone — next line is parsed as bearing ° CW from north (blank Enter
+  /// cancels).
+
+  bool segmentAngleKeyboardAwaitBearing = false;
+
 
 
   /// Line vertices for GL: pairs (x,y,z) per endpoint; each segment is two endpoints.
@@ -742,6 +747,8 @@ inline void ResetSegmentAngleLock(AppCommandState& st) {
   st.segmentLockUy = 0.f;
 
   st.segmentAnglePickPhase = AppCommandState::SegmentAnglePickPhase::Idle;
+
+  st.segmentAngleKeyboardAwaitBearing = false;
 
 }
 

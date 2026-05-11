@@ -733,9 +733,9 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
         "DIMALIGNED (DAL), CIRCLE (C), MOVE (M), COPY (CP), ROTATE (RO), DELETE (DEL), ZOOM (ZE/ZW), PLOTSCALE "
         "(PSCALE), REGEN (RE). SURVEY: CRTPTS, VWPTS, IMPPTS, EXPPTS. Idle: two-click box selects. ESC.");
     log.push_back(
-        "LINE: @dx,dy from anchor; A<bearing> (+ optional +90 / -45 or 45+90 on one line), or AP then two clicks — "
-        "Enter locks picked bearing; +90 adjusts then locks (° clockwise from north); distance (+/-) along ray; "
-        "A clears. Ortho: distance toward cursor.");
+        "LINE: @dx,dy from anchor; A or ANGLE alone then bearing on next line (blank Enter cancels); A<bearing> (+ "
+        "optional +90) on one line; AP + two picks then Enter (or +90) locks bearing; distance (+/-) along ray; A "
+        "clears when lock or AP pick is active. Ortho: distance toward cursor.");
     log.push_back(
         "ROTATE: ° clockwise from north / DMS; R reference; then bearing or P. DELETE / ZW use unsnapped windows. TRIM "
         "matches Civil 3D: cutting edges, Enter, trim clicks. ZE fits geometry.");
@@ -2028,6 +2028,10 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   if (st.active == K::Line) {
     using LP = AppCommandState::LinePhase;
     using SAP = AppCommandState::SegmentAnglePickPhase;
+    if (st.linePhase == LP::NeedNextPoint && st.segmentAngleKeyboardAwaitBearing) {
+      log.push_back("Finish bearing entry on the command line (blank Enter cancels) before viewport picks.");
+      return;
+    }
     if (st.linePhase == LP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitP1) {
       st.segmentPickRefX1 = wx;
       st.segmentPickRefY1 = wy;
@@ -2049,6 +2053,10 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       }
       return;
     }
+    if (st.linePhase == LP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitAdjustOrCommit) {
+      log.push_back("Bearing pick — press Enter to lock (or type +90 / -45); viewport click ignored in this step.");
+      return;
+    }
     if (st.linePhase == LP::NeedNextPoint && st.segmentAngleLockActive)
       ApplySegmentAngleLockToWorldPick(st.anchorX, st.anchorY, st.segmentLockUx, st.segmentLockUy, &wx, &wy, false);
     else if (st.linePhase == LP::NeedNextPoint && st.orthoMode) {
@@ -2066,6 +2074,10 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   if (st.active == K::Polyline) {
     using PP = AppCommandState::PolylinePhase;
     using SAP = AppCommandState::SegmentAnglePickPhase;
+    if (st.polylinePhase == PP::NeedNextPoint && st.segmentAngleKeyboardAwaitBearing) {
+      log.push_back("Finish bearing entry on the command line (blank Enter cancels) before viewport picks.");
+      return;
+    }
     if (st.polylinePhase == PP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitP1) {
       st.segmentPickRefX1 = wx;
       st.segmentPickRefY1 = wy;
@@ -2085,6 +2097,10 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
         log.push_back(
             "Bearing from picks — Enter locks as-is; type +90 / -45 (° CW from N) to adjust and lock (one line).");
       }
+      return;
+    }
+    if (st.polylinePhase == PP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitAdjustOrCommit) {
+      log.push_back("Bearing pick — press Enter to lock (or type +90 / -45); viewport click ignored in this step.");
       return;
     }
     if (st.polylinePhase == PP::NeedNextPoint && st.segmentAngleLockActive)
@@ -2772,10 +2788,10 @@ static void CommitSegmentAnglePickLock(AppCommandState& st, std::vector<std::str
 
 void CancelSegmentAnglePick(AppCommandState& st, std::vector<std::string>* log) {
   using SAP = AppCommandState::SegmentAnglePickPhase;
-  if (st.segmentAnglePickPhase == SAP::Idle)
-    return;
+  const bool hadPick = st.segmentAnglePickPhase != SAP::Idle;
   st.segmentAnglePickPhase = SAP::Idle;
-  if (log)
+  st.segmentAngleKeyboardAwaitBearing = false;
+  if (hadPick && log)
     log->push_back("Bearing pick — canceled.");
 }
 
@@ -2787,13 +2803,19 @@ bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lin
   const std::string low = ToLower(s);
   if (low == "ap" || low == "anglepick" || low == "a p") {
     ResetSegmentAngleLock(st);
+    st.segmentAngleKeyboardAwaitBearing = false;
     st.segmentAnglePickPhase = SAP::WaitP1;
     log.push_back("Bearing pick — first reference point (viewport click). ESC cancels pick.");
     return true;
   }
   if (low == "a" || low == "angle") {
-    ResetSegmentAngleLock(st);
-    log.push_back("Segment bearing lock — off.");
+    if (st.segmentAngleLockActive || st.segmentAnglePickPhase != SAP::Idle) {
+      ResetSegmentAngleLock(st);
+      log.push_back("Segment bearing lock — off.");
+    } else {
+      st.segmentAngleKeyboardAwaitBearing = true;
+      log.push_back("Bearing ° clockwise from north (decimal/DMS); blank Enter cancels.");
+    }
     return true;
   }
   std::string rest;
@@ -2809,8 +2831,13 @@ bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lin
     return false;
 
   if (rest.empty()) {
-    ResetSegmentAngleLock(st);
-    log.push_back("Segment bearing lock — off.");
+    if (st.segmentAngleLockActive || st.segmentAnglePickPhase != SAP::Idle) {
+      ResetSegmentAngleLock(st);
+      log.push_back("Segment bearing lock — off.");
+    } else {
+      st.segmentAngleKeyboardAwaitBearing = true;
+      log.push_back("Bearing ° clockwise from north (decimal/DMS); blank Enter cancels.");
+    }
     return true;
   }
   float combined = 0.f;
@@ -4618,6 +4645,37 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
+  const bool linePolyNextNeedPoint =
+      (st.active == K::Line && st.linePhase == LP::NeedNextPoint) ||
+      (st.active == K::Polyline && st.polylinePhase == PP::NeedNextPoint);
+
+  if (linePolyNextNeedPoint && st.segmentAngleKeyboardAwaitBearing) {
+    if (line.empty()) {
+      st.segmentAngleKeyboardAwaitBearing = false;
+      log.push_back("Bearing entry canceled.");
+      cmdBuf[0] = '\0';
+      return;
+    }
+    float combined = 0.f;
+    if (!ParseBearingCwNorthStringWithOptionalDelta(line, &combined, log)) {
+      cmdBuf[0] = '\0';
+      return;
+    }
+    const float theta = MathAngleRadFromBearingCwNorthDeg(combined);
+    st.segmentLockUx = std::cos(theta);
+    st.segmentLockUy = std::sin(theta);
+    st.segmentAngleLockActive = true;
+    st.segmentAnglePickPhase = SAP::Idle;
+    st.segmentAngleKeyboardAwaitBearing = false;
+    char bufKb[144];
+    std::snprintf(bufKb, sizeof(bufKb),
+                  "Bearing lock %.6g° clockwise from north — distance (+/- along ray) or click (A clears).",
+                  static_cast<double>(combined));
+    log.push_back(bufKb);
+    cmdBuf[0] = '\0';
+    return;
+  }
+
   if (line.empty()) {
     if (st.active == K::Trim) {
       using TP = AppCommandState::TrimPhase;
@@ -5133,6 +5191,8 @@ const char* LineCommandFooterHint(const AppCommandState& st) {
     return "";
   if (st.linePhase == LP::NeedFirstPoint)
     return "LINE: First point — click or X,Y | ESC ends command";
+  if (st.linePhase == LP::NeedNextPoint && st.segmentAngleKeyboardAwaitBearing)
+    return "LINE: Type bearing ° CW from N (decimal/DMS) | blank Enter cancels | ESC ends command";
   if (st.linePhase == LP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitP1)
     return "LINE bearing pick: First direction point — click | AP started | ESC cancels pick";
   if (st.linePhase == LP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitP2)
@@ -5159,6 +5219,8 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
     using SAP = AppCommandState::SegmentAnglePickPhase;
     if (st.polylinePhase == PP::NeedFirstPoint)
       return "POLYLINE: First point — click or X,Y | CLOSE closes | ESC cancel";
+    if (st.polylinePhase == PP::NeedNextPoint && st.segmentAngleKeyboardAwaitBearing)
+      return "POLYLINE: Type bearing ° CW from N | blank Enter cancels | ESC cancel";
     if (st.polylinePhase == PP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitP1)
       return "POLYLINE bearing pick: First direction click | ESC cancels pick";
     if (st.polylinePhase == PP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitP2)

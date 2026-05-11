@@ -562,6 +562,30 @@ int main() {
     cmd.uiCursorWorldY = curY;
     DrawCommandLinePanel(cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd, curX, curY, 0.f,
                          &objectSnapEnabled, &orthoEnabled, &gridVisible);
+
+    // LINE/POLYLINE AP: after two picks the bottom command InputText is hidden — Enter must still lock bearing.
+    // Keyboard-only "A" then bearing: Enter with empty buffer cancels awaiting mode when no text field is focused.
+    {
+      ImGuiIO& ioEnter = ImGui::GetIO();
+      const bool enterDown =
+          ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
+      if (enterDown && !ioEnter.WantTextInput) {
+        using SAP = AppCommandState::SegmentAnglePickPhase;
+        using LP = AppCommandState::LinePhase;
+        using PP = AppCommandState::PolylinePhase;
+        const bool lineNext =
+            cmd.active == AppCommandState::Kind::Line && cmd.linePhase == LP::NeedNextPoint;
+        const bool polyNext =
+            cmd.active == AppCommandState::Kind::Polyline && cmd.polylinePhase == PP::NeedNextPoint;
+        const bool apCommit =
+            (lineNext || polyNext) && cmd.segmentAnglePickPhase == SAP::WaitAdjustOrCommit;
+        const bool kbAwaitBearing =
+            (lineNext || polyNext) && cmd.segmentAngleKeyboardAwaitBearing;
+        if (apCommit || kbAwaitBearing)
+          ProcessCommandLineSubmit(cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd, cmdLog);
+      }
+    }
+
     DrawCreatePointsPanel(cmd, cmdLog);
     DrawSettingsPanel(cmd);
     DrawViewPointsPanel(cmd, cmdLog);
