@@ -482,6 +482,15 @@ int main() {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
+    ImGuiIO& ioFrame = ImGui::GetIO();
+    if (!ioFrame.WantTextInput) {
+      if (ImGui::IsKeyPressed(ImGuiKey_F3, false))
+        objectSnapEnabled = !objectSnapEnabled;
+      if (ImGui::IsKeyPressed(ImGuiKey_F8, false))
+        orthoEnabled = !orthoEnabled;
+    }
+    cmd.orthoMode = orthoEnabled;
+
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
       if (cmd.copySurveyDupModalOpen) {
         ApplyCopySurveyDuplicateModalResult(cmd, false, cmdLog);
@@ -544,16 +553,14 @@ int main() {
     ImGui::PopStyleVar(3);
 
     DrawPropertiesPanel(cmd);
-    DrawHotTogglesPanel(&objectSnapEnabled, &orthoEnabled, &cmd, &gridVisible);
-
-    cmd.orthoMode = orthoEnabled;
 
     CadSnap::Hit snapHit{};
     DrawDrawingViewport(viewport.ColorTexture(), cmd, cmdLog, &panX, &panY, &zoom, &curX, &curY, &curRawX,
                         &curRawY, &fbW, &fbH, objectSnapEnabled, &snapHit);
     cmd.uiCursorWorldX = curX;
     cmd.uiCursorWorldY = curY;
-    DrawCommandLinePanel(cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd, curX, curY, 0.f);
+    DrawCommandLinePanel(cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd, curX, curY, 0.f,
+                         &objectSnapEnabled, &orthoEnabled, &gridVisible);
     DrawCreatePointsPanel(cmd, cmdLog);
     DrawViewPointsPanel(cmd, cmdLog);
     DrawImportPointsPanel(cmd, cmdLog);

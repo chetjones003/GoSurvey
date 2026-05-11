@@ -10,7 +10,7 @@
 
 void ApplyCadDarkTheme();
 
-/// One-time layout: properties (left), toggles (right), command line (bottom), drawing (center).
+/// One-time layout: properties (left), reports (right), command line (bottom, includes mode toggles), drawing (center).
 void SetupMainDockLayout(ImGuiID dockspace_id);
 
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log);
@@ -18,13 +18,12 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log);
 void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>& log);
 
 void DrawPropertiesPanel(AppCommandState& cmd);
-/// \param object_snap_enabled UI checkbox state for geometric object snaps (endpoint, mid, center, perp).
-/// \param grid_visible when non-null, ties the Grid checkbox to persistent state (viewport minor grid).
-void DrawHotTogglesPanel(bool* object_snap_enabled, bool* ortho_mode_enabled, AppCommandState* cmd_state,
-                         bool* grid_visible);
 
+/// Command log, input, hints, and a single-line status bar (toggles, annotation-scale combo, cursor). Default
+/// plotted text height is under Properties → General.
 void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBufSize, AppCommandState& cmd,
-                          float cursorX, float cursorY, float cursorZ);
+                          float cursorX, float cursorY, float cursorZ, bool* object_snap_enabled,
+                          bool* ortho_mode_enabled, bool* grid_visible);
 
 /// Central CAD viewport: renders OpenGL texture and handles pan / zoom / LINE picks.
 /// Writes framebuffer pixel size and cursor world position. When object snap finds a hit, cursor and
