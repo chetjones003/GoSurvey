@@ -631,7 +631,7 @@ uint64_t SelectionFingerprint(const std::vector<SelectedEntity>& sel) {
 
 static char gBufLayer[160]{};
 static char gBufLinetype[160]{};
-static float gLineweightMm = 0.25f;
+static float gLineweightMm = 0.18f;
 static float gTransparency01 = 0.f;
 static bool gLineweightMixed = false;
 static bool gTransparencyMixed = false;
@@ -2115,7 +2115,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const float v = my / std::max(avail.y, 1.f);
       const float z0 = *zoom;
       const float halfH0 = (1.f / std::max(z0, 1.e-4f)) * 50.f;
-      const float z1 = z0 * std::pow(1.17f, wheel);
+      // Continuous zoom (works with fractional MouseWheel deltas; less "stair-step" than fixed pow steps).
+      const float z1 = std::clamp(z0 * std::exp(wheel * 0.14f), 1.e-4f, 1.e5f);
       const float halfH1 = (1.f / std::max(z1, 1.e-4f)) * 50.f;
       const float dh = halfH0 - halfH1;
       *panX += (u - 0.5f) * 2.f * aspect * dh;

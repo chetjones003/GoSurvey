@@ -1369,6 +1369,110 @@ void BuildExportLayerRgbHint(const AppCommandState& st, std::unordered_map<std::
 
 } // namespace
 
+static void MaybeRebaseLargeCadCoordinatesAfterImport(AppCommandState& st, std::vector<std::string>& log) {
+  auto consider = [&](double x, double y, double* mnX, double* mxX, double* mnY, double* mxY, bool* any) {
+    if (!*any) {
+      *mnX = *mxX = x;
+      *mnY = *mxY = y;
+      *any = true;
+    } else {
+      *mnX = std::min(*mnX, x);
+      *mxX = std::max(*mxX, x);
+      *mnY = std::min(*mnY, y);
+      *mxY = std::max(*mxY, y);
+    }
+  };
+
+  double mnX = 0., mxX = 0., mnY = 0., mxY = 0.;
+  bool any = false;
+
+  const auto& L = st.userLinesFlat;
+  if (L.size() % 6 == 0) {
+    for (size_t i = 0; i + 5 < L.size(); i += 6) {
+      consider(static_cast<double>(L[i]), static_cast<double>(L[i + 1]), &mnX, &mxX, &mnY, &mxY, &any);
+      consider(static_cast<double>(L[i + 3]), static_cast<double>(L[i + 4]), &mnX, &mxX, &mnY, &mxY, &any);
+    }
+  }
+  const auto& C = st.userCirclesCxCyR;
+  if (C.size() % 3 == 0) {
+    for (size_t i = 0; i + 2 < C.size(); i += 3) {
+      const double cx = static_cast<double>(C[i]);
+      const double cy = static_cast<double>(C[i + 1]);
+      const double r = std::fabs(static_cast<double>(C[i + 2]));
+      consider(cx - r, cy - r, &mnX, &mxX, &mnY, &mxY, &any);
+      consider(cx + r, cy + r, &mnX, &mxX, &mnY, &mxY, &any);
+    }
+  }
+  for (const CadArc& a : st.userArcs) {
+    const double r = std::fabs(static_cast<double>(a.r));
+    consider(static_cast<double>(a.cx) - r, static_cast<double>(a.cy) - r, &mnX, &mxX, &mnY, &mxY, &any);
+    consider(static_cast<double>(a.cx) + r, static_cast<double>(a.cy) + r, &mnX, &mxX, &mnY, &mxY, &any);
+  }
+  for (const CadEllipse& el : st.userEllipses) {
+    const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    const double mb = ma * static_cast<double>(el.ratio);
+    consider(static_cast<double>(el.cx) - ma - mb, static_cast<double>(el.cy) - ma - mb, &mnX, &mxX, &mnY, &mxY,
+              &any);
+    consider(static_cast<double>(el.cx) + ma + mb, static_cast<double>(el.cy) + ma + mb, &mnX, &mxX, &mnY, &mxY,
+              &any);
+  }
+  const auto& PV = st.userPolylineVerts;
+  for (size_t i = 0; i + 2 < PV.size(); i += 3)
+    consider(static_cast<double>(PV[i]), static_cast<double>(PV[i + 1]), &mnX, &mxX, &mnY, &mxY, &any);
+  for (const CadAnnotation& an : st.cadAnnotations) {
+    float amnX = 0.f, amnY = 0.f, amxX = 0.f, amxY = 0.f;
+    CadAnnotationRoughBounds(an, st.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
+    consider(static_cast<double>(amnX), static_cast<double>(amnY), &mnX, &mxX, &mnY, &mxY, &any);
+    consider(static_cast<double>(amxX), static_cast<double>(amxY), &mnX, &mxX, &mnY, &mxY, &any);
+  }
+
+  if (!any)
+    return;
+
+  const double spanX = mxX - mnX;
+  const double spanY = mxY - mnY;
+  const double maxAbs = std::max(
+      1.e-9,
+      std::max(std::max(std::fabs(mnX), std::fabs(mxX)), std::max(std::fabs(mnY), std::fabs(mxY))));
+  const double maxSpan = std::max(spanX, spanY);
+  if (maxAbs < 5e4 && maxSpan < 1e5)
+    return;
+
+  const double ox = 0.5 * (mnX + mxX);
+  const double oy = 0.5 * (mnY + mxY);
+
+  auto sub2 = [&](float* x, float* y) {
+    *x = static_cast<float>(static_cast<double>(*x) - ox);
+    *y = static_cast<float>(static_cast<double>(*y) - oy);
+  };
+
+  for (size_t i = 0; i + 5 < st.userLinesFlat.size(); i += 6) {
+    sub2(&st.userLinesFlat[i], &st.userLinesFlat[i + 1]);
+    sub2(&st.userLinesFlat[i + 3], &st.userLinesFlat[i + 4]);
+  }
+  for (size_t i = 0; i + 2 < st.userCirclesCxCyR.size(); i += 3)
+    sub2(&st.userCirclesCxCyR[i], &st.userCirclesCxCyR[i + 1]);
+  for (CadArc& a : st.userArcs)
+    sub2(&a.cx, &a.cy);
+  for (CadEllipse& el : st.userEllipses)
+    sub2(&el.cx, &el.cy);
+  for (size_t i = 0; i + 2 < st.userPolylineVerts.size(); i += 3)
+    sub2(&st.userPolylineVerts[i], &st.userPolylineVerts[i + 1]);
+  for (CadAnnotation& an : st.cadAnnotations) {
+    sub2(&an.insX, &an.insY);
+    sub2(&an.boxMinX, &an.boxMinY);
+    sub2(&an.boxMaxX, &an.boxMaxY);
+  }
+
+  st.worldDocumentOriginX = ox;
+  st.worldDocumentOriginY = oy;
+  char buf[192];
+  std::snprintf(buf, sizeof(buf),
+                "DXF import — shifted CAD to a local origin (%.6g, %.6g) for smooth zoom; export adds it back.",
+                ox, oy);
+  log.push_back(buf);
+}
+
 bool ImportDxfFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
   if (!pathUtf8 || pathUtf8[0] == '\0') {
     log.push_back("DXF import — no path.");
@@ -1442,6 +1546,7 @@ bool ImportDxfFile(AppCommandState& st, const char* pathUtf8, std::vector<std::s
       ++printed;
     }
   }
+  MaybeRebaseLargeCadCoordinatesAfterImport(st, log);
   BumpCadGpuCache(st);
   return true;
 }
@@ -1469,6 +1574,9 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
     return false;
   }
   out << std::setprecision(16);
+
+  const double kExpOx = st.worldDocumentOriginX;
+  const double kExpOy = st.worldDocumentOriginY;
 
   auto emitPair = [&](int code, const std::string& val) {
     out << code << "\r\n" << val << "\r\n";
@@ -1547,11 +1655,11 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
     emitPair(62, "256");
     emitPair(420, std::to_string(static_cast<int>(rgb)));
     emitPair(100, "AcDbLine");
-    emitPair(10, std::to_string(static_cast<double>(x0)));
-    emitPair(20, std::to_string(static_cast<double>(y0)));
+    emitPair(10, std::to_string(static_cast<double>(x0) + kExpOx));
+    emitPair(20, std::to_string(static_cast<double>(y0) + kExpOy));
     emitPair(30, std::to_string(static_cast<double>(z0)));
-    emitPair(11, std::to_string(static_cast<double>(x1)));
-    emitPair(21, std::to_string(static_cast<double>(y1)));
+    emitPair(11, std::to_string(static_cast<double>(x1) + kExpOx));
+    emitPair(21, std::to_string(static_cast<double>(y1) + kExpOy));
     emitPair(31, std::to_string(static_cast<double>(z1)));
   }
 
@@ -1575,8 +1683,8 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
     emitPair(62, "256");
     emitPair(420, std::to_string(static_cast<int>(rgb)));
     emitPair(100, "AcDbCircle");
-    emitPair(10, std::to_string(static_cast<double>(cx)));
-    emitPair(20, std::to_string(static_cast<double>(cy)));
+    emitPair(10, std::to_string(static_cast<double>(cx) + kExpOx));
+    emitPair(20, std::to_string(static_cast<double>(cy) + kExpOy));
     emitPair(30, "0.0");
     emitPair(40, std::to_string(static_cast<double>(rr)));
   }
@@ -1613,8 +1721,8 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
       emitPair(62, "256");
       emitPair(420, std::to_string(static_cast<int>(rgb)));
       emitPair(100, "AcDbText");
-      emitPair(10, std::to_string(static_cast<double>(an.insX)));
-      emitPair(20, std::to_string(static_cast<double>(an.insY)));
+      emitPair(10, std::to_string(static_cast<double>(an.insX) + kExpOx));
+      emitPair(20, std::to_string(static_cast<double>(an.insY) + kExpOy));
       emitPair(30, "0.0");
       emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch))));
       emitPair(50, std::to_string(rotDeg));
@@ -1633,8 +1741,8 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
       emitPair(62, "256");
       emitPair(420, std::to_string(static_cast<int>(rgb)));
       emitPair(100, "AcDbMText");
-      emitPair(10, std::to_string(static_cast<double>(an.insX)));
-      emitPair(20, std::to_string(static_cast<double>(an.insY)));
+      emitPair(10, std::to_string(static_cast<double>(an.insX) + kExpOx));
+      emitPair(20, std::to_string(static_cast<double>(an.insY) + kExpOy));
       emitPair(30, "0.0");
       emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch))));
       emitPair(41, std::to_string(static_cast<double>(bw)));
