@@ -2695,6 +2695,8 @@ void ClearCadSelection(AppCommandState& st) {
 }
 
 void ClearCadGeometry(AppCommandState& st) {
+  st.worldDocumentOriginX = 0.0;
+  st.worldDocumentOriginY = 0.0;
   st.userLinesFlat.clear();
   st.userLineAttrs.clear();
   st.userCirclesCxCyR.clear();

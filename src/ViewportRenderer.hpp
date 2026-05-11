@@ -39,6 +39,8 @@ public:
 private:
   bool EnsureFramebuffer(int w, int h);
   void DestroyFramebuffer();
+  bool EnsureMultisamplePass(int w, int h);
+  void DestroyMultisamplePass();
   bool EnsureShader();
   void DestroyShader();
   static void Ortho(float left, float right, float bottom, float top, float nearp, float farp,
@@ -49,6 +51,14 @@ private:
   unsigned int rbo_ = 0;
   int fbW_ = 0;
   int fbH_ = 0;
+
+  /// Multisampled pass → blit to \p colorTex_ (reduces aliasing / "sparkle" when zoomed).
+  unsigned int msFbo_ = 0;
+  unsigned int msColorRbo_ = 0;
+  unsigned int msDepthRbo_ = 0;
+  int msFbW_ = 0;
+  int msFbH_ = 0;
+  bool msaaAvailable_ = false;
 
   unsigned int lineProgram_ = 0;
   unsigned int vcLineProgram_ = 0;

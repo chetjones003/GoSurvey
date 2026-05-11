@@ -474,7 +474,73 @@ void ViewportRenderer::DestroyShader() {
   }
 }
 
+void ViewportRenderer::DestroyMultisamplePass() {
+  if (msColorRbo_) {
+    glDeleteRenderbuffers(1, &msColorRbo_);
+    msColorRbo_ = 0;
+  }
+  if (msDepthRbo_) {
+    glDeleteRenderbuffers(1, &msDepthRbo_);
+    msDepthRbo_ = 0;
+  }
+  if (msFbo_) {
+    glDeleteFramebuffers(1, &msFbo_);
+    msFbo_ = 0;
+  }
+  msFbW_ = msFbH_ = 0;
+  msaaAvailable_ = false;
+}
+
+bool ViewportRenderer::EnsureMultisamplePass(int w, int h) {
+  if (w <= 0 || h <= 0)
+    return false;
+  if (msaaAvailable_ && msFbo_ && w == msFbW_ && h == msFbH_)
+    return true;
+
+  DestroyMultisamplePass();
+
+  GLint samples = 0;
+  glGetIntegerv(GL_MAX_SAMPLES, &samples);
+  GLint n = 4;
+  if (samples < 2)
+    return false;
+  if (samples >= 8)
+    n = 8;
+  else if (samples >= 4)
+    n = 4;
+  else
+    n = 2;
+
+  glGenFramebuffers(1, &msFbo_);
+  glBindFramebuffer(GL_FRAMEBUFFER, msFbo_);
+
+  glGenRenderbuffers(1, &msColorRbo_);
+  glBindRenderbuffer(GL_RENDERBUFFER, msColorRbo_);
+  glRenderbufferStorageMultisample(GL_RENDERBUFFER, n, GL_RGBA8, w, h);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, msColorRbo_);
+
+  glGenRenderbuffers(1, &msDepthRbo_);
+  glBindRenderbuffer(GL_RENDERBUFFER, msDepthRbo_);
+  glRenderbufferStorageMultisample(GL_RENDERBUFFER, n, GL_DEPTH_COMPONENT24, w, h);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, msDepthRbo_);
+
+  const GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  glBindRenderbuffer(GL_RENDERBUFFER, 0);
+
+  if (st != GL_FRAMEBUFFER_COMPLETE) {
+    DestroyMultisamplePass();
+    return false;
+  }
+
+  msFbW_ = w;
+  msFbH_ = h;
+  msaaAvailable_ = true;
+  return true;
+}
+
 void ViewportRenderer::DestroyFramebuffer() {
+  DestroyMultisamplePass();
   if (colorTex_) {
     glDeleteTextures(1, &colorTex_);
     colorTex_ = 0;
@@ -537,7 +603,8 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
-  glBindFramebuffer(GL_FRAMEBUFFER, fbo_);
+  const bool useMsaa = EnsureMultisamplePass(fbW_, fbH_);
+  glBindFramebuffer(GL_FRAMEBUFFER, (useMsaa && msFbo_) ? msFbo_ : fbo_);
   glViewport(0, 0, fbW_, fbH_);
   glDisable(GL_DEPTH_TEST);
   glDepthMask(GL_FALSE);
@@ -557,60 +624,85 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
   float mvp[16];
   MulMat4(proj, model, mvp);
 
+  constexpr GLfloat kLwMain = 1.35f;
+  constexpr GLfloat kLwHiLine = 2.65f;
+  constexpr GLfloat kLwHiCirc = 2.45f;
+  constexpr GLfloat kLwFence = 1.1f;
+  constexpr GLfloat kLwSurvey = 1.65f;
+  constexpr GLfloat kLwSnap = 1.35f;
+  constexpr GLfloat kLwGizmo = 1.1f;
+
   GLint locMvp = glGetUniformLocation(lineProgram_, "uMVP");
   GLint locCol = glGetUniformLocation(lineProgram_, "uColor");
 
   glUseProgram(gridProgram_);
   glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
 
-  // --- Grid (drawn first; translucent, painter order keeps it behind geometry) ---
+  // --- Grid: centered on view, step scales with zoom (stable in world space) ---
   if (showGrid) {
-    if (gridVertexCount_ == 0) {
-      std::vector<float> gridVerts;
-      const float step = 10.f;
-      const int n = 80;
-      const float gz = -0.02f;
-      for (int i = -n; i <= n; ++i) {
-        float x = static_cast<float>(i) * step;
-        gridVerts.push_back(x);
-        gridVerts.push_back(static_cast<float>(-n) * step);
-        gridVerts.push_back(gz);
-        gridVerts.push_back(x);
-        gridVerts.push_back(static_cast<float>(n) * step);
-        gridVerts.push_back(gz);
-
-        float y = static_cast<float>(i) * step;
-        gridVerts.push_back(static_cast<float>(-n) * step);
-        gridVerts.push_back(y);
-        gridVerts.push_back(gz);
-        gridVerts.push_back(static_cast<float>(n) * step);
-        gridVerts.push_back(y);
-        gridVerts.push_back(gz);
-      }
-      gridVertexCount_ = static_cast<int>(gridVerts.size() / 3);
-
-      glBindVertexArray(vaoGrid_);
-      glBindBuffer(GL_ARRAY_BUFFER, vboGrid_);
-      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(gridVerts.size() * sizeof(float)),
-                   gridVerts.data(), GL_STATIC_DRAW);
-      glEnableVertexAttribArray(0);
-      glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
-      glBindVertexArray(0);
+    auto niceStep = [](float worldSpan) -> float {
+      float s = worldSpan / 20.f;
+      if (s < 1e-9f)
+        s = 1e-9f;
+      const float p = std::pow(10.f, std::floor(std::log10(s)));
+      const float m = s / p;
+      if (m < 1.5f)
+        return p;
+      if (m < 3.5f)
+        return 2.f * p;
+      if (m < 7.f)
+        return 5.f * p;
+      return 10.f * p;
+    };
+    const float gx = panX;
+    const float gy = panY;
+    const float step = niceStep(std::max(halfW, halfH) * 2.f);
+    const float spanW = halfW * 2.15f + step * 2.f;
+    const float spanH = halfH * 2.15f + step * 2.f;
+    const int rawNi = static_cast<int>(std::ceil(spanW / std::max(step, 1e-12f))) + 2;
+    const int ni = std::min(512, std::max(4, rawNi));
+    std::vector<float> gridVerts;
+    const float gz = -0.02f;
+    for (int i = -ni; i <= ni; ++i) {
+      const float x = gx + static_cast<float>(i) * step;
+      gridVerts.push_back(x);
+      gridVerts.push_back(gy - spanH);
+      gridVerts.push_back(gz);
+      gridVerts.push_back(x);
+      gridVerts.push_back(gy + spanH);
+      gridVerts.push_back(gz);
     }
+    for (int i = -ni; i <= ni; ++i) {
+      const float y = gy + static_cast<float>(i) * step;
+      gridVerts.push_back(gx - spanW);
+      gridVerts.push_back(y);
+      gridVerts.push_back(gz);
+      gridVerts.push_back(gx + spanW);
+      gridVerts.push_back(y);
+      gridVerts.push_back(gz);
+    }
+    gridVertexCount_ = static_cast<int>(gridVerts.size() / 3);
+
+    glBindVertexArray(vaoGrid_);
+    glBindBuffer(GL_ARRAY_BUFFER, vboGrid_);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(gridVerts.size() * sizeof(float)),
+                 gridVerts.empty() ? nullptr : gridVerts.data(), GL_DYNAMIC_DRAW);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glUniform4f(locCol, 0.14f, 0.14f, 0.15f, 0.28f);
-    glBindVertexArray(vaoGrid_);
     glDrawArrays(GL_LINES, 0, gridVertexCount_);
     glDisable(GL_BLEND);
+    glBindVertexArray(0);
   }
 
   glBindBuffer(GL_ARRAY_BUFFER, vboLines_);
   glBindVertexArray(vaoLines_);
   glEnableVertexAttribArray(0);
   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
-  glLineWidth(2.f);
+  glLineWidth(kLwMain);
 
   constexpr float kLineDefaultR = 0.35f;
   constexpr float kLineDefaultG = 0.95f;
@@ -711,7 +803,7 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
     glUseProgram(vcLineProgram_);
     GLint locVcMvp = glGetUniformLocation(vcLineProgram_, "uMVP");
     glUniformMatrix4fv(locVcMvp, 1, GL_FALSE, mvp);
-    glLineWidth(2.f);
+    glLineWidth(kLwMain);
     if (!cpuVcLines_.empty()) {
       glBindVertexArray(vaoVcLines_);
       glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(cpuVcLines_.size() / 7));
@@ -730,16 +822,17 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
   glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
 
   glDisable(GL_BLEND);
+  glLineWidth(kLwMain);
 
   // --- Selection highlight (accent stroke on top of committed geometry) ---
   if (highlightLines && !highlightLines->empty() && highlightLines->size() % 6 == 0) {
     glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
     glUniform4f(locCol, 1.f, 0.92f, 0.15f, 1.f);
-    glLineWidth(3.75f);
+    glLineWidth(kLwHiLine);
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(highlightLines->size() * sizeof(float)),
                  highlightLines->data(), GL_STREAM_DRAW);
     glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(highlightLines->size() / 3));
-    glLineWidth(2.f);
+    glLineWidth(kLwMain);
   }
   if (highlightCircles && !highlightCircles->empty() && highlightCircles->size() % 3 == 0) {
     std::vector<float> hlCircGeom;
@@ -749,11 +842,11 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
     if (!hlCircGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
       glUniform4f(locCol, 1.f, 0.88f, 0.22f, 1.f);
-      glLineWidth(3.5f);
+      glLineWidth(kLwHiCirc);
       glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(hlCircGeom.size() * sizeof(float)), hlCircGeom.data(),
                    GL_STREAM_DRAW);
       glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(hlCircGeom.size() / 3));
-      glLineWidth(2.f);
+      glLineWidth(kLwMain);
     }
   }
 
@@ -786,12 +879,12 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
       glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(fillGeom.size() / 3));
     }
     glUniform4f(locCol, 0.45f, 0.78f, 1.f, 0.9f);
-    glLineWidth(1.25f);
+    glLineWidth(kLwFence);
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(lineGeom.size() * sizeof(float)), lineGeom.data(),
                  GL_STREAM_DRAW);
     glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(lineGeom.size() / 3));
     glDisable(GL_BLEND);
-    glLineWidth(2.f);
+    glLineWidth(kLwMain);
   }
 
   // --- Move/copy/rotate preview geometry ---
@@ -827,11 +920,11 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
     glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
     glUseProgram(lineProgram_);
     glUniform4f(locCol, 1.f, 0.48f, 0.12f, 1.f);
-    glLineWidth(2.35f);
+    glLineWidth(kLwSurvey);
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(surveyMarkers->size() * sizeof(float)),
                  surveyMarkers->data(), GL_STREAM_DRAW);
     glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(surveyMarkers->size() / 3));
-    glLineWidth(2.f);
+    glLineWidth(kLwMain);
   }
 
   // --- Object snap glyph (green, screen-stable size) ---
@@ -841,7 +934,7 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
     if (!snapGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
       glUniform4f(locCol, 0.15f, 0.92f, 0.38f, 1.f);
-      glLineWidth(2.f);
+      glLineWidth(kLwSnap);
       glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(snapGeom.size() * sizeof(float)), snapGeom.data(),
                    GL_STREAM_DRAW);
       glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(snapGeom.size() / 3));
@@ -866,17 +959,26 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
   };
   glBufferData(GL_ARRAY_BUFFER, sizeof(axisVerts), axisVerts, GL_STREAM_DRAW);
 
-  glLineWidth(1.25f);
+  glLineWidth(kLwGizmo);
   glUniform4f(locCol, 0.9f, 0.2f, 0.2f, 1.f);
   glDrawArrays(GL_LINES, 0, 2);
   glUniform4f(locCol, 0.2f, 0.85f, 0.35f, 1.f);
   glDrawArrays(GL_LINES, 2, 2);
   glUniform4f(locCol, 0.25f, 0.55f, 1.f, 1.f);
   glDrawArrays(GL_LINES, 4, 2);
-  glLineWidth(2.f);
+  glLineWidth(kLwMain);
 
   glBindVertexArray(0);
   glUseProgram(0);
   glDepthMask(GL_TRUE);
+
+  if (useMsaa && msFbo_ && fbo_) {
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, msFbo_);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, fbo_);
+    glBlitFramebuffer(0, 0, fbW_, fbH_, 0, 0, fbW_, fbH_, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+    glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+  }
+
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }

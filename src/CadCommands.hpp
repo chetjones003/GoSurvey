@@ -33,7 +33,7 @@ struct EntityAttributes {
 
   std::string linetype = "Continuous";
 
-  float lineweightMm = 0.25f;
+  float lineweightMm = 0.18f;
 
   float transparency = 0.f; ///< 0 = opaque, 1 = fully transparent
 
@@ -232,6 +232,14 @@ struct AppCommandState {
   float modelUnitsPerPlottedInch = 50.f;
 
   float defaultPlottedTextHeightInches = 0.125f;
+
+
+
+  /// World XY added on DXF export when CAD was shifted to a local origin for rendering precision (large imports).
+
+  double worldDocumentOriginX = 0.0;
+
+  double worldDocumentOriginY = 0.0;
 
 
 
