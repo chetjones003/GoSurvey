@@ -8,6 +8,7 @@ cmake_install.cmake
 _install/
 .cache/clangd/
 compile_commands.json
+gosurvey_imgui.ini
 
 # --- Compiled artifacts (also produced beside tree sometimes) ---
 *.exe
