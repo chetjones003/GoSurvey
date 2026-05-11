@@ -293,28 +293,35 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     gridSameLine(i++);
     if (ImGui::Button("Line", ImVec2(drawCell.x, drawCell.y)))
       StartLineCommand(cmd, log);
-    RibbonItemHelp("Line (L)");
+    RibbonItemHelp("Line — draw straight segments between points.\nCommand bar: LINE or L");
     gridSameLine(i++);
     if (ImGui::Button("Circle", ImVec2(drawCell.x, drawCell.y)))
       StartCircleCommand(cmd, log);
+    RibbonItemHelp("Circle — center point and radius.\nCommand bar: CIRCLE or C");
     gridSameLine(i++);
     if (ImGui::Button("PLine", ImVec2(drawCell.x, drawCell.y)))
       StartPolylineCommand(cmd, log);
+    RibbonItemHelp("Polyline — chain of segments; optional close.\nCommand bar: POLYLINE or PL");
     gridSameLine(i++);
     if (ImGui::Button("Arc", ImVec2(drawCell.x, drawCell.y)))
       StartArcCommand(cmd, log);
+    RibbonItemHelp("Arc — three-point arc (start, mid, end).\nCommand bar: ARC");
     gridSameLine(i++);
     if (ImGui::Button("Ellipse", ImVec2(drawCell.x, drawCell.y)))
       StartEllipseCommand(cmd, log);
+    RibbonItemHelp("Ellipse — center, axis endpoint, then ratio on command line.\nCommand bar: ELLIPSE or EL");
     gridSameLine(i++);
     if (ImGui::Button("Dim", ImVec2(drawCell.x, drawCell.y)))
       StartDimAlignedCommand(cmd, log);
+    RibbonItemHelp("Aligned dimension — extension lines and text.\nCommand bar: DIMALIGNED or DAL");
     gridSameLine(i++);
     if (ImGui::Button("Text", ImVec2(drawCell.x, drawCell.y)))
       StartTextCommand(cmd, log);
+    RibbonItemHelp("Text — single-line annotation at insertion.\nCommand bar: TEXT");
     gridSameLine(i++);
     if (ImGui::Button("Mtext", ImVec2(drawCell.x, drawCell.y)))
       StartMtextCommand(cmd, log);
+    RibbonItemHelp("Mtext — multiline paragraph in a frame.\nCommand bar: MTEXT or MT");
   }
   RibbonSectionEnd();
   ImGui::SameLine(0, 10);
@@ -330,21 +337,27 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     g(i++);
     if (ImGui::Button("Move", ImVec2(modCell.x, modCell.y)))
       StartMoveCommand(cmd, log);
+    RibbonItemHelp("Move — relocate selected entities by base point and offset.\nCommand bar: MOVE or M");
     g(i++);
     if (ImGui::Button("Copy", ImVec2(modCell.x, modCell.y)))
       StartCopyCommand(cmd, log);
+    RibbonItemHelp("Copy — duplicate selection with base point and offset.\nCommand bar: COPY or CP");
     g(i++);
     if (ImGui::Button("Rotate", ImVec2(modCell.x, modCell.y)))
       StartRotateCommand(cmd, log);
+    RibbonItemHelp("Rotate — turn selection around a base point by angle.\nCommand bar: ROTATE or RO");
     g(i++);
     if (ImGui::Button("Erase", ImVec2(modCell.x, modCell.y)))
       StartDeleteCommand(cmd, log);
+    RibbonItemHelp("Erase — remove entities (window or crossing selection).\nCommand bar: DELETE or DEL");
     g(i++);
     if (ImGui::Button("Join", ImVec2(modCell.x, modCell.y)))
       StartJoinCommand(cmd, log);
+    RibbonItemHelp("Join — merge colinear line segments.\nCommand bar: JOIN or J");
     g(i++);
     if (ImGui::Button("Trim", ImVec2(modCell.x, modCell.y)))
       StartTrimCommand(cmd, log);
+    RibbonItemHelp("Trim — shorten segments to cutting edges or drawn trim line.\nCommand bar: TRIM or TR");
   }
   RibbonSectionEnd();
   ImGui::SameLine(0, 10);
@@ -353,9 +366,11 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   {
     if (ImGui::Button("Z extents", ImVec2(viewCell.x, viewCell.y)))
       StartZoomExtentsCommand(cmd, log);
+    RibbonItemHelp("Zoom extents — fit all drawing content in the view.\nCommand bar: ZOOMEXTENTS or ZE");
     ImGui::SameLine(0, st.ItemSpacing.x);
     if (ImGui::Button("Z window", ImVec2(viewCell.x, viewCell.y)))
       StartZoomWindowCommand(cmd, log);
+    RibbonItemHelp("Zoom window — zoom to a rectangle you pick with two clicks.\nCommand bar: ZOOMWINDOW or ZW");
   }
   RibbonSectionEnd();
   ImGui::SameLine(0, 10);
@@ -364,10 +379,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   {
     ImGui::BeginDisabled();
     ImGui::Button("Scale", ImVec2(inqCell.x, inqCell.y));
-    RibbonItemHelp("Not available yet", ImGuiHoveredFlags_AllowWhenDisabled);
+    RibbonItemHelp("Scale — resize selection relative to a base point (not implemented yet).\nCommand bar: (none yet)",
+                   ImGuiHoveredFlags_AllowWhenDisabled);
     ImGui::SameLine(0, st.ItemSpacing.x);
     ImGui::Button("Mirror", ImVec2(inqCell.x, inqCell.y));
-    RibbonItemHelp("Not available yet", ImGuiHoveredFlags_AllowWhenDisabled);
+    RibbonItemHelp("Mirror — flip selection across a mirror line (not implemented yet).\nCommand bar: (none yet)",
+                   ImGuiHoveredFlags_AllowWhenDisabled);
     ImGui::EndDisabled();
   }
   RibbonSectionEnd();
@@ -377,7 +394,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   {
     ImGui::BeginDisabled();
     ImGui::Button("Point", ImVec2(srvCell.x, srvCell.y));
-    RibbonItemHelp("Survey point placement (coming soon)", ImGuiHoveredFlags_AllowWhenDisabled);
+    RibbonItemHelp(
+        "Survey point — place field points in the drawing (coming soon).\nCommand bar: CREATEPOINTS or CRTPTS",
+        ImGuiHoveredFlags_AllowWhenDisabled);
     ImGui::EndDisabled();
   }
   RibbonSectionEnd();
@@ -401,7 +420,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   if (ImGui::Button("LAY", ImVec2(layerBtnW, layerRowBtnH))) {
     log.push_back("LAYER — layer manager table (coming soon).");
   }
-  RibbonItemHelp("Open layer manager (LAYER) — table of all layers");
+  RibbonItemHelp("Open layer manager — table of all layers (coming soon).\nCommand bar: LAYER (planned)");
   ImGui::SameLine(0, st.ItemSpacing.x);
   ImGui::SetNextItemWidth(std::max(80.f, kLayerPanelW - layerBtnW - st.ItemSpacing.x - st.WindowPadding.x * 2.f));
   const char* preview = ribbonActiveLayer.empty() ? "0" : ribbonActiveLayer.c_str();
@@ -417,7 +436,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ImGui::EndCombo();
   }
   ImGui::PopID();
-  RibbonItemHelp("Current layer for new geometry (full wiring later)");
+  RibbonItemHelp("Current layer for new geometry (full wiring later).\nCommand bar: (set via properties for now)");
 
   ImGui::EndChild();
 
