@@ -636,7 +636,7 @@ struct AppCommandState {
   float viewportCrosshairR = 1.f;
   float viewportCrosshairG = 0.8392157f;
   float viewportCrosshairB = 0.f;
-  float viewportCrosshairArmFracX = 0.05f;
+  float viewportCrosshairArmFracX = 0.03f;
   float viewportCrosshairArmFracY = 0.05f;
   float viewportCrosshairPickHalfPxX = 4.f;
   float viewportCrosshairPickHalfPxY = 4.f;
@@ -684,6 +684,12 @@ struct AppCommandState {
   float pendingCopyDx = 0.f;
   float pendingCopyDy = 0.f;
   SurveyDuplicatePolicy copySurveyDuplicatePolicy = SurveyDuplicatePolicy::Renumber;
+
+  /// True while the viewport command palette should mirror the command line (hover latched until idle / mouse away).
+  bool viewportCmdPaletteEngaged = false;
+
+  /// True when the viewport command palette is visible — command line defers its InputText to avoid duplicate focus.
+  bool viewportDrawingHovered = false;
 
 };
 

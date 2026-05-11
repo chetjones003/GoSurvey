@@ -556,8 +556,8 @@ int main() {
     DrawPropertiesPanel(cmd);
 
     CadSnap::Hit snapHit{};
-    DrawDrawingViewport(viewport.ColorTexture(), cmd, cmdLog, &panX, &panY, &zoom, &curX, &curY, &curRawX,
-                        &curRawY, &fbW, &fbH, objectSnapEnabled, &snapHit);
+    DrawDrawingViewport(viewport.ColorTexture(), cmd, cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), &panX,
+                        &panY, &zoom, &curX, &curY, &curRawX, &curRawY, &fbW, &fbH, objectSnapEnabled, &snapHit);
     cmd.uiCursorWorldX = curX;
     cmd.uiCursorWorldY = curY;
     DrawCommandLinePanel(cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd, curX, curY, 0.f,

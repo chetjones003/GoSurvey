@@ -2208,21 +2208,27 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   ImGui::PushID("GoSurveyCmdPanel");
 
   ImGuiIO& io = ImGui::GetIO();
-  if (!io.WantTextInput && io.InputQueueCharacters.Size > 0) {
+  const bool cmdInputOnViewport =
+      cmd.active != AppCommandState::Kind::None && cmd.viewportDrawingHovered;
+  if (!io.WantTextInput && io.InputQueueCharacters.Size > 0 && !cmdInputOnViewport) {
     RouteQueuedCharsToCmdBuf(cmdBuf, cmdBufSize, io);
     ImGui::SetKeyboardFocusHere(0);
   }
 
   const float inputAvailW = ImGui::GetContentRegionAvail().x;
-  ImGui::SetNextItemWidth(std::max(64.f, inputAvailW - sendBtnW - st.ItemSpacing.x));
-  ImGuiInputTextFlags flags =
-      ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
-  const bool exec = ImGui::InputTextWithHint("##CommandLineInput", CommandInputHint(cmd), cmdBuf,
-                                             static_cast<size_t>(cmdBufSize), flags, CommandLineInputCallback, nullptr);
-  ImGui::SetItemDefaultFocus();
-  ImGui::SameLine(0, st.ItemSpacing.x);
-  if (ImGui::Button("Send", ImVec2(sendBtnW, 0.f)) || exec)
-    ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+  if (!cmdInputOnViewport) {
+    ImGui::SetNextItemWidth(std::max(64.f, inputAvailW - sendBtnW - st.ItemSpacing.x));
+    ImGuiInputTextFlags flags =
+        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
+    const bool exec = ImGui::InputTextWithHint("##CommandLineInput", CommandInputHint(cmd), cmdBuf,
+                                               static_cast<size_t>(cmdBufSize), flags, CommandLineInputCallback, nullptr);
+    ImGui::SetItemDefaultFocus();
+    ImGui::SameLine(0, st.ItemSpacing.x);
+    if (ImGui::Button("Send", ImVec2(sendBtnW, 0.f)) || exec)
+      ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+  } else {
+    ImGui::TextDisabled("Command input follows the cursor on the drawing (viewport).");
+  }
 
   if (footerNonEmpty(circFooter)) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
@@ -2420,11 +2426,13 @@ static int HitTestMtextGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 
 }
 
 void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, std::vector<std::string>& log,
-                         float* panX, float* panY, float* zoom, float* outCursorX, float* outCursorY,
-                         float* outCursorRawX, float* outCursorRawY, int* outFbW, int* outFbH,
+                         char* cmdBuf, int cmdBufSize, float* panX, float* panY, float* zoom, float* outCursorX,
+                         float* outCursorY, float* outCursorRawX, float* outCursorRawY, int* outFbW, int* outFbH,
                          bool object_snap_enabled, CadSnap::Hit* out_snap) {
   ImGui::SetNextWindowSize(ImVec2(900, 650), ImGuiCond_FirstUseEver);
   if (!ImGui::Begin("Drawing1", nullptr)) {
+    cmd.viewportDrawingHovered = false;
+    cmd.viewportCmdPaletteEngaged = false;
     ImGui::End();
     return;
   }
@@ -3060,7 +3068,69 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     }
   }
 
-  // CAD-style crosshair (viewport only): OS cursor hidden; pickbox + arms from Settings.
+  using VK = AppCommandState::Kind;
+  const bool inImage = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y;
+
+  if (cmd.active == VK::None) {
+    cmd.viewportCmdPaletteEngaged = false;
+    cmd.viewportDrawingHovered = false;
+  } else {
+    ImGuiIO& ioEng = ImGui::GetIO();
+    if (inImage)
+      cmd.viewportCmdPaletteEngaged = true;
+    else if (cmd.viewportCmdPaletteEngaged) {
+      const bool hasDraft = cmdBuf && cmdBuf[0] != '\0';
+      if (!hasDraft && !ioEng.WantTextInput && ImGui::GetActiveID() == 0)
+        cmd.viewportCmdPaletteEngaged = false;
+    }
+  }
+
+  const bool showViewportCmdPalette =
+      cmd.active != VK::None && cmd.viewportCmdPaletteEngaged && cmdBuf && cmdBufSize > 0;
+  cmd.viewportDrawingHovered = showViewportCmdPalette;
+
+  if (showViewportCmdPalette) {
+    ImGuiIO& io = ImGui::GetIO();
+    const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
+    const float pad = 14.f;
+    ImVec2 wp(mouse.x + pad, mouse.y + pad);
+    const float estW = std::min(520.f, std::max(260.f, avail.x * 0.5f));
+    const float estH = 78.f;
+    wp.x = std::clamp(wp.x, mainViewport->WorkPos.x + 4.f,
+                      mainViewport->WorkPos.x + mainViewport->WorkSize.x - estW - 8.f);
+    wp.y = std::clamp(wp.y, mainViewport->WorkPos.y + 4.f,
+                      mainViewport->WorkPos.y + mainViewport->WorkSize.y - estH - 8.f);
+
+    ImGui::SetNextWindowPos(wp, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.94f);
+    ImGuiWindowFlags wf = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
+                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.f, 8.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.f);
+    ImGui::Begin("##ViewportCommandInput", nullptr, wf);
+    if (!io.WantTextInput && io.InputQueueCharacters.Size > 0) {
+      RouteQueuedCharsToCmdBuf(cmdBuf, cmdBufSize, io);
+      ImGui::SetKeyboardFocusHere(0);
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.88f, 0.96f, 1.f));
+    ImGui::TextWrapped("%s", CommandInputHint(cmd));
+    ImGui::PopStyleColor();
+    ImGui::SetNextItemWidth(std::clamp(360.f * io.FontGlobalScale, 200.f, mainViewport->WorkSize.x * 0.48f));
+    ImGui::PushID("viewport_cmd_repl");
+    ImGuiInputTextFlags itf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
+    const bool exec =
+        ImGui::InputTextWithHint("##vp_cmd_buf", "Type value, Enter or Send", cmdBuf, static_cast<size_t>(cmdBufSize),
+                                 itf, CommandLineInputCallback, nullptr);
+    ImGui::SameLine(0.f, 8.f);
+    if (ImGui::Button("Send##vp") || exec)
+      ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+    ImGui::PopID();
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+  }
+
+  // CAD-style crosshair (viewport only): OS cursor hidden; pickbox + arms from Settings (window DL so palette
+  // stacks above).
   if (hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
     ImGui::SetMouseCursor(ImGuiMouseCursor_None);
     const ImVec2 imgMin = imgPos;
@@ -3079,25 +3149,25 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const float cb = std::clamp(cmd.viewportCrosshairB, 0.f, 1.f);
     const ImU32 kCad =
         IM_COL32(static_cast<int>(cr * 255.f), static_cast<int>(cg * 255.f), static_cast<int>(cb * 255.f), 255);
-    ImDrawList* fg = ImGui::GetForegroundDrawList();
-    fg->PushClipRect(imgMin, imgMax, true);
+    ImDrawList* wdl = ImGui::GetWindowDrawList();
+    wdl->PushClipRect(imgMin, imgMax, true);
     const float xl = std::max(imgMin.x, cx - phx - armX);
     const float xr = std::min(imgMax.x, cx + phx + armX);
     const float yt = std::max(imgMin.y, cy - phy - armY);
     const float yb = std::min(imgMax.y, cy + phy + armY);
-    fg->AddLine(ImVec2(xl, cy), ImVec2(cx - phx, cy), kCad, hair);
-    fg->AddLine(ImVec2(cx + phx, cy), ImVec2(xr, cy), kCad, hair);
-    fg->AddLine(ImVec2(cx, yt), ImVec2(cx, cy - phy), kCad, hair);
-    fg->AddLine(ImVec2(cx, cy + phy), ImVec2(cx, yb), kCad, hair);
+    wdl->AddLine(ImVec2(xl, cy), ImVec2(cx - phx, cy), kCad, hair);
+    wdl->AddLine(ImVec2(cx + phx, cy), ImVec2(xr, cy), kCad, hair);
+    wdl->AddLine(ImVec2(cx, yt), ImVec2(cx, cy - phy), kCad, hair);
+    wdl->AddLine(ImVec2(cx, cy + phy), ImVec2(cx, yb), kCad, hair);
     const float l = cx - phx;
     const float r = cx + phx;
     const float t = cy - phy;
     const float b = cy + phy;
-    fg->AddLine(ImVec2(l, t), ImVec2(r, t), kCad, hair);
-    fg->AddLine(ImVec2(r, t), ImVec2(r, b), kCad, hair);
-    fg->AddLine(ImVec2(r, b), ImVec2(l, b), kCad, hair);
-    fg->AddLine(ImVec2(l, b), ImVec2(l, t), kCad, hair);
-    fg->PopClipRect();
+    wdl->AddLine(ImVec2(l, t), ImVec2(r, t), kCad, hair);
+    wdl->AddLine(ImVec2(r, t), ImVec2(r, b), kCad, hair);
+    wdl->AddLine(ImVec2(r, b), ImVec2(l, b), kCad, hair);
+    wdl->AddLine(ImVec2(l, b), ImVec2(l, t), kCad, hair);
+    wdl->PopClipRect();
   }
 
   *outFbW = static_cast<int>(std::max(1.f, std::floor(avail.x)));
