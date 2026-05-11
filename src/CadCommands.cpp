@@ -846,11 +846,26 @@ bool SegIntersectsAABB(float x0, float y0, float x1, float y1, float mnX, float 
 bool CircleIntersectsAABB(float cx, float cy, float r, float mnX, float mxX, float mnY, float mxY) {
   if (r <= 0.f)
     return false;
+  // Crossing fence: use the circle *curve* (circumference), not the filled disk. The old disk test
+  // selected circles whenever the box lay inside the disk (closest point in rect to center < r),
+  // even when the box never touched the visible circle.
   const float qx = std::clamp(cx, mnX, mxX);
   const float qy = std::clamp(cy, mnY, mxY);
-  const float dx = cx - qx;
-  const float dy = cy - qy;
-  return dx * dx + dy * dy <= r * r;
+  const float dx0 = cx - qx;
+  const float dy0 = cy - qy;
+  const float dMinSq = dx0 * dx0 + dy0 * dy0;
+  auto cornerDsq = [&](float x, float y) {
+    const float dx = cx - x;
+    const float dy = cy - y;
+    return dx * dx + dy * dy;
+  };
+  float dMaxSq = cornerDsq(mnX, mnY);
+  dMaxSq = std::max(dMaxSq, cornerDsq(mxX, mnY));
+  dMaxSq = std::max(dMaxSq, cornerDsq(mxX, mxY));
+  dMaxSq = std::max(dMaxSq, cornerDsq(mnX, mxY));
+  const float r2 = r * r;
+  const float tol = 1e-5f * (std::fabs(r2) + 1.f);
+  return dMinSq <= r2 + tol && r2 <= dMaxSq + tol;
 }
 
 bool CircleFullyInsideRect(float cx, float cy, float r, float mnX, float mxX, float mnY, float mxY) {
