@@ -1,0 +1,57 @@
+# --- CMake / build ---
+/build/
+/out/
+/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+_install/
+.cache/clangd/
+compile_commands.json
+
+# --- Compiled artifacts (also produced beside tree sometimes) ---
+*.exe
+*.dll
+*.lib
+*.exp
+*.obj
+*.o
+*.a
+*.pdb
+*.ilk
+*.idb
+*.pch
+
+# --- Visual Studio / MSVC ---
+.vs/
+*.user
+*.userosscache
+*.VC.db
+*.VC.opendb
+*.suo
+*.sln.docstates
+x64/
+Win32/
+[Dd]ebug/
+[Rr]elease/
+*.aps
+
+# --- Ninja ---
+.ninja_deps
+.ninja_log
+build.ninja
+rules.ninja
+
+# --- IDE / editors ---
+.idea/
+*.swp
+*.swo
+*~
+
+# --- Runtime / local config ---
+imgui.ini
+
+# --- OS ---
+.DS_Store
+Thumbs.db
+desktop.ini

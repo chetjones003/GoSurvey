@@ -1,0 +1,18 @@
+{
+  "configurations": [
+    {
+      "name": "Win32",
+      "includePath": [
+        "${workspaceFolder}/src",
+        "${workspaceFolder}/build/_deps/glfw-src/include",
+        "${workspaceFolder}/build/_deps/imgui-src",
+        "${workspaceFolder}/build/_deps/imgui-src/backends",
+        "${workspaceFolder}/build/_deps/glew-src/include"
+      ],
+      "defines": ["GLEW_STATIC"],
+      "cppStandard": "c++17",
+      "intelliSenseMode": "windows-msvc-x64"
+    }
+  ],
+  "version": 4
+}

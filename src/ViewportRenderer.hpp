@@ -1,0 +1,71 @@
+#pragma once
+
+#include "CadCommands.hpp"
+#include "CadSnap.hpp"
+
+#include <cstdint>
+#include <vector>
+
+class ViewportRenderer {
+public:
+  bool Init();
+  void Shutdown();
+
+  void SetSize(int width, int height);
+
+  /// \param circlesCxCyR (cx, cy, r) triplets; drawn as line loops in the XY plane.
+  /// \param rubberLines GL_LINES vertex data (x,y,z pairs of endpoints) for transient previews.
+  /// \param snapOverlay Active object snap glyph (green); nullptr or invalid — skip.
+  /// \param selectionFillRect axis-aligned window in world XY: minX, maxX, minY, maxY; nullptr skips.
+  /// \param previewLines / previewCircles transient geometry (same layout as user geometry).
+  /// \param highlightLines / highlightCircles selected entities redrawn on top (accent stroke).
+  /// \param cadGpuRevision from AppCommandState — bumps invalidate GPU caches for committed geometry.
+  /// \param lineEntityAttrs / circleEntityAttrs parallel to segments/circles; nullptr uses fixed defaults.
+  /// \param extended Optional arcs / ellipses / polylines (same shader batch as lines).
+  /// \param showGrid draws the minor grid in model space (toggle from UI).
+  void RenderScene(float panX, float panY, float zoom, int fbWidth, int fbHeight,
+                   const std::vector<float>& userLines, const std::vector<float>& circlesCxCyR,
+                   std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
+                   const CadSnap::Hit* snapOverlay,
+                   const float* selectionFillRect, const std::vector<float>* previewLines,
+                   const std::vector<float>* previewCircles, const std::vector<float>* highlightLines,
+                   const std::vector<float>* highlightCircles, const std::vector<float>* surveyMarkers,
+                   const std::vector<EntityAttributes>* lineEntityAttrs,
+                   const std::vector<EntityAttributes>* circleEntityAttrs,
+                   const CadExtendedGeometryInput* extended, bool showGrid);
+
+  [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
+
+private:
+  bool EnsureFramebuffer(int w, int h);
+  void DestroyFramebuffer();
+  bool EnsureShader();
+  void DestroyShader();
+  static void Ortho(float left, float right, float bottom, float top, float nearp, float farp,
+                    float* outColMajor);
+
+  unsigned int fbo_ = 0;
+  unsigned int colorTex_ = 0;
+  unsigned int rbo_ = 0;
+  int fbW_ = 0;
+  int fbH_ = 0;
+
+  unsigned int lineProgram_ = 0;
+  unsigned int vcLineProgram_ = 0;
+  unsigned int vaoLines_ = 0;
+  unsigned int vboLines_ = 0;
+
+  unsigned int vaoVcLines_ = 0;
+  unsigned int vboVcLines_ = 0;
+  unsigned int vaoVcCircles_ = 0;
+  unsigned int vboVcCircles_ = 0;
+
+  std::vector<float> cpuVcLines_;
+  std::vector<float> cpuVcCircles_;
+  std::uint32_t cachedCadGpuRevision_ = 0xffffffffu;
+
+  unsigned int gridProgram_ = 0;
+  unsigned int vaoGrid_ = 0;
+  unsigned int vboGrid_ = 0;
+  int gridVertexCount_ = 0;
+};

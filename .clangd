@@ -1,0 +1,3 @@
+# Ninja + CMake writes compile_commands.json under build/. clangd flag is also set in .vscode/settings.json.
+CompileFlags:
+  CompilationDatabase: build
