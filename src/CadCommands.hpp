@@ -59,11 +59,11 @@ inline void ResolveEntityColorForViewport(const EntityAttributes& attr, float de
 
 
 
-/// Single-line TEXT or MTEXT box content drawn over the viewport (world coordinates).
+/// Single-line TEXT, MTEXT box, or aligned linear dimension drawn over the viewport (world coordinates).
 
 struct CadAnnotation {
 
-  enum class Kind { Text = 0, Mtext = 1 };
+  enum class Kind { Text = 0, Mtext = 1, DimAligned = 2 };
 
   Kind kind = Kind::Text;
 
@@ -83,7 +83,37 @@ struct CadAnnotation {
 
   float boxMinX = 0.f, boxMinY = 0.f, boxMaxX = 0.f, boxMaxY = 0.f;
 
+  /// \c Kind::DimAligned — extension definition points (on measured geometry).
+
+  float dimExt1X = 0.f, dimExt1Y = 0.f, dimExt2X = 0.f, dimExt2Y = 0.f;
+
+  /// Signed perpendicular distance from chord midpoint to dimension line along N = (-T.y, T.x), T = normalize(e2-e1).
+
+  float dimSignedOffset = 0.f;
+
 };
+
+
+
+/// Fills dimension-line feet, unit tangent \p T along measurement, left normal \p N, and chord length. False if degenerate.
+
+bool CadDimAlignedGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx,
+
+                            float* ty, float* nx, float* ny, float* measLen);
+
+
+
+/// Live DIMALIGNED preview after extension points are set (\p st.dimPhase == WaitDimLinePt).
+
+bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out);
+
+
+
+/// After editing extension points or dimension offset, restore text from fixed (normal, tangent) offsets vs dim mid.
+
+void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, float alongT);
+
+
 
 
 
@@ -500,6 +530,36 @@ struct AppCommandState {
 
 
 
+  /// Aligned dimension grip drag (viewport): which grip on \ref dimGripAnnotationIndex.
+
+  int dimGripAnnotationIndex = -1;
+
+  int dimGripWhich = -1; ///< 0 ext1, 1 ext2, 2 dim foot 1, 3 dim foot 2, 4 text
+
+  float dimGripDownWorldX = 0.f;
+
+  float dimGripDownWorldY = 0.f;
+
+  float dimGripOrigSignedOffset = 0.f;
+
+  float dimGripOrigExt1X = 0.f, dimGripOrigExt1Y = 0.f, dimGripOrigExt2X = 0.f, dimGripOrigExt2Y = 0.f;
+
+  float dimGripOrigInsX = 0.f, dimGripOrigInsY = 0.f;
+
+  float dimGripDragNx = 0.f, dimGripDragNy = 0.f;
+
+  /// True after first click on a dim grip until second click commits (or RMB cancels).
+
+  bool dimGripMoveActive = false;
+
+  /// Text position vs dimension mid in local (N,T) frame at grip pick — reapplied after ext / dim-line edits.
+
+  float dimGripTextAlongN = 0.f;
+
+  float dimGripTextAlongT = 0.f;
+
+
+
   // --- MOVE / COPY ---
 
   enum class ModifyPhase { PickSelection, NeedBase, NeedDestination } modifyPhase = ModifyPhase::PickSelection;
@@ -634,6 +694,22 @@ inline void ClearMtextGripInteraction(AppCommandState& st) {
   st.mtextGripAnnotationIndex = -1;
 
   st.mtextGripCorner = -1;
+
+}
+
+
+
+inline void ClearDimGripInteraction(AppCommandState& st) {
+
+  st.dimGripAnnotationIndex = -1;
+
+  st.dimGripWhich = -1;
+
+  st.dimGripMoveActive = false;
+
+  st.dimGripTextAlongN = 0.f;
+
+  st.dimGripTextAlongT = 0.f;
 
 }
 

@@ -1462,6 +1462,10 @@ static void MaybeRebaseLargeCadCoordinatesAfterImport(AppCommandState& st, std::
     sub2(&an.insX, &an.insY);
     sub2(&an.boxMinX, &an.boxMinY);
     sub2(&an.boxMaxX, &an.boxMaxY);
+    if (an.kind == CadAnnotation::Kind::DimAligned) {
+      sub2(&an.dimExt1X, &an.dimExt1Y);
+      sub2(&an.dimExt2X, &an.dimExt2Y);
+    }
   }
 
   st.worldDocumentOriginX = ox;
@@ -1700,6 +1704,7 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
   constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
   size_t nTextOut = 0;
   size_t nMtextOut = 0;
+  size_t nDimExplodedLines = 0;
   for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
     const CadAnnotation& an = st.cadAnnotations[ai];
     EntityAttributes at{};
@@ -1710,6 +1715,59 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
     const std::string layer = at.layer.empty() ? std::string("0") : at.layer;
 
     if (an.kind == CadAnnotation::Kind::Text) {
+      char hb[16];
+      std::snprintf(hb, sizeof(hb), "%X", handle++);
+      const std::string txt = sanitizeDxfText(an.text);
+      const double rotDeg = static_cast<double>(an.rotationRad) * kRadToDeg;
+      emitPair(0, "TEXT");
+      emitPair(5, hb);
+      emitPair(100, "AcDbEntity");
+      emitPair(8, layer);
+      emitPair(62, "256");
+      emitPair(420, std::to_string(static_cast<int>(rgb)));
+      emitPair(100, "AcDbText");
+      emitPair(10, std::to_string(static_cast<double>(an.insX) + kExpOx));
+      emitPair(20, std::to_string(static_cast<double>(an.insY) + kExpOy));
+      emitPair(30, "0.0");
+      emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch))));
+      emitPair(50, std::to_string(rotDeg));
+      emitPair(1, txt);
+      ++nTextOut;
+    } else if (an.kind == CadAnnotation::Kind::DimAligned) {
+      float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
+      if (!CadDimAlignedGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
+        continue;
+      const float gap = std::clamp(0.012f * meas, 1.e-5f * meas, 0.12f * meas);
+      const float over = std::clamp(0.02f * meas, 1.e-5f * meas, 0.1f * meas);
+      const float leg1 = std::hypot(sx1 - an.dimExt1X, sy1 - an.dimExt1Y);
+      const float u1 = leg1 > 1.e-8f ? gap / leg1 : 0.f;
+      const float ex1 = an.dimExt1X + (sx1 - an.dimExt1X) * u1;
+      const float ey1 = an.dimExt1Y + (sy1 - an.dimExt1Y) * u1;
+      const float leg2 = std::hypot(sx2 - an.dimExt2X, sy2 - an.dimExt2Y);
+      const float u2 = leg2 > 1.e-8f ? gap / leg2 : 0.f;
+      const float ex2 = an.dimExt2X + (sx2 - an.dimExt2X) * u2;
+      const float ey2 = an.dimExt2Y + (sy2 - an.dimExt2Y) * u2;
+      auto emitLine = [&](float x0, float y0, float x1, float y1) {
+        char hb[16];
+        std::snprintf(hb, sizeof(hb), "%X", handle++);
+        emitPair(0, "LINE");
+        emitPair(5, hb);
+        emitPair(100, "AcDbEntity");
+        emitPair(8, layer);
+        emitPair(62, "256");
+        emitPair(420, std::to_string(static_cast<int>(rgb)));
+        emitPair(100, "AcDbLine");
+        emitPair(10, std::to_string(static_cast<double>(x0) + kExpOx));
+        emitPair(20, std::to_string(static_cast<double>(y0) + kExpOy));
+        emitPair(30, "0.0");
+        emitPair(11, std::to_string(static_cast<double>(x1) + kExpOx));
+        emitPair(21, std::to_string(static_cast<double>(y1) + kExpOy));
+        emitPair(31, "0.0");
+        ++nDimExplodedLines;
+      };
+      emitLine(ex1, ey1, sx1 + nx * over, sy1 + ny * over);
+      emitLine(ex2, ey2, sx2 + nx * over, sy2 + ny * over);
+      emitLine(sx1, sy1, sx2, sy2);
       char hb[16];
       std::snprintf(hb, sizeof(hb), "%X", handle++);
       const std::string txt = sanitizeDxfText(an.text);
@@ -1757,6 +1815,7 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
   emitPair(0, "EOF");
 
   log.push_back("DXF export — wrote " + std::to_string(nSeg) + " LINE(s), " + std::to_string(nCirc) + " CIRCLE(s), " +
-                std::to_string(nTextOut) + " TEXT, " + std::to_string(nMtextOut) + " MTEXT.");
+                std::to_string(nTextOut) + " TEXT, " + std::to_string(nMtextOut) + " MTEXT, " +
+                std::to_string(nDimExplodedLines) + " LINE(s) from dimensions.");
   return true;
 }

@@ -1494,7 +1494,11 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
   EnsureAttrCounts(cmd);
   CadAnnotation& ann = cmd.cadAnnotations[static_cast<size_t>(annIdx)];
 
-  const char* kindLabel = ann.kind == CadAnnotation::Kind::Text ? "TEXT" : "MTEXT";
+  const char* kindLabel =
+      ann.kind == CadAnnotation::Kind::Text       ? "TEXT"
+      : ann.kind == CadAnnotation::Kind::Mtext   ? "MTEXT"
+      : ann.kind == CadAnnotation::Kind::DimAligned ? "DIMALIGNED"
+                                                   : "?";
 
   auto syncMtextInsFromBox = [&]() {
     const float mnX = std::min(ann.boxMinX, ann.boxMaxX);
@@ -1658,7 +1662,10 @@ void DrawAnnotationGeometryOnly(const AppCommandState& cmd, const std::vector<Se
     if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadAnnotations.size())
       continue;
     const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(e.index)];
-    kinds.push_back(a.kind == CadAnnotation::Kind::Text ? "TEXT" : "MTEXT");
+    kinds.push_back(a.kind == CadAnnotation::Kind::Text       ? "TEXT"
+                    : a.kind == CadAnnotation::Kind::Mtext    ? "MTEXT"
+                    : a.kind == CadAnnotation::Kind::DimAligned ? "DIMALIGNED"
+                                                              : "?");
     phIn.push_back(a.plottedHeightInches);
     mwHeight.push_back(CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch));
     insX.push_back(a.insX);
@@ -1848,10 +1855,14 @@ void DrawPropertiesPanel(AppCommandState& cmd) {
         break;
       }
     }
-    if (ix >= 0 && static_cast<size_t>(ix) < cmd.cadAnnotations.size())
-      ImGui::TextDisabled(cmd.cadAnnotations[static_cast<size_t>(ix)].kind == CadAnnotation::Kind::Text ? "TEXT"
-                                                                                                         : "MTEXT");
-    else
+    if (ix >= 0 && static_cast<size_t>(ix) < cmd.cadAnnotations.size()) {
+      const CadAnnotation::Kind k = cmd.cadAnnotations[static_cast<size_t>(ix)].kind;
+      const char* lab = k == CadAnnotation::Kind::Text       ? "TEXT"
+                        : k == CadAnnotation::Kind::Mtext    ? "MTEXT"
+                        : k == CadAnnotation::Kind::DimAligned ? "DIMALIGNED"
+                                                              : "Annotation";
+      ImGui::TextDisabled("%s", lab);
+    } else
       ImGui::TextDisabled("Annotation");
   }
 
@@ -2329,6 +2340,60 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   ImGui::End();
 }
 
+static void RotateImDrawListVertsXY(ImDrawList* dl, int vtxStart, int vtxEnd, const ImVec2& pivot, float cosA,
+                                    float sinA) {
+  if (!dl || vtxStart >= vtxEnd)
+    return;
+  ImDrawVert* vbuf = dl->VtxBuffer.Data;
+  for (int i = vtxStart; i < vtxEnd; ++i) {
+    ImDrawVert* v = &vbuf[i];
+    const float dx = v->pos.x - pivot.x;
+    const float dy = v->pos.y - pivot.y;
+    v->pos.x = pivot.x + dx * cosA - dy * sinA;
+    v->pos.y = pivot.y + dx * sinA + dy * cosA;
+  }
+}
+
+static void AddAlignedDimText(ImDrawList* dl, ImFont* font, float fontPx, const ImVec2& pivotSp, float screenAngRad,
+                              ImU32 textCol, const char* text) {
+  if (!dl || !text || !text[0])
+    return;
+  const float fs = ImGui::GetFontSize();
+  const float scale = fontPx / std::max(fs, 1.e-6f);
+  const ImVec2 ts = ImGui::CalcTextSize(text);
+  const float tw = ts.x * scale;
+  const float th = ts.y * scale;
+  const int v0 = dl->VtxBuffer.Size;
+  dl->AddText(font, fontPx, ImVec2(pivotSp.x - tw * 0.5f, pivotSp.y - th * 0.5f), textCol, text);
+  const int v1 = dl->VtxBuffer.Size;
+  RotateImDrawListVertsXY(dl, v0, v1, pivotSp, std::cos(screenAngRad), std::sin(screenAngRad));
+}
+
+static int HitTestDimGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 avail, float worldLeft, float worldRight,
+                          float worldBottom, float worldTop, const CadAnnotation& ann, float gripRadiusPx) {
+  if (ann.kind != CadAnnotation::Kind::DimAligned)
+    return -1;
+  float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
+  if (!CadDimAlignedGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
+    return -1;
+  const float wx[5] = {ann.dimExt1X, ann.dimExt2X, sx1, sx2, ann.insX};
+  const float wy[5] = {ann.dimExt1Y, ann.dimExt2Y, sy1, sy2, ann.insY};
+  const float denx = worldRight - worldLeft + 1e-12f;
+  const float deny = worldTop - worldBottom + 1e-12f;
+  const float r2 = gripRadiusPx * gripRadiusPx;
+  for (int i = 4; i >= 0; --i) {
+    const float u = (wx[i] - worldLeft) / denx;
+    const float v = (worldTop - wy[i]) / deny;
+    const float sx = imgPos.x + u * avail.x;
+    const float sy = imgPos.y + v * avail.y;
+    const float dx = mouseSx - sx;
+    const float dy = mouseSy - sy;
+    if (dx * dx + dy * dy <= r2)
+      return i;
+  }
+  return -1;
+}
+
 static int HitTestMtextGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 avail, float worldLeft,
                             float worldRight, float worldBottom, float worldTop, const CadAnnotation& ann,
                             float gripRadiusPx) {
@@ -2460,7 +2525,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     CadSnap::Hit snap{};
     if (object_snap_enabled) {
       const float tol = CadSnap::WorldToleranceFromPixels(avail.y, halfH, 14.f);
-      const bool midCmd = cmd.active != AppCommandState::Kind::None;
+      const bool midCmd =
+          cmd.active != AppCommandState::Kind::None || cmd.dimGripMoveActive;
       snap = CadSnap::FindBest(rawX, rawY, cmd, midCmd, tol);
     }
 
@@ -2476,8 +2542,75 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     }
   }
 
+  if (cmd.dimGripMoveActive && cmd.dimGripAnnotationIndex >= 0 && outCursorX && outCursorY && hovered &&
+      mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
+    const float curWx = *outCursorX;
+    const float curWy = *outCursorY;
+    const size_t gi = static_cast<size_t>(cmd.dimGripAnnotationIndex);
+    if (gi < cmd.cadAnnotations.size()) {
+      CadAnnotation& ann = cmd.cadAnnotations[gi];
+      if (ann.kind == CadAnnotation::Kind::DimAligned) {
+        switch (cmd.dimGripWhich) {
+        case 0:
+          ann.dimExt1X = curWx;
+          ann.dimExt1Y = curWy;
+          CadDimAlignedApplyInsFromLocalOffset(&ann, cmd.dimGripTextAlongN, cmd.dimGripTextAlongT);
+          break;
+        case 1:
+          ann.dimExt2X = curWx;
+          ann.dimExt2Y = curWy;
+          CadDimAlignedApplyInsFromLocalOffset(&ann, cmd.dimGripTextAlongN, cmd.dimGripTextAlongT);
+          break;
+        case 2:
+        case 3:
+          ann.dimSignedOffset = cmd.dimGripOrigSignedOffset + (curWx - cmd.dimGripDownWorldX) * cmd.dimGripDragNx +
+                                (curWy - cmd.dimGripDownWorldY) * cmd.dimGripDragNy;
+          CadDimAlignedApplyInsFromLocalOffset(&ann, cmd.dimGripTextAlongN, cmd.dimGripTextAlongT);
+          break;
+        case 4:
+          ann.insX = cmd.dimGripOrigInsX + (curWx - cmd.dimGripDownWorldX);
+          ann.insY = cmd.dimGripOrigInsY + (curWy - cmd.dimGripDownWorldY);
+          break;
+        default:
+          break;
+        }
+        float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+        if (CadDimAlignedGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+          ann.rotationRad = std::atan2(ty, tx);
+      }
+    }
+    BumpCadGpuCache(cmd);
+  }
+
+  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && mx >= 0 && mx < avail.x && my >= 0 &&
+      my < avail.y && cmd.dimGripMoveActive && cmd.dimGripAnnotationIndex >= 0) {
+    const size_t gi = static_cast<size_t>(cmd.dimGripAnnotationIndex);
+    if (gi < cmd.cadAnnotations.size()) {
+      CadAnnotation& ann = cmd.cadAnnotations[gi];
+      if (ann.kind == CadAnnotation::Kind::DimAligned) {
+        ann.dimExt1X = cmd.dimGripOrigExt1X;
+        ann.dimExt1Y = cmd.dimGripOrigExt1Y;
+        ann.dimExt2X = cmd.dimGripOrigExt2X;
+        ann.dimExt2Y = cmd.dimGripOrigExt2Y;
+        ann.dimSignedOffset = cmd.dimGripOrigSignedOffset;
+        ann.insX = cmd.dimGripOrigInsX;
+        ann.insY = cmd.dimGripOrigInsY;
+        float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+        if (CadDimAlignedGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+          ann.rotationRad = std::atan2(ty, tx);
+      }
+    }
+    ClearDimGripInteraction(cmd);
+    BumpCadGpuCache(cmd);
+  }
+
   if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 &&
       my < avail.y) {
+    if (cmd.dimGripMoveActive) {
+      cmd.dimGripMoveActive = false;
+      ClearDimGripInteraction(cmd);
+      BumpCadGpuCache(cmd);
+    } else {
     using K = AppCommandState::Kind;
     using MP = AppCommandState::ModifyPhase;
     using RP = AppCommandState::RotatePhase;
@@ -2555,16 +2688,54 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     } else if (cmd.active == K::None) {
       bool handled = false;
       int gripCorner = -1;
+      int dimGripHit = -1;
       if (cmd.selection.size() == 1 && cmd.selection[0].type == SelectedEntity::Type::Annotation) {
         const int aix = cmd.selection[0].index;
-        if (aix >= 0 && static_cast<size_t>(aix) < cmd.cadAnnotations.size() &&
-            cmd.cadAnnotations[static_cast<size_t>(aix)].kind == CadAnnotation::Kind::Mtext) {
-          gripCorner =
-              HitTestMtextGrip(mouse.x, mouse.y, imgPos, avail, worldLeft, worldRight, worldBottom, worldTop,
-                               cmd.cadAnnotations[static_cast<size_t>(aix)], 10.f);
+        if (aix >= 0 && static_cast<size_t>(aix) < cmd.cadAnnotations.size()) {
+          const CadAnnotation& can = cmd.cadAnnotations[static_cast<size_t>(aix)];
+          if (can.kind == CadAnnotation::Kind::Mtext) {
+            gripCorner =
+                HitTestMtextGrip(mouse.x, mouse.y, imgPos, avail, worldLeft, worldRight, worldBottom, worldTop, can,
+                                 10.f);
+          } else if (can.kind == CadAnnotation::Kind::DimAligned) {
+            dimGripHit =
+                HitTestDimGrip(mouse.x, mouse.y, imgPos, avail, worldLeft, worldRight, worldBottom, worldTop, can,
+                               10.f);
+          }
         }
       }
-      if (gripCorner >= 0) {
+      if (dimGripHit >= 0) {
+        const int aix = cmd.selection[0].index;
+        CadAnnotation& ann = cmd.cadAnnotations[static_cast<size_t>(aix)];
+        cmd.dimGripAnnotationIndex = aix;
+        cmd.dimGripWhich = dimGripHit;
+        cmd.dimGripOrigSignedOffset = ann.dimSignedOffset;
+        cmd.dimGripOrigExt1X = ann.dimExt1X;
+        cmd.dimGripOrigExt1Y = ann.dimExt1Y;
+        cmd.dimGripOrigExt2X = ann.dimExt2X;
+        cmd.dimGripOrigExt2Y = ann.dimExt2Y;
+        cmd.dimGripOrigInsX = ann.insX;
+        cmd.dimGripOrigInsY = ann.insY;
+        float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+        if (CadDimAlignedGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml)) {
+          cmd.dimGripDragNx = nx;
+          cmd.dimGripDragNy = ny;
+          const float dmx = 0.5f * (sx1 + sx2);
+          const float dmy = 0.5f * (sy1 + sy2);
+          cmd.dimGripTextAlongN = (ann.insX - dmx) * nx + (ann.insY - dmy) * ny;
+          cmd.dimGripTextAlongT = (ann.insX - dmx) * tx + (ann.insY - dmy) * ty;
+        }
+        if (outCursorX && outCursorY) {
+          cmd.dimGripDownWorldX = *outCursorX;
+          cmd.dimGripDownWorldY = *outCursorY;
+        } else {
+          cmd.dimGripDownWorldX = wxPick;
+          cmd.dimGripDownWorldY = wyPick;
+        }
+        cmd.dimGripMoveActive = true;
+        ClearMtextGripInteraction(cmd);
+        handled = true;
+      } else if (gripCorner >= 0) {
         const int aix = cmd.selection[0].index;
         cmd.mtextGripAnnotationIndex = aix;
         cmd.mtextGripCorner = gripCorner;
@@ -2575,12 +2746,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float cy[4] = {ann.boxMinY, ann.boxMinY, ann.boxMaxY, ann.boxMaxY};
         cmd.mtextGripFixedCornerX = cx[opp];
         cmd.mtextGripFixedCornerY = cy[opp];
+        ClearDimGripInteraction(cmd);
         handled = true;
       }
       if (!handled) {
         const int annIx = PickCadAnnotationAt(rawPickX, rawPickY, cmd, halfH, avail.y);
         if (annIx >= 0) {
           ClearMtextGripInteraction(cmd);
+          ClearDimGripInteraction(cmd);
           SelectedEntity se;
           se.type = SelectedEntity::Type::Annotation;
           se.index = annIx;
@@ -2619,6 +2792,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       }
     }
+    }
   }
 
   std::vector<CadAnnotation> transformAnnPreviews;
@@ -2627,10 +2801,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   using AK = AppCommandState::Kind;
   using AMP = AppCommandState::MtextPhase;
+  using ADP = AppCommandState::DimPhase;
   const bool showMtextCmdDraft =
       cmd.active == AK::Mtext && cmd.mtextPhase == AMP::WaitString;
+  const bool showDimAlignedDraft =
+      cmd.active == AK::DimAligned && cmd.dimPhase == ADP::WaitDimLinePt && outCursorX && outCursorY;
 
-  if (!cmd.cadAnnotations.empty() || !transformAnnPreviews.empty() || showMtextCmdDraft) {
+  if (!cmd.cadAnnotations.empty() || !transformAnnPreviews.empty() || showMtextCmdDraft || showDimAlignedDraft) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     auto worldToScreen = [&](float wx, float wy, ImVec2* out) {
       const float denx = worldRight - worldLeft + 1e-12f;
@@ -2649,13 +2826,113 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     constexpr ImU32 kGripBorder = IM_COL32(60, 120, 220, 255);
     ImFont* font = ImGui::GetFont();
 
-    auto drawAnnotationVisual = [&](const CadAnnotation& a, ImU32 col) {
+    auto drawAnnotationVisual = [&](const CadAnnotation& a, const EntityAttributes* attrPtr, ImU32 colFallback) {
       const float hWorld = CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch);
       if (a.kind == CadAnnotation::Kind::Text) {
         ImVec2 sp{};
         worldToScreen(a.insX, a.insY, &sp);
         const float fontPx = std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), 10.f, 160.f);
+        float rgba[4];
+        if (attrPtr)
+          ResolveEntityColorForViewport(*attrPtr, 230 / 255.f, 232 / 255.f, 238 / 255.f, rgba);
+        else {
+          rgba[0] = 0.9f;
+          rgba[1] = 0.91f;
+          rgba[2] = 0.93f;
+          rgba[3] = 1.f;
+        }
+        const ImU32 col = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
+                                   static_cast<int>(rgba[2] * 255.f), static_cast<int>(rgba[3] * 255.f));
         dl->AddText(font, fontPx, sp, col, a.text.c_str());
+      } else if (a.kind == CadAnnotation::Kind::DimAligned) {
+        float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
+        if (!CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
+          return;
+        float rgba[4];
+        if (attrPtr)
+          ResolveEntityColorForViewport(*attrPtr, 225 / 255.f, 177 / 255.f, 44 / 255.f, rgba);
+        else {
+          rgba[0] = 0.9f;
+          rgba[1] = 0.72f;
+          rgba[2] = 0.25f;
+          rgba[3] = 1.f;
+        }
+        const ImU32 lineCol = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
+                                       static_cast<int>(rgba[2] * 255.f), static_cast<int>(rgba[3] * 255.f));
+        constexpr ImU32 kDimTextCol = IM_COL32(248, 250, 252, 255);
+        const float denx = worldRight - worldLeft + 1.e-12f;
+        const float deny = worldTop - worldBottom + 1.e-12f;
+        auto ws = [&](float wx, float wy, ImVec2* o) {
+          const float u = (wx - worldLeft) / denx;
+          const float v = (worldTop - wy) / deny;
+          o->x = imgPos.x + u * avail.x;
+          o->y = imgPos.y + v * avail.y;
+        };
+        const float fontPx = std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), 10.f, 160.f);
+        // Extension lines: fixed screen thickness (never scales with annotation). Dimension segment + arrows use
+        // separate stroke so arrow outline weight can track text if needed later.
+        constexpr float kDimExtLinePx = 1.0f;
+        constexpr float kDimDimLinePx = 1.25f;
+        const float gap = std::clamp(0.012f * meas, 1.e-5f * meas, 0.12f * meas);
+        const float over = std::clamp(0.02f * meas, 1.e-5f * meas, 0.1f * meas);
+        const float leg1 = std::hypot(sx1 - a.dimExt1X, sy1 - a.dimExt1Y);
+        const float u1 = leg1 > 1.e-8f ? gap / leg1 : 0.f;
+        const float ex1 = a.dimExt1X + (sx1 - a.dimExt1X) * u1;
+        const float ey1 = a.dimExt1Y + (sy1 - a.dimExt1Y) * u1;
+        const float leg2 = std::hypot(sx2 - a.dimExt2X, sy2 - a.dimExt2Y);
+        const float u2 = leg2 > 1.e-8f ? gap / leg2 : 0.f;
+        const float ex2 = a.dimExt2X + (sx2 - a.dimExt2X) * u2;
+        const float ey2 = a.dimExt2Y + (sy2 - a.dimExt2Y) * u2;
+        ImVec2 A{}, B{};
+        ws(ex1, ey1, &A);
+        ws(sx1 + nx * over, sy1 + ny * over, &B);
+        dl->AddLine(A, B, lineCol, kDimExtLinePx);
+        ws(ex2, ey2, &A);
+        ws(sx2 + nx * over, sy2 + ny * over, &B);
+        dl->AddLine(A, B, lineCol, kDimExtLinePx);
+        // Arrow length in world units tracks annotation height (drawing scale); tiny floor from meas for readability.
+        const float alenW = std::max(0.32f * hWorld, 0.012f * meas);
+        const float dlen = std::hypot(sx2 - sx1, sy2 - sy1);
+        if (dlen > 1.e-6f) {
+          const float ux = (sx2 - sx1) / dlen;
+          const float uy = (sy2 - sy1) / dlen;
+          const float tipInset =
+              std::clamp(0.18f * alenW, 1.e-7f * meas, std::max(1.e-6f, 0.22f * dlen));
+          const float maxAlen = 0.47f * std::max(0.f, dlen - 2.f * tipInset);
+          const float alenUse = std::max(1.e-6f, std::min(alenW, maxAlen));
+          // Tips sit near the extension intersections, pointing inward along the dimension line (CAD default).
+          const float tip1x = sx1 + ux * tipInset;
+          const float tip1y = sy1 + uy * tipInset;
+          const float tip2x = sx2 - ux * tipInset;
+          const float tip2y = sy2 - uy * tipInset;
+          const float base1x = tip1x + ux * alenUse;
+          const float base1y = tip1y + uy * alenUse;
+          const float base2x = tip2x - ux * alenUse;
+          const float base2y = tip2y - uy * alenUse;
+          if (std::hypot(base2x - base1x, base2y - base1y) > 1.e-5f) {
+            ws(base1x, base1y, &A);
+            ws(base2x, base2y, &B);
+            dl->AddLine(A, B, lineCol, kDimDimLinePx);
+          }
+          const float hw = alenUse * 0.48f;
+          const float ox = -uy * hw;
+          const float oy = ux * hw;
+          ImVec2 t0{}, t1{}, t2{};
+          ws(tip1x, tip1y, &t0);
+          ws(base1x + ox, base1y + oy, &t1);
+          ws(base1x - ox, base1y - oy, &t2);
+          dl->AddTriangleFilled(t0, t1, t2, lineCol);
+          ws(tip2x, tip2y, &t0);
+          ws(base2x + ox, base2y + oy, &t1);
+          ws(base2x - ox, base2y - oy, &t2);
+          dl->AddTriangleFilled(t0, t1, t2, lineCol);
+        }
+        ImVec2 sp{};
+        ws(a.insX, a.insY, &sp);
+        const float dsx = std::cos(a.rotationRad) * avail.x / denx;
+        const float dsy = -std::sin(a.rotationRad) * avail.y / deny;
+        const float screenAng = std::atan2(dsy, dsx);
+        AddAlignedDimText(dl, font, fontPx, sp, screenAng, kDimTextCol, a.text.c_str());
       } else {
         ImVec2 sa{}, sb{};
         worldToScreen(a.boxMinX, a.boxMinY, &sa);
@@ -2666,6 +2943,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float ry1 = std::max(sa.y, sb.y);
         const float fontPx = std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), 10.f, 128.f);
         const float wrapW = std::max(8.f, rx1 - rx0 - 8.f);
+        ImU32 col = colFallback;
+        if (attrPtr) {
+          float rgba[4];
+          ResolveEntityColorForViewport(*attrPtr, 230 / 255.f, 232 / 255.f, 238 / 255.f, rgba);
+          col = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
+                         static_cast<int>(rgba[2] * 255.f), static_cast<int>(rgba[3] * 255.f));
+        }
         dl->PushClipRect(ImVec2(rx0, ry0), ImVec2(rx1, ry1), true);
         dl->AddText(font, fontPx, ImVec2(rx0 + 4.f, ry0 + 4.f), col, a.text.c_str(), nullptr, wrapW);
         dl->PopClipRect();
@@ -2680,11 +2964,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       return false;
     };
 
-    for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai)
-      drawAnnotationVisual(cmd.cadAnnotations[ai], kAnnCol);
+    for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
+      const EntityAttributes* ap =
+          ai < cmd.cadAnnotationAttrs.size() ? &cmd.cadAnnotationAttrs[ai] : nullptr;
+      drawAnnotationVisual(cmd.cadAnnotations[ai], ap, kAnnCol);
+    }
 
     for (const CadAnnotation& ap : transformAnnPreviews)
-      drawAnnotationVisual(ap, kAnnTfPrevCol);
+      drawAnnotationVisual(ap, nullptr, kAnnTfPrevCol);
 
     if (showMtextCmdDraft) {
       CadAnnotation d{};
@@ -2697,7 +2984,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       d.boxMaxY = std::max(cmd.mtxtY1, cmd.mtxtY2);
       d.insX = d.boxMinX;
       d.insY = d.boxMinY;
-      drawAnnotationVisual(d, kMtextDraftCol);
+      drawAnnotationVisual(d, nullptr, kMtextDraftCol);
+    }
+
+    if (showDimAlignedDraft) {
+      CadAnnotation d{};
+      if (CadDimAlignedBuildDraft(cmd, *outCursorX, *outCursorY, &d))
+        drawAnnotationVisual(d, nullptr, kAnnTfPrevCol);
     }
 
     const float gripHalf = 4.f;
@@ -2720,6 +3013,41 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const float wx[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
       const float wy[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
       for (int c = 0; c < 4; ++c) {
+        ImVec2 gp{};
+        worldToScreen(wx[c], wy[c], &gp);
+        dl->AddRectFilled(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf),
+                          kGripFill);
+        dl->AddRect(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf), kGripBorder,
+                    0.f, 0, 1.f);
+      }
+    }
+
+    for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
+      const CadAnnotation& a = cmd.cadAnnotations[ai];
+      if (a.kind != CadAnnotation::Kind::DimAligned || !isAnnSelected(ai))
+        continue;
+      float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
+      CadAnnotationRoughBounds(a, cmd.modelUnitsPerPlottedInch, &mnX, &mnY, &mxX, &mxY);
+      ImVec2 c00{}, c01{}, c10{}, c11{};
+      worldToScreen(mnX, mnY, &c00);
+      worldToScreen(mxX, mnY, &c01);
+      worldToScreen(mxX, mxY, &c10);
+      worldToScreen(mnX, mxY, &c11);
+      const float rx0 = std::min(std::min(c00.x, c01.x), std::min(c10.x, c11.x));
+      const float ry0 = std::min(std::min(c00.y, c01.y), std::min(c10.y, c11.y));
+      const float rx1 = std::max(std::max(c00.x, c01.x), std::max(c10.x, c11.x));
+      const float ry1 = std::max(std::max(c00.y, c01.y), std::max(c10.y, c11.y));
+      dl->AddRect(ImVec2(rx0, ry0), ImVec2(rx1, ry1), kAnnSelCol, 0.f, 0, 2.f);
+      const bool singleSel = cmd.selection.size() == 1 && cmd.selection[0].type == SelectedEntity::Type::Annotation &&
+                             cmd.selection[0].index == static_cast<int>(ai);
+      if (!singleSel)
+        continue;
+      float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
+      if (!CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
+        continue;
+      const float wx[5] = {a.dimExt1X, a.dimExt2X, sx1, sx2, a.insX};
+      const float wy[5] = {a.dimExt1Y, a.dimExt2Y, sy1, sy2, a.insY};
+      for (int c = 0; c < 5; ++c) {
         ImVec2 gp{};
         worldToScreen(wx[c], wy[c], &gp);
         dl->AddRectFilled(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf),
