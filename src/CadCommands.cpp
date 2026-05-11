@@ -46,6 +46,110 @@ bool ComputeCircumcircle(float ax, float ay, float bx, float by, float cx, float
   return true;
 }
 
+bool CadDimAlignedGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx,
+                           float* ty, float* nx, float* ny, float* measLen) {
+  if (a.kind != CadAnnotation::Kind::DimAligned)
+    return false;
+  const float x1 = a.dimExt1X, y1 = a.dimExt1Y, x2 = a.dimExt2X, y2 = a.dimExt2Y;
+  float vx = x2 - x1;
+  float vy = y2 - y1;
+  const float len = std::hypot(vx, vy);
+  if (len < 1.e-8f)
+    return false;
+  vx /= len;
+  vy /= len;
+  const float n0x = -vy;
+  const float n0y = vx;
+  const float cmx = 0.5f * (x1 + x2);
+  const float cmy = 0.5f * (y1 + y2);
+  const float dmx = cmx + n0x * a.dimSignedOffset;
+  const float dmy = cmy + n0y * a.dimSignedOffset;
+  // Feet on the dimension line (parallel to chord through dmx,dmy): perpendicular from each extension point.
+  const float t1 = (x1 - dmx) * vx + (y1 - dmy) * vy;
+  const float t2 = (x2 - dmx) * vx + (y2 - dmy) * vy;
+  *sx1 = dmx + vx * t1;
+  *sy1 = dmy + vy * t1;
+  *sx2 = dmx + vx * t2;
+  *sy2 = dmy + vy * t2;
+  *tx = vx;
+  *ty = vy;
+  *nx = n0x;
+  *ny = n0y;
+  *measLen = len;
+  return true;
+}
+
+/// Place measurement text on the far side of the dimension line from the measured chord (CAD "above" the dim line).
+static void CadDimAlignedPlaceTextBeyondDimLine(float chordMidX, float chordMidY, float dimMidX, float dimMidY,
+                                                float n0x, float n0y, float hWorld, float* outIx, float* outIy) {
+  const float dOff = (dimMidX - chordMidX) * n0x + (dimMidY - chordMidY) * n0y;
+  float s = 1.f;
+  if (dOff > 1.e-8f)
+    s = 1.f;
+  else if (dOff < -1.e-8f)
+    s = -1.f;
+  // Slightly more than half the annotation height so the label clears the dim line but still reads "just above" it.
+  const float lift = 1.08f * hWorld;
+  *outIx = dimMidX + n0x * (s * lift);
+  *outIy = dimMidY + n0y * (s * lift);
+}
+
+void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, float alongT) {
+  if (!ann || ann->kind != CadAnnotation::Kind::DimAligned)
+    return;
+  float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+  if (!CadDimAlignedGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+    return;
+  const float dmx = 0.5f * (sx1 + sx2);
+  const float dmy = 0.5f * (sy1 + sy2);
+  ann->insX = dmx + nx * alongN + tx * alongT;
+  ann->insY = dmy + ny * alongN + ty * alongT;
+}
+
+bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out) {
+  if (!out || st.active != AppCommandState::Kind::DimAligned ||
+      st.dimPhase != AppCommandState::DimPhase::WaitDimLinePt)
+    return false;
+  const float x1 = st.dimE1x, y1 = st.dimE1y, x2 = st.dimE2x, y2 = st.dimE2y;
+  const float lx = cursorWx, ly = cursorWy;
+  float vx = x2 - x1;
+  float vy = y2 - y1;
+  const float len = std::hypot(vx, vy);
+  if (len < 1.e-8f)
+    return false;
+  vx /= len;
+  vy /= len;
+  const float t1 = (x1 - lx) * vx + (y1 - ly) * vy;
+  const float t2 = (x2 - lx) * vx + (y2 - ly) * vy;
+  const float sx1 = lx + vx * t1;
+  const float sy1 = ly + vy * t1;
+  const float sx2 = lx + vx * t2;
+  const float sy2 = ly + vy * t2;
+  const float cmx = 0.5f * (x1 + x2);
+  const float cmy = 0.5f * (y1 + y2);
+  const float n0x = -vy;
+  const float n0y = vx;
+  const float dmx = 0.5f * (sx1 + sx2);
+  const float dmy = 0.5f * (sy1 + sy2);
+  const float dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
+  CadAnnotation d{};
+  d.kind = CadAnnotation::Kind::DimAligned;
+  d.dimExt1X = x1;
+  d.dimExt1Y = y1;
+  d.dimExt2X = x2;
+  d.dimExt2Y = y2;
+  d.dimSignedOffset = dOff;
+  d.plottedHeightInches = std::max(st.defaultPlottedTextHeightInches * 0.85f, 1.e-6f);
+  char buf[96];
+  std::snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(len));
+  d.text = buf;
+  d.rotationRad = std::atan2(vy, vx);
+  const float hWorld = CadAnnotationHeightWorld(d, st.modelUnitsPerPlottedInch);
+  CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &d.insX, &d.insY);
+  *out = std::move(d);
+  return true;
+}
+
 void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlottedInch, float* outMnX, float* outMnY,
                               float* outMxX, float* outMxY) {
   const float h = CadAnnotationHeightWorld(a, modelUnitsPerPlottedInch);
@@ -54,6 +158,54 @@ void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlotted
     *outMxX = std::max(a.boxMinX, a.boxMaxX);
     *outMnY = std::min(a.boxMinY, a.boxMaxY);
     *outMxY = std::max(a.boxMinY, a.boxMaxY);
+    return;
+  }
+  if (a.kind == CadAnnotation::Kind::DimAligned) {
+    float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
+    if (!CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas)) {
+      *outMnX = *outMxX = a.insX;
+      *outMnY = *outMxY = a.insY;
+      return;
+    }
+    auto expandSeg = [&](float ax, float ay, float bx, float by) {
+      *outMnX = std::min(*outMnX, std::min(ax, bx));
+      *outMxX = std::max(*outMxX, std::max(ax, bx));
+      *outMnY = std::min(*outMnY, std::min(ay, by));
+      *outMxY = std::max(*outMxY, std::max(ay, by));
+    };
+    *outMnX = *outMxX = sx1;
+    *outMnY = *outMxY = sy1;
+    expandSeg(sx1, sy1, sx2, sy2);
+    const float gap = std::clamp(0.012f * meas, 1.e-5f * meas, 0.12f * meas);
+    const float over = std::clamp(0.02f * meas, 1.e-5f * meas, 0.1f * meas);
+    const float leg1 = std::hypot(sx1 - a.dimExt1X, sy1 - a.dimExt1Y);
+    const float u1 = leg1 > 1.e-8f ? gap / leg1 : 0.f;
+    const float ex1 = a.dimExt1X + (sx1 - a.dimExt1X) * u1;
+    const float ey1 = a.dimExt1Y + (sy1 - a.dimExt1Y) * u1;
+    const float leg2 = std::hypot(sx2 - a.dimExt2X, sy2 - a.dimExt2Y);
+    const float u2 = leg2 > 1.e-8f ? gap / leg2 : 0.f;
+    const float ex2 = a.dimExt2X + (sx2 - a.dimExt2X) * u2;
+    const float ey2 = a.dimExt2Y + (sy2 - a.dimExt2Y) * u2;
+    expandSeg(ex1, ey1, sx1 + nx * over, sy1 + ny * over);
+    expandSeg(ex2, ey2, sx2 + nx * over, sy2 + ny * over);
+    const float charFactor = 0.55f;
+    const float tw = std::max(h * charFactor * std::max(1.f, static_cast<float>(a.text.size())), h * 2.f);
+    const float c = std::cos(a.rotationRad);
+    const float s = std::sin(a.rotationRad);
+    auto corner = [&](float lx, float ly, float* ox, float* oy) {
+      const float rx = lx * c - ly * s;
+      const float ry = lx * s + ly * c;
+      *ox = a.insX + rx;
+      *oy = a.insY + ry;
+    };
+    float xs[4]{};
+    float ys[4]{};
+    corner(0.f, 0.f, &xs[0], &ys[0]);
+    corner(tw, 0.f, &xs[1], &ys[1]);
+    corner(tw, -h, &xs[2], &ys[2]);
+    corner(0.f, -h, &xs[3], &ys[3]);
+    for (int i = 0; i < 4; ++i)
+      expandSeg(xs[i], ys[i], xs[i], ys[i]);
     return;
   }
   const float charFactor = 0.55f;
@@ -85,27 +237,80 @@ void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlotted
 int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
                         float viewportHeightPx) {
   const float tol = CadSnap::WorldToleranceFromPixels(viewportHeightPx, orthoHalfHeightWorld, 12.f);
+  const float tol2 = tol * tol;
+  auto distSqSeg = [](float px, float py, float ax, float ay, float bx, float by) -> float {
+    const float vx = bx - ax;
+    const float vy = by - ay;
+    const float len2 = vx * vx + vy * vy;
+    if (len2 < 1.e-18f) {
+      const float dx = px - ax;
+      const float dy = py - ay;
+      return dx * dx + dy * dy;
+    }
+    const float t = std::clamp(((px - ax) * vx + (py - ay) * vy) / len2, 0.f, 1.f);
+    const float qx = ax + t * vx;
+    const float qy = ay + t * vy;
+    const float dx = px - qx;
+    const float dy = py - qy;
+    return dx * dx + dy * dy;
+  };
   for (int i = static_cast<int>(cmd.cadAnnotations.size()) - 1; i >= 0; --i) {
+    const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(i)];
+    if (a.kind == CadAnnotation::Kind::DimAligned) {
+      float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
+      if (!CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
+        continue;
+      float best = tol2 + 1.f;
+      auto upd = [&](float ax, float ay, float bx, float by) {
+        best = std::min(best, distSqSeg(wx, wy, ax, ay, bx, by));
+      };
+      const float gap = std::clamp(0.012f * meas, 1.e-5f * meas, 0.12f * meas);
+      const float over = std::clamp(0.02f * meas, 1.e-5f * meas, 0.1f * meas);
+      const float leg1 = std::hypot(sx1 - a.dimExt1X, sy1 - a.dimExt1Y);
+      const float u1 = leg1 > 1.e-8f ? gap / leg1 : 0.f;
+      const float ex1 = a.dimExt1X + (sx1 - a.dimExt1X) * u1;
+      const float ey1 = a.dimExt1Y + (sy1 - a.dimExt1Y) * u1;
+      const float leg2 = std::hypot(sx2 - a.dimExt2X, sy2 - a.dimExt2Y);
+      const float u2 = leg2 > 1.e-8f ? gap / leg2 : 0.f;
+      const float ex2 = a.dimExt2X + (sx2 - a.dimExt2X) * u2;
+      const float ey2 = a.dimExt2Y + (sy2 - a.dimExt2Y) * u2;
+      upd(ex1, ey1, sx1 + nx * over, sy1 + ny * over);
+      upd(ex2, ey2, sx2 + nx * over, sy2 + ny * over);
+      upd(sx1, sy1, sx2, sy2);
+      const float h = CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch);
+      const float charFactor = 0.55f;
+      const float tw = std::max(h * charFactor * std::max(1.f, static_cast<float>(a.text.size())), h * 2.f);
+      const float c = std::cos(a.rotationRad);
+      const float s = std::sin(a.rotationRad);
+      auto corner = [&](float lx, float ly, float* ox, float* oy) {
+        const float rx = lx * c - ly * s;
+        const float ry = lx * s + ly * c;
+        *ox = a.insX + rx;
+        *oy = a.insY + ry;
+      };
+      float xs[4]{};
+      float ys[4]{};
+      corner(0.f, 0.f, &xs[0], &ys[0]);
+      corner(tw, 0.f, &xs[1], &ys[1]);
+      corner(tw, -h, &xs[2], &ys[2]);
+      corner(0.f, -h, &xs[3], &ys[3]);
+      for (int e = 0; e < 4; ++e) {
+        const int e2 = (e + 1) % 4;
+        upd(xs[e], ys[e], xs[e2], ys[e2]);
+      }
+      if (best <= tol2)
+        return i;
+      continue;
+    }
     float mnX = 0.f;
     float mnY = 0.f;
     float mxX = 0.f;
     float mxY = 0.f;
-    CadAnnotationRoughBounds(cmd.cadAnnotations[static_cast<size_t>(i)], cmd.modelUnitsPerPlottedInch, &mnX, &mnY,
-                             &mxX, &mxY);
+    CadAnnotationRoughBounds(a, cmd.modelUnitsPerPlottedInch, &mnX, &mnY, &mxX, &mxY);
     if (wx >= mnX - tol && wx <= mxX + tol && wy >= mnY - tol && wy <= mxY + tol)
       return i;
   }
   return -1;
-}
-
-static void AppendUserGeometrySegment(AppCommandState& st, float x0, float y0, float x1, float y1) {
-  st.userLinesFlat.push_back(x0);
-  st.userLinesFlat.push_back(y0);
-  st.userLinesFlat.push_back(0.f);
-  st.userLinesFlat.push_back(x1);
-  st.userLinesFlat.push_back(y1);
-  st.userLinesFlat.push_back(0.f);
-  st.userLineAttrs.push_back(EntityAttributes{});
 }
 
 static void ResetModifyRotateDraft(AppCommandState& st) {
@@ -377,6 +582,7 @@ static void ResetAllCadDraftTools(AppCommandState& st) {
   ResetTextCmdDraft(st);
   ResetMtextDraft(st);
   ResetDimDraft(st);
+  ClearDimGripInteraction(st);
 }
 
 void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<std::string>& log) {
@@ -1022,6 +1228,11 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
           c.boxMinY += dy;
           c.boxMaxX += dx;
           c.boxMaxY += dy;
+        } else if (c.kind == CadAnnotation::Kind::DimAligned) {
+          c.dimExt1X += dx;
+          c.dimExt1Y += dy;
+          c.dimExt2X += dx;
+          c.dimExt2Y += dy;
         }
         newAnn.push_back(std::move(c));
         EntityAttributes a{};
@@ -1155,6 +1366,12 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         RotateAroundBase(bx, by, rad, &c.insX, &c.insY);
         if (c.kind == CadAnnotation::Kind::Text) {
           c.rotationRad += rad;
+        } else if (c.kind == CadAnnotation::Kind::DimAligned) {
+          RotateAroundBase(bx, by, rad, &c.dimExt1X, &c.dimExt1Y);
+          RotateAroundBase(bx, by, rad, &c.dimExt2X, &c.dimExt2Y);
+          float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+          if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+            c.rotationRad = std::atan2(ty, tx);
         } else {
           float xs[4] = {c.boxMinX, c.boxMaxX, c.boxMaxX, c.boxMinX};
           float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
@@ -1348,6 +1565,12 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     RotateAroundBase(bx, by, rad, &a.insX, &a.insY);
     if (a.kind == CadAnnotation::Kind::Text) {
       a.rotationRad += rad;
+    } else if (a.kind == CadAnnotation::Kind::DimAligned) {
+      RotateAroundBase(bx, by, rad, &a.dimExt1X, &a.dimExt1Y);
+      RotateAroundBase(bx, by, rad, &a.dimExt2X, &a.dimExt2Y);
+      float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+      if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+        a.rotationRad = std::atan2(ty, tx);
     } else {
       float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
       float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
@@ -1446,6 +1669,11 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy) {
       a.boxMinY += dy;
       a.boxMaxX += dx;
       a.boxMaxY += dy;
+    } else if (a.kind == CadAnnotation::Kind::DimAligned) {
+      a.dimExt1X += dx;
+      a.dimExt1Y += dy;
+      a.dimExt2X += dx;
+      a.dimExt2Y += dy;
     }
   }
   ApplyTranslationToSelectedSurveyPoints(st, dx, dy);
@@ -1749,20 +1977,31 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   const float sy1 = ly + vy * t1;
   const float sx2 = lx + vx * t2;
   const float sy2 = ly + vy * t2;
-  AppendUserGeometrySegment(st, x1, y1, sx1, sy1);
-  AppendUserGeometrySegment(st, x2, y2, sx2, sy2);
-  AppendUserGeometrySegment(st, sx1, sy1, sx2, sy2);
+  const float cmx = 0.5f * (x1 + x2);
+  const float cmy = 0.5f * (y1 + y2);
+  const float n0x = -vy;
+  const float n0y = vx;
+  const float dmx = 0.5f * (sx1 + sx2);
+  const float dmy = 0.5f * (sy1 + sy2);
+  const float dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
   char buf[96];
   std::snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(len));
   CadAnnotation ann;
-  ann.kind = CadAnnotation::Kind::Text;
-  ann.insX = 0.5f * (sx1 + sx2);
-  ann.insY = 0.5f * (sy1 + sy2);
+  ann.kind = CadAnnotation::Kind::DimAligned;
+  ann.dimExt1X = x1;
+  ann.dimExt1Y = y1;
+  ann.dimExt2X = x2;
+  ann.dimExt2Y = y2;
+  ann.dimSignedOffset = dOff;
   ann.plottedHeightInches = st.defaultPlottedTextHeightInches * 0.85f;
   ann.rotationRad = std::atan2(vy, vx);
   ann.text = buf;
+  const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
+  CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
+  EntityAttributes at{};
+  at.color = "#e1b12c";
   st.cadAnnotations.push_back(std::move(ann));
-  st.cadAnnotationAttrs.push_back(EntityAttributes{});
+  st.cadAnnotationAttrs.push_back(at);
   BumpCadGpuCache(st);
   st.active = AppCommandState::Kind::None;
   ResetDimDraft(st);
@@ -1947,13 +2186,13 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       st.dimE1x = wx;
       st.dimE1y = wy;
       st.dimPhase = DP::WaitExt2;
-      log.push_back("DIMALIGNED — second extension corner:");
+      log.push_back("DIMALIGNED — second extension point:");
       break;
     case DP::WaitExt2:
       st.dimE2x = wx;
       st.dimE2y = wy;
       st.dimPhase = DP::WaitDimLinePt;
-      log.push_back("DIMALIGNED — point on dimension line:");
+      log.push_back("DIMALIGNED — offset (point away from measured line):");
       break;
     case DP::WaitDimLinePt:
       CommitDimAlignedAt(st, wx, wy, log);
@@ -2202,6 +2441,11 @@ static void CadAnnotationPreviewTranslated(const CadAnnotation& src, float dx, f
     out->boxMinY += dy;
     out->boxMaxX += dx;
     out->boxMaxY += dy;
+  } else if (out->kind == CadAnnotation::Kind::DimAligned) {
+    out->dimExt1X += dx;
+    out->dimExt1Y += dy;
+    out->dimExt2X += dx;
+    out->dimExt2Y += dy;
   }
 }
 
@@ -2213,6 +2457,12 @@ static void CadAnnotationPreviewRotated(const CadAnnotation& src, float bx, floa
   RotatePtForAnnotationPreview(bx, by, rad, &a.insX, &a.insY);
   if (a.kind == CadAnnotation::Kind::Text) {
     a.rotationRad += rad;
+  } else if (a.kind == CadAnnotation::Kind::DimAligned) {
+    RotatePtForAnnotationPreview(bx, by, rad, &a.dimExt1X, &a.dimExt1Y);
+    RotatePtForAnnotationPreview(bx, by, rad, &a.dimExt2X, &a.dimExt2Y);
+    float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+    if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+      a.rotationRad = std::atan2(ty, tx);
   } else {
     float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
     float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
@@ -2685,13 +2935,14 @@ void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log) 
   st.selBoxWaitingSecond = false;
   st.active = AppCommandState::Kind::DimAligned;
   st.dimPhase = AppCommandState::DimPhase::WaitExt1;
-  log.push_back("DIMALIGNED — extension point 1, point 2, then point on dimension line. ESC cancels.");
+  log.push_back("DIMALIGNED — extension 1, extension 2, then offset (point away from measured line). ESC cancels.");
 }
 
 void ClearCadSelection(AppCommandState& st) {
   st.selection.clear();
   st.selBoxWaitingSecond = false;
   ClearMtextGripInteraction(st);
+  ClearDimGripInteraction(st);
 }
 
 void ClearCadGeometry(AppCommandState& st) {
@@ -2874,6 +3125,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   const size_t nDel = lineIx.size() + circIx.size() + annIx.size() + arcIx.size() + ellIx.size() + polyIx.size();
   st.selection.clear();
   ClearMtextGripInteraction(st);
+  ClearDimGripInteraction(st);
   if (nDel > 0) {
     BumpCadGpuCache(st);
     log.push_back("Deleted " + std::to_string(nDel) + " object(s).");
@@ -4090,6 +4342,7 @@ void ProcessPendingViewportZoom(AppCommandState& st, float* panX, float* panY, f
 void BeginSelectionBoxCorner(AppCommandState& st, float wx, float wy, float anchorScreenX,
                              float anchorScreenY) {
   ClearMtextGripInteraction(st);
+  ClearDimGripInteraction(st);
   st.selBoxAnchorX = wx;
   st.selBoxAnchorY = wy;
   st.selBoxAnchorScreenX = anchorScreenX;
@@ -4965,7 +5218,7 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
     case DP::WaitExt2:
       return "DIMALIGNED: Extension 2 | ESC cancel";
     case DP::WaitDimLinePt:
-      return "DIMALIGNED: Point on dimension line | ESC cancel";
+      return "DIMALIGNED: Offset from measured line — preview follows cursor | ESC cancel";
     }
   }
   return "";
