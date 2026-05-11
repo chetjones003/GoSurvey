@@ -1,4 +1,5 @@
 #include "CadCommands.hpp"
+#include "MtextRichFormat.hpp"
 
 #include "CadSnap.hpp"
 
@@ -567,6 +568,7 @@ void ResetTextCmdDraft(AppCommandState& st) {
 void ResetMtextDraft(AppCommandState& st) {
   st.mtextPhase = AppCommandState::MtextPhase::WaitCorner1;
   st.mtxtX1 = st.mtxtY1 = st.mtxtX2 = st.mtxtY2 = 0.f;
+  CloseMtextRichEditorUi(st);
 }
 
 void ResetDimDraft(AppCommandState& st) {
@@ -583,6 +585,7 @@ static void ResetAllCadDraftTools(AppCommandState& st) {
   ResetMtextDraft(st);
   ResetDimDraft(st);
   ClearDimGripInteraction(st);
+  AbortMtextGripInteraction(st);
 }
 
 void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<std::string>& log) {
@@ -2186,10 +2189,9 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       st.mtxtX2 = wx;
       st.mtxtY2 = wy;
       st.mtextPhase = MPt::WaitString;
-      log.push_back("MTEXT — type text:");
+      OpenMtextRichEditorForPlacement(st, &log);
       break;
     case MPt::WaitString:
-      log.push_back("MTEXT — type text on command line.");
       break;
     }
     return;
@@ -2952,7 +2954,90 @@ void StartMtextCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.selBoxWaitingSecond = false;
   st.active = AppCommandState::Kind::Mtext;
   st.mtextPhase = AppCommandState::MtextPhase::WaitCorner1;
-  log.push_back("MTEXT — two corners for box, then type text. ESC cancels.");
+  log.push_back("MTEXT — two corners for box, then type in the on-screen editor (Ctrl+Enter reformats; Save to place). ESC cancels.");
+}
+
+void OpenMtextRichEditorForPlacement(AppCommandState& st, std::vector<std::string>* log) {
+  CloseMtextRichEditorUi(st);
+  st.mtextRichEditorPlacement = true;
+  st.mtextRichEditorAnnIndex = -1;
+  st.mtextRichEditorBuf.clear();
+  st.mtextRichEditorOpen = true;
+  st.mtextRichEditorFocusRequest = true;
+  if (log)
+    log->push_back("MTEXT — type in the box; Ctrl+Enter reformats; Save to place; Esc to cancel.");
+}
+
+void OpenMtextRichEditorForAnnotation(AppCommandState& st, int annIndex, std::vector<std::string>* log) {
+  if (annIndex < 0 || static_cast<size_t>(annIndex) >= st.cadAnnotations.size())
+    return;
+  CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(annIndex)];
+  if (a.kind != CadAnnotation::Kind::Mtext)
+    return;
+  CloseMtextRichEditorUi(st);
+  st.mtextRichEditorPlacement = false;
+  st.mtextRichEditorAnnIndex = annIndex;
+  st.mtextRichEditorBuf = a.text;
+  st.mtextRichEditorOpen = true;
+  st.mtextRichEditorFocusRequest = true;
+  if (log)
+    log->push_back("MTEXT — edit in the box; Ctrl+Enter reformats; Save to update; Esc to cancel.");
+}
+
+void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
+  if (!st.mtextRichEditorOpen)
+    return;
+  using K = AppCommandState::Kind;
+  if (st.mtextRichEditorPlacement) {
+    if (st.active != K::Mtext || st.mtextPhase != AppCommandState::MtextPhase::WaitString) {
+      CloseMtextRichEditorUi(st);
+      return;
+    }
+    const std::string normalized = MtextRichNormalize(st.mtextRichEditorBuf);
+    if (!Trim(MtextRichFlattenToPlain(normalized)).empty()) {
+      CadAnnotation ann;
+      ann.kind = CadAnnotation::Kind::Mtext;
+      ann.boxMinX = std::min(st.mtxtX1, st.mtxtX2);
+      ann.boxMinY = std::min(st.mtxtY1, st.mtxtY2);
+      ann.boxMaxX = std::max(st.mtxtX1, st.mtxtX2);
+      ann.boxMaxY = std::max(st.mtxtY1, st.mtxtY2);
+      ann.insX = ann.boxMinX;
+      ann.insY = ann.boxMinY;
+      ann.plottedHeightInches = st.defaultPlottedTextHeightInches;
+      ann.text = normalized;
+      st.cadAnnotations.push_back(std::move(ann));
+      st.cadAnnotationAttrs.push_back(EntityAttributes{});
+      BumpCadGpuCache(st);
+      log.push_back("MTEXT placed.");
+    } else
+      log.push_back("MTEXT — empty; canceled.");
+    st.active = K::None;
+    ResetMtextDraft(st);
+    CloseMtextRichEditorUi(st);
+    return;
+  }
+  const int ix = st.mtextRichEditorAnnIndex;
+  if (ix >= 0 && static_cast<size_t>(ix) < st.cadAnnotations.size() &&
+      st.cadAnnotations[static_cast<size_t>(ix)].kind == CadAnnotation::Kind::Mtext) {
+    st.cadAnnotations[static_cast<size_t>(ix)].text = MtextRichNormalize(st.mtextRichEditorBuf);
+    BumpCadGpuCache(st);
+    log.push_back("MTEXT updated.");
+  }
+  CloseMtextRichEditorUi(st);
+}
+
+void CancelMtextRichEditor(AppCommandState& st, std::vector<std::string>* log) {
+  if (!st.mtextRichEditorOpen)
+    return;
+  if (st.mtextRichEditorPlacement) {
+    if (log)
+      log->push_back("MTEXT — canceled.");
+    st.active = AppCommandState::Kind::None;
+    ResetMtextDraft(st);
+    CloseMtextRichEditorUi(st);
+    return;
+  }
+  CloseMtextRichEditorUi(st);
 }
 
 void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -2968,7 +3053,7 @@ void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log) 
 void ClearCadSelection(AppCommandState& st) {
   st.selection.clear();
   st.selBoxWaitingSecond = false;
-  ClearMtextGripInteraction(st);
+  AbortMtextGripInteraction(st);
   ClearDimGripInteraction(st);
 }
 
@@ -3004,7 +3089,7 @@ void ResetCadToolStateToIdle(AppCommandState& st) {
   st.selBoxWaitingSecond = false;
   st.copySurveyDupModalOpen = false;
   st.copySurveyDupModalOpenRequested = false;
-  ClearMtextGripInteraction(st);
+  AbortMtextGripInteraction(st);
 }
 
 void ClearSelection(AppCommandState& st) {
@@ -3151,7 +3236,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
 
   const size_t nDel = lineIx.size() + circIx.size() + annIx.size() + arcIx.size() + ellIx.size() + polyIx.size();
   st.selection.clear();
-  ClearMtextGripInteraction(st);
+  AbortMtextGripInteraction(st);
   ClearDimGripInteraction(st);
   if (nDel > 0) {
     BumpCadGpuCache(st);
@@ -4368,7 +4453,7 @@ void ProcessPendingViewportZoom(AppCommandState& st, float* panX, float* panY, f
 
 void BeginSelectionBoxCorner(AppCommandState& st, float wx, float wy, float anchorScreenX,
                              float anchorScreenY) {
-  ClearMtextGripInteraction(st);
+  AbortMtextGripInteraction(st);
   ClearDimGripInteraction(st);
   st.selBoxAnchorX = wx;
   st.selBoxAnchorY = wy;
@@ -4466,7 +4551,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.selBoxWaitingSecond = false;
   st.copySurveyDupModalOpen = false;
   st.copySurveyDupModalOpenRequested = false;
-  ClearMtextGripInteraction(st);
+  ClearEntityGripInteraction(st);
+  ClearDimGripInteraction(st);
   if (prev == AppCommandState::Kind::Zoom)
     ClearPendingViewportZoom(st);
 }
@@ -4672,6 +4758,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
                   "Bearing lock %.6g° clockwise from north — distance (+/- along ray) or click (A clears).",
                   static_cast<double>(combined));
     log.push_back(bufKb);
+    cmdBuf[0] = '\0';
+    return;
+  }
+
+  if (st.active == K::Mtext && st.mtextPhase == AppCommandState::MtextPhase::WaitString && !line.empty()) {
+    log.push_back("MTEXT — type in the on-screen editor over the box (Ctrl+Enter reformats; Save to place).");
     cmdBuf[0] = '\0';
     return;
   }
@@ -4925,29 +5017,6 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       cmdBuf[0] = '\0';
       return;
     }
-  }
-
-  if (st.active == K::Mtext && st.mtextPhase == AppCommandState::MtextPhase::WaitString) {
-    CadAnnotation ann;
-    ann.kind = CadAnnotation::Kind::Mtext;
-    ann.boxMinX = std::min(st.mtxtX1, st.mtxtX2);
-    ann.boxMinY = std::min(st.mtxtY1, st.mtxtY2);
-    ann.boxMaxX = std::max(st.mtxtX1, st.mtxtX2);
-    ann.boxMaxY = std::max(st.mtxtY1, st.mtxtY2);
-    ann.insX = ann.boxMinX;
-    ann.insY = ann.boxMinY;
-    ann.plottedHeightInches = st.defaultPlottedTextHeightInches;
-    ann.text = line;
-    if (!ann.text.empty()) {
-      st.cadAnnotations.push_back(std::move(ann));
-      st.cadAnnotationAttrs.push_back(EntityAttributes{});
-      log.push_back("MTEXT placed.");
-    } else
-      log.push_back("MTEXT — empty; canceled.");
-    st.active = K::None;
-    ResetMtextDraft(st);
-    cmdBuf[0] = '\0';
-    return;
   }
 
   if (st.active == AppCommandState::Kind::Line) {
@@ -5270,7 +5339,7 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
     case MP::WaitCorner2:
       return "MTEXT: Opposite corner | ESC cancel";
     case MP::WaitString:
-      return "MTEXT: Type text | ESC cancel";
+      return "MTEXT: Edit in drawing box — Ctrl+Enter reformats | Save to place | Esc cancel";
     }
   }
   if (st.active == K::DimAligned) {

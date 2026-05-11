@@ -2,6 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "DxfColors.hpp"
+#include "MtextRichFormat.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -1789,7 +1790,7 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
     } else {
       char hb[16];
       std::snprintf(hb, sizeof(hb), "%X", handle++);
-      const std::string txt = sanitizeDxfText(an.text);
+      const std::string txt = sanitizeDxfText(MtextRichFlattenToPlain(an.text));
       const float bw =
           std::max(1.f, std::fabs(an.boxMaxX - an.boxMinX));
       emitPair(0, "MTEXT");
