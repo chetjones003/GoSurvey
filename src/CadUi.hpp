@@ -10,6 +10,10 @@
 
 void ApplyCadDarkTheme();
 
+/// Optional logo drawn at the left of the main menu bar (OpenGL texture from \p LoadAppLogoFromPngFile).
+void CadUiSetMenuBarLogo(ImTextureID texture, float widthPx, float heightPx);
+void CadUiClearMenuBarLogo();
+
 /// One-time layout: properties (left), reports (right), command line (bottom, includes mode toggles), drawing (center).
 void SetupMainDockLayout(ImGuiID dockspace_id);
 
