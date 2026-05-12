@@ -26,3 +26,6 @@ std::filesystem::path AppExecutableDirectory();
 
 /// Tries `<exe>/relativePath` then `<cwd>/relativePath`. \p relativePath may include subdirs (e.g. `icons/logo.png`).
 std::filesystem::path ResolveBundledAssetPath(const std::filesystem::path& relativePath);
+
+/// Bundled app logo for splash, title bar, and window icon: `icons/bitmap.png`, then `bitmap.png` beside the exe or cwd.
+std::filesystem::path ResolveAppLogoPngPath();

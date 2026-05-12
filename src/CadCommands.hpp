@@ -31,12 +31,28 @@ struct EntityAttributes {
 
   std::string color = "ByLayer";
 
+  /// "ByLayer", "ByBlock", or a linetype table name such as "Continuous" / "DASHED" / "CENTER".
+  std::string linetype = "ByLayer";
+
+  /// Millimetres on paper; \c -1.f means ByLayer (DXF 370 = -1).
+  float lineweightMm = -1.f;
+
+  /// 0 = opaque, 1 = fully transparent; \c -1.f means ByLayer.
+  float transparency = -1.f;
+
+};
+
+/// Named layer row for the layer manager (visibility / freeze / lock are stored for future viewport filtering).
+struct CadLayerRow {
+  std::string name;
+  bool on = true;
+  bool frozen = false;
+  bool locked = false;
+  /// Layer swatch color (same encoding as \ref EntityAttributes::color except not "ByLayer").
+  std::string color = "White";
   std::string linetype = "Continuous";
-
-  float lineweightMm = 0.18f;
-
-  float transparency = 0.f; ///< 0 = opaque, 1 = fully transparent
-
+  float lineweightMm = -1.f; ///< \c -1 = default (DXF layer 370 -3 on export).
+  float transparency = 0.f;  ///< 0 opaque .. 1 fully transparent (layer-wide).
 };
 
 
@@ -47,13 +63,31 @@ void ResolveStoredColorForViewport(const std::string& colorStorage, float transp
 
                                    float defaultG, float defaultB, float* outRgba);
 
+struct AppCommandState;
+
+const CadLayerRow* FindDrawingLayerRowCi(const AppCommandState& st, const std::string& layerName);
+
+float EffectiveEntityTransparency01(const EntityAttributes& e, const CadLayerRow* layer);
+
+float EffectiveEntityLineweightMm(const EntityAttributes& e, const CadLayerRow* layer);
+
+std::string EffectiveEntityLinetypeNameForViewport(const EntityAttributes& e, const CadLayerRow* layer);
+
+void ResolveEntityRgbaForViewport(const EntityAttributes& attr, const CadLayerRow* layer, float defaultR,
+
+                                    float defaultG, float defaultB, float* outRgba);
+
+int CadDxfLineweightEnum370FromMm(float mm);
+
+float CadDxfLineweightMmFromEnum370(int code);
+
 
 
 inline void ResolveEntityColorForViewport(const EntityAttributes& attr, float defaultR, float defaultG,
 
                                           float defaultB, float* outRgba) {
 
-  ResolveStoredColorForViewport(attr.color, attr.transparency, defaultR, defaultG, defaultB, outRgba);
+  ResolveEntityRgbaForViewport(attr, nullptr, defaultR, defaultG, defaultB, outRgba);
 
 }
 
@@ -175,6 +209,8 @@ struct CadExtendedGeometryInput {
   const std::vector<uint8_t>* polylineClosed = nullptr;
 
   const std::vector<EntityAttributes>* polylineAttrs = nullptr;
+
+  const std::vector<CadLayerRow>* drawingLayers = nullptr;
 
 };
 
@@ -764,6 +800,14 @@ struct AppCommandState {
 
   bool showSettingsWindow = false;
 
+  /// Layer manager (LAYER / ribbon LAY). Rows are synced with geometry-used names.
+  bool showLayerManagerWindow = false;
+
+  /// Current layer for new geometry (ribbon combo + command defaults).
+  std::string currentLayer = "0";
+
+  std::vector<CadLayerRow> drawingLayerTable;
+
   /// Viewport CAD crosshair (Drawing1): RGB 0–1, arm length as fraction of viewport width/height, pickbox half-size in px.
   float viewportCrosshairR = 1.f;
   float viewportCrosshairG = 0.8392157f;
@@ -839,6 +883,14 @@ inline void BumpCadGpuCache(AppCommandState& st) { ++st.cadGpuRevision; }
 
 /// Keeps per-entity attribute vectors sized to match geometry counts (used by Properties and select-similar).
 void EnsureAttrCounts(AppCommandState& st);
+
+void SyncDrawingLayerTableWithGeometry(AppCommandState& st);
+
+bool CadAddDrawingLayer(AppCommandState& st, const std::string& name, std::string* err);
+
+bool CadRenameDrawingLayer(AppCommandState& st, const std::string& oldName, const std::string& newName, std::string* err);
+
+bool CadDeleteDrawingLayer(AppCommandState& st, const std::string& name, std::string* err);
 
 inline void RestoreMtextGripOriginal(AppCommandState& st) {
   if (!st.mtextGripMoveActive)

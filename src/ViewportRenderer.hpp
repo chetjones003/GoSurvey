@@ -32,7 +32,8 @@ public:
                    const std::vector<float>* highlightCircles, const std::vector<float>* surveyMarkers,
                    const std::vector<EntityAttributes>* lineEntityAttrs,
                    const std::vector<EntityAttributes>* circleEntityAttrs,
-                   const CadExtendedGeometryInput* extended, bool showGrid);
+                   const CadExtendedGeometryInput* extended, bool showGrid,
+                   const std::vector<CadLayerRow>* drawingLayers);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 
@@ -72,6 +73,13 @@ private:
 
   std::vector<float> cpuVcLines_;
   std::vector<float> cpuVcCircles_;
+  struct VcLineBatch {
+    int first = 0;
+    int count = 0;
+    float widthPx = 1.35f;
+  };
+  std::vector<VcLineBatch> vcLineBatches_;
+  std::vector<VcLineBatch> vcCircleBatches_;
   std::uint32_t cachedCadGpuRevision_ = 0xffffffffu;
 
   unsigned int gridProgram_ = 0;

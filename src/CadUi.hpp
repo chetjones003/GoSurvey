@@ -10,9 +10,12 @@
 
 void ApplyCadDarkTheme();
 
-/// Optional logo drawn at the left of the main menu bar (OpenGL texture from \p LoadAppLogoFromPngFile).
+/// Optional app logo texture (from \p LoadAppLogoFromPngFile via \ref ResolveAppLogoPngPath). On Windows it appears in the custom title bar;
+/// on other platforms, at the left of the main menu bar.
 void CadUiSetMenuBarLogo(ImTextureID texture, float widthPx, float heightPx);
 void CadUiClearMenuBarLogo();
+/// Returns true when a logo was set with \ref CadUiSetMenuBarLogo and fills \p outTexture / \p outDimsPx.
+bool CadUiTitleBarLogoQuery(ImTextureID* outTexture, ImVec2* outDimsPx);
 
 /// One-time layout: properties (left), reports (right), command line (bottom, includes mode toggles), drawing (center).
 void SetupMainDockLayout(ImGuiID dockspace_id);
@@ -48,6 +51,8 @@ void DrawImportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 void DrawExportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 
 void DrawSurveyReportsPanel(AppCommandState& cmd);
+
+void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
 /// Modal after COPY when survey points were selected — duplicate ID policy for new survey rows.
 void DrawCopySurveyDuplicateModal(AppCommandState& cmd, std::vector<std::string>& log);
