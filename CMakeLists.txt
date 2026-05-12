@@ -75,6 +75,7 @@ add_executable(GoSurvey
   src/main.cpp
   src/SplashScreen.cpp
   src/GsIo.cpp
+  src/UserPrefs.cpp
   src/AppIcon.cpp
   src/ViewportRenderer.cpp
   src/CadUi.cpp
@@ -120,3 +121,11 @@ if(MSVC)
 else()
   target_compile_options(GoSurvey PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+set(GOSURVEY_DEFAULT_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/default-template.gs")
+add_custom_command(TARGET GoSurvey POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different
+          "${GOSURVEY_DEFAULT_TEMPLATE}"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/default-template.gs"
+  COMMENT "Copy default workspace template (.gs) beside executable")

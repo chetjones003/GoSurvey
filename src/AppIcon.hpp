@@ -29,3 +29,6 @@ std::filesystem::path ResolveBundledAssetPath(const std::filesystem::path& relat
 
 /// Bundled app logo for splash, title bar, and window icon: `icons/bitmap.png`, then `bitmap.png` beside the exe or cwd.
 std::filesystem::path ResolveAppLogoPngPath();
+
+/// Default startup workspace: `resources/default-template.gs` beside the executable (or cwd), from build copy.
+[[nodiscard]] std::filesystem::path ResolveDefaultWorkspaceTemplateGsPath();

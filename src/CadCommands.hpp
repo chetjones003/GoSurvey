@@ -875,6 +875,9 @@ struct AppCommandState {
 
   char surveyExportCsvPath[512]{};
 
+  /// UTF-8 path to optional startup .gs (Settings → Startup). Empty = use bundled resources/default-template.gs.
+  char defaultWorkspaceTemplatePathUtf8[768]{};
+
   int surveyImportCsvLayoutIdx = 0;
 
   int surveyExportCsvLayoutIdx = 0;

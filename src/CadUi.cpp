@@ -3,8 +3,10 @@
 
 #include "CadLinetype.hpp"
 #include "DxfIo.hpp"
+#include "AppIcon.hpp"
 #include "GsIo.hpp"
 #include "SurveyCsv.hpp"
+#include "UserPrefs.hpp"
 #include "WinFileDialogs.hpp"
 #include "SurveyPoints.hpp"
 
@@ -5083,7 +5085,7 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
   ImGui::End();
 }
 
-void DrawSettingsPanel(AppCommandState& cmd) {
+void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   if (!cmd.showSettingsWindow)
     return;
 
@@ -5097,6 +5099,48 @@ void DrawSettingsPanel(AppCommandState& cmd) {
   cmd.showSettingsWindow = open;
 
   if (ImGui::BeginTabBar("##settings_tabs")) {
+    if (ImGui::BeginTabItem("Startup")) {
+      ImGui::TextWrapped(
+          "When GoSurvey starts, it loads a workspace .gs into the drawing. Leave the path empty to use the bundled "
+          "file (resources/default-template.gs next to the executable). Your choice is saved in gosurvey-user.json "
+          "beside the executable.");
+      ImGui::Separator();
+      ImGui::InputText("Custom .gs path (UTF-8)##startup_gs", cmd.defaultWorkspaceTemplatePathUtf8,
+                       IM_ARRAYSIZE(cmd.defaultWorkspaceTemplatePathUtf8));
+      ImGui::SameLine();
+#if defined(_WIN32)
+      if (ImGui::Button("Browse##startup_gs")) {
+        if (BrowseOpenFileGsUtf8(cmd.defaultWorkspaceTemplatePathUtf8, sizeof(cmd.defaultWorkspaceTemplatePathUtf8)) &&
+            log)
+          log->push_back("Startup template path set from file dialog.");
+      }
+#else
+      ImGui::BeginDisabled();
+      ImGui::Button("Browse##startup_gs");
+      ImGui::EndDisabled();
+      ItemHelpTooltip("File browse for startup template is only implemented on Windows in this build.");
+#endif
+      {
+        const std::filesystem::path bundled = ResolveDefaultWorkspaceTemplateGsPath();
+        if (!bundled.empty())
+          ImGui::TextDisabled("Bundled template resolved to: %s", bundled.u8string().c_str());
+        else
+          ImGui::TextDisabled("Bundled template not found (expected resources/default-template.gs beside exe or cwd).");
+      }
+      if (ImGui::Button("Save startup preferences##startup_save")) {
+        SaveUserStartupPrefs(cmd);
+        if (log)
+          log->push_back("Saved startup preferences (gosurvey-user.json).");
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Clear path (use bundled)##startup_clear")) {
+        cmd.defaultWorkspaceTemplatePathUtf8[0] = '\0';
+        SaveUserStartupPrefs(cmd);
+        if (log)
+          log->push_back("Cleared custom startup path; bundled template will be used on next launch.");
+      }
+      ImGui::EndTabItem();
+    }
     if (ImGui::BeginTabItem("Crosshair")) {
       ImGui::TextUnformatted("CAD crosshair (Drawing1 viewport)");
       ImGui::Separator();

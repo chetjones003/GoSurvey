@@ -105,6 +105,10 @@ std::filesystem::path ResolveAppLogoPngPath() {
   return {};
 }
 
+std::filesystem::path ResolveDefaultWorkspaceTemplateGsPath() {
+  return ResolveBundledAssetPath(std::filesystem::path("resources") / "default-template.gs");
+}
+
 static bool LoadPngToGpuTexture(const std::filesystem::path& pngPath, GLFWwindow* windowForIcon, AppLogoGpu* out,
                                 bool keyNearWhiteBackground) {
   if (out) {

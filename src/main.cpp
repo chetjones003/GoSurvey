@@ -4,7 +4,9 @@
 #include "CadSnap.hpp"
 #include "SurveyPoints.hpp"
 #include "AppIcon.hpp"
+#include "GsIo.hpp"
 #include "SplashScreen.hpp"
+#include "UserPrefs.hpp"
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -18,9 +20,48 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 namespace {
+
+static void TryLoadStartupWorkspaceTemplate(AppCommandState& cmd, std::vector<std::string>& cmdLog) {
+  namespace fs = std::filesystem;
+  auto appendLines = [&](std::vector<std::string>& lines) {
+    for (auto& s : lines)
+      cmdLog.push_back(std::move(s));
+  };
+  auto tryLoadPath = [&](const fs::path& p) -> bool {
+    if (p.empty() || !fs::exists(p))
+      return false;
+    std::vector<std::string> boot;
+    const std::string u8 = p.u8string();
+    if (!LoadGoSurveyFile(cmd, u8.c_str(), boot))
+      return false;
+    appendLines(boot);
+    return true;
+  };
+
+  if (cmd.defaultWorkspaceTemplatePathUtf8[0] != '\0') {
+    const fs::path custom(cmd.defaultWorkspaceTemplatePathUtf8);
+    if (!custom.empty() && fs::exists(custom)) {
+      std::vector<std::string> boot;
+      const std::string u8 = custom.u8string();
+      if (LoadGoSurveyFile(cmd, u8.c_str(), boot)) {
+        appendLines(boot);
+        return;
+      }
+      appendLines(boot);
+      cmdLog.push_back("Startup: custom template failed to load; trying bundled default-template.gs.");
+    } else {
+      cmdLog.push_back("Startup: custom template path not found; trying bundled default-template.gs.");
+    }
+  }
+
+  if (tryLoadPath(ResolveDefaultWorkspaceTemplateGsPath()))
+    return;
+  cmdLog.push_back("Startup: bundled default-template.gs not found; starting with an empty drawing.");
+}
 
 void PushRubberSeg(std::vector<float>& o, float x0, float y0, float x1, float y1) {
   o.push_back(x0);
@@ -471,12 +512,14 @@ int main() {
   GlfwApplyMainStageWindowChrome(window);
 
   AppCommandState cmd;
+  LoadUserStartupPrefs(cmd);
   std::vector<std::string> cmdLog;
   cmdLog.push_back("GoSurvey CAD shell ready.");
   cmdLog.push_back(
       "LINE/L … SURVEY: CREATEPOINTS (CRTPTS), VIEWPOINTS (VWPTS), IMPORTPOINTS (IMPPTS), EXPORTPOINTS (EXPPTS), "
       "JSON database — idle: two-click select. MMB "
       "pan.");
+  TryLoadStartupWorkspaceTemplate(cmd, cmdLog);
   char cmdBuf[4096]{};
 
   float panX = 0.f;
@@ -636,7 +679,7 @@ int main() {
     }
 
     DrawCreatePointsPanel(cmd, cmdLog);
-    DrawSettingsPanel(cmd);
+    DrawSettingsPanel(cmd, &cmdLog);
     DrawLayerManagerWindow(cmd, &cmdLog);
     DrawViewPointsPanel(cmd, cmdLog);
     DrawImportPointsPanel(cmd, cmdLog);
