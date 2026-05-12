@@ -4,6 +4,19 @@ GoSurvey is a desktop drafting and survey-helper: a **CAD-style drawing** with o
 
 ---
 
+## Download and run (Windows)
+
+1. Open **[Releases](https://github.com/chetjones003/GoSurvey/releases)** for this repository.
+2. Under the latest release (or a specific version), download the Windows asset—typically a **`.zip`** containing the executable, or a standalone **`.exe`** if that is what is published.
+3. If you downloaded a **zip**, extract all files to a folder where you are allowed to run programs (e.g. your Desktop or `Documents`).
+4. Run the **`GoSurvey` executable** from the release (for example **`GoSurvey-0.2.0.exe`** — the version in the filename matches the release). There is no separate installer if the release is distributed as a portable build.
+5. **SmartScreen**: Windows may show “Windows protected your PC” for apps that are not code-signed. If you trust this release, choose **More info** → **Run anyway**.
+6. If the app fails to start with a message about a **missing Microsoft runtime DLL**, install the latest **[Visual C++ Redistributable for x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)** from Microsoft, then try again.
+
+To build from source instead, clone the repo, install CMake and a C++17 toolchain with OpenGL, configure with CMake, and build the `GoSurvey` target (see `CMakeLists.txt`).
+
+---
+
 ## Layout at a glance
 
 - **Drawing viewport** — Pan with the **middle mouse button**. Zoom with the **mouse wheel** (smooth, cursor-centered). A **minor grid** follows the view; large coordinates may be **rebased** on DXF import so pan/zoom stay stable.
@@ -106,7 +119,24 @@ Delete and zoom-window corners use **unsnapped** picks so corners land exactly w
 
 ## DXF
 
-**File → Import DXF…** / **Export DXF…** — Linework, circles, arcs, ellipses, polylines, and supported annotations. Very large coordinates may be **shifted** on import for floating-point precision; export adds the offset back.
+Use **File → Import DXF…** and **File → Export DXF…** for exchange with **AutoCAD**, **AutoCAD Civil 3D**, and other DXF readers.
+
+### Export (ASCII DXF AC1032)
+
+Exports are **ASCII DXF** tagged for **AC1032** (AutoCAD 2018–class), structured for broad compatibility:
+
+- **HEADER** — Drawing limits, extents, common system variables, **`$HANDSEED`**, and (when **survey points** are exported) **`$PDMODE`** / **`$PDSIZE`** so POINT entities display as an **X** (same effect as the **PTYPE** command in AutoCAD: point style is stored as variables, not as a script line in the file).
+- **CLASSES** (empty), **TABLES** — Standard tables including **LAYER** (with plot-style pointers), **VIEW**, **UCS**, **VPORT**, **APPID**, **DIMSTYLE**, **BLOCK_RECORD** with canonical **`*Model_Space`** / **`*Paper_Space`** names.
+- **BLOCKS** / **ENTITIES** — Your CAD geometry plus **survey points** as native **`POINT`** / **`AcDbPoint`** entities (easting, northing, elevation, per-point **layer** and **ByLayer** color).
+- **OBJECTS** — Minimal named-object dictionary (including plot-style table) so hosts like Civil 3D accept the file.
+
+**CAD content** includes lines, circles, text, mtext, and aligned dimensions (as exploded lines + text), with layers, ACI colors, lineweights, and model-space ownership as expected by current DXF practice.
+
+Very large coordinates may still be **rebased** on **import** inside GoSurvey for numeric stability; **export** adds the stored world origin back so coordinates match your survey/CAD space.
+
+### Import
+
+**Model space** geometry: lines, circles, arcs, ellipses, polylines, and common annotations. **POINT** entities from other applications are approximated as small crossing **line** segments in GoSurvey’s editor. Paper space and some object types are skipped; use the command log for details.
 
 ---
 
@@ -121,7 +151,7 @@ World coordinates: **Easting = X**, **Northing = Y**.
 | **IMPORTPOINTS** (`IMPPTS`) | CSV import with presets and preview. |
 | **EXPORTPOINTS** (`EXPPTS`) | CSV export with column layout options. |
 
-Create-points: numbering, defaults, JSON save/load. **Click placement** when idle (Esc turns it off). Survey markers participate in selection; **duplicate ID** policy applies when copying/moving survey rows.
+Create-points: numbering, defaults, JSON save/load. **Click placement** when idle (Esc turns it off). Survey markers participate in selection; **duplicate ID** policy applies when copying/moving survey rows. **Export DXF** writes survey points as **AutoCAD POINT** objects (see **DXF → Export** above) so they show up in Civil 3D and similar hosts.
 
 ---
 
