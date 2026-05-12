@@ -250,6 +250,16 @@ bool FindMatchingEndBlk(const std::vector<DxfPair>& t, size_t blockIdx, size_t l
   return false;
 }
 
+bool IsModelSpaceBlockName(const std::string& raw) {
+  // AutoCAD R2000+ uses *Model_Space; older/other writers use *MODEL_SPACE or *MODEL_SPACE*.
+  std::string s = Trim(raw);
+  for (char& ch : s)
+    ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+  while (!s.empty() && s.back() == '*')
+    s.pop_back();
+  return s == "*model_space";
+}
+
 /// Geometry sometimes lives only inside block *MODEL_SPACE (no ENTITIES section). Range is [begin,end) exclusive of ENDBLK.
 bool FindModelSpaceEntityRange(const std::vector<DxfPair>& t, size_t* beginOut, size_t* endOut) {
   size_t bs0 = 0;
@@ -270,7 +280,7 @@ bool FindModelSpaceEntityRange(const std::vector<DxfPair>& t, size_t* beginOut, 
     }
     bool isMs = false;
     for (size_t k = i; k < be; ++k) {
-      if (t[k].code == 2 && EqCiNorm(t[k].value, "*MODEL_SPACE")) {
+      if (t[k].code == 2 && IsModelSpaceBlockName(t[k].value)) {
         isMs = true;
         break;
       }
@@ -301,10 +311,6 @@ bool IsPaperSpaceBlockName(const std::string& raw) {
   for (char& ch : s)
     ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
   return s.find("*paper_space") != std::string::npos;
-}
-
-bool IsModelSpaceBlockName(const std::string& raw) {
-  return EqCiNorm(Trim(raw), "*MODEL_SPACE");
 }
 
 struct Affine2D {
@@ -957,7 +963,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       EntityAttributes at{};
       at.layer = layer;
       at.color = EntityColorStorage(c62, has420, rgb420, layer, layerRgb);
-      const double rad = rot * kDegToRad;
+      // DXF: AcDbText group 50 is rotation in radians (ObjectARX DXF reference).
+      const double rad = rot;
       const double textLen = std::max(static_cast<double>(txt.size()), 1.0);
       const double w = std::max(h * 0.65 * textLen, h * 2.0);
       const double x1 = x + w * std::cos(rad);
@@ -999,7 +1006,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       EntityAttributes at{};
       at.layer = layer;
       at.color = EntityColorStorage(c62, has420, rgb420, layer, layerRgb);
-      const double rad = rot * kDegToRad;
+      // DXF: AcDbMText group 50 is rotation in radians.
+      const double rad = rot;
       const double cr = std::cos(rad);
       const double sr = std::sin(rad);
       const double hw = std::max(boxW, h * 0.55 * std::max(static_cast<double>(txt.size()) * 0.08 + 4.0, 8.0));
@@ -1345,6 +1353,8 @@ void BuildExportLayerRgbHint(const AppCommandState& st, std::unordered_map<std::
     const EntityAttributes& at = st.cadAnnotationAttrs[i];
     layers.insert(at.layer.empty() ? std::string("0") : at.layer);
   }
+  for (const SurveyPoint& p : st.surveyPoints)
+    layers.insert(p.layer.empty() ? std::string("0") : p.layer);
   layers.insert("0");
   const uint32_t defw = DxfRgbPackedFromAci(7);
   for (const auto& lyr : layers)
@@ -1565,13 +1575,168 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
   BuildExportLayerRgbHint(st, &layerRgbHint);
 
   std::unordered_set<std::string> layerNames;
+  auto addLayerName = [&](const std::string& raw) {
+    layerNames.insert(raw.empty() ? std::string("0") : raw);
+  };
   for (size_t i = 0; i < st.userLineAttrs.size(); ++i)
-    layerNames.insert(st.userLineAttrs[i].layer);
+    addLayerName(st.userLineAttrs[i].layer);
   for (size_t i = 0; i < st.userCircleAttrs.size(); ++i)
-    layerNames.insert(st.userCircleAttrs[i].layer);
+    addLayerName(st.userCircleAttrs[i].layer);
   for (size_t i = 0; i < st.cadAnnotationAttrs.size(); ++i)
-    layerNames.insert(st.cadAnnotationAttrs[i].layer.empty() ? std::string("0") : st.cadAnnotationAttrs[i].layer);
+    addLayerName(st.cadAnnotationAttrs[i].layer.empty() ? std::string("0") : st.cadAnnotationAttrs[i].layer);
+  for (const SurveyPoint& p : st.surveyPoints)
+    addLayerName(p.layer);
   layerNames.insert("0");
+
+  const size_t nSeg = st.userLinesFlat.size() / 6;
+  const size_t nCirc = st.userCirclesCxCyR.size() / 3;
+  const size_t nLayerRows = layerNames.size();
+  // Symbol handles (hex, unique): fixed small IDs for tables/rows where handle < layer base (0x10),
+  // then layer rows 0x10.., then VPORT, VIEW, UCS, APPID, DIMSTYLE, BLOCK_RECORD, BLOCK pairs.
+  const uint64_t symAfterLayers = 0x10ull + static_cast<uint64_t>(nLayerRows);
+  const uint64_t symVportTab = symAfterLayers;
+  const uint64_t symVportActive = symAfterLayers + 1;
+  const uint64_t symViewTab = symAfterLayers + 2;
+  const uint64_t symUcsTab = symAfterLayers + 3;
+  const uint64_t symAppidTab = symAfterLayers + 4;
+  const uint64_t symAppidAcad = symAfterLayers + 5;
+  const uint64_t symDimstyleTab = symAfterLayers + 6;
+  const uint64_t symDimstyleStd = symAfterLayers + 7;
+  const uint64_t symBlockRecordTab = symAfterLayers + 8;
+  const uint64_t symBrModel = symAfterLayers + 9;
+  const uint64_t symBrPaper = symAfterLayers + 10;
+  const uint64_t symBlkModel0 = symAfterLayers + 11;
+  const uint64_t symBlkModel1 = symAfterLayers + 12;
+  const uint64_t symBlkPaper0 = symAfterLayers + 13;
+  const uint64_t symBlkPaper1 = symAfterLayers + 14;
+  const uint64_t lastSymHandle = symBlkPaper1;
+
+  uint64_t entityHandleCount = static_cast<uint64_t>(nSeg) + static_cast<uint64_t>(nCirc) +
+                               static_cast<uint64_t>(st.surveyPoints.size());
+  for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
+    const CadAnnotation& an = st.cadAnnotations[ai];
+    if (an.kind == CadAnnotation::Kind::Text)
+      ++entityHandleCount;
+    else if (an.kind == CadAnnotation::Kind::DimAligned) {
+      float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
+      if (!CadDimAlignedGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
+        continue;
+      entityHandleCount += 4; // three LINE + one TEXT
+    } else
+      ++entityHandleCount;
+  }
+  const uint64_t entityHandleStart = std::max(0x1000ull, lastSymHandle + 1ull);
+  // OBJECTS: root NOD + ACAD_GROUP + ACAD_PLOTSTYLENAME (AcDbDictionaryWithDefault + Normal -> placeholder).
+  // LAYER rows require group 390 -> plot-style placeholder (AutoCAD / Civil 3D DXF2000+).
+  const uint64_t objDictRoot = entityHandleStart + entityHandleCount;
+  const uint64_t objDictAcadGroup = objDictRoot + 1ull;
+  const uint64_t objPlotDictWdflt = objDictAcadGroup + 1ull;
+  const uint64_t objPlotPlaceholder = objPlotDictWdflt + 1ull;
+  const uint64_t handSeedVal = objPlotPlaceholder + 1ull;
+  char handSeedBuf[24];
+  std::snprintf(handSeedBuf, sizeof(handSeedBuf), "%llX", static_cast<unsigned long long>(handSeedVal));
+
+  char hVportTab[24], hVportAct[24], hViewTab[24], hUcsTab[24], hAppidTab[24], hAppidAcad[24], hDimTab[24],
+      hDimStd[24];
+  char hBrTab[24], hBrModel[24], hBrPaper[24], hBlkM0[24], hBlkM1[24], hBlkP0[24], hBlkP1[24];
+  char hObjRoot[24], hObjAcadGroup[24], hObjPlotDict[24], hObjPlotPh[24];
+  std::snprintf(hVportTab, sizeof(hVportTab), "%llX", static_cast<unsigned long long>(symVportTab));
+  std::snprintf(hVportAct, sizeof(hVportAct), "%llX", static_cast<unsigned long long>(symVportActive));
+  std::snprintf(hViewTab, sizeof(hViewTab), "%llX", static_cast<unsigned long long>(symViewTab));
+  std::snprintf(hUcsTab, sizeof(hUcsTab), "%llX", static_cast<unsigned long long>(symUcsTab));
+  std::snprintf(hAppidTab, sizeof(hAppidTab), "%llX", static_cast<unsigned long long>(symAppidTab));
+  std::snprintf(hAppidAcad, sizeof(hAppidAcad), "%llX", static_cast<unsigned long long>(symAppidAcad));
+  std::snprintf(hDimTab, sizeof(hDimTab), "%llX", static_cast<unsigned long long>(symDimstyleTab));
+  std::snprintf(hDimStd, sizeof(hDimStd), "%llX", static_cast<unsigned long long>(symDimstyleStd));
+  std::snprintf(hBrTab, sizeof(hBrTab), "%llX", static_cast<unsigned long long>(symBlockRecordTab));
+  std::snprintf(hBrModel, sizeof(hBrModel), "%llX", static_cast<unsigned long long>(symBrModel));
+  std::snprintf(hBrPaper, sizeof(hBrPaper), "%llX", static_cast<unsigned long long>(symBrPaper));
+  std::snprintf(hBlkM0, sizeof(hBlkM0), "%llX", static_cast<unsigned long long>(symBlkModel0));
+  std::snprintf(hBlkM1, sizeof(hBlkM1), "%llX", static_cast<unsigned long long>(symBlkModel1));
+  std::snprintf(hBlkP0, sizeof(hBlkP0), "%llX", static_cast<unsigned long long>(symBlkPaper0));
+  std::snprintf(hBlkP1, sizeof(hBlkP1), "%llX", static_cast<unsigned long long>(symBlkPaper1));
+  std::snprintf(hObjRoot, sizeof(hObjRoot), "%llX", static_cast<unsigned long long>(objDictRoot));
+  std::snprintf(hObjAcadGroup, sizeof(hObjAcadGroup), "%llX", static_cast<unsigned long long>(objDictAcadGroup));
+  std::snprintf(hObjPlotDict, sizeof(hObjPlotDict), "%llX", static_cast<unsigned long long>(objPlotDictWdflt));
+  std::snprintf(hObjPlotPh, sizeof(hObjPlotPh), "%llX", static_cast<unsigned long long>(objPlotPlaceholder));
+
+  const double ox = st.worldDocumentOriginX;
+  const double oy = st.worldDocumentOriginY;
+  double extMnX = 0., extMxX = 0., extMnY = 0., extMxY = 0., extMnZ = 0., extMxZ = 0.;
+  bool extAny = false;
+  bool extZAny = false;
+  auto accExt = [&](double x, double y) {
+    if (!extAny) {
+      extMnX = extMxX = x;
+      extMnY = extMxY = y;
+      extAny = true;
+    } else {
+      extMnX = std::min(extMnX, x);
+      extMxX = std::max(extMxX, x);
+      extMnY = std::min(extMnY, y);
+      extMxY = std::max(extMxY, y);
+    }
+  };
+  auto accExtZ = [&](double z) {
+    if (!extZAny) {
+      extMnZ = extMxZ = z;
+      extZAny = true;
+    } else {
+      extMnZ = std::min(extMnZ, z);
+      extMxZ = std::max(extMxZ, z);
+    }
+  };
+  for (size_t i = 0; i < nSeg; ++i) {
+    accExt(static_cast<double>(st.userLinesFlat[i * 6 + 0]) + ox, static_cast<double>(st.userLinesFlat[i * 6 + 1]) + oy);
+    accExt(static_cast<double>(st.userLinesFlat[i * 6 + 3]) + ox, static_cast<double>(st.userLinesFlat[i * 6 + 4]) + oy);
+    accExtZ(static_cast<double>(st.userLinesFlat[i * 6 + 2]));
+    accExtZ(static_cast<double>(st.userLinesFlat[i * 6 + 5]));
+  }
+  for (size_t ci = 0; ci < nCirc; ++ci) {
+    const double cx = static_cast<double>(st.userCirclesCxCyR[ci * 3]) + ox;
+    const double cy = static_cast<double>(st.userCirclesCxCyR[ci * 3 + 1]) + oy;
+    const double rr = std::fabs(static_cast<double>(st.userCirclesCxCyR[ci * 3 + 2]));
+    accExt(cx - rr, cy - rr);
+    accExt(cx + rr, cy + rr);
+  }
+  for (const CadAnnotation& an : st.cadAnnotations) {
+    float amnX = 0.f, amnY = 0.f, amxX = 0.f, amxY = 0.f;
+    CadAnnotationRoughBounds(an, st.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
+    accExt(static_cast<double>(amnX) + ox, static_cast<double>(amnY) + oy);
+    accExt(static_cast<double>(amxX) + ox, static_cast<double>(amxY) + oy);
+  }
+  for (const SurveyPoint& p : st.surveyPoints) {
+    accExt(static_cast<double>(p.easting) + ox, static_cast<double>(p.northing) + oy);
+    accExtZ(static_cast<double>(p.elevation));
+  }
+  if (!extAny) {
+    extMnX = extMxX = extMnY = extMxY = 0.;
+  } else {
+    const double pad = std::max((extMxX - extMnX), (extMxY - extMnY)) * 0.05 + 1.0;
+    extMnX -= pad;
+    extMxX += pad;
+    extMnY -= pad;
+    extMxY += pad;
+  }
+  if (!extZAny) {
+    extMnZ = extMxZ = 0.;
+  } else {
+    const double zSpan = extMxZ - extMnZ;
+    if (zSpan < 1e-9) {
+      // Coplanar Z: keep a single elevation in $EXTMIN/$EXTMAX (no ± padding); matches typical 2D survey.
+    } else {
+      const double padZ = std::max((extMxZ - extMnZ) * 0.05 + 0.01, 1e-9);
+      extMnZ -= padZ;
+      extMxZ += padZ;
+    }
+  }
+
+  const double vCx = (extMnX + extMxX) * 0.5;
+  const double vCy = (extMnY + extMxY) * 0.5;
+  const double vW = extMxX - extMnX;
+  const double vHspan = extMxY - extMnY;
+  const double vViewH = std::max(1.0, std::max(vW, vHspan) * 1.1 + 1.0);
+  const double vAsp = (vHspan > 1e-12) ? (vW / vHspan) : 1.0;
 
   std::ofstream out(std::filesystem::path(pathUtf8), std::ios::binary);
   if (!out) {
@@ -1590,25 +1755,284 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
   emitPair(0, "SECTION");
   emitPair(2, "HEADER");
   emitPair(9, "$ACADVER");
-  emitPair(1, "AC1018");
+  emitPair(1, "AC1032");
+  emitPair(9, "$ACADMAINTVER");
+  emitPair(90, "378");
+  emitPair(9, "$DWGCODEPAGE");
+  emitPair(3, "ANSI_1252");
+  emitPair(9, "$LASTSAVEDBY");
+  emitPair(1, "GoSurvey");
+  emitPair(9, "$REQUIREDVERSIONS");
+  emitPair(160, "0");
   emitPair(9, "$INSBASE");
   emitPair(10, "0.0");
   emitPair(20, "0.0");
   emitPair(30, "0.0");
+  emitPair(9, "$EXTMIN");
+  emitPair(10, std::to_string(extMnX));
+  emitPair(20, std::to_string(extMnY));
+  emitPair(30, std::to_string(extMnZ));
+  emitPair(9, "$EXTMAX");
+  emitPair(10, std::to_string(extMxX));
+  emitPair(20, std::to_string(extMxY));
+  emitPair(30, std::to_string(extMxZ));
+  emitPair(9, "$LIMMIN");
+  emitPair(10, "0.0");
+  emitPair(20, "0.0");
+  emitPair(9, "$LIMMAX");
+  emitPair(10, "4000.0");
+  emitPair(20, "4000.0");
+  emitPair(9, "$ORTHOMODE");
+  emitPair(70, "0");
+  emitPair(9, "$REGENMODE");
+  emitPair(70, "1");
+  emitPair(9, "$FILLMODE");
+  emitPair(70, "1");
+  emitPair(9, "$QTEXTMODE");
+  emitPair(70, "0");
+  emitPair(9, "$MIRRTEXT");
+  emitPair(70, "0");
+  if (!st.surveyPoints.empty()) {
+    // Match PTYPE "X": point display as X-cross (PDMODE 3). PDSIZE 0 = 5% of viewport height.
+    emitPair(9, "$PDMODE");
+    emitPair(70, "3");
+    emitPair(9, "$PDSIZE");
+    emitPair(40, "0.0");
+  }
+  emitPair(9, "$LTSCALE");
+  emitPair(40, "1.0");
+  emitPair(9, "$ATTMODE");
+  emitPair(70, "1");
+  emitPair(9, "$TEXTSIZE");
+  emitPair(40, "0.1");
+  emitPair(9, "$TRACEWID");
+  emitPair(40, "0.05");
+  emitPair(9, "$TEXTSTYLE");
+  emitPair(7, "Standard");
+  emitPair(9, "$CLAYER");
+  emitPair(8, "0");
+  emitPair(9, "$CELTYPE");
+  emitPair(6, "ByLayer");
+  emitPair(9, "$CECOLOR");
+  emitPair(62, "256");
+  emitPair(9, "$PSTYLEMODE");
+  emitPair(290, "1");
+  emitPair(9, "$CELTSCALE");
+  emitPair(40, "1.0");
+  emitPair(9, "$DISPSILH");
+  emitPair(70, "1");
+  emitPair(9, "$DIMSCALE");
+  emitPair(40, "1.0");
+  emitPair(9, "$DIMASZ");
+  emitPair(40, "0.05");
+  emitPair(9, "$DIMEXO");
+  emitPair(40, "0.0");
+  emitPair(9, "$DIMDLI");
+  emitPair(40, "0.2");
+  emitPair(9, "$DIMRND");
+  emitPair(40, "0.0");
+  emitPair(9, "$DIMDLE");
+  emitPair(40, "0.0");
+  emitPair(9, "$DIMEXE");
+  emitPair(40, "0.0");
+  emitPair(9, "$DIMTP");
+  emitPair(40, "0.0");
+  emitPair(9, "$DIMTM");
+  emitPair(40, "0.0");
+  emitPair(9, "$DIMTXT");
+  emitPair(40, "0.1");
+  emitPair(9, "$DIMCEN");
+  emitPair(40, "0.09");
+  emitPair(9, "$DIMTSZ");
+  emitPair(40, "0.0");
+  emitPair(9, "$DIMTOL");
+  emitPair(70, "0");
+  emitPair(9, "$DIMLIM");
+  emitPair(70, "0");
+  emitPair(9, "$DIMTIH");
+  emitPair(70, "0");
+  emitPair(9, "$DIMTOH");
+  emitPair(70, "0");
+  emitPair(9, "$DIMSE1");
+  emitPair(70, "0");
+  emitPair(9, "$DIMSE2");
+  emitPair(70, "0");
+  emitPair(9, "$DIMTAD");
+  emitPair(70, "1");
+  emitPair(9, "$DIMZIN");
+  emitPair(70, "0");
+  emitPair(9, "$DIMBLK");
+  emitPair(1, "");
+  emitPair(9, "$DIMASO");
+  emitPair(70, "1");
+  emitPair(9, "$DIMSHO");
+  emitPair(70, "1");
+  emitPair(9, "$DIMPOST");
+  emitPair(1, "");
+  emitPair(9, "$DIMAPOST");
+  emitPair(1, "");
+  emitPair(9, "$DIMALT");
+  emitPair(70, "0");
+  emitPair(9, "$DIMALTD");
+  emitPair(70, "2");
+  emitPair(9, "$DIMALTF");
+  emitPair(40, "25.4");
+  emitPair(9, "$DIMLFAC");
+  emitPair(40, "1.0");
+  emitPair(9, "$DIMTOFL");
+  emitPair(70, "0");
+  emitPair(9, "$DIMTVP");
+  emitPair(40, "0.0");
+  emitPair(9, "$DIMTIX");
+  emitPair(70, "0");
+  emitPair(9, "$DIMSOXD");
+  emitPair(70, "0");
+  emitPair(9, "$DIMSAH");
+  emitPair(70, "0");
+  emitPair(9, "$DIMBLK1");
+  emitPair(1, "");
+  emitPair(9, "$DIMBLK2");
+  emitPair(1, "");
+  emitPair(9, "$DIMSTYLE");
+  emitPair(2, "Standard");
+  emitPair(9, "$DIMCLRD");
+  emitPair(70, "256");
+  emitPair(9, "$DIMCLRE");
+  emitPair(70, "256");
+  emitPair(9, "$DIMCLRT");
+  emitPair(70, "256");
+  emitPair(9, "$DIMTFAC");
+  emitPair(40, "1.0");
+  emitPair(9, "$DIMGAP");
+  emitPair(40, "0.09");
+  emitPair(9, "$DIMJUST");
+  emitPair(70, "0");
+  emitPair(9, "$DIMSD1");
+  emitPair(70, "0");
+  emitPair(9, "$DIMSD2");
+  emitPair(70, "0");
+  emitPair(9, "$DIMTOLJ");
+  emitPair(70, "1");
+  emitPair(9, "$DIMTZIN");
+  emitPair(70, "0");
+  emitPair(9, "$DIMALTZ");
+  emitPair(70, "0");
+  emitPair(9, "$DIMALTTZ");
+  emitPair(70, "0");
+  emitPair(9, "$DIMUPT");
+  emitPair(70, "0");
+  emitPair(9, "$DIMDEC");
+  emitPair(70, "4");
+  emitPair(9, "$DIMTDEC");
+  emitPair(70, "4");
+  emitPair(9, "$DIMALTU");
+  emitPair(70, "2");
+  emitPair(9, "$DIMALTTD");
+  emitPair(70, "2");
+  emitPair(9, "$DIMTXSTY");
+  emitPair(7, "Standard");
+  emitPair(9, "$DIMAUNIT");
+  emitPair(70, "0");
+  emitPair(9, "$DIMADEC");
+  emitPair(70, "0");
+  emitPair(9, "$DIMALTRND");
+  emitPair(40, "0.0");
+  emitPair(9, "$DIMAZIN");
+  emitPair(70, "0");
+  emitPair(9, "$DIMDSEP");
+  emitPair(70, "46");
+  emitPair(9, "$DIMATFIT");
+  emitPair(70, "3");
+  emitPair(9, "$DIMFRAC");
+  emitPair(70, "0");
+  emitPair(9, "$DIMLDRBLK");
+  emitPair(1, "");
+  emitPair(9, "$DIMLUNIT");
+  emitPair(70, "2");
+  emitPair(9, "$DIMLWD");
+  emitPair(70, "-2");
+  emitPair(9, "$DIMLWE");
+  emitPair(70, "-2");
+  emitPair(9, "$DIMTMOVE");
+  emitPair(70, "0");
+  emitPair(9, "$HANDSEED");
+  emitPair(5, handSeedBuf);
+  emitPair(0, "ENDSEC");
+
+  // DXF R13+: CLASSES is required (may be empty). See ezdxf "DXF File Structure" / Autodesk DXF reference.
+  emitPair(0, "SECTION");
+  emitPair(2, "CLASSES");
   emitPair(0, "ENDSEC");
 
   emitPair(0, "SECTION");
   emitPair(2, "TABLES");
+
+  emitPair(0, "TABLE");
+  emitPair(2, "LTYPE");
+  emitPair(5, "3");
+  emitPair(100, "AcDbSymbolTable");
+  emitPair(70, "3");
+  emitPair(0, "LTYPE");
+  emitPair(5, "4");
+  emitPair(100, "AcDbSymbolTableRecord");
+  emitPair(100, "AcDbLinetypeTableRecord");
+  emitPair(2, "ByBlock");
+  emitPair(70, "0");
+  emitPair(3, "");
+  emitPair(72, "65");
+  emitPair(73, "0");
+  emitPair(40, "0.0");
+  emitPair(0, "LTYPE");
+  emitPair(5, "5");
+  emitPair(100, "AcDbSymbolTableRecord");
+  emitPair(100, "AcDbLinetypeTableRecord");
+  emitPair(2, "ByLayer");
+  emitPair(70, "0");
+  emitPair(3, "");
+  emitPair(72, "65");
+  emitPair(73, "0");
+  emitPair(40, "0.0");
+  emitPair(0, "LTYPE");
+  emitPair(5, "6");
+  emitPair(100, "AcDbSymbolTableRecord");
+  emitPair(100, "AcDbLinetypeTableRecord");
+  emitPair(2, "Continuous");
+  emitPair(70, "0");
+  emitPair(3, "Solid line");
+  emitPair(72, "65");
+  emitPair(73, "0");
+  emitPair(40, "0.0");
+  emitPair(0, "ENDTAB");
+
+  emitPair(0, "TABLE");
+  emitPair(2, "STYLE");
+  emitPair(5, "7");
+  emitPair(100, "AcDbSymbolTable");
+  emitPair(70, "1");
+  emitPair(0, "STYLE");
+  emitPair(5, "8");
+  emitPair(100, "AcDbSymbolTableRecord");
+  emitPair(100, "AcDbTextStyleTableRecord");
+  emitPair(2, "Standard");
+  emitPair(70, "0");
+  emitPair(40, "0.0");
+  emitPair(41, "1.0");
+  emitPair(50, "0.0");
+  emitPair(71, "0");
+  emitPair(42, "2.5");
+  emitPair(3, "txt");
+  emitPair(0, "ENDTAB");
+
   emitPair(0, "TABLE");
   emitPair(2, "LAYER");
   emitPair(5, "2");
   emitPair(100, "AcDbSymbolTable");
-  emitPair(70, std::to_string(static_cast<int>(layerNames.size())));
+  emitPair(70, std::to_string(static_cast<int>(std::max<size_t>(1, nLayerRows))));
 
-  uint32_t handle = 0x10;
+  uint32_t layerRowHandle = 0x10;
   for (const std::string& lyr : layerNames) {
     char hbuf[16];
-    std::snprintf(hbuf, sizeof(hbuf), "%X", handle++);
+    std::snprintf(hbuf, sizeof(hbuf), "%X", layerRowHandle++);
     uint32_t lr = DxfRgbPackedFromAci(7);
     auto it = layerRgbHint.find(lyr);
     if (it != layerRgbHint.end())
@@ -1617,30 +2041,220 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
 
     emitPair(0, "LAYER");
     emitPair(5, hbuf);
+    emitPair(330, "2");
     emitPair(100, "AcDbSymbolTableRecord");
     emitPair(100, "AcDbLayerTableRecord");
     emitPair(2, lyr);
     emitPair(70, "0");
     emitPair(62, std::to_string(lac));
     emitPair(6, "Continuous");
+    emitPair(290, "1");
     emitPair(370, "-3");
+    emitPair(390, hObjPlotPh);
   }
 
   emitPair(0, "ENDTAB");
+
+  emitPair(0, "TABLE");
+  emitPair(2, "VPORT");
+  emitPair(5, hVportTab);
+  emitPair(100, "AcDbSymbolTable");
+  emitPair(70, "1");
+  emitPair(0, "VPORT");
+  emitPair(5, hVportAct);
+  emitPair(100, "AcDbSymbolTableRecord");
+  emitPair(100, "AcDbViewportTableRecord");
+  emitPair(2, "*Active");
+  emitPair(70, "0");
+  emitPair(10, "0.0");
+  emitPair(20, "0.0");
+  emitPair(11, "1.0");
+  emitPair(21, "1.0");
+  emitPair(12, std::to_string(vCx));
+  emitPair(22, std::to_string(vCy));
+  emitPair(13, "0.0");
+  emitPair(23, "0.0");
+  emitPair(14, "10.0");
+  emitPair(24, "10.0");
+  emitPair(15, "10.0");
+  emitPair(25, "10.0");
+  emitPair(16, "0.0");
+  emitPair(26, "0.0");
+  emitPair(36, "1.0");
+  emitPair(17, "0.0");
+  emitPair(27, "0.0");
+  emitPair(37, "0.0");
+  emitPair(40, std::to_string(vViewH));
+  emitPair(41, std::to_string(vAsp));
+  emitPair(42, "50.0");
+  emitPair(43, "0.0");
+  emitPair(44, "0.0");
+  emitPair(50, "0.0");
+  emitPair(51, "0.0");
+  emitPair(71, "0");
+  emitPair(72, "100");
+  emitPair(73, "1");
+  emitPair(74, "3");
+  emitPair(75, "0");
+  emitPair(76, "0");
+  emitPair(77, "0");
+  emitPair(78, "0");
+  emitPair(281, "0");
+  emitPair(65, "1");
+  emitPair(110, "0.0");
+  emitPair(120, "0.0");
+  emitPair(130, "0.0");
+  emitPair(111, "1.0");
+  emitPair(121, "0.0");
+  emitPair(131, "0.0");
+  emitPair(112, "0.0");
+  emitPair(122, "1.0");
+  emitPair(132, "0.0");
+  emitPair(79, "0");
+  emitPair(146, "0.0");
+  emitPair(0, "ENDTAB");
+
+  emitPair(0, "TABLE");
+  emitPair(2, "VIEW");
+  emitPair(5, hViewTab);
+  emitPair(330, "0");
+  emitPair(100, "AcDbSymbolTable");
+  emitPair(70, "0");
+  emitPair(0, "ENDTAB");
+
+  emitPair(0, "TABLE");
+  emitPair(2, "UCS");
+  emitPair(5, hUcsTab);
+  emitPair(330, "0");
+  emitPair(100, "AcDbSymbolTable");
+  emitPair(70, "0");
+  emitPair(0, "ENDTAB");
+
+  emitPair(0, "TABLE");
+  emitPair(2, "APPID");
+  emitPair(5, hAppidTab);
+  emitPair(100, "AcDbSymbolTable");
+  emitPair(70, "1");
+  emitPair(0, "APPID");
+  emitPair(5, hAppidAcad);
+  emitPair(100, "AcDbSymbolTableRecord");
+  emitPair(100, "AcDbRegAppTableRecord");
+  emitPair(2, "ACAD");
+  emitPair(70, "0");
+  emitPair(0, "ENDTAB");
+
+  emitPair(0, "TABLE");
+  emitPair(2, "DIMSTYLE");
+  emitPair(5, hDimTab);
+  emitPair(100, "AcDbSymbolTable");
+  emitPair(70, "1");
+  emitPair(100, "AcDbDimStyleTable");
+  emitPair(71, "1");
+  emitPair(0, "DIMSTYLE");
+  emitPair(105, hDimStd);
+  emitPair(330, hDimTab);
+  emitPair(100, "AcDbSymbolTableRecord");
+  emitPair(100, "AcDbDimStyleTableRecord");
+  emitPair(2, "Standard");
+  emitPair(70, "0");
+  emitPair(3, "");
+  emitPair(40, "1.0");
+  emitPair(41, "2.5");
+  emitPair(42, "0.625");
+  emitPair(43, "3.75");
+  emitPair(44, "1.25");
+  emitPair(45, "0.0");
+  emitPair(46, "0.0");
+  emitPair(47, "0.0");
+  emitPair(48, "0.0");
+  emitPair(140, "2.5");
+  emitPair(141, "2.5");
+  emitPair(142, "0.625");
+  emitPair(143, "0.03937007874016");
+  emitPair(144, "1.0");
+  emitPair(145, "0.0");
+  emitPair(146, "0.0");
+  emitPair(147, "0.625");
+  emitPair(148, "0.0");
+  emitPair(71, "0");
+  emitPair(72, "0");
+  emitPair(73, "0");
+  emitPair(74, "0");
+  emitPair(75, "0");
+  emitPair(0, "ENDTAB");
+
+  emitPair(0, "TABLE");
+  emitPair(2, "BLOCK_RECORD");
+  emitPair(5, hBrTab);
+  emitPair(100, "AcDbSymbolTable");
+  emitPair(70, "2");
+  emitPair(0, "BLOCK_RECORD");
+  emitPair(5, hBrModel);
+  emitPair(100, "AcDbSymbolTableRecord");
+  emitPair(100, "AcDbBlockTableRecord");
+  emitPair(2, "*Model_Space");
+  emitPair(70, "0");
+  emitPair(280, "1");
+  emitPair(281, "0");
+  emitPair(0, "BLOCK_RECORD");
+  emitPair(5, hBrPaper);
+  emitPair(100, "AcDbSymbolTableRecord");
+  emitPair(100, "AcDbBlockTableRecord");
+  emitPair(2, "*Paper_Space");
+  emitPair(70, "0");
+  emitPair(280, "1");
+  emitPair(281, "0");
+  emitPair(0, "ENDTAB");
+
   emitPair(0, "ENDSEC");
 
   emitPair(0, "SECTION");
   emitPair(2, "BLOCKS");
+  emitPair(0, "BLOCK");
+  emitPair(5, hBlkM0);
+  emitPair(330, hBrModel);
+  emitPair(100, "AcDbEntity");
+  emitPair(8, "0");
+  emitPair(100, "AcDbBlockBegin");
+  emitPair(2, "*Model_Space");
+  emitPair(70, "0");
+  emitPair(10, "0.0");
+  emitPair(20, "0.0");
+  emitPair(30, "0.0");
+  emitPair(3, "*Model_Space");
+  emitPair(0, "ENDBLK");
+  emitPair(5, hBlkM1);
+  emitPair(330, hBrModel);
+  emitPair(100, "AcDbEntity");
+  emitPair(8, "0");
+  emitPair(100, "AcDbBlockEnd");
+  emitPair(0, "BLOCK");
+  emitPair(5, hBlkP0);
+  emitPair(330, hBrPaper);
+  emitPair(100, "AcDbEntity");
+  emitPair(8, "0");
+  emitPair(100, "AcDbBlockBegin");
+  emitPair(2, "*Paper_Space");
+  emitPair(70, "1");
+  emitPair(10, "0.0");
+  emitPair(20, "0.0");
+  emitPair(30, "0.0");
+  emitPair(3, "*Paper_Space");
+  emitPair(0, "ENDBLK");
+  emitPair(5, hBlkP1);
+  emitPair(330, hBrPaper);
+  emitPair(100, "AcDbEntity");
+  emitPair(8, "0");
+  emitPair(100, "AcDbBlockEnd");
   emitPair(0, "ENDSEC");
 
   emitPair(0, "SECTION");
   emitPair(2, "ENTITIES");
 
-  const size_t nSeg = st.userLinesFlat.size() / 6;
-  handle = 0x1000;
+  uint64_t entHandle = entityHandleStart;
   for (size_t i = 0; i < nSeg; ++i) {
-    char hb[16];
-    std::snprintf(hb, sizeof(hb), "%X", handle++);
+    char hb[24];
+    std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
     const float x0 = st.userLinesFlat[i * 6 + 0];
     const float y0 = st.userLinesFlat[i * 6 + 1];
     const float z0 = st.userLinesFlat[i * 6 + 2];
@@ -1652,13 +2266,16 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
       at = st.userLineAttrs[i];
     const uint32_t rgb =
         AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+    const int entAci = DxfNearestAciFromRgbPacked(rgb);
 
     emitPair(0, "LINE");
     emitPair(5, hb);
+    emitPair(330, hBrModel);
     emitPair(100, "AcDbEntity");
     emitPair(8, at.layer.empty() ? std::string("0") : at.layer);
-    emitPair(62, "256");
-    emitPair(420, std::to_string(static_cast<int>(rgb)));
+    emitPair(6, "Continuous");
+    emitPair(62, std::to_string(entAci));
+    emitPair(370, "-3");
     emitPair(100, "AcDbLine");
     emitPair(10, std::to_string(static_cast<double>(x0) + kExpOx));
     emitPair(20, std::to_string(static_cast<double>(y0) + kExpOy));
@@ -1666,32 +2283,70 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
     emitPair(11, std::to_string(static_cast<double>(x1) + kExpOx));
     emitPair(21, std::to_string(static_cast<double>(y1) + kExpOy));
     emitPair(31, std::to_string(static_cast<double>(z1)));
+    emitPair(210, "0.0");
+    emitPair(220, "0.0");
+    emitPair(230, "1.0");
   }
 
-  const size_t nCirc = st.userCirclesCxCyR.size() / 3;
   for (size_t ci = 0; ci < nCirc; ++ci) {
-    char hb[16];
-    std::snprintf(hb, sizeof(hb), "%X", handle++);
+    char hb[24];
+    std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
     EntityAttributes at{};
     if (ci < st.userCircleAttrs.size())
       at = st.userCircleAttrs[ci];
     const uint32_t rgb =
         AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+    const int entAci = DxfNearestAciFromRgbPacked(rgb);
     const float cx = st.userCirclesCxCyR[ci * 3];
     const float cy = st.userCirclesCxCyR[ci * 3 + 1];
     const float rr = st.userCirclesCxCyR[ci * 3 + 2];
 
     emitPair(0, "CIRCLE");
     emitPair(5, hb);
+    emitPair(330, hBrModel);
     emitPair(100, "AcDbEntity");
     emitPair(8, at.layer.empty() ? std::string("0") : at.layer);
-    emitPair(62, "256");
-    emitPair(420, std::to_string(static_cast<int>(rgb)));
+    emitPair(6, "Continuous");
+    emitPair(62, std::to_string(entAci));
+    emitPair(370, "-3");
     emitPair(100, "AcDbCircle");
     emitPair(10, std::to_string(static_cast<double>(cx) + kExpOx));
     emitPair(20, std::to_string(static_cast<double>(cy) + kExpOy));
     emitPair(30, "0.0");
     emitPair(40, std::to_string(static_cast<double>(rr)));
+    emitPair(210, "0.0");
+    emitPair(220, "0.0");
+    emitPair(230, "1.0");
+  }
+
+  size_t nPointOut = 0;
+  for (const SurveyPoint& p : st.surveyPoints) {
+    char hb[24];
+    std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+    EntityAttributes at{};
+    at.layer = p.layer.empty() ? std::string("0") : p.layer;
+    at.color = "ByLayer";
+    const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+    const int entAci = DxfNearestAciFromRgbPacked(rgb);
+    const std::string layer = at.layer;
+
+    emitPair(0, "POINT");
+    emitPair(5, hb);
+    emitPair(330, hBrModel);
+    emitPair(100, "AcDbEntity");
+    emitPair(8, layer);
+    emitPair(6, "Continuous");
+    emitPair(62, std::to_string(entAci));
+    emitPair(370, "-3");
+    emitPair(100, "AcDbPoint");
+    emitPair(10, std::to_string(static_cast<double>(p.easting) + kExpOx));
+    emitPair(20, std::to_string(static_cast<double>(p.northing) + kExpOy));
+    emitPair(30, std::to_string(static_cast<double>(p.elevation)));
+    emitPair(39, "0.0");
+    emitPair(210, "0.0");
+    emitPair(220, "0.0");
+    emitPair(230, "1.0");
+    ++nPointOut;
   }
 
   auto sanitizeDxfText = [](std::string t) {
@@ -1702,7 +2357,6 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
     return t;
   };
 
-  constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
   size_t nTextOut = 0;
   size_t nMtextOut = 0;
   size_t nDimExplodedLines = 0;
@@ -1713,25 +2367,35 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
       at = st.cadAnnotationAttrs[ai];
     const uint32_t rgb =
         AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+    const int entAci = DxfNearestAciFromRgbPacked(rgb);
     const std::string layer = at.layer.empty() ? std::string("0") : at.layer;
 
     if (an.kind == CadAnnotation::Kind::Text) {
-      char hb[16];
-      std::snprintf(hb, sizeof(hb), "%X", handle++);
+      char hb[24];
+      std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
       const std::string txt = sanitizeDxfText(an.text);
-      const double rotDeg = static_cast<double>(an.rotationRad) * kRadToDeg;
+      const double rotRad = static_cast<double>(an.rotationRad);
       emitPair(0, "TEXT");
       emitPair(5, hb);
+      emitPair(330, hBrModel);
       emitPair(100, "AcDbEntity");
       emitPair(8, layer);
-      emitPair(62, "256");
-      emitPair(420, std::to_string(static_cast<int>(rgb)));
+      emitPair(6, "Continuous");
+      emitPair(7, "Standard");
+      emitPair(62, std::to_string(entAci));
+      emitPair(370, "-3");
       emitPair(100, "AcDbText");
       emitPair(10, std::to_string(static_cast<double>(an.insX) + kExpOx));
       emitPair(20, std::to_string(static_cast<double>(an.insY) + kExpOy));
       emitPair(30, "0.0");
       emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch))));
-      emitPair(50, std::to_string(rotDeg));
+      emitPair(50, std::to_string(rotRad));
+      emitPair(71, "0");
+      emitPair(72, "0");
+      emitPair(73, "0");
+      emitPair(210, "0.0");
+      emitPair(220, "0.0");
+      emitPair(230, "1.0");
       emitPair(1, txt);
       ++nTextOut;
     } else if (an.kind == CadAnnotation::Kind::DimAligned) {
@@ -1749,14 +2413,16 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
       const float ex2 = an.dimExt2X + (sx2 - an.dimExt2X) * u2;
       const float ey2 = an.dimExt2Y + (sy2 - an.dimExt2Y) * u2;
       auto emitLine = [&](float x0, float y0, float x1, float y1) {
-        char hb[16];
-        std::snprintf(hb, sizeof(hb), "%X", handle++);
+        char hb[24];
+        std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
         emitPair(0, "LINE");
         emitPair(5, hb);
+        emitPair(330, hBrModel);
         emitPair(100, "AcDbEntity");
         emitPair(8, layer);
-        emitPair(62, "256");
-        emitPair(420, std::to_string(static_cast<int>(rgb)));
+        emitPair(6, "Continuous");
+        emitPair(62, std::to_string(entAci));
+        emitPair(370, "-3");
         emitPair(100, "AcDbLine");
         emitPair(10, std::to_string(static_cast<double>(x0) + kExpOx));
         emitPair(20, std::to_string(static_cast<double>(y0) + kExpOy));
@@ -1764,59 +2430,116 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
         emitPair(11, std::to_string(static_cast<double>(x1) + kExpOx));
         emitPair(21, std::to_string(static_cast<double>(y1) + kExpOy));
         emitPair(31, "0.0");
+        emitPair(210, "0.0");
+        emitPair(220, "0.0");
+        emitPair(230, "1.0");
         ++nDimExplodedLines;
       };
       emitLine(ex1, ey1, sx1 + nx * over, sy1 + ny * over);
       emitLine(ex2, ey2, sx2 + nx * over, sy2 + ny * over);
       emitLine(sx1, sy1, sx2, sy2);
-      char hb[16];
-      std::snprintf(hb, sizeof(hb), "%X", handle++);
+      char hb[24];
+      std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
       const std::string txt = sanitizeDxfText(an.text);
-      const double rotDeg = static_cast<double>(an.rotationRad) * kRadToDeg;
+      const double rotRad = static_cast<double>(an.rotationRad);
       emitPair(0, "TEXT");
       emitPair(5, hb);
+      emitPair(330, hBrModel);
       emitPair(100, "AcDbEntity");
       emitPair(8, layer);
-      emitPair(62, "256");
-      emitPair(420, std::to_string(static_cast<int>(rgb)));
+      emitPair(6, "Continuous");
+      emitPair(7, "Standard");
+      emitPair(62, std::to_string(entAci));
+      emitPair(370, "-3");
       emitPair(100, "AcDbText");
       emitPair(10, std::to_string(static_cast<double>(an.insX) + kExpOx));
       emitPair(20, std::to_string(static_cast<double>(an.insY) + kExpOy));
       emitPair(30, "0.0");
       emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch))));
-      emitPair(50, std::to_string(rotDeg));
+      emitPair(50, std::to_string(rotRad));
+      emitPair(71, "0");
+      emitPair(72, "0");
+      emitPair(73, "0");
+      emitPair(210, "0.0");
+      emitPair(220, "0.0");
+      emitPair(230, "1.0");
       emitPair(1, txt);
       ++nTextOut;
     } else {
-      char hb[16];
-      std::snprintf(hb, sizeof(hb), "%X", handle++);
+      char hb[24];
+      std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
       const std::string txt = sanitizeDxfText(MtextRichFlattenToPlain(an.text));
       const float bw =
           std::max(1.f, std::fabs(an.boxMaxX - an.boxMinX));
+      const double rotRad = static_cast<double>(an.rotationRad);
+      const double m11 = std::cos(rotRad);
+      const double m21 = std::sin(rotRad);
       emitPair(0, "MTEXT");
       emitPair(5, hb);
+      emitPair(330, hBrModel);
       emitPair(100, "AcDbEntity");
       emitPair(8, layer);
-      emitPair(62, "256");
-      emitPair(420, std::to_string(static_cast<int>(rgb)));
+      emitPair(6, "Continuous");
+      emitPair(7, "Standard");
+      emitPair(62, std::to_string(entAci));
+      emitPair(370, "-3");
       emitPair(100, "AcDbMText");
       emitPair(10, std::to_string(static_cast<double>(an.insX) + kExpOx));
       emitPair(20, std::to_string(static_cast<double>(an.insY) + kExpOy));
       emitPair(30, "0.0");
       emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch))));
       emitPair(41, std::to_string(static_cast<double>(bw)));
-      emitPair(50, "0.0");
       emitPair(71, "1");
+      emitPair(72, "0");
+      emitPair(11, std::to_string(m11));
+      emitPair(21, std::to_string(m21));
+      emitPair(31, "0.0");
+      emitPair(50, std::to_string(rotRad));
+      emitPair(210, "0.0");
+      emitPair(220, "0.0");
+      emitPair(230, "1.0");
       emitPair(1, txt);
       ++nMtextOut;
     }
   }
 
   emitPair(0, "ENDSEC");
+
+  // Named object dictionary: ACAD_GROUP + ACAD_PLOTSTYLENAME (required for LAYER group 390).
+  emitPair(0, "SECTION");
+  emitPair(2, "OBJECTS");
+  emitPair(0, "DICTIONARY");
+  emitPair(5, hObjRoot);
+  emitPair(330, "0");
+  emitPair(100, "AcDbDictionary");
+  emitPair(281, "1");
+  emitPair(3, "ACAD_GROUP");
+  emitPair(350, hObjAcadGroup);
+  emitPair(3, "ACAD_PLOTSTYLENAME");
+  emitPair(350, hObjPlotDict);
+  emitPair(0, "DICTIONARY");
+  emitPair(5, hObjAcadGroup);
+  emitPair(330, hObjRoot);
+  emitPair(100, "AcDbDictionary");
+  emitPair(281, "1");
+  emitPair(0, "ACDBPLACEHOLDER");
+  emitPair(5, hObjPlotPh);
+  emitPair(330, hObjPlotDict);
+  emitPair(0, "ACDBDICTIONARYWDFLT");
+  emitPair(5, hObjPlotDict);
+  emitPair(330, hObjRoot);
+  emitPair(100, "AcDbDictionary");
+  emitPair(281, "1");
+  emitPair(3, "Normal");
+  emitPair(350, hObjPlotPh);
+  emitPair(100, "AcDbDictionaryWithDefault");
+  emitPair(340, hObjPlotPh);
+  emitPair(0, "ENDSEC");
+
   emitPair(0, "EOF");
 
   log.push_back("DXF export — wrote " + std::to_string(nSeg) + " LINE(s), " + std::to_string(nCirc) + " CIRCLE(s), " +
-                std::to_string(nTextOut) + " TEXT, " + std::to_string(nMtextOut) + " MTEXT, " +
-                std::to_string(nDimExplodedLines) + " LINE(s) from dimensions.");
+                std::to_string(nPointOut) + " POINT(s), " + std::to_string(nTextOut) + " TEXT, " +
+                std::to_string(nMtextOut) + " MTEXT, " + std::to_string(nDimExplodedLines) + " LINE(s) from dimensions.");
   return true;
 }
