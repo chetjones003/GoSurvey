@@ -7,11 +7,26 @@ GoSurvey is a desktop drafting and survey-helper: a **CAD-style drawing** with o
 ## Download and run (Windows)
 
 1. Open **[Releases](https://github.com/chetjones003/GoSurvey/releases)** for this repository.
-2. Under the latest release (or a specific version), download the Windows asset—typically a **`.zip`** containing the executable, or a standalone **`.exe`** if that is what is published.
-3. If you downloaded a **zip**, extract all files to a folder where you are allowed to run programs (e.g. your Desktop or `Documents`).
-4. Run the **`GoSurvey` executable** from the release (for example **`GoSurvey-0.2.0.exe`** — the version in the filename matches the release). There is no separate installer if the release is distributed as a portable build.
-5. **SmartScreen**: Windows may show “Windows protected your PC” for apps that are not code-signed. If you trust this release, choose **More info** → **Run anyway**.
-6. If the app fails to start with a message about a **missing Microsoft runtime DLL**, install the latest **[Visual C++ Redistributable for x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)** from Microsoft, then try again.
+2. Under the latest release (or a specific version), download the Windows **`.zip`** portable bundle (the executable plus supporting folders—see below).
+3. **Extract the entire zip** to any folder you like (for example Desktop, `Documents`, or a tools directory). You may rename that folder after extraction; the path does not matter as long as the **contents stay together**.
+4. **Keep the folder layout intact.** The zip is meant to look like this after extraction (the exact `.exe` name may include a version, e.g. `GoSurvey-0.2.1.exe`):
+
+   ```text
+   YourFolder\
+     GoSurvey-<version>.exe
+     icons\
+     resources\
+   ```
+
+   Do **not** move only the executable somewhere else. The **`icons`** and **`resources`** folders must remain **next to the same `.exe`** you run. The app loads the window/splash artwork from **`icons`**, and the default startup drawing template from **`resources`** (among other bundled files).
+
+5. **Run the program from that folder.** Double-click the executable **inside** the folder that contains **`icons`** and **`resources`**, or start it from a shortcut whose **“Start in”** (working directory) is that folder. If you run the `.exe` from a different location while the support folders are left behind, icons and the default template may not load correctly.
+
+6. There is no separate installer for the portable zip build.
+
+7. **SmartScreen**: Windows may show “Windows protected your PC” for apps that are not code-signed. If you trust this release, choose **More info** → **Run anyway**.
+
+8. If the app fails to start with a message about a **missing Microsoft runtime DLL**, install the latest **[Visual C++ Redistributable for x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)** from Microsoft, then try again.
 
 To build from source instead, clone the repo, install CMake and a C++17 toolchain with OpenGL, configure with CMake, and build the `GoSurvey` target (see `CMakeLists.txt`).
 
