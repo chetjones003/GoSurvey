@@ -6,9 +6,13 @@ struct GLFWwindow;
 /// Also requests a transparent framebuffer so the desktop can show outside the splash card (OS-dependent).
 void GlfwApplySplashStageWindowHints();
 
-/// After splash: title bar on, resizable, maximize, and app title (main CAD shell).
+/// After splash: main CAD shell window chrome (borderless + custom controls on Windows; decorated on
+/// other platforms), resizable, maximized, taskbar title.
 void GlfwApplyMainStageWindowChrome(GLFWwindow* window);
 
-/// Centered splash card (~⅓ of the work area) on a dimmed full-screen backdrop; theme colors; tries
-/// `icons/main_logo.png` first (near-white keyed to transparent), then `logo.png`, `white_logo2.png`.
+/// Windows: custom caption strip (drag, min / max / close). No-op elsewhere.
+void DrawMainWindowTitleBar(GLFWwindow* window);
+
+/// Centered splash card (~⅓ of the work area) on a dimmed full-screen backdrop; theme colors; logo from
+/// \ref ResolveAppLogoPngPath (`icons/bitmap.png` or `bitmap.png`).
 void RunStartupSplash(GLFWwindow* window, double durationSec = 2.0);

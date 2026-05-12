@@ -1,5 +1,6 @@
 #include "ViewportRenderer.hpp"
 
+#include "CadLinetype.hpp"
 #include "CadSnap.hpp"
 
 #include <GL/glew.h>
@@ -8,6 +9,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace {
@@ -111,106 +113,32 @@ void AppendCircleLineApprox(std::vector<float>& out, float cx, float cy, float r
   }
 }
 
-void AppendCircleLineApproxVc(std::vector<float>& out, float cx, float cy, float r, int segments, float z,
-                              const float* rgba) {
-  if (r <= 1e-6f)
-    return;
-  const float twoPi = 6.28318530718f;
-  for (int i = 0; i < segments; ++i) {
-    const float t0 = twoPi * static_cast<float>(i) / static_cast<float>(segments);
-    const float t1 = twoPi * static_cast<float>(i + 1) / static_cast<float>(segments);
-    const float x0 = cx + r * std::cos(t0);
-    const float y0 = cy + r * std::sin(t0);
-    const float x1 = cx + r * std::cos(t1);
-    const float y1 = cy + r * std::sin(t1);
-    out.push_back(x0);
-    out.push_back(y0);
-    out.push_back(z);
-    out.push_back(rgba[0]);
-    out.push_back(rgba[1]);
-    out.push_back(rgba[2]);
-    out.push_back(rgba[3]);
-    out.push_back(x1);
-    out.push_back(y1);
-    out.push_back(z);
-    out.push_back(rgba[0]);
-    out.push_back(rgba[1]);
-    out.push_back(rgba[2]);
-    out.push_back(rgba[3]);
+const CadLayerRow* LookupLayerRowCi(const std::vector<CadLayerRow>* layers, const std::string& layerName) {
+  if (!layers)
+    return nullptr;
+  for (const auto& r : *layers) {
+    if (r.name.size() != layerName.size())
+      continue;
+    bool eq = true;
+    for (size_t i = 0; i < r.name.size(); ++i) {
+      if (std::tolower(static_cast<unsigned char>(r.name[i])) !=
+          std::tolower(static_cast<unsigned char>(layerName[i]))) {
+        eq = false;
+        break;
+      }
+    }
+    if (eq)
+      return &r;
   }
+  return nullptr;
 }
 
-void AppendArcLineApproxVc(std::vector<float>& out, const CadArc& a, int segments, float z,
-                           const float* rgba) {
-  if (a.r <= 1e-6f || segments < 2)
-    return;
-  for (int i = 0; i < segments; ++i) {
-    const float u0 = static_cast<float>(i) / static_cast<float>(segments);
-    const float u1 = static_cast<float>(i + 1) / static_cast<float>(segments);
-    const float t0 = a.startRad + a.sweepRad * u0;
-    const float t1 = a.startRad + a.sweepRad * u1;
-    const float x0 = a.cx + a.r * std::cos(t0);
-    const float y0 = a.cy + a.r * std::sin(t0);
-    const float x1 = a.cx + a.r * std::cos(t1);
-    const float y1 = a.cy + a.r * std::sin(t1);
-    out.push_back(x0);
-    out.push_back(y0);
-    out.push_back(z);
-    out.push_back(rgba[0]);
-    out.push_back(rgba[1]);
-    out.push_back(rgba[2]);
-    out.push_back(rgba[3]);
-    out.push_back(x1);
-    out.push_back(y1);
-    out.push_back(z);
-    out.push_back(rgba[0]);
-    out.push_back(rgba[1]);
-    out.push_back(rgba[2]);
-    out.push_back(rgba[3]);
-  }
-}
-
-void AppendEllipseLineApproxVc(std::vector<float>& out, const CadEllipse& el, int segments, float z,
-                               const float* rgba) {
-  const float ma = std::hypot(el.majVx, el.majVy);
-  if (ma < 1e-8f || segments < 3)
-    return;
-  const float ux = el.majVx / ma;
-  const float uy = el.majVy / ma;
-  const float px = -uy;
-  const float py = ux;
-  const float mb = ma * el.ratio;
-  constexpr float twopi = 6.28318530718f;
-  for (int i = 0; i < segments; ++i) {
-    const float u0 = twopi * static_cast<float>(i) / static_cast<float>(segments);
-    const float u1 = twopi * static_cast<float>(i + 1) / static_cast<float>(segments);
-    const float c0 = std::cos(u0);
-    const float s0 = std::sin(u0);
-    const float c1 = std::cos(u1);
-    const float s1 = std::sin(u1);
-    const float x0 = el.cx + ux * (ma * c0) + px * (mb * s0);
-    const float y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
-    const float x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
-    const float y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
-    out.push_back(x0);
-    out.push_back(y0);
-    out.push_back(z);
-    out.push_back(rgba[0]);
-    out.push_back(rgba[1]);
-    out.push_back(rgba[2]);
-    out.push_back(rgba[3]);
-    out.push_back(x1);
-    out.push_back(y1);
-    out.push_back(z);
-    out.push_back(rgba[0]);
-    out.push_back(rgba[1]);
-    out.push_back(rgba[2]);
-    out.push_back(rgba[3]);
-  }
+float LineweightMmToDevicePx(float mm) {
+  return std::clamp(0.65f + mm * 5.25f, 1.f, 16.f);
 }
 
 void AppendPolylineEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput& eg, float z, float defR,
-                           float defG, float defB) {
+                           float defG, float defB, float dashPatScale) {
   const auto* V = eg.polylineVerts;
   const auto* O = eg.polylineOffsets;
   const auto* Cl = eg.polylineClosed;
@@ -218,49 +146,91 @@ void AppendPolylineEdgesVc(std::vector<float>& out, const CadExtendedGeometryInp
   if (!V || !O || O->size() < 2)
     return;
   const int np = static_cast<int>(O->size()) - 1;
-  auto edge = [&](float x0, float y0, float x1, float y1, const float* rgba) {
-    out.push_back(x0);
-    out.push_back(y0);
-    out.push_back(z);
-    out.push_back(rgba[0]);
-    out.push_back(rgba[1]);
-    out.push_back(rgba[2]);
-    out.push_back(rgba[3]);
-    out.push_back(x1);
-    out.push_back(y1);
-    out.push_back(z);
-    out.push_back(rgba[0]);
-    out.push_back(rgba[1]);
-    out.push_back(rgba[2]);
-    out.push_back(rgba[3]);
-  };
   for (int pi = 0; pi < np; ++pi) {
     EntityAttributes attr{};
     if (At && static_cast<size_t>(pi) < At->size())
       attr = (*At)[static_cast<size_t>(pi)];
+    const CadLayerRow* lr = LookupLayerRowCi(eg.drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
     float rgba[4];
-    ResolveEntityColorForViewport(attr, defR, defG, defB, rgba);
+    ResolveEntityRgbaForViewport(attr, lr, defR, defG, defB, rgba);
+    const std::string lt = EffectiveEntityLinetypeNameForViewport(attr, lr);
     const int v0 = (*O)[static_cast<size_t>(pi)];
     const int v1 = (*O)[static_cast<size_t>(pi + 1)];
     if (v0 >= v1)
       continue;
     const bool closed =
         Cl && static_cast<size_t>(pi) < Cl->size() && (*Cl)[static_cast<size_t>(pi)] != 0;
-    for (int vi = v0; vi + 1 < v1; ++vi) {
-      const float x0 = (*V)[static_cast<size_t>(vi * 3 + 0)];
-      const float y0 = (*V)[static_cast<size_t>(vi * 3 + 1)];
-      const float x1 = (*V)[static_cast<size_t>((vi + 1) * 3 + 0)];
-      const float y1 = (*V)[static_cast<size_t>((vi + 1) * 3 + 1)];
-      edge(x0, y0, x1, y1, rgba);
+    const int nv = v1 - v0;
+    if (nv < 2)
+      continue;
+    std::vector<float> xy(static_cast<size_t>(nv * 2));
+    for (int k = 0; k < nv; ++k) {
+      const int vi = v0 + k;
+      xy[static_cast<size_t>(k * 2)] = (*V)[static_cast<size_t>(vi * 3 + 0)];
+      xy[static_cast<size_t>(k * 2 + 1)] = (*V)[static_cast<size_t>(vi * 3 + 1)];
     }
-    if (closed && v1 - v0 >= 2) {
-      const float x0 = (*V)[static_cast<size_t>((v1 - 1) * 3 + 0)];
-      const float y0 = (*V)[static_cast<size_t>((v1 - 1) * 3 + 1)];
-      const float x1 = (*V)[static_cast<size_t>(v0 * 3 + 0)];
-      const float y1 = (*V)[static_cast<size_t>(v0 * 3 + 1)];
-      edge(x0, y0, x1, y1, rgba);
-    }
+    CadTessellateLinetypeChainVc(xy.data(), nv, z, closed, lt, dashPatScale, rgba, &out);
   }
+}
+
+void AppendArcVcDashed(std::vector<float>& out, const CadArc& a, int n, float z, float dashPatScale,
+                       const EntityAttributes& attr, const CadLayerRow* lr, float defR, float defG, float defB) {
+  if (a.r <= 1e-6f || n < 2)
+    return;
+  float rgba[4];
+  ResolveEntityRgbaForViewport(attr, lr, defR, defG, defB, rgba);
+  const std::string lt = EffectiveEntityLinetypeNameForViewport(attr, lr);
+  std::vector<float> xy(static_cast<size_t>((static_cast<size_t>(n) + 1u) * 2u));
+  for (int i = 0; i <= n; ++i) {
+    const float u = static_cast<float>(i) / static_cast<float>(n);
+    const float ang = a.startRad + a.sweepRad * u;
+    xy[static_cast<size_t>(i * 2)] = a.cx + a.r * std::cos(ang);
+    xy[static_cast<size_t>(i * 2 + 1)] = a.cy + a.r * std::sin(ang);
+  }
+  CadTessellateLinetypeChainVc(xy.data(), n + 1, z, false, lt, dashPatScale, rgba, &out);
+}
+
+void AppendEllipseVcDashed(std::vector<float>& out, const CadEllipse& el, int n, float z, float dashPatScale,
+                           const EntityAttributes& attr, const CadLayerRow* lr, float defR, float defG, float defB) {
+  const float ma = std::hypot(el.majVx, el.majVy);
+  if (ma < 1e-8f || n < 3)
+    return;
+  float rgba[4];
+  ResolveEntityRgbaForViewport(attr, lr, defR, defG, defB, rgba);
+  const std::string lt = EffectiveEntityLinetypeNameForViewport(attr, lr);
+  const float ux = el.majVx / ma;
+  const float uy = el.majVy / ma;
+  const float px = -uy;
+  const float py = ux;
+  const float mb = ma * el.ratio;
+  constexpr float twopi = 6.28318530718f;
+  std::vector<float> xy(static_cast<size_t>((static_cast<size_t>(n) + 1u) * 2u));
+  for (int i = 0; i <= n; ++i) {
+    const float u = twopi * static_cast<float>(i) / static_cast<float>(n);
+    const float c0 = std::cos(u);
+    const float s0 = std::sin(u);
+    xy[static_cast<size_t>(i * 2)] = el.cx + ux * (ma * c0) + px * (mb * s0);
+    xy[static_cast<size_t>(i * 2 + 1)] = el.cy + uy * (ma * c0) + py * (mb * s0);
+  }
+  CadTessellateLinetypeChainVc(xy.data(), n + 1, z, true, lt, dashPatScale, rgba, &out);
+}
+
+void AppendCircleVcDashed(std::vector<float>& out, float cx, float cy, float r, int segments, float z,
+                          float dashPatScale, const EntityAttributes& attr, const CadLayerRow* lr, float defR,
+                          float defG, float defB) {
+  if (r <= 1e-6f)
+    return;
+  float rgba[4];
+  ResolveEntityRgbaForViewport(attr, lr, defR, defG, defB, rgba);
+  const std::string lt = EffectiveEntityLinetypeNameForViewport(attr, lr);
+  const float twoPi = 6.28318530718f;
+  std::vector<float> xy(static_cast<size_t>((static_cast<size_t>(segments) + 1u) * 2u));
+  for (int i = 0; i <= segments; ++i) {
+    const float t = twoPi * static_cast<float>(i) / static_cast<float>(segments);
+    xy[static_cast<size_t>(i * 2)] = cx + r * std::cos(t);
+    xy[static_cast<size_t>(i * 2 + 1)] = cy + r * std::sin(t);
+  }
+  CadTessellateLinetypeChainVc(xy.data(), segments + 1, z, true, lt, dashPatScale, rgba, &out);
 }
 
 void AppendSnapSquareOutline(std::vector<float>& out, float cx, float cy, float z, float h) {
@@ -613,7 +583,8 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
                                    const std::vector<float>* surveyMarkers,
                                    const std::vector<EntityAttributes>* lineEntityAttrs,
                                    const std::vector<EntityAttributes>* circleEntityAttrs,
-                                   const CadExtendedGeometryInput* extended, bool showGrid) {
+                                   const CadExtendedGeometryInput* extended, bool showGrid,
+                                   const std::vector<CadLayerRow>* drawingLayers) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -741,41 +712,69 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
     if (cadGpuRevision != cachedCadGpuRevision_) {
       cpuVcLines_.clear();
       cpuVcCircles_.clear();
+      vcLineBatches_.clear();
+      vcCircleBatches_.clear();
+      const float dashPatScale = std::max(halfW, halfH) * 0.045f;
+
+      int lineVertTotal = 0;
+      int lineBatchStart = 0;
+      float lineBatchPx = -1.f;
+
+      auto maybeSplitLineBatch = [&](int vertsBefore, float nextPx) {
+        if (lineBatchPx < 0.f) {
+          lineBatchPx = nextPx;
+          return;
+        }
+        if (vertsBefore > lineBatchStart && std::fabs(nextPx - lineBatchPx) > 0.25f) {
+        vcLineBatches_.push_back(VcLineBatch{lineBatchStart, vertsBefore - lineBatchStart, lineBatchPx});
+          lineBatchStart = vertsBefore;
+          lineBatchPx = nextPx;
+        }
+      };
+
+      auto appendUserLineSeg = [&](const EntityAttributes& attr, float x0, float y0, float z0, float x1, float y1,
+                                   float z1, float dr, float dg, float db) {
+        const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
+        const int vertsBefore = static_cast<int>(cpuVcLines_.size() / 7);
+        float rgba[4];
+        ResolveEntityRgbaForViewport(attr, lr, dr, dg, db, rgba);
+        const std::string lt = EffectiveEntityLinetypeNameForViewport(attr, lr);
+        const float lwMm = EffectiveEntityLineweightMm(attr, lr);
+        const float pxw = LineweightMmToDevicePx(lwMm);
+        maybeSplitLineBatch(vertsBefore, pxw);
+        CadTessellateLinetypeSegmentVc(x0, y0, z0, x1, y1, z1, lt, dashPatScale, rgba, &cpuVcLines_);
+        lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
+      };
+
       if (hasLines) {
         const size_t nSeg = userLines.size() / 6;
-        cpuVcLines_.resize(nSeg * 14);
         for (size_t i = 0; i < nSeg; ++i) {
           EntityAttributes attr{};
           if (lineEntityAttrs && i < lineEntityAttrs->size())
             attr = (*lineEntityAttrs)[i];
-          float rgba[4];
-          ResolveEntityColorForViewport(attr, kLineDefaultR, kLineDefaultG, kLineDefaultB, rgba);
-          float* dst = &cpuVcLines_[i * 14];
-          dst[0] = userLines[i * 6 + 0];
-          dst[1] = userLines[i * 6 + 1];
-          dst[2] = userLines[i * 6 + 2];
-          dst[3] = rgba[0];
-          dst[4] = rgba[1];
-          dst[5] = rgba[2];
-          dst[6] = rgba[3];
-          dst[7] = userLines[i * 6 + 3];
-          dst[8] = userLines[i * 6 + 4];
-          dst[9] = userLines[i * 6 + 5];
-          dst[10] = rgba[0];
-          dst[11] = rgba[1];
-          dst[12] = rgba[2];
-          dst[13] = rgba[3];
+          appendUserLineSeg(attr, userLines[i * 6 + 0], userLines[i * 6 + 1], userLines[i * 6 + 2],
+                            userLines[i * 6 + 3], userLines[i * 6 + 4], userLines[i * 6 + 5], kLineDefaultR,
+                            kLineDefaultG, kLineDefaultB);
         }
       }
+      if (lineVertTotal > lineBatchStart && lineBatchPx >= 0.f)
+        vcLineBatches_.push_back(VcLineBatch{lineBatchStart, lineVertTotal - lineBatchStart, lineBatchPx});
+
       if (extended) {
+        lineBatchStart = lineVertTotal;
+        lineBatchPx = -1.f;
         if (extended->arcs) {
           for (size_t i = 0; i < extended->arcs->size(); ++i) {
             EntityAttributes attr{};
             if (extended->arcAttrs && i < extended->arcAttrs->size())
               attr = (*extended->arcAttrs)[i];
-            float rgba[4];
-            ResolveEntityColorForViewport(attr, kLineDefaultR, kLineDefaultG, kLineDefaultB, rgba);
-            AppendArcLineApproxVc(cpuVcLines_, (*extended->arcs)[i], 48, 0.f, rgba);
+            const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
+            const int vb = static_cast<int>(cpuVcLines_.size() / 7);
+            const float lwMm = EffectiveEntityLineweightMm(attr, lr);
+            maybeSplitLineBatch(vb, LineweightMmToDevicePx(lwMm));
+            AppendArcVcDashed(cpuVcLines_, (*extended->arcs)[i], 48, 0.f, dashPatScale, attr, lr, kLineDefaultR,
+                              kLineDefaultG, kLineDefaultB);
+            lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
         }
         if (extended->ellipses) {
@@ -783,27 +782,64 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
             EntityAttributes attr{};
             if (extended->ellAttrs && i < extended->ellAttrs->size())
               attr = (*extended->ellAttrs)[i];
-            float rgba[4];
-            ResolveEntityColorForViewport(attr, kLineDefaultR, kLineDefaultG, kLineDefaultB, rgba);
-            AppendEllipseLineApproxVc(cpuVcLines_, (*extended->ellipses)[i], 72, 0.f, rgba);
+            const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
+            const int vb = static_cast<int>(cpuVcLines_.size() / 7);
+            maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr, lr)));
+            AppendEllipseVcDashed(cpuVcLines_, (*extended->ellipses)[i], 72, 0.f, dashPatScale, attr, lr,
+                                   kLineDefaultR, kLineDefaultG, kLineDefaultB);
+            lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
         }
         if (extended->polylineVerts && extended->polylineOffsets) {
-          AppendPolylineEdgesVc(cpuVcLines_, *extended, 0.f, kLineDefaultR, kLineDefaultG, kLineDefaultB);
+          const int vb = static_cast<int>(cpuVcLines_.size() / 7);
+          // Polylines: split batch using first segment's weight (per-entity variation not batched here).
+          EntityAttributes attr0{};
+          if (extended->polylineAttrs && extended->polylineOffsets->size() >= 2 &&
+              !extended->polylineAttrs->empty())
+            attr0 = (*extended->polylineAttrs)[0];
+          const CadLayerRow* lr0 =
+              LookupLayerRowCi(drawingLayers, attr0.layer.empty() ? std::string("0") : attr0.layer);
+          maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr0, lr0)));
+          AppendPolylineEdgesVc(cpuVcLines_, *extended, 0.f, kLineDefaultR, kLineDefaultG, kLineDefaultB,
+                                dashPatScale);
+          lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
         }
+        if (lineVertTotal > lineBatchStart && lineBatchPx >= 0.f)
+          vcLineBatches_.push_back(VcLineBatch{lineBatchStart, lineVertTotal - lineBatchStart, lineBatchPx});
       }
+
       if (hasCircles) {
+        int circVert = 0;
+        int circBatchStart = 0;
+        float circBatchPx = -1.f;
+        auto maybeSplitCirc = [&](int vertsBefore, float nextPx) {
+          if (circBatchPx < 0.f) {
+            circBatchPx = nextPx;
+            return;
+          }
+          if (vertsBefore > circBatchStart && std::fabs(nextPx - circBatchPx) > 0.25f) {
+            vcCircleBatches_.push_back(VcLineBatch{circBatchStart, vertsBefore - circBatchStart, circBatchPx});
+            circBatchStart = vertsBefore;
+            circBatchPx = nextPx;
+          }
+        };
         const size_t nCirc = circlesCxCyR.size() / 3;
         for (size_t ci = 0; ci < nCirc; ++ci) {
           EntityAttributes attr{};
           if (circleEntityAttrs && ci < circleEntityAttrs->size())
             attr = (*circleEntityAttrs)[ci];
-          float rgba[4];
-          ResolveEntityColorForViewport(attr, kCircDefaultR, kCircDefaultG, kCircDefaultB, rgba);
-          AppendCircleLineApproxVc(cpuVcCircles_, circlesCxCyR[ci * 3], circlesCxCyR[ci * 3 + 1],
-                                   circlesCxCyR[ci * 3 + 2], 72, 0.f, rgba);
+          const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
+          const int vb = static_cast<int>(cpuVcCircles_.size() / 7);
+          const float lwMm = EffectiveEntityLineweightMm(attr, lr);
+          maybeSplitCirc(vb, LineweightMmToDevicePx(lwMm));
+          AppendCircleVcDashed(cpuVcCircles_, circlesCxCyR[ci * 3], circlesCxCyR[ci * 3 + 1], circlesCxCyR[ci * 3 + 2],
+                               72, 0.f, dashPatScale, attr, lr, kCircDefaultR, kCircDefaultG, kCircDefaultB);
+          circVert = static_cast<int>(cpuVcCircles_.size() / 7);
         }
+        if (circVert > circBatchStart && circBatchPx >= 0.f)
+          vcCircleBatches_.push_back(VcLineBatch{circBatchStart, circVert - circBatchStart, circBatchPx});
       }
+
       glBindBuffer(GL_ARRAY_BUFFER, vboVcLines_);
       glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(cpuVcLines_.size() * sizeof(float)),
                    cpuVcLines_.empty() ? nullptr : cpuVcLines_.data(), GL_DYNAMIC_DRAW);
@@ -817,14 +853,29 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
     glUseProgram(vcLineProgram_);
     GLint locVcMvp = glGetUniformLocation(vcLineProgram_, "uMVP");
     glUniformMatrix4fv(locVcMvp, 1, GL_FALSE, mvp);
-    glLineWidth(kLwMain);
     if (!cpuVcLines_.empty()) {
       glBindVertexArray(vaoVcLines_);
-      glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(cpuVcLines_.size() / 7));
+      if (vcLineBatches_.empty())
+        vcLineBatches_.push_back(
+            VcLineBatch{0, static_cast<int>(cpuVcLines_.size() / 7), LineweightMmToDevicePx(0.18f)});
+      for (const auto& b : vcLineBatches_) {
+        if (b.count <= 0)
+          continue;
+        glLineWidth(b.widthPx);
+        glDrawArrays(GL_LINES, static_cast<GLsizei>(b.first), static_cast<GLsizei>(b.count));
+      }
     }
     if (!cpuVcCircles_.empty()) {
       glBindVertexArray(vaoVcCircles_);
-      glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(cpuVcCircles_.size() / 7));
+      if (vcCircleBatches_.empty())
+        vcCircleBatches_.push_back(
+            VcLineBatch{0, static_cast<int>(cpuVcCircles_.size() / 7), LineweightMmToDevicePx(0.18f)});
+      for (const auto& b : vcCircleBatches_) {
+        if (b.count <= 0)
+          continue;
+        glLineWidth(b.widthPx);
+        glDrawArrays(GL_LINES, static_cast<GLsizei>(b.first), static_cast<GLsizei>(b.count));
+      }
     }
     glBindVertexArray(0);
     glUseProgram(lineProgram_);

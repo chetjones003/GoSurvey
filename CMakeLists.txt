@@ -67,6 +67,7 @@ add_executable(GoSurvey
   src/ViewportRenderer.cpp
   src/CadUi.cpp
   src/CadCommands.cpp
+  src/CadLinetype.cpp
   src/MtextRichFormat.cpp
   src/CadSnap.cpp
   src/SurveyPoints.cpp
@@ -88,6 +89,7 @@ target_link_libraries(GoSurvey PRIVATE
 )
 if(WIN32)
   target_link_libraries(GoSurvey PRIVATE comdlg32)
+  target_sources(GoSurvey PRIVATE src/WinFrameControls.cpp)
 endif()
 target_compile_definitions(GoSurvey PRIVATE GLEW_STATIC)
 
@@ -104,24 +106,4 @@ if(MSVC)
   target_compile_options(GoSurvey PRIVATE /W4 /permissive-)
 else()
   target_compile_options(GoSurvey PRIVATE -Wall -Wextra -Wpedantic)
-endif()
-
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/icons")
-  # Merge icons into the output dir without wiping extra files there (e.g. user-added main_logo.png).
-  # copy_directory can behave like a full sync on some generators and remove destination-only assets.
-  file(GLOB _icon_src_files "${CMAKE_CURRENT_SOURCE_DIR}/icons/*")
-  if(_icon_src_files)
-    set(_icon_post_cmds COMMAND "${CMAKE_COMMAND}" -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/icons")
-    foreach(_abs IN LISTS _icon_src_files)
-      if(IS_DIRECTORY "${_abs}")
-        continue()
-      endif()
-      get_filename_component(_leaf "${_abs}" NAME)
-      list(APPEND _icon_post_cmds
-        COMMAND "${CMAKE_COMMAND}" -E copy_if_different
-                "${_abs}"
-                "$<TARGET_FILE_DIR:GoSurvey>/icons/${_leaf}")
-    endforeach()
-    add_custom_command(TARGET GoSurvey POST_BUILD ${_icon_post_cmds})
-  endif()
 endif()

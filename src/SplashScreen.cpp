@@ -1,6 +1,8 @@
 #include "SplashScreen.hpp"
 
 #include "AppIcon.hpp"
+#include "CadUi.hpp"
+#include "WinFrameControls.hpp"
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -24,6 +26,14 @@ void GlfwApplySplashStageWindowHints() {
 void GlfwApplyMainStageWindowChrome(GLFWwindow* window) {
   if (!window)
     return;
+#if defined(_WIN32)
+  glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
+  glfwSetWindowAttrib(window, GLFW_RESIZABLE, GLFW_TRUE);
+  glfwSetWindowTitle(window, "GoSurvey — CAD");
+  GlfwPlatformInstallBorderlessResize(window);
+  glfwMaximizeWindow(window);
+  glfwFocusWindow(window);
+#else
   if (glfwGetWindowAttrib(window, GLFW_MAXIMIZED))
     glfwRestoreWindow(window);
   glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_TRUE);
@@ -31,6 +41,161 @@ void GlfwApplyMainStageWindowChrome(GLFWwindow* window) {
   glfwSetWindowTitle(window, "GoSurvey — CAD");
   glfwMaximizeWindow(window);
   glfwFocusWindow(window);
+#endif
+}
+
+namespace {
+
+#if defined(_WIN32)
+
+static void TitleBarDrawMinIcon(ImDrawList* dl, ImVec2 mn, ImVec2 mx, ImU32 col) {
+  const ImVec2 c((mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f);
+  const float half = (mx.x - mn.x) * 0.22f;
+  dl->AddLine(ImVec2(c.x - half, c.y), ImVec2(c.x + half, c.y), col, 1.25f);
+}
+
+static void TitleBarDrawMaxIcon(ImDrawList* dl, ImVec2 mn, ImVec2 mx, ImU32 col) {
+  const float bw = mx.x - mn.x;
+  const float bh = mx.y - mn.y;
+  const float dim = std::min(bw, bh);
+  const float side = dim * 0.34f;
+  const float cx = (mn.x + mx.x) * 0.5f;
+  const float cy = (mn.y + mx.y) * 0.5f;
+  const float h = side * 0.5f;
+  dl->AddRect(ImVec2(cx - h, cy - h), ImVec2(cx + h, cy + h), col, 1.f, 0, 1.f);
+}
+
+static void TitleBarDrawRestoreIcon(ImDrawList* dl, ImVec2 mn, ImVec2 mx, ImU32 col) {
+  const float bw = mx.x - mn.x;
+  const float bh = mx.y - mn.y;
+  const float dim = std::min(bw, bh);
+  const float s = dim * 0.15f;
+  const float cx = (mn.x + mx.x) * 0.5f;
+  const float cy = (mn.y + mx.y) * 0.5f;
+  const float ox = dim * 0.085f;
+  const float oy = -dim * 0.085f;
+  dl->AddRect(ImVec2(cx - s + ox, cy - s + oy), ImVec2(cx + s + ox, cy + s + oy), col, 1.f, 0, 1.f);
+  dl->AddRect(ImVec2(cx - s - ox, cy - s - oy), ImVec2(cx + s - ox, cy + s - oy), col, 1.f, 0, 1.f);
+}
+
+static void TitleBarDrawCloseIcon(ImDrawList* dl, ImVec2 mn, ImVec2 mx, ImU32 col) {
+  const float cx = (mn.x + mx.x) * 0.5f;
+  const float cy = (mn.y + mx.y) * 0.5f;
+  const float half = (mx.x - mn.x) * 0.22f;
+  dl->AddLine(ImVec2(cx - half, cy - half), ImVec2(cx + half, cy + half), col, 1.25f);
+  dl->AddLine(ImVec2(cx - half, cy + half), ImVec2(cx + half, cy - half), col, 1.25f);
+}
+
+#endif
+
+} // namespace
+
+void DrawMainWindowTitleBar(GLFWwindow* window) {
+#if !defined(_WIN32)
+  (void)window;
+  return;
+#else
+  if (!window)
+    return;
+
+  const ImGuiStyle& st = ImGui::GetStyle();
+  float rowH = ImGui::GetFrameHeight() + 8.f;
+  const ImVec4 barBg = st.Colors[ImGuiCol_MenuBarBg];
+  const float btnW = 44.f;
+  float btnH = std::max(22.f, rowH - 6.f);
+  const float btnStripW = btnW * 3.f + st.ItemInnerSpacing.x * 2.f;
+  const float padY = 3.f;
+  const float leftPad = 10.f;
+
+  ImTextureID logoTex = (ImTextureID)0;
+  ImVec2 logoDims(0.f, 0.f);
+  const bool haveLogo = CadUiTitleBarLogoQuery(&logoTex, &logoDims);
+  float logoW = 0.f;
+  float logoH = 0.f;
+  if (haveLogo) {
+    logoH = std::max(18.f, std::min(btnH, rowH - 8.f));
+    logoW = logoH * (logoDims.x / logoDims.y);
+    rowH = std::max(rowH, logoH + 8.f);
+    btnH = std::max(22.f, rowH - 6.f);
+  }
+
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, barBg);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+  ImGui::BeginChild("##GoSurveyTitleBar", ImVec2(0.f, rowH), false,
+                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+
+  const ImVec2 wp = ImGui::GetWindowPos();
+  const float stripLeftScr = wp.x + ImGui::GetWindowContentRegionMax().x - btnStripW;
+
+  ImGui::SetCursorPos(ImVec2(leftPad, padY));
+  ImGui::BeginGroup();
+  if (haveLogo && logoTex) {
+    ImGui::SetCursorPosY(padY + std::max(0.f, (btnH - logoH) * 0.5f));
+    ImGui::Image(logoTex, ImVec2(logoW, logoH), ImVec2(0.f, 1.f), ImVec2(1.f, 0.f));
+    ImGui::SameLine(0.f, st.ItemInnerSpacing.x);
+  }
+  ImGui::SetCursorPosY(padY + std::max(0.f, (btnH - ImGui::GetTextLineHeight()) * 0.5f));
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.78f, 0.82f, 0.88f, 1.f));
+  ImGui::TextUnformatted("GoSurvey");
+  ImGui::PopStyleColor();
+  ImGui::SameLine(0.f, 12.f);
+  const float dragLeftScr = ImGui::GetCursorScreenPos().x;
+  const float dragW = std::max(32.f, stripLeftScr - dragLeftScr - 4.f);
+  ImGui::InvisibleButton("##TitleDrag", ImVec2(dragW, btnH));
+  if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    GlfwPlatformBeginCaptionDrag(window);
+  if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+    if (glfwGetWindowAttrib(window, GLFW_MAXIMIZED))
+      glfwRestoreWindow(window);
+    else
+      glfwMaximizeWindow(window);
+  }
+  ImGui::EndGroup();
+
+  ImGui::SetCursorScreenPos(ImVec2(stripLeftScr, wp.y + padY));
+  ImGui::BeginGroup();
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+
+  const ImVec2 btnSize(btnW, btnH);
+
+  if (ImGui::InvisibleButton("##TitleMin", btnSize))
+    glfwIconifyWindow(window);
+  if (ImGui::IsItemHovered())
+    dl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(255, 255, 255, 26), 2.f);
+  TitleBarDrawMinIcon(dl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                      ImGui::ColorConvertFloat4ToU32(st.Colors[ImGuiCol_Text]));
+  ImGui::SameLine(0.f, st.ItemInnerSpacing.x);
+
+  const bool maxed = glfwGetWindowAttrib(window, GLFW_MAXIMIZED) == GLFW_TRUE;
+  if (ImGui::InvisibleButton("##TitleMax", btnSize)) {
+    if (maxed)
+      glfwRestoreWindow(window);
+    else
+      glfwMaximizeWindow(window);
+  }
+  if (ImGui::IsItemHovered())
+    dl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(255, 255, 255, 26), 2.f);
+  if (maxed)
+    TitleBarDrawRestoreIcon(dl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                          ImGui::ColorConvertFloat4ToU32(st.Colors[ImGuiCol_Text]));
+  else
+    TitleBarDrawMaxIcon(dl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                        ImGui::ColorConvertFloat4ToU32(st.Colors[ImGuiCol_Text]));
+  ImGui::SameLine(0.f, st.ItemInnerSpacing.x);
+
+  if (ImGui::InvisibleButton("##TitleClose", btnSize))
+    glfwSetWindowShouldClose(window, GLFW_TRUE);
+  if (ImGui::IsItemHovered())
+    dl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(232, 18, 35, 110), 2.f);
+  TitleBarDrawCloseIcon(dl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
+                        ImGui::ColorConvertFloat4ToU32(st.Colors[ImGuiCol_Text]));
+
+  ImGui::EndGroup();
+
+  ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
+#endif
 }
 
 void RunStartupSplash(GLFWwindow* window, double durationSec) {
@@ -38,12 +203,7 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
     return;
 
   namespace fs = std::filesystem;
-  fs::path logoPath;
-  for (const char* name : {"main_logo.png", "logo.png", "white_logo2.png"}) {
-    logoPath = ResolveBundledAssetPath(fs::path("icons") / name);
-    if (!logoPath.empty())
-      break;
-  }
+  const fs::path logoPath = ResolveAppLogoPngPath();
   AppLogoGpu splashTex{};
   const bool haveLogo = !logoPath.empty() && LoadAppTextureFromPngFile(logoPath, &splashTex, true);
 
@@ -86,7 +246,7 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
     const ImVec2 workPos = vp->WorkPos;
     const ImVec2 work = vp->WorkSize;
 
-    ImVec2 panel(work.x * (1.f / 3.f), work.y * (1.f / 3.f));
+    ImVec2 panel(work.x * (1.f / 2.f), work.y * (1.f / 2.f));
     panel.x = fmaxf(panel.x, 360.f);
     panel.y = fmaxf(panel.y, 280.f);
     panel.x = fminf(panel.x, work.x * 0.92f);
@@ -139,7 +299,7 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
 
     ImGui::Spacing();
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.55f, 0.62f, 0.72f, 0.85f * intro));
-    const char* subtitle = "Survey-grade CAD";
+    const char* subtitle = "Precision Survey CAD";
     tw = ImGui::CalcTextSize(subtitle).x;
     ImGui::SetCursorPosX((ws.x - tw) * 0.5f);
     ImGui::TextUnformatted(subtitle);
@@ -148,7 +308,8 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
     ImGui::Dummy(ImVec2(1, ws.y * 0.03f));
 
     if (haveLogo && splashTex.texture) {
-      const float maxSide = std::min(ws.x, ws.y) * 0.42f;
+      // Logo fits inside the splash card; fraction of the shorter card edge (was 0.42).
+      const float maxSide = std::min(ws.x, ws.y) * 0.62f;
       float lw = static_cast<float>(splashTex.width);
       float lh = static_cast<float>(splashTex.height);
       const float scale = maxSide / std::max(lw, lh);

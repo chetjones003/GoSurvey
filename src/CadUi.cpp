@@ -1,6 +1,7 @@
 #include "CadUi.hpp"
 #include "MtextRichFormat.hpp"
 
+#include "CadLinetype.hpp"
 #include "DxfIo.hpp"
 #include "SurveyCsv.hpp"
 #include "WinFileDialogs.hpp"
@@ -31,6 +32,16 @@ void CadUiSetMenuBarLogo(ImTextureID texture, float widthPx, float heightPx) {
 void CadUiClearMenuBarLogo() {
   g_menuBarLogoTex = (ImTextureID)0;
   g_menuBarLogoDims = ImVec2(0.f, 0.f);
+}
+
+bool CadUiTitleBarLogoQuery(ImTextureID* outTexture, ImVec2* outDimsPx) {
+  if (!outTexture || !outDimsPx)
+    return false;
+  if (!g_menuBarLogoTex || g_menuBarLogoDims.x <= 0.f || g_menuBarLogoDims.y <= 0.f)
+    return false;
+  *outTexture = g_menuBarLogoTex;
+  *outDimsPx = g_menuBarLogoDims;
+  return true;
 }
 
 namespace {
@@ -205,18 +216,20 @@ void SetupMainDockLayout(ImGuiID dockspace_id) {
 
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
   static char dxfPath[4096]{};
+#if !defined(_WIN32)
   if (g_menuBarLogoTex && g_menuBarLogoDims.x > 0.f && g_menuBarLogoDims.y > 0.f) {
     const ImGuiStyle& st = ImGui::GetStyle();
     const float fh = ImGui::GetFrameHeight();
     const float logoH = std::max(1.f, fh - st.FramePadding.y * 0.35f);
-    //const float aspect = g_menuBarLogoDims.x / g_menuBarLogoDims.y;
-    //const float logoW = logoH * aspect;
+    const float aspect = g_menuBarLogoDims.x / g_menuBarLogoDims.y;
+    const float logoW = logoH * aspect;
     const float yPad = std::max(0.f, (fh - logoH) * 0.5f);
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() + yPad);
-    //ImGui::Image(g_menuBarLogoTex, ImVec2(logoW, logoH), ImVec2(0.f, 1.f), ImVec2(1.f, 0.f));
+    ImGui::Image(g_menuBarLogoTex, ImVec2(logoW, logoH), ImVec2(0.f, 1.f), ImVec2(1.f, 0.f));
     ImGui::SameLine(0.f, st.ItemInnerSpacing.x);
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - yPad);
   }
+#endif
   if (ImGui::BeginMenu("File")) {
     ImGui::MenuItem("New", nullptr);
     ImGui::MenuItem("Open...", nullptr);
@@ -248,6 +261,10 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
 static void CollectAllDrawingLayers(const AppCommandState& cmd, std::vector<std::string>* outSortedUnique) {
   std::set<std::string> layers;
   layers.insert("0");
+  for (const auto& row : cmd.drawingLayerTable) {
+    if (!row.name.empty())
+      layers.insert(row.name);
+  }
   auto add = [&layers](const std::string& s) {
     if (!s.empty())
       layers.insert(s);
@@ -264,6 +281,10 @@ static void CollectAllDrawingLayers(const AppCommandState& cmd, std::vector<std:
     add(a.layer);
   for (const auto& a : cmd.cadAnnotationAttrs)
     add(a.layer);
+  for (const auto& p : cmd.surveyPoints)
+    add(p.layer);
+  if (!cmd.currentLayer.empty())
+    add(cmd.currentLayer);
   outSortedUnique->assign(layers.begin(), layers.end());
 }
 
@@ -479,33 +500,36 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   ImGui::PopStyleColor();
   ImGui::Separator();
 
-  static std::string ribbonActiveLayer = "0";
   std::vector<std::string> layerList;
   CollectAllDrawingLayers(cmd, &layerList);
-  if (std::find(layerList.begin(), layerList.end(), ribbonActiveLayer) == layerList.end())
-    layerList.insert(layerList.begin(), ribbonActiveLayer);
+  if (std::find(layerList.begin(), layerList.end(), cmd.currentLayer) == layerList.end())
+    layerList.insert(layerList.begin(), cmd.currentLayer);
 
   const float layerBtnW = layBtnCell.x;
   if (ImGui::Button("LAY", ImVec2(layerBtnW, layerRowBtnH))) {
-    log.push_back("LAYER — layer manager table (coming soon).");
+    SyncDrawingLayerTableWithGeometry(cmd);
+    cmd.showLayerManagerWindow = true;
+    log.push_back("LAYER — layer manager opened.");
   }
-  RibbonItemHelp("Open layer manager — table of all layers (coming soon).\nCommand bar: LAYER (planned)");
+  RibbonItemHelp("Open layer manager — table of all layers.\nCommand bar: LAYER or LA");
   ImGui::SameLine(0, st.ItemSpacing.x);
   ImGui::SetNextItemWidth(std::max(80.f, kLayerPanelW - layerBtnW - st.ItemSpacing.x - st.WindowPadding.x * 2.f));
-  const char* preview = ribbonActiveLayer.empty() ? "0" : ribbonActiveLayer.c_str();
+  const char* preview = cmd.currentLayer.empty() ? "0" : cmd.currentLayer.c_str();
   ImGui::PushID("RibbonLayerCombo");
   if (ImGui::BeginCombo("##ribbonlayerpick", preview, ImGuiComboFlags_HeightLargest)) {
     for (const auto& L : layerList) {
-      const bool sel = L == ribbonActiveLayer;
-      if (ImGui::Selectable(L.c_str(), sel))
-        ribbonActiveLayer = L;
+      const bool sel = L == cmd.currentLayer;
+      if (ImGui::Selectable(L.c_str(), sel)) {
+        cmd.currentLayer = L;
+        SyncDrawingLayerTableWithGeometry(cmd);
+      }
       if (sel)
         ImGui::SetItemDefaultFocus();
     }
     ImGui::EndCombo();
   }
   ImGui::PopID();
-  RibbonItemHelp("Current layer for new geometry (full wiring later).\nCommand bar: (set via properties for now)");
+  RibbonItemHelp("Current layer for new geometry (LINE, CIRCLE, TEXT, …).");
 
   ImGui::EndChild();
 
@@ -740,6 +764,95 @@ static const NamedColorPreset kNamedColors[] = {
     {"Black", "Black", 0.f, 0.f, 0.f},    {"Orange", "Orange", 1.f, 0.5f, 0.f},
 };
 
+static const char* kEntityLinetypeLabels[] = {"By Layer", "By Block", "Continuous", "Dashed", "Hidden", "Center",
+                                            "Phantom", "Divide", "Border"};
+static const char* kEntityLinetypeStorage[] = {"ByLayer", "ByBlock", "Continuous", "DASHED", "HIDDEN", "CENTER",
+                                               "PHANTOM", "DIVIDE", "BORDER"};
+static constexpr int kEntityLinetypeCount =
+    static_cast<int>(sizeof(kEntityLinetypeLabels) / sizeof(kEntityLinetypeLabels[0]));
+
+static const char* kLayerLinetypeLabels[] = {"Continuous", "Dashed", "Hidden", "Center", "Phantom", "Divide", "Border"};
+static const char* kLayerLinetypeStorage[] = {"Continuous", "DASHED", "HIDDEN", "CENTER", "PHANTOM", "DIVIDE",
+                                                "BORDER"};
+static constexpr int kLayerLinetypeCount =
+    static_cast<int>(sizeof(kLayerLinetypeLabels) / sizeof(kLayerLinetypeLabels[0]));
+
+static constexpr float kUiLineweightMmPresets[] = {
+    -1.f,  0.f,   0.05f, 0.09f, 0.13f, 0.15f, 0.18f, 0.20f, 0.25f, 0.30f, 0.35f, 0.40f,
+    0.50f, 0.53f, 0.60f, 0.70f, 0.80f, 0.90f, 1.00f, 1.06f, 1.20f, 1.40f, 1.58f, 2.00f, 2.11f};
+static constexpr int kUiLineweightPresetCount =
+    static_cast<int>(sizeof(kUiLineweightMmPresets) / sizeof(kUiLineweightMmPresets[0]));
+
+static constexpr float kUiTransparencyPresets[] = {-1.f, 0.f, 0.25f, 0.5f, 0.75f, 0.9f, 1.f};
+static constexpr int kUiTransparencyPresetCount =
+    static_cast<int>(sizeof(kUiTransparencyPresets) / sizeof(kUiTransparencyPresets[0]));
+
+static int EntityLinetypeComboIndex(const std::string& s) {
+  const std::string c = CadCanonicalLinetypeNameForDxf(s);
+  for (int i = 0; i < kEntityLinetypeCount; ++i) {
+    if (CadCanonicalLinetypeNameForDxf(kEntityLinetypeStorage[i]) == c)
+      return i;
+  }
+  return -1;
+}
+
+static int LayerLinetypeComboIndex(const std::string& s) {
+  const std::string c = CadCanonicalLinetypeNameForDxf(s);
+  for (int i = 0; i < kLayerLinetypeCount; ++i) {
+    if (CadCanonicalLinetypeNameForDxf(kLayerLinetypeStorage[i]) == c)
+      return i;
+  }
+  return 0;
+}
+
+static void SnprintLineweightPresetLabel(char* buf, size_t cap, float mm, bool layerRow) {
+  if (mm < 0.f) {
+    if (layerRow)
+      std::snprintf(buf, cap, "Default");
+    else
+      std::snprintf(buf, cap, "By Layer");
+    return;
+  }
+  std::snprintf(buf, cap, "%.2f mm", static_cast<double>(mm));
+}
+
+static int LineweightPresetIndexFromMm(float mm) {
+  if (mm < 0.f)
+    return 0;
+  int best = 1;
+  float bestD = 1e18f;
+  for (int i = 1; i < kUiLineweightPresetCount; ++i) {
+    const float d = std::fabs(mm - kUiLineweightMmPresets[i]);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+static int TransparencyPresetIndexFromValue(float a) {
+  if (a < -0.5f)
+    return 0;
+  int best = 1;
+  float bestD = 1e18f;
+  for (int i = 1; i < kUiTransparencyPresetCount; ++i) {
+    const float d = std::fabs(a - kUiTransparencyPresets[i]);
+    if (d < bestD) {
+      bestD = d;
+      best = i;
+    }
+  }
+  return best;
+}
+
+static const char* TransparencyPresetLabel(int idx) {
+  static const char* kLab[] = {"By Layer", "0 %", "25 %", "50 %", "75 %", "90 %", "100 %"};
+  if (idx < 0 || idx >= kUiTransparencyPresetCount)
+    return "?";
+  return kLab[idx];
+}
+
 bool ParseHexColorRgb(const std::string& s, float* r, float* g, float* b) {
   if (s.size() < 4 || s[0] != '#')
     return false;
@@ -959,8 +1072,25 @@ void ApplyLayerToSelection(AppCommandState& cmd, const std::string& v) {
           static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
         continue;
       cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].layer = v;
+    } else if (e.type == SelectedEntity::Type::Arc) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
+          static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
+        continue;
+      cmd.userArcAttrs[static_cast<size_t>(e.index)].layer = v;
+    } else if (e.type == SelectedEntity::Type::Ellipse) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userEllipses.size() ||
+          static_cast<size_t>(e.index) >= cmd.userEllAttrs.size())
+        continue;
+      cmd.userEllAttrs[static_cast<size_t>(e.index)].layer = v;
+    } else if (e.type == SelectedEntity::Type::Polyline) {
+      const int np =
+          static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+      if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
+        continue;
+      cmd.userPolylineAttrs[static_cast<size_t>(e.index)].layer = v;
     }
   }
+  SyncDrawingLayerTableWithGeometry(cmd);
   BumpCadGpuCache(cmd);
   RefreshMixedHintFlags(cmd);
 }
@@ -985,6 +1115,22 @@ void ApplyColorToSelection(AppCommandState& cmd, const std::string& v) {
           static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
         continue;
       cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].color = v;
+    } else if (e.type == SelectedEntity::Type::Arc) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
+          static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
+        continue;
+      cmd.userArcAttrs[static_cast<size_t>(e.index)].color = v;
+    } else if (e.type == SelectedEntity::Type::Ellipse) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userEllipses.size() ||
+          static_cast<size_t>(e.index) >= cmd.userEllAttrs.size())
+        continue;
+      cmd.userEllAttrs[static_cast<size_t>(e.index)].color = v;
+    } else if (e.type == SelectedEntity::Type::Polyline) {
+      const int np =
+          static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+      if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
+        continue;
+      cmd.userPolylineAttrs[static_cast<size_t>(e.index)].color = v;
     }
   }
   BumpCadGpuCache(cmd);
@@ -1011,6 +1157,22 @@ void ApplyLinetypeToSelection(AppCommandState& cmd, const std::string& v) {
           static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
         continue;
       cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].linetype = v;
+    } else if (e.type == SelectedEntity::Type::Arc) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
+          static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
+        continue;
+      cmd.userArcAttrs[static_cast<size_t>(e.index)].linetype = v;
+    } else if (e.type == SelectedEntity::Type::Ellipse) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userEllipses.size() ||
+          static_cast<size_t>(e.index) >= cmd.userEllAttrs.size())
+        continue;
+      cmd.userEllAttrs[static_cast<size_t>(e.index)].linetype = v;
+    } else if (e.type == SelectedEntity::Type::Polyline) {
+      const int np =
+          static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+      if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
+        continue;
+      cmd.userPolylineAttrs[static_cast<size_t>(e.index)].linetype = v;
     }
   }
   BumpCadGpuCache(cmd);
@@ -1018,24 +1180,40 @@ void ApplyLinetypeToSelection(AppCommandState& cmd, const std::string& v) {
 }
 
 void ApplyLineweightToSelection(AppCommandState& cmd, float mm) {
-  mm = std::max(0.f, mm);
+  const float stored = (mm < 0.f) ? -1.f : std::max(0.f, mm);
   EnsureAttrCounts(cmd);
   for (const auto& e : cmd.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
       const size_t k = static_cast<size_t>(e.index) * 6;
       if (k + 5 >= cmd.userLinesFlat.size() || static_cast<size_t>(e.index) >= cmd.userLineAttrs.size())
         continue;
-      cmd.userLineAttrs[static_cast<size_t>(e.index)].lineweightMm = mm;
+      cmd.userLineAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
     } else if (e.type == SelectedEntity::Type::Circle) {
       const size_t k = static_cast<size_t>(e.index) * 3;
       if (k + 2 >= cmd.userCirclesCxCyR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
         continue;
-      cmd.userCircleAttrs[static_cast<size_t>(e.index)].lineweightMm = mm;
+      cmd.userCircleAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
     } else if (e.type == SelectedEntity::Type::Annotation) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadAnnotations.size() ||
           static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
         continue;
-      cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].lineweightMm = mm;
+      cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
+    } else if (e.type == SelectedEntity::Type::Arc) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
+          static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
+        continue;
+      cmd.userArcAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
+    } else if (e.type == SelectedEntity::Type::Ellipse) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userEllipses.size() ||
+          static_cast<size_t>(e.index) >= cmd.userEllAttrs.size())
+        continue;
+      cmd.userEllAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
+    } else if (e.type == SelectedEntity::Type::Polyline) {
+      const int np =
+          static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+      if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
+        continue;
+      cmd.userPolylineAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
     }
   }
   BumpCadGpuCache(cmd);
@@ -1043,24 +1221,40 @@ void ApplyLineweightToSelection(AppCommandState& cmd, float mm) {
 }
 
 void ApplyTransparencyToSelection(AppCommandState& cmd, float a) {
-  a = std::clamp(a, 0.f, 1.f);
+  const float stored = (a < -0.5f) ? -1.f : std::clamp(a, 0.f, 1.f);
   EnsureAttrCounts(cmd);
   for (const auto& e : cmd.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
       const size_t k = static_cast<size_t>(e.index) * 6;
       if (k + 5 >= cmd.userLinesFlat.size() || static_cast<size_t>(e.index) >= cmd.userLineAttrs.size())
         continue;
-      cmd.userLineAttrs[static_cast<size_t>(e.index)].transparency = a;
+      cmd.userLineAttrs[static_cast<size_t>(e.index)].transparency = stored;
     } else if (e.type == SelectedEntity::Type::Circle) {
       const size_t k = static_cast<size_t>(e.index) * 3;
       if (k + 2 >= cmd.userCirclesCxCyR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
         continue;
-      cmd.userCircleAttrs[static_cast<size_t>(e.index)].transparency = a;
+      cmd.userCircleAttrs[static_cast<size_t>(e.index)].transparency = stored;
     } else if (e.type == SelectedEntity::Type::Annotation) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadAnnotations.size() ||
           static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
         continue;
-      cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].transparency = a;
+      cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].transparency = stored;
+    } else if (e.type == SelectedEntity::Type::Arc) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
+          static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
+        continue;
+      cmd.userArcAttrs[static_cast<size_t>(e.index)].transparency = stored;
+    } else if (e.type == SelectedEntity::Type::Ellipse) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userEllipses.size() ||
+          static_cast<size_t>(e.index) >= cmd.userEllAttrs.size())
+        continue;
+      cmd.userEllAttrs[static_cast<size_t>(e.index)].transparency = stored;
+    } else if (e.type == SelectedEntity::Type::Polyline) {
+      const int np =
+          static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+      if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
+        continue;
+      cmd.userPolylineAttrs[static_cast<size_t>(e.index)].transparency = stored;
     }
   }
   BumpCadGpuCache(cmd);
@@ -1204,9 +1398,30 @@ void DrawEditableGeneralSection(AppCommandState& cmd, const std::vector<Selected
                                  IM_ARRAYSIZE(gBufLayer), tflags);
     const bool layerDeactivated = ImGui::IsItemDeactivatedAfterEdit();
     if (layerEnter || layerDeactivated) {
-      const std::string v = TrimUi(std::string(gBufLayer));
-      if (!v.empty())
-        ApplyLayerToSelection(cmd, v);
+      const std::string vv = TrimUi(std::string(gBufLayer));
+      if (!vv.empty())
+        ApplyLayerToSelection(cmd, vv);
+    }
+
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted("Layer list");
+    ImGui::TableNextColumn();
+    {
+      std::vector<std::string> layerOpts;
+      CollectAllDrawingLayers(cmd, &layerOpts);
+      const char* cprev = gHintLayerMixed ? "(mixed)" : (gBufLayer[0] ? gBufLayer : "— choose —");
+      ImGui::SetNextItemWidth(-1);
+      if (ImGui::BeginCombo("##layerpicklist", cprev)) {
+        for (const auto& L : layerOpts) {
+          if (ImGui::Selectable(L.c_str())) {
+            ImStrncpy(gBufLayer, L.c_str(), IM_ARRAYSIZE(gBufLayer));
+            gBufLayer[IM_ARRAYSIZE(gBufLayer) - 1] = '\0';
+            ApplyLayerToSelection(cmd, L);
+          }
+        }
+        ImGui::EndCombo();
+      }
     }
 
     requestCustomColorPopup = DrawColorPickerRow(cmd);
@@ -1216,14 +1431,36 @@ void DrawEditableGeneralSection(AppCommandState& cmd, const std::vector<Selected
     ImGui::TextUnformatted("Linetype");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1);
-    const bool ltEnter =
-        ImGui::InputTextWithHint("##linetype", gHintLinetypeMixed ? "Mixed — enter applies to all" : "",
-                                 gBufLinetype, IM_ARRAYSIZE(gBufLinetype), tflags);
-    const bool ltDeactivated = ImGui::IsItemDeactivatedAfterEdit();
-    if (ltEnter || ltDeactivated) {
-      const std::string v = TrimUi(std::string(gBufLinetype));
-      if (!v.empty())
-        ApplyLinetypeToSelection(cmd, v);
+    {
+      std::vector<std::string> layers2, colors2, ltypes2;
+      std::vector<float> lws2, trans2;
+      CollectGeneralAttrs(cmd, cmd.selection, &layers2, &colors2, &ltypes2, &lws2, &trans2);
+      const std::string mtLt = MergeStrings(ltypes2);
+      char ltPrev[180];
+      if (mtLt == kVaries)
+        std::snprintf(ltPrev, sizeof(ltPrev), "(mixed)");
+      else {
+        const int lix = EntityLinetypeComboIndex(mtLt);
+        if (lix >= 0)
+          std::snprintf(ltPrev, sizeof(ltPrev), "%s", kEntityLinetypeLabels[lix]);
+        else
+          ImStrncpy(ltPrev, mtLt.c_str(), sizeof(ltPrev));
+      }
+      ltPrev[sizeof(ltPrev) - 1] = '\0';
+      if (ImGui::BeginCombo("##linetypecombo", ltPrev)) {
+        for (int j = 0; j < kEntityLinetypeCount; ++j) {
+          const bool sel = (mtLt != kVaries && EntityLinetypeComboIndex(mtLt) == j);
+          if (ImGui::Selectable(kEntityLinetypeLabels[j], sel)) {
+            ApplyLinetypeToSelection(cmd, kEntityLinetypeStorage[j]);
+            ImStrncpy(gBufLinetype, kEntityLinetypeStorage[j], IM_ARRAYSIZE(gBufLinetype));
+            gBufLinetype[IM_ARRAYSIZE(gBufLinetype) - 1] = '\0';
+            gHintLinetypeMixed = false;
+          }
+          if (sel)
+            ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+      }
     }
 
     ImGui::TableNextRow();
@@ -1231,15 +1468,27 @@ void DrawEditableGeneralSection(AppCommandState& cmd, const std::vector<Selected
     ImGui::TextUnformatted("Lineweight");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1);
-    const bool lwCh =
-        ImGui::SliderFloat("##lw", &gLineweightMm, 0.f, 5.f, "%.2f mm");
-    if (lwCh || ImGui::IsItemDeactivatedAfterEdit()) {
-      ApplyLineweightToSelection(cmd, gLineweightMm);
-      gLineweightMixed = false;
-    }
-    if (gLineweightMixed) {
-      ImGui::SameLine();
-      ImGui::TextDisabled("(mixed)");
+    {
+      char lwPrev[96];
+      if (gLineweightMixed)
+        std::snprintf(lwPrev, sizeof(lwPrev), "(mixed)");
+      else
+        SnprintLineweightPresetLabel(lwPrev, sizeof(lwPrev), gLineweightMm, false);
+      if (ImGui::BeginCombo("##lwcombo", lwPrev)) {
+        for (int j = 0; j < kUiLineweightPresetCount; ++j) {
+          char lab[96];
+          SnprintLineweightPresetLabel(lab, sizeof(lab), kUiLineweightMmPresets[j], false);
+          const bool sel = !gLineweightMixed && LineweightPresetIndexFromMm(gLineweightMm) == j;
+          if (ImGui::Selectable(lab, sel)) {
+            ApplyLineweightToSelection(cmd, kUiLineweightMmPresets[j]);
+            gLineweightMm = kUiLineweightMmPresets[j];
+            gLineweightMixed = false;
+          }
+          if (sel)
+            ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+      }
     }
 
     ImGui::TableNextRow();
@@ -1247,16 +1496,29 @@ void DrawEditableGeneralSection(AppCommandState& cmd, const std::vector<Selected
     ImGui::TextUnformatted("Transparency");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1);
-    const bool trCh = ImGui::SliderFloat("##tr", &gTransparency01, 0.f, 1.f, "");
-    if (trCh || ImGui::IsItemDeactivatedAfterEdit()) {
-      ApplyTransparencyToSelection(cmd, gTransparency01);
-      gTransparencyMixed = false;
-    }
-    ImGui::SameLine();
-    ImGui::Text("%.0f %%", static_cast<double>(gTransparency01 * 100.f));
-    if (gTransparencyMixed) {
-      ImGui::SameLine();
-      ImGui::TextDisabled("(mixed)");
+    {
+      char trPrev[96];
+      if (gTransparencyMixed)
+        std::snprintf(trPrev, sizeof(trPrev), "(mixed)");
+      else {
+        const float trV = (gTransparency01 < -0.5f) ? -1.f : gTransparency01;
+        const int tix = TransparencyPresetIndexFromValue(trV);
+        std::snprintf(trPrev, sizeof(trPrev), "%s", TransparencyPresetLabel(tix));
+      }
+      if (ImGui::BeginCombo("##trcombo", trPrev)) {
+        for (int j = 0; j < kUiTransparencyPresetCount; ++j) {
+          const bool sel = !gTransparencyMixed && TransparencyPresetIndexFromValue(gTransparency01 < -0.5f ? -1.f
+                                                                                                         : gTransparency01) == j;
+          if (ImGui::Selectable(TransparencyPresetLabel(j), sel)) {
+            ApplyTransparencyToSelection(cmd, kUiTransparencyPresets[j]);
+            gTransparency01 = kUiTransparencyPresets[j];
+            gTransparencyMixed = false;
+          }
+          if (sel)
+            ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+      }
     }
 
     ImGui::TableNextRow();
@@ -4400,6 +4662,216 @@ void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
   ImGui::SameLine();
   if (ImGui::Button("Load from file"))
     LoadSurveyPointsFromJsonFile(cmd, pathBuf, log);
+
+  ImGui::End();
+}
+
+void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log) {
+  std::vector<std::string> discard;
+  if (!log)
+    log = &discard;
+  SyncDrawingLayerTableWithGeometry(cmd);
+  if (!cmd.showLayerManagerWindow)
+    return;
+
+  ImGui::SetNextWindowSize(ImVec2(1040, 520), ImGuiCond_FirstUseEver);
+  bool open = cmd.showLayerManagerWindow;
+  if (!ImGui::Begin("Layer Manager", &open)) {
+    cmd.showLayerManagerWindow = open;
+    ImGui::End();
+    return;
+  }
+  cmd.showLayerManagerWindow = open;
+
+  ImGui::TextWrapped(
+      "Layers group objects for display and DXF. New geometry uses the current layer from the ribbon (top right). "
+      "Layer 0 cannot be renamed or deleted.");
+  ImGui::Separator();
+
+  static char newLayerBuf[160] = "NewLayer";
+  ImGui::InputText("New layer name", newLayerBuf, IM_ARRAYSIZE(newLayerBuf));
+  ImGui::SameLine();
+  if (ImGui::Button("Add layer")) {
+    std::string err;
+    if (CadAddDrawingLayer(cmd, std::string(newLayerBuf), &err))
+      log->push_back("Layer added: " + TrimUi(std::string(newLayerBuf)));
+    else
+      log->push_back("LAYER — " + err);
+  }
+
+  ImGui::Separator();
+  const ImGuiTableFlags tflags =
+      ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY;
+  if (ImGui::BeginTable("laymgr", 10, tflags, ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 16.f))) {
+    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.16f);
+    ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 36.f);
+    ImGui::TableSetupColumn("Freeze", ImGuiTableColumnFlags_WidthFixed, 52.f);
+    ImGui::TableSetupColumn("Lock", ImGuiTableColumnFlags_WidthFixed, 44.f);
+    ImGui::TableSetupColumn("Current", ImGuiTableColumnFlags_WidthFixed, 64.f);
+    ImGui::TableSetupColumn("Color", ImGuiTableColumnFlags_WidthStretch, 0.12f);
+    ImGui::TableSetupColumn("Linetype", ImGuiTableColumnFlags_WidthStretch, 0.11f);
+    ImGui::TableSetupColumn("Lineweight", ImGuiTableColumnFlags_WidthStretch, 0.10f);
+    ImGui::TableSetupColumn("Transparency", ImGuiTableColumnFlags_WidthStretch, 0.10f);
+    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 72.f);
+    ImGui::TableHeadersRow();
+
+    for (size_t i = 0; i < cmd.drawingLayerTable.size();) {
+      CadLayerRow& row = cmd.drawingLayerTable[i];
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::PushID(static_cast<int>(i));
+      if (row.name == "0") {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("0");
+      } else {
+        char nmBuf[256];
+        ImStrncpy(nmBuf, row.name.c_str(), IM_ARRAYSIZE(nmBuf));
+        nmBuf[IM_ARRAYSIZE(nmBuf) - 1] = '\0';
+        if (ImGui::InputText("##nm", nmBuf, IM_ARRAYSIZE(nmBuf))) {
+        }
+        if (ImGui::IsItemDeactivatedAfterEdit()) {
+          const std::string nn = TrimUi(std::string(nmBuf));
+          if (!nn.empty() && nn != row.name) {
+            std::string err;
+            const std::string oldNm = row.name;
+            if (!CadRenameDrawingLayer(cmd, oldNm, nn, &err))
+              log->push_back("LAYER — " + err);
+            else
+              log->push_back("Layer renamed.");
+          }
+        }
+      }
+      ImGui::TableNextColumn();
+      if (ImGui::Checkbox("##on", &row.on))
+        BumpCadGpuCache(cmd);
+      ImGui::TableNextColumn();
+      if (ImGui::Checkbox("##fr", &row.frozen))
+        BumpCadGpuCache(cmd);
+      ImGui::TableNextColumn();
+      if (ImGui::Checkbox("##lk", &row.locked))
+        BumpCadGpuCache(cmd);
+      ImGui::TableNextColumn();
+      if (ImGui::RadioButton("##cur", cmd.currentLayer == row.name)) {
+        cmd.currentLayer = row.name;
+        SyncDrawingLayerTableWithGeometry(cmd);
+      }
+
+      ImGui::TableNextColumn();
+      ImGui::SetNextItemWidth(-1);
+      {
+        char cprev[120];
+        ImStrncpy(cprev, ColorStorageToPreviewLabel(row.color).c_str(), sizeof(cprev));
+        cprev[sizeof(cprev) - 1] = '\0';
+        if (ImGui::BeginCombo("##laycol", cprev)) {
+          for (const auto& p : kNamedColors) {
+            if (std::string(p.storage) == "ByLayer")
+              continue;
+            const bool sel = (row.color == p.storage);
+            if (ImGui::Selectable(p.label, sel)) {
+              row.color = p.storage;
+              BumpCadGpuCache(cmd);
+            }
+            if (sel)
+              ImGui::SetItemDefaultFocus();
+          }
+          ImGui::EndCombo();
+        }
+      }
+
+      ImGui::TableNextColumn();
+      ImGui::SetNextItemWidth(-1);
+      {
+        const int li = LayerLinetypeComboIndex(row.linetype);
+        char lprev[64];
+        std::snprintf(lprev, sizeof(lprev), "%s", kLayerLinetypeLabels[li]);
+        if (ImGui::BeginCombo("##laylt", lprev)) {
+          for (int j = 0; j < kLayerLinetypeCount; ++j) {
+            const bool sel = (j == li);
+            if (ImGui::Selectable(kLayerLinetypeLabels[j], sel)) {
+              row.linetype = kLayerLinetypeStorage[j];
+              BumpCadGpuCache(cmd);
+            }
+            if (sel)
+              ImGui::SetItemDefaultFocus();
+          }
+          ImGui::EndCombo();
+        }
+      }
+
+      ImGui::TableNextColumn();
+      ImGui::SetNextItemWidth(-1);
+      {
+        const int wi = LineweightPresetIndexFromMm(row.lineweightMm);
+        char wprev[64];
+        SnprintLineweightPresetLabel(wprev, sizeof(wprev), row.lineweightMm, true);
+        if (ImGui::BeginCombo("##laylw", wprev)) {
+          for (int j = 0; j < kUiLineweightPresetCount; ++j) {
+            char lab[64];
+            SnprintLineweightPresetLabel(lab, sizeof(lab), kUiLineweightMmPresets[j], true);
+            const bool sel = (j == wi);
+            if (ImGui::Selectable(lab, sel)) {
+              row.lineweightMm = kUiLineweightMmPresets[j];
+              BumpCadGpuCache(cmd);
+            }
+            if (sel)
+              ImGui::SetItemDefaultFocus();
+          }
+          ImGui::EndCombo();
+        }
+      }
+
+      ImGui::TableNextColumn();
+      ImGui::SetNextItemWidth(-1);
+      {
+        static constexpr float kLayTrans[] = {0.f, 0.25f, 0.5f, 0.75f, 0.9f, 1.f};
+        static constexpr const char* kLayTransLab[] = {"0 %", "25 %", "50 %", "75 %", "90 %", "100 %"};
+        constexpr int kNtr = static_cast<int>(sizeof(kLayTrans) / sizeof(kLayTrans[0]));
+        int ti = 0;
+        float bd = 1e9f;
+        for (int j = 0; j < kNtr; ++j) {
+          const float d = std::fabs(row.transparency - kLayTrans[j]);
+          if (d < bd) {
+            bd = d;
+            ti = j;
+          }
+        }
+        if (ImGui::BeginCombo("##laytr", kLayTransLab[ti])) {
+          for (int j = 0; j < kNtr; ++j) {
+            const bool sel = (j == ti);
+            if (ImGui::Selectable(kLayTransLab[j], sel)) {
+              row.transparency = kLayTrans[j];
+              BumpCadGpuCache(cmd);
+            }
+            if (sel)
+              ImGui::SetItemDefaultFocus();
+          }
+          ImGui::EndCombo();
+        }
+      }
+
+      ImGui::TableNextColumn();
+      if (row.name != "0") {
+        if (ImGui::SmallButton("Delete")) {
+          std::string err;
+          if (!CadDeleteDrawingLayer(cmd, row.name, &err))
+            log->push_back("LAYER — " + err);
+          ImGui::PopID();
+          continue;
+        }
+      } else {
+        ImGui::TextDisabled("—");
+      }
+
+      ImGui::PopID();
+      ++i;
+    }
+    ImGui::EndTable();
+  }
+
+  ImGui::Separator();
+  ImGui::TextDisabled(
+      "On / Freeze / Lock are stored for future visibility and editing rules; all layers still draw. "
+      "Color, linetype, lineweight, and transparency apply to entities set to ByLayer / defaults.");
 
   ImGui::End();
 }

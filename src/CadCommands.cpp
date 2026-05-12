@@ -1,4 +1,5 @@
 #include "CadCommands.hpp"
+#include "CadLinetype.hpp"
 #include "MtextRichFormat.hpp"
 
 #include "CadSnap.hpp"
@@ -389,6 +390,16 @@ std::string ToLower(std::string s) {
   return s;
 }
 
+static EntityAttributes MakeNewEntityAttrs(const AppCommandState& st) {
+  EntityAttributes a;
+  a.layer = st.currentLayer.empty() ? std::string("0") : st.currentLayer;
+  a.color = "ByLayer";
+  a.linetype = "ByLayer";
+  a.lineweightMm = -1.f;
+  a.transparency = -1.f;
+  return a;
+}
+
 bool ParseTwoFloats(std::string s, float* x, float* y) {
   for (char& c : s) {
     if (c == ',')
@@ -437,6 +448,7 @@ const CmdEntry kRegistry[] = {
     {"select", ""},
     {"help", ""},
     {"regen", "re"},
+    {"layer", "la"},
 };
 
 bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vector<std::string>& log);
@@ -596,7 +608,7 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<
   st.userCirclesCxCyR.push_back(cx);
   st.userCirclesCxCyR.push_back(cy);
   st.userCirclesCxCyR.push_back(r);
-  st.userCircleAttrs.push_back(EntityAttributes{});
+  st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
   st.active = AppCommandState::Kind::None;
   ResetCircleDraft(st);
@@ -675,6 +687,12 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     log.push_back("REGEN — viewport caches refreshed.");
     return true;
   }
+  if (primary == "layer") {
+    SyncDrawingLayerTableWithGeometry(st);
+    st.showLayerManagerWindow = true;
+    log.push_back("LAYER — layer manager opened.");
+    return true;
+  }
   if (primary == "move") {
     StartMoveCommand(st, log);
     return true;
@@ -734,7 +752,7 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     log.push_back(
         "LINE (L), POLYLINE (PL, CLOSE to close), ARC (3-point), ELLIPSE (center, axis end, ratio), TEXT, MTEXT, "
         "DIMALIGNED (DAL), CIRCLE (C), MOVE (M), COPY (CP), ROTATE (RO), DELETE (DEL), ZOOM (ZE/ZW), PLOTSCALE "
-        "(PSCALE), REGEN (RE). SURVEY: CRTPTS, VWPTS, IMPPTS, EXPPTS. Idle: two-click box selects. ESC.");
+        "(PSCALE), REGEN (RE), LAYER (LA). SURVEY: CRTPTS, VWPTS, IMPPTS, EXPPTS. Idle: two-click box selects. ESC.");
     log.push_back(
         "LINE: @dx,dy from anchor; A or ANGLE alone then bearing on next line (blank Enter cancels); A<bearing> (+ "
         "optional +90) on one line; AP + two picks then Enter (or +90) locks bearing; distance (+/-) along ray; A "
@@ -1997,7 +2015,7 @@ static void CommitArcThreePoints(AppCommandState& st, float ax, float ay, float 
   arc.startRad = static_cast<float>(sr);
   arc.sweepRad = static_cast<float>(sw);
   st.userArcs.push_back(arc);
-  st.userArcAttrs.push_back(EntityAttributes{});
+  st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
   st.active = AppCommandState::Kind::None;
   ResetArcDraft(st);
@@ -2043,7 +2061,7 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   ann.text = buf;
   const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
-  EntityAttributes at{};
+  EntityAttributes at = MakeNewEntityAttrs(st);
   at.color = "#e1b12c";
   st.cadAnnotations.push_back(std::move(ann));
   st.cadAnnotationAttrs.push_back(at);
@@ -3048,7 +3066,7 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
       ann.plottedHeightInches = st.defaultPlottedTextHeightInches;
       ann.text = normalized;
       st.cadAnnotations.push_back(std::move(ann));
-      st.cadAnnotationAttrs.push_back(EntityAttributes{});
+      st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
       BumpCadGpuCache(st);
       log.push_back("MTEXT placed.");
     } else
@@ -3108,34 +3126,215 @@ void EnsureAttrCounts(AppCommandState& st) {
   bool grew = false;
   const size_t nl = st.userLinesFlat.size() / 6;
   while (st.userLineAttrs.size() < nl) {
-    st.userLineAttrs.emplace_back();
+    st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
   const size_t nc = st.userCirclesCxCyR.size() / 3;
   while (st.userCircleAttrs.size() < nc) {
-    st.userCircleAttrs.emplace_back();
+    st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
   while (st.userArcAttrs.size() < st.userArcs.size()) {
-    st.userArcAttrs.emplace_back();
+    st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
   while (st.userEllAttrs.size() < st.userEllipses.size()) {
-    st.userEllAttrs.emplace_back();
+    st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
   const size_t np = st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0;
   while (st.userPolylineAttrs.size() < np) {
-    st.userPolylineAttrs.emplace_back();
+    st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
   const size_t na = st.cadAnnotations.size();
   while (st.cadAnnotationAttrs.size() < na) {
-    st.cadAnnotationAttrs.emplace_back();
+    st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
   if (grew)
     BumpCadGpuCache(st);
+}
+
+static void CollectLayersUsedInDrawing(const AppCommandState& st, std::set<std::string>* out) {
+  out->insert("0");
+  auto add = [&](const std::string& s) {
+    if (!s.empty())
+      out->insert(s);
+  };
+  for (const auto& a : st.userLineAttrs)
+    add(a.layer);
+  for (const auto& a : st.userCircleAttrs)
+    add(a.layer);
+  for (const auto& a : st.userArcAttrs)
+    add(a.layer);
+  for (const auto& a : st.userEllAttrs)
+    add(a.layer);
+  for (const auto& a : st.userPolylineAttrs)
+    add(a.layer);
+  for (const auto& a : st.cadAnnotationAttrs)
+    add(a.layer);
+  for (const auto& p : st.surveyPoints)
+    add(p.layer);
+  add(st.currentLayer);
+}
+
+void SyncDrawingLayerTableWithGeometry(AppCommandState& st) {
+  if (st.drawingLayerTable.empty()) {
+    CadLayerRow z;
+    z.name = "0";
+    st.drawingLayerTable.push_back(z);
+  }
+  std::set<std::string> have;
+  for (const auto& r : st.drawingLayerTable)
+    have.insert(r.name);
+  std::set<std::string> used;
+  CollectLayersUsedInDrawing(st, &used);
+  for (const std::string& name : used) {
+    if (!have.count(name)) {
+      CadLayerRow row;
+      row.name = name;
+      st.drawingLayerTable.push_back(row);
+      have.insert(name);
+    }
+  }
+  if (st.currentLayer.empty())
+    st.currentLayer = "0";
+  if (!have.count(st.currentLayer))
+    st.currentLayer = "0";
+}
+
+static bool ValidNewLayerNameChars(const std::string& n) {
+  if (n.empty() || n.size() > 255)
+    return false;
+  for (unsigned char c : n) {
+    if (c < 32 || c == 127)
+      return false;
+    if (c == '<' || c == '>' || c == '/' || c == '\\' || c == '"' || c == ':' || c == ';' || c == '?' ||
+        c == '*' || c == '|' || c == ',' || c == '`')
+      return false;
+  }
+  return true;
+}
+
+static bool LayerNameExistsCi(const AppCommandState& st, const std::string& name) {
+  const std::string nl = ToLower(name);
+  for (const auto& r : st.drawingLayerTable) {
+    if (ToLower(r.name) == nl)
+      return true;
+  }
+  return false;
+}
+
+bool CadAddDrawingLayer(AppCommandState& st, const std::string& raw, std::string* err) {
+  const std::string name = Trim(raw);
+  if (!ValidNewLayerNameChars(name)) {
+    if (err)
+      *err = "Invalid layer name (empty, too long, or reserved characters).";
+    return false;
+  }
+  SyncDrawingLayerTableWithGeometry(st);
+  if (LayerNameExistsCi(st, name)) {
+    if (err)
+      *err = "Layer already exists.";
+    return false;
+  }
+  CadLayerRow row;
+  row.name = name;
+  st.drawingLayerTable.push_back(row);
+  return true;
+}
+
+bool CadRenameDrawingLayer(AppCommandState& st, const std::string& oldNameRaw, const std::string& newNameRaw,
+                           std::string* err) {
+  const std::string oldN = Trim(oldNameRaw);
+  const std::string newN = Trim(newNameRaw);
+  if (oldN == "0") {
+    if (err)
+      *err = "Layer 0 cannot be renamed.";
+    return false;
+  }
+  if (!ValidNewLayerNameChars(newN)) {
+    if (err)
+      *err = "Invalid new layer name.";
+    return false;
+  }
+  if (newN == oldN)
+    return true;
+  if (LayerNameExistsCi(st, newN) && ToLower(newN) != ToLower(oldN)) {
+    if (err)
+      *err = "A layer with that name already exists.";
+    return false;
+  }
+  auto it = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+                         [&](const CadLayerRow& r) { return r.name == oldN; });
+  if (it == st.drawingLayerTable.end()) {
+    if (err)
+      *err = "Layer not found in table.";
+    return false;
+  }
+  auto reassign = [&](std::string& L) {
+    if (L == oldN)
+      L = newN;
+  };
+  for (auto& a : st.userLineAttrs)
+    reassign(a.layer);
+  for (auto& a : st.userCircleAttrs)
+    reassign(a.layer);
+  for (auto& a : st.userArcAttrs)
+    reassign(a.layer);
+  for (auto& a : st.userEllAttrs)
+    reassign(a.layer);
+  for (auto& a : st.userPolylineAttrs)
+    reassign(a.layer);
+  for (auto& a : st.cadAnnotationAttrs)
+    reassign(a.layer);
+  for (auto& p : st.surveyPoints)
+    reassign(p.layer);
+  if (st.currentLayer == oldN)
+    st.currentLayer = newN;
+  it->name = newN;
+  BumpCadGpuCache(st);
+  return true;
+}
+
+bool CadDeleteDrawingLayer(AppCommandState& st, const std::string& nameRaw, std::string* err) {
+  const std::string name = Trim(nameRaw);
+  if (name == "0") {
+    if (err)
+      *err = "Layer 0 cannot be deleted.";
+    return false;
+  }
+  const auto itRow = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+                                  [&](const CadLayerRow& r) { return r.name == name; });
+  if (itRow == st.drawingLayerTable.end()) {
+    if (err)
+      *err = "Layer not found.";
+    return false;
+  }
+  auto reassign = [&](std::string& L) {
+    if (L == name)
+      L = "0";
+  };
+  for (auto& a : st.userLineAttrs)
+    reassign(a.layer);
+  for (auto& a : st.userCircleAttrs)
+    reassign(a.layer);
+  for (auto& a : st.userArcAttrs)
+    reassign(a.layer);
+  for (auto& a : st.userEllAttrs)
+    reassign(a.layer);
+  for (auto& a : st.userPolylineAttrs)
+    reassign(a.layer);
+  for (auto& a : st.cadAnnotationAttrs)
+    reassign(a.layer);
+  for (auto& p : st.surveyPoints)
+    reassign(p.layer);
+  if (st.currentLayer == name)
+    st.currentLayer = "0";
+  st.drawingLayerTable.erase(itRow);
+  BumpCadGpuCache(st);
+  return true;
 }
 
 void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::string>* log) {
@@ -4610,7 +4809,7 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     st.userPolylineVerts.insert(st.userPolylineVerts.end(), pv.begin(), pv.end());
     st.userPolylineOffsets.push_back(baseVert + nv);
     st.userPolylineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
-    st.userPolylineAttrs.push_back(EntityAttributes{});
+    st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
     polysOut++;
 
     for (int ej : comp) {
@@ -4887,7 +5086,7 @@ static void FinishEllipseFromRatio(AppCommandState& st, float ratio, std::vector
   ell.majVy = vy0;
   ell.ratio = ratio;
   st.userEllipses.push_back(ell);
-  st.userEllAttrs.push_back(EntityAttributes{});
+  st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
   st.active = K::None;
   ResetEllipseDraft(st);
@@ -4911,7 +5110,7 @@ static void CommitPolylineDraft(AppCommandState& st, bool closed, std::vector<st
   st.userPolylineVerts.insert(st.userPolylineVerts.end(), st.polylineDraftVerts.begin(), st.polylineDraftVerts.end());
   st.userPolylineOffsets.push_back(baseVert + static_cast<int>(nvert));
   st.userPolylineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
-  st.userPolylineAttrs.push_back(EntityAttributes{});
+  st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
   st.active = AppCommandState::Kind::None;
   ResetPolylineDraft(st);
@@ -4937,7 +5136,7 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
   st.userLinesFlat.push_back(x);
   st.userLinesFlat.push_back(y);
   st.userLinesFlat.push_back(0.f);
-  st.userLineAttrs.push_back(EntityAttributes{});
+  st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
 
   st.anchorX = x;
@@ -5300,7 +5499,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       ann.text = line;
       if (!ann.text.empty()) {
         st.cadAnnotations.push_back(std::move(ann));
-        st.cadAnnotationAttrs.push_back(EntityAttributes{});
+        st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
         log.push_back("TEXT placed.");
       } else
         log.push_back("TEXT — empty; canceled.");
@@ -5647,9 +5846,7 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
   return "";
 }
 
-namespace {
-
-bool ParseHexColorForViewport(const std::string& s, float* r, float* g, float* b) {
+static bool ParseHexColorForViewport(const std::string& s, float* r, float* g, float* b) {
   if (s.size() < 4 || s[0] != '#')
     return false;
   auto hexVal = [](char c) -> int {
@@ -5717,7 +5914,7 @@ static const NamedRgbPreset kViewportColorPresets[] = {
     {"Orange", 1.f, 0.5f, 0.f},
 };
 
-bool LookupNamedRgbPreset(const std::string& c, float* r, float* g, float* b) {
+static bool LookupNamedRgbPreset(const std::string& c, float* r, float* g, float* b) {
   for (const auto& p : kViewportColorPresets) {
     if (c == p.storage) {
       *r = p.r;
@@ -5729,11 +5926,9 @@ bool LookupNamedRgbPreset(const std::string& c, float* r, float* g, float* b) {
   return false;
 }
 
-} // namespace
-
 void ResolveStoredColorForViewport(const std::string& colorStorage, float transparency, float defaultR,
-                                   float defaultG, float defaultB, float* outRgba) {
-  const float tr = std::clamp(transparency, 0.f, 1.f);
+                                  float defaultG, float defaultB, float* outRgba) {
+  const float tr = transparency < 0.f ? 0.f : std::clamp(transparency, 0.f, 1.f);
   const float alpha = 1.f - tr;
   const std::string& c = colorStorage;
 
@@ -5767,6 +5962,95 @@ void ResolveStoredColorForViewport(const std::string& colorStorage, float transp
   outRgba[1] = defaultG;
   outRgba[2] = defaultB;
   outRgba[3] = alpha;
+}
+
+static bool LayerNamesEqCi(const std::string& a, const std::string& b) {
+  if (a.size() != b.size())
+    return false;
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
+      return false;
+  }
+  return true;
+}
+
+const CadLayerRow* FindDrawingLayerRowCi(const AppCommandState& st, const std::string& layerName) {
+  for (const auto& r : st.drawingLayerTable) {
+    if (LayerNamesEqCi(r.name, layerName))
+      return &r;
+  }
+  return nullptr;
+}
+
+float EffectiveEntityTransparency01(const EntityAttributes& e, const CadLayerRow* layer) {
+  if (e.transparency >= 0.f)
+    return std::clamp(e.transparency, 0.f, 1.f);
+  if (layer)
+    return std::clamp(layer->transparency, 0.f, 1.f);
+  return 0.f;
+}
+
+float EffectiveEntityLineweightMm(const EntityAttributes& e, const CadLayerRow* layer) {
+  if (e.lineweightMm >= 0.f)
+    return e.lineweightMm;
+  if (layer && layer->lineweightMm >= 0.f)
+    return layer->lineweightMm;
+  return 0.18f;
+}
+
+std::string EffectiveEntityLinetypeNameForViewport(const EntityAttributes& e, const CadLayerRow* layer) {
+  const std::string c = CadCanonicalLinetypeNameForDxf(e.linetype);
+  if (c.empty() || c == "ByLayer")
+    return layer ? layer->linetype : std::string("Continuous");
+  return e.linetype;
+}
+
+void ResolveEntityRgbaForViewport(const EntityAttributes& attr, const CadLayerRow* layer, float defaultR,
+                                  float defaultG, float defaultB, float* outRgba) {
+  const float tr = EffectiveEntityTransparency01(attr, layer);
+  std::string col = attr.color;
+  if (col.empty() || col == "ByLayer") {
+    if (layer && !layer->color.empty() && layer->color != "ByLayer")
+      col = layer->color;
+  }
+  ResolveStoredColorForViewport(col, tr, defaultR, defaultG, defaultB, outRgba);
+}
+
+struct DxfLwPair {
+  int code;
+  float mm;
+};
+
+static const DxfLwPair kDxfLwTable[] = {
+    {0, 0.f},     {5, 0.05f},   {9, 0.09f},   {13, 0.13f},  {15, 0.15f},  {18, 0.18f},  {20, 0.20f},
+    {25, 0.25f},  {30, 0.30f},  {35, 0.35f},  {40, 0.40f},  {50, 0.50f},  {53, 0.53f},  {60, 0.60f},
+    {70, 0.70f},  {80, 0.80f},  {90, 0.90f},  {100, 1.00f}, {106, 1.06f}, {120, 1.20f}, {140, 1.40f},
+    {158, 1.58f}, {200, 2.00f}, {211, 2.11f},
+};
+
+int CadDxfLineweightEnum370FromMm(float mm) {
+  if (mm < 0.f)
+    return -1;
+  int best = 18;
+  float bestD = 1e9f;
+  for (const auto& e : kDxfLwTable) {
+    const float d = std::fabs(e.mm - mm);
+    if (d < bestD) {
+      bestD = d;
+      best = e.code;
+    }
+  }
+  return best;
+}
+
+float CadDxfLineweightMmFromEnum370(int code) {
+  if (code < 0)
+    return -1.f;
+  for (const auto& e : kDxfLwTable) {
+    if (e.code == code)
+      return e.mm;
+  }
+  return -1.f;
 }
 
 bool LoadApplicationFont() {

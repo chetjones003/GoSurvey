@@ -6,11 +6,12 @@
 #include "AppIcon.hpp"
 #include "SplashScreen.hpp"
 
+#include <GL/glew.h>
+#include <GLFW/glfw3.h>
+
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
-
-#include <GLFW/glfw3.h>
 
 #include <algorithm>
 #include <cstdio>
@@ -444,8 +445,8 @@ int main() {
   AppLogoGpu appLogo{};
   {
     namespace fs = std::filesystem;
-    const fs::path iconPath = ResolveBundledAssetPath(fs::path("icons") / "white_logo2.png");
-    if (!iconPath.empty() && LoadAppLogoFromPngFile(window, iconPath, &appLogo))
+    const fs::path iconPath = ResolveAppLogoPngPath();
+    if (!iconPath.empty() && LoadAppLogoFromPngFile(window, iconPath, &appLogo, true))
       CadUiSetMenuBarLogo((ImTextureID)(intptr_t)(uintptr_t)appLogo.texture, static_cast<float>(appLogo.width),
                           static_cast<float>(appLogo.height));
   }
@@ -466,7 +467,7 @@ int main() {
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
 
-  RunStartupSplash(window, 4.0);
+  RunStartupSplash(window, 2.0);
   GlfwApplyMainStageWindowChrome(window);
 
   AppCommandState cmd;
@@ -557,20 +558,37 @@ int main() {
     ImGui::SetNextWindowSize(mainVp->WorkSize);
     ImGui::SetNextWindowViewport(mainVp->ID);
 
-    ImGuiWindowFlags hostFlags = ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar |
-                                 ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                                 ImGuiWindowFlags_NoBringToFrontOnFocus | ImGuiWindowFlags_NoNavFocus |
-                                 ImGuiWindowFlags_NoBackground;
+    ImGuiWindowFlags hostFlags = ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoCollapse |
+                                 ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBringToFrontOnFocus |
+                                 ImGuiWindowFlags_NoNavFocus | ImGuiWindowFlags_NoBackground;
+#if !defined(_WIN32)
+    hostFlags |= ImGuiWindowFlags_MenuBar;
+#endif
 
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     ImGui::Begin("GoSurveyHost", nullptr, hostFlags);
 
+    DrawMainWindowTitleBar(window);
+
+#if defined(_WIN32)
+    {
+      const float menuStripH = ImGui::GetFrameHeight() + 6.f;
+      ImGui::BeginChild("##GoSurveyMenuHost", ImVec2(0.f, menuStripH), false,
+                        ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
+      if (ImGui::BeginMenuBar()) {
+        DrawMainMenuBar(cmd, cmdLog);
+        ImGui::EndMenuBar();
+      }
+      ImGui::EndChild();
+    }
+#else
     if (ImGui::BeginMenuBar()) {
       DrawMainMenuBar(cmd, cmdLog);
       ImGui::EndMenuBar();
     }
+#endif
 
     DrawRibbonBar(ribbonH, cmd, cmdLog);
 
@@ -620,6 +638,7 @@ int main() {
 
     DrawCreatePointsPanel(cmd, cmdLog);
     DrawSettingsPanel(cmd);
+    DrawLayerManagerWindow(cmd, &cmdLog);
     DrawViewPointsPanel(cmd, cmdLog);
     DrawImportPointsPanel(cmd, cmdLog);
     DrawExportPointsPanel(cmd, cmdLog);
@@ -777,6 +796,7 @@ int main() {
     ext.polylineOffsets = &cmd.userPolylineOffsets;
     ext.polylineClosed = &cmd.userPolylineClosed;
     ext.polylineAttrs = &cmd.userPolylineAttrs;
+    ext.drawingLayers = &cmd.drawingLayerTable;
 
     viewport.SetSize(fbW, fbH);
     viewport.RenderScene(panX, panY, zoom, fbW, fbH, cmd.userLinesFlat, cmd.userCirclesCxCyR, cmd.cadGpuRevision,
@@ -786,7 +806,7 @@ int main() {
                          highlightLines.empty() ? nullptr : &highlightLines,
                          highlightCircles.empty() ? nullptr : &highlightCircles,
                          surveyMarkers.empty() ? nullptr : &surveyMarkers, &cmd.userLineAttrs,
-                         &cmd.userCircleAttrs, &ext, gridVisible);
+                         &cmd.userCircleAttrs, &ext, gridVisible, &cmd.drawingLayerTable);
 
     ImGui::Render();
     int displayW = 0;

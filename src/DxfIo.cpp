@@ -1,6 +1,7 @@
 ﻿#include "DxfIo.hpp"
 
 #include "CadCommands.hpp"
+#include "CadLinetype.hpp"
 #include "DxfColors.hpp"
 #include "MtextRichFormat.hpp"
 
@@ -1376,9 +1377,34 @@ void BuildExportLayerRgbHint(const AppCommandState& st, std::unordered_map<std::
     seedFromAttrs(st.userCircleAttrs[i]);
   for (size_t i = 0; i < st.cadAnnotationAttrs.size(); ++i)
     seedFromAttrs(st.cadAnnotationAttrs[i]);
+
+  for (const CadLayerRow& row : st.drawingLayerTable) {
+    if (row.name.empty())
+      continue;
+    uint32_t rgb = 0;
+    if (!row.color.empty() && row.color[0] == '#' && Hex7ToRgbPacked(row.color, &rgb))
+      (*hint)[row.name] = rgb & 0xFFFFFFu;
+    else if (NamedColorToRgbPacked(row.color, &rgb))
+      (*hint)[row.name] = rgb & 0xFFFFFFu;
+  }
 }
 
-} // namespace
+const CadLayerRow* FindLayerRowDxfExport(const AppCommandState& st, const std::string& name) {
+  for (const auto& r : st.drawingLayerTable) {
+    if (EqCiStr(r.name, name))
+      return &r;
+  }
+  return nullptr;
+}
+
+std::string DxfExportEntityLtype6(const EntityAttributes& at) {
+  const std::string c = CadCanonicalLinetypeNameForDxf(at.linetype);
+  if (c.empty() || c == "ByLayer")
+    return "BYLAYER";
+  if (c == "ByBlock")
+    return "BYBLOCK";
+  return CadCanonicalLinetypeNameForDxf(at.linetype);
+}
 
 static void MaybeRebaseLargeCadCoordinatesAfterImport(AppCommandState& st, std::vector<std::string>& log) {
   auto consider = [&](double x, double y, double* mnX, double* mxX, double* mnY, double* mxY, bool* any) {
@@ -1488,7 +1514,7 @@ static void MaybeRebaseLargeCadCoordinatesAfterImport(AppCommandState& st, std::
   log.push_back(buf);
 }
 
-bool ImportDxfFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
   if (!pathUtf8 || pathUtf8[0] == '\0') {
     log.push_back("DXF import — no path.");
     return false;
@@ -1566,7 +1592,7 @@ bool ImportDxfFile(AppCommandState& st, const char* pathUtf8, std::vector<std::s
   return true;
 }
 
-bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
   if (!pathUtf8 || pathUtf8[0] == '\0') {
     log.push_back("DXF export — no path.");
     return false;
@@ -1586,6 +1612,10 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
     addLayerName(st.cadAnnotationAttrs[i].layer.empty() ? std::string("0") : st.cadAnnotationAttrs[i].layer);
   for (const SurveyPoint& p : st.surveyPoints)
     addLayerName(p.layer);
+  for (const CadLayerRow& lr : st.drawingLayerTable) {
+    if (!lr.name.empty())
+      addLayerName(lr.name);
+  }
   layerNames.insert("0");
 
   const size_t nSeg = st.userLinesFlat.size() / 6;
@@ -1750,6 +1780,25 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
 
   auto emitPair = [&](int code, const std::string& val) {
     out << code << "\r\n" << val << "\r\n";
+  };
+
+  auto dxfEmitTransparency440IfNeeded = [&](float transparency01) {
+    if (transparency01 <= 1e-5f)
+      return;
+    const unsigned char b =
+        static_cast<unsigned char>(std::lround(std::clamp(transparency01, 0.f, 1.f) * 255.f));
+    const int pack = static_cast<int>(0x02000000u | static_cast<unsigned int>(b));
+    emitPair(440, std::to_string(pack));
+  };
+  auto dxfEntityLineweight370Str = [](const EntityAttributes& at) -> std::string {
+    if (at.lineweightMm < 0.f)
+      return "-1";
+    return std::to_string(CadDxfLineweightEnum370FromMm(at.lineweightMm));
+  };
+  auto dxfLayerLineweight370Str = [](const CadLayerRow* row) -> std::string {
+    if (!row || row->lineweightMm < 0.f)
+      return "-3";
+    return std::to_string(CadDxfLineweightEnum370FromMm(row->lineweightMm));
   };
 
   emitPair(0, "SECTION");
@@ -1971,9 +2020,10 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
   emitPair(2, "LTYPE");
   emitPair(5, "3");
   emitPair(100, "AcDbSymbolTable");
-  emitPair(70, "3");
+  emitPair(70, "7");
   emitPair(0, "LTYPE");
   emitPair(5, "4");
+  emitPair(330, "3");
   emitPair(100, "AcDbSymbolTableRecord");
   emitPair(100, "AcDbLinetypeTableRecord");
   emitPair(2, "ByBlock");
@@ -1984,6 +2034,7 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
   emitPair(40, "0.0");
   emitPair(0, "LTYPE");
   emitPair(5, "5");
+  emitPair(330, "3");
   emitPair(100, "AcDbSymbolTableRecord");
   emitPair(100, "AcDbLinetypeTableRecord");
   emitPair(2, "ByLayer");
@@ -1994,6 +2045,7 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
   emitPair(40, "0.0");
   emitPair(0, "LTYPE");
   emitPair(5, "6");
+  emitPair(330, "3");
   emitPair(100, "AcDbSymbolTableRecord");
   emitPair(100, "AcDbLinetypeTableRecord");
   emitPair(2, "Continuous");
@@ -2002,15 +2054,87 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
   emitPair(72, "65");
   emitPair(73, "0");
   emitPair(40, "0.0");
+  emitPair(0, "LTYPE");
+  emitPair(5, "7");
+  emitPair(330, "3");
+  emitPair(100, "AcDbSymbolTableRecord");
+  emitPair(100, "AcDbLinetypeTableRecord");
+  emitPair(2, "DASHED");
+  emitPair(70, "0");
+  emitPair(3, "Dashed __ __ __ __ __ __ __ __ __ __ __ __ __ __");
+  emitPair(72, "65");
+  emitPair(73, "2");
+  emitPair(40, "0.75");
+  emitPair(49, "0.5");
+  emitPair(74, "0");
+  emitPair(49, "-0.25");
+  emitPair(74, "0");
+  emitPair(0, "LTYPE");
+  emitPair(5, "8");
+  emitPair(330, "3");
+  emitPair(100, "AcDbSymbolTableRecord");
+  emitPair(100, "AcDbLinetypeTableRecord");
+  emitPair(2, "HIDDEN");
+  emitPair(70, "0");
+  emitPair(3, "Hidden __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __ __");
+  emitPair(72, "65");
+  emitPair(73, "2");
+  emitPair(40, "0.375");
+  emitPair(49, "0.25");
+  emitPair(74, "0");
+  emitPair(49, "-0.125");
+  emitPair(74, "0");
+  emitPair(0, "LTYPE");
+  emitPair(5, "9");
+  emitPair(330, "3");
+  emitPair(100, "AcDbSymbolTableRecord");
+  emitPair(100, "AcDbLinetypeTableRecord");
+  emitPair(2, "CENTER");
+  emitPair(70, "0");
+  emitPair(3, "Center ____ _ ____ _ ____ _ ____ _ ____ _ ____");
+  emitPair(72, "65");
+  emitPair(73, "4");
+  emitPair(40, "2.0");
+  emitPair(49, "1.25");
+  emitPair(74, "0");
+  emitPair(49, "-0.25");
+  emitPair(74, "0");
+  emitPair(49, "0.25");
+  emitPair(74, "0");
+  emitPair(49, "-0.25");
+  emitPair(74, "0");
+  emitPair(0, "LTYPE");
+  emitPair(5, "A");
+  emitPair(330, "3");
+  emitPair(100, "AcDbSymbolTableRecord");
+  emitPair(100, "AcDbLinetypeTableRecord");
+  emitPair(2, "PHANTOM");
+  emitPair(70, "0");
+  emitPair(3, "Phantom ______  __  __  ______  __  __  ______  __  __  _");
+  emitPair(72, "65");
+  emitPair(73, "6");
+  emitPair(40, "2.5");
+  emitPair(49, "1.25");
+  emitPair(74, "0");
+  emitPair(49, "-0.25");
+  emitPair(74, "0");
+  emitPair(49, "0.25");
+  emitPair(74, "0");
+  emitPair(49, "-0.25");
+  emitPair(74, "0");
+  emitPair(49, "0.25");
+  emitPair(74, "0");
+  emitPair(49, "-0.25");
+  emitPair(74, "0");
   emitPair(0, "ENDTAB");
 
   emitPair(0, "TABLE");
   emitPair(2, "STYLE");
-  emitPair(5, "7");
+  emitPair(5, "B");
   emitPair(100, "AcDbSymbolTable");
   emitPair(70, "1");
   emitPair(0, "STYLE");
-  emitPair(5, "8");
+  emitPair(5, "C");
   emitPair(100, "AcDbSymbolTableRecord");
   emitPair(100, "AcDbTextStyleTableRecord");
   emitPair(2, "Standard");
@@ -2039,6 +2163,14 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
       lr = it->second & 0xFFFFFFu;
     const int lac = DxfNearestAciFromRgbPacked(lr);
 
+    const CadLayerRow* row = FindLayerRowDxfExport(st, lyr);
+    std::string ltype6 = "Continuous";
+    if (row && !row->linetype.empty()) {
+      ltype6 = CadCanonicalLinetypeNameForDxf(row->linetype);
+      if (ltype6.empty())
+        ltype6 = "Continuous";
+    }
+
     emitPair(0, "LAYER");
     emitPair(5, hbuf);
     emitPair(330, "2");
@@ -2047,9 +2179,11 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
     emitPair(2, lyr);
     emitPair(70, "0");
     emitPair(62, std::to_string(lac));
-    emitPair(6, "Continuous");
+    emitPair(6, ltype6);
     emitPair(290, "1");
-    emitPair(370, "-3");
+    emitPair(370, dxfLayerLineweight370Str(row));
+    if (row)
+      dxfEmitTransparency440IfNeeded(row->transparency);
     emitPair(390, hObjPlotPh);
   }
 
@@ -2268,14 +2402,18 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
         AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
     const int entAci = DxfNearestAciFromRgbPacked(rgb);
 
+    const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
+    const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
+
     emitPair(0, "LINE");
     emitPair(5, hb);
     emitPair(330, hBrModel);
     emitPair(100, "AcDbEntity");
-    emitPair(8, at.layer.empty() ? std::string("0") : at.layer);
-    emitPair(6, "Continuous");
+    emitPair(8, layer8);
+    emitPair(6, DxfExportEntityLtype6(at));
     emitPair(62, std::to_string(entAci));
-    emitPair(370, "-3");
+    emitPair(370, dxfEntityLineweight370Str(at));
+    dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, lyr));
     emitPair(100, "AcDbLine");
     emitPair(10, std::to_string(static_cast<double>(x0) + kExpOx));
     emitPair(20, std::to_string(static_cast<double>(y0) + kExpOy));
@@ -2301,14 +2439,18 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
     const float cy = st.userCirclesCxCyR[ci * 3 + 1];
     const float rr = st.userCirclesCxCyR[ci * 3 + 2];
 
+    const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
+    const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
+
     emitPair(0, "CIRCLE");
     emitPair(5, hb);
     emitPair(330, hBrModel);
     emitPair(100, "AcDbEntity");
-    emitPair(8, at.layer.empty() ? std::string("0") : at.layer);
-    emitPair(6, "Continuous");
+    emitPair(8, layer8);
+    emitPair(6, DxfExportEntityLtype6(at));
     emitPair(62, std::to_string(entAci));
-    emitPair(370, "-3");
+    emitPair(370, dxfEntityLineweight370Str(at));
+    dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, lyr));
     emitPair(100, "AcDbCircle");
     emitPair(10, std::to_string(static_cast<double>(cx) + kExpOx));
     emitPair(20, std::to_string(static_cast<double>(cy) + kExpOy));
@@ -2329,15 +2471,17 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
     const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
     const int entAci = DxfNearestAciFromRgbPacked(rgb);
     const std::string layer = at.layer;
+    const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer);
 
     emitPair(0, "POINT");
     emitPair(5, hb);
     emitPair(330, hBrModel);
     emitPair(100, "AcDbEntity");
     emitPair(8, layer);
-    emitPair(6, "Continuous");
+    emitPair(6, DxfExportEntityLtype6(at));
     emitPair(62, std::to_string(entAci));
-    emitPair(370, "-3");
+    emitPair(370, dxfEntityLineweight370Str(at));
+    dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, lyr));
     emitPair(100, "AcDbPoint");
     emitPair(10, std::to_string(static_cast<double>(p.easting) + kExpOx));
     emitPair(20, std::to_string(static_cast<double>(p.northing) + kExpOy));
@@ -2369,6 +2513,7 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
         AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
     const int entAci = DxfNearestAciFromRgbPacked(rgb);
     const std::string layer = at.layer.empty() ? std::string("0") : at.layer;
+    const CadLayerRow* annLyr = FindLayerRowDxfExport(st, layer);
 
     if (an.kind == CadAnnotation::Kind::Text) {
       char hb[24];
@@ -2380,10 +2525,11 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
       emitPair(330, hBrModel);
       emitPair(100, "AcDbEntity");
       emitPair(8, layer);
-      emitPair(6, "Continuous");
+      emitPair(6, DxfExportEntityLtype6(at));
       emitPair(7, "Standard");
       emitPair(62, std::to_string(entAci));
-      emitPair(370, "-3");
+      emitPair(370, dxfEntityLineweight370Str(at));
+      dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, annLyr));
       emitPair(100, "AcDbText");
       emitPair(10, std::to_string(static_cast<double>(an.insX) + kExpOx));
       emitPair(20, std::to_string(static_cast<double>(an.insY) + kExpOy));
@@ -2420,9 +2566,10 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
         emitPair(330, hBrModel);
         emitPair(100, "AcDbEntity");
         emitPair(8, layer);
-        emitPair(6, "Continuous");
+        emitPair(6, DxfExportEntityLtype6(at));
         emitPair(62, std::to_string(entAci));
-        emitPair(370, "-3");
+        emitPair(370, dxfEntityLineweight370Str(at));
+        dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, annLyr));
         emitPair(100, "AcDbLine");
         emitPair(10, std::to_string(static_cast<double>(x0) + kExpOx));
         emitPair(20, std::to_string(static_cast<double>(y0) + kExpOy));
@@ -2447,10 +2594,11 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
       emitPair(330, hBrModel);
       emitPair(100, "AcDbEntity");
       emitPair(8, layer);
-      emitPair(6, "Continuous");
+      emitPair(6, DxfExportEntityLtype6(at));
       emitPair(7, "Standard");
       emitPair(62, std::to_string(entAci));
-      emitPair(370, "-3");
+      emitPair(370, dxfEntityLineweight370Str(at));
+      dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, annLyr));
       emitPair(100, "AcDbText");
       emitPair(10, std::to_string(static_cast<double>(an.insX) + kExpOx));
       emitPair(20, std::to_string(static_cast<double>(an.insY) + kExpOy));
@@ -2479,10 +2627,11 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
       emitPair(330, hBrModel);
       emitPair(100, "AcDbEntity");
       emitPair(8, layer);
-      emitPair(6, "Continuous");
+      emitPair(6, DxfExportEntityLtype6(at));
       emitPair(7, "Standard");
       emitPair(62, std::to_string(entAci));
-      emitPair(370, "-3");
+      emitPair(370, dxfEntityLineweight370Str(at));
+      dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, annLyr));
       emitPair(100, "AcDbMText");
       emitPair(10, std::to_string(static_cast<double>(an.insX) + kExpOx));
       emitPair(20, std::to_string(static_cast<double>(an.insY) + kExpOy));
@@ -2542,4 +2691,14 @@ bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<
                 std::to_string(nPointOut) + " POINT(s), " + std::to_string(nTextOut) + " TEXT, " +
                 std::to_string(nMtextOut) + " MTEXT, " + std::to_string(nDimExplodedLines) + " LINE(s) from dimensions.");
   return true;
+}
+
+} // namespace
+
+bool ImportDxfFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+  return ImportDxfFile_Impl(st, pathUtf8, log);
+}
+
+bool ExportDxfFile(const AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
+  return ExportDxfFile_Impl(st, pathUtf8, log);
 }

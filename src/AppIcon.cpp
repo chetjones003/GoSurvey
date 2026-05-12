@@ -53,6 +53,15 @@ static void FlipRgbaRowsTopToBottom(int w, int h, const unsigned char* src, unsi
   }
 }
 
+/// True if any pixel is not fully opaque — chroma-keying would fight real alpha.
+static bool ImageUsesAlphaChannel(const stbi_uc* rgba, int w, int h) {
+  const int n = w * h;
+  for (int i = 0; i < n; ++i)
+    if (rgba[static_cast<size_t>(i) * 4u + 3u] < 255)
+      return true;
+  return false;
+}
+
 /// Makes near-white backdrop transparent (straight alpha). Tuned for #fff / scan anti-alias fringes.
 static void ApplyNearWhiteChromaKey(stbi_uc* rgba, int w, int h) {
   constexpr int kOpaqueBelow = 218; // min(R,G,B) at or below: leave pixel unchanged
@@ -87,6 +96,15 @@ std::filesystem::path ResolveBundledAssetPath(const std::filesystem::path& relat
   return {};
 }
 
+std::filesystem::path ResolveAppLogoPngPath() {
+  namespace fs = std::filesystem;
+  if (fs::path p = ResolveBundledAssetPath(fs::path("icons") / "bitmap.png"); !p.empty())
+    return p;
+  if (fs::path p = ResolveBundledAssetPath(fs::path("bitmap.png")); !p.empty())
+    return p;
+  return {};
+}
+
 static bool LoadPngToGpuTexture(const std::filesystem::path& pngPath, GLFWwindow* windowForIcon, AppLogoGpu* out,
                                 bool keyNearWhiteBackground) {
   if (out) {
@@ -106,7 +124,7 @@ static bool LoadPngToGpuTexture(const std::filesystem::path& pngPath, GLFWwindow
     return false;
   }
 
-  if (keyNearWhiteBackground)
+  if (keyNearWhiteBackground && !ImageUsesAlphaChannel(rgba, w, h))
     ApplyNearWhiteChromaKey(rgba, w, h);
 
   if (windowForIcon) {
