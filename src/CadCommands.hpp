@@ -4,6 +4,7 @@
 
 #include "SurveyPoints.hpp"
 
+#include <algorithm>
 #include <cstdint>
 #include <string>
 #include <utility>
@@ -328,6 +329,13 @@ struct AppCommandState {
   /// Drawing viewport: survey index under cursor (-1 if none), for hover feedback.
   int viewportHoverSurveyPointIndex = -1;
 
+  /// When true, viewport picks should use the snapped world point (OSNAP) instead of the sticky-blended cursor.
+  bool viewportSnapPickValid = false;
+
+  float viewportSnapPickWorldX = 0.f;
+
+  float viewportSnapPickWorldY = 0.f;
+
   /// Last Drawing1 viewport metrics (match survey MTEXT box to on-screen font scaling).
   float viewportLastSurveyLayoutOrthoHalfH = 50.f;
 
@@ -367,6 +375,42 @@ struct AppCommandState {
   /// Scales arrow length derived from annotation height (1 = default).
 
   float viewportDimArrowScale = 1.f;
+
+  /// Object snap master (F3, status bar OSNAP). Per-type toggles: right-click OSNAP or Settings → Object snap.
+
+  bool objectSnapEnabled = true;
+
+  bool objectSnapEndpoint = true;
+
+  bool objectSnapMidpoint = true;
+
+  bool objectSnapCenter = true;
+
+  bool objectSnapPerpendicular = true;
+
+  bool objectSnapSurveyPoint = true;
+
+  bool objectSnapGeometricCenter = true;
+
+  /// Screen-space aperture (pixels) for object snap tolerance and related viewport picks.
+
+  float objectSnapAperturePx = 14.f;
+
+  /// Half-size in screen pixels for green object-snap glyphs (square / triangle / circle overlay).
+
+  float objectSnapGlyphHalfPx = 15.f;
+
+  /// Shift+RMB snap menu: next viewport pick uses this world point (then cleared on submit / cancel).
+
+  bool pendingOneShotSnapValid = false;
+
+  float pendingOneShotSnapX = 0.f;
+
+  float pendingOneShotSnapY = 0.f;
+
+  /// \c static_cast<\ref CadSnap::Kind>.
+
+  int pendingOneShotSnapKind = 0;
 
 
 
@@ -1201,6 +1245,9 @@ void BeginSelectionBoxCorner(AppCommandState& st, float wx, float wy, float anch
 
 
 void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// Clears Shift+RMB one-shot snap (call on pick submit, cancel, reset, clear geometry).
+void ClearPendingOneShotObjectSnap(AppCommandState& st);
 
 /// Called from UI when COPY survey duplicate-ID modal closes (\p applySurveyDup runs duplication).
 void ApplyCopySurveyDuplicateModalResult(AppCommandState& st, bool applySurveyDup, std::vector<std::string>& log);

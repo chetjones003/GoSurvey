@@ -1,0 +1,441 @@
+================================================================================
+  GoSurvey workspace file (.gs) — format specification and load behavior
+================================================================================
+
+This document describes the native GoSurvey workspace file format (extension
+.gs), how it is structured on disk, and exactly how the application reads it.
+It is derived from the implementation in:
+
+  src/GsIo.cpp
+  src/GsIo.hpp
+
+Related types and defaults appear in:
+
+  src/CadCommands.hpp   (geometry containers, EntityAttributes, CadAnnotation,
+                         CadLayerRow, AppCommandState fields)
+  src/SurveyPoints.hpp  (SurveyPoint, SurveyPointLabelStyle, CreatePointsOptions,
+                         SurveyLabelStyleTemplates, SurveyDuplicatePolicy)
+
+
+--------------------------------------------------------------------------------
+1. OVERVIEW
+--------------------------------------------------------------------------------
+
+1.1 What a .gs file is
+  A .gs file is a single UTF-8 text file containing one JSON object (the root
+  object). There is no binary wrapper, compression, or encryption. Pretty
+  printing (indented JSON) is used when saving; the parser accepts any valid
+  JSON whitespace.
+
+1.2 Purpose
+  The file stores:
+    • Drawing geometry (lines, circles, arcs, ellipses, polylines)
+    • Parallel attribute arrays (layer, color, linetype, etc.)
+    • CAD annotations (TEXT, MTEXT, aligned dimensions)
+    • Layer table
+    • Survey points and create-points bookkeeping
+    • A subset of user preferences normally edited in Settings (viewport,
+      survey display, object snap)
+
+1.3 API entry points (C++)
+  bool SaveGoSurveyFile(const AppCommandState& st, const char* pathUtf8,
+                        std::vector<std::string>& log);
+  bool LoadGoSurveyFile(AppCommandState& st, const char* pathUtf8,
+                        std::vector<std::string>& log);
+
+  Paths are passed as UTF-8 C strings and are opened via std::filesystem::path
+  (Save: ofstream; Load: ifstream, both std::ios::binary).
+
+
+--------------------------------------------------------------------------------
+2. ROOT JSON OBJECT
+--------------------------------------------------------------------------------
+
+The root MUST be a JSON object with the following top-level keys:
+
+  "format"    (string)  MUST be exactly:  gosurvey
+  "version"   (integer) Currently MUST be:  1
+                         (constant kGsFormatVersion in GsIo.cpp)
+  "document"  (object)  Required. Drawing + survey payload (see section 3).
+  "settings"  (object)  Optional. UI / viewport / OSNAP preferences (section 4).
+
+Any other top-level keys are ignored by the current loader.
+
+2.1 Version policy
+  LoadGoSurveyFile rejects the file if:
+    • "format" is missing or not the string "gosurvey", OR
+    • "version" is missing, not an integer, or not equal to 1.
+
+  Future format versions would increment kGsFormatVersion and require migration
+  or loader updates.
+
+
+--------------------------------------------------------------------------------
+3. THE "document" OBJECT
+--------------------------------------------------------------------------------
+
+All keys below live under root["document"]. Types are JSON types as written by
+nlohmann::json (numbers may serialize as integers or floats; the loader uses
+.get<float>() or .get<int>() where noted).
+
+3.1 Document coordinate system and scale
+  worldDocumentOriginX   (number, default 0 on load if missing)
+  worldDocumentOriginY   (number, default 0)
+  modelUnitsPerPlottedInch (number, default 50 on load if missing)
+    — "Drawing scale" / model units per plotted inch (MUP).
+
+  defaultPlottedTextHeightInches (number, default 0.125)
+    — Default annotation height in plotted inches for new TEXT/MTEXT.
+
+  currentLayer (string, default "0")
+    — Active layer name for new geometry.
+
+3.2 Lines — flat array + parallel attributes
+  lineVerts   (array of numbers)
+    Flat list of line segment vertices in world coordinates. Each segment is
+    SIX consecutive floats:
+      x0, y0, z0, x1, y1, z1
+    Z is stored for forward compatibility; the application primarily uses X/Y.
+    The array length MUST be a multiple of 6.
+
+  lineAttrs   (array of objects)
+    One object per line segment (lineVerts.size() / 6). Each object follows
+    EntityAttributes (section 5.1). Save always emits one attr per segment;
+    ValidateDocumentJson enforces the count match.
+
+3.3 Circles
+  circles     (array of numbers)
+    Triplets: centerX, centerY, radius  (length MUST be multiple of 3).
+
+  circleAttrs (array of objects)
+    Length MUST equal circles.size() / 3. EntityAttributes per circle.
+
+3.4 Arcs
+  arcs        (array of objects)
+    Each object:
+      cx, cy, r, startRad, sweepRad   (numbers)
+    Angles are radians in the same convention as the rest of the CAD core.
+
+  arcAttrs    (array of objects)
+    Length MUST equal arcs.size(). One EntityAttributes per arc.
+
+3.5 Ellipses
+  ellipses    (array of objects)
+    Each object:
+      cx, cy           — center
+      majVx, majVy     — major axis vector (length = semi-major axis in world)
+      ratio            — minor/major axis length ratio (0 < ratio <= 1 typical)
+
+  ellAttrs    (array of objects)
+    Length MUST equal ellipses.size().
+
+3.6 Polylines — offsets into shared vertex pool
+  polylineOffsets (array of integers)
+    Defines polylines as half-open index ranges into polylineVerts (vertex
+    indices, NOT byte offsets). If there are N polylines, this array has N+1
+    entries:
+      [ vStart0, vStart1, vStart2, ..., vStartN ]
+    Polyline i uses vertex indices from polylineOffsets[i] inclusive through
+    polylineOffsets[i+1] exclusive in the polylineVerts array.
+
+    Allowed states:
+      • Empty array: means ZERO polylines. Then polylineVerts MUST be empty,
+        polylineClosed and polylineAttrs MUST be empty arrays.
+      • Length >= 2: entries MUST be non-decreasing integers; the last offset
+        times 3 MUST NOT exceed polylineVerts.size() (each vertex is 3 floats).
+
+    Length == 1 is INVALID (validation fails).
+
+  polylineVerts (array of numbers)
+    Length MUST be a multiple of 3:  x, y, z per vertex index.
+
+  polylineClosed (array of integers)
+    Length MUST equal number of polylines = polylineOffsets.size() - 1 when
+    offsets non-empty. Each entry is 0 or 1 (stored as int; clamped on load).
+    1 means the polyline is closed (last vertex connects to first).
+
+  polylineAttrs (array of objects)
+    Length MUST match polyline count. EntityAttributes per polyline.
+
+3.7 Annotations
+  annotations     (array of objects)
+    Each object is a CadAnnotation (section 5.2). Field "kind" is a string tag:
+      "text"  — single-line TEXT
+      "mtext" — multiline MTEXT box
+      "dim"   — aligned linear dimension (DimAligned)
+    Unknown "kind" strings load as Text.
+
+  annotationAttrs (array of objects)
+    Length MUST equal annotations.size(). EntityAttributes per annotation.
+
+3.8 Layers
+  layers (array of objects, optional on load — missing means empty table)
+    Each object is a CadLayerRow (section 5.3).
+
+3.9 Survey points
+  surveyPoints (array of objects, optional — missing loads as no points)
+    Per point:
+      id            (number)  integer survey point ID
+      easting       (number)
+      northing      (number)
+      elevation     (number)
+      description   (string, optional)
+      layer         (string, optional)
+      labelStyle    (integer)  enum SurveyPointLabelStyle (section 6.1)
+      labelMtextAnnIndex (integer)  index into cadAnnotations for linked label,
+                                    or -1 if none
+
+3.10 Create-points tool state
+  createPointsNextId (integer, default 1)
+    Next point id suggestion for CREATEPOINTS-style placement.
+
+  createPointsOptions (object, optional — default-constructed if missing)
+    Fields (section 6.2):
+      startNumber, sequentialNumbering, pointNumberOffset, sequenceNumbersFrom,
+      layer, defaultDescription, defaultElevation, duplicatePolicy (int enum)
+
+
+--------------------------------------------------------------------------------
+4. THE "settings" OBJECT
+--------------------------------------------------------------------------------
+
+root["settings"] is optional. If present and a JSON object, keys are applied
+best-effort in ApplySettingsFromJson: unknown keys are ignored; missing keys
+leave existing in-memory values unchanged only where the load sequence has
+already reset state (see section 7 — in practice the document load clears
+geometry first, then applies document, then settings).
+
+Survey display / labels:
+  surveyPointCrossSpanPlottedInches   (number)
+  surveyPointShowIdInViewport         (boolean)
+  surveyPointLabelPlottedHeightInches (number)
+  surveyLabelOffsetEastPlottedIn      (number)
+  surveyLabelOffsetNorthPlottedIn     (number)
+  surveyLabelBoxWidthPlottedIn        (number)
+  surveyLabelBoxHeightPlottedIn       (number)
+  surveyLabelTemplates                (object, optional)
+    Sub-keys (all strings, MTEXT-style templates with placeholders):
+      numberDesc, numberOnly, descOnly, numberElev, numberElevDesc
+    Placeholders documented in SurveyPoints.hpp: {id} {desc} {elev}; use a
+    real newline in the string for line breaks.
+
+Viewport crosshair (Drawing1):
+  viewportCrosshairR, G, B              (numbers, 0..1 typical)
+  viewportCrosshairArmFracX, ArmFracY (numbers)
+  viewportCrosshairPickHalfPxX, PickHalfPxY (numbers)
+  viewportCrosshairHairPx               (number)
+
+Viewport text size clamps (pixels):
+  viewportTextMinPx, viewportTextMaxPx
+  viewportMtextMinPx, viewportMtextMaxPx
+
+Dimension viewport drawing:
+  viewportDimExtLinePx, viewportDimDimLinePx, viewportDimArrowScale
+  viewportDimTextMinPx, viewportDimTextMaxPx
+
+Object snap:
+  objectSnapEnabled, objectSnapEndpoint, objectSnapMidpoint, objectSnapCenter,
+  objectSnapPerpendicular, objectSnapSurveyPoint, objectSnapGeometricCenter
+      (booleans)
+  objectSnapAperturePx   (number; clamped to [4, 64] after load)
+  objectSnapGlyphHalfPx  (number; clamped to [3, 48] after load)
+
+
+--------------------------------------------------------------------------------
+5. SHARED RECORD SHAPES
+--------------------------------------------------------------------------------
+
+5.1 EntityAttributes (JSON object)
+  Used in lineAttrs, circleAttrs, arcAttrs, ellAttrs, polylineAttrs,
+  annotationAttrs.
+
+  layer          (string)   default "0"
+  color          (string)   e.g. "ByLayer", "Red", ACI names as stored by app
+  linetype       (string)   "ByLayer", "ByBlock", or table name, e.g. "Continuous"
+  lineweightMm   (number)   paper mm; -1.f means ByLayer
+  transparency   (number)   0 = opaque, 1 = fully transparent; -1 = ByLayer
+
+  Load uses tolerant checks: strings and numbers read if present and typed.
+
+5.2 CadAnnotation (JSON object in "annotations")
+  kind               (string)  "text" | "mtext" | "dim"
+  insX, insY         (numbers) insertion / anchor in world units
+  plottedHeightInches (number)
+  rotationRad        (number)  mathematical angle (radians), CCW from +X
+  text               (string)  content (TEXT/MTEXT); dimension text for dim
+  boxMinX,Y, boxMaxX,Y (numbers) MTEXT box corners in world space
+  dimExt1X,Y, dimExt2X,Y (numbers) dimension extension anchor points
+  dimSignedOffset    (number)  perpendicular offset for dim line
+  surveyPointLabelFor (integer) if >= 0, links this MTEXT to survey point index
+
+5.3 CadLayerRow (JSON object in "layers")
+  name          (string)
+  on            (boolean)
+  frozen        (boolean)
+  locked        (boolean)
+  color         (string)  layer swatch (not "ByLayer" in this row)
+  linetype      (string)
+  lineweightMm  (number)
+  transparency  (number)
+
+
+--------------------------------------------------------------------------------
+6. ENUMERATIONS (stored as integers in JSON)
+--------------------------------------------------------------------------------
+
+6.1 SurveyPointLabelStyle  (field surveyPoints[].labelStyle)
+  0 = None
+  1 = NumberDesc
+  2 = NumberOnly
+  3 = DescOnly
+  4 = NumberElev
+  5 = NumberElevDesc
+
+  On load, values outside 0..5 fall back to default NumberDesc (see
+  o.value("labelStyle", ...) in GsIo.cpp).
+
+6.2 SurveyDuplicatePolicy  (createPointsOptions.duplicatePolicy)
+  0 = Notify
+  1 = Renumber
+  2 = Merge
+  3 = Overwrite
+
+  CreatePointsOptionsFromJson only accepts 0..3; otherwise leaves default.
+
+
+--------------------------------------------------------------------------------
+7. HOW GoSurvey LOADS A .gs FILE (EXACT ORDER)
+--------------------------------------------------------------------------------
+
+LoadGoSurveyFile performs the following steps:
+
+7.1 Open and parse
+  • Open path as binary ifstream (UTF-8 path via std::filesystem::path).
+  • Parse entire file as JSON into `root`. Parse exceptions → log and failure.
+
+7.2 Root validation
+  • root must be a JSON object.
+  • root["format"] must exist and equal string "gosurvey".
+  • root["version"] must exist, be an integer, and equal 1.
+  • root["document"] must exist and be an object.
+
+7.3 Structural validation of document
+  ValidateDocumentJson(doc, log) checks array lengths and polyline invariants
+  (section 3). On failure, load aborts before mutating application state.
+
+7.4 Reset application drawing state
+  On success path, BEFORE applying JSON:
+    ResetCadToolStateToIdle(st)
+    CloseMtextRichEditorUi(st)
+    st.mtextRichEditorBuf.clear()
+    ClearCadGeometry(st)          — clears vectors for lines, circles, etc.
+    st.surveyPoints.clear()
+    st.surveyPointIdBuffers.clear()
+    st.selectedSurveyPointIndices.clear()
+    st.drawingLayerTable.clear()
+
+7.5 Apply document payload
+  ApplyDocumentFromJson(st, doc, log):
+    • Sets world origin, MUP, defaults, current layer from doc with defaults.
+    • Fills userLinesFlat from lineVerts; userLineAttrs from lineAttrs objects.
+    • Same pattern for circles, arcs, ellipses, polylines, annotations, layers.
+    • Survey points: id, easting, northing, elevation, description, layer,
+      labelStyle, labelMtextAnnIndex with defaults for missing fields.
+    • createPointsNextId and createPointsOptions.
+    • Post-pass: repairs inconsistent survey ↔ MTEXT cross-references:
+        - For each survey point, if labelMtextAnnIndex points to a non-MTEXT
+          annotation or one whose surveyPointLabelFor != point index, reset to -1.
+        - For each annotation with surveyPointLabelFor >= 0, if the survey row’s
+          labelMtextAnnIndex does not match this annotation index, clear
+          surveyPointLabelFor to -1.
+
+7.6 Apply settings (optional)
+  If root["settings"] is an object, ApplySettingsFromJson merges supported keys
+  (section 4). Numeric/boolean presence is checked before assignment.
+
+7.7 Post-load maintenance
+    EnsureAttrCounts(st)
+      — ensures parallel *_Attrs arrays match geometry counts (safety net).
+
+    SyncDrawingLayerTableWithGeometry(st)
+      — reconciles layer table with layers referenced by entities.
+
+    RepositionAllSurveyPointLabels(st)
+
+    For each survey point with labelStyle != None and no linked MTEXT:
+        EnsureSurveyPointLabelMtext(st, i, &log)
+      — may create MTEXT annotations for labels.
+
+    RepositionAllSurveyPointLabels(st) again
+
+    BumpCadGpuCache(st)
+
+  Success log message: "Opened GoSurvey workspace (.gs): <path>"
+
+
+--------------------------------------------------------------------------------
+8. HOW GoSurvey SAVES A .gs FILE
+--------------------------------------------------------------------------------
+
+SaveGoSurveyFile:
+
+  • BuildRoot(st) constructs the root object (format, version, document,
+    settings) exactly as described in sections 2–4.
+  • Opens path as binary ofstream.
+  • Writes root.dump(2) — pretty-printed JSON with indent 2.
+  • On success: log "Saved GoSurvey workspace (.gs): <path>"
+
+
+--------------------------------------------------------------------------------
+9. HAND-EDITING AND FORWARD COMPATIBILITY
+--------------------------------------------------------------------------------
+
+9.1 Strict vs tolerant
+  Structural rules in ValidateDocumentJson are strict: a hand-edited file that
+  violates array length invariants will fail to load with descriptive messages
+  in the log vector.
+
+  Many leaf fields inside objects are tolerant: missing keys use defaults on
+  load (especially under settings and survey point objects).
+
+9.2 Unknown fields
+  Extra keys inside document, settings, or attribute objects are generally
+  preserved in JSON on round-trip only if you merge manually — the C++ save
+  path only writes known keys. Unknown keys in an input file are ignored at
+  load (nlohmann parses them but Apply* functions do not read them).
+
+9.3 Float precision
+  All coordinates are IEEE floats serialized as JSON numbers; very large
+  world coordinates may lose ULP precision as with any JSON float workflow.
+
+
+--------------------------------------------------------------------------------
+10. QUICK REFERENCE — REQUIRED document ARRAYS
+--------------------------------------------------------------------------------
+
+Key                 Type        Invariant
+------------------  ----------  ----------------------------------------------
+lineVerts           number[]    size % 6 == 0
+lineAttrs           object[]    size == lineVerts.size() / 6
+circles             number[]    size % 3 == 0
+circleAttrs         object[]    size == circles.size() / 3
+arcs                object[]    arcAttrs.size() == arcs.size()
+arcAttrs            object[]
+ellipses            object[]    ellAttrs.size() == ellipses.size()
+ellAttrs            object[]
+polylineOffsets     int[]       empty OR length >= 2, non-decreasing, valid range
+polylineVerts       number[]    size % 3 == 0; empty if offsets empty
+polylineClosed      int[]       size == polyline count (offsets.size()-1)
+polylineAttrs       object[]    same size as polylineClosed
+annotations         object[]    annotationAttrs.size() == annotations.size()
+annotationAttrs     object[]
+
+
+--------------------------------------------------------------------------------
+11. FILE LOCATION IN REPOSITORY
+--------------------------------------------------------------------------------
+
+  Implementation:  src/GsIo.cpp, src/GsIo.hpp
+  This document:     docs/gs-file-format.txt
+
+End of document.

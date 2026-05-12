@@ -11,3 +11,7 @@ bool BrowseSaveFileCsvUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNam
 bool BrowseOpenFileDxfUtf8(char* utf8Out, size_t utf8Cap);
 
 bool BrowseSaveFileDxfUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
+
+bool BrowseOpenFileGsUtf8(char* utf8Out, size_t utf8Cap);
+
+bool BrowseSaveFileGsUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);

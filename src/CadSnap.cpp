@@ -1,7 +1,10 @@
 #include "CadSnap.hpp"
 
+#include "SurveyPoints.hpp"
+
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace CadSnap {
 
@@ -13,40 +16,236 @@ float WorldToleranceFromPixels(float viewportHeightPx, float orthoHalfHeightWorl
 
 namespace {
 
-void Consider(float wx, float wy, float px, float py, Kind kind, float tolWorld, Hit* best,
-              float* bestDistSq, int* bestPri) {
-  const float dx = px - wx;
-  const float dy = py - wy;
-  const float d2 = dx * dx + dy * dy;
+constexpr float kHugePickDistSq = 1.e30f;
+
+[[nodiscard]] float DistSqPointToSegment(float px, float py, float ax, float ay, float bx, float by) {
+  const float vx = bx - ax;
+  const float vy = by - ay;
+  const float len2 = vx * vx + vy * vy;
+  if (len2 < 1.e-18f) {
+    const float dx = px - ax;
+    const float dy = py - ay;
+    return dx * dx + dy * dy;
+  }
+  float t = ((px - ax) * vx + (py - ay) * vy) / len2;
+  t = std::clamp(t, 0.f, 1.f);
+  const float qx = ax + t * vx;
+  const float qy = ay + t * vy;
+  const float dx = px - qx;
+  const float dy = py - qy;
+  return dx * dx + dy * dy;
+}
+
+[[nodiscard]] float MinDistSqToSurveyMarker(float wx, float wy, float e, float n, float halfArmWorld) {
+  const float s = std::max(halfArmWorld, 1.e-8f);
+  const float d1 = DistSqPointToSegment(wx, wy, e - s, n - s, e + s, n + s);
+  const float d2 = DistSqPointToSegment(wx, wy, e - s, n + s, e + s, n - s);
+  return std::min(d1, d2);
+}
+
+[[nodiscard]] float CircleCenterPickDistSq(float wx, float wy, float cx, float cy, float r, float tolWorld) {
+  if (r <= 1.e-6f)
+    return kHugePickDistSq;
+  const float d = std::hypot(wx - cx, wy - cy);
+  if (d <= r)
+    return 0.f;
+  const float out = d - r;
+  if (out <= tolWorld)
+    return out * out;
+  return kHugePickDistSq;
+}
+
+[[nodiscard]] bool EllipseContainsPoint(float wx, float wy, const CadEllipse& el) {
+  const float ma = std::hypot(el.majVx, el.majVy);
+  if (ma < 1.e-8f)
+    return false;
+  const float ux = el.majVx / ma;
+  const float uy = el.majVy / ma;
+  const float px = -uy;
+  const float py = ux;
+  const float mb = ma * el.ratio;
+  const float dx = wx - el.cx;
+  const float dy = wy - el.cy;
+  const float u = dx * ux + dy * uy;
+  const float v = dx * px + dy * py;
+  const float uu = u / std::max(ma, 1.e-8f);
+  const float vv = v / std::max(mb, 1.e-8f);
+  return (uu * uu + vv * vv) <= 1.f + 1.e-5f;
+}
+
+[[nodiscard]] float EllipseCenterPickDistSq(float wx, float wy, const CadEllipse& el, float tolWorld) {
+  if (EllipseContainsPoint(wx, wy, el))
+    return 0.f;
+  constexpr int kSeg = 48;
+  constexpr float kTwoPi = 6.28318530718f;
+  const float ma = std::hypot(el.majVx, el.majVy);
+  if (ma < 1.e-8f)
+    return kHugePickDistSq;
+  const float ux = el.majVx / ma;
+  const float uy = el.majVy / ma;
+  const float px = -uy;
+  const float py = ux;
+  const float mb = ma * el.ratio;
+  float minD2 = kHugePickDistSq;
+  for (int i = 0; i < kSeg; ++i) {
+    const float ang0 = kTwoPi * static_cast<float>(i) / static_cast<float>(kSeg);
+    const float ang1 = kTwoPi * static_cast<float>(i + 1) / static_cast<float>(kSeg);
+    const float c0 = std::cos(ang0);
+    const float s0 = std::sin(ang0);
+    const float c1 = std::cos(ang1);
+    const float s1 = std::sin(ang1);
+    const float x0 = el.cx + ux * (ma * c0) + px * (mb * s0);
+    const float y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
+    const float x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
+    const float y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
+    minD2 = std::min(minD2, DistSqPointToSegment(wx, wy, x0, y0, x1, y1));
+  }
+  const float md = std::sqrt(std::min(std::max(minD2, 0.f), 1.e20f));
+  if (md <= tolWorld)
+    return minD2;
+  return kHugePickDistSq;
+}
+
+[[nodiscard]] bool PointInClosedPoly(float wx, float wy, const std::vector<float>& V, int v0, int v1) {
+  const int n = v1 - v0;
+  if (n < 3)
+    return false;
+  bool c = false;
+  for (int i = 0, j = n - 1; i < n; j = i++) {
+    const float yi = V[static_cast<size_t>((v0 + i) * 3 + 1)];
+    const float yj = V[static_cast<size_t>((v0 + j) * 3 + 1)];
+    if ((yi > wy) == (yj > wy))
+      continue;
+    const float xi = V[static_cast<size_t>((v0 + i) * 3)];
+    const float xj = V[static_cast<size_t>((v0 + j) * 3)];
+    const float t = (yj - yi);
+    const float xInt = (t > 1.e-12f || t < -1.e-12f) ? (xj - xi) * (wy - yi) / t + xi : xi;
+    if (wx < xInt)
+      c = !c;
+  }
+  return c;
+}
+
+[[nodiscard]] float ClosedPolyGeometricPickDistSq(float wx, float wy, const std::vector<float>& V, int v0,
+                                                  int v1) {
+  const int n = v1 - v0;
+  if (n < 3)
+    return kHugePickDistSq;
+  float minD2 = kHugePickDistSq;
+  for (int i = 0; i < n; ++i) {
+    const int ia = v0 + i;
+    const int ib = v0 + ((i + 1) % n);
+    const float ax = V[static_cast<size_t>(ia * 3)];
+    const float ay = V[static_cast<size_t>(ia * 3 + 1)];
+    const float bx = V[static_cast<size_t>(ib * 3)];
+    const float by = V[static_cast<size_t>(ib * 3 + 1)];
+    minD2 = std::min(minD2, DistSqPointToSegment(wx, wy, ax, ay, bx, by));
+  }
+  if (PointInClosedPoly(wx, wy, V, v0, v1))
+    return 0.f;
+  return minD2;
+}
+
+[[nodiscard]] bool ClosedPolylineCentroid(const std::vector<float>& V, int v0, int v1, float* outCx,
+                                          float* outCy) {
+  const int n = v1 - v0;
+  if (n < 3 || !outCx || !outCy)
+    return false;
+  double a2 = 0.0;
+  double cxa = 0.0;
+  double cya = 0.0;
+  for (int i = 0; i < n; ++i) {
+    const int ia = v0 + i;
+    const int ib = v0 + ((i + 1) % n);
+    const double xi = static_cast<double>(V[static_cast<size_t>(ia * 3)]);
+    const double yi = static_cast<double>(V[static_cast<size_t>(ia * 3 + 1)]);
+    const double xj = static_cast<double>(V[static_cast<size_t>(ib * 3)]);
+    const double yj = static_cast<double>(V[static_cast<size_t>(ib * 3 + 1)]);
+    const double cross = xi * yj - xj * yi;
+    a2 += cross;
+    cxa += (xi + xj) * cross;
+    cya += (yi + yj) * cross;
+  }
+  if (std::fabs(a2) < 1.e-12) {
+    double sx = 0.0, sy = 0.0;
+    for (int i = 0; i < n; ++i) {
+      sx += static_cast<double>(V[static_cast<size_t>((v0 + i) * 3)]);
+      sy += static_cast<double>(V[static_cast<size_t>((v0 + i) * 3 + 1)]);
+    }
+    *outCx = static_cast<float>(sx / static_cast<double>(n));
+    *outCy = static_cast<float>(sy / static_cast<double>(n));
+    return true;
+  }
+  const double inv = 1.0 / (3.0 * a2);
+  *outCx = static_cast<float>(cxa * inv);
+  *outCy = static_cast<float>(cya * inv);
+  return std::isfinite(static_cast<double>(*outCx)) && std::isfinite(static_cast<double>(*outCy));
+}
+
+struct SnapPickAccum {
+  Hit best{};
+  float bestPickDistSq = 0.f;
+  int bestPri = -1;
+  float bestTieDistSq = 0.f;
+};
+
+void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float snapY, Kind kind, float pickDistSq,
+                  float tolWorld) {
   const float tol2 = tolWorld * tolWorld;
-  if (d2 > tol2)
+  if (!(pickDistSq <= tol2) || pickDistSq > 1.e28f)
     return;
   const int pri = Priority(kind);
-  if (!best->valid || d2 < *bestDistSq - 1.e-12f ||
-      (std::abs(d2 - *bestDistSq) <= 1.e-12f * tol2 && pri > *bestPri)) {
-    best->valid = true;
-    best->kind = kind;
-    best->x = px;
-    best->y = py;
-    *bestDistSq = d2;
-    *bestPri = pri;
+  const float tie = (snapX - wx) * (snapX - wx) + (snapY - wy) * (snapY - wy);
+  const float eps = 1.e-9f * std::max(tol2, 1.f);
+  if (!acc->best.valid) {
+    acc->best.valid = true;
+    acc->best.kind = kind;
+    acc->best.x = snapX;
+    acc->best.y = snapY;
+    acc->bestPickDistSq = pickDistSq;
+    acc->bestPri = pri;
+    acc->bestTieDistSq = tie;
+    return;
+  }
+  if (pickDistSq < acc->bestPickDistSq - eps) {
+    acc->best.kind = kind;
+    acc->best.x = snapX;
+    acc->best.y = snapY;
+    acc->bestPickDistSq = pickDistSq;
+    acc->bestPri = pri;
+    acc->bestTieDistSq = tie;
+    return;
+  }
+  if (std::fabs(pickDistSq - acc->bestPickDistSq) > eps)
+    return;
+  if (pri > acc->bestPri || (pri == acc->bestPri && tie < acc->bestTieDistSq - 1.e-12f)) {
+    acc->best.kind = kind;
+    acc->best.x = snapX;
+    acc->best.y = snapY;
+    acc->bestPri = pri;
+    acc->bestTieDistSq = tie;
   }
 }
 
+void Consider(SnapPickAccum* acc, float wx, float wy, float px, float py, Kind kind, float tolWorld) {
+  const float dx = px - wx;
+  const float dy = py - wy;
+  ConsiderSnap(acc, wx, wy, px, py, kind, dx * dx + dy * dy, tolWorld);
+}
+
 /// Foot of perpendicular from \p ref onto segment AB (clamped). Cursor \p wx,\p wy only gates distance.
-void AppendPerpendicularFromRef(float refX, float refY, float wx, float wy, float ax, float ay, float bx,
-                                float by, float tolWorld, Hit* best, float* bestDistSq, int* bestPri) {
+void AppendPerpendicularFromRef(float refX, float refY, float wx, float wy, float ax, float ay, float bx, float by,
+                                float tolWorld, SnapPickAccum* acc) {
   const float vx = bx - ax;
   const float vy = by - ay;
   const float len2 = vx * vx + vy * vy;
   if (len2 < 1.e-12f)
     return;
-  // Q = A + t*v with (ref - Q)·v = 0 on the infinite line => t = ((ref - A)·v) / (v·v)
   float t = ((refX - ax) * vx + (refY - ay) * vy) / len2;
   t = std::clamp(t, 0.f, 1.f);
   const float qx = ax + t * vx;
   const float qy = ay + t * vy;
-  Consider(wx, wy, qx, qy, Kind::Perpendicular, tolWorld, best, bestDistSq, bestPri);
+  Consider(acc, wx, wy, qx, qy, Kind::Perpendicular, tolWorld);
 }
 
 [[nodiscard]] bool PerpendicularReference(const AppCommandState& cmd, float* refX, float* refY) {
@@ -107,13 +306,11 @@ void AppendPerpendicularFromRef(float refX, float refY, float wx, float wy, floa
 } // namespace
 
 Hit FindBest(float wx, float wy, const AppCommandState& cmd, bool commandActive, float tolWorld) {
-  Hit best{};
-  float bestDistSq = 0.f;
-  int bestPri = -1;
+  SnapPickAccum acc{};
 
   float refPx = 0.f;
   float refPy = 0.f;
-  const bool havePerpRef = commandActive && PerpendicularReference(cmd, &refPx, &refPy);
+  const bool havePerpRef = commandActive && cmd.objectSnapPerpendicular && PerpendicularReference(cmd, &refPx, &refPy);
 
   const auto& L = cmd.userLinesFlat;
   if (L.size() % 6 == 0) {
@@ -122,20 +319,26 @@ Hit FindBest(float wx, float wy, const AppCommandState& cmd, bool commandActive,
       const float y0 = L[i + 1];
       const float x1 = L[i + 3];
       const float y1 = L[i + 4];
-      Consider(wx, wy, x0, y0, Kind::Endpoint, tolWorld, &best, &bestDistSq, &bestPri);
-      Consider(wx, wy, x1, y1, Kind::Endpoint, tolWorld, &best, &bestDistSq, &bestPri);
-      Consider(wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld, &best,
-               &bestDistSq, &bestPri);
+      if (cmd.objectSnapEndpoint) {
+        Consider(&acc, wx, wy, x0, y0, Kind::Endpoint, tolWorld);
+        Consider(&acc, wx, wy, x1, y1, Kind::Endpoint, tolWorld);
+      }
+      if (cmd.objectSnapMidpoint)
+        Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld);
       if (havePerpRef)
-        AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &best, &bestDistSq,
-                                   &bestPri);
+        AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc);
     }
   }
 
   const auto& C = cmd.userCirclesCxCyR;
-  if (C.size() % 3 == 0) {
-    for (size_t i = 0; i + 2 < C.size(); i += 3)
-      Consider(wx, wy, C[i], C[i + 1], Kind::Center, tolWorld, &best, &bestDistSq, &bestPri);
+  if (C.size() % 3 == 0 && cmd.objectSnapCenter) {
+    for (size_t i = 0; i + 2 < C.size(); i += 3) {
+      const float cx = C[i];
+      const float cy = C[i + 1];
+      const float r = C[i + 2];
+      const float p2 = CircleCenterPickDistSq(wx, wy, cx, cy, r, tolWorld);
+      ConsiderSnap(&acc, wx, wy, cx, cy, Kind::Center, p2, tolWorld);
+    }
   }
 
   const int polyCount =
@@ -150,29 +353,40 @@ Hit FindBest(float wx, float wy, const AppCommandState& cmd, bool commandActive,
       const float ay = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 1)];
       const float bx = cmd.userPolylineVerts[static_cast<size_t>(ib * 3)];
       const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
-      Consider(wx, wy, ax, ay, Kind::Endpoint, tolWorld, &best, &bestDistSq, &bestPri);
-      Consider(wx, wy, bx, by, Kind::Endpoint, tolWorld, &best, &bestDistSq, &bestPri);
-      Consider(wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld, &best, &bestDistSq,
-               &bestPri);
+      if (cmd.objectSnapEndpoint) {
+        Consider(&acc, wx, wy, ax, ay, Kind::Endpoint, tolWorld);
+        Consider(&acc, wx, wy, bx, by, Kind::Endpoint, tolWorld);
+      }
+      if (cmd.objectSnapMidpoint)
+        Consider(&acc, wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld);
       if (havePerpRef)
-        AppendPerpendicularFromRef(refPx, refPy, wx, wy, ax, ay, bx, by, tolWorld, &best, &bestDistSq, &bestPri);
+        AppendPerpendicularFromRef(refPx, refPy, wx, wy, ax, ay, bx, by, tolWorld, &acc);
     };
     for (int vi = v0; vi + 1 < v1; ++vi)
       considerEdge(vi, vi + 1);
     if (closed && v1 - v0 >= 2)
       considerEdge(v1 - 1, v0);
+
+    if (cmd.objectSnapGeometricCenter && closed && v1 - v0 >= 3) {
+      float gcx = 0.f;
+      float gcy = 0.f;
+      if (ClosedPolylineCentroid(cmd.userPolylineVerts, v0, v1, &gcx, &gcy)) {
+        const float p2 = ClosedPolyGeometricPickDistSq(wx, wy, cmd.userPolylineVerts, v0, v1);
+        ConsiderSnap(&acc, wx, wy, gcx, gcy, Kind::GeometricCenter, p2, tolWorld);
+      }
+    }
   }
 
   constexpr int kArcSnapSeg = 24;
   for (const CadArc& a : cmd.userArcs) {
     if (a.r <= 1e-6f || kArcSnapSeg < 1)
       continue;
-    const float tStart = a.startRad;
     const float tEnd = a.startRad + a.sweepRad;
-    Consider(wx, wy, a.cx + a.r * std::cos(tStart), a.cy + a.r * std::sin(tStart), Kind::Endpoint, tolWorld, &best,
-             &bestDistSq, &bestPri);
-    Consider(wx, wy, a.cx + a.r * std::cos(tEnd), a.cy + a.r * std::sin(tEnd), Kind::Endpoint, tolWorld, &best,
-             &bestDistSq, &bestPri);
+    if (cmd.objectSnapEndpoint) {
+      Consider(&acc, wx, wy, a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), Kind::Endpoint,
+               tolWorld);
+      Consider(&acc, wx, wy, a.cx + a.r * std::cos(tEnd), a.cy + a.r * std::sin(tEnd), Kind::Endpoint, tolWorld);
+    }
     for (int i = 0; i < kArcSnapSeg; ++i) {
       const float u0 = static_cast<float>(i) / static_cast<float>(kArcSnapSeg);
       const float u1 = static_cast<float>(i + 1) / static_cast<float>(kArcSnapSeg);
@@ -182,9 +396,10 @@ Hit FindBest(float wx, float wy, const AppCommandState& cmd, bool commandActive,
       const float y0 = a.cy + a.r * std::sin(t0);
       const float x1 = a.cx + a.r * std::cos(t1);
       const float y1 = a.cy + a.r * std::sin(t1);
-      Consider(wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld, &best, &bestDistSq, &bestPri);
+      if (cmd.objectSnapMidpoint)
+        Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld);
       if (havePerpRef)
-        AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &best, &bestDistSq, &bestPri);
+        AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc);
     }
   }
 
@@ -194,7 +409,10 @@ Hit FindBest(float wx, float wy, const AppCommandState& cmd, bool commandActive,
     const float ma = std::hypot(el.majVx, el.majVy);
     if (ma < 1e-8f || kEllSnapSeg < 3)
       continue;
-    Consider(wx, wy, el.cx, el.cy, Kind::Center, tolWorld, &best, &bestDistSq, &bestPri);
+    if (cmd.objectSnapCenter) {
+      const float p2 = EllipseCenterPickDistSq(wx, wy, el, tolWorld);
+      ConsiderSnap(&acc, wx, wy, el.cx, el.cy, Kind::Center, p2, tolWorld);
+    }
     const float ux = el.majVx / ma;
     const float uy = el.majVy / ma;
     const float px = -uy;
@@ -211,16 +429,307 @@ Hit FindBest(float wx, float wy, const AppCommandState& cmd, bool commandActive,
       const float y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
       const float x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
       const float y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
-      Consider(wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld, &best, &bestDistSq, &bestPri);
+      if (cmd.objectSnapMidpoint)
+        Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld);
       if (havePerpRef)
-        AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &best, &bestDistSq, &bestPri);
+        AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc);
     }
   }
 
-  for (const SurveyPoint& sp : cmd.surveyPoints)
-    Consider(wx, wy, sp.easting, sp.northing, Kind::SurveyCenter, tolWorld, &best, &bestDistSq, &bestPri);
+  if (cmd.objectSnapSurveyPoint) {
+    const float arm =
+        SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
+    for (const SurveyPoint& sp : cmd.surveyPoints) {
+      const float p2 = MinDistSqToSurveyMarker(wx, wy, sp.easting, sp.northing, arm);
+      ConsiderSnap(&acc, wx, wy, sp.easting, sp.northing, Kind::SurveyCenter, p2, tolWorld);
+    }
+  }
 
-  return best;
+  return acc.best;
+}
+
+bool CommandHasPerpendicularSnapReference(const AppCommandState& cmd, bool commandActive) {
+  if (!commandActive || !cmd.objectSnapPerpendicular)
+    return false;
+  float rx = 0.f;
+  float ry = 0.f;
+  return PerpendicularReference(cmd, &rx, &ry);
+}
+
+void PushSnapPickerEntry(float px, float py, Kind kind, float sortWx, float sortWy,
+                         std::vector<SnapCandidateEntry>& out) {
+  SnapCandidateEntry e;
+  e.hit.valid = true;
+  e.hit.kind = kind;
+  e.hit.x = px;
+  e.hit.y = py;
+  const float dx = px - sortWx;
+  const float dy = py - sortWy;
+  e.distSq = dx * dx + dy * dy;
+  out.push_back(e);
+}
+
+void PushPerpFootEntry(float refX, float refY, float ax, float ay, float bx, float by, float sortWx, float sortWy,
+                       std::vector<SnapCandidateEntry>& out) {
+  const float vx = bx - ax;
+  const float vy = by - ay;
+  const float len2 = vx * vx + vy * vy;
+  if (len2 < 1.e-12f)
+    return;
+  float t = ((refX - ax) * vx + (refY - ay) * vy) / len2;
+  t = std::clamp(t, 0.f, 1.f);
+  const float qx = ax + t * vx;
+  const float qy = ay + t * vy;
+  PushSnapPickerEntry(qx, qy, Kind::Perpendicular, sortWx, sortWy, out);
+}
+
+void SortDedupeSnapPicker(std::vector<SnapCandidateEntry>& v) {
+  std::sort(v.begin(), v.end(),
+            [](const SnapCandidateEntry& a, const SnapCandidateEntry& b) { return a.distSq < b.distSq; });
+  std::vector<SnapCandidateEntry> u;
+  u.reserve(v.size());
+  for (const auto& c : v) {
+    bool dup = false;
+    for (const auto& p : u) {
+      if (p.hit.kind == c.hit.kind && std::fabs(p.hit.x - c.hit.x) < 1e-5f &&
+          std::fabs(p.hit.y - c.hit.y) < 1e-5f) {
+        dup = true;
+        break;
+      }
+    }
+    if (!dup)
+      u.push_back(c);
+  }
+  v.swap(u);
+}
+
+void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const AppCommandState& cmd,
+                          bool commandActive, std::vector<SnapCandidateEntry>& out) {
+  out.clear();
+  float refPx = 0.f;
+  float refPy = 0.f;
+  const bool havePerpRef = commandActive && cmd.objectSnapPerpendicular && PerpendicularReference(cmd, &refPx, &refPy);
+
+  switch (kind) {
+  case Kind::Endpoint: {
+    const auto& L = cmd.userLinesFlat;
+    if (L.size() % 6 == 0) {
+      for (size_t i = 0; i + 5 < L.size(); i += 6) {
+        PushSnapPickerEntry(L[i], L[i + 1], Kind::Endpoint, sortWorldX, sortWorldY, out);
+        PushSnapPickerEntry(L[i + 3], L[i + 4], Kind::Endpoint, sortWorldX, sortWorldY, out);
+      }
+    }
+    const int polyCount =
+        static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+    for (int pi = 0; pi < polyCount; ++pi) {
+      const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const bool closed =
+          static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+      auto pushEdge = [&](int ia, int ib) {
+        const float ax = cmd.userPolylineVerts[static_cast<size_t>(ia * 3)];
+        const float ay = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 1)];
+        const float bx = cmd.userPolylineVerts[static_cast<size_t>(ib * 3)];
+        const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
+        PushSnapPickerEntry(ax, ay, Kind::Endpoint, sortWorldX, sortWorldY, out);
+        PushSnapPickerEntry(bx, by, Kind::Endpoint, sortWorldX, sortWorldY, out);
+      };
+      for (int vi = v0; vi + 1 < v1; ++vi)
+        pushEdge(vi, vi + 1);
+      if (closed && v1 - v0 >= 2)
+        pushEdge(v1 - 1, v0);
+    }
+    for (const CadArc& a : cmd.userArcs) {
+      if (a.r <= 1e-6f)
+        continue;
+      const float tEnd = a.startRad + a.sweepRad;
+      PushSnapPickerEntry(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), Kind::Endpoint,
+                          sortWorldX, sortWorldY, out);
+      PushSnapPickerEntry(a.cx + a.r * std::cos(tEnd), a.cy + a.r * std::sin(tEnd), Kind::Endpoint, sortWorldX,
+                          sortWorldY, out);
+    }
+    break;
+  }
+  case Kind::Midpoint: {
+    const auto& L = cmd.userLinesFlat;
+    if (L.size() % 6 == 0) {
+      for (size_t i = 0; i + 5 < L.size(); i += 6) {
+        const float x0 = L[i];
+        const float y0 = L[i + 1];
+        const float x1 = L[i + 3];
+        const float y1 = L[i + 4];
+        PushSnapPickerEntry(0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out);
+      }
+    }
+    const int polyCount =
+        static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+    for (int pi = 0; pi < polyCount; ++pi) {
+      const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const bool closed =
+          static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+      auto pushEdgeMid = [&](int ia, int ib) {
+        const float ax = cmd.userPolylineVerts[static_cast<size_t>(ia * 3)];
+        const float ay = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 1)];
+        const float bx = cmd.userPolylineVerts[static_cast<size_t>(ib * 3)];
+        const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
+        PushSnapPickerEntry(0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, sortWorldX, sortWorldY, out);
+      };
+      for (int vi = v0; vi + 1 < v1; ++vi)
+        pushEdgeMid(vi, vi + 1);
+      if (closed && v1 - v0 >= 2)
+        pushEdgeMid(v1 - 1, v0);
+    }
+    constexpr int kArcSnapSeg = 24;
+    for (const CadArc& a : cmd.userArcs) {
+      if (a.r <= 1e-6f || kArcSnapSeg < 1)
+        continue;
+      for (int i = 0; i < kArcSnapSeg; ++i) {
+        const float u0 = static_cast<float>(i) / static_cast<float>(kArcSnapSeg);
+        const float u1 = static_cast<float>(i + 1) / static_cast<float>(kArcSnapSeg);
+        const float t0 = a.startRad + a.sweepRad * u0;
+        const float t1 = a.startRad + a.sweepRad * u1;
+        const float x0 = a.cx + a.r * std::cos(t0);
+        const float y0 = a.cy + a.r * std::sin(t0);
+        const float x1 = a.cx + a.r * std::cos(t1);
+        const float y1 = a.cy + a.r * std::sin(t1);
+        PushSnapPickerEntry(0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out);
+      }
+    }
+    constexpr int kEllSnapSeg = 36;
+    constexpr float kTwoPi = 6.28318530718f;
+    for (const CadEllipse& el : cmd.userEllipses) {
+      const float ma = std::hypot(el.majVx, el.majVy);
+      if (ma < 1e-8f || kEllSnapSeg < 3)
+        continue;
+      const float ux = el.majVx / ma;
+      const float uy = el.majVy / ma;
+      const float px = -uy;
+      const float py = ux;
+      const float mb = ma * el.ratio;
+      for (int i = 0; i < kEllSnapSeg; ++i) {
+        const float ang0 = kTwoPi * static_cast<float>(i) / static_cast<float>(kEllSnapSeg);
+        const float ang1 = kTwoPi * static_cast<float>(i + 1) / static_cast<float>(kEllSnapSeg);
+        const float c0 = std::cos(ang0);
+        const float s0 = std::sin(ang0);
+        const float c1 = std::cos(ang1);
+        const float s1 = std::sin(ang1);
+        const float x0 = el.cx + ux * (ma * c0) + px * (mb * s0);
+        const float y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
+        const float x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
+        const float y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
+        PushSnapPickerEntry(0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out);
+      }
+    }
+    break;
+  }
+  case Kind::Center: {
+    const auto& C = cmd.userCirclesCxCyR;
+    if (C.size() % 3 == 0) {
+      for (size_t i = 0; i + 2 < C.size(); i += 3)
+        PushSnapPickerEntry(C[i], C[i + 1], Kind::Center, sortWorldX, sortWorldY, out);
+    }
+    for (const CadEllipse& el : cmd.userEllipses) {
+      const float ma = std::hypot(el.majVx, el.majVy);
+      if (ma < 1e-8f)
+        continue;
+      PushSnapPickerEntry(el.cx, el.cy, Kind::Center, sortWorldX, sortWorldY, out);
+    }
+    break;
+  }
+  case Kind::Perpendicular: {
+    if (!havePerpRef)
+      break;
+    const auto& L = cmd.userLinesFlat;
+    if (L.size() % 6 == 0) {
+      for (size_t i = 0; i + 5 < L.size(); i += 6)
+        PushPerpFootEntry(refPx, refPy, L[i], L[i + 1], L[i + 3], L[i + 4], sortWorldX, sortWorldY, out);
+    }
+    const int polyCount =
+        static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+    for (int pi = 0; pi < polyCount; ++pi) {
+      const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const bool closed =
+          static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+      auto pushEdgePerp = [&](int ia, int ib) {
+        const float ax = cmd.userPolylineVerts[static_cast<size_t>(ia * 3)];
+        const float ay = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 1)];
+        const float bx = cmd.userPolylineVerts[static_cast<size_t>(ib * 3)];
+        const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
+        PushPerpFootEntry(refPx, refPy, ax, ay, bx, by, sortWorldX, sortWorldY, out);
+      };
+      for (int vi = v0; vi + 1 < v1; ++vi)
+        pushEdgePerp(vi, vi + 1);
+      if (closed && v1 - v0 >= 2)
+        pushEdgePerp(v1 - 1, v0);
+    }
+    constexpr int kArcSnapSeg = 24;
+    for (const CadArc& a : cmd.userArcs) {
+      if (a.r <= 1e-6f || kArcSnapSeg < 1)
+        continue;
+      for (int i = 0; i < kArcSnapSeg; ++i) {
+        const float u0 = static_cast<float>(i) / static_cast<float>(kArcSnapSeg);
+        const float u1 = static_cast<float>(i + 1) / static_cast<float>(kArcSnapSeg);
+        const float t0 = a.startRad + a.sweepRad * u0;
+        const float t1 = a.startRad + a.sweepRad * u1;
+        const float x0 = a.cx + a.r * std::cos(t0);
+        const float y0 = a.cy + a.r * std::sin(t0);
+        const float x1 = a.cx + a.r * std::cos(t1);
+        const float y1 = a.cy + a.r * std::sin(t1);
+        PushPerpFootEntry(refPx, refPy, x0, y0, x1, y1, sortWorldX, sortWorldY, out);
+      }
+    }
+    constexpr int kEllSnapSeg = 36;
+    constexpr float kTwoPi = 6.28318530718f;
+    for (const CadEllipse& el : cmd.userEllipses) {
+      const float ma = std::hypot(el.majVx, el.majVy);
+      if (ma < 1e-8f || kEllSnapSeg < 3)
+        continue;
+      const float ux = el.majVx / ma;
+      const float uy = el.majVy / ma;
+      const float px = -uy;
+      const float py = ux;
+      const float mb = ma * el.ratio;
+      for (int i = 0; i < kEllSnapSeg; ++i) {
+        const float ang0 = kTwoPi * static_cast<float>(i) / static_cast<float>(kEllSnapSeg);
+        const float ang1 = kTwoPi * static_cast<float>(i + 1) / static_cast<float>(kEllSnapSeg);
+        const float c0 = std::cos(ang0);
+        const float s0 = std::sin(ang0);
+        const float c1 = std::cos(ang1);
+        const float s1 = std::sin(ang1);
+        const float x0 = el.cx + ux * (ma * c0) + px * (mb * s0);
+        const float y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
+        const float x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
+        const float y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
+        PushPerpFootEntry(refPx, refPy, x0, y0, x1, y1, sortWorldX, sortWorldY, out);
+      }
+    }
+    break;
+  }
+  case Kind::GeometricCenter: {
+    const int polyCount =
+        static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+    for (int pi = 0; pi < polyCount; ++pi) {
+      const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const bool closed =
+          static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+      if (!closed || v1 - v0 < 3)
+        continue;
+      float gcx = 0.f;
+      float gcy = 0.f;
+      if (ClosedPolylineCentroid(cmd.userPolylineVerts, v0, v1, &gcx, &gcy))
+        PushSnapPickerEntry(gcx, gcy, Kind::GeometricCenter, sortWorldX, sortWorldY, out);
+    }
+    break;
+  }
+  case Kind::SurveyCenter:
+    for (const SurveyPoint& sp : cmd.surveyPoints)
+      PushSnapPickerEntry(sp.easting, sp.northing, Kind::SurveyCenter, sortWorldX, sortWorldY, out);
+    break;
+  }
+  SortDedupeSnapPicker(out);
 }
 
 } // namespace CadSnap

@@ -3,10 +3,10 @@
 
 #include "CadLinetype.hpp"
 #include "DxfIo.hpp"
+#include "GsIo.hpp"
 #include "SurveyCsv.hpp"
 #include "WinFileDialogs.hpp"
 #include "SurveyPoints.hpp"
-#include "WinFileDialogs.hpp"
 
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
@@ -216,6 +216,7 @@ void SetupMainDockLayout(ImGuiID dockspace_id) {
 
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
   static char dxfPath[4096]{};
+  static char gsPath[4096]{};
 #if !defined(_WIN32)
   if (g_menuBarLogoTex && g_menuBarLogoDims.x > 0.f && g_menuBarLogoDims.y > 0.f) {
     const ImGuiStyle& st = ImGui::GetStyle();
@@ -240,6 +241,14 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
     if (ImGui::MenuItem("Export DXF...", nullptr)) {
       if (BrowseSaveFileDxfUtf8(dxfPath, sizeof(dxfPath), "drawing.dxf"))
         ExportDxfFile(cmd, dxfPath, log);
+    }
+    if (ImGui::MenuItem("Save workspace (.gs)...", nullptr)) {
+      if (BrowseSaveFileGsUtf8(gsPath, sizeof(gsPath), "drawing.gs"))
+        SaveGoSurveyFile(cmd, gsPath, log);
+    }
+    if (ImGui::MenuItem("Open workspace (.gs)...", nullptr)) {
+      if (BrowseOpenFileGsUtf8(gsPath, sizeof(gsPath)))
+        LoadGoSurveyFile(cmd, gsPath, log);
     }
     ImGui::Separator();
     ImGui::MenuItem("Exit", nullptr);
@@ -2014,11 +2023,11 @@ void DrawAnnotationGeometryOnly(const AppCommandState& cmd, const std::vector<Se
 }
 
 int PickSurveyPointIndex(const std::vector<SurveyPoint>& pts, float wx, float wy, float surveyCrossHalfWorld,
-                         float viewportHeightPx, float orthoHalfHeightWorld) {
+                         float viewportHeightPx, float orthoHalfHeightWorld, float viewportPickAperturePx) {
   if (pts.empty())
     return -1;
   const float arm = std::max(surveyCrossHalfWorld, 1.e-8f);
-  const float tol = CadSnap::WorldToleranceFromPixels(viewportHeightPx, orthoHalfHeightWorld, 12.f);
+  const float tol = CadSnap::WorldToleranceFromPixels(viewportHeightPx, orthoHalfHeightWorld, viewportPickAperturePx);
   const float radius = std::max(arm, tol) * 1.38f;
   const float r2 = radius * radius;
   int best = -1;
@@ -2769,8 +2778,8 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
 }
 
 void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBufSize, AppCommandState& cmd,
-                          float cursorX, float cursorY, float cursorZ, bool* object_snap_enabled,
-                          bool* ortho_mode_enabled, bool* grid_visible) {
+                          float cursorX, float cursorY, float cursorZ, bool* ortho_mode_enabled,
+                          bool* grid_visible) {
   ImGui::SetNextWindowSize(ImVec2(900, 220), ImGuiCond_FirstUseEver);
   if (!ImGui::Begin("Command line", nullptr)) {
     ImGui::End();
@@ -2922,13 +2931,30 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   ImGui::BeginChild("StatusBarStrip", ImVec2(0, statusBtnH), false, ImGuiWindowFlags_HorizontalScrollbar);
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3.f, 0.f));
 
-  if (object_snap_enabled) {
-    const bool on = *object_snap_enabled;
+  {
+    const bool on = cmd.objectSnapEnabled;
     PushModeToggleButtonColors(on);
     if (ImGui::Button("OSNAP", ImVec2(0.f, statusBtnH)))
-      *object_snap_enabled = !*object_snap_enabled;
+      cmd.objectSnapEnabled = !cmd.objectSnapEnabled;
     PopModeToggleButtonColors(on);
-    ItemHelpTooltip("Object snap — endpoint, mid, center, survey point, perpendicular (F3)");
+    ItemHelpTooltip(
+        "Object snap — F3 toggles; right-click for snap types (endpoint, mid, …). During a command, "
+        "Shift+right-click the drawing: choose a snap type, then pick one from all of that type in the model "
+        "(sorted by distance from the click). Aperture in Settings affects live snapping only. "
+        "Circle/ellipse center and survey snaps engage when the aperture meets the circle or survey marker, not only "
+        "the center point. Snap symbols and magnetic pull apply only while a draw/edit command is active (not in idle "
+        "selection).");
+    if (ImGui::BeginPopupContextItem("osnap_modes", ImGuiPopupFlags_MouseButtonRight)) {
+      ImGui::TextDisabled("Snap to");
+      ImGui::Separator();
+      ImGui::Checkbox("Endpoint", &cmd.objectSnapEndpoint);
+      ImGui::Checkbox("Midpoint", &cmd.objectSnapMidpoint);
+      ImGui::Checkbox("Center", &cmd.objectSnapCenter);
+      ImGui::Checkbox("Perpendicular", &cmd.objectSnapPerpendicular);
+      ImGui::Checkbox("Survey point", &cmd.objectSnapSurveyPoint);
+      ImGui::Checkbox("Geometric center (closed polyline)", &cmd.objectSnapGeometricCenter);
+      ImGui::EndPopup();
+    }
     ImGui::SameLine(0, 4);
   }
   if (ortho_mode_enabled) {
@@ -3216,10 +3242,51 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
   ImGui::PopStyleColor();
 }
 
+static std::vector<CadSnap::SnapCandidateEntry> g_snapPickMenuScratch;
+static int g_snapMenuStep = 0; ///< 0 = choose snap type, 1 = choose instance
+static float g_snapMenuSortX = 0.f;
+static float g_snapMenuSortY = 0.f;
+static CadSnap::Kind g_snapMenuSelectedKind = CadSnap::Kind::Endpoint;
+
+static const char* SnapKindLabelForUi(CadSnap::Kind k) {
+  switch (k) {
+  case CadSnap::Kind::Endpoint:
+    return "Endpoint";
+  case CadSnap::Kind::Midpoint:
+    return "Midpoint";
+  case CadSnap::Kind::Center:
+    return "Center";
+  case CadSnap::Kind::Perpendicular:
+    return "Perpendicular";
+  case CadSnap::Kind::SurveyCenter:
+    return "Survey";
+  case CadSnap::Kind::GeometricCenter:
+    return "Geo center";
+  }
+  return "Snap";
+}
+
+static void FormatSnapPickLine(char* line, size_t cap, const AppCommandState& cmd, const CadSnap::Hit& h) {
+  if (cap < 8)
+    return;
+  if (h.kind == CadSnap::Kind::SurveyCenter) {
+    for (size_t i = 0; i < cmd.surveyPoints.size(); ++i) {
+      const auto& p = cmd.surveyPoints[i];
+      if (std::fabs(p.easting - h.x) < 1e-4f && std::fabs(p.northing - h.y) < 1e-4f) {
+        std::snprintf(line, cap, "%s — ID %d — %.4f, %.4f", SnapKindLabelForUi(h.kind), p.id,
+                      static_cast<double>(h.x), static_cast<double>(h.y));
+        return;
+      }
+    }
+  }
+  std::snprintf(line, cap, "%s — %.4f, %.4f", SnapKindLabelForUi(h.kind), static_cast<double>(h.x),
+                static_cast<double>(h.y));
+}
+
 void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, std::vector<std::string>& log,
                          char* cmdBuf, int cmdBufSize, float* panX, float* panY, float* zoom, float* outCursorX,
                          float* outCursorY, float* outCursorRawX, float* outCursorRawY, int* outFbW, int* outFbH,
-                         bool object_snap_enabled, CadSnap::Hit* out_snap) {
+                         CadSnap::Hit* out_snap) {
   ImGui::SetNextWindowSize(ImVec2(900, 650), ImGuiCond_FirstUseEver);
   if (!ImGui::Begin("Drawing1", nullptr)) {
     cmd.viewportDrawingHovered = false;
@@ -3244,18 +3311,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   ImGui::Image(static_cast<ImTextureID>(static_cast<std::intptr_t>(viewportTextureId)), avail, ImVec2(0, 1),
                ImVec2(1, 0));
-
-  {
-    using AK = AppCommandState::Kind;
-    const bool ctxBlocked = cmd.active != AK::None || cmd.dimGripMoveActive || cmd.entityGripMoveActive ||
-                            cmd.mtextGripMoveActive || cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond;
-    const bool hasPick = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
-    if (ImGui::BeginPopupContextItem("##drawing1_vp_ctx", ImGuiPopupFlags_MouseButtonRight)) {
-      if (ImGui::MenuItem("Select similar", nullptr, false, hasPick && !ctxBlocked))
-        SelectSimilarToCurrentSelection(cmd, &log);
-      ImGui::EndPopup();
-    }
-  }
 
   const bool hovered = ImGui::IsItemHovered();
   const ImVec2 mouse = ImGui::GetIO().MousePos;
@@ -3297,6 +3352,32 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const float surveyCrossHalfW =
       SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
 
+  {
+    ImGuiIO& ioVpRmb = ImGui::GetIO();
+    if (hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
+      const float uR = mx / std::max(avail.x, 1.f);
+      const float vR = my / std::max(avail.y, 1.f);
+      const float rmbWx = worldLeft + uR * (worldRight - worldLeft);
+      const float rmbWy = worldTop - vR * (worldTop - worldBottom);
+      using AK = AppCommandState::Kind;
+      const bool blockSnapPickMenu = cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond || cmd.dimGripMoveActive ||
+                                     cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
+      const bool allowSnapCycle =
+          cmd.active != AK::None && cmd.objectSnapEnabled && !blockSnapPickMenu;
+      if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+        if (ioVpRmb.KeyShift && allowSnapCycle) {
+          g_snapMenuSortX = rmbWx;
+          g_snapMenuSortY = rmbWy;
+          g_snapMenuStep = 0;
+          g_snapPickMenuScratch.clear();
+          ImGui::OpenPopup("##gos_snap_pick");
+        } else {
+          ImGui::OpenPopup("##drawing1_vp_ctx");
+        }
+      }
+    }
+  }
+
   cmd.viewportLastSurveyLayoutOrthoHalfH = halfH;
   cmd.viewportLastSurveyLayoutHeightPx = avail.y;
 
@@ -3320,6 +3401,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   }
 
   cmd.viewportHoverSurveyPointIndex = -1;
+  cmd.viewportSnapPickValid = false;
   *out_snap = {};
 
   if (hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
@@ -3338,25 +3420,63 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                                   cmd.mtextGripMoveActive || cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond;
     if (!cmd.surveyPoints.empty() && !blockSurveyHover)
       cmd.viewportHoverSurveyPointIndex =
-          PickSurveyPointIndex(cmd.surveyPoints, rawX, rawY, surveyCrossHalfW, avail.y, halfH);
+          PickSurveyPointIndex(cmd.surveyPoints, rawX, rawY, surveyCrossHalfW, avail.y, halfH,
+                               cmd.objectSnapAperturePx);
 
-    CadSnap::Hit snap{};
-    if (object_snap_enabled) {
-      const float tol = CadSnap::WorldToleranceFromPixels(avail.y, halfH, 14.f);
-      const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.dimGripMoveActive ||
-                          cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
-      snap = CadSnap::FindBest(rawX, rawY, cmd, midCmd, tol);
-    }
-
-    if (out_snap && snap.valid)
-      *out_snap = snap;
-
-    if (snap.valid) {
-      *outCursorX = snap.x;
-      *outCursorY = snap.y;
+    if (cmd.pendingOneShotSnapValid && outCursorX && outCursorY) {
+      *outCursorX = cmd.pendingOneShotSnapX;
+      *outCursorY = cmd.pendingOneShotSnapY;
+      cmd.viewportSnapPickValid = true;
+      cmd.viewportSnapPickWorldX = cmd.pendingOneShotSnapX;
+      cmd.viewportSnapPickWorldY = cmd.pendingOneShotSnapY;
+      if (out_snap) {
+        out_snap->valid = true;
+        out_snap->kind = static_cast<CadSnap::Kind>(cmd.pendingOneShotSnapKind);
+        out_snap->x = cmd.pendingOneShotSnapX;
+        out_snap->y = cmd.pendingOneShotSnapY;
+      }
     } else {
-      *outCursorX = rawX;
-      *outCursorY = rawY;
+      cmd.viewportSnapPickValid = false;
+      const bool snapViewportActive =
+          cmd.objectSnapEnabled && cmd.active != AppCommandState::Kind::None;
+      CadSnap::Hit snap{};
+      if (snapViewportActive) {
+        const float tol = CadSnap::WorldToleranceFromPixels(avail.y, halfH, cmd.objectSnapAperturePx);
+        const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.dimGripMoveActive ||
+                            cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
+        snap = CadSnap::FindBest(rawX, rawY, cmd, midCmd, tol);
+        if (snap.valid) {
+          cmd.viewportSnapPickValid = true;
+          cmd.viewportSnapPickWorldX = snap.x;
+          cmd.viewportSnapPickWorldY = snap.y;
+          if (out_snap)
+            *out_snap = snap;
+          const float dx = snap.x - rawX;
+          const float dy = snap.y - rawY;
+          const float dist = std::hypot(dx, dy);
+          const float outer = tol * 2.75f;
+          float alpha = 0.f;
+          if (outer > 1.e-12f && dist < outer) {
+            const float u = std::clamp(1.f - dist / outer, 0.f, 1.f);
+            alpha = u * u * 0.58f;
+            if (dist < tol)
+              alpha = std::max(alpha, 0.88f);
+            alpha = std::min(alpha, 0.92f);
+          }
+          *outCursorX = rawX + alpha * dx;
+          *outCursorY = rawY + alpha * dy;
+        } else {
+          if (out_snap)
+            out_snap->valid = false;
+          *outCursorX = rawX;
+          *outCursorY = rawY;
+        }
+      } else {
+        if (out_snap)
+          out_snap->valid = false;
+        *outCursorX = rawX;
+        *outCursorY = rawY;
+      }
     }
   }
 
@@ -3625,6 +3745,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     using MP = AppCommandState::ModifyPhase;
     using RP = AppCommandState::RotatePhase;
 
+    const bool haveSnapPick = outCursorX && outCursorY && cmd.viewportSnapPickValid;
+    const float commitX = haveSnapPick ? cmd.viewportSnapPickWorldX : *outCursorX;
+    const float commitY = haveSnapPick ? cmd.viewportSnapPickWorldY : *outCursorY;
+
     const float uPick = mx / std::max(avail.x, 1.f);
     const float vPick = my / std::max(avail.y, 1.f);
     const float rawPickX = worldLeft + uPick * (worldRight - worldLeft);
@@ -3645,7 +3769,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const int hitIx =
           cmd.surveyPoints.empty()
               ? -1
-              : PickSurveyPointIndex(cmd.surveyPoints, rawPickX, rawPickY, surveyCrossHalfW, avail.y, halfH);
+              : PickSurveyPointIndex(cmd.surveyPoints, rawPickX, rawPickY, surveyCrossHalfW, avail.y, halfH,
+                                     cmd.objectSnapAperturePx);
       if (hitIx >= 0) {
         ClearCadSelection(cmd);
         ApplySurveyPointClickSelection(cmd, hitIx, keyShift, &log);
@@ -3659,7 +3784,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     } else if (cmd.active == K::Line || cmd.active == K::Circle || cmd.active == K::Polyline ||
                cmd.active == K::Arc || cmd.active == K::Ellipse || cmd.active == K::Text ||
                cmd.active == K::Mtext || cmd.active == K::DimAligned)
-      SubmitViewportPick(cmd, *outCursorX, *outCursorY, log);
+      SubmitViewportPick(cmd, commitX, commitY, log);
     else if (cmd.active == K::Move || cmd.active == K::Copy) {
       if (cmd.modifyPhase == MP::PickSelection) {
         if (!cmd.selBoxWaitingSecond)
@@ -3667,7 +3792,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         else
           SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
       } else
-        SubmitViewportPick(cmd, *outCursorX, *outCursorY, log);
+        SubmitViewportPick(cmd, commitX, commitY, log);
     } else if (cmd.active == K::Rotate) {
       if (cmd.rotatePhase == RP::PickSelection) {
         if (!cmd.selBoxWaitingSecond)
@@ -3675,7 +3800,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         else
           SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
       } else
-        SubmitViewportPick(cmd, *outCursorX, *outCursorY, log);
+        SubmitViewportPick(cmd, commitX, commitY, log);
     } else if (cmd.active == K::Delete) {
       if (!cmd.selBoxWaitingSecond)
         BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
@@ -3687,12 +3812,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       else
         SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
     } else if (cmd.active == K::Trim) {
-      const float trimTol = CadSnap::WorldToleranceFromPixels(avail.y, halfH, 14.f);
+      const float trimTol = CadSnap::WorldToleranceFromPixels(avail.y, halfH, cmd.objectSnapAperturePx);
       using TP = AppCommandState::TrimPhase;
       const bool trimCutLinePt =
           cmd.trimPhase == TP::CuttingLine_WaitP1 || cmd.trimPhase == TP::CuttingLine_WaitP2;
-      const float tx = trimCutLinePt ? *outCursorX : rawPickX;
-      const float ty = trimCutLinePt ? *outCursorY : rawPickY;
+      const float tx = trimCutLinePt ? commitX : rawPickX;
+      const float ty = trimCutLinePt ? commitY : rawPickY;
       SubmitTrimViewportPick(cmd, tx, ty, trimTol, log);
     } else if (cmd.active == K::Zoom) {
       if (!cmd.selBoxWaitingSecond)
@@ -4075,7 +4200,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
       if (!handled) {
         if (!cmd.surveyPoints.empty()) {
-          const int hitIx = PickSurveyPointIndex(cmd.surveyPoints, rawPickX, rawPickY, surveyCrossHalfW, avail.y, halfH);
+          const int hitIx = PickSurveyPointIndex(cmd.surveyPoints, rawPickX, rawPickY, surveyCrossHalfW, avail.y,
+                                                 halfH, cmd.objectSnapAperturePx);
           if (hitIx >= 0) {
             ClearCadSelection(cmd);
             ApplySurveyPointClickSelection(cmd, hitIx, keyShift, &log);
@@ -4385,7 +4511,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const float worldPerPxYH = (worldTop - worldBottom) / std::max(avail.y, 1.f);
     const float armH =
         SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
-    const float tolH = CadSnap::WorldToleranceFromPixels(avail.y, halfH, 12.f);
+    const float tolH = CadSnap::WorldToleranceFromPixels(avail.y, halfH, cmd.objectSnapAperturePx);
     const float rWorldH = std::max(armH, tolH) * 1.38f;
     const float rPxH = rWorldH / std::max(worldPerPxYH, 1e-6f);
     dlHov->AddCircle(cH, std::max(rPxH, 4.f), IM_COL32(100, 215, 255, 230), 48, 2.25f);
@@ -4554,16 +4680,25 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     ImGui::PopStyleVar(2);
   }
 
-  // CAD-style crosshair (viewport only): OS cursor hidden; pickbox + arms from Settings (window DL so palette
-  // stacks above).
+  // CAD-style crosshair (viewport only): OS cursor hidden; position follows world cursor (sticky OSNAP blend in
+  // command). Pick box matches object snap aperture; arms from Settings.
   if (hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
     ImGui::SetMouseCursor(ImGuiMouseCursor_None);
     const ImVec2 imgMin = imgPos;
     const ImVec2 imgMax(imgPos.x + avail.x, imgPos.y + avail.y);
-    const float cx = mouse.x;
-    const float cy = mouse.y;
-    const float phx = std::clamp(cmd.viewportCrosshairPickHalfPxX, 1.f, 64.f);
-    const float phy = std::clamp(cmd.viewportCrosshairPickHalfPxY, 1.f, 64.f);
+    float cx = mouse.x;
+    float cy = mouse.y;
+    if (outCursorX && outCursorY) {
+      const float denx = worldRight - worldLeft + 1.e-12f;
+      const float deny = worldTop - worldBottom + 1.e-12f;
+      const float uSnap = (*outCursorX - worldLeft) / denx;
+      const float vSnap = (worldTop - *outCursorY) / deny;
+      cx = imgPos.x + uSnap * avail.x;
+      cy = imgPos.y + vSnap * avail.y;
+    }
+    const float ap = std::clamp(cmd.objectSnapAperturePx, 4.f, 64.f);
+    const float phx = ap * 0.5f;
+    const float phy = ap * 0.5f;
     const float hair = std::clamp(cmd.viewportCrosshairHairPx, 0.5f, 4.f);
     const float frx = std::clamp(cmd.viewportCrosshairArmFracX, 0.001f, 0.5f);
     const float fry = std::clamp(cmd.viewportCrosshairArmFracY, 0.001f, 0.5f);
@@ -4593,6 +4728,78 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     wdl->AddLine(ImVec2(r, b), ImVec2(l, b), kCad, hair);
     wdl->AddLine(ImVec2(l, b), ImVec2(l, t), kCad, hair);
     wdl->PopClipRect();
+  }
+
+  if (ImGui::BeginPopup("##drawing1_vp_ctx")) {
+    using AK = AppCommandState::Kind;
+    const bool ctxBlocked = cmd.active != AK::None || cmd.dimGripMoveActive || cmd.entityGripMoveActive ||
+                            cmd.mtextGripMoveActive || cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond;
+    const bool hasPick = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
+    if (ImGui::MenuItem("Select similar", nullptr, false, hasPick && !ctxBlocked))
+      SelectSimilarToCurrentSelection(cmd, &log);
+    ImGui::EndPopup();
+  }
+  ImGui::SetNextWindowPos(ImGui::GetMousePos(), ImGuiCond_Appearing);
+  if (ImGui::BeginPopup("##gos_snap_pick", ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGuiIO& ioSnapPick = ImGui::GetIO();
+    const auto goSnapKind = [&](CadSnap::Kind k) {
+      g_snapPickMenuScratch.clear();
+      CadSnap::GatherAllSnapsOfKind(k, g_snapMenuSortX, g_snapMenuSortY, cmd, true, g_snapPickMenuScratch);
+      g_snapMenuSelectedKind = k;
+      g_snapMenuStep = 1;
+    };
+
+    if (g_snapMenuStep == 0) {
+      ImGui::TextUnformatted("Snap once — choose type");
+      ImGui::Separator();
+      if (cmd.objectSnapEndpoint && ImGui::Selectable("Endpoint"))
+        goSnapKind(CadSnap::Kind::Endpoint);
+      if (cmd.objectSnapMidpoint && ImGui::Selectable("Midpoint"))
+        goSnapKind(CadSnap::Kind::Midpoint);
+      if (cmd.objectSnapCenter && ImGui::Selectable("Center"))
+        goSnapKind(CadSnap::Kind::Center);
+      if (cmd.objectSnapPerpendicular && CadSnap::CommandHasPerpendicularSnapReference(cmd, true) &&
+          ImGui::Selectable("Perpendicular"))
+        goSnapKind(CadSnap::Kind::Perpendicular);
+      if (cmd.objectSnapSurveyPoint && ImGui::Selectable("Survey"))
+        goSnapKind(CadSnap::Kind::SurveyCenter);
+      if (cmd.objectSnapGeometricCenter && ImGui::Selectable("Geometric center"))
+        goSnapKind(CadSnap::Kind::GeometricCenter);
+    } else {
+      char title[96];
+      std::snprintf(title, sizeof(title), "%s — all in model (sorted by distance from click)",
+                    SnapKindLabelForUi(g_snapMenuSelectedKind));
+      ImGui::TextWrapped("%s", title);
+      if (ImGui::Button("Back")) {
+        g_snapMenuStep = 0;
+        g_snapPickMenuScratch.clear();
+      }
+      ImGui::Separator();
+      const float lineH = ImGui::GetTextLineHeightWithSpacing();
+      const float maxListH = std::clamp(22.f * lineH, 180.f, 420.f * ioSnapPick.FontGlobalScale);
+      ImGui::BeginChild("##gos_snap_pick_list", ImVec2(360.f * ioSnapPick.FontGlobalScale, maxListH), true,
+                        ImGuiWindowFlags_AlwaysVerticalScrollbar);
+      if (g_snapPickMenuScratch.empty()) {
+        ImGui::TextUnformatted("No matching snaps in the current geometry.");
+      } else {
+        for (size_t i = 0; i < g_snapPickMenuScratch.size(); ++i) {
+          const CadSnap::Hit& h = g_snapPickMenuScratch[i].hit;
+          char line[192];
+          FormatSnapPickLine(line, sizeof(line), cmd, h);
+          ImGui::PushID(static_cast<int>(i));
+          if (ImGui::Selectable(line)) {
+            cmd.pendingOneShotSnapValid = true;
+            cmd.pendingOneShotSnapX = h.x;
+            cmd.pendingOneShotSnapY = h.y;
+            cmd.pendingOneShotSnapKind = static_cast<int>(h.kind);
+            ImGui::CloseCurrentPopup();
+          }
+          ImGui::PopID();
+        }
+      }
+      ImGui::EndChild();
+    }
+    ImGui::EndPopup();
   }
 
   DrawMtextRichEditorOverlay(cmd, log, worldLeft, worldRight, worldBottom, worldTop, imgPos, avail);
@@ -4903,9 +5110,35 @@ void DrawSettingsPanel(AppCommandState& cmd) {
                        "%.3f");
       ImGui::DragFloat("Reach Y (fraction of viewport height)", &cmd.viewportCrosshairArmFracY, 0.002f, 0.002f, 0.5f,
                        "%.3f");
-      ImGui::DragFloat("Pickbox half-width (px)", &cmd.viewportCrosshairPickHalfPxX, 0.15f, 1.f, 32.f, "%.1f");
-      ImGui::DragFloat("Pickbox half-height (px)", &cmd.viewportCrosshairPickHalfPxY, 0.15f, 1.f, 32.f, "%.1f");
+      ImGui::TextDisabled(
+          "Pick box on Drawing1 matches Object snap → Aperture (square side = aperture in screen pixels).");
       ImGui::DragFloat("Line thickness (px)", &cmd.viewportCrosshairHairPx, 0.05f, 0.75f, 4.f, "%.2f");
+      ImGui::EndTabItem();
+    }
+    if (ImGui::BeginTabItem("Object snap")) {
+      ImGui::TextUnformatted("Cursor snaps to drawing geometry when OSNAP is on (status bar or F3).");
+      ImGui::Separator();
+      ImGui::Checkbox("Enable object snap", &cmd.objectSnapEnabled);
+      if (ImGui::DragFloat("Aperture (screen px)", &cmd.objectSnapAperturePx, 0.25f, 4.f, 64.f, "%.1f"))
+        cmd.objectSnapAperturePx = std::clamp(cmd.objectSnapAperturePx, 4.f, 64.f);
+      ItemHelpTooltip("Screen pick radius: larger catches snaps from farther away; smaller is stricter. "
+                      "Also sets the crosshair pick box on Drawing1.");
+      if (ImGui::DragFloat("Snap indicator half-size (px)", &cmd.objectSnapGlyphHalfPx, 0.15f, 3.f, 48.f, "%.1f"))
+        cmd.objectSnapGlyphHalfPx = std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f);
+      ItemHelpTooltip("Green snap symbols (endpoint square, midpoint triangle, etc.): half-width on screen.");
+      ImGui::Separator();
+      ImGui::TextDisabled("Snap types (also: right-click OSNAP on the command line)");
+      ImGui::Checkbox("Endpoint", &cmd.objectSnapEndpoint);
+      ImGui::Checkbox("Midpoint", &cmd.objectSnapMidpoint);
+      ImGui::Checkbox("Center (circle / ellipse center)", &cmd.objectSnapCenter);
+      ImGui::Checkbox("Perpendicular (when a reference point applies)", &cmd.objectSnapPerpendicular);
+      ImGui::Checkbox("Survey point", &cmd.objectSnapSurveyPoint);
+      ImGui::Checkbox("Geometric center (closed polyline)", &cmd.objectSnapGeometricCenter);
+      ImGui::Separator();
+      ImGui::TextWrapped(
+          "With a command active (LINE, CIRCLE, …), Shift+right-click anywhere on the drawing: choose a snap type, "
+          "then pick one from every matching snap in the model (list is sorted by distance from that click). "
+          "That choice applies to the next left-click only.");
       ImGui::EndTabItem();
     }
     if (ImGui::BeginTabItem("Survey points")) {

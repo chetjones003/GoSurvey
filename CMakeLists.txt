@@ -29,6 +29,17 @@ FetchContent_Declare(glew
 
 FetchContent_MakeAvailable(glfw imgui glew)
 
+set(NLOHMANN_JSON_INCLUDE "${CMAKE_BINARY_DIR}/_deps")
+set(NLOHMANN_JSON_FILE "${NLOHMANN_JSON_INCLUDE}/nlohmann/json.hpp")
+if(NOT EXISTS "${NLOHMANN_JSON_FILE}")
+  file(MAKE_DIRECTORY "${NLOHMANN_JSON_INCLUDE}/nlohmann")
+  file(DOWNLOAD
+    "https://raw.githubusercontent.com/nlohmann/json/v3.11.3/single_include/nlohmann/json.hpp"
+    "${NLOHMANN_JSON_FILE}"
+    TLS_VERIFY ON
+  )
+endif()
+
 set(GLEW_ROOT "${glew_SOURCE_DIR}")
 if(EXISTS "${glew_SOURCE_DIR}/glew-2.2.0/src/glew.c")
   set(GLEW_ROOT "${glew_SOURCE_DIR}/glew-2.2.0")
@@ -63,6 +74,7 @@ target_compile_definitions(imgui_backend PUBLIC
 add_executable(GoSurvey
   src/main.cpp
   src/SplashScreen.cpp
+  src/GsIo.cpp
   src/AppIcon.cpp
   src/ViewportRenderer.cpp
   src/CadUi.cpp
@@ -80,6 +92,7 @@ add_executable(GoSurvey
 target_include_directories(GoSurvey PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+  ${NLOHMANN_JSON_INCLUDE}
 )
 target_link_libraries(GoSurvey PRIVATE
   imgui_backend
