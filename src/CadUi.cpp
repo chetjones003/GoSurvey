@@ -20,6 +20,19 @@
 #include <cfloat>
 #include <string>
 
+static ImTextureID g_menuBarLogoTex{};
+static ImVec2 g_menuBarLogoDims{};
+
+void CadUiSetMenuBarLogo(ImTextureID texture, float widthPx, float heightPx) {
+  g_menuBarLogoTex = texture;
+  g_menuBarLogoDims = ImVec2(widthPx, heightPx);
+}
+
+void CadUiClearMenuBarLogo() {
+  g_menuBarLogoTex = (ImTextureID)0;
+  g_menuBarLogoDims = ImVec2(0.f, 0.f);
+}
+
 namespace {
 
 std::string TrimCopyUi(std::string s) {
@@ -192,6 +205,18 @@ void SetupMainDockLayout(ImGuiID dockspace_id) {
 
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
   static char dxfPath[4096]{};
+  if (g_menuBarLogoTex && g_menuBarLogoDims.x > 0.f && g_menuBarLogoDims.y > 0.f) {
+    const ImGuiStyle& st = ImGui::GetStyle();
+    const float fh = ImGui::GetFrameHeight();
+    const float logoH = std::max(1.f, fh - st.FramePadding.y * 0.35f);
+    //const float aspect = g_menuBarLogoDims.x / g_menuBarLogoDims.y;
+    //const float logoW = logoH * aspect;
+    const float yPad = std::max(0.f, (fh - logoH) * 0.5f);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() + yPad);
+    //ImGui::Image(g_menuBarLogoTex, ImVec2(logoW, logoH), ImVec2(0.f, 1.f), ImVec2(1.f, 0.f));
+    ImGui::SameLine(0.f, st.ItemInnerSpacing.x);
+    ImGui::SetCursorPosY(ImGui::GetCursorPosY() - yPad);
+  }
   if (ImGui::BeginMenu("File")) {
     ImGui::MenuItem("New", nullptr);
     ImGui::MenuItem("Open...", nullptr);

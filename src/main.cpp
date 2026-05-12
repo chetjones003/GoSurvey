@@ -3,6 +3,8 @@
 #include "ViewportRenderer.hpp"
 #include "CadSnap.hpp"
 #include "SurveyPoints.hpp"
+#include "AppIcon.hpp"
+#include "SplashScreen.hpp"
 
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
@@ -13,6 +15,8 @@
 #include <algorithm>
 #include <cstdio>
 #include <cmath>
+#include <cstdint>
+#include <filesystem>
 #include <vector>
 
 namespace {
@@ -417,12 +421,14 @@ int main() {
   glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
   glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+  GlfwApplySplashStageWindowHints();
 
-  GLFWwindow* window = glfwCreateWindow(1600, 900, "GoSurvey — CAD", nullptr, nullptr);
+  GLFWwindow* window = glfwCreateWindow(1600, 900, "GoSurvey", nullptr, nullptr);
   if (!window) {
     glfwTerminate();
     return 1;
   }
+  glfwDefaultWindowHints();
   glfwMaximizeWindow(window);
 
   glfwMakeContextCurrent(window);
@@ -433,6 +439,15 @@ int main() {
     glfwDestroyWindow(window);
     glfwTerminate();
     return 1;
+  }
+
+  AppLogoGpu appLogo{};
+  {
+    namespace fs = std::filesystem;
+    const fs::path iconPath = ResolveBundledAssetPath(fs::path("icons") / "white_logo2.png");
+    if (!iconPath.empty() && LoadAppLogoFromPngFile(window, iconPath, &appLogo))
+      CadUiSetMenuBarLogo((ImTextureID)(intptr_t)(uintptr_t)appLogo.texture, static_cast<float>(appLogo.width),
+                          static_cast<float>(appLogo.height));
   }
 
   IMGUI_CHECKVERSION();
@@ -450,6 +465,9 @@ int main() {
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
+
+  RunStartupSplash(window, 4.0);
+  GlfwApplyMainStageWindowChrome(window);
 
   AppCommandState cmd;
   std::vector<std::string> cmdLog;
@@ -784,6 +802,8 @@ int main() {
 
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
+  CadUiClearMenuBarLogo();
+  DestroyAppLogoGpu(&appLogo);
   ImGui::DestroyContext();
 
   viewport.Shutdown();
