@@ -238,7 +238,8 @@ void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlotted
 
 int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
                         float viewportHeightPx) {
-  const float tol = CadSnap::WorldToleranceFromPixels(viewportHeightPx, orthoHalfHeightWorld, 12.f);
+  const float tol =
+      CadSnap::WorldToleranceFromPixels(viewportHeightPx, orthoHalfHeightWorld, cmd.objectSnapAperturePx);
   const float tol2 = tol * tol;
   auto distSqSeg = [](float px, float py, float ax, float ay, float bx, float by) -> float {
     const float vx = bx - ax;
@@ -3455,11 +3456,17 @@ void ClearCadGeometry(AppCommandState& st) {
   st.userPolylineAttrs.clear();
   st.cadAnnotations.clear();
   st.cadAnnotationAttrs.clear();
+  ClearPendingOneShotObjectSnap(st);
   ClearCadSelection(st);
   BumpCadGpuCache(st);
 }
 
+void ClearPendingOneShotObjectSnap(AppCommandState& st) {
+  st.pendingOneShotSnapValid = false;
+}
+
 void ResetCadToolStateToIdle(AppCommandState& st) {
+  ClearPendingOneShotObjectSnap(st);
   st.active = AppCommandState::Kind::None;
   st.linePhase = AppCommandState::LinePhase::NeedFirstPoint;
   ResetSegmentAngleLock(st);
@@ -4487,6 +4494,7 @@ static void ExecuteDrawnSegmentTrimOnce(AppCommandState& st, float p1x, float p1
 }
 
 bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWorld, std::vector<std::string>& log) {
+  ClearPendingOneShotObjectSnap(st);
   using K = AppCommandState::Kind;
   using TP = AppCommandState::TrimPhase;
   if (st.active != K::Trim)
@@ -4996,6 +5004,7 @@ void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log) {
 void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.active == AppCommandState::Kind::None)
     return;
+  ClearPendingOneShotObjectSnap(st);
   const AppCommandState::Kind prev = st.active;
   if (st.active == AppCommandState::Kind::Line)
     log.push_back("LINE canceled.");
@@ -5177,6 +5186,7 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
 
 void SubmitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log,
                          bool windowSelectionSubtract, bool fenceLeftToRightWindowMode) {
+  ClearPendingOneShotObjectSnap(st);
   SubmitViewportPickImpl(st, wx, wy, log, windowSelectionSubtract, fenceLeftToRightWindowMode);
 }
 

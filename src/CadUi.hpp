@@ -29,8 +29,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log = n
 /// Command log, input, hints, and a single-line status bar (toggles, annotation-scale combo, cursor). Default
 /// plotted text height is under Properties → General.
 void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBufSize, AppCommandState& cmd,
-                          float cursorX, float cursorY, float cursorZ, bool* object_snap_enabled,
-                          bool* ortho_mode_enabled, bool* grid_visible);
+                          float cursorX, float cursorY, float cursorZ, bool* ortho_mode_enabled, bool* grid_visible);
 
 /// Central CAD viewport: renders OpenGL texture and handles pan / zoom / LINE picks.
 /// Writes framebuffer pixel size and cursor world position. When object snap finds a hit, cursor and
@@ -38,7 +37,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
 void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, std::vector<std::string>& log,
                          char* cmdBuf, int cmdBufSize, float* panX, float* panY, float* zoom, float* outCursorX,
                          float* outCursorY, float* outCursorRawX, float* outCursorRawY, int* outFbW, int* outFbH,
-                         bool object_snap_enabled, CadSnap::Hit* out_snap);
+                         CadSnap::Hit* out_snap);
 
 void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 

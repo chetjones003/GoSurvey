@@ -16,6 +16,7 @@ public:
   /// \param circlesCxCyR (cx, cy, r) triplets; drawn as line loops in the XY plane.
   /// \param rubberLines GL_LINES vertex data (x,y,z pairs of endpoints) for transient previews.
   /// \param snapOverlay Active object snap glyph (green); nullptr or invalid — skip.
+  /// \param snapGlyphHalfPx Screen-space half-extent (pixels) for snap glyph geometry (see Settings → Object snap).
   /// \param selectionFillRect axis-aligned window in world XY: minX, maxX, minY, maxY; nullptr skips.
   /// \param previewLines / previewCircles transient geometry (same layout as user geometry).
   /// \param highlightLines / highlightCircles selected entities redrawn on top (accent stroke).
@@ -26,8 +27,8 @@ public:
   void RenderScene(float panX, float panY, float zoom, int fbWidth, int fbHeight,
                    const std::vector<float>& userLines, const std::vector<float>& circlesCxCyR,
                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
-                   const CadSnap::Hit* snapOverlay,
-                   const float* selectionFillRect, const std::vector<float>* previewLines,
+                   const CadSnap::Hit* snapOverlay, float snapGlyphHalfPx, const float* selectionFillRect,
+                   const std::vector<float>* previewLines,
                    const std::vector<float>* previewCircles, const std::vector<float>* highlightLines,
                    const std::vector<float>* highlightCircles, const std::vector<float>* surveyMarkers,
                    const std::vector<EntityAttributes>* lineEntityAttrs,

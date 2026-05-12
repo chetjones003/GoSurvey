@@ -304,12 +304,12 @@ void AppendWorldRectFillTris(std::vector<float>& o, float xa, float ya, float xb
   o.insert(o.end(), tri, tri + sizeof(tri) / sizeof(tri[0]));
 }
 
-void BuildSnapOverlayLines(const CadSnap::Hit& snap, float halfWorld, int fbHeight, std::vector<float>& out) {
+void BuildSnapOverlayLines(const CadSnap::Hit& snap, float halfWorld, int fbHeight, float glyphHalfPx,
+                           std::vector<float>& out) {
   if (!snap.valid)
     return;
   const float zSnap = 0.045f;
-  const float mh =
-      15.f * (2.f * halfWorld) / static_cast<float>(std::max(fbHeight, 1)); // ~10 px half-extent
+  const float mh = std::clamp(glyphHalfPx, 3.f, 48.f) * (2.f * halfWorld) / static_cast<float>(std::max(fbHeight, 1));
   switch (snap.kind) {
   case CadSnap::Kind::Endpoint:
     AppendSnapSquareOutline(out, snap.x, snap.y, zSnap, mh);
@@ -327,6 +327,10 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, float halfWorld, int fbHeig
     AppendSnapDiagonalCross(out, snap.x, snap.y, zSnap, R * 0.78f);
     break;
   }
+  case CadSnap::Kind::GeometricCenter:
+    AppendSnapSquareOutline(out, snap.x, snap.y, zSnap, mh);
+    AppendSnapDiagonalCross(out, snap.x, snap.y, zSnap, mh * 0.42f);
+    break;
   case CadSnap::Kind::Perpendicular:
     AppendSnapSquareOutline(out, snap.x, snap.y, zSnap, mh);
     AppendSnapCrossInSquare(out, snap.x, snap.y, zSnap, mh * 0.55f);
@@ -577,9 +581,9 @@ void ViewportRenderer::SetSize(int width, int height) {
 void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWidth, int fbHeight,
                                    const std::vector<float>& userLines, const std::vector<float>& circlesCxCyR,
                                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
-                                   const CadSnap::Hit* snapOverlay, const float* selectionFillRect,
-                                   const std::vector<float>* previewLines, const std::vector<float>* previewCircles,
-                                   const std::vector<float>* highlightLines, const std::vector<float>* highlightCircles,
+                                   const CadSnap::Hit* snapOverlay, float snapGlyphHalfPx,
+                                   const float* selectionFillRect, const std::vector<float>* previewLines,
+                                   const std::vector<float>* previewCircles, const std::vector<float>* highlightLines, const std::vector<float>* highlightCircles,
                                    const std::vector<float>* surveyMarkers,
                                    const std::vector<EntityAttributes>* lineEntityAttrs,
                                    const std::vector<EntityAttributes>* circleEntityAttrs,
@@ -995,7 +999,7 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
   // --- Object snap glyph (green, screen-stable size) ---
   if (snapOverlay && snapOverlay->valid) {
     std::vector<float> snapGeom;
-    BuildSnapOverlayLines(*snapOverlay, halfH, fbH_, snapGeom);
+    BuildSnapOverlayLines(*snapOverlay, halfH, fbH_, snapGlyphHalfPx, snapGeom);
     if (!snapGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
       glUniform4f(locCol, 0.15f, 0.92f, 0.38f, 1.f);

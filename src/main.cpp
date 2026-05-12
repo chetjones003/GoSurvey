@@ -491,7 +491,6 @@ int main() {
 
   bool dockLayoutDone = false;
   const float ribbonH = 130.f;
-  bool objectSnapEnabled = true;
   bool orthoEnabled = true;
   bool gridVisible = true;
 
@@ -505,7 +504,7 @@ int main() {
     ImGuiIO& ioFrame = ImGui::GetIO();
     if (!ioFrame.WantTextInput) {
       if (ImGui::IsKeyPressed(ImGuiKey_F3, false))
-        objectSnapEnabled = !objectSnapEnabled;
+        cmd.objectSnapEnabled = !cmd.objectSnapEnabled;
       if (ImGui::IsKeyPressed(ImGuiKey_F8, false))
         orthoEnabled = !orthoEnabled;
     }
@@ -607,11 +606,11 @@ int main() {
 
     CadSnap::Hit snapHit{};
     DrawDrawingViewport(viewport.ColorTexture(), cmd, cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), &panX,
-                        &panY, &zoom, &curX, &curY, &curRawX, &curRawY, &fbW, &fbH, objectSnapEnabled, &snapHit);
+                        &panY, &zoom, &curX, &curY, &curRawX, &curRawY, &fbW, &fbH, &snapHit);
     cmd.uiCursorWorldX = curX;
     cmd.uiCursorWorldY = curY;
-    DrawCommandLinePanel(cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd, curX, curY, 0.f,
-                         &objectSnapEnabled, &orthoEnabled, &gridVisible);
+    DrawCommandLinePanel(cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd, curX, curY, 0.f, &orthoEnabled,
+                         &gridVisible);
 
     // LINE/POLYLINE AP: after two picks the bottom command InputText is hidden — Enter must still lock bearing.
     // Keyboard-only "A" then bearing: Enter with empty buffer cancels awaiting mode when no text field is focused.
@@ -800,7 +799,8 @@ int main() {
 
     viewport.SetSize(fbW, fbH);
     viewport.RenderScene(panX, panY, zoom, fbW, fbH, cmd.userLinesFlat, cmd.userCirclesCxCyR, cmd.cadGpuRevision,
-                         rubberLines, snapHit.valid ? &snapHit : nullptr, selRectPtr,
+                         rubberLines, snapHit.valid ? &snapHit : nullptr,
+                         std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f), selRectPtr,
                          previewLines.empty() ? nullptr : &previewLines,
                          previewCircles.empty() ? nullptr : &previewCircles,
                          highlightLines.empty() ? nullptr : &highlightLines,
