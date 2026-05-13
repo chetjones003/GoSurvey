@@ -76,6 +76,7 @@ add_executable(GoSurvey
   src/SplashScreen.cpp
   src/GsIo.cpp
   src/UserPrefs.cpp
+  src/ImGuiLayout.cpp
   src/AppIcon.cpp
   src/ViewportRenderer.cpp
   src/CadUi.cpp
@@ -125,6 +126,7 @@ endif()
 set(GOSURVEY_DEFAULT_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/resources/default-template.gs")
 add_custom_command(TARGET GoSurvey POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/layouts"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_DEFAULT_TEMPLATE}"
           "$<TARGET_FILE_DIR:GoSurvey>/resources/default-template.gs"
