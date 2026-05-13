@@ -7,6 +7,7 @@
 #include "GsIo.hpp"
 #include "SplashScreen.hpp"
 #include "UserPrefs.hpp"
+#include "ImGuiLayout.hpp"
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -251,6 +252,13 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
   prevCircles->clear();
   using K = AppCommandState::Kind;
   using MP = AppCommandState::ModifyPhase;
+  using OP = AppCommandState::OffsetPhase;
+
+  if (cmd.active == K::Offset && cmd.offsetEntityValid &&
+      (cmd.offsetPhase == OP::WaitDistanceOrThrough || cmd.offsetPhase == OP::WaitSidePick)) {
+    CadOffsetAppendLivePreview(cmd, curX, curY, prevLines, prevCircles);
+    return;
+  }
 
   if (cmd.active == K::Move || cmd.active == K::Copy) {
     if (cmd.modifyPhase != MP::NeedDestination)
@@ -416,11 +424,11 @@ void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<float>* hlL
   hlLines->clear();
   hlCircles->clear();
   constexpr float kLineZ = 0.012f;
-  for (const auto& e : cmd.selection) {
+  const auto appendOne = [&](const SelectedEntity& e) {
     if (e.type == SelectedEntity::Type::LineSeg) {
       const size_t k = static_cast<size_t>(e.index) * 6;
       if (k + 5 >= cmd.userLinesFlat.size())
-        continue;
+        return;
       for (int i = 0; i < 2; ++i) {
         hlLines->push_back(cmd.userLinesFlat[k + i * 3]);
         hlLines->push_back(cmd.userLinesFlat[k + i * 3 + 1]);
@@ -429,24 +437,29 @@ void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<float>* hlL
     } else if (e.type == SelectedEntity::Type::Circle) {
       const size_t k = static_cast<size_t>(e.index) * 3;
       if (k + 2 >= cmd.userCirclesCxCyR.size())
-        continue;
+        return;
       hlCircles->push_back(cmd.userCirclesCxCyR[k]);
       hlCircles->push_back(cmd.userCirclesCxCyR[k + 1]);
       hlCircles->push_back(cmd.userCirclesCxCyR[k + 2]);
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= cmd.userArcs.size())
-        continue;
+        return;
       AppendArcPolylineStrip(hlLines, kLineZ, cmd.userArcs[k]);
     } else if (e.type == SelectedEntity::Type::Ellipse) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= cmd.userEllipses.size())
-        continue;
+        return;
       AppendEllipsePolylineStrip(hlLines, kLineZ, cmd.userEllipses[k]);
     } else if (e.type == SelectedEntity::Type::Polyline) {
       AppendCommittedPolylineStrip(hlLines, kLineZ, cmd, e.index);
     }
-  }
+  };
+  for (const auto& e : cmd.selection)
+    appendOne(e);
+  if (cmd.active == AppCommandState::Kind::Offset && cmd.offsetPhase == AppCommandState::OffsetPhase::WaitSelectEntity &&
+      cmd.offsetHoverHighlightValid)
+    appendOne(cmd.offsetHoverEntity);
 }
 
 } // namespace
@@ -497,7 +510,6 @@ int main() {
   ImGuiIO& io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-  io.IniFilename = "gosurvey_imgui.ini";
   io.ConfigInputTextEnterKeepActive = false; // CAD shell: Enter submits without selecting-all next keystroke
 
   ApplyCadDarkTheme();
@@ -513,6 +525,7 @@ int main() {
 
   AppCommandState cmd;
   LoadUserStartupPrefs(cmd);
+  const bool haveSavedDockIni = ImGuiLayout_ConfigureIniPath(cmd);
   std::vector<std::string> cmdLog;
   cmdLog.push_back("GoSurvey CAD shell ready.");
   cmdLog.push_back(
@@ -532,7 +545,7 @@ int main() {
   int fbW = 900;
   int fbH = 650;
 
-  bool dockLayoutDone = false;
+  bool dockLayoutDone = haveSavedDockIni;
   const float ribbonH = 130.f;
   bool orthoEnabled = true;
   bool gridVisible = true;
@@ -634,13 +647,29 @@ int main() {
 
     DrawRibbonBar(ribbonH, cmd, cmdLog);
 
-    ImGuiID dockspaceId = ImGui::GetID("GoSurveyDockSpace");
-    ImGui::DockSpace(dockspaceId, ImVec2(0.f, 0.f), 0);
+    const float cadStatusH = CadStatusBarStripHeightPx();
+    const float dockWrapH = std::max(1.f, ImGui::GetContentRegionAvail().y - cadStatusH);
+    ImGui::BeginChild("##GoSurveyDockWrap", ImVec2(0.f, dockWrapH), false,
+                      ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-    if (!dockLayoutDone) {
+    const ImVec2 dockHostSize = ImGui::GetContentRegionAvail();
+    ImGuiID dockspaceId = ImGui::GetID("GoSurveyDockSpace");
+    ImGui::DockSpace(dockspaceId, dockHostSize, 0);
+
+    if (cmd.pendingBuiltinDockLayoutReset) {
+      cmd.pendingBuiltinDockLayoutReset = false;
+      SetupMainDockLayout(dockspaceId, dockHostSize);
+      ImGuiIO& ioDock = ImGui::GetIO();
+      if (ioDock.IniFilename && ioDock.IniFilename[0])
+        ImGui::SaveIniSettingsToDisk(ioDock.IniFilename);
       dockLayoutDone = true;
-      SetupMainDockLayout(dockspaceId);
+      cmdLog.push_back("UI layout: reset to built-in dock split (saved to current layout .ini).");
+    } else if (!dockLayoutDone) {
+      dockLayoutDone = true;
+      SetupMainDockLayout(dockspaceId, dockHostSize);
     }
+
+    ImGui::EndChild();
 
     ImGui::End();
     ImGui::PopStyleVar(3);
@@ -652,8 +681,8 @@ int main() {
                         &panY, &zoom, &curX, &curY, &curRawX, &curRawY, &fbW, &fbH, &snapHit);
     cmd.uiCursorWorldX = curX;
     cmd.uiCursorWorldY = curY;
-    DrawCommandLinePanel(cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd, curX, curY, 0.f, &orthoEnabled,
-                         &gridVisible);
+    DrawCommandLinePanel(cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd);
+    DrawCadStatusBarStrip(cmd, curX, curY, 0.f, &orthoEnabled, &gridVisible);
 
     // LINE/POLYLINE AP: after two picks the bottom command InputText is hidden — Enter must still lock bearing.
     // Keyboard-only "A" then bearing: Enter with empty buffer cancels awaiting mode when no text field is focused.
@@ -680,6 +709,7 @@ int main() {
 
     DrawCreatePointsPanel(cmd, cmdLog);
     DrawSettingsPanel(cmd, &cmdLog);
+    ImGuiLayout_DrawLayoutPopups(cmd, cmdLog);
     DrawLayerManagerWindow(cmd, &cmdLog);
     DrawViewPointsPanel(cmd, cmdLog);
     DrawImportPointsPanel(cmd, cmdLog);
@@ -805,7 +835,9 @@ int main() {
 
     std::vector<float> previewLines;
     std::vector<float> previewCircles;
-    BuildTransformPreview(cmd, curX, curY, &previewLines, &previewCircles);
+    const float previewCx = cmd.active == AppCommandState::Kind::Offset ? curRawX : curX;
+    const float previewCy = cmd.active == AppCommandState::Kind::Offset ? curRawY : curY;
+    BuildTransformPreview(cmd, previewCx, previewCy, &previewLines, &previewCircles);
 
     if (cmd.active == AppCommandState::Kind::Trim &&
         cmd.trimPhase == AppCommandState::TrimPhase::CuttingLine_WaitP2) {
@@ -851,6 +883,7 @@ int main() {
                          surveyMarkers.empty() ? nullptr : &surveyMarkers, &cmd.userLineAttrs,
                          &cmd.userCircleAttrs, &ext, gridVisible, &cmd.drawingLayerTable);
 
+    ImGuiLayout_CommitDeferredIniLoadIfNeeded();
     ImGui::Render();
     int displayW = 0;
     int displayH = 0;

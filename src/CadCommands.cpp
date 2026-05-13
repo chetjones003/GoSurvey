@@ -23,6 +23,8 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
 
 bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std::string>& log);
 
+float CadOffsetEntityPickTolWorld(const AppCommandState& st);
+
 float RotateDeltaFromReferenceAndNewSegment(float refX1, float refY1, float refX2, float refY2,
                                              float newX1, float newY1, float newX2, float newY2) {
   const float thetaRef = std::atan2(refY2 - refY1, refX2 - refX1);
@@ -433,6 +435,7 @@ const CmdEntry kRegistry[] = {
     {"text", ""},
     {"mtext", "mt"},
     {"dimaligned", "dal"},
+    {"id", ""},
     {"plotscale", "pscale"},
     {"move", "m"},
     {"copy", "cp"},
@@ -440,6 +443,7 @@ const CmdEntry kRegistry[] = {
     {"delete", "del"},
     {"join", "j"},
     {"trim", "tr"},
+    {"offset", "o"},
     {"zoomextents", "ze"},
     {"zoomwindow", "zw"},
     {"createpoints", "crtpts"},
@@ -678,6 +682,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     StartDimAlignedCommand(st, log);
     return true;
   }
+  if (primary == "id") {
+    StartIdPointCommand(st, log);
+    return true;
+  }
   if (primary == "plotscale") {
     log.push_back(
         "PLOTSCALE sets drawing units per plotted inch (e.g. 50 for civil 1\"=50'). Usage: PLOTSCALE 50");
@@ -718,6 +726,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     StartTrimCommand(st, log);
     return true;
   }
+  if (primary == "offset") {
+    StartOffsetCommand(st, log);
+    return true;
+  }
   if (primary == "zoomextents") {
     StartZoomExtentsCommand(st, log);
     return true;
@@ -752,7 +764,8 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   if (primary == "help") {
     log.push_back(
         "LINE (L), POLYLINE (PL, CLOSE to close), ARC (3-point), ELLIPSE (center, axis end, ratio), TEXT, MTEXT, "
-        "DIMALIGNED (DAL), CIRCLE (C), MOVE (M), COPY (CP), ROTATE (RO), DELETE (DEL), ZOOM (ZE/ZW), PLOTSCALE "
+        "DIMALIGNED (DAL), ID, CIRCLE (C), MOVE (M), COPY (CP), ROTATE (RO), DELETE (DEL), OFFSET (O), ZOOM (ZE/ZW), "
+        "PLOTSCALE "
         "(PSCALE), REGEN (RE), LAYER (LA). SURVEY: CRTPTS, VWPTS, IMPPTS, EXPPTS. Idle: two-click box selects. ESC.");
     log.push_back(
         "LINE: @dx,dy from anchor; A or ANGLE alone then bearing on next line (blank Enter cancels); A<bearing> (+ "
@@ -760,7 +773,8 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
         "clears when lock or AP pick is active. Ortho: distance toward cursor.");
     log.push_back(
         "ROTATE: ° clockwise from north / DMS; R reference; then bearing or P. DELETE / ZW use unsnapped windows. TRIM "
-        "matches Civil 3D: cutting edges, Enter, trim clicks. ZE fits geometry.");
+        "matches Civil 3D: cutting edges, Enter, trim clicks. OFFSET: pick entity, distance + side or through-click "
+        "(line/circle/arc). ZE fits geometry.");
     return true;
   }
   return false;
@@ -2072,6 +2086,509 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   log.push_back("DIMALIGNED complete.");
 }
 
+static void CommitIdPointAt(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  char buf[192];
+  std::snprintf(buf, sizeof(buf), "ID — UCS (World)  X = %.6f  Y = %.6f  Z = 0.000000", static_cast<double>(wx),
+                static_cast<double>(wy));
+  log.push_back(buf);
+  st.active = AppCommandState::Kind::None;
+}
+
+namespace OffsetCmd {
+
+static void ResetOffsetDraft(AppCommandState& st) {
+  st.offsetEntityValid = false;
+  st.offsetEntity = {};
+  st.offsetTypedDistance = 0.f;
+  st.offsetPhase = AppCommandState::OffsetPhase::WaitSelectEntity;
+  st.offsetHoverHighlightValid = false;
+  st.offsetHoverEntity = {};
+}
+
+static void ClosestPointOnSegment(float ax, float ay, float bx, float by, float px, float py, float* qx,
+                                  float* qy) {
+  const float vx = bx - ax;
+  const float vy = by - ay;
+  const float len2 = vx * vx + vy * vy;
+  if (len2 < 1e-18f) {
+    *qx = ax;
+    *qy = ay;
+    return;
+  }
+  const float t = std::clamp(((px - ax) * vx + (py - ay) * vy) / len2, 0.f, 1.f);
+  *qx = ax + t * vx;
+  *qy = ay + t * vy;
+}
+
+static bool LineLineIntersectInf(float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy,
+                                 float* ox, float* oy) {
+  const float rx = bx - ax, ry = by - ay;
+  const float sx = dx - cx, sy = dy - cy;
+  const float det = rx * sy - ry * sx;
+  if (std::fabs(det) < 1e-12f * std::max(1.f, std::hypot(rx, ry) * std::hypot(sx, sy)))
+    return false;
+  const float t = ((cx - ax) * sy - (cy - ay) * sx) / det;
+  *ox = ax + t * rx;
+  *oy = ay + t * ry;
+  return true;
+}
+
+static void UnitLeftNormal(float ax, float ay, float bx, float by, float* nx, float* ny) {
+  float vx = bx - ax;
+  float vy = by - ay;
+  const float len = std::hypot(vx, vy);
+  if (len < 1e-12f) {
+    *nx = 0.f;
+    *ny = 1.f;
+    return;
+  }
+  vx /= len;
+  vy /= len;
+  *nx = -vy;
+  *ny = vx;
+}
+
+static float SignedSideLine(float ax, float ay, float bx, float by, float px, float py) {
+  float qx = 0.f, qy = 0.f;
+  ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
+  float nx = 0.f, ny = 0.f;
+  UnitLeftNormal(ax, ay, bx, by, &nx, &ny);
+  return (px - qx) * nx + (py - qy) * ny;
+}
+
+static float SignedSideCircle(float cx, float cy, float r, float px, float py) {
+  const float d = std::hypot(px - cx, py - cy);
+  return d - r;
+}
+
+static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std::vector<std::string>& log) {
+  const size_t k = static_cast<size_t>(lineIx) * 6;
+  if (k + 5 >= st.userLinesFlat.size())
+    return false;
+  const float x0 = st.userLinesFlat[k];
+  const float y0 = st.userLinesFlat[k + 1];
+  const float x1 = st.userLinesFlat[k + 3];
+  const float y1 = st.userLinesFlat[k + 4];
+  const float dx = x1 - x0;
+  const float dy = y1 - y0;
+  if (std::hypot(dx, dy) < 1e-8f) {
+    log.push_back("OFFSET — zero-length line.");
+    return false;
+  }
+  float nx = 0.f, ny = 0.f;
+  UnitLeftNormal(x0, y0, x1, y1, &nx, &ny);
+  const float ox0 = x0 + nx * signedD;
+  const float oy0 = y0 + ny * signedD;
+  const float ox1 = x1 + nx * signedD;
+  const float oy1 = y1 + ny * signedD;
+  st.userLinesFlat.push_back(ox0);
+  st.userLinesFlat.push_back(oy0);
+  st.userLinesFlat.push_back(0.f);
+  st.userLinesFlat.push_back(ox1);
+  st.userLinesFlat.push_back(oy1);
+  st.userLinesFlat.push_back(0.f);
+  if (static_cast<size_t>(lineIx) < st.userLineAttrs.size())
+    st.userLineAttrs.push_back(st.userLineAttrs[static_cast<size_t>(lineIx)]);
+  else
+    st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  return true;
+}
+
+static bool CommitOffsetCircle(AppCommandState& st, int ci, float signedD, std::vector<std::string>& log) {
+  const size_t k = static_cast<size_t>(ci) * 3;
+  if (k + 2 >= st.userCirclesCxCyR.size())
+    return false;
+  const float cx = st.userCirclesCxCyR[k];
+  const float cy = st.userCirclesCxCyR[k + 1];
+  const float r = st.userCirclesCxCyR[k + 2];
+  const float nr = r + signedD;
+  if (nr <= 1e-6f) {
+    log.push_back("OFFSET — resulting circle radius too small.");
+    return false;
+  }
+  st.userCirclesCxCyR.push_back(cx);
+  st.userCirclesCxCyR.push_back(cy);
+  st.userCirclesCxCyR.push_back(nr);
+  if (static_cast<size_t>(ci) < st.userCircleAttrs.size())
+    st.userCircleAttrs.push_back(st.userCircleAttrs[static_cast<size_t>(ci)]);
+  else
+    st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  return true;
+}
+
+static bool CommitOffsetArc(AppCommandState& st, int ai, float signedD, std::vector<std::string>& log) {
+  if (ai < 0 || static_cast<size_t>(ai) >= st.userArcs.size())
+    return false;
+  const CadArc& a = st.userArcs[static_cast<size_t>(ai)];
+  const float nr = a.r + signedD;
+  if (nr <= 1e-6f) {
+    log.push_back("OFFSET — resulting arc radius too small.");
+    return false;
+  }
+  CadArc o = a;
+  o.r = nr;
+  st.userArcs.push_back(o);
+  if (static_cast<size_t>(ai) < st.userArcAttrs.size())
+    st.userArcAttrs.push_back(st.userArcAttrs[static_cast<size_t>(ai)]);
+  else
+    st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  return true;
+}
+
+static bool CommitOffsetEllipse(AppCommandState& st, int ei, float signedD, std::vector<std::string>& log) {
+  if (ei < 0 || static_cast<size_t>(ei) >= st.userEllipses.size())
+    return false;
+  const CadEllipse& e = st.userEllipses[static_cast<size_t>(ei)];
+  const float ma = std::hypot(e.majVx, e.majVy);
+  if (ma < 1e-8f) {
+    log.push_back("OFFSET — degenerate ellipse.");
+    return false;
+  }
+  const float f = (ma + signedD) / ma;
+  if (ma + signedD <= 1e-6f) {
+    log.push_back("OFFSET — resulting ellipse too small.");
+    return false;
+  }
+  CadEllipse o = e;
+  o.majVx *= f;
+  o.majVy *= f;
+  st.userEllipses.push_back(o);
+  if (static_cast<size_t>(ei) < st.userEllAttrs.size())
+    st.userEllAttrs.push_back(st.userEllAttrs[static_cast<size_t>(ei)]);
+  else
+    st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  return true;
+}
+
+static bool CommitOffsetPolyline(AppCommandState& st, int pi, float signedD, std::vector<std::string>& log) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+    return false;
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const int nv = v1 - v0;
+  if (nv < 2) {
+    log.push_back("OFFSET — polyline needs at least two vertices.");
+    return false;
+  }
+  const bool closed =
+      static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+
+  std::vector<std::pair<float, float>> v;
+  v.reserve(static_cast<size_t>(nv));
+  for (int i = v0; i < v1; ++i) {
+    v.push_back({st.userPolylineVerts[static_cast<size_t>(i * 3)], st.userPolylineVerts[static_cast<size_t>(i * 3 + 1)]});
+  }
+
+  const int n = static_cast<int>(v.size());
+  const int nEdges = closed ? n : n - 1;
+  if (nEdges < 1) {
+    log.push_back("OFFSET — not enough edges.");
+    return false;
+  }
+
+  std::vector<std::pair<float, float>> pa(static_cast<size_t>(nEdges)), pb(static_cast<size_t>(nEdges));
+  for (int ei = 0; ei < nEdges; ++ei) {
+    const int ia = ei;
+    const int ib = closed ? (ei + 1) % n : ei + 1;
+    const float ax = v[static_cast<size_t>(ia)].first;
+    const float ay = v[static_cast<size_t>(ia)].second;
+    const float bx = v[static_cast<size_t>(ib)].first;
+    const float by = v[static_cast<size_t>(ib)].second;
+    float nx = 0.f, ny = 0.f;
+    UnitLeftNormal(ax, ay, bx, by, &nx, &ny);
+    pa[static_cast<size_t>(ei)] = {ax + nx * signedD, ay + ny * signedD};
+    pb[static_cast<size_t>(ei)] = {bx + nx * signedD, by + ny * signedD};
+  }
+
+  std::vector<std::pair<float, float>> out;
+  if (!closed) {
+    if (nEdges == 1) {
+      out.push_back(pa[0]);
+      out.push_back(pb[0]);
+    } else {
+      out.push_back(pa[0]);
+      for (int ei = 0; ei < nEdges - 1; ++ei) {
+        const auto& a0 = pa[static_cast<size_t>(ei)];
+        const auto& b0 = pb[static_cast<size_t>(ei)];
+        const auto& a1 = pa[static_cast<size_t>(ei + 1)];
+        const auto& b1 = pb[static_cast<size_t>(ei + 1)];
+        float ix = 0.f, iy = 0.f;
+        if (LineLineIntersectInf(a0.first, a0.second, b0.first, b0.second, a1.first, a1.second, b1.first, b1.second,
+                                  &ix, &iy))
+          out.push_back({ix, iy});
+        else {
+          const float mx = 0.5f * (b0.first + a1.first);
+          const float my = 0.5f * (b0.second + a1.second);
+          out.push_back({mx, my});
+        }
+      }
+      out.push_back(pb[static_cast<size_t>(nEdges - 1)]);
+    }
+  } else {
+    out.resize(static_cast<size_t>(nEdges));
+    for (int ei = 0; ei < nEdges; ++ei) {
+      const int en = (ei + 1) % nEdges;
+      const auto& a0 = pa[static_cast<size_t>(ei)];
+      const auto& b0 = pb[static_cast<size_t>(ei)];
+      const auto& a1 = pa[static_cast<size_t>(en)];
+      const auto& b1 = pb[static_cast<size_t>(en)];
+      float ix = 0.f, iy = 0.f;
+      if (LineLineIntersectInf(a0.first, a0.second, b0.first, b0.second, a1.first, a1.second, b1.first, b1.second, &ix,
+                               &iy))
+        out[static_cast<size_t>(ei)] = {ix, iy};
+      else
+        out[static_cast<size_t>(ei)] = {0.5f * (b0.first + a1.first), 0.5f * (b0.second + a1.second)};
+    }
+  }
+
+  if (out.size() < 2) {
+    log.push_back("OFFSET — could not build offset polyline.");
+    return false;
+  }
+
+  if (st.userPolylineOffsets.empty())
+    st.userPolylineOffsets.push_back(0);
+  const int baseVert = st.userPolylineOffsets.back();
+  for (const auto& p : out) {
+    st.userPolylineVerts.push_back(p.first);
+    st.userPolylineVerts.push_back(p.second);
+    st.userPolylineVerts.push_back(0.f);
+  }
+  st.userPolylineOffsets.push_back(baseVert + static_cast<int>(out.size()));
+  st.userPolylineClosed.push_back(closed ? 1u : 0u);
+  if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
+    st.userPolylineAttrs.push_back(st.userPolylineAttrs[static_cast<size_t>(pi)]);
+  else
+    st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  return true;
+}
+
+static bool CommitOffsetSigned(AppCommandState& st, float signedD, std::vector<std::string>& log) {
+  if (!st.offsetEntityValid)
+    return false;
+  const SelectedEntity& e = st.offsetEntity;
+  bool ok = false;
+  switch (e.type) {
+  case SelectedEntity::Type::LineSeg:
+    ok = CommitOffsetLine(st, e.index, signedD, log);
+    break;
+  case SelectedEntity::Type::Circle:
+    ok = CommitOffsetCircle(st, e.index, signedD, log);
+    break;
+  case SelectedEntity::Type::Arc:
+    ok = CommitOffsetArc(st, e.index, signedD, log);
+    break;
+  case SelectedEntity::Type::Ellipse:
+    ok = CommitOffsetEllipse(st, e.index, signedD, log);
+    break;
+  case SelectedEntity::Type::Polyline:
+    ok = CommitOffsetPolyline(st, e.index, signedD, log);
+    break;
+  default:
+    log.push_back("OFFSET — unsupported entity type.");
+    return false;
+  }
+  if (ok)
+    log.push_back("OFFSET — created parallel / concentric geometry.");
+  return ok;
+}
+
+static void FinishOffsetAndIdle(AppCommandState& st, std::vector<std::string>& log) {
+  (void)log;
+  ResetOffsetDraft(st);
+  st.active = AppCommandState::Kind::None;
+}
+
+static void HandleOffsetThroughPick(AppCommandState& st, float px, float py, std::vector<std::string>& log) {
+  if (!st.offsetEntityValid)
+    return;
+  const SelectedEntity& e = st.offsetEntity;
+  float signedD = 0.f;
+  switch (e.type) {
+  case SelectedEntity::Type::LineSeg: {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return;
+    const float x0 = st.userLinesFlat[k];
+    const float y0 = st.userLinesFlat[k + 1];
+    const float x1 = st.userLinesFlat[k + 3];
+    const float y1 = st.userLinesFlat[k + 4];
+    signedD = SignedSideLine(x0, y0, x1, y1, px, py);
+    break;
+  }
+  case SelectedEntity::Type::Circle: {
+    const size_t k = static_cast<size_t>(e.index) * 3;
+    if (k + 2 >= st.userCirclesCxCyR.size())
+      return;
+    const float cx = st.userCirclesCxCyR[k];
+    const float cy = st.userCirclesCxCyR[k + 1];
+    const float r = st.userCirclesCxCyR[k + 2];
+    signedD = SignedSideCircle(cx, cy, r, px, py);
+    break;
+  }
+  case SelectedEntity::Type::Arc: {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      return;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    signedD = SignedSideCircle(a.cx, a.cy, a.r, px, py);
+    break;
+  }
+  case SelectedEntity::Type::Polyline:
+    log.push_back("OFFSET — polyline: type a distance, then pick a side (through-click not supported).");
+    return;
+  case SelectedEntity::Type::Ellipse:
+    log.push_back("OFFSET — ellipse: type a distance, then pick a side (through-click not supported).");
+    return;
+  default:
+    return;
+  }
+  if (std::fabs(signedD) < 1e-8f) {
+    log.push_back("OFFSET — through point on original; pick farther away.");
+    return;
+  }
+  if (CommitOffsetSigned(st, signedD, log))
+    FinishOffsetAndIdle(st, log);
+}
+
+static void HandleOffsetSidePick(AppCommandState& st, float px, float py, std::vector<std::string>& log) {
+  if (!st.offsetEntityValid || st.offsetTypedDistance <= 0.f)
+    return;
+  const float d = st.offsetTypedDistance;
+  const SelectedEntity& e = st.offsetEntity;
+  float sgn = 1.f;
+  switch (e.type) {
+  case SelectedEntity::Type::LineSeg: {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return;
+    const float sd = SignedSideLine(st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 3],
+                                    st.userLinesFlat[k + 4], px, py);
+    sgn = sd >= 0.f ? 1.f : -1.f;
+    break;
+  }
+  case SelectedEntity::Type::Circle: {
+    const size_t k = static_cast<size_t>(e.index) * 3;
+    if (k + 2 >= st.userCirclesCxCyR.size())
+      return;
+    const float cx = st.userCirclesCxCyR[k];
+    const float cy = st.userCirclesCxCyR[k + 1];
+    const float r = st.userCirclesCxCyR[k + 2];
+    const float side = SignedSideCircle(cx, cy, r, px, py);
+    sgn = side >= 0.f ? 1.f : -1.f;
+    break;
+  }
+  case SelectedEntity::Type::Arc: {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      return;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    const float side = SignedSideCircle(a.cx, a.cy, a.r, px, py);
+    sgn = side >= 0.f ? 1.f : -1.f;
+    break;
+  }
+  case SelectedEntity::Type::Ellipse:
+  case SelectedEntity::Type::Polyline: {
+    if (e.type == SelectedEntity::Type::Polyline) {
+      const int pi = e.index;
+      if (pi >= 0 && static_cast<size_t>(pi + 1) < st.userPolylineOffsets.size()) {
+        const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+        const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+        float best = 1e30f;
+        float bestS = 1.f;
+        for (int vi = v0; vi + 1 < v1; ++vi) {
+          const float ax = st.userPolylineVerts[static_cast<size_t>(vi * 3)];
+          const float ay = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
+          const float bx = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
+          const float by = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
+          float qx = 0.f, qy = 0.f;
+          ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
+          const float sd = SignedSideLine(ax, ay, bx, by, px, py);
+          const float dx = px - qx;
+          const float dy = py - qy;
+          const float dist2 = dx * dx + dy * dy;
+          if (dist2 < best) {
+            best = dist2;
+            bestS = sd >= 0.f ? 1.f : -1.f;
+          }
+        }
+        sgn = bestS;
+      }
+    } else if (e.index >= 0 && static_cast<size_t>(e.index) < st.userEllipses.size()) {
+      const CadEllipse& el = st.userEllipses[static_cast<size_t>(e.index)];
+      const float ma = std::hypot(el.majVx, el.majVy);
+      if (ma >= 1e-8f) {
+        const float ux = el.majVx / ma;
+        const float uy = el.majVy / ma;
+        const float pxn = -uy;
+        const float pyn = ux;
+        const float mb = ma * el.ratio;
+        constexpr float twopi = 6.28318530718f;
+        float best = 1e30f;
+        float bx = el.cx, by = el.cy;
+        for (int i = 0; i <= 48; ++i) {
+          const float ang = twopi * static_cast<float>(i) / 48.f;
+          const float c0 = std::cos(ang);
+          const float s0 = std::sin(ang);
+          const float ex = el.cx + ux * (ma * c0) + pxn * (mb * s0);
+          const float ey = el.cy + uy * (ma * c0) + pyn * (mb * s0);
+          const float dx = px - ex;
+          const float dy = py - ey;
+          const float dist2 = dx * dx + dy * dy;
+          if (dist2 < best) {
+            best = dist2;
+            bx = ex;
+            by = ey;
+          }
+        }
+        const float ox = bx - el.cx;
+        const float oy = by - el.cy;
+        const float inX = px - el.cx;
+        const float inY = py - el.cy;
+        sgn = (inX * ox + inY * oy) >= 0.f ? 1.f : -1.f;
+      }
+    }
+    break;
+  }
+  default:
+    return;
+  }
+  const float signedD = d * sgn;
+  if (CommitOffsetSigned(st, signedD, log))
+    FinishOffsetAndIdle(st, log);
+}
+
+static void HandleOffsetViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  using OP = AppCommandState::OffsetPhase;
+  switch (st.offsetPhase) {
+  case OP::WaitSelectEntity: {
+    SelectedEntity hit{};
+    float d2 = 0.f;
+    if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+      log.push_back("OFFSET — nothing under cursor; try again.");
+      return;
+    }
+    st.offsetEntity = hit;
+    st.offsetEntityValid = true;
+    st.offsetPhase = OP::WaitDistanceOrThrough;
+    st.offsetTypedDistance = 0.f;
+    log.push_back("OFFSET — distance (number) + pick side, or click through point for line / circle / arc.");
+    return;
+  }
+  case OP::WaitDistanceOrThrough:
+    HandleOffsetThroughPick(st, wx, wy, log);
+    return;
+  case OP::WaitSidePick:
+    HandleOffsetSidePick(st, wx, wy, log);
+    return;
+  }
+}
+
+} // namespace OffsetCmd
+
 void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector<std::string>& log,
                              bool windowSelectionSubtract, bool fenceLeftToRightWindowMode) {
   using K = AppCommandState::Kind;
@@ -2280,6 +2797,16 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
+  if (st.active == K::IdPoint) {
+    CommitIdPointAt(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::Offset) {
+    OffsetCmd::HandleOffsetViewportPick(st, wx, wy, log);
+    return;
+  }
+
   if (st.active == K::Circle) {
     switch (st.circlePhase) {
     case AppCommandState::CirclePhase::WaitCenterOrMode:
@@ -2458,6 +2985,20 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
 }
 
 } // namespace
+
+void StartOffsetCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None) {
+    log.push_back("OFFSET — finish or cancel the active command first.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  OffsetCmd::ResetOffsetDraft(st);
+  st.active = K::Offset;
+  st.selBoxWaitingSecond = false;
+  log.push_back("OFFSET — select line, circle, arc, ellipse, or polyline. ESC cancels.");
+}
 
 float MathAngleRadFromBearingCwNorthDeg(float bearingDegClockwiseFromNorth) {
   constexpr float kDegToRad = 0.01745329251994329577f;
@@ -3114,6 +3655,20 @@ void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log) 
   st.active = AppCommandState::Kind::DimAligned;
   st.dimPhase = AppCommandState::DimPhase::WaitExt1;
   log.push_back("DIMALIGNED — extension 1, extension 2, then offset (point away from measured line). ESC cancels.");
+}
+
+void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None) {
+    log.push_back("ID — finish or cancel the active command first.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selectedSurveyPointIndices.clear();
+  st.selBoxWaitingSecond = false;
+  st.active = K::IdPoint;
+  log.push_back("ID — specify point (click in drawing or type X,Y). UCS = World. ESC cancels.");
 }
 
 void ClearCadSelection(AppCommandState& st) {
@@ -4393,6 +4948,452 @@ bool PickClosestCadEntity(const AppCommandState& st, float wx, float wy, float t
   return true;
 }
 
+namespace {
+
+static void OfsClosestPtSeg(float ax, float ay, float bx, float by, float px, float py, float* qx, float* qy) {
+  const float vx = bx - ax;
+  const float vy = by - ay;
+  const float len2 = vx * vx + vy * vy;
+  if (len2 < 1e-18f) {
+    *qx = ax;
+    *qy = ay;
+    return;
+  }
+  const float t = std::clamp(((px - ax) * vx + (py - ay) * vy) / len2, 0.f, 1.f);
+  *qx = ax + t * vx;
+  *qy = ay + t * vy;
+}
+
+static void OfsUnitLeftNormal(float ax, float ay, float bx, float by, float* nx, float* ny) {
+  float vx = bx - ax;
+  float vy = by - ay;
+  const float len = std::hypot(vx, vy);
+  if (len < 1e-12f) {
+    *nx = 0.f;
+    *ny = 1.f;
+    return;
+  }
+  vx /= len;
+  vy /= len;
+  *nx = -vy;
+  *ny = vx;
+}
+
+static float OfsSignedSideLine(float ax, float ay, float bx, float by, float px, float py) {
+  float qx = 0.f, qy = 0.f;
+  OfsClosestPtSeg(ax, ay, bx, by, px, py, &qx, &qy);
+  float nx = 0.f, ny = 0.f;
+  OfsUnitLeftNormal(ax, ay, bx, by, &nx, &ny);
+  return (px - qx) * nx + (py - qy) * ny;
+}
+
+static float OfsSignedSideCircle(float cx, float cy, float r, float px, float py) {
+  const float d = std::hypot(px - cx, py - cy);
+  return d - r;
+}
+
+static bool OfsLineLineIntersectInf(float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy,
+                                    float* ox, float* oy) {
+  const float rx = bx - ax, ry = by - ay;
+  const float sx = dx - cx, sy = dy - cy;
+  const float det = rx * sy - ry * sx;
+  if (std::fabs(det) < 1e-12f * std::max(1.f, std::hypot(rx, ry) * std::hypot(sx, sy)))
+    return false;
+  const float t = ((cx - ax) * sy - (cy - ay) * sx) / det;
+  *ox = ax + t * rx;
+  *oy = ay + t * ry;
+  return true;
+}
+
+static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, float py, float* signedDOut) {
+  using OP = AppCommandState::OffsetPhase;
+  using T = SelectedEntity::Type;
+  if (!st.offsetEntityValid)
+    return false;
+  const SelectedEntity& e = st.offsetEntity;
+  if (st.offsetPhase == OP::WaitSidePick) {
+    if (st.offsetTypedDistance <= 0.f)
+      return false;
+    const float d = st.offsetTypedDistance;
+    float sgn = 1.f;
+    switch (e.type) {
+    case T::LineSeg: {
+      const size_t k = static_cast<size_t>(e.index) * 6;
+      if (k + 5 >= st.userLinesFlat.size())
+        return false;
+      const float sd = OfsSignedSideLine(st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 3],
+                                         st.userLinesFlat[k + 4], px, py);
+      sgn = sd >= 0.f ? 1.f : -1.f;
+      break;
+    }
+    case T::Circle: {
+      const size_t k = static_cast<size_t>(e.index) * 3;
+      if (k + 2 >= st.userCirclesCxCyR.size())
+        return false;
+      const float cx = st.userCirclesCxCyR[k];
+      const float cy = st.userCirclesCxCyR[k + 1];
+      const float r = st.userCirclesCxCyR[k + 2];
+      const float side = OfsSignedSideCircle(cx, cy, r, px, py);
+      sgn = side >= 0.f ? 1.f : -1.f;
+      break;
+    }
+    case T::Arc: {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+        return false;
+      const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+      const float side = OfsSignedSideCircle(a.cx, a.cy, a.r, px, py);
+      sgn = side >= 0.f ? 1.f : -1.f;
+      break;
+    }
+    case T::Ellipse:
+    case T::Polyline: {
+      if (e.type == T::Polyline) {
+        const int pi = e.index;
+        if (pi >= 0 && static_cast<size_t>(pi + 1) < st.userPolylineOffsets.size()) {
+          const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+          const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+          float best = 1e30f;
+          float bestS = 1.f;
+          for (int vi = v0; vi + 1 < v1; ++vi) {
+            const float ax = st.userPolylineVerts[static_cast<size_t>(vi * 3)];
+            const float ay = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
+            const float bx = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
+            const float by = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
+            float qx = 0.f, qy = 0.f;
+            OfsClosestPtSeg(ax, ay, bx, by, px, py, &qx, &qy);
+            const float sd = OfsSignedSideLine(ax, ay, bx, by, px, py);
+            const float dx = px - qx;
+            const float dy = py - qy;
+            const float dist2 = dx * dx + dy * dy;
+            if (dist2 < best) {
+              best = dist2;
+              bestS = sd >= 0.f ? 1.f : -1.f;
+            }
+          }
+          sgn = bestS;
+        }
+      } else if (e.index >= 0 && static_cast<size_t>(e.index) < st.userEllipses.size()) {
+        const CadEllipse& el = st.userEllipses[static_cast<size_t>(e.index)];
+        const float ma = std::hypot(el.majVx, el.majVy);
+        if (ma >= 1e-8f) {
+          const float ux = el.majVx / ma;
+          const float uy = el.majVy / ma;
+          const float pxn = -uy;
+          const float pyn = ux;
+          const float mb = ma * el.ratio;
+          constexpr float twopi = 6.28318530718f;
+          float best = 1e30f;
+          float bx = el.cx, by = el.cy;
+          for (int i = 0; i <= 48; ++i) {
+            const float ang = twopi * static_cast<float>(i) / 48.f;
+            const float c0 = std::cos(ang);
+            const float s0 = std::sin(ang);
+            const float ex = el.cx + ux * (ma * c0) + pxn * (mb * s0);
+            const float ey = el.cy + uy * (ma * c0) + pyn * (mb * s0);
+            const float dx = px - ex;
+            const float dy = py - ey;
+            const float dist2 = dx * dx + dy * dy;
+            if (dist2 < best) {
+              best = dist2;
+              bx = ex;
+              by = ey;
+            }
+          }
+          const float ox = bx - el.cx;
+          const float oy = by - el.cy;
+          const float inX = px - el.cx;
+          const float inY = py - el.cy;
+          sgn = (inX * ox + inY * oy) >= 0.f ? 1.f : -1.f;
+        }
+      }
+      break;
+    }
+    default:
+      return false;
+    }
+    *signedDOut = d * sgn;
+    return true;
+  }
+  if (st.offsetPhase == OP::WaitDistanceOrThrough) {
+    float signedD = 0.f;
+    switch (e.type) {
+    case T::LineSeg: {
+      const size_t k = static_cast<size_t>(e.index) * 6;
+      if (k + 5 >= st.userLinesFlat.size())
+        return false;
+      signedD = OfsSignedSideLine(st.userLinesFlat[k], st.userLinesFlat[k + 1], st.userLinesFlat[k + 3],
+                                  st.userLinesFlat[k + 4], px, py);
+      break;
+    }
+    case T::Circle: {
+      const size_t k = static_cast<size_t>(e.index) * 3;
+      if (k + 2 >= st.userCirclesCxCyR.size())
+        return false;
+      signedD = OfsSignedSideCircle(st.userCirclesCxCyR[k], st.userCirclesCxCyR[k + 1], st.userCirclesCxCyR[k + 2], px,
+                                  py);
+      break;
+    }
+    case T::Arc: {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+        return false;
+      const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+      signedD = OfsSignedSideCircle(a.cx, a.cy, a.r, px, py);
+      break;
+    }
+    default:
+      return false;
+    }
+    if (std::fabs(signedD) < 1e-7f)
+      return false;
+    *signedDOut = signedD;
+    return true;
+  }
+  return false;
+}
+
+static void AppendArcPreviewStrip(float z, const CadArc& a, std::vector<float>* lines) {
+  constexpr int n = 56;
+  for (int i = 0; i < n; ++i) {
+    const float u0 = static_cast<float>(i) / static_cast<float>(n);
+    const float u1 = static_cast<float>(i + 1) / static_cast<float>(n);
+    const float t0 = a.startRad + a.sweepRad * u0;
+    const float t1 = a.startRad + a.sweepRad * u1;
+    const float x0 = a.cx + a.r * std::cos(t0);
+    const float y0 = a.cy + a.r * std::sin(t0);
+    const float x1 = a.cx + a.r * std::cos(t1);
+    const float y1 = a.cy + a.r * std::sin(t1);
+    lines->push_back(x0);
+    lines->push_back(y0);
+    lines->push_back(z);
+    lines->push_back(x1);
+    lines->push_back(y1);
+    lines->push_back(z);
+  }
+}
+
+static void AppendEllipsePreviewStrip(float z, const CadEllipse& el, std::vector<float>* lines) {
+  const float ma = std::hypot(el.majVx, el.majVy);
+  if (ma < 1e-8f)
+    return;
+  const float ux = el.majVx / ma;
+  const float uy = el.majVy / ma;
+  const float px = -uy;
+  const float py = ux;
+  const float mb = ma * el.ratio;
+  constexpr int n = 56;
+  constexpr float twopi = 6.28318530718f;
+  for (int i = 0; i < n; ++i) {
+    const float u0 = twopi * static_cast<float>(i) / static_cast<float>(n);
+    const float u1 = twopi * static_cast<float>(i + 1) / static_cast<float>(n);
+    const float c0 = std::cos(u0);
+    const float s0 = std::sin(u0);
+    const float c1 = std::cos(u1);
+    const float s1 = std::sin(u1);
+    const float x0 = el.cx + ux * (ma * c0) + px * (mb * s0);
+    const float y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
+    const float x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
+    const float y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
+    lines->push_back(x0);
+    lines->push_back(y0);
+    lines->push_back(z);
+    lines->push_back(x1);
+    lines->push_back(y1);
+    lines->push_back(z);
+  }
+}
+
+static void AppendPolylineOffsetPreview(const AppCommandState& st, int pi, float signedD, float z,
+                                        std::vector<float>* lines) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+    return;
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const int nv = v1 - v0;
+  if (nv < 2)
+    return;
+  const bool closed =
+      static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+
+  std::vector<std::pair<float, float>> v;
+  v.reserve(static_cast<size_t>(nv));
+  for (int i = v0; i < v1; ++i)
+    v.push_back({st.userPolylineVerts[static_cast<size_t>(i * 3)], st.userPolylineVerts[static_cast<size_t>(i * 3 + 1)]});
+
+  const int n = static_cast<int>(v.size());
+  const int nEdges = closed ? n : n - 1;
+  if (nEdges < 1)
+    return;
+
+  std::vector<std::pair<float, float>> pa(static_cast<size_t>(nEdges)), pb(static_cast<size_t>(nEdges));
+  for (int ei = 0; ei < nEdges; ++ei) {
+    const int ia = ei;
+    const int ib = closed ? (ei + 1) % n : ei + 1;
+    const float ax = v[static_cast<size_t>(ia)].first;
+    const float ay = v[static_cast<size_t>(ia)].second;
+    const float bx = v[static_cast<size_t>(ib)].first;
+    const float by = v[static_cast<size_t>(ib)].second;
+    float nx = 0.f, ny = 0.f;
+    OfsUnitLeftNormal(ax, ay, bx, by, &nx, &ny);
+    pa[static_cast<size_t>(ei)] = {ax + nx * signedD, ay + ny * signedD};
+    pb[static_cast<size_t>(ei)] = {bx + nx * signedD, by + ny * signedD};
+  }
+
+  std::vector<std::pair<float, float>> out;
+  if (!closed) {
+    if (nEdges == 1) {
+      out.push_back(pa[0]);
+      out.push_back(pb[0]);
+    } else {
+      out.push_back(pa[0]);
+      for (int ei = 0; ei < nEdges - 1; ++ei) {
+        const auto& a0 = pa[static_cast<size_t>(ei)];
+        const auto& b0 = pb[static_cast<size_t>(ei)];
+        const auto& a1 = pa[static_cast<size_t>(ei + 1)];
+        const auto& b1 = pb[static_cast<size_t>(ei + 1)];
+        float ix = 0.f, iy = 0.f;
+        if (OfsLineLineIntersectInf(a0.first, a0.second, b0.first, b0.second, a1.first, a1.second, b1.first, b1.second,
+                                    &ix, &iy))
+          out.push_back({ix, iy});
+        else {
+          out.push_back({0.5f * (b0.first + a1.first), 0.5f * (b0.second + a1.second)});
+        }
+      }
+      out.push_back(pb[static_cast<size_t>(nEdges - 1)]);
+    }
+  } else {
+    out.resize(static_cast<size_t>(nEdges));
+    for (int ei = 0; ei < nEdges; ++ei) {
+      const int en = (ei + 1) % nEdges;
+      const auto& a0 = pa[static_cast<size_t>(ei)];
+      const auto& b0 = pb[static_cast<size_t>(ei)];
+      const auto& a1 = pa[static_cast<size_t>(en)];
+      const auto& b1 = pb[static_cast<size_t>(en)];
+      float ix = 0.f, iy = 0.f;
+      if (OfsLineLineIntersectInf(a0.first, a0.second, b0.first, b0.second, a1.first, a1.second, b1.first, b1.second,
+                                  &ix, &iy))
+        out[static_cast<size_t>(ei)] = {ix, iy};
+      else
+        out[static_cast<size_t>(ei)] = {0.5f * (b0.first + a1.first), 0.5f * (b0.second + a1.second)};
+    }
+  }
+  if (out.size() < 2)
+    return;
+  for (size_t i = 0; i + 1 < out.size(); ++i) {
+    lines->push_back(out[i].first);
+    lines->push_back(out[i].second);
+    lines->push_back(z);
+    lines->push_back(out[i + 1].first);
+    lines->push_back(out[i + 1].second);
+    lines->push_back(z);
+  }
+  if (closed && out.size() >= 2) {
+    lines->push_back(out.back().first);
+    lines->push_back(out.back().second);
+    lines->push_back(z);
+    lines->push_back(out[0].first);
+    lines->push_back(out[0].second);
+    lines->push_back(z);
+  }
+}
+
+} // namespace
+
+float CadOffsetEntityPickTolWorld(const AppCommandState& st) {
+  float mnX = 0.f, mxX = 0.f, mnY = 0.f, mxY = 0.f;
+  float geom = 1e-3f;
+  if (ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
+    geom = std::max(1e-5f, 2.5e-5f * std::max(mxX - mnX, mxY - mnY));
+  const float px = CadSnap::WorldToleranceFromPixels(st.viewportLastSurveyLayoutHeightPx,
+                                                     st.viewportLastSurveyLayoutOrthoHalfH, st.objectSnapAperturePx);
+  return std::max(geom, px * 1.5f);
+}
+
+void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, float cursorWy,
+                                std::vector<float>* previewLines, std::vector<float>* previewCircles) {
+  if (!previewLines || !previewCircles)
+    return;
+  previewLines->clear();
+  previewCircles->clear();
+  if (!cmd.offsetEntityValid)
+    return;
+  float signedD = 0.f;
+  if (!TryOffsetSignedDFromCursor(cmd, cursorWx, cursorWy, &signedD))
+    return;
+
+  using T = SelectedEntity::Type;
+  const SelectedEntity& e = cmd.offsetEntity;
+  constexpr float zl = 0.022f;
+
+  switch (e.type) {
+  case T::LineSeg: {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= cmd.userLinesFlat.size())
+      return;
+    const float x0 = cmd.userLinesFlat[k];
+    const float y0 = cmd.userLinesFlat[k + 1];
+    const float x1 = cmd.userLinesFlat[k + 3];
+    const float y1 = cmd.userLinesFlat[k + 4];
+    const float dx = x1 - x0;
+    const float dy = y1 - y0;
+    if (std::hypot(dx, dy) < 1e-8f)
+      return;
+    float nx = 0.f, ny = 0.f;
+    OfsUnitLeftNormal(x0, y0, x1, y1, &nx, &ny);
+    previewLines->push_back(x0 + nx * signedD);
+    previewLines->push_back(y0 + ny * signedD);
+    previewLines->push_back(zl);
+    previewLines->push_back(x1 + nx * signedD);
+    previewLines->push_back(y1 + ny * signedD);
+    previewLines->push_back(zl);
+    break;
+  }
+  case T::Circle: {
+    const size_t k = static_cast<size_t>(e.index) * 3;
+    if (k + 2 >= cmd.userCirclesCxCyR.size())
+      return;
+    const float cx = cmd.userCirclesCxCyR[k];
+    const float cy = cmd.userCirclesCxCyR[k + 1];
+    const float r = cmd.userCirclesCxCyR[k + 2];
+    const float nr = r + signedD;
+    if (nr <= 1e-6f)
+      return;
+    previewCircles->push_back(cx);
+    previewCircles->push_back(cy);
+    previewCircles->push_back(nr);
+    break;
+  }
+  case T::Arc: {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size())
+      return;
+    CadArc o = cmd.userArcs[static_cast<size_t>(e.index)];
+    o.r += signedD;
+    if (o.r <= 1e-6f)
+      return;
+    AppendArcPreviewStrip(zl, o, previewLines);
+    break;
+  }
+  case T::Ellipse: {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userEllipses.size())
+      return;
+    const CadEllipse& el0 = cmd.userEllipses[static_cast<size_t>(e.index)];
+    const float ma = std::hypot(el0.majVx, el0.majVy);
+    if (ma < 1e-8f || ma + signedD <= 1e-6f)
+      return;
+    CadEllipse el = el0;
+    const float f = (ma + signedD) / ma;
+    el.majVx *= f;
+    el.majVy *= f;
+    AppendEllipsePreviewStrip(zl, el, previewLines);
+    break;
+  }
+  case T::Polyline:
+    AppendPolylineOffsetPreview(cmd, e.index, signedD, zl, previewLines);
+    break;
+  default:
+    break;
+  }
+}
+
 void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1x, float fenceP1y, float fenceP2x,
                                         float fenceP2y, float pickPreviewX, float pickPreviewY,
                                         std::vector<float>* previewLinesOut) {
@@ -5034,9 +6035,15 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("JOIN canceled.");
   else if (st.active == AppCommandState::Kind::Trim)
     log.push_back("TRIM canceled.");
+  else if (st.active == AppCommandState::Kind::Offset)
+    log.push_back("OFFSET canceled.");
+  else if (st.active == AppCommandState::Kind::IdPoint)
+    log.push_back("ID canceled.");
   else if (st.active == AppCommandState::Kind::Zoom)
     log.push_back("ZOOM WINDOW canceled.");
   st.active = AppCommandState::Kind::None;
+  if (prev == AppCommandState::Kind::Offset)
+    OffsetCmd::ResetOffsetDraft(st);
   st.linePhase = AppCommandState::LinePhase::NeedFirstPoint;
   ResetSegmentAngleLock(st);
   st.trimPhase = AppCommandState::TrimPhase::SelectCuttingEdges;
@@ -5282,6 +6289,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         st.trimCutters.clear();
         log.push_back("TRIM — finished.");
       }
+    } else if (st.active == K::Offset) {
+      using OP = AppCommandState::OffsetPhase;
+      if (st.offsetPhase == OP::WaitDistanceOrThrough)
+        log.push_back("OFFSET — type a positive distance, or pick a through point (line / circle / arc).");
+      else if (st.offsetPhase == OP::WaitSidePick)
+        log.push_back("OFFSET — pick which side to offset.");
+      else
+        log.push_back("OFFSET — select an entity in the viewport.");
     }
     cmdBuf[0] = '\0';
     return;
@@ -5343,6 +6358,44 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
 
   if (st.active == AppCommandState::Kind::Zoom) {
     log.push_back("ZOOM WINDOW — finish two clicks in the viewport, or ESC to cancel.");
+    cmdBuf[0] = '\0';
+    return;
+  }
+
+  if (st.active == K::Offset) {
+    using OP = AppCommandState::OffsetPhase;
+    if (st.offsetPhase != OP::WaitDistanceOrThrough) {
+      log.push_back("OFFSET — use viewport picks; type a distance only after selecting the object.");
+      cmdBuf[0] = '\0';
+      return;
+    }
+    float d = 0.f;
+    if (!ParseOneFloat(Trim(line), &d)) {
+      log.push_back("OFFSET — type a positive offset distance (model units), then pick a side.");
+      cmdBuf[0] = '\0';
+      return;
+    }
+    if (d <= 0.f) {
+      log.push_back("OFFSET — distance must be positive.");
+      cmdBuf[0] = '\0';
+      return;
+    }
+    st.offsetTypedDistance = d;
+    st.offsetPhase = OP::WaitSidePick;
+    log.push_back("OFFSET — pick which side of the object to offset.");
+    cmdBuf[0] = '\0';
+    return;
+  }
+
+  if (st.active == K::IdPoint) {
+    float px = 0.f;
+    float py = 0.f;
+    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f)) {
+      log.push_back("ID — pick in viewport or type X,Y (model units, UCS World).");
+      cmdBuf[0] = '\0';
+      return;
+    }
+    CommitIdPointAt(st, px, py, log);
     cmdBuf[0] = '\0';
     return;
   }
@@ -5748,6 +6801,22 @@ const char* TrimCommandFooterHint(const AppCommandState& st) {
   return "";
 }
 
+const char* OffsetCommandFooterHint(const AppCommandState& st) {
+  using K = AppCommandState::Kind;
+  using OP = AppCommandState::OffsetPhase;
+  if (st.active != K::Offset)
+    return "";
+  switch (st.offsetPhase) {
+  case OP::WaitSelectEntity:
+    return "OFFSET: Pick line, circle, arc, ellipse, or polyline | ESC cancel";
+  case OP::WaitDistanceOrThrough:
+    return "OFFSET: Type distance then pick side — or through-click (line / circle / arc) | ESC cancel";
+  case OP::WaitSidePick:
+    return "OFFSET: Pick side of object (polyline/ellipse use closest edge) | ESC cancel";
+  }
+  return "";
+}
+
 const char* ZoomCommandFooterHint(const AppCommandState& st) {
   if (st.active != AppCommandState::Kind::Zoom)
     return "";
@@ -5784,6 +6853,9 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
   using TP = AppCommandState::TextCmdPhase;
   using MP = AppCommandState::MtextPhase;
   using DP = AppCommandState::DimPhase;
+
+  if (st.active == K::IdPoint)
+    return "ID: Pick point (OSNAP when enabled) or type X,Y — logs UCS World | ESC cancel";
 
   if (st.active == K::Polyline) {
     using SAP = AppCommandState::SegmentAnglePickPhase;

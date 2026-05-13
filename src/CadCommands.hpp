@@ -291,7 +291,11 @@ struct AppCommandState {
 
     Join,
 
-    Trim
+    Trim,
+
+    Offset,
+
+    IdPoint
 
   } active = Kind::None;
 
@@ -656,6 +660,24 @@ struct AppCommandState {
 
   float trimCutInfP1x = 0.f, trimCutInfP1y = 0.f, trimCutInfP2x = 0.f, trimCutInfP2y = 0.f;
 
+  /// OFFSET: pick entity, then type distance + pick side, or click a through point (line / circle / arc).
+  enum class OffsetPhase {
+    WaitSelectEntity,
+    WaitDistanceOrThrough,
+    WaitSidePick,
+  } offsetPhase = OffsetPhase::WaitSelectEntity;
+
+  bool offsetEntityValid = false;
+
+  SelectedEntity offsetEntity{};
+
+  /// Typed offset distance (always positive); combined with side pick for sign.
+  float offsetTypedDistance = 0.f;
+
+  /// While OFFSET waits for the first pick, entity under cursor (for highlight).
+  bool offsetHoverHighlightValid = false;
+  SelectedEntity offsetHoverEntity{};
+
   /// Bumped when CAD geometry or per-entity viewport styling changes; GPU vertex caches invalidate when stale.
   uint32_t cadGpuRevision = 0;
 
@@ -877,6 +899,15 @@ struct AppCommandState {
 
   /// UTF-8 path to optional startup .gs (Settings → Startup). Empty = use bundled resources/default-template.gs.
   char defaultWorkspaceTemplatePathUtf8[768]{};
+
+  /// Active UI layout stem (file resources/layouts/<stem>.ini). See View → Layout.
+  char activeUiLayoutNameUtf8[64]{"default"};
+
+  bool openSaveLayoutAsPopup = false;
+
+  char saveLayoutAsNameBufUtf8[64]{};
+
+  bool pendingBuiltinDockLayoutReset = false;
 
   int surveyImportCsvLayoutIdx = 0;
 
@@ -1169,6 +1200,8 @@ void CancelMtextRichEditor(AppCommandState& st, std::vector<std::string>* log);
 
 void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log);
 
+void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log);
+
 void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log);
 
 void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log);
@@ -1180,6 +1213,8 @@ void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log);
 
 void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log);
+
+void StartOffsetCommand(AppCommandState& st, std::vector<std::string>& log);
 
 /// Removes selected entities from the drawing and clears selection. No-op if selection empty.
 
@@ -1210,6 +1245,13 @@ void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1
 
 bool PickClosestCadEntity(const AppCommandState& st, float wx, float wy, float tolWorld, SelectedEntity* out,
                           float* outDistSq);
+
+/// World pick tolerance for OFFSET entity selection (geometry scale + screen aperture).
+[[nodiscard]] float CadOffsetEntityPickTolWorld(const AppCommandState& st);
+
+/// Live offset preview from cursor (through mode or typed distance + side); clears vectors first.
+void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, float cursorWy,
+                                std::vector<float>* previewLines, std::vector<float>* previewCircles);
 
 void StartZoomExtentsCommand(AppCommandState& st, std::vector<std::string>& log);
 
@@ -1288,6 +1330,8 @@ const char* DeleteCommandFooterHint(const AppCommandState& st);
 const char* JoinCommandFooterHint(const AppCommandState& st);
 
 const char* TrimCommandFooterHint(const AppCommandState& st);
+
+const char* OffsetCommandFooterHint(const AppCommandState& st);
 
 const char* ZoomCommandFooterHint(const AppCommandState& st);
 

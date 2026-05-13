@@ -17,19 +17,24 @@ void CadUiClearMenuBarLogo();
 /// Returns true when a logo was set with \ref CadUiSetMenuBarLogo and fills \p outTexture / \p outDimsPx.
 bool CadUiTitleBarLogoQuery(ImTextureID* outTexture, ImVec2* outDimsPx);
 
-/// One-time layout: properties (left), reports (right), command line (bottom, includes mode toggles), drawing (center).
-void SetupMainDockLayout(ImGuiID dockspace_id);
+/// One-time layout: properties (left), reports (right), command line (bottom), drawing (center). Status toggles
+/// (OSNAP, ORTHO, …) are a separate fixed strip at the bottom of the main work area (see \ref DrawCadStatusBarStrip).
+void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size);
 
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log);
-/// Ribbon under the menu bar: sectioned tool grids (Draw, Modify, View, …) plus a fixed-width layer strip.
+/// Ribbon under the menu bar: sectioned icon toolbars (Draw, Modify, View, …) plus a fixed-width layer strip; hover for tooltips.
 void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>& log);
 
 void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
-/// Command log, input, hints, and a single-line status bar (toggles, annotation-scale combo, cursor). Default
-/// plotted text height is under Properties → General.
-void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBufSize, AppCommandState& cmd,
-                          float cursorX, float cursorY, float cursorZ, bool* ortho_mode_enabled, bool* grid_visible);
+/// Command log, input, and hints. Default plotted text height is under Properties → General.
+void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBufSize, AppCommandState& cmd);
+
+/// Fixed-height strip: OSNAP, ORTHO, GRID, POLAR, plot scale, cursor readout. Laid out by \ref main.cpp across the
+/// bottom of the main viewport (not docked, not movable).
+float CadStatusBarStripHeightPx();
+void DrawCadStatusBarStrip(AppCommandState& cmd, float cursorX, float cursorY, float cursorZ,
+                           bool* ortho_mode_enabled, bool* grid_visible);
 
 /// Central CAD viewport: renders OpenGL texture and handles pan / zoom / LINE picks.
 /// Writes framebuffer pixel size and cursor world position. When object snap finds a hit, cursor and
