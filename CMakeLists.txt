@@ -72,27 +72,41 @@ target_compile_definitions(imgui_backend PUBLIC
 )
 
 add_executable(GoSurvey
-  src/main.cpp
-  src/SplashScreen.cpp
-  src/GsIo.cpp
-  src/UserPrefs.cpp
-  src/ImGuiLayout.cpp
-  src/AppIcon.cpp
-  src/ViewportRenderer.cpp
-  src/CadUi.cpp
-  src/CadCommands.cpp
-  src/CadLinetype.cpp
-  src/MtextRichFormat.cpp
-  src/CadSnap.cpp
-  src/SurveyPoints.cpp
-  src/SurveyCsv.cpp
-  src/DxfIo.cpp
-  src/DxfColors.cpp
-  src/WinFileDialogs.cpp
+  src/app/main.cpp
+  src/ui/SplashScreen.cpp
+  src/io/GsIo.cpp
+  src/io/UserPrefs.cpp
+  src/ui/ImGuiLayout.cpp
+  src/platform/AppIcon.cpp
+  src/render/ViewportRenderer.cpp
+  src/ui/CadUi.cpp
+  src/ui/CadUi_CopySurveyModal.cpp
+  src/ui/CadUi_SurveyReports.cpp
+  src/ui/CadUi_ImportExportPoints.cpp
+  src/cad/CadCommands.cpp
+  src/cad/geom2d.cpp
+  src/cad/CadRubberPreview.cpp
+  src/cad/TransformPreview.cpp
+  src/cad/CadLinetype.cpp
+  src/ui/MtextRichFormat.cpp
+  src/cad/CadSnap.cpp
+  src/survey/SurveyPoints.cpp
+  src/io/SurveyCsv.cpp
+  src/io/DxfIo.cpp
+  src/io/DxfColors.cpp
+  src/platform/WinFileDialogs.cpp
 )
 
 target_include_directories(GoSurvey PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/cad
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/util
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/io
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/render
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party
   ${NLOHMANN_JSON_INCLUDE}
 )
@@ -104,7 +118,7 @@ target_link_libraries(GoSurvey PRIVATE
 )
 if(WIN32)
   target_link_libraries(GoSurvey PRIVATE comdlg32)
-  target_sources(GoSurvey PRIVATE src/WinFrameControls.cpp)
+  target_sources(GoSurvey PRIVATE src/platform/WinFrameControls.cpp)
 endif()
 target_compile_definitions(GoSurvey PRIVATE GLEW_STATIC)
 
