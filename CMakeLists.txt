@@ -81,6 +81,8 @@ add_executable(GoSurvey
   src/render/ViewportRenderer.cpp
   src/ui/CadUi.cpp
   src/ui/CadUi_CopySurveyModal.cpp
+  src/ui/CadUi_SurveyReports.cpp
+  src/ui/CadUi_ImportExportPoints.cpp
   src/cad/CadCommands.cpp
   src/cad/geom2d.cpp
   src/cad/CadRubberPreview.cpp
