@@ -23,6 +23,78 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
 
 bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std::string>& log);
 
+namespace {
+
+constexpr float kPiAngF = 3.14159265358979323846f;
+
+static float CadAngNormalizeMinusPiToPi(float a) {
+  while (a > kPiAngF)
+    a -= 2.f * kPiAngF;
+  while (a < -kPiAngF)
+    a += 2.f * kPiAngF;
+  return a;
+}
+
+static bool CadDimAngularComputeFrame(const CadAnnotation& a, float* a1Out, float* a2Out, float* sweepOut, float* bisx,
+                                      float* bisy, float* thetaInterior) {
+  if (a.kind != CadAnnotation::Kind::DimAngular)
+    return false;
+  const float vx = a.dimAngVertexX, vy = a.dimAngVertexY;
+  const float p1x = a.dimExt1X, p1y = a.dimExt1Y, p2x = a.dimExt2X, p2y = a.dimExt2Y;
+  const float u1x = p1x - vx, u1y = p1y - vy;
+  const float u2x = p2x - vx, u2y = p2y - vy;
+  const float l1 = std::hypot(u1x, u1y);
+  const float l2 = std::hypot(u2x, u2y);
+  if (l1 < 1.e-8f || l2 < 1.e-8f)
+    return false;
+  const float n1x = u1x / l1, n1y = u1y / l1;
+  const float n2x = u2x / l2, n2y = u2y / l2;
+  const float dot = n1x * n2x + n1y * n2y;
+  const float a1 = std::atan2(n1y, n1x);
+  const float a2 = std::atan2(n2y, n2x);
+  const float sweep = CadAngNormalizeMinusPiToPi(a2 - a1);
+  const float theta = std::acos(std::clamp(dot, -1.f, 1.f));
+  float bx = n1x + n2x;
+  float by = n1y + n2y;
+  const float bl = std::hypot(bx, by);
+  if (bl > 1.e-6f) {
+    bx /= bl;
+    by /= bl;
+  } else {
+    bx = -n1y;
+    by = n1x;
+  }
+  const float mid = a1 + 0.5f * sweep;
+  const float mdx = std::cos(mid);
+  const float mdy = std::sin(mid);
+  if (bx * mdx + by * mdy < 0.f) {
+    bx = -bx;
+    by = -by;
+  }
+  *a1Out = a1;
+  *a2Out = a2;
+  *sweepOut = sweep;
+  *bisx = bx;
+  *bisy = by;
+  *thetaInterior = theta;
+  return theta > 1.e-7f;
+}
+
+static float CadDimAngularPickRadius(float vx, float vy, float bisx, float bisy, float pickx, float picky, float rMin,
+                                     float rMax) {
+  const float wx = pickx - vx;
+  const float wy = picky - vy;
+  float t = wx * bisx + wy * bisy;
+  if (t <= 1.e-8f) {
+    t = wx * -bisx + wy * -bisy;
+    if (t <= 1.e-8f)
+      t = rMin;
+  }
+  return std::clamp(t, rMin, rMax);
+}
+
+} // namespace
+
 float CadOffsetEntityPickTolWorld(const AppCommandState& st);
 
 float RotateDeltaFromReferenceAndNewSegment(float refX1, float refY1, float refX2, float refY2,
@@ -83,6 +155,54 @@ bool CadDimAlignedGeometry(const CadAnnotation& a, float* sx1, float* sy1, float
   return true;
 }
 
+bool CadDimLinearGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx,
+                          float* ty, float* nx, float* ny, float* measLen) {
+  if (a.kind != CadAnnotation::Kind::DimLinear)
+    return false;
+  const float x1 = a.dimExt1X, y1 = a.dimExt1Y, x2 = a.dimExt2X, y2 = a.dimExt2Y;
+  const float cmx = 0.5f * (x1 + x2);
+  const float cmy = 0.5f * (y1 + y2);
+  if (!a.dimLinearVertical) {
+    const float span = std::fabs(x2 - x1);
+    if (span < 1.e-8f)
+      return false;
+    const float dmy = cmy + a.dimSignedOffset;
+    *sx1 = x1;
+    *sy1 = dmy;
+    *sx2 = x2;
+    *sy2 = dmy;
+    *tx = (x2 >= x1) ? 1.f : -1.f;
+    *ty = 0.f;
+    *nx = 0.f;
+    *ny = 1.f;
+    *measLen = span;
+  } else {
+    const float span = std::fabs(y2 - y1);
+    if (span < 1.e-8f)
+      return false;
+    const float dmx = cmx + a.dimSignedOffset;
+    *sx1 = dmx;
+    *sy1 = y1;
+    *sx2 = dmx;
+    *sy2 = y2;
+    *tx = 0.f;
+    *ty = (y2 >= y1) ? 1.f : -1.f;
+    *nx = 1.f;
+    *ny = 0.f;
+    *measLen = span;
+  }
+  return true;
+}
+
+bool CadDimAnyGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx, float* ty,
+                       float* nx, float* ny, float* measLen) {
+  if (a.kind == CadAnnotation::Kind::DimAligned)
+    return CadDimAlignedGeometry(a, sx1, sy1, sx2, sy2, tx, ty, nx, ny, measLen);
+  if (a.kind == CadAnnotation::Kind::DimLinear)
+    return CadDimLinearGeometry(a, sx1, sy1, sx2, sy2, tx, ty, nx, ny, measLen);
+  return false;
+}
+
 /// Place measurement text on the far side of the dimension line from the measured chord (CAD "above" the dim line).
 static void CadDimAlignedPlaceTextBeyondDimLine(float chordMidX, float chordMidY, float dimMidX, float dimMidY,
                                                 float n0x, float n0y, float hWorld, float* outIx, float* outIy) {
@@ -99,10 +219,28 @@ static void CadDimAlignedPlaceTextBeyondDimLine(float chordMidX, float chordMidY
 }
 
 void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, float alongT) {
-  if (!ann || ann->kind != CadAnnotation::Kind::DimAligned)
+  if (!ann)
+    return;
+  if (ann->kind == CadAnnotation::Kind::DimAngular) {
+    const float vx = ann->dimAngVertexX, vy = ann->dimAngVertexY;
+    float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
+    if (!CadDimAngularComputeFrame(*ann, &a1, &a2, &sweep, &bisx, &bisy, &theta))
+      return;
+    const float R = std::max(ann->dimSignedOffset, 1.e-6f);
+    const float mid = a1 + 0.5f * sweep;
+    const float mx = vx + std::cos(mid) * R;
+    const float my = vy + std::sin(mid) * R;
+    const float tx = -std::sin(mid);
+    const float ty = std::cos(mid);
+    ann->insX = mx + bisx * alongN + tx * alongT;
+    ann->insY = my + bisy * alongN + ty * alongT;
+    ann->rotationRad = std::atan2(bisy, bisx);
+    return;
+  }
+  if (ann->kind != CadAnnotation::Kind::DimAligned && ann->kind != CadAnnotation::Kind::DimLinear)
     return;
   float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
-  if (!CadDimAlignedGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+  if (!CadDimAnyGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
     return;
   const float dmx = 0.5f * (sx1 + sx2);
   const float dmy = 0.5f * (sy1 + sy2);
@@ -154,6 +292,227 @@ bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cu
   return true;
 }
 
+void CadDimLinearUpdateDraftOrientation(AppCommandState& st, float cursorWx, float cursorWy) {
+  if (st.active != AppCommandState::Kind::DimLinear || st.dimPhase != AppCommandState::DimPhase::WaitDimLinePt)
+    return;
+  const float cmx = 0.5f * (st.dimE1x + st.dimE2x);
+  const float cmy = 0.5f * (st.dimE1y + st.dimE2y);
+  const float chord = std::hypot(st.dimE2x - st.dimE1x, st.dimE2y - st.dimE1y);
+  const float unlockTol = 1.e-3f * std::max(1.f, chord);
+
+  const float dxSpan = std::fabs(st.dimE2x - st.dimE1x);
+  const float dySpan = std::fabs(st.dimE2y - st.dimE1y);
+  const float spanTol =
+      std::max(1e-8f, 1e-12f * std::max(std::max(std::fabs(st.dimE1x), std::fabs(st.dimE1y)),
+                                        std::max(std::fabs(st.dimE2x), std::fabs(st.dimE2y))));
+  const bool mustVertical = dxSpan <= spanTol && dySpan > spanTol;
+  const bool mustHorizontal = dySpan <= spanTol && dxSpan > spanTol;
+  if (mustVertical || mustHorizontal) {
+    st.dimLinearDraftVertical = mustVertical;
+    st.dimLinearOrientUserLock = false;
+    return;
+  }
+
+  if (st.dimLinearOrientUserLock) {
+    if (std::hypot(cursorWx - st.dimLinearLockCursorWx, cursorWy - st.dimLinearLockCursorWy) > unlockTol)
+      st.dimLinearOrientUserLock = false;
+  }
+  if (!st.dimLinearOrientUserLock) {
+    const float adx = std::fabs(cursorWx - cmx);
+    const float ady = std::fabs(cursorWy - cmy);
+    st.dimLinearDraftVertical = adx > ady;
+  }
+}
+
+void CadDimLinearApplyHVHotkey(AppCommandState& st, bool vertical, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::DimLinear || st.dimPhase != AppCommandState::DimPhase::WaitDimLinePt)
+    return;
+  st.dimLinearDraftVertical = vertical;
+  st.dimLinearOrientUserLock = true;
+  st.dimLinearLockCursorWx = st.uiCursorWorldX;
+  st.dimLinearLockCursorWy = st.uiCursorWorldY;
+  log.push_back(vertical ? "DIMLINEAR — vertical span (V). Move crosshair to unlock orientation."
+                         : "DIMLINEAR — horizontal span (H). Move crosshair to unlock orientation.");
+  BumpCadGpuCache(st);
+}
+
+bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out) {
+  if (!out || st.active != AppCommandState::Kind::DimLinear ||
+      st.dimPhase != AppCommandState::DimPhase::WaitDimLinePt)
+    return false;
+  CadDimLinearUpdateDraftOrientation(st, cursorWx, cursorWy);
+  const float x1 = st.dimE1x, y1 = st.dimE1y, x2 = st.dimE2x, y2 = st.dimE2y;
+  const float cmx = 0.5f * (x1 + x2);
+  const float cmy = 0.5f * (y1 + y2);
+  const bool vert = st.dimLinearDraftVertical;
+  const float meas = vert ? std::fabs(y2 - y1) : std::fabs(x2 - x1);
+  if (meas < 1.e-8f)
+    return false;
+  float dmx = cmx;
+  float dmy = cmy;
+  float n0x = 0.f;
+  float n0y = 1.f;
+  float dOff = 0.f;
+  if (!vert) {
+    dmy = cursorWy;
+    dOff = dmy - cmy;
+  } else {
+    dmx = cursorWx;
+    dOff = dmx - cmx;
+    n0x = 1.f;
+    n0y = 0.f;
+  }
+  CadAnnotation d{};
+  d.kind = CadAnnotation::Kind::DimLinear;
+  d.dimExt1X = x1;
+  d.dimExt1Y = y1;
+  d.dimExt2X = x2;
+  d.dimExt2Y = y2;
+  d.dimSignedOffset = dOff;
+  d.dimLinearVertical = vert;
+  d.plottedHeightInches = std::max(st.defaultPlottedTextHeightInches * 0.85f, 1.e-6f);
+  char buf[96];
+  std::snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(meas));
+  d.text = buf;
+  float tx = 0.f, ty = 0.f;
+  if (!vert) {
+    tx = (x2 >= x1) ? 1.f : -1.f;
+    ty = 0.f;
+  } else {
+    tx = 0.f;
+    ty = (y2 >= y1) ? 1.f : -1.f;
+  }
+  d.rotationRad = std::atan2(ty, tx);
+  const float hWorld = CadAnnotationHeightWorld(d, st.modelUnitsPerPlottedInch);
+  CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &d.insX, &d.insY);
+  *out = std::move(d);
+  return true;
+}
+
+std::string CadFormatAngleDegMinSecFromRad(float angleRad) {
+  double deg = static_cast<double>(angleRad) * (180.0 / 3.14159265358979323846);
+  if (deg < 0.0)
+    deg = -deg;
+  if (deg > 180.0)
+    deg = 360.0 - deg;
+  int id = static_cast<int>(std::floor(deg + 1.e-9));
+  double minf = (deg - static_cast<double>(id)) * 60.0;
+  if (minf < 0.0)
+    minf = 0.0;
+  int im = static_cast<int>(std::floor(minf + 1.e-9));
+  double sec = (minf - static_cast<double>(im)) * 60.0;
+  if (sec < 0.0)
+    sec = 0.0;
+  if (im >= 60) {
+    im = 0;
+    id = std::min(id + 1, 359);
+  }
+  if (sec >= 59.95) {
+    sec = 0.0;
+    ++im;
+    if (im >= 60) {
+      im = 0;
+      ++id;
+    }
+  }
+  char buf[96];
+  std::snprintf(buf, sizeof(buf), "%d\xc2\xb0%d'%.1f\"", id, im, static_cast<double>(sec));
+  return std::string(buf);
+}
+
+std::string CadFormatBearingCwNorthDegMinSec(float bearingDegClockwiseFromNorth) {
+  double deg = std::fmod(static_cast<double>(bearingDegClockwiseFromNorth), 360.0);
+  if (deg < 0.0)
+    deg += 360.0;
+  int id = static_cast<int>(std::floor(deg + 1.e-9));
+  double minf = (deg - static_cast<double>(id)) * 60.0;
+  if (minf < 0.0)
+    minf = 0.0;
+  int im = static_cast<int>(std::floor(minf + 1.e-9));
+  double sec = (minf - static_cast<double>(im)) * 60.0;
+  if (sec < 0.0)
+    sec = 0.0;
+  if (im >= 60) {
+    im = 0;
+    id = (id + 1) % 360;
+  }
+  if (sec >= 59.95) {
+    sec = 0.0;
+    ++im;
+    if (im >= 60) {
+      im = 0;
+      id = (id + 1) % 360;
+    }
+  }
+  char buf[96];
+  std::snprintf(buf, sizeof(buf), "%d\xc2\xb0%d'%.1f\"", id, im, static_cast<double>(sec));
+  return std::string(buf);
+}
+
+void CadDimRefreshMeasurementText(CadAnnotation* ann) {
+  if (!ann)
+    return;
+  if (ann->kind == CadAnnotation::Kind::DimAligned || ann->kind == CadAnnotation::Kind::DimLinear) {
+    float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+    if (!CadDimAnyGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+      return;
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(ml));
+    ann->text = buf;
+  } else if (ann->kind == CadAnnotation::Kind::DimAngular) {
+    float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
+    if (!CadDimAngularComputeFrame(*ann, &a1, &a2, &sweep, &bisx, &bisy, &theta))
+      return;
+    ann->text = CadFormatAngleDegMinSecFromRad(theta);
+  }
+}
+
+void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float mupi) {
+  if (!ann || ann->kind != CadAnnotation::Kind::DimAngular)
+    return;
+  const float vx = ann->dimAngVertexX, vy = ann->dimAngVertexY;
+  float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
+  if (!CadDimAngularComputeFrame(*ann, &a1, &a2, &sweep, &bisx, &bisy, &theta))
+    return;
+  const float R = std::max(ann->dimSignedOffset, 1.e-6f);
+  const float mid = a1 + 0.5f * sweep;
+  const float mx = vx + std::cos(mid) * R;
+  const float my = vy + std::sin(mid) * R;
+  const float hWorld = CadAnnotationHeightWorld(*ann, mupi);
+  const float lift = 1.12f * hWorld;
+  ann->insX = mx + bisx * lift;
+  ann->insY = my + bisy * lift;
+  ann->rotationRad = std::atan2(bisy, bisx);
+}
+
+bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out) {
+  if (!out || st.active != AppCommandState::Kind::DimAngular ||
+      st.dimAngularPhase != AppCommandState::DimAngularPhase::WaitArc)
+    return false;
+  const float vx = st.dimAngVx, vy = st.dimAngVy;
+  CadAnnotation d{};
+  d.kind = CadAnnotation::Kind::DimAngular;
+  d.dimAngVertexX = vx;
+  d.dimAngVertexY = vy;
+  d.dimExt1X = st.dimE1x;
+  d.dimExt1Y = st.dimE1y;
+  d.dimExt2X = st.dimE2x;
+  d.dimExt2Y = st.dimE2y;
+  float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
+  if (!CadDimAngularComputeFrame(d, &a1, &a2, &sweep, &bisx, &bisy, &theta))
+    return false;
+  const float leg = std::min(std::hypot(d.dimExt1X - vx, d.dimExt1Y - vy), std::hypot(d.dimExt2X - vx, d.dimExt2Y - vy));
+  const float rMax = std::max(1.e-4f, 0.92f * leg);
+  const float rMin = std::max(1.e-4f, 0.02f * leg);
+  const float R = CadDimAngularPickRadius(vx, vy, bisx, bisy, cursorWx, cursorWy, rMin, rMax);
+  d.dimSignedOffset = R;
+  d.plottedHeightInches = std::max(st.defaultPlottedTextHeightInches * 0.85f, 1.e-6f);
+  d.text = CadFormatAngleDegMinSecFromRad(theta);
+  CadDimAngularSyncTextPlacement(&d, st.modelUnitsPerPlottedInch);
+  *out = std::move(d);
+  return true;
+}
+
 void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlottedInch, float* outMnX, float* outMnY,
                               float* outMxX, float* outMxY) {
   const float h = CadAnnotationHeightWorld(a, modelUnitsPerPlottedInch);
@@ -164,9 +523,9 @@ void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlotted
     *outMxY = std::max(a.boxMinY, a.boxMaxY);
     return;
   }
-  if (a.kind == CadAnnotation::Kind::DimAligned) {
+  if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
-    if (!CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas)) {
+    if (!CadDimAnyGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas)) {
       *outMnX = *outMxX = a.insX;
       *outMnY = *outMxY = a.insY;
       return;
@@ -261,9 +620,9 @@ int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float or
   };
   for (int i = static_cast<int>(cmd.cadAnnotations.size()) - 1; i >= 0; --i) {
     const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(i)];
-    if (a.kind == CadAnnotation::Kind::DimAligned) {
+    if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
       float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
-      if (!CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
+      if (!CadDimAnyGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
         continue;
       float best = tol2 + 1.f;
       auto upd = [&](float ax, float ay, float bx, float by) {
@@ -321,6 +680,10 @@ int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float or
 static void ResetModifyRotateDraft(AppCommandState& st) {
   st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
   st.modifyBaseX = st.modifyBaseY = 0.f;
+  st.scaleRefDist = 1.f;
+  st.scalePhase = AppCommandState::ScalePhase::FactorPick;
+  st.scaleRefP1X = st.scaleRefP1Y = 0.f;
+  st.scaleNewLenP1X = st.scaleNewLenP1Y = 0.f;
   st.rotatePhase = AppCommandState::RotatePhase::PickSelection;
   st.rotateBaseX = st.rotateBaseY = 0.f;
   st.rotateRefX1 = st.rotateRefY1 = st.rotateRefX2 = st.rotateRefY2 = 0.f;
@@ -435,11 +798,15 @@ const CmdEntry kRegistry[] = {
     {"text", ""},
     {"mtext", "mt"},
     {"dimaligned", "dal"},
+    {"dimlinear", "dli"},
+    {"dimangular", "dan"},
     {"id", ""},
+    {"inverse", "inv"},
     {"plotscale", "pscale"},
     {"move", "m"},
     {"copy", "cp"},
     {"rotate", "ro"},
+    {"scale", "sc"},
     {"delete", "del"},
     {"join", "j"},
     {"trim", "tr"},
@@ -591,6 +958,19 @@ void ResetMtextDraft(AppCommandState& st) {
 void ResetDimDraft(AppCommandState& st) {
   st.dimPhase = AppCommandState::DimPhase::WaitExt1;
   st.dimE1x = st.dimE1y = st.dimE2x = st.dimE2y = 0.f;
+  st.dimLinearDraftVertical = false;
+  st.dimLinearOrientUserLock = false;
+  st.dimLinearLockCursorWx = st.dimLinearLockCursorWy = 0.f;
+}
+
+void ResetDimAngularDraft(AppCommandState& st) {
+  st.dimAngularPhase = AppCommandState::DimAngularPhase::WaitVertex;
+  st.dimAngVx = st.dimAngVy = 0.f;
+}
+
+static void ResetSurveyInverseDraft(AppCommandState& st) {
+  st.surveyInversePhase = AppCommandState::SurveyInversePhase::WaitFrom;
+  st.surveyInverseFromX = st.surveyInverseFromY = 0.f;
 }
 
 static void ResetAllCadDraftTools(AppCommandState& st) {
@@ -601,8 +981,48 @@ static void ResetAllCadDraftTools(AppCommandState& st) {
   ResetTextCmdDraft(st);
   ResetMtextDraft(st);
   ResetDimDraft(st);
+  ResetDimAngularDraft(st);
+  ResetSurveyInverseDraft(st);
   ClearDimGripInteraction(st);
   AbortMtextGripInteraction(st);
+}
+
+static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  CadAnnotation d{};
+  d.kind = CadAnnotation::Kind::DimAngular;
+  d.dimAngVertexX = st.dimAngVx;
+  d.dimAngVertexY = st.dimAngVy;
+  d.dimExt1X = st.dimE1x;
+  d.dimExt1Y = st.dimE1y;
+  d.dimExt2X = st.dimE2x;
+  d.dimExt2Y = st.dimE2y;
+  float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
+  if (!CadDimAngularComputeFrame(d, &a1, &a2, &sweep, &bisx, &bisy, &theta)) {
+    log.push_back("DIMANGULAR — points are degenerate or collinear.");
+    return;
+  }
+  if (theta < 1e-5f) {
+    log.push_back("DIMANGULAR — angle is zero (ray points coincide with vertex direction).");
+    return;
+  }
+  const float vx = st.dimAngVx, vy = st.dimAngVy;
+  const float leg = std::min(std::hypot(st.dimE1x - vx, st.dimE1y - vy), std::hypot(st.dimE2x - vx, st.dimE2y - vy));
+  const float rMax = std::max(1.e-4f, 0.92f * leg);
+  const float rMin = std::max(1.e-4f, 0.02f * leg);
+  const float R = CadDimAngularPickRadius(vx, vy, bisx, bisy, wx, wy, rMin, rMax);
+  d.dimSignedOffset = R;
+  d.plottedHeightInches = st.defaultPlottedTextHeightInches * 0.85f;
+  d.text = CadFormatAngleDegMinSecFromRad(theta);
+  CadDimAngularSyncTextPlacement(&d, st.modelUnitsPerPlottedInch);
+  EntityAttributes at = MakeNewEntityAttrs(st);
+  at.color = "#e1b12c";
+  st.cadAnnotations.push_back(std::move(d));
+  st.cadAnnotationAttrs.push_back(at);
+  BumpCadGpuCache(st);
+  st.active = AppCommandState::Kind::None;
+  ResetDimAngularDraft(st);
+  ResetDimDraft(st);
+  log.push_back("DIMANGULAR complete.");
 }
 
 void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<std::string>& log) {
@@ -682,8 +1102,20 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     StartDimAlignedCommand(st, log);
     return true;
   }
+  if (primary == "dimlinear") {
+    StartDimLinearCommand(st, log);
+    return true;
+  }
+  if (primary == "dimangular") {
+    StartDimAngularCommand(st, log);
+    return true;
+  }
   if (primary == "id") {
     StartIdPointCommand(st, log);
+    return true;
+  }
+  if (primary == "inverse") {
+    StartSurveyInverseCommand(st, log);
     return true;
   }
   if (primary == "plotscale") {
@@ -712,6 +1144,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "rotate") {
     StartRotateCommand(st, log);
+    return true;
+  }
+  if (primary == "scale") {
+    StartScaleCommand(st, log);
     return true;
   }
   if (primary == "delete") {
@@ -764,15 +1200,18 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   if (primary == "help") {
     log.push_back(
         "LINE (L), POLYLINE (PL, CLOSE to close), ARC (3-point), ELLIPSE (center, axis end, ratio), TEXT, MTEXT, "
-        "DIMALIGNED (DAL), ID, CIRCLE (C), MOVE (M), COPY (CP), ROTATE (RO), DELETE (DEL), OFFSET (O), ZOOM (ZE/ZW), "
+        "DIMALIGNED (DAL), DIMLINEAR (DLI), DIMANGULAR (DAN), ID, INVERSE (INV), CIRCLE (C), MOVE (M), COPY (CP), ROTATE (RO), SCALE (SC), DELETE (DEL), OFFSET (O), ZOOM (ZE/ZW), "
         "PLOTSCALE "
-        "(PSCALE), REGEN (RE), LAYER (LA). SURVEY: CRTPTS, VWPTS, IMPPTS, EXPPTS. Idle: two-click box selects. ESC.");
+        "(PSCALE), REGEN (RE), LAYER (LA). SURVEY: CRTPTS, VWPTS, IMPPTS, EXPPTS, INVERSE (INV). Idle: two-click box selects. ESC.");
     log.push_back(
         "LINE: @dx,dy from anchor; A or ANGLE alone then bearing on next line (blank Enter cancels); A<bearing> (+ "
         "optional +90) on one line; AP + two picks then Enter (or +90) locks bearing; distance (+/-) along ray; A "
         "clears when lock or AP pick is active. Ortho: distance toward cursor.");
     log.push_back(
-        "ROTATE: ° clockwise from north / DMS; R reference; then bearing or P. DELETE / ZW use unsnapped windows. TRIM "
+        "ROTATE: ° clockwise from north / DMS; R reference; then bearing or P. SCALE: after base, factor or pick from "
+        "base; R / REFERENCE then two-point ref length, then new length (type or two picks). INVERSE: two points "
+        "(World X=E, Y=N); logs dE, dN, distance, bearing in deg/min/sec and decimal deg CW from north. DELETE / ZW use unsnapped "
+        "windows. TRIM "
         "matches Civil 3D: cutting edges, Enter, trim clicks. OFFSET: pick entity, distance + side or through-click "
         "(line/circle/arc). ZE fits geometry.");
     return true;
@@ -1209,6 +1648,34 @@ void RotateAroundBase(float bx, float by, float rad, float* x, float* y) {
   *y = by + s * dx + c * dy;
 }
 
+/// Rotates \c DimLinear extension points and offset; keeps \p ann.dimLinearVertical; refreshes \p ann.rotationRad.
+
+static void RotateCadDimLinearAroundBase(float bx, float by, float rad, CadAnnotation* ann) {
+  if (!ann || ann->kind != CadAnnotation::Kind::DimLinear)
+    return;
+  const float x1 = ann->dimExt1X, y1 = ann->dimExt1Y, x2 = ann->dimExt2X, y2 = ann->dimExt2Y;
+  const float cmx = 0.5f * (x1 + x2);
+  const float cmy = 0.5f * (y1 + y2);
+  float dmx = cmx;
+  float dmy = cmy;
+  if (!ann->dimLinearVertical)
+    dmy = cmy + ann->dimSignedOffset;
+  else
+    dmx = cmx + ann->dimSignedOffset;
+  RotateAroundBase(bx, by, rad, &ann->dimExt1X, &ann->dimExt1Y);
+  RotateAroundBase(bx, by, rad, &ann->dimExt2X, &ann->dimExt2Y);
+  RotateAroundBase(bx, by, rad, &dmx, &dmy);
+  const float ncmx = 0.5f * (ann->dimExt1X + ann->dimExt2X);
+  const float ncmy = 0.5f * (ann->dimExt1Y + ann->dimExt2Y);
+  if (!ann->dimLinearVertical)
+    ann->dimSignedOffset = dmy - ncmy;
+  else
+    ann->dimSignedOffset = dmx - ncmx;
+  float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+  if (CadDimLinearGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+    ann->rotationRad = std::atan2(ty, tx);
+}
+
 static float NormalizeAngleRadMinusPiToPi(float a) {
   constexpr float kPi = 3.14159265358979323846f;
   constexpr float kTwoPi = 2.f * kPi;
@@ -1305,7 +1772,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
           c.boxMinY += dy;
           c.boxMaxX += dx;
           c.boxMaxY += dy;
-        } else if (c.kind == CadAnnotation::Kind::DimAligned) {
+        } else if (c.kind == CadAnnotation::Kind::DimAligned || c.kind == CadAnnotation::Kind::DimLinear) {
           c.dimExt1X += dx;
           c.dimExt1Y += dy;
           c.dimExt2X += dx;
@@ -1444,6 +1911,8 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         RotateAroundBase(bx, by, rad, &c.insX, &c.insY);
         if (c.kind == CadAnnotation::Kind::Text) {
           c.rotationRad += rad;
+        } else if (c.kind == CadAnnotation::Kind::DimLinear) {
+          RotateCadDimLinearAroundBase(bx, by, rad, &c);
         } else if (c.kind == CadAnnotation::Kind::DimAligned) {
           RotateAroundBase(bx, by, rad, &c.dimExt1X, &c.dimExt1Y);
           RotateAroundBase(bx, by, rad, &c.dimExt2X, &c.dimExt2Y);
@@ -1643,6 +2112,8 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     RotateAroundBase(bx, by, rad, &a.insX, &a.insY);
     if (a.kind == CadAnnotation::Kind::Text) {
       a.rotationRad += rad;
+    } else if (a.kind == CadAnnotation::Kind::DimLinear) {
+      RotateCadDimLinearAroundBase(bx, by, rad, &a);
     } else if (a.kind == CadAnnotation::Kind::DimAligned) {
       RotateAroundBase(bx, by, rad, &a.dimExt1X, &a.dimExt1Y);
       RotateAroundBase(bx, by, rad, &a.dimExt2X, &a.dimExt2Y);
@@ -1747,7 +2218,7 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy) {
       a.boxMinY += dy;
       a.boxMaxX += dx;
       a.boxMaxY += dy;
-    } else if (a.kind == CadAnnotation::Kind::DimAligned) {
+    } else if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
       a.dimExt1X += dx;
       a.dimExt1Y += dy;
       a.dimExt2X += dx;
@@ -1755,6 +2226,338 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy) {
     }
   }
   ApplyTranslationToSelectedSurveyPoints(st, dx, dy);
+  BumpCadGpuCache(st);
+}
+
+static void ScalePtAroundBase(float bx, float by, float sc, float* x, float* y) {
+  *x = bx + sc * (*x - bx);
+  *y = by + sc * (*y - by);
+}
+
+static void ScaleCadDimLinearAroundBase(float bx, float by, float sc, CadAnnotation* ann) {
+  if (!ann || ann->kind != CadAnnotation::Kind::DimLinear)
+    return;
+  const float x1 = ann->dimExt1X, y1 = ann->dimExt1Y, x2 = ann->dimExt2X, y2 = ann->dimExt2Y;
+  const float cmx = 0.5f * (x1 + x2);
+  const float cmy = 0.5f * (y1 + y2);
+  float dmx = cmx;
+  float dmy = cmy;
+  if (!ann->dimLinearVertical)
+    dmy = cmy + ann->dimSignedOffset;
+  else
+    dmx = cmx + ann->dimSignedOffset;
+  ScalePtAroundBase(bx, by, sc, &ann->dimExt1X, &ann->dimExt1Y);
+  ScalePtAroundBase(bx, by, sc, &ann->dimExt2X, &ann->dimExt2Y);
+  ScalePtAroundBase(bx, by, sc, &dmx, &dmy);
+  const float ncmx = 0.5f * (ann->dimExt1X + ann->dimExt2X);
+  const float ncmy = 0.5f * (ann->dimExt1Y + ann->dimExt2Y);
+  if (!ann->dimLinearVertical)
+    ann->dimSignedOffset = dmy - ncmy;
+  else
+    ann->dimSignedOffset = dmx - ncmx;
+  float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+  if (CadDimLinearGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+    ann->rotationRad = std::atan2(ty, tx);
+}
+
+static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outCx, float* outCy) {
+  if (!outCx || !outCy)
+    return false;
+  double accx = 0.0;
+  double accy = 0.0;
+  int n = 0;
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::LineSeg) {
+      const size_t k = static_cast<size_t>(e.index) * 6;
+      if (k + 5 < st.userLinesFlat.size()) {
+        accx += 0.5 * static_cast<double>(st.userLinesFlat[k] + st.userLinesFlat[k + 3]);
+        accy += 0.5 * static_cast<double>(st.userLinesFlat[k + 1] + st.userLinesFlat[k + 4]);
+        ++n;
+      }
+    } else if (e.type == SelectedEntity::Type::Circle) {
+      const size_t k = static_cast<size_t>(e.index) * 3;
+      if (k + 2 < st.userCirclesCxCyR.size()) {
+        accx += static_cast<double>(st.userCirclesCxCyR[k]);
+        accy += static_cast<double>(st.userCirclesCxCyR[k + 1]);
+        ++n;
+      }
+    } else if (e.type == SelectedEntity::Type::Arc) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.userArcs.size()) {
+        accx += static_cast<double>(st.userArcs[k].cx);
+        accy += static_cast<double>(st.userArcs[k].cy);
+        ++n;
+      }
+    } else if (e.type == SelectedEntity::Type::Ellipse) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.userEllipses.size()) {
+        accx += static_cast<double>(st.userEllipses[k].cx);
+        accy += static_cast<double>(st.userEllipses[k].cy);
+        ++n;
+      }
+    } else if (e.type == SelectedEntity::Type::Polyline) {
+      const int pi = e.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+        continue;
+      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      double sx = 0.0, sy = 0.0;
+      int nv = 0;
+      for (int vi = v0; vi < v1; ++vi) {
+        sx += static_cast<double>(st.userPolylineVerts[static_cast<size_t>(vi * 3)]);
+        sy += static_cast<double>(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)]);
+        ++nv;
+      }
+      if (nv > 0) {
+        accx += sx / static_cast<double>(nv);
+        accy += sy / static_cast<double>(nv);
+        ++n;
+      }
+    } else if (e.type == SelectedEntity::Type::Annotation) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.cadAnnotations.size()) {
+        const CadAnnotation& a = st.cadAnnotations[k];
+        accx += static_cast<double>(a.insX);
+        accy += static_cast<double>(a.insY);
+        ++n;
+      }
+    }
+  }
+  for (int si : st.selectedSurveyPointIndices) {
+    if (si >= 0 && static_cast<size_t>(si) < st.surveyPoints.size()) {
+      accx += static_cast<double>(st.surveyPoints[static_cast<size_t>(si)].easting);
+      accy += static_cast<double>(st.surveyPoints[static_cast<size_t>(si)].northing);
+      ++n;
+    }
+  }
+  if (n <= 0)
+    return false;
+  *outCx = static_cast<float>(accx / static_cast<double>(n));
+  *outCy = static_cast<float>(accy / static_cast<double>(n));
+  return true;
+}
+
+static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, float bx, float by, float* outMax) {
+  if (!outMax)
+    return;
+  float m = 0.f;
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::LineSeg) {
+      const size_t k = static_cast<size_t>(e.index) * 6;
+      if (k + 5 < st.userLinesFlat.size()) {
+        for (int i = 0; i < 2; ++i) {
+          const float x = st.userLinesFlat[k + i * 3];
+          const float y = st.userLinesFlat[k + i * 3 + 1];
+          m = std::max(m, std::hypot(x - bx, y - by));
+        }
+      }
+    } else if (e.type == SelectedEntity::Type::Circle) {
+      const size_t k = static_cast<size_t>(e.index) * 3;
+      if (k + 2 < st.userCirclesCxCyR.size()) {
+        const float cx = st.userCirclesCxCyR[k];
+        const float cy = st.userCirclesCxCyR[k + 1];
+        const float r = st.userCirclesCxCyR[k + 2];
+        m = std::max(m, std::hypot(cx - bx, cy - by) + r);
+      }
+    } else if (e.type == SelectedEntity::Type::Arc) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.userArcs.size()) {
+        const CadArc& a = st.userArcs[k];
+        m = std::max(m, std::hypot(a.cx - bx, a.cy - by) + a.r);
+      }
+    } else if (e.type == SelectedEntity::Type::Ellipse) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.userEllipses.size()) {
+        const CadEllipse& el = st.userEllipses[k];
+        const float ma = std::hypot(el.majVx, el.majVy);
+        const float mb = ma * el.ratio;
+        m = std::max(m, std::hypot(el.cx - bx, el.cy - by) + std::max(ma, mb));
+      }
+    } else if (e.type == SelectedEntity::Type::Polyline) {
+      const int pi = e.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+        continue;
+      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      for (int vi = v0; vi < v1; ++vi) {
+        const float x = st.userPolylineVerts[static_cast<size_t>(vi * 3)];
+        const float y = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
+        m = std::max(m, std::hypot(x - bx, y - by));
+      }
+    } else if (e.type == SelectedEntity::Type::Annotation) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= st.cadAnnotations.size())
+        continue;
+      const CadAnnotation& a = st.cadAnnotations[k];
+      if (a.kind == CadAnnotation::Kind::Mtext) {
+        float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
+        float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
+        for (int i = 0; i < 4; ++i)
+          m = std::max(m, std::hypot(xs[i] - bx, ys[i] - by));
+      } else if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
+        m = std::max(m, std::hypot(a.dimExt1X - bx, a.dimExt1Y - by));
+        m = std::max(m, std::hypot(a.dimExt2X - bx, a.dimExt2Y - by));
+        m = std::max(m, std::hypot(a.insX - bx, a.insY - by));
+      } else if (a.kind == CadAnnotation::Kind::DimAngular) {
+        m = std::max(m, std::hypot(a.dimAngVertexX - bx, a.dimAngVertexY - by));
+        m = std::max(m, std::hypot(a.dimExt1X - bx, a.dimExt1Y - by));
+        m = std::max(m, std::hypot(a.dimExt2X - bx, a.dimExt2Y - by));
+        m = std::max(m, std::hypot(a.insX - bx, a.insY - by));
+      } else
+        m = std::max(m, std::hypot(a.insX - bx, a.insY - by));
+    }
+  }
+  for (int si : st.selectedSurveyPointIndices) {
+    if (si >= 0 && static_cast<size_t>(si) < st.surveyPoints.size()) {
+      const SurveyPoint& sp = st.surveyPoints[static_cast<size_t>(si)];
+      m = std::max(m, std::hypot(sp.easting - bx, sp.northing - by));
+    }
+  }
+  *outMax = m;
+}
+
+static float ComputeScaleReferenceDistance(const AppCommandState& st, float bx, float by) {
+  float cx = 0.f, cy = 0.f;
+  const bool haveC = ComputeSelectionCentroidWorld(st, &cx, &cy);
+  const float dCent = haveC ? std::hypot(cx - bx, cy - by) : 0.f;
+  float dMax = 0.f;
+  ComputeMaxSelectionDistanceFromPoint(st, bx, by, &dMax);
+  const float ref = std::max(dCent, 0.25f * std::max(dMax, 1e-6f));
+  return std::max(ref, 1e-6f);
+}
+
+static void ApplyScaleToSelectedSurveyPoints(AppCommandState& st, float bx, float by, float sc) {
+  std::vector<int> ix = st.selectedSurveyPointIndices;
+  std::sort(ix.begin(), ix.end());
+  ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
+  for (int i : ix) {
+    if (i < 0 || static_cast<size_t>(i) >= st.surveyPoints.size())
+      continue;
+    float x = st.surveyPoints[static_cast<size_t>(i)].easting;
+    float y = st.surveyPoints[static_cast<size_t>(i)].northing;
+    ScalePtAroundBase(bx, by, sc, &x, &y);
+    st.surveyPoints[static_cast<size_t>(i)].easting = x;
+    st.surveyPoints[static_cast<size_t>(i)].northing = y;
+  }
+  for (int i : ix) {
+    if (i >= 0 && static_cast<size_t>(i) < st.surveyPoints.size())
+      RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(i));
+  }
+}
+
+void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc) {
+  if (!(sc > 0.f) || !std::isfinite(sc))
+    return;
+  std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::LineSeg)
+      continue;
+    if (e.index >= 0 && static_cast<size_t>(e.index) < lineMark.size())
+      lineMark[static_cast<size_t>(e.index)] = true;
+  }
+  if (!lineMark.empty()) {
+    for (size_t i = 0; i < lineMark.size(); ++i) {
+      if (!lineMark[i])
+        continue;
+      size_t k = i * 6;
+      if (k + 5 < st.userLinesFlat.size()) {
+        ScalePtAroundBase(bx, by, sc, &st.userLinesFlat[k], &st.userLinesFlat[k + 1]);
+        ScalePtAroundBase(bx, by, sc, &st.userLinesFlat[k + 3], &st.userLinesFlat[k + 4]);
+      }
+    }
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Circle)
+      continue;
+    size_t k = static_cast<size_t>(e.index) * 3;
+    if (k + 2 < st.userCirclesCxCyR.size()) {
+      ScalePtAroundBase(bx, by, sc, &st.userCirclesCxCyR[k], &st.userCirclesCxCyR[k + 1]);
+      st.userCirclesCxCyR[k + 2] *= sc;
+    }
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Arc)
+      continue;
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.userArcs.size())
+      continue;
+    CadArc& a = st.userArcs[k];
+    ScalePtAroundBase(bx, by, sc, &a.cx, &a.cy);
+    a.r *= sc;
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Ellipse)
+      continue;
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.userEllipses.size())
+      continue;
+    CadEllipse& el = st.userEllipses[k];
+    float mx = el.cx + el.majVx;
+    float my = el.cy + el.majVy;
+    ScalePtAroundBase(bx, by, sc, &el.cx, &el.cy);
+    ScalePtAroundBase(bx, by, sc, &mx, &my);
+    el.majVx = mx - el.cx;
+    el.majVy = my - el.cy;
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Polyline)
+      continue;
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+      continue;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    for (int vi = v0; vi < v1; ++vi)
+      ScalePtAroundBase(bx, by, sc, &st.userPolylineVerts[static_cast<size_t>(vi * 3 + 0)],
+                        &st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)]);
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Annotation)
+      continue;
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.cadAnnotations.size())
+      continue;
+    CadAnnotation& a = st.cadAnnotations[k];
+    if (a.kind == CadAnnotation::Kind::Text) {
+      ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
+      a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+    } else if (a.kind == CadAnnotation::Kind::Mtext) {
+      ScalePtAroundBase(bx, by, sc, &a.boxMinX, &a.boxMinY);
+      ScalePtAroundBase(bx, by, sc, &a.boxMaxX, &a.boxMaxY);
+      if (a.boxMinX > a.boxMaxX)
+        std::swap(a.boxMinX, a.boxMaxX);
+      if (a.boxMinY > a.boxMaxY)
+        std::swap(a.boxMinY, a.boxMaxY);
+      a.insX = a.boxMinX;
+      a.insY = a.boxMinY;
+      a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+    } else if (a.kind == CadAnnotation::Kind::DimLinear) {
+      ScaleCadDimLinearAroundBase(bx, by, sc, &a);
+      ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
+      a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+      CadDimRefreshMeasurementText(&a);
+    } else if (a.kind == CadAnnotation::Kind::DimAligned) {
+      ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
+      ScalePtAroundBase(bx, by, sc, &a.dimExt2X, &a.dimExt2Y);
+      a.dimSignedOffset *= sc;
+      ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
+      a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+      float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+      if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+        a.rotationRad = std::atan2(ty, tx);
+      CadDimRefreshMeasurementText(&a);
+    } else if (a.kind == CadAnnotation::Kind::DimAngular) {
+      ScalePtAroundBase(bx, by, sc, &a.dimAngVertexX, &a.dimAngVertexY);
+      ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
+      ScalePtAroundBase(bx, by, sc, &a.dimExt2X, &a.dimExt2Y);
+      a.dimSignedOffset *= sc;
+      ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
+      a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+      CadDimAngularSyncTextPlacement(&a, st.modelUnitsPerPlottedInch);
+      CadDimRefreshMeasurementText(&a);
+    }
+  }
+  ApplyScaleToSelectedSurveyPoints(st, bx, by, sc);
   BumpCadGpuCache(st);
 }
 
@@ -1837,6 +2640,125 @@ bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineI
   }
   (void)log;
   return false;
+}
+
+static void FinishScaleCommand(AppCommandState& st, float scaleFactor, std::vector<std::string>& log) {
+  const float s = std::max(scaleFactor, 1e-6f);
+  ApplyScaleToSelection(st, st.modifyBaseX, st.modifyBaseY, s);
+  st.active = AppCommandState::Kind::None;
+  ResetModifyRotateDraft(st);
+  log.push_back("SCALE complete.");
+}
+
+static bool HandleScaleText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+  std::string line = Trim(lineIn);
+  using MP = AppCommandState::ModifyPhase;
+  using SP = AppCommandState::ScalePhase;
+  if (st.modifyPhase == MP::NeedBase) {
+    float px = 0.f;
+    float py = 0.f;
+    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+      return false;
+    st.modifyBaseX = px;
+    st.modifyBaseY = py;
+    st.scaleRefDist = ComputeScaleReferenceDistance(st, px, py);
+    st.scalePhase = SP::FactorPick;
+    st.modifyPhase = MP::NeedDestination;
+    log.push_back(
+        "SCALE — pick second point or type factor (>0), or R / REFERENCE for two-point reference length then new "
+        "length.");
+    return true;
+  }
+  if (st.modifyPhase != MP::NeedDestination)
+    return false;
+
+  switch (st.scalePhase) {
+  case SP::FactorPick: {
+    const std::string low = ToLower(line);
+    if (low == "r" || low == "ref" || low == "reference") {
+      st.scalePhase = SP::Ref_WaitP1;
+      log.push_back("SCALE ref — first point of reference length:");
+      return true;
+    }
+    float sf = 0.f;
+    if (ParseOneFloat(line, &sf)) {
+      if (!(sf > 0.f) || !std::isfinite(sf)) {
+        log.push_back("SCALE — scale factor must be a positive finite number.");
+        return false;
+      }
+      FinishScaleCommand(st, sf, log);
+      return true;
+    }
+    float px = 0.f;
+    float py = 0.f;
+    if (!ParseWorldPoint(line, &px, &py, true, st.modifyBaseX, st.modifyBaseY))
+      return false;
+    const float d = std::hypot(px - st.modifyBaseX, py - st.modifyBaseY);
+    FinishScaleCommand(st, d / std::max(st.scaleRefDist, 1e-20f), log);
+    return true;
+  }
+  case SP::Ref_WaitP1: {
+    float px = 0.f;
+    float py = 0.f;
+    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+      return false;
+    st.scaleRefP1X = px;
+    st.scaleRefP1Y = py;
+    st.scalePhase = SP::Ref_WaitP2;
+    log.push_back("SCALE ref — second point of reference length:");
+    return true;
+  }
+  case SP::Ref_WaitP2: {
+    float px = 0.f;
+    float py = 0.f;
+    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+      return false;
+    const float refLen = std::hypot(px - st.scaleRefP1X, py - st.scaleRefP1Y);
+    if (!(refLen > 1e-8f) || !std::isfinite(refLen)) {
+      log.push_back("SCALE ref — reference length is too small; pick two distinct points.");
+      return false;
+    }
+    st.scaleRefDist = refLen;
+    st.scalePhase = SP::NewLength_WaitTypedOrP1;
+    log.push_back("SCALE ref — type new length (model units) or pick first point of new length segment.");
+    return true;
+  }
+  case SP::NewLength_WaitTypedOrP1: {
+    float L = 0.f;
+    if (ParseOneFloat(line, &L)) {
+      if (!(L > 0.f) || !std::isfinite(L)) {
+        log.push_back("SCALE ref — new length must be a positive finite number.");
+        return false;
+      }
+      FinishScaleCommand(st, L / std::max(st.scaleRefDist, 1e-20f), log);
+      return true;
+    }
+    float px = 0.f;
+    float py = 0.f;
+    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+      return false;
+    st.scaleNewLenP1X = px;
+    st.scaleNewLenP1Y = py;
+    st.scalePhase = SP::NewLength_WaitP2;
+    log.push_back("SCALE ref — second point of new length segment:");
+    return true;
+  }
+  case SP::NewLength_WaitP2: {
+    float px = 0.f;
+    float py = 0.f;
+    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+      return false;
+    const float newLen = std::hypot(px - st.scaleNewLenP1X, py - st.scaleNewLenP1Y);
+    if (!(newLen > 1e-8f) || !std::isfinite(newLen)) {
+      log.push_back("SCALE ref — new length is too small; pick two distinct points.");
+      return false;
+    }
+    FinishScaleCommand(st, newLen / std::max(st.scaleRefDist, 1e-20f), log);
+    return true;
+  }
+  default:
+    return false;
+  }
 }
 
 static bool TryRotateCopyToggle(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
@@ -2086,12 +3008,96 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   log.push_back("DIMALIGNED complete.");
 }
 
+static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vector<std::string>& log) {
+  CadDimLinearUpdateDraftOrientation(st, lx, ly);
+  const float x1 = st.dimE1x, y1 = st.dimE1y;
+  const float x2 = st.dimE2x, y2 = st.dimE2y;
+  const float cmx = 0.5f * (x1 + x2);
+  const float cmy = 0.5f * (y1 + y2);
+  const bool vert = st.dimLinearDraftVertical;
+  const float meas = vert ? std::fabs(y2 - y1) : std::fabs(x2 - x1);
+  if (meas < 1e-8f) {
+    log.push_back(vert ? "DIMLINEAR — extension points have the same Y (zero vertical span)."
+                       : "DIMLINEAR — extension points have the same X (zero horizontal span).");
+    return;
+  }
+  float dmx = cmx;
+  float dmy = cmy;
+  float n0x = 0.f;
+  float n0y = 1.f;
+  float dOff = 0.f;
+  if (!vert) {
+    dmy = ly;
+    dOff = dmy - cmy;
+  } else {
+    dmx = lx;
+    dOff = dmx - cmx;
+    n0x = 1.f;
+    n0y = 0.f;
+  }
+  char buf[96];
+  std::snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(meas));
+  CadAnnotation ann;
+  ann.kind = CadAnnotation::Kind::DimLinear;
+  ann.dimExt1X = x1;
+  ann.dimExt1Y = y1;
+  ann.dimExt2X = x2;
+  ann.dimExt2Y = y2;
+  ann.dimSignedOffset = dOff;
+  ann.dimLinearVertical = vert;
+  ann.plottedHeightInches = st.defaultPlottedTextHeightInches * 0.85f;
+  float tx = 0.f, ty = 0.f;
+  if (!vert) {
+    tx = (x2 >= x1) ? 1.f : -1.f;
+    ty = 0.f;
+  } else {
+    tx = 0.f;
+    ty = (y2 >= y1) ? 1.f : -1.f;
+  }
+  ann.rotationRad = std::atan2(ty, tx);
+  ann.text = buf;
+  const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
+  CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
+  EntityAttributes at = MakeNewEntityAttrs(st);
+  at.color = "#e1b12c";
+  st.cadAnnotations.push_back(std::move(ann));
+  st.cadAnnotationAttrs.push_back(at);
+  BumpCadGpuCache(st);
+  st.active = AppCommandState::Kind::None;
+  ResetDimDraft(st);
+  log.push_back("DIMLINEAR complete.");
+}
+
 static void CommitIdPointAt(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
   char buf[192];
   std::snprintf(buf, sizeof(buf), "ID — UCS (World)  X = %.6f  Y = %.6f  Z = 0.000000", static_cast<double>(wx),
                 static_cast<double>(wy));
   log.push_back(buf);
   st.active = AppCommandState::Kind::None;
+}
+
+static void CommitSurveyInverseSecondPoint(AppCommandState& st, float x2, float y2, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  using SIP = AppCommandState::SurveyInversePhase;
+  const float de = x2 - st.surveyInverseFromX;
+  const float dn = y2 - st.surveyInverseFromY;
+  const float horiz = std::hypot(de, dn);
+  if (horiz < 1e-10f) {
+    log.push_back("INVERSE — horizontal distance is zero; pick a different second point.");
+    return;
+  }
+  const float theta = std::atan2(dn, de);
+  const float brg = BearingCwNorthDegFromMathAngleRad(theta);
+  const std::string brgDms = CadFormatBearingCwNorthDegMinSec(brg);
+  char buf[512];
+  std::snprintf(buf, sizeof(buf),
+                "INVERSE — ΔE = %.6f  ΔN = %.6f  horiz dist = %.6f  bearing = %s clockwise from north (%.4f° "
+                "decimal).",
+                static_cast<double>(de), static_cast<double>(dn), static_cast<double>(horiz), brgDms.c_str(),
+                static_cast<double>(brg));
+  log.push_back(buf);
+  st.active = K::None;
+  st.surveyInversePhase = SIP::WaitFrom;
 }
 
 namespace OffsetCmd {
@@ -2594,10 +3600,11 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   using K = AppCommandState::Kind;
   using MP = AppCommandState::ModifyPhase;
   using RP = AppCommandState::RotatePhase;
+  using SP = AppCommandState::ScalePhase;
 
   auto finishBox = [&]() {
     const bool inclSurvey = (st.active == AppCommandState::Kind::None || st.active == K::Move ||
-                             st.active == K::Copy || st.active == K::Rotate);
+                             st.active == K::Copy || st.active == K::Rotate || st.active == K::Scale);
     ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, wx, wy, windowSelectionSubtract,
                              fenceLeftToRightWindowMode, inclSurvey);
     st.selBoxWaitingSecond = false;
@@ -2775,23 +3782,61 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
-  if (st.active == K::DimAligned) {
+  if (st.active == K::DimAligned || st.active == K::DimLinear) {
     using DP = AppCommandState::DimPhase;
+    const bool linear = st.active == K::DimLinear;
     switch (st.dimPhase) {
     case DP::WaitExt1:
       st.dimE1x = wx;
       st.dimE1y = wy;
       st.dimPhase = DP::WaitExt2;
-      log.push_back("DIMALIGNED — second extension point:");
+      log.push_back(std::string(linear ? "DIMLINEAR" : "DIMALIGNED") + " — second extension point:");
       break;
     case DP::WaitExt2:
       st.dimE2x = wx;
       st.dimE2y = wy;
       st.dimPhase = DP::WaitDimLinePt;
-      log.push_back("DIMALIGNED — offset (point away from measured line):");
+      if (linear) {
+        st.dimLinearOrientUserLock = false;
+        CadDimLinearUpdateDraftOrientation(st, wx, wy);
+        log.push_back(
+            "DIMLINEAR — pick dimension line position (horizontal vs vertical follows cursor; H / V to lock); type X,Y or @dx,dy from chord mid.");
+      } else
+        log.push_back("DIMALIGNED — pick dimension line position (offset from measured segment).");
       break;
     case DP::WaitDimLinePt:
-      CommitDimAlignedAt(st, wx, wy, log);
+      if (linear)
+        CommitDimLinearAt(st, wx, wy, log);
+      else
+        CommitDimAlignedAt(st, wx, wy, log);
+      break;
+    }
+    return;
+  }
+
+  if (st.active == K::DimAngular) {
+    using DAP = AppCommandState::DimAngularPhase;
+    switch (st.dimAngularPhase) {
+    case DAP::WaitVertex:
+      st.dimAngVx = wx;
+      st.dimAngVy = wy;
+      st.dimAngularPhase = DAP::WaitRay1;
+      log.push_back("DIMANGULAR — first ray point (on first leg):");
+      break;
+    case DAP::WaitRay1:
+      st.dimE1x = wx;
+      st.dimE1y = wy;
+      st.dimAngularPhase = DAP::WaitRay2;
+      log.push_back("DIMANGULAR — second ray point (on second leg):");
+      break;
+    case DAP::WaitRay2:
+      st.dimE2x = wx;
+      st.dimE2y = wy;
+      st.dimAngularPhase = DAP::WaitArc;
+      log.push_back("DIMANGULAR — pick arc / label side (radius along angle bisector); type X,Y or @dx,dy from vertex.");
+      break;
+    case DAP::WaitArc:
+      CommitDimAngularAt(st, wx, wy, log);
       break;
     }
     return;
@@ -2799,6 +3844,19 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
 
   if (st.active == K::IdPoint) {
     CommitIdPointAt(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::SurveyInverse) {
+    using SIP = AppCommandState::SurveyInversePhase;
+    if (st.surveyInversePhase == SIP::WaitFrom) {
+      st.surveyInverseFromX = wx;
+      st.surveyInverseFromY = wy;
+      st.surveyInversePhase = SIP::WaitTo;
+      log.push_back("INVERSE — second point (pick or type X,Y; @dx,dy from first):");
+      return;
+    }
+    CommitSurveyInverseSecondPoint(st, wx, wy, log);
     return;
   }
 
@@ -2929,6 +3987,75 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
+  if (st.active == K::Scale) {
+    if (st.modifyPhase == MP::PickSelection) {
+      if (st.selBoxWaitingSecond) {
+        finishBox();
+        if (st.selection.empty() && st.selectedSurveyPointIndices.empty())
+          log.push_back("Nothing selected — pick two corners again.");
+        else {
+          st.modifyPhase = MP::NeedBase;
+          log.push_back("SCALE — base point:");
+        }
+      }
+      return;
+    }
+    if (st.modifyPhase == MP::NeedBase) {
+      st.modifyBaseX = wx;
+      st.modifyBaseY = wy;
+      st.scaleRefDist = ComputeScaleReferenceDistance(st, wx, wy);
+      st.scalePhase = SP::FactorPick;
+      st.modifyPhase = MP::NeedDestination;
+      log.push_back(
+          "SCALE — pick second point or type factor (>0), or R / REFERENCE on command line for two-point reference "
+          "length.");
+      return;
+    }
+    if (st.modifyPhase == MP::NeedDestination) {
+      switch (st.scalePhase) {
+      case SP::FactorPick: {
+        const float d = std::hypot(wx - st.modifyBaseX, wy - st.modifyBaseY);
+        const float s = std::max(d / std::max(st.scaleRefDist, 1e-20f), 1e-6f);
+        FinishScaleCommand(st, s, log);
+        return;
+      }
+      case SP::Ref_WaitP1:
+        st.scaleRefP1X = wx;
+        st.scaleRefP1Y = wy;
+        st.scalePhase = SP::Ref_WaitP2;
+        log.push_back("SCALE ref — second point of reference length:");
+        return;
+      case SP::Ref_WaitP2: {
+        const float refLen = std::hypot(wx - st.scaleRefP1X, wy - st.scaleRefP1Y);
+        if (!(refLen > 1e-8f) || !std::isfinite(refLen)) {
+          log.push_back("SCALE ref — reference length is too small; pick two distinct points.");
+          return;
+        }
+        st.scaleRefDist = refLen;
+        st.scalePhase = SP::NewLength_WaitTypedOrP1;
+        log.push_back("SCALE ref — type new length (model units) or pick first point of new length segment.");
+        return;
+      }
+      case SP::NewLength_WaitTypedOrP1:
+        st.scaleNewLenP1X = wx;
+        st.scaleNewLenP1Y = wy;
+        st.scalePhase = SP::NewLength_WaitP2;
+        log.push_back("SCALE ref — second point of new length segment:");
+        return;
+      case SP::NewLength_WaitP2: {
+        const float newLen = std::hypot(wx - st.scaleNewLenP1X, wy - st.scaleNewLenP1Y);
+        if (!(newLen > 1e-8f) || !std::isfinite(newLen)) {
+          log.push_back("SCALE ref — new length is too small; pick two distinct points.");
+          return;
+        }
+        FinishScaleCommand(st, newLen / std::max(st.scaleRefDist, 1e-20f), log);
+        return;
+      }
+      }
+    }
+    return;
+  }
+
   if (st.active == K::Rotate) {
     if (st.rotatePhase == RP::PickSelection) {
       if (st.selBoxWaitingSecond) {
@@ -3050,6 +4177,29 @@ bool CadRotatePreviewTheta(const AppCommandState& cmd, float curX, float curY, f
   return true;
 }
 
+bool CadScalePreviewFactor(const AppCommandState& cmd, float curX, float curY, float* outScale) {
+  using K = AppCommandState::Kind;
+  using MP = AppCommandState::ModifyPhase;
+  using SP = AppCommandState::ScalePhase;
+  if (cmd.active != K::Scale || !outScale)
+    return false;
+  if (cmd.modifyPhase != MP::NeedDestination)
+    return false;
+  if (cmd.scalePhase == SP::FactorPick) {
+    const float d = std::hypot(curX - cmd.modifyBaseX, curY - cmd.modifyBaseY);
+    float s = d / std::max(cmd.scaleRefDist, 1e-20f);
+    *outScale = std::max(s, 1e-6f);
+    return true;
+  }
+  if (cmd.scalePhase == SP::NewLength_WaitP2) {
+    const float d = std::hypot(curX - cmd.scaleNewLenP1X, curY - cmd.scaleNewLenP1Y);
+    float s = d / std::max(cmd.scaleRefDist, 1e-20f);
+    *outScale = std::max(s, 1e-6f);
+    return true;
+  }
+  return false;
+}
+
 static void CadAnnotationPreviewTranslated(const CadAnnotation& src, float dx, float dy, CadAnnotation* out) {
   if (!out)
     return;
@@ -3061,7 +4211,7 @@ static void CadAnnotationPreviewTranslated(const CadAnnotation& src, float dx, f
     out->boxMinY += dy;
     out->boxMaxX += dx;
     out->boxMaxY += dy;
-  } else if (out->kind == CadAnnotation::Kind::DimAligned) {
+  } else if (out->kind == CadAnnotation::Kind::DimAligned || out->kind == CadAnnotation::Kind::DimLinear) {
     out->dimExt1X += dx;
     out->dimExt1Y += dy;
     out->dimExt2X += dx;
@@ -3077,6 +4227,8 @@ static void CadAnnotationPreviewRotated(const CadAnnotation& src, float bx, floa
   RotatePtForAnnotationPreview(bx, by, rad, &a.insX, &a.insY);
   if (a.kind == CadAnnotation::Kind::Text) {
     a.rotationRad += rad;
+  } else if (a.kind == CadAnnotation::Kind::DimLinear) {
+    RotateCadDimLinearAroundBase(bx, by, rad, &a);
   } else if (a.kind == CadAnnotation::Kind::DimAligned) {
     RotatePtForAnnotationPreview(bx, by, rad, &a.dimExt1X, &a.dimExt1Y);
     RotatePtForAnnotationPreview(bx, by, rad, &a.dimExt2X, &a.dimExt2Y);
@@ -3106,6 +4258,47 @@ static void CadAnnotationPreviewRotated(const CadAnnotation& src, float bx, floa
   }
 }
 
+static void CadAnnotationPreviewScaled(const CadAnnotation& src, float bx, float by, float sc, CadAnnotation* out) {
+  if (!out)
+    return;
+  *out = src;
+  CadAnnotation& a = *out;
+  ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
+  if (a.kind == CadAnnotation::Kind::Text) {
+    a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+  } else if (a.kind == CadAnnotation::Kind::DimLinear) {
+    ScaleCadDimLinearAroundBase(bx, by, sc, &a);
+    ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
+    a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+  } else if (a.kind == CadAnnotation::Kind::DimAligned) {
+    ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
+    ScalePtAroundBase(bx, by, sc, &a.dimExt2X, &a.dimExt2Y);
+    a.dimSignedOffset *= sc;
+    ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
+    a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+    float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+    if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+      a.rotationRad = std::atan2(ty, tx);
+  } else if (a.kind == CadAnnotation::Kind::DimAngular) {
+    ScalePtAroundBase(bx, by, sc, &a.dimAngVertexX, &a.dimAngVertexY);
+    ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
+    ScalePtAroundBase(bx, by, sc, &a.dimExt2X, &a.dimExt2Y);
+    a.dimSignedOffset *= sc;
+    ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
+    a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+  } else {
+    ScalePtAroundBase(bx, by, sc, &a.boxMinX, &a.boxMinY);
+    ScalePtAroundBase(bx, by, sc, &a.boxMaxX, &a.boxMaxY);
+    if (a.boxMinX > a.boxMaxX)
+      std::swap(a.boxMinX, a.boxMaxX);
+    if (a.boxMinY > a.boxMaxY)
+      std::swap(a.boxMinY, a.boxMaxY);
+    a.insX = a.boxMinX;
+    a.insY = a.boxMinY;
+    a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
+  }
+}
+
 void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float curX, float curY,
                                            std::vector<CadAnnotation>* out) {
   if (!out)
@@ -3124,6 +4317,24 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
         continue;
       CadAnnotation p{};
       CadAnnotationPreviewTranslated(cmd.cadAnnotations[k], dx, dy, &p);
+      out->push_back(p);
+    }
+    return;
+  }
+  float sc = 1.f;
+  if (cmd.active == K::Scale && cmd.modifyPhase == MP::NeedDestination) {
+    if (!CadScalePreviewFactor(cmd, curX, curY, &sc))
+      return;
+    const float bx = cmd.modifyBaseX;
+    const float by = cmd.modifyBaseY;
+    for (const auto& e : cmd.selection) {
+      if (e.type != SelectedEntity::Type::Annotation)
+        continue;
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= cmd.cadAnnotations.size())
+        continue;
+      CadAnnotation p{};
+      CadAnnotationPreviewScaled(cmd.cadAnnotations[k], bx, by, sc, &p);
       out->push_back(p);
     }
     return;
@@ -3657,6 +4868,28 @@ void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log) 
   log.push_back("DIMALIGNED — extension 1, extension 2, then offset (point away from measured line). ESC cancels.");
 }
 
+void StartDimLinearCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selectedSurveyPointIndices.clear();
+  st.selBoxWaitingSecond = false;
+  st.active = AppCommandState::Kind::DimLinear;
+  st.dimPhase = AppCommandState::DimPhase::WaitExt1;
+  log.push_back("DIMLINEAR — ortho distance in X or Y between extension points; third pick sets dimension line; "
+                "cursor or H/V chooses horizontal vs vertical. ESC cancels.");
+}
+
+void StartDimAngularCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selectedSurveyPointIndices.clear();
+  st.selBoxWaitingSecond = false;
+  st.active = AppCommandState::Kind::DimAngular;
+  st.dimAngularPhase = AppCommandState::DimAngularPhase::WaitVertex;
+  log.push_back("DIMANGULAR — vertex, two ray points, then arc position (radius). Text is degrees/minutes/seconds. ESC "
+                "cancels.");
+}
+
 void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
   if (st.active != K::None) {
@@ -3669,6 +4902,24 @@ void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.selBoxWaitingSecond = false;
   st.active = K::IdPoint;
   log.push_back("ID — specify point (click in drawing or type X,Y). UCS = World. ESC cancels.");
+}
+
+void StartSurveyInverseCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  using SIP = AppCommandState::SurveyInversePhase;
+  if (st.active != K::None) {
+    log.push_back("INVERSE — finish or cancel the active command first.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selectedSurveyPointIndices.clear();
+  st.selBoxWaitingSecond = false;
+  st.active = K::SurveyInverse;
+  st.surveyInversePhase = SIP::WaitFrom;
+  log.push_back(
+      "INVERSE — first point (World X=Easting, Y=Northing); then second. "
+      "Result: ΔE, ΔN, horizontal distance, bearing D°M'S\" and decimal ° clockwise from north. ESC cancels.");
 }
 
 void ClearCadSelection(AppCommandState& st) {
@@ -6002,6 +7253,23 @@ void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log) {
         "ROTATE — window-select (two clicks), base point, then ° clockwise from north / DMS, or R reference. ESC.");
 }
 
+void StartScaleCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::Scale;
+  st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+  st.selBoxWaitingSecond = false;
+  st.scaleRefDist = 1.f;
+  st.scalePhase = AppCommandState::ScalePhase::FactorPick;
+  if (!st.selection.empty() || !st.selectedSurveyPointIndices.empty()) {
+    st.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
+    log.push_back("SCALE — specify base point (click or type X,Y). ESC to cancel.");
+  } else
+    log.push_back(
+        "SCALE — window-select (two clicks), base point, then scale: second point or factor (>0), or R for "
+        "two-point reference length then new length (type or two picks). ESC cancels.");
+}
+
 void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.active == AppCommandState::Kind::None)
     return;
@@ -6023,12 +7291,18 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("MTEXT canceled.");
   else if (st.active == AppCommandState::Kind::DimAligned)
     log.push_back("DIMALIGNED canceled.");
+  else if (st.active == AppCommandState::Kind::DimLinear)
+    log.push_back("DIMLINEAR canceled.");
+  else if (st.active == AppCommandState::Kind::DimAngular)
+    log.push_back("DIMANGULAR canceled.");
   else if (st.active == AppCommandState::Kind::Move)
     log.push_back("MOVE canceled.");
   else if (st.active == AppCommandState::Kind::Copy)
     log.push_back("COPY canceled.");
   else if (st.active == AppCommandState::Kind::Rotate)
     log.push_back("ROTATE canceled.");
+  else if (st.active == AppCommandState::Kind::Scale)
+    log.push_back("SCALE canceled.");
   else if (st.active == AppCommandState::Kind::Delete)
     log.push_back("DELETE canceled.");
   else if (st.active == AppCommandState::Kind::Join)
@@ -6039,6 +7313,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("OFFSET canceled.");
   else if (st.active == AppCommandState::Kind::IdPoint)
     log.push_back("ID canceled.");
+  else if (st.active == AppCommandState::Kind::SurveyInverse)
+    log.push_back("INVERSE canceled.");
   else if (st.active == AppCommandState::Kind::Zoom)
     log.push_back("ZOOM WINDOW canceled.");
   st.active = AppCommandState::Kind::None;
@@ -6400,12 +7676,49 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
+  if (st.active == K::SurveyInverse) {
+    using SIP = AppCommandState::SurveyInversePhase;
+    float px = 0.f;
+    float py = 0.f;
+    if (st.surveyInversePhase == SIP::WaitFrom) {
+      if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f)) {
+        log.push_back("INVERSE — type X,Y (World) or pick first point in Drawing1.");
+        cmdBuf[0] = '\0';
+        return;
+      }
+      st.surveyInverseFromX = px;
+      st.surveyInverseFromY = py;
+      st.surveyInversePhase = SIP::WaitTo;
+      log.push_back("INVERSE — second point (X,Y or @dx,dy from first).");
+      cmdBuf[0] = '\0';
+      return;
+    }
+    if (!ParseWorldPoint(line, &px, &py, true, st.surveyInverseFromX, st.surveyInverseFromY)) {
+      log.push_back("INVERSE — type X,Y or @dx,dy from first point.");
+      cmdBuf[0] = '\0';
+      return;
+    }
+    CommitSurveyInverseSecondPoint(st, px, py, log);
+    cmdBuf[0] = '\0';
+    return;
+  }
+
   if (st.active == AppCommandState::Kind::Move || st.active == AppCommandState::Kind::Copy) {
     if (HandleModifyText(st, st.active == AppCommandState::Kind::Copy, line, log)) {
       cmdBuf[0] = '\0';
       return;
     }
     log.push_back("Could not parse MOVE/COPY input — use X,Y or @dx,dy from base.");
+    cmdBuf[0] = '\0';
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Scale) {
+    if (HandleScaleText(st, line, log)) {
+      cmdBuf[0] = '\0';
+      return;
+    }
+    log.push_back("Could not parse SCALE input — see command hints (base X,Y; factor; R + reference/new length).");
     cmdBuf[0] = '\0';
     return;
   }
@@ -6639,6 +7952,64 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
+  if (st.active == K::DimAligned || st.active == K::DimLinear) {
+    using DP = AppCommandState::DimPhase;
+    const bool linear = st.active == K::DimLinear;
+    const std::string dimTrim = Trim(line);
+    const std::string dimLow = ToLower(dimTrim);
+    if (linear && st.dimPhase == DP::WaitDimLinePt && (dimLow == "h" || dimLow == "v")) {
+      CadDimLinearApplyHVHotkey(st, dimLow == "v", log);
+      cmdBuf[0] = '\0';
+      return;
+    }
+    float px = 0.f;
+    float py = 0.f;
+    bool allowRel = false;
+    float ax = 0.f;
+    float ay = 0.f;
+    if (st.dimPhase == DP::WaitExt2) {
+      allowRel = true;
+      ax = st.dimE1x;
+      ay = st.dimE1y;
+    } else if (linear && st.dimPhase == DP::WaitDimLinePt) {
+      allowRel = true;
+      ax = 0.5f * (st.dimE1x + st.dimE2x);
+      ay = 0.5f * (st.dimE1y + st.dimE2y);
+    }
+    if (!ParseWorldPoint(dimTrim, &px, &py, allowRel, ax, ay)) {
+      log.push_back(linear ? "DIMLINEAR — X,Y or @dx,dy; at line step H / V locks orientation; move cursor to unlock."
+                           : "DIMALIGNED — X,Y or @dx,dy from first extension.");
+      cmdBuf[0] = '\0';
+      return;
+    }
+    SubmitViewportPick(st, px, py, log, false, false);
+    cmdBuf[0] = '\0';
+    return;
+  }
+
+  if (st.active == K::DimAngular) {
+    using DAP = AppCommandState::DimAngularPhase;
+    const std::string dimTrim = Trim(line);
+    float px = 0.f;
+    float py = 0.f;
+    bool allowRel = false;
+    float ax = 0.f;
+    float ay = 0.f;
+    if (st.dimAngularPhase != DAP::WaitVertex) {
+      allowRel = true;
+      ax = st.dimAngVx;
+      ay = st.dimAngVy;
+    }
+    if (!ParseWorldPoint(dimTrim, &px, &py, allowRel, ax, ay)) {
+      log.push_back("DIMANGULAR — X,Y or @dx,dy from vertex.");
+      cmdBuf[0] = '\0';
+      return;
+    }
+    SubmitViewportPick(st, px, py, log, false, false);
+    cmdBuf[0] = '\0';
+    return;
+  }
+
   std::string low = ToLower(line);
   for (const CmdEntry& e : kRegistry) {
     if (low == ToLower(e.primary)) {
@@ -6771,6 +8142,35 @@ const char* RotateCommandFooterHint(const AppCommandState& st) {
   return "";
 }
 
+const char* ScaleCommandFooterHint(const AppCommandState& st) {
+  using K = AppCommandState::Kind;
+  using MP = AppCommandState::ModifyPhase;
+  using SP = AppCommandState::ScalePhase;
+  if (st.active != K::Scale)
+    return "";
+  if (st.modifyPhase == MP::PickSelection)
+    return "SCALE: Window-select — click two corners | ESC cancel";
+  if (st.modifyPhase == MP::NeedBase)
+    return "SCALE: Base point — click or X,Y | ESC cancel";
+  if (st.modifyPhase == MP::NeedDestination) {
+    switch (st.scalePhase) {
+    case SP::FactorPick:
+      return "SCALE: Second point or type factor (>0) — dist/base-ref | R = two-point ref length | ESC";
+    case SP::Ref_WaitP1:
+      return "SCALE ref: First point of reference length | ESC cancel";
+    case SP::Ref_WaitP2:
+      return "SCALE ref: Second point (reference length) | ESC cancel";
+    case SP::NewLength_WaitTypedOrP1:
+      return "SCALE ref: Type new length (model units) or pick first point of new length | ESC";
+    case SP::NewLength_WaitP2:
+      return "SCALE ref: Second point of new length (preview) | ESC cancel";
+    default:
+      return "";
+    }
+  }
+  return "";
+}
+
 const char* DeleteCommandFooterHint(const AppCommandState& st) {
   if (st.active != AppCommandState::Kind::Delete)
     return "";
@@ -6857,6 +8257,13 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
   if (st.active == K::IdPoint)
     return "ID: Pick point (OSNAP when enabled) or type X,Y — logs UCS World | ESC cancel";
 
+  if (st.active == K::SurveyInverse) {
+    using SIP = AppCommandState::SurveyInversePhase;
+    if (st.surveyInversePhase == SIP::WaitFrom)
+      return "INVERSE: First point — pick or X,Y (Easting, Northing) | ESC cancel";
+    return "INVERSE: Second point — pick or X,Y / @ from first | ESC cancel";
+  }
+
   if (st.active == K::Polyline) {
     using SAP = AppCommandState::SegmentAnglePickPhase;
     if (st.polylinePhase == PP::NeedFirstPoint)
@@ -6915,14 +8322,29 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
       return "MTEXT: Edit in drawing box — Ctrl+Enter reformats | Save to place | Esc cancel";
     }
   }
-  if (st.active == K::DimAligned) {
+  if (st.active == K::DimAligned || st.active == K::DimLinear) {
     switch (st.dimPhase) {
     case DP::WaitExt1:
-      return "DIMALIGNED: Extension 1 | ESC cancel";
+      return st.active == K::DimLinear ? "DIMLINEAR: Extension 1 | ESC cancel" : "DIMALIGNED: Extension 1 | ESC cancel";
     case DP::WaitExt2:
-      return "DIMALIGNED: Extension 2 | ESC cancel";
+      return st.active == K::DimLinear ? "DIMLINEAR: Extension 2 | ESC cancel" : "DIMALIGNED: Extension 2 | ESC cancel";
     case DP::WaitDimLinePt:
-      return "DIMALIGNED: Offset from measured line — preview follows cursor | ESC cancel";
+      return st.active == K::DimLinear
+                 ? "DIMLINEAR: Line — dominant X vs Y from chord mid; H / V keys; X,Y | @ from chord mid | ESC"
+                 : "DIMALIGNED: Offset — click | X,Y | @ from chord mid | ESC";
+    }
+  }
+  if (st.active == K::DimAngular) {
+    using DAP = AppCommandState::DimAngularPhase;
+    switch (st.dimAngularPhase) {
+    case DAP::WaitVertex:
+      return "DIMANGULAR: Vertex | X,Y | ESC cancel";
+    case DAP::WaitRay1:
+      return "DIMANGULAR: First ray point | X,Y | @ from vertex | ESC";
+    case DAP::WaitRay2:
+      return "DIMANGULAR: Second ray point | X,Y | @ from vertex | ESC";
+    case DAP::WaitArc:
+      return "DIMANGULAR: Arc radius (bisector) | click | X,Y | @ from vertex | ESC";
     }
   }
   return "";

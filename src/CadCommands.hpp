@@ -98,7 +98,7 @@ inline void ResolveEntityColorForViewport(const EntityAttributes& attr, float de
 
 struct CadAnnotation {
 
-  enum class Kind { Text = 0, Mtext = 1, DimAligned = 2 };
+  enum class Kind { Text = 0, Mtext = 1, DimAligned = 2, DimLinear = 3, DimAngular = 4 };
 
   Kind kind = Kind::Text;
 
@@ -118,13 +118,23 @@ struct CadAnnotation {
 
   float boxMinX = 0.f, boxMinY = 0.f, boxMaxX = 0.f, boxMaxY = 0.f;
 
-  /// \c Kind::DimAligned — extension definition points (on measured geometry).
+  /// \c Kind::DimAligned / \c DimLinear / \c DimAngular — extension or ray points (on measured geometry).
 
   float dimExt1X = 0.f, dimExt1Y = 0.f, dimExt2X = 0.f, dimExt2Y = 0.f;
 
-  /// Signed perpendicular distance from chord midpoint to dimension line along N = (-T.y, T.x), T = normalize(e2-e1).
+  /// \c Kind::DimAngular — vertex (center) of the measured angle.
+
+  float dimAngVertexX = 0.f;
+
+  float dimAngVertexY = 0.f;
+
+  /// Signed distance from chord midpoint to dimension line: aligned uses N=(-T.y,T.x) with T=normalize(e2-e1); linear uses N=(0,1) for horizontal span or N=(1,0) for vertical span; angular uses arc radius (world units).
 
   float dimSignedOffset = 0.f;
+
+  /// \c Kind::DimLinear only — if true, measures |Y2−Y1| with a vertical dimension line; if false, |X2−X1| with horizontal dim line.
+
+  bool dimLinearVertical = false;
 
   /// If >= 0, this MTEXT is the viewport label for \c surveyPoints[this index] (bidirectional link).
   int surveyPointLabelFor = -1;
@@ -141,18 +151,65 @@ bool CadDimAlignedGeometry(const CadAnnotation& a, float* sx1, float* sy1, float
 
 
 
+/// Horizontal linear dimension: world-X span between extension X coordinates; dimension line is horizontal.
+
+bool CadDimLinearGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx,
+
+                          float* ty, float* nx, float* ny, float* measLen);
+
+
+
+/// \ref CadDimAlignedGeometry or \ref CadDimLinearGeometry based on \p a.kind.
+
+bool CadDimAnyGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx, float* ty,
+
+                       float* nx, float* ny, float* measLen);
+
+
+
 /// Live DIMALIGNED preview after extension points are set (\p st.dimPhase == WaitDimLinePt).
 
 bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out);
 
 
 
+/// Updates \p st.dimLinearDraftVertical from cursor vs chord midpoint unless user locked with H/V.
+
+void CadDimLinearUpdateDraftOrientation(AppCommandState& st, float cursorWx, float cursorWy);
+
+/// \p vertical true = measure |ΔY| (vertical dimension line); false = measure |ΔX| (horizontal dim line).
+/// Locks orientation until the crosshair moves enough to clear the user lock.
+
+void CadDimLinearApplyHVHotkey(AppCommandState& st, bool vertical, std::vector<std::string>& log);
+
+/// Live DIMLINEAR preview (\p st.active == DimLinear, \p st.dimPhase == WaitDimLinePt).
+
+bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out);
+
+/// Format a positive angle (radians) as \c D°M'S" with decimal seconds (survey style).
+
+std::string CadFormatAngleDegMinSecFromRad(float angleRad);
+
+/// Whole-circle bearing in **degrees** clockwise from north (e.g. from \ref BearingCwNorthDegFromMathAngleRad) as
+/// \c D°M'S" with decimal seconds; normalized to \c [0,360).
+
+std::string CadFormatBearingCwNorthDegMinSec(float bearingDegClockwiseFromNorth);
+
+/// Live DIMANGULAR preview (\p st.active == DimAngular, \p dimAngularPhase == WaitArc).
+
+bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out);
+
+/// After vertex / ray / radius edits, re-place label along the angle bisector.
+
+void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float modelUnitsPerPlottedInch);
+
 /// After editing extension points or dimension offset, restore text from fixed (normal, tangent) offsets vs dim mid.
 
 void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, float alongT);
 
+/// Recompute dimension text from current geometry (linear / aligned / angular).
 
-
+void CadDimRefreshMeasurementText(CadAnnotation* ann);
 
 
 /// Committed 3-point arc (circumcircle + start/sweep in radians from +X).
@@ -245,6 +302,10 @@ int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float or
 
 bool CadRotatePreviewTheta(const AppCommandState& cmd, float curX, float curY, float* outThetaRad);
 
+/// \c Kind::Scale, \c modifyPhase == NeedDestination — live scale from cursor (see \ref AppCommandState::scalePhase).
+
+bool CadScalePreviewFactor(const AppCommandState& cmd, float curX, float curY, float* outScale);
+
 
 
 /// MOVE/COPY destination drag or ROTATE angle preview — ghost annotations for ImGui overlay.
@@ -279,11 +340,17 @@ struct AppCommandState {
 
     DimAligned,
 
+    DimLinear,
+
+    DimAngular,
+
     Move,
 
     Copy,
 
     Rotate,
+
+    Scale,
 
     Delete,
 
@@ -295,7 +362,11 @@ struct AppCommandState {
 
     Offset,
 
-    IdPoint
+    IdPoint,
+
+    /// Two-point inverse: horizontal distance and bearing (clockwise from north) between picks (World X=E, Y=N).
+
+    SurveyInverse
 
   } active = Kind::None;
 
@@ -520,9 +591,29 @@ struct AppCommandState {
 
   enum class DimPhase { WaitExt1, WaitExt2, WaitDimLinePt } dimPhase = DimPhase::WaitExt1;
 
+  /// \c Kind::DimAngular — vertex then two ray points then arc radius pick.
+
+  enum class DimAngularPhase { WaitVertex, WaitRay1, WaitRay2, WaitArc } dimAngularPhase = DimAngularPhase::WaitVertex;
+
+  float dimAngVx = 0.f;
+
+  float dimAngVy = 0.f;
+
   float dimE1x = 0.f, dimE1y = 0.f;
 
   float dimE2x = 0.f, dimE2y = 0.f;
+
+  /// \c Kind::DimLinear, \p dimPhase == WaitDimLinePt — preview orientation (horizontal vs vertical span).
+
+  bool dimLinearDraftVertical = false;
+
+  /// When true, \p dimLinearDraftVertical is fixed until the crosshair moves from \p dimLinearLockCursorW*.
+
+  bool dimLinearOrientUserLock = false;
+
+  float dimLinearLockCursorWx = 0.f;
+
+  float dimLinearLockCursorWy = 0.f;
 
 
 
@@ -715,6 +806,8 @@ struct AppCommandState {
 
   int mtextGripAnnotationIndex = -1;
 
+  /// 0–3 = MTEXT box corners; 4 = survey-linked label center (move whole box).
+
   int mtextGripCorner = -1;
 
   float mtextGripFixedCornerX = 0.f;
@@ -727,6 +820,12 @@ struct AppCommandState {
 
   float mtextGripOrigBoxMinX = 0.f, mtextGripOrigBoxMaxX = 0.f, mtextGripOrigBoxMinY = 0.f,
       mtextGripOrigBoxMaxY = 0.f;
+
+  /// World pick at MTEXT grip mousedown (whole-label drag uses delta from here).
+
+  float mtextGripDownWorldX = 0.f;
+
+  float mtextGripDownWorldY = 0.f;
 
 
 
@@ -804,6 +903,31 @@ struct AppCommandState {
 
   float modifyBaseY = 0.f;
 
+  /// \c Kind::Scale — after base pick: reference length (world) so scale = new length / this value (or distance /
+  /// base-to-cursor over this value in \c ScalePhase::FactorPick).
+
+  float scaleRefDist = 1.f;
+
+  /// \c Kind::Scale — sub-state while \c modifyPhase == NeedDestination (after base).
+
+  enum class ScalePhase {
+
+    FactorPick, ///< Default: \c scaleRefDist from selection vs base; scale = dist(base,cursor)/ref or typed factor.
+
+    Ref_WaitP1, ///< First point of explicit reference length segment.
+
+    Ref_WaitP2, ///< Second point sets \c scaleRefDist.
+
+    NewLength_WaitTypedOrP1, ///< Type new length, or pick first point of new-length segment.
+
+    NewLength_WaitP2, ///< Second pick completes scale = dist(new seg)/\c scaleRefDist.
+
+  } scalePhase = ScalePhase::FactorPick;
+
+  float scaleRefP1X = 0.f, scaleRefP1Y = 0.f;
+
+  float scaleNewLenP1X = 0.f, scaleNewLenP1Y = 0.f;
+
 
 
   // --- ROTATE ---
@@ -861,6 +985,12 @@ struct AppCommandState {
   int createPointsNextId = 1;
 
   bool showCreatePointsWindow = false;
+
+  enum class SurveyInversePhase { WaitFrom, WaitTo } surveyInversePhase = SurveyInversePhase::WaitFrom;
+
+  float surveyInverseFromX = 0.f;
+
+  float surveyInverseFromY = 0.f;
 
   bool showViewPointsWindow = false;
 
@@ -991,6 +1121,8 @@ inline void ClearMtextGripInteraction(AppCommandState& st) {
   st.mtextGripMoveActive = false;
   st.mtextGripAnnotationIndex = -1;
   st.mtextGripCorner = -1;
+  st.mtextGripDownWorldX = 0.f;
+  st.mtextGripDownWorldY = 0.f;
 }
 
 /// Cancel in-progress MTEXT grip edit and restore the box (selection change, new command, fence, etc.).
@@ -1200,13 +1332,21 @@ void CancelMtextRichEditor(AppCommandState& st, std::vector<std::string>* log);
 
 void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log);
 
+void StartDimLinearCommand(AppCommandState& st, std::vector<std::string>& log);
+
+void StartDimAngularCommand(AppCommandState& st, std::vector<std::string>& log);
+
 void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log);
+
+void StartSurveyInverseCommand(AppCommandState& st, std::vector<std::string>& log);
 
 void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log);
 
 void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log);
 
 void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log);
+
+void StartScaleCommand(AppCommandState& st, std::vector<std::string>& log);
 
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log);
 
@@ -1324,6 +1464,8 @@ const char* CircleCommandFooterHint(const AppCommandState& st);
 const char* ModifyCommandFooterHint(const AppCommandState& st);
 
 const char* RotateCommandFooterHint(const AppCommandState& st);
+
+const char* ScaleCommandFooterHint(const AppCommandState& st);
 
 const char* DeleteCommandFooterHint(const AppCommandState& st);
 

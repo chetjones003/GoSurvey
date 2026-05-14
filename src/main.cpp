@@ -163,6 +163,11 @@ void RotatePreviewPt(float bx, float by, float rad, float* x, float* y) {
   *y = by + s * dx + c * dy;
 }
 
+void ScalePreviewPt(float bx, float by, float sc, float* x, float* y) {
+  *x = bx + sc * (*x - bx);
+  *y = by + sc * (*y - by);
+}
+
 void AppendArcPolylineStrip(std::vector<float>* out, float z, const CadArc& a, int n = 48) {
   for (int i = 0; i < n; ++i) {
     const float u0 = static_cast<float>(i) / static_cast<float>(n);
@@ -320,6 +325,116 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           prevLines->push_back(0.f);
           prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3)] + dx);
           prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)] + dy);
+          prevLines->push_back(0.f);
+        }
+      }
+    }
+    return;
+  }
+
+  if (cmd.active == K::Scale && cmd.modifyPhase == MP::NeedDestination) {
+    using SP = AppCommandState::ScalePhase;
+    if (cmd.scalePhase == SP::Ref_WaitP2) {
+      prevLines->push_back(cmd.scaleRefP1X);
+      prevLines->push_back(cmd.scaleRefP1Y);
+      prevLines->push_back(0.f);
+      prevLines->push_back(curX);
+      prevLines->push_back(curY);
+      prevLines->push_back(0.f);
+      return;
+    }
+    if (cmd.scalePhase == SP::NewLength_WaitP2) {
+      prevLines->push_back(cmd.scaleNewLenP1X);
+      prevLines->push_back(cmd.scaleNewLenP1Y);
+      prevLines->push_back(0.f);
+      prevLines->push_back(curX);
+      prevLines->push_back(curY);
+      prevLines->push_back(0.f);
+    }
+    float sc = 1.f;
+    if (!CadScalePreviewFactor(cmd, curX, curY, &sc))
+      return;
+    const float bx = cmd.modifyBaseX;
+    const float by = cmd.modifyBaseY;
+    for (const auto& e : cmd.selection) {
+      if (e.type == SelectedEntity::Type::LineSeg) {
+        const size_t k = static_cast<size_t>(e.index) * 6;
+        if (k + 5 >= cmd.userLinesFlat.size())
+          continue;
+        for (int i = 0; i < 2; ++i) {
+          float x = cmd.userLinesFlat[k + i * 3];
+          float y = cmd.userLinesFlat[k + i * 3 + 1];
+          ScalePreviewPt(bx, by, sc, &x, &y);
+          prevLines->push_back(x);
+          prevLines->push_back(y);
+          prevLines->push_back(0.f);
+        }
+      } else if (e.type == SelectedEntity::Type::Circle) {
+        const size_t k = static_cast<size_t>(e.index) * 3;
+        if (k + 2 >= cmd.userCirclesCxCyR.size())
+          continue;
+        float x = cmd.userCirclesCxCyR[k];
+        float y = cmd.userCirclesCxCyR[k + 1];
+        float r = cmd.userCirclesCxCyR[k + 2];
+        ScalePreviewPt(bx, by, sc, &x, &y);
+        r *= sc;
+        prevCircles->push_back(x);
+        prevCircles->push_back(y);
+        prevCircles->push_back(r);
+      } else if (e.type == SelectedEntity::Type::Arc) {
+        const size_t k = static_cast<size_t>(e.index);
+        if (k >= cmd.userArcs.size())
+          continue;
+        CadArc a = cmd.userArcs[k];
+        ScalePreviewPt(bx, by, sc, &a.cx, &a.cy);
+        a.r *= sc;
+        AppendArcPolylineStrip(prevLines, 0.f, a);
+      } else if (e.type == SelectedEntity::Type::Ellipse) {
+        const size_t k = static_cast<size_t>(e.index);
+        if (k >= cmd.userEllipses.size())
+          continue;
+        CadEllipse el = cmd.userEllipses[k];
+        float mx = el.cx + el.majVx;
+        float my = el.cy + el.majVy;
+        ScalePreviewPt(bx, by, sc, &el.cx, &el.cy);
+        ScalePreviewPt(bx, by, sc, &mx, &my);
+        el.majVx = mx - el.cx;
+        el.majVy = my - el.cy;
+        AppendEllipsePolylineStrip(prevLines, 0.f, el);
+      } else if (e.type == SelectedEntity::Type::Polyline) {
+        const int pi = e.index;
+        if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+          continue;
+        const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
+        const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+        const bool closed =
+            static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+        for (int vi = v0; vi + 1 < v1; ++vi) {
+          float x0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3)];
+          float y0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
+          float x1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
+          float y1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
+          ScalePreviewPt(bx, by, sc, &x0, &y0);
+          ScalePreviewPt(bx, by, sc, &x1, &y1);
+          prevLines->push_back(x0);
+          prevLines->push_back(y0);
+          prevLines->push_back(0.f);
+          prevLines->push_back(x1);
+          prevLines->push_back(y1);
+          prevLines->push_back(0.f);
+        }
+        if (closed && v1 - v0 >= 2) {
+          float x0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
+          float y0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)];
+          float x1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3)];
+          float y1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)];
+          ScalePreviewPt(bx, by, sc, &x0, &y0);
+          ScalePreviewPt(bx, by, sc, &x1, &y1);
+          prevLines->push_back(x0);
+          prevLines->push_back(y0);
+          prevLines->push_back(0.f);
+          prevLines->push_back(x1);
+          prevLines->push_back(y1);
           prevLines->push_back(0.f);
         }
       }
@@ -520,7 +635,7 @@ int main() {
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
 
-  RunStartupSplash(window, 2.0);
+  //RunStartupSplash(window, 1.0);
   GlfwApplyMainStageWindowChrome(window);
 
   AppCommandState cmd;
@@ -530,6 +645,7 @@ int main() {
   cmdLog.push_back("GoSurvey CAD shell ready.");
   cmdLog.push_back(
       "LINE/L … SURVEY: CREATEPOINTS (CRTPTS), VIEWPOINTS (VWPTS), IMPORTPOINTS (IMPPTS), EXPORTPOINTS (EXPPTS), "
+      "INVERSE (INV), "
       "JSON database — idle: two-click select. MMB "
       "pan.");
   TryLoadStartupWorkspaceTemplate(cmd, cmdLog);
@@ -681,6 +797,16 @@ int main() {
                         &panY, &zoom, &curX, &curY, &curRawX, &curRawY, &fbW, &fbH, &snapHit);
     cmd.uiCursorWorldX = curX;
     cmd.uiCursorWorldY = curY;
+    {
+      ImGuiIO& ioDim = ImGui::GetIO();
+      if (!ioDim.WantTextInput && cmd.active == AppCommandState::Kind::DimLinear &&
+          cmd.dimPhase == AppCommandState::DimPhase::WaitDimLinePt) {
+        if (ImGui::IsKeyPressed(ImGuiKey_H, false))
+          CadDimLinearApplyHVHotkey(cmd, false, cmdLog);
+        else if (ImGui::IsKeyPressed(ImGuiKey_V, false))
+          CadDimLinearApplyHVHotkey(cmd, true, cmdLog);
+      }
+    }
     DrawCommandLinePanel(cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd);
     DrawCadStatusBarStrip(cmd, curX, curY, 0.f, &orthoEnabled, &gridVisible);
 
@@ -786,9 +912,25 @@ int main() {
         cmd.ellPhase == AppCommandState::EllipsePhase::WaitMajorEnd)
       PushRubberSeg(rubberLines, cmd.ellCx, cmd.ellCy, curX, curY);
 
-    if (cmd.active == AppCommandState::Kind::DimAligned &&
+    if ((cmd.active == AppCommandState::Kind::DimAligned || cmd.active == AppCommandState::Kind::DimLinear) &&
         cmd.dimPhase == AppCommandState::DimPhase::WaitExt2)
       PushRubberSeg(rubberLines, cmd.dimE1x, cmd.dimE1y, curX, curY);
+
+    if (cmd.active == AppCommandState::Kind::SurveyInverse &&
+        cmd.surveyInversePhase == AppCommandState::SurveyInversePhase::WaitTo)
+      PushRubberSeg(rubberLines, cmd.surveyInverseFromX, cmd.surveyInverseFromY, curX, curY);
+    if (cmd.active == AppCommandState::Kind::DimAngular) {
+      using DAP = AppCommandState::DimAngularPhase;
+      if (cmd.dimAngularPhase == DAP::WaitRay1)
+        PushRubberSeg(rubberLines, cmd.dimAngVx, cmd.dimAngVy, curX, curY);
+      else if (cmd.dimAngularPhase == DAP::WaitRay2) {
+        PushRubberSeg(rubberLines, cmd.dimAngVx, cmd.dimAngVy, cmd.dimE1x, cmd.dimE1y);
+        PushRubberSeg(rubberLines, cmd.dimAngVx, cmd.dimAngVy, curX, curY);
+      } else if (cmd.dimAngularPhase == DAP::WaitArc) {
+        PushRubberSeg(rubberLines, cmd.dimAngVx, cmd.dimAngVy, cmd.dimE1x, cmd.dimE1y);
+        PushRubberSeg(rubberLines, cmd.dimAngVx, cmd.dimAngVy, cmd.dimE2x, cmd.dimE2y);
+      }
+    }
 
     if (cmd.active == AppCommandState::Kind::Circle) {
       using CP = AppCommandState::CirclePhase;

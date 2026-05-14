@@ -1499,7 +1499,7 @@ static void MaybeRebaseLargeCadCoordinatesAfterImport(AppCommandState& st, std::
     sub2(&an.insX, &an.insY);
     sub2(&an.boxMinX, &an.boxMinY);
     sub2(&an.boxMaxX, &an.boxMaxY);
-    if (an.kind == CadAnnotation::Kind::DimAligned) {
+    if (an.kind == CadAnnotation::Kind::DimAligned || an.kind == CadAnnotation::Kind::DimLinear) {
       sub2(&an.dimExt1X, &an.dimExt1Y);
       sub2(&an.dimExt2X, &an.dimExt2Y);
     }
@@ -1647,9 +1647,9 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     const CadAnnotation& an = st.cadAnnotations[ai];
     if (an.kind == CadAnnotation::Kind::Text)
       ++entityHandleCount;
-    else if (an.kind == CadAnnotation::Kind::DimAligned) {
+    else if (an.kind == CadAnnotation::Kind::DimAligned || an.kind == CadAnnotation::Kind::DimLinear) {
       float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
-      if (!CadDimAlignedGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
+      if (!CadDimAnyGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
         continue;
       entityHandleCount += 4; // three LINE + one TEXT
     } else
@@ -2544,9 +2544,9 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       emitPair(230, "1.0");
       emitPair(1, txt);
       ++nTextOut;
-    } else if (an.kind == CadAnnotation::Kind::DimAligned) {
+    } else if (an.kind == CadAnnotation::Kind::DimAligned || an.kind == CadAnnotation::Kind::DimLinear) {
       float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
-      if (!CadDimAlignedGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
+      if (!CadDimAnyGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
         continue;
       const float gap = std::clamp(0.012f * meas, 1.e-5f * meas, 0.12f * meas);
       const float over = std::clamp(0.02f * meas, 1.e-5f * meas, 0.1f * meas);

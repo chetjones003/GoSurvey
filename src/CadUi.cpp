@@ -356,6 +356,7 @@ enum class RibbonIconKind : std::uint8_t {
   Arc,
   Ellipse,
   Dim,
+  DimLinear,
   Id,
   Text,
   Mtext,
@@ -371,6 +372,7 @@ enum class RibbonIconKind : std::uint8_t {
   Scale,
   Mirror,
   SurveyPoint,
+  SurveyInverse,
   Layers,
 };
 
@@ -469,18 +471,37 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     break;
   }
   case RibbonIconKind::Dim: {
-    // Linear dimension: witness lines + horizontal dim line with outward arrows in accent.
+    // Aligned dimension: two parallel witness segments (white) + perpendicular dim line with outward arrows (accent).
+    const float inv = 0.70710678f;
+    const ImVec2 u(inv, -inv);   // extension direction (~45° up-right in screen space)
+    const ImVec2 v(inv, inv);    // dimension line (perpendicular to extensions)
+    const float dimHalf = std::min(w, h) * 0.26f;
+    const float extHalf = std::min(w, h) * 0.11f;
+    const ImVec2 p0(c.x - v.x * dimHalf, c.y - v.y * dimHalf);
+    const ImVec2 p1(c.x + v.x * dimHalf, c.y + v.y * dimHalf);
+    dl->AddLine(ImVec2(p0.x - u.x * extHalf, p0.y - u.y * extHalf), ImVec2(p0.x + u.x * extHalf, p0.y + u.y * extHalf),
+                col, t);
+    dl->AddLine(ImVec2(p1.x - u.x * extHalf, p1.y - u.y * extHalf), ImVec2(p1.x + u.x * extHalf, p1.y + u.y * extHalf),
+                col, t);
+    dl->AddLine(p0, p1, acc, t * 1.05f);
+    const float head = std::clamp(std::min(w, h) * 0.095f, 2.5f, 5.5f);
+    RibbonStrokeArrow(dl, p0, ImVec2(-v.x, -v.y), head, acc, t);
+    RibbonStrokeArrow(dl, p1, ImVec2(v.x, v.y), head, acc, t);
+    break;
+  }
+  case RibbonIconKind::DimLinear: {
     const float xL = mn.x + w * 0.24f;
     const float xR = mx.x - w * 0.24f;
     const float yTop = mn.y + h * 0.2f;
     const float yBot = mx.y - h * 0.2f;
     const float yDim = c.y;
+    const ImU32 orange = IM_COL32(234, 126, 40, 255);
     dl->AddLine(ImVec2(xL, yTop), ImVec2(xL, yBot), col, t);
     dl->AddLine(ImVec2(xR, yTop), ImVec2(xR, yBot), col, t);
-    dl->AddLine(ImVec2(xL, yDim), ImVec2(xR, yDim), acc, t);
-    const float head = std::min(w, h) * 0.11f;
-    RibbonStrokeArrow(dl, ImVec2(xL, yDim), ImVec2(-1.f, 0.f), head, acc, t);
-    RibbonStrokeArrow(dl, ImVec2(xR, yDim), ImVec2(1.f, 0.f), head, acc, t);
+    dl->AddLine(ImVec2(xL, yDim), ImVec2(xR, yDim), orange, t * 1.05f);
+    const float head = std::clamp(std::min(w, h) * 0.1f, 2.5f, 5.5f);
+    RibbonStrokeArrow(dl, ImVec2(xL, yDim), ImVec2(-1.f, 0.f), head, orange, t);
+    RibbonStrokeArrow(dl, ImVec2(xR, yDim), ImVec2(1.f, 0.f), head, orange, t);
     break;
   }
   case RibbonIconKind::Id: {
@@ -711,6 +732,22 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     dl->AddCircle(c, std::min(w, h) * 0.12f, col, 16, t);
     break;
   }
+  case RibbonIconKind::SurveyInverse: {
+    const float r = std::min(w, h) * 0.07f;
+    const ImVec2 p0(mn.x + w * 0.22f, mx.y - h * 0.28f);
+    const ImVec2 p1(mx.x - w * 0.22f, mn.y + h * 0.28f);
+    dl->AddCircleFilled(p0, r, col, 12);
+    dl->AddCircleFilled(p1, r, col, 12);
+    dl->AddLine(p0, p1, acc, t * 1.05f);
+    const ImVec2 d(p1.x - p0.x, p1.y - p0.y);
+    const float len = std::sqrt(d.x * d.x + d.y * d.y);
+    if (len > 1e-4f) {
+      const float inv = 1.f / len;
+      RibbonStrokeArrow(dl, p1, ImVec2(d.x * inv, d.y * inv), std::clamp(std::min(w, h) * 0.1f, 2.5f, 5.5f), acc,
+                         t);
+    }
+    break;
+  }
   case RibbonIconKind::Layers: {
     for (int i = 0; i < 3; ++i) {
       const float y = mn.y + h * (0.18f + static_cast<float>(i) * 0.22f);
@@ -790,8 +827,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   const float wAnn = RibbonSectionWidthPx(2, toolCell.x);
   const float wMod = RibbonSectionWidthPx(modCols, toolCell.x);
   const float wView = RibbonSectionWidthPx(2, toolCell.x);
-  const float wInq = RibbonSectionWidthPx(2, toolCell.x);
-  const float wSrv = RibbonSectionWidthPx(1, toolCell.x);
+  const float wInq = RibbonSectionWidthPx(3, toolCell.x);
+  const float wSrv = RibbonSectionWidthPx(2, toolCell.x);
 
   ImGui::BeginChild("RibbonToolsLeft", ImVec2(-kLayerPanelW - st.ItemSpacing.x, panelH), false,
                     ImGuiWindowFlags_HorizontalScrollbar);
@@ -850,6 +887,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       StartRotateCommand(cmd, log);
     RibbonItemHelp("Rotate — turn selection around a base point by angle.\nCommand bar: ROTATE or RO");
     g(i++);
+    if (RibbonIconButton("##RibbonScale", toolCell, RibbonIconKind::Scale))
+      StartScaleCommand(cmd, log);
+    RibbonItemHelp("Scale — uniform scale about a base point (window-select like Move).\nAfter base: pick scale, "
+                     "type factor (>0), or R / REFERENCE for two-point reference length then new length (type or two "
+                     "picks).\nCommand bar: SCALE or SC");
+    g(i++);
     if (RibbonIconButton("##RibbonErase", toolCell, RibbonIconKind::Erase))
       StartDeleteCommand(cmd, log);
     RibbonItemHelp("Erase — remove entities (window or crossing selection).\nCommand bar: DELETE or DEL");
@@ -868,10 +911,6 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         "Offset — parallel lines, concentric circles/arcs, offset polylines and ellipses.\nCommand bar: OFFSET or O");
     g(i++);
     ImGui::BeginDisabled();
-    RibbonIconButton("##RibbonScale", toolCell, RibbonIconKind::Scale);
-    RibbonItemHelp("Scale — resize selection relative to a base point (not implemented yet).\nCommand bar: (none yet)",
-                   ImGuiHoveredFlags_AllowWhenDisabled);
-    g(i++);
     RibbonIconButton("##RibbonMirror", toolCell, RibbonIconKind::Mirror);
     RibbonItemHelp("Mirror — flip selection across a mirror line (not implemented yet).\nCommand bar: (none yet)",
                    ImGuiHoveredFlags_AllowWhenDisabled);
@@ -899,6 +938,11 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       StartDimAlignedCommand(cmd, log);
     RibbonItemHelp("Aligned dimension — extension lines and text.\nCommand bar: DIMALIGNED or DAL");
     ImGui::SameLine(0, st.ItemSpacing.x);
+    if (RibbonIconButton("##RibbonDimLin", toolCell, RibbonIconKind::DimLinear))
+      StartDimLinearCommand(cmd, log);
+    RibbonItemHelp(
+        "Linear dimension — horizontal or vertical distance in X or Y; third pick sets line position (cursor or H/V).\nCommand bar: DIMLINEAR or DLI");
+    ImGui::SameLine(0, st.ItemSpacing.x);
     if (RibbonIconButton("##RibbonId", toolCell, RibbonIconKind::Id))
       StartIdPointCommand(cmd, log);
     RibbonItemHelp("ID — list UCS (World) X,Y,Z at a point (click or type coordinates).\nCommand bar: ID");
@@ -908,12 +952,17 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
   RibbonSectionBegin("RibbonSecSurvey", "Survey", wSrv, panelH);
   {
-    ImGui::BeginDisabled();
-    RibbonIconButton("##RibbonPoint", toolCell, RibbonIconKind::SurveyPoint);
+    if (RibbonIconButton("##RibbonPoint", toolCell, RibbonIconKind::SurveyPoint))
+      StartCreatePointsCommand(cmd, log);
     RibbonItemHelp(
-        "Survey point — place field points in the drawing (coming soon).\nCommand bar: CREATEPOINTS or CRTPTS",
-        ImGuiHoveredFlags_AllowWhenDisabled);
-    ImGui::EndDisabled();
+        "Create points — open the create-points panel; enable \"Place points with clicks on Drawing1\" to add "
+        "survey points in the viewport.\nCommand bar: CREATEPOINTS or CRTPTS");
+    ImGui::SameLine(0, st.ItemSpacing.x);
+    if (RibbonIconButton("##RibbonInverse", toolCell, RibbonIconKind::SurveyInverse))
+      StartSurveyInverseCommand(cmd, log);
+    RibbonItemHelp(
+        "Inverse — two-point survey leg: horizontal distance and bearing (clockwise from north) in the command log "
+        "(World X=Easting, Y=Northing).\nCommand bar: INVERSE or INV");
   }
   RibbonSectionEnd();
   ImGui::SameLine(0, 8);
@@ -2234,8 +2283,9 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
   const char* kindLabel =
       ann.kind == CadAnnotation::Kind::Text       ? "TEXT"
       : ann.kind == CadAnnotation::Kind::Mtext   ? "MTEXT"
-      : ann.kind == CadAnnotation::Kind::DimAligned ? "DIMALIGNED"
-                                                   : "?";
+      : ann.kind == CadAnnotation::Kind::DimAligned   ? "DIMALIGNED"
+      : ann.kind == CadAnnotation::Kind::DimLinear    ? "DIMLINEAR"
+                                                      : "?";
 
   auto syncMtextInsFromBox = [&]() {
     const float mnX = std::min(ann.boxMinX, ann.boxMaxX);
@@ -2404,6 +2454,7 @@ void DrawAnnotationGeometryOnly(const AppCommandState& cmd, const std::vector<Se
     kinds.push_back(a.kind == CadAnnotation::Kind::Text       ? "TEXT"
                     : a.kind == CadAnnotation::Kind::Mtext    ? "MTEXT"
                     : a.kind == CadAnnotation::Kind::DimAligned ? "DIMALIGNED"
+                    : a.kind == CadAnnotation::Kind::DimLinear  ? "DIMLINEAR"
                                                               : "?");
     phIn.push_back(a.plottedHeightInches);
     mwHeight.push_back(CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch));
@@ -2921,6 +2972,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
       const char* lab = k == CadAnnotation::Kind::Text       ? "TEXT"
                         : k == CadAnnotation::Kind::Mtext    ? "MTEXT"
                         : k == CadAnnotation::Kind::DimAligned ? "DIMALIGNED"
+                        : k == CadAnnotation::Kind::DimLinear  ? "DIMLINEAR"
                                                               : "Annotation";
       ImGui::TextDisabled("%s", lab);
     } else
@@ -3138,18 +3190,37 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
       return "MTEXT — edit in drawing box (Ctrl+Enter reformats; Save to place):";
     }
   }
-  if (cmd.active == AppCommandState::Kind::DimAligned) {
+  if (cmd.active == AppCommandState::Kind::DimAligned || cmd.active == AppCommandState::Kind::DimLinear) {
     switch (cmd.dimPhase) {
     case AppCommandState::DimPhase::WaitExt1:
-      return "DIM ext 1:";
+      return cmd.active == AppCommandState::Kind::DimLinear ? "DIMLINEAR ext 1:" : "DIM ext 1:";
     case AppCommandState::DimPhase::WaitExt2:
-      return "DIM ext 2:";
+      return cmd.active == AppCommandState::Kind::DimLinear ? "DIMLINEAR ext 2:" : "DIM ext 2:";
     case AppCommandState::DimPhase::WaitDimLinePt:
-      return "DIM line pt:";
+      return cmd.active == AppCommandState::Kind::DimLinear ? "DIMLINEAR line (cursor/H/V) or X,Y:"
+                                                           : "DIM line pt:";
+    }
+  }
+  if (cmd.active == AppCommandState::Kind::DimAngular) {
+    switch (cmd.dimAngularPhase) {
+    case AppCommandState::DimAngularPhase::WaitVertex:
+      return "DIMANGULAR vertex:";
+    case AppCommandState::DimAngularPhase::WaitRay1:
+      return "DIMANGULAR ray 1:";
+    case AppCommandState::DimAngularPhase::WaitRay2:
+      return "DIMANGULAR ray 2:";
+    case AppCommandState::DimAngularPhase::WaitArc:
+      return "DIMANGULAR arc / radius:";
     }
   }
   if (cmd.active == AppCommandState::Kind::IdPoint)
     return "ID — point (X,Y or click):";
+  if (cmd.active == AppCommandState::Kind::SurveyInverse) {
+    using SIP = AppCommandState::SurveyInversePhase;
+    if (cmd.surveyInversePhase == SIP::WaitFrom)
+      return "INVERSE — first point X,Y (Easting, Northing):";
+    return "INVERSE — second point X,Y or @ from first:";
+  }
   if (cmd.active == AppCommandState::Kind::Circle) {
     using CP = AppCommandState::CirclePhase;
     switch (cmd.circlePhase) {
@@ -3172,6 +3243,31 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     if (cmd.modifyPhase == MP::NeedBase)
       return "Base point X,Y:";
     return "Destination @dx,dy or X,Y:";
+  }
+  if (cmd.active == AppCommandState::Kind::Scale) {
+    using MP = AppCommandState::ModifyPhase;
+    using SP = AppCommandState::ScalePhase;
+    if (cmd.modifyPhase == MP::PickSelection)
+      return "SCALE — window opposite corner or cancel:";
+    if (cmd.modifyPhase == MP::NeedBase)
+      return "SCALE — base point X,Y:";
+    if (cmd.modifyPhase == MP::NeedDestination) {
+      switch (cmd.scalePhase) {
+      case SP::FactorPick:
+        return "SCALE — scale factor, second point from base, or R (reference):";
+      case SP::Ref_WaitP1:
+        return "SCALE ref — first point X,Y:";
+      case SP::Ref_WaitP2:
+        return "SCALE ref — second point X,Y:";
+      case SP::NewLength_WaitTypedOrP1:
+        return "SCALE ref — new length (number) or first point X,Y:";
+      case SP::NewLength_WaitP2:
+        return "SCALE ref — second point X,Y:";
+      default:
+        return "SCALE — command input:";
+      }
+    }
+    return "SCALE — command input:";
   }
   if (cmd.active == AppCommandState::Kind::Rotate) {
     using RP = AppCommandState::RotatePhase;
@@ -3328,6 +3424,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   const char* circFooter = CircleCommandFooterHint(cmd);
   const char* lineFooter = LineCommandFooterHint(cmd);
   const char* modFooter = ModifyCommandFooterHint(cmd);
+  const char* scaleFooter = ScaleCommandFooterHint(cmd);
   const char* rotFooter = RotateCommandFooterHint(cmd);
   const char* delFooter = DeleteCommandFooterHint(cmd);
   const char* joinFooter = JoinCommandFooterHint(cmd);
@@ -3365,6 +3462,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   footerH += wrappedBlockH(circFooter);
   footerH += wrappedBlockH(lineFooter);
   footerH += wrappedBlockH(modFooter);
+  footerH += wrappedBlockH(scaleFooter);
   footerH += wrappedBlockH(rotFooter);
   footerH += wrappedBlockH(delFooter);
   footerH += wrappedBlockH(joinFooter);
@@ -3433,6 +3531,11 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   if (footerNonEmpty(modFooter)) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextWrapped("%s", modFooter);
+    ImGui::PopStyleColor();
+  }
+  if (footerNonEmpty(scaleFooter)) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("%s", scaleFooter);
     ImGui::PopStyleColor();
   }
   if (footerNonEmpty(rotFooter)) {
@@ -3513,10 +3616,10 @@ static void AddAlignedDimText(ImDrawList* dl, ImFont* font, float fontPx, const 
 
 static int HitTestDimGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 avail, float worldLeft, float worldRight,
                           float worldBottom, float worldTop, const CadAnnotation& ann, float gripRadiusPx) {
-  if (ann.kind != CadAnnotation::Kind::DimAligned)
+  if (ann.kind != CadAnnotation::Kind::DimAligned && ann.kind != CadAnnotation::Kind::DimLinear)
     return -1;
   float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
-  if (!CadDimAlignedGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
+  if (!CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
     return -1;
   const float wx[5] = {ann.dimExt1X, ann.dimExt2X, sx1, sx2, ann.insX};
   const float wy[5] = {ann.dimExt1Y, ann.dimExt2Y, sy1, sy2, ann.insY};
@@ -3541,11 +3644,24 @@ static int HitTestMtextGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 
                             float gripRadiusPx) {
   if (ann.kind != CadAnnotation::Kind::Mtext)
     return -1;
-  const float wx[4] = {ann.boxMinX, ann.boxMaxX, ann.boxMaxX, ann.boxMinX};
-  const float wy[4] = {ann.boxMinY, ann.boxMinY, ann.boxMaxY, ann.boxMaxY};
   const float denx = worldRight - worldLeft + 1e-12f;
   const float deny = worldTop - worldBottom + 1e-12f;
   const float r2 = gripRadiusPx * gripRadiusPx;
+  if (ann.surveyPointLabelFor >= 0) {
+    const float cx = 0.5f * (ann.boxMinX + ann.boxMaxX);
+    const float cy = 0.5f * (ann.boxMinY + ann.boxMaxY);
+    const float u = (cx - worldLeft) / denx;
+    const float v = (worldTop - cy) / deny;
+    const float sx = imgPos.x + u * avail.x;
+    const float sy = imgPos.y + v * avail.y;
+    const float dx = mouseSx - sx;
+    const float dy = mouseSy - sy;
+    if (dx * dx + dy * dy <= r2)
+      return 4;
+    return -1;
+  }
+  const float wx[4] = {ann.boxMinX, ann.boxMaxX, ann.boxMaxX, ann.boxMinX};
+  const float wy[4] = {ann.boxMinY, ann.boxMinY, ann.boxMaxY, ann.boxMaxY};
   for (int i = 0; i < 4; ++i) {
     const float u = (wx[i] - worldLeft) / denx;
     const float v = (worldTop - wy[i]) / deny;
@@ -3613,27 +3729,19 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
 
   const ImGuiStyle& ist = ImGui::GetStyle();
   const float innerW = std::max(24.f, w - ist.WindowPadding.x * 2.f);
-  static const char kMtextHelp[] =
-      "Tags: [[b]]…[[/b]], [[i]]…[[/i]], [[u]]…[[/u]], [[caps]]…[[/caps]]. Ctrl+Enter reformats (normalize). "
-      "Save places or updates; Esc cancels.";
-  const float helpH = ImGui::CalcTextSize(kMtextHelp, nullptr, false, innerW).y + 4.f;
-  const float previewBodyH =
-      std::clamp(MtextRichWrappedHeight(ImGui::GetFont(), ImGui::GetFontSize(), innerW, cmd.mtextRichEditorBuf) + 6.f,
-                 36.f, 420.f);
-  const float previewH = previewBodyH + ist.FramePadding.y * 2.f;
   int editorLineCount = 1;
   for (unsigned char ch : cmd.mtextRichEditorBuf) {
     if (ch == '\n')
       ++editorLineCount;
   }
   const float lh = ImGui::GetTextLineHeightWithSpacing();
-  const float editorH = std::clamp(static_cast<float>(editorLineCount) * lh + ist.FramePadding.y * 2.f + 12.f, 72.f,
-                                   520.f);
-  const float toolbarH = ImGui::GetFrameHeightWithSpacing() * 2.f + ist.ItemSpacing.y;
-  const float btnRowH = ImGui::GetFrameHeightWithSpacing() + 6.f;
-  const float sepExtra = ist.ItemSpacing.y + 2.f;
-  const float hContent = ist.WindowPadding.y * 2.f + helpH + ist.ItemSpacing.y + previewH + toolbarH + sepExtra +
-                         editorH + btnRowH + ist.ItemSpacing.y;
+  const float editorH =
+      std::clamp(static_cast<float>(editorLineCount) * lh + ist.FramePadding.y * 2.f + 12.f, 96.f, 420.f);
+  const float hintH = ImGui::GetTextLineHeightWithSpacing() + 4.f;
+  const float fmtRowH = ImGui::GetFrameHeightWithSpacing() + 4.f;
+  const float btnRowH = ImGui::GetFrameHeightWithSpacing() + 8.f;
+  const float hContent = ist.WindowPadding.y * 2.f + hintH + ist.ItemSpacing.y + editorH + ist.ItemSpacing.y + fmtRowH +
+                         ist.ItemSpacing.y + btnRowH;
 
   float wxp = sx0 + kPad;
   float wyp = sy0 + kPad;
@@ -3648,59 +3756,10 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
   if (hContent > h + 0.5f)
     editorWinFlags |= ImGuiWindowFlags_AlwaysVerticalScrollbar;
   if (ImGui::BeginChild("##MtextRichEditor", ImVec2(w, h), ImGuiChildFlags_Borders, editorWinFlags)) {
-    ImGui::TextWrapped("%s", kMtextHelp);
-    if (ImGui::BeginChild("##mtext_rte_preview", ImVec2(0, previewH), true,
-                          ImGuiWindowFlags_NoNavInputs | ImGuiWindowFlags_NoNavFocus)) {
-      ImDrawList* pdl = ImGui::GetWindowDrawList();
-      const ImVec2 p0 = ImGui::GetCursorScreenPos();
-      const float pw = std::max(24.f, ImGui::GetContentRegionAvail().x);
-      const ImU32 prevCol = ImGui::GetColorU32(ImGuiCol_Text);
-      MtextRichDrawWrapped(pdl, ImGui::GetFont(), ImGui::GetFontSize(), p0, pw, prevCol, cmd.mtextRichEditorBuf);
-      ImGui::Dummy(ImVec2(pw, previewBodyH));
-      ImGui::EndChild();
-    }
-    ImGui::PushID("mtext_rte_tb");
-    if (ImGui::SmallButton("B"))
-      MtextRichWrapSelection(cmd, "[[b]]", "[[/b]]");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("I"))
-      MtextRichWrapSelection(cmd, "[[i]]", "[[/i]]");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("U"))
-      MtextRichWrapSelection(cmd, "[[u]]", "[[/u]]");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("CAPS"))
-      MtextRichWrapSelection(cmd, "[[caps]]", "[[/caps]]");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(std::max(120.f, ImGui::GetContentRegionAvail().x * 0.38f));
-    static const struct {
-      const char* label;
-      const char* utf8;
-    } kMathPick[] = {
-        {"\xCF\x80 pi", "\xCF\x80"},           // U+03C0
-        {"\xCE\xA3 Sigma", "\xCE\xA3"},       // U+03A3
-        {"\xE2\x88\x9E infinity", "\xE2\x88\x9E"}, // U+221E
-        {"\xE2\x89\xA4 leq", "\xE2\x89\xA4"}, // U+2264
-        {"\xE2\x89\xA5 geq", "\xE2\x89\xA5"}, // U+2265
-        {"\xC2\xB1 plus-minus", "\xC2\xB1"},   // U+00B1
-        {"\xE2\x88\x9A sqrt", "\xE2\x88\x9A"}, // U+221A
-        {"\xE2\x88\xAB integral", "\xE2\x88\xAB"}, // U+222B
-        {"\xC3\x97 times", "\xC3\x97"},       // U+00D7
-        {"\xC2\xB7 dot", "\xC2\xB7"},         // U+00B7
-        {"\xCE\xB1 alpha", "\xCE\xB1"},       // U+03B1
-        {"\xCE\xB8 theta", "\xCE\xB8"},       // U+03B8
-        {"\xC2\xB0 degrees", "\xC2\xB0"},     // U+00B0
-    };
-    if (ImGui::BeginCombo("##mtext_math_ins", "Insert math…")) {
-      for (const auto& e : kMathPick) {
-        if (ImGui::Selectable(e.label))
-          MtextRichInsertAtCaret(cmd, e.utf8);
-      }
-      ImGui::EndCombo();
-    }
-    ImGui::Checkbox("Type ALL CAPS (ASCII)", &cmd.mtextRichEditorTypingAllCaps);
-    ImGui::PopID();
-    ImGui::Separator();
+    ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + innerW);
+    ImGui::TextDisabled("%s",
+                        "Rich tags: [[b]],[[i]],[[u]],[[caps]]…[[/…]]. Ctrl+Enter: normalize. Esc: cancel unsaved.");
+    ImGui::PopTextWrapPos();
     if (cmd.mtextRichEditorFocusRequest) {
       ImGui::SetKeyboardFocusHere(0);
       cmd.mtextRichEditorFocusRequest = false;
@@ -3714,6 +3773,56 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
     if (ImGui::GetActiveID() == bodyId && io.KeyCtrl &&
         (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)))
       cmd.mtextRichEditorBuf = MtextRichNormalize(cmd.mtextRichEditorBuf);
+
+    ImGui::PushID("mtext_rte_tb");
+    if (ImGui::SmallButton("B"))
+      MtextRichWrapSelection(cmd, "[[b]]", "[[/b]]");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("I"))
+      MtextRichWrapSelection(cmd, "[[i]]", "[[/i]]");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("U"))
+      MtextRichWrapSelection(cmd, "[[u]]", "[[/u]]");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("CAPS"))
+      MtextRichWrapSelection(cmd, "[[caps]]", "[[/caps]]");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(std::min(140.f, std::max(72.f, ImGui::GetContentRegionAvail().x * 0.28f)));
+    static const struct {
+      const char* label;
+      const char* utf8;
+    } kMathPick[] = {
+        {"\xCF\x80 pi", "\xCF\x80"},               // U+03C0
+        {"\xCE\xA3 Sigma", "\xCE\xA3"},           // U+03A3
+        {"\xE2\x88\x9E infinity", "\xE2\x88\x9E"}, // U+221E
+        {"\xE2\x89\xA4 leq", "\xE2\x89\xA4"},     // U+2264
+        {"\xE2\x89\xA5 geq", "\xE2\x89\xA5"},     // U+2265
+        {"\xC2\xB1 plus-minus", "\xC2\xB1"},       // U+00B1
+        {"\xE2\x88\x9A sqrt", "\xE2\x88\x9A"},     // U+221A
+        {"\xE2\x88\xAB integral", "\xE2\x88\xAB"}, // U+222B
+        {"\xC3\x97 times", "\xC3\x97"},           // U+00D7
+        {"\xC2\xB7 dot", "\xC2\xB7"},             // U+00B7
+        {"\xCE\xB1 alpha", "\xCE\xB1"},           // U+03B1
+        {"\xCE\xB8 theta", "\xCE\xB8"},           // U+03B8
+        {"\xC2\xB0 degrees", "\xC2\xB0"},         // U+00B0
+    };
+    if (ImGui::BeginCombo("##mtext_math_ins", "Insert…")) {
+      for (const auto& e : kMathPick) {
+        if (ImGui::Selectable(e.label))
+          MtextRichInsertAtCaret(cmd, e.utf8);
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("Abc##mtext_caps", &cmd.mtextRichEditorTypingAllCaps);
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
+      ImGui::SetTooltip("Type new ASCII in ALL CAPS");
+    ImGui::PopID();
+
+    const float saveW = ImGui::CalcTextSize("Save").x + ist.FramePadding.x * 2.f + 16.f;
+    const float cancelW = ImGui::CalcTextSize("Cancel").x + ist.FramePadding.x * 2.f + 16.f;
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - saveW - cancelW -
+                                                                     ist.ItemInnerSpacing.x));
     if (ImGui::Button(cmd.mtextRichEditorPlacement ? "Place##mtext_rte_ok" : "Save##mtext_rte_ok"))
       CommitMtextRichEditor(cmd, log);
     ImGui::SameLine();
@@ -3763,6 +3872,70 @@ static void FormatSnapPickLine(char* line, size_t cap, const AppCommandState& cm
   }
   std::snprintf(line, cap, "%s — %.4f, %.4f", SnapKindLabelForUi(h.kind), static_cast<double>(h.x),
                 static_cast<double>(h.y));
+}
+
+/// When a single annotation with viewport grips is selected, pull the cursor to the nearest grip inside the OSNAP
+/// aperture (competes with geometry snap by closest distance to raw pick).
+static void ApplyGripMagnetToGrips(AppCommandState& cmd, float rawX, float rawY, float halfH, float availY,
+                                   float* ioX, float* ioY, CadSnap::Hit* out_snap) {
+  if (!ioX || !ioY)
+    return;
+  if (cmd.selection.size() != 1 || cmd.selection[0].type != SelectedEntity::Type::Annotation)
+    return;
+  const int ix = cmd.selection[0].index;
+  if (ix < 0 || static_cast<size_t>(ix) >= cmd.cadAnnotations.size())
+    return;
+  const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(ix)];
+  const float tol = CadSnap::WorldToleranceFromPixels(availY, halfH, cmd.objectSnapAperturePx);
+  const float tol2 = tol * tol;
+  auto dist2 = [](float px, float py, float qx, float qy) {
+    const float dx = px - qx;
+    const float dy = py - qy;
+    return dx * dx + dy * dy;
+  };
+  float bestD2 = dist2(rawX, rawY, *ioX, *ioY);
+  float bx = *ioX, by = *ioY;
+  auto offer = [&](float gx, float gy) {
+    const float h = dist2(rawX, rawY, gx, gy);
+    if (h <= tol2 && h < bestD2 - 1e-15f) {
+      bestD2 = h;
+      bx = gx;
+      by = gy;
+    }
+  };
+  offer(*ioX, *ioY);
+  if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
+    float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+    if (CadDimAnyGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml)) {
+      offer(a.dimExt1X, a.dimExt1Y);
+      offer(a.dimExt2X, a.dimExt2Y);
+      offer(sx1, sy1);
+      offer(sx2, sy2);
+      offer(a.insX, a.insY);
+    }
+  } else if (a.kind == CadAnnotation::Kind::Mtext) {
+    if (a.surveyPointLabelFor >= 0)
+      offer(0.5f * (a.boxMinX + a.boxMaxX), 0.5f * (a.boxMinY + a.boxMaxY));
+    else {
+      offer(a.boxMinX, a.boxMinY);
+      offer(a.boxMaxX, a.boxMinY);
+      offer(a.boxMaxX, a.boxMaxY);
+      offer(a.boxMinX, a.boxMaxY);
+    }
+  }
+  if (bx != *ioX || by != *ioY) {
+    *ioX = bx;
+    *ioY = by;
+    cmd.viewportSnapPickValid = true;
+    cmd.viewportSnapPickWorldX = bx;
+    cmd.viewportSnapPickWorldY = by;
+    if (out_snap) {
+      out_snap->valid = true;
+      out_snap->kind = CadSnap::Kind::Endpoint;
+      out_snap->x = bx;
+      out_snap->y = by;
+    }
+  }
 }
 
 void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, std::vector<std::string>& log,
@@ -3935,12 +4108,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     } else {
       cmd.viewportSnapPickValid = false;
       const bool snapViewportActive =
-          cmd.objectSnapEnabled && cmd.active != AppCommandState::Kind::None;
+          cmd.objectSnapEnabled &&
+          (cmd.active != AppCommandState::Kind::None || cmd.createPointsPlacementActive ||
+           cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive);
       CadSnap::Hit snap{};
       if (snapViewportActive) {
         const float tol = CadSnap::WorldToleranceFromPixels(avail.y, halfH, cmd.objectSnapAperturePx);
-        const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.dimGripMoveActive ||
-                            cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
+        const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.createPointsPlacementActive ||
+                            cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
         snap = CadSnap::FindBest(rawX, rawY, cmd, midCmd, tol);
         if (snap.valid) {
           cmd.viewportSnapPickValid = true;
@@ -3975,25 +4150,39 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         *outCursorY = rawY;
       }
     }
+    if (!cmd.pendingOneShotSnapValid && outCursorX && outCursorY &&
+        !cmd.dimGripMoveActive && !cmd.entityGripMoveActive && !cmd.mtextGripMoveActive)
+      ApplyGripMagnetToGrips(cmd, rawX, rawY, halfH, avail.y, outCursorX, outCursorY, out_snap);
   }
 
   // MTEXT box grips: first click arms; snapped cursor updates box live; second LMB commits (like dim / entity grips).
   if (cmd.mtextGripMoveActive && cmd.mtextGripAnnotationIndex >= 0 && outCursorX && outCursorY && hovered &&
       mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
-    const float curWx = *outCursorX;
-    const float curWy = *outCursorY;
+    const float curWx = cmd.viewportSnapPickValid ? cmd.viewportSnapPickWorldX : *outCursorX;
+    const float curWy = cmd.viewportSnapPickValid ? cmd.viewportSnapPickWorldY : *outCursorY;
     const size_t gi = static_cast<size_t>(cmd.mtextGripAnnotationIndex);
     if (gi < cmd.cadAnnotations.size()) {
       CadAnnotation& ann = cmd.cadAnnotations[gi];
       if (ann.kind == CadAnnotation::Kind::Mtext) {
-        const float fx = cmd.mtextGripFixedCornerX;
-        const float fy = cmd.mtextGripFixedCornerY;
-        ann.boxMinX = std::min(fx, curWx);
-        ann.boxMaxX = std::max(fx, curWx);
-        ann.boxMinY = std::min(fy, curWy);
-        ann.boxMaxY = std::max(fy, curWy);
-        ann.insX = ann.boxMinX;
-        ann.insY = ann.boxMinY;
+        if (ann.surveyPointLabelFor >= 0 && cmd.mtextGripCorner == 4) {
+          const float dx = curWx - cmd.mtextGripDownWorldX;
+          const float dy = curWy - cmd.mtextGripDownWorldY;
+          ann.boxMinX = cmd.mtextGripOrigBoxMinX + dx;
+          ann.boxMaxX = cmd.mtextGripOrigBoxMaxX + dx;
+          ann.boxMinY = cmd.mtextGripOrigBoxMinY + dy;
+          ann.boxMaxY = cmd.mtextGripOrigBoxMaxY + dy;
+          ann.insX = ann.boxMinX;
+          ann.insY = ann.boxMinY;
+        } else {
+          const float fx = cmd.mtextGripFixedCornerX;
+          const float fy = cmd.mtextGripFixedCornerY;
+          ann.boxMinX = std::min(fx, curWx);
+          ann.boxMaxX = std::max(fx, curWx);
+          ann.boxMinY = std::min(fy, curWy);
+          ann.boxMaxY = std::max(fy, curWy);
+          ann.insX = ann.boxMinX;
+          ann.insY = ann.boxMinY;
+        }
       }
     }
     BumpCadGpuCache(cmd);
@@ -4001,12 +4190,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   if (cmd.dimGripMoveActive && cmd.dimGripAnnotationIndex >= 0 && outCursorX && outCursorY && hovered &&
       mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
-    const float curWx = *outCursorX;
-    const float curWy = *outCursorY;
+    const float curWx = cmd.viewportSnapPickValid ? cmd.viewportSnapPickWorldX : *outCursorX;
+    const float curWy = cmd.viewportSnapPickValid ? cmd.viewportSnapPickWorldY : *outCursorY;
     const size_t gi = static_cast<size_t>(cmd.dimGripAnnotationIndex);
     if (gi < cmd.cadAnnotations.size()) {
       CadAnnotation& ann = cmd.cadAnnotations[gi];
-      if (ann.kind == CadAnnotation::Kind::DimAligned) {
+      if (ann.kind == CadAnnotation::Kind::DimAligned || ann.kind == CadAnnotation::Kind::DimLinear) {
         switch (cmd.dimGripWhich) {
         case 0:
           ann.dimExt1X = curWx;
@@ -4031,8 +4220,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         default:
           break;
         }
+        CadDimRefreshMeasurementText(&ann);
         float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
-        if (CadDimAlignedGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+        if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
           ann.rotationRad = std::atan2(ty, tx);
       }
     }
@@ -4043,8 +4233,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // (same pattern as dim grips). RMB / ESC restore originals.
   if (cmd.entityGripMoveActive && cmd.entityGripEntityIndex >= 0 && outCursorX && outCursorY && hovered &&
       mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
-    const float curWx = *outCursorX;
-    const float curWy = *outCursorY;
+    const float curWx = cmd.viewportSnapPickValid ? cmd.viewportSnapPickWorldX : *outCursorX;
+    const float curWy = cmd.viewportSnapPickValid ? cmd.viewportSnapPickWorldY : *outCursorY;
     const int idx = cmd.entityGripEntityIndex;
     switch (cmd.entityGripType) {
       case SelectedEntity::Type::LineSeg: {
@@ -4208,7 +4398,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const size_t gi = static_cast<size_t>(cmd.dimGripAnnotationIndex);
     if (gi < cmd.cadAnnotations.size()) {
       CadAnnotation& ann = cmd.cadAnnotations[gi];
-      if (ann.kind == CadAnnotation::Kind::DimAligned) {
+      if (ann.kind == CadAnnotation::Kind::DimAligned || ann.kind == CadAnnotation::Kind::DimLinear) {
         ann.dimExt1X = cmd.dimGripOrigExt1X;
         ann.dimExt1Y = cmd.dimGripOrigExt1Y;
         ann.dimExt2X = cmd.dimGripOrigExt2X;
@@ -4217,7 +4407,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ann.insX = cmd.dimGripOrigInsX;
         ann.insY = cmd.dimGripOrigInsY;
         float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
-        if (CadDimAlignedGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+        if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
           ann.rotationRad = std::atan2(ty, tx);
       }
     }
@@ -4254,6 +4444,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const bool useRawWorldForWindowRect =
         cmd.active == K::None || cmd.active == K::Delete || cmd.active == K::Join || cmd.active == K::Trim ||
         cmd.active == K::Zoom || (cmd.active == K::Move && cmd.modifyPhase == MP::PickSelection) ||
+        (cmd.active == K::Copy && cmd.modifyPhase == MP::PickSelection) ||
+        (cmd.active == K::Scale && cmd.modifyPhase == MP::PickSelection) ||
         (cmd.active == K::Rotate && cmd.rotatePhase == RP::PickSelection);
     const float wxPick = useRawWorldForWindowRect ? rawPickX : *outCursorX;
     const float wyPick = useRawWorldForWindowRect ? rawPickY : *outCursorY;
@@ -4276,15 +4468,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             SyncSurveyPointLinkedMtextSelection(cmd, svi);
         }
       } else {
-        TryPlaceSurveyPoint(cmd, *outCursorX, *outCursorY, cmd.createPointsOpts.defaultElevation, log);
+        TryPlaceSurveyPoint(cmd, commitX, commitY, cmd.createPointsOpts.defaultElevation, log);
       }
     } else if (cmd.active == K::Offset)
       SubmitViewportPick(cmd, rawPickX, rawPickY, log);
     else if (cmd.active == K::Line || cmd.active == K::Circle || cmd.active == K::Polyline ||
              cmd.active == K::Arc || cmd.active == K::Ellipse || cmd.active == K::Text ||
-             cmd.active == K::Mtext || cmd.active == K::DimAligned || cmd.active == K::IdPoint)
+             cmd.active == K::Mtext || cmd.active == K::DimAligned || cmd.active == K::DimLinear ||
+             cmd.active == K::DimAngular ||
+             cmd.active == K::IdPoint || cmd.active == K::SurveyInverse)
       SubmitViewportPick(cmd, commitX, commitY, log);
-    else if (cmd.active == K::Move || cmd.active == K::Copy) {
+    else if (cmd.active == K::Move || cmd.active == K::Copy || cmd.active == K::Scale) {
       if (cmd.modifyPhase == MP::PickSelection) {
         if (!cmd.selBoxWaitingSecond)
           BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
@@ -4344,7 +4538,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             gripCorner =
                 HitTestMtextGrip(mouse.x, mouse.y, imgPos, avail, worldLeft, worldRight, worldBottom, worldTop, can,
                                  10.f);
-          } else if (can.kind == CadAnnotation::Kind::DimAligned) {
+          } else if (can.kind == CadAnnotation::Kind::DimAligned || can.kind == CadAnnotation::Kind::DimLinear) {
             dimGripHit =
                 HitTestDimGrip(mouse.x, mouse.y, imgPos, avail, worldLeft, worldRight, worldBottom, worldTop, can,
                                10.f);
@@ -4364,7 +4558,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.dimGripOrigInsX = ann.insX;
         cmd.dimGripOrigInsY = ann.insY;
         float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
-        if (CadDimAlignedGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml)) {
+        if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml)) {
           cmd.dimGripDragNx = nx;
           cmd.dimGripDragNy = ny;
           const float dmx = 0.5f * (sx1 + sx2);
@@ -4373,8 +4567,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           cmd.dimGripTextAlongT = (ann.insX - dmx) * tx + (ann.insY - dmy) * ty;
         }
         if (outCursorX && outCursorY) {
-          cmd.dimGripDownWorldX = *outCursorX;
-          cmd.dimGripDownWorldY = *outCursorY;
+          cmd.dimGripDownWorldX = commitX;
+          cmd.dimGripDownWorldY = commitY;
         } else {
           cmd.dimGripDownWorldX = wxPick;
           cmd.dimGripDownWorldY = wyPick;
@@ -4392,12 +4586,22 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.mtextGripAnnotationIndex = aix;
         cmd.mtextGripCorner = gripCorner;
         cmd.mtextGripMoveActive = true;
-        static const int kOpp[4] = {2, 3, 0, 1};
-        const int opp = kOpp[gripCorner];
-        const float cx[4] = {ann.boxMinX, ann.boxMaxX, ann.boxMaxX, ann.boxMinX};
-        const float cy[4] = {ann.boxMinY, ann.boxMinY, ann.boxMaxY, ann.boxMaxY};
-        cmd.mtextGripFixedCornerX = cx[opp];
-        cmd.mtextGripFixedCornerY = cy[opp];
+        if (ann.surveyPointLabelFor >= 0 && gripCorner == 4) {
+          if (outCursorX && outCursorY) {
+            cmd.mtextGripDownWorldX = commitX;
+            cmd.mtextGripDownWorldY = commitY;
+          } else {
+            cmd.mtextGripDownWorldX = wxPick;
+            cmd.mtextGripDownWorldY = wyPick;
+          }
+        } else {
+          static const int kOpp[4] = {2, 3, 0, 1};
+          const int opp = kOpp[gripCorner];
+          const float cx[4] = {ann.boxMinX, ann.boxMaxX, ann.boxMaxX, ann.boxMinX};
+          const float cy[4] = {ann.boxMinY, ann.boxMinY, ann.boxMaxY, ann.boxMaxY};
+          cmd.mtextGripFixedCornerX = cx[opp];
+          cmd.mtextGripFixedCornerY = cy[opp];
+        }
         ClearDimGripInteraction(cmd);
         ClearEntityGripInteraction(cmd);
         handled = true;
@@ -4732,10 +4936,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   using ADP = AppCommandState::DimPhase;
   const bool showMtextCmdDraft =
       cmd.active == AK::Mtext && cmd.mtextPhase == AMP::WaitString && !cmd.mtextRichEditorOpen;
-  const bool showDimAlignedDraft =
-      cmd.active == AK::DimAligned && cmd.dimPhase == ADP::WaitDimLinePt && outCursorX && outCursorY;
+  const bool showDimCmdDraft =
+      (cmd.active == AK::DimAligned || cmd.active == AK::DimLinear) && cmd.dimPhase == ADP::WaitDimLinePt &&
+      outCursorX && outCursorY;
 
-  if (!cmd.cadAnnotations.empty() || !transformAnnPreviews.empty() || showMtextCmdDraft || showDimAlignedDraft) {
+  if (!cmd.cadAnnotations.empty() || !transformAnnPreviews.empty() || showMtextCmdDraft || showDimCmdDraft) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     auto worldToScreen = [&](float wx, float wy, ImVec2* out) {
       const float denx = worldRight - worldLeft + 1e-12f;
@@ -4773,9 +4978,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const ImU32 col = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
                                    static_cast<int>(rgba[2] * 255.f), static_cast<int>(rgba[3] * 255.f));
         dl->AddText(font, fontPx, sp, col, a.text.c_str());
-      } else if (a.kind == CadAnnotation::Kind::DimAligned) {
+      } else if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
         float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
-        if (!CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
+        if (!CadDimAnyGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
           return;
         float rgba[4];
         if (attrPtr)
@@ -4927,9 +5132,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       drawAnnotationVisual(d, nullptr, kMtextDraftCol);
     }
 
-    if (showDimAlignedDraft) {
+    if (showDimCmdDraft) {
       CadAnnotation d{};
-      if (CadDimAlignedBuildDraft(cmd, *outCursorX, *outCursorY, &d))
+      const bool ok = cmd.active == AK::DimLinear
+                          ? CadDimLinearBuildDraft(cmd, *outCursorX, *outCursorY, &d)
+                          : CadDimAlignedBuildDraft(cmd, *outCursorX, *outCursorY, &d);
+      if (ok)
         drawAnnotationVisual(d, nullptr, kAnnTfPrevCol);
     }
 
@@ -4938,52 +5146,55 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const CadAnnotation& a = cmd.cadAnnotations[ai];
       if (a.kind != CadAnnotation::Kind::Mtext || !isAnnSelected(ai))
         continue;
-      ImVec2 sa{}, sb{};
-      worldToScreen(a.boxMinX, a.boxMinY, &sa);
-      worldToScreen(a.boxMaxX, a.boxMaxY, &sb);
-      const float rx0 = std::min(sa.x, sb.x);
-      const float ry0 = std::min(sa.y, sb.y);
-      const float rx1 = std::max(sa.x, sb.x);
-      const float ry1 = std::max(sa.y, sb.y);
-      dl->AddRect(ImVec2(rx0, ry0), ImVec2(rx1, ry1), kAnnSelCol, 0.f, 0, 2.f);
+      // Survey-linked labels: grips only (no selection rectangle).
+      if (a.surveyPointLabelFor < 0) {
+        ImVec2 sa{}, sb{};
+        worldToScreen(a.boxMinX, a.boxMinY, &sa);
+        worldToScreen(a.boxMaxX, a.boxMaxY, &sb);
+        const float rx0 = std::min(sa.x, sb.x);
+        const float ry0 = std::min(sa.y, sb.y);
+        const float rx1 = std::max(sa.x, sb.x);
+        const float ry1 = std::max(sa.y, sb.y);
+        dl->AddRect(ImVec2(rx0, ry0), ImVec2(rx1, ry1), kAnnSelCol, 0.f, 0, 2.f);
+      }
       const bool singleSel = cmd.selection.size() == 1 && cmd.selection[0].type == SelectedEntity::Type::Annotation &&
                              cmd.selection[0].index == static_cast<int>(ai);
       if (!singleSel)
         continue;
-      const float wx[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
-      const float wy[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
-      for (int c = 0; c < 4; ++c) {
+      if (a.surveyPointLabelFor >= 0) {
+        const float cx = 0.5f * (a.boxMinX + a.boxMaxX);
+        const float cy = 0.5f * (a.boxMinY + a.boxMaxY);
         ImVec2 gp{};
-        worldToScreen(wx[c], wy[c], &gp);
+        worldToScreen(cx, cy, &gp);
         dl->AddRectFilled(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf),
                           kGripFill);
         dl->AddRect(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf), kGripBorder,
                     0.f, 0, 1.f);
+      } else {
+        const float wx[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
+        const float wy[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
+        for (int c = 0; c < 4; ++c) {
+          ImVec2 gp{};
+          worldToScreen(wx[c], wy[c], &gp);
+          dl->AddRectFilled(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf),
+                            kGripFill);
+          dl->AddRect(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf), kGripBorder,
+                      0.f, 0, 1.f);
+        }
       }
     }
 
     for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
       const CadAnnotation& a = cmd.cadAnnotations[ai];
-      if (a.kind != CadAnnotation::Kind::DimAligned || !isAnnSelected(ai))
+      if ((a.kind != CadAnnotation::Kind::DimAligned && a.kind != CadAnnotation::Kind::DimLinear) ||
+          !isAnnSelected(ai))
         continue;
-      float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
-      CadAnnotationRoughBounds(a, cmd.modelUnitsPerPlottedInch, &mnX, &mnY, &mxX, &mxY);
-      ImVec2 c00{}, c01{}, c10{}, c11{};
-      worldToScreen(mnX, mnY, &c00);
-      worldToScreen(mxX, mnY, &c01);
-      worldToScreen(mxX, mxY, &c10);
-      worldToScreen(mnX, mxY, &c11);
-      const float rx0 = std::min(std::min(c00.x, c01.x), std::min(c10.x, c11.x));
-      const float ry0 = std::min(std::min(c00.y, c01.y), std::min(c10.y, c11.y));
-      const float rx1 = std::max(std::max(c00.x, c01.x), std::max(c10.x, c11.x));
-      const float ry1 = std::max(std::max(c00.y, c01.y), std::max(c10.y, c11.y));
-      dl->AddRect(ImVec2(rx0, ry0), ImVec2(rx1, ry1), kAnnSelCol, 0.f, 0, 2.f);
       const bool singleSel = cmd.selection.size() == 1 && cmd.selection[0].type == SelectedEntity::Type::Annotation &&
                              cmd.selection[0].index == static_cast<int>(ai);
       if (!singleSel)
         continue;
       float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
-      if (!CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
+      if (!CadDimAnyGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
         continue;
       const float wx[5] = {a.dimExt1X, a.dimExt2X, sx1, sx2, a.insX};
       const float wy[5] = {a.dimExt1Y, a.dimExt2Y, sy1, sy2, a.insY};

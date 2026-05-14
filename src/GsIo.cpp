@@ -78,6 +78,8 @@ const char* AnnotationKindTag(CadAnnotation::Kind k) {
     return "mtext";
   case CadAnnotation::Kind::DimAligned:
     return "dim";
+  case CadAnnotation::Kind::DimLinear:
+    return "dimlinear";
   default:
     return "text";
   }
@@ -88,6 +90,8 @@ CadAnnotation::Kind AnnotationKindFromString(const std::string& s) {
     return CadAnnotation::Kind::Mtext;
   if (s == "dim")
     return CadAnnotation::Kind::DimAligned;
+  if (s == "dimlinear")
+    return CadAnnotation::Kind::DimLinear;
   return CadAnnotation::Kind::Text;
 }
 
@@ -107,6 +111,8 @@ void CadAnnotationToJson(const CadAnnotation& a, json& o) {
   o["dimExt2X"] = a.dimExt2X;
   o["dimExt2Y"] = a.dimExt2Y;
   o["dimSignedOffset"] = a.dimSignedOffset;
+  if (a.kind == CadAnnotation::Kind::DimLinear)
+    o["dimLinearVertical"] = a.dimLinearVertical;
   o["surveyPointLabelFor"] = a.surveyPointLabelFor;
 }
 
@@ -142,6 +148,8 @@ CadAnnotation CadAnnotationFromJson(const json& o) {
     a.dimExt2Y = o["dimExt2Y"].get<float>();
   if (o.contains("dimSignedOffset"))
     a.dimSignedOffset = o["dimSignedOffset"].get<float>();
+  if (a.kind == CadAnnotation::Kind::DimLinear && o.contains("dimLinearVertical") && o["dimLinearVertical"].is_boolean())
+    a.dimLinearVertical = o["dimLinearVertical"].get<bool>();
   if (o.contains("surveyPointLabelFor"))
     a.surveyPointLabelFor = o["surveyPointLabelFor"].get<int>();
   return a;
