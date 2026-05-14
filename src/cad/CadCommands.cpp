@@ -1,6 +1,8 @@
 #include "CadCommands.hpp"
 #include "CadLinetype.hpp"
+#include "geom2d.hpp"
 #include "MtextRichFormat.hpp"
+#include "StringUtil.hpp"
 
 #include "CadSnap.hpp"
 
@@ -740,22 +742,6 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log);
 
 namespace {
 
-std::string Trim(const std::string& s) {
-  size_t a = 0;
-  while (a < s.size() && std::isspace(static_cast<unsigned char>(s[a])))
-    ++a;
-  size_t b = s.size();
-  while (b > a && std::isspace(static_cast<unsigned char>(s[b - 1])))
-    --b;
-  return s.substr(a, b - a);
-}
-
-std::string ToLower(std::string s) {
-  for (char& c : s)
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  return s;
-}
-
 static EntityAttributes MakeNewEntityAttrs(const AppCommandState& st) {
   EntityAttributes a;
   a.layer = st.currentLayer.empty() ? std::string("0") : st.currentLayer;
@@ -780,7 +766,7 @@ bool ParseTwoFloats(std::string s, float* x, float* y) {
 }
 
 bool ParseOneFloat(const std::string& s, float* v) {
-  std::istringstream iss(Trim(s));
+  std::istringstream iss(StringUtil::trimCopy(s));
   return static_cast<bool>(iss >> *v);
 }
 
@@ -848,21 +834,21 @@ int FuzzySubsequenceScore(std::string_view query, std::string_view cand) {
 }
 
 bool TryStrongFuzzyDispatch(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
-  std::string line = Trim(lineIn);
+  std::string line = StringUtil::trimCopy(lineIn);
   if (line.empty())
     return false;
   std::vector<std::string> tokens;
   std::istringstream iss(line);
   std::string tok;
   while (iss >> tok)
-    tokens.push_back(ToLower(tok));
+    tokens.push_back(StringUtil::toLowerAsciiCopy(tok));
   if (tokens.empty())
     return false;
 
   std::unordered_map<std::string, int> bestPerPrimary;
   for (const std::string& t : tokens) {
     for (const CmdEntry& e : kRegistry) {
-      const std::string prim = ToLower(std::string(e.primary));
+      const std::string prim = StringUtil::toLowerAsciiCopy(std::string(e.primary));
       auto considerCand = [&](const std::string& candLower) {
         const int sc = FuzzySubsequenceScore(t, candLower);
         if (sc < 0)
@@ -877,10 +863,10 @@ bool TryStrongFuzzyDispatch(const std::string& lineIn, AppCommandState& st, std:
       std::istringstream als(std::string(e.aliases));
       std::string a;
       while (std::getline(als, a, ',')) {
-        a = Trim(a);
+        a = StringUtil::trimCopy(a);
         if (a.empty())
           continue;
-        considerCand(ToLower(a));
+        considerCand(StringUtil::toLowerAsciiCopy(a));
       }
     }
   }
@@ -1041,10 +1027,10 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<
 }
 
 bool ParseRadiusOrDiameter(const std::string& raw, float* radiusOut, std::vector<std::string>& log) {
-  std::string s = Trim(raw);
+  std::string s = StringUtil::trimCopy(raw);
   if (s.empty())
     return false;
-  std::string low = ToLower(s);
+  std::string low = StringUtil::toLowerAsciiCopy(s);
   if (!low.empty() && low[0] == 'd') {
     float dia = 0.f;
     if (!ParseOneFloat(low.substr(1), &dia)) {
@@ -1220,11 +1206,11 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
 }
 
 bool HandleCircleTextInput(const std::string& lineIn, AppCommandState& st, std::vector<std::string>& log) {
-  std::string line = Trim(lineIn);
+  std::string line = StringUtil::trimCopy(lineIn);
 
   switch (st.circlePhase) {
   case AppCommandState::CirclePhase::WaitCenterOrMode: {
-    if (ToLower(line) == "3p") {
+    if (StringUtil::toLowerAsciiCopy(line) == "3p") {
       st.circleStyle = AppCommandState::CircleStyle::ThreePoint;
       st.circlePhase = AppCommandState::CirclePhase::ThreeP_WaitP1;
       log.push_back("Three-point circle — specify first point.");
@@ -1286,68 +1272,6 @@ bool HandleCircleTextInput(const std::string& lineIn, AppCommandState& st, std::
   }
   }
   return false;
-}
-
-bool SegIntersectsAABB(float x0, float y0, float x1, float y1, float mnX, float mxX, float mnY, float mxY) {
-  auto ins = [&](float x, float y) { return x >= mnX && x <= mxX && y >= mnY && y <= mxY; };
-  if (ins(x0, y0) || ins(x1, y1))
-    return true;
-  auto edgeHit = [&](float ex0, float ey0, float ex1, float ey1) {
-    float dxs = x1 - x0;
-    float dys = y1 - y0;
-    float dxe = ex1 - ex0;
-    float dye = ey1 - ey0;
-    float denom = dxs * dye - dys * dxe;
-    if (std::fabs(denom) < 1e-12f)
-      return false;
-    float t = ((ex0 - x0) * dye - (ey0 - y0) * dxe) / denom;
-    float u = ((ex0 - x0) * dys - (ey0 - y0) * dxs) / denom;
-    return t >= 0.f && t <= 1.f && u >= 0.f && u <= 1.f;
-  };
-  if (edgeHit(mnX, mnY, mxX, mnY))
-    return true;
-  if (edgeHit(mxX, mnY, mxX, mxY))
-    return true;
-  if (edgeHit(mxX, mxY, mnX, mxY))
-    return true;
-  if (edgeHit(mnX, mxY, mnX, mnY))
-    return true;
-  return false;
-}
-
-bool CircleIntersectsAABB(float cx, float cy, float r, float mnX, float mxX, float mnY, float mxY) {
-  if (r <= 0.f)
-    return false;
-  // Crossing fence: use the circle *curve* (circumference), not the filled disk. The old disk test
-  // selected circles whenever the box lay inside the disk (closest point in rect to center < r),
-  // even when the box never touched the visible circle.
-  const float qx = std::clamp(cx, mnX, mxX);
-  const float qy = std::clamp(cy, mnY, mxY);
-  const float dx0 = cx - qx;
-  const float dy0 = cy - qy;
-  const float dMinSq = dx0 * dx0 + dy0 * dy0;
-  auto cornerDsq = [&](float x, float y) {
-    const float dx = cx - x;
-    const float dy = cy - y;
-    return dx * dx + dy * dy;
-  };
-  float dMaxSq = cornerDsq(mnX, mnY);
-  dMaxSq = std::max(dMaxSq, cornerDsq(mxX, mnY));
-  dMaxSq = std::max(dMaxSq, cornerDsq(mxX, mxY));
-  dMaxSq = std::max(dMaxSq, cornerDsq(mnX, mxY));
-  const float r2 = r * r;
-  const float tol = 1e-5f * (std::fabs(r2) + 1.f);
-  return dMinSq <= r2 + tol && r2 <= dMaxSq + tol;
-}
-
-bool CircleFullyInsideRect(float cx, float cy, float r, float mnX, float mxX, float mnY, float mxY) {
-  if (r <= 0.f)
-    return false;
-  return cx - r >= mnX && cx + r <= mxX && cy - r >= mnY && cy + r <= mxY;
-}
-
-bool PointInsideClosedRect(float x, float y, float mnX, float mxX, float mnY, float mxY) {
-  return x >= mnX && x <= mxX && y >= mnY && y <= mxY;
 }
 
 bool SelectedEntityEqual(const SelectedEntity& a, const SelectedEntity& b) {
@@ -2562,17 +2486,17 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc) {
 }
 
 bool ParseAngleDegreesInternal(const std::string& raw, float* degreesOut) {
-  std::string s = Trim(raw);
+  std::string s = StringUtil::trimCopy(raw);
   if (s.empty())
     return false;
-  std::string low = ToLower(s);
+  std::string low = StringUtil::toLowerAsciiCopy(s);
   bool neg = false;
   if (!low.empty() && low[0] == '-') {
     neg = true;
-    low = Trim(low.substr(1));
+    low = StringUtil::trimCopy(low.substr(1));
   }
   if (!low.empty() && low[0] == '+')
-    low = Trim(low.substr(1));
+    low = StringUtil::trimCopy(low.substr(1));
   float deg = 0.f;
   float min = 0.f;
   float sec = 0.f;
@@ -2608,7 +2532,7 @@ bool ParseAngleDegreesInternal(const std::string& raw, float* degreesOut) {
 }
 
 bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineIn, std::vector<std::string>& log) {
-  std::string line = Trim(lineIn);
+  std::string line = StringUtil::trimCopy(lineIn);
   using MP = AppCommandState::ModifyPhase;
   if (st.modifyPhase == MP::NeedBase) {
     float px = 0.f;
@@ -2651,7 +2575,7 @@ static void FinishScaleCommand(AppCommandState& st, float scaleFactor, std::vect
 }
 
 static bool HandleScaleText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  std::string line = Trim(lineIn);
+  std::string line = StringUtil::trimCopy(lineIn);
   using MP = AppCommandState::ModifyPhase;
   using SP = AppCommandState::ScalePhase;
   if (st.modifyPhase == MP::NeedBase) {
@@ -2674,7 +2598,7 @@ static bool HandleScaleText(AppCommandState& st, const std::string& lineIn, std:
 
   switch (st.scalePhase) {
   case SP::FactorPick: {
-    const std::string low = ToLower(line);
+    const std::string low = StringUtil::toLowerAsciiCopy(line);
     if (low == "r" || low == "ref" || low == "reference") {
       st.scalePhase = SP::Ref_WaitP1;
       log.push_back("SCALE ref — first point of reference length:");
@@ -2762,7 +2686,7 @@ static bool HandleScaleText(AppCommandState& st, const std::string& lineIn, std:
 }
 
 static bool TryRotateCopyToggle(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  const std::string low = ToLower(Trim(lineIn));
+  const std::string low = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(lineIn));
   if (low != "c" && low != "copy")
     return false;
   st.rotateCopyMode = !st.rotateCopyMode;
@@ -2797,7 +2721,7 @@ static void FinishRotateCommand(AppCommandState& st, float bx, float by, float r
 }
 
 bool HandleRotateText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
-  std::string line = Trim(lineIn);
+  std::string line = StringUtil::trimCopy(lineIn);
   using RP = AppCommandState::RotatePhase;
   constexpr float kDegToRad = 0.01745329251994329577f;
 
@@ -2816,7 +2740,7 @@ bool HandleRotateText(AppCommandState& st, const std::string& lineIn, std::vecto
   if (st.rotatePhase == RP::NeedAngleOrReference) {
     if (TryRotateCopyToggle(st, line, log))
       return true;
-    std::string low = ToLower(line);
+    std::string low = StringUtil::toLowerAsciiCopy(line);
     if (low == "r" || low == "ref" || low == "reference") {
       st.rotatePhase = RP::Ref_WaitP1;
       log.push_back("Reference — first point:");
@@ -2860,7 +2784,7 @@ bool HandleRotateText(AppCommandState& st, const std::string& lineIn, std::vecto
   }
 
   if (st.rotatePhase == RP::AfterReference_WaitAngleOrP) {
-    std::string low = ToLower(line);
+    std::string low = StringUtil::toLowerAsciiCopy(line);
     if (low == "p") {
       st.rotatePhase = RP::AnglePoints_WaitP1;
       log.push_back("Angle — first point:");
@@ -4488,13 +4412,13 @@ bool ParseAngleDegrees(const std::string& raw, float* degreesOut) {
 }
 
 bool ParseWorldPoint(const std::string& raw, float* ox, float* oy, bool allowRelative, float baseX, float baseY) {
-  std::string s = Trim(raw);
+  std::string s = StringUtil::trimCopy(raw);
   if (s.empty())
     return false;
   if (!s.empty() && s[0] == '@') {
     if (!allowRelative)
       return false;
-    s = Trim(s.substr(1));
+    s = StringUtil::trimCopy(s.substr(1));
     float dx = 0.f;
     float dy = 0.f;
     if (!ParseTwoFloats(s, &dx, &dy))
@@ -4539,7 +4463,7 @@ static float NormalizeBearingDegreesCwNorth(float deg) {
 
 static bool ParseBearingCwNorthStringWithOptionalDelta(const std::string& raw, float* bearingCombinedDegOut,
                                                        std::vector<std::string>& log) {
-  std::string work = Trim(raw);
+  std::string work = StringUtil::trimCopy(raw);
   if (work.empty())
     return false;
   float bear = 0.f;
@@ -4549,8 +4473,8 @@ static bool ParseBearingCwNorthStringWithOptionalDelta(const std::string& raw, f
 
   const size_t sp = work.rfind(' ');
   if (sp != std::string::npos && sp + 1 < work.size()) {
-    std::string tail = Trim(work.substr(sp + 1));
-    std::string head = Trim(work.substr(0, sp));
+    std::string tail = StringUtil::trimCopy(work.substr(sp + 1));
+    std::string head = StringUtil::trimCopy(work.substr(0, sp));
     if (!tail.empty() && (tail[0] == '+' || tail[0] == '-')) {
       if (!ParseAngleDegreesInternal(tail, &delta)) {
         log.push_back("Invalid adjustment — use +90 / -45 (decimal or DMS).");
@@ -4565,8 +4489,8 @@ static bool ParseBearingCwNorthStringWithOptionalDelta(const std::string& raw, f
     for (size_t k = 1; k < work.size(); ++k) {
       if (work[k] != '+' && work[k] != '-')
         continue;
-      std::string head = Trim(work.substr(0, k));
-      std::string tail = Trim(work.substr(k));
+      std::string head = StringUtil::trimCopy(work.substr(0, k));
+      std::string tail = StringUtil::trimCopy(work.substr(k));
       if (head.empty() || tail.empty())
         continue;
       if (!ParseAngleDegreesInternal(head, &bear))
@@ -4612,10 +4536,10 @@ void CancelSegmentAnglePick(AppCommandState& st, std::vector<std::string>* log) 
 
 bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
   using SAP = AppCommandState::SegmentAnglePickPhase;
-  const std::string s = Trim(lineIn);
+  const std::string s = StringUtil::trimCopy(lineIn);
   if (s.empty())
     return false;
-  const std::string low = ToLower(s);
+  const std::string low = StringUtil::toLowerAsciiCopy(s);
   if (low == "ap" || low == "anglepick" || low == "a p") {
     ResetSegmentAngleLock(st);
     st.segmentAngleKeyboardAwaitBearing = false;
@@ -4635,13 +4559,13 @@ bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lin
   }
   std::string rest;
   if (low.rfind("angle ", 0) == 0)
-    rest = Trim(s.substr(6));
+    rest = StringUtil::trimCopy(s.substr(6));
   else if (low.rfind("a ", 0) == 0)
-    rest = Trim(s.substr(2));
+    rest = StringUtil::trimCopy(s.substr(2));
   else if (low.rfind("angle", 0) == 0 && low.size() > 5)
-    rest = Trim(s.substr(5));
+    rest = StringUtil::trimCopy(s.substr(5));
   else if (low.rfind("a", 0) == 0 && low.size() > 1)
-    rest = Trim(s.substr(1));
+    rest = StringUtil::trimCopy(s.substr(1));
   else
     return false;
 
@@ -4807,7 +4731,7 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
       return;
     }
     const std::string normalized = MtextRichNormalize(st.mtextRichEditorBuf);
-    if (!Trim(MtextRichFlattenToPlain(normalized)).empty()) {
+    if (!StringUtil::trimCopy(MtextRichFlattenToPlain(normalized)).empty()) {
       CadAnnotation ann;
       ann.kind = CadAnnotation::Kind::Mtext;
       ann.boxMinX = std::min(st.mtxtX1, st.mtxtX2);
@@ -5025,16 +4949,16 @@ static bool ValidNewLayerNameChars(const std::string& n) {
 }
 
 static bool LayerNameExistsCi(const AppCommandState& st, const std::string& name) {
-  const std::string nl = ToLower(name);
+  const std::string nl = StringUtil::toLowerAsciiCopy(name);
   for (const auto& r : st.drawingLayerTable) {
-    if (ToLower(r.name) == nl)
+    if (StringUtil::toLowerAsciiCopy(r.name) == nl)
       return true;
   }
   return false;
 }
 
 bool CadAddDrawingLayer(AppCommandState& st, const std::string& raw, std::string* err) {
-  const std::string name = Trim(raw);
+  const std::string name = StringUtil::trimCopy(raw);
   if (!ValidNewLayerNameChars(name)) {
     if (err)
       *err = "Invalid layer name (empty, too long, or reserved characters).";
@@ -5054,8 +4978,8 @@ bool CadAddDrawingLayer(AppCommandState& st, const std::string& raw, std::string
 
 bool CadRenameDrawingLayer(AppCommandState& st, const std::string& oldNameRaw, const std::string& newNameRaw,
                            std::string* err) {
-  const std::string oldN = Trim(oldNameRaw);
-  const std::string newN = Trim(newNameRaw);
+  const std::string oldN = StringUtil::trimCopy(oldNameRaw);
+  const std::string newN = StringUtil::trimCopy(newNameRaw);
   if (oldN == "0") {
     if (err)
       *err = "Layer 0 cannot be renamed.";
@@ -5068,7 +4992,7 @@ bool CadRenameDrawingLayer(AppCommandState& st, const std::string& oldNameRaw, c
   }
   if (newN == oldN)
     return true;
-  if (LayerNameExistsCi(st, newN) && ToLower(newN) != ToLower(oldN)) {
+  if (LayerNameExistsCi(st, newN) && StringUtil::toLowerAsciiCopy(newN) != StringUtil::toLowerAsciiCopy(oldN)) {
     if (err)
       *err = "A layer with that name already exists.";
     return false;
@@ -5106,7 +5030,7 @@ bool CadRenameDrawingLayer(AppCommandState& st, const std::string& oldNameRaw, c
 }
 
 bool CadDeleteDrawingLayer(AppCommandState& st, const std::string& nameRaw, std::string* err) {
-  const std::string name = Trim(nameRaw);
+  const std::string name = StringUtil::trimCopy(nameRaw);
   if (name == "0") {
     if (err)
       *err = "Layer 0 cannot be deleted.";
@@ -7475,7 +7399,7 @@ void SubmitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std
 
 void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st, std::vector<std::string>& log) {
   (void)cmdBufSize;
-  std::string line = Trim(std::string(cmdBuf));
+  std::string line = StringUtil::trimCopy(std::string(cmdBuf));
   using K = AppCommandState::Kind;
   using LP = AppCommandState::LinePhase;
   using PP = AppCommandState::PolylinePhase;
@@ -7492,7 +7416,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       cmdBuf[0] = '\0';
       return;
     }
-    const std::string t = Trim(line);
+    const std::string t = StringUtil::trimCopy(line);
     if (!t.empty() && (t[0] == '+' || t[0] == '-')) {
       float dlt = 0.f;
       if (!ParseAngleDegreesInternal(t, &dlt)) {
@@ -7579,10 +7503,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   }
 
   if (st.active == K::None) {
-    std::istringstream issIdle(Trim(std::string(cmdBuf)));
+    std::istringstream issIdle(StringUtil::trimCopy(std::string(cmdBuf)));
     std::string plotTok;
     issIdle >> plotTok;
-    plotTok = ToLower(plotTok);
+    plotTok = StringUtil::toLowerAsciiCopy(plotTok);
     if (plotTok == "plotscale" || plotTok == "pscale") {
       float pv = 0.f;
       if (!(issIdle >> pv) || pv <= 0.f)
@@ -7615,7 +7539,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
 
   if (st.active == AppCommandState::Kind::Trim) {
     using TP = AppCommandState::TrimPhase;
-    const std::string low = ToLower(Trim(line));
+    const std::string low = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(line));
     if (low == "l" || low == "line") {
       if (st.trimPhase != TP::SelectCuttingEdges)
         log.push_back("TRIM — L only while picking cutting edges (ESC and restart TRIM if stuck).");
@@ -7646,7 +7570,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     float d = 0.f;
-    if (!ParseOneFloat(Trim(line), &d)) {
+    if (!ParseOneFloat(StringUtil::trimCopy(line), &d)) {
       log.push_back("OFFSET — type a positive offset distance (model units), then pick a side.");
       cmdBuf[0] = '\0';
       return;
@@ -7735,7 +7659,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
 
   if (st.active == K::Polyline) {
     using PP = AppCommandState::PolylinePhase;
-    const std::string low = ToLower(Trim(line));
+    const std::string low = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(line));
     if (low == "close" || low == "cl") {
       CancelSegmentAnglePick(st, nullptr);
       if (st.polylinePhase != PP::NeedNextPoint || st.polyDraftSegments == 0)
@@ -7803,7 +7727,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   }
 
   if (st.active == K::Ellipse && st.ellPhase == AppCommandState::EllipsePhase::WaitRatio) {
-    const std::string tr = Trim(line);
+    const std::string tr = StringUtil::trimCopy(line);
     float ratio = 0.5f;
     if (!tr.empty() && !ParseSingleFloatToken(tr, &ratio)) {
       log.push_back("ELLIPSE — enter one number for minor/major ratio (0-1], or blank for 0.5.");
@@ -7833,7 +7757,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     if (st.textPhase == TP::WaitHeight) {
-      const std::string tr = Trim(line);
+      const std::string tr = StringUtil::trimCopy(line);
       if (tr.empty())
         st.textHeightDraft = DefaultAnnotationTextHeightWorld(st);
       else if (!ParseSingleFloatToken(tr, &st.textHeightDraft) || st.textHeightDraft <= 0.f) {
@@ -7847,7 +7771,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     if (st.textPhase == TP::WaitRotation) {
-      const std::string tr = Trim(line);
+      const std::string tr = StringUtil::trimCopy(line);
       if (tr.empty())
         st.textRotDraft = 0.f;
       else {
@@ -7955,8 +7879,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   if (st.active == K::DimAligned || st.active == K::DimLinear) {
     using DP = AppCommandState::DimPhase;
     const bool linear = st.active == K::DimLinear;
-    const std::string dimTrim = Trim(line);
-    const std::string dimLow = ToLower(dimTrim);
+    const std::string dimTrim = StringUtil::trimCopy(line);
+    const std::string dimLow = StringUtil::toLowerAsciiCopy(dimTrim);
     if (linear && st.dimPhase == DP::WaitDimLinePt && (dimLow == "h" || dimLow == "v")) {
       CadDimLinearApplyHVHotkey(st, dimLow == "v", log);
       cmdBuf[0] = '\0';
@@ -7989,7 +7913,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
 
   if (st.active == K::DimAngular) {
     using DAP = AppCommandState::DimAngularPhase;
-    const std::string dimTrim = Trim(line);
+    const std::string dimTrim = StringUtil::trimCopy(line);
     float px = 0.f;
     float py = 0.f;
     bool allowRel = false;
@@ -8010,10 +7934,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
-  std::string low = ToLower(line);
+  std::string low = StringUtil::toLowerAsciiCopy(line);
   for (const CmdEntry& e : kRegistry) {
-    if (low == ToLower(e.primary)) {
-      DispatchByPrimary(ToLower(e.primary), st, log);
+    if (low == StringUtil::toLowerAsciiCopy(e.primary)) {
+      DispatchByPrimary(StringUtil::toLowerAsciiCopy(e.primary), st, log);
       cmdBuf[0] = '\0';
       return;
     }
@@ -8022,11 +7946,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     std::istringstream als(std::string(e.aliases));
     std::string a;
     while (std::getline(als, a, ',')) {
-      a = Trim(a);
+      a = StringUtil::trimCopy(a);
       if (a.empty())
         continue;
-      if (low == ToLower(a)) {
-        DispatchByPrimary(ToLower(e.primary), st, log);
+      if (low == StringUtil::toLowerAsciiCopy(a)) {
+        DispatchByPrimary(StringUtil::toLowerAsciiCopy(e.primary), st, log);
         cmdBuf[0] = '\0';
         return;
       }
@@ -8063,7 +7987,7 @@ std::vector<std::string> FuzzyCommandMatches(const std::string& query, int maxRe
     int score;
   };
   std::vector<Scored> ranked;
-  std::string qlow = ToLower(Trim(query));
+  std::string qlow = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(query));
   if (qlow.empty())
     return {};
 

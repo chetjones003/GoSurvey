@@ -6,15 +6,15 @@ This document describes the native GoSurvey workspace file format (extension
 .gs), how it is structured on disk, and exactly how the application reads it.
 It is derived from the implementation in:
 
-  src/GsIo.cpp
-  src/GsIo.hpp
+  src/io/GsIo.cpp
+  src/io/GsIo.hpp
 
 Related types and defaults appear in:
 
-  src/CadCommands.hpp   (geometry containers, EntityAttributes, CadAnnotation,
-                         CadLayerRow, AppCommandState fields)
-  src/SurveyPoints.hpp  (SurveyPoint, SurveyPointLabelStyle, CreatePointsOptions,
-                         SurveyLabelStyleTemplates, SurveyDuplicatePolicy)
+  src/cad/CadCommands.hpp   (geometry containers, EntityAttributes, CadAnnotation,
+                             CadLayerRow, AppCommandState fields)
+  src/survey/SurveyPoints.hpp  (SurveyPoint, SurveyPointLabelStyle, CreatePointsOptions,
+                                SurveyLabelStyleTemplates, SurveyDuplicatePolicy)
 
 
 --------------------------------------------------------------------------------
@@ -435,7 +435,7 @@ annotationAttrs     object[]
 11. FILE LOCATION IN REPOSITORY
 --------------------------------------------------------------------------------
 
-  Implementation:  src/GsIo.cpp, src/GsIo.hpp
+  Implementation:  src/io/GsIo.cpp, src/io/GsIo.hpp
   This document:     docs/gs-file-format.txt
 
 End of document.

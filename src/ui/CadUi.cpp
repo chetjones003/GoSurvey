@@ -1,4 +1,5 @@
 #include "CadUi.hpp"
+#include "ViewportPickPolicy.hpp"
 #include "MtextRichFormat.hpp"
 
 #include "CadLinetype.hpp"
@@ -10,6 +11,7 @@
 #include "ImGuiLayout.hpp"
 #include "WinFileDialogs.hpp"
 #include "SurveyPoints.hpp"
+#include "StringUtil.hpp"
 
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
@@ -49,14 +51,6 @@ bool CadUiTitleBarLogoQuery(ImTextureID* outTexture, ImVec2* outDimsPx) {
 }
 
 namespace {
-
-std::string TrimCopyUi(std::string s) {
-  while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front())))
-    s.erase(s.begin());
-  while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back())))
-    s.pop_back();
-  return s;
-}
 
 static int MtextRichEditorInputCallback(ImGuiInputTextCallbackData* data) {
   auto* cmd = static_cast<AppCommandState*>(data->UserData);
@@ -2575,7 +2569,7 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
       ImGui::SetNextItemWidth(-FLT_MIN);
       ImGui::InputText("##svy_id", &cmd.surveyPointIdBuffers[static_cast<size_t>(rowIx)]);
       if (ImGui::IsItemDeactivatedAfterEdit()) {
-        std::string t = TrimCopyUi(cmd.surveyPointIdBuffers[static_cast<size_t>(rowIx)]);
+        std::string t = StringUtil::trimCopy(cmd.surveyPointIdBuffers[static_cast<size_t>(rowIx)]);
         char* end = nullptr;
         const long v = std::strtol(t.c_str(), &end, 10);
         const bool parsed =
@@ -2812,7 +2806,7 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
       } else {
         ImGui::InputText(idVaries, buf);
         if (ImGui::IsItemDeactivatedAfterEdit()) {
-          std::string t = TrimCopyUi(*buf);
+          std::string t = StringUtil::trimCopy(*buf);
           if (t == "VARIES" || t.empty()) {
             log->push_back("Properties — enter a numeric value to apply to all selected points.");
             gMultiFp = ~0ull;
@@ -2847,7 +2841,7 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputText("##svy_layer_m", &gBufLayer);
     if (ImGui::IsItemDeactivatedAfterEdit()) {
-      std::string t = TrimCopyUi(gBufLayer);
+      std::string t = StringUtil::trimCopy(gBufLayer);
       if (t != "VARIES") {
         for (int ix : ixv) {
           if (ix < 0 || static_cast<size_t>(ix) >= cmd.surveyPoints.size())
@@ -2867,7 +2861,7 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
     ImGui::SetNextItemWidth(-FLT_MIN);
     ImGui::InputTextMultiline("##svy_desc_m", &gBufDesc, ImVec2(-FLT_MIN, 72.f));
     if (ImGui::IsItemDeactivatedAfterEdit()) {
-      std::string t = TrimCopyUi(gBufDesc);
+      std::string t = StringUtil::trimCopy(gBufDesc);
       if (t != "VARIES") {
         for (int ix : ixv) {
           if (ix < 0 || static_cast<size_t>(ix) >= cmd.surveyPoints.size())
@@ -4441,12 +4435,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const float rawPickX = worldLeft + uPick * (worldRight - worldLeft);
     const float rawPickY = worldTop - vPick * (worldTop - worldBottom);
 
-    const bool useRawWorldForWindowRect =
-        cmd.active == K::None || cmd.active == K::Delete || cmd.active == K::Join || cmd.active == K::Trim ||
-        cmd.active == K::Zoom || (cmd.active == K::Move && cmd.modifyPhase == MP::PickSelection) ||
-        (cmd.active == K::Copy && cmd.modifyPhase == MP::PickSelection) ||
-        (cmd.active == K::Scale && cmd.modifyPhase == MP::PickSelection) ||
-        (cmd.active == K::Rotate && cmd.rotatePhase == RP::PickSelection);
+    const bool useRawWorldForWindowRect = ViewportUseRawWorldForSelectionRectPick(cmd);
     const float wxPick = useRawWorldForWindowRect ? rawPickX : *outCursorX;
     const float wyPick = useRawWorldForWindowRect ? rawPickY : *outCursorY;
     const bool keyShift = ImGui::GetIO().KeyShift;
@@ -6026,7 +6015,7 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
       ImGui::SetNextItemWidth(96.f);
       ImGui::InputText("##id", &cmd.surveyPointIdBuffers[i]);
       if (ImGui::IsItemDeactivatedAfterEdit()) {
-        std::string t = TrimCopyUi(cmd.surveyPointIdBuffers[i]);
+        std::string t = StringUtil::trimCopy(cmd.surveyPointIdBuffers[i]);
         char* end = nullptr;
         const long v = std::strtol(t.c_str(), &end, 10);
         const bool parsed =
@@ -6223,41 +6212,4 @@ void DrawSurveyReportsPanel(AppCommandState& cmd) {
   }
 
   ImGui::End();
-}
-
-void DrawCopySurveyDuplicateModal(AppCommandState& cmd, std::vector<std::string>& log) {
-  if (!cmd.copySurveyDupModalOpen)
-    return;
-
-  if (cmd.copySurveyDupModalOpenRequested) {
-    ImGui::OpenPopup("GoSurveyCopySurveyDup");
-    cmd.copySurveyDupModalOpenRequested = false;
-  }
-
-  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
-
-  if (ImGui::BeginPopupModal("GoSurveyCopySurveyDup", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextWrapped(
-        "Lines and circles are already copied. Choose how to add duplicate survey points when another point "
-        "already uses the same ID.");
-    ImGui::Separator();
-    int pol = static_cast<int>(cmd.copySurveyDuplicatePolicy);
-    if (ImGui::Combo(
-            "If point numbers exist",
-            &pol,
-            "Notify (skip duplicate)\0Renumber (next free ID)\0Merge (update coords/desc)\0Overwrite (replace "
-            "row)\0\0"))
-      cmd.copySurveyDuplicatePolicy = static_cast<SurveyDuplicatePolicy>(pol);
-
-    if (ImGui::Button("OK##copy_survey_dup", ImVec2(120.f, 0.f))) {
-      ApplyCopySurveyDuplicateModalResult(cmd, true, log);
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel##copy_survey_dup", ImVec2(120.f, 0.f))) {
-      ApplyCopySurveyDuplicateModalResult(cmd, false, log);
-      ImGui::CloseCurrentPopup();
-    }
-    ImGui::EndPopup();
-  }
 }
