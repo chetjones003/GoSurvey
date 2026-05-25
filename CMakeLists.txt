@@ -12,6 +12,7 @@ include(FetchContent)
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+
 FetchContent_Declare(glfw
   GIT_REPOSITORY https://github.com/glfw/glfw.git
   GIT_TAG 3.4
@@ -85,6 +86,7 @@ add_executable(GoSurvey
   src/ui/CadUi_ImportExportPoints.cpp
   src/cad/CadCommands.cpp
   src/cad/geom2d.cpp
+  src/cad/CadCoordinateFrame.cpp
   src/cad/CadRubberPreview.cpp
   src/cad/TransformPreview.cpp
   src/cad/CadLinetype.cpp
