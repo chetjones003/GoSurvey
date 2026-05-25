@@ -26,7 +26,7 @@ struct SnapCandidateEntry {
 /// (LINE previous point, circle center while sizing radius, prior 3P picks, etc.) so the snap
 /// lies at the foot from that reference onto each segment—not under the cursor along the line.
 /// \p commandActive retained for callers; perpendicular logic ignores it when no reference applies.
-[[nodiscard]] Hit FindBest(float wx, float wy, const AppCommandState& cmd, bool commandActive,
+[[nodiscard]] Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActive,
                            float tolWorld);
 
 /// All snap targets of a single \p kind in the drawing (no aperture). Sorted by distance to (\p sortWorldX,\p sortWorldY).

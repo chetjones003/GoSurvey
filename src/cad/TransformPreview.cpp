@@ -1,6 +1,7 @@
 #include "TransformPreview.hpp"
 
 #include "CadCommands.hpp"
+#include "geom2d.hpp"
 
 #include <cmath>
 #include <vector>
@@ -22,52 +23,14 @@ void scalePreviewPt(float baseX, float baseY, float scale, float* inOutX, float*
 }
 
 void appendArcPolylineStrip(std::vector<float>* out, float z, const CadArc& a, int n) {
-  for (int i = 0; i < n; ++i) {
-    const float u0 = static_cast<float>(i) / static_cast<float>(n);
-    const float u1 = static_cast<float>(i + 1) / static_cast<float>(n);
-    const float t0 = a.startRad + a.sweepRad * u0;
-    const float t1 = a.startRad + a.sweepRad * u1;
-    const float x0 = a.cx + a.r * std::cos(t0);
-    const float y0 = a.cy + a.r * std::sin(t0);
-    const float x1 = a.cx + a.r * std::cos(t1);
-    const float y1 = a.cy + a.r * std::sin(t1);
-    out->push_back(x0);
-    out->push_back(y0);
-    out->push_back(z);
-    out->push_back(x1);
-    out->push_back(y1);
-    out->push_back(z);
-  }
+  AppendArcLineSegments(*out, static_cast<double>(a.cx), static_cast<double>(a.cy), static_cast<double>(a.r),
+                        static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), n, z);
 }
 
 void appendEllipsePolylineStrip(std::vector<float>* out, float z, const CadEllipse& el, int n) {
-  const float ma = std::hypot(el.majVx, el.majVy);
-  if (ma < 1e-8f)
-    return;
-  const float ux = el.majVx / ma;
-  const float uy = el.majVy / ma;
-  const float px = -uy;
-  const float py = ux;
-  const float mb = ma * el.ratio;
-  constexpr float twopi = 6.28318530718f;
-  for (int i = 0; i < n; ++i) {
-    const float u0 = twopi * static_cast<float>(i) / static_cast<float>(n);
-    const float u1 = twopi * static_cast<float>(i + 1) / static_cast<float>(n);
-    const float c0 = std::cos(u0);
-    const float s0 = std::sin(u0);
-    const float c1 = std::cos(u1);
-    const float s1 = std::sin(u1);
-    const float x0 = el.cx + ux * (ma * c0) + px * (mb * s0);
-    const float y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
-    const float x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
-    const float y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
-    out->push_back(x0);
-    out->push_back(y0);
-    out->push_back(z);
-    out->push_back(x1);
-    out->push_back(y1);
-    out->push_back(z);
-  }
+  AppendEllipseLineSegments(*out, static_cast<double>(el.cx), static_cast<double>(el.cy),
+                            static_cast<double>(el.majVx), static_cast<double>(el.majVy),
+                            static_cast<double>(el.ratio), n, z);
 }
 
 void appendCommittedPolylineStrip(std::vector<float>* out, float z, const AppCommandState& cmd, int pi) {

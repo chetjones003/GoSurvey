@@ -1,4 +1,5 @@
 #include "CadUi.hpp"
+#include "CadCoordinateFrame.hpp"
 #include "ViewportPickPolicy.hpp"
 #include "MtextRichFormat.hpp"
 
@@ -2598,11 +2599,12 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
       ImGui::TextUnformatted("Northing (Y)");
       ImGui::TableNextColumn();
       {
-        double dn = static_cast<double>(p.northing);
+        double dn = static_cast<double>(CadCoord::WorldYFromLocal(cmd, p.northing));
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::InputDouble("##svy_n", &dn, 0., 0., "%.6f");
         if (ImGui::IsItemDeactivatedAfterEdit()) {
-          p.northing = static_cast<float>(dn);
+          const double wx = static_cast<double>(CadCoord::WorldXFromLocal(cmd, p.easting));
+          CadCoord::LocalFromWorld(cmd, wx, dn, &p.easting, &p.northing);
           EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(rowIx), log);
         }
       }
@@ -2611,11 +2613,12 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
       ImGui::TextUnformatted("Easting (X)");
       ImGui::TableNextColumn();
       {
-        double de = static_cast<double>(p.easting);
+        double de = static_cast<double>(CadCoord::WorldXFromLocal(cmd, p.easting));
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::InputDouble("##svy_e", &de, 0., 0., "%.6f");
         if (ImGui::IsItemDeactivatedAfterEdit()) {
-          p.easting = static_cast<float>(de);
+          const double wy = static_cast<double>(CadCoord::WorldYFromLocal(cmd, p.northing));
+          CadCoord::LocalFromWorld(cmd, de, wy, &p.easting, &p.northing);
           EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(rowIx), log);
         }
       }
@@ -2719,12 +2722,14 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
       }
       gBufId = gSameId ? std::to_string(r.id) : std::string("VARIES");
       if (gSameE) {
-        std::snprintf(tmp, sizeof(tmp), "%.6f", static_cast<double>(r.easting));
+        std::snprintf(tmp, sizeof(tmp), "%.6f",
+                      static_cast<double>(CadCoord::WorldXFromLocal(cmd, r.easting)));
         gBufE = tmp;
       } else
         gBufE = "VARIES";
       if (gSameN) {
-        std::snprintf(tmp, sizeof(tmp), "%.6f", static_cast<double>(r.northing));
+        std::snprintf(tmp, sizeof(tmp), "%.6f",
+                      static_cast<double>(CadCoord::WorldYFromLocal(cmd, r.northing)));
         gBufN = tmp;
       } else
         gBufN = "VARIES";
@@ -2791,13 +2796,26 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
       ImGui::SetNextItemWidth(-FLT_MIN);
       if (sameFlag) {
         const int refIx = ixv.front();
-        double dv = static_cast<double>(cmd.surveyPoints[static_cast<size_t>(refIx)].*memb);
+        const SurveyPoint& ref = cmd.surveyPoints[static_cast<size_t>(refIx)];
+        double dv = static_cast<double>(ref.*memb);
+        if (memb == &SurveyPoint::easting)
+          dv = static_cast<double>(CadCoord::WorldXFromLocal(cmd, ref.easting));
+        else if (memb == &SurveyPoint::northing)
+          dv = static_cast<double>(CadCoord::WorldYFromLocal(cmd, ref.northing));
         ImGui::InputDouble(idSame, &dv, 0., 0., fmt);
         if (ImGui::IsItemDeactivatedAfterEdit()) {
           for (int ix : ixv) {
             if (ix < 0 || static_cast<size_t>(ix) >= cmd.surveyPoints.size())
               continue;
-            cmd.surveyPoints[static_cast<size_t>(ix)].*memb = static_cast<float>(dv);
+            SurveyPoint& pt = cmd.surveyPoints[static_cast<size_t>(ix)];
+            if (memb == &SurveyPoint::easting) {
+              const double wy = static_cast<double>(CadCoord::WorldYFromLocal(cmd, pt.northing));
+              CadCoord::LocalFromWorld(cmd, dv, wy, &pt.easting, &pt.northing);
+            } else if (memb == &SurveyPoint::northing) {
+              const double wx = static_cast<double>(CadCoord::WorldXFromLocal(cmd, pt.easting));
+              CadCoord::LocalFromWorld(cmd, wx, dv, &pt.easting, &pt.northing);
+            } else
+              pt.*memb = static_cast<float>(dv);
             EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(ix), log);
           }
           gMultiFp = ~0ull;
@@ -2821,7 +2839,15 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
           for (int ix : ixv) {
             if (ix < 0 || static_cast<size_t>(ix) >= cmd.surveyPoints.size())
               continue;
-            cmd.surveyPoints[static_cast<size_t>(ix)].*memb = static_cast<float>(v);
+            SurveyPoint& pt = cmd.surveyPoints[static_cast<size_t>(ix)];
+            if (memb == &SurveyPoint::easting) {
+              const double wy = static_cast<double>(CadCoord::WorldYFromLocal(cmd, pt.northing));
+              CadCoord::LocalFromWorld(cmd, v, wy, &pt.easting, &pt.northing);
+            } else if (memb == &SurveyPoint::northing) {
+              const double wx = static_cast<double>(CadCoord::WorldXFromLocal(cmd, pt.easting));
+              CadCoord::LocalFromWorld(cmd, wx, v, &pt.easting, &pt.northing);
+            } else
+              pt.*memb = static_cast<float>(v);
             EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(ix), log);
           }
           gMultiFp = ~0ull;
@@ -3315,7 +3341,7 @@ float CadStatusBarStripHeightPx() {
   return kPadY * 2.f + sep + ImGui::GetFrameHeight();
 }
 
-void DrawCadStatusBarStrip(AppCommandState& cmd, float cursorX, float cursorY, float cursorZ,
+void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY, float cursorZ,
                            bool* ortho_mode_enabled, bool* grid_visible) {
   ImGuiViewport* vp = ImGui::GetMainViewport();
   const float sh = CadStatusBarStripHeightPx();
@@ -3869,8 +3895,8 @@ static void FormatSnapPickLine(char* line, size_t cap, const AppCommandState& cm
 
 /// When a single annotation with viewport grips is selected, pull the cursor to the nearest grip inside the OSNAP
 /// aperture (competes with geometry snap by closest distance to raw pick).
-static void ApplyGripMagnetToGrips(AppCommandState& cmd, float rawX, float rawY, float halfH, float availY,
-                                   float* ioX, float* ioY, CadSnap::Hit* out_snap) {
+static void ApplyGripMagnetToGrips(AppCommandState& cmd, double rawX, double rawY, float halfH, float availY,
+                                   double* ioX, double* ioY, CadSnap::Hit* out_snap) {
   if (!ioX || !ioY)
     return;
   if (cmd.selection.size() != 1 || cmd.selection[0].type != SelectedEntity::Type::Annotation)
@@ -3880,23 +3906,24 @@ static void ApplyGripMagnetToGrips(AppCommandState& cmd, float rawX, float rawY,
     return;
   const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(ix)];
   const float tol = CadSnap::WorldToleranceFromPixels(availY, halfH, cmd.objectSnapAperturePx);
-  const float tol2 = tol * tol;
-  auto dist2 = [](float px, float py, float qx, float qy) {
-    const float dx = px - qx;
-    const float dy = py - qy;
+  const double tol2 = static_cast<double>(tol) * static_cast<double>(tol);
+  auto dist2 = [](double px, double py, float qx, float qy) {
+    const double dx = px - static_cast<double>(qx);
+    const double dy = py - static_cast<double>(qy);
     return dx * dx + dy * dy;
   };
-  float bestD2 = dist2(rawX, rawY, *ioX, *ioY);
-  float bx = *ioX, by = *ioY;
+  double bestD2 = dist2(rawX, rawY, static_cast<float>(*ioX), static_cast<float>(*ioY));
+  double bx = *ioX;
+  double by = *ioY;
   auto offer = [&](float gx, float gy) {
-    const float h = dist2(rawX, rawY, gx, gy);
-    if (h <= tol2 && h < bestD2 - 1e-15f) {
+    const double h = dist2(rawX, rawY, gx, gy);
+    if (h <= tol2 && h < bestD2 - 1.e-15) {
       bestD2 = h;
-      bx = gx;
-      by = gy;
+      bx = static_cast<double>(gx);
+      by = static_cast<double>(gy);
     }
   };
-  offer(*ioX, *ioY);
+  offer(static_cast<float>(*ioX), static_cast<float>(*ioY));
   if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (CadDimAnyGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml)) {
@@ -3932,8 +3959,8 @@ static void ApplyGripMagnetToGrips(AppCommandState& cmd, float rawX, float rawY,
 }
 
 void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, std::vector<std::string>& log,
-                         char* cmdBuf, int cmdBufSize, float* panX, float* panY, float* zoom, float* outCursorX,
-                         float* outCursorY, float* outCursorRawX, float* outCursorRawY, int* outFbW, int* outFbH,
+                         char* cmdBuf, int cmdBufSize, double* panX, double* panY, float* zoom, double* outCursorX,
+                         double* outCursorY, double* outCursorRawX, double* outCursorRawY, int* outFbW, int* outFbH,
                          CadSnap::Hit* out_snap) {
   ImGui::SetNextWindowSize(ImVec2(900, 650), ImGuiCond_FirstUseEver);
   if (!ImGui::Begin("Drawing1", nullptr)) {
@@ -3968,35 +3995,42 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (hovered) {
     const float wheel = ImGui::GetIO().MouseWheel;
     if (wheel != 0.f && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
-      const float u = mx / std::max(avail.x, 1.f);
-      const float v = my / std::max(avail.y, 1.f);
-      const float z0 = *zoom;
-      const float halfH0 = (1.f / std::max(z0, 1.e-4f)) * 50.f;
-      // Continuous zoom (works with fractional MouseWheel deltas; less "stair-step" than fixed pow steps).
-      const float z1 = std::clamp(z0 * std::exp(wheel * 0.14f), 1.e-4f, 1.e5f);
-      const float halfH1 = (1.f / std::max(z1, 1.e-4f)) * 50.f;
-      const float dh = halfH0 - halfH1;
-      *panX += (u - 0.5f) * 2.f * aspect * dh;
-      *panY += dh * (1.f - 2.f * v);
-      *zoom = z1;
+      const double u = static_cast<double>(mx) / static_cast<double>(std::max(avail.x, 1.f));
+      const double v = static_cast<double>(my) / static_cast<double>(std::max(avail.y, 1.f));
+      const double z0 = static_cast<double>(*zoom);
+      const double halfH0 = (1.0 / std::max(z0, 1.e-4)) * 50.0;
+      const double z1 = std::clamp(z0 * std::exp(static_cast<double>(wheel) * 0.14), 1.e-4, 1.e5);
+      const double halfH1 = (1.0 / std::max(z1, 1.e-4)) * 50.0;
+      const double dh = halfH0 - halfH1;
+      const double aspectD = static_cast<double>(aspect);
+      *panX += (u - 0.5) * 2.0 * aspectD * dh;
+      *panY += dh * (1.0 - 2.0 * v);
+      *zoom = static_cast<float>(z1);
     }
 
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
       ImVec2 d = ImGui::GetIO().MouseDelta;
-      const float aspect = avail.x / std::max(avail.y, 1.f);
-      const float halfH = (1.f / std::max(*zoom, 1.e-4f)) * 50.f;
-      const float halfW = halfH * aspect;
-      *panX -= (d.x / std::max(avail.x, 1.f)) * (2.f * halfW);
-      *panY += (d.y / std::max(avail.y, 1.f)) * (2.f * halfH);
+      const double aspectD = static_cast<double>(avail.x) / static_cast<double>(std::max(avail.y, 1.f));
+      const double halfH = (1.0 / std::max(static_cast<double>(*zoom), 1.e-4)) * 50.0;
+      const double halfW = halfH * aspectD;
+      *panX -= (static_cast<double>(d.x) / static_cast<double>(std::max(avail.x, 1.f))) * (2.0 * halfW);
+      *panY += (static_cast<double>(d.y) / static_cast<double>(std::max(avail.y, 1.f))) * (2.0 * halfH);
     }
   }
 
+  const int vpFbW = static_cast<int>(std::max(1.f, std::floor(avail.x)));
+  const int vpFbH = static_cast<int>(std::max(1.f, std::floor(avail.y)));
+  ProcessPendingViewportZoom(cmd, panX, panY, zoom, vpFbW, vpFbH, aspect, log);
   const float halfH = (1.f / std::max(*zoom, 1.e-4f)) * 50.f;
   const float halfW = halfH * aspect;
-  const float worldLeft = -halfW + *panX;
-  const float worldRight = halfW + *panX;
-  const float worldBottom = -halfH + *panY;
-  const float worldTop = halfH + *panY;
+  const double panXd = *panX;
+  const double panYd = *panY;
+  const double halfWd = static_cast<double>(halfW);
+  const double halfHd = static_cast<double>(halfH);
+  const double worldLeft = -halfWd + panXd;
+  const double worldRight = halfWd + panXd;
+  const double worldBottom = -halfHd + panYd;
+  const double worldTop = halfHd + panYd;
   const float surveyCrossHalfW =
       SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
 
@@ -4005,8 +4039,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     if (hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
       const float uR = mx / std::max(avail.x, 1.f);
       const float vR = my / std::max(avail.y, 1.f);
-      const float rmbWx = worldLeft + uR * (worldRight - worldLeft);
-      const float rmbWy = worldTop - vR * (worldTop - worldBottom);
+      const double rmbWx = worldLeft + static_cast<double>(uR) * (worldRight - worldLeft);
+      const double rmbWy = worldTop - static_cast<double>(vR) * (worldTop - worldBottom);
       using AK = AppCommandState::Kind;
       const bool blockSnapPickMenu = cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond || cmd.dimGripMoveActive ||
                                      cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
@@ -4014,8 +4048,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           cmd.active != AK::None && cmd.objectSnapEnabled && !blockSnapPickMenu;
       if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         if (ioVpRmb.KeyShift && allowSnapCycle) {
-          g_snapMenuSortX = rmbWx;
-          g_snapMenuSortY = rmbWy;
+          g_snapMenuSortX = static_cast<float>(rmbWx);
+          g_snapMenuSortY = static_cast<float>(rmbWy);
           g_snapMenuStep = 0;
           g_snapPickMenuScratch.clear();
           ImGui::OpenPopup("##gos_snap_pick");
@@ -4056,8 +4090,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
     const float u = mx / std::max(avail.x, 1.f);
     const float v = my / std::max(avail.y, 1.f);
-    const float rawX = worldLeft + u * (worldRight - worldLeft);
-    const float rawY = worldTop - v * (worldTop - worldBottom);
+    const double rawX = worldLeft + static_cast<double>(u) * (worldRight - worldLeft);
+    const double rawY = worldTop - static_cast<double>(v) * (worldTop - worldBottom);
+    const float rawXf = static_cast<float>(rawX);
+    const float rawYf = static_cast<float>(rawY);
 
     if (outCursorRawX)
       *outCursorRawX = rawX;
@@ -4069,7 +4105,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       SelectedEntity hit{};
       float d2 = 0.f;
       const float offTol = CadOffsetEntityPickTolWorld(cmd);
-      if (PickClosestCadEntity(cmd, rawX, rawY, offTol, &hit, &d2)) {
+      if (PickClosestCadEntity(cmd, rawXf, rawYf, offTol, &hit, &d2)) {
         cmd.offsetHoverHighlightValid = true;
         cmd.offsetHoverEntity = hit;
       } else {
@@ -4083,7 +4119,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                                   cmd.mtextGripMoveActive || cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond;
     if (!cmd.surveyPoints.empty() && !blockSurveyHover)
       cmd.viewportHoverSurveyPointIndex =
-          PickSurveyPointIndex(cmd.surveyPoints, rawX, rawY, surveyCrossHalfW, avail.y, halfH,
+          PickSurveyPointIndex(cmd.surveyPoints, rawXf, rawYf, surveyCrossHalfW, avail.y, halfH,
                                cmd.objectSnapAperturePx);
 
     if (cmd.pendingOneShotSnapValid && outCursorX && outCursorY) {
@@ -4116,17 +4152,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           cmd.viewportSnapPickWorldY = snap.y;
           if (out_snap)
             *out_snap = snap;
-          const float dx = snap.x - rawX;
-          const float dy = snap.y - rawY;
-          const float dist = std::hypot(dx, dy);
-          const float outer = tol * 2.75f;
-          float alpha = 0.f;
-          if (outer > 1.e-12f && dist < outer) {
-            const float u = std::clamp(1.f - dist / outer, 0.f, 1.f);
-            alpha = u * u * 0.58f;
-            if (dist < tol)
-              alpha = std::max(alpha, 0.88f);
-            alpha = std::min(alpha, 0.92f);
+          const double dx = static_cast<double>(snap.x) - rawX;
+          const double dy = static_cast<double>(snap.y) - rawY;
+          const double dist = std::hypot(dx, dy);
+          const double outer = static_cast<double>(tol) * 2.75;
+          double alpha = 0.;
+          if (outer > 1.e-12 && dist < outer) {
+            const double uMag = std::clamp(1.0 - dist / outer, 0.0, 1.0);
+            alpha = uMag * uMag * 0.58;
+            if (dist < static_cast<double>(tol))
+              alpha = std::max(alpha, 0.88);
+            alpha = std::min(alpha, 0.92);
           }
           *outCursorX = rawX + alpha * dx;
           *outCursorY = rawY + alpha * dy;
@@ -4431,12 +4467,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     const float uPick = mx / std::max(avail.x, 1.f);
     const float vPick = my / std::max(avail.y, 1.f);
-    const float rawPickX = worldLeft + uPick * (worldRight - worldLeft);
-    const float rawPickY = worldTop - vPick * (worldTop - worldBottom);
+    const double rawPickX = worldLeft + static_cast<double>(uPick) * (worldRight - worldLeft);
+    const double rawPickY = worldTop - static_cast<double>(vPick) * (worldTop - worldBottom);
+    const float rawPickXf = static_cast<float>(rawPickX);
+    const float rawPickYf = static_cast<float>(rawPickY);
 
     const bool useRawWorldForWindowRect = ViewportUseRawWorldForSelectionRectPick(cmd);
-    const float wxPick = useRawWorldForWindowRect ? rawPickX : *outCursorX;
-    const float wyPick = useRawWorldForWindowRect ? rawPickY : *outCursorY;
+    const float wxPick = useRawWorldForWindowRect ? rawPickXf : *outCursorX;
+    const float wyPick = useRawWorldForWindowRect ? rawPickYf : *outCursorY;
     const bool keyShift = ImGui::GetIO().KeyShift;
     constexpr float kFenceDirTolPx = 3.f;
     const float fenceDragDx = mx - cmd.selBoxAnchorScreenX;
@@ -4446,7 +4484,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const int hitIx =
           cmd.surveyPoints.empty()
               ? -1
-              : PickSurveyPointIndex(cmd.surveyPoints, rawPickX, rawPickY, surveyCrossHalfW, avail.y, halfH,
+              : PickSurveyPointIndex(cmd.surveyPoints, rawPickXf, rawPickYf, surveyCrossHalfW, avail.y, halfH,
                                      cmd.objectSnapAperturePx);
       if (hitIx >= 0) {
         ClearCadSelection(cmd);
@@ -4524,11 +4562,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const CadAnnotation& can = cmd.cadAnnotations[static_cast<size_t>(aix)];
           if (can.kind == CadAnnotation::Kind::Mtext) {
             gripCorner =
-                HitTestMtextGrip(mouse.x, mouse.y, imgPos, avail, worldLeft, worldRight, worldBottom, worldTop, can,
+                HitTestMtextGrip(mouse.x, mouse.y, imgPos, avail, static_cast<float>(worldLeft),
+                                 static_cast<float>(worldRight), static_cast<float>(worldBottom),
+                                 static_cast<float>(worldTop), can,
                                  10.f);
           } else if (can.kind == CadAnnotation::Kind::DimAligned || can.kind == CadAnnotation::Kind::DimLinear) {
             dimGripHit =
-                HitTestDimGrip(mouse.x, mouse.y, imgPos, avail, worldLeft, worldRight, worldBottom, worldTop, can,
+                HitTestDimGrip(mouse.x, mouse.y, imgPos, avail, static_cast<float>(worldLeft),
+                               static_cast<float>(worldRight), static_cast<float>(worldBottom),
+                               static_cast<float>(worldTop), can,
                                10.f);
           }
         }
@@ -4597,11 +4639,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
       if (!handled && cmd.selection.size() == 1) {
         const SelectedEntity sel = cmd.selection[0];
-        const float denx = worldRight - worldLeft + 1e-12f;
-        const float deny = worldTop - worldBottom + 1e-12f;
-        auto wtsRel = [&](float wx, float wy) -> ImVec2 {
-          const float u = (wx - worldLeft) / denx;
-          const float v = (worldTop - wy) / deny;
+        const double denx = worldRight - worldLeft + 1e-12;
+        const double deny = worldTop - worldBottom + 1e-12;
+        auto wtsRel = [&](double wx, double wy) -> ImVec2 {
+          const float u = static_cast<float>((wx - worldLeft) / denx);
+          const float v = static_cast<float>((worldTop - wy) / deny);
           return ImVec2(u * avail.x, v * avail.y); // relative to image top-left
         };
 
@@ -4931,14 +4973,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (!cmd.cadAnnotations.empty() || !transformAnnPreviews.empty() || showMtextCmdDraft || showDimCmdDraft) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     auto worldToScreen = [&](float wx, float wy, ImVec2* out) {
-      const float denx = worldRight - worldLeft + 1e-12f;
-      const float deny = worldTop - worldBottom + 1e-12f;
-      const float u = (wx - worldLeft) / denx;
-      const float v = (worldTop - wy) / deny;
+      const double denx = worldRight - worldLeft + 1e-12;
+      const double deny = worldTop - worldBottom + 1e-12;
+      const float u = static_cast<float>((static_cast<double>(wx) - worldLeft) / denx);
+      const float v = static_cast<float>((worldTop - static_cast<double>(wy)) / deny);
       out->x = imgPos.x + u * avail.x;
       out->y = imgPos.y + v * avail.y;
     };
-    const float worldPerPxY = (worldTop - worldBottom) / std::max(avail.y, 1.f);
+    const float worldPerPxY = static_cast<float>((worldTop - worldBottom) / static_cast<double>(std::max(avail.y, 1.f)));
     constexpr ImU32 kAnnCol = IM_COL32(230, 232, 238, 255);
     constexpr ImU32 kAnnTfPrevCol = IM_COL32(160, 220, 255, 130);
     constexpr ImU32 kMtextDraftCol = IM_COL32(210, 200, 140, 200);
@@ -5500,10 +5542,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     ImGui::EndPopup();
   }
 
-  DrawMtextRichEditorOverlay(cmd, log, worldLeft, worldRight, worldBottom, worldTop, imgPos, avail);
+  DrawMtextRichEditorOverlay(cmd, log, static_cast<float>(worldLeft), static_cast<float>(worldRight),
+                             static_cast<float>(worldBottom), static_cast<float>(worldTop), imgPos, avail);
 
-  *outFbW = static_cast<int>(std::max(1.f, std::floor(avail.x)));
-  *outFbH = static_cast<int>(std::max(1.f, std::floor(avail.y)));
+  *outFbW = vpFbW;
+  *outFbH = vpFbH;
+  cmd.viewportLastFbW = vpFbW;
+  cmd.viewportLastFbH = vpFbH;
+  cmd.viewportPanX = *panX;
+  cmd.viewportPanY = *panY;
+  cmd.viewportZoom = *zoom;
 
   ImGui::End();
 }
@@ -6040,17 +6088,19 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
         EnsureSurveyPointLabelMtext(cmd, i, &log);
       }
       ImGui::TableNextColumn();
-      double de = static_cast<double>(p.easting);
+      double de = static_cast<double>(CadCoord::WorldXFromLocal(cmd, p.easting));
       ImGui::InputDouble("##e", &de, 0., 0., "%.6f");
       if (ImGui::IsItemDeactivatedAfterEdit()) {
-        p.easting = static_cast<float>(de);
+        const double wy = static_cast<double>(CadCoord::WorldYFromLocal(cmd, p.northing));
+        CadCoord::LocalFromWorld(cmd, de, wy, &p.easting, &p.northing);
         EnsureSurveyPointLabelMtext(cmd, i, &log);
       }
       ImGui::TableNextColumn();
-      double dn = static_cast<double>(p.northing);
+      double dn = static_cast<double>(CadCoord::WorldYFromLocal(cmd, p.northing));
       ImGui::InputDouble("##n", &dn, 0., 0., "%.6f");
       if (ImGui::IsItemDeactivatedAfterEdit()) {
-        p.northing = static_cast<float>(dn);
+        const double wx = static_cast<double>(CadCoord::WorldXFromLocal(cmd, p.easting));
+        CadCoord::LocalFromWorld(cmd, wx, dn, &p.easting, &p.northing);
         EnsureSurveyPointLabelMtext(cmd, i, &log);
       }
       ImGui::TableNextColumn();

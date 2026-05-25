@@ -24,7 +24,7 @@ public:
   /// \param lineEntityAttrs / circleEntityAttrs parallel to segments/circles; nullptr uses fixed defaults.
   /// \param extended Optional arcs / ellipses / polylines (same shader batch as lines).
   /// \param showGrid draws the minor grid in model space (toggle from UI).
-  void RenderScene(float panX, float panY, float zoom, int fbWidth, int fbHeight,
+  void RenderScene(double panX, double panY, float zoom, int fbWidth, int fbHeight,
                    const std::vector<float>& userLines, const std::vector<float>& circlesCxCyR,
                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
                    const CadSnap::Hit* snapOverlay, float snapGlyphHalfPx, const float* selectionFillRect,
@@ -82,6 +82,10 @@ private:
   std::vector<VcLineBatch> vcLineBatches_;
   std::vector<VcLineBatch> vcCircleBatches_;
   std::uint32_t cachedCadGpuRevision_ = 0xffffffffu;
+  double cachedViewAnchorX_ = 0.;
+  double cachedViewAnchorY_ = 0.;
+  double cachedHalfHd_ = -1.;
+  int cachedFbHeight_ = -1;
 
   unsigned int gridProgram_ = 0;
   unsigned int vaoGrid_ = 0;
