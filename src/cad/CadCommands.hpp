@@ -411,6 +411,10 @@ struct AppCommandState {
 
   float viewportSnapPickWorldY = 0.f;
 
+  /// Command-line log cache for the selectable read-only multiline (rebuilt each frame from \ref log).
+  std::vector<char> commandLogCacheBytes;
+  size_t commandLogLastSizeForAutoscroll = 0;
+
   /// Last Drawing1 viewport metrics (match survey MTEXT box to on-screen font scaling).
   float viewportLastSurveyLayoutOrthoHalfH = 50.f;
 
