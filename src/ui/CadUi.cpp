@@ -3522,32 +3522,20 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     }
     cmd.commandLogCacheBytes[pos] = '\0';
 
-    // InputTextMultiline owns its own scroll child; SetScrollHereY on the outer BeginChild was a no-op (the inner
-    // view doesn't overflow because InputTextMultiline fills it). Drive its internal scroll via a CallbackAlways
-    // that pins the caret to the end of the buffer when the log grew. ImGui keeps the caret visible, which scrolls
-    // the inner viewport to the bottom even though we never show a caret in read-only mode.
-    struct CmdLogScrollCtx {
-      bool jumpToEnd = false;
-    } scrollCtx;
-    scrollCtx.jumpToEnd = (log.size() != cmd.commandLogLastSizeForAutoscroll);
-    if (scrollCtx.jumpToEnd)
+    // InputTextMultiline owns its own scroll child. We can target that child's scroll via SetNextWindowScroll —
+    // the docs explicitly call this out as the correct way to pre-set the next Begin/BeginChild's scroll without
+    // a one-frame delay. Passing FLT_MAX clamps to ScrollMaxY (the bottom). The CursorPos / SetScrollHereY tricks
+    // are no-ops here because the read-only multiline never owns the active cursor.
+    const bool logGrew = (log.size() != cmd.commandLogLastSizeForAutoscroll);
+    if (logGrew) {
       cmd.commandLogLastSizeForAutoscroll = log.size();
-    const auto cmdLogCb = [](ImGuiInputTextCallbackData* data) -> int {
-      auto* ctx = static_cast<CmdLogScrollCtx*>(data->UserData);
-      if (ctx && ctx->jumpToEnd) {
-        data->CursorPos = data->BufTextLen;
-        data->SelectionStart = data->SelectionEnd = data->CursorPos;
-        ctx->jumpToEnd = false;
-      }
-      return 0;
-    };
+      ImGui::SetNextWindowScroll(ImVec2(-1.f, FLT_MAX));
+    }
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.f, 0.f, 0.f, 0.f));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.f, 0.f));
     ImGui::InputTextMultiline("##CmdLogReadOnly", cmd.commandLogCacheBytes.data(), cmd.commandLogCacheBytes.size(),
                               ImVec2(-FLT_MIN, scrollH),
-                              ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoHorizontalScroll |
-                                  ImGuiInputTextFlags_CallbackAlways,
-                              cmdLogCb, &scrollCtx);
+                              ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoHorizontalScroll);
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
   }
