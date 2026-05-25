@@ -33,15 +33,15 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
 /// Fixed-height strip: OSNAP, ORTHO, GRID, POLAR, plot scale, cursor readout. Laid out by \ref main.cpp across the
 /// bottom of the main viewport (not docked, not movable).
 float CadStatusBarStripHeightPx();
-void DrawCadStatusBarStrip(AppCommandState& cmd, float cursorX, float cursorY, float cursorZ,
+void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY, float cursorZ,
                            bool* ortho_mode_enabled, bool* grid_visible);
 
 /// Central CAD viewport: renders OpenGL texture and handles pan / zoom / LINE picks.
 /// Writes framebuffer pixel size and cursor world position. When object snap finds a hit, cursor and
 /// \p out_snap reflect the snapped point; otherwise raw hover coordinates.
 void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, std::vector<std::string>& log,
-                         char* cmdBuf, int cmdBufSize, float* panX, float* panY, float* zoom, float* outCursorX,
-                         float* outCursorY, float* outCursorRawX, float* outCursorRawY, int* outFbW, int* outFbH,
+                         char* cmdBuf, int cmdBufSize, double* panX, double* panY, float* zoom, double* outCursorX,
+                         double* outCursorY, double* outCursorRawX, double* outCursorRawY, int* outFbW, int* outFbH,
                          CadSnap::Hit* out_snap);
 
 void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log);

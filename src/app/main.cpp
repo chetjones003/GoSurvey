@@ -1,4 +1,5 @@
 #include "CadCommands.hpp"
+#include "CadCoordinateFrame.hpp"
 #include "CadRubberPreview.hpp"
 #include "TransformPreview.hpp"
 #include "CadUi.hpp"
@@ -139,13 +140,10 @@ int main() {
   TryLoadStartupWorkspaceTemplate(cmd, cmdLog);
   char cmdBuf[4096]{};
 
-  float panX = 0.f;
-  float panY = 0.f;
-  float zoom = 1.f;
-  float curX = 0.f;
-  float curY = 0.f;
-  float curRawX = 0.f;
-  float curRawY = 0.f;
+  double curX = 0.;
+  double curY = 0.;
+  double curRawX = 0.;
+  double curRawY = 0.;
   int fbW = 900;
   int fbH = 650;
 
@@ -281,10 +279,11 @@ int main() {
     DrawPropertiesPanel(cmd, &cmdLog);
 
     CadSnap::Hit snapHit{};
-    DrawDrawingViewport(viewport.ColorTexture(), cmd, cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), &panX,
-                        &panY, &zoom, &curX, &curY, &curRawX, &curRawY, &fbW, &fbH, &snapHit);
-    cmd.uiCursorWorldX = curX;
-    cmd.uiCursorWorldY = curY;
+    DrawDrawingViewport(viewport.ColorTexture(), cmd, cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)),
+                        &cmd.viewportPanX, &cmd.viewportPanY, &cmd.viewportZoom, &curX, &curY, &curRawX, &curRawY,
+                        &fbW, &fbH, &snapHit);
+    cmd.uiCursorWorldX = CadCoord::WorldXFromLocal(cmd, static_cast<float>(curX));
+    cmd.uiCursorWorldY = CadCoord::WorldYFromLocal(cmd, static_cast<float>(curY));
     {
       ImGuiIO& ioDim = ImGui::GetIO();
       if (!ioDim.WantTextInput && cmd.active == AppCommandState::Kind::DimLinear &&
@@ -296,7 +295,9 @@ int main() {
       }
     }
     DrawCommandLinePanel(cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd);
-    DrawCadStatusBarStrip(cmd, curX, curY, 0.f, &orthoEnabled, &gridVisible);
+    DrawCadStatusBarStrip(cmd, CadCoord::WorldXFromLocal(cmd, static_cast<float>(curX)),
+                          CadCoord::WorldYFromLocal(cmd, static_cast<float>(curY)), 0.f, &orthoEnabled,
+                          &gridVisible);
 
     // LINE/POLYLINE AP: after two picks the bottom command InputText is hidden — Enter must still lock bearing.
     // Keyboard-only "A" then bearing: Enter with empty buffer cancels awaiting mode when no text field is focused.
@@ -331,33 +332,36 @@ int main() {
     DrawSurveyReportsPanel(cmd);
     DrawCopySurveyDuplicateModal(cmd, cmdLog);
 
-    ProcessPendingViewportZoom(cmd, &panX, &panY, &zoom, fbW, fbH, cmdLog);
-
     std::vector<float> rubberLines;
-    AppendCadDraftRubberLines(cmd, curX, curY, orthoEnabled, rubberLines);
+    const float orthoHalfH = (1.f / std::max(cmd.viewportZoom, 1.e-4f)) * 50.f;
+    AppendCadDraftRubberLines(cmd, curX, curY, orthoEnabled, cmd.viewportPanX, cmd.viewportPanY, orthoHalfH, fbH,
+                              rubberLines);
 
     float selRectBuf[4]{};
     const float* selRectPtr = nullptr;
     if (cmd.selBoxWaitingSecond) {
-      selRectBuf[0] = std::min(cmd.selBoxAnchorX, curRawX);
-      selRectBuf[1] = std::max(cmd.selBoxAnchorX, curRawX);
-      selRectBuf[2] = std::min(cmd.selBoxAnchorY, curRawY);
-      selRectBuf[3] = std::max(cmd.selBoxAnchorY, curRawY);
+      selRectBuf[0] = std::min(cmd.selBoxAnchorX, static_cast<float>(curRawX));
+      selRectBuf[1] = std::max(cmd.selBoxAnchorX, static_cast<float>(curRawX));
+      selRectBuf[2] = std::min(cmd.selBoxAnchorY, static_cast<float>(curRawY));
+      selRectBuf[3] = std::max(cmd.selBoxAnchorY, static_cast<float>(curRawY));
       selRectPtr = selRectBuf;
     }
 
     std::vector<float> previewLines;
     std::vector<float> previewCircles;
-    const float previewCx = cmd.active == AppCommandState::Kind::Offset ? curRawX : curX;
-    const float previewCy = cmd.active == AppCommandState::Kind::Offset ? curRawY : curY;
+    const float previewCx =
+        cmd.active == AppCommandState::Kind::Offset ? static_cast<float>(curRawX) : static_cast<float>(curX);
+    const float previewCy =
+        cmd.active == AppCommandState::Kind::Offset ? static_cast<float>(curRawY) : static_cast<float>(curY);
     BuildTransformPreview(cmd, previewCx, previewCy, &previewLines, &previewCircles);
 
     if (cmd.active == AppCommandState::Kind::Trim &&
         cmd.trimPhase == AppCommandState::TrimPhase::CuttingLine_WaitP2) {
-      float lx = curX;
-      float ly = curY;
+      float lx = static_cast<float>(curX);
+      float ly = static_cast<float>(curY);
       ApplyOrthoConstrainFromAnchor(cmd.trimCutInfP1x, cmd.trimCutInfP1y, &lx, &ly, orthoEnabled);
-      PushRubberSeg(rubberLines, cmd.trimCutInfP1x, cmd.trimCutInfP1y, lx, ly);
+      PushRubberSegViewRel(rubberLines, cmd.trimCutInfP1x, cmd.trimCutInfP1y, lx, ly, cmd.viewportPanX,
+                           cmd.viewportPanY);
       const float midx = (cmd.trimCutInfP1x + lx) * 0.5f;
       const float midy = (cmd.trimCutInfP1y + ly) * 0.5f;
       CadTrimAppendCutLineRemovedPreview(cmd, cmd.trimCutInfP1x, cmd.trimCutInfP1y, lx, ly, midx, midy, &previewLines);
@@ -386,7 +390,8 @@ int main() {
     ext.drawingLayers = &cmd.drawingLayerTable;
 
     viewport.SetSize(fbW, fbH);
-    viewport.RenderScene(panX, panY, zoom, fbW, fbH, cmd.userLinesFlat, cmd.userCirclesCxCyR, cmd.cadGpuRevision,
+    viewport.RenderScene(cmd.viewportPanX, cmd.viewportPanY, cmd.viewportZoom, fbW, fbH, cmd.userLinesFlat,
+                         cmd.userCirclesCxCyR, cmd.cadGpuRevision,
                          rubberLines, snapHit.valid ? &snapHit : nullptr,
                          std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f), selRectPtr,
                          previewLines.empty() ? nullptr : &previewLines,
