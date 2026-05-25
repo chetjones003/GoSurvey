@@ -1,5 +1,7 @@
 # --- CMake / build ---
 /build/
+/build-debug/
+/build-release/
 /out/
 /cmake-build-*/
 CMakeCache.txt
