@@ -3507,6 +3507,8 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   const float scrollH = std::max(40.f, availY - footerH);
 
   {
+    // Build a contiguous UTF-8 buffer of the log for TextUnformatted (faster than per-line Text() calls, and the
+    // clipboard copy uses the same buffer). Also drives the AutoCAD-style "Copy log" button.
     size_t neededBytes = 1;
     for (const auto& line : log)
       neededBytes += line.size() + 1;
@@ -3522,22 +3524,37 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     }
     cmd.commandLogCacheBytes[pos] = '\0';
 
-    // InputTextMultiline owns its own scroll child. We can target that child's scroll via SetNextWindowScroll —
-    // the docs explicitly call this out as the correct way to pre-set the next Begin/BeginChild's scroll without
-    // a one-frame delay. Passing FLT_MAX clamps to ScrollMaxY (the bottom). The CursorPos / SetScrollHereY tricks
-    // are no-ops here because the read-only multiline never owns the active cursor.
+    // Header strip above the log: "Copy log" button (for debug paste) and "Clear scroll lock" if user has scrolled up.
+    const float copyBtnW = ImGui::CalcTextSize("Copy log").x + ImGui::GetStyle().FramePadding.x * 2.f + 8.f;
+    if (ImGui::Button("Copy log", ImVec2(copyBtnW, 0.f)))
+      ImGui::SetClipboardText(cmd.commandLogCacheBytes.data());
+    ItemHelpTooltip("Copies the entire command log to the clipboard.");
+    ImGui::SameLine();
+    ImGui::TextDisabled("(%zu line%s)", log.size(), log.size() == 1 ? "" : "s");
+
+    // Canonical ImGui scrolling-log pattern: child window holds TextUnformatted, then SetScrollHereY(1) AT THE END
+    // of the child (after content is laid out so ScrollMaxY is current). InputTextMultiline can't autoscroll
+    // reliably in read-only mode because it never owns an active caret to scroll-into-view.
+    //
+    // Selection note: TextUnformatted doesn't support drag-selection; for debug paste use the "Copy log" button
+    // above (one click → whole log on clipboard). Right-click anywhere in the child also exposes the same action.
+    const float headerH = ImGui::GetFrameHeightWithSpacing();
+    const float logChildH = std::max(40.f, scrollH - headerH);
+    ImGui::BeginChild("##CmdLogChild", ImVec2(0.f, logChildH), true, ImGuiWindowFlags_HorizontalScrollbar);
+    ImGui::PushTextWrapPos(ImGui::GetContentRegionAvail().x);
+    ImGui::TextUnformatted(cmd.commandLogCacheBytes.data());
+    ImGui::PopTextWrapPos();
+    if (ImGui::BeginPopupContextWindow("##cmdLogCtx")) {
+      if (ImGui::MenuItem("Copy log to clipboard"))
+        ImGui::SetClipboardText(cmd.commandLogCacheBytes.data());
+      ImGui::EndPopup();
+    }
     const bool logGrew = (log.size() != cmd.commandLogLastSizeForAutoscroll);
     if (logGrew) {
       cmd.commandLogLastSizeForAutoscroll = log.size();
-      ImGui::SetNextWindowScroll(ImVec2(-1.f, FLT_MAX));
+      ImGui::SetScrollHereY(1.0f);
     }
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.f, 0.f, 0.f, 0.f));
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.f, 0.f));
-    ImGui::InputTextMultiline("##CmdLogReadOnly", cmd.commandLogCacheBytes.data(), cmd.commandLogCacheBytes.size(),
-                              ImVec2(-FLT_MIN, scrollH),
-                              ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoHorizontalScroll);
-    ImGui::PopStyleVar();
-    ImGui::PopStyleColor();
+    ImGui::EndChild();
   }
 
   ImGui::Separator();
