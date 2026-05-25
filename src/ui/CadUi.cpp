@@ -3480,12 +3480,38 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   const float availY = ImGui::GetContentRegionAvail().y;
   const float scrollH = std::max(40.f, availY - footerH);
 
-  ImGui::BeginChild("CmdScroll", ImVec2(0, scrollH), true, ImGuiWindowFlags_HorizontalScrollbar);
-  for (const auto& line : log)
-    ImGui::TextUnformatted(line.c_str());
-  if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
-    ImGui::SetScrollHereY(1.f);
-  ImGui::EndChild();
+  {
+    size_t neededBytes = 1;
+    for (const auto& line : log)
+      neededBytes += line.size() + 1;
+    if (cmd.commandLogCacheBytes.size() < neededBytes)
+      cmd.commandLogCacheBytes.assign(neededBytes + 64, '\0');
+    size_t pos = 0;
+    for (size_t li = 0; li < log.size(); ++li) {
+      const std::string& line = log[li];
+      std::memcpy(cmd.commandLogCacheBytes.data() + pos, line.data(), line.size());
+      pos += line.size();
+      if (li + 1 < log.size())
+        cmd.commandLogCacheBytes[pos++] = '\n';
+    }
+    cmd.commandLogCacheBytes[pos] = '\0';
+
+    ImGui::BeginChild("CmdScroll", ImVec2(0, scrollH), true, ImGuiWindowFlags_HorizontalScrollbar);
+    const float innerW = ImGui::GetContentRegionAvail().x;
+    const float innerH = ImGui::GetContentRegionAvail().y;
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.f, 0.f));
+    ImGui::InputTextMultiline("##CmdLogReadOnly", cmd.commandLogCacheBytes.data(), cmd.commandLogCacheBytes.size(),
+                              ImVec2(innerW, innerH),
+                              ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoHorizontalScroll);
+    ImGui::PopStyleVar();
+    ImGui::PopStyleColor();
+    if (log.size() != cmd.commandLogLastSizeForAutoscroll) {
+      cmd.commandLogLastSizeForAutoscroll = log.size();
+      ImGui::SetScrollHereY(1.f);
+    }
+    ImGui::EndChild();
+  }
 
   ImGui::Separator();
   ImGui::PushID("GoSurveyCmdPanel");
