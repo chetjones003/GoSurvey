@@ -34,7 +34,7 @@ To build from source instead, clone the repo, install CMake and a C++17 toolchai
 
 ## Layout at a glance
 
-- **Drawing viewport** — Pan with the **middle mouse button**. Zoom with the **mouse wheel** (smooth, cursor-centered). A **minor grid** follows the view; large coordinates may be **rebased** on DXF import so pan/zoom stay stable.
+- **Drawing viewport** — Pan with the **middle mouse button**. Zoom with the **mouse wheel** (smooth, cursor-centered). A **minor grid** follows the view.
 - **Ribbon** (under the menu bar) — **Draw**, **Modify**, **View**, **Inquiry**, and **Survey** blocks in a grid; hover a button for a short description and **command bar** aliases (e.g. `LINE` / `L`). On the right: **Layer** — **LAY** (future layer manager) and a **layer** dropdown built from layers used in the drawing.
 - **Properties** (docked left) — When something is selected: layer, color, linetype, lineweight, transparency, and geometry where supported. **General** also has **default plotted text height** (inches on sheet) for new TEXT/MTEXT.
 - **Command line** (docked bottom) — Scrollable **log**, command **input** + **Send**, context **hints**, then a **single-line status bar**: **OSNAP**, **ORTHO**, **GRID**, **POLAR** (UI placeholder), **annotation scale** (preset dropdown such as 1″ = 50′), and **cursor / UCS** readout.
@@ -146,8 +146,6 @@ Exports are **ASCII DXF** tagged for **AC1032** (AutoCAD 2018–class), structur
 - **OBJECTS** — Minimal named-object dictionary (including plot-style table) so hosts like Civil 3D accept the file.
 
 **CAD content** includes lines, circles, text, mtext, and aligned dimensions (as exploded lines + text), with layers, ACI colors, lineweights, and model-space ownership as expected by current DXF practice.
-
-Very large coordinates may still be **rebased** on **import** inside GoSurvey for numeric stability; **export** adds the stored world origin back so coordinates match your survey/CAD space.
 
 ### Import
 

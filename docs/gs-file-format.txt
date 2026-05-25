@@ -79,8 +79,8 @@ nlohmann::json (numbers may serialize as integers or floats; the loader uses
 .get<float>() or .get<int>() where noted).
 
 3.1 Document coordinate system and scale
-  worldDocumentOriginX   (number, default 0 on load if missing)
-  worldDocumentOriginY   (number, default 0)
+  worldDocumentOriginX   (number, deprecated — always 0; older builds may have stored a shift offset; load adds it back to geometry)
+  worldDocumentOriginY   (number, deprecated — always 0)
   modelUnitsPerPlottedInch (number, default 50 on load if missing)
     — "Drawing scale" / model units per plotted inch (MUP).
 

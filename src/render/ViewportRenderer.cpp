@@ -7,6 +7,7 @@
 #include <GL/glew.h>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -47,6 +48,32 @@ in vec4 vColor;
 out vec4 FragColor;
 void main() {
   FragColor = vColor;
+}
+)";
+
+// Textured quad — used for PDF underlay rendering
+const char* kTexVs = R"(#version 330 core
+layout(location = 0) in vec2 aPos;
+layout(location = 1) in vec2 aUV;
+uniform mat4 uMVP;
+out vec2 vUV;
+void main() {
+  gl_Position = uMVP * vec4(aPos, 0.0, 1.0);
+  vUV = aUV;
+}
+)";
+
+const char* kTexFs = R"(#version 330 core
+in vec2 vUV;
+uniform sampler2D uTex;
+uniform float uAlpha;
+uniform float uTransparentBg;  // 1.0 = make near-white pixels transparent, 0.0 = full raster
+out vec4 FragColor;
+void main() {
+  vec4 s = texture(uTex, vUV);
+  float lum = dot(s.rgb, vec3(0.299, 0.587, 0.114));
+  float bgFade = 1.0 - smoothstep(0.80, 0.97, lum) * uTransparentBg;
+  FragColor = vec4(s.rgb, s.a * uAlpha * bgFade);
 }
 )";
 
@@ -503,10 +530,33 @@ bool ViewportRenderer::EnsureShader() {
   glGenVertexArrays(1, &vaoGrid_);
   glGenBuffers(1, &vboGrid_);
 
+  // Textured quad for PDF underlays
+  GLuint texVs = CompileShader(GL_VERTEX_SHADER,   kTexVs);
+  GLuint texFs = CompileShader(GL_FRAGMENT_SHADER, kTexFs);
+  if (texVs && texFs) {
+    texProgram_ = LinkProgram(texVs, texFs);
+    if (texProgram_) {
+      glGenVertexArrays(1, &vaoTex_);
+      glGenBuffers(1, &vboTex_);
+      glBindVertexArray(vaoTex_);
+      glBindBuffer(GL_ARRAY_BUFFER, vboTex_);
+      // layout: vec2 pos + vec2 uv (4 floats per vertex, 6 verts per quad — streamed each frame)
+      glEnableVertexAttribArray(0);
+      glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), nullptr);
+      glEnableVertexAttribArray(1);
+      glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                             reinterpret_cast<const void*>(2 * sizeof(float)));
+      glBindVertexArray(0);
+    }
+  }
+
   return true;
 }
 
 void ViewportRenderer::DestroyShader() {
+  if (vboTex_) { glDeleteBuffers(1, &vboTex_); vboTex_ = 0; }
+  if (vaoTex_) { glDeleteVertexArrays(1, &vaoTex_); vaoTex_ = 0; }
+  if (texProgram_) { glDeleteProgram(texProgram_); texProgram_ = 0; }
   if (vboGrid_) {
     glDeleteBuffers(1, &vboGrid_);
     vboGrid_ = 0;
@@ -676,7 +726,8 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
                                    const std::vector<EntityAttributes>* lineEntityAttrs,
                                    const std::vector<EntityAttributes>* circleEntityAttrs,
                                    const CadExtendedGeometryInput* extended, bool showGrid,
-                                   const std::vector<CadLayerRow>* drawingLayers, const RenderTuning& tuning) {
+                                   const std::vector<CadLayerRow>* drawingLayers, const RenderTuning& tuning,
+                                   const std::vector<PdfAttachment>* pdfAttachments) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -729,6 +780,65 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
 
   GLint locMvp = glGetUniformLocation(lineProgram_, "uMVP");
   GLint locCol = glGetUniformLocation(lineProgram_, "uColor");
+
+  // --- PDF underlays (rendered first, behind all CAD geometry) ---
+  if (pdfAttachments && !pdfAttachments->empty() && texProgram_ && vaoTex_ && vboTex_) {
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glUseProgram(texProgram_);
+    GLint texMvpLoc = glGetUniformLocation(texProgram_, "uMVP");
+    GLint texSampLoc = glGetUniformLocation(texProgram_, "uTex");
+    glUniformMatrix4fv(texMvpLoc, 1, GL_FALSE, mvp);
+    glUniform1i(texSampLoc, 0);
+    GLint texAlphaLoc        = glGetUniformLocation(texProgram_, "uAlpha");
+    GLint texTransparentBgLoc = glGetUniformLocation(texProgram_, "uTransparentBg");
+    glActiveTexture(GL_TEXTURE0);
+    glBindVertexArray(vaoTex_);
+    glBindBuffer(GL_ARRAY_BUFFER, vboTex_);
+
+    for (const PdfAttachment& att : *pdfAttachments) {
+      if (!att.glTexId || att.pageWidthPts <= 0.f || att.pageHeightPts <= 0.f)
+        continue;
+      glUniform1f(texAlphaLoc,        std::clamp(att.fade, 0.f, 1.f));
+      glUniform1f(texTransparentBgLoc, att.showBackground ? 0.f : 1.f);
+
+      const float cosR = std::cos(att.rotationDeg * 3.14159265f / 180.f);
+      const float sinR = std::sin(att.rotationDeg * 3.14159265f / 180.f);
+      const float W    = att.pageWidthPts  * att.scale;
+      const float H    = att.pageHeightPts * att.scale;
+
+      // Four corners in local space; UV maps (0,0)=BL to (1,1)=TR.
+      auto corner = [&](float px, float py, float u, float v) -> std::array<float, 4> {
+        const float lx = att.insertX + px * cosR - py * sinR;
+        const float ly = att.insertY + px * sinR + py * cosR;
+        // Shift into view-relative space (subtract anchor).
+        return {static_cast<float>(lx - viewAnchorX),
+                static_cast<float>(ly - viewAnchorY), u, v};
+      };
+
+      auto bl = corner(0.f, 0.f, 0.f, 0.f);
+      auto br = corner(W,   0.f,  1.f, 0.f);
+      auto tr = corner(W,   H,    1.f, 1.f);
+      auto tl = corner(0.f, H,    0.f, 1.f);
+
+      // Two triangles: BL-BR-TR, BL-TR-TL
+      float verts[24] = {
+        bl[0], bl[1], bl[2], bl[3],
+        br[0], br[1], br[2], br[3],
+        tr[0], tr[1], tr[2], tr[3],
+        bl[0], bl[1], bl[2], bl[3],
+        tr[0], tr[1], tr[2], tr[3],
+        tl[0], tl[1], tl[2], tl[3],
+      };
+      glBufferData(GL_ARRAY_BUFFER, sizeof(verts), verts, GL_STREAM_DRAW);
+      glBindTexture(GL_TEXTURE_2D, att.glTexId);
+      glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+
+    glBindVertexArray(0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glDisable(GL_BLEND);
+  }
 
   glUseProgram(gridProgram_);
   glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);

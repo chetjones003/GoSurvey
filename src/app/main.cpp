@@ -3,8 +3,10 @@
 #include "CadRubberPreview.hpp"
 #include "TransformPreview.hpp"
 #include "CadUi.hpp"
+#include "PdfAttachDialog.hpp"
 #include "ViewportRenderer.hpp"
 #include "CadSnap.hpp"
+#include "PdfAttach.hpp"
 #include "SurveyPoints.hpp"
 #include "AppIcon.hpp"
 #include "GsIo.hpp"
@@ -93,8 +95,11 @@ int main() {
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
 
+  PdfAttach_Init();
+
   ViewportRenderer viewport;
   if (!viewport.Init()) {
+    PdfAttach_Shutdown();
     glfwDestroyWindow(window);
     glfwTerminate();
     return 1;
@@ -331,6 +336,7 @@ int main() {
     DrawExportPointsPanel(cmd, cmdLog);
     DrawSurveyReportsPanel(cmd);
     DrawCopySurveyDuplicateModal(cmd, cmdLog);
+    DrawPdfAttachDialog(cmd, cmdLog);
 
     std::vector<float> rubberLines;
     const float orthoHalfH = (1.f / std::max(cmd.viewportZoom, 1.e-9f)) * 50.f;
@@ -394,6 +400,11 @@ int main() {
     tuning.arcCircleSmoothnessCap = std::clamp(cmd.displayArcCircleSmoothness, 8, 20000);
     tuning.hardwareAcceleration = cmd.systemHardwareAcceleration;
     tuning.smoothLineDisplay = cmd.gfxSmoothLineDisplay;
+    // Build PDF render list: committed attachments + cursor-follow preview when picking insert point.
+    std::vector<PdfAttachment> pdfRenderList;
+    if (!cmd.pdfAttachments.empty())
+      pdfRenderList = cmd.pdfAttachments; // shallow copy of the vector (texIds stay valid)
+
     viewport.RenderScene(cmd.viewportPanX, cmd.viewportPanY, cmd.viewportZoom, fbW, fbH, cmd.userLinesFlat,
                          cmd.userCirclesCxCyR, cmd.cadGpuRevision,
                          rubberLines, snapHit.valid ? &snapHit : nullptr,
@@ -403,7 +414,8 @@ int main() {
                          highlightLines.empty() ? nullptr : &highlightLines,
                          highlightCircles.empty() ? nullptr : &highlightCircles,
                          surveyMarkers.empty() ? nullptr : &surveyMarkers, &cmd.userLineAttrs,
-                         &cmd.userCircleAttrs, &ext, gridVisible, &cmd.drawingLayerTable, tuning);
+                         &cmd.userCircleAttrs, &ext, gridVisible, &cmd.drawingLayerTable, tuning,
+                         pdfRenderList.empty() ? nullptr : &pdfRenderList);
 
     ImGuiLayout_CommitDeferredIniLoadIfNeeded();
     ImGui::Render();
@@ -424,7 +436,16 @@ int main() {
   DestroyAppLogoGpu(&appLogo);
   ImGui::DestroyContext();
 
+  // Release PDF textures before GL context is destroyed.
+  for (auto& att : cmd.pdfAttachments)
+    PdfAttach_ReleaseTexture(att);
+  if (cmd.pdfDraftCache) {
+    PdfDraftCache_Free(cmd.pdfDraftCache);
+    cmd.pdfDraftCache = nullptr;
+  }
+
   viewport.Shutdown();
+  PdfAttach_Shutdown();
   glfwDestroyWindow(window);
   glfwTerminate();
   return 0;

@@ -18,6 +18,14 @@ FetchContent_Declare(glfw
   GIT_TAG 3.4
 )
 
+# PDFium prebuilt binaries (Windows x64).
+# Update the URL to the latest release from:
+#   https://github.com/bblanchon/pdfium-binaries/releases
+FetchContent_Declare(pdfium_binaries
+  URL https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7857/pdfium-win-x64.tgz
+  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+
 FetchContent_Declare(imgui
   GIT_REPOSITORY https://github.com/ocornut/imgui.git
   GIT_TAG docking
@@ -28,7 +36,15 @@ FetchContent_Declare(glew
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 
-FetchContent_MakeAvailable(glfw imgui glew)
+FetchContent_MakeAvailable(glfw imgui glew pdfium_binaries)
+
+# Create an imported target for the pdfium DLL.
+add_library(pdfium SHARED IMPORTED)
+set_target_properties(pdfium PROPERTIES
+  IMPORTED_LOCATION "${pdfium_binaries_SOURCE_DIR}/bin/pdfium.dll"
+  IMPORTED_IMPLIB   "${pdfium_binaries_SOURCE_DIR}/lib/pdfium.dll.lib"
+  INTERFACE_INCLUDE_DIRECTORIES "${pdfium_binaries_SOURCE_DIR}/include"
+)
 
 set(NLOHMANN_JSON_INCLUDE "${CMAKE_BINARY_DIR}/_deps")
 set(NLOHMANN_JSON_FILE "${NLOHMANN_JSON_INCLUDE}/nlohmann/json.hpp")
@@ -97,6 +113,8 @@ add_executable(GoSurvey
   src/io/DxfIo.cpp
   src/io/DxfColors.cpp
   src/platform/WinFileDialogs.cpp
+  src/pdf/PdfAttach.cpp
+  src/ui/PdfAttachDialog.cpp
 )
 
 target_include_directories(GoSurvey PRIVATE
@@ -109,6 +127,7 @@ target_include_directories(GoSurvey PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
   ${CMAKE_CURRENT_SOURCE_DIR}/src/render
   ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party
   ${NLOHMANN_JSON_INCLUDE}
 )
@@ -117,6 +136,7 @@ target_link_libraries(GoSurvey PRIVATE
   glfw
   OpenGL::GL
   glew_static
+  pdfium
 )
 if(WIN32)
   target_link_libraries(GoSurvey PRIVATE comdlg32)
@@ -147,3 +167,12 @@ add_custom_command(TARGET GoSurvey POST_BUILD
           "${GOSURVEY_DEFAULT_TEMPLATE}"
           "$<TARGET_FILE_DIR:GoSurvey>/resources/default-template.gs"
   COMMENT "Copy default workspace template (.gs) beside executable")
+
+# Copy pdfium.dll next to the executable so it can be found at runtime.
+if(WIN32)
+  add_custom_command(TARGET GoSurvey POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${pdfium_binaries_SOURCE_DIR}/bin/pdfium.dll"
+            "$<TARGET_FILE_DIR:GoSurvey>/pdfium.dll"
+    COMMENT "Copy pdfium.dll beside executable")
+endif()

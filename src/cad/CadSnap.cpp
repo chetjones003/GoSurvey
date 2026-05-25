@@ -456,6 +456,56 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     }
   }
 
+  // --- PDF underlay snap points ---
+  if (cmd.objectSnapEnabled) {
+    for (const PdfAttachment& att : cmd.pdfAttachments) {
+      const float cosR = std::cos(att.rotationDeg * 3.14159265f / 180.f);
+      const float sinR = std::sin(att.rotationDeg * 3.14159265f / 180.f);
+      const float sc   = att.scale;
+
+      // Transform a PDF-space (px, py) to local (drawing) space.
+      auto pdfToLocal = [&](float px, float py, float* lx, float* ly) {
+        *lx = att.insertX + (px * sc * cosR - py * sc * sinR);
+        *ly = att.insertY + (px * sc * sinR + py * sc * cosR);
+      };
+
+      if (att.snapLines && cmd.objectSnapEndpoint) {
+        const auto& SL = att.snapLinesFlat;
+        for (size_t i = 0; i + 3 < SL.size(); i += 4) {
+          float lx0 = 0.f, ly0 = 0.f, lx1 = 0.f, ly1 = 0.f;
+          pdfToLocal(SL[i],     SL[i + 1], &lx0, &ly0);
+          pdfToLocal(SL[i + 2], SL[i + 3], &lx1, &ly1);
+          Consider(&acc, wx, wy, lx0, ly0, Kind::Endpoint, tolWorld);
+          Consider(&acc, wx, wy, lx1, ly1, Kind::Endpoint, tolWorld);
+          if (cmd.objectSnapMidpoint)
+            Consider(&acc, wx, wy, 0.5f * (lx0 + lx1), 0.5f * (ly0 + ly1), Kind::Midpoint, tolWorld);
+          if (havePerpRef)
+            AppendPerpendicularFromRef(refPx, refPy, wx, wy, lx0, ly0, lx1, ly1, tolWorld, &acc);
+        }
+      }
+
+      if (att.snapCircles && cmd.objectSnapCenter) {
+        const auto& SC = att.snapCirclesCxCyR;
+        for (size_t i = 0; i + 2 < SC.size(); i += 3) {
+          float lcx = 0.f, lcy = 0.f;
+          pdfToLocal(SC[i], SC[i + 1], &lcx, &lcy);
+          const float lr  = SC[i + 2] * sc;
+          const float p2  = CircleCenterPickDistSq(wx, wy, lcx, lcy, lr, tolWorld);
+          ConsiderSnap(&acc, wx, wy, lcx, lcy, Kind::Center, p2, tolWorld);
+        }
+      }
+
+      if (att.snapText && cmd.objectSnapEndpoint) {
+        const auto& ST = att.snapTextPos;
+        for (size_t i = 0; i + 1 < ST.size(); i += 2) {
+          float ltx = 0.f, lty = 0.f;
+          pdfToLocal(ST[i], ST[i + 1], &ltx, &lty);
+          Consider(&acc, wx, wy, ltx, lty, Kind::Endpoint, tolWorld);
+        }
+      }
+    }
+  }
+
   return acc.best;
 }
 
