@@ -978,6 +978,17 @@ static void ResetAllCadDraftTools(AppCommandState& st) {
   ResetSurveyInverseDraft(st);
   ClearDimGripInteraction(st);
   AbortMtextGripInteraction(st);
+  // Release PDF draft resources if any command was running
+  if (st.pdfDraftCache) {
+    PdfDraftCache_Free(st.pdfDraftCache);
+    st.pdfDraftCache = nullptr;
+  }
+  if (st.pdfAttachPreviewReady) {
+    PdfAttach_ReleaseTexture(st.pdfAttachPreview);
+    st.pdfAttachPreviewReady = false;
+  }
+  st.pdfAttachDialogOpen = false;
+  st.pdfAttachPhase = AppCommandState::PdfAttachPhase::WaitDialog;
 }
 
 static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
@@ -1181,6 +1192,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "exportpoints") {
     StartExportPointsCommand(st, log);
+    return true;
+  }
+  if (primary == "pdfattach" || primary == "pdfatt") {
+    StartPdfAttachCommand(st, log);
     return true;
   }
   if (primary == "select") {
@@ -7496,6 +7511,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("INVERSE canceled.");
   else if (st.active == AppCommandState::Kind::Zoom)
     log.push_back("ZOOM WINDOW canceled.");
+  else if (st.active == AppCommandState::Kind::PdfAttach)
+    log.push_back("PDFATTACH canceled.");
   st.active = AppCommandState::Kind::None;
   if (prev == AppCommandState::Kind::Offset)
     OffsetCmd::ResetOffsetDraft(st);
@@ -8734,6 +8751,106 @@ float CadDxfLineweightMmFromEnum370(int code) {
       return e.mm;
   }
   return -1.f;
+}
+
+// ---------------------------------------------------------------------------
+// PDFATTACH
+// ---------------------------------------------------------------------------
+void StartPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selectedSurveyPointIndices.clear();
+  st.selBoxWaitingSecond = false;
+  st.active              = AppCommandState::Kind::PdfAttach;
+  st.pdfAttachPhase      = AppCommandState::PdfAttachPhase::WaitDialog;
+  st.pdfAttachDialogOpen = true;
+  log.push_back("PDFATTACH — select PDF file and options in the dialog, then place the underlay.");
+}
+
+void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::PdfAttach ||
+      st.pdfAttachPhase != AppCommandState::PdfAttachPhase::WaitInsertPoint)
+    return;
+
+  // Build the committed attachment at the picked world location.
+  PdfAttachment att;
+  bool ok = PdfAttach_Build(st.pdfAttachFilePath,
+                             st.pdfAttachSelectedPage,
+                             st.pdfAttachRasterDpi,
+                             st.pdfAttachSnapLines,
+                             st.pdfAttachSnapCircles,
+                             st.pdfAttachSnapText,
+                             att);
+  if (ok) {
+    att.insertX    = wx;
+    att.insertY    = wy;
+    att.scale      = st.pdfAttachScale;
+    att.rotationDeg = st.pdfAttachRotDeg;
+    const int nSnapLines   = static_cast<int>(att.snapLinesFlat.size())    / 4;
+    const int nSnapCircles = static_cast<int>(att.snapCirclesCxCyR.size()) / 3;
+    const int nSnapText    = static_cast<int>(att.snapTextPos.size())      / 2;
+    st.pdfAttachments.push_back(std::move(att));
+    char snapMsg[128];
+    std::snprintf(snapMsg, sizeof(snapMsg),
+                  "PDFATTACH — placed.  Snap: %d lines, %d circles, %d text.",
+                  nSnapLines, nSnapCircles, nSnapText);
+    log.push_back(snapMsg);
+  } else {
+    log.push_back("PDFATTACH — failed to rasterize page.");
+  }
+
+  // Release preview texture and reset to idle.
+  if (st.pdfAttachPreviewReady) {
+    PdfAttach_ReleaseTexture(st.pdfAttachPreview);
+    st.pdfAttachPreviewReady = false;
+  }
+  st.active         = AppCommandState::Kind::None;
+  st.pdfAttachPhase = AppCommandState::PdfAttachPhase::WaitDialog;
+}
+
+void CancelPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log) {
+  log.push_back("PDFATTACH cancelled.");
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::None;
+}
+
+void VectorizePdfAttachmentLines(AppCommandState& st, int pdfIndex, std::vector<std::string>& log) {
+  if (pdfIndex < 0 || pdfIndex >= static_cast<int>(st.pdfAttachments.size()))
+    return;
+  const PdfAttachment& att = st.pdfAttachments[static_cast<size_t>(pdfIndex)];
+  const auto& snap = att.snapLinesFlat;
+  if (snap.empty()) {
+    log.push_back("Vectorize — no line snap geometry in this PDF underlay.");
+    return;
+  }
+  constexpr float kPi = 3.14159265f;
+  const float cosR = std::cos(att.rotationDeg * kPi / 180.f);
+  const float sinR = std::sin(att.rotationDeg * kPi / 180.f);
+  int n = 0;
+  for (size_t i = 0; i + 3 < snap.size(); i += 4) {
+    const float sx1 = snap[i]     * att.scale, sy1 = snap[i + 1] * att.scale;
+    const float sx2 = snap[i + 2] * att.scale, sy2 = snap[i + 3] * att.scale;
+    st.userLinesFlat.push_back(att.insertX + sx1 * cosR - sy1 * sinR);
+    st.userLinesFlat.push_back(att.insertY + sx1 * sinR + sy1 * cosR);
+    st.userLinesFlat.push_back(0.f);
+    st.userLinesFlat.push_back(att.insertX + sx2 * cosR - sy2 * sinR);
+    st.userLinesFlat.push_back(att.insertY + sx2 * sinR + sy2 * cosR);
+    st.userLinesFlat.push_back(0.f);
+    ++n;
+  }
+  EnsureAttrCounts(st);
+  // Tag newly-added lines with this underlay's layer.
+  if (!att.layer.empty()) {
+    const size_t total = st.userLinesFlat.size() / 6;
+    const size_t firstNew = total - static_cast<size_t>(n);
+    for (size_t k = firstNew; k < total && k < st.userLineAttrs.size(); ++k)
+      st.userLineAttrs[k].layer = att.layer;
+  }
+  BumpCadGpuCache(st);
+  char buf[128];
+  std::snprintf(buf, sizeof(buf), "Vectorize — added %d line segment%s from PDF underlay.",
+                n, n == 1 ? "" : "s");
+  log.push_back(buf);
 }
 
 bool LoadApplicationFont() {

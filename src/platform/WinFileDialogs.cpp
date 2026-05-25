@@ -76,6 +76,22 @@ bool BrowseOpenFileGsUtf8(char* utf8Out, size_t utf8Cap) {
   return WideToUtf8(wfile, utf8Out, utf8Cap);
 }
 
+bool BrowseOpenFilePdfUtf8(char* utf8Out, size_t utf8Cap) {
+  if (!utf8Out || utf8Cap < 4)
+    return false;
+  wchar_t wfile[MAX_PATH]{};
+  OPENFILENAMEW ofn{};
+  ofn.lStructSize = sizeof(ofn);
+  ofn.lpstrFile = wfile;
+  ofn.nMaxFile = MAX_PATH;
+  ofn.lpstrFilter = L"PDF (*.pdf)\0*.pdf\0All (*.*)\0*.*\0\0";
+  ofn.nFilterIndex = 1;
+  ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+  if (!GetOpenFileNameW(&ofn))
+    return false;
+  return WideToUtf8(wfile, utf8Out, utf8Cap);
+}
+
 bool BrowseSaveFileGsUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8) {
   if (!utf8Out || utf8Cap < 4)
     return false;
@@ -200,6 +216,13 @@ bool BrowseOpenFileGsUtf8(char* utf8Out, size_t utf8Cap) {
 }
 
 bool BrowseSaveFileGsUtf8(char* utf8Out, size_t utf8Cap, const char*) {
+  if (utf8Out && utf8Cap > 0)
+    utf8Out[0] = '\0';
+  (void)utf8Cap;
+  return false;
+}
+
+bool BrowseOpenFilePdfUtf8(char* utf8Out, size_t utf8Cap) {
   if (utf8Out && utf8Cap > 0)
     utf8Out[0] = '\0';
   (void)utf8Cap;

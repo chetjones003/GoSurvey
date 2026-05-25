@@ -368,6 +368,10 @@ enum class RibbonIconKind : std::uint8_t {
   SurveyPoint,
   SurveyInverse,
   Layers,
+  PdfAttach,
+  PdfShowBg,
+  PdfHideBg,
+  PdfVectorize,
 };
 
 static ImVec2 RibbonLerp(const ImVec2& a, const ImVec2& b, float u, float v) {
@@ -750,6 +754,66 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     }
     break;
   }
+  case RibbonIconKind::PdfShowBg: {
+    // Filled page = raster background visible
+    const ImVec2 tl2(mn.x + w * 0.15f, mn.y + h * 0.12f);
+    const ImVec2 br2(mx.x - w * 0.15f, mx.y - h * 0.12f);
+    dl->AddRectFilled(tl2, br2, IM_COL32(60, 70, 80, 160));
+    dl->AddRect(tl2, br2, col, 0.f, 0, t);
+    for (int li = 0; li < 3; ++li) {
+      const float ly = tl2.y + (br2.y - tl2.y) * (0.25f + static_cast<float>(li) * 0.27f);
+      dl->AddLine({tl2.x + w * 0.07f, ly}, {br2.x - w * 0.07f, ly}, col, t * 0.75f);
+    }
+    break;
+  }
+  case RibbonIconKind::PdfHideBg: {
+    // Hollow page with diagonal strikethrough = raster hidden
+    const ImVec2 tl2(mn.x + w * 0.15f, mn.y + h * 0.12f);
+    const ImVec2 br2(mx.x - w * 0.15f, mx.y - h * 0.12f);
+    dl->AddRect(tl2, br2, col, 0.f, 0, t * 0.5f);
+    dl->AddLine(tl2, br2, IM_COL32(200, 80, 80, 200), t);
+    dl->AddLine({tl2.x, br2.y}, {br2.x, tl2.y}, IM_COL32(200, 80, 80, 200), t);
+    break;
+  }
+  case RibbonIconKind::PdfVectorize: {
+    // Three dots (left) → arrow → three crisp lines (right)
+    const float dotR = std::max(1.5f, w * 0.045f);
+    for (int di = 0; di < 3; ++di) {
+      const float y = c.y + (di - 1) * h * 0.22f;
+      dl->AddCircleFilled({c.x - w * 0.30f, y}, dotR, col, 8);
+    }
+    dl->AddLine({c.x - w * 0.08f, c.y}, {c.x + w * 0.04f, c.y}, col, t);
+    dl->AddTriangleFilled({c.x + w * 0.04f, c.y},
+                          {c.x - w * 0.02f, c.y - h * 0.07f},
+                          {c.x - w * 0.02f, c.y + h * 0.07f}, col);
+    for (int li = 0; li < 3; ++li) {
+      const float y = c.y + (li - 1) * h * 0.22f;
+      dl->AddLine({c.x + w * 0.16f, y}, {c.x + w * 0.38f, y}, col, t);
+    }
+    break;
+  }
+  case RibbonIconKind::PdfAttach: {
+    // Page outline with folded top-right corner, plus three content lines.
+    const float pl = mn.x + w * 0.18f;
+    const float pr = mx.x - w * 0.18f;
+    const float pt = mn.y + h * 0.10f;
+    const float pb = mx.y - h * 0.10f;
+    const float fold = std::min(w, h) * 0.18f;
+    // Page border (without top-right corner segment).
+    dl->AddLine(ImVec2(pl, pt),          ImVec2(pr - fold, pt),  col, t);
+    dl->AddLine(ImVec2(pr - fold, pt),   ImVec2(pr, pt + fold),  col, t);
+    dl->AddLine(ImVec2(pr, pt + fold),   ImVec2(pr, pb),         col, t);
+    dl->AddLine(ImVec2(pr, pb),          ImVec2(pl, pb),         col, t);
+    dl->AddLine(ImVec2(pl, pb),          ImVec2(pl, pt),         col, t);
+    // Three horizontal content lines.
+    const float lx0 = pl + w * 0.10f;
+    const float lx1 = pr - w * 0.10f;
+    for (int li = 0; li < 3; ++li) {
+      const float ly = pt + fold + (pb - pt - fold) * (0.20f + static_cast<float>(li) * 0.28f);
+      dl->AddLine(ImVec2(lx0, ly), ImVec2(lx1, ly), col, t * 0.85f);
+    }
+    break;
+  }
   default:
     break;
   }
@@ -856,6 +920,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     if (RibbonIconButton("##RibbonEllipse", toolCell, RibbonIconKind::Ellipse))
       StartEllipseCommand(cmd, log);
     RibbonItemHelp("Ellipse — center, axis endpoint, then ratio on command line.\nCommand bar: ELLIPSE or EL");
+    gridSameLine(i++);
+    if (RibbonIconButton("##RibbonPdfAttach", toolCell, RibbonIconKind::PdfAttach))
+      StartPdfAttachCommand(cmd, log);
+    RibbonItemHelp("PDF Attach — attach a PDF page as a raster underlay with snap recognition.\nCommand bar: PDFATTACH");
   }
   RibbonSectionEnd();
   ImGui::SameLine(0, 8);
@@ -972,6 +1040,54 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     RibbonItemHelp("Zoom window — zoom to a rectangle you pick with two clicks.\nCommand bar: ZOOMWINDOW or ZW");
   }
   RibbonSectionEnd();
+
+  // Contextual "PDF Underlay" section — shown when a PDF attachment is selected
+  {
+    int selPdfCtxIdx = -1;
+    for (const auto& e : cmd.selection)
+      if (e.type == SelectedEntity::Type::PdfUnderlay) { selPdfCtxIdx = e.index; break; }
+    if (!cmd.pdfAttachments.empty() && selPdfCtxIdx >= 0 &&
+        selPdfCtxIdx < static_cast<int>(cmd.pdfAttachments.size())) {
+    ImGui::SameLine(0, 8);
+    PdfAttachment& pdfSel = cmd.pdfAttachments[static_cast<size_t>(selPdfCtxIdx)];
+    const float ctrlW     = 185.f;
+    const float wPdfCtx   = RibbonSectionWidthPx(2, toolCell.x) + st.ItemSpacing.x + ctrlW;
+    RibbonSectionBegin("RibbonSecPdfCtx", "PDF Underlay", wPdfCtx, panelH);
+    {
+      if (RibbonIconButton("##PdfBgBtn", toolCell,
+                           pdfSel.showBackground ? RibbonIconKind::PdfShowBg : RibbonIconKind::PdfHideBg))
+        pdfSel.showBackground = !pdfSel.showBackground;
+      RibbonItemHelp(pdfSel.showBackground
+                     ? "Background ON — lines visible, paper transparent.  Click to show paper."
+                     : "Background OFF — full raster image visible.  Click to hide paper.");
+      ImGui::SameLine(0, st.ItemSpacing.x);
+      if (RibbonIconButton("##PdfVecBtn", toolCell, RibbonIconKind::PdfVectorize))
+        VectorizePdfAttachmentLines(cmd, selPdfCtxIdx, log);
+      RibbonItemHelp("Vectorize Lines — add PDF snap-line geometry as drawing entities on the current layer.");
+      ImGui::SameLine(0, st.ItemSpacing.x);
+      ImGui::BeginGroup();
+      {
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("Fade");
+        ImGui::SameLine(0, 4.f);
+        float fadePct = pdfSel.fade * 100.f;
+        ImGui::SetNextItemWidth(ctrlW - 38.f);
+        if (ImGui::SliderFloat("##PdfCtxFade", &fadePct, 0.f, 100.f, "%.0f%%"))
+          pdfSel.fade = fadePct / 100.f;
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextDisabled("Snap:");
+        ImGui::SameLine(0, 3.f);
+        ImGui::Checkbox("L##pcs", &pdfSel.snapLines);
+        ImGui::SameLine(0, 3.f);
+        ImGui::Checkbox("C##pcs", &pdfSel.snapCircles);
+        ImGui::SameLine(0, 3.f);
+        ImGui::Checkbox("T##pcs", &pdfSel.snapText);
+      }
+      ImGui::EndGroup();
+    }
+    RibbonSectionEnd();
+    } // selPdfCtxIdx >= 0
+  } // contextual PDF block
 
   ImGui::EndChild();
 
@@ -2954,30 +3070,33 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
 
   int nLine = 0;
   int nCirc = 0;
-  int nAnn = 0;
+  int nAnn  = 0;
+  int nPdf  = 0;
   for (const auto& e : sel) {
-    if (e.type == SelectedEntity::Type::LineSeg)
-      ++nLine;
-    else if (e.type == SelectedEntity::Type::Circle)
-      ++nCirc;
-    else if (e.type == SelectedEntity::Type::Annotation)
-      ++nAnn;
+    if      (e.type == SelectedEntity::Type::LineSeg)    ++nLine;
+    else if (e.type == SelectedEntity::Type::Circle)     ++nCirc;
+    else if (e.type == SelectedEntity::Type::Annotation) ++nAnn;
+    else if (e.type == SelectedEntity::Type::PdfUnderlay)++nPdf;
   }
 
   ImGui::Text("Selected: %d object(s)", static_cast<int>(sel.size()));
-  const int typeKinds = (nLine > 0 ? 1 : 0) + (nCirc > 0 ? 1 : 0) + (nAnn > 0 ? 1 : 0);
+  const int typeKinds = (nLine > 0 ? 1 : 0) + (nCirc > 0 ? 1 : 0) + (nAnn > 0 ? 1 : 0) + (nPdf > 0 ? 1 : 0);
   if (typeKinds > 1)
-    ImGui::TextDisabled("(Mixed: Line %d, Circle %d, Annotation %d)", nLine, nCirc, nAnn);
+    ImGui::TextDisabled("(Mixed: Line %d, Circle %d, Ann %d, PDF %d)", nLine, nCirc, nAnn, nPdf);
   else if (nLine > 1)
     ImGui::TextDisabled("%d lines", nLine);
   else if (nCirc > 1)
     ImGui::TextDisabled("%d circles", nCirc);
   else if (nAnn > 1)
     ImGui::TextDisabled("%d annotations", nAnn);
+  else if (nPdf > 1)
+    ImGui::TextDisabled("%d PDF underlays", nPdf);
   else if (nLine == 1)
     ImGui::TextDisabled("Line");
   else if (nCirc == 1)
     ImGui::TextDisabled("Circle");
+  else if (nPdf == 1)
+    ImGui::TextDisabled("PDF Underlay");
   else if (nAnn == 1) {
     int ix = -1;
     for (const auto& e : sel) {
@@ -3035,6 +3154,64 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
       DrawSingleCircleGeometryEditable(cmd, circOnly.front().index);
     else
       DrawCircleGeometryOnly(cmd, circOnly);
+  } else if (nPdf > 0 && nLine == 0 && nCirc == 0 && nAnn == 0) {
+    // PDF Underlay properties — single or multi
+    int pdfIdx = -1;
+    for (const auto& e : sel)
+      if (e.type == SelectedEntity::Type::PdfUnderlay) { pdfIdx = e.index; break; }
+
+    if (nPdf == 1 && pdfIdx >= 0 && pdfIdx < static_cast<int>(cmd.pdfAttachments.size())) {
+      PdfAttachment& att = cmd.pdfAttachments[static_cast<size_t>(pdfIdx)];
+      if (ImGui::CollapsingHeader("PDF Underlay", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::TextDisabled("File: %s", att.filePath.c_str());
+        ImGui::TextDisabled("Page: %d", att.pageIndex + 1);
+        ImGui::Separator();
+
+        char layBuf[128] = {};
+        std::strncpy(layBuf, att.layer.c_str(), sizeof(layBuf) - 1);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::InputText("Layer##pdfprop", layBuf, sizeof(layBuf)))
+          att.layer = layBuf;
+
+        ImGui::Checkbox("Show Paper Background##pdfprop", &att.showBackground);
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        float fadePct = att.fade * 100.f;
+        if (ImGui::SliderFloat("Fade##pdfprop", &fadePct, 0.f, 100.f, "%.0f%%"))
+          att.fade = fadePct / 100.f;
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Placement");
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputFloat("Insert X##pdfprop", &att.insertX, 0.f, 0.f, "%.4f");
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputFloat("Insert Y##pdfprop", &att.insertY, 0.f, 0.f, "%.4f");
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputFloat("Scale##pdfprop", &att.scale, 0.f, 0.f, "%.6f");
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        ImGui::InputFloat("Rotation (deg)##pdfprop", &att.rotationDeg, 0.f, 0.f, "%.2f");
+
+        ImGui::Separator();
+        ImGui::TextDisabled("Object Snap");
+        ImGui::Checkbox("Lines##pdfsnap",   &att.snapLines);
+        ImGui::SameLine();
+        ImGui::Checkbox("Circles##pdfsnap", &att.snapCircles);
+        ImGui::SameLine();
+        ImGui::Checkbox("Text##pdfsnap",    &att.snapText);
+      }
+    } else {
+      if (ImGui::CollapsingHeader("PDF Underlay", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::TextDisabled("%d PDF underlays selected.", nPdf);
+        // Bulk fade
+        float fadePct = 50.f; // no common value; just a slider stub
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::SliderFloat("Fade##pdfbulk", &fadePct, 0.f, 100.f, "%.0f%%")) {
+          for (const auto& e : sel)
+            if (e.type == SelectedEntity::Type::PdfUnderlay &&
+                e.index >= 0 && e.index < static_cast<int>(cmd.pdfAttachments.size()))
+              cmd.pdfAttachments[static_cast<size_t>(e.index)].fade = fadePct / 100.f;
+        }
+      }
+    }
   } else {
     if (ImGui::CollapsingHeader("Geometry", ImGuiTreeNodeFlags_DefaultOpen)) {
       ImGui::TextWrapped("Mixed entity types — geometry is read-only here. Edit General above, or select only "
@@ -4546,6 +4723,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
     } else if (cmd.active == K::Offset)
       SubmitViewportPick(cmd, rawPickX, rawPickY, log);
+    else if (cmd.active == K::PdfAttach &&
+             cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint)
+      SubmitPdfAttachInsertPoint(cmd, commitX, commitY, log);
     else if (cmd.active == K::Line || cmd.active == K::Circle || cmd.active == K::Polyline ||
              cmd.active == K::Arc || cmd.active == K::Ellipse || cmd.active == K::Text ||
              cmd.active == K::Mtext || cmd.active == K::DimAligned || cmd.active == K::DimLinear ||
@@ -4979,6 +5159,31 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           handled = true;
         }
       }
+      // PDF underlay hit-test (highest draw index = topmost wins)
+      if (!handled && !cmd.pdfAttachments.empty()) {
+        constexpr float kPiH = 3.14159265f;
+        for (int pi = static_cast<int>(cmd.pdfAttachments.size()) - 1; pi >= 0; --pi) {
+          const PdfAttachment& patt = cmd.pdfAttachments[static_cast<size_t>(pi)];
+          if (patt.pageWidthPts <= 0.f || patt.pageHeightPts <= 0.f)
+            continue;
+          const float pW   = patt.pageWidthPts  * patt.scale;
+          const float pH   = patt.pageHeightPts * patt.scale;
+          const float angH = -patt.rotationDeg  * kPiH / 180.f;
+          const float cosH = std::cos(angH), sinH = std::sin(angH);
+          const float ddx  = rawPickXf - patt.insertX;
+          const float ddy  = rawPickYf - patt.insertY;
+          const float lxH  = ddx * cosH - ddy * sinH;
+          const float lyH  = ddx * sinH + ddy * cosH;
+          if (lxH >= 0.f && lxH <= pW && lyH >= 0.f && lyH <= pH) {
+            ClearCadSelection(cmd);
+            cmd.selectedSurveyPointIndices.clear();
+            cmd.selection.push_back({SelectedEntity::Type::PdfUnderlay, pi});
+            handled = true;
+            break;
+          }
+        }
+      }
+
       if (!handled) {
         if (!cmd.surveyPoints.empty()) {
           const int hitIx = PickSurveyPointIndex(cmd.surveyPoints, rawPickX, rawPickY, surveyCrossHalfW, avail.y,
@@ -5003,6 +5208,75 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
     }
     }
+  }
+
+  // --- PDF overlays: insertion bounding-box preview + selection border ---
+  {
+    const double denx = std::max(worldRight - worldLeft, 1e-12);
+    const double deny = std::max(worldTop - worldBottom, 1e-12);
+    auto wts = [&](float wx, float wy) -> ImVec2 {
+      const float u = static_cast<float>((static_cast<double>(wx) - worldLeft) / denx);
+      const float v = static_cast<float>((worldTop - static_cast<double>(wy)) / deny);
+      return {imgPos.x + u * avail.x, imgPos.y + v * avail.y};
+    };
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+
+    // Bounding-box ghost during WaitInsertPoint phase
+    if (cmd.active == AppCommandState::Kind::PdfAttach &&
+        cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint &&
+        cmd.pdfDraftCache && hovered && outCursorX && outCursorY) {
+      const float pageW = PdfDraftCache_PageWidthPts(cmd.pdfDraftCache, cmd.pdfAttachSelectedPage);
+      const float pageH = PdfDraftCache_PageHeightPts(cmd.pdfDraftCache, cmd.pdfAttachSelectedPage);
+      if (pageW > 0.f && pageH > 0.f) {
+        constexpr float kPiOv = 3.14159265f;
+        const float W    = pageW * cmd.pdfAttachScale;
+        const float H    = pageH * cmd.pdfAttachScale;
+        const float cosR = std::cos(cmd.pdfAttachRotDeg * kPiOv / 180.f);
+        const float sinR = std::sin(cmd.pdfAttachRotDeg * kPiOv / 180.f);
+        const float ix   = static_cast<float>(*outCursorX);
+        const float iy   = static_cast<float>(*outCursorY);
+        auto cp = [&](float px, float py) -> ImVec2 {
+          return wts(ix + px * cosR - py * sinR, iy + px * sinR + py * cosR);
+        };
+        const ImVec2 bl = cp(0, 0), br = cp(W, 0), tr = cp(W, H), tl = cp(0, H);
+        const ImU32 previewCol = IM_COL32(0, 220, 100, 180);
+        dl->AddLine(bl, br, previewCol, 1.5f);
+        dl->AddLine(br, tr, previewCol, 1.5f);
+        dl->AddLine(tr, tl, previewCol, 1.5f);
+        dl->AddLine(tl, bl, previewCol, 1.5f);
+      }
+    }
+
+    // Selection border for the selected PDF underlay
+    {
+    int selPdfBorderIdx = -1;
+    for (const auto& e : cmd.selection)
+      if (e.type == SelectedEntity::Type::PdfUnderlay) { selPdfBorderIdx = e.index; break; }
+    if (selPdfBorderIdx >= 0 &&
+        selPdfBorderIdx < static_cast<int>(cmd.pdfAttachments.size())) {
+      const PdfAttachment& sa = cmd.pdfAttachments[static_cast<size_t>(selPdfBorderIdx)];
+      if (sa.pageWidthPts > 0.f && sa.pageHeightPts > 0.f) {
+        constexpr float kPiOv = 3.14159265f;
+        const float W    = sa.pageWidthPts  * sa.scale;
+        const float H    = sa.pageHeightPts * sa.scale;
+        const float cosR = std::cos(sa.rotationDeg * kPiOv / 180.f);
+        const float sinR = std::sin(sa.rotationDeg * kPiOv / 180.f);
+        auto cp = [&](float px, float py) -> ImVec2 {
+          return wts(sa.insertX + px * cosR - py * sinR,
+                     sa.insertY + px * sinR + py * cosR);
+        };
+        const ImVec2 bl = cp(0, 0), br = cp(W, 0), tr = cp(W, H), tl = cp(0, H);
+        const ImU32 selCol = IM_COL32(0, 180, 255, 220);
+        dl->AddLine(bl, br, selCol, 1.5f);
+        dl->AddLine(br, tr, selCol, 1.5f);
+        dl->AddLine(tr, tl, selCol, 1.5f);
+        dl->AddLine(tl, bl, selCol, 1.5f);
+        constexpr float hSz = 4.f;
+        for (const ImVec2& sc : {bl, br, tr, tl})
+          dl->AddRectFilled({sc.x - hSz, sc.y - hSz}, {sc.x + hSz, sc.y + hSz}, selCol);
+      }
+    }
+    } // selPdfBorderIdx block
   }
 
   std::vector<CadAnnotation> transformAnnPreviews;

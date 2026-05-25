@@ -1,7 +1,6 @@
 #pragma once
 
-
-
+#include "PdfAttach.hpp"
 #include "SurveyPoints.hpp"
 
 #include <algorithm>
@@ -14,7 +13,7 @@
 
 struct SelectedEntity {
 
-  enum class Type { LineSeg = 0, Circle = 1, Annotation = 2, Polyline = 3, Arc = 4, Ellipse = 5 };
+  enum class Type { LineSeg = 0, Circle = 1, Annotation = 2, Polyline = 3, Arc = 4, Ellipse = 5, PdfUnderlay = 6 };
 
   Type type = Type::LineSeg;
 
@@ -366,7 +365,10 @@ struct AppCommandState {
 
     /// Two-point inverse: horizontal distance and bearing (clockwise from north) between picks (World X=E, Y=N).
 
-    SurveyInverse
+    SurveyInverse,
+
+    /// PDF underlay attach — opens dialog, then optionally waits for viewport picks.
+    PdfAttach
 
   } active = Kind::None;
 
@@ -1160,6 +1162,47 @@ struct AppCommandState {
   /// True when the viewport command palette is visible — command line defers its InputText to avoid duplicate focus.
   bool viewportDrawingHovered = false;
 
+  // -------------------------------------------------------------------------
+  // PDFATTACH command state
+  // -------------------------------------------------------------------------
+  enum class PdfAttachPhase {
+    WaitDialog,       ///< Dialog is open; user browses / configures
+    WaitInsertPoint,  ///< User picks insertion point in viewport
+    WaitScaleRef,     ///< User picks second point to define scale interactively
+    WaitRotationPt,   ///< User picks rotation reference point
+  } pdfAttachPhase = PdfAttachPhase::WaitDialog;
+
+  bool pdfAttachDialogOpen = false;
+
+  char pdfAttachFilePath[1024]{};
+  int  pdfAttachSelectedPage = 0;
+
+  float pdfAttachInsertX  = 0.f;
+  float pdfAttachInsertY  = 0.f;
+  float pdfAttachScale    = 1.f;
+  float pdfAttachRotDeg   = 0.f;
+
+  /// DPI used to rasterize the final attached page texture.
+  float pdfAttachRasterDpi = 150.f;
+
+  bool pdfAttachSpecifyInsert = true;
+  bool pdfAttachSpecifyScale  = false;
+  bool pdfAttachSpecifyRot    = false;
+
+  bool pdfAttachSnapLines   = true;
+  bool pdfAttachSnapCircles = true;
+  bool pdfAttachSnapText    = true;
+
+  /// Opaque per-document draft cache (owned; freed when command ends or file changes).
+  PdfDraftCache* pdfDraftCache = nullptr;
+
+  /// Preview attachment built during WaitInsertPoint (cursor-follows).
+  PdfAttachment pdfAttachPreview;
+  bool          pdfAttachPreviewReady = false;
+
+  /// Committed PDF underlays.
+  std::vector<PdfAttachment> pdfAttachments;
+
 };
 
 
@@ -1539,6 +1582,17 @@ void SubmitViewportPick(AppCommandState& st, float worldX, float worldY, std::ve
 
 
 void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st, std::vector<std::string>& log);
+
+void StartPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// Called from the viewport when the user clicks to place the PDF attachment.
+void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+
+/// Release draft cache and preview texture; resets command state to idle.
+void CancelPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// Convert snap-line geometry of the PDF underlay at \p pdfIndex into drawing entities on the current layer.
+void VectorizePdfAttachmentLines(AppCommandState& st, int pdfIndex, std::vector<std::string>& log);
 
 
 

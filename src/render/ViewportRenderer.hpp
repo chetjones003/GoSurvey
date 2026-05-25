@@ -2,6 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "CadSnap.hpp"
+#include "PdfAttach.hpp"
 
 #include <cstdint>
 #include <vector>
@@ -42,7 +43,8 @@ public:
                    const std::vector<EntityAttributes>* lineEntityAttrs,
                    const std::vector<EntityAttributes>* circleEntityAttrs,
                    const CadExtendedGeometryInput* extended, bool showGrid,
-                   const std::vector<CadLayerRow>* drawingLayers, const RenderTuning& tuning = RenderTuning{});
+                   const std::vector<CadLayerRow>* drawingLayers, const RenderTuning& tuning = RenderTuning{},
+                   const std::vector<PdfAttachment>* pdfAttachments = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 
@@ -99,4 +101,9 @@ private:
   unsigned int vaoGrid_ = 0;
   unsigned int vboGrid_ = 0;
   int gridVertexCount_ = 0;
+
+  // Textured-quad program for PDF underlays
+  unsigned int texProgram_ = 0;
+  unsigned int vaoTex_     = 0;
+  unsigned int vboTex_     = 0;
 };
