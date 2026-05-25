@@ -3522,21 +3522,34 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     }
     cmd.commandLogCacheBytes[pos] = '\0';
 
-    ImGui::BeginChild("CmdScroll", ImVec2(0, scrollH), true, ImGuiWindowFlags_HorizontalScrollbar);
-    const float innerW = ImGui::GetContentRegionAvail().x;
-    const float innerH = ImGui::GetContentRegionAvail().y;
+    // InputTextMultiline owns its own scroll child; SetScrollHereY on the outer BeginChild was a no-op (the inner
+    // view doesn't overflow because InputTextMultiline fills it). Drive its internal scroll via a CallbackAlways
+    // that pins the caret to the end of the buffer when the log grew. ImGui keeps the caret visible, which scrolls
+    // the inner viewport to the bottom even though we never show a caret in read-only mode.
+    struct CmdLogScrollCtx {
+      bool jumpToEnd = false;
+    } scrollCtx;
+    scrollCtx.jumpToEnd = (log.size() != cmd.commandLogLastSizeForAutoscroll);
+    if (scrollCtx.jumpToEnd)
+      cmd.commandLogLastSizeForAutoscroll = log.size();
+    const auto cmdLogCb = [](ImGuiInputTextCallbackData* data) -> int {
+      auto* ctx = static_cast<CmdLogScrollCtx*>(data->UserData);
+      if (ctx && ctx->jumpToEnd) {
+        data->CursorPos = data->BufTextLen;
+        data->SelectionStart = data->SelectionEnd = data->CursorPos;
+        ctx->jumpToEnd = false;
+      }
+      return 0;
+    };
     ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.f, 0.f, 0.f, 0.f));
     ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(0.f, 0.f));
     ImGui::InputTextMultiline("##CmdLogReadOnly", cmd.commandLogCacheBytes.data(), cmd.commandLogCacheBytes.size(),
-                              ImVec2(innerW, innerH),
-                              ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoHorizontalScroll);
+                              ImVec2(-FLT_MIN, scrollH),
+                              ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_NoHorizontalScroll |
+                                  ImGuiInputTextFlags_CallbackAlways,
+                              cmdLogCb, &scrollCtx);
     ImGui::PopStyleVar();
     ImGui::PopStyleColor();
-    if (log.size() != cmd.commandLogLastSizeForAutoscroll) {
-      cmd.commandLogLastSizeForAutoscroll = log.size();
-      ImGui::SetScrollHereY(1.f);
-    }
-    ImGui::EndChild();
   }
 
   ImGui::Separator();
@@ -4024,9 +4037,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const double u = static_cast<double>(mx) / static_cast<double>(std::max(avail.x, 1.f));
       const double v = static_cast<double>(my) / static_cast<double>(std::max(avail.y, 1.f));
       const double z0 = static_cast<double>(*zoom);
-      const double halfH0 = (1.0 / std::max(z0, 1.e-4)) * 50.0;
-      const double z1 = std::clamp(z0 * std::exp(static_cast<double>(wheel) * 0.14), 1.e-4, 1.e5);
-      const double halfH1 = (1.0 / std::max(z1, 1.e-4)) * 50.0;
+      const double halfH0 = (1.0 / std::max(z0, 1.e-9)) * 50.0;
+      // AutoCAD ZOOMFACTOR analog: settings → Display → Zoom factor (1.01..3.0). Each wheel notch multiplies the
+      // zoom by `factor`. Sub-notch wheel deltas use the same `factor^wheel` curve.
+      const double factor = std::clamp(static_cast<double>(cmd.displayWheelZoomFactor), 1.01, 3.0);
+      const double mul = std::pow(factor, static_cast<double>(wheel));
+      const double z1 = std::clamp(z0 * mul, 1.e-9, 1.e9);
+      const double halfH1 = (1.0 / std::max(z1, 1.e-9)) * 50.0;
       const double dh = halfH0 - halfH1;
       const double aspectD = static_cast<double>(aspect);
       *panX += (u - 0.5) * 2.0 * aspectD * dh;
@@ -4037,7 +4054,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
       ImVec2 d = ImGui::GetIO().MouseDelta;
       const double aspectD = static_cast<double>(avail.x) / static_cast<double>(std::max(avail.y, 1.f));
-      const double halfH = (1.0 / std::max(static_cast<double>(*zoom), 1.e-4)) * 50.0;
+      const double halfH = (1.0 / std::max(static_cast<double>(*zoom), 1.e-9)) * 50.0;
       const double halfW = halfH * aspectD;
       *panX -= (static_cast<double>(d.x) / static_cast<double>(std::max(avail.x, 1.f))) * (2.0 * halfW);
       *panY += (static_cast<double>(d.y) / static_cast<double>(std::max(avail.y, 1.f))) * (2.0 * halfH);
@@ -4047,7 +4064,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const int vpFbW = static_cast<int>(std::max(1.f, std::floor(avail.x)));
   const int vpFbH = static_cast<int>(std::max(1.f, std::floor(avail.y)));
   ProcessPendingViewportZoom(cmd, panX, panY, zoom, vpFbW, vpFbH, aspect, log);
-  const float halfH = (1.f / std::max(*zoom, 1.e-4f)) * 50.f;
+  const float halfH = (1.f / std::max(*zoom, 1.e-9f)) * 50.f;
   const float halfW = halfH * aspect;
   const double panXd = *panX;
   const double panYd = *panY;
@@ -5982,6 +5999,21 @@ static void DrawDisplayCrosshair(AppCommandState& cmd) {
   }
 }
 
+static void DrawDisplayZoomFactor(AppCommandState& cmd) {
+  ImGui::SetNextItemWidth(80.f);
+  if (ImGui::DragFloat("##zoomFactorNum", &cmd.displayWheelZoomFactor, 0.01f, 1.01f, 3.0f, "%.2f"))
+    cmd.displayWheelZoomFactor = std::clamp(cmd.displayWheelZoomFactor, 1.01f, 3.0f);
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(-1.f);
+  if (ImGui::SliderFloat("Wheel zoom factor##zoomFactorSlider", &cmd.displayWheelZoomFactor, 1.01f, 3.0f, "%.2fx"))
+    cmd.displayWheelZoomFactor = std::clamp(cmd.displayWheelZoomFactor, 1.01f, 3.0f);
+  ItemHelpTooltip(
+      "AutoCAD ZOOMFACTOR analog. Multiplier applied per mouse-wheel notch (and per ZOOM IN/OUT step).\n"
+      "1.10 = 10% per notch (slow, precise); 2.00 = 2x per notch (fast).");
+  ImGui::TextDisabled("Current zoom: %.4g x", static_cast<double>(cmd.viewportZoom));
+  ImGui::TextDisabled("Pan: (%.3f, %.3f)", cmd.viewportPanX, cmd.viewportPanY);
+}
+
 static void DrawDisplayFadeControl(AppCommandState& cmd) {
   ImGui::SetNextItemWidth(60.f);
   ImGui::DragInt("##xrefFadeNum", &cmd.displayFadeXref, 0.5f, 0, 90, "%d");
@@ -6018,6 +6050,9 @@ static void DrawSettingsDisplayTab(AppCommandState& cmd) {
     BoxEnd();
     BoxBegin("Crosshair size", 130.f);
     DrawDisplayCrosshair(cmd);
+    BoxEnd();
+    BoxBegin("Zoom", 130.f);
+    DrawDisplayZoomFactor(cmd);
     BoxEnd();
     BoxBegin("Fade control", 130.f);
     DrawDisplayFadeControl(cmd);

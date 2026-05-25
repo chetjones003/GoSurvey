@@ -70,6 +70,9 @@ void LoadUserStartupPrefs(AppCommandState& st) {
         st.viewportCrosshairArmFracX = std::clamp(f * 0.6f, 0.002f, 0.5f);
         st.viewportCrosshairArmFracY = std::clamp(f, 0.002f, 0.5f);
       }
+      if (s.contains("displayWheelZoomFactor") && s["displayWheelZoomFactor"].is_number())
+        st.displayWheelZoomFactor =
+            std::clamp(s["displayWheelZoomFactor"].get<float>(), 1.01f, 3.0f);
       if (s.contains("displayFadeXref") && s["displayFadeXref"].is_number_integer())
         st.displayFadeXref = std::clamp(s["displayFadeXref"].get<int>(), 0, 90);
       if (s.contains("displayFadeInPlace") && s["displayFadeInPlace"].is_number_integer())
@@ -104,6 +107,7 @@ void SaveUserStartupPrefs(const AppCommandState& st) {
   s["settingsActiveTabIdx"] = st.settingsActiveTabIdx;
   s["displayArcCircleSmoothness"] = st.displayArcCircleSmoothness;
   s["displayCrosshairSizePct"] = st.displayCrosshairSizePct;
+  s["displayWheelZoomFactor"] = st.displayWheelZoomFactor;
   s["displayFadeXref"] = st.displayFadeXref;
   s["displayFadeInPlace"] = st.displayFadeInPlace;
   s["systemHardwareAcceleration"] = st.systemHardwareAcceleration;

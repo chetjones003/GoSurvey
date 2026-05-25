@@ -48,7 +48,8 @@ bool ComputeCircumcircleRubber(float ax, float ay, float bx, float by, float cx,
   return true;
 }
 
-void AppendArcRubberWorld(std::vector<float>& out, float ax, float ay, float bx, float by, float cx, float cy) {
+void AppendArcRubberWorld(std::vector<float>& out, float ax, float ay, float bx, float by, float cx, float cy,
+                          float orthoHalfH, int fbHeightPx, int maxSegmentCap) {
   float ox = 0.f;
   float oy = 0.f;
   float r = 0.f;
@@ -71,7 +72,11 @@ void AppendArcRubberWorld(std::vector<float>& out, float ax, float ay, float bx,
   if (std::fabs(sweep) < 1e-12)
     sweep = twopi;
   const double sr = ta;
-  const int nseg = 36;
+  // Sweep-scaled cap for arc rubber: keep chord-pixel target consistent with the cached arc tessellation.
+  const double sweepFrac = std::clamp(std::fabs(sweep) / twopi, 0.05, 1.0);
+  const int arcCap = std::max(8, static_cast<int>(std::ceil(maxSegmentCap * sweepFrac)));
+  const int nseg = std::max(
+      8, CircleTessellationSegmentCount(r, static_cast<double>(orthoHalfH), fbHeightPx, arcCap));
   for (int i = 0; i < nseg; ++i) {
     const double t0 = sr + sweep * static_cast<double>(i) / static_cast<double>(nseg);
     const double t1 = sr + sweep * static_cast<double>(i + 1) / static_cast<double>(nseg);
@@ -85,11 +90,12 @@ void AppendArcRubberWorld(std::vector<float>& out, float ax, float ay, float bx,
   }
 }
 
-void AppendCircleRubberWorld(std::vector<float>& out, float cx, float cy, float r, float orthoHalfH, int fbHeightPx) {
+void AppendCircleRubberWorld(std::vector<float>& out, float cx, float cy, float r, float orthoHalfH, int fbHeightPx,
+                             int maxSegmentCap) {
   if (r <= 1e-6f)
     return;
   const int segments =
-      CircleTessellationSegmentCount(static_cast<double>(r), static_cast<double>(orthoHalfH), fbHeightPx);
+      CircleTessellationSegmentCount(static_cast<double>(r), static_cast<double>(orthoHalfH), fbHeightPx, maxSegmentCap);
   const double dcx = static_cast<double>(cx);
   const double dcy = static_cast<double>(cy);
   const double dr = static_cast<double>(r);
@@ -173,7 +179,8 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     if (cmd.arcPhase == AP::WaitMid)
       PushRubberSegViewRel(rubberLines, cmd.arcAx, cmd.arcAy, curXf, curYf, 0., 0.);
     else if (cmd.arcPhase == AP::WaitEnd)
-      AppendArcRubberWorld(rubberLines, cmd.arcAx, cmd.arcAy, cmd.arcBx, cmd.arcBy, curXf, curYf);
+      AppendArcRubberWorld(rubberLines, cmd.arcAx, cmd.arcAy, cmd.arcBx, cmd.arcBy, curXf, curYf, orthoHalfH,
+                           fbHeightPx, cmd.displayArcCircleSmoothness);
   }
 
   if (cmd.active == AppCommandState::Kind::Ellipse && cmd.ellPhase == AppCommandState::EllipsePhase::WaitMajorEnd)
@@ -206,7 +213,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       const float dx = curXf - cmd.circleCx;
       const float dy = curYf - cmd.circleCy;
       AppendCircleRubberWorld(rubberLines, cmd.circleCx, cmd.circleCy, std::sqrt(dx * dx + dy * dy), orthoHalfH,
-                              fbHeightPx);
+                              fbHeightPx, cmd.displayArcCircleSmoothness);
     } else if (cmd.circlePhase == CP::ThreeP_WaitP2) {
       const float dx = curXf - cmd.c3p1x;
       const float dy = curYf - cmd.c3p1y;
@@ -214,13 +221,13 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       const float rPrev = 0.5f * chord;
       if (rPrev > 1e-6f)
         AppendCircleRubberWorld(rubberLines, (cmd.c3p1x + curXf) * 0.5f, (cmd.c3p1y + curYf) * 0.5f, rPrev, orthoHalfH,
-                                fbHeightPx);
+                                fbHeightPx, cmd.displayArcCircleSmoothness);
     } else if (cmd.circlePhase == CP::ThreeP_WaitP3) {
       float ox = 0.f;
       float oy = 0.f;
       float rCirc = 0.f;
       if (ComputeCircumcircle(cmd.c3p1x, cmd.c3p1y, cmd.c3p2x, cmd.c3p2y, curXf, curYf, &ox, &oy, &rCirc))
-        AppendCircleRubberWorld(rubberLines, ox, oy, rCirc, orthoHalfH, fbHeightPx);
+        AppendCircleRubberWorld(rubberLines, ox, oy, rCirc, orthoHalfH, fbHeightPx, cmd.displayArcCircleSmoothness);
     }
   }
 

@@ -1070,6 +1070,10 @@ struct AppCommandState {
   // Display tab — Crosshair size (1..100, % of viewport min axis). Mirrors AutoCAD CURSORSIZE.
   int displayCrosshairSizePct = 5;
 
+  // Display tab — Zoom. Wheel zoom factor per notch (AutoCAD ZOOMFACTOR analog). 1.10 = 10% per notch.
+  // Clamped 1.01..3.0 at the call site; higher = faster zoom, lower = finer control.
+  float displayWheelZoomFactor = 1.15f;
+
   // Display tab — Fade control (placeholders).
   int displayFadeXref = 50;
   int displayFadeInPlace = 70;

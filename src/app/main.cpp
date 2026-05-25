@@ -333,7 +333,7 @@ int main() {
     DrawCopySurveyDuplicateModal(cmd, cmdLog);
 
     std::vector<float> rubberLines;
-    const float orthoHalfH = (1.f / std::max(cmd.viewportZoom, 1.e-4f)) * 50.f;
+    const float orthoHalfH = (1.f / std::max(cmd.viewportZoom, 1.e-9f)) * 50.f;
     AppendCadDraftRubberLines(cmd, curX, curY, orthoEnabled, cmd.viewportPanX, cmd.viewportPanY, orthoHalfH, fbH,
                               rubberLines);
 
