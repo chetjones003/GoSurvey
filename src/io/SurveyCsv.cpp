@@ -1,6 +1,7 @@
 #include "SurveyCsv.hpp"
 
 #include "CadCommands.hpp"
+#include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
 
 #include <algorithm>
@@ -9,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iomanip>
 #include <sstream>
 
 #include <filesystem>
@@ -270,6 +272,10 @@ ParseOutcome ParseDataRow(const std::vector<std::string>& cells, SurveyCsvLayout
   return o;
 }
 
+void AppendSurveyExportCoord(std::ostringstream& oss, double v) {
+  oss << std::fixed << std::setprecision(4) << v;
+}
+
 std::string HeaderLine(SurveyCsvLayout layout) {
   switch (layout) {
   case SurveyCsvLayout::PENZD_PN:
@@ -290,18 +296,43 @@ std::string BuildExportCsvBody(const AppCommandState& st, SurveyCsvLayout layout
     oss << HeaderLine(layout) << '\n';
   for (const auto& p : st.surveyPoints) {
     const std::string d = CsvEscapeField(p.description);
+    const double e = static_cast<double>(p.easting) + st.worldDocumentOriginX;
+    const double n = static_cast<double>(p.northing) + st.worldDocumentOriginY;
+    const double z = static_cast<double>(p.elevation);
     switch (layout) {
     case SurveyCsvLayout::PENZD_PN:
-      oss << p.id << ',' << p.northing << ',' << p.easting << ',' << p.elevation << ',' << d << '\n';
+      oss << p.id << ',';
+      AppendSurveyExportCoord(oss, n);
+      oss << ',';
+      AppendSurveyExportCoord(oss, e);
+      oss << ',';
+      AppendSurveyExportCoord(oss, z);
+      oss << ',' << d << '\n';
       break;
     case SurveyCsvLayout::PENZD_PE:
-      oss << p.id << ',' << p.easting << ',' << p.northing << ',' << p.elevation << ',' << d << '\n';
+      oss << p.id << ',';
+      AppendSurveyExportCoord(oss, e);
+      oss << ',';
+      AppendSurveyExportCoord(oss, n);
+      oss << ',';
+      AppendSurveyExportCoord(oss, z);
+      oss << ',' << d << '\n';
       break;
     case SurveyCsvLayout::NEZ:
-      oss << p.northing << ',' << p.easting << ',' << p.elevation << '\n';
+      AppendSurveyExportCoord(oss, n);
+      oss << ',';
+      AppendSurveyExportCoord(oss, e);
+      oss << ',';
+      AppendSurveyExportCoord(oss, z);
+      oss << '\n';
       break;
     case SurveyCsvLayout::ENZ:
-      oss << p.easting << ',' << p.northing << ',' << p.elevation << '\n';
+      AppendSurveyExportCoord(oss, e);
+      oss << ',';
+      AppendSurveyExportCoord(oss, n);
+      oss << ',';
+      AppendSurveyExportCoord(oss, z);
+      oss << '\n';
       break;
     }
   }
@@ -456,6 +487,8 @@ bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
 
   st.createPointsNextId = std::max(st.createPointsNextId, autoId);
   st.selectedSurveyPointIndices.clear();
+  if (imported > 0)
+    CadCoord::MaybeRebaseLargeCoordinates(st, &log);
   log.push_back("IMPORTPOINTS — imported " + std::to_string(imported) + " point(s); skipped " +
                 std::to_string(skipped) + " row(s).");
   st.surveyImportPreviewDirty = true;
