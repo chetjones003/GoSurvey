@@ -420,6 +420,10 @@ struct AppCommandState {
 
   float viewportLastSurveyLayoutHeightPx = 600.f;
 
+  int viewportLastFbW = 900;
+
+  int viewportLastFbH = 650;
+
   /// Last ortho half-height / viewport height / MUP used for survey MTEXT auto-layout (re-run when zoom/size/MUP changes).
   float surveyLabelLayoutCacheHalfH = -1.f;
 
@@ -493,8 +497,7 @@ struct AppCommandState {
 
 
 
-  /// World XY added on DXF export when CAD was shifted to a local origin for rendering precision (large imports).
-
+  /// World coordinate of local (0,0). Geometry is stored in local space for float precision.
   double worldDocumentOriginX = 0.0;
 
   double worldDocumentOriginY = 0.0;
@@ -634,6 +637,11 @@ struct AppCommandState {
   float uiCursorWorldX = 0.f;
 
   float uiCursorWorldY = 0.f;
+
+  /// Drawing viewport pan/zoom (local coordinates; pan is view center in storage space).
+  double viewportPanX = 0.;
+  double viewportPanY = 0.;
+  float viewportZoom = 1.f;
 
 
 
@@ -1264,6 +1272,9 @@ bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lin
 
 /// Trim and parse absolute "x,y" / "x y" or relative "@dx,dy" when allowed.
 
+bool ParseStoragePoint(const AppCommandState& st, const std::string& raw, float* lx, float* ly, bool allowRelative,
+                       float baseLocalX, float baseLocalY);
+
 bool ParseWorldPoint(const std::string& raw, float* ox, float* oy, bool allowRelative, float baseX, float baseY);
 
 /// If ortho: snaps dx/dy so segment from anchor is horizontal or vertical (CAD-style).
@@ -1403,9 +1414,8 @@ void StartZoomWindowCommand(AppCommandState& st, std::vector<std::string>& log);
 
 /// Applies pending zoom-extents or zoom-window requests using current framebuffer size.
 
-void ProcessPendingViewportZoom(AppCommandState& st, float* panX, float* panY, float* zoom, int fbW, int fbH,
-
-                                std::vector<std::string>& log);
+void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY, float* zoom, int fbW, int fbH,
+                                float viewportAspect, std::vector<std::string>& log);
 
 
 
@@ -1485,11 +1495,16 @@ const char* LineCommandFooterHint(const AppCommandState& st);
 
 const char* DrawingExtrasFooterHint(const AppCommandState& st);
 
-bool ComputeWorldExtents(const AppCommandState& st, float* outMnX, float* outMxX, float* outMnY, float* outMxY);
+bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY, double* outMxY);
 
-void ApplyViewportZoomToWorldRect(float mnX, float mxX, float mnY, float mxY, float* panX, float* panY,
+/// Robust extents that drop far-outlier entities (DXFs often contain stray geometry at world (0,0) such as
+/// defpoints, block-insert origins, or leftover construction). On success, \p outSkipped is the number of
+/// entities discarded; 0 means the answer equals \ref ComputeWorldExtents.
+bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY,
+                               double* outMxY, int* outSkipped);
 
-                                  float* zoom, int fbW, int fbH);
+void ApplyViewportZoomToWorldRect(double mnX, double mxX, double mnY, double mxY, double* panX, double* panY,
+                                  float* zoom, int fbW, int fbH, float viewportAspect);
 
 
 

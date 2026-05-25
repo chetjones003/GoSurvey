@@ -4,11 +4,14 @@
 
 struct AppCommandState;
 
-/// One rubber segment as two XYZ triples (Z always 0 for draft lines).
-void PushRubberSeg(std::vector<float>& o, float x0, float y0, float x1, float y1);
+/// One rubber segment as two XYZ triples (Z always 0 for draft lines), in view-relative coords.
+void PushRubberSegViewRel(std::vector<float>& o, double x0, double y0, double x1, double y1, double anchorX,
+                          double anchorY);
 
-void AppendWorldRectRubber(std::vector<float>& o, float xa, float ya, float xb, float yb);
+void AppendWorldRectRubberViewRel(std::vector<float>& o, float xa, float ya, float xb, float yb, double anchorX,
+                                  double anchorY);
 
-/// Draft-command rubber for the drawing viewport (line, polyline, arc, circle, dims, survey inverse, MTEXT box).
-void AppendCadDraftRubberLines(const AppCommandState& cmd, float curX, float curY, bool orthoEnabled,
+/// Draft-command rubber for the drawing viewport (view-relative coords for GPU precision at high zoom).
+void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double curY, bool orthoEnabled,
+                               double viewAnchorX, double viewAnchorY, float orthoHalfH, int fbHeightPx,
                                std::vector<float>& rubberLines);

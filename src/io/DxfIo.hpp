@@ -6,7 +6,7 @@
 struct AppCommandState;
 
 /// Replaces CAD geometry from ASCII DXF (model space only: skips paper space group 67 and VIEWPORT; expands INSERT;
-/// LINE/LWPOLYLINE/POLYLINE (VERTEX/SEQEND)/CIRCLE/ARC/ELLIPSE/POINT/TEXT/MTEXT/DIMENSION/HATCH/ACAD_TABLE). Survey database untouched.
+/// LINE/LWPOLYLINE/POLYLINE (VERTEX/SEQEND)/CIRCLE/ARC/ELLIPSE/POINT/TEXT/MTEXT/DIMENSION/HATCH/ACAD_TABLE).
 bool ImportDxfFile(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log);
 
 /// Writes CAD geometry as ASCII DXF (AC1032): HEADER/CLASSES/TABLES/BLOCKS/ENTITIES/OBJECTS aligned with the

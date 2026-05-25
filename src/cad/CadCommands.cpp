@@ -1,4 +1,5 @@
 #include "CadCommands.hpp"
+#include "CadCoordinateFrame.hpp"
 #include "CadLinetype.hpp"
 #include "geom2d.hpp"
 #include "MtextRichFormat.hpp"
@@ -108,19 +109,25 @@ float RotateDeltaFromReferenceAndNewSegment(float refX1, float refY1, float refX
 
 bool ComputeCircumcircle(float ax, float ay, float bx, float by, float cx, float cy, float* ox, float* oy,
                          float* r) {
-  const float d = 2.f * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
-  if (std::fabs(d) < 1e-6f)
+  const double dax = static_cast<double>(ax);
+  const double day = static_cast<double>(ay);
+  const double dbx = static_cast<double>(bx);
+  const double dby = static_cast<double>(by);
+  const double dcx = static_cast<double>(cx);
+  const double dcy = static_cast<double>(cy);
+  const double d = 2.0 * (dax * (dby - dcy) + dbx * (dcy - day) + dcx * (day - dby));
+  if (std::fabs(d) < 1e-6)
     return false;
-  const float a2 = ax * ax + ay * ay;
-  const float b2 = bx * bx + by * by;
-  const float c2 = cx * cx + cy * cy;
-  const float ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d;
-  const float uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d;
-  const float dx = ux - ax;
-  const float dy = uy - ay;
-  *ox = ux;
-  *oy = uy;
-  *r = std::sqrt(dx * dx + dy * dy);
+  const double a2 = dax * dax + day * day;
+  const double b2 = dbx * dbx + dby * dby;
+  const double c2 = dcx * dcx + dcy * dcy;
+  const double ux = (a2 * (dby - dcy) + b2 * (dcy - day) + c2 * (day - dby)) / d;
+  const double uy = (a2 * (dcx - dbx) + b2 * (dax - dcx) + c2 * (dbx - dax)) / d;
+  const double dx = ux - dax;
+  const double dy = uy - day;
+  *ox = static_cast<float>(ux);
+  *oy = static_cast<float>(uy);
+  *r = static_cast<float>(std::sqrt(dx * dx + dy * dy));
   return true;
 }
 
@@ -1218,7 +1225,7 @@ bool HandleCircleTextInput(const std::string& lineIn, AppCommandState& st, std::
     }
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
     st.circleCx = px;
     st.circleCy = py;
@@ -1236,7 +1243,7 @@ bool HandleCircleTextInput(const std::string& lineIn, AppCommandState& st, std::
   case AppCommandState::CirclePhase::ThreeP_WaitP1: {
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
     st.c3p1x = px;
     st.c3p1y = py;
@@ -1247,7 +1254,7 @@ bool HandleCircleTextInput(const std::string& lineIn, AppCommandState& st, std::
   case AppCommandState::CirclePhase::ThreeP_WaitP2: {
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
     st.c3p2x = px;
     st.c3p2y = py;
@@ -1258,7 +1265,7 @@ bool HandleCircleTextInput(const std::string& lineIn, AppCommandState& st, std::
   case AppCommandState::CirclePhase::ThreeP_WaitP3: {
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
     float ox = 0.f;
     float oy = 0.f;
@@ -2537,7 +2544,7 @@ bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineI
   if (st.modifyPhase == MP::NeedBase) {
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
     st.modifyBaseX = px;
     st.modifyBaseY = py;
@@ -2548,7 +2555,7 @@ bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineI
   if (st.modifyPhase == MP::NeedDestination) {
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, true, st.modifyBaseX, st.modifyBaseY))
+    if (!ParseStoragePoint(st, line, &px, &py, true, st.modifyBaseX, st.modifyBaseY))
       return false;
     float dx = px - st.modifyBaseX;
     float dy = py - st.modifyBaseY;
@@ -2581,7 +2588,7 @@ static bool HandleScaleText(AppCommandState& st, const std::string& lineIn, std:
   if (st.modifyPhase == MP::NeedBase) {
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
     st.modifyBaseX = px;
     st.modifyBaseY = py;
@@ -2615,7 +2622,7 @@ static bool HandleScaleText(AppCommandState& st, const std::string& lineIn, std:
     }
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, true, st.modifyBaseX, st.modifyBaseY))
+    if (!ParseStoragePoint(st, line, &px, &py, true, st.modifyBaseX, st.modifyBaseY))
       return false;
     const float d = std::hypot(px - st.modifyBaseX, py - st.modifyBaseY);
     FinishScaleCommand(st, d / std::max(st.scaleRefDist, 1e-20f), log);
@@ -2624,7 +2631,7 @@ static bool HandleScaleText(AppCommandState& st, const std::string& lineIn, std:
   case SP::Ref_WaitP1: {
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
     st.scaleRefP1X = px;
     st.scaleRefP1Y = py;
@@ -2635,7 +2642,7 @@ static bool HandleScaleText(AppCommandState& st, const std::string& lineIn, std:
   case SP::Ref_WaitP2: {
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
     const float refLen = std::hypot(px - st.scaleRefP1X, py - st.scaleRefP1Y);
     if (!(refLen > 1e-8f) || !std::isfinite(refLen)) {
@@ -2659,7 +2666,7 @@ static bool HandleScaleText(AppCommandState& st, const std::string& lineIn, std:
     }
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
     st.scaleNewLenP1X = px;
     st.scaleNewLenP1Y = py;
@@ -2670,7 +2677,7 @@ static bool HandleScaleText(AppCommandState& st, const std::string& lineIn, std:
   case SP::NewLength_WaitP2: {
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
     const float newLen = std::hypot(px - st.scaleNewLenP1X, py - st.scaleNewLenP1Y);
     if (!(newLen > 1e-8f) || !std::isfinite(newLen)) {
@@ -2728,7 +2735,7 @@ bool HandleRotateText(AppCommandState& st, const std::string& lineIn, std::vecto
   if (st.rotatePhase == RP::NeedBase) {
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
     st.rotateBaseX = px;
     st.rotateBaseY = py;
@@ -2759,7 +2766,7 @@ bool HandleRotateText(AppCommandState& st, const std::string& lineIn, std::vecto
       return true;
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
     st.rotateRefX1 = px;
     st.rotateRefY1 = py;
@@ -2773,7 +2780,7 @@ bool HandleRotateText(AppCommandState& st, const std::string& lineIn, std::vecto
       return true;
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
     st.rotateRefX2 = px;
     st.rotateRefY2 = py;
@@ -2809,7 +2816,7 @@ bool HandleRotateText(AppCommandState& st, const std::string& lineIn, std::vecto
       return true;
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
     st.rotateAnglePt1X = px;
     st.rotateAnglePt1Y = py;
@@ -2823,7 +2830,7 @@ bool HandleRotateText(AppCommandState& st, const std::string& lineIn, std::vecto
       return true;
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f))
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
       return false;
     const float delta = RotateDeltaFromReferenceAndNewSegment(st.rotateRefX1, st.rotateRefY1, st.rotateRefX2,
                                                                st.rotateRefY2, st.rotateAnglePt1X,
@@ -2992,10 +2999,12 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   log.push_back("DIMLINEAR complete.");
 }
 
-static void CommitIdPointAt(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+static void CommitIdPointAt(AppCommandState& st, float lx, float ly, std::vector<std::string>& log) {
+  double wx = 0.;
+  double wy = 0.;
+  CadCoord::WorldFromLocal(st, lx, ly, &wx, &wy);
   char buf[192];
-  std::snprintf(buf, sizeof(buf), "ID — UCS (World)  X = %.6f  Y = %.6f  Z = 0.000000", static_cast<double>(wx),
-                static_cast<double>(wy));
+  std::snprintf(buf, sizeof(buf), "ID — UCS (World)  X = %.6f  Y = %.6f  Z = 0.000000", wx, wy);
   log.push_back(buf);
   st.active = AppCommandState::Kind::None;
 }
@@ -4280,82 +4289,83 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
   }
 }
 
-bool ComputeWorldExtents(const AppCommandState& st, float* outMnX, float* outMxX, float* outMnY, float* outMxY) {
+bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY, double* outMxY) {
   bool any = false;
-  float mnX = 0.f;
-  float mxX = 0.f;
-  float mnY = 0.f;
-  float mxY = 0.f;
-  auto consider = [&](float x, float y) {
-    if (!any) {
-      mnX = mxX = x;
-      mnY = mxY = y;
-      any = true;
-    } else {
-      mnX = std::min(mnX, x);
-      mxX = std::max(mxX, x);
-      mnY = std::min(mnY, y);
-      mxY = std::max(mxY, y);
-    }
-  };
+  double mnX = 0.;
+  double mxX = 0.;
+  double mnY = 0.;
+  double mxY = 0.;
+  auto consider = [&](double x, double y) { ExpandExtents(x, y, &mnX, &mxX, &mnY, &mxY, &any); };
 
   const auto& L = st.userLinesFlat;
   if (L.size() % 6 == 0) {
     for (size_t i = 0; i + 5 < L.size(); i += 6) {
-      consider(L[i], L[i + 1]);
-      consider(L[i + 3], L[i + 4]);
+      consider(static_cast<double>(L[i]), static_cast<double>(L[i + 1]));
+      consider(static_cast<double>(L[i + 3]), static_cast<double>(L[i + 4]));
     }
   }
   const auto& C = st.userCirclesCxCyR;
   if (C.size() % 3 == 0) {
     for (size_t ci = 0; ci + 2 < C.size(); ci += 3) {
-      const float cx = C[ci];
-      const float cy = C[ci + 1];
-      const float r = C[ci + 2];
-      if (r <= 0.f)
+      const double cx = static_cast<double>(C[ci]);
+      const double cy = static_cast<double>(C[ci + 1]);
+      const double r = std::fabs(static_cast<double>(C[ci + 2]));
+      if (r <= 1e-12)
         continue;
       consider(cx - r, cy - r);
+      consider(cx + r, cy - r);
+      consider(cx - r, cy + r);
       consider(cx + r, cy + r);
     }
   }
   for (const SurveyPoint& p : st.surveyPoints)
-    consider(p.easting, p.northing);
+    consider(static_cast<double>(p.easting), static_cast<double>(p.northing));
 
   for (const CadAnnotation& a : st.cadAnnotations) {
-    float mnX = 0.f;
-    float mnY = 0.f;
-    float mxX = 0.f;
-    float mxY = 0.f;
-    CadAnnotationRoughBounds(a, st.modelUnitsPerPlottedInch, &mnX, &mnY, &mxX, &mxY);
-    consider(mnX, mnY);
-    consider(mxX, mxY);
+    float amnX = 0.f;
+    float amnY = 0.f;
+    float amxX = 0.f;
+    float amxY = 0.f;
+    CadAnnotationRoughBounds(a, st.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
+    consider(static_cast<double>(amnX), static_cast<double>(amnY));
+    consider(static_cast<double>(amxX), static_cast<double>(amxY));
   }
 
   for (const CadArc& a : st.userArcs) {
+    const double dcx = static_cast<double>(a.cx);
+    const double dcy = static_cast<double>(a.cy);
+    const double dr = std::fabs(static_cast<double>(a.r));
+    if (dr <= 1e-12)
+      continue;
     const int n = std::max(8, static_cast<int>(std::fabs(static_cast<double>(a.sweepRad)) / (3.14159265 / 16.0)) + 1);
     for (int i = 0; i <= n; ++i) {
-      const float u = static_cast<float>(i) / static_cast<float>(n);
-      const float t = a.startRad + a.sweepRad * u;
-      consider(a.cx + a.r * std::cos(t), a.cy + a.r * std::sin(t));
+      const double u = static_cast<double>(i) / static_cast<double>(n);
+      const double t = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u;
+      double wx = 0.;
+      double wy = 0.;
+      CirclePointWorld(dcx, dcy, dr, t, &wx, &wy);
+      consider(wx, wy);
     }
   }
 
   for (const CadEllipse& el : st.userEllipses) {
-    const float ma = std::hypot(el.majVx, el.majVy);
-    if (ma < 1e-8f)
+    const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    if (ma < 1e-12)
       continue;
-    const float ux = el.majVx / ma;
-    const float uy = el.majVy / ma;
-    const float px = -uy;
-    const float py = ux;
-    const float mb = ma * el.ratio;
     constexpr int n = 48;
-    constexpr float twopi = 6.28318530718f;
-    for (int i = 0; i <= n; ++i) {
-      const float ang = twopi * static_cast<float>(i) / static_cast<float>(n);
-      const float c = std::cos(ang);
-      const float s = std::sin(ang);
-      consider(el.cx + ux * (ma * c) + px * (mb * s), el.cy + uy * (ma * c) + py * (mb * s));
+    constexpr double kTwoPi = 6.283185307179586;
+    const double ux = static_cast<double>(el.majVx) / ma;
+    const double uy = static_cast<double>(el.majVy) / ma;
+    const double px = -uy;
+    const double py = ux;
+    const double mb = ma * static_cast<double>(el.ratio);
+    const double ecx = static_cast<double>(el.cx);
+    const double ecy = static_cast<double>(el.cy);
+    for (int i = 0; i < n; ++i) {
+      const double ang = kTwoPi * static_cast<double>(i) / static_cast<double>(n);
+      const double c = std::cos(ang);
+      const double s = std::sin(ang);
+      consider(ecx + ux * (ma * c) + px * (mb * s), ecy + uy * (ma * c) + py * (mb * s));
     }
   }
 
@@ -4365,8 +4375,10 @@ bool ComputeWorldExtents(const AppCommandState& st, float* outMnX, float* outMxX
     for (size_t pi = 0; pi + 1 < PO.size(); ++pi) {
       const int v0 = PO[pi];
       const int v1 = PO[pi + 1];
-      for (int vi = v0; vi < v1; ++vi)
-        consider(PV[static_cast<size_t>(vi * 3 + 0)], PV[static_cast<size_t>(vi * 3 + 1)]);
+      for (int vi = v0; vi < v1; ++vi) {
+        consider(static_cast<double>(PV[static_cast<size_t>(vi * 3 + 0)]),
+                 static_cast<double>(PV[static_cast<size_t>(vi * 3 + 1)]));
+      }
     }
   }
 
@@ -4379,32 +4391,250 @@ bool ComputeWorldExtents(const AppCommandState& st, float* outMnX, float* outMxX
   return true;
 }
 
-void ApplyViewportZoomToWorldRect(float mnX, float mxX, float mnY, float mxY, float* panX, float* panY, float* zoom,
-                                  int fbW, int fbH) {
-  const float aspect =
-      static_cast<float>(std::max(fbW, 1)) / static_cast<float>(std::max(fbH, 1));
+namespace {
+
+struct EntityBox {
+  double cx;
+  double cy;
+  double mnX;
+  double mxX;
+  double mnY;
+  double mxY;
+};
+
+[[nodiscard]] double NthPercentile(std::vector<double>& v, double p) {
+  if (v.empty())
+    return 0.;
+  const size_t n = v.size();
+  const double idxF = p * static_cast<double>(n - 1);
+  const size_t k = std::clamp(static_cast<size_t>(idxF), size_t{0}, n - 1);
+  std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(k), v.end());
+  return v[k];
+}
+
+void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) {
+  const auto& L = st.userLinesFlat;
+  if (L.size() % 6 == 0) {
+    for (size_t i = 0; i + 5 < L.size(); i += 6) {
+      EntityBox b{};
+      b.mnX = std::min(static_cast<double>(L[i]), static_cast<double>(L[i + 3]));
+      b.mxX = std::max(static_cast<double>(L[i]), static_cast<double>(L[i + 3]));
+      b.mnY = std::min(static_cast<double>(L[i + 1]), static_cast<double>(L[i + 4]));
+      b.mxY = std::max(static_cast<double>(L[i + 1]), static_cast<double>(L[i + 4]));
+      b.cx = 0.5 * (b.mnX + b.mxX);
+      b.cy = 0.5 * (b.mnY + b.mxY);
+      out.push_back(b);
+    }
+  }
+  const auto& C = st.userCirclesCxCyR;
+  if (C.size() % 3 == 0) {
+    for (size_t ci = 0; ci + 2 < C.size(); ci += 3) {
+      const double cx = static_cast<double>(C[ci]);
+      const double cy = static_cast<double>(C[ci + 1]);
+      const double r = std::fabs(static_cast<double>(C[ci + 2]));
+      if (r <= 1e-12)
+        continue;
+      EntityBox b{};
+      b.mnX = cx - r;
+      b.mxX = cx + r;
+      b.mnY = cy - r;
+      b.mxY = cy + r;
+      b.cx = cx;
+      b.cy = cy;
+      out.push_back(b);
+    }
+  }
+  for (const SurveyPoint& p : st.surveyPoints) {
+    EntityBox b{};
+    b.mnX = b.mxX = b.cx = static_cast<double>(p.easting);
+    b.mnY = b.mxY = b.cy = static_cast<double>(p.northing);
+    out.push_back(b);
+  }
+  for (const CadAnnotation& a : st.cadAnnotations) {
+    float amnX = 0.f;
+    float amnY = 0.f;
+    float amxX = 0.f;
+    float amxY = 0.f;
+    CadAnnotationRoughBounds(a, st.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
+    EntityBox b{};
+    b.mnX = static_cast<double>(amnX);
+    b.mxX = static_cast<double>(amxX);
+    b.mnY = static_cast<double>(amnY);
+    b.mxY = static_cast<double>(amxY);
+    b.cx = 0.5 * (b.mnX + b.mxX);
+    b.cy = 0.5 * (b.mnY + b.mxY);
+    out.push_back(b);
+  }
+  for (const CadArc& a : st.userArcs) {
+    const double dr = std::fabs(static_cast<double>(a.r));
+    if (dr <= 1e-12)
+      continue;
+    EntityBox b{};
+    b.mnX = static_cast<double>(a.cx) - dr;
+    b.mxX = static_cast<double>(a.cx) + dr;
+    b.mnY = static_cast<double>(a.cy) - dr;
+    b.mxY = static_cast<double>(a.cy) + dr;
+    b.cx = static_cast<double>(a.cx);
+    b.cy = static_cast<double>(a.cy);
+    out.push_back(b);
+  }
+  for (const CadEllipse& el : st.userEllipses) {
+    const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    if (ma < 1e-12)
+      continue;
+    const double mb = ma * static_cast<double>(el.ratio);
+    const double rrx = std::hypot(ma, mb);
+    EntityBox b{};
+    b.mnX = static_cast<double>(el.cx) - rrx;
+    b.mxX = static_cast<double>(el.cx) + rrx;
+    b.mnY = static_cast<double>(el.cy) - rrx;
+    b.mxY = static_cast<double>(el.cy) + rrx;
+    b.cx = static_cast<double>(el.cx);
+    b.cy = static_cast<double>(el.cy);
+    out.push_back(b);
+  }
+  const auto& PV = st.userPolylineVerts;
+  const auto& PO = st.userPolylineOffsets;
+  if (PO.size() >= 2) {
+    for (size_t pi = 0; pi + 1 < PO.size(); ++pi) {
+      const int v0 = PO[pi];
+      const int v1 = PO[pi + 1];
+      if (v1 <= v0)
+        continue;
+      EntityBox b{};
+      bool any = false;
+      for (int vi = v0; vi < v1; ++vi) {
+        const double vx = static_cast<double>(PV[static_cast<size_t>(vi * 3 + 0)]);
+        const double vy = static_cast<double>(PV[static_cast<size_t>(vi * 3 + 1)]);
+        if (!any) {
+          b.mnX = b.mxX = vx;
+          b.mnY = b.mxY = vy;
+          any = true;
+        } else {
+          b.mnX = std::min(b.mnX, vx);
+          b.mxX = std::max(b.mxX, vx);
+          b.mnY = std::min(b.mnY, vy);
+          b.mxY = std::max(b.mxY, vy);
+        }
+      }
+      if (!any)
+        continue;
+      b.cx = 0.5 * (b.mnX + b.mxX);
+      b.cy = 0.5 * (b.mnY + b.mxY);
+      out.push_back(b);
+    }
+  }
+}
+
+} // namespace
+
+bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY,
+                               double* outMxY, int* outSkipped) {
+  if (outSkipped)
+    *outSkipped = 0;
+  std::vector<EntityBox> ents;
+  ents.reserve(st.userLinesFlat.size() / 6 + st.userCirclesCxCyR.size() / 3 + st.userArcs.size() +
+               st.userEllipses.size() + st.cadAnnotations.size() + st.surveyPoints.size() +
+               (st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1));
+  CollectEntityBoxes(st, ents);
+
+  if (ents.size() < 16)
+    return ComputeWorldExtents(st, outMnX, outMxX, outMnY, outMxY);
+
+  std::vector<double> xs;
+  std::vector<double> ys;
+  xs.reserve(ents.size());
+  ys.reserve(ents.size());
+  for (const EntityBox& b : ents) {
+    xs.push_back(b.cx);
+    ys.push_back(b.cy);
+  }
+
+  std::vector<double> xsCopy = xs;
+  std::vector<double> ysCopy = ys;
+  const double xP05 = NthPercentile(xsCopy, 0.05);
+  xsCopy = xs;
+  const double xP95 = NthPercentile(xsCopy, 0.95);
+  const double yP05 = NthPercentile(ysCopy, 0.05);
+  ysCopy = ys;
+  const double yP95 = NthPercentile(ysCopy, 0.95);
+
+  const double bulkSpanX = std::max(xP95 - xP05, 0.);
+  const double bulkSpanY = std::max(yP95 - yP05, 0.);
+  const double midX = 0.5 * (xP05 + xP95);
+  const double midY = 0.5 * (yP05 + yP95);
+
+  // Outlier window: entities whose center is within ±5× the bulk span from the bulk midpoint are kept.
+  // A 5× pad is generous enough to retain legitimate sparse content while still rejecting (0,0)-anchored
+  // strays in large DXFs.
+  const double radX = std::max(bulkSpanX * 5.0, 1.0);
+  const double radY = std::max(bulkSpanY * 5.0, 1.0);
+
+  bool any = false;
+  double mnX = 0., mxX = 0., mnY = 0., mxY = 0.;
+  int skipped = 0;
+  for (const EntityBox& b : ents) {
+    if (std::fabs(b.cx - midX) > radX || std::fabs(b.cy - midY) > radY) {
+      ++skipped;
+      continue;
+    }
+    if (!any) {
+      mnX = b.mnX;
+      mxX = b.mxX;
+      mnY = b.mnY;
+      mxY = b.mxY;
+      any = true;
+    } else {
+      mnX = std::min(mnX, b.mnX);
+      mxX = std::max(mxX, b.mxX);
+      mnY = std::min(mnY, b.mnY);
+      mxY = std::max(mxY, b.mxY);
+    }
+  }
+
+  if (!any)
+    return ComputeWorldExtents(st, outMnX, outMxX, outMnY, outMxY);
+
+  *outMnX = mnX;
+  *outMxX = mxX;
+  *outMnY = mnY;
+  *outMxY = mxY;
+  if (outSkipped)
+    *outSkipped = skipped;
+  return true;
+}
+
+void ApplyViewportZoomToWorldRect(double mnX, double mxX, double mnY, double mxY, double* panX, double* panY,
+                                  float* zoom, int fbW, int fbH, float viewportAspect) {
+  (void)fbW;
+  (void)fbH;
+  const float aspect = std::max(viewportAspect, 1e-6f);
   constexpr float kMargin = 0.08f;
-  constexpr float kMinSpan = 1e-5f;
-  float rw = mxX - mnX;
-  float rh = mxY - mnY;
+  constexpr double kMinSpan = 1e-5;
+  double dmnX = mnX;
+  double dmxX = mxX;
+  double dmnY = mnY;
+  double dmxY = mxY;
+  double rw = dmxX - dmnX;
+  double rh = dmxY - dmnY;
   if (rw < kMinSpan) {
-    mnX -= kMinSpan;
-    mxX += kMinSpan;
-    rw = mxX - mnX;
+    dmnX -= kMinSpan;
+    dmxX += kMinSpan;
+    rw = dmxX - dmnX;
   }
   if (rh < kMinSpan) {
-    mnY -= kMinSpan;
-    mxY += kMinSpan;
-    rh = mxY - mnY;
+    dmnY -= kMinSpan;
+    dmxY += kMinSpan;
+    rh = dmxY - dmnY;
   }
-  const float cx = 0.5f * (mnX + mxX);
-  const float cy = 0.5f * (mnY + mxY);
-  const float denom = 2.f * (1.f - kMargin);
-  const float needHalfH = std::max(rh / denom, rw / (aspect * denom));
+  const double cx = 0.5 * (dmnX + dmxX);
+  const double cy = 0.5 * (dmnY + dmxY);
+  const double denom = 2.0 * (1.0 - static_cast<double>(kMargin));
+  const double needHalfH = std::max(rh / denom, rw / (static_cast<double>(aspect) * denom));
   constexpr float kOrthoHalfHRef = 50.f;
   *panX = cx;
   *panY = cy;
-  *zoom = kOrthoHalfHRef / std::max(needHalfH, 1e-8f);
+  *zoom = std::clamp(kOrthoHalfHRef / static_cast<float>(std::max(needHalfH, 1e-8)), 1.e-9f, 1.e9f);
 }
 
 bool ParseAngleDegrees(const std::string& raw, float* degreesOut) {
@@ -4428,6 +4658,21 @@ bool ParseWorldPoint(const std::string& raw, float* ox, float* oy, bool allowRel
     return true;
   }
   return ParseTwoFloats(s, ox, oy);
+}
+
+bool ParseStoragePoint(const AppCommandState& st, const std::string& raw, float* lx, float* ly, bool allowRelative,
+                       float baseLocalX, float baseLocalY) {
+  if (!lx || !ly)
+    return false;
+  double baseWx = 0.;
+  double baseWy = 0.;
+  CadCoord::WorldFromLocal(st, baseLocalX, baseLocalY, &baseWx, &baseWy);
+  float wx = 0.f;
+  float wy = 0.f;
+  if (!ParseWorldPoint(raw, &wx, &wy, allowRelative, static_cast<float>(baseWx), static_cast<float>(baseWy)))
+    return false;
+  CadCoord::LocalFromWorld(st, static_cast<double>(wx), static_cast<double>(wy), lx, ly);
+  return true;
 }
 
 void ApplyOrthoConstrainFromAnchor(float anchorX, float anchorY, float* wx, float* wy, bool ortho) {
@@ -5514,14 +5759,19 @@ static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& 
     const float cy = st.userCirclesCxCyR[k + 1];
     const float r = st.userCirclesCxCyR[k + 2];
     constexpr int n = 48;
-    constexpr float twopi = 6.28318530718f;
-    float px = cx + r;
-    float py = cy;
+    const double dcx = static_cast<double>(cx);
+    const double dcy = static_cast<double>(cy);
+    const double dr = static_cast<double>(r);
+    double px = 0.;
+    double py = 0.;
+    CirclePointWorld(dcx, dcy, dr, 0.0, &px, &py);
     for (int i = 1; i <= n; ++i) {
-      const float t = twopi * static_cast<float>(i) / static_cast<float>(n);
-      const float x = cx + r * std::cos(t);
-      const float y = cy + r * std::sin(t);
-      out->push_back({px, py, x, y});
+      constexpr double kTwoPi = 6.283185307179586;
+      const double t = kTwoPi * static_cast<double>(i) / static_cast<double>(n);
+      double x = 0.;
+      double y = 0.;
+      CirclePointWorld(dcx, dcy, dr, t, &x, &y);
+      out->push_back({static_cast<float>(px), static_cast<float>(py), static_cast<float>(x), static_cast<float>(y)});
       px = x;
       py = y;
     }
@@ -5533,14 +5783,19 @@ static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& 
       return;
     const CadArc& a = st.userArcs[k];
     constexpr int n = 40;
-    float px = a.cx + a.r * std::cos(a.startRad);
-    float py = a.cy + a.r * std::sin(a.startRad);
+    const double dcx = static_cast<double>(a.cx);
+    const double dcy = static_cast<double>(a.cy);
+    const double dr = static_cast<double>(a.r);
+    double px = 0.;
+    double py = 0.;
+    CirclePointWorld(dcx, dcy, dr, static_cast<double>(a.startRad), &px, &py);
     for (int i = 1; i <= n; ++i) {
-      const float u = static_cast<float>(i) / static_cast<float>(n);
-      const float ang = a.startRad + a.sweepRad * u;
-      const float x = a.cx + a.r * std::cos(ang);
-      const float y = a.cy + a.r * std::sin(ang);
-      out->push_back({px, py, x, y});
+      const double u = static_cast<double>(i) / static_cast<double>(n);
+      const double ang = static_cast<double>(a.startRad + a.sweepRad * u);
+      double x = 0.;
+      double y = 0.;
+      CirclePointWorld(dcx, dcy, dr, ang, &x, &y);
+      out->push_back({static_cast<float>(px), static_cast<float>(py), static_cast<float>(x), static_cast<float>(y)});
       px = x;
       py = y;
     }
@@ -5551,25 +5806,27 @@ static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& 
     if (k >= st.userEllipses.size())
       return;
     const CadEllipse& el = st.userEllipses[k];
-    const float ma = std::hypot(el.majVx, el.majVy);
-    if (ma < 1e-8f)
+    const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    if (ma < 1e-12)
       return;
-    const float ux = el.majVx / ma;
-    const float uy = el.majVy / ma;
-    const float pxv = -uy;
-    const float pyv = ux;
-    const float mb = ma * el.ratio;
+    const double ux = static_cast<double>(el.majVx) / ma;
+    const double uy = static_cast<double>(el.majVy) / ma;
+    const double pxv = -uy;
+    const double pyv = ux;
+    const double mb = ma * static_cast<double>(el.ratio);
     constexpr int n = 48;
-    constexpr float twopi = 6.28318530718f;
-    float px = el.cx + ux * ma;
-    float py = el.cy + uy * ma;
+    constexpr double kTwoPi = 6.283185307179586;
+    const double ecx = static_cast<double>(el.cx);
+    const double ecy = static_cast<double>(el.cy);
+    double px = ecx + ux * ma;
+    double py = ecy + uy * ma;
     for (int i = 1; i <= n; ++i) {
-      const float ang = twopi * static_cast<float>(i) / static_cast<float>(n);
-      const float c = std::cos(ang);
-      const float s = std::sin(ang);
-      const float x = el.cx + ux * (ma * c) + pxv * (mb * s);
-      const float y = el.cy + uy * (ma * c) + pyv * (mb * s);
-      out->push_back({px, py, x, y});
+      const double ang = kTwoPi * static_cast<double>(i) / static_cast<double>(n);
+      const double c = std::cos(ang);
+      const double s = std::sin(ang);
+      const double x = ecx + ux * (ma * c) + pxv * (mb * s);
+      const double y = ecy + uy * (ma * c) + pyv * (mb * s);
+      out->push_back({static_cast<float>(px), static_cast<float>(py), static_cast<float>(x), static_cast<float>(y)});
       px = x;
       py = y;
     }
@@ -5859,10 +6116,13 @@ static bool TrimSegmentIntersectPickSide(float ax, float ay, float bx, float by,
                                          float fenceFx, float fenceFy, float fenceGx, float fenceGy,
                                          bool useFenceToPickIntersection,
                                          float* outIx, float* outIy, bool* trimFromA, std::vector<std::string>* log) {
-  float mnX = 0.f, mxX = 0.f, mnY = 0.f, mxY = 0.f;
   float epsGeom = 1e-5f;
-  if (ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
-    epsGeom = std::max(1e-8f, 1e-6f * std::max(mxX - mnX, mxY - mnY));
+  double dmnX = 0.;
+  double dmxX = 0.;
+  double dmnY = 0.;
+  double dmxY = 0.;
+  if (ComputeWorldExtents(st, &dmnX, &dmxX, &dmnY, &dmxY))
+    epsGeom = std::max(1e-8f, static_cast<float>(1e-6 * std::max(dmxX - dmnX, dmxY - dmnY)));
 
   const float vx = bx - ax;
   const float vy = by - ay;
@@ -6327,54 +6587,14 @@ static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, floa
 }
 
 static void AppendArcPreviewStrip(float z, const CadArc& a, std::vector<float>* lines) {
-  constexpr int n = 56;
-  for (int i = 0; i < n; ++i) {
-    const float u0 = static_cast<float>(i) / static_cast<float>(n);
-    const float u1 = static_cast<float>(i + 1) / static_cast<float>(n);
-    const float t0 = a.startRad + a.sweepRad * u0;
-    const float t1 = a.startRad + a.sweepRad * u1;
-    const float x0 = a.cx + a.r * std::cos(t0);
-    const float y0 = a.cy + a.r * std::sin(t0);
-    const float x1 = a.cx + a.r * std::cos(t1);
-    const float y1 = a.cy + a.r * std::sin(t1);
-    lines->push_back(x0);
-    lines->push_back(y0);
-    lines->push_back(z);
-    lines->push_back(x1);
-    lines->push_back(y1);
-    lines->push_back(z);
-  }
+  AppendArcLineSegments(*lines, static_cast<double>(a.cx), static_cast<double>(a.cy), static_cast<double>(a.r),
+                        static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), 56, z);
 }
 
 static void AppendEllipsePreviewStrip(float z, const CadEllipse& el, std::vector<float>* lines) {
-  const float ma = std::hypot(el.majVx, el.majVy);
-  if (ma < 1e-8f)
-    return;
-  const float ux = el.majVx / ma;
-  const float uy = el.majVy / ma;
-  const float px = -uy;
-  const float py = ux;
-  const float mb = ma * el.ratio;
-  constexpr int n = 56;
-  constexpr float twopi = 6.28318530718f;
-  for (int i = 0; i < n; ++i) {
-    const float u0 = twopi * static_cast<float>(i) / static_cast<float>(n);
-    const float u1 = twopi * static_cast<float>(i + 1) / static_cast<float>(n);
-    const float c0 = std::cos(u0);
-    const float s0 = std::sin(u0);
-    const float c1 = std::cos(u1);
-    const float s1 = std::sin(u1);
-    const float x0 = el.cx + ux * (ma * c0) + px * (mb * s0);
-    const float y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
-    const float x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
-    const float y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
-    lines->push_back(x0);
-    lines->push_back(y0);
-    lines->push_back(z);
-    lines->push_back(x1);
-    lines->push_back(y1);
-    lines->push_back(z);
-  }
+  AppendEllipseLineSegments(*lines, static_cast<double>(el.cx), static_cast<double>(el.cy),
+                            static_cast<double>(el.majVx), static_cast<double>(el.majVy),
+                            static_cast<double>(el.ratio), 56, z);
 }
 
 static void AppendPolylineOffsetPreview(const AppCommandState& st, int pi, float signedD, float z,
@@ -6474,10 +6694,13 @@ static void AppendPolylineOffsetPreview(const AppCommandState& st, int pi, float
 } // namespace
 
 float CadOffsetEntityPickTolWorld(const AppCommandState& st) {
-  float mnX = 0.f, mxX = 0.f, mnY = 0.f, mxY = 0.f;
+  double mnX = 0.;
+  double mxX = 0.;
+  double mnY = 0.;
+  double mxY = 0.;
   float geom = 1e-3f;
   if (ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
-    geom = std::max(1e-5f, 2.5e-5f * std::max(mxX - mnX, mxY - mnY));
+    geom = std::max(1e-5f, static_cast<float>(2.5e-5 * std::max(mxX - mnX, mxY - mnY)));
   const float px = CadSnap::WorldToleranceFromPixels(st.viewportLastSurveyLayoutHeightPx,
                                                      st.viewportLastSurveyLayoutOrthoHalfH, st.objectSnapAperturePx);
   return std::max(geom, px * 1.5f);
@@ -6646,10 +6869,13 @@ void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1
 
 static void ExecuteDrawnSegmentTrimOnce(AppCommandState& st, float p1x, float p1y, float p2x, float p2y,
                                         float tolWorld, std::vector<std::string>& log) {
-  float mnX = 0.f, mxX = 0.f, mnY = 0.f, mxY = 0.f;
   float matchTol = std::max(tolWorld * 4.f, 1e-6f);
+  double mnX = 0.;
+  double mxX = 0.;
+  double mnY = 0.;
+  double mxY = 0.;
   if (ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
-    matchTol = std::max(matchTol, 2e-5f * std::max(mxX - mnX, mxY - mnY));
+    matchTol = std::max(matchTol, static_cast<float>(2e-5 * std::max(mxX - mnX, mxY - mnY)));
   TrimTargetEdge tgt{};
   float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f, dEdge = 0.f;
   if (!PickTrimTargetClosestToDrawnSegment(st, p1x, p1y, p2x, p2y, matchTol, &tgt, &ax, &ay, &bx, &by, &dEdge)) {
@@ -6761,9 +6987,12 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
   };
   std::vector<Edge> edges;
   float tol = 1e-3f;
-  float mnX = 0.f, mxX = 0.f, mnY = 0.f, mxY = 0.f;
+  double mnX = 0.;
+  double mxX = 0.;
+  double mnY = 0.;
+  double mxY = 0.;
   if (ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
-    tol = std::max(1e-5f, 1e-4f * std::max(mxX - mnX, mxY - mnY));
+    tol = std::max(1e-5f, static_cast<float>(1e-4 * std::max(mxX - mnX, mxY - mnY)));
 
   auto readLine = [&](int idx, float* x0, float* y0, float* x1, float* y1) -> bool {
     const size_t k = static_cast<size_t>(idx) * 6;
@@ -7097,26 +7326,52 @@ void StartZoomWindowCommand(AppCommandState& st, std::vector<std::string>& log) 
       "cancels.");
 }
 
-void ProcessPendingViewportZoom(AppCommandState& st, float* panX, float* panY, float* zoom, int fbW, int fbH,
-                                std::vector<std::string>& log) {
+void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY, float* zoom, int fbW, int fbH,
+                                float viewportAspect, std::vector<std::string>& log) {
+  if (fbW <= 0 || fbH <= 0)
+    return;
   if (st.pendingZoomExtents) {
-    st.pendingZoomExtents = false;
-    float mnX = 0.f;
-    float mxX = 0.f;
-    float mnY = 0.f;
-    float mxY = 0.f;
-    if (!ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
+    double mnX = 0.;
+    double mxX = 0.;
+    double mnY = 0.;
+    double mxY = 0.;
+    int skipped = 0;
+    if (!ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped)) {
+      st.pendingZoomExtents = false;
       log.push_back("ZOOM EXTENTS — nothing to frame.");
-    else {
-      ApplyViewportZoomToWorldRect(mnX, mxX, mnY, mxY, panX, panY, zoom, fbW, fbH);
-      log.push_back("Zoom extents applied.");
+      return;
     }
+    ApplyViewportZoomToWorldRect(mnX, mxX, mnY, mxY, &st.viewportPanX, &st.viewportPanY, &st.viewportZoom, fbW, fbH,
+                                 viewportAspect);
+    BumpCadGpuCache(st);
+    if (panX)
+      *panX = st.viewportPanX;
+    if (panY)
+      *panY = st.viewportPanY;
+    if (zoom)
+      *zoom = st.viewportZoom;
+    st.pendingZoomExtents = false;
+    char buf[256];
+    const double spanX = mxX - mnX;
+    const double spanY = mxY - mnY;
+    std::snprintf(buf, sizeof(buf),
+                  "Zoom extents applied — span %.6g x %.6g (local %.6g..%.6g, %.6g..%.6g) zoom=%.6g skipped=%d.",
+                  spanX, spanY, mnX, mxX, mnY, mxY, static_cast<double>(st.viewportZoom), skipped);
+    log.push_back(buf);
     return;
   }
   if (st.pendingZoomWindow) {
     st.pendingZoomWindow = false;
-    ApplyViewportZoomToWorldRect(st.pendingZoomMnX, st.pendingZoomMxX, st.pendingZoomMnY, st.pendingZoomMxY, panX,
-                                 panY, zoom, fbW, fbH);
+    ApplyViewportZoomToWorldRect(static_cast<double>(st.pendingZoomMnX), static_cast<double>(st.pendingZoomMxX),
+                                 static_cast<double>(st.pendingZoomMnY), static_cast<double>(st.pendingZoomMxY),
+                                 &st.viewportPanX, &st.viewportPanY, &st.viewportZoom, fbW, fbH, viewportAspect);
+    if (panX)
+      *panX = st.viewportPanX;
+    if (panY)
+      *panY = st.viewportPanY;
+    if (zoom)
+      *zoom = st.viewportZoom;
+    BumpCadGpuCache(st);
     log.push_back("Zoom window applied.");
   }
 }
@@ -7590,7 +7845,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   if (st.active == K::IdPoint) {
     float px = 0.f;
     float py = 0.f;
-    if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f)) {
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
       log.push_back("ID — pick in viewport or type X,Y (model units, UCS World).");
       cmdBuf[0] = '\0';
       return;
@@ -7605,7 +7860,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     float px = 0.f;
     float py = 0.f;
     if (st.surveyInversePhase == SIP::WaitFrom) {
-      if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f)) {
+      if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
         log.push_back("INVERSE — type X,Y (World) or pick first point in Drawing1.");
         cmdBuf[0] = '\0';
         return;
@@ -7617,7 +7872,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       cmdBuf[0] = '\0';
       return;
     }
-    if (!ParseWorldPoint(line, &px, &py, true, st.surveyInverseFromX, st.surveyInverseFromY)) {
+    if (!ParseStoragePoint(st, line, &px, &py, true, st.surveyInverseFromX, st.surveyInverseFromY)) {
       log.push_back("INVERSE — type X,Y or @dx,dy from first point.");
       cmdBuf[0] = '\0';
       return;
@@ -7688,7 +7943,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
 
-    if (ParseWorldPoint(line, &px, &py, allowRel, st.anchorX, st.anchorY)) {
+    if (ParseStoragePoint(st, line, &px, &py, allowRel, st.anchorX, st.anchorY)) {
       SubmitPolylineVertex(st, px, py, log);
       cmdBuf[0] = '\0';
       return;
@@ -7744,7 +7999,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (st.textPhase == TP::WaitInsertion) {
       float px = 0.f;
       float py = 0.f;
-      if (!ParseWorldPoint(line, &px, &py, false, 0.f, 0.f)) {
+      if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
         log.push_back("TEXT — type insertion X,Y or click in viewport.");
         cmdBuf[0] = '\0';
         return;
@@ -7820,7 +8075,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
 
-    if (ParseWorldPoint(line, &px, &py, allowRel, st.anchorX, st.anchorY)) {
+    if (ParseStoragePoint(st, line, &px, &py, allowRel, st.anchorX, st.anchorY)) {
       SubmitLineVertex(st, px, py, log);
       cmdBuf[0] = '\0';
       return;
@@ -7900,7 +8155,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       ax = 0.5f * (st.dimE1x + st.dimE2x);
       ay = 0.5f * (st.dimE1y + st.dimE2y);
     }
-    if (!ParseWorldPoint(dimTrim, &px, &py, allowRel, ax, ay)) {
+    if (!ParseStoragePoint(st, dimTrim, &px, &py, allowRel, ax, ay)) {
       log.push_back(linear ? "DIMLINEAR — X,Y or @dx,dy; at line step H / V locks orientation; move cursor to unlock."
                            : "DIMALIGNED — X,Y or @dx,dy from first extension.");
       cmdBuf[0] = '\0';
@@ -7924,7 +8179,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       ax = st.dimAngVx;
       ay = st.dimAngVy;
     }
-    if (!ParseWorldPoint(dimTrim, &px, &py, allowRel, ax, ay)) {
+    if (!ParseStoragePoint(st, dimTrim, &px, &py, allowRel, ax, ay)) {
       log.push_back("DIMANGULAR — X,Y or @dx,dy from vertex.");
       cmdBuf[0] = '\0';
       return;

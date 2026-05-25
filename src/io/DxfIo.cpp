@@ -1,6 +1,7 @@
-﻿#include "DxfIo.hpp"
+#include "DxfIo.hpp"
 
 #include "CadCommands.hpp"
+#include "CadCoordinateFrame.hpp"
 #include "CadLinetype.hpp"
 #include "DxfColors.hpp"
 #include "MtextRichFormat.hpp"
@@ -1406,114 +1407,6 @@ std::string DxfExportEntityLtype6(const EntityAttributes& at) {
   return CadCanonicalLinetypeNameForDxf(at.linetype);
 }
 
-static void MaybeRebaseLargeCadCoordinatesAfterImport(AppCommandState& st, std::vector<std::string>& log) {
-  auto consider = [&](double x, double y, double* mnX, double* mxX, double* mnY, double* mxY, bool* any) {
-    if (!*any) {
-      *mnX = *mxX = x;
-      *mnY = *mxY = y;
-      *any = true;
-    } else {
-      *mnX = std::min(*mnX, x);
-      *mxX = std::max(*mxX, x);
-      *mnY = std::min(*mnY, y);
-      *mxY = std::max(*mxY, y);
-    }
-  };
-
-  double mnX = 0., mxX = 0., mnY = 0., mxY = 0.;
-  bool any = false;
-
-  const auto& L = st.userLinesFlat;
-  if (L.size() % 6 == 0) {
-    for (size_t i = 0; i + 5 < L.size(); i += 6) {
-      consider(static_cast<double>(L[i]), static_cast<double>(L[i + 1]), &mnX, &mxX, &mnY, &mxY, &any);
-      consider(static_cast<double>(L[i + 3]), static_cast<double>(L[i + 4]), &mnX, &mxX, &mnY, &mxY, &any);
-    }
-  }
-  const auto& C = st.userCirclesCxCyR;
-  if (C.size() % 3 == 0) {
-    for (size_t i = 0; i + 2 < C.size(); i += 3) {
-      const double cx = static_cast<double>(C[i]);
-      const double cy = static_cast<double>(C[i + 1]);
-      const double r = std::fabs(static_cast<double>(C[i + 2]));
-      consider(cx - r, cy - r, &mnX, &mxX, &mnY, &mxY, &any);
-      consider(cx + r, cy + r, &mnX, &mxX, &mnY, &mxY, &any);
-    }
-  }
-  for (const CadArc& a : st.userArcs) {
-    const double r = std::fabs(static_cast<double>(a.r));
-    consider(static_cast<double>(a.cx) - r, static_cast<double>(a.cy) - r, &mnX, &mxX, &mnY, &mxY, &any);
-    consider(static_cast<double>(a.cx) + r, static_cast<double>(a.cy) + r, &mnX, &mxX, &mnY, &mxY, &any);
-  }
-  for (const CadEllipse& el : st.userEllipses) {
-    const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
-    const double mb = ma * static_cast<double>(el.ratio);
-    consider(static_cast<double>(el.cx) - ma - mb, static_cast<double>(el.cy) - ma - mb, &mnX, &mxX, &mnY, &mxY,
-              &any);
-    consider(static_cast<double>(el.cx) + ma + mb, static_cast<double>(el.cy) + ma + mb, &mnX, &mxX, &mnY, &mxY,
-              &any);
-  }
-  const auto& PV = st.userPolylineVerts;
-  for (size_t i = 0; i + 2 < PV.size(); i += 3)
-    consider(static_cast<double>(PV[i]), static_cast<double>(PV[i + 1]), &mnX, &mxX, &mnY, &mxY, &any);
-  for (const CadAnnotation& an : st.cadAnnotations) {
-    float amnX = 0.f, amnY = 0.f, amxX = 0.f, amxY = 0.f;
-    CadAnnotationRoughBounds(an, st.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
-    consider(static_cast<double>(amnX), static_cast<double>(amnY), &mnX, &mxX, &mnY, &mxY, &any);
-    consider(static_cast<double>(amxX), static_cast<double>(amxY), &mnX, &mxX, &mnY, &mxY, &any);
-  }
-
-  if (!any)
-    return;
-
-  const double spanX = mxX - mnX;
-  const double spanY = mxY - mnY;
-  const double maxAbs = std::max(
-      1.e-9,
-      std::max(std::max(std::fabs(mnX), std::fabs(mxX)), std::max(std::fabs(mnY), std::fabs(mxY))));
-  const double maxSpan = std::max(spanX, spanY);
-  if (maxAbs < 5e4 && maxSpan < 1e5)
-    return;
-
-  const double ox = 0.5 * (mnX + mxX);
-  const double oy = 0.5 * (mnY + mxY);
-
-  auto sub2 = [&](float* x, float* y) {
-    *x = static_cast<float>(static_cast<double>(*x) - ox);
-    *y = static_cast<float>(static_cast<double>(*y) - oy);
-  };
-
-  for (size_t i = 0; i + 5 < st.userLinesFlat.size(); i += 6) {
-    sub2(&st.userLinesFlat[i], &st.userLinesFlat[i + 1]);
-    sub2(&st.userLinesFlat[i + 3], &st.userLinesFlat[i + 4]);
-  }
-  for (size_t i = 0; i + 2 < st.userCirclesCxCyR.size(); i += 3)
-    sub2(&st.userCirclesCxCyR[i], &st.userCirclesCxCyR[i + 1]);
-  for (CadArc& a : st.userArcs)
-    sub2(&a.cx, &a.cy);
-  for (CadEllipse& el : st.userEllipses)
-    sub2(&el.cx, &el.cy);
-  for (size_t i = 0; i + 2 < st.userPolylineVerts.size(); i += 3)
-    sub2(&st.userPolylineVerts[i], &st.userPolylineVerts[i + 1]);
-  for (CadAnnotation& an : st.cadAnnotations) {
-    sub2(&an.insX, &an.insY);
-    sub2(&an.boxMinX, &an.boxMinY);
-    sub2(&an.boxMaxX, &an.boxMaxY);
-    if (an.kind == CadAnnotation::Kind::DimAligned || an.kind == CadAnnotation::Kind::DimLinear) {
-      sub2(&an.dimExt1X, &an.dimExt1Y);
-      sub2(&an.dimExt2X, &an.dimExt2Y);
-    }
-  }
-
-  st.worldDocumentOriginX = ox;
-  st.worldDocumentOriginY = oy;
-  char buf[192];
-  std::snprintf(buf, sizeof(buf),
-                "DXF import — shifted CAD to a local origin (%.6g, %.6g) for smooth zoom; export adds it back.",
-                ox, oy);
-  log.push_back(buf);
-}
-
 bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<std::string>& log) {
   if (!pathUtf8 || pathUtf8[0] == '\0') {
     log.push_back("DXF import — no path.");
@@ -1587,7 +1480,38 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
       ++printed;
     }
   }
-  MaybeRebaseLargeCadCoordinatesAfterImport(st, log);
+  CadCoord::RebaseDrawingToLocalOrigin(st, &log);
+  {
+    double rawMnX = 0., rawMxX = 0., rawMnY = 0., rawMxY = 0.;
+    if (ComputeWorldExtents(st, &rawMnX, &rawMxX, &rawMnY, &rawMxY)) {
+      char buf[256];
+      std::snprintf(buf, sizeof(buf),
+                    "DXF import — full local bbox: X %.6g..%.6g (span %.6g), Y %.6g..%.6g (span %.6g).", rawMnX,
+                    rawMxX, rawMxX - rawMnX, rawMnY, rawMxY, rawMxY - rawMnY);
+      log.push_back(buf);
+    }
+    double mnX = 0., mxX = 0., mnY = 0., mxY = 0.;
+    int skipped = 0;
+    if (ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped)) {
+      char buf[256];
+      std::snprintf(
+          buf, sizeof(buf),
+          "DXF import — robust local bbox: X %.6g..%.6g (span %.6g), Y %.6g..%.6g (span %.6g), skipped=%d outlier(s).",
+          mnX, mxX, mxX - mnX, mnY, mxY, mxY - mnY, skipped);
+      log.push_back(buf);
+    }
+  }
+  const int fbW = std::max(st.viewportLastFbW, 1);
+  const int fbH = std::max(st.viewportLastFbH, 1);
+  const float aspect = static_cast<float>(fbW) / static_cast<float>(fbH);
+  if (CadCoord::FitViewportToDrawing(st, aspect, fbW, fbH)) {
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+                  "DXF import — zoom extents applied (pan=%.6g,%.6g zoom=%.6g fb=%dx%d).", st.viewportPanX,
+                  st.viewportPanY, static_cast<double>(st.viewportZoom), fbW, fbH);
+    log.push_back(buf);
+  } else
+    st.pendingZoomExtents = true;
   BumpCadGpuCache(st);
   return true;
 }
@@ -1690,8 +1614,6 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   std::snprintf(hObjPlotDict, sizeof(hObjPlotDict), "%llX", static_cast<unsigned long long>(objPlotDictWdflt));
   std::snprintf(hObjPlotPh, sizeof(hObjPlotPh), "%llX", static_cast<unsigned long long>(objPlotPlaceholder));
 
-  const double ox = st.worldDocumentOriginX;
-  const double oy = st.worldDocumentOriginY;
   double extMnX = 0., extMxX = 0., extMnY = 0., extMxY = 0., extMnZ = 0., extMxZ = 0.;
   bool extAny = false;
   bool extZAny = false;
@@ -1717,14 +1639,14 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     }
   };
   for (size_t i = 0; i < nSeg; ++i) {
-    accExt(static_cast<double>(st.userLinesFlat[i * 6 + 0]) + ox, static_cast<double>(st.userLinesFlat[i * 6 + 1]) + oy);
-    accExt(static_cast<double>(st.userLinesFlat[i * 6 + 3]) + ox, static_cast<double>(st.userLinesFlat[i * 6 + 4]) + oy);
+    accExt(static_cast<double>(st.userLinesFlat[i * 6 + 0]), static_cast<double>(st.userLinesFlat[i * 6 + 1]));
+    accExt(static_cast<double>(st.userLinesFlat[i * 6 + 3]), static_cast<double>(st.userLinesFlat[i * 6 + 4]));
     accExtZ(static_cast<double>(st.userLinesFlat[i * 6 + 2]));
     accExtZ(static_cast<double>(st.userLinesFlat[i * 6 + 5]));
   }
   for (size_t ci = 0; ci < nCirc; ++ci) {
-    const double cx = static_cast<double>(st.userCirclesCxCyR[ci * 3]) + ox;
-    const double cy = static_cast<double>(st.userCirclesCxCyR[ci * 3 + 1]) + oy;
+    const double cx = static_cast<double>(st.userCirclesCxCyR[ci * 3]);
+    const double cy = static_cast<double>(st.userCirclesCxCyR[ci * 3 + 1]);
     const double rr = std::fabs(static_cast<double>(st.userCirclesCxCyR[ci * 3 + 2]));
     accExt(cx - rr, cy - rr);
     accExt(cx + rr, cy + rr);
@@ -1732,11 +1654,11 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   for (const CadAnnotation& an : st.cadAnnotations) {
     float amnX = 0.f, amnY = 0.f, amxX = 0.f, amxY = 0.f;
     CadAnnotationRoughBounds(an, st.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
-    accExt(static_cast<double>(amnX) + ox, static_cast<double>(amnY) + oy);
-    accExt(static_cast<double>(amxX) + ox, static_cast<double>(amxY) + oy);
+    accExt(static_cast<double>(amnX), static_cast<double>(amnY));
+    accExt(static_cast<double>(amxX), static_cast<double>(amxY));
   }
   for (const SurveyPoint& p : st.surveyPoints) {
-    accExt(static_cast<double>(p.easting) + ox, static_cast<double>(p.northing) + oy);
+    accExt(static_cast<double>(p.easting), static_cast<double>(p.northing));
     accExtZ(static_cast<double>(p.elevation));
   }
   if (!extAny) {
@@ -1774,9 +1696,6 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     return false;
   }
   out << std::setprecision(16);
-
-  const double kExpOx = st.worldDocumentOriginX;
-  const double kExpOy = st.worldDocumentOriginY;
 
   auto emitPair = [&](int code, const std::string& val) {
     out << code << "\r\n" << val << "\r\n";
@@ -2385,6 +2304,11 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   emitPair(0, "SECTION");
   emitPair(2, "ENTITIES");
 
+  const double ox = st.worldDocumentOriginX;
+  const double oy = st.worldDocumentOriginY;
+  auto worldX = [&](float lx) { return static_cast<double>(lx) + ox; };
+  auto worldY = [&](float ly) { return static_cast<double>(ly) + oy; };
+
   uint64_t entHandle = entityHandleStart;
   for (size_t i = 0; i < nSeg; ++i) {
     char hb[24];
@@ -2415,11 +2339,11 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     emitPair(370, dxfEntityLineweight370Str(at));
     dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, lyr));
     emitPair(100, "AcDbLine");
-    emitPair(10, std::to_string(static_cast<double>(x0) + kExpOx));
-    emitPair(20, std::to_string(static_cast<double>(y0) + kExpOy));
+    emitPair(10, std::to_string(worldX(x0)));
+    emitPair(20, std::to_string(worldY(y0)));
     emitPair(30, std::to_string(static_cast<double>(z0)));
-    emitPair(11, std::to_string(static_cast<double>(x1) + kExpOx));
-    emitPair(21, std::to_string(static_cast<double>(y1) + kExpOy));
+    emitPair(11, std::to_string(worldX(x1)));
+    emitPair(21, std::to_string(worldY(y1)));
     emitPair(31, std::to_string(static_cast<double>(z1)));
     emitPair(210, "0.0");
     emitPair(220, "0.0");
@@ -2452,8 +2376,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     emitPair(370, dxfEntityLineweight370Str(at));
     dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, lyr));
     emitPair(100, "AcDbCircle");
-    emitPair(10, std::to_string(static_cast<double>(cx) + kExpOx));
-    emitPair(20, std::to_string(static_cast<double>(cy) + kExpOy));
+    emitPair(10, std::to_string(worldX(cx)));
+    emitPair(20, std::to_string(worldY(cy)));
     emitPair(30, "0.0");
     emitPair(40, std::to_string(static_cast<double>(rr)));
     emitPair(210, "0.0");
@@ -2483,8 +2407,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     emitPair(370, dxfEntityLineweight370Str(at));
     dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, lyr));
     emitPair(100, "AcDbPoint");
-    emitPair(10, std::to_string(static_cast<double>(p.easting) + kExpOx));
-    emitPair(20, std::to_string(static_cast<double>(p.northing) + kExpOy));
+    emitPair(10, std::to_string(worldX(p.easting)));
+    emitPair(20, std::to_string(worldY(p.northing)));
     emitPair(30, std::to_string(static_cast<double>(p.elevation)));
     emitPair(39, "0.0");
     emitPair(210, "0.0");
@@ -2531,8 +2455,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       emitPair(370, dxfEntityLineweight370Str(at));
       dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, annLyr));
       emitPair(100, "AcDbText");
-      emitPair(10, std::to_string(static_cast<double>(an.insX) + kExpOx));
-      emitPair(20, std::to_string(static_cast<double>(an.insY) + kExpOy));
+      emitPair(10, std::to_string(static_cast<double>(an.insX)));
+      emitPair(20, std::to_string(static_cast<double>(an.insY)));
       emitPair(30, "0.0");
       emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch))));
       emitPair(50, std::to_string(rotRad));
@@ -2571,11 +2495,11 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
         emitPair(370, dxfEntityLineweight370Str(at));
         dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, annLyr));
         emitPair(100, "AcDbLine");
-        emitPair(10, std::to_string(static_cast<double>(x0) + kExpOx));
-        emitPair(20, std::to_string(static_cast<double>(y0) + kExpOy));
+        emitPair(10, std::to_string(static_cast<double>(x0)));
+        emitPair(20, std::to_string(static_cast<double>(y0)));
         emitPair(30, "0.0");
-        emitPair(11, std::to_string(static_cast<double>(x1) + kExpOx));
-        emitPair(21, std::to_string(static_cast<double>(y1) + kExpOy));
+        emitPair(11, std::to_string(static_cast<double>(x1)));
+        emitPair(21, std::to_string(static_cast<double>(y1)));
         emitPair(31, "0.0");
         emitPair(210, "0.0");
         emitPair(220, "0.0");
@@ -2600,8 +2524,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       emitPair(370, dxfEntityLineweight370Str(at));
       dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, annLyr));
       emitPair(100, "AcDbText");
-      emitPair(10, std::to_string(static_cast<double>(an.insX) + kExpOx));
-      emitPair(20, std::to_string(static_cast<double>(an.insY) + kExpOy));
+      emitPair(10, std::to_string(static_cast<double>(an.insX)));
+      emitPair(20, std::to_string(static_cast<double>(an.insY)));
       emitPair(30, "0.0");
       emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch))));
       emitPair(50, std::to_string(rotRad));
@@ -2633,8 +2557,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       emitPair(370, dxfEntityLineweight370Str(at));
       dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, annLyr));
       emitPair(100, "AcDbMText");
-      emitPair(10, std::to_string(static_cast<double>(an.insX) + kExpOx));
-      emitPair(20, std::to_string(static_cast<double>(an.insY) + kExpOy));
+      emitPair(10, std::to_string(static_cast<double>(an.insX)));
+      emitPair(20, std::to_string(static_cast<double>(an.insY)));
       emitPair(30, "0.0");
       emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch))));
       emitPair(41, std::to_string(static_cast<double>(bw)));

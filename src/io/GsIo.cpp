@@ -1,6 +1,7 @@
 #include "GsIo.hpp"
 
 #include "CadCommands.hpp"
+#include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
 
 #include <algorithm>
@@ -674,7 +675,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   else
     st.createPointsOpts = CreatePointsOptions{};
 
-  (void)log;
+  CadCoord::MaybeRebaseLargeCoordinates(st, &log);
 
   for (size_t i = 0; i < st.surveyPoints.size(); ++i) {
     int& li = st.surveyPoints[i].labelMtextAnnIndex;

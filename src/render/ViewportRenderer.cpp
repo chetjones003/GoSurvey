@@ -2,6 +2,7 @@
 
 #include "CadLinetype.hpp"
 #include "CadSnap.hpp"
+#include "geom2d.hpp"
 
 #include <GL/glew.h>
 
@@ -97,18 +98,50 @@ void TranslateMat(float tx, float ty, float tz, float* m) {
   m[14] = tz;
 }
 
-void AppendCircleLineApprox(std::vector<float>& out, float cx, float cy, float r, int segments, float z) {
-  if (r <= 1e-6f)
+void AppendCircleLineApprox(std::vector<float>& out, float cx, float cy, float r, int segments, float z,
+                            double viewAnchorX, double viewAnchorY) {
+  if (r <= 1e-6f || segments < 1)
     return;
-  const float twoPi = 6.28318530718f;
+  const double dcx = static_cast<double>(cx);
+  const double dcy = static_cast<double>(cy);
+  const double dr = static_cast<double>(r);
+  constexpr double kTwoPi = 6.283185307179586;
   for (int i = 0; i < segments; ++i) {
-    const float t0 = twoPi * static_cast<float>(i) / static_cast<float>(segments);
-    const float t1 = twoPi * static_cast<float>(i + 1) / static_cast<float>(segments);
-    out.push_back(cx + r * std::cos(t0));
-    out.push_back(cy + r * std::sin(t0));
+    const double t0 = kTwoPi * static_cast<double>(i) / static_cast<double>(segments);
+    const double t1 = kTwoPi * static_cast<double>(i + 1) / static_cast<double>(segments);
+    float rx = 0.f;
+    float ry = 0.f;
+    CirclePointViewRel(dcx, dcy, viewAnchorX, viewAnchorY, dr, t0, &rx, &ry);
+    out.push_back(rx);
+    out.push_back(ry);
     out.push_back(z);
-    out.push_back(cx + r * std::cos(t1));
-    out.push_back(cy + r * std::sin(t1));
+    CirclePointViewRel(dcx, dcy, viewAnchorX, viewAnchorY, dr, t1, &rx, &ry);
+    out.push_back(rx);
+    out.push_back(ry);
+    out.push_back(z);
+  }
+}
+
+void AppendCircleLineApproxViewRel(std::vector<float>& out, float viewCx, float viewCy, float r, int segments,
+                                   float z) {
+  if (r <= 1e-6f || segments < 1)
+    return;
+  const double dr = static_cast<double>(r);
+  const double dcx = static_cast<double>(viewCx);
+  const double dcy = static_cast<double>(viewCy);
+  constexpr double kTwoPi = 6.283185307179586;
+  for (int i = 0; i < segments; ++i) {
+    const double t0 = kTwoPi * static_cast<double>(i) / static_cast<double>(segments);
+    const double t1 = kTwoPi * static_cast<double>(i + 1) / static_cast<double>(segments);
+    const double c0 = std::cos(t0);
+    const double s0 = std::sin(t0);
+    const double c1 = std::cos(t1);
+    const double s1 = std::sin(t1);
+    out.push_back(static_cast<float>(dcx + dr * c0));
+    out.push_back(static_cast<float>(dcy + dr * s0));
+    out.push_back(z);
+    out.push_back(static_cast<float>(dcx + dr * c1));
+    out.push_back(static_cast<float>(dcy + dr * s1));
     out.push_back(z);
   }
 }
@@ -138,7 +171,7 @@ float LineweightMmToDevicePx(float mm) {
 }
 
 void AppendPolylineEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput& eg, float z, float defR,
-                           float defG, float defB, float dashPatScale) {
+                           float defG, float defB, float dashPatScale, double viewAnchorX, double viewAnchorY) {
   const auto* V = eg.polylineVerts;
   const auto* O = eg.polylineOffsets;
   const auto* Cl = eg.polylineClosed;
@@ -166,69 +199,90 @@ void AppendPolylineEdgesVc(std::vector<float>& out, const CadExtendedGeometryInp
     std::vector<float> xy(static_cast<size_t>(nv * 2));
     for (int k = 0; k < nv; ++k) {
       const int vi = v0 + k;
-      xy[static_cast<size_t>(k * 2)] = (*V)[static_cast<size_t>(vi * 3 + 0)];
-      xy[static_cast<size_t>(k * 2 + 1)] = (*V)[static_cast<size_t>(vi * 3 + 1)];
+      WorldToViewRelativeFloat(static_cast<double>((*V)[static_cast<size_t>(vi * 3 + 0)]),
+                               static_cast<double>((*V)[static_cast<size_t>(vi * 3 + 1)]), viewAnchorX,
+                               viewAnchorY, &xy[static_cast<size_t>(k * 2)], &xy[static_cast<size_t>(k * 2 + 1)]);
     }
     CadTessellateLinetypeChainVc(xy.data(), nv, z, closed, lt, dashPatScale, rgba, &out);
   }
 }
 
 void AppendArcVcDashed(std::vector<float>& out, const CadArc& a, int n, float z, float dashPatScale,
-                       const EntityAttributes& attr, const CadLayerRow* lr, float defR, float defG, float defB) {
+                       const EntityAttributes& attr, const CadLayerRow* lr, float defR, float defG, float defB,
+                       double viewAnchorX, double viewAnchorY) {
   if (a.r <= 1e-6f || n < 2)
     return;
   float rgba[4];
   ResolveEntityRgbaForViewport(attr, lr, defR, defG, defB, rgba);
   const std::string lt = EffectiveEntityLinetypeNameForViewport(attr, lr);
+  const double dcx = static_cast<double>(a.cx);
+  const double dcy = static_cast<double>(a.cy);
+  const double dr = static_cast<double>(a.r);
+  const double rcx = dcx - viewAnchorX;
+  const double rcy = dcy - viewAnchorY;
   std::vector<float> xy(static_cast<size_t>((static_cast<size_t>(n) + 1u) * 2u));
   for (int i = 0; i <= n; ++i) {
     const float u = static_cast<float>(i) / static_cast<float>(n);
-    const float ang = a.startRad + a.sweepRad * u;
-    xy[static_cast<size_t>(i * 2)] = a.cx + a.r * std::cos(ang);
-    xy[static_cast<size_t>(i * 2 + 1)] = a.cy + a.r * std::sin(ang);
+    const double ang = static_cast<double>(a.startRad + a.sweepRad * u);
+    const double c = std::cos(ang);
+    const double s = std::sin(ang);
+    xy[static_cast<size_t>(i * 2)] = static_cast<float>(rcx + dr * c);
+    xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(rcy + dr * s);
   }
   CadTessellateLinetypeChainVc(xy.data(), n + 1, z, false, lt, dashPatScale, rgba, &out);
 }
 
 void AppendEllipseVcDashed(std::vector<float>& out, const CadEllipse& el, int n, float z, float dashPatScale,
-                           const EntityAttributes& attr, const CadLayerRow* lr, float defR, float defG, float defB) {
+                           const EntityAttributes& attr, const CadLayerRow* lr, float defR, float defG, float defB,
+                           double viewAnchorX, double viewAnchorY) {
   const float ma = std::hypot(el.majVx, el.majVy);
   if (ma < 1e-8f || n < 3)
     return;
   float rgba[4];
   ResolveEntityRgbaForViewport(attr, lr, defR, defG, defB, rgba);
   const std::string lt = EffectiveEntityLinetypeNameForViewport(attr, lr);
-  const float ux = el.majVx / ma;
-  const float uy = el.majVy / ma;
-  const float px = -uy;
-  const float py = ux;
-  const float mb = ma * el.ratio;
-  constexpr float twopi = 6.28318530718f;
+  const double dcx = static_cast<double>(el.cx);
+  const double dcy = static_cast<double>(el.cy);
+  const double rcx = dcx - viewAnchorX;
+  const double rcy = dcy - viewAnchorY;
+  const double ux = static_cast<double>(el.majVx / ma);
+  const double uy = static_cast<double>(el.majVy / ma);
+  const double px = -uy;
+  const double py = ux;
+  const double dma = static_cast<double>(ma);
+  const double dmb = dma * static_cast<double>(el.ratio);
+  constexpr double kTwoPi = 6.283185307179586;
   std::vector<float> xy(static_cast<size_t>((static_cast<size_t>(n) + 1u) * 2u));
   for (int i = 0; i <= n; ++i) {
-    const float u = twopi * static_cast<float>(i) / static_cast<float>(n);
-    const float c0 = std::cos(u);
-    const float s0 = std::sin(u);
-    xy[static_cast<size_t>(i * 2)] = el.cx + ux * (ma * c0) + px * (mb * s0);
-    xy[static_cast<size_t>(i * 2 + 1)] = el.cy + uy * (ma * c0) + py * (mb * s0);
+    const double u = kTwoPi * static_cast<double>(i) / static_cast<double>(n);
+    const double c0 = std::cos(u);
+    const double s0 = std::sin(u);
+    xy[static_cast<size_t>(i * 2)] = static_cast<float>(rcx + ux * (dma * c0) + px * (dmb * s0));
+    xy[static_cast<size_t>(i * 2 + 1)] = static_cast<float>(rcy + uy * (dma * c0) + py * (dmb * s0));
   }
   CadTessellateLinetypeChainVc(xy.data(), n + 1, z, true, lt, dashPatScale, rgba, &out);
 }
 
 void AppendCircleVcDashed(std::vector<float>& out, float cx, float cy, float r, int segments, float z,
                           float dashPatScale, const EntityAttributes& attr, const CadLayerRow* lr, float defR,
-                          float defG, float defB) {
+                          float defG, float defB, double viewAnchorX, double viewAnchorY) {
   if (r <= 1e-6f)
     return;
   float rgba[4];
   ResolveEntityRgbaForViewport(attr, lr, defR, defG, defB, rgba);
   const std::string lt = EffectiveEntityLinetypeNameForViewport(attr, lr);
-  const float twoPi = 6.28318530718f;
+  const double dcx = static_cast<double>(cx);
+  const double dcy = static_cast<double>(cy);
+  const double dr = static_cast<double>(r);
+  constexpr double kTwoPi = 6.283185307179586;
   std::vector<float> xy(static_cast<size_t>((static_cast<size_t>(segments) + 1u) * 2u));
   for (int i = 0; i <= segments; ++i) {
-    const float t = twoPi * static_cast<float>(i) / static_cast<float>(segments);
-    xy[static_cast<size_t>(i * 2)] = cx + r * std::cos(t);
-    xy[static_cast<size_t>(i * 2 + 1)] = cy + r * std::sin(t);
+    const double t = kTwoPi * static_cast<double>(i) / static_cast<double>(segments);
+    float rx = 0.f;
+    float ry = 0.f;
+    CirclePointViewRel(dcx, dcy, viewAnchorX, viewAnchorY, dr, t, &rx, &ry);
+    xy[static_cast<size_t>(i * 2)] = rx;
+    xy[static_cast<size_t>(i * 2 + 1)] = ry;
   }
   CadTessellateLinetypeChainVc(xy.data(), segments + 1, z, true, lt, dashPatScale, rgba, &out);
 }
@@ -274,17 +328,24 @@ void AppendSnapDiagonalCross(std::vector<float>& out, float cx, float cy, float 
              {cx - h, cy - h, z, cx + h, cy + h, z, cx - h, cy + h, z, cx + h, cy - h, z});
 }
 
-void AppendWorldRectOutline(std::vector<float>& o, float xa, float ya, float xb, float yb, float z) {
+void AppendWorldRectOutline(std::vector<float>& o, float xa, float ya, float xb, float yb, float z, double viewAnchorX,
+                            double viewAnchorY) {
   const float mnX = std::min(xa, xb);
   const float mxX = std::max(xa, xb);
   const float mnY = std::min(ya, yb);
   const float mxY = std::max(ya, yb);
   auto seg = [&](float x0, float y0, float x1, float y1) {
-    o.push_back(x0);
-    o.push_back(y0);
+    float rx0 = 0.f;
+    float ry0 = 0.f;
+    float rx1 = 0.f;
+    float ry1 = 0.f;
+    WorldToViewRelativeFloat(static_cast<double>(x0), static_cast<double>(y0), viewAnchorX, viewAnchorY, &rx0, &ry0);
+    WorldToViewRelativeFloat(static_cast<double>(x1), static_cast<double>(y1), viewAnchorX, viewAnchorY, &rx1, &ry1);
+    o.push_back(rx0);
+    o.push_back(ry0);
     o.push_back(z);
-    o.push_back(x1);
-    o.push_back(y1);
+    o.push_back(rx1);
+    o.push_back(ry1);
     o.push_back(z);
   };
   seg(mnX, mnY, mxX, mnY);
@@ -293,47 +354,74 @@ void AppendWorldRectOutline(std::vector<float>& o, float xa, float ya, float xb,
   seg(mnX, mxY, mnX, mnY);
 }
 
-void AppendWorldRectFillTris(std::vector<float>& o, float xa, float ya, float xb, float yb, float z) {
+void AppendWorldRectFillTris(std::vector<float>& o, float xa, float ya, float xb, float yb, float z, double viewAnchorX,
+                             double viewAnchorY) {
   const float mnX = std::min(xa, xb);
   const float mxX = std::max(xa, xb);
   const float mnY = std::min(ya, yb);
   const float mxY = std::max(ya, yb);
+  float c[4][2];
+  const float corners[4][2] = {{mnX, mnY}, {mxX, mnY}, {mxX, mxY}, {mnX, mxY}};
+  for (int i = 0; i < 4; ++i)
+    WorldToViewRelativeFloat(static_cast<double>(corners[i][0]), static_cast<double>(corners[i][1]), viewAnchorX,
+                             viewAnchorY, &c[i][0], &c[i][1]);
   const float tri[] = {
-      mnX, mnY, z, mxX, mnY, z, mxX, mxY, z, mnX, mnY, z, mxX, mxY, z, mnX, mxY, z,
+      c[0][0], c[0][1], z, c[1][0], c[1][1], z, c[2][0], c[2][1], z,
+      c[0][0], c[0][1], z, c[2][0], c[2][1], z, c[3][0], c[3][1], z,
   };
   o.insert(o.end(), tri, tri + sizeof(tri) / sizeof(tri[0]));
 }
 
+void ConvertLineVertsWorldToView(const std::vector<float>& world, double viewAnchorX, double viewAnchorY,
+                                 std::vector<float>* rel) {
+  rel->clear();
+  rel->reserve(world.size());
+  for (size_t i = 0; i + 2 < world.size(); i += 3) {
+    float rx = 0.f;
+    float ry = 0.f;
+    WorldToViewRelativeFloat(static_cast<double>(world[i]), static_cast<double>(world[i + 1]), viewAnchorX, viewAnchorY,
+                             &rx, &ry);
+    rel->push_back(rx);
+    rel->push_back(ry);
+    rel->push_back(world[i + 2]);
+  }
+}
+
 void BuildSnapOverlayLines(const CadSnap::Hit& snap, float halfWorld, int fbHeight, float glyphHalfPx,
-                           std::vector<float>& out) {
+                           double viewAnchorX, double viewAnchorY, std::vector<float>& out) {
   if (!snap.valid)
     return;
+  float sx = 0.f;
+  float sy = 0.f;
+  WorldToViewRelativeFloat(static_cast<double>(snap.x), static_cast<double>(snap.y), viewAnchorX, viewAnchorY, &sx,
+                           &sy);
   const float zSnap = 0.045f;
   const float mh = std::clamp(glyphHalfPx, 3.f, 48.f) * (2.f * halfWorld) / static_cast<float>(std::max(fbHeight, 1));
+  const int snapCircSegs = std::max(16, static_cast<int>(mh * 40.f));
   switch (snap.kind) {
   case CadSnap::Kind::Endpoint:
-    AppendSnapSquareOutline(out, snap.x, snap.y, zSnap, mh);
+    AppendSnapSquareOutline(out, sx, sy, zSnap, mh);
     break;
   case CadSnap::Kind::Midpoint:
-    AppendSnapTriangleOutline(out, snap.x, snap.y, zSnap, mh);
+    AppendSnapTriangleOutline(out, sx, sy, zSnap, mh);
     break;
   case CadSnap::Kind::Center:
-    AppendCircleLineApprox(out, snap.x, snap.y, mh * 0.85f, 28, zSnap);
+    AppendCircleLineApproxViewRel(out, sx, sy, mh * 0.85f, snapCircSegs, zSnap);
     break;
   case CadSnap::Kind::SurveyCenter: {
     const float R = mh * 0.62f;
-    AppendCircleLineApprox(out, snap.x, snap.y, R, 28, zSnap);
+    AppendCircleLineApproxViewRel(out, sx, sy, R, snapCircSegs, zSnap);
     // × slightly larger than the circle (tips past radius R in diagonal directions).
-    AppendSnapDiagonalCross(out, snap.x, snap.y, zSnap, R * 0.78f);
+    AppendSnapDiagonalCross(out, sx, sy, zSnap, R * 0.78f);
     break;
   }
   case CadSnap::Kind::GeometricCenter:
-    AppendSnapSquareOutline(out, snap.x, snap.y, zSnap, mh);
-    AppendSnapDiagonalCross(out, snap.x, snap.y, zSnap, mh * 0.42f);
+    AppendSnapSquareOutline(out, sx, sy, zSnap, mh);
+    AppendSnapDiagonalCross(out, sx, sy, zSnap, mh * 0.42f);
     break;
   case CadSnap::Kind::Perpendicular:
-    AppendSnapSquareOutline(out, snap.x, snap.y, zSnap, mh);
-    AppendSnapCrossInSquare(out, snap.x, snap.y, zSnap, mh * 0.55f);
+    AppendSnapSquareOutline(out, sx, sy, zSnap, mh);
+    AppendSnapCrossInSquare(out, sx, sy, zSnap, mh * 0.55f);
     break;
   }
 }
@@ -578,7 +666,7 @@ void ViewportRenderer::SetSize(int width, int height) {
   EnsureFramebuffer(width, height);
 }
 
-void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWidth, int fbHeight,
+void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbWidth, int fbHeight,
                                    const std::vector<float>& userLines, const std::vector<float>& circlesCxCyR,
                                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
                                    const CadSnap::Hit* snapOverlay, float snapGlyphHalfPx,
@@ -602,10 +690,14 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   const float aspect = static_cast<float>(fbW_) / static_cast<float>(std::max(fbH_, 1));
-  const float halfH = (1.f / std::max(zoom, 1.e-4f)) * 50.f;
-  const float halfW = halfH * aspect;
+  const double halfHd = (1.0 / std::max(static_cast<double>(zoom), 1.e-4)) * 50.0;
+  const double halfWd = halfHd * static_cast<double>(aspect);
+  const float halfH = static_cast<float>(halfHd);
+  const float halfW = static_cast<float>(halfWd);
+  const double viewAnchorX = panX;
+  const double viewAnchorY = panY;
   float proj[16];
-  Ortho(-halfW + panX, halfW + panX, -halfH + panY, halfH + panY, -1000.f, 1000.f, proj);
+  Ortho(-halfW, halfW, -halfH, halfH, -1000.f, 1000.f, proj);
 
   float model[16];
   TranslateMat(0.f, 0.f, 0.f, model);
@@ -643,32 +735,37 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
         return 5.f * p;
       return 10.f * p;
     };
-    const float gx = panX;
-    const float gy = panY;
     const float step = niceStep(std::max(halfW, halfH) * 2.f);
     const float spanW = halfW * 2.15f + step * 2.f;
     const float spanH = halfH * 2.15f + step * 2.f;
     const int rawNi = static_cast<int>(std::ceil(spanW / std::max(step, 1e-12f))) + 2;
     const int ni = std::min(512, std::max(4, rawNi));
+    const double stepD = static_cast<double>(step);
+    const double originX = std::floor(viewAnchorX / stepD) * stepD;
+    const double originY = std::floor(viewAnchorY / stepD) * stepD;
     std::vector<float> gridVerts;
     const float gz = -0.02f;
+    auto pushGridSeg = [&](double wx0, double wy0, double wx1, double wy1) {
+      float rx0 = 0.f;
+      float ry0 = 0.f;
+      float rx1 = 0.f;
+      float ry1 = 0.f;
+      WorldToViewRelativeFloat(wx0, wy0, viewAnchorX, viewAnchorY, &rx0, &ry0);
+      WorldToViewRelativeFloat(wx1, wy1, viewAnchorX, viewAnchorY, &rx1, &ry1);
+      gridVerts.push_back(rx0);
+      gridVerts.push_back(ry0);
+      gridVerts.push_back(gz);
+      gridVerts.push_back(rx1);
+      gridVerts.push_back(ry1);
+      gridVerts.push_back(gz);
+    };
     for (int i = -ni; i <= ni; ++i) {
-      const float x = gx + static_cast<float>(i) * step;
-      gridVerts.push_back(x);
-      gridVerts.push_back(gy - spanH);
-      gridVerts.push_back(gz);
-      gridVerts.push_back(x);
-      gridVerts.push_back(gy + spanH);
-      gridVerts.push_back(gz);
+      const double x = originX + static_cast<double>(i) * stepD;
+      pushGridSeg(x, viewAnchorY - static_cast<double>(spanH), x, viewAnchorY + static_cast<double>(spanH));
     }
     for (int i = -ni; i <= ni; ++i) {
-      const float y = gy + static_cast<float>(i) * step;
-      gridVerts.push_back(gx - spanW);
-      gridVerts.push_back(y);
-      gridVerts.push_back(gz);
-      gridVerts.push_back(gx + spanW);
-      gridVerts.push_back(y);
-      gridVerts.push_back(gz);
+      const double y = originY + static_cast<double>(i) * stepD;
+      pushGridSeg(viewAnchorX - static_cast<double>(spanW), y, viewAnchorX + static_cast<double>(spanW), y);
     }
     gridVertexCount_ = static_cast<int>(gridVerts.size() / 3);
 
@@ -713,7 +810,15 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
        (extended->polylineVerts != nullptr && extended->polylineOffsets != nullptr &&
         extended->polylineOffsets->size() >= 2));
   if (hasLines || hasCircles || hasExt) {
-    if (cadGpuRevision != cachedCadGpuRevision_) {
+    const double worldPerPx = (2.0 * halfHd) / static_cast<double>(std::max(fbH_, 1));
+    const double anchorEps = std::max(worldPerPx * 0.2, 1.e-12);
+    const bool viewAnchorChanged =
+        std::fabs(panX - cachedViewAnchorX_) > anchorEps || std::fabs(panY - cachedViewAnchorY_) > anchorEps;
+    const bool viewScaleChanged =
+        cachedHalfHd_ < 0. ||
+        fbHeight != cachedFbHeight_ ||
+        std::fabs(halfHd - cachedHalfHd_) > std::max(cachedHalfHd_ * 0.001, 1.e-12);
+    if (cadGpuRevision != cachedCadGpuRevision_ || viewAnchorChanged || viewScaleChanged) {
       cpuVcLines_.clear();
       cpuVcCircles_.clear();
       vcLineBatches_.clear();
@@ -746,7 +851,15 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
         const float lwMm = EffectiveEntityLineweightMm(attr, lr);
         const float pxw = LineweightMmToDevicePx(lwMm);
         maybeSplitLineBatch(vertsBefore, pxw);
-        CadTessellateLinetypeSegmentVc(x0, y0, z0, x1, y1, z1, lt, dashPatScale, rgba, &cpuVcLines_);
+        float rx0 = 0.f;
+        float ry0 = 0.f;
+        float rx1 = 0.f;
+        float ry1 = 0.f;
+        WorldToViewRelativeFloat(static_cast<double>(x0), static_cast<double>(y0), viewAnchorX, viewAnchorY, &rx0,
+                                 &ry0);
+        WorldToViewRelativeFloat(static_cast<double>(x1), static_cast<double>(y1), viewAnchorX, viewAnchorY, &rx1,
+                                 &ry1);
+        CadTessellateLinetypeSegmentVc(rx0, ry0, z0, rx1, ry1, z1, lt, dashPatScale, rgba, &cpuVcLines_);
         lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
       };
 
@@ -777,7 +890,7 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
             const float lwMm = EffectiveEntityLineweightMm(attr, lr);
             maybeSplitLineBatch(vb, LineweightMmToDevicePx(lwMm));
             AppendArcVcDashed(cpuVcLines_, (*extended->arcs)[i], 48, 0.f, dashPatScale, attr, lr, kLineDefaultR,
-                              kLineDefaultG, kLineDefaultB);
+                              kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY);
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
         }
@@ -790,7 +903,7 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
             const int vb = static_cast<int>(cpuVcLines_.size() / 7);
             maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr, lr)));
             AppendEllipseVcDashed(cpuVcLines_, (*extended->ellipses)[i], 72, 0.f, dashPatScale, attr, lr,
-                                   kLineDefaultR, kLineDefaultG, kLineDefaultB);
+                                   kLineDefaultR, kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY);
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
         }
@@ -805,7 +918,7 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
               LookupLayerRowCi(drawingLayers, attr0.layer.empty() ? std::string("0") : attr0.layer);
           maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr0, lr0)));
           AppendPolylineEdgesVc(cpuVcLines_, *extended, 0.f, kLineDefaultR, kLineDefaultG, kLineDefaultB,
-                                dashPatScale);
+                                dashPatScale, viewAnchorX, viewAnchorY);
           lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
         }
         if (lineVertTotal > lineBatchStart && lineBatchPx >= 0.f)
@@ -836,8 +949,12 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
           const int vb = static_cast<int>(cpuVcCircles_.size() / 7);
           const float lwMm = EffectiveEntityLineweightMm(attr, lr);
           maybeSplitCirc(vb, LineweightMmToDevicePx(lwMm));
-          AppendCircleVcDashed(cpuVcCircles_, circlesCxCyR[ci * 3], circlesCxCyR[ci * 3 + 1], circlesCxCyR[ci * 3 + 2],
-                               72, 0.f, dashPatScale, attr, lr, kCircDefaultR, kCircDefaultG, kCircDefaultB);
+          const float cr = circlesCxCyR[ci * 3 + 2];
+          const int circSegs =
+              CircleTessellationSegmentCount(static_cast<double>(cr), static_cast<double>(halfH), fbHeight);
+          AppendCircleVcDashed(cpuVcCircles_, circlesCxCyR[ci * 3], circlesCxCyR[ci * 3 + 1], cr,
+                               circSegs, 0.f, dashPatScale, attr, lr, kCircDefaultR, kCircDefaultG, kCircDefaultB,
+                               viewAnchorX, viewAnchorY);
           circVert = static_cast<int>(cpuVcCircles_.size() / 7);
         }
         if (circVert > circBatchStart && circBatchPx >= 0.f)
@@ -852,6 +969,10 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
                    cpuVcCircles_.empty() ? nullptr : cpuVcCircles_.data(), GL_DYNAMIC_DRAW);
       glBindBuffer(GL_ARRAY_BUFFER, 0);
       cachedCadGpuRevision_ = cadGpuRevision;
+      cachedViewAnchorX_ = panX;
+      cachedViewAnchorY_ = panY;
+      cachedHalfHd_ = halfHd;
+      cachedFbHeight_ = fbHeight;
     }
 
     glUseProgram(vcLineProgram_);
@@ -895,19 +1016,25 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
 
   // --- Selection highlight (accent stroke on top of committed geometry) ---
   if (highlightLines && !highlightLines->empty() && highlightLines->size() % 6 == 0) {
+    std::vector<float> hlLineRel;
+    ConvertLineVertsWorldToView(*highlightLines, viewAnchorX, viewAnchorY, &hlLineRel);
     glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
     glUniform4f(locCol, 1.f, 0.92f, 0.15f, 1.f);
     glLineWidth(kLwHiLine);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(highlightLines->size() * sizeof(float)),
-                 highlightLines->data(), GL_STREAM_DRAW);
-    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(highlightLines->size() / 3));
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(hlLineRel.size() * sizeof(float)), hlLineRel.data(),
+                 GL_STREAM_DRAW);
+    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(hlLineRel.size() / 3));
     glLineWidth(kLwMain);
   }
   if (highlightCircles && !highlightCircles->empty() && highlightCircles->size() % 3 == 0) {
     std::vector<float> hlCircGeom;
-    for (size_t i = 0; i + 2 < highlightCircles->size(); i += 3)
-      AppendCircleLineApprox(hlCircGeom, (*highlightCircles)[i], (*highlightCircles)[i + 1],
-                             (*highlightCircles)[i + 2], 80, 0.018f);
+    for (size_t i = 0; i + 2 < highlightCircles->size(); i += 3) {
+      const float hr = (*highlightCircles)[i + 2];
+      const int hlSegs =
+          CircleTessellationSegmentCount(static_cast<double>(hr), static_cast<double>(halfH), fbHeight);
+      AppendCircleLineApprox(hlCircGeom, (*highlightCircles)[i], (*highlightCircles)[i + 1], hr, hlSegs, 0.018f,
+                             viewAnchorX, viewAnchorY);
+    }
     if (!hlCircGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
       glUniform4f(locCol, 1.f, 0.88f, 0.22f, 1.f);
@@ -921,11 +1048,13 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
 
   // --- Rubber previews (LINE segment + CIRCLE construction aids) ---
   if (!rubberLines.empty() && rubberLines.size() % 6 == 0) {
+    std::vector<float> rubberRel;
+    ConvertLineVertsWorldToView(rubberLines, viewAnchorX, viewAnchorY, &rubberRel);
     glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
     glUniform4f(locCol, 1.f, 0.85f, 0.2f, 1.f);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(rubberLines.size() * sizeof(float)),
-                 rubberLines.data(), GL_STREAM_DRAW);
-    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(rubberLines.size() / 3));
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(rubberRel.size() * sizeof(float)), rubberRel.data(),
+                 GL_STREAM_DRAW);
+    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(rubberRel.size() / 3));
   }
 
   // --- Window selection preview (semi-transparent fill + outline) ---
@@ -936,8 +1065,8 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
     const float yb = selectionFillRect[3];
     std::vector<float> fillGeom;
     std::vector<float> lineGeom;
-    AppendWorldRectFillTris(fillGeom, xa, ya, xb, yb, 0.035f);
-    AppendWorldRectOutline(lineGeom, xa, ya, xb, yb, 0.036f);
+    AppendWorldRectFillTris(fillGeom, xa, ya, xb, yb, 0.035f, viewAnchorX, viewAnchorY);
+    AppendWorldRectOutline(lineGeom, xa, ya, xb, yb, 0.036f, viewAnchorX, viewAnchorY);
     glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -958,20 +1087,26 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
 
   // --- Move/copy/rotate preview geometry ---
   if (previewLines && !previewLines->empty() && previewLines->size() % 6 == 0) {
+    std::vector<float> previewLineRel;
+    ConvertLineVertsWorldToView(*previewLines, viewAnchorX, viewAnchorY, &previewLineRel);
     glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glUniform4f(locCol, 1.f, 0.88f, 0.35f, 0.55f);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(previewLines->size() * sizeof(float)),
-                 previewLines->data(), GL_STREAM_DRAW);
-    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(previewLines->size() / 3));
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(previewLineRel.size() * sizeof(float)),
+                 previewLineRel.data(), GL_STREAM_DRAW);
+    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(previewLineRel.size() / 3));
     glDisable(GL_BLEND);
   }
   if (previewCircles && !previewCircles->empty() && previewCircles->size() % 3 == 0) {
     std::vector<float> circleGeom;
-    for (size_t i = 0; i + 2 < previewCircles->size(); i += 3)
-      AppendCircleLineApprox(circleGeom, (*previewCircles)[i], (*previewCircles)[i + 1], (*previewCircles)[i + 2],
-                             72, 0.032f);
+    for (size_t i = 0; i + 2 < previewCircles->size(); i += 3) {
+      const float pr = (*previewCircles)[i + 2];
+      const int prevSegs =
+          CircleTessellationSegmentCount(static_cast<double>(pr), halfHd, fbHeight);
+      AppendCircleLineApprox(circleGeom, (*previewCircles)[i], (*previewCircles)[i + 1], pr, prevSegs, 0.032f,
+                             viewAnchorX, viewAnchorY);
+    }
     if (!circleGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
       glEnable(GL_BLEND);
@@ -986,20 +1121,22 @@ void ViewportRenderer::RenderScene(float panX, float panY, float zoom, int fbWid
 
   // --- Survey points (X markers, apparent size ~constant on screen) ---
   if (surveyMarkers && !surveyMarkers->empty() && surveyMarkers->size() % 6 == 0) {
+    std::vector<float> surveyRel;
+    ConvertLineVertsWorldToView(*surveyMarkers, viewAnchorX, viewAnchorY, &surveyRel);
     glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
     glUseProgram(lineProgram_);
     glUniform4f(locCol, 1.f, 0.48f, 0.12f, 1.f);
     glLineWidth(kLwSurvey);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(surveyMarkers->size() * sizeof(float)),
-                 surveyMarkers->data(), GL_STREAM_DRAW);
-    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(surveyMarkers->size() / 3));
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(surveyRel.size() * sizeof(float)), surveyRel.data(),
+                 GL_STREAM_DRAW);
+    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(surveyRel.size() / 3));
     glLineWidth(kLwMain);
   }
 
   // --- Object snap glyph (green, screen-stable size) ---
   if (snapOverlay && snapOverlay->valid) {
     std::vector<float> snapGeom;
-    BuildSnapOverlayLines(*snapOverlay, halfH, fbH_, snapGlyphHalfPx, snapGeom);
+    BuildSnapOverlayLines(*snapOverlay, halfH, fbH_, snapGlyphHalfPx, viewAnchorX, viewAnchorY, snapGeom);
     if (!snapGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
       glUniform4f(locCol, 0.15f, 0.92f, 0.38f, 1.f);

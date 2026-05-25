@@ -1,6 +1,7 @@
 #include "CadSnap.hpp"
 
 #include "SurveyPoints.hpp"
+#include "geom2d.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -305,7 +306,7 @@ void AppendPerpendicularFromRef(float refX, float refY, float wx, float wy, floa
 
 } // namespace
 
-Hit FindBest(float wx, float wy, const AppCommandState& cmd, bool commandActive, float tolWorld) {
+Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActive, float tolWorld) {
   SnapPickAccum acc{};
 
   float refPx = 0.f;
@@ -381,25 +382,35 @@ Hit FindBest(float wx, float wy, const AppCommandState& cmd, bool commandActive,
   for (const CadArc& a : cmd.userArcs) {
     if (a.r <= 1e-6f || kArcSnapSeg < 1)
       continue;
-    const float tEnd = a.startRad + a.sweepRad;
+    const double dcx = static_cast<double>(a.cx);
+    const double dcy = static_cast<double>(a.cy);
+    const double dr = static_cast<double>(a.r);
+    const double tEnd = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad);
     if (cmd.objectSnapEndpoint) {
-      Consider(&acc, wx, wy, a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), Kind::Endpoint,
-               tolWorld);
-      Consider(&acc, wx, wy, a.cx + a.r * std::cos(tEnd), a.cy + a.r * std::sin(tEnd), Kind::Endpoint, tolWorld);
+      double ex = 0.;
+      double ey = 0.;
+      CirclePointWorld(dcx, dcy, dr, static_cast<double>(a.startRad), &ex, &ey);
+      Consider(&acc, wx, wy, static_cast<float>(ex), static_cast<float>(ey), Kind::Endpoint, tolWorld);
+      CirclePointWorld(dcx, dcy, dr, tEnd, &ex, &ey);
+      Consider(&acc, wx, wy, static_cast<float>(ex), static_cast<float>(ey), Kind::Endpoint, tolWorld);
     }
     for (int i = 0; i < kArcSnapSeg; ++i) {
-      const float u0 = static_cast<float>(i) / static_cast<float>(kArcSnapSeg);
-      const float u1 = static_cast<float>(i + 1) / static_cast<float>(kArcSnapSeg);
-      const float t0 = a.startRad + a.sweepRad * u0;
-      const float t1 = a.startRad + a.sweepRad * u1;
-      const float x0 = a.cx + a.r * std::cos(t0);
-      const float y0 = a.cy + a.r * std::sin(t0);
-      const float x1 = a.cx + a.r * std::cos(t1);
-      const float y1 = a.cy + a.r * std::sin(t1);
+      const double u0 = static_cast<double>(i) / static_cast<double>(kArcSnapSeg);
+      const double u1 = static_cast<double>(i + 1) / static_cast<double>(kArcSnapSeg);
+      const double t0 = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u0;
+      const double t1 = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u1;
+      double x0 = 0.;
+      double y0 = 0.;
+      double x1 = 0.;
+      double y1 = 0.;
+      CirclePointWorld(dcx, dcy, dr, t0, &x0, &y0);
+      CirclePointWorld(dcx, dcy, dr, t1, &x1, &y1);
       if (cmd.objectSnapMidpoint)
-        Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld);
+        Consider(&acc, wx, wy, static_cast<float>(0.5 * (x0 + x1)), static_cast<float>(0.5 * (y0 + y1)), Kind::Midpoint,
+                 tolWorld);
       if (havePerpRef)
-        AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc);
+        AppendPerpendicularFromRef(refPx, refPy, wx, wy, static_cast<float>(x0), static_cast<float>(y0),
+                                   static_cast<float>(x1), static_cast<float>(y1), tolWorld, &acc);
     }
   }
 
@@ -584,41 +595,50 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     for (const CadArc& a : cmd.userArcs) {
       if (a.r <= 1e-6f || kArcSnapSeg < 1)
         continue;
+      const double dcx = static_cast<double>(a.cx);
+      const double dcy = static_cast<double>(a.cy);
+      const double dr = static_cast<double>(a.r);
       for (int i = 0; i < kArcSnapSeg; ++i) {
-        const float u0 = static_cast<float>(i) / static_cast<float>(kArcSnapSeg);
-        const float u1 = static_cast<float>(i + 1) / static_cast<float>(kArcSnapSeg);
-        const float t0 = a.startRad + a.sweepRad * u0;
-        const float t1 = a.startRad + a.sweepRad * u1;
-        const float x0 = a.cx + a.r * std::cos(t0);
-        const float y0 = a.cy + a.r * std::sin(t0);
-        const float x1 = a.cx + a.r * std::cos(t1);
-        const float y1 = a.cy + a.r * std::sin(t1);
-        PushSnapPickerEntry(0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out);
+        const double u0 = static_cast<double>(i) / static_cast<double>(kArcSnapSeg);
+        const double u1 = static_cast<double>(i + 1) / static_cast<double>(kArcSnapSeg);
+        const double t0 = static_cast<double>(a.startRad + a.sweepRad * static_cast<float>(u0));
+        const double t1 = static_cast<double>(a.startRad + a.sweepRad * static_cast<float>(u1));
+        double x0 = 0.;
+        double y0 = 0.;
+        double x1 = 0.;
+        double y1 = 0.;
+        CirclePointWorld(dcx, dcy, dr, t0, &x0, &y0);
+        CirclePointWorld(dcx, dcy, dr, t1, &x1, &y1);
+        PushSnapPickerEntry(static_cast<float>(0.5 * (x0 + x1)), static_cast<float>(0.5 * (y0 + y1)), Kind::Midpoint,
+                            sortWorldX, sortWorldY, out);
       }
     }
     constexpr int kEllSnapSeg = 36;
-    constexpr float kTwoPi = 6.28318530718f;
+    constexpr double kTwoPi = 6.283185307179586;
     for (const CadEllipse& el : cmd.userEllipses) {
-      const float ma = std::hypot(el.majVx, el.majVy);
-      if (ma < 1e-8f || kEllSnapSeg < 3)
+      const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+      if (ma < 1e-12 || kEllSnapSeg < 3)
         continue;
-      const float ux = el.majVx / ma;
-      const float uy = el.majVy / ma;
-      const float px = -uy;
-      const float py = ux;
-      const float mb = ma * el.ratio;
+      const double ux = static_cast<double>(el.majVx) / ma;
+      const double uy = static_cast<double>(el.majVy) / ma;
+      const double px = -uy;
+      const double py = ux;
+      const double mb = ma * static_cast<double>(el.ratio);
+      const double ecx = static_cast<double>(el.cx);
+      const double ecy = static_cast<double>(el.cy);
       for (int i = 0; i < kEllSnapSeg; ++i) {
-        const float ang0 = kTwoPi * static_cast<float>(i) / static_cast<float>(kEllSnapSeg);
-        const float ang1 = kTwoPi * static_cast<float>(i + 1) / static_cast<float>(kEllSnapSeg);
-        const float c0 = std::cos(ang0);
-        const float s0 = std::sin(ang0);
-        const float c1 = std::cos(ang1);
-        const float s1 = std::sin(ang1);
-        const float x0 = el.cx + ux * (ma * c0) + px * (mb * s0);
-        const float y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
-        const float x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
-        const float y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
-        PushSnapPickerEntry(0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out);
+        const double ang0 = kTwoPi * static_cast<double>(i) / static_cast<double>(kEllSnapSeg);
+        const double ang1 = kTwoPi * static_cast<double>(i + 1) / static_cast<double>(kEllSnapSeg);
+        const double c0 = std::cos(ang0);
+        const double s0 = std::sin(ang0);
+        const double c1 = std::cos(ang1);
+        const double s1 = std::sin(ang1);
+        const double x0 = ecx + ux * (ma * c0) + px * (mb * s0);
+        const double y0 = ecy + uy * (ma * c0) + py * (mb * s0);
+        const double x1 = ecx + ux * (ma * c1) + px * (mb * s1);
+        const double y1 = ecy + uy * (ma * c1) + py * (mb * s1);
+        PushSnapPickerEntry(static_cast<float>(0.5 * (x0 + x1)), static_cast<float>(0.5 * (y0 + y1)), Kind::Midpoint,
+                            sortWorldX, sortWorldY, out);
       }
     }
     break;
