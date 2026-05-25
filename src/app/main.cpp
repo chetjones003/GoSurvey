@@ -333,7 +333,7 @@ int main() {
     DrawCopySurveyDuplicateModal(cmd, cmdLog);
 
     std::vector<float> rubberLines;
-    const float orthoHalfH = (1.f / std::max(cmd.viewportZoom, 1.e-4f)) * 50.f;
+    const float orthoHalfH = (1.f / std::max(cmd.viewportZoom, 1.e-9f)) * 50.f;
     AppendCadDraftRubberLines(cmd, curX, curY, orthoEnabled, cmd.viewportPanX, cmd.viewportPanY, orthoHalfH, fbH,
                               rubberLines);
 
@@ -390,6 +390,10 @@ int main() {
     ext.drawingLayers = &cmd.drawingLayerTable;
 
     viewport.SetSize(fbW, fbH);
+    RenderTuning tuning{};
+    tuning.arcCircleSmoothnessCap = std::clamp(cmd.displayArcCircleSmoothness, 8, 20000);
+    tuning.hardwareAcceleration = cmd.systemHardwareAcceleration;
+    tuning.smoothLineDisplay = cmd.gfxSmoothLineDisplay;
     viewport.RenderScene(cmd.viewportPanX, cmd.viewportPanY, cmd.viewportZoom, fbW, fbH, cmd.userLinesFlat,
                          cmd.userCirclesCxCyR, cmd.cadGpuRevision,
                          rubberLines, snapHit.valid ? &snapHit : nullptr,
@@ -399,7 +403,7 @@ int main() {
                          highlightLines.empty() ? nullptr : &highlightLines,
                          highlightCircles.empty() ? nullptr : &highlightCircles,
                          surveyMarkers.empty() ? nullptr : &surveyMarkers, &cmd.userLineAttrs,
-                         &cmd.userCircleAttrs, &ext, gridVisible, &cmd.drawingLayerTable);
+                         &cmd.userCircleAttrs, &ext, gridVisible, &cmd.drawingLayerTable, tuning);
 
     ImGuiLayout_CommitDeferredIniLoadIfNeeded();
     ImGui::Render();

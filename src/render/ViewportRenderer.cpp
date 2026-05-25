@@ -676,11 +676,23 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
                                    const std::vector<EntityAttributes>* lineEntityAttrs,
                                    const std::vector<EntityAttributes>* circleEntityAttrs,
                                    const CadExtendedGeometryInput* extended, bool showGrid,
-                                   const std::vector<CadLayerRow>* drawingLayers) {
+                                   const std::vector<CadLayerRow>* drawingLayers, const RenderTuning& tuning) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
-  const bool useMsaa = EnsureMultisamplePass(fbW_, fbH_);
+  // MSAA path is gated by "Hardware Acceleration" + "Smooth line display" (Settings → System → Graphics Performance).
+  const bool wantMsaa = tuning.hardwareAcceleration && tuning.smoothLineDisplay;
+  const bool useMsaa = wantMsaa && EnsureMultisamplePass(fbW_, fbH_);
+  if (!wantMsaa && msFbo_)
+    DestroyMultisamplePass();
+  // GL_LINE_SMOOTH is deprecated in core but supported by most drivers; it provides line antialiasing in the
+  // non-multisampled path. Gated by both toggles to match AutoCAD-style behavior.
+  if (tuning.hardwareAcceleration && tuning.smoothLineDisplay) {
+    glEnable(GL_LINE_SMOOTH);
+    glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
+  } else {
+    glDisable(GL_LINE_SMOOTH);
+  }
   glBindFramebuffer(GL_FRAMEBUFFER, (useMsaa && msFbo_) ? msFbo_ : fbo_);
   glViewport(0, 0, fbW_, fbH_);
   glDisable(GL_DEPTH_TEST);
@@ -690,7 +702,9 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   const float aspect = static_cast<float>(fbW_) / static_cast<float>(std::max(fbH_, 1));
-  const double halfHd = (1.0 / std::max(static_cast<double>(zoom), 1.e-4)) * 50.0;
+  // Zoom clamp here matches the wheel/MMB pan clamps in DrawDrawingViewport: wide enough for million-unit drawings
+  // without quantizing halfHd at extreme zooms.
+  const double halfHd = (1.0 / std::max(static_cast<double>(zoom), 1.e-9)) * 50.0;
   const double halfWd = halfHd * static_cast<double>(aspect);
   const float halfH = static_cast<float>(halfHd);
   const float halfW = static_cast<float>(halfWd);
@@ -810,10 +824,14 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
        (extended->polylineVerts != nullptr && extended->polylineOffsets != nullptr &&
         extended->polylineOffsets->size() >= 2));
   if (hasLines || hasCircles || hasExt) {
-    const double worldPerPx = (2.0 * halfHd) / static_cast<double>(std::max(fbH_, 1));
-    const double anchorEps = std::max(worldPerPx * 0.2, 1.e-12);
+    // Drift budget for the anchor: cached vertex magnitudes can grow to roughly halfHd + drift. Letting drift reach
+    // halfHd * 0.5 keeps view-relative coordinates well within float precision while letting pan move freely without
+    // rebuilding the (potentially expensive) circle/arc tessellation cache. The visible model offset is applied via
+    // the per-frame MVP translation below, so the cache stays geometrically valid until drift exceeds the budget.
+    const double anchorDriftBudget = std::max(halfHd * 0.5, 1.e-12);
     const bool viewAnchorChanged =
-        std::fabs(panX - cachedViewAnchorX_) > anchorEps || std::fabs(panY - cachedViewAnchorY_) > anchorEps;
+        std::fabs(panX - cachedViewAnchorX_) > anchorDriftBudget ||
+        std::fabs(panY - cachedViewAnchorY_) > anchorDriftBudget;
     const bool viewScaleChanged =
         cachedHalfHd_ < 0. ||
         fbHeight != cachedFbHeight_ ||
@@ -889,7 +907,16 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
             const int vb = static_cast<int>(cpuVcLines_.size() / 7);
             const float lwMm = EffectiveEntityLineweightMm(attr, lr);
             maybeSplitLineBatch(vb, LineweightMmToDevicePx(lwMm));
-            AppendArcVcDashed(cpuVcLines_, (*extended->arcs)[i], 48, 0.f, dashPatScale, attr, lr, kLineDefaultR,
+            // Arcs share the same chord-pixel target as full circles. The cap is the user-facing
+            // "Arc and circle smoothness" Display setting (sweep-scaled so a 90° arc gets ~1/4 of the segments).
+            const auto& a = (*extended->arcs)[i];
+            const double sweepFrac =
+                std::clamp(std::fabs(static_cast<double>(a.sweepRad)) / 6.283185307179586, 0.05, 1.0);
+            const int arcCap = std::max(8, static_cast<int>(std::ceil(tuning.arcCircleSmoothnessCap * sweepFrac)));
+            const int arcSegs = std::max(
+                8, CircleTessellationSegmentCount(static_cast<double>(a.r), static_cast<double>(halfH), fbHeight,
+                                                  arcCap));
+            AppendArcVcDashed(cpuVcLines_, (*extended->arcs)[i], arcSegs, 0.f, dashPatScale, attr, lr, kLineDefaultR,
                               kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY);
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
@@ -902,7 +929,14 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
             const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
             const int vb = static_cast<int>(cpuVcLines_.size() / 7);
             maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr, lr)));
-            AppendEllipseVcDashed(cpuVcLines_, (*extended->ellipses)[i], 72, 0.f, dashPatScale, attr, lr,
+            // Ellipses scale segment count with the major semi-axis (worst-case chord length).
+            const auto& e = (*extended->ellipses)[i];
+            const double majLen =
+                std::sqrt(static_cast<double>(e.majVx) * e.majVx + static_cast<double>(e.majVy) * e.majVy);
+            const int ellSegs = std::max(
+                16, CircleTessellationSegmentCount(majLen, static_cast<double>(halfH), fbHeight,
+                                                   tuning.arcCircleSmoothnessCap));
+            AppendEllipseVcDashed(cpuVcLines_, (*extended->ellipses)[i], ellSegs, 0.f, dashPatScale, attr, lr,
                                    kLineDefaultR, kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY);
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
@@ -950,8 +984,8 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
           const float lwMm = EffectiveEntityLineweightMm(attr, lr);
           maybeSplitCirc(vb, LineweightMmToDevicePx(lwMm));
           const float cr = circlesCxCyR[ci * 3 + 2];
-          const int circSegs =
-              CircleTessellationSegmentCount(static_cast<double>(cr), static_cast<double>(halfH), fbHeight);
+          const int circSegs = CircleTessellationSegmentCount(static_cast<double>(cr), static_cast<double>(halfH),
+                                                              fbHeight, tuning.arcCircleSmoothnessCap);
           AppendCircleVcDashed(cpuVcCircles_, circlesCxCyR[ci * 3], circlesCxCyR[ci * 3 + 1], cr,
                                circSegs, 0.f, dashPatScale, attr, lr, kCircDefaultR, kCircDefaultG, kCircDefaultB,
                                viewAnchorX, viewAnchorY);
@@ -977,7 +1011,16 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
 
     glUseProgram(vcLineProgram_);
     GLint locVcMvp = glGetUniformLocation(vcLineProgram_, "uMVP");
-    glUniformMatrix4fv(locVcMvp, 1, GL_FALSE, mvp);
+    // Cached vertex coords are stored relative to cachedViewAnchor (see rebuild block above). The current frame's
+    // camera anchor is panX/Y, so we translate by (cachedAnchor - panX/Y) to land each cached vertex at the correct
+    // on-screen position. When the cache was rebuilt this frame this offset is zero; otherwise it absorbs all of the
+    // accumulated pan without touching the vertex buffer or re-tessellating curves.
+    float cachedModel[16];
+    TranslateMat(static_cast<float>(cachedViewAnchorX_ - panX), static_cast<float>(cachedViewAnchorY_ - panY), 0.f,
+                 cachedModel);
+    float cachedMvp[16];
+    MulMat4(proj, cachedModel, cachedMvp);
+    glUniformMatrix4fv(locVcMvp, 1, GL_FALSE, cachedMvp);
     if (!cpuVcLines_.empty()) {
       glBindVertexArray(vaoVcLines_);
       if (vcLineBatches_.empty())
@@ -1030,8 +1073,8 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
     std::vector<float> hlCircGeom;
     for (size_t i = 0; i + 2 < highlightCircles->size(); i += 3) {
       const float hr = (*highlightCircles)[i + 2];
-      const int hlSegs =
-          CircleTessellationSegmentCount(static_cast<double>(hr), static_cast<double>(halfH), fbHeight);
+      const int hlSegs = CircleTessellationSegmentCount(static_cast<double>(hr), static_cast<double>(halfH), fbHeight,
+                                                        tuning.arcCircleSmoothnessCap);
       AppendCircleLineApprox(hlCircGeom, (*highlightCircles)[i], (*highlightCircles)[i + 1], hr, hlSegs, 0.018f,
                              viewAnchorX, viewAnchorY);
     }
@@ -1103,7 +1146,7 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
     for (size_t i = 0; i + 2 < previewCircles->size(); i += 3) {
       const float pr = (*previewCircles)[i + 2];
       const int prevSegs =
-          CircleTessellationSegmentCount(static_cast<double>(pr), halfHd, fbHeight);
+          CircleTessellationSegmentCount(static_cast<double>(pr), halfHd, fbHeight, tuning.arcCircleSmoothnessCap);
       AppendCircleLineApprox(circleGeom, (*previewCircles)[i], (*previewCircles)[i + 1], pr, prevSegs, 0.032f,
                              viewAnchorX, viewAnchorY);
     }
