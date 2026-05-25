@@ -676,11 +676,23 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
                                    const std::vector<EntityAttributes>* lineEntityAttrs,
                                    const std::vector<EntityAttributes>* circleEntityAttrs,
                                    const CadExtendedGeometryInput* extended, bool showGrid,
-                                   const std::vector<CadLayerRow>* drawingLayers) {
+                                   const std::vector<CadLayerRow>* drawingLayers, const RenderTuning& tuning) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
-  const bool useMsaa = EnsureMultisamplePass(fbW_, fbH_);
+  // MSAA path is gated by "Hardware Acceleration" + "Smooth line display" (Settings → System → Graphics Performance).
+  const bool wantMsaa = tuning.hardwareAcceleration && tuning.smoothLineDisplay;
+  const bool useMsaa = wantMsaa && EnsureMultisamplePass(fbW_, fbH_);
+  if (!wantMsaa && msFbo_)
+    DestroyMultisamplePass();
+  // GL_LINE_SMOOTH is deprecated in core but supported by most drivers; it provides line antialiasing in the
+  // non-multisampled path. Gated by both toggles to match AutoCAD-style behavior.
+  if (tuning.hardwareAcceleration && tuning.smoothLineDisplay) {
+    glEnable(GL_LINE_SMOOTH);
+    glHint(GL_LINE_SMOOTH_HINT, GL_NICEST);
+  } else {
+    glDisable(GL_LINE_SMOOTH);
+  }
   glBindFramebuffer(GL_FRAMEBUFFER, (useMsaa && msFbo_) ? msFbo_ : fbo_);
   glViewport(0, 0, fbW_, fbH_);
   glDisable(GL_DEPTH_TEST);
@@ -950,8 +962,8 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
           const float lwMm = EffectiveEntityLineweightMm(attr, lr);
           maybeSplitCirc(vb, LineweightMmToDevicePx(lwMm));
           const float cr = circlesCxCyR[ci * 3 + 2];
-          const int circSegs =
-              CircleTessellationSegmentCount(static_cast<double>(cr), static_cast<double>(halfH), fbHeight);
+          const int circSegs = CircleTessellationSegmentCount(static_cast<double>(cr), static_cast<double>(halfH),
+                                                              fbHeight, tuning.arcCircleSmoothnessCap);
           AppendCircleVcDashed(cpuVcCircles_, circlesCxCyR[ci * 3], circlesCxCyR[ci * 3 + 1], cr,
                                circSegs, 0.f, dashPatScale, attr, lr, kCircDefaultR, kCircDefaultG, kCircDefaultB,
                                viewAnchorX, viewAnchorY);
@@ -1030,8 +1042,8 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
     std::vector<float> hlCircGeom;
     for (size_t i = 0; i + 2 < highlightCircles->size(); i += 3) {
       const float hr = (*highlightCircles)[i + 2];
-      const int hlSegs =
-          CircleTessellationSegmentCount(static_cast<double>(hr), static_cast<double>(halfH), fbHeight);
+      const int hlSegs = CircleTessellationSegmentCount(static_cast<double>(hr), static_cast<double>(halfH), fbHeight,
+                                                        tuning.arcCircleSmoothnessCap);
       AppendCircleLineApprox(hlCircGeom, (*highlightCircles)[i], (*highlightCircles)[i + 1], hr, hlSegs, 0.018f,
                              viewAnchorX, viewAnchorY);
     }
@@ -1103,7 +1115,7 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
     for (size_t i = 0; i + 2 < previewCircles->size(); i += 3) {
       const float pr = (*previewCircles)[i + 2];
       const int prevSegs =
-          CircleTessellationSegmentCount(static_cast<double>(pr), halfHd, fbHeight);
+          CircleTessellationSegmentCount(static_cast<double>(pr), halfHd, fbHeight, tuning.arcCircleSmoothnessCap);
       AppendCircleLineApprox(circleGeom, (*previewCircles)[i], (*previewCircles)[i + 1], pr, prevSegs, 0.032f,
                              viewAnchorX, viewAnchorY);
     }

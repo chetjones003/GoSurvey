@@ -81,7 +81,8 @@ void CirclePointViewRel(double localCx, double localCy, double anchorX, double a
   *relY = static_cast<float>(rcy + r * s);
 }
 
-int CircleTessellationSegmentCount(double radiusWorld, double orthoHalfHeightWorld, int framebufferHeightPx) {
+int CircleTessellationSegmentCount(double radiusWorld, double orthoHalfHeightWorld, int framebufferHeightPx,
+                                   int maxSegmentCap) {
   if (radiusWorld <= 1e-12)
     return 0;
   const double halfH = std::max(orthoHalfHeightWorld, 1e-12);
@@ -91,7 +92,8 @@ int CircleTessellationSegmentCount(double radiusWorld, double orthoHalfHeightWor
   constexpr double kTwoPi = 6.283185307179586;
   constexpr double kTargetChordPx = 4.0;
   const int segs = static_cast<int>(std::ceil(kTwoPi * rPix / kTargetChordPx));
-  return std::clamp(segs, 24, 512);
+  const int upper = std::clamp(maxSegmentCap, 8, 20000);
+  return std::clamp(segs, 24, upper);
 }
 
 void CirclePointWorld(double cx, double cy, double r, double angleRad, double* outX, double* outY) {

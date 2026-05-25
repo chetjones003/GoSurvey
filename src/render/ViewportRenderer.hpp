@@ -6,6 +6,14 @@
 #include <cstdint>
 #include <vector>
 
+/// Render-time tuning sourced from Settings → Display / System (AutoCAD Options analog).
+/// Defaults match prior unconditional behavior so call sites that omit this stay backward-compatible.
+struct RenderTuning {
+  int arcCircleSmoothnessCap = 512; ///< Display → Display resolution: max segments per full circle (VIEWRES).
+  bool hardwareAcceleration = true; ///< System → Hardware Acceleration: when off, MSAA path is skipped.
+  bool smoothLineDisplay = true;    ///< Graphics Performance → Smooth line display: GL_LINE_SMOOTH + MSAA.
+};
+
 class ViewportRenderer {
 public:
   bool Init();
@@ -34,7 +42,7 @@ public:
                    const std::vector<EntityAttributes>* lineEntityAttrs,
                    const std::vector<EntityAttributes>* circleEntityAttrs,
                    const CadExtendedGeometryInput* extended, bool showGrid,
-                   const std::vector<CadLayerRow>* drawingLayers);
+                   const std::vector<CadLayerRow>* drawingLayers, const RenderTuning& tuning = RenderTuning{});
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 

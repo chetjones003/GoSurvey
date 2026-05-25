@@ -1026,6 +1026,75 @@ struct AppCommandState {
   float viewportCrosshairPickHalfPxY = 4.f;
   float viewportCrosshairHairPx = 1.f;
 
+  // ---------------------------------------------------------------------------------------------------------
+  // Settings (AutoCAD-style Options dialog). Live tab is preserved across opens/closes via settingsActiveTabIdx.
+  // The fields below are persistent UI/render preferences accessed from DrawSettingsPanel and consumed by the
+  // renderer + tessellator. Names try to mirror AutoCAD VIEWRES/Options labels so they read naturally.
+  // ---------------------------------------------------------------------------------------------------------
+  int settingsActiveTabIdx = 1; ///< 0=Files 1=Display 2=Open and Save 3=Plot 4=System 5=User Prefs 6=Drafting 7=3D 8=Selection 9=Profiles 10=AEC
+
+  // Display tab — Display resolution. Wired: arcCircleSmoothness caps CircleTessellationSegmentCount.
+  int displayArcCircleSmoothness = 1000;       ///< Max segments per full circle (1..20000). AutoCAD VIEWRES analog.
+  int displayPolylineCurveSegments = 8;        ///< Placeholder; current pipeline uses pixel-chord adaptive segments.
+  float displayRenderedObjectSmoothness = 0.5f;///< Placeholder (3D-style smoothness factor).
+  int displayContourLinesPerSurface = 4;       ///< Placeholder.
+
+  // Display tab — Display performance. Placeholders (UI only).
+  bool displayPanZoomWithRaster = false;
+  bool displayHighlightRasterFrameOnly = true;
+  bool displayApplySolidFill = true;
+  bool displayShowTextBoundaryFrameOnly = false;
+  bool displayDrawTrueSilhouettes = false;
+
+  // Display tab — Window Elements (placeholders + theme tag).
+  int displayColorThemeIdx = 0; ///< 0=Dark, 1=Light. Currently visual placeholder.
+  bool displayScrollbars = false;
+  bool displayLargeToolbarButtons = false;
+  bool displayResizeRibbonIcons = true;
+  bool displayShowTooltips = true;
+  float displayTooltipDelaySec = 1.0f;
+  bool displayShowShortcutKeysInTooltips = true;
+  bool displayShowExtendedTooltips = true;
+  float displayExtendedTooltipDelaySec = 2.0f;
+  bool displayShowRolloverTooltips = true;
+  bool displayShowFileTabs = true;
+
+  // Display tab — Layout elements (placeholders).
+  bool displayLayoutAndModelTabs = true;
+  bool displayPrintableArea = true;
+  bool displayPaperBackground = true;
+  bool displayPaperShadow = true;
+  bool displayPageSetupOnNewLayouts = false;
+  bool displayCreateViewportInNewLayouts = true;
+
+  // Display tab — Crosshair size (1..100, % of viewport min axis). Mirrors AutoCAD CURSORSIZE.
+  int displayCrosshairSizePct = 5;
+
+  // Display tab — Fade control (placeholders).
+  int displayFadeXref = 50;
+  int displayFadeInPlace = 70;
+
+  // System tab — Hardware acceleration toggle, drives MSAA + line smoothing.
+  bool systemHardwareAcceleration = true;
+  bool systemAutoCheckCertificationUpdate = true;
+  bool systemDisplayOLETextSizeDialog = true;
+  bool systemBeepOnError = false;
+  bool systemAllowLongSymbolNames = true;
+  bool systemAccessOnlineContent = true;
+  bool systemStoreLinksIndexInDrawing = true;
+  bool systemOpenTablesReadOnly = false;
+  int systemLayoutRegenOption = 0; ///< 0=Regen on switch, 1=Cache model+last, 2=Cache model+all.
+
+  // System → Graphics Performance sub-dialog.
+  bool showGraphicsPerformanceDialog = false;
+  bool gfxSmoothLineDisplay = true;            ///< Wired: GL_LINE_SMOOTH + MSAA when systemHardwareAcceleration on.
+  bool gfxAcceleratedFontDisplay = true;       ///< Placeholder (font rasterization through ImGui is already GPU).
+  int gfxVideoMemoryCachingLevel = 5;          ///< Placeholder 1..5.
+  bool gfx3dFastShadedMode = true;             ///< Placeholders (no 3D pipeline).
+  bool gfx3dAdvancedMaterialEffects = true;
+  bool gfx3dFullShadowDisplay = true;
+  bool gfx3dPerPixelLighting = true;
+
   bool createPointsPlacementActive = false;
 
   /// Editable ID strings for VIEWPOINTS table rows (synced from point IDs when empty).

@@ -20,9 +20,10 @@ void WorldToViewRelativeFloat(double worldX, double worldY, double anchorX, doub
 void CirclePointViewRel(double localCx, double localCy, double anchorX, double anchorY, double r, double angleRad,
                         float* relX, float* relY);
 
-/// Circle/arc chord count from on-screen size (~8 px per segment, clamped).
+/// Circle/arc chord count from on-screen size (~4 px per segment, clamped).
+/// \param maxSegmentCap upper clamp on returned segment count (AutoCAD-style "Arc and circle smoothness" / VIEWRES).
 [[nodiscard]] int CircleTessellationSegmentCount(double radiusWorld, double orthoHalfHeightWorld,
-                                                 int framebufferHeightPx);
+                                                 int framebufferHeightPx, int maxSegmentCap = 512);
 
 /// Point on a circle in world space (double precision: center + radius * trig).
 void CirclePointWorld(double cx, double cy, double r, double angleRad, double* outX, double* outY);
