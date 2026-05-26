@@ -815,6 +815,7 @@ const CmdEntry kRegistry[] = {
     {"regen", "re"},
     {"layer", "la"},
     {"pdfattach", "pa"},
+    {"overkill",  "ok"},
 };
 
 bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vector<std::string>& log);
@@ -1210,7 +1211,7 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     log.push_back(
         "LINE (L), POLYLINE (PL, CLOSE to close), ARC (3-point), ELLIPSE (center, axis end, ratio), TEXT, MTEXT, "
         "DIMALIGNED (DAL), DIMLINEAR (DLI), DIMANGULAR (DAN), ID, INVERSE (INV), CIRCLE (C), MOVE (M), COPY (CP), ROTATE (RO), SCALE (SC), DELETE (DEL), OFFSET (O), ZOOM (ZE/ZW), "
-        "PLOTSCALE "
+        "OVERKILL (OK), PLOTSCALE "
         "(PSCALE), REGEN (RE), LAYER (LA). SURVEY: CRTPTS, VWPTS, IMPPTS, EXPPTS, INVERSE (INV). Idle: two-click box selects. ESC.");
     log.push_back(
         "LINE: @dx,dy from anchor; A or ANGLE alone then bearing on next line (blank Enter cancels); A<bearing> (+ "
@@ -1222,7 +1223,12 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
         "(World X=E, Y=N); logs dE, dN, distance, bearing in deg/min/sec and decimal deg CW from north. DELETE / ZW use unsnapped "
         "windows. TRIM "
         "matches Civil 3D: cutting edges, Enter, trim clicks. OFFSET: pick entity, distance + side or through-click "
-        "(line/circle/arc). ZE fits geometry.");
+        "(line/circle/arc). ZE fits geometry. OVERKILL: remove zero-length/duplicate/overlapping lines, merge "
+        "collinear overlapping lines, remove arcs over circles, deduplicate circles and arcs — operates on entire drawing.");
+    return true;
+  }
+  if (primary == "overkill") {
+    ExecuteOverkill(st, log);
     return true;
   }
   return false;
@@ -7362,6 +7368,425 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("JOIN — nothing merged.");
 }
 
+// =============================================================================
+// OVERKILL — batch cleanup of the entire drawing.
+//   • Lines: delete zero-length, exact duplicates, merge collinear overlapping
+//            / contiguous segments into the shortest covering segment.
+//   • Circles: delete exact duplicates (same center + radius).
+//   • Arcs: delete arcs whose circle matches an existing full circle; delete
+//           exact duplicate arcs (same center/radius/start/sweep).
+//   • Polylines: remove zero-length (coincident) vertex steps.
+// Tolerance is auto-derived from drawing extents (1e-4 × span, min 1e-6).
+// =============================================================================
+void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
+  // ── tolerance ────────────────────────────────────────────────────────────
+  float tol = 1e-3f;
+  {
+    double mnX = 0., mxX = 0., mnY = 0., mxY = 0.;
+    if (ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
+      tol = std::max(1e-6f, static_cast<float>(1e-4 * std::max(mxX - mnX, mxY - mnY)));
+  }
+  const float tolSq = tol * tol;
+  int nRemoved = 0;
+
+  // =========================================================================
+  // 1. LINE SEGMENTS
+  // =========================================================================
+  {
+    struct LSeg { float x0, y0, x1, y1; EntityAttributes attr; };
+
+    // Snapshot into a working vector that carries attrs
+    const size_t nL = st.userLinesFlat.size() / 6;
+    std::vector<LSeg> segs;
+    segs.reserve(nL);
+    for (size_t i = 0; i < nL; ++i) {
+      const size_t k = i * 6;
+      segs.push_back({ st.userLinesFlat[k],     st.userLinesFlat[k + 1],
+                       st.userLinesFlat[k + 3], st.userLinesFlat[k + 4],
+                       i < st.userLineAttrs.size() ? st.userLineAttrs[i] : MakeNewEntityAttrs(st) });
+    }
+
+    // ── 1a. Zero-length segments ──────────────────────────────────────────
+    {
+      const size_t before = segs.size();
+      segs.erase(std::remove_if(segs.begin(), segs.end(),
+                                [&](const LSeg& s) {
+                                  const float dx = s.x1 - s.x0, dy = s.y1 - s.y0;
+                                  return dx * dx + dy * dy < tolSq;
+                                }),
+                 segs.end());
+      nRemoved += static_cast<int>(before - segs.size());
+    }
+
+    // Canonicalize direction so that any reversed duplicate looks identical:
+    // ensure dx > 0, or (dx ≈ 0 and dy > 0), by swapping P0↔P1 if needed.
+    for (auto& s : segs) {
+      const float dx = s.x1 - s.x0, dy = s.y1 - s.y0;
+      if (dx < 0.f || (std::fabs(dx) < 1e-12f && dy < 0.f)) {
+        std::swap(s.x0, s.x1);
+        std::swap(s.y0, s.y1);
+      }
+    }
+
+    // ── 1b. Exact duplicates ─────────────────────────────────────────────
+    // Sort by (x0, y0, x1, y1); compare adjacent clusters within tol.
+    {
+      std::sort(segs.begin(), segs.end(), [](const LSeg& a, const LSeg& b) {
+        if (a.x0 != b.x0) return a.x0 < b.x0;
+        if (a.y0 != b.y0) return a.y0 < b.y0;
+        if (a.x1 != b.x1) return a.x1 < b.x1;
+        return a.y1 < b.y1;
+      });
+      std::vector<bool> dead(segs.size(), false);
+      for (size_t i = 0; i + 1 < segs.size(); ++i) {
+        if (dead[i]) continue;
+        for (size_t j = i + 1; j < segs.size(); ++j) {
+          if (segs[j].x0 - segs[i].x0 > tol) break; // no more same-x0 candidates
+          if (dead[j]) continue;
+          const float dx0 = segs[j].x0 - segs[i].x0, dy0 = segs[j].y0 - segs[i].y0;
+          const float dx1 = segs[j].x1 - segs[i].x1, dy1 = segs[j].y1 - segs[i].y1;
+          if (dx0 * dx0 + dy0 * dy0 < tolSq && dx1 * dx1 + dy1 * dy1 < tolSq) {
+            dead[j] = true;
+            ++nRemoved;
+          }
+        }
+      }
+      std::vector<LSeg> kept;
+      kept.reserve(segs.size());
+      for (size_t i = 0; i < segs.size(); ++i)
+        if (!dead[i]) kept.push_back(std::move(segs[i]));
+      segs = std::move(kept);
+    }
+
+    // ── 1c. Collinear overlap / contiguous merge ──────────────────────────
+    // Two segments are merged when they are:
+    //   (a) parallel (|sin angle| < 0.001, ≈ 0.06°), AND
+    //   (b) collinear (perpendicular distance < tol), AND
+    //   (c) overlapping or touching (1-D intervals on shared axis overlap or touch within tol).
+    // Union-Find groups them; within each group, project onto canonical direction,
+    // merge the 1-D interval cover, and emit the minimal set of segments.
+    {
+      const int n = static_cast<int>(segs.size());
+      std::vector<int> par(static_cast<size_t>(n));
+      std::iota(par.begin(), par.end(), 0);
+
+      // Iterative union-find with path halving
+      auto find = [&](int x) {
+        while (par[x] != x) { par[x] = par[par[x]]; x = par[x]; }
+        return x;
+      };
+      auto unite = [&](int a, int b) { par[find(a)] = find(b); };
+
+      for (int i = 0; i < n; ++i) {
+        const float dxi = segs[i].x1 - segs[i].x0;
+        const float dyi = segs[i].y1 - segs[i].y0;
+        const float li  = std::sqrt(dxi * dxi + dyi * dyi);
+        if (li < 1e-12f) continue;
+        const float uxi = dxi / li, uyi = dyi / li;
+
+        for (int j = i + 1; j < n; ++j) {
+          if (find(i) == find(j)) continue; // already same group
+
+          const float dxj = segs[j].x1 - segs[j].x0;
+          const float dyj = segs[j].y1 - segs[j].y0;
+          const float lj  = std::sqrt(dxj * dxj + dyj * dyj);
+          if (lj < 1e-12f) continue;
+          const float uxj = dxj / lj, uyj = dyj / lj;
+
+          // (a) Parallel?
+          if (std::fabs(uxi * uyj - uyi * uxj) > 0.001f) continue;
+
+          // (b) Collinear? — perpendicular distance from j.P0 to line through i
+          {
+            const float vx = segs[j].x0 - segs[i].x0;
+            const float vy = segs[j].y0 - segs[i].y0;
+            if (std::fabs(vx * uyi - vy * uxi) > tol) continue;
+          }
+
+          // (c) Overlap or touch along uxi,uyi?
+          {
+            const float tj0 = (segs[j].x0 - segs[i].x0) * uxi + (segs[j].y0 - segs[i].y0) * uyi;
+            const float tj1 = (segs[j].x1 - segs[i].x0) * uxi + (segs[j].y1 - segs[i].y0) * uyi;
+            const float jMin = std::min(tj0, tj1);
+            const float jMax = std::max(tj0, tj1);
+            if (jMax < -tol || jMin > li + tol) continue;
+          }
+
+          unite(i, j);
+        }
+      }
+
+      // Group segments by their union-find root
+      std::unordered_map<int, std::vector<int>> groups;
+      groups.reserve(static_cast<size_t>(n));
+      for (int i = 0; i < n; ++i)
+        groups[find(i)].push_back(i);
+
+      std::vector<LSeg> result;
+      result.reserve(static_cast<size_t>(n));
+
+      for (auto& [root, members] : groups) {
+        (void)root;
+        if (members.size() == 1) {
+          result.push_back(std::move(segs[static_cast<size_t>(members[0])]));
+          continue;
+        }
+
+        // Pick canonical direction from the longest member
+        int best = members[0];
+        float bestLen = 0.f;
+        for (int idx : members) {
+          const float dx = segs[idx].x1 - segs[idx].x0, dy = segs[idx].y1 - segs[idx].y0;
+          const float l = std::sqrt(dx * dx + dy * dy);
+          if (l > bestLen) { bestLen = l; best = idx; }
+        }
+        const float dxb = segs[best].x1 - segs[best].x0;
+        const float dyb = segs[best].y1 - segs[best].y0;
+        const float lb  = std::sqrt(dxb * dxb + dyb * dyb);
+        if (lb < 1e-12f) { nRemoved += static_cast<int>(members.size()); continue; }
+        const float ux = dxb / lb, uy = dyb / lb;
+        const float ox = segs[best].x0, oy = segs[best].y0;
+
+        // Project each member's endpoints onto the canonical axis
+        struct Iv { float t0, t1; int idx; };
+        std::vector<Iv> ivs;
+        ivs.reserve(members.size());
+        for (int idx : members) {
+          const float ta = (segs[idx].x0 - ox) * ux + (segs[idx].y0 - oy) * uy;
+          const float tb = (segs[idx].x1 - ox) * ux + (segs[idx].y1 - oy) * uy;
+          ivs.push_back({ std::min(ta, tb), std::max(ta, tb), idx });
+        }
+        std::sort(ivs.begin(), ivs.end(), [](const Iv& a, const Iv& b) { return a.t0 < b.t0; });
+
+        // Sweep through intervals and merge overlapping/touching ones
+        struct Mv { float t0, t1; int idx; }; // idx carries representative attrs
+        std::vector<Mv> merged;
+        merged.reserve(ivs.size());
+        for (const auto& iv : ivs) {
+          if (merged.empty() || iv.t0 > merged.back().t1 + tol)
+            merged.push_back({ iv.t0, iv.t1, iv.idx });
+          else if (iv.t1 > merged.back().t1)
+            merged.back().t1 = iv.t1;
+        }
+
+        // members.size() originals → merged.size() outputs; log net removal
+        nRemoved += static_cast<int>(members.size()) - static_cast<int>(merged.size());
+
+        for (const auto& m : merged) {
+          LSeg nl;
+          nl.x0   = ox + ux * m.t0;  nl.y0 = oy + uy * m.t0;
+          nl.x1   = ox + ux * m.t1;  nl.y1 = oy + uy * m.t1;
+          nl.attr = segs[static_cast<size_t>(m.idx)].attr;
+          result.push_back(std::move(nl));
+        }
+      }
+
+      segs = std::move(result);
+    }
+
+    // Write back
+    st.userLinesFlat.clear();
+    st.userLineAttrs.clear();
+    st.userLinesFlat.reserve(segs.size() * 6);
+    st.userLineAttrs.reserve(segs.size());
+    for (const auto& s : segs) {
+      st.userLinesFlat.insert(st.userLinesFlat.end(), { s.x0, s.y0, 0.f, s.x1, s.y1, 0.f });
+      st.userLineAttrs.push_back(s.attr);
+    }
+  }
+
+  // =========================================================================
+  // 2. CIRCLES — remove exact duplicates (same center + radius)
+  // =========================================================================
+  {
+    const size_t nC = st.userCirclesCxCyR.size() / 3;
+    struct Circ { float cx, cy, r; EntityAttributes attr; };
+    std::vector<Circ> cs;
+    cs.reserve(nC);
+    for (size_t i = 0; i < nC; ++i) {
+      const size_t k = i * 3;
+      cs.push_back({ st.userCirclesCxCyR[k], st.userCirclesCxCyR[k + 1], st.userCirclesCxCyR[k + 2],
+                     i < st.userCircleAttrs.size() ? st.userCircleAttrs[i] : MakeNewEntityAttrs(st) });
+    }
+    // Sort by radius then center; allows early break on radius mismatch
+    std::sort(cs.begin(), cs.end(), [](const Circ& a, const Circ& b) {
+      if (a.r != b.r) return a.r < b.r;
+      if (a.cx != b.cx) return a.cx < b.cx;
+      return a.cy < b.cy;
+    });
+    std::vector<bool> dead(cs.size(), false);
+    for (size_t i = 0; i + 1 < cs.size(); ++i) {
+      if (dead[i]) continue;
+      for (size_t j = i + 1; j < cs.size(); ++j) {
+        if (cs[j].r - cs[i].r > tol) break; // sorted by r; no more matching radii
+        if (dead[j]) continue;
+        const float dx = cs[j].cx - cs[i].cx, dy = cs[j].cy - cs[i].cy;
+        const float dr = cs[j].r  - cs[i].r;
+        if (dx * dx + dy * dy < tolSq && dr * dr < tolSq) { dead[j] = true; ++nRemoved; }
+      }
+    }
+    st.userCirclesCxCyR.clear();
+    st.userCircleAttrs.clear();
+    for (size_t i = 0; i < cs.size(); ++i) {
+      if (!dead[i]) {
+        st.userCirclesCxCyR.push_back(cs[i].cx);
+        st.userCirclesCxCyR.push_back(cs[i].cy);
+        st.userCirclesCxCyR.push_back(cs[i].r);
+        st.userCircleAttrs.push_back(cs[i].attr);
+      }
+    }
+  }
+
+  // =========================================================================
+  // 3. ARCS
+  //   3a. Delete arcs whose (center, radius) matches an existing full circle.
+  //   3b. Delete exact duplicate arcs (same center/radius/startRad/sweepRad).
+  // =========================================================================
+  {
+    const size_t nA = st.userArcs.size();
+    const size_t nC = st.userCirclesCxCyR.size() / 3;
+    std::vector<bool> dead(nA, false);
+
+    // 3a — arcs over full circles
+    for (size_t i = 0; i < nA; ++i) {
+      if (dead[i]) continue;
+      const CadArc& a = st.userArcs[i];
+      for (size_t c = 0; c < nC; ++c) {
+        const float dx = a.cx - st.userCirclesCxCyR[c * 3];
+        const float dy = a.cy - st.userCirclesCxCyR[c * 3 + 1];
+        const float dr = a.r  - st.userCirclesCxCyR[c * 3 + 2];
+        if (dx * dx + dy * dy < tolSq && dr * dr < tolSq) { dead[i] = true; ++nRemoved; break; }
+      }
+    }
+
+    // 3b — exact duplicate arcs
+    // Normalize startRad to [0, 2π) for comparison
+    constexpr float kTwoPi = 2.f * 3.14159265358979f;
+    auto normAngle = [&](float a) -> float {
+      a = std::fmod(a, kTwoPi);
+      if (a < 0.f) a += kTwoPi;
+      return a;
+    };
+    constexpr float kAngTol = 1e-4f; // ≈ 0.006°
+    for (size_t i = 0; i < nA; ++i) {
+      if (dead[i]) continue;
+      const CadArc& a = st.userArcs[i];
+      const float aStart = normAngle(a.startRad);
+      for (size_t j = i + 1; j < nA; ++j) {
+        if (dead[j]) continue;
+        const CadArc& b = st.userArcs[j];
+        const float dxC = a.cx - b.cx, dyC = a.cy - b.cy, drR = a.r - b.r;
+        if (dxC * dxC + dyC * dyC >= tolSq || drR * drR >= tolSq) continue;
+        const float dStart = std::fabs(aStart - normAngle(b.startRad));
+        const float dSweep = std::fabs(a.sweepRad - b.sweepRad);
+        // Handle 0 vs 2π wrap for start angle
+        const float dStartW = std::min(dStart, std::fabs(dStart - kTwoPi));
+        if (dStartW < kAngTol && dSweep < kAngTol) { dead[j] = true; ++nRemoved; }
+      }
+    }
+
+    std::vector<CadArc>           newArcs;
+    std::vector<EntityAttributes> newArcAttrs;
+    newArcs.reserve(nA);
+    newArcAttrs.reserve(nA);
+    for (size_t i = 0; i < nA; ++i) {
+      if (!dead[i]) {
+        newArcs.push_back(st.userArcs[i]);
+        newArcAttrs.push_back(i < st.userArcAttrs.size() ? st.userArcAttrs[i] : MakeNewEntityAttrs(st));
+      }
+    }
+    st.userArcs     = std::move(newArcs);
+    st.userArcAttrs = std::move(newArcAttrs);
+  }
+
+  // =========================================================================
+  // 4. POLYLINES — remove zero-length (coincident) vertex steps
+  // =========================================================================
+  {
+    const int nP = static_cast<int>(st.userPolylineOffsets.size()) > 0
+                     ? static_cast<int>(st.userPolylineOffsets.size()) - 1
+                     : 0;
+    // Collect polylines to erase (those that become degenerate after cleanup).
+    // Iterate high→low so earlier polyline offsets stay valid while we mutate.
+    std::vector<int> polyToErase;
+
+    for (int pi = nP - 1; pi >= 0; --pi) {
+      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      if (v1 - v0 < 2) { polyToErase.push_back(pi); continue; }
+
+      const bool closed = static_cast<size_t>(pi) < st.userPolylineClosed.size() &&
+                          st.userPolylineClosed[static_cast<size_t>(pi)];
+
+      // Collect this polyline's vertices
+      std::vector<std::pair<float, float>> verts;
+      verts.reserve(static_cast<size_t>(v1 - v0));
+      for (int vi = v0; vi < v1; ++vi) {
+        verts.push_back({ st.userPolylineVerts[static_cast<size_t>(vi * 3)],
+                          st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)] });
+      }
+
+      // Remove consecutive duplicate vertices (zero-length steps)
+      std::vector<std::pair<float, float>> clean;
+      clean.reserve(verts.size());
+      clean.push_back(verts[0]);
+      for (size_t k = 1; k < verts.size(); ++k) {
+        const float dx = verts[k].first  - clean.back().first;
+        const float dy = verts[k].second - clean.back().second;
+        if (dx * dx + dy * dy >= tolSq)
+          clean.push_back(verts[k]);
+        else
+          ++nRemoved;
+      }
+      // For closed polylines, also remove zero-length wrap (last vertex ≈ first)
+      if (closed) {
+        while (clean.size() >= 2) {
+          const float dx = clean.back().first  - clean.front().first;
+          const float dy = clean.back().second - clean.front().second;
+          if (dx * dx + dy * dy < tolSq) { clean.pop_back(); ++nRemoved; }
+          else break;
+        }
+      }
+
+      if (clean.size() < 2)   { polyToErase.push_back(pi); continue; }
+      if (clean.size() == verts.size()) continue; // unchanged
+
+      // Replace the vertex slice [v0*3, v1*3) with cleaned data
+      const int nNew  = static_cast<int>(clean.size());
+      const int delta = nNew - (v1 - v0);
+      st.userPolylineVerts.erase(
+          st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0 * 3),
+          st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v1 * 3));
+
+      std::vector<float> newV;
+      newV.reserve(static_cast<size_t>(nNew * 3));
+      for (const auto& p : clean) { newV.push_back(p.first); newV.push_back(p.second); newV.push_back(0.f); }
+      st.userPolylineVerts.insert(
+          st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0 * 3),
+          newV.begin(), newV.end());
+
+      // Adjust all offsets after pi by the vertex delta
+      for (size_t oi = static_cast<size_t>(pi + 1); oi < st.userPolylineOffsets.size(); ++oi)
+        st.userPolylineOffsets[oi] += delta;
+    }
+
+    // polyToErase is in descending order (loop ran high→low, push_back is stable)
+    for (int pi : polyToErase)
+      ErasePolylineByIndex(st, pi);
+  }
+
+  // ── report ────────────────────────────────────────────────────────────────
+  st.selection.clear();
+  if (nRemoved > 0) {
+    BumpCadGpuCache(st);
+    char buf[128];
+    std::snprintf(buf, sizeof(buf), "OVERKILL — cleaned up %d object(s).", nRemoved);
+    log.push_back(buf);
+  } else {
+    log.push_back("OVERKILL — nothing to clean up.");
+  }
+}
+
 void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
@@ -8860,19 +9285,30 @@ void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::ve
       st.pdfAttachPhase != AppCommandState::PdfAttachPhase::WaitInsertPoint)
     return;
 
-  // Build the committed attachment at the picked world location.
   PdfAttachment att;
-  bool ok = PdfAttach_Build(st.pdfAttachFilePath,
-                             st.pdfAttachSelectedPage,
-                             st.pdfAttachRasterDpi,
-                             st.pdfAttachSnapLines,
-                             st.pdfAttachSnapCircles,
-                             st.pdfAttachSnapText,
-                             att);
+  bool ok = false;
+
+  if (st.pdfAttachPreviewReady) {
+    // Reuse the attachment already built by the async path — no rebuild needed.
+    att                      = std::move(st.pdfAttachPreview);
+    st.pdfAttachPreviewReady = false;
+    ok                       = true;
+  } else {
+    // Fallback: synchronous build (should rarely happen — e.g. if the user
+    // somehow reaches WaitInsertPoint without the async build completing).
+    ok = PdfAttach_Build(st.pdfAttachFilePath,
+                          st.pdfAttachSelectedPage,
+                          st.pdfAttachRasterDpi,
+                          st.pdfAttachSnapLines,
+                          st.pdfAttachSnapCircles,
+                          st.pdfAttachSnapText,
+                          att);
+  }
+
   if (ok) {
-    att.insertX    = wx;
-    att.insertY    = wy;
-    att.scale      = st.pdfAttachScale;
+    att.insertX     = wx;
+    att.insertY     = wy;
+    att.scale       = st.pdfAttachScale;
     att.rotationDeg = st.pdfAttachRotDeg;
     const int nSnapLines   = static_cast<int>(att.snapLinesFlat.size())    / 4;
     const int nSnapCircles = static_cast<int>(att.snapCirclesCxCyR.size()) / 3;
@@ -8887,11 +9323,6 @@ void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::ve
     log.push_back("PDFATTACH — failed to rasterize page.");
   }
 
-  // Release preview texture and reset to idle.
-  if (st.pdfAttachPreviewReady) {
-    PdfAttach_ReleaseTexture(st.pdfAttachPreview);
-    st.pdfAttachPreviewReady = false;
-  }
   st.active         = AppCommandState::Kind::None;
   st.pdfAttachPhase = AppCommandState::PdfAttachPhase::WaitDialog;
 }

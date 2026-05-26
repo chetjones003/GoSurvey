@@ -5159,30 +5159,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           handled = true;
         }
       }
-      // PDF underlay hit-test (highest draw index = topmost wins)
-      if (!handled && !cmd.pdfAttachments.empty()) {
-        constexpr float kPiH = 3.14159265f;
-        for (int pi = static_cast<int>(cmd.pdfAttachments.size()) - 1; pi >= 0; --pi) {
-          const PdfAttachment& patt = cmd.pdfAttachments[static_cast<size_t>(pi)];
-          if (patt.pageWidthPts <= 0.f || patt.pageHeightPts <= 0.f)
-            continue;
-          const float pW   = patt.pageWidthPts  * patt.scale;
-          const float pH   = patt.pageHeightPts * patt.scale;
-          const float angH = -patt.rotationDeg  * kPiH / 180.f;
-          const float cosH = std::cos(angH), sinH = std::sin(angH);
-          const float ddx  = rawPickXf - patt.insertX;
-          const float ddy  = rawPickYf - patt.insertY;
-          const float lxH  = ddx * cosH - ddy * sinH;
-          const float lyH  = ddx * sinH + ddy * cosH;
-          if (lxH >= 0.f && lxH <= pW && lyH >= 0.f && lyH <= pH) {
-            ClearCadSelection(cmd);
-            cmd.selectedSurveyPointIndices.clear();
-            cmd.selection.push_back({SelectedEntity::Type::PdfUnderlay, pi});
-            handled = true;
-            break;
-          }
-        }
-      }
+      // PDF underlays are selected via the standard 2-click box selection
+      // (ComputeSelectionFromRect handles PdfUnderlay hit testing).
 
       if (!handled) {
         if (!cmd.surveyPoints.empty()) {

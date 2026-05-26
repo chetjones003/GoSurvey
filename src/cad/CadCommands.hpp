@@ -1195,7 +1195,7 @@ struct AppCommandState {
 
   bool pdfAttachSnapLines   = true;
   bool pdfAttachSnapCircles = true;
-  bool pdfAttachSnapText    = true;
+  bool pdfAttachSnapText    = false; // text positions cause spurious endpoint snaps; disabled by default
 
   /// Opaque per-document draft cache (owned; freed when command ends or file changes).
   PdfDraftCache* pdfDraftCache = nullptr;
@@ -1517,6 +1517,11 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log);
 /// Join selected lines / polylines at coincident endpoints into polylines (window-select like DELETE).
 
 void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log);
+
+/// OVERKILL — remove zero-length segments, exact duplicates, collinear overlapping/contiguous lines
+/// (merged into one), duplicate circles/arcs, and arcs whose circle matches an existing full circle.
+/// Operates on the entire drawing immediately; no selection required.
+void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log);
 
 /// TRIM — pick cutting edges, Enter, trim clicks; or \p L then two points: draws the segment to trim (nearest edge),
 /// trims once at nearest crossing (fence disambiguates), then TRIM ends.
