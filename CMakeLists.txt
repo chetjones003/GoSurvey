@@ -141,6 +141,31 @@ target_link_libraries(GoSurvey PRIVATE
 if(WIN32)
   target_link_libraries(GoSurvey PRIVATE comdlg32)
   target_sources(GoSurvey PRIVATE src/platform/WinFrameControls.cpp)
+
+  # Windows.Data.Pdf via C++/WinRT (fast hardware-accelerated thumbnail path).
+  # Locate the cppwinrt headers in whichever Windows SDK version is installed.
+  file(GLOB _sdk_versions LIST_DIRECTORIES true
+       "C:/Program Files (x86)/Windows Kits/10/Include/10.*")
+  list(SORT _sdk_versions ORDER DESCENDING)
+  foreach(_sdk_ver ${_sdk_versions})
+    if(EXISTS "${_sdk_ver}/cppwinrt/winrt/windows.data.pdf.h")
+      target_include_directories(GoSurvey PRIVATE "${_sdk_ver}/cppwinrt")
+      target_link_libraries(GoSurvey PRIVATE runtimeobject Windowscodecs)
+      target_compile_definitions(GoSurvey PRIVATE PDF_WINRT_ENABLED)
+      # C++/WinRT requires C++20 <coroutine> (not available in the C++17
+      # experimental path used by older MSVC).  Compile only PdfAttach.cpp
+      # at /std:c++20 so the rest of the project stays on C++17.
+      if(MSVC)
+        set_source_files_properties(src/pdf/PdfAttach.cpp PROPERTIES
+          COMPILE_OPTIONS "/std:c++20")
+      else()
+        set_source_files_properties(src/pdf/PdfAttach.cpp PROPERTIES
+          COMPILE_OPTIONS "-std=c++20")
+      endif()
+      message(STATUS "Windows.Data.Pdf WinRT support enabled (SDK ${_sdk_ver})")
+      break()
+    endif()
+  endforeach()
 endif()
 target_compile_definitions(GoSurvey PRIVATE GLEW_STATIC)
 
