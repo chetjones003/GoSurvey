@@ -814,6 +814,7 @@ const CmdEntry kRegistry[] = {
     {"help", ""},
     {"regen", "re"},
     {"layer", "la"},
+    {"pdfattach", "pa"},
 };
 
 bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vector<std::string>& log);
@@ -1544,6 +1545,47 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
     }
   }
 
+  // PDF underlays: hit if the rotated bounding box intersects/is-contained-by the selection rect.
+  constexpr float kPdfPi = 3.14159265f;
+  for (int pi = 0; pi < static_cast<int>(st.pdfAttachments.size()); ++pi) {
+    const PdfAttachment& patt = st.pdfAttachments[static_cast<size_t>(pi)];
+    if (patt.pageWidthPts <= 0.f || patt.pageHeightPts <= 0.f)
+      continue;
+    const float W    = patt.pageWidthPts  * patt.scale;
+    const float H    = patt.pageHeightPts * patt.scale;
+    const float cosR = std::cos(patt.rotationDeg * kPdfPi / 180.f);
+    const float sinR = std::sin(patt.rotationDeg * kPdfPi / 180.f);
+    // Four corners in world space.
+    float cx[4] = {
+      patt.insertX,
+      patt.insertX + W * cosR,
+      patt.insertX + W * cosR - H * sinR,
+      patt.insertX - H * sinR
+    };
+    float cy[4] = {
+      patt.insertY,
+      patt.insertY + W * sinR,
+      patt.insertY + W * sinR + H * cosR,
+      patt.insertY + H * cosR
+    };
+    float pmnX = cx[0], pmxX = cx[0], pmnY = cy[0], pmxY = cy[0];
+    for (int k = 1; k < 4; ++k) {
+      pmnX = std::min(pmnX, cx[k]); pmxX = std::max(pmxX, cx[k]);
+      pmnY = std::min(pmnY, cy[k]); pmxY = std::max(pmxY, cy[k]);
+    }
+    bool hit = false;
+    if (windowMode)
+      hit = pmnX >= mnX && pmxX <= mxX && pmnY >= mnY && pmxY <= mxY;
+    else
+      hit = !(pmxX < mnX || pmnX > mxX || pmxY < mnY || pmnY > mxY);
+    if (hit) {
+      SelectedEntity e{};
+      e.type  = SelectedEntity::Type::PdfUnderlay;
+      e.index = pi;
+      hits.push_back(e);
+    }
+  }
+
   if (subtract) {
     std::vector<SelectedEntity> kept;
     kept.reserve(st.selection.size());
@@ -2088,6 +2130,17 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
       a.insY = mnY;
     }
   }
+  // PDF underlays: rotate insertion point around base; accumulate rotation angle.
+  constexpr float kPdfRadToDeg = 180.f / 3.14159265f;
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::PdfUnderlay)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.pdfAttachments.size())
+      continue;
+    PdfAttachment& att = st.pdfAttachments[static_cast<size_t>(e.index)];
+    RotateAroundBase(bx, by, rad, &att.insertX, &att.insertY);
+    att.rotationDeg += rad * kPdfRadToDeg;
+  }
   ApplyRotationToSelectedSurveyPoints(st, bx, by, rad);
   BumpCadGpuCache(st);
 }
@@ -2170,6 +2223,15 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy) {
       a.dimExt2X += dx;
       a.dimExt2Y += dy;
     }
+  }
+  // PDF underlays: shift insertion point.
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::PdfUnderlay)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.pdfAttachments.size())
+      continue;
+    st.pdfAttachments[static_cast<size_t>(e.index)].insertX += dx;
+    st.pdfAttachments[static_cast<size_t>(e.index)].insertY += dy;
   }
   ApplyTranslationToSelectedSurveyPoints(st, dx, dy);
   BumpCadGpuCache(st);
@@ -2502,6 +2564,16 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc) {
       CadDimAngularSyncTextPlacement(&a, st.modelUnitsPerPlottedInch);
       CadDimRefreshMeasurementText(&a);
     }
+  }
+  // PDF underlays: scale insertion point around base; multiply uniform scale factor.
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::PdfUnderlay)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.pdfAttachments.size())
+      continue;
+    PdfAttachment& att = st.pdfAttachments[static_cast<size_t>(e.index)];
+    ScalePtAroundBase(bx, by, sc, &att.insertX, &att.insertY);
+    att.scale = std::max(att.scale * sc, 1e-9f);
   }
   ApplyScaleToSelectedSurveyPoints(st, bx, by, sc);
   BumpCadGpuCache(st);
@@ -5714,7 +5786,23 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
       st.userEllAttrs.erase(st.userEllAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
-  const size_t nDel = lineIx.size() + circIx.size() + annIx.size() + arcIx.size() + ellIx.size() + polyIx.size();
+  // PDF underlays: release GL texture and erase from highest index downward.
+  std::set<int> pdfIx;
+  const size_t nPdf = st.pdfAttachments.size();
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::PdfUnderlay && e.index >= 0 &&
+        static_cast<size_t>(e.index) < nPdf)
+      pdfIx.insert(e.index);
+  }
+  std::vector<int> pdfv(pdfIx.begin(), pdfIx.end());
+  std::sort(pdfv.begin(), pdfv.end(), std::greater<int>());
+  for (int idx : pdfv) {
+    PdfAttach_ReleaseTexture(st.pdfAttachments[static_cast<size_t>(idx)]);
+    st.pdfAttachments.erase(st.pdfAttachments.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  const size_t nDel = lineIx.size() + circIx.size() + annIx.size() + arcIx.size() + ellIx.size() +
+                      polyIx.size() + pdfIx.size();
   st.selection.clear();
   AbortMtextGripInteraction(st);
   ClearDimGripInteraction(st);
@@ -8810,6 +8898,16 @@ void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::ve
 
 void CancelPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back("PDFATTACH cancelled.");
+  // If a background build is running, detach it so Cancel returns immediately.
+  // The AsyncBuild owns the thread; move it out to a short-lived cleanup thread
+  // that waits for the render to finish before dropping the struct.
+  if (st.pdfAttachAsync) {
+    auto ab = std::move(st.pdfAttachAsync); // st.pdfAttachAsync is now null
+    std::thread([moved = std::move(ab)]() mutable {
+      if (moved && moved->thread.joinable())
+        moved->thread.join();
+    }).detach();
+  }
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::None;
 }

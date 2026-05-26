@@ -14,7 +14,10 @@
 // ---------------------------------------------------------------------------
 namespace {
 
-// Reload the draft cache if the path changed or if the cache is null.
+// Ensure a draft cache exists for the current path.
+// Called every frame while the dialog is open — cheap when the cache is already
+// present.  PdfDraftCache_Create now returns immediately and loads the document
+// on a background thread, so this function never blocks the main thread.
 static void EnsureDraftCache(AppCommandState& cmd) {
   if (!cmd.pdfAttachFilePath[0]) {
     if (cmd.pdfDraftCache) {
@@ -23,13 +26,15 @@ static void EnsureDraftCache(AppCommandState& cmd) {
     }
     return;
   }
-  // Already loaded for the current path? Nothing to do.
-  if (cmd.pdfDraftCache)
-    return;
-  cmd.pdfDraftCache = PdfDraftCache_Create(cmd.pdfAttachFilePath);
+  if (!cmd.pdfDraftCache) {
+    // Spawn the async loader — returns instantly.
+    cmd.pdfDraftCache = PdfDraftCache_Create(cmd.pdfAttachFilePath);
+  }
+  // Once loading finishes, clamp the selected page in case the previous value
+  // was out of range for this document.
   if (cmd.pdfDraftCache) {
-    const int total = PdfDraftCache_PageCount(cmd.pdfDraftCache);
-    if (cmd.pdfAttachSelectedPage >= total)
+    const int total = PdfDraftCache_PageCount(cmd.pdfDraftCache);  // 0 until ready
+    if (total > 0 && cmd.pdfAttachSelectedPage >= total)
       cmd.pdfAttachSelectedPage = 0;
   }
 }
@@ -104,6 +109,10 @@ static void DrawThumbnailStrip(AppCommandState& cmd) {
       cmd.pdfAttachSelectedPage = pi;
   }
   ImGui::EndChild();
+
+  // Progressive thumbnail loading: rasterize one pending page per frame.
+  // This spreads the work across frames so the UI never hitches.
+  PdfDraftCache_TickThumb(cmd.pdfDraftCache);
 }
 
 // One parameter row: label, float input, and optional "Pick" button.
@@ -225,10 +234,19 @@ bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log) {
     EnsureDraftCache(cmd);
   }
 
-  // Status line (page count).
+  // Status line — reflects async load state.
   if (cmd.pdfDraftCache) {
-    const int total = PdfDraftCache_PageCount(cmd.pdfDraftCache);
-    ImGui::TextDisabled("%d page%s", total, total == 1 ? "" : "s");
+    if (PdfDraftCache_IsLoading(cmd.pdfDraftCache)) {
+      // Animate a simple "Loading..." spinner using elapsed time.
+      const char* kSpinner[] = { "|", "/", "-", "\\" };
+      const int   spin = static_cast<int>(ImGui::GetTime() * 8.0) & 3;
+      ImGui::TextDisabled("Loading PDF...  %s", kSpinner[spin]);
+    } else if (PdfDraftCache_IsFailed(cmd.pdfDraftCache)) {
+      ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Unable to open PDF.");
+    } else {
+      const int total = PdfDraftCache_PageCount(cmd.pdfDraftCache);
+      ImGui::TextDisabled("%d page%s", total, total == 1 ? "" : "s");
+    }
   } else if (cmd.pdfAttachFilePath[0]) {
     ImGui::TextColored(ImVec4(1.f, 0.4f, 0.4f, 1.f), "Unable to open PDF.");
   }
@@ -282,50 +300,98 @@ bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log) {
   ImGui::Separator();
   ImGui::Spacing();
 
+  // --- Building phase: rasterize running in background ---
+  if (cmd.pdfAttachPhase == Ph::Building && cmd.pdfAttachAsync) {
+    auto& ab = *cmd.pdfAttachAsync;
+    const char* kSpinner[] = { "|", "/", "-", "\\" };
+    const int   spin = static_cast<int>(ImGui::GetTime() * 8.0) & 3;
+    ImGui::TextDisabled("Rasterizing...  %s", kSpinner[spin]);
+
+    if (ab.done.load(std::memory_order_acquire)) {
+      // Background thread finished — upload texture on main thread.
+      PdfAttachment att;
+      const bool ok = PdfAttach_FinishBuild(ab.result, cmd.pdfAttachFilePath,
+                                             cmd.pdfAttachSelectedPage, att);
+      if (ab.thread.joinable()) ab.thread.join();
+      cmd.pdfAttachAsync.reset();
+
+      if (ok) {
+        if (ab.specifyInsert) {
+          // Store the built attachment in the preview and wait for viewport pick.
+          cmd.pdfAttachPreview      = std::move(att);
+          cmd.pdfAttachPreviewReady = true;
+          cmd.pdfAttachDialogOpen   = false;
+          cmd.pdfAttachPhase        = Ph::WaitInsertPoint;
+          log.push_back("PDFATTACH — click in viewport to specify insertion point.  ESC to cancel.");
+        } else {
+          att.insertX     = cmd.pdfAttachInsertX;
+          att.insertY     = cmd.pdfAttachInsertY;
+          att.scale       = cmd.pdfAttachScale;
+          att.rotationDeg = cmd.pdfAttachRotDeg;
+          cmd.pdfAttachments.push_back(std::move(att));
+          log.push_back("PDFATTACH — underlay placed.");
+          if (cmd.pdfDraftCache) {
+            PdfDraftCache_Free(cmd.pdfDraftCache);
+            cmd.pdfDraftCache = nullptr;
+          }
+          if (cmd.pdfAttachPreviewReady) {
+            PdfAttach_ReleaseTexture(cmd.pdfAttachPreview);
+            cmd.pdfAttachPreviewReady = false;
+          }
+          cmd.pdfAttachDialogOpen = false;
+          cmd.pdfAttachPhase      = Ph::WaitDialog;
+          cmd.active              = AppCommandState::Kind::None;
+        }
+      } else {
+        log.push_back("PDFATTACH — failed to rasterize page.");
+        cmd.pdfAttachPhase = Ph::WaitDialog;  // return to dialog so user can retry
+      }
+    }
+
+    // While building, disable both action buttons.
+    ImGui::BeginDisabled();
+    ImGui::Button("Attach", ImVec2(120.f, 0.f));
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(80.f, 0.f))) {
+      CancelPdfAttachCommand(cmd, log);
+    }
+    ImGui::End();
+    return cmd.active == K::PdfAttach;
+  }
+
   const bool canAttach =
       cmd.pdfAttachFilePath[0] != '\0' && cmd.pdfDraftCache != nullptr &&
       PdfDraftCache_PageCount(cmd.pdfDraftCache) > 0;
 
   if (!canAttach) ImGui::BeginDisabled();
   if (ImGui::Button("Attach", ImVec2(120.f, 0.f))) {
-    if (cmd.pdfAttachSpecifyInsert) {
-      // Close dialog and wait for viewport insertion pick.
-      cmd.pdfAttachDialogOpen = false;
-      cmd.pdfAttachPhase      = Ph::WaitInsertPoint;
-      log.push_back("PDFATTACH — click in viewport to specify insertion point.  ESC to cancel.");
-    } else {
-      // Commit immediately at the typed coordinates.
-      PdfAttachment att;
-      bool ok = PdfAttach_Build(cmd.pdfAttachFilePath,
-                                 cmd.pdfAttachSelectedPage,
-                                 cmd.pdfAttachRasterDpi,
-                                 cmd.pdfAttachSnapLines,
-                                 cmd.pdfAttachSnapCircles,
-                                 cmd.pdfAttachSnapText,
-                                 att);
-      if (ok) {
-        att.insertX     = cmd.pdfAttachInsertX;
-        att.insertY     = cmd.pdfAttachInsertY;
-        att.scale       = cmd.pdfAttachScale;
-        att.rotationDeg = cmd.pdfAttachRotDeg;
-        cmd.pdfAttachments.push_back(std::move(att));
-        log.push_back("PDFATTACH — underlay placed.");
-      } else {
-        log.push_back("PDFATTACH — failed to rasterize page.");
-      }
-      // Clean up without logging "cancelled".
-      if (cmd.pdfDraftCache) {
-        PdfDraftCache_Free(cmd.pdfDraftCache);
-        cmd.pdfDraftCache = nullptr;
-      }
-      if (cmd.pdfAttachPreviewReady) {
-        PdfAttach_ReleaseTexture(cmd.pdfAttachPreview);
-        cmd.pdfAttachPreviewReady = false;
-      }
-      cmd.pdfAttachDialogOpen = false;
-      cmd.pdfAttachPhase      = AppCommandState::PdfAttachPhase::WaitDialog;
-      cmd.active              = AppCommandState::Kind::None;
-    }
+    // Capture params before closing dialog or switching phase.
+    const std::string  capturedPath  = cmd.pdfAttachFilePath;
+    const int          capturedPage  = cmd.pdfAttachSelectedPage;
+    const float        capturedDpi   = cmd.pdfAttachRasterDpi;
+    const bool         capturedLines = cmd.pdfAttachSnapLines;
+    const bool         capturedCirc  = cmd.pdfAttachSnapCircles;
+    const bool         capturedText  = cmd.pdfAttachSnapText;
+    const bool         capturedSpec  = cmd.pdfAttachSpecifyInsert;
+
+    // Kick off the background rasterize task.
+    // Building phase keeps the dialog open (spinner) until the thread completes.
+    auto ab = std::make_unique<AppCommandState::AsyncBuild>();
+    ab->specifyInsert = capturedSpec;
+    auto* abPtr = ab.get();
+
+    abPtr->thread = std::thread([abPtr, capturedPath, capturedPage, capturedDpi,
+                                  capturedLines, capturedCirc, capturedText]() {
+      PdfAttach_BuildToBuffer(capturedPath.c_str(), capturedPage, capturedDpi,
+                               capturedLines, capturedCirc, capturedText,
+                               abPtr->result);
+      abPtr->done.store(true, std::memory_order_release);
+    });
+
+    cmd.pdfAttachAsync = std::move(ab);
+    cmd.pdfAttachPhase = Ph::Building;
+    log.push_back("PDFATTACH — rasterizing, please wait...");
   }
   if (!canAttach) ImGui::EndDisabled();
 

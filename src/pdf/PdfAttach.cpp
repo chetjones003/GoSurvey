@@ -1104,6 +1104,125 @@ void PdfDraftCache_ExtractSnap(const PdfDraftCache* cache, int pageIndex,
   FPDF_ClosePage(page);
 }
 
+// ---------------------------------------------------------------------------
+// Async-friendly build helpers
+// ---------------------------------------------------------------------------
+
+bool PdfAttach_BuildToBuffer(const char* filePath, int pageIndex, float dpi,
+                              bool doSnapLines, bool doSnapCircles, bool doSnapText,
+                              PdfAttachPixelResult& out) {
+  out = PdfAttachPixelResult{};
+
+  PdfLog("[PDF] PdfAttach_BuildToBuffer: page %d @ %.0f DPI\n", pageIndex, dpi);
+
+  // -----------------------------------------------------------------
+  // Fast path: Windows.Data.Pdf (hardware-accelerated Direct2D render).
+  // -----------------------------------------------------------------
+#ifdef PDF_WINRT_ENABLED
+  {
+    // Compute pixel dimensions at the requested DPI using the cached page size.
+    // We'll let RenderPageWithWinRT compute the dimensions from the PDF page.
+    // To match exactly the requested DPI we need to know the page size first.
+    // Load a thin pdfium doc just for the page dimensions, then render via WinRT.
+    float wPts = 0.f, hPts = 0.f;
+    {
+      FPDF_DOCUMENT doc2 = FPDF_LoadDocument(filePath, nullptr);
+      if (doc2) {
+        FS_SIZEF sz{};
+        FPDF_GetPageSizeByIndexF(doc2, pageIndex, &sz);
+        wPts = sz.width;
+        hPts = sz.height;
+        FPDF_CloseDocument(doc2);
+      }
+    }
+    if (wPts > 0.f && hPts > 0.f) {
+      const int targetW = std::max(1, static_cast<int>(wPts * dpi / 72.f));
+      const int targetH = std::max(1, static_cast<int>(hPts * dpi / 72.f));
+      PdfTimer tWinRT;
+      const bool winrtOk = RenderPageWithWinRT(
+          filePath, pageIndex,
+          std::max(targetW, targetH),   // maxPx drives the longer dimension
+          out.pixelBuf, &out.texW, &out.texH);
+      PdfLog("[PDF] BuildToBuffer WinRT %s (%.1f ms) → %dx%d\n",
+             winrtOk ? "OK" : "FAILED", tWinRT.ms(), out.texW, out.texH);
+      if (winrtOk) {
+        out.pageWidthPts  = wPts;
+        out.pageHeightPts = hPts;
+        // Extract snap geometry using pdfium (WinRT doesn't provide vector data).
+        FPDF_DOCUMENT doc2 = FPDF_LoadDocument(filePath, nullptr);
+        if (doc2) {
+          FPDF_PAGE page2 = FPDF_LoadPage(doc2, pageIndex);
+          if (page2) {
+            PdfTimer tSnap;
+            ExtractSnapFromPage(page2, doSnapLines, doSnapCircles, doSnapText,
+                                out.snapLinesFlat, out.snapCirclesCxCyR, out.snapTextPos);
+            PdfLog("[PDF] BuildToBuffer snap (WinRT path): %.1f ms  (lines=%zu)\n",
+                   tSnap.ms(), out.snapLinesFlat.size() / 4);
+            FPDF_ClosePage(page2);
+          }
+          FPDF_CloseDocument(doc2);
+        }
+        out.success = true;
+        return true;
+      }
+    }
+  }
+#endif
+
+  // -----------------------------------------------------------------
+  // Fallback: pdfium CPU render (progressive, non-blocking via caller's thread).
+  // -----------------------------------------------------------------
+  PdfLog("[PDF] BuildToBuffer: using pdfium fallback\n");
+  FPDF_DOCUMENT doc = FPDF_LoadDocument(filePath, nullptr);
+  if (!doc) return false;
+
+  const int total = FPDF_GetPageCount(doc);
+  if (pageIndex < 0 || pageIndex >= total) { FPDF_CloseDocument(doc); return false; }
+
+  FPDF_PAGE page = FPDF_LoadPage(doc, pageIndex);
+  if (!page) { FPDF_CloseDocument(doc); return false; }
+
+  out.pageWidthPts  = FPDF_GetPageWidthF(page);
+  out.pageHeightPts = FPDF_GetPageHeightF(page);
+
+  const std::atomic<bool> neverCancel{false};
+  RenderPageToBuffer(page, dpi, FPDF_PRINTING, neverCancel,
+                     out.pixelBuf, &out.texW, &out.texH);
+
+  ExtractSnapFromPage(page, doSnapLines, doSnapCircles, doSnapText,
+                      out.snapLinesFlat, out.snapCirclesCxCyR, out.snapTextPos);
+
+  FPDF_ClosePage(page);
+  FPDF_CloseDocument(doc);
+
+  out.success = !out.pixelBuf.empty();
+  return out.success;
+}
+
+bool PdfAttach_FinishBuild(const PdfAttachPixelResult& res, const char* filePath,
+                            int pageIndex, PdfAttachment& att) {
+  if (!res.success || res.pixelBuf.empty()) return false;
+
+  att = PdfAttachment{};
+  att.filePath        = filePath ? filePath : "";
+  att.pageIndex       = pageIndex;
+  att.pageWidthPts    = res.pageWidthPts;
+  att.pageHeightPts   = res.pageHeightPts;
+  att.texW            = res.texW;
+  att.texH            = res.texH;
+  att.snapLinesFlat   = res.snapLinesFlat;
+  att.snapCirclesCxCyR= res.snapCirclesCxCyR;
+  att.snapTextPos     = res.snapTextPos;
+  att.snapLines       = !res.snapLinesFlat.empty();
+  att.snapCircles     = !res.snapCirclesCxCyR.empty();
+  att.snapText        = !res.snapTextPos.empty();
+
+  PdfTimer t;
+  att.glTexId = UploadBgraTexture(res.pixelBuf, res.texW, res.texH);
+  PdfLog("[PDF] FinishBuild: UploadBgraTexture %.1f ms\n", t.ms());
+  return att.glTexId != 0;
+}
+
 bool PdfAttach_Build(const char* filePath, int pageIndex, float dpi,
                      bool doSnapLines, bool doSnapCircles, bool doSnapText,
                      PdfAttachment& out) {

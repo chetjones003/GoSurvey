@@ -4,8 +4,11 @@
 #include "SurveyPoints.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -1167,6 +1170,7 @@ struct AppCommandState {
   // -------------------------------------------------------------------------
   enum class PdfAttachPhase {
     WaitDialog,       ///< Dialog is open; user browses / configures
+    Building,         ///< Async rasterize running in background; dialog shows spinner
     WaitInsertPoint,  ///< User picks insertion point in viewport
     WaitScaleRef,     ///< User picks second point to define scale interactively
     WaitRotationPt,   ///< User picks rotation reference point
@@ -1195,6 +1199,17 @@ struct AppCommandState {
 
   /// Opaque per-document draft cache (owned; freed when command ends or file changes).
   PdfDraftCache* pdfDraftCache = nullptr;
+
+  // --- Async build (Building phase) ------------------------------------
+  // Background thread rasterizes the page; main thread uploads the GL texture
+  // when done.  Heap-allocated so atomic members don't affect copyability.
+  struct AsyncBuild {
+    std::thread           thread;
+    std::atomic<bool>     done{false};
+    PdfAttachPixelResult  result;
+    bool                  specifyInsert = false; ///< captured at click time
+  };
+  std::unique_ptr<AsyncBuild> pdfAttachAsync;   ///< non-null while Building
 
   /// Preview attachment built during WaitInsertPoint (cursor-follows).
   PdfAttachment pdfAttachPreview;
