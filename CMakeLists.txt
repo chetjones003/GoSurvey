@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GoSurvey VERSION 0.3.0 LANGUAGES CXX C)
+project(GoSurvey VERSION 0.3.1 LANGUAGES CXX C RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -141,6 +141,12 @@ target_link_libraries(GoSurvey PRIVATE
 if(WIN32)
   target_link_libraries(GoSurvey PRIVATE comdlg32)
   target_sources(GoSurvey PRIVATE src/platform/WinFrameControls.cpp)
+
+  # Embed the application icon so Windows shows it in Explorer, the taskbar,
+  # the Start Menu, and desktop shortcuts.
+  target_sources(GoSurvey PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/app.rc"
+  )
 
   # Windows.Data.Pdf via C++/WinRT (fast hardware-accelerated thumbnail path).
   # Locate the cppwinrt headers in whichever Windows SDK version is installed.

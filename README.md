@@ -1,83 +1,93 @@
 # GoSurvey
 
-GoSurvey is a desktop drafting and survey-helper: a **CAD-style drawing** with optional **survey points** (coordinates, IDs, descriptions) and **DXF** import/export. Use the **ribbon**, **command line**, **viewport**, and **panels** together—the **command log** explains what to enter at each step.
+GoSurvey is a desktop drafting and survey-helper: a **CAD-style drawing** with optional **survey points** (coordinates, IDs, descriptions), **PDF underlays** with object snap, and **DXF** import/export. Use the **ribbon**, **command line**, **viewport**, and **panels** together — the **command log** explains what to enter at each step.
 
 ---
 
-## Download and run (Windows)
+## Download and install (Windows)
+
+### Installer (recommended)
 
 1. Open **[Releases](https://github.com/chetjones003/GoSurvey/releases)** for this repository.
-2. Under the latest release (or a specific version), download the Windows **`.zip`** portable bundle (the executable plus supporting folders—see below).
-3. **Extract the entire zip** to any folder you like (for example Desktop, `Documents`, or a tools directory). You may rename that folder after extraction; the path does not matter as long as the **contents stay together**.
-4. **Keep the folder layout intact.** The zip is meant to look like this after extraction (the exact `.exe` name may include a version, e.g. `GoSurvey-0.2.1.exe`):
+2. Download the **`.exe` installer** from the latest release.
+3. Run it and follow the wizard. GoSurvey is installed to `%ProgramFiles%\GoSurvey` by default and a Start Menu entry is created. An optional desktop shortcut is offered.
+4. **SmartScreen**: Windows may show "Windows protected your PC" for apps that are not code-signed. Choose **More info → Run anyway** if you trust the release.
+
+### Portable ZIP
+
+A portable **`.zip`** bundle is also provided for users who prefer not to run an installer.
+
+1. Download and extract the zip to any folder.
+2. **Keep the folder layout intact** — do not move the `.exe` away from its sibling folders:
 
    ```text
    YourFolder\
      GoSurvey-<version>.exe
-     icons\
+     pdfium.dll
      resources\
+       default-template.gs
+       icons\
+         bitmap.png
+       layouts\
    ```
 
-   Do **not** move only the executable somewhere else. The **`icons`** and **`resources`** folders must remain **next to the same `.exe`** you run. The app loads the window/splash artwork from **`icons`**, and the default startup drawing template from **`resources`** (among other bundled files).
+3. Run the executable directly from inside that folder, or create a shortcut whose **"Start in"** path points to that folder.
 
-5. **Run the program from that folder.** Double-click the executable **inside** the folder that contains **`icons`** and **`resources`**, or start it from a shortcut whose **“Start in”** (working directory) is that folder. If you run the `.exe` from a different location while the support folders are left behind, icons and the default template may not load correctly.
+### Runtime requirement
 
-6. There is no separate installer for the portable zip build.
-
-7. **SmartScreen**: Windows may show “Windows protected your PC” for apps that are not code-signed. If you trust this release, choose **More info** → **Run anyway**.
-
-8. If the app fails to start with a message about a **missing Microsoft runtime DLL**, install the latest **[Visual C++ Redistributable for x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)** from Microsoft, then try again.
-
-To build from source instead, clone the repo, install CMake and a C++17 toolchain with OpenGL, configure with CMake, and build the `GoSurvey` target (see `CMakeLists.txt`).
+If the app fails to start with a missing DLL error, install the latest **[Visual C++ Redistributable for x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)** from Microsoft.
 
 ---
 
 ## Layout at a glance
 
-- **Drawing viewport** — Pan with the **middle mouse button**. Zoom with the **mouse wheel** (smooth, cursor-centered). A **minor grid** follows the view.
-- **Ribbon** (under the menu bar) — **Draw**, **Modify**, **View**, **Inquiry**, and **Survey** blocks in a grid; hover a button for a short description and **command bar** aliases (e.g. `LINE` / `L`). On the right: **Layer** — **LAY** (future layer manager) and a **layer** dropdown built from layers used in the drawing.
-- **Properties** (docked left) — When something is selected: layer, color, linetype, lineweight, transparency, and geometry where supported. **General** also has **default plotted text height** (inches on sheet) for new TEXT/MTEXT.
-- **Command line** (docked bottom) — Scrollable **log**, command **input** + **Send**, context **hints**, then a **single-line status bar**: **OSNAP**, **ORTHO**, **GRID**, **POLAR** (UI placeholder), **annotation scale** (preset dropdown such as 1″ = 50′), and **cursor / UCS** readout.
-- **Panels** — Create points, viewpoints table, import/export CSV, and reports open as separate windows when you use their commands.
+- **Drawing viewport** — Pan with the **middle mouse button**. Zoom with the **mouse wheel** (smooth, cursor-centred). A minor grid follows the view.
+- **Ribbon** (under the menu bar) — **Draw**, **Modify**, **View**, **Inquiry**, and **Survey** blocks; hover a button for a short description and command aliases. Layer dropdown on the right.
+- **Properties** (docked left) — Layer, color, linetype, lineweight, transparency, and geometry for the current selection. Also holds **default plotted text height** for new TEXT/MTEXT.
+- **Command line** (docked bottom) — Scrollable **log**, command **input**, context **hints**, and a status bar with **OSNAP**, **ORTHO**, **GRID**, **POLAR**, annotation scale, and cursor readout.
+- **Panels** — Create points, viewpoints table, CSV import/export, and reports open as separate windows.
 
 ---
 
 ## Angles and bearings
 
-**North is 0°**; angles increase **clockwise** (survey-style): east 90°, south 180°, west 270°.
+**North is 0°**; angles increase **clockwise** (survey convention): east 90°, south 180°, west 270°.
 
-That applies to bearings in **LINE** / **POLYLINE**, **ROTATE**, **TEXT** rotation, and related readouts.
+Applies to LINE/POLYLINE bearings, ROTATE, TEXT rotation, and all readouts.
 
 ---
 
 ## Drawing geometry
 
-| Tool | What it does |
-|------|----------------|
-| **LINE** (`LINE` or `L`) | Segments from clicks or `X,Y` / two numbers. After the first point use **`@dx,dy`** for relative offsets. |
-| **POLYLINE** (`POLYLINE` or `PL`) | Like LINE but one object; **`CLOSE`** / **`CL`** to close, **`END`** for open. |
-| **CIRCLE** (`CIRCLE` or `C`) | Center, then radius (or **`D`** + diameter). Type **`3P`** for a three-point circle. |
-| **ARC** | Three picks: start, point on arc, end. |
-| **ELLIPSE** (`ELLIPSE` or `EL`) | Center, major-axis end, then **minor/major ratio** (0–1] on the command line (Enter = default). |
-| **Aligned dimension** (`DIMALIGNED` or `DAL`) | Two extension points, then a point on the dimension line. |
-| **TEXT** | Insertion, then height, rotation (clockwise from north), and string—often typed on the command line. |
-| **MTEXT** (`MTEXT` or `MT`) | Two corners for a frame, then content. |
+| Tool | Alias | What it does |
+|------|-------|--------------|
+| **LINE** | `L` | Segments from clicks or `X,Y`. Use `@dx,dy` for relative offsets. |
+| **POLYLINE** | `PL` | Like LINE but one object. `CLOSE`/`CL` to close, `END` for open. |
+| **CIRCLE** | `C` | Center then radius (or `D` + diameter). `3P` for three-point. |
+| **ARC** | — | Three picks: start, point on arc, end. |
+| **ELLIPSE** | `EL` | Center, major-axis end, then minor/major ratio. |
+| **TEXT** | — | Insertion, height, rotation (CW from north), content. |
+| **MTEXT** | `MT` | Two corners for a frame, then content. |
+| **DIMALIGNED** | `DAL` | Aligned dimension: two extension points, then dimension line point. |
+| **DIMLINEAR** | `DLI` | Horizontal or vertical dimension. |
+| **DIMANGULAR** | `DAN` | Angular dimension between two lines. |
 
-### LINE / POLYLINE — distance along a locked bearing
+### LINE / POLYLINE — bearing input
 
 After the segment anchor:
 
-- **`A <bearing>`** or **`ANGLE`** + degrees — locks the next segment to that bearing; then a **signed distance** along the ray or a click snapped to the line.
-- **`AP`** (or **`ANGLEPICK`** / **`A P`**) — pick **two points** for direction; **Enter** locks, or **`+90`**, **`-45`**, etc. (decimal or DMS) to adjust before locking.
-- One line can combine bearing and turn, e.g. **`A 45 +90`**.
-- **`A`** / **`ANGLE`** alone clears the lock.
-- With **Ortho** on and **no** bearing lock, a **single number** is distance along H/V toward the cursor.
+- **`A <bearing>`** — lock to a bearing; then a signed distance or a click.
+- **`ANGLE`** alone — enters bearing-lock mode; type the bearing on the next prompt.
+- **`AP`** / **`ANGLEPICK`** — pick two points for direction; Enter to lock, or `+90` / `-45` (decimal or DMS) to adjust first.
+- **`A 45 +90`** — bearing and turn in one line.
+- **`A`** alone — clear the lock.
+- With **Ortho** on and no bearing lock, a **single number** is distance along H/V toward the cursor.
 
-While using **`AP`**, **Esc** cancels only the pick sequence, not the whole LINE.
+While in `AP` mode, **Esc** cancels only the pick, not the whole command.
 
 ### Ortho
 
-**Ortho** constrains picks and rubber-band previews to **horizontal or vertical** from the **current anchor** (LINE/POLYLINE and similar). Toggle from the status bar or **F8** when you are not typing in the command input.
+**F8** (or status bar toggle) constrains picks and rubber-band previews to horizontal/vertical from the current anchor.
 
 ---
 
@@ -85,31 +95,72 @@ While using **`AP`**, **Esc** cancels only the pick sequence, not the whole LINE
 
 ### Selection
 
-With **no command active**, **two clicks** define a selection **window**. The log reports CAD and survey hits.
+With no command active, **two clicks** define a selection window. Type `SELECT` for an explicit reminder.
 
-Type **`SELECT`** for an explicit selection reminder.
+### MOVE / COPY (`M` / `CP`)
 
-### MOVE / COPY (`MOVE` / `M`, `COPY` / `CP`)
+Window-select, then **base** and **second point** (or `@dx,dy`). Duplicate survey-point IDs trigger a dialog: skip, renumber, merge, or overwrite.
 
-Window-select if needed, then **base** and **second point** (or **`@dx,dy`** from base).
+### ROTATE (`RO`)
 
-If **survey points** are copied/moved and IDs collide, a dialog chooses **skip, renumber, merge,** or **overwrite**.
+Window-select, base, then angle (° CW from north, DMS allowed), or `R` for reference direction. `C` toggles copy mode.
 
-### ROTATE (`ROTATE` / `RO`)
+### SCALE (`SC`)
 
-Window-select, **base**, then angle (**° clockwise from north**, DMS allowed), or **`R`** for reference direction then new bearing or **`P`** for two points. **`C`** toggles **copy**.
+Window-select, base, scale factor. `C` toggles copy.
 
-### DELETE (`DELETE` / `DEL`)
+### OFFSET (`O`)
+
+Pick an entity, enter a distance (or type `T` and click through-point), then click the side to offset toward. Works on lines, circles, and arcs.
+
+### TRIM (`TR`)
+
+Pick cutting edges, press Enter, then click the segment halves to remove (click near the end you want gone). Type `L` for line-trim (two clicks on one edge).
+
+### JOIN (`J`)
+
+Window-select collinear lines or coaxial arcs/polylines that meet at endpoints; merges touching chains into single entities.
+
+### OVERKILL (`OK`)
+
+Cleans up the entire drawing in one pass:
+
+- **Lines** — removes zero-length and exact-duplicate segments; merges collinear overlapping/touching segments into the shortest covering segment (union-find + 1-D interval cover).
+- **Circles** — removes exact duplicates (same centre and radius within tolerance).
+- **Arcs** — removes arcs whose underlying circle is already present as a full circle entity; removes exact duplicate arcs.
+- **Polylines** — strips zero-length (coincident) vertex steps.
+
+Tolerance is auto-derived: `1 × 10⁻⁴ × max(x-span, y-span)`. Removal counts are reported in the command log.
+
+### DELETE (`DEL`)
 
 Two-click window over geometry to remove.
 
-### JOIN (`JOIN` / `J`)
+---
 
-Window-select **lines / polylines** that meet at endpoints to merge chains.
+## PDF Underlay
 
-### TRIM (`TRIM` / `TR`)
+### Attaching a PDF (`PDFATTACH` / `PA`)
 
-Pick **cutting edges**, **Enter**, then click segments to trim (near the end to remove). Type **`L`** for **line-trim** (two clicks on an edge).
+Opens the PDF Attach dialog. Choose a PDF file and page, then:
+
+- **Specify insertion point** — click in the viewport to place, then set scale.
+- **Direct insert** — enter coordinates and scale numerically.
+
+The PDF is rasterised and displayed as a GPU texture overlay. Both light-background (white paper) and dark-background (CAD export) PDFs are supported: the background is automatically detected and made transparent so the PDF floats cleanly over your drawing at any opacity.
+
+Multiple PDFs can be attached simultaneously. Each underlay has independent position, scale, rotation, opacity, and snap toggles.
+
+### PDF snap
+
+Object snap works on attached PDFs. Snap targets are detected by analysing the **rendered raster image** rather than internal PDF path structure, so snap fires at the geometry you can actually see:
+
+- **Endpoints** — line ends, stroke terminals (1 foreground neighbour in the raster topology).
+- **Corners** — bends and junctions where two lines meet at an angle (2 non-opposite neighbours).
+- **Junctions** — T-intersections and crossings (3+ neighbours).
+- **Midpoints** and **perpendicular** snaps are also available on PDF line segments.
+
+This image-based approach reliably handles GIS exports, scanned drawings, and other high-density PDFs where the internal PDF path objects do not correspond to visible line geometry.
 
 ---
 
@@ -117,39 +168,40 @@ Pick **cutting edges**, **Enter**, then click segments to trim (near the end to 
 
 | Command | Action |
 |---------|--------|
-| **ZOOM EXTENTS** (`ZOOMEXTENTS` / `ZE`) | Fit geometry and survey markers in view. |
-| **ZOOM WINDOW** (`ZOOMWINDOW` / `ZW`) | Two clicks define the zoom rectangle. |
+| **ZOOM EXTENTS** (`ZE`) | Fit all geometry and markers in view. |
+| **ZOOM WINDOW** (`ZW`) | Two clicks define the zoom rectangle. |
+| **REGEN** (`RE`) | Refresh GPU caches if the display looks stale. |
 
-Delete and zoom-window corners use **unsnapped** picks so corners land exactly where you click.
+Delete and zoom-window use **unsnapped** cursor positions.
 
 ---
 
 ## Plot scale, annotations, and display
 
-- **Annotation scale** — Preset dropdown on the **command line status bar** (e.g. 1″ = 50′). Values map to **model units per plotted inch** (same meaning as **`PLOTSCALE`** / **`PSCALE`** on the command line, e.g. `PSCALE 50`).
-- **Default text height** — **Properties → General**, in **inches on the sheet**; combined with plot scale for TEXT/MTEXT model height.
-- **REGEN** (`REGEN` / `RE`) — Refreshes GPU caches if the display looks stale.
+- **Annotation scale** — Preset dropdown on the status bar (e.g. `1″ = 50′`). Same as `PLOTSCALE`/`PSCALE` on the command line (e.g. `PSCALE 50`). Controls model units per plotted inch.
+- **Default text height** — Properties → General, in inches on the sheet; combined with plot scale for new TEXT/MTEXT model height.
+- **REGEN** (`RE`) — Refreshes GPU caches if the display looks stale.
 
 ---
 
 ## DXF
 
-Use **File → Import DXF…** and **File → Export DXF…** for exchange with **AutoCAD**, **AutoCAD Civil 3D**, and other DXF readers.
+Use **File → Import DXF…** and **File → Export DXF…** for exchange with AutoCAD, AutoCAD Civil 3D, and other DXF readers.
 
 ### Export (ASCII DXF AC1032)
 
-Exports are **ASCII DXF** tagged for **AC1032** (AutoCAD 2018–class), structured for broad compatibility:
+Exports are **ASCII DXF** tagged AC1032 (AutoCAD 2018-class):
 
-- **HEADER** — Drawing limits, extents, common system variables, **`$HANDSEED`**, and (when **survey points** are exported) **`$PDMODE`** / **`$PDSIZE`** so POINT entities display as an **X** (same effect as the **PTYPE** command in AutoCAD: point style is stored as variables, not as a script line in the file).
-- **CLASSES** (empty), **TABLES** — Standard tables including **LAYER** (with plot-style pointers), **VIEW**, **UCS**, **VPORT**, **APPID**, **DIMSTYLE**, **BLOCK_RECORD** with canonical **`*Model_Space`** / **`*Paper_Space`** names.
-- **BLOCKS** / **ENTITIES** — Your CAD geometry plus **survey points** as native **`POINT`** / **`AcDbPoint`** entities (easting, northing, elevation, per-point **layer** and **ByLayer** color).
-- **OBJECTS** — Minimal named-object dictionary (including plot-style table) so hosts like Civil 3D accept the file.
+- **HEADER** — Drawing limits, extents, system variables, `$HANDSEED`, and (when survey points are present) `$PDMODE`/`$PDSIZE` so POINT entities display as an X.
+- **TABLES** — Standard tables: LAYER (with plot-style pointers), VIEW, UCS, VPORT, APPID, DIMSTYLE, BLOCK_RECORD with canonical `*Model_Space`/`*Paper_Space` names.
+- **ENTITIES** — Lines, circles, arcs, ellipses, polylines, text, mtext, aligned dimensions (as exploded lines + text), with layers, ACI colors, lineweights, and model-space ownership.
+- **OBJECTS** — Minimal named-object dictionary so hosts like Civil 3D accept the file.
 
-**CAD content** includes lines, circles, text, mtext, and aligned dimensions (as exploded lines + text), with layers, ACI colors, lineweights, and model-space ownership as expected by current DXF practice.
+Survey points are written as native `POINT`/`AcDbPoint` entities (easting, northing, elevation, per-point layer and ByLayer colour).
 
 ### Import
 
-**Model space** geometry: lines, circles, arcs, ellipses, polylines, and common annotations. **POINT** entities from other applications are approximated as small crossing **line** segments in GoSurvey’s editor. Paper space and some object types are skipped; use the command log for details.
+Model-space geometry: lines, circles, arcs, ellipses, polylines, and common annotations. `POINT` entities are approximated as small crossing line segments. Paper space and unsupported types are skipped; the command log reports details.
 
 ---
 
@@ -158,38 +210,42 @@ Exports are **ASCII DXF** tagged for **AC1032** (AutoCAD 2018–class), structur
 World coordinates: **Easting = X**, **Northing = Y**.
 
 | Command | Panel |
-|---------|--------|
-| **CREATEPOINTS** (`CRTPTS`) | Create/configure points and optional click-placement. |
-| **VIEWPOINTS** (`VWPTS`) | Table of points (IDs, coordinates, elevation, layer, description). |
-| **IMPORTPOINTS** (`IMPPTS`) | CSV import with presets and preview. |
+|---------|-------|
+| **CREATEPOINTS** (`CRTPTS`) | Create / configure points and optional click-placement. |
+| **VIEWPOINTS** (`VWPTS`) | Table of points: IDs, coordinates, elevation, layer, description. |
+| **IMPORTPOINTS** (`IMPPTS`) | CSV import with column presets and preview. |
 | **EXPORTPOINTS** (`EXPPTS`) | CSV export with column layout options. |
 
-Create-points: numbering, defaults, JSON save/load. **Click placement** when idle (Esc turns it off). Survey markers participate in selection; **duplicate ID** policy applies when copying/moving survey rows. **Export DXF** writes survey points as **AutoCAD POINT** objects (see **DXF → Export** above) so they show up in Civil 3D and similar hosts.
+Create-points: numbering, defaults, JSON save/load. Click placement when idle (Esc turns it off). Survey markers participate in selection; duplicate-ID policy (skip, renumber, merge, overwrite) applies when copying or moving.
+
+Export DXF writes survey points as AutoCAD `POINT` objects so they appear in Civil 3D and similar hosts.
 
 ---
 
 ## Snapping
 
-**OSNAP** (status bar or **F3** when not typing in the command line) snaps to **endpoints**, **midpoints**, **circle centers**, and **perpendicular** points. Context matters for perpendicular snaps (e.g. previous LINE point).
+**OSNAP** (status bar or **F3** when not typing) snaps to **endpoints**, **midpoints**, **circle centres**, and **perpendicular** points on both native geometry and PDF underlays.
+
+For PDF underlays, snap targets are detected from the rendered raster image and filtered through a visibility mask so only candidates that land in areas with visible content are offered. A spatial grid (CSR layout) keeps endpoint lookup fast even for dense PDFs with thousands of snap targets.
 
 ---
 
 ## Layers and appearance
 
-**Properties** on a selection: **layer**, **color**, **linetype**, **lineweight**, **transparency** (named colors or hex). The ribbon **layer** dropdown lists layers present on entities; **LAY** will open a layer table when implemented.
+Select an entity and use **Properties** to edit layer, colour, linetype, lineweight, and transparency. The ribbon layer dropdown lists all layers present in the drawing. **LAYER** (`LA`) opens the layer manager.
 
 ---
 
 ## Keyboard
 
-| Input | Behavior |
-|--------|----------|
-| **Esc** | Cancel active command; during LINE **`AP`** pick, exits only the bearing pick first. Idle: clear selection / close some placement UIs. |
-| **Delete** | Start **DELETE** (window select). |
-| **F3** | Toggle **object snap** (when not typing in the command input). |
-| **F8** | Toggle **Ortho** (when not typing in the command input). |
+| Key | Behaviour |
+|-----|-----------|
+| **Esc** | Cancel active command. In `AP` bearing-pick mode, exits the pick first. Idle: clear selection / close placement UIs. |
+| **Delete** | Start DELETE (window select). |
+| **F3** | Toggle object snap (when not typing in the command input). |
+| **F8** | Toggle Ortho (when not typing in the command input). |
 
-Typed commands are resolved with **flexible / fuzzy** matching for short input.
+Typed commands use **flexible / fuzzy** matching so short input works.
 
 ---
 
@@ -199,9 +255,26 @@ Type **`HELP`** in the command line for a compact command list.
 
 ---
 
+## Building from source
+
+Requirements: CMake 3.20+, a C++17 toolchain (MSVC or Clang-cl), OpenGL, Windows SDK (for WinRT PDF thumbnail acceleration).
+
+```bash
+git clone https://github.com/chetjones003/GoSurvey.git
+cd GoSurvey
+cmake --preset ninja-release
+cmake --build build
+```
+
+Dependencies (fetched automatically by CMake): GLFW, Dear ImGui, GLEW, PDFium (prebuilt Windows x64 binary), nlohmann/json.
+
+---
+
 ## Tips
 
-- Read the **command log** and **hints** under the input—they list valid inputs for the current step.
-- Use **`@dx,dy`** from the current anchor when chaining LINE segments.
-- For bearings without mental math: **`AP`**, two clicks, **`+90`** or **Enter**, then the **distance**.
-- **`ZE`** after import or big edits to frame everything.
+- Read the **command log** and **hints** under the input — they list valid inputs for the current step.
+- Use **`@dx,dy`** when chaining LINE segments from the current anchor.
+- For bearings without mental math: **`AP`**, two clicks, **`+90`** or Enter, then type the distance.
+- **`ZE`** after import or large edits to frame everything in view.
+- Run **`OVERKILL`** after DXF imports or manual cleanup to remove duplicates and merge collinear segments.
+- Use **`PDFATTACH`** to bring in a reference plan, then snap directly to its visible geometry for accurate placement.
