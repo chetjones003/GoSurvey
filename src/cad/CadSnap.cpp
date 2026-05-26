@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <vector>
 
 namespace CadSnap {
@@ -463,46 +464,140 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       const float sinR = std::sin(att.rotationDeg * 3.14159265f / 180.f);
       const float sc   = att.scale;
 
-      // Transform a PDF-space (px, py) to local (drawing) space.
+      // Transform a PDF-space point to local (drawing / world) space.
       auto pdfToLocal = [&](float px, float py, float* lx, float* ly) {
         *lx = att.insertX + (px * sc * cosR - py * sc * sinR);
         *ly = att.insertY + (px * sc * sinR + py * sc * cosR);
       };
 
+      // Inverse: transform world cursor to PDF-page space for spatial queries.
+      // PDF rotation is counter-clockwise by att.rotationDeg.
+      // Inverse transform: rotate by -rotationDeg, then divide by scale.
+      const float dxW       = wx - att.insertX;
+      const float dyW       = wy - att.insertY;
+      const float pdfCurX   = ( dxW * cosR + dyW * sinR) / sc;
+      const float pdfCurY   = (-dxW * sinR + dyW * cosR) / sc;
+      const float pdfTol    = (sc > 1e-9f) ? tolWorld / sc : 0.f;
+
+      // ---- Endpoint snap via spatial grid (O(cells-near-cursor)) ----------
       if (att.snapLines && cmd.objectSnapEndpoint) {
-        const auto& SL = att.snapLinesFlat;
-        for (size_t i = 0; i + 3 < SL.size(); i += 4) {
-          float lx0 = 0.f, ly0 = 0.f, lx1 = 0.f, ly1 = 0.f;
-          pdfToLocal(SL[i],     SL[i + 1], &lx0, &ly0);
-          pdfToLocal(SL[i + 2], SL[i + 3], &lx1, &ly1);
-          Consider(&acc, wx, wy, lx0, ly0, Kind::Endpoint, tolWorld);
-          Consider(&acc, wx, wy, lx1, ly1, Kind::Endpoint, tolWorld);
-          if (cmd.objectSnapMidpoint)
-            Consider(&acc, wx, wy, 0.5f * (lx0 + lx1), 0.5f * (ly0 + ly1), Kind::Midpoint, tolWorld);
-          if (havePerpRef)
-            AppendPerpendicularFromRef(refPx, refPy, wx, wy, lx0, ly0, lx1, ly1, tolWorld, &acc);
+        // Visibility-mask check: returns true if pdfX,pdfY is inside or
+        // adjacent to a cell marked as having visible foreground content.
+        // This filters out snap endpoints that land in visually blank areas
+        // (construction lines extending past viewport, etc.).
+        const bool hasMask = !att.snapVisMask.empty();
+        constexpr int MW = PdfAttachment::kVisMaskW;
+        constexpr int MH = PdfAttachment::kVisMaskH;
+        auto visOk = [&](float pdfX, float pdfY) -> bool {
+          if (!hasMask || att.pageWidthPts <= 0.f || att.pageHeightPts <= 0.f)
+            return true;
+          // Map PDF coords (y-up, origin BL) to mask coords (row 0 = top of page).
+          // The endpoint coordinate and the line pixels that pass through it map to
+          // the same cell by construction, so an exact single-cell check is correct.
+          // A 3x3 neighbourhood is too permissive on dense drawings (13 pt cells → every
+          // "empty" area on a busy engineering plan is within one cell of some drawn line).
+          const int cx = std::clamp(static_cast<int>(pdfX / att.pageWidthPts  * MW), 0, MW - 1);
+          const int cy = std::clamp(static_cast<int>((1.f - pdfY / att.pageHeightPts) * MH), 0, MH - 1);
+          return att.snapVisMask[static_cast<size_t>(cy) * MW + cx] != 0;
+        };
+
+        const auto& grid = att.snapEndptGrid;
+        if (grid.cols > 0 && !grid.pts.empty()) {
+          // Enumerate all cells that overlap [cursor ± pdfTol].
+          const int col0 = std::max(0, static_cast<int>(
+              (pdfCurX - pdfTol - grid.originX) / grid.cellW));
+          const int col1 = std::min(grid.cols - 1, static_cast<int>(
+              (pdfCurX + pdfTol - grid.originX) / grid.cellW));
+          const int row0 = std::max(0, static_cast<int>(
+              (pdfCurY - pdfTol - grid.originY) / grid.cellH));
+          const int row1 = std::min(grid.rows - 1, static_cast<int>(
+              (pdfCurY + pdfTol - grid.originY) / grid.cellH));
+          for (int gr = row0; gr <= row1; ++gr) {
+            for (int gc = col0; gc <= col1; ++gc) {
+              const size_t cellIdx = static_cast<size_t>(gr * grid.cols + gc);
+              const uint32_t start = grid.offsets[cellIdx];
+              const uint32_t end   = grid.offsets[cellIdx + 1];
+              for (uint32_t k = start; k < end; ++k) {
+                const float epdfX = grid.pts[static_cast<size_t>(k) * 2];
+                const float epdfY = grid.pts[static_cast<size_t>(k) * 2 + 1];
+                if (!visOk(epdfX, epdfY)) continue; // blank area → skip
+                float lx = 0.f, ly = 0.f;
+                pdfToLocal(epdfX, epdfY, &lx, &ly);
+                Consider(&acc, wx, wy, lx, ly, Kind::Endpoint, tolWorld);
+              }
+            }
+          }
+        } else {
+          // Fallback: linear scan for attachments built without the grid
+          // (e.g. loaded from an older saved file or extremely small drawings).
+          const auto& SL = att.snapLinesFlat;
+          for (size_t i = 0; i + 3 < SL.size(); i += 4) {
+            float lx0 = 0.f, ly0 = 0.f, lx1 = 0.f, ly1 = 0.f;
+            pdfToLocal(SL[i],     SL[i + 1], &lx0, &ly0);
+            pdfToLocal(SL[i + 2], SL[i + 3], &lx1, &ly1);
+            Consider(&acc, wx, wy, lx0, ly0, Kind::Endpoint, tolWorld);
+            Consider(&acc, wx, wy, lx1, ly1, Kind::Endpoint, tolWorld);
+          }
         }
       }
 
+      // ---- Midpoint snap (snapLinesFlat with PDF-space bbox pre-filter) ----
+      if (att.snapLines && cmd.objectSnapMidpoint) {
+        const auto& SL = att.snapLinesFlat;
+        for (size_t i = 0; i + 3 < SL.size(); i += 4) {
+          // Cheap PDF-space bbox reject — avoids pdfToLocal for distant lines.
+          const float bxMin = std::min(SL[i], SL[i + 2]);
+          const float bxMax = std::max(SL[i], SL[i + 2]);
+          const float byMin = std::min(SL[i + 1], SL[i + 3]);
+          const float byMax = std::max(SL[i + 1], SL[i + 3]);
+          if (pdfCurX < bxMin - pdfTol || pdfCurX > bxMax + pdfTol ||
+              pdfCurY < byMin - pdfTol || pdfCurY > byMax + pdfTol)
+            continue;
+          float lx0 = 0.f, ly0 = 0.f, lx1 = 0.f, ly1 = 0.f;
+          pdfToLocal(SL[i],     SL[i + 1], &lx0, &ly0);
+          pdfToLocal(SL[i + 2], SL[i + 3], &lx1, &ly1);
+          Consider(&acc, wx, wy, 0.5f * (lx0 + lx1), 0.5f * (ly0 + ly1),
+                   Kind::Midpoint, tolWorld);
+        }
+      }
+
+      // ---- Perpendicular snap (same pre-filter approach) -------------------
+      if (att.snapLines && havePerpRef) {
+        const auto& SL = att.snapLinesFlat;
+        for (size_t i = 0; i + 3 < SL.size(); i += 4) {
+          const float bxMin = std::min(SL[i], SL[i + 2]);
+          const float bxMax = std::max(SL[i], SL[i + 2]);
+          const float byMin = std::min(SL[i + 1], SL[i + 3]);
+          const float byMax = std::max(SL[i + 1], SL[i + 3]);
+          if (pdfCurX < bxMin - pdfTol || pdfCurX > bxMax + pdfTol ||
+              pdfCurY < byMin - pdfTol || pdfCurY > byMax + pdfTol)
+            continue;
+          float lx0 = 0.f, ly0 = 0.f, lx1 = 0.f, ly1 = 0.f;
+          pdfToLocal(SL[i],     SL[i + 1], &lx0, &ly0);
+          pdfToLocal(SL[i + 2], SL[i + 3], &lx1, &ly1);
+          AppendPerpendicularFromRef(refPx, refPy, wx, wy, lx0, ly0, lx1, ly1, tolWorld, &acc);
+        }
+      }
+
+      // ---- Circle center snap ---------------------------------------------
       if (att.snapCircles && cmd.objectSnapCenter) {
         const auto& SC = att.snapCirclesCxCyR;
         for (size_t i = 0; i + 2 < SC.size(); i += 3) {
           float lcx = 0.f, lcy = 0.f;
           pdfToLocal(SC[i], SC[i + 1], &lcx, &lcy);
-          const float lr  = SC[i + 2] * sc;
-          const float p2  = CircleCenterPickDistSq(wx, wy, lcx, lcy, lr, tolWorld);
+          const float lr = SC[i + 2] * sc;
+          const float p2 = CircleCenterPickDistSq(wx, wy, lcx, lcy, lr, tolWorld);
           ConsiderSnap(&acc, wx, wy, lcx, lcy, Kind::Center, p2, tolWorld);
         }
       }
 
-      if (att.snapText && cmd.objectSnapEndpoint) {
-        const auto& ST = att.snapTextPos;
-        for (size_t i = 0; i + 1 < ST.size(); i += 2) {
-          float ltx = 0.f, lty = 0.f;
-          pdfToLocal(ST[i], ST[i + 1], &ltx, &lty);
-          Consider(&acc, wx, wy, ltx, lty, Kind::Endpoint, tolWorld);
-        }
-      }
+      // ---- Text insertion-point snap --------------------------------------
+      // NOTE: Text positions are intentionally NOT emitted here.
+      // Firing them as Kind::Endpoint causes the snap to trigger at text-label
+      // baselines scattered across the PDF (room numbers, dimensions, callouts),
+      // which appear as "snap on nothing" to the user.  Text snap positions
+      // are stored so the feature can be surfaced later via a dedicated
+      // Insert/Node snap type without polluting general endpoint snap.
     }
   }
 

@@ -67,13 +67,41 @@ const char* kTexFs = R"(#version 330 core
 in vec2 vUV;
 uniform sampler2D uTex;
 uniform float uAlpha;
-uniform float uTransparentBg;  // 1.0 = make near-white pixels transparent, 0.0 = full raster
+uniform float uTransparentBg;  // 1.0 = filter background out, 0.0 = full raster
+uniform float uDarkBg;         // 1.0 = dark-background PDF (filter black), 0.0 = light-background
 out vec4 FragColor;
 void main() {
-  vec4 s = texture(uTex, vUV);
-  float lum = dot(s.rgb, vec3(0.299, 0.587, 0.114));
-  float bgFade = 1.0 - smoothstep(0.80, 0.97, lum) * uTransparentBg;
-  FragColor = vec4(s.rgb, s.a * uAlpha * bgFade);
+  vec4  s     = texture(uTex, vUV);
+  vec3  col   = s.rgb;
+  float alpha = s.a * uAlpha;
+
+  if (uTransparentBg > 0.5) {
+    if (uDarkBg > 0.5) {
+      // Dark-background PDF (e.g. CAD DWG export): background = black.
+      // contentA = how far the pixel is from pure black.
+      // Un-premultiply the black tint so line colors are restored to full saturation.
+      float contentA = max(max(s.r, s.g), s.b);
+      float fadeA    = smoothstep(0.10, 0.35, contentA);
+      col   = contentA > 0.01 ? clamp(s.rgb / contentA, 0.0, 1.0) : s.rgb;
+      alpha = s.a * uAlpha * fadeA;
+    } else {
+      // Light-background PDF (e.g. white-paper scan/print): background = white.
+      // Un-premultiply the white tint so line colors are restored to full saturation.
+      float bgMix    = min(min(s.r, s.g), s.b);   // white fraction blended into pixel
+      float contentA = 1.0 - bgMix;               // 0 = pure white bg, 1 = full content
+      float fadeA    = smoothstep(0.05, 0.30, contentA);
+      col   = contentA > 0.05 ? clamp((s.rgb - bgMix) / contentA, 0.0, 1.0) : s.rgb;
+      // Boost dark/gray content so it's visible on a dark-theme CAD viewport.
+      // Uses max-channel as a proxy for "how coloured is this pixel":
+      //   - Black/gray lines (maxC≈0): lifted toward white so they're readable.
+      //   - Saturated fills (maxC≈1): boost≈0, colour preserved exactly.
+      float maxC = max(max(col.r, col.g), col.b);
+      col = clamp(col + vec3((1.0 - maxC) * 0.85), 0.0, 1.0);
+      alpha = s.a * uAlpha * fadeA;
+    }
+  }
+
+  FragColor = vec4(col, alpha);
 }
 )";
 
@@ -792,6 +820,7 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
     glUniform1i(texSampLoc, 0);
     GLint texAlphaLoc        = glGetUniformLocation(texProgram_, "uAlpha");
     GLint texTransparentBgLoc = glGetUniformLocation(texProgram_, "uTransparentBg");
+    GLint texDarkBgLoc        = glGetUniformLocation(texProgram_, "uDarkBg");
     glActiveTexture(GL_TEXTURE0);
     glBindVertexArray(vaoTex_);
     glBindBuffer(GL_ARRAY_BUFFER, vboTex_);
@@ -799,8 +828,9 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
     for (const PdfAttachment& att : *pdfAttachments) {
       if (!att.glTexId || att.pageWidthPts <= 0.f || att.pageHeightPts <= 0.f)
         continue;
-      glUniform1f(texAlphaLoc,        std::clamp(att.fade, 0.f, 1.f));
+      glUniform1f(texAlphaLoc,         std::clamp(att.fade, 0.f, 1.f));
       glUniform1f(texTransparentBgLoc, att.showBackground ? 0.f : 1.f);
+      glUniform1f(texDarkBgLoc,        att.snapVisDark ? 1.f : 0.f);
 
       const float cosR = std::cos(att.rotationDeg * 3.14159265f / 180.f);
       const float sinR = std::sin(att.rotationDeg * 3.14159265f / 180.f);

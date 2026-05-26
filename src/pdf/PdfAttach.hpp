@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -39,9 +40,31 @@ struct PdfAttachment {
   bool snapCircles = true;
   bool snapText    = true;
 
-  bool        showBackground = true;  ///< Render the raster image; snap still active when false.
+  bool        showBackground = false; ///< Render the raster image; snap still active when false.
   float       fade           = 1.0f;  ///< Opacity multiplier (0 = transparent, 1 = opaque).
   std::string layer;                  ///< Drawing layer assignment.
+
+  /// Spatial grid for fast endpoint snap in PDF-page space.
+  /// Built by PdfAttach_BuildSnapGrid after snap geometry is extracted.
+  /// Stores interleaved (x, y) endpoint pairs bucketed into cells.
+  struct SnapGrid {
+    int   cols = 0, rows = 0;           ///< Grid dimensions (cells)
+    float originX = 0.f, originY = 0.f; ///< Lower-left page corner (PDF pts)
+    float cellW = 1.f, cellH = 1.f;     ///< Cell dimensions (PDF pts)
+    /// CSR layout: cell [row*cols+col] owns pts[offsets[…]*2 .. offsets[…+1]*2)
+    std::vector<uint32_t> offsets;      ///< Size cols*rows+1
+    std::vector<float>    pts;          ///< Interleaved (x,y) endpoint pairs
+  };
+  SnapGrid snapEndptGrid; ///< Populated at attach-commit time; used by CadSnap.
+
+  /// Downsampled visibility mask built from the rasterised page image.
+  /// Each byte is 1 if the corresponding page tile contains any foreground
+  /// (non-background) pixel, 0 if it is visually empty.
+  /// Used by CadSnap to reject snap endpoints that land in blank areas.
+  static constexpr int kVisMaskW = 256;
+  static constexpr int kVisMaskH = 256;
+  std::vector<uint8_t> snapVisMask; ///< kVisMaskW × kVisMaskH
+  bool snapVisDark = false;         ///< true when foreground = bright (dark-bg PDF)
 };
 
 /// Opaque per-document draft cache used by the PDFATTACH dialog.

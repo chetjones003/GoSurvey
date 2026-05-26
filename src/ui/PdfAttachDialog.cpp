@@ -309,14 +309,16 @@ bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log) {
 
     if (ab.done.load(std::memory_order_acquire)) {
       // Background thread finished — upload texture on main thread.
+      // Save fields from ab before reset() destroys it.
+      const bool specifyInsert = ab.specifyInsert;
       PdfAttachment att;
       const bool ok = PdfAttach_FinishBuild(ab.result, cmd.pdfAttachFilePath,
                                              cmd.pdfAttachSelectedPage, att);
       if (ab.thread.joinable()) ab.thread.join();
-      cmd.pdfAttachAsync.reset();
+      cmd.pdfAttachAsync.reset();  // ab is a dangling ref after this point
 
       if (ok) {
-        if (ab.specifyInsert) {
+        if (specifyInsert) {
           // Store the built attachment in the preview and wait for viewport pick.
           cmd.pdfAttachPreview      = std::move(att);
           cmd.pdfAttachPreviewReady = true;

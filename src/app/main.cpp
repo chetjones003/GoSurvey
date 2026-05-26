@@ -155,7 +155,7 @@ int main() {
   bool dockLayoutDone = haveSavedDockIni;
   const float ribbonH = 130.f;
   bool orthoEnabled = true;
-  bool gridVisible = true;
+  bool gridVisible = false;
 
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
