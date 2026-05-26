@@ -946,76 +946,86 @@ bool PdfDraftCache_TickThumb(PdfDraftCache* cache) {
       bool gotThumb = false;
 
       // -----------------------------------------------------------------
-      // Fast path A: embedded /Thumb entry in the page dictionary.
-      // AutoCAD, Revit, and Acrobat write these; extraction is instant.
-      // Requires loading the page (a few ms), not rendering it.
+      // Fast path A: Windows.Data.Pdf native renderer (Direct2D / GPU).
+      // Opens the PDF file completely independently of pdfium — no
+      // FPDF_LoadPage required here, so it never waits on page parsing.
+      // On hardware with a GPU this path is typically 10-100× faster than
+      // pdfium for dense vector engineering drawings.
       // -----------------------------------------------------------------
-      {
-        PdfTimer tEmbed;
-        FPDF_PAGE page = FPDF_LoadPage(cache->doc, pi);
-        if (page) {
-          gotThumb = TryEmbeddedThumbnail(page,
-                                          cache->thumbResult.buf,
-                                          &cache->thumbResult.w,
-                                          &cache->thumbResult.h);
-          if (gotThumb)
-            PdfLog("[PDF] ThumbThread p%d: embedded thumbnail %.1f ms (%dx%d)\n",
-                   pi, tEmbed.ms(), cache->thumbResult.w, cache->thumbResult.h);
-          else
-            PdfLog("[PDF] ThumbThread p%d: no embedded thumbnail (%.1f ms)\n",
-                   pi, tEmbed.ms());
-          // Keep page open for fallback path B if needed.
-          if (gotThumb || cache->thumbCancelled.load(std::memory_order_acquire)) {
-            FPDF_ClosePage(page);
-          } else {
-            // -----------------------------------------------------------------
-            // Fast path B: Windows.Data.Pdf native renderer (Direct2D / GPU).
-            // Opens the file independently of the pdfium doc; may be
-            // significantly faster than pdfium for complex vector drawings.
-            // -----------------------------------------------------------------
 #ifdef PDF_WINRT_ENABLED
-            {
-              PdfTimer tWinRT;
-              gotThumb = RenderPageWithWinRT(cache->loadPath, pi, 300,
-                                             cache->thumbResult.buf,
-                                             &cache->thumbResult.w,
-                                             &cache->thumbResult.h);
-              PdfLog("[PDF] ThumbThread p%d: WinRT %s (%.1f ms)\n",
-                     pi, gotThumb ? "OK" : "FAILED", tWinRT.ms());
-            }
+      if (!cache->thumbCancelled.load(std::memory_order_acquire)) {
+        PdfTimer tWinRT;
+        gotThumb = RenderPageWithWinRT(cache->loadPath, pi, 300,
+                                       cache->thumbResult.buf,
+                                       &cache->thumbResult.w,
+                                       &cache->thumbResult.h);
+        PdfLog("[PDF] ThumbThread p%d: WinRT %s (%.1f ms)\n",
+               pi, gotThumb ? "OK" : "FAILED", tWinRT.ms());
+      }
 #endif
-            if (!gotThumb && !cache->thumbCancelled.load(std::memory_order_acquire)) {
-              // -----------------------------------------------------------------
-              // Slow path C: pdfium progressive render (cancellable via IFSDK_PAUSE).
-              // Used when embedded thumbnail is absent and WinRT is unavailable /
-              // failed.  The IFSDK_PAUSE callback checks thumbCancelled between
-              // drawing operations so the render can be aborted quickly.
-              // -----------------------------------------------------------------
-              const float w_pt   = FPDF_GetPageWidthF(page);
-              const float h_pt   = FPDF_GetPageHeightF(page);
-              const float maxPts = std::max(w_pt > 0.f ? w_pt : 1.f,
-                                            h_pt > 0.f ? h_pt : 1.f);
-              constexpr float kMaxThumbPx  = 280.f;
-              constexpr float kMinThumbDpi =   4.f;
-              constexpr float kMaxThumbDpi =  18.f;
-              const float thumbDpi = std::max(kMinThumbDpi,
-                                     std::min(kMaxThumbDpi,
-                                              kMaxThumbPx * 72.f / maxPts));
-              constexpr int kThumbFlags = FPDF_RENDER_NO_SMOOTHTEXT |
-                                          FPDF_RENDER_NO_SMOOTHIMAGE |
-                                          FPDF_RENDER_NO_SMOOTHPATH;
-              PdfTimer tRender;
-              gotThumb = RenderPageToBuffer(page, thumbDpi, kThumbFlags,
-                                            cache->thumbCancelled,
+
+      // -----------------------------------------------------------------
+      // Paths B and C both require the pdfium page to be loaded.
+      // Skip the FPDF_LoadPage cost entirely when WinRT already succeeded.
+      // -----------------------------------------------------------------
+      if (!gotThumb && !cache->thumbCancelled.load(std::memory_order_acquire)) {
+        PdfTimer tPageLoad;
+        FPDF_PAGE page = FPDF_LoadPage(cache->doc, pi);
+        PdfLog("[PDF] ThumbThread p%d: FPDF_LoadPage %.1f ms  (%s)\n",
+               pi, tPageLoad.ms(), page ? "OK" : "FAILED");
+
+        if (page) {
+          // -----------------------------------------------------------------
+          // Fast path B: embedded /Thumb entry in the page dictionary.
+          // AutoCAD, Revit, and Acrobat write these; extraction is nearly
+          // instant since the image is already decoded by pdfium.
+          // -----------------------------------------------------------------
+          {
+            PdfTimer tEmbed;
+            gotThumb = TryEmbeddedThumbnail(page,
                                             cache->thumbResult.buf,
                                             &cache->thumbResult.w,
                                             &cache->thumbResult.h);
-              PdfLog("[PDF] ThumbThread p%d: pdfium render %s (%.1f ms @ %.1f DPI)\n",
-                     pi, gotThumb ? "OK" : "cancelled/failed",
-                     tRender.ms(), thumbDpi);
-            }
-            FPDF_ClosePage(page);
+            if (gotThumb)
+              PdfLog("[PDF] ThumbThread p%d: embedded thumbnail %.1f ms (%dx%d)\n",
+                     pi, tEmbed.ms(), cache->thumbResult.w, cache->thumbResult.h);
+            else
+              PdfLog("[PDF] ThumbThread p%d: no embedded thumbnail (%.1f ms)\n",
+                     pi, tEmbed.ms());
           }
+
+          // -----------------------------------------------------------------
+          // Slow path C: pdfium progressive render (cancellable via IFSDK_PAUSE).
+          // Last resort when both WinRT and embedded thumbnail are unavailable.
+          // The IFSDK_PAUSE callback checks thumbCancelled between individual
+          // drawing operations so the render can be aborted quickly.
+          // -----------------------------------------------------------------
+          if (!gotThumb && !cache->thumbCancelled.load(std::memory_order_acquire)) {
+            const float w_pt   = FPDF_GetPageWidthF(page);
+            const float h_pt   = FPDF_GetPageHeightF(page);
+            const float maxPts = std::max(w_pt > 0.f ? w_pt : 1.f,
+                                          h_pt > 0.f ? h_pt : 1.f);
+            constexpr float kMaxThumbPx  = 280.f;
+            constexpr float kMinThumbDpi =   4.f;
+            constexpr float kMaxThumbDpi =  18.f;
+            const float thumbDpi = std::max(kMinThumbDpi,
+                                   std::min(kMaxThumbDpi,
+                                            kMaxThumbPx * 72.f / maxPts));
+            constexpr int kThumbFlags = FPDF_RENDER_NO_SMOOTHTEXT |
+                                        FPDF_RENDER_NO_SMOOTHIMAGE |
+                                        FPDF_RENDER_NO_SMOOTHPATH;
+            PdfTimer tRender;
+            gotThumb = RenderPageToBuffer(page, thumbDpi, kThumbFlags,
+                                          cache->thumbCancelled,
+                                          cache->thumbResult.buf,
+                                          &cache->thumbResult.w,
+                                          &cache->thumbResult.h);
+            PdfLog("[PDF] ThumbThread p%d: pdfium render %s (%.1f ms @ %.1f DPI)\n",
+                   pi, gotThumb ? "OK" : "cancelled/failed",
+                   tRender.ms(), thumbDpi);
+          }
+
+          FPDF_ClosePage(page);
         }
       }
 
