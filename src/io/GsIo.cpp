@@ -26,16 +26,11 @@ void EntityAttributesToJson(const EntityAttributes& e, json& o) {
 
 EntityAttributes EntityAttributesFromJson(const json& o) {
   EntityAttributes e;
-  if (o.contains("layer") && o["layer"].is_string())
-    e.layer = o["layer"].get<std::string>();
-  if (o.contains("color") && o["color"].is_string())
-    e.color = o["color"].get<std::string>();
-  if (o.contains("linetype") && o["linetype"].is_string())
-    e.linetype = o["linetype"].get<std::string>();
-  if (o.contains("lineweightMm") && o["lineweightMm"].is_number())
-    e.lineweightMm = o["lineweightMm"].get<float>();
-  if (o.contains("transparency") && o["transparency"].is_number())
-    e.transparency = o["transparency"].get<float>();
+  e.layer        = o.value("layer",        e.layer);
+  e.color        = o.value("color",        e.color);
+  e.linetype     = o.value("linetype",     e.linetype);
+  e.lineweightMm = o.value("lineweightMm", e.lineweightMm);
+  e.transparency = o.value("transparency", e.transparency);
   return e;
 }
 
@@ -52,22 +47,14 @@ void CadLayerRowToJson(const CadLayerRow& r, json& o) {
 
 CadLayerRow CadLayerRowFromJson(const json& o) {
   CadLayerRow r;
-  if (o.contains("name") && o["name"].is_string())
-    r.name = o["name"].get<std::string>();
-  if (o.contains("on"))
-    r.on = o["on"].get<bool>();
-  if (o.contains("frozen"))
-    r.frozen = o["frozen"].get<bool>();
-  if (o.contains("locked"))
-    r.locked = o["locked"].get<bool>();
-  if (o.contains("color") && o["color"].is_string())
-    r.color = o["color"].get<std::string>();
-  if (o.contains("linetype") && o["linetype"].is_string())
-    r.linetype = o["linetype"].get<std::string>();
-  if (o.contains("lineweightMm") && o["lineweightMm"].is_number())
-    r.lineweightMm = o["lineweightMm"].get<float>();
-  if (o.contains("transparency") && o["transparency"].is_number())
-    r.transparency = o["transparency"].get<float>();
+  r.name         = o.value("name",         r.name);
+  r.on           = o.value("on",           r.on);
+  r.frozen       = o.value("frozen",       r.frozen);
+  r.locked       = o.value("locked",       r.locked);
+  r.color        = o.value("color",        r.color);
+  r.linetype     = o.value("linetype",     r.linetype);
+  r.lineweightMm = o.value("lineweightMm", r.lineweightMm);
+  r.transparency = o.value("transparency", r.transparency);
   return r;
 }
 
@@ -121,38 +108,23 @@ CadAnnotation CadAnnotationFromJson(const json& o) {
   CadAnnotation a;
   if (o.contains("kind") && o["kind"].is_string())
     a.kind = AnnotationKindFromString(o["kind"].get<std::string>());
-  if (o.contains("insX"))
-    a.insX = o["insX"].get<float>();
-  if (o.contains("insY"))
-    a.insY = o["insY"].get<float>();
-  if (o.contains("plottedHeightInches"))
-    a.plottedHeightInches = o["plottedHeightInches"].get<float>();
-  if (o.contains("rotationRad"))
-    a.rotationRad = o["rotationRad"].get<float>();
-  if (o.contains("text") && o["text"].is_string())
-    a.text = o["text"].get<std::string>();
-  if (o.contains("boxMinX"))
-    a.boxMinX = o["boxMinX"].get<float>();
-  if (o.contains("boxMinY"))
-    a.boxMinY = o["boxMinY"].get<float>();
-  if (o.contains("boxMaxX"))
-    a.boxMaxX = o["boxMaxX"].get<float>();
-  if (o.contains("boxMaxY"))
-    a.boxMaxY = o["boxMaxY"].get<float>();
-  if (o.contains("dimExt1X"))
-    a.dimExt1X = o["dimExt1X"].get<float>();
-  if (o.contains("dimExt1Y"))
-    a.dimExt1Y = o["dimExt1Y"].get<float>();
-  if (o.contains("dimExt2X"))
-    a.dimExt2X = o["dimExt2X"].get<float>();
-  if (o.contains("dimExt2Y"))
-    a.dimExt2Y = o["dimExt2Y"].get<float>();
-  if (o.contains("dimSignedOffset"))
-    a.dimSignedOffset = o["dimSignedOffset"].get<float>();
-  if (a.kind == CadAnnotation::Kind::DimLinear && o.contains("dimLinearVertical") && o["dimLinearVertical"].is_boolean())
-    a.dimLinearVertical = o["dimLinearVertical"].get<bool>();
-  if (o.contains("surveyPointLabelFor"))
-    a.surveyPointLabelFor = o["surveyPointLabelFor"].get<int>();
+  a.insX               = o.value("insX",               a.insX);
+  a.insY               = o.value("insY",               a.insY);
+  a.plottedHeightInches = o.value("plottedHeightInches", a.plottedHeightInches);
+  a.rotationRad        = o.value("rotationRad",        a.rotationRad);
+  a.text               = o.value("text",               a.text);
+  a.boxMinX            = o.value("boxMinX",            a.boxMinX);
+  a.boxMinY            = o.value("boxMinY",            a.boxMinY);
+  a.boxMaxX            = o.value("boxMaxX",            a.boxMaxX);
+  a.boxMaxY            = o.value("boxMaxY",            a.boxMaxY);
+  a.dimExt1X           = o.value("dimExt1X",           a.dimExt1X);
+  a.dimExt1Y           = o.value("dimExt1Y",           a.dimExt1Y);
+  a.dimExt2X           = o.value("dimExt2X",           a.dimExt2X);
+  a.dimExt2Y           = o.value("dimExt2Y",           a.dimExt2Y);
+  a.dimSignedOffset    = o.value("dimSignedOffset",    a.dimSignedOffset);
+  if (a.kind == CadAnnotation::Kind::DimLinear)
+    a.dimLinearVertical = o.value("dimLinearVertical", a.dimLinearVertical);
+  a.surveyPointLabelFor = o.value("surveyPointLabelFor", a.surveyPointLabelFor);
   return a;
 }
 
@@ -166,16 +138,11 @@ void CadArcToJson(const CadArc& a, json& o) {
 
 CadArc CadArcFromJson(const json& o) {
   CadArc a;
-  if (o.contains("cx"))
-    a.cx = o["cx"].get<float>();
-  if (o.contains("cy"))
-    a.cy = o["cy"].get<float>();
-  if (o.contains("r"))
-    a.r = o["r"].get<float>();
-  if (o.contains("startRad"))
-    a.startRad = o["startRad"].get<float>();
-  if (o.contains("sweepRad"))
-    a.sweepRad = o["sweepRad"].get<float>();
+  a.cx       = o.value("cx",       a.cx);
+  a.cy       = o.value("cy",       a.cy);
+  a.r        = o.value("r",        a.r);
+  a.startRad = o.value("startRad", a.startRad);
+  a.sweepRad = o.value("sweepRad", a.sweepRad);
   return a;
 }
 
@@ -189,16 +156,11 @@ void CadEllipseToJson(const CadEllipse& e, json& o) {
 
 CadEllipse CadEllipseFromJson(const json& o) {
   CadEllipse e;
-  if (o.contains("cx"))
-    e.cx = o["cx"].get<float>();
-  if (o.contains("cy"))
-    e.cy = o["cy"].get<float>();
-  if (o.contains("majVx"))
-    e.majVx = o["majVx"].get<float>();
-  if (o.contains("majVy"))
-    e.majVy = o["majVy"].get<float>();
-  if (o.contains("ratio"))
-    e.ratio = o["ratio"].get<float>();
+  e.cx    = o.value("cx",    e.cx);
+  e.cy    = o.value("cy",    e.cy);
+  e.majVx = o.value("majVx", e.majVx);
+  e.majVy = o.value("majVy", e.majVy);
+  e.ratio = o.value("ratio", e.ratio);
   return e;
 }
 
@@ -215,20 +177,13 @@ void CreatePointsOptionsToJson(const CreatePointsOptions& c, json& o) {
 
 CreatePointsOptions CreatePointsOptionsFromJson(const json& o) {
   CreatePointsOptions c{};
-  if (o.contains("startNumber"))
-    c.startNumber = o["startNumber"].get<int>();
-  if (o.contains("sequentialNumbering"))
-    c.sequentialNumbering = o["sequentialNumbering"].get<bool>();
-  if (o.contains("pointNumberOffset"))
-    c.pointNumberOffset = o["pointNumberOffset"].get<int>();
-  if (o.contains("sequenceNumbersFrom"))
-    c.sequenceNumbersFrom = o["sequenceNumbersFrom"].get<int>();
-  if (o.contains("layer") && o["layer"].is_string())
-    c.layer = o["layer"].get<std::string>();
-  if (o.contains("defaultDescription") && o["defaultDescription"].is_string())
-    c.defaultDescription = o["defaultDescription"].get<std::string>();
-  if (o.contains("defaultElevation"))
-    c.defaultElevation = o["defaultElevation"].get<float>();
+  c.startNumber        = o.value("startNumber",        c.startNumber);
+  c.sequentialNumbering = o.value("sequentialNumbering", c.sequentialNumbering);
+  c.pointNumberOffset  = o.value("pointNumberOffset",  c.pointNumberOffset);
+  c.sequenceNumbersFrom = o.value("sequenceNumbersFrom", c.sequenceNumbersFrom);
+  c.layer              = o.value("layer",              c.layer);
+  c.defaultDescription = o.value("defaultDescription", c.defaultDescription);
+  c.defaultElevation   = o.value("defaultElevation",   c.defaultElevation);
   if (o.contains("duplicatePolicy")) {
     const int p = o["duplicatePolicy"].get<int>();
     if (p >= 0 && p <= static_cast<int>(SurveyDuplicatePolicy::Overwrite))
@@ -247,16 +202,11 @@ void SurveyLabelTemplatesToJson(const SurveyLabelStyleTemplates& t, json& o) {
 
 SurveyLabelStyleTemplates SurveyLabelTemplatesFromJson(const json& o) {
   SurveyLabelStyleTemplates t;
-  if (o.contains("numberDesc") && o["numberDesc"].is_string())
-    t.numberDesc = o["numberDesc"].get<std::string>();
-  if (o.contains("numberOnly") && o["numberOnly"].is_string())
-    t.numberOnly = o["numberOnly"].get<std::string>();
-  if (o.contains("descOnly") && o["descOnly"].is_string())
-    t.descOnly = o["descOnly"].get<std::string>();
-  if (o.contains("numberElev") && o["numberElev"].is_string())
-    t.numberElev = o["numberElev"].get<std::string>();
-  if (o.contains("numberElevDesc") && o["numberElevDesc"].is_string())
-    t.numberElevDesc = o["numberElevDesc"].get<std::string>();
+  t.numberDesc    = o.value("numberDesc",    t.numberDesc);
+  t.numberOnly    = o.value("numberOnly",    t.numberOnly);
+  t.descOnly      = o.value("descOnly",      t.descOnly);
+  t.numberElev    = o.value("numberElev",    t.numberElev);
+  t.numberElevDesc = o.value("numberElevDesc", t.numberElevDesc);
   return t;
 }
 

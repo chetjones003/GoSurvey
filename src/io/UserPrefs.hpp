@@ -4,8 +4,12 @@
 
 struct AppCommandState;
 
-/// UTF-8 path to startup .gs template (see Settings → Startup). Stored in gosurvey-user.json beside the executable.
+/// Loads gosurvey-user.json: sets startup template path, active layout name, and all user settings.
 void LoadUserStartupPrefs(AppCommandState& st);
+
+/// Re-applies only the settings section of gosurvey-user.json without touching path or layout fields.
+/// Call this after loading a startup workspace template so user preferences win over template defaults.
+void LoadUserStartupPrefSettings(AppCommandState& st);
 
 /// Writes gosurvey-user.json beside the executable (best-effort; may fail if the directory is not writable).
 void SaveUserStartupPrefs(const AppCommandState& st);

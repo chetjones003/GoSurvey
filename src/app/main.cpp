@@ -143,6 +143,12 @@ int main() {
       "JSON database — idle: two-click select. MMB "
       "pan.");
   TryLoadStartupWorkspaceTemplate(cmd, cmdLog);
+  // Re-apply user preferences so they override any template defaults (crosshair, snap, survey, etc.).
+  LoadUserStartupPrefSettings(cmd);
+  if (!cmd.surveyPoints.empty()) {
+    RepositionAllSurveyPointLabels(cmd);
+    BumpCadGpuCache(cmd);
+  }
   char cmdBuf[4096]{};
 
   double curX = 0.;
@@ -404,7 +410,6 @@ int main() {
                          &cmd.userCircleAttrs, &ext, gridVisible, &cmd.drawingLayerTable, tuning,
                          pdfRenderList.empty() ? nullptr : &pdfRenderList);
 
-    ImGuiLayout_CommitDeferredIniLoadIfNeeded();
     ImGui::Render();
     int displayW = 0;
     int displayH = 0;

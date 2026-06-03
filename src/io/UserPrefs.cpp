@@ -20,6 +20,96 @@ std::filesystem::path UserPrefsJsonPath() {
   return exeDir / "gosurvey-user.json";
 }
 
+// Applies the "settings" sub-object from user.json to cmd. All fields are optional with safe clamping.
+void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
+  if (!s.is_object())
+    return;
+
+  auto num = [&](const char* k, float* out, float lo, float hi) {
+    if (s.contains(k) && s[k].is_number())
+      *out = std::clamp(s[k].get<float>(), lo, hi);
+  };
+  auto b = [&](const char* k, bool* out) {
+    if (s.contains(k) && s[k].is_boolean())
+      *out = s[k].get<bool>();
+  };
+  auto str = [&](const nlohmann::json& obj, const char* k, std::string* out) {
+    if (obj.contains(k) && obj[k].is_string())
+      *out = obj[k].get<std::string>();
+  };
+
+  // --- Display / System settings (existing) ---
+  if (s.contains("settingsActiveTabIdx") && s["settingsActiveTabIdx"].is_number_integer())
+    st.settingsActiveTabIdx = std::clamp(s["settingsActiveTabIdx"].get<int>(), 0, 10);
+  if (s.contains("displayArcCircleSmoothness") && s["displayArcCircleSmoothness"].is_number_integer())
+    st.displayArcCircleSmoothness = std::clamp(s["displayArcCircleSmoothness"].get<int>(), 8, 20000);
+  if (s.contains("displayCrosshairSizePct") && s["displayCrosshairSizePct"].is_number_integer()) {
+    st.displayCrosshairSizePct = std::clamp(s["displayCrosshairSizePct"].get<int>(), 1, 100);
+    const float f = static_cast<float>(st.displayCrosshairSizePct) * 0.01f;
+    st.viewportCrosshairArmFracX = std::clamp(f * 0.6f, 0.002f, 0.5f);
+    st.viewportCrosshairArmFracY = std::clamp(f, 0.002f, 0.5f);
+  }
+  if (s.contains("displayWheelZoomFactor") && s["displayWheelZoomFactor"].is_number())
+    st.displayWheelZoomFactor = std::clamp(s["displayWheelZoomFactor"].get<float>(), 1.01f, 3.0f);
+  if (s.contains("displayFadeXref") && s["displayFadeXref"].is_number_integer())
+    st.displayFadeXref = std::clamp(s["displayFadeXref"].get<int>(), 0, 90);
+  if (s.contains("displayFadeInPlace") && s["displayFadeInPlace"].is_number_integer())
+    st.displayFadeInPlace = std::clamp(s["displayFadeInPlace"].get<int>(), 0, 90);
+  if (s.contains("systemHardwareAcceleration") && s["systemHardwareAcceleration"].is_boolean())
+    st.systemHardwareAcceleration = s["systemHardwareAcceleration"].get<bool>();
+  if (s.contains("gfxSmoothLineDisplay") && s["gfxSmoothLineDisplay"].is_boolean())
+    st.gfxSmoothLineDisplay = s["gfxSmoothLineDisplay"].get<bool>();
+  if (s.contains("gfxAcceleratedFontDisplay") && s["gfxAcceleratedFontDisplay"].is_boolean())
+    st.gfxAcceleratedFontDisplay = s["gfxAcceleratedFontDisplay"].get<bool>();
+  if (s.contains("gfxVideoMemoryCachingLevel") && s["gfxVideoMemoryCachingLevel"].is_number_integer())
+    st.gfxVideoMemoryCachingLevel = std::clamp(s["gfxVideoMemoryCachingLevel"].get<int>(), 1, 5);
+
+  // --- Crosshair appearance (User Preferences → Crosshair details) ---
+  num("viewportCrosshairR",      &st.viewportCrosshairR,      0.f, 1.f);
+  num("viewportCrosshairG",      &st.viewportCrosshairG,      0.f, 1.f);
+  num("viewportCrosshairB",      &st.viewportCrosshairB,      0.f, 1.f);
+  num("viewportCrosshairHairPx", &st.viewportCrosshairHairPx, 0.75f, 4.f);
+
+  // --- Survey point settings (User Preferences tab) ---
+  num("surveyPointCrossSpanPlottedInches",    &st.surveyPointCrossSpanPlottedInches,    0.02f, 2.f);
+  b  ("surveyPointShowIdInViewport",          &st.surveyPointShowIdInViewport);
+  num("surveyPointLabelPlottedHeightInches",  &st.surveyPointLabelPlottedHeightInches,  0.04f, 0.5f);
+  num("surveyLabelOffsetEastPlottedIn",       &st.surveyLabelOffsetEastPlottedIn,       -2.f, 4.f);
+  num("surveyLabelOffsetNorthPlottedIn",      &st.surveyLabelOffsetNorthPlottedIn,      -2.f, 4.f);
+  if (s.contains("surveyLabelTemplates") && s["surveyLabelTemplates"].is_object()) {
+    const auto& t = s["surveyLabelTemplates"];
+    str(t, "numberDesc",    &st.surveyLabelTemplates.numberDesc);
+    str(t, "numberOnly",    &st.surveyLabelTemplates.numberOnly);
+    str(t, "descOnly",      &st.surveyLabelTemplates.descOnly);
+    str(t, "numberElev",    &st.surveyLabelTemplates.numberElev);
+    str(t, "numberElevDesc",&st.surveyLabelTemplates.numberElevDesc);
+  }
+
+  // --- Text / MTEXT screen sizes (User Preferences tab) ---
+  num("viewportTextMinPx",  &st.viewportTextMinPx,  4.f,  48.f);
+  num("viewportTextMaxPx",  &st.viewportTextMaxPx,  24.f, 320.f);
+  num("viewportMtextMinPx", &st.viewportMtextMinPx, 4.f,  48.f);
+  num("viewportMtextMaxPx", &st.viewportMtextMaxPx, 24.f, 320.f);
+
+  // --- Dimension settings (User Preferences tab) ---
+  num("viewportDimExtLinePx",  &st.viewportDimExtLinePx,  0.25f, 8.f);
+  num("viewportDimDimLinePx",  &st.viewportDimDimLinePx,  0.25f, 8.f);
+  num("viewportDimArrowScale", &st.viewportDimArrowScale,  0.2f, 4.f);
+  num("viewportDimTextMinPx",  &st.viewportDimTextMinPx,  4.f,  48.f);
+  num("viewportDimTextMaxPx",  &st.viewportDimTextMaxPx,  24.f, 320.f);
+
+  // --- Object snap (Drafting tab) ---
+  b  ("objectSnapEnabled",         &st.objectSnapEnabled);
+  b  ("objectSnapEndpoint",        &st.objectSnapEndpoint);
+  b  ("objectSnapMidpoint",        &st.objectSnapMidpoint);
+  b  ("objectSnapCenter",          &st.objectSnapCenter);
+  b  ("objectSnapPerpendicular",   &st.objectSnapPerpendicular);
+  b  ("objectSnapSurveyPoint",     &st.objectSnapSurveyPoint);
+  b  ("objectSnapGeometricCenter", &st.objectSnapGeometricCenter);
+  num("objectSnapAperturePx",      &st.objectSnapAperturePx,  4.f, 64.f);
+  num("objectSnapGlyphHalfPx",     &st.objectSnapGlyphHalfPx, 3.f, 48.f);
+}
+
 } // namespace
 
 void CopyUtf8PathCapped(char* dest, size_t cap, const char* utf8) {
@@ -56,36 +146,24 @@ void LoadUserStartupPrefs(AppCommandState& st) {
       const std::string s = j["activeUiLayout"].get<std::string>();
       CopyUtf8PathCapped(st.activeUiLayoutNameUtf8, sizeof(st.activeUiLayoutNameUtf8), s.c_str());
     }
-    // Display / System settings (AutoCAD Options analog). Each is wrapped in a type check + sensible clamp so a
-    // corrupted file still loads safely.
-    if (j.contains("settings") && j["settings"].is_object()) {
-      const auto& s = j["settings"];
-      if (s.contains("settingsActiveTabIdx") && s["settingsActiveTabIdx"].is_number_integer())
-        st.settingsActiveTabIdx = std::clamp(s["settingsActiveTabIdx"].get<int>(), 0, 10);
-      if (s.contains("displayArcCircleSmoothness") && s["displayArcCircleSmoothness"].is_number_integer())
-        st.displayArcCircleSmoothness = std::clamp(s["displayArcCircleSmoothness"].get<int>(), 8, 20000);
-      if (s.contains("displayCrosshairSizePct") && s["displayCrosshairSizePct"].is_number_integer()) {
-        st.displayCrosshairSizePct = std::clamp(s["displayCrosshairSizePct"].get<int>(), 1, 100);
-        const float f = static_cast<float>(st.displayCrosshairSizePct) * 0.01f;
-        st.viewportCrosshairArmFracX = std::clamp(f * 0.6f, 0.002f, 0.5f);
-        st.viewportCrosshairArmFracY = std::clamp(f, 0.002f, 0.5f);
-      }
-      if (s.contains("displayWheelZoomFactor") && s["displayWheelZoomFactor"].is_number())
-        st.displayWheelZoomFactor =
-            std::clamp(s["displayWheelZoomFactor"].get<float>(), 1.01f, 3.0f);
-      if (s.contains("displayFadeXref") && s["displayFadeXref"].is_number_integer())
-        st.displayFadeXref = std::clamp(s["displayFadeXref"].get<int>(), 0, 90);
-      if (s.contains("displayFadeInPlace") && s["displayFadeInPlace"].is_number_integer())
-        st.displayFadeInPlace = std::clamp(s["displayFadeInPlace"].get<int>(), 0, 90);
-      if (s.contains("systemHardwareAcceleration") && s["systemHardwareAcceleration"].is_boolean())
-        st.systemHardwareAcceleration = s["systemHardwareAcceleration"].get<bool>();
-      if (s.contains("gfxSmoothLineDisplay") && s["gfxSmoothLineDisplay"].is_boolean())
-        st.gfxSmoothLineDisplay = s["gfxSmoothLineDisplay"].get<bool>();
-      if (s.contains("gfxAcceleratedFontDisplay") && s["gfxAcceleratedFontDisplay"].is_boolean())
-        st.gfxAcceleratedFontDisplay = s["gfxAcceleratedFontDisplay"].get<bool>();
-      if (s.contains("gfxVideoMemoryCachingLevel") && s["gfxVideoMemoryCachingLevel"].is_number_integer())
-        st.gfxVideoMemoryCachingLevel = std::clamp(s["gfxVideoMemoryCachingLevel"].get<int>(), 1, 5);
-    }
+    if (j.contains("settings") && j["settings"].is_object())
+      ApplyUserPrefsSettings(st, j["settings"]);
+  } catch (...) {
+  }
+}
+
+void LoadUserStartupPrefSettings(AppCommandState& st) {
+  const auto path = UserPrefsJsonPath();
+  std::ifstream f(path, std::ios::binary);
+  if (!f)
+    return;
+  try {
+    nlohmann::json j;
+    f >> j;
+    if (!j.is_object())
+      return;
+    if (j.contains("settings") && j["settings"].is_object())
+      ApplyUserPrefsSettings(st, j["settings"]);
   } catch (...) {
   }
 }
@@ -101,19 +179,66 @@ void SaveUserStartupPrefs(const AppCommandState& st) {
   }
   if (!j.is_object())
     j = nlohmann::json::object();
+
   j["defaultWorkspaceTemplatePath"] = std::string(st.defaultWorkspaceTemplatePathUtf8);
   j["activeUiLayout"] = std::string(st.activeUiLayoutNameUtf8);
+
   nlohmann::json s = nlohmann::json::object();
-  s["settingsActiveTabIdx"] = st.settingsActiveTabIdx;
-  s["displayArcCircleSmoothness"] = st.displayArcCircleSmoothness;
-  s["displayCrosshairSizePct"] = st.displayCrosshairSizePct;
-  s["displayWheelZoomFactor"] = st.displayWheelZoomFactor;
-  s["displayFadeXref"] = st.displayFadeXref;
-  s["displayFadeInPlace"] = st.displayFadeInPlace;
-  s["systemHardwareAcceleration"] = st.systemHardwareAcceleration;
-  s["gfxSmoothLineDisplay"] = st.gfxSmoothLineDisplay;
-  s["gfxAcceleratedFontDisplay"] = st.gfxAcceleratedFontDisplay;
-  s["gfxVideoMemoryCachingLevel"] = st.gfxVideoMemoryCachingLevel;
+
+  // Display / System settings
+  s["settingsActiveTabIdx"]        = st.settingsActiveTabIdx;
+  s["displayArcCircleSmoothness"]  = st.displayArcCircleSmoothness;
+  s["displayCrosshairSizePct"]     = st.displayCrosshairSizePct;
+  s["displayWheelZoomFactor"]      = st.displayWheelZoomFactor;
+  s["displayFadeXref"]             = st.displayFadeXref;
+  s["displayFadeInPlace"]          = st.displayFadeInPlace;
+  s["systemHardwareAcceleration"]  = st.systemHardwareAcceleration;
+  s["gfxSmoothLineDisplay"]        = st.gfxSmoothLineDisplay;
+  s["gfxAcceleratedFontDisplay"]   = st.gfxAcceleratedFontDisplay;
+  s["gfxVideoMemoryCachingLevel"]  = st.gfxVideoMemoryCachingLevel;
+
+  // Crosshair appearance
+  s["viewportCrosshairR"]          = st.viewportCrosshairR;
+  s["viewportCrosshairG"]          = st.viewportCrosshairG;
+  s["viewportCrosshairB"]          = st.viewportCrosshairB;
+  s["viewportCrosshairHairPx"]     = st.viewportCrosshairHairPx;
+
+  // Survey point settings
+  s["surveyPointCrossSpanPlottedInches"]   = st.surveyPointCrossSpanPlottedInches;
+  s["surveyPointShowIdInViewport"]         = st.surveyPointShowIdInViewport;
+  s["surveyPointLabelPlottedHeightInches"] = st.surveyPointLabelPlottedHeightInches;
+  s["surveyLabelOffsetEastPlottedIn"]      = st.surveyLabelOffsetEastPlottedIn;
+  s["surveyLabelOffsetNorthPlottedIn"]     = st.surveyLabelOffsetNorthPlottedIn;
+  nlohmann::json tpl;
+  tpl["numberDesc"]     = st.surveyLabelTemplates.numberDesc;
+  tpl["numberOnly"]     = st.surveyLabelTemplates.numberOnly;
+  tpl["descOnly"]       = st.surveyLabelTemplates.descOnly;
+  tpl["numberElev"]     = st.surveyLabelTemplates.numberElev;
+  tpl["numberElevDesc"] = st.surveyLabelTemplates.numberElevDesc;
+  s["surveyLabelTemplates"] = std::move(tpl);
+
+  // Text / MTEXT / Dimension sizes
+  s["viewportTextMinPx"]      = st.viewportTextMinPx;
+  s["viewportTextMaxPx"]      = st.viewportTextMaxPx;
+  s["viewportMtextMinPx"]     = st.viewportMtextMinPx;
+  s["viewportMtextMaxPx"]     = st.viewportMtextMaxPx;
+  s["viewportDimExtLinePx"]   = st.viewportDimExtLinePx;
+  s["viewportDimDimLinePx"]   = st.viewportDimDimLinePx;
+  s["viewportDimArrowScale"]  = st.viewportDimArrowScale;
+  s["viewportDimTextMinPx"]   = st.viewportDimTextMinPx;
+  s["viewportDimTextMaxPx"]   = st.viewportDimTextMaxPx;
+
+  // Object snap
+  s["objectSnapEnabled"]          = st.objectSnapEnabled;
+  s["objectSnapEndpoint"]         = st.objectSnapEndpoint;
+  s["objectSnapMidpoint"]         = st.objectSnapMidpoint;
+  s["objectSnapCenter"]           = st.objectSnapCenter;
+  s["objectSnapPerpendicular"]    = st.objectSnapPerpendicular;
+  s["objectSnapSurveyPoint"]      = st.objectSnapSurveyPoint;
+  s["objectSnapGeometricCenter"]  = st.objectSnapGeometricCenter;
+  s["objectSnapAperturePx"]       = st.objectSnapAperturePx;
+  s["objectSnapGlyphHalfPx"]      = st.objectSnapGlyphHalfPx;
+
   j["settings"] = std::move(s);
   try {
     std::ofstream f(path, std::ios::binary | std::ios::trunc);

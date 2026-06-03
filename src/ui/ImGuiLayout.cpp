@@ -63,30 +63,18 @@ bool ImGuiLayout_ConfigureIniPath(AppCommandState& st) {
   g_iniAbsPathUtf8 = iniPath.u8string();
   g_deferredIniLoadPending = false;
 
-  if (!fs::exists(iniPath)) {
-    ImGui::GetIO().IniFilename = g_iniAbsPathUtf8.c_str();
-    return false;
-  }
-  const auto sz = static_cast<std::uintmax_t>(fs::file_size(iniPath));
-  if (sz <= 32u) {
-    ImGui::GetIO().IniFilename = g_iniAbsPathUtf8.c_str();
-    return false;
-  }
+  ImGui::GetIO().IniFilename = g_iniAbsPathUtf8.c_str();
 
-  // ImGui applies io.IniFilename at the start of NewFrame(), before we submit DockSpace(). That breaks docking
-  // restoration for our nested dock host; mid-session LoadIniSettingsFromDisk works (e.g. switching to default2).
-  // Suppress the automatic first load and apply once after the first full frame of dock/window submission.
-  g_deferredIniLoadPending = true;
-  ImGui::GetIO().IniFilename = nullptr;
-  return true;
+  if (!fs::exists(iniPath))
+    return false;
+  const auto sz = static_cast<std::uintmax_t>(fs::file_size(iniPath));
+  return sz > 32u;
 }
 
 void ImGuiLayout_CommitDeferredIniLoadIfNeeded() {
-  if (!g_deferredIniLoadPending)
-    return;
-  g_deferredIniLoadPending = false;
-  ImGui::LoadIniSettingsFromDisk(g_iniAbsPathUtf8.c_str());
-  ImGui::GetIO().IniFilename = g_iniAbsPathUtf8.c_str();
+  // No-op: the deferred load mechanism was removed. IniFilename is set directly in
+  // ImGuiLayout_ConfigureIniPath so ImGui's built-in auto-load handles restoration.
+  (void)g_deferredIniLoadPending;
 }
 
 void ImGuiLayout_ListLayoutStems(std::vector<std::string>* out_sorted_stems) {
