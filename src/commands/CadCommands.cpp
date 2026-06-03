@@ -4101,6 +4101,21 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
           "ROTATE — ° clockwise from north or R reference or C copy; decimal/DMS or click-drag preview.");
       return;
     }
+    if (st.rotatePhase == RP::NeedAngleOrReference) {
+      // Click confirms the angle shown in the live preview: bearing CW from north, base→cursor.
+      const float dx = wx - st.rotateBaseX;
+      const float dy = wy - st.rotateBaseY;
+      FinishRotateCommand(st, st.rotateBaseX, st.rotateBaseY, -std::atan2(dx, dy), log);
+      return;
+    }
+    if (st.rotatePhase == RP::AfterReference_WaitAngleOrP) {
+      // Click confirms the angle shown in the live preview: angle from reference segment to base→cursor.
+      const float thetaRef =
+          std::atan2(st.rotateRefY2 - st.rotateRefY1, st.rotateRefX2 - st.rotateRefX1);
+      const float delta = std::atan2(wy - st.rotateBaseY, wx - st.rotateBaseX) - thetaRef;
+      FinishRotateCommand(st, st.rotateBaseX, st.rotateBaseY, delta, log);
+      return;
+    }
     if (st.rotatePhase == RP::Ref_WaitP1) {
       st.rotateRefX1 = wx;
       st.rotateRefY1 = wy;
