@@ -63,3 +63,6 @@ void DrawCopySurveyDuplicateModal(AppCommandState& cmd, std::vector<std::string>
 
 /// PDFATTACH configuration dialog + pick-phase hint overlay.
 bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log);
+
+/// ALIGN results window: editable pair list, live Helmert solution, Apply button, report generation.
+void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log);
