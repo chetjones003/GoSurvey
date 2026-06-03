@@ -89,39 +89,59 @@ target_compile_definitions(imgui_backend PUBLIC
 )
 
 add_executable(GoSurvey
+  # Application entry
   src/app/main.cpp
-  src/ui/SplashScreen.cpp
-  src/io/GsIo.cpp
-  src/io/UserPrefs.cpp
-  src/ui/ImGuiLayout.cpp
-  src/platform/AppIcon.cpp
+
+  # Command system
+  src/commands/CadCommands.cpp
+  src/commands/CadLinetype.cpp
+  src/commands/CadCoordinateFrame.cpp
+
+  # Viewport system
+  src/viewport/CadSnap.cpp
+  src/viewport/CadRubberPreview.cpp
+  src/viewport/TransformPreview.cpp
+
+  # Renderer
   src/render/ViewportRenderer.cpp
+
+  # UI panels
   src/ui/CadUi.cpp
   src/ui/CadUi_CopySurveyModal.cpp
   src/ui/CadUi_SurveyReports.cpp
   src/ui/CadUi_ImportExportPoints.cpp
-  src/cad/CadCommands.cpp
-  src/cad/geom2d.cpp
-  src/cad/CadCoordinateFrame.cpp
-  src/cad/CadRubberPreview.cpp
-  src/cad/TransformPreview.cpp
-  src/cad/CadLinetype.cpp
+  src/ui/SplashScreen.cpp
+  src/ui/ImGuiLayout.cpp
   src/ui/MtextRichFormat.cpp
-  src/cad/CadSnap.cpp
+  src/ui/PdfAttachDialog.cpp
+
+  # Survey / COGO
   src/survey/SurveyPoints.cpp
+
+  # I/O
+  src/io/GsIo.cpp
+  src/io/UserPrefs.cpp
   src/io/SurveyCsv.cpp
   src/io/DxfIo.cpp
   src/io/DxfColors.cpp
-  src/platform/WinFileDialogs.cpp
+
+  # PDF underlay
   src/pdf/PdfAttach.cpp
-  src/ui/PdfAttachDialog.cpp
+
+  # Platform
+  src/platform/AppIcon.cpp
+  src/platform/WinFileDialogs.cpp
+
+  # Geometry math (util)
+  src/util/geom2d.cpp
 )
 
 target_include_directories(GoSurvey PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src
   ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/viewport
   ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
-  ${CMAKE_CURRENT_SOURCE_DIR}/src/cad
   ${CMAKE_CURRENT_SOURCE_DIR}/src/util
   ${CMAKE_CURRENT_SOURCE_DIR}/src/io
   ${CMAKE_CURRENT_SOURCE_DIR}/src/survey

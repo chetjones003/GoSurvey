@@ -585,6 +585,26 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     return any;
   };
 
+  // Common entity base fields — layer, ACI color index, and true-color override.
+  // parse() handles group codes 8/62/420; makeAttr() builds EntityAttributes.
+  struct EntityBase {
+    std::string layer{"0"};
+    int c62{256};
+    bool has420{false};
+    int rgb420{0};
+    void parse(int code, const std::string& v) {
+      if      (code ==   8) layer = v;
+      else if (code ==  62) ParseIntFlexible(v, &c62);
+      else if (code == 420) has420 = ParseIntFlexible(v, &rgb420);
+    }
+    EntityAttributes makeAttr(const std::unordered_map<std::string, uint32_t>& lrgb) const {
+      EntityAttributes at{};
+      at.layer = layer;
+      at.color = EntityColorStorage(c62, has420, rgb420, layer, lrgb);
+      return at;
+    }
+  };
+
   struct PendingLw {
     std::string layer = "0";
     int c62 = 256;
@@ -612,23 +632,14 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     }
 
     if (EqCiNorm(typ, "POLYLINE")) {
-      std::string layer = "0";
-      int c62 = 256;
-      bool has420 = false;
-      int rgb420 = 0;
+      EntityBase base;
       int flags70 = 0;
       size_t k = i + 1;
       for (; k < entEnd && t[k].code != 0; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
-        if (c == 8)
-          layer = v;
-        else if (c == 62)
-          ParseIntFlexible(v, &c62);
-        else if (c == 420)
-          has420 = ParseIntFlexible(v, &rgb420);
-        else if (c == 70)
-          ParseIntFlexible(v, &flags70);
+        base.parse(c, v);
+        if (c == 70) ParseIntFlexible(v, &flags70);
       }
 
       struct PolyVtx {
@@ -664,10 +675,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         continue;
       }
 
-      EntityAttributes at{};
-      at.layer = layer;
-      at.color = EntityColorStorage(c62, has420, rgb420, layer, layerRgb);
-
+      const auto at = base.makeAttr(layerRgb);
       const int nv = static_cast<int>(verts.size());
       if (nv >= 2) {
         for (int vi = 0; vi < nv - 1; ++vi)
@@ -690,37 +698,20 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     }
 
     if (typ == "LINE") {
-      std::string layer = "0";
-      int c62 = 256;
-      bool has420 = false;
-      int rgb420 = 0;
+      EntityBase base;
       double x0 = 0, y0 = 0, z0 = 0, x1 = 0, y1 = 0, z1 = 0;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
-        if (c == 8)
-          layer = v;
-        else if (c == 62)
-          ParseIntFlexible(v, &c62);
-        else if (c == 420)
-          has420 = ParseIntFlexible(v, &rgb420);
-        else if (c == 10)
-          ParseDouble(v, &x0);
-        else if (c == 20)
-          ParseDouble(v, &y0);
-        else if (c == 30)
-          ParseDouble(v, &z0);
-        else if (c == 11)
-          ParseDouble(v, &x1);
-        else if (c == 21)
-          ParseDouble(v, &y1);
-        else if (c == 31)
-          ParseDouble(v, &z1);
+        base.parse(c, v);
+        if      (c == 10) ParseDouble(v, &x0);
+        else if (c == 20) ParseDouble(v, &y0);
+        else if (c == 30) ParseDouble(v, &z0);
+        else if (c == 11) ParseDouble(v, &x1);
+        else if (c == 21) ParseDouble(v, &y1);
+        else if (c == 31) ParseDouble(v, &z1);
       }
-      EntityAttributes at{};
-      at.layer = layer;
-      at.color = EntityColorStorage(c62, has420, rgb420, layer, layerRgb);
-      appendSegXF(x0, y0, x1, y1, at);
+      appendSegXF(x0, y0, x1, y1, base.makeAttr(layerRgb));
       i = j;
       continue;
     }
@@ -766,68 +757,37 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     }
 
     if (typ == "CIRCLE") {
-      std::string layer = "0";
-      int c62 = 256;
-      bool has420 = false;
-      int rgb420 = 0;
+      EntityBase base;
       double cx = 0, cy = 0, cz = 0, rad = 0;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
-        if (c == 8)
-          layer = v;
-        else if (c == 62)
-          ParseIntFlexible(v, &c62);
-        else if (c == 420)
-          has420 = ParseIntFlexible(v, &rgb420);
-        else if (c == 10)
-          ParseDouble(v, &cx);
-        else if (c == 20)
-          ParseDouble(v, &cy);
-        else if (c == 30)
-          ParseDouble(v, &cz);
-        else if (c == 40)
-          ParseDouble(v, &rad);
+        base.parse(c, v);
+        if      (c == 10) ParseDouble(v, &cx);
+        else if (c == 20) ParseDouble(v, &cy);
+        else if (c == 30) ParseDouble(v, &cz);
+        else if (c == 40) ParseDouble(v, &rad);
       }
-      EntityAttributes at{};
-      at.layer = layer;
-      at.color = EntityColorStorage(c62, has420, rgb420, layer, layerRgb);
-      appendCircleXF(cx, cy, rad, at);
+      appendCircleXF(cx, cy, rad, base.makeAttr(layerRgb));
       i = j;
       continue;
     }
 
     if (typ == "ARC") {
-      std::string layer = "0";
-      int c62 = 256;
-      bool has420 = false;
-      int rgb420 = 0;
+      EntityBase base;
       double cx = 0, cy = 0, cz = 0, rad = 0, a0deg = 0, a1deg = 0;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
-        if (c == 8)
-          layer = v;
-        else if (c == 62)
-          ParseIntFlexible(v, &c62);
-        else if (c == 420)
-          has420 = ParseIntFlexible(v, &rgb420);
-        else if (c == 10)
-          ParseDouble(v, &cx);
-        else if (c == 20)
-          ParseDouble(v, &cy);
-        else if (c == 30)
-          ParseDouble(v, &cz);
-        else if (c == 40)
-          ParseDouble(v, &rad);
-        else if (c == 50)
-          ParseDouble(v, &a0deg);
-        else if (c == 51)
-          ParseDouble(v, &a1deg);
+        base.parse(c, v);
+        if      (c == 10) ParseDouble(v, &cx);
+        else if (c == 20) ParseDouble(v, &cy);
+        else if (c == 30) ParseDouble(v, &cz);
+        else if (c == 40) ParseDouble(v, &rad);
+        else if (c == 50) ParseDouble(v, &a0deg);
+        else if (c == 51) ParseDouble(v, &a1deg);
       }
-      EntityAttributes at{};
-      at.layer = layer;
-      at.color = EntityColorStorage(c62, has420, rgb420, layer, layerRgb);
+      const auto at = base.makeAttr(layerRgb);
       if (rad > 1e-9) {
         double sweep = a1deg - a0deg;
         if (std::fabs(sweep) < 1e-9)
@@ -856,77 +816,40 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     }
 
     if (typ == "ELLIPSE") {
-      std::string layer = "0";
-      int c62 = 256;
-      bool has420 = false;
-      int rgb420 = 0;
-      double cx = 0, cy = 0, cz = 0;
-      double mx = 1, my = 0, mz = 0;
-      double ratio = 0.5;
-      double t0 = 0, t1 = 2.0 * kPi;
+      EntityBase base;
+      double cx = 0, cy = 0, cz = 0, mx = 1, my = 0, mz = 0, ratio = 0.5, t0 = 0, t1 = 2.0 * kPi;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
-        if (c == 8)
-          layer = v;
-        else if (c == 62)
-          ParseIntFlexible(v, &c62);
-        else if (c == 420)
-          has420 = ParseIntFlexible(v, &rgb420);
-        else if (c == 10)
-          ParseDouble(v, &cx);
-        else if (c == 20)
-          ParseDouble(v, &cy);
-        else if (c == 30)
-          ParseDouble(v, &cz);
-        else if (c == 11)
-          ParseDouble(v, &mx);
-        else if (c == 21)
-          ParseDouble(v, &my);
-        else if (c == 31)
-          ParseDouble(v, &mz);
-        else if (c == 40)
-          ParseDouble(v, &ratio);
-        else if (c == 41)
-          ParseDouble(v, &t0);
-        else if (c == 42)
-          ParseDouble(v, &t1);
+        base.parse(c, v);
+        if      (c == 10) ParseDouble(v, &cx);
+        else if (c == 20) ParseDouble(v, &cy);
+        else if (c == 30) ParseDouble(v, &cz);
+        else if (c == 11) ParseDouble(v, &mx);
+        else if (c == 21) ParseDouble(v, &my);
+        else if (c == 31) ParseDouble(v, &mz);
+        else if (c == 40) ParseDouble(v, &ratio);
+        else if (c == 41) ParseDouble(v, &t0);
+        else if (c == 42) ParseDouble(v, &t1);
       }
-      (void)cz;
-      (void)mz;
-      EntityAttributes at{};
-      at.layer = layer;
-      at.color = EntityColorStorage(c62, has420, rgb420, layer, layerRgb);
-      if (ratio <= 1e-12)
-        ratio = 1e-12;
-      appendEllipseXF(cx, cy, mx, my, ratio, t0, t1, at);
+      (void)cz; (void)mz;
+      if (ratio <= 1e-12) ratio = 1e-12;
+      appendEllipseXF(cx, cy, mx, my, ratio, t0, t1, base.makeAttr(layerRgb));
       i = j;
       continue;
     }
 
     if (typ == "POINT") {
-      std::string layer = "0";
-      int c62 = 256;
-      bool has420 = false;
-      int rgb420 = 0;
+      EntityBase base;
       double px = 0, py = 0;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
-        if (c == 8)
-          layer = v;
-        else if (c == 62)
-          ParseIntFlexible(v, &c62);
-        else if (c == 420)
-          has420 = ParseIntFlexible(v, &rgb420);
-        else if (c == 10)
-          ParseDouble(v, &px);
-        else if (c == 20)
-          ParseDouble(v, &py);
+        base.parse(c, v);
+        if      (c == 10) ParseDouble(v, &px);
+        else if (c == 20) ParseDouble(v, &py);
       }
-      EntityAttributes at{};
-      at.layer = layer;
-      at.color = EntityColorStorage(c62, has420, rgb420, layer, layerRgb);
+      const auto at = base.makeAttr(layerRgb);
       double arm = (*coordMagMax > 1.0) ? (*coordMagMax * 1e-7) : 0.01;
       arm = std::clamp(arm, 1e-6, std::max(*coordMagMax * 1e-6, 0.5));
       appendSegXF(px - arm, py, px + arm, py, at);
@@ -936,35 +859,20 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     }
 
     if (typ == "TEXT") {
-      std::string layer = "0";
-      int c62 = 256;
-      bool has420 = false;
-      int rgb420 = 0;
+      EntityBase base;
       double x = 0, y = 0, h = 2.5, rot = 0;
       std::string txt;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
-        if (c == 8)
-          layer = v;
-        else if (c == 62)
-          ParseIntFlexible(v, &c62);
-        else if (c == 420)
-          has420 = ParseIntFlexible(v, &rgb420);
-        else if (c == 10)
-          ParseDouble(v, &x);
-        else if (c == 20)
-          ParseDouble(v, &y);
-        else if (c == 40)
-          ParseDouble(v, &h);
-        else if (c == 50)
-          ParseDouble(v, &rot);
-        else if (c == 1)
-          txt = v;
+        base.parse(c, v);
+        if      (c == 10) ParseDouble(v, &x);
+        else if (c == 20) ParseDouble(v, &y);
+        else if (c == 40) ParseDouble(v, &h);
+        else if (c == 50) ParseDouble(v, &rot);
+        else if (c ==  1) txt = v;
       }
-      EntityAttributes at{};
-      at.layer = layer;
-      at.color = EntityColorStorage(c62, has420, rgb420, layer, layerRgb);
+      const auto at = base.makeAttr(layerRgb);
       // DXF: AcDbText group 50 is rotation in radians (ObjectARX DXF reference).
       const double rad = rot;
       const double textLen = std::max(static_cast<double>(txt.size()), 1.0);
@@ -977,37 +885,21 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     }
 
     if (typ == "MTEXT") {
-      std::string layer = "0";
-      int c62 = 256;
-      bool has420 = false;
-      int rgb420 = 0;
+      EntityBase base;
       double ix = 0, iy = 0, h = 3, boxW = 120, rot = 0;
       std::string txt;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
-        if (c == 8)
-          layer = v;
-        else if (c == 62)
-          ParseIntFlexible(v, &c62);
-        else if (c == 420)
-          has420 = ParseIntFlexible(v, &rgb420);
-        else if (c == 10)
-          ParseDouble(v, &ix);
-        else if (c == 20)
-          ParseDouble(v, &iy);
-        else if (c == 40)
-          ParseDouble(v, &h);
-        else if (c == 41)
-          ParseDouble(v, &boxW);
-        else if (c == 50)
-          ParseDouble(v, &rot);
-        else if (c == 1 || c == 3)
-          txt += v;
+        base.parse(c, v);
+        if      (c == 10) ParseDouble(v, &ix);
+        else if (c == 20) ParseDouble(v, &iy);
+        else if (c == 40) ParseDouble(v, &h);
+        else if (c == 41) ParseDouble(v, &boxW);
+        else if (c == 50) ParseDouble(v, &rot);
+        else if (c == 1 || c == 3) txt += v;
       }
-      EntityAttributes at{};
-      at.layer = layer;
-      at.color = EntityColorStorage(c62, has420, rgb420, layer, layerRgb);
+      const auto at = base.makeAttr(layerRgb);
       // DXF: AcDbMText group 50 is rotation in radians.
       const double rad = rot;
       const double cr = std::cos(rad);
@@ -1032,45 +924,25 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     }
 
     if (EqCiNorm(typ, "DIMENSION")) {
-      std::string layer = "0";
-      int c62 = 256;
-      bool has420 = false;
-      int rgb420 = 0;
-      double px10 = NAN, py10 = NAN, px13 = NAN, py13 = NAN, px14 = NAN, py14 = NAN, px15 = NAN, py15 = NAN,
-             px16 = NAN, py16 = NAN;
+      EntityBase base;
+      double px10 = NAN, py10 = NAN, px13 = NAN, py13 = NAN, px14 = NAN, py14 = NAN,
+             px15 = NAN, py15 = NAN, px16 = NAN, py16 = NAN;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
-        if (c == 8)
-          layer = v;
-        else if (c == 62)
-          ParseIntFlexible(v, &c62);
-        else if (c == 420)
-          has420 = ParseIntFlexible(v, &rgb420);
-        else if (c == 10)
-          ParseDouble(v, &px10);
-        else if (c == 20)
-          ParseDouble(v, &py10);
-        else if (c == 13)
-          ParseDouble(v, &px13);
-        else if (c == 23)
-          ParseDouble(v, &py13);
-        else if (c == 14)
-          ParseDouble(v, &px14);
-        else if (c == 24)
-          ParseDouble(v, &py14);
-        else if (c == 15)
-          ParseDouble(v, &px15);
-        else if (c == 25)
-          ParseDouble(v, &py15);
-        else if (c == 16)
-          ParseDouble(v, &px16);
-        else if (c == 26)
-          ParseDouble(v, &py16);
+        base.parse(c, v);
+        if      (c == 10) ParseDouble(v, &px10);
+        else if (c == 20) ParseDouble(v, &py10);
+        else if (c == 13) ParseDouble(v, &px13);
+        else if (c == 23) ParseDouble(v, &py13);
+        else if (c == 14) ParseDouble(v, &px14);
+        else if (c == 24) ParseDouble(v, &py14);
+        else if (c == 15) ParseDouble(v, &px15);
+        else if (c == 25) ParseDouble(v, &py15);
+        else if (c == 16) ParseDouble(v, &px16);
+        else if (c == 26) ParseDouble(v, &py16);
       }
-      EntityAttributes at{};
-      at.layer = layer;
-      at.color = EntityColorStorage(c62, has420, rgb420, layer, layerRgb);
+      const auto at = base.makeAttr(layerRgb);
       auto finitePair = [](double x, double y) { return std::isfinite(x) && std::isfinite(y); };
       if (finitePair(px13, py13) && finitePair(px14, py14))
         appendSegXF(px13, py13, px14, py14, at);
@@ -1087,41 +959,28 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     }
 
     if (EqCiNorm(typ, "ACAD_TABLE")) {
-      std::string layer = "0";
-      int c62 = 256;
-      bool has420 = false;
-      int rgb420 = 0;
+      EntityBase base;
       double minx = 1e300, maxx = -1e300, miny = 1e300, maxy = -1e300;
-      bool anyPt = false;
+      bool anyPt = false, haveX = false;
       double pendX = 0;
-      bool haveX = false;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
-        if (c == 8)
-          layer = v;
-        else if (c == 62)
-          ParseIntFlexible(v, &c62);
-        else if (c == 420)
-          has420 = ParseIntFlexible(v, &rgb420);
-        else if (c == 10 || c == 11) {
+        base.parse(c, v);
+        if (c == 10 || c == 11) {
           ParseDouble(v, &pendX);
           haveX = true;
         } else if ((c == 20 || c == 21) && haveX) {
           double yv = 0;
           if (ParseDouble(v, &yv)) {
-            minx = std::min(minx, pendX);
-            maxx = std::max(maxx, pendX);
-            miny = std::min(miny, yv);
-            maxy = std::max(maxy, yv);
+            minx = std::min(minx, pendX); maxx = std::max(maxx, pendX);
+            miny = std::min(miny, yv);   maxy = std::max(maxy, yv);
             anyPt = true;
           }
           haveX = false;
         }
       }
-      EntityAttributes at{};
-      at.layer = layer;
-      at.color = EntityColorStorage(c62, has420, rgb420, layer, layerRgb);
+      const auto at = base.makeAttr(layerRgb);
       if (anyPt && maxx > minx && maxy > miny && maxx - minx < 1e200 && maxy - miny < 1e200) {
         appendSegXF(minx, miny, maxx, miny, at);
         appendSegXF(maxx, miny, maxx, maxy, at);
@@ -1133,67 +992,36 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     }
 
     if (typ == "HATCH") {
-      std::string layer = "0";
-      int c62 = 256;
-      bool has420 = false;
-      int rgb420 = 0;
+      EntityBase base;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
-        if (c == 8)
-          layer = v;
-        else if (c == 62)
-          ParseIntFlexible(v, &c62);
-        else if (c == 420)
-          has420 = ParseIntFlexible(v, &rgb420);
+        base.parse(c, v);
       }
-      EntityAttributes at{};
-      at.layer = layer;
-      at.color = EntityColorStorage(c62, has420, rgb420, layer, layerRgb);
-      (void)hatchEmit(i + 1, j, at);
+      (void)hatchEmit(i + 1, j, base.makeAttr(layerRgb));
       i = j;
       continue;
     }
 
     if (typ == "INSERT") {
-      std::string layer = "0";
-      int c62 = 256;
-      bool has420 = false;
-      int rgb420 = 0;
+      EntityBase base;
       std::string blk;
       double ix = 0, iy = 0, sx = 1, sy = 1, rot = 0;
       bool has41 = false, has42 = false;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
-        if (c == 8)
-          layer = v;
-        else if (c == 62)
-          ParseIntFlexible(v, &c62);
-        else if (c == 420)
-          has420 = ParseIntFlexible(v, &rgb420);
-        else if (c == 2)
-          blk = Trim(v);
-        else if (c == 10)
-          ParseDouble(v, &ix);
-        else if (c == 20)
-          ParseDouble(v, &iy);
-        else if (c == 41) {
-          ParseDouble(v, &sx);
-          has41 = true;
-        } else if (c == 42) {
-          ParseDouble(v, &sy);
-          has42 = true;
-        } else if (c == 50)
-          ParseDouble(v, &rot);
+        base.parse(c, v);
+        if      (c ==  2) blk = Trim(v);
+        else if (c == 10) ParseDouble(v, &ix);
+        else if (c == 20) ParseDouble(v, &iy);
+        else if (c == 41) { ParseDouble(v, &sx); has41 = true; }
+        else if (c == 42) { ParseDouble(v, &sy); has42 = true; }
+        else if (c == 50) ParseDouble(v, &rot);
       }
-      if (!has41)
-        sx = 1;
-      if (!has42)
-        sy = 1;
-      EntityAttributes at{};
-      at.layer = layer;
-      at.color = EntityColorStorage(c62, has420, rgb420, layer, layerRgb);
+      if (!has41) sx = 1;
+      if (!has42) sy = 1;
+      const auto at = base.makeAttr(layerRgb);
 
       if (!blockDefs || blk.empty() || insertDepth >= kMaxInsertDepth) {
         (*skippedUnknown)++;
@@ -2308,6 +2136,18 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   const double oy = st.worldDocumentOriginY;
   auto worldX = [&](float lx) { return static_cast<double>(lx) + ox; };
   auto worldY = [&](float ly) { return static_cast<double>(ly) + oy; };
+  // Common DXF entity header: handle, model-space owner, AcDbEntity subclass, layer, linetype, color, lineweight, transparency.
+  auto emitEntityHeader = [&](const char* hb, const std::string& layer8, const EntityAttributes& at,
+                               int aci, const CadLayerRow* lyr) {
+    emitPair(5, hb);
+    emitPair(330, hBrModel);
+    emitPair(100, "AcDbEntity");
+    emitPair(8, layer8);
+    emitPair(6, DxfExportEntityLtype6(at));
+    emitPair(62, std::to_string(aci));
+    emitPair(370, dxfEntityLineweight370Str(at));
+    dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, lyr));
+  };
 
   uint64_t entHandle = entityHandleStart;
   for (size_t i = 0; i < nSeg; ++i) {
@@ -2330,14 +2170,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
 
     emitPair(0, "LINE");
-    emitPair(5, hb);
-    emitPair(330, hBrModel);
-    emitPair(100, "AcDbEntity");
-    emitPair(8, layer8);
-    emitPair(6, DxfExportEntityLtype6(at));
-    emitPair(62, std::to_string(entAci));
-    emitPair(370, dxfEntityLineweight370Str(at));
-    dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, lyr));
+    emitEntityHeader(hb, layer8, at, entAci, lyr);
     emitPair(100, "AcDbLine");
     emitPair(10, std::to_string(worldX(x0)));
     emitPair(20, std::to_string(worldY(y0)));
@@ -2367,14 +2200,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
 
     emitPair(0, "CIRCLE");
-    emitPair(5, hb);
-    emitPair(330, hBrModel);
-    emitPair(100, "AcDbEntity");
-    emitPair(8, layer8);
-    emitPair(6, DxfExportEntityLtype6(at));
-    emitPair(62, std::to_string(entAci));
-    emitPair(370, dxfEntityLineweight370Str(at));
-    dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, lyr));
+    emitEntityHeader(hb, layer8, at, entAci, lyr);
     emitPair(100, "AcDbCircle");
     emitPair(10, std::to_string(worldX(cx)));
     emitPair(20, std::to_string(worldY(cy)));
@@ -2398,14 +2224,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer);
 
     emitPair(0, "POINT");
-    emitPair(5, hb);
-    emitPair(330, hBrModel);
-    emitPair(100, "AcDbEntity");
-    emitPair(8, layer);
-    emitPair(6, DxfExportEntityLtype6(at));
-    emitPair(62, std::to_string(entAci));
-    emitPair(370, dxfEntityLineweight370Str(at));
-    dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, lyr));
+    emitEntityHeader(hb, layer, at, entAci, lyr);
     emitPair(100, "AcDbPoint");
     emitPair(10, std::to_string(worldX(p.easting)));
     emitPair(20, std::to_string(worldY(p.northing)));
@@ -2486,14 +2305,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
         char hb[24];
         std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
         emitPair(0, "LINE");
-        emitPair(5, hb);
-        emitPair(330, hBrModel);
-        emitPair(100, "AcDbEntity");
-        emitPair(8, layer);
-        emitPair(6, DxfExportEntityLtype6(at));
-        emitPair(62, std::to_string(entAci));
-        emitPair(370, dxfEntityLineweight370Str(at));
-        dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, annLyr));
+        emitEntityHeader(hb, layer, at, entAci, annLyr);
         emitPair(100, "AcDbLine");
         emitPair(10, std::to_string(static_cast<double>(x0)));
         emitPair(20, std::to_string(static_cast<double>(y0)));

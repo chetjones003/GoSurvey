@@ -3168,7 +3168,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
         ImGui::Separator();
 
         char layBuf[128] = {};
-        std::strncpy(layBuf, att.layer.c_str(), sizeof(layBuf) - 1);
+        att.layer.copy(layBuf, sizeof(layBuf) - 1);
         ImGui::SetNextItemWidth(-FLT_MIN);
         if (ImGui::InputText("Layer##pdfprop", layBuf, sizeof(layBuf)))
           att.layer = layBuf;
@@ -3776,72 +3776,28 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     ImGui::TextDisabled("Command input follows the cursor on the drawing (viewport).");
   }
 
-  if (footerNonEmpty(circFooter)) {
+  auto renderHint = [](const char* s) {
+    if (!s || !s[0]) return;
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", circFooter);
+    ImGui::TextWrapped("%s", s);
     ImGui::PopStyleColor();
-  }
-  if (footerNonEmpty(lineFooter)) {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", lineFooter);
-    ImGui::PopStyleColor();
-  }
-  if (footerNonEmpty(modFooter)) {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", modFooter);
-    ImGui::PopStyleColor();
-  }
-  if (footerNonEmpty(scaleFooter)) {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", scaleFooter);
-    ImGui::PopStyleColor();
-  }
-  if (footerNonEmpty(rotFooter)) {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", rotFooter);
-    ImGui::PopStyleColor();
-  }
-  if (footerNonEmpty(delFooter)) {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", delFooter);
-    ImGui::PopStyleColor();
-  }
-  if (footerNonEmpty(joinFooter)) {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", joinFooter);
-    ImGui::PopStyleColor();
-  }
-  if (footerNonEmpty(trimFooter)) {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", trimFooter);
-    ImGui::PopStyleColor();
-  }
-  if (footerNonEmpty(offsetFooter)) {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", offsetFooter);
-    ImGui::PopStyleColor();
-  }
-  if (footerNonEmpty(alignFooter)) {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", alignFooter);
-    ImGui::PopStyleColor();
-  }
-  if (footerNonEmpty(zmFooter)) {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", zmFooter);
-    ImGui::PopStyleColor();
-  }
-  if (footerNonEmpty(drawXFooter)) {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", drawXFooter);
-    ImGui::PopStyleColor();
-  }
+  };
 
-  if (!fuzzLineStr.empty()) {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("%s", fuzzLineStr.c_str());
-    ImGui::PopStyleColor();
-  }
+  renderHint(circFooter);
+  renderHint(lineFooter);
+  renderHint(modFooter);
+  renderHint(scaleFooter);
+  renderHint(rotFooter);
+  renderHint(delFooter);
+  renderHint(joinFooter);
+  renderHint(trimFooter);
+  renderHint(offsetFooter);
+  renderHint(alignFooter);
+  renderHint(zmFooter);
+  renderHint(drawXFooter);
+
+  if (!fuzzLineStr.empty())
+    renderHint(fuzzLineStr.c_str());
 
   ImGui::PopID();
 

@@ -3626,6 +3626,48 @@ static void HandleOffsetViewportPick(AppCommandState& st, float wx, float wy, st
 
 } // namespace OffsetCmd
 
+// Returns true when the bearing-pick state fully consumed the click (caller must return).
+// When false, the caller should call SubmitLineVertex / SubmitPolylineVertex with the
+// (possibly angle-locked or ortho-clamped) wx/wy.
+static bool ApplySegmentAnglePickToViewportPick(AppCommandState& st, float& wx, float& wy,
+                                                bool inNextPtPhase, std::vector<std::string>& log) {
+  using SAP = AppCommandState::SegmentAnglePickPhase;
+  if (!inNextPtPhase) return false;
+  if (st.segmentAngleKeyboardAwaitBearing) {
+    log.push_back("Finish bearing entry on the command line (blank Enter cancels) before viewport picks.");
+    return true;
+  }
+  if (st.segmentAnglePickPhase == SAP::WaitP1) {
+    st.segmentPickRefX1 = wx; st.segmentPickRefY1 = wy;
+    st.segmentAnglePickPhase = SAP::WaitP2;
+    log.push_back("Bearing pick — second reference point:");
+    return true;
+  }
+  if (st.segmentAnglePickPhase == SAP::WaitP2) {
+    const float dx = wx - st.segmentPickRefX1, dy = wy - st.segmentPickRefY1;
+    if (std::hypot(dx, dy) < 1e-8f)
+      log.push_back("Bearing pick — points coincide; pick again.");
+    else {
+      st.segmentPickDraftBearingDeg = BearingCwNorthDegFromMathAngleRad(std::atan2(dy, dx));
+      st.segmentAnglePickPhase = SAP::WaitAdjustOrCommit;
+      log.push_back("Bearing from picks — Enter locks as-is; type +90 / -45 (° CW from N) to adjust and lock (one line).");
+    }
+    return true;
+  }
+  if (st.segmentAnglePickPhase == SAP::WaitAdjustOrCommit) {
+    log.push_back("Bearing pick — press Enter to lock (or type +90 / -45); viewport click ignored in this step.");
+    return true;
+  }
+  if (st.segmentAngleLockActive)
+    ApplySegmentAngleLockToWorldPick(st.anchorX, st.anchorY, st.segmentLockUx, st.segmentLockUy, &wx, &wy, false);
+  else if (st.orthoMode) {
+    const float dx = wx - st.anchorX, dy = wy - st.anchorY;
+    if (std::fabs(dx) >= std::fabs(dy)) wy = st.anchorY;
+    else wx = st.anchorX;
+  }
+  return false;
+}
+
 void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector<std::string>& log,
                              bool windowSelectionSubtract, bool fenceLeftToRightWindowMode) {
   using K = AppCommandState::Kind;
@@ -3647,93 +3689,17 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
 
   if (st.active == K::Line) {
     using LP = AppCommandState::LinePhase;
-    using SAP = AppCommandState::SegmentAnglePickPhase;
-    if (st.linePhase == LP::NeedNextPoint && st.segmentAngleKeyboardAwaitBearing) {
-      log.push_back("Finish bearing entry on the command line (blank Enter cancels) before viewport picks.");
-      return;
-    }
-    if (st.linePhase == LP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitP1) {
-      st.segmentPickRefX1 = wx;
-      st.segmentPickRefY1 = wy;
-      st.segmentAnglePickPhase = SAP::WaitP2;
-      log.push_back("Bearing pick — second reference point:");
-      return;
-    }
-    if (st.linePhase == LP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitP2) {
-      const float dx = wx - st.segmentPickRefX1;
-      const float dy = wy - st.segmentPickRefY1;
-      if (std::hypot(dx, dy) < 1e-8f)
-        log.push_back("Bearing pick — points coincide; pick again.");
-      else {
-        const float theta = std::atan2(dy, dx);
-        st.segmentPickDraftBearingDeg = BearingCwNorthDegFromMathAngleRad(theta);
-        st.segmentAnglePickPhase = SAP::WaitAdjustOrCommit;
-        log.push_back(
-            "Bearing from picks — Enter locks as-is; type +90 / -45 (° CW from N) to adjust and lock (one line).");
-      }
-      return;
-    }
-    if (st.linePhase == LP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitAdjustOrCommit) {
-      log.push_back("Bearing pick — press Enter to lock (or type +90 / -45); viewport click ignored in this step.");
-      return;
-    }
-    if (st.linePhase == LP::NeedNextPoint && st.segmentAngleLockActive)
-      ApplySegmentAngleLockToWorldPick(st.anchorX, st.anchorY, st.segmentLockUx, st.segmentLockUy, &wx, &wy, false);
-    else if (st.linePhase == LP::NeedNextPoint && st.orthoMode) {
-      const float dx = wx - st.anchorX;
-      const float dy = wy - st.anchorY;
-      if (std::fabs(dx) >= std::fabs(dy))
-        wy = st.anchorY;
-      else
-        wx = st.anchorX;
-    }
-    SubmitLineVertex(st, wx, wy, log);
+    const bool nextPt = st.linePhase == LP::NeedNextPoint;
+    if (!ApplySegmentAnglePickToViewportPick(st, wx, wy, nextPt, log))
+      SubmitLineVertex(st, wx, wy, log);
     return;
   }
 
   if (st.active == K::Polyline) {
     using PP = AppCommandState::PolylinePhase;
-    using SAP = AppCommandState::SegmentAnglePickPhase;
-    if (st.polylinePhase == PP::NeedNextPoint && st.segmentAngleKeyboardAwaitBearing) {
-      log.push_back("Finish bearing entry on the command line (blank Enter cancels) before viewport picks.");
-      return;
-    }
-    if (st.polylinePhase == PP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitP1) {
-      st.segmentPickRefX1 = wx;
-      st.segmentPickRefY1 = wy;
-      st.segmentAnglePickPhase = SAP::WaitP2;
-      log.push_back("Bearing pick — second reference point:");
-      return;
-    }
-    if (st.polylinePhase == PP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitP2) {
-      const float dx = wx - st.segmentPickRefX1;
-      const float dy = wy - st.segmentPickRefY1;
-      if (std::hypot(dx, dy) < 1e-8f)
-        log.push_back("Bearing pick — points coincide; pick again.");
-      else {
-        const float theta = std::atan2(dy, dx);
-        st.segmentPickDraftBearingDeg = BearingCwNorthDegFromMathAngleRad(theta);
-        st.segmentAnglePickPhase = SAP::WaitAdjustOrCommit;
-        log.push_back(
-            "Bearing from picks — Enter locks as-is; type +90 / -45 (° CW from N) to adjust and lock (one line).");
-      }
-      return;
-    }
-    if (st.polylinePhase == PP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitAdjustOrCommit) {
-      log.push_back("Bearing pick — press Enter to lock (or type +90 / -45); viewport click ignored in this step.");
-      return;
-    }
-    if (st.polylinePhase == PP::NeedNextPoint && st.segmentAngleLockActive)
-      ApplySegmentAngleLockToWorldPick(st.anchorX, st.anchorY, st.segmentLockUx, st.segmentLockUy, &wx, &wy, false);
-    else if (st.polylinePhase == PP::NeedNextPoint && st.orthoMode) {
-      const float dx = wx - st.anchorX;
-      const float dy = wy - st.anchorY;
-      if (std::fabs(dx) >= std::fabs(dy))
-        wy = st.anchorY;
-      else
-        wx = st.anchorX;
-    }
-    SubmitPolylineVertex(st, wx, wy, log);
+    const bool nextPt = st.polylinePhase == PP::NeedNextPoint;
+    if (!ApplySegmentAnglePickToViewportPick(st, wx, wy, nextPt, log))
+      SubmitPolylineVertex(st, wx, wy, log);
     return;
   }
 
@@ -8224,6 +8190,7 @@ void SubmitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std
 }
 
 void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st, std::vector<std::string>& log) {
+  [&]() {
   (void)cmdBufSize;
   std::string line = StringUtil::trimCopy(std::string(cmdBuf));
   using K = AppCommandState::Kind;
@@ -8239,7 +8206,6 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   if (segPickNeedAdjust) {
     if (line.empty()) {
       CommitSegmentAnglePickLock(st, log);
-      cmdBuf[0] = '\0';
       return;
     }
     const std::string t = StringUtil::trimCopy(line);
@@ -8247,16 +8213,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       float dlt = 0.f;
       if (!ParseAngleDegreesInternal(t, &dlt)) {
         log.push_back("Bearing pick — invalid adjustment (decimal/DMS). Blank Enter locks; +/- adds turn.");
-        cmdBuf[0] = '\0';
         return;
       }
       st.segmentPickDraftBearingDeg = NormalizeBearingDegreesCwNorth(st.segmentPickDraftBearingDeg + dlt);
       CommitSegmentAnglePickLock(st, log);
-      cmdBuf[0] = '\0';
       return;
     }
     log.push_back("Bearing pick — blank Enter to lock, or +90 / -45 first (° clockwise from north).");
-    cmdBuf[0] = '\0';
     return;
   }
 
@@ -8268,12 +8231,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (line.empty()) {
       st.segmentAngleKeyboardAwaitBearing = false;
       log.push_back("Bearing entry canceled.");
-      cmdBuf[0] = '\0';
       return;
     }
     float combined = 0.f;
     if (!ParseBearingCwNorthStringWithOptionalDelta(line, &combined, log)) {
-      cmdBuf[0] = '\0';
       return;
     }
     const float theta = MathAngleRadFromBearingCwNorthDeg(combined);
@@ -8287,13 +8248,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
                   "Bearing lock %.6g° clockwise from north — distance (+/- along ray) or click (A clears).",
                   static_cast<double>(combined));
     log.push_back(bufKb);
-    cmdBuf[0] = '\0';
     return;
   }
 
   if (st.active == K::Mtext && st.mtextPhase == AppCommandState::MtextPhase::WaitString && !line.empty()) {
     log.push_back("MTEXT — type in the on-screen editor over the box (Ctrl+Enter reformats; Save to place).");
-    cmdBuf[0] = '\0';
     return;
   }
 
@@ -8342,7 +8301,6 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         ExecuteAlignCommand(st, log);
       }
     }
-    cmdBuf[0] = '\0';
     return;
   }
 
@@ -8364,20 +8322,17 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         BumpCadGpuCache(st);
         log.push_back("Plot scale: 1 plotted inch = " + std::to_string(pv) + " model units.");
       }
-      cmdBuf[0] = '\0';
       return;
     }
   }
 
   if (st.active == AppCommandState::Kind::Delete) {
     log.push_back("DELETE — finish window-select in the viewport (two clicks), or ESC to cancel.");
-    cmdBuf[0] = '\0';
     return;
   }
 
   if (st.active == AppCommandState::Kind::Join) {
     log.push_back("JOIN — finish window-select in the viewport (two clicks), or ESC to cancel.");
-    cmdBuf[0] = '\0';
     return;
   }
 
@@ -8392,17 +8347,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         st.trimPhase = TP::CuttingLine_WaitP1;
         log.push_back("TRIM — draw along the segment to trim: first point (rubber band shows dashed preview).");
       }
-      cmdBuf[0] = '\0';
       return;
     }
     log.push_back("TRIM — viewport picks, or type L to trim by drawing on the segment (two clicks); ESC cancels.");
-    cmdBuf[0] = '\0';
     return;
   }
 
   if (st.active == AppCommandState::Kind::Zoom) {
     log.push_back("ZOOM WINDOW — finish two clicks in the viewport, or ESC to cancel.");
-    cmdBuf[0] = '\0';
     return;
   }
 
@@ -8410,24 +8362,20 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     using OP = AppCommandState::OffsetPhase;
     if (st.offsetPhase != OP::WaitDistanceOrThrough) {
       log.push_back("OFFSET — use viewport picks; type a distance only after selecting the object.");
-      cmdBuf[0] = '\0';
       return;
     }
     float d = 0.f;
     if (!ParseOneFloat(StringUtil::trimCopy(line), &d)) {
       log.push_back("OFFSET — type a positive offset distance (model units), then pick a side.");
-      cmdBuf[0] = '\0';
       return;
     }
     if (d <= 0.f) {
       log.push_back("OFFSET — distance must be positive.");
-      cmdBuf[0] = '\0';
       return;
     }
     st.offsetTypedDistance = d;
     st.offsetPhase = OP::WaitSidePick;
     log.push_back("OFFSET — pick which side of the object to offset.");
-    cmdBuf[0] = '\0';
     return;
   }
 
@@ -8436,11 +8384,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     float py = 0.f;
     if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
       log.push_back("ID — pick in viewport or type X,Y (model units, UCS World).");
-      cmdBuf[0] = '\0';
       return;
     }
     CommitIdPointAt(st, px, py, log);
-    cmdBuf[0] = '\0';
     return;
   }
 
@@ -8451,23 +8397,19 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (st.surveyInversePhase == SIP::WaitFrom) {
       if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
         log.push_back("INVERSE — type X,Y (World) or pick first point in Drawing1.");
-        cmdBuf[0] = '\0';
         return;
       }
       st.surveyInverseFromX = px;
       st.surveyInverseFromY = py;
       st.surveyInversePhase = SIP::WaitTo;
       log.push_back("INVERSE — second point (X,Y or @dx,dy from first).");
-      cmdBuf[0] = '\0';
       return;
     }
     if (!ParseStoragePoint(st, line, &px, &py, true, st.surveyInverseFromX, st.surveyInverseFromY)) {
       log.push_back("INVERSE — type X,Y or @dx,dy from first point.");
-      cmdBuf[0] = '\0';
       return;
     }
     CommitSurveyInverseSecondPoint(st, px, py, log);
-    cmdBuf[0] = '\0';
     return;
   }
 
@@ -8476,18 +8418,15 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // Empty Enter is handled above; PickSelection accepts no typed coordinates.
     if (st.alignPhase == AP::PickSelection) {
       log.push_back("ALIGN — window-select entities in the drawing, then press Enter.");
-      cmdBuf[0] = '\0';
       return;
     }
     if (line.empty()) {
       ExecuteAlignCommand(st, log);
-      cmdBuf[0] = '\0';
       return;
     }
     float px = 0.f, py = 0.f;
     if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
       log.push_back("ALIGN — type X,Y for the point, or press Enter to apply with current pairs.");
-      cmdBuf[0] = '\0';
       return;
     }
     if (st.alignPhase == AP::PickSrc) {
@@ -8506,37 +8445,30 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       log.push_back("ALIGN — pair " + std::to_string(n) + " added.  Pick next source, or Enter to apply (" +
                     std::to_string(n) + " pair" + (n == 1 ? "" : "s") + " ready).");
     }
-    cmdBuf[0] = '\0';
     return;
   }
 
   if (st.active == AppCommandState::Kind::Move || st.active == AppCommandState::Kind::Copy) {
     if (HandleModifyText(st, st.active == AppCommandState::Kind::Copy, line, log)) {
-      cmdBuf[0] = '\0';
       return;
     }
     log.push_back("Could not parse MOVE/COPY input — use X,Y or @dx,dy from base.");
-    cmdBuf[0] = '\0';
     return;
   }
 
   if (st.active == AppCommandState::Kind::Scale) {
     if (HandleScaleText(st, line, log)) {
-      cmdBuf[0] = '\0';
       return;
     }
     log.push_back("Could not parse SCALE input — see command hints (base X,Y; factor; R + reference/new length).");
-    cmdBuf[0] = '\0';
     return;
   }
 
   if (st.active == AppCommandState::Kind::Rotate) {
     if (HandleRotateText(st, line, log)) {
-      cmdBuf[0] = '\0';
       return;
     }
     log.push_back("Could not parse ROTATE input — see command hints.");
-    cmdBuf[0] = '\0';
     return;
   }
 
@@ -8549,7 +8481,6 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         log.push_back("POLYLINE CLOSE — need at least one segment after the start point.");
       else
         CommitPolylineDraft(st, true, log);
-      cmdBuf[0] = '\0';
       return;
     }
     if (low == "end") {
@@ -8558,7 +8489,6 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         log.push_back("POLYLINE END — need at least one segment after the start point.");
       else
         CommitPolylineDraft(st, false, log);
-      cmdBuf[0] = '\0';
       return;
     }
 
@@ -8567,13 +8497,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     const bool allowRel = st.polylinePhase == PP::NeedNextPoint;
 
     if (allowRel && TryParseSegmentAngleLockCommand(st, line, log)) {
-      cmdBuf[0] = '\0';
       return;
     }
 
     if (ParseStoragePoint(st, line, &px, &py, allowRel, st.anchorX, st.anchorY)) {
       SubmitPolylineVertex(st, px, py, log);
-      cmdBuf[0] = '\0';
       return;
     }
 
@@ -8584,7 +8512,6 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           log.push_back("POLYLINE — distance must be non-zero.");
         else
           SubmitPolylineVertex(st, st.anchorX + st.segmentLockUx * dist, st.anchorY + st.segmentLockUy * dist, log);
-        cmdBuf[0] = '\0';
         return;
       }
     }
@@ -8599,13 +8526,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
               "Ortho distance needs cursor direction — move crosshair away from anchor, then enter distance.");
         else
           SubmitPolylineVertex(st, st.anchorX + ux * dist, st.anchorY + uy * dist, log);
-        cmdBuf[0] = '\0';
         return;
       }
     }
 
     log.push_back("POLYLINE — X,Y / @dx,dy / A or AP bearing / CLOSE / END / ortho distance.");
-    cmdBuf[0] = '\0';
     return;
   }
 
@@ -8614,11 +8539,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     float ratio = 0.5f;
     if (!tr.empty() && !ParseSingleFloatToken(tr, &ratio)) {
       log.push_back("ELLIPSE — enter one number for minor/major ratio (0-1], or blank for 0.5.");
-      cmdBuf[0] = '\0';
       return;
     }
     FinishEllipseFromRatio(st, ratio, log);
-    cmdBuf[0] = '\0';
     return;
   }
 
@@ -8629,14 +8552,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       float py = 0.f;
       if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
         log.push_back("TEXT — type insertion X,Y or click in viewport.");
-        cmdBuf[0] = '\0';
         return;
       }
       st.textInsX = px;
       st.textInsY = py;
       st.textPhase = TP::WaitHeight;
       log.push_back("TEXT height — Enter for plot-scale default:");
-      cmdBuf[0] = '\0';
       return;
     }
     if (st.textPhase == TP::WaitHeight) {
@@ -8645,12 +8566,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         st.textHeightDraft = DefaultAnnotationTextHeightWorld(st);
       else if (!ParseSingleFloatToken(tr, &st.textHeightDraft) || st.textHeightDraft <= 0.f) {
         log.push_back("TEXT — invalid height.");
-        cmdBuf[0] = '\0';
         return;
       }
       st.textPhase = TP::WaitRotation;
       log.push_back("TEXT rotation ° clockwise from north (decimal/DMS) — Enter for 0:");
-      cmdBuf[0] = '\0';
       return;
     }
     if (st.textPhase == TP::WaitRotation) {
@@ -8661,14 +8580,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         float deg = 0.f;
         if (!ParseAngleDegrees(tr, &deg)) {
           log.push_back("TEXT — could not parse angle.");
-          cmdBuf[0] = '\0';
           return;
         }
         st.textRotDraft = MathAngleRadFromBearingCwNorthDeg(deg);
       }
       st.textPhase = TP::WaitString;
       log.push_back("TEXT — enter content:");
-      cmdBuf[0] = '\0';
       return;
     }
     if (st.textPhase == TP::WaitString) {
@@ -8688,7 +8605,6 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         log.push_back("TEXT — empty; canceled.");
       st.active = K::None;
       ResetTextCmdDraft(st);
-      cmdBuf[0] = '\0';
       return;
     }
   }
@@ -8699,13 +8615,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     const bool allowRel = st.linePhase == AppCommandState::LinePhase::NeedNextPoint;
 
     if (allowRel && TryParseSegmentAngleLockCommand(st, line, log)) {
-      cmdBuf[0] = '\0';
       return;
     }
 
     if (ParseStoragePoint(st, line, &px, &py, allowRel, st.anchorX, st.anchorY)) {
       SubmitLineVertex(st, px, py, log);
-      cmdBuf[0] = '\0';
       return;
     }
 
@@ -8719,7 +8633,6 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           py = st.anchorY + st.segmentLockUy * dist;
           SubmitLineVertex(st, px, py, log);
         }
-        cmdBuf[0] = '\0';
         return;
       }
     }
@@ -8737,7 +8650,6 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           py = st.anchorY + uy * dist;
           SubmitLineVertex(st, px, py, log);
         }
-        cmdBuf[0] = '\0';
         return;
       }
     }
@@ -8745,17 +8657,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     log.push_back(
         std::string("Could not parse point. Use X,Y or X Y") +
         (allowRel ? "; @dx,dy; A / AP (two picks); A 45 +90; ortho distance toward cursor." : "."));
-    cmdBuf[0] = '\0';
     return;
   }
 
   if (st.active == AppCommandState::Kind::Circle) {
     if (HandleCircleTextInput(line, st, log)) {
-      cmdBuf[0] = '\0';
       return;
     }
     log.push_back("Could not parse input for current CIRCLE step — see hint below.");
-    cmdBuf[0] = '\0';
     return;
   }
 
@@ -8766,7 +8675,6 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     const std::string dimLow = StringUtil::toLowerAsciiCopy(dimTrim);
     if (linear && st.dimPhase == DP::WaitDimLinePt && (dimLow == "h" || dimLow == "v")) {
       CadDimLinearApplyHVHotkey(st, dimLow == "v", log);
-      cmdBuf[0] = '\0';
       return;
     }
     float px = 0.f;
@@ -8786,11 +8694,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (!ParseStoragePoint(st, dimTrim, &px, &py, allowRel, ax, ay)) {
       log.push_back(linear ? "DIMLINEAR — X,Y or @dx,dy; at line step H / V locks orientation; move cursor to unlock."
                            : "DIMALIGNED — X,Y or @dx,dy from first extension.");
-      cmdBuf[0] = '\0';
       return;
     }
     SubmitViewportPick(st, px, py, log, false, false);
-    cmdBuf[0] = '\0';
     return;
   }
 
@@ -8809,11 +8715,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     if (!ParseStoragePoint(st, dimTrim, &px, &py, allowRel, ax, ay)) {
       log.push_back("DIMANGULAR — X,Y or @dx,dy from vertex.");
-      cmdBuf[0] = '\0';
       return;
     }
     SubmitViewportPick(st, px, py, log, false, false);
-    cmdBuf[0] = '\0';
     return;
   }
 
@@ -8821,7 +8725,6 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   for (const CmdEntry& e : kRegistry) {
     if (low == StringUtil::toLowerAsciiCopy(e.primary)) {
       DispatchByPrimary(StringUtil::toLowerAsciiCopy(e.primary), st, log);
-      cmdBuf[0] = '\0';
       return;
     }
     if (e.aliases[0] == '\0')
@@ -8834,14 +8737,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         continue;
       if (low == StringUtil::toLowerAsciiCopy(a)) {
         DispatchByPrimary(StringUtil::toLowerAsciiCopy(e.primary), st, log);
-        cmdBuf[0] = '\0';
         return;
       }
     }
   }
 
   if (TryStrongFuzzyDispatch(line, st, log)) {
-    cmdBuf[0] = '\0';
     return;
   }
 
@@ -8857,6 +8758,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   } else
     log.push_back("Unknown command. Type HELP.");
 
+  }();
   cmdBuf[0] = '\0';
 }
 
