@@ -222,6 +222,11 @@ struct AppCommandState {
     Align
   } active = Kind::None;
 
+  /// Most recently started command; used for right-click repeat when idle.
+  Kind lastCommand = Kind::None;
+  /// Right-click in the drawing with no active command repeats \c lastCommand (see Settings → Drafting).
+  bool rightClickRepeatLastCommand = true;
+
   /// Plot scale: one plotted inch equals this many drawing units (e.g. 50 for 1 inch = 50 feet).
   float modelUnitsPerPlottedInch = 50.f;
   float defaultPlottedTextHeightInches = 0.125f;
@@ -977,6 +982,8 @@ void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartOffsetCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Re-invokes \c st.lastCommand (no-op if \c Kind::None).
+void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log);
 
 /// Removes selected entities from the drawing and clears selection. No-op if selection empty.
 void EraseCadAnnotationAtIndex(AppCommandState& st, size_t annIndex);
