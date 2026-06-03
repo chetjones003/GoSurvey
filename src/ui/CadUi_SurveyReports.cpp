@@ -25,7 +25,7 @@ void DrawSurveyReportsPanel(AppCommandState& cmd) {
           cmd.surveyReportSelectedTab = i;
           ImGui::BeginChild("SurveyReportBody", ImVec2(0, 0), false,
                             ImGuiWindowFlags_HorizontalScrollbar);
-          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.88f, 0.84f, 1.f));
+          ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.f));
           ImGui::TextUnformatted(cmd.surveyReportTabs[static_cast<size_t>(i)].second.c_str());
           ImGui::PopStyleColor();
           ImGui::EndChild();

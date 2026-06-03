@@ -9,6 +9,7 @@
 #include <vector>
 
 void ApplyCadDarkTheme();
+void ApplyCadLightTheme();
 
 /// Optional app logo texture (from \p LoadAppLogoFromPngFile via \ref ResolveAppLogoPngPath). On Windows it appears in the custom title bar;
 /// on other platforms, at the left of the main menu bar.
@@ -66,3 +67,7 @@ bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log);
 
 /// ALIGN results window: editable pair list, live Helmert solution, Apply button, report generation.
 void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log);
+
+/// Modal shown when the user tries to close the application with unsaved drawings.
+/// Sets cmd.closeConfirmed = true when the user accepts close (with or without saving).
+void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log);

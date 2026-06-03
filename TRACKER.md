@@ -1,15 +1,30 @@
 # PROJECT ISSUE & FEATURE TRACKER
 
 ## BUGS
-- [x] **[BUG-001]** Rotation command will is not able to specify rotation from mouse click [COMPLETE]
-    - After specifying a base point the command needs a rotation amount CW from north, R for reference, C for copy.
-      I should be able to not only type in the degree but specify with the mouse.
-    - This behavior also happens when typing R for reference, giving two reference points. I should be able to not only type in a
-      rotation but specify with the mouse.
-    - Not only specifying a point with the mouse but snaps should also work.
+
+- [ ] **[BUG-002]** Survey Point Labels do not work correctly
+    - When selecting a survey point, if I press delete the label is deleted first then I
+      have to press delete again to delete the point.
+    - The point and the label should be "linked" together in a sense. I can move the label independently 
+      of the point yes, but if i move the point then the label should move with it the same. And this 
+      goes for deleting. If i delete the point the label goes. I cannot select the label without 
+      selecting the point. The are "linked".
+    - Also labels just don't "feel" good to work with. Maybe try to clean this up.
+    - I should also be able to change a points color, label's color, even the different styles of 
+      labels, for example, An id can be one color, description
+      another, and elevation another.
+    - I also need settings for more label styles, like northing, easting.
+
+- [ ] **[BUG-003]** Fix Some UI Elements
+    - Menu dropdowns need some padding on the left and right sides of the text
+    - Settings window needs scroll bars where scrolling is possible
+    - Save Layout window also needs padding
+        - save layout window should also have a dropdown of existing layouts and a button 
+          to create a new layout and then type the name
 
 ## FEATURES
-- [ ] **[FEAT-001]** I want the UI to look much more professional.
+
+- [~] **[FEAT-001]** I want the UI to look much more professional. [IN PROGRESS]
     - Core UI Colors
         Purpose                 Color           Hex
         Workspace Background	Rich Black	    #0D0F12
@@ -41,3 +56,31 @@
     - If I hover over a line, circle, text, survey point, etc...the entity should highlight very slightly
       to let me know i am over an entity.
     - And if I am hovering over an entity, click should select that entity. Other wise a box select is needed.
+
+- [ ] **[FEAT-003]** Settings menu right click options
+    - I want in the User Preferences tab to have a Right Click Options section that has the following:
+        - Default Mode:
+            - if no objects are selected, right click means:
+                - dropdown list
+                    - Repeat last command
+                    - Shortcut menu
+        - Edit Mode
+            - If one or more objects are selected, right click means:
+                - dropdown list
+                    - Repeat last command
+                    - Shortcut menu
+        - Command Mode
+            - If a command is in progress, right click means:
+                - dropdown list
+                    - ENTER
+                    - Shortcut menu: always enabled
+                    - Shortcut menu: enabled when options are present
+
+# COMPLETED
+
+~~- [x] **[BUG-001]** Rotation command will is not able to specify rotation from mouse click [COMPLETE]
+    - After specifying a base point the command needs a rotation amount CW from north, R for reference,
+      C for copy. I should be able to not only type in the degree but specify with the mouse.
+    - This behavior also happens when typing R for reference, giving two reference points. I should 
+      be able to not only type in a rotation but specify with the mouse.
+    - Not only specifying a point with the mouse but snaps should also work.~~

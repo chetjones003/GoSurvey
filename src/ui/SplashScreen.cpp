@@ -100,12 +100,15 @@ void DrawMainWindowTitleBar(GLFWwindow* window) {
 
   const ImGuiStyle& st = ImGui::GetStyle();
   float rowH = ImGui::GetFrameHeight() + 8.f;
-  const ImVec4 barBg = st.Colors[ImGuiCol_MenuBarBg];
-  const float btnW = 44.f;
-  float btnH = std::max(22.f, rowH - 6.f);
+  // Title bar is always dark regardless of the active application theme.
+  const ImVec4 barBg     = ImVec4(0.090f, 0.102f, 0.122f, 1.f);  // #171A1F dark secondary
+  const ImU32  iconCol   = IM_COL32(199, 207, 219, 255);           // resting icon color
+  const ImU32  iconColHov = IM_COL32(255, 255, 255, 255);          // brighter on hover / press
+
+  const float btnW      = 44.f;
   const float btnStripW = btnW * 3.f + st.ItemInnerSpacing.x * 2.f;
-  const float padY = 3.f;
-  const float leftPad = 10.f;
+  const float padY      = 4.f;
+  const float leftPad   = 10.f;
 
   ImTextureID logoTex = (ImTextureID)0;
   ImVec2 logoDims(0.f, 0.f);
@@ -113,84 +116,88 @@ void DrawMainWindowTitleBar(GLFWwindow* window) {
   float logoW = 0.f;
   float logoH = 0.f;
   if (haveLogo) {
-    logoH = std::max(18.f, std::min(btnH, rowH - 8.f));
+    logoH = std::max(18.f, std::min(rowH - padY * 2.f, rowH - 8.f));
     logoW = logoH * (logoDims.x / logoDims.y);
-    rowH = std::max(rowH, logoH + 8.f);
-    btnH = std::max(22.f, rowH - 6.f);
+    rowH  = std::max(rowH, logoH + padY * 2.f);
   }
+
+  // Supply title bar geometry to the WndProc so WM_NCHITTEST returns HTCAPTION for the drag
+  // region and HTCLIENT for the button strip, making hit detection OS-level reliable.
+  GlfwPlatformSetTitleBarMetrics(rowH, btnStripW);
 
   ImGui::PushStyleColor(ImGuiCol_ChildBg, barBg);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
   ImGui::BeginChild("##GoSurveyTitleBar", ImVec2(0.f, rowH), false,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
-  const ImVec2 wp = ImGui::GetWindowPos();
-  const float stripLeftScr = wp.x + ImGui::GetWindowContentRegionMax().x - btnStripW;
+  const ImVec2 wp          = ImGui::GetWindowPos();
+  const float  rightEdge   = wp.x + ImGui::GetWindowSize().x;
+  const float  stripLeftScr = rightEdge - btnStripW;
 
+  // Logo + title text.  The drag area to the right of the text is handled natively by HTCAPTION
+  // in BorderlessWndProc — no InvisibleButton needed here.
   ImGui::SetCursorPos(ImVec2(leftPad, padY));
-  ImGui::BeginGroup();
   if (haveLogo && logoTex) {
-    ImGui::SetCursorPosY(padY + std::max(0.f, (btnH - logoH) * 0.5f));
+    ImGui::SetCursorPosY(padY + std::max(0.f, (rowH - padY * 2.f - logoH) * 0.5f));
     ImGui::Image(logoTex, ImVec2(logoW, logoH), ImVec2(0.f, 1.f), ImVec2(1.f, 0.f));
     ImGui::SameLine(0.f, st.ItemInnerSpacing.x);
   }
-  ImGui::SetCursorPosY(padY + std::max(0.f, (btnH - ImGui::GetTextLineHeight()) * 0.5f));
+  ImGui::SetCursorPosY(padY + std::max(0.f, (rowH - padY * 2.f - ImGui::GetTextLineHeight()) * 0.5f));
   ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.78f, 0.82f, 0.88f, 1.f));
   ImGui::TextUnformatted("GoSurvey");
   ImGui::PopStyleColor();
-  ImGui::SameLine(0.f, 12.f);
-  const float dragLeftScr = ImGui::GetCursorScreenPos().x;
-  const float dragW = std::max(32.f, stripLeftScr - dragLeftScr - 4.f);
-  ImGui::InvisibleButton("##TitleDrag", ImVec2(dragW, btnH));
-  if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-    GlfwPlatformBeginCaptionDrag(window);
-  if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-    if (glfwGetWindowAttrib(window, GLFW_MAXIMIZED))
-      glfwRestoreWindow(window);
-    else
-      glfwMaximizeWindow(window);
-  }
-  ImGui::EndGroup();
 
-  ImGui::SetCursorScreenPos(ImVec2(stripLeftScr, wp.y + padY));
-  ImGui::BeginGroup();
+  // Window control buttons — full rowH so there are no dead zones at the top or bottom edge.
+  ImGui::SetCursorScreenPos(ImVec2(stripLeftScr, wp.y));
   ImDrawList* dl = ImGui::GetWindowDrawList();
+  const ImVec2 btnSize(btnW, rowH);
 
-  const ImVec2 btnSize(btnW, btnH);
-
+  // Minimize
   if (ImGui::InvisibleButton("##TitleMin", btnSize))
     glfwIconifyWindow(window);
-  if (ImGui::IsItemHovered())
-    dl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(255, 255, 255, 26), 2.f);
-  TitleBarDrawMinIcon(dl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                      ImGui::ColorConvertFloat4ToU32(st.Colors[ImGuiCol_Text]));
+  {
+    const bool hov = ImGui::IsItemHovered();
+    const bool act = ImGui::IsItemActive();
+    if (act)
+      dl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(255, 255, 255, 80));
+    else if (hov)
+      dl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(255, 255, 255, 50));
+    TitleBarDrawMinIcon(dl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), (hov || act) ? iconColHov : iconCol);
+  }
   ImGui::SameLine(0.f, st.ItemInnerSpacing.x);
 
+  // Maximize / restore
   const bool maxed = glfwGetWindowAttrib(window, GLFW_MAXIMIZED) == GLFW_TRUE;
   if (ImGui::InvisibleButton("##TitleMax", btnSize)) {
-    if (maxed)
-      glfwRestoreWindow(window);
-    else
-      glfwMaximizeWindow(window);
+    if (maxed) glfwRestoreWindow(window);
+    else       glfwMaximizeWindow(window);
   }
-  if (ImGui::IsItemHovered())
-    dl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(255, 255, 255, 26), 2.f);
-  if (maxed)
-    TitleBarDrawRestoreIcon(dl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                          ImGui::ColorConvertFloat4ToU32(st.Colors[ImGuiCol_Text]));
-  else
-    TitleBarDrawMaxIcon(dl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                        ImGui::ColorConvertFloat4ToU32(st.Colors[ImGuiCol_Text]));
+  {
+    const bool hov = ImGui::IsItemHovered();
+    const bool act = ImGui::IsItemActive();
+    if (act)
+      dl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(255, 255, 255, 80));
+    else if (hov)
+      dl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(255, 255, 255, 50));
+    if (maxed)
+      TitleBarDrawRestoreIcon(dl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), (hov || act) ? iconColHov : iconCol);
+    else
+      TitleBarDrawMaxIcon(dl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), (hov || act) ? iconColHov : iconCol);
+  }
   ImGui::SameLine(0.f, st.ItemInnerSpacing.x);
 
+  // Close
   if (ImGui::InvisibleButton("##TitleClose", btnSize))
     glfwSetWindowShouldClose(window, GLFW_TRUE);
-  if (ImGui::IsItemHovered())
-    dl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(232, 18, 35, 110), 2.f);
-  TitleBarDrawCloseIcon(dl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(),
-                        ImGui::ColorConvertFloat4ToU32(st.Colors[ImGuiCol_Text]));
-
-  ImGui::EndGroup();
+  {
+    const bool hov = ImGui::IsItemHovered();
+    const bool act = ImGui::IsItemActive();
+    if (act)
+      dl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(150, 30, 18, 220));
+    else if (hov)
+      dl->AddRectFilled(ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), IM_COL32(196, 43, 28, 190));
+    TitleBarDrawCloseIcon(dl, ImGui::GetItemRectMin(), ImGui::GetItemRectMax(), (hov || act) ? iconColHov : iconCol);
+  }
 
   ImGui::EndChild();
   ImGui::PopStyleVar();

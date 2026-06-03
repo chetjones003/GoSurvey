@@ -191,6 +191,44 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
                                            std::vector<CadAnnotation>* out);
 
 
+/// Snapshot of all per-drawing data.  AppCommandState holds the live (active-tab) copy directly;
+/// switching tabs saves the active fields here and restores the target tab's snapshot.
+struct DrawingDocument {
+  double viewportPanX = 0.0;
+  double viewportPanY = 0.0;
+  float  viewportZoom = 1.f;
+  double worldDocumentOriginX = 0.0;
+  double worldDocumentOriginY = 0.0;
+
+  std::vector<float>            userLinesFlat;
+  std::vector<EntityAttributes> userLineAttrs;
+  std::vector<float>            userCirclesCxCyR;
+  std::vector<EntityAttributes> userCircleAttrs;
+  std::vector<CadArc>           userArcs;
+  std::vector<EntityAttributes> userArcAttrs;
+  std::vector<CadEllipse>       userEllipses;
+  std::vector<EntityAttributes> userEllAttrs;
+  std::vector<int>              userPolylineOffsets;
+  std::vector<float>            userPolylineVerts;
+  std::vector<uint8_t>          userPolylineClosed;
+  std::vector<EntityAttributes> userPolylineAttrs;
+  std::vector<CadAnnotation>    cadAnnotations;
+  std::vector<EntityAttributes> cadAnnotationAttrs;
+  std::vector<SurveyPoint>      surveyPoints;
+  std::vector<int>              selectedSurveyPointIndices;
+  std::vector<CadLayerRow>      drawingLayerTable;
+  std::vector<PdfAttachment>    pdfAttachments;
+  std::vector<SelectedEntity>   selection;
+  uint32_t cadGpuRevision  = 0;
+  uint32_t savedRevision   = 0;   ///< cadGpuRevision at last save; != cadGpuRevision means unsaved changes.
+  std::string filePath;           ///< Absolute path to the .gs file, empty if never saved.
+};
+
+/// Copy the active per-drawing fields from \p cmd into \p cmd.documents[idx].
+void SaveDocumentToSnapshot(AppCommandState& cmd, int idx);
+/// Copy \p cmd.documents[idx] back into the active fields of \p cmd.  Cancels any in-progress command.
+void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx);
+
 struct AppCommandState {
   enum class Kind {
     None,
@@ -611,7 +649,7 @@ struct AppCommandState {
   bool displayDrawTrueSilhouettes = false;
 
   // Display tab — Window Elements (placeholders + theme tag).
-  int displayColorThemeIdx = 0; ///< 0=Dark, 1=Light. Currently visual placeholder.
+  int displayColorThemeIdx = 1; ///< 0=Dark, 1=Light.
   bool displayScrollbars = false;
   bool displayLargeToolbarButtons = false;
   bool displayResizeRibbonIcons = true;
@@ -698,6 +736,35 @@ struct AppCommandState {
   bool viewportCmdPaletteEngaged = false;
   /// True when the viewport command palette is visible — command line defers its InputText to avoid duplicate focus.
   bool viewportDrawingHovered = false;
+
+  // -------------------------------------------------------------------------
+  // Open drawings tab bar
+  // -------------------------------------------------------------------------
+  struct DrawingTab {
+    std::string  name;
+    uint32_t     uid = 0;  ///< Stable per-tab ID used in ImGui label suffix to prevent ID collisions.
+  };
+  std::vector<DrawingTab>     drawingTabs{{"Drawing 1", 1u}};
+  int      activeDrawingIdx   = 0;
+  int      nextDrawingNumber  = 2;    ///< Auto-incremented for "Drawing N" naming.
+  uint32_t nextTabUid         = 2u;   ///< Monotonically increasing; each new tab gets a unique uid.
+  bool pendingDrawingTabSwitch = false; ///< Set for one frame after a programmatic tab change.
+  bool pendingViewportFocus   = false; ///< Request ImGui focus on the Drawing1 window next frame.
+  bool pendingPropertiesFocus = false; ///< Request ImGui focus on the Properties tab on next Begin().
+  bool propertiesPanelActive  = false; ///< True when Properties is the selected tab in its dock node.
+  int  prevDrawingIdx         = 0;     ///< Authoritative "last active" idx; used by main.cpp for switch detection.
+  int  pendingTabErase        = -1;    ///< If >= 0, main.cpp must shut down + erase viewportRenderers[this index].
+  /// Per-drawing snapshots — one entry per open tab.  Active tab's live data lives in the fields
+  /// above; this vector is read/written by SaveDocumentToSnapshot / RestoreDocumentFromSnapshot.
+  std::vector<DrawingDocument> documents{1};
+
+  // --- Active-document dirty/path tracking (mirrors DrawingDocument fields for the live tab) ---
+  uint32_t    activeDocSavedRevision = 0;   ///< cadGpuRevision when the active doc was last saved.
+  std::string activeDocFilePath;            ///< Absolute path to the active doc's .gs file.
+
+  // --- Close confirmation ---
+  bool confirmCloseModal = false;  ///< Set by the main loop to open the "Unsaved Changes" dialog.
+  bool closeConfirmed    = false;  ///< Set by the dialog to signal the main loop to exit.
 
   // -------------------------------------------------------------------------
   // ALIGN command state (Helmert transformation)

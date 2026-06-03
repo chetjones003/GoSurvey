@@ -18,6 +18,10 @@ namespace {
 WNDPROC g_prevWndProc = nullptr;
 GLFWwindow* g_borderlessWindow = nullptr;
 
+// Updated each frame by GlfwPlatformSetTitleBarMetrics so WM_NCHITTEST can route correctly.
+float g_titleBarRowH     = 0.f;
+float g_btnStripWidthPx  = 0.f;
+
 int EdgeBorderPx() {
   HDC dc = GetDC(nullptr);
   const int dpi = dc ? GetDeviceCaps(dc, LOGPIXELSX) : 96;
@@ -32,9 +36,6 @@ LRESULT CALLBACK BorderlessWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     if (hit != HTCLIENT)
       return hit;
 
-    if (!g_borderlessWindow || glfwGetWindowAttrib(g_borderlessWindow, GLFW_MAXIMIZED))
-      return HTCLIENT;
-
     const int px = static_cast<int>(static_cast<SHORT>(LOWORD(lParam)));
     const int py = static_cast<int>(static_cast<SHORT>(HIWORD(lParam)));
     POINT pt{px, py};
@@ -43,29 +44,41 @@ LRESULT CALLBACK BorderlessWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     GetClientRect(hwnd, &cr);
     const int ww = cr.right - cr.left;
     const int hh = cr.bottom - cr.top;
-    const int b = EdgeBorderPx();
+    const int b  = EdgeBorderPx();
 
-    const bool onLeft = pt.x < b;
-    const bool onRight = pt.x >= ww - b;
-    const bool onTop = pt.y < b;
-    const bool onBottom = pt.y >= hh - b;
+    const bool maximized = g_borderlessWindow &&
+                           glfwGetWindowAttrib(g_borderlessWindow, GLFW_MAXIMIZED) == GLFW_TRUE;
 
-    if (onTop && onLeft)
-      return HTTOPLEFT;
-    if (onTop && onRight)
-      return HTTOPRIGHT;
-    if (onBottom && onLeft)
-      return HTBOTTOMLEFT;
-    if (onBottom && onRight)
-      return HTBOTTOMRIGHT;
-    if (onTop)
-      return HTTOP;
-    if (onBottom)
-      return HTBOTTOM;
-    if (onLeft)
-      return HTLEFT;
-    if (onRight)
-      return HTRIGHT;
+    // Top-corner resize grips — checked before the title bar so corners remain resizable.
+    if (!maximized) {
+      const bool onLeft  = pt.x < b;
+      const bool onRight = pt.x >= ww - b;
+      const bool onTop   = pt.y < b;
+      // Right corner only if outside the button strip.
+      const bool inBtnStrip = g_btnStripWidthPx > 0.f && pt.x >= ww - (int)g_btnStripWidthPx;
+      if (onTop && onLeft)              return HTTOPLEFT;
+      if (onTop && onRight && !inBtnStrip) return HTTOPRIGHT;
+    }
+
+    // Title bar — button strip stays HTCLIENT (ImGui handles it); drag area returns HTCAPTION
+    // so Windows manages the move natively without going through ImGui.
+    if (g_titleBarRowH > 0.f && pt.y >= 0 && pt.y < (int)g_titleBarRowH) {
+      if (g_btnStripWidthPx > 0.f && pt.x >= ww - (int)g_btnStripWidthPx)
+        return HTCLIENT;
+      return HTCAPTION;
+    }
+
+    // Below-title-bar resize edges (skip when maximized).
+    if (!maximized) {
+      const bool onLeft   = pt.x < b;
+      const bool onRight  = pt.x >= ww - b;
+      const bool onBottom = pt.y >= hh - b;
+      if (onBottom && onLeft)  return HTBOTTOMLEFT;
+      if (onBottom && onRight) return HTBOTTOMRIGHT;
+      if (onBottom)            return HTBOTTOM;
+      if (onLeft)              return HTLEFT;
+      if (onRight)             return HTRIGHT;
+    }
     return HTCLIENT;
   }
   if (g_prevWndProc)
@@ -100,6 +113,11 @@ void GlfwPlatformBeginCaptionDrag(GLFWwindow* window) {
     return;
   ReleaseCapture();
   SendMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+}
+
+void GlfwPlatformSetTitleBarMetrics(float rowHeightPx, float btnStripWidthPx) {
+  g_titleBarRowH    = rowHeightPx;
+  g_btnStripWidthPx = btnStripWidthPx;
 }
 
 #endif // _WIN32

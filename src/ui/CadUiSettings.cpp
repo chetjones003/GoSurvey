@@ -38,8 +38,13 @@ static void DrawSettingsHeader(const AppCommandState& cmd) {
 static void DrawDisplayWindowElements(AppCommandState& cmd) {
   const char* themes[] = {"Dark", "Light"};
   ImGui::SetNextItemWidth(150.f);
-  if (ImGui::Combo("Color theme:", &cmd.displayColorThemeIdx, themes, IM_ARRAYSIZE(themes)))
+  if (ImGui::Combo("Color theme:", &cmd.displayColorThemeIdx, themes, IM_ARRAYSIZE(themes))) {
     cmd.displayColorThemeIdx = std::clamp(cmd.displayColorThemeIdx, 0, 1);
+    if (cmd.displayColorThemeIdx == 0)
+      ApplyCadDarkTheme();
+    else
+      ApplyCadLightTheme();
+  }
   ImGui::Spacing();
   ImGui::Checkbox("Display scroll bars in drawing window", &cmd.displayScrollbars);
   ImGui::Checkbox("Use large buttons for Toolbars", &cmd.displayLargeToolbarButtons);

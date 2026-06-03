@@ -22,6 +22,71 @@
 #include <unordered_set>
 #include <numeric>
 
+void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
+  if (idx < 0 || static_cast<size_t>(idx) >= cmd.documents.size()) return;
+  DrawingDocument& doc       = cmd.documents[static_cast<size_t>(idx)];
+  doc.viewportPanX           = cmd.viewportPanX;
+  doc.viewportPanY           = cmd.viewportPanY;
+  doc.viewportZoom           = cmd.viewportZoom;
+  doc.worldDocumentOriginX   = cmd.worldDocumentOriginX;
+  doc.worldDocumentOriginY   = cmd.worldDocumentOriginY;
+  doc.userLinesFlat          = cmd.userLinesFlat;
+  doc.userLineAttrs          = cmd.userLineAttrs;
+  doc.userCirclesCxCyR       = cmd.userCirclesCxCyR;
+  doc.userCircleAttrs        = cmd.userCircleAttrs;
+  doc.userArcs               = cmd.userArcs;
+  doc.userArcAttrs           = cmd.userArcAttrs;
+  doc.userEllipses           = cmd.userEllipses;
+  doc.userEllAttrs           = cmd.userEllAttrs;
+  doc.userPolylineOffsets    = cmd.userPolylineOffsets;
+  doc.userPolylineVerts      = cmd.userPolylineVerts;
+  doc.userPolylineClosed     = cmd.userPolylineClosed;
+  doc.userPolylineAttrs      = cmd.userPolylineAttrs;
+  doc.cadAnnotations         = cmd.cadAnnotations;
+  doc.cadAnnotationAttrs     = cmd.cadAnnotationAttrs;
+  doc.surveyPoints           = cmd.surveyPoints;
+  doc.selectedSurveyPointIndices = cmd.selectedSurveyPointIndices;
+  doc.drawingLayerTable      = cmd.drawingLayerTable;
+  doc.pdfAttachments         = cmd.pdfAttachments;
+  doc.selection              = cmd.selection;
+  doc.cadGpuRevision         = cmd.cadGpuRevision;
+  doc.savedRevision          = cmd.activeDocSavedRevision;
+  doc.filePath               = cmd.activeDocFilePath;
+}
+
+void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
+  if (idx < 0 || static_cast<size_t>(idx) >= cmd.documents.size()) return;
+  const DrawingDocument& doc     = cmd.documents[static_cast<size_t>(idx)];
+  cmd.viewportPanX               = doc.viewportPanX;
+  cmd.viewportPanY               = doc.viewportPanY;
+  cmd.viewportZoom               = doc.viewportZoom;
+  cmd.worldDocumentOriginX       = doc.worldDocumentOriginX;
+  cmd.worldDocumentOriginY       = doc.worldDocumentOriginY;
+  cmd.userLinesFlat              = doc.userLinesFlat;
+  cmd.userLineAttrs              = doc.userLineAttrs;
+  cmd.userCirclesCxCyR           = doc.userCirclesCxCyR;
+  cmd.userCircleAttrs            = doc.userCircleAttrs;
+  cmd.userArcs                   = doc.userArcs;
+  cmd.userArcAttrs               = doc.userArcAttrs;
+  cmd.userEllipses               = doc.userEllipses;
+  cmd.userEllAttrs               = doc.userEllAttrs;
+  cmd.userPolylineOffsets        = doc.userPolylineOffsets;
+  cmd.userPolylineVerts          = doc.userPolylineVerts;
+  cmd.userPolylineClosed         = doc.userPolylineClosed;
+  cmd.userPolylineAttrs          = doc.userPolylineAttrs;
+  cmd.cadAnnotations             = doc.cadAnnotations;
+  cmd.cadAnnotationAttrs         = doc.cadAnnotationAttrs;
+  cmd.surveyPoints               = doc.surveyPoints;
+  cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
+  cmd.drawingLayerTable          = doc.drawingLayerTable;
+  cmd.pdfAttachments             = doc.pdfAttachments;
+  cmd.selection                  = doc.selection;
+  cmd.cadGpuRevision             = doc.cadGpuRevision;
+  cmd.activeDocSavedRevision     = doc.savedRevision;
+  cmd.activeDocFilePath          = doc.filePath;
+  cmd.active = AppCommandState::Kind::None;  // cancel any in-progress command on switch
+}
+
 bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::string>& log);
 
 bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std::string>& log);

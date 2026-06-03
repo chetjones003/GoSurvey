@@ -97,8 +97,10 @@ int main() {
 
   PdfAttach_Init();
 
-  ViewportRenderer viewport;
-  if (!viewport.Init()) {
+  // One ViewportRenderer (owns its own FBO + texture) per open drawing tab.
+  std::vector<std::unique_ptr<ViewportRenderer>> viewportRenderers;
+  viewportRenderers.push_back(std::make_unique<ViewportRenderer>());
+  if (!viewportRenderers[0]->Init()) {
     PdfAttach_Shutdown();
     glfwDestroyWindow(window);
     glfwTerminate();
@@ -121,7 +123,7 @@ int main() {
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigInputTextEnterKeepActive = false; // CAD shell: Enter submits without selecting-all next keystroke
 
-  ApplyCadDarkTheme();
+  ApplyCadLightTheme();
   if (!LoadApplicationFont())
     std::fprintf(stderr, "Calibri not found; using ImGui default font.\n");
   io.FontGlobalScale = 1.05f;
@@ -141,8 +143,14 @@ int main() {
   cmdLog.push_back("Drawing Created.");
   cmdLog.push_back("JSON database - ready...");
   TryLoadStartupWorkspaceTemplate(cmd, cmdLog);
+  cmd.activeDocSavedRevision = cmd.cadGpuRevision;  // loaded template counts as "clean"
   // Re-apply user preferences so they override any template defaults (crosshair, snap, survey, etc.).
   LoadUserStartupPrefSettings(cmd);
+  // Re-apply theme now that displayColorThemeIdx is known from saved prefs.
+  if (cmd.displayColorThemeIdx == 0)
+    ApplyCadDarkTheme();
+  else
+    ApplyCadLightTheme();
   if (!cmd.surveyPoints.empty()) {
     RepositionAllSurveyPointLabels(cmd);
     BumpCadGpuCache(cmd);
@@ -160,9 +168,28 @@ int main() {
   const float ribbonH = 130.f;
   bool orthoEnabled = true;
   bool gridVisible = false;
+  // prevDrawingIdx lives in cmd — no local needed.
 
-  while (!glfwWindowShouldClose(window)) {
+  while (true) {
     glfwPollEvents();
+
+    // Intercept window-close so we can prompt about unsaved drawings.
+    if (glfwWindowShouldClose(window)) {
+      glfwSetWindowShouldClose(window, GLFW_FALSE);
+      bool anyDirty = (cmd.cadGpuRevision != cmd.activeDocSavedRevision);
+      for (int i = 0; i < static_cast<int>(cmd.documents.size()) && !anyDirty; ++i) {
+        if (i != cmd.activeDrawingIdx &&
+            cmd.documents[i].cadGpuRevision != cmd.documents[i].savedRevision)
+          anyDirty = true;
+      }
+      if (anyDirty)
+        cmd.confirmCloseModal = true;
+      else
+        cmd.closeConfirmed = true;
+    }
+
+    if (cmd.closeConfirmed)
+      break;
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
@@ -286,8 +313,44 @@ int main() {
 
     DrawPropertiesPanel(cmd, &cmdLog);
 
+    // Keep documents vector in sync with the tab list.
+    while (cmd.documents.size() < cmd.drawingTabs.size())
+      cmd.documents.emplace_back();
+
+    // Erase renderer for a closed tab (must happen before provisioning so indices stay aligned).
+    if (cmd.pendingTabErase >= 0) {
+      const auto eraseAt = static_cast<size_t>(cmd.pendingTabErase);
+      if (eraseAt < viewportRenderers.size()) {
+        viewportRenderers[eraseAt]->Shutdown();
+        viewportRenderers.erase(viewportRenderers.begin() + static_cast<std::ptrdiff_t>(eraseAt));
+      }
+      cmd.pendingTabErase = -1;
+    }
+
+    // Clamp activeDrawingIdx defensively (close/erase can leave it transiently out of range).
+    if (!cmd.drawingTabs.empty())
+      cmd.activeDrawingIdx = std::max(0, std::min(cmd.activeDrawingIdx,
+                                                  static_cast<int>(cmd.drawingTabs.size()) - 1));
+
+    // Always provision renderers before any switch logic (New/Open menu items bypass switch detection).
+    while (viewportRenderers.size() <= static_cast<size_t>(cmd.activeDrawingIdx)) {
+      viewportRenderers.push_back(std::make_unique<ViewportRenderer>());
+      viewportRenderers.back()->Init();
+    }
+
+    // Detect tab switch: save old document, restore new one.
+    // cmd.prevDrawingIdx is the authoritative last-active index (also written by menu New/Open handlers).
+    if (cmd.activeDrawingIdx != cmd.prevDrawingIdx) {
+      SaveDocumentToSnapshot(cmd, cmd.prevDrawingIdx);
+      RestoreDocumentFromSnapshot(cmd, cmd.activeDrawingIdx);
+      cmd.prevDrawingIdx = cmd.activeDrawingIdx;
+    }
+
+    const size_t activeRendIdx = static_cast<size_t>(cmd.activeDrawingIdx);
+    ViewportRenderer& activeRenderer = *viewportRenderers[activeRendIdx];
+
     CadSnap::Hit snapHit{};
-    DrawDrawingViewport(viewport.ColorTexture(), cmd, cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)),
+    DrawDrawingViewport(activeRenderer.ColorTexture(), cmd, cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)),
                         &cmd.viewportPanX, &cmd.viewportPanY, &cmd.viewportZoom, &curX, &curY, &curRawX, &curRawY,
                         &fbW, &fbH, &snapHit);
     cmd.uiCursorWorldX = CadCoord::WorldXFromLocal(cmd, static_cast<float>(curX));
@@ -325,9 +388,16 @@ int main() {
     DrawImportPointsPanel(cmd, cmdLog);
     DrawExportPointsPanel(cmd, cmdLog);
     DrawSurveyReportsPanel(cmd);
+    // After all panels have called Begin() their DockNode is set, so SetWindowFocus
+    // can correctly update the dock node's SelectedTabId for the next frame.
+    if (cmd.pendingPropertiesFocus) {
+      ImGui::SetWindowFocus("Properties");
+      cmd.pendingPropertiesFocus = false;
+    }
     DrawCopySurveyDuplicateModal(cmd, cmdLog);
     DrawPdfAttachDialog(cmd, cmdLog);
     DrawAlignResultsWindow(cmd, cmdLog);
+    DrawCloseConfirmModal(cmd, cmdLog);
 
     std::vector<float> rubberLines;
     const float orthoHalfH = (1.f / std::max(cmd.viewportZoom, 1.e-9f)) * 50.f;
@@ -386,7 +456,7 @@ int main() {
     ext.polylineAttrs = &cmd.userPolylineAttrs;
     ext.drawingLayers = &cmd.drawingLayerTable;
 
-    viewport.SetSize(fbW, fbH);
+    activeRenderer.SetSize(fbW, fbH);
     RenderTuning tuning{};
     tuning.arcCircleSmoothnessCap = std::clamp(cmd.displayArcCircleSmoothness, 8, 20000);
     tuning.hardwareAcceleration = cmd.systemHardwareAcceleration;
@@ -396,7 +466,7 @@ int main() {
     if (!cmd.pdfAttachments.empty())
       pdfRenderList = cmd.pdfAttachments; // shallow copy of the vector (texIds stay valid)
 
-    viewport.RenderScene(cmd.viewportPanX, cmd.viewportPanY, cmd.viewportZoom, fbW, fbH, cmd.userLinesFlat,
+    activeRenderer.RenderScene(cmd.viewportPanX, cmd.viewportPanY, cmd.viewportZoom, fbW, fbH, cmd.userLinesFlat,
                          cmd.userCirclesCxCyR, cmd.cadGpuRevision,
                          rubberLines, snapHit.valid ? &snapHit : nullptr,
                          std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f), selRectPtr,
@@ -420,6 +490,14 @@ int main() {
     glfwSwapBuffers(window);
   }
 
+  // Silently persist settings, preferences, and the current dock layout.
+  SaveUserStartupPrefs(cmd);
+  {
+    const ImGuiIO& ioSave = ImGui::GetIO();
+    if (ioSave.IniFilename && ioSave.IniFilename[0])
+      ImGui::SaveIniSettingsToDisk(ioSave.IniFilename);
+  }
+
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   CadUiClearMenuBarLogo();
@@ -434,7 +512,8 @@ int main() {
     cmd.pdfDraftCache = nullptr;
   }
 
-  viewport.Shutdown();
+  for (auto& r : viewportRenderers)
+    r->Shutdown();
   PdfAttach_Shutdown();
   glfwDestroyWindow(window);
   glfwTerminate();

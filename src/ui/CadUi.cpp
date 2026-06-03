@@ -12,6 +12,7 @@
 #include "WinFileDialogs.hpp"
 #include "SurveyPoints.hpp"
 #include "StringUtil.hpp"
+#include "imgui.h"
 
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
@@ -138,60 +139,151 @@ void ApplyCadDarkTheme() {
   ImGuiStyle& style = ImGui::GetStyle();
   ImVec4* colors = style.Colors;
 
-  style.WindowRounding = 2.f;
-  style.ChildRounding = 2.f;
-  style.FrameRounding = 2.f;
-  style.PopupRounding = 2.f;
-  style.ScrollbarRounding = 2.f;
-  style.GrabRounding = 2.f;
-  style.TabRounding = 2.f;
+  style.WindowRounding = 4.f;
+  style.ChildRounding = 3.f;
+  style.FrameRounding = 3.f;
+  style.PopupRounding = 4.f;
+  style.ScrollbarRounding = 3.f;
+  style.GrabRounding = 3.f;
+  style.TabRounding = 3.f;
   style.WindowBorderSize = 1.f;
-  style.FrameBorderSize = 1.f;
+  style.FrameBorderSize = 0.f;
+  style.TabBorderSize = 0.f;
+  style.ScrollbarSize = 12.f;
   style.WindowPadding = ImVec2(8, 8);
   style.FramePadding = ImVec2(6, 4);
   style.ItemSpacing = ImVec2(8, 6);
 
-  const ImVec4 bg0 = ImVec4(0.11f, 0.11f, 0.12f, 1.f);
-  const ImVec4 bg1 = ImVec4(0.14f, 0.14f, 0.15f, 1.f);
-  const ImVec4 bg2 = ImVec4(0.18f, 0.18f, 0.19f, 1.f);
-  const ImVec4 accent = ImVec4(0.92f, 0.48f, 0.16f, 1.f);
+  // Core UI palette — hex values match the FEAT-001 spec exactly
+  const ImVec4 workspace  = ImVec4(0.051f, 0.059f, 0.071f, 1.f);  // #0D0F12  Workspace Background
+  const ImVec4 secondary  = ImVec4(0.090f, 0.102f, 0.122f, 1.f);  // #171A1F  Secondary Background
+  const ImVec4 panel      = ImVec4(0.125f, 0.145f, 0.173f, 1.f);  // #20252C  Panel Background
+  const ImVec4 raised     = ImVec4(0.165f, 0.192f, 0.231f, 1.f);  // #2A313B  Raised Surface
+  const ImVec4 border     = ImVec4(0.227f, 0.263f, 0.310f, 1.f);  // #3A434F  Border
+  const ImVec4 separator  = ImVec4(0.294f, 0.337f, 0.392f, 1.f);  // #4B5664  Separator Lines
+  const ImVec4 blue       = ImVec4(0.231f, 0.510f, 0.965f, 1.f);  // #3B82F6  Primary Blue accent
+  const ImVec4 orange     = ImVec4(0.976f, 0.451f, 0.086f, 1.f);  // #F97316  Survey Orange (unused here; used in toggle buttons)
+  const ImVec4 text       = ImVec4(0.898f, 0.906f, 0.922f, 1.f);  // #E5E7EB  Command Text / primary text
 
-  colors[ImGuiCol_Text] = ImVec4(0.93f, 0.93f, 0.94f, 1.f);
-  colors[ImGuiCol_TextDisabled] = ImVec4(0.50f, 0.50f, 0.52f, 1.f);
-  colors[ImGuiCol_WindowBg] = bg0;
-  colors[ImGuiCol_ChildBg] = bg0;
-  colors[ImGuiCol_PopupBg] = ImVec4(0.12f, 0.12f, 0.13f, 0.98f);
-  colors[ImGuiCol_Border] = ImVec4(0.28f, 0.28f, 0.30f, 1.f);
-  colors[ImGuiCol_FrameBg] = bg1;
-  colors[ImGuiCol_FrameBgHovered] = bg2;
-  colors[ImGuiCol_FrameBgActive] = ImVec4(0.42f, 0.26f, 0.12f, 1.f);
-  colors[ImGuiCol_TitleBg] = bg1;
-  colors[ImGuiCol_TitleBgActive] = bg2;
-  colors[ImGuiCol_MenuBarBg] = ImVec4(0.16f, 0.16f, 0.17f, 1.f);
-  colors[ImGuiCol_ScrollbarBg] = bg0;
-  colors[ImGuiCol_ScrollbarGrab] = bg2;
-  colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.22f, 0.22f, 0.24f, 1.f);
-  colors[ImGuiCol_CheckMark] = accent;
-  colors[ImGuiCol_SliderGrab] = accent;
-  colors[ImGuiCol_Button] = bg2;
-  colors[ImGuiCol_ButtonHovered] = ImVec4(0.50f, 0.30f, 0.14f, 1.f);
-  colors[ImGuiCol_ButtonActive] = ImVec4(0.44f, 0.26f, 0.10f, 1.f);
-  colors[ImGuiCol_Header] = bg2;
-  colors[ImGuiCol_HeaderHovered] = ImVec4(0.50f, 0.30f, 0.14f, 1.f);
-  colors[ImGuiCol_HeaderActive] = ImVec4(0.44f, 0.26f, 0.10f, 1.f);
-  colors[ImGuiCol_Separator] = ImVec4(0.28f, 0.28f, 0.30f, 1.f);
-  colors[ImGuiCol_Tab] = bg1;
-  colors[ImGuiCol_TabHovered] = ImVec4(0.58f, 0.34f, 0.16f, 1.f);
-  const ImVec4 tabSel = ImVec4(0.48f, 0.28f, 0.12f, 1.f);
-  colors[ImGuiCol_TabActive] = tabSel;
-  colors[ImGuiCol_TabUnfocused] = bg1;
-  colors[ImGuiCol_TabUnfocusedActive] = bg2;
-  // ImGui copies HeaderActive into TabSelectedOverline once in StyleColorsDark; we change HeaderActive
-  // afterward, so the overline would stay default blue unless we set these explicitly.
-  colors[ImGuiCol_TabSelectedOverline] = tabSel;
-  colors[ImGuiCol_TabDimmedSelectedOverline] = bg2;
-  colors[ImGuiCol_DockingPreview] = ImVec4(0.92f, 0.48f, 0.16f, 0.35f);
-  colors[ImGuiCol_DockingEmptyBg] = ImVec4(0.09f, 0.09f, 0.10f, 1.f);
+  (void)orange;
+
+  colors[ImGuiCol_Text]                  = text;
+  colors[ImGuiCol_TextDisabled]          = separator;
+  colors[ImGuiCol_WindowBg]              = workspace;
+  colors[ImGuiCol_ChildBg]               = secondary;
+  colors[ImGuiCol_PopupBg]               = ImVec4(0.090f, 0.102f, 0.122f, 0.98f);
+  colors[ImGuiCol_Border]                = border;
+  colors[ImGuiCol_BorderShadow]          = ImVec4(0.f, 0.f, 0.f, 0.f);
+  colors[ImGuiCol_FrameBg]               = panel;
+  colors[ImGuiCol_FrameBgHovered]        = raised;
+  colors[ImGuiCol_FrameBgActive]         = ImVec4(0.204f, 0.235f, 0.278f, 1.f);
+  colors[ImGuiCol_TitleBg]               = secondary;
+  colors[ImGuiCol_TitleBgActive]         = panel;
+  colors[ImGuiCol_TitleBgCollapsed]      = workspace;
+  colors[ImGuiCol_MenuBarBg]             = secondary;
+  colors[ImGuiCol_ScrollbarBg]           = workspace;
+  colors[ImGuiCol_ScrollbarGrab]         = raised;
+  colors[ImGuiCol_ScrollbarGrabHovered]  = border;
+  colors[ImGuiCol_ScrollbarGrabActive]   = separator;
+  colors[ImGuiCol_CheckMark]             = blue;
+  colors[ImGuiCol_SliderGrab]            = blue;
+  colors[ImGuiCol_SliderGrabActive]      = ImVec4(0.380f, 0.588f, 0.984f, 1.f);
+  colors[ImGuiCol_Button]                = panel;
+  colors[ImGuiCol_ButtonHovered]         = raised;
+  colors[ImGuiCol_ButtonActive]          = ImVec4(0.204f, 0.235f, 0.278f, 1.f);
+  colors[ImGuiCol_Header]                = panel;
+  colors[ImGuiCol_HeaderHovered]         = raised;
+  colors[ImGuiCol_HeaderActive]          = ImVec4(0.204f, 0.235f, 0.278f, 1.f);
+  colors[ImGuiCol_Separator]             = border;
+  colors[ImGuiCol_SeparatorHovered]      = separator;
+  colors[ImGuiCol_SeparatorActive]       = blue;
+  colors[ImGuiCol_ResizeGrip]            = ImVec4(0.231f, 0.510f, 0.965f, 0.15f);
+  colors[ImGuiCol_ResizeGripHovered]     = ImVec4(0.231f, 0.510f, 0.965f, 0.55f);
+  colors[ImGuiCol_ResizeGripActive]      = blue;
+  colors[ImGuiCol_Tab]                   = secondary;
+  colors[ImGuiCol_TabHovered]            = raised;
+  colors[ImGuiCol_TabActive]             = ImVec4(0.063f, 0.141f, 0.345f, 1.f);  // dark blue tint
+  colors[ImGuiCol_TabUnfocused]          = workspace;
+  colors[ImGuiCol_TabUnfocusedActive]    = ImVec4(0.063f, 0.141f, 0.345f, 1.f);  // same as TabActive — showing tab is always blue
+  // Keep the overline accent explicitly — ImGui may copy HeaderActive into it and ours changed.
+  colors[ImGuiCol_TabSelectedOverline]        = blue;
+  colors[ImGuiCol_TabDimmedSelectedOverline]  = blue;  // showing tab overline stays blue even without focus
+  colors[ImGuiCol_DockingPreview]        = ImVec4(0.231f, 0.510f, 0.965f, 0.35f);
+  colors[ImGuiCol_DockingEmptyBg]        = workspace;
+}
+
+void ApplyCadLightTheme() {
+  ImGuiStyle& style = ImGui::GetStyle();
+  ImVec4* colors = style.Colors;
+
+  style.WindowRounding = 4.f;
+  style.ChildRounding = 3.f;
+  style.FrameRounding = 3.f;
+  style.PopupRounding = 4.f;
+  style.ScrollbarRounding = 3.f;
+  style.GrabRounding = 3.f;
+  style.TabRounding = 3.f;
+  style.WindowBorderSize = 1.f;
+  style.FrameBorderSize = 0.f;
+  style.TabBorderSize = 0.f;
+  style.ScrollbarSize = 12.f;
+  style.WindowPadding = ImVec2(8, 8);
+  style.FramePadding = ImVec2(6, 4);
+  style.ItemSpacing = ImVec2(8, 6);
+
+  // Light palette — medium-gray blue-gray tones; clearly gray, not near-white
+  const ImVec4 workspace  = ImVec4(0.835f, 0.847f, 0.875f, 1.f);  // #D5D8DF  Workspace Background
+  const ImVec4 secondary  = ImVec4(0.773f, 0.788f, 0.824f, 1.f);  // #C5C9D2  Secondary Background
+  const ImVec4 panel      = ImVec4(0.702f, 0.722f, 0.765f, 1.f);  // #B3B8C3  Panel Background
+  const ImVec4 raised     = ImVec4(0.635f, 0.659f, 0.710f, 1.f);  // #A2A8B5  Raised Surface
+  const ImVec4 border     = ImVec4(0.533f, 0.565f, 0.627f, 1.f);  // #8890A0  Border
+  const ImVec4 separator  = ImVec4(0.416f, 0.447f, 0.510f, 1.f);  // #6A7282  Separator Lines
+  const ImVec4 blue       = ImVec4(0.231f, 0.510f, 0.965f, 1.f);  // #3B82F6  Primary Blue accent
+  const ImVec4 text       = ImVec4(0.102f, 0.125f, 0.208f, 1.f);  // #1A2035  Primary text
+  const ImVec4 textMuted  = ImVec4(0.380f, 0.412f, 0.475f, 1.f);  // #616979  Disabled text
+
+  colors[ImGuiCol_Text]                  = text;
+  colors[ImGuiCol_TextDisabled]          = textMuted;
+  colors[ImGuiCol_WindowBg]              = workspace;
+  colors[ImGuiCol_ChildBg]               = secondary;
+  colors[ImGuiCol_PopupBg]               = ImVec4(0.835f, 0.847f, 0.875f, 0.98f);
+  colors[ImGuiCol_Border]                = border;
+  colors[ImGuiCol_BorderShadow]          = ImVec4(0.f, 0.f, 0.f, 0.f);
+  colors[ImGuiCol_FrameBg]               = panel;
+  colors[ImGuiCol_FrameBgHovered]        = raised;
+  colors[ImGuiCol_FrameBgActive]         = ImVec4(0.580f, 0.604f, 0.651f, 1.f);
+  colors[ImGuiCol_TitleBg]               = secondary;
+  colors[ImGuiCol_TitleBgActive]         = panel;
+  colors[ImGuiCol_TitleBgCollapsed]      = workspace;
+  colors[ImGuiCol_MenuBarBg]             = secondary;
+  colors[ImGuiCol_ScrollbarBg]           = workspace;
+  colors[ImGuiCol_ScrollbarGrab]         = raised;
+  colors[ImGuiCol_ScrollbarGrabHovered]  = border;
+  colors[ImGuiCol_ScrollbarGrabActive]   = separator;
+  colors[ImGuiCol_CheckMark]             = blue;
+  colors[ImGuiCol_SliderGrab]            = blue;
+  colors[ImGuiCol_SliderGrabActive]      = ImVec4(0.380f, 0.588f, 0.984f, 1.f);
+  colors[ImGuiCol_Button]                = panel;
+  colors[ImGuiCol_ButtonHovered]         = raised;
+  colors[ImGuiCol_ButtonActive]          = ImVec4(0.580f, 0.604f, 0.651f, 1.f);
+  colors[ImGuiCol_Header]                = panel;
+  colors[ImGuiCol_HeaderHovered]         = raised;
+  colors[ImGuiCol_HeaderActive]          = ImVec4(0.580f, 0.604f, 0.651f, 1.f);
+  colors[ImGuiCol_Separator]             = border;
+  colors[ImGuiCol_SeparatorHovered]      = separator;
+  colors[ImGuiCol_SeparatorActive]       = blue;
+  colors[ImGuiCol_ResizeGrip]            = ImVec4(0.231f, 0.510f, 0.965f, 0.15f);
+  colors[ImGuiCol_ResizeGripHovered]     = ImVec4(0.231f, 0.510f, 0.965f, 0.55f);
+  colors[ImGuiCol_ResizeGripActive]      = blue;
+  colors[ImGuiCol_Tab]                   = secondary;
+  colors[ImGuiCol_TabHovered]            = raised;
+  colors[ImGuiCol_TabActive]             = ImVec4(0.741f, 0.831f, 0.988f, 1.f);  // light blue tint
+  colors[ImGuiCol_TabUnfocused]          = panel;
+  colors[ImGuiCol_TabUnfocusedActive]    = ImVec4(0.741f, 0.831f, 0.988f, 1.f);  // same as TabActive — showing tab is always blue
+  colors[ImGuiCol_TabSelectedOverline]        = blue;
+  colors[ImGuiCol_TabDimmedSelectedOverline]  = blue;  // showing tab overline stays blue even without focus
+  colors[ImGuiCol_DockingPreview]        = ImVec4(0.231f, 0.510f, 0.965f, 0.35f);
+  colors[ImGuiCol_DockingEmptyBg]        = workspace;
 }
 
 void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size) {
@@ -213,9 +305,9 @@ void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size) {
   ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Down, 0.30f, &dock_bottom, &dock_center);
 
   ImGui::DockBuilderDockWindow("Properties", dock_left);
-  ImGui::DockBuilderDockWindow("Reports", dock_right);
+  ImGui::DockBuilderDockWindow("Reports", dock_left);
   ImGui::DockBuilderDockWindow("Command line", dock_bottom);
-  ImGui::DockBuilderDockWindow("Drawing1", dock_center);
+  ImGui::DockBuilderDockWindow("Viewports", dock_center);
 
   ImGui::DockBuilderFinish(dockspace_id);
 }
@@ -238,8 +330,69 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
   }
 #endif
   if (ImGui::BeginMenu("File")) {
-    ImGui::MenuItem("New", nullptr);
-    ImGui::MenuItem("Open...", nullptr);
+    if (ImGui::MenuItem("New", nullptr)) {
+      SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
+      const int newIdx = static_cast<int>(cmd.drawingTabs.size());
+      cmd.drawingTabs.push_back({"Drawing " + std::to_string(cmd.nextDrawingNumber++), cmd.nextTabUid++});
+      cmd.documents.emplace_back();
+      RestoreDocumentFromSnapshot(cmd, newIdx);  // load empty state into cmd
+      cmd.activeDrawingIdx        = newIdx;
+      cmd.prevDrawingIdx          = newIdx;  // tell main.cpp the switch already happened
+      cmd.pendingDrawingTabSwitch = true;
+      cmd.pendingViewportFocus    = true;
+    }
+    if (ImGui::MenuItem("Open", nullptr)) {
+      if (BrowseOpenFileGsUtf8(gsPath, sizeof(gsPath))) {
+        SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
+        const std::string tabName = std::filesystem::path(gsPath).stem().string();
+        const int newIdx = static_cast<int>(cmd.drawingTabs.size());
+        cmd.drawingTabs.push_back({tabName.empty() ? "Drawing" : tabName, cmd.nextTabUid++});
+        cmd.documents.emplace_back();
+        RestoreDocumentFromSnapshot(cmd, newIdx);  // clear cmd to empty state
+        if (LoadGoSurveyFile(cmd, gsPath, log)) {
+          cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+          cmd.activeDocFilePath      = std::string(gsPath);
+        }
+        cmd.activeDrawingIdx        = newIdx;
+        cmd.prevDrawingIdx          = newIdx;  // tell main.cpp the switch already happened
+        cmd.pendingDrawingTabSwitch = true;
+        cmd.pendingViewportFocus    = true;
+      }
+    }
+    if (ImGui::MenuItem("Save", "Ctrl+S")) {
+      const std::string& path = cmd.activeDocFilePath;
+      if (!path.empty()) {
+        if (SaveGoSurveyFile(cmd, path.c_str(), log))
+          cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+      } else {
+        if (BrowseSaveFileGsUtf8(gsPath, sizeof(gsPath), "drawing.gs")) {
+          if (SaveGoSurveyFile(cmd, gsPath, log)) {
+            cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+            cmd.activeDocFilePath      = std::string(gsPath);
+            if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
+              cmd.drawingTabs[cmd.activeDrawingIdx].name =
+                  std::filesystem::path(gsPath).stem().string();
+          }
+        }
+      }
+    }
+    if (ImGui::MenuItem("Save As...")) {
+      const std::string defName = cmd.activeDocFilePath.empty()
+          ? (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size())
+                 ? cmd.drawingTabs[cmd.activeDrawingIdx].name + ".gs"
+                 : std::string("drawing.gs"))
+          : std::filesystem::path(cmd.activeDocFilePath).filename().string();
+      if (BrowseSaveFileGsUtf8(gsPath, sizeof(gsPath), defName.c_str())) {
+        if (SaveGoSurveyFile(cmd, gsPath, log)) {
+          cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+          cmd.activeDocFilePath      = std::string(gsPath);
+          if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
+            cmd.drawingTabs[cmd.activeDrawingIdx].name =
+                std::filesystem::path(gsPath).stem().string();
+        }
+      }
+    }
+    ImGui::Separator();
     if (ImGui::MenuItem("Import DXF...", nullptr)) {
       if (BrowseOpenFileDxfUtf8(dxfPath, sizeof(dxfPath)))
         ImportDxfFile(cmd, dxfPath, log);
@@ -248,16 +401,19 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       if (BrowseSaveFileDxfUtf8(dxfPath, sizeof(dxfPath), "drawing.dxf"))
         ExportDxfFile(cmd, dxfPath, log);
     }
-    if (ImGui::MenuItem("Save workspace (.gs)...", nullptr)) {
-      if (BrowseSaveFileGsUtf8(gsPath, sizeof(gsPath), "drawing.gs"))
-        SaveGoSurveyFile(cmd, gsPath, log);
-    }
-    if (ImGui::MenuItem("Open workspace (.gs)...", nullptr)) {
-      if (BrowseOpenFileGsUtf8(gsPath, sizeof(gsPath)))
-        LoadGoSurveyFile(cmd, gsPath, log);
-    }
     ImGui::Separator();
-    ImGui::MenuItem("Exit", nullptr);
+    if (ImGui::MenuItem("Quit Application", nullptr)) {
+      bool anyDirty = (cmd.cadGpuRevision != cmd.activeDocSavedRevision);
+      for (int i = 0; i < static_cast<int>(cmd.documents.size()) && !anyDirty; ++i) {
+        if (i != cmd.activeDrawingIdx &&
+            cmd.documents[i].cadGpuRevision != cmd.documents[i].savedRevision)
+          anyDirty = true;
+      }
+      if (anyDirty)
+        cmd.confirmCloseModal = true;
+      else
+        cmd.closeConfirmed = true;
+    }
     ImGui::EndMenu();
   }
   if (ImGui::BeginMenu("Edit")) {
@@ -326,9 +482,14 @@ static ImVec2 RibbonToolIconCellSize(float sectionHeightPx) {
 
 static void RibbonSectionBegin(const char* childId, const char* title, float width, float height) {
   ImGui::BeginGroup();
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.13f, 0.14f, 0.16f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
   ImGui::BeginChild(childId, ImVec2(width, height), true, ImGuiWindowFlags_NoScrollbar);
-  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.64f, 0.72f, 1.f));
+  {
+    // 60% primary text + 40% disabled — readable in both dark and light themes.
+    const ImVec4 txt = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+    const ImVec4 dis = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(txt.x*0.6f+dis.x*0.4f, txt.y*0.6f+dis.y*0.4f, txt.z*0.6f+dis.z*0.4f, 1.f));
+  }
   const ImGuiStyle& st = ImGui::GetStyle();
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(st.ItemSpacing.x, 1.f));
   ImGui::TextUnformatted(title);
@@ -493,13 +654,13 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     const float yTop = mn.y + h * 0.2f;
     const float yBot = mx.y - h * 0.2f;
     const float yDim = c.y;
-    const ImU32 orange = IM_COL32(234, 126, 40, 255);
+    const ImU32 accentBlue = IM_COL32(59, 130, 246, 255);  // #3B82F6 Primary Blue
     dl->AddLine(ImVec2(xL, yTop), ImVec2(xL, yBot), col, t);
     dl->AddLine(ImVec2(xR, yTop), ImVec2(xR, yBot), col, t);
-    dl->AddLine(ImVec2(xL, yDim), ImVec2(xR, yDim), orange, t * 1.05f);
+    dl->AddLine(ImVec2(xL, yDim), ImVec2(xR, yDim), accentBlue, t * 1.05f);
     const float head = std::clamp(std::min(w, h) * 0.1f, 2.5f, 5.5f);
-    RibbonStrokeArrow(dl, ImVec2(xL, yDim), ImVec2(-1.f, 0.f), head, orange, t);
-    RibbonStrokeArrow(dl, ImVec2(xR, yDim), ImVec2(1.f, 0.f), head, orange, t);
+    RibbonStrokeArrow(dl, ImVec2(xL, yDim), ImVec2(-1.f, 0.f), head, accentBlue, t);
+    RibbonStrokeArrow(dl, ImVec2(xR, yDim), ImVec2(1.f, 0.f), head, accentBlue, t);
     break;
   }
   case RibbonIconKind::Id: {
@@ -1093,7 +1254,11 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
   ImGui::SameLine(0, st.ItemSpacing.x);
   ImGui::BeginChild("RibbonLayerStrip", ImVec2(kLayerPanelW, panelH), true, ImGuiWindowFlags_NoScrollbar);
-  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.64f, 0.72f, 1.f));
+  {
+    const ImVec4 txt = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+    const ImVec4 dis = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(txt.x*0.6f+dis.x*0.4f, txt.y*0.6f+dis.y*0.4f, txt.z*0.6f+dis.z*0.4f, 1.f));
+  }
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(st.ItemSpacing.x, 1.f));
   ImGui::TextUnformatted("Layer");
   ImGui::Separator();
@@ -3022,10 +3187,14 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
 
 void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::SetNextWindowSize(ImVec2(320, 560), ImGuiCond_FirstUseEver);
+  if (cmd.pendingPropertiesFocus)
+    ImGui::SetNextWindowFocus();
   if (!ImGui::Begin("Properties", nullptr)) {
+    cmd.propertiesPanelActive = false;
     ImGui::End();
     return;
   }
+  cmd.propertiesPanelActive = true;
 
   auto& svyIx = cmd.selectedSurveyPointIndices;
   svyIx.erase(std::remove_if(svyIx.begin(), svyIx.end(),
@@ -3038,12 +3207,38 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
 
   if (!haveSurveyPick && !haveCadSel) {
     gPropsSelFingerprint = ~0ull;
-    ImGui::TextDisabled("No selection.");
-    ImGui::Separator();
-    ImGui::TextWrapped(
-        "Fence: left→right = window (fully inside); right→left = crossing (touches fence). Includes COGO points. "
-        "Survey markers: click to add to the set; Shift+click adds another or removes if already picked; click a "
-        "picked marker again (no Shift) to keep only that point. Shift+fence subtracts. ESC clears.");
+    if (ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_DefaultOpen)) {
+      ImGui::BeginDisabled();
+      if (ImGui::BeginTable("props_gen_empty", 2, ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+        ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+        static const char* kGeneralRows[] = {
+          "Layer", "Layer list", "Color", "Linetype", "Lineweight", "Transparency", "Plot style"
+        };
+        for (const char* label : kGeneralRows) {
+          ImGui::TableNextRow();
+          ImGui::TableNextColumn(); ImGui::TextUnformatted(label);
+          ImGui::TableNextColumn(); ImGui::TextDisabled("\xe2\x80\x94");  // em dash
+        }
+        ImGui::EndTable();
+      }
+      ImGui::EndDisabled();
+    }
+    if (ImGui::CollapsingHeader("Geometry", ImGuiTreeNodeFlags_DefaultOpen)) {
+      ImGui::BeginDisabled();
+      if (ImGui::BeginTable("props_geo_empty", 2, ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+        ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+        static const char* kGeomRows[] = {"Start X", "Start Y", "End X", "End Y"};
+        for (const char* label : kGeomRows) {
+          ImGui::TableNextRow();
+          ImGui::TableNextColumn(); ImGui::TextUnformatted(label);
+          ImGui::TableNextColumn(); ImGui::TextDisabled("\xe2\x80\x94");
+        }
+        ImGui::EndTable();
+      }
+      ImGui::EndDisabled();
+    }
     ImGui::End();
     return;
   }
@@ -3231,11 +3426,19 @@ namespace {
 
 static bool gPolarTrackingEnabled = false;
 
-void PushModeToggleButtonColors(bool on) {
-  if (on) {
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.62f, 0.34f, 0.12f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.40f, 0.14f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.52f, 0.28f, 0.10f, 1.f));
+void PushModeToggleButtonColors(bool on, int themeIdx) {
+  if (!on)
+    return;
+  if (themeIdx == 0) {
+    // Dark mode: dark blue tint — clearly "on" against deep panel background
+    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.063f, 0.141f, 0.345f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.086f, 0.180f, 0.420f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.051f, 0.114f, 0.290f, 1.f));
+  } else {
+    // Light mode: Primary Blue fills — clearly active against light gray
+    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.231f, 0.510f, 0.965f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.310f, 0.565f, 0.980f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.180f, 0.431f, 0.831f, 1.f));
   }
 }
 
@@ -3558,7 +3761,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
 
   {
     const bool on = cmd.objectSnapEnabled;
-    PushModeToggleButtonColors(on);
+    PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
     if (ImGui::Button("OSNAP", ImVec2(0.f, statusBtnH)))
       cmd.objectSnapEnabled = !cmd.objectSnapEnabled;
     PopModeToggleButtonColors(on);
@@ -3584,7 +3787,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   }
   if (ortho_mode_enabled) {
     const bool on = *ortho_mode_enabled;
-    PushModeToggleButtonColors(on);
+    PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
     if (ImGui::Button("ORTHO", ImVec2(0.f, statusBtnH)))
       *ortho_mode_enabled = !*ortho_mode_enabled;
     PopModeToggleButtonColors(on);
@@ -3593,7 +3796,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   }
   if (grid_visible) {
     const bool on = *grid_visible;
-    PushModeToggleButtonColors(on);
+    PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
     if (ImGui::Button("GRID", ImVec2(0.f, statusBtnH)))
       *grid_visible = !*grid_visible;
     PopModeToggleButtonColors(on);
@@ -3602,7 +3805,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   }
   {
     const bool on = gPolarTrackingEnabled;
-    PushModeToggleButtonColors(on);
+    PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
     if (ImGui::Button("POLAR", ImVec2(0.f, statusBtnH)))
       gPolarTrackingEnabled = !gPolarTrackingEnabled;
     PopModeToggleButtonColors(on);
@@ -3627,9 +3830,19 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
 }
 
 void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBufSize, AppCommandState& cmd) {
+  const bool isDark = (cmd.displayColorThemeIdx == 0);
+  // Console background is slightly distinct from the main workspace in both themes.
+  const ImVec4 consoleBg = isDark
+      ? ImVec4(0.067f, 0.078f, 0.094f, 1.f)   // #111418 dark console
+      : ImVec4(0.773f, 0.788f, 0.824f, 1.f);  // light secondary as console bg
+  const ImVec4 promptColor = isDark
+      ? ImVec4(0.133f, 0.773f, 0.369f, 1.f)   // #22C55E bright green on dark
+      : ImVec4(0.059f, 0.557f, 0.247f, 1.f);  // #0F8E3F darker green on light
   ImGui::SetNextWindowSize(ImVec2(900, 220), ImGuiCond_FirstUseEver);
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, consoleBg);
   if (!ImGui::Begin("Command line", nullptr)) {
     ImGui::End();
+    ImGui::PopStyleColor();
     return;
   }
 
@@ -3765,7 +3978,12 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   if (!cmdInputOnViewport) {
     ImGuiInputTextFlags flags =
         ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
-    ImGui::SetNextItemWidth(std::max(64.f, inputAvailW - sendBtnW - st.ItemSpacing.x));
+    ImGui::PushStyleColor(ImGuiCol_Text, promptColor);
+    ImGui::TextUnformatted(">");
+    ImGui::PopStyleColor();
+    const float promptW = ImGui::GetItemRectSize().x + st.ItemSpacing.x * 0.5f;
+    ImGui::SameLine(0, st.ItemSpacing.x * 0.5f);
+    ImGui::SetNextItemWidth(std::max(64.f, inputAvailW - sendBtnW - st.ItemSpacing.x - promptW));
     const bool exec = ImGui::InputTextWithHint("##CommandLineInput", CommandInputHint(cmd), cmdBuf,
                                                static_cast<size_t>(cmdBufSize), flags, CommandLineInputCallback, nullptr);
     ImGui::SetItemDefaultFocus();
@@ -3802,6 +4020,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   ImGui::PopID();
 
   ImGui::End();
+  ImGui::PopStyleColor();
 }
 
 static void RotateImDrawListVertsXY(ImDrawList* dl, int vtxStart, int vtxEnd, const ImVec2& pivot, float cosA,
@@ -4163,20 +4382,73 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                          double* outCursorY, double* outCursorRawX, double* outCursorRawY, int* outFbW, int* outFbH,
                          CadSnap::Hit* out_snap) {
   ImGui::SetNextWindowSize(ImVec2(900, 650), ImGuiCond_FirstUseEver);
-  if (!ImGui::Begin("Drawing1", nullptr)) {
+  if (cmd.pendingViewportFocus) {
+    ImGui::SetNextWindowFocus();
+    cmd.pendingViewportFocus = false;
+  }
+  if (!ImGui::Begin("Viewports", nullptr)) {
     cmd.viewportDrawingHovered = false;
     cmd.viewportCmdPaletteEngaged = false;
     ImGui::End();
     return;
   }
 
-  ImGui::TextDisabled("Model");
-  ImGui::SameLine();
-  ImGui::Button("Layout1");
-  ImGui::SameLine();
-  ImGui::Button("Layout2");
+  // Drawing tab bar — each open drawing is a closeable tab; "+" creates a new one.
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 3.f));
+  if (ImGui::BeginTabBar("##DrawingTabs",
+                         ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_FittingPolicyScroll)) {
+    for (int i = 0; i < static_cast<int>(cmd.drawingTabs.size()); ++i) {
+      bool tabOpen = true;
+      // SetSelected only fires on the one frame after a programmatic switch (e.g. "+").
+      // Applying it every frame would override ImGui's own click handling.
+      const bool wantSelect = cmd.pendingDrawingTabSwitch && (i == cmd.activeDrawingIdx);
+      const ImGuiTabItemFlags tflags = wantSelect ? ImGuiTabItemFlags_SetSelected : 0;
+      // Append "##<uid>" so each tab has a unique ImGui ID even when two tabs share the same display name.
+      const std::string tabLabel = cmd.drawingTabs[i].name + "##dt" + std::to_string(cmd.drawingTabs[i].uid);
+      if (ImGui::BeginTabItem(tabLabel.c_str(), &tabOpen, tflags)) {
+        cmd.activeDrawingIdx = i;
+        cmd.pendingDrawingTabSwitch = false;  // consumed
+        ImGui::EndTabItem();
+      }
+      if (!tabOpen && cmd.drawingTabs.size() > 1) {
+        const int closeIdx  = i;
+        const int tabCount  = static_cast<int>(cmd.drawingTabs.size());
 
-  ImGui::Separator();
+        // Which tab becomes active after this one closes?
+        int newActive = cmd.activeDrawingIdx;
+        if (closeIdx == cmd.activeDrawingIdx) {
+          newActive = (closeIdx > 0) ? closeIdx - 1 : closeIdx + 1;
+          // Load that tab's snapshot into cmd before we erase anything.
+          RestoreDocumentFromSnapshot(cmd, newActive);
+        }
+        // Adjust for the index shift the erase will produce.
+        if (newActive > closeIdx) --newActive;
+        newActive = std::max(0, std::min(newActive, tabCount - 2));
+
+        // Erase tab + matching document snapshot so indices stay aligned.
+        cmd.drawingTabs.erase(cmd.drawingTabs.begin() + closeIdx);
+        if (closeIdx < static_cast<int>(cmd.documents.size()))
+          cmd.documents.erase(cmd.documents.begin() + closeIdx);
+
+        // Tell main.cpp to erase + shut down the matching renderer.
+        cmd.pendingTabErase = closeIdx;
+
+        cmd.activeDrawingIdx    = newActive;
+        cmd.prevDrawingIdx      = newActive;  // suppress spurious switch detection
+        cmd.pendingDrawingTabSwitch = true;   // visually select the new active tab
+        --i;
+      }
+    }
+    // Trailing "+" to open a new empty drawing.
+    if (ImGui::TabItemButton("+", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip)) {
+      cmd.drawingTabs.push_back({"Drawing " + std::to_string(cmd.nextDrawingNumber++), cmd.nextTabUid++});
+      cmd.activeDrawingIdx        = static_cast<int>(cmd.drawingTabs.size()) - 1;
+      cmd.pendingDrawingTabSwitch = true;
+      cmd.pendingViewportFocus    = true;
+    }
+    ImGui::EndTabBar();
+  }
+  ImGui::PopStyleVar();
 
   ImVec2 avail = ImGui::GetContentRegionAvail();
   avail.y = std::max(avail.y, 80.f);
@@ -5698,7 +5970,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       RouteQueuedCharsToCmdBuf(cmdBuf, cmdBufSize, io);
       ImGui::SetKeyboardFocusHere(0);
     }
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.88f, 0.96f, 1.f));
+    // Dark: bright blue-white hint; Light: muted dark so it reads on the light popup bg.
+    const ImVec4 hintCol = (cmd.displayColorThemeIdx == 0)
+        ? ImVec4(0.82f, 0.88f, 0.96f, 1.f)
+        : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    ImGui::PushStyleColor(ImGuiCol_Text, hintCol);
     ImGui::TextWrapped("%s", CommandInputHint(cmd));
     ImGui::PopStyleColor();
     ImGuiInputTextFlags itf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
@@ -5942,7 +6218,9 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
     ImGui::TableSetupColumn("Lineweight", ImGuiTableColumnFlags_WidthStretch, 0.10f);
     ImGui::TableSetupColumn("Transparency", ImGuiTableColumnFlags_WidthStretch, 0.10f);
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 72.f);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 1.f, 1.f));
     ImGui::TableHeadersRow();
+    ImGui::PopStyleColor();
 
     for (size_t i = 0; i < cmd.drawingLayerTable.size();) {
       CadLayerRow& row = cmd.drawingLayerTable[i];
@@ -6134,8 +6412,14 @@ static void DrawSettingsHeader(const AppCommandState& cmd) {
 static void DrawDisplayWindowElements(AppCommandState& cmd) {
   const char* themes[] = {"Dark", "Light"};
   ImGui::SetNextItemWidth(150.f);
-  if (ImGui::Combo("Color theme:", &cmd.displayColorThemeIdx, themes, IM_ARRAYSIZE(themes)))
+  if (ImGui::Combo("Color theme:", &cmd.displayColorThemeIdx, themes, IM_ARRAYSIZE(themes))) {
     cmd.displayColorThemeIdx = std::clamp(cmd.displayColorThemeIdx, 0, 1);
+    if (cmd.displayColorThemeIdx == 0)
+      ApplyCadDarkTheme();
+    else
+      ApplyCadLightTheme();
+    SaveUserStartupPrefs(cmd);
+  }
   ImGui::Spacing();
   ImGui::Checkbox("Display scroll bars in drawing window", &cmd.displayScrollbars);
   ImGui::Checkbox("Use large buttons for Toolbars", &cmd.displayLargeToolbarButtons);
@@ -6687,6 +6971,93 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   DrawGraphicsPerformanceDialog(cmd, log);
 }
 
+void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) {
+  if (cmd.confirmCloseModal) {
+    ImGui::OpenPopup("Unsaved Changes##closeconf");
+    cmd.confirmCloseModal = false;
+  }
+
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  if (!ImGui::BeginPopupModal("Unsaved Changes##closeconf", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    return;
+
+  // Collect dirty drawings: active doc first, then inactive snapshots.
+  struct DirtyEntry { int idx; std::string name; };
+  std::vector<DirtyEntry> dirty;
+  if (cmd.cadGpuRevision != cmd.activeDocSavedRevision &&
+      cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
+    dirty.push_back({cmd.activeDrawingIdx, cmd.drawingTabs[cmd.activeDrawingIdx].name});
+  for (int i = 0; i < static_cast<int>(cmd.documents.size()); ++i) {
+    if (i == cmd.activeDrawingIdx) continue;
+    if (cmd.documents[i].cadGpuRevision != cmd.documents[i].savedRevision &&
+        i < static_cast<int>(cmd.drawingTabs.size()))
+      dirty.push_back({i, cmd.drawingTabs[i].name});
+  }
+
+  if (dirty.empty()) {
+    cmd.closeConfirmed = true;
+    ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+    return;
+  }
+
+  ImGui::TextUnformatted("The following drawings have unsaved changes:");
+  ImGui::Spacing();
+  for (const auto& e : dirty)
+    ImGui::BulletText("%s", e.name.c_str());
+  ImGui::Spacing();
+  ImGui::Separator();
+  ImGui::Spacing();
+
+  static char s_savePath[4096]{};
+
+  if (ImGui::Button("Save All & Close", ImVec2(148.f, 0))) {
+    bool allOk = true;
+    for (const auto& e : dirty) {
+      const bool isActive = (e.idx == cmd.activeDrawingIdx);
+      if (!isActive) {
+        // Temporarily bring this doc's data into cmd.
+        SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
+        RestoreDocumentFromSnapshot(cmd, e.idx);
+      }
+      std::string path = cmd.activeDocFilePath;
+      if (path.empty()) {
+        const std::string def = e.name + ".gs";
+        if (BrowseSaveFileGsUtf8(s_savePath, sizeof(s_savePath), def.c_str()))
+          path = s_savePath;
+      }
+      if (!path.empty() && SaveGoSurveyFile(cmd, path.c_str(), log)) {
+        cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+        cmd.activeDocFilePath      = path;
+        if (!isActive) {
+          // Commit updated saved-revision back into the snapshot.
+          SaveDocumentToSnapshot(cmd, e.idx);
+        }
+      } else {
+        allOk = false;
+      }
+      if (!isActive)
+        RestoreDocumentFromSnapshot(cmd, cmd.activeDrawingIdx);
+    }
+    if (allOk) {
+      cmd.closeConfirmed = true;
+      ImGui::CloseCurrentPopup();
+    }
+  }
+
+  ImGui::SameLine();
+  if (ImGui::Button("Close Without Saving", ImVec2(148.f, 0))) {
+    cmd.closeConfirmed = true;
+    ImGui::CloseCurrentPopup();
+  }
+
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", ImVec2(72.f, 0)))
+    ImGui::CloseCurrentPopup();
+
+  ImGui::EndPopup();
+}
+
 void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log) {
   if (!cmd.showAlignResultsWindow)
     return;
@@ -6734,7 +7105,9 @@ void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log)
     ImGui::TableSetupColumn("Dst X", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("Dst Y", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("Resid", ImGuiTableColumnFlags_WidthFixed,   72.f);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 1.f, 1.f));
     ImGui::TableHeadersRow();
+    ImGui::PopStyleColor();
 
     for (int i = 0; i < static_cast<int>(cmd.alignControlPts.size()); ++i) {
       const auto& cp    = cmd.alignControlPts[static_cast<size_t>(i)];
@@ -6824,7 +7197,9 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
     ImGui::TableSetupColumn("Layer", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("Description", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("Del", ImGuiTableColumnFlags_WidthFixed, 56.f);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 1.f, 1.f));
     ImGui::TableHeadersRow();
+	ImGui::PopStyleColor();
 
     for (size_t i = 0; i < cmd.surveyPoints.size(); ++i) {
       SurveyPoint& p = cmd.surveyPoints[i];
