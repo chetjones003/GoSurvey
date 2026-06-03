@@ -371,7 +371,10 @@ struct AppCommandState {
     SurveyInverse,
 
     /// PDF underlay attach — opens dialog, then optionally waits for viewport picks.
-    PdfAttach
+    PdfAttach,
+
+    /// 2-D Helmert (similarity) transformation from user-picked control point pairs.
+    Align
 
   } active = Kind::None;
 
@@ -1104,8 +1107,6 @@ struct AppCommandState {
   bool gfx3dFullShadowDisplay = true;
   bool gfx3dPerPixelLighting = true;
 
-  bool createPointsPlacementActive = false;
-
   /// Editable ID strings for VIEWPOINTS table rows (synced from point IDs when empty).
   std::vector<std::string> surveyPointIdBuffers;
 
@@ -1164,6 +1165,31 @@ struct AppCommandState {
 
   /// True when the viewport command palette is visible — command line defers its InputText to avoid duplicate focus.
   bool viewportDrawingHovered = false;
+
+  // -------------------------------------------------------------------------
+  // ALIGN command state (Helmert transformation)
+  // -------------------------------------------------------------------------
+  enum class AlignPhase { PickSelection, PickSrc, PickDst } alignPhase = AlignPhase::PickSrc;
+
+  struct AlignControlPt { float srcX = 0.f, srcY = 0.f, dstX = 0.f, dstY = 0.f; };
+  std::vector<AlignControlPt> alignControlPts;
+
+  struct HelmertResult {
+    bool  valid = false;
+    float a  = 1.f, b  = 0.f;   ///< X' = a*x - b*y + tx
+    float tx = 0.f, ty = 0.f;
+    float scale = 1.f;
+    float rotationCwNorthDeg = 0.f;
+    std::vector<float> pairResiduals; ///< per-pair distance residual (destination units)
+    float rms = 0.f;
+    int   nPairs = 0;
+  } alignLastResult;
+
+  bool showAlignResultsWindow = false;
+  /// Snapshot of selection committed at ALIGN PickSelection → PickSrc transition.
+  std::vector<SelectedEntity> alignSelectionSnapshot;
+  std::vector<int> alignSurveySnapshot;
+  bool alignHasSelection = false; ///< true = only transform snapshotted entities; false = all
 
   // -------------------------------------------------------------------------
   // PDFATTACH command state
@@ -1603,6 +1629,13 @@ void SubmitViewportPick(AppCommandState& st, float worldX, float worldY, std::ve
 
 void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st, std::vector<std::string>& log);
 
+void StartAlignCommand(AppCommandState& st, std::vector<std::string>& log);
+void ExecuteAlignCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Recompute Helmert solution from current \ref AppCommandState::alignControlPts into \ref AppCommandState::alignLastResult.
+void RecalcAlignResult(AppCommandState& st);
+/// Apply the last Helmert solution, generate a report tab, and close the results window.
+/// \p applyScale — false strips scale (rotation + translation only; re-derives tx/ty from centroids).
+void ApplyAlignCommand(AppCommandState& st, std::vector<std::string>& log, bool applyScale);
 void StartPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log);
 
 /// Called from the viewport when the user clicks to place the PDF attachment.
@@ -1636,6 +1669,7 @@ const char* TrimCommandFooterHint(const AppCommandState& st);
 
 const char* OffsetCommandFooterHint(const AppCommandState& st);
 
+const char* AlignCommandFooterHint(const AppCommandState& st);
 const char* ZoomCommandFooterHint(const AppCommandState& st);
 
 const char* LineCommandFooterHint(const AppCommandState& st);

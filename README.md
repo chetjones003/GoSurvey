@@ -1,6 +1,6 @@
 # GoSurvey
 
-GoSurvey is a desktop drafting and survey-helper: a **CAD-style drawing** with optional **survey points** (coordinates, IDs, descriptions), **PDF underlays** with object snap, and **DXF** import/export. Use the **ribbon**, **command line**, **viewport**, and **panels** together — the **command log** explains what to enter at each step.
+GoSurvey is a desktop drafting and survey-helper: a **CAD-style drawing** with optional **survey points** (coordinates, IDs, descriptions), **PDF underlays** with object snap, and **DXF** import/export. Use the **ribbon**, **command line**, **viewport**, and **panels** together — the **command log** and **dynamic cursor hint** explain what to enter at each step.
 
 ---
 
@@ -41,11 +41,13 @@ If the app fails to start with a missing DLL error, install the latest **[Visual
 
 ## Layout at a glance
 
-- **Drawing viewport** — Pan with the **middle mouse button**. Zoom with the **mouse wheel** (smooth, cursor-centred). A minor grid follows the view.
+- **Drawing viewport** — Pan with the **middle mouse button**. Zoom with the **mouse wheel** (smooth, cursor-centred). A minor grid follows the view. While a command is active, a **floating hint panel** appears near the cursor showing what to enter next — the same hint also appears in the command line footer.
 - **Ribbon** (under the menu bar) — **Draw**, **Modify**, **View**, **Inquiry**, and **Survey** blocks; hover a button for a short description and command aliases. Layer dropdown on the right.
 - **Properties** (docked left) — Layer, color, linetype, lineweight, transparency, and geometry for the current selection. Also holds **default plotted text height** for new TEXT/MTEXT.
 - **Command line** (docked bottom) — Scrollable **log**, command **input**, context **hints**, and a status bar with **OSNAP**, **ORTHO**, **GRID**, **POLAR**, annotation scale, and cursor readout.
 - **Panels** — Create points, viewpoints table, CSV import/export, and reports open as separate windows.
+
+**Enter key**: pressing **Enter** submits the current command input from anywhere — you do not need to click the command line first.
 
 ---
 
@@ -53,7 +55,7 @@ If the app fails to start with a missing DLL error, install the latest **[Visual
 
 **North is 0°**; angles increase **clockwise** (survey convention): east 90°, south 180°, west 270°.
 
-Applies to LINE/POLYLINE bearings, ROTATE, TEXT rotation, and all readouts.
+Applies to LINE/POLYLINE bearings, ROTATE, ALIGN, TEXT rotation, and all readouts.
 
 ---
 
@@ -211,14 +213,67 @@ World coordinates: **Easting = X**, **Northing = Y**.
 
 | Command | Panel |
 |---------|-------|
-| **CREATEPOINTS** (`CRTPTS`) | Create / configure points and optional click-placement. |
+| **CREATEPOINTS** (`CRTPTS`) | Open the create-points panel and click in the drawing to place survey points. |
 | **VIEWPOINTS** (`VWPTS`) | Table of points: IDs, coordinates, elevation, layer, description. |
 | **IMPORTPOINTS** (`IMPPTS`) | CSV import with column presets and preview. |
 | **EXPORTPOINTS** (`EXPPTS`) | CSV export with column layout options. |
 
-Create-points: numbering, defaults, JSON save/load. Click placement when idle (Esc turns it off). Survey markers participate in selection; duplicate-ID policy (skip, renumber, merge, overwrite) applies when copying or moving.
+### Create Points
 
-Export DXF writes survey points as AutoCAD `POINT` objects so they appear in Civil 3D and similar hosts.
+Open the **Create points** panel (ribbon Survey → point icon, or type `CREATEPOINTS`). While the panel is open, clicking in the drawing places survey points — no separate toggle needed. Clicking on an existing marker selects it instead.
+
+The panel lets you set the **next point ID**, default **layer**, **description**, and **elevation** for new points, and choose a **duplicate ID policy** (skip, renumber, merge, overwrite).
+
+Survey markers participate in selection; duplicate-ID policy applies when copying or moving. Export DXF writes survey points as AutoCAD `POINT` objects so they appear in Civil 3D and similar hosts.
+
+---
+
+## Coordinate alignment — ALIGN (`AL`)
+
+`ALIGN` computes and applies a **2D Helmert (similarity) transformation** — scale, rotation, and translation — from a set of source→destination control point pairs. This is the standard least-squares 4-parameter adjustment used to transform a drawing from local coordinates into a real-world coordinate system.
+
+### Workflow
+
+1. **Type `ALIGN` or `AL`.**
+
+   - If entities are already selected, ALIGN uses that selection immediately and skips to step 3.
+   - If nothing is selected, ALIGN asks you to **window-select** the entities to transform. Press **Enter** to confirm the selection.
+
+2. **Pick control point pairs.** For each pair:
+
+   - Click (or type `X,Y`) the **source** survey point in the drawing — use OSNAP to snap precisely to an existing survey marker.
+   - Click or type the **destination** real-world coordinates for that point.
+
+   Repeat for as many pairs as needed. A minimum of **1 pair** gives translation only. **2 or more pairs** fit a full Helmert (scale + rotation + translation).
+
+3. **Press Enter to solve.** The results window opens showing the computed transformation parameters and per-pair residuals.
+
+4. **Review and optionally remove pairs.** Click the **`-`** button on any row to remove it — the solution updates live. Use this to exclude outliers.
+
+5. **Apply.** Choose one of:
+
+   - **Apply Scale** (checkbox checked) — applies the full Helmert including the computed scale factor.
+   - **Apply** (checkbox unchecked) — applies rotation and translation only, with scale forced to 1.0. The translation is re-derived from centroids so the solution remains least-squares optimal.
+
+6. **Report.** A transformation report is automatically added to the **Reports** tab showing all parameters and per-pair point errors.
+
+### Control point tagging
+
+After applying, ALIGN automatically tags affected survey points:
+
+- **Source points** (those snapped-to as ALIGN sources) — have **` ADJ`** appended to their description, indicating they were adjusted.
+- **Destination points** (those at the real-world coordinates) — have **` CON`** appended, indicating they are control (fixed) points. Their coordinates are **restored to the exact destination values** after the transform; they do not drift.
+
+### Results window columns
+
+| Column | Meaning |
+|--------|---------|
+| Pair | Sequential pair number |
+| Src X / Src Y | Source point coordinates (pre-transform drawing space) |
+| Dst X / Dst Y | Destination real-world coordinates |
+| Resid | Point error — distance from predicted to actual destination after the transformation |
+
+**Point error (RMS)** is the root-mean-square of per-pair residuals: the average distance by which each source maps away from its intended destination. Lower is a better fit.
 
 ---
 
@@ -241,6 +296,7 @@ Select an entity and use **Properties** to edit layer, colour, linetype, linewei
 | Key | Behaviour |
 |-----|-----------|
 | **Esc** | Cancel active command. In `AP` bearing-pick mode, exits the pick first. Idle: clear selection / close placement UIs. |
+| **Enter** | Submit command input from anywhere — no need to click the command line first. |
 | **Delete** | Start DELETE (window select). |
 | **F3** | Toggle object snap (when not typing in the command input). |
 | **F8** | Toggle Ortho (when not typing in the command input). |
@@ -272,9 +328,11 @@ Dependencies (fetched automatically by CMake): GLFW, Dear ImGui, GLEW, PDFium (p
 
 ## Tips
 
+- The **floating hint panel** near the cursor tells you what to enter at every step — the same text also appears in the command line footer.
 - Read the **command log** and **hints** under the input — they list valid inputs for the current step.
 - Use **`@dx,dy`** when chaining LINE segments from the current anchor.
 - For bearings without mental math: **`AP`**, two clicks, **`+90`** or Enter, then type the distance.
 - **`ZE`** after import or large edits to frame everything in view.
 - Run **`OVERKILL`** after DXF imports or manual cleanup to remove duplicates and merge collinear segments.
 - Use **`PDFATTACH`** to bring in a reference plan, then snap directly to its visible geometry for accurate placement.
+- Use **`ALIGN`** to transform a local-coordinate drawing into real-world coordinates using known control points. Add ≥ 2 source→destination pairs for a full Helmert fit; remove outlier pairs in the results window before applying.

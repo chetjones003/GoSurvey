@@ -758,12 +758,9 @@ bool LoadSurveyPointsFromJsonFile(AppCommandState& st, const char* path, std::ve
 
 void StartCreatePointsCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.showCreatePointsWindow = true;
-  st.createPointsPlacementActive = false;
   st.selBoxWaitingSecond = false;
   ResetCreatePointsNextIdFromSettings(st);
-  log.push_back(
-      "CREATEPOINTS — configure the panel; turn on \"Place points…\" to click placements (ESC exits). "
-      "VIEWPOINTS for table.");
+  log.push_back("CREATEPOINTS — click in the drawing to place points. ESC closes. VIEWPOINTS for table.");
 }
 
 void StartViewPointsCommand(AppCommandState& st, std::vector<std::string>& log) {

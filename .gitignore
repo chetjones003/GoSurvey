@@ -12,6 +12,7 @@ _install/
 compile_commands.json
 gosurvey_imgui.ini
 /installer/
+CLAUDE.md
 
 # --- Compiled artifacts (also produced beside tree sometimes) ---
 *.exe

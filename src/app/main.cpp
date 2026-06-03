@@ -200,9 +200,8 @@ int main() {
           CancelActiveCommand(cmd, cmdLog);
         cmdBuf[0] = '\0';
       } else {
-        const bool hadCreatePtsUi = cmd.showCreatePointsWindow || cmd.createPointsPlacementActive;
+        const bool hadCreatePtsUi = cmd.showCreatePointsWindow;
         cmd.showCreatePointsWindow = false;
-        cmd.createPointsPlacementActive = false;
         ClearSelection(cmd);
         cmd.pendingZoomExtents = false;
         cmd.pendingZoomWindow = false;
@@ -310,21 +309,8 @@ int main() {
       ImGuiIO& ioEnter = ImGui::GetIO();
       const bool enterDown =
           ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
-      if (enterDown && !ioEnter.WantTextInput) {
-        using SAP = AppCommandState::SegmentAnglePickPhase;
-        using LP = AppCommandState::LinePhase;
-        using PP = AppCommandState::PolylinePhase;
-        const bool lineNext =
-            cmd.active == AppCommandState::Kind::Line && cmd.linePhase == LP::NeedNextPoint;
-        const bool polyNext =
-            cmd.active == AppCommandState::Kind::Polyline && cmd.polylinePhase == PP::NeedNextPoint;
-        const bool apCommit =
-            (lineNext || polyNext) && cmd.segmentAnglePickPhase == SAP::WaitAdjustOrCommit;
-        const bool kbAwaitBearing =
-            (lineNext || polyNext) && cmd.segmentAngleKeyboardAwaitBearing;
-        if (apCommit || kbAwaitBearing)
-          ProcessCommandLineSubmit(cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd, cmdLog);
-      }
+      if (enterDown && !ioEnter.WantTextInput && cmd.active != AppCommandState::Kind::None)
+        ProcessCommandLineSubmit(cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd, cmdLog);
     }
 
     DrawCreatePointsPanel(cmd, cmdLog);
@@ -337,6 +323,7 @@ int main() {
     DrawSurveyReportsPanel(cmd);
     DrawCopySurveyDuplicateModal(cmd, cmdLog);
     DrawPdfAttachDialog(cmd, cmdLog);
+    DrawAlignResultsWindow(cmd, cmdLog);
 
     std::vector<float> rubberLines;
     const float orthoHalfH = (1.f / std::max(cmd.viewportZoom, 1.e-9f)) * 50.f;

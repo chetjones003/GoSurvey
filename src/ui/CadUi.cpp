@@ -1017,8 +1017,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     if (RibbonIconButton("##RibbonPoint", toolCell, RibbonIconKind::SurveyPoint))
       StartCreatePointsCommand(cmd, log);
     RibbonItemHelp(
-        "Create points — open the create-points panel; enable \"Place points with clicks on Drawing1\" to add "
-        "survey points in the viewport.\nCommand bar: CREATEPOINTS or CRTPTS");
+        "Create points — open the create-points panel and click in the drawing to place survey points.\n"
+        "Command bar: CREATEPOINTS or CRTPTS");
     ImGui::SameLine(0, st.ItemSpacing.x);
     if (RibbonIconButton("##RibbonInverse", toolCell, RibbonIconKind::SurveyInverse))
       StartSurveyInverseCommand(cmd, log);
@@ -3508,6 +3508,22 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   }
   if (cmd.active == AppCommandState::Kind::Zoom)
     return "ZOOM WINDOW — opposite corner or ESC:";
+  // Fallback: delegate to footer-hint functions. Handles ALIGN and any future commands
+  // that define a footer hint — they automatically appear in the dynamic cursor too.
+  {
+    const char* h;
+    h = AlignCommandFooterHint(cmd);    if (h && h[0]) return h;
+    h = LineCommandFooterHint(cmd);     if (h && h[0]) return h;
+    h = DrawingExtrasFooterHint(cmd);   if (h && h[0]) return h;
+    h = ModifyCommandFooterHint(cmd);   if (h && h[0]) return h;
+    h = RotateCommandFooterHint(cmd);   if (h && h[0]) return h;
+    h = ScaleCommandFooterHint(cmd);    if (h && h[0]) return h;
+    h = DeleteCommandFooterHint(cmd);   if (h && h[0]) return h;
+    h = JoinCommandFooterHint(cmd);     if (h && h[0]) return h;
+    h = TrimCommandFooterHint(cmd);     if (h && h[0]) return h;
+    h = OffsetCommandFooterHint(cmd);   if (h && h[0]) return h;
+    h = ZoomCommandFooterHint(cmd);     if (h && h[0]) return h;
+  }
   return "Command:";
 }
 
@@ -3617,17 +3633,18 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     return;
   }
 
-  const char* circFooter = CircleCommandFooterHint(cmd);
-  const char* lineFooter = LineCommandFooterHint(cmd);
-  const char* modFooter = ModifyCommandFooterHint(cmd);
-  const char* scaleFooter = ScaleCommandFooterHint(cmd);
-  const char* rotFooter = RotateCommandFooterHint(cmd);
-  const char* delFooter = DeleteCommandFooterHint(cmd);
-  const char* joinFooter = JoinCommandFooterHint(cmd);
-  const char* trimFooter = TrimCommandFooterHint(cmd);
+  const char* circFooter   = CircleCommandFooterHint(cmd);
+  const char* lineFooter   = LineCommandFooterHint(cmd);
+  const char* modFooter    = ModifyCommandFooterHint(cmd);
+  const char* scaleFooter  = ScaleCommandFooterHint(cmd);
+  const char* rotFooter    = RotateCommandFooterHint(cmd);
+  const char* delFooter    = DeleteCommandFooterHint(cmd);
+  const char* joinFooter   = JoinCommandFooterHint(cmd);
+  const char* trimFooter   = TrimCommandFooterHint(cmd);
   const char* offsetFooter = OffsetCommandFooterHint(cmd);
-  const char* zmFooter = ZoomCommandFooterHint(cmd);
-  const char* drawXFooter = DrawingExtrasFooterHint(cmd);
+  const char* alignFooter  = AlignCommandFooterHint(cmd);
+  const char* zmFooter     = ZoomCommandFooterHint(cmd);
+  const char* drawXFooter  = DrawingExtrasFooterHint(cmd);
 
   std::vector<std::string> fuzzMatches;
   if (cmd.active == AppCommandState::Kind::None && cmdBuf[0] != '\0')
@@ -3664,6 +3681,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   footerH += wrappedBlockH(joinFooter);
   footerH += wrappedBlockH(trimFooter);
   footerH += wrappedBlockH(offsetFooter);
+  footerH += wrappedBlockH(alignFooter);
   footerH += wrappedBlockH(zmFooter);
   footerH += wrappedBlockH(drawXFooter);
   std::string fuzzLineStr;
@@ -3801,6 +3819,11 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   if (footerNonEmpty(offsetFooter)) {
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextWrapped("%s", offsetFooter);
+    ImGui::PopStyleColor();
+  }
+  if (footerNonEmpty(alignFooter)) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("%s", alignFooter);
     ImGui::PopStyleColor();
   }
   if (footerNonEmpty(zmFooter)) {
@@ -4363,12 +4386,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       cmd.viewportSnapPickValid = false;
       const bool snapViewportActive =
           cmd.objectSnapEnabled &&
-          (cmd.active != AppCommandState::Kind::None || cmd.createPointsPlacementActive ||
+          (cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
            cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive);
       CadSnap::Hit snap{};
       if (snapViewportActive) {
         const float tol = CadSnap::WorldToleranceFromPixels(avail.y, halfH, cmd.objectSnapAperturePx);
-        const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.createPointsPlacementActive ||
+        const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
                             cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
         snap = CadSnap::FindBest(rawX, rawY, cmd, midCmd, tol);
         if (snap.valid) {
@@ -4705,7 +4728,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const float fenceDragDx = mx - cmd.selBoxAnchorScreenX;
     const bool fenceWindowMode = fenceDragDx > kFenceDirTolPx;
 
-    if (cmd.createPointsPlacementActive && cmd.active == K::None) {
+    if (cmd.showCreatePointsWindow && cmd.active == K::None) {
       const int hitIx =
           cmd.surveyPoints.empty()
               ? -1
@@ -4726,6 +4749,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     else if (cmd.active == K::PdfAttach &&
              cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint)
       SubmitPdfAttachInsertPoint(cmd, commitX, commitY, log);
+    else if (cmd.active == K::Align) {
+      using AP = AppCommandState::AlignPhase;
+      if (cmd.alignPhase == AP::PickSelection) {
+        if (!cmd.selBoxWaitingSecond)
+          BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
+        else
+          SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
+      } else {
+        SubmitViewportPick(cmd, commitX, commitY, log);
+      }
+    }
     else if (cmd.active == K::Line || cmd.active == K::Circle || cmd.active == K::Polyline ||
              cmd.active == K::Arc || cmd.active == K::Ellipse || cmd.active == K::Text ||
              cmd.active == K::Mtext || cmd.active == K::DimAligned || cmd.active == K::DimLinear ||
@@ -5860,7 +5894,7 @@ void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
   if (!cmd.showCreatePointsWindow)
     return;
 
-  ImGui::SetNextWindowSize(ImVec2(460, 560), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(420, 340), ImGuiCond_FirstUseEver);
   bool open = cmd.showCreatePointsWindow;
   if (!ImGui::Begin("Create points", &open)) {
     cmd.showCreatePointsWindow = open;
@@ -5869,51 +5903,34 @@ void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
   }
   cmd.showCreatePointsWindow = open;
 
+  ImGui::TextDisabled("Click in the drawing to place points. Clicks on existing markers select them.");
+  ImGui::Separator();
+
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextUnformatted("Next point ID");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(100.f);
+  ImGui::InputInt("##next_survey_id", &cmd.createPointsNextId);
+
+  ImGui::Separator();
+
   CreatePointsOptions& o = cmd.createPointsOpts;
-  ImGui::TextWrapped("Stored coordinates match the drawing: Easting = world X, Northing = world Y.");
-  ImGui::Separator();
-  ImGui::InputInt("Starting point number", &o.startNumber);
-  ImGui::Checkbox("Use sequential numbering", &o.sequentialNumbering);
-  ImGui::InputInt("Point number offset", &o.pointNumberOffset);
-  if (o.pointNumberOffset == 0)
-    o.pointNumberOffset = 1;
-  ImGui::InputInt("Sequence point numbers from", &o.sequenceNumbersFrom);
-  ImGui::Separator();
-  ImGui::TextUnformatted("Default fields for newly placed points");
   ImGui::InputText("Layer##cp_layer", &o.layer);
-  ImGui::InputTextMultiline("Default description##cp_desc", &o.defaultDescription, ImVec2(-FLT_MIN, 72.f));
-  ImGui::InputFloat("Default elevation##cp_z", &o.defaultElevation);
+  ImGui::InputTextMultiline("Description##cp_desc", &o.defaultDescription, ImVec2(-FLT_MIN, 60.f));
+  ImGui::InputFloat("Elevation##cp_z", &o.defaultElevation);
 
   int pol = static_cast<int>(o.duplicatePolicy);
-  if (ImGui::Combo(
-          "If point numbers exist",
-          &pol,
-          "Notify (skip duplicate)\0Renumber (next free ID)\0Merge (update coords/desc)\0Overwrite (replace "
-          "row)\0\0"))
+  if (ImGui::Combo("If ID exists##cp_dup", &pol,
+                   "Notify (skip)\0Renumber (next free)\0Merge (update coords)\0Overwrite\0\0"))
     o.duplicatePolicy = static_cast<SurveyDuplicatePolicy>(pol);
 
   ImGui::Separator();
-  ImGui::TextUnformatted("Next ID used when you click the drawing:");
-  ImGui::InputInt("##next_survey_id", &cmd.createPointsNextId);
-  if (ImGui::Button("Set next ID from starting number"))
-    ResetCreatePointsNextIdFromSettings(cmd);
-  ImGui::SameLine();
-  if (ImGui::Button("Set next ID from sequence-from"))
-    cmd.createPointsNextId = o.sequenceNumbersFrom;
-
-  ImGui::Checkbox("Place points with clicks on Drawing1", &cmd.createPointsPlacementActive);
-  if (cmd.createPointsPlacementActive)
-    ImGui::TextDisabled(
-        "Clicks place points on empty ground; clicks on existing markers select/adjust survey picks instead. "
-        "Requires idle CAD (no LINE/CIRCLE/MOVE…). ESC closes this panel and turns placement off.");
-
-  ImGui::Separator();
   static char pathBuf[512] = "gosurvey_points.json";
-  ImGui::InputText("Survey database file", pathBuf, sizeof(pathBuf));
-  if (ImGui::Button("Save to file"))
+  ImGui::InputText("File##cp_file", pathBuf, sizeof(pathBuf));
+  if (ImGui::Button("Save"))
     SaveSurveyPointsToJsonFile(cmd, pathBuf, log);
   ImGui::SameLine();
-  if (ImGui::Button("Load from file"))
+  if (ImGui::Button("Load"))
     LoadSurveyPointsFromJsonFile(cmd, pathBuf, log);
 
   ImGui::End();
@@ -6709,6 +6726,101 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::End();
 
   DrawGraphicsPerformanceDialog(cmd, log);
+}
+
+void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log) {
+  if (!cmd.showAlignResultsWindow)
+    return;
+
+  ImGui::SetNextWindowSize(ImVec2(600, 480), ImGuiCond_FirstUseEver);
+  bool open = cmd.showAlignResultsWindow;
+  if (!ImGui::Begin("ALIGN — Helmert transformation", &open, ImGuiWindowFlags_NoCollapse)) {
+    cmd.showAlignResultsWindow = open;
+    ImGui::End();
+    return;
+  }
+  cmd.showAlignResultsWindow = open;
+
+  const auto& res = cmd.alignLastResult;
+
+  // Solution summary
+  if (res.valid) {
+    ImGui::Text("Pairs: %d", res.nPairs);
+    ImGui::SameLine(110.f);
+    ImGui::Text("Scale: %.8f", static_cast<double>(res.scale));
+    ImGui::Text("Rotation:     %s", CadFormatBearingCwNorthDegMinSec(res.rotationCwNorthDeg).c_str());
+    ImGui::Text("Translation:  X = %.6f   Y = %.6f", static_cast<double>(res.tx), static_cast<double>(res.ty));
+    ImGui::Text("Point error:  %.6f (avg. distance each source maps from its destination)",
+                static_cast<double>(res.rms));
+  } else if (cmd.alignControlPts.empty()) {
+    ImGui::TextColored(ImVec4(1.f, 0.5f, 0.5f, 1.f), "No pairs — add control pairs and solve again.");
+  } else {
+    ImGui::TextColored(ImVec4(1.f, 0.5f, 0.5f, 1.f), "Degenerate — pairs are coincident or collinear.");
+  }
+
+  ImGui::Separator();
+
+  // Pairs table with per-row Remove button
+  const float footerH = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y * 2.f;
+  const float tableH  = std::max(60.f, ImGui::GetContentRegionAvail().y - footerH);
+  const ImGuiTableFlags tf = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                             ImGuiTableFlags_ScrollY | ImGuiTableFlags_Resizable;
+  int removeIdx = -1;
+  if (ImGui::BeginTable("##align_pairs", 7, tf, ImVec2(0.f, tableH))) {
+    ImGui::TableSetupScrollFreeze(0, 1);
+    ImGui::TableSetupColumn("##rm",  ImGuiTableColumnFlags_WidthFixed,   26.f);
+    ImGui::TableSetupColumn("Pair",  ImGuiTableColumnFlags_WidthFixed,   36.f);
+    ImGui::TableSetupColumn("Src X", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("Src Y", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("Dst X", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("Dst Y", ImGuiTableColumnFlags_WidthStretch);
+    ImGui::TableSetupColumn("Resid", ImGuiTableColumnFlags_WidthFixed,   72.f);
+    ImGui::TableHeadersRow();
+
+    for (int i = 0; i < static_cast<int>(cmd.alignControlPts.size()); ++i) {
+      const auto& cp    = cmd.alignControlPts[static_cast<size_t>(i)];
+      const float resid = (res.valid && i < static_cast<int>(res.pairResiduals.size()))
+                              ? res.pairResiduals[static_cast<size_t>(i)] : 0.f;
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::PushID(i);
+      if (ImGui::SmallButton("-"))
+        removeIdx = i;
+      ImGui::PopID();
+      ImGui::TableNextColumn(); ImGui::Text("%d", i + 1);
+      ImGui::TableNextColumn(); ImGui::Text("%.4f", static_cast<double>(cp.srcX));
+      ImGui::TableNextColumn(); ImGui::Text("%.4f", static_cast<double>(cp.srcY));
+      ImGui::TableNextColumn(); ImGui::Text("%.4f", static_cast<double>(cp.dstX));
+      ImGui::TableNextColumn(); ImGui::Text("%.4f", static_cast<double>(cp.dstY));
+      ImGui::TableNextColumn(); ImGui::Text(res.valid ? "%.6f" : "—", static_cast<double>(resid));
+    }
+    ImGui::EndTable();
+  }
+
+  if (removeIdx >= 0) {
+    cmd.alignControlPts.erase(cmd.alignControlPts.begin() + removeIdx);
+    RecalcAlignResult(cmd);
+  }
+
+  ImGui::Separator();
+  static bool s_applyScale = true;
+  ImGui::Checkbox("Apply scale", &s_applyScale);
+  ImGui::SameLine();
+  const bool canApply = res.valid;
+  if (!canApply)
+    ImGui::BeginDisabled();
+  if (ImGui::Button("Apply", ImVec2(90.f, 0.f)))
+    ApplyAlignCommand(cmd, log, s_applyScale);
+  if (!canApply)
+    ImGui::EndDisabled();
+  ImGui::SameLine();
+  if (ImGui::Button("Close", ImVec2(70.f, 0.f))) {
+    cmd.showAlignResultsWindow = false;
+    cmd.alignControlPts.clear();
+    cmd.alignPhase = AppCommandState::AlignPhase::PickSrc;
+  }
+
+  ImGui::End();
 }
 
 void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
