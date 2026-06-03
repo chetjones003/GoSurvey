@@ -1026,10 +1026,10 @@ static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vec
   st.cadAnnotations.push_back(std::move(d));
   st.cadAnnotationAttrs.push_back(at);
   BumpCadGpuCache(st);
-  st.active = AppCommandState::Kind::None;
   ResetDimAngularDraft(st);
   ResetDimDraft(st);
   log.push_back("DIMANGULAR complete.");
+  log.push_back("DIMANGULAR — vertex, two ray points, then arc position. ESC to exit.");
 }
 
 void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<std::string>& log) {
@@ -1042,9 +1042,9 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<
   st.userCirclesCxCyR.push_back(r);
   st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
-  st.active = AppCommandState::Kind::None;
   ResetCircleDraft(st);
   log.push_back("Circle complete.");
+  log.push_back("CIRCLE — center + radius (or 3P). ESC to exit.");
 }
 
 bool ParseRadiusOrDiameter(const std::string& raw, float* radiusOut, std::vector<std::string>& log) {
@@ -2024,8 +2024,8 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
 static void FinalizeCopyTranslation(AppCommandState& st, float dx, float dy, std::vector<std::string>& log) {
   st.pendingSurveyDupIsRotate = false;
   DuplicateCadSelectionTranslated(st, dx, dy);
-  st.active = AppCommandState::Kind::None;
-  ResetModifyRotateDraft(st);
+  // Stay in COPY — same selection + base, ready for another destination.
+  st.modifyPhase = AppCommandState::ModifyPhase::NeedDestination;
   if (!st.selectedSurveyPointIndices.empty()) {
     st.pendingCopyDx = dx;
     st.pendingCopyDy = dy;
@@ -2033,7 +2033,7 @@ static void FinalizeCopyTranslation(AppCommandState& st, float dx, float dy, std
     st.copySurveyDupModalOpenRequested = true;
     log.push_back("COPY — CAD geometry duplicated; choose survey ID policy.");
   } else {
-    log.push_back("COPY complete.");
+    log.push_back("COPY — next destination (ESC to exit):");
   }
 }
 
@@ -2661,9 +2661,9 @@ bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineI
       FinalizeCopyTranslation(st, dx, dy, log);
     else {
       ApplyTranslationToSelection(st, dx, dy);
-      st.active = AppCommandState::Kind::None;
-      ResetModifyRotateDraft(st);
-      log.push_back("MOVE complete.");
+      // Stay in MOVE — same selection at new position, ready for another base+destination.
+      st.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
+      log.push_back("MOVE complete — base point (ESC to exit):");
     }
     return true;
   }
@@ -3032,9 +3032,9 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   st.cadAnnotations.push_back(std::move(ann));
   st.cadAnnotationAttrs.push_back(at);
   BumpCadGpuCache(st);
-  st.active = AppCommandState::Kind::None;
   ResetDimDraft(st);
   log.push_back("DIMALIGNED complete.");
+  log.push_back("DIMALIGNED — extension 1, extension 2, then offset. ESC to exit.");
 }
 
 static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vector<std::string>& log) {
@@ -3092,9 +3092,9 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   st.cadAnnotations.push_back(std::move(ann));
   st.cadAnnotationAttrs.push_back(at);
   BumpCadGpuCache(st);
-  st.active = AppCommandState::Kind::None;
   ResetDimDraft(st);
   log.push_back("DIMLINEAR complete.");
+  log.push_back("DIMLINEAR — extension 1, extension 2, then dimension line. ESC to exit.");
 }
 
 static void CommitIdPointAt(AppCommandState& st, float lx, float ly, std::vector<std::string>& log) {
@@ -4003,9 +4003,9 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
         FinalizeCopyTranslation(st, dx, dy, log);
       else {
         ApplyTranslationToSelection(st, dx, dy);
-        st.active = K::None;
-        ResetModifyRotateDraft(st);
-        log.push_back("MOVE complete.");
+        // Stay in MOVE — same selection at new position, ready for another base+destination.
+        st.modifyPhase = MP::NeedBase;
+        log.push_back("MOVE complete — base point (ESC to exit):");
       }
     }
     return;
@@ -4962,6 +4962,7 @@ void StartLineCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
   st.active = AppCommandState::Kind::Line;
+  st.lastCommand = AppCommandState::Kind::Line;
   st.linePhase = AppCommandState::LinePhase::NeedFirstPoint;
   log.push_back("LINE — specify first point (click or type X,Y / X Y). ESC to cancel.");
 }
@@ -4972,6 +4973,7 @@ void StartCircleCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
   st.active = AppCommandState::Kind::Circle;
+  st.lastCommand = AppCommandState::Kind::Circle;
   log.push_back(
       "CIRCLE — center + radius: click/type center, then radius (click edge), type radius, or D + diameter.");
   log.push_back("Or type 3P first for a three-point circle. ESC to cancel.");
@@ -5124,6 +5126,7 @@ void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log) 
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
   st.active = AppCommandState::Kind::DimAligned;
+  st.lastCommand = AppCommandState::Kind::DimAligned;
   st.dimPhase = AppCommandState::DimPhase::WaitExt1;
   log.push_back("DIMALIGNED — extension 1, extension 2, then offset (point away from measured line). ESC cancels.");
 }
@@ -5134,6 +5137,7 @@ void StartDimLinearCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
   st.active = AppCommandState::Kind::DimLinear;
+  st.lastCommand = AppCommandState::Kind::DimLinear;
   st.dimPhase = AppCommandState::DimPhase::WaitExt1;
   log.push_back("DIMLINEAR — ortho distance in X or Y between extension points; third pick sets dimension line; "
                 "cursor or H/V chooses horizontal vs vertical. ESC cancels.");
@@ -5145,6 +5149,7 @@ void StartDimAngularCommand(AppCommandState& st, std::vector<std::string>& log) 
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
   st.active = AppCommandState::Kind::DimAngular;
+  st.lastCommand = AppCommandState::Kind::DimAngular;
   st.dimAngularPhase = AppCommandState::DimAngularPhase::WaitVertex;
   log.push_back("DIMANGULAR — vertex, two ray points, then arc position (radius). Text is degrees/minutes/seconds. ESC "
                 "cancels.");
@@ -7917,6 +7922,7 @@ void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Move;
+  st.lastCommand = AppCommandState::Kind::Move;
   st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
   st.selBoxWaitingSecond = false;
   if (!st.selection.empty() || !st.selectedSurveyPointIndices.empty()) {
@@ -7931,6 +7937,7 @@ void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Copy;
+  st.lastCommand = AppCommandState::Kind::Copy;
   st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
   st.selBoxWaitingSecond = false;
   if (!st.selection.empty() || !st.selectedSurveyPointIndices.empty()) {
@@ -8257,6 +8264,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   }
 
   if (line.empty()) {
+    if (st.active == K::Line && st.linePhase == AppCommandState::LinePhase::NeedNextPoint) {
+      // Blank Enter ends the current line chain; restart LINE for the next one.
+      ResetSegmentAngleLock(st);
+      st.linePhase = AppCommandState::LinePhase::NeedFirstPoint;
+      log.push_back("LINE — specify first point (click or type X,Y / X Y). ESC to cancel.");
+      return;
+    }
     if (st.active == K::Trim) {
       using TP = AppCommandState::TrimPhase;
       if (st.trimPhase == TP::SelectCuttingEdges) {
@@ -9815,4 +9829,29 @@ bool LoadApplicationFont() {
     }
   }
   return false;
+}
+
+void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  switch (st.lastCommand) {
+    case K::Line:       StartLineCommand(st, log);       break;
+    case K::Circle:     StartCircleCommand(st, log);     break;
+    case K::Polyline:   StartPolylineCommand(st, log);   break;
+    case K::Arc:        StartArcCommand(st, log);        break;
+    case K::Ellipse:    StartEllipseCommand(st, log);    break;
+    case K::Text:       StartTextCommand(st, log);       break;
+    case K::Mtext:      StartMtextCommand(st, log);      break;
+    case K::DimAligned: StartDimAlignedCommand(st, log); break;
+    case K::DimLinear:  StartDimLinearCommand(st, log);  break;
+    case K::DimAngular: StartDimAngularCommand(st, log); break;
+    case K::Move:       StartMoveCommand(st, log);       break;
+    case K::Copy:       StartCopyCommand(st, log);       break;
+    case K::Rotate:     StartRotateCommand(st, log);     break;
+    case K::Scale:      StartScaleCommand(st, log);      break;
+    case K::Delete:     StartDeleteCommand(st, log);     break;
+    case K::Join:       StartJoinCommand(st, log);       break;
+    case K::Trim:       StartTrimCommand(st, log);       break;
+    case K::Offset:     StartOffsetCommand(st, log);     break;
+    default: break;
+  }
 }

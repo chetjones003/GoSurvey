@@ -4257,6 +4257,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           g_snapMenuStep = 0;
           g_snapPickMenuScratch.clear();
           ImGui::OpenPopup("##gos_snap_pick");
+        } else if (cmd.active == AK::None && cmd.rightClickRepeatLastCommand &&
+                   cmd.lastCommand != AK::None && !blockSnapPickMenu) {
+          RepeatLastCommand(cmd, log);
         } else {
           ImGui::OpenPopup("##drawing1_vp_ctx");
         }

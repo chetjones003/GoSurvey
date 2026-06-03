@@ -98,6 +98,9 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   num("viewportDimTextMinPx",  &st.viewportDimTextMinPx,  4.f,  48.f);
   num("viewportDimTextMaxPx",  &st.viewportDimTextMaxPx,  24.f, 320.f);
 
+  // --- Right-click behavior (Drafting tab) ---
+  b  ("rightClickRepeatLastCommand", &st.rightClickRepeatLastCommand);
+
   // --- Object snap (Drafting tab) ---
   b  ("objectSnapEnabled",         &st.objectSnapEnabled);
   b  ("objectSnapEndpoint",        &st.objectSnapEndpoint);
@@ -227,6 +230,9 @@ void SaveUserStartupPrefs(const AppCommandState& st) {
   s["viewportDimArrowScale"]  = st.viewportDimArrowScale;
   s["viewportDimTextMinPx"]   = st.viewportDimTextMinPx;
   s["viewportDimTextMaxPx"]   = st.viewportDimTextMaxPx;
+
+  // Right-click behavior
+  s["rightClickRepeatLastCommand"] = st.rightClickRepeatLastCommand;
 
   // Object snap
   s["objectSnapEnabled"]          = st.objectSnapEnabled;

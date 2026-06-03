@@ -313,6 +313,13 @@ static void DrawSettingsSystemTab(AppCommandState& cmd) {
 }
 
 static void DrawSettingsDraftingTab(AppCommandState& cmd) {
+  BoxBegin("Right-click behavior", 90.f);
+  ImGui::Checkbox("Right-click in drawing repeats last command when no command is active",
+                  &cmd.rightClickRepeatLastCommand);
+  ItemHelpTooltip("When enabled, right-clicking in the drawing viewport with no active command immediately "
+                  "re-invokes the last used command (LINE, CIRCLE, COPY, etc.).\n"
+                  "When disabled, right-click opens the context menu instead.");
+  BoxEnd();
   BoxBegin("Object snap (AutoSnap)", 0.f);
   ImGui::TextUnformatted("Cursor snaps to drawing geometry when OSNAP is on (status bar or F3).");
   ImGui::Separator();

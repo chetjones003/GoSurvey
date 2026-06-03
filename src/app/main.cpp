@@ -137,11 +137,9 @@ int main() {
   const bool haveSavedDockIni = ImGuiLayout_ConfigureIniPath(cmd);
   std::vector<std::string> cmdLog;
   cmdLog.push_back("GoSurvey CAD shell ready.");
-  cmdLog.push_back(
-      "LINE/L … SURVEY: CREATEPOINTS (CRTPTS), VIEWPOINTS (VWPTS), IMPORTPOINTS (IMPPTS), EXPORTPOINTS (EXPPTS), "
-      "INVERSE (INV), "
-      "JSON database — idle: two-click select. MMB "
-      "pan.");
+  cmdLog.push_back( "Regenerating model.");
+  cmdLog.push_back("Drawing Created.");
+  cmdLog.push_back("JSON database - ready...");
   TryLoadStartupWorkspaceTemplate(cmd, cmdLog);
   // Re-apply user preferences so they override any template defaults (crosshair, snap, survey, etc.).
   LoadUserStartupPrefSettings(cmd);
