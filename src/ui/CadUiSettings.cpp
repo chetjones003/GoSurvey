@@ -18,7 +18,7 @@
 static void BoxBegin(const char* label, float height = 0.f) {
   ImGui::SeparatorText(label);
   if (height > 0.f)
-    ImGui::BeginChild((std::string("##box_") + label).c_str(), ImVec2(0, height), true, ImGuiWindowFlags_NoScrollbar);
+    ImGui::BeginChild((std::string("##box_") + label).c_str(), ImVec2(0, height), true);
   else
     ImGui::BeginChild((std::string("##box_") + label).c_str(), ImVec2(0, 0), true);
 }
