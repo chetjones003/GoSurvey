@@ -2059,10 +2059,10 @@ bool DrawColorPickerRow(AppCommandState& cmd) {
   std::vector<std::string> layers, colors, ltypes;
   std::vector<float> lws, trans;
   CollectGeneralAttrs(cmd, cmd.selection, &layers, &colors, &ltypes, &lws, &trans);
-  (void)layers;
   (void)ltypes;
   (void)lws;
 
+  const std::string mergedLayer = MergeStrings(layers);
   const std::string merged = MergeStrings(colors);
   float mergedTrans = 0.f;
   if (!trans.empty()) {
@@ -2110,7 +2110,15 @@ bool DrawColorPickerRow(AppCommandState& cmd) {
     swatchRgb = ImVec4(0.45f, 0.45f, 0.47f, 1.f - mergedTrans);
   } else {
     float rgba[4];
-    ResolveStoredColorForViewport(merged, mergedTrans, dr, dg, db, rgba);
+    // When color is "ByLayer" and all selected entities share one layer, resolve
+    // the swatch to that layer's actual color instead of the ByLayer placeholder.
+    std::string effectiveColor = merged;
+    if (merged == "ByLayer" && mergedLayer != kVaries && mergedLayer != "---" && !mergedLayer.empty()) {
+      const CadLayerRow* row = FindDrawingLayerRowCi(cmd, mergedLayer);
+      if (row && !row->color.empty())
+        effectiveColor = row->color;
+    }
+    ResolveStoredColorForViewport(effectiveColor, mergedTrans, dr, dg, db, rgba);
     swatchRgb = ImVec4(rgba[0], rgba[1], rgba[2], rgba[3]);
   }
 
@@ -6663,6 +6671,10 @@ void DrawQuickSelectWindow(AppCommandState& cmd, std::vector<std::string>& log) 
           // Reset property to first valid one for this type
           if (kQsTypes[i].props.size() != 0)
             cmd.qsProperty = *kQsTypes[i].props.begin();
+          // Reset operator if it's numeric-only but new property is a string property
+          if (!QsPropertyIsNumeric(cmd.qsProperty) &&
+              (cmd.qsOperator == QO::LessThan || cmd.qsOperator == QO::GreaterThan))
+            cmd.qsOperator = QO::Equals;
         }
         if (sel) ImGui::SetItemDefaultFocus();
       }
@@ -6687,8 +6699,12 @@ void DrawQuickSelectWindow(AppCommandState& cmd, std::vector<std::string>& log) 
     if (ImGui::BeginCombo("##qs_prop", curPropName)) {
       for (QP p : validProps) {
         const bool sel = (p == cmd.qsProperty);
-        if (ImGui::Selectable(QsPropertyLabel(p), sel))
+        if (ImGui::Selectable(QsPropertyLabel(p), sel)) {
           cmd.qsProperty = p;
+          if (!QsPropertyIsNumeric(p) &&
+              (cmd.qsOperator == QO::LessThan || cmd.qsOperator == QO::GreaterThan))
+            cmd.qsOperator = QO::Equals;
+        }
         if (sel) ImGui::SetItemDefaultFocus();
       }
       ImGui::EndCombo();
