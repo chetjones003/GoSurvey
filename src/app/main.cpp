@@ -438,6 +438,10 @@ int main() {
     std::vector<float> highlightCircles;
     BuildSelectionHighlight(cmd, &highlightLines, &highlightCircles);
 
+    std::vector<float> hoverLines;
+    std::vector<float> hoverCircles;
+    BuildHoverHighlight(cmd, &hoverLines, &hoverCircles);
+
     std::vector<float> surveyMarkers;
     if (!cmd.surveyPoints.empty()) {
       const float surveyCrossHalf =
@@ -474,6 +478,8 @@ int main() {
                          previewCircles.empty() ? nullptr : &previewCircles,
                          highlightLines.empty() ? nullptr : &highlightLines,
                          highlightCircles.empty() ? nullptr : &highlightCircles,
+                         hoverLines.empty() ? nullptr : &hoverLines,
+                         hoverCircles.empty() ? nullptr : &hoverCircles,
                          surveyMarkers.empty() ? nullptr : &surveyMarkers, &cmd.userLineAttrs,
                          &cmd.userCircleAttrs, &ext, gridVisible, &cmd.drawingLayerTable, tuning,
                          pdfRenderList.empty() ? nullptr : &pdfRenderList);

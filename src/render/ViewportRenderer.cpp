@@ -749,8 +749,9 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
                                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
                                    const CadSnap::Hit* snapOverlay, float snapGlyphHalfPx,
                                    const float* selectionFillRect, const std::vector<float>* previewLines,
-                                   const std::vector<float>* previewCircles, const std::vector<float>* highlightLines, const std::vector<float>* highlightCircles,
-                                   const std::vector<float>* surveyMarkers,
+                                   const std::vector<float>* previewCircles, const std::vector<float>* highlightLines,
+                                   const std::vector<float>* highlightCircles, const std::vector<float>* hoverLines,
+                                   const std::vector<float>* hoverCircles, const std::vector<float>* surveyMarkers,
                                    const std::vector<EntityAttributes>* lineEntityAttrs,
                                    const std::vector<EntityAttributes>* circleEntityAttrs,
                                    const CadExtendedGeometryInput* extended, bool showGrid,
@@ -1196,6 +1197,38 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
 
   glDisable(GL_BLEND);
   glLineWidth(kLwMain);
+
+  // --- Hover highlight (subtle blue stroke drawn before selection so selection always wins) ---
+  if (hoverLines && !hoverLines->empty() && hoverLines->size() % 6 == 0) {
+    std::vector<float> hvLineRel;
+    ConvertLineVertsWorldToView(*hoverLines, viewAnchorX, viewAnchorY, &hvLineRel);
+    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+    glUniform4f(locCol, 0.45f, 0.72f, 1.f, 1.f);
+    glLineWidth(kLwHiLine * 0.72f);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(hvLineRel.size() * sizeof(float)), hvLineRel.data(),
+                 GL_STREAM_DRAW);
+    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(hvLineRel.size() / 3));
+    glLineWidth(kLwMain);
+  }
+  if (hoverCircles && !hoverCircles->empty() && hoverCircles->size() % 3 == 0) {
+    std::vector<float> hvCircGeom;
+    for (size_t i = 0; i + 2 < hoverCircles->size(); i += 3) {
+      const float hr = (*hoverCircles)[i + 2];
+      const int hvSegs = CircleTessellationSegmentCount(static_cast<double>(hr), static_cast<double>(halfH), fbHeight,
+                                                        tuning.arcCircleSmoothnessCap);
+      AppendCircleLineApprox(hvCircGeom, (*hoverCircles)[i], (*hoverCircles)[i + 1], hr, hvSegs, 0.017f,
+                             viewAnchorX, viewAnchorY);
+    }
+    if (!hvCircGeom.empty()) {
+      glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+      glUniform4f(locCol, 0.45f, 0.72f, 1.f, 1.f);
+      glLineWidth(kLwHiCirc * 0.72f);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(hvCircGeom.size() * sizeof(float)), hvCircGeom.data(),
+                   GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(hvCircGeom.size() / 3));
+      glLineWidth(kLwMain);
+    }
+  }
 
   // --- Selection highlight (accent stroke on top of committed geometry) ---
   if (highlightLines && !highlightLines->empty() && highlightLines->size() % 6 == 0) {

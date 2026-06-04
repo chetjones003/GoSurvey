@@ -351,45 +351,63 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
   }
 }
 
+static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEntity& e,
+                                   float lineZ, std::vector<float>* hlLines, std::vector<float>* hlCircles) {
+  if (e.type == SelectedEntity::Type::LineSeg) {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= cmd.userLinesFlat.size())
+      return;
+    for (int i = 0; i < 2; ++i) {
+      hlLines->push_back(cmd.userLinesFlat[k + i * 3]);
+      hlLines->push_back(cmd.userLinesFlat[k + i * 3 + 1]);
+      hlLines->push_back(lineZ);
+    }
+  } else if (e.type == SelectedEntity::Type::Circle) {
+    const size_t k = static_cast<size_t>(e.index) * 3;
+    if (k + 2 >= cmd.userCirclesCxCyR.size())
+      return;
+    hlCircles->push_back(cmd.userCirclesCxCyR[k]);
+    hlCircles->push_back(cmd.userCirclesCxCyR[k + 1]);
+    hlCircles->push_back(cmd.userCirclesCxCyR[k + 2]);
+  } else if (e.type == SelectedEntity::Type::Arc) {
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= cmd.userArcs.size())
+      return;
+    appendArcPolylineStrip(hlLines, lineZ, cmd.userArcs[k], 48);
+  } else if (e.type == SelectedEntity::Type::Ellipse) {
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= cmd.userEllipses.size())
+      return;
+    appendEllipsePolylineStrip(hlLines, lineZ, cmd.userEllipses[k], 56);
+  } else if (e.type == SelectedEntity::Type::Polyline) {
+    appendCommittedPolylineStrip(hlLines, lineZ, cmd, e.index);
+  }
+}
+
 void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<float>* hlLines,
                              std::vector<float>* hlCircles) {
   hlLines->clear();
   hlCircles->clear();
   constexpr float kLineZ = 0.012f;
-  const auto appendOne = [&](const SelectedEntity& e) {
-    if (e.type == SelectedEntity::Type::LineSeg) {
-      const size_t k = static_cast<size_t>(e.index) * 6;
-      if (k + 5 >= cmd.userLinesFlat.size())
-        return;
-      for (int i = 0; i < 2; ++i) {
-        hlLines->push_back(cmd.userLinesFlat[k + i * 3]);
-        hlLines->push_back(cmd.userLinesFlat[k + i * 3 + 1]);
-        hlLines->push_back(kLineZ);
-      }
-    } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 3;
-      if (k + 2 >= cmd.userCirclesCxCyR.size())
-        return;
-      hlCircles->push_back(cmd.userCirclesCxCyR[k]);
-      hlCircles->push_back(cmd.userCirclesCxCyR[k + 1]);
-      hlCircles->push_back(cmd.userCirclesCxCyR[k + 2]);
-    } else if (e.type == SelectedEntity::Type::Arc) {
-      const size_t k = static_cast<size_t>(e.index);
-      if (k >= cmd.userArcs.size())
-        return;
-      appendArcPolylineStrip(hlLines, kLineZ, cmd.userArcs[k], 48);
-    } else if (e.type == SelectedEntity::Type::Ellipse) {
-      const size_t k = static_cast<size_t>(e.index);
-      if (k >= cmd.userEllipses.size())
-        return;
-      appendEllipsePolylineStrip(hlLines, kLineZ, cmd.userEllipses[k], 56);
-    } else if (e.type == SelectedEntity::Type::Polyline) {
-      appendCommittedPolylineStrip(hlLines, kLineZ, cmd, e.index);
-    }
-  };
   for (const auto& e : cmd.selection)
-    appendOne(e);
+    AppendEntityHighlight(cmd, e, kLineZ, hlLines, hlCircles);
   if (cmd.active == AppCommandState::Kind::Offset && cmd.offsetPhase == AppCommandState::OffsetPhase::WaitSelectEntity &&
       cmd.offsetHoverHighlightValid)
-    appendOne(cmd.offsetHoverEntity);
+    AppendEntityHighlight(cmd, cmd.offsetHoverEntity, kLineZ, hlLines, hlCircles);
+}
+
+void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLines,
+                         std::vector<float>* hoverCircles) {
+  hoverLines->clear();
+  hoverCircles->clear();
+  if (!cmd.viewportHoverEntityValid)
+    return;
+  // Skip if already selected — selection highlight takes visual precedence.
+  const SelectedEntity& e = cmd.viewportHoverEntity;
+  for (const auto& sel : cmd.selection) {
+    if (sel.type == e.type && sel.index == e.index)
+      return;
+  }
+  constexpr float kLineZ = 0.011f;
+  AppendEntityHighlight(cmd, e, kLineZ, hoverLines, hoverCircles);
 }

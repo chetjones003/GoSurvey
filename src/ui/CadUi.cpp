@@ -4622,6 +4622,25 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           PickSurveyPointIndex(cmd.surveyPoints, rawXf, rawYf, surveyCrossHalfW, avail.y, halfH,
                                cmd.objectSnapAperturePx);
 
+    // Idle hover: detect CAD entity under cursor for subtle highlight feedback.
+    {
+      const bool blockEntityHover = cmd.active != AK::None || cmd.dimGripMoveActive ||
+                                    cmd.entityGripMoveActive || cmd.mtextGripMoveActive || cmd.selBoxWaitingSecond;
+      if (!blockEntityHover) {
+        SelectedEntity hoverHit{};
+        float hoverD2 = 0.f;
+        const float hoverTol = CadOffsetEntityPickTolWorld(cmd);
+        if (PickClosestCadEntity(cmd, rawXf, rawYf, hoverTol, &hoverHit, &hoverD2)) {
+          cmd.viewportHoverEntityValid = true;
+          cmd.viewportHoverEntity = hoverHit;
+        } else {
+          cmd.viewportHoverEntityValid = false;
+        }
+      } else {
+        cmd.viewportHoverEntityValid = false;
+      }
+    }
+
     if (cmd.pendingOneShotSnapValid && outCursorX && outCursorY) {
       *outCursorX = cmd.pendingOneShotSnapX;
       *outCursorY = cmd.pendingOneShotSnapY;
@@ -5462,6 +5481,34 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
       // PDF underlays are selected via the standard 2-click box selection
       // (ComputeSelectionFromRect handles PdfUnderlay hit testing).
+
+      // Click-to-select: pick the closest CAD entity under the cursor (line, circle, arc, ellipse, polyline).
+      if (!handled) {
+        SelectedEntity clickHit{};
+        float clickD2 = 0.f;
+        const float clickTol = CadOffsetEntityPickTolWorld(cmd);
+        if (PickClosestCadEntity(cmd, rawPickXf, rawPickYf, clickTol, &clickHit, &clickD2)) {
+          AbortMtextGripInteraction(cmd);
+          ClearDimGripInteraction(cmd);
+          if (keyShift) {
+            // Shift+click: remove entity from selection (subtractive).
+            auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
+              return x.type == clickHit.type && x.index == clickHit.index;
+            });
+            if (it != cmd.selection.end())
+              cmd.selection.erase(it);
+          } else {
+            // Plain click: add entity to selection (additive).
+            const bool alreadySelected = std::any_of(cmd.selection.begin(), cmd.selection.end(),
+              [&](const SelectedEntity& x) { return x.type == clickHit.type && x.index == clickHit.index; });
+            if (!alreadySelected)
+              cmd.selection.push_back(clickHit);
+          }
+          EnsureAttrCounts(cmd);
+          cmd.selBoxWaitingSecond = false;
+          handled = true;
+        }
+      }
 
       if (!handled) {
         if (!cmd.surveyPoints.empty()) {

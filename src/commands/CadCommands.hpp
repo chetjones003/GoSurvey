@@ -289,6 +289,9 @@ struct AppCommandState {
   float surveyLabelLeaderArrowPx = 5.5f;
   /// Drawing viewport: survey index under cursor (-1 if none), for hover feedback.
   int viewportHoverSurveyPointIndex = -1;
+  /// Drawing viewport: CAD entity under cursor when idle (no command active), for hover highlight feedback.
+  bool viewportHoverEntityValid = false;
+  SelectedEntity viewportHoverEntity{};
   /// When true, viewport picks should use the snapped world point (OSNAP) instead of the sticky-blended cursor.
   bool viewportSnapPickValid = false;
   float viewportSnapPickWorldX = 0.f;

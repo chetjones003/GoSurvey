@@ -3,11 +3,6 @@
 ## BUGS
 
 ## FEATURES
-- [ ] **[FEAT-002]** Add more support for for hovering over entities
-    - If I hover over a line, circle, text, survey point, etc...the entity should highlight very slightly
-      to let me know i am over an entity.
-    - And if I am hovering over an entity, click should select that entity. Other wise a box select is needed.
-
 - [ ] **[FEAT-003]** Settings menu right click options
     - I want in the User Preferences tab to have a Right Click Options section that has the following:
         - Default Mode:
@@ -94,3 +89,9 @@
     - I also need settings for more label styles, like northing, easting.
     - If a point label gets a certain "distance" away from the point the i need a leader
       pointing back to it's associated point. A leader is a line with an arrow~~
+
+~~- [x] **[FEAT-002]** Add more support for hovering over entities [COMPLETE]
+    - If I hover over a line, circle, text, survey point, etc...the entity should highlight very slightly
+      to let me know i am over an entity.
+    - And if I am hovering over an entity, click should select that entity. Other wise a box select is needed.~~
+
