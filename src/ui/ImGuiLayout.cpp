@@ -181,19 +181,42 @@ void ImGuiLayout_DrawLayoutPopups(AppCommandState& cmd, std::vector<std::string>
     cmd.openSaveLayoutAsPopup = false;
   }
 
-  ImGui::SetNextWindowSize(ImVec2(420, 0), ImGuiCond_Always);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(16.f, 14.f));
+  ImGui::SetNextWindowSize(ImVec2(460, 0), ImGuiCond_Always);
   if (ImGui::BeginPopupModal("Save layout as##GoSurvey", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGui::TextUnformatted("Name is stored as <name>.ini under resources/layouts next to the executable.");
+    ImGui::TextUnformatted("Saves the current panel layout as a named .ini file.");
     ImGui::Spacing();
-    ImGui::InputText("Layout name##save_layout", cmd.saveLayoutAsNameBufUtf8, sizeof(cmd.saveLayoutAsNameBufUtf8));
+
+    // Existing layouts — click to pre-fill the name field.
+    std::vector<std::string> stems;
+    ImGuiLayout_ListLayoutStems(&stems);
+    if (!stems.empty()) {
+      ImGui::SeparatorText("Existing layouts");
+      const float listH = std::min(static_cast<float>(stems.size()), 5.f) * ImGui::GetTextLineHeightWithSpacing() + 6.f;
+      if (ImGui::BeginListBox("##existing_layouts", ImVec2(-FLT_MIN, listH))) {
+        for (const std::string& s : stems) {
+          const bool selected = std::string(cmd.saveLayoutAsNameBufUtf8) == s;
+          if (ImGui::Selectable(s.c_str(), selected))
+            std::snprintf(cmd.saveLayoutAsNameBufUtf8, sizeof(cmd.saveLayoutAsNameBufUtf8), "%s", s.c_str());
+        }
+        ImGui::EndListBox();
+      }
+      ImGui::Spacing();
+    }
+
+    ImGui::SeparatorText("Name");
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputText("##save_layout_name", cmd.saveLayoutAsNameBufUtf8, sizeof(cmd.saveLayoutAsNameBufUtf8));
     ImGui::Spacing();
-    if (ImGui::Button("Save", ImVec2(120, 0))) {
+
+    if (ImGui::Button("Save", ImVec2(140.f, 0.f))) {
       if (ImGuiLayout_SaveCurrentLayoutAs(cmd, cmd.saveLayoutAsNameBufUtf8, log))
         ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Cancel", ImVec2(120, 0)))
+    if (ImGui::Button("Cancel", ImVec2(140.f, 0.f)))
       ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
   }
+  ImGui::PopStyleVar();
 }

@@ -38,7 +38,9 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
       *out = obj[k].get<std::string>();
   };
 
-  // --- Display / System settings (existing) ---
+  // --- Display / System settings ---
+  if (s.contains("displayColorThemeIdx") && s["displayColorThemeIdx"].is_number_integer())
+    st.displayColorThemeIdx = std::clamp(s["displayColorThemeIdx"].get<int>(), 0, 1);
   if (s.contains("settingsActiveTabIdx") && s["settingsActiveTabIdx"].is_number_integer())
     st.settingsActiveTabIdx = std::clamp(s["settingsActiveTabIdx"].get<int>(), 0, 10);
   if (s.contains("displayArcCircleSmoothness") && s["displayArcCircleSmoothness"].is_number_integer())
@@ -97,6 +99,12 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   num("viewportDimArrowScale", &st.viewportDimArrowScale,  0.2f, 4.f);
   num("viewportDimTextMinPx",  &st.viewportDimTextMinPx,  4.f,  48.f);
   num("viewportDimTextMaxPx",  &st.viewportDimTextMaxPx,  24.f, 320.f);
+
+  // --- Panel focus restoration ---
+  if (s.contains("focusedSidePanel") && s["focusedSidePanel"].is_string()) {
+    if (s["focusedSidePanel"].get<std::string>() == "Properties")
+      st.pendingPropertiesFocus = true;
+  }
 
   // --- Right-click behavior (Drafting tab) ---
   b  ("rightClickRepeatLastCommand", &st.rightClickRepeatLastCommand);
@@ -189,6 +197,7 @@ void SaveUserStartupPrefs(const AppCommandState& st) {
   nlohmann::json s = nlohmann::json::object();
 
   // Display / System settings
+  s["displayColorThemeIdx"]        = st.displayColorThemeIdx;
   s["settingsActiveTabIdx"]        = st.settingsActiveTabIdx;
   s["displayArcCircleSmoothness"]  = st.displayArcCircleSmoothness;
   s["displayCrosshairSizePct"]     = st.displayCrosshairSizePct;
@@ -230,6 +239,9 @@ void SaveUserStartupPrefs(const AppCommandState& st) {
   s["viewportDimArrowScale"]  = st.viewportDimArrowScale;
   s["viewportDimTextMinPx"]   = st.viewportDimTextMinPx;
   s["viewportDimTextMaxPx"]   = st.viewportDimTextMaxPx;
+
+  // Panel focus restoration
+  s["focusedSidePanel"] = st.propertiesPanelActive ? "Properties" : "Reports";
 
   // Right-click behavior
   s["rightClickRepeatLastCommand"] = st.rightClickRepeatLastCommand;

@@ -107,6 +107,7 @@ add_executable(GoSurvey
 
   # UI panels
   src/ui/CadUi.cpp
+  src/ui/CadUiSettings.cpp
   src/ui/CadUi_CopySurveyModal.cpp
   src/ui/CadUi_SurveyReports.cpp
   src/ui/CadUi_ImportExportPoints.cpp

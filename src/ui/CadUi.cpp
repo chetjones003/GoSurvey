@@ -12,6 +12,7 @@
 #include "WinFileDialogs.hpp"
 #include "SurveyPoints.hpp"
 #include "StringUtil.hpp"
+#include "imgui.h"
 
 #include <imgui_internal.h>
 #include <imgui_stdlib.h>
@@ -138,60 +139,151 @@ void ApplyCadDarkTheme() {
   ImGuiStyle& style = ImGui::GetStyle();
   ImVec4* colors = style.Colors;
 
-  style.WindowRounding = 2.f;
-  style.ChildRounding = 2.f;
-  style.FrameRounding = 2.f;
-  style.PopupRounding = 2.f;
-  style.ScrollbarRounding = 2.f;
-  style.GrabRounding = 2.f;
-  style.TabRounding = 2.f;
+  style.WindowRounding = 4.f;
+  style.ChildRounding = 3.f;
+  style.FrameRounding = 3.f;
+  style.PopupRounding = 4.f;
+  style.ScrollbarRounding = 3.f;
+  style.GrabRounding = 3.f;
+  style.TabRounding = 3.f;
   style.WindowBorderSize = 1.f;
-  style.FrameBorderSize = 1.f;
+  style.FrameBorderSize = 0.f;
+  style.TabBorderSize = 0.f;
+  style.ScrollbarSize = 12.f;
   style.WindowPadding = ImVec2(8, 8);
   style.FramePadding = ImVec2(6, 4);
   style.ItemSpacing = ImVec2(8, 6);
 
-  const ImVec4 bg0 = ImVec4(0.11f, 0.11f, 0.12f, 1.f);
-  const ImVec4 bg1 = ImVec4(0.14f, 0.14f, 0.15f, 1.f);
-  const ImVec4 bg2 = ImVec4(0.18f, 0.18f, 0.19f, 1.f);
-  const ImVec4 accent = ImVec4(0.92f, 0.48f, 0.16f, 1.f);
+  // Core UI palette — hex values match the FEAT-001 spec exactly
+  const ImVec4 workspace  = ImVec4(0.051f, 0.059f, 0.071f, 1.f);  // #0D0F12  Workspace Background
+  const ImVec4 secondary  = ImVec4(0.090f, 0.102f, 0.122f, 1.f);  // #171A1F  Secondary Background
+  const ImVec4 panel      = ImVec4(0.125f, 0.145f, 0.173f, 1.f);  // #20252C  Panel Background
+  const ImVec4 raised     = ImVec4(0.165f, 0.192f, 0.231f, 1.f);  // #2A313B  Raised Surface
+  const ImVec4 border     = ImVec4(0.227f, 0.263f, 0.310f, 1.f);  // #3A434F  Border
+  const ImVec4 separator  = ImVec4(0.294f, 0.337f, 0.392f, 1.f);  // #4B5664  Separator Lines
+  const ImVec4 blue       = ImVec4(0.231f, 0.510f, 0.965f, 1.f);  // #3B82F6  Primary Blue accent
+  const ImVec4 orange     = ImVec4(0.976f, 0.451f, 0.086f, 1.f);  // #F97316  Survey Orange (unused here; used in toggle buttons)
+  const ImVec4 text       = ImVec4(0.898f, 0.906f, 0.922f, 1.f);  // #E5E7EB  Command Text / primary text
 
-  colors[ImGuiCol_Text] = ImVec4(0.93f, 0.93f, 0.94f, 1.f);
-  colors[ImGuiCol_TextDisabled] = ImVec4(0.50f, 0.50f, 0.52f, 1.f);
-  colors[ImGuiCol_WindowBg] = bg0;
-  colors[ImGuiCol_ChildBg] = bg0;
-  colors[ImGuiCol_PopupBg] = ImVec4(0.12f, 0.12f, 0.13f, 0.98f);
-  colors[ImGuiCol_Border] = ImVec4(0.28f, 0.28f, 0.30f, 1.f);
-  colors[ImGuiCol_FrameBg] = bg1;
-  colors[ImGuiCol_FrameBgHovered] = bg2;
-  colors[ImGuiCol_FrameBgActive] = ImVec4(0.42f, 0.26f, 0.12f, 1.f);
-  colors[ImGuiCol_TitleBg] = bg1;
-  colors[ImGuiCol_TitleBgActive] = bg2;
-  colors[ImGuiCol_MenuBarBg] = ImVec4(0.16f, 0.16f, 0.17f, 1.f);
-  colors[ImGuiCol_ScrollbarBg] = bg0;
-  colors[ImGuiCol_ScrollbarGrab] = bg2;
-  colors[ImGuiCol_ScrollbarGrabHovered] = ImVec4(0.22f, 0.22f, 0.24f, 1.f);
-  colors[ImGuiCol_CheckMark] = accent;
-  colors[ImGuiCol_SliderGrab] = accent;
-  colors[ImGuiCol_Button] = bg2;
-  colors[ImGuiCol_ButtonHovered] = ImVec4(0.50f, 0.30f, 0.14f, 1.f);
-  colors[ImGuiCol_ButtonActive] = ImVec4(0.44f, 0.26f, 0.10f, 1.f);
-  colors[ImGuiCol_Header] = bg2;
-  colors[ImGuiCol_HeaderHovered] = ImVec4(0.50f, 0.30f, 0.14f, 1.f);
-  colors[ImGuiCol_HeaderActive] = ImVec4(0.44f, 0.26f, 0.10f, 1.f);
-  colors[ImGuiCol_Separator] = ImVec4(0.28f, 0.28f, 0.30f, 1.f);
-  colors[ImGuiCol_Tab] = bg1;
-  colors[ImGuiCol_TabHovered] = ImVec4(0.58f, 0.34f, 0.16f, 1.f);
-  const ImVec4 tabSel = ImVec4(0.48f, 0.28f, 0.12f, 1.f);
-  colors[ImGuiCol_TabActive] = tabSel;
-  colors[ImGuiCol_TabUnfocused] = bg1;
-  colors[ImGuiCol_TabUnfocusedActive] = bg2;
-  // ImGui copies HeaderActive into TabSelectedOverline once in StyleColorsDark; we change HeaderActive
-  // afterward, so the overline would stay default blue unless we set these explicitly.
-  colors[ImGuiCol_TabSelectedOverline] = tabSel;
-  colors[ImGuiCol_TabDimmedSelectedOverline] = bg2;
-  colors[ImGuiCol_DockingPreview] = ImVec4(0.92f, 0.48f, 0.16f, 0.35f);
-  colors[ImGuiCol_DockingEmptyBg] = ImVec4(0.09f, 0.09f, 0.10f, 1.f);
+  (void)orange;
+
+  colors[ImGuiCol_Text]                  = text;
+  colors[ImGuiCol_TextDisabled]          = separator;
+  colors[ImGuiCol_WindowBg]              = workspace;
+  colors[ImGuiCol_ChildBg]               = secondary;
+  colors[ImGuiCol_PopupBg]               = ImVec4(0.090f, 0.102f, 0.122f, 0.98f);
+  colors[ImGuiCol_Border]                = border;
+  colors[ImGuiCol_BorderShadow]          = ImVec4(0.f, 0.f, 0.f, 0.f);
+  colors[ImGuiCol_FrameBg]               = panel;
+  colors[ImGuiCol_FrameBgHovered]        = raised;
+  colors[ImGuiCol_FrameBgActive]         = ImVec4(0.204f, 0.235f, 0.278f, 1.f);
+  colors[ImGuiCol_TitleBg]               = secondary;
+  colors[ImGuiCol_TitleBgActive]         = panel;
+  colors[ImGuiCol_TitleBgCollapsed]      = workspace;
+  colors[ImGuiCol_MenuBarBg]             = secondary;
+  colors[ImGuiCol_ScrollbarBg]           = workspace;
+  colors[ImGuiCol_ScrollbarGrab]         = raised;
+  colors[ImGuiCol_ScrollbarGrabHovered]  = border;
+  colors[ImGuiCol_ScrollbarGrabActive]   = separator;
+  colors[ImGuiCol_CheckMark]             = blue;
+  colors[ImGuiCol_SliderGrab]            = blue;
+  colors[ImGuiCol_SliderGrabActive]      = ImVec4(0.380f, 0.588f, 0.984f, 1.f);
+  colors[ImGuiCol_Button]                = panel;
+  colors[ImGuiCol_ButtonHovered]         = raised;
+  colors[ImGuiCol_ButtonActive]          = ImVec4(0.204f, 0.235f, 0.278f, 1.f);
+  colors[ImGuiCol_Header]                = panel;
+  colors[ImGuiCol_HeaderHovered]         = raised;
+  colors[ImGuiCol_HeaderActive]          = ImVec4(0.204f, 0.235f, 0.278f, 1.f);
+  colors[ImGuiCol_Separator]             = border;
+  colors[ImGuiCol_SeparatorHovered]      = separator;
+  colors[ImGuiCol_SeparatorActive]       = blue;
+  colors[ImGuiCol_ResizeGrip]            = ImVec4(0.231f, 0.510f, 0.965f, 0.15f);
+  colors[ImGuiCol_ResizeGripHovered]     = ImVec4(0.231f, 0.510f, 0.965f, 0.55f);
+  colors[ImGuiCol_ResizeGripActive]      = blue;
+  colors[ImGuiCol_Tab]                   = secondary;
+  colors[ImGuiCol_TabHovered]            = raised;
+  colors[ImGuiCol_TabActive]             = ImVec4(0.063f, 0.141f, 0.345f, 1.f);  // dark blue tint
+  colors[ImGuiCol_TabUnfocused]          = workspace;
+  colors[ImGuiCol_TabUnfocusedActive]    = ImVec4(0.063f, 0.141f, 0.345f, 1.f);  // same as TabActive — showing tab is always blue
+  // Keep the overline accent explicitly — ImGui may copy HeaderActive into it and ours changed.
+  colors[ImGuiCol_TabSelectedOverline]        = blue;
+  colors[ImGuiCol_TabDimmedSelectedOverline]  = blue;  // showing tab overline stays blue even without focus
+  colors[ImGuiCol_DockingPreview]        = ImVec4(0.231f, 0.510f, 0.965f, 0.35f);
+  colors[ImGuiCol_DockingEmptyBg]        = workspace;
+}
+
+void ApplyCadLightTheme() {
+  ImGuiStyle& style = ImGui::GetStyle();
+  ImVec4* colors = style.Colors;
+
+  style.WindowRounding = 4.f;
+  style.ChildRounding = 3.f;
+  style.FrameRounding = 3.f;
+  style.PopupRounding = 4.f;
+  style.ScrollbarRounding = 3.f;
+  style.GrabRounding = 3.f;
+  style.TabRounding = 3.f;
+  style.WindowBorderSize = 1.f;
+  style.FrameBorderSize = 0.f;
+  style.TabBorderSize = 0.f;
+  style.ScrollbarSize = 12.f;
+  style.WindowPadding = ImVec2(8, 8);
+  style.FramePadding = ImVec2(6, 4);
+  style.ItemSpacing = ImVec2(8, 6);
+
+  // Light palette — medium-gray blue-gray tones; clearly gray, not near-white
+  const ImVec4 workspace  = ImVec4(0.835f, 0.847f, 0.875f, 1.f);  // #D5D8DF  Workspace Background
+  const ImVec4 secondary  = ImVec4(0.773f, 0.788f, 0.824f, 1.f);  // #C5C9D2  Secondary Background
+  const ImVec4 panel      = ImVec4(0.702f, 0.722f, 0.765f, 1.f);  // #B3B8C3  Panel Background
+  const ImVec4 raised     = ImVec4(0.635f, 0.659f, 0.710f, 1.f);  // #A2A8B5  Raised Surface
+  const ImVec4 border     = ImVec4(0.533f, 0.565f, 0.627f, 1.f);  // #8890A0  Border
+  const ImVec4 separator  = ImVec4(0.416f, 0.447f, 0.510f, 1.f);  // #6A7282  Separator Lines
+  const ImVec4 blue       = ImVec4(0.231f, 0.510f, 0.965f, 1.f);  // #3B82F6  Primary Blue accent
+  const ImVec4 text       = ImVec4(0.102f, 0.125f, 0.208f, 1.f);  // #1A2035  Primary text
+  const ImVec4 textMuted  = ImVec4(0.380f, 0.412f, 0.475f, 1.f);  // #616979  Disabled text
+
+  colors[ImGuiCol_Text]                  = text;
+  colors[ImGuiCol_TextDisabled]          = textMuted;
+  colors[ImGuiCol_WindowBg]              = workspace;
+  colors[ImGuiCol_ChildBg]               = secondary;
+  colors[ImGuiCol_PopupBg]               = ImVec4(0.835f, 0.847f, 0.875f, 0.98f);
+  colors[ImGuiCol_Border]                = border;
+  colors[ImGuiCol_BorderShadow]          = ImVec4(0.f, 0.f, 0.f, 0.f);
+  colors[ImGuiCol_FrameBg]               = panel;
+  colors[ImGuiCol_FrameBgHovered]        = raised;
+  colors[ImGuiCol_FrameBgActive]         = ImVec4(0.580f, 0.604f, 0.651f, 1.f);
+  colors[ImGuiCol_TitleBg]               = secondary;
+  colors[ImGuiCol_TitleBgActive]         = panel;
+  colors[ImGuiCol_TitleBgCollapsed]      = workspace;
+  colors[ImGuiCol_MenuBarBg]             = secondary;
+  colors[ImGuiCol_ScrollbarBg]           = workspace;
+  colors[ImGuiCol_ScrollbarGrab]         = raised;
+  colors[ImGuiCol_ScrollbarGrabHovered]  = border;
+  colors[ImGuiCol_ScrollbarGrabActive]   = separator;
+  colors[ImGuiCol_CheckMark]             = blue;
+  colors[ImGuiCol_SliderGrab]            = blue;
+  colors[ImGuiCol_SliderGrabActive]      = ImVec4(0.380f, 0.588f, 0.984f, 1.f);
+  colors[ImGuiCol_Button]                = panel;
+  colors[ImGuiCol_ButtonHovered]         = raised;
+  colors[ImGuiCol_ButtonActive]          = ImVec4(0.580f, 0.604f, 0.651f, 1.f);
+  colors[ImGuiCol_Header]                = panel;
+  colors[ImGuiCol_HeaderHovered]         = raised;
+  colors[ImGuiCol_HeaderActive]          = ImVec4(0.580f, 0.604f, 0.651f, 1.f);
+  colors[ImGuiCol_Separator]             = border;
+  colors[ImGuiCol_SeparatorHovered]      = separator;
+  colors[ImGuiCol_SeparatorActive]       = blue;
+  colors[ImGuiCol_ResizeGrip]            = ImVec4(0.231f, 0.510f, 0.965f, 0.15f);
+  colors[ImGuiCol_ResizeGripHovered]     = ImVec4(0.231f, 0.510f, 0.965f, 0.55f);
+  colors[ImGuiCol_ResizeGripActive]      = blue;
+  colors[ImGuiCol_Tab]                   = secondary;
+  colors[ImGuiCol_TabHovered]            = raised;
+  colors[ImGuiCol_TabActive]             = ImVec4(0.741f, 0.831f, 0.988f, 1.f);  // light blue tint
+  colors[ImGuiCol_TabUnfocused]          = panel;
+  colors[ImGuiCol_TabUnfocusedActive]    = ImVec4(0.741f, 0.831f, 0.988f, 1.f);  // same as TabActive — showing tab is always blue
+  colors[ImGuiCol_TabSelectedOverline]        = blue;
+  colors[ImGuiCol_TabDimmedSelectedOverline]  = blue;  // showing tab overline stays blue even without focus
+  colors[ImGuiCol_DockingPreview]        = ImVec4(0.231f, 0.510f, 0.965f, 0.35f);
+  colors[ImGuiCol_DockingEmptyBg]        = workspace;
 }
 
 void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size) {
@@ -212,10 +304,10 @@ void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size) {
   ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Right, 0.24f, &dock_right, &dock_center);
   ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Down, 0.30f, &dock_bottom, &dock_center);
 
-  ImGui::DockBuilderDockWindow("Properties", dock_left);
-  ImGui::DockBuilderDockWindow("Reports", dock_right);
+  ImGui::DockBuilderDockWindow("Reports", dock_left);
+  ImGui::DockBuilderDockWindow("Properties", dock_left);  // docked last → active tab
   ImGui::DockBuilderDockWindow("Command line", dock_bottom);
-  ImGui::DockBuilderDockWindow("Drawing1", dock_center);
+  ImGui::DockBuilderDockWindow("Viewports", dock_center);
 
   ImGui::DockBuilderFinish(dockspace_id);
 }
@@ -237,9 +329,71 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - yPad);
   }
 #endif
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.f, 8.f));
   if (ImGui::BeginMenu("File")) {
-    ImGui::MenuItem("New", nullptr);
-    ImGui::MenuItem("Open...", nullptr);
+    if (ImGui::MenuItem("New", nullptr)) {
+      SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
+      const int newIdx = static_cast<int>(cmd.drawingTabs.size());
+      cmd.drawingTabs.push_back({"Drawing " + std::to_string(cmd.nextDrawingNumber++), cmd.nextTabUid++});
+      cmd.documents.emplace_back();
+      RestoreDocumentFromSnapshot(cmd, newIdx);  // load empty state into cmd
+      cmd.activeDrawingIdx        = newIdx;
+      cmd.prevDrawingIdx          = newIdx;  // tell main.cpp the switch already happened
+      cmd.pendingDrawingTabSwitch = true;
+      cmd.pendingViewportFocus    = true;
+    }
+    if (ImGui::MenuItem("Open", nullptr)) {
+      if (BrowseOpenFileGsUtf8(gsPath, sizeof(gsPath))) {
+        SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
+        const std::string tabName = std::filesystem::path(gsPath).stem().string();
+        const int newIdx = static_cast<int>(cmd.drawingTabs.size());
+        cmd.drawingTabs.push_back({tabName.empty() ? "Drawing" : tabName, cmd.nextTabUid++});
+        cmd.documents.emplace_back();
+        RestoreDocumentFromSnapshot(cmd, newIdx);  // clear cmd to empty state
+        if (LoadGoSurveyFile(cmd, gsPath, log)) {
+          cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+          cmd.activeDocFilePath      = std::string(gsPath);
+        }
+        cmd.activeDrawingIdx        = newIdx;
+        cmd.prevDrawingIdx          = newIdx;  // tell main.cpp the switch already happened
+        cmd.pendingDrawingTabSwitch = true;
+        cmd.pendingViewportFocus    = true;
+      }
+    }
+    if (ImGui::MenuItem("Save", "Ctrl+S")) {
+      const std::string& path = cmd.activeDocFilePath;
+      if (!path.empty()) {
+        if (SaveGoSurveyFile(cmd, path.c_str(), log))
+          cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+      } else {
+        if (BrowseSaveFileGsUtf8(gsPath, sizeof(gsPath), "drawing.gs")) {
+          if (SaveGoSurveyFile(cmd, gsPath, log)) {
+            cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+            cmd.activeDocFilePath      = std::string(gsPath);
+            if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
+              cmd.drawingTabs[cmd.activeDrawingIdx].name =
+                  std::filesystem::path(gsPath).stem().string();
+          }
+        }
+      }
+    }
+    if (ImGui::MenuItem("Save As...")) {
+      const std::string defName = cmd.activeDocFilePath.empty()
+          ? (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size())
+                 ? cmd.drawingTabs[cmd.activeDrawingIdx].name + ".gs"
+                 : std::string("drawing.gs"))
+          : std::filesystem::path(cmd.activeDocFilePath).filename().string();
+      if (BrowseSaveFileGsUtf8(gsPath, sizeof(gsPath), defName.c_str())) {
+        if (SaveGoSurveyFile(cmd, gsPath, log)) {
+          cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+          cmd.activeDocFilePath      = std::string(gsPath);
+          if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
+            cmd.drawingTabs[cmd.activeDrawingIdx].name =
+                std::filesystem::path(gsPath).stem().string();
+        }
+      }
+    }
+    ImGui::Separator();
     if (ImGui::MenuItem("Import DXF...", nullptr)) {
       if (BrowseOpenFileDxfUtf8(dxfPath, sizeof(dxfPath)))
         ImportDxfFile(cmd, dxfPath, log);
@@ -248,16 +402,19 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       if (BrowseSaveFileDxfUtf8(dxfPath, sizeof(dxfPath), "drawing.dxf"))
         ExportDxfFile(cmd, dxfPath, log);
     }
-    if (ImGui::MenuItem("Save workspace (.gs)...", nullptr)) {
-      if (BrowseSaveFileGsUtf8(gsPath, sizeof(gsPath), "drawing.gs"))
-        SaveGoSurveyFile(cmd, gsPath, log);
-    }
-    if (ImGui::MenuItem("Open workspace (.gs)...", nullptr)) {
-      if (BrowseOpenFileGsUtf8(gsPath, sizeof(gsPath)))
-        LoadGoSurveyFile(cmd, gsPath, log);
-    }
     ImGui::Separator();
-    ImGui::MenuItem("Exit", nullptr);
+    if (ImGui::MenuItem("Quit Application", nullptr)) {
+      bool anyDirty = (cmd.cadGpuRevision != cmd.activeDocSavedRevision);
+      for (int i = 0; i < static_cast<int>(cmd.documents.size()) && !anyDirty; ++i) {
+        if (i != cmd.activeDrawingIdx &&
+            cmd.documents[i].cadGpuRevision != cmd.documents[i].savedRevision)
+          anyDirty = true;
+      }
+      if (anyDirty)
+        cmd.confirmCloseModal = true;
+      else
+        cmd.closeConfirmed = true;
+    }
     ImGui::EndMenu();
   }
   if (ImGui::BeginMenu("Edit")) {
@@ -273,6 +430,7 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       cmd.showSettingsWindow = true;
     ImGui::EndMenu();
   }
+  ImGui::PopStyleVar();
 }
 
 static void CollectAllDrawingLayers(const AppCommandState& cmd, std::vector<std::string>* outSortedUnique) {
@@ -326,9 +484,14 @@ static ImVec2 RibbonToolIconCellSize(float sectionHeightPx) {
 
 static void RibbonSectionBegin(const char* childId, const char* title, float width, float height) {
   ImGui::BeginGroup();
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.13f, 0.14f, 0.16f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
   ImGui::BeginChild(childId, ImVec2(width, height), true, ImGuiWindowFlags_NoScrollbar);
-  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.64f, 0.72f, 1.f));
+  {
+    // 60% primary text + 40% disabled — readable in both dark and light themes.
+    const ImVec4 txt = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+    const ImVec4 dis = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(txt.x*0.6f+dis.x*0.4f, txt.y*0.6f+dis.y*0.4f, txt.z*0.6f+dis.z*0.4f, 1.f));
+  }
   const ImGuiStyle& st = ImGui::GetStyle();
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(st.ItemSpacing.x, 1.f));
   ImGui::TextUnformatted(title);
@@ -493,13 +656,13 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     const float yTop = mn.y + h * 0.2f;
     const float yBot = mx.y - h * 0.2f;
     const float yDim = c.y;
-    const ImU32 orange = IM_COL32(234, 126, 40, 255);
+    const ImU32 accentBlue = IM_COL32(59, 130, 246, 255);  // #3B82F6 Primary Blue
     dl->AddLine(ImVec2(xL, yTop), ImVec2(xL, yBot), col, t);
     dl->AddLine(ImVec2(xR, yTop), ImVec2(xR, yBot), col, t);
-    dl->AddLine(ImVec2(xL, yDim), ImVec2(xR, yDim), orange, t * 1.05f);
+    dl->AddLine(ImVec2(xL, yDim), ImVec2(xR, yDim), accentBlue, t * 1.05f);
     const float head = std::clamp(std::min(w, h) * 0.1f, 2.5f, 5.5f);
-    RibbonStrokeArrow(dl, ImVec2(xL, yDim), ImVec2(-1.f, 0.f), head, orange, t);
-    RibbonStrokeArrow(dl, ImVec2(xR, yDim), ImVec2(1.f, 0.f), head, orange, t);
+    RibbonStrokeArrow(dl, ImVec2(xL, yDim), ImVec2(-1.f, 0.f), head, accentBlue, t);
+    RibbonStrokeArrow(dl, ImVec2(xR, yDim), ImVec2(1.f, 0.f), head, accentBlue, t);
     break;
   }
   case RibbonIconKind::Id: {
@@ -1093,7 +1256,11 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
   ImGui::SameLine(0, st.ItemSpacing.x);
   ImGui::BeginChild("RibbonLayerStrip", ImVec2(kLayerPanelW, panelH), true, ImGuiWindowFlags_NoScrollbar);
-  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.58f, 0.64f, 0.72f, 1.f));
+  {
+    const ImVec4 txt = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+    const ImVec4 dis = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(txt.x*0.6f+dis.x*0.4f, txt.y*0.6f+dis.y*0.4f, txt.z*0.6f+dis.z*0.4f, 1.f));
+  }
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(st.ItemSpacing.x, 1.f));
   ImGui::TextUnformatted("Layer");
   ImGui::Separator();
@@ -3022,10 +3189,14 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
 
 void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::SetNextWindowSize(ImVec2(320, 560), ImGuiCond_FirstUseEver);
+  if (cmd.pendingPropertiesFocus)
+    ImGui::SetNextWindowFocus();
   if (!ImGui::Begin("Properties", nullptr)) {
+    cmd.propertiesPanelActive = false;
     ImGui::End();
     return;
   }
+  cmd.propertiesPanelActive = true;
 
   auto& svyIx = cmd.selectedSurveyPointIndices;
   svyIx.erase(std::remove_if(svyIx.begin(), svyIx.end(),
@@ -3038,12 +3209,38 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
 
   if (!haveSurveyPick && !haveCadSel) {
     gPropsSelFingerprint = ~0ull;
-    ImGui::TextDisabled("No selection.");
-    ImGui::Separator();
-    ImGui::TextWrapped(
-        "Fence: left→right = window (fully inside); right→left = crossing (touches fence). Includes COGO points. "
-        "Survey markers: click to add to the set; Shift+click adds another or removes if already picked; click a "
-        "picked marker again (no Shift) to keep only that point. Shift+fence subtracts. ESC clears.");
+    if (ImGui::CollapsingHeader("General", ImGuiTreeNodeFlags_DefaultOpen)) {
+      ImGui::BeginDisabled();
+      if (ImGui::BeginTable("props_gen_empty", 2, ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+        ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+        static const char* kGeneralRows[] = {
+          "Layer", "Layer list", "Color", "Linetype", "Lineweight", "Transparency", "Plot style"
+        };
+        for (const char* label : kGeneralRows) {
+          ImGui::TableNextRow();
+          ImGui::TableNextColumn(); ImGui::TextUnformatted(label);
+          ImGui::TableNextColumn(); ImGui::TextDisabled("\xe2\x80\x94");  // em dash
+        }
+        ImGui::EndTable();
+      }
+      ImGui::EndDisabled();
+    }
+    if (ImGui::CollapsingHeader("Geometry", ImGuiTreeNodeFlags_DefaultOpen)) {
+      ImGui::BeginDisabled();
+      if (ImGui::BeginTable("props_geo_empty", 2, ImGuiTableFlags_SizingStretchProp)) {
+        ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+        ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+        static const char* kGeomRows[] = {"Start X", "Start Y", "End X", "End Y"};
+        for (const char* label : kGeomRows) {
+          ImGui::TableNextRow();
+          ImGui::TableNextColumn(); ImGui::TextUnformatted(label);
+          ImGui::TableNextColumn(); ImGui::TextDisabled("\xe2\x80\x94");
+        }
+        ImGui::EndTable();
+      }
+      ImGui::EndDisabled();
+    }
     ImGui::End();
     return;
   }
@@ -3231,11 +3428,19 @@ namespace {
 
 static bool gPolarTrackingEnabled = false;
 
-void PushModeToggleButtonColors(bool on) {
-  if (on) {
-    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.62f, 0.34f, 0.12f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.72f, 0.40f, 0.14f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.52f, 0.28f, 0.10f, 1.f));
+void PushModeToggleButtonColors(bool on, int themeIdx) {
+  if (!on)
+    return;
+  if (themeIdx == 0) {
+    // Dark mode: dark blue tint — clearly "on" against deep panel background
+    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.063f, 0.141f, 0.345f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.086f, 0.180f, 0.420f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.051f, 0.114f, 0.290f, 1.f));
+  } else {
+    // Light mode: Primary Blue fills — clearly active against light gray
+    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.231f, 0.510f, 0.965f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.310f, 0.565f, 0.980f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.180f, 0.431f, 0.831f, 1.f));
   }
 }
 
@@ -3558,7 +3763,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
 
   {
     const bool on = cmd.objectSnapEnabled;
-    PushModeToggleButtonColors(on);
+    PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
     if (ImGui::Button("OSNAP", ImVec2(0.f, statusBtnH)))
       cmd.objectSnapEnabled = !cmd.objectSnapEnabled;
     PopModeToggleButtonColors(on);
@@ -3584,7 +3789,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   }
   if (ortho_mode_enabled) {
     const bool on = *ortho_mode_enabled;
-    PushModeToggleButtonColors(on);
+    PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
     if (ImGui::Button("ORTHO", ImVec2(0.f, statusBtnH)))
       *ortho_mode_enabled = !*ortho_mode_enabled;
     PopModeToggleButtonColors(on);
@@ -3593,7 +3798,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   }
   if (grid_visible) {
     const bool on = *grid_visible;
-    PushModeToggleButtonColors(on);
+    PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
     if (ImGui::Button("GRID", ImVec2(0.f, statusBtnH)))
       *grid_visible = !*grid_visible;
     PopModeToggleButtonColors(on);
@@ -3602,7 +3807,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   }
   {
     const bool on = gPolarTrackingEnabled;
-    PushModeToggleButtonColors(on);
+    PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
     if (ImGui::Button("POLAR", ImVec2(0.f, statusBtnH)))
       gPolarTrackingEnabled = !gPolarTrackingEnabled;
     PopModeToggleButtonColors(on);
@@ -3627,9 +3832,19 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
 }
 
 void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBufSize, AppCommandState& cmd) {
+  const bool isDark = (cmd.displayColorThemeIdx == 0);
+  // Console background is slightly distinct from the main workspace in both themes.
+  const ImVec4 consoleBg = isDark
+      ? ImVec4(0.067f, 0.078f, 0.094f, 1.f)   // #111418 dark console
+      : ImVec4(0.773f, 0.788f, 0.824f, 1.f);  // light secondary as console bg
+  const ImVec4 promptColor = isDark
+      ? ImVec4(0.133f, 0.773f, 0.369f, 1.f)   // #22C55E bright green on dark
+      : ImVec4(0.059f, 0.557f, 0.247f, 1.f);  // #0F8E3F darker green on light
   ImGui::SetNextWindowSize(ImVec2(900, 220), ImGuiCond_FirstUseEver);
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, consoleBg);
   if (!ImGui::Begin("Command line", nullptr)) {
     ImGui::End();
+    ImGui::PopStyleColor();
     return;
   }
 
@@ -3765,7 +3980,12 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   if (!cmdInputOnViewport) {
     ImGuiInputTextFlags flags =
         ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
-    ImGui::SetNextItemWidth(std::max(64.f, inputAvailW - sendBtnW - st.ItemSpacing.x));
+    ImGui::PushStyleColor(ImGuiCol_Text, promptColor);
+    ImGui::TextUnformatted(">");
+    ImGui::PopStyleColor();
+    const float promptW = ImGui::GetItemRectSize().x + st.ItemSpacing.x * 0.5f;
+    ImGui::SameLine(0, st.ItemSpacing.x * 0.5f);
+    ImGui::SetNextItemWidth(std::max(64.f, inputAvailW - sendBtnW - st.ItemSpacing.x - promptW));
     const bool exec = ImGui::InputTextWithHint("##CommandLineInput", CommandInputHint(cmd), cmdBuf,
                                                static_cast<size_t>(cmdBufSize), flags, CommandLineInputCallback, nullptr);
     ImGui::SetItemDefaultFocus();
@@ -3802,6 +4022,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   ImGui::PopID();
 
   ImGui::End();
+  ImGui::PopStyleColor();
 }
 
 static void RotateImDrawListVertsXY(ImDrawList* dl, int vtxStart, int vtxEnd, const ImVec2& pivot, float cosA,
@@ -4163,20 +4384,73 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                          double* outCursorY, double* outCursorRawX, double* outCursorRawY, int* outFbW, int* outFbH,
                          CadSnap::Hit* out_snap) {
   ImGui::SetNextWindowSize(ImVec2(900, 650), ImGuiCond_FirstUseEver);
-  if (!ImGui::Begin("Drawing1", nullptr)) {
+  if (cmd.pendingViewportFocus) {
+    ImGui::SetNextWindowFocus();
+    cmd.pendingViewportFocus = false;
+  }
+  if (!ImGui::Begin("Viewports", nullptr)) {
     cmd.viewportDrawingHovered = false;
     cmd.viewportCmdPaletteEngaged = false;
     ImGui::End();
     return;
   }
 
-  ImGui::TextDisabled("Model");
-  ImGui::SameLine();
-  ImGui::Button("Layout1");
-  ImGui::SameLine();
-  ImGui::Button("Layout2");
+  // Drawing tab bar — each open drawing is a closeable tab; "+" creates a new one.
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 3.f));
+  if (ImGui::BeginTabBar("##DrawingTabs",
+                         ImGuiTabBarFlags_Reorderable | ImGuiTabBarFlags_FittingPolicyScroll)) {
+    for (int i = 0; i < static_cast<int>(cmd.drawingTabs.size()); ++i) {
+      bool tabOpen = true;
+      // SetSelected only fires on the one frame after a programmatic switch (e.g. "+").
+      // Applying it every frame would override ImGui's own click handling.
+      const bool wantSelect = cmd.pendingDrawingTabSwitch && (i == cmd.activeDrawingIdx);
+      const ImGuiTabItemFlags tflags = wantSelect ? ImGuiTabItemFlags_SetSelected : 0;
+      // Append "##<uid>" so each tab has a unique ImGui ID even when two tabs share the same display name.
+      const std::string tabLabel = cmd.drawingTabs[i].name + "##dt" + std::to_string(cmd.drawingTabs[i].uid);
+      if (ImGui::BeginTabItem(tabLabel.c_str(), &tabOpen, tflags)) {
+        cmd.activeDrawingIdx = i;
+        cmd.pendingDrawingTabSwitch = false;  // consumed
+        ImGui::EndTabItem();
+      }
+      if (!tabOpen && cmd.drawingTabs.size() > 1) {
+        const int closeIdx  = i;
+        const int tabCount  = static_cast<int>(cmd.drawingTabs.size());
 
-  ImGui::Separator();
+        // Which tab becomes active after this one closes?
+        int newActive = cmd.activeDrawingIdx;
+        if (closeIdx == cmd.activeDrawingIdx) {
+          newActive = (closeIdx > 0) ? closeIdx - 1 : closeIdx + 1;
+          // Load that tab's snapshot into cmd before we erase anything.
+          RestoreDocumentFromSnapshot(cmd, newActive);
+        }
+        // Adjust for the index shift the erase will produce.
+        if (newActive > closeIdx) --newActive;
+        newActive = std::max(0, std::min(newActive, tabCount - 2));
+
+        // Erase tab + matching document snapshot so indices stay aligned.
+        cmd.drawingTabs.erase(cmd.drawingTabs.begin() + closeIdx);
+        if (closeIdx < static_cast<int>(cmd.documents.size()))
+          cmd.documents.erase(cmd.documents.begin() + closeIdx);
+
+        // Tell main.cpp to erase + shut down the matching renderer.
+        cmd.pendingTabErase = closeIdx;
+
+        cmd.activeDrawingIdx    = newActive;
+        cmd.prevDrawingIdx      = newActive;  // suppress spurious switch detection
+        cmd.pendingDrawingTabSwitch = true;   // visually select the new active tab
+        --i;
+      }
+    }
+    // Trailing "+" to open a new empty drawing.
+    if (ImGui::TabItemButton("+", ImGuiTabItemFlags_Trailing | ImGuiTabItemFlags_NoTooltip)) {
+      cmd.drawingTabs.push_back({"Drawing " + std::to_string(cmd.nextDrawingNumber++), cmd.nextTabUid++});
+      cmd.activeDrawingIdx        = static_cast<int>(cmd.drawingTabs.size()) - 1;
+      cmd.pendingDrawingTabSwitch = true;
+      cmd.pendingViewportFocus    = true;
+    }
+    ImGui::EndTabBar();
+  }
+  ImGui::PopStyleVar();
 
   ImVec2 avail = ImGui::GetContentRegionAvail();
   avail.y = std::max(avail.y, 80.f);
@@ -5698,7 +5972,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       RouteQueuedCharsToCmdBuf(cmdBuf, cmdBufSize, io);
       ImGui::SetKeyboardFocusHere(0);
     }
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.88f, 0.96f, 1.f));
+    // Dark: bright blue-white hint; Light: muted dark so it reads on the light popup bg.
+    const ImVec4 hintCol = (cmd.displayColorThemeIdx == 0)
+        ? ImVec4(0.82f, 0.88f, 0.96f, 1.f)
+        : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    ImGui::PushStyleColor(ImGuiCol_Text, hintCol);
     ImGui::TextWrapped("%s", CommandInputHint(cmd));
     ImGui::PopStyleColor();
     ImGuiInputTextFlags itf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
@@ -5942,7 +6220,9 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
     ImGui::TableSetupColumn("Lineweight", ImGuiTableColumnFlags_WidthStretch, 0.10f);
     ImGui::TableSetupColumn("Transparency", ImGuiTableColumnFlags_WidthStretch, 0.10f);
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 72.f);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 1.f, 1.f));
     ImGui::TableHeadersRow();
+    ImGui::PopStyleColor();
 
     for (size_t i = 0; i < cmd.drawingLayerTable.size();) {
       CadLayerRow& row = cmd.drawingLayerTable[i];
@@ -6105,586 +6385,96 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
   ImGui::End();
 }
 
-// ---------------------------------------------------------------------------------------------------------
-// AutoCAD-style Options dialog (Settings panel).
-// Helpers are static and split per pane / box to keep each function within the 60-line house rule.
-// ---------------------------------------------------------------------------------------------------------
+// Settings panel implementation lives in CadUiSettings.cpp.
 
-static void BoxBegin(const char* label, float height = 0.f) {
-  ImGui::SeparatorText(label);
-  if (height > 0.f) {
-    ImGui::BeginChild((std::string("##box_") + label).c_str(), ImVec2(0, height), true, ImGuiWindowFlags_NoScrollbar);
-  } else {
-    ImGui::BeginChild((std::string("##box_") + label).c_str(), ImVec2(0, 0), true);
+// DELETED: duplicate BoxBegin and DrawSettingsPanel — do not re-add here.
+
+
+void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) {
+  if (cmd.confirmCloseModal) {
+    ImGui::OpenPopup("Unsaved Changes##closeconf");
+    cmd.confirmCloseModal = false;
   }
-}
 
-static void BoxEnd() { ImGui::EndChild(); }
-
-static void DrawSettingsHeader(const AppCommandState& cmd) {
-  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.85f, 0.85f, 0.85f, 1.f));
-  ImGui::Text("Current profile:   <<GoSurvey>>");
-  ImGui::SameLine(ImGui::GetContentRegionAvail().x * 0.55f);
-  const char* drawingLabel = cmd.activeUiLayoutNameUtf8[0] ? cmd.activeUiLayoutNameUtf8 : "Untitled";
-  ImGui::Text("Current drawing:   %s", drawingLabel);
-  ImGui::PopStyleColor();
-  ImGui::Separator();
-}
-
-static void DrawDisplayWindowElements(AppCommandState& cmd) {
-  const char* themes[] = {"Dark", "Light"};
-  ImGui::SetNextItemWidth(150.f);
-  if (ImGui::Combo("Color theme:", &cmd.displayColorThemeIdx, themes, IM_ARRAYSIZE(themes)))
-    cmd.displayColorThemeIdx = std::clamp(cmd.displayColorThemeIdx, 0, 1);
-  ImGui::Spacing();
-  ImGui::Checkbox("Display scroll bars in drawing window", &cmd.displayScrollbars);
-  ImGui::Checkbox("Use large buttons for Toolbars", &cmd.displayLargeToolbarButtons);
-  ImGui::Checkbox("Resize ribbon icons to standard sizes", &cmd.displayResizeRibbonIcons);
-  ImGui::Checkbox("Show ToolTips", &cmd.displayShowTooltips);
-  if (cmd.displayShowTooltips) {
-    ImGui::Indent();
-    ImGui::SetNextItemWidth(80.f);
-    ImGui::DragFloat("Number of seconds before display##tooltipDelay", &cmd.displayTooltipDelaySec, 0.05f, 0.f, 5.f,
-                     "%.3f");
-    ImGui::Checkbox("Show shortcut keys in ToolTips", &cmd.displayShowShortcutKeysInTooltips);
-    ImGui::Checkbox("Show extended ToolTips", &cmd.displayShowExtendedTooltips);
-    if (cmd.displayShowExtendedTooltips) {
-      ImGui::SetNextItemWidth(80.f);
-      ImGui::DragFloat("Number of seconds to delay##extDelay", &cmd.displayExtendedTooltipDelaySec, 0.05f, 0.f, 5.f,
-                       "%.3f");
-    }
-    ImGui::Unindent();
-  }
-  ImGui::Checkbox("Show rollover ToolTips", &cmd.displayShowRolloverTooltips);
-  ImGui::Checkbox("Display File Tabs", &cmd.displayShowFileTabs);
-}
-
-static void DrawDisplayLayoutElements(AppCommandState& cmd) {
-  ImGui::Checkbox("Display Layout and Model tabs", &cmd.displayLayoutAndModelTabs);
-  ImGui::Checkbox("Display printable area", &cmd.displayPrintableArea);
-  ImGui::Checkbox("Display paper background", &cmd.displayPaperBackground);
-  if (cmd.displayPaperBackground) {
-    ImGui::Indent();
-    ImGui::Checkbox("Display paper shadow", &cmd.displayPaperShadow);
-    ImGui::Unindent();
-  }
-  ImGui::Checkbox("Show Page Setup Manager for new layouts", &cmd.displayPageSetupOnNewLayouts);
-  ImGui::Checkbox("Create viewport in new layouts", &cmd.displayCreateViewportInNewLayouts);
-}
-
-static void DrawDisplayResolution(AppCommandState& cmd) {
-  ImGui::SetNextItemWidth(80.f);
-  if (ImGui::DragInt("Arc and circle smoothness", &cmd.displayArcCircleSmoothness, 5.f, 8, 20000)) {
-    cmd.displayArcCircleSmoothness = std::clamp(cmd.displayArcCircleSmoothness, 8, 20000);
-    BumpCadGpuCache(cmd); // segment cap changed — rebuild tessellated circle batches.
-  }
-  ItemHelpTooltip(
-      "AutoCAD VIEWRES analog. Caps the chord count when tessellating circles/arcs at the current zoom.\n"
-      "Higher = smoother curves (more GPU work). 1000 matches AutoCAD's default.");
-  ImGui::SetNextItemWidth(80.f);
-  ImGui::DragInt("Segments in a polyline curve", &cmd.displayPolylineCurveSegments, 0.25f, 4, 32);
-  ItemHelpTooltip("Hint for spline-fit polylines (not currently consumed; reserved).");
-  ImGui::SetNextItemWidth(80.f);
-  ImGui::DragFloat("Rendered object smoothness", &cmd.displayRenderedObjectSmoothness, 0.01f, 0.01f, 10.f, "%.2f");
-  ItemHelpTooltip("Reserved for 3D pipeline.");
-  ImGui::SetNextItemWidth(80.f);
-  ImGui::DragInt("Contour lines per surface", &cmd.displayContourLinesPerSurface, 0.25f, 0, 32);
-  ItemHelpTooltip("Reserved for 3D pipeline.");
-}
-
-static void DrawDisplayPerformance(AppCommandState& cmd) {
-  ImGui::Checkbox("Pan and zoom with raster && OLE", &cmd.displayPanZoomWithRaster);
-  ImGui::Checkbox("Highlight raster image frame only", &cmd.displayHighlightRasterFrameOnly);
-  ImGui::Checkbox("Apply solid fill", &cmd.displayApplySolidFill);
-  ImGui::Checkbox("Show text boundary frame only", &cmd.displayShowTextBoundaryFrameOnly);
-  ImGui::Checkbox("Draw true silhouettes for solids and surfaces", &cmd.displayDrawTrueSilhouettes);
-  ImGui::TextDisabled("(GoSurvey is 2D-only; raster/OLE/3D options are placeholders.)");
-}
-
-static void DrawDisplayCrosshair(AppCommandState& cmd) {
-  ImGui::SetNextItemWidth(60.f);
-  if (ImGui::DragInt("Crosshair size##xhairSize", &cmd.displayCrosshairSizePct, 1.f, 1, 100, "%d")) {
-    cmd.displayCrosshairSizePct = std::clamp(cmd.displayCrosshairSizePct, 1, 100);
-    const float f = static_cast<float>(cmd.displayCrosshairSizePct) * 0.01f;
-    cmd.viewportCrosshairArmFracX = std::clamp(f * 0.6f, 0.002f, 0.5f);
-    cmd.viewportCrosshairArmFracY = std::clamp(f, 0.002f, 0.5f);
-  }
-  ItemHelpTooltip("Percent of the viewport. 100 makes the crosshair span the full window (AutoCAD CURSORSIZE).");
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(-1.f);
-  int slider = cmd.displayCrosshairSizePct;
-  if (ImGui::SliderInt("##xhairSlider", &slider, 1, 100, "")) {
-    cmd.displayCrosshairSizePct = std::clamp(slider, 1, 100);
-    const float f = static_cast<float>(cmd.displayCrosshairSizePct) * 0.01f;
-    cmd.viewportCrosshairArmFracX = std::clamp(f * 0.6f, 0.002f, 0.5f);
-    cmd.viewportCrosshairArmFracY = std::clamp(f, 0.002f, 0.5f);
-  }
-  ImGui::Spacing();
-  if (ImGui::TreeNode("Crosshair details##xhairDetail")) {
-    float xc[3] = {cmd.viewportCrosshairR, cmd.viewportCrosshairG, cmd.viewportCrosshairB};
-    if (ImGui::ColorEdit3("Color##xhair", xc)) {
-      cmd.viewportCrosshairR = xc[0];
-      cmd.viewportCrosshairG = xc[1];
-      cmd.viewportCrosshairB = xc[2];
-    }
-    ImGui::DragFloat("Line thickness (px)##xhairThick", &cmd.viewportCrosshairHairPx, 0.05f, 0.75f, 4.f, "%.2f");
-    ImGui::TreePop();
-  }
-}
-
-static void DrawDisplayZoomFactor(AppCommandState& cmd) {
-  ImGui::SetNextItemWidth(80.f);
-  if (ImGui::DragFloat("##zoomFactorNum", &cmd.displayWheelZoomFactor, 0.01f, 1.01f, 3.0f, "%.2f"))
-    cmd.displayWheelZoomFactor = std::clamp(cmd.displayWheelZoomFactor, 1.01f, 3.0f);
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(-1.f);
-  if (ImGui::SliderFloat("Wheel zoom factor##zoomFactorSlider", &cmd.displayWheelZoomFactor, 1.01f, 3.0f, "%.2fx"))
-    cmd.displayWheelZoomFactor = std::clamp(cmd.displayWheelZoomFactor, 1.01f, 3.0f);
-  ItemHelpTooltip(
-      "AutoCAD ZOOMFACTOR analog. Multiplier applied per mouse-wheel notch (and per ZOOM IN/OUT step).\n"
-      "1.10 = 10% per notch (slow, precise); 2.00 = 2x per notch (fast).");
-  ImGui::TextDisabled("Current zoom: %.4g x", static_cast<double>(cmd.viewportZoom));
-  ImGui::TextDisabled("Pan: (%.3f, %.3f)", cmd.viewportPanX, cmd.viewportPanY);
-}
-
-static void DrawDisplayFadeControl(AppCommandState& cmd) {
-  ImGui::SetNextItemWidth(60.f);
-  ImGui::DragInt("##xrefFadeNum", &cmd.displayFadeXref, 0.5f, 0, 90, "%d");
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(-1.f);
-  ImGui::SliderInt("Xref display##xrefFadeSlider", &cmd.displayFadeXref, 0, 90, "");
-  cmd.displayFadeXref = std::clamp(cmd.displayFadeXref, 0, 90);
-  ImGui::SetNextItemWidth(60.f);
-  ImGui::DragInt("##inPlaceFadeNum", &cmd.displayFadeInPlace, 0.5f, 0, 90, "%d");
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(-1.f);
-  ImGui::SliderInt("In-place edit and annotative representations##inPlaceFadeSlider", &cmd.displayFadeInPlace, 0, 90,
-                   "");
-  cmd.displayFadeInPlace = std::clamp(cmd.displayFadeInPlace, 0, 90);
-  ImGui::TextDisabled("(Reserved: fade is a placeholder; no fade pass is applied yet.)");
-}
-
-static void DrawSettingsDisplayTab(AppCommandState& cmd) {
-  if (ImGui::BeginTable("##disp_layout", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    BoxBegin("Window Elements", 260.f);
-    DrawDisplayWindowElements(cmd);
-    BoxEnd();
-    BoxBegin("Layout elements", 170.f);
-    DrawDisplayLayoutElements(cmd);
-    BoxEnd();
-    ImGui::TableSetColumnIndex(1);
-    BoxBegin("Display resolution", 150.f);
-    DrawDisplayResolution(cmd);
-    BoxEnd();
-    BoxBegin("Display performance", 150.f);
-    DrawDisplayPerformance(cmd);
-    BoxEnd();
-    BoxBegin("Crosshair size", 130.f);
-    DrawDisplayCrosshair(cmd);
-    BoxEnd();
-    BoxBegin("Zoom", 130.f);
-    DrawDisplayZoomFactor(cmd);
-    BoxEnd();
-    BoxBegin("Fade control", 130.f);
-    DrawDisplayFadeControl(cmd);
-    BoxEnd();
-    ImGui::EndTable();
-  }
-}
-
-static void DrawSettingsFilesTab(AppCommandState& cmd, std::vector<std::string>* log) {
-  ImGui::TextWrapped(
-      "Search paths, file locations, and startup template. GoSurvey loads a workspace .gs at startup; an empty "
-      "Custom path uses the bundled resources/default-template.gs next to the executable. Preferences are saved "
-      "in gosurvey-user.json beside the executable.");
-  ImGui::Separator();
-  BoxBegin("Startup template (.gs)", 140.f);
-  ImGui::InputText("Custom .gs path (UTF-8)##startup_gs", cmd.defaultWorkspaceTemplatePathUtf8,
-                   IM_ARRAYSIZE(cmd.defaultWorkspaceTemplatePathUtf8));
-  ImGui::SameLine();
-#if defined(_WIN32)
-  if (ImGui::Button("Browse##startup_gs")) {
-    if (BrowseOpenFileGsUtf8(cmd.defaultWorkspaceTemplatePathUtf8, sizeof(cmd.defaultWorkspaceTemplatePathUtf8)) && log)
-      log->push_back("Startup template path set from file dialog.");
-  }
-#else
-  ImGui::BeginDisabled();
-  ImGui::Button("Browse##startup_gs");
-  ImGui::EndDisabled();
-  ItemHelpTooltip("File browse for startup template is only implemented on Windows in this build.");
-#endif
-  const std::filesystem::path bundled = ResolveDefaultWorkspaceTemplateGsPath();
-  if (!bundled.empty())
-    ImGui::TextDisabled("Bundled template resolved to: %s", bundled.u8string().c_str());
-  else
-    ImGui::TextDisabled("Bundled template not found (expected resources/default-template.gs beside exe or cwd).");
-  if (ImGui::Button("Save startup preferences##startup_save")) {
-    SaveUserStartupPrefs(cmd);
-    if (log)
-      log->push_back("Saved startup preferences (gosurvey-user.json).");
-  }
-  ImGui::SameLine();
-  if (ImGui::Button("Clear path (use bundled)##startup_clear")) {
-    cmd.defaultWorkspaceTemplatePathUtf8[0] = '\0';
-    SaveUserStartupPrefs(cmd);
-    if (log)
-      log->push_back("Cleared custom startup path; bundled template will be used on next launch.");
-  }
-  BoxEnd();
-  BoxBegin("Support file search path", 90.f);
-  ImGui::TextDisabled("(Reserved.) GoSurvey resolves resources/ relative to the executable.");
-  BoxEnd();
-}
-
-static void DrawGraphicsPerformanceDialog(AppCommandState& cmd, std::vector<std::string>* log) {
-  if (!cmd.showGraphicsPerformanceDialog)
-    return;
-  ImGui::SetNextWindowSize(ImVec2(560, 640), ImGuiCond_FirstUseEver);
-  bool open = cmd.showGraphicsPerformanceDialog;
-  if (!ImGui::Begin("Graphics Performance", &open, ImGuiWindowFlags_NoCollapse)) {
-    cmd.showGraphicsPerformanceDialog = open;
-    ImGui::End();
-    return;
-  }
-  cmd.showGraphicsPerformanceDialog = open;
-  ImGui::TextDisabled("Video Card:       OpenGL (driver-reported)");
-  ImGui::TextDisabled("Driver Version:   reported by GLFW / driver");
-  ImGui::TextDisabled("Virtual Device:   OpenGL %d.x", 3);
-  ImGui::Separator();
-  ImGui::TextUnformatted("Hardware Acceleration");
-  ImGui::SameLine(ImGui::GetContentRegionAvail().x - 60.f);
-  if (ImGui::Checkbox("##hwaccel", &cmd.systemHardwareAcceleration) && log) {
-    log->push_back(std::string("Hardware acceleration: ") + (cmd.systemHardwareAcceleration ? "ON" : "OFF") +
-                   " (MSAA + line smoothing).");
-  }
-  ImGui::TextWrapped("Disable hardware acceleration only if you are experiencing graphics issues or have an "
-                     "incompatible video card.");
-  ImGui::Separator();
-  ImGui::TextUnformatted("2D Display Settings");
-  ImGui::Spacing();
-  if (ImGui::Checkbox("Smooth line display", &cmd.gfxSmoothLineDisplay) && log)
-    log->push_back(std::string("Smooth line display: ") + (cmd.gfxSmoothLineDisplay ? "ON" : "OFF") + ".");
-  ImGui::TextDisabled("Removes the jagged effect on the display of diagonal lines and curved edges in 2D wireframe.");
-  ImGui::Checkbox("Accelerated font display", &cmd.gfxAcceleratedFontDisplay);
-  ImGui::TextDisabled("Improves the display of TrueType fonts using GPU acceleration.");
-  ImGui::Spacing();
-  ImGui::TextUnformatted("Video Memory Caching Level");
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(-1.f);
-  ImGui::SliderInt("##vmcache", &cmd.gfxVideoMemoryCachingLevel, 1, 5, "%d");
-  ImGui::TextDisabled("Higher = more video memory used for graphics cache.");
-  ImGui::Separator();
-  ImGui::TextUnformatted("3D Display Settings");
-  ImGui::Spacing();
-  ImGui::Checkbox("Fast shaded mode", &cmd.gfx3dFastShadedMode);
-  ImGui::Checkbox("Advanced material effects", &cmd.gfx3dAdvancedMaterialEffects);
-  ImGui::Checkbox("Full shadow display", &cmd.gfx3dFullShadowDisplay);
-  ImGui::Checkbox("Per-pixel lighting (Phong)", &cmd.gfx3dPerPixelLighting);
-  ImGui::TextDisabled("(GoSurvey is 2D-only; 3D options are placeholders for future surface viewing.)");
-  ImGui::Separator();
-  if (ImGui::Button("Restore Defaults##gpx")) {
-    cmd.systemHardwareAcceleration = true;
-    cmd.gfxSmoothLineDisplay = true;
-    cmd.gfxAcceleratedFontDisplay = true;
-    cmd.gfxVideoMemoryCachingLevel = 5;
-    cmd.gfx3dFastShadedMode = true;
-    cmd.gfx3dAdvancedMaterialEffects = true;
-    cmd.gfx3dFullShadowDisplay = true;
-    cmd.gfx3dPerPixelLighting = true;
-  }
-  ImGui::SameLine();
-  if (ImGui::Button("OK##gpx"))
-    cmd.showGraphicsPerformanceDialog = false;
-  ImGui::SameLine();
-  if (ImGui::Button("Cancel##gpx"))
-    cmd.showGraphicsPerformanceDialog = false;
-  ImGui::End();
-}
-
-static void DrawSystemHardwareAccel(AppCommandState& cmd) {
-  if (ImGui::Button("Graphics Performance", ImVec2(-FLT_MIN, 0.f)))
-    cmd.showGraphicsPerformanceDialog = true;
-  ImGui::TextDisabled("Current: HW accel %s, smooth lines %s.",
-                      cmd.systemHardwareAcceleration ? "ON" : "OFF",
-                      cmd.gfxSmoothLineDisplay ? "ON" : "OFF");
-  ImGui::Checkbox("Automatically check for certification update", &cmd.systemAutoCheckCertificationUpdate);
-}
-
-static void DrawSystemLayoutRegen(AppCommandState& cmd) {
-  ImGui::RadioButton("Regen when switching layouts", &cmd.systemLayoutRegenOption, 0);
-  ImGui::RadioButton("Cache model tab and last layout", &cmd.systemLayoutRegenOption, 1);
-  ImGui::RadioButton("Cache model tab and all layouts", &cmd.systemLayoutRegenOption, 2);
-}
-
-static void DrawSystemGeneralOptions(AppCommandState& cmd) {
-  ImGui::BeginDisabled();
-  ImGui::Button("Hidden Messages Settings", ImVec2(-FLT_MIN, 0.f));
-  ImGui::EndDisabled();
-  ImGui::Checkbox("Display OLE Text Size Dialog", &cmd.systemDisplayOLETextSizeDialog);
-  ImGui::Checkbox("Beep on error in user input", &cmd.systemBeepOnError);
-  ImGui::Checkbox("Allow long symbol names", &cmd.systemAllowLongSymbolNames);
-}
-
-static void DrawSettingsSystemTab(AppCommandState& cmd) {
-  if (ImGui::BeginTable("##sys_layout", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
-    ImGui::TableNextRow();
-    ImGui::TableSetColumnIndex(0);
-    BoxBegin("Hardware Acceleration", 110.f);
-    DrawSystemHardwareAccel(cmd);
-    BoxEnd();
-    BoxBegin("Current Pointing Device", 110.f);
-    const char* devices[] = {"Current System Pointing Device"};
-    int idx = 0;
-    ImGui::SetNextItemWidth(-1.f);
-    ImGui::Combo("##ptdev", &idx, devices, IM_ARRAYSIZE(devices));
-    ImGui::TextDisabled("Accept input from:");
-    ImGui::BeginDisabled();
-    ImGui::RadioButton("Digitizer only", false);
-    ImGui::RadioButton("Digitizer and mouse", true);
-    ImGui::EndDisabled();
-    BoxEnd();
-    BoxBegin("Layout Regen Options", 120.f);
-    DrawSystemLayoutRegen(cmd);
-    BoxEnd();
-    ImGui::TableSetColumnIndex(1);
-    BoxBegin("General Options", 140.f);
-    DrawSystemGeneralOptions(cmd);
-    BoxEnd();
-    BoxBegin("Help", 70.f);
-    ImGui::Checkbox("Access online content when available", &cmd.systemAccessOnlineContent);
-    BoxEnd();
-    BoxBegin("InfoCenter", 70.f);
-    ImGui::BeginDisabled();
-    ImGui::Button("Balloon Notifications", ImVec2(-FLT_MIN, 0.f));
-    ImGui::EndDisabled();
-    BoxEnd();
-    BoxBegin("Security", 70.f);
-    ImGui::BeginDisabled();
-    ImGui::Button("Security Options", ImVec2(-FLT_MIN, 0.f));
-    ImGui::EndDisabled();
-    BoxEnd();
-    BoxBegin("dbConnect Options", 80.f);
-    ImGui::Checkbox("Store Links index in drawing file", &cmd.systemStoreLinksIndexInDrawing);
-    ImGui::Checkbox("Open tables in read-only mode", &cmd.systemOpenTablesReadOnly);
-    BoxEnd();
-    ImGui::EndTable();
-  }
-}
-
-static void DrawSettingsDraftingTab(AppCommandState& cmd) {
-  BoxBegin("Object snap (AutoSnap)", 0.f);
-  ImGui::TextUnformatted("Cursor snaps to drawing geometry when OSNAP is on (status bar or F3).");
-  ImGui::Separator();
-  ImGui::Checkbox("Enable object snap", &cmd.objectSnapEnabled);
-  if (ImGui::DragFloat("Aperture (screen px)", &cmd.objectSnapAperturePx, 0.25f, 4.f, 64.f, "%.1f"))
-    cmd.objectSnapAperturePx = std::clamp(cmd.objectSnapAperturePx, 4.f, 64.f);
-  ItemHelpTooltip("Screen pick radius: larger catches snaps from farther away; smaller is stricter. "
-                  "Also sets the crosshair pick box on Drawing1.");
-  if (ImGui::DragFloat("Snap indicator half-size (px)", &cmd.objectSnapGlyphHalfPx, 0.15f, 3.f, 48.f, "%.1f"))
-    cmd.objectSnapGlyphHalfPx = std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f);
-  ItemHelpTooltip("Green snap symbols (endpoint square, midpoint triangle, etc.): half-width on screen.");
-  ImGui::Separator();
-  ImGui::TextDisabled("Snap types (also: right-click OSNAP on the command line)");
-  ImGui::Checkbox("Endpoint", &cmd.objectSnapEndpoint);
-  ImGui::Checkbox("Midpoint", &cmd.objectSnapMidpoint);
-  ImGui::Checkbox("Center (circle / ellipse center)", &cmd.objectSnapCenter);
-  ImGui::Checkbox("Perpendicular (when a reference point applies)", &cmd.objectSnapPerpendicular);
-  ImGui::Checkbox("Survey point", &cmd.objectSnapSurveyPoint);
-  ImGui::Checkbox("Geometric center (closed polyline)", &cmd.objectSnapGeometricCenter);
-  ImGui::Separator();
-  ImGui::TextWrapped(
-      "With a command active (LINE, CIRCLE, …), Shift+right-click anywhere on the drawing: choose a snap type, "
-      "then pick one from every matching snap in the model (list is sorted by distance from that click). "
-      "That choice applies to the next left-click only.");
-  BoxEnd();
-}
-
-static void DrawUserPrefsSurveyPoints(AppCommandState& cmd) {
-  ImGui::DragFloat("Cross span (plotted inches)", &cmd.surveyPointCrossSpanPlottedInches, 0.002f, 0.02f, 2.f, "%.3f");
-  ItemHelpTooltip("Horizontal span of the X on paper: world size = span × model units per plotted inch.");
-  ImGui::Checkbox("Show point ID in viewport", &cmd.surveyPointShowIdInViewport);
-  if (ImGui::DragFloat("Survey label text height (plotted inches)", &cmd.surveyPointLabelPlottedHeightInches, 0.001f,
-                       0.04f, 0.5f, "%.3f")) {
-    for (size_t i = 0; i < cmd.surveyPoints.size(); ++i)
-      EnsureSurveyPointLabelMtext(cmd, i, nullptr);
-  }
-  const bool le = ImGui::DragFloat("Label center east of point (plotted in)", &cmd.surveyLabelOffsetEastPlottedIn,
-                                   0.002f, -2.f, 4.f, "%.3f");
-  const bool ln = ImGui::DragFloat("Label center north of point (plotted in)", &cmd.surveyLabelOffsetNorthPlottedIn,
-                                   0.002f, -2.f, 4.f, "%.3f");
-  if (le || ln) {
-    for (size_t i = 0; i < cmd.surveyPoints.size(); ++i)
-      RepositionSurveyLabelMtextForPoint(cmd, i);
-    BumpCadGpuCache(cmd);
-  }
-}
-
-static void DrawUserPrefsLabelTemplates(AppCommandState& cmd) {
-  ImGui::TextWrapped(
-      "Label style templates (apply to all points). Placeholders: {id} {desc} {elev}. "
-      "Press Enter in a field or click Apply to refresh existing labels.");
-  ImGui::InputTextMultiline("Number + description##svy_tpl_nd", &cmd.surveyLabelTemplates.numberDesc,
-                            ImVec2(-FLT_MIN, 52.f));
-  ImGui::InputTextMultiline("Number only##svy_tpl_no", &cmd.surveyLabelTemplates.numberOnly, ImVec2(-FLT_MIN, 40.f));
-  ImGui::InputTextMultiline("Description only##svy_tpl_do", &cmd.surveyLabelTemplates.descOnly,
-                            ImVec2(-FLT_MIN, 40.f));
-  ImGui::InputTextMultiline("Number + elevation##svy_tpl_ne", &cmd.surveyLabelTemplates.numberElev,
-                            ImVec2(-FLT_MIN, 52.f));
-  ImGui::InputTextMultiline("Number + elevation + description##svy_tpl_ned",
-                            &cmd.surveyLabelTemplates.numberElevDesc, ImVec2(-FLT_MIN, 60.f));
-  if (ImGui::Button("Apply label templates to all survey points")) {
-    for (size_t i = 0; i < cmd.surveyPoints.size(); ++i)
-      EnsureSurveyPointLabelMtext(cmd, i, nullptr);
-    BumpCadGpuCache(cmd);
-  }
-}
-
-static void DrawUserPrefsTextMtext(AppCommandState& cmd) {
-  ImGui::DragFloat("TEXT min px", &cmd.viewportTextMinPx, 0.25f, 4.f, 48.f, "%.1f");
-  ImGui::DragFloat("TEXT max px", &cmd.viewportTextMaxPx, 0.5f, 24.f, 320.f, "%.1f");
-  if (cmd.viewportTextMaxPx < cmd.viewportTextMinPx)
-    cmd.viewportTextMaxPx = cmd.viewportTextMinPx;
-  ImGui::DragFloat("MTEXT min px", &cmd.viewportMtextMinPx, 0.25f, 4.f, 48.f, "%.1f");
-  ImGui::DragFloat("MTEXT max px", &cmd.viewportMtextMaxPx, 0.5f, 24.f, 320.f, "%.1f");
-  if (cmd.viewportMtextMaxPx < cmd.viewportMtextMinPx)
-    cmd.viewportMtextMaxPx = cmd.viewportMtextMinPx;
-}
-
-static void DrawUserPrefsDimensions(AppCommandState& cmd) {
-  ImGui::DragFloat("Extension line px", &cmd.viewportDimExtLinePx, 0.05f, 0.25f, 8.f, "%.2f");
-  ImGui::DragFloat("Dimension line px", &cmd.viewportDimDimLinePx, 0.05f, 0.25f, 8.f, "%.2f");
-  ImGui::DragFloat("Arrow size scale", &cmd.viewportDimArrowScale, 0.02f, 0.2f, 4.f, "%.2f");
-  ItemHelpTooltip("Multiplies arrow length derived from dimension text height (paper × plot scale).");
-  ImGui::DragFloat("Value text min px", &cmd.viewportDimTextMinPx, 0.25f, 4.f, 48.f, "%.1f");
-  ImGui::DragFloat("Value text max px", &cmd.viewportDimTextMaxPx, 0.5f, 24.f, 320.f, "%.1f");
-  if (cmd.viewportDimTextMaxPx < cmd.viewportDimTextMinPx)
-    cmd.viewportDimTextMaxPx = cmd.viewportDimTextMinPx;
-}
-
-static void DrawSettingsUserPrefsTab(AppCommandState& cmd) {
-  if (ImGui::CollapsingHeader("Survey points (markers + linked MTEXT)", ImGuiTreeNodeFlags_DefaultOpen))
-    DrawUserPrefsSurveyPoints(cmd);
-  if (ImGui::CollapsingHeader("Label templates"))
-    DrawUserPrefsLabelTemplates(cmd);
-  if (ImGui::CollapsingHeader("Text & MTEXT screen size"))
-    DrawUserPrefsTextMtext(cmd);
-  if (ImGui::CollapsingHeader("Dimensions"))
-    DrawUserPrefsDimensions(cmd);
-}
-
-static void DrawSettingsPlaceholderTab(const char* title, const char* description) {
-  ImGui::TextUnformatted(title);
-  ImGui::Separator();
-  ImGui::TextWrapped("%s", description);
-  ImGui::Spacing();
-  ImGui::BeginDisabled();
-  ImGui::TextDisabled("(No GoSurvey-specific controls in this section yet.)");
-  ImGui::EndDisabled();
-}
-
-void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
-  if (!cmd.showSettingsWindow)
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  if (!ImGui::BeginPopupModal("Unsaved Changes##closeconf", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
     return;
 
-  ImGui::SetNextWindowSize(ImVec2(960, 720), ImGuiCond_FirstUseEver);
-  bool open = cmd.showSettingsWindow;
-  if (!ImGui::Begin("Options", &open, ImGuiWindowFlags_NoCollapse)) {
-    cmd.showSettingsWindow = open;
-    ImGui::End();
+  // Collect dirty drawings: active doc first, then inactive snapshots.
+  struct DirtyEntry { int idx; std::string name; };
+  std::vector<DirtyEntry> dirty;
+  if (cmd.cadGpuRevision != cmd.activeDocSavedRevision &&
+      cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
+    dirty.push_back({cmd.activeDrawingIdx, cmd.drawingTabs[cmd.activeDrawingIdx].name});
+  for (int i = 0; i < static_cast<int>(cmd.documents.size()); ++i) {
+    if (i == cmd.activeDrawingIdx) continue;
+    if (cmd.documents[i].cadGpuRevision != cmd.documents[i].savedRevision &&
+        i < static_cast<int>(cmd.drawingTabs.size()))
+      dirty.push_back({i, cmd.drawingTabs[i].name});
+  }
+
+  if (dirty.empty()) {
+    cmd.closeConfirmed = true;
+    ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
     return;
   }
-  cmd.showSettingsWindow = open;
-  DrawSettingsHeader(cmd);
 
-  const ImGuiTabBarFlags tabFlags = ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_NoCloseWithMiddleMouseButton;
-  if (ImGui::BeginTabBar("##optionsTabs", tabFlags)) {
-    if (ImGui::BeginTabItem("Files")) {
-      cmd.settingsActiveTabIdx = 0;
-      DrawSettingsFilesTab(cmd, log);
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("Display")) {
-      cmd.settingsActiveTabIdx = 1;
-      DrawSettingsDisplayTab(cmd);
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("Open and Save")) {
-      cmd.settingsActiveTabIdx = 2;
-      DrawSettingsPlaceholderTab("Open and Save", "File-format and recovery options. Reserved for future use.");
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("Plot and Publish")) {
-      cmd.settingsActiveTabIdx = 3;
-      DrawSettingsPlaceholderTab("Plot and Publish", "Default plot settings, plot styles, and publish behavior.");
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("System")) {
-      cmd.settingsActiveTabIdx = 4;
-      DrawSettingsSystemTab(cmd);
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("User Preferences")) {
-      cmd.settingsActiveTabIdx = 5;
-      DrawSettingsUserPrefsTab(cmd);
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("Drafting")) {
-      cmd.settingsActiveTabIdx = 6;
-      DrawSettingsDraftingTab(cmd);
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("3D Modeling")) {
-      cmd.settingsActiveTabIdx = 7;
-      DrawSettingsPlaceholderTab("3D Modeling",
-                                 "GoSurvey is a 2D survey workspace; 3D modeling options are reserved for "
-                                 "future surface viewing.");
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("Selection")) {
-      cmd.settingsActiveTabIdx = 8;
-      DrawSettingsPlaceholderTab("Selection", "Pickbox / grip size and selection preview options.");
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("Profiles")) {
-      cmd.settingsActiveTabIdx = 9;
-      DrawSettingsPlaceholderTab("Profiles",
-                                 "Saved option profiles (per-user). The current profile is <<GoSurvey>>.");
-      ImGui::EndTabItem();
-    }
-    if (ImGui::BeginTabItem("AEC Editor")) {
-      cmd.settingsActiveTabIdx = 10;
-      DrawSettingsPlaceholderTab("AEC Editor", "Civil/AEC-specific editor preferences. Reserved.");
-      ImGui::EndTabItem();
-    }
-    ImGui::EndTabBar();
-  }
-
+  ImGui::TextUnformatted("The following drawings have unsaved changes:");
+  ImGui::Spacing();
+  for (const auto& e : dirty)
+    ImGui::BulletText("%s", e.name.c_str());
+  ImGui::Spacing();
   ImGui::Separator();
-  if (ImGui::Button("OK", ImVec2(90.f, 0.f))) {
-    SaveUserStartupPrefs(cmd);
-    if (log)
-      log->push_back("Settings saved (gosurvey-user.json).");
-    cmd.showSettingsWindow = false;
-  }
-  ImGui::SameLine();
-  if (ImGui::Button("Cancel", ImVec2(90.f, 0.f)))
-    cmd.showSettingsWindow = false;
-  ImGui::SameLine();
-  if (ImGui::Button("Apply", ImVec2(90.f, 0.f))) {
-    SaveUserStartupPrefs(cmd);
-    if (log)
-      log->push_back("Settings applied (gosurvey-user.json).");
-  }
-  ImGui::SameLine();
-  ImGui::BeginDisabled();
-  ImGui::Button("Help", ImVec2(90.f, 0.f));
-  ImGui::EndDisabled();
+  ImGui::Spacing();
 
-  ImGui::End();
+  static char s_savePath[4096]{};
 
-  DrawGraphicsPerformanceDialog(cmd, log);
+  if (ImGui::Button("Save All & Close", ImVec2(148.f, 0))) {
+    bool allOk = true;
+    for (const auto& e : dirty) {
+      const bool isActive = (e.idx == cmd.activeDrawingIdx);
+      if (!isActive) {
+        // Temporarily bring this doc's data into cmd.
+        SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
+        RestoreDocumentFromSnapshot(cmd, e.idx);
+      }
+      std::string path = cmd.activeDocFilePath;
+      if (path.empty()) {
+        const std::string def = e.name + ".gs";
+        if (BrowseSaveFileGsUtf8(s_savePath, sizeof(s_savePath), def.c_str()))
+          path = s_savePath;
+      }
+      if (!path.empty() && SaveGoSurveyFile(cmd, path.c_str(), log)) {
+        cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+        cmd.activeDocFilePath      = path;
+        if (!isActive) {
+          // Commit updated saved-revision back into the snapshot.
+          SaveDocumentToSnapshot(cmd, e.idx);
+        }
+      } else {
+        allOk = false;
+      }
+      if (!isActive)
+        RestoreDocumentFromSnapshot(cmd, cmd.activeDrawingIdx);
+    }
+    if (allOk) {
+      cmd.closeConfirmed = true;
+      ImGui::CloseCurrentPopup();
+    }
+  }
+
+  ImGui::SameLine();
+  if (ImGui::Button("Close Without Saving", ImVec2(148.f, 0))) {
+    cmd.closeConfirmed = true;
+    ImGui::CloseCurrentPopup();
+  }
+
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", ImVec2(72.f, 0)))
+    ImGui::CloseCurrentPopup();
+
+  ImGui::EndPopup();
 }
 
 void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log) {
@@ -6734,7 +6524,9 @@ void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log)
     ImGui::TableSetupColumn("Dst X", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("Dst Y", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("Resid", ImGuiTableColumnFlags_WidthFixed,   72.f);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 1.f, 1.f));
     ImGui::TableHeadersRow();
+    ImGui::PopStyleColor();
 
     for (int i = 0; i < static_cast<int>(cmd.alignControlPts.size()); ++i) {
       const auto& cp    = cmd.alignControlPts[static_cast<size_t>(i)];
@@ -6824,7 +6616,9 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
     ImGui::TableSetupColumn("Layer", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("Description", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("Del", ImGuiTableColumnFlags_WidthFixed, 56.f);
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 1.f, 1.f));
     ImGui::TableHeadersRow();
+	ImGui::PopStyleColor();
 
     for (size_t i = 0; i < cmd.surveyPoints.size(); ++i) {
       SurveyPoint& p = cmd.surveyPoints[i];
