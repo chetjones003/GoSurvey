@@ -6463,7 +6463,18 @@ static void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& l
     const EntityAttributes* attrs = getAttrs(e);
     switch (cmd.qsProperty) {
     case QP::Layer:   return attrs ? matchStr(attrs->layer) : (cmd.qsOperator == QO::SelectAll);
-    case QP::Color:   return attrs ? matchStr(attrs->color) : (cmd.qsOperator == QO::SelectAll);
+    case QP::Color: {
+      if (!attrs) return cmd.qsOperator == QO::SelectAll;
+      // Resolve "ByLayer" to the layer's actual color so filtering by "Red" finds
+      // entities that visually appear red even when their stored color is ByLayer.
+      std::string effectiveColor = attrs->color;
+      if (effectiveColor == "ByLayer") {
+        const CadLayerRow* row = FindDrawingLayerRowCi(cmd, attrs->layer);
+        if (row && !row->color.empty())
+          effectiveColor = row->color;
+      }
+      return matchStr(effectiveColor);
+    }
     case QP::Length: {
       float len = 0.f;
       if (e.type == T::LineSeg) {
