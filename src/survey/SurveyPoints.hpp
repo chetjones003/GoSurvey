@@ -11,15 +11,21 @@ enum class SurveyPointLabelStyle : uint8_t {
   DescOnly,
   NumberElev,
   NumberElevDesc,
+  NumberNorthEast,
+  NorthEast,
+  NumberNorthEastElev,
 };
 
-/// Placeholders: {id} {desc} {elev} — use a real newline in the string for line breaks.
+/// Placeholders: {id} {desc} {elev} {north} {east} — use a real newline in the string for line breaks.
 struct SurveyLabelStyleTemplates {
   std::string numberDesc = "{id}\n{desc}";
   std::string numberOnly = "{id}";
   std::string descOnly = "{desc}";
   std::string numberElev = "{id}\nZ={elev}";
   std::string numberElevDesc = "{id}\nZ={elev}\n{desc}";
+  std::string numberNorthEast = "{id}\nN={north}\nE={east}";
+  std::string northEast = "N={north}\nE={east}";
+  std::string numberNorthEastElev = "{id}\nN={north}\nE={east}\nZ={elev}";
 };
 
 struct SurveyPoint {

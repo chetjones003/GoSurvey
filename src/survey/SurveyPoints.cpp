@@ -556,6 +556,15 @@ std::string FormatSurveyPointLabelPlain(const SurveyPoint& p, SurveyPointLabelSt
   case SurveyPointLabelStyle::NumberElevDesc:
     tpl = &templates.numberElevDesc;
     break;
+  case SurveyPointLabelStyle::NumberNorthEast:
+    tpl = &templates.numberNorthEast;
+    break;
+  case SurveyPointLabelStyle::NorthEast:
+    tpl = &templates.northEast;
+    break;
+  case SurveyPointLabelStyle::NumberNorthEastElev:
+    tpl = &templates.numberNorthEastElev;
+    break;
   default:
     tpl = &templates.numberDesc;
     break;
@@ -566,6 +575,12 @@ std::string FormatSurveyPointLabelPlain(const SurveyPoint& p, SurveyPointLabelSt
   char ebuf[64];
   std::snprintf(ebuf, sizeof(ebuf), "%.3f", static_cast<double>(p.elevation));
   ReplaceAll(&out, "{elev}", std::string(ebuf));
+  char nbuf[64];
+  std::snprintf(nbuf, sizeof(nbuf), "%.3f", static_cast<double>(p.northing));
+  ReplaceAll(&out, "{north}", std::string(nbuf));
+  char eastbuf[64];
+  std::snprintf(eastbuf, sizeof(eastbuf), "%.3f", static_cast<double>(p.easting));
+  ReplaceAll(&out, "{east}", std::string(eastbuf));
   return out;
 }
 
@@ -603,8 +618,12 @@ void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) 
   const float bwClamped = std::max(bw, minDim);
   const float bhClamped = std::max(bh, minDim);
 
-  const float cx = p.easting + st.surveyLabelOffsetEastPlottedIn * mup;
-  const float cy = p.northing + st.surveyLabelOffsetNorthPlottedIn * mup;
+  const float offsetE = a.surveyLabelHasUserOffset ? a.surveyLabelUserOffsetEast
+                                                    : st.surveyLabelOffsetEastPlottedIn * mup;
+  const float offsetN = a.surveyLabelHasUserOffset ? a.surveyLabelUserOffsetNorth
+                                                    : st.surveyLabelOffsetNorthPlottedIn * mup;
+  const float cx = p.easting + offsetE;
+  const float cy = p.northing + offsetN;
   a.boxMinX = cx - bwClamped * 0.5f;
   a.boxMaxX = cx + bwClamped * 0.5f;
   a.boxMinY = cy - bhClamped * 0.5f;
@@ -740,7 +759,7 @@ bool LoadSurveyPointsFromJsonFile(AppCommandState& st, const char* path, std::ve
       p.description.clear();
     int ls = static_cast<int>(SurveyPointLabelStyle::NumberDesc);
     if (parseIntField(obj, "labelStyle", &ls)) {
-      if (ls < 0 || ls > static_cast<int>(SurveyPointLabelStyle::NumberElevDesc))
+      if (ls < 0 || ls > static_cast<int>(SurveyPointLabelStyle::NumberNorthEastElev))
         ls = static_cast<int>(SurveyPointLabelStyle::NumberDesc);
       p.labelStyle = static_cast<SurveyPointLabelStyle>(ls);
     }

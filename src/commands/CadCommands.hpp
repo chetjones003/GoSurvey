@@ -97,6 +97,10 @@ struct CadAnnotation {
   bool dimLinearVertical = false;
   /// If >= 0, this MTEXT is the viewport label for \c surveyPoints[this index] (bidirectional link).
   int surveyPointLabelFor = -1;
+  /// When true, the label was manually dragged and these world-unit offsets from the point override the global defaults.
+  bool surveyLabelHasUserOffset = false;
+  float surveyLabelUserOffsetEast = 0.f;
+  float surveyLabelUserOffsetNorth = 0.f;
 };
 
 
@@ -281,6 +285,8 @@ struct AppCommandState {
   /// Legacy fixed box (plotted inches); ignored for auto-sized survey-linked MTEXT labels.
   float surveyLabelBoxWidthPlottedIn = 1.5f;
   float surveyLabelBoxHeightPlottedIn = 0.75f;
+  /// Leader arrow: filled triangle base half-width (px); length = arrowPx * 2.36.
+  float surveyLabelLeaderArrowPx = 5.5f;
   /// Drawing viewport: survey index under cursor (-1 if none), for hover feedback.
   int viewportHoverSurveyPointIndex = -1;
   /// When true, viewport picks should use the snapped world point (OSNAP) instead of the sticky-blended cursor.
