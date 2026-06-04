@@ -102,6 +102,11 @@ void CadAnnotationToJson(const CadAnnotation& a, json& o) {
   if (a.kind == CadAnnotation::Kind::DimLinear)
     o["dimLinearVertical"] = a.dimLinearVertical;
   o["surveyPointLabelFor"] = a.surveyPointLabelFor;
+  if (a.surveyLabelHasUserOffset) {
+    o["surveyLabelHasUserOffset"] = true;
+    o["surveyLabelUserOffsetEast"] = a.surveyLabelUserOffsetEast;
+    o["surveyLabelUserOffsetNorth"] = a.surveyLabelUserOffsetNorth;
+  }
 }
 
 CadAnnotation CadAnnotationFromJson(const json& o) {
@@ -125,6 +130,9 @@ CadAnnotation CadAnnotationFromJson(const json& o) {
   if (a.kind == CadAnnotation::Kind::DimLinear)
     a.dimLinearVertical = o.value("dimLinearVertical", a.dimLinearVertical);
   a.surveyPointLabelFor = o.value("surveyPointLabelFor", a.surveyPointLabelFor);
+  a.surveyLabelHasUserOffset    = o.value("surveyLabelHasUserOffset",    a.surveyLabelHasUserOffset);
+  a.surveyLabelUserOffsetEast   = o.value("surveyLabelUserOffsetEast",   a.surveyLabelUserOffsetEast);
+  a.surveyLabelUserOffsetNorth  = o.value("surveyLabelUserOffsetNorth",  a.surveyLabelUserOffsetNorth);
   return a;
 }
 
@@ -198,15 +206,21 @@ void SurveyLabelTemplatesToJson(const SurveyLabelStyleTemplates& t, json& o) {
   o["descOnly"] = t.descOnly;
   o["numberElev"] = t.numberElev;
   o["numberElevDesc"] = t.numberElevDesc;
+  o["numberNorthEast"] = t.numberNorthEast;
+  o["northEast"] = t.northEast;
+  o["numberNorthEastElev"] = t.numberNorthEastElev;
 }
 
 SurveyLabelStyleTemplates SurveyLabelTemplatesFromJson(const json& o) {
   SurveyLabelStyleTemplates t;
-  t.numberDesc    = o.value("numberDesc",    t.numberDesc);
-  t.numberOnly    = o.value("numberOnly",    t.numberOnly);
-  t.descOnly      = o.value("descOnly",      t.descOnly);
-  t.numberElev    = o.value("numberElev",    t.numberElev);
-  t.numberElevDesc = o.value("numberElevDesc", t.numberElevDesc);
+  t.numberDesc         = o.value("numberDesc",         t.numberDesc);
+  t.numberOnly         = o.value("numberOnly",         t.numberOnly);
+  t.descOnly           = o.value("descOnly",           t.descOnly);
+  t.numberElev         = o.value("numberElev",         t.numberElev);
+  t.numberElevDesc     = o.value("numberElevDesc",     t.numberElevDesc);
+  t.numberNorthEast    = o.value("numberNorthEast",    t.numberNorthEast);
+  t.northEast          = o.value("northEast",          t.northEast);
+  t.numberNorthEastElev = o.value("numberNorthEastElev", t.numberNorthEastElev);
   return t;
 }
 
@@ -334,6 +348,7 @@ json BuildRoot(const AppCommandState& st) {
   settings["surveyLabelOffsetNorthPlottedIn"] = st.surveyLabelOffsetNorthPlottedIn;
   settings["surveyLabelBoxWidthPlottedIn"] = st.surveyLabelBoxWidthPlottedIn;
   settings["surveyLabelBoxHeightPlottedIn"] = st.surveyLabelBoxHeightPlottedIn;
+  settings["surveyLabelLeaderArrowPx"] = st.surveyLabelLeaderArrowPx;
   json tpl;
   SurveyLabelTemplatesToJson(st.surveyLabelTemplates, tpl);
   settings["surveyLabelTemplates"] = std::move(tpl);
@@ -499,6 +514,7 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
   num(s, "surveyLabelOffsetNorthPlottedIn", &st.surveyLabelOffsetNorthPlottedIn);
   num(s, "surveyLabelBoxWidthPlottedIn", &st.surveyLabelBoxWidthPlottedIn);
   num(s, "surveyLabelBoxHeightPlottedIn", &st.surveyLabelBoxHeightPlottedIn);
+  num(s, "surveyLabelLeaderArrowPx", &st.surveyLabelLeaderArrowPx);
   if (s.contains("surveyLabelTemplates") && s["surveyLabelTemplates"].is_object())
     st.surveyLabelTemplates = SurveyLabelTemplatesFromJson(s["surveyLabelTemplates"]);
 
@@ -612,7 +628,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       if (o.contains("layer") && o["layer"].is_string())
         p.layer = o["layer"].get<std::string>();
       const int ls = o.value("labelStyle", static_cast<int>(SurveyPointLabelStyle::NumberDesc));
-      if (ls >= 0 && ls <= static_cast<int>(SurveyPointLabelStyle::NumberElevDesc))
+      if (ls >= 0 && ls <= static_cast<int>(SurveyPointLabelStyle::NumberNorthEastElev))
         p.labelStyle = static_cast<SurveyPointLabelStyle>(ls);
       p.labelMtextAnnIndex = o.value("labelMtextAnnIndex", -1);
       st.surveyPoints.push_back(std::move(p));

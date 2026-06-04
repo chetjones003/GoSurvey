@@ -2831,19 +2831,35 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
       ImGui::TableNextColumn();
       {
         int styleI = static_cast<int>(p.labelStyle);
-        styleI = std::clamp(styleI, 0, static_cast<int>(SurveyPointLabelStyle::NumberElevDesc));
+        styleI = std::clamp(styleI, 0, static_cast<int>(SurveyPointLabelStyle::NumberNorthEastElev));
         const char* items =
             "None\0"
             "Point number and description\0"
             "Point number only\0"
             "Description only\0"
             "Point number and elevation\0"
-            "Point number, elevation, and description\0\0";
+            "Point number, elevation, and description\0"
+            "Point number, northing, and easting\0"
+            "Northing and easting\0"
+            "Point number, northing, easting, and elevation\0\0";
         if (ImGui::Combo("##svy_lbl_style", &styleI, items)) {
           p.labelStyle = static_cast<SurveyPointLabelStyle>(styleI);
           EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(rowIx), log);
           SyncSurveyPointLinkedMtextSelection(cmd, rowIx);
         }
+      }
+      // Label color (via cadAnnotationAttrs of the linked label).
+      if (p.labelMtextAnnIndex >= 0 && static_cast<size_t>(p.labelMtextAnnIndex) < cmd.cadAnnotationAttrs.size()) {
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();
+        ImGui::TextUnformatted("Label color");
+        ImGui::TableNextColumn();
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        EntityAttributes& lattr = cmd.cadAnnotationAttrs[static_cast<size_t>(p.labelMtextAnnIndex)];
+        if (ImGui::InputText("##svy_lbl_color", &lattr.color, ImGuiInputTextFlags_EnterReturnsTrue))
+          BumpCadGpuCache(cmd);
+        if (ImGui::IsItemDeactivatedAfterEdit())
+          BumpCadGpuCache(cmd);
       }
       ImGui::TableNextRow();
       ImGui::TableNextColumn();
@@ -2956,6 +2972,9 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
       "Description only",
       "Point number and elevation",
       "Point number, elevation, and description",
+      "Point number, northing, and easting",
+      "Northing and easting",
+      "Point number, northing, easting, and elevation",
   };
 
   constexpr float kHorizTol = 5e-5f;
@@ -3034,11 +3053,11 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
     ImGui::TextUnformatted("Label style");
     ImGui::TableNextColumn();
     {
-      gStyleLead = std::clamp(gStyleLead, 0, static_cast<int>(SurveyPointLabelStyle::NumberElevDesc));
+      gStyleLead = std::clamp(gStyleLead, 0, static_cast<int>(SurveyPointLabelStyle::NumberNorthEastElev));
       const char* preview = gSameStyle ? kLblStyleNames[gStyleLead] : "VARIES";
       ImGui::SetNextItemWidth(-FLT_MIN);
       if (ImGui::BeginCombo("##svy_lbl_style_m", preview)) {
-        for (int si = 0; si <= static_cast<int>(SurveyPointLabelStyle::NumberElevDesc); ++si) {
+        for (int si = 0; si <= static_cast<int>(SurveyPointLabelStyle::NumberNorthEastElev); ++si) {
           const bool selected = gSameStyle && si == gStyleLead;
           if (ImGui::Selectable(kLblStyleNames[si], selected)) {
             for (int ix : ixv) {
@@ -4935,6 +4954,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       ClearEntityGripInteraction(cmd);
       BumpCadGpuCache(cmd);
     } else if (cmd.mtextGripMoveActive) {
+      // Before clearing, persist user-dragged offset for survey labels so reposition calls keep this position.
+      const int gripAnnIdx = cmd.mtextGripAnnotationIndex;
+      if (gripAnnIdx >= 0 && static_cast<size_t>(gripAnnIdx) < cmd.cadAnnotations.size() &&
+          cmd.mtextGripCorner == 4) {
+        CadAnnotation& gripAnn = cmd.cadAnnotations[static_cast<size_t>(gripAnnIdx)];
+        const int spi = gripAnn.surveyPointLabelFor;
+        if (spi >= 0 && static_cast<size_t>(spi) < cmd.surveyPoints.size()) {
+          const SurveyPoint& sp = cmd.surveyPoints[static_cast<size_t>(spi)];
+          const float newCx = 0.5f * (gripAnn.boxMinX + gripAnn.boxMaxX);
+          const float newCy = 0.5f * (gripAnn.boxMinY + gripAnn.boxMaxY);
+          gripAnn.surveyLabelUserOffsetEast  = newCx - sp.easting;
+          gripAnn.surveyLabelUserOffsetNorth = newCy - sp.northing;
+          gripAnn.surveyLabelHasUserOffset   = true;
+        }
+      }
       ClearMtextGripInteraction(cmd);
       BumpCadGpuCache(cmd);
     } else {
@@ -5691,6 +5725,59 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           drawX = rx0 + 0.5f * ((rx1 - rx0) - pw);
           drawY = ry0 + 0.5f * ((ry1 - ry0) - ph);
           wrapW = std::max(pw, 8.f);
+
+          // Draw leader line from label to point when label is manually offset far enough.
+          if (a.surveyLabelHasUserOffset &&
+              static_cast<size_t>(a.surveyPointLabelFor) < cmd.surveyPoints.size()) {
+            const SurveyPoint& lsp = cmd.surveyPoints[static_cast<size_t>(a.surveyPointLabelFor)];
+            const float lcx = 0.5f * (a.boxMinX + a.boxMaxX);
+            const float lcy = 0.5f * (a.boxMinY + a.boxMaxY);
+            const float bwHalf = 0.5f * std::fabs(a.boxMaxX - a.boxMinX);
+            const float bhHalf = 0.5f * std::fabs(a.boxMaxY - a.boxMinY);
+            const float halfDiag = std::hypot(bwHalf, bhHalf);
+            const float distToPoint = std::hypot(lsp.easting - lcx, lsp.northing - lcy);
+            if (distToPoint > halfDiag * 1.1f) {
+              ImVec2 ptScreen{};
+              worldToScreen(lsp.easting, lsp.northing, &ptScreen);
+              const float cx_s = 0.5f * (rx0 + rx1);
+              const float cy_s = 0.5f * (ry0 + ry1);
+              // Direction from label to point in screen space.
+              const float ldx = ptScreen.x - cx_s;
+              const float ldy = ptScreen.y - cy_s;
+              const float ldist = std::hypot(ldx, ldy);
+              if (ldist > 1.f) {
+                const float udx = ldx / ldist;
+                const float udy = ldy / ldist;
+                // Clip the line start to the label box edge.
+                const float halfBoxPxW = 0.5f * (rx1 - rx0);
+                const float halfBoxPxH = 0.5f * (ry1 - ry0);
+                // Parametric distance to box edge along direction (udx, udy).
+                const float tEdge = (std::fabs(udx) > 1e-5f && std::fabs(udy) > 1e-5f)
+                    ? std::min(halfBoxPxW / std::fabs(udx), halfBoxPxH / std::fabs(udy))
+                    : (std::fabs(udx) > 1e-5f ? halfBoxPxW / std::fabs(udx) : halfBoxPxH / std::fabs(udy));
+                const float lineStartX = cx_s + udx * tEdge;
+                const float lineStartY = cy_s + udy * tEdge;
+                // Survey orange, fully opaque leader.
+                const ImU32 leaderCol  = IM_COL32(249, 115, 22, 220);
+                const ImU32 leaderShadow = IM_COL32(0, 0, 0, 120);
+                // Thin dark shadow under the line for contrast on dark backgrounds.
+                dl->AddLine(ImVec2(lineStartX + 1.f, lineStartY + 1.f),
+                            ImVec2(ptScreen.x  + 1.f, ptScreen.y  + 1.f),
+                            leaderShadow, 2.0f);
+                dl->AddLine(ImVec2(lineStartX, lineStartY), ptScreen, leaderCol, 1.5f);
+                // Arrowhead at the point end (aLen derived from half-width to keep a fixed aspect).
+                const float aHalf = cmd.surveyLabelLeaderArrowPx;
+                const float aLen  = aHalf * 2.36f;
+                const float bx = ptScreen.x - udx * aLen;
+                const float by = ptScreen.y - udy * aLen;
+                dl->AddTriangleFilled(
+                    ptScreen,
+                    ImVec2(bx - udy * aHalf, by + udx * aHalf),
+                    ImVec2(bx + udy * aHalf, by - udx * aHalf),
+                    leaderCol);
+              }
+            }
+          }
         }
         dl->PushClipRect(ImVec2(rx0, ry0), ImVec2(rx1, ry1), true);
         MtextRichDrawWrapped(dl, font, fontPx, ImVec2(drawX, drawY), wrapW, col, a.text);

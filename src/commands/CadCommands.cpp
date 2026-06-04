@@ -7898,12 +7898,18 @@ void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
-  if (!st.selection.empty()) {
-    ExecuteDeleteSelection(st, log);
-    return;
-  }
+  // Survey points take priority: deleting a point also removes its linked label.
+  // Checking selection first caused the label annotation to be deleted on the first
+  // keypress (since SyncSurveyPointLinkedMtextSelection adds the label to st.selection),
+  // requiring a second Delete to remove the point itself.
   if (!st.selectedSurveyPointIndices.empty()) {
     DeleteSelectedSurveyPoints(st, log);
+    if (!st.selection.empty())
+      ExecuteDeleteSelection(st, log);
+    return;
+  }
+  if (!st.selection.empty()) {
+    ExecuteDeleteSelection(st, log);
     return;
   }
   st.active = AppCommandState::Kind::Delete;

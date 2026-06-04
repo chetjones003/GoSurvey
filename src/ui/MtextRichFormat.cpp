@@ -1,6 +1,7 @@
 #include "MtextRichFormat.hpp"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <vector>
 
@@ -11,6 +12,8 @@ struct StyleDepth {
   int i = 0;
   int u = 0;
   int c = 0;
+  // Color stack: each entry is a packed 0xRRGGBB value (no alpha).
+  std::vector<uint32_t> colorStack;
 };
 
 struct RichRun {
@@ -19,6 +22,8 @@ struct RichRun {
   bool italic = false;
   bool underline = false;
   bool caps = false;
+  bool hasColorOverride = false;
+  uint32_t colorOverride = 0; // 0xRRGGBB
 };
 
 bool Starts(const std::string& s, size_t i, const char* tag) {
@@ -31,6 +36,35 @@ void ApplyCapsAscii(std::string* t) {
     if (ch >= 'a' && ch <= 'z')
       ch = static_cast<char>(ch - 'a' + 'A');
   }
+}
+
+// Try to parse [[color:RRGGBB]] at position i. Returns true and advances i past the tag.
+bool TryParseColorOpen(const std::string& s, size_t i, size_t* outEnd, uint32_t* outRgb) {
+  // Minimum: [[color:RRGGBB]] = 16 chars
+  if (i + 16 > s.size())
+    return false;
+  if (!Starts(s, i, "[[color:"))
+    return false;
+  // Expect 6 hex digits then "]]"
+  const size_t hexStart = i + 8;
+  if (hexStart + 8 > s.size())
+    return false;
+  if (s[hexStart + 6] != ']' || s[hexStart + 7] != ']')
+    return false;
+  // Parse the 6 hex digits
+  uint32_t rgb = 0;
+  for (int k = 0; k < 6; ++k) {
+    const char c = s[hexStart + static_cast<size_t>(k)];
+    uint32_t nibble;
+    if (c >= '0' && c <= '9')      nibble = static_cast<uint32_t>(c - '0');
+    else if (c >= 'a' && c <= 'f') nibble = static_cast<uint32_t>(c - 'a' + 10);
+    else if (c >= 'A' && c <= 'F') nibble = static_cast<uint32_t>(c - 'A' + 10);
+    else return false;
+    rgb = (rgb << 4) | nibble;
+  }
+  *outEnd = hexStart + 8;
+  *outRgb = rgb;
+  return true;
 }
 
 void BuildRuns(const std::string& wire, std::vector<RichRun>* outRuns) {
@@ -46,6 +80,10 @@ void BuildRuns(const std::string& wire, std::vector<RichRun>* outRuns) {
     r.italic = st.i > 0;
     r.underline = st.u > 0;
     r.caps = st.c > 0;
+    if (!st.colorStack.empty()) {
+      r.hasColorOverride = true;
+      r.colorOverride = st.colorStack.back();
+    }
     outRuns->push_back(std::move(r));
     acc.clear();
   };
@@ -53,46 +91,29 @@ void BuildRuns(const std::string& wire, std::vector<RichRun>* outRuns) {
   for (size_t i = 0; i < wire.size();) {
     if (wire[i] == '[' && i + 1 < wire.size() && wire[i + 1] == '[') {
       bool hit = false;
-      if (Starts(wire, i, "[[b]]")) {
+      if (Starts(wire, i, "[[b]]"))          { flush(); ++st.b; i += 5; hit = true; }
+      else if (Starts(wire, i, "[[/b]]"))    { flush(); st.b = std::max(0, st.b - 1); i += 6; hit = true; }
+      else if (Starts(wire, i, "[[i]]"))     { flush(); ++st.i; i += 5; hit = true; }
+      else if (Starts(wire, i, "[[/i]]"))    { flush(); st.i = std::max(0, st.i - 1); i += 6; hit = true; }
+      else if (Starts(wire, i, "[[u]]"))     { flush(); ++st.u; i += 5; hit = true; }
+      else if (Starts(wire, i, "[[/u]]"))    { flush(); st.u = std::max(0, st.u - 1); i += 6; hit = true; }
+      else if (Starts(wire, i, "[[caps]]"))  { flush(); ++st.c; i += 8; hit = true; }
+      else if (Starts(wire, i, "[[/caps]]")) { flush(); st.c = std::max(0, st.c - 1); i += 9; hit = true; }
+      else if (Starts(wire, i, "[[/color]]")) {
         flush();
-        ++st.b;
-        i += 5;
+        if (!st.colorStack.empty())
+          st.colorStack.pop_back();
+        i += 10;
         hit = true;
-      } else if (Starts(wire, i, "[[/b]]")) {
-        flush();
-        st.b = std::max(0, st.b - 1);
-        i += 6;
-        hit = true;
-      } else if (Starts(wire, i, "[[i]]")) {
-        flush();
-        ++st.i;
-        i += 5;
-        hit = true;
-      } else if (Starts(wire, i, "[[/i]]")) {
-        flush();
-        st.i = std::max(0, st.i - 1);
-        i += 6;
-        hit = true;
-      } else if (Starts(wire, i, "[[u]]")) {
-        flush();
-        ++st.u;
-        i += 5;
-        hit = true;
-      } else if (Starts(wire, i, "[[/u]]")) {
-        flush();
-        st.u = std::max(0, st.u - 1);
-        i += 6;
-        hit = true;
-      } else if (Starts(wire, i, "[[caps]]")) {
-        flush();
-        ++st.c;
-        i += 8;
-        hit = true;
-      } else if (Starts(wire, i, "[[/caps]]")) {
-        flush();
-        st.c = std::max(0, st.c - 1);
-        i += 9;
-        hit = true;
+      } else {
+        size_t afterTag = 0;
+        uint32_t rgb = 0;
+        if (TryParseColorOpen(wire, i, &afterTag, &rgb)) {
+          flush();
+          st.colorStack.push_back(rgb);
+          i = afterTag;
+          hit = true;
+        }
       }
       if (!hit) {
         acc += wire[i];
@@ -109,23 +130,22 @@ void BuildRuns(const std::string& wire, std::vector<RichRun>* outRuns) {
 void SerializeRuns(const std::vector<RichRun>& runs, std::string* out) {
   out->clear();
   for (const RichRun& r : runs) {
-    if (r.bold)
-      *out += "[[b]]";
-    if (r.italic)
-      *out += "[[i]]";
-    if (r.underline)
-      *out += "[[u]]";
-    if (r.caps)
-      *out += "[[caps]]";
+    if (r.hasColorOverride) {
+      char buf[20];
+      std::snprintf(buf, sizeof(buf), "[[color:%06X]]", r.colorOverride);
+      *out += buf;
+    }
+    if (r.bold)    *out += "[[b]]";
+    if (r.italic)  *out += "[[i]]";
+    if (r.underline) *out += "[[u]]";
+    if (r.caps)    *out += "[[caps]]";
     *out += r.text;
-    if (r.caps)
-      *out += "[[/caps]]";
-    if (r.underline)
-      *out += "[[/u]]";
-    if (r.italic)
-      *out += "[[/i]]";
-    if (r.bold)
-      *out += "[[/b]]";
+    if (r.caps)    *out += "[[/caps]]";
+    if (r.underline) *out += "[[/u]]";
+    if (r.italic)  *out += "[[/i]]";
+    if (r.bold)    *out += "[[/b]]";
+    if (r.hasColorOverride)
+      *out += "[[/color]]";
   }
 }
 
@@ -147,7 +167,16 @@ static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, I
   float lineStartX = pen.x;
 
   auto segColor = [&](const RichRun& r) -> ImU32 {
-    ImVec4 fc = ImGui::ColorConvertU32ToFloat4(baseRgb);
+    ImVec4 fc;
+    if (r.hasColorOverride) {
+      const uint32_t rgb = r.colorOverride;
+      fc.x = static_cast<float>((rgb >> 16) & 0xFF) / 255.f;
+      fc.y = static_cast<float>((rgb >>  8) & 0xFF) / 255.f;
+      fc.z = static_cast<float>( rgb        & 0xFF) / 255.f;
+      fc.w = 1.f;
+    } else {
+      fc = ImGui::ColorConvertU32ToFloat4(baseRgb);
+    }
     if (r.bold) {
       fc.x = std::min(1.f, fc.x + 0.09f);
       fc.y = std::min(1.f, fc.y + 0.09f);
@@ -248,6 +277,13 @@ std::string MtextRichFlattenToPlain(const std::string& wire) {
     o += t;
   }
   return o;
+}
+
+std::string MtextRichColorTag(uint8_t r, uint8_t g, uint8_t b) {
+  char buf[20];
+  std::snprintf(buf, sizeof(buf), "[[color:%02X%02X%02X]]",
+                static_cast<unsigned>(r), static_cast<unsigned>(g), static_cast<unsigned>(b));
+  return buf;
 }
 
 void MtextRichDrawWrapped(ImDrawList* dl, ImFont* font, float fontPx, ImVec2 origin, float maxWidth, ImU32 baseRgb,

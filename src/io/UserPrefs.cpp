@@ -84,8 +84,12 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
     str(t, "numberOnly",    &st.surveyLabelTemplates.numberOnly);
     str(t, "descOnly",      &st.surveyLabelTemplates.descOnly);
     str(t, "numberElev",    &st.surveyLabelTemplates.numberElev);
-    str(t, "numberElevDesc",&st.surveyLabelTemplates.numberElevDesc);
+    str(t, "numberElevDesc",     &st.surveyLabelTemplates.numberElevDesc);
+    str(t, "numberNorthEast",   &st.surveyLabelTemplates.numberNorthEast);
+    str(t, "northEast",         &st.surveyLabelTemplates.northEast);
+    str(t, "numberNorthEastElev", &st.surveyLabelTemplates.numberNorthEastElev);
   }
+  num("surveyLabelLeaderArrowPx", &st.surveyLabelLeaderArrowPx, 2.f, 30.f);
 
   // --- Text / MTEXT screen sizes (User Preferences tab) ---
   num("viewportTextMinPx",  &st.viewportTextMinPx,  4.f,  48.f);
@@ -226,8 +230,12 @@ void SaveUserStartupPrefs(const AppCommandState& st) {
   tpl["numberOnly"]     = st.surveyLabelTemplates.numberOnly;
   tpl["descOnly"]       = st.surveyLabelTemplates.descOnly;
   tpl["numberElev"]     = st.surveyLabelTemplates.numberElev;
-  tpl["numberElevDesc"] = st.surveyLabelTemplates.numberElevDesc;
+  tpl["numberElevDesc"]      = st.surveyLabelTemplates.numberElevDesc;
+  tpl["numberNorthEast"]    = st.surveyLabelTemplates.numberNorthEast;
+  tpl["northEast"]          = st.surveyLabelTemplates.northEast;
+  tpl["numberNorthEastElev"] = st.surveyLabelTemplates.numberNorthEastElev;
   s["surveyLabelTemplates"] = std::move(tpl);
+  s["surveyLabelLeaderArrowPx"] = st.surveyLabelLeaderArrowPx;
 
   // Text / MTEXT / Dimension sizes
   s["viewportTextMinPx"]      = st.viewportTextMinPx;

@@ -4,6 +4,7 @@
 #include "CadUi.hpp"
 #include "CadUiHelpers.hpp"
 #include "AppIcon.hpp"
+#include "MtextRichFormat.hpp"
 #include "SurveyPoints.hpp"
 #include "UserPrefs.hpp"
 #include "WinFileDialogs.hpp"
@@ -367,20 +368,164 @@ static void DrawUserPrefsSurveyPoints(AppCommandState& cmd) {
       RepositionSurveyLabelMtextForPoint(cmd, i);
     BumpCadGpuCache(cmd);
   }
+  ImGui::Separator();
+  ImGui::TextUnformatted("Leader arrow (shown when label is dragged away from its point)");
+  if (ImGui::DragFloat("Arrow half-width (px)", &cmd.surveyLabelLeaderArrowPx, 0.1f, 2.f, 30.f, "%.1f"))
+    cmd.surveyLabelLeaderArrowPx = std::clamp(cmd.surveyLabelLeaderArrowPx, 2.f, 30.f);
+  ItemHelpTooltip("Controls the size of the filled arrowhead on survey label leader lines. Length is 2.36x the half-width.");
 }
 
-static void DrawUserPrefsLabelTemplates(AppCommandState& cmd) {
-  ImGui::TextWrapped("Label style templates (apply to all points). Placeholders: {id} {desc} {elev}. Press Enter in a field or click Apply to refresh existing labels.");
-  ImGui::InputTextMultiline("Number + description##svy_tpl_nd", &cmd.surveyLabelTemplates.numberDesc, ImVec2(-FLT_MIN, 52.f));
-  ImGui::InputTextMultiline("Number only##svy_tpl_no", &cmd.surveyLabelTemplates.numberOnly, ImVec2(-FLT_MIN, 40.f));
-  ImGui::InputTextMultiline("Description only##svy_tpl_do", &cmd.surveyLabelTemplates.descOnly, ImVec2(-FLT_MIN, 40.f));
-  ImGui::InputTextMultiline("Number + elevation##svy_tpl_ne", &cmd.surveyLabelTemplates.numberElev, ImVec2(-FLT_MIN, 52.f));
-  ImGui::InputTextMultiline("Number + elevation + description##svy_tpl_ned", &cmd.surveyLabelTemplates.numberElevDesc, ImVec2(-FLT_MIN, 60.f));
-  if (ImGui::Button("Apply label templates to all survey points")) {
+// State for the template editor popup (one at a time).
+static std::string* gTplEditorTarget = nullptr;
+static const char*  gTplEditorTitle  = nullptr;
+static float        gTplEditorColor[3] = {1.f, 1.f, 1.f};
+static std::string  gTplEditorInsert;  // text to inject at cursor next callback tick
+
+static int TplEditorCallback(ImGuiInputTextCallbackData* data) {
+  if (data->EventFlag == ImGuiInputTextFlags_CallbackAlways && !gTplEditorInsert.empty()) {
+    data->InsertChars(data->CursorPos, gTplEditorInsert.c_str());
+    gTplEditorInsert.clear();
+  }
+  return 0;
+}
+
+static void OpenTplEditorPopup(std::string* target, const char* title) {
+  gTplEditorTarget = target;
+  gTplEditorTitle  = title;
+  ImGui::OpenPopup("##tpl_editor_modal");
+}
+
+static void DrawTplEditorPopup(AppCommandState& cmd) {
+  ImGui::SetNextWindowSize(ImVec2(720.f, 600.f), ImGuiCond_Always);
+  if (!ImGui::BeginPopupModal("##tpl_editor_modal", nullptr,
+                               ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoTitleBar))
+    return;
+
+  if (gTplEditorTarget == nullptr) {
+    ImGui::EndPopup();
+    return;
+  }
+
+  ImGui::TextUnformatted(gTplEditorTitle ? gTplEditorTitle : "Edit Template");
+  ImGui::SameLine();
+  ImGui::TextDisabled("  Tags: [[b]] [[i]] [[u]] [[color:RRGGBB]] [[/color]]");
+  ImGui::Separator();
+
+  // Two-column layout: left = text editor (stretches), right = fixed-width toolbox (no child, no scroll).
+  const float toolW = 200.f;
+  const float gap   = ImGui::GetStyle().ItemSpacing.x;
+  const float editorW = ImGui::GetContentRegionAvail().x - toolW - gap;
+  // Text editor fills available height minus header + footer.
+  const float editorH = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() * 2.f - 12.f;
+
+  ImGui::BeginGroup();
+  ImGui::InputTextMultiline("##tpl_text", gTplEditorTarget, ImVec2(editorW, editorH),
+                             ImGuiInputTextFlags_CallbackAlways, TplEditorCallback);
+  ImGui::EndGroup();
+
+  ImGui::SameLine();
+
+  // Right toolbox: plain group, auto-height — no scroll, no child window.
+  ImGui::BeginGroup();
+
+  // ---- Attribute insert ----
+  ImGui::TextUnformatted("Insert attribute");
+  ImGui::Separator();
+  const struct { const char* label; const char* token; } kAttrs[] = {
+    {"ID",          "{id}"},
+    {"Northing",    "{north}"},
+    {"Easting",     "{east}"},
+    {"Elevation",   "{elev}"},
+    {"Description", "{desc}"},
+  };
+  const float btnW = toolW - 4.f;
+  for (const auto& a : kAttrs) {
+    if (ImGui::Button(a.label, ImVec2(btnW, 0.f)))
+      gTplEditorInsert = a.token;
+  }
+
+  ImGui::Spacing();
+  ImGui::TextUnformatted("Formatting");
+  ImGui::Separator();
+  const float halfBtnW = (btnW - gap) * 0.5f;
+  if (ImGui::Button("Bold on",       ImVec2(halfBtnW, 0.f))) gTplEditorInsert = "[[b]]";
+  ImGui::SameLine(0.f, gap);
+  if (ImGui::Button("Bold off",      ImVec2(halfBtnW, 0.f))) gTplEditorInsert = "[[/b]]";
+  if (ImGui::Button("Italic on",     ImVec2(halfBtnW, 0.f))) gTplEditorInsert = "[[i]]";
+  ImGui::SameLine(0.f, gap);
+  if (ImGui::Button("Italic off",    ImVec2(halfBtnW, 0.f))) gTplEditorInsert = "[[/i]]";
+  if (ImGui::Button("Underline on",  ImVec2(halfBtnW, 0.f))) gTplEditorInsert = "[[u]]";
+  ImGui::SameLine(0.f, gap);
+  if (ImGui::Button("Underline off", ImVec2(halfBtnW, 0.f))) gTplEditorInsert = "[[/u]]";
+
+  ImGui::Spacing();
+  ImGui::TextUnformatted("Color");
+  ImGui::Separator();
+  // Small swatch: clicking it opens ImGui's built-in color picker popup.
+  ImGui::SetNextItemWidth(btnW);
+  ImGui::ColorEdit3("##tpl_col", gTplEditorColor,
+                    ImGuiColorEditFlags_NoLabel | ImGuiColorEditFlags_NoInputs);
+  ImGui::Spacing();
+  if (ImGui::Button("Insert color tag", ImVec2(btnW, 0.f))) {
+    const auto cr = static_cast<uint8_t>(gTplEditorColor[0] * 255.f + 0.5f);
+    const auto cg = static_cast<uint8_t>(gTplEditorColor[1] * 255.f + 0.5f);
+    const auto cb = static_cast<uint8_t>(gTplEditorColor[2] * 255.f + 0.5f);
+    gTplEditorInsert = MtextRichColorTag(cr, cg, cb);
+  }
+  if (ImGui::Button("End color tag", ImVec2(btnW, 0.f)))
+    gTplEditorInsert = "[[/color]]";
+
+  ImGui::EndGroup();
+
+  ImGui::Separator();
+  if (ImGui::Button("Apply to all points", ImVec2(160.f, 0.f))) {
     for (size_t i = 0; i < cmd.surveyPoints.size(); ++i)
       EnsureSurveyPointLabelMtext(cmd, i, nullptr);
     BumpCadGpuCache(cmd);
   }
+  ImGui::SameLine();
+  if (ImGui::Button("Close", ImVec2(80.f, 0.f))) {
+    gTplEditorTarget = nullptr;
+    ImGui::CloseCurrentPopup();
+  }
+
+  ImGui::EndPopup();
+}
+
+
+static void DrawUserPrefsLabelTemplates(AppCommandState& cmd) {
+  ImGui::TextWrapped(
+      "Click a style to edit its template. Supports placeholders {id} {desc} {elev} {north} {east} "
+      "and rich tags [[b]] [[i]] [[u]] [[color:RRGGBB]] [[/color]].");
+  ImGui::Spacing();
+
+  struct TplEntry { const char* label; std::string* tpl; };
+  TplEntry entries[] = {
+    {"Number + description",                   &cmd.surveyLabelTemplates.numberDesc},
+    {"Number only",                            &cmd.surveyLabelTemplates.numberOnly},
+    {"Description only",                       &cmd.surveyLabelTemplates.descOnly},
+    {"Number + elevation",                     &cmd.surveyLabelTemplates.numberElev},
+    {"Number + elevation + description",       &cmd.surveyLabelTemplates.numberElevDesc},
+    {"Number + northing + easting",            &cmd.surveyLabelTemplates.numberNorthEast},
+    {"Northing + easting",                     &cmd.surveyLabelTemplates.northEast},
+    {"Number + northing + easting + elevation",&cmd.surveyLabelTemplates.numberNorthEastElev},
+  };
+
+  for (auto& e : entries) {
+    if (ImGui::Button(e.label, ImVec2(240.f, 0.f)))
+      OpenTplEditorPopup(e.tpl, e.label);
+    ImGui::SameLine();
+    ImGui::TextDisabled("%s", e.tpl->c_str());
+  }
+
+  ImGui::Spacing();
+  if (ImGui::Button("Apply all templates to survey points")) {
+    for (size_t i = 0; i < cmd.surveyPoints.size(); ++i)
+      EnsureSurveyPointLabelMtext(cmd, i, nullptr);
+    BumpCadGpuCache(cmd);
+  }
+
+  DrawTplEditorPopup(cmd);
 }
 
 static void DrawUserPrefsTextMtext(AppCommandState& cmd) {
