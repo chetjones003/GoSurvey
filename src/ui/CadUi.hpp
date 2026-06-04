@@ -50,6 +50,9 @@ void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 /// Floating panel listing all currently selected entities; each entry has a checkbox to deselect it.
 void DrawSelectionCyclingPanel(AppCommandState& cmd);
 
+/// QUICKSELECT (QS) filter window — builds a selection by entity type and property criteria.
+void DrawQuickSelectWindow(AppCommandState& cmd, std::vector<std::string>& log);
+
 void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 
 void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log = nullptr);

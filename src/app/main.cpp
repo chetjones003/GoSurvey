@@ -380,6 +380,7 @@ int main() {
         ProcessCommandLineSubmit(cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd, cmdLog);
     }
 
+    DrawQuickSelectWindow(cmd, cmdLog);
     DrawSelectionCyclingPanel(cmd);
     DrawCreatePointsPanel(cmd, cmdLog);
     DrawSettingsPanel(cmd, &cmdLog);

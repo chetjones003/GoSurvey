@@ -663,6 +663,21 @@ struct AppCommandState {
   float surveyInverseFromY = 0.f;
   bool showViewPointsWindow = false;
   bool showSettingsWindow = false;
+  bool showQuickSelectWindow = false;
+
+  /// Quick Select filter state (QUICKSELECT / QS command).
+  enum class QsApplyTo    : uint8_t { EntireDrawing = 0, CurrentSelection = 1 };
+  enum class QsObjectType : uint8_t { All=0, Line, Circle, Arc, Ellipse, Polyline, Text, Mtext, DimAligned, DimLinear, DimAngular, SurveyPoint };
+  enum class QsProperty   : uint8_t { Layer=0, Color, Length, Radius, Closed, Content, Id, Elevation, Easting, Northing, Description };
+  enum class QsOperator   : uint8_t { Equals=0, NotEquals, LessThan, GreaterThan, SelectAll };
+  enum class QsInclude    : uint8_t { Include=0, Exclude };
+  QsApplyTo    qsApplyTo          = QsApplyTo::EntireDrawing;
+  QsObjectType qsObjectType       = QsObjectType::All;
+  QsProperty   qsProperty         = QsProperty::Layer;
+  QsOperator   qsOperator         = QsOperator::Equals;
+  char         qsValueBuf[256]    = {};
+  QsInclude    qsIncludeMode      = QsInclude::Include;
+  bool         qsAppendToExisting = false;
   /// Layer manager (LAYER / ribbon LAY). Rows are synced with geometry-used names.
   bool showLayerManagerWindow = false;
   /// Current layer for new geometry (ribbon combo + command defaults).
@@ -1097,6 +1112,7 @@ void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartScaleCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartQuickSelectCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartOffsetCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Re-invokes \c st.lastCommand (no-op if \c Kind::None).

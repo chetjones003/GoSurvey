@@ -6354,6 +6354,392 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   ImGui::End();
 }
 
+// ---------------------------------------------------------------------------
+// QUICKSELECT
+// ---------------------------------------------------------------------------
+
+static void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
+  using OT = AppCommandState::QsObjectType;
+  using QP = AppCommandState::QsProperty;
+  using QO = AppCommandState::QsOperator;
+  using QI = AppCommandState::QsInclude;
+  using T  = SelectedEntity::Type;
+
+  float numVal = 0.f;
+  try { numVal = std::stof(cmd.qsValueBuf); } catch (...) {}
+  const std::string strVal = cmd.qsValueBuf;
+
+  auto matchStr = [&](const std::string& prop) -> bool {
+    switch (cmd.qsOperator) {
+    case QO::SelectAll:  return true;
+    case QO::Equals:     return prop == strVal;
+    case QO::NotEquals:  return prop != strVal;
+    default:             return false;
+    }
+  };
+  auto matchNum = [&](float prop) -> bool {
+    switch (cmd.qsOperator) {
+    case QO::SelectAll:     return true;
+    case QO::Equals:        return std::fabs(prop - numVal) < 1e-5f;
+    case QO::NotEquals:     return std::fabs(prop - numVal) >= 1e-5f;
+    case QO::LessThan:      return prop < numVal;
+    case QO::GreaterThan:   return prop > numVal;
+    }
+    return false;
+  };
+  auto typeMatches = [&](OT t) -> bool {
+    return cmd.qsObjectType == OT::All || cmd.qsObjectType == t;
+  };
+  auto getAttrs = [&](const SelectedEntity& e) -> const EntityAttributes* {
+    switch (e.type) {
+    case T::LineSeg:    return (size_t)e.index < cmd.userLineAttrs.size()       ? &cmd.userLineAttrs[(size_t)e.index]       : nullptr;
+    case T::Circle:     return (size_t)e.index < cmd.userCircleAttrs.size()     ? &cmd.userCircleAttrs[(size_t)e.index]     : nullptr;
+    case T::Arc:        return (size_t)e.index < cmd.userArcAttrs.size()        ? &cmd.userArcAttrs[(size_t)e.index]        : nullptr;
+    case T::Ellipse:    return (size_t)e.index < cmd.userEllAttrs.size()        ? &cmd.userEllAttrs[(size_t)e.index]        : nullptr;
+    case T::Polyline:   return (size_t)e.index < cmd.userPolylineAttrs.size()   ? &cmd.userPolylineAttrs[(size_t)e.index]   : nullptr;
+    case T::Annotation: return (size_t)e.index < cmd.cadAnnotationAttrs.size()  ? &cmd.cadAnnotationAttrs[(size_t)e.index]  : nullptr;
+    default:            return nullptr;
+    }
+  };
+
+  auto testEntity = [&](const SelectedEntity& e) -> bool {
+    // Type gate
+    switch (e.type) {
+    case T::LineSeg:  if (!typeMatches(OT::Line))    return false; break;
+    case T::Circle:   if (!typeMatches(OT::Circle))  return false; break;
+    case T::Arc:      if (!typeMatches(OT::Arc))     return false; break;
+    case T::Ellipse:  if (!typeMatches(OT::Ellipse)) return false; break;
+    case T::Polyline: if (!typeMatches(OT::Polyline))return false; break;
+    case T::Annotation: {
+      if ((size_t)e.index >= cmd.cadAnnotations.size()) return false;
+      const auto k = cmd.cadAnnotations[(size_t)e.index].kind;
+      using AK = CadAnnotation::Kind;
+      if (cmd.qsObjectType == OT::Text       && k != AK::Text)       return false;
+      if (cmd.qsObjectType == OT::Mtext      && k != AK::Mtext)      return false;
+      if (cmd.qsObjectType == OT::DimAligned && k != AK::DimAligned) return false;
+      if (cmd.qsObjectType == OT::DimLinear  && k != AK::DimLinear)  return false;
+      if (cmd.qsObjectType == OT::DimAngular && k != AK::DimAngular) return false;
+      if (cmd.qsObjectType != OT::All && cmd.qsObjectType != OT::Text &&
+          cmd.qsObjectType != OT::Mtext && cmd.qsObjectType != OT::DimAligned &&
+          cmd.qsObjectType != OT::DimLinear && cmd.qsObjectType != OT::DimAngular)
+        return false;
+      break;
+    }
+    default: return false;
+    }
+    // Property test
+    const EntityAttributes* attrs = getAttrs(e);
+    switch (cmd.qsProperty) {
+    case QP::Layer:   return attrs ? matchStr(attrs->layer) : (cmd.qsOperator == QO::SelectAll);
+    case QP::Color:   return attrs ? matchStr(attrs->color) : (cmd.qsOperator == QO::SelectAll);
+    case QP::Length: {
+      float len = 0.f;
+      if (e.type == T::LineSeg) {
+        const size_t k = (size_t)e.index * 6;
+        if (k + 4 < cmd.userLinesFlat.size())
+          len = std::hypot(cmd.userLinesFlat[k+3] - cmd.userLinesFlat[k],
+                           cmd.userLinesFlat[k+4] - cmd.userLinesFlat[k+1]);
+      } else if (e.type == T::Polyline) {
+        const int np = (int)cmd.userPolylineOffsets.size();
+        if (e.index >= 0 && e.index + 1 < np) {
+          const int sv = cmd.userPolylineOffsets[(size_t)e.index];
+          const int ev = cmd.userPolylineOffsets[(size_t)e.index + 1];
+          for (int vi = sv; vi + 1 < ev; ++vi) {
+            const size_t xi = (size_t)vi * 3;
+            if (xi + 3 < cmd.userPolylineVerts.size())
+              len += std::hypot(cmd.userPolylineVerts[xi+3] - cmd.userPolylineVerts[xi],
+                                cmd.userPolylineVerts[xi+4] - cmd.userPolylineVerts[xi+1]);
+          }
+        }
+      }
+      return matchNum(len);
+    }
+    case QP::Radius: {
+      float r = 0.f;
+      if (e.type == T::Circle) {
+        const size_t k = (size_t)e.index * 3;
+        if (k + 2 < cmd.userCirclesCxCyR.size()) r = cmd.userCirclesCxCyR[k + 2];
+      } else if (e.type == T::Arc && (size_t)e.index < cmd.userArcs.size()) {
+        r = cmd.userArcs[(size_t)e.index].r;
+      }
+      return matchNum(r);
+    }
+    case QP::Closed:
+      if (e.type == T::Polyline && (size_t)e.index < cmd.userPolylineClosed.size()) {
+        const bool closed = cmd.userPolylineClosed[(size_t)e.index] != 0;
+        if (cmd.qsOperator == QO::SelectAll) return true;
+        const bool want = (strVal == "Yes" || strVal == "yes" || strVal == "1" || strVal == "true");
+        return (cmd.qsOperator == QO::Equals) ? (closed == want) : (closed != want);
+      }
+      return false;
+    case QP::Content:
+      if (e.type == T::Annotation && (size_t)e.index < cmd.cadAnnotations.size())
+        return matchStr(cmd.cadAnnotations[(size_t)e.index].text);
+      return false;
+    default: return cmd.qsOperator == QO::SelectAll;
+    }
+  };
+
+  auto testSurvey = [&](int spi) -> bool {
+    if (!typeMatches(OT::SurveyPoint)) return false;
+    if ((size_t)spi >= cmd.surveyPoints.size()) return false;
+    const SurveyPoint& sp = cmd.surveyPoints[(size_t)spi];
+    switch (cmd.qsProperty) {
+    case QP::Layer:       return matchStr(sp.layer);
+    case QP::Id:          return matchNum(static_cast<float>(sp.id));
+    case QP::Elevation:   return matchNum(sp.elevation);
+    case QP::Easting:     return matchNum(sp.easting);
+    case QP::Northing:    return matchNum(sp.northing);
+    case QP::Description: return matchStr(sp.description);
+    default:              return cmd.qsOperator == QO::SelectAll;
+    }
+  };
+
+  const bool exclude = (cmd.qsIncludeMode == QI::Exclude);
+  std::vector<SelectedEntity> newCad;
+  std::vector<int> newSurvey;
+
+  auto addCad = [&](const SelectedEntity& e) {
+    if (testEntity(e) != exclude) newCad.push_back(e);
+  };
+  auto addSurvey = [&](int spi) {
+    if (testSurvey(spi) != exclude) newSurvey.push_back(spi);
+  };
+
+  if (cmd.qsApplyTo == AppCommandState::QsApplyTo::EntireDrawing) {
+    const int nLines = (int)(cmd.userLinesFlat.size() / 6);
+    for (int i = 0; i < nLines; ++i)  addCad({SelectedEntity::Type::LineSeg, i});
+    const int nCirc = (int)(cmd.userCirclesCxCyR.size() / 3);
+    for (int i = 0; i < nCirc; ++i)   addCad({SelectedEntity::Type::Circle, i});
+    for (int i = 0; i < (int)cmd.userArcs.size(); ++i)      addCad({SelectedEntity::Type::Arc, i});
+    for (int i = 0; i < (int)cmd.userEllipses.size(); ++i)  addCad({SelectedEntity::Type::Ellipse, i});
+    const int nPoly = std::max(0, (int)cmd.userPolylineOffsets.size() - 1);
+    for (int i = 0; i < nPoly; ++i)   addCad({SelectedEntity::Type::Polyline, i});
+    for (int i = 0; i < (int)cmd.cadAnnotations.size(); ++i) addCad({SelectedEntity::Type::Annotation, i});
+    for (int i = 0; i < (int)cmd.surveyPoints.size(); ++i)   addSurvey(i);
+  } else {
+    for (const auto& e : cmd.selection)           addCad(e);
+    for (int spi : cmd.selectedSurveyPointIndices) addSurvey(spi);
+  }
+
+  if (cmd.qsAppendToExisting) {
+    for (const auto& e : newCad) {
+      if (!std::any_of(cmd.selection.begin(), cmd.selection.end(),
+            [&](const SelectedEntity& s){ return s.type == e.type && s.index == e.index; }))
+        cmd.selection.push_back(e);
+    }
+    for (int spi : newSurvey) {
+      if (std::find(cmd.selectedSurveyPointIndices.begin(), cmd.selectedSurveyPointIndices.end(), spi)
+          == cmd.selectedSurveyPointIndices.end())
+        cmd.selectedSurveyPointIndices.push_back(spi);
+    }
+  } else {
+    cmd.selection = std::move(newCad);
+    cmd.selectedSurveyPointIndices = std::move(newSurvey);
+  }
+
+  EnsureAttrCounts(cmd);
+  BumpCadGpuCache(cmd);
+
+  const int total = (int)(cmd.selection.size() + cmd.selectedSurveyPointIndices.size());
+  char msg[128];
+  std::snprintf(msg, sizeof(msg), "QUICKSELECT — %d item%s selected.", total, total == 1 ? "" : "s");
+  log.push_back(msg);
+}
+
+// Property lists per object type (indices into QsProperty enum).
+struct QsTypeProps {
+  const char* label;
+  AppCommandState::QsObjectType type;
+  // Which properties are valid, as QsProperty values
+  std::initializer_list<AppCommandState::QsProperty> props;
+};
+
+static const QsTypeProps kQsTypes[] = {
+  { "All",              AppCommandState::QsObjectType::All,        { AppCommandState::QsProperty::Layer, AppCommandState::QsProperty::Color } },
+  { "Line",             AppCommandState::QsObjectType::Line,       { AppCommandState::QsProperty::Layer, AppCommandState::QsProperty::Color, AppCommandState::QsProperty::Length } },
+  { "Circle",           AppCommandState::QsObjectType::Circle,     { AppCommandState::QsProperty::Layer, AppCommandState::QsProperty::Color, AppCommandState::QsProperty::Radius } },
+  { "Arc",              AppCommandState::QsObjectType::Arc,        { AppCommandState::QsProperty::Layer, AppCommandState::QsProperty::Color, AppCommandState::QsProperty::Radius } },
+  { "Ellipse",          AppCommandState::QsObjectType::Ellipse,    { AppCommandState::QsProperty::Layer, AppCommandState::QsProperty::Color } },
+  { "Polyline",         AppCommandState::QsObjectType::Polyline,   { AppCommandState::QsProperty::Layer, AppCommandState::QsProperty::Color, AppCommandState::QsProperty::Length, AppCommandState::QsProperty::Closed } },
+  { "Text",             AppCommandState::QsObjectType::Text,       { AppCommandState::QsProperty::Layer, AppCommandState::QsProperty::Color, AppCommandState::QsProperty::Content } },
+  { "MText",            AppCommandState::QsObjectType::Mtext,      { AppCommandState::QsProperty::Layer, AppCommandState::QsProperty::Color, AppCommandState::QsProperty::Content } },
+  { "Dim (Aligned)",    AppCommandState::QsObjectType::DimAligned, { AppCommandState::QsProperty::Layer, AppCommandState::QsProperty::Color } },
+  { "Dim (Linear)",     AppCommandState::QsObjectType::DimLinear,  { AppCommandState::QsProperty::Layer, AppCommandState::QsProperty::Color } },
+  { "Dim (Angular)",    AppCommandState::QsObjectType::DimAngular, { AppCommandState::QsProperty::Layer, AppCommandState::QsProperty::Color } },
+  { "Survey Point",     AppCommandState::QsObjectType::SurveyPoint,{ AppCommandState::QsProperty::Layer, AppCommandState::QsProperty::Id, AppCommandState::QsProperty::Elevation, AppCommandState::QsProperty::Easting, AppCommandState::QsProperty::Northing, AppCommandState::QsProperty::Description } },
+};
+
+static const char* QsPropertyLabel(AppCommandState::QsProperty p) {
+  using QP = AppCommandState::QsProperty;
+  switch (p) {
+  case QP::Layer:       return "Layer";
+  case QP::Color:       return "Color";
+  case QP::Length:      return "Length";
+  case QP::Radius:      return "Radius";
+  case QP::Closed:      return "Closed";
+  case QP::Content:     return "Content";
+  case QP::Id:          return "ID";
+  case QP::Elevation:   return "Elevation";
+  case QP::Easting:     return "Easting";
+  case QP::Northing:    return "Northing";
+  case QP::Description: return "Description";
+  }
+  return "";
+}
+
+static bool QsPropertyIsNumeric(AppCommandState::QsProperty p) {
+  using QP = AppCommandState::QsProperty;
+  return p == QP::Length || p == QP::Radius || p == QP::Id ||
+         p == QP::Elevation || p == QP::Easting || p == QP::Northing;
+}
+
+void DrawQuickSelectWindow(AppCommandState& cmd, std::vector<std::string>& log) {
+  if (!cmd.showQuickSelectWindow)
+    return;
+
+  ImGui::SetNextWindowSize(ImVec2(400, 380), ImGuiCond_FirstUseEver);
+  bool open = cmd.showQuickSelectWindow;
+  if (!ImGui::Begin("Quick Select", &open, ImGuiWindowFlags_NoCollapse)) {
+    cmd.showQuickSelectWindow = open;
+    ImGui::End();
+    return;
+  }
+  cmd.showQuickSelectWindow = open;
+
+  using QP = AppCommandState::QsProperty;
+  using QO = AppCommandState::QsOperator;
+  using QI = AppCommandState::QsInclude;
+  constexpr int kNumTypes = (int)(sizeof(kQsTypes) / sizeof(kQsTypes[0]));
+
+  // --- Apply to ---
+  ImGui::TextUnformatted("Apply to:");
+  ImGui::SameLine(120.f);
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  {
+    static const char* kApplyItems[] = { "Entire drawing", "Current selection" };
+    int sel = static_cast<int>(cmd.qsApplyTo);
+    if (ImGui::Combo("##qs_apply", &sel, kApplyItems, 2))
+      cmd.qsApplyTo = static_cast<AppCommandState::QsApplyTo>(sel);
+  }
+
+  // --- Object type ---
+  ImGui::TextUnformatted("Object type:");
+  ImGui::SameLine(120.f);
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  {
+    const char* curTypeName = kQsTypes[0].label;
+    for (int i = 0; i < kNumTypes; ++i)
+      if (kQsTypes[i].type == cmd.qsObjectType) { curTypeName = kQsTypes[i].label; break; }
+    if (ImGui::BeginCombo("##qs_type", curTypeName)) {
+      for (int i = 0; i < kNumTypes; ++i) {
+        const bool sel = (kQsTypes[i].type == cmd.qsObjectType);
+        if (ImGui::Selectable(kQsTypes[i].label, sel)) {
+          cmd.qsObjectType = kQsTypes[i].type;
+          // Reset property to first valid one for this type
+          if (kQsTypes[i].props.size() != 0)
+            cmd.qsProperty = *kQsTypes[i].props.begin();
+        }
+        if (sel) ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+  }
+
+  // Collect valid properties for current type
+  std::vector<QP> validProps;
+  for (int i = 0; i < kNumTypes; ++i)
+    if (kQsTypes[i].type == cmd.qsObjectType) { validProps.assign(kQsTypes[i].props); break; }
+  // Ensure current property is valid; reset if not
+  if (!validProps.empty() && std::find(validProps.begin(), validProps.end(), cmd.qsProperty) == validProps.end())
+    cmd.qsProperty = validProps[0];
+
+  // --- Properties ---
+  ImGui::TextUnformatted("Properties:");
+  ImGui::SameLine(120.f);
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  {
+    const char* curPropName = validProps.empty() ? "Layer" : QsPropertyLabel(cmd.qsProperty);
+    if (ImGui::BeginCombo("##qs_prop", curPropName)) {
+      for (QP p : validProps) {
+        const bool sel = (p == cmd.qsProperty);
+        if (ImGui::Selectable(QsPropertyLabel(p), sel))
+          cmd.qsProperty = p;
+        if (sel) ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+  }
+
+  // --- Operator ---
+  const bool isNumeric = QsPropertyIsNumeric(cmd.qsProperty);
+  ImGui::TextUnformatted("Operator:");
+  ImGui::SameLine(120.f);
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  {
+    static const char* kAllOps[]  = { "= Equals", "<> Not Equal", "< Less Than", "> Greater Than", "Select All" };
+    static const char* kStrOps[]  = { "= Equals", "<> Not Equal", "Select All" };
+    const char** ops   = isNumeric ? kAllOps : kStrOps;
+    const int    nOps  = isNumeric ? 5 : 3;
+    // Map current QsOperator to the index in the active list
+    static const QO kAllOpVals[] = { QO::Equals, QO::NotEquals, QO::LessThan, QO::GreaterThan, QO::SelectAll };
+    static const QO kStrOpVals[] = { QO::Equals, QO::NotEquals, QO::SelectAll };
+    const QO* opVals = isNumeric ? kAllOpVals : kStrOpVals;
+    int curIdx = 0;
+    for (int i = 0; i < nOps; ++i) if (opVals[i] == cmd.qsOperator) { curIdx = i; break; }
+    if (ImGui::BeginCombo("##qs_op", ops[curIdx])) {
+      for (int i = 0; i < nOps; ++i) {
+        const bool sel = (i == curIdx);
+        if (ImGui::Selectable(ops[i], sel)) cmd.qsOperator = opVals[i];
+        if (sel) ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+  }
+
+  // --- Value ---
+  const bool needValue = (cmd.qsOperator != QO::SelectAll);
+  ImGui::TextUnformatted("Value:");
+  ImGui::SameLine(120.f);
+  ImGui::SetNextItemWidth(-FLT_MIN);
+  ImGui::BeginDisabled(!needValue);
+  if (cmd.qsProperty == QP::Closed) {
+    // Special case: boolean, offer a combo
+    static const char* kClosedOpts[] = { "Yes", "No" };
+    int closedSel = (std::string(cmd.qsValueBuf) == "Yes" || std::string(cmd.qsValueBuf) == "yes") ? 0 : 1;
+    if (ImGui::Combo("##qs_val_closed", &closedSel, kClosedOpts, 2))
+      std::snprintf(cmd.qsValueBuf, sizeof(cmd.qsValueBuf), "%s", kClosedOpts[closedSel]);
+  } else {
+    ImGui::InputText("##qs_val", cmd.qsValueBuf, sizeof(cmd.qsValueBuf));
+  }
+  ImGui::EndDisabled();
+
+  ImGui::Separator();
+
+  // --- How to apply ---
+  ImGui::TextUnformatted("How to apply:");
+  {
+    int inc = static_cast<int>(cmd.qsIncludeMode);
+    if (ImGui::RadioButton("Include in new selection",  &inc, 0)) cmd.qsIncludeMode = QI::Include;
+    if (ImGui::RadioButton("Exclude from new selection",&inc, 1)) cmd.qsIncludeMode = QI::Exclude;
+  }
+
+  ImGui::Checkbox("Append to current selection", &cmd.qsAppendToExisting);
+
+  ImGui::Separator();
+
+  const float btnW = (ImGui::GetContentRegionAvail().x - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+  if (ImGui::Button("OK", ImVec2(btnW, 0))) {
+    ExecuteQuickSelect(cmd, log);
+    cmd.showQuickSelectWindow = false;
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", ImVec2(btnW, 0)))
+    cmd.showQuickSelectWindow = false;
+
+  ImGui::End();
+}
+
 // Returns a display label for a SelectedEntity, e.g. "Line 3", "MTEXT 2".
 static void FormatSelectedEntityLabel(const AppCommandState& cmd, const SelectedEntity& e,
                                       char* buf, size_t bufSize) {

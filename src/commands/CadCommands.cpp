@@ -880,8 +880,9 @@ const CmdEntry kRegistry[] = {
     {"regen", "re"},
     {"layer", "la"},
     {"pdfattach", "pa"},
-    {"overkill",  "ok"},
-    {"align",     "al"},
+    {"overkill",     "ok"},
+    {"align",        "al"},
+    {"quickselect",  "qs"},
 };
 
 bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vector<std::string>& log);
@@ -1299,6 +1300,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "align") {
     StartAlignCommand(st, log);
+    return true;
+  }
+  if (primary == "quickselect" || primary == "qs") {
+    StartQuickSelectCommand(st, log);
     return true;
   }
   return false;
@@ -9940,4 +9945,9 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
     case K::Offset:     StartOffsetCommand(st, log);     break;
     default: break;
   }
+}
+
+void StartQuickSelectCommand(AppCommandState& st, std::vector<std::string>& log) {
+  st.showQuickSelectWindow = true;
+  log.push_back("QUICKSELECT — filter entities by type and property.");
 }

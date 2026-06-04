@@ -3,10 +3,10 @@
 ## BUGS
 
 ## FEATURES
-- [ ] **[FEAT-005]** Quick Select
+~~- [x] **[FEAT-005]** Quick Select [COMPLETE]
     - I want a QUICKSELECT (Alias QS) command that brings up a window that will allow me to choose
       to apply to entire drawing or select an area in the drawing. specify object type, specify properties
-      to select, operator (=, <, >, select all), value.
+      to select, operator (=, <, >, select all), value.~~
 
 - [ ] **[FEAT-006]** Grip Sizes and Multiple Grips
     - grips should be blue
