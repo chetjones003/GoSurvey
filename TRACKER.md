@@ -3,25 +3,6 @@
 ## BUGS
 
 ## FEATURES
-- [ ] **[FEAT-003]** Settings menu right click options
-    - I want in the User Preferences tab to have a Right Click Options section that has the following:
-        - Default Mode:
-            - if no objects are selected, right click means:
-                - dropdown list
-                    - Repeat last command
-                    - Shortcut menu
-        - Edit Mode
-            - If one or more objects are selected, right click means:
-                - dropdown list
-                    - Repeat last command
-                    - Shortcut menu
-        - Command Mode
-            - If a command is in progress, right click means:
-                - dropdown list
-                    - ENTER
-                    - Shortcut menu: always enabled
-                    - Shortcut menu: enabled when options are present
-
 - [ ] **[FEAT-004]** Selection cycling
     - I want a way if i have multiple items selected i can cycle through what is selected one
       at a time by bringing up a window with the entities selected to toggle on or off the selection.
@@ -30,6 +11,11 @@
     - I want a QUICKSELECT (Alias QS) command that brings up a window that will allow me to choose
       to apply to entire drawing or select an area in the drawing. specify object type, specify properties
       to select, operator (=, <, >, select all), value.
+
+- [ ] **[FEAT-006]** Grip Sizes and Multiple Grips
+    - grips should be blue
+    - I want a way in the settings menu to change the size of grips
+    - If i have multiple objects selected the grips should should show for all objects
 
 # COMPLETED
 
@@ -88,10 +74,30 @@
       another, and elevation another.
     - I also need settings for more label styles, like northing, easting.
     - If a point label gets a certain "distance" away from the point the i need a leader
-      pointing back to it's associated point. A leader is a line with an arrow~~
+      pointing back to it's associated point. A leader is a line with an arrow
+~~
 
 ~~- [x] **[FEAT-002]** Add more support for hovering over entities [COMPLETE]
     - If I hover over a line, circle, text, survey point, etc...the entity should highlight very slightly
       to let me know i am over an entity.
     - And if I am hovering over an entity, click should select that entity. Other wise a box select is needed.~~
+
+~~- [x] **[FEAT-003]** Settings menu right click options [COMPLETE]
+    - I want in the User Preferences tab to have a Right Click Options section that has the following:
+        - Default Mode:
+            - if no objects are selected, right click means:
+                - dropdown list
+                    - Repeat last command
+                    - Shortcut menu
+        - Edit Mode
+            - If one or more objects are selected, right click means:
+                - dropdown list
+                    - Repeat last command
+                    - Shortcut menu
+        - Command Mode
+            - If a command is in progress, right click means:
+                - dropdown list
+                    - ENTER
+                    - Shortcut menu: always enabled
+                    - Shortcut menu: enabled when options are present~~
 

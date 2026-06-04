@@ -4550,11 +4550,42 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           g_snapMenuStep = 0;
           g_snapPickMenuScratch.clear();
           ImGui::OpenPopup("##gos_snap_pick");
-        } else if (cmd.active == AK::None && cmd.rightClickRepeatLastCommand &&
-                   cmd.lastCommand != AK::None && !blockSnapPickMenu) {
-          RepeatLastCommand(cmd, log);
-        } else {
-          ImGui::OpenPopup("##drawing1_vp_ctx");
+        } else if (!blockSnapPickMenu) {
+          using DM = AppCommandState::RightClickDefaultMode;
+          using EM = AppCommandState::RightClickEditMode;
+          using CM = AppCommandState::RightClickCommandMode;
+          const bool hasSel = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
+          if (cmd.active != AK::None) {
+            switch (cmd.rightClickCommandMode) {
+            case CM::Enter:
+              ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+              break;
+            case CM::ShortcutMenuAlways:
+            case CM::ShortcutMenuWhenOptions:
+              ImGui::OpenPopup("##drawing1_vp_ctx");
+              break;
+            }
+          } else if (hasSel) {
+            switch (cmd.rightClickEditMode) {
+            case EM::RepeatLastCommand:
+              if (cmd.lastCommand != AK::None) RepeatLastCommand(cmd, log);
+              else ImGui::OpenPopup("##drawing1_vp_ctx");
+              break;
+            case EM::ShortcutMenu:
+              ImGui::OpenPopup("##drawing1_vp_ctx");
+              break;
+            }
+          } else {
+            switch (cmd.rightClickDefaultMode) {
+            case DM::RepeatLastCommand:
+              if (cmd.lastCommand != AK::None) RepeatLastCommand(cmd, log);
+              else ImGui::OpenPopup("##drawing1_vp_ctx");
+              break;
+            case DM::ShortcutMenu:
+              ImGui::OpenPopup("##drawing1_vp_ctx");
+              break;
+            }
+          }
         }
       }
     }
@@ -6177,11 +6208,46 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   if (ImGui::BeginPopup("##drawing1_vp_ctx")) {
     using AK = AppCommandState::Kind;
-    const bool ctxBlocked = cmd.active != AK::None || cmd.dimGripMoveActive || cmd.entityGripMoveActive ||
-                            cmd.mtextGripMoveActive || cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond;
-    const bool hasPick = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
-    if (ImGui::MenuItem("Select similar", nullptr, false, hasPick && !ctxBlocked))
-      SelectSimilarToCurrentSelection(cmd, &log);
+    const bool gripActive = cmd.dimGripMoveActive || cmd.entityGripMoveActive ||
+                            cmd.mtextGripMoveActive || cmd.mtextRichEditorOpen;
+    const bool hasSel = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
+
+    if (cmd.active != AK::None) {
+      // Command Mode shortcut menu
+      if (ImGui::MenuItem("Enter")) {
+        char empty[2] = {};
+        ProcessCommandLineSubmit(empty, static_cast<int>(sizeof(empty)), cmd, log);
+        ImGui::CloseCurrentPopup();
+      }
+      if (ImGui::MenuItem("Cancel")) {
+        CancelActiveCommand(cmd, log);
+        ImGui::CloseCurrentPopup();
+      }
+    } else if (!gripActive) {
+      // Edit Mode / Default Mode shortcut menu
+      if (cmd.lastCommand != AK::None) {
+        char repeatLabel[64];
+        std::snprintf(repeatLabel, sizeof(repeatLabel), "Repeat %s",
+                      AppCommandState::KindName(cmd.lastCommand));
+        if (ImGui::MenuItem(repeatLabel))
+          RepeatLastCommand(cmd, log);
+        ImGui::Separator();
+      }
+      if (hasSel) {
+        if (ImGui::MenuItem("Move"))   { StartMoveCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Copy"))   { StartCopyCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Rotate")) { StartRotateCommand(cmd, log); ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Scale"))  { StartScaleCommand(cmd, log);  ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Delete")) { StartDeleteCommand(cmd, log); ImGui::CloseCurrentPopup(); }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Select similar"))
+          SelectSimilarToCurrentSelection(cmd, &log);
+        if (ImGui::MenuItem("Clear selection")) {
+          ClearCadSelection(cmd);
+          BumpCadGpuCache(cmd);
+        }
+      }
+    }
     ImGui::EndPopup();
   }
   ImGui::SetNextWindowPos(ImGui::GetMousePos(), ImGuiCond_Appearing);

@@ -110,8 +110,19 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
       st.pendingPropertiesFocus = true;
   }
 
-  // --- Right-click behavior (Drafting tab) ---
+  // --- Right-click behavior (Drafting tab legacy + User Preferences) ---
   b  ("rightClickRepeatLastCommand", &st.rightClickRepeatLastCommand);
+  auto u8clamped = [&](const char* k, uint8_t* out, uint8_t hi) {
+    if (s.contains(k) && s[k].is_number_unsigned())
+      *out = static_cast<uint8_t>(std::min(s[k].get<unsigned>(), static_cast<unsigned>(hi)));
+  };
+  uint8_t tmp = 0;
+  tmp = static_cast<uint8_t>(st.rightClickDefaultMode);
+  u8clamped("rightClickDefaultMode",  &tmp, 1); st.rightClickDefaultMode  = static_cast<AppCommandState::RightClickDefaultMode>(tmp);
+  tmp = static_cast<uint8_t>(st.rightClickEditMode);
+  u8clamped("rightClickEditMode",     &tmp, 1); st.rightClickEditMode     = static_cast<AppCommandState::RightClickEditMode>(tmp);
+  tmp = static_cast<uint8_t>(st.rightClickCommandMode);
+  u8clamped("rightClickCommandMode",  &tmp, 2); st.rightClickCommandMode  = static_cast<AppCommandState::RightClickCommandMode>(tmp);
 
   // --- Object snap (Drafting tab) ---
   b  ("objectSnapEnabled",         &st.objectSnapEnabled);
@@ -253,6 +264,9 @@ void SaveUserStartupPrefs(const AppCommandState& st) {
 
   // Right-click behavior
   s["rightClickRepeatLastCommand"] = st.rightClickRepeatLastCommand;
+  s["rightClickDefaultMode"]       = static_cast<uint8_t>(st.rightClickDefaultMode);
+  s["rightClickEditMode"]          = static_cast<uint8_t>(st.rightClickEditMode);
+  s["rightClickCommandMode"]       = static_cast<uint8_t>(st.rightClickCommandMode);
 
   // Object snap
   s["objectSnapEnabled"]          = st.objectSnapEnabled;

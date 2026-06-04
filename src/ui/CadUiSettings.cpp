@@ -320,13 +320,6 @@ static void DrawSettingsSystemTab(AppCommandState& cmd) {
 }
 
 static void DrawSettingsDraftingTab(AppCommandState& cmd) {
-  BoxBegin("Right-click behavior", 90.f);
-  ImGui::Checkbox("Right-click in drawing repeats last command when no command is active",
-                  &cmd.rightClickRepeatLastCommand);
-  ItemHelpTooltip("When enabled, right-clicking in the drawing viewport with no active command immediately "
-                  "re-invokes the last used command (LINE, CIRCLE, COPY, etc.).\n"
-                  "When disabled, right-click opens the context menu instead.");
-  BoxEnd();
   BoxBegin("Object snap (AutoSnap)", 0.f);
   ImGui::TextUnformatted("Cursor snaps to drawing geometry when OSNAP is on (status bar or F3).");
   ImGui::Separator();
@@ -547,7 +540,35 @@ static void DrawUserPrefsDimensions(AppCommandState& cmd) {
   if (cmd.viewportDimTextMaxPx < cmd.viewportDimTextMinPx) cmd.viewportDimTextMaxPx = cmd.viewportDimTextMinPx;
 }
 
+static void DrawUserPrefsRightClick(AppCommandState& cmd) {
+  using DM = AppCommandState::RightClickDefaultMode;
+  using EM = AppCommandState::RightClickEditMode;
+  using CM = AppCommandState::RightClickCommandMode;
+
+  ImGui::TextDisabled("Default Mode — if no objects are selected, right click means:");
+  static const char* kDMItems[] = { "Repeat last command", "Shortcut menu" };
+  int dmSel = static_cast<int>(cmd.rightClickDefaultMode);
+  if (ImGui::Combo("##rmb_default", &dmSel, kDMItems, 2))
+    cmd.rightClickDefaultMode = static_cast<DM>(dmSel);
+
+  ImGui::Spacing();
+  ImGui::TextDisabled("Edit Mode — if one or more objects are selected, right click means:");
+  static const char* kEMItems[] = { "Repeat last command", "Shortcut menu" };
+  int emSel = static_cast<int>(cmd.rightClickEditMode);
+  if (ImGui::Combo("##rmb_edit", &emSel, kEMItems, 2))
+    cmd.rightClickEditMode = static_cast<EM>(emSel);
+
+  ImGui::Spacing();
+  ImGui::TextDisabled("Command Mode — if a command is in progress, right click means:");
+  static const char* kCMItems[] = { "ENTER", "Shortcut menu: always enabled", "Shortcut menu: enabled when options are present" };
+  int cmSel = static_cast<int>(cmd.rightClickCommandMode);
+  if (ImGui::Combo("##rmb_command", &cmSel, kCMItems, 3))
+    cmd.rightClickCommandMode = static_cast<CM>(cmSel);
+}
+
 static void DrawSettingsUserPrefsTab(AppCommandState& cmd) {
+  if (ImGui::CollapsingHeader("Right Click Options", ImGuiTreeNodeFlags_DefaultOpen))
+    DrawUserPrefsRightClick(cmd);
   if (ImGui::CollapsingHeader("Survey points (markers + linked MTEXT)", ImGuiTreeNodeFlags_DefaultOpen))
     DrawUserPrefsSurveyPoints(cmd);
   if (ImGui::CollapsingHeader("Label templates"))

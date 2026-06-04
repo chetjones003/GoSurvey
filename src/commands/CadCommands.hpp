@@ -264,10 +264,47 @@ struct AppCommandState {
     Align
   } active = Kind::None;
 
+  static const char* KindName(Kind k) {
+    switch (k) {
+    case Kind::Line:          return "LINE";
+    case Kind::Circle:        return "CIRCLE";
+    case Kind::Polyline:      return "POLYLINE";
+    case Kind::Arc:           return "ARC";
+    case Kind::Ellipse:       return "ELLIPSE";
+    case Kind::Text:          return "TEXT";
+    case Kind::Mtext:         return "MTEXT";
+    case Kind::DimAligned:    return "DIMALIGNED";
+    case Kind::DimLinear:     return "DIMLINEAR";
+    case Kind::DimAngular:    return "DIMANGULAR";
+    case Kind::Move:          return "MOVE";
+    case Kind::Copy:          return "COPY";
+    case Kind::Rotate:        return "ROTATE";
+    case Kind::Scale:         return "SCALE";
+    case Kind::Delete:        return "DELETE";
+    case Kind::Zoom:          return "ZOOM";
+    case Kind::Join:          return "JOIN";
+    case Kind::Trim:          return "TRIM";
+    case Kind::Offset:        return "OFFSET";
+    case Kind::IdPoint:       return "ID";
+    case Kind::SurveyInverse: return "INVERSE";
+    case Kind::PdfAttach:     return "PDFATTACH";
+    case Kind::Align:         return "ALIGN";
+    default:                  return "";
+    }
+  }
+
   /// Most recently started command; used for right-click repeat when idle.
   Kind lastCommand = Kind::None;
   /// Right-click in the drawing with no active command repeats \c lastCommand (see Settings → Drafting).
   bool rightClickRepeatLastCommand = true;
+
+  /// Right-click behavior per context (User Preferences → Right Click Options).
+  enum class RightClickDefaultMode  : uint8_t { RepeatLastCommand = 0, ShortcutMenu = 1 };
+  enum class RightClickEditMode     : uint8_t { RepeatLastCommand = 0, ShortcutMenu = 1 };
+  enum class RightClickCommandMode  : uint8_t { Enter = 0, ShortcutMenuAlways = 1, ShortcutMenuWhenOptions = 2 };
+  RightClickDefaultMode rightClickDefaultMode   = RightClickDefaultMode::RepeatLastCommand;
+  RightClickEditMode    rightClickEditMode      = RightClickEditMode::RepeatLastCommand;
+  RightClickCommandMode rightClickCommandMode   = RightClickCommandMode::Enter;
 
   /// Plot scale: one plotted inch equals this many drawing units (e.g. 50 for 1 inch = 50 feet).
   float modelUnitsPerPlottedInch = 50.f;
