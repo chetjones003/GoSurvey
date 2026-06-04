@@ -15,8 +15,9 @@
       another, and elevation another.
     - I also need settings for more label styles, like northing, easting.
 
-- [ ] **[BUG-003]** Fix Some UI Elements
+- [x] **[BUG-003]** Fix Some UI Elements [COMPLETE]
     - Menu dropdowns need some padding on the left and right sides of the text
+    - Properties tab is still not focused correctly over the Reports tab
     - Settings window needs scroll bars where scrolling is possible
     - Save Layout window also needs padding
         - save layout window should also have a dropdown of existing layouts and a button 

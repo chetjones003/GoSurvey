@@ -304,8 +304,8 @@ void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size) {
   ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Right, 0.24f, &dock_right, &dock_center);
   ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Down, 0.30f, &dock_bottom, &dock_center);
 
-  ImGui::DockBuilderDockWindow("Properties", dock_left);
   ImGui::DockBuilderDockWindow("Reports", dock_left);
+  ImGui::DockBuilderDockWindow("Properties", dock_left);  // docked last → active tab
   ImGui::DockBuilderDockWindow("Command line", dock_bottom);
   ImGui::DockBuilderDockWindow("Viewports", dock_center);
 
@@ -329,6 +329,7 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
     ImGui::SetCursorPosY(ImGui::GetCursorPosY() - yPad);
   }
 #endif
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.f, 8.f));
   if (ImGui::BeginMenu("File")) {
     if (ImGui::MenuItem("New", nullptr)) {
       SaveDocumentToSnapshot(cmd, cmd.activeDrawingIdx);
@@ -429,6 +430,7 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       cmd.showSettingsWindow = true;
     ImGui::EndMenu();
   }
+  ImGui::PopStyleVar();
 }
 
 static void CollectAllDrawingLayers(const AppCommandState& cmd, std::vector<std::string>* outSortedUnique) {

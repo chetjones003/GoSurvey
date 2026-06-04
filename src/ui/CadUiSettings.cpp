@@ -429,21 +429,26 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   cmd.showSettingsWindow = open;
   DrawSettingsHeader(cmd);
 
-  const ImGuiTabBarFlags tabFlags = ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_NoCloseWithMiddleMouseButton;
-  if (ImGui::BeginTabBar("##optionsTabs", tabFlags)) {
-    if (ImGui::BeginTabItem("Files"))          { cmd.settingsActiveTabIdx = 0; DrawSettingsFilesTab(cmd, log);                                                       ImGui::EndTabItem(); }
-    if (ImGui::BeginTabItem("Display"))        { cmd.settingsActiveTabIdx = 1; DrawSettingsDisplayTab(cmd);                                                          ImGui::EndTabItem(); }
-    if (ImGui::BeginTabItem("Open and Save"))  { cmd.settingsActiveTabIdx = 2; DrawSettingsPlaceholderTab("Open and Save", "File-format and recovery options.");      ImGui::EndTabItem(); }
-    if (ImGui::BeginTabItem("Plot and Publish")){ cmd.settingsActiveTabIdx = 3; DrawSettingsPlaceholderTab("Plot and Publish", "Default plot settings.");              ImGui::EndTabItem(); }
-    if (ImGui::BeginTabItem("System"))         { cmd.settingsActiveTabIdx = 4; DrawSettingsSystemTab(cmd);                                                           ImGui::EndTabItem(); }
-    if (ImGui::BeginTabItem("User Preferences")){ cmd.settingsActiveTabIdx = 5; DrawSettingsUserPrefsTab(cmd);                                                        ImGui::EndTabItem(); }
-    if (ImGui::BeginTabItem("Drafting"))       { cmd.settingsActiveTabIdx = 6; DrawSettingsDraftingTab(cmd);                                                         ImGui::EndTabItem(); }
-    if (ImGui::BeginTabItem("3D Modeling"))    { cmd.settingsActiveTabIdx = 7; DrawSettingsPlaceholderTab("3D Modeling", "GoSurvey is 2D; 3D options are reserved."); ImGui::EndTabItem(); }
-    if (ImGui::BeginTabItem("Selection"))      { cmd.settingsActiveTabIdx = 8; DrawSettingsPlaceholderTab("Selection", "Pickbox / grip size options.");               ImGui::EndTabItem(); }
-    if (ImGui::BeginTabItem("Profiles"))       { cmd.settingsActiveTabIdx = 9; DrawSettingsPlaceholderTab("Profiles", "Saved option profiles. Current: <<GoSurvey>>.");ImGui::EndTabItem(); }
-    if (ImGui::BeginTabItem("AEC Editor"))     { cmd.settingsActiveTabIdx = 10; DrawSettingsPlaceholderTab("AEC Editor", "Civil/AEC-specific editor preferences.");   ImGui::EndTabItem(); }
-    ImGui::EndTabBar();
+  // Leave room for the separator + button row so they remain visible when content scrolls.
+  const float footerH = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y + 4.f;
+  if (ImGui::BeginChild("##settings_content", ImVec2(0.f, -footerH))) {
+    const ImGuiTabBarFlags tabFlags = ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_NoCloseWithMiddleMouseButton;
+    if (ImGui::BeginTabBar("##optionsTabs", tabFlags)) {
+      if (ImGui::BeginTabItem("Files"))          { cmd.settingsActiveTabIdx = 0; DrawSettingsFilesTab(cmd, log);                                                       ImGui::EndTabItem(); }
+      if (ImGui::BeginTabItem("Display"))        { cmd.settingsActiveTabIdx = 1; DrawSettingsDisplayTab(cmd);                                                          ImGui::EndTabItem(); }
+      if (ImGui::BeginTabItem("Open and Save"))  { cmd.settingsActiveTabIdx = 2; DrawSettingsPlaceholderTab("Open and Save", "File-format and recovery options.");      ImGui::EndTabItem(); }
+      if (ImGui::BeginTabItem("Plot and Publish")){ cmd.settingsActiveTabIdx = 3; DrawSettingsPlaceholderTab("Plot and Publish", "Default plot settings.");              ImGui::EndTabItem(); }
+      if (ImGui::BeginTabItem("System"))         { cmd.settingsActiveTabIdx = 4; DrawSettingsSystemTab(cmd);                                                           ImGui::EndTabItem(); }
+      if (ImGui::BeginTabItem("User Preferences")){ cmd.settingsActiveTabIdx = 5; DrawSettingsUserPrefsTab(cmd);                                                        ImGui::EndTabItem(); }
+      if (ImGui::BeginTabItem("Drafting"))       { cmd.settingsActiveTabIdx = 6; DrawSettingsDraftingTab(cmd);                                                         ImGui::EndTabItem(); }
+      if (ImGui::BeginTabItem("3D Modeling"))    { cmd.settingsActiveTabIdx = 7; DrawSettingsPlaceholderTab("3D Modeling", "GoSurvey is 2D; 3D options are reserved."); ImGui::EndTabItem(); }
+      if (ImGui::BeginTabItem("Selection"))      { cmd.settingsActiveTabIdx = 8; DrawSettingsPlaceholderTab("Selection", "Pickbox / grip size options.");               ImGui::EndTabItem(); }
+      if (ImGui::BeginTabItem("Profiles"))       { cmd.settingsActiveTabIdx = 9; DrawSettingsPlaceholderTab("Profiles", "Saved option profiles. Current: <<GoSurvey>>.");ImGui::EndTabItem(); }
+      if (ImGui::BeginTabItem("AEC Editor"))     { cmd.settingsActiveTabIdx = 10; DrawSettingsPlaceholderTab("AEC Editor", "Civil/AEC-specific editor preferences.");   ImGui::EndTabItem(); }
+      ImGui::EndTabBar();
+    }
   }
+  ImGui::EndChild();
 
   ImGui::Separator();
   if (ImGui::Button("OK", ImVec2(90.f, 0.f)))     { SaveUserStartupPrefs(cmd); if (log) log->push_back("Settings saved (gosurvey-user.json)."); cmd.showSettingsWindow = false; }
