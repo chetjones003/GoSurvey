@@ -427,8 +427,6 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       cmd.pendingBuiltinDockLayoutReset = true;
     ImGuiLayout_DrawViewLayoutMenu(cmd, log);
     ImGui::Separator();
-    if (ImGui::MenuItem("Selection...", nullptr))
-      cmd.showSelectionCyclingWindow = true;
     if (ImGui::MenuItem("Settings...", nullptr))
       cmd.showSettingsWindow = true;
     ImGui::EndMenu();
@@ -3845,6 +3843,27 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   ImGui::AlignTextToFramePadding();
   ImGui::Text("X %.3f  Y %.3f  Z %.3f  |  UCS: World", cursorX, cursorY, cursorZ);
 
+  ImGui::SameLine(0, 16);
+  ImGui::AlignTextToFramePadding();
+  ImGui::TextDisabled("|");
+  ImGui::SameLine(0, 8);
+  {
+    const bool on = cmd.showSelectionCyclingWindow;
+    PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
+    if (ImGui::Button("SEL", ImVec2(0.f, statusBtnH))) {
+      if (!cmd.showSelectionCyclingWindow) {
+        cmd.selectionCycleEntities      = cmd.selection;
+        cmd.selectionCycleSurveyPoints  = cmd.selectedSurveyPointIndices;
+        cmd.showSelectionCyclingWindow  = true;
+      } else {
+        cmd.showSelectionCyclingWindow = false;
+      }
+    }
+    PopModeToggleButtonColors(on);
+    ItemHelpTooltip("Selection panel — lists selected entities so you can toggle each one on or off.\n"
+                    "Click to open and snapshot the current selection; click again to close.");
+  }
+
   ImGui::PopStyleVar();
   ImGui::EndChild();
   ImGui::PopStyleVar();
@@ -6245,8 +6264,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImGui::Separator();
         if (ImGui::MenuItem("Select similar"))
           SelectSimilarToCurrentSelection(cmd, &log);
-        if (ImGui::MenuItem("Selection..."))
+        if (ImGui::MenuItem("Selection...")) {
+          cmd.selectionCycleEntities     = cmd.selection;
+          cmd.selectionCycleSurveyPoints = cmd.selectedSurveyPointIndices;
           cmd.showSelectionCyclingWindow = true;
+        }
         if (ImGui::MenuItem("Clear selection")) {
           ClearCadSelection(cmd);
           BumpCadGpuCache(cmd);
@@ -6379,9 +6401,9 @@ void DrawSelectionCyclingPanel(AppCommandState& cmd) {
   if (!cmd.showSelectionCyclingWindow)
     return;
 
-  const int nCad = static_cast<int>(cmd.selection.size());
-  const int nSurvey = static_cast<int>(cmd.selectedSurveyPointIndices.size());
-  const int total = nCad + nSurvey;
+  const int nCad    = static_cast<int>(cmd.selectionCycleEntities.size());
+  const int nSurvey = static_cast<int>(cmd.selectionCycleSurveyPoints.size());
+  const int total   = nCad + nSurvey;
 
   ImGui::SetNextWindowSize(ImVec2(280, 320), ImGuiCond_FirstUseEver);
   bool open = cmd.showSelectionCyclingWindow;
@@ -6393,31 +6415,45 @@ void DrawSelectionCyclingPanel(AppCommandState& cmd) {
   cmd.showSelectionCyclingWindow = open;
 
   char header[64];
-  std::snprintf(header, sizeof(header), "%d item%s selected", total, total == 1 ? "" : "s");
+  std::snprintf(header, sizeof(header), "%d item%s in list", total, total == 1 ? "" : "s");
   ImGui::TextDisabled("%s", header);
+  if (ImGui::SmallButton("Refresh")) {
+    cmd.selectionCycleEntities     = cmd.selection;
+    cmd.selectionCycleSurveyPoints = cmd.selectedSurveyPointIndices;
+  }
+  ItemHelpTooltip("Re-snapshot the current selection into this list.");
   ImGui::Separator();
 
-  const float listH = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - ImGui::GetStyle().ItemSpacing.y;
-  ImGui::BeginChild("##sel_list", ImVec2(0.f, listH), false);
+  const float footerH = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y;
+  ImGui::BeginChild("##sel_list", ImVec2(0.f, -footerH), false);
 
-  // CAD entities — iterate backwards so erasing by index stays valid.
-  for (int i = nCad - 1; i >= 0; --i) {
-    const SelectedEntity& e = cmd.selection[static_cast<size_t>(i)];
+  // CAD entities from the snapshot.
+  for (int i = 0; i < nCad; ++i) {
+    const SelectedEntity& e = cmd.selectionCycleEntities[static_cast<size_t>(i)];
     char label[128];
     FormatSelectedEntityLabel(cmd, e, label, sizeof(label));
-    bool checked = true;
+
+    bool isSelected = std::any_of(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& s) {
+      return s.type == e.type && s.index == e.index;
+    });
     ImGui::PushID(i);
-    if (ImGui::Checkbox(label, &checked) && !checked) {
-      cmd.selection.erase(cmd.selection.begin() + i);
+    if (ImGui::Checkbox(label, &isSelected)) {
+      if (isSelected) {
+        cmd.selection.push_back(e);
+      } else {
+        cmd.selection.erase(std::remove_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& s) {
+          return s.type == e.type && s.index == e.index;
+        }), cmd.selection.end());
+      }
       EnsureAttrCounts(cmd);
       BumpCadGpuCache(cmd);
     }
     ImGui::PopID();
   }
 
-  // Survey points — iterate backwards for the same reason.
-  for (int i = nSurvey - 1; i >= 0; --i) {
-    const int spi = cmd.selectedSurveyPointIndices[static_cast<size_t>(i)];
+  // Survey points from the snapshot.
+  for (int i = 0; i < nSurvey; ++i) {
+    const int spi = cmd.selectionCycleSurveyPoints[static_cast<size_t>(i)];
     char label[128];
     if (static_cast<size_t>(spi) < cmd.surveyPoints.size()) {
       const SurveyPoint& sp = cmd.surveyPoints[static_cast<size_t>(spi)];
@@ -6428,10 +6464,20 @@ void DrawSelectionCyclingPanel(AppCommandState& cmd) {
     } else {
       std::snprintf(label, sizeof(label), "Survey Pt %d", spi + 1);
     }
-    bool checked = true;
+
+    bool isSelected = std::find(cmd.selectedSurveyPointIndices.begin(),
+                                cmd.selectedSurveyPointIndices.end(), spi) !=
+                      cmd.selectedSurveyPointIndices.end();
     ImGui::PushID(10000 + i);
-    if (ImGui::Checkbox(label, &checked) && !checked)
-      cmd.selectedSurveyPointIndices.erase(cmd.selectedSurveyPointIndices.begin() + i);
+    if (ImGui::Checkbox(label, &isSelected)) {
+      if (isSelected) {
+        cmd.selectedSurveyPointIndices.push_back(spi);
+      } else {
+        auto it = std::remove(cmd.selectedSurveyPointIndices.begin(),
+                              cmd.selectedSurveyPointIndices.end(), spi);
+        cmd.selectedSurveyPointIndices.erase(it, cmd.selectedSurveyPointIndices.end());
+      }
+    }
     ImGui::PopID();
   }
 
@@ -6440,6 +6486,23 @@ void DrawSelectionCyclingPanel(AppCommandState& cmd) {
   ImGui::Separator();
   if (ImGui::Button("Deselect All")) {
     ClearCadSelection(cmd);
+    BumpCadGpuCache(cmd);
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Select All")) {
+    for (const auto& e : cmd.selectionCycleEntities) {
+      const bool already = std::any_of(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& s) {
+        return s.type == e.type && s.index == e.index;
+      });
+      if (!already)
+        cmd.selection.push_back(e);
+    }
+    for (int spi : cmd.selectionCycleSurveyPoints) {
+      if (std::find(cmd.selectedSurveyPointIndices.begin(),
+                    cmd.selectedSurveyPointIndices.end(), spi) == cmd.selectedSurveyPointIndices.end())
+        cmd.selectedSurveyPointIndices.push_back(spi);
+    }
+    EnsureAttrCounts(cmd);
     BumpCadGpuCache(cmd);
   }
 

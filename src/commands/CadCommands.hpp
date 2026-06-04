@@ -655,6 +655,9 @@ struct AppCommandState {
   int createPointsNextId = 1;
   bool showCreatePointsWindow = false;
   bool showSelectionCyclingWindow = false;
+  /// Stable snapshot of the selection taken when the SEL panel is opened; entities remain listed even after deselection.
+  std::vector<SelectedEntity> selectionCycleEntities;
+  std::vector<int> selectionCycleSurveyPoints;
   enum class SurveyInversePhase { WaitFrom, WaitTo } surveyInversePhase = SurveyInversePhase::WaitFrom;
   float surveyInverseFromX = 0.f;
   float surveyInverseFromY = 0.f;
