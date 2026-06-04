@@ -4,7 +4,7 @@
 
 namespace CadSnap {
 
-enum class Kind { Endpoint, Midpoint, Center, Perpendicular, SurveyCenter, GeometricCenter };
+enum class Kind { Endpoint, Midpoint, Center, Perpendicular, SurveyCenter, GeometricCenter, Grip };
 
 struct Hit {
   bool valid = false;
@@ -26,8 +26,19 @@ struct SnapCandidateEntry {
 /// (LINE previous point, circle center while sizing radius, prior 3P picks, etc.) so the snap
 /// lies at the foot from that reference onto each segment—not under the cursor along the line.
 /// \p commandActive retained for callers; perpendicular logic ignores it when no reference applies.
+/// Identifies a single entity whose snap candidates should be suppressed in FindBest.
+struct SnapExclude {
+  bool valid = false;
+  SelectedEntity::Type type = SelectedEntity::Type::LineSeg;
+  int index = -1;
+};
+
 [[nodiscard]] Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActive,
-                           float tolWorld);
+                           float tolWorld, SnapExclude exclude = {});
+
+/// Grip-only snap: checks grip points of all selected entities (CAD, MTEXT, survey points).
+/// Returns Kind::Grip. No glyph is drawn for this kind. Works regardless of OSNAP toggle.
+[[nodiscard]] Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorld);
 
 /// All snap targets of a single \p kind in the drawing (no aperture). Sorted by distance to (\p sortWorldX,\p sortWorldY).
 void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const AppCommandState& cmd,
@@ -50,6 +61,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     return 1;
   case Kind::Perpendicular:
     return 0;
+  case Kind::Grip:
+    return 4; ///< Beats all geometry snaps; no glyph is drawn for this kind.
   }
   return 0;
 }

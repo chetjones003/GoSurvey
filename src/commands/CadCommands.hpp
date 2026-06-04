@@ -371,6 +371,8 @@ struct AppCommandState {
   float objectSnapAperturePx = 14.f;
   /// Half-size in screen pixels for green object-snap glyphs (square / triangle / circle overlay).
   float objectSnapGlyphHalfPx = 15.f;
+  /// Half-size in screen pixels for grip squares drawn on selected entities.
+  float gripSizePx = 4.f;
   /// Shift+RMB snap menu: next viewport pick uses this world point (then cleared on submit / cancel).
   bool pendingOneShotSnapValid = false;
   float pendingOneShotSnapX = 0.f;
