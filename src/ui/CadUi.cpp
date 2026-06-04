@@ -464,18 +464,6 @@ static void CollectAllDrawingLayers(const AppCommandState& cmd, std::vector<std:
   outSortedUnique->assign(layers.begin(), layers.end());
 }
 
-static void CollectAllDrawingColors(const AppCommandState& cmd, std::vector<std::string>* outSorted) {
-  std::set<std::string> colors;
-  colors.insert("ByLayer");
-  auto add = [&](const std::string& c) { if (!c.empty()) colors.insert(c); };
-  for (const auto& a : cmd.userLineAttrs)      add(a.color);
-  for (const auto& a : cmd.userCircleAttrs)    add(a.color);
-  for (const auto& a : cmd.userArcAttrs)       add(a.color);
-  for (const auto& a : cmd.userEllAttrs)       add(a.color);
-  for (const auto& a : cmd.userPolylineAttrs)  add(a.color);
-  for (const auto& a : cmd.cadAnnotationAttrs) add(a.color);
-  outSorted->assign(colors.begin(), colors.end());
-}
 
 static float RibbonSectionWidthPx(int nCols, float cellW) {
   const ImGuiStyle& st = ImGui::GetStyle();
@@ -1544,6 +1532,29 @@ static const NamedColorPreset kNamedColors[] = {
     {"Magenta", "Magenta", 1.f, 0.f, 1.f}, {"White", "White", 1.f, 1.f, 1.f}, {"Gray", "Gray", 0.5f, 0.5f, 0.5f},
     {"Black", "Black", 0.f, 0.f, 0.f},    {"Orange", "Orange", 1.f, 0.5f, 0.f},
 };
+
+// Full named palette first, then any custom color strings from entities not in the palette.
+// Each entry: { display label, storage string }.
+static void CollectQsColorOptions(const AppCommandState& cmd,
+                                   std::vector<std::pair<std::string, std::string>>* out) {
+  out->clear();
+  for (const auto& p : kNamedColors)
+    out->push_back({ p.label, p.storage });
+  std::set<std::string> known;
+  for (const auto& p : kNamedColors) known.insert(p.storage);
+  auto addExtra = [&](const std::string& c) {
+    if (!c.empty() && known.find(c) == known.end()) {
+      out->push_back({ c, c });
+      known.insert(c);
+    }
+  };
+  for (const auto& a : cmd.userLineAttrs)      addExtra(a.color);
+  for (const auto& a : cmd.userCircleAttrs)    addExtra(a.color);
+  for (const auto& a : cmd.userArcAttrs)       addExtra(a.color);
+  for (const auto& a : cmd.userEllAttrs)       addExtra(a.color);
+  for (const auto& a : cmd.userPolylineAttrs)  addExtra(a.color);
+  for (const auto& a : cmd.cadAnnotationAttrs) addExtra(a.color);
+}
 
 static const char* kEntityLinetypeLabels[] = {"By Layer", "By Block", "Continuous", "Dashed", "Hidden", "Center",
                                             "Phantom", "Divide", "Border"};
@@ -6733,22 +6744,23 @@ void DrawQuickSelectWindow(AppCommandState& cmd, std::vector<std::string>& log) 
       ImGui::EndCombo();
     }
   } else if (cmd.qsProperty == QP::Color) {
-    std::vector<std::string> colors;
-    CollectAllDrawingColors(cmd, &colors);
-    const std::string curVal = cmd.qsValueBuf;
-    if (std::find(colors.begin(), colors.end(), curVal) == colors.end() && !colors.empty())
-      std::snprintf(cmd.qsValueBuf, sizeof(cmd.qsValueBuf), "%s", colors[0].c_str());
-    // Find display label for the current value
-    auto colorLabel = [](const std::string& storage) -> const char* {
-      for (const auto& p : kNamedColors)
-        if (storage == p.storage) return p.label;
-      return storage.c_str();
-    };
-    if (ImGui::BeginCombo("##qs_val_color", colorLabel(cmd.qsValueBuf))) {
-      for (const auto& c : colors) {
-        const bool sel = (c == cmd.qsValueBuf);
-        if (ImGui::Selectable(colorLabel(c), sel))
-          std::snprintf(cmd.qsValueBuf, sizeof(cmd.qsValueBuf), "%s", c.c_str());
+    std::vector<std::pair<std::string, std::string>> colorOpts;
+    CollectQsColorOptions(cmd, &colorOpts);
+    // Ensure the stored value is valid; default to first option.
+    const std::string curStorage = cmd.qsValueBuf;
+    const bool curValid = std::any_of(colorOpts.begin(), colorOpts.end(),
+      [&](const std::pair<std::string,std::string>& p){ return p.second == curStorage; });
+    if (!curValid && !colorOpts.empty())
+      std::snprintf(cmd.qsValueBuf, sizeof(cmd.qsValueBuf), "%s", colorOpts[0].second.c_str());
+    // Find current display label for preview.
+    const char* preview = cmd.qsValueBuf;
+    for (const auto& opt : colorOpts)
+      if (opt.second == cmd.qsValueBuf) { preview = opt.first.c_str(); break; }
+    if (ImGui::BeginCombo("##qs_val_color", preview)) {
+      for (const auto& opt : colorOpts) {
+        const bool sel = (opt.second == cmd.qsValueBuf);
+        if (ImGui::Selectable(opt.first.c_str(), sel))
+          std::snprintf(cmd.qsValueBuf, sizeof(cmd.qsValueBuf), "%s", opt.second.c_str());
         if (sel) ImGui::SetItemDefaultFocus();
       }
       ImGui::EndCombo();
