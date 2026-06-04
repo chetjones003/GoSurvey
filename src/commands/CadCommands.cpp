@@ -2410,6 +2410,19 @@ static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outC
         accy += static_cast<double>(a.insY);
         ++n;
       }
+    } else if (e.type == SelectedEntity::Type::PdfUnderlay) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.pdfAttachments.size()) {
+        const PdfAttachment& patt = st.pdfAttachments[k];
+        constexpr float kPi = 3.14159265f;
+        const float cosR = std::cos(patt.rotationDeg * kPi / 180.f);
+        const float sinR = std::sin(patt.rotationDeg * kPi / 180.f);
+        const float hw   = patt.pageWidthPts  * patt.scale * 0.5f;
+        const float hh   = patt.pageHeightPts * patt.scale * 0.5f;
+        accx += static_cast<double>(patt.insertX + cosR * hw - sinR * hh);
+        accy += static_cast<double>(patt.insertY + sinR * hw + cosR * hh);
+        ++n;
+      }
     }
   }
   for (int si : st.selectedSurveyPointIndices) {
@@ -2494,6 +2507,25 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
         m = std::max(m, std::hypot(a.insX - bx, a.insY - by));
       } else
         m = std::max(m, std::hypot(a.insX - bx, a.insY - by));
+    } else if (e.type == SelectedEntity::Type::PdfUnderlay) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.pdfAttachments.size()) {
+        const PdfAttachment& patt = st.pdfAttachments[k];
+        if (patt.pageWidthPts > 0.f && patt.pageHeightPts > 0.f) {
+          constexpr float kPi = 3.14159265f;
+          const float cosR = std::cos(patt.rotationDeg * kPi / 180.f);
+          const float sinR = std::sin(patt.rotationDeg * kPi / 180.f);
+          const float W    = patt.pageWidthPts  * patt.scale;
+          const float H    = patt.pageHeightPts * patt.scale;
+          const float lcx[4] = {0.f, W, W, 0.f};
+          const float lcy[4] = {0.f, 0.f, H, H};
+          for (int ci = 0; ci < 4; ++ci) {
+            const float wx = patt.insertX + cosR * lcx[ci] - sinR * lcy[ci];
+            const float wy = patt.insertY + sinR * lcx[ci] + cosR * lcy[ci];
+            m = std::max(m, std::hypot(wx - bx, wy - by));
+          }
+        }
+      }
     }
   }
   for (int si : st.selectedSurveyPointIndices) {

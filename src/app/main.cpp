@@ -22,6 +22,7 @@
 #include <imgui_impl_opengl3.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <cstdint>
 #include <filesystem>
@@ -471,6 +472,60 @@ int main() {
     std::vector<PdfAttachment> pdfRenderList;
     if (!cmd.pdfAttachments.empty())
       pdfRenderList = cmd.pdfAttachments; // shallow copy of the vector (texIds stay valid)
+
+    // Live preview for selected PDF underlays during MOVE/COPY/ROTATE/SCALE.
+    {
+      using K  = AppCommandState::Kind;
+      using MP = AppCommandState::ModifyPhase;
+      const bool isMove   = (cmd.active == K::Move || cmd.active == K::Copy) &&
+                            cmd.modifyPhase == MP::NeedDestination;
+      const bool isRotate = cmd.active == K::Rotate;
+      const bool isScale  = cmd.active == K::Scale && cmd.modifyPhase == MP::NeedDestination;
+
+      float dx = 0.f, dy = 0.f, theta = 0.f, sc = 1.f;
+      bool hasPdfPreview = false;
+      if (isMove) {
+        dx = previewCx - cmd.modifyBaseX;
+        dy = previewCy - cmd.modifyBaseY;
+        hasPdfPreview = true;
+      } else if (isRotate) {
+        hasPdfPreview = CadRotatePreviewTheta(cmd, previewCx, previewCy, &theta);
+      } else if (isScale) {
+        hasPdfPreview = CadScalePreviewFactor(cmd, previewCx, previewCy, &sc);
+      }
+
+      if (hasPdfPreview) {
+        constexpr float kRadToDeg = 180.f / 3.14159265f;
+        const float cosT = std::cos(theta);
+        const float sinT = std::sin(theta);
+        const float bx   = isRotate ? cmd.rotateBaseX : cmd.modifyBaseX;
+        const float by   = isRotate ? cmd.rotateBaseY : cmd.modifyBaseY;
+        for (const auto& e : cmd.selection) {
+          if (e.type != SelectedEntity::Type::PdfUnderlay)
+            continue;
+          const size_t idx = static_cast<size_t>(e.index);
+          if (e.index < 0 || idx >= pdfRenderList.size())
+            continue;
+          PdfAttachment prev = pdfRenderList[idx]; // copy — modified insertX/Y/rot/scale only
+          if (isMove) {
+            prev.insertX += dx;
+            prev.insertY += dy;
+          } else if (isRotate) {
+            const float rpx  = prev.insertX - bx;
+            const float rpy  = prev.insertY - by;
+            prev.insertX      = bx + cosT * rpx - sinT * rpy;
+            prev.insertY      = by + sinT * rpx + cosT * rpy;
+            prev.rotationDeg += theta * kRadToDeg;
+          } else { // scale
+            prev.insertX = bx + sc * (prev.insertX - bx);
+            prev.insertY = by + sc * (prev.insertY - by);
+            prev.scale   = std::max(prev.scale * sc, 1e-9f);
+          }
+          prev.fade *= 0.6f; // dim the preview to distinguish it from the original
+          pdfRenderList.push_back(std::move(prev));
+        }
+      }
+    }
 
     activeRenderer.RenderScene(cmd.viewportPanX, cmd.viewportPanY, cmd.viewportZoom, fbW, fbH, cmd.userLinesFlat,
                          cmd.userCirclesCxCyR, cmd.cadGpuRevision,

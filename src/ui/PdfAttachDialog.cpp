@@ -187,13 +187,16 @@ bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log) {
   // --- Main dialog ---
   ImGui::SetNextWindowSize(ImVec2(560.f, 640.f), ImGuiCond_FirstUseEver);
   bool open = true;
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(14.f, 14.f));
   if (!ImGui::Begin("PDF Attach", &open, ImGuiWindowFlags_NoDocking)) {
+    ImGui::PopStyleVar();
     ImGui::End();
     if (!open) {
       CancelPdfAttachCommand(cmd, log);
     }
     return cmd.active == K::PdfAttach;
   }
+  ImGui::PopStyleVar();
   if (!open) {
     ImGui::End();
     CancelPdfAttachCommand(cmd, log);
@@ -202,7 +205,8 @@ bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log) {
 
   // --- File selection row ---
   ImGui::SeparatorText("PDF File");
-  ImGui::SetNextItemWidth(-80.f);
+  const float browseW = ImGui::CalcTextSize("Browse...").x + ImGui::GetStyle().FramePadding.x * 2.f;
+  ImGui::SetNextItemWidth(-(browseW + ImGui::GetStyle().ItemSpacing.x));
   bool pathChanged = false;
   if (ImGui::InputText("##PdfPath", cmd.pdfAttachFilePath,
                         sizeof(cmd.pdfAttachFilePath),

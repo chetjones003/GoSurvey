@@ -7203,7 +7203,7 @@ void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) 
 
   static char s_savePath[4096]{};
 
-  if (ImGui::Button("Save All & Close", ImVec2(148.f, 0))) {
+  if (ImGui::Button("Save All & Close", ImVec2(0, 0))) {
     bool allOk = true;
     for (const auto& e : dirty) {
       const bool isActive = (e.idx == cmd.activeDrawingIdx);
@@ -7238,13 +7238,13 @@ void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) 
   }
 
   ImGui::SameLine();
-  if (ImGui::Button("Close Without Saving", ImVec2(148.f, 0))) {
+  if (ImGui::Button("Close Without Saving", ImVec2(0, 0))) {
     cmd.closeConfirmed = true;
     ImGui::CloseCurrentPopup();
   }
 
   ImGui::SameLine();
-  if (ImGui::Button("Cancel", ImVec2(72.f, 0)))
+  if (ImGui::Button("Cancel", ImVec2(0, 0)))
     ImGui::CloseCurrentPopup();
 
   ImGui::EndPopup();
