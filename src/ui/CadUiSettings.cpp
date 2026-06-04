@@ -3,6 +3,7 @@
 
 #include "CadUi.hpp"
 #include "CadUiHelpers.hpp"
+#include "AppIcon.hpp"
 #include "SurveyPoints.hpp"
 #include "UserPrefs.hpp"
 #include "WinFileDialogs.hpp"
