@@ -654,6 +654,7 @@ struct AppCommandState {
   CreatePointsOptions createPointsOpts;
   int createPointsNextId = 1;
   bool showCreatePointsWindow = false;
+  bool showSelectionCyclingWindow = false;
   enum class SurveyInversePhase { WaitFrom, WaitTo } surveyInversePhase = SurveyInversePhase::WaitFrom;
   float surveyInverseFromX = 0.f;
   float surveyInverseFromY = 0.f;

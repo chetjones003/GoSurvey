@@ -3,9 +3,9 @@
 ## BUGS
 
 ## FEATURES
-- [ ] **[FEAT-004]** Selection cycling
+~~- [x] **[FEAT-004]** Selection cycling [COMPLETE]
     - I want a way if i have multiple items selected i can cycle through what is selected one
-      at a time by bringing up a window with the entities selected to toggle on or off the selection.
+      at a time by bringing up a window with the entities selected to toggle on or off the selection.~~
 
 - [ ] **[FEAT-005]** Quick Select
     - I want a QUICKSELECT (Alias QS) command that brings up a window that will allow me to choose

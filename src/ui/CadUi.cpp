@@ -426,6 +426,9 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
     if (ImGui::MenuItem("Reset layout", nullptr))
       cmd.pendingBuiltinDockLayoutReset = true;
     ImGuiLayout_DrawViewLayoutMenu(cmd, log);
+    ImGui::Separator();
+    if (ImGui::MenuItem("Selection...", nullptr))
+      cmd.showSelectionCyclingWindow = true;
     if (ImGui::MenuItem("Settings...", nullptr))
       cmd.showSettingsWindow = true;
     ImGui::EndMenu();
@@ -6242,6 +6245,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImGui::Separator();
         if (ImGui::MenuItem("Select similar"))
           SelectSimilarToCurrentSelection(cmd, &log);
+        if (ImGui::MenuItem("Selection..."))
+          cmd.showSelectionCyclingWindow = true;
         if (ImGui::MenuItem("Clear selection")) {
           ClearCadSelection(cmd);
           BumpCadGpuCache(cmd);
@@ -6323,6 +6328,120 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   cmd.viewportPanX = *panX;
   cmd.viewportPanY = *panY;
   cmd.viewportZoom = *zoom;
+
+  ImGui::End();
+}
+
+// Returns a display label for a SelectedEntity, e.g. "Line 3", "MTEXT 2".
+static void FormatSelectedEntityLabel(const AppCommandState& cmd, const SelectedEntity& e,
+                                      char* buf, size_t bufSize) {
+  using T = SelectedEntity::Type;
+  switch (e.type) {
+  case T::LineSeg:
+    std::snprintf(buf, bufSize, "Line %d", e.index + 1);
+    break;
+  case T::Circle:
+    std::snprintf(buf, bufSize, "Circle %d", e.index + 1);
+    break;
+  case T::Arc:
+    std::snprintf(buf, bufSize, "Arc %d", e.index + 1);
+    break;
+  case T::Ellipse:
+    std::snprintf(buf, bufSize, "Ellipse %d", e.index + 1);
+    break;
+  case T::Polyline:
+    std::snprintf(buf, bufSize, "Polyline %d", e.index + 1);
+    break;
+  case T::Annotation: {
+    const char* kindStr = "Annotation";
+    if (static_cast<size_t>(e.index) < cmd.cadAnnotations.size()) {
+      switch (cmd.cadAnnotations[static_cast<size_t>(e.index)].kind) {
+      case CadAnnotation::Kind::Text:       kindStr = "Text";             break;
+      case CadAnnotation::Kind::Mtext:      kindStr = "MText";            break;
+      case CadAnnotation::Kind::DimAligned: kindStr = "Dim (Aligned)";    break;
+      case CadAnnotation::Kind::DimLinear:  kindStr = "Dim (Linear)";     break;
+      case CadAnnotation::Kind::DimAngular: kindStr = "Dim (Angular)";    break;
+      }
+    }
+    std::snprintf(buf, bufSize, "%s %d", kindStr, e.index + 1);
+    break;
+  }
+  case T::PdfUnderlay:
+    std::snprintf(buf, bufSize, "PDF Underlay %d", e.index + 1);
+    break;
+  default:
+    std::snprintf(buf, bufSize, "Entity %d", e.index + 1);
+    break;
+  }
+}
+
+void DrawSelectionCyclingPanel(AppCommandState& cmd) {
+  if (!cmd.showSelectionCyclingWindow)
+    return;
+
+  const int nCad = static_cast<int>(cmd.selection.size());
+  const int nSurvey = static_cast<int>(cmd.selectedSurveyPointIndices.size());
+  const int total = nCad + nSurvey;
+
+  ImGui::SetNextWindowSize(ImVec2(280, 320), ImGuiCond_FirstUseEver);
+  bool open = cmd.showSelectionCyclingWindow;
+  if (!ImGui::Begin("Selection", &open, ImGuiWindowFlags_NoCollapse)) {
+    cmd.showSelectionCyclingWindow = open;
+    ImGui::End();
+    return;
+  }
+  cmd.showSelectionCyclingWindow = open;
+
+  char header[64];
+  std::snprintf(header, sizeof(header), "%d item%s selected", total, total == 1 ? "" : "s");
+  ImGui::TextDisabled("%s", header);
+  ImGui::Separator();
+
+  const float listH = ImGui::GetContentRegionAvail().y - ImGui::GetFrameHeightWithSpacing() - ImGui::GetStyle().ItemSpacing.y;
+  ImGui::BeginChild("##sel_list", ImVec2(0.f, listH), false);
+
+  // CAD entities — iterate backwards so erasing by index stays valid.
+  for (int i = nCad - 1; i >= 0; --i) {
+    const SelectedEntity& e = cmd.selection[static_cast<size_t>(i)];
+    char label[128];
+    FormatSelectedEntityLabel(cmd, e, label, sizeof(label));
+    bool checked = true;
+    ImGui::PushID(i);
+    if (ImGui::Checkbox(label, &checked) && !checked) {
+      cmd.selection.erase(cmd.selection.begin() + i);
+      EnsureAttrCounts(cmd);
+      BumpCadGpuCache(cmd);
+    }
+    ImGui::PopID();
+  }
+
+  // Survey points — iterate backwards for the same reason.
+  for (int i = nSurvey - 1; i >= 0; --i) {
+    const int spi = cmd.selectedSurveyPointIndices[static_cast<size_t>(i)];
+    char label[128];
+    if (static_cast<size_t>(spi) < cmd.surveyPoints.size()) {
+      const SurveyPoint& sp = cmd.surveyPoints[static_cast<size_t>(spi)];
+      if (!sp.description.empty())
+        std::snprintf(label, sizeof(label), "Survey Pt #%d (%s)", sp.id, sp.description.c_str());
+      else
+        std::snprintf(label, sizeof(label), "Survey Pt #%d", sp.id);
+    } else {
+      std::snprintf(label, sizeof(label), "Survey Pt %d", spi + 1);
+    }
+    bool checked = true;
+    ImGui::PushID(10000 + i);
+    if (ImGui::Checkbox(label, &checked) && !checked)
+      cmd.selectedSurveyPointIndices.erase(cmd.selectedSurveyPointIndices.begin() + i);
+    ImGui::PopID();
+  }
+
+  ImGui::EndChild();
+
+  ImGui::Separator();
+  if (ImGui::Button("Deselect All")) {
+    ClearCadSelection(cmd);
+    BumpCadGpuCache(cmd);
+  }
 
   ImGui::End();
 }

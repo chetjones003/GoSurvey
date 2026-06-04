@@ -380,6 +380,7 @@ int main() {
         ProcessCommandLineSubmit(cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd, cmdLog);
     }
 
+    DrawSelectionCyclingPanel(cmd);
     DrawCreatePointsPanel(cmd, cmdLog);
     DrawSettingsPanel(cmd, &cmdLog);
     ImGuiLayout_DrawLayoutPopups(cmd, cmdLog);

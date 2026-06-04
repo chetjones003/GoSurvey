@@ -47,6 +47,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
 void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 
+/// Floating panel listing all currently selected entities; each entry has a checkbox to deselect it.
+void DrawSelectionCyclingPanel(AppCommandState& cmd);
+
 void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 
 void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
