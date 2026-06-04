@@ -464,6 +464,19 @@ static void CollectAllDrawingLayers(const AppCommandState& cmd, std::vector<std:
   outSortedUnique->assign(layers.begin(), layers.end());
 }
 
+static void CollectAllDrawingColors(const AppCommandState& cmd, std::vector<std::string>* outSorted) {
+  std::set<std::string> colors;
+  colors.insert("ByLayer");
+  auto add = [&](const std::string& c) { if (!c.empty()) colors.insert(c); };
+  for (const auto& a : cmd.userLineAttrs)      add(a.color);
+  for (const auto& a : cmd.userCircleAttrs)    add(a.color);
+  for (const auto& a : cmd.userArcAttrs)       add(a.color);
+  for (const auto& a : cmd.userEllAttrs)       add(a.color);
+  for (const auto& a : cmd.userPolylineAttrs)  add(a.color);
+  for (const auto& a : cmd.cadAnnotationAttrs) add(a.color);
+  outSorted->assign(colors.begin(), colors.end());
+}
+
 static float RibbonSectionWidthPx(int nCols, float cellW) {
   const ImGuiStyle& st = ImGui::GetStyle();
   if (nCols <= 0)
@@ -6703,8 +6716,44 @@ void DrawQuickSelectWindow(AppCommandState& cmd, std::vector<std::string>& log) 
   ImGui::SameLine(120.f);
   ImGui::SetNextItemWidth(-FLT_MIN);
   ImGui::BeginDisabled(!needValue);
-  if (cmd.qsProperty == QP::Closed) {
-    // Special case: boolean, offer a combo
+  if (cmd.qsProperty == QP::Layer) {
+    std::vector<std::string> layers;
+    CollectAllDrawingLayers(cmd, &layers);
+    // Ensure current value is in the list; default to first entry.
+    const std::string curVal = cmd.qsValueBuf;
+    if (std::find(layers.begin(), layers.end(), curVal) == layers.end() && !layers.empty())
+      std::snprintf(cmd.qsValueBuf, sizeof(cmd.qsValueBuf), "%s", layers[0].c_str());
+    if (ImGui::BeginCombo("##qs_val_layer", cmd.qsValueBuf)) {
+      for (const auto& lay : layers) {
+        const bool sel = (lay == cmd.qsValueBuf);
+        if (ImGui::Selectable(lay.c_str(), sel))
+          std::snprintf(cmd.qsValueBuf, sizeof(cmd.qsValueBuf), "%s", lay.c_str());
+        if (sel) ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+  } else if (cmd.qsProperty == QP::Color) {
+    std::vector<std::string> colors;
+    CollectAllDrawingColors(cmd, &colors);
+    const std::string curVal = cmd.qsValueBuf;
+    if (std::find(colors.begin(), colors.end(), curVal) == colors.end() && !colors.empty())
+      std::snprintf(cmd.qsValueBuf, sizeof(cmd.qsValueBuf), "%s", colors[0].c_str());
+    // Find display label for the current value
+    auto colorLabel = [](const std::string& storage) -> const char* {
+      for (const auto& p : kNamedColors)
+        if (storage == p.storage) return p.label;
+      return storage.c_str();
+    };
+    if (ImGui::BeginCombo("##qs_val_color", colorLabel(cmd.qsValueBuf))) {
+      for (const auto& c : colors) {
+        const bool sel = (c == cmd.qsValueBuf);
+        if (ImGui::Selectable(colorLabel(c), sel))
+          std::snprintf(cmd.qsValueBuf, sizeof(cmd.qsValueBuf), "%s", c.c_str());
+        if (sel) ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+  } else if (cmd.qsProperty == QP::Closed) {
     static const char* kClosedOpts[] = { "Yes", "No" };
     int closedSel = (std::string(cmd.qsValueBuf) == "Yes" || std::string(cmd.qsValueBuf) == "yes") ? 0 : 1;
     if (ImGui::Combo("##qs_val_closed", &closedSel, kClosedOpts, 2))
