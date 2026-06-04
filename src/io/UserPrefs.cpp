@@ -134,6 +134,7 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   b  ("objectSnapGeometricCenter", &st.objectSnapGeometricCenter);
   num("objectSnapAperturePx",      &st.objectSnapAperturePx,  4.f, 64.f);
   num("objectSnapGlyphHalfPx",     &st.objectSnapGlyphHalfPx, 3.f, 48.f);
+  num("gripSizePx",                &st.gripSizePx,            2.f, 20.f);
 }
 
 } // namespace
@@ -278,6 +279,7 @@ void SaveUserStartupPrefs(const AppCommandState& st) {
   s["objectSnapGeometricCenter"]  = st.objectSnapGeometricCenter;
   s["objectSnapAperturePx"]       = st.objectSnapAperturePx;
   s["objectSnapGlyphHalfPx"]      = st.objectSnapGlyphHalfPx;
+  s["gripSizePx"]                 = st.gripSizePx;
 
   j["settings"] = std::move(s);
   try {

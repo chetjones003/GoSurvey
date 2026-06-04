@@ -307,7 +307,8 @@ void AppendPerpendicularFromRef(float refX, float refY, float wx, float wy, floa
 
 } // namespace
 
-Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActive, float tolWorld) {
+Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActive, float tolWorld,
+             SnapExclude exclude) {
   SnapPickAccum acc{};
 
   float refPx = 0.f;
@@ -317,6 +318,8 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   const auto& L = cmd.userLinesFlat;
   if (L.size() % 6 == 0) {
     for (size_t i = 0; i + 5 < L.size(); i += 6) {
+      if (exclude.valid && exclude.type == SelectedEntity::Type::LineSeg &&
+          exclude.index == static_cast<int>(i / 6)) continue;
       const float x0 = L[i];
       const float y0 = L[i + 1];
       const float x1 = L[i + 3];
@@ -335,6 +338,8 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   const auto& C = cmd.userCirclesCxCyR;
   if (C.size() % 3 == 0 && cmd.objectSnapCenter) {
     for (size_t i = 0; i + 2 < C.size(); i += 3) {
+      if (exclude.valid && exclude.type == SelectedEntity::Type::Circle &&
+          exclude.index == static_cast<int>(i / 3)) continue;
       const float cx = C[i];
       const float cy = C[i + 1];
       const float r = C[i + 2];
@@ -346,6 +351,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   const int polyCount =
       static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < polyCount; ++pi) {
+    if (exclude.valid && exclude.type == SelectedEntity::Type::Polyline && exclude.index == pi) continue;
     const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
     const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
     const bool closed =
@@ -380,7 +386,10 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   }
 
   constexpr int kArcSnapSeg = 24;
-  for (const CadArc& a : cmd.userArcs) {
+  for (size_t arcIdx = 0; arcIdx < cmd.userArcs.size(); ++arcIdx) {
+    if (exclude.valid && exclude.type == SelectedEntity::Type::Arc &&
+        exclude.index == static_cast<int>(arcIdx)) continue;
+    const CadArc& a = cmd.userArcs[arcIdx];
     if (a.r <= 1e-6f || kArcSnapSeg < 1)
       continue;
     const double dcx = static_cast<double>(a.cx);
@@ -417,7 +426,10 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
 
   constexpr int kEllSnapSeg = 36;
   constexpr float kTwoPi = 6.28318530718f;
-  for (const CadEllipse& el : cmd.userEllipses) {
+  for (size_t ellIdx = 0; ellIdx < cmd.userEllipses.size(); ++ellIdx) {
+    if (exclude.valid && exclude.type == SelectedEntity::Type::Ellipse &&
+        exclude.index == static_cast<int>(ellIdx)) continue;
+    const CadEllipse& el = cmd.userEllipses[ellIdx];
     const float ma = std::hypot(el.majVx, el.majVy);
     if (ma < 1e-8f || kEllSnapSeg < 3)
       continue;
@@ -893,8 +905,91 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     for (const SurveyPoint& sp : cmd.surveyPoints)
       PushSnapPickerEntry(sp.easting, sp.northing, Kind::SurveyCenter, sortWorldX, sortWorldY, out);
     break;
+  case Kind::Grip:
+    break; // grip snap points are per-selection, not gathered globally
   }
   SortDedupeSnapPicker(out);
+}
+
+Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorld) {
+  SnapPickAccum acc{};
+  const float tol2 = tolWorld * tolWorld;
+
+  auto gripCandidate = [&](float gx, float gy) {
+    const float dx = gx - static_cast<float>(wx);
+    const float dy = gy - static_cast<float>(wy);
+    if (dx * dx + dy * dy <= tol2)
+      ConsiderSnap(&acc, wx, wy, gx, gy, Kind::Grip, 0.f, tolWorld);
+  };
+
+  // CAD entity grips
+  for (const SelectedEntity& sel : cmd.selection) {
+    if (sel.type == SelectedEntity::Type::LineSeg) {
+      const size_t k = static_cast<size_t>(sel.index) * 6;
+      if (k + 5 < cmd.userLinesFlat.size()) {
+        gripCandidate(cmd.userLinesFlat[k],     cmd.userLinesFlat[k + 1]);
+        gripCandidate(cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4]);
+      }
+    } else if (sel.type == SelectedEntity::Type::Circle) {
+      const size_t k = static_cast<size_t>(sel.index) * 3;
+      if (k + 2 < cmd.userCirclesCxCyR.size()) {
+        const float cx = cmd.userCirclesCxCyR[k];
+        const float cy = cmd.userCirclesCxCyR[k + 1];
+        gripCandidate(cx, cy);
+        gripCandidate(cx + cmd.userCirclesCxCyR[k + 2], cy);
+      }
+    } else if (sel.type == SelectedEntity::Type::Polyline) {
+      const int np = static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+      if (sel.index >= 0 && sel.index < np) {
+        const int startV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index)];
+        const int endV   = cmd.userPolylineOffsets[static_cast<size_t>(sel.index + 1)];
+        for (int vi = 0; vi < endV - startV; ++vi) {
+          const size_t xIdx = static_cast<size_t>(startV + vi) * 3;
+          if (xIdx + 1 >= cmd.userPolylineVerts.size()) break;
+          gripCandidate(cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1]);
+        }
+      }
+    } else if (sel.type == SelectedEntity::Type::Arc) {
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
+        const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
+        const float endRad = a.startRad + a.sweepRad;
+        gripCandidate(a.cx, a.cy);
+        gripCandidate(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad));
+        gripCandidate(a.cx + a.r * std::cos(endRad),     a.cy + a.r * std::sin(endRad));
+      }
+    } else if (sel.type == SelectedEntity::Type::Ellipse) {
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
+        const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
+        const float perpX = -el.majVy, perpY = el.majVx;
+        gripCandidate(el.cx, el.cy);
+        gripCandidate(el.cx + el.majVx,            el.cy + el.majVy);
+        gripCandidate(el.cx + perpX * el.ratio,     el.cy + perpY * el.ratio);
+      }
+    } else if (sel.type == SelectedEntity::Type::Annotation) {
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadAnnotations.size()) {
+        const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(sel.index)];
+        if (a.kind == CadAnnotation::Kind::Mtext) {
+          if (a.surveyPointLabelFor >= 0) {
+            gripCandidate(0.5f * (a.boxMinX + a.boxMaxX), 0.5f * (a.boxMinY + a.boxMaxY));
+          } else {
+            gripCandidate(a.boxMinX, a.boxMinY);
+            gripCandidate(a.boxMaxX, a.boxMinY);
+            gripCandidate(a.boxMaxX, a.boxMaxY);
+            gripCandidate(a.boxMinX, a.boxMaxY);
+          }
+        }
+      }
+    }
+  }
+
+  // Survey point grips (selected survey points)
+  for (const int idx : cmd.selectedSurveyPointIndices) {
+    if (idx >= 0 && static_cast<size_t>(idx) < cmd.surveyPoints.size())
+      gripCandidate(cmd.surveyPoints[static_cast<size_t>(idx)].easting,
+                    cmd.surveyPoints[static_cast<size_t>(idx)].northing);
+  }
+
+  return acc.best;
 }
 
 } // namespace CadSnap

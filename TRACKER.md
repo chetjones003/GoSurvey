@@ -3,15 +3,6 @@
 ## BUGS
 
 ## FEATURES
-~~- [x] **[FEAT-005]** Quick Select [COMPLETE]
-    - I want a QUICKSELECT (Alias QS) command that brings up a window that will allow me to choose
-      to apply to entire drawing or select an area in the drawing. specify object type, specify properties
-      to select, operator (=, <, >, select all), value.~~
-
-- [ ] **[FEAT-006]** Grip Sizes and Multiple Grips
-    - grips should be blue
-    - I want a way in the settings menu to change the size of grips
-    - If i have multiple objects selected the grips should should show for all objects
 
 # COMPLETED
 
@@ -100,3 +91,14 @@
 ~~- [x] **[FEAT-004]** Selection cycling [COMPLETE]
     - I want a way if i have multiple items selected i can cycle through what is selected one
       at a time by bringing up a window with the entities selected to toggle on or off the selection.~~
+
+~~- [x] **[FEAT-005]** Quick Select [COMPLETE]
+    - I want a QUICKSELECT (Alias QS) command that brings up a window that will allow me to choose
+      to apply to entire drawing or select an area in the drawing. specify object type, specify properties
+      to select, operator (=, <, >, select all), value.~~
+
+~~- [x] **[FEAT-006]** Grip Sizes and Multiple Grips [COMPLETE]
+    - grips should be blue
+    - I want a way in the settings menu to change the size of grips
+    - If i have multiple objects selected the grips should should show for all objects
+    - also cursor should snap to grips~~

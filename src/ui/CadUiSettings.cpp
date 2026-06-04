@@ -579,6 +579,16 @@ static void DrawSettingsUserPrefsTab(AppCommandState& cmd) {
     DrawUserPrefsDimensions(cmd);
 }
 
+static void DrawSettingsSelectionTab(AppCommandState& cmd) {
+  ImGui::TextUnformatted("Selection"); ImGui::Separator();
+  if (ImGui::CollapsingHeader("Grips", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::TextWrapped("Grips appear as blue squares on selected entities and can be snapped to.");
+    ImGui::Spacing();
+    ImGui::SliderFloat("Grip size (px)", &cmd.gripSizePx, 2.f, 20.f, "%.1f");
+    cmd.gripSizePx = std::clamp(cmd.gripSizePx, 2.f, 20.f);
+  }
+}
+
 static void DrawSettingsPlaceholderTab(const char* title, const char* description) {
   ImGui::TextUnformatted(title); ImGui::Separator();
   ImGui::TextWrapped("%s", description); ImGui::Spacing();
@@ -609,7 +619,7 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
       if (ImGui::BeginTabItem("User Preferences")){ cmd.settingsActiveTabIdx = 5; DrawSettingsUserPrefsTab(cmd);                                                        ImGui::EndTabItem(); }
       if (ImGui::BeginTabItem("Drafting"))       { cmd.settingsActiveTabIdx = 6; DrawSettingsDraftingTab(cmd);                                                         ImGui::EndTabItem(); }
       if (ImGui::BeginTabItem("3D Modeling"))    { cmd.settingsActiveTabIdx = 7; DrawSettingsPlaceholderTab("3D Modeling", "GoSurvey is 2D; 3D options are reserved."); ImGui::EndTabItem(); }
-      if (ImGui::BeginTabItem("Selection"))      { cmd.settingsActiveTabIdx = 8; DrawSettingsPlaceholderTab("Selection", "Pickbox / grip size options.");               ImGui::EndTabItem(); }
+      if (ImGui::BeginTabItem("Selection"))      { cmd.settingsActiveTabIdx = 8; DrawSettingsSelectionTab(cmd);                                                       ImGui::EndTabItem(); }
       if (ImGui::BeginTabItem("Profiles"))       { cmd.settingsActiveTabIdx = 9; DrawSettingsPlaceholderTab("Profiles", "Saved option profiles. Current: <<GoSurvey>>.");ImGui::EndTabItem(); }
       if (ImGui::BeginTabItem("AEC Editor"))     { cmd.settingsActiveTabIdx = 10; DrawSettingsPlaceholderTab("AEC Editor", "Civil/AEC-specific editor preferences.");   ImGui::EndTabItem(); }
       ImGui::EndTabBar();

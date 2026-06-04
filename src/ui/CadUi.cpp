@@ -4366,6 +4366,8 @@ static const char* SnapKindLabelForUi(CadSnap::Kind k) {
     return "Survey";
   case CadSnap::Kind::GeometricCenter:
     return "Geo center";
+  case CadSnap::Kind::Grip:
+    return "Grip";
   }
   return "Snap";
 }
@@ -4445,7 +4447,7 @@ static void ApplyGripMagnetToGrips(AppCommandState& cmd, double rawX, double raw
     cmd.viewportSnapPickWorldY = by;
     if (out_snap) {
       out_snap->valid = true;
-      out_snap->kind = CadSnap::Kind::Endpoint;
+      out_snap->kind = CadSnap::Kind::Grip;
       out_snap->x = bx;
       out_snap->y = by;
     }
@@ -4740,16 +4742,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
     } else {
       cmd.viewportSnapPickValid = false;
-      const bool snapViewportActive =
-          cmd.objectSnapEnabled &&
-          (cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
-           cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive);
+      const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
+                          cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
+      const bool snapViewportActive = cmd.objectSnapEnabled && midCmd;
       CadSnap::Hit snap{};
       if (snapViewportActive) {
         const float tol = CadSnap::WorldToleranceFromPixels(avail.y, halfH, cmd.objectSnapAperturePx);
-        const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
-                            cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
-        snap = CadSnap::FindBest(rawX, rawY, cmd, midCmd, tol);
+        CadSnap::SnapExclude exclude{};
+        if (cmd.entityGripMoveActive && cmd.entityGripEntityIndex >= 0) {
+          exclude.valid = true;
+          exclude.type  = cmd.entityGripType;
+          exclude.index = cmd.entityGripEntityIndex;
+        }
+        snap = CadSnap::FindBest(rawX, rawY, cmd, midCmd, tol, exclude);
         if (snap.valid) {
           cmd.viewportSnapPickValid = true;
           cmd.viewportSnapPickWorldX = snap.x;
@@ -4784,8 +4789,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
     }
     if (!cmd.pendingOneShotSnapValid && outCursorX && outCursorY &&
-        !cmd.dimGripMoveActive && !cmd.entityGripMoveActive && !cmd.mtextGripMoveActive)
+        !cmd.dimGripMoveActive && !cmd.entityGripMoveActive && !cmd.mtextGripMoveActive) {
       ApplyGripMagnetToGrips(cmd, rawX, rawY, halfH, avail.y, outCursorX, outCursorY, out_snap);
+      // Silent grip snap for all selected entities — no glyph, works regardless of OSNAP toggle.
+      if (!cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty()) {
+        const float gripTol = CadSnap::WorldToleranceFromPixels(avail.y, halfH, cmd.objectSnapAperturePx);
+        const CadSnap::Hit gs = CadSnap::FindGripSnap(rawX, rawY, cmd, gripTol);
+        if (gs.valid && outCursorX && outCursorY) {
+          *outCursorX = gs.x;
+          *outCursorY = gs.y;
+          // Intentionally do NOT set viewportSnapPickValid or out_snap — grip snap is silent.
+        }
+      }
+    }
   }
 
   // MTEXT box grips: first click arms; snapped cursor updates box live; second LMB commits (like dim / entity grips).
@@ -4866,8 +4882,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // (same pattern as dim grips). RMB / ESC restore originals.
   if (cmd.entityGripMoveActive && cmd.entityGripEntityIndex >= 0 && outCursorX && outCursorY && hovered &&
       mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
-    const float curWx = cmd.viewportSnapPickValid ? cmd.viewportSnapPickWorldX : *outCursorX;
-    const float curWy = cmd.viewportSnapPickValid ? cmd.viewportSnapPickWorldY : *outCursorY;
+    // Snap to other geometry if OSNAP fired (entity's own geometry is excluded); otherwise raw cursor.
+    const float curWx = cmd.viewportSnapPickValid
+        ? cmd.viewportSnapPickWorldX
+        : (outCursorRawX ? static_cast<float>(*outCursorRawX) : static_cast<float>(*outCursorX));
+    const float curWy = cmd.viewportSnapPickValid
+        ? cmd.viewportSnapPickWorldY
+        : (outCursorRawY ? static_cast<float>(*outCursorRawY) : static_cast<float>(*outCursorY));
     const int idx = cmd.entityGripEntityIndex;
     switch (cmd.entityGripType) {
       case SelectedEntity::Type::LineSeg: {
@@ -5270,8 +5291,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         handled = true;
       }
 
-      if (!handled && cmd.selection.size() == 1) {
-        const SelectedEntity sel = cmd.selection[0];
+      if (!handled && !cmd.selection.empty()) {
         const double denx = worldRight - worldLeft + 1e-12;
         const double deny = worldTop - worldBottom + 1e-12;
         auto wtsRel = [&](double wx, double wy) -> ImVec2 {
@@ -5284,176 +5304,84 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float r2 = gripHitPx * gripHitPx;
         float bestD2 = r2;
         int bestWhich = -1;
+        SelectedEntity bestSel{};
 
-        switch (sel.type) {
-        case SelectedEntity::Type::LineSeg: {
-          const size_t k = static_cast<size_t>(sel.index) * 6;
-          if (k + 5 < cmd.userLinesFlat.size()) {
-            const float x0 = cmd.userLinesFlat[k];
-            const float y0 = cmd.userLinesFlat[k + 1];
-            const float x1 = cmd.userLinesFlat[k + 3];
-            const float y1 = cmd.userLinesFlat[k + 4];
-            {
-              ImVec2 p0 = wtsRel(x0, y0);
-              const float dx = mx - p0.x, dy = my - p0.y;
-              const float d2 = dx * dx + dy * dy;
-              if (d2 <= bestD2) {
-                bestD2 = d2;
-                bestWhich = 0;
-              }
-            }
-            {
-              ImVec2 p1 = wtsRel(x1, y1);
-              const float dx = mx - p1.x, dy = my - p1.y;
-              const float d2 = dx * dx + dy * dy;
-              if (d2 <= bestD2) {
-                bestD2 = d2;
-                bestWhich = 1;
-              }
-            }
-          }
-          break;
-        }
-        case SelectedEntity::Type::Circle: {
-          const size_t k = static_cast<size_t>(sel.index) * 3;
-          if (k + 2 < cmd.userCirclesCxCyR.size()) {
-            const float cx = cmd.userCirclesCxCyR[k];
-            const float cy = cmd.userCirclesCxCyR[k + 1];
-            const float r = cmd.userCirclesCxCyR[k + 2];
-            {
-              ImVec2 pc = wtsRel(cx, cy);
-              const float dx = mx - pc.x, dy = my - pc.y;
-              const float d2 = dx * dx + dy * dy;
-              if (d2 <= bestD2) {
-                bestD2 = d2;
-                bestWhich = 0;
-              }
-            }
-            {
-              ImVec2 pr = wtsRel(cx + r, cy);
-              const float dx = mx - pr.x, dy = my - pr.y;
-              const float d2 = dx * dx + dy * dy;
-              if (d2 <= bestD2) {
-                bestD2 = d2;
-                bestWhich = 1;
-              }
-            }
-          }
-          break;
-        }
-        case SelectedEntity::Type::Polyline: {
-          const int np = cmd.userPolylineOffsets.size() > 0 ? static_cast<int>(cmd.userPolylineOffsets.size() - 1) : 0;
-          if (sel.index >= 0 && sel.index < np) {
-            const int startV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index)];
-            const int endV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index + 1)];
-            const int nV = std::max(0, endV - startV);
-            for (int vi = 0; vi < nV; ++vi) {
-              const size_t xIdx = static_cast<size_t>(startV + vi) * 3;
-              if (xIdx + 1 >= cmd.userPolylineVerts.size())
-                continue;
-              const float x = cmd.userPolylineVerts[xIdx];
-              const float y = cmd.userPolylineVerts[xIdx + 1];
-              ImVec2 p = wtsRel(x, y);
-              const float dx = mx - p.x, dy = my - p.y;
-              const float d2 = dx * dx + dy * dy;
-              if (d2 <= bestD2) {
-                bestD2 = d2;
-                bestWhich = vi;
-              }
-            }
-          }
-          break;
-        }
-        case SelectedEntity::Type::Arc: {
-          if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
-            const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
-            const float startX = a.cx + a.r * std::cos(a.startRad);
-            const float startY = a.cy + a.r * std::sin(a.startRad);
-            const float endRad = a.startRad + a.sweepRad;
-            const float endX = a.cx + a.r * std::cos(endRad);
-            const float endY = a.cy + a.r * std::sin(endRad);
-            {
-              ImVec2 pc = wtsRel(a.cx, a.cy);
-              const float dx = mx - pc.x, dy = my - pc.y;
-              const float d2 = dx * dx + dy * dy;
-              if (d2 <= bestD2) {
-                bestD2 = d2;
-                bestWhich = 0;
-              }
-            }
-            {
-              ImVec2 ps = wtsRel(startX, startY);
-              const float dx = mx - ps.x, dy = my - ps.y;
-              const float d2 = dx * dx + dy * dy;
-              if (d2 <= bestD2) {
-                bestD2 = d2;
-                bestWhich = 1;
-              }
-            }
-            {
-              ImVec2 pe = wtsRel(endX, endY);
-              const float dx = mx - pe.x, dy = my - pe.y;
-              const float d2 = dx * dx + dy * dy;
-              if (d2 <= bestD2) {
-                bestD2 = d2;
-                bestWhich = 2;
-              }
-            }
-          }
-          break;
-        }
-        case SelectedEntity::Type::Ellipse: {
-          if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
-            const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
-            const ImVec2 pC = wtsRel(el.cx, el.cy);
-            const float dxC = mx - pC.x, dyC = my - pC.y;
-            const float d2c = dxC * dxC + dyC * dyC;
-            if (d2c <= bestD2) {
-              bestD2 = d2c;
-              bestWhich = 0;
-            }
+        auto tryGrip = [&](const SelectedEntity& sel, float gx, float gy, int which) {
+          ImVec2 p = wtsRel(gx, gy);
+          const float dx = mx - p.x, dy = my - p.y;
+          const float d2 = dx * dx + dy * dy;
+          if (d2 < bestD2) { bestD2 = d2; bestWhich = which; bestSel = sel; }
+        };
 
-            const float majX = el.cx + el.majVx;
-            const float majY = el.cy + el.majVy;
-            {
-              ImVec2 pM = wtsRel(majX, majY);
-              const float dx = mx - pM.x, dy = my - pM.y;
-              const float d2 = dx * dx + dy * dy;
-              if (d2 <= bestD2) {
-                bestD2 = d2;
-                bestWhich = 1;
-              }
+        for (const SelectedEntity& sel : cmd.selection) {
+          switch (sel.type) {
+          case SelectedEntity::Type::LineSeg: {
+            const size_t k = static_cast<size_t>(sel.index) * 6;
+            if (k + 5 < cmd.userLinesFlat.size()) {
+              tryGrip(sel, cmd.userLinesFlat[k],     cmd.userLinesFlat[k + 1], 0);
+              tryGrip(sel, cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4], 1);
             }
-            const float perpX = -el.majVy;
-            const float perpY = el.majVx;
-            const float minX = el.cx + perpX * el.ratio;
-            const float minY = el.cy + perpY * el.ratio;
-            {
-              ImVec2 pN = wtsRel(minX, minY);
-              const float dx = mx - pN.x, dy = my - pN.y;
-              const float d2 = dx * dx + dy * dy;
-              if (d2 <= bestD2) {
-                bestD2 = d2;
-                bestWhich = 2;
-              }
-            }
+            break;
           }
-          break;
-        }
-        default:
-          break;
+          case SelectedEntity::Type::Circle: {
+            const size_t k = static_cast<size_t>(sel.index) * 3;
+            if (k + 2 < cmd.userCirclesCxCyR.size()) {
+              const float cx = cmd.userCirclesCxCyR[k];
+              const float cy = cmd.userCirclesCxCyR[k + 1];
+              const float r  = cmd.userCirclesCxCyR[k + 2];
+              tryGrip(sel, cx,     cy, 0);
+              tryGrip(sel, cx + r, cy, 1);
+            }
+            break;
+          }
+          case SelectedEntity::Type::Polyline: {
+            const int np = cmd.userPolylineOffsets.size() > 0 ? static_cast<int>(cmd.userPolylineOffsets.size() - 1) : 0;
+            if (sel.index >= 0 && sel.index < np) {
+              const int startV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index)];
+              const int endV   = cmd.userPolylineOffsets[static_cast<size_t>(sel.index + 1)];
+              for (int vi = 0; vi < endV - startV; ++vi) {
+                const size_t xIdx = static_cast<size_t>(startV + vi) * 3;
+                if (xIdx + 1 >= cmd.userPolylineVerts.size()) break;
+                tryGrip(sel, cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1], vi);
+              }
+            }
+            break;
+          }
+          case SelectedEntity::Type::Arc: {
+            if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
+              const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
+              const float endRad = a.startRad + a.sweepRad;
+              tryGrip(sel, a.cx, a.cy, 0);
+              tryGrip(sel, a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), 1);
+              tryGrip(sel, a.cx + a.r * std::cos(endRad),     a.cy + a.r * std::sin(endRad),     2);
+            }
+            break;
+          }
+          case SelectedEntity::Type::Ellipse: {
+            if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
+              const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
+              const float perpX = -el.majVy, perpY = el.majVx;
+              tryGrip(sel, el.cx,                                 el.cy,                                 0);
+              tryGrip(sel, el.cx + el.majVx,                     el.cy + el.majVy,                     1);
+              tryGrip(sel, el.cx + perpX * el.ratio,              el.cy + perpY * el.ratio,              2);
+            }
+            break;
+          }
+          default:
+            break;
+          }
         }
 
         if (bestWhich >= 0) {
           cmd.entityGripMoveActive = true;
-          cmd.entityGripType = sel.type;
-          cmd.entityGripEntityIndex = sel.index;
+          cmd.entityGripType = bestSel.type;
+          cmd.entityGripEntityIndex = bestSel.index;
           cmd.entityGripWhich = bestWhich;
 
           // Store originals for RMB cancel.
-          switch (sel.type) {
+          switch (bestSel.type) {
           case SelectedEntity::Type::LineSeg: {
-            const size_t k = static_cast<size_t>(sel.index) * 6;
+            const size_t k = static_cast<size_t>(bestSel.index) * 6;
             cmd.entityGripOrigX0 = cmd.userLinesFlat[k];
             cmd.entityGripOrigY0 = cmd.userLinesFlat[k + 1];
             cmd.entityGripOrigX1 = cmd.userLinesFlat[k + 3];
@@ -5461,34 +5389,34 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             break;
           }
           case SelectedEntity::Type::Circle: {
-            const size_t k = static_cast<size_t>(sel.index) * 3;
+            const size_t k = static_cast<size_t>(bestSel.index) * 3;
             cmd.entityGripOrigCx = cmd.userCirclesCxCyR[k];
             cmd.entityGripOrigCy = cmd.userCirclesCxCyR[k + 1];
-            cmd.entityGripOrigR = cmd.userCirclesCxCyR[k + 2];
+            cmd.entityGripOrigR  = cmd.userCirclesCxCyR[k + 2];
             break;
           }
           case SelectedEntity::Type::Polyline: {
-            const int startV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index)];
+            const int startV  = cmd.userPolylineOffsets[static_cast<size_t>(bestSel.index)];
             const int globalV = startV + bestWhich;
             const size_t xIdx = static_cast<size_t>(globalV) * 3;
             cmd.entityGripOrigPolylineXIdx = static_cast<int>(xIdx);
-            cmd.entityGripOrigPolyVertX = cmd.userPolylineVerts[xIdx];
-            cmd.entityGripOrigPolyVertY = cmd.userPolylineVerts[xIdx + 1];
+            cmd.entityGripOrigPolyVertX    = cmd.userPolylineVerts[xIdx];
+            cmd.entityGripOrigPolyVertY    = cmd.userPolylineVerts[xIdx + 1];
             break;
           }
           case SelectedEntity::Type::Arc: {
-            const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
-            cmd.entityGripOrigCx = a.cx;
-            cmd.entityGripOrigCy = a.cy;
-            cmd.entityGripOrigR = a.r;
+            const CadArc& a = cmd.userArcs[static_cast<size_t>(bestSel.index)];
+            cmd.entityGripOrigCx       = a.cx;
+            cmd.entityGripOrigCy       = a.cy;
+            cmd.entityGripOrigR        = a.r;
             cmd.entityGripOrigStartRad = a.startRad;
             cmd.entityGripOrigSweepRad = a.sweepRad;
             break;
           }
           case SelectedEntity::Type::Ellipse: {
-            const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
-            cmd.entityGripOrigEllCx = el.cx;
-            cmd.entityGripOrigEllCy = el.cy;
+            const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(bestSel.index)];
+            cmd.entityGripOrigEllCx    = el.cx;
+            cmd.entityGripOrigEllCy    = el.cy;
             cmd.entityGripOrigEllMajVx = el.majVx;
             cmd.entityGripOrigEllMajVy = el.majVy;
             cmd.entityGripOrigEllRatio = el.ratio;
@@ -5718,8 +5646,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     constexpr ImU32 kAnnTfPrevCol = IM_COL32(160, 220, 255, 130);
     constexpr ImU32 kMtextDraftCol = IM_COL32(210, 200, 140, 200);
     constexpr ImU32 kAnnSelCol = IM_COL32(120, 200, 255, 255);
-    constexpr ImU32 kGripFill = IM_COL32(255, 255, 255, 255);
-    constexpr ImU32 kGripBorder = IM_COL32(60, 120, 220, 255);
+    constexpr ImU32 kGripFill = IM_COL32(59, 130, 246, 255);
+    constexpr ImU32 kGripBorder = IM_COL32(30, 64, 175, 255);
     ImFont* font = ImGui::GetFont();
 
     auto drawAnnotationVisual = [&](const CadAnnotation& a, const EntityAttributes* attrPtr, ImU32 colFallback) {
@@ -5957,7 +5885,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         drawAnnotationVisual(d, nullptr, kAnnTfPrevCol);
     }
 
-    const float gripHalf = 4.f;
+    const float gripHalf = cmd.gripSizePx;
     for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
       const CadAnnotation& a = cmd.cadAnnotations[ai];
       if (a.kind != CadAnnotation::Kind::Mtext || !isAnnSelected(ai))
@@ -5973,10 +5901,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float ry1 = std::max(sa.y, sb.y);
         dl->AddRect(ImVec2(rx0, ry0), ImVec2(rx1, ry1), kAnnSelCol, 0.f, 0, 2.f);
       }
-      const bool singleSel = cmd.selection.size() == 1 && cmd.selection[0].type == SelectedEntity::Type::Annotation &&
-                             cmd.selection[0].index == static_cast<int>(ai);
-      if (!singleSel)
-        continue;
       if (a.surveyPointLabelFor >= 0) {
         const float cx = 0.5f * (a.boxMinX + a.boxMaxX);
         const float cy = 0.5f * (a.boxMinY + a.boxMaxY);
@@ -6004,10 +5928,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const CadAnnotation& a = cmd.cadAnnotations[ai];
       if ((a.kind != CadAnnotation::Kind::DimAligned && a.kind != CadAnnotation::Kind::DimLinear) ||
           !isAnnSelected(ai))
-        continue;
-      const bool singleSel = cmd.selection.size() == 1 && cmd.selection[0].type == SelectedEntity::Type::Annotation &&
-                             cmd.selection[0].index == static_cast<int>(ai);
-      if (!singleSel)
         continue;
       float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
       if (!CadDimAnyGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
@@ -6070,39 +5990,36 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   }
 
   // --- CAD ENTITY GRIPS (viewport direct edit) ---
-  if (cmd.selection.size() == 1) {
-    const SelectedEntity sel = cmd.selection[0];
-    if (sel.type == SelectedEntity::Type::LineSeg || sel.type == SelectedEntity::Type::Circle ||
-        sel.type == SelectedEntity::Type::Polyline || sel.type == SelectedEntity::Type::Arc ||
-        sel.type == SelectedEntity::Type::Ellipse) {
-      ImDrawList* dlG = ImGui::GetWindowDrawList();
-      constexpr float gripHalf = 4.f;
-      constexpr ImU32 kGripFill = IM_COL32(255, 255, 255, 255);
-      constexpr ImU32 kGripBorder = IM_COL32(60, 120, 220, 255);
+  if (!cmd.selection.empty()) {
+    ImDrawList* dlG = ImGui::GetWindowDrawList();
+    const float gripHalf = cmd.gripSizePx;
+    constexpr ImU32 kGripFillE = IM_COL32(59, 130, 246, 255);
+    constexpr ImU32 kGripBorderE = IM_COL32(30, 64, 175, 255);
 
-      const float denx = worldRight - worldLeft + 1e-12f;
-      const float deny = worldTop - worldBottom + 1e-12f;
-      auto wts = [&](float wx, float wy, ImVec2* o) {
-        const float u = (wx - worldLeft) / denx;
-        const float v = (worldTop - wy) / deny;
-        o->x = imgPos.x + u * avail.x;
-        o->y = imgPos.y + v * avail.y;
-      };
+    const float denx = worldRight - worldLeft + 1e-12f;
+    const float deny = worldTop - worldBottom + 1e-12f;
+    auto wts = [&](float wx, float wy, ImVec2* o) {
+      const float u = (wx - worldLeft) / denx;
+      const float v = (worldTop - wy) / deny;
+      o->x = imgPos.x + u * avail.x;
+      o->y = imgPos.y + v * avail.y;
+    };
 
-      auto drawGrip = [&](float wx, float wy) {
-        ImVec2 gp{};
-        wts(wx, wy, &gp);
-        dlG->AddRectFilled(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf),
-                            kGripFill);
-        dlG->AddRect(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf),
-                     kGripBorder, 0.f, 0, 1.f);
-      };
+    auto drawGrip = [&](float wx, float wy) {
+      ImVec2 gp{};
+      wts(wx, wy, &gp);
+      dlG->AddRectFilled(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf),
+                          kGripFillE);
+      dlG->AddRect(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf),
+                   kGripBorderE, 0.f, 0, 1.f);
+    };
 
+    for (const SelectedEntity& sel : cmd.selection) {
       if (sel.type == SelectedEntity::Type::LineSeg) {
         const size_t k = static_cast<size_t>(sel.index) * 6;
         if (k + 5 < cmd.userLinesFlat.size()) {
-          drawGrip(cmd.userLinesFlat[k], cmd.userLinesFlat[k + 1]);        // start
-          drawGrip(cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4]);    // end
+          drawGrip(cmd.userLinesFlat[k], cmd.userLinesFlat[k + 1]);
+          drawGrip(cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4]);
         }
       } else if (sel.type == SelectedEntity::Type::Circle) {
         const size_t k = static_cast<size_t>(sel.index) * 3;
@@ -6110,8 +6027,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const float cx = cmd.userCirclesCxCyR[k];
           const float cy = cmd.userCirclesCxCyR[k + 1];
           const float r = cmd.userCirclesCxCyR[k + 2];
-          drawGrip(cx, cy);       // center
-          drawGrip(cx + r, cy);  // radius handle (along +X)
+          drawGrip(cx, cy);
+          drawGrip(cx + r, cy);
         }
       } else if (sel.type == SelectedEntity::Type::Polyline) {
         const int np = cmd.userPolylineOffsets.size() > 0 ? static_cast<int>(cmd.userPolylineOffsets.size() - 1) : 0;
@@ -6128,19 +6045,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else if (sel.type == SelectedEntity::Type::Arc) {
         if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
           const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
-          drawGrip(a.cx, a.cy); // center
-          drawGrip(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad)); // start
+          drawGrip(a.cx, a.cy);
+          drawGrip(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad));
           const float endRad = a.startRad + a.sweepRad;
-          drawGrip(a.cx + a.r * std::cos(endRad), a.cy + a.r * std::sin(endRad));       // end
+          drawGrip(a.cx + a.r * std::cos(endRad), a.cy + a.r * std::sin(endRad));
         }
       } else if (sel.type == SelectedEntity::Type::Ellipse) {
         if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
           const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
-          drawGrip(el.cx, el.cy); // center
-          drawGrip(el.cx + el.majVx, el.cy + el.majVy); // major endpoint
+          drawGrip(el.cx, el.cy);
+          drawGrip(el.cx + el.majVx, el.cy + el.majVy);
           const float perpX = -el.majVy;
           const float perpY = el.majVx;
-          drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio); // minor endpoint
+          drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio);
         }
       }
     }

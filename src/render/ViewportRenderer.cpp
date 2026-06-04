@@ -478,6 +478,8 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, float halfWorld, int fbHeig
     AppendSnapSquareOutline(out, sx, sy, zSnap, mh);
     AppendSnapCrossInSquare(out, sx, sy, zSnap, mh * 0.55f);
     break;
+  case CadSnap::Kind::Grip:
+    break; // grip snap is silent — no glyph drawn
   }
 }
 
