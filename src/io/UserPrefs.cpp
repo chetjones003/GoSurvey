@@ -11,28 +11,12 @@
 #include <fstream>
 #include <filesystem>
 
-#ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#endif
-
 namespace {
 
 std::filesystem::path UserPrefsJsonPath() {
-#ifdef _WIN32
-  wchar_t appdata[MAX_PATH];
-  if (GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH) > 0)
-    return std::filesystem::path(appdata) / "GoSurvey" / "gosurvey-user.json";
-#elif defined(__APPLE__)
-  if (const char* home = getenv("HOME"))
-    return std::filesystem::path(home) / "Library" / "Application Support" / "GoSurvey" / "gosurvey-user.json";
-#else
-  if (const char* xdg = getenv("XDG_CONFIG_HOME"); xdg && xdg[0])
-    return std::filesystem::path(xdg) / "GoSurvey" / "gosurvey-user.json";
-  if (const char* home = getenv("HOME"))
-    return std::filesystem::path(home) / ".config" / "GoSurvey" / "gosurvey-user.json";
-#endif
+  const std::filesystem::path dir = UserDataDirectory();
+  if (!dir.empty())
+    return dir / "gosurvey-user.json";
   const std::filesystem::path exeDir = AppExecutableDirectory();
   if (!exeDir.empty())
     return exeDir / "gosurvey-user.json";

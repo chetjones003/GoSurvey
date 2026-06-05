@@ -44,6 +44,23 @@ std::filesystem::path AppExecutableDirectory() {
 #endif
 }
 
+std::filesystem::path UserDataDirectory() {
+#ifdef _WIN32
+  wchar_t appdata[MAX_PATH];
+  if (GetEnvironmentVariableW(L"APPDATA", appdata, MAX_PATH) > 0)
+    return std::filesystem::path(appdata) / "GoSurvey";
+#elif defined(__APPLE__)
+  if (const char* home = getenv("HOME"))
+    return std::filesystem::path(home) / "Library" / "Application Support" / "GoSurvey";
+#else
+  if (const char* xdg = getenv("XDG_CONFIG_HOME"); xdg && xdg[0])
+    return std::filesystem::path(xdg) / "GoSurvey";
+  if (const char* home = getenv("HOME"))
+    return std::filesystem::path(home) / ".config" / "GoSurvey";
+#endif
+  return {};
+}
+
 static void FlipRgbaRowsTopToBottom(int w, int h, const unsigned char* src, unsigned char* dst) {
   const int rowBytes = w * 4;
   for (int y = 0; y < h; ++y) {

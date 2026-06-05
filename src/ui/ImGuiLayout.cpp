@@ -16,7 +16,20 @@ static bool g_deferredIniLoadPending = false;
 
 namespace {
 
-std::filesystem::path LayoutsRootDirectory() {
+// Where user-saved layouts are written (always writable).
+std::filesystem::path UserLayoutsDirectory() {
+  namespace fs = std::filesystem;
+  const fs::path dir = UserDataDirectory();
+  if (!dir.empty())
+    return dir / "layouts";
+  const fs::path exeDir = AppExecutableDirectory();
+  if (!exeDir.empty())
+    return exeDir / "resources" / "layouts";
+  return fs::current_path() / "resources" / "layouts";
+}
+
+// Where bundled/installed layouts live (read-only in production).
+std::filesystem::path BundledLayoutsDirectory() {
   namespace fs = std::filesystem;
   const fs::path exeDir = AppExecutableDirectory();
   if (!exeDir.empty())
@@ -24,9 +37,25 @@ std::filesystem::path LayoutsRootDirectory() {
   return fs::current_path() / "resources" / "layouts";
 }
 
-void EnsureLayoutsRootExists() {
+// Returns the user-dir path for stem.ini.
+// If it doesn't exist there yet, copies from the bundled dir so ImGui can read it.
+std::filesystem::path ResolveLayoutIniPath(const std::string& stem) {
+  namespace fs = std::filesystem;
+  const fs::path userPath = UserLayoutsDirectory() / (stem + ".ini");
+  if (fs::exists(userPath))
+    return userPath;
+  const fs::path bundledPath = BundledLayoutsDirectory() / (stem + ".ini");
+  if (fs::exists(bundledPath)) {
+    std::error_code ec;
+    fs::create_directories(userPath.parent_path(), ec);
+    fs::copy_file(bundledPath, userPath, fs::copy_options::skip_existing, ec);
+  }
+  return userPath;
+}
+
+void EnsureUserLayoutsDirExists() {
   std::error_code ec;
-  std::filesystem::create_directories(LayoutsRootDirectory(), ec);
+  std::filesystem::create_directories(UserLayoutsDirectory(), ec);
 }
 
 std::string SanitizeLayoutStem(const char* utf8) {
@@ -52,14 +81,14 @@ std::string SanitizeLayoutStem(const char* utf8) {
 } // namespace
 
 bool ImGuiLayout_ConfigureIniPath(AppCommandState& st) {
-  EnsureLayoutsRootExists();
+  EnsureUserLayoutsDirExists();
   std::string stem = SanitizeLayoutStem(st.activeUiLayoutNameUtf8);
   if (stem.empty())
     stem = "default";
   CopyUtf8PathCapped(st.activeUiLayoutNameUtf8, sizeof(st.activeUiLayoutNameUtf8), stem.c_str());
 
   namespace fs = std::filesystem;
-  const fs::path iniPath = LayoutsRootDirectory() / (stem + ".ini");
+  const fs::path iniPath = ResolveLayoutIniPath(stem);
   g_iniAbsPathUtf8 = iniPath.u8string();
   g_deferredIniLoadPending = false;
 
@@ -82,18 +111,24 @@ void ImGuiLayout_ListLayoutStems(std::vector<std::string>* out_sorted_stems) {
     return;
   out_sorted_stems->clear();
   namespace fs = std::filesystem;
-  const fs::path root = LayoutsRootDirectory();
-  std::error_code ec;
-  if (!fs::exists(root, ec))
-    return;
-  for (const fs::directory_entry& e : fs::directory_iterator(root, ec)) {
-    if (!e.is_regular_file(ec))
-      continue;
-    const fs::path p = e.path();
-    if (p.extension() != ".ini")
-      continue;
-    out_sorted_stems->push_back(p.stem().u8string());
-  }
+
+  auto collect = [&](const fs::path& root) {
+    std::error_code ec;
+    if (!fs::exists(root, ec))
+      return;
+    for (const fs::directory_entry& e : fs::directory_iterator(root, ec)) {
+      if (!e.is_regular_file(ec))
+        continue;
+      const fs::path p = e.path();
+      if (p.extension() != ".ini")
+        continue;
+      out_sorted_stems->push_back(p.stem().u8string());
+    }
+  };
+
+  collect(BundledLayoutsDirectory());
+  collect(UserLayoutsDirectory());
+
   std::sort(out_sorted_stems->begin(), out_sorted_stems->end());
   out_sorted_stems->erase(std::unique(out_sorted_stems->begin(), out_sorted_stems->end()), out_sorted_stems->end());
 }
@@ -105,7 +140,7 @@ bool ImGuiLayout_SwitchToLayout(AppCommandState& st, const char* layout_stem_utf
     return false;
   }
   namespace fs = std::filesystem;
-  const fs::path iniPath = LayoutsRootDirectory() / (stem + ".ini");
+  const fs::path iniPath = ResolveLayoutIniPath(stem);
   if (!fs::exists(iniPath)) {
     log.push_back("Layout: file not found: " + iniPath.u8string());
     return false;
@@ -133,9 +168,9 @@ bool ImGuiLayout_SaveCurrentLayoutAs(AppCommandState& st, const char* layout_ste
     log.push_back("Layout: enter a name (letters, digits, dash, underscore).");
     return false;
   }
-  EnsureLayoutsRootExists();
+  EnsureUserLayoutsDirExists();
   namespace fs = std::filesystem;
-  const fs::path iniPath = LayoutsRootDirectory() / (stem + ".ini");
+  const fs::path iniPath = UserLayoutsDirectory() / (stem + ".ini");
 
   ImGui::SaveIniSettingsToDisk(iniPath.u8string().c_str());
 

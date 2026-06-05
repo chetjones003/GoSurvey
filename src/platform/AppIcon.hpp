@@ -24,6 +24,10 @@ void DestroyAppLogoGpu(AppLogoGpu* io);
 /// Directory containing the executable (Windows), or empty if unknown.
 std::filesystem::path AppExecutableDirectory();
 
+/// Per-user application data directory (e.g. %APPDATA%\GoSurvey on Windows).
+/// Returns an empty path if it cannot be determined.
+std::filesystem::path UserDataDirectory();
+
 /// Tries `<exe>/relativePath` then `<cwd>/relativePath`. \p relativePath may include subdirs (e.g. `icons/logo.png`).
 std::filesystem::path ResolveBundledAssetPath(const std::filesystem::path& relativePath);
 
