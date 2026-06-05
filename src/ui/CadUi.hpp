@@ -77,3 +77,5 @@ void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log)
 /// Modal shown when the user tries to close the application with unsaved drawings.
 /// Sets cmd.closeConfirmed = true when the user accepts close (with or without saving).
 void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log);
+
+void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log);

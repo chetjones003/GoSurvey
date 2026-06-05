@@ -2,6 +2,7 @@
 
 #include "PdfAttach.hpp"
 #include "SurveyPoints.hpp"
+#include "traverse/TraverseCalc.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -195,6 +196,58 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
                                            std::vector<CadAnnotation>* out);
 
 
+/// In-process clipboard for COPYCLIP / PASTECLIP.  Geometry stored at local (storage) coordinates.
+struct CadClipboard {
+  float basePtX = 0.f; ///< Bounding-box center X used as paste anchor (local space).
+  float basePtY = 0.f;
+
+  std::vector<float>            lines;
+  std::vector<EntityAttributes> lineAttrs;
+  std::vector<float>            circles;
+  std::vector<EntityAttributes> circleAttrs;
+  std::vector<CadArc>           arcs;
+  std::vector<EntityAttributes> arcAttrs;
+  std::vector<CadEllipse>       ellipses;
+  std::vector<EntityAttributes> ellAttrs;
+  std::vector<int>              polyOffsets; ///< Self-contained offset table (starts with 0).
+  std::vector<float>            polyVerts;
+  std::vector<uint8_t>          polyClosed;
+  std::vector<EntityAttributes> polyAttrs;
+  std::vector<CadAnnotation>    annotations;
+  std::vector<EntityAttributes> annotationAttrs;
+
+  bool empty() const {
+    return lines.empty() && circles.empty() && arcs.empty() && ellipses.empty() &&
+           (polyOffsets.size() <= 1) && annotations.empty();
+  }
+};
+
+
+/// Geometry-only snapshot for undo/redo.  PDF glTexId is zeroed to avoid stale GPU references.
+struct DrawingGeometrySnapshot {
+  std::vector<float>            userLinesFlat;
+  std::vector<EntityAttributes> userLineAttrs;
+  std::vector<float>            userCirclesCxCyR;
+  std::vector<EntityAttributes> userCircleAttrs;
+  std::vector<CadArc>           userArcs;
+  std::vector<EntityAttributes> userArcAttrs;
+  std::vector<CadEllipse>       userEllipses;
+  std::vector<EntityAttributes> userEllAttrs;
+  std::vector<int>              userPolylineOffsets;
+  std::vector<float>            userPolylineVerts;
+  std::vector<uint8_t>          userPolylineClosed;
+  std::vector<EntityAttributes> userPolylineAttrs;
+  std::vector<CadAnnotation>    cadAnnotations;
+  std::vector<EntityAttributes> cadAnnotationAttrs;
+  std::vector<SurveyPoint>      surveyPoints;
+  std::vector<CadLayerRow>      drawingLayerTable;
+  std::vector<PdfAttachment>    pdfAttachments;
+  double worldDocumentOriginX = 0.0;
+  double worldDocumentOriginY = 0.0;
+  std::string description;
+};
+
+
 /// Snapshot of all per-drawing data.  AppCommandState holds the live (active-tab) copy directly;
 /// switching tabs saves the active fields here and restores the target tab's snapshot.
 struct DrawingDocument {
@@ -226,6 +279,8 @@ struct DrawingDocument {
   uint32_t cadGpuRevision  = 0;
   uint32_t savedRevision   = 0;   ///< cadGpuRevision at last save; != cadGpuRevision means unsaved changes.
   std::string filePath;           ///< Absolute path to the .gs file, empty if never saved.
+  std::vector<DrawingGeometrySnapshot> undoStack;
+  std::vector<DrawingGeometrySnapshot> redoStack;
 };
 
 /// Copy the active per-drawing fields from \p cmd into \p cmd.documents[idx].
@@ -261,7 +316,9 @@ struct AppCommandState {
     /// PDF underlay attach — opens dialog, then optionally waits for viewport picks.
     PdfAttach,
     /// 2-D Helmert (similarity) transformation from user-picked control point pairs.
-    Align
+    Align,
+    /// Clipboard paste — cursor-following preview; one viewport click places the pasted entities.
+    Paste,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -289,6 +346,7 @@ struct AppCommandState {
     case Kind::SurveyInverse: return "INVERSE";
     case Kind::PdfAttach:     return "PDFATTACH";
     case Kind::Align:         return "ALIGN";
+    case Kind::Paste:         return "PASTE";
     default:                  return "";
     }
   }
@@ -828,6 +886,7 @@ struct AppCommandState {
   // --- Active-document dirty/path tracking (mirrors DrawingDocument fields for the live tab) ---
   uint32_t    activeDocSavedRevision = 0;   ///< cadGpuRevision when the active doc was last saved.
   std::string activeDocFilePath;            ///< Absolute path to the active doc's .gs file.
+  int undoHistoryMaxSize = 50; ///< Maximum undo frames per drawing tab (0 = unlimited). Settings → User Preferences.
 
   // --- Close confirmation ---
   bool confirmCloseModal = false;  ///< Set by the main loop to open the "Unsaved Changes" dialog.
@@ -904,12 +963,37 @@ struct AppCommandState {
 
   /// Committed PDF underlays.
   std::vector<PdfAttachment> pdfAttachments;
+
+  // -------------------------------------------------------------------------
+  // TRAVERSE EDITOR state
+  // -------------------------------------------------------------------------
+  bool showTraverseEditorWindow = false;
+  TraverseData traverseData;
+  /// When true, traverseData must be recomputed before the next panel draw.
+  bool traverseDataDirty = true;
+
+  // -------------------------------------------------------------------------
+  // CLIPBOARD (COPYCLIP / PASTECLIP)
+  // -------------------------------------------------------------------------
+  CadClipboard clipboard;
 };
 
 
 inline float DefaultAnnotationTextHeightWorld(const AppCommandState& st) {
   return st.defaultPlottedTextHeightInches * st.modelUnitsPerPlottedInch;
 }
+
+
+/// Capture the active tab's current geometry into the undo stack; clears redo stack; trims to undoHistoryMaxSize.
+void PushUndoSnapshot(AppCommandState& st, const std::string& description);
+/// Undo: restore previous geometry snapshot; push current to redo stack. Returns true if an undo was performed.
+bool DoUndo(AppCommandState& st, std::vector<std::string>& log);
+/// Redo: restore next geometry snapshot; push current to undo stack. Returns true if a redo was performed.
+bool DoRedo(AppCommandState& st, std::vector<std::string>& log);
+/// True if the active tab has at least one undo frame available.
+bool CanUndo(const AppCommandState& st);
+/// True if the active tab has at least one redo frame available.
+bool CanRedo(const AppCommandState& st);
 
 
 inline void BumpCadGpuCache(AppCommandState& st) { ++st.cadGpuRevision; }
@@ -1194,6 +1278,13 @@ void ApplyAlignCommand(AppCommandState& st, std::vector<std::string>& log, bool 
 void StartPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Called from the viewport when the user clicks to place the PDF attachment.
 void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+
+/// Copy currently selected CAD entities into \p st.clipboard.  Clears any previous clipboard content.
+void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log);
+/// Begin PASTE — show cursor-following preview; next viewport click places the clipboard contents.
+void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Immediately paste clipboard contents at their original (stored) coordinates without interaction.
+void StartPasteOrigCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Release draft cache and preview texture; resets command state to idle.
 void CancelPdfAttachCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Convert snap-line geometry of the PDF underlay at \p pdfIndex into drawing entities on the current layer.

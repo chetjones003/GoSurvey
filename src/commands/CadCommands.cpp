@@ -4,6 +4,7 @@
 #include "geom2d.hpp"
 #include "MtextRichFormat.hpp"
 #include "StringUtil.hpp"
+#include "AppIcon.hpp"
 
 #include "CadSnap.hpp"
 
@@ -15,6 +16,9 @@
 #include <cstddef>
 #include <cmath>
 #include <cstdio>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
 #include <set>
 #include <sstream>
 #include <string_view>
@@ -85,6 +89,161 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.activeDocSavedRevision     = doc.savedRevision;
   cmd.activeDocFilePath          = doc.filePath;
   cmd.active = AppCommandState::Kind::None;  // cancel any in-progress command on switch
+}
+
+// ---------------------------------------------------------------------------
+// Undo / Redo
+// ---------------------------------------------------------------------------
+
+namespace {
+
+static void WriteUndoHistoryLogLine(const std::string& msg) {
+  const std::filesystem::path dir = UserDataDirectory();
+  if (dir.empty())
+    return;
+  std::error_code ec;
+  std::filesystem::create_directories(dir, ec);
+  const std::filesystem::path logPath = dir / "history.log";
+  std::ofstream f(logPath, std::ios::app);
+  if (!f)
+    return;
+  std::time_t t = std::time(nullptr);
+  char timeBuf[32];
+  struct tm tmInfo{};
+#ifdef _WIN32
+  localtime_s(&tmInfo, &t);
+#else
+  localtime_r(&t, &tmInfo);
+#endif
+  std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &tmInfo);
+  f << timeBuf << "  " << msg << "\n";
+}
+
+static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const std::string& description) {
+  DrawingGeometrySnapshot snap;
+  snap.userLinesFlat        = st.userLinesFlat;
+  snap.userLineAttrs        = st.userLineAttrs;
+  snap.userCirclesCxCyR     = st.userCirclesCxCyR;
+  snap.userCircleAttrs      = st.userCircleAttrs;
+  snap.userArcs             = st.userArcs;
+  snap.userArcAttrs         = st.userArcAttrs;
+  snap.userEllipses         = st.userEllipses;
+  snap.userEllAttrs         = st.userEllAttrs;
+  snap.userPolylineOffsets  = st.userPolylineOffsets;
+  snap.userPolylineVerts    = st.userPolylineVerts;
+  snap.userPolylineClosed   = st.userPolylineClosed;
+  snap.userPolylineAttrs    = st.userPolylineAttrs;
+  snap.cadAnnotations       = st.cadAnnotations;
+  snap.cadAnnotationAttrs   = st.cadAnnotationAttrs;
+  snap.surveyPoints         = st.surveyPoints;
+  snap.drawingLayerTable    = st.drawingLayerTable;
+  snap.pdfAttachments       = st.pdfAttachments;
+  // Zero GL texture IDs: restored snapshots must not reference freed GPU resources.
+  for (auto& att : snap.pdfAttachments)
+    att.glTexId = 0;
+  snap.worldDocumentOriginX = st.worldDocumentOriginX;
+  snap.worldDocumentOriginY = st.worldDocumentOriginY;
+  snap.description          = description;
+  return snap;
+}
+
+static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot& snap) {
+  st.userLinesFlat        = snap.userLinesFlat;
+  st.userLineAttrs        = snap.userLineAttrs;
+  st.userCirclesCxCyR     = snap.userCirclesCxCyR;
+  st.userCircleAttrs      = snap.userCircleAttrs;
+  st.userArcs             = snap.userArcs;
+  st.userArcAttrs         = snap.userArcAttrs;
+  st.userEllipses         = snap.userEllipses;
+  st.userEllAttrs         = snap.userEllAttrs;
+  st.userPolylineOffsets  = snap.userPolylineOffsets;
+  st.userPolylineVerts    = snap.userPolylineVerts;
+  st.userPolylineClosed   = snap.userPolylineClosed;
+  st.userPolylineAttrs    = snap.userPolylineAttrs;
+  st.cadAnnotations       = snap.cadAnnotations;
+  st.cadAnnotationAttrs   = snap.cadAnnotationAttrs;
+  st.surveyPoints         = snap.surveyPoints;
+  st.drawingLayerTable    = snap.drawingLayerTable;
+  st.pdfAttachments       = snap.pdfAttachments;
+  st.worldDocumentOriginX = snap.worldDocumentOriginX;
+  st.worldDocumentOriginY = snap.worldDocumentOriginY;
+}
+
+} // namespace
+
+void PushUndoSnapshot(AppCommandState& st, const std::string& description) {
+  const int idx = st.activeDrawingIdx;
+  if (idx < 0 || static_cast<size_t>(idx) >= st.documents.size())
+    return;
+  auto& doc = st.documents[static_cast<size_t>(idx)];
+  doc.undoStack.push_back(CaptureGeometrySnapshot(st, description));
+  doc.redoStack.clear();
+  if (st.undoHistoryMaxSize > 0) {
+    while (static_cast<int>(doc.undoStack.size()) > st.undoHistoryMaxSize)
+      doc.undoStack.erase(doc.undoStack.begin());
+  }
+}
+
+bool CanUndo(const AppCommandState& st) {
+  const int idx = st.activeDrawingIdx;
+  if (idx < 0 || static_cast<size_t>(idx) >= st.documents.size())
+    return false;
+  return !st.documents[static_cast<size_t>(idx)].undoStack.empty();
+}
+
+bool CanRedo(const AppCommandState& st) {
+  const int idx = st.activeDrawingIdx;
+  if (idx < 0 || static_cast<size_t>(idx) >= st.documents.size())
+    return false;
+  return !st.documents[static_cast<size_t>(idx)].redoStack.empty();
+}
+
+bool DoUndo(AppCommandState& st, std::vector<std::string>& log) {
+  const int idx = st.activeDrawingIdx;
+  if (idx < 0 || static_cast<size_t>(idx) >= st.documents.size())
+    return false;
+  auto& doc = st.documents[static_cast<size_t>(idx)];
+  if (doc.undoStack.empty()) {
+    log.push_back("Nothing to undo.");
+    return false;
+  }
+  DrawingGeometrySnapshot current = CaptureGeometrySnapshot(st, "");
+  doc.redoStack.push_back(std::move(current));
+  const DrawingGeometrySnapshot& frame = doc.undoStack.back();
+  const std::string desc = frame.description;
+  RestoreGeometrySnapshot(st, frame);
+  doc.undoStack.pop_back();
+  BumpCadGpuCache(st);
+  st.active = AppCommandState::Kind::None;
+  st.selection.clear();
+  st.selectedSurveyPointIndices.clear();
+  log.push_back("UNDO" + (desc.empty() ? "." : ": " + desc));
+  WriteUndoHistoryLogLine("UNDO: " + desc);
+  return true;
+}
+
+bool DoRedo(AppCommandState& st, std::vector<std::string>& log) {
+  const int idx = st.activeDrawingIdx;
+  if (idx < 0 || static_cast<size_t>(idx) >= st.documents.size())
+    return false;
+  auto& doc = st.documents[static_cast<size_t>(idx)];
+  if (doc.redoStack.empty()) {
+    log.push_back("Nothing to redo.");
+    return false;
+  }
+  DrawingGeometrySnapshot current = CaptureGeometrySnapshot(st, "");
+  doc.undoStack.push_back(std::move(current));
+  const DrawingGeometrySnapshot& frame = doc.redoStack.back();
+  const std::string desc = frame.description;
+  RestoreGeometrySnapshot(st, frame);
+  doc.redoStack.pop_back();
+  BumpCadGpuCache(st);
+  st.active = AppCommandState::Kind::None;
+  st.selection.clear();
+  st.selectedSurveyPointIndices.clear();
+  log.push_back("REDO" + (desc.empty() ? "." : ": " + desc));
+  WriteUndoHistoryLogLine("REDO: " + desc);
+  return true;
 }
 
 bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::string>& log);
@@ -883,6 +1042,8 @@ const CmdEntry kRegistry[] = {
     {"overkill",     "ok"},
     {"align",        "al"},
     {"quickselect",  "qs"},
+    {"paste",        ""},
+    {"pasteorig",    "po"},
 };
 
 bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vector<std::string>& log);
@@ -1089,6 +1250,7 @@ static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vec
   CadDimAngularSyncTextPlacement(&d, st.modelUnitsPerPlottedInch);
   EntityAttributes at = MakeNewEntityAttrs(st);
   at.color = "#e1b12c";
+  PushUndoSnapshot(st, "DIMANGULAR");
   st.cadAnnotations.push_back(std::move(d));
   st.cadAnnotationAttrs.push_back(at);
   BumpCadGpuCache(st);
@@ -1103,6 +1265,7 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<
     log.push_back("Circle radius too small.");
     return;
   }
+  PushUndoSnapshot(st, "Circle");
   st.userCirclesCxCyR.push_back(cx);
   st.userCirclesCxCyR.push_back(cy);
   st.userCirclesCxCyR.push_back(r);
@@ -1304,6 +1467,14 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "quickselect" || primary == "qs") {
     StartQuickSelectCommand(st, log);
+    return true;
+  }
+  if (primary == "paste") {
+    StartPasteCommand(st, log);
+    return true;
+  }
+  if (primary == "pasteorig" || primary == "po") {
+    StartPasteOrigCommand(st, log);
     return true;
   }
   return false;
@@ -1919,6 +2090,89 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
       st.userPolylineVerts.size() != polyVertsBefore)
     BumpCadGpuCache(st);
+}
+
+// Paste clipboard geometry with (dx, dy) offset applied to all stored coordinates.
+static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy) {
+  const CadClipboard& cb = st.clipboard;
+
+  // Lines
+  for (size_t i = 0; i + 5 < cb.lines.size() + 1; i += 6) {
+    st.userLinesFlat.push_back(cb.lines[i + 0] + dx);
+    st.userLinesFlat.push_back(cb.lines[i + 1] + dy);
+    st.userLinesFlat.push_back(cb.lines[i + 2]);
+    st.userLinesFlat.push_back(cb.lines[i + 3] + dx);
+    st.userLinesFlat.push_back(cb.lines[i + 4] + dy);
+    st.userLinesFlat.push_back(cb.lines[i + 5]);
+    st.userLineAttrs.push_back(cb.lineAttrs[i / 6]);
+  }
+  // Circles
+  for (size_t i = 0; i + 2 < cb.circles.size() + 1; i += 3) {
+    st.userCirclesCxCyR.push_back(cb.circles[i + 0] + dx);
+    st.userCirclesCxCyR.push_back(cb.circles[i + 1] + dy);
+    st.userCirclesCxCyR.push_back(cb.circles[i + 2]);
+    st.userCircleAttrs.push_back(cb.circleAttrs[i / 3]);
+  }
+  // Arcs
+  for (size_t i = 0; i < cb.arcs.size(); ++i) {
+    CadArc a = cb.arcs[i];
+    a.cx += dx;
+    a.cy += dy;
+    st.userArcs.push_back(a);
+    st.userArcAttrs.push_back(cb.arcAttrs[i]);
+  }
+  // Ellipses
+  for (size_t i = 0; i < cb.ellipses.size(); ++i) {
+    CadEllipse el = cb.ellipses[i];
+    el.cx += dx;
+    el.cy += dy;
+    st.userEllipses.push_back(el);
+    st.userEllAttrs.push_back(cb.ellAttrs[i]);
+  }
+  // Polylines — self-contained offset table; map into main arrays
+  const int nPoly = static_cast<int>(cb.polyOffsets.size()) - 1;
+  for (int pi = 0; pi < nPoly; ++pi) {
+    const int v0 = cb.polyOffsets[static_cast<size_t>(pi)];
+    const int v1 = cb.polyOffsets[static_cast<size_t>(pi + 1)];
+    const int nv = v1 - v0;
+    if (nv < 2)
+      continue;
+    const int baseVert = st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.back();
+    for (int vi = v0; vi < v1; ++vi) {
+      st.userPolylineVerts.push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 0)] + dx);
+      st.userPolylineVerts.push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 1)] + dy);
+      st.userPolylineVerts.push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 2)]);
+    }
+    if (st.userPolylineOffsets.empty())
+      st.userPolylineOffsets.push_back(baseVert);
+    st.userPolylineOffsets.push_back(baseVert + nv);
+    uint8_t cl = (static_cast<size_t>(pi) < cb.polyClosed.size()) ? cb.polyClosed[static_cast<size_t>(pi)] : 0u;
+    st.userPolylineClosed.push_back(cl);
+    st.userPolylineAttrs.push_back(cb.polyAttrs[static_cast<size_t>(pi)]);
+  }
+  // Annotations — strip survey link so pasted labels are independent
+  for (size_t i = 0; i < cb.annotations.size(); ++i) {
+    CadAnnotation a = cb.annotations[i];
+    a.surveyPointLabelFor = -1;
+    a.surveyLabelHasUserOffset = false;
+    a.insX += dx;
+    a.insY += dy;
+    if (a.kind == CadAnnotation::Kind::Mtext) {
+      a.boxMinX += dx; a.boxMinY += dy;
+      a.boxMaxX += dx; a.boxMaxY += dy;
+    } else if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
+      a.dimExt1X += dx; a.dimExt1Y += dy;
+      a.dimExt2X += dx; a.dimExt2Y += dy;
+    } else if (a.kind == CadAnnotation::Kind::DimAngular) {
+      a.dimAngVertexX += dx; a.dimAngVertexY += dy;
+      a.dimExt1X += dx; a.dimExt1Y += dy;
+      a.dimExt2X += dx; a.dimExt2Y += dy;
+    }
+    st.cadAnnotations.push_back(std::move(a));
+    st.cadAnnotationAttrs.push_back(cb.annotationAttrs[i]);
+  }
+
+  BumpCadGpuCache(st);
 }
 
 static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by, float rad) {
@@ -2759,6 +3013,7 @@ bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineI
       return false;
     float dx = px - st.modifyBaseX;
     float dy = py - st.modifyBaseY;
+    PushUndoSnapshot(st, isCopy ? "Copy" : "Move");
     if (isCopy)
       FinalizeCopyTranslation(st, dx, dy, log);
     else {
@@ -2774,6 +3029,7 @@ bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineI
 }
 
 static void FinishScaleCommand(AppCommandState& st, float scaleFactor, std::vector<std::string>& log) {
+  PushUndoSnapshot(st, "Scale");
   const float s = std::max(scaleFactor, 1e-6f);
   ApplyScaleToSelection(st, st.modifyBaseX, st.modifyBaseY, s);
   st.active = AppCommandState::Kind::None;
@@ -2902,6 +3158,7 @@ static bool TryRotateCopyToggle(AppCommandState& st, const std::string& lineIn, 
 }
 
 static void FinishRotateCommand(AppCommandState& st, float bx, float by, float rad, std::vector<std::string>& log) {
+  PushUndoSnapshot(st, st.rotateCopyMode ? "Rotate-copy" : "Rotate");
   using K = AppCommandState::Kind;
   if (st.rotateCopyMode) {
     DuplicateCadSelectionRotated(st, bx, by, rad);
@@ -3082,6 +3339,7 @@ static void CommitArcThreePoints(AppCommandState& st, float ax, float ay, float 
   arc.r = r;
   arc.startRad = static_cast<float>(sr);
   arc.sweepRad = static_cast<float>(sw);
+  PushUndoSnapshot(st, "Arc");
   st.userArcs.push_back(arc);
   st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
@@ -3131,6 +3389,7 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
   EntityAttributes at = MakeNewEntityAttrs(st);
   at.color = "#e1b12c";
+  PushUndoSnapshot(st, "DIMALIGNED");
   st.cadAnnotations.push_back(std::move(ann));
   st.cadAnnotationAttrs.push_back(at);
   BumpCadGpuCache(st);
@@ -3191,6 +3450,7 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
   EntityAttributes at = MakeNewEntityAttrs(st);
   at.color = "#e1b12c";
+  PushUndoSnapshot(st, "DIMLINEAR");
   st.cadAnnotations.push_back(std::move(ann));
   st.cadAnnotationAttrs.push_back(at);
   BumpCadGpuCache(st);
@@ -3304,6 +3564,7 @@ static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std
   const size_t k = static_cast<size_t>(lineIx) * 6;
   if (k + 5 >= st.userLinesFlat.size())
     return false;
+  PushUndoSnapshot(st, "Offset line");
   const float x0 = st.userLinesFlat[k];
   const float y0 = st.userLinesFlat[k + 1];
   const float x1 = st.userLinesFlat[k + 3];
@@ -3338,6 +3599,7 @@ static bool CommitOffsetCircle(AppCommandState& st, int ci, float signedD, std::
   const size_t k = static_cast<size_t>(ci) * 3;
   if (k + 2 >= st.userCirclesCxCyR.size())
     return false;
+  PushUndoSnapshot(st, "Offset circle");
   const float cx = st.userCirclesCxCyR[k];
   const float cy = st.userCirclesCxCyR[k + 1];
   const float r = st.userCirclesCxCyR[k + 2];
@@ -3360,6 +3622,7 @@ static bool CommitOffsetCircle(AppCommandState& st, int ci, float signedD, std::
 static bool CommitOffsetArc(AppCommandState& st, int ai, float signedD, std::vector<std::string>& log) {
   if (ai < 0 || static_cast<size_t>(ai) >= st.userArcs.size())
     return false;
+  PushUndoSnapshot(st, "Offset arc");
   const CadArc& a = st.userArcs[static_cast<size_t>(ai)];
   const float nr = a.r + signedD;
   if (nr <= 1e-6f) {
@@ -3380,6 +3643,7 @@ static bool CommitOffsetArc(AppCommandState& st, int ai, float signedD, std::vec
 static bool CommitOffsetEllipse(AppCommandState& st, int ei, float signedD, std::vector<std::string>& log) {
   if (ei < 0 || static_cast<size_t>(ei) >= st.userEllipses.size())
     return false;
+  PushUndoSnapshot(st, "Offset ellipse");
   const CadEllipse& e = st.userEllipses[static_cast<size_t>(ei)];
   const float ma = std::hypot(e.majVx, e.majVy);
   if (ma < 1e-8f) {
@@ -3489,6 +3753,7 @@ static bool CommitOffsetPolyline(AppCommandState& st, int pi, float signedD, std
     return false;
   }
 
+  PushUndoSnapshot(st, "Offset polyline");
   if (st.userPolylineOffsets.empty())
     st.userPolylineOffsets.push_back(0);
   const int baseVert = st.userPolylineOffsets.back();
@@ -4101,6 +4366,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       const bool wasCopy = (st.active == K::Copy);
       const float dx = wx - st.modifyBaseX;
       const float dy = wy - st.modifyBaseY;
+      PushUndoSnapshot(st, wasCopy ? "Copy" : "Move");
       if (wasCopy)
         FinalizeCopyTranslation(st, dx, dy, log);
       else {
@@ -4110,6 +4376,17 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
         log.push_back("MOVE complete — base point (ESC to exit):");
       }
     }
+    return;
+  }
+
+  if (st.active == K::Paste && st.modifyPhase == MP::NeedDestination) {
+    const float dx = wx - st.modifyBaseX;
+    const float dy = wy - st.modifyBaseY;
+    PushUndoSnapshot(st, "Paste");
+    CommitPasteFromClipboard(st, dx, dy);
+    st.active = K::None;
+    st.selection.clear();
+    log.push_back("PASTE complete.");
     return;
   }
 
@@ -4253,6 +4530,128 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
 }
 
 } // namespace
+
+void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.selection.empty()) {
+    log.push_back("COPYCLIP — nothing selected. Select objects first.");
+    return;
+  }
+  CadClipboard& cb = st.clipboard;
+  cb = CadClipboard{};
+
+  float mnX = 1e30f, mnY = 1e30f, mxX = -1e30f, mxY = -1e30f;
+  auto expandBbox = [&](float x, float y) {
+    mnX = std::min(mnX, x); mnY = std::min(mnY, y);
+    mxX = std::max(mxX, x); mxY = std::max(mxY, y);
+  };
+
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::LineSeg) {
+      const size_t k = static_cast<size_t>(e.index) * 6;
+      if (k + 5 >= st.userLinesFlat.size())
+        continue;
+      for (int j = 0; j < 6; ++j)
+        cb.lines.push_back(st.userLinesFlat[k + static_cast<size_t>(j)]);
+      cb.lineAttrs.push_back(static_cast<size_t>(e.index) < st.userLineAttrs.size()
+                                 ? st.userLineAttrs[static_cast<size_t>(e.index)] : EntityAttributes{});
+      expandBbox(st.userLinesFlat[k], st.userLinesFlat[k + 1]);
+      expandBbox(st.userLinesFlat[k + 3], st.userLinesFlat[k + 4]);
+    } else if (e.type == SelectedEntity::Type::Circle) {
+      const size_t k = static_cast<size_t>(e.index) * 3;
+      if (k + 2 >= st.userCirclesCxCyR.size())
+        continue;
+      cb.circles.push_back(st.userCirclesCxCyR[k]);
+      cb.circles.push_back(st.userCirclesCxCyR[k + 1]);
+      cb.circles.push_back(st.userCirclesCxCyR[k + 2]);
+      cb.circleAttrs.push_back(static_cast<size_t>(e.index) < st.userCircleAttrs.size()
+                                   ? st.userCircleAttrs[static_cast<size_t>(e.index)] : EntityAttributes{});
+      expandBbox(st.userCirclesCxCyR[k], st.userCirclesCxCyR[k + 1]);
+    } else if (e.type == SelectedEntity::Type::Arc) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= st.userArcs.size())
+        continue;
+      cb.arcs.push_back(st.userArcs[k]);
+      cb.arcAttrs.push_back(k < st.userArcAttrs.size() ? st.userArcAttrs[k] : EntityAttributes{});
+      expandBbox(st.userArcs[k].cx, st.userArcs[k].cy);
+    } else if (e.type == SelectedEntity::Type::Ellipse) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= st.userEllipses.size())
+        continue;
+      cb.ellipses.push_back(st.userEllipses[k]);
+      cb.ellAttrs.push_back(k < st.userEllAttrs.size() ? st.userEllAttrs[k] : EntityAttributes{});
+      expandBbox(st.userEllipses[k].cx, st.userEllipses[k].cy);
+    } else if (e.type == SelectedEntity::Type::Polyline) {
+      const int pi = e.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+        continue;
+      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int nv = v1 - v0;
+      if (nv < 2)
+        continue;
+      if (cb.polyOffsets.empty())
+        cb.polyOffsets.push_back(0);
+      const int baseVert = cb.polyOffsets.back();
+      for (int vi = v0; vi < v1; ++vi) {
+        cb.polyVerts.push_back(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 0)]);
+        cb.polyVerts.push_back(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)]);
+        cb.polyVerts.push_back(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
+        expandBbox(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 0)],
+                   st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)]);
+      }
+      cb.polyOffsets.push_back(baseVert + nv);
+      uint8_t cl = static_cast<size_t>(pi) < st.userPolylineClosed.size()
+                       ? st.userPolylineClosed[static_cast<size_t>(pi)] : 0u;
+      cb.polyClosed.push_back(cl);
+      cb.polyAttrs.push_back(static_cast<size_t>(pi) < st.userPolylineAttrs.size()
+                                 ? st.userPolylineAttrs[static_cast<size_t>(pi)] : EntityAttributes{});
+    } else if (e.type == SelectedEntity::Type::Annotation) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= st.cadAnnotations.size())
+        continue;
+      cb.annotations.push_back(st.cadAnnotations[k]);
+      cb.annotationAttrs.push_back(k < st.cadAnnotationAttrs.size()
+                                       ? st.cadAnnotationAttrs[k] : EntityAttributes{});
+      expandBbox(st.cadAnnotations[k].insX, st.cadAnnotations[k].insY);
+    }
+  }
+
+  if (mnX > mxX) {
+    cb.basePtX = 0.f;
+    cb.basePtY = 0.f;
+  } else {
+    cb.basePtX = (mnX + mxX) * 0.5f;
+    cb.basePtY = (mnY + mxY) * 0.5f;
+  }
+
+  log.push_back("COPYCLIP — " + std::to_string(st.selection.size()) + " object(s) copied to clipboard.");
+}
+
+void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.clipboard.empty()) {
+    log.push_back("PASTE — clipboard is empty. Use Ctrl+C to copy objects first.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::Paste;
+  st.lastCommand = AppCommandState::Kind::Paste;
+  st.modifyPhase = AppCommandState::ModifyPhase::NeedDestination;
+  st.modifyBaseX = st.clipboard.basePtX;
+  st.modifyBaseY = st.clipboard.basePtY;
+  st.selBoxWaitingSecond = false;
+  log.push_back("PASTE — click destination point to place copied objects. ESC to cancel.");
+}
+
+void StartPasteOrigCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.clipboard.empty()) {
+    log.push_back("PASTEORIG — clipboard is empty. Use Ctrl+C to copy objects first.");
+    return;
+  }
+  PushUndoSnapshot(st, "Paste original");
+  CommitPasteFromClipboard(st, 0.f, 0.f);
+  log.push_back("PASTEORIG — objects pasted at original coordinates.");
+}
 
 void StartOffsetCommand(AppCommandState& st, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
@@ -4458,6 +4857,16 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
         continue;
       CadAnnotation p{};
       CadAnnotationPreviewTranslated(cmd.cadAnnotations[k], dx, dy, &p);
+      out->push_back(p);
+    }
+    return;
+  }
+  if (cmd.active == K::Paste && cmd.modifyPhase == MP::NeedDestination) {
+    const float dx = curX - cmd.modifyBaseX;
+    const float dy = curY - cmd.modifyBaseY;
+    for (const auto& ann : cmd.clipboard.annotations) {
+      CadAnnotation p{};
+      CadAnnotationPreviewTranslated(ann, dx, dy, &p);
       out->push_back(p);
     }
     return;
@@ -5187,6 +5596,7 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
     }
     const std::string normalized = MtextRichNormalize(st.mtextRichEditorBuf);
     if (!StringUtil::trimCopy(MtextRichFlattenToPlain(normalized)).empty()) {
+      PushUndoSnapshot(st, "MTEXT");
       CadAnnotation ann;
       ann.kind = CadAnnotation::Kind::Mtext;
       ann.boxMinX = std::min(st.mtxtX1, st.mtxtX2);
@@ -5211,6 +5621,7 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
   const int ix = st.mtextRichEditorAnnIndex;
   if (ix >= 0 && static_cast<size_t>(ix) < st.cadAnnotations.size() &&
       st.cadAnnotations[static_cast<size_t>(ix)].kind == CadAnnotation::Kind::Mtext) {
+    PushUndoSnapshot(st, "MTEXT edit");
     CadAnnotation& ann = st.cadAnnotations[static_cast<size_t>(ix)];
     ann.text = MtextRichNormalize(st.mtextRichEditorBuf);
     if (ann.surveyPointLabelFor >= 0 &&
@@ -5428,6 +5839,7 @@ bool CadAddDrawingLayer(AppCommandState& st, const std::string& raw, std::string
       *err = "Layer already exists.";
     return false;
   }
+  PushUndoSnapshot(st, "Add layer");
   CadLayerRow row;
   row.name = name;
   st.drawingLayerTable.push_back(row);
@@ -5462,6 +5874,7 @@ bool CadRenameDrawingLayer(AppCommandState& st, const std::string& oldNameRaw, c
       *err = "Layer not found in table.";
     return false;
   }
+  PushUndoSnapshot(st, "Rename layer");
   auto reassign = [&](std::string& L) {
     if (L == oldN)
       L = newN;
@@ -5501,6 +5914,7 @@ bool CadDeleteDrawingLayer(AppCommandState& st, const std::string& nameRaw, std:
       *err = "Layer not found.";
     return false;
   }
+  PushUndoSnapshot(st, "Delete layer");
   auto reassign = [&](std::string& L) {
     if (L == name)
       L = "0";
@@ -5757,6 +6171,9 @@ void EraseCadAnnotationAtIndex(AppCommandState& st, size_t annIndex) {
 }
 
 void DeleteSelectedSurveyPoints(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.selectedSurveyPointIndices.empty())
+    return;
+  PushUndoSnapshot(st, "Delete survey points");
   std::vector<int> ix = st.selectedSurveyPointIndices;
   std::sort(ix.begin(), ix.end(), std::greater<int>());
   ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
@@ -5829,6 +6246,7 @@ void ApplyLinkedSurveyForAnnotationPick(AppCommandState& st, int annIndex, bool 
 void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) {
   if (st.selection.empty())
     return;
+  PushUndoSnapshot(st, "Delete");
   std::set<int> lineIx;
   std::set<int> circIx;
   std::set<int> annIx;
@@ -7119,6 +7537,7 @@ static void ExecuteDrawnSegmentTrimOnce(AppCommandState& st, float p1x, float p1
   }
   const float pmx = (p1x + p2x) * 0.5f;
   const float pmy = (p1y + p2y) * 0.5f;
+  PushUndoSnapshot(st, "Trim");
   if (!TrimSegmentToCuttingEdges(st, tgt, ax, ay, bx, by, pmx, pmy, cuts, true, p1x, p1y, p2x, p2y, log))
     return;
   BumpCadGpuCache(st);
@@ -7201,6 +7620,7 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
     return false;
   }
 
+  PushUndoSnapshot(st, "Trim");
   if (!TrimSegmentToCuttingEdges(st, tgt, ax, ay, bx, by, wx, wy, cuts, false, 0.f, 0.f, 0.f, 0.f, log))
     return true;
   BumpCadGpuCache(st);
@@ -7208,6 +7628,7 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
 }
 
 void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
+  PushUndoSnapshot(st, "Join");
   using ST = SelectedEntity::Type;
   struct Edge {
     float x0, y0, x1, y1;
@@ -7499,6 +7920,7 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
 // Tolerance is auto-derived from drawing extents (1e-4 × span, min 1e-6).
 // =============================================================================
 void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
+  PushUndoSnapshot(st, "Overkill");
   // ── tolerance ────────────────────────────────────────────────────────────
   float tol = 1e-3f;
   {
@@ -8154,6 +8576,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("ZOOM WINDOW canceled.");
   else if (st.active == AppCommandState::Kind::PdfAttach)
     log.push_back("PDFATTACH canceled.");
+  else if (st.active == AppCommandState::Kind::Paste)
+    log.push_back("PASTE canceled.");
   else if (st.active == AppCommandState::Kind::Align) {
     st.alignControlPts.clear();
     st.alignSelectionSnapshot.clear();
@@ -8223,6 +8647,7 @@ static void FinishEllipseFromRatio(AppCommandState& st, float ratio, std::vector
   ell.majVx = vx0;
   ell.majVy = vy0;
   ell.ratio = ratio;
+  PushUndoSnapshot(st, "Ellipse");
   st.userEllipses.push_back(ell);
   st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
@@ -8242,6 +8667,7 @@ static void CommitPolylineDraft(AppCommandState& st, bool closed, std::vector<st
     log.push_back("POLYLINE — need at least two vertices (use END to finish open).");
     return;
   }
+  PushUndoSnapshot(st, closed ? "Polyline (closed)" : "Polyline");
   if (st.userPolylineOffsets.empty())
     st.userPolylineOffsets.push_back(0);
   const int baseVert = st.userPolylineOffsets.back();
@@ -8268,6 +8694,7 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
     return true;
   }
 
+  PushUndoSnapshot(st, "Line segment");
   st.userLinesFlat.push_back(st.anchorX);
   st.userLinesFlat.push_back(st.anchorY);
   st.userLinesFlat.push_back(0.f);
@@ -8735,6 +9162,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       ann.rotationRad = st.textRotDraft;
       ann.text = line;
       if (!ann.text.empty()) {
+        PushUndoSnapshot(st, "Text");
         st.cadAnnotations.push_back(std::move(ann));
         st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
         log.push_back("TEXT placed.");
@@ -8951,6 +9379,8 @@ const char* CircleCommandFooterHint(const AppCommandState& st) {
 const char* ModifyCommandFooterHint(const AppCommandState& st) {
   using K = AppCommandState::Kind;
   using MP = AppCommandState::ModifyPhase;
+  if (st.active == K::Paste && st.modifyPhase == MP::NeedDestination)
+    return "PASTE: Click destination point | ESC cancel";
   if (st.active != K::Move && st.active != K::Copy)
     return "";
   if (st.modifyPhase == MP::PickSelection)
@@ -9450,6 +9880,7 @@ void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::ve
     const int nSnapLines   = static_cast<int>(att.snapLinesFlat.size())    / 4;
     const int nSnapCircles = static_cast<int>(att.snapCirclesCxCyR.size()) / 3;
     const int nSnapText    = static_cast<int>(att.snapTextPos.size())      / 2;
+    PushUndoSnapshot(st, "PDF attach");
     st.pdfAttachments.push_back(std::move(att));
     char snapMsg[128];
     std::snprintf(snapMsg, sizeof(snapMsg),
@@ -9489,6 +9920,7 @@ void VectorizePdfAttachmentLines(AppCommandState& st, int pdfIndex, std::vector<
     log.push_back("Vectorize — no line snap geometry in this PDF underlay.");
     return;
   }
+  PushUndoSnapshot(st, "Vectorize PDF");
   constexpr float kPi = 3.14159265f;
   const float cosR = std::cos(att.rotationDeg * kPi / 180.f);
   const float sinR = std::sin(att.rotationDeg * kPi / 180.f);
@@ -9802,6 +10234,7 @@ void ApplyAlignCommand(AppCommandState& st, std::vector<std::string>& log, bool 
     log.push_back("ALIGN — no valid solution to apply.");
     return;
   }
+  PushUndoSnapshot(st, "Align");
 
   // Compute actual transform parameters — optionally strip scale.
   float a = res.a, b = res.b, tx = res.tx, ty = res.ty;

@@ -246,6 +246,22 @@ int main() {
       StartDeleteCommand(cmd, cmdLog);
     }
 
+    const bool ctrlHeld = ImGui::GetIO().KeyCtrl;
+    if (ctrlHeld && !ImGui::GetIO().WantTextInput) {
+      if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+        if (ImGui::GetIO().KeyShift)
+          DoRedo(cmd, cmdLog);
+        else
+          DoUndo(cmd, cmdLog);
+      }
+      if (ImGui::IsKeyPressed(ImGuiKey_Y, false))
+        DoRedo(cmd, cmdLog);
+      if (ImGui::IsKeyPressed(ImGuiKey_C, false))
+        CopySelectionToClipboard(cmd, cmdLog);
+      if (ImGui::IsKeyPressed(ImGuiKey_V, false))
+        StartPasteCommand(cmd, cmdLog);
+    }
+
     const ImGuiViewport* mainVp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(mainVp->WorkPos);
     ImGui::SetNextWindowSize(mainVp->WorkSize);
@@ -391,6 +407,7 @@ int main() {
     DrawImportPointsPanel(cmd, cmdLog);
     DrawExportPointsPanel(cmd, cmdLog);
     DrawSurveyReportsPanel(cmd);
+    DrawTraverseEditorPanel(cmd, cmdLog);
     // After all panels have called Begin() their DockNode is set, so SetWindowFocus
     // can correctly update the dock node's SelectedTabId for the next frame.
     if (cmd.pendingPropertiesFocus) {

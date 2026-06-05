@@ -583,6 +583,20 @@ static void DrawSettingsUserPrefsTab(AppCommandState& cmd) {
     DrawUserPrefsTextMtext(cmd);
   if (ImGui::CollapsingHeader("Dimensions"))
     DrawUserPrefsDimensions(cmd);
+  if (ImGui::CollapsingHeader("Undo / Redo", ImGuiTreeNodeFlags_DefaultOpen)) {
+    ImGui::TextWrapped("Undo history is per drawing tab and cleared when the tab is closed.");
+    ImGui::Spacing();
+    ImGui::SetNextItemWidth(160.f);
+    ImGui::SliderInt("History size (steps)", &cmd.undoHistoryMaxSize, 1, 200);
+    cmd.undoHistoryMaxSize = std::clamp(cmd.undoHistoryMaxSize, 1, 200);
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    if (ImGui::IsItemHovered()) {
+      ImGui::BeginTooltip();
+      ImGui::TextUnformatted("Maximum number of undo steps to keep per drawing tab.\nOlder steps are discarded when the limit is reached.\nHistory log is written to %APPDATA%\\GoSurvey\\history.log.");
+      ImGui::EndTooltip();
+    }
+  }
 }
 
 static void DrawSettingsSelectionTab(AppCommandState& cmd) {

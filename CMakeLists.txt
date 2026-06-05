@@ -111,6 +111,7 @@ add_executable(GoSurvey
   src/ui/CadUi_CopySurveyModal.cpp
   src/ui/CadUi_SurveyReports.cpp
   src/ui/CadUi_ImportExportPoints.cpp
+  src/ui/CadUi_TraverseEditor.cpp
   src/ui/SplashScreen.cpp
   src/ui/ImGuiLayout.cpp
   src/ui/MtextRichFormat.cpp
@@ -118,6 +119,9 @@ add_executable(GoSurvey
 
   # Survey / COGO
   src/survey/SurveyPoints.cpp
+
+  # Traverse engine
+  src/traverse/TraverseCalc.cpp
 
   # I/O
   src/io/GsIo.cpp

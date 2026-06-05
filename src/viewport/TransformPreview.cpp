@@ -149,6 +149,66 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     return;
   }
 
+  if (cmd.active == K::Paste && cmd.modifyPhase == MP::NeedDestination) {
+    const float dx = curX - cmd.modifyBaseX;
+    const float dy = curY - cmd.modifyBaseY;
+    const CadClipboard& cb = cmd.clipboard;
+    // Lines
+    for (size_t i = 0; i + 5 < cb.lines.size() + 1; i += 6) {
+      prevLines->push_back(cb.lines[i + 0] + dx);
+      prevLines->push_back(cb.lines[i + 1] + dy);
+      prevLines->push_back(0.f);
+      prevLines->push_back(cb.lines[i + 3] + dx);
+      prevLines->push_back(cb.lines[i + 4] + dy);
+      prevLines->push_back(0.f);
+    }
+    // Circles
+    for (size_t i = 0; i + 2 < cb.circles.size() + 1; i += 3) {
+      prevCircles->push_back(cb.circles[i + 0] + dx);
+      prevCircles->push_back(cb.circles[i + 1] + dy);
+      prevCircles->push_back(cb.circles[i + 2]);
+    }
+    // Arcs
+    for (const auto& a : cb.arcs) {
+      CadArc pa = a;
+      pa.cx += dx;
+      pa.cy += dy;
+      appendArcPolylineStrip(prevLines, 0.f, pa, 48);
+    }
+    // Ellipses
+    for (const auto& el : cb.ellipses) {
+      CadEllipse pe = el;
+      pe.cx += dx;
+      pe.cy += dy;
+      appendEllipsePolylineStrip(prevLines, 0.f, pe, 56);
+    }
+    // Polylines
+    const int nPoly = static_cast<int>(cb.polyOffsets.size()) - 1;
+    for (int pi = 0; pi < nPoly; ++pi) {
+      const int v0 = cb.polyOffsets[static_cast<size_t>(pi)];
+      const int v1 = cb.polyOffsets[static_cast<size_t>(pi + 1)];
+      const bool closed =
+          static_cast<size_t>(pi) < cb.polyClosed.size() && cb.polyClosed[static_cast<size_t>(pi)];
+      for (int vi = v0; vi + 1 < v1; ++vi) {
+        prevLines->push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 0)] + dx);
+        prevLines->push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 1)] + dy);
+        prevLines->push_back(0.f);
+        prevLines->push_back(cb.polyVerts[static_cast<size_t>((vi + 1) * 3 + 0)] + dx);
+        prevLines->push_back(cb.polyVerts[static_cast<size_t>((vi + 1) * 3 + 1)] + dy);
+        prevLines->push_back(0.f);
+      }
+      if (closed && v1 - v0 >= 2) {
+        prevLines->push_back(cb.polyVerts[static_cast<size_t>((v1 - 1) * 3 + 0)] + dx);
+        prevLines->push_back(cb.polyVerts[static_cast<size_t>((v1 - 1) * 3 + 1)] + dy);
+        prevLines->push_back(0.f);
+        prevLines->push_back(cb.polyVerts[static_cast<size_t>(v0 * 3 + 0)] + dx);
+        prevLines->push_back(cb.polyVerts[static_cast<size_t>(v0 * 3 + 1)] + dy);
+        prevLines->push_back(0.f);
+      }
+    }
+    return;
+  }
+
   if (cmd.active == K::Scale && cmd.modifyPhase == MP::NeedDestination) {
     using SP = AppCommandState::ScalePhase;
     if (cmd.scalePhase == SP::Ref_WaitP2) {

@@ -418,8 +418,27 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
     ImGui::EndMenu();
   }
   if (ImGui::BeginMenu("Edit")) {
-    ImGui::MenuItem("Undo", nullptr);
-    ImGui::MenuItem("Redo", nullptr);
+    const bool hasSelection = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
+    const bool hasClipboard = !cmd.clipboard.empty();
+    if (ImGui::MenuItem("Copy", "Ctrl+C", false, hasSelection))
+      CopySelectionToClipboard(cmd, log);
+    if (ImGui::MenuItem("Paste", "Ctrl+V", false, hasClipboard))
+      StartPasteCommand(cmd, log);
+    if (ImGui::MenuItem("Paste at Original Coordinates", nullptr, false, hasClipboard))
+      StartPasteOrigCommand(cmd, log);
+    ImGui::Separator();
+    const bool canUndo = CanUndo(cmd);
+    const bool canRedo = CanRedo(cmd);
+    std::string undoLabel = "Undo";
+    if (canUndo) {
+      const auto& desc = cmd.documents[static_cast<size_t>(cmd.activeDrawingIdx)].undoStack.back().description;
+      if (!desc.empty())
+        undoLabel = "Undo: " + desc;
+    }
+    if (ImGui::MenuItem(undoLabel.c_str(), "Ctrl+Z", false, canUndo))
+      DoUndo(cmd, log);
+    if (ImGui::MenuItem("Redo", "Ctrl+Shift+Z", false, canRedo))
+      DoRedo(cmd, log);
     ImGui::EndMenu();
   }
   if (ImGui::BeginMenu("View")) {
@@ -537,6 +556,11 @@ enum class RibbonIconKind : std::uint8_t {
   PdfShowBg,
   PdfHideBg,
   PdfVectorize,
+  Undo,
+  Redo,
+  ClipboardCopy,
+  ClipboardPaste,
+  Traverse,
 };
 
 static ImVec2 RibbonLerp(const ImVec2& a, const ImVec2& b, float u, float v) {
@@ -979,6 +1003,102 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     }
     break;
   }
+  case RibbonIconKind::Undo: {
+    // Nearly-complete circle going CCW (in screen space), gap at top, arrowhead at 1-o'clock end.
+    const float kPi = 3.14159265f;
+    const float r2 = std::min(w, h) * 0.30f;
+    const float thick2 = std::clamp(std::min(w, h) * 0.095f, 2.f, 5.5f);
+    const float arrowH = std::min(w, h) * 0.20f;
+    const float gapHalf = 0.42f; // ~24° each side
+    const float gapCtr = kPi * 1.5f; // 12 o'clock in ImGui (Y-down, sin(3PI/2)<0 = up)
+    // CCW arc: starts at 11-o'clock, decreasing-angle for ~316°, ends at 1-o'clock
+    const float a0 = gapCtr - gapHalf;
+    const float a1 = a0 - (2.f * kPi - 2.f * gapHalf);
+    dl->PathArcTo(c, r2, a0, a1, 32);
+    dl->PathStroke(col, 0, thick2);
+    // Arrowhead at end (a1 ≈ 1-o'clock), CCW tangent = (sin θ, -cos θ)
+    const float etx = std::sin(a1), ety = -std::cos(a1);
+    const ImVec2 tip2 = {c.x + r2 * std::cos(a1), c.y + r2 * std::sin(a1)};
+    const ImVec2 bas2 = {tip2.x - etx * arrowH, tip2.y - ety * arrowH};
+    dl->AddTriangleFilled(tip2,
+      {bas2.x + ety * arrowH * 0.45f, bas2.y - etx * arrowH * 0.45f},
+      {bas2.x - ety * arrowH * 0.45f, bas2.y + etx * arrowH * 0.45f}, col);
+    break;
+  }
+  case RibbonIconKind::Redo: {
+    // Nearly-complete circle going CW (in screen space), gap at top, arrowhead at 11-o'clock end.
+    const float kPi = 3.14159265f;
+    const float r2 = std::min(w, h) * 0.30f;
+    const float thick2 = std::clamp(std::min(w, h) * 0.095f, 2.f, 5.5f);
+    const float arrowH = std::min(w, h) * 0.20f;
+    const float gapHalf = 0.42f;
+    const float gapCtr = kPi * 1.5f;
+    // CW arc: starts at 1-o'clock, increasing-angle for ~316°, ends at 11-o'clock
+    const float a0 = gapCtr + gapHalf;
+    const float a1 = a0 + (2.f * kPi - 2.f * gapHalf);
+    dl->PathArcTo(c, r2, a0, a1, 32);
+    dl->PathStroke(col, 0, thick2);
+    // Arrowhead at end (a1 ≈ 11-o'clock), CW tangent = (-sin θ, cos θ)
+    const float etx = -std::sin(a1), ety = std::cos(a1);
+    const ImVec2 tip2 = {c.x + r2 * std::cos(a1), c.y + r2 * std::sin(a1)};
+    const ImVec2 bas2 = {tip2.x - etx * arrowH, tip2.y - ety * arrowH};
+    dl->AddTriangleFilled(tip2,
+      {bas2.x + ety * arrowH * 0.45f, bas2.y - etx * arrowH * 0.45f},
+      {bas2.x - ety * arrowH * 0.45f, bas2.y + etx * arrowH * 0.45f}, col);
+    break;
+  }
+  case RibbonIconKind::ClipboardCopy: {
+    // Clipboard body + small "C" copy-to arrow (copy selection → clipboard)
+    const float cpl = mn.x + w * 0.22f, cpr = mx.x - w * 0.22f;
+    const float cpt = mn.y + h * 0.20f, cpb = mx.y - h * 0.14f;
+    const float clipW = (cpr - cpl) * 0.32f;
+    const float clipH = h * 0.12f;
+    const float clipL = c.x - clipW * 0.5f, clipR = c.x + clipW * 0.5f;
+    // Clipboard body (rounded rect)
+    dl->AddRect(ImVec2(cpl, cpt + clipH * 0.6f), ImVec2(cpr, cpb), col, 2.f, 0, t);
+    // Clip at top-center
+    dl->AddRectFilled(ImVec2(clipL, cpt), ImVec2(clipR, cpt + clipH), col, 1.f);
+    // Horizontal content lines on the clipboard
+    const float lineY1 = cpt + h * 0.37f, lineY2 = cpt + h * 0.50f;
+    dl->AddLine(ImVec2(cpl + w * 0.08f, lineY1), ImVec2(cpr - w * 0.08f, lineY1), col, t * 0.65f);
+    dl->AddLine(ImVec2(cpl + w * 0.08f, lineY2), ImVec2(cpr - w * 0.08f, lineY2), col, t * 0.65f);
+    // Small "copy" arrow in accent color (up-right corner)
+    const float ax = cpr - w * 0.04f, ay = cpt + h * 0.05f;
+    const float ahead = std::min(w, h) * 0.10f;
+    RibbonStrokeArrow(dl, ImVec2(ax, ay), ImVec2(0.7f, -0.7f), ahead, acc, t * 0.9f);
+    break;
+  }
+  case RibbonIconKind::ClipboardPaste: {
+    // Clipboard body + downward arrow (paste from clipboard → drawing)
+    const float cpl = mn.x + w * 0.22f, cpr = mx.x - w * 0.22f;
+    const float cpt = mn.y + h * 0.16f, cpb = mx.y - h * 0.10f;
+    const float clipW = (cpr - cpl) * 0.32f;
+    const float clipH = h * 0.12f;
+    const float clipL = c.x - clipW * 0.5f, clipR = c.x + clipW * 0.5f;
+    dl->AddRect(ImVec2(cpl, cpt + clipH * 0.6f), ImVec2(cpr, cpb), col, 2.f, 0, t);
+    dl->AddRectFilled(ImVec2(clipL, cpt), ImVec2(clipR, cpt + clipH), col, 1.f);
+    // Downward arrow in accent color — paste direction
+    const float arrowX = c.x, arrowYtop = cpt + clipH * 0.5f, arrowYbot = cpb - h * 0.04f;
+    dl->AddLine(ImVec2(arrowX, arrowYtop + h * 0.08f), ImVec2(arrowX, arrowYbot - h * 0.12f), acc, t * 1.1f);
+    const float ahead = std::min(w, h) * 0.12f;
+    RibbonStrokeArrow(dl, ImVec2(arrowX, arrowYbot - h * 0.04f), ImVec2(0.f, 1.f), ahead, acc, t);
+    break;
+  }
+  case RibbonIconKind::Traverse: {
+    // Traverse icon: four dots connected by a zigzag path representing a traverse loop.
+    const float r = std::min(w, h) * 0.065f;
+    const ImVec2 p0(mn.x + w * 0.20f, mx.y - h * 0.24f);
+    const ImVec2 p1(mx.x - w * 0.24f, mx.y - h * 0.20f);
+    const ImVec2 p2(mx.x - w * 0.18f, mn.y + h * 0.28f);
+    const ImVec2 p3(mn.x + w * 0.22f, mn.y + h * 0.22f);
+    dl->AddLine(p0, p1, col, t);
+    dl->AddLine(p1, p2, col, t);
+    dl->AddLine(p2, p3, col, t);
+    dl->AddLine(p3, p0, acc, t * 0.65f); // closing leg (lighter, dashed effect via alpha)
+    for (const auto& p : {p0, p1, p2, p3})
+      dl->AddCircleFilled(p, r, col, 10);
+    break;
+  }
   default:
     break;
   }
@@ -1046,12 +1166,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
   const int drawCols = 4;
   const int modCols = 4;
+  const float wUndo = RibbonSectionWidthPx(4, toolCell.x);
   const float wDraw = RibbonSectionWidthPx(drawCols, toolCell.x);
   const float wAnn = RibbonSectionWidthPx(2, toolCell.x);
   const float wMod = RibbonSectionWidthPx(modCols, toolCell.x);
   const float wView = RibbonSectionWidthPx(2, toolCell.x);
   const float wInq = RibbonSectionWidthPx(3, toolCell.x);
-  const float wSrv = RibbonSectionWidthPx(2, toolCell.x);
+  const float wSrv = RibbonSectionWidthPx(3, toolCell.x);
 
   ImGui::BeginChild("RibbonToolsLeft", ImVec2(-kLayerPanelW - st.ItemSpacing.x, panelH), false,
                     ImGuiWindowFlags_HorizontalScrollbar);
@@ -1061,6 +1182,49 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     if (idx % kCols != 0)
       ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x);
   };
+
+  RibbonSectionBegin("RibbonSecUndo", "Edit", wUndo, panelH);
+  {
+    const bool canUndo = CanUndo(cmd);
+    const bool canRedo = CanRedo(cmd);
+    const bool hasSelection = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
+    const bool hasClipboard = !cmd.clipboard.empty();
+    if (!canUndo)
+      ImGui::BeginDisabled();
+    if (RibbonIconButton("##RibbonUndo", toolCell, RibbonIconKind::Undo))
+      DoUndo(cmd, log);
+    if (!canUndo)
+      ImGui::EndDisabled();
+    RibbonItemHelp("Undo (Ctrl+Z) — restore previous state.", canUndo ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+    ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x);
+    if (!canRedo)
+      ImGui::BeginDisabled();
+    if (RibbonIconButton("##RibbonRedo", toolCell, RibbonIconKind::Redo))
+      DoRedo(cmd, log);
+    if (!canRedo)
+      ImGui::EndDisabled();
+    RibbonItemHelp("Redo (Ctrl+Shift+Z) — restore next state.", canRedo ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+    ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x);
+    if (!hasSelection)
+      ImGui::BeginDisabled();
+    if (RibbonIconButton("##RibbonClipCopy", toolCell, RibbonIconKind::ClipboardCopy))
+      CopySelectionToClipboard(cmd, log);
+    if (!hasSelection)
+      ImGui::EndDisabled();
+    RibbonItemHelp("Copy (Ctrl+C) — copy selected objects to clipboard.\nPaste later with Ctrl+V or the Paste button.",
+                   hasSelection ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+    ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x);
+    if (!hasClipboard)
+      ImGui::BeginDisabled();
+    if (RibbonIconButton("##RibbonClipPaste", toolCell, RibbonIconKind::ClipboardPaste))
+      StartPasteCommand(cmd, log);
+    if (!hasClipboard)
+      ImGui::EndDisabled();
+    RibbonItemHelp("Paste (Ctrl+V) — place clipboard objects at cursor position.\nRight-click Edit menu for Paste at Original Coordinates.",
+                   hasClipboard ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+  }
+  RibbonSectionEnd();
+  ImGui::SameLine(0, 8);
 
   RibbonSectionBegin("RibbonSecDraw", "Draw", wDraw, panelH);
   {
@@ -1190,6 +1354,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     RibbonItemHelp(
         "Inverse — two-point survey leg: horizontal distance and bearing (clockwise from north) in the command log "
         "(World X=Easting, Y=Northing).\nCommand bar: INVERSE or INV");
+    ImGui::SameLine(0, st.ItemSpacing.x);
+    if (RibbonIconButton("##RibbonTraverse", toolCell, RibbonIconKind::Traverse))
+      cmd.showTraverseEditorWindow = true;
+    RibbonItemHelp("Traverse Editor — enter traverse leg observations (horizontal angles, distances, vertical angles)\nto compute coordinates and closure. Face 1/Face 2 support included.");
   }
   RibbonSectionEnd();
   ImGui::SameLine(0, 8);
@@ -5156,7 +5324,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
              cmd.active == K::Arc || cmd.active == K::Ellipse || cmd.active == K::Text ||
              cmd.active == K::Mtext || cmd.active == K::DimAligned || cmd.active == K::DimLinear ||
              cmd.active == K::DimAngular ||
-             cmd.active == K::IdPoint || cmd.active == K::SurveyInverse)
+             cmd.active == K::IdPoint || cmd.active == K::SurveyInverse || cmd.active == K::Paste)
       SubmitViewportPick(cmd, commitX, commitY, log);
     else if (cmd.active == K::Move || cmd.active == K::Copy || cmd.active == K::Scale) {
       if (cmd.modifyPhase == MP::PickSelection) {

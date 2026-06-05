@@ -1,0 +1,116 @@
+#pragma once
+
+#include <string>
+#include <vector>
+
+/// One leg of a survey traverse.
+/// Records measurements made at the instrument (FROM) station pointing to the
+/// foresight (TO) station. Computed fields are filled by \ref ComputeTraverse.
+struct TraverseLeg {
+    int stationId = 0;           ///< Foresight station point number.
+    std::string description;     ///< Station description / field notes.
+
+    // --- Horizontal angle (° CW from backsight direction to this foresight) ---
+    std::string horizAngleBuf;   ///< User input — decimal or DdMmSs (e.g. "45d30m10s").
+    double horizAngleDeg = 0.0;
+    bool hasHorizAngle = false;
+
+    // Face 1 / Face 2 horizontal circle readings
+    std::string face1HorizBuf;
+    std::string face2HorizBuf;
+    double face1HorizDeg = 0.0;
+    double face2HorizDeg = 0.0;
+
+    // --- Horizontal distance (measured directly) ---
+    double horizDist = 0.0;
+    bool hasHorizDist = false;
+
+    // --- Slope distance ---
+    double slopeDist = 0.0;
+    bool hasSlopeDist = false;
+
+    // --- Vertical / zenith angle ---
+    std::string vertAngleBuf;    ///< User input — decimal or DdMmSs.
+    double vertAngleDeg = 0.0;
+    bool isZenithAngle = true;   ///< true = zenith (90° level); false = elevation from horizontal.
+    bool hasVertAngle = false;
+
+    // Face 1 / Face 2 vertical circle readings
+    std::string face1VertBuf;
+    std::string face2VertBuf;
+    double face1VertDeg = 0.0;
+    double face2VertDeg = 0.0;
+
+    // --- Computed outputs (set by ComputeTraverse) ---
+    double computedBearingDeg = 0.0;
+    double computedHorizDist = 0.0;
+    double computedDeltaE = 0.0;
+    double computedDeltaN = 0.0;
+    double computedDeltaZ = 0.0;
+    double computedEasting = 0.0;
+    double computedNorthing = 0.0;
+    double computedElevation = 0.0;
+    bool computed = false;
+    bool hasSufficientData = false;
+    std::string errorMsg;
+};
+
+struct TraverseData {
+    // --- Starting station ---
+    int startStationId = 1;
+    double startEasting = 0.0;
+    double startNorthing = 0.0;
+    double startElevation = 0.0;
+
+    /// Orientation bearing at the start station (° CW from N).
+    /// This is the bearing of the reference direction (backsight or known azimuth).
+    /// The forward bearing of the first leg = startBearingDeg + HA of first leg.
+    /// If you know the first leg bearing directly, set startBearingDeg to it and
+    /// leave the first row's H.Angle at 0°.
+    std::string startBearingBuf;
+    double startBearingDeg = 0.0;
+    bool hasStartBearing = false;
+
+    std::vector<TraverseLeg> legs;
+
+    bool useFace1Face2 = false;   ///< When true, use F1/F2 averages instead of single observations.
+    bool isClosedLoop = false;    ///< When true, compute closure back to starting station.
+
+    // --- Closure results (set by ComputeTraverse when isClosedLoop) ---
+    double closureDeltaE = 0.0;       ///< End easting − start easting.
+    double closureDeltaN = 0.0;       ///< End northing − start northing.
+    double closureLinear = 0.0;       ///< Linear closure error sqrt(dE²+dN²).
+    double closurePerimeter = 0.0;    ///< Sum of all horizontal distances.
+    double closurePrecision = 0.0;    ///< 1/(perimeter/linear) — larger is better; 0 if closed perfectly.
+    bool closureValid = false;
+};
+
+/// Parse angle from user string (decimal degrees or DdMmSs). Returns false on failure.
+bool TraverseParseAngle(const std::string& raw, double* degreesOut);
+
+/// Normalize angle to [0, 360).
+double TraverseNormBearing(double deg);
+
+/// Reduce slope distance to horizontal using zenith or elevation angle.
+double TraverseReduceToHoriz(double slopeDist, double angleDeg, bool isZenith);
+
+/// Compute signed vertical component from slope distance and zenith or elevation angle.
+double TraverseReduceToVert(double slopeDist, double angleDeg, bool isZenith);
+
+/// Average face 1 and face 2 horizontal angles. F2 should read ~F1 ± 180°.
+double TraverseAverageFaceHoriz(double face1Deg, double face2Deg);
+
+/// Average face 1 and face 2 zenith angles. F1 + F2 should ≈ 360°.
+double TraverseAverageFaceZenith(double face1Deg, double face2Deg);
+
+/// Average face 1 and face 2 elevation angles (simple mean).
+double TraverseAverageFaceElevation(double face1Deg, double face2Deg);
+
+/// Format a bearing as "DDD°MM'SS.S\"".
+std::string TraverseFormatBearing(double bearingDeg);
+
+/// Format a delta or distance value to 4 decimal places.
+std::string TraverseFormatDist(double val);
+
+/// Compute all legs in \p td: fills computed fields and closure info.
+void ComputeTraverse(TraverseData& td);

@@ -127,6 +127,10 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   tmp = static_cast<uint8_t>(st.rightClickCommandMode);
   u8clamped("rightClickCommandMode",  &tmp, 2); st.rightClickCommandMode  = static_cast<AppCommandState::RightClickCommandMode>(tmp);
 
+  // --- Undo/Redo ---
+  if (s.contains("undoHistoryMaxSize") && s["undoHistoryMaxSize"].is_number_integer())
+    st.undoHistoryMaxSize = std::clamp(s["undoHistoryMaxSize"].get<int>(), 1, 200);
+
   // --- Object snap (Drafting tab) ---
   b  ("objectSnapEnabled",         &st.objectSnapEnabled);
   b  ("objectSnapEndpoint",        &st.objectSnapEndpoint);
@@ -273,6 +277,9 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["rightClickCommandMode"]       = static_cast<uint8_t>(st.rightClickCommandMode);
 
   // Object snap
+  // Undo/Redo
+  s["undoHistoryMaxSize"]         = st.undoHistoryMaxSize;
+
   s["objectSnapEnabled"]          = st.objectSnapEnabled;
   s["objectSnapEndpoint"]         = st.objectSnapEndpoint;
   s["objectSnapMidpoint"]         = st.objectSnapMidpoint;
