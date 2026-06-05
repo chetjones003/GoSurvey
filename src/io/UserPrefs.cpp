@@ -195,7 +195,7 @@ void LoadUserStartupPrefSettings(AppCommandState& st) {
   }
 }
 
-void SaveUserStartupPrefs(const AppCommandState& st) {
+bool SaveUserStartupPrefs(const AppCommandState& st) {
   const auto path = UserPrefsJsonPath();
   nlohmann::json j = nlohmann::json::object();
   try {
@@ -283,10 +283,16 @@ void SaveUserStartupPrefs(const AppCommandState& st) {
 
   j["settings"] = std::move(s);
   try {
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    if (const auto dir = path.parent_path(); !dir.empty()) {
+      std::error_code ec;
+      std::filesystem::create_directories(dir, ec);
+    }
+    std::ofstream f(path, std::ios::out | std::ios::binary | std::ios::trunc);
     if (!f)
-      return;
+      return false;
     f << j.dump(2);
+    return f.good();
   } catch (...) {
+    return false;
   }
 }

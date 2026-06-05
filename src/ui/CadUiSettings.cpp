@@ -203,14 +203,20 @@ static void DrawSettingsFilesTab(AppCommandState& cmd, std::vector<std::string>*
   else
     ImGui::TextDisabled("Bundled template not found (expected resources/default-template.gs beside exe or cwd).");
   if (ImGui::Button("Save startup preferences##startup_save")) {
-    SaveUserStartupPrefs(cmd);
-    if (log) log->push_back("Saved startup preferences (gosurvey-user.json).");
+    if (SaveUserStartupPrefs(cmd)) {
+      if (log) log->push_back("Saved startup preferences (gosurvey-user.json).");
+    } else {
+      if (log) log->push_back("Error: failed to write gosurvey-user.json (check directory permissions).");
+    }
   }
   ImGui::SameLine();
   if (ImGui::Button("Clear path (use bundled)##startup_clear")) {
     cmd.defaultWorkspaceTemplatePathUtf8[0] = '\0';
-    SaveUserStartupPrefs(cmd);
-    if (log) log->push_back("Cleared custom startup path; bundled template will be used on next launch.");
+    if (SaveUserStartupPrefs(cmd)) {
+      if (log) log->push_back("Cleared custom startup path; bundled template will be used on next launch.");
+    } else {
+      if (log) log->push_back("Error: failed to write gosurvey-user.json (check directory permissions).");
+    }
   }
   BoxEnd();
   BoxBegin("Support file search path", 90.f);
@@ -628,11 +634,11 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::EndChild();
 
   ImGui::Separator();
-  if (ImGui::Button("OK", ImVec2(90.f, 0.f)))     { SaveUserStartupPrefs(cmd); if (log) log->push_back("Settings saved (gosurvey-user.json)."); cmd.showSettingsWindow = false; }
+  if (ImGui::Button("OK", ImVec2(90.f, 0.f)))     { if (SaveUserStartupPrefs(cmd)) { if (log) log->push_back("Settings saved (gosurvey-user.json)."); } else { if (log) log->push_back("Error: failed to write gosurvey-user.json (check directory permissions)."); } cmd.showSettingsWindow = false; }
   ImGui::SameLine();
   if (ImGui::Button("Cancel", ImVec2(90.f, 0.f))) cmd.showSettingsWindow = false;
   ImGui::SameLine();
-  if (ImGui::Button("Apply", ImVec2(90.f, 0.f)))  { SaveUserStartupPrefs(cmd); if (log) log->push_back("Settings applied (gosurvey-user.json)."); }
+  if (ImGui::Button("Apply", ImVec2(90.f, 0.f)))  { if (SaveUserStartupPrefs(cmd)) { if (log) log->push_back("Settings applied (gosurvey-user.json)."); } else { if (log) log->push_back("Error: failed to write gosurvey-user.json (check directory permissions)."); } }
   ImGui::SameLine();
   ImGui::BeginDisabled(); ImGui::Button("Help", ImVec2(90.f, 0.f)); ImGui::EndDisabled();
   ImGui::End();

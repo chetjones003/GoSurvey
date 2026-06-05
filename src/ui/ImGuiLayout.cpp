@@ -121,7 +121,8 @@ bool ImGuiLayout_SwitchToLayout(AppCommandState& st, const char* layout_stem_utf
   ImGui::LoadIniSettingsFromDisk(g_iniAbsPathUtf8.c_str());
 
   CopyUtf8PathCapped(st.activeUiLayoutNameUtf8, sizeof(st.activeUiLayoutNameUtf8), stem.c_str());
-  SaveUserStartupPrefs(st);
+  if (!SaveUserStartupPrefs(st))
+    log.push_back("Warning: failed to write gosurvey-user.json — layout preference will not persist.");
   log.push_back("UI layout: switched to \"" + stem + "\" (" + g_iniAbsPathUtf8 + ").");
   return true;
 }
@@ -143,7 +144,8 @@ bool ImGuiLayout_SaveCurrentLayoutAs(AppCommandState& st, const char* layout_ste
   ImGui::GetIO().IniFilename = g_iniAbsPathUtf8.c_str();
 
   CopyUtf8PathCapped(st.activeUiLayoutNameUtf8, sizeof(st.activeUiLayoutNameUtf8), stem.c_str());
-  SaveUserStartupPrefs(st);
+  if (!SaveUserStartupPrefs(st))
+    log.push_back("Warning: failed to write gosurvey-user.json — layout preference will not persist.");
   log.push_back("UI layout: saved as \"" + stem + "\" (" + g_iniAbsPathUtf8 + ").");
   return true;
 }

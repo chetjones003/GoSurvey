@@ -11,8 +11,8 @@ void LoadUserStartupPrefs(AppCommandState& st);
 /// Call this after loading a startup workspace template so user preferences win over template defaults.
 void LoadUserStartupPrefSettings(AppCommandState& st);
 
-/// Writes gosurvey-user.json beside the executable (best-effort; may fail if the directory is not writable).
-void SaveUserStartupPrefs(const AppCommandState& st);
+/// Writes gosurvey-user.json beside the executable. Returns true on success, false if the file could not be written.
+bool SaveUserStartupPrefs(const AppCommandState& st);
 
 /// Copies \p utf8 into \p dest with a trailing NUL; never writes past \p cap bytes (including NUL).
 void CopyUtf8PathCapped(char* dest, size_t cap, const char* utf8);
