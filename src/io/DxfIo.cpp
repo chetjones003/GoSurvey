@@ -413,11 +413,11 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     xf.apply(x1, y1, &ox1, &oy1);
     UpdateCoordMag(coordMagMax, ox0, oy0);
     UpdateCoordMag(coordMagMax, ox1, oy1);
-    st.userLinesFlat.push_back(static_cast<float>(ox0));
-    st.userLinesFlat.push_back(static_cast<float>(oy0));
+    st.userLinesFlat.push_back(static_cast<float>(ox0 - st.worldDocumentOriginX));
+    st.userLinesFlat.push_back(static_cast<float>(oy0 - st.worldDocumentOriginY));
     st.userLinesFlat.push_back(0.f);
-    st.userLinesFlat.push_back(static_cast<float>(ox1));
-    st.userLinesFlat.push_back(static_cast<float>(oy1));
+    st.userLinesFlat.push_back(static_cast<float>(ox1 - st.worldDocumentOriginX));
+    st.userLinesFlat.push_back(static_cast<float>(oy1 - st.worldDocumentOriginY));
     st.userLinesFlat.push_back(0.f);
     st.userLineAttrs.push_back(at);
   };
@@ -498,8 +498,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       xf.apply(cx, cy, &ocx, &ocy);
       UpdateCoordMag(coordMagMax, ocx, ocy);
       UpdateCoordMag(coordMagMax, ocx + rad, ocy);
-      st.userCirclesCxCyR.push_back(static_cast<float>(ocx));
-      st.userCirclesCxCyR.push_back(static_cast<float>(ocy));
+      st.userCirclesCxCyR.push_back(static_cast<float>(ocx - st.worldDocumentOriginX));
+      st.userCirclesCxCyR.push_back(static_cast<float>(ocy - st.worldDocumentOriginY));
       st.userCirclesCxCyR.push_back(static_cast<float>(rad));
       st.userCircleAttrs.push_back(at);
       return;
@@ -852,8 +852,11 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       const auto at = base.makeAttr(layerRgb);
       double arm = (*coordMagMax > 1.0) ? (*coordMagMax * 1e-7) : 0.01;
       arm = std::clamp(arm, 1e-6, std::max(*coordMagMax * 1e-6, 0.5));
-      appendSegXF(px - arm, py, px + arm, py, at);
-      appendSegXF(px, py - arm, px, py + arm, at);
+      // Split each arm at center so (px,py) is a stored endpoint — snap hits the exact point.
+      appendSegXF(px - arm, py, px, py, at);
+      appendSegXF(px, py, px + arm, py, at);
+      appendSegXF(px, py - arm, px, py, at);
+      appendSegXF(px, py, px, py + arm, at);
       i = j;
       continue;
     }
@@ -1067,6 +1070,9 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       const Affine2D nest = xf.compose(ins);
       ParseEntityRegion(t, br.first, br.second, st, layerRgb, blockDefs, nest, insertDepth + 1, coordMagMax, skippedPaper,
                         skippedViewport, skippedUnknown, skipCounts);
+      // Store the INSERT insertion point as a zero-length segment so snap can hit the exact
+      // world coordinate — Civil 3D COGO points use INSERT entities whose center must be snap-able.
+      appendSegXF(ix, iy, ix, iy, base.makeAttr(layerRgb));
       i = j;
       continue;
     }
@@ -1267,6 +1273,76 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
 
   ResetCadToolStateToIdle(st);
   ClearCadGeometry(st);
+
+  // Parse HEADER $EXTMIN/$EXTMAX to set the world origin before entity parsing.
+  // This lets appendSegXF subtract a near-zero offset before the double→float cast,
+  // preserving sub-unit precision for state-plane coordinates (Civil 3D, etc.).
+  {
+    size_t hb = 0, he = 0;
+    if (FindSectionBounds(pairs, "HEADER", &hb, &he)) {
+      double minX = 0, minY = 0, maxX = 0, maxY = 0;
+      bool gotMin = false, gotMax = false;
+      for (size_t k = hb; k < he; ++k) {
+        if (pairs[k].code != 9)
+          continue;
+        const bool isMin = (pairs[k].value == "$EXTMIN");
+        const bool isMax = (pairs[k].value == "$EXTMAX");
+        if (!isMin && !isMax)
+          continue;
+        double vx = 0, vy = 0;
+        bool hx = false, hy = false;
+        for (size_t kk = k + 1; kk < he && pairs[kk].code != 9; ++kk) {
+          if (pairs[kk].code == 10) { ParseDouble(pairs[kk].value, &vx); hx = true; }
+          else if (pairs[kk].code == 20) { ParseDouble(pairs[kk].value, &vy); hy = true; }
+        }
+        if (hx && hy) {
+          if (isMin) { minX = vx; minY = vy; gotMin = true; }
+          else       { maxX = vx; maxY = vy; gotMax = true; }
+        }
+      }
+      // Only trust HEADER extents if min and max are in the same coordinate system.
+      // Civil 3D sometimes writes $EXTMIN in local/paper space and $EXTMAX in state-plane
+      // (or vice-versa), producing a span of millions of feet. A span > 1e6 ft (~190 miles)
+      // signals a mixed-system HEADER — ignore it and fall back to entity scanning below.
+      const double spanX = gotMin && gotMax ? std::fabs(maxX - minX) : 0.0;
+      const double spanY = gotMin && gotMax ? std::fabs(maxY - minY) : 0.0;
+      const bool headerSane = std::max(spanX, spanY) < 1e6;
+      if (headerSane) {
+        if (gotMin && gotMax && (spanX > 0.0 || spanY > 0.0)) {
+          st.worldDocumentOriginX = 0.5 * (minX + maxX);
+          st.worldDocumentOriginY = 0.5 * (minY + maxY);
+        } else if (gotMin) {
+          st.worldDocumentOriginX = minX;
+          st.worldDocumentOriginY = minY;
+        }
+      }
+    }
+  }
+
+  // If HEADER gave no usable origin, scan entity coordinates for the first large-magnitude
+  // value to use as the world origin (avoids float precision loss for state-plane coordinates).
+  if (st.worldDocumentOriginX == 0.0 && st.worldDocumentOriginY == 0.0) {
+    auto prescanEntities = [&](size_t a, size_t b) {
+      bool gotX = false, gotY = false;
+      for (size_t k = a; k < b; ++k) {
+        if (!gotX && pairs[k].code == 10) {
+          double v = 0;
+          if (ParseDouble(pairs[k].value, &v) && std::fabs(v) > 10000.0) {
+            st.worldDocumentOriginX = v; gotX = true;
+          }
+        }
+        if (!gotY && pairs[k].code == 20) {
+          double v = 0;
+          if (ParseDouble(pairs[k].value, &v) && std::fabs(v) > 10000.0) {
+            st.worldDocumentOriginY = v; gotY = true;
+          }
+        }
+        if (gotX && gotY) break;
+      }
+    };
+    if (hasEntitiesSec) prescanEntities(eb, ee);
+    else if (hasModelSpace) prescanEntities(mb, me);
+  }
 
   double coordMagMax = 0;
   int skippedPaper = 0;
