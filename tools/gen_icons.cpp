@@ -104,21 +104,32 @@ static constexpr int S  = 32;       // output icon size
 static constexpr int SS = 4;        // supersample factor
 static constexpr int B  = S * SS;   // big canvas size
 
+// Global stroke boldness. Bumped so the line-art reads fuller/heavier at
+// toolbar size (matches the "redraw richer" intent) without redrawing each icon.
+static constexpr float kStroke = 1.35f;
+
 struct Color { uint8_t r, g, b, a; };
 static Color RGBA(int r, int g, int b, int a = 255) {
   return {static_cast<uint8_t>(r), static_cast<uint8_t>(g), static_cast<uint8_t>(b), static_cast<uint8_t>(a)};
 }
 
-// nanoCAD-ish palette.
-static const Color BLUE   = RGBA(26, 72, 150);
-static const Color GREEN  = RGBA(34, 130, 64);
-static const Color TEAL   = RGBA(20, 120, 130);
-static const Color ORANGE = RGBA(200, 110, 24);
-static const Color SLATE  = RGBA(64, 72, 84);
-static const Color RED    = RGBA(206, 38, 38);
-static const Color YELLOW = RGBA(225, 178, 40);
+// Muted 2-tone nanoCAD palette: dark slate "ink" for primary geometry,
+// steel-blue "accent" for nodes, emphasis lines and secondary shapes.
+// The old per-category color names are kept but collapsed onto the two tones
+// so each icon's geometry maps cleanly: cool/structural names -> ink,
+// node/highlight names (RED, TEAL, PINK) -> steel accent.
+static const Color INK    = RGBA(58, 64, 74);     // #3A404A primary geometry
+static const Color STEEL  = RGBA(46, 91, 174);    // #2E5BAE steel-blue accent
 static const Color WHITE  = RGBA(248, 248, 248);
-static const Color PINK   = RGBA(225, 120, 130);
+
+static const Color BLUE   = INK;    // primary geometry
+static const Color GREEN  = INK;    // primary geometry (was 2nd category color)
+static const Color ORANGE = INK;    // primary geometry (survey)
+static const Color SLATE  = INK;    // primary geometry (neutral tools)
+static const Color YELLOW = INK;    // unused
+static const Color TEAL   = STEEL;  // secondary shape / emphasis line
+static const Color RED    = STEEL;  // node dots / accent
+static const Color PINK   = STEEL;  // accent fill (eraser)
 
 struct Canvas {
   std::vector<uint8_t> p = std::vector<uint8_t>(static_cast<size_t>(B) * B * 4, 0);
@@ -141,7 +152,7 @@ static float DistSeg(float px, float py, float ax, float ay, float bx, float by)
 // All primitives take output-space coords (0..S); scaled by SS internally.
 static void Line(Canvas& c, float x0, float y0, float x1, float y1, float th, Color col) {
   x0 *= SS; y0 *= SS; x1 *= SS; y1 *= SS;
-  const float r = th * SS * 0.5f;
+  const float r = th * kStroke * SS * 0.5f;
   const int minx = std::max(0, (int)std::floor(std::min(x0, x1) - r - 1));
   const int maxx = std::min(B - 1, (int)std::ceil(std::max(x0, x1) + r + 1));
   const int miny = std::max(0, (int)std::floor(std::min(y0, y1) - r - 1));
@@ -163,7 +174,7 @@ static void Disc(Canvas& c, float cx, float cy, float rad, Color col) {
 static void Ring(Canvas& c, float cx, float cy, float rad, float th, Color col,
                  float a0 = 0.f, float a1 = 6.2831853f) {
   cx *= SS; cy *= SS; rad *= SS;
-  const float hr = th * SS * 0.5f;
+  const float hr = th * kStroke * SS * 0.5f;
   for (int y = std::max(0, (int)(cy - rad - hr - 1)); y <= std::min(B - 1, (int)(cy + rad + hr + 1)); ++y)
     for (int x = std::max(0, (int)(cx - rad - hr - 1)); x <= std::min(B - 1, (int)(cx + rad + hr + 1)); ++x) {
       const float dx = x + 0.5f - cx, dy = y + 0.5f - cy;
@@ -180,7 +191,7 @@ static void Ring(Canvas& c, float cx, float cy, float rad, float th, Color col,
 
 static void EllipseRing(Canvas& c, float cx, float cy, float rx, float ry, float th, Color col) {
   cx *= SS; cy *= SS; rx *= SS; ry *= SS;
-  const float hr = th * SS * 0.5f;
+  const float hr = th * kStroke * SS * 0.5f;
   for (int y = std::max(0, (int)(cy - ry - hr - 1)); y <= std::min(B - 1, (int)(cy + ry + hr + 1)); ++y)
     for (int x = std::max(0, (int)(cx - rx - hr - 1)); x <= std::min(B - 1, (int)(cx + rx + hr + 1)); ++x) {
       const float dx = (x + 0.5f - cx) / rx, dy = (y + 0.5f - cy) / ry;
@@ -206,7 +217,7 @@ static void RectOutline(Canvas& c, float x0, float y0, float x1, float y1, float
 }
 
 // Small filled node square centered at (x,y), half-size hs (output space).
-static void Node(Canvas& c, float x, float y, Color fill, float hs = 2.0f) {
+static void Node(Canvas& c, float x, float y, Color fill, float hs = 2.4f) {
   RectFill(c, x - hs, y - hs, x + hs, y + hs, fill);
 }
 
@@ -296,18 +307,18 @@ static void DrawIcon(Canvas& c, const std::string& n) {
     Arrow(c, cx - a, cy, -1, 0, 4, 2.0f, GREEN);
     Arrow(c, cx + a, cy, 1, 0, 4, 2.0f, GREEN);
   } else if (n == "copy") {
-    RectOutline(c, 6, 11, 18, 25, 2.0f, BLUE);
-    RectOutline(c, 12, 5, 24, 19, 2.0f, GREEN);
+    RectOutline(c, 6, 11, 18, 25, 2.0f, INK);
+    RectOutline(c, 12, 5, 24, 19, 2.0f, STEEL);  // front copy -> accent
   } else if (n == "rotate") {
-    Ring(c, cx, cy, 8, 2.2f, GREEN, 0.9f, 5.2f);
+    Ring(c, cx, cy, 8, 2.2f, INK, 0.9f, 5.2f);
     const float ae = 5.2f;
-    Arrow(c, cx + std::cos(ae) * 8, cy + std::sin(ae) * 8, std::sin(ae), -std::cos(ae), 4.5f, 2.2f, GREEN);
-    Disc(c, cx, cy, 1.8f, GREEN);
+    Arrow(c, cx + std::cos(ae) * 8, cy + std::sin(ae) * 8, std::sin(ae), -std::cos(ae), 4.5f, 2.2f, INK);
+    Disc(c, cx, cy, 1.8f, STEEL);  // pivot -> accent
   } else if (n == "scale") {
-    RectOutline(c, 6, 18, 14, 26, 2.0f, GREEN);
-    RectOutline(c, 16, 6, 26, 16, 2.0f, GREEN);
-    Line(c, 12, 20, 22, 10, 2.0f, GREEN);
-    Arrow(c, 22, 10, 1, -1, 4, 2.0f, GREEN);
+    RectOutline(c, 6, 18, 14, 26, 2.0f, INK);
+    RectOutline(c, 16, 6, 26, 16, 2.0f, INK);
+    Line(c, 12, 20, 22, 10, 2.0f, STEEL);  // scale vector -> accent
+    Arrow(c, 22, 10, 1, -1, 4, 2.0f, STEEL);
   } else if (n == "erase") {
     PolyFill(c, {{8, 20}, {18, 8}, {24, 13}, {14, 25}}, PINK);     // eraser body
     PolyFill(c, {{8, 20}, {12, 15.2f}, {18, 20.2f}, {14, 25}}, WHITE);
@@ -322,9 +333,9 @@ static void DrawIcon(Canvas& c, const std::string& n) {
     Line(c, 20, 22, 24, 22, 2.0f, BLUE);
     Line(c, 10, 6, 22, 28, 2.2f, RED);     // cutting edge
   } else if (n == "offset") {
-    Ring(c, 13, cy, 9, 2.2f, BLUE, 1.5708f, 4.7124f);
-    Ring(c, 13, cy, 5, 2.2f, GREEN, 1.5708f, 4.7124f);
-    Arrow(c, 22, cy, 1, 0, 4, 2.0f, GREEN);
+    Ring(c, 13, cy, 9, 2.2f, INK, 1.5708f, 4.7124f);
+    Ring(c, 13, cy, 5, 2.2f, STEEL, 1.5708f, 4.7124f);  // offset copy -> accent
+    Arrow(c, 22, cy, 1, 0, 4, 2.0f, STEEL);
   } else if (n == "zoomextents") {
     Ring(c, 14, 14, 7, 2.2f, SLATE);
     Line(c, 19, 19, 26, 26, 2.6f, SLATE);
@@ -365,7 +376,7 @@ static void DrawIcon(Canvas& c, const std::string& n) {
     RectFill(c, 10, 21.5f, 12, 25, WHITE); RectFill(c, 14, 21.5f, 16, 25, WHITE); RectFill(c, 18, 21.5f, 20, 25, WHITE);
   } else if (n == "pdfshowbg") {
     RectFill(c, 7, 6, 23, 26, WHITE); RectOutline(c, 7, 6, 23, 26, 1.6f, SLATE);
-    Ring(c, 22, 22, 5, 1.8f, GREEN); Disc(c, 22, 22, 2, GREEN);
+    Ring(c, 22, 22, 5, 1.8f, STEEL); Disc(c, 22, 22, 2, STEEL);  // show badge -> accent
   } else if (n == "pdfhidebg") {
     RectFill(c, 7, 6, 23, 26, WHITE); RectOutline(c, 7, 6, 23, 26, 1.6f, SLATE);
     Ring(c, 22, 22, 5, 1.8f, RED);
@@ -384,8 +395,8 @@ static void DrawIcon(Canvas& c, const std::string& n) {
     Arrow(c, 24, 9, 0, -1, 4.5f, 2.2f, SLATE);
   } else if (n == "clipboardcopy") {
     RectFill(c, 7, 6, 19, 24, WHITE); RectOutline(c, 7, 6, 19, 24, 1.6f, SLATE);
-    RectFill(c, 10, 4, 16, 7, SLATE);
-    RectOutline(c, 13, 12, 25, 27, 2.0f, GREEN);
+    RectFill(c, 10, 4, 16, 7, INK);
+    RectOutline(c, 13, 12, 25, 27, 2.0f, STEEL);  // copied sheet -> accent
   } else if (n == "clipboardpaste") {
     RectFill(c, 8, 7, 24, 27, WHITE); RectOutline(c, 8, 7, 24, 27, 1.6f, SLATE);
     RectFill(c, 12, 5, 20, 9, SLATE);
