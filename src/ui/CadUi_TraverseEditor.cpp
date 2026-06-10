@@ -145,30 +145,54 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
     // ---- Starting station header ----
     ImGui::SeparatorText("Starting Station");
 
-    const float fieldW = 130.f;
+    const float colGap = 14.f;
 
-    ImGui::SetNextItemWidth(80.f);
-    if (ImGui::InputInt("Start ID##trv", &td.startStationId))
-        cmd.traverseDataDirty = true;
-    ImGui::SameLine(0, 12);
-    ImGui::SetNextItemWidth(fieldW);
-    if (ImGui::InputDouble("Easting##trv_e", &td.startEasting, 0., 0., "%.4f"))
-        cmd.traverseDataDirty = true;
-    ImGui::SameLine(0, 12);
-    ImGui::SetNextItemWidth(fieldW);
-    if (ImGui::InputDouble("Northing##trv_n", &td.startNorthing, 0., 0., "%.4f"))
-        cmd.traverseDataDirty = true;
-    ImGui::SameLine(0, 12);
-    ImGui::SetNextItemWidth(fieldW);
-    if (ImGui::InputDouble("Elevation##trv_z", &td.startElevation, 0., 0., "%.4f"))
-        cmd.traverseDataDirty = true;
-    ImGui::SameLine(0, 12);
-    ImGui::SetNextItemWidth(120.f);
-    if (ImGui::InputText("Ref Bearing°##trv_sb", &td.startBearingBuf)) {
-        // Live parse
-        ParseStartBearing(td);
-        cmd.traverseDataDirty = true;
-    }
+    // One column: a caption above its input field. The body lambda draws the input
+    // (its width is set by the caller via SetNextItemWidth before invoking).
+    auto LabeledCol = [&](const char* caption, float width, const auto& body) {
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted(caption);
+        ImGui::SetNextItemWidth(width);
+        body();
+        ImGui::EndGroup();
+    };
+    // A checkbox aligned to the input row: a blank caption-height spacer sits where
+    // the other columns' captions are, so the checkbox lines up with the fields.
+    auto CheckboxCol = [&](const char* label, bool* value, const char* tip) {
+        ImGui::BeginGroup();
+        ImGui::Dummy(ImVec2(0.f, ImGui::GetTextLineHeight()));
+        if (ImGui::Checkbox(label, value))
+            cmd.traverseDataDirty = true;
+        ImGui::EndGroup();
+        if (tip && *tip) ItemHelpTooltip(tip);
+    };
+
+    LabeledCol("Start ID", 90.f, [&] {
+        if (ImGui::InputInt("##trv_id", &td.startStationId, 0, 0))
+            cmd.traverseDataDirty = true;
+    });
+    ImGui::SameLine(0, colGap);
+    LabeledCol("Easting", 130.f, [&] {
+        if (ImGui::InputDouble("##trv_e", &td.startEasting, 0., 0., "%.4f"))
+            cmd.traverseDataDirty = true;
+    });
+    ImGui::SameLine(0, colGap);
+    LabeledCol("Northing", 130.f, [&] {
+        if (ImGui::InputDouble("##trv_n", &td.startNorthing, 0., 0., "%.4f"))
+            cmd.traverseDataDirty = true;
+    });
+    ImGui::SameLine(0, colGap);
+    LabeledCol("Elevation", 130.f, [&] {
+        if (ImGui::InputDouble("##trv_z", &td.startElevation, 0., 0., "%.4f"))
+            cmd.traverseDataDirty = true;
+    });
+    ImGui::SameLine(0, colGap);
+    LabeledCol("Ref Bearing\xc2\xb0", 120.f, [&] {
+        if (ImGui::InputText("##trv_sb", &td.startBearingBuf)) {
+            ParseStartBearing(td);
+            cmd.traverseDataDirty = true;
+        }
+    });
     ItemHelpTooltip(
         "Reference orientation at the start station (° CW from N).\n"
         "This is the azimuth of the backsight direction (or any reference mark)\n"
@@ -178,17 +202,14 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
         "the first row's H.Angle to 0.");
 
     // ---- Options ----
-    ImGui::SameLine(0, 20);
-    if (ImGui::Checkbox("Closed Loop##trv", &td.isClosedLoop))
-        cmd.traverseDataDirty = true;
-    ItemHelpTooltip("Report closure error back to the starting station.");
+    ImGui::SameLine(0, 24);
+    CheckboxCol("Closed Loop##trv", &td.isClosedLoop,
+                "Report closure error back to the starting station.");
     ImGui::SameLine(0, 16);
-    if (ImGui::Checkbox("Face 1 / Face 2##trv", &td.useFace1Face2))
-        cmd.traverseDataDirty = true;
-    ItemHelpTooltip(
-        "Show Face 1 and Face 2 columns. Angles are averaged before computation.\n"
-        "Horizontal: F2 is treated as F1 + 180° (handles wrap).\n"
-        "Zenith: mean = (F1 + (360° - F2)) / 2.");
+    CheckboxCol("Face 1 / Face 2##trv", &td.useFace1Face2,
+                "Show Face 1 and Face 2 columns. Angles are averaged before computation.\n"
+                "Horizontal: F2 is treated as F1 + 180° (handles wrap).\n"
+                "Zenith: mean = (F1 + (360° - F2)) / 2.");
 
     ImGui::SeparatorText("Legs");
 
