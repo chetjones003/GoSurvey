@@ -279,7 +279,10 @@ void ApplyCadLightTheme() {
   colors[ImGuiCol_FrameBgHovered]        = white;
   colors[ImGuiCol_FrameBgActive]         = ImVec4(0.949f, 0.965f, 0.996f, 1.f);
   colors[ImGuiCol_TitleBg]               = face;
-  colors[ImGuiCol_TitleBgActive]         = capBlue;     // active window/pane caption
+  // Keep focused panes the same color as unfocused: ImGui fills a docked node's tab-bar strip (and a
+  // floating window's caption) with TitleBgActive when focused, so a contrasting color here makes every
+  // panel flash dark blue as focus moves between them. Matching TitleBg removes that focus highlight.
+  colors[ImGuiCol_TitleBgActive]         = face;
   colors[ImGuiCol_TitleBgCollapsed]      = faceDk;
   colors[ImGuiCol_MenuBarBg]             = face;
   colors[ImGuiCol_ScrollbarBg]           = faceDk;
@@ -4555,6 +4558,11 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   static int  s_cmdSel = 0;
   static bool s_cmdDismissed = false;
   static std::string s_cmdLastQuery;
+  // Highlighted suggestion persisted across the Enter frame: a single-line InputText with EnterReturnsTrue
+  // deactivates itself when Enter is pressed, so on that frame the list isn't rebuilt (inputActive is false).
+  // We capture the highlight while the list is open and consume it on submit.
+  static bool s_cmdSugVisible = false;
+  static std::string s_cmdHighlight;
   std::vector<CommandSuggestion> cmdSug;
   ImVec2 cmdInputMin(0, 0), cmdInputMax(0, 0);
   bool   cmdShowSug = false;
@@ -4579,7 +4587,10 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     std::string query(cmdBuf);
     while (!query.empty() && std::isspace(static_cast<unsigned char>(query.front()))) query.erase(query.begin());
     while (!query.empty() && std::isspace(static_cast<unsigned char>(query.back())))  query.pop_back();
-    if (query != s_cmdLastQuery) { s_cmdLastQuery = query; s_cmdSel = 0; s_cmdDismissed = false; }
+    if (query != s_cmdLastQuery) {
+      s_cmdLastQuery = query; s_cmdSel = 0; s_cmdDismissed = false;
+      s_cmdSugVisible = false; s_cmdHighlight.clear();
+    }
 
     const bool singleToken = query.find_first_of(" \t") == std::string::npos;
     if (inputActive && !query.empty() && singleToken && !s_cmdDismissed)
@@ -4588,24 +4599,39 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     if (!cmdSug.empty()) {
       const int n = static_cast<int>(cmdSug.size());
       s_cmdSel = std::clamp(s_cmdSel, 0, n - 1);
+      // Claim the arrow keys for the (single-line) command input while the suggestion list is open.
+      // ImGuiConfigFlags_NavEnableKeyboard is on globally, and a single-line InputText doesn't consume
+      // Up/Down, so keyboard-nav would otherwise steal them: Up moves focus off the field (closing the
+      // list) and Down jumps focus to the Send button (so Enter runs the typed text, not the highlight).
+      ImGui::SetItemKeyOwner(ImGuiKey_UpArrow);
+      ImGui::SetItemKeyOwner(ImGuiKey_DownArrow);
       if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true)) s_cmdSel = (s_cmdSel + 1) % n;
       if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true))   s_cmdSel = (s_cmdSel - 1 + n) % n;
       g_cmdSuggestComplete = cmdSug[s_cmdSel].name;
       for (char& ch : g_cmdSuggestComplete) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
       cmdShowSug = true;
+      s_cmdSugVisible = true;
+      s_cmdHighlight = g_cmdSuggestComplete;
     } else {
       g_cmdSuggestComplete.clear();
+      // Clear the persisted highlight only when the user is actively in the field with no list (e.g. a
+      // full/multi-token command). On the Enter frame the input is already inactive, so the highlight
+      // survives to be consumed by the submit branch below.
+      if (inputActive) { s_cmdSugVisible = false; s_cmdHighlight.clear(); }
     }
 
     ImGui::SameLine(0, st.ItemSpacing.x);
     const bool sendClicked = ImGui::Button("Send", ImVec2(sendBtnW, 0.f));
     if (sendClicked || exec) {
-      // Enter with the list open runs the highlighted command.
-      if (exec && cmdShowSug && !cmdSug.empty())
-        std::snprintf(cmdBuf, static_cast<size_t>(cmdBufSize), "%s", g_cmdSuggestComplete.c_str());
+      // Enter with the list open runs the highlighted command. The list state is read from the persisted
+      // s_cmd* values because Enter deactivates the input, so cmdShowSug/cmdSug are already empty this frame.
+      if (exec && s_cmdSugVisible && !s_cmdHighlight.empty())
+        std::snprintf(cmdBuf, static_cast<size_t>(cmdBufSize), "%s", s_cmdHighlight.c_str());
       s_cmdDismissed = true;
       s_cmdLastQuery.clear();
       cmdShowSug = false;
+      s_cmdSugVisible = false;
+      s_cmdHighlight.clear();
       ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
     }
   } else {
