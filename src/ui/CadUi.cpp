@@ -279,7 +279,10 @@ void ApplyCadLightTheme() {
   colors[ImGuiCol_FrameBgHovered]        = white;
   colors[ImGuiCol_FrameBgActive]         = ImVec4(0.949f, 0.965f, 0.996f, 1.f);
   colors[ImGuiCol_TitleBg]               = face;
-  colors[ImGuiCol_TitleBgActive]         = capBlue;     // active window/pane caption
+  // Keep focused panes the same color as unfocused: ImGui fills a docked node's tab-bar strip (and a
+  // floating window's caption) with TitleBgActive when focused, so a contrasting color here makes every
+  // panel flash dark blue as focus moves between them. Matching TitleBg removes that focus highlight.
+  colors[ImGuiCol_TitleBgActive]         = face;
   colors[ImGuiCol_TitleBgCollapsed]      = faceDk;
   colors[ImGuiCol_MenuBarBg]             = face;
   colors[ImGuiCol_ScrollbarBg]           = faceDk;
@@ -338,9 +341,10 @@ static void PropValueCellBg() {
   ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, kPropValueBg, 1);
 }
 
-// Fill the panel's empty area below the last item with the light-blue workspace
-// color (the grid above keeps its gray window background for the label column).
-static void FillPropPanelEmptyBlue() {
+// Fill the panel's empty area below the last item with the neutral gray
+// workspace color (the grid above keeps its lighter window background for the
+// label column), so inactive space reads as quiet gray rather than blue.
+static void FillPropPanelEmpty() {
   ImGuiWindow* win = ImGui::GetCurrentWindow();
   if (!win) return;
   const float top = win->DC.CursorPos.y;
@@ -348,7 +352,7 @@ static void FillPropPanelEmptyBlue() {
   if (bottom <= top) return;
   win->DrawList->AddRectFilled(ImVec2(win->Pos.x, top),
                                ImVec2(win->Pos.x + win->Size.x, bottom),
-                               IM_COL32(210, 224, 242, 255));  // #D2E0F2
+                               IM_COL32(224, 224, 218, 255));  // #E0E0DA neutral gray
 }
 
 // nanoCAD-style collapsible section header: blue gradient bar, navy bold-ish text,
@@ -604,47 +608,75 @@ static void CollectAllDrawingLayers(const AppCommandState& cmd, std::vector<std:
 }
 
 
-static float RibbonSectionWidthPx(int nCols, float cellW) {
-  const ImGuiStyle& st = ImGui::GetStyle();
-  if (nCols <= 0)
-    return cellW + 12.f;
-  return static_cast<float>(nCols) * cellW + static_cast<float>(std::max(0, nCols - 1)) * st.ItemSpacing.x + 12.f;
-}
+// nanoCAD-classic toolbar band palette. One warm system-gray for the whole
+// strip (no Office-blue ribbon), with 3D bevel hi/lo tones for button states
+// and grippers. Kept here so the strip, sections and buttons stay in sync.
+constexpr ImU32 kBandFace   = IM_COL32(230, 230, 224, 255);  // #E6E6E0 toolbar band
+constexpr ImU32 kBandHilite = IM_COL32(252, 252, 250, 255);  // #FCFCFA top-left bevel
+constexpr ImU32 kBandShadow = IM_COL32(132, 130, 122, 255);  // #84827A bottom-right bevel
+constexpr ImU32 kBandSunken = IM_COL32(212, 211, 204, 255);  // #D4D3CC pressed face
 
-/// Square icon cell from ribbon section height (title + separator + two icon rows + row gap).
-static ImVec2 RibbonToolIconCellSize(float sectionHeightPx) {
-  const ImGuiStyle& st = ImGui::GetStyle();
-  const float titleLine = ImGui::GetTextLineHeight();
-  const float headerH = titleLine + st.ItemSpacing.y + 2.f;
-  const float avail = std::max(36.f, sectionHeightPx - headerH);
-  const float rowGap = st.ItemSpacing.y;
-  const float cell = std::floor((avail - rowGap) * 0.5f);
-  const float s = std::clamp(cell, 28.f, 52.f);
-  return ImVec2(s, s);
+// Height of the bottom title strip inside each ribbon panel (Civil 3D-style).
+constexpr float kRibbonTitleH = 17.f;
+// Carries the active panel's title from Begin to End (panels never nest).
+static const char* s_ribbonPanelTitle = nullptr;
+
+// Usable content height above the bottom title strip, for sizing buttons.
+static float RibbonPanelContentH(float panelH) {
+  return std::max(24.f, panelH - kRibbonTitleH);
 }
 
 static void RibbonSectionBegin(const char* childId, const char* title, float width, float height) {
   ImGui::BeginGroup();
-  // Almost-white group boxes sitting on the light-blue toolbar strip.
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(244, 244, 242, 255));  // #F4F4F2
-  ImGui::BeginChild(childId, ImVec2(width, height), true, ImGuiWindowFlags_NoScrollbar);
-  {
-    // 60% primary text + 40% disabled — readable in both dark and light themes.
-    const ImVec4 txt = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-    const ImVec4 dis = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(txt.x*0.6f+dis.x*0.4f, txt.y*0.6f+dis.y*0.4f, txt.z*0.6f+dis.z*0.4f, 1.f));
-  }
-  const ImGuiStyle& st = ImGui::GetStyle();
-  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(st.ItemSpacing.x, 1.f));
-  ImGui::TextUnformatted(title);
-  ImGui::Separator();
+  // Flat panel: same gray as the band, no border. Buttons float on a uniform
+  // strip; the panel title is pinned at the bottom by RibbonSectionEnd.
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, kBandFace);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f, 2.f));
+  ImGui::BeginChild(childId, ImVec2(width, height), false, ImGuiWindowFlags_NoScrollbar);
   ImGui::PopStyleVar();
-  ImGui::PopStyleColor();
+  s_ribbonPanelTitle = title;
 }
 
 static void RibbonSectionEnd() {
+  // Bottom-centered panel title + dropdown chevron (Civil 3D-style).
+  ImGuiWindow* win = ImGui::GetCurrentWindow();
+  const float wh = win->Size.y;
+  const float ww = win->Size.x;
+  const ImVec2 wp = win->Pos;
+  ImDrawList* dl = win->DrawList;
+  const char* title = s_ribbonPanelTitle ? s_ribbonPanelTitle : "";
+  const ImVec2 ts = ImGui::CalcTextSize(title);
+
+  const float titleTop = wp.y + wh - kRibbonTitleH;
+  dl->AddLine(ImVec2(wp.x + 3.f, titleTop), ImVec2(wp.x + ww - 3.f, titleTop), IM_COL32(0, 0, 0, 26), 1.f);
+
+  const ImVec4 t4 = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+  const ImVec4 d4 = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+  const ImU32 tcol = ImGui::GetColorU32(
+      ImVec4(t4.x * 0.5f + d4.x * 0.5f, t4.y * 0.5f + d4.y * 0.5f, t4.z * 0.5f + d4.z * 0.5f, 1.f));
+
+  constexpr float chevSz = 3.f;
+  constexpr float gap = 5.f;
+  const float totalW = ts.x + gap + chevSz * 2.f;
+  const float tx = wp.x + (ww - totalW) * 0.5f;
+  const float ty = titleTop + (kRibbonTitleH - ts.y) * 0.5f;
+  dl->AddText(ImVec2(tx, ty), tcol, title);
+  const float cx = tx + ts.x + gap + chevSz;
+  const float cy = titleTop + kRibbonTitleH * 0.5f;
+  dl->AddTriangleFilled(ImVec2(cx - chevSz, cy - chevSz * 0.55f), ImVec2(cx + chevSz, cy - chevSz * 0.55f),
+                        ImVec2(cx, cy + chevSz * 0.75f), tcol);
+
   ImGui::EndChild();
   ImGui::PopStyleColor();
+
+  // Etched vertical divider in the gap to the right of the panel.
+  const ImVec2 mn = ImGui::GetItemRectMin();
+  const ImVec2 mx = ImGui::GetItemRectMax();
+  ImDrawList* pdl = ImGui::GetWindowDrawList();
+  const float dx = mx.x + 4.f;
+  pdl->AddLine(ImVec2(dx, mn.y + 3.f), ImVec2(dx, mx.y - 3.f), kBandShadow, 1.f);
+  pdl->AddLine(ImVec2(dx + 1.f, mn.y + 3.f), ImVec2(dx + 1.f, mx.y - 3.f), kBandHilite, 1.f);
+
   ImGui::EndGroup();
 }
 
@@ -708,44 +740,11 @@ static void RibbonGripSquare(ImDrawList* dl, ImVec2 ctr, float half, ImU32 fillC
   dl->AddRect(a, b, edgeCol, 0.f, 0, edgeTh);
 }
 
-// nanoCAD-style per-category icon color: draw=blue, modify=green, annotate=teal,
-// survey=orange, everything else (edit/view/inquiry/layers/pdf) = neutral slate.
-static ImU32 RibbonIconColor(RibbonIconKind k) {
-  switch (k) {
-  // Draw — blueprint blue
-  case RibbonIconKind::Line:
-  case RibbonIconKind::Circle:
-  case RibbonIconKind::Polyline:
-  case RibbonIconKind::Arc:
-  case RibbonIconKind::Ellipse:
-  case RibbonIconKind::PdfAttach:
-    return IM_COL32(28, 64, 124, 255);   // #1C407C
-  // Modify — green
-  case RibbonIconKind::Move:
-  case RibbonIconKind::Copy:
-  case RibbonIconKind::Rotate:
-  case RibbonIconKind::Scale:
-  case RibbonIconKind::Erase:
-  case RibbonIconKind::Join:
-  case RibbonIconKind::Trim:
-  case RibbonIconKind::Offset:
-  case RibbonIconKind::Mirror:
-    return IM_COL32(31, 122, 61, 255);   // #1F7A3D
-  // Annotate — teal
-  case RibbonIconKind::Text:
-  case RibbonIconKind::Mtext:
-  case RibbonIconKind::Dim:
-  case RibbonIconKind::DimLinear:
-    return IM_COL32(20, 110, 120, 255);  // #146E78
-  // Survey — orange
-  case RibbonIconKind::SurveyPoint:
-  case RibbonIconKind::SurveyInverse:
-  case RibbonIconKind::Traverse:
-    return IM_COL32(184, 98, 22, 255);   // #B86216
-  // Edit / View / Inquiry / Layers / PDF — neutral slate
-  default:
-    return IM_COL32(60, 66, 76, 255);    // #3C424C
-  }
+// Muted 2-tone fallback art: all geometry uses one dark slate "ink"; node and
+// emphasis accents (drawn separately below) use steel-blue. Matches the
+// regenerated bitmap icon set so missing PNGs degrade consistently.
+static ImU32 RibbonIconColor(RibbonIconKind /*k*/) {
+  return IM_COL32(58, 64, 74, 255);  // #3A404A primary geometry ink
 }
 
 static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, RibbonIconKind k, ImU32 col, bool hovered) {
@@ -755,9 +754,9 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
   const float h = std::max(1.f, mx.y - mn.y);
   const float t = std::clamp(std::min(w, h) * 0.060f, 1.35f, 2.6f);
   const ImVec2 c((mn.x + mx.x) * 0.5f, (mn.y + mx.y) * 0.5f);
-  // Per-category geometry color; red endpoint/grip nodes (CAD convention).
+  // Dark slate geometry with steel-blue node/emphasis accents (2-tone set).
   col = RibbonIconColor(k);
-  const ImU32 acc = IM_COL32(200, 32, 32, 255);      // #C82020  red endpoint/grip nodes
+  const ImU32 acc = IM_COL32(46, 91, 174, 255);      // #2E5BAE  steel-blue endpoint/grip nodes
   const float grip = std::clamp(std::min(w, h) * 0.05f, 2.2f, 4.8f);
 
   switch (k) {
@@ -846,7 +845,7 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     const float yTop = mn.y + h * 0.2f;
     const float yBot = mx.y - h * 0.2f;
     const float yDim = c.y;
-    const ImU32 accentBlue = IM_COL32(59, 130, 246, 255);  // #3B82F6 Primary Blue
+    const ImU32 accentBlue = IM_COL32(46, 91, 174, 255);  // #2E5BAE steel-blue accent
     dl->AddLine(ImVec2(xL, yTop), ImVec2(xL, yBot), col, t);
     dl->AddLine(ImVec2(xR, yTop), ImVec2(xR, yBot), col, t);
     dl->AddLine(ImVec2(xL, yDim), ImVec2(xR, yDim), accentBlue, t * 1.05f);
@@ -1351,56 +1350,104 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
   return false;
 }
 
-static bool RibbonIconButton(const char* str_id, const ImVec2& cellSize, RibbonIconKind icon) {
+// Classic Win32/nanoCAD 3D button background: flat at rest; raised bevel on
+// hover (light top-left, dark bottom-right); sunken bevel when pressed.
+static void DrawRibbonButtonBevel(ImDrawList* dl, const ImRect& bb, bool sunken) {
+  const ImU32 face = sunken ? kBandSunken : IM_COL32(240, 240, 235, 255);  // raised face slightly lighter than band
+  dl->AddRectFilled(bb.Min, bb.Max, face, 0.f);
+  const ImU32 tl = sunken ? kBandShadow : kBandHilite;  // top-left edge
+  const ImU32 br = sunken ? kBandHilite : kBandShadow;  // bottom-right edge
+  dl->AddLine(ImVec2(bb.Min.x, bb.Min.y + 0.5f), ImVec2(bb.Max.x - 1.f, bb.Min.y + 0.5f), tl, 1.f);
+  dl->AddLine(ImVec2(bb.Min.x + 0.5f, bb.Min.y), ImVec2(bb.Min.x + 0.5f, bb.Max.y - 1.f), tl, 1.f);
+  dl->AddLine(ImVec2(bb.Min.x, bb.Max.y - 0.5f), ImVec2(bb.Max.x, bb.Max.y - 0.5f), br, 1.f);
+  dl->AddLine(ImVec2(bb.Max.x - 0.5f, bb.Min.y), ImVec2(bb.Max.x - 0.5f, bb.Max.y), br, 1.f);
+}
+
+// Draw an icon (bitmap if loaded, else procedural fallback) centered as a
+// square inside [iconMin, iconMax], dimmed by the current style alpha.
+static void DrawRibbonIconArt(ImDrawList* dl, RibbonIconKind icon, const ImVec2& iconMin, const ImVec2& iconMax) {
+  if (iconMax.y <= iconMin.y + 2.f || iconMax.x <= iconMin.x + 2.f)
+    return;
+  EnsureRibbonIconsLoaded();
+  const ImTextureID tex = g_ribbonIconTex[static_cast<int>(icon)];
+  if (tex) {
+    const float side = std::min(iconMax.x - iconMin.x, iconMax.y - iconMin.y);
+    const ImVec2 ctr((iconMin.x + iconMax.x) * 0.5f, (iconMin.y + iconMax.y) * 0.5f);
+    const ImVec2 a(ctr.x - side * 0.5f, ctr.y - side * 0.5f);
+    const ImVec2 b(ctr.x + side * 0.5f, ctr.y + side * 0.5f);
+    const int alpha = static_cast<int>(ImGui::GetStyle().Alpha * 255.f);
+    dl->AddImage(tex, a, b, ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, alpha));
+  } else {
+    const ImU32 fg = ImGui::GetColorU32(ImGuiCol_Text);
+    PaintRibbonIcon(dl, iconMin, iconMax, icon, fg, false);
+  }
+}
+
+// Where a button's text label sits relative to its icon.
+enum class RibbonLabel { None, Right, Below };
+
+// Flexible ribbon button: icon-only (None), icon + label to the right (Right),
+// or a large icon with the label centered below (Below). Shares the 3D bevel
+// and icon art with every ribbon button so states stay consistent.
+static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* label,
+                           const ImVec2& size, RibbonLabel mode) {
   ImGuiWindow* window = ImGui::GetCurrentWindow();
   if (window->SkipItems)
     return false;
 
   const ImGuiID id = window->GetID(str_id);
-
   const ImVec2 pos = window->DC.CursorPos;
-  const ImRect bb(pos, ImVec2(pos.x + cellSize.x, pos.y + cellSize.y));
-  ImGui::ItemSize(cellSize, 0.f);
+  const ImRect bb(pos, ImVec2(pos.x + size.x, pos.y + size.y));
+  ImGui::ItemSize(size, 0.f);
   if (!ImGui::ItemAdd(bb, id))
     return false;
 
   bool hovered = false;
   bool held = false;
   const bool pressed = ImGui::ButtonBehavior(bb, id, &hovered, &held, ImGuiButtonFlags_None);
-
   ImGui::RenderNavCursor(bb, id);
+
   ImDrawList* dl = window->DrawList;
-  // No idle button square — just the icon on the toolbar. Highlight only on hover/press.
+  const bool sunken = held && hovered;
+  float shift = 0.f;
   if (hovered || held) {
-    const ImU32 fill = (held && hovered) ? IM_COL32(150, 185, 222, 190)   // pressed
-                                         : IM_COL32(205, 224, 245, 160);  // hover
-    dl->AddRectFilled(bb.Min, bb.Max, fill, 2.f);
-    dl->AddRect(bb.Min, bb.Max, IM_COL32(110, 145, 190, 220), 2.f, 0, 1.f);
+    DrawRibbonButtonBevel(dl, bb, sunken);
+    if (sunken)
+      shift = 1.f;
   }
 
-  const float pad = 4.f;
-  const ImVec2 iconMin(bb.Min.x + pad, bb.Min.y + pad);
-  const ImVec2 iconMax(bb.Max.x - pad, bb.Max.y - pad);
+  const bool hasLabel = (label && label[0] && mode != RibbonLabel::None);
+  const ImVec2 ts = hasLabel ? ImGui::CalcTextSize(label) : ImVec2(0.f, 0.f);
+  const ImU32 textCol = ImGui::GetColorU32(ImGuiCol_Text);
+  constexpr float pad = 3.f;
 
-  if (iconMax.y > iconMin.y + 2.f && iconMax.x > iconMin.x + 2.f) {
-    EnsureRibbonIconsLoaded();
-    const ImTextureID tex = g_ribbonIconTex[static_cast<int>(icon)];
-    if (tex) {
-      // Center the square 32px art within the icon rect; dim when disabled.
-      const float side = std::min(iconMax.x - iconMin.x, iconMax.y - iconMin.y);
-      const ImVec2 ctr((iconMin.x + iconMax.x) * 0.5f, (iconMin.y + iconMax.y) * 0.5f);
-      const ImVec2 a(ctr.x - side * 0.5f, ctr.y - side * 0.5f);
-      const ImVec2 b(ctr.x + side * 0.5f, ctr.y + side * 0.5f);
-      const int alpha = static_cast<int>(ImGui::GetStyle().Alpha * 255.f);
-      dl->AddImage(tex, a, b, ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, alpha));
-    } else {
-      const ImU32 fg = ImGui::GetColorU32(ImGuiCol_Text);
-      PaintRibbonIcon(dl, iconMin, iconMax, icon, fg, hovered);
-    }
+  ImVec2 iconMin, iconMax, labelPos;
+  if (mode == RibbonLabel::Below && hasLabel) {
+    const float iconArea = size.y - ts.y - pad * 2.f - 1.f;
+    const float sideMax = std::min(size.x - pad * 2.f, iconArea);
+    const ImVec2 ctr(bb.Min.x + size.x * 0.5f + shift, bb.Min.y + pad + iconArea * 0.5f + shift);
+    iconMin = ImVec2(ctr.x - sideMax * 0.5f, ctr.y - sideMax * 0.5f);
+    iconMax = ImVec2(ctr.x + sideMax * 0.5f, ctr.y + sideMax * 0.5f);
+    labelPos = ImVec2(bb.Min.x + (size.x - ts.x) * 0.5f + shift, bb.Max.y - ts.y - pad + shift);
+  } else if (mode == RibbonLabel::Right && hasLabel) {
+    const float side = size.y - pad * 2.f;
+    iconMin = ImVec2(bb.Min.x + pad + shift, bb.Min.y + pad + shift);
+    iconMax = ImVec2(iconMin.x + side, iconMin.y + side);
+    labelPos = ImVec2(iconMax.x + 4.f + shift, bb.Min.y + (size.y - ts.y) * 0.5f + shift);
+  } else {
+    const float side = std::min(size.x, size.y) - pad * 2.f;
+    const ImVec2 ctr(bb.Min.x + size.x * 0.5f + shift, bb.Min.y + size.y * 0.5f + shift);
+    iconMin = ImVec2(ctr.x - side * 0.5f, ctr.y - side * 0.5f);
+    iconMax = ImVec2(ctr.x + side * 0.5f, ctr.y + side * 0.5f);
   }
+
+  DrawRibbonIconArt(dl, icon, iconMin, iconMax);
+  if (hasLabel)
+    dl->AddText(labelPos, textCol, label);
 
   return pressed;
 }
+
 
 static void RibbonItemHelp(const char* text, ImGuiHoveredFlags extraFlags = 0) {
   if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort | extraFlags) && ImGui::BeginTooltip()) {
@@ -1414,8 +1461,8 @@ static void RibbonItemHelp(const char* text, ImGuiHoveredFlags extraFlags = 0) {
 void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>& log) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 3));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5, 4));
-  // nanoCAD-style light-blue toolbar background; icons float on it without button squares.
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(210, 224, 242, 255));  // #D2E0F2
+  // nanoCAD-style flat system-gray toolbar band; icons float on it as 3D buttons.
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, kBandFace);
   ImGui::BeginChild("RibbonStrip", ImVec2(0, height), true,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   ImGui::PopStyleColor();
@@ -1424,97 +1471,113 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   const float panelH = height - st.WindowPadding.y * 2.f;
   constexpr float kLayerPanelW = 500.f;
 
-  const ImVec2 toolCell = RibbonToolIconCellSize(panelH);
+  // Civil 3D-style panel metrics: a button column fills the height above the
+  // bottom title; small labeled buttons stack 3 to a column; the icon grid
+  // uses 2 rows of square cells.
+  const float colH     = std::max(48.f, RibbonPanelContentH(panelH) - 4.f);
+  const float rowH     = std::floor((colH - 4.f) / 3.f);
+  const float gridCell = std::floor((colH - 2.f) / 2.f);
+  constexpr float largeW = 60.f;
 
-  const int drawCols = 4;
-  const int modCols = 4;
-  const float wUndo = RibbonSectionWidthPx(4, toolCell.x);
-  const float wDraw = RibbonSectionWidthPx(drawCols, toolCell.x);
-  const float wAnn = RibbonSectionWidthPx(2, toolCell.x);
-  const float wMod = RibbonSectionWidthPx(modCols, toolCell.x);
-  const float wView = RibbonSectionWidthPx(2, toolCell.x);
-  const float wInq = RibbonSectionWidthPx(3, toolCell.x);
-  const float wSrv = RibbonSectionWidthPx(3, toolCell.x);
+  auto largeBtn = [&](const char* id, RibbonIconKind ic, const char* label) {
+    return RibbonButtonEx(id, ic, label, ImVec2(largeW, colH), RibbonLabel::Below);
+  };
+  auto smallBtn = [&](const char* id, RibbonIconKind ic, const char* label, float w) {
+    return RibbonButtonEx(id, ic, label, ImVec2(w, rowH), RibbonLabel::Right);
+  };
+  auto gridBtn = [&](const char* id, RibbonIconKind ic) {
+    return RibbonButtonEx(id, ic, nullptr, ImVec2(gridCell, gridCell), RibbonLabel::None);
+  };
+  // Column width = small icon + gap + the widest label in the column.
+  auto colW = [&](std::initializer_list<const char*> labels) {
+    float m = 0.f;
+    for (const char* l : labels)
+      m = std::max(m, ImGui::CalcTextSize(l).x);
+    return rowH + 8.f + m;
+  };
 
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(210, 224, 242, 255));  // #D2E0F2 blue strip
+  const float wEdit = 8.f + largeW + 4.f + colW({"Copy", "Undo", "Redo"});
+  const float wDraw = 8.f + gridCell * 3.f + 4.f * 2.f;
+  const float wMod  = 8.f + largeW + 4.f + colW({"Copy", "Rotate", "Scale"}) + 4.f +
+                      colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror"});
+  const float wAnn  = 8.f + colW({"Text", "Mtext"});
+  const float wInq  = 8.f + colW({"Aligned", "Linear", "ID Point"});
+  const float wSrv  = 8.f + largeW + 4.f + colW({"Inverse", "Traverse"});
+  const float wView = 8.f + colW({"Extents", "Window"});
+
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, kBandFace);
   ImGui::BeginChild("RibbonToolsLeft", ImVec2(-kLayerPanelW - st.ItemSpacing.x, panelH), false,
                     ImGuiWindowFlags_HorizontalScrollbar);
   ImGui::PopStyleColor();
 
-  auto gridSameLine = [](int idx) {
-    constexpr int kCols = 4;
-    if (idx % kCols != 0)
-      ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x);
-  };
-
-  RibbonSectionBegin("RibbonSecUndo", "Edit", wUndo, panelH);
+  RibbonSectionBegin("RibbonSecUndo", "Edit", wEdit, panelH);
   {
     const bool canUndo = CanUndo(cmd);
     const bool canRedo = CanRedo(cmd);
     const bool hasSelection = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
     const bool hasClipboard = !cmd.clipboard.empty();
-    if (!canUndo)
-      ImGui::BeginDisabled();
-    if (RibbonIconButton("##RibbonUndo", toolCell, RibbonIconKind::Undo))
-      DoUndo(cmd, log);
-    if (!canUndo)
-      ImGui::EndDisabled();
-    RibbonItemHelp("Undo (Ctrl+Z) — restore previous state.", canUndo ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
-    ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x);
-    if (!canRedo)
-      ImGui::BeginDisabled();
-    if (RibbonIconButton("##RibbonRedo", toolCell, RibbonIconKind::Redo))
-      DoRedo(cmd, log);
-    if (!canRedo)
-      ImGui::EndDisabled();
-    RibbonItemHelp("Redo (Ctrl+Shift+Z) — restore next state.", canRedo ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
-    ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x);
-    if (!hasSelection)
-      ImGui::BeginDisabled();
-    if (RibbonIconButton("##RibbonClipCopy", toolCell, RibbonIconKind::ClipboardCopy))
-      CopySelectionToClipboard(cmd, log);
-    if (!hasSelection)
-      ImGui::EndDisabled();
-    RibbonItemHelp("Copy (Ctrl+C) — copy selected objects to clipboard.\nPaste later with Ctrl+V or the Paste button.",
-                   hasSelection ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
-    ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x);
+    const float cw = colW({"Copy", "Undo", "Redo"});
+
     if (!hasClipboard)
       ImGui::BeginDisabled();
-    if (RibbonIconButton("##RibbonClipPaste", toolCell, RibbonIconKind::ClipboardPaste))
+    if (largeBtn("##RibbonClipPaste", RibbonIconKind::ClipboardPaste, "Paste"))
       StartPasteCommand(cmd, log);
     if (!hasClipboard)
       ImGui::EndDisabled();
     RibbonItemHelp("Paste (Ctrl+V) — place clipboard objects at cursor position.\nRight-click Edit menu for Paste at Original Coordinates.",
                    hasClipboard ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+
+    ImGui::SameLine(0, 4);
+    ImGui::BeginGroup();
+    if (!hasSelection)
+      ImGui::BeginDisabled();
+    if (smallBtn("##RibbonClipCopy", RibbonIconKind::ClipboardCopy, "Copy", cw))
+      CopySelectionToClipboard(cmd, log);
+    if (!hasSelection)
+      ImGui::EndDisabled();
+    RibbonItemHelp("Copy (Ctrl+C) — copy selected objects to clipboard.\nPaste later with Ctrl+V or the Paste button.",
+                   hasSelection ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+    if (!canUndo)
+      ImGui::BeginDisabled();
+    if (smallBtn("##RibbonUndo", RibbonIconKind::Undo, "Undo", cw))
+      DoUndo(cmd, log);
+    if (!canUndo)
+      ImGui::EndDisabled();
+    RibbonItemHelp("Undo (Ctrl+Z) — restore previous state.", canUndo ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+    if (!canRedo)
+      ImGui::BeginDisabled();
+    if (smallBtn("##RibbonRedo", RibbonIconKind::Redo, "Redo", cw))
+      DoRedo(cmd, log);
+    if (!canRedo)
+      ImGui::EndDisabled();
+    RibbonItemHelp("Redo (Ctrl+Shift+Z) — restore next state.", canRedo ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+    ImGui::EndGroup();
   }
   RibbonSectionEnd();
   ImGui::SameLine(0, 8);
 
   RibbonSectionBegin("RibbonSecDraw", "Draw", wDraw, panelH);
   {
-    int i = 0;
-    gridSameLine(i++);
-    if (RibbonIconButton("##RibbonLine", toolCell, RibbonIconKind::Line))
+    if (gridBtn("##RibbonLine", RibbonIconKind::Line))
       StartLineCommand(cmd, log);
     RibbonItemHelp("Line — draw straight segments between points.\nCommand bar: LINE or L");
-    gridSameLine(i++);
-    if (RibbonIconButton("##RibbonCircle", toolCell, RibbonIconKind::Circle))
+    ImGui::SameLine(0, 4);
+    if (gridBtn("##RibbonCircle", RibbonIconKind::Circle))
       StartCircleCommand(cmd, log);
     RibbonItemHelp("Circle — center point and radius.\nCommand bar: CIRCLE or C");
-    gridSameLine(i++);
-    if (RibbonIconButton("##RibbonPLine", toolCell, RibbonIconKind::Polyline))
+    ImGui::SameLine(0, 4);
+    if (gridBtn("##RibbonPLine", RibbonIconKind::Polyline))
       StartPolylineCommand(cmd, log);
     RibbonItemHelp("Polyline — chain of segments; optional close.\nCommand bar: POLYLINE or PL");
-    gridSameLine(i++);
-    if (RibbonIconButton("##RibbonArc", toolCell, RibbonIconKind::Arc))
+    if (gridBtn("##RibbonArc", RibbonIconKind::Arc))  // wraps to the second row
       StartArcCommand(cmd, log);
     RibbonItemHelp("Arc — three-point arc (start, mid, end).\nCommand bar: ARC");
-    gridSameLine(i++);
-    if (RibbonIconButton("##RibbonEllipse", toolCell, RibbonIconKind::Ellipse))
+    ImGui::SameLine(0, 4);
+    if (gridBtn("##RibbonEllipse", RibbonIconKind::Ellipse))
       StartEllipseCommand(cmd, log);
     RibbonItemHelp("Ellipse — center, axis endpoint, then ratio on command line.\nCommand bar: ELLIPSE or EL");
-    gridSameLine(i++);
-    if (RibbonIconButton("##RibbonPdfAttach", toolCell, RibbonIconKind::PdfAttach))
+    ImGui::SameLine(0, 4);
+    if (gridBtn("##RibbonPdfAttach", RibbonIconKind::PdfAttach))
       StartPdfAttachCommand(cmd, log);
     RibbonItemHelp("PDF Attach — attach a PDF page as a raster underlay with snap recognition.\nCommand bar: PDFATTACH");
   }
@@ -1523,118 +1586,126 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
   RibbonSectionBegin("RibbonSecModify", "Modify", wMod, panelH);
   {
-    int i = 0;
-    auto g = [](int idx) {
-      constexpr int kCols = 4;
-      if (idx % kCols != 0)
-        ImGui::SameLine(0, ImGui::GetStyle().ItemSpacing.x);
-    };
-    g(i++);
-    if (RibbonIconButton("##RibbonMove", toolCell, RibbonIconKind::Move))
+    if (largeBtn("##RibbonMove", RibbonIconKind::Move, "Move"))
       StartMoveCommand(cmd, log);
     RibbonItemHelp("Move — relocate selected entities by base point and offset.\nCommand bar: MOVE or M");
-    g(i++);
-    if (RibbonIconButton("##RibbonCopy", toolCell, RibbonIconKind::Copy))
+
+    ImGui::SameLine(0, 4);
+    const float c1 = colW({"Copy", "Rotate", "Scale"});
+    ImGui::BeginGroup();
+    if (smallBtn("##RibbonCopy", RibbonIconKind::Copy, "Copy", c1))
       StartCopyCommand(cmd, log);
     RibbonItemHelp("Copy — duplicate selection with base point and offset.\nCommand bar: COPY or CP");
-    g(i++);
-    if (RibbonIconButton("##RibbonRotate", toolCell, RibbonIconKind::Rotate))
+    if (smallBtn("##RibbonRotate", RibbonIconKind::Rotate, "Rotate", c1))
       StartRotateCommand(cmd, log);
     RibbonItemHelp("Rotate — turn selection around a base point by angle.\nCommand bar: ROTATE or RO");
-    g(i++);
-    if (RibbonIconButton("##RibbonScale", toolCell, RibbonIconKind::Scale))
+    if (smallBtn("##RibbonScale", RibbonIconKind::Scale, "Scale", c1))
       StartScaleCommand(cmd, log);
     RibbonItemHelp("Scale — uniform scale about a base point (window-select like Move).\nAfter base: pick scale, "
                      "type factor (>0), or R / REFERENCE for two-point reference length then new length (type or two "
                      "picks).\nCommand bar: SCALE or SC");
-    g(i++);
-    if (RibbonIconButton("##RibbonErase", toolCell, RibbonIconKind::Erase))
+    ImGui::EndGroup();
+
+    ImGui::SameLine(0, 4);
+    const float c2 = colW({"Erase", "Trim", "Offset"});
+    ImGui::BeginGroup();
+    if (smallBtn("##RibbonErase", RibbonIconKind::Erase, "Erase", c2))
       StartDeleteCommand(cmd, log);
     RibbonItemHelp("Erase — remove entities (window or crossing selection).\nCommand bar: DELETE or DEL");
-    g(i++);
-    if (RibbonIconButton("##RibbonJoin", toolCell, RibbonIconKind::Join))
-      StartJoinCommand(cmd, log);
-    RibbonItemHelp("Join — merge colinear line segments.\nCommand bar: JOIN or J");
-    g(i++);
-    if (RibbonIconButton("##RibbonTrim", toolCell, RibbonIconKind::Trim))
+    if (smallBtn("##RibbonTrim", RibbonIconKind::Trim, "Trim", c2))
       StartTrimCommand(cmd, log);
     RibbonItemHelp("Trim — shorten segments to cutting edges or drawn trim line.\nCommand bar: TRIM or TR");
-    g(i++);
-    if (RibbonIconButton("##RibbonOffset", toolCell, RibbonIconKind::Offset))
+    if (smallBtn("##RibbonOffset", RibbonIconKind::Offset, "Offset", c2))
       StartOffsetCommand(cmd, log);
     RibbonItemHelp(
         "Offset — parallel lines, concentric circles/arcs, offset polylines and ellipses.\nCommand bar: OFFSET or O");
-    g(i++);
+    ImGui::EndGroup();
+
+    ImGui::SameLine(0, 4);
+    const float c3 = colW({"Join", "Mirror"});
+    ImGui::BeginGroup();
+    if (smallBtn("##RibbonJoin", RibbonIconKind::Join, "Join", c3))
+      StartJoinCommand(cmd, log);
+    RibbonItemHelp("Join — merge colinear line segments.\nCommand bar: JOIN or J");
     ImGui::BeginDisabled();
-    RibbonIconButton("##RibbonMirror", toolCell, RibbonIconKind::Mirror);
+    smallBtn("##RibbonMirror", RibbonIconKind::Mirror, "Mirror", c3);
     RibbonItemHelp("Mirror — flip selection across a mirror line (not implemented yet).\nCommand bar: (none yet)",
                    ImGuiHoveredFlags_AllowWhenDisabled);
     ImGui::EndDisabled();
+    ImGui::EndGroup();
   }
   RibbonSectionEnd();
   ImGui::SameLine(0, 8);
 
   RibbonSectionBegin("RibbonSecAnnotate", "Annotate", wAnn, panelH);
   {
-    if (RibbonIconButton("##RibbonText", toolCell, RibbonIconKind::Text))
+    const float cw = colW({"Text", "Mtext"});
+    ImGui::BeginGroup();
+    if (smallBtn("##RibbonText", RibbonIconKind::Text, "Text", cw))
       StartTextCommand(cmd, log);
     RibbonItemHelp("Text — single-line annotation at insertion.\nCommand bar: TEXT");
-    ImGui::SameLine(0, st.ItemSpacing.x);
-    if (RibbonIconButton("##RibbonMtext", toolCell, RibbonIconKind::Mtext))
+    if (smallBtn("##RibbonMtext", RibbonIconKind::Mtext, "Mtext", cw))
       StartMtextCommand(cmd, log);
     RibbonItemHelp("Mtext — multiline in a frame; after box, edit in the on-drawing editor (Ctrl+Enter reformats; Save to place). Double-click MTEXT to edit.\nCommand bar: MTEXT or MT");
+    ImGui::EndGroup();
   }
   RibbonSectionEnd();
   ImGui::SameLine(0, 8);
 
   RibbonSectionBegin("RibbonSecInquiry", "Inquiry", wInq, panelH);
   {
-    if (RibbonIconButton("##RibbonDim", toolCell, RibbonIconKind::Dim))
+    const float cw = colW({"Aligned", "Linear", "ID Point"});
+    ImGui::BeginGroup();
+    if (smallBtn("##RibbonDim", RibbonIconKind::Dim, "Aligned", cw))
       StartDimAlignedCommand(cmd, log);
     RibbonItemHelp("Aligned dimension — extension lines and text.\nCommand bar: DIMALIGNED or DAL");
-    ImGui::SameLine(0, st.ItemSpacing.x);
-    if (RibbonIconButton("##RibbonDimLin", toolCell, RibbonIconKind::DimLinear))
+    if (smallBtn("##RibbonDimLin", RibbonIconKind::DimLinear, "Linear", cw))
       StartDimLinearCommand(cmd, log);
     RibbonItemHelp(
         "Linear dimension — horizontal or vertical distance in X or Y; third pick sets line position (cursor or H/V).\nCommand bar: DIMLINEAR or DLI");
-    ImGui::SameLine(0, st.ItemSpacing.x);
-    if (RibbonIconButton("##RibbonId", toolCell, RibbonIconKind::Id))
+    if (smallBtn("##RibbonId", RibbonIconKind::Id, "ID Point", cw))
       StartIdPointCommand(cmd, log);
     RibbonItemHelp("ID — list UCS (World) X,Y,Z at a point (click or type coordinates).\nCommand bar: ID");
+    ImGui::EndGroup();
   }
   RibbonSectionEnd();
   ImGui::SameLine(0, 8);
 
   RibbonSectionBegin("RibbonSecSurvey", "Survey", wSrv, panelH);
   {
-    if (RibbonIconButton("##RibbonPoint", toolCell, RibbonIconKind::SurveyPoint))
+    if (largeBtn("##RibbonPoint", RibbonIconKind::SurveyPoint, "Points"))
       StartCreatePointsCommand(cmd, log);
     RibbonItemHelp(
         "Create points — open the create-points panel and click in the drawing to place survey points.\n"
         "Command bar: CREATEPOINTS or CRTPTS");
-    ImGui::SameLine(0, st.ItemSpacing.x);
-    if (RibbonIconButton("##RibbonInverse", toolCell, RibbonIconKind::SurveyInverse))
+
+    ImGui::SameLine(0, 4);
+    const float cw = colW({"Inverse", "Traverse"});
+    ImGui::BeginGroup();
+    if (smallBtn("##RibbonInverse", RibbonIconKind::SurveyInverse, "Inverse", cw))
       StartSurveyInverseCommand(cmd, log);
     RibbonItemHelp(
         "Inverse — two-point survey leg: horizontal distance and bearing (clockwise from north) in the command log "
         "(World X=Easting, Y=Northing).\nCommand bar: INVERSE or INV");
-    ImGui::SameLine(0, st.ItemSpacing.x);
-    if (RibbonIconButton("##RibbonTraverse", toolCell, RibbonIconKind::Traverse))
+    if (smallBtn("##RibbonTraverse", RibbonIconKind::Traverse, "Traverse", cw))
       cmd.showTraverseEditorWindow = true;
     RibbonItemHelp("Traverse Editor — enter traverse leg observations (horizontal angles, distances, vertical angles)\nto compute coordinates and closure. Face 1/Face 2 support included.");
+    ImGui::EndGroup();
   }
   RibbonSectionEnd();
   ImGui::SameLine(0, 8);
 
   RibbonSectionBegin("RibbonSecView", "View", wView, panelH);
   {
-    if (RibbonIconButton("##RibbonZExtents", toolCell, RibbonIconKind::ZoomExtents))
+    const float cw = colW({"Extents", "Window"});
+    ImGui::BeginGroup();
+    if (smallBtn("##RibbonZExtents", RibbonIconKind::ZoomExtents, "Extents", cw))
       StartZoomExtentsCommand(cmd, log);
     RibbonItemHelp("Zoom extents — fit all drawing content in the view.\nCommand bar: ZOOMEXTENTS or ZE");
-    ImGui::SameLine(0, st.ItemSpacing.x);
-    if (RibbonIconButton("##RibbonZWindow", toolCell, RibbonIconKind::ZoomWindow))
+    if (smallBtn("##RibbonZWindow", RibbonIconKind::ZoomWindow, "Window", cw))
       StartZoomWindowCommand(cmd, log);
     RibbonItemHelp("Zoom window — zoom to a rectangle you pick with two clicks.\nCommand bar: ZOOMWINDOW or ZW");
+    ImGui::EndGroup();
   }
   RibbonSectionEnd();
 
@@ -1648,20 +1719,22 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ImGui::SameLine(0, 8);
     PdfAttachment& pdfSel = cmd.pdfAttachments[static_cast<size_t>(selPdfCtxIdx)];
     const float ctrlW     = 185.f;
-    const float wPdfCtx   = RibbonSectionWidthPx(2, toolCell.x) + st.ItemSpacing.x + ctrlW;
+    const float pdfCw     = colW({"Background", "Vectorize"});
+    const float wPdfCtx   = 8.f + pdfCw + 6.f + ctrlW;
     RibbonSectionBegin("RibbonSecPdfCtx", "PDF Underlay", wPdfCtx, panelH);
     {
-      if (RibbonIconButton("##PdfBgBtn", toolCell,
-                           pdfSel.showBackground ? RibbonIconKind::PdfShowBg : RibbonIconKind::PdfHideBg))
+      ImGui::BeginGroup();
+      if (smallBtn("##PdfBgBtn", pdfSel.showBackground ? RibbonIconKind::PdfShowBg : RibbonIconKind::PdfHideBg,
+                   "Background", pdfCw))
         pdfSel.showBackground = !pdfSel.showBackground;
       RibbonItemHelp(pdfSel.showBackground
                      ? "Background ON — lines visible, paper transparent.  Click to show paper."
                      : "Background OFF — full raster image visible.  Click to hide paper.");
-      ImGui::SameLine(0, st.ItemSpacing.x);
-      if (RibbonIconButton("##PdfVecBtn", toolCell, RibbonIconKind::PdfVectorize))
+      if (smallBtn("##PdfVecBtn", RibbonIconKind::PdfVectorize, "Vectorize", pdfCw))
         VectorizePdfAttachmentLines(cmd, selPdfCtxIdx, log);
       RibbonItemHelp("Vectorize Lines — add PDF snap-line geometry as drawing entities on the current layer.");
-      ImGui::SameLine(0, st.ItemSpacing.x);
+      ImGui::EndGroup();
+      ImGui::SameLine(0, 6);
       ImGui::BeginGroup();
       {
         ImGui::AlignTextToFramePadding();
@@ -1689,50 +1762,51 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   ImGui::EndChild();
 
   ImGui::SameLine(0, st.ItemSpacing.x);
-  ImGui::BeginChild("RibbonLayerStrip", ImVec2(kLayerPanelW, panelH), true, ImGuiWindowFlags_NoScrollbar);
+  RibbonSectionBegin("RibbonLayerStrip", "Layers", kLayerPanelW, panelH);
   {
-    const ImVec4 txt = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-    const ImVec4 dis = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(txt.x*0.6f+dis.x*0.4f, txt.y*0.6f+dis.y*0.4f, txt.z*0.6f+dis.z*0.4f, 1.f));
-  }
-  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(st.ItemSpacing.x, 1.f));
-  ImGui::TextUnformatted("Layer");
-  ImGui::Separator();
-  ImGui::PopStyleVar();
-  ImGui::PopStyleColor();
+    std::vector<std::string> layerList;
+    CollectAllDrawingLayers(cmd, &layerList);
+    if (std::find(layerList.begin(), layerList.end(), cmd.currentLayer) == layerList.end())
+      layerList.insert(layerList.begin(), cmd.currentLayer);
 
-  std::vector<std::string> layerList;
-  CollectAllDrawingLayers(cmd, &layerList);
-  if (std::find(layerList.begin(), layerList.end(), cmd.currentLayer) == layerList.end())
-    layerList.insert(layerList.begin(), cmd.currentLayer);
-
-  const float layerBtnW = toolCell.x;
-  if (RibbonIconButton("##RibbonLAY", toolCell, RibbonIconKind::Layers)) {
-    SyncDrawingLayerTableWithGeometry(cmd);
-    cmd.showLayerManagerWindow = true;
-    log.push_back("LAYER — layer manager opened.");
-  }
-  RibbonItemHelp("Open layer manager — table of all layers.\nCommand bar: LAYER or LA");
-  ImGui::SameLine(0, st.ItemSpacing.x);
-  ImGui::SetNextItemWidth(std::max(80.f, kLayerPanelW - layerBtnW - st.ItemSpacing.x - st.WindowPadding.x * 2.f));
-  const char* preview = cmd.currentLayer.empty() ? "0" : cmd.currentLayer.c_str();
-  ImGui::PushID("RibbonLayerCombo");
-  if (ImGui::BeginCombo("##ribbonlayerpick", preview, ImGuiComboFlags_HeightLargest)) {
-    for (const auto& L : layerList) {
-      const bool sel = L == cmd.currentLayer;
-      if (ImGui::Selectable(L.c_str(), sel)) {
-        cmd.currentLayer = L;
-        SyncDrawingLayerTableWithGeometry(cmd);
-      }
-      if (sel)
-        ImGui::SetItemDefaultFocus();
+    if (largeBtn("##RibbonLAY", RibbonIconKind::Layers, "Layers")) {
+      SyncDrawingLayerTableWithGeometry(cmd);
+      cmd.showLayerManagerWindow = true;
+      log.push_back("LAYER — layer manager opened.");
     }
-    ImGui::EndCombo();
-  }
-  ImGui::PopID();
-  RibbonItemHelp("Current layer for new geometry (LINE, CIRCLE, TEXT, …).");
+    RibbonItemHelp("Open layer manager — table of all layers.\nCommand bar: LAYER or LA");
 
-  ImGui::EndChild();
+    ImGui::SameLine(0, 6);
+    ImGui::BeginGroup();
+    ImGui::Dummy(ImVec2(0.f, 6.f));
+    {
+      const ImVec4 txt = ImGui::GetStyleColorVec4(ImGuiCol_Text);
+      const ImVec4 dis = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+      ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(txt.x * 0.55f + dis.x * 0.45f, txt.y * 0.55f + dis.y * 0.45f,
+                                                  txt.z * 0.55f + dis.z * 0.45f, 1.f));
+      ImGui::TextUnformatted("Current layer");
+      ImGui::PopStyleColor();
+    }
+    ImGui::SetNextItemWidth(std::max(120.f, kLayerPanelW - largeW - 40.f));
+    const char* preview = cmd.currentLayer.empty() ? "0" : cmd.currentLayer.c_str();
+    ImGui::PushID("RibbonLayerCombo");
+    if (ImGui::BeginCombo("##ribbonlayerpick", preview, ImGuiComboFlags_HeightLargest)) {
+      for (const auto& L : layerList) {
+        const bool sel = L == cmd.currentLayer;
+        if (ImGui::Selectable(L.c_str(), sel)) {
+          cmd.currentLayer = L;
+          SyncDrawingLayerTableWithGeometry(cmd);
+        }
+        if (sel)
+          ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::PopID();
+    RibbonItemHelp("Current layer for new geometry (LINE, CIRCLE, TEXT, …).");
+    ImGui::EndGroup();
+  }
+  RibbonSectionEnd();
 
   ImGui::EndChild();
   ImGui::PopStyleVar(2);
@@ -3248,20 +3322,22 @@ void DrawAnnotationGeometryOnly(const AppCommandState& cmd, const std::vector<Se
   ImGui::TextDisabled("Select a single TEXT or MTEXT to edit content and box here.");
 }
 
-int PickSurveyPointIndex(const std::vector<SurveyPoint>& pts, float wx, float wy, float surveyCrossHalfWorld,
+int PickSurveyPointIndex(const std::vector<SurveyPoint>& pts, double wx, double wy, float surveyCrossHalfWorld,
                          float viewportHeightPx, float orthoHalfHeightWorld, float viewportPickAperturePx) {
   if (pts.empty())
     return -1;
   const float arm = std::max(surveyCrossHalfWorld, 1.e-8f);
   const float tol = CadSnap::WorldToleranceFromPixels(viewportHeightPx, orthoHalfHeightWorld, viewportPickAperturePx);
-  const float radius = std::max(arm, tol) * 1.38f;
-  const float r2 = radius * radius;
+  const double radius = static_cast<double>(std::max(arm, tol)) * 1.38;
+  const double r2 = radius * radius;
   int best = -1;
-  float bestD2 = 0.f;
+  double bestD2 = 0.0;
+  // Distances are computed in double: at state-plane magnitudes a float subtraction of two ~1e7 coordinates
+  // loses ~1 ft of precision, so the hit test stops matching the rendered cross position.
   for (size_t i = 0; i < pts.size(); ++i) {
-    const float dx = wx - pts[i].easting;
-    const float dy = wy - pts[i].northing;
-    const float d2 = dx * dx + dy * dy;
+    const double dx = wx - static_cast<double>(pts[i].easting);
+    const double dy = wy - static_cast<double>(pts[i].northing);
+    const double d2 = dx * dx + dy * dy;
     if (d2 <= r2 && (best < 0 || d2 < bestD2)) {
       bestD2 = d2;
       best = static_cast<int>(i);
@@ -3728,7 +3804,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
       }
       ImGui::EndDisabled();
     }
-    FillPropPanelEmptyBlue();
+    FillPropPanelEmpty();
     ImGui::End();
     return;
   }
@@ -3741,7 +3817,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   if (!haveCadSel) {
     gPropsSelFingerprint = ~0ull;
     ImGui::TextDisabled("Bulk editing: VIEWPOINTS (VWPTS).");
-    FillPropPanelEmptyBlue();
+    FillPropPanelEmpty();
     ImGui::End();
     return;
   }
@@ -3910,7 +3986,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     ImGui::TextDisabled("Survey bulk edit: VIEWPOINTS (VWPTS).");
   }
 
-  FillPropPanelEmptyBlue();
+  FillPropPanelEmpty();
   ImGui::End();
 }
 
@@ -4243,14 +4319,14 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   ImGuiWindowFlags wf = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoNavFocus;
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.824f, 0.878f, 0.949f, 1.f));  // #D2E0F2 light blue
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.902f, 0.902f, 0.878f, 1.f));  // #E6E6E0 gray band (matches toolbar)
   ImGui::Begin("##CadStatusBarStrip", nullptr, wf);
   ImGui::PopStyleColor();
 
   ImGui::Separator();
   const float statusBtnH = ImGui::GetFrameHeight();
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.824f, 0.878f, 0.949f, 1.f));  // #D2E0F2 light blue
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.902f, 0.902f, 0.878f, 1.f));  // #E6E6E0 gray band (matches toolbar)
   ImGui::BeginChild("StatusBarStrip", ImVec2(0, statusBtnH), false, ImGuiWindowFlags_HorizontalScrollbar);
   ImGui::PopStyleColor();
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3.f, 0.f));
@@ -4351,7 +4427,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   // Console background is slightly distinct from the main workspace in both themes.
   const ImVec4 consoleBg = isDark
       ? ImVec4(0.067f, 0.078f, 0.094f, 1.f)   // #111418 dark console
-      : ImVec4(0.824f, 0.878f, 0.949f, 1.f);  // #D2E0F2 light-blue panel
+      : ImVec4(0.925f, 0.918f, 0.894f, 1.f);  // #ECEAE4 light-gray console panel
   const ImVec4 promptColor = isDark
       ? ImVec4(0.133f, 0.773f, 0.369f, 1.f)   // #22C55E bright green on dark
       : ImVec4(0.059f, 0.557f, 0.247f, 1.f);  // #0F8E3F darker green on light
@@ -4482,6 +4558,11 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   static int  s_cmdSel = 0;
   static bool s_cmdDismissed = false;
   static std::string s_cmdLastQuery;
+  // Highlighted suggestion persisted across the Enter frame: a single-line InputText with EnterReturnsTrue
+  // deactivates itself when Enter is pressed, so on that frame the list isn't rebuilt (inputActive is false).
+  // We capture the highlight while the list is open and consume it on submit.
+  static bool s_cmdSugVisible = false;
+  static std::string s_cmdHighlight;
   std::vector<CommandSuggestion> cmdSug;
   ImVec2 cmdInputMin(0, 0), cmdInputMax(0, 0);
   bool   cmdShowSug = false;
@@ -4506,7 +4587,10 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     std::string query(cmdBuf);
     while (!query.empty() && std::isspace(static_cast<unsigned char>(query.front()))) query.erase(query.begin());
     while (!query.empty() && std::isspace(static_cast<unsigned char>(query.back())))  query.pop_back();
-    if (query != s_cmdLastQuery) { s_cmdLastQuery = query; s_cmdSel = 0; s_cmdDismissed = false; }
+    if (query != s_cmdLastQuery) {
+      s_cmdLastQuery = query; s_cmdSel = 0; s_cmdDismissed = false;
+      s_cmdSugVisible = false; s_cmdHighlight.clear();
+    }
 
     const bool singleToken = query.find_first_of(" \t") == std::string::npos;
     if (inputActive && !query.empty() && singleToken && !s_cmdDismissed)
@@ -4515,24 +4599,39 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     if (!cmdSug.empty()) {
       const int n = static_cast<int>(cmdSug.size());
       s_cmdSel = std::clamp(s_cmdSel, 0, n - 1);
+      // Claim the arrow keys for the (single-line) command input while the suggestion list is open.
+      // ImGuiConfigFlags_NavEnableKeyboard is on globally, and a single-line InputText doesn't consume
+      // Up/Down, so keyboard-nav would otherwise steal them: Up moves focus off the field (closing the
+      // list) and Down jumps focus to the Send button (so Enter runs the typed text, not the highlight).
+      ImGui::SetItemKeyOwner(ImGuiKey_UpArrow);
+      ImGui::SetItemKeyOwner(ImGuiKey_DownArrow);
       if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true)) s_cmdSel = (s_cmdSel + 1) % n;
       if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true))   s_cmdSel = (s_cmdSel - 1 + n) % n;
       g_cmdSuggestComplete = cmdSug[s_cmdSel].name;
       for (char& ch : g_cmdSuggestComplete) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
       cmdShowSug = true;
+      s_cmdSugVisible = true;
+      s_cmdHighlight = g_cmdSuggestComplete;
     } else {
       g_cmdSuggestComplete.clear();
+      // Clear the persisted highlight only when the user is actively in the field with no list (e.g. a
+      // full/multi-token command). On the Enter frame the input is already inactive, so the highlight
+      // survives to be consumed by the submit branch below.
+      if (inputActive) { s_cmdSugVisible = false; s_cmdHighlight.clear(); }
     }
 
     ImGui::SameLine(0, st.ItemSpacing.x);
     const bool sendClicked = ImGui::Button("Send", ImVec2(sendBtnW, 0.f));
     if (sendClicked || exec) {
-      // Enter with the list open runs the highlighted command.
-      if (exec && cmdShowSug && !cmdSug.empty())
-        std::snprintf(cmdBuf, static_cast<size_t>(cmdBufSize), "%s", g_cmdSuggestComplete.c_str());
+      // Enter with the list open runs the highlighted command. The list state is read from the persisted
+      // s_cmd* values because Enter deactivates the input, so cmdShowSug/cmdSug are already empty this frame.
+      if (exec && s_cmdSugVisible && !s_cmdHighlight.empty())
+        std::snprintf(cmdBuf, static_cast<size_t>(cmdBufSize), "%s", s_cmdHighlight.c_str());
       s_cmdDismissed = true;
       s_cmdLastQuery.clear();
       cmdShowSug = false;
+      s_cmdSugVisible = false;
+      s_cmdHighlight.clear();
       ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
     }
   } else {
@@ -5213,8 +5312,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const float v = my / std::max(avail.y, 1.f);
     const double rawX = worldLeft + static_cast<double>(u) * (worldRight - worldLeft);
     const double rawY = worldTop - static_cast<double>(v) * (worldTop - worldBottom);
-    const float rawXf = static_cast<float>(rawX);
-    const float rawYf = static_cast<float>(rawY);
 
     if (outCursorRawX)
       *outCursorRawX = rawX;
@@ -5226,7 +5323,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       SelectedEntity hit{};
       float d2 = 0.f;
       const float offTol = CadOffsetEntityPickTolWorld(cmd);
-      if (PickClosestCadEntity(cmd, rawXf, rawYf, offTol, &hit, &d2)) {
+      if (PickClosestCadEntity(cmd, rawX, rawY, offTol, &hit, &d2)) {
         cmd.offsetHoverHighlightValid = true;
         cmd.offsetHoverEntity = hit;
       } else {
@@ -5240,7 +5337,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                                   cmd.mtextGripMoveActive || cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond;
     if (!cmd.surveyPoints.empty() && !blockSurveyHover)
       cmd.viewportHoverSurveyPointIndex =
-          PickSurveyPointIndex(cmd.surveyPoints, rawXf, rawYf, surveyCrossHalfW, avail.y, halfH,
+          PickSurveyPointIndex(cmd.surveyPoints, rawX, rawY, surveyCrossHalfW, avail.y, halfH,
                                cmd.objectSnapAperturePx);
 
     // Idle hover: detect CAD entity under cursor for subtle highlight feedback.
@@ -5250,8 +5347,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (!blockEntityHover) {
         SelectedEntity hoverHit{};
         float hoverD2 = 0.f;
-        const float hoverTol = CadOffsetEntityPickTolWorld(cmd);
-        if (PickClosestCadEntity(cmd, rawXf, rawYf, hoverTol, &hoverHit, &hoverD2)) {
+        const float hoverTol = CadHoverEntityPickTolWorld(cmd);
+        if (PickClosestCadEntity(cmd, rawX, rawY, hoverTol, &hoverHit, &hoverD2)) {
           cmd.viewportHoverEntityValid = true;
           cmd.viewportHoverEntity = hoverHit;
         } else {
@@ -5658,7 +5755,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const int hitIx =
           cmd.surveyPoints.empty()
               ? -1
-              : PickSurveyPointIndex(cmd.surveyPoints, rawPickXf, rawPickYf, surveyCrossHalfW, avail.y, halfH,
+              : PickSurveyPointIndex(cmd.surveyPoints, rawPickX, rawPickY, surveyCrossHalfW, avail.y, halfH,
                                      cmd.objectSnapAperturePx);
       if (hitIx >= 0) {
         ClearCadSelection(cmd);
@@ -6034,7 +6131,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         SelectedEntity clickHit{};
         float clickD2 = 0.f;
         const float clickTol = CadOffsetEntityPickTolWorld(cmd);
-        if (PickClosestCadEntity(cmd, rawPickXf, rawPickYf, clickTol, &clickHit, &clickD2)) {
+        if (PickClosestCadEntity(cmd, rawPickX, rawPickY, clickTol, &clickHit, &clickD2)) {
           AbortMtextGripInteraction(cmd);
           ClearDimGripInteraction(cmd);
           if (keyShift) {
