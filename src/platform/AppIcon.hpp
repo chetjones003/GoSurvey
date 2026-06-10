@@ -21,6 +21,11 @@ bool LoadAppTextureFromPngFile(const std::filesystem::path& pngPath, AppLogoGpu*
 
 void DestroyAppLogoGpu(AppLogoGpu* io);
 
+/// Loads an RGBA PNG into an OpenGL texture for ImGui WITHOUT flipping rows
+/// (top-down, matching ImGui's uv(0,0)=top-left). Returns the GL texture name,
+/// or 0 on failure. Intended for small UI icons. Requires a current GL context.
+unsigned int LoadIconTextureRgba(const std::filesystem::path& pngPath, int* outW = nullptr, int* outH = nullptr);
+
 /// Directory containing the executable (Windows), or empty if unknown.
 std::filesystem::path AppExecutableDirectory();
 

@@ -223,9 +223,9 @@ add_custom_command(TARGET GoSurvey POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_DEFAULT_TEMPLATE}"
           "$<TARGET_FILE_DIR:GoSurvey>/resources/default-template.gs"
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-          "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/bitmap.png"
-          "$<TARGET_FILE_DIR:GoSurvey>/resources/icons/bitmap.png"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
   COMMENT "Copy resources beside executable")
 
 # Copy pdfium.dll next to the executable so it can be found at runtime.

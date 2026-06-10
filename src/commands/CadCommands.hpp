@@ -1292,6 +1292,15 @@ void VectorizePdfAttachmentLines(AppCommandState& st, int pdfIndex, std::vector<
 
 std::vector<std::string> FuzzyCommandMatches(const std::string& query, int maxResults);
 
+/// One fuzzy-match entry for the command-line autocomplete UI.
+struct CommandSuggestion {
+  std::string name;         ///< primary command name, uppercased (e.g. "LINE")
+  std::string description;  ///< short human description shown in parentheses
+};
+
+/// Ranked fuzzy matches with descriptions, for the nanoCAD-style command picker.
+std::vector<CommandSuggestion> FuzzyCommandSuggestions(const std::string& query, int maxResults);
+
 const char* CircleCommandFooterHint(const AppCommandState& st);
 const char* ModifyCommandFooterHint(const AppCommandState& st);
 const char* RotateCommandFooterHint(const AppCommandState& st);
