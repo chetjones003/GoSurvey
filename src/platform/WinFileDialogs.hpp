@@ -17,3 +17,6 @@ bool BrowseOpenFileGsUtf8(char* utf8Out, size_t utf8Cap);
 bool BrowseSaveFileGsUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
 
 bool BrowseOpenFilePdfUtf8(char* utf8Out, size_t utf8Cap);
+
+/// Autodesk Field Book raw-data file (*.fbk).
+bool BrowseOpenFileFbkUtf8(char* utf8Out, size_t utf8Cap);
