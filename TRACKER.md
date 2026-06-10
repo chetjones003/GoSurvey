@@ -1,6 +1,12 @@
 # PROJECT ISSUE & FEATURE TRACKER
 
 ## BUGS
+### [BUG-002] Fuzzy find menu has some functionality problems
+    - using the up arrow closes the menu
+    - using the down arrow and selecting the highlighted command does not run that command
+
+### [BUG-002] Focusing different panels shows a ugly dark blue
+    - I don't want to visually see different panels gaining focus. no color change
 
 ## FEATURES
 
@@ -24,6 +30,14 @@
             or three wire with a least sqaures adjustment editor
 
 # COMPLETED
+~~### [BUG-001] Object hovering not working properly when in state plane coordinate system.
+    - Object hovering triggers on objects even if my cursor is not "visually" touching the object
+    - Fixed: pick distance math now runs in double precision (float cancellation at state-plane
+      magnitudes was quantizing distances to ~1 ft); hover/click tolerance uses the robust
+      outlier-trimmed extent instead of the raw bbox; idle hover highlight uses a tight fixed
+      3px aperture so the cursor must visually touch the stroke at any zoom.
+~~
+
 ~~### [FEAT-001] Undo Redo System
     - [ ] Full undo redo with configureable history size settings window
     - [ ] UI Buttons at the top ribbon

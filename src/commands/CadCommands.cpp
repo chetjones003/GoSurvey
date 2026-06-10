@@ -6907,18 +6907,39 @@ static bool TrimSegmentToCuttingEdges(AppCommandState& st, const TrimTargetEdge&
   return true;
 }
 
-bool PickClosestCadEntity(const AppCommandState& st, float wx, float wy, float tolWorld, SelectedEntity* out,
+// Squared point-segment distance in double precision. Picking math must run in double: at state-plane
+// magnitudes (eastings/northings in the millions) a 32-bit float's ULP is ~1 ft, so a float-only distance
+// suffers catastrophic cancellation and stops matching the rendered position — entities then "hover" while
+// the cursor is feet away. Stored geometry is promoted per-coordinate so distances match what is drawn.
+static double PickDistSqPointSegmentD(double px, double py, double ax, double ay, double bx, double by) {
+  const double vx = bx - ax;
+  const double vy = by - ay;
+  const double len2 = vx * vx + vy * vy;
+  if (len2 < 1e-24) {
+    const double dx = px - ax;
+    const double dy = py - ay;
+    return dx * dx + dy * dy;
+  }
+  const double t = std::clamp(((px - ax) * vx + (py - ay) * vy) / len2, 0.0, 1.0);
+  const double qx = ax + t * vx;
+  const double qy = ay + t * vy;
+  const double dx = px - qx;
+  const double dy = py - qy;
+  return dx * dx + dy * dy;
+}
+
+bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float tolWorld, SelectedEntity* out,
                           float* outDistSq) {
   if (!out || !outDistSq)
     return false;
-  const float tol2 = tolWorld * tolWorld;
+  const double tol2 = static_cast<double>(tolWorld) * static_cast<double>(tolWorld);
   bool any = false;
-  float best = 0.f;
+  double best = 0.0;
   SelectedEntity bestE{};
-  auto consider = [&](const SelectedEntity& e, float d2) {
+  auto consider = [&](const SelectedEntity& e, double d2) {
     if (d2 > tol2)
       return;
-    if (!any || d2 < best - 1e-12f) {
+    if (!any || d2 < best - 1e-12) {
       any = true;
       best = d2;
       bestE = e;
@@ -6931,8 +6952,7 @@ bool PickClosestCadEntity(const AppCommandState& st, float wx, float wy, float t
       SelectedEntity e{};
       e.type = SelectedEntity::Type::LineSeg;
       e.index = static_cast<int>(i / 6);
-      const float d2 =
-          CadCmdGeom::DistSqPointSegment(wx, wy, L[i], L[i + 1], L[i + 3], L[i + 4]);
+      const double d2 = PickDistSqPointSegmentD(wx, wy, L[i], L[i + 1], L[i + 3], L[i + 4]);
       consider(e, d2);
     }
   }
@@ -6942,11 +6962,11 @@ bool PickClosestCadEntity(const AppCommandState& st, float wx, float wy, float t
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Circle;
       e.index = static_cast<int>(ci / 3);
-      const float cx = C[ci];
-      const float cy = C[ci + 1];
-      const float r = C[ci + 2];
-      const float d = std::hypot(wx - cx, wy - cy);
-      const float dr = d - r;
+      const double cx = static_cast<double>(C[ci]);
+      const double cy = static_cast<double>(C[ci + 1]);
+      const double r = static_cast<double>(C[ci + 2]);
+      const double d = std::hypot(wx - cx, wy - cy);
+      const double dr = d - r;
       consider(e, dr * dr);
     }
   }
@@ -6955,15 +6975,15 @@ bool PickClosestCadEntity(const AppCommandState& st, float wx, float wy, float t
     SelectedEntity e{};
     e.type = SelectedEntity::Type::Arc;
     e.index = static_cast<int>(ai);
-    float bestD2 = 1e30f;
+    double bestD2 = 1e300;
     constexpr int n = 36;
     for (int i = 0; i <= n; ++i) {
-      const float u = static_cast<float>(i) / static_cast<float>(n);
-      const float ang = a.startRad + a.sweepRad * u;
-      const float x = a.cx + a.r * std::cos(ang);
-      const float y = a.cy + a.r * std::sin(ang);
-      const float dx = wx - x;
-      const float dy = wy - y;
+      const double u = static_cast<double>(i) / static_cast<double>(n);
+      const double ang = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u;
+      const double x = static_cast<double>(a.cx) + static_cast<double>(a.r) * std::cos(ang);
+      const double y = static_cast<double>(a.cy) + static_cast<double>(a.r) * std::sin(ang);
+      const double dx = wx - x;
+      const double dy = wy - y;
       bestD2 = std::min(bestD2, dx * dx + dy * dy);
     }
     consider(e, bestD2);
@@ -6973,24 +6993,24 @@ bool PickClosestCadEntity(const AppCommandState& st, float wx, float wy, float t
     SelectedEntity e{};
     e.type = SelectedEntity::Type::Ellipse;
     e.index = static_cast<int>(ei);
-    const float ma = std::hypot(el.majVx, el.majVy);
-    float bestD2 = 1e30f;
-    if (ma >= 1e-8f) {
-      const float ux = el.majVx / ma;
-      const float uy = el.majVy / ma;
-      const float px = -uy;
-      const float py = ux;
-      const float mb = ma * el.ratio;
+    const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    double bestD2 = 1e300;
+    if (ma >= 1e-8) {
+      const double ux = static_cast<double>(el.majVx) / ma;
+      const double uy = static_cast<double>(el.majVy) / ma;
+      const double px = -uy;
+      const double py = ux;
+      const double mb = ma * static_cast<double>(el.ratio);
       constexpr int n = 36;
-      constexpr float twopi = 6.28318530718f;
+      constexpr double twopi = 6.28318530717958647692;
       for (int i = 0; i <= n; ++i) {
-        const float ang = twopi * static_cast<float>(i) / static_cast<float>(n);
-        const float c = std::cos(ang);
-        const float s = std::sin(ang);
-        const float x = el.cx + ux * (ma * c) + px * (mb * s);
-        const float y = el.cy + uy * (ma * c) + py * (mb * s);
-        const float dx = wx - x;
-        const float dy = wy - y;
+        const double ang = twopi * static_cast<double>(i) / static_cast<double>(n);
+        const double c = std::cos(ang);
+        const double s = std::sin(ang);
+        const double x = static_cast<double>(el.cx) + ux * (ma * c) + px * (mb * s);
+        const double y = static_cast<double>(el.cy) + uy * (ma * c) + py * (mb * s);
+        const double dx = wx - x;
+        const double dy = wy - y;
         bestD2 = std::min(bestD2, dx * dx + dy * dy);
       }
     }
@@ -7006,20 +7026,20 @@ bool PickClosestCadEntity(const AppCommandState& st, float wx, float wy, float t
     SelectedEntity e{};
     e.type = SelectedEntity::Type::Polyline;
     e.index = pi;
-    float bestD2 = 1e30f;
+    double bestD2 = 1e300;
     for (int vi = v0; vi + 1 < v1; ++vi) {
-      const float ax = st.userPolylineVerts[static_cast<size_t>(vi * 3)];
-      const float ay = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
-      const float bx = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
-      const float by = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
-      bestD2 = std::min(bestD2, CadCmdGeom::DistSqPointSegment(wx, wy, ax, ay, bx, by));
+      const double ax = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(vi * 3)]);
+      const double ay = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)]);
+      const double bx = static_cast<double>(st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)]);
+      const double by = static_cast<double>(st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)]);
+      bestD2 = std::min(bestD2, PickDistSqPointSegmentD(wx, wy, ax, ay, bx, by));
     }
     if (closed && v1 - v0 >= 2) {
-      const float ax = st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
-      const float ay = st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)];
-      const float bx = st.userPolylineVerts[static_cast<size_t>(v0 * 3)];
-      const float by = st.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)];
-      bestD2 = std::min(bestD2, CadCmdGeom::DistSqPointSegment(wx, wy, ax, ay, bx, by));
+      const double ax = static_cast<double>(st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)]);
+      const double ay = static_cast<double>(st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)]);
+      const double bx = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(v0 * 3)]);
+      const double by = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)]);
+      bestD2 = std::min(bestD2, PickDistSqPointSegmentD(wx, wy, ax, ay, bx, by));
     }
     consider(e, bestD2);
   }
@@ -7027,7 +7047,7 @@ bool PickClosestCadEntity(const AppCommandState& st, float wx, float wy, float t
   if (!any)
     return false;
   *out = bestE;
-  *outDistSq = best;
+  *outDistSq = static_cast<float>(best);
   return true;
 }
 
@@ -7347,11 +7367,24 @@ float CadOffsetEntityPickTolWorld(const AppCommandState& st) {
   double mnY = 0.;
   double mxY = 0.;
   float geom = 1e-3f;
-  if (ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
+  // Use the robust (outlier-trimmed) extent: stray entities sitting millions of feet away — common in
+  // Civil 3D state-plane DXFs — would otherwise inflate this scale floor into a tens-of-feet "magnetic"
+  // pick radius that highlights lines the cursor is nowhere near.
+  int skipped = 0;
+  if (ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped))
     geom = std::max(1e-5f, static_cast<float>(2.5e-5 * std::max(mxX - mnX, mxY - mnY)));
   const float px = CadSnap::WorldToleranceFromPixels(st.viewportLastSurveyLayoutHeightPx,
                                                      st.viewportLastSurveyLayoutOrthoHalfH, st.objectSnapAperturePx);
   return std::max(geom, px * 1.5f);
+}
+
+float CadHoverEntityPickTolWorld(const AppCommandState& st) {
+  // Idle hover highlight is pure visual feedback, so it must require the cursor to actually touch the drawn
+  // stroke — unlike OFFSET/selection picking, which keeps a forgiving aperture. A small fixed pixel aperture
+  // (no scale floor) means the tolerance is constant in screen space at every zoom level.
+  constexpr float kHoverAperturePx = 3.0f;
+  return CadSnap::WorldToleranceFromPixels(st.viewportLastSurveyLayoutHeightPx,
+                                           st.viewportLastSurveyLayoutOrthoHalfH, kHoverAperturePx);
 }
 
 void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, float cursorWy,

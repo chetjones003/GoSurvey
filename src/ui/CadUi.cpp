@@ -3319,20 +3319,22 @@ void DrawAnnotationGeometryOnly(const AppCommandState& cmd, const std::vector<Se
   ImGui::TextDisabled("Select a single TEXT or MTEXT to edit content and box here.");
 }
 
-int PickSurveyPointIndex(const std::vector<SurveyPoint>& pts, float wx, float wy, float surveyCrossHalfWorld,
+int PickSurveyPointIndex(const std::vector<SurveyPoint>& pts, double wx, double wy, float surveyCrossHalfWorld,
                          float viewportHeightPx, float orthoHalfHeightWorld, float viewportPickAperturePx) {
   if (pts.empty())
     return -1;
   const float arm = std::max(surveyCrossHalfWorld, 1.e-8f);
   const float tol = CadSnap::WorldToleranceFromPixels(viewportHeightPx, orthoHalfHeightWorld, viewportPickAperturePx);
-  const float radius = std::max(arm, tol) * 1.38f;
-  const float r2 = radius * radius;
+  const double radius = static_cast<double>(std::max(arm, tol)) * 1.38;
+  const double r2 = radius * radius;
   int best = -1;
-  float bestD2 = 0.f;
+  double bestD2 = 0.0;
+  // Distances are computed in double: at state-plane magnitudes a float subtraction of two ~1e7 coordinates
+  // loses ~1 ft of precision, so the hit test stops matching the rendered cross position.
   for (size_t i = 0; i < pts.size(); ++i) {
-    const float dx = wx - pts[i].easting;
-    const float dy = wy - pts[i].northing;
-    const float d2 = dx * dx + dy * dy;
+    const double dx = wx - static_cast<double>(pts[i].easting);
+    const double dy = wy - static_cast<double>(pts[i].northing);
+    const double d2 = dx * dx + dy * dy;
     if (d2 <= r2 && (best < 0 || d2 < bestD2)) {
       bestD2 = d2;
       best = static_cast<int>(i);
@@ -5284,8 +5286,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const float v = my / std::max(avail.y, 1.f);
     const double rawX = worldLeft + static_cast<double>(u) * (worldRight - worldLeft);
     const double rawY = worldTop - static_cast<double>(v) * (worldTop - worldBottom);
-    const float rawXf = static_cast<float>(rawX);
-    const float rawYf = static_cast<float>(rawY);
 
     if (outCursorRawX)
       *outCursorRawX = rawX;
@@ -5297,7 +5297,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       SelectedEntity hit{};
       float d2 = 0.f;
       const float offTol = CadOffsetEntityPickTolWorld(cmd);
-      if (PickClosestCadEntity(cmd, rawXf, rawYf, offTol, &hit, &d2)) {
+      if (PickClosestCadEntity(cmd, rawX, rawY, offTol, &hit, &d2)) {
         cmd.offsetHoverHighlightValid = true;
         cmd.offsetHoverEntity = hit;
       } else {
@@ -5311,7 +5311,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                                   cmd.mtextGripMoveActive || cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond;
     if (!cmd.surveyPoints.empty() && !blockSurveyHover)
       cmd.viewportHoverSurveyPointIndex =
-          PickSurveyPointIndex(cmd.surveyPoints, rawXf, rawYf, surveyCrossHalfW, avail.y, halfH,
+          PickSurveyPointIndex(cmd.surveyPoints, rawX, rawY, surveyCrossHalfW, avail.y, halfH,
                                cmd.objectSnapAperturePx);
 
     // Idle hover: detect CAD entity under cursor for subtle highlight feedback.
@@ -5321,8 +5321,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (!blockEntityHover) {
         SelectedEntity hoverHit{};
         float hoverD2 = 0.f;
-        const float hoverTol = CadOffsetEntityPickTolWorld(cmd);
-        if (PickClosestCadEntity(cmd, rawXf, rawYf, hoverTol, &hoverHit, &hoverD2)) {
+        const float hoverTol = CadHoverEntityPickTolWorld(cmd);
+        if (PickClosestCadEntity(cmd, rawX, rawY, hoverTol, &hoverHit, &hoverD2)) {
           cmd.viewportHoverEntityValid = true;
           cmd.viewportHoverEntity = hoverHit;
         } else {
@@ -5729,7 +5729,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const int hitIx =
           cmd.surveyPoints.empty()
               ? -1
-              : PickSurveyPointIndex(cmd.surveyPoints, rawPickXf, rawPickYf, surveyCrossHalfW, avail.y, halfH,
+              : PickSurveyPointIndex(cmd.surveyPoints, rawPickX, rawPickY, surveyCrossHalfW, avail.y, halfH,
                                      cmd.objectSnapAperturePx);
       if (hitIx >= 0) {
         ClearCadSelection(cmd);
@@ -6105,7 +6105,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         SelectedEntity clickHit{};
         float clickD2 = 0.f;
         const float clickTol = CadOffsetEntityPickTolWorld(cmd);
-        if (PickClosestCadEntity(cmd, rawPickXf, rawPickYf, clickTol, &clickHit, &clickD2)) {
+        if (PickClosestCadEntity(cmd, rawPickX, rawPickY, clickTol, &clickHit, &clickD2)) {
           AbortMtextGripInteraction(cmd);
           ClearDimGripInteraction(cmd);
           if (keyShift) {

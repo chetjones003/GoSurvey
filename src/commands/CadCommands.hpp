@@ -1224,10 +1224,13 @@ void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1
                                         float fenceP2y, float pickPreviewX, float pickPreviewY,
                                         std::vector<float>* previewLinesOut);
 /// Closest CAD entity within tolerance (later draw order wins on tie). False if none.
-bool PickClosestCadEntity(const AppCommandState& st, float wx, float wy, float tolWorld, SelectedEntity* out,
+bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float tolWorld, SelectedEntity* out,
                           float* outDistSq);
 /// World pick tolerance for OFFSET entity selection (geometry scale + screen aperture).
 [[nodiscard]] float CadOffsetEntityPickTolWorld(const AppCommandState& st);
+/// Tight world pick tolerance for the idle hover highlight: fixed small pixel aperture so the cursor must
+/// visually touch the stroke at any zoom level.
+[[nodiscard]] float CadHoverEntityPickTolWorld(const AppCommandState& st);
 /// Live offset preview from cursor (through mode or typed distance + side); clears vectors first.
 void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, float cursorWy,
                                 std::vector<float>* previewLines, std::vector<float>* previewCircles);
