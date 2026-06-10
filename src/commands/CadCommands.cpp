@@ -1004,46 +1004,47 @@ bool ParseOneFloat(const std::string& s, float* v) {
 struct CmdEntry {
   const char* primary;
   const char* aliases;
+  const char* description;
 };
 
 const CmdEntry kRegistry[] = {
-    {"line", "l"},
-    {"circle", "c"},
-    {"polyline", "pl"},
-    {"arc", ""},
-    {"ellipse", "el"},
-    {"text", ""},
-    {"mtext", "mt"},
-    {"dimaligned", "dal"},
-    {"dimlinear", "dli"},
-    {"dimangular", "dan"},
-    {"id", ""},
-    {"inverse", "inv"},
-    {"plotscale", "pscale"},
-    {"move", "m"},
-    {"copy", "cp"},
-    {"rotate", "ro"},
-    {"scale", "sc"},
-    {"delete", "del"},
-    {"join", "j"},
-    {"trim", "tr"},
-    {"offset", "o"},
-    {"zoomextents", "ze"},
-    {"zoomwindow", "zw"},
-    {"createpoints", "crtpts"},
-    {"viewpoints", "vwpts"},
-    {"importpoints", "imppts"},
-    {"exportpoints", "exppts"},
-    {"select", ""},
-    {"help", ""},
-    {"regen", "re"},
-    {"layer", "la"},
-    {"pdfattach", "pa"},
-    {"overkill",     "ok"},
-    {"align",        "al"},
-    {"quickselect",  "qs"},
-    {"paste",        ""},
-    {"pasteorig",    "po"},
+    {"line", "l", "Draw line segments"},
+    {"circle", "c", "Draw a circle"},
+    {"polyline", "pl", "Draw a connected polyline"},
+    {"arc", "", "Draw an arc"},
+    {"ellipse", "el", "Draw an ellipse"},
+    {"text", "", "Place single-line text"},
+    {"mtext", "mt", "Place multiline text"},
+    {"dimaligned", "dal", "Aligned dimension"},
+    {"dimlinear", "dli", "Linear dimension"},
+    {"dimangular", "dan", "Angular dimension"},
+    {"id", "", "Identify point coordinates"},
+    {"inverse", "inv", "Inverse between two points"},
+    {"plotscale", "pscale", "Set the plot scale"},
+    {"move", "m", "Move objects"},
+    {"copy", "cp", "Copy objects"},
+    {"rotate", "ro", "Rotate objects"},
+    {"scale", "sc", "Scale objects"},
+    {"delete", "del", "Erase objects"},
+    {"join", "j", "Join collinear objects"},
+    {"trim", "tr", "Trim objects to an edge"},
+    {"offset", "o", "Offset at a distance"},
+    {"zoomextents", "ze", "Zoom to drawing extents"},
+    {"zoomwindow", "zw", "Zoom to a window"},
+    {"createpoints", "crtpts", "Create survey points"},
+    {"viewpoints", "vwpts", "View / edit survey points"},
+    {"importpoints", "imppts", "Import survey points"},
+    {"exportpoints", "exppts", "Export survey points"},
+    {"select", "", "Build a selection set"},
+    {"help", "", "Show command help"},
+    {"regen", "re", "Regenerate the drawing"},
+    {"layer", "la", "Open the Layer manager"},
+    {"pdfattach", "pa", "Attach a PDF underlay"},
+    {"overkill",     "ok", "Remove duplicate geometry"},
+    {"align",        "al", "Align objects to others"},
+    {"quickselect",  "qs", "Select by object properties"},
+    {"paste",        "", "Paste from clipboard"},
+    {"pasteorig",    "po", "Paste at original coordinates"},
 };
 
 bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vector<std::string>& log);
@@ -9358,6 +9359,49 @@ std::vector<std::string> FuzzyCommandMatches(const std::string& query, int maxRe
   return out;
 }
 
+std::vector<CommandSuggestion> FuzzyCommandSuggestions(const std::string& query, int maxResults) {
+  struct Scored {
+    const CmdEntry* entry;
+    int score;
+  };
+  std::vector<Scored> ranked;
+  const std::string qlow = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(query));
+  if (qlow.empty())
+    return {};
+
+  for (const CmdEntry& e : kRegistry) {
+    // Best score across the primary name and each alias.
+    int best = FuzzySubsequenceScore(qlow, e.primary);
+    if (e.aliases[0] != '\0') {
+      std::istringstream als(std::string(e.aliases));
+      std::string a;
+      while (std::getline(als, a, ',')) {
+        a = StringUtil::trimCopy(a);
+        if (!a.empty())
+          best = std::max(best, FuzzySubsequenceScore(qlow, a));
+      }
+    }
+    if (best >= 0)
+      ranked.push_back({&e, best});
+  }
+  std::sort(ranked.begin(), ranked.end(), [](const Scored& a, const Scored& b) {
+    if (a.score != b.score)
+      return a.score > b.score;
+    return std::string(a.entry->primary) < std::string(b.entry->primary);
+  });
+
+  std::vector<CommandSuggestion> out;
+  for (size_t i = 0; i < ranked.size() && static_cast<int>(out.size()) < maxResults; ++i) {
+    CommandSuggestion s;
+    s.name = ranked[i].entry->primary;
+    for (char& ch : s.name)
+      ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));  // NAME in caps (nanoCAD style)
+    s.description = ranked[i].entry->description ? ranked[i].entry->description : "";
+    out.push_back(std::move(s));
+  }
+  return out;
+}
+
 const char* CircleCommandFooterHint(const AppCommandState& st) {
   if (st.active != AppCommandState::Kind::Circle)
     return "";
@@ -10370,15 +10414,19 @@ const char* AlignCommandFooterHint(const AppCommandState& st) {
 
 bool LoadApplicationFont() {
   ImGuiIO& io = ImGui::GetIO();
+  // Tahoma is the classic nanoCAD / Windows-2000 UI font. Fall back to Segoe UI.
   const char* candidates[] = {
+      "C:/Windows/Fonts/tahoma.ttf",
+      "C:/Windows/Fonts/Tahoma.ttf",
+      "C:/Windows/Fonts/segoeui.ttf",
       "C:/Windows/Fonts/calibri.ttf",
-      "C:/Windows/Fonts/Calibri.ttf",
   };
   ImFontConfig cfg;
   cfg.OversampleH = 2;
   cfg.OversampleV = 1;
+  cfg.PixelSnapH  = true;  // crisp small classic text
   for (const char* path : candidates) {
-    ImFont* f = io.Fonts->AddFontFromFileTTF(path, 18.5f, &cfg);
+    ImFont* f = io.Fonts->AddFontFromFileTTF(path, 16.0f, &cfg);
     if (f) {
       io.FontDefault = f;
       return true;
