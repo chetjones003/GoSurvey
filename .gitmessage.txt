@@ -1,0 +1,12 @@
+
+
+# ----------------------------------------------------------------------
+# Subject: <type>(<scope>): summary in the imperative mood (<= 72 chars)
+#   types: feat fix refactor perf docs test build chore
+# Leave a blank line, then a body explaining WHAT changed and WHY.
+# Wrap the body at ~72 columns. Lines starting with # are ignored.
+# Reference issues/bugs from TRACKER.md where relevant (e.g. BUG-001).
+# Keep the Co-Authored-By trailer below so attribution is preserved.
+# ----------------------------------------------------------------------
+
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
