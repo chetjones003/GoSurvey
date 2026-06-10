@@ -3,6 +3,22 @@
 #include <string>
 #include <vector>
 
+/// One raw face-1/face-2 measurement set to a foresight, as read from a raw data
+/// file (e.g. Autodesk FBK). Angles are decimal degrees; distance is slope distance.
+/// A set may carry only F1, only F2, or both. The editor shows these as detail rows;
+/// the reduced per-leg values live in \ref TraverseLeg.
+struct TraverseMeasSet {
+    int setNo = 0;            ///< 1-based set number within the leg.
+    double f1HzDec = 0.0;     ///< Face-1 horizontal circle reading.
+    double f1VaDec = 90.0;    ///< Face-1 zenith angle.
+    double f1Sd = 0.0;        ///< Face-1 slope distance.
+    bool hasF1 = false;
+    double f2HzDec = 0.0;     ///< Face-2 horizontal circle reading.
+    double f2VaDec = 90.0;    ///< Face-2 zenith angle.
+    double f2Sd = 0.0;        ///< Face-2 slope distance.
+    bool hasF2 = false;
+};
+
 /// One leg of a survey traverse.
 /// Records measurements made at the instrument (FROM) station pointing to the
 /// foresight (TO) station. Computed fields are filled by \ref ComputeTraverse.
@@ -40,6 +56,10 @@ struct TraverseLeg {
     std::string face2VertBuf;
     double face1VertDeg = 0.0;
     double face2VertDeg = 0.0;
+
+    // Raw per-set F1/F2 observations from a raw-data import (FBK, RW5, …).
+    // Empty for manually entered legs; the editor can expand these as detail rows.
+    std::vector<TraverseMeasSet> rawSets;
 
     // --- Computed outputs (set by ComputeTraverse) ---
     double computedBearingDeg = 0.0;

@@ -122,6 +122,7 @@ add_executable(GoSurvey
 
   # Traverse engine
   src/traverse/TraverseCalc.cpp
+  src/traverse/FbkImport.cpp
 
   # I/O
   src/io/GsIo.cpp

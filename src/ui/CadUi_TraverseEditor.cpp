@@ -3,6 +3,8 @@
 #include "CadCommands.hpp"
 #include "SurveyPoints.hpp"
 #include "traverse/TraverseCalc.hpp"
+#include "traverse/FbkImport.hpp"
+#include "WinFileDialogs.hpp"
 
 #include <imgui.h>
 #include <imgui_stdlib.h>
@@ -118,6 +120,27 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
     cmd.showTraverseEditorWindow = open;
 
     TraverseData& td = cmd.traverseData;
+
+    // ---- Raw data import ----
+    if (ImGui::Button("Import .fbk\xe2\x80\xa6")) {
+        char path[1024]{};
+        if (BrowseOpenFileFbkUtf8(path, sizeof(path))) {
+            TraverseData imported;
+            std::string err;
+            if (FbkImport(path, imported, err)) {
+                cmd.traverseData = std::move(imported);
+                cmd.traverseDataDirty = true;
+                log.push_back(std::string("TRAVERSE — imported FBK (") +
+                              std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
+            } else {
+                log.push_back("TRAVERSE — FBK import failed: " + err);
+            }
+        }
+    }
+    ItemHelpTooltip(
+        "Import an Autodesk Field Book (.fbk) raw data file.\n"
+        "Replaces the current traverse with the imported stations, backsight\n"
+        "orientation, and face-averaged observations.");
 
     // ---- Starting station header ----
     ImGui::SeparatorText("Starting Station");
