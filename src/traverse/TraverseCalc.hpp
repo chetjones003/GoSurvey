@@ -37,6 +37,12 @@ struct TraverseLeg {
     double face1HorizDeg = 0.0;
     double face2HorizDeg = 0.0;
 
+    // Backsight circle reading for this leg's setup (° CW). The reduced
+    // horizontal angle is (foresight circle reading − backsight reading).
+    // Filled by the importer; needed to re-reduce edited raw sets (REQ-018).
+    double backsightCircleDeg = 0.0;
+    bool hasBacksightCircle = false;
+
     // --- Horizontal distance (measured directly) ---
     double horizDist = 0.0;
     bool hasHorizDist = false;
@@ -57,12 +63,18 @@ struct TraverseLeg {
     double face1VertDeg = 0.0;
     double face2VertDeg = 0.0;
 
+    // Which faces are actually present. A foresight may carry only F1 (e.g. the
+    // F2 face disabled in the field), so face averaging must not assume both.
+    bool hasFace1 = false;
+    bool hasFace2 = false;
+
     // Raw per-set F1/F2 observations from a raw-data import (FBK, RW5, …).
     // Empty for manually entered legs; the editor can expand these as detail rows.
     std::vector<TraverseMeasSet> rawSets;
 
     // --- Computed outputs (set by ComputeTraverse) ---
     double computedBearingDeg = 0.0;
+    double computedHorizAngleDeg = 0.0;   ///< Resolved turned angle actually used (F1/F2 avg or single).
     double computedHorizDist = 0.0;
     double computedDeltaE = 0.0;
     double computedDeltaN = 0.0;
@@ -114,6 +126,22 @@ double TraverseNormBearing(double deg);
 /// Reduce slope distance to horizontal using zenith or elevation angle.
 double TraverseReduceToHoriz(double slopeDist, double angleDeg, bool isZenith);
 
+/// Recover slope distance from a horizontal distance using zenith or elevation
+/// angle (the inverse of \ref TraverseReduceToHoriz). Returns 0 if the angle is
+/// degenerate (sin/cos ~ 0), so a near-horizontal sight does not divide by zero.
+double TraverseSlopeFromHoriz(double horizDist, double angleDeg, bool isZenith);
+
+/// Simple descriptive statistics over a set of repeated observations (REQ-011).
+struct StatSummary {
+    int    n      = 0;     ///< Number of samples.
+    double sum    = 0.0;   ///< Σx.
+    double mean   = 0.0;   ///< Σx / n  (0 if n == 0).
+    double stddev = 0.0;   ///< Sample standard deviation from the mean (n−1); 0 if n < 2.
+};
+
+/// Compute count, sum, mean, and sample standard deviation from the mean.
+StatSummary ComputeStats(const std::vector<double>& samples);
+
 /// Compute signed vertical component from slope distance and zenith or elevation angle.
 double TraverseReduceToVert(double slopeDist, double angleDeg, bool isZenith);
 
@@ -131,6 +159,16 @@ std::string TraverseFormatBearing(double bearingDeg);
 
 /// Format a delta or distance value to 4 decimal places.
 std::string TraverseFormatDist(double val);
+
+/// Re-derive a leg's reduced fields from its raw per-set F1/F2 observations
+/// (REQ-018, ADR-003). Face-averages the literal circle readings, subtracts the
+/// leg's backsight reading to get the reduced horizontal angle, and averages the
+/// zenith angles and slope distances. Updates horizAngleDeg / vertAngleDeg /
+/// slopeDist, the per-face reduced values, the presence flags, and the input
+/// buffers. No-op when the leg has no raw sets (a manually entered leg).
+/// The FBK importer and the editor both call this, so import and edit reduce
+/// identically.
+void ReduceLegFromSets(TraverseLeg& leg);
 
 /// Compute all legs in \p td: fills computed fields and closure info.
 void ComputeTraverse(TraverseData& td);

@@ -122,6 +122,7 @@ add_executable(GoSurvey
 
   # Traverse engine
   src/traverse/TraverseCalc.cpp
+  src/traverse/TraverseLeastSquares.cpp
   src/traverse/FbkImport.cpp
 
   # I/O
@@ -236,4 +237,44 @@ if(WIN32)
             "${pdfium_binaries_SOURCE_DIR}/bin/pdfium.dll"
             "$<TARGET_FILE_DIR:GoSurvey>/pdfium.dll"
     COMMENT "Copy pdfium.dll beside executable")
+endif()
+
+# ---------------------------------------------------------------------------
+# Tests (ADR-002): domain regression suite via Catch2 + ctest.
+# Catch2 is a TEST-ONLY dependency (decision log, REQ-300) — GoSurvey does not
+# link it. The test target compiles only the pure-compute Domain sources, so it
+# stays free of the UI/GL/Win32 layers.
+# ---------------------------------------------------------------------------
+option(GOSURVEY_BUILD_TESTS "Build the GoSurvey domain test suite" ON)
+if(GOSURVEY_BUILD_TESTS)
+  FetchContent_Declare(Catch2
+    GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+    GIT_TAG v3.5.2
+  )
+  FetchContent_MakeAvailable(Catch2)
+  list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
+
+  enable_testing()
+  add_executable(GoSurveyTests
+    tests/TraverseTests.cpp
+    src/traverse/TraverseCalc.cpp
+    src/traverse/TraverseLeastSquares.cpp
+    src/traverse/FbkImport.cpp
+  )
+  target_include_directories(GoSurveyTests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/traverse
+  )
+  target_compile_definitions(GoSurveyTests PRIVATE
+    GOSURVEY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
+  )
+  target_link_libraries(GoSurveyTests PRIVATE Catch2::Catch2WithMain)
+  if(MSVC)
+    target_compile_options(GoSurveyTests PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(GoSurveyTests PRIVATE -Wall -Wextra)
+  endif()
+
+  include(Catch)
+  catch_discover_tests(GoSurveyTests)
 endif()

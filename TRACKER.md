@@ -13,8 +13,17 @@
                 zenith or from backsight), slope distance. All of this should optional input data based\
                 on what the user wants to provide and it will be up to the traverse engine to solve the
                 traverse and let the user know what data to provide if data is insufficient.
-    - [ ] Survey Least Squares Adjustment window that lets the user review traverse leg residuals to detect
+    - [~] Survey Least Squares Adjustment window that lets the user review traverse leg residuals to detect
             blunders and edit accordingly.
+            - Done (REQ-014..017): "Calculate Closure" opens a window showing the unadjusted closure
+              beside a weighted least-squares adjustment (closed-loop), with a per-observation
+              residuals tab and configurable a-priori standard errors. Raw F1/F2 measurements and
+              per-leg statistics now display in the editor (REQ-010..012). See spec ADR-001/002.
+            - Done (REQ-018): each leg expands inline to an editable observation-set editor —
+              add/remove sets and edit the literal F1/F2 circle readings, slope distances, and
+              zenith angles; the leg re-reduces from its sets via ReduceLegFromSets (ADR-003,
+              backsight reading stored on the leg). "+ Add Leg" moved into the table as its last row.
+            - Remaining: connecting (point-to-point) traverses.
     - [ ] Ability to import raw data formats such as Autodesk .fbk, Bently RWD,
             Carlson RW5, Microsurvey RW5, TDS RAW,
             TDS RW5 and traverse editor gets filled in automatically

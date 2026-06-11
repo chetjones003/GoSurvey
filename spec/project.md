@@ -132,7 +132,12 @@ library and a handful of vetted libraries over a deep dependency graph.
 | Date | Decision | Rationale | Status |
 |------|----------|-----------|--------|
 | `<2026-06-10>` | `<Use OpenGL 4.5, not Vulkan>` | `<Faster to ship; team familiarity; portability sufficient>` | accepted |
-| `<…>` | `<…>` | `<…>` | accepted / superseded |
+| 2026-06-10 | Accept REQ-010–017 (Traverse Editor raw-measurement display + least-squares closure analysis) | Extends FEAT-002; gives surveyors full observation review and rigorous adjustment with residuals | accepted |
+| 2026-06-10 | ADR-001 — in-tree least-squares adjustment module, no third-party linear-algebra dependency | Closed-loop systems are tiny; a small in-tree solver satisfies REQ-016 without violating the REQ-300 dependency policy | accepted |
+| 2026-06-10 | Add Catch2 (v3, via FetchContent) as a test-only dependency (REQ-300) | (1) An assert harness is possible in-tree but a framework gives proper numeric-tolerance assertions and reporting; (2) Catch2 is actively maintained and widely used; (3) the accepted REQ-011/012/015/016 require committed regression tests and no harness exists today. Test-only — not linked into GoSurvey. | accepted |
+| 2026-06-10 | ADR-002 — separate `GoSurveyTests` executable + ctest for domain regression tests | Establishes the project's first test target without coupling tests to the GUI executable | accepted |
+| 2026-06-11 | Accept REQ-018 (editable per-leg observation sets) and amend REQ-013 (view-only scoped to the collapsed summary; editing via the expander) | User wants to expand a leg to add/edit observations and have the traverse re-derive; protection intent preserved (editing requires deliberate expand) | accepted |
+| 2026-06-11 | ADR-003 — store backsight reading on the leg + one `ReduceLegFromSets` reduction shared by import and edit | Edited sets need the backsight reference to reduce; keeps literal circle readings (REQ-010) and avoids silent no-op edits (REQ-201) | accepted |
 
 > **Change protocol:** any change to this file, `requirements.md`, or
 > `architecture.md` is a deliberate decision recorded here — never a quiet edit

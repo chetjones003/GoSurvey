@@ -3,6 +3,7 @@
 #include "PdfAttach.hpp"
 #include "SurveyPoints.hpp"
 #include "traverse/TraverseCalc.hpp"
+#include "traverse/TraverseLeastSquares.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -975,6 +976,17 @@ struct AppCommandState {
   TraverseData traverseData;
   /// When true, traverseData must be recomputed before the next panel draw.
   bool traverseDataDirty = true;
+
+  /// Closure-analysis window (unadjusted vs least-squares, REQ-014).
+  bool        showTraverseClosureWindow = false;
+  LsaWeights  traverseLsaWeights;          ///< Editable a-priori standard errors.
+  LsaResult   traverseLsaResult;           ///< Last computed adjustment.
+  bool        traverseLsaComputed = false; ///< True once a result has been produced.
+  bool        traverseLsaAccepted = false; ///< User accepted the LSA result.
+
+  /// Index of the leg whose per-leg observation editor is expanded (REQ-018),
+  /// or -1 when none. Accordion: at most one leg is expanded at a time.
+  int         traverseExpandedLeg = -1;
 
   // -------------------------------------------------------------------------
   // CLIPBOARD (COPYCLIP / PASTECLIP)

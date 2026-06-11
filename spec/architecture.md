@@ -213,3 +213,62 @@ A change is rejected if it breaks any of these:
 - Alternatives: what we rejected, and why
 - Consequences: what this makes easy, and what it costs
 ```
+
+### ADR-001 — Least-squares traverse adjustment module   (2026-06-10, accepted)
+- Context:    REQ-014–017 require a rigorous adjustment of a closed-loop traverse
+  that yields per-observation angular and distance residuals for blunder review.
+  The existing `ComputeTraverse` produces only an unadjusted closure. A
+  least-squares adjustment is a new compute capability — an architectural
+  decision, not a Workshop choice.
+- Decision:   Add a Domain-layer module (in `src/traverse/`) that assembles the
+  weighted normal equations (N = AᵀWA) for a closed loop's unknown station
+  coordinates and solves them with an **in-tree** dense symmetric solver
+  (Cholesky / Gaussian elimination), producing adjusted coordinates and
+  residuals v = Ax − l. No third-party linear-algebra dependency is added.
+- Alternatives: (a) Eigen or similar matrix library — rejected: the systems are
+  tiny (2 × unknown stations); a heavy header-only dependency is not justified
+  under the REQ-300 dependency policy. (b) Rule-based methods only
+  (Compass/Transit/Crandall) — rejected: they distribute coordinate misclosure
+  and cannot produce true per-observation angle/distance residuals (REQ-016).
+- Consequences: a small in-tree solver to maintain and test; the dependency
+  graph stays minimal; scope is bounded to closed loops this increment
+  (connecting traverses deferred to the roadmap).
+
+### ADR-003 — Backsight reading on the leg + `ReduceLegFromSets` reduction   (2026-06-11, accepted)
+- Context:    REQ-018 makes a leg's per-set F1/F2 observations editable, after
+  which the leg's horizontal angle must re-derive from the edited circle
+  readings. A leg's H.Angle is `circle reading − backsight circle reading`, but
+  the backsight reading was consumed by the FBK importer (`setup.bsHzDec`) and
+  never stored on the leg — so the edited sets had no reference to reduce against.
+  How an edited set feeds the leg is a data-model decision, not a Workshop choice.
+- Decision:   Store the backsight circle reading on `TraverseLeg`
+  (`backsightCircleDeg`, `hasBacksightCircle`) and add a Domain reduction
+  function `ReduceLegFromSets(TraverseLeg&)` (in `TraverseCalc`) that face-averages
+  the literal per-set circle readings, subtracts the backsight reading to get the
+  reduced H.Angle, averages the zenith angles and slope distances, and writes the
+  leg's reduced fields and input buffers. The FBK importer is refactored to
+  populate the sets + backsight reading and then call this one function, so the
+  import path and the edit path reduce identically (single source of truth).
+- Alternatives: (a) store pre-reduced directions in the sets instead of literal
+  circle readings — rejected: loses raw-measurement fidelity (REQ-010 "see every
+  measurement made"). (b) make sets editable but not re-reduce the leg —
+  rejected: editing would silently not affect the computed traverse (a hidden
+  failure, REQ-201).
+- Consequences: `TraverseLeg` gains two fields; reduction logic moves out of the
+  importer into one reusable Domain function (less duplication, edit==import);
+  the literal field readings are preserved for display and adjustment.
+
+### ADR-002 — Domain test target (Catch2 + ctest)   (2026-06-10, accepted)
+- Context:    REQ-011/012/015/016 require committed numeric regression tests, but
+  the project had no test infrastructure. The accepted least-squares math
+  (ADR-001) is exactly the kind of compute that needs tolerance-asserted tests.
+- Decision:   Add a separate `GoSurveyTests` executable, built only when tests
+  are enabled, that compiles the Domain compute sources (`TraverseCalc.cpp` and
+  the new least-squares module) and exercises them with Catch2 v3 under ctest.
+  GoSurvey (the GUI app) does not link Catch2; the dependency is test-only.
+- Alternatives: (a) in-tree assert harness — viable but weaker tolerance
+  assertions/reporting; (b) folding tests into the GUI executable behind a flag —
+  rejected: couples tests to UI and the GL/window stack.
+- Consequences: first test target for the repo; Catch2 added as a test-only
+  FetchContent dependency (recorded in the decision log per REQ-300); domain
+  code must stay linkable without the UI/GL layers (a healthy layering pressure).

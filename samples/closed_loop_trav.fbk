@@ -1,0 +1,234 @@
+!FBK file created by FDE core engine v7.2.30
+!Date (creation): 2024/03/12 08:51:14
+!Date (last modification): 2024/03/12 13:24:07
+JOB "OCAPS TRAV"
+UNITS USFOOT DMS !US Survey Foot
+HORIZ ANGLE RIGHT
+VERT ANGLE ZENITH
+
+!Instrument Model: TS12 P 5" R400 Serial: 875659 Name: TS12 P 5" R400
+NEZ "KCP2" 31361.9390 10289.8560 10.0880
+NEZ "KCP1" 31975.0500 9737.7820 14.8830
+
+!Measure Foresight 6.00
+
+!Calibration date: 2023/02/27 08:56:31
+!Compensator Long.: 0.00000 Trans.: 0.00000
+!Horiz. Collimation: 0.00000 Vertical Index: 0.00000
+!Tilting Axis: 0.00000
+!Atmospheric PPM: 4.3
+SF 1.0000000
+!Prism type: Leica Circ Prism 0.0
+PRISM 4.050
+
+!Setup Date: 2024/03/12 09:33:08 Method: Known backsight point
+!NEZ "KCP2" 31361.9390 10289.8560 10.0880
+STN "KCP2" 5.000
+!NEZ "KCP1" 31975.0500 9737.7820 14.8830
+BS "KCP1" 317.59551
+F1 VA "KCP1" 317.59551 825.036 89.44079
+!Delta horiz dist: 0.0130 Delta height: 0.0224
+F2 VA "KCP1" 137.59528 825.036 270.15454
+!Reduced Hz: 0.00000 Spread: 0.00023
+!Mean V: 89.44112 Spread: 0.00068
+!Slope: 825.036 Spread: 0.000
+!Set 2 of 3
+F1 VA "KCP1" 317.59482 825.035 89.44114
+F2 VA "KCP1" 137.59520 825.036 270.15495
+!Reduced Hz: 0.00000 Spread: 0.00038
+!Mean V: 89.44109 Spread: 0.00009
+!Slope: 825.035 Spread: 0.001
+!Set 3 of 3
+F1 VA "KCP1" 317.59463 825.035 89.44057
+F2 VA "KCP1" 137.59504 825.036 270.15472
+!Reduced Hz: 0.00000 Spread: 0.00041
+!Mean V: 89.44093 Spread: 0.00071
+!Slope: 825.036 Spread: 0.001
+!Sets statistics
+!Type: Backsight
+!Point ID: KCP1
+!No of sets: 3
+!HzArc: 0.00000 MaxSpread: 0.00041 StdDev: 0.00000
+!V: 89.44105 MaxSpread: 0.00071 StdDev: 0.00011
+!SlopeDist: 825.036 MaxSpread: 0.001 StdDev: 0.000
+
+
+!? sets of angles
+!Set 1 of ?
+!Disabled by user PRISM 4.980
+F1 VA "KCP3" 9.20161 696.161 90.02295
+!Disabled by user F2 VA "KCP3" 189.20155 696.163 269.57256
+!Reduced Hz: 51.20220 Spread: 0.00006
+!Mean V: 90.02320 Spread: 0.00049
+!Slope: 696.162 Spread: 0.002
+!Disabled by user PRISM 4.050
+F2 VA "KCP1" 137.59525 825.034 270.15493
+!Reduced Hz: 0.00000 Spread: 0.00026
+!Mean V: 89.44093 Spread: 0.00029
+!Slope: 825.035 Spread: 0.002
+!Set 2 of ?
+!Disabled by user F1 VA "KCP1" 317.59465 825.034 89.44060
+!Set 2 of ?
+!Disabled by user PRISM 4.980
+F1 VA "KCP3" 9.20093 696.161 90.02302
+!Disabled by user F2 VA "KCP3" 189.20144 696.162 269.57244
+!Reduced Hz: 51.20212 Spread: 0.00051
+!Mean V: 90.02329 Spread: 0.00054
+!Slope: 696.161 Spread: 0.001
+!Disabled by user PRISM 4.050
+F2 VA "KCP1" 137.59548 825.035 270.15471
+!Reduced Hz: 0.00000 Spread: 0.00083
+!Mean V: 89.44094 Spread: 0.00069
+!Slope: 825.035 Spread: 0.000
+!Set 3 of ?
+!Disabled by user F1 VA "KCP1" 317.59489 825.036 89.44057
+!Set 3 of ?
+!Disabled by user PRISM 4.980
+F1 VA "KCP3" 9.20111 696.162 90.02290
+!Disabled by user F2 VA "KCP3" 189.20152 696.161 269.57231
+!Reduced Hz: 51.20224 Spread: 0.00041
+!Mean V: 90.02330 Spread: 0.00079
+!Slope: 696.162 Spread: 0.001
+!Disabled by user PRISM 4.050
+F2 VA "KCP1" 137.59526 825.034 270.15473
+!Reduced Hz: 0.00000 Spread: 0.00037
+!Mean V: 89.44092 Spread: 0.00070
+!Slope: 825.035 Spread: 0.002
+PRISM 5.040
+
+!Setup Date: 2024/03/12 12:37:51 Method: Known backsight point
+!NEZ "KCP3" 32048.8746 10402.8114 9.6134
+STN "KCP3" 5.000
+!NEZ "KCP2" 31361.9390 10289.8560 10.0880
+BS "KCP2" 189.20161
+F1 VA "KCP2" 189.20161 696.162 89.57342
+!Delta horiz dist: -0.0008 Delta height: 0.0126
+
+!3 sets of angles
+!Set 1 of 3
+PRISM 4.980
+F1 VA "KCP1.1" 263.39502 669.121 89.36062
+F2 VA "KCP1.1" 83.39556 669.122 270.23501
+!Reduced Hz: 74.19357 Spread: 0.00054
+!Mean V: 89.36080 Spread: 0.00037
+!Slope: 669.121 Spread: 0.000
+PRISM 5.040
+F2 VA "KCP2" 9.20184 696.161 270.02254
+!Reduced Hz: 0.00000 Spread: 0.00023
+!Mean V: 89.57344 Spread: 0.00004
+!Slope: 696.161 Spread: 0.001
+!Set 2 of 3
+F1 VA "KCP2" 189.20135 696.161 89.57250
+!Set 2 of 3
+PRISM 4.980
+F1 VA "KCP1.1" 263.39570 669.122 89.36078
+F2 VA "KCP1.1" 83.39553 669.121 270.23520
+!Reduced Hz: 74.19390 Spread: 0.00017
+!Mean V: 89.36079 Spread: 0.00002
+!Slope: 669.121 Spread: 0.001
+PRISM 5.040
+F2 VA "KCP2" 9.20207 696.161 270.02308
+!Reduced Hz: 0.00000 Spread: 0.00072
+!Mean V: 89.57271 Spread: 0.00042
+!Slope: 696.161 Spread: 0.000
+!Set 3 of 3
+F1 VA "KCP2" 189.20135 696.161 89.57263
+!Set 3 of 3
+PRISM 4.980
+F1 VA "KCP1.1" 263.39508 669.122 89.36069
+F2 VA "KCP1.1" 83.39533 669.121 270.23572
+!Reduced Hz: 74.19352 Spread: 0.00025
+!Mean V: 89.36048 Spread: 0.00041
+!Slope: 669.121 Spread: 0.001
+!Sets statistics
+!Type: Foresight
+!Point ID: KCP1.1
+!No of sets: 3
+!HzArc: 74.19366 MaxSpread: 0.00054 StdDev: 0.00021
+!V: 89.36069 MaxSpread: 0.00041 StdDev: 0.00018
+!SlopeDist: 669.121 MaxSpread: 0.001 StdDev: 0.000
+!Azimuth: 263.39527
+!NEZ "KCP1.1" 31975.0405 9737.7925 14.2916
+
+PRISM 5.040
+F2 VA "KCP2" 9.20201 696.161 270.02223
+!Reduced Hz: 0.00000 Spread: 0.00066
+!Mean V: 89.57320 Spread: 0.00114
+!Slope: 696.161 Spread: 0.000
+!Sets statistics
+!Type: Backsight
+!Point ID: KCP2
+!No of sets: 3
+!HzArc: 0.00000 MaxSpread: 0.00072 StdDev: 0.00000
+!V: 89.57312 MaxSpread: 0.00114 StdDev: 0.00037
+!SlopeDist: 696.161 MaxSpread: 0.001 StdDev: 0.000
+
+PRISM 4.430
+
+!Setup Date: 2024/03/12 13:19:59 Method: Known backsight point
+!NEZ "KCP1.1" 31975.0405 9737.7925 14.2916
+STN "KCP1.1" 5.000
+!NEZ "KCP3" 32048.8746 10402.8114 9.6134
+BS "KCP3" 83.39527
+F1 VA "KCP3" 83.39527 669.124 90.27007
+!Delta horiz dist: 0.0016 Delta height: 0.0001
+
+!3 sets of angles
+!Set 1 of 3
+PRISM 4.980
+F1 VA "KCP2.1" 137.59580 825.043 90.20118
+F2 VA "KCP2.1" 317.59508 825.044 269.39472
+!Reduced Hz: 54.20030 Spread: 0.00072
+!Mean V: 90.20123 Spread: 0.00010
+!Slope: 825.044 Spread: 0.001
+PRISM 4.430
+F2 VA "KCP3" 263.39500 669.124 269.32564
+!Reduced Hz: 0.00000 Spread: 0.00027
+!Mean V: 90.27022 Spread: 0.00029
+!Slope: 669.124 Spread: 0.000
+!Set 2 of 3
+F1 VA "KCP3" 83.39471 669.124 90.26577
+!Set 2 of 3
+PRISM 4.980
+F1 VA "KCP2.1" 137.59516 825.044 90.20097
+F2 VA "KCP2.1" 317.59530 825.043 269.39481
+!Reduced Hz: 54.20031 Spread: 0.00014
+!Mean V: 90.20108 Spread: 0.00021
+!Slope: 825.043 Spread: 0.000
+PRISM 4.430
+F2 VA "KCP3" 263.39514 669.125 269.32550
+!Reduced Hz: 0.00000 Spread: 0.00043
+!Mean V: 90.27013 Spread: 0.00073
+!Slope: 669.124 Spread: 0.001
+!Set 3 of 3
+F1 VA "KCP3" 83.39510 669.123 90.26593
+!Set 3 of 3
+PRISM 4.980
+F1 VA "KCP2.1" 137.59505 825.042 90.20091
+F2 VA "KCP2.1" 317.59531 825.044 269.39462
+!Reduced Hz: 54.20019 Spread: 0.00026
+!Mean V: 90.20115 Spread: 0.00047
+!Slope: 825.043 Spread: 0.002
+!Sets statistics
+!Type: Foresight
+!Point ID: KCP2.1
+!No of sets: 3
+!HzArc: 54.20027 MaxSpread: 0.00072 StdDev: 0.00007
+!V: 90.20115 MaxSpread: 0.00047 StdDev: 0.00007
+!SlopeDist: 825.043 MaxSpread: 0.002 StdDev: 0.000
+!Azimuth: 137.59554
+!NEZ "KCP2.1" 31361.9366 10289.8585 9.4798
+
+PRISM 4.430
+F2 VA "KCP3" 263.39489 669.124 269.32543
+!Reduced Hz: 0.00000 Spread: 0.00021
+!Mean V: 90.27025 Spread: 0.00064
+!Slope: 669.124 Spread: 0.001
+!Sets statistics
+!Type: Backsight
+!Point ID: KCP3
+!No of sets: 3
+!HzArc: 0.00000 MaxSpread: 0.00043 StdDev: 0.00000
+!V: 90.27020 MaxSpread: 0.00073 StdDev: 0.00006
+!SlopeDist: 669.124 MaxSpread: 0.001 StdDev: 0.000
+

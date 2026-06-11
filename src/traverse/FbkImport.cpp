@@ -44,13 +44,6 @@ static double UnpackFbkAngle(double packed) {
     return neg ? -result : result;
 }
 
-static double SimpleAvg(const std::vector<double>& v) {
-    if (v.empty()) return 0.0;
-    double s = 0.0;
-    for (double x : v) s += x;
-    return s / static_cast<double>(v.size());
-}
-
 static double ComputeAzimuth(double fromN, double fromE, double toN, double toE) {
     const double dE = toE - fromE;
     const double dN = toN - fromN;
@@ -65,12 +58,6 @@ static bool ParseQuotedName(const std::string& tok, std::string* out) {
         return false;
     *out = tok.substr(1, tok.size() - 2);
     return true;
-}
-
-static std::string FmtDec(double deg) {
-    char buf[32];
-    std::snprintf(buf, sizeof(buf), "%.4f", deg);
-    return std::string(buf);
 }
 
 // Tokenize a FBK line: strip inline "--" comment, split on whitespace,
@@ -267,102 +254,38 @@ bool FbkImport(const char* path, TraverseData& td, std::string& errorMsg) {
             const bool hasF2 = !po.f2Hz.empty();
             if (!hasF1 && !hasF2) continue;
 
-            // Face-averaged Hz circle reading for this foresight
-            double faceHz = 0.0;
-            if (hasF1 && hasF2)
-                faceHz = TraverseAverageFaceHoriz(SimpleAvg(po.f1Hz), SimpleAvg(po.f2Hz));
-            else if (hasF1)
-                faceHz = SimpleAvg(po.f1Hz);
-            else
-                faceHz = TraverseNormBearing(SimpleAvg(po.f2Hz) + 180.0);
-
-            // H.Angle = foresight circle reading − backsight circle reading (mod 360)
-            const double ha = TraverseNormBearing(faceHz - setup.bsHzDec);
-
-            // Face-averaged zenith angle
-            const bool hasF1Va = !po.f1Va.empty();
-            const bool hasF2Va = !po.f2Va.empty();
-            double faceVa = 90.0;
-            bool hasVa = false;
-            if (hasF1Va && hasF2Va)
-                faceVa = TraverseAverageFaceZenith(SimpleAvg(po.f1Va), SimpleAvg(po.f2Va));
-            else if (hasF1Va)
-                faceVa = SimpleAvg(po.f1Va);
-            else if (hasF2Va)
-                faceVa = SimpleAvg(po.f2Va);
-            hasVa = hasF1Va || hasF2Va;
-
-            // Average slope distance across both faces
-            std::vector<double> allSd;
-            allSd.insert(allSd.end(), po.f1Sd.begin(), po.f1Sd.end());
-            allSd.insert(allSd.end(), po.f2Sd.begin(), po.f2Sd.end());
-            const double sd = allSd.empty() ? 0.0 : SimpleAvg(allSd);
-
             TraverseLeg leg;
-            leg.stationId     = GetId(pname);
-            leg.description   = pname;
-            leg.horizAngleDeg = ha;
-            leg.hasHorizAngle = true;
-            leg.horizAngleBuf = FmtDec(ha);
-            leg.isZenithAngle = true;
-            if (hasVa) {
-                leg.vertAngleDeg = faceVa;
-                leg.hasVertAngle = true;
-                leg.vertAngleBuf = FmtDec(faceVa);
-            }
-            if (sd > 0.0) {
-                leg.slopeDist    = sd;
-                leg.hasSlopeDist = true;
+            leg.stationId          = GetId(pname);
+            leg.description        = pname;
+            leg.isZenithAngle      = true;
+            leg.backsightCircleDeg = setup.bsHzDec;   // reduce circle readings against this.
+            leg.hasBacksightCircle = setup.hasBs;     // (a setup with no BS is skipped above).
+
+            // Populate raw measurement sets — the literal per-set F1/F2 circle
+            // readings, slope distances, and zenith angles.  Pair by index;
+            // unmatched singles carry forward.  The reduced per-leg values are
+            // then derived from these by ReduceLegFromSets (ADR-003), so the
+            // import path and the editor's edit path reduce identically.
+            const size_t nSets = std::max(po.f1Hz.size(), po.f2Hz.size());
+            for (size_t s = 0; s < nSets; ++s) {
+                TraverseMeasSet ms;
+                ms.setNo = static_cast<int>(s) + 1;
+                if (s < po.f1Hz.size()) {
+                    ms.f1HzDec = po.f1Hz[s];
+                    ms.f1VaDec = (s < po.f1Va.size()) ? po.f1Va[s] : 90.0;
+                    ms.f1Sd    = (s < po.f1Sd.size()) ? po.f1Sd[s] : 0.0;
+                    ms.hasF1   = true;
+                }
+                if (s < po.f2Hz.size()) {
+                    ms.f2HzDec = po.f2Hz[s];
+                    ms.f2VaDec = (s < po.f2Va.size()) ? po.f2Va[s] : 90.0;
+                    ms.f2Sd    = (s < po.f2Sd.size()) ? po.f2Sd[s] : 0.0;
+                    ms.hasF2   = true;
+                }
+                leg.rawSets.push_back(ms);
             }
 
-            // Populate face columns so Face1/Face2 mode works correctly if
-            // the user enables it.  Store the reduced H.Angles (foresight
-            // circle reading − BS circle reading) per face, and the raw
-            // zenith readings per face.  The traverse engine will then call
-            // TraverseAverageFaceHoriz / TraverseAverageFaceZenith on these.
-            if (hasF1) {
-                leg.face1HorizDeg = TraverseNormBearing(SimpleAvg(po.f1Hz) - setup.bsHzDec);
-                leg.face1HorizBuf = FmtDec(leg.face1HorizDeg);
-                if (hasF1Va) {
-                    leg.face1VertDeg = SimpleAvg(po.f1Va);
-                    leg.face1VertBuf = FmtDec(leg.face1VertDeg);
-                }
-            }
-            if (hasF2) {
-                // Store F2 reduced H.Angle; TraverseAverageFaceHoriz expects
-                // F2 ≈ F1 + 180° in the same reference frame so pass the raw
-                // reduced angle — the averaging function handles the wrap.
-                leg.face2HorizDeg = TraverseNormBearing(SimpleAvg(po.f2Hz) - setup.bsHzDec);
-                leg.face2HorizBuf = FmtDec(leg.face2HorizDeg);
-                if (hasF2Va) {
-                    leg.face2VertDeg = SimpleAvg(po.f2Va);
-                    leg.face2VertBuf = FmtDec(leg.face2VertDeg);
-                }
-            }
-
-            // Populate raw measurement sets so the editor can show per-set
-            // F1/F2 detail rows.  Pair by index; unmatched singles carry forward.
-            {
-                const size_t nSets = std::max(po.f1Hz.size(), po.f2Hz.size());
-                for (size_t s = 0; s < nSets; ++s) {
-                    TraverseMeasSet ms;
-                    ms.setNo = static_cast<int>(s) + 1;
-                    if (s < po.f1Hz.size()) {
-                        ms.f1HzDec = po.f1Hz[s];
-                        ms.f1VaDec = (s < po.f1Va.size()) ? po.f1Va[s] : 90.0;
-                        ms.f1Sd    = (s < po.f1Sd.size()) ? po.f1Sd[s] : 0.0;
-                        ms.hasF1   = true;
-                    }
-                    if (s < po.f2Hz.size()) {
-                        ms.f2HzDec = po.f2Hz[s];
-                        ms.f2VaDec = (s < po.f2Va.size()) ? po.f2Va[s] : 90.0;
-                        ms.f2Sd    = (s < po.f2Sd.size()) ? po.f2Sd[s] : 0.0;
-                        ms.hasF2   = true;
-                    }
-                    leg.rawSets.push_back(ms);
-                }
-            }
-
+            ReduceLegFromSets(leg);  // fills horizAngleDeg / vertAngleDeg / slopeDist + buffers.
             td.legs.push_back(leg);
         }
     }
@@ -370,6 +293,27 @@ bool FbkImport(const char* path, TraverseData& td, std::string& errorMsg) {
     if (td.legs.empty()) {
         errorMsg = "FBK parsed but no traverse legs could be extracted";
         return false;
+    }
+
+    // ---------- closed-loop detection ----------------------------------------
+    // A loop traverse ends back on the start monument, typically re-observed
+    // under a suffixed name (e.g. start "KCP2" closes as foresight "KCP2.1").
+    // Strip a trailing ".<digits>" re-observation suffix and compare to the
+    // start station name; if they match, this is a closed loop.
+    {
+        auto baseName = [](const std::string& s) -> std::string {
+            const size_t dot = s.find_last_of('.');
+            if (dot != std::string::npos && dot + 1 < s.size()) {
+                bool allDigits = true;
+                for (size_t i = dot + 1; i < s.size(); ++i)
+                    if (!std::isdigit(static_cast<unsigned char>(s[i]))) { allDigits = false; break; }
+                if (allDigits)
+                    return s.substr(0, dot);
+            }
+            return s;
+        };
+        if (baseName(td.legs.back().description) == baseName(first.stnName))
+            td.isClosedLoop = true;
     }
 
     return true;
