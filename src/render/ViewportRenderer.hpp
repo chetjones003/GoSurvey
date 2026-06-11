@@ -13,6 +13,9 @@ struct RenderTuning {
   int arcCircleSmoothnessCap = 512; ///< Display → Display resolution: max segments per full circle (VIEWRES).
   bool hardwareAcceleration = true; ///< System → Hardware Acceleration: when off, MSAA path is skipped.
   bool smoothLineDisplay = true;    ///< Graphics Performance → Smooth line display: GL_LINE_SMOOTH + MSAA.
+  float bgR = 0.f;                  ///< Display → Window Elements: viewport background (clear) color. Default black preserves prior behavior.
+  float bgG = 0.f;
+  float bgB = 0.f;
 };
 
 class ViewportRenderer {

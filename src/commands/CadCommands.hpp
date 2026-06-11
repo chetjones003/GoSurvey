@@ -752,6 +752,10 @@ struct AppCommandState {
   float viewportCrosshairPickHalfPxX = 4.f;
   float viewportCrosshairPickHalfPxY = 4.f;
   float viewportCrosshairHairPx = 1.f;
+  /// Viewport background (model-space clear color): RGB 0–1. Default #1F1F2A dark gray.
+  float viewportBgR = 0.1215686f;
+  float viewportBgG = 0.1215686f;
+  float viewportBgB = 0.1647059f;
 
   // ---------------------------------------------------------------------------------------------------------
   // Settings (AutoCAD-style Options dialog). Live tab is preserved across opens/closes via settingsActiveTabIdx.

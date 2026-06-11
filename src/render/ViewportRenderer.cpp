@@ -780,7 +780,7 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
   glDisable(GL_DEPTH_TEST);
   glDepthMask(GL_FALSE);
 
-  glClearColor(0.f, 0.f, 0.f, 1.f);
+  glClearColor(tuning.bgR, tuning.bgG, tuning.bgB, 1.f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
   const float aspect = static_cast<float>(fbW_) / static_cast<float>(std::max(fbH_, 1));

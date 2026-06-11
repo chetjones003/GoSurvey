@@ -75,6 +75,11 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   num("viewportCrosshairB",      &st.viewportCrosshairB,      0.f, 1.f);
   num("viewportCrosshairHairPx", &st.viewportCrosshairHairPx, 0.75f, 4.f);
 
+  // --- Viewport background (Display → Window Elements) ---
+  num("viewportBgR", &st.viewportBgR, 0.f, 1.f);
+  num("viewportBgG", &st.viewportBgG, 0.f, 1.f);
+  num("viewportBgB", &st.viewportBgB, 0.f, 1.f);
+
   // --- Survey point settings (User Preferences tab) ---
   num("surveyPointCrossSpanPlottedInches",    &st.surveyPointCrossSpanPlottedInches,    0.02f, 2.f);
   b  ("surveyPointShowIdInViewport",          &st.surveyPointShowIdInViewport);
@@ -237,6 +242,11 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["viewportCrosshairG"]          = st.viewportCrosshairG;
   s["viewportCrosshairB"]          = st.viewportCrosshairB;
   s["viewportCrosshairHairPx"]     = st.viewportCrosshairHairPx;
+
+  // Viewport background
+  s["viewportBgR"]                 = st.viewportBgR;
+  s["viewportBgG"]                 = st.viewportBgG;
+  s["viewportBgB"]                 = st.viewportBgB;
 
   // Survey point settings
   s["surveyPointCrossSpanPlottedInches"]   = st.surveyPointCrossSpanPlottedInches;
