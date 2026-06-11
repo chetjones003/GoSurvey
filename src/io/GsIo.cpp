@@ -356,6 +356,9 @@ json BuildRoot(const AppCommandState& st) {
   settings["viewportCrosshairR"] = st.viewportCrosshairR;
   settings["viewportCrosshairG"] = st.viewportCrosshairG;
   settings["viewportCrosshairB"] = st.viewportCrosshairB;
+  settings["viewportBgR"] = st.viewportBgR;
+  settings["viewportBgG"] = st.viewportBgG;
+  settings["viewportBgB"] = st.viewportBgB;
   settings["viewportCrosshairArmFracX"] = st.viewportCrosshairArmFracX;
   settings["viewportCrosshairArmFracY"] = st.viewportCrosshairArmFracY;
   settings["viewportCrosshairPickHalfPxX"] = st.viewportCrosshairPickHalfPxX;
@@ -521,6 +524,9 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
   num(s, "viewportCrosshairR", &st.viewportCrosshairR);
   num(s, "viewportCrosshairG", &st.viewportCrosshairG);
   num(s, "viewportCrosshairB", &st.viewportCrosshairB);
+  num(s, "viewportBgR", &st.viewportBgR);
+  num(s, "viewportBgG", &st.viewportBgG);
+  num(s, "viewportBgB", &st.viewportBgB);
   num(s, "viewportCrosshairArmFracX", &st.viewportCrosshairArmFracX);
   num(s, "viewportCrosshairArmFracY", &st.viewportCrosshairArmFracY);
   num(s, "viewportCrosshairPickHalfPxX", &st.viewportCrosshairPickHalfPxX);

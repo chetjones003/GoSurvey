@@ -219,6 +219,9 @@ Survey display / labels:
     Placeholders documented in SurveyPoints.hpp: {id} {desc} {elev}; use a
     real newline in the string for line breaks.
 
+Viewport background (Display > Window Elements):
+  viewportBgR, G, B                     (numbers, 0..1; default #1F1F2A dark gray)
+
 Viewport crosshair (Drawing1):
   viewportCrosshairR, G, B              (numbers, 0..1 typical)
   viewportCrosshairArmFracX, ArmFracY (numbers)

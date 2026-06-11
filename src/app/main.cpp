@@ -485,6 +485,9 @@ int main() {
     tuning.arcCircleSmoothnessCap = std::clamp(cmd.displayArcCircleSmoothness, 8, 20000);
     tuning.hardwareAcceleration = cmd.systemHardwareAcceleration;
     tuning.smoothLineDisplay = cmd.gfxSmoothLineDisplay;
+    tuning.bgR = std::clamp(cmd.viewportBgR, 0.f, 1.f);
+    tuning.bgG = std::clamp(cmd.viewportBgG, 0.f, 1.f);
+    tuning.bgB = std::clamp(cmd.viewportBgB, 0.f, 1.f);
     // Build PDF render list: committed attachments + cursor-follow preview when picking insert point.
     std::vector<PdfAttachment> pdfRenderList;
     if (!cmd.pdfAttachments.empty())

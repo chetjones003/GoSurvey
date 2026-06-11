@@ -47,6 +47,18 @@ static void DrawDisplayWindowElements(AppCommandState& cmd) {
     else
       ApplyCadLightTheme();
   }
+  {
+    float bg[3] = {cmd.viewportBgR, cmd.viewportBgG, cmd.viewportBgB};
+    ImGui::SetNextItemWidth(150.f);
+    if (ImGui::ColorEdit3("Viewport background", bg)) {
+      cmd.viewportBgR = bg[0]; cmd.viewportBgG = bg[1]; cmd.viewportBgB = bg[2];
+    }
+    ItemHelpTooltip("Model-space background (clear) color for the drawing viewport.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Reset##bgReset")) {
+      cmd.viewportBgR = 0.1215686f; cmd.viewportBgG = 0.1215686f; cmd.viewportBgB = 0.1647059f;
+    }
+  }
   ImGui::Spacing();
   ImGui::Checkbox("Display scroll bars in drawing window", &cmd.displayScrollbars);
   ImGui::Checkbox("Use large buttons for Toolbars", &cmd.displayLargeToolbarButtons);
