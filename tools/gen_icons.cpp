@@ -118,8 +118,8 @@ static Color RGBA(int r, int g, int b, int a = 255) {
 // The old per-category color names are kept but collapsed onto the two tones
 // so each icon's geometry maps cleanly: cool/structural names -> ink,
 // node/highlight names (RED, TEAL, PINK) -> steel accent.
-static const Color INK    = RGBA(58, 64, 74);     // #3A404A primary geometry
-static const Color STEEL  = RGBA(46, 91, 174);    // #2E5BAE steel-blue accent
+static const Color INK    = RGBA(174, 180, 190);  // #AEB4BE light linework (reads on #464646)
+static const Color STEEL  = RGBA(110, 160, 215);  // #6EA0D7 light steel-blue accent (section-header hue)
 static const Color WHITE  = RGBA(248, 248, 248);
 
 static const Color BLUE   = INK;    // primary geometry
