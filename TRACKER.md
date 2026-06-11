@@ -19,7 +19,11 @@
               beside a weighted least-squares adjustment (closed-loop), with a per-observation
               residuals tab and configurable a-priori standard errors. Raw F1/F2 measurements and
               per-leg statistics now display in the editor (REQ-010..012). See spec ADR-001/002.
-            - Remaining: connecting (point-to-point) traverses; in-window editing of blunders.
+            - Done (REQ-018): each leg expands inline to an editable observation-set editor —
+              add/remove sets and edit the literal F1/F2 circle readings, slope distances, and
+              zenith angles; the leg re-reduces from its sets via ReduceLegFromSets (ADR-003,
+              backsight reading stored on the leg). "+ Add Leg" moved into the table as its last row.
+            - Remaining: connecting (point-to-point) traverses.
     - [ ] Ability to import raw data formats such as Autodesk .fbk, Bently RWD,
             Carlson RW5, Microsurvey RW5, TDS RAW,
             TDS RW5 and traverse editor gets filled in automatically

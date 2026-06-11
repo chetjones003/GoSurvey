@@ -187,6 +187,92 @@ std::string TraverseFormatDist(double val) {
 }
 
 
+// ------------------------------------------------------------------ reduction --
+
+void ReduceLegFromSets(TraverseLeg& leg) {
+    if (leg.rawSets.empty())
+        return;  // manually entered leg — nothing to reduce.
+
+    // Average the literal per-face circle readings / zenith angles / slope
+    // distances over the sets that carry that face.
+    auto meanOf = [](const std::vector<double>& v) -> double {
+        if (v.empty()) return 0.0;
+        double s = 0.0;
+        for (double x : v) s += x;
+        return s / static_cast<double>(v.size());
+    };
+
+    std::vector<double> f1Hz, f1Va, f1Sd, f2Hz, f2Va, f2Sd;
+    for (const TraverseMeasSet& s : leg.rawSets) {
+        if (s.hasF1) { f1Hz.push_back(s.f1HzDec); f1Va.push_back(s.f1VaDec); f1Sd.push_back(s.f1Sd); }
+        if (s.hasF2) { f2Hz.push_back(s.f2HzDec); f2Va.push_back(s.f2VaDec); f2Sd.push_back(s.f2Sd); }
+    }
+
+    const bool hasF1 = !f1Hz.empty();
+    const bool hasF2 = !f2Hz.empty();
+    leg.hasFace1 = hasF1;
+    leg.hasFace2 = hasF2;
+    if (!hasF1 && !hasF2) {
+        leg.hasHorizAngle = false;
+        leg.hasVertAngle  = false;
+        leg.hasSlopeDist  = false;
+        return;
+    }
+
+    const double bs = leg.hasBacksightCircle ? leg.backsightCircleDeg : 0.0;
+
+    // --- Horizontal: face-average circle readings, then subtract backsight. ---
+    const double avgF1Hz = meanOf(f1Hz);
+    const double avgF2Hz = meanOf(f2Hz);
+    double faceHz;
+    if (hasF1 && hasF2)
+        faceHz = TraverseAverageFaceHoriz(avgF1Hz, avgF2Hz);
+    else if (hasF1)
+        faceHz = avgF1Hz;
+    else
+        faceHz = TraverseNormBearing(avgF2Hz + 180.0);  // F2 only: onto the F1 frame.
+
+    leg.horizAngleDeg = TraverseNormBearing(faceHz - bs);
+    leg.hasHorizAngle = true;
+    leg.horizAngleBuf = TraverseFormatDist(leg.horizAngleDeg);
+
+    if (hasF1) {
+        leg.face1HorizDeg = TraverseNormBearing(avgF1Hz - bs);
+        leg.face1HorizBuf = TraverseFormatDist(leg.face1HorizDeg);
+    }
+    if (hasF2) {
+        leg.face2HorizDeg = TraverseNormBearing(avgF2Hz - bs);
+        leg.face2HorizBuf = TraverseFormatDist(leg.face2HorizDeg);
+    }
+
+    // --- Zenith: face-average (FBK vertical circle readings are zenith). ---
+    const double avgF1Va = meanOf(f1Va);
+    const double avgF2Va = meanOf(f2Va);
+    if (hasF1 && hasF2)
+        leg.vertAngleDeg = TraverseAverageFaceZenith(avgF1Va, avgF2Va);
+    else if (hasF1)
+        leg.vertAngleDeg = avgF1Va;
+    else
+        leg.vertAngleDeg = avgF2Va;
+    leg.isZenithAngle = true;
+    leg.hasVertAngle  = true;
+    leg.vertAngleBuf  = TraverseFormatDist(leg.vertAngleDeg);
+    if (hasF1) { leg.face1VertDeg = avgF1Va; leg.face1VertBuf = TraverseFormatDist(avgF1Va); }
+    if (hasF2) { leg.face2VertDeg = avgF2Va; leg.face2VertBuf = TraverseFormatDist(avgF2Va); }
+
+    // --- Slope distance: mean across all faces' distances. ---
+    std::vector<double> allSd = f1Sd;
+    allSd.insert(allSd.end(), f2Sd.begin(), f2Sd.end());
+    const double sd = meanOf(allSd);
+    if (sd > 0.0) {
+        leg.slopeDist    = sd;
+        leg.hasSlopeDist = true;
+    } else {
+        leg.hasSlopeDist = false;
+    }
+}
+
+
 // ------------------------------------------------------------------ computation --
 
 void ComputeTraverse(TraverseData& td) {

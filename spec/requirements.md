@@ -113,17 +113,23 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-06-10 — initial.
 
-### REQ-013 — Imported measurements are view-only
+### REQ-013 — Raw measurements are protected from accidental edits
 - Purpose: protect raw field data from accidental edits
 - Priority: must
 - Type: functional
-- Statement: In the main editor window, imported F1/F2 measurements are
-  presented read-only; no imported measurement field is editable.
-- Acceptance: code/UI review confirms no editable control is bound to an
-  imported observation value.
+- Statement: The computed-output cells of the main editor (bearing, deltas,
+  coordinates, status) are read-only, and the individual F1/F2 observation values
+  are not editable from the summary grid — they can be edited only inside a leg's
+  explicit per-leg expander (REQ-018). Editing raw observations requires the
+  deliberate act of expanding a leg. (The summary grid's manual-entry fields —
+  H.Angle, H.Dist, S.Dist, V.Angle — remain editable for legs entered by hand.)
+- Acceptance: code/UI review confirms no computed-output cell is editable and no
+  control is bound to an individual F1/F2 observation outside the per-leg
+  expander.
 - Owner-layer: UI
 - Status: accepted
-- Revisions: 2026-06-10 — initial.
+- Revisions: 2026-06-10 — initial; 2026-06-11 — scoped view-only to the
+  collapsed summary; editing happens in the per-leg expander (REQ-018, ADR-003).
 
 ### REQ-014 — Closure window: unadjusted vs least-squares, side by side
 - Purpose: let the surveyor compare and accept an adjustment
@@ -166,6 +172,26 @@ requirements is a planning failure, not a sign of rigor.
 - Owner-layer: Domain (compute), UI (display)
 - Status: accepted
 - Revisions: 2026-06-10 — initial.
+
+### REQ-018 — Editable per-leg observation sets (expander)
+- Purpose: let the surveyor add, edit, or remove individual observations per leg
+  and have the traverse re-derive from them (FEAT-002)
+- Priority: should
+- Type: functional
+- Statement: Each leg can be expanded inline to show its observation sets as
+  editable controls (per-set F1/F2 horizontal circle reading, slope distance,
+  zenith angle, with per-face presence). The user can add a set and remove a set.
+  Editing, adding, or removing a set re-reduces the leg from its sets — the
+  leg's horizontal angle (circle reading − backsight reading), zenith angle, and
+  slope distance are recomputed — and the traverse and closure update
+  accordingly. Sets retain the literal field circle readings, not pre-reduced
+  directions.
+- Acceptance: importing the sample FBK and then editing a set's circle reading
+  changes that leg's computed bearing and the loop closure; adding a set changes
+  the per-leg statistics (REQ-011); removing all but one set still computes.
+- Owner-layer: Domain (reduction), UI (editing)
+- Status: accepted
+- Revisions: 2026-06-11 — initial (ADR-003).
 
 ### REQ-017 — Insufficient redundancy is surfaced, not absorbed
 - Purpose: no silent failure (REQ-201)
@@ -283,6 +309,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-015 | compute | `TraverseTests` "adjustment drives misclosure to zero" | implemented |
 | REQ-016 | compute | `TraverseTests` "perfect loop yields zero residuals" | implemented |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
+| REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
 
 ---
 

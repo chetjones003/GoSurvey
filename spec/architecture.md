@@ -234,6 +234,30 @@ A change is rejected if it breaks any of these:
   graph stays minimal; scope is bounded to closed loops this increment
   (connecting traverses deferred to the roadmap).
 
+### ADR-003 — Backsight reading on the leg + `ReduceLegFromSets` reduction   (2026-06-11, accepted)
+- Context:    REQ-018 makes a leg's per-set F1/F2 observations editable, after
+  which the leg's horizontal angle must re-derive from the edited circle
+  readings. A leg's H.Angle is `circle reading − backsight circle reading`, but
+  the backsight reading was consumed by the FBK importer (`setup.bsHzDec`) and
+  never stored on the leg — so the edited sets had no reference to reduce against.
+  How an edited set feeds the leg is a data-model decision, not a Workshop choice.
+- Decision:   Store the backsight circle reading on `TraverseLeg`
+  (`backsightCircleDeg`, `hasBacksightCircle`) and add a Domain reduction
+  function `ReduceLegFromSets(TraverseLeg&)` (in `TraverseCalc`) that face-averages
+  the literal per-set circle readings, subtracts the backsight reading to get the
+  reduced H.Angle, averages the zenith angles and slope distances, and writes the
+  leg's reduced fields and input buffers. The FBK importer is refactored to
+  populate the sets + backsight reading and then call this one function, so the
+  import path and the edit path reduce identically (single source of truth).
+- Alternatives: (a) store pre-reduced directions in the sets instead of literal
+  circle readings — rejected: loses raw-measurement fidelity (REQ-010 "see every
+  measurement made"). (b) make sets editable but not re-reduce the leg —
+  rejected: editing would silently not affect the computed traverse (a hidden
+  failure, REQ-201).
+- Consequences: `TraverseLeg` gains two fields; reduction logic moves out of the
+  importer into one reusable Domain function (less duplication, edit==import);
+  the literal field readings are preserved for display and adjustment.
+
 ### ADR-002 — Domain test target (Catch2 + ctest)   (2026-06-10, accepted)
 - Context:    REQ-011/012/015/016 require committed numeric regression tests, but
   the project had no test infrastructure. The accepted least-squares math

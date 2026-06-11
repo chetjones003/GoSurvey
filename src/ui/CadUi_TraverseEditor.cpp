@@ -10,6 +10,7 @@
 #include <imgui.h>
 #include <imgui_stdlib.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -30,28 +31,6 @@ static void ParseHorizAngle(TraverseLeg& leg) {
     // If parse fails, keep previous value and flag; user is mid-edit.
 }
 
-static void ParseFace1Horiz(TraverseLeg& leg) {
-    leg.hasFace1 = false;
-    if (!leg.face1HorizBuf.empty()) {
-        double v;
-        if (TraverseParseAngle(leg.face1HorizBuf, &v)) {
-            leg.face1HorizDeg = v;
-            leg.hasFace1 = true;
-        }
-    }
-}
-
-static void ParseFace2Horiz(TraverseLeg& leg) {
-    leg.hasFace2 = false;
-    if (!leg.face2HorizBuf.empty()) {
-        double v;
-        if (TraverseParseAngle(leg.face2HorizBuf, &v)) {
-            leg.face2HorizDeg = v;
-            leg.hasFace2 = true;
-        }
-    }
-}
-
 static void ParseVertAngle(TraverseLeg& leg) {
     if (leg.vertAngleBuf.empty()) {
         leg.hasVertAngle = false;
@@ -61,22 +40,6 @@ static void ParseVertAngle(TraverseLeg& leg) {
     if (TraverseParseAngle(leg.vertAngleBuf, &v)) {
         leg.vertAngleDeg = v;
         leg.hasVertAngle = true;
-    }
-}
-
-static void ParseFace1Vert(TraverseLeg& leg) {
-    if (!leg.face1VertBuf.empty()) {
-        double v;
-        if (TraverseParseAngle(leg.face1VertBuf, &v))
-            leg.face1VertDeg = v;
-    }
-}
-
-static void ParseFace2Vert(TraverseLeg& leg) {
-    if (!leg.face2VertBuf.empty()) {
-        double v;
-        if (TraverseParseAngle(leg.face2VertBuf, &v))
-            leg.face2VertDeg = v;
     }
 }
 
@@ -92,16 +55,13 @@ static void ParseStartBearing(TraverseData& td) {
     }
 }
 
-// Draw one computed value cell (read-only, grayed if not computed).
-static void ReadOnlyCell(const char* label, bool valid, double val, const char* fmt = "%.4f") {
-    if (valid) {
-        char buf[32];
-        std::snprintf(buf, sizeof(buf), fmt, val);
-        ImGui::TextUnformatted(buf);
-    } else {
-        ImGui::TextDisabled("—");
-    }
-    (void)label;
+// Right-align text within the current table cell (for numeric columns).
+static void RightAlignedText(const char* s) {
+    const float textW = ImGui::CalcTextSize(s).x;
+    const float availW = ImGui::GetContentRegionAvail().x;
+    if (availW > textW)
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (availW - textW));
+    ImGui::TextUnformatted(s);
 }
 
 // Reduced (face-averaged) horizontal circle reading for one set.
@@ -121,103 +81,159 @@ static double SetReducedDist(const TraverseMeasSet& s) {
     return s.f2Sd;
 }
 
-// ---- Raw measurements & per-leg statistics (REQ-010, REQ-011, REQ-012) ----
-// View-only (REQ-013): nothing here is an editable control.
-static void DrawRawMeasurements(TraverseData& td) {
-    for (size_t i = 0; i < td.legs.size(); ++i) {
-        TraverseLeg& leg = td.legs[i];
-        if (leg.rawSets.empty())
-            continue;
+// One editable numeric cell. Returns true on commit (deactivated after edit).
+static bool SetCellDouble(const char* id, double* v, const char* fmt, bool enabled) {
+    if (!enabled) ImGui::BeginDisabled();
+    ImGui::SetNextItemWidth(-FLT_MIN);
+    ImGui::InputDouble(id, v, 0., 0., fmt);
+    const bool committed = ImGui::IsItemDeactivatedAfterEdit();
+    if (!enabled) ImGui::EndDisabled();
+    return committed;
+}
 
-        ImGui::PushID(static_cast<int>(i));
-        char hdr[96];
-        std::snprintf(hdr, sizeof(hdr), "Leg %zu  \xe2\x86\x92  Station %d  (%zu set%s)",
-                      i + 1, leg.stationId, leg.rawSets.size(),
-                      leg.rawSets.size() == 1 ? "" : "s");
-        if (ImGui::TreeNode(hdr)) {
-            const ImGuiTableFlags tf = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                                       ImGuiTableFlags_SizingFixedFit;
-            if (ImGui::BeginTable("rawsets", 7, tf)) {
-                ImGui::TableSetupColumn("Set");
-                ImGui::TableSetupColumn("F1 Hz\xc2\xb0");
-                ImGui::TableSetupColumn("F1 SD");
-                ImGui::TableSetupColumn("F1 VA\xc2\xb0");
-                ImGui::TableSetupColumn("F2 Hz\xc2\xb0");
-                ImGui::TableSetupColumn("F2 SD");
-                ImGui::TableSetupColumn("F2 VA\xc2\xb0");
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
-                ImGui::TableHeadersRow();
-                ImGui::PopStyleColor();
+// ---- Per-leg observation editor (REQ-018) ----
+// Editable observation sets for one expanded leg: add/remove sets, edit the
+// literal F1/F2 circle readings, slope distances, and zenith angles. Any edit
+// re-reduces the leg from its sets (ADR-003) and marks the traverse dirty.
+// Below the editor it shows the per-leg statistics (REQ-011) and the
+// complementary distance (REQ-012).
+static void DrawLegObservationEditor(TraverseLeg& leg, size_t legIndex, bool& dirty) {
+    ImGui::PushID(static_cast<int>(legIndex));
 
-                std::vector<double> hz, dist, va;
-                for (const TraverseMeasSet& s : leg.rawSets) {
-                    ImGui::TableNextRow();
-                    ImGui::TableNextColumn(); ImGui::Text("%d", s.setNo);
-                    ImGui::TableNextColumn();
-                    if (s.hasF1) ImGui::Text("%.5f", s.f1HzDec); else ImGui::TextDisabled("\xe2\x80\x94");
-                    ImGui::TableNextColumn();
-                    if (s.hasF1) ImGui::Text("%.4f", s.f1Sd); else ImGui::TextDisabled("\xe2\x80\x94");
-                    ImGui::TableNextColumn();
-                    if (s.hasF1) ImGui::Text("%.5f", s.f1VaDec); else ImGui::TextDisabled("\xe2\x80\x94");
-                    ImGui::TableNextColumn();
-                    if (s.hasF2) ImGui::Text("%.5f", s.f2HzDec); else ImGui::TextDisabled("\xe2\x80\x94");
-                    ImGui::TableNextColumn();
-                    if (s.hasF2) ImGui::Text("%.4f", s.f2Sd); else ImGui::TextDisabled("\xe2\x80\x94");
-                    ImGui::TableNextColumn();
-                    if (s.hasF2) ImGui::Text("%.5f", s.f2VaDec); else ImGui::TextDisabled("\xe2\x80\x94");
+    char title[112];
+    std::snprintf(title, sizeof(title),
+                  "Leg %zu  \xe2\x86\x92  Station %d \xe2\x80\x94 observations  (%zu set%s)",
+                  legIndex + 1, leg.stationId, leg.rawSets.size(),
+                  leg.rawSets.size() == 1 ? "" : "s");
+    ImGui::SeparatorText(title);
 
-                    hz.push_back(SetReducedHoriz(s));
-                    dist.push_back(SetReducedDist(s));
-                    va.push_back(SetReducedZenith(s));
-                }
-                ImGui::EndTable();
+    bool changed = false;
+    int  removeIdx = -1;
 
-                // Statistics over the reduced per-set values (REQ-011).
-                const StatSummary sh = ComputeStats(hz);
-                const StatSummary sd = ComputeStats(dist);
-                const StatSummary sv = ComputeStats(va);
-                ImGui::TextUnformatted("Reduced (face-averaged) per-set statistics:");
-                if (ImGui::BeginTable("rawstats", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-                                                     ImGuiTableFlags_SizingFixedFit)) {
-                    ImGui::TableSetupColumn("Quantity");
-                    ImGui::TableSetupColumn("N");
-                    ImGui::TableSetupColumn("Mean");
-                    ImGui::TableSetupColumn("Sum");
-                    ImGui::TableSetupColumn("Std Dev");
-                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
-                    ImGui::TableHeadersRow();
-                    ImGui::PopStyleColor();
-                    auto statRow = [](const char* name, const StatSummary& s, const char* fmt) {
-                        ImGui::TableNextRow();
-                        ImGui::TableNextColumn(); ImGui::TextUnformatted(name);
-                        ImGui::TableNextColumn(); ImGui::Text("%d", s.n);
-                        char b[32];
-                        ImGui::TableNextColumn(); std::snprintf(b, sizeof(b), fmt, s.mean);   ImGui::TextUnformatted(b);
-                        ImGui::TableNextColumn(); std::snprintf(b, sizeof(b), fmt, s.sum);    ImGui::TextUnformatted(b);
-                        ImGui::TableNextColumn(); std::snprintf(b, sizeof(b), fmt, s.stddev); ImGui::TextUnformatted(b);
-                    };
-                    statRow("Horizontal\xc2\xb0", sh, "%.6f");
-                    statRow("Distance",     sd, "%.4f");
-                    statRow("Zenith\xc2\xb0",     sv, "%.6f");
-                    ImGui::EndTable();
-                }
+    const ImGuiTableFlags tf = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                               ImGuiTableFlags_SizingFixedFit;
+    if (ImGui::BeginTable("editsets", 10, tf)) {
+        ImGui::TableSetupColumn("Set",      ImGuiTableColumnFlags_WidthFixed, 30.f);
+        ImGui::TableSetupColumn("F1",       ImGuiTableColumnFlags_WidthFixed, 24.f);
+        ImGui::TableSetupColumn("F1 Hz\xc2\xb0",  ImGuiTableColumnFlags_WidthFixed, 96.f);
+        ImGui::TableSetupColumn("F1 SD",    ImGuiTableColumnFlags_WidthFixed, 84.f);
+        ImGui::TableSetupColumn("F1 VA\xc2\xb0",  ImGuiTableColumnFlags_WidthFixed, 96.f);
+        ImGui::TableSetupColumn("F2",       ImGuiTableColumnFlags_WidthFixed, 24.f);
+        ImGui::TableSetupColumn("F2 Hz\xc2\xb0",  ImGuiTableColumnFlags_WidthFixed, 96.f);
+        ImGui::TableSetupColumn("F2 SD",    ImGuiTableColumnFlags_WidthFixed, 84.f);
+        ImGui::TableSetupColumn("F2 VA\xc2\xb0",  ImGuiTableColumnFlags_WidthFixed, 96.f);
+        ImGui::TableSetupColumn("",         ImGuiTableColumnFlags_WidthFixed, 26.f);
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+        ImGui::TableHeadersRow();
+        ImGui::PopStyleColor();
 
-                // Complementary distance (REQ-012): show both slope and horizontal.
-                const double vaDeg = sv.n > 0 ? sv.mean
-                                   : (leg.hasVertAngle ? leg.vertAngleDeg : 90.0);
-                double horiz = leg.computed ? leg.computedHorizDist
-                             : (leg.hasHorizDist ? leg.horizDist
-                                                 : TraverseReduceToHoriz(leg.slopeDist, vaDeg, true));
-                double slope = leg.hasSlopeDist ? leg.slopeDist
-                                                : TraverseSlopeFromHoriz(horiz, vaDeg, true);
-                ImGui::Text("Horizontal distance: %.4f    Slope distance: %.4f    (zenith %.5f\xc2\xb0)",
-                            horiz, slope, vaDeg);
+        for (size_t si = 0; si < leg.rawSets.size(); ++si) {
+            TraverseMeasSet& s = leg.rawSets[si];
+            ImGui::TableNextRow();
+            ImGui::PushID(static_cast<int>(si));
 
-                ImGui::TreePop();
-            }
+            ImGui::TableNextColumn();
+            ImGui::AlignTextToFramePadding();
+            ImGui::Text("%d", s.setNo);
+
+            // Face-1 presence + values
+            ImGui::TableNextColumn();
+            if (ImGui::Checkbox("##hasf1", &s.hasF1)) changed = true;
+            ImGui::TableNextColumn(); changed |= SetCellDouble("##f1hz", &s.f1HzDec, "%.5f", s.hasF1);
+            ImGui::TableNextColumn(); changed |= SetCellDouble("##f1sd", &s.f1Sd,    "%.4f", s.hasF1);
+            ImGui::TableNextColumn(); changed |= SetCellDouble("##f1va", &s.f1VaDec, "%.5f", s.hasF1);
+
+            // Face-2 presence + values
+            ImGui::TableNextColumn();
+            if (ImGui::Checkbox("##hasf2", &s.hasF2)) changed = true;
+            ImGui::TableNextColumn(); changed |= SetCellDouble("##f2hz", &s.f2HzDec, "%.5f", s.hasF2);
+            ImGui::TableNextColumn(); changed |= SetCellDouble("##f2sd", &s.f2Sd,    "%.4f", s.hasF2);
+            ImGui::TableNextColumn(); changed |= SetCellDouble("##f2va", &s.f2VaDec, "%.5f", s.hasF2);
+
+            ImGui::TableNextColumn();
+            if (ImGui::SmallButton("\xe2\x9c\x95")) removeIdx = static_cast<int>(si);
+            ItemHelpTooltip("Remove this observation set.");
+
+            ImGui::PopID();
         }
-        ImGui::PopID();
+        ImGui::EndTable();
     }
+
+    if (ImGui::Button("+ Add Observation")) {
+        TraverseMeasSet ms;
+        ms.setNo  = static_cast<int>(leg.rawSets.size()) + 1;
+        ms.hasF1  = true;          // start as a face-1 reading; user can toggle F2 on.
+        ms.f1VaDec = 90.0;
+        if (!leg.rawSets.empty()) {
+            // Seed from the previous set so a repeat observation is quick to enter.
+            const TraverseMeasSet& prev = leg.rawSets.back();
+            ms.f1HzDec = prev.f1HzDec; ms.f1Sd = prev.f1Sd; ms.f1VaDec = prev.f1VaDec;
+        }
+        leg.rawSets.push_back(ms);
+        changed = true;
+    }
+    ItemHelpTooltip("Append another observation set to this leg.\n"
+                    "The leg's angle and distance re-average over all sets.");
+
+    if (removeIdx >= 0) {
+        leg.rawSets.erase(leg.rawSets.begin() + removeIdx);
+        changed = true;
+    }
+    if (changed) {
+        for (size_t si = 0; si < leg.rawSets.size(); ++si)   // keep set numbers contiguous.
+            leg.rawSets[si].setNo = static_cast<int>(si) + 1;
+        ReduceLegFromSets(leg);
+        dirty = true;
+    }
+
+    // ---- Statistics over the reduced per-set values (REQ-011) ----
+    std::vector<double> hz, dist, va;
+    for (const TraverseMeasSet& s : leg.rawSets) {
+        hz.push_back(SetReducedHoriz(s));
+        dist.push_back(SetReducedDist(s));
+        va.push_back(SetReducedZenith(s));
+    }
+    const StatSummary sh = ComputeStats(hz);
+    const StatSummary sd = ComputeStats(dist);
+    const StatSummary sv = ComputeStats(va);
+    ImGui::TextUnformatted("Reduced (face-averaged) per-set statistics:");
+    if (ImGui::BeginTable("rawstats", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                         ImGuiTableFlags_SizingFixedFit)) {
+        ImGui::TableSetupColumn("Quantity");
+        ImGui::TableSetupColumn("N");
+        ImGui::TableSetupColumn("Mean");
+        ImGui::TableSetupColumn("Sum");
+        ImGui::TableSetupColumn("Std Dev");
+        ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+        ImGui::TableHeadersRow();
+        ImGui::PopStyleColor();
+        auto statRow = [](const char* name, const StatSummary& s, const char* fmt) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn(); ImGui::TextUnformatted(name);
+            ImGui::TableNextColumn(); ImGui::Text("%d", s.n);
+            char b[32];
+            ImGui::TableNextColumn(); std::snprintf(b, sizeof(b), fmt, s.mean);   ImGui::TextUnformatted(b);
+            ImGui::TableNextColumn(); std::snprintf(b, sizeof(b), fmt, s.sum);    ImGui::TextUnformatted(b);
+            ImGui::TableNextColumn(); std::snprintf(b, sizeof(b), fmt, s.stddev); ImGui::TextUnformatted(b);
+        };
+        statRow("Horizontal\xc2\xb0", sh, "%.6f");
+        statRow("Distance",     sd, "%.4f");
+        statRow("Zenith\xc2\xb0",     sv, "%.6f");
+        ImGui::EndTable();
+    }
+
+    // ---- Complementary distance (REQ-012): show both slope and horizontal. ----
+    const double vaDeg = sv.n > 0 ? sv.mean
+                       : (leg.hasVertAngle ? leg.vertAngleDeg : 90.0);
+    double horiz = leg.computed ? leg.computedHorizDist
+                 : (leg.hasHorizDist ? leg.horizDist
+                                     : TraverseReduceToHoriz(leg.slopeDist, vaDeg, true));
+    double slope = leg.hasSlopeDist ? leg.slopeDist
+                                    : TraverseSlopeFromHoriz(horiz, vaDeg, true);
+    ImGui::Text("Horizontal distance: %.4f    Slope distance: %.4f    (zenith %.5f\xc2\xb0)",
+                horiz, slope, vaDeg);
+
+    ImGui::PopID();
 }
 
 // ---- Closure analysis window: Unadjusted vs Least Squares (REQ-014–017) ----
@@ -393,6 +409,7 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
             if (FbkImport(path, imported, err)) {
                 cmd.traverseData = std::move(imported);
                 cmd.traverseDataDirty = true;
+                cmd.traverseExpandedLeg = -1;  // selection from a prior traverse is meaningless now.
                 log.push_back(std::string("TRAVERSE — imported FBK (") +
                               std::to_string(cmd.traverseData.legs.size()) + " legs): " + path);
             } else {
@@ -468,31 +485,58 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
     ImGui::SameLine(0, 24);
     CheckboxCol("Closed Loop##trv", &td.isClosedLoop,
                 "Report closure error back to the starting station.");
-    ImGui::SameLine(0, 16);
-    CheckboxCol("Face 1 / Face 2##trv", &td.useFace1Face2,
-                "Show Face 1 and Face 2 columns. Angles are averaged before computation.\n"
-                "Horizontal: F2 is treated as F1 + 180° (handles wrap).\n"
-                "Zenith: mean = (F1 + (360° - F2)) / 2.");
 
     ImGui::SeparatorText("Legs");
 
     // ---- Table ----
-    const int baseCols = 16; // always-visible columns
-    const int f12Cols  = 4;  // extra when Face 1/2 mode on
-    const int numCols  = td.useFace1Face2 ? baseCols + f12Cols : baseCols;
+    // Slim grid: data-entry columns, a thin divider, then the computed-output
+    // columns (tinted, read-only). Per-face F1/F2 data lives in each leg's
+    // observation expander, not here.
+    constexpr int kNumCols = 17;  // 8 input + 1 divider + 8 computed.
 
+    // Calm borders: an outer frame and horizontal row rules only — no busy
+    // vertical grid lines. Row striping (RowBg) carries the eye instead.
     const ImGuiTableFlags tf =
-        ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
-        ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX |
+        ImGuiTableFlags_BordersOuter | ImGuiTableFlags_BordersInnerH |
+        ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY | ImGuiTableFlags_ScrollX |
         ImGuiTableFlags_Resizable | ImGuiTableFlags_SizingFixedFit;
 
-    const float footerH = ImGui::GetFrameHeightWithSpacing() * 4.f + ImGui::GetStyle().ItemSpacing.y;
+    // Keep the expanded-leg selection valid (used below the table).
+    if (cmd.traverseExpandedLeg >= static_cast<int>(td.legs.size()))
+        cmd.traverseExpandedLeg = -1;  // legs shrank out from under the selection.
+    const float editorH = 300.f;
 
-    if (ImGui::BeginTable("traverse_legs", numCols, tf, ImVec2(0.f, -footerH))) {
+    // Grow with the number of legs, but clamp so an empty traverse isn't tiny and
+    // a long one scrolls instead of taking over the panel. +1 row for the add-leg
+    // row, +1 for the header.
+    const float rowH     = ImGui::GetFrameHeightWithSpacing();
+    const int   bodyRows = std::clamp(static_cast<int>(td.legs.size()) + 1, 3, 12);
+    const float tableH   = rowH * static_cast<float>(bodyRows + 1);
+
+    // Tints: subtle gray for the read-only computed cells; a darker bar for the
+    // input | computed divider column.
+    const ImU32 tintComputed = ImGui::GetColorU32(ImVec4(0.46f, 0.51f, 0.58f, 0.16f));
+    const ImU32 tintDivider  = ImGui::GetColorU32(ImVec4(0.38f, 0.43f, 0.50f, 0.55f));
+
+    // A read-only computed numeric cell: tinted, right-aligned, 3 dp.
+    auto computedNum = [&](bool valid, double v) {
+        ImGui::TableNextColumn();
+        ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, tintComputed);
+        if (valid) {
+            char b[32];
+            std::snprintf(b, sizeof(b), "%.3f", v);
+            RightAlignedText(b);
+        } else {
+            ImGui::TextDisabled("\xe2\x80\x94");
+        }
+    };
+
+    ImGui::PushStyleVar(ImGuiStyleVar_CellPadding, ImVec2(6.f, 4.f));
+    if (ImGui::BeginTable("traverse_legs", kNumCols, tf, ImVec2(0.f, tableH))) {
         ImGui::TableSetupScrollFreeze(0, 1);
 
-        // Always-visible columns
-        ImGui::TableSetupColumn("#",         ImGuiTableColumnFlags_WidthFixed,   28.f);
+        // --- Input columns ---
+        ImGui::TableSetupColumn("#",         ImGuiTableColumnFlags_WidthFixed,   50.f);
         ImGui::TableSetupColumn("Stn ID",    ImGuiTableColumnFlags_WidthFixed,   55.f);
         ImGui::TableSetupColumn("Desc",      ImGuiTableColumnFlags_WidthStretch, 90.f);
         ImGui::TableSetupColumn("H.Angle\xc2\xb0",  ImGuiTableColumnFlags_WidthFixed,   92.f);
@@ -500,23 +544,18 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
         ImGui::TableSetupColumn("S.Dist",    ImGuiTableColumnFlags_WidthFixed,   80.f);
         ImGui::TableSetupColumn("V.Angle\xc2\xb0",  ImGuiTableColumnFlags_WidthFixed,   92.f);
         ImGui::TableSetupColumn("Z",         ImGuiTableColumnFlags_WidthFixed,   22.f); // zenith checkbox
-        // Computed
+        // --- Divider ---
+        ImGui::TableSetupColumn("##div",     ImGuiTableColumnFlags_WidthFixed |
+                                             ImGuiTableColumnFlags_NoResize | ImGuiTableColumnFlags_NoReorder, 8.f);
+        // --- Computed columns (read-only) ---
         ImGui::TableSetupColumn("Bearing\xc2\xb0",  ImGuiTableColumnFlags_WidthFixed,   92.f);
-        ImGui::TableSetupColumn("\xce\x94""E",       ImGuiTableColumnFlags_WidthFixed,   82.f);
-        ImGui::TableSetupColumn("\xce\x94""N",       ImGuiTableColumnFlags_WidthFixed,   82.f);
-        ImGui::TableSetupColumn("\xce\x94""Z",       ImGuiTableColumnFlags_WidthFixed,   72.f);
+        ImGui::TableSetupColumn("\xce\x94""E",       ImGuiTableColumnFlags_WidthFixed,   78.f);
+        ImGui::TableSetupColumn("\xce\x94""N",       ImGuiTableColumnFlags_WidthFixed,   78.f);
+        ImGui::TableSetupColumn("\xce\x94""Z",       ImGuiTableColumnFlags_WidthFixed,   70.f);
         ImGui::TableSetupColumn("Easting",   ImGuiTableColumnFlags_WidthFixed,   92.f);
         ImGui::TableSetupColumn("Northing",  ImGuiTableColumnFlags_WidthFixed,   92.f);
         ImGui::TableSetupColumn("Elev",      ImGuiTableColumnFlags_WidthFixed,   80.f);
         ImGui::TableSetupColumn("Status",    ImGuiTableColumnFlags_WidthFixed,   56.f);
-
-        // Face 1/2 columns
-        if (td.useFace1Face2) {
-            ImGui::TableSetupColumn("F1 H\xc2\xb0",  ImGuiTableColumnFlags_WidthFixed, 92.f);
-            ImGui::TableSetupColumn("F2 H\xc2\xb0",  ImGuiTableColumnFlags_WidthFixed, 92.f);
-            ImGui::TableSetupColumn("F1 V\xc2\xb0",  ImGuiTableColumnFlags_WidthFixed, 92.f);
-            ImGui::TableSetupColumn("F2 V\xc2\xb0",  ImGuiTableColumnFlags_WidthFixed, 92.f);
-        }
 
         ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 1.f, 1.f));
         ImGui::TableHeadersRow();
@@ -527,9 +566,14 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
             ImGui::TableNextRow();
             ImGui::PushID(static_cast<int>(i));
 
-            // # row number
+            // # row number + expand toggle for the per-leg observation editor.
             ImGui::TableNextColumn();
             ImGui::AlignTextToFramePadding();
+            const bool expanded = (cmd.traverseExpandedLeg == static_cast<int>(i));
+            if (ImGui::ArrowButton("##exp", expanded ? ImGuiDir_Down : ImGuiDir_Right))
+                cmd.traverseExpandedLeg = expanded ? -1 : static_cast<int>(i);
+            ItemHelpTooltip("Expand this leg to view and edit its individual observations.");
+            ImGui::SameLine(0, 4);
             char numBuf[8];
             std::snprintf(numBuf, sizeof(numBuf), "%zu", i + 1);
             ImGui::TextUnformatted(numBuf);
@@ -597,39 +641,29 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
             ImGui::PopStyleColor(2);
             ItemHelpTooltip("Checked = zenith angle (90° is level).\nUnchecked = elevation angle (0° is level).");
 
-            // Computed: Bearing
+            // Divider between the input and computed groups.
             ImGui::TableNextColumn();
+            ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, tintDivider);
+
+            // Computed: Bearing (tinted, right-aligned).
+            ImGui::TableNextColumn();
+            ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, tintComputed);
             if (leg.computed)
-                ImGui::TextUnformatted(TraverseFormatBearing(leg.computedBearingDeg).c_str());
+                RightAlignedText(TraverseFormatBearing(leg.computedBearingDeg).c_str());
             else
                 ImGui::TextDisabled("\xe2\x80\x94");
 
-            // ΔE
-            ImGui::TableNextColumn();
-            ReadOnlyCell("dE", leg.computed, leg.computedDeltaE);
+            // ΔE, ΔN, ΔZ, Easting, Northing, Elevation.
+            computedNum(leg.computed, leg.computedDeltaE);
+            computedNum(leg.computed, leg.computedDeltaN);
+            computedNum(leg.computed, leg.computedDeltaZ);
+            computedNum(leg.computed, leg.computedEasting);
+            computedNum(leg.computed, leg.computedNorthing);
+            computedNum(leg.computed, leg.computedElevation);
 
-            // ΔN
+            // Status (tinted).
             ImGui::TableNextColumn();
-            ReadOnlyCell("dN", leg.computed, leg.computedDeltaN);
-
-            // ΔZ
-            ImGui::TableNextColumn();
-            ReadOnlyCell("dZ", leg.computed, leg.computedDeltaZ);
-
-            // Easting
-            ImGui::TableNextColumn();
-            ReadOnlyCell("E", leg.computed, leg.computedEasting);
-
-            // Northing
-            ImGui::TableNextColumn();
-            ReadOnlyCell("N", leg.computed, leg.computedNorthing);
-
-            // Elevation
-            ImGui::TableNextColumn();
-            ReadOnlyCell("Z", leg.computed, leg.computedElevation);
-
-            // Status
-            ImGui::TableNextColumn();
+            ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, tintComputed);
             if (leg.hasSufficientData) {
                 ImGui::TextColored(ImVec4(0.35f, 0.85f, 0.35f, 1.f), "\xe2\x9c\x93"); // ✓
             } else if (!leg.errorMsg.empty()) {
@@ -639,63 +673,43 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
                 ImGui::TextDisabled("\xe2\x80\x94");
             }
 
-            // Face 1/2 columns (optional)
-            if (td.useFace1Face2) {
-                // F1 H.Angle
-                ImGui::TableNextColumn();
-                ImGui::SetNextItemWidth(-FLT_MIN);
-                ImGui::InputText("##f1h", &leg.face1HorizBuf);
-                if (ImGui::IsItemDeactivatedAfterEdit()) {
-                    ParseFace1Horiz(leg);
-                    cmd.traverseDataDirty = true;
-                }
-
-                // F2 H.Angle
-                ImGui::TableNextColumn();
-                ImGui::SetNextItemWidth(-FLT_MIN);
-                ImGui::InputText("##f2h", &leg.face2HorizBuf);
-                if (ImGui::IsItemDeactivatedAfterEdit()) {
-                    ParseFace2Horiz(leg);
-                    cmd.traverseDataDirty = true;
-                }
-
-                // F1 V.Angle
-                ImGui::TableNextColumn();
-                ImGui::SetNextItemWidth(-FLT_MIN);
-                ImGui::InputText("##f1v", &leg.face1VertBuf);
-                if (ImGui::IsItemDeactivatedAfterEdit()) {
-                    ParseFace1Vert(leg);
-                    cmd.traverseDataDirty = true;
-                }
-
-                // F2 V.Angle
-                ImGui::TableNextColumn();
-                ImGui::SetNextItemWidth(-FLT_MIN);
-                ImGui::InputText("##f2v", &leg.face2VertBuf);
-                if (ImGui::IsItemDeactivatedAfterEdit()) {
-                    ParseFace2Vert(leg);
-                    cmd.traverseDataDirty = true;
-                }
-            }
-
             ImGui::PopID();
+        }
+
+        // ---- Add-leg row: a "+ Add Leg" action directly under the last leg. ----
+        ImGui::TableNextRow();
+        ImGui::TableNextColumn();  // # column
+        ImGui::TableNextColumn();  // Stn ID column
+        ImGui::TableNextColumn();  // Desc column (widest) holds the button
+        if (ImGui::SmallButton("+ Add Leg")) {
+            TraverseLeg newLeg;
+            if (!td.legs.empty())
+                newLeg.stationId = td.legs.back().stationId + 1;
+            else
+                newLeg.stationId = td.startStationId + 1;
+            newLeg.isZenithAngle = true;
+            td.legs.push_back(std::move(newLeg));
+            cmd.traverseDataDirty = true;
         }
 
         ImGui::EndTable();
     }
+    ImGui::PopStyleVar();  // CellPadding
+
+    // ---- Per-leg observation editor (REQ-018), directly under the table. ----
+    // Re-read the selection LIVE here: the arrow toggles above can change it
+    // mid-frame (including to -1 when collapsing), so a stale top-of-frame flag
+    // must not be trusted. Guard the full [0, size) range before indexing.
+    const int exIdx = cmd.traverseExpandedLeg;
+    if (exIdx >= 0 && exIdx < static_cast<int>(td.legs.size())) {
+        if (ImGui::BeginChild("legobs", ImVec2(0.f, editorH), ImGuiChildFlags_Borders)) {
+            const size_t idx = static_cast<size_t>(exIdx);
+            DrawLegObservationEditor(td.legs[idx], idx, cmd.traverseDataDirty);
+        }
+        ImGui::EndChild();
+    }
 
     // ---- Leg buttons ----
-    if (ImGui::Button("+ Add Leg")) {
-        TraverseLeg newLeg;
-        if (!td.legs.empty())
-            newLeg.stationId = td.legs.back().stationId + 1;
-        else
-            newLeg.stationId = td.startStationId + 1;
-        newLeg.isZenithAngle = true;
-        td.legs.push_back(std::move(newLeg));
-        cmd.traverseDataDirty = true;
-    }
-    ImGui::SameLine();
     const bool hasLegs = !td.legs.empty();
     if (!hasLegs) ImGui::BeginDisabled();
     if (ImGui::Button("- Remove Last")) {
@@ -726,16 +740,6 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
                                    : ImVec4(1.f,   0.75f, 0.2f,  1.f);  // warn (orange)
             ImGui::TextColored(col, "%s", closureBuf);
         }
-    }
-
-    // ---- Raw measurements & statistics (REQ-010, 011, 012) ----
-    bool anyRaw = false;
-    for (const auto& leg : td.legs)
-        if (!leg.rawSets.empty()) { anyRaw = true; break; }
-    if (anyRaw) {
-        ImGui::Separator();
-        if (ImGui::CollapsingHeader("Raw Measurements & Statistics"))
-            DrawRawMeasurements(td);
     }
 
     // ---- Closure analysis ----

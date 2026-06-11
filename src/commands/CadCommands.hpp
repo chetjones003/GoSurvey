@@ -980,6 +980,10 @@ struct AppCommandState {
   bool        traverseLsaComputed = false; ///< True once a result has been produced.
   bool        traverseLsaAccepted = false; ///< User accepted the LSA result.
 
+  /// Index of the leg whose per-leg observation editor is expanded (REQ-018),
+  /// or -1 when none. Accordion: at most one leg is expanded at a time.
+  int         traverseExpandedLeg = -1;
+
   // -------------------------------------------------------------------------
   // CLIPBOARD (COPYCLIP / PASTECLIP)
   // -------------------------------------------------------------------------

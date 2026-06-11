@@ -1,5 +1,6 @@
 // Domain regression tests for the Traverse Editor extension (REQ-011, REQ-012,
-// REQ-015, REQ-016, REQ-017). Pure compute only — no UI/GL dependency (ADR-002).
+// REQ-015, REQ-016, REQ-017, REQ-018). Pure compute only — no UI/GL dependency
+// (ADR-002).
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
@@ -181,6 +182,53 @@ TEST_CASE("FBK import detects a re-observed closed loop", "[fbk][REQ-015]") {
     CHECK(td.legs[0].hasSufficientData);
     CHECK(td.legs[0].errorMsg.empty());
     CHECK(td.legs[0].computedBearingDeg == Approx(bearingSingle).margin(1e-6));
+}
+
+// ---------------------------------------------------------------- REQ-018 --
+// ReduceLegFromSets re-derives a leg's reduced fields from its editable raw
+// sets, subtracting the stored backsight reading (ADR-003). Editing/adding a
+// set must change the reduced result.
+TEST_CASE("ReduceLegFromSets re-derives leg", "[reduce][REQ-018]") {
+    auto makeSet = [](int n, double f1Hz, double f2Hz, double sd) {
+        TraverseMeasSet s;
+        s.setNo = n;
+        s.hasF1 = true; s.f1HzDec = f1Hz; s.f1VaDec = 90.0; s.f1Sd = sd;
+        s.hasF2 = true; s.f2HzDec = f2Hz; s.f2VaDec = 270.0; s.f2Sd = sd;
+        return s;
+    };
+
+    SECTION("face-averaged circle reading reduced against the backsight") {
+        TraverseLeg leg;
+        leg.backsightCircleDeg = 10.0;
+        leg.hasBacksightCircle = true;
+        leg.rawSets.push_back(makeSet(1, 90.0, 270.0, 100.0)); // F2 = F1 + 180.
+        ReduceLegFromSets(leg);
+
+        REQUIRE(leg.hasHorizAngle);
+        CHECK(leg.hasFace1);
+        CHECK(leg.hasFace2);
+        CHECK(leg.horizAngleDeg == Approx(80.0).margin(1e-9));  // 90 - 10 backsight.
+        CHECK(leg.vertAngleDeg  == Approx(90.0).margin(1e-9));  // (90 + (360-270))/2.
+        CHECK(leg.slopeDist     == Approx(100.0).margin(1e-9));
+    }
+
+    SECTION("adding a second observation moves the mean") {
+        TraverseLeg leg;                       // no backsight => reading is the angle.
+        leg.rawSets.push_back(makeSet(1, 90.0, 270.0, 100.0));
+        ReduceLegFromSets(leg);
+        CHECK(leg.horizAngleDeg == Approx(90.0).margin(1e-9));
+
+        leg.rawSets.push_back(makeSet(2, 92.0, 272.0, 100.0));
+        ReduceLegFromSets(leg);
+        CHECK(leg.horizAngleDeg == Approx(91.0).margin(1e-9));  // mean of 90 and 92.
+    }
+
+    SECTION("empty sets leave a manual leg untouched") {
+        TraverseLeg leg;
+        leg.hasHorizAngle = true; leg.horizAngleDeg = 45.0;
+        ReduceLegFromSets(leg);                // no rawSets -> no-op.
+        CHECK(leg.horizAngleDeg == Approx(45.0));
+    }
 }
 
 // Engine-level guard for the single-face case (independent of FBK parsing).

@@ -37,6 +37,12 @@ struct TraverseLeg {
     double face1HorizDeg = 0.0;
     double face2HorizDeg = 0.0;
 
+    // Backsight circle reading for this leg's setup (° CW). The reduced
+    // horizontal angle is (foresight circle reading − backsight reading).
+    // Filled by the importer; needed to re-reduce edited raw sets (REQ-018).
+    double backsightCircleDeg = 0.0;
+    bool hasBacksightCircle = false;
+
     // --- Horizontal distance (measured directly) ---
     double horizDist = 0.0;
     bool hasHorizDist = false;
@@ -153,6 +159,16 @@ std::string TraverseFormatBearing(double bearingDeg);
 
 /// Format a delta or distance value to 4 decimal places.
 std::string TraverseFormatDist(double val);
+
+/// Re-derive a leg's reduced fields from its raw per-set F1/F2 observations
+/// (REQ-018, ADR-003). Face-averages the literal circle readings, subtracts the
+/// leg's backsight reading to get the reduced horizontal angle, and averages the
+/// zenith angles and slope distances. Updates horizAngleDeg / vertAngleDeg /
+/// slopeDist, the per-face reduced values, the presence flags, and the input
+/// buffers. No-op when the leg has no raw sets (a manually entered leg).
+/// The FBK importer and the editor both call this, so import and edit reduce
+/// identically.
+void ReduceLegFromSets(TraverseLeg& leg);
 
 /// Compute all legs in \p td: fills computed fields and closure info.
 void ComputeTraverse(TraverseData& td);
