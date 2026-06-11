@@ -253,17 +253,17 @@ void ApplyCadLightTheme() {
   style.CellPadding       = ImVec2(4, 2);
 
   // --- nanoCAD classic palette ---
-  const ImVec4 face       = ImVec4(0.957f, 0.957f, 0.949f, 1.f);  // #F4F4F2  control face (almost white)
-  const ImVec4 faceDk     = ImVec4(0.898f, 0.898f, 0.886f, 1.f);  // #E5E5E2  darker gray (buttons)
-  const ImVec4 white      = ImVec4(1.000f, 1.000f, 1.000f, 1.f);  // #FFFFFF  value cells / edits
-  const ImVec4 hilite     = ImVec4(0.960f, 0.956f, 0.925f, 1.f);  // #F5F4EC  light bevel
+  const ImVec4 face       = ImVec4(0.275f, 0.275f, 0.275f, 1.f);  // #464646  dark control face (panels)
+  const ImVec4 faceDk     = ImVec4(0.227f, 0.227f, 0.227f, 1.f);  // #3A3A3A  darker gray (buttons/tabs)
+  const ImVec4 field      = ImVec4(0.176f, 0.176f, 0.176f, 1.f);  // #2D2D2D  recessed value cells / edits
+  const ImVec4 hilite     = ImVec4(0.337f, 0.337f, 0.337f, 1.f);  // #565656  raised bevel highlight
   const ImVec4 shadow     = ImVec4(0.502f, 0.502f, 0.502f, 1.f);  // #808080  3D shadow
   const ImVec4 dkShadow   = ImVec4(0.251f, 0.251f, 0.251f, 1.f);  // #404040  3D dark shadow
-  const ImVec4 text       = ImVec4(0.000f, 0.000f, 0.000f, 1.f);  // #000000  black text
-  const ImVec4 textMuted  = ImVec4(0.392f, 0.392f, 0.392f, 1.f);  // #646464  disabled text
+  const ImVec4 text       = ImVec4(0.898f, 0.906f, 0.922f, 1.f);  // #E5E7EB  light text
+  const ImVec4 textMuted  = ImVec4(0.627f, 0.627f, 0.627f, 1.f);  // #A0A0A0  disabled text
   // Steel-blue accents (section headers, active tab/title, selection).
-  const ImVec4 steel      = ImVec4(0.725f, 0.812f, 0.910f, 1.f);  // #B9CFE8  light steel header
-  const ImVec4 steelHi    = ImVec4(0.800f, 0.871f, 0.949f, 1.f);  // #CCDEF2  hovered steel
+  const ImVec4 steel      = ImVec4(0.235f, 0.333f, 0.459f, 1.f);  // #3C5575  dark steel (active/base, light text)
+  const ImVec4 steelHi    = ImVec4(0.306f, 0.431f, 0.588f, 1.f);  // #4E6E96  brighter steel (hover, light text)
   const ImVec4 capBlue    = ImVec4(0.235f, 0.424f, 0.690f, 1.f);  // #3C6CB0  active caption blue
   const ImVec4 selBlue    = ImVec4(0.180f, 0.357f, 0.682f, 1.f);  // #2E5BAE  selection blue
   const ImVec4 mdiBlue    = ImVec4(0.357f, 0.486f, 0.659f, 1.f);  // #5B7CA8  steel MDI workspace
@@ -275,9 +275,9 @@ void ApplyCadLightTheme() {
   colors[ImGuiCol_PopupBg]               = face;
   colors[ImGuiCol_Border]                = shadow;      // 3D shadow border
   colors[ImGuiCol_BorderShadow]          = hilite;      // bottom-right highlight
-  colors[ImGuiCol_FrameBg]               = white;       // edit fields / combos = white
-  colors[ImGuiCol_FrameBgHovered]        = white;
-  colors[ImGuiCol_FrameBgActive]         = ImVec4(0.949f, 0.965f, 0.996f, 1.f);
+  colors[ImGuiCol_FrameBg]               = field;       // edit fields / combos = recessed dark
+  colors[ImGuiCol_FrameBgHovered]        = field;
+  colors[ImGuiCol_FrameBgActive]         = ImVec4(0.235f, 0.235f, 0.235f, 1.f);  // #3C3C3C active field
   colors[ImGuiCol_TitleBg]               = face;
   // Keep focused panes the same color as unfocused: ImGui fills a docked node's tab-bar strip (and a
   // floating window's caption) with TitleBgActive when focused, so a contrasting color here makes every
@@ -313,11 +313,12 @@ void ApplyCadLightTheme() {
   colors[ImGuiCol_TabDimmedSelectedOverline]  = capBlue;
   colors[ImGuiCol_TableHeaderBg]         = steel;
   colors[ImGuiCol_TableBorderStrong]     = shadow;
-  colors[ImGuiCol_TableBorderLight]      = ImVec4(0.831f, 0.816f, 0.784f, 1.f);
-  colors[ImGuiCol_TableRowBg]            = white;       // value rows = white
-  colors[ImGuiCol_TableRowBgAlt]         = white;       // uniform white (no zebra)
+  colors[ImGuiCol_TableBorderLight]      = ImVec4(0.353f, 0.353f, 0.353f, 1.f);  // #5A5A5A gridline
+  colors[ImGuiCol_TableRowBg]            = field;       // value rows = recessed dark
+  colors[ImGuiCol_TableRowBgAlt]         = field;       // uniform (no zebra)
   colors[ImGuiCol_DockingPreview]        = ImVec4(0.235f, 0.424f, 0.690f, 0.40f);
-  colors[ImGuiCol_DockingEmptyBg]        = mdiBlue;     // steel-blue MDI workspace
+  colors[ImGuiCol_DockingEmptyBg]        = face;        // empty MDI workspace = panel face (#464646)
+  (void)mdiBlue;
   (void)dkShadow;
 }
 
@@ -331,8 +332,8 @@ void ApplyCadLightTheme() {
 static constexpr ImGuiTableFlags kPropTableFlags =
     ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Borders;
 
-// White value column; the label column stays transparent (gray panel face).
-static constexpr ImU32 kPropValueBg = IM_COL32(255, 255, 255, 255); // #FFFFFF
+// Recessed value column; the label column stays transparent (dark panel face).
+static constexpr ImU32 kPropValueBg = IM_COL32(45, 45, 45, 255); // #2D2D2D
 
 // Paint the value cell (column 1) of the current table row white, like nanoCAD.
 // Call once per row (any time while that row is current). The label column is
@@ -352,7 +353,7 @@ static void FillPropPanelEmpty() {
   if (bottom <= top) return;
   win->DrawList->AddRectFilled(ImVec2(win->Pos.x, top),
                                ImVec2(win->Pos.x + win->Size.x, bottom),
-                               IM_COL32(224, 224, 218, 255));  // #E0E0DA neutral gray
+                               IM_COL32(70, 70, 70, 255));  // #464646 neutral panel fill
 }
 
 // nanoCAD-style collapsible section header: blue gradient bar, navy bold-ish text,
@@ -380,13 +381,13 @@ static bool PropSectionHeader(const char* label) {
   if (pressed) { open = !open; storage->SetInt(id, open ? 1 : 0); }
 
   ImDrawList* dl = window->DrawList;
-  // Steel-blue gradient (lighter on the right), brighter when hovered.
-  const ImU32 cL = hovered ? IM_COL32(170, 200, 235, 255) : IM_COL32(150, 185, 222, 255);
-  const ImU32 cR = hovered ? IM_COL32(225, 238, 250, 255) : IM_COL32(214, 230, 246, 255);
+  // Dark steel-blue gradient (lighter on the right), brighter when hovered.
+  const ImU32 cL = hovered ? IM_COL32( 58,  88, 128, 255) : IM_COL32( 48,  72, 104, 255);
+  const ImU32 cR = hovered ? IM_COL32( 78, 118, 168, 255) : IM_COL32( 60,  92, 134, 255);
   dl->AddRectFilledMultiColor(bb.Min, bb.Max, cL, cR, cR, cL);
-  // 3D edges: light highlight on top, shadow on bottom.
-  dl->AddLine(ImVec2(bb.Min.x, bb.Min.y), ImVec2(bb.Max.x, bb.Min.y), IM_COL32(255, 255, 255, 160));
-  dl->AddLine(ImVec2(bb.Min.x, bb.Max.y - 1), ImVec2(bb.Max.x, bb.Max.y - 1), IM_COL32(120, 140, 165, 200));
+  // 3D edges: subtle highlight on top, shadow on bottom.
+  dl->AddLine(ImVec2(bb.Min.x, bb.Min.y), ImVec2(bb.Max.x, bb.Min.y), IM_COL32(255, 255, 255, 60));
+  dl->AddLine(ImVec2(bb.Min.x, bb.Max.y - 1), ImVec2(bb.Max.x, bb.Max.y - 1), IM_COL32(0, 0, 0, 120));
 
   // [-]/[+] collapse box on the right.
   const float boxSz = ImGui::GetFontSize() * 0.62f;
@@ -403,9 +404,9 @@ static bool PropSectionHeader(const char* label) {
     dl->AddLine(ImVec2(mx, box.Min.y + 2), ImVec2(mx, box.Max.y - 2), glyph); // vertical → plus
   }
 
-  // Navy title text.
+  // Light title text on the dark steel bar.
   dl->AddText(ImVec2(bb.Min.x + 6, bb.Min.y + (h - ImGui::GetFontSize()) * 0.5f),
-              IM_COL32(0, 0, 128, 255), label);
+              IM_COL32(229, 231, 235, 255), label);
   (void)g;
   return open;
 }
@@ -611,10 +612,10 @@ static void CollectAllDrawingLayers(const AppCommandState& cmd, std::vector<std:
 // nanoCAD-classic toolbar band palette. One warm system-gray for the whole
 // strip (no Office-blue ribbon), with 3D bevel hi/lo tones for button states
 // and grippers. Kept here so the strip, sections and buttons stay in sync.
-constexpr ImU32 kBandFace   = IM_COL32(230, 230, 224, 255);  // #E6E6E0 toolbar band
-constexpr ImU32 kBandHilite = IM_COL32(252, 252, 250, 255);  // #FCFCFA top-left bevel
-constexpr ImU32 kBandShadow = IM_COL32(132, 130, 122, 255);  // #84827A bottom-right bevel
-constexpr ImU32 kBandSunken = IM_COL32(212, 211, 204, 255);  // #D4D3CC pressed face
+constexpr ImU32 kBandFace   = IM_COL32( 70,  70,  70, 255);  // #464646 toolbar band
+constexpr ImU32 kBandHilite = IM_COL32( 86,  86,  86, 255);  // #565656 top-left bevel
+constexpr ImU32 kBandShadow = IM_COL32( 32,  32,  32, 255);  // #202020 bottom-right bevel
+constexpr ImU32 kBandSunken = IM_COL32( 58,  58,  58, 255);  // #3A3A3A pressed face
 
 // Height of the bottom title strip inside each ribbon panel (Civil 3D-style).
 constexpr float kRibbonTitleH = 17.f;
@@ -4319,14 +4320,14 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   ImGuiWindowFlags wf = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoNavFocus;
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.902f, 0.902f, 0.878f, 1.f));  // #E6E6E0 gray band (matches toolbar)
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.275f, 0.275f, 0.275f, 1.f));  // #464646 gray band (matches toolbar)
   ImGui::Begin("##CadStatusBarStrip", nullptr, wf);
   ImGui::PopStyleColor();
 
   ImGui::Separator();
   const float statusBtnH = ImGui::GetFrameHeight();
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.902f, 0.902f, 0.878f, 1.f));  // #E6E6E0 gray band (matches toolbar)
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.275f, 0.275f, 0.275f, 1.f));  // #464646 gray band (matches toolbar)
   ImGui::BeginChild("StatusBarStrip", ImVec2(0, statusBtnH), false, ImGuiWindowFlags_HorizontalScrollbar);
   ImGui::PopStyleColor();
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3.f, 0.f));
@@ -4427,10 +4428,10 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   // Console background is slightly distinct from the main workspace in both themes.
   const ImVec4 consoleBg = isDark
       ? ImVec4(0.067f, 0.078f, 0.094f, 1.f)   // #111418 dark console
-      : ImVec4(0.925f, 0.918f, 0.894f, 1.f);  // #ECEAE4 light-gray console panel
+      : ImVec4(0.235f, 0.235f, 0.235f, 1.f);  // #3C3C3C console panel (recessed vs #464646 band)
   const ImVec4 promptColor = isDark
       ? ImVec4(0.133f, 0.773f, 0.369f, 1.f)   // #22C55E bright green on dark
-      : ImVec4(0.059f, 0.557f, 0.247f, 1.f);  // #0F8E3F darker green on light
+      : ImVec4(0.180f, 0.720f, 0.400f, 1.f);  // #2EB766 bright green on dark console
   ImGui::SetNextWindowSize(ImVec2(900, 220), ImGuiCond_FirstUseEver);
   ImGui::PushStyleColor(ImGuiCol_WindowBg, consoleBg);
   if (!ImGui::Begin("Command line", nullptr)) {
@@ -4676,7 +4677,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
                                 ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
                                 ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(1.f, padY));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(1.f, 1.f, 1.f, 1.f));      // white list (nanoCAD)
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.275f, 0.275f, 0.275f, 1.f));  // #464646 list (matches panels)
     ImGui::PushStyleColor(ImGuiCol_Border,  ImVec4(0.45f, 0.45f, 0.45f, 1.f));
     if (ImGui::Begin("##CmdSuggestPopup", nullptr, pf)) {
       ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -4695,12 +4696,13 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
         }
         if (ImGui::IsItemHovered()) s_cmdSel = i;
 
-        // Selected row gets a right-pointing arrow marker in the left gutter (nanoCAD style).
+        // Selected row gets a steel-blue highlight bar + a right-pointing arrow marker (nanoCAD style).
         if (i == s_cmdSel) {
+          dl->AddRectFilled(rmin, ImVec2(rmin.x + rowW, rmin.y + rowH), IM_COL32(60, 92, 134, 255));
           const float cy = rmin.y + rowH * 0.5f;
           const float ax = rmin.x + 4.f;
           dl->AddTriangleFilled(ImVec2(ax, cy - 4.5f), ImVec2(ax, cy + 4.5f), ImVec2(ax + 6.f, cy),
-                                IM_COL32(40, 90, 170, 255));
+                                IM_COL32(150, 190, 240, 255));
         }
 
         // Icon (if the command has one), then NAME and (description), after the arrow gutter.
@@ -4716,11 +4718,11 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
           textX = rmin.x + gutter + rowH - 2.f;
         }
         const float ty = rmin.y + (rowH - ImGui::GetTextLineHeight()) * 0.5f;
-        dl->AddText(ImVec2(textX, ty), IM_COL32(0, 0, 0, 255), cmdSug[i].name.c_str());
+        dl->AddText(ImVec2(textX, ty), IM_COL32(229, 231, 235, 255), cmdSug[i].name.c_str());
         const float nameW = ImGui::CalcTextSize(cmdSug[i].name.c_str()).x;
         if (!cmdSug[i].description.empty()) {
           const std::string d = "  (" + cmdSug[i].description + ")";
-          dl->AddText(ImVec2(textX + nameW, ty), IM_COL32(95, 95, 95, 255), d.c_str());
+          dl->AddText(ImVec2(textX + nameW, ty), IM_COL32(160, 160, 160, 255), d.c_str());
         }
         ImGui::PopID();
       }
