@@ -305,6 +305,8 @@ bool FbkImport(const char* path, TraverseData& td, std::string& errorMsg) {
             leg.hasHorizAngle = true;
             leg.horizAngleBuf = FmtDec(ha);
             leg.isZenithAngle = true;
+            leg.hasFace1      = hasF1;   // a foresight may carry only one face
+            leg.hasFace2      = hasF2;   // (the other disabled in the field).
             if (hasVa) {
                 leg.vertAngleDeg = faceVa;
                 leg.hasVertAngle = true;
@@ -370,6 +372,27 @@ bool FbkImport(const char* path, TraverseData& td, std::string& errorMsg) {
     if (td.legs.empty()) {
         errorMsg = "FBK parsed but no traverse legs could be extracted";
         return false;
+    }
+
+    // ---------- closed-loop detection ----------------------------------------
+    // A loop traverse ends back on the start monument, typically re-observed
+    // under a suffixed name (e.g. start "KCP2" closes as foresight "KCP2.1").
+    // Strip a trailing ".<digits>" re-observation suffix and compare to the
+    // start station name; if they match, this is a closed loop.
+    {
+        auto baseName = [](const std::string& s) -> std::string {
+            const size_t dot = s.find_last_of('.');
+            if (dot != std::string::npos && dot + 1 < s.size()) {
+                bool allDigits = true;
+                for (size_t i = dot + 1; i < s.size(); ++i)
+                    if (!std::isdigit(static_cast<unsigned char>(s[i]))) { allDigits = false; break; }
+                if (allDigits)
+                    return s.substr(0, dot);
+            }
+            return s;
+        };
+        if (baseName(td.legs.back().description) == baseName(first.stnName))
+            td.isClosedLoop = true;
     }
 
     return true;

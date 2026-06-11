@@ -115,6 +115,34 @@ double TraverseReduceToVert(double slopeDist, double angleDeg, bool isZenith) {
     return slopeDist * std::sin(angleDeg * kDeg2Rad);
 }
 
+double TraverseSlopeFromHoriz(double horizDist, double angleDeg, bool isZenith) {
+    // horiz = slope * sin(zenith)  (or slope * cos(elevation))  ->  invert.
+    const double factor = isZenith ? std::sin(angleDeg * kDeg2Rad)
+                                   : std::cos(angleDeg * kDeg2Rad);
+    if (std::abs(factor) < 1e-10)
+        return 0.0;  // near-horizontal zenith / near-vertical elevation: undefined.
+    return horizDist / factor;
+}
+
+StatSummary ComputeStats(const std::vector<double>& samples) {
+    StatSummary s;
+    s.n = static_cast<int>(samples.size());
+    if (s.n == 0)
+        return s;
+    for (double x : samples)
+        s.sum += x;
+    s.mean = s.sum / s.n;
+    if (s.n >= 2) {
+        double sq = 0.0;
+        for (double x : samples) {
+            const double d = x - s.mean;
+            sq += d * d;
+        }
+        s.stddev = std::sqrt(sq / (s.n - 1));
+    }
+    return s;
+}
+
 double TraverseAverageFaceHoriz(double face1Deg, double face2Deg) {
     // F2 should be ~ F1 ± 180°. Adjust F2 by +180° to bring it onto the same scale as F1.
     double adj2 = std::fmod(face2Deg + 180.0, 360.0);
@@ -195,8 +223,13 @@ void ComputeTraverse(TraverseData& td) {
         // --- Horizontal angle ---
         double ha = 0.0;
         bool hasHA = false;
-        if (td.useFace1Face2) {
-            ha = TraverseAverageFaceHoriz(leg.face1HorizDeg, leg.face2HorizDeg);
+        if (td.useFace1Face2 && (leg.hasFace1 || leg.hasFace2)) {
+            if (leg.hasFace1 && leg.hasFace2)
+                ha = TraverseAverageFaceHoriz(leg.face1HorizDeg, leg.face2HorizDeg);
+            else if (leg.hasFace1)
+                ha = leg.face1HorizDeg;
+            else  // F2 only: bring onto the F1 frame (F2 reads ~F1 ± 180°).
+                ha = TraverseNormBearing(leg.face2HorizDeg + 180.0);
             hasHA = true;
         } else if (leg.hasHorizAngle) {
             ha = leg.horizAngleDeg;
@@ -208,6 +241,7 @@ void ComputeTraverse(TraverseData& td) {
             // Propagation stops here; subsequent legs cannot be computed.
             break;
         }
+        leg.computedHorizAngleDeg = ha;
 
         // --- Forward bearing ---
         // Back-bearing at the current instrument station = prevFwd + 180°
@@ -222,11 +256,15 @@ void ComputeTraverse(TraverseData& td) {
 
         // Resolve the active vertical angle (F1/F2 or single)
         auto resolveVA = [&](double* vaOut) -> bool {
-            if (td.useFace1Face2) {
-                if (leg.isZenithAngle)
-                    *vaOut = TraverseAverageFaceZenith(leg.face1VertDeg, leg.face2VertDeg);
-                else
-                    *vaOut = TraverseAverageFaceElevation(leg.face1VertDeg, leg.face2VertDeg);
+            if (td.useFace1Face2 && (leg.hasFace1 || leg.hasFace2)) {
+                if (leg.hasFace1 && leg.hasFace2)
+                    *vaOut = leg.isZenithAngle
+                                 ? TraverseAverageFaceZenith(leg.face1VertDeg, leg.face2VertDeg)
+                                 : TraverseAverageFaceElevation(leg.face1VertDeg, leg.face2VertDeg);
+                else if (leg.hasFace1)
+                    *vaOut = leg.face1VertDeg;
+                else  // F2 only: a zenith F2 reads ~360° − F1; elevation is symmetric.
+                    *vaOut = leg.isZenithAngle ? (360.0 - leg.face2VertDeg) : leg.face2VertDeg;
                 return true;
             }
             if (leg.hasVertAngle) {

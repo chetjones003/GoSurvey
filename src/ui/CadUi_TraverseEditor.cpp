@@ -3,6 +3,7 @@
 #include "CadCommands.hpp"
 #include "SurveyPoints.hpp"
 #include "traverse/TraverseCalc.hpp"
+#include "traverse/TraverseLeastSquares.hpp"
 #include "traverse/FbkImport.hpp"
 #include "WinFileDialogs.hpp"
 
@@ -30,18 +31,24 @@ static void ParseHorizAngle(TraverseLeg& leg) {
 }
 
 static void ParseFace1Horiz(TraverseLeg& leg) {
+    leg.hasFace1 = false;
     if (!leg.face1HorizBuf.empty()) {
         double v;
-        if (TraverseParseAngle(leg.face1HorizBuf, &v))
+        if (TraverseParseAngle(leg.face1HorizBuf, &v)) {
             leg.face1HorizDeg = v;
+            leg.hasFace1 = true;
+        }
     }
 }
 
 static void ParseFace2Horiz(TraverseLeg& leg) {
+    leg.hasFace2 = false;
     if (!leg.face2HorizBuf.empty()) {
         double v;
-        if (TraverseParseAngle(leg.face2HorizBuf, &v))
+        if (TraverseParseAngle(leg.face2HorizBuf, &v)) {
             leg.face2HorizDeg = v;
+            leg.hasFace2 = true;
+        }
     }
 }
 
@@ -97,6 +104,257 @@ static void ReadOnlyCell(const char* label, bool valid, double val, const char* 
     (void)label;
 }
 
+// Reduced (face-averaged) horizontal circle reading for one set.
+static double SetReducedHoriz(const TraverseMeasSet& s) {
+    if (s.hasF1 && s.hasF2) return TraverseAverageFaceHoriz(s.f1HzDec, s.f2HzDec);
+    if (s.hasF1) return s.f1HzDec;
+    return s.f2HzDec;
+}
+static double SetReducedZenith(const TraverseMeasSet& s) {
+    if (s.hasF1 && s.hasF2) return TraverseAverageFaceZenith(s.f1VaDec, s.f2VaDec);
+    if (s.hasF1) return s.f1VaDec;
+    return s.f2VaDec;
+}
+static double SetReducedDist(const TraverseMeasSet& s) {
+    if (s.hasF1 && s.hasF2) return 0.5 * (s.f1Sd + s.f2Sd);
+    if (s.hasF1) return s.f1Sd;
+    return s.f2Sd;
+}
+
+// ---- Raw measurements & per-leg statistics (REQ-010, REQ-011, REQ-012) ----
+// View-only (REQ-013): nothing here is an editable control.
+static void DrawRawMeasurements(TraverseData& td) {
+    for (size_t i = 0; i < td.legs.size(); ++i) {
+        TraverseLeg& leg = td.legs[i];
+        if (leg.rawSets.empty())
+            continue;
+
+        ImGui::PushID(static_cast<int>(i));
+        char hdr[96];
+        std::snprintf(hdr, sizeof(hdr), "Leg %zu  \xe2\x86\x92  Station %d  (%zu set%s)",
+                      i + 1, leg.stationId, leg.rawSets.size(),
+                      leg.rawSets.size() == 1 ? "" : "s");
+        if (ImGui::TreeNode(hdr)) {
+            const ImGuiTableFlags tf = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                       ImGuiTableFlags_SizingFixedFit;
+            if (ImGui::BeginTable("rawsets", 7, tf)) {
+                ImGui::TableSetupColumn("Set");
+                ImGui::TableSetupColumn("F1 Hz\xc2\xb0");
+                ImGui::TableSetupColumn("F1 SD");
+                ImGui::TableSetupColumn("F1 VA\xc2\xb0");
+                ImGui::TableSetupColumn("F2 Hz\xc2\xb0");
+                ImGui::TableSetupColumn("F2 SD");
+                ImGui::TableSetupColumn("F2 VA\xc2\xb0");
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+                ImGui::TableHeadersRow();
+                ImGui::PopStyleColor();
+
+                std::vector<double> hz, dist, va;
+                for (const TraverseMeasSet& s : leg.rawSets) {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn(); ImGui::Text("%d", s.setNo);
+                    ImGui::TableNextColumn();
+                    if (s.hasF1) ImGui::Text("%.5f", s.f1HzDec); else ImGui::TextDisabled("\xe2\x80\x94");
+                    ImGui::TableNextColumn();
+                    if (s.hasF1) ImGui::Text("%.4f", s.f1Sd); else ImGui::TextDisabled("\xe2\x80\x94");
+                    ImGui::TableNextColumn();
+                    if (s.hasF1) ImGui::Text("%.5f", s.f1VaDec); else ImGui::TextDisabled("\xe2\x80\x94");
+                    ImGui::TableNextColumn();
+                    if (s.hasF2) ImGui::Text("%.5f", s.f2HzDec); else ImGui::TextDisabled("\xe2\x80\x94");
+                    ImGui::TableNextColumn();
+                    if (s.hasF2) ImGui::Text("%.4f", s.f2Sd); else ImGui::TextDisabled("\xe2\x80\x94");
+                    ImGui::TableNextColumn();
+                    if (s.hasF2) ImGui::Text("%.5f", s.f2VaDec); else ImGui::TextDisabled("\xe2\x80\x94");
+
+                    hz.push_back(SetReducedHoriz(s));
+                    dist.push_back(SetReducedDist(s));
+                    va.push_back(SetReducedZenith(s));
+                }
+                ImGui::EndTable();
+
+                // Statistics over the reduced per-set values (REQ-011).
+                const StatSummary sh = ComputeStats(hz);
+                const StatSummary sd = ComputeStats(dist);
+                const StatSummary sv = ComputeStats(va);
+                ImGui::TextUnformatted("Reduced (face-averaged) per-set statistics:");
+                if (ImGui::BeginTable("rawstats", 5, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                                     ImGuiTableFlags_SizingFixedFit)) {
+                    ImGui::TableSetupColumn("Quantity");
+                    ImGui::TableSetupColumn("N");
+                    ImGui::TableSetupColumn("Mean");
+                    ImGui::TableSetupColumn("Sum");
+                    ImGui::TableSetupColumn("Std Dev");
+                    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+                    ImGui::TableHeadersRow();
+                    ImGui::PopStyleColor();
+                    auto statRow = [](const char* name, const StatSummary& s, const char* fmt) {
+                        ImGui::TableNextRow();
+                        ImGui::TableNextColumn(); ImGui::TextUnformatted(name);
+                        ImGui::TableNextColumn(); ImGui::Text("%d", s.n);
+                        char b[32];
+                        ImGui::TableNextColumn(); std::snprintf(b, sizeof(b), fmt, s.mean);   ImGui::TextUnformatted(b);
+                        ImGui::TableNextColumn(); std::snprintf(b, sizeof(b), fmt, s.sum);    ImGui::TextUnformatted(b);
+                        ImGui::TableNextColumn(); std::snprintf(b, sizeof(b), fmt, s.stddev); ImGui::TextUnformatted(b);
+                    };
+                    statRow("Horizontal\xc2\xb0", sh, "%.6f");
+                    statRow("Distance",     sd, "%.4f");
+                    statRow("Zenith\xc2\xb0",     sv, "%.6f");
+                    ImGui::EndTable();
+                }
+
+                // Complementary distance (REQ-012): show both slope and horizontal.
+                const double vaDeg = sv.n > 0 ? sv.mean
+                                   : (leg.hasVertAngle ? leg.vertAngleDeg : 90.0);
+                double horiz = leg.computed ? leg.computedHorizDist
+                             : (leg.hasHorizDist ? leg.horizDist
+                                                 : TraverseReduceToHoriz(leg.slopeDist, vaDeg, true));
+                double slope = leg.hasSlopeDist ? leg.slopeDist
+                                                : TraverseSlopeFromHoriz(horiz, vaDeg, true);
+                ImGui::Text("Horizontal distance: %.4f    Slope distance: %.4f    (zenith %.5f\xc2\xb0)",
+                            horiz, slope, vaDeg);
+
+                ImGui::TreePop();
+            }
+        }
+        ImGui::PopID();
+    }
+}
+
+// ---- Closure analysis window: Unadjusted vs Least Squares (REQ-014–017) ----
+static void DrawTraverseClosureWindow(AppCommandState& cmd, std::vector<std::string>& log) {
+    if (!cmd.showTraverseClosureWindow)
+        return;
+
+    TraverseData& td = cmd.traverseData;
+
+    ImGui::SetNextWindowSize(ImVec2(720, 520), ImGuiCond_FirstUseEver);
+    bool open = cmd.showTraverseClosureWindow;
+    if (!ImGui::Begin("Traverse Closure Analysis", &open)) {
+        cmd.showTraverseClosureWindow = open;
+        ImGui::End();
+        return;
+    }
+    cmd.showTraverseClosureWindow = open;
+
+    auto recompute = [&] {
+        cmd.traverseLsaResult = ComputeTraverseLeastSquares(td, cmd.traverseLsaWeights);
+        cmd.traverseLsaComputed = true;
+        cmd.traverseLsaAccepted = false;
+    };
+    if (!cmd.traverseLsaComputed)
+        recompute();
+
+    // ---- A-priori standard errors (weights) ----
+    ImGui::SeparatorText("A-priori Standard Errors");
+    bool wChanged = false;
+    ImGui::SetNextItemWidth(120.f);
+    wChanged |= ImGui::InputDouble("Angle \xcf\x83 (sec)##lsa_sa", &cmd.traverseLsaWeights.sigmaAngleSec, 0., 0., "%.2f");
+    ImGui::SameLine(0, 16); ImGui::SetNextItemWidth(120.f);
+    wChanged |= ImGui::InputDouble("Dist \xcf\x83 (ft)##lsa_sd", &cmd.traverseLsaWeights.sigmaDistConstFt, 0., 0., "%.4f");
+    ImGui::SameLine(0, 16); ImGui::SetNextItemWidth(120.f);
+    wChanged |= ImGui::InputDouble("Dist ppm##lsa_ppm", &cmd.traverseLsaWeights.sigmaDistPpm, 0., 0., "%.2f");
+    ImGui::SameLine(0, 16);
+    if (ImGui::Button("Recompute") || wChanged)
+        recompute();
+
+    const LsaResult& res = cmd.traverseLsaResult;
+
+    if (ImGui::BeginTabBar("closure_tabs")) {
+        // ---------------------------------------------------- Closure summary --
+        if (ImGui::BeginTabItem("Closure Summary")) {
+            if (ImGui::BeginTable("summary", 2, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg)) {
+                ImGui::TableSetupColumn("Unadjusted");
+                ImGui::TableSetupColumn("Least Squares");
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+                ImGui::TableHeadersRow();
+                ImGui::PopStyleColor();
+
+                ImGui::TableNextRow();
+                // --- Unadjusted column ---
+                ImGui::TableNextColumn();
+                if (td.closureValid) {
+                    ImGui::Text("Misclosure \xce\x94""E: %.4f", td.closureDeltaE);
+                    ImGui::Text("Misclosure \xce\x94""N: %.4f", td.closureDeltaN);
+                    ImGui::Text("Linear misclosure: %.4f", td.closureLinear);
+                    ImGui::Text("Perimeter: %.4f", td.closurePerimeter);
+                    if (td.closureLinear > 1e-6)
+                        ImGui::Text("Precision: 1:%.0f", td.closurePrecision);
+                    else
+                        ImGui::TextUnformatted("Precision: perfect");
+                } else {
+                    ImGui::TextDisabled("No closure (set Closed Loop and compute).");
+                }
+                // --- Least-squares column ---
+                ImGui::TableNextColumn();
+                if (res.ok) {
+                    ImGui::Text("Observations: %d", res.observations);
+                    ImGui::Text("Unknowns: %d", res.unknowns);
+                    ImGui::Text("Redundancy: %d", res.redundancy);
+                    ImGui::Text("Std dev of unit weight: %.4f", res.refStdDev);
+                    ImGui::Text("Adjusted misclosure: %.6f", res.adjClosureLinear);
+                    ImGui::Text("Iterations: %d", res.iterations);
+                } else {
+                    ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f), "Least squares unavailable:");
+                    ImGui::TextWrapped("%s", res.message.c_str());
+                }
+                ImGui::EndTable();
+            }
+
+            ImGui::Separator();
+            if (!res.ok) ImGui::BeginDisabled();
+            if (ImGui::Button("Accept Least-Squares Result")) {
+                // Write adjusted coordinates back into the legs so a subsequent
+                // Commit to Drawing uses the adjusted positions.
+                for (size_t s = 0; s < res.stationIds.size(); ++s) {
+                    for (auto& leg : td.legs) {
+                        if (leg.stationId == res.stationIds[s]) {
+                            leg.computedEasting  = res.adjEasting[s];
+                            leg.computedNorthing = res.adjNorthing[s];
+                        }
+                    }
+                }
+                cmd.traverseLsaAccepted = true;
+                log.push_back("TRAVERSE — accepted least-squares adjustment (adjusted misclosure " +
+                              TraverseFormatDist(res.adjClosureLinear) + ").");
+            }
+            if (!res.ok) ImGui::EndDisabled();
+            if (cmd.traverseLsaAccepted) {
+                ImGui::SameLine();
+                ImGui::TextColored(ImVec4(0.35f, 0.85f, 0.35f, 1.f), "\xe2\x9c\x93 accepted");
+            }
+            ImGui::EndTabItem();
+        }
+
+        // ---------------------------------------------------------- Residuals --
+        if (ImGui::BeginTabItem("Residuals")) {
+            if (!res.ok) {
+                ImGui::TextColored(ImVec4(1.f, 0.5f, 0.3f, 1.f), "No residuals: %s", res.message.c_str());
+            } else if (ImGui::BeginTable("residuals", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg |
+                                                         ImGuiTableFlags_ScrollY)) {
+                ImGui::TableSetupColumn("From");
+                ImGui::TableSetupColumn("To");
+                ImGui::TableSetupColumn("Angle resid (sec)");
+                ImGui::TableSetupColumn("Dist resid (ft)");
+                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1, 1, 1, 1));
+                ImGui::TableHeadersRow();
+                ImGui::PopStyleColor();
+                for (const LsaResidual& v : res.residuals) {
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn(); ImGui::Text("%d", v.fromStationId);
+                    ImGui::TableNextColumn(); ImGui::Text("%d", v.toStationId);
+                    ImGui::TableNextColumn(); ImGui::Text("%+.2f", v.angleResidualSec);
+                    ImGui::TableNextColumn(); ImGui::Text("%+.4f", v.distResidualFt);
+                }
+                ImGui::EndTable();
+            }
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+
+    ImGui::End();
+}
+
 } // namespace
 
 
@@ -108,7 +366,12 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
     if (cmd.traverseDataDirty) {
         ComputeTraverse(cmd.traverseData);
         cmd.traverseDataDirty = false;
+        cmd.traverseLsaComputed = false;  // inputs changed -> adjustment is stale.
     }
+
+    // The closure window is launched from this editor; draw it here so it
+    // survives the editor being collapsed.
+    DrawTraverseClosureWindow(cmd, log);
 
     ImGui::SetNextWindowSize(ImVec2(1080, 580), ImGuiCond_FirstUseEver);
     bool open = cmd.showTraverseEditorWindow;
@@ -464,6 +727,27 @@ void DrawTraverseEditorPanel(AppCommandState& cmd, std::vector<std::string>& log
             ImGui::TextColored(col, "%s", closureBuf);
         }
     }
+
+    // ---- Raw measurements & statistics (REQ-010, 011, 012) ----
+    bool anyRaw = false;
+    for (const auto& leg : td.legs)
+        if (!leg.rawSets.empty()) { anyRaw = true; break; }
+    if (anyRaw) {
+        ImGui::Separator();
+        if (ImGui::CollapsingHeader("Raw Measurements & Statistics"))
+            DrawRawMeasurements(td);
+    }
+
+    // ---- Closure analysis ----
+    ImGui::Separator();
+    if (ImGui::Button("Calculate Closure\xe2\x80\xa6")) {
+        cmd.showTraverseClosureWindow = true;
+        cmd.traverseLsaComputed = false;  // recompute fresh on open.
+    }
+    ItemHelpTooltip(
+        "Open the closure analysis: unadjusted misclosure beside a weighted\n"
+        "least-squares adjustment, with per-observation residuals.\n"
+        "Requires a closed loop that returns to the start station.");
 
     // ---- Commit to drawing ----
     ImGui::Separator();

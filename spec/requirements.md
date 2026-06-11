@@ -69,6 +69,120 @@ requirements is a planning failure, not a sign of rigor.
 
 ---
 
+## Traverse measurement & adjustment requirements
+
+> These cover the Traverse Editor's raw-measurement display and the least-squares
+> closure analysis (extends FEAT-002). Numeric acceptance asserts against
+> tolerance per REQ-101, never exact float equality.
+
+### REQ-010 — Display every raw observation
+- Purpose: surveyor review of field data (FEAT-002)
+- Priority: must
+- Type: functional
+- Statement: After importing a raw-data file, the editor displays every
+  individual F1/F2 observation retained per leg (horizontal circle, slope
+  distance, vertical/zenith angle) — not only the reduced per-leg values.
+- Acceptance: importing the sample FBK shows a detail row for each F1/F2
+  observation; the visible observation count equals the count in the file.
+- Owner-layer: UI (data from Domain)
+- Status: accepted
+- Revisions: 2026-06-10 — initial.
+
+### REQ-011 — Per-leg observation statistics
+- Purpose: blunder/quality review
+- Priority: must
+- Type: functional
+- Statement: For each leg the editor computes and displays the mean, sum, and
+  standard deviation from the mean of the repeated observations (horizontal
+  angle, distance, vertical angle).
+- Acceptance: computed mean/sum/std-dev match an independent hand calculation
+  within tolerance (REQ-101).
+- Owner-layer: Domain (compute), UI (display)
+- Status: accepted
+- Revisions: 2026-06-10 — initial.
+
+### REQ-012 — Complementary distance reduction
+- Purpose: show both slope and horizontal distance regardless of which was given
+- Priority: must
+- Type: functional
+- Statement: When slope distance is provided the editor computes and shows the
+  horizontal distance, and when horizontal distance is provided it shows the
+  slope distance, using the leg's vertical/zenith angle.
+- Acceptance: complementary distance matches a hand calculation within ±0.01 ft.
+- Owner-layer: Domain (compute), UI (display)
+- Status: accepted
+- Revisions: 2026-06-10 — initial.
+
+### REQ-013 — Imported measurements are view-only
+- Purpose: protect raw field data from accidental edits
+- Priority: must
+- Type: functional
+- Statement: In the main editor window, imported F1/F2 measurements are
+  presented read-only; no imported measurement field is editable.
+- Acceptance: code/UI review confirms no editable control is bound to an
+  imported observation value.
+- Owner-layer: UI
+- Status: accepted
+- Revisions: 2026-06-10 — initial.
+
+### REQ-014 — Closure window: unadjusted vs least-squares, side by side
+- Purpose: let the surveyor compare and accept an adjustment
+- Priority: must
+- Type: functional
+- Statement: A "Calculate Closure" action opens a window presenting the existing
+  unadjusted closure and the least-squares result side by side, across two tabs
+  (closure summary; per-observation residuals), and lets the user accept the
+  least-squares result.
+- Acceptance: both columns populate for a closed loop; an Accept action records
+  the least-squares result as the chosen adjustment.
+- Owner-layer: UI (data from Domain)
+- Status: accepted
+- Revisions: 2026-06-10 — initial.
+
+### REQ-015 — Least-squares adjustment of a closed-loop traverse
+- Purpose: rigorous adjustment (FEAT-002)
+- Priority: must
+- Type: functional
+- Statement: The editor adjusts a closed-loop traverse by weighted least squares,
+  using configurable a-priori standard errors (defaults: σ_angle = 5″,
+  σ_dist = 0.02 ft + 2 ppm) to weight observations. Only closed loops are
+  adjusted in this increment. A loop closes on the start monument, which may be
+  re-observed under a suffixed name (e.g. start "KCP2" closing as "KCP2.1");
+  import detects this and the closing foresight is held as the start.
+- Acceptance: on a synthetic closed loop with a known injected misclosure, the
+  adjusted coordinates reduce the misclosure to ~0 within tolerance (REQ-101).
+- Owner-layer: Domain (compute)
+- Status: accepted
+- Revisions: 2026-06-10 — initial.
+
+### REQ-016 — Per-observation residuals
+- Purpose: blunder detection
+- Priority: must
+- Type: functional
+- Statement: The closure window's residuals tab shows each observation's angular
+  residual and distance residual from the least-squares adjustment.
+- Acceptance: residuals match an independently worked least-squares example
+  within tolerance (REQ-101).
+- Owner-layer: Domain (compute), UI (display)
+- Status: accepted
+- Revisions: 2026-06-10 — initial.
+
+### REQ-017 — Insufficient redundancy is surfaced, not absorbed
+- Purpose: no silent failure (REQ-201)
+- Priority: must
+- Type: functional
+- Statement: When a traverse has insufficient redundancy for adjustment (e.g. an
+  open traverse, redundancy ≤ 0) or the normal-equation system is singular, the
+  closure window reports "least squares unavailable" with a reason and shows no
+  adjusted values; it does not crash or emit NaN/silent results.
+- Acceptance: an open traverse yields the message and no adjusted output; a
+  singular system logs an error and produces no value.
+- Owner-layer: Domain (compute), UI (display)
+- Status: accepted
+- Revisions: 2026-06-10 — initial.
+
+---
+
 ## Performance requirements
 
 > Performance is a requirement, not an afterthought — but always paired with a
@@ -161,7 +275,14 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-001 | IO | `<TEST-001>` | accepted |
 | REQ-100 | Renderer | `<bench-frame>` | proposed |
 | REQ-101 | compute | `<regression set>` | proposed |
-| `<…>` | `<…>` | `<…>` | `<…>` |
+| REQ-010 | UI | manual (FBK import shows raw rows) | implemented |
+| REQ-011 | compute | `TraverseTests` "ComputeStats" | implemented |
+| REQ-012 | compute | `TraverseTests` "Complementary distance" | implemented |
+| REQ-013 | UI | review (raw rows read-only) | implemented |
+| REQ-014 | UI | manual (closure window, side-by-side) | implemented |
+| REQ-015 | compute | `TraverseTests` "adjustment drives misclosure to zero" | implemented |
+| REQ-016 | compute | `TraverseTests` "perfect loop yields zero residuals" | implemented |
+| REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 
 ---
 

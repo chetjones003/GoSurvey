@@ -57,12 +57,18 @@ struct TraverseLeg {
     double face1VertDeg = 0.0;
     double face2VertDeg = 0.0;
 
+    // Which faces are actually present. A foresight may carry only F1 (e.g. the
+    // F2 face disabled in the field), so face averaging must not assume both.
+    bool hasFace1 = false;
+    bool hasFace2 = false;
+
     // Raw per-set F1/F2 observations from a raw-data import (FBK, RW5, …).
     // Empty for manually entered legs; the editor can expand these as detail rows.
     std::vector<TraverseMeasSet> rawSets;
 
     // --- Computed outputs (set by ComputeTraverse) ---
     double computedBearingDeg = 0.0;
+    double computedHorizAngleDeg = 0.0;   ///< Resolved turned angle actually used (F1/F2 avg or single).
     double computedHorizDist = 0.0;
     double computedDeltaE = 0.0;
     double computedDeltaN = 0.0;
@@ -113,6 +119,22 @@ double TraverseNormBearing(double deg);
 
 /// Reduce slope distance to horizontal using zenith or elevation angle.
 double TraverseReduceToHoriz(double slopeDist, double angleDeg, bool isZenith);
+
+/// Recover slope distance from a horizontal distance using zenith or elevation
+/// angle (the inverse of \ref TraverseReduceToHoriz). Returns 0 if the angle is
+/// degenerate (sin/cos ~ 0), so a near-horizontal sight does not divide by zero.
+double TraverseSlopeFromHoriz(double horizDist, double angleDeg, bool isZenith);
+
+/// Simple descriptive statistics over a set of repeated observations (REQ-011).
+struct StatSummary {
+    int    n      = 0;     ///< Number of samples.
+    double sum    = 0.0;   ///< Σx.
+    double mean   = 0.0;   ///< Σx / n  (0 if n == 0).
+    double stddev = 0.0;   ///< Sample standard deviation from the mean (n−1); 0 if n < 2.
+};
+
+/// Compute count, sum, mean, and sample standard deviation from the mean.
+StatSummary ComputeStats(const std::vector<double>& samples);
 
 /// Compute signed vertical component from slope distance and zenith or elevation angle.
 double TraverseReduceToVert(double slopeDist, double angleDeg, bool isZenith);
