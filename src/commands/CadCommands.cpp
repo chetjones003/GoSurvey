@@ -9402,16 +9402,34 @@ std::vector<CommandSuggestion> FuzzyCommandSuggestions(const std::string& query,
   if (qlow.empty())
     return {};
 
+  // Prefix match only: the query must be a leading prefix of the command name or an
+  // alias (e.g. "e" lists ELLIPSE, EXPORTPOINTS — not REGEN/DELETE). Ranked by how
+  // strongly the query matches, so an exact alias hit beats a mere name prefix:
+  //   4 = query == primary name      (exact)
+  //   3 = query == an alias          (e.g. "l" is LINE's alias → LINE before LAYER)
+  //   2 = primary name starts with query
+  //   1 = an alias starts with query
+  const auto isPrefix = [](const std::string& q, const std::string& s) {
+    return s.size() >= q.size() && StringUtil::toLowerAsciiCopy(s).compare(0, q.size(), q) == 0;
+  };
   for (const CmdEntry& e : kRegistry) {
-    // Best score across the primary name and each alias.
-    int best = FuzzySubsequenceScore(qlow, e.primary);
+    int best = -1;
+    const std::string nameLow = StringUtil::toLowerAsciiCopy(e.primary);
+    if (nameLow == qlow)
+      best = 4;
+    else if (isPrefix(qlow, e.primary))
+      best = 2;
     if (e.aliases[0] != '\0') {
       std::istringstream als(std::string(e.aliases));
       std::string a;
       while (std::getline(als, a, ',')) {
         a = StringUtil::trimCopy(a);
-        if (!a.empty())
-          best = std::max(best, FuzzySubsequenceScore(qlow, a));
+        if (a.empty())
+          continue;
+        if (StringUtil::toLowerAsciiCopy(a) == qlow)
+          best = std::max(best, 3);
+        else if (isPrefix(qlow, a))
+          best = std::max(best, 1);
       }
     }
     if (best >= 0)
@@ -9419,8 +9437,8 @@ std::vector<CommandSuggestion> FuzzyCommandSuggestions(const std::string& query,
   }
   std::sort(ranked.begin(), ranked.end(), [](const Scored& a, const Scored& b) {
     if (a.score != b.score)
-      return a.score > b.score;
-    return std::string(a.entry->primary) < std::string(b.entry->primary);
+      return a.score > b.score;  // stronger matches (exact name/alias) first
+    return std::string(a.entry->primary) < std::string(b.entry->primary);  // then alphabetical
   });
 
   std::vector<CommandSuggestion> out;

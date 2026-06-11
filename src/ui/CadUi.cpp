@@ -4320,7 +4320,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   ImGuiWindowFlags wf = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoNavFocus;
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.275f, 0.275f, 0.275f, 1.f));  // #464646 gray band (matches toolbar)
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.117f, 0.117f, 0.117f, 1.f));  // #464646 gray band (matches toolbar)
   ImGui::Begin("##CadStatusBarStrip", nullptr, wf);
   ImGui::PopStyleColor();
 
@@ -4422,6 +4422,12 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   ImGui::End();
   ImGui::PopStyleVar();
 }
+
+// Last drawing-crosshair screen position, captured while the viewport is hovered.
+// Persists when focus moves to the command input so the autocomplete popup can
+// anchor at the crosshair (AutoCAD dynamic-input style) rather than the command bar.
+// (-1,-1) means "not yet known" → popup falls back to the command-input anchor.
+static ImVec2 s_lastCrosshairScreen = ImVec2(-1.f, -1.f);
 
 void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBufSize, AppCommandState& cmd) {
   const bool isDark = (cmd.displayColorThemeIdx == 0);
@@ -4564,6 +4570,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   // We capture the highlight while the list is open and consume it on submit.
   static bool s_cmdSugVisible = false;
   static std::string s_cmdHighlight;
+  static bool s_cmdScrollToSel = false;  // request: scroll the keyboard-selected row into view
   std::vector<CommandSuggestion> cmdSug;
   ImVec2 cmdInputMin(0, 0), cmdInputMax(0, 0);
   bool   cmdShowSug = false;
@@ -4571,7 +4578,8 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   if (!cmdInputOnViewport) {
     ImGuiInputTextFlags flags = ImGuiInputTextFlags_EnterReturnsTrue |
                                 ImGuiInputTextFlags_CallbackAlways |
-                                ImGuiInputTextFlags_CallbackCompletion;  // Tab completes to highlighted
+                                ImGuiInputTextFlags_CallbackCompletion |  // Tab completes to highlighted
+                                ImGuiInputTextFlags_EscapeClearsAll;      // Esc clears the buffer (unfreezes crosshair)
     ImGui::PushStyleColor(ImGuiCol_Text, promptColor);
     ImGui::TextUnformatted(">");
     ImGui::PopStyleColor();
@@ -4595,7 +4603,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
 
     const bool singleToken = query.find_first_of(" \t") == std::string::npos;
     if (inputActive && !query.empty() && singleToken && !s_cmdDismissed)
-      cmdSug = FuzzyCommandSuggestions(query, 8);
+      cmdSug = FuzzyCommandSuggestions(query, 20);
 
     if (!cmdSug.empty()) {
       const int n = static_cast<int>(cmdSug.size());
@@ -4606,8 +4614,8 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       // list) and Down jumps focus to the Send button (so Enter runs the typed text, not the highlight).
       ImGui::SetItemKeyOwner(ImGuiKey_UpArrow);
       ImGui::SetItemKeyOwner(ImGuiKey_DownArrow);
-      if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true)) s_cmdSel = (s_cmdSel + 1) % n;
-      if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true))   s_cmdSel = (s_cmdSel - 1 + n) % n;
+      if (ImGui::IsKeyPressed(ImGuiKey_DownArrow, true)) { s_cmdSel = (s_cmdSel + 1) % n; s_cmdScrollToSel = true; }
+      if (ImGui::IsKeyPressed(ImGuiKey_UpArrow, true))   { s_cmdSel = (s_cmdSel - 1 + n) % n; s_cmdScrollToSel = true; }
       g_cmdSuggestComplete = cmdSug[s_cmdSel].name;
       for (char& ch : g_cmdSuggestComplete) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
       cmdShowSug = true;
@@ -4664,17 +4672,47 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   ImGui::End();
   ImGui::PopStyleColor();
 
-  // --- nanoCAD-style command autocomplete popup (top-level window above the input) ---
+  // --- nanoCAD-style command autocomplete popup (anchored at the drawing crosshair) ---
   if (cmdShowSug && !cmdSug.empty()) {
     const float rowH  = ImGui::GetTextLineHeight() + 7.f;
     const float padY  = 3.f;
-    const float listH = padY * 2.f + rowH * static_cast<float>(cmdSug.size());
-    const float listW = std::max(300.f, cmdInputMax.x - cmdInputMin.x);
-    ImGui::SetNextWindowPos(ImVec2(cmdInputMin.x, cmdInputMin.y - listH - 3.f));
+    // Cap the visible height; if there are more suggestions than fit, the popup scrolls.
+    const int   kMaxRows = 8;
+    const int   nSug     = static_cast<int>(cmdSug.size());
+    const int   visRows  = std::min(nSug, kMaxRows);
+    const bool  scrolls  = nSug > visRows;
+    const float listH = padY * 2.f + rowH * static_cast<float>(visRows);
+    // Size the popup snugly to its content (name + description), not the command
+    // input width — keeps it compact at the cursor.
+    const float gutter = 14.f;  // arrow gutter (mirrors the row layout below)
+    float contentW = 0.f;
+    for (const CommandSuggestion& s : cmdSug) {
+      float w = ImGui::CalcTextSize(s.name.c_str()).x;
+      if (!s.description.empty())
+        w += ImGui::CalcTextSize(("  (" + s.description + ")").c_str()).x;
+      contentW = std::max(contentW, w);
+    }
+    float listW = std::clamp(gutter + rowH + contentW + 12.f, 150.f, 460.f);
+    if (scrolls) listW += ImGui::GetStyle().ScrollbarSize;  // keep text clear of the scrollbar
+    // Pop up at the crosshair (AutoCAD dynamic-input style); fall back to above the
+    // command input if the crosshair position isn't known yet.
+    ImVec2 pos;
+    if (s_lastCrosshairScreen.x >= 0.f) {
+      const float offX = 16.f, offY = 18.f;  // clear the crosshair pickbox
+      pos = ImVec2(s_lastCrosshairScreen.x + offX, s_lastCrosshairScreen.y + offY);
+      const ImGuiViewport* vp = ImGui::GetMainViewport();
+      const ImVec2 wmax(vp->WorkPos.x + vp->WorkSize.x, vp->WorkPos.y + vp->WorkSize.y);
+      if (pos.y + listH > wmax.y) pos.y = s_lastCrosshairScreen.y - offY - listH;  // flip above
+      if (pos.x + listW > wmax.x) pos.x = wmax.x - listW;
+      pos.x = std::max(pos.x, vp->WorkPos.x);
+      pos.y = std::max(pos.y, vp->WorkPos.y);
+    } else {
+      pos = ImVec2(cmdInputMin.x, cmdInputMin.y - listH - 3.f);
+    }
+    ImGui::SetNextWindowPos(pos);
     ImGui::SetNextWindowSize(ImVec2(listW, listH));
     const ImGuiWindowFlags pf = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
-                                ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoSavedSettings |
+                                ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                 ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(1.f, padY));
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.275f, 0.275f, 0.275f, 1.f));  // #464646 list (matches panels)
@@ -4685,7 +4723,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       for (int i = 0; i < static_cast<int>(cmdSug.size()); ++i) {
         ImGui::PushID(i);
         const ImVec2 rmin = ImGui::GetCursorScreenPos();
-        const float gutter = 14.f;  // left gutter for the selection arrow marker
+        // gutter declared above (popup-width calc): left gutter for the selection arrow marker
 
         if (ImGui::InvisibleButton("row", ImVec2(rowW, rowH))) {
           std::string pick = cmdSug[i].name;
@@ -4695,6 +4733,9 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
           ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
         }
         if (ImGui::IsItemHovered()) s_cmdSel = i;
+
+        // Keep the keyboard-selected row visible when the list scrolls.
+        if (i == s_cmdSel && s_cmdScrollToSel) ImGui::SetScrollHereY(0.5f);
 
         // Selected row gets a steel-blue highlight bar + a right-pointing arrow marker (nanoCAD style).
         if (i == s_cmdSel) {
@@ -4726,6 +4767,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
         }
         ImGui::PopID();
       }
+      s_cmdScrollToSel = false;  // request consumed this frame
     }
     ImGui::End();
     ImGui::PopStyleColor(2);
@@ -6762,19 +6804,39 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   // CAD-style crosshair (viewport only): OS cursor hidden; position follows world cursor (sticky OSNAP blend in
   // command). Pick box matches object snap aperture; arms from Settings.
-  if (hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
-    ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+  //
+  // While the user is typing a command NAME (no active command yet, command buffer
+  // non-empty), the crosshair freezes at its last position so the autocomplete popup
+  // anchored to it stays put. The OS mouse stays free — the user can move/click the
+  // popup. It unfreezes when the command is entered (cmd.active set, buffer cleared)
+  // or cancelled (buffer cleared on Esc).
+  const bool typingCommand =
+      (cmd.active == AppCommandState::Kind::None) && cmdBuf && cmdBuf[0] != '\0';
+  const bool liveHover = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y;
+  const bool frozenHair = typingCommand && s_lastCrosshairScreen.x >= 0.f;
+  if (liveHover || frozenHair) {
     const ImVec2 imgMin = imgPos;
     const ImVec2 imgMax(imgPos.x + avail.x, imgPos.y + avail.y);
-    float cx = mouse.x;
-    float cy = mouse.y;
-    if (outCursorX && outCursorY) {
-      const float denx = worldRight - worldLeft + 1.e-12f;
-      const float deny = worldTop - worldBottom + 1.e-12f;
-      const float uSnap = (*outCursorX - worldLeft) / denx;
-      const float vSnap = (worldTop - *outCursorY) / deny;
-      cx = imgPos.x + uSnap * avail.x;
-      cy = imgPos.y + vSnap * avail.y;
+    float cx, cy;
+    if (frozenHair) {
+      // Frozen: hold the last position; leave the OS cursor visible (user has the mouse).
+      cx = s_lastCrosshairScreen.x;
+      cy = s_lastCrosshairScreen.y;
+    } else {
+      ImGui::SetMouseCursor(ImGuiMouseCursor_None);
+      cx = mouse.x;
+      cy = mouse.y;
+      if (outCursorX && outCursorY) {
+        const float denx = worldRight - worldLeft + 1.e-12f;
+        const float deny = worldTop - worldBottom + 1.e-12f;
+        const float uSnap = (*outCursorX - worldLeft) / denx;
+        const float vSnap = (worldTop - *outCursorY) / deny;
+        cx = imgPos.x + uSnap * avail.x;
+        cy = imgPos.y + vSnap * avail.y;
+      }
+      // Remember the live crosshair so the popup can anchor here, and so the position
+      // is preserved once we freeze on the next typed character.
+      s_lastCrosshairScreen = ImVec2(cx, cy);
     }
     const float ap = std::clamp(cmd.objectSnapAperturePx, 4.f, 64.f);
     const float phx = ap * 0.5f;
