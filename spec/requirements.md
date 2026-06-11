@@ -209,6 +209,69 @@ requirements is a planning failure, not a sign of rigor.
 
 ---
 
+## Display & units requirements
+
+> These cover the Drawing Units (`UNITS`) feature: how the user configures the
+> precision and format of the linear and angular values the application
+> **displays**. They own display formatting only — stored coordinates and the
+> internal angle convention are unchanged (REQ-101 fidelity is preserved).
+
+### REQ-020 — UNITS command and Drawing Units dialog
+- Purpose: give the user one AutoCAD-style place to control displayed units
+- Priority: should
+- Type: functional
+- Statement: A `UNITS` command (command line + menu) opens a modal Drawing Units
+  dialog with Length, Angle, Insertion-scale, and a live Sample Output. The
+  Length group (Type = Decimal; adjustable precision) is the single owner of the
+  display precision for all non-survey linear/coordinate readouts, replacing the
+  interim Display-tab "Coordinate precision" control. Cancel/Esc reverts to the
+  values present when the dialog opened; OK applies and persists.
+- Acceptance: typing `UNITS` opens the dialog; changing Length precision changes
+  the ID, status-bar, dimension, and property readouts to that many decimals;
+  Cancel makes no change; settings persist across restart.
+- Owner-layer: UI (command + dialog), IO (persistence)
+- Status: accepted
+- Revisions: 2026-06-11 — initial.
+
+### REQ-021 — Configurable angle display
+- Purpose: surveyor-appropriate bearing/angle presentation
+- Priority: should
+- Type: functional
+- Statement: Non-survey angle/bearing **readouts** (INVERSE bearing, angular
+  dimensions, rotation-relative-north properties, Sample Output) render according
+  to a chosen angle format ∈ {Decimal Degrees, Deg/Min/Sec, Surveyor's Units},
+  an adjustable precision, a direction (clockwise / counter-clockwise), and a
+  base angle. This governs **display only**: typing an angle into a command keeps
+  the existing CW-from-north entry convention. At default settings the rendered
+  output matches the pre-feature bearing format.
+- Acceptance: Surveyor's Units renders a representative bearing as `N 45°30'00" E`;
+  Decimal Degrees and DMS render correctly at the chosen precision; changing
+  direction/base changes displayed values consistently across readouts and Sample
+  Output; angle entry is unchanged; a parity test confirms default-settings output
+  equals the previous formatter (assert against tolerance per REQ-101 where
+  numeric).
+- Owner-layer: Domain (pure formatter), UI (readouts + dialog)
+- Status: accepted
+- Revisions: 2026-06-11 — initial.
+
+### REQ-022 — Insertion scale stored; settings persisted
+- Purpose: complete the dialog without over-reaching into insertion behavior
+- Priority: may
+- Type: functional
+- Statement: The Drawing Units "units to scale inserted content" selection is
+  stored and reflected in Sample Output but does not alter inserted/pasted
+  geometry this increment. All Drawing Units settings persist in the user prefs
+  file. Survey-point display precision (Settings → User Preferences) remains
+  independent and is not changed by UNITS.
+- Acceptance: the insertion-units selection persists and appears in Sample Output
+  with no change to inserted geometry; survey-point precision is unaffected by any
+  UNITS change.
+- Owner-layer: UI (dialog), IO (persistence)
+- Status: accepted
+- Revisions: 2026-06-11 — initial.
+
+---
+
 ## Performance requirements
 
 > Performance is a requirement, not an afterthought — but always paired with a
@@ -310,6 +373,9 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-016 | compute | `TraverseTests` "perfect loop yields zero residuals" | implemented |
 | REQ-017 | compute | `TraverseTests` "insufficient/invalid input is surfaced" | implemented |
 | REQ-018 | Domain/UI | `TraverseTests` "ReduceLegFromSets re-derives leg" | implemented |
+| REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
+| REQ-021 | Domain/UI | `AngleFormatTests` (DD/DMS/Surveyor's, direction/base, default parity) | accepted |
+| REQ-022 | UI/IO | manual (insertion units stored + sampled; survey precision independent) | accepted |
 
 ---
 

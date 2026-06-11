@@ -2,6 +2,7 @@
 
 #include "PdfAttach.hpp"
 #include "SurveyPoints.hpp"
+#include "AngleFormat.hpp"
 #include "traverse/TraverseCalc.hpp"
 #include "traverse/TraverseLeastSquares.hpp"
 
@@ -140,7 +141,7 @@ void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float modelUnitsPerPlott
 /// After editing extension points or dimension offset, restore text from fixed (normal, tangent) offsets vs dim mid.
 void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, float alongT);
 /// Recompute dimension text from current geometry (linear / aligned / angular).
-void CadDimRefreshMeasurementText(CadAnnotation* ann);
+void CadDimRefreshMeasurementText(CadAnnotation* ann, int linearPrecision, const AngleDisplaySettings& angle);
 
 /// Committed 3-point arc (circumcircle + start/sweep in radians from +X).
 struct CadArc {
@@ -371,6 +372,10 @@ struct AppCommandState {
   /// Survey point X marker: horizontal span on paper (inches) → world half-extent = 0.5 × span × MUP (not zoom).
   float surveyPointCrossSpanPlottedInches = 0.14f;
   bool surveyPointShowIdInViewport = false;
+  /// Decimal places shown for survey-point coordinates (labels on the drawing
+  /// and the survey points table/editor). Display only — stored values keep full
+  /// precision. Configured in Settings → User Preferences → Survey points.
+  int surveyPointDisplayPrecision = 4;
   /// Plotted text height (inches) for survey point ID labels when \ref surveyPointShowIdInViewport is true.
   float surveyPointLabelPlottedHeightInches = 0.10f;
   SurveyLabelStyleTemplates surveyLabelTemplates;
@@ -802,6 +807,23 @@ struct AppCommandState {
   // Display tab — Crosshair size (1..100, % of viewport min axis). Mirrors AutoCAD CURSORSIZE.
   int displayCrosshairSizePct = 5;
 
+  // Decimal places shown for all non-survey user-facing coordinate/length
+  // readouts (status bar, ID/INVERSE, dimensions, properties). Display only —
+  // stored values keep full precision. Owned by the Drawing Units dialog
+  // (UNITS command); see REQ-020.
+  int displayLinearPrecision = 4;
+
+  // Drawing Units dialog (UNITS command) visibility. REQ-020.
+  bool showUnitsWindow = false;
+
+  // Angle DISPLAY settings owned by the Drawing Units dialog (REQ-021, ADR-004).
+  // Display only: the stored/compute convention (CW from north) and angle entry
+  // are unchanged. Defaults reproduce the pre-feature bearing format.
+  int    angleDisplayType = 1;        ///< 0=Decimal Degrees, 1=Deg/Min/Sec, 2=Surveyor's Units
+  int    angleDisplayPrecision = 1;   ///< decimals on the smallest unit (deg for DD; sec for DMS/Surveyor)
+  bool   angleDisplayClockwise = true;
+  double angleDisplayBaseDeg = 0.0;   ///< canonical CW-from-north degrees of the 0° direction (N=0,E=90,S=180,W=270)
+
   // Display tab — Zoom. Wheel zoom factor per notch (AutoCAD ZOOMFACTOR analog). 1.10 = 10% per notch.
   // Clamped 1.01..3.0 at the call site; higher = faster zoom, lower = finer control.
   float displayWheelZoomFactor = 1.15f;
@@ -1191,6 +1213,12 @@ float BearingCwNorthDegFromMathAngleRad(float mathAngleRadFromEastCcw);
 float RotateDeltaFromReferenceAndNewSegment(float refX1, float refY1, float refX2, float refY2,
                                              float newX1, float newY1, float newX2, float newY2);
 
+
+/// Build the angle-display settings (REQ-021) from the live UNITS state.
+[[nodiscard]] inline AngleDisplaySettings CadAngleDisplaySettings(const AppCommandState& st) {
+  return AngleDisplaySettings{static_cast<AngleDisplayType>(st.angleDisplayType), st.angleDisplayPrecision,
+                              st.angleDisplayClockwise, st.angleDisplayBaseDeg};
+}
 
 void StartLineCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartCircleCommand(AppCommandState& st, std::vector<std::string>& log);

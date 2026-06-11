@@ -2,6 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "MtextRichFormat.hpp"
+#include "NumFormat.hpp"
 
 #include <imgui.h>
 
@@ -536,7 +537,7 @@ void ReplaceAll(std::string* s, const std::string& from, const std::string& to) 
 } // namespace
 
 std::string FormatSurveyPointLabelPlain(const SurveyPoint& p, SurveyPointLabelStyle style,
-                                       const SurveyLabelStyleTemplates& templates) {
+                                       const SurveyLabelStyleTemplates& templates, int precision) {
   if (style == SurveyPointLabelStyle::None)
     return {};
   const std::string* tpl = &templates.numberDesc;
@@ -572,15 +573,9 @@ std::string FormatSurveyPointLabelPlain(const SurveyPoint& p, SurveyPointLabelSt
   std::string out = *tpl;
   ReplaceAll(&out, "{id}", std::to_string(p.id));
   ReplaceAll(&out, "{desc}", p.description);
-  char ebuf[64];
-  std::snprintf(ebuf, sizeof(ebuf), "%.3f", static_cast<double>(p.elevation));
-  ReplaceAll(&out, "{elev}", std::string(ebuf));
-  char nbuf[64];
-  std::snprintf(nbuf, sizeof(nbuf), "%.3f", static_cast<double>(p.northing));
-  ReplaceAll(&out, "{north}", std::string(nbuf));
-  char eastbuf[64];
-  std::snprintf(eastbuf, sizeof(eastbuf), "%.3f", static_cast<double>(p.easting));
-  ReplaceAll(&out, "{east}", std::string(eastbuf));
+  ReplaceAll(&out, "{elev}", FormatLinear(static_cast<double>(p.elevation), precision));
+  ReplaceAll(&out, "{north}", FormatLinear(static_cast<double>(p.northing), precision));
+  ReplaceAll(&out, "{east}", FormatLinear(static_cast<double>(p.easting), precision));
   return out;
 }
 
@@ -649,7 +644,8 @@ void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::ve
     return;
   }
 
-  const std::string body = FormatSurveyPointLabelPlain(p, p.labelStyle, st.surveyLabelTemplates);
+  const std::string body =
+      FormatSurveyPointLabelPlain(p, p.labelStyle, st.surveyLabelTemplates, st.surveyPointDisplayPrecision);
   if (p.labelMtextAnnIndex >= 0 && static_cast<size_t>(p.labelMtextAnnIndex) < st.cadAnnotations.size()) {
     CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(p.labelMtextAnnIndex)];
     if (a.kind == CadAnnotation::Kind::Mtext) {

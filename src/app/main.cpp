@@ -401,6 +401,7 @@ int main() {
     DrawSelectionCyclingPanel(cmd);
     DrawCreatePointsPanel(cmd, cmdLog);
     DrawSettingsPanel(cmd, &cmdLog);
+    DrawUnitsDialog(cmd, &cmdLog);
     ImGuiLayout_DrawLayoutPopups(cmd, cmdLog);
     DrawLayerManagerWindow(cmd, &cmdLog);
     DrawViewPointsPanel(cmd, cmdLog);

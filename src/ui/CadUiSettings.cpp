@@ -5,6 +5,7 @@
 #include "CadUiHelpers.hpp"
 #include "AppIcon.hpp"
 #include "MtextRichFormat.hpp"
+#include "NumFormat.hpp"
 #include "SurveyPoints.hpp"
 #include "UserPrefs.hpp"
 #include "WinFileDialogs.hpp"
@@ -365,6 +366,13 @@ static void DrawSettingsDraftingTab(AppCommandState& cmd) {
 }
 
 static void DrawUserPrefsSurveyPoints(AppCommandState& cmd) {
+  ImGui::SetNextItemWidth(80.f);
+  if (ImGui::DragInt("Coordinate display precision (decimals)", &cmd.surveyPointDisplayPrecision, 0.1f, 0, 12, "%d")) {
+    cmd.surveyPointDisplayPrecision = std::clamp(cmd.surveyPointDisplayPrecision, 0, 12);
+    for (size_t i = 0; i < cmd.surveyPoints.size(); ++i)
+      EnsureSurveyPointLabelMtext(cmd, i, nullptr);
+  }
+  ItemHelpTooltip("Decimal places shown for survey-point northing/easting/elevation in labels and the survey points table. Display only; stored values keep full precision.");
   ImGui::DragFloat("Cross span (plotted inches)", &cmd.surveyPointCrossSpanPlottedInches, 0.002f, 0.02f, 2.f, "%.3f");
   ItemHelpTooltip("Horizontal span of the X on paper: world size = span x model units per plotted inch.");
   ImGui::Checkbox("Show point ID in viewport", &cmd.surveyPointShowIdInViewport);
@@ -670,4 +678,179 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::End();
 
   DrawGraphicsPerformanceDialog(cmd, log);
+}
+
+// ---------------------------------------------------------------------------
+// Drawing Units dialog (UNITS command) — REQ-020. Owns displayLinearPrecision.
+// Phase 1: Length group (Decimal + precision) is functional and the single owner
+// of the non-survey display precision; a live Sample Output reflects it. The
+// Angle and Insertion-scale groups are shown disabled as placeholders for the
+// REQ-021 / REQ-022 follow-up phases. Cancel/[X]/Esc revert to the precision the
+// dialog opened with; OK persists (REQ-020 acceptance).
+// ---------------------------------------------------------------------------
+void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log) {
+  // Track the open edge so we can snapshot for Cancel-revert (REQ-020/021).
+  static bool   gWasOpen = false;
+  static int    gSnapPrecision = 4;
+  static int    gSnapAngType = 1;
+  static int    gSnapAngPrec = 1;
+  static bool   gSnapAngCw = true;
+  static double gSnapAngBase = 0.0;
+  if (cmd.showUnitsWindow && !gWasOpen) {  // entered the dialog: remember
+    gSnapPrecision = cmd.displayLinearPrecision;
+    gSnapAngType   = cmd.angleDisplayType;
+    gSnapAngPrec   = cmd.angleDisplayPrecision;
+    gSnapAngCw     = cmd.angleDisplayClockwise;
+    gSnapAngBase   = cmd.angleDisplayBaseDeg;
+  }
+  gWasOpen = cmd.showUnitsWindow;
+
+  if (!cmd.showUnitsWindow)
+    return;
+
+  auto revertAndClose = [&]() {
+    cmd.displayLinearPrecision   = std::clamp(gSnapPrecision, 0, 12);
+    cmd.angleDisplayType         = std::clamp(gSnapAngType, 0, 2);
+    cmd.angleDisplayPrecision    = std::clamp(gSnapAngPrec, 0, 6);
+    cmd.angleDisplayClockwise    = gSnapAngCw;
+    cmd.angleDisplayBaseDeg      = gSnapAngBase;
+    cmd.showUnitsWindow = false;
+  };
+
+  ImGui::SetNextWindowSize(ImVec2(520, 560), ImGuiCond_FirstUseEver);
+  bool open = cmd.showUnitsWindow;
+  if (!ImGui::Begin("Drawing Units", &open, ImGuiWindowFlags_NoCollapse)) {
+    ImGui::End();
+    if (!open) revertAndClose();  // window collapsed/closed via [X]
+    return;
+  }
+  if (!open) {  // [X] pressed: treat as Cancel
+    ImGui::End();
+    revertAndClose();
+    return;
+  }
+  // Esc closes as Cancel while the window is focused.
+  if (ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows) &&
+      ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    ImGui::End();
+    revertAndClose();
+    return;
+  }
+
+  // Precision dropdown: "0", "0.0", … "0.00000000" (0..8 decimals), AutoCAD-style.
+  static const char* kPrecLabels[] = {"0",         "0.0",       "0.00",      "0.000",
+                                       "0.0000",    "0.00000",   "0.000000",  "0.0000000",
+                                       "0.00000000"};
+  constexpr int kPrecCount = IM_ARRAYSIZE(kPrecLabels);
+
+  if (ImGui::BeginTable("##units_top", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
+    ImGui::TableNextRow();
+
+    // ---- Length ----
+    ImGui::TableSetColumnIndex(0);
+    BoxBegin("Length", 150.f);
+    {
+      ImGui::TextUnformatted("Type:");
+      const char* kLenTypes[] = {"Decimal"};
+      int lenType = 0;
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      ImGui::Combo("##len_type", &lenType, kLenTypes, IM_ARRAYSIZE(kLenTypes));
+      ItemHelpTooltip("GoSurvey works in decimal units (survey/civil norm). Other length formats are reserved.");
+
+      ImGui::Spacing();
+      ImGui::TextUnformatted("Precision:");
+      int precIdx = std::clamp(cmd.displayLinearPrecision, 0, kPrecCount - 1);
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      if (ImGui::Combo("##len_prec", &precIdx, kPrecLabels, kPrecCount))
+        cmd.displayLinearPrecision = std::clamp(precIdx, 0, kPrecCount - 1);
+      ItemHelpTooltip("Decimal places shown for all non-survey coordinate/length readouts: status bar, ID, INVERSE, dimensions, and properties. Display only — stored values keep full precision.");
+    }
+    BoxEnd();
+
+    // ---- Angle (REQ-021) ----
+    ImGui::TableSetColumnIndex(1);
+    BoxBegin("Angle", 200.f);
+    {
+      ImGui::TextUnformatted("Type:");
+      const char* kAngTypes[] = {"Decimal Degrees", "Deg/Min/Sec", "Surveyor's Units"};
+      int angType = std::clamp(cmd.angleDisplayType, 0, 2);
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      if (ImGui::Combo("##ang_type", &angType, kAngTypes, IM_ARRAYSIZE(kAngTypes)))
+        cmd.angleDisplayType = std::clamp(angType, 0, 2);
+
+      ImGui::Spacing();
+      ImGui::TextUnformatted("Precision (decimals on smallest unit):");
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      if (ImGui::DragInt("##ang_prec", &cmd.angleDisplayPrecision, 0.1f, 0, 6, "%d"))
+        cmd.angleDisplayPrecision = std::clamp(cmd.angleDisplayPrecision, 0, 6);
+
+      // Direction (clockwise/CCW) + base angle. Surveyor's units always reference
+      // the N-S meridian, so direction/base do not apply there.
+      ImGui::BeginDisabled(cmd.angleDisplayType == 2);
+      ImGui::Checkbox("Clockwise", &cmd.angleDisplayClockwise);
+      ImGui::TextUnformatted("Base (0\xc2\xb0):");
+      const char* kBaseNames[] = {"North", "East", "South", "West", "Custom"};
+      const double kBaseDeg[]  = {0.0, 90.0, 180.0, 270.0};
+      int baseSel = 4;  // Custom unless it matches a cardinal
+      for (int i = 0; i < 4; ++i)
+        if (std::abs(cmd.angleDisplayBaseDeg - kBaseDeg[i]) < 1e-6) baseSel = i;
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      if (ImGui::Combo("##ang_base", &baseSel, kBaseNames, IM_ARRAYSIZE(kBaseNames))) {
+        if (baseSel < 4) cmd.angleDisplayBaseDeg = kBaseDeg[baseSel];
+      }
+      if (baseSel == 4) {
+        ImGui::SetNextItemWidth(-FLT_MIN);
+        if (ImGui::InputDouble("##ang_base_custom", &cmd.angleDisplayBaseDeg, 0., 0., "%.4f\xc2\xb0 CW from north")) {
+          cmd.angleDisplayBaseDeg = std::fmod(cmd.angleDisplayBaseDeg, 360.0);
+          if (cmd.angleDisplayBaseDeg < 0.0) cmd.angleDisplayBaseDeg += 360.0;
+        }
+      }
+      ImGui::EndDisabled();
+    }
+    BoxEnd();
+    ImGui::EndTable();
+  }
+
+  // ---- Insertion scale (placeholder for REQ-022 / Phase 3) ----
+  BoxBegin("Insertion scale", 90.f);
+  ImGui::BeginDisabled();
+  {
+    ImGui::TextUnformatted("Units to scale inserted content:");
+    const char* kInsUnits[] = {"Feet"};
+    int insUnit = 0;
+    ImGui::SetNextItemWidth(220.f);
+    ImGui::Combo("##ins_units", &insUnit, kInsUnits, IM_ARRAYSIZE(kInsUnits));
+  }
+  ImGui::EndDisabled();
+  ImGui::TextDisabled("(Stored only — does not rescale inserted geometry. REQ-022.)");
+  BoxEnd();
+
+  // ---- Sample Output (live) ----
+  BoxBegin("Sample Output", 80.f);
+  {
+    const int p = cmd.displayLinearPrecision;
+    const std::string sx = FormatLinear(1.5, p);
+    const std::string sy = FormatLinear(2.0, p);
+    const std::string sz = FormatLinear(0.0, p);
+    ImGui::Text("%s, %s, %s", sx.c_str(), sy.c_str(), sz.c_str());
+    // Angle preview uses the current (pre-REQ-021) bearing formatter.
+    const std::string dist = FormatLinear(3.0, p);
+    ImGui::Text("%s < %s", dist.c_str(), FormatBearing(45.0, CadAngleDisplaySettings(cmd)).c_str());
+  }
+  BoxEnd();
+
+  ImGui::Separator();
+  if (ImGui::Button("OK", ImVec2(90.f, 0.f))) {
+    if (SaveUserStartupPrefs(cmd)) {
+      if (log) log->push_back("Drawing units saved (gosurvey-user.json).");
+    } else if (log) {
+      log->push_back("Error: failed to write gosurvey-user.json (check directory permissions).");
+    }
+    cmd.showUnitsWindow = false;
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", ImVec2(90.f, 0.f)))
+    revertAndClose();
+
+  ImGui::End();
 }

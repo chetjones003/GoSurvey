@@ -57,6 +57,9 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 
 void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
+/// Drawing Units dialog (UNITS command). REQ-020. Owns displayLinearPrecision.
+void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+
 void DrawImportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 
 void DrawExportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);

@@ -2,6 +2,7 @@
 #include "CadCoordinateFrame.hpp"
 #include "CadLinetype.hpp"
 #include "geom2d.hpp"
+#include "NumFormat.hpp"
 #include "MtextRichFormat.hpp"
 #include "StringUtil.hpp"
 #include "AppIcon.hpp"
@@ -515,9 +516,7 @@ bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cu
   d.dimExt2Y = y2;
   d.dimSignedOffset = dOff;
   d.plottedHeightInches = std::max(st.defaultPlottedTextHeightInches * 0.85f, 1.e-6f);
-  char buf[96];
-  std::snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(len));
-  d.text = buf;
+  d.text = FormatLinear(static_cast<double>(len), st.displayLinearPrecision);
   d.rotationRad = std::atan2(vy, vx);
   const float hWorld = CadAnnotationHeightWorld(d, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &d.insX, &d.insY);
@@ -604,9 +603,7 @@ bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy,
   d.dimSignedOffset = dOff;
   d.dimLinearVertical = vert;
   d.plottedHeightInches = std::max(st.defaultPlottedTextHeightInches * 0.85f, 1.e-6f);
-  char buf[96];
-  std::snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(meas));
-  d.text = buf;
+  d.text = FormatLinear(static_cast<double>(meas), st.displayLinearPrecision);
   float tx = 0.f, ty = 0.f;
   if (!vert) {
     tx = (x2 >= x1) ? 1.f : -1.f;
@@ -682,21 +679,19 @@ std::string CadFormatBearingCwNorthDegMinSec(float bearingDegClockwiseFromNorth)
   return std::string(buf);
 }
 
-void CadDimRefreshMeasurementText(CadAnnotation* ann) {
+void CadDimRefreshMeasurementText(CadAnnotation* ann, int linearPrecision, const AngleDisplaySettings& angle) {
   if (!ann)
     return;
   if (ann->kind == CadAnnotation::Kind::DimAligned || ann->kind == CadAnnotation::Kind::DimLinear) {
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (!CadDimAnyGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
       return;
-    char buf[96];
-    std::snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(ml));
-    ann->text = buf;
+    ann->text = FormatLinear(static_cast<double>(ml), linearPrecision);
   } else if (ann->kind == CadAnnotation::Kind::DimAngular) {
     float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
     if (!CadDimAngularComputeFrame(*ann, &a1, &a2, &sweep, &bisx, &bisy, &theta))
       return;
-    ann->text = CadFormatAngleDegMinSecFromRad(theta);
+    ann->text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), angle);
   }
 }
 
@@ -740,7 +735,7 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const float R = CadDimAngularPickRadius(vx, vy, bisx, bisy, cursorWx, cursorWy, rMin, rMax);
   d.dimSignedOffset = R;
   d.plottedHeightInches = std::max(st.defaultPlottedTextHeightInches * 0.85f, 1.e-6f);
-  d.text = CadFormatAngleDegMinSecFromRad(theta);
+  d.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(st));
   CadDimAngularSyncTextPlacement(&d, st.modelUnitsPerPlottedInch);
   *out = std::move(d);
   return true;
@@ -1039,6 +1034,7 @@ const CmdEntry kRegistry[] = {
     {"help", "", "Show command help"},
     {"regen", "re", "Regenerate the drawing"},
     {"layer", "la", "Open the Layer manager"},
+    {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"pdfattach", "pa", "Attach a PDF underlay"},
     {"overkill",     "ok", "Remove duplicate geometry"},
     {"align",        "al", "Align objects to others"},
@@ -1247,7 +1243,7 @@ static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vec
   const float R = CadDimAngularPickRadius(vx, vy, bisx, bisy, wx, wy, rMin, rMax);
   d.dimSignedOffset = R;
   d.plottedHeightInches = st.defaultPlottedTextHeightInches * 0.85f;
-  d.text = CadFormatAngleDegMinSecFromRad(theta);
+  d.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(st));
   CadDimAngularSyncTextPlacement(&d, st.modelUnitsPerPlottedInch);
   EntityAttributes at = MakeNewEntityAttrs(st);
   at.color = "#e1b12c";
@@ -1369,6 +1365,11 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     SyncDrawingLayerTableWithGeometry(st);
     st.showLayerManagerWindow = true;
     log.push_back("LAYER — layer manager opened.");
+    return true;
+  }
+  if (primary == "units") {
+    st.showUnitsWindow = true;
+    log.push_back("UNITS — drawing units dialog opened.");
     return true;
   }
   if (primary == "move") {
@@ -2911,7 +2912,7 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc) {
       ScaleCadDimLinearAroundBase(bx, by, sc, &a);
       ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
       a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
-      CadDimRefreshMeasurementText(&a);
+      CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
     } else if (a.kind == CadAnnotation::Kind::DimAligned) {
       ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
       ScalePtAroundBase(bx, by, sc, &a.dimExt2X, &a.dimExt2Y);
@@ -2921,7 +2922,7 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc) {
       float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
       if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
         a.rotationRad = std::atan2(ty, tx);
-      CadDimRefreshMeasurementText(&a);
+      CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
     } else if (a.kind == CadAnnotation::Kind::DimAngular) {
       ScalePtAroundBase(bx, by, sc, &a.dimAngVertexX, &a.dimAngVertexY);
       ScalePtAroundBase(bx, by, sc, &a.dimExt1X, &a.dimExt1Y);
@@ -2930,7 +2931,7 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc) {
       ScalePtAroundBase(bx, by, sc, &a.insX, &a.insY);
       a.plottedHeightInches = std::max(a.plottedHeightInches * sc, 1.e-6f);
       CadDimAngularSyncTextPlacement(&a, st.modelUnitsPerPlottedInch);
-      CadDimRefreshMeasurementText(&a);
+      CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
     }
   }
   // PDF underlays: scale insertion point around base; multiply uniform scale factor.
@@ -3464,8 +3465,10 @@ static void CommitIdPointAt(AppCommandState& st, float lx, float ly, std::vector
   double wx = 0.;
   double wy = 0.;
   CadCoord::WorldFromLocal(st, lx, ly, &wx, &wy);
-  char buf[192];
-  std::snprintf(buf, sizeof(buf), "ID — UCS (World)  X = %.6f  Y = %.6f  Z = 0.000000", wx, wy);
+  const int p = st.displayLinearPrecision;
+  char buf[256];
+  std::snprintf(buf, sizeof(buf), "ID — UCS (World)  X = %s  Y = %s  Z = %s",
+                FormatLinear(wx, p).c_str(), FormatLinear(wy, p).c_str(), FormatLinear(0.0, p).c_str());
   log.push_back(buf);
   st.active = AppCommandState::Kind::None;
 }
@@ -3482,13 +3485,12 @@ static void CommitSurveyInverseSecondPoint(AppCommandState& st, float x2, float 
   }
   const float theta = std::atan2(dn, de);
   const float brg = BearingCwNorthDegFromMathAngleRad(theta);
-  const std::string brgDms = CadFormatBearingCwNorthDegMinSec(brg);
+  const std::string brgStr = FormatBearing(static_cast<double>(brg), CadAngleDisplaySettings(st));
+  const int p = st.displayLinearPrecision;
   char buf[512];
-  std::snprintf(buf, sizeof(buf),
-                "INVERSE — ΔE = %.6f  ΔN = %.6f  horiz dist = %.6f  bearing = %s clockwise from north (%.4f° "
-                "decimal).",
-                static_cast<double>(de), static_cast<double>(dn), static_cast<double>(horiz), brgDms.c_str(),
-                static_cast<double>(brg));
+  std::snprintf(buf, sizeof(buf), "INVERSE — ΔE = %s  ΔN = %s  horiz dist = %s  bearing = %s",
+                FormatLinear(static_cast<double>(de), p).c_str(), FormatLinear(static_cast<double>(dn), p).c_str(),
+                FormatLinear(static_cast<double>(horiz), p).c_str(), brgStr.c_str());
   log.push_back(buf);
   st.active = K::None;
   st.surveyInversePhase = SIP::WaitFrom;
@@ -10224,7 +10226,7 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
       if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &ttx, &tty, &nx, &ny, &ml))
         ann.rotationRad = std::atan2(tty, ttx);
       ann.plottedHeightInches = std::max(ann.plottedHeightInches * sc, 1e-6f);
-      CadDimRefreshMeasurementText(&ann);
+      CadDimRefreshMeasurementText(&ann, st.displayLinearPrecision, CadAngleDisplaySettings(st));
       break;
     }
     case CadAnnotation::Kind::DimAngular:
@@ -10234,7 +10236,7 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
       ann.dimSignedOffset *= sc;
       ann.plottedHeightInches = std::max(ann.plottedHeightInches * sc, 1e-6f);
       CadDimAngularSyncTextPlacement(&ann, st.modelUnitsPerPlottedInch);
-      CadDimRefreshMeasurementText(&ann);
+      CadDimRefreshMeasurementText(&ann, st.displayLinearPrecision, CadAngleDisplaySettings(st));
       break;
     }
   }

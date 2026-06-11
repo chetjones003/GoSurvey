@@ -138,6 +138,8 @@ library and a handful of vetted libraries over a deep dependency graph.
 | 2026-06-10 | ADR-002 — separate `GoSurveyTests` executable + ctest for domain regression tests | Establishes the project's first test target without coupling tests to the GUI executable | accepted |
 | 2026-06-11 | Accept REQ-018 (editable per-leg observation sets) and amend REQ-013 (view-only scoped to the collapsed summary; editing via the expander) | User wants to expand a leg to add/edit observations and have the traverse re-derive; protection intent preserved (editing requires deliberate expand) | accepted |
 | 2026-06-11 | ADR-003 — store backsight reading on the leg + one `ReduceLegFromSets` reduction shared by import and edit | Edited sets need the backsight reference to reduce; keeps literal circle readings (REQ-010) and avoids silent no-op edits (REQ-201) | accepted |
+| 2026-06-11 | Accept REQ-020/021/022 (UNITS command + Drawing Units dialog; configurable angle display; insertion scale stored + settings persisted) | User wants an AutoCAD-style UNITS dialog owning display precision and angle/bearing format; follow-up to the display-precision unification. Display-only scope keeps storage/compute and angle entry unchanged | accepted |
+| 2026-06-11 | ADR-004 — configurable angle DISPLAY via a pure `AngleFormat` module; angle input convention unchanged | One tested seam for angle formatting reused by every readout (§11.4); preserves the CW-from-north convention for entry/geometry and REQ-101 fidelity; input-side ANGBASE/ANGDIR deferred | accepted |
 
 > **Change protocol:** any change to this file, `requirements.md`, or
 > `architecture.md` is a deliberate decision recorded here — never a quiet edit
