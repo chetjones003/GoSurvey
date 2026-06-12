@@ -696,12 +696,14 @@ void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log) {
   static int    gSnapAngPrec = 1;
   static bool   gSnapAngCw = true;
   static double gSnapAngBase = 0.0;
+  static int    gSnapInsUnits = 2;
   if (cmd.showUnitsWindow && !gWasOpen) {  // entered the dialog: remember
     gSnapPrecision = cmd.displayLinearPrecision;
     gSnapAngType   = cmd.angleDisplayType;
     gSnapAngPrec   = cmd.angleDisplayPrecision;
     gSnapAngCw     = cmd.angleDisplayClockwise;
     gSnapAngBase   = cmd.angleDisplayBaseDeg;
+    gSnapInsUnits  = cmd.drawingInsUnits;
   }
   gWasOpen = cmd.showUnitsWindow;
 
@@ -714,6 +716,7 @@ void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log) {
     cmd.angleDisplayPrecision    = std::clamp(gSnapAngPrec, 0, 6);
     cmd.angleDisplayClockwise    = gSnapAngCw;
     cmd.angleDisplayBaseDeg      = gSnapAngBase;
+    cmd.drawingInsUnits          = gSnapInsUnits;
     cmd.showUnitsWindow = false;
   };
 
@@ -811,18 +814,23 @@ void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log) {
     ImGui::EndTable();
   }
 
-  // ---- Insertion scale (placeholder for REQ-022 / Phase 3) ----
-  BoxBegin("Insertion scale", 90.f);
-  ImGui::BeginDisabled();
+  // ---- Insertion scale: drawing unit (AutoCAD INSUNITS relabel, REQ-022) ----
+  BoxBegin("Insertion scale", 95.f);
   {
     ImGui::TextUnformatted("Units to scale inserted content:");
-    const char* kInsUnits[] = {"Feet"};
-    int insUnit = 0;
+    const char* kInsNames[] = {"Feet", "Meters", "Unitless"};
+    const int   kInsCodes[] = {2, 6, 0};
+    int insSel = 0;
+    for (int i = 0; i < 3; ++i)
+      if (cmd.drawingInsUnits == kInsCodes[i]) insSel = i;
     ImGui::SetNextItemWidth(220.f);
-    ImGui::Combo("##ins_units", &insUnit, kInsUnits, IM_ARRAYSIZE(kInsUnits));
+    if (ImGui::Combo("##ins_units", &insSel, kInsNames, IM_ARRAYSIZE(kInsNames))) {
+      cmd.drawingInsUnits = kInsCodes[std::clamp(insSel, 0, 2)];
+      BumpCadGpuCache(cmd);  // document property: flag the drawing as modified
+    }
+    ItemHelpTooltip("AutoCAD INSUNITS. A relabel only: it tells the drawing (and the DXF $INSUNITS header) what unit it is in. It never rescales or converts geometry.");
   }
-  ImGui::EndDisabled();
-  ImGui::TextDisabled("(Stored only — does not rescale inserted geometry. REQ-022.)");
+  ImGui::TextDisabled("Relabel only — saved to the drawing (.gs) and DXF $INSUNITS; geometry unchanged.");
   BoxEnd();
 
   // ---- Sample Output (live) ----

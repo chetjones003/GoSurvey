@@ -254,21 +254,29 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-06-11 — initial.
 
-### REQ-022 — Insertion scale stored; settings persisted
-- Purpose: complete the dialog without over-reaching into insertion behavior
+### REQ-022 — Drawing unit (INSUNITS-style relabel), persisted to .gs and DXF
+- Purpose: tell the drawing what unit it is in, AutoCAD-faithfully, without ever
+  altering geometry
 - Priority: may
 - Type: functional
-- Statement: The Drawing Units "units to scale inserted content" selection is
-  stored and reflected in Sample Output but does not alter inserted/pasted
-  geometry this increment. All Drawing Units settings persist in the user prefs
-  file. Survey-point display precision (Settings → User Preferences) remains
-  independent and is not changed by UNITS.
-- Acceptance: the insertion-units selection persists and appears in Sample Output
-  with no change to inserted geometry; survey-point precision is unaffected by any
-  UNITS change.
-- Owner-layer: UI (dialog), IO (persistence)
+- Statement: The Drawing Units dialog sets the drawing's unit — Unitless, Feet,
+  or Meters — as a **relabel only**, mirroring AutoCAD's INSUNITS: it never
+  scales, converts, or otherwise alters any coordinate, length, survey point, or
+  text height. The unit is a **document property**: it is persisted in the `.gs`
+  file and written to the DXF `$INSUNITS` header on export (Feet=2, Meters=6,
+  Unitless=0). On DXF import, a present `$INSUNITS` sets the drawing's unit but
+  coordinates are read **unscaled** (1:1), so round-trip fidelity (REQ-002) is
+  preserved. Display precision and angle-format settings remain app-global user
+  prefs and are unaffected; survey-point display precision remains independent.
+- Acceptance: changing the unit changes no coordinate anywhere; export writes
+  `$INSUNITS` matching the unit; importing a DXF that carries `$INSUNITS` adopts
+  the unit with coordinates unchanged (a known point exported then re-imported is
+  identical within REQ-101 tolerance); a `.gs` save/load preserves the unit;
+  survey-point precision is unaffected.
+- Owner-layer: UI (dialog), IO (DXF + .gs persistence)
 - Status: accepted
-- Revisions: 2026-06-11 — initial.
+- Revisions: 2026-06-11 — initial (stored-only, user-pref). 2026-06-12 — amended
+  to an INSUNITS relabel persisted in .gs/DXF; no geometry scaling (decision log).
 
 ---
 

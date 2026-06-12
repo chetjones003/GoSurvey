@@ -369,6 +369,11 @@ struct AppCommandState {
   /// Plot scale: one plotted inch equals this many drawing units (e.g. 50 for 1 inch = 50 feet).
   float modelUnitsPerPlottedInch = 50.f;
   float defaultPlottedTextHeightInches = 0.125f;
+
+  /// Drawing unit, AutoCAD $INSUNITS code (REQ-022). A relabel only — never scales
+  /// geometry. Document property: persisted in .gs and the DXF header. Only the
+  /// survey-relevant codes are offered: 0=Unitless, 2=Feet, 6=Meters.
+  int drawingInsUnits = 2;
   /// Survey point X marker: horizontal span on paper (inches) → world half-extent = 0.5 × span × MUP (not zoom).
   float surveyPointCrossSpanPlottedInches = 0.14f;
   bool surveyPointShowIdInViewport = false;

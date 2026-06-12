@@ -1300,6 +1300,23 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
           else       { maxX = vx; maxY = vy; gotMax = true; }
         }
       }
+      // Drawing unit (REQ-022): adopt $INSUNITS as a relabel only — never scale
+      // coordinates, so the import stays 1:1 (REQ-002). Only the offered codes are
+      // accepted; anything else leaves the current unit unchanged.
+      for (size_t k = hb; k < he; ++k) {
+        if (pairs[k].code != 9 || pairs[k].value != "$INSUNITS")
+          continue;
+        for (size_t kk = k + 1; kk < he && pairs[kk].code != 9; ++kk) {
+          if (pairs[kk].code == 70) {
+            int u = 0;
+            if (ParseIntFlexible(pairs[kk].value, &u) && (u == 0 || u == 2 || u == 6))
+              st.drawingInsUnits = u;
+            break;
+          }
+        }
+        break;
+      }
+
       // Only trust HEADER extents if min and max are in the same coordinate system.
       // Civil 3D sometimes writes $EXTMIN in local/paper space and $EXTMAX in state-plane
       // (or vice-versa), producing a span of millions of feet. A span > 1e6 ft (~190 miles)
@@ -1640,6 +1657,10 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   emitPair(10, "0.0");
   emitPair(20, "0.0");
   emitPair(30, "0.0");
+  // Drawing unit (REQ-022): AutoCAD INSUNITS relabel. Metadata only — coordinates
+  // above/below are written unscaled, so this never changes geometry.
+  emitPair(9, "$INSUNITS");
+  emitPair(70, std::to_string(st.drawingInsUnits));
   emitPair(9, "$EXTMIN");
   emitPair(10, std::to_string(extMnX));
   emitPair(20, std::to_string(extMnY));
