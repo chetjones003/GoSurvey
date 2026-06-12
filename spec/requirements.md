@@ -278,6 +278,26 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-06-11 — initial (stored-only, user-pref). 2026-06-12 — amended
   to an INSUNITS relabel persisted in .gs/DXF; no geometry scaling (decision log).
 
+### REQ-023 — Survey points survive a DXF round-trip
+- Purpose: DXF is a safe interchange/backup for survey data, not just `.gs`
+- Priority: should
+- Type: functional
+- Statement: A GoSurvey drawing exported to DXF and re-imported reconstructs its
+  survey points with identity intact — id, easting, northing, elevation,
+  description, layer, and label style — and re-links each point's label. Identity
+  is carried in DXF XDATA under a registered `GOSURVEY` application id; a `POINT`
+  without that XDATA (e.g. from another program) still imports as a snappable
+  cross-line marker, so foreign-point behavior is unchanged. Coordinates
+  round-trip within REQ-101 tolerance (the existing world-origin translation is
+  preserved; nothing is scaled).
+- Acceptance: a drawing with N survey points exported then re-imported yields N
+  survey points with matching id, coordinates (within REQ-101), description, and
+  label style; each reconstructed point has a single linked label (no duplicate or
+  orphan MTEXT); a `POINT` from a non-GoSurvey DXF still imports as cross-lines.
+- Owner-layer: IO (DXF)
+- Status: accepted
+- Revisions: 2026-06-12 — initial (resolves issue #37).
+
 ---
 
 ## Performance requirements
@@ -384,6 +404,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
 | REQ-021 | Domain/UI | `AngleFormatTests` (DD/DMS/Surveyor's, direction/base, default parity) | accepted |
 | REQ-022 | UI/IO | manual (insertion units stored + sampled; survey precision independent) | accepted |
+| REQ-023 | IO | runtime DXF round-trip (survey points reconstructed via XDATA; foreign POINT → cross-lines) | accepted |
 
 ---
 
