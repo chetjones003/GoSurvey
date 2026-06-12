@@ -298,6 +298,27 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-06-12 — initial (resolves issue #37).
 
+### REQ-024 — AutoCAD-style dynamic input at the cursor for point prompts
+- Purpose: familiar, readable coordinate entry that matches AutoCAD dynamic input
+- Priority: should
+- Type: functional
+- Statement: When the active command prompt expects a coordinate point, the
+  cursor dynamic-input shows a prompt label plus **two coordinate fields** (X and
+  Y) that continuously display the crosshair's current **world** coordinates at
+  the configured display precision (REQ-020 `displayLinearPrecision`). The active
+  field is highlighted; typing overrides (locks) that field to the typed value;
+  Tab moves between the fields; Enter — or a viewport click — commits the point.
+  Prompts that do not expect a point (bearing/angle/distance/option/command-name
+  entry) keep a single input field. There is no Send button; commit is by Enter
+  or click.
+- Acceptance: starting LINE shows the "first point" prompt with two boxes that
+  track the cursor's easting/northing; typing locks the X field; Tab focuses Y;
+  Enter commits the shown/typed X,Y and a viewport click still places the point;
+  a non-point prompt (e.g. circle radius, bearing entry) shows a single field.
+- Owner-layer: UI
+- Status: accepted
+- Revisions: 2026-06-12 — initial.
+
 ---
 
 ## Performance requirements
@@ -405,6 +426,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-021 | Domain/UI | `AngleFormatTests` (DD/DMS/Surveyor's, direction/base, default parity) | accepted |
 | REQ-022 | UI/IO | manual (insertion units stored + sampled; survey precision independent) | accepted |
 | REQ-023 | IO | runtime DXF round-trip (survey points reconstructed via XDATA; foreign POINT → cross-lines) | accepted |
+| REQ-024 | UI | manual (LINE shows two live coord boxes; type locks X; Tab→Y; Enter/click commits; non-point prompt single field) | accepted |
 
 ---
 
