@@ -257,6 +257,8 @@ if(GOSURVEY_BUILD_TESTS)
   enable_testing()
   add_executable(GoSurveyTests
     tests/TraverseTests.cpp
+    tests/NumFormatTests.cpp
+    tests/AngleFormatTests.cpp
     src/traverse/TraverseCalc.cpp
     src/traverse/TraverseLeastSquares.cpp
     src/traverse/FbkImport.cpp

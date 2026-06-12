@@ -60,6 +60,16 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
     st.displayFadeXref = std::clamp(s["displayFadeXref"].get<int>(), 0, 90);
   if (s.contains("displayFadeInPlace") && s["displayFadeInPlace"].is_number_integer())
     st.displayFadeInPlace = std::clamp(s["displayFadeInPlace"].get<int>(), 0, 90);
+  if (s.contains("displayLinearPrecision") && s["displayLinearPrecision"].is_number_integer())
+    st.displayLinearPrecision = std::clamp(s["displayLinearPrecision"].get<int>(), 0, 12);
+  if (s.contains("angleDisplayType") && s["angleDisplayType"].is_number_integer())
+    st.angleDisplayType = std::clamp(s["angleDisplayType"].get<int>(), 0, 2);
+  if (s.contains("angleDisplayPrecision") && s["angleDisplayPrecision"].is_number_integer())
+    st.angleDisplayPrecision = std::clamp(s["angleDisplayPrecision"].get<int>(), 0, 6);
+  if (s.contains("angleDisplayClockwise") && s["angleDisplayClockwise"].is_boolean())
+    st.angleDisplayClockwise = s["angleDisplayClockwise"].get<bool>();
+  if (s.contains("angleDisplayBaseDeg") && s["angleDisplayBaseDeg"].is_number())
+    st.angleDisplayBaseDeg = s["angleDisplayBaseDeg"].get<double>();
   if (s.contains("systemHardwareAcceleration") && s["systemHardwareAcceleration"].is_boolean())
     st.systemHardwareAcceleration = s["systemHardwareAcceleration"].get<bool>();
   if (s.contains("gfxSmoothLineDisplay") && s["gfxSmoothLineDisplay"].is_boolean())
@@ -83,6 +93,8 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   // --- Survey point settings (User Preferences tab) ---
   num("surveyPointCrossSpanPlottedInches",    &st.surveyPointCrossSpanPlottedInches,    0.02f, 2.f);
   b  ("surveyPointShowIdInViewport",          &st.surveyPointShowIdInViewport);
+  if (s.contains("surveyPointDisplayPrecision") && s["surveyPointDisplayPrecision"].is_number_integer())
+    st.surveyPointDisplayPrecision = std::clamp(s["surveyPointDisplayPrecision"].get<int>(), 0, 12);
   num("surveyPointLabelPlottedHeightInches",  &st.surveyPointLabelPlottedHeightInches,  0.04f, 0.5f);
   num("surveyLabelOffsetEastPlottedIn",       &st.surveyLabelOffsetEastPlottedIn,       -2.f, 4.f);
   num("surveyLabelOffsetNorthPlottedIn",      &st.surveyLabelOffsetNorthPlottedIn,      -2.f, 4.f);
@@ -232,6 +244,11 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["displayWheelZoomFactor"]      = st.displayWheelZoomFactor;
   s["displayFadeXref"]             = st.displayFadeXref;
   s["displayFadeInPlace"]          = st.displayFadeInPlace;
+  s["displayLinearPrecision"]      = st.displayLinearPrecision;
+  s["angleDisplayType"]            = st.angleDisplayType;
+  s["angleDisplayPrecision"]       = st.angleDisplayPrecision;
+  s["angleDisplayClockwise"]       = st.angleDisplayClockwise;
+  s["angleDisplayBaseDeg"]         = st.angleDisplayBaseDeg;
   s["systemHardwareAcceleration"]  = st.systemHardwareAcceleration;
   s["gfxSmoothLineDisplay"]        = st.gfxSmoothLineDisplay;
   s["gfxAcceleratedFontDisplay"]   = st.gfxAcceleratedFontDisplay;
@@ -251,6 +268,7 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   // Survey point settings
   s["surveyPointCrossSpanPlottedInches"]   = st.surveyPointCrossSpanPlottedInches;
   s["surveyPointShowIdInViewport"]         = st.surveyPointShowIdInViewport;
+  s["surveyPointDisplayPrecision"]         = st.surveyPointDisplayPrecision;
   s["surveyPointLabelPlottedHeightInches"] = st.surveyPointLabelPlottedHeightInches;
   s["surveyLabelOffsetEastPlottedIn"]      = st.surveyLabelOffsetEastPlottedIn;
   s["surveyLabelOffsetNorthPlottedIn"]     = st.surveyLabelOffsetNorthPlottedIn;

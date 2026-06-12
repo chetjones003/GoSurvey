@@ -272,3 +272,26 @@ A change is rejected if it breaks any of these:
 - Consequences: first test target for the repo; Catch2 added as a test-only
   FetchContent dependency (recorded in the decision log per REQ-300); domain
   code must stay linkable without the UI/GL layers (a healthy layering pressure).
+
+### ADR-004 — Configurable angle DISPLAY via a pure formatter module   (2026-06-11, accepted)
+- Context:    REQ-021 makes angle/bearing presentation user-configurable (format,
+  precision, direction, base angle). The application has a single app-wide angle
+  convention — bearings clockwise from north — baked into hard-coded formatters
+  (`CadFormatBearingCwNorthDegMinSec`, `%.4f°`). Making display configurable
+  touches every angle readout, so it is an architectural decision, not a Workshop
+  choice.
+- Decision:   Add a Domain/util-layer **pure** `AngleFormat` module (the angle
+  analog of `NumFormat.hpp`) that, given angle-format settings (type, precision,
+  direction, base), formats an angle for display. The stored/compute convention
+  (CW-from-north, used for angle *entry* and geometry) is unchanged; the new
+  module is a display layer over it. Settings live on `AppCommandState` and
+  persist via `UserPrefs`. No third-party dependency.
+- Alternatives: (a) make `ANGBASE/ANGDIR` reinterpret angle *input* too — rejected
+  this increment: it touches every angle-entry path and is a larger, riskier
+  change (deferred; would need its own REQ). (b) Scatter format branches into each
+  readout — rejected: duplicates logic and is untestable without the UI (violates
+  the ADR-002 layering pressure and §11.2).
+- Consequences: angle display becomes one tested seam reused by ≥2 readouts
+  (satisfies §11.4); the underlying convention is preserved so existing geometry,
+  angle entry, and REQ-101 fidelity are untouched; default settings must reproduce
+  the previous bearing output (guarded by a parity test).

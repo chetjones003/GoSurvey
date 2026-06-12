@@ -233,6 +233,7 @@ json BuildRoot(const AppCommandState& st) {
   doc["worldDocumentOriginX"] = st.worldDocumentOriginX;
   doc["worldDocumentOriginY"] = st.worldDocumentOriginY;
   doc["modelUnitsPerPlottedInch"] = st.modelUnitsPerPlottedInch;
+  doc["drawingInsUnits"] = st.drawingInsUnits;
   doc["defaultPlottedTextHeightInches"] = st.defaultPlottedTextHeightInches;
   doc["currentLayer"] = st.currentLayer;
   doc["lineVerts"] = st.userLinesFlat;
@@ -561,6 +562,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.worldDocumentOriginX = doc.value("worldDocumentOriginX", 0.0);
   st.worldDocumentOriginY = doc.value("worldDocumentOriginY", 0.0);
   st.modelUnitsPerPlottedInch = doc.value("modelUnitsPerPlottedInch", 50.f);
+  st.drawingInsUnits = doc.value("drawingInsUnits", 2);
   st.defaultPlottedTextHeightInches = doc.value("defaultPlottedTextHeightInches", 0.125f);
   if (doc.contains("currentLayer") && doc["currentLayer"].is_string())
     st.currentLayer = doc["currentLayer"].get<std::string>();

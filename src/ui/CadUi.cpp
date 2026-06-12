@@ -4,6 +4,7 @@
 #include "MtextRichFormat.hpp"
 
 #include "CadLinetype.hpp"
+#include "NumFormat.hpp"
 #include "DxfIo.hpp"
 #include "AppIcon.hpp"
 #include "GsIo.hpp"
@@ -1839,10 +1840,8 @@ std::string MergeFloatsFmt(const std::vector<float>& v, const char* fmt, float e
   return buf;
 }
 
-std::string FormatXY(float x, float y) {
-  char buf[96];
-  std::snprintf(buf, sizeof(buf), "%.4f, %.4f", static_cast<double>(x), static_cast<double>(y));
-  return buf;
+std::string FormatXY(float x, float y, int precision) {
+  return FormatLinear(static_cast<double>(x), precision) + ", " + FormatLinear(static_cast<double>(y), precision);
 }
 
 /// Clockwise from north (+Y): **north = 0°**, east = 90°, decimal degrees [0, 360). App-wide bearing convention.
@@ -2875,6 +2874,7 @@ void DrawSingleLineGeometryEditable(AppCommandState& cmd, int lineIdx) {
   float* y0 = &cmd.userLinesFlat[k + 1];
   float* x1 = &cmd.userLinesFlat[k + 3];
   float* y1 = &cmd.userLinesFlat[k + 4];
+  const std::string cfmt = DisplayFloatFmt(cmd.displayLinearPrecision);
 
   if (ImGui::BeginTable("props_geom_line_ed", 2, kPropTableFlags)) {
     ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
@@ -2885,7 +2885,7 @@ void DrawSingleLineGeometryEditable(AppCommandState& cmd, int lineIdx) {
     ImGui::TextUnformatted("Start X");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##lsx", x0, 0.f, 0.f, "%.4f");
+    ImGui::InputFloat("##lsx", x0, 0.f, 0.f, cfmt.c_str());
     if (ImGui::IsItemDeactivatedAfterEdit())
       BumpCadGpuCache(cmd);
 
@@ -2894,7 +2894,7 @@ void DrawSingleLineGeometryEditable(AppCommandState& cmd, int lineIdx) {
     ImGui::TextUnformatted("Start Y");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##lsy", y0, 0.f, 0.f, "%.4f");
+    ImGui::InputFloat("##lsy", y0, 0.f, 0.f, cfmt.c_str());
     if (ImGui::IsItemDeactivatedAfterEdit())
       BumpCadGpuCache(cmd);
 
@@ -2903,7 +2903,7 @@ void DrawSingleLineGeometryEditable(AppCommandState& cmd, int lineIdx) {
     ImGui::TextUnformatted("End X");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##lex", x1, 0.f, 0.f, "%.4f");
+    ImGui::InputFloat("##lex", x1, 0.f, 0.f, cfmt.c_str());
     if (ImGui::IsItemDeactivatedAfterEdit())
       BumpCadGpuCache(cmd);
 
@@ -2912,7 +2912,7 @@ void DrawSingleLineGeometryEditable(AppCommandState& cmd, int lineIdx) {
     ImGui::TextUnformatted("End Y");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##ley", y1, 0.f, 0.f, "%.4f");
+    ImGui::InputFloat("##ley", y1, 0.f, 0.f, cfmt.c_str());
     if (ImGui::IsItemDeactivatedAfterEdit())
       BumpCadGpuCache(cmd);
 
@@ -2923,18 +2923,16 @@ void DrawSingleLineGeometryEditable(AppCommandState& cmd, int lineIdx) {
   const float dy = *y1 - *y0;
   const float len = std::sqrt(dx * dx + dy * dy);
   const float bear = BearingDegreesCwFromNorth(dx, dy);
-  char lenBuf[64];
-  char bearBuf[64];
-  std::snprintf(lenBuf, sizeof(lenBuf), "%.4f", static_cast<double>(len));
-  std::snprintf(bearBuf, sizeof(bearBuf), "%.4f°", static_cast<double>(bear));
+  const std::string lenStr = FormatLinear(static_cast<double>(len), cmd.displayLinearPrecision);
+  const std::string bearStr = FormatBearing(static_cast<double>(bear), CadAngleDisplaySettings(cmd));
 
   ImGui::Spacing();
   ImGui::TextDisabled("Derived");
   if (ImGui::BeginTable("props_geom_line_derived", 2, kPropTableFlags)) {
     ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
-    PropRow("Length", lenBuf);
-    PropRow("Rotation rel. north", bearBuf);
+    PropRow("Length", lenStr.c_str());
+    PropRow("Rotation rel. north", bearStr.c_str());
     ImGui::EndTable();
   }
 }
@@ -2948,6 +2946,7 @@ void DrawSingleCircleGeometryEditable(AppCommandState& cmd, int circleIdx) {
   float* cx = &cmd.userCirclesCxCyR[k];
   float* cy = &cmd.userCirclesCxCyR[k + 1];
   float* r = &cmd.userCirclesCxCyR[k + 2];
+  const std::string cfmt = DisplayFloatFmt(cmd.displayLinearPrecision);
 
   if (ImGui::BeginTable("props_geom_circ_ed", 2, kPropTableFlags)) {
     ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
@@ -2958,7 +2957,7 @@ void DrawSingleCircleGeometryEditable(AppCommandState& cmd, int circleIdx) {
     ImGui::TextUnformatted("Center X");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##cx", cx, 0.f, 0.f, "%.4f");
+    ImGui::InputFloat("##cx", cx, 0.f, 0.f, cfmt.c_str());
     if (ImGui::IsItemDeactivatedAfterEdit())
       BumpCadGpuCache(cmd);
 
@@ -2967,7 +2966,7 @@ void DrawSingleCircleGeometryEditable(AppCommandState& cmd, int circleIdx) {
     ImGui::TextUnformatted("Center Y");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##cy", cy, 0.f, 0.f, "%.4f");
+    ImGui::InputFloat("##cy", cy, 0.f, 0.f, cfmt.c_str());
     if (ImGui::IsItemDeactivatedAfterEdit())
       BumpCadGpuCache(cmd);
 
@@ -2976,7 +2975,7 @@ void DrawSingleCircleGeometryEditable(AppCommandState& cmd, int circleIdx) {
     ImGui::TextUnformatted("Radius");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##cr", r, 0.f, 0.f, "%.4f");
+    ImGui::InputFloat("##cr", r, 0.f, 0.f, cfmt.c_str());
     if (*r < 1e-6f)
       *r = 1e-6f;
     if (ImGui::IsItemDeactivatedAfterEdit())
@@ -2989,19 +2988,18 @@ void DrawSingleCircleGeometryEditable(AppCommandState& cmd, int circleIdx) {
   const float diam = 2.f * (*r);
   const float circ = 2.f * kPi * (*r);
   const float area = kPi * (*r) * (*r);
-  char dBuf[64], cBuf[64], aBuf[64];
-  std::snprintf(dBuf, sizeof(dBuf), "%.4f", static_cast<double>(diam));
-  std::snprintf(cBuf, sizeof(cBuf), "%.4f", static_cast<double>(circ));
-  std::snprintf(aBuf, sizeof(aBuf), "%.4f", static_cast<double>(area));
+  const std::string dStr = FormatLinear(static_cast<double>(diam), cmd.displayLinearPrecision);
+  const std::string cStr = FormatLinear(static_cast<double>(circ), cmd.displayLinearPrecision);
+  const std::string aStr = FormatLinear(static_cast<double>(area), cmd.displayLinearPrecision);
 
   ImGui::Spacing();
   ImGui::TextDisabled("Derived");
   if (ImGui::BeginTable("props_geom_circ_derived", 2, kPropTableFlags)) {
     ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
-    PropRow("Diameter", dBuf);
-    PropRow("Circumference", cBuf);
-    PropRow("Area", aBuf);
+    PropRow("Diameter", dStr.c_str());
+    PropRow("Circumference", cStr.c_str());
+    PropRow("Area", aStr.c_str());
     ImGui::EndTable();
   }
 }
@@ -3025,18 +3023,25 @@ void DrawLineGeometryOnly(const AppCommandState& cmd, const std::vector<Selected
   auto mergeCoord = [&](const std::vector<float>& xs, const std::vector<float>& ys) -> std::string {
     if (xs.empty() || ys.empty() || xs.size() != ys.size())
       return "---";
-    std::string ref = FormatXY(xs[0], ys[0]);
+    std::string ref = FormatXY(xs[0], ys[0], cmd.displayLinearPrecision);
     for (size_t i = 1; i < xs.size(); ++i) {
-      if (FormatXY(xs[i], ys[i]) != ref)
+      if (FormatXY(xs[i], ys[i], cmd.displayLinearPrecision) != ref)
         return kVaries;
     }
     return ref;
   };
   const std::string startPt = mergeCoord(vx0, vy0);
   const std::string endPt = mergeCoord(vx1, vy1);
-  const std::string lenStr = MergeFloatsFmt(vlen, "%.4f");
-  std::string bearStr =
-      vbear.empty() ? std::string("---") : MergeFloatsFmt(vbear, "%.4f°", 1e-4f);
+  const std::string lenStr = MergeFloatsFmt(vlen, DisplayFloatFmt(cmd.displayLinearPrecision).c_str());
+  std::string bearStr;
+  if (vbear.empty()) {
+    bearStr = "---";
+  } else {
+    const AngleDisplaySettings as = CadAngleDisplaySettings(cmd);
+    bearStr = FormatBearing(static_cast<double>(vbear[0]), as);
+    for (size_t i = 1; i < vbear.size(); ++i)
+      if (FormatBearing(static_cast<double>(vbear[i]), as) != bearStr) { bearStr = kVaries; break; }
+  }
 
   if (!PropSectionHeader("Geometry"))
     return;
@@ -3068,9 +3073,9 @@ void DrawCircleGeometryOnly(const AppCommandState& cmd, const std::vector<Select
   const std::string ctr = [&]() -> std::string {
     if (cxv.empty())
       return "---";
-    std::string ref = FormatXY(cxv[0], cyv[0]);
+    std::string ref = FormatXY(cxv[0], cyv[0], cmd.displayLinearPrecision);
     for (size_t i = 1; i < cxv.size(); ++i) {
-      if (FormatXY(cxv[i], cyv[i]) != ref)
+      if (FormatXY(cxv[i], cyv[i], cmd.displayLinearPrecision) != ref)
         return kVaries;
     }
     return ref;
@@ -3081,11 +3086,12 @@ void DrawCircleGeometryOnly(const AppCommandState& cmd, const std::vector<Select
   if (ImGui::BeginTable("props_geom_circ", 2, kPropTableFlags)) {
     ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.42f);
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.58f);
+    const std::string cfmt = DisplayFloatFmt(cmd.displayLinearPrecision);
     PropRow("Center", ctr);
-    PropRow("Radius", MergeFloatsFmt(rv, "%.4f"));
-    PropRow("Diameter", MergeFloatsFmt(diamv, "%.4f"));
-    PropRow("Circumference", MergeFloatsFmt(circv, "%.4f"));
-    PropRow("Area", MergeFloatsFmt(areav, "%.4f"));
+    PropRow("Radius", MergeFloatsFmt(rv, cfmt.c_str()));
+    PropRow("Diameter", MergeFloatsFmt(diamv, cfmt.c_str()));
+    PropRow("Circumference", MergeFloatsFmt(circv, cfmt.c_str()));
+    PropRow("Area", MergeFloatsFmt(areav, cfmt.c_str()));
     ImGui::EndTable();
   }
 }
@@ -3097,6 +3103,7 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
     return;
   EnsureAttrCounts(cmd);
   CadAnnotation& ann = cmd.cadAnnotations[static_cast<size_t>(annIdx)];
+  const std::string cfmt = DisplayFloatFmt(cmd.displayLinearPrecision);
 
   const char* kindLabel =
       ann.kind == CadAnnotation::Kind::Text       ? "TEXT"
@@ -3133,7 +3140,7 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
     ImGui::TextUnformatted("Insertion X");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##ainsx", &ann.insX, 0.f, 0.f, "%.4f");
+    ImGui::InputFloat("##ainsx", &ann.insX, 0.f, 0.f, cfmt.c_str());
     if (ImGui::IsItemDeactivatedAfterEdit()) {
       if (ann.kind == CadAnnotation::Kind::Mtext) {
         const float dx = ann.insX - ann.boxMinX;
@@ -3148,7 +3155,7 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
     ImGui::TextUnformatted("Insertion Y");
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##ainsy", &ann.insY, 0.f, 0.f, "%.4f");
+    ImGui::InputFloat("##ainsy", &ann.insY, 0.f, 0.f, cfmt.c_str());
     if (ImGui::IsItemDeactivatedAfterEdit()) {
       if (ann.kind == CadAnnotation::Kind::Mtext) {
         const float dy = ann.insY - ann.boxMinY;
@@ -3189,7 +3196,7 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
       ImGui::TextUnformatted("Box min X");
       ImGui::TableNextColumn();
       ImGui::SetNextItemWidth(-1);
-      ImGui::InputFloat("##bmix", &ann.boxMinX, 0.f, 0.f, "%.4f");
+      ImGui::InputFloat("##bmix", &ann.boxMinX, 0.f, 0.f, cfmt.c_str());
       if (ImGui::IsItemDeactivatedAfterEdit()) {
         syncMtextInsFromBox();
         BumpCadGpuCache(cmd);
@@ -3200,7 +3207,7 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
       ImGui::TextUnformatted("Box min Y");
       ImGui::TableNextColumn();
       ImGui::SetNextItemWidth(-1);
-      ImGui::InputFloat("##bmiy", &ann.boxMinY, 0.f, 0.f, "%.4f");
+      ImGui::InputFloat("##bmiy", &ann.boxMinY, 0.f, 0.f, cfmt.c_str());
       if (ImGui::IsItemDeactivatedAfterEdit()) {
         syncMtextInsFromBox();
         BumpCadGpuCache(cmd);
@@ -3211,7 +3218,7 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
       ImGui::TextUnformatted("Box max X");
       ImGui::TableNextColumn();
       ImGui::SetNextItemWidth(-1);
-      ImGui::InputFloat("##bmax", &ann.boxMaxX, 0.f, 0.f, "%.4f");
+      ImGui::InputFloat("##bmax", &ann.boxMaxX, 0.f, 0.f, cfmt.c_str());
       if (ImGui::IsItemDeactivatedAfterEdit()) {
         syncMtextInsFromBox();
         BumpCadGpuCache(cmd);
@@ -3222,7 +3229,7 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
       ImGui::TextUnformatted("Box max Y");
       ImGui::TableNextColumn();
       ImGui::SetNextItemWidth(-1);
-      ImGui::InputFloat("##bmay", &ann.boxMaxY, 0.f, 0.f, "%.4f");
+      ImGui::InputFloat("##bmay", &ann.boxMaxY, 0.f, 0.f, cfmt.c_str());
       if (ImGui::IsItemDeactivatedAfterEdit()) {
         syncMtextInsFromBox();
         BumpCadGpuCache(cmd);
@@ -3243,20 +3250,16 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
   ImGui::Spacing();
   ImGui::TextDisabled("Derived");
   const float hWorld = CadAnnotationHeightWorld(ann, cmd.modelUnitsPerPlottedInch);
-  char hbuf[96];
-  std::snprintf(hbuf, sizeof(hbuf), "%.4f model units", static_cast<double>(hWorld));
+  const std::string hStr = FormatLinear(static_cast<double>(hWorld), cmd.displayLinearPrecision) + " model units";
   if (ImGui::BeginTable("props_geom_ann_derived", 2, kPropTableFlags)) {
     ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
-    PropRow("Model text height", std::string(hbuf));
+    PropRow("Model text height", hStr);
     if (ann.kind == CadAnnotation::Kind::Mtext) {
       const float bw = std::fabs(ann.boxMaxX - ann.boxMinX);
       const float bh = std::fabs(ann.boxMaxY - ann.boxMinY);
-      char wbuf[64], h2buf[64];
-      std::snprintf(wbuf, sizeof(wbuf), "%.4f", static_cast<double>(bw));
-      std::snprintf(h2buf, sizeof(h2buf), "%.4f", static_cast<double>(bh));
-      PropRow("Box width", std::string(wbuf));
-      PropRow("Box height", std::string(h2buf));
+      PropRow("Box width", FormatLinear(static_cast<double>(bw), cmd.displayLinearPrecision));
+      PropRow("Box height", FormatLinear(static_cast<double>(bh), cmd.displayLinearPrecision));
     }
     ImGui::EndTable();
   }
@@ -3287,17 +3290,16 @@ void DrawAnnotationGeometryOnly(const AppCommandState& cmd, const std::vector<Se
     ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.42f);
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.58f);
     PropRow("Kind", MergeStrings(kinds));
+    const std::string mfmt = DisplayFloatFmt(cmd.displayLinearPrecision);
     PropRow("Plotted height (in)", MergeFloatsFmt(phIn, "%.4f"));
-    PropRow("Model text height", MergeFloatsFmt(mwHeight, "%.4f"));
+    PropRow("Model text height", MergeFloatsFmt(mwHeight, mfmt.c_str()));
+    const int prec = cmd.displayLinearPrecision;
     const std::string insXs = [&]() -> std::string {
       if (insX.empty())
         return "---";
-      char b[64];
-      std::snprintf(b, sizeof(b), "%.4f", static_cast<double>(insX[0]));
-      std::string ref(b);
+      std::string ref = FormatLinear(static_cast<double>(insX[0]), prec);
       for (size_t i = 1; i < insX.size(); ++i) {
-        std::snprintf(b, sizeof(b), "%.4f", static_cast<double>(insX[i]));
-        if (std::string(b) != ref)
+        if (FormatLinear(static_cast<double>(insX[i]), prec) != ref)
           return kVaries;
       }
       return ref;
@@ -3305,19 +3307,26 @@ void DrawAnnotationGeometryOnly(const AppCommandState& cmd, const std::vector<Se
     const std::string insYs = [&]() -> std::string {
       if (insY.empty())
         return "---";
-      char b[64];
-      std::snprintf(b, sizeof(b), "%.4f", static_cast<double>(insY[0]));
-      std::string ref(b);
+      std::string ref = FormatLinear(static_cast<double>(insY[0]), prec);
       for (size_t i = 1; i < insY.size(); ++i) {
-        std::snprintf(b, sizeof(b), "%.4f", static_cast<double>(insY[i]));
-        if (std::string(b) != ref)
+        if (FormatLinear(static_cast<double>(insY[i]), prec) != ref)
           return kVaries;
       }
       return ref;
     }();
     PropRow("Insertion X", insXs);
     PropRow("Insertion Y", insYs);
-    PropRow("Rotation ° CW from N", MergeFloatsFmt(rotDeg, "%.2f", 1e-3f));
+    const std::string rotStr = [&]() -> std::string {
+      if (rotDeg.empty())
+        return "---";
+      const AngleDisplaySettings as = CadAngleDisplaySettings(cmd);
+      std::string ref = FormatBearing(static_cast<double>(rotDeg[0]), as);
+      for (size_t i = 1; i < rotDeg.size(); ++i)
+        if (FormatBearing(static_cast<double>(rotDeg[i]), as) != ref)
+          return kVaries;
+      return ref;
+    }();
+    PropRow("Rotation rel. north", rotStr);
     ImGui::EndTable();
   }
   ImGui::TextDisabled("Select a single TEXT or MTEXT to edit content and box here.");
@@ -3443,7 +3452,7 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
       {
         double dn = static_cast<double>(CadCoord::WorldYFromLocal(cmd, p.northing));
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::InputDouble("##svy_n", &dn, 0., 0., "%.6f");
+        ImGui::InputDouble("##svy_n", &dn, 0., 0., DisplayFloatFmt(cmd.surveyPointDisplayPrecision).c_str());
         if (ImGui::IsItemDeactivatedAfterEdit()) {
           const double wx = static_cast<double>(CadCoord::WorldXFromLocal(cmd, p.easting));
           CadCoord::LocalFromWorld(cmd, wx, dn, &p.easting, &p.northing);
@@ -3457,7 +3466,7 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
       {
         double de = static_cast<double>(CadCoord::WorldXFromLocal(cmd, p.easting));
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::InputDouble("##svy_e", &de, 0., 0., "%.6f");
+        ImGui::InputDouble("##svy_e", &de, 0., 0., DisplayFloatFmt(cmd.surveyPointDisplayPrecision).c_str());
         if (ImGui::IsItemDeactivatedAfterEdit()) {
           const double wy = static_cast<double>(CadCoord::WorldYFromLocal(cmd, p.northing));
           CadCoord::LocalFromWorld(cmd, de, wy, &p.easting, &p.northing);
@@ -3471,7 +3480,7 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
       {
         double dz = static_cast<double>(p.elevation);
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::InputDouble("##svy_z", &dz, 0., 0., "%.4f");
+        ImGui::InputDouble("##svy_z", &dz, 0., 0., DisplayFloatFmt(cmd.surveyPointDisplayPrecision).c_str());
         if (ImGui::IsItemDeactivatedAfterEdit()) {
           p.elevation = static_cast<float>(dz);
           EnsureSurveyPointLabelMtext(cmd, static_cast<size_t>(rowIx), log);
@@ -3545,7 +3554,6 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
       gSameStyle = true;
       gSameId = true;
       gSameE = gSameN = gSameZ = gSameLayer = gSameDesc = true;
-      char tmp[96];
       for (int ix : ixv) {
         if (ix < 0 || static_cast<size_t>(ix) >= cmd.surveyPoints.size())
           continue;
@@ -3565,23 +3573,19 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
         if (q.description != r.description)
           gSameDesc = false;
       }
+      const int sprec = cmd.surveyPointDisplayPrecision;
       gBufId = gSameId ? std::to_string(r.id) : std::string("VARIES");
-      if (gSameE) {
-        std::snprintf(tmp, sizeof(tmp), "%.6f",
-                      static_cast<double>(CadCoord::WorldXFromLocal(cmd, r.easting)));
-        gBufE = tmp;
-      } else
+      if (gSameE)
+        gBufE = FormatLinear(static_cast<double>(CadCoord::WorldXFromLocal(cmd, r.easting)), sprec);
+      else
         gBufE = "VARIES";
-      if (gSameN) {
-        std::snprintf(tmp, sizeof(tmp), "%.6f",
-                      static_cast<double>(CadCoord::WorldYFromLocal(cmd, r.northing)));
-        gBufN = tmp;
-      } else
+      if (gSameN)
+        gBufN = FormatLinear(static_cast<double>(CadCoord::WorldYFromLocal(cmd, r.northing)), sprec);
+      else
         gBufN = "VARIES";
-      if (gSameZ) {
-        std::snprintf(tmp, sizeof(tmp), "%.4f", static_cast<double>(r.elevation));
-        gBufZ = tmp;
-      } else
+      if (gSameZ)
+        gBufZ = FormatLinear(static_cast<double>(r.elevation), sprec);
+      else
         gBufZ = "VARIES";
       gBufLayer = gSameLayer ? r.layer : std::string("VARIES");
       gBufDesc = gSameDesc ? r.description : std::string("VARIES");
@@ -3700,9 +3704,10 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
       }
     };
 
-    applyCoord("Northing (Y)", "##svy_m_n_d", "##svy_m_n", &gBufN, gSameN, &SurveyPoint::northing, "%.6f");
-    applyCoord("Easting (X)", "##svy_m_e_d", "##svy_m_e", &gBufE, gSameE, &SurveyPoint::easting, "%.6f");
-    applyCoord("Elevation", "##svy_m_z_d", "##svy_m_z", &gBufZ, gSameZ, &SurveyPoint::elevation, "%.4f");
+    const std::string svyFmt = DisplayFloatFmt(cmd.surveyPointDisplayPrecision);
+    applyCoord("Northing (Y)", "##svy_m_n_d", "##svy_m_n", &gBufN, gSameN, &SurveyPoint::northing, svyFmt.c_str());
+    applyCoord("Easting (X)", "##svy_m_e_d", "##svy_m_e", &gBufE, gSameE, &SurveyPoint::easting, svyFmt.c_str());
+    applyCoord("Elevation", "##svy_m_z_d", "##svy_m_z", &gBufZ, gSameZ, &SurveyPoint::elevation, svyFmt.c_str());
 
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
@@ -3945,9 +3950,9 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
         ImGui::Separator();
         ImGui::TextDisabled("Placement");
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::InputFloat("Insert X##pdfprop", &att.insertX, 0.f, 0.f, "%.4f");
+        ImGui::InputFloat("Insert X##pdfprop", &att.insertX, 0.f, 0.f, DisplayFloatFmt(cmd.displayLinearPrecision).c_str());
         ImGui::SetNextItemWidth(-FLT_MIN);
-        ImGui::InputFloat("Insert Y##pdfprop", &att.insertY, 0.f, 0.f, "%.4f");
+        ImGui::InputFloat("Insert Y##pdfprop", &att.insertY, 0.f, 0.f, DisplayFloatFmt(cmd.displayLinearPrecision).c_str());
         ImGui::SetNextItemWidth(-FLT_MIN);
         ImGui::InputFloat("Scale##pdfprop", &att.scale, 0.f, 0.f, "%.6f");
         ImGui::SetNextItemWidth(-FLT_MIN);
@@ -4392,7 +4397,11 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   ImGui::TextDisabled("|");
   ImGui::SameLine(0, 8);
   ImGui::AlignTextToFramePadding();
-  ImGui::Text("X %.3f  Y %.3f  Z %.3f  |  UCS: World", cursorX, cursorY, cursorZ);
+  {
+    const int p = cmd.displayLinearPrecision;
+    ImGui::Text("X %s  Y %s  Z %s  |  UCS: World", FormatLinear(cursorX, p).c_str(),
+                FormatLinear(cursorY, p).c_str(), FormatLinear(cursorZ, p).c_str());
+  }
 
   ImGui::SameLine(0, 16);
   ImGui::AlignTextToFramePadding();
@@ -5056,14 +5065,16 @@ static void FormatSnapPickLine(char* line, size_t cap, const AppCommandState& cm
     for (size_t i = 0; i < cmd.surveyPoints.size(); ++i) {
       const auto& p = cmd.surveyPoints[i];
       if (std::fabs(p.easting - h.x) < 1e-4f && std::fabs(p.northing - h.y) < 1e-4f) {
-        std::snprintf(line, cap, "%s — ID %d — %.4f, %.4f", SnapKindLabelForUi(h.kind), p.id,
-                      static_cast<double>(h.x), static_cast<double>(h.y));
+        std::snprintf(line, cap, "%s — ID %d — %s, %s", SnapKindLabelForUi(h.kind), p.id,
+                      FormatLinear(static_cast<double>(h.x), cmd.displayLinearPrecision).c_str(),
+                      FormatLinear(static_cast<double>(h.y), cmd.displayLinearPrecision).c_str());
         return;
       }
     }
   }
-  std::snprintf(line, cap, "%s — %.4f, %.4f", SnapKindLabelForUi(h.kind), static_cast<double>(h.x),
-                static_cast<double>(h.y));
+  std::snprintf(line, cap, "%s — %s, %s", SnapKindLabelForUi(h.kind),
+                FormatLinear(static_cast<double>(h.x), cmd.displayLinearPrecision).c_str(),
+                FormatLinear(static_cast<double>(h.y), cmd.displayLinearPrecision).c_str());
 }
 
 /// When a single annotation with viewport grips is selected, pull the cursor to the nearest grip inside the OSNAP
@@ -5544,7 +5555,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         default:
           break;
         }
-        CadDimRefreshMeasurementText(&ann);
+        CadDimRefreshMeasurementText(&ann, cmd.displayLinearPrecision, CadAngleDisplaySettings(cmd));
         float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
         if (CadDimAnyGeometry(ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
           ann.rotationRad = std::atan2(ty, tx);
@@ -7965,10 +7976,12 @@ void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log)
     ImGui::Text("Pairs: %d", res.nPairs);
     ImGui::SameLine(110.f);
     ImGui::Text("Scale: %.8f", static_cast<double>(res.scale));
-    ImGui::Text("Rotation:     %s", CadFormatBearingCwNorthDegMinSec(res.rotationCwNorthDeg).c_str());
-    ImGui::Text("Translation:  X = %.6f   Y = %.6f", static_cast<double>(res.tx), static_cast<double>(res.ty));
-    ImGui::Text("Point error:  %.6f (avg. distance each source maps from its destination)",
-                static_cast<double>(res.rms));
+    ImGui::Text("Rotation:     %s", FormatBearing(static_cast<double>(res.rotationCwNorthDeg), CadAngleDisplaySettings(cmd)).c_str());
+    ImGui::Text("Translation:  X = %s   Y = %s",
+                FormatLinear(static_cast<double>(res.tx), cmd.displayLinearPrecision).c_str(),
+                FormatLinear(static_cast<double>(res.ty), cmd.displayLinearPrecision).c_str());
+    ImGui::Text("Point error:  %s (avg. distance each source maps from its destination)",
+                FormatLinear(static_cast<double>(res.rms), cmd.displayLinearPrecision).c_str());
   } else if (cmd.alignControlPts.empty()) {
     ImGui::TextColored(ImVec4(1.f, 0.5f, 0.5f, 1.f), "No pairs — add control pairs and solve again.");
   } else {
@@ -8006,12 +8019,15 @@ void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log)
       if (ImGui::SmallButton("-"))
         removeIdx = i;
       ImGui::PopID();
+      const int pp = cmd.displayLinearPrecision;
       ImGui::TableNextColumn(); ImGui::Text("%d", i + 1);
-      ImGui::TableNextColumn(); ImGui::Text("%.4f", static_cast<double>(cp.srcX));
-      ImGui::TableNextColumn(); ImGui::Text("%.4f", static_cast<double>(cp.srcY));
-      ImGui::TableNextColumn(); ImGui::Text("%.4f", static_cast<double>(cp.dstX));
-      ImGui::TableNextColumn(); ImGui::Text("%.4f", static_cast<double>(cp.dstY));
-      ImGui::TableNextColumn(); ImGui::Text(res.valid ? "%.6f" : "—", static_cast<double>(resid));
+      ImGui::TableNextColumn(); ImGui::TextUnformatted(FormatLinear(static_cast<double>(cp.srcX), pp).c_str());
+      ImGui::TableNextColumn(); ImGui::TextUnformatted(FormatLinear(static_cast<double>(cp.srcY), pp).c_str());
+      ImGui::TableNextColumn(); ImGui::TextUnformatted(FormatLinear(static_cast<double>(cp.dstX), pp).c_str());
+      ImGui::TableNextColumn(); ImGui::TextUnformatted(FormatLinear(static_cast<double>(cp.dstY), pp).c_str());
+      ImGui::TableNextColumn();
+      if (res.valid) ImGui::TextUnformatted(FormatLinear(static_cast<double>(resid), pp).c_str());
+      else ImGui::TextUnformatted("—");
     }
     ImGui::EndTable();
   }
@@ -8123,7 +8139,7 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
       }
       ImGui::TableNextColumn();
       double de = static_cast<double>(CadCoord::WorldXFromLocal(cmd, p.easting));
-      ImGui::InputDouble("##e", &de, 0., 0., "%.6f");
+      ImGui::InputDouble("##e", &de, 0., 0., DisplayFloatFmt(cmd.surveyPointDisplayPrecision).c_str());
       if (ImGui::IsItemDeactivatedAfterEdit()) {
         const double wy = static_cast<double>(CadCoord::WorldYFromLocal(cmd, p.northing));
         CadCoord::LocalFromWorld(cmd, de, wy, &p.easting, &p.northing);
@@ -8131,7 +8147,7 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
       }
       ImGui::TableNextColumn();
       double dn = static_cast<double>(CadCoord::WorldYFromLocal(cmd, p.northing));
-      ImGui::InputDouble("##n", &dn, 0., 0., "%.6f");
+      ImGui::InputDouble("##n", &dn, 0., 0., DisplayFloatFmt(cmd.surveyPointDisplayPrecision).c_str());
       if (ImGui::IsItemDeactivatedAfterEdit()) {
         const double wx = static_cast<double>(CadCoord::WorldXFromLocal(cmd, p.easting));
         CadCoord::LocalFromWorld(cmd, wx, dn, &p.easting, &p.northing);
@@ -8139,7 +8155,7 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
       }
       ImGui::TableNextColumn();
       double dz = static_cast<double>(p.elevation);
-      ImGui::InputDouble("##z", &dz, 0., 0., "%.4f");
+      ImGui::InputDouble("##z", &dz, 0., 0., DisplayFloatFmt(cmd.surveyPointDisplayPrecision).c_str());
       if (ImGui::IsItemDeactivatedAfterEdit()) {
         p.elevation = static_cast<float>(dz);
         EnsureSurveyPointLabelMtext(cmd, i, &log);

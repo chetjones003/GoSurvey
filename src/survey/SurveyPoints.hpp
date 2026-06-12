@@ -83,7 +83,7 @@ void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float b
 void RemoveSurveyPointAt(AppCommandState& st, size_t index);
 
 [[nodiscard]] std::string FormatSurveyPointLabelPlain(const SurveyPoint& p, SurveyPointLabelStyle style,
-                                                      const SurveyLabelStyleTemplates& templates);
+                                                      const SurveyLabelStyleTemplates& templates, int precision);
 
 void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::vector<std::string>* log);
 
