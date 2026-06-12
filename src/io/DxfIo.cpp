@@ -841,15 +841,41 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
 
     if (typ == "POINT") {
       EntityBase base;
-      double px = 0, py = 0;
+      double px = 0, py = 0, pz = 0;
+      bool isGoSurvey = false, inGoSurveyXdata = false;
+      int sid = 0, slabel = 0;
+      std::string sdesc;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
         base.parse(c, v);
         if      (c == 10) ParseDouble(v, &px);
         else if (c == 20) ParseDouble(v, &py);
+        else if (c == 30) ParseDouble(v, &pz);
+        else if (c == 1001) { inGoSurveyXdata = (v == "GOSURVEY"); if (inGoSurveyXdata) isGoSurvey = true; }
+        else if (inGoSurveyXdata && c == 1071) ParseIntFlexible(v, &sid);
+        else if (inGoSurveyXdata && c == 1070) ParseIntFlexible(v, &slabel);
+        else if (inGoSurveyXdata && c == 1000) sdesc = v;
       }
       const auto at = base.makeAttr(layerRgb);
+      if (isGoSurvey) {
+        // REQ-023: reconstruct the survey point, applying the same INSERT
+        // transform + world-origin offset used for geometry (so it lands 1:1).
+        double wx = 0, wy = 0;
+        xf.apply(px, py, &wx, &wy);
+        SurveyPoint sp;
+        sp.id        = sid;
+        sp.easting   = static_cast<float>(wx - st.worldDocumentOriginX);
+        sp.northing  = static_cast<float>(wy - st.worldDocumentOriginY);
+        sp.elevation = static_cast<float>(pz);
+        sp.description = sdesc;
+        sp.layer = at.layer.empty() ? std::string("0") : at.layer;
+        sp.labelStyle = static_cast<SurveyPointLabelStyle>(
+            std::clamp(slabel, 0, static_cast<int>(SurveyPointLabelStyle::NumberNorthEastElev)));
+        st.surveyPoints.push_back(sp);
+        i = j;
+        continue;
+      }
       double arm = (*coordMagMax > 1.0) ? (*coordMagMax * 1e-7) : 0.01;
       arm = std::clamp(arm, 1e-6, std::max(*coordMagMax * 1e-6, 0.5));
       // Split each arm at center so (px,py) is a stored endpoint — snap hits the exact point.
@@ -891,6 +917,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       EntityBase base;
       double ix = 0, iy = 0, h = 3, boxW = 120, rot = 0;
       std::string txt;
+      bool isSurveyLabel = false;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
@@ -901,7 +928,11 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         else if (c == 41) ParseDouble(v, &boxW);
         else if (c == 50) ParseDouble(v, &rot);
         else if (c == 1 || c == 3) txt += v;
+        else if (c == 1001 && v == "GOSURVEY") isSurveyLabel = true;
       }
+      // REQ-023: a survey-point label is regenerated from the reconstructed point;
+      // skip the exported MTEXT so we don't create a duplicate/orphan annotation.
+      if (isSurveyLabel) { i = j; continue; }
       const auto at = base.makeAttr(layerRgb);
       // DXF: AcDbMText group 50 is rotation in radians.
       const double rad = rot;
@@ -1273,6 +1304,10 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
 
   ResetCadToolStateToIdle(st);
   ClearCadGeometry(st);
+  // REQ-023: import replaces the drawing. Survey points are reconstructed from
+  // POINT XDATA below (ClearCadGeometry does not touch them), so clear first.
+  st.surveyPoints.clear();
+  st.selectedSurveyPointIndices.clear();
 
   // Parse HEADER $EXTMIN/$EXTMAX to set the world origin before entity parsing.
   // This lets appendSegXF subtract a near-zero offset before the double→float cast,
@@ -1433,6 +1468,10 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
     log.push_back(buf);
   } else
     st.pendingZoomExtents = true;
+  // REQ-023: regenerate the linked label for each reconstructed survey point
+  // (their exported label MTEXTs were skipped above to avoid duplicates).
+  for (size_t spi = 0; spi < st.surveyPoints.size(); ++spi)
+    EnsureSurveyPointLabelMtext(st, spi, nullptr);
   BumpCadGpuCache(st);
   return true;
 }
@@ -1484,7 +1523,10 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   const uint64_t symBlkModel1 = symAfterLayers + 12;
   const uint64_t symBlkPaper0 = symAfterLayers + 13;
   const uint64_t symBlkPaper1 = symAfterLayers + 14;
-  const uint64_t lastSymHandle = symBlkPaper1;
+  // Registered APPID for survey-point XDATA (REQ-023, ADR-005). Appended at the end
+  // of the symbol-handle range so no existing handle shifts.
+  const uint64_t symGoSurveyAppid = symAfterLayers + 15;
+  const uint64_t lastSymHandle = symGoSurveyAppid;
 
   uint64_t entityHandleCount = static_cast<uint64_t>(nSeg) + static_cast<uint64_t>(nCirc) +
                                static_cast<uint64_t>(st.surveyPoints.size());
@@ -1521,6 +1563,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   std::snprintf(hUcsTab, sizeof(hUcsTab), "%llX", static_cast<unsigned long long>(symUcsTab));
   std::snprintf(hAppidTab, sizeof(hAppidTab), "%llX", static_cast<unsigned long long>(symAppidTab));
   std::snprintf(hAppidAcad, sizeof(hAppidAcad), "%llX", static_cast<unsigned long long>(symAppidAcad));
+  char hGoSurveyAppid[24];
+  std::snprintf(hGoSurveyAppid, sizeof(hGoSurveyAppid), "%llX", static_cast<unsigned long long>(symGoSurveyAppid));
   std::snprintf(hDimTab, sizeof(hDimTab), "%llX", static_cast<unsigned long long>(symDimstyleTab));
   std::snprintf(hDimStd, sizeof(hDimStd), "%llX", static_cast<unsigned long long>(symDimstyleStd));
   std::snprintf(hBrTab, sizeof(hBrTab), "%llX", static_cast<unsigned long long>(symBlockRecordTab));
@@ -2112,12 +2156,19 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   emitPair(2, "APPID");
   emitPair(5, hAppidTab);
   emitPair(100, "AcDbSymbolTable");
-  emitPair(70, "1");
+  emitPair(70, "2");
   emitPair(0, "APPID");
   emitPair(5, hAppidAcad);
   emitPair(100, "AcDbSymbolTableRecord");
   emitPair(100, "AcDbRegAppTableRecord");
   emitPair(2, "ACAD");
+  emitPair(70, "0");
+  // Registered app id for survey-point identity XDATA (REQ-023).
+  emitPair(0, "APPID");
+  emitPair(5, hGoSurveyAppid);
+  emitPair(100, "AcDbSymbolTableRecord");
+  emitPair(100, "AcDbRegAppTableRecord");
+  emitPair(2, "GOSURVEY");
   emitPair(70, "0");
   emitPair(0, "ENDTAB");
 
@@ -2330,6 +2381,19 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     emitPair(210, "0.0");
     emitPair(220, "0.0");
     emitPair(230, "1.0");
+    // Survey-point identity XDATA (REQ-023, ADR-005): id, label style, description.
+    // Coordinates stay in 10/20/30 and layer in 8; a reader that ignores the
+    // GOSURVEY app id still sees a valid POINT.
+    {
+      std::string desc = p.description;
+      for (char& c : desc)
+        if (c == '\r' || c == '\n') c = ' ';
+      if (desc.size() > 255) desc.resize(255);
+      emitPair(1001, "GOSURVEY");
+      emitPair(1071, std::to_string(p.id));
+      emitPair(1070, std::to_string(static_cast<int>(p.labelStyle)));
+      emitPair(1000, desc);
+    }
     ++nPointOut;
   }
 
@@ -2481,6 +2545,10 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       emitPair(220, "0.0");
       emitPair(230, "1.0");
       emitPair(1, txt);
+      // Survey-point label marker (REQ-023): import skips these and lets the
+      // reconstructed point regenerate its own linked label (avoids duplicates).
+      if (an.surveyPointLabelFor >= 0)
+        emitPair(1001, "GOSURVEY");
       ++nMtextOut;
     }
   }

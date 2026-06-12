@@ -295,3 +295,25 @@ A change is rejected if it breaks any of these:
   (satisfies §11.4); the underlying convention is preserved so existing geometry,
   angle entry, and REQ-101 fidelity are untouched; default settings must reproduce
   the previous bearing output (guarded by a parity test).
+
+### ADR-005 — Survey-point identity in DXF via a registered XDATA schema   (2026-06-12, accepted)
+- Context:    REQ-023 requires survey points to survive a DXF round-trip with their
+  identity (id, description, label style, linked label). A DXF `POINT` has no
+  native field for these, and the importer currently expands every `POINT` into
+  cross-line geometry — so the data is lost. Encoding extra identity in the DXF is
+  a data-format decision, not a Workshop choice.
+- Decision:   Carry survey-point identity in DXF **XDATA** under one registered
+  application id, `GOSURVEY` (added to the APPID table). On a survey `POINT`:
+  `1071` id, `1070` label style, `1000` description (coordinates stay in `10/20/30`,
+  layer in `8`). On a survey-label `MTEXT`: a `GOSURVEY` marker so import skips it
+  and the reconstructed point regenerates its own linked label. Import rebuilds a
+  `SurveyPoint` from any `POINT` carrying this XDATA (applying the same
+  transform/world-origin handling as geometry); a `POINT` without it keeps the
+  cross-line behavior. Contained to `src/io/DxfIo.cpp`; no new dependency.
+- Alternatives: (a) a custom OBJECTS-section dictionary — heavier and more fragile
+  than entity XDATA; (b) layer-name / point-style conventions — can't carry a
+  description or id robustly; (c) leave it — the accepted data loss (issue #37).
+- Consequences: GoSurvey DXF becomes a faithful survey round-trip; third-party
+  apps still read valid `POINT`s (unknown XDATA is ignored); a small XDATA schema
+  and one registered APPID to maintain. The APPID handle is appended at the end of
+  the symbol-handle range so existing handles do not shift.
