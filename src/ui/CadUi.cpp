@@ -4383,6 +4383,73 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
   }
 }
 
+// AutoCAD-style "Specify … :" label for the dynamic-input point prompt (REQ-024).
+// Only meaningful when CommandExpectsPointEntry(cmd) is true.
+static const char* CadPointPromptLabel(const AppCommandState& cmd) {
+  using K = AppCommandState::Kind;
+  switch (cmd.active) {
+  case K::Line:
+    return cmd.linePhase == AppCommandState::LinePhase::NeedFirstPoint ? "Specify first point:"
+                                                                       : "Specify next point:";
+  case K::Polyline:
+    return cmd.polylinePhase == AppCommandState::PolylinePhase::NeedFirstPoint ? "Specify start point:"
+                                                                              : "Specify next point:";
+  case K::Arc:
+    switch (cmd.arcPhase) {
+    case AppCommandState::ArcPhase::WaitStart: return "Specify start point:";
+    case AppCommandState::ArcPhase::WaitMid:   return "Specify second point:";
+    case AppCommandState::ArcPhase::WaitEnd:   return "Specify end point:";
+    }
+    return "Specify point:";
+  case K::Ellipse:
+    return cmd.ellPhase == AppCommandState::EllipsePhase::WaitCenter ? "Specify center point:"
+                                                                     : "Specify axis endpoint:";
+  case K::Circle:
+    switch (cmd.circlePhase) {
+    case AppCommandState::CirclePhase::WaitCenterOrMode: return "Specify center point:";
+    case AppCommandState::CirclePhase::ThreeP_WaitP1:    return "Specify first point:";
+    case AppCommandState::CirclePhase::ThreeP_WaitP2:    return "Specify second point:";
+    case AppCommandState::CirclePhase::ThreeP_WaitP3:    return "Specify third point:";
+    default:                                             return "Specify point:";
+    }
+  case K::Text:
+    return "Specify start point:";
+  case K::Mtext:
+    return cmd.mtextPhase == AppCommandState::MtextPhase::WaitCorner1 ? "Specify first corner:"
+                                                                      : "Specify opposite corner:";
+  case K::DimAligned:
+  case K::DimLinear:
+    switch (cmd.dimPhase) {
+    case AppCommandState::DimPhase::WaitExt1:      return "Specify first extension line origin:";
+    case AppCommandState::DimPhase::WaitExt2:      return "Specify second extension line origin:";
+    case AppCommandState::DimPhase::WaitDimLinePt: return "Specify dimension line location:";
+    }
+    return "Specify point:";
+  case K::DimAngular:
+    switch (cmd.dimAngularPhase) {
+    case AppCommandState::DimAngularPhase::WaitVertex: return "Specify vertex:";
+    case AppCommandState::DimAngularPhase::WaitRay1:   return "Specify first ray point:";
+    case AppCommandState::DimAngularPhase::WaitRay2:   return "Specify second ray point:";
+    default:                                          return "Specify point:";
+    }
+  case K::IdPoint:
+    return "Specify point:";
+  case K::SurveyInverse:
+    return cmd.surveyInversePhase == AppCommandState::SurveyInversePhase::WaitFrom ? "Specify first point:"
+                                                                                  : "Specify second point:";
+  case K::Move:
+  case K::Copy:
+    return cmd.modifyPhase == AppCommandState::ModifyPhase::NeedBase ? "Specify base point:"
+                                                                     : "Specify second point:";
+  case K::Scale:
+    return cmd.modifyPhase == AppCommandState::ModifyPhase::NeedBase ? "Specify base point:" : "Specify point:";
+  case K::Rotate:
+    return cmd.rotatePhase == AppCommandState::RotatePhase::NeedBase ? "Specify base point:" : "Specify point:";
+  default:
+    return "Specify point:";
+  }
+}
+
 float CadStatusBarStripHeightPx() {
   constexpr float kPadY = 4.f;
   const ImGuiStyle& st = ImGui::GetStyle();
@@ -6886,13 +6953,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const bool promptChanged = (curHint != s_lastDynHint) || vpPalJustOpened;
     s_lastDynHint = curHint;
 
-    // Dark: bright blue-white hint; Light: muted dark so it reads on the light popup bg.
+    // Prompt label: a muted/secondary tone with a little gap below it, so it reads
+    // as a label separated from the input boxes. Point prompts get an AutoCAD-style
+    // "Specify … :" label; other prompts keep the full guidance hint.
     const ImVec4 hintCol = (cmd.displayColorThemeIdx == 0)
-        ? ImVec4(0.82f, 0.88f, 0.96f, 1.f)
+        ? ImVec4(0.62f, 0.66f, 0.73f, 1.f)
         : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
     ImGui::PushStyleColor(ImGuiCol_Text, hintCol);
-    ImGui::TextUnformatted(curHint);
+    ImGui::TextUnformatted(pointEntry ? CadPointPromptLabel(cmd) : curHint);
     ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0.f, 4.f));
 
     if (pointEntry) {
       // Two live coordinate fields: track the crosshair's world X/Y at the display
@@ -6912,22 +6982,32 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (!yLocked) std::snprintf(dyBuf, sizeof(dyBuf), "%s", FormatLinear(liveWy, prec).c_str());
 
       const float fieldW = std::clamp(120.f * io.FontGlobalScale, 84.f, 220.f);
-      const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_AutoSelectAll;
+      const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue;
 
-      // If the user starts typing with neither field focused, focus X so the
-      // keystroke lands there (fields otherwise just display the live readout).
       const ImGuiID idX = ImGui::GetID("##dynX");
       const ImGuiID idY = ImGui::GetID("##dynY");
       const ImGuiID activeId = ImGui::GetActiveID();
-      if (activeId != idX && activeId != idY && !io.WantTextInput && io.InputQueueCharacters.Size > 0)
-        ImGui::SetKeyboardFocusHere();
+
+      // Type-to-start: the first keystroke with neither field focused begins entry
+      // in X immediately — clear the live value, capture the typed char, then lock
+      // and focus X. (Without seeding, ImGui's first key only grabs focus, so it
+      // took two presses to start typing.)
+      if (activeId != idX && activeId != idY && !io.WantTextInput && io.InputQueueCharacters.Size > 0) {
+        dxBuf[0] = '\0';
+        xLocked = true;
+        RouteQueuedCharsToCmdBuf(dxBuf, static_cast<int>(sizeof(dxBuf)), io);
+        ImGui::SetKeyboardFocusHere();  // focus X (the next item)
+      }
 
       ImGui::SetNextItemWidth(fieldW);
       const bool xEnter = ImGui::InputText("##dynX", dxBuf, sizeof(dxBuf), pf);
+      // Clicking/Tabbing into a field clears its live readout for fresh entry.
+      if (ImGui::IsItemActivated() && !xLocked) { dxBuf[0] = '\0'; xLocked = true; }
       if (ImGui::IsItemEdited()) xLocked = true;
       ImGui::SameLine(0.f, 6.f);
       ImGui::SetNextItemWidth(fieldW);
       const bool yEnter = ImGui::InputText("##dynY", dyBuf, sizeof(dyBuf), pf);
+      if (ImGui::IsItemActivated() && !yLocked) { dyBuf[0] = '\0'; yLocked = true; }
       if (ImGui::IsItemEdited()) yLocked = true;
 
       if (xEnter || yEnter) {
