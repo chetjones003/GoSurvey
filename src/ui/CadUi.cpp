@@ -6957,7 +6957,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // as a label separated from the input boxes. Point prompts get an AutoCAD-style
     // "Specify … :" label; other prompts keep the full guidance hint.
     const ImVec4 hintCol = (cmd.displayColorThemeIdx == 0)
-        ? ImVec4(0.62f, 0.66f, 0.73f, 1.f)
+        ? ImVec4(0.90f, 0.93f, 0.98f, 1.f)
         : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
     ImGui::PushStyleColor(ImGuiCol_Text, hintCol);
     ImGui::TextUnformatted(pointEntry ? CadPointPromptLabel(cmd) : curHint);
