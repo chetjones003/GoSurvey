@@ -79,10 +79,21 @@ nlohmann::json (numbers may serialize as integers or floats; the loader uses
 .get<float>() or .get<int>() where noted).
 
 3.1 Document coordinate system and scale
-  worldDocumentOriginX   (number, deprecated — always 0; older builds may have stored a shift offset; load adds it back to geometry)
-  worldDocumentOriginY   (number, deprecated — always 0)
+  worldDocumentOriginX   (number, default 0)
+  worldDocumentOriginY   (number, default 0)
+    — Local-frame origin. All stored geometry and survey-point coordinates in this
+      file are LOCAL; world (state-plane) coordinates are local + origin. The local
+      frame keeps large real-world coordinates near zero for float precision. On
+      load the origin is read back as-is; very large stored coordinates may be
+      re-centred (rebased) so the local frame stays near zero. Older files that
+      stored world coordinates with origin 0 still load correctly.
+
   modelUnitsPerPlottedInch (number, default 50 on load if missing)
     — "Drawing scale" / model units per plotted inch (MUP).
+
+  drawingInsUnits (integer, default 2 = feet)
+    — AutoCAD $INSUNITS code (relabel only; coordinates are never scaled). Recognised
+      values: 0 = unitless, 2 = feet, 6 = metres.
 
   defaultPlottedTextHeightInches (number, default 0.125)
     — Default annotation height in plotted inches for new TEXT/MTEXT.
@@ -92,7 +103,8 @@ nlohmann::json (numbers may serialize as integers or floats; the loader uses
 
 3.2 Lines — flat array + parallel attributes
   lineVerts   (array of numbers)
-    Flat list of line segment vertices in world coordinates. Each segment is
+    Flat list of line segment vertices in LOCAL coordinates (world = local +
+    worldDocumentOrigin; see 3.1). Each segment is
     SIX consecutive floats:
       x0, y0, z0, x1, y1, z1
     Z is stored for forward compatibility; the application primarily uses X/Y.

@@ -4,32 +4,40 @@ This document describes how C++ sources are organised. All `#include "Header.hpp
 
 ## Directory map
 
+> **Note (2025-06):** the former `src/cad/` was split into `src/commands/`,
+> `src/viewport/`, and `src/util/` (see the source-restructure refactor). Header
+> paths below use the current folders.
+
 | Folder | Role |
 |--------|------|
-| `src/app/` | Application entry (`main.cpp`) — GLFW/ImGui frame loop, startup workspace loading, high-level wiring. |
-| `src/ui/` | ImGui panels, ribbon, menus, command line UI, drawing viewport input, splash screen, rich MTEXT editor. |
-| `src/cad/` | CAD model and command orchestration (`AppCommandState`, all drawing/editing commands, object snap, linetype metadata, rubber-band preview, transform preview). |
-| `src/util/` | Header-only helpers shared across domains (e.g. `StringUtil.hpp` — ASCII trim / lowercasing). |
+| `src/app/` | Application entry (`main.cpp`) — GLFW/ImGui frame loop, startup workspace loading, global Enter/key routing, modal dispatch, high-level wiring. |
+| `src/ui/` | ImGui panels, ribbon, menus, command line UI + dynamic input, drawing viewport input, multi-tab document bar, splash screen, rich MTEXT editor, modals (copy-survey, DXF point conflict), Options dialog, Traverse Editor UI, import/export-points panels. |
+| `src/commands/` | CAD model and command orchestration: `AppCommandState` (`CadCommands.hpp`), all drawing/editing commands, command registry + fuzzy dispatch, footer hints, linetype metadata (`CadLinetype`), and the **document coordinate frame** (`CadCoordinateFrame` — local/world origin, rebase, zoom-extents). |
+| `src/viewport/` | Viewport interaction: object snap (`CadSnap`), rubber-band preview (`CadRubberPreview`), transform/selection preview (`TransformPreview`), pick policy. |
+| `src/util/` | Header-only helpers shared across domains (e.g. string utilities, `geom2d`, number/angle formatting). |
 | `src/io/` | Workspace `.gs` I/O (JSON via nlohmann), DXF import/export, user preferences, survey CSV import/export, DXF ACI colour tables. |
-| `src/survey/` | In-memory survey / COGO points model (`SurveyPoint`, create-points bookkeeping, label styles). |
-| `src/render/` | OpenGL viewport renderer — geometry batches, overlays, PDF texture drawing. |
+| `src/survey/` | In-memory survey / COGO points model (`SurveyPoint`, create-points bookkeeping, label styles, label MTEXT linking, merge/conflict helpers). |
+| `src/traverse/` | Traverse subsystem: raw-observation reduction (`TraverseCalc`), least-squares closure (`TraverseLeastSquares`), and Autodesk FBK raw-data import (`FbkImport`). |
+| `src/render/` | OpenGL viewport renderer — geometry batches, overlays, PDF texture drawing, view-relative tessellation. |
 | `src/platform/` | OS-specific helpers: Windows file dialogs, custom frame controls (title bar), application icon loading. |
 | `src/pdf/` | PDF underlay subsystem: rasterisation pipeline (`PdfAttach.cpp`), async attach worker, snap geometry extraction, image-based snap-target detection, visibility mask, spatial endpoint grid. |
 
 ## Key data structures
 
-### `AppCommandState` (`src/cad/CadCommands.hpp`)
+### `AppCommandState` (`src/commands/CadCommands.hpp`)
 
 Central mutable state for the entire application. One instance lives in `main.cpp` and is passed by reference to every UI and command function. Fields are grouped by subsystem:
 
-- **Geometry containers** — `userLinesFlat`, `userCirclesCxCyR`, `userArcs`, `userEllipses`, `userPolylineVerts/Offsets`, `cadAnnotations`, `pdfAttachments`.
+- **Geometry containers** — `userLinesFlat`, `userCirclesCxCyR`, `userArcs`, `userEllipses`, `userPolylineVerts/Offsets`, `cadAnnotations`, `pdfAttachments`. Stored in **local** space (see Document coordinate frame below).
 - **Per-entity attributes** — parallel `EntityAttributes` vectors and `drawingLayerTable`.
 - **Active command** — `active` (Kind enum) plus per-command phase sub-enums and draft state.
 - **Selection** — `selection` (vector of `SelectedEntity`) and `selectedSurveyPointIndices`.
-- **Survey** — `surveyPoints`, `createPointsOpts`, label layout cache.
+- **Survey** — `surveyPoints`, `createPointsOpts`, label layout cache, and DXF-import merge state (`pendingDxfConflictPoints`, `dxfPointConflictModalOpen`, `dxfPointConflictOffset`).
+- **Coordinate frame** — `worldDocumentOriginX/Y` (the local↔world offset; see below), plot scale (`modelUnitsPerPlottedInch`), and `drawingInsUnits`.
 - **ALIGN** — see section below.
 - **Viewport** — pan/zoom, snap settings, crosshair style, GPU revision counter (`cadGpuRevision`).
-- **UI toggles** — `showCreatePointsWindow`, `showAlignResultsWindow`, `showLayerManagerWindow`, etc.
+- **UI toggles** — `showCreatePointsWindow`, `showAlignResultsWindow`, `showLayerManagerWindow`, `showTraverseEditorWindow`, `showImportPointsWindow`, etc.
+- **Multi-document** — the open drawings are kept as document snapshots; switching tabs saves/restores the full `AppCommandState` (geometry, layers, survey points, coordinate frame, viewport).
 - **Reports** — `surveyReportTabs` (vector of title/body pairs), `surveyReportSelectLatestPending`.
 
 ### `PdfAttachment` (`src/pdf/PdfAttach.hpp`)
@@ -43,7 +51,7 @@ Holds everything needed to render and snap-to one attached PDF page:
 - `snapVisDark` — `true` when this is a dark-background PDF (CAD export style); drives both the snap mask threshold and the shader filter direction.
 - `showBackground` — User toggle; `false` (default) renders the page with background made transparent.
 
-## Snap pipeline (`src/cad/CadSnap.cpp`, `src/pdf/PdfAttach.cpp`)
+## Snap pipeline (`src/viewport/CadSnap.cpp`, `src/pdf/PdfAttach.cpp`)
 
 1. **Extraction** (`ExtractSnapFromPage`) — walks pdfium path objects; collinear-run dedup and minimum-length filter produce `snapLinesFlat`.
 2. **Image-based override** (`BuildImageSnapPts`) — for dense PDFs (>2 000 path segments, e.g. GIS exports), replaces path-based snap: renders a 512×512 binary mask, analyses 8-connected topology to find endpoints (1 neighbour), corners (2 non-opposite), and junctions (3+), emits degenerate point pairs.
@@ -126,6 +134,49 @@ The main loop checks `ImGui::IsKeyPressed(ImGuiKey_Enter)` and `!ImGuiIO::WantTe
 ## Create points — placement mode
 
 The **Create points** panel (`DrawCreatePointsPanel`) activates point placement whenever `showCreatePointsWindow` is true. No separate toggle is needed: opening the panel enables placement, closing it disables it. The viewport OSNAP system and click handler check `showCreatePointsWindow` directly instead of a separate `createPointsPlacementActive` flag (which was removed). The panel exposes only the settings that matter for daily use: next point ID, default layer/description/elevation, duplicate policy, and JSON file save/load.
+
+## Document coordinate frame (`src/commands/CadCoordinateFrame.cpp`)
+
+All geometry — including survey points — is stored in **local** space; world (state-plane)
+coordinates are `world = local + worldDocumentOrigin`. Keeping a near-origin local frame
+preserves `float` precision for large real-world coordinates (e.g. Louisiana state plane).
+
+- `LocalFromWorld` / `WorldFromLocal` (and the `WorldXFromLocal`/`WorldYFromLocal` inline
+  helpers) convert between the two; UI readouts, the VIEWPOINTS table, and `{north}`/`{east}`
+  labels all display via these so the user always sees world coordinates.
+- `ShiftAllStorageBy` translates every stored container (geometry + survey points) by a delta.
+- `ApplyDocumentOriginRebase` changes the origin and shifts storage so world positions are
+  unchanged; it also regenerates survey-point label text (origin affects `{north}`/`{east}`).
+- `RebaseDrawingToLocalOrigin` re-centres the document on its centroid (used after DXF import);
+  `MaybeRebaseLargeCoordinates` does so on load/CSV-import when stored coordinates are large.
+- **Invariant:** any importer that ingests *world* coordinates (CSV, DXF survey points) must
+  convert to local (subtract the origin, in `double`) before storing into the `float` fields,
+  otherwise points land an origin's-distance away. `.gs` files store world coordinates with
+  origin 0 and rebase on load.
+
+## Survey-point DXF round-trip and merge (`src/io/DxfIo.cpp`, `src/survey/SurveyPoints.cpp`)
+
+Survey points export as native `POINT` entities at world coordinates carrying `GOSURVEY` XDATA
+(id / label style / description). On import (REQ-023):
+
+- A `POINT` with GoSurvey XDATA is reconstructed; a foreign `POINT` becomes snap cross-lines.
+- Import replaces CAD geometry but **preserves** existing session survey points. The kept points
+  are shifted back to world space before the new origin is established (because `ClearCadGeometry`
+  zeroes the origin), then rebased with the new geometry.
+- The DXF's reconstructed points are collected in a side buffer (threaded through
+  `ParseEntityRegion`) and merged: non-colliding ids are added before the rebase; colliding ids
+  are deferred (in world coords) to `DrawDxfPointConflictModal`, which calls
+  `ResolveConflictingWorldSurveyPoints` to overwrite or offset.
+
+## Traverse subsystem (`src/traverse/`)
+
+- `TraverseCalc` reduces raw per-leg observations (horizontal angle, distance, vertical angle;
+  Face 1 / Face 2 sets) into leg vectors and accumulated coordinates.
+- `TraverseLeastSquares` performs the closed-traverse least-squares adjustment and residual
+  reporting — an in-tree solver, no external linear-algebra dependency (ADR-001).
+- `FbkImport` parses Autodesk FBK raw survey files into the editor's observation model.
+- UI lives in `src/ui/CadUi_TraverseEditor.cpp` (opened via `showTraverseEditorWindow`);
+  results are pushed to the Reports tab. Regression tests: `tests/TraverseTests.cpp`.
 
 ## Build
 
