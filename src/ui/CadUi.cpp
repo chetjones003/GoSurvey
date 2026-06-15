@@ -1506,7 +1506,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   const float wInq  = 8.f + colW({"Aligned", "Linear", "ID Point"});
   const float wSrv  = 8.f + largeW + 4.f + colW({"Inverse", "Traverse"});
   const float wView = 8.f + colW({"Extents", "Window"});
-  const bool  ribbonPaperSpace = cmd.activeSpaceIndex != kModelSpaceIndex;  // REQ-032 contextual ribbon
+  // REQ-032 contextual ribbon: Layout tools in paper space, but the normal model ribbon while editing a
+  // viewport in place (floating model space, REQ-036) so the draw/modify tools are available.
+  const bool  ribbonPaperSpace = cmd.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(cmd);
   const float wLayout = 8.f + largeW + 4.f + colW({"Poly VP"});
 
   ImGui::PushStyleColor(ImGuiCol_ChildBg, kBandFace);
@@ -5671,8 +5673,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   // Paper-space viewport selection + grip edit + MOVE/COPY (REQ-035). Active only while idle of the
   // rectangular-viewport command and in a paper layout.
-  if (!modelSpace && cmd.active == AppCommandState::Kind::None && cmd.activeSpaceIndex >= 0 &&
-      cmd.activeSpaceIndex < static_cast<int>(cmd.paperLayouts.size())) {
+  if (!modelSpace && !InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::None &&
+      cmd.activeSpaceIndex >= 0 && cmd.activeSpaceIndex < static_cast<int>(cmd.paperLayouts.size())) {
     PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
     float curX = 0.f, curY = 0.f;
     screenToPaperIn(&curX, &curY);
@@ -5801,6 +5803,38 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         BumpCadGpuCache(cmd);
       } else {
         cmd.paperGripCorner = -2;  // selection changed underneath us
+      }
+    }
+  }
+
+  // Floating model space (REQ-036): map the cursor through the active viewport and route model command
+  // clicks so the model is edited IN PLACE inside the viewport rect (the sheet stays visible).
+  if (InFloatingModelSpace(cmd) && cmd.floatingViewportLayout >= 0 &&
+      cmd.floatingViewportLayout < static_cast<int>(cmd.paperLayouts.size())) {
+    PaperLayout& FL = cmd.paperLayouts[static_cast<size_t>(cmd.floatingViewportLayout)];
+    if (cmd.floatingViewportIndex >= 0 && cmd.floatingViewportIndex < static_cast<int>(FL.viewports.size())) {
+      const Viewport& fv = FL.viewports[static_cast<size_t>(cmd.floatingViewportIndex)];
+      float px = 0.f, py = 0.f;
+      screenToPaperIn(&px, &py);
+      const bool inside = px >= fv.paperXIn && px <= fv.paperXIn + fv.paperWIn && py >= fv.paperYIn &&
+                          py <= fv.paperYIn + fv.paperHIn;
+      const float vcx = fv.paperXIn + fv.paperWIn * 0.5f;
+      const float vcy = fv.paperYIn + fv.paperHIn * 0.5f;
+      const float s = fv.safeScale();
+      const double mLocalX = (fv.modelCenterX + static_cast<double>(px - vcx) * s) - cmd.worldDocumentOriginX;
+      const double mLocalY = (fv.modelCenterY + static_cast<double>(py - vcy) * s) - cmd.worldDocumentOriginY;
+      if (inside) {
+        if (outCursorX && outCursorY) {
+          *outCursorX = mLocalX;
+          *outCursorY = mLocalY;
+        }
+        if (outCursorRawX && outCursorRawY) {
+          *outCursorRawX = mLocalX;
+          *outCursorRawY = mLocalY;
+        }
+        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+            cmd.active != AppCommandState::Kind::None)
+          SubmitViewportPick(cmd, static_cast<float>(mLocalX), static_cast<float>(mLocalY), log);
       }
     }
   }
@@ -6927,11 +6961,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         sdl->AddLine(ImVec2(c.x, c.y - crossPx), ImVec2(c.x, c.y + crossPx), kVpModelCol, 1.0f);
       }
       sdl->PopClipRect();
-      // Viewport border; selected ones accented. The single selected viewport shows edit grips (REQ-035).
+      // Viewport border; selected ones accented. The active floating viewport (REQ-036) is green.
       const bool selVp = IsViewportSelected(cmd, vi);
-      sdl->AddRect(rmin, rmax, selVp ? IM_COL32(59, 130, 246, 255) : IM_COL32(90, 90, 100, 255), 0.f, 0,
-                   selVp ? 2.0f : 1.2f);
-      if (selVp && cmd.selectedViewports.size() == 1) {
+      const bool floatVp = InFloatingModelSpace(cmd) && cmd.floatingViewportLayout == cmd.activeSpaceIndex &&
+                           vi == cmd.floatingViewportIndex;
+      sdl->AddRect(rmin, rmax,
+                   floatVp ? IM_COL32(90, 220, 120, 255)
+                           : (selVp ? IM_COL32(59, 130, 246, 255) : IM_COL32(90, 90, 100, 255)),
+                   0.f, 0, (floatVp || selVp) ? 2.0f : 1.2f);
+      if (selVp && !floatVp && cmd.selectedViewports.size() == 1) {
         const ImVec2 corners[4] = {rmin, ImVec2(rmax.x, rmin.y), rmax, ImVec2(rmin.x, rmax.y)};
         for (const ImVec2& cp : corners)
           sdl->AddRectFilled(ImVec2(cp.x - 4.f, cp.y - 4.f), ImVec2(cp.x + 4.f, cp.y + 4.f),
@@ -6974,22 +7012,57 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       sdl->AddRectFilled(a2, b2, IM_COL32(59, 130, 246, 40));
       sdl->AddRect(a2, b2, IM_COL32(59, 130, 246, 200), 0.f, 0, 1.0f);
     }
+    // Floating model space (REQ-036): in-place model cursor + LINE/POLYLINE rubber inside the viewport.
+    if (InFloatingModelSpace(cmd) && cmd.floatingViewportLayout == cmd.activeSpaceIndex &&
+        cmd.floatingViewportIndex >= 0 && cmd.floatingViewportIndex < static_cast<int>(L.viewports.size()) &&
+        hovered) {
+      const Viewport& fv = L.viewports[static_cast<size_t>(cmd.floatingViewportIndex)];
+      const float vcx = fv.paperXIn + fv.paperWIn * 0.5f;
+      const float vcy = fv.paperYIn + fv.paperHIn * 0.5f;
+      const float s = fv.safeScale();
+      auto mlToScreen = [&](float lx, float ly) {
+        float pIx = 0.f, pIy = 0.f;
+        ModelToPaperIn(fv, static_cast<double>(lx) + cmd.worldDocumentOriginX,
+                       static_cast<double>(ly) + cmd.worldDocumentOriginY, &pIx, &pIy);
+        return w2s(pIx, pIy);
+      };
+      const float curLX = static_cast<float>((fv.modelCenterX + static_cast<double>(curPX - vcx) * s) -
+                                             cmd.worldDocumentOriginX);
+      const float curLY = static_cast<float>((fv.modelCenterY + static_cast<double>(curPY - vcy) * s) -
+                                             cmd.worldDocumentOriginY);
+      const ImVec2 r0 = w2s(fv.paperXIn, fv.paperYIn);
+      const ImVec2 r1 = w2s(fv.paperXIn + fv.paperWIn, fv.paperYIn + fv.paperHIn);
+      sdl->PushClipRect(ImVec2(std::min(r0.x, r1.x), std::min(r0.y, r1.y)),
+                        ImVec2(std::max(r0.x, r1.x), std::max(r0.y, r1.y)), true);
+      const bool lineRubber = cmd.active == AppCommandState::Kind::Line &&
+                              cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint;
+      const bool plineRubber = cmd.active == AppCommandState::Kind::Polyline &&
+                               cmd.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint;
+      if (lineRubber || plineRubber)
+        sdl->AddLine(mlToScreen(cmd.anchorX, cmd.anchorY), mlToScreen(curLX, curLY),
+                     IM_COL32(90, 220, 120, 230), 1.5f);
+      const ImVec2 cc = mlToScreen(curLX, curLY);  // model cursor crosshair
+      sdl->AddLine(ImVec2(cc.x - 7.f, cc.y), ImVec2(cc.x + 7.f, cc.y), IM_COL32(90, 220, 120, 210), 1.f);
+      sdl->AddLine(ImVec2(cc.x, cc.y - 7.f), ImVec2(cc.x, cc.y + 7.f), IM_COL32(90, 220, 120, 210), 1.f);
+      sdl->PopClipRect();
+    }
   }
 
-  // Floating model space (REQ-036): banner + viewport-edge accent so the mode is obvious.
+  // Floating model space (REQ-036): a banner so the in-place edit mode is obvious (the active viewport is
+  // outlined in green).
   if (InFloatingModelSpace(cmd)) {
     ImDrawList* bdl = ImGui::GetWindowDrawList();
-    char msg[112];
-    std::snprintf(msg, sizeof(msg), "FLOATING MODEL SPACE — Viewport %d   (Esc / PAPER button to return)",
+    char msg[128];
+    std::snprintf(msg, sizeof(msg),
+                  "FLOATING MODEL SPACE — editing Viewport %d in place   (Esc / FLOAT button / PSPACE to return)",
                   cmd.floatingViewportIndex + 1);
     const ImVec2 ts = ImGui::CalcTextSize(msg);
     const float pad = 8.f;
     const ImVec2 bmin(imgPos.x + (avail.x - ts.x) * 0.5f - pad, imgPos.y + 6.f);
     const ImVec2 bmax(bmin.x + ts.x + pad * 2.f, bmin.y + ts.y + pad);
-    bdl->AddRectFilled(bmin, bmax, IM_COL32(40, 70, 120, 225), 4.f);
-    bdl->AddRect(bmin, bmax, IM_COL32(120, 180, 255, 255), 4.f);
-    bdl->AddText(ImVec2(bmin.x + pad, bmin.y + pad * 0.5f), IM_COL32(230, 240, 255, 255), msg);
-    bdl->AddRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), IM_COL32(120, 180, 255, 200), 0.f, 0, 3.f);
+    bdl->AddRectFilled(bmin, bmax, IM_COL32(30, 80, 50, 225), 4.f);
+    bdl->AddRect(bmin, bmax, IM_COL32(120, 220, 150, 255), 4.f);
+    bdl->AddText(ImVec2(bmin.x + pad, bmin.y + pad * 0.5f), IM_COL32(225, 245, 230, 255), msg);
   }
 
   std::vector<CadAnnotation> transformAnnPreviews;

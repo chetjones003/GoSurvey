@@ -339,9 +339,9 @@ void StartPaperMoveCopyViewports(AppCommandState& cmd, bool copy, std::vector<st
 }
 
 // --- Floating model space (REQ-036) ---
-// Mapping: the maximized model view shows model height = 100/zoom (since halfH = 50/zoom); a viewport on
-// paper shows model height = paperHIn * scale. Entering matches them so framing is continuous, and exiting
-// recovers the viewport's scale from the final zoom.
+// In-place: the active space stays the paper layout (so the sheet + all viewports stay visible), and
+// model edit/snap/draw is routed through the active viewport's rectangle. The model is already drawn
+// inside the viewport by the paper overlay, so entering does not change the view.
 
 bool InFloatingModelSpace(const AppCommandState& cmd) { return cmd.floatingViewportIndex >= 0; }
 
@@ -351,45 +351,20 @@ void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std
   PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
   if (vpIdx < 0 || static_cast<size_t>(vpIdx) >= L.viewports.size())
     return;
-  const Viewport& v = L.viewports[static_cast<size_t>(vpIdx)];
-  cmd.savedPaperPanX = cmd.viewportPanX;
-  cmd.savedPaperPanY = cmd.viewportPanY;
-  cmd.savedPaperZoom = cmd.viewportZoom;
   cmd.floatingViewportLayout = layoutIdx;
   cmd.floatingViewportIndex = vpIdx;
-  cmd.activeSpaceIndex = kModelSpaceIndex;  // reuse the full model edit/snap pipeline
-  cmd.viewportPanX = v.modelCenterX - cmd.worldDocumentOriginX;  // model view is local (world = local + origin)
-  cmd.viewportPanY = v.modelCenterY - cmd.worldDocumentOriginY;
-  const float visH = std::max(0.01f, v.paperHIn * v.safeScale());
-  cmd.viewportZoom = 100.f / visH;
   cmd.active = AppCommandState::Kind::None;
   cmd.paperMovePhase = 0;
   cmd.paperGripCorner = -2;
   cmd.paperSelBoxActive = false;
   log.push_back("Floating model space — editing viewport " + std::to_string(vpIdx + 1) +
-                "; Esc or the PAPER button returns to the layout.");
+                " in place; Esc / FLOAT button / PSPACE returns to paper editing.");
   BumpCadGpuCache(cmd);
 }
 
 void ExitFloatingModelSpace(AppCommandState& cmd, std::vector<std::string>& log) {
   if (cmd.floatingViewportIndex < 0)
     return;
-  const int li = cmd.floatingViewportLayout;
-  const int vi = cmd.floatingViewportIndex;
-  if (li >= 0 && static_cast<size_t>(li) < cmd.paperLayouts.size()) {
-    PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(li)];
-    if (vi >= 0 && static_cast<size_t>(vi) < L.viewports.size()) {
-      Viewport& v = L.viewports[static_cast<size_t>(vi)];
-      v.modelCenterX = cmd.viewportPanX + cmd.worldDocumentOriginX;
-      v.modelCenterY = cmd.viewportPanY + cmd.worldDocumentOriginY;
-      const float visH = 100.f / std::max(1.e-6f, cmd.viewportZoom);
-      v.scaleModelPerPaperIn = std::max(1.e-6f, visH / std::max(0.01f, v.paperHIn));
-    }
-  }
-  cmd.activeSpaceIndex = (li >= 0 && static_cast<size_t>(li) < cmd.paperLayouts.size()) ? li : kModelSpaceIndex;
-  cmd.viewportPanX = cmd.savedPaperPanX;
-  cmd.viewportPanY = cmd.savedPaperPanY;
-  cmd.viewportZoom = cmd.savedPaperZoom;
   cmd.floatingViewportLayout = -1;
   cmd.floatingViewportIndex = -1;
   cmd.active = AppCommandState::Kind::None;
@@ -8718,7 +8693,7 @@ void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.activeSpaceIndex != kModelSpaceIndex) {  // REQ-035: paper space deletes selected viewports
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // REQ-035: delete viewports
     DeleteSelectedViewports(st, log);
     return;
   }
@@ -8831,7 +8806,7 @@ void BeginSelectionBoxCorner(AppCommandState& st, float wx, float wy, float anch
 }
 
 void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.activeSpaceIndex != kModelSpaceIndex) {  // REQ-035: move selected viewports in paper space
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // REQ-035: move viewports
     StartPaperMoveCopyViewports(st, /*copy=*/false, log);
     return;
   }
@@ -8850,7 +8825,7 @@ void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.activeSpaceIndex != kModelSpaceIndex) {  // REQ-035: copy selected viewports in paper space
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // REQ-035: copy viewports
     StartPaperMoveCopyViewports(st, /*copy=*/true, log);
     return;
   }
