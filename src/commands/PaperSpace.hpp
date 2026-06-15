@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 // Paper space data model (REQ-025/026/031, ADR-006).
 //   Increment 1: named layouts, each a sheet with a paper size + orientation.
@@ -30,6 +31,29 @@ inline const PaperSizePreset kPaperSizePresets[] = {
 constexpr int kPaperSizePresetCount = static_cast<int>(sizeof(kPaperSizePresets) / sizeof(kPaperSizePresets[0]));
 constexpr int kDefaultPaperPresetIdx = 8;  // ARCH D
 
+// A viewport (REQ-027): a rectangular window on a paper layout showing model space at a
+// given scale and center. Rect is in paper inches with the sheet's lower-left at (0,0).
+struct Viewport {
+  float paperXIn = 1.f;   // lower-left of the viewport rect, paper inches
+  float paperYIn = 1.f;
+  float paperWIn = 10.f;  // rect size, paper inches
+  float paperHIn = 7.5f;
+  double modelCenterX = 0.0;  // model-space point shown at the viewport's center
+  double modelCenterY = 0.0;
+  float scaleModelPerPaperIn = 50.f;  // model units per paper inch (AutoCAD viewport scale)
+
+  float safeScale() const { return scaleModelPerPaperIn > 1.e-6f ? scaleModelPerPaperIn : 1.e-6f; }
+};
+
+// Pure transform (REQ-027): a model-space point → paper-space inches within \p vp.
+inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outPaperX, float* outPaperY) {
+  const float s = vp.safeScale();
+  const float cx = vp.paperXIn + vp.paperWIn * 0.5f;
+  const float cy = vp.paperYIn + vp.paperHIn * 0.5f;
+  *outPaperX = cx + static_cast<float>((mx - vp.modelCenterX) / static_cast<double>(s));
+  *outPaperY = cy + static_cast<float>((my - vp.modelCenterY) / static_cast<double>(s));
+}
+
 struct PaperLayout {
   std::string name = "Layout1";
   // Portrait dimensions in inches (width <= height); orientation chooses how they map to the sheet.
@@ -37,6 +61,7 @@ struct PaperLayout {
   float portraitHeightIn = kPaperSizePresets[kDefaultPaperPresetIdx].heightIn;
   bool landscape = true;
   int presetIdx = kDefaultPaperPresetIdx;  // index into kPaperSizePresets, or -1 = custom
+  std::vector<Viewport> viewports;         // REQ-027
 
   float sheetWidthIn() const { return landscape ? portraitHeightIn : portraitWidthIn; }
   float sheetHeightIn() const { return landscape ? portraitWidthIn : portraitHeightIn; }

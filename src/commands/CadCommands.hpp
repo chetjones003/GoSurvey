@@ -302,6 +302,10 @@ void DeletePaperLayout(AppCommandState& cmd, int idx);
 void SetActiveSpace(AppCommandState& cmd, int spaceIndex);
 /// Toggle between model space and the last/first paper layout (creating one if none exist).
 void ToggleModelPaperSpace(AppCommandState& cmd);
+/// Append a default viewport (centered on the model) to layout \p layoutIdx; returns its index (REQ-027).
+int  AddViewport(AppCommandState& cmd, int layoutIdx);
+/// Delete viewport \p vpIdx from layout \p layoutIdx, fixing up the selection.
+void DeleteViewport(AppCommandState& cmd, int layoutIdx, int vpIdx);
 
 struct AppCommandState {
   enum class Kind {
@@ -1023,6 +1027,8 @@ struct AppCommandState {
   std::vector<PaperLayout> paperLayouts;
   int activeSpaceIndex = kModelSpaceIndex;   ///< -1 = model space; else index into paperLayouts.
   int lastPaperLayoutIndex = 0;              ///< layout the MODEL/PAPER toggle returns to.
+  int selectedViewportLayout = -1;           ///< layout owning the selected viewport (REQ-027), or -1.
+  int selectedViewportIndex = -1;            ///< index into that layout's viewports, or -1.
 
   // -------------------------------------------------------------------------
   // TRAVERSE EDITOR state
