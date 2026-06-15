@@ -4304,6 +4304,174 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   return "Command:";
 }
 
+// True when the active prompt expects a coordinate POINT, so the cursor dynamic
+// input shows AutoCAD-style live X/Y fields (REQ-024). Mirrors the point phases
+// of CommandInputHint; non-point prompts (bearing/angle/distance/factor/option/
+// selection) return false and keep a single input field.
+static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
+  using K = AppCommandState::Kind;
+  switch (cmd.active) {
+  case K::Line: {
+    using LP = AppCommandState::LinePhase;
+    using SAP = AppCommandState::SegmentAnglePickPhase;
+    if (cmd.linePhase == LP::NeedFirstPoint) return true;
+    if (cmd.linePhase == LP::NeedNextPoint)
+      return !(cmd.segmentAngleKeyboardAwaitBearing || cmd.segmentAngleLockActive ||
+               cmd.segmentAnglePickPhase != SAP::Idle);
+    return false;
+  }
+  case K::Polyline: {
+    using PP = AppCommandState::PolylinePhase;
+    using SAP = AppCommandState::SegmentAnglePickPhase;
+    if (cmd.polylinePhase == PP::NeedFirstPoint) return true;
+    if (cmd.polylinePhase == PP::NeedNextPoint)
+      return !(cmd.segmentAngleKeyboardAwaitBearing || cmd.segmentAngleLockActive ||
+               cmd.segmentAnglePickPhase != SAP::Idle);
+    return false;
+  }
+  case K::Arc: return true;
+  case K::Ellipse: {
+    using EP = AppCommandState::EllipsePhase;
+    return cmd.ellPhase == EP::WaitCenter || cmd.ellPhase == EP::WaitMajorEnd;
+  }
+  case K::Text:
+    return cmd.textPhase == AppCommandState::TextCmdPhase::WaitInsertion;
+  case K::Mtext: {
+    using MP = AppCommandState::MtextPhase;
+    return cmd.mtextPhase == MP::WaitCorner1 || cmd.mtextPhase == MP::WaitCorner2;
+  }
+  case K::DimAligned:
+  case K::DimLinear: return true;
+  case K::DimAngular: {
+    using DAP = AppCommandState::DimAngularPhase;
+    return cmd.dimAngularPhase == DAP::WaitVertex || cmd.dimAngularPhase == DAP::WaitRay1 ||
+           cmd.dimAngularPhase == DAP::WaitRay2;
+  }
+  case K::IdPoint: return true;
+  case K::SurveyInverse: return true;
+  case K::Circle: {
+    using CP = AppCommandState::CirclePhase;
+    return cmd.circlePhase == CP::WaitCenterOrMode || cmd.circlePhase == CP::ThreeP_WaitP1 ||
+           cmd.circlePhase == CP::ThreeP_WaitP2 || cmd.circlePhase == CP::ThreeP_WaitP3;
+  }
+  case K::Move:
+  case K::Copy: {
+    using MP = AppCommandState::ModifyPhase;
+    return cmd.modifyPhase == MP::NeedBase || cmd.modifyPhase == MP::NeedDestination;
+  }
+  case K::Scale: {
+    using MP = AppCommandState::ModifyPhase;
+    using SP = AppCommandState::ScalePhase;
+    if (cmd.modifyPhase == MP::NeedBase) return true;
+    if (cmd.modifyPhase == MP::NeedDestination)
+      return cmd.scalePhase == SP::Ref_WaitP1 || cmd.scalePhase == SP::Ref_WaitP2 ||
+             cmd.scalePhase == SP::NewLength_WaitP2;
+    return false;
+  }
+  case K::Rotate: {
+    using RP = AppCommandState::RotatePhase;
+    return cmd.rotatePhase == RP::NeedBase || cmd.rotatePhase == RP::Ref_WaitP1 ||
+           cmd.rotatePhase == RP::Ref_WaitP2 || cmd.rotatePhase == RP::AnglePoints_WaitP1 ||
+           cmd.rotatePhase == RP::AnglePoints_WaitP2;
+  }
+  case K::Trim: {
+    using TP = AppCommandState::TrimPhase;
+    return cmd.trimPhase == TP::CuttingLine_WaitP1 || cmd.trimPhase == TP::CuttingLine_WaitP2;
+  }
+  default:
+    return false;
+  }
+}
+
+// Ordinal word for the point being specified ("first", "second", … then "11th").
+static std::string OrdinalWord(int n) {
+  static const char* kWords[] = {"zeroth", "first", "second", "third",   "fourth", "fifth",
+                                 "sixth",  "seventh", "eighth", "ninth", "tenth"};
+  if (n >= 1 && n <= 10)
+    return kWords[n];
+  const char* suf = "th";
+  const int mod100 = n % 100;
+  if (mod100 < 11 || mod100 > 13) {
+    switch (n % 10) {
+    case 1: suf = "st"; break;
+    case 2: suf = "nd"; break;
+    case 3: suf = "rd"; break;
+    default: break;
+    }
+  }
+  return std::to_string(n) + suf;
+}
+
+// AutoCAD-style "Specify … :" label for the dynamic-input point prompt (REQ-024).
+// Only meaningful when CommandExpectsPointEntry(cmd) is true. Multi-point chains
+// (LINE, POLYLINE) count the point being specified: first, second, third, …
+static std::string CadPointPromptLabel(const AppCommandState& cmd) {
+  using K = AppCommandState::Kind;
+  switch (cmd.active) {
+  case K::Line:
+    return cmd.linePhase == AppCommandState::LinePhase::NeedFirstPoint
+               ? std::string("Specify first point:")
+               : "Specify " + OrdinalWord(static_cast<int>(cmd.lineDraftSegments) + 2) + " point:";
+  case K::Polyline:
+    return cmd.polylinePhase == AppCommandState::PolylinePhase::NeedFirstPoint
+               ? std::string("Specify first point:")
+               : "Specify " + OrdinalWord(static_cast<int>(cmd.polyDraftSegments) + 2) + " point:";
+  case K::Arc:
+    switch (cmd.arcPhase) {
+    case AppCommandState::ArcPhase::WaitStart: return "Specify start point:";
+    case AppCommandState::ArcPhase::WaitMid:   return "Specify second point:";
+    case AppCommandState::ArcPhase::WaitEnd:   return "Specify end point:";
+    }
+    return "Specify point:";
+  case K::Ellipse:
+    return cmd.ellPhase == AppCommandState::EllipsePhase::WaitCenter ? "Specify center point:"
+                                                                     : "Specify axis endpoint:";
+  case K::Circle:
+    switch (cmd.circlePhase) {
+    case AppCommandState::CirclePhase::WaitCenterOrMode: return "Specify center point:";
+    case AppCommandState::CirclePhase::ThreeP_WaitP1:    return "Specify first point:";
+    case AppCommandState::CirclePhase::ThreeP_WaitP2:    return "Specify second point:";
+    case AppCommandState::CirclePhase::ThreeP_WaitP3:    return "Specify third point:";
+    default:                                             return "Specify point:";
+    }
+  case K::Text:
+    return "Specify start point:";
+  case K::Mtext:
+    return cmd.mtextPhase == AppCommandState::MtextPhase::WaitCorner1 ? "Specify first corner:"
+                                                                      : "Specify opposite corner:";
+  case K::DimAligned:
+  case K::DimLinear:
+    switch (cmd.dimPhase) {
+    case AppCommandState::DimPhase::WaitExt1:      return "Specify first extension line origin:";
+    case AppCommandState::DimPhase::WaitExt2:      return "Specify second extension line origin:";
+    case AppCommandState::DimPhase::WaitDimLinePt: return "Specify dimension line location:";
+    }
+    return "Specify point:";
+  case K::DimAngular:
+    switch (cmd.dimAngularPhase) {
+    case AppCommandState::DimAngularPhase::WaitVertex: return "Specify vertex:";
+    case AppCommandState::DimAngularPhase::WaitRay1:   return "Specify first ray point:";
+    case AppCommandState::DimAngularPhase::WaitRay2:   return "Specify second ray point:";
+    default:                                          return "Specify point:";
+    }
+  case K::IdPoint:
+    return "Specify point:";
+  case K::SurveyInverse:
+    return cmd.surveyInversePhase == AppCommandState::SurveyInversePhase::WaitFrom ? "Specify first point:"
+                                                                                  : "Specify second point:";
+  case K::Move:
+  case K::Copy:
+    return cmd.modifyPhase == AppCommandState::ModifyPhase::NeedBase ? "Specify base point:"
+                                                                     : "Specify second point:";
+  case K::Scale:
+    return cmd.modifyPhase == AppCommandState::ModifyPhase::NeedBase ? "Specify base point:" : "Specify point:";
+  case K::Rotate:
+    return cmd.rotatePhase == AppCommandState::RotatePhase::NeedBase ? "Specify base point:" : "Specify point:";
+  default:
+    return "Specify point:";
+  }
+}
+
 float CadStatusBarStripHeightPx() {
   constexpr float kPadY = 4.f;
   const ImGuiStyle& st = ImGui::GetStyle();
@@ -4437,6 +4605,12 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
 // anchor at the crosshair (AutoCAD dynamic-input style) rather than the command bar.
 // (-1,-1) means "not yet known" → popup falls back to the command-input anchor.
 static ImVec2 s_lastCrosshairScreen = ImVec2(-1.f, -1.f);
+
+// Screen rect of the command-autocomplete popup while it is open, so the viewport
+// click handler can ignore a left-click that lands on the suggestion list (REQ-024).
+static bool   s_cmdSugPopupOpen = false;
+static ImVec2 s_cmdSugPopupMin = ImVec2(0.f, 0.f);
+static ImVec2 s_cmdSugPopupMax = ImVec2(0.f, 0.f);
 
 void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBufSize, AppCommandState& cmd) {
   const bool isDark = (cmd.displayColorThemeIdx == 0);
@@ -4580,6 +4754,11 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   static bool s_cmdSugVisible = false;
   static std::string s_cmdHighlight;
   static bool s_cmdScrollToSel = false;  // request: scroll the keyboard-selected row into view
+  // Suggestions persisted from the frame they were built. Clicking a row deactivates the command
+  // InputText (focus moves to the popup), so on the click frame inputActive is false and the list
+  // would otherwise rebuild empty — taking the popup (and its row buttons) down before the click
+  // resolves. We keep the list alive from this cache while the mouse is over the popup.
+  static std::vector<CommandSuggestion> s_cmdSugCache;
   std::vector<CommandSuggestion> cmdSug;
   ImVec2 cmdInputMin(0, 0), cmdInputMax(0, 0);
   bool   cmdShowSug = false;
@@ -4611,8 +4790,17 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     }
 
     const bool singleToken = query.find_first_of(" \t") == std::string::npos;
-    if (inputActive && !query.empty() && singleToken && !s_cmdDismissed)
+    // Mouse is over last frame's popup rect — a row is being hovered/clicked.
+    const bool overCmdSugPopup = s_cmdSugPopupOpen &&
+        ImGui::IsMouseHoveringRect(s_cmdSugPopupMin, s_cmdSugPopupMax, false);
+    if (inputActive && !query.empty() && singleToken && !s_cmdDismissed) {
       cmdSug = FuzzyCommandSuggestions(query, 20);
+      s_cmdSugCache = cmdSug;
+    } else if (overCmdSugPopup && !s_cmdDismissed && !s_cmdSugCache.empty()) {
+      // Input lost focus to a click on the popup; keep the cached list alive this frame so the
+      // row's InvisibleButton (which fires on mouse release) can run the command.
+      cmdSug = s_cmdSugCache;
+    }
 
     if (!cmdSug.empty()) {
       const int n = static_cast<int>(cmdSug.size());
@@ -4682,6 +4870,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   ImGui::PopStyleColor();
 
   // --- nanoCAD-style command autocomplete popup (anchored at the drawing crosshair) ---
+  s_cmdSugPopupOpen = false;
   if (cmdShowSug && !cmdSug.empty()) {
     const float rowH  = ImGui::GetTextLineHeight() + 7.f;
     const float padY  = 3.f;
@@ -4720,6 +4909,9 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     }
     ImGui::SetNextWindowPos(pos);
     ImGui::SetNextWindowSize(ImVec2(listW, listH));
+    s_cmdSugPopupOpen = true;
+    s_cmdSugPopupMin = pos;
+    s_cmdSugPopupMax = ImVec2(pos.x + listW, pos.y + listH);
     const ImGuiWindowFlags pf = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                 ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
@@ -4738,7 +4930,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
           std::string pick = cmdSug[i].name;
           for (char& ch : pick) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
           std::snprintf(cmdBuf, static_cast<size_t>(cmdBufSize), "%s", pick.c_str());
-          s_cmdDismissed = true; s_cmdLastQuery.clear();
+          s_cmdDismissed = true; s_cmdLastQuery.clear(); s_cmdSugCache.clear();
           ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
         }
         if (ImGui::IsItemHovered()) s_cmdSel = i;
@@ -5755,8 +5947,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     BumpCadGpuCache(cmd);
   }
 
-  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 &&
-      my < avail.y) {
+  const bool overCmdSugPopup =
+      s_cmdSugPopupOpen && ImGui::IsMouseHoveringRect(s_cmdSugPopupMin, s_cmdSugPopupMax, false);
+  if (hovered && !overCmdSugPopup && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x &&
+      my >= 0 && my < avail.y) {
     if (cmd.dimGripMoveActive) {
       cmd.dimGripMoveActive = false;
       ClearDimGripInteraction(cmd);
@@ -6771,6 +6965,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       !cmd.mtextRichEditorOpen;
   cmd.viewportDrawingHovered = showViewportCmdPalette;
 
+  // Detect the palette's open edge so the two-field coordinate input resets its
+  // typed-value locks when it (re)appears (REQ-024).
+  static bool s_vpPalShownPrev = false;
+  const bool vpPalJustOpened = showViewportCmdPalette && !s_vpPalShownPrev;
+  s_vpPalShownPrev = showViewportCmdPalette;
+
   if (showViewportCmdPalette) {
     ImGuiIO& io = ImGui::GetIO();
     const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
@@ -6790,25 +6990,94 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.f, 8.f));
     ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.f);
     ImGui::Begin("##ViewportCommandInput", nullptr, wf);
-    if (!io.WantTextInput && io.InputQueueCharacters.Size > 0) {
-      RouteQueuedCharsToCmdBuf(cmdBuf, cmdBufSize, io);
-      ImGui::SetKeyboardFocusHere(0);
-    }
-    // Dark: bright blue-white hint; Light: muted dark so it reads on the light popup bg.
+
+    const bool pointEntry = CommandExpectsPointEntry(cmd);
+
+    // Prompt label (AutoCAD "Specify ... :"). Reset the two-field locks whenever
+    // the prompt changes (new point, including after a commit or viewport click)
+    // or the palette just reopened for a fresh command.
+    const char* curHint = CommandInputHint(cmd);
+    static const char* s_lastDynHint = nullptr;
+    const bool promptChanged = (curHint != s_lastDynHint) || vpPalJustOpened;
+    s_lastDynHint = curHint;
+
+    // Prompt label: a muted/secondary tone with a little gap below it, so it reads
+    // as a label separated from the input boxes. Point prompts get an AutoCAD-style
+    // "Specify … :" label; other prompts keep the full guidance hint.
     const ImVec4 hintCol = (cmd.displayColorThemeIdx == 0)
-        ? ImVec4(0.82f, 0.88f, 0.96f, 1.f)
+        ? ImVec4(0.90f, 0.93f, 0.98f, 1.f)
         : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
     ImGui::PushStyleColor(ImGuiCol_Text, hintCol);
-    ImGui::TextWrapped("%s", CommandInputHint(cmd));
+    const std::string promptLabel = pointEntry ? CadPointPromptLabel(cmd) : std::string(curHint);
+    ImGui::TextUnformatted(promptLabel.c_str());
     ImGui::PopStyleColor();
-    ImGuiInputTextFlags itf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
-    ImGui::SetNextItemWidth(std::clamp(360.f * io.FontGlobalScale, 200.f, mainViewport->WorkSize.x * 0.48f));
-    const bool exec =
-        ImGui::InputTextWithHint("##vp_cmd_buf", "Type value, Enter or Send", cmdBuf, static_cast<size_t>(cmdBufSize),
-                                 itf, CommandLineInputCallback, nullptr);
-    ImGui::SameLine(0.f, 8.f);
-    if (ImGui::Button("Send##vp") || exec)
-      ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+    ImGui::Dummy(ImVec2(0.f, 4.f));
+
+    if (pointEntry) {
+      // Two live coordinate fields: track the crosshair's world X/Y at the display
+      // precision until the user types into a field (which locks it). Tab switches
+      // fields; Enter (or a viewport click) commits. REQ-024.
+      double liveWx = 0.0, liveWy = 0.0;
+      if (outCursorX && outCursorY)
+        CadCoord::WorldFromLocal(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &liveWx,
+                                 &liveWy);
+
+      static char dxBuf[64] = {0}, dyBuf[64] = {0};
+      static bool xLocked = false, yLocked = false;
+      if (promptChanged) { xLocked = false; yLocked = false; }
+
+      const int prec = cmd.displayLinearPrecision;
+      if (!xLocked) std::snprintf(dxBuf, sizeof(dxBuf), "%s", FormatLinear(liveWx, prec).c_str());
+      if (!yLocked) std::snprintf(dyBuf, sizeof(dyBuf), "%s", FormatLinear(liveWy, prec).c_str());
+
+      const float fieldW = std::clamp(120.f * io.FontGlobalScale, 84.f, 220.f);
+      const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue;
+
+      const ImGuiID idX = ImGui::GetID("##dynX");
+      const ImGuiID idY = ImGui::GetID("##dynY");
+      const ImGuiID activeId = ImGui::GetActiveID();
+
+      // Type-to-start: the first keystroke with neither field focused begins entry
+      // in X immediately — clear the live value, capture the typed char, then lock
+      // and focus X. (Without seeding, ImGui's first key only grabs focus, so it
+      // took two presses to start typing.)
+      if (activeId != idX && activeId != idY && !io.WantTextInput && io.InputQueueCharacters.Size > 0) {
+        dxBuf[0] = '\0';
+        xLocked = true;
+        RouteQueuedCharsToCmdBuf(dxBuf, static_cast<int>(sizeof(dxBuf)), io);
+        ImGui::SetKeyboardFocusHere();  // focus X (the next item)
+      }
+
+      ImGui::SetNextItemWidth(fieldW);
+      const bool xEnter = ImGui::InputText("##dynX", dxBuf, sizeof(dxBuf), pf);
+      // Clicking/Tabbing into a field clears its live readout for fresh entry.
+      if (ImGui::IsItemActivated() && !xLocked) { dxBuf[0] = '\0'; xLocked = true; }
+      if (ImGui::IsItemEdited()) xLocked = true;
+      ImGui::SameLine(0.f, 6.f);
+      ImGui::SetNextItemWidth(fieldW);
+      const bool yEnter = ImGui::InputText("##dynY", dyBuf, sizeof(dyBuf), pf);
+      if (ImGui::IsItemActivated() && !yLocked) { dyBuf[0] = '\0'; yLocked = true; }
+      if (ImGui::IsItemEdited()) yLocked = true;
+
+      if (xEnter || yEnter) {
+        char combined[160];
+        std::snprintf(combined, sizeof(combined), "%s,%s", dxBuf, dyBuf);
+        ProcessCommandLineSubmit(combined, static_cast<int>(sizeof(combined)), cmd, log);
+      }
+    } else {
+      // Single field for non-point prompts (bearing/angle/distance/option/command).
+      if (!io.WantTextInput && io.InputQueueCharacters.Size > 0) {
+        RouteQueuedCharsToCmdBuf(cmdBuf, cmdBufSize, io);
+        ImGui::SetKeyboardFocusHere(0);
+      }
+      const ImGuiInputTextFlags itf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
+      ImGui::SetNextItemWidth(std::clamp(360.f * io.FontGlobalScale, 200.f, mainViewport->WorkSize.x * 0.48f));
+      const bool exec =
+          ImGui::InputTextWithHint("##vp_cmd_buf", "Type value or Enter", cmdBuf, static_cast<size_t>(cmdBufSize),
+                                   itf, CommandLineInputCallback, nullptr);
+      if (exec)
+        ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+    }
     ImGui::End();
     ImGui::PopStyleVar(2);
   }

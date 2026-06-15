@@ -396,7 +396,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
                        const std::unordered_map<std::string, uint32_t>& layerRgb,
                        const std::unordered_map<std::string, std::pair<size_t, size_t>>* blockDefs, const Affine2D& xf,
                        int insertDepth, double* coordMagMax, int* skippedPaper, int* skippedViewport,
-                       int* skippedUnknown, std::unordered_map<std::string, int>* skipCounts) {
+                       int* skippedUnknown, std::unordered_map<std::string, int>* skipCounts,
+                       std::vector<SurveyPoint>* embeddedPointsLocal) {
 
   constexpr int kMaxInsertDepth = 64;
 
@@ -859,8 +860,9 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       }
       const auto at = base.makeAttr(layerRgb);
       if (isGoSurvey) {
-        // REQ-023: reconstruct the survey point, applying the same INSERT
-        // transform + world-origin offset used for geometry (so it lands 1:1).
+        // REQ-023: reconstruct the survey point, applying the same INSERT transform + world-origin offset
+        // used for geometry (so it lands 1:1, in precise local coords). Collected in a side buffer and
+        // merged with the session's existing points after parsing rather than pushed directly.
         double wx = 0, wy = 0;
         xf.apply(px, py, &wx, &wy);
         SurveyPoint sp;
@@ -872,7 +874,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         sp.layer = at.layer.empty() ? std::string("0") : at.layer;
         sp.labelStyle = static_cast<SurveyPointLabelStyle>(
             std::clamp(slabel, 0, static_cast<int>(SurveyPointLabelStyle::NumberNorthEastElev)));
-        st.surveyPoints.push_back(sp);
+        if (embeddedPointsLocal)
+          embeddedPointsLocal->push_back(sp);
         i = j;
         continue;
       }
@@ -1100,7 +1103,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       const Affine2D ins = Affine2D::FromInsert(ix, iy, sx, sy, rot);
       const Affine2D nest = xf.compose(ins);
       ParseEntityRegion(t, br.first, br.second, st, layerRgb, blockDefs, nest, insertDepth + 1, coordMagMax, skippedPaper,
-                        skippedViewport, skippedUnknown, skipCounts);
+                        skippedViewport, skippedUnknown, skipCounts, embeddedPointsLocal);
       // Store the INSERT insertion point as a zero-length segment so snap can hit the exact
       // world coordinate — Civil 3D COGO points use INSERT entities whose center must be snap-able.
       appendSegXF(ix, iy, ix, iy, base.makeAttr(layerRgb));
@@ -1302,12 +1305,24 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
     return false;
   }
 
+  // Import replaces the CAD drawing, but KEEPS survey points already in the session (e.g. CSV-imported)
+  // so the two orders — points-then-DXF and DXF-then-points — behave the same. Points embedded in the
+  // DXF are reconstructed below and merged with the existing ones (ID conflicts resolved via a prompt).
+  const double oldOriginX = st.worldDocumentOriginX;
+  const double oldOriginY = st.worldDocumentOriginY;
   ResetCadToolStateToIdle(st);
-  ClearCadGeometry(st);
-  // REQ-023: import replaces the drawing. Survey points are reconstructed from
-  // POINT XDATA below (ClearCadGeometry does not touch them), so clear first.
-  st.surveyPoints.clear();
+  ClearCadGeometry(st);  // zeroes the document origin and drops all annotations (incl. survey labels)
   st.selectedSurveyPointIndices.clear();
+  const bool hadExistingPoints = !st.surveyPoints.empty();
+  if (hadExistingPoints) {
+    // The points are still in the OLD local frame but the origin is now 0; move them to world space so the
+    // origin established below rebases them with the new geometry. Their label links were just cleared, so
+    // reset each so EnsureSurveyPointLabelMtext rebuilds fresh labels.
+    if (oldOriginX != 0.0 || oldOriginY != 0.0)
+      CadCoord::ShiftAllStorageBy(st, oldOriginX, oldOriginY);
+    for (SurveyPoint& p : st.surveyPoints)
+      p.labelMtextAnnIndex = -1;
+  }
 
   // Parse HEADER $EXTMIN/$EXTMAX to set the world origin before entity parsing.
   // This lets appendSegXF subtract a near-zero offset before the double→float cast,
@@ -1360,12 +1375,12 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
       const double spanY = gotMin && gotMax ? std::fabs(maxY - minY) : 0.0;
       const bool headerSane = std::max(spanX, spanY) < 1e6;
       if (headerSane) {
+        // ApplyDocumentOriginRebase (rather than a blind assignment) so any survey points kept from the
+        // session are shifted into the new origin's local frame instead of being left in the old one.
         if (gotMin && gotMax && (spanX > 0.0 || spanY > 0.0)) {
-          st.worldDocumentOriginX = 0.5 * (minX + maxX);
-          st.worldDocumentOriginY = 0.5 * (minY + maxY);
+          CadCoord::ApplyDocumentOriginRebase(st, 0.5 * (minX + maxX), 0.5 * (minY + maxY), &log);
         } else if (gotMin) {
-          st.worldDocumentOriginX = minX;
-          st.worldDocumentOriginY = minY;
+          CadCoord::ApplyDocumentOriginRebase(st, minX, minY, &log);
         }
       }
     }
@@ -1374,19 +1389,20 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   // If HEADER gave no usable origin, scan entity coordinates for the first large-magnitude
   // value to use as the world origin (avoids float precision loss for state-plane coordinates).
   if (st.worldDocumentOriginX == 0.0 && st.worldDocumentOriginY == 0.0) {
+    double candX = 0.0, candY = 0.0;
     auto prescanEntities = [&](size_t a, size_t b) {
       bool gotX = false, gotY = false;
       for (size_t k = a; k < b; ++k) {
         if (!gotX && pairs[k].code == 10) {
           double v = 0;
           if (ParseDouble(pairs[k].value, &v) && std::fabs(v) > 10000.0) {
-            st.worldDocumentOriginX = v; gotX = true;
+            candX = v; gotX = true;
           }
         }
         if (!gotY && pairs[k].code == 20) {
           double v = 0;
           if (ParseDouble(pairs[k].value, &v) && std::fabs(v) > 10000.0) {
-            st.worldDocumentOriginY = v; gotY = true;
+            candY = v; gotY = true;
           }
         }
         if (gotX && gotY) break;
@@ -1394,6 +1410,9 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
     };
     if (hasEntitiesSec) prescanEntities(eb, ee);
     else if (hasModelSpace) prescanEntities(mb, me);
+    // Rebase (not assign) so kept survey points shift into the new local frame.
+    if (candX != 0.0 || candY != 0.0)
+      CadCoord::ApplyDocumentOriginRebase(st, candX, candY, &log);
   }
 
   double coordMagMax = 0;
@@ -1401,10 +1420,11 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   int skippedViewport = 0;
   int skipped = 0;
   std::unordered_map<std::string, int> skipHist;
+  std::vector<SurveyPoint> embeddedPoints;  // GOSURVEY XDATA points, local coords (rel. parse-time origin)
   const Affine2D xfRoot{};
   if (hasEntitiesSec)
     ParseEntityRegion(pairs, eb, ee, st, layerRgb, &blockDefs, xfRoot, 0, &coordMagMax, &skippedPaper,
-                      &skippedViewport, &skipped, &skipHist);
+                      &skippedViewport, &skipped, &skipHist, &embeddedPoints);
 
   const bool noGeom = st.userLinesFlat.empty() && st.userCirclesCxCyR.empty();
   if ((!hasEntitiesSec || noGeom) && hasModelSpace) {
@@ -1413,7 +1433,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
     else if (noGeom)
       log.push_back("DXF import — ENTITIES empty after model-space filter; reading geometry from *MODEL_SPACE block.");
     ParseEntityRegion(pairs, mb, me, st, layerRgb, &blockDefs, xfRoot, 0, &coordMagMax, &skippedPaper,
-                      &skippedViewport, &skipped, &skipHist);
+                      &skippedViewport, &skipped, &skipHist, &embeddedPoints);
   }
 
   const size_t nLines = st.userLinesFlat.size() / 6;
@@ -1436,6 +1456,31 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
       ++printed;
     }
   }
+  // Merge the DXF's embedded survey points with the session's existing ones. Embedded coords are local
+  // (relative to the current/parse origin). Non-colliding IDs are added now so the rebase below shifts and
+  // labels them with the rest; colliding IDs are converted to world coords and deferred to the conflict
+  // modal (overwrite vs. offset). With no pre-existing points there are no conflicts — all just import.
+  std::vector<SurveyPoint> embeddedConflictsWorld;
+  {
+    auto idInUse = [&](int id) {
+      for (const SurveyPoint& p : st.surveyPoints)
+        if (p.id == id)
+          return true;
+      return false;
+    };
+    for (SurveyPoint& sp : embeddedPoints) {
+      if (hadExistingPoints && idInUse(sp.id)) {
+        SurveyPoint w = sp;
+        w.easting = static_cast<float>(static_cast<double>(sp.easting) + st.worldDocumentOriginX);
+        w.northing = static_cast<float>(static_cast<double>(sp.northing) + st.worldDocumentOriginY);
+        embeddedConflictsWorld.push_back(w);
+      } else {
+        sp.labelMtextAnnIndex = -1;
+        st.surveyPoints.push_back(sp);
+      }
+    }
+  }
+
   CadCoord::RebaseDrawingToLocalOrigin(st, &log);
   {
     double rawMnX = 0., rawMxX = 0., rawMnY = 0., rawMxY = 0.;
@@ -1472,6 +1517,21 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   // (their exported label MTEXTs were skipped above to avoid duplicates).
   for (size_t spi = 0; spi < st.surveyPoints.size(); ++spi)
     EnsureSurveyPointLabelMtext(st, spi, nullptr);
+
+  // Embedded points whose IDs collide with existing session points were deferred; ask the user how to
+  // reconcile them (overwrite the existing rows, or offset the imported IDs).
+  if (!embeddedConflictsWorld.empty()) {
+    int maxId = 0;
+    for (const SurveyPoint& p : st.surveyPoints)
+      maxId = std::max(maxId, p.id);
+    st.pendingDxfConflictPoints = std::move(embeddedConflictsWorld);
+    st.dxfPointConflictOffset = std::max(maxId, 1);  // default offset clears the existing range
+    st.dxfPointConflictModalOpen = true;
+    st.dxfPointConflictModalOpenRequested = true;
+    log.push_back("DXF import — " + std::to_string(st.pendingDxfConflictPoints.size()) +
+                  " imported survey point ID(s) conflict with existing points; choose overwrite or offset.");
+  }
+
   BumpCadGpuCache(st);
   return true;
 }

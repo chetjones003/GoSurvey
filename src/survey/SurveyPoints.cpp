@@ -537,7 +537,8 @@ void ReplaceAll(std::string* s, const std::string& from, const std::string& to) 
 } // namespace
 
 std::string FormatSurveyPointLabelPlain(const SurveyPoint& p, SurveyPointLabelStyle style,
-                                       const SurveyLabelStyleTemplates& templates, int precision) {
+                                       const SurveyLabelStyleTemplates& templates, int precision,
+                                       double worldOriginX, double worldOriginY) {
   if (style == SurveyPointLabelStyle::None)
     return {};
   const std::string* tpl = &templates.numberDesc;
@@ -574,8 +575,8 @@ std::string FormatSurveyPointLabelPlain(const SurveyPoint& p, SurveyPointLabelSt
   ReplaceAll(&out, "{id}", std::to_string(p.id));
   ReplaceAll(&out, "{desc}", p.description);
   ReplaceAll(&out, "{elev}", FormatLinear(static_cast<double>(p.elevation), precision));
-  ReplaceAll(&out, "{north}", FormatLinear(static_cast<double>(p.northing), precision));
-  ReplaceAll(&out, "{east}", FormatLinear(static_cast<double>(p.easting), precision));
+  ReplaceAll(&out, "{north}", FormatLinear(static_cast<double>(p.northing) + worldOriginY, precision));
+  ReplaceAll(&out, "{east}", FormatLinear(static_cast<double>(p.easting) + worldOriginX, precision));
   return out;
 }
 
@@ -632,6 +633,36 @@ void RepositionAllSurveyPointLabels(AppCommandState& st) {
     RepositionSurveyLabelMtextForPoint(st, i);
 }
 
+void RegenerateAllSurveyPointLabels(AppCommandState& st) {
+  // Rebuilds label text (so {north}/{east} reflect the current document origin) and repositions.
+  for (size_t i = 0; i < st.surveyPoints.size(); ++i)
+    EnsureSurveyPointLabelMtext(st, i, nullptr);
+}
+
+void ResolveConflictingWorldSurveyPoints(AppCommandState& st, const std::vector<SurveyPoint>& conflictsWorld,
+                                         bool overwrite, int offset, std::vector<std::string>* log) {
+  for (const SurveyPoint& w : conflictsWorld) {
+    int id = w.id;
+    if (overwrite) {
+      const int idx = FindSurveyPointIndexById(st.surveyPoints, id);
+      if (idx >= 0)
+        RemoveSurveyPointAt(st, static_cast<size_t>(idx));
+    } else {
+      id = w.id + offset;
+      int guard = 0;
+      while (SurveyIdExists(st.surveyPoints, id) && guard++ < 1000000)
+        ++id;
+    }
+    SurveyPoint sp = w;
+    sp.id = id;
+    sp.easting = static_cast<float>(static_cast<double>(w.easting) - st.worldDocumentOriginX);
+    sp.northing = static_cast<float>(static_cast<double>(w.northing) - st.worldDocumentOriginY);
+    sp.labelMtextAnnIndex = -1;
+    st.surveyPoints.push_back(sp);
+    EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, log);
+  }
+}
+
 void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::vector<std::string>* log) {
   if (pointIndex >= st.surveyPoints.size())
     return;
@@ -645,7 +676,8 @@ void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::ve
   }
 
   const std::string body =
-      FormatSurveyPointLabelPlain(p, p.labelStyle, st.surveyLabelTemplates, st.surveyPointDisplayPrecision);
+      FormatSurveyPointLabelPlain(p, p.labelStyle, st.surveyLabelTemplates, st.surveyPointDisplayPrecision,
+                                  st.worldDocumentOriginX, st.worldDocumentOriginY);
   if (p.labelMtextAnnIndex >= 0 && static_cast<size_t>(p.labelMtextAnnIndex) < st.cadAnnotations.size()) {
     CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(p.labelMtextAnnIndex)];
     if (a.kind == CadAnnotation::Kind::Mtext) {

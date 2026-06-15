@@ -416,6 +416,7 @@ int main() {
       cmd.pendingPropertiesFocus = false;
     }
     DrawCopySurveyDuplicateModal(cmd, cmdLog);
+    DrawDxfPointConflictModal(cmd, cmdLog);
     DrawPdfAttachDialog(cmd, cmdLog);
     DrawAlignResultsWindow(cmd, cmdLog);
     DrawCloseConfirmModal(cmd, cmdLog);

@@ -82,8 +82,11 @@ void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float b
 
 void RemoveSurveyPointAt(AppCommandState& st, size_t index);
 
+/// \p worldOriginX/Y are added to the point's local easting/northing so {north}/{east} render world
+/// (state-plane) coordinates rather than the internal local-space values.
 [[nodiscard]] std::string FormatSurveyPointLabelPlain(const SurveyPoint& p, SurveyPointLabelStyle style,
-                                                      const SurveyLabelStyleTemplates& templates, int precision);
+                                                      const SurveyLabelStyleTemplates& templates, int precision,
+                                                      double worldOriginX = 0.0, double worldOriginY = 0.0);
 
 void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::vector<std::string>* log);
 
@@ -91,6 +94,15 @@ void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex);
 
 /// Repositions every linked survey MTEXT (e.g. after plot scale / PSCALE changes).
 void RepositionAllSurveyPointLabels(AppCommandState& st);
+
+/// Rebuilds every linked survey MTEXT's text and position. Call after the document origin changes so
+/// {north}/{east} labels show world coordinates relative to the new origin.
+void RegenerateAllSurveyPointLabels(AppCommandState& st);
+
+/// Adds conflicting world-coordinate survey points to the document. \p overwrite replaces the existing same-ID point;
+/// otherwise each point's ID gets \p offset added (then bumped to the next free ID if still taken).
+void ResolveConflictingWorldSurveyPoints(AppCommandState& st, const std::vector<SurveyPoint>& conflictsWorld,
+                                         bool overwrite, int offset, std::vector<std::string>* log);
 
 bool SaveSurveyPointsToJsonFile(const AppCommandState& st, const char* path, std::vector<std::string>& log);
 

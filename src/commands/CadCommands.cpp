@@ -5493,6 +5493,7 @@ void StartLineCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.active = AppCommandState::Kind::Line;
   st.lastCommand = AppCommandState::Kind::Line;
   st.linePhase = AppCommandState::LinePhase::NeedFirstPoint;
+  st.lineDraftSegments = 0;
   log.push_back("LINE — specify first point (click or type X,Y / X Y). ESC to cancel.");
 }
 
@@ -8742,6 +8743,7 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
 
   st.anchorX = x;
   st.anchorY = y;
+  ++st.lineDraftSegments;
   log.push_back("Segment added — next point or ESC to finish.");
   return true;
 }
@@ -8854,6 +8856,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       // Blank Enter ends the current line chain; restart LINE for the next one.
       ResetSegmentAngleLock(st);
       st.linePhase = AppCommandState::LinePhase::NeedFirstPoint;
+      st.lineDraftSegments = 0;
       log.push_back("LINE — specify first point (click or type X,Y / X Y). ESC to cancel.");
       return;
     }

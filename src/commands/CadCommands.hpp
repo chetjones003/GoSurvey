@@ -462,6 +462,9 @@ struct AppCommandState {
   float pendingZoomMxY = 0.f;
 
   enum class LinePhase { NeedFirstPoint, NeedNextPoint } linePhase = LinePhase::NeedFirstPoint;
+  /// Segments committed in the current LINE chain; the point being specified is
+  /// (lineDraftSegments + 2) once past the first point (REQ-024 ordinal prompt).
+  uint32_t lineDraftSegments = 0;
 
   enum class PolylinePhase { NeedFirstPoint, NeedNextPoint } polylinePhase = PolylinePhase::NeedFirstPoint;
 
@@ -889,6 +892,12 @@ struct AppCommandState {
   float pendingCopyDx = 0.f;
   float pendingCopyDy = 0.f;
   SurveyDuplicatePolicy copySurveyDuplicatePolicy = SurveyDuplicatePolicy::Renumber;
+  /// DXF import merges its embedded survey points with existing ones. Points whose ID collides are held
+  /// here (in WORLD coordinates) until the user resolves them via the conflict modal.
+  std::vector<SurveyPoint> pendingDxfConflictPoints;
+  bool dxfPointConflictModalOpen = false;
+  bool dxfPointConflictModalOpenRequested = false;
+  int  dxfPointConflictOffset = 0;
   /// True while the viewport command palette should mirror the command line (hover latched until idle / mouse away).
   bool viewportCmdPaletteEngaged = false;
   /// True when the viewport command palette is visible — command line defers its InputText to avoid duplicate focus.
