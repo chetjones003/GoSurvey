@@ -311,6 +311,19 @@ void DeleteViewport(AppCommandState& cmd, int layoutIdx, int vpIdx);
 /// Start the rectangular-viewport command (REQ-033); requires an active paper layout.
 void StartPaperRectViewportCommand(AppCommandState& cmd, std::vector<std::string>& log);
 
+// --- Paper-space viewport selection / edit (REQ-035) ---
+bool IsViewportSelected(const AppCommandState& cmd, int vi);
+/// Select viewport \p vi in the active layout; \p additive toggles it within the current selection.
+void SelectViewport(AppCommandState& cmd, int vi, bool additive);
+void ClearViewportSelection(AppCommandState& cmd);
+/// Delete all selected viewports in the active layout.
+void DeleteSelectedViewports(AppCommandState& cmd, std::vector<std::string>& log);
+/// Move (or, if \p copy, duplicate) the selected viewports by a paper-inch delta.
+void TranslateSelectedViewports(AppCommandState& cmd, float dxIn, float dyIn, bool copy,
+                                std::vector<std::string>& log);
+/// Begin a two-click MOVE/COPY of the selected viewports (paper-inch base → destination).
+void StartPaperMoveCopyViewports(AppCommandState& cmd, bool copy, std::vector<std::string>& log);
+
 struct AppCommandState {
   enum class Kind {
     None,
@@ -1034,12 +1047,24 @@ struct AppCommandState {
   std::vector<PaperLayout> paperLayouts;
   int activeSpaceIndex = kModelSpaceIndex;   ///< -1 = model space; else index into paperLayouts.
   int lastPaperLayoutIndex = 0;              ///< layout the MODEL/PAPER toggle returns to.
-  int selectedViewportLayout = -1;           ///< layout owning the selected viewport (REQ-027), or -1.
-  int selectedViewportIndex = -1;            ///< index into that layout's viewports, or -1.
+  int selectedViewportLayout = -1;           ///< layout owning the primary selected viewport (REQ-027), or -1.
+  int selectedViewportIndex = -1;            ///< primary selected viewport (popup edit/grips), or -1.
+  std::vector<int> selectedViewports;        ///< all selected viewports in the active layout (REQ-035).
   // Rectangular viewport command draft (REQ-033): 0 = need first corner, 1 = need second.
   int   paperVpPhase = 0;
   float paperVpFirstXIn = 0.f;
   float paperVpFirstYIn = 0.f;
+  // Paper-space grip edit (REQ-035): grabbed grip on selectedViewportIndex (click-grab, move, click-commit).
+  int   paperGripCorner = -2;                ///< -2 none, -1 move (whole viewport), 0..3 resize corner.
+  // Paper-space MOVE/COPY of selected viewports (REQ-035): 0 idle, 1 need base, 2 need destination.
+  int   paperMovePhase = 0;
+  bool  paperMoveIsCopy = false;
+  float paperMoveBaseXIn = 0.f;
+  float paperMoveBaseYIn = 0.f;
+  // Paper-space window selection box (REQ-035).
+  bool  paperSelBoxActive = false;
+  float paperSelBoxX0In = 0.f;
+  float paperSelBoxY0In = 0.f;
 
   // -------------------------------------------------------------------------
   // TRAVERSE EDITOR state

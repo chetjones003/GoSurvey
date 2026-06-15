@@ -4606,13 +4606,10 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
           AddViewport(cmd, layoutIdx);
         for (int vi = 0; vi < static_cast<int>(PL.viewports.size()); ++vi) {
           ImGui::PushID(vi);
-          const bool sel = cmd.selectedViewportLayout == layoutIdx && cmd.selectedViewportIndex == vi;
           char lbl[32];
           std::snprintf(lbl, sizeof(lbl), "Viewport %d", vi + 1);
-          if (ImGui::Selectable(lbl, sel)) {
-            cmd.selectedViewportLayout = layoutIdx;
-            cmd.selectedViewportIndex = vi;
-          }
+          if (ImGui::Selectable(lbl, IsViewportSelected(cmd, vi)))
+            SelectViewport(cmd, vi, /*additive=*/false);
           ImGui::PopID();
         }
         if (cmd.selectedViewportLayout == layoutIdx && cmd.selectedViewportIndex >= 0 &&
@@ -5651,6 +5648,127 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       cmd.active = AppCommandState::Kind::None;
       cmd.paperVpPhase = 0;
       log.push_back("Rectangular viewport created.");
+    }
+  }
+
+  // Paper-space viewport selection + grip edit + MOVE/COPY (REQ-035). Active only while idle of the
+  // rectangular-viewport command and in a paper layout.
+  if (!modelSpace && cmd.active == AppCommandState::Kind::None && cmd.activeSpaceIndex >= 0 &&
+      cmd.activeSpaceIndex < static_cast<int>(cmd.paperLayouts.size())) {
+    PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
+    float curX = 0.f, curY = 0.f;
+    screenToPaperIn(&curX, &curY);
+    const float pxPerWorld = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
+    const float gripTolIn = 7.f / std::max(1.e-6f, pxPerWorld);
+    const bool clickL = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x &&
+                        my >= 0 && my < avail.y;
+
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+      if (cmd.paperMovePhase != 0 || cmd.paperGripCorner != -2 || cmd.paperSelBoxActive) {
+        cmd.paperMovePhase = 0;
+        cmd.paperGripCorner = -2;
+        cmd.paperSelBoxActive = false;
+      } else if (!cmd.selectedViewports.empty()) {
+        ClearViewportSelection(cmd);
+      }
+    }
+
+    auto primaryVp = [&]() -> Viewport* {
+      if (cmd.selectedViewports.size() == 1 && cmd.selectedViewportIndex >= 0 &&
+          cmd.selectedViewportIndex < static_cast<int>(L.viewports.size()))
+        return &L.viewports[static_cast<size_t>(cmd.selectedViewportIndex)];
+      return nullptr;
+    };
+
+    if (clickL && cmd.paperMovePhase == 1) {  // MOVE/COPY: base point
+      cmd.paperMoveBaseXIn = curX;
+      cmd.paperMoveBaseYIn = curY;
+      cmd.paperMovePhase = 2;
+      log.push_back("Click the destination point.");
+    } else if (clickL && cmd.paperMovePhase == 2) {  // MOVE/COPY: destination
+      TranslateSelectedViewports(cmd, curX - cmd.paperMoveBaseXIn, curY - cmd.paperMoveBaseYIn,
+                                 cmd.paperMoveIsCopy, log);
+      cmd.paperMovePhase = 0;
+    } else if (clickL && cmd.paperGripCorner != -2) {  // commit an in-progress grip edit
+      cmd.paperGripCorner = -2;
+      log.push_back("Viewport edited.");
+    } else if (clickL) {
+      // 1) a grip of the single selected viewport?
+      int gripCorner = -2;
+      if (Viewport* v = primaryVp()) {
+        const float x0 = v->paperXIn, y0 = v->paperYIn, x1 = v->paperXIn + v->paperWIn, y1 = v->paperYIn + v->paperHIn;
+        const float cxp = (x0 + x1) * 0.5f, cyp = (y0 + y1) * 0.5f;
+        const float gx[5] = {x0, x1, x1, x0, cxp};
+        const float gy[5] = {y0, y0, y1, y1, cyp};
+        const int gc[5] = {0, 1, 2, 3, -1};  // corners 0..3, center = -1 (move)
+        for (int i = 0; i < 5; ++i)
+          if (std::fabs(curX - gx[i]) <= gripTolIn && std::fabs(curY - gy[i]) <= gripTolIn) {
+            gripCorner = gc[i];
+            break;
+          }
+      }
+      if (gripCorner != -2) {
+        cmd.paperGripCorner = gripCorner;
+        log.push_back(gripCorner == -1 ? "Move viewport — click the new location." : "Resize — click the new corner.");
+      } else {
+        // 2) a viewport body (topmost wins)?
+        int hit = -1;
+        for (int vi = static_cast<int>(L.viewports.size()) - 1; vi >= 0; --vi) {
+          const Viewport& v = L.viewports[static_cast<size_t>(vi)];
+          if (curX >= v.paperXIn && curX <= v.paperXIn + v.paperWIn && curY >= v.paperYIn &&
+              curY <= v.paperYIn + v.paperHIn) {
+            hit = vi;
+            break;
+          }
+        }
+        if (hit >= 0) {
+          SelectViewport(cmd, hit, ImGui::GetIO().KeyShift);
+        } else if (!cmd.paperSelBoxActive) {  // 3) empty: start a window-select box
+          cmd.paperSelBoxActive = true;
+          cmd.paperSelBoxX0In = curX;
+          cmd.paperSelBoxY0In = curY;
+        } else {  // complete the box: select viewports fully inside it
+          const float bx0 = std::min(cmd.paperSelBoxX0In, curX), bx1 = std::max(cmd.paperSelBoxX0In, curX);
+          const float by0 = std::min(cmd.paperSelBoxY0In, curY), by1 = std::max(cmd.paperSelBoxY0In, curY);
+          cmd.selectedViewports.clear();
+          for (int vi = 0; vi < static_cast<int>(L.viewports.size()); ++vi) {
+            const Viewport& v = L.viewports[static_cast<size_t>(vi)];
+            if (v.paperXIn >= bx0 && v.paperXIn + v.paperWIn <= bx1 && v.paperYIn >= by0 &&
+                v.paperYIn + v.paperHIn <= by1)
+              cmd.selectedViewports.push_back(vi);
+          }
+          cmd.selectedViewportIndex = cmd.selectedViewports.empty() ? -1 : cmd.selectedViewports.back();
+          cmd.selectedViewportLayout = cmd.selectedViewports.empty() ? -1 : cmd.activeSpaceIndex;
+          cmd.paperSelBoxActive = false;
+          BumpCadGpuCache(cmd);
+        }
+      }
+    }
+
+    // Live grip edit: the grabbed viewport follows the cursor until the commit click.
+    if (cmd.paperGripCorner != -2) {
+      if (Viewport* v = primaryVp()) {
+        if (cmd.paperGripCorner == -1) {  // move whole viewport (center follows cursor)
+          v->paperXIn = curX - v->paperWIn * 0.5f;
+          v->paperYIn = curY - v->paperHIn * 0.5f;
+        } else {  // resize: grabbed corner → cursor, opposite corner fixed
+          float x0 = v->paperXIn, y0 = v->paperYIn, x1 = v->paperXIn + v->paperWIn, y1 = v->paperYIn + v->paperHIn;
+          switch (cmd.paperGripCorner) {
+          case 0: x0 = curX; y0 = curY; break;
+          case 1: x1 = curX; y0 = curY; break;
+          case 2: x1 = curX; y1 = curY; break;
+          case 3: x0 = curX; y1 = curY; break;
+          default: break;
+          }
+          v->paperXIn = std::min(x0, x1);
+          v->paperYIn = std::min(y0, y1);
+          v->paperWIn = std::max(0.1f, std::fabs(x1 - x0));
+          v->paperHIn = std::max(0.1f, std::fabs(y1 - y0));
+        }
+        BumpCadGpuCache(cmd);
+      } else {
+        cmd.paperGripCorner = -2;  // selection changed underneath us
+      }
     }
   }
 
@@ -6776,25 +6894,52 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         sdl->AddLine(ImVec2(c.x, c.y - crossPx), ImVec2(c.x, c.y + crossPx), kVpModelCol, 1.0f);
       }
       sdl->PopClipRect();
-      // Viewport border; selected one accented with corner grips.
-      const bool selVp = cmd.activeSpaceIndex == cmd.selectedViewportLayout && vi == cmd.selectedViewportIndex;
+      // Viewport border; selected ones accented. The single selected viewport shows edit grips (REQ-035).
+      const bool selVp = IsViewportSelected(cmd, vi);
       sdl->AddRect(rmin, rmax, selVp ? IM_COL32(59, 130, 246, 255) : IM_COL32(90, 90, 100, 255), 0.f, 0,
                    selVp ? 2.0f : 1.2f);
-      if (selVp) {
+      if (selVp && cmd.selectedViewports.size() == 1) {
         const ImVec2 corners[4] = {rmin, ImVec2(rmax.x, rmin.y), rmax, ImVec2(rmin.x, rmax.y)};
         for (const ImVec2& cp : corners)
           sdl->AddRectFilled(ImVec2(cp.x - 4.f, cp.y - 4.f), ImVec2(cp.x + 4.f, cp.y + 4.f),
                              IM_COL32(59, 130, 246, 255));
+        const ImVec2 ctr((rmin.x + rmax.x) * 0.5f, (rmin.y + rmax.y) * 0.5f);  // center = move grip
+        sdl->AddRectFilled(ImVec2(ctr.x - 4.f, ctr.y - 4.f), ImVec2(ctr.x + 4.f, ctr.y + 4.f),
+                           IM_COL32(245, 200, 70, 255));
       }
     }
+    const float curPX = static_cast<float>(worldLeft + (mx / std::max(avail.x, 1.f)) * (worldRight - worldLeft));
+    const float curPY = static_cast<float>(worldTop - (my / std::max(avail.y, 1.f)) * (worldTop - worldBottom));
     // Rectangular-viewport rubber-band preview (REQ-033) between the first click and the cursor.
     if (cmd.active == AppCommandState::Kind::PaperRectViewport && cmd.paperVpPhase == 1 && hovered) {
-      const float curX = static_cast<float>(worldLeft + (mx / std::max(avail.x, 1.f)) * (worldRight - worldLeft));
-      const float curY = static_cast<float>(worldTop - (my / std::max(avail.y, 1.f)) * (worldTop - worldBottom));
       const ImVec2 q0 = w2s(cmd.paperVpFirstXIn, cmd.paperVpFirstYIn);
-      const ImVec2 q1 = w2s(curX, curY);
+      const ImVec2 q1 = w2s(curPX, curPY);
       sdl->AddRect(ImVec2(std::min(q0.x, q1.x), std::min(q0.y, q1.y)),
                    ImVec2(std::max(q0.x, q1.x), std::max(q0.y, q1.y)), IM_COL32(59, 130, 246, 220), 0.f, 0, 1.5f);
+    }
+    // MOVE/COPY ghost preview (REQ-035): selected viewports translated by (cursor − base).
+    if (cmd.paperMovePhase == 2 && hovered) {
+      const float dxIn = curPX - cmd.paperMoveBaseXIn;
+      const float dyIn = curPY - cmd.paperMoveBaseYIn;
+      for (int sv : cmd.selectedViewports) {
+        if (sv < 0 || sv >= static_cast<int>(L.viewports.size()))
+          continue;
+        const Viewport& v = L.viewports[static_cast<size_t>(sv)];
+        const ImVec2 g0 = w2s(v.paperXIn + dxIn, v.paperYIn + dyIn);
+        const ImVec2 g1 = w2s(v.paperXIn + v.paperWIn + dxIn, v.paperYIn + v.paperHIn + dyIn);
+        sdl->AddRect(ImVec2(std::min(g0.x, g1.x), std::min(g0.y, g1.y)),
+                     ImVec2(std::max(g0.x, g1.x), std::max(g0.y, g1.y)),
+                     cmd.paperMoveIsCopy ? IM_COL32(120, 220, 120, 220) : IM_COL32(245, 200, 70, 220), 0.f, 0, 1.5f);
+      }
+    }
+    // Window-select box (REQ-035).
+    if (cmd.paperSelBoxActive && hovered) {
+      const ImVec2 s0 = w2s(cmd.paperSelBoxX0In, cmd.paperSelBoxY0In);
+      const ImVec2 s1 = w2s(curPX, curPY);
+      const ImVec2 a2(std::min(s0.x, s1.x), std::min(s0.y, s1.y));
+      const ImVec2 b2(std::max(s0.x, s1.x), std::max(s0.y, s1.y));
+      sdl->AddRectFilled(a2, b2, IM_COL32(59, 130, 246, 40));
+      sdl->AddRect(a2, b2, IM_COL32(59, 130, 246, 200), 0.f, 0, 1.0f);
     }
   }
 

@@ -91,6 +91,12 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.paperLayouts               = doc.paperLayouts;
   cmd.activeSpaceIndex           = doc.activeSpaceIndex;
   cmd.lastPaperLayoutIndex       = doc.activeSpaceIndex >= 0 ? doc.activeSpaceIndex : 0;
+  cmd.selectedViewports.clear();  // transient selection; indices don't carry across documents
+  cmd.selectedViewportIndex = -1;
+  cmd.selectedViewportLayout = -1;
+  cmd.paperGripCorner = -2;
+  cmd.paperMovePhase = 0;
+  cmd.paperSelBoxActive = false;
   cmd.cadGpuRevision             = doc.cadGpuRevision;
   cmd.activeDocSavedRevision     = doc.savedRevision;
   cmd.activeDocFilePath          = doc.filePath;
@@ -181,6 +187,7 @@ int AddViewport(AppCommandState& cmd, int layoutIdx) {
   const int idx = static_cast<int>(L.viewports.size()) - 1;
   cmd.selectedViewportLayout = layoutIdx;
   cmd.selectedViewportIndex = idx;
+  cmd.selectedViewports = {idx};
   BumpCadGpuCache(cmd);
   return idx;
 }
@@ -201,6 +208,7 @@ int AddViewportRect(AppCommandState& cmd, int layoutIdx, float x0In, float y0In,
   const int idx = static_cast<int>(L.viewports.size()) - 1;
   cmd.selectedViewportLayout = layoutIdx;
   cmd.selectedViewportIndex = idx;
+  cmd.selectedViewports = {idx};
   BumpCadGpuCache(cmd);
   return idx;
 }
@@ -226,7 +234,106 @@ void DeleteViewport(AppCommandState& cmd, int layoutIdx, int vpIdx) {
   L.viewports.erase(L.viewports.begin() + vpIdx);
   cmd.selectedViewportLayout = -1;
   cmd.selectedViewportIndex = -1;
+  cmd.selectedViewports.clear();
   BumpCadGpuCache(cmd);
+}
+
+// --- Paper-space viewport selection + edit (REQ-035) ---
+
+bool IsViewportSelected(const AppCommandState& cmd, int vi) {
+  for (int s : cmd.selectedViewports)
+    if (s == vi)
+      return true;
+  return false;
+}
+
+static void SetPrimarySelectedViewport(AppCommandState& cmd) {
+  cmd.selectedViewportLayout = cmd.selectedViewports.empty() ? -1 : cmd.activeSpaceIndex;
+  cmd.selectedViewportIndex = cmd.selectedViewports.empty() ? -1 : cmd.selectedViewports.back();
+}
+
+void SelectViewport(AppCommandState& cmd, int vi, bool additive) {
+  if (!additive)
+    cmd.selectedViewports.clear();
+  bool present = false;
+  for (size_t i = 0; i < cmd.selectedViewports.size(); ++i) {
+    if (cmd.selectedViewports[i] == vi) {
+      present = true;
+      if (additive)
+        cmd.selectedViewports.erase(cmd.selectedViewports.begin() + static_cast<std::ptrdiff_t>(i));  // toggle off
+      break;
+    }
+  }
+  if (!present && vi >= 0)
+    cmd.selectedViewports.push_back(vi);
+  SetPrimarySelectedViewport(cmd);
+  BumpCadGpuCache(cmd);
+}
+
+void ClearViewportSelection(AppCommandState& cmd) {
+  cmd.selectedViewports.clear();
+  cmd.selectedViewportIndex = -1;
+  cmd.selectedViewportLayout = -1;
+  BumpCadGpuCache(cmd);
+}
+
+void DeleteSelectedViewports(AppCommandState& cmd, std::vector<std::string>& log) {
+  if (cmd.activeSpaceIndex < 0 || static_cast<size_t>(cmd.activeSpaceIndex) >= cmd.paperLayouts.size() ||
+      cmd.selectedViewports.empty()) {
+    log.push_back("DELETE — no viewport selected.");
+    return;
+  }
+  PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
+  std::vector<int> idxs = cmd.selectedViewports;
+  std::sort(idxs.begin(), idxs.end(), [](int a, int b) { return a > b; });  // erase high→low keeps indices valid
+  int n = 0;
+  for (int vi : idxs) {
+    if (vi >= 0 && static_cast<size_t>(vi) < L.viewports.size()) {
+      L.viewports.erase(L.viewports.begin() + vi);
+      ++n;
+    }
+  }
+  ClearViewportSelection(cmd);
+  log.push_back("DELETE — removed " + std::to_string(n) + " viewport(s).");
+}
+
+void TranslateSelectedViewports(AppCommandState& cmd, float dxIn, float dyIn, bool copy,
+                                std::vector<std::string>& log) {
+  if (cmd.activeSpaceIndex < 0 || static_cast<size_t>(cmd.activeSpaceIndex) >= cmd.paperLayouts.size() ||
+      cmd.selectedViewports.empty())
+    return;
+  PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
+  std::vector<int> newSel;
+  for (int vi : cmd.selectedViewports) {
+    if (vi < 0 || static_cast<size_t>(vi) >= L.viewports.size())
+      continue;
+    if (copy) {
+      Viewport v = L.viewports[static_cast<size_t>(vi)];
+      v.paperXIn += dxIn;
+      v.paperYIn += dyIn;
+      L.viewports.push_back(v);
+      newSel.push_back(static_cast<int>(L.viewports.size()) - 1);
+    } else {
+      L.viewports[static_cast<size_t>(vi)].paperXIn += dxIn;
+      L.viewports[static_cast<size_t>(vi)].paperYIn += dyIn;
+    }
+  }
+  if (copy && !newSel.empty())
+    cmd.selectedViewports = newSel;
+  SetPrimarySelectedViewport(cmd);
+  log.push_back(copy ? "COPY — duplicated viewport(s)." : "MOVE — moved viewport(s).");
+  BumpCadGpuCache(cmd);
+}
+
+void StartPaperMoveCopyViewports(AppCommandState& cmd, bool copy, std::vector<std::string>& log) {
+  if (cmd.selectedViewports.empty()) {
+    log.push_back(std::string(copy ? "COPY" : "MOVE") + " — select viewport(s) first.");
+    return;
+  }
+  cmd.active = AppCommandState::Kind::None;  // paper viewport ops are not a model command
+  cmd.paperMovePhase = 1;
+  cmd.paperMoveIsCopy = copy;
+  log.push_back(std::string(copy ? "COPY" : "MOVE") + " viewport — click the base point (Esc to cancel).");
 }
 
 // ---------------------------------------------------------------------------
@@ -8534,6 +8641,10 @@ void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.activeSpaceIndex != kModelSpaceIndex) {  // REQ-035: paper space deletes selected viewports
+    DeleteSelectedViewports(st, log);
+    return;
+  }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   // Survey points take priority: deleting a point also removes its linked label.
@@ -8643,6 +8754,10 @@ void BeginSelectionBoxCorner(AppCommandState& st, float wx, float wy, float anch
 }
 
 void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.activeSpaceIndex != kModelSpaceIndex) {  // REQ-035: move selected viewports in paper space
+    StartPaperMoveCopyViewports(st, /*copy=*/false, log);
+    return;
+  }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Move;
@@ -8658,6 +8773,10 @@ void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.activeSpaceIndex != kModelSpaceIndex) {  // REQ-035: copy selected viewports in paper space
+    StartPaperMoveCopyViewports(st, /*copy=*/true, log);
+    return;
+  }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Copy;
