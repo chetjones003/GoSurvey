@@ -236,6 +236,21 @@ json BuildRoot(const AppCommandState& st) {
   doc["drawingInsUnits"] = st.drawingInsUnits;
   doc["defaultPlottedTextHeightInches"] = st.defaultPlottedTextHeightInches;
   doc["currentLayer"] = st.currentLayer;
+  // Paper space layouts (REQ-031). Viewports/frozen layers persist in a later increment.
+  {
+    json layouts = json::array();
+    for (const PaperLayout& l : st.paperLayouts) {
+      json o;
+      o["name"] = l.name;
+      o["portraitWidthIn"] = l.portraitWidthIn;
+      o["portraitHeightIn"] = l.portraitHeightIn;
+      o["landscape"] = l.landscape;
+      o["presetIdx"] = l.presetIdx;
+      layouts.push_back(o);
+    }
+    doc["paperLayouts"] = layouts;
+    doc["activeSpaceIndex"] = st.activeSpaceIndex;
+  }
   doc["lineVerts"] = st.userLinesFlat;
   json lineAttrs = json::array();
   for (const auto& a : st.userLineAttrs) {
@@ -563,6 +578,30 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.worldDocumentOriginY = doc.value("worldDocumentOriginY", 0.0);
   st.modelUnitsPerPlottedInch = doc.value("modelUnitsPerPlottedInch", 50.f);
   st.drawingInsUnits = doc.value("drawingInsUnits", 2);
+  // Paper space layouts (REQ-031). Missing/garbage → no layouts, model space (no crash).
+  st.paperLayouts.clear();
+  if (doc.contains("paperLayouts") && doc["paperLayouts"].is_array()) {
+    for (const auto& o : doc["paperLayouts"]) {
+      if (!o.is_object())
+        continue;
+      PaperLayout l;
+      if (o.contains("name") && o["name"].is_string())
+        l.name = o["name"].get<std::string>();
+      l.portraitWidthIn = o.value("portraitWidthIn", l.portraitWidthIn);
+      l.portraitHeightIn = o.value("portraitHeightIn", l.portraitHeightIn);
+      l.landscape = o.value("landscape", l.landscape);
+      l.presetIdx = o.value("presetIdx", l.presetIdx);
+      st.paperLayouts.push_back(l);
+    }
+  }
+  {
+    int asi = doc.value("activeSpaceIndex", kModelSpaceIndex);
+    if (asi < 0 || asi >= static_cast<int>(st.paperLayouts.size()))
+      asi = kModelSpaceIndex;
+    st.activeSpaceIndex = asi;
+    st.lastPaperLayoutIndex =
+        st.paperLayouts.empty() ? 0 : std::max(0, asi < 0 ? 0 : asi);
+  }
   st.defaultPlottedTextHeightInches = doc.value("defaultPlottedTextHeightInches", 0.125f);
   if (doc.contains("currentLayer") && doc["currentLayer"].is_string())
     st.currentLayer = doc["currentLayer"].get<std::string>();

@@ -4506,6 +4506,74 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3.f, 0.f));
 
   {
+    // Paper space layout tabs + sheet picker (REQ-025/026): Model | Layout… | +
+    auto spaceTab = [&](const char* label, bool active) {
+      PushModeToggleButtonColors(active, cmd.displayColorThemeIdx);
+      const bool clicked = ImGui::Button(label, ImVec2(0.f, statusBtnH));
+      PopModeToggleButtonColors(active);
+      ImGui::SameLine(0, 2);
+      return clicked;
+    };
+    if (spaceTab("Model", cmd.activeSpaceIndex == kModelSpaceIndex))
+      SetActiveSpace(cmd, kModelSpaceIndex);
+
+    int pendingDelete = -1;
+    for (int i = 0; i < static_cast<int>(cmd.paperLayouts.size()); ++i) {
+      ImGui::PushID(i);
+      const bool act = cmd.activeSpaceIndex == i;
+      PushModeToggleButtonColors(act, cmd.displayColorThemeIdx);
+      if (ImGui::Button(cmd.paperLayouts[static_cast<size_t>(i)].name.c_str(), ImVec2(0.f, statusBtnH)))
+        SetActiveSpace(cmd, i);
+      PopModeToggleButtonColors(act);
+      if (ImGui::BeginPopupContextItem("layout_ctx")) {
+        ImGui::TextDisabled("Layout");
+        ImGui::Separator();
+        ImGui::SetNextItemWidth(160.f);
+        if (ImGui::InputText("Name", &cmd.paperLayouts[static_cast<size_t>(i)].name))
+          BumpCadGpuCache(cmd);
+        if (ImGui::Button("Delete layout")) {
+          pendingDelete = i;
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+      }
+      ImGui::PopID();
+      ImGui::SameLine(0, 2);
+    }
+    if (ImGui::Button("+##addlayout", ImVec2(0.f, statusBtnH)))
+      SetActiveSpace(cmd, AddPaperLayout(cmd));
+    if (pendingDelete >= 0)
+      DeletePaperLayout(cmd, pendingDelete);
+
+    // When a paper layout is active, show its paper size + orientation (REQ-026).
+    if (cmd.activeSpaceIndex >= 0 && cmd.activeSpaceIndex < static_cast<int>(cmd.paperLayouts.size())) {
+      PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
+      ImGui::SameLine(0, 6);
+      ImGui::SetNextItemWidth(150.f);
+      const char* sizeLabel =
+          (L.presetIdx >= 0 && L.presetIdx < kPaperSizePresetCount) ? kPaperSizePresets[L.presetIdx].name : "Custom";
+      if (ImGui::BeginCombo("##papersize", sizeLabel)) {
+        for (int s = 0; s < kPaperSizePresetCount; ++s) {
+          if (ImGui::Selectable(kPaperSizePresets[s].name, L.presetIdx == s)) {
+            L.presetIdx = s;
+            L.portraitWidthIn = kPaperSizePresets[s].widthIn;
+            L.portraitHeightIn = kPaperSizePresets[s].heightIn;
+            BumpCadGpuCache(cmd);
+          }
+        }
+        ImGui::EndCombo();
+      }
+      ImGui::SameLine(0, 4);
+      if (ImGui::Checkbox("Landscape", &L.landscape))
+        BumpCadGpuCache(cmd);
+    }
+    ImGui::SameLine(0, 6);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextDisabled("|");
+    ImGui::SameLine(0, 6);
+  }
+
+  {
     const bool on = cmd.objectSnapEnabled;
     PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
     if (ImGui::Button("OSNAP", ImVec2(0.f, statusBtnH)))
@@ -4557,6 +4625,17 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
     PopModeToggleButtonColors(on);
     ItemHelpTooltip("Polar tracking (UI only for now)");
     ImGui::SameLine(0, 4);
+  }
+
+  {
+    // MODEL / PAPER space toggle (REQ-025). Clicking switches the active space.
+    const bool paper = cmd.activeSpaceIndex != kModelSpaceIndex;
+    PushModeToggleButtonColors(paper, cmd.displayColorThemeIdx);
+    if (ImGui::Button(paper ? "PAPER" : "MODEL", ImVec2(0.f, statusBtnH)))
+      ToggleModelPaperSpace(cmd);
+    PopModeToggleButtonColors(paper);
+    ItemHelpTooltip("Toggle between Model space and the current Paper space layout (REQ-025).");
+    ImGui::SameLine(0, 8);
   }
 
   DrawPlotScaleCombo(cmd);
@@ -6496,6 +6575,27 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
     }
     } // selPdfBorderIdx block
+  }
+
+  // Paper space sheet outline (REQ-026). The sheet spans (0,0)..(sheetW,sheetH) in paper inches,
+  // mapped through the same world→screen transform so it pans/zooms with the view.
+  if (cmd.activeSpaceIndex >= 0 && cmd.activeSpaceIndex < static_cast<int>(cmd.paperLayouts.size())) {
+    const PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
+    const double denx = worldRight - worldLeft + 1e-12;
+    const double deny = worldTop - worldBottom + 1e-12;
+    auto w2s = [&](float wx, float wy) {
+      const float u = static_cast<float>((static_cast<double>(wx) - worldLeft) / denx);
+      const float v = static_cast<float>((worldTop - static_cast<double>(wy)) / deny);
+      return ImVec2(imgPos.x + u * avail.x, imgPos.y + v * avail.y);
+    };
+    const ImVec2 p0 = w2s(0.f, 0.f);
+    const ImVec2 p1 = w2s(L.sheetWidthIn(), L.sheetHeightIn());
+    const ImVec2 a(std::min(p0.x, p1.x), std::min(p0.y, p1.y));
+    const ImVec2 b(std::max(p0.x, p1.x), std::max(p0.y, p1.y));
+    ImDrawList* sdl = ImGui::GetWindowDrawList();
+    sdl->AddRectFilled(ImVec2(a.x + 5.f, a.y + 5.f), ImVec2(b.x + 5.f, b.y + 5.f), IM_COL32(0, 0, 0, 90));  // shadow
+    sdl->AddRectFilled(a, b, IM_COL32(244, 244, 244, 255));                                                 // sheet
+    sdl->AddRect(a, b, IM_COL32(40, 40, 40, 255), 0.f, 0, 1.5f);                                            // border
   }
 
   std::vector<CadAnnotation> transformAnnPreviews;

@@ -101,6 +101,20 @@ nlohmann::json (numbers may serialize as integers or floats; the loader uses
   currentLayer (string, default "0")
     — Active layer name for new geometry.
 
+  paperLayouts (array of objects, optional; default empty = no paper space)
+    — Paper space layouts (REQ-031). Each object:
+        name             (string)  layout/tab name
+        portraitWidthIn  (number)  portrait sheet width in inches (<= height)
+        portraitHeightIn (number)  portrait sheet height in inches
+        landscape        (bool)    orientation; true swaps width/height on the sheet
+        presetIdx        (integer) index into the paper-size preset table, or -1 = custom
+      Viewports and per-viewport frozen layers are added in a later increment.
+      A missing or malformed array loads as zero layouts (model space only).
+
+  activeSpaceIndex (integer, default -1)
+    — Active space: -1 = model space; >= 0 = index into paperLayouts. An
+      out-of-range value loads as model space (-1).
+
 3.2 Lines — flat array + parallel attributes
   lineVerts   (array of numbers)
     Flat list of line segment vertices in LOCAL coordinates (world = local +

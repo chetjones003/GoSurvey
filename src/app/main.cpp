@@ -549,8 +549,14 @@ int main() {
       }
     }
 
-    activeRenderer.RenderScene(cmd.viewportPanX, cmd.viewportPanY, cmd.viewportZoom, fbW, fbH, cmd.userLinesFlat,
-                         cmd.userCirclesCxCyR, cmd.cadGpuRevision,
+    // Paper space (REQ-025) renders a blank sheet this increment; model geometry shows through
+    // viewports in a later increment. The sheet outline itself is drawn as a UI overlay.
+    const bool paperSpace = cmd.activeSpaceIndex != kModelSpaceIndex;
+    static const std::vector<float> kEmptyVerts;
+    const std::vector<float>& sceneLines   = paperSpace ? kEmptyVerts : cmd.userLinesFlat;
+    const std::vector<float>& sceneCircles = paperSpace ? kEmptyVerts : cmd.userCirclesCxCyR;
+    activeRenderer.RenderScene(cmd.viewportPanX, cmd.viewportPanY, cmd.viewportZoom, fbW, fbH, sceneLines,
+                         sceneCircles, cmd.cadGpuRevision,
                          rubberLines, snapHit.valid ? &snapHit : nullptr,
                          std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f), selRectPtr,
                          previewLines.empty() ? nullptr : &previewLines,
@@ -559,9 +565,9 @@ int main() {
                          highlightCircles.empty() ? nullptr : &highlightCircles,
                          hoverLines.empty() ? nullptr : &hoverLines,
                          hoverCircles.empty() ? nullptr : &hoverCircles,
-                         surveyMarkers.empty() ? nullptr : &surveyMarkers, &cmd.userLineAttrs,
+                         (paperSpace || surveyMarkers.empty()) ? nullptr : &surveyMarkers, &cmd.userLineAttrs,
                          &cmd.userCircleAttrs, &ext, gridVisible, &cmd.drawingLayerTable, tuning,
-                         pdfRenderList.empty() ? nullptr : &pdfRenderList);
+                         paperSpace ? nullptr : (pdfRenderList.empty() ? nullptr : &pdfRenderList));
 
     ImGui::Render();
     int displayW = 0;
