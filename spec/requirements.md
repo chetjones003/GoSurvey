@@ -290,13 +290,28 @@ requirements is a planning failure, not a sign of rigor.
   cross-line marker, so foreign-point behavior is unchanged. Coordinates
   round-trip within REQ-101 tolerance (the existing world-origin translation is
   preserved; nothing is scaled).
+  DXF import replaces the **CAD geometry** but **preserves survey points already
+  in the session** (so importing points then a DXF, or a DXF then points, both
+  keep all points); the DXF's reconstructed survey points are **merged** with the
+  existing ones. Points are stored in local space (`world = local +
+  worldDocumentOrigin`), so import converts each merged point into the document's
+  current local frame. When an imported point's id does not collide it is added
+  directly; when it collides with an existing point the user is prompted to either
+  **overwrite** the existing point or **offset** the imported ids by a chosen
+  amount.
 - Acceptance: a drawing with N survey points exported then re-imported yields N
   survey points with matching id, coordinates (within REQ-101), description, and
   label style; each reconstructed point has a single linked label (no duplicate or
   orphan MTEXT); a `POINT` from a non-GoSurvey DXF still imports as cross-lines.
+  Importing a DXF while M survey points already exist keeps all M (they remain on
+  the linework in world coordinates) and adds the DXF's non-colliding points; a
+  colliding id triggers the overwrite/offset prompt rather than dropping or
+  silently duplicating a point.
 - Owner-layer: IO (DXF)
 - Status: accepted
-- Revisions: 2026-06-12 — initial (resolves issue #37).
+- Revisions: 2026-06-12 — initial (resolves issue #37). 2026-06-15 — amended: DXF
+  import preserves existing session survey points and merges reconstructed points,
+  with an overwrite/offset prompt on id conflict (decision log).
 
 ### REQ-024 — AutoCAD-style dynamic input at the cursor for point prompts
 - Purpose: familiar, readable coordinate entry that matches AutoCAD dynamic input
@@ -425,7 +440,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-020 | UI/IO | manual (UNITS opens dialog; precision drives readouts; persists) | accepted |
 | REQ-021 | Domain/UI | `AngleFormatTests` (DD/DMS/Surveyor's, direction/base, default parity) | accepted |
 | REQ-022 | UI/IO | manual (insertion units stored + sampled; survey precision independent) | accepted |
-| REQ-023 | IO | runtime DXF round-trip (survey points reconstructed via XDATA; foreign POINT → cross-lines) | accepted |
+| REQ-023 | IO | runtime DXF round-trip (survey points reconstructed via XDATA; existing points preserved + merged, id conflict → overwrite/offset prompt; foreign POINT → cross-lines) | accepted |
 | REQ-024 | UI | manual (LINE shows two live coord boxes; type locks X; Tab→Y; Enter/click commits; non-point prompt single field) | accepted |
 
 ---
