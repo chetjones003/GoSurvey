@@ -1,6 +1,7 @@
 #pragma once
 
 #include "PdfAttach.hpp"
+#include "PaperSpace.hpp"
 #include "SurveyPoints.hpp"
 #include "AngleFormat.hpp"
 #include "traverse/TraverseCalc.hpp"
@@ -278,6 +279,8 @@ struct DrawingDocument {
   std::vector<CadLayerRow>      drawingLayerTable;
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<SelectedEntity>   selection;
+  std::vector<PaperLayout>      paperLayouts;            ///< Paper-space layouts (REQ-025); empty = none.
+  int                           activeSpaceIndex = kModelSpaceIndex;  ///< -1 = model; else index into paperLayouts.
   uint32_t cadGpuRevision  = 0;
   uint32_t savedRevision   = 0;   ///< cadGpuRevision at last save; != cadGpuRevision means unsaved changes.
   std::string filePath;           ///< Absolute path to the .gs file, empty if never saved.
@@ -289,6 +292,16 @@ struct DrawingDocument {
 void SaveDocumentToSnapshot(AppCommandState& cmd, int idx);
 /// Copy \p cmd.documents[idx] back into the active fields of \p cmd.  Cancels any in-progress command.
 void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx);
+
+// --- Paper space (REQ-025) ---
+/// Append a new paper layout with a unique default name; returns its index.
+int  AddPaperLayout(AppCommandState& cmd);
+/// Delete the layout at \p idx, fixing up the active space.
+void DeletePaperLayout(AppCommandState& cmd, int idx);
+/// Set the active space: kModelSpaceIndex for model, else a paper-layout index (clamped).
+void SetActiveSpace(AppCommandState& cmd, int spaceIndex);
+/// Toggle between model space and the last/first paper layout (creating one if none exist).
+void ToggleModelPaperSpace(AppCommandState& cmd);
 
 struct AppCommandState {
   enum class Kind {
@@ -1004,6 +1017,12 @@ struct AppCommandState {
 
   /// Committed PDF underlays.
   std::vector<PdfAttachment> pdfAttachments;
+
+  // -------------------------------------------------------------------------
+  // PAPER SPACE (REQ-025/026/031) — active drawing's layouts; mirrored per tab in DrawingDocument.
+  std::vector<PaperLayout> paperLayouts;
+  int activeSpaceIndex = kModelSpaceIndex;   ///< -1 = model space; else index into paperLayouts.
+  int lastPaperLayoutIndex = 0;              ///< layout the MODEL/PAPER toggle returns to.
 
   // -------------------------------------------------------------------------
   // TRAVERSE EDITOR state

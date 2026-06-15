@@ -334,6 +334,113 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-06-12 — initial.
 
+### REQ-025 — Model and Paper space with layout tabs and a space toggle
+- Purpose: compose a model onto sheets, the way AutoCAD model/paper space works
+- Priority: should
+- Type: functional
+- Statement: Each drawing has a **Model space** (today's modeling area) and zero or
+  more named **Paper space layouts**. The UI shows a tab/selector to switch the
+  active space, and layouts can be **added, renamed, and deleted**. A status-bar
+  button reads **MODEL** or **PAPER** for the active space and **clicking it
+  toggles** between model space and the current/last paper layout. Switching space
+  changes what the viewport edits and displays; model geometry is unaffected by
+  paper-space edits.
+- Acceptance: a drawing shows a Model entry plus at least one Paper layout entry;
+  switching changes the active space; ≥2 layouts can be added, renamed, and deleted
+  and coexist; the status button shows MODEL/PAPER and clicking it toggles the
+  active space.
+- Owner-layer: UI / Domain
+- Status: accepted
+- Revisions: 2026-06-15 — initial (Paper Space milestone, decision log).
+
+### REQ-026 — Sheet definition: paper size and orientation
+- Purpose: a layout represents a real sheet of paper
+- Priority: should
+- Type: functional
+- Statement: A paper layout has a selectable **paper size** (a preset set covering
+  common ANSI A–E and ARCH sizes, plus a custom width×height) and **orientation**
+  (portrait/landscape). The sheet outline (and printable margin, if modeled)
+  renders in paper space at the chosen physical size.
+- Acceptance: choosing a size + orientation renders the sheet outline at that
+  physical size in paper space; changing the size updates the outline.
+- Owner-layer: UI / Domain
+- Status: accepted
+- Revisions: 2026-06-15 — initial.
+
+### REQ-027 — Layout viewports at independent scales
+- Purpose: show one or more scaled views of the model on a sheet
+- Priority: should
+- Type: functional
+- Statement: A paper layout may hold **one or more viewports**, each a rectangular
+  window onto **model space** with its own **scale** and **pan/center**. Viewports
+  can be **created, moved, resized**, and have their scale set (model units per
+  paper unit). Model geometry renders inside each viewport clipped to its rectangle
+  at the viewport's scale; the model itself is unchanged.
+- Acceptance: the user can add a viewport and set its scale and model geometry
+  appears inside it at that scale; a layout can hold ≥2 viewports showing the model
+  at **different** scales simultaneously; viewports can be moved and resized.
+- Owner-layer: UI / Domain / Renderer
+- Status: accepted
+- Revisions: 2026-06-15 — initial.
+
+### REQ-028 — Per-viewport layer freeze
+- Purpose: control which layers show in each viewport independently
+- Priority: should
+- Type: functional
+- Statement: Each viewport carries its own set of **frozen layers**. A layer frozen
+  in a viewport is hidden **only in that viewport** — not in other viewports, other
+  layouts, or model space.
+- Acceptance: freezing a layer in one viewport hides its geometry in that viewport
+  while it remains visible in other viewports and in model space; thawing restores
+  it.
+- Owner-layer: UI / Domain / Renderer
+- Status: accepted
+- Revisions: 2026-06-15 — initial.
+
+### REQ-029 — Plot a single layout to PDF at true scale
+- Purpose: produce a printable sheet at correct plot scale
+- Priority: should
+- Type: functional
+- Statement: The user can **plot a single paper layout to a PDF** sized to the
+  layout's paper size, with geometry placed at **true plot scale** (1:1 on the
+  sheet; each viewport's model content at the viewport's scale). Output is vector
+  where practical, produced with the already-bundled PDFium edit API (ADR-006) — no
+  new dependency.
+- Acceptance: plotting a layout produces a one-page PDF at the layout's paper size
+  where a measured distance on the sheet matches the intended plot scale within
+  REQ-101 tolerance.
+- Owner-layer: IO / Renderer
+- Status: accepted
+- Revisions: 2026-06-15 — initial.
+
+### REQ-030 — Batch plot multiple layouts
+- Purpose: plot many sheets in one action
+- Priority: should
+- Type: functional
+- Statement: The user can select **multiple paper layouts** and plot them in one
+  action to a **multi-page PDF** (one page per layout), each at its own paper size
+  and true plot scale (REQ-029).
+- Acceptance: selecting ≥2 layouts and batch-plotting produces a single multi-page
+  PDF with one correctly sized/scaled page per selected layout.
+- Owner-layer: IO / Renderer
+- Status: accepted
+- Revisions: 2026-06-15 — initial.
+
+### REQ-031 — Persist layouts and viewports in .gs
+- Purpose: layouts survive save/reload
+- Priority: should
+- Type: functional
+- Statement: Paper layouts, their paper size/orientation, their viewports
+  (rectangle, scale, center) and per-viewport frozen layers are **persisted in the
+  native `.gs` file** and restored on load. DXF persistence of layouts/viewports is
+  **deferred** to a later requirement (decision log, 2026-06-15).
+- Acceptance: a drawing with multiple layouts and viewports (with set scales, paper
+  sizes, and per-viewport frozen layers) saved to `.gs` then reloaded restores all
+  of them identically.
+- Owner-layer: IO
+- Status: accepted
+- Revisions: 2026-06-15 — initial.
+
 ---
 
 ## Performance requirements
@@ -442,6 +549,13 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-022 | UI/IO | manual (insertion units stored + sampled; survey precision independent) | accepted |
 | REQ-023 | IO | runtime DXF round-trip (survey points reconstructed via XDATA; existing points preserved + merged, id conflict → overwrite/offset prompt; foreign POINT → cross-lines) | accepted |
 | REQ-024 | UI | manual (LINE shows two live coord boxes; type locks X; Tab→Y; Enter/click commits; non-point prompt single field) | accepted |
+| REQ-025 | UI/Domain | manual (Model + Paper layout tabs; add/rename/delete; MODEL/PAPER status button toggles) | accepted |
+| REQ-026 | UI/Domain | manual (paper size + orientation render the sheet outline at physical size) | accepted |
+| REQ-027 | UI/Domain/Renderer | manual (≥2 viewports at different scales; create/move/resize/scale) | accepted |
+| REQ-028 | UI/Domain/Renderer | manual (layer frozen in one viewport hidden there only) | accepted |
+| REQ-029 | IO/Renderer | manual + measured (single layout → 1-page PDF at true scale within REQ-101) | accepted |
+| REQ-030 | IO/Renderer | manual (≥2 layouts → one multi-page PDF, per-page size/scale) | accepted |
+| REQ-031 | IO | manual (layouts/viewports/scales/paper/frozen-layers round-trip through .gs) | accepted |
 
 ---
 

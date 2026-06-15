@@ -317,3 +317,52 @@ A change is rejected if it breaks any of these:
   apps still read valid `POINT`s (unknown XDATA is ignored); a small XDATA schema
   and one registered APPID to maintain. The APPID handle is appended at the end of
   the symbol-handle range so existing handles do not shift.
+
+### ADR-006 — Paper-space data model and a paper/model render mode   (2026-06-15, accepted)
+- Context:    REQ-025–028 introduce paper space: each drawing gains named paper
+  **layouts**, each holding **viewports** (rectangular windows onto model space with
+  their own scale, center, and frozen-layer set), plus an active-**space** notion
+  (model vs a paper layout). Model space today is a single coordinate space rendered
+  by one viewport path. Adding layouts/viewports is new Domain data + ownership, and
+  drawing a sheet with scaled clipped model views is a new Renderer mode — an
+  architectural decision, not a Workshop choice (architecture §3, §7, §11.4).
+- Decision:   Add a Domain data model owned by the drawing/document: a vector of
+  `PaperLayout` (name, paper size, orientation) each owning a vector of `Viewport`
+  (paper-space rect, model center, scale, frozen-layer set), plus an `activeSpace`
+  selector on `AppCommandState`. The Renderer gains a **paper-space pass**: it draws
+  the sheet outline in paper units, then for each viewport sets a scissor rect and a
+  paper←model transform (scale + center) and reuses the **existing** model geometry
+  batches, skipping that viewport's frozen layers. Model space rendering is
+  unchanged when `activeSpace == Model`. No new geometry storage — viewports
+  reference the one model. Concrete uses (layouts, viewports) are present today, so
+  the types are concrete, not speculative (§11.4).
+- Alternatives: (a) duplicate geometry per layout — rejected: wastes memory and
+  desynchronizes from the model. (b) a generic "scene graph / camera" abstraction —
+  rejected as speculative (§11.4); a viewport is a concrete transform+rect+scale.
+  (c) render each viewport to an offscreen FBO — deferred; scissor + transform over
+  the existing batches is simpler and sufficient.
+- Consequences: the document model grows by two small owned vectors + an enum; the
+  Renderer learns one new pass reusing existing batches; `.gs` gains a layouts
+  section (REQ-031); DXF layout/VPORT export is explicitly deferred. Built
+  incrementally (decision log) so each slice passes Verification.
+
+### ADR-007 — Plot output as vector PDF via the bundled PDFium edit API   (2026-06-15, accepted)
+- Context:    REQ-029/030 require plotting a layout (and batches) to a printable
+  sheet at true plot scale. The project already links **PDFium** (read path for PDF
+  underlays, with `fpdf_edit.h` available). How plot output is produced — and
+  whether a new dependency is taken — is an architectural/dependency decision
+  (REQ-300).
+- Decision:   Produce plot output as **vector PDF** using PDFium's edit API
+  (`FPDF_CreateNewDocument`, `FPDFPage_New`, path/text page objects), one PDF page
+  per layout sized to the layout's paper size, geometry emitted at true plot scale
+  (paper units), each viewport's model content transformed and clipped to its rect.
+  Batch plot writes multiple pages into one document. **No new dependency.**
+  Direct-to-OS-printer (GDI) is deferred; users print the produced PDF.
+- Alternatives: (a) Windows GDI printing — rejected this increment: Windows-only
+  print code and batch still needs PDF. (b) raster-to-PDF (hi-DPI image per sheet) —
+  rejected: not vector-crisp, larger files; may be a fallback for dense underlays
+  only. (c) a new PDF-writer dependency — rejected: PDFium already provides write
+  APIs (REQ-300).
+- Consequences: plotting lives in IO/Renderer with no new dependency; output is
+  vector and measurable against REQ-101; a PDF-emit path to maintain alongside the
+  existing PDF-read path; real-printer support remains a future REQ.

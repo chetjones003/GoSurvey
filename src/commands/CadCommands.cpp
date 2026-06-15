@@ -54,6 +54,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.drawingLayerTable      = cmd.drawingLayerTable;
   doc.pdfAttachments         = cmd.pdfAttachments;
   doc.selection              = cmd.selection;
+  doc.paperLayouts           = cmd.paperLayouts;
+  doc.activeSpaceIndex       = cmd.activeSpaceIndex;
   doc.cadGpuRevision         = cmd.cadGpuRevision;
   doc.savedRevision          = cmd.activeDocSavedRevision;
   doc.filePath               = cmd.activeDocFilePath;
@@ -86,10 +88,77 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.drawingLayerTable          = doc.drawingLayerTable;
   cmd.pdfAttachments             = doc.pdfAttachments;
   cmd.selection                  = doc.selection;
+  cmd.paperLayouts               = doc.paperLayouts;
+  cmd.activeSpaceIndex           = doc.activeSpaceIndex;
+  cmd.lastPaperLayoutIndex       = doc.activeSpaceIndex >= 0 ? doc.activeSpaceIndex : 0;
   cmd.cadGpuRevision             = doc.cadGpuRevision;
   cmd.activeDocSavedRevision     = doc.savedRevision;
   cmd.activeDocFilePath          = doc.filePath;
   cmd.active = AppCommandState::Kind::None;  // cancel any in-progress command on switch
+}
+
+// ---------------------------------------------------------------------------
+// Paper space (REQ-025)
+// ---------------------------------------------------------------------------
+
+int AddPaperLayout(AppCommandState& cmd) {
+  // Pick a unique "Layout N" name.
+  int n = static_cast<int>(cmd.paperLayouts.size()) + 1;
+  auto nameTaken = [&](const std::string& s) {
+    for (const PaperLayout& l : cmd.paperLayouts)
+      if (l.name == s)
+        return true;
+    return false;
+  };
+  std::string name;
+  do {
+    name = "Layout" + std::to_string(n++);
+  } while (nameTaken(name));
+  PaperLayout layout;  // defaults: ARCH D, landscape
+  layout.name = name;
+  cmd.paperLayouts.push_back(layout);
+  const int idx = static_cast<int>(cmd.paperLayouts.size()) - 1;
+  cmd.lastPaperLayoutIndex = idx;
+  BumpCadGpuCache(cmd);
+  return idx;
+}
+
+void DeletePaperLayout(AppCommandState& cmd, int idx) {
+  if (idx < 0 || static_cast<size_t>(idx) >= cmd.paperLayouts.size())
+    return;
+  cmd.paperLayouts.erase(cmd.paperLayouts.begin() + idx);
+  // Fix up the active space and the toggle target.
+  if (cmd.activeSpaceIndex == idx)
+    cmd.activeSpaceIndex = kModelSpaceIndex;          // deleted the active layout → fall back to model
+  else if (cmd.activeSpaceIndex > idx)
+    --cmd.activeSpaceIndex;                            // indices after the removed one shift down
+  cmd.lastPaperLayoutIndex =
+      std::clamp(cmd.lastPaperLayoutIndex, 0, std::max(0, static_cast<int>(cmd.paperLayouts.size()) - 1));
+  BumpCadGpuCache(cmd);
+}
+
+void SetActiveSpace(AppCommandState& cmd, int spaceIndex) {
+  if (spaceIndex < 0) {
+    cmd.activeSpaceIndex = kModelSpaceIndex;
+  } else if (!cmd.paperLayouts.empty()) {
+    cmd.activeSpaceIndex = std::clamp(spaceIndex, 0, static_cast<int>(cmd.paperLayouts.size()) - 1);
+    cmd.lastPaperLayoutIndex = cmd.activeSpaceIndex;
+  } else {
+    cmd.activeSpaceIndex = kModelSpaceIndex;
+  }
+  cmd.active = AppCommandState::Kind::None;  // leaving a space cancels any in-progress command
+  BumpCadGpuCache(cmd);
+}
+
+void ToggleModelPaperSpace(AppCommandState& cmd) {
+  if (cmd.activeSpaceIndex == kModelSpaceIndex) {
+    if (cmd.paperLayouts.empty())
+      AddPaperLayout(cmd);  // create one on first switch so PAPER has somewhere to go
+    SetActiveSpace(cmd, std::clamp(cmd.lastPaperLayoutIndex, 0, static_cast<int>(cmd.paperLayouts.size()) - 1));
+  } else {
+    cmd.lastPaperLayoutIndex = cmd.activeSpaceIndex;
+    SetActiveSpace(cmd, kModelSpaceIndex);
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -57,7 +57,20 @@ when" and the requirements it closes.
 A lightweight board that complements the milestones. Keep each column honest.
 
 ### Now (in flight — keep short)
-- `<TASK referencing REQ-001 — reject malformed import records>`
+- **Paper Space — Increment 1** (REQ-025, REQ-026, REQ-031 partial): model/paper
+  spaces, layout tabs, MODEL/PAPER status toggle, paper size + orientation + sheet
+  outline, `.gs` persistence of layouts.
+
+### M-PaperSpace — Paper space & plotting (incremental)
+- **Goal:** compose the model onto sheets and plot them.
+- **Delivers:** REQ-025–031 (ADR-006, ADR-007).
+- **Increments:**
+  1. Spaces + layout tabs + MODEL/PAPER toggle + paper size/orientation + outline + `.gs` (REQ-025, REQ-026, REQ-031 part).
+  2. Viewports: create/move/resize, independent scale/center, model rendered inside (REQ-027, REQ-031).
+  3. Per-viewport layer freeze (REQ-028).
+  4. Plot single + batch to PDF via PDFium (REQ-029, REQ-030).
+- **Deferred:** DXF persistence of layouts/viewports; direct-to-OS-printer.
+- **Status:** Increment 1 in progress.
 
 ### Next (accepted, sequenced, not started)
 - `<REQ-101 — coordinate tolerance regression>`
