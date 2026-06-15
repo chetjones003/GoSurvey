@@ -1,6 +1,7 @@
 #include "CadCoordinateFrame.hpp"
 
 #include "CadCommands.hpp"
+#include "SurveyPoints.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -64,6 +65,8 @@ void ApplyDocumentOriginRebase(AppCommandState& st, double newOriginX, double ne
   st.viewportPanY += dy;
   st.worldDocumentOriginX = newOriginX;
   st.worldDocumentOriginY = newOriginY;
+  // The origin moved, so {north}/{east} label text is now stale — rebuild it against the new origin.
+  RegenerateAllSurveyPointLabels(st);
   if (log) {
     char buf[192];
     std::snprintf(buf, sizeof(buf),

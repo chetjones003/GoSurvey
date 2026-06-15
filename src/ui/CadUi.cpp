@@ -4383,17 +4383,39 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
   }
 }
 
+// Ordinal word for the point being specified ("first", "second", … then "11th").
+static std::string OrdinalWord(int n) {
+  static const char* kWords[] = {"zeroth", "first", "second", "third",   "fourth", "fifth",
+                                 "sixth",  "seventh", "eighth", "ninth", "tenth"};
+  if (n >= 1 && n <= 10)
+    return kWords[n];
+  const char* suf = "th";
+  const int mod100 = n % 100;
+  if (mod100 < 11 || mod100 > 13) {
+    switch (n % 10) {
+    case 1: suf = "st"; break;
+    case 2: suf = "nd"; break;
+    case 3: suf = "rd"; break;
+    default: break;
+    }
+  }
+  return std::to_string(n) + suf;
+}
+
 // AutoCAD-style "Specify … :" label for the dynamic-input point prompt (REQ-024).
-// Only meaningful when CommandExpectsPointEntry(cmd) is true.
-static const char* CadPointPromptLabel(const AppCommandState& cmd) {
+// Only meaningful when CommandExpectsPointEntry(cmd) is true. Multi-point chains
+// (LINE, POLYLINE) count the point being specified: first, second, third, …
+static std::string CadPointPromptLabel(const AppCommandState& cmd) {
   using K = AppCommandState::Kind;
   switch (cmd.active) {
   case K::Line:
-    return cmd.linePhase == AppCommandState::LinePhase::NeedFirstPoint ? "Specify first point:"
-                                                                       : "Specify next point:";
+    return cmd.linePhase == AppCommandState::LinePhase::NeedFirstPoint
+               ? std::string("Specify first point:")
+               : "Specify " + OrdinalWord(static_cast<int>(cmd.lineDraftSegments) + 2) + " point:";
   case K::Polyline:
-    return cmd.polylinePhase == AppCommandState::PolylinePhase::NeedFirstPoint ? "Specify start point:"
-                                                                              : "Specify next point:";
+    return cmd.polylinePhase == AppCommandState::PolylinePhase::NeedFirstPoint
+               ? std::string("Specify first point:")
+               : "Specify " + OrdinalWord(static_cast<int>(cmd.polyDraftSegments) + 2) + " point:";
   case K::Arc:
     switch (cmd.arcPhase) {
     case AppCommandState::ArcPhase::WaitStart: return "Specify start point:";
@@ -4584,6 +4606,12 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
 // (-1,-1) means "not yet known" → popup falls back to the command-input anchor.
 static ImVec2 s_lastCrosshairScreen = ImVec2(-1.f, -1.f);
 
+// Screen rect of the command-autocomplete popup while it is open, so the viewport
+// click handler can ignore a left-click that lands on the suggestion list (REQ-024).
+static bool   s_cmdSugPopupOpen = false;
+static ImVec2 s_cmdSugPopupMin = ImVec2(0.f, 0.f);
+static ImVec2 s_cmdSugPopupMax = ImVec2(0.f, 0.f);
+
 void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBufSize, AppCommandState& cmd) {
   const bool isDark = (cmd.displayColorThemeIdx == 0);
   // Console background is slightly distinct from the main workspace in both themes.
@@ -4726,6 +4754,11 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   static bool s_cmdSugVisible = false;
   static std::string s_cmdHighlight;
   static bool s_cmdScrollToSel = false;  // request: scroll the keyboard-selected row into view
+  // Suggestions persisted from the frame they were built. Clicking a row deactivates the command
+  // InputText (focus moves to the popup), so on the click frame inputActive is false and the list
+  // would otherwise rebuild empty — taking the popup (and its row buttons) down before the click
+  // resolves. We keep the list alive from this cache while the mouse is over the popup.
+  static std::vector<CommandSuggestion> s_cmdSugCache;
   std::vector<CommandSuggestion> cmdSug;
   ImVec2 cmdInputMin(0, 0), cmdInputMax(0, 0);
   bool   cmdShowSug = false;
@@ -4757,8 +4790,17 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     }
 
     const bool singleToken = query.find_first_of(" \t") == std::string::npos;
-    if (inputActive && !query.empty() && singleToken && !s_cmdDismissed)
+    // Mouse is over last frame's popup rect — a row is being hovered/clicked.
+    const bool overCmdSugPopup = s_cmdSugPopupOpen &&
+        ImGui::IsMouseHoveringRect(s_cmdSugPopupMin, s_cmdSugPopupMax, false);
+    if (inputActive && !query.empty() && singleToken && !s_cmdDismissed) {
       cmdSug = FuzzyCommandSuggestions(query, 20);
+      s_cmdSugCache = cmdSug;
+    } else if (overCmdSugPopup && !s_cmdDismissed && !s_cmdSugCache.empty()) {
+      // Input lost focus to a click on the popup; keep the cached list alive this frame so the
+      // row's InvisibleButton (which fires on mouse release) can run the command.
+      cmdSug = s_cmdSugCache;
+    }
 
     if (!cmdSug.empty()) {
       const int n = static_cast<int>(cmdSug.size());
@@ -4828,6 +4870,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   ImGui::PopStyleColor();
 
   // --- nanoCAD-style command autocomplete popup (anchored at the drawing crosshair) ---
+  s_cmdSugPopupOpen = false;
   if (cmdShowSug && !cmdSug.empty()) {
     const float rowH  = ImGui::GetTextLineHeight() + 7.f;
     const float padY  = 3.f;
@@ -4866,6 +4909,9 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     }
     ImGui::SetNextWindowPos(pos);
     ImGui::SetNextWindowSize(ImVec2(listW, listH));
+    s_cmdSugPopupOpen = true;
+    s_cmdSugPopupMin = pos;
+    s_cmdSugPopupMax = ImVec2(pos.x + listW, pos.y + listH);
     const ImGuiWindowFlags pf = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
                                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                 ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
@@ -4884,7 +4930,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
           std::string pick = cmdSug[i].name;
           for (char& ch : pick) ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
           std::snprintf(cmdBuf, static_cast<size_t>(cmdBufSize), "%s", pick.c_str());
-          s_cmdDismissed = true; s_cmdLastQuery.clear();
+          s_cmdDismissed = true; s_cmdLastQuery.clear(); s_cmdSugCache.clear();
           ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
         }
         if (ImGui::IsItemHovered()) s_cmdSel = i;
@@ -5901,8 +5947,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     BumpCadGpuCache(cmd);
   }
 
-  if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 &&
-      my < avail.y) {
+  const bool overCmdSugPopup =
+      s_cmdSugPopupOpen && ImGui::IsMouseHoveringRect(s_cmdSugPopupMin, s_cmdSugPopupMax, false);
+  if (hovered && !overCmdSugPopup && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x &&
+      my >= 0 && my < avail.y) {
     if (cmd.dimGripMoveActive) {
       cmd.dimGripMoveActive = false;
       ClearDimGripInteraction(cmd);
@@ -6960,7 +7008,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ? ImVec4(0.90f, 0.93f, 0.98f, 1.f)
         : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
     ImGui::PushStyleColor(ImGuiCol_Text, hintCol);
-    ImGui::TextUnformatted(pointEntry ? CadPointPromptLabel(cmd) : curHint);
+    const std::string promptLabel = pointEntry ? CadPointPromptLabel(cmd) : std::string(curHint);
+    ImGui::TextUnformatted(promptLabel.c_str());
     ImGui::PopStyleColor();
     ImGui::Dummy(ImVec2(0.f, 4.f));
 

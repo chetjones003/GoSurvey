@@ -71,6 +71,10 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log 
 /// Modal after COPY when survey points were selected — duplicate ID policy for new survey rows.
 void DrawCopySurveyDuplicateModal(AppCommandState& cmd, std::vector<std::string>& log);
 
+/// Modal after a DXF import whose embedded survey points have IDs that collide with existing points —
+/// lets the user overwrite the existing rows or offset the imported IDs.
+void DrawDxfPointConflictModal(AppCommandState& cmd, std::vector<std::string>& log);
+
 /// PDFATTACH configuration dialog + pick-phase hint overlay.
 bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log);
 

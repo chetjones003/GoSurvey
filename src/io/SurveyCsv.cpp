@@ -71,7 +71,7 @@ bool ParseIntStrict(const std::string& cell, int* out) {
   return true;
 }
 
-bool ParseDoubleStrict(const std::string& cell, float* out) {
+bool ParseDoubleStrict(const std::string& cell, double* out) {
   const std::string t = Trim(cell);
   if (t.empty())
     return false;
@@ -80,6 +80,14 @@ bool ParseDoubleStrict(const std::string& cell, float* out) {
   if (!end || end != t.c_str() + static_cast<std::ptrdiff_t>(t.size()))
     return false;
   if (!std::isfinite(v))
+    return false;
+  *out = v;
+  return true;
+}
+
+bool ParseDoubleStrict(const std::string& cell, float* out) {
+  double v = 0.0;
+  if (!ParseDoubleStrict(cell, &v))
     return false;
   *out = static_cast<float>(v);
   return true;
@@ -170,6 +178,10 @@ struct ParseOutcome {
   bool ok = false;
   std::string err;
   SurveyPoint pt{};
+  // World-space coordinates as read from the file, in full double precision. Survey points are stored
+  // in *local* space (world − worldDocumentOrigin), so the importer converts these before storing.
+  double worldE = 0.0;
+  double worldN = 0.0;
 };
 
 ParseOutcome ParseDataRow(const std::vector<std::string>& cells, SurveyCsvLayout layout, bool hasIdColumn,
@@ -181,8 +193,8 @@ ParseOutcome ParseDataRow(const std::vector<std::string>& cells, SurveyCsvLayout
     return o;
   }
 
-  float n = 0.f;
-  float e = 0.f;
+  double n = 0.0;
+  double e = 0.0;
   float z = 0.f;
   std::string desc;
 
@@ -263,8 +275,12 @@ ParseOutcome ParseDataRow(const std::vector<std::string>& cells, SurveyCsvLayout
     return o;
   }
 
-  o.pt.easting = e;
-  o.pt.northing = n;
+  o.worldE = e;
+  o.worldN = n;
+  // pt.easting/northing are local-space; the importer fills them from worldE/worldN minus the
+  // document origin. Seed with the world values so callers that don't convert still see coordinates.
+  o.pt.easting = static_cast<float>(e);
+  o.pt.northing = static_cast<float>(n);
   o.pt.elevation = z;
   o.pt.description = desc;
   o.pt.layer = "0";
@@ -477,6 +493,11 @@ bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
       ++skipped;
       continue;
     }
+
+    // CSV coordinates are world-space; survey points are stored local (world − document origin). Convert
+    // in double precision so points land exactly on existing geometry (e.g. an imported DXF's endpoints).
+    pr.pt.easting = static_cast<float>(pr.worldE - st.worldDocumentOriginX);
+    pr.pt.northing = static_cast<float>(pr.worldN - st.worldDocumentOriginY);
 
     st.surveyPoints.push_back(pr.pt);
     EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, &log);
