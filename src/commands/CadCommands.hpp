@@ -1072,13 +1072,10 @@ struct AppCommandState {
   bool  paperSelBoxActive = false;
   float paperSelBoxX0In = 0.f;
   float paperSelBoxY0In = 0.f;
-  // Floating model space (REQ-036): edit the model through a viewport. While active, activeSpaceIndex
-  // is model and the view is the viewport's; exit writes the view back and restores the paper view.
-  int    floatingViewportLayout = -1;   ///< paper layout to return to, or -1 if not floating.
-  int    floatingViewportIndex = -1;    ///< viewport being edited, or -1.
-  double savedPaperPanX = 0.0;          ///< paper view saved on entry, restored on exit.
-  double savedPaperPanY = 0.0;
-  float  savedPaperZoom = 1.f;
+  // Floating model space (REQ-036): edit the model IN PLACE through a viewport. The active space stays
+  // the paper layout (sheet + viewports stay visible); model edit/snap/draw is routed through the viewport.
+  int    floatingViewportLayout = -1;   ///< paper layout of the floating viewport, or -1 if not floating.
+  int    floatingViewportIndex = -1;    ///< viewport being edited in place, or -1.
 
   // -------------------------------------------------------------------------
   // TRAVERSE EDITOR state

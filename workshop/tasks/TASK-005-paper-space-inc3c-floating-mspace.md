@@ -44,6 +44,11 @@ ASSUMPTION-1: Entering "maximizes" the viewport's model view to the window (VPMA
 ## 8. Implementation log
 - 2026-06-15 enter/exit + state; double-click enter; Esc + FLOAT button + PSPACE/MSPACE; banner.
 - 2026-06-15 build clean (stopped running instance to relink); tests green (20 cases).
+- 2026-06-15 REWORK (user feedback: maximize was disorienting): floating is now **in place** — the active
+  space stays the paper layout (sheet + viewports stay visible), the model ribbon shows while floating,
+  the cursor maps through the active viewport, and model command clicks are routed via SubmitViewportPick.
+  LINE/POLYLINE rubber + a model cursor crosshair draw inside the viewport; the active viewport is green.
+  Dropped the maximize/saved-view logic. Build clean; tests green (20 cases).
 
 ## 9. Self-verification
 - [x] build-project        — PASS (clean)
@@ -57,9 +62,13 @@ ASSUMPTION-1: Entering "maximizes" the viewport's model view to the window (VPMA
 - Verdict: PASS — one tracked tech-debt item (in-place sheet-visible MSPACE via the GL viewport pass).
 
 ## 11. Outcome
-- Requirements satisfied: REQ-036 (Acceptance met: yes — edit model through the viewport; leave returns to paper)
-- Technical debt: in-place MSPACE (sheet visible, editing within the rect) deferred to the GL per-viewport
-  transform/clip pass (shared with REQ-034 polygonal + perf); remove when that pass lands.
+- Requirements satisfied: REQ-036 (Acceptance met: yes — IN-PLACE edit of the model through the viewport,
+  sheet visible, clipped to the rect; leave returns to paper).
+- Technical debt (tracked, follow-ups):
+  - Snap inside the floating viewport (clicks currently take the raw model cursor — no OSNAP).
+  - Live preview parity for non-LINE/POLYLINE commands (only LINE/POLYLINE rubber drawn in place so far).
+  - Pan/zoom the model *within* the viewport (currently pan/zoom moves the whole sheet).
+  These share the deferred GL per-viewport transform/clip pass (with REQ-034 polygonal + perf).
 - Tests added: none new (interaction; manual)
 - Docs updated: none
-- Done: 2026-06-15
+- Done: 2026-06-15 (reworked to in-place same day)
