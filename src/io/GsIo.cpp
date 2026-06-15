@@ -246,6 +246,19 @@ json BuildRoot(const AppCommandState& st) {
       o["portraitHeightIn"] = l.portraitHeightIn;
       o["landscape"] = l.landscape;
       o["presetIdx"] = l.presetIdx;
+      json vps = json::array();
+      for (const Viewport& v : l.viewports) {
+        json vo;
+        vo["paperXIn"] = v.paperXIn;
+        vo["paperYIn"] = v.paperYIn;
+        vo["paperWIn"] = v.paperWIn;
+        vo["paperHIn"] = v.paperHIn;
+        vo["modelCenterX"] = v.modelCenterX;
+        vo["modelCenterY"] = v.modelCenterY;
+        vo["scaleModelPerPaperIn"] = v.scaleModelPerPaperIn;
+        vps.push_back(vo);
+      }
+      o["viewports"] = vps;
       layouts.push_back(o);
     }
     doc["paperLayouts"] = layouts;
@@ -591,6 +604,21 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       l.portraitHeightIn = o.value("portraitHeightIn", l.portraitHeightIn);
       l.landscape = o.value("landscape", l.landscape);
       l.presetIdx = o.value("presetIdx", l.presetIdx);
+      if (o.contains("viewports") && o["viewports"].is_array()) {
+        for (const auto& vo : o["viewports"]) {
+          if (!vo.is_object())
+            continue;
+          Viewport v;
+          v.paperXIn = vo.value("paperXIn", v.paperXIn);
+          v.paperYIn = vo.value("paperYIn", v.paperYIn);
+          v.paperWIn = vo.value("paperWIn", v.paperWIn);
+          v.paperHIn = vo.value("paperHIn", v.paperHIn);
+          v.modelCenterX = vo.value("modelCenterX", v.modelCenterX);
+          v.modelCenterY = vo.value("modelCenterY", v.modelCenterY);
+          v.scaleModelPerPaperIn = vo.value("scaleModelPerPaperIn", v.scaleModelPerPaperIn);
+          l.viewports.push_back(v);
+        }
+      }
       st.paperLayouts.push_back(l);
     }
   }

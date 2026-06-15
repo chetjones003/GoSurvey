@@ -4566,6 +4566,61 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
       ImGui::SameLine(0, 4);
       if (ImGui::Checkbox("Landscape", &L.landscape))
         BumpCadGpuCache(cmd);
+
+      // Viewports popup (REQ-027): add / select / edit rect+scale / delete.
+      ImGui::SameLine(0, 6);
+      if (ImGui::Button("Viewports…"))
+        ImGui::OpenPopup("paper_viewports");
+      if (ImGui::BeginPopup("paper_viewports")) {
+        const int layoutIdx = cmd.activeSpaceIndex;
+        PaperLayout& PL = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+        ImGui::TextDisabled("Viewports — layout \"%s\"", PL.name.c_str());
+        ImGui::Separator();
+        if (ImGui::Button("+ Add viewport"))
+          AddViewport(cmd, layoutIdx);
+        for (int vi = 0; vi < static_cast<int>(PL.viewports.size()); ++vi) {
+          ImGui::PushID(vi);
+          const bool sel = cmd.selectedViewportLayout == layoutIdx && cmd.selectedViewportIndex == vi;
+          char lbl[32];
+          std::snprintf(lbl, sizeof(lbl), "Viewport %d", vi + 1);
+          if (ImGui::Selectable(lbl, sel)) {
+            cmd.selectedViewportLayout = layoutIdx;
+            cmd.selectedViewportIndex = vi;
+          }
+          ImGui::PopID();
+        }
+        if (cmd.selectedViewportLayout == layoutIdx && cmd.selectedViewportIndex >= 0 &&
+            cmd.selectedViewportIndex < static_cast<int>(PL.viewports.size())) {
+          Viewport& V = PL.viewports[static_cast<size_t>(cmd.selectedViewportIndex)];
+          ImGui::Separator();
+          ImGui::TextDisabled("Selected viewport (paper inches / model units)");
+          bool ch = false;
+          ImGui::SetNextItemWidth(90.f);
+          ch |= ImGui::InputFloat("X##vpx", &V.paperXIn, 0.f, 0.f, "%.3f");
+          ImGui::SameLine();
+          ImGui::SetNextItemWidth(90.f);
+          ch |= ImGui::InputFloat("Y##vpy", &V.paperYIn, 0.f, 0.f, "%.3f");
+          ImGui::SetNextItemWidth(90.f);
+          ch |= ImGui::InputFloat("W##vpw", &V.paperWIn, 0.f, 0.f, "%.3f");
+          ImGui::SameLine();
+          ImGui::SetNextItemWidth(90.f);
+          ch |= ImGui::InputFloat("H##vph", &V.paperHIn, 0.f, 0.f, "%.3f");
+          ImGui::SetNextItemWidth(140.f);
+          ch |= ImGui::InputFloat("Scale (model/in)##vps", &V.scaleModelPerPaperIn, 0.f, 0.f, "%.4f");
+          ImGui::SetNextItemWidth(120.f);
+          ch |= ImGui::InputDouble("Center X##vpcx", &V.modelCenterX, 0., 0., "%.4f");
+          ImGui::SameLine();
+          ImGui::SetNextItemWidth(120.f);
+          ch |= ImGui::InputDouble("Center Y##vpcy", &V.modelCenterY, 0., 0., "%.4f");
+          if (V.paperWIn < 0.1f) V.paperWIn = 0.1f;
+          if (V.paperHIn < 0.1f) V.paperHIn = 0.1f;
+          if (ch)
+            BumpCadGpuCache(cmd);
+          if (ImGui::Button("Delete viewport"))
+            DeleteViewport(cmd, layoutIdx, cmd.selectedViewportIndex);
+        }
+        ImGui::EndPopup();
+      }
     }
     ImGui::SameLine(0, 6);
     ImGui::AlignTextToFramePadding();
@@ -5499,6 +5554,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const ImVec2 mouse = ImGui::GetIO().MousePos;
   const float mx = mouse.x - imgPos.x;
   const float my = mouse.y - imgPos.y;
+  // In paper space, model-entity picking/selection is suppressed (pan/zoom still work); paper-space
+  // viewport interaction is handled separately (REQ-025/027).
+  const bool modelSpace = cmd.activeSpaceIndex == kModelSpaceIndex;
 
   if (hovered) {
     const float wheel = ImGui::GetIO().MouseWheel;
@@ -5548,7 +5606,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   {
     ImGuiIO& ioVpRmb = ImGui::GetIO();
-    if (hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
+    if (modelSpace && hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
       const float uR = mx / std::max(avail.x, 1.f);
       const float vR = my / std::max(avail.y, 1.f);
       const double rmbWx = worldLeft + static_cast<double>(uR) * (worldRight - worldLeft);
@@ -6028,8 +6086,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   const bool overCmdSugPopup =
       s_cmdSugPopupOpen && ImGui::IsMouseHoveringRect(s_cmdSugPopupMin, s_cmdSugPopupMax, false);
-  if (hovered && !overCmdSugPopup && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x &&
-      my >= 0 && my < avail.y) {
+  if (modelSpace && hovered && !overCmdSugPopup && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 &&
+      mx < avail.x && my >= 0 && my < avail.y) {
     if (cmd.dimGripMoveActive) {
       cmd.dimGripMoveActive = false;
       ClearDimGripInteraction(cmd);
@@ -6596,6 +6654,89 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     sdl->AddRectFilled(ImVec2(a.x + 5.f, a.y + 5.f), ImVec2(b.x + 5.f, b.y + 5.f), IM_COL32(0, 0, 0, 90));  // shadow
     sdl->AddRectFilled(a, b, IM_COL32(244, 244, 244, 255));                                                 // sheet
     sdl->AddRect(a, b, IM_COL32(40, 40, 40, 255), 0.f, 0, 1.5f);                                            // border
+
+    // Viewports (REQ-027): each shows model space clipped + scaled inside its rect. Drawn via the
+    // overlay this increment; the GL-batch pass is tracked tech debt (TASK-002 §7).
+    const double oX = cmd.worldDocumentOriginX;
+    const double oY = cmd.worldDocumentOriginY;
+    constexpr ImU32 kVpModelCol = IM_COL32(25, 25, 30, 255);
+    for (int vi = 0; vi < static_cast<int>(L.viewports.size()); ++vi) {
+      const Viewport& vp = L.viewports[static_cast<size_t>(vi)];
+      const ImVec2 r0 = w2s(vp.paperXIn, vp.paperYIn);
+      const ImVec2 r1 = w2s(vp.paperXIn + vp.paperWIn, vp.paperYIn + vp.paperHIn);
+      const ImVec2 rmin(std::min(r0.x, r1.x), std::min(r0.y, r1.y));
+      const ImVec2 rmax(std::max(r0.x, r1.x), std::max(r0.y, r1.y));
+      // World (model, in world coords) → screen, through this viewport.
+      auto m2s = [&](double wx, double wy) {
+        float px = 0.f, py = 0.f;
+        ModelToPaperIn(vp, wx, wy, &px, &py);
+        return w2s(px, py);
+      };
+      const float pxPerWorld = avail.x / static_cast<float>(denx);  // screen px per paper inch (uniform)
+      const float pxPerModel = pxPerWorld / vp.safeScale();
+      sdl->PushClipRect(rmin, rmax, true);
+      // Lines.
+      for (size_t i = 0; i + 5 < cmd.userLinesFlat.size(); i += 6) {
+        const ImVec2 s0 = m2s(cmd.userLinesFlat[i] + oX, cmd.userLinesFlat[i + 1] + oY);
+        const ImVec2 s1 = m2s(cmd.userLinesFlat[i + 3] + oX, cmd.userLinesFlat[i + 4] + oY);
+        sdl->AddLine(s0, s1, kVpModelCol, 1.0f);
+      }
+      // Polylines.
+      for (size_t pi = 0; pi < cmd.userPolylineOffsets.size(); ++pi) {
+        const int start = cmd.userPolylineOffsets[pi];
+        const int end = (pi + 1 < cmd.userPolylineOffsets.size())
+                            ? cmd.userPolylineOffsets[pi + 1]
+                            : static_cast<int>(cmd.userPolylineVerts.size() / 3);
+        ImVec2 prev{};
+        bool have = false;
+        for (int k = start; k < end; ++k) {
+          const ImVec2 s = m2s(cmd.userPolylineVerts[static_cast<size_t>(k) * 3] + oX,
+                               cmd.userPolylineVerts[static_cast<size_t>(k) * 3 + 1] + oY);
+          if (have)
+            sdl->AddLine(prev, s, kVpModelCol, 1.0f);
+          prev = s;
+          have = true;
+        }
+      }
+      // Circles.
+      for (size_t i = 0; i + 2 < cmd.userCirclesCxCyR.size(); i += 3) {
+        const ImVec2 c = m2s(cmd.userCirclesCxCyR[i] + oX, cmd.userCirclesCxCyR[i + 1] + oY);
+        const float rPx = cmd.userCirclesCxCyR[i + 2] * pxPerModel;
+        if (rPx >= 0.5f)
+          sdl->AddCircle(c, rPx, kVpModelCol, 0, 1.0f);
+      }
+      // Arcs (sampled).
+      for (const CadArc& arc : cmd.userArcs) {
+        const int segs = std::clamp(static_cast<int>(std::fabs(arc.sweepRad) / 0.15f) + 2, 2, 180);
+        ImVec2 prev{};
+        for (int k = 0; k <= segs; ++k) {
+          const float t = arc.startRad + arc.sweepRad * (static_cast<float>(k) / static_cast<float>(segs));
+          const ImVec2 s = m2s(static_cast<double>(arc.cx + arc.r * std::cos(t)) + oX,
+                               static_cast<double>(arc.cy + arc.r * std::sin(t)) + oY);
+          if (k > 0)
+            sdl->AddLine(prev, s, kVpModelCol, 1.0f);
+          prev = s;
+        }
+      }
+      // Survey-point crosses.
+      const float crossPx = 4.f;
+      for (const SurveyPoint& sp : cmd.surveyPoints) {
+        const ImVec2 c = m2s(static_cast<double>(sp.easting) + oX, static_cast<double>(sp.northing) + oY);
+        sdl->AddLine(ImVec2(c.x - crossPx, c.y), ImVec2(c.x + crossPx, c.y), kVpModelCol, 1.0f);
+        sdl->AddLine(ImVec2(c.x, c.y - crossPx), ImVec2(c.x, c.y + crossPx), kVpModelCol, 1.0f);
+      }
+      sdl->PopClipRect();
+      // Viewport border; selected one accented with corner grips.
+      const bool selVp = cmd.activeSpaceIndex == cmd.selectedViewportLayout && vi == cmd.selectedViewportIndex;
+      sdl->AddRect(rmin, rmax, selVp ? IM_COL32(59, 130, 246, 255) : IM_COL32(90, 90, 100, 255), 0.f, 0,
+                   selVp ? 2.0f : 1.2f);
+      if (selVp) {
+        const ImVec2 corners[4] = {rmin, ImVec2(rmax.x, rmin.y), rmax, ImVec2(rmin.x, rmax.y)};
+        for (const ImVec2& cp : corners)
+          sdl->AddRectFilled(ImVec2(cp.x - 4.f, cp.y - 4.f), ImVec2(cp.x + 4.f, cp.y + 4.f),
+                             IM_COL32(59, 130, 246, 255));
+      }
+    }
   }
 
   std::vector<CadAnnotation> transformAnnPreviews;

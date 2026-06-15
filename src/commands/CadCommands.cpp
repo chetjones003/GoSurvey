@@ -161,6 +161,42 @@ void ToggleModelPaperSpace(AppCommandState& cmd) {
   }
 }
 
+int AddViewport(AppCommandState& cmd, int layoutIdx) {
+  if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.paperLayouts.size())
+    return -1;
+  PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  const float sw = L.sheetWidthIn();
+  const float sh = L.sheetHeightIn();
+  Viewport vp;
+  vp.paperWIn = sw * 0.7f;
+  vp.paperHIn = sh * 0.7f;
+  vp.paperXIn = (sw - vp.paperWIn) * 0.5f;
+  vp.paperYIn = (sh - vp.paperHIn) * 0.5f;
+  // worldDocumentOrigin is ~the model centroid (the load/import rebase centers on it), so it makes a
+  // sensible default viewport center; scale defaults to the drawing's plot scale.
+  vp.modelCenterX = cmd.worldDocumentOriginX;
+  vp.modelCenterY = cmd.worldDocumentOriginY;
+  vp.scaleModelPerPaperIn = cmd.modelUnitsPerPlottedInch > 1.e-6f ? cmd.modelUnitsPerPlottedInch : 50.f;
+  L.viewports.push_back(vp);
+  const int idx = static_cast<int>(L.viewports.size()) - 1;
+  cmd.selectedViewportLayout = layoutIdx;
+  cmd.selectedViewportIndex = idx;
+  BumpCadGpuCache(cmd);
+  return idx;
+}
+
+void DeleteViewport(AppCommandState& cmd, int layoutIdx, int vpIdx) {
+  if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.paperLayouts.size())
+    return;
+  PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  if (vpIdx < 0 || static_cast<size_t>(vpIdx) >= L.viewports.size())
+    return;
+  L.viewports.erase(L.viewports.begin() + vpIdx);
+  cmd.selectedViewportLayout = -1;
+  cmd.selectedViewportIndex = -1;
+  BumpCadGpuCache(cmd);
+}
+
 // ---------------------------------------------------------------------------
 // Undo / Redo
 // ---------------------------------------------------------------------------

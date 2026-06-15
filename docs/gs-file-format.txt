@@ -108,7 +108,12 @@ nlohmann::json (numbers may serialize as integers or floats; the loader uses
         portraitHeightIn (number)  portrait sheet height in inches
         landscape        (bool)    orientation; true swaps width/height on the sheet
         presetIdx        (integer) index into the paper-size preset table, or -1 = custom
-      Viewports and per-viewport frozen layers are added in a later increment.
+        viewports        (array of objects, optional) — REQ-027; each viewport:
+            paperXIn, paperYIn        (numbers) rect lower-left in paper inches (sheet origin 0,0)
+            paperWIn, paperHIn        (numbers) rect size in paper inches
+            modelCenterX, modelCenterY(numbers) model-space (world) point shown at the rect center
+            scaleModelPerPaperIn      (number)  model units per paper inch (viewport scale)
+      Per-viewport frozen layers are added in a later increment.
       A missing or malformed array loads as zero layouts (model space only).
 
   activeSpaceIndex (integer, default -1)
