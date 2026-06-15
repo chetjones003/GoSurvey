@@ -97,6 +97,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.paperGripCorner = -2;
   cmd.paperMovePhase = 0;
   cmd.paperSelBoxActive = false;
+  cmd.floatingViewportLayout = -1;  // floating model space is transient, not per-document
+  cmd.floatingViewportIndex = -1;
   cmd.cadGpuRevision             = doc.cadGpuRevision;
   cmd.activeDocSavedRevision     = doc.savedRevision;
   cmd.activeDocFilePath          = doc.filePath;
@@ -334,6 +336,65 @@ void StartPaperMoveCopyViewports(AppCommandState& cmd, bool copy, std::vector<st
   cmd.paperMovePhase = 1;
   cmd.paperMoveIsCopy = copy;
   log.push_back(std::string(copy ? "COPY" : "MOVE") + " viewport — click the base point (Esc to cancel).");
+}
+
+// --- Floating model space (REQ-036) ---
+// Mapping: the maximized model view shows model height = 100/zoom (since halfH = 50/zoom); a viewport on
+// paper shows model height = paperHIn * scale. Entering matches them so framing is continuous, and exiting
+// recovers the viewport's scale from the final zoom.
+
+bool InFloatingModelSpace(const AppCommandState& cmd) { return cmd.floatingViewportIndex >= 0; }
+
+void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std::vector<std::string>& log) {
+  if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.paperLayouts.size())
+    return;
+  PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  if (vpIdx < 0 || static_cast<size_t>(vpIdx) >= L.viewports.size())
+    return;
+  const Viewport& v = L.viewports[static_cast<size_t>(vpIdx)];
+  cmd.savedPaperPanX = cmd.viewportPanX;
+  cmd.savedPaperPanY = cmd.viewportPanY;
+  cmd.savedPaperZoom = cmd.viewportZoom;
+  cmd.floatingViewportLayout = layoutIdx;
+  cmd.floatingViewportIndex = vpIdx;
+  cmd.activeSpaceIndex = kModelSpaceIndex;  // reuse the full model edit/snap pipeline
+  cmd.viewportPanX = v.modelCenterX - cmd.worldDocumentOriginX;  // model view is local (world = local + origin)
+  cmd.viewportPanY = v.modelCenterY - cmd.worldDocumentOriginY;
+  const float visH = std::max(0.01f, v.paperHIn * v.safeScale());
+  cmd.viewportZoom = 100.f / visH;
+  cmd.active = AppCommandState::Kind::None;
+  cmd.paperMovePhase = 0;
+  cmd.paperGripCorner = -2;
+  cmd.paperSelBoxActive = false;
+  log.push_back("Floating model space — editing viewport " + std::to_string(vpIdx + 1) +
+                "; Esc or the PAPER button returns to the layout.");
+  BumpCadGpuCache(cmd);
+}
+
+void ExitFloatingModelSpace(AppCommandState& cmd, std::vector<std::string>& log) {
+  if (cmd.floatingViewportIndex < 0)
+    return;
+  const int li = cmd.floatingViewportLayout;
+  const int vi = cmd.floatingViewportIndex;
+  if (li >= 0 && static_cast<size_t>(li) < cmd.paperLayouts.size()) {
+    PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(li)];
+    if (vi >= 0 && static_cast<size_t>(vi) < L.viewports.size()) {
+      Viewport& v = L.viewports[static_cast<size_t>(vi)];
+      v.modelCenterX = cmd.viewportPanX + cmd.worldDocumentOriginX;
+      v.modelCenterY = cmd.viewportPanY + cmd.worldDocumentOriginY;
+      const float visH = 100.f / std::max(1.e-6f, cmd.viewportZoom);
+      v.scaleModelPerPaperIn = std::max(1.e-6f, visH / std::max(0.01f, v.paperHIn));
+    }
+  }
+  cmd.activeSpaceIndex = (li >= 0 && static_cast<size_t>(li) < cmd.paperLayouts.size()) ? li : kModelSpaceIndex;
+  cmd.viewportPanX = cmd.savedPaperPanX;
+  cmd.viewportPanY = cmd.savedPaperPanY;
+  cmd.viewportZoom = cmd.savedPaperZoom;
+  cmd.floatingViewportLayout = -1;
+  cmd.floatingViewportIndex = -1;
+  cmd.active = AppCommandState::Kind::None;
+  log.push_back("Returned to paper space.");
+  BumpCadGpuCache(cmd);
 }
 
 // ---------------------------------------------------------------------------
@@ -1286,6 +1347,8 @@ const CmdEntry kRegistry[] = {
     {"paste",        "", "Paste from clipboard"},
     {"pasteorig",    "po", "Paste at original coordinates"},
     {"mview",        "rectviewport, rectvp", "Rectangular paper-space viewport (two clicks)"},
+    {"mspace",       "ms", "Edit the model through the selected viewport (floating model space)"},
+    {"pspace",       "ps", "Return to paper space from a floating viewport"},
 };
 
 bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vector<std::string>& log);
@@ -1726,6 +1789,20 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "mview" || primary == "rectviewport" || primary == "rectvp") {
     StartPaperRectViewportCommand(st, log);
+    return true;
+  }
+  if (primary == "mspace" || primary == "ms") {
+    if (st.activeSpaceIndex != kModelSpaceIndex && st.selectedViewportIndex >= 0)
+      EnterFloatingModelSpace(st, st.activeSpaceIndex, st.selectedViewportIndex, log);
+    else
+      log.push_back("MSPACE — select a viewport in a paper layout first.");
+    return true;
+  }
+  if (primary == "pspace" || primary == "ps") {
+    if (InFloatingModelSpace(st))
+      ExitFloatingModelSpace(st, log);
+    else
+      log.push_back("PSPACE — not in a floating viewport.");
     return true;
   }
   return false;
