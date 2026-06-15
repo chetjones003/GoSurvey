@@ -65,12 +65,17 @@ A lightweight board that complements the milestones. Keep each column honest.
 - **Goal:** compose the model onto sheets and plot them.
 - **Delivers:** REQ-025–031 (ADR-006, ADR-007).
 - **Increments:**
-  1. Spaces + layout tabs + MODEL/PAPER toggle + paper size/orientation + outline + `.gs` (REQ-025, REQ-026, REQ-031 part).
-  2. Viewports: create/move/resize, independent scale/center, model rendered inside (REQ-027, REQ-031).
-  3. Per-viewport layer freeze (REQ-028).
+  1. ✅ Spaces + layout tabs + MODEL/PAPER toggle + paper size/orientation + outline + `.gs` (REQ-025, REQ-026, REQ-031 part).
+  2. ✅ Viewports: create/move/resize, independent scale/center, model rendered inside (REQ-027, REQ-031).
+  3a. Layout contextual ribbon + Rectangular viewport command w/ preview (REQ-032, REQ-033).
+  3b. Viewports selectable; MOVE/COPY/DELETE operate on them (REQ-035).
+  3c. Floating model space — double-click to edit model through a viewport (REQ-036).
+  3d. Polygonal viewport (REQ-034) — needs the GL per-viewport transform/clip pass.
+  3e. Per-viewport layer freeze (REQ-028).
   4. Plot single + batch to PDF via PDFium (REQ-029, REQ-030).
-- **Deferred:** DXF persistence of layouts/viewports; direct-to-OS-printer.
-- **Status:** Increment 1 in progress.
+- **Deferred:** DXF persistence of layouts/viewports; direct-to-OS-printer; GL
+  per-viewport transform/clip pass (perf + polygonal/MSPACE drawing) — see ADR-006/008 debt.
+- **Status:** Inc 1–2 done; Inc 3a in progress.
 
 ### Next (accepted, sequenced, not started)
 - `<REQ-101 — coordinate tolerance regression>`

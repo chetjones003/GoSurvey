@@ -366,3 +366,34 @@ A change is rejected if it breaks any of these:
 - Consequences: plotting lives in IO/Renderer with no new dependency; output is
   vector and measurable against REQ-101; a PDF-emit path to maintain alongside the
   existing PDF-read path; real-printer support remains a future REQ.
+
+### ADR-008 — Viewports as selectable objects + floating model space   (2026-06-15, accepted)
+- Context:    REQ-033–036 add command-driven viewport creation, viewport selection
+  with MOVE/COPY/DELETE, and floating model space (edit the model through a viewport,
+  AutoCAD MSPACE). This extends paper space (ADR-006) from a passive display into an
+  interactive space, which touches the selection model and the command/coordinate
+  flow — architectural decisions, not Workshop choices.
+- Decision:   (a) **Viewport-creating commands** are new `AppCommandState::Kind`
+  values with paper-space draft state; their clicks are handled in a paper-space
+  input branch (screen↔paper-inch), not the model `SubmitViewportPick` path, and they
+  render a rubber-band preview through the paper overlay. (b) **Viewports are
+  selectable** in paper space via a paper-space selection set; the existing MOVE,
+  COPY, and DELETE commands branch on the active space to operate on selected
+  viewports (translate the rect / duplicate / erase) instead of model entities —
+  reusing the command surface without a parallel command set. (c) **Floating model
+  space** is an `AppCommandState` mode (active viewport index) under which the
+  model command + snap pipeline runs through that viewport's transform, clipped to
+  its rect; entering is a double-click, leaving is double-click-out / Esc / PSPACE.
+  No new dependency, no new global; state lives on `AppCommandState`/`DrawingDocument`.
+- Alternatives: (a) a parallel paper-space command set (separate move/copy/delete) —
+  rejected: duplicates command logic and diverges UX from model space (the user
+  asked for parity). (b) viewports as model `SelectedEntity` — rejected: they live in
+  paper coordinates, not the model frame; a paper-space selection is clearer. (c)
+  read-only viewports (no MSPACE) — rejected: the user requires editing through the
+  viewport.
+- Consequences: a handful of new command Kinds + a paper-space selection vector;
+  MOVE/COPY/DELETE gain a small paper-space branch; the renderer eventually needs the
+  per-viewport transform/clip pass for MSPACE drawing and for polygonal clipping
+  (REQ-034) — the GL scissor/stencil pass deferred under ADR-006. Delivered
+  incrementally (3a ribbon+rect viewport, 3b select+edit, 3c floating mspace,
+  3d polygonal) so each slice is verifiable.

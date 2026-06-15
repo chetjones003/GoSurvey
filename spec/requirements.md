@@ -441,6 +441,78 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-06-15 — initial.
 
+### REQ-032 — Contextual "Layout" ribbon in paper space
+- Purpose: surface paper-space commands only when they apply
+- Priority: should
+- Type: functional
+- Statement: While a paper layout is the active space, the ribbon presents a
+  **Layout** context with the paper-space commands (rectangular viewport, polygonal
+  viewport, and future paper-space tools); in model space the normal ribbon shows.
+- Acceptance: switching to a paper layout shows the Layout ribbon with the viewport
+  commands; switching back to Model restores the normal ribbon.
+- Owner-layer: UI
+- Status: accepted
+- Revisions: 2026-06-15 — initial (Paper Space Inc 3a).
+
+### REQ-033 — Rectangular viewport command with live preview
+- Purpose: create viewports by drawing them, like AutoCAD MVIEW
+- Priority: should
+- Type: functional
+- Statement: A command (ribbon **Layout → Rectangular Viewport**, or a command-line
+  alias) lets the user create a viewport on the active layout with **two clicks**
+  defining opposite corners, showing a **rubber-band preview** between the first
+  click and the cursor. The new viewport defaults to a sensible scale/center, then
+  is editable (REQ-027). Esc cancels before the second click.
+- Acceptance: starting the command then clicking two corners creates a viewport of
+  that rectangle showing the model; a preview rectangle tracks the cursor between
+  clicks; Esc before the second click creates nothing.
+- Owner-layer: UI / Commands
+- Status: accepted
+- Revisions: 2026-06-15 — initial (Inc 3a).
+
+### REQ-034 — Polygonal viewport command
+- Purpose: non-rectangular viewports
+- Priority: could
+- Type: functional
+- Statement: A command lets the user define a viewport boundary by clicking
+  **vertices until "close"**, with a preview; the viewport clips the model to that
+  polygon. Polygonal clipping depends on the GL viewport render pass (ADR-006 /
+  ADR-008), so this lands after that pass exists.
+- Acceptance: clicking ≥3 vertices then closing creates a viewport that clips the
+  model to the polygon; preview tracks the in-progress boundary.
+- Owner-layer: UI / Commands / Renderer
+- Status: accepted
+- Revisions: 2026-06-15 — initial (Inc 3d; depends on the GL clip pass).
+
+### REQ-035 — Viewports are selectable; MOVE/COPY/DELETE operate on them
+- Purpose: edit viewports with the same UX as model objects
+- Priority: should
+- Type: functional
+- Statement: In paper space, viewports are **selectable objects** (single click and
+  window selection, with grips), and the **MOVE**, **COPY**, and **DELETE** commands
+  operate on the selected viewport(s) — mirroring model-space selection/editing.
+- Acceptance: clicking a viewport selects it (window-select selects those inside);
+  MOVE relocates it, COPY duplicates it, DELETE removes it; grips move/resize it.
+- Owner-layer: UI / Commands
+- Status: accepted
+- Revisions: 2026-06-15 — initial (Inc 3b).
+
+### REQ-036 — Floating model space (edit the model through a viewport)
+- Purpose: AutoCAD-style MSPACE — work in model space inside a viewport on the sheet
+- Priority: should
+- Type: functional
+- Statement: **Double-clicking a viewport** enters **floating model space**: the
+  viewport becomes the active model view and model **draw/edit/snap commands operate
+  through the viewport's transform**, clipped to its boundary. Double-clicking
+  outside (or Esc, or a PSPACE toggle) returns to paper space. The viewport's
+  scale/center reflect the navigation done while active.
+- Acceptance: double-clicking a viewport activates it; drawing/snapping/editing apply
+  to model space (visible at the viewport's scale, clipped to its rect); leaving the
+  viewport returns to paper space with the model unchanged outside the viewport edits.
+- Owner-layer: UI / Commands / Renderer
+- Status: accepted
+- Revisions: 2026-06-15 — initial (Inc 3c).
+
 ---
 
 ## Performance requirements
@@ -556,6 +628,11 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-029 | IO/Renderer | manual + measured (single layout → 1-page PDF at true scale within REQ-101) | accepted |
 | REQ-030 | IO/Renderer | manual (≥2 layouts → one multi-page PDF, per-page size/scale) | accepted |
 | REQ-031 | IO | manual (layouts/viewports/scales/paper/frozen-layers round-trip through .gs) | accepted |
+| REQ-032 | UI | manual (Layout ribbon shows in paper space; normal ribbon in model) | accepted |
+| REQ-033 | UI/Commands | manual (two-click rectangular viewport with rubber-band preview; Esc cancels) | accepted |
+| REQ-034 | UI/Commands/Renderer | manual (polygonal viewport clips model to the polygon) — Inc 3d | accepted |
+| REQ-035 | UI/Commands | manual (viewport click/window select + grips; MOVE/COPY/DELETE act on viewports) | accepted |
+| REQ-036 | UI/Commands/Renderer | manual (double-click into viewport edits model through it; leave returns to paper) | accepted |
 
 ---
 

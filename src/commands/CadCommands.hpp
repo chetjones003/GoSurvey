@@ -304,8 +304,12 @@ void SetActiveSpace(AppCommandState& cmd, int spaceIndex);
 void ToggleModelPaperSpace(AppCommandState& cmd);
 /// Append a default viewport (centered on the model) to layout \p layoutIdx; returns its index (REQ-027).
 int  AddViewport(AppCommandState& cmd, int layoutIdx);
+/// Append a viewport with an explicit paper-inch rect (corners may be unordered); returns its index.
+int  AddViewportRect(AppCommandState& cmd, int layoutIdx, float x0In, float y0In, float x1In, float y1In);
 /// Delete viewport \p vpIdx from layout \p layoutIdx, fixing up the selection.
 void DeleteViewport(AppCommandState& cmd, int layoutIdx, int vpIdx);
+/// Start the rectangular-viewport command (REQ-033); requires an active paper layout.
+void StartPaperRectViewportCommand(AppCommandState& cmd, std::vector<std::string>& log);
 
 struct AppCommandState {
   enum class Kind {
@@ -338,6 +342,8 @@ struct AppCommandState {
     Align,
     /// Clipboard paste — cursor-following preview; one viewport click places the pasted entities.
     Paste,
+    /// Paper space: create a rectangular viewport by two clicks (REQ-033).
+    PaperRectViewport,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -366,6 +372,7 @@ struct AppCommandState {
     case Kind::PdfAttach:     return "PDFATTACH";
     case Kind::Align:         return "ALIGN";
     case Kind::Paste:         return "PASTE";
+    case Kind::PaperRectViewport: return "MVIEW";
     default:                  return "";
     }
   }
@@ -1029,6 +1036,10 @@ struct AppCommandState {
   int lastPaperLayoutIndex = 0;              ///< layout the MODEL/PAPER toggle returns to.
   int selectedViewportLayout = -1;           ///< layout owning the selected viewport (REQ-027), or -1.
   int selectedViewportIndex = -1;            ///< index into that layout's viewports, or -1.
+  // Rectangular viewport command draft (REQ-033): 0 = need first corner, 1 = need second.
+  int   paperVpPhase = 0;
+  float paperVpFirstXIn = 0.f;
+  float paperVpFirstYIn = 0.f;
 
   // -------------------------------------------------------------------------
   // TRAVERSE EDITOR state

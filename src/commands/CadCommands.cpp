@@ -185,6 +185,38 @@ int AddViewport(AppCommandState& cmd, int layoutIdx) {
   return idx;
 }
 
+int AddViewportRect(AppCommandState& cmd, int layoutIdx, float x0In, float y0In, float x1In, float y1In) {
+  if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.paperLayouts.size())
+    return -1;
+  PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  Viewport vp;
+  vp.paperXIn = std::min(x0In, x1In);
+  vp.paperYIn = std::min(y0In, y1In);
+  vp.paperWIn = std::max(0.1f, std::fabs(x1In - x0In));
+  vp.paperHIn = std::max(0.1f, std::fabs(y1In - y0In));
+  vp.modelCenterX = cmd.worldDocumentOriginX;
+  vp.modelCenterY = cmd.worldDocumentOriginY;
+  vp.scaleModelPerPaperIn = cmd.modelUnitsPerPlottedInch > 1.e-6f ? cmd.modelUnitsPerPlottedInch : 50.f;
+  L.viewports.push_back(vp);
+  const int idx = static_cast<int>(L.viewports.size()) - 1;
+  cmd.selectedViewportLayout = layoutIdx;
+  cmd.selectedViewportIndex = idx;
+  BumpCadGpuCache(cmd);
+  return idx;
+}
+
+void StartPaperRectViewportCommand(AppCommandState& cmd, std::vector<std::string>& log) {
+  if (cmd.activeSpaceIndex == kModelSpaceIndex || cmd.activeSpaceIndex < 0 ||
+      static_cast<size_t>(cmd.activeSpaceIndex) >= cmd.paperLayouts.size()) {
+    log.push_back("Rectangular viewport — switch to a paper layout first (MODEL/PAPER button).");
+    return;
+  }
+  cmd.active = AppCommandState::Kind::PaperRectViewport;
+  cmd.lastCommand = AppCommandState::Kind::PaperRectViewport;
+  cmd.paperVpPhase = 0;
+  log.push_back("Rectangular viewport — click the first corner on the sheet (Esc to cancel).");
+}
+
 void DeleteViewport(AppCommandState& cmd, int layoutIdx, int vpIdx) {
   if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.paperLayouts.size())
     return;
@@ -1146,6 +1178,7 @@ const CmdEntry kRegistry[] = {
     {"quickselect",  "qs", "Select by object properties"},
     {"paste",        "", "Paste from clipboard"},
     {"pasteorig",    "po", "Paste at original coordinates"},
+    {"mview",        "rectviewport, rectvp", "Rectangular paper-space viewport (two clicks)"},
 };
 
 bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vector<std::string>& log);
@@ -1582,6 +1615,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "pasteorig" || primary == "po") {
     StartPasteOrigCommand(st, log);
+    return true;
+  }
+  if (primary == "mview" || primary == "rectviewport" || primary == "rectvp") {
+    StartPaperRectViewportCommand(st, log);
     return true;
   }
   return false;
@@ -8720,6 +8757,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("PDFATTACH canceled.");
   else if (st.active == AppCommandState::Kind::Paste)
     log.push_back("PASTE canceled.");
+  else if (st.active == AppCommandState::Kind::PaperRectViewport) {
+    st.paperVpPhase = 0;
+    log.push_back("Rectangular viewport canceled.");
+  }
   else if (st.active == AppCommandState::Kind::Align) {
     st.alignControlPts.clear();
     st.alignSelectionSnapshot.clear();
