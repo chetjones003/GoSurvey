@@ -13,6 +13,7 @@ compile_commands.json
 gosurvey_imgui.ini
 /installer/
 *.rdbg
+/.claude/
 
 # --- Compiled artifacts (also produced beside tree sometimes) ---
 *.exe

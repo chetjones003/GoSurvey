@@ -1,8 +1,6 @@
 # GoSurvey
 
-GoSurvey is a desktop drafting and survey-helper: a **CAD-style drawing** with **multi-tab documents**, optional **survey points** (coordinates, IDs, descriptions), a **Traverse Editor** with least-squares closure, **PDF underlays** with object snap, and **DXF**/**CSV** import/export. Coordinate entry uses **AutoCAD-style dynamic input** at the cursor, and a **fuzzy command line** with an autocomplete popup. Use the **ribbon**, **command line**, **viewport**, and **panels** together — the **command log** and **dynamic input** explain what to enter at each step.
-
-Drawing units, display precision, and angle/bearing format are configurable through the **UNITS** dialog. Coordinates can be large real-world **state-plane** values: GoSurvey keeps an internal local origin for floating-point precision while showing true world coordinates everywhere.
+GoSurvey is a simple and modern computer-aided design (CAD) platform that provides users with powerful, easy functionality for 2D drafting and COGO needs.
 
 ---
 
@@ -14,26 +12,6 @@ Drawing units, display precision, and angle/bearing format are configurable thro
 2. Download the **`.exe` installer** from the latest release.
 3. Run it and follow the wizard. GoSurvey is installed to `%ProgramFiles%\GoSurvey` by default and a Start Menu entry is created. An optional desktop shortcut is offered.
 4. **SmartScreen**: Windows may show "Windows protected your PC" for apps that are not code-signed. Choose **More info → Run anyway** if you trust the release.
-
-### Portable ZIP
-
-A portable **`.zip`** bundle is also provided for users who prefer not to run an installer.
-
-1. Download and extract the zip to any folder.
-2. **Keep the folder layout intact** — do not move the `.exe` away from its sibling folders:
-
-   ```text
-   YourFolder\
-     GoSurvey-<version>.exe
-     pdfium.dll
-     resources\
-       default-template.gs
-       icons\
-         bitmap.png
-       layouts\
-   ```
-
-3. Run the executable directly from inside that folder, or create a shortcut whose **"Start in"** path points to that folder.
 
 ### Runtime requirement
 
