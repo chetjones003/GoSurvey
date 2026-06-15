@@ -1506,6 +1506,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   const float wInq  = 8.f + colW({"Aligned", "Linear", "ID Point"});
   const float wSrv  = 8.f + largeW + 4.f + colW({"Inverse", "Traverse"});
   const float wView = 8.f + colW({"Extents", "Window"});
+  const bool  ribbonPaperSpace = cmd.activeSpaceIndex != kModelSpaceIndex;  // REQ-032 contextual ribbon
+  const float wLayout = 8.f + largeW + 4.f + colW({"Poly VP"});
 
   ImGui::PushStyleColor(ImGuiCol_ChildBg, kBandFace);
   ImGui::BeginChild("RibbonToolsLeft", ImVec2(-kLayerPanelW - st.ItemSpacing.x, panelH), false,
@@ -1558,6 +1560,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   RibbonSectionEnd();
   ImGui::SameLine(0, 8);
 
+  if (!ribbonPaperSpace) {
   RibbonSectionBegin("RibbonSecDraw", "Draw", wDraw, panelH);
   {
     if (gridBtn("##RibbonLine", RibbonIconKind::Line))
@@ -1696,6 +1699,26 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   }
   RibbonSectionEnd();
   ImGui::SameLine(0, 8);
+  } else {
+    // Layout contextual ribbon (REQ-032): paper-space commands.
+    RibbonSectionBegin("RibbonSecLayout", "Layout", wLayout, panelH);
+    {
+      if (largeBtn("##RibbonRectVp", RibbonIconKind::ZoomWindow, "Rect VP"))
+        StartPaperRectViewportCommand(cmd, log);
+      RibbonItemHelp("Rectangular viewport — two clicks define a viewport on the sheet.\nCommand bar: MVIEW / RECTVP");
+      ImGui::SameLine(0, 4);
+      ImGui::BeginGroup();
+      const float cwL = colW({"Poly VP"});
+      ImGui::BeginDisabled();
+      smallBtn("##RibbonPolyVp", RibbonIconKind::Polyline, "Poly VP", cwL);
+      ImGui::EndDisabled();
+      RibbonItemHelp("Polygonal viewport — coming in a later increment (REQ-034).",
+                     ImGuiHoveredFlags_AllowWhenDisabled);
+      ImGui::EndGroup();
+    }
+    RibbonSectionEnd();
+    ImGui::SameLine(0, 8);
+  }
 
   RibbonSectionBegin("RibbonSecView", "View", wView, panelH);
   {
@@ -4083,6 +4106,9 @@ static void DrawPlotScaleCombo(AppCommandState& cmd) {
 } // namespace
 
 static const char* CommandInputHint(const AppCommandState& cmd) {
+  if (cmd.active == AppCommandState::Kind::PaperRectViewport)
+    return cmd.paperVpPhase == 0 ? "Rectangular viewport — first corner (click on the sheet):"
+                                 : "Rectangular viewport — opposite corner:";
   if (cmd.active == AppCommandState::Kind::Line) {
     using SAP = AppCommandState::SegmentAnglePickPhase;
     if (cmd.linePhase == AppCommandState::LinePhase::NeedFirstPoint)
@@ -5604,6 +5630,30 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const float surveyCrossHalfW =
       SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
 
+  // Paper coords (inches) under the cursor — paper inches are the "world" units in paper space.
+  auto screenToPaperIn = [&](float* outX, float* outY) {
+    *outX = static_cast<float>(worldLeft + (mx / std::max(avail.x, 1.f)) * (worldRight - worldLeft));
+    *outY = static_cast<float>(worldTop - (my / std::max(avail.y, 1.f)) * (worldTop - worldBottom));
+  };
+
+  // Rectangular-viewport command (REQ-033): two clicks define the rect (preview in the overlay below).
+  if (!modelSpace && cmd.active == AppCommandState::Kind::PaperRectViewport && hovered &&
+      ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
+    float px = 0.f, py = 0.f;
+    screenToPaperIn(&px, &py);
+    if (cmd.paperVpPhase == 0) {
+      cmd.paperVpFirstXIn = px;
+      cmd.paperVpFirstYIn = py;
+      cmd.paperVpPhase = 1;
+      log.push_back("Rectangular viewport — click the opposite corner (Esc to cancel).");
+    } else {
+      AddViewportRect(cmd, cmd.activeSpaceIndex, cmd.paperVpFirstXIn, cmd.paperVpFirstYIn, px, py);
+      cmd.active = AppCommandState::Kind::None;
+      cmd.paperVpPhase = 0;
+      log.push_back("Rectangular viewport created.");
+    }
+  }
+
   {
     ImGuiIO& ioVpRmb = ImGui::GetIO();
     if (modelSpace && hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
@@ -6736,6 +6786,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           sdl->AddRectFilled(ImVec2(cp.x - 4.f, cp.y - 4.f), ImVec2(cp.x + 4.f, cp.y + 4.f),
                              IM_COL32(59, 130, 246, 255));
       }
+    }
+    // Rectangular-viewport rubber-band preview (REQ-033) between the first click and the cursor.
+    if (cmd.active == AppCommandState::Kind::PaperRectViewport && cmd.paperVpPhase == 1 && hovered) {
+      const float curX = static_cast<float>(worldLeft + (mx / std::max(avail.x, 1.f)) * (worldRight - worldLeft));
+      const float curY = static_cast<float>(worldTop - (my / std::max(avail.y, 1.f)) * (worldTop - worldBottom));
+      const ImVec2 q0 = w2s(cmd.paperVpFirstXIn, cmd.paperVpFirstYIn);
+      const ImVec2 q1 = w2s(curX, curY);
+      sdl->AddRect(ImVec2(std::min(q0.x, q1.x), std::min(q0.y, q1.y)),
+                   ImVec2(std::max(q0.x, q1.x), std::max(q0.y, q1.y)), IM_COL32(59, 130, 246, 220), 0.f, 0, 1.5f);
     }
   }
 
