@@ -324,6 +324,13 @@ void TranslateSelectedViewports(AppCommandState& cmd, float dxIn, float dyIn, bo
 /// Begin a two-click MOVE/COPY of the selected viewports (paper-inch base → destination).
 void StartPaperMoveCopyViewports(AppCommandState& cmd, bool copy, std::vector<std::string>& log);
 
+// --- Floating model space (REQ-036) ---
+bool InFloatingModelSpace(const AppCommandState& cmd);
+/// Enter floating model space for viewport \p vpIdx of layout \p layoutIdx (edit the model through it).
+void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std::vector<std::string>& log);
+/// Save the floating view back to the viewport and return to paper space.
+void ExitFloatingModelSpace(AppCommandState& cmd, std::vector<std::string>& log);
+
 struct AppCommandState {
   enum class Kind {
     None,
@@ -1065,6 +1072,13 @@ struct AppCommandState {
   bool  paperSelBoxActive = false;
   float paperSelBoxX0In = 0.f;
   float paperSelBoxY0In = 0.f;
+  // Floating model space (REQ-036): edit the model through a viewport. While active, activeSpaceIndex
+  // is model and the view is the viewport's; exit writes the view back and restores the paper view.
+  int    floatingViewportLayout = -1;   ///< paper layout to return to, or -1 if not floating.
+  int    floatingViewportIndex = -1;    ///< viewport being edited, or -1.
+  double savedPaperPanX = 0.0;          ///< paper view saved on entry, restored on exit.
+  double savedPaperPanY = 0.0;
+  float  savedPaperZoom = 1.f;
 
   // -------------------------------------------------------------------------
   // TRAVERSE EDITOR state

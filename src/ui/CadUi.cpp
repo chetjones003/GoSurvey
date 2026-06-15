@@ -4706,13 +4706,25 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   }
 
   {
-    // MODEL / PAPER space toggle (REQ-025). Clicking switches the active space.
-    const bool paper = cmd.activeSpaceIndex != kModelSpaceIndex;
-    PushModeToggleButtonColors(paper, cmd.displayColorThemeIdx);
-    if (ImGui::Button(paper ? "PAPER" : "MODEL", ImVec2(0.f, statusBtnH)))
-      ToggleModelPaperSpace(cmd);
-    PopModeToggleButtonColors(paper);
-    ItemHelpTooltip("Toggle between Model space and the current Paper space layout (REQ-025).");
+    // MODEL / PAPER space toggle (REQ-025). While in a floating viewport (REQ-036), the button reads
+    // FLOAT and returns to the layout.
+    if (InFloatingModelSpace(cmd)) {
+      PushModeToggleButtonColors(true, cmd.displayColorThemeIdx);
+      if (ImGui::Button("FLOAT", ImVec2(0.f, statusBtnH))) {
+        std::vector<std::string> sbLog;
+        ExitFloatingModelSpace(cmd, sbLog);
+      }
+      PopModeToggleButtonColors(true);
+      ItemHelpTooltip("Floating model space — editing the model through a viewport. Click (or Esc) to return.");
+    } else {
+      const bool paper = cmd.activeSpaceIndex != kModelSpaceIndex;
+      PushModeToggleButtonColors(paper, cmd.displayColorThemeIdx);
+      if (ImGui::Button(paper ? "PAPER" : "MODEL", ImVec2(0.f, statusBtnH)))
+        ToggleModelPaperSpace(cmd);
+      PopModeToggleButtonColors(paper);
+      ItemHelpTooltip("Toggle between Model space and the current Paper space layout (REQ-025). "
+                      "Double-click a viewport to edit the model through it.");
+    }
     ImGui::SameLine(0, 8);
   }
 
@@ -5581,6 +5593,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // viewport interaction is handled separately (REQ-025/027).
   const bool modelSpace = cmd.activeSpaceIndex == kModelSpaceIndex;
 
+  // Floating model space (REQ-036): Esc with no active command returns to the layout.
+  if (InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::None &&
+      ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+    ExitFloatingModelSpace(cmd, log);
+  }
+
   if (hovered) {
     const float wheel = ImGui::GetIO().MouseWheel;
     if (wheel != 0.f && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
@@ -5663,6 +5681,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const bool clickL = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x &&
                         my >= 0 && my < avail.y;
 
+    // Double-click a viewport → floating model space (REQ-036): edit the model through it.
+    bool enteredFloat = false;
+    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 &&
+        my < avail.y && cmd.paperMovePhase == 0 && cmd.paperGripCorner == -2) {
+      for (int vi = static_cast<int>(L.viewports.size()) - 1; vi >= 0; --vi) {
+        const Viewport& v = L.viewports[static_cast<size_t>(vi)];
+        if (curX >= v.paperXIn && curX <= v.paperXIn + v.paperWIn && curY >= v.paperYIn &&
+            curY <= v.paperYIn + v.paperHIn) {
+          EnterFloatingModelSpace(cmd, cmd.activeSpaceIndex, vi, log);
+          enteredFloat = true;
+          break;
+        }
+      }
+    }
+
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
       if (cmd.paperMovePhase != 0 || cmd.paperGripCorner != -2 || cmd.paperSelBoxActive) {
         cmd.paperMovePhase = 0;
@@ -5692,7 +5725,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     } else if (clickL && cmd.paperGripCorner != -2) {  // commit an in-progress grip edit
       cmd.paperGripCorner = -2;
       log.push_back("Viewport edited.");
-    } else if (clickL) {
+    } else if (clickL && !enteredFloat) {
       // 1) a grip of the single selected viewport?
       int gripCorner = -2;
       if (Viewport* v = primaryVp()) {
@@ -6941,6 +6974,22 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       sdl->AddRectFilled(a2, b2, IM_COL32(59, 130, 246, 40));
       sdl->AddRect(a2, b2, IM_COL32(59, 130, 246, 200), 0.f, 0, 1.0f);
     }
+  }
+
+  // Floating model space (REQ-036): banner + viewport-edge accent so the mode is obvious.
+  if (InFloatingModelSpace(cmd)) {
+    ImDrawList* bdl = ImGui::GetWindowDrawList();
+    char msg[112];
+    std::snprintf(msg, sizeof(msg), "FLOATING MODEL SPACE — Viewport %d   (Esc / PAPER button to return)",
+                  cmd.floatingViewportIndex + 1);
+    const ImVec2 ts = ImGui::CalcTextSize(msg);
+    const float pad = 8.f;
+    const ImVec2 bmin(imgPos.x + (avail.x - ts.x) * 0.5f - pad, imgPos.y + 6.f);
+    const ImVec2 bmax(bmin.x + ts.x + pad * 2.f, bmin.y + ts.y + pad);
+    bdl->AddRectFilled(bmin, bmax, IM_COL32(40, 70, 120, 225), 4.f);
+    bdl->AddRect(bmin, bmax, IM_COL32(120, 180, 255, 255), 4.f);
+    bdl->AddText(ImVec2(bmin.x + pad, bmin.y + pad * 0.5f), IM_COL32(230, 240, 255, 255), msg);
+    bdl->AddRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), IM_COL32(120, 180, 255, 200), 0.f, 0, 3.f);
   }
 
   std::vector<CadAnnotation> transformAnnPreviews;
