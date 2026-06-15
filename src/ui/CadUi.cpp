@@ -4533,6 +4533,34 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   ImGui::PopStyleColor();
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3.f, 0.f));
 
+  // ---- LEFT: hamburger menu + layout tabs ----
+  {
+    const ImVec2 hbPos = ImGui::GetCursorScreenPos();
+    if (ImGui::Button("##statusmenu", ImVec2(statusBtnH, statusBtnH)))
+      ImGui::OpenPopup("status_menu");
+    ItemHelpTooltip("Layouts & spaces menu");
+    ImDrawList* hdl = ImGui::GetWindowDrawList();
+    const float hx0 = hbPos.x + statusBtnH * 0.28f, hx1 = hbPos.x + statusBtnH * 0.72f;
+    for (int k = 0; k < 3; ++k) {
+      const float yy = hbPos.y + statusBtnH * (0.34f + 0.16f * static_cast<float>(k));
+      hdl->AddLine(ImVec2(hx0, yy), ImVec2(hx1, yy), IM_COL32(220, 220, 220, 255), 1.6f);
+    }
+    if (ImGui::BeginPopup("status_menu")) {
+      if (ImGui::MenuItem("Model space"))
+        SetActiveSpace(cmd, kModelSpaceIndex);
+      ImGui::Separator();
+      for (int i = 0; i < static_cast<int>(cmd.paperLayouts.size()); ++i)
+        if (ImGui::MenuItem(cmd.paperLayouts[static_cast<size_t>(i)].name.c_str(), nullptr,
+                            cmd.activeSpaceIndex == i))
+          SetActiveSpace(cmd, i);
+      ImGui::Separator();
+      if (ImGui::MenuItem("New paper layout"))
+        SetActiveSpace(cmd, AddPaperLayout(cmd));
+      ImGui::EndPopup();
+    }
+    ImGui::SameLine(0, 6);
+  }
+
   {
     // Paper space layout tabs + sheet picker (REQ-025/026): Model | Layout… | +
     auto spaceTab = [&](const char* label, bool active) {
@@ -4653,63 +4681,30 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
     ImGui::SameLine(0, 6);
   }
 
+  // Coordinate readout (left side, after the layout tabs).
   {
-    const bool on = cmd.objectSnapEnabled;
-    PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
-    if (ImGui::Button("OSNAP", ImVec2(0.f, statusBtnH)))
-      cmd.objectSnapEnabled = !cmd.objectSnapEnabled;
-    PopModeToggleButtonColors(on);
-    ItemHelpTooltip(
-        "Object snap — F3 toggles; right-click for snap types (endpoint, mid, …). During a command, "
-        "Shift+right-click the drawing: choose a snap type, then pick one from all of that type in the model "
-        "(sorted by distance from the click). Aperture in Settings affects live snapping only. "
-        "Circle/ellipse center and survey snaps engage when the aperture meets the circle or survey marker, not only "
-        "the center point. Snap symbols and magnetic pull apply only while a draw/edit command is active (not in idle "
-        "selection).");
-    if (ImGui::BeginPopupContextItem("osnap_modes", ImGuiPopupFlags_MouseButtonRight)) {
-      ImGui::TextDisabled("Snap to");
-      ImGui::Separator();
-      ImGui::Checkbox("Endpoint", &cmd.objectSnapEndpoint);
-      ImGui::Checkbox("Midpoint", &cmd.objectSnapMidpoint);
-      ImGui::Checkbox("Center", &cmd.objectSnapCenter);
-      ImGui::Checkbox("Perpendicular", &cmd.objectSnapPerpendicular);
-      ImGui::Checkbox("Survey point", &cmd.objectSnapSurveyPoint);
-      ImGui::Checkbox("Geometric center (closed polyline)", &cmd.objectSnapGeometricCenter);
-      ImGui::EndPopup();
-    }
-    ImGui::SameLine(0, 4);
-  }
-  if (ortho_mode_enabled) {
-    const bool on = *ortho_mode_enabled;
-    PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
-    if (ImGui::Button("ORTHO", ImVec2(0.f, statusBtnH)))
-      *ortho_mode_enabled = !*ortho_mode_enabled;
-    PopModeToggleButtonColors(on);
-    ItemHelpTooltip("Ortho mode — constrain to horizontal / vertical (F8)");
-    ImGui::SameLine(0, 4);
-  }
-  if (grid_visible) {
-    const bool on = *grid_visible;
-    PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
-    if (ImGui::Button("GRID", ImVec2(0.f, statusBtnH)))
-      *grid_visible = !*grid_visible;
-    PopModeToggleButtonColors(on);
-    ItemHelpTooltip("Drawing grid");
-    ImGui::SameLine(0, 4);
-  }
-  {
-    const bool on = gPolarTrackingEnabled;
-    PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
-    if (ImGui::Button("POLAR", ImVec2(0.f, statusBtnH)))
-      gPolarTrackingEnabled = !gPolarTrackingEnabled;
-    PopModeToggleButtonColors(on);
-    ItemHelpTooltip("Polar tracking (UI only for now)");
-    ImGui::SameLine(0, 4);
+    const int p = cmd.displayLinearPrecision;
+    ImGui::AlignTextToFramePadding();
+    ImGui::Text("X %s  Y %s  Z %s  |  UCS: World", FormatLinear(cursorX, p).c_str(),
+                FormatLinear(cursorY, p).c_str(), FormatLinear(cursorZ, p).c_str());
   }
 
+  // ---- RIGHT (right-aligned): space toggle + mode tools ----
   {
-    // MODEL / PAPER space toggle (REQ-025). While in a floating viewport (REQ-036), the button reads
-    // FLOAT and returns to the layout.
+    const ImGuiStyle& sty = ImGui::GetStyle();
+    auto bw = [&](const char* t) { return ImGui::CalcTextSize(t).x + sty.FramePadding.x * 2.f; };
+    const char* spaceLbl = InFloatingModelSpace(cmd)
+                               ? "FLOAT"
+                               : (cmd.activeSpaceIndex != kModelSpaceIndex ? "PAPER" : "MODEL");
+    constexpr float sp = 4.f;
+    const float rightW = bw(spaceLbl) + bw("VPLOCK") + bw("OSNAP") + bw("ORTHO") + bw("GRID") + bw("POLAR") +
+                         140.f /*plot scale combo*/ + bw("SEL") + sp * 8.f + 24.f;
+    ImGui::SameLine(0, 8);
+    const float rx = ImGui::GetWindowContentRegionMax().x - rightW;
+    if (rx > ImGui::GetCursorPosX())
+      ImGui::SetCursorPosX(rx);
+
+    // Space toggle (MODEL / PAPER / FLOAT) — REQ-025/036.
     if (InFloatingModelSpace(cmd)) {
       PushModeToggleButtonColors(true, cmd.displayColorThemeIdx);
       if (ImGui::Button("FLOAT", ImVec2(0.f, statusBtnH))) {
@@ -4724,43 +4719,87 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
       if (ImGui::Button(paper ? "PAPER" : "MODEL", ImVec2(0.f, statusBtnH)))
         ToggleModelPaperSpace(cmd);
       PopModeToggleButtonColors(paper);
-      ItemHelpTooltip("Toggle between Model space and the current Paper space layout (REQ-025). "
-                      "Double-click a viewport to edit the model through it.");
+      ItemHelpTooltip("Toggle Model / current Paper layout. Double-click a viewport to edit the model through it.");
     }
-    ImGui::SameLine(0, 8);
-  }
+    ImGui::SameLine(0, sp);
 
-  DrawPlotScaleCombo(cmd);
-  ImGui::SameLine(0, 8);
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextDisabled("|");
-  ImGui::SameLine(0, 8);
-  ImGui::AlignTextToFramePadding();
-  {
-    const int p = cmd.displayLinearPrecision;
-    ImGui::Text("X %s  Y %s  Z %s  |  UCS: World", FormatLinear(cursorX, p).c_str(),
-                FormatLinear(cursorY, p).c_str(), FormatLinear(cursorZ, p).c_str());
-  }
+    // VPLOCK — viewport zoom lock (user request).
+    {
+      const bool on = cmd.viewportZoomLocked;
+      PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
+      if (ImGui::Button("VPLOCK", ImVec2(0.f, statusBtnH)))
+        cmd.viewportZoomLocked = !cmd.viewportZoomLocked;
+      PopModeToggleButtonColors(on);
+      ItemHelpTooltip("Viewport zoom lock: ON = pan/zoom always moves the sheet; OFF = while editing a viewport "
+                      "in place, pan/zoom adjusts that viewport's model framing.");
+      ImGui::SameLine(0, sp);
+    }
 
-  ImGui::SameLine(0, 16);
-  ImGui::AlignTextToFramePadding();
-  ImGui::TextDisabled("|");
-  ImGui::SameLine(0, 8);
-  {
-    const bool on = cmd.showSelectionCyclingWindow;
-    PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
-    if (ImGui::Button("SEL", ImVec2(0.f, statusBtnH))) {
-      if (!cmd.showSelectionCyclingWindow) {
-        cmd.selectionCycleEntities      = cmd.selection;
-        cmd.selectionCycleSurveyPoints  = cmd.selectedSurveyPointIndices;
-        cmd.showSelectionCyclingWindow  = true;
-      } else {
-        cmd.showSelectionCyclingWindow = false;
+    // OSNAP (+ snap-type popup).
+    {
+      const bool on = cmd.objectSnapEnabled;
+      PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
+      if (ImGui::Button("OSNAP", ImVec2(0.f, statusBtnH)))
+        cmd.objectSnapEnabled = !cmd.objectSnapEnabled;
+      PopModeToggleButtonColors(on);
+      ItemHelpTooltip("Object snap — F3 toggles; right-click for snap types.");
+      if (ImGui::BeginPopupContextItem("osnap_modes", ImGuiPopupFlags_MouseButtonRight)) {
+        ImGui::TextDisabled("Snap to");
+        ImGui::Separator();
+        ImGui::Checkbox("Endpoint", &cmd.objectSnapEndpoint);
+        ImGui::Checkbox("Midpoint", &cmd.objectSnapMidpoint);
+        ImGui::Checkbox("Center", &cmd.objectSnapCenter);
+        ImGui::Checkbox("Perpendicular", &cmd.objectSnapPerpendicular);
+        ImGui::Checkbox("Survey point", &cmd.objectSnapSurveyPoint);
+        ImGui::Checkbox("Geometric center (closed polyline)", &cmd.objectSnapGeometricCenter);
+        ImGui::EndPopup();
       }
+      ImGui::SameLine(0, sp);
     }
-    PopModeToggleButtonColors(on);
-    ItemHelpTooltip("Selection panel — lists selected entities so you can toggle each one on or off.\n"
-                    "Click to open and snapshot the current selection; click again to close.");
+    if (ortho_mode_enabled) {
+      const bool on = *ortho_mode_enabled;
+      PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
+      if (ImGui::Button("ORTHO", ImVec2(0.f, statusBtnH)))
+        *ortho_mode_enabled = !*ortho_mode_enabled;
+      PopModeToggleButtonColors(on);
+      ItemHelpTooltip("Ortho mode — constrain to horizontal / vertical (F8)");
+      ImGui::SameLine(0, sp);
+    }
+    if (grid_visible) {
+      const bool on = *grid_visible;
+      PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
+      if (ImGui::Button("GRID", ImVec2(0.f, statusBtnH)))
+        *grid_visible = !*grid_visible;
+      PopModeToggleButtonColors(on);
+      ItemHelpTooltip("Drawing grid");
+      ImGui::SameLine(0, sp);
+    }
+    {
+      const bool on = gPolarTrackingEnabled;
+      PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
+      if (ImGui::Button("POLAR", ImVec2(0.f, statusBtnH)))
+        gPolarTrackingEnabled = !gPolarTrackingEnabled;
+      PopModeToggleButtonColors(on);
+      ItemHelpTooltip("Polar tracking (UI only for now)");
+      ImGui::SameLine(0, sp);
+    }
+    DrawPlotScaleCombo(cmd);
+    ImGui::SameLine(0, sp);
+    {
+      const bool on = cmd.showSelectionCyclingWindow;
+      PushModeToggleButtonColors(on, cmd.displayColorThemeIdx);
+      if (ImGui::Button("SEL", ImVec2(0.f, statusBtnH))) {
+        if (!cmd.showSelectionCyclingWindow) {
+          cmd.selectionCycleEntities      = cmd.selection;
+          cmd.selectionCycleSurveyPoints  = cmd.selectedSurveyPointIndices;
+          cmd.showSelectionCyclingWindow  = true;
+        } else {
+          cmd.showSelectionCyclingWindow = false;
+        }
+      }
+      PopModeToggleButtonColors(on);
+      ItemHelpTooltip("Selection panel — lists selected entities so you can toggle each one on or off.");
+    }
   }
 
   ImGui::PopStyleVar();
@@ -5601,7 +5640,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     ExitFloatingModelSpace(cmd, log);
   }
 
-  if (hovered) {
+  // When editing a viewport in place and the zoom lock is OFF, pan/zoom targets the viewport's model
+  // framing instead of the sheet (handled below, after paper coords are available).
+  const bool routeZoomToViewport = InFloatingModelSpace(cmd) && !cmd.viewportZoomLocked;
+
+  if (hovered && !routeZoomToViewport) {
     const float wheel = ImGui::GetIO().MouseWheel;
     if (wheel != 0.f && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
       const double u = static_cast<double>(mx) / static_cast<double>(std::max(avail.x, 1.f));
@@ -5653,7 +5696,48 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     *outY = static_cast<float>(worldTop - (my / std::max(avail.y, 1.f)) * (worldTop - worldBottom));
   };
 
+  // Viewport zoom/pan (user request): editing a viewport in place with the lock OFF — wheel zooms the
+  // viewport's model framing about the cursor; middle-drag pans the model within the viewport.
+  if (routeZoomToViewport && hovered && cmd.floatingViewportLayout >= 0 &&
+      cmd.floatingViewportLayout < static_cast<int>(cmd.paperLayouts.size())) {
+    PaperLayout& FZ = cmd.paperLayouts[static_cast<size_t>(cmd.floatingViewportLayout)];
+    if (cmd.floatingViewportIndex >= 0 && cmd.floatingViewportIndex < static_cast<int>(FZ.viewports.size())) {
+      Viewport& vp = FZ.viewports[static_cast<size_t>(cmd.floatingViewportIndex)];
+      float cpx = 0.f, cpy = 0.f;
+      screenToPaperIn(&cpx, &cpy);
+      const bool inside = cpx >= vp.paperXIn && cpx <= vp.paperXIn + vp.paperWIn && cpy >= vp.paperYIn &&
+                          cpy <= vp.paperYIn + vp.paperHIn;
+      const float vcx = vp.paperXIn + vp.paperWIn * 0.5f;
+      const float vcy = vp.paperYIn + vp.paperHIn * 0.5f;
+      if (inside) {
+        const float wheel = ImGui::GetIO().MouseWheel;
+        if (wheel != 0.f) {
+          const double factor = std::clamp(static_cast<double>(cmd.displayWheelZoomFactor), 1.01, 3.0);
+          const double mul = std::pow(factor, static_cast<double>(wheel));
+          const float s0 = vp.safeScale();
+          const float s1 = std::clamp(static_cast<float>(s0 / mul), 1.e-6f, 1.e9f);  // wheel up → zoom in
+          const double curMX = vp.modelCenterX + static_cast<double>(cpx - vcx) * s0;  // keep cursor point fixed
+          const double curMY = vp.modelCenterY + static_cast<double>(cpy - vcy) * s0;
+          vp.modelCenterX = curMX - static_cast<double>(cpx - vcx) * s1;
+          vp.modelCenterY = curMY - static_cast<double>(cpy - vcy) * s1;
+          vp.scaleModelPerPaperIn = s1;
+          BumpCadGpuCache(cmd);
+        }
+        if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+          const ImVec2 d = ImGui::GetIO().MouseDelta;
+          const double dPaperX = static_cast<double>(d.x / std::max(avail.x, 1.f)) * (worldRight - worldLeft);
+          const double dPaperY = static_cast<double>(d.y / std::max(avail.y, 1.f)) * (worldTop - worldBottom);
+          const float s = vp.safeScale();
+          vp.modelCenterX -= dPaperX * static_cast<double>(s);
+          vp.modelCenterY += dPaperY * static_cast<double>(s);
+          BumpCadGpuCache(cmd);
+        }
+      }
+    }
+  }
+
   // Rectangular-viewport command (REQ-033): two clicks define the rect (preview in the overlay below).
+  bool consumedPaperClick = false;  // the click that finished RECTVP must not also grab a grip this frame.
   if (!modelSpace && cmd.active == AppCommandState::Kind::PaperRectViewport && hovered &&
       ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
     float px = 0.f, py = 0.f;
@@ -5667,6 +5751,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       AddViewportRect(cmd, cmd.activeSpaceIndex, cmd.paperVpFirstXIn, cmd.paperVpFirstYIn, px, py);
       cmd.active = AppCommandState::Kind::None;
       cmd.paperVpPhase = 0;
+      consumedPaperClick = true;
       log.push_back("Rectangular viewport created.");
     }
   }
@@ -5680,8 +5765,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     screenToPaperIn(&curX, &curY);
     const float pxPerWorld = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
     const float gripTolIn = 7.f / std::max(1.e-6f, pxPerWorld);
-    const bool clickL = hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x &&
-                        my >= 0 && my < avail.y;
+    const bool clickL = hovered && !consumedPaperClick && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+                        mx >= 0 && mx < avail.x && my >= 0 && my < avail.y;
 
     // Double-click a viewport → floating model space (REQ-036): edit the model through it.
     bool enteredFloat = false;

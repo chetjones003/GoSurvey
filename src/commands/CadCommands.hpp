@@ -1076,6 +1076,9 @@ struct AppCommandState {
   // the paper layout (sheet + viewports stay visible); model edit/snap/draw is routed through the viewport.
   int    floatingViewportLayout = -1;   ///< paper layout of the floating viewport, or -1 if not floating.
   int    floatingViewportIndex = -1;    ///< viewport being edited in place, or -1.
+  /// Viewport zoom lock (user request): when ON, pan/zoom always targets the sheet; when OFF and editing a
+  /// viewport in place, pan/zoom adjusts that viewport's model framing (scale/center).
+  bool   viewportZoomLocked = false;
 
   // -------------------------------------------------------------------------
   // TRAVERSE EDITOR state
