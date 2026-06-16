@@ -5794,12 +5794,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     }
 
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-      if (cmd.paperMovePhase != 0 || cmd.paperGripCorner != -2 || cmd.paperSelBoxActive) {
+      if (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0 || cmd.paperGripCorner != -2 ||
+          cmd.paperSelBoxActive) {
         cmd.paperMovePhase = 0;
+        cmd.paperRotatePhase = 0;
         cmd.paperGripCorner = -2;
         cmd.paperSelBoxActive = false;
-      } else if (!cmd.selectedViewports.empty()) {
+      } else if (!cmd.selectedViewports.empty() || !cmd.selectedPaperEntities.empty()) {
         ClearViewportSelection(cmd);
+        ClearPaperEntitySelection(cmd);
       }
     }
 
@@ -5810,15 +5813,39 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       return nullptr;
     };
 
+    // Native paper-entity click selection (REQ-037): a click on a paper line/text selects it (Shift toggles).
+    const float entityPickTolIn = std::max(gripTolIn, 6.f / std::max(1.e-6f, pxPerWorld));
+    auto tryPaperEntityClick = [&]() -> bool {
+      PaperEntityRef pr;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        return false;
+      if (!ImGui::GetIO().KeyShift)
+        ClearViewportSelection(cmd);
+      TogglePaperEntitySelection(cmd, pr, ImGui::GetIO().KeyShift);
+      return true;
+    };
+
     if (clickL && cmd.paperMovePhase == 1) {  // MOVE/COPY: base point
       cmd.paperMoveBaseXIn = curX;
       cmd.paperMoveBaseYIn = curY;
       cmd.paperMovePhase = 2;
       log.push_back("Click the destination point.");
     } else if (clickL && cmd.paperMovePhase == 2) {  // MOVE/COPY: destination
-      TranslateSelectedViewports(cmd, curX - cmd.paperMoveBaseXIn, curY - cmd.paperMoveBaseYIn,
-                                 cmd.paperMoveIsCopy, log);
+      const float ddx = curX - cmd.paperMoveBaseXIn, ddy = curY - cmd.paperMoveBaseYIn;
+      if (!cmd.selectedPaperEntities.empty())
+        TranslateSelectedPaperEntities(cmd, ddx, ddy, cmd.paperMoveIsCopy, log);  // REQ-037
+      if (!cmd.selectedViewports.empty())
+        TranslateSelectedViewports(cmd, ddx, ddy, cmd.paperMoveIsCopy, log);  // REQ-035
       cmd.paperMovePhase = 0;
+    } else if (clickL && cmd.paperRotatePhase == 1) {  // ROTATE: base point (REQ-037)
+      cmd.paperRotateBaseXIn = curX;
+      cmd.paperRotateBaseYIn = curY;
+      cmd.paperRotatePhase = 2;
+      log.push_back("Click a point to set the rotation angle.");
+    } else if (clickL && cmd.paperRotatePhase == 2) {  // ROTATE: angle (REQ-037)
+      const float ang = std::atan2(curY - cmd.paperRotateBaseYIn, curX - cmd.paperRotateBaseXIn);
+      RotateSelectedPaperEntities(cmd, cmd.paperRotateBaseXIn, cmd.paperRotateBaseYIn, ang, log);
+      cmd.paperRotatePhase = 0;
     } else if (clickL && cmd.paperGripCorner != -2) {  // commit an in-progress grip edit
       cmd.paperGripCorner = -2;
       log.push_back("Viewport edited.");
@@ -5840,6 +5867,24 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
       cmd.selectedViewportIndex = cmd.selectedViewports.empty() ? -1 : cmd.selectedViewports.back();
       cmd.selectedViewportLayout = cmd.selectedViewports.empty() ? -1 : cmd.activeSpaceIndex;
+      // Native paper geometry in the same box (REQ-037): lines by bounds; text by insertion point.
+      cmd.selectedPaperEntities.clear();
+      for (int si = 0; si < static_cast<int>(L.paperLines.size() / 6); ++si) {
+        const size_t i = static_cast<size_t>(si) * 6;
+        const float lx0 = std::min(L.paperLines[i], L.paperLines[i + 3]);
+        const float lx1 = std::max(L.paperLines[i], L.paperLines[i + 3]);
+        const float ly0 = std::min(L.paperLines[i + 1], L.paperLines[i + 4]);
+        const float ly1 = std::max(L.paperLines[i + 1], L.paperLines[i + 4]);
+        const bool sel = windowMode ? (lx0 >= bx0 && lx1 <= bx1 && ly0 >= by0 && ly1 <= by1)
+                                    : (lx0 <= bx1 && lx1 >= bx0 && ly0 <= by1 && ly1 >= by0);
+        if (sel)
+          cmd.selectedPaperEntities.push_back({PaperEntityRef::Type::Line, si});
+      }
+      for (int ti = 0; ti < static_cast<int>(L.paperTexts.size()); ++ti) {
+        const CadAnnotation& a = L.paperTexts[static_cast<size_t>(ti)];
+        if (a.insX >= bx0 && a.insX <= bx1 && a.insY >= by0 && a.insY <= by1)
+          cmd.selectedPaperEntities.push_back({PaperEntityRef::Type::Text, ti});
+      }
       cmd.paperSelBoxActive = false;
       BumpCadGpuCache(cmd);
     } else if (clickL && !enteredFloat) {
@@ -5860,8 +5905,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (gripCorner != -2) {
         cmd.paperGripCorner = gripCorner;
         log.push_back(gripCorner == -1 ? "Move viewport — click the new location." : "Resize — click the new corner.");
+      } else if (tryPaperEntityClick()) {
+        // 2) a native paper entity (line/text) under the cursor → selected (REQ-037).
       } else {
-        // 2) a viewport BORDER (topmost wins)? Clicking the interior is the model view, so it does not
+        // 3) a viewport BORDER (topmost wins)? Clicking the interior is the model view, so it does not
         // select — that lets a window box start even when viewports cover the sheet (AutoCAD behavior).
         const float bt = std::max(gripTolIn, 5.f / std::max(1.e-6f, pxPerWorld));
         int hit = -1;
@@ -5876,8 +5923,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           }
         }
         if (hit >= 0) {
+          if (!ImGui::GetIO().KeyShift)
+            ClearPaperEntitySelection(cmd);  // selecting a viewport clears paper-entity selection (REQ-037)
           SelectViewport(cmd, hit, ImGui::GetIO().KeyShift);
         } else {  // interior or empty: start a window-select box
+          if (!ImGui::GetIO().KeyShift)
+            ClearPaperEntitySelection(cmd);
           cmd.paperSelBoxActive = true;
           cmd.paperSelBoxX0In = curX;
           cmd.paperSelBoxY0In = curY;
@@ -7110,17 +7161,32 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // (in paper inches via w2s — a title block / annotations sit above viewport content).
     {
       constexpr ImU32 kPaperGeomCol = IM_COL32(20, 20, 25, 255);
+      constexpr ImU32 kPaperSelCol = IM_COL32(59, 130, 246, 255);
       const float pxPerPaperIn = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
-      for (size_t i = 0; i + 5 < L.paperLines.size(); i += 6)
+      auto isPaperSel = [&](PaperEntityRef::Type t, int idx) {
+        for (const PaperEntityRef& r : cmd.selectedPaperEntities)
+          if (r.type == t && r.index == idx)
+            return true;
+        return false;
+      };
+      for (size_t i = 0; i + 5 < L.paperLines.size(); i += 6) {
+        const bool sel = isPaperSel(PaperEntityRef::Type::Line, static_cast<int>(i / 6));
         sdl->AddLine(w2s(L.paperLines[i], L.paperLines[i + 1]), w2s(L.paperLines[i + 3], L.paperLines[i + 4]),
-                     kPaperGeomCol, 1.2f);
+                     sel ? kPaperSelCol : kPaperGeomCol, sel ? 2.0f : 1.2f);
+      }
       ImFont* paperFont = ImGui::GetFont();
-      for (const CadAnnotation& a : L.paperTexts) {
+      for (size_t ti = 0; ti < L.paperTexts.size(); ++ti) {
+        const CadAnnotation& a = L.paperTexts[ti];
         if (a.text.empty())
           continue;
+        const bool sel = isPaperSel(PaperEntityRef::Type::Text, static_cast<int>(ti));
         const float hPx = std::max(6.f, a.plottedHeightInches * pxPerPaperIn);
         const ImVec2 p = w2s(a.insX, a.insY);  // insertion ≈ bottom-left; ImGui draws from top-left.
-        sdl->AddText(paperFont, hPx, ImVec2(p.x, p.y - hPx), kPaperGeomCol, a.text.c_str());
+        sdl->AddText(paperFont, hPx, ImVec2(p.x, p.y - hPx), sel ? kPaperSelCol : kPaperGeomCol, a.text.c_str());
+        if (sel) {
+          const float w = std::max(hPx * 0.6f, hPx * 0.6f * static_cast<float>(a.text.size()));
+          sdl->AddRect(ImVec2(p.x, p.y - hPx), ImVec2(p.x + w, p.y), kPaperSelCol, 0.f, 0, 1.f);
+        }
       }
     }
     const float curPX = static_cast<float>(worldLeft + (mx / std::max(avail.x, 1.f)) * (worldRight - worldLeft));
@@ -7129,6 +7195,34 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     if (!InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::Line &&
         cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint && hovered)
       sdl->AddLine(w2s(cmd.anchorX, cmd.anchorY), w2s(curPX, curPY), IM_COL32(59, 130, 246, 230), 1.5f);
+    // Paper-entity MOVE/COPY ghost + ROTATE preview (REQ-037): selected geometry transformed by the cursor.
+    if (!cmd.selectedPaperEntities.empty() && hovered && (cmd.paperMovePhase == 2 || cmd.paperRotatePhase == 2)) {
+      const ImU32 ghostCol = (cmd.paperMovePhase == 2 && cmd.paperMoveIsCopy) ? IM_COL32(120, 220, 120, 220)
+                                                                              : IM_COL32(245, 200, 70, 220);
+      const bool rotating = cmd.paperRotatePhase == 2;
+      const float ang = rotating ? std::atan2(curPY - cmd.paperRotateBaseYIn, curPX - cmd.paperRotateBaseXIn) : 0.f;
+      const float ca = std::cos(ang), sa = std::sin(ang);
+      const float bX = cmd.paperRotateBaseXIn, bY = cmd.paperRotateBaseYIn;
+      const float dX = curPX - cmd.paperMoveBaseXIn, dY = curPY - cmd.paperMoveBaseYIn;
+      auto xf = [&](float x, float y) -> ImVec2 {
+        if (rotating)
+          return w2s(bX + (x - bX) * ca - (y - bY) * sa, bY + (x - bX) * sa + (y - bY) * ca);
+        return w2s(x + dX, y + dY);
+      };
+      for (const PaperEntityRef& r : cmd.selectedPaperEntities) {
+        if (r.type == PaperEntityRef::Type::Line) {
+          const size_t i = static_cast<size_t>(r.index) * 6;
+          if (i + 5 < L.paperLines.size())
+            sdl->AddLine(xf(L.paperLines[i], L.paperLines[i + 1]), xf(L.paperLines[i + 3], L.paperLines[i + 4]),
+                         ghostCol, 1.5f);
+        } else if (r.index >= 0 && static_cast<size_t>(r.index) < L.paperTexts.size()) {
+          const CadAnnotation& a = L.paperTexts[static_cast<size_t>(r.index)];
+          sdl->AddCircleFilled(xf(a.insX, a.insY), 3.f, ghostCol);
+        }
+      }
+      if (rotating)
+        sdl->AddLine(w2s(bX, bY), w2s(curPX, curPY), ghostCol, 1.f);
+    }
     // Rectangular-viewport rubber-band preview (REQ-033) between the first click and the cursor.
     if (cmd.active == AppCommandState::Kind::PaperRectViewport && cmd.paperVpPhase == 1 && hovered) {
       const ImVec2 q0 = w2s(cmd.paperVpFirstXIn, cmd.paperVpFirstYIn);

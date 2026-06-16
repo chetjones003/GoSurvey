@@ -383,14 +383,15 @@ void TranslateSelectedViewports(AppCommandState& cmd, float dxIn, float dyIn, bo
 }
 
 void StartPaperMoveCopyViewports(AppCommandState& cmd, bool copy, std::vector<std::string>& log) {
-  if (cmd.selectedViewports.empty()) {
-    log.push_back(std::string(copy ? "COPY" : "MOVE") + " — select viewport(s) first.");
+  // Operates on whatever is selected in paper space: viewports (REQ-035) and/or native geometry (REQ-037).
+  if (cmd.selectedViewports.empty() && cmd.selectedPaperEntities.empty()) {
+    log.push_back(std::string(copy ? "COPY" : "MOVE") + " — select object(s) first.");
     return;
   }
-  cmd.active = AppCommandState::Kind::None;  // paper viewport ops are not a model command
+  cmd.active = AppCommandState::Kind::None;  // paper-space edit ops are not a model command
   cmd.paperMovePhase = 1;
   cmd.paperMoveIsCopy = copy;
-  log.push_back(std::string(copy ? "COPY" : "MOVE") + " viewport — click the base point (Esc to cancel).");
+  log.push_back(std::string(copy ? "COPY" : "MOVE") + " — click the base point (Esc to cancel).");
 }
 
 // --- Floating model space (REQ-036) ---
@@ -408,6 +409,187 @@ PaperLayout* ActivePaperGeometryTarget(AppCommandState& st) {
   if (static_cast<size_t>(st.activeSpaceIndex) >= st.paperLayouts.size())
     return nullptr;
   return &st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+}
+
+// --- Native paper-space geometry: selection + edit (REQ-037, ADR-009) ---
+
+using PaperRef = PaperEntityRef;
+
+void ClearPaperEntitySelection(AppCommandState& st) { st.selectedPaperEntities.clear(); }
+
+static float PaperPointSegDist2(float px, float py, float ax, float ay, float bx, float by) {
+  const float vx = bx - ax, vy = by - ay;
+  const float len2 = vx * vx + vy * vy;
+  float t = len2 > 1.e-12f ? ((px - ax) * vx + (py - ay) * vy) / len2 : 0.f;
+  t = std::clamp(t, 0.f, 1.f);
+  const float dx = px - (ax + t * vx), dy = py - (ay + t * vy);
+  return dx * dx + dy * dy;
+}
+
+// Approximate paper-text bounds in paper inches (insertion ≈ bottom-left, horizontal first version).
+static void PaperTextBoundsIn(const CadAnnotation& a, float* x0, float* y0, float* x1, float* y1) {
+  const float h = std::max(0.01f, a.plottedHeightInches);
+  const float w = std::max(h * 0.6f, h * 0.6f * static_cast<float>(a.text.size()));
+  *x0 = a.insX;
+  *y0 = a.insY;
+  *x1 = a.insX + w;
+  *y1 = a.insY + h;
+}
+
+bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperRef* out) {
+  // Text first (it draws on top); topmost = last in the vector. Then lines by segment distance.
+  for (int ti = static_cast<int>(L.paperTexts.size()) - 1; ti >= 0; --ti) {
+    float bx0, by0, bx1, by1;
+    PaperTextBoundsIn(L.paperTexts[static_cast<size_t>(ti)], &bx0, &by0, &bx1, &by1);
+    if (x >= bx0 - tolIn && x <= bx1 + tolIn && y >= by0 - tolIn && y <= by1 + tolIn) {
+      out->type = PaperRef::Type::Text;
+      out->index = ti;
+      return true;
+    }
+  }
+  const float tol2 = tolIn * tolIn;
+  for (int si = static_cast<int>(L.paperLines.size() / 6) - 1; si >= 0; --si) {
+    const size_t i = static_cast<size_t>(si) * 6;
+    if (PaperPointSegDist2(x, y, L.paperLines[i], L.paperLines[i + 1], L.paperLines[i + 3],
+                           L.paperLines[i + 4]) <= tol2) {
+      out->type = PaperRef::Type::Line;
+      out->index = si;
+      return true;
+    }
+  }
+  return false;
+}
+
+void TogglePaperEntitySelection(AppCommandState& st, PaperRef ref, bool additive) {
+  if (!additive) {
+    st.selectedPaperEntities.assign(1, ref);
+    return;
+  }
+  for (size_t i = 0; i < st.selectedPaperEntities.size(); ++i)
+    if (st.selectedPaperEntities[i].type == ref.type && st.selectedPaperEntities[i].index == ref.index) {
+      st.selectedPaperEntities.erase(st.selectedPaperEntities.begin() + static_cast<std::ptrdiff_t>(i));
+      return;
+    }
+  st.selectedPaperEntities.push_back(ref);
+}
+
+void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L || st.selectedPaperEntities.empty())
+    return;
+  std::vector<int> lineIdx, textIdx;
+  for (const PaperRef& r : st.selectedPaperEntities)
+    (r.type == PaperRef::Type::Line ? lineIdx : textIdx).push_back(r.index);
+  auto descUnique = [](std::vector<int>& v) {
+    std::sort(v.begin(), v.end(), [](int a, int b) { return a > b; });
+    v.erase(std::unique(v.begin(), v.end()), v.end());
+  };
+  descUnique(lineIdx);
+  descUnique(textIdx);
+  PushUndoSnapshot(st, "Delete paper geometry");
+  for (int si : lineIdx) {
+    if (si >= 0 && static_cast<size_t>(si) * 6 + 5 < L->paperLines.size()) {
+      L->paperLines.erase(L->paperLines.begin() + static_cast<std::ptrdiff_t>(si) * 6,
+                          L->paperLines.begin() + static_cast<std::ptrdiff_t>(si) * 6 + 6);
+      if (static_cast<size_t>(si) < L->paperLineAttrs.size())
+        L->paperLineAttrs.erase(L->paperLineAttrs.begin() + si);
+    }
+  }
+  for (int ti : textIdx) {
+    if (ti >= 0 && static_cast<size_t>(ti) < L->paperTexts.size()) {
+      L->paperTexts.erase(L->paperTexts.begin() + ti);
+      if (static_cast<size_t>(ti) < L->paperTextAttrs.size())
+        L->paperTextAttrs.erase(L->paperTextAttrs.begin() + ti);
+    }
+  }
+  const size_t n = lineIdx.size() + textIdx.size();
+  ClearPaperEntitySelection(st);
+  BumpCadGpuCache(st);
+  log.push_back("DELETE — removed " + std::to_string(n) + " paper object(s).");
+}
+
+void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn, bool copy,
+                                    std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L || st.selectedPaperEntities.empty())
+    return;
+  PushUndoSnapshot(st, copy ? "Copy paper geometry" : "Move paper geometry");
+  std::vector<PaperRef> newSel;
+  for (const PaperRef& r : st.selectedPaperEntities) {
+    if (r.type == PaperRef::Type::Line) {
+      const size_t i = static_cast<size_t>(r.index) * 6;
+      if (i + 5 >= L->paperLines.size())
+        continue;
+      if (copy) {
+        for (int k = 0; k < 6; ++k)
+          L->paperLines.push_back(L->paperLines[i + static_cast<size_t>(k)]);
+        const size_t j = L->paperLines.size() - 6;
+        L->paperLines[j] += dxIn;
+        L->paperLines[j + 1] += dyIn;
+        L->paperLines[j + 3] += dxIn;
+        L->paperLines[j + 4] += dyIn;
+        L->paperLineAttrs.push_back(static_cast<size_t>(r.index) < L->paperLineAttrs.size()
+                                        ? L->paperLineAttrs[static_cast<size_t>(r.index)]
+                                        : EntityAttributes{});
+        newSel.push_back({PaperRef::Type::Line, static_cast<int>(L->paperLines.size() / 6) - 1});
+      } else {
+        L->paperLines[i] += dxIn;
+        L->paperLines[i + 1] += dyIn;
+        L->paperLines[i + 3] += dxIn;
+        L->paperLines[i + 4] += dyIn;
+      }
+    } else {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperTexts.size())
+        continue;
+      if (copy) {
+        CadAnnotation a = L->paperTexts[static_cast<size_t>(r.index)];
+        a.insX += dxIn;
+        a.insY += dyIn;
+        L->paperTexts.push_back(std::move(a));
+        L->paperTextAttrs.push_back(static_cast<size_t>(r.index) < L->paperTextAttrs.size()
+                                        ? L->paperTextAttrs[static_cast<size_t>(r.index)]
+                                        : EntityAttributes{});
+        newSel.push_back({PaperRef::Type::Text, static_cast<int>(L->paperTexts.size()) - 1});
+      } else {
+        L->paperTexts[static_cast<size_t>(r.index)].insX += dxIn;
+        L->paperTexts[static_cast<size_t>(r.index)].insY += dyIn;
+      }
+    }
+  }
+  if (copy && !newSel.empty())
+    st.selectedPaperEntities = newSel;
+  BumpCadGpuCache(st);
+  log.push_back(copy ? "COPY — duplicated paper object(s)." : "MOVE — moved paper object(s).");
+}
+
+void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float angRad,
+                                 std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L || st.selectedPaperEntities.empty())
+    return;
+  const float c = std::cos(angRad), s = std::sin(angRad);
+  auto rot = [&](float& x, float& y) {
+    const float dx = x - baseX, dy = y - baseY;
+    x = baseX + dx * c - dy * s;
+    y = baseY + dx * s + dy * c;
+  };
+  PushUndoSnapshot(st, "Rotate paper geometry");
+  for (const PaperRef& r : st.selectedPaperEntities) {
+    if (r.type == PaperRef::Type::Line) {
+      const size_t i = static_cast<size_t>(r.index) * 6;
+      if (i + 5 >= L->paperLines.size())
+        continue;
+      rot(L->paperLines[i], L->paperLines[i + 1]);
+      rot(L->paperLines[i + 3], L->paperLines[i + 4]);
+    } else {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperTexts.size())
+        continue;
+      rot(L->paperTexts[static_cast<size_t>(r.index)].insX, L->paperTexts[static_cast<size_t>(r.index)].insY);
+      L->paperTexts[static_cast<size_t>(r.index)].rotationRad += angRad;
+    }
+  }
+  BumpCadGpuCache(st);
+  log.push_back("ROTATE — rotated paper object(s).");
 }
 
 void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std::vector<std::string>& log) {
@@ -8837,8 +9019,15 @@ void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
-  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // REQ-035: delete viewports
-    DeleteSelectedViewports(st, log);
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // paper space: geometry + viewports
+    const bool hadEntities = !st.selectedPaperEntities.empty();
+    const bool hadViewports = !st.selectedViewports.empty();
+    if (hadEntities)
+      DeleteSelectedPaperEntities(st, log);  // REQ-037
+    if (hadViewports)
+      DeleteSelectedViewports(st, log);  // REQ-035
+    if (!hadEntities && !hadViewports)
+      log.push_back("DELETE — select paper object(s) or viewport(s) first.");
     return;
   }
   ClearPendingViewportZoom(st);
@@ -8988,6 +9177,16 @@ void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // REQ-037: rotate paper geometry
+    if (st.selectedPaperEntities.empty()) {
+      log.push_back("ROTATE — select paper object(s) first.");
+      return;
+    }
+    st.active = AppCommandState::Kind::None;  // paper-space edit ops are not a model command
+    st.paperRotatePhase = 1;
+    log.push_back("ROTATE — click the base point (Esc to cancel).");
+    return;
+  }
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Rotate;

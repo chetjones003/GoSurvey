@@ -24,6 +24,14 @@ struct SelectedEntity {
   int index = 0; ///< Entity index in the parallel container for \p type
 };
 
+/// A selected native paper-space entity (REQ-037): index into the active layout's paperLines (by segment)
+/// or paperTexts. Top-level so free-function declarations can name it before AppCommandState is defined.
+struct PaperEntityRef {
+  enum class Type : std::uint8_t { Line = 0, Text = 1 };
+  Type type = Type::Line;
+  int  index = 0;
+};
+
 
 /// Named layer row for the layer manager (visibility / freeze / lock are stored for future viewport filtering).
 struct CadLayerRow {
@@ -299,6 +307,17 @@ bool InFloatingModelSpace(const AppCommandState& cmd);
 /// REQ-037 / ADR-009: the active layout's paper-space geometry store a draw/edit command writes to,
 /// or nullptr when the command targets model space (model space active, or floating model space).
 PaperLayout* ActivePaperGeometryTarget(AppCommandState& st);
+
+// Native paper-space geometry selection + edit (REQ-037). Indices are into the ACTIVE layout's stores.
+void ClearPaperEntitySelection(AppCommandState& st);
+/// Topmost paper entity (text over line) within \p tolIn of (x,y) in paper inches; false if none.
+bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperEntityRef* out);
+void TogglePaperEntitySelection(AppCommandState& st, PaperEntityRef ref, bool additive);
+void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& log);
+void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn, bool copy,
+                                    std::vector<std::string>& log);
+void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float angRad,
+                                 std::vector<std::string>& log);
 /// Enter floating model space for viewport \p vpIdx of layout \p layoutIdx (edit the model through it).
 void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std::vector<std::string>& log);
 /// Save the floating view back to the viewport and return to paper space.
@@ -1055,6 +1074,13 @@ struct AppCommandState {
   bool  paperSelBoxActive = false;
   float paperSelBoxX0In = 0.f;
   float paperSelBoxY0In = 0.f;
+  // Paper-space native geometry selection + edit (REQ-037, ADR-009). Indices into the ACTIVE layout's
+  // paperLines (line index = segment, i.e. flat offset/6) and paperTexts. Coexists with viewport selection.
+  std::vector<PaperEntityRef> selectedPaperEntities;
+  // Paper-space ROTATE of selected paper entities: 0 idle, 1 need base point, 2 need rotation angle.
+  int   paperRotatePhase = 0;
+  float paperRotateBaseXIn = 0.f;
+  float paperRotateBaseYIn = 0.f;
   // Floating model space (REQ-036): edit the model IN PLACE through a viewport. The active space stays
   // the paper layout (sheet + viewports stay visible); model edit/snap/draw is routed through the viewport.
   int    floatingViewportLayout = -1;   ///< paper layout of the floating viewport, or -1 if not floating.
