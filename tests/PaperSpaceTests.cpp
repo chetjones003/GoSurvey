@@ -64,3 +64,36 @@ TEST_CASE("Viewport safeScale clamps non-positive scale", "[paperspace]") {
   REQUIRE(std::isfinite(px));
   REQUIRE(std::isfinite(py));
 }
+
+// REQ-028: per-viewport frozen layers default empty and can be toggled.
+TEST_CASE("Viewport frozen layers toggle", "[paperspace]") {
+  Viewport vp;
+  REQUIRE(vp.frozenLayers.empty());
+
+  // Initially no layers frozen
+  REQUIRE_FALSE(IsLayerFrozenInViewport(vp, "0"));
+  REQUIRE_FALSE(IsLayerFrozenInViewport(vp, "Layer1"));
+
+  // Toggle a layer on
+  ToggleFrozenLayerInViewport(vp, "Layer1");
+  REQUIRE(vp.frozenLayers.size() == 1);
+  REQUIRE(IsLayerFrozenInViewport(vp, "Layer1"));
+  REQUIRE_FALSE(IsLayerFrozenInViewport(vp, "0"));
+
+  // Add another layer
+  ToggleFrozenLayerInViewport(vp, "Layer2");
+  REQUIRE(vp.frozenLayers.size() == 2);
+  REQUIRE(IsLayerFrozenInViewport(vp, "Layer1"));
+  REQUIRE(IsLayerFrozenInViewport(vp, "Layer2"));
+
+  // Toggle a frozen layer off
+  ToggleFrozenLayerInViewport(vp, "Layer1");
+  REQUIRE(vp.frozenLayers.size() == 1);
+  REQUIRE_FALSE(IsLayerFrozenInViewport(vp, "Layer1"));
+  REQUIRE(IsLayerFrozenInViewport(vp, "Layer2"));
+
+  // Toggle off the last layer
+  ToggleFrozenLayerInViewport(vp, "Layer2");
+  REQUIRE(vp.frozenLayers.empty());
+  REQUIRE_FALSE(IsLayerFrozenInViewport(vp, "Layer2"));
+}

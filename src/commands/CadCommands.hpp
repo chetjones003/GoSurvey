@@ -326,6 +326,12 @@ void TranslateSelectedViewports(AppCommandState& cmd, float dxIn, float dyIn, bo
 /// Begin a two-click MOVE/COPY of the selected viewports (paper-inch base → destination).
 void StartPaperMoveCopyViewports(AppCommandState& cmd, bool copy, std::vector<std::string>& log);
 
+// --- Per-viewport layer freeze (REQ-028) ---
+/// Toggle the frozen state of a layer in a viewport.
+void ToggleFrozenLayerInViewport(Viewport& vp, const std::string& layerName);
+/// Check if a layer is frozen in a viewport.
+bool IsLayerFrozenInViewport(const Viewport& vp, const std::string& layerName);
+
 // --- Floating model space (REQ-036) ---
 bool InFloatingModelSpace(const AppCommandState& cmd);
 /// Enter floating model space for viewport \p vpIdx of layout \p layoutIdx (edit the model through it).

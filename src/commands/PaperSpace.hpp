@@ -42,6 +42,7 @@ struct Viewport {
   double modelCenterY = 0.0;
   float scaleModelPerPaperIn = 50.f;  // model units per paper inch (AutoCAD viewport scale)
   std::string layer = "0";            // viewport's layer; if not plottable, its border is omitted from plots
+  std::vector<std::string> frozenLayers;  // layer names hidden only in this viewport (REQ-028)
 
   float safeScale() const { return scaleModelPerPaperIn > 1.e-6f ? scaleModelPerPaperIn : 1.e-6f; }
 };
@@ -53,6 +54,25 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
   const float cy = vp.paperYIn + vp.paperHIn * 0.5f;
   *outPaperX = cx + static_cast<float>((mx - vp.modelCenterX) / static_cast<double>(s));
   *outPaperY = cy + static_cast<float>((my - vp.modelCenterY) / static_cast<double>(s));
+}
+
+// Per-viewport layer freeze (REQ-028): toggle and query frozen layers for a viewport.
+inline void ToggleFrozenLayerInViewport(Viewport& vp, const std::string& layerName) {
+  for (size_t i = 0; i < vp.frozenLayers.size(); ++i) {
+    if (vp.frozenLayers[i] == layerName) {
+      vp.frozenLayers.erase(vp.frozenLayers.begin() + static_cast<std::ptrdiff_t>(i));
+      return;
+    }
+  }
+  vp.frozenLayers.push_back(layerName);
+}
+
+inline bool IsLayerFrozenInViewport(const Viewport& vp, const std::string& layerName) {
+  for (const auto& fl : vp.frozenLayers) {
+    if (fl == layerName)
+      return true;
+  }
+  return false;
 }
 
 // A named page setup (paper size + orientation + plot settings) the user can apply to layouts via the

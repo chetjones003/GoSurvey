@@ -6996,14 +6996,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const float pxPerWorld = avail.x / static_cast<float>(denx);  // screen px per paper inch (uniform)
       const float pxPerModel = pxPerWorld / vp.safeScale();
       sdl->PushClipRect(rmin, rmax, true);
-      // Lines.
+      // Lines (REQ-028: skip frozen layers).
       for (size_t i = 0; i + 5 < cmd.userLinesFlat.size(); i += 6) {
+        const size_t lineIdx = i / 6;
+        const EntityAttributes& attr = LineAttr(cmd, static_cast<int>(lineIdx));
+        if (IsLayerFrozenInViewport(vp, attr.layer))
+          continue;
         const ImVec2 s0 = m2s(cmd.userLinesFlat[i] + oX, cmd.userLinesFlat[i + 1] + oY);
         const ImVec2 s1 = m2s(cmd.userLinesFlat[i + 3] + oX, cmd.userLinesFlat[i + 4] + oY);
         sdl->AddLine(s0, s1, kVpModelCol, 1.0f);
       }
-      // Polylines.
+      // Polylines (REQ-028: skip frozen layers).
       for (size_t pi = 0; pi < cmd.userPolylineOffsets.size(); ++pi) {
+        const EntityAttributes& attr = PolylineAttr(cmd, static_cast<int>(pi));
+        if (IsLayerFrozenInViewport(vp, attr.layer))
+          continue;
         const int start = cmd.userPolylineOffsets[pi];
         const int end = (pi + 1 < cmd.userPolylineOffsets.size())
                             ? cmd.userPolylineOffsets[pi + 1]
@@ -7019,15 +7026,23 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           have = true;
         }
       }
-      // Circles.
+      // Circles (REQ-028: skip frozen layers).
       for (size_t i = 0; i + 2 < cmd.userCirclesCxCyR.size(); i += 3) {
+        const size_t circleIdx = i / 3;
+        const EntityAttributes& attr = CircleAttr(cmd, static_cast<int>(circleIdx));
+        if (IsLayerFrozenInViewport(vp, attr.layer))
+          continue;
         const ImVec2 c = m2s(cmd.userCirclesCxCyR[i] + oX, cmd.userCirclesCxCyR[i + 1] + oY);
         const float rPx = cmd.userCirclesCxCyR[i + 2] * pxPerModel;
         if (rPx >= 0.5f)
           sdl->AddCircle(c, rPx, kVpModelCol, 0, 1.0f);
       }
-      // Arcs (sampled).
-      for (const CadArc& arc : cmd.userArcs) {
+      // Arcs (REQ-028: skip frozen layers, sampled).
+      for (size_t arcIdx = 0; arcIdx < cmd.userArcs.size(); ++arcIdx) {
+        const CadArc& arc = cmd.userArcs[arcIdx];
+        const EntityAttributes& attr = ArcAttr(cmd, static_cast<int>(arcIdx));
+        if (IsLayerFrozenInViewport(vp, attr.layer))
+          continue;
         const int segs = std::clamp(static_cast<int>(std::fabs(arc.sweepRad) / 0.15f) + 2, 2, 180);
         ImVec2 prev{};
         for (int k = 0; k <= segs; ++k) {
@@ -7039,9 +7054,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           prev = s;
         }
       }
-      // Survey-point crosses.
+      // Survey-point crosses (REQ-028: skip frozen layers).
       const float crossPx = 4.f;
       for (const SurveyPoint& sp : cmd.surveyPoints) {
+        if (IsLayerFrozenInViewport(vp, sp.layer))
+          continue;
         const ImVec2 c = m2s(static_cast<double>(sp.easting) + oX, static_cast<double>(sp.northing) + oY);
         sdl->AddLine(ImVec2(c.x - crossPx, c.y), ImVec2(c.x + crossPx, c.y), kVpModelCol, 1.0f);
         sdl->AddLine(ImVec2(c.x, c.y - crossPx), ImVec2(c.x, c.y + crossPx), kVpModelCol, 1.0f);
@@ -7922,6 +7939,27 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   DrawMtextRichEditorOverlay(cmd, log, static_cast<float>(worldLeft), static_cast<float>(worldRight),
                              static_cast<float>(worldBottom), static_cast<float>(worldTop), imgPos, avail);
+
+  // REQ-028: Per-viewport layer freeze UI. Shows layer checkboxes when a viewport is selected in paper space.
+  if (cmd.activeSpaceIndex >= 0 && cmd.activeSpaceIndex < static_cast<int>(cmd.paperLayouts.size()) &&
+      cmd.selectedViewports.size() == 1 && cmd.selectedViewportIndex >= 0) {
+    PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
+    if (cmd.selectedViewportIndex < static_cast<int>(L.viewports.size())) {
+      Viewport& vp = L.viewports[static_cast<size_t>(cmd.selectedViewportIndex)];
+      ImGui::Separator();
+      if (ImGui::CollapsingHeader("Frozen Layers", ImGuiTreeNodeFlags_DefaultOpen)) {
+        ImGui::BeginChild("##frozenLayersChild", ImVec2(-1.f, 150.f), ImGuiChildFlags_Borders);
+        for (const auto& row : cmd.drawingLayerTable) {
+          bool frozen = IsLayerFrozenInViewport(vp, row.name);
+          if (ImGui::Checkbox(row.name.c_str(), &frozen)) {
+            ToggleFrozenLayerInViewport(vp, row.name);
+            BumpCadGpuCache(cmd);
+          }
+        }
+        ImGui::EndChild();
+      }
+    }
+  }
 
   *outFbW = vpFbW;
   *outFbH = vpFbH;

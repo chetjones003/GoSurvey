@@ -270,6 +270,7 @@ json BuildRoot(const AppCommandState& st) {
         vo["modelCenterY"] = v.modelCenterY;
         vo["scaleModelPerPaperIn"] = v.scaleModelPerPaperIn;
         vo["layer"] = v.layer;
+        vo["frozenLayers"] = v.frozenLayers;
         vps.push_back(vo);
       }
       o["viewports"] = vps;
@@ -661,6 +662,12 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           v.scaleModelPerPaperIn = vo.value("scaleModelPerPaperIn", v.scaleModelPerPaperIn);
           if (vo.contains("layer") && vo["layer"].is_string())
             v.layer = vo["layer"].get<std::string>();
+          if (vo.contains("frozenLayers") && vo["frozenLayers"].is_array()) {
+            for (const auto& fl : vo["frozenLayers"]) {
+              if (fl.is_string())
+                v.frozenLayers.push_back(fl.get<std::string>());
+            }
+          }
           l.viewports.push_back(v);
         }
       }

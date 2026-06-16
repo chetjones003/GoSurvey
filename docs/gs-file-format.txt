@@ -113,7 +113,8 @@ nlohmann::json (numbers may serialize as integers or floats; the loader uses
             paperWIn, paperHIn        (numbers) rect size in paper inches
             modelCenterX, modelCenterY(numbers) model-space (world) point shown at the rect center
             scaleModelPerPaperIn      (number)  model units per paper inch (viewport scale)
-      Per-viewport frozen layers are added in a later increment.
+            layer                     (string)  viewport's layer (for plotting)
+            frozenLayers              (array of strings, optional) — REQ-028; layers hidden only in this viewport
       A missing or malformed array loads as zero layouts (model space only).
 
   activeSpaceIndex (integer, default -1)
