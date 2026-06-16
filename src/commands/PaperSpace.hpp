@@ -1,5 +1,7 @@
 #pragma once
 
+#include "CadEntities.hpp"
+
 #include <string>
 #include <vector>
 
@@ -99,6 +101,15 @@ struct PaperLayout {
   bool landscape = true;
   int presetIdx = kDefaultPaperPresetIdx;  // index into kPaperSizePresets, or -1 = custom
   std::vector<Viewport> viewports;         // REQ-027
+
+  // Native paper-space geometry (REQ-037, ADR-009): entities that live on this sheet, in PAPER INCHES
+  // (sheet origin at 0,0), separate from model space and from viewport content. Owned by this layout.
+  //   paperLines: flat (x0,y0,z0, x1,y1,z1) per segment, z = 0 on the sheet; paperLineAttrs is parallel.
+  //   paperTexts: CadAnnotation with insX/insY in paper inches (kind Text/Mtext); paperTextAttrs parallel.
+  std::vector<float>            paperLines;
+  std::vector<EntityAttributes> paperLineAttrs;
+  std::vector<CadAnnotation>    paperTexts;
+  std::vector<EntityAttributes> paperTextAttrs;
   // Current page-setup plot fields (the layout's own setup). Paper size/orientation above are part of it.
   std::string pageSetupName;               // name of the applied named setup, or "" = <None>
   bool  fitToPaper = false;

@@ -274,6 +274,31 @@ json BuildRoot(const AppCommandState& st) {
         vps.push_back(vo);
       }
       o["viewports"] = vps;
+      // Native paper-space geometry (REQ-037): lines + text in paper inches, owned by the layout.
+      o["paperLines"] = l.paperLines;  // flat x0,y0,z0,x1,y1,z1 per segment
+      {
+        json plAttrs = json::array();
+        for (const EntityAttributes& a : l.paperLineAttrs) {
+          json ao;
+          EntityAttributesToJson(a, ao);
+          plAttrs.push_back(ao);
+        }
+        o["paperLineAttrs"] = std::move(plAttrs);
+        json pTexts = json::array();
+        for (const CadAnnotation& a : l.paperTexts) {
+          json ao;
+          CadAnnotationToJson(a, ao);
+          pTexts.push_back(ao);
+        }
+        o["paperTexts"] = std::move(pTexts);
+        json ptAttrs = json::array();
+        for (const EntityAttributes& a : l.paperTextAttrs) {
+          json ao;
+          EntityAttributesToJson(a, ao);
+          ptAttrs.push_back(ao);
+        }
+        o["paperTextAttrs"] = std::move(ptAttrs);
+      }
       layouts.push_back(o);
     }
     doc["paperLayouts"] = layouts;
@@ -671,6 +696,32 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           l.viewports.push_back(v);
         }
       }
+      // Native paper-space geometry (REQ-037). Missing/garbage → empty (no crash); attrs padded to match.
+      if (o.contains("paperLines") && o["paperLines"].is_array()) {
+        for (const auto& f : o["paperLines"]) {
+          if (f.is_number())
+            l.paperLines.push_back(f.get<float>());
+        }
+        if (l.paperLines.size() % 6 != 0)  // drop a trailing partial segment
+          l.paperLines.resize(l.paperLines.size() - (l.paperLines.size() % 6));
+      }
+      if (o.contains("paperLineAttrs") && o["paperLineAttrs"].is_array()) {
+        for (const auto& ao : o["paperLineAttrs"])
+          if (ao.is_object())
+            l.paperLineAttrs.push_back(EntityAttributesFromJson(ao));
+      }
+      l.paperLineAttrs.resize(l.paperLines.size() / 6);  // keep parallel (default-fill or trim)
+      if (o.contains("paperTexts") && o["paperTexts"].is_array()) {
+        for (const auto& ao : o["paperTexts"])
+          if (ao.is_object())
+            l.paperTexts.push_back(CadAnnotationFromJson(ao));
+      }
+      if (o.contains("paperTextAttrs") && o["paperTextAttrs"].is_array()) {
+        for (const auto& ao : o["paperTextAttrs"])
+          if (ao.is_object())
+            l.paperTextAttrs.push_back(EntityAttributesFromJson(ao));
+      }
+      l.paperTextAttrs.resize(l.paperTexts.size());  // keep parallel
       st.paperLayouts.push_back(l);
     }
   }
