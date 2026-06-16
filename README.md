@@ -7,6 +7,78 @@ GoSurvey is a simple and modern computer-aided design (CAD) platform that provid
 ![Screenshot3](./samples/Screenshot3.png)
 ![Screenshot4](./samples/Screenshot4.png)
 
+# Table of Contents
+
+- [Download and Install (Windows)](#download-and-install-windows)
+  - [Installer (Recommended)](#installer-recommended)
+  - [Runtime Requirement](#runtime-requirement)
+
+- [Layout at a Glance](#layout-at-a-glance)
+
+- [Command Line and Dynamic Input](#command-line-and-dynamic-input)
+
+- [Drawing Units — UNITS](#drawing-units--units-un--ddunits)
+
+- [Angles and Bearings](#angles-and-bearings)
+
+- [Drawing Geometry](#drawing-geometry)
+  - [LINE / POLYLINE — Bearing Input](#line--polyline--bearing-input)
+  - [Ortho](#ortho)
+
+- [Modifying and Selecting](#modifying-and-selecting)
+  - [Selection](#selection)
+  - [QUICKSELECT](#quickselect-qs)
+  - [Grips](#grips)
+  - [Clipboard — Copy / Paste](#clipboard--copy--paste)
+  - [MOVE / COPY](#move--copy-m--cp)
+  - [ROTATE](#rotate-ro)
+  - [SCALE](#scale-sc)
+  - [OFFSET](#offset-o)
+  - [TRIM](#trim-tr)
+  - [JOIN](#join-j)
+  - [OVERKILL](#overkill-ok)
+  - [DELETE](#delete-del)
+
+- [PDF Underlay](#pdf-underlay)
+  - [Attaching a PDF](#attaching-a-pdf-pdfattach--pa)
+  - [PDF Snap](#pdf-snap)
+
+- [View](#view)
+
+- [Plot Scale, Annotations, and Display](#plot-scale-annotations-and-display)
+
+- [DXF](#dxf)
+  - [Export](#export)
+  - [Import](#import)
+
+- [Survey Points](#survey-points)
+  - [Create Points](#create-points)
+  - [View / Edit Points](#view--edit-points--viewpoints-vwpts)
+  - [CSV Import / Export](#csv-import--export--importpoints--exportpoints-imppts--exppts)
+
+- [Coordinate Alignment — ALIGN](#coordinate-alignment--align-al)
+  - [Workflow](#workflow)
+  - [Control Point Tagging](#control-point-tagging)
+  - [Results Window Columns](#results-window-columns)
+
+- [Traverse Editor](#traverse-editor)
+
+- [Inquiry](#inquiry)
+
+- [Options](#options)
+
+- [Snapping](#snapping)
+
+- [Layers and Appearance](#layers-and-appearance)
+
+- [Keyboard](#keyboard)
+
+- [Help](#help)
+
+- [Building from Source](#building-from-source)
+
+- [Tips](#tips)
+
 ---
 
 ## Download and install (Windows)
