@@ -761,9 +761,10 @@ void ViewportRenderer::RenderPaperSpace(int fbWidth, int fbHeight, const std::ve
   const float sheetW = layout.sheetWidthIn();
   const float sheetH = layout.sheetHeightIn();
 
-  // Paper-space projection: ortho from (0,0) to (sheetW, sheetH) in inches.
+  // Paper-space projection: ortho from (0,0) at upper-left to (sheetW, sheetH) at lower-right in inches.
+  // Note: Y is inverted (sheetH at bottom, 0 at top) to match paperYIn coordinates measured from top.
   float paperProj[16];
-  Ortho(0.f, sheetW, 0.f, sheetH, -1000.f, 1000.f, paperProj);
+  Ortho(0.f, sheetW, sheetH, 0.f, -1000.f, 1000.f, paperProj);
 
   float paperModel[16];
   TranslateMat(0.f, 0.f, 0.f, paperModel);
