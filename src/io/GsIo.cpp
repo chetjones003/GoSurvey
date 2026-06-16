@@ -246,6 +246,13 @@ json BuildRoot(const AppCommandState& st) {
       o["portraitHeightIn"] = l.portraitHeightIn;
       o["landscape"] = l.landscape;
       o["presetIdx"] = l.presetIdx;
+      o["pageSetupName"] = l.pageSetupName;
+      o["fitToPaper"] = l.fitToPaper;
+      o["scaleModelPerPaperIn"] = l.scaleModelPerPaperIn;
+      o["plotArea"] = l.plotArea;
+      o["offsetXIn"] = l.offsetXIn;
+      o["offsetYIn"] = l.offsetYIn;
+      o["centerPlot"] = l.centerPlot;
       json vps = json::array();
       for (const Viewport& v : l.viewports) {
         json vo;
@@ -263,6 +270,23 @@ json BuildRoot(const AppCommandState& st) {
     }
     doc["paperLayouts"] = layouts;
     doc["activeSpaceIndex"] = st.activeSpaceIndex;
+    json setups = json::array();
+    for (const PageSetup& ps : st.savedPageSetups) {
+      json o;
+      o["name"] = ps.name;
+      o["presetIdx"] = ps.presetIdx;
+      o["portraitWidthIn"] = ps.portraitWidthIn;
+      o["portraitHeightIn"] = ps.portraitHeightIn;
+      o["landscape"] = ps.landscape;
+      o["fitToPaper"] = ps.fitToPaper;
+      o["scaleModelPerPaperIn"] = ps.scaleModelPerPaperIn;
+      o["plotArea"] = ps.plotArea;
+      o["offsetXIn"] = ps.offsetXIn;
+      o["offsetYIn"] = ps.offsetYIn;
+      o["centerPlot"] = ps.centerPlot;
+      setups.push_back(o);
+    }
+    doc["savedPageSetups"] = setups;
   }
   doc["lineVerts"] = st.userLinesFlat;
   json lineAttrs = json::array();
@@ -604,6 +628,14 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       l.portraitHeightIn = o.value("portraitHeightIn", l.portraitHeightIn);
       l.landscape = o.value("landscape", l.landscape);
       l.presetIdx = o.value("presetIdx", l.presetIdx);
+      if (o.contains("pageSetupName") && o["pageSetupName"].is_string())
+        l.pageSetupName = o["pageSetupName"].get<std::string>();
+      l.fitToPaper = o.value("fitToPaper", l.fitToPaper);
+      l.scaleModelPerPaperIn = o.value("scaleModelPerPaperIn", l.scaleModelPerPaperIn);
+      l.plotArea = o.value("plotArea", l.plotArea);
+      l.offsetXIn = o.value("offsetXIn", l.offsetXIn);
+      l.offsetYIn = o.value("offsetYIn", l.offsetYIn);
+      l.centerPlot = o.value("centerPlot", l.centerPlot);
       if (o.contains("viewports") && o["viewports"].is_array()) {
         for (const auto& vo : o["viewports"]) {
           if (!vo.is_object())
@@ -629,6 +661,27 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.activeSpaceIndex = asi;
     st.lastPaperLayoutIndex =
         st.paperLayouts.empty() ? 0 : std::max(0, asi < 0 ? 0 : asi);
+  }
+  st.savedPageSetups.clear();
+  if (doc.contains("savedPageSetups") && doc["savedPageSetups"].is_array()) {
+    for (const auto& o : doc["savedPageSetups"]) {
+      if (!o.is_object())
+        continue;
+      PageSetup ps;
+      if (o.contains("name") && o["name"].is_string())
+        ps.name = o["name"].get<std::string>();
+      ps.presetIdx = o.value("presetIdx", ps.presetIdx);
+      ps.portraitWidthIn = o.value("portraitWidthIn", ps.portraitWidthIn);
+      ps.portraitHeightIn = o.value("portraitHeightIn", ps.portraitHeightIn);
+      ps.landscape = o.value("landscape", ps.landscape);
+      ps.fitToPaper = o.value("fitToPaper", ps.fitToPaper);
+      ps.scaleModelPerPaperIn = o.value("scaleModelPerPaperIn", ps.scaleModelPerPaperIn);
+      ps.plotArea = o.value("plotArea", ps.plotArea);
+      ps.offsetXIn = o.value("offsetXIn", ps.offsetXIn);
+      ps.offsetYIn = o.value("offsetYIn", ps.offsetYIn);
+      ps.centerPlot = o.value("centerPlot", ps.centerPlot);
+      st.savedPageSetups.push_back(ps);
+    }
   }
   st.defaultPlottedTextHeightInches = doc.value("defaultPlottedTextHeightInches", 0.125f);
   if (doc.contains("currentLayer") && doc["currentLayer"].is_string())

@@ -4584,10 +4584,30 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
       if (ImGui::BeginPopupContextItem("layout_ctx")) {
         ImGui::TextDisabled("Layout");
         ImGui::Separator();
-        ImGui::SetNextItemWidth(160.f);
-        if (ImGui::InputText("Name", &cmd.paperLayouts[static_cast<size_t>(i)].name))
-          BumpCadGpuCache(cmd);
-        if (ImGui::Button("Delete layout")) {
+        ImGui::SetNextItemWidth(180.f);
+        ImGui::InputText("Rename", &cmd.paperLayouts[static_cast<size_t>(i)].name);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Move or Copy…")) {
+          cmd.pageSetupLayoutIdx = i;
+          cmd.moveCopyBeforeSel = i;
+          cmd.moveCopyCreateCopy = false;
+          cmd.showMoveCopyLayout = true;
+          ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::MenuItem("Page Setup Manager…")) {
+          EnsureStandardPageSetup(cmd);
+          cmd.pageSetupLayoutIdx = i;
+          cmd.pageSetupManagerSel = -1;
+          cmd.showPageSetupManager = true;
+          ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::MenuItem("Viewports…")) {
+          SetActiveSpace(cmd, i);
+          cmd.showViewportsWindow = true;
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Delete")) {
           pendingDelete = i;
           ImGui::CloseCurrentPopup();
         }
@@ -4601,80 +4621,8 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
     if (pendingDelete >= 0)
       DeletePaperLayout(cmd, pendingDelete);
 
-    // When a paper layout is active, show its paper size + orientation (REQ-026).
-    if (cmd.activeSpaceIndex >= 0 && cmd.activeSpaceIndex < static_cast<int>(cmd.paperLayouts.size())) {
-      PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
-      ImGui::SameLine(0, 6);
-      ImGui::SetNextItemWidth(150.f);
-      const char* sizeLabel =
-          (L.presetIdx >= 0 && L.presetIdx < kPaperSizePresetCount) ? kPaperSizePresets[L.presetIdx].name : "Custom";
-      if (ImGui::BeginCombo("##papersize", sizeLabel)) {
-        for (int s = 0; s < kPaperSizePresetCount; ++s) {
-          if (ImGui::Selectable(kPaperSizePresets[s].name, L.presetIdx == s)) {
-            L.presetIdx = s;
-            L.portraitWidthIn = kPaperSizePresets[s].widthIn;
-            L.portraitHeightIn = kPaperSizePresets[s].heightIn;
-            BumpCadGpuCache(cmd);
-          }
-        }
-        ImGui::EndCombo();
-      }
-      ImGui::SameLine(0, 4);
-      if (ImGui::Checkbox("Landscape", &L.landscape))
-        BumpCadGpuCache(cmd);
-
-      // Viewports popup (REQ-027): add / select / edit rect+scale / delete.
-      ImGui::SameLine(0, 6);
-      if (ImGui::Button("Viewports…"))
-        ImGui::OpenPopup("paper_viewports");
-      if (ImGui::BeginPopup("paper_viewports")) {
-        const int layoutIdx = cmd.activeSpaceIndex;
-        PaperLayout& PL = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
-        ImGui::TextDisabled("Viewports — layout \"%s\"", PL.name.c_str());
-        ImGui::Separator();
-        if (ImGui::Button("+ Add viewport"))
-          AddViewport(cmd, layoutIdx);
-        for (int vi = 0; vi < static_cast<int>(PL.viewports.size()); ++vi) {
-          ImGui::PushID(vi);
-          char lbl[32];
-          std::snprintf(lbl, sizeof(lbl), "Viewport %d", vi + 1);
-          if (ImGui::Selectable(lbl, IsViewportSelected(cmd, vi)))
-            SelectViewport(cmd, vi, /*additive=*/false);
-          ImGui::PopID();
-        }
-        if (cmd.selectedViewportLayout == layoutIdx && cmd.selectedViewportIndex >= 0 &&
-            cmd.selectedViewportIndex < static_cast<int>(PL.viewports.size())) {
-          Viewport& V = PL.viewports[static_cast<size_t>(cmd.selectedViewportIndex)];
-          ImGui::Separator();
-          ImGui::TextDisabled("Selected viewport (paper inches / model units)");
-          bool ch = false;
-          ImGui::SetNextItemWidth(90.f);
-          ch |= ImGui::InputFloat("X##vpx", &V.paperXIn, 0.f, 0.f, "%.3f");
-          ImGui::SameLine();
-          ImGui::SetNextItemWidth(90.f);
-          ch |= ImGui::InputFloat("Y##vpy", &V.paperYIn, 0.f, 0.f, "%.3f");
-          ImGui::SetNextItemWidth(90.f);
-          ch |= ImGui::InputFloat("W##vpw", &V.paperWIn, 0.f, 0.f, "%.3f");
-          ImGui::SameLine();
-          ImGui::SetNextItemWidth(90.f);
-          ch |= ImGui::InputFloat("H##vph", &V.paperHIn, 0.f, 0.f, "%.3f");
-          ImGui::SetNextItemWidth(140.f);
-          ch |= ImGui::InputFloat("Scale (model/in)##vps", &V.scaleModelPerPaperIn, 0.f, 0.f, "%.4f");
-          ImGui::SetNextItemWidth(120.f);
-          ch |= ImGui::InputDouble("Center X##vpcx", &V.modelCenterX, 0., 0., "%.4f");
-          ImGui::SameLine();
-          ImGui::SetNextItemWidth(120.f);
-          ch |= ImGui::InputDouble("Center Y##vpcy", &V.modelCenterY, 0., 0., "%.4f");
-          if (V.paperWIn < 0.1f) V.paperWIn = 0.1f;
-          if (V.paperHIn < 0.1f) V.paperHIn = 0.1f;
-          if (ch)
-            BumpCadGpuCache(cmd);
-          if (ImGui::Button("Delete viewport"))
-            DeleteViewport(cmd, layoutIdx, cmd.selectedViewportIndex);
-        }
-        ImGui::EndPopup();
-      }
-    }
+    // Paper size / orientation / plot settings now live in the per-layout Page Setup Manager
+    // (right-click a layout tab). Viewports moved to the Viewports… window.
     ImGui::SameLine(0, 6);
     ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("|");
@@ -5634,11 +5582,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // viewport interaction is handled separately (REQ-025/027).
   const bool modelSpace = cmd.activeSpaceIndex == kModelSpaceIndex;
 
-  // Floating model space (REQ-036): Esc with no active command returns to the layout.
-  if (InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::None &&
-      ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-    ExitFloatingModelSpace(cmd, log);
-  }
+  // Floating model space (REQ-036): Esc does NOT exit — it cancels the active model command so the user
+  // keeps editing in the viewport. Exit is via double-click outside the viewport (below), the FLOAT
+  // button, or PSPACE.
 
   // When editing a viewport in place and the zoom lock is OFF, pan/zoom targets the viewport's model
   // framing instead of the sheet (handled below, after paper coords are available).
@@ -5920,6 +5866,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
             cmd.active != AppCommandState::Kind::None)
           SubmitViewportPick(cmd, static_cast<float>(mLocalX), static_cast<float>(mLocalY), log);
+      } else if (hovered && cmd.active == AppCommandState::Kind::None &&
+                 ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 &&
+                 my < avail.y) {
+        // Double-click outside the active viewport returns to paper editing (REQ-036).
+        ExitFloatingModelSpace(cmd, log);
       }
     }
   }

@@ -280,6 +280,7 @@ struct DrawingDocument {
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<SelectedEntity>   selection;
   std::vector<PaperLayout>      paperLayouts;            ///< Paper-space layouts (REQ-025); empty = none.
+  std::vector<PageSetup>        savedPageSetups;         ///< Drawing-wide named page setups.
   int                           activeSpaceIndex = kModelSpaceIndex;  ///< -1 = model; else index into paperLayouts.
   uint32_t cadGpuRevision  = 0;
   uint32_t savedRevision   = 0;   ///< cadGpuRevision at last save; != cadGpuRevision means unsaved changes.
@@ -330,6 +331,16 @@ bool InFloatingModelSpace(const AppCommandState& cmd);
 void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std::vector<std::string>& log);
 /// Save the floating view back to the viewport and return to paper space.
 void ExitFloatingModelSpace(AppCommandState& cmd, std::vector<std::string>& log);
+
+// --- Page setups (named, drawing-wide) ---
+/// Ensure a built-in "Standard" page setup exists in cmd.savedPageSetups.
+void EnsureStandardPageSetup(AppCommandState& cmd);
+/// Copy a PageSetup's paper-size/orientation/plot fields into a layout (Set Current).
+void ApplyPageSetupToLayout(PaperLayout& layout, const PageSetup& ps);
+/// Snapshot a layout's current paper/plot fields into a PageSetup (for New "start with *layout*").
+PageSetup PageSetupFromLayout(const PaperLayout& layout, const std::string& name);
+/// Reorder/copy a layout to before \p beforeIdx (== size → move to end); copy clones it. Move-or-Copy.
+void MoveOrCopyLayout(AppCommandState& cmd, int layoutIdx, int beforeIdx, bool makeCopy, std::vector<std::string>& log);
 
 struct AppCommandState {
   enum class Kind {
@@ -1079,6 +1090,25 @@ struct AppCommandState {
   /// Viewport zoom lock (user request): when ON, pan/zoom always targets the sheet; when OFF and editing a
   /// viewport in place, pan/zoom adjusts that viewport's model framing (scale/center).
   bool   viewportZoomLocked = false;
+
+  // Page setups + layout-tab dialogs (right-click menu → Rename / Move-Copy / Page Setup Manager / Delete).
+  std::vector<PageSetup> savedPageSetups;        ///< drawing-wide named page setups; "Standard" ensured.
+  bool showPageSetupManager = false;
+  bool showNewPageSetup     = false;
+  bool showPageSetupEditor  = false;             ///< the big "Modify" page-setup editor.
+  bool showMoveCopyLayout   = false;
+  int  pageSetupLayoutIdx   = -1;                ///< layout the dialogs target.
+  int  pageSetupManagerSel  = -1;                ///< Page Setup Manager selection: -1 = layout's current, >=0 saved idx.
+  bool pageSetupDisplayOnNew = false;            ///< "Display when creating a new layout".
+  int  pageSetupEditorTarget = -1;               ///< editor edits: -1 = layout's current, >=0 = saved setup idx.
+  PageSetup pageSetupEditorDraft;                ///< working copy while the editor is open.
+  char newPageSetupName[64] = "Setup1";
+  int  newPageSetupStartWith = 3;                ///< index into the New "Start with" list.
+  int  moveCopyBeforeSel    = 0;                 ///< Move-or-Copy "Before layout" selection (== count → move to end).
+  bool moveCopyCreateCopy   = false;
+  int  layoutRenameIdx      = -1;                ///< layout being renamed inline, or -1.
+  char layoutRenameBuf[64]  = "";
+  bool showViewportsWindow  = false;             ///< Viewports manager window (moved off the status bar).
 
   // -------------------------------------------------------------------------
   // TRAVERSE EDITOR state
