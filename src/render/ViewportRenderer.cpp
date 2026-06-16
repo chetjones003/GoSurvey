@@ -802,10 +802,11 @@ void ViewportRenderer::RenderPaperSpace(int fbWidth, int fbHeight, const std::ve
     const Viewport& vp = layout.viewports[vi];
 
     // Compute scissors rect in screen space (GL origin at bottom-left).
-    const int scissorX = static_cast<int>(vp.paperXIn * pxPerInch);
-    const int scissorY = static_cast<int>((sheetH - vp.paperYIn - vp.paperHIn) * pxPerInch);
-    const int scissorW = static_cast<int>(vp.paperWIn * pxPerInch);
-    const int scissorH = static_cast<int>(vp.paperHIn * pxPerInch);
+    // Clamp to framebuffer bounds to avoid rendering outside the paper area.
+    const int scissorX = std::max(0, static_cast<int>(vp.paperXIn * pxPerInch));
+    const int scissorY = std::max(0, static_cast<int>((sheetH - vp.paperYIn - vp.paperHIn) * pxPerInch));
+    const int scissorW = std::min(fbW_, static_cast<int>(vp.paperWIn * pxPerInch));
+    const int scissorH = std::min(fbH_, static_cast<int>(vp.paperHIn * pxPerInch));
 
     glEnable(GL_SCISSOR_TEST);
     glScissor(scissorX, scissorY, scissorW, scissorH);
