@@ -55,6 +55,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.pdfAttachments         = cmd.pdfAttachments;
   doc.selection              = cmd.selection;
   doc.paperLayouts           = cmd.paperLayouts;
+  doc.savedPageSetups        = cmd.savedPageSetups;
   doc.activeSpaceIndex       = cmd.activeSpaceIndex;
   doc.cadGpuRevision         = cmd.cadGpuRevision;
   doc.savedRevision          = cmd.activeDocSavedRevision;
@@ -89,6 +90,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.pdfAttachments             = doc.pdfAttachments;
   cmd.selection                  = doc.selection;
   cmd.paperLayouts               = doc.paperLayouts;
+  cmd.savedPageSetups            = doc.savedPageSetups;
   cmd.activeSpaceIndex           = doc.activeSpaceIndex;
   cmd.lastPaperLayoutIndex       = doc.activeSpaceIndex >= 0 ? doc.activeSpaceIndex : 0;
   cmd.selectedViewports.clear();  // transient selection; indices don't carry across documents
@@ -369,6 +371,85 @@ void ExitFloatingModelSpace(AppCommandState& cmd, std::vector<std::string>& log)
   cmd.floatingViewportIndex = -1;
   cmd.active = AppCommandState::Kind::None;
   log.push_back("Returned to paper space.");
+  BumpCadGpuCache(cmd);
+}
+
+// --- Page setups (named, drawing-wide) ---
+
+void EnsureStandardPageSetup(AppCommandState& cmd) {
+  for (const PageSetup& p : cmd.savedPageSetups)
+    if (p.name == "Standard")
+      return;
+  PageSetup std;
+  std.name = "Standard";  // defaults: ARCH D, landscape, 1:1
+  cmd.savedPageSetups.insert(cmd.savedPageSetups.begin(), std);
+}
+
+void ApplyPageSetupToLayout(PaperLayout& layout, const PageSetup& ps) {
+  layout.presetIdx = ps.presetIdx;
+  layout.portraitWidthIn = ps.portraitWidthIn;
+  layout.portraitHeightIn = ps.portraitHeightIn;
+  layout.landscape = ps.landscape;
+  layout.fitToPaper = ps.fitToPaper;
+  layout.scaleModelPerPaperIn = ps.scaleModelPerPaperIn;
+  layout.plotArea = ps.plotArea;
+  layout.offsetXIn = ps.offsetXIn;
+  layout.offsetYIn = ps.offsetYIn;
+  layout.centerPlot = ps.centerPlot;
+  layout.pageSetupName = ps.name;
+}
+
+PageSetup PageSetupFromLayout(const PaperLayout& layout, const std::string& name) {
+  PageSetup ps;
+  ps.name = name;
+  ps.presetIdx = layout.presetIdx;
+  ps.portraitWidthIn = layout.portraitWidthIn;
+  ps.portraitHeightIn = layout.portraitHeightIn;
+  ps.landscape = layout.landscape;
+  ps.fitToPaper = layout.fitToPaper;
+  ps.scaleModelPerPaperIn = layout.scaleModelPerPaperIn;
+  ps.plotArea = layout.plotArea;
+  ps.offsetXIn = layout.offsetXIn;
+  ps.offsetYIn = layout.offsetYIn;
+  ps.centerPlot = layout.centerPlot;
+  return ps;
+}
+
+void MoveOrCopyLayout(AppCommandState& cmd, int layoutIdx, int beforeIdx, bool makeCopy,
+                      std::vector<std::string>& log) {
+  const int n = static_cast<int>(cmd.paperLayouts.size());
+  if (layoutIdx < 0 || layoutIdx >= n)
+    return;
+  PaperLayout item = cmd.paperLayouts[static_cast<size_t>(layoutIdx)];
+  if (makeCopy) {
+    // Unique "Name (2)" style name.
+    std::string base = item.name;
+    int k = 2;
+    auto taken = [&](const std::string& s) {
+      for (const PaperLayout& l : cmd.paperLayouts)
+        if (l.name == s)
+          return true;
+      return false;
+    };
+    std::string nm;
+    do {
+      nm = base + " (" + std::to_string(k++) + ")";
+    } while (taken(nm));
+    item.name = nm;
+    int insertAt = std::clamp(beforeIdx, 0, n);
+    cmd.paperLayouts.insert(cmd.paperLayouts.begin() + insertAt, item);
+    SetActiveSpace(cmd, insertAt);
+    log.push_back("Layout copied as \"" + item.name + "\".");
+  } else {
+    cmd.paperLayouts.erase(cmd.paperLayouts.begin() + layoutIdx);
+    int insertAt = beforeIdx;
+    if (insertAt > layoutIdx)
+      --insertAt;  // account for the removed slot
+    insertAt = std::clamp(insertAt, 0, static_cast<int>(cmd.paperLayouts.size()));
+    cmd.paperLayouts.insert(cmd.paperLayouts.begin() + insertAt, item);
+    SetActiveSpace(cmd, insertAt);
+    log.push_back("Layout \"" + item.name + "\" moved.");
+  }
   BumpCadGpuCache(cmd);
 }
 

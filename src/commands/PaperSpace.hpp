@@ -54,6 +54,22 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
   *outPaperY = cy + static_cast<float>((my - vp.modelCenterY) / static_cast<double>(s));
 }
 
+// A named page setup (paper size + orientation + plot settings) the user can apply to layouts via the
+// Page Setup Manager. Plot device is fixed to GoSurvey's PDF output for now (real plotting = Inc 4).
+struct PageSetup {
+  std::string name = "Standard";
+  int   presetIdx = kDefaultPaperPresetIdx;  // index into kPaperSizePresets, or -1 = custom
+  float portraitWidthIn = kPaperSizePresets[kDefaultPaperPresetIdx].widthIn;
+  float portraitHeightIn = kPaperSizePresets[kDefaultPaperPresetIdx].heightIn;
+  bool  landscape = true;
+  bool  fitToPaper = false;
+  float scaleModelPerPaperIn = 1.f;  // plot scale: model units per paper inch (when not fit-to-paper)
+  int   plotArea = 0;                // 0 = Layout (only option for now)
+  float offsetXIn = 0.f;
+  float offsetYIn = 0.f;
+  bool  centerPlot = false;
+};
+
 struct PaperLayout {
   std::string name = "Layout1";
   // Portrait dimensions in inches (width <= height); orientation chooses how they map to the sheet.
@@ -62,6 +78,14 @@ struct PaperLayout {
   bool landscape = true;
   int presetIdx = kDefaultPaperPresetIdx;  // index into kPaperSizePresets, or -1 = custom
   std::vector<Viewport> viewports;         // REQ-027
+  // Current page-setup plot fields (the layout's own setup). Paper size/orientation above are part of it.
+  std::string pageSetupName;               // name of the applied named setup, or "" = <None>
+  bool  fitToPaper = false;
+  float scaleModelPerPaperIn = 1.f;
+  int   plotArea = 0;
+  float offsetXIn = 0.f;
+  float offsetYIn = 0.f;
+  bool  centerPlot = false;
 
   float sheetWidthIn() const { return landscape ? portraitHeightIn : portraitWidthIn; }
   float sheetHeightIn() const { return landscape ? portraitWidthIn : portraitHeightIn; }

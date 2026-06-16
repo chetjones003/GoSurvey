@@ -110,6 +110,7 @@ add_executable(GoSurvey
   src/ui/CadUiSettings.cpp
   src/ui/CadUi_CopySurveyModal.cpp
   src/ui/CadUi_DxfPointConflictModal.cpp
+  src/ui/CadUi_PageSetup.cpp
   src/ui/CadUi_SurveyReports.cpp
   src/ui/CadUi_ImportExportPoints.cpp
   src/ui/CadUi_TraverseEditor.cpp

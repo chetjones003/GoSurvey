@@ -417,6 +417,11 @@ int main() {
     }
     DrawCopySurveyDuplicateModal(cmd, cmdLog);
     DrawDxfPointConflictModal(cmd, cmdLog);
+    DrawViewportsWindow(cmd, cmdLog);
+    DrawMoveCopyLayoutDialog(cmd, cmdLog);
+    DrawPageSetupManager(cmd, cmdLog);
+    DrawNewPageSetupDialog(cmd, cmdLog);
+    DrawPageSetupEditor(cmd, cmdLog);
     DrawPdfAttachDialog(cmd, cmdLog);
     DrawAlignResultsWindow(cmd, cmdLog);
     DrawCloseConfirmModal(cmd, cmdLog);

@@ -75,6 +75,13 @@ void DrawCopySurveyDuplicateModal(AppCommandState& cmd, std::vector<std::string>
 /// lets the user overwrite the existing rows or offset the imported IDs.
 void DrawDxfPointConflictModal(AppCommandState& cmd, std::vector<std::string>& log);
 
+// Paper-space layout dialogs (right-click a layout tab).
+void DrawViewportsWindow(AppCommandState& cmd, std::vector<std::string>& log);
+void DrawMoveCopyLayoutDialog(AppCommandState& cmd, std::vector<std::string>& log);
+void DrawPageSetupManager(AppCommandState& cmd, std::vector<std::string>& log);
+void DrawNewPageSetupDialog(AppCommandState& cmd, std::vector<std::string>& log);
+void DrawPageSetupEditor(AppCommandState& cmd, std::vector<std::string>& log);
+
 /// PDFATTACH configuration dialog + pick-phase hint overlay.
 bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log);
 
