@@ -2,10 +2,10 @@
 
 GoSurvey is a simple and modern computer-aided design (CAD) platform that provides users with powerful, easy functionality for 2D drafting and COGO needs.
 
-[![Screenshot1](./samples/Screenshot1.png)]
-[![Screenshot2](./samples/Screenshot2.png)]
-[![Screenshot3](./samples/Screenshot3.png)]
-[![Screenshot4](./samples/Screenshot4.png)]
+![Screenshot1](./samples/Screenshot1.png)
+![Screenshot2](./samples/Screenshot2.png)
+![Screenshot3](./samples/Screenshot3.png)
+![Screenshot4](./samples/Screenshot4.png)
 
 ---
 
