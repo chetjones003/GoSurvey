@@ -295,6 +295,10 @@ bool IsLayerFrozenInViewport(const Viewport& vp, const std::string& layerName);
 
 // --- Floating model space (REQ-036) ---
 bool InFloatingModelSpace(const AppCommandState& cmd);
+
+/// REQ-037 / ADR-009: the active layout's paper-space geometry store a draw/edit command writes to,
+/// or nullptr when the command targets model space (model space active, or floating model space).
+PaperLayout* ActivePaperGeometryTarget(AppCommandState& st);
 /// Enter floating model space for viewport \p vpIdx of layout \p layoutIdx (edit the model through it).
 void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std::vector<std::string>& log);
 /// Save the floating view back to the viewport and return to paper space.

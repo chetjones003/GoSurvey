@@ -400,6 +400,16 @@ void StartPaperMoveCopyViewports(AppCommandState& cmd, bool copy, std::vector<st
 
 bool InFloatingModelSpace(const AppCommandState& cmd) { return cmd.floatingViewportIndex >= 0; }
 
+PaperLayout* ActivePaperGeometryTarget(AppCommandState& st) {
+  // REQ-037 / ADR-009: a draw/edit command writes to the active layout's paper store when a paper
+  // layout is active and NOT in floating model space; otherwise it targets model space (→ nullptr).
+  if (st.activeSpaceIndex < 0 || InFloatingModelSpace(st))
+    return nullptr;
+  if (static_cast<size_t>(st.activeSpaceIndex) >= st.paperLayouts.size())
+    return nullptr;
+  return &st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+}
+
 void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std::vector<std::string>& log) {
   if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.paperLayouts.size())
     return;
@@ -9183,13 +9193,24 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
   }
 
   PushUndoSnapshot(st, "Line segment");
-  st.userLinesFlat.push_back(st.anchorX);
-  st.userLinesFlat.push_back(st.anchorY);
-  st.userLinesFlat.push_back(0.f);
-  st.userLinesFlat.push_back(x);
-  st.userLinesFlat.push_back(y);
-  st.userLinesFlat.push_back(0.f);
-  st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+  if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
+    // Paper-space LINE (REQ-037): anchor/x,y are paper inches; commit to the layout's paper store.
+    L->paperLines.push_back(st.anchorX);
+    L->paperLines.push_back(st.anchorY);
+    L->paperLines.push_back(0.f);
+    L->paperLines.push_back(x);
+    L->paperLines.push_back(y);
+    L->paperLines.push_back(0.f);
+    L->paperLineAttrs.push_back(MakeNewEntityAttrs(st));
+  } else {
+    st.userLinesFlat.push_back(st.anchorX);
+    st.userLinesFlat.push_back(st.anchorY);
+    st.userLinesFlat.push_back(0.f);
+    st.userLinesFlat.push_back(x);
+    st.userLinesFlat.push_back(y);
+    st.userLinesFlat.push_back(0.f);
+    st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+  }
   BumpCadGpuCache(st);
 
   st.anchorX = x;

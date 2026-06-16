@@ -5739,6 +5739,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     }
   }
 
+  // Paper-space LINE creation (REQ-037): clicks are paper inches; SubmitLineVertex routes the commit to
+  // the active layout's paper store (ActivePaperGeometryTarget). Esc finishes via the global handler.
+  if (!modelSpace && !InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::Line && hovered &&
+      ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
+    float px = 0.f, py = 0.f;
+    screenToPaperIn(&px, &py);
+    SubmitLineVertex(cmd, px, py, log);
+    consumedPaperClick = true;
+  }
+
   // Paper-space viewport selection + grip edit + MOVE/COPY (REQ-035). Active only while idle of the
   // rectangular-viewport command and in a paper layout.
   if (!modelSpace && !InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::None &&
@@ -7082,8 +7092,29 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                            IM_COL32(245, 200, 70, 255));
       }
     }
+    // Native paper-space geometry (REQ-037): committed sheet lines + text, drawn on top of the viewports
+    // (in paper inches via w2s — a title block / annotations sit above viewport content).
+    {
+      constexpr ImU32 kPaperGeomCol = IM_COL32(20, 20, 25, 255);
+      const float pxPerPaperIn = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
+      for (size_t i = 0; i + 5 < L.paperLines.size(); i += 6)
+        sdl->AddLine(w2s(L.paperLines[i], L.paperLines[i + 1]), w2s(L.paperLines[i + 3], L.paperLines[i + 4]),
+                     kPaperGeomCol, 1.2f);
+      ImFont* paperFont = ImGui::GetFont();
+      for (const CadAnnotation& a : L.paperTexts) {
+        if (a.text.empty())
+          continue;
+        const float hPx = std::max(6.f, a.plottedHeightInches * pxPerPaperIn);
+        const ImVec2 p = w2s(a.insX, a.insY);  // insertion ≈ bottom-left; ImGui draws from top-left.
+        sdl->AddText(paperFont, hPx, ImVec2(p.x, p.y - hPx), kPaperGeomCol, a.text.c_str());
+      }
+    }
     const float curPX = static_cast<float>(worldLeft + (mx / std::max(avail.x, 1.f)) * (worldRight - worldLeft));
     const float curPY = static_cast<float>(worldTop - (my / std::max(avail.y, 1.f)) * (worldTop - worldBottom));
+    // Paper-space LINE rubber band (REQ-037): from the committed anchor (paper inches) to the cursor.
+    if (!InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::Line &&
+        cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint && hovered)
+      sdl->AddLine(w2s(cmd.anchorX, cmd.anchorY), w2s(curPX, curPY), IM_COL32(59, 130, 246, 230), 1.5f);
     // Rectangular-viewport rubber-band preview (REQ-033) between the first click and the cursor.
     if (cmd.active == AppCommandState::Kind::PaperRectViewport && cmd.paperVpPhase == 1 && hovered) {
       const ImVec2 q0 = w2s(cmd.paperVpFirstXIn, cmd.paperVpFirstYIn);
