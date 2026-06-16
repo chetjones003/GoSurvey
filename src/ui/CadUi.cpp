@@ -1509,7 +1509,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // REQ-032 contextual ribbon: Layout tools in paper space, but the normal model ribbon while editing a
   // viewport in place (floating model space, REQ-036) so the draw/modify tools are available.
   const bool  ribbonPaperSpace = cmd.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(cmd);
-  const float wLayout = 8.f + largeW + 4.f + colW({"Poly VP"});
+  const float wLayout = 8.f + largeW + 4.f + colW({"Poly VP"}) + 8.f + largeW + 4.f + colW({"Batch"});
 
   ImGui::PushStyleColor(ImGuiCol_ChildBg, kBandFace);
   ImGui::BeginChild("RibbonToolsLeft", ImVec2(-kLayerPanelW - st.ItemSpacing.x, panelH), false,
@@ -1717,6 +1717,19 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       RibbonItemHelp("Polygonal viewport — coming in a later increment (REQ-034).",
                      ImGuiHoveredFlags_AllowWhenDisabled);
       ImGui::EndGroup();
+
+      ImGui::SameLine(0, 8);
+      if (largeBtn("##RibbonPlot", RibbonIconKind::PdfAttach, "Plot"))
+        PlotActiveLayout(cmd, log);
+      RibbonItemHelp("Plot the current layout to a vector PDF.\nCommand bar: PLOT");
+      ImGui::SameLine(0, 4);
+      if (smallBtn("##RibbonBatchPlot", RibbonIconKind::PdfAttach, "Batch", colW({"Batch"}))) {
+        cmd.batchPlotSelected.clear();
+        if (cmd.activeSpaceIndex >= 0)
+          cmd.batchPlotSelected.push_back(cmd.activeSpaceIndex);
+        cmd.showBatchPlotDialog = true;
+      }
+      RibbonItemHelp("Batch plot — pick layouts to plot into one multi-page PDF.");
     }
     RibbonSectionEnd();
     ImGui::SameLine(0, 8);
@@ -8600,11 +8613,12 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
   ImGui::Separator();
   const ImGuiTableFlags tflags =
       ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY;
-  if (ImGui::BeginTable("laymgr", 10, tflags, ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 16.f))) {
+  if (ImGui::BeginTable("laymgr", 11, tflags, ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 16.f))) {
     ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.16f);
     ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 36.f);
     ImGui::TableSetupColumn("Freeze", ImGuiTableColumnFlags_WidthFixed, 52.f);
     ImGui::TableSetupColumn("Lock", ImGuiTableColumnFlags_WidthFixed, 44.f);
+    ImGui::TableSetupColumn("Plot", ImGuiTableColumnFlags_WidthFixed, 40.f);
     ImGui::TableSetupColumn("Current", ImGuiTableColumnFlags_WidthFixed, 64.f);
     ImGui::TableSetupColumn("Color", ImGuiTableColumnFlags_WidthStretch, 0.12f);
     ImGui::TableSetupColumn("Linetype", ImGuiTableColumnFlags_WidthStretch, 0.11f);
@@ -8650,6 +8664,11 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
       ImGui::TableNextColumn();
       if (ImGui::Checkbox("##lk", &row.locked))
         BumpCadGpuCache(cmd);
+      ImGui::TableNextColumn();
+      if (ImGui::Checkbox("##plot", &row.plottable))  // REQ-029/030: exclude from plots when off
+        BumpCadGpuCache(cmd);
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Plottable — when off, this layer's geometry (and viewports on it) is excluded from plots.");
       ImGui::TableNextColumn();
       if (ImGui::RadioButton("##cur", cmd.currentLayer == row.name)) {
         cmd.currentLayer = row.name;

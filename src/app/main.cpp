@@ -422,6 +422,7 @@ int main() {
     DrawPageSetupManager(cmd, cmdLog);
     DrawNewPageSetupDialog(cmd, cmdLog);
     DrawPageSetupEditor(cmd, cmdLog);
+    DrawBatchPlotDialog(cmd, cmdLog);
     DrawPdfAttachDialog(cmd, cmdLog);
     DrawAlignResultsWindow(cmd, cmdLog);
     DrawCloseConfirmModal(cmd, cmdLog);

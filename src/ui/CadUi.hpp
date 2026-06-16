@@ -81,6 +81,10 @@ void DrawMoveCopyLayoutDialog(AppCommandState& cmd, std::vector<std::string>& lo
 void DrawPageSetupManager(AppCommandState& cmd, std::vector<std::string>& log);
 void DrawNewPageSetupDialog(AppCommandState& cmd, std::vector<std::string>& log);
 void DrawPageSetupEditor(AppCommandState& cmd, std::vector<std::string>& log);
+/// Batch-plot dialog: tick layouts → write a multi-page PDF (REQ-030).
+void DrawBatchPlotDialog(AppCommandState& cmd, std::vector<std::string>& log);
+/// Plot the active layout to a PDF (file dialog). REQ-029.
+void PlotActiveLayout(AppCommandState& cmd, std::vector<std::string>& log);
 
 /// PDFATTACH configuration dialog + pick-phase hint overlay.
 bool DrawPdfAttachDialog(AppCommandState& cmd, std::vector<std::string>& log);
