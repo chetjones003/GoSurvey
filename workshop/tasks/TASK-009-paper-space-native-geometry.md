@@ -1,7 +1,7 @@
 # TASK-009 — Native paper-space geometry (REQ-037, ADR-009)
 
 - Type:    feature
-- Status:  implement (Phase 5a: data model + persistence)
+- Status:  implement (5a data+IO done; 5b render + LINE/TEXT create done; 5c edit+snap next)
 - Opened:  2026-06-16
 - Owner:   Workshop
 
@@ -76,3 +76,18 @@ ASSUMPTION-2: Paper lines reuse the model 6-float layout (x0,y0,z0,x1,y1,z1) wit
   Removal condition: add a headless GsIo seam (or split AppCommandState IO from the ImGui-coupled
   command TU) so a .gs round-trip can be tested without GUI deps, then add the round-trip test.
   Until then: verified manually via the app once 5b (create) lands.
+
+- 2026-06-16 [5b] ActivePaperGeometryTarget(st) helper (CadCommands): active layout's paper store when
+  a paper layout is active and not floating, else nullptr. Declared in CadCommands.hpp for reuse.
+- 2026-06-16 [5b] LINE: SubmitLineVertex commit routes to L->paperLines/paperLineAttrs in paper space;
+  CadUi paper input branch feeds clicks (paper inches); rubber-band preview; undo via paperLayouts snapshot.
+- 2026-06-16 [5b] TEXT: CadUi paper branch sets insertion (paper inches) → WaitHeight; height default +
+  commit are space-aware (paper height stored directly as plottedHeightInches, no MUP); commit → paperTexts.
+- 2026-06-16 [5b] Render committed paperLines + paperTexts in the overlay (paper inches via w2s), on top
+  of viewports. Build green; 159 tests pass.
+
+## KNOWN LIMITATIONS (5b)
+- Paper text renders horizontal only (rotationRad stored but not applied in the overlay yet).
+- TEXT insertion via typed command-line X,Y in paper space parses as model storage coords; CLICK is the
+  supported paper insertion path. Both → 5b refinement / 5c.
+- No object snapping in paper space yet (scope = 5c).

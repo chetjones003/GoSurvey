@@ -5749,6 +5749,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     consumedPaperClick = true;
   }
 
+  // Paper-space TEXT insertion (REQ-037): the click sets the insertion point in paper inches; height,
+  // rotation and the string are then entered on the command line (space-aware commit → paper store).
+  if (!modelSpace && !InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::Text &&
+      cmd.textPhase == AppCommandState::TextCmdPhase::WaitInsertion && hovered &&
+      ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
+    float px = 0.f, py = 0.f;
+    screenToPaperIn(&px, &py);
+    cmd.textInsX = px;
+    cmd.textInsY = py;
+    cmd.textPhase = AppCommandState::TextCmdPhase::WaitHeight;
+    consumedPaperClick = true;
+    log.push_back("TEXT — height in paper inches (Enter = sheet default):");
+  }
+
   // Paper-space viewport selection + grip edit + MOVE/COPY (REQ-035). Active only while idle of the
   // rectangular-viewport command and in a paper layout.
   if (!modelSpace && !InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::None &&

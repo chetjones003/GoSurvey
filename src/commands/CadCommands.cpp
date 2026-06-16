@@ -9636,9 +9636,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     if (st.textPhase == TP::WaitHeight) {
+      // In paper space the height is in plotted (paper) inches directly; in model space it is world units.
+      const bool paperText = ActivePaperGeometryTarget(st) != nullptr;
       const std::string tr = StringUtil::trimCopy(line);
       if (tr.empty())
-        st.textHeightDraft = DefaultAnnotationTextHeightWorld(st);
+        st.textHeightDraft = paperText ? st.defaultPlottedTextHeightInches : DefaultAnnotationTextHeightWorld(st);
       else if (!ParseSingleFloatToken(tr, &st.textHeightDraft) || st.textHeightDraft <= 0.f) {
         log.push_back("TEXT — invalid height.");
         return;
@@ -9668,14 +9670,21 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       ann.kind = CadAnnotation::Kind::Text;
       ann.insX = st.textInsX;
       ann.insY = st.textInsY;
-      ann.plottedHeightInches =
-          st.textHeightDraft / std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
       ann.rotationRad = st.textRotDraft;
       ann.text = line;
       if (!ann.text.empty()) {
         PushUndoSnapshot(st, "Text");
-        st.cadAnnotations.push_back(std::move(ann));
-        st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
+        if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
+          // Paper-space TEXT (REQ-037): insX/insY are paper inches; textHeightDraft is already in
+          // paper (plotted) inches — store it directly, no model-scale division.
+          ann.plottedHeightInches = st.textHeightDraft;
+          L->paperTexts.push_back(std::move(ann));
+          L->paperTextAttrs.push_back(MakeNewEntityAttrs(st));
+        } else {
+          ann.plottedHeightInches = st.textHeightDraft / std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+          st.cadAnnotations.push_back(std::move(ann));
+          st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
+        }
         log.push_back("TEXT placed.");
       } else
         log.push_back("TEXT — empty; canceled.");
