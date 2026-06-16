@@ -127,3 +127,30 @@ struct PaperLayout {
   float sheetWidthIn() const { return landscape ? portraitHeightIn : portraitWidthIn; }
   float sheetHeightIn() const { return landscape ? portraitWidthIn : portraitHeightIn; }
 };
+
+// Object snapping for native paper-space geometry (REQ-037, paper-only). Returns the nearest snap point —
+// a paper line's endpoint or midpoint, or a text insertion point — within \p tolIn of (px,py), all in paper
+// inches. False (and outputs untouched) when nothing is in range. Pure + header-only so it is unit-testable.
+inline bool SnapPaperInchPoint(const PaperLayout& L, float px, float py, float tolIn, float* outX, float* outY) {
+  float best2 = tolIn * tolIn;
+  bool found = false;
+  auto consider = [&](float x, float y) {
+    const float dx = px - x, dy = py - y;
+    const float d2 = dx * dx + dy * dy;
+    if (d2 <= best2) {
+      best2 = d2;
+      *outX = x;
+      *outY = y;
+      found = true;
+    }
+  };
+  for (size_t i = 0; i + 5 < L.paperLines.size(); i += 6) {
+    consider(L.paperLines[i], L.paperLines[i + 1]);                                      // endpoint 1
+    consider(L.paperLines[i + 3], L.paperLines[i + 4]);                                  // endpoint 2
+    consider((L.paperLines[i] + L.paperLines[i + 3]) * 0.5f,
+             (L.paperLines[i + 1] + L.paperLines[i + 4]) * 0.5f);                        // midpoint
+  }
+  for (const CadAnnotation& a : L.paperTexts)
+    consider(a.insX, a.insY);  // text insertion point
+  return found;
+}

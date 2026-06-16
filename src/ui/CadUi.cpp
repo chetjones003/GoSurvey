@@ -5739,12 +5739,35 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     }
   }
 
+  // Paper-space object snap (REQ-037, paper-only): snap the cursor to nearby paper geometry. Computed once
+  // per frame and reused by paper LINE/TEXT creation and the MOVE/COPY/ROTATE pick points (not entity picking).
+  bool paperSnapActive = false;
+  float paperSnapXIn = 0.f, paperSnapYIn = 0.f;
+  if (!modelSpace && !InFloatingModelSpace(cmd) && cmd.activeSpaceIndex >= 0 &&
+      cmd.activeSpaceIndex < static_cast<int>(cmd.paperLayouts.size()) && hovered) {
+    float rawX = 0.f, rawY = 0.f;
+    screenToPaperIn(&rawX, &rawY);
+    const float pxPerIn = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
+    const float snapTolIn = 10.f / std::max(1.e-6f, pxPerIn);
+    paperSnapActive = SnapPaperInchPoint(cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)], rawX, rawY,
+                                         snapTolIn, &paperSnapXIn, &paperSnapYIn);
+  }
+  // Snapped paper-inch pick: the snap point when one is in range, else the raw cursor.
+  auto paperPick = [&](float* x, float* y) {
+    if (paperSnapActive) {
+      *x = paperSnapXIn;
+      *y = paperSnapYIn;
+    } else {
+      screenToPaperIn(x, y);
+    }
+  };
+
   // Paper-space LINE creation (REQ-037): clicks are paper inches; SubmitLineVertex routes the commit to
   // the active layout's paper store (ActivePaperGeometryTarget). Esc finishes via the global handler.
   if (!modelSpace && !InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::Line && hovered &&
       ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
     float px = 0.f, py = 0.f;
-    screenToPaperIn(&px, &py);
+    paperPick(&px, &py);
     SubmitLineVertex(cmd, px, py, log);
     consumedPaperClick = true;
   }
@@ -5755,7 +5778,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       cmd.textPhase == AppCommandState::TextCmdPhase::WaitInsertion && hovered &&
       ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
     float px = 0.f, py = 0.f;
-    screenToPaperIn(&px, &py);
+    paperPick(&px, &py);
     cmd.textInsX = px;
     cmd.textInsY = py;
     cmd.textPhase = AppCommandState::TextCmdPhase::WaitHeight;
@@ -5770,6 +5793,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
     float curX = 0.f, curY = 0.f;
     screenToPaperIn(&curX, &curY);
+    // Snap MOVE/COPY/ROTATE pick points to paper geometry (REQ-037); entity-selection clicks stay on the raw
+    // cursor so picking small objects is not deflected.
+    if (paperSnapActive && (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0)) {
+      curX = paperSnapXIn;
+      curY = paperSnapYIn;
+    }
     const float pxPerWorld = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
     const float gripTolIn = 7.f / std::max(1.e-6f, pxPerWorld);
     const bool clickL = hovered && !consumedPaperClick && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
@@ -7191,10 +7220,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     }
     const float curPX = static_cast<float>(worldLeft + (mx / std::max(avail.x, 1.f)) * (worldRight - worldLeft));
     const float curPY = static_cast<float>(worldTop - (my / std::max(avail.y, 1.f)) * (worldTop - worldBottom));
-    // Paper-space LINE rubber band (REQ-037): from the committed anchor (paper inches) to the cursor.
+    // Paper-space LINE rubber band (REQ-037): from the committed anchor (paper inches) to the (snapped) cursor.
+    const float snapCurPX = paperSnapActive ? paperSnapXIn : curPX;
+    const float snapCurPY = paperSnapActive ? paperSnapYIn : curPY;
     if (!InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::Line &&
         cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint && hovered)
-      sdl->AddLine(w2s(cmd.anchorX, cmd.anchorY), w2s(curPX, curPY), IM_COL32(59, 130, 246, 230), 1.5f);
+      sdl->AddLine(w2s(cmd.anchorX, cmd.anchorY), w2s(snapCurPX, snapCurPY), IM_COL32(59, 130, 246, 230), 1.5f);
+    // Object-snap glyph (REQ-037): green square at the snapped paper point.
+    if (paperSnapActive && hovered) {
+      const ImVec2 g = w2s(paperSnapXIn, paperSnapYIn);
+      sdl->AddRect(ImVec2(g.x - 5.f, g.y - 5.f), ImVec2(g.x + 5.f, g.y + 5.f), IM_COL32(120, 220, 120, 255), 0.f,
+                   0, 1.5f);
+    }
     // Paper-entity MOVE/COPY ghost + ROTATE preview (REQ-037): selected geometry transformed by the cursor.
     if (!cmd.selectedPaperEntities.empty() && hovered && (cmd.paperMovePhase == 2 || cmd.paperRotatePhase == 2)) {
       const ImU32 ghostCol = (cmd.paperMovePhase == 2 && cmd.paperMoveIsCopy) ? IM_COL32(120, 220, 120, 220)

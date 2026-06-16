@@ -1,7 +1,7 @@
 # TASK-009 — Native paper-space geometry (REQ-037, ADR-009)
 
 - Type:    feature
-- Status:  implement (5a data+IO done; 5b render + LINE/TEXT create done; 5c edit+snap next)
+- Status:  implement (5a data+IO, 5b render+create, 5c edit+snap all done; verification + manual test next)
 - Opened:  2026-06-16
 - Owner:   Workshop
 
@@ -86,7 +86,16 @@ ASSUMPTION-2: Paper lines reuse the model 6-float layout (x0,y0,z0,x1,y1,z1) wit
 - 2026-06-16 [5b] Render committed paperLines + paperTexts in the overlay (paper inches via w2s), on top
   of viewports. Build green; 159 tests pass.
 
-## KNOWN LIMITATIONS (5b)
+- 2026-06-16 [5c] PaperEntityRef (top-level) + selectedPaperEntities; PickPaperEntityAt / Toggle /
+  Clear / Delete / Translate(move+copy) / Rotate in CadCommands; click + window/crossing selection in
+  CadUi (priority grip > entity > viewport border); DELETE/MOVE/COPY/ROTATE branch to paper-entity ops.
+  Live ghost + rotate preview; selection highlight. Undo via paperLayouts snapshot.
+- 2026-06-16 [5c] Object snapping: SnapPaperInchPoint (pure, header-only in PaperSpace.hpp) — endpoint /
+  midpoint / text-insertion, paper-only. Wired into LINE/TEXT create + MOVE/COPY/ROTATE picks; green snap
+  glyph; snapped rubber band. Unit test added (PaperSpaceTests, snap endpoints/midpoint/text/miss).
+- 2026-06-16 [5c] Build green; 171 assertions / 22 cases pass.
+
+## KNOWN LIMITATIONS (5b/5c)
 - Paper text renders horizontal only (rotationRad stored but not applied in the overlay yet).
 - TEXT insertion via typed command-line X,Y in paper space parses as model storage coords; CLICK is the
   supported paper insertion path. Both → 5b refinement / 5c.

@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 
 #include <cmath>
 
@@ -96,4 +97,40 @@ TEST_CASE("Viewport frozen layers toggle", "[paperspace]") {
   ToggleFrozenLayerInViewport(vp, "Layer2");
   REQUIRE(vp.frozenLayers.empty());
   REQUIRE_FALSE(IsLayerFrozenInViewport(vp, "Layer2"));
+}
+
+TEST_CASE("Paper-space object snap finds endpoints, midpoints, text (REQ-037)", "[paperspace]") {
+  PaperLayout L;
+  // One paper line from (0,0) to (10,0): endpoints (0,0),(10,0) and midpoint (5,0).
+  const float seg[6] = {0.f, 0.f, 0.f, 10.f, 0.f, 0.f};
+  L.paperLines.assign(seg, seg + 6);
+  CadAnnotation t;
+  t.insX = 3.f;
+  t.insY = 4.f;
+  t.text = "TB";
+  L.paperTexts.push_back(t);
+
+  float sx = 0.f, sy = 0.f;
+
+  // Near an endpoint → snaps to it.
+  REQUIRE(SnapPaperInchPoint(L, 0.1f, 0.05f, 0.5f, &sx, &sy));
+  REQUIRE(sx == Catch::Approx(0.f));
+  REQUIRE(sy == Catch::Approx(0.f));
+
+  // Near the midpoint → snaps to (5,0).
+  REQUIRE(SnapPaperInchPoint(L, 4.9f, 0.2f, 0.5f, &sx, &sy));
+  REQUIRE(sx == Catch::Approx(5.f));
+  REQUIRE(sy == Catch::Approx(0.f));
+
+  // Near the text insertion point → snaps to (3,4).
+  REQUIRE(SnapPaperInchPoint(L, 3.2f, 3.9f, 0.5f, &sx, &sy));
+  REQUIRE(sx == Catch::Approx(3.f));
+  REQUIRE(sy == Catch::Approx(4.f));
+
+  // Far from everything (tol too small) → no snap, outputs untouched.
+  sx = -99.f;
+  sy = -99.f;
+  REQUIRE_FALSE(SnapPaperInchPoint(L, 100.f, 100.f, 0.5f, &sx, &sy));
+  REQUIRE(sx == Catch::Approx(-99.f));
+  REQUIRE(sy == Catch::Approx(-99.f));
 }
