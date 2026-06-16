@@ -5784,16 +5784,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       cmd.paperGripCorner = -2;
       log.push_back("Viewport edited.");
     } else if (clickL && cmd.paperSelBoxActive) {
-      // A window-select box is open — this click closes it (takes priority over grip/body picking) and
-      // selects every viewport fully inside the box. Crossing the box edges over a viewport no longer
-      // mis-selects a single one (the bug behind "2-click selection is broken").
+      // A window-select box is open — this click closes it (priority over grip/body picking). Same
+      // convention as model geometry: left-to-right = window (viewport fully inside); right-to-left =
+      // crossing (any overlap).
+      const bool windowMode = curX >= cmd.paperSelBoxX0In;
       const float bx0 = std::min(cmd.paperSelBoxX0In, curX), bx1 = std::max(cmd.paperSelBoxX0In, curX);
       const float by0 = std::min(cmd.paperSelBoxY0In, curY), by1 = std::max(cmd.paperSelBoxY0In, curY);
       cmd.selectedViewports.clear();
       for (int vi = 0; vi < static_cast<int>(L.viewports.size()); ++vi) {
         const Viewport& v = L.viewports[static_cast<size_t>(vi)];
-        if (v.paperXIn >= bx0 && v.paperXIn + v.paperWIn <= bx1 && v.paperYIn >= by0 &&
-            v.paperYIn + v.paperHIn <= by1)
+        const float vx0 = v.paperXIn, vy0 = v.paperYIn, vx1 = v.paperXIn + v.paperWIn, vy1 = v.paperYIn + v.paperHIn;
+        const bool sel = windowMode ? (vx0 >= bx0 && vx1 <= bx1 && vy0 >= by0 && vy1 <= by1)
+                                    : (vx0 <= bx1 && vx1 >= bx0 && vy0 <= by1 && vy1 >= by0);
+        if (sel)
           cmd.selectedViewports.push_back(vi);
       }
       cmd.selectedViewportIndex = cmd.selectedViewports.empty() ? -1 : cmd.selectedViewports.back();
@@ -7071,14 +7074,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                      cmd.paperMoveIsCopy ? IM_COL32(120, 220, 120, 220) : IM_COL32(245, 200, 70, 220), 0.f, 0, 1.5f);
       }
     }
-    // Window-select box (REQ-035).
+    // Window-select box (REQ-035): blue (window, left→right) or green (crossing, right→left), like geometry.
     if (cmd.paperSelBoxActive && hovered) {
       const ImVec2 s0 = w2s(cmd.paperSelBoxX0In, cmd.paperSelBoxY0In);
       const ImVec2 s1 = w2s(curPX, curPY);
       const ImVec2 a2(std::min(s0.x, s1.x), std::min(s0.y, s1.y));
       const ImVec2 b2(std::max(s0.x, s1.x), std::max(s0.y, s1.y));
-      sdl->AddRectFilled(a2, b2, IM_COL32(59, 130, 246, 40));
-      sdl->AddRect(a2, b2, IM_COL32(59, 130, 246, 200), 0.f, 0, 1.0f);
+      const bool windowMode = curPX >= cmd.paperSelBoxX0In;
+      const ImU32 fill = windowMode ? IM_COL32(59, 130, 246, 40) : IM_COL32(90, 220, 120, 40);
+      const ImU32 edge = windowMode ? IM_COL32(59, 130, 246, 200) : IM_COL32(90, 220, 120, 220);
+      sdl->AddRectFilled(a2, b2, fill);
+      sdl->AddRect(a2, b2, edge, 0.f, 0, 1.0f);
     }
     // Floating model space (REQ-036): in-place model cursor + LINE/POLYLINE rubber inside the viewport.
     if (InFloatingModelSpace(cmd) && cmd.floatingViewportLayout == cmd.activeSpaceIndex &&
