@@ -7947,7 +7947,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     if (cmd.selectedViewportIndex < static_cast<int>(L.viewports.size())) {
       Viewport& vp = L.viewports[static_cast<size_t>(cmd.selectedViewportIndex)];
       ImGui::Separator();
-      if (ImGui::CollapsingHeader("Frozen Layers", ImGuiTreeNodeFlags_DefaultOpen)) {
+      if (ImGui::CollapsingHeader("Frozen Layers")) {
         ImGui::BeginChild("##frozenLayersChild", ImVec2(-1.f, 80.f), ImGuiChildFlags_Borders);
         for (const auto& row : cmd.drawingLayerTable) {
           bool frozen = IsLayerFrozenInViewport(vp, row.name);
