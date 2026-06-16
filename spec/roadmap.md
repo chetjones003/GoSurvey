@@ -72,10 +72,12 @@ A lightweight board that complements the milestones. Keep each column honest.
   3c. Floating model space — double-click to edit model through a viewport (REQ-036).
   3d. Polygonal viewport (REQ-034) — needs the GL per-viewport transform/clip pass.
   3e. Per-viewport layer freeze (REQ-028).
-  4. Plot single + batch to PDF via PDFium (REQ-029, REQ-030).
+  4. ✅ Plot single + batch to vector PDF via PDFium (REQ-029, REQ-030) — per-layer "plottable"
+     toggle + viewport-on-layer; geometry/borders on off/frozen/non-plottable layers excluded.
 - **Deferred:** DXF persistence of layouts/viewports; direct-to-OS-printer; GL
-  per-viewport transform/clip pass (perf + polygonal/MSPACE drawing) — see ADR-006/008 debt.
-- **Status:** Inc 1–2 done; Inc 3a in progress.
+  per-viewport transform/clip pass (perf + polygonal/MSPACE drawing); plot color/plot-styles and
+  PDF-underlay content in plots — see ADR-006/007/008 debt.
+- **Status:** Inc 1, 2, 3a, 3b, 3c, 4 done; 3d (polygonal), 3e (per-vp freeze) remain.
 
 ### Next (accepted, sequenced, not started)
 - `<REQ-101 — coordinate tolerance regression>`

@@ -43,6 +43,7 @@ void CadLayerRowToJson(const CadLayerRow& r, json& o) {
   o["linetype"] = r.linetype;
   o["lineweightMm"] = r.lineweightMm;
   o["transparency"] = r.transparency;
+  o["plottable"] = r.plottable;
 }
 
 CadLayerRow CadLayerRowFromJson(const json& o) {
@@ -55,6 +56,7 @@ CadLayerRow CadLayerRowFromJson(const json& o) {
   r.linetype     = o.value("linetype",     r.linetype);
   r.lineweightMm = o.value("lineweightMm", r.lineweightMm);
   r.transparency = o.value("transparency", r.transparency);
+  r.plottable    = o.value("plottable",    r.plottable);
   return r;
 }
 
@@ -263,6 +265,7 @@ json BuildRoot(const AppCommandState& st) {
         vo["modelCenterX"] = v.modelCenterX;
         vo["modelCenterY"] = v.modelCenterY;
         vo["scaleModelPerPaperIn"] = v.scaleModelPerPaperIn;
+        vo["layer"] = v.layer;
         vps.push_back(vo);
       }
       o["viewports"] = vps;
@@ -648,6 +651,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           v.modelCenterX = vo.value("modelCenterX", v.modelCenterX);
           v.modelCenterY = vo.value("modelCenterY", v.modelCenterY);
           v.scaleModelPerPaperIn = vo.value("scaleModelPerPaperIn", v.scaleModelPerPaperIn);
+          if (vo.contains("layer") && vo["layer"].is_string())
+            v.layer = vo["layer"].get<std::string>();
           l.viewports.push_back(v);
         }
       }

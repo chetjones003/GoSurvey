@@ -133,6 +133,7 @@ add_executable(GoSurvey
   src/io/SurveyCsv.cpp
   src/io/DxfIo.cpp
   src/io/DxfColors.cpp
+  src/io/PdfPlot.cpp
 
   # PDF underlay
   src/pdf/PdfAttach.cpp

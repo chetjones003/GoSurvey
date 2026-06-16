@@ -2,6 +2,8 @@
 
 #include "CadCommands.hpp"
 #include "PaperSpace.hpp"
+#include "PdfPlot.hpp"
+#include "WinFileDialogs.hpp"
 
 #include <imgui.h>
 #include <imgui_stdlib.h>
@@ -89,6 +91,17 @@ void DrawViewportsWindow(AppCommandState& cmd, std::vector<std::string>& log) {
     ImGui::SameLine();
     ImGui::SetNextItemWidth(120.f);
     ch |= ImGui::InputDouble("Center Y##vpcy", &V.modelCenterY, 0., 0., "%.4f");
+    ImGui::SetNextItemWidth(150.f);
+    if (ImGui::BeginCombo("Layer##vplayer", V.layer.c_str())) {
+      for (const CadLayerRow& lr : cmd.drawingLayerTable)
+        if (ImGui::Selectable(lr.name.c_str(), V.layer == lr.name)) {
+          V.layer = lr.name;
+          ch = true;
+        }
+      ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    ImGui::TextDisabled("(border omitted from plots if layer not plottable)");
     if (V.paperWIn < 0.1f) V.paperWIn = 0.1f;
     if (V.paperHIn < 0.1f) V.paperHIn = 0.1f;
     if (ch)
@@ -97,6 +110,68 @@ void DrawViewportsWindow(AppCommandState& cmd, std::vector<std::string>& log) {
       DeleteViewport(cmd, layoutIdx, cmd.selectedViewportIndex);
   }
   ImGui::End();
+}
+
+// ---------------------------------------------------------------------------
+// Plotting (REQ-029/030).
+// ---------------------------------------------------------------------------
+void PlotActiveLayout(AppCommandState& cmd, std::vector<std::string>& log) {
+  if (cmd.activeSpaceIndex < 0 || cmd.activeSpaceIndex >= static_cast<int>(cmd.paperLayouts.size())) {
+    log.push_back("PLOT — switch to a paper layout first.");
+    return;
+  }
+  const std::string def = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)].name + ".pdf";
+  char path[1024] = {0};
+  if (!BrowseSaveFilePdfUtf8(path, sizeof(path), def.c_str()))
+    return;
+  PlotLayoutsToPdf(cmd, {cmd.activeSpaceIndex}, path, log);
+}
+
+void DrawBatchPlotDialog(AppCommandState& cmd, std::vector<std::string>& log) {
+  if (!cmd.showBatchPlotDialog)
+    return;
+  ImGui::OpenPopup("Batch Plot");
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  ImGui::SetNextWindowSize(ImVec2(420, 380), ImGuiCond_Appearing);
+  bool open = true;
+  if (ImGui::BeginPopupModal("Batch Plot", &open, ImGuiWindowFlags_NoSavedSettings)) {
+    ImGui::TextUnformatted("Select layouts to plot (one page each, in order):");
+    ImGui::BeginChild("bp_list", ImVec2(0, 240), true);
+    for (int i = 0; i < static_cast<int>(cmd.paperLayouts.size()); ++i) {
+      bool sel = std::find(cmd.batchPlotSelected.begin(), cmd.batchPlotSelected.end(), i) !=
+                 cmd.batchPlotSelected.end();
+      if (ImGui::Checkbox(cmd.paperLayouts[static_cast<size_t>(i)].name.c_str(), &sel)) {
+        if (sel)
+          cmd.batchPlotSelected.push_back(i);
+        else
+          cmd.batchPlotSelected.erase(
+              std::remove(cmd.batchPlotSelected.begin(), cmd.batchPlotSelected.end(), i),
+              cmd.batchPlotSelected.end());
+      }
+    }
+    ImGui::EndChild();
+    ImGui::Spacing();
+    const bool any = !cmd.batchPlotSelected.empty();
+    if (!any) ImGui::BeginDisabled();
+    if (ImGui::Button("Plot to PDF…", ImVec2(140, 0))) {
+      char path[1024] = {0};
+      if (BrowseSaveFilePdfUtf8(path, sizeof(path), "plot.pdf")) {
+        std::sort(cmd.batchPlotSelected.begin(), cmd.batchPlotSelected.end());
+        PlotLayoutsToPdf(cmd, cmd.batchPlotSelected, path, log);
+        cmd.showBatchPlotDialog = false;
+        ImGui::CloseCurrentPopup();
+      }
+    }
+    if (!any) ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(110, 0))) {
+      cmd.showBatchPlotDialog = false;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
+  if (!open)
+    cmd.showBatchPlotDialog = false;
 }
 
 // ---------------------------------------------------------------------------

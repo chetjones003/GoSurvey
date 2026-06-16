@@ -18,5 +18,8 @@ bool BrowseSaveFileGsUtf8(char* utf8Out, size_t utf8Cap, const char* defaultName
 
 bool BrowseOpenFilePdfUtf8(char* utf8Out, size_t utf8Cap);
 
+/// UTF-8 path for saving a plotted PDF; suggests default file name.
+bool BrowseSaveFilePdfUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8);
+
 /// Autodesk Field Book raw-data file (*.fbk).
 bool BrowseOpenFileFbkUtf8(char* utf8Out, size_t utf8Cap);

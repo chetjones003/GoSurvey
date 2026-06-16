@@ -47,6 +47,7 @@ struct CadLayerRow {
   std::string linetype = "Continuous";
   float lineweightMm = -1.f; ///< \c -1 = default (DXF layer 370 -3 on export).
   float transparency = 0.f;  ///< 0 opaque .. 1 fully transparent (layer-wide).
+  bool plottable = true;     ///< when false, geometry/viewports on this layer are excluded from plots (REQ-029/030).
 };
 
 
@@ -1109,6 +1110,8 @@ struct AppCommandState {
   int  layoutRenameIdx      = -1;                ///< layout being renamed inline, or -1.
   char layoutRenameBuf[64]  = "";
   bool showViewportsWindow  = false;             ///< Viewports manager window (moved off the status bar).
+  bool showBatchPlotDialog  = false;             ///< Batch-plot dialog (select layouts → multi-page PDF).
+  std::vector<int> batchPlotSelected;            ///< layout indices ticked in the batch-plot dialog.
 
   // -------------------------------------------------------------------------
   // TRAVERSE EDITOR state
