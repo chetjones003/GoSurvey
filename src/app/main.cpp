@@ -579,7 +579,10 @@ int main() {
                          (paperSpace || hoverCircles.empty()) ? nullptr : &hoverCircles,
                          (paperSpace || surveyMarkers.empty()) ? nullptr : &surveyMarkers, &cmd.userLineAttrs,
                          &cmd.userCircleAttrs, &ext, gridVisible, &cmd.drawingLayerTable, tuning,
-                         paperSpace ? nullptr : (pdfRenderList.empty() ? nullptr : &pdfRenderList));
+                         paperSpace ? nullptr : (pdfRenderList.empty() ? nullptr : &pdfRenderList),
+                         // REQ-034 Phase 1: GL scissor pass parameters
+                         cmd.activeSpaceIndex, &cmd.paperLayouts,
+                         cmd.worldDocumentOriginX, cmd.worldDocumentOriginY, cmd.modelUnitsPerPlottedInch);
 
     ImGui::Render();
     int displayW = 0;

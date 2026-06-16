@@ -2,6 +2,7 @@
 
 #include "CadLinetype.hpp"
 #include "CadSnap.hpp"
+#include "PaperSpace.hpp"
 #include "geom2d.hpp"
 
 #include <GL/glew.h>
@@ -746,6 +747,170 @@ void ViewportRenderer::SetSize(int width, int height) {
   EnsureFramebuffer(width, height);
 }
 
+void ViewportRenderer::RenderPaperSpace(int fbWidth, int fbHeight, const std::vector<float>& userLines,
+                        const std::vector<float>& circlesCxCyR, std::uint32_t cadGpuRevision,
+                        const std::vector<float>& rubberLines, const CadSnap::Hit* snapOverlay,
+                        float snapGlyphHalfPx, const std::vector<float>* highlightLines,
+                        const std::vector<float>* highlightCircles, const std::vector<float>* surveyMarkers,
+                        const std::vector<EntityAttributes>* lineEntityAttrs,
+                        const std::vector<EntityAttributes>* circleEntityAttrs,
+                        const CadExtendedGeometryInput* extended, const std::vector<CadLayerRow>* drawingLayers,
+                        const RenderTuning& tuning, const PaperLayout& layout, double worldDocOriginX,
+                        double worldDocOriginY, float modelUnitsPerPlottedInch) {
+  // REQ-034 Phase 1: Render paper space with per-viewport GL scissor clipping.
+  const float sheetW = layout.sheetWidthIn();
+  const float sheetH = layout.sheetHeightIn();
+
+  // Paper-space projection: ortho from (0,0) to (sheetW, sheetH) in inches.
+  float paperProj[16];
+  Ortho(0.f, sheetW, 0.f, sheetH, -1000.f, 1000.f, paperProj);
+
+  float paperModel[16];
+  TranslateMat(0.f, 0.f, 0.f, paperModel);
+
+  float paperMvp[16];
+  MulMat4(paperProj, paperModel, paperMvp);
+
+  if (!EnsureShader() || !lineProgram_ || !vaoLines_ || !vboLines_)
+    return;
+
+  glUseProgram(lineProgram_);
+  GLint locMvp = glGetUniformLocation(lineProgram_, "uMVP");
+  GLint locCol = glGetUniformLocation(lineProgram_, "uColor");
+  glBindVertexArray(vaoLines_);
+  glBindBuffer(GL_ARRAY_BUFFER, vboLines_);
+
+  // Draw sheet outline.
+  const float sheetOutlineVerts[] = {
+    0.f, 0.f, 0.f, sheetW, 0.f, 0.f,
+    sheetW, 0.f, 0.f, sheetW, sheetH, 0.f,
+    sheetW, sheetH, 0.f, 0.f, sheetH, 0.f,
+    0.f, sheetH, 0.f, 0.f, 0.f, 0.f,
+  };
+  glUniformMatrix4fv(locMvp, 1, GL_FALSE, paperMvp);
+  glUniform4f(locCol, 0.4f, 0.4f, 0.4f, 1.f);
+  glLineWidth(1.5f);
+  glBufferData(GL_ARRAY_BUFFER, sizeof(sheetOutlineVerts), sheetOutlineVerts, GL_STREAM_DRAW);
+  glDrawArrays(GL_LINES, 0, 12);
+
+  // REQ-034 Phase 1: Render model geometry for each viewport with scissor clipping.
+  const float pxPerInch = static_cast<float>(fbW_) / sheetW;
+  constexpr GLfloat kLwModel = 1.0f;
+  constexpr GLfloat kLwVpBorder = 1.2f;
+
+  for (size_t vi = 0; vi < layout.viewports.size(); ++vi) {
+    const Viewport& vp = layout.viewports[vi];
+
+    // Compute scissors rect in screen space (GL origin at bottom-left).
+    const int scissorX = static_cast<int>(vp.paperXIn * pxPerInch);
+    const int scissorY = static_cast<int>((sheetH - vp.paperYIn - vp.paperHIn) * pxPerInch);
+    const int scissorW = static_cast<int>(vp.paperWIn * pxPerInch);
+    const int scissorH = static_cast<int>(vp.paperHIn * pxPerInch);
+
+    glEnable(GL_SCISSOR_TEST);
+    glScissor(scissorX, scissorY, scissorW, scissorH);
+
+    // Compute per-viewport model matrix: model (world coords) → paper inches.
+    // This transform accounts for:
+    //   1. World origin offset (geometry stored in LOCAL = world - origin)
+    //   2. Viewport center (model point that maps to viewport center in paper)
+    //   3. Viewport scale (model units per paper inch)
+    // Result: paper-space coordinates in inches, which are then mapped to screen by paperProj.
+
+    const float s = vp.safeScale();  // model units per paper inch
+    const float vpCenterPaperX = vp.paperXIn + vp.paperWIn * 0.5f;
+    const float vpCenterPaperY = vp.paperYIn + vp.paperHIn * 0.5f;
+
+    // Scale matrix: 1/scale (model units to paper inches)
+    float scale[16];
+    {
+      scale[0] = 1.f / s; scale[1] = 0.f; scale[2] = 0.f; scale[3] = 0.f;
+      scale[4] = 0.f; scale[5] = 1.f / s; scale[6] = 0.f; scale[7] = 0.f;
+      scale[8] = 0.f; scale[9] = 0.f; scale[10] = 1.f; scale[11] = 0.f;
+      scale[12] = 0.f; scale[13] = 0.f; scale[14] = 0.f; scale[15] = 1.f;
+    }
+
+    // Translation: center viewport on model point; account for world origin.
+    float trans[16];
+    {
+      const float tx = vpCenterPaperX - static_cast<float>(vp.modelCenterX - worldDocOriginX) / s;
+      const float ty = vpCenterPaperY - static_cast<float>(vp.modelCenterY - worldDocOriginY) / s;
+      trans[0] = 1.f; trans[1] = 0.f; trans[2] = 0.f; trans[3] = 0.f;
+      trans[4] = 0.f; trans[5] = 1.f; trans[6] = 0.f; trans[7] = 0.f;
+      trans[8] = 0.f; trans[9] = 0.f; trans[10] = 1.f; trans[11] = 0.f;
+      trans[12] = tx; trans[13] = ty; trans[14] = 0.f; trans[15] = 1.f;
+    }
+
+    // Combined: trans * scale (apply scale first, then translate).
+    float vpModel[16];
+    MulMat4(trans, scale, vpModel);
+
+    // Full MVP for this viewport.
+    float vpMvp[16];
+    MulMat4(paperProj, vpModel, vpMvp);
+    glUniformMatrix4fv(locMvp, 1, GL_FALSE, vpMvp);
+
+    // Render model geometry with viewport clipping.
+    glUniform4f(locCol, 0.25f, 0.25f, 0.3f, 1.f);  // Dark gray for model.
+    glLineWidth(kLwModel);
+
+    // Render lines.
+    if (!userLines.empty() && (lineEntityAttrs == nullptr || lineEntityAttrs->size() * 6 == userLines.size())) {
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(userLines.size() * sizeof(float)), userLines.data(),
+                   GL_STATIC_DRAW);
+      glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(userLines.size() / 3));
+    }
+
+    // Render circles.
+    if (!circlesCxCyR.empty()) {
+      for (size_t i = 0; i + 2 < circlesCxCyR.size(); i += 3) {
+        const float cx = circlesCxCyR[i];
+        const float cy = circlesCxCyR[i + 1];
+        const float r = circlesCxCyR[i + 2];
+        constexpr int kCircleSegs = 32;
+        std::vector<float> circleVerts;
+        for (int seg = 0; seg < kCircleSegs; ++seg) {
+          const float angle0 = 2.f * 3.14159265f * seg / kCircleSegs;
+          const float angle1 = 2.f * 3.14159265f * (seg + 1) / kCircleSegs;
+          circleVerts.push_back(cx + r * std::cos(angle0));
+          circleVerts.push_back(cy + r * std::sin(angle0));
+          circleVerts.push_back(0.f);
+          circleVerts.push_back(cx + r * std::cos(angle1));
+          circleVerts.push_back(cy + r * std::sin(angle1));
+          circleVerts.push_back(0.f);
+        }
+        if (!circleVerts.empty()) {
+          glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(circleVerts.size() * sizeof(float)),
+                       circleVerts.data(), GL_STREAM_DRAW);
+          glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(circleVerts.size() / 3));
+        }
+      }
+    }
+
+    glDisable(GL_SCISSOR_TEST);
+  }
+
+  // Render viewport borders (paper-space coordinates, no scissor clipping).
+  glUniform4f(locCol, 0.3f, 0.5f, 0.8f, 1.f);  // Blue for viewport borders.
+  glLineWidth(kLwVpBorder);
+  glUniformMatrix4fv(locMvp, 1, GL_FALSE, paperMvp);  // Use paper projection only (no model transform).
+  for (size_t vi = 0; vi < layout.viewports.size(); ++vi) {
+    const Viewport& vp = layout.viewports[vi];
+    const float vpRectVerts[] = {
+      vp.paperXIn, vp.paperYIn, 0.f,
+      vp.paperXIn + vp.paperWIn, vp.paperYIn, 0.f,
+      vp.paperXIn + vp.paperWIn, vp.paperYIn + vp.paperHIn, 0.f,
+      vp.paperXIn, vp.paperYIn + vp.paperHIn, 0.f,
+      vp.paperXIn, vp.paperYIn, 0.f,
+    };
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vpRectVerts), vpRectVerts, GL_STREAM_DRAW);
+    glDrawArrays(GL_LINE_STRIP, 0, 5);
+  }
+
+  glLineWidth(1.35f);
+  glBindVertexArray(0);
+}
+
 void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbWidth, int fbHeight,
                                    const std::vector<float>& userLines, const std::vector<float>& circlesCxCyR,
                                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
@@ -758,7 +923,9 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
                                    const std::vector<EntityAttributes>* circleEntityAttrs,
                                    const CadExtendedGeometryInput* extended, bool showGrid,
                                    const std::vector<CadLayerRow>* drawingLayers, const RenderTuning& tuning,
-                                   const std::vector<PdfAttachment>* pdfAttachments) {
+                                   const std::vector<PdfAttachment>* pdfAttachments,
+                                   int activeSpaceIndex, const void* paperLayoutsPtr,
+                                   double worldDocOriginX, double worldDocOriginY, float modelUnitsPerPlottedInch) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -782,6 +949,22 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
 
   glClearColor(tuning.bgR, tuning.bgG, tuning.bgB, 1.f);
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+  // REQ-034 Phase 1: Paper-space rendering via GL scissor pass. If in paper space, render viewports
+  // instead of model space. This replaces the ImGui overlay path with GL rendering.
+  const bool inPaperSpace = (activeSpaceIndex >= 0);
+  if (inPaperSpace && paperLayoutsPtr) {
+    const auto& paperLayouts = *static_cast<const std::vector<PaperLayout>*>(paperLayoutsPtr);
+    if (activeSpaceIndex < static_cast<int>(paperLayouts.size())) {
+      RenderPaperSpace(fbWidth, fbHeight, userLines, circlesCxCyR, cadGpuRevision, rubberLines,
+                       snapOverlay, snapGlyphHalfPx, highlightLines, highlightCircles, surveyMarkers,
+                       lineEntityAttrs, circleEntityAttrs, extended, drawingLayers, tuning,
+                       paperLayouts[activeSpaceIndex], worldDocOriginX, worldDocOriginY,
+                       modelUnitsPerPlottedInch);
+      // Paper-space rendering is complete; skip model-space rendering.
+      goto finish_render;
+    }
+  }
 
   const float aspect = static_cast<float>(fbW_) / static_cast<float>(std::max(fbH_, 1));
   // Zoom clamp here matches the wheel/MMB pan clamps in DrawDrawingViewport: wide enough for million-unit drawings
@@ -1392,6 +1575,7 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
   glDrawArrays(GL_LINES, 4, 2);
   glLineWidth(kLwMain);
 
+finish_render:
   glBindVertexArray(0);
   glUseProgram(0);
   glDepthMask(GL_TRUE);
