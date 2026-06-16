@@ -193,6 +193,8 @@ void DrawPageSetupManager(AppCommandState& cmd, std::vector<std::string>& log) {
                       static_cast<int>(cmd.savedPageSetups.size()) + 1);
         cmd.newPageSetupStartWith = 3;  // *layout* by default
         cmd.showNewPageSetup = true;
+        cmd.showPageSetupManager = false;  // close first (modals don't nest cleanly); reopened on close
+        ImGui::CloseCurrentPopup();
       }
       if (ImGui::Button("Modify...", ImVec2(110, 0))) {
         cmd.pageSetupEditorTarget = cmd.pageSetupManagerSel;  // -1 layout current, else saved index
@@ -201,6 +203,8 @@ void DrawPageSetupManager(AppCommandState& cmd, std::vector<std::string>& log) {
                      : PageSetupFromLayout(L, L.pageSetupName.empty() ? std::string("*") + L.name + "*"
                                                                       : L.pageSetupName);
         cmd.showPageSetupEditor = true;
+        cmd.showPageSetupManager = false;  // close first; reopened when the editor closes
+        ImGui::CloseCurrentPopup();
       }
       ImGui::BeginDisabled();
       ImGui::Button("Import...", ImVec2(110, 0));
@@ -291,17 +295,21 @@ void DrawNewPageSetupDialog(AppCommandState& cmd, std::vector<std::string>& log)
       cmd.savedPageSetups.push_back(ps);
       cmd.pageSetupManagerSel = static_cast<int>(cmd.savedPageSetups.size()) - 1;
       cmd.showNewPageSetup = false;
+      cmd.showPageSetupManager = true;  // back to the manager
       ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
     if (ImGui::Button("Cancel", ImVec2(110, 0))) {
       cmd.showNewPageSetup = false;
+      cmd.showPageSetupManager = true;
       ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
   }
-  if (!open)
+  if (!open) {
     cmd.showNewPageSetup = false;
+    cmd.showPageSetupManager = true;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -395,15 +403,19 @@ void DrawPageSetupEditor(AppCommandState& cmd, std::vector<std::string>& log) {
       }
       BumpCadGpuCache(cmd);
       cmd.showPageSetupEditor = false;
+      cmd.showPageSetupManager = true;  // back to the manager
       ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();
     if (ImGui::Button("Cancel", ImVec2(110, 0))) {
       cmd.showPageSetupEditor = false;
+      cmd.showPageSetupManager = true;
       ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
   }
-  if (!open)
+  if (!open) {
     cmd.showPageSetupEditor = false;
+    cmd.showPageSetupManager = true;
+  }
 }

@@ -4068,19 +4068,37 @@ static void DrawPlotScaleCombo(AppCommandState& cmd) {
   };
 
   constexpr int kN = static_cast<int>(sizeof(kScales) / sizeof(kScales[0]));
+
+  // Target: the viewport we're "in" (floating), else a single selected viewport in paper space, else the
+  // drawing's model plot scale. The combo then sets that viewport's scale (user request).
+  Viewport* tvp = nullptr;
+  if (InFloatingModelSpace(cmd) && cmd.floatingViewportLayout >= 0 &&
+      cmd.floatingViewportLayout < static_cast<int>(cmd.paperLayouts.size())) {
+    PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.floatingViewportLayout)];
+    if (cmd.floatingViewportIndex >= 0 && cmd.floatingViewportIndex < static_cast<int>(L.viewports.size()))
+      tvp = &L.viewports[static_cast<size_t>(cmd.floatingViewportIndex)];
+  } else if (cmd.activeSpaceIndex >= 0 && cmd.activeSpaceIndex < static_cast<int>(cmd.paperLayouts.size()) &&
+             cmd.selectedViewports.size() == 1) {
+    PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
+    if (cmd.selectedViewportIndex >= 0 && cmd.selectedViewportIndex < static_cast<int>(L.viewports.size()))
+      tvp = &L.viewports[static_cast<size_t>(cmd.selectedViewportIndex)];
+  }
+  const float curVal = tvp ? tvp->scaleModelPerPaperIn : cmd.modelUnitsPerPlottedInch;
+
   int selected = -1;
   for (int i = 0; i < kN; ++i) {
-    if (std::fabs(cmd.modelUnitsPerPlottedInch - kScales[i].modelUnitsPerPlottedInch) < 0.051f) {
+    if (std::fabs(curVal - kScales[i].modelUnitsPerPlottedInch) < 0.051f) {
       selected = i;
       break;
     }
   }
 
   char preview[96];
+  const char* pfx = tvp ? "VP " : "";
   if (selected >= 0)
-    std::snprintf(preview, sizeof(preview), "%s", kScales[selected].label);
+    std::snprintf(preview, sizeof(preview), "%s%s", pfx, kScales[selected].label);
   else
-    std::snprintf(preview, sizeof(preview), "1\" = %.3g' (custom)", static_cast<double>(cmd.modelUnitsPerPlottedInch));
+    std::snprintf(preview, sizeof(preview), "%s1\" = %.3g' (custom)", pfx, static_cast<double>(curVal));
 
   ImGui::PushID("plotscalecombo");
   ImGui::SetNextItemWidth(158.f);
@@ -4088,20 +4106,26 @@ static void DrawPlotScaleCombo(AppCommandState& cmd) {
     for (int i = 0; i < kN; ++i) {
       const bool isSel = (selected == i);
       if (ImGui::Selectable(kScales[i].label, isSel)) {
-        cmd.modelUnitsPerPlottedInch = kScales[i].modelUnitsPerPlottedInch;
-        RepositionAllSurveyPointLabels(cmd);
-        cmd.surveyLabelLayoutCacheHalfH = cmd.viewportLastSurveyLayoutOrthoHalfH;
-        cmd.surveyLabelLayoutCacheVpHeightPx = cmd.viewportLastSurveyLayoutHeightPx;
-        cmd.surveyLabelLayoutCacheMup = cmd.modelUnitsPerPlottedInch;
-        BumpCadGpuCache(cmd);
+        if (tvp) {
+          tvp->scaleModelPerPaperIn = kScales[i].modelUnitsPerPlottedInch;  // set THIS viewport's scale
+          BumpCadGpuCache(cmd);
+        } else {
+          cmd.modelUnitsPerPlottedInch = kScales[i].modelUnitsPerPlottedInch;
+          RepositionAllSurveyPointLabels(cmd);
+          cmd.surveyLabelLayoutCacheHalfH = cmd.viewportLastSurveyLayoutOrthoHalfH;
+          cmd.surveyLabelLayoutCacheVpHeightPx = cmd.viewportLastSurveyLayoutHeightPx;
+          cmd.surveyLabelLayoutCacheMup = cmd.modelUnitsPerPlottedInch;
+          BumpCadGpuCache(cmd);
+        }
       }
       if (isSel)
         ImGui::SetItemDefaultFocus();
     }
     ImGui::EndCombo();
   }
-  ItemHelpTooltip("Drawing scale: model units per plotted inch (e.g. 50 for 1\" = 50'). "
-                  "Use PSCALE for values not in the list.");
+  ItemHelpTooltip(tvp ? "Viewport scale: model units per paper inch for the active/selected viewport."
+                      : "Drawing scale: model units per plotted inch (e.g. 50 for 1\" = 50'). "
+                        "Use PSCALE for values not in the list.");
   ImGui::PopID();
 }
 
@@ -5714,10 +5738,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const bool clickL = hovered && !consumedPaperClick && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
                         mx >= 0 && mx < avail.x && my >= 0 && my < avail.y;
 
-    // Double-click a viewport → floating model space (REQ-036): edit the model through it.
+    // Double-click a viewport → floating model space (REQ-036): edit the model through it. Suppressed
+    // while a window-select box is open so a quick two-click selection doesn't enter a viewport.
     bool enteredFloat = false;
     if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 &&
-        my < avail.y && cmd.paperMovePhase == 0 && cmd.paperGripCorner == -2) {
+        my < avail.y && cmd.paperMovePhase == 0 && cmd.paperGripCorner == -2 && !cmd.paperSelBoxActive) {
       for (int vi = static_cast<int>(L.viewports.size()) - 1; vi >= 0; --vi) {
         const Viewport& v = L.viewports[static_cast<size_t>(vi)];
         if (curX >= v.paperXIn && curX <= v.paperXIn + v.paperWIn && curY >= v.paperYIn &&
@@ -5758,6 +5783,23 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     } else if (clickL && cmd.paperGripCorner != -2) {  // commit an in-progress grip edit
       cmd.paperGripCorner = -2;
       log.push_back("Viewport edited.");
+    } else if (clickL && cmd.paperSelBoxActive) {
+      // A window-select box is open — this click closes it (takes priority over grip/body picking) and
+      // selects every viewport fully inside the box. Crossing the box edges over a viewport no longer
+      // mis-selects a single one (the bug behind "2-click selection is broken").
+      const float bx0 = std::min(cmd.paperSelBoxX0In, curX), bx1 = std::max(cmd.paperSelBoxX0In, curX);
+      const float by0 = std::min(cmd.paperSelBoxY0In, curY), by1 = std::max(cmd.paperSelBoxY0In, curY);
+      cmd.selectedViewports.clear();
+      for (int vi = 0; vi < static_cast<int>(L.viewports.size()); ++vi) {
+        const Viewport& v = L.viewports[static_cast<size_t>(vi)];
+        if (v.paperXIn >= bx0 && v.paperXIn + v.paperWIn <= bx1 && v.paperYIn >= by0 &&
+            v.paperYIn + v.paperHIn <= by1)
+          cmd.selectedViewports.push_back(vi);
+      }
+      cmd.selectedViewportIndex = cmd.selectedViewports.empty() ? -1 : cmd.selectedViewports.back();
+      cmd.selectedViewportLayout = cmd.selectedViewports.empty() ? -1 : cmd.activeSpaceIndex;
+      cmd.paperSelBoxActive = false;
+      BumpCadGpuCache(cmd);
     } else if (clickL && !enteredFloat) {
       // 1) a grip of the single selected viewport?
       int gripCorner = -2;
@@ -5789,24 +5831,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
         if (hit >= 0) {
           SelectViewport(cmd, hit, ImGui::GetIO().KeyShift);
-        } else if (!cmd.paperSelBoxActive) {  // 3) empty: start a window-select box
+        } else {  // 3) empty: start a window-select box
           cmd.paperSelBoxActive = true;
           cmd.paperSelBoxX0In = curX;
           cmd.paperSelBoxY0In = curY;
-        } else {  // complete the box: select viewports fully inside it
-          const float bx0 = std::min(cmd.paperSelBoxX0In, curX), bx1 = std::max(cmd.paperSelBoxX0In, curX);
-          const float by0 = std::min(cmd.paperSelBoxY0In, curY), by1 = std::max(cmd.paperSelBoxY0In, curY);
-          cmd.selectedViewports.clear();
-          for (int vi = 0; vi < static_cast<int>(L.viewports.size()); ++vi) {
-            const Viewport& v = L.viewports[static_cast<size_t>(vi)];
-            if (v.paperXIn >= bx0 && v.paperXIn + v.paperWIn <= bx1 && v.paperYIn >= by0 &&
-                v.paperYIn + v.paperHIn <= by1)
-              cmd.selectedViewports.push_back(vi);
-          }
-          cmd.selectedViewportIndex = cmd.selectedViewports.empty() ? -1 : cmd.selectedViewports.back();
-          cmd.selectedViewportLayout = cmd.selectedViewports.empty() ? -1 : cmd.activeSpaceIndex;
-          cmd.paperSelBoxActive = false;
-          BumpCadGpuCache(cmd);
         }
       }
     }
