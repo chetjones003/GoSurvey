@@ -5819,19 +5819,23 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.paperGripCorner = gripCorner;
         log.push_back(gripCorner == -1 ? "Move viewport — click the new location." : "Resize — click the new corner.");
       } else {
-        // 2) a viewport body (topmost wins)?
+        // 2) a viewport BORDER (topmost wins)? Clicking the interior is the model view, so it does not
+        // select — that lets a window box start even when viewports cover the sheet (AutoCAD behavior).
+        const float bt = std::max(gripTolIn, 5.f / std::max(1.e-6f, pxPerWorld));
         int hit = -1;
         for (int vi = static_cast<int>(L.viewports.size()) - 1; vi >= 0; --vi) {
           const Viewport& v = L.viewports[static_cast<size_t>(vi)];
-          if (curX >= v.paperXIn && curX <= v.paperXIn + v.paperWIn && curY >= v.paperYIn &&
-              curY <= v.paperYIn + v.paperHIn) {
+          const float x0 = v.paperXIn, y0 = v.paperYIn, x1 = v.paperXIn + v.paperWIn, y1 = v.paperYIn + v.paperHIn;
+          const bool inOuter = curX >= x0 - bt && curX <= x1 + bt && curY >= y0 - bt && curY <= y1 + bt;
+          const bool inInner = curX >= x0 + bt && curX <= x1 - bt && curY >= y0 + bt && curY <= y1 - bt;
+          if (inOuter && !inInner) {
             hit = vi;
             break;
           }
         }
         if (hit >= 0) {
           SelectViewport(cmd, hit, ImGui::GetIO().KeyShift);
-        } else {  // 3) empty: start a window-select box
+        } else {  // interior or empty: start a window-select box
           cmd.paperSelBoxActive = true;
           cmd.paperSelBoxX0In = curX;
           cmd.paperSelBoxY0In = curY;

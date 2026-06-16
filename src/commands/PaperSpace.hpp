@@ -29,7 +29,7 @@ inline const PaperSizePreset kPaperSizePresets[] = {
     {"ARCH D (24\" x 36\")", 24.f, 36.f},   {"ARCH E (36\" x 48\")", 36.f, 48.f},
 };
 constexpr int kPaperSizePresetCount = static_cast<int>(sizeof(kPaperSizePresets) / sizeof(kPaperSizePresets[0]));
-constexpr int kDefaultPaperPresetIdx = 8;  // ARCH D
+constexpr int kDefaultPaperPresetIdx = 1;  // ANSI B (11" x 17")
 
 // A viewport (REQ-027): a rectangular window on a paper layout showing model space at a
 // given scale and center. Rect is in paper inches with the sheet's lower-left at (0,0).
