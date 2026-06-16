@@ -5738,15 +5738,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const bool clickL = hovered && !consumedPaperClick && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
                         mx >= 0 && mx < avail.x && my >= 0 && my < avail.y;
 
-    // Double-click a viewport → floating model space (REQ-036): edit the model through it. Suppressed
-    // while a window-select box is open so a quick two-click selection doesn't enter a viewport.
+    // Double-click inside a viewport → floating model space (REQ-036). A real double-click is two clicks
+    // at the same spot, so it's distinct from a two-corner window box. The first click may have started a
+    // window box (interior clicks do) — cancel it and enter the viewport instead.
     bool enteredFloat = false;
     if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 &&
-        my < avail.y && cmd.paperMovePhase == 0 && cmd.paperGripCorner == -2 && !cmd.paperSelBoxActive) {
+        my < avail.y && cmd.paperMovePhase == 0 && cmd.paperGripCorner == -2) {
       for (int vi = static_cast<int>(L.viewports.size()) - 1; vi >= 0; --vi) {
         const Viewport& v = L.viewports[static_cast<size_t>(vi)];
         if (curX >= v.paperXIn && curX <= v.paperXIn + v.paperWIn && curY >= v.paperYIn &&
             curY <= v.paperYIn + v.paperHIn) {
+          cmd.paperSelBoxActive = false;  // discard the box the first click of the double-click started
           EnterFloatingModelSpace(cmd, cmd.activeSpaceIndex, vi, log);
           enteredFloat = true;
           break;
