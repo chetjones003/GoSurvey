@@ -1,7 +1,7 @@
 # TASK-008 — Paper Space Inc 3d Phase 1: GL per-viewport scissor pass (foundation)
 
 - Type:    feature
-- Status:  implement
+- Status:  reverted — GL pass disabled; paper space stays on the ImGui overlay
 - Opened:  2026-06-16
 - Owner:   Workshop
 
@@ -102,6 +102,30 @@ ASSUMPTION-4: Existing model geometry batches (lines, circles, arcs, polylines) 
 - 2026-06-16 Implemented per-viewport model→paper transform matrix (accounts for origin, scale, viewport center).
 - 2026-06-16 Added model geometry rendering: lines, circles with scissor clipping per viewport.
 - 2026-06-16 Build clean; ready for visual testing and performance validation.
+- 2026-06-16 VISUAL TEST FAILED. The GL pass used a fixed full-framebuffer ortho
+  (Ortho(0, sheetW, sheetH, 0, ...) over glViewport(0,0,fbW,fbH)) with NO pan/zoom.
+  So the GL sheet outline + viewport border were anchored to the screen and could
+  not move/scale with the view. They appeared as a large blue box that did not
+  track the (pan/zoom-aware) ImGui paper overlay. The opaque ImGui sheet covered
+  the GL model geometry, so the GL pass delivered no visible benefit and one big bug.
+- 2026-06-16 REVERTED. Removed RenderPaperSpace (decl + def); simplified RenderScene
+  paper-space params to a single `int activeSpaceIndex` (>= 0 ⇒ skip GL geometry,
+  leave cleared background); updated main.cpp call; dropped unused PaperSpace.hpp
+  include. Paper space remains rendered by the ImGui overlay (CadUi), which already
+  draws the sheet, viewport rects, and model geometry clipped+scaled per viewport,
+  pan/zoom-aware. Commit 08ffa1b.
+
+## ROOT-CAUSE / RETROSPECTIVE
+A GL scissor pass CAN replace the overlay, but ASSUMPTION-3 was wrong: the paper→
+screen transform is NOT a fixed ortho — it must use the same pan/zoom mapping the
+overlay's `w2s` uses (worldLeft/worldRight/worldTop/worldBottom → imgPos/avail).
+Any retry of Phase 1 must:
+  1. Pass the view pan/zoom (or the worldLeft/Right/Top/Bottom window) into the GL pass.
+  2. Build the paper ortho from that window so the GL sheet aligns with the overlay sheet.
+  3. Decide ownership: either GL draws geometry AND the overlay draws only chrome
+     (handles/grips/selection), or keep the overlay fully — but never both drawing the
+     sheet/border at different transforms.
+This is an architectural alignment decision → SPEC GAP candidate before any retry.
 
 ## 9. Self-verification
 - [ ] build-project        — PASS
@@ -117,8 +141,9 @@ ASSUMPTION-4: Existing model geometry batches (lines, circles, arcs, polylines) 
 - Findings:   —
 
 ## 11. Outcome
-- Requirements satisfied: REQ-034 (partial — foundation; full acceptance in Phase 3), REQ-036 (partial — GL path ready for MSPACE snap improvements)
+- Requirements satisfied: none — GL pass reverted. Paper space continues to satisfy
+  REQ-026/027/028 via the existing ImGui overlay (unchanged). REQ-034/036 NOT advanced.
 - Tests added:            —
-- Refactors:              —
-- Docs updated:           —
-- Done:                   —
+- Refactors:              GL paper pass removed; RenderScene paper-space params reduced to activeSpaceIndex.
+- Docs updated:           this task log (root-cause + retry requirements).
+- Done:                   reverted 2026-06-16 (commit 08ffa1b). Retry needs pan/zoom-aware GL transform (see retrospective).
