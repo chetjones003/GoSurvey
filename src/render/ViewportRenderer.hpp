@@ -49,9 +49,9 @@ public:
                    const CadExtendedGeometryInput* extended, bool showGrid,
                    const std::vector<CadLayerRow>* drawingLayers, const RenderTuning& tuning = RenderTuning{},
                    const std::vector<PdfAttachment>* pdfAttachments = nullptr,
-                   // Paper-space rendering (REQ-034 Phase 1: GL scissor pass)
-                   int activeSpaceIndex = -1, const void* paperLayoutsPtr = nullptr,
-                   double worldDocOriginX = 0.0, double worldDocOriginY = 0.0, float modelUnitsPerPlottedInch = 1.f);
+                   // When >= 0, the view is in paper space; GL geometry is skipped and the paper-space
+                   // sheet/viewports are drawn by the ImGui overlay (CadUi::DrawDrawingViewport).
+                   int activeSpaceIndex = -1);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 
@@ -64,17 +64,6 @@ private:
   void DestroyShader();
   static void Ortho(float left, float right, float bottom, float top, float nearp, float farp,
                     float* outColMajor);
-  // REQ-034 Phase 1: Render paper space with GL scissor clipping per viewport
-  void RenderPaperSpace(int fbWidth, int fbHeight, const std::vector<float>& userLines,
-                        const std::vector<float>& circlesCxCyR, std::uint32_t cadGpuRevision,
-                        const std::vector<float>& rubberLines, const CadSnap::Hit* snapOverlay,
-                        float snapGlyphHalfPx, const std::vector<float>* highlightLines,
-                        const std::vector<float>* highlightCircles, const std::vector<float>* surveyMarkers,
-                        const std::vector<EntityAttributes>* lineEntityAttrs,
-                        const std::vector<EntityAttributes>* circleEntityAttrs,
-                        const CadExtendedGeometryInput* extended, const std::vector<CadLayerRow>* drawingLayers,
-                        const RenderTuning& tuning, const struct PaperLayout& layout, double worldDocOriginX,
-                        double worldDocOriginY, float modelUnitsPerPlottedInch);
 
   unsigned int fbo_ = 0;
   unsigned int colorTex_ = 0;
