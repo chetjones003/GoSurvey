@@ -87,6 +87,11 @@ struct PaperLayout {
   float offsetXIn = 0.f;
   float offsetYIn = 0.f;
   bool  centerPlot = false;
+  // Saved paper-space view for this layout (so each layout keeps its own pan/zoom; fit to sheet on first entry).
+  double viewPanX = 0.0;
+  double viewPanY = 0.0;
+  float  viewZoom = 1.f;
+  bool   viewInit = false;
 
   float sheetWidthIn() const { return landscape ? portraitHeightIn : portraitWidthIn; }
   float sheetHeightIn() const { return landscape ? portraitWidthIn : portraitHeightIn; }

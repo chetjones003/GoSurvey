@@ -1091,6 +1091,12 @@ struct AppCommandState {
   /// Viewport zoom lock (user request): when ON, pan/zoom always targets the sheet; when OFF and editing a
   /// viewport in place, pan/zoom adjusts that viewport's model framing (scale/center).
   bool   viewportZoomLocked = false;
+  // Saved model-space view so switching Model<->Paper keeps each space's own pan/zoom (each layout saves
+  // its own in PaperLayout::view*). Fixes the new layout opening on the model's zoomed-out view.
+  double modelViewPanX = 0.0;
+  double modelViewPanY = 0.0;
+  float  modelViewZoom = 1.f;
+  bool   modelViewSaved = false;
 
   // Page setups + layout-tab dialogs (right-click menu → Rename / Move-Copy / Page Setup Manager / Delete).
   std::vector<PageSetup> savedPageSetups;        ///< drawing-wide named page setups; "Standard" ensured.

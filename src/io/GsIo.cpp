@@ -255,6 +255,10 @@ json BuildRoot(const AppCommandState& st) {
       o["offsetXIn"] = l.offsetXIn;
       o["offsetYIn"] = l.offsetYIn;
       o["centerPlot"] = l.centerPlot;
+      o["viewPanX"] = l.viewPanX;
+      o["viewPanY"] = l.viewPanY;
+      o["viewZoom"] = l.viewZoom;
+      o["viewInit"] = l.viewInit;
       json vps = json::array();
       for (const Viewport& v : l.viewports) {
         json vo;
@@ -639,6 +643,10 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       l.offsetXIn = o.value("offsetXIn", l.offsetXIn);
       l.offsetYIn = o.value("offsetYIn", l.offsetYIn);
       l.centerPlot = o.value("centerPlot", l.centerPlot);
+      l.viewPanX = o.value("viewPanX", l.viewPanX);
+      l.viewPanY = o.value("viewPanY", l.viewPanY);
+      l.viewZoom = o.value("viewZoom", l.viewZoom);
+      l.viewInit = o.value("viewInit", l.viewInit);
       if (o.contains("viewports") && o["viewports"].is_array()) {
         for (const auto& vo : o["viewports"]) {
           if (!vo.is_object())
