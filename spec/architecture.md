@@ -397,3 +397,39 @@ A change is rejected if it breaks any of these:
   (REQ-034) — the GL scissor/stencil pass deferred under ADR-006. Delivered
   incrementally (3a ribbon+rect viewport, 3b select+edit, 3c floating mspace,
   3d polygonal) so each slice is verifiable.
+
+### ADR-009 — Native paper-space geometry: per-layout entity store + command routing   (2026-06-16, accepted)
+- Context:    REQ-037 adds geometry that lives **on the sheet** (title blocks, notes,
+  borders), separate from model space and from viewport content. Paper layouts today
+  own only `Viewport`s — there is no place to store sheet-native lines/text, no rule
+  for which store a draw/edit command targets, and no `.gs` schema for it. New Domain
+  data + ownership + a coordinate-space routing rule = an architectural decision, not a
+  Workshop choice (architecture §3, §10.1 single-owner, §11.4 no speculative types).
+- Decision:   (a) **`PaperLayout` owns a paper-space entity store** — its own vectors
+  of paper-space lines and text (extensible later to polylines/circles/arcs), stored in
+  **paper inches** with the sheet origin at (0,0). These reuse the *existing* entity
+  value types where practical (line endpoints, a text/annotation record + attributes),
+  not new speculative abstractions. One visible owner: the `PaperLayout` (§10.1, §11.5).
+  (b) **Command routing by active space.** A single rule decides the target store:
+  `activeSpaceIndex == kModelSpaceIndex` **or** floating model space → model store
+  (geometry in model/world coords); a paper layout active and *not* floating → that
+  layout's paper store (geometry in paper inches). Draw (line, text) and edit (move,
+  copy, rotate, delete) and object snapping branch on this rule — reusing the command
+  surface, mirroring how ADR-008 routes MOVE/COPY/DELETE. Survey tools (survey points,
+  CSV) stay model-only. (c) **Snapping** in paper space resolves against paper-space
+  entities only; snapping to model geometry shown inside viewports is deferred.
+  (d) **Persistence:** paper-space entities serialize per layout in the native `.gs`
+  (REQ-031/037); DXF persistence deferred. No new dependency, no new global.
+- Alternatives: (a) one global entity store tagged with a space id — rejected: breaks
+  single-owner (§10.1), and per-layout ownership matches how viewports/frozen-layers are
+  already owned. (b) a separate parallel command set for paper geometry — rejected:
+  duplicates draw/edit logic and diverges UX from model space (the user asked for
+  parity). (c) render paper geometry via the (reverted) GL paper pass — rejected for
+  now: paper space is drawn by the pan/zoom-aware ImGui overlay (see TASK-008 revert);
+  paper entities render there in paper inches through the overlay's `w2s` mapping.
+- Consequences: `PaperLayout` gains entity vectors; a small "active store" indirection
+  lets draw/edit/snap target model vs paper; GsIo gains a per-layout geometry section;
+  the overlay draws paper entities. Delivered incrementally (5a data model + persistence,
+  5b render + line/text create, 5c move/copy/rotate/delete + snap) so each slice is
+  verifiable. Coordinates never cross spaces implicitly: model stays in world coords,
+  paper stays in paper inches (§11 — no silent coordinate-space mixing).

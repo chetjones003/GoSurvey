@@ -513,6 +513,30 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-06-15 — initial (Inc 3c).
 
+### REQ-037 — Native paper-space geometry (annotations / title blocks)
+- Purpose: draw and edit geometry that lives on the sheet itself — title blocks,
+  notes, borders — independent of model space and of viewport content
+- Priority: should
+- Type: functional
+- Statement: A paper layout owns its own set of **paper-space entities**, stored in
+  **paper inches** with the sheet origin at (0,0) and **separate** from model-space
+  geometry and from the model content shown inside viewports. The first version
+  supports **lines and text** (extensible to polylines/circles/arcs). When a paper
+  layout is the active space **and not in floating model space**, the standard
+  **draw** (line, text) and **edit** (move, copy, rotate, delete) commands and
+  **object snapping** operate on that layout's paper-space entities — mirroring the
+  model-space UX. Survey-specific tools (survey points, CSV import) remain
+  **model-only**. Snapping in paper space resolves to **paper-space entities only**
+  (snapping to viewport-displayed model geometry is deferred). Paper-space entities
+  **persist per layout in the native `.gs` file** and are unaffected by model edits.
+- Acceptance: in a paper layout the user can draw lines and place text on the sheet;
+  each can be moved/copied/rotated/deleted and snapped to; they do **not** appear in
+  model space or in other layouts; a drawing with paper-space entities saved to `.gs`
+  then reloaded restores them per layout.
+- Owner-layer: Domain / UI / Commands / Renderer / IO
+- Status: accepted
+- Revisions: 2026-06-16 — initial (Paper Space Inc 5; SPEC GAP resolution, ADR-009).
+
 ---
 
 ## Performance requirements
@@ -633,6 +657,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-034 | UI/Commands/Renderer | manual (polygonal viewport clips model to the polygon) — Inc 3d | accepted |
 | REQ-035 | UI/Commands | manual (viewport click/window select + grips; MOVE/COPY/DELETE act on viewports) | accepted |
 | REQ-036 | UI/Commands/Renderer | manual (double-click into viewport edits model through it; leave returns to paper) | accepted |
+| REQ-037 | Domain/UI/Commands/Renderer/IO | manual (draw lines+text on a sheet; move/copy/rotate/delete/snap; not in model or other layouts; .gs round-trip) | accepted |
 
 ---
 
