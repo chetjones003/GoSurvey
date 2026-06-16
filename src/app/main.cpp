@@ -467,7 +467,8 @@ int main() {
 
     std::vector<float> hoverLines;
     std::vector<float> hoverCircles;
-    BuildHoverHighlight(cmd, &hoverLines, &hoverCircles);
+    if (cmd.activeSpaceIndex == kModelSpaceIndex)  // no model-entity hover in paper space (incl. floating)
+      BuildHoverHighlight(cmd, &hoverLines, &hoverCircles);
 
     std::vector<float> surveyMarkers;
     if (!cmd.surveyPoints.empty()) {
@@ -556,20 +557,25 @@ int main() {
 
     // Paper space (REQ-025) renders a blank sheet this increment; model geometry shows through
     // viewports in a later increment. The sheet outline itself is drawn as a UI overlay.
+    // Paper space (incl. floating-viewport editing) renders a blank model scene; the sheet, viewports,
+    // and any in-place edit previews are drawn as UI overlays. All model-interaction visuals (hover,
+    // highlight, preview, rubber, snap glyph, selection rect, survey markers, PDFs) are suppressed here so
+    // leftover DXF geometry isn't hover-highlighted behind the sheet.
     const bool paperSpace = cmd.activeSpaceIndex != kModelSpaceIndex;
     static const std::vector<float> kEmptyVerts;
     const std::vector<float>& sceneLines   = paperSpace ? kEmptyVerts : cmd.userLinesFlat;
     const std::vector<float>& sceneCircles = paperSpace ? kEmptyVerts : cmd.userCirclesCxCyR;
+    const std::vector<float>& sceneRubber  = paperSpace ? kEmptyVerts : rubberLines;
     activeRenderer.RenderScene(cmd.viewportPanX, cmd.viewportPanY, cmd.viewportZoom, fbW, fbH, sceneLines,
                          sceneCircles, cmd.cadGpuRevision,
-                         rubberLines, snapHit.valid ? &snapHit : nullptr,
-                         std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f), selRectPtr,
-                         previewLines.empty() ? nullptr : &previewLines,
-                         previewCircles.empty() ? nullptr : &previewCircles,
-                         highlightLines.empty() ? nullptr : &highlightLines,
-                         highlightCircles.empty() ? nullptr : &highlightCircles,
-                         hoverLines.empty() ? nullptr : &hoverLines,
-                         hoverCircles.empty() ? nullptr : &hoverCircles,
+                         sceneRubber, (paperSpace || !snapHit.valid) ? nullptr : &snapHit,
+                         std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f), paperSpace ? nullptr : selRectPtr,
+                         (paperSpace || previewLines.empty()) ? nullptr : &previewLines,
+                         (paperSpace || previewCircles.empty()) ? nullptr : &previewCircles,
+                         (paperSpace || highlightLines.empty()) ? nullptr : &highlightLines,
+                         (paperSpace || highlightCircles.empty()) ? nullptr : &highlightCircles,
+                         (paperSpace || hoverLines.empty()) ? nullptr : &hoverLines,
+                         (paperSpace || hoverCircles.empty()) ? nullptr : &hoverCircles,
                          (paperSpace || surveyMarkers.empty()) ? nullptr : &surveyMarkers, &cmd.userLineAttrs,
                          &cmd.userCircleAttrs, &ext, gridVisible, &cmd.drawingLayerTable, tuning,
                          paperSpace ? nullptr : (pdfRenderList.empty() ? nullptr : &pdfRenderList));
