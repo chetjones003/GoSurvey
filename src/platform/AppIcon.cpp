@@ -140,11 +140,11 @@ std::filesystem::path ResolveBundledAssetPath(const std::filesystem::path& relat
 
 std::filesystem::path ResolveAppLogoPngPath() {
   namespace fs = std::filesystem;
-  if (fs::path p = ResolveBundledAssetPath(fs::path("resources") / "icons" / "bitmap.png"); !p.empty())
+  if (fs::path p = ResolveBundledAssetPath(fs::path("resources") / "icons" / "app.png"); !p.empty())
     return p;
-  if (fs::path p = ResolveBundledAssetPath(fs::path("icons") / "bitmap.png"); !p.empty())
+  if (fs::path p = ResolveBundledAssetPath(fs::path("icons") / "app.png"); !p.empty())
     return p;
-  if (fs::path p = ResolveBundledAssetPath(fs::path("bitmap.png")); !p.empty())
+  if (fs::path p = ResolveBundledAssetPath(fs::path("app.png")); !p.empty())
     return p;
   return {};
 }

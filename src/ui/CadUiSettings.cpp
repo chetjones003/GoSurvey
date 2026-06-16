@@ -57,7 +57,7 @@ static void DrawDisplayWindowElements(AppCommandState& cmd) {
     ItemHelpTooltip("Model-space background (clear) color for the drawing viewport.");
     ImGui::SameLine();
     if (ImGui::SmallButton("Reset##bgReset")) {
-      cmd.viewportBgR = 0.1215686f; cmd.viewportBgG = 0.1215686f; cmd.viewportBgB = 0.1647059f;
+      cmd.viewportBgR = 0.1f; cmd.viewportBgG = 0.1f; cmd.viewportBgB = 0.1f;
     }
   }
   ImGui::Spacing();

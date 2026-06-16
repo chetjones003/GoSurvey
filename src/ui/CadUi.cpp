@@ -5022,8 +5022,8 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     }
 
     ImGui::SameLine(0, st.ItemSpacing.x);
-    const bool sendClicked = ImGui::Button("Send", ImVec2(sendBtnW, 0.f));
-    if (sendClicked || exec) {
+    //const bool sendClicked = ImGui::Button("Send", ImVec2(sendBtnW, 0.f));
+    if (exec) {
       // Enter with the list open runs the highlighted command. The list state is read from the persisted
       // s_cmd* values because Enter deactivates the input, so cmdShowSug/cmdSug are already empty this frame.
       if (exec && s_cmdSugVisible && !s_cmdHighlight.empty())

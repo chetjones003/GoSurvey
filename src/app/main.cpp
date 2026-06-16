@@ -127,7 +127,7 @@ int main() {
   ApplyCadLightTheme();
   if (!LoadApplicationFont())
     std::fprintf(stderr, "Calibri not found; using ImGui default font.\n");
-  io.FontGlobalScale = 1.05f;
+  io.FontGlobalScale = 1.35f;
 
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
