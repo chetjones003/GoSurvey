@@ -101,6 +101,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.paperSelBoxActive = false;
   cmd.floatingViewportLayout = -1;  // floating model space is transient, not per-document
   cmd.floatingViewportIndex = -1;
+  cmd.modelViewSaved = false;       // restored view belongs to the restored active space
   cmd.cadGpuRevision             = doc.cadGpuRevision;
   cmd.activeDocSavedRevision     = doc.savedRevision;
   cmd.activeDocFilePath          = doc.filePath;
@@ -147,14 +148,66 @@ void DeletePaperLayout(AppCommandState& cmd, int idx) {
   BumpCadGpuCache(cmd);
 }
 
+static void FitViewToSheet(AppCommandState& cmd, const PaperLayout& pl) {
+  const float sw = std::max(pl.sheetWidthIn(), 0.01f);
+  const float sh = std::max(pl.sheetHeightIn(), 0.01f);
+  float aspect = 1.9f;
+  if (cmd.viewportLastFbW > 0 && cmd.viewportLastFbH > 0)
+    aspect = static_cast<float>(cmd.viewportLastFbW) / static_cast<float>(cmd.viewportLastFbH);
+  constexpr float margin = 1.15f;
+  // Visible world (paper inches): height = 100/zoom, width = 100*aspect/zoom. Pick the binding fit.
+  const float zoomH = 100.f / (sh * margin);
+  const float zoomW = 100.f * aspect / (sw * margin);
+  cmd.viewportZoom = std::min(zoomH, zoomW);
+  cmd.viewportPanX = static_cast<double>(sw) * 0.5;  // pan = view center; center on the sheet
+  cmd.viewportPanY = static_cast<double>(sh) * 0.5;
+}
+
 void SetActiveSpace(AppCommandState& cmd, int spaceIndex) {
-  if (spaceIndex < 0) {
-    cmd.activeSpaceIndex = kModelSpaceIndex;
-  } else if (!cmd.paperLayouts.empty()) {
-    cmd.activeSpaceIndex = std::clamp(spaceIndex, 0, static_cast<int>(cmd.paperLayouts.size()) - 1);
-    cmd.lastPaperLayoutIndex = cmd.activeSpaceIndex;
+  const int prev = cmd.activeSpaceIndex;
+  // Save the view of the space we're leaving so each space keeps its own pan/zoom.
+  if (prev == kModelSpaceIndex) {
+    cmd.modelViewPanX = cmd.viewportPanX;
+    cmd.modelViewPanY = cmd.viewportPanY;
+    cmd.modelViewZoom = cmd.viewportZoom;
+    cmd.modelViewSaved = true;
+  } else if (prev >= 0 && static_cast<size_t>(prev) < cmd.paperLayouts.size()) {
+    PaperLayout& pl = cmd.paperLayouts[static_cast<size_t>(prev)];
+    pl.viewPanX = cmd.viewportPanX;
+    pl.viewPanY = cmd.viewportPanY;
+    pl.viewZoom = cmd.viewportZoom;
+    pl.viewInit = true;
+  }
+
+  int ns;
+  if (spaceIndex < 0 || cmd.paperLayouts.empty()) {
+    ns = kModelSpaceIndex;
   } else {
-    cmd.activeSpaceIndex = kModelSpaceIndex;
+    ns = std::clamp(spaceIndex, 0, static_cast<int>(cmd.paperLayouts.size()) - 1);
+    cmd.lastPaperLayoutIndex = ns;
+  }
+  cmd.activeSpaceIndex = ns;
+
+  // Load the new space's view (fit a layout's sheet on first entry).
+  if (ns == kModelSpaceIndex) {
+    if (cmd.modelViewSaved) {
+      cmd.viewportPanX = cmd.modelViewPanX;
+      cmd.viewportPanY = cmd.modelViewPanY;
+      cmd.viewportZoom = cmd.modelViewZoom;
+    }
+  } else {
+    PaperLayout& pl = cmd.paperLayouts[static_cast<size_t>(ns)];
+    if (pl.viewInit) {
+      cmd.viewportPanX = pl.viewPanX;
+      cmd.viewportPanY = pl.viewPanY;
+      cmd.viewportZoom = pl.viewZoom;
+    } else {
+      FitViewToSheet(cmd, pl);
+      pl.viewPanX = cmd.viewportPanX;
+      pl.viewPanY = cmd.viewportPanY;
+      pl.viewZoom = cmd.viewportZoom;
+      pl.viewInit = true;
+    }
   }
   cmd.active = AppCommandState::Kind::None;  // leaving a space cancels any in-progress command
   BumpCadGpuCache(cmd);
