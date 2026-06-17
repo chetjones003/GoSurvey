@@ -7450,9 +7450,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (lineRubber || plineRubber)
         sdl->AddLine(mlToScreen(cmd.anchorX, cmd.anchorY), mlToScreen(drawLX, drawLY),
                      IM_COL32(90, 220, 120, 230), 1.5f);
-      const ImVec2 cc = mlToScreen(drawLX, drawLY);  // model cursor crosshair
-      sdl->AddLine(ImVec2(cc.x - 7.f, cc.y), ImVec2(cc.x + 7.f, cc.y), IM_COL32(90, 220, 120, 210), 1.f);
-      sdl->AddLine(ImVec2(cc.x, cc.y - 7.f), ImVec2(cc.x, cc.y + 7.f), IM_COL32(90, 220, 120, 210), 1.f);
+      // The cursor crosshair itself is the full CAD crosshair drawn later (at the raw mouse in floating mode);
+      // no small marker here. Keep the snap glyph below.
       if (floatingSnapHit.valid) {  // object-snap glyph (green square), sized to match the model-space glyph
         const ImVec2 sg = mlToScreen(floatingSnapHit.x, floatingSnapHit.y);
         const float h = std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f);
@@ -8101,7 +8100,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       ImGui::SetMouseCursor(ImGuiMouseCursor_None);
       cx = mouse.x;
       cy = mouse.y;
-      if (outCursorX && outCursorY) {
+      // The outCursor→screen mapping below uses the model/paper VIEW window (worldLeft..worldRight). In
+      // floating model space outCursorX/Y are model-local coords (a different space), so that mapping would
+      // throw the crosshair off-screen — keep it at the raw mouse there (the snap glyph shows the snap).
+      if (outCursorX && outCursorY && !InFloatingModelSpace(cmd)) {
         const float denx = worldRight - worldLeft + 1.e-12f;
         const float deny = worldTop - worldBottom + 1.e-12f;
         const float uSnap = (*outCursorX - worldLeft) / denx;
