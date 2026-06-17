@@ -5768,6 +5768,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
     float px = 0.f, py = 0.f;
     paperPick(&px, &py);
+    // ORTHO (REQ-037): constrain the segment to horizontal/vertical from the anchor — unless snapped to a
+    // point (object snap overrides ortho, matching AutoCAD).
+    if (!paperSnapActive && cmd.orthoMode && cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint) {
+      if (std::fabs(px - cmd.anchorX) >= std::fabs(py - cmd.anchorY))
+        py = cmd.anchorY;
+      else
+        px = cmd.anchorX;
+    }
     SubmitLineVertex(cmd, px, py, log);
     consumedPaperClick = true;
   }
@@ -5944,8 +5952,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         for (int vi = static_cast<int>(L.viewports.size()) - 1; vi >= 0; --vi) {
           const Viewport& v = L.viewports[static_cast<size_t>(vi)];
           const float x0 = v.paperXIn, y0 = v.paperYIn, x1 = v.paperXIn + v.paperWIn, y1 = v.paperYIn + v.paperHIn;
-          const bool inOuter = curX >= x0 - bt && curX <= x1 + bt && curY >= y0 - bt && curY <= y1 + bt;
-          const bool inInner = curX >= x0 + bt && curX <= x1 - bt && curY >= y0 + bt && curY <= y1 - bt;
+          // Border hit band, clamped so a small/zoomed-out viewport keeps a non-selecting interior (issue #4):
+          // only the visible border ring selects, never the inside of the rect.
+          const float btv = std::min(bt, 0.25f * std::min(v.paperWIn, v.paperHIn));
+          const bool inOuter = curX >= x0 - btv && curX <= x1 + btv && curY >= y0 - btv && curY <= y1 + btv;
+          const bool inInner = curX >= x0 + btv && curX <= x1 - btv && curY >= y0 + btv && curY <= y1 - btv;
           if (inOuter && !inInner) {
             hit = vi;
             break;
@@ -7221,11 +7232,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const float curPX = static_cast<float>(worldLeft + (mx / std::max(avail.x, 1.f)) * (worldRight - worldLeft));
     const float curPY = static_cast<float>(worldTop - (my / std::max(avail.y, 1.f)) * (worldTop - worldBottom));
     // Paper-space LINE rubber band (REQ-037): from the committed anchor (paper inches) to the (snapped) cursor.
-    const float snapCurPX = paperSnapActive ? paperSnapXIn : curPX;
-    const float snapCurPY = paperSnapActive ? paperSnapYIn : curPY;
+    float snapCurPX = paperSnapActive ? paperSnapXIn : curPX;
+    float snapCurPY = paperSnapActive ? paperSnapYIn : curPY;
     if (!InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::Line &&
-        cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint && hovered)
+        cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint && hovered) {
+      // Mirror the ORTHO constraint used at commit so the preview matches what will be drawn.
+      if (!paperSnapActive && cmd.orthoMode) {
+        if (std::fabs(snapCurPX - cmd.anchorX) >= std::fabs(snapCurPY - cmd.anchorY))
+          snapCurPY = cmd.anchorY;
+        else
+          snapCurPX = cmd.anchorX;
+      }
       sdl->AddLine(w2s(cmd.anchorX, cmd.anchorY), w2s(snapCurPX, snapCurPY), IM_COL32(59, 130, 246, 230), 1.5f);
+    }
     // Object-snap glyph (REQ-037): green square at the snapped paper point.
     if (paperSnapActive && hovered) {
       const ImVec2 g = w2s(paperSnapXIn, paperSnapYIn);
