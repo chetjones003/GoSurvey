@@ -6077,10 +6077,22 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           *outCursorRawX = mLocalX;
           *outCursorRawY = mLocalY;
         }
-        // A click drives the active model command, or selects model geometry when idle — through the
-        // snapped point. (Window-drag box selection in the floating viewport is a later slice.)
-        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-          SubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log);
+        // A click drives the active model command through the snapped point. When idle, selection is a
+        // two-click / drag box exactly like model space (idle SubmitViewportPick is a no-op unless a box is
+        // open), so we arm the box on the first click and close it on the second (REQ-036).
+        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+          if (cmd.active == AppCommandState::Kind::None) {
+            if (!cmd.selBoxWaitingSecond) {
+              BeginSelectionBoxCorner(cmd, static_cast<float>(curMX), static_cast<float>(curMY), mx, my);
+            } else {
+              const bool fenceWindowMode = (mx - cmd.selBoxAnchorScreenX) > 3.f;  // L→R window, R→L crossing
+              SubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log,
+                                 ImGui::GetIO().KeyShift, fenceWindowMode);
+            }
+          } else {
+            SubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log);
+          }
+        }
       } else if (hovered && cmd.active == AppCommandState::Kind::None &&
                  ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 &&
                  my < avail.y) {
@@ -6174,10 +6186,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   cmd.viewportHoverSurveyPointIndex = -1;
   cmd.offsetHoverHighlightValid = false;
-  cmd.viewportSnapPickValid = false;
   *out_snap = {};
 
-  if (hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
+  // Model-space snap / hover / grip-magnet. Gated to model space: in floating model space this same work is
+  // done in the floating input block above (using the viewport transform), so running it here with the paper
+  // view coords would clobber the floating hover/snap/cursor (REQ-036).
+  if (modelSpace) {
+    cmd.viewportSnapPickValid = false;
+  }
+  if (modelSpace && hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
     const float u = mx / std::max(avail.x, 1.f);
     const float v = my / std::max(avail.y, 1.f);
     const double rawX = worldLeft + static_cast<double>(u) * (worldRight - worldLeft);
@@ -7440,6 +7457,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float h = std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f);
         sdl->AddRect(ImVec2(sg.x - h, sg.y - h), ImVec2(sg.x + h, sg.y + h), IM_COL32(120, 220, 120, 255), 0.f,
                      0, 2.0f);
+      }
+      // Selection box (REQ-036): window (L→R, blue) or crossing (R→L, green), drawn from the armed anchor
+      // to the cursor while a box is open in the floating viewport.
+      if (cmd.active == AppCommandState::Kind::None && cmd.selBoxWaitingSecond) {
+        const ImVec2 a = mlToScreen(static_cast<float>(cmd.selBoxAnchorX), static_cast<float>(cmd.selBoxAnchorY));
+        const ImVec2 b = mlToScreen(curLX, curLY);
+        const ImVec2 mn(std::min(a.x, b.x), std::min(a.y, b.y));
+        const ImVec2 mx2(std::max(a.x, b.x), std::max(a.y, b.y));
+        const bool windowMode = (mx - cmd.selBoxAnchorScreenX) > 3.f;
+        const ImU32 fill = windowMode ? IM_COL32(59, 130, 246, 40) : IM_COL32(90, 220, 120, 40);
+        const ImU32 edge = windowMode ? IM_COL32(59, 130, 246, 200) : IM_COL32(90, 220, 120, 220);
+        sdl->AddRectFilled(mn, mx2, fill);
+        sdl->AddRect(mn, mx2, edge, 0.f, 0, 1.0f);
       }
       sdl->PopClipRect();
     }
