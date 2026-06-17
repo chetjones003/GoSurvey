@@ -6028,16 +6028,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const double mLocalX = (fv.modelCenterX + static_cast<double>(px - vcx) * s) - cmd.worldDocumentOriginX;
       const double mLocalY = (fv.modelCenterY + static_cast<double>(py - vcy) * s) - cmd.worldDocumentOriginY;
       if (inside) {
-        // Object snapping inside the floating viewport (REQ-036), mirroring the model-space snap path but
-        // using the viewport's own scale for the pixel→world tolerance. The snapped point drives the pick,
-        // exactly as the model path feeds CadSnap into SubmitViewportPick.
+        // World units per screen pixel inside this viewport (viewport scale ÷ paper px-per-inch). Drives the
+        // px→world tolerances for snapping and hover so they feel like model space.
+        const float pxPerPaperIn = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
+        const float worldPerPx = s / std::max(1.e-6f, pxPerPaperIn);
+        // Object snapping inside the floating viewport (REQ-036), mirroring the model-space snap path. The
+        // snapped point drives the pick, exactly as the model path feeds CadSnap into SubmitViewportPick.
         double curMX = mLocalX, curMY = mLocalY;
         cmd.viewportSnapPickValid = false;
         const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
                             cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
         if (cmd.objectSnapEnabled && midCmd) {
-          const float pxPerPaperIn = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
-          const float worldPerPx = s / std::max(1.e-6f, pxPerPaperIn);  // world units per screen pixel here
           const float tol = std::max(1.e-6f, cmd.objectSnapAperturePx * worldPerPx);
           CadSnap::SnapExclude exclude{};
           if (cmd.entityGripMoveActive && cmd.entityGripEntityIndex >= 0) {
@@ -6054,6 +6055,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             curMX = snap.x;
             curMY = snap.y;
             floatingSnapHit = snap;
+          }
+        }
+        // Hover highlight (REQ-036): entity under the cursor when idle, for the in-viewport highlight below.
+        cmd.viewportHoverEntityValid = false;
+        if (!midCmd) {
+          SelectedEntity hoverHit{};
+          float hoverD2 = 0.f;
+          const float hoverTol = std::max(1.e-6f, 8.f * worldPerPx);
+          if (PickClosestCadEntity(cmd, static_cast<float>(mLocalX), static_cast<float>(mLocalY), hoverTol,
+                                   &hoverHit, &hoverD2)) {
+            cmd.viewportHoverEntityValid = true;
+            cmd.viewportHoverEntity = hoverHit;
           }
         }
         if (outCursorX && outCursorY) {
@@ -7148,6 +7161,27 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const float pxPerWorld = avail.x / static_cast<float>(denx);  // screen px per paper inch (uniform)
       const float pxPerModel = pxPerWorld / vp.safeScale();
       sdl->PushClipRect(rmin, rmax, true);
+      // Selection + hover highlight inside the floating viewport (REQ-036): GL draws these in model space,
+      // but GL is skipped in paper space, so style the overlay strokes here for the active floating viewport.
+      const bool isFloatVp = InFloatingModelSpace(cmd) && cmd.floatingViewportLayout == cmd.activeSpaceIndex &&
+                             vi == cmd.floatingViewportIndex;
+      auto entStyle = [&](SelectedEntity::Type t, int idx, ImU32& col, float& wid) {
+        col = kVpModelCol;
+        wid = 1.0f;
+        if (!isFloatVp)
+          return;
+        for (const SelectedEntity& se : cmd.selection)
+          if (se.type == t && se.index == idx) {
+            col = IM_COL32(59, 130, 246, 255);  // selection accent (blue)
+            wid = 2.0f;
+            return;
+          }
+        if (cmd.viewportHoverEntityValid && cmd.viewportHoverEntity.type == t &&
+            cmd.viewportHoverEntity.index == idx) {
+          col = IM_COL32(130, 180, 240, 255);  // hover (lighter blue)
+          wid = 1.6f;
+        }
+      };
       // Lines (REQ-028: skip frozen layers).
       for (size_t i = 0; i + 5 < cmd.userLinesFlat.size(); i += 6) {
         const size_t lineIdx = i / 6;
@@ -7156,7 +7190,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           continue;
         const ImVec2 s0 = m2s(cmd.userLinesFlat[i] + oX, cmd.userLinesFlat[i + 1] + oY);
         const ImVec2 s1 = m2s(cmd.userLinesFlat[i + 3] + oX, cmd.userLinesFlat[i + 4] + oY);
-        sdl->AddLine(s0, s1, kVpModelCol, 1.0f);
+        ImU32 lc;
+        float lw;
+        entStyle(SelectedEntity::Type::LineSeg, static_cast<int>(lineIdx), lc, lw);
+        sdl->AddLine(s0, s1, lc, lw);
       }
       // Polylines (REQ-028: skip frozen layers).
       for (size_t pi = 0; pi < cmd.userPolylineOffsets.size(); ++pi) {
@@ -7167,13 +7204,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const int end = (pi + 1 < cmd.userPolylineOffsets.size())
                             ? cmd.userPolylineOffsets[pi + 1]
                             : static_cast<int>(cmd.userPolylineVerts.size() / 3);
+        ImU32 pc;
+        float pw;
+        entStyle(SelectedEntity::Type::Polyline, static_cast<int>(pi), pc, pw);
         ImVec2 prev{};
         bool have = false;
         for (int k = start; k < end; ++k) {
           const ImVec2 s = m2s(cmd.userPolylineVerts[static_cast<size_t>(k) * 3] + oX,
                                cmd.userPolylineVerts[static_cast<size_t>(k) * 3 + 1] + oY);
           if (have)
-            sdl->AddLine(prev, s, kVpModelCol, 1.0f);
+            sdl->AddLine(prev, s, pc, pw);
           prev = s;
           have = true;
         }
@@ -7186,8 +7226,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           continue;
         const ImVec2 c = m2s(cmd.userCirclesCxCyR[i] + oX, cmd.userCirclesCxCyR[i + 1] + oY);
         const float rPx = cmd.userCirclesCxCyR[i + 2] * pxPerModel;
+        ImU32 cc2;
+        float cw;
+        entStyle(SelectedEntity::Type::Circle, static_cast<int>(circleIdx), cc2, cw);
         if (rPx >= 0.5f)
-          sdl->AddCircle(c, rPx, kVpModelCol, 0, 1.0f);
+          sdl->AddCircle(c, rPx, cc2, 0, cw);
       }
       // Arcs (REQ-028: skip frozen layers, sampled).
       for (size_t arcIdx = 0; arcIdx < cmd.userArcs.size(); ++arcIdx) {
@@ -7196,13 +7239,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (IsLayerFrozenInViewport(vp, attr.layer))
           continue;
         const int segs = std::clamp(static_cast<int>(std::fabs(arc.sweepRad) / 0.15f) + 2, 2, 180);
+        ImU32 ac;
+        float aw;
+        entStyle(SelectedEntity::Type::Arc, static_cast<int>(arcIdx), ac, aw);
         ImVec2 prev{};
         for (int k = 0; k <= segs; ++k) {
           const float t = arc.startRad + arc.sweepRad * (static_cast<float>(k) / static_cast<float>(segs));
           const ImVec2 s = m2s(static_cast<double>(arc.cx + arc.r * std::cos(t)) + oX,
                                static_cast<double>(arc.cy + arc.r * std::sin(t)) + oY);
           if (k > 0)
-            sdl->AddLine(prev, s, kVpModelCol, 1.0f);
+            sdl->AddLine(prev, s, ac, aw);
           prev = s;
         }
       }
@@ -7389,10 +7435,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const ImVec2 cc = mlToScreen(drawLX, drawLY);  // model cursor crosshair
       sdl->AddLine(ImVec2(cc.x - 7.f, cc.y), ImVec2(cc.x + 7.f, cc.y), IM_COL32(90, 220, 120, 210), 1.f);
       sdl->AddLine(ImVec2(cc.x, cc.y - 7.f), ImVec2(cc.x, cc.y + 7.f), IM_COL32(90, 220, 120, 210), 1.f);
-      if (floatingSnapHit.valid) {  // object-snap glyph (green square) at the snapped point
+      if (floatingSnapHit.valid) {  // object-snap glyph (green square), sized to match the model-space glyph
         const ImVec2 sg = mlToScreen(floatingSnapHit.x, floatingSnapHit.y);
-        sdl->AddRect(ImVec2(sg.x - 5.f, sg.y - 5.f), ImVec2(sg.x + 5.f, sg.y + 5.f),
-                     IM_COL32(120, 220, 120, 255), 0.f, 0, 1.5f);
+        const float h = std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f);
+        sdl->AddRect(ImVec2(sg.x - h, sg.y - h), ImVec2(sg.x + h, sg.y + h), IM_COL32(120, 220, 120, 255), 0.f,
+                     0, 2.0f);
       }
       sdl->PopClipRect();
     }
