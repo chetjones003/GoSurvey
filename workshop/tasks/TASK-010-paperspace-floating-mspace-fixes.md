@@ -55,11 +55,14 @@ This is a larger refactor; deliver in slices.
   blue) model entities highlighted in the floating viewport's overlay draw (lines/circles/polylines/arcs).
   Build green; 171 tests pass.
 
+- 2026-06-17 [hover + selection FIXED] Two root causes found: (1) the model snap/hover/grip block
+  (~CadUi 6180) was not gated by modelSpace, so in floating it re-ran with paper coords and reset
+  viewportHoverEntityValid — now gated to model space. (2) idle SubmitViewportPick is a NO-OP; model
+  selection is the two-click/drag box (BeginSelectionBoxCorner → finishBox). Floating now arms+closes the
+  box (window/crossing) and renders it. Build green; 171 tests pass.
+
 ## NEXT (floating MSPACE — remaining)
-- Window-DRAG / two-click box selection inside the floating viewport: replicate the model idle box flow
-  (BeginSelectionBoxCorner with floating coords + selBoxWaitingSecond + fenceWindowMode) and RENDER the
-  selection box rect in the overlay (model draws it via GL, skipped in paper space). Single-click select
-  already works; this adds window/crossing.
 - Grip editing of model entities through the floating viewport: detect grips at the floating cursor
   (FindGripSnap / grip hit-test with viewport-scale tol), drag, commit — plus draw the grips in the overlay.
-- Both are intricate (state machine + overlay rendering); do as focused slices with user testing.
+  Intricate (state machine + overlay rendering); do as a focused slice with user testing.
+- Possible polish: survey-point hover/selection inside the floating viewport (currently model-only).
