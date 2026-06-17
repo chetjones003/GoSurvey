@@ -50,8 +50,16 @@ This is a larger refactor; deliver in slices.
   snapped pick); idle clicks route to SubmitViewportPick (single-click selection); preview cursor + green
   snap glyph drawn via the overlay's mlToScreen. Build green; 171 tests pass.
 
+- 2026-06-17 [glyph + hover + selection] Snap glyph sized to cmd.objectSnapGlyphHalfPx (matches model).
+  Hover pick (PickClosestCadEntity) at the floating cursor when idle; selected (blue) + hovered (light
+  blue) model entities highlighted in the floating viewport's overlay draw (lines/circles/polylines/arcs).
+  Build green; 171 tests pass.
+
 ## NEXT (floating MSPACE — remaining)
-- #2b/#3 window-DRAG box selection (the second-corner box + its rendering), hover highlight, and grip
-  editing inside the floating viewport. These need the shared model input path driven through the floating
-  screen→model mapping (it is gated `modelSpace` throughout) — the larger seam. Single-click select + snap
-  + commands now work; this slice adds the rest.
+- Window-DRAG / two-click box selection inside the floating viewport: replicate the model idle box flow
+  (BeginSelectionBoxCorner with floating coords + selBoxWaitingSecond + fenceWindowMode) and RENDER the
+  selection box rect in the overlay (model draws it via GL, skipped in paper space). Single-click select
+  already works; this adds window/crossing.
+- Grip editing of model entities through the floating viewport: detect grips at the floating cursor
+  (FindGripSnap / grip hit-test with viewport-scale tol), drag, commit — plus draw the grips in the overlay.
+- Both are intricate (state machine + overlay rendering); do as focused slices with user testing.
