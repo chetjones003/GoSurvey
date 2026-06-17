@@ -29,10 +29,13 @@ This is a larger refactor; deliver in slices.
 
 ## 4. Plan (incremental sub-slices)
 - [x] 5: ORTHO in paper space for LINE (constrain to H/V from anchor; osnap overrides ortho).
-- [ ] 2a: route idle left-clicks inside the floating viewport to selection (SubmitViewportPick when idle).
-- [ ] 1: object snapping inside the floating viewport (snap against model geometry at the floating cursor).
-- [ ] 2b/3: window-select + hover + grips inside the floating viewport (the input-path unification).
-- [ ] 4: viewport selection hit area = border only (verify/adjust the inOuter/!inInner band + grips).
+- [x] 4: viewport selection — border-only click band + crossing-box only when it touches a border edge.
+- [x] 2a: idle left-clicks inside the floating viewport route to SubmitViewportPick (single-click select).
+- [x] 1: object snapping inside the floating viewport — CadSnap::FindBest at the floating cursor with the
+      viewport's own px→world tolerance; snapped point drives the pick (viewportSnapPickValid) and the
+      rubber-band/crosshair preview; green snap glyph drawn in the overlay.
+- [ ] 2b/3: window-DRAG box selection + hover highlight + grips inside the floating viewport (the input-path
+      unification — model input path is gated `modelSpace`; needs the floating screen→model seam).
 
 ## 5. Implementation log
 - 2026-06-17 task opened from user feedback (6 issues).
@@ -42,12 +45,13 @@ This is a larger refactor; deliver in slices.
 - 2026-06-17 [#4] Viewport border hit band clamped to 0.25×min(W,H) per viewport so a small/zoomed-out
   viewport keeps a non-selecting interior — only the visible border ring selects, never the rect interior.
 
-## NEXT (floating MSPACE — needs a focused pass + user testing; do NOT ship blind half-fixes)
-- #2a idle selection: route idle left-clicks inside the floating viewport to SubmitViewportPick. Risk:
-  SubmitViewportPick's idle window-box flow (selBoxWaitingSecond) has no box rendering in floating mode —
-  verify behavior before enabling.
-- #1 snapping: compute model object-snap at the floating cursor (mLocalX/Y) and use the snapped point for
-  picks + show the glyph. The floating block currently passes the raw mapped cursor.
-- #2b/#3 window-select + hover + grips: the real fix is to drive the shared model input path with the
-  floating screen→model mapping (a coordinate seam), rather than the thin single-click forwarder at
-  CadUi ~5997. Larger refactor; the model input path is gated `modelSpace` throughout.
+- 2026-06-17 [#1 + #2a] Floating viewport now snaps + selects: mirrored the model snap pipeline in the
+  floating input block (CadSnap::FindBest with the viewport-scale tolerance → viewportSnapPickValid +
+  snapped pick); idle clicks route to SubmitViewportPick (single-click selection); preview cursor + green
+  snap glyph drawn via the overlay's mlToScreen. Build green; 171 tests pass.
+
+## NEXT (floating MSPACE — remaining)
+- #2b/#3 window-DRAG box selection (the second-corner box + its rendering), hover highlight, and grip
+  editing inside the floating viewport. These need the shared model input path driven through the floating
+  screen→model mapping (it is gated `modelSpace` throughout) — the larger seam. Single-click select + snap
+  + commands now work; this slice adds the rest.

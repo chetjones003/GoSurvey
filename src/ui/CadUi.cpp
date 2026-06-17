@@ -6011,6 +6011,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   // Floating model space (REQ-036): map the cursor through the active viewport and route model command
   // clicks so the model is edited IN PLACE inside the viewport rect (the sheet stays visible).
+  CadSnap::Hit floatingSnapHit{};  // object-snap result inside the floating viewport, for the overlay glyph
+  floatingSnapHit.valid = false;
   if (InFloatingModelSpace(cmd) && cmd.floatingViewportLayout >= 0 &&
       cmd.floatingViewportLayout < static_cast<int>(cmd.paperLayouts.size())) {
     PaperLayout& FL = cmd.paperLayouts[static_cast<size_t>(cmd.floatingViewportLayout)];
@@ -6026,17 +6028,46 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const double mLocalX = (fv.modelCenterX + static_cast<double>(px - vcx) * s) - cmd.worldDocumentOriginX;
       const double mLocalY = (fv.modelCenterY + static_cast<double>(py - vcy) * s) - cmd.worldDocumentOriginY;
       if (inside) {
+        // Object snapping inside the floating viewport (REQ-036), mirroring the model-space snap path but
+        // using the viewport's own scale for the pixel→world tolerance. The snapped point drives the pick,
+        // exactly as the model path feeds CadSnap into SubmitViewportPick.
+        double curMX = mLocalX, curMY = mLocalY;
+        cmd.viewportSnapPickValid = false;
+        const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
+                            cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
+        if (cmd.objectSnapEnabled && midCmd) {
+          const float pxPerPaperIn = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
+          const float worldPerPx = s / std::max(1.e-6f, pxPerPaperIn);  // world units per screen pixel here
+          const float tol = std::max(1.e-6f, cmd.objectSnapAperturePx * worldPerPx);
+          CadSnap::SnapExclude exclude{};
+          if (cmd.entityGripMoveActive && cmd.entityGripEntityIndex >= 0) {
+            exclude.valid = true;
+            exclude.type = cmd.entityGripType;
+            exclude.index = cmd.entityGripEntityIndex;
+          }
+          const CadSnap::Hit snap = CadSnap::FindBest(static_cast<float>(mLocalX), static_cast<float>(mLocalY),
+                                                      cmd, midCmd, tol, exclude);
+          if (snap.valid) {
+            cmd.viewportSnapPickValid = true;
+            cmd.viewportSnapPickWorldX = snap.x;
+            cmd.viewportSnapPickWorldY = snap.y;
+            curMX = snap.x;
+            curMY = snap.y;
+            floatingSnapHit = snap;
+          }
+        }
         if (outCursorX && outCursorY) {
-          *outCursorX = mLocalX;
-          *outCursorY = mLocalY;
+          *outCursorX = curMX;
+          *outCursorY = curMY;
         }
         if (outCursorRawX && outCursorRawY) {
           *outCursorRawX = mLocalX;
           *outCursorRawY = mLocalY;
         }
-        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
-            cmd.active != AppCommandState::Kind::None)
-          SubmitViewportPick(cmd, static_cast<float>(mLocalX), static_cast<float>(mLocalY), log);
+        // A click drives the active model command, or selects model geometry when idle — through the
+        // snapped point. (Window-drag box selection in the floating viewport is a later slice.)
+        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+          SubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log);
       } else if (hovered && cmd.active == AppCommandState::Kind::None &&
                  ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 &&
                  my < avail.y) {
@@ -7345,12 +7376,24 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                               cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint;
       const bool plineRubber = cmd.active == AppCommandState::Kind::Polyline &&
                                cmd.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint;
+      // Snap the in-place preview cursor to the floating snap point so the rubber band + crosshair match
+      // what a click commits (REQ-036).
+      float drawLX = curLX, drawLY = curLY;
+      if (floatingSnapHit.valid) {
+        drawLX = floatingSnapHit.x;
+        drawLY = floatingSnapHit.y;
+      }
       if (lineRubber || plineRubber)
-        sdl->AddLine(mlToScreen(cmd.anchorX, cmd.anchorY), mlToScreen(curLX, curLY),
+        sdl->AddLine(mlToScreen(cmd.anchorX, cmd.anchorY), mlToScreen(drawLX, drawLY),
                      IM_COL32(90, 220, 120, 230), 1.5f);
-      const ImVec2 cc = mlToScreen(curLX, curLY);  // model cursor crosshair
+      const ImVec2 cc = mlToScreen(drawLX, drawLY);  // model cursor crosshair
       sdl->AddLine(ImVec2(cc.x - 7.f, cc.y), ImVec2(cc.x + 7.f, cc.y), IM_COL32(90, 220, 120, 210), 1.f);
       sdl->AddLine(ImVec2(cc.x, cc.y - 7.f), ImVec2(cc.x, cc.y + 7.f), IM_COL32(90, 220, 120, 210), 1.f);
+      if (floatingSnapHit.valid) {  // object-snap glyph (green square) at the snapped point
+        const ImVec2 sg = mlToScreen(floatingSnapHit.x, floatingSnapHit.y);
+        sdl->AddRect(ImVec2(sg.x - 5.f, sg.y - 5.f), ImVec2(sg.x + 5.f, sg.y + 5.f),
+                     IM_COL32(120, 220, 120, 255), 0.f, 0, 1.5f);
+      }
       sdl->PopClipRect();
     }
   }
