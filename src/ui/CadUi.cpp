@@ -6188,13 +6188,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   cmd.offsetHoverHighlightValid = false;
   *out_snap = {};
 
-  // Model-space snap / hover / grip-magnet. Gated to model space: in floating model space this same work is
-  // done in the floating input block above (using the viewport transform), so running it here with the paper
-  // view coords would clobber the floating hover/snap/cursor (REQ-036).
-  if (modelSpace) {
+  // Cursor / snap / hover. Runs in model AND paper space (it also drives the paper-space crosshair via
+  // outCursorX/Y), but NOT in floating model space — there the floating input block above does this work
+  // through the viewport transform, and running it here with the paper view coords would clobber the
+  // floating hover/snap/cursor (REQ-036).
+  if (!InFloatingModelSpace(cmd)) {
     cmd.viewportSnapPickValid = false;
   }
-  if (modelSpace && hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
+  if (!InFloatingModelSpace(cmd) && hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
     const float u = mx / std::max(avail.x, 1.f);
     const float v = my / std::max(avail.y, 1.f);
     const double rawX = worldLeft + static_cast<double>(u) * (worldRight - worldLeft);
