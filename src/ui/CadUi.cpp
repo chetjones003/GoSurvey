@@ -5897,8 +5897,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       for (int vi = 0; vi < static_cast<int>(L.viewports.size()); ++vi) {
         const Viewport& v = L.viewports[static_cast<size_t>(vi)];
         const float vx0 = v.paperXIn, vy0 = v.paperYIn, vx1 = v.paperXIn + v.paperWIn, vy1 = v.paperYIn + v.paperHIn;
+        // A viewport is a hollow rectangle outline, not a filled object. WINDOW (L→R) selects it only when
+        // the whole border is inside the box; CROSSING (R→L) selects it only when the box actually touches a
+        // border edge — a box drawn entirely inside the viewport interior touches no visible geometry and
+        // must NOT select it (issue #4).
+        const bool overlap = vx0 <= bx1 && vx1 >= bx0 && vy0 <= by1 && vy1 >= by0;
+        const bool boxInsideInterior = bx0 > vx0 && bx1 < vx1 && by0 > vy0 && by1 < vy1;
         const bool sel = windowMode ? (vx0 >= bx0 && vx1 <= bx1 && vy0 >= by0 && vy1 <= by1)
-                                    : (vx0 <= bx1 && vx1 >= bx0 && vy0 <= by1 && vy1 >= by0);
+                                    : (overlap && !boxInsideInterior);
         if (sel)
           cmd.selectedViewports.push_back(vi);
       }
