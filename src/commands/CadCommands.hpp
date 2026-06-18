@@ -308,6 +308,11 @@ bool IsLayerFrozenInViewport(const Viewport& vp, const std::string& layerName);
 // --- Floating model space (REQ-036) ---
 bool InFloatingModelSpace(const AppCommandState& cmd);
 
+/// REQ-036: grab the nearest grip of a selected entity within \p tolWorld of (lx,ly) in LOCAL model coords;
+/// arms the grip drag and stores originals (for the floating viewport, where the screen-space grab cannot be
+/// used through the viewport transform). Returns true if a grip was grabbed.
+bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float tolWorld);
+
 /// REQ-037 / ADR-009: the active layout's paper-space geometry store a draw/edit command writes to,
 /// or nullptr when the command targets model space (model space active, or floating model space).
 PaperLayout* ActivePaperGeometryTarget(AppCommandState& st);

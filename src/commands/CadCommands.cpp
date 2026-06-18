@@ -597,6 +597,136 @@ void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, 
   log.push_back("ROTATE — rotated paper object(s).");
 }
 
+bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float tolWorld) {
+  // REQ-036: grab the nearest grip of a selected entity within tolWorld of (lx,ly) in LOCAL coords. Mirrors
+  // the model-space grab but with a world-distance hit test (the model path uses a screen-space test, which
+  // does not work through the floating viewport transform). On a hit, arms the grip drag + stores originals.
+  if (cmd.selection.empty())
+    return false;
+  float bestD2 = tolWorld * tolWorld;
+  int bestWhich = -1;
+  SelectedEntity bestSel{};
+  auto tryGrip = [&](const SelectedEntity& sel, float gx, float gy, int which) {
+    const float dx = lx - gx, dy = ly - gy;
+    const float d2 = dx * dx + dy * dy;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      bestWhich = which;
+      bestSel = sel;
+    }
+  };
+  for (const SelectedEntity& sel : cmd.selection) {
+    switch (sel.type) {
+    case SelectedEntity::Type::LineSeg: {
+      const size_t k = static_cast<size_t>(sel.index) * 6;
+      if (k + 5 < cmd.userLinesFlat.size()) {
+        tryGrip(sel, cmd.userLinesFlat[k], cmd.userLinesFlat[k + 1], 0);
+        tryGrip(sel, cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4], 1);
+      }
+      break;
+    }
+    case SelectedEntity::Type::Circle: {
+      const size_t k = static_cast<size_t>(sel.index) * 3;
+      if (k + 2 < cmd.userCirclesCxCyR.size()) {
+        const float cx = cmd.userCirclesCxCyR[k], cy = cmd.userCirclesCxCyR[k + 1], r = cmd.userCirclesCxCyR[k + 2];
+        tryGrip(sel, cx, cy, 0);
+        tryGrip(sel, cx + r, cy, 1);
+      }
+      break;
+    }
+    case SelectedEntity::Type::Polyline: {
+      const int np = cmd.userPolylineOffsets.size() > 0 ? static_cast<int>(cmd.userPolylineOffsets.size() - 1) : 0;
+      if (sel.index >= 0 && sel.index < np) {
+        const int startV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index)];
+        const int endV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index + 1)];
+        for (int vi = 0; vi < endV - startV; ++vi) {
+          const size_t xIdx = static_cast<size_t>(startV + vi) * 3;
+          if (xIdx + 1 >= cmd.userPolylineVerts.size())
+            break;
+          tryGrip(sel, cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1], vi);
+        }
+      }
+      break;
+    }
+    case SelectedEntity::Type::Arc: {
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
+        const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
+        const float endRad = a.startRad + a.sweepRad;
+        tryGrip(sel, a.cx, a.cy, 0);
+        tryGrip(sel, a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), 1);
+        tryGrip(sel, a.cx + a.r * std::cos(endRad), a.cy + a.r * std::sin(endRad), 2);
+      }
+      break;
+    }
+    case SelectedEntity::Type::Ellipse: {
+      if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
+        const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
+        const float perpX = -el.majVy, perpY = el.majVx;
+        tryGrip(sel, el.cx, el.cy, 0);
+        tryGrip(sel, el.cx + el.majVx, el.cy + el.majVy, 1);
+        tryGrip(sel, el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, 2);
+      }
+      break;
+    }
+    default:
+      break;
+    }
+  }
+  if (bestWhich < 0)
+    return false;
+  PushUndoSnapshot(cmd, "Grip edit");
+  cmd.entityGripMoveActive = true;
+  cmd.entityGripType = bestSel.type;
+  cmd.entityGripEntityIndex = bestSel.index;
+  cmd.entityGripWhich = bestWhich;
+  switch (bestSel.type) {  // store originals for RMB / Esc cancel
+  case SelectedEntity::Type::LineSeg: {
+    const size_t k = static_cast<size_t>(bestSel.index) * 6;
+    cmd.entityGripOrigX0 = cmd.userLinesFlat[k];
+    cmd.entityGripOrigY0 = cmd.userLinesFlat[k + 1];
+    cmd.entityGripOrigX1 = cmd.userLinesFlat[k + 3];
+    cmd.entityGripOrigY1 = cmd.userLinesFlat[k + 4];
+    break;
+  }
+  case SelectedEntity::Type::Circle: {
+    const size_t k = static_cast<size_t>(bestSel.index) * 3;
+    cmd.entityGripOrigCx = cmd.userCirclesCxCyR[k];
+    cmd.entityGripOrigCy = cmd.userCirclesCxCyR[k + 1];
+    cmd.entityGripOrigR = cmd.userCirclesCxCyR[k + 2];
+    break;
+  }
+  case SelectedEntity::Type::Polyline: {
+    const int startV = cmd.userPolylineOffsets[static_cast<size_t>(bestSel.index)];
+    const size_t xIdx = static_cast<size_t>(startV + bestWhich) * 3;
+    cmd.entityGripOrigPolylineXIdx = static_cast<int>(xIdx);
+    cmd.entityGripOrigPolyVertX = cmd.userPolylineVerts[xIdx];
+    cmd.entityGripOrigPolyVertY = cmd.userPolylineVerts[xIdx + 1];
+    break;
+  }
+  case SelectedEntity::Type::Arc: {
+    const CadArc& a = cmd.userArcs[static_cast<size_t>(bestSel.index)];
+    cmd.entityGripOrigCx = a.cx;
+    cmd.entityGripOrigCy = a.cy;
+    cmd.entityGripOrigR = a.r;
+    cmd.entityGripOrigStartRad = a.startRad;
+    cmd.entityGripOrigSweepRad = a.sweepRad;
+    break;
+  }
+  case SelectedEntity::Type::Ellipse: {
+    const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(bestSel.index)];
+    cmd.entityGripOrigEllCx = el.cx;
+    cmd.entityGripOrigEllCy = el.cy;
+    cmd.entityGripOrigEllMajVx = el.majVx;
+    cmd.entityGripOrigEllMajVy = el.majVy;
+    cmd.entityGripOrigEllRatio = el.ratio;
+    break;
+  }
+  default:
+    break;
+  }
+  return true;
+}
+
 void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std::vector<std::string>& log) {
   if (layoutIdx < 0 || static_cast<size_t>(layoutIdx) >= cmd.paperLayouts.size())
     return;

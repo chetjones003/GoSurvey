@@ -6097,12 +6097,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         //   - empty space    → arm a selection box.
         if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
             !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
-          if (cmd.active != AppCommandState::Kind::None) {
+          const float gripTolWorld = 10.f * worldPerPx;  // grip hit radius (~10px) in model units
+          if (cmd.entityGripMoveActive) {
+            // Commit the grip drag — geometry was updated live by the (ungated) grip-drag block above.
+            ClearEntityGripInteraction(cmd);
+            BumpCadGpuCache(cmd);
+            log.push_back("Grip edit committed.");
+          } else if (cmd.active != AppCommandState::Kind::None) {
             SubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log);
           } else if (cmd.selBoxWaitingSecond) {
             const bool fenceWindowMode = (mx - cmd.selBoxAnchorScreenX) > 3.f;  // L→R window, R→L crossing
             SubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log,
                                ImGui::GetIO().KeyShift, fenceWindowMode);
+          } else if (TryBeginEntityGripAtLocal(cmd, static_cast<float>(curMX), static_cast<float>(curMY),
+                                               gripTolWorld)) {
+            // Grabbed a grip of a selected entity → the drag block now moves it; consume this click.
           } else if (cmd.viewportHoverEntityValid) {
             const SelectedEntity e = cmd.viewportHoverEntity;  // the highlighted (blue) object under the cursor
             auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(),
@@ -7303,6 +7312,75 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const ImVec2 c = m2s(static_cast<double>(sp.easting) + oX, static_cast<double>(sp.northing) + oY);
         sdl->AddLine(ImVec2(c.x - crossPx, c.y), ImVec2(c.x + crossPx, c.y), kVpModelCol, 1.0f);
         sdl->AddLine(ImVec2(c.x, c.y - crossPx), ImVec2(c.x, c.y + crossPx), kVpModelCol, 1.0f);
+      }
+      // Entity grips (REQ-036): squares at each selected entity's grip points; the grabbed grip is hot.
+      if (isFloatVp) {
+        const float gh = 4.f;
+        auto drawGrip = [&](float lx, float ly, bool hot) {
+          const ImVec2 p = m2s(static_cast<double>(lx) + oX, static_cast<double>(ly) + oY);
+          sdl->AddRectFilled(ImVec2(p.x - gh, p.y - gh), ImVec2(p.x + gh, p.y + gh),
+                             hot ? IM_COL32(245, 120, 60, 255) : IM_COL32(59, 130, 246, 255));
+          sdl->AddRect(ImVec2(p.x - gh, p.y - gh), ImVec2(p.x + gh, p.y + gh), IM_COL32(255, 255, 255, 255));
+        };
+        for (const SelectedEntity& sel : cmd.selection) {
+          const bool gActive = cmd.entityGripMoveActive && cmd.entityGripType == sel.type &&
+                               cmd.entityGripEntityIndex == sel.index;
+          auto hot = [&](int which) { return gActive && cmd.entityGripWhich == which; };
+          switch (sel.type) {
+          case SelectedEntity::Type::LineSeg: {
+            const size_t k = static_cast<size_t>(sel.index) * 6;
+            if (k + 5 < cmd.userLinesFlat.size()) {
+              drawGrip(cmd.userLinesFlat[k], cmd.userLinesFlat[k + 1], hot(0));
+              drawGrip(cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4], hot(1));
+            }
+            break;
+          }
+          case SelectedEntity::Type::Circle: {
+            const size_t k = static_cast<size_t>(sel.index) * 3;
+            if (k + 2 < cmd.userCirclesCxCyR.size()) {
+              drawGrip(cmd.userCirclesCxCyR[k], cmd.userCirclesCxCyR[k + 1], hot(0));
+              drawGrip(cmd.userCirclesCxCyR[k] + cmd.userCirclesCxCyR[k + 2], cmd.userCirclesCxCyR[k + 1], hot(1));
+            }
+            break;
+          }
+          case SelectedEntity::Type::Polyline: {
+            const int np = cmd.userPolylineOffsets.size() > 0 ? static_cast<int>(cmd.userPolylineOffsets.size() - 1) : 0;
+            if (sel.index >= 0 && sel.index < np) {
+              const int startV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index)];
+              const int endV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index + 1)];
+              for (int vi2 = 0; vi2 < endV - startV; ++vi2) {
+                const size_t xIdx = static_cast<size_t>(startV + vi2) * 3;
+                if (xIdx + 1 >= cmd.userPolylineVerts.size())
+                  break;
+                drawGrip(cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1], hot(vi2));
+              }
+            }
+            break;
+          }
+          case SelectedEntity::Type::Arc: {
+            if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
+              const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
+              const float endRad = a.startRad + a.sweepRad;
+              drawGrip(a.cx, a.cy, hot(0));
+              drawGrip(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), hot(1));
+              drawGrip(a.cx + a.r * std::cos(endRad), a.cy + a.r * std::sin(endRad), hot(2));
+            }
+            break;
+          }
+          case SelectedEntity::Type::Ellipse: {
+            if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
+              const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
+              const float perpX = -el.majVy, perpY = el.majVx;
+              drawGrip(el.cx, el.cy, hot(0));
+              drawGrip(el.cx + el.majVx, el.cy + el.majVy, hot(1));
+              drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, hot(2));
+            }
+            break;
+          }
+          default:
+            break;
+          }
+        }
       }
       sdl->PopClipRect();
       // Viewport border; selected ones accented. The active floating viewport (REQ-036) is green.
