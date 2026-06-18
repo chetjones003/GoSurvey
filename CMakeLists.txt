@@ -117,6 +117,8 @@ add_executable(GoSurvey
   src/ui/SplashScreen.cpp
   src/ui/ImGuiLayout.cpp
   src/ui/MtextRichFormat.cpp
+  src/ui/FontRegistry.cpp
+  src/ui/ShxFont.cpp
   src/ui/PdfAttachDialog.cpp
 
   # Survey / COGO

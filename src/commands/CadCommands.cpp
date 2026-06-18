@@ -4,6 +4,7 @@
 #include "geom2d.hpp"
 #include "NumFormat.hpp"
 #include "MtextRichFormat.hpp"
+#include "FontRegistry.hpp"
 #include "StringUtil.hpp"
 #include "AppIcon.hpp"
 
@@ -49,6 +50,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.userPolylineAttrs      = cmd.userPolylineAttrs;
   doc.cadAnnotations         = cmd.cadAnnotations;
   doc.cadAnnotationAttrs     = cmd.cadAnnotationAttrs;
+  doc.cadFilledRegions       = cmd.cadFilledRegions;
+  doc.cadFilledRegionAttrs   = cmd.cadFilledRegionAttrs;
   doc.surveyPoints           = cmd.surveyPoints;
   doc.selectedSurveyPointIndices = cmd.selectedSurveyPointIndices;
   doc.drawingLayerTable      = cmd.drawingLayerTable;
@@ -84,6 +87,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.userPolylineAttrs          = doc.userPolylineAttrs;
   cmd.cadAnnotations             = doc.cadAnnotations;
   cmd.cadAnnotationAttrs         = doc.cadAnnotationAttrs;
+  cmd.cadFilledRegions           = doc.cadFilledRegions;
+  cmd.cadFilledRegionAttrs       = doc.cadFilledRegionAttrs;
   cmd.surveyPoints               = doc.surveyPoints;
   cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
   cmd.drawingLayerTable          = doc.drawingLayerTable;
@@ -742,6 +747,8 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
   snap.userPolylineAttrs    = st.userPolylineAttrs;
   snap.cadAnnotations       = st.cadAnnotations;
   snap.cadAnnotationAttrs   = st.cadAnnotationAttrs;
+  snap.cadFilledRegions     = st.cadFilledRegions;
+  snap.cadFilledRegionAttrs = st.cadFilledRegionAttrs;
   snap.surveyPoints         = st.surveyPoints;
   snap.drawingLayerTable    = st.drawingLayerTable;
   snap.pdfAttachments       = st.pdfAttachments;
@@ -769,6 +776,8 @@ static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySn
   st.userPolylineAttrs    = snap.userPolylineAttrs;
   st.cadAnnotations       = snap.cadAnnotations;
   st.cadAnnotationAttrs   = snap.cadAnnotationAttrs;
+  st.cadFilledRegions     = snap.cadFilledRegions;
+  st.cadFilledRegionAttrs = snap.cadFilledRegionAttrs;
   st.surveyPoints         = snap.surveyPoints;
   st.drawingLayerTable    = snap.drawingLayerTable;
   st.pdfAttachments       = snap.pdfAttachments;
@@ -5629,6 +5638,10 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     }
   }
 
+  for (const CadFilledRegion& fr : st.cadFilledRegions)
+    for (size_t i = 0; i + 1 < fr.verts.size(); i += 2)
+      consider(static_cast<double>(fr.verts[i]), static_cast<double>(fr.verts[i + 1]));
+
   if (!any)
     return false;
   *outMnX = mnX;
@@ -6689,6 +6702,8 @@ void ClearCadGeometry(AppCommandState& st) {
   st.userPolylineAttrs.clear();
   st.cadAnnotations.clear();
   st.cadAnnotationAttrs.clear();
+  st.cadFilledRegions.clear();
+  st.cadFilledRegionAttrs.clear();
   ClearPendingOneShotObjectSnap(st);
   ClearCadSelection(st);
   BumpCadGpuCache(st);
@@ -11165,6 +11180,7 @@ bool LoadApplicationFont() {
     ImFont* f = io.Fonts->AddFontFromFileTTF(path, 16.0f, &cfg);
     if (f) {
       io.FontDefault = f;
+      FontReg::SetDefault(f);  // fallback for unresolved CAD fonts
       return true;
     }
   }

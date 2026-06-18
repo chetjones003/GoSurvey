@@ -200,6 +200,15 @@ nlohmann::json (numbers may serialize as integers or floats; the loader uses
   annotationAttrs (array of objects)
     Length MUST equal annotations.size(). EntityAttributes per annotation.
 
+  filledRegions   (array of arrays, optional on load — missing means none)
+    Each element is a flat [x0,y0, x1,y1, ...] array of local-coordinate vertices
+    for one closed solid-filled loop (ADR-011). Imported from a SOLID-fill HATCH;
+    rendered filled in the viewport overlay and re-exported as a SOLID HATCH.
+
+  filledRegionAttrs (array of objects, optional)
+    Length SHOULD equal filledRegions.size(). EntityAttributes (color/layer) per
+    filled region. Missing or short → defaults applied per index.
+
 3.8 Layers
   layers (array of objects, optional on load — missing means empty table)
     Each object is a CadLayerRow (section 5.3).

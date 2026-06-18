@@ -51,7 +51,10 @@ public:
                    const std::vector<PdfAttachment>* pdfAttachments = nullptr,
                    // When >= 0, the view is in paper space; GL geometry is skipped and the paper-space
                    // sheet/viewports are drawn by the ImGui overlay (CadUi::DrawDrawingViewport).
-                   int activeSpaceIndex = -1);
+                   int activeSpaceIndex = -1,
+                   // Solid-filled regions (ADR-011) drawn under the linework via stencil even-odd fill.
+                   const std::vector<CadFilledRegion>* filledRegions = nullptr,
+                   const std::vector<EntityAttributes>* filledRegionAttrs = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 

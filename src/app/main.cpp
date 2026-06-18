@@ -581,7 +581,9 @@ int main() {
                          &cmd.userCircleAttrs, &ext, gridVisible, &cmd.drawingLayerTable, tuning,
                          paperSpace ? nullptr : (pdfRenderList.empty() ? nullptr : &pdfRenderList),
                          // Paper space: skip GL geometry; the ImGui overlay draws the sheet + viewports.
-                         cmd.activeSpaceIndex);
+                         cmd.activeSpaceIndex,
+                         (paperSpace || cmd.cadFilledRegions.empty()) ? nullptr : &cmd.cadFilledRegions,
+                         (paperSpace || cmd.cadFilledRegionAttrs.empty()) ? nullptr : &cmd.cadFilledRegionAttrs);
 
     ImGui::Render();
     int displayW = 0;

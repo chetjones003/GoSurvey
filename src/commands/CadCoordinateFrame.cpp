@@ -50,6 +50,9 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
       add2(&an.dimExt2X, &an.dimExt2Y);
     }
   }
+  for (CadFilledRegion& fr : st.cadFilledRegions)
+    for (size_t i = 0; i + 1 < fr.verts.size(); i += 2)
+      add2(&fr.verts[i], &fr.verts[i + 1]);
   for (SurveyPoint& p : st.surveyPoints)
     add2(&p.easting, &p.northing);
 }

@@ -677,8 +677,8 @@ bool ViewportRenderer::EnsureMultisamplePass(int w, int h) {
 
   glGenRenderbuffers(1, &msDepthRbo_);
   glBindRenderbuffer(GL_RENDERBUFFER, msDepthRbo_);
-  glRenderbufferStorageMultisample(GL_RENDERBUFFER, n, GL_DEPTH_COMPONENT24, w, h);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, msDepthRbo_);
+  glRenderbufferStorageMultisample(GL_RENDERBUFFER, n, GL_DEPTH24_STENCIL8, w, h);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, msDepthRbo_);
 
   const GLenum st = glCheckFramebufferStatus(GL_FRAMEBUFFER);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -734,8 +734,8 @@ bool ViewportRenderer::EnsureFramebuffer(int w, int h) {
 
   glGenRenderbuffers(1, &rbo_);
   glBindRenderbuffer(GL_RENDERBUFFER, rbo_);
-  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, w, h);
-  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rbo_);
+  glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH24_STENCIL8, w, h);
+  glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_STENCIL_ATTACHMENT, GL_RENDERBUFFER, rbo_);
 
   GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
@@ -759,7 +759,9 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
                                    const CadExtendedGeometryInput* extended, bool showGrid,
                                    const std::vector<CadLayerRow>* drawingLayers, const RenderTuning& tuning,
                                    const std::vector<PdfAttachment>* pdfAttachments,
-                                   int activeSpaceIndex) {
+                                   int activeSpaceIndex,
+                                   const std::vector<CadFilledRegion>* filledRegions,
+                                   const std::vector<EntityAttributes>* filledRegionAttrs) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -782,7 +784,8 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
   glDepthMask(GL_FALSE);
 
   glClearColor(tuning.bgR, tuning.bgG, tuning.bgB, 1.f);
-  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+  glClearStencil(0);
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
 
   // Paper space: the ImGui overlay in CadUi::DrawDrawingViewport renders the sheet, viewport rects,
   // and model geometry clipped+scaled inside each viewport, all pan/zoom-aware (via its w2s transform).
@@ -955,6 +958,84 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
     glBindVertexArray(0);
   }
 
+  // --- Solid-filled regions (ADR-011): even-odd stencil fill, drawn under the linework so it is plottable
+  // and behind outlines. Each loop is fan-triangulated and INVERTed into the stencil (concave + holes via
+  // even-odd parity); a covering quad then fills where parity is odd and resets the stencil to 0. ---
+  if (filledRegions && !filledRegions->empty()) {
+    glUseProgram(lineProgram_);
+    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+    glBindBuffer(GL_ARRAY_BUFFER, vboLines_);
+    glBindVertexArray(vaoLines_);
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
+    glDisable(GL_BLEND);
+    glEnable(GL_STENCIL_TEST);
+    std::vector<float> fan;
+    for (size_t fi = 0; fi < filledRegions->size(); ++fi) {
+      const CadFilledRegion& fr = (*filledRegions)[fi];
+      if (fr.loopStart.empty() || fr.verts.size() < 6)
+        continue;
+      fan.clear();
+      double mnx = 1e300, mxx = -1e300, mny = 1e300, mxy = -1e300;
+      auto vx = [&](int p) { return fr.verts[static_cast<size_t>(p) * 2 + 0]; };
+      auto vy = [&](int p) { return fr.verts[static_cast<size_t>(p) * 2 + 1]; };
+      for (size_t li = 0; li < fr.loopStart.size(); ++li) {
+        const int begin = fr.loopStart[li];
+        const int cnt = fr.loopCount(li);
+        if (cnt < 3)
+          continue;
+        for (int v = 1; v + 1 < cnt; ++v) {
+          fan.push_back(vx(begin) - static_cast<float>(viewAnchorX));
+          fan.push_back(vy(begin) - static_cast<float>(viewAnchorY));
+          fan.push_back(0.f);
+          fan.push_back(vx(begin + v) - static_cast<float>(viewAnchorX));
+          fan.push_back(vy(begin + v) - static_cast<float>(viewAnchorY));
+          fan.push_back(0.f);
+          fan.push_back(vx(begin + v + 1) - static_cast<float>(viewAnchorX));
+          fan.push_back(vy(begin + v + 1) - static_cast<float>(viewAnchorY));
+          fan.push_back(0.f);
+        }
+        for (int v = 0; v < cnt; ++v) {
+          mnx = std::min(mnx, static_cast<double>(vx(begin + v)));
+          mxx = std::max(mxx, static_cast<double>(vx(begin + v)));
+          mny = std::min(mny, static_cast<double>(vy(begin + v)));
+          mxy = std::max(mxy, static_cast<double>(vy(begin + v)));
+        }
+      }
+      if (fan.empty())
+        continue;
+      // Pass 1: parity into stencil (no color write).
+      glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+      glStencilFunc(GL_ALWAYS, 0, 0xFF);
+      glStencilOp(GL_KEEP, GL_KEEP, GL_INVERT);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(fan.size() * sizeof(float)), fan.data(), GL_STREAM_DRAW);
+      glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(fan.size() / 3));
+      // Pass 2: fill the odd-parity region, resetting stencil to 0 as the covering quad draws.
+      float rgba[4] = {0.85f, 0.85f, 0.85f, 1.f};
+      if (filledRegionAttrs && fi < filledRegionAttrs->size()) {
+        const EntityAttributes& attr = (*filledRegionAttrs)[fi];
+        const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
+        ResolveEntityRgbaForViewport(attr, lr, 0.85f, 0.85f, 0.85f, rgba);
+      }
+      glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+      glStencilFunc(GL_NOTEQUAL, 0, 0xFF);
+      glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
+      glUniform4f(locCol, rgba[0], rgba[1], rgba[2], 1.f);
+      const float qx0 = static_cast<float>(mnx - viewAnchorX), qy0 = static_cast<float>(mny - viewAnchorY);
+      const float qx1 = static_cast<float>(mxx - viewAnchorX), qy1 = static_cast<float>(mxy - viewAnchorY);
+      const float quad[18] = {qx0, qy0, 0.f, qx1, qy0, 0.f, qx1, qy1, 0.f,
+                              qx0, qy0, 0.f, qx1, qy1, 0.f, qx0, qy1, 0.f};
+      glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STREAM_DRAW);
+      glDrawArrays(GL_TRIANGLES, 0, 6);
+    }
+    glDisable(GL_STENCIL_TEST);
+    glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBindVertexArray(0);
+  }
+
+  glUseProgram(lineProgram_);
+  glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
   glBindBuffer(GL_ARRAY_BUFFER, vboLines_);
   glBindVertexArray(vaoLines_);
   glEnableVertexAttribArray(0);

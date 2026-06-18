@@ -2,6 +2,8 @@
 #include "CadCoordinateFrame.hpp"
 #include "ViewportPickPolicy.hpp"
 #include "MtextRichFormat.hpp"
+#include "FontRegistry.hpp"
+#include "ShxFont.hpp"
 
 #include "CadLinetype.hpp"
 #include "NumFormat.hpp"
@@ -28,6 +30,16 @@
 #include <cfloat>
 #include <cstdint>
 #include <string>
+
+// True when a font name refers to an SHX stroke font (rendered from the real .shx, not a TrueType).
+static bool CadIsShxFontName(const std::string& s) {
+  if (s.size() < 4)
+    return false;
+  std::string ext = s.substr(s.size() - 4);
+  for (char& c : ext)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return ext == ".shx";
+}
 
 static ImTextureID g_menuBarLogoTex{};
 static ImVec2 g_menuBarLogoDims{};
@@ -7529,8 +7541,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (a.kind == CadAnnotation::Kind::Text) {
         ImVec2 sp{};
         worldToScreen(a.insX, a.insY, &sp);
+        // CAD TEXT is model-sized: scale with the drawing (no min-px floor), so it stays proportional when
+        // zoomed out instead of ballooning at the readability floor. Only cap the upper end.
         const float fontPx =
-            std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), cmd.viewportTextMinPx, cmd.viewportTextMaxPx);
+            std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), 1.f, cmd.viewportTextMaxPx);
         float rgba[4];
         if (attrPtr)
           ResolveEntityColorForViewport(*attrPtr, 230 / 255.f, 232 / 255.f, 238 / 255.f, rgba);
@@ -7542,7 +7556,37 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
         const ImU32 col = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
                                    static_cast<int>(rgba[2] * 255.f), static_cast<int>(rgba[3] * 255.f));
-        dl->AddText(font, fontPx, sp, col, a.text.c_str());
+        // An SHX font (romans.shx, …) is rendered from the real .shx file as strokes — an exact match to
+        // AutoCAD. Anything else uses the resolved TrueType (with faux bold/italic for missing variants).
+        Shx::Font* sf = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+        if (sf && sf->valid()) {
+          const float thick = std::max(1.f, fontPx * 0.05f);
+          const ImVec2 baselinePt(sp.x, sp.y + fontPx);  // sp = top-left; baseline sits one cap-height down
+          Shx::DrawText(dl, *sf, baselinePt, fontPx, -a.rotationRad, col, a.text, thick);
+          if (a.underline) {
+            const float w = Shx::MeasureWidthPx(*sf, a.text, fontPx);
+            const float uy = baselinePt.y + std::max(1.5f, fontPx * 0.12f);
+            dl->AddLine(ImVec2(baselinePt.x, uy), ImVec2(baselinePt.x + w, uy), col, thick);
+          }
+        } else {
+          bool realBold = false, realItalic = false;
+          ImFont* tf = a.fontFamily.empty()
+                           ? font
+                           : FontReg::Resolve(a.fontFamily, a.bold, a.italic, &realBold, &realItalic);
+          if (!tf) tf = font;
+          const ImVec2 ext = tf->CalcTextSizeA(fontPx, FLT_MAX, 0.f, a.text.c_str());
+          if (a.bold && !realBold) {  // faux bold: double-strike
+            dl->AddText(tf, fontPx, ImVec2(sp.x + 0.6f, sp.y), col, a.text.c_str());
+            dl->AddText(tf, fontPx, ImVec2(sp.x - 0.6f, sp.y), col, a.text.c_str());
+          }
+          if (a.italic && !realItalic)  // faux italic: slight horizontal nudge (no true shear in ImGui)
+            dl->AddText(tf, fontPx, ImVec2(sp.x + 0.4f, sp.y), col, a.text.c_str());
+          dl->AddText(tf, fontPx, sp, col, a.text.c_str());
+          if (a.underline) {
+            const float uy = sp.y + ext.y - std::max(1.f, fontPx * 0.07f);
+            dl->AddLine(ImVec2(sp.x, uy), ImVec2(sp.x + ext.x, uy), col, std::max(1.f, fontPx * 0.06f));
+          }
+        }
       } else if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
         float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
         if (!CadDimAnyGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
@@ -7640,8 +7684,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float ry0 = std::min(sa.y, sb.y);
         const float rx1 = std::max(sa.x, sb.x);
         const float ry1 = std::max(sa.y, sb.y);
+        // Survey-point labels keep the readability floor (stay legible at any zoom); plain MTEXT is
+        // model-sized and scales with the drawing (no floor) so it stays proportional when zoomed out.
+        const float mtextMinPx = (a.surveyPointLabelFor >= 0) ? cmd.viewportMtextMinPx : 1.f;
         const float fontPx =
-            std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), cmd.viewportMtextMinPx, cmd.viewportMtextMaxPx);
+            std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), mtextMinPx, cmd.viewportMtextMaxPx);
         ImU32 col = colFallback;
         if (attrPtr) {
           float rgba[4];
@@ -7655,7 +7702,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (a.surveyPointLabelFor >= 0) {
           float pw = 8.f;
           float ph = fontPx * 1.22f;
-          MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph);
+          MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, a.fontFamily);
           drawX = rx0 + 0.5f * ((rx1 - rx0) - pw);
           drawY = ry0 + 0.5f * ((ry1 - ry0) - ph);
           wrapW = std::max(pw, 8.f);
@@ -7712,9 +7759,53 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
               }
             }
           }
+        } else if (a.mtextAttach != 1) {
+          // Honor MTEXT attachment (group 71): col 0/1/2 = left/center/right, row 0/1/2 = top/middle/bottom.
+          const int acol = (a.mtextAttach - 1) % 3;
+          const int arow = (a.mtextAttach - 1) / 3;
+          float pw = 8.f, ph = fontPx * 1.22f;
+          MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, a.fontFamily);
+          if (acol == 1)      drawX = rx0 + 0.5f * ((rx1 - rx0) - pw);
+          else if (acol == 2) drawX = std::max(rx0 + 4.f, rx1 - pw - 4.f);
+          if (arow == 1)      drawY = ry0 + 0.5f * ((ry1 - ry0) - ph);
+          else if (arow == 2) drawY = std::max(ry0 + 4.f, ry1 - ph - 4.f);
+          if (acol != 0) wrapW = std::max(pw, 8.f);
         }
         dl->PushClipRect(ImVec2(rx0, ry0), ImVec2(rx1, ry1), true);
-        MtextRichDrawWrapped(dl, font, fontPx, ImVec2(drawX, drawY), wrapW, col, a.text);
+        Shx::Font* sfm = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+        if (sfm && sfm->valid()) {
+          // Render MTEXT as SHX strokes (exact AutoCAD match), line by line, honoring the attachment.
+          const std::string plain = MtextRichFlattenToPlain(a.text);
+          const bool underline = a.text.find("[[u]]") != std::string::npos;
+          const int acol = (a.mtextAttach - 1) % 3;
+          const float lineH = fontPx * 1.4f;
+          const float thick = std::max(1.f, fontPx * 0.05f);
+          std::vector<std::string> lines;
+          {
+            std::string ln;
+            for (char ch : plain) {
+              if (ch == '\n') { lines.push_back(ln); ln.clear(); }
+              else ln += ch;
+            }
+            lines.push_back(ln);
+          }
+          float ly = drawY;
+          for (const std::string& ln : lines) {
+            const float w = Shx::MeasureWidthPx(*sfm, ln, fontPx);
+            float lx = rx0 + 4.f;
+            if (acol == 1)      lx = rx0 + 0.5f * ((rx1 - rx0) - w);
+            else if (acol == 2) lx = std::max(rx0 + 4.f, rx1 - w - 4.f);
+            const ImVec2 base(lx, ly + fontPx);
+            Shx::DrawText(dl, *sfm, base, fontPx, 0.f, col, ln, thick);
+            if (underline) {
+              const float uy = base.y + std::max(1.5f, fontPx * 0.12f);
+              dl->AddLine(ImVec2(lx, uy), ImVec2(lx + w, uy), col, thick);
+            }
+            ly += lineH;
+          }
+        } else {
+          MtextRichDrawWrapped(dl, font, fontPx, ImVec2(drawX, drawY), wrapW, col, a.text, a.fontFamily);
+        }
         dl->PopClipRect();
       }
     };

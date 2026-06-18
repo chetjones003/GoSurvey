@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 // Pure CAD entity value types, dependency-free so both the model-space command layer
 // (CadCommands.hpp) and the paper-space data model (PaperSpace.hpp) can reuse them
@@ -31,6 +32,16 @@ struct CadAnnotation {
   float rotationRad = 0.f;
   std::string text;
   float boxMinX = 0.f, boxMinY = 0.f, boxMaxX = 0.f, boxMaxY = 0.f;
+  /// MTEXT attachment point (DXF group 71): 1=top-left … 5=middle-center … 9=bottom-right.
+  /// Drives in-box justification when rendering; default 1 keeps legacy top-left behavior.
+  int mtextAttach = 1;
+  /// Typeface for TEXT (and the base font for MTEXT runs without a [[font:…]] override): a TrueType
+  /// family ("Arial") or an SHX name ("romans.shx"). Empty = the application default font.
+  std::string fontFamily;
+  /// TEXT character styling (MTEXT carries per-run styling in its [[b]]/[[i]]/[[u]] wire tags instead).
+  bool bold = false;
+  bool italic = false;
+  bool underline = false;
   /// \c Kind::DimAligned / \c DimLinear / \c DimAngular — extension or ray points (on measured geometry).
   float dimExt1X = 0.f, dimExt1Y = 0.f, dimExt2X = 0.f, dimExt2Y = 0.f;
   /// \c Kind::DimAngular — vertex (center) of the measured angle.
@@ -46,4 +57,19 @@ struct CadAnnotation {
   bool surveyLabelHasUserOffset = false;
   float surveyLabelUserOffsetEast = 0.f;
   float surveyLabelUserOffsetNorth = 0.f;
+};
+
+/// A solid-filled region (ADR-011), imported from a SOLID-fill HATCH. Holds one or more closed boundary
+/// loops in the same local coordinate frame as line geometry: loop 0 is the outer boundary, any further
+/// loops are holes (islands). Rendered filled with even-odd rule in the GL pass and re-exported as a HATCH.
+struct CadFilledRegion {
+  std::vector<float> verts;      ///< Flat x,y pairs for all loops, concatenated (local storage coordinates).
+  std::vector<int>   loopStart;  ///< Pair-index where each loop begins; loopStart[0]==0. Loop k spans
+                                 ///< [loopStart[k], loopStart[k+1]) (last loop runs to verts.size()/2).
+  /// Vertex (pair) count of loop \p k.
+  int loopCount(size_t k) const {
+    const int begin = loopStart[k];
+    const int end = (k + 1 < loopStart.size()) ? loopStart[k + 1] : static_cast<int>(verts.size() / 2);
+    return end - begin;
+  }
 };

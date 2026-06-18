@@ -1,8 +1,10 @@
 #include "MtextRichFormat.hpp"
+#include "FontRegistry.hpp"
 
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace {
@@ -14,6 +16,8 @@ struct StyleDepth {
   int c = 0;
   // Color stack: each entry is a packed 0xRRGGBB value (no alpha).
   std::vector<uint32_t> colorStack;
+  // Font-family stack: each entry a TrueType family / SHX name; empty stack = base font.
+  std::vector<std::string> fontStack;
 };
 
 struct RichRun {
@@ -24,6 +28,7 @@ struct RichRun {
   bool caps = false;
   bool hasColorOverride = false;
   uint32_t colorOverride = 0; // 0xRRGGBB
+  std::string font;           // per-run typeface override; empty = base font
 };
 
 bool Starts(const std::string& s, size_t i, const char* tag) {
@@ -84,6 +89,8 @@ void BuildRuns(const std::string& wire, std::vector<RichRun>* outRuns) {
       r.hasColorOverride = true;
       r.colorOverride = st.colorStack.back();
     }
+    if (!st.fontStack.empty())
+      r.font = st.fontStack.back();
     outRuns->push_back(std::move(r));
     acc.clear();
   };
@@ -105,6 +112,21 @@ void BuildRuns(const std::string& wire, std::vector<RichRun>* outRuns) {
           st.colorStack.pop_back();
         i += 10;
         hit = true;
+      } else if (Starts(wire, i, "[[/font]]")) {
+        flush();
+        if (!st.fontStack.empty())
+          st.fontStack.pop_back();
+        i += 9;
+        hit = true;
+      } else if (Starts(wire, i, "[[font:")) {
+        const size_t nameStart = i + 7;
+        const size_t close = wire.find("]]", nameStart);
+        if (close != std::string::npos) {
+          flush();
+          st.fontStack.push_back(wire.substr(nameStart, close - nameStart));
+          i = close + 2;
+          hit = true;
+        }
       } else {
         size_t afterTag = 0;
         uint32_t rgb = 0;
@@ -130,6 +152,8 @@ void BuildRuns(const std::string& wire, std::vector<RichRun>* outRuns) {
 void SerializeRuns(const std::vector<RichRun>& runs, std::string* out) {
   out->clear();
   for (const RichRun& r : runs) {
+    if (!r.font.empty())
+      *out += "[[font:" + r.font + "]]";
     if (r.hasColorOverride) {
       char buf[20];
       std::snprintf(buf, sizeof(buf), "[[color:%06X]]", r.colorOverride);
@@ -146,11 +170,14 @@ void SerializeRuns(const std::vector<RichRun>& runs, std::string* out) {
     if (r.bold)    *out += "[[/b]]";
     if (r.hasColorOverride)
       *out += "[[/color]]";
+    if (!r.font.empty())
+      *out += "[[/font]]";
   }
 }
 
 static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, ImVec2 origin, float maxWidth,
-                                   ImU32 baseRgb, const std::string& wire, float* outMaxContentWidthPx) {
+                                   ImU32 baseRgb, const std::string& wire, const std::string& baseFontFamily,
+                                   float* outMaxContentWidthPx) {
   if (outMaxContentWidthPx)
     *outMaxContentWidthPx = 0.f;
   if (!font || maxWidth < 4.f)
@@ -167,40 +194,47 @@ static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, I
   float lineStartX = pen.x;
 
   auto segColor = [&](const RichRun& r) -> ImU32 {
+    if (!r.hasColorOverride)
+      return baseRgb;
+    const uint32_t rgb = r.colorOverride;
     ImVec4 fc;
-    if (r.hasColorOverride) {
-      const uint32_t rgb = r.colorOverride;
-      fc.x = static_cast<float>((rgb >> 16) & 0xFF) / 255.f;
-      fc.y = static_cast<float>((rgb >>  8) & 0xFF) / 255.f;
-      fc.z = static_cast<float>( rgb        & 0xFF) / 255.f;
-      fc.w = 1.f;
-    } else {
-      fc = ImGui::ColorConvertU32ToFloat4(baseRgb);
-    }
-    if (r.bold) {
-      fc.x = std::min(1.f, fc.x + 0.09f);
-      fc.y = std::min(1.f, fc.y + 0.09f);
-      fc.z = std::min(1.f, fc.z + 0.09f);
-    }
-    if (r.italic) {
-      fc.x = std::max(0.f, fc.x - 0.08f);
-      fc.y = std::max(0.f, fc.y - 0.05f);
-      fc.z = std::min(1.f, fc.z + 0.12f);
-    }
+    fc.x = static_cast<float>((rgb >> 16) & 0xFF) / 255.f;
+    fc.y = static_cast<float>((rgb >>  8) & 0xFF) / 255.f;
+    fc.z = static_cast<float>( rgb        & 0xFF) / 255.f;
+    fc.w = 1.f;
     return ImGui::ColorConvertFloat4ToU32(fc);
   };
 
   float maxInkY = origin.y + lineH * 0.2f;
+  const float uThick = std::max(1.f, fontPx * 0.06f);
 
   for (const RichRun& r : runs) {
-    const char* s = r.text.c_str();
-    const char* end = s + r.text.size();
     std::string disp = r.text;
     if (r.caps)
       ApplyCapsAscii(&disp);
-    s = disp.c_str();
-    end = s + disp.size();
+    const char* s = disp.c_str();
+    const char* end = s + disp.size();
     const ImU32 col = segColor(r);
+    // Resolve the run typeface (per-run [[font:…]] → base family → fallback) and bold/italic; missing
+    // bold/italic variants fall back to faux double-strike / nudge.
+    const std::string& fam = !r.font.empty() ? r.font : baseFontFamily;
+    bool realBold = false, realItalic = false;
+    ImFont* rf = fam.empty() ? font : FontReg::Resolve(fam, r.bold, r.italic, &realBold, &realItalic);
+    if (!rf)
+      rf = font;
+    const bool fauxBold = r.bold && !realBold;
+    const bool fauxItalic = r.italic && !realItalic;
+    auto drawSeg = [&](const char* a, const char* b, ImVec2 at) {
+      if (!dl)
+        return;
+      if (fauxBold) {
+        dl->AddText(rf, fontPx, ImVec2(at.x + 0.55f, at.y), col, a, b);
+        dl->AddText(rf, fontPx, ImVec2(at.x - 0.55f, at.y), col, a, b);
+      }
+      if (fauxItalic)
+        dl->AddText(rf, fontPx, ImVec2(at.x + 0.4f, at.y), col, a, b);
+      dl->AddText(rf, fontPx, at, col, a, b);
+    };
     while (s < end) {
       if (*s == '\n') {
         if (outMaxContentWidthPx)
@@ -215,36 +249,27 @@ static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, I
       while (wend < end && *wend != ' ' && *wend != '\n')
         ++wend;
       if (wend > s) {
-        ImVec2 sz = font->CalcTextSizeA(fontPx, FLT_MAX, 0.f, s, wend);
+        ImVec2 sz = rf->CalcTextSizeA(fontPx, FLT_MAX, 0.f, s, wend);
         if (pen.x + sz.x > xMax && pen.x > x0 + 0.5f) {
           pen.x = x0;
           pen.y += lineH;
         }
-        if (dl) {
-          if (r.bold) {
-            dl->AddText(font, fontPx, pen + ImVec2(0.55f, 0.f), col, s, wend);
-            dl->AddText(font, fontPx, pen + ImVec2(-0.55f, 0.f), col, s, wend);
-          }
-          if (r.italic)
-            dl->AddText(font, fontPx, pen + ImVec2(0.4f, 0.f), col, s, wend);
-          dl->AddText(font, fontPx, pen, col, s, wend);
-          if (r.underline) {
-            const float uy = pen.y + sz.y + 0.5f;
-            dl->AddLine(ImVec2(pen.x, uy), ImVec2(pen.x + sz.x, uy), col, 1.f);
-          }
-        }
+        drawSeg(s, wend, pen);
+        if (dl && r.underline)
+          dl->AddLine(ImVec2(pen.x, pen.y + sz.y + 0.5f), ImVec2(pen.x + sz.x, pen.y + sz.y + 0.5f), col, uThick);
         pen.x += sz.x;
         maxInkY = std::max(maxInkY, pen.y + sz.y);
         s = wend;
       }
       if (s < end && *s == ' ') {
-        ImVec2 sp = font->CalcTextSizeA(fontPx, FLT_MAX, 0.f, s, s + 1);
+        ImVec2 sp = rf->CalcTextSizeA(fontPx, FLT_MAX, 0.f, s, s + 1);
         if (pen.x + sp.x > xMax && pen.x > x0 + 0.5f) {
           pen.x = x0;
           pen.y += lineH;
         }
-        if (dl)
-          dl->AddText(font, fontPx, pen, col, s, s + 1);
+        if (dl && r.underline)
+          dl->AddLine(ImVec2(pen.x, pen.y + sp.y + 0.5f), ImVec2(pen.x + sp.x, pen.y + sp.y + 0.5f), col, uThick);
+        drawSeg(s, s + 1, pen);
         pen.x += sp.x;
         maxInkY = std::max(maxInkY, pen.y + sp.y);
         ++s;
@@ -287,17 +312,20 @@ std::string MtextRichColorTag(uint8_t r, uint8_t g, uint8_t b) {
 }
 
 void MtextRichDrawWrapped(ImDrawList* dl, ImFont* font, float fontPx, ImVec2 origin, float maxWidth, ImU32 baseRgb,
-                          const std::string& wire) {
+                          const std::string& wire, const std::string& baseFontFamily) {
   if (!dl)
     return;
-  RichWrappedLayoutCore(dl, font, fontPx, origin, maxWidth, baseRgb, wire, nullptr);
+  RichWrappedLayoutCore(dl, font, fontPx, origin, maxWidth, baseRgb, wire, baseFontFamily, nullptr);
 }
 
-float MtextRichWrappedHeight(ImFont* font, float fontPx, float maxWidth, const std::string& wire) {
-  return RichWrappedLayoutCore(nullptr, font, fontPx, ImVec2(0.f, 0.f), maxWidth, IM_COL32_WHITE, wire, nullptr);
+float MtextRichWrappedHeight(ImFont* font, float fontPx, float maxWidth, const std::string& wire,
+                             const std::string& baseFontFamily) {
+  return RichWrappedLayoutCore(nullptr, font, fontPx, ImVec2(0.f, 0.f), maxWidth, IM_COL32_WHITE, wire,
+                               baseFontFamily, nullptr);
 }
 
-void MtextRichNaturalContentPx(ImFont* font, float fontPx, const std::string& wire, float* outW, float* outH) {
+void MtextRichNaturalContentPx(ImFont* font, float fontPx, const std::string& wire, float* outW, float* outH,
+                               const std::string& baseFontFamily) {
   if (!outW || !outH)
     return;
   if (!font || fontPx < 1.f) {
@@ -306,6 +334,7 @@ void MtextRichNaturalContentPx(ImFont* font, float fontPx, const std::string& wi
     return;
   }
   float maxW = 0.f;
-  *outH = RichWrappedLayoutCore(nullptr, font, fontPx, ImVec2(0.f, 0.f), 1.e9f, IM_COL32_WHITE, wire, &maxW);
+  *outH = RichWrappedLayoutCore(nullptr, font, fontPx, ImVec2(0.f, 0.f), 1.e9f, IM_COL32_WHITE, wire,
+                                baseFontFamily, &maxW);
   *outW = std::max(maxW, 8.f);
 }

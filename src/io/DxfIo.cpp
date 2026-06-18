@@ -355,10 +355,144 @@ struct Affine2D {
   }
 };
 
+/// A DXF text style (STYLE table record): the font it maps to and whether it is oblique (italic).
+struct DxfTextStyle {
+  std::string font;     // group 3 primary font file, e.g. "romans.shx" or "arial.ttf"
+  bool italic = false;  // group 50 oblique angle != 0
+};
+
 inline void UpdateCoordMag(double* mag, double x, double y) {
   const double m = std::fabs(x) + std::fabs(y);
   if (m > *mag)
     *mag = m;
+}
+
+// Convert AutoCAD TEXT/MTEXT "%%" control codes to plain text: %%d→°, %%p→±, %%c→Ø,
+// %%%→%, and underline/overline/strike toggles (%%u %%o %%k) are dropped. %%nnn → ASCII char.
+std::string DxfPercentCodesToPlain(const std::string& in) {
+  std::string out;
+  out.reserve(in.size());
+  for (size_t i = 0; i < in.size();) {
+    if (in[i] == '%' && i + 2 < in.size() && in[i + 1] == '%') {
+      const char code = static_cast<char>(std::tolower(static_cast<unsigned char>(in[i + 2])));
+      switch (code) {
+        case 'd': out += "\xC2\xB0"; i += 3; continue;  // degree °
+        case 'p': out += "\xC2\xB1"; i += 3; continue;  // plus/minus ±
+        case 'c': out += "\xC3\x98"; i += 3; continue;  // diameter Ø
+        case '%': out += "%";        i += 3; continue;
+        case 'u': case 'o': case 'k': i += 3; continue; // underline/overline/strike toggles
+        default: break;
+      }
+      // %%nnn numeric ASCII code (up to 3 digits)
+      if (std::isdigit(static_cast<unsigned char>(in[i + 2]))) {
+        int val = 0, n = 0;
+        size_t k = i + 2;
+        while (k < in.size() && n < 3 && std::isdigit(static_cast<unsigned char>(in[k]))) {
+          val = val * 10 + (in[k] - '0');
+          ++k;
+          ++n;
+        }
+        if (val > 0 && val < 256)
+          out.push_back(static_cast<char>(val));
+        i = k;
+        continue;
+      }
+    }
+    out.push_back(in[i]);
+    ++i;
+  }
+  return out;
+}
+
+// Convert AutoCAD MTEXT formatting to the GoSurvey rich wire ([[b]]/[[i]]/[[u]]/[[font:…]]), preserving
+// styling instead of discarding it. Handles \P (newline), \L/\l (underline on/off), \f…|bX|iX; (font +
+// bold/italic), { } scoping, and the %%u/%%d/%%p/%%c codes. Other codes are dropped.
+std::string DxfMtextToRichWire(const std::string& in) {
+  struct State { std::string font; bool b = false, i = false, u = false; };
+  State cur;
+  std::vector<State> scope;
+  std::string out;
+  bool haveOpen = false;
+  State open;
+  auto closeTags = [&]() {
+    if (!haveOpen) return;
+    if (open.u) out += "[[/u]]";
+    if (open.i) out += "[[/i]]";
+    if (open.b) out += "[[/b]]";
+    if (!open.font.empty()) out += "[[/font]]";
+    haveOpen = false;
+  };
+  auto openTags = [&]() {
+    if (haveOpen) return;
+    if (!cur.font.empty()) out += "[[font:" + cur.font + "]]";
+    if (cur.b) out += "[[b]]";
+    if (cur.i) out += "[[i]]";
+    if (cur.u) out += "[[u]]";
+    open = cur;
+    haveOpen = true;
+  };
+  auto sync = [&]() {
+    if (haveOpen && (open.font != cur.font || open.b != cur.b || open.i != cur.i || open.u != cur.u))
+      closeTags();
+    openTags();
+  };
+  auto emit = [&](char ch) { sync(); out.push_back(ch); };
+
+  for (size_t i = 0; i < in.size();) {
+    const char c = in[i];
+    if (c == '\\' && i + 1 < in.size()) {
+      const char n = in[i + 1];
+      switch (n) {
+        case 'P': case 'n': emit('\n'); i += 2; continue;
+        case '~': emit(' ');  i += 2; continue;
+        case '\\': emit('\\'); i += 2; continue;
+        case '{': emit('{'); i += 2; continue;
+        case '}': emit('}'); i += 2; continue;
+        case 'L': cur.u = true;  i += 2; continue;
+        case 'l': cur.u = false; i += 2; continue;
+        case 'f': case 'F': {
+          // \f FontName | b0/1 | i0/1 | c.. | p.. ;  — set current font + bold/italic.
+          size_t k = i + 2;
+          std::string name;
+          while (k < in.size() && in[k] != '|' && in[k] != ';') name.push_back(in[k++]);
+          while (k < in.size() && in[k] != ';') {
+            if (in[k] == '|' && k + 1 < in.size()) {
+              const char f = in[k + 1];
+              if (f == 'b') cur.b = (k + 2 < in.size() && in[k + 2] != '0');
+              else if (f == 'i') cur.i = (k + 2 < in.size() && in[k + 2] != '0');
+            }
+            ++k;
+          }
+          if (!name.empty()) cur.font = name;
+          i = (k < in.size()) ? k + 1 : k;  // skip ';'
+          continue;
+        }
+        case 'C': case 'c': case 'H': case 'W': case 'Q': case 'T': case 'A': case 'p': {
+          i += 2;
+          while (i < in.size() && in[i] != ';') ++i;
+          if (i < in.size()) ++i;
+          continue;
+        }
+        case 'O': case 'o': case 'K': case 'k': i += 2; continue;  // overline/strike — unsupported
+        default: emit(n); i += 2; continue;
+      }
+    }
+    if (c == '{') { scope.push_back(cur); ++i; continue; }
+    if (c == '}') { if (!scope.empty()) { cur = scope.back(); scope.pop_back(); } ++i; continue; }
+    if (c == '%' && i + 2 < in.size() && in[i + 1] == '%') {
+      const char code = static_cast<char>(std::tolower(static_cast<unsigned char>(in[i + 2])));
+      if (code == 'u') { cur.u = !cur.u; i += 3; continue; }
+      if (code == 'o' || code == 'k') { i += 3; continue; }
+      if (code == 'd') { sync(); out += "\xC2\xB0"; i += 3; continue; }
+      if (code == 'p') { sync(); out += "\xC2\xB1"; i += 3; continue; }
+      if (code == 'c') { sync(); out += "\xC3\x98"; i += 3; continue; }
+      if (code == '%') { emit('%'); i += 3; continue; }
+    }
+    emit(c);
+    ++i;
+  }
+  closeTags();
+  return out;
 }
 
 void CollectBlockDefinitions(const std::vector<DxfPair>& t,
@@ -397,9 +531,29 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
                        const std::unordered_map<std::string, std::pair<size_t, size_t>>* blockDefs, const Affine2D& xf,
                        int insertDepth, double* coordMagMax, int* skippedPaper, int* skippedViewport,
                        int* skippedUnknown, std::unordered_map<std::string, int>* skipCounts,
-                       std::vector<SurveyPoint>* embeddedPointsLocal) {
+                       std::vector<SurveyPoint>* embeddedPointsLocal,
+                       const std::unordered_map<std::string, DxfTextStyle>* textStyles) {
 
   constexpr int kMaxInsertDepth = 64;
+
+  // Resolve a TEXT/MTEXT style name (DXF group 7; empty → "Standard") to its font + italic flag.
+  auto resolveStyle = [&](const std::string& styleName, std::string* outFont, bool* outItalic) {
+    *outFont = std::string();
+    *outItalic = false;
+    if (!textStyles)
+      return;
+    const std::string key = styleName.empty() ? std::string("Standard") : styleName;
+    auto it = textStyles->find(key);
+    if (it == textStyles->end()) {
+      // case-insensitive fallback
+      for (const auto& kv : *textStyles)
+        if (EqCiStr(kv.first, key)) { it = textStyles->find(kv.first); break; }
+    }
+    if (it != textStyles->end()) {
+      *outFont = it->second.font;
+      *outItalic = it->second.italic;
+    }
+  };
 
   auto collectEntityRange = [&](size_t startIdx, size_t* endIdxOut) {
     size_t jj = startIdx + 1;
@@ -421,6 +575,29 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     st.userLinesFlat.push_back(static_cast<float>(oy1 - st.worldDocumentOriginY));
     st.userLinesFlat.push_back(0.f);
     st.userLineAttrs.push_back(at);
+  };
+
+  // Map a model-space (insertion, height, rotation) triple through the active INSERT transform into the
+  // document's local frame, producing the annotation fields. plottedHeightInches is set so that
+  // CadAnnotationHeightWorld(...) reproduces the model height (round-trips DXF group 40 exactly).
+  struct AnnXf { double insX, insY; float plottedH; float rotWorld; double scaleX, scaleY; };
+  auto xfAnnotation = [&](double x, double y, double hModel, double rotModel) -> AnnXf {
+    double ox = 0, oy = 0;
+    xf.apply(x, y, &ox, &oy);
+    UpdateCoordMag(coordMagMax, ox, oy);
+    const double cdx = xf.m00 * std::cos(rotModel) + xf.m01 * std::sin(rotModel);
+    const double cdy = xf.m10 * std::cos(rotModel) + xf.m11 * std::sin(rotModel);
+    const double scaleX = std::hypot(xf.m00, xf.m10);
+    const double scaleY = std::hypot(xf.m01, xf.m11);
+    const double mup = std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6);
+    AnnXf r;
+    r.insX = ox - st.worldDocumentOriginX;
+    r.insY = oy - st.worldDocumentOriginY;
+    r.plottedH = static_cast<float>((hModel * scaleY) / mup);
+    r.rotWorld = static_cast<float>(std::atan2(cdy, cdx));
+    r.scaleX = scaleX;
+    r.scaleY = scaleY;
+    return r;
   };
 
   auto appendBulgeXF = [&](double x0, double y0, double x1, double y1, double bulge, const EntityAttributes& at) {
@@ -584,6 +761,116 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       ++k;
     }
     return any;
+  };
+
+  // Collect SOLID-fill HATCH boundary loops as filled regions (ADR-011). Each boundary path (group 92)
+  // becomes one CadFilledRegion: line edges contribute their start vertex, arc edges are tessellated,
+  // polyline boundaries contribute their listed vertices. Coordinates pass through the active INSERT
+  // transform and are rebased to local storage, exactly like appendSegXF.
+  auto appendHatchSolidFills = [&](size_t lo, size_t hi, const EntityAttributes& at) {
+    // Accumulate ALL boundary paths of one hatch into a single region: loop 0 outer, the rest holes.
+    CadFilledRegion region;
+    auto pushVertWorld = [&](double mx, double my) {
+      double ox = 0, oy = 0;
+      xf.apply(mx, my, &ox, &oy);
+      UpdateCoordMag(coordMagMax, ox, oy);
+      region.verts.push_back(static_cast<float>(ox - st.worldDocumentOriginX));
+      region.verts.push_back(static_cast<float>(oy - st.worldDocumentOriginY));
+    };
+    auto endLoop = [&]() {
+      // Drop a just-finished loop that has fewer than 3 vertices (degenerate).
+      if (!region.loopStart.empty()) {
+        const int start = region.loopStart.back();
+        if (static_cast<int>(region.verts.size() / 2) - start < 3) {
+          region.verts.resize(static_cast<size_t>(start) * 2);
+          region.loopStart.pop_back();
+        }
+      }
+    };
+    auto beginLoop = [&]() { region.loopStart.push_back(static_cast<int>(region.verts.size() / 2)); };
+    size_t k = lo;
+    bool inBoundary = false;
+    bool polylineBoundary = false;
+    while (k < hi) {
+      const int c = t[k].code;
+      if (c == 0) break;  // end of entity
+      if (c == 91) { ++k; continue; }  // number of boundary paths
+      if (c == 92) {                   // new boundary path → new loop
+        endLoop();
+        beginLoop();
+        inBoundary = true;
+        int flags = 0;
+        ParseIntFlexible(t[k].value, &flags);
+        polylineBoundary = (flags & 2) != 0;
+        ++k;
+        continue;
+      }
+      // Pattern/seed/gradient data follows the boundary paths — stop collecting vertices there.
+      if (c == 75 || c == 76 || c == 98 || c == 450 || c == 470) { inBoundary = false; ++k; continue; }
+      if (!inBoundary) { ++k; continue; }
+      if (polylineBoundary) {
+        if (c == 10) {
+          double x = 0, y = 0;
+          ParseDouble(t[k].value, &x);
+          if (k + 1 < hi && t[k + 1].code == 20)
+            ParseDouble(t[k + 1].value, &y);
+          pushVertWorld(x, y);
+          k += 2;
+          continue;
+        }
+        ++k;
+        continue;
+      }
+      if (c == 72) {  // edge type within an edge-based boundary
+        int et = 1;
+        ParseIntFlexible(t[k].value, &et);
+        size_t kk = k + 1;
+        if (et == 2) {  // arc edge — tessellate (angles in degrees, group 73 = CCW flag)
+          double cx = 0, cy = 0, r = 0, a0 = 0, a1 = 0;
+          int ccw = 1;
+          for (; kk < hi && t[kk].code != 72 && t[kk].code != 92 && t[kk].code != 97 &&
+                 t[kk].code != 98 && t[kk].code != 0; ++kk) {
+            const int cc = t[kk].code;
+            if (cc == 10) ParseDouble(t[kk].value, &cx);
+            else if (cc == 20) ParseDouble(t[kk].value, &cy);
+            else if (cc == 40) ParseDouble(t[kk].value, &r);
+            else if (cc == 50) ParseDouble(t[kk].value, &a0);
+            else if (cc == 51) ParseDouble(t[kk].value, &a1);
+            else if (cc == 73) ParseIntFlexible(t[kk].value, &ccw);
+          }
+          if (r > 1e-9) {
+            double sweep = a1 - a0;
+            if (ccw) { while (sweep < 0) sweep += 360.0; }
+            else     { while (sweep > 0) sweep -= 360.0; }
+            if (std::fabs(sweep) < 1e-6) sweep = ccw ? 360.0 : -360.0;
+            constexpr int nseg = 24;
+            for (int s = 0; s < nseg; ++s) {  // skip the final point — next edge supplies it
+              const double u = (a0 + sweep * (static_cast<double>(s) / nseg)) * kDegToRad;
+              pushVertWorld(cx + r * std::cos(u), cy + r * std::sin(u));
+            }
+          }
+          k = kk;
+          continue;
+        }
+        // Line (et == 1) and other edge types: take the edge start point (10,20).
+        double x = 0, y = 0;
+        for (; kk < hi && t[kk].code != 72 && t[kk].code != 92 && t[kk].code != 97 &&
+               t[kk].code != 98 && t[kk].code != 0; ++kk) {
+          const int cc = t[kk].code;
+          if (cc == 10) ParseDouble(t[kk].value, &x);
+          else if (cc == 20) ParseDouble(t[kk].value, &y);
+        }
+        pushVertWorld(x, y);
+        k = kk;
+        continue;
+      }
+      ++k;
+    }
+    endLoop();
+    if (!region.loopStart.empty() && region.verts.size() >= 6) {
+      st.cadFilledRegions.push_back(std::move(region));
+      st.cadFilledRegionAttrs.push_back(at);
+    }
   };
 
   // Common entity base fields — layer, ACI color index, and true-color override.
@@ -892,34 +1179,72 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
 
     if (typ == "TEXT") {
       EntityBase base;
-      double x = 0, y = 0, h = 2.5, rot = 0;
-      std::string txt;
+      double x = 0, y = 0, ax = 0, ay = 0, h = 2.5, rot = 0;
+      int halign = 0, valign = 0;
+      bool haveAlign = false;
+      std::string txt, styleName;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
         base.parse(c, v);
         if      (c == 10) ParseDouble(v, &x);
         else if (c == 20) ParseDouble(v, &y);
+        else if (c == 11) { ParseDouble(v, &ax); haveAlign = true; }
+        else if (c == 21) { ParseDouble(v, &ay); haveAlign = true; }
         else if (c == 40) ParseDouble(v, &h);
-        else if (c == 50) ParseDouble(v, &rot);
+        else if (c == 50) ParseDouble(v, &rot); // ObjectARX: AcDbText group 50 is rotation in DEGREES
+        else if (c ==  7) styleName = Trim(v);
+        else if (c == 72) ParseIntFlexible(v, &halign);
+        else if (c == 73) ParseIntFlexible(v, &valign);
         else if (c ==  1) txt = v;
       }
-      const auto at = base.makeAttr(layerRgb);
-      // DXF: AcDbText group 50 is rotation in radians (ObjectARX DXF reference).
-      const double rad = rot;
-      const double textLen = std::max(static_cast<double>(txt.size()), 1.0);
-      const double w = std::max(h * 0.65 * textLen, h * 2.0);
-      const double x1 = x + w * std::cos(rad);
-      const double y1 = y + w * std::sin(rad);
-      appendSegXF(x, y, x1, y1, at);
+      // %%u toggles underline; the title-block convention is a leading %%u (underline the whole string).
+      auto hasUnderlineCode = [](const std::string& s) {
+        for (size_t p = 0; p + 2 < s.size(); ++p)
+          if (s[p] == '%' && s[p + 1] == '%' && (s[p + 2] == 'u' || s[p + 2] == 'U'))
+            return true;
+        return false;
+      };
+      const bool underline = hasUnderlineCode(txt);
+      txt = DxfPercentCodesToPlain(txt);
+      if (txt.empty()) { i = j; continue; }
+      std::string styleFont;
+      bool styleItalic = false;
+      resolveStyle(styleName, &styleFont, &styleItalic);
+      // When the text is non-left/baseline aligned, group 11/21 carries the true placement point
+      // (group 10/20 is then the unused first-fit point), so prefer it.
+      const bool useAlignPt = haveAlign && (halign != 0 || valign != 0);
+      const double px = useAlignPt ? ax : x;
+      const double py = useAlignPt ? ay : y;
+      const AnnXf a = xfAnnotation(px, py, h, rot * kDegToRad);
+      // The renderer draws TEXT downward from insX/insY (top-left), but DXF group 10/20 is the baseline
+      // (or the alignment point). Convert to the top so the glyphs sit above the baseline like AutoCAD.
+      const double worldH = h * a.scaleY;
+      double topY = a.insY + worldH;                 // valign 0 (baseline) / 1 (bottom)
+      if (valign == 2)      topY = a.insY + 0.5 * worldH;  // middle
+      else if (valign == 3) topY = a.insY;                 // top
+      CadAnnotation an;
+      an.kind = CadAnnotation::Kind::Text;
+      an.insX = static_cast<float>(a.insX);
+      an.insY = static_cast<float>(topY);
+      an.plottedHeightInches = a.plottedH;
+      an.rotationRad = a.rotWorld;
+      an.text = txt;
+      an.fontFamily = styleFont;
+      an.italic = styleItalic;
+      an.underline = underline;
+      st.cadAnnotations.push_back(an);
+      st.cadAnnotationAttrs.push_back(base.makeAttr(layerRgb));
       i = j;
       continue;
     }
 
     if (typ == "MTEXT") {
       EntityBase base;
-      double ix = 0, iy = 0, h = 3, boxW = 120, rot = 0;
-      std::string txt;
+      double ix = 0, iy = 0, h = 3, refW = 0, rot = 0, dirX = 0, dirY = 0;
+      int attach = 1;  // 1 = top-left (DXF default)
+      bool haveDir = false, haveRot = false;
+      std::string txt, styleName;
       bool isSurveyLabel = false;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
@@ -927,35 +1252,62 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         base.parse(c, v);
         if      (c == 10) ParseDouble(v, &ix);
         else if (c == 20) ParseDouble(v, &iy);
+        else if (c == 11) { ParseDouble(v, &dirX); haveDir = true; }
+        else if (c == 21) { ParseDouble(v, &dirY); haveDir = true; }
         else if (c == 40) ParseDouble(v, &h);
-        else if (c == 41) ParseDouble(v, &boxW);
-        else if (c == 50) ParseDouble(v, &rot);
+        else if (c == 41) ParseDouble(v, &refW);
+        else if (c == 50) { ParseDouble(v, &rot); haveRot = true; } // group 50 is DEGREES
+        else if (c == 71) ParseIntFlexible(v, &attach);
+        else if (c ==  7) styleName = Trim(v);
         else if (c == 1 || c == 3) txt += v;
         else if (c == 1001 && v == "GOSURVEY") isSurveyLabel = true;
       }
       // REQ-023: a survey-point label is regenerated from the reconstructed point;
       // skip the exported MTEXT so we don't create a duplicate/orphan annotation.
       if (isSurveyLabel) { i = j; continue; }
-      const auto at = base.makeAttr(layerRgb);
-      // DXF: AcDbMText group 50 is rotation in radians.
-      const double rad = rot;
-      const double cr = std::cos(rad);
-      const double sr = std::sin(rad);
-      const double hw = std::max(boxW, h * 0.55 * std::max(static_cast<double>(txt.size()) * 0.08 + 4.0, 8.0));
-      const double hh = std::max(h * 1.25, h * (1.0 + static_cast<double>(txt.size()) / 48.0));
-      auto corner = [&](double lx, double ly, double* ox, double* oy) {
-        *ox = ix + cr * lx - sr * ly;
-        *oy = iy + sr * lx + cr * ly;
-      };
-      double x0 = 0, y0 = 0, x1 = 0, y1 = 0, x2 = 0, y2 = 0, x3 = 0, y3 = 0;
-      corner(0, 0, &x0, &y0);
-      corner(hw, 0, &x1, &y1);
-      corner(hw, hh, &x2, &y2);
-      corner(0, hh, &x3, &y3);
-      appendSegXF(x0, y0, x1, y1, at);
-      appendSegXF(x1, y1, x2, y2, at);
-      appendSegXF(x2, y2, x3, y3, at);
-      appendSegXF(x3, y3, x0, y0, at);
+      txt = DxfMtextToRichWire(txt);  // preserve \L underline, \f font, bold/italic as rich tags
+      if (txt.empty()) { i = j; continue; }
+      std::string styleFont;
+      bool styleItalic = false;
+      resolveStyle(styleName, &styleFont, &styleItalic);
+      // Rotation: prefer the X-axis direction vector (group 11/21); else group 50 degrees.
+      double rotModel = 0;
+      if (haveDir && (std::fabs(dirX) > 1e-12 || std::fabs(dirY) > 1e-12))
+        rotModel = std::atan2(dirY, dirX);
+      else if (haveRot)
+        rotModel = rot * kDegToRad;
+      const AnnXf a = xfAnnotation(ix, iy, h, rotModel);
+      // Box: width = reference width (model→world via scaleX); height from line count. Positioned by the
+      // attachment point (group 71): col 0/1/2 = left/center/right, row 0/1/2 = top/middle/bottom.
+      int lineCount = 1;
+      for (char ch : txt)
+        if (ch == '\n') ++lineCount;
+      const double hWorld = static_cast<double>(a.plottedH) *
+                            std::max(static_cast<double>(st.modelUnitsPerPlottedInch), 1e-6);
+      const double textW = static_cast<double>(txt.size()) * hWorld * 0.62;
+      double boxW = (refW > 1e-9 ? refW * a.scaleX : textW);
+      if (boxW < hWorld) boxW = std::max(textW, hWorld);
+      const double boxH = std::max(hWorld * 1.3, lineCount * hWorld * 1.3);
+      const int col = (attach - 1) % 3;  // 0 left, 1 center, 2 right
+      const int row = (attach - 1) / 3;  // 0 top, 1 middle, 2 bottom
+      const double left = a.insX - (col == 0 ? 0.0 : col == 1 ? boxW * 0.5 : boxW);
+      const double top  = a.insY + (row == 0 ? 0.0 : row == 1 ? boxH * 0.5 : boxH);
+      CadAnnotation an;
+      an.kind = CadAnnotation::Kind::Mtext;
+      an.mtextAttach = std::clamp(attach, 1, 9);
+      an.plottedHeightInches = a.plottedH;
+      an.rotationRad = a.rotWorld;
+      an.text = txt;
+      an.fontFamily = styleFont;  // base typeface; per-run [[font:…]] tags may override
+      an.italic = styleItalic;
+      an.boxMinX = static_cast<float>(left);
+      an.boxMaxX = static_cast<float>(left + boxW);
+      an.boxMinY = static_cast<float>(top - boxH);
+      an.boxMaxY = static_cast<float>(top);
+      an.insX = an.boxMinX;  // GoSurvey stores the box bottom-left as the insertion point
+      an.insY = an.boxMinY;
+      st.cadAnnotations.push_back(an);
+      st.cadAnnotationAttrs.push_back(base.makeAttr(layerRgb));
       i = j;
       continue;
     }
@@ -1030,12 +1382,21 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
 
     if (typ == "HATCH") {
       EntityBase base;
+      bool solid = false;
+      std::string patName;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
         base.parse(c, v);
+        if      (c == 70) { int f = 0; if (ParseIntFlexible(v, &f)) solid = (f != 0); } // 70 = solid-fill flag
+        else if (c ==  2) patName = Trim(v);
       }
-      (void)hatchEmit(i + 1, j, base.makeAttr(layerRgb));
+      const auto at = base.makeAttr(layerRgb);
+      // ADR-011: a SOLID-fill hatch becomes filled region(s); a pattern hatch keeps the boundary outline.
+      if (solid || EqCiStr(patName, "SOLID"))
+        appendHatchSolidFills(i + 1, j, at);
+      else
+        (void)hatchEmit(i + 1, j, at);
       i = j;
       continue;
     }
@@ -1103,7 +1464,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       const Affine2D ins = Affine2D::FromInsert(ix, iy, sx, sy, rot);
       const Affine2D nest = xf.compose(ins);
       ParseEntityRegion(t, br.first, br.second, st, layerRgb, blockDefs, nest, insertDepth + 1, coordMagMax, skippedPaper,
-                        skippedViewport, skippedUnknown, skipCounts, embeddedPointsLocal);
+                        skippedViewport, skippedUnknown, skipCounts, embeddedPointsLocal, textStyles);
       // Store the INSERT insertion point as a zero-length segment so snap can hit the exact
       // world coordinate — Civil 3D COGO points use INSERT entities whose center must be snap-able.
       appendSegXF(ix, iy, ix, iy, base.makeAttr(layerRgb));
@@ -1191,6 +1552,37 @@ bool BuildLayerRgbTable(const std::vector<DxfPair>& t, std::unordered_map<std::s
   }
   log.push_back("DXF layer table — " + std::to_string(layerRgb->size()) + " layer color(s).");
   return true;
+}
+
+// Build a map of STYLE-table records: style name → {font file, italic}. TEXT/MTEXT group 7 references
+// these; the default style is "Standard". Font names are passed to the font registry, which substitutes
+// SHX fonts (romans.shx, txt, …) with the closest TrueType.
+void BuildTextStyleTable(const std::vector<DxfPair>& t, std::unordered_map<std::string, DxfTextStyle>* styles) {
+  styles->clear();
+  size_t i = 0;
+  while (i < t.size()) {
+    if (t[i].code != 0 || !EqCiNorm(t[i].value, "STYLE")) {
+      ++i;
+      continue;
+    }
+    size_t j = i + 1;
+    while (j < t.size() && t[j].code != 0)
+      ++j;
+    std::string name, font;
+    double oblique = 0;
+    for (size_t k = i + 1; k < j; ++k) {
+      if (t[k].code == 2) name = Trim(t[k].value);
+      else if (t[k].code == 3) font = Trim(t[k].value);
+      else if (t[k].code == 50) ParseDouble(t[k].value, &oblique);
+    }
+    if (!name.empty()) {
+      DxfTextStyle s;
+      s.font = font;
+      s.italic = std::fabs(oblique) > 1e-6;
+      (*styles)[name] = s;
+    }
+    i = j;
+  }
 }
 
 uint32_t AttrResolvedRgbPacked(const EntityAttributes& e,
@@ -1293,6 +1685,9 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
 
   std::unordered_map<std::string, std::pair<size_t, size_t>> blockDefs;
   CollectBlockDefinitions(pairs, &blockDefs);
+
+  std::unordered_map<std::string, DxfTextStyle> textStyles;
+  BuildTextStyleTable(pairs, &textStyles);
 
   size_t eb = 0, ee = 0;
   const bool hasEntitiesSec = FindSectionBounds(pairs, "ENTITIES", &eb, &ee);
@@ -1424,7 +1819,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   const Affine2D xfRoot{};
   if (hasEntitiesSec)
     ParseEntityRegion(pairs, eb, ee, st, layerRgb, &blockDefs, xfRoot, 0, &coordMagMax, &skippedPaper,
-                      &skippedViewport, &skipped, &skipHist, &embeddedPoints);
+                      &skippedViewport, &skipped, &skipHist, &embeddedPoints, &textStyles);
 
   const bool noGeom = st.userLinesFlat.empty() && st.userCirclesCxCyR.empty();
   if ((!hasEntitiesSec || noGeom) && hasModelSpace) {
@@ -1433,7 +1828,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
     else if (noGeom)
       log.push_back("DXF import — ENTITIES empty after model-space filter; reading geometry from *MODEL_SPACE block.");
     ParseEntityRegion(pairs, mb, me, st, layerRgb, &blockDefs, xfRoot, 0, &coordMagMax, &skippedPaper,
-                      &skippedViewport, &skipped, &skipHist, &embeddedPoints);
+                      &skippedViewport, &skipped, &skipHist, &embeddedPoints, &textStyles);
   }
 
   const size_t nLines = st.userLinesFlat.size() / 6;
@@ -2482,8 +2877,10 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     if (an.kind == CadAnnotation::Kind::Text) {
       char hb[24];
       std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
-      const std::string txt = sanitizeDxfText(an.text);
+      // Underline round-trips through the AutoCAD %%u toggle.
+      const std::string txt = (an.underline ? std::string("%%u") : std::string()) + sanitizeDxfText(an.text);
       const double rotRad = static_cast<double>(an.rotationRad);
+      const double hWorld = static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
       emitPair(0, "TEXT");
       emitPair(5, hb);
       emitPair(330, hBrModel);
@@ -2495,11 +2892,12 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       emitPair(370, dxfEntityLineweight370Str(at));
       dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, annLyr));
       emitPair(100, "AcDbText");
+      // insX/insY is the top-left; DXF group 10/20 is the baseline (one text height lower).
       emitPair(10, std::to_string(static_cast<double>(an.insX)));
-      emitPair(20, std::to_string(static_cast<double>(an.insY)));
+      emitPair(20, std::to_string(static_cast<double>(an.insY) - hWorld));
       emitPair(30, "0.0");
-      emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch))));
-      emitPair(50, std::to_string(rotRad));
+      emitPair(40, std::to_string(hWorld));
+      emitPair(50, std::to_string(rotRad * (180.0 / kPi))); // DXF group 50 is DEGREES
       emitPair(71, "0");
       emitPair(72, "0");
       emitPair(73, "0");
@@ -2561,7 +2959,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       emitPair(20, std::to_string(static_cast<double>(an.insY)));
       emitPair(30, "0.0");
       emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch))));
-      emitPair(50, std::to_string(rotRad));
+      emitPair(50, std::to_string(rotRad * (180.0 / kPi))); // DXF group 50 is DEGREES
       emitPair(71, "0");
       emitPair(72, "0");
       emitPair(73, "0");
@@ -2590,17 +2988,26 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       emitPair(370, dxfEntityLineweight370Str(at));
       dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, annLyr));
       emitPair(100, "AcDbMText");
-      emitPair(10, std::to_string(static_cast<double>(an.insX)));
-      emitPair(20, std::to_string(static_cast<double>(an.insY)));
+      // Insertion point is the box corner/edge selected by the attachment (group 71):
+      // col 0/1/2 = left/center/right (min/mid/max X), row 0/1/2 = top/middle/bottom (max/mid/min Y).
+      const int attach = std::clamp(an.mtextAttach, 1, 9);
+      const int acol = (attach - 1) % 3;
+      const int arow = (attach - 1) / 3;
+      const float bMnX = std::min(an.boxMinX, an.boxMaxX), bMxX = std::max(an.boxMinX, an.boxMaxX);
+      const float bMnY = std::min(an.boxMinY, an.boxMaxY), bMxY = std::max(an.boxMinY, an.boxMaxY);
+      const double insXw = acol == 0 ? bMnX : acol == 1 ? 0.5 * (bMnX + bMxX) : bMxX;
+      const double insYw = arow == 0 ? bMxY : arow == 1 ? 0.5 * (bMnY + bMxY) : bMnY;
+      emitPair(10, std::to_string(insXw));
+      emitPair(20, std::to_string(insYw));
       emitPair(30, "0.0");
       emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch))));
       emitPair(41, std::to_string(static_cast<double>(bw)));
-      emitPair(71, "1");
+      emitPair(71, std::to_string(attach));
       emitPair(72, "0");
       emitPair(11, std::to_string(m11));
       emitPair(21, std::to_string(m21));
       emitPair(31, "0.0");
-      emitPair(50, std::to_string(rotRad));
+      emitPair(50, std::to_string(rotRad * (180.0 / kPi))); // DXF group 50 is DEGREES
       emitPair(210, "0.0");
       emitPair(220, "0.0");
       emitPair(230, "1.0");
@@ -2611,6 +3018,57 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
         emitPair(1001, "GOSURVEY");
       ++nMtextOut;
     }
+  }
+
+  // Filled regions (ADR-011) → SOLID HATCH; each boundary loop (outer + holes) is one polyline path.
+  size_t nHatchOut = 0;
+  for (size_t fi = 0; fi < st.cadFilledRegions.size(); ++fi) {
+    const CadFilledRegion& fr = st.cadFilledRegions[fi];
+    if (fr.loopStart.empty() || fr.verts.size() < 6)
+      continue;
+    EntityAttributes at{};
+    if (fi < st.cadFilledRegionAttrs.size())
+      at = st.cadFilledRegionAttrs[fi];
+    const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+    const int entAci = DxfNearestAciFromRgbPacked(rgb);
+    const std::string layer = at.layer.empty() ? std::string("0") : at.layer;
+    const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer);
+    char hb[24];
+    std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+    emitPair(0, "HATCH");
+    emitEntityHeader(hb, layer, at, entAci, lyr);
+    emitPair(100, "AcDbHatch");
+    emitPair(10, "0.0");  // elevation point
+    emitPair(20, "0.0");
+    emitPair(30, "0.0");
+    emitPair(210, "0.0");
+    emitPair(220, "0.0");
+    emitPair(230, "1.0");
+    emitPair(2, "SOLID");
+    emitPair(70, "1");  // solid fill
+    emitPair(71, "0");  // non-associative
+    emitPair(91, std::to_string(fr.loopStart.size()));  // boundary path count
+    for (size_t li = 0; li < fr.loopStart.size(); ++li) {
+      const int begin = fr.loopStart[li];
+      const int cnt = fr.loopCount(li);
+      if (cnt < 3)
+        continue;
+      emitPair(92, "3");  // external (1) + polyline (2)
+      emitPair(72, "0");  // polyline boundary, no bulges
+      emitPair(73, "1");  // closed
+      emitPair(93, std::to_string(cnt));
+      for (int v = 0; v < cnt; ++v) {
+        emitPair(10, std::to_string(worldX(fr.verts[static_cast<size_t>(begin + v) * 2 + 0])));
+        emitPair(20, std::to_string(worldY(fr.verts[static_cast<size_t>(begin + v) * 2 + 1])));
+      }
+      emitPair(97, "0");  // number of source boundary objects
+    }
+    emitPair(75, "0");  // hatch style = normal
+    emitPair(76, "1");  // predefined pattern type
+    emitPair(98, "1");  // one seed point
+    emitPair(10, std::to_string(worldX(fr.verts[0])));
+    emitPair(20, std::to_string(worldY(fr.verts[1])));
+    ++nHatchOut;
   }
 
   emitPair(0, "ENDSEC");
@@ -2650,7 +3108,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
 
   log.push_back("DXF export — wrote " + std::to_string(nSeg) + " LINE(s), " + std::to_string(nCirc) + " CIRCLE(s), " +
                 std::to_string(nPointOut) + " POINT(s), " + std::to_string(nTextOut) + " TEXT, " +
-                std::to_string(nMtextOut) + " MTEXT, " + std::to_string(nDimExplodedLines) + " LINE(s) from dimensions.");
+                std::to_string(nMtextOut) + " MTEXT, " + std::to_string(nDimExplodedLines) + " LINE(s) from dimensions, " +
+                std::to_string(nHatchOut) + " HATCH(es).");
   return true;
 }
 

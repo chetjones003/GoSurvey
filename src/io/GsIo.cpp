@@ -96,6 +96,12 @@ void CadAnnotationToJson(const CadAnnotation& a, json& o) {
   o["boxMinY"] = a.boxMinY;
   o["boxMaxX"] = a.boxMaxX;
   o["boxMaxY"] = a.boxMaxY;
+  if (a.kind == CadAnnotation::Kind::Mtext && a.mtextAttach != 1)
+    o["mtextAttach"] = a.mtextAttach;
+  if (!a.fontFamily.empty()) o["fontFamily"] = a.fontFamily;
+  if (a.bold)      o["bold"] = true;
+  if (a.italic)    o["italic"] = true;
+  if (a.underline) o["underline"] = true;
   o["dimExt1X"] = a.dimExt1X;
   o["dimExt1Y"] = a.dimExt1Y;
   o["dimExt2X"] = a.dimExt2X;
@@ -124,6 +130,11 @@ CadAnnotation CadAnnotationFromJson(const json& o) {
   a.boxMinY            = o.value("boxMinY",            a.boxMinY);
   a.boxMaxX            = o.value("boxMaxX",            a.boxMaxX);
   a.boxMaxY            = o.value("boxMaxY",            a.boxMaxY);
+  a.mtextAttach        = o.value("mtextAttach",        a.mtextAttach);
+  a.fontFamily         = o.value("fontFamily",         a.fontFamily);
+  a.bold               = o.value("bold",               a.bold);
+  a.italic             = o.value("italic",             a.italic);
+  a.underline          = o.value("underline",          a.underline);
   a.dimExt1X           = o.value("dimExt1X",           a.dimExt1X);
   a.dimExt1Y           = o.value("dimExt1Y",           a.dimExt1Y);
   a.dimExt2X           = o.value("dimExt2X",           a.dimExt2X);
@@ -396,6 +407,23 @@ json BuildRoot(const AppCommandState& st) {
     annAttrs.push_back(std::move(o));
   }
   doc["annotationAttrs"] = std::move(annAttrs);
+
+  // Filled regions (ADR-011): each is {verts:[x,y,…], loops:[startPairIdx,…]} + a parallel attribute object.
+  json fills = json::array();
+  for (const auto& fr : st.cadFilledRegions) {
+    json o;
+    o["verts"] = fr.verts;
+    o["loops"] = fr.loopStart;
+    fills.push_back(std::move(o));
+  }
+  doc["filledRegions"] = std::move(fills);
+  json fillAttrs = json::array();
+  for (const auto& a : st.cadFilledRegionAttrs) {
+    json o;
+    EntityAttributesToJson(a, o);
+    fillAttrs.push_back(std::move(o));
+  }
+  doc["filledRegionAttrs"] = std::move(fillAttrs);
 
   json layers = json::array();
   for (const auto& r : st.drawingLayerTable) {
@@ -807,6 +835,34 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.cadAnnotationAttrs.clear();
   for (const auto& o : doc["annotationAttrs"])
     st.cadAnnotationAttrs.push_back(EntityAttributesFromJson(o));
+
+  // Filled regions (ADR-011) — guarded with contains() so older .gs files load unchanged.
+  st.cadFilledRegions.clear();
+  if (doc.contains("filledRegions") && doc["filledRegions"].is_array()) {
+    for (const auto& el : doc["filledRegions"]) {
+      CadFilledRegion fr;
+      // Current form: {verts, loops}. Legacy form (pre-multi-loop): a bare flat vertex array = one loop.
+      if (el.is_object()) {
+        if (el.contains("verts"))
+          for (const auto& v : el["verts"])
+            fr.verts.push_back(v.get<float>());
+        if (el.contains("loops"))
+          for (const auto& v : el["loops"])
+            fr.loopStart.push_back(v.get<int>());
+      } else if (el.is_array()) {
+        for (const auto& v : el)
+          fr.verts.push_back(v.get<float>());
+      }
+      if (fr.loopStart.empty() && fr.verts.size() >= 6)
+        fr.loopStart.push_back(0);
+      st.cadFilledRegions.push_back(std::move(fr));
+    }
+  }
+  st.cadFilledRegionAttrs.clear();
+  if (doc.contains("filledRegionAttrs") && doc["filledRegionAttrs"].is_array()) {
+    for (const auto& o : doc["filledRegionAttrs"])
+      st.cadFilledRegionAttrs.push_back(EntityAttributesFromJson(o));
+  }
 
   st.drawingLayerTable.clear();
   if (doc.contains("layers") && doc["layers"].is_array()) {

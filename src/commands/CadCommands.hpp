@@ -212,6 +212,8 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> userPolylineAttrs;
   std::vector<CadAnnotation>    cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
+  std::vector<CadFilledRegion>  cadFilledRegions;
+  std::vector<EntityAttributes> cadFilledRegionAttrs;
   std::vector<SurveyPoint>      surveyPoints;
   std::vector<CadLayerRow>      drawingLayerTable;
   std::vector<PdfAttachment>    pdfAttachments;
@@ -244,6 +246,8 @@ struct DrawingDocument {
   std::vector<EntityAttributes> userPolylineAttrs;
   std::vector<CadAnnotation>    cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
+  std::vector<CadFilledRegion>  cadFilledRegions;
+  std::vector<EntityAttributes> cadFilledRegionAttrs;
   std::vector<SurveyPoint>      surveyPoints;
   std::vector<int>              selectedSurveyPointIndices;
   std::vector<CadLayerRow>      drawingLayerTable;
@@ -656,6 +660,9 @@ struct AppCommandState {
 
   std::vector<CadAnnotation> cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
+  /// Solid-filled regions (ADR-011), imported from SOLID-fill HATCH; rendered filled in the overlay.
+  std::vector<CadFilledRegion> cadFilledRegions;
+  std::vector<EntityAttributes> cadFilledRegionAttrs;
 
   // --- Selection (idle box pick + move/copy/rotate) ---
   std::vector<SelectedEntity> selection;
