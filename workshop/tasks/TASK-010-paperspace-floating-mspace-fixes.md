@@ -61,8 +61,16 @@ This is a larger refactor; deliver in slices.
   selection is the two-click/drag box (BeginSelectionBoxCorner → finishBox). Floating now arms+closes the
   box (window/crossing) and renders it. Build green; 171 tests pass.
 
-## NEXT (floating MSPACE — remaining)
-- Grip editing of model entities through the floating viewport: detect grips at the floating cursor
-  (FindGripSnap / grip hit-test with viewport-scale tol), drag, commit — plus draw the grips in the overlay.
-  Intricate (state machine + overlay rendering); do as a focused slice with user testing.
-- Possible polish: survey-point hover/selection inside the floating viewport (currently model-only).
+- 2026-06-17 [grips DONE] TryBeginEntityGripAtLocal (CadCommands) does a local-coord grip grab + stores
+  originals + undo snapshot (line/circle/polyline/arc/ellipse). Floating click handler grabs a grip
+  (priority over select/box) and commits on the next click; the existing ungated drag/RMB-cancel blocks
+  handle the live move + cancel using the floating outCursor (with snapping, dragged entity excluded). Grip
+  squares rendered in the overlay (grabbed grip accent-colored). Build green; 171 tests pass.
+
+## STATUS: floating model space feature-complete for this pass
+Working in the floating viewport: snapping, selection (click-to-pick hovered + window/crossing box), hover,
+draw + edit commands, full crosshair cursor, ORTHO, and grips. Issues #1–#6 from 2026-06-17 all addressed.
+
+## Possible future polish (not requested)
+- Survey-point hover/selection inside the floating viewport (currently model-only).
+- Grip-edit for annotations/dimensions through the floating viewport (model-only today).
