@@ -6089,20 +6089,33 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           *outCursorRawX = mLocalX;
           *outCursorRawY = mLocalY;
         }
-        // A click drives the active model command through the snapped point. When idle, selection is a
-        // two-click / drag box exactly like model space (idle SubmitViewportPick is a no-op unless a box is
-        // open), so we arm the box on the first click and close it on the second (REQ-036).
-        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
-          if (cmd.active == AppCommandState::Kind::None) {
-            if (!cmd.selBoxWaitingSecond) {
-              BeginSelectionBoxCorner(cmd, static_cast<float>(curMX), static_cast<float>(curMY), mx, my);
-            } else {
-              const bool fenceWindowMode = (mx - cmd.selBoxAnchorScreenX) > 3.f;  // L→R window, R→L crossing
-              SubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log,
-                                 ImGui::GetIO().KeyShift, fenceWindowMode);
-            }
-          } else {
+        // Click handling, mirroring model space (REQ-036). The entering double-click must NOT also act here,
+        // so single clicks only (IsMouseDoubleClicked guards the box/select from arming on viewport entry):
+        //   - active command → command point (snapped);
+        //   - a box is open  → close it (window L→R / crossing R→L);
+        //   - hovering an object → select it directly (Shift toggles), like the model click-to-select;
+        //   - empty space    → arm a selection box.
+        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+            !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+          if (cmd.active != AppCommandState::Kind::None) {
             SubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log);
+          } else if (cmd.selBoxWaitingSecond) {
+            const bool fenceWindowMode = (mx - cmd.selBoxAnchorScreenX) > 3.f;  // L→R window, R→L crossing
+            SubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log,
+                               ImGui::GetIO().KeyShift, fenceWindowMode);
+          } else if (cmd.viewportHoverEntityValid) {
+            const SelectedEntity e = cmd.viewportHoverEntity;  // the highlighted (blue) object under the cursor
+            auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(),
+                                   [&](const SelectedEntity& x) { return x.type == e.type && x.index == e.index; });
+            if (ImGui::GetIO().KeyShift) {            // Shift+click removes
+              if (it != cmd.selection.end())
+                cmd.selection.erase(it);
+            } else if (it == cmd.selection.end()) {   // plain click adds (additive, like model space)
+              cmd.selection.push_back(e);
+            }
+            EnsureAttrCounts(cmd);
+          } else {
+            BeginSelectionBoxCorner(cmd, static_cast<float>(curMX), static_cast<float>(curMY), mx, my);
           }
         }
       } else if (hovered && cmd.active == AppCommandState::Kind::None &&
