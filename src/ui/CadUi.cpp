@@ -8046,7 +8046,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   }
 
   // --- CAD ENTITY GRIPS (viewport direct edit) ---
-  if (!cmd.selection.empty()) {
+  // Model space only: this maps via the model view window (worldLeft..worldRight). In floating model space
+  // the grips are drawn by the per-viewport overlay through the viewport transform; running this there too
+  // would place stray grips at the wrong screen positions (REQ-036).
+  if (modelSpace && !cmd.selection.empty()) {
     ImDrawList* dlG = ImGui::GetWindowDrawList();
     const float gripHalf = cmd.gripSizePx;
     constexpr ImU32 kGripFillE = IM_COL32(59, 130, 246, 255);
