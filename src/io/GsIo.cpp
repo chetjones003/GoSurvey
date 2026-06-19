@@ -310,6 +310,52 @@ json BuildRoot(const AppCommandState& st) {
         }
         o["paperTextAttrs"] = std::move(ptAttrs);
       }
+      // Full paper-space primitive store (REQ-038, ADR-013): circles/arcs/ellipses/polylines, paper inches.
+      {
+        auto attrsToJson = [](const std::vector<EntityAttributes>& src) {
+          json arr = json::array();
+          for (const EntityAttributes& a : src) {
+            json ao;
+            EntityAttributesToJson(a, ao);
+            arr.push_back(ao);
+          }
+          return arr;
+        };
+        o["paperCircles"] = l.paperCircles;  // flat cx,cy,r triples
+        o["paperCircleAttrs"] = attrsToJson(l.paperCircleAttrs);
+        json arcs = json::array();
+        for (const CadArc& a : l.paperArcs) {
+          json ao;
+          CadArcToJson(a, ao);
+          arcs.push_back(ao);
+        }
+        o["paperArcs"] = std::move(arcs);
+        o["paperArcAttrs"] = attrsToJson(l.paperArcAttrs);
+        json ells = json::array();
+        for (const CadEllipse& e : l.paperEllipses) {
+          json eo;
+          CadEllipseToJson(e, eo);
+          ells.push_back(eo);
+        }
+        o["paperEllipses"] = std::move(ells);
+        o["paperEllAttrs"] = attrsToJson(l.paperEllAttrs);
+        o["paperPolyOffsets"] = l.paperPolyOffsets;
+        o["paperPolyVerts"] = l.paperPolyVerts;
+        json pc = json::array();
+        for (uint8_t c : l.paperPolyClosed)
+          pc.push_back(static_cast<int>(c));
+        o["paperPolyClosed"] = std::move(pc);
+        o["paperPolyAttrs"] = attrsToJson(l.paperPolyAttrs);
+        json pfills = json::array();
+        for (const CadFilledRegion& fr : l.paperFilledRegions) {
+          json fo;
+          fo["verts"] = fr.verts;
+          fo["loops"] = fr.loopStart;
+          pfills.push_back(std::move(fo));
+        }
+        o["paperFilledRegions"] = std::move(pfills);
+        o["paperFilledRegionAttrs"] = attrsToJson(l.paperFilledRegionAttrs);
+      }
       layouts.push_back(o);
     }
     doc["paperLayouts"] = layouts;
@@ -750,6 +796,78 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
             l.paperTextAttrs.push_back(EntityAttributesFromJson(ao));
       }
       l.paperTextAttrs.resize(l.paperTexts.size());  // keep parallel
+      // Full paper-space primitive store (REQ-038, ADR-013). Missing → empty; attrs padded to stay parallel.
+      {
+        auto readAttrs = [&](const char* key, std::vector<EntityAttributes>& dst) {
+          if (o.contains(key) && o[key].is_array())
+            for (const auto& ao : o[key])
+              if (ao.is_object())
+                dst.push_back(EntityAttributesFromJson(ao));
+        };
+        if (o.contains("paperCircles") && o["paperCircles"].is_array()) {
+          for (const auto& f : o["paperCircles"])
+            if (f.is_number())
+              l.paperCircles.push_back(f.get<float>());
+          if (l.paperCircles.size() % 3 != 0)
+            l.paperCircles.resize(l.paperCircles.size() - (l.paperCircles.size() % 3));
+        }
+        readAttrs("paperCircleAttrs", l.paperCircleAttrs);
+        l.paperCircleAttrs.resize(l.paperCircles.size() / 3);
+        if (o.contains("paperArcs") && o["paperArcs"].is_array())
+          for (const auto& ao : o["paperArcs"])
+            if (ao.is_object())
+              l.paperArcs.push_back(CadArcFromJson(ao));
+        readAttrs("paperArcAttrs", l.paperArcAttrs);
+        l.paperArcAttrs.resize(l.paperArcs.size());
+        if (o.contains("paperEllipses") && o["paperEllipses"].is_array())
+          for (const auto& eo : o["paperEllipses"])
+            if (eo.is_object())
+              l.paperEllipses.push_back(CadEllipseFromJson(eo));
+        readAttrs("paperEllAttrs", l.paperEllAttrs);
+        l.paperEllAttrs.resize(l.paperEllipses.size());
+        if (o.contains("paperPolyOffsets") && o["paperPolyOffsets"].is_array())
+          for (const auto& v : o["paperPolyOffsets"])
+            if (v.is_number())
+              l.paperPolyOffsets.push_back(v.get<int>());
+        if (o.contains("paperPolyVerts") && o["paperPolyVerts"].is_array())
+          for (const auto& v : o["paperPolyVerts"])
+            if (v.is_number())
+              l.paperPolyVerts.push_back(v.get<float>());
+        if (o.contains("paperPolyClosed") && o["paperPolyClosed"].is_array())
+          for (const auto& v : o["paperPolyClosed"])
+            if (v.is_number())
+              l.paperPolyClosed.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
+        // Drop a malformed offset table (must start at 0 and be monotonic) rather than risk OOB on render.
+        const int nPoly = static_cast<int>(l.paperPolyOffsets.size()) - 1;
+        if (nPoly < 0 || (!l.paperPolyOffsets.empty() && l.paperPolyOffsets.front() != 0) ||
+            (nPoly >= 0 && !l.paperPolyOffsets.empty() &&
+             static_cast<size_t>(l.paperPolyOffsets.back()) * 3 != l.paperPolyVerts.size())) {
+          l.paperPolyOffsets.clear();
+          l.paperPolyVerts.clear();
+          l.paperPolyClosed.clear();
+          l.paperPolyAttrs.clear();
+        } else {
+          readAttrs("paperPolyAttrs", l.paperPolyAttrs);
+          l.paperPolyClosed.resize(static_cast<size_t>(std::max(0, nPoly)));
+          l.paperPolyAttrs.resize(static_cast<size_t>(std::max(0, nPoly)));
+        }
+        if (o.contains("paperFilledRegions") && o["paperFilledRegions"].is_array())
+          for (const auto& el : o["paperFilledRegions"])
+            if (el.is_object()) {
+              CadFilledRegion fr;
+              if (el.contains("verts"))
+                for (const auto& v : el["verts"])
+                  fr.verts.push_back(v.get<float>());
+              if (el.contains("loops"))
+                for (const auto& v : el["loops"])
+                  fr.loopStart.push_back(v.get<int>());
+              if (fr.loopStart.empty() && fr.verts.size() >= 6)
+                fr.loopStart.push_back(0);
+              l.paperFilledRegions.push_back(std::move(fr));
+            }
+        readAttrs("paperFilledRegionAttrs", l.paperFilledRegionAttrs);
+        l.paperFilledRegionAttrs.resize(l.paperFilledRegions.size());
+      }
       st.paperLayouts.push_back(l);
     }
   }

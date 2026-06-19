@@ -431,15 +431,8 @@ static float PaperPointSegDist2(float px, float py, float ax, float ay, float bx
   return dx * dx + dy * dy;
 }
 
-// Approximate paper-text bounds in paper inches (insertion ≈ bottom-left, horizontal first version).
-static void PaperTextBoundsIn(const CadAnnotation& a, float* x0, float* y0, float* x1, float* y1) {
-  const float h = std::max(0.01f, a.plottedHeightInches);
-  const float w = std::max(h * 0.6f, h * 0.6f * static_cast<float>(a.text.size()));
-  *x0 = a.insX;
-  *y0 = a.insY;
-  *x1 = a.insX + w;
-  *y1 = a.insY + h;
-}
+// PaperTextBoundsIn (top-left text bounds, REQ-039) now lives in PaperSpace.hpp as an inline helper so the
+// header-only box-select + unit tests can share it.
 
 bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, PaperRef* out) {
   // Text first (it draws on top); topmost = last in the vector. Then lines by segment distance.
@@ -453,6 +446,52 @@ bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, Pape
     }
   }
   const float tol2 = tolIn * tolIn;
+  // Circles / arcs / ellipses / polylines (REQ-038, ADR-013) — newest first, topmost wins.
+  for (int ci = static_cast<int>(L.paperCircles.size() / 3) - 1; ci >= 0; --ci) {
+    const size_t i = static_cast<size_t>(ci) * 3;
+    const float dr = std::sqrt((x - L.paperCircles[i]) * (x - L.paperCircles[i]) +
+                               (y - L.paperCircles[i + 1]) * (y - L.paperCircles[i + 1])) - L.paperCircles[i + 2];
+    if (std::abs(dr) <= tolIn) {
+      out->type = PaperRef::Type::Circle;
+      out->index = ci;
+      return true;
+    }
+  }
+  for (int ai = static_cast<int>(L.paperArcs.size()) - 1; ai >= 0; --ai) {
+    const CadArc& a = L.paperArcs[static_cast<size_t>(ai)];
+    if (std::abs(std::sqrt((x - a.cx) * (x - a.cx) + (y - a.cy) * (y - a.cy)) - a.r) <= tolIn) {
+      out->type = PaperRef::Type::Arc;
+      out->index = ai;
+      return true;
+    }
+  }
+  for (int ei = static_cast<int>(L.paperEllipses.size()) - 1; ei >= 0; --ei) {
+    const CadEllipse& e = L.paperEllipses[static_cast<size_t>(ei)];
+    const float a = std::sqrt(e.majVx * e.majVx + e.majVy * e.majVy);
+    const float b = a * e.ratio;
+    if (a > 1.e-6f && b > 1.e-6f) {
+      const float dx = x - e.cx, dy = y - e.cy;
+      const float n = (dx * dx) / (a * a) + (dy * dy) / (b * b);
+      if (std::abs(n - 1.f) <= 0.15f) {  // proximity band around the rim
+        out->type = PaperRef::Type::Ellipse;
+        out->index = ei;
+        return true;
+      }
+    }
+  }
+  for (int pi = static_cast<int>(L.paperPolyOffsets.size()) - 2; pi >= 0; --pi) {
+    const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    for (int vi = v0; vi + 1 < v1; ++vi) {
+      const size_t a = static_cast<size_t>(vi) * 3, b = static_cast<size_t>(vi + 1) * 3;
+      if (PaperPointSegDist2(x, y, L.paperPolyVerts[a], L.paperPolyVerts[a + 1], L.paperPolyVerts[b],
+                             L.paperPolyVerts[b + 1]) <= tol2) {
+        out->type = PaperRef::Type::Polyline;
+        out->index = pi;
+        return true;
+      }
+    }
+  }
   for (int si = static_cast<int>(L.paperLines.size() / 6) - 1; si >= 0; --si) {
     const size_t i = static_cast<size_t>(si) * 6;
     if (PaperPointSegDist2(x, y, L.paperLines[i], L.paperLines[i + 1], L.paperLines[i + 3],
@@ -478,36 +517,76 @@ void TogglePaperEntitySelection(AppCommandState& st, PaperRef ref, bool additive
   st.selectedPaperEntities.push_back(ref);
 }
 
+// Remove paper polyline \p pi from \p L, fixing the offset table + parallel arrays (REQ-038, ADR-013).
+static void ErasePaperPolyline(PaperLayout& L, int pi) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= L.paperPolyOffsets.size())
+    return;
+  const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+  const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+  const int nv = v1 - v0;
+  L.paperPolyVerts.erase(L.paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+                         L.paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+  L.paperPolyOffsets.erase(L.paperPolyOffsets.begin() + (pi + 1));  // drop this poly's end marker
+  for (size_t k = static_cast<size_t>(pi + 1); k < L.paperPolyOffsets.size(); ++k)
+    L.paperPolyOffsets[k] -= nv;                                    // shift the rest back
+  if (L.paperPolyOffsets.size() == 1)  // last polyline removed → empty the table entirely
+    L.paperPolyOffsets.clear();
+  if (static_cast<size_t>(pi) < L.paperPolyClosed.size())
+    L.paperPolyClosed.erase(L.paperPolyClosed.begin() + pi);
+  if (static_cast<size_t>(pi) < L.paperPolyAttrs.size())
+    L.paperPolyAttrs.erase(L.paperPolyAttrs.begin() + pi);
+}
+
 void DeleteSelectedPaperEntities(AppCommandState& st, std::vector<std::string>& log) {
   PaperLayout* L = ActivePaperGeometryTarget(st);
   if (!L || st.selectedPaperEntities.empty())
     return;
-  std::vector<int> lineIdx, textIdx;
+  // Group indices by type; erase each type's indices in descending order so earlier indices stay valid.
+  std::vector<int> byType[6];
   for (const PaperRef& r : st.selectedPaperEntities)
-    (r.type == PaperRef::Type::Line ? lineIdx : textIdx).push_back(r.index);
+    byType[static_cast<int>(r.type)].push_back(r.index);
   auto descUnique = [](std::vector<int>& v) {
     std::sort(v.begin(), v.end(), [](int a, int b) { return a > b; });
     v.erase(std::unique(v.begin(), v.end()), v.end());
   };
-  descUnique(lineIdx);
-  descUnique(textIdx);
+  for (auto& v : byType)
+    descUnique(v);
   PushUndoSnapshot(st, "Delete paper geometry");
-  for (int si : lineIdx) {
+  size_t n = 0;
+  auto eraseElem = [&](auto& vec, auto& attrs, int idx) {
+    if (idx >= 0 && static_cast<size_t>(idx) < vec.size()) {
+      vec.erase(vec.begin() + idx);
+      if (static_cast<size_t>(idx) < attrs.size())
+        attrs.erase(attrs.begin() + idx);
+      ++n;
+    }
+  };
+  for (int si : byType[static_cast<int>(PaperRef::Type::Line)])
     if (si >= 0 && static_cast<size_t>(si) * 6 + 5 < L->paperLines.size()) {
       L->paperLines.erase(L->paperLines.begin() + static_cast<std::ptrdiff_t>(si) * 6,
                           L->paperLines.begin() + static_cast<std::ptrdiff_t>(si) * 6 + 6);
       if (static_cast<size_t>(si) < L->paperLineAttrs.size())
         L->paperLineAttrs.erase(L->paperLineAttrs.begin() + si);
+      ++n;
     }
-  }
-  for (int ti : textIdx) {
-    if (ti >= 0 && static_cast<size_t>(ti) < L->paperTexts.size()) {
-      L->paperTexts.erase(L->paperTexts.begin() + ti);
-      if (static_cast<size_t>(ti) < L->paperTextAttrs.size())
-        L->paperTextAttrs.erase(L->paperTextAttrs.begin() + ti);
+  for (int ci : byType[static_cast<int>(PaperRef::Type::Circle)])
+    if (ci >= 0 && static_cast<size_t>(ci) * 3 + 2 < L->paperCircles.size()) {
+      L->paperCircles.erase(L->paperCircles.begin() + static_cast<std::ptrdiff_t>(ci) * 3,
+                            L->paperCircles.begin() + static_cast<std::ptrdiff_t>(ci) * 3 + 3);
+      if (static_cast<size_t>(ci) < L->paperCircleAttrs.size())
+        L->paperCircleAttrs.erase(L->paperCircleAttrs.begin() + ci);
+      ++n;
     }
+  for (int ai : byType[static_cast<int>(PaperRef::Type::Arc)])
+    eraseElem(L->paperArcs, L->paperArcAttrs, ai);
+  for (int ei : byType[static_cast<int>(PaperRef::Type::Ellipse)])
+    eraseElem(L->paperEllipses, L->paperEllAttrs, ei);
+  for (int pi : byType[static_cast<int>(PaperRef::Type::Polyline)]) {
+    ErasePaperPolyline(*L, pi);
+    ++n;
   }
-  const size_t n = lineIdx.size() + textIdx.size();
+  for (int ti : byType[static_cast<int>(PaperRef::Type::Text)])
+    eraseElem(L->paperTexts, L->paperTextAttrs, ti);
   ClearPaperEntitySelection(st);
   BumpCadGpuCache(st);
   log.push_back("DELETE — removed " + std::to_string(n) + " paper object(s).");
@@ -520,45 +599,114 @@ void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn,
     return;
   PushUndoSnapshot(st, copy ? "Copy paper geometry" : "Move paper geometry");
   std::vector<PaperRef> newSel;
+  auto attrAt = [](const std::vector<EntityAttributes>& v, int i) {
+    return (i >= 0 && static_cast<size_t>(i) < v.size()) ? v[static_cast<size_t>(i)] : EntityAttributes{};
+  };
   for (const PaperRef& r : st.selectedPaperEntities) {
-    if (r.type == PaperRef::Type::Line) {
+    switch (r.type) {
+    case PaperRef::Type::Line: {
       const size_t i = static_cast<size_t>(r.index) * 6;
       if (i + 5 >= L->paperLines.size())
-        continue;
+        break;
       if (copy) {
         for (int k = 0; k < 6; ++k)
           L->paperLines.push_back(L->paperLines[i + static_cast<size_t>(k)]);
         const size_t j = L->paperLines.size() - 6;
-        L->paperLines[j] += dxIn;
-        L->paperLines[j + 1] += dyIn;
-        L->paperLines[j + 3] += dxIn;
-        L->paperLines[j + 4] += dyIn;
-        L->paperLineAttrs.push_back(static_cast<size_t>(r.index) < L->paperLineAttrs.size()
-                                        ? L->paperLineAttrs[static_cast<size_t>(r.index)]
-                                        : EntityAttributes{});
+        L->paperLines[j] += dxIn; L->paperLines[j + 1] += dyIn;
+        L->paperLines[j + 3] += dxIn; L->paperLines[j + 4] += dyIn;
+        L->paperLineAttrs.push_back(attrAt(L->paperLineAttrs, r.index));
         newSel.push_back({PaperRef::Type::Line, static_cast<int>(L->paperLines.size() / 6) - 1});
       } else {
-        L->paperLines[i] += dxIn;
-        L->paperLines[i + 1] += dyIn;
-        L->paperLines[i + 3] += dxIn;
-        L->paperLines[i + 4] += dyIn;
+        L->paperLines[i] += dxIn; L->paperLines[i + 1] += dyIn;
+        L->paperLines[i + 3] += dxIn; L->paperLines[i + 4] += dyIn;
       }
-    } else {
+      break;
+    }
+    case PaperRef::Type::Circle: {
+      const size_t i = static_cast<size_t>(r.index) * 3;
+      if (i + 2 >= L->paperCircles.size())
+        break;
+      if (copy) {
+        L->paperCircles.push_back(L->paperCircles[i] + dxIn);
+        L->paperCircles.push_back(L->paperCircles[i + 1] + dyIn);
+        L->paperCircles.push_back(L->paperCircles[i + 2]);
+        L->paperCircleAttrs.push_back(attrAt(L->paperCircleAttrs, r.index));
+        newSel.push_back({PaperRef::Type::Circle, static_cast<int>(L->paperCircles.size() / 3) - 1});
+      } else {
+        L->paperCircles[i] += dxIn; L->paperCircles[i + 1] += dyIn;
+      }
+      break;
+    }
+    case PaperRef::Type::Arc: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperArcs.size())
+        break;
+      if (copy) {
+        CadArc a = L->paperArcs[static_cast<size_t>(r.index)];
+        a.cx += dxIn; a.cy += dyIn;
+        L->paperArcs.push_back(a);
+        L->paperArcAttrs.push_back(attrAt(L->paperArcAttrs, r.index));
+        newSel.push_back({PaperRef::Type::Arc, static_cast<int>(L->paperArcs.size()) - 1});
+      } else {
+        L->paperArcs[static_cast<size_t>(r.index)].cx += dxIn;
+        L->paperArcs[static_cast<size_t>(r.index)].cy += dyIn;
+      }
+      break;
+    }
+    case PaperRef::Type::Ellipse: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperEllipses.size())
+        break;
+      if (copy) {
+        CadEllipse e = L->paperEllipses[static_cast<size_t>(r.index)];
+        e.cx += dxIn; e.cy += dyIn;
+        L->paperEllipses.push_back(e);
+        L->paperEllAttrs.push_back(attrAt(L->paperEllAttrs, r.index));
+        newSel.push_back({PaperRef::Type::Ellipse, static_cast<int>(L->paperEllipses.size()) - 1});
+      } else {
+        L->paperEllipses[static_cast<size_t>(r.index)].cx += dxIn;
+        L->paperEllipses[static_cast<size_t>(r.index)].cy += dyIn;
+      }
+      break;
+    }
+    case PaperRef::Type::Polyline: {
+      const int pi = r.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size())
+        break;
+      const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+      const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+      if (copy) {
+        const int baseVert = L->paperPolyOffsets.empty() ? 0 : L->paperPolyOffsets.back();
+        for (int vi = v0; vi < v1; ++vi) {
+          L->paperPolyVerts.push_back(L->paperPolyVerts[static_cast<size_t>(vi * 3)] + dxIn);
+          L->paperPolyVerts.push_back(L->paperPolyVerts[static_cast<size_t>(vi * 3 + 1)] + dyIn);
+          L->paperPolyVerts.push_back(L->paperPolyVerts[static_cast<size_t>(vi * 3 + 2)]);
+        }
+        L->paperPolyOffsets.push_back(baseVert + (v1 - v0));
+        L->paperPolyClosed.push_back(static_cast<size_t>(pi) < L->paperPolyClosed.size() ? L->paperPolyClosed[static_cast<size_t>(pi)] : 0u);
+        L->paperPolyAttrs.push_back(attrAt(L->paperPolyAttrs, pi));
+        newSel.push_back({PaperRef::Type::Polyline, static_cast<int>(L->paperPolyOffsets.size()) - 2});
+      } else {
+        for (int vi = v0; vi < v1; ++vi) {
+          L->paperPolyVerts[static_cast<size_t>(vi * 3)] += dxIn;
+          L->paperPolyVerts[static_cast<size_t>(vi * 3 + 1)] += dyIn;
+        }
+      }
+      break;
+    }
+    case PaperRef::Type::Text: {
       if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperTexts.size())
-        continue;
+        break;
       if (copy) {
         CadAnnotation a = L->paperTexts[static_cast<size_t>(r.index)];
-        a.insX += dxIn;
-        a.insY += dyIn;
+        a.insX += dxIn; a.insY += dyIn;
         L->paperTexts.push_back(std::move(a));
-        L->paperTextAttrs.push_back(static_cast<size_t>(r.index) < L->paperTextAttrs.size()
-                                        ? L->paperTextAttrs[static_cast<size_t>(r.index)]
-                                        : EntityAttributes{});
+        L->paperTextAttrs.push_back(attrAt(L->paperTextAttrs, r.index));
         newSel.push_back({PaperRef::Type::Text, static_cast<int>(L->paperTexts.size()) - 1});
       } else {
         L->paperTexts[static_cast<size_t>(r.index)].insX += dxIn;
         L->paperTexts[static_cast<size_t>(r.index)].insY += dyIn;
       }
+      break;
+    }
     }
   }
   if (copy && !newSel.empty())
@@ -580,17 +728,56 @@ void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, 
   };
   PushUndoSnapshot(st, "Rotate paper geometry");
   for (const PaperRef& r : st.selectedPaperEntities) {
-    if (r.type == PaperRef::Type::Line) {
+    switch (r.type) {
+    case PaperRef::Type::Line: {
       const size_t i = static_cast<size_t>(r.index) * 6;
       if (i + 5 >= L->paperLines.size())
-        continue;
+        break;
       rot(L->paperLines[i], L->paperLines[i + 1]);
       rot(L->paperLines[i + 3], L->paperLines[i + 4]);
-    } else {
-      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperTexts.size())
-        continue;
-      rot(L->paperTexts[static_cast<size_t>(r.index)].insX, L->paperTexts[static_cast<size_t>(r.index)].insY);
-      L->paperTexts[static_cast<size_t>(r.index)].rotationRad += angRad;
+      break;
+    }
+    case PaperRef::Type::Circle: {
+      const size_t i = static_cast<size_t>(r.index) * 3;
+      if (i + 2 < L->paperCircles.size())
+        rot(L->paperCircles[i], L->paperCircles[i + 1]);  // radius is rotation-invariant
+      break;
+    }
+    case PaperRef::Type::Arc: {
+      if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperArcs.size()) {
+        CadArc& a = L->paperArcs[static_cast<size_t>(r.index)];
+        rot(a.cx, a.cy);
+        a.startRad += angRad;
+      }
+      break;
+    }
+    case PaperRef::Type::Ellipse: {
+      if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperEllipses.size()) {
+        CadEllipse& e = L->paperEllipses[static_cast<size_t>(r.index)];
+        rot(e.cx, e.cy);
+        const float mx = e.majVx * c - e.majVy * s;  // rotate the major-axis vector
+        const float my = e.majVx * s + e.majVy * c;
+        e.majVx = mx; e.majVy = my;
+      }
+      break;
+    }
+    case PaperRef::Type::Polyline: {
+      const int pi = r.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size())
+        break;
+      const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+      const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+      for (int vi = v0; vi < v1; ++vi)
+        rot(L->paperPolyVerts[static_cast<size_t>(vi * 3)], L->paperPolyVerts[static_cast<size_t>(vi * 3 + 1)]);
+      break;
+    }
+    case PaperRef::Type::Text: {
+      if (r.index >= 0 && static_cast<size_t>(r.index) < L->paperTexts.size()) {
+        rot(L->paperTexts[static_cast<size_t>(r.index)].insX, L->paperTexts[static_cast<size_t>(r.index)].insY);
+        L->paperTexts[static_cast<size_t>(r.index)].rotationRad += angRad;
+      }
+      break;
+    }
     }
   }
   BumpCadGpuCache(st);
@@ -882,6 +1069,7 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
   snap.surveyPoints         = st.surveyPoints;
   snap.drawingLayerTable    = st.drawingLayerTable;
   snap.pdfAttachments       = st.pdfAttachments;
+  snap.paperLayouts         = st.paperLayouts;  // native paper geometry is undoable (REQ-037/038)
   // Zero GL texture IDs: restored snapshots must not reference freed GPU resources.
   for (auto& att : snap.pdfAttachments)
     att.glTexId = 0;
@@ -911,6 +1099,8 @@ static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySn
   st.surveyPoints         = snap.surveyPoints;
   st.drawingLayerTable    = snap.drawingLayerTable;
   st.pdfAttachments       = snap.pdfAttachments;
+  st.paperLayouts         = snap.paperLayouts;
+  st.selectedPaperEntities.clear();  // restored layouts invalidate paper-entity indices
   st.worldDocumentOriginX = snap.worldDocumentOriginX;
   st.worldDocumentOriginY = snap.worldDocumentOriginY;
 }
@@ -2195,8 +2385,8 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
         "(PSCALE), REGEN (RE), LAYER (LA). SURVEY: CRTPTS, VWPTS, IMPPTS, EXPPTS, INVERSE (INV). Idle: two-click box selects. ESC.");
     log.push_back(
         "LINE: @dx,dy from anchor; A or ANGLE alone then bearing on next line (blank Enter cancels); A<bearing> (+ "
-        "optional +90) on one line; AP + two picks then Enter (or +90) locks bearing; distance (+/-) along ray; A "
-        "clears when lock or AP pick is active. Ortho: distance toward cursor.");
+        "optional +90) on one line; 2P (=AP) + two picks then Enter (or +90) locks bearing; distance (+/-) along ray; A "
+        "clears when lock or 2P pick is active. Ortho: distance toward cursor.");
     log.push_back(
         "ROTATE: ° clockwise from north / DMS; R reference; then bearing or P. SCALE: after base, factor or pick from "
         "base; R / REFERENCE then two-point ref length, then new length (type or two picks). INVERSE: two points "
@@ -2860,11 +3050,13 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
     BumpCadGpuCache(st);
 }
 
-// Paste clipboard geometry with (dx, dy) offset applied to all stored coordinates.
-static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy) {
+// Paste clipboard geometry into MODEL space with (dx, dy) applied. Builds st.selection from the pasted
+// entities (REQ-038 #5). Caller pushes the undo snapshot.
+static void CommitPasteIntoModel(AppCommandState& st, float dx, float dy) {
   const CadClipboard& cb = st.clipboard;
+  using ST = SelectedEntity::Type;
+  st.selection.clear();
 
-  // Lines
   for (size_t i = 0; i + 5 < cb.lines.size() + 1; i += 6) {
     st.userLinesFlat.push_back(cb.lines[i + 0] + dx);
     st.userLinesFlat.push_back(cb.lines[i + 1] + dy);
@@ -2873,31 +3065,31 @@ static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy) {
     st.userLinesFlat.push_back(cb.lines[i + 4] + dy);
     st.userLinesFlat.push_back(cb.lines[i + 5]);
     st.userLineAttrs.push_back(cb.lineAttrs[i / 6]);
+    st.selection.push_back({ST::LineSeg, static_cast<int>(st.userLineAttrs.size()) - 1});
   }
-  // Circles
   for (size_t i = 0; i + 2 < cb.circles.size() + 1; i += 3) {
     st.userCirclesCxCyR.push_back(cb.circles[i + 0] + dx);
     st.userCirclesCxCyR.push_back(cb.circles[i + 1] + dy);
     st.userCirclesCxCyR.push_back(cb.circles[i + 2]);
     st.userCircleAttrs.push_back(cb.circleAttrs[i / 3]);
+    st.selection.push_back({ST::Circle, static_cast<int>(st.userCircleAttrs.size()) - 1});
   }
-  // Arcs
   for (size_t i = 0; i < cb.arcs.size(); ++i) {
     CadArc a = cb.arcs[i];
     a.cx += dx;
     a.cy += dy;
     st.userArcs.push_back(a);
     st.userArcAttrs.push_back(cb.arcAttrs[i]);
+    st.selection.push_back({ST::Arc, static_cast<int>(st.userArcs.size()) - 1});
   }
-  // Ellipses
   for (size_t i = 0; i < cb.ellipses.size(); ++i) {
     CadEllipse el = cb.ellipses[i];
     el.cx += dx;
     el.cy += dy;
     st.userEllipses.push_back(el);
     st.userEllAttrs.push_back(cb.ellAttrs[i]);
+    st.selection.push_back({ST::Ellipse, static_cast<int>(st.userEllipses.size()) - 1});
   }
-  // Polylines — self-contained offset table; map into main arrays
   const int nPoly = static_cast<int>(cb.polyOffsets.size()) - 1;
   for (int pi = 0; pi < nPoly; ++pi) {
     const int v0 = cb.polyOffsets[static_cast<size_t>(pi)];
@@ -2917,11 +3109,11 @@ static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy) {
     uint8_t cl = (static_cast<size_t>(pi) < cb.polyClosed.size()) ? cb.polyClosed[static_cast<size_t>(pi)] : 0u;
     st.userPolylineClosed.push_back(cl);
     st.userPolylineAttrs.push_back(cb.polyAttrs[static_cast<size_t>(pi)]);
+    st.selection.push_back({ST::Polyline, static_cast<int>(st.userPolylineOffsets.size()) - 2});
   }
-  // Annotations — strip survey link so pasted labels are independent
   for (size_t i = 0; i < cb.annotations.size(); ++i) {
     CadAnnotation a = cb.annotations[i];
-    a.surveyPointLabelFor = -1;
+    a.surveyPointLabelFor = -1;  // strip survey link so pasted labels are independent
     a.surveyLabelHasUserOffset = false;
     a.insX += dx;
     a.insY += dy;
@@ -2936,11 +3128,139 @@ static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy) {
       a.dimExt1X += dx; a.dimExt1Y += dy;
       a.dimExt2X += dx; a.dimExt2Y += dy;
     }
+    // Cross-space height (paper→model): paper text height is in paper inches, which transfer 1:1 to model units;
+    // model text stores plotted-inches (× modelUnitsPerPlottedInch = model units), so divide by the factor.
+    if (cb.fromPaper)
+      a.plottedHeightInches /= std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
     st.cadAnnotations.push_back(std::move(a));
     st.cadAnnotationAttrs.push_back(cb.annotationAttrs[i]);
+    st.selection.push_back({ST::Annotation, static_cast<int>(st.cadAnnotations.size()) - 1});
   }
-
+  for (size_t i = 0; i < cb.filledRegions.size(); ++i) {  // solid fills (not selectable → not added to selection)
+    CadFilledRegion fr = cb.filledRegions[i];
+    for (size_t v = 0; v + 1 < fr.verts.size(); v += 2) {
+      fr.verts[v] += dx;
+      fr.verts[v + 1] += dy;
+    }
+    st.cadFilledRegions.push_back(std::move(fr));
+    st.cadFilledRegionAttrs.push_back(cb.filledRegionAttrs[i]);
+  }
   BumpCadGpuCache(st);
+}
+
+// Paste clipboard geometry into a PAPER layout's store with (dx, dy) applied (paper inches). Builds
+// st.selectedPaperEntities (REQ-038 #5). Returns the count of non-text annotations skipped (paper holds
+// only Text/Mtext). Caller pushes the undo snapshot. ADR-013: cross-space is an explicit 1:1 transfer.
+static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, float dy) {
+  const CadClipboard& cb = st.clipboard;
+  using PT = PaperEntityRef::Type;
+  st.selectedPaperEntities.clear();
+  int skipped = 0;
+
+  for (size_t i = 0; i + 5 < cb.lines.size() + 1; i += 6) {
+    L.paperLines.push_back(cb.lines[i + 0] + dx);
+    L.paperLines.push_back(cb.lines[i + 1] + dy);
+    L.paperLines.push_back(cb.lines[i + 2]);
+    L.paperLines.push_back(cb.lines[i + 3] + dx);
+    L.paperLines.push_back(cb.lines[i + 4] + dy);
+    L.paperLines.push_back(cb.lines[i + 5]);
+    L.paperLineAttrs.push_back(cb.lineAttrs[i / 6]);
+    st.selectedPaperEntities.push_back({PT::Line, static_cast<int>(L.paperLines.size() / 6) - 1});
+  }
+  for (size_t i = 0; i + 2 < cb.circles.size() + 1; i += 3) {
+    L.paperCircles.push_back(cb.circles[i + 0] + dx);
+    L.paperCircles.push_back(cb.circles[i + 1] + dy);
+    L.paperCircles.push_back(cb.circles[i + 2]);
+    L.paperCircleAttrs.push_back(cb.circleAttrs[i / 3]);
+    st.selectedPaperEntities.push_back({PT::Circle, static_cast<int>(L.paperCircles.size() / 3) - 1});
+  }
+  for (size_t i = 0; i < cb.arcs.size(); ++i) {
+    CadArc a = cb.arcs[i];
+    a.cx += dx;
+    a.cy += dy;
+    L.paperArcs.push_back(a);
+    L.paperArcAttrs.push_back(cb.arcAttrs[i]);
+    st.selectedPaperEntities.push_back({PT::Arc, static_cast<int>(L.paperArcs.size()) - 1});
+  }
+  for (size_t i = 0; i < cb.ellipses.size(); ++i) {
+    CadEllipse el = cb.ellipses[i];
+    el.cx += dx;
+    el.cy += dy;
+    L.paperEllipses.push_back(el);
+    L.paperEllAttrs.push_back(cb.ellAttrs[i]);
+    st.selectedPaperEntities.push_back({PT::Ellipse, static_cast<int>(L.paperEllipses.size()) - 1});
+  }
+  const int nPoly = static_cast<int>(cb.polyOffsets.size()) - 1;
+  for (int pi = 0; pi < nPoly; ++pi) {
+    const int v0 = cb.polyOffsets[static_cast<size_t>(pi)];
+    const int v1 = cb.polyOffsets[static_cast<size_t>(pi + 1)];
+    const int nv = v1 - v0;
+    if (nv < 2)
+      continue;
+    const int baseVert = L.paperPolyOffsets.empty() ? 0 : L.paperPolyOffsets.back();
+    for (int vi = v0; vi < v1; ++vi) {
+      L.paperPolyVerts.push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 0)] + dx);
+      L.paperPolyVerts.push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 1)] + dy);
+      L.paperPolyVerts.push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 2)]);
+    }
+    if (L.paperPolyOffsets.empty())
+      L.paperPolyOffsets.push_back(baseVert);
+    L.paperPolyOffsets.push_back(baseVert + nv);
+    uint8_t cl = (static_cast<size_t>(pi) < cb.polyClosed.size()) ? cb.polyClosed[static_cast<size_t>(pi)] : 0u;
+    L.paperPolyClosed.push_back(cl);
+    L.paperPolyAttrs.push_back(cb.polyAttrs[static_cast<size_t>(pi)]);
+    st.selectedPaperEntities.push_back({PT::Polyline, static_cast<int>(L.paperPolyOffsets.size()) - 2});
+  }
+  for (size_t i = 0; i < cb.annotations.size(); ++i) {
+    const CadAnnotation& src = cb.annotations[i];
+    if (src.kind != CadAnnotation::Kind::Text && src.kind != CadAnnotation::Kind::Mtext) {
+      ++skipped;  // dimensions have no paper store (ADR-013 scope); reported by the caller, not dropped silently.
+      continue;
+    }
+    CadAnnotation a = src;
+    a.surveyPointLabelFor = -1;
+    a.surveyLabelHasUserOffset = false;
+    a.insX += dx;
+    a.insY += dy;
+    if (a.kind == CadAnnotation::Kind::Mtext) {
+      a.boxMinX += dx; a.boxMinY += dy;
+      a.boxMaxX += dx; a.boxMaxY += dy;
+    }
+    // Cross-space height: a model annotation's world height is plottedHeightInches × modelUnitsPerPlottedInch
+    // (model units), which transfers 1:1 to paper inches. Paper text uses plottedHeightInches AS paper inches,
+    // so scale it up by the factor. (Paper→paper keeps the value.)
+    if (!cb.fromPaper)
+      a.plottedHeightInches *= std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+    L.paperTexts.push_back(std::move(a));
+    L.paperTextAttrs.push_back(cb.annotationAttrs[i]);
+    st.selectedPaperEntities.push_back({PT::Text, static_cast<int>(L.paperTexts.size()) - 1});
+  }
+  for (size_t i = 0; i < cb.filledRegions.size(); ++i) {  // solid fills onto the sheet (not selectable)
+    CadFilledRegion fr = cb.filledRegions[i];
+    for (size_t v = 0; v + 1 < fr.verts.size(); v += 2) {
+      fr.verts[v] += dx;
+      fr.verts[v + 1] += dy;
+    }
+    L.paperFilledRegions.push_back(std::move(fr));
+    L.paperFilledRegionAttrs.push_back(cb.filledRegionAttrs[i]);
+  }
+  BumpCadGpuCache(st);
+  return skipped;
+}
+
+// Paste clipboard geometry into the ACTIVE space (model or the active paper layout) with (dx, dy) applied.
+// Routes by ActivePaperGeometryTarget (ADR-009/013). Caller pushes the undo snapshot.
+static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, std::vector<std::string>& log) {
+  if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
+    st.selection.clear();  // crossing into paper: model selection no longer applies
+    const int skipped = CommitPasteIntoPaper(st, *L, dx, dy);
+    if (skipped > 0)
+      log.push_back("PASTE — " + std::to_string(skipped) +
+                    " dimension(s) skipped (paper space stores lines, text, circles, arcs, ellipses, polylines).");
+  } else {
+    ClearPaperEntitySelection(st);
+    CommitPasteIntoModel(st, dx, dy);
+  }
 }
 
 static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by, float rad) {
@@ -5149,13 +5469,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   }
 
   if (st.active == K::Paste && st.modifyPhase == MP::NeedDestination) {
-    const float dx = wx - st.modifyBaseX;
-    const float dy = wy - st.modifyBaseY;
-    PushUndoSnapshot(st, "Paste");
-    CommitPasteFromClipboard(st, dx, dy);
-    st.active = K::None;
-    st.selection.clear();
-    log.push_back("PASTE complete.");
+    CommitClipboardPasteAt(st, wx, wy, log);  // routes by active space; builds the new selection
     return;
   }
 
@@ -5300,13 +5614,158 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
 
 } // namespace
 
+// Public paste entry point (REQ-038): place the clipboard at point (x,y) in the ACTIVE space's coordinates
+// (world for model, paper inches for a paper layout). Used by the model pick path and the paper overlay click.
+// Calls the file-local CommitPasteFromClipboard (visible here via the anonymous namespace's using-directive).
+void CommitClipboardPasteAt(AppCommandState& st, float x, float y, std::vector<std::string>& log) {
+  if (st.clipboard.empty())
+    return;
+  PushUndoSnapshot(st, "Paste");
+  CommitPasteFromClipboard(st, x - st.clipboard.basePtX, y - st.clipboard.basePtY, log);
+  st.active = AppCommandState::Kind::None;
+  st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+  log.push_back("PASTE complete.");
+}
+
+// Append filled regions fully enclosed by [mnX,mxX]×[mnY,mxY] to the clipboard (REQ-038 addendum). Fills are
+// not an independently selectable entity, so a copy carries the fills inside the selection's bounding box.
+static void CopyEnclosedFilledRegions(CadClipboard& cb, const std::vector<CadFilledRegion>& regions,
+                                      const std::vector<EntityAttributes>& attrs, float mnX, float mnY, float mxX,
+                                      float mxY) {
+  if (mnX > mxX)
+    return;
+  for (size_t i = 0; i < regions.size(); ++i) {
+    const CadFilledRegion& fr = regions[i];
+    if (fr.verts.size() < 6)
+      continue;
+    bool inside = true;
+    for (size_t v = 0; v + 1 < fr.verts.size(); v += 2)
+      if (fr.verts[v] < mnX || fr.verts[v] > mxX || fr.verts[v + 1] < mnY || fr.verts[v + 1] > mxY) {
+        inside = false;
+        break;
+      }
+    if (!inside)
+      continue;
+    cb.filledRegions.push_back(fr);
+    cb.filledRegionAttrs.push_back(i < attrs.size() ? attrs[i] : EntityAttributes{});
+  }
+}
+
+// Copy the active paper layout's selected entities into st.clipboard (REQ-038, ADR-013). Coordinates are
+// paper inches; they enter the clipboard verbatim and a later paste applies the 1:1 transfer.
+static void CopyPaperSelectionToClipboard(AppCommandState& st, PaperLayout& L, std::vector<std::string>& log) {
+  if (st.selectedPaperEntities.empty()) {
+    log.push_back("COPYCLIP — nothing selected. Select paper objects first.");
+    return;
+  }
+  CadClipboard& cb = st.clipboard;
+  cb = CadClipboard{};
+  cb.fromPaper = true;
+  float mnX = 1e30f, mnY = 1e30f, mxX = -1e30f, mxY = -1e30f;
+  auto expandBbox = [&](float x, float y) {
+    mnX = std::min(mnX, x); mnY = std::min(mnY, y);
+    mxX = std::max(mxX, x); mxY = std::max(mxY, y);
+  };
+  auto attrAt = [](const std::vector<EntityAttributes>& v, int i) {
+    return (i >= 0 && static_cast<size_t>(i) < v.size()) ? v[static_cast<size_t>(i)] : EntityAttributes{};
+  };
+  for (const PaperRef& r : st.selectedPaperEntities) {
+    switch (r.type) {
+    case PaperRef::Type::Line: {
+      const size_t k = static_cast<size_t>(r.index) * 6;
+      if (k + 5 >= L.paperLines.size())
+        break;
+      for (int j = 0; j < 6; ++j)
+        cb.lines.push_back(L.paperLines[k + static_cast<size_t>(j)]);
+      cb.lineAttrs.push_back(attrAt(L.paperLineAttrs, r.index));
+      expandBbox(L.paperLines[k], L.paperLines[k + 1]);
+      expandBbox(L.paperLines[k + 3], L.paperLines[k + 4]);
+      break;
+    }
+    case PaperRef::Type::Circle: {
+      const size_t k = static_cast<size_t>(r.index) * 3;
+      if (k + 2 >= L.paperCircles.size())
+        break;
+      cb.circles.push_back(L.paperCircles[k]);
+      cb.circles.push_back(L.paperCircles[k + 1]);
+      cb.circles.push_back(L.paperCircles[k + 2]);
+      cb.circleAttrs.push_back(attrAt(L.paperCircleAttrs, r.index));
+      expandBbox(L.paperCircles[k], L.paperCircles[k + 1]);
+      break;
+    }
+    case PaperRef::Type::Arc: {
+      if (static_cast<size_t>(r.index) >= L.paperArcs.size())
+        break;
+      cb.arcs.push_back(L.paperArcs[static_cast<size_t>(r.index)]);
+      cb.arcAttrs.push_back(attrAt(L.paperArcAttrs, r.index));
+      expandBbox(L.paperArcs[static_cast<size_t>(r.index)].cx, L.paperArcs[static_cast<size_t>(r.index)].cy);
+      break;
+    }
+    case PaperRef::Type::Ellipse: {
+      if (static_cast<size_t>(r.index) >= L.paperEllipses.size())
+        break;
+      cb.ellipses.push_back(L.paperEllipses[static_cast<size_t>(r.index)]);
+      cb.ellAttrs.push_back(attrAt(L.paperEllAttrs, r.index));
+      expandBbox(L.paperEllipses[static_cast<size_t>(r.index)].cx, L.paperEllipses[static_cast<size_t>(r.index)].cy);
+      break;
+    }
+    case PaperRef::Type::Polyline: {
+      const int pi = r.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= L.paperPolyOffsets.size())
+        break;
+      const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+      const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+      if (v1 - v0 < 2)
+        break;
+      if (cb.polyOffsets.empty())
+        cb.polyOffsets.push_back(0);
+      const int baseVert = cb.polyOffsets.back();
+      for (int vi = v0; vi < v1; ++vi) {
+        cb.polyVerts.push_back(L.paperPolyVerts[static_cast<size_t>(vi * 3 + 0)]);
+        cb.polyVerts.push_back(L.paperPolyVerts[static_cast<size_t>(vi * 3 + 1)]);
+        cb.polyVerts.push_back(L.paperPolyVerts[static_cast<size_t>(vi * 3 + 2)]);
+        expandBbox(L.paperPolyVerts[static_cast<size_t>(vi * 3 + 0)], L.paperPolyVerts[static_cast<size_t>(vi * 3 + 1)]);
+      }
+      cb.polyOffsets.push_back(baseVert + (v1 - v0));
+      cb.polyClosed.push_back(static_cast<size_t>(pi) < L.paperPolyClosed.size() ? L.paperPolyClosed[static_cast<size_t>(pi)] : 0u);
+      cb.polyAttrs.push_back(attrAt(L.paperPolyAttrs, pi));
+      break;
+    }
+    case PaperRef::Type::Text: {
+      if (static_cast<size_t>(r.index) >= L.paperTexts.size())
+        break;
+      cb.annotations.push_back(L.paperTexts[static_cast<size_t>(r.index)]);
+      cb.annotationAttrs.push_back(attrAt(L.paperTextAttrs, r.index));
+      expandBbox(L.paperTexts[static_cast<size_t>(r.index)].insX, L.paperTexts[static_cast<size_t>(r.index)].insY);
+      break;
+    }
+    }
+  }
+  CopyEnclosedFilledRegions(cb, L.paperFilledRegions, L.paperFilledRegionAttrs, mnX, mnY, mxX, mxY);
+  if (mnX > mxX) {
+    cb.basePtX = 0.f;
+    cb.basePtY = 0.f;
+  } else {
+    cb.basePtX = (mnX + mxX) * 0.5f;
+    cb.basePtY = (mnY + mxY) * 0.5f;
+  }
+  log.push_back("COPYCLIP — " + std::to_string(st.selectedPaperEntities.size()) + " paper object(s) copied to clipboard.");
+}
+
 void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log) {
+  // Route by active space (ADR-009/013): a paper layout active (and not floating model space) copies the
+  // paper selection; otherwise the model selection.
+  if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
+    CopyPaperSelectionToClipboard(st, *L, log);
+    return;
+  }
   if (st.selection.empty()) {
     log.push_back("COPYCLIP — nothing selected. Select objects first.");
     return;
   }
   CadClipboard& cb = st.clipboard;
   cb = CadClipboard{};
+  cb.fromPaper = false;  // copied from model space
 
   float mnX = 1e30f, mnY = 1e30f, mxX = -1e30f, mxY = -1e30f;
   auto expandBbox = [&](float x, float y) {
@@ -5384,6 +5843,7 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       expandBbox(st.cadAnnotations[k].insX, st.cadAnnotations[k].insY);
     }
   }
+  CopyEnclosedFilledRegions(cb, st.cadFilledRegions, st.cadFilledRegionAttrs, mnX, mnY, mxX, mxY);
 
   if (mnX > mxX) {
     cb.basePtX = 0.f;
@@ -5418,7 +5878,7 @@ void StartPasteOrigCommand(AppCommandState& st, std::vector<std::string>& log) {
     return;
   }
   PushUndoSnapshot(st, "Paste original");
-  CommitPasteFromClipboard(st, 0.f, 0.f);
+  CommitPasteFromClipboard(st, 0.f, 0.f, log);
   log.push_back("PASTEORIG — objects pasted at original coordinates.");
 }
 
@@ -6175,7 +6635,7 @@ bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lin
   if (s.empty())
     return false;
   const std::string low = StringUtil::toLowerAsciiCopy(s);
-  if (low == "ap" || low == "anglepick" || low == "a p") {
+  if (low == "2p" || low == "2 p" || low == "ap" || low == "anglepick" || low == "a p") {
     ResetSegmentAngleLock(st);
     st.segmentAngleKeyboardAwaitBearing = false;
     st.segmentAnglePickPhase = SAP::WaitP1;
@@ -6287,7 +6747,7 @@ void StartPolylineCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.selBoxWaitingSecond = false;
   st.active = AppCommandState::Kind::Polyline;
   st.polylinePhase = AppCommandState::PolylinePhase::NeedFirstPoint;
-  log.push_back("POLYLINE — like LINE (A / AP bearing lock); CLOSE/CL; ortho; ESC cancels.");
+  log.push_back("POLYLINE — like LINE (A / 2P bearing lock); CLOSE/CL; ortho; ESC cancels.");
 }
 
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -6347,16 +6807,46 @@ void OpenMtextRichEditorForAnnotation(AppCommandState& st, int annIndex, std::ve
   if (annIndex < 0 || static_cast<size_t>(annIndex) >= st.cadAnnotations.size())
     return;
   CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(annIndex)];
-  if (a.kind != CadAnnotation::Kind::Mtext)
+  // REQ-039 phase 2: double-click edits MTEXT (rich) or single-line TEXT (plain). Other kinds are not text.
+  if (a.kind != CadAnnotation::Kind::Mtext && a.kind != CadAnnotation::Kind::Text)
     return;
   CloseMtextRichEditorUi(st);
   st.mtextRichEditorPlacement = false;
+  st.mtextRichEditorPaper = false;
+  st.mtextRichEditorPaperLayout = -1;
+  st.mtextRichEditorPlain = (a.kind == CadAnnotation::Kind::Text);
   st.mtextRichEditorAnnIndex = annIndex;
   st.mtextRichEditorBuf = a.text;
   st.mtextRichEditorOpen = true;
   st.mtextRichEditorFocusRequest = true;
   if (log)
-    log->push_back("MTEXT — edit in the box; Ctrl+Enter reformats; Save to update; Esc to cancel.");
+    log->push_back(st.mtextRichEditorPlain
+                       ? "TEXT — edit the contents; Enter or Save to update; Esc to cancel."
+                       : "MTEXT — edit in the box; Ctrl+Enter reformats; Save to update; Esc to cancel.");
+}
+
+// In-place editor for a native paper-space text (REQ-039 phase 2): the SAME editor as model text, retargeted
+// to the active layout's paperTexts store. Plain box for Kind::Text, rich box for Kind::Mtext.
+void OpenPaperTextEditor(AppCommandState& st, int layoutIndex, int textIndex, std::vector<std::string>* log) {
+  if (layoutIndex < 0 || static_cast<size_t>(layoutIndex) >= st.paperLayouts.size())
+    return;
+  PaperLayout& L = st.paperLayouts[static_cast<size_t>(layoutIndex)];
+  if (textIndex < 0 || static_cast<size_t>(textIndex) >= L.paperTexts.size())
+    return;
+  CadAnnotation& a = L.paperTexts[static_cast<size_t>(textIndex)];
+  CloseMtextRichEditorUi(st);
+  st.mtextRichEditorPlacement = false;
+  st.mtextRichEditorPaper = true;
+  st.mtextRichEditorPaperLayout = layoutIndex;
+  st.mtextRichEditorPlain = (a.kind == CadAnnotation::Kind::Text);
+  st.mtextRichEditorAnnIndex = textIndex;
+  st.mtextRichEditorBuf = a.text;
+  st.mtextRichEditorOpen = true;
+  st.mtextRichEditorFocusRequest = true;
+  if (log)
+    log->push_back(st.mtextRichEditorPlain
+                       ? "Paper text — edit the contents; Enter or Save to update; Esc to cancel."
+                       : "Paper MTEXT — edit in the box; Ctrl+Enter reformats; Save to update; Esc to cancel.");
 }
 
 void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
@@ -6392,18 +6882,31 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
     CloseMtextRichEditorUi(st);
     return;
   }
-  const int ix = st.mtextRichEditorAnnIndex;
-  if (ix >= 0 && static_cast<size_t>(ix) < st.cadAnnotations.size() &&
-      st.cadAnnotations[static_cast<size_t>(ix)].kind == CadAnnotation::Kind::Mtext) {
-    PushUndoSnapshot(st, "MTEXT edit");
-    CadAnnotation& ann = st.cadAnnotations[static_cast<size_t>(ix)];
-    ann.text = MtextRichNormalize(st.mtextRichEditorBuf);
-    if (ann.surveyPointLabelFor >= 0 &&
-        static_cast<size_t>(ann.surveyPointLabelFor) < st.surveyPoints.size()) {
-      RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(ann.surveyPointLabelFor));
+  // Edit an existing text object (model cadAnnotations or paper paperTexts; MTEXT rich or TEXT plain).
+  const bool paper = st.mtextRichEditorPaper;
+  const bool plain = st.mtextRichEditorPlain;
+  if (MtextRichEditorTargetAnnotation(st)) {
+    PushUndoSnapshot(st, paper ? "Paper text edit" : (plain ? "TEXT edit" : "MTEXT edit"));
+    // Re-resolve after the snapshot (it does not mutate the live stores, but keep the access pattern safe).
+    CadAnnotation* ann = MtextRichEditorTargetAnnotation(st);
+    if (ann) {
+      if (plain) {
+        // Single-line TEXT: store contents verbatim, collapsing any stray newlines (the box is single-line,
+        // but paste can introduce them). No MTEXT normalization — that would inject [[…]] tags into TEXT.
+        std::string t = st.mtextRichEditorBuf;
+        for (char& c : t)
+          if (c == '\n' || c == '\r')
+            c = ' ';
+        ann->text = std::move(t);
+      } else {
+        ann->text = MtextRichNormalize(st.mtextRichEditorBuf);
+        if (!paper && ann->surveyPointLabelFor >= 0 &&
+            static_cast<size_t>(ann->surveyPointLabelFor) < st.surveyPoints.size())
+          RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(ann->surveyPointLabelFor));
+      }
+      BumpCadGpuCache(st);
+      log.push_back(paper ? "Paper text updated." : (plain ? "TEXT updated." : "MTEXT updated."));
     }
-    BumpCadGpuCache(st);
-    log.push_back("MTEXT updated.");
   }
   CloseMtextRichEditorUi(st);
 }
@@ -9531,8 +10034,7 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
     st.anchorX = x;
     st.anchorY = y;
     st.linePhase = AppCommandState::LinePhase::NeedNextPoint;
-    log.push_back(
-        "First point set — next: click, X,Y, @dx,dy; A / AP (two picks + Enter / +90); distance along bearing.");
+    log.push_back("First point set. Next: click; X, Y; @dx,dy; [A]zimuth, [2P];");
     return true;
   }
 
@@ -9604,6 +10106,15 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   [&]() {
   (void)cmdBufSize;
   std::string line = StringUtil::trimCopy(std::string(cmdBuf));
+
+  // Record the entry for the command bar's history dropdown (REQ-040): newest last,
+  // skip blanks and consecutive duplicates, cap at 20.
+  if (!line.empty() && (st.cmdEnteredHistory.empty() || st.cmdEnteredHistory.back() != line)) {
+    st.cmdEnteredHistory.push_back(line);
+    if (st.cmdEnteredHistory.size() > 20)
+      st.cmdEnteredHistory.erase(st.cmdEnteredHistory.begin());
+  }
+
   using K = AppCommandState::Kind;
   using LP = AppCommandState::LinePhase;
   using PP = AppCommandState::PolylinePhase;
@@ -9949,7 +10460,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       }
     }
 
-    log.push_back("POLYLINE — X,Y / @dx,dy / A or AP bearing / CLOSE / END / ortho distance.");
+    log.push_back("POLYLINE — X,Y / @dx,dy / A or 2P bearing / CLOSE / END / ortho distance.");
     return;
   }
 
@@ -10085,7 +10596,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
 
     log.push_back(
         std::string("Could not parse point. Use X,Y or X Y") +
-        (allowRel ? "; @dx,dy; A / AP (two picks); A 45 +90; ortho distance toward cursor." : "."));
+        (allowRel ? "; @dx,dy; A / 2P (two picks); A 45 +90; ortho distance toward cursor." : "."));
     return;
   }
 
@@ -10434,16 +10945,17 @@ const char* LineCommandFooterHint(const AppCommandState& st) {
   if (st.linePhase == LP::NeedNextPoint && st.segmentAngleKeyboardAwaitBearing)
     return "LINE: Type bearing ° CW from N (decimal/DMS) | blank Enter cancels | ESC ends command";
   if (st.linePhase == LP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitP1)
-    return "LINE bearing pick: First direction point — click | AP started | ESC cancels pick";
+    return "LINE bearing pick: First direction point — click | 2P started | ESC cancels pick";
   if (st.linePhase == LP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitP2)
     return "LINE bearing pick: Second point — direction | ESC cancels pick";
   if (st.linePhase == LP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitAdjustOrCommit)
     return "LINE bearing pick: Enter locks | +90/-45 adjust+lock | ESC cancels pick";
   if (st.linePhase == LP::NeedNextPoint && st.segmentAngleLockActive)
     return "LINE (bearing lock): distance ± along ray | click on line | X,Y | @dx,dy | A clears";
-  if (st.orthoMode)
-    return "LINE (Ortho): Next — click locks H/V | X,Y | @dx,dy | distance toward cursor | A/AP bearing";
-  return "LINE: Next — click | X,Y | @dx,dy | A / AP / A 45 +90 | Ortho panel";
+  // Basic next-point (ortho or not). Bracketed [A]/[2P] are rendered as clickable
+  // links in the command-line footer (DrawCommandLinePanel); the same text feeds the
+  // dynamic-cursor label and the height calc, so keep it identical.
+  return "Next: click; X, Y; @dx,dy; [A]zimuth, [2P];";
 }
 
 const char* DrawingExtrasFooterHint(const AppCommandState& st) {
@@ -10479,7 +10991,7 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
       return "POLYLINE bearing pick: Enter locks | +90/-45 adjust+lock | ESC cancels pick";
     if (st.polylinePhase == PP::NeedNextPoint && st.segmentAngleLockActive)
       return "POLYLINE (bearing lock): distance ± | click on ray | X,Y | A clears | CLOSE / END";
-    return "POLYLINE: Next — click | X,Y | @dx,dy | A/AP | CLOSE / END | ESC";
+    return "POLYLINE: Next — click | X,Y | @dx,dy | A/2P | CLOSE / END | ESC";
   }
   if (st.active == K::Arc) {
     switch (st.arcPhase) {

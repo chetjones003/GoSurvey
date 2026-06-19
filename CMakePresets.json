@@ -11,12 +11,28 @@
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON"
       }
+    },
+    {
+      "name": "ninja-debug",
+      "displayName": "Ninja Debug (symbols, for VS Code debugging)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_C_COMPILER": "C:/Program Files/LLVM/bin/clang.exe",
+        "CMAKE_CXX_COMPILER": "C:/Program Files/LLVM/bin/clang++.exe"
+      }
     }
   ],
   "buildPresets": [
     {
       "name": "ninja-release",
       "configurePreset": "ninja-release"
+    },
+    {
+      "name": "ninja-debug",
+      "configurePreset": "ninja-debug"
     }
   ]
 }

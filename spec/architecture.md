@@ -433,3 +433,85 @@ A change is rejected if it breaks any of these:
   5b render + line/text create, 5c move/copy/rotate/delete + snap) so each slice is
   verifiable. Coordinates never cross spaces implicitly: model stays in world coords,
   paper stays in paper inches (§11 — no silent coordinate-space mixing).
+
+### ADR-013 — Full paper-space primitive store + clipboard copy/paste across spaces   (2026-06-17, accepted)
+- Context:    REQ-038 adds clipboard copy/paste that works within and **across** model
+  and paper space (e.g. copy a DXF title block from model space onto a sheet). Two
+  forces meet the existing design: (1) the in-process clipboard (`CadClipboard` on
+  `AppCommandState`) and its cursor-following paste preview were built **model-only** —
+  `CopySelectionToClipboard` reads only the model selection/arrays and
+  `CommitPasteFromClipboard` writes only the model arrays; (2) paper layouts under
+  ADR-009/REQ-037 store **only lines + text**, so the other clipboard primitives
+  (circles, arcs, ellipses, polylines) have nowhere to land in paper space. Extending
+  the paper data model and crossing coordinate spaces are architectural decisions, not
+  Workshop choices (architecture §3, §10.1 single-owner, §11.4, §11 no implicit
+  coordinate mixing).
+- Decision:   (a) **Extend the `PaperLayout` paper-space entity store** from lines+text
+  to the **full primitive set** — circles, arcs, ellipses, polylines — each stored in
+  **paper inches** (sheet origin 0,0) with a parallel `EntityAttributes` vector,
+  reusing the existing entity value types (no new speculative abstraction; §11.4). The
+  `PaperLayout` remains the single visible owner (§10.1). These render through the
+  pan/zoom-aware ImGui paper overlay (consistent with ADR-009's revert of the GL paper
+  pass), participate in paper selection/snap/edit, and **persist per layout in `.gs`**
+  (REQ-031/037 pattern); DXF persistence of the new paper types stays **deferred**.
+  (b) **Copy/paste routes by active space** (the ADR-008/009 active-space branch
+  pattern): copy reads the model selection+arrays in model/floating-model space, or the
+  active layout's selection+stores in paper space; paste writes into whichever space is
+  active when the placing click happens. (c) **Cross-space paste is an explicit 1:1 raw
+  coordinate transfer** — model local units and paper inches are carried verbatim with
+  no scale conversion. This is the **one sanctioned exception** to ADR-009's "no
+  coordinate-space mixing": it is user-initiated (Ctrl+V into a deliberately chosen
+  space), never implicit. No new dependency, no new global.
+- Alternatives: (a) **Skip unsupported types on paper paste** (paste lines+text, drop
+  curves with a warning) — rejected by the user: title blocks mix circles/arcs and must
+  paste intact. (b) **Block any paste containing unsupported types** — rejected: too
+  coarse, defeats the title-block use case. (c) **Convert curves to polylines on paste**
+  — rejected: lossy and paper had no polyline store either; (a) full store is cleaner.
+  (d) **Auto-scale across spaces** (model units → plotted inches by a viewport scale) —
+  rejected: ambiguous (which viewport's scale?) and the user chose predictable 1:1 raw.
+- Consequences: `PaperLayout` gains four owned vectors (+ attrs); the overlay, paper
+  hit-testing/selection-highlight, `SnapPaperInchPoint`, the paper edit commands
+  (translate/rotate/delete), `CopySelectionToClipboard`, `CommitPasteFromClipboard`, and
+  the `.gs` per-layout section each extend to the new types; Ctrl+C/Ctrl+V wiring is
+  unchanged. Supersedes the lines+text-only limit of ADR-009/REQ-037 for the paper-space store.
+### ADR-014 — Paper-space object parity by active-space branching + a shared in-place text editor   (2026-06-18, accepted)
+- Context:    REQ-039 requires paper-space objects to have the full model-space interaction surface
+  — box selection, grips, Properties display+edit, draw/modify commands, and double-click in-place
+  text editing. Three reported defects motivate it: paper box-select does not select objects; paper
+  text picks/snaps are offset (the bounds helper treats text insertion as bottom-left while text
+  renders top-left); the Properties panel is model-only. Extending the paper interaction model and
+  adding a new editing UI are architectural decisions, not Workshop choices (architecture §3, §11.4).
+- Decision:   (a) **Continue the established active-space-branch pattern** (ADR-008/009/013): paper
+  parity is delivered by extending the existing paper selection set (`selectedPaperEntities`), the
+  paper hit-test/box-select code, the Properties panel, and the draw/modify command branches — each
+  routed by the active-space rule (`activeSpaceIndex`/floating-model). **No new abstraction, layer,
+  global, or dependency**; reuse the existing entity value types and the `PaperLayout` paper stores.
+  (b) **Properties panel reads the active space's selection**: in a paper layout it binds to the
+  active layout's paper objects (General + per-type Geometry + Text) instead of the model selection,
+  reusing the same panel and edit-apply paths. (c) **One shared in-place text-edit helper** opens an
+  inline editor over a double-clicked text and writes the committed string back to the target's
+  `CadAnnotation`; it is called from **two** concrete sites — the model annotation store and the
+  active layout's `paperTexts` — satisfying the §11.4 ≥2-use rule (not a speculative abstraction).
+  (d) **Fix the text anchor**: `PaperTextBoundsIn` and `SnapPaperInchPoint` treat the text insertion
+  as the **top-left** (matching the renderer), removing the ~one-line pick/snap offset.
+- Alternatives: (a) a unified cross-space entity/selection abstraction — rejected (§11.4 speculative;
+  the project deliberately chose per-space stores in ADR-006/009). (b) a paper-only parallel
+  Properties panel — rejected: duplicates the panel and diverges UX (the user asked for parity).
+  (c) edit paper text only through the Properties "Contents" field (no in-place editor) — rejected:
+  the user wants a double-click in-place editor, and wants it in model space too.
+- Consequences: the paper selection/box-select/Properties/draw/modify branches each grow to cover all
+  paper object types; one new shared inline-text-edit helper reused by model + paper; the text-anchor
+  fix corrects paper text picking and snapping. DXF persistence of paper objects stays deferred (.gs
+  only). Delivered incrementally (Phase 1 selection/text-pick/Properties, Phase 2 in-place editor,
+  Phase 3 grips, Phase 4 draw + modify) so each slice is independently verifiable.
+
+- Addendum (2026-06-18): solid fills (`CadFilledRegion`, ADR-011) are now clipboard-copyable too.
+  `CadClipboard` and `PaperLayout` each gain a `…FilledRegions` (+attrs) vector. Because filled regions
+  are **not** an independently selectable `SelectedEntity` type, copy **includes any filled region whose
+  vertices are fully enclosed by the selection's bounding box** (window-copy a title block → its logo fill
+  comes along); the base point is unchanged (computed from the explicit selection). Paste applies the same
+  1:1 offset. Paper fills render in the **ImGui overlay** (no GL stencil in paper, per the reverted GL paper
+  pass) via a **screen-space scanline even-odd fill** over all loops — matching the model GL stencil pass's
+  even-odd rule, so concave shapes and island holes (e.g. the logo's counters) are correct. Colour resolves
+  like the model (`ResolveEntityRgbaForViewport` with the layer row). DXF persistence of paper fills stays
+  deferred (.gs only).

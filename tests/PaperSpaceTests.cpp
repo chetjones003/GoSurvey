@@ -134,3 +134,120 @@ TEST_CASE("Paper-space object snap finds endpoints, midpoints, text (REQ-037)", 
   REQUIRE(sx == Catch::Approx(-99.f));
   REQUIRE(sy == Catch::Approx(-99.f));
 }
+
+// REQ-038 / ADR-013: paper space now stores circles/arcs/ellipses/polylines; snapping finds their key points.
+TEST_CASE("Paper-space object snap finds new primitive key points (REQ-038)", "[paperspace]") {
+  PaperLayout L;
+  // Circle center (20,20), r=5 → center + 4 quadrants.
+  const float circ[3] = {20.f, 20.f, 5.f};
+  L.paperCircles.assign(circ, circ + 3);
+  // Arc center (0,0), r=10, start 0, sweep +90° → start point (10,0), end point (0,10), center (0,0).
+  CadArc a;
+  a.cx = 0.f; a.cy = 0.f; a.r = 10.f; a.startRad = 0.f; a.sweepRad = 1.57079633f;
+  L.paperArcs.push_back(a);
+  // Polyline with a vertex at (40,5).
+  L.paperPolyOffsets = {0, 2};
+  L.paperPolyVerts = {40.f, 5.f, 0.f, 45.f, 5.f, 0.f};
+  L.paperPolyClosed = {0};
+
+  float sx = 0.f, sy = 0.f;
+  // Circle east quadrant (25,20).
+  REQUIRE(SnapPaperInchPoint(L, 24.9f, 20.1f, 0.5f, &sx, &sy));
+  REQUIRE(sx == Catch::Approx(25.f));
+  REQUIRE(sy == Catch::Approx(20.f));
+  // Arc end point (0,10) — cos(90°) leaves a tiny float residue in x, so use a margin.
+  REQUIRE(SnapPaperInchPoint(L, 0.1f, 9.9f, 0.5f, &sx, &sy));
+  REQUIRE(sx == Catch::Approx(0.f).margin(1e-4));
+  REQUIRE(sy == Catch::Approx(10.f));
+  // Polyline vertex (40,5).
+  REQUIRE(SnapPaperInchPoint(L, 40.2f, 4.8f, 0.5f, &sx, &sy));
+  REQUIRE(sx == Catch::Approx(40.f));
+  REQUIRE(sy == Catch::Approx(5.f));
+}
+
+// REQ-039 (bug #2): the renderer anchors paper text at its insertion = TOP-LEFT, so the bounds occupy
+// [insY - h, insY] in Y and [insX, insX + w] in X. Earlier (bottom-left) bounds put the glyphs above the
+// insertion, mis-picking text by ~one line height.
+TEST_CASE("Paper text bounds anchor at the top-left insertion (REQ-039)", "[paperspace]") {
+  CadAnnotation t;
+  t.insX = 3.f;
+  t.insY = 4.f;
+  t.plottedHeightInches = 0.5f;
+  t.text = "AB";  // two glyphs → width = 0.6*h*2 = 0.6
+  float x0, y0, x1, y1;
+  PaperTextBoundsIn(t, &x0, &y0, &x1, &y1);
+  REQUIRE(x0 == Catch::Approx(3.f));
+  REQUIRE(y1 == Catch::Approx(4.f));        // top edge at the insertion Y
+  REQUIRE(y0 == Catch::Approx(4.f - 0.5f)); // descends one line height below it
+  REQUIRE(x1 == Catch::Approx(3.f + 0.6f));
+  REQUIRE(y0 < y1);
+}
+
+// REQ-039 (bug #1): box-select hits each paper object type. Window (L→R) needs the whole extent inside;
+// crossing (R→L) needs only an overlap.
+TEST_CASE("Paper box-select selects each type by window/crossing rules (REQ-039)", "[paperspace]") {
+  PaperLayout L;
+  // Line from (1,1) to (3,3) — extent [1,3]x[1,3].
+  const float seg[6] = {1.f, 1.f, 0.f, 3.f, 3.f, 0.f};
+  L.paperLines.assign(seg, seg + 6);
+  // Text at top-left (5,6), h=0.5 → bounds [5,5.3]x[5.5,6].
+  CadAnnotation t; t.insX = 5.f; t.insY = 6.f; t.plottedHeightInches = 0.5f; t.text = "T";
+  L.paperTexts.push_back(t);
+  // Circle center (10,10) r=2 → bbox [8,12]x[8,12].
+  const float circ[3] = {10.f, 10.f, 2.f};
+  L.paperCircles.assign(circ, circ + 3);
+  // Arc center (20,20) r=3 → bbox [17,23]x[17,23].
+  CadArc a; a.cx = 20.f; a.cy = 20.f; a.r = 3.f; a.startRad = 0.f; a.sweepRad = 1.f;
+  L.paperArcs.push_back(a);
+  // Ellipse center (30,30) major (4,0) → bbox [26,34]x[26,34].
+  CadEllipse e; e.cx = 30.f; e.cy = 30.f; e.majVx = 4.f; e.majVy = 0.f; e.ratio = 0.5f;
+  L.paperEllipses.push_back(e);
+  // Polyline verts (40,40)-(44,42) → bbox [40,44]x[40,42].
+  L.paperPolyOffsets = {0, 2};
+  L.paperPolyVerts = {40.f, 40.f, 0.f, 44.f, 42.f, 0.f};
+  L.paperPolyClosed = {0};
+
+  auto countType = [](const std::vector<PaperEntityRef>& v, PaperEntityRef::Type t) {
+    int n = 0;
+    for (const auto& r : v) if (r.type == t) ++n;
+    return n;
+  };
+
+  // A window box [0,0]-[50,50] fully contains every object → all six selected.
+  {
+    std::vector<PaperEntityRef> out;
+    SelectPaperEntitiesInBox(L, 0.f, 0.f, 50.f, 50.f, /*windowMode=*/true, out);
+    REQUIRE(out.size() == 6);
+    REQUIRE(countType(out, PaperEntityRef::Type::Line) == 1);
+    REQUIRE(countType(out, PaperEntityRef::Type::Text) == 1);
+    REQUIRE(countType(out, PaperEntityRef::Type::Circle) == 1);
+    REQUIRE(countType(out, PaperEntityRef::Type::Arc) == 1);
+    REQUIRE(countType(out, PaperEntityRef::Type::Ellipse) == 1);
+    REQUIRE(countType(out, PaperEntityRef::Type::Polyline) == 1);
+  }
+
+  // A window box [9,9]-[11,11] cuts through the circle but does not contain it → window selects nothing.
+  {
+    std::vector<PaperEntityRef> out;
+    SelectPaperEntitiesInBox(L, 9.f, 9.f, 11.f, 11.f, /*windowMode=*/true, out);
+    REQUIRE(out.empty());
+  }
+
+  // The same box as a crossing selection (R→L) overlaps only the circle → exactly the circle.
+  {
+    std::vector<PaperEntityRef> out;
+    SelectPaperEntitiesInBox(L, 9.f, 9.f, 11.f, 11.f, /*windowMode=*/false, out);
+    REQUIRE(out.size() == 1);
+    REQUIRE(out.front().type == PaperEntityRef::Type::Circle);
+    REQUIRE(out.front().index == 0);
+  }
+
+  // A box far from everything selects nothing in either mode.
+  {
+    std::vector<PaperEntityRef> out;
+    SelectPaperEntitiesInBox(L, 100.f, 100.f, 110.f, 110.f, /*windowMode=*/false, out);
+    REQUIRE(out.empty());
+    SelectPaperEntitiesInBox(L, 100.f, 100.f, 110.f, 110.f, /*windowMode=*/true, out);
+    REQUIRE(out.empty());
+  }
+}

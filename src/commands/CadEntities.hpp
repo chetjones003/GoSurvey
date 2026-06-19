@@ -59,6 +59,26 @@ struct CadAnnotation {
   float surveyLabelUserOffsetNorth = 0.f;
 };
 
+/// Committed 3-point arc (circumcircle + start/sweep in radians from +X).
+/// Dependency-free so both the model store (CadCommands.hpp) and the paper-space store (PaperSpace.hpp,
+/// ADR-013) can hold arcs without a circular include.
+struct CadArc {
+  float cx = 0.f;
+  float cy = 0.f;
+  float r = 0.f;
+  float startRad = 0.f;
+  float sweepRad = 0.f;
+};
+
+/// Axis-aligned ellipse: center + major-axis vector (semi-major length = |majV|) + minor/major ratio (0,1].
+struct CadEllipse {
+  float cx = 0.f;
+  float cy = 0.f;
+  float majVx = 1.f;
+  float majVy = 0.f;
+  float ratio = 0.5f;
+};
+
 /// A solid-filled region (ADR-011), imported from a SOLID-fill HATCH. Holds one or more closed boundary
 /// loops in the same local coordinate frame as line geometry: loop 0 is the outer boundary, any further
 /// loops are holes (islands). Rendered filled with even-odd rule in the GL pass and re-exported as a HATCH.

@@ -24,13 +24,8 @@ struct SelectedEntity {
   int index = 0; ///< Entity index in the parallel container for \p type
 };
 
-/// A selected native paper-space entity (REQ-037): index into the active layout's paperLines (by segment)
-/// or paperTexts. Top-level so free-function declarations can name it before AppCommandState is defined.
-struct PaperEntityRef {
-  enum class Type : std::uint8_t { Line = 0, Text = 1 };
-  Type type = Type::Line;
-  int  index = 0;
-};
+// PaperEntityRef (selected paper-space entity) is defined in PaperSpace.hpp so header-only selection
+// helpers can name it; CadCommands.hpp gets it via the include above (REQ-039).
 
 
 /// Named layer row for the layer manager (visibility / freeze / lock are stored for future viewport filtering).
@@ -114,23 +109,7 @@ void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, floa
 /// Recompute dimension text from current geometry (linear / aligned / angular).
 void CadDimRefreshMeasurementText(CadAnnotation* ann, int linearPrecision, const AngleDisplaySettings& angle);
 
-/// Committed 3-point arc (circumcircle + start/sweep in radians from +X).
-struct CadArc {
-  float cx = 0.f;
-  float cy = 0.f;
-  float r = 0.f;
-  float startRad = 0.f;
-  float sweepRad = 0.f;
-};
-
-/// Axis-aligned ellipse: center + major-axis vector (semi-major length = |majV|) + minor/major ratio (0,1].
-struct CadEllipse {
-  float cx = 0.f;
-  float cy = 0.f;
-  float majVx = 1.f;
-  float majVy = 0.f;
-  float ratio = 0.5f;
-};
+// CadArc and CadEllipse are defined in CadEntities.hpp (shared with PaperSpace.hpp, ADR-013).
 
 /// Optional batched polylines / arcs / ellipses for the viewport (nullptr = none).
 struct CadExtendedGeometryInput {
@@ -188,10 +167,15 @@ struct CadClipboard {
   std::vector<EntityAttributes> polyAttrs;
   std::vector<CadAnnotation>    annotations;
   std::vector<EntityAttributes> annotationAttrs;
+  std::vector<CadFilledRegion>  filledRegions;     ///< Solid fills enclosed by the copy selection (REQ-038 addendum).
+  std::vector<EntityAttributes> filledRegionAttrs;
+  /// Source space of the copy. Text height has different units per space (model: plotted-inches × scale = model
+  /// units; paper: paper inches), so a cross-space paste scales annotation height by modelUnitsPerPlottedInch.
+  bool fromPaper = false;
 
   bool empty() const {
     return lines.empty() && circles.empty() && arcs.empty() && ellipses.empty() &&
-           (polyOffsets.size() <= 1) && annotations.empty();
+           (polyOffsets.size() <= 1) && annotations.empty() && filledRegions.empty();
   }
 };
 
@@ -217,6 +201,7 @@ struct DrawingGeometrySnapshot {
   std::vector<SurveyPoint>      surveyPoints;
   std::vector<CadLayerRow>      drawingLayerTable;
   std::vector<PdfAttachment>    pdfAttachments;
+  std::vector<PaperLayout>      paperLayouts;  ///< Paper layouts incl. native paper geometry (REQ-037/038) — undoable.
   double worldDocumentOriginX = 0.0;
   double worldDocumentOriginY = 0.0;
   std::string description;
@@ -453,6 +438,9 @@ struct AppCommandState {
   /// Drawing viewport: CAD entity under cursor when idle (no command active), for hover highlight feedback.
   bool viewportHoverEntityValid = false;
   SelectedEntity viewportHoverEntity{};
+  /// Paper layout: native paper-space entity under the cursor when idle, for hover highlight parity (REQ-039).
+  bool paperHoverValid = false;
+  PaperEntityRef paperHover{};
   /// When true, viewport picks should use the snapped world point (OSNAP) instead of the sticky-blended cursor.
   bool viewportSnapPickValid = false;
   float viewportSnapPickWorldX = 0.f;
@@ -460,6 +448,22 @@ struct AppCommandState {
   /// Command-line log cache for the selectable read-only multiline (rebuilt each frame from \ref log).
   std::vector<char> commandLogCacheBytes;
   size_t commandLogLastSizeForAutoscroll = 0;
+
+  // --- Floating command bar / fading history / F2 console (REQ-040) ---
+  bool cmdLineClassicDock = false;    ///< true → legacy docked panel; false → floating bar (default). Persisted.
+  bool cmdBarVisible = true;          ///< floating bar shown; × hides, Ctrl+9 restores. Persisted.
+  bool cmdBarAnchorValid = false;     ///< false → place at the default bottom-left this frame. Persisted.
+  float cmdBarAnchorX = 0.f;          ///< persisted floating-bar bottom-LEFT x anchor (screen px); Y is pinned to the bottom.
+  float cmdBarAnchorY = 0.f;          ///< (legacy/unused: the bar is always pinned to the viewport bottom).
+  float cmdBarWidth = 0.f;            ///< user-resized bar width (px); 0 → default. Persisted.
+  float cmdConsoleHeight = 0.f;       ///< user-resized F2 console height (px); 0 → default. Persisted.
+  bool cmdConsoleOpen = false;        ///< F2 expanded console (not persisted).
+  float cmdBarFadeDelaySec = 4.f;     ///< idle seconds before recent-history lines start fading. Persisted.
+  float cmdBarOpacity = 0.92f;        ///< bar / console background opacity. Persisted.
+  int cmdBarHistoryLines = 3;         ///< recent log lines floated above the bar. Persisted.
+  double cmdLogLastChangeTime = 0.0;  ///< ImGui time of the last log append (drives the fade).
+  size_t cmdLogLastSizeForFade = 0;   ///< log size seen at the last fade-timer reset.
+  std::vector<std::string> cmdEnteredHistory;  ///< recently submitted command-line entries (newest last; capped). Runtime only.
   /// Last Drawing1 viewport metrics (match survey MTEXT box to on-screen font scaling).
   float viewportLastSurveyLayoutOrthoHalfH = 50.f;
   float viewportLastSurveyLayoutHeightPx = 600.f;
@@ -550,6 +554,12 @@ struct AppCommandState {
   /// Multiline MTEXT editor over the box (new placement or double-click edit). Not command-line text.
   bool mtextRichEditorOpen = false;
   bool mtextRichEditorPlacement = false;
+  /// Editor target (REQ-039 phase 2): when \c mtextRichEditorPaper, \c mtextRichEditorAnnIndex indexes
+  /// \c paperLayouts[mtextRichEditorPaperLayout].paperTexts; otherwise it indexes \c cadAnnotations.
+  bool mtextRichEditorPaper = false;
+  int mtextRichEditorPaperLayout = -1;
+  /// Single-line \c Kind::Text edit (no MTEXT rich tags): plain content box.
+  bool mtextRichEditorPlain = false;
   int mtextRichEditorAnnIndex = -1;
   std::string mtextRichEditorBuf;
   bool mtextRichEditorFocusRequest = false;
@@ -1218,6 +1228,9 @@ inline void AbortMtextGripInteraction(AppCommandState& st) {
 inline void CloseMtextRichEditorUi(AppCommandState& st) {
   st.mtextRichEditorOpen = false;
   st.mtextRichEditorPlacement = false;
+  st.mtextRichEditorPaper = false;
+  st.mtextRichEditorPaperLayout = -1;
+  st.mtextRichEditorPlain = false;
   st.mtextRichEditorAnnIndex = -1;
   st.mtextRichEditorBuf.clear();
   st.mtextRichEditorFocusRequest = false;
@@ -1225,6 +1238,29 @@ inline void CloseMtextRichEditorUi(AppCommandState& st) {
   st.mtextRichEditorSelStart = 0;
   st.mtextRichEditorSelEnd = 0;
   st.mtextRichEditorTypingAllCaps = false;
+}
+
+/// The annotation the in-place text editor is currently editing (REQ-039 phase 2): a model
+/// \c cadAnnotations entry or, when \c mtextRichEditorPaper, the active paper layout's \c paperTexts
+/// entry. Returns \c nullptr for placement mode (no existing object yet) or an out-of-range index.
+inline CadAnnotation* MtextRichEditorTargetAnnotation(AppCommandState& st) {
+  if (!st.mtextRichEditorOpen || st.mtextRichEditorPlacement)
+    return nullptr;
+  const int ix = st.mtextRichEditorAnnIndex;
+  if (ix < 0)
+    return nullptr;
+  if (st.mtextRichEditorPaper) {
+    if (st.mtextRichEditorPaperLayout < 0 ||
+        static_cast<size_t>(st.mtextRichEditorPaperLayout) >= st.paperLayouts.size())
+      return nullptr;
+    PaperLayout& L = st.paperLayouts[static_cast<size_t>(st.mtextRichEditorPaperLayout)];
+    if (static_cast<size_t>(ix) >= L.paperTexts.size())
+      return nullptr;
+    return &L.paperTexts[static_cast<size_t>(ix)];
+  }
+  if (static_cast<size_t>(ix) >= st.cadAnnotations.size())
+    return nullptr;
+  return &st.cadAnnotations[static_cast<size_t>(ix)];
 }
 
 
@@ -1366,6 +1402,7 @@ void StartTextCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartMtextCommand(AppCommandState& st, std::vector<std::string>& log);
 void OpenMtextRichEditorForPlacement(AppCommandState& st, std::vector<std::string>* log);
 void OpenMtextRichEditorForAnnotation(AppCommandState& st, int annIndex, std::vector<std::string>* log);
+void OpenPaperTextEditor(AppCommandState& st, int layoutIndex, int textIndex, std::vector<std::string>* log);
 void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log);
 void CancelMtextRichEditor(AppCommandState& st, std::vector<std::string>* log);
 void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log);
@@ -1467,6 +1504,9 @@ void SubmitPdfAttachInsertPoint(AppCommandState& st, float wx, float wy, std::ve
 void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log);
 /// Begin PASTE — show cursor-following preview; next viewport click places the clipboard contents.
 void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Commit a PASTE: place the clipboard at (x,y) in the ACTIVE space's coordinates (world for model, paper
+/// inches for a paper layout). Routes the write + new selection by active space (REQ-038, ADR-013).
+void CommitClipboardPasteAt(AppCommandState& st, float x, float y, std::vector<std::string>& log);
 /// Immediately paste clipboard contents at their original (stored) coordinates without interaction.
 void StartPasteOrigCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Release draft cache and preview texture; resets command state to idle.

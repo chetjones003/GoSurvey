@@ -265,6 +265,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/NumFormatTests.cpp
     tests/AngleFormatTests.cpp
     tests/PaperSpaceTests.cpp
+    tests/CommandLineTests.cpp
     src/traverse/TraverseCalc.cpp
     src/traverse/TraverseLeastSquares.cpp
     src/traverse/FbkImport.cpp

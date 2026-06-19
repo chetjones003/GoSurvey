@@ -29,53 +29,64 @@
 #include <string>
 #include <vector>
 
-namespace {
+namespace
+{
 
-static void TryLoadStartupWorkspaceTemplate(AppCommandState& cmd, std::vector<std::string>& cmdLog) {
-  namespace fs = std::filesystem;
-  auto appendLines = [&](std::vector<std::string>& lines) {
-    for (auto& s : lines)
-      cmdLog.push_back(std::move(s));
-  };
-  auto tryLoadPath = [&](const fs::path& p) -> bool {
-    if (p.empty() || !fs::exists(p))
-      return false;
-    std::vector<std::string> boot;
-    const std::string u8 = p.u8string();
-    if (!LoadGoSurveyFile(cmd, u8.c_str(), boot))
-      return false;
-    appendLines(boot);
-    return true;
-  };
-
-  if (cmd.defaultWorkspaceTemplatePathUtf8[0] != '\0') {
-    const fs::path custom(cmd.defaultWorkspaceTemplatePathUtf8);
-    if (!custom.empty() && fs::exists(custom)) {
+  static void TryLoadStartupWorkspaceTemplate(AppCommandState &cmd, std::vector<std::string> &cmdLog)
+  {
+    namespace fs = std::filesystem;
+    auto appendLines = [&](std::vector<std::string> &lines)
+    {
+      for (auto &s : lines)
+        cmdLog.push_back(std::move(s));
+    };
+    auto tryLoadPath = [&](const fs::path &p) -> bool
+    {
+      if (p.empty() || !fs::exists(p))
+        return false;
       std::vector<std::string> boot;
-      const std::string u8 = custom.u8string();
-      if (LoadGoSurveyFile(cmd, u8.c_str(), boot)) {
-        appendLines(boot);
-        return;
-      }
+      const std::string u8 = p.u8string();
+      if (!LoadGoSurveyFile(cmd, u8.c_str(), boot))
+        return false;
       appendLines(boot);
-      cmdLog.push_back("Startup: custom template failed to load; trying bundled default-template.gs.");
-    } else {
-      cmdLog.push_back("Startup: custom template path not found; trying bundled default-template.gs.");
-    }
-  }
+      return true;
+    };
 
-  if (tryLoadPath(ResolveDefaultWorkspaceTemplateGsPath()))
-    return;
-  cmdLog.push_back("Startup: bundled default-template.gs not found; starting with an empty drawing.");
-}
+    if (cmd.defaultWorkspaceTemplatePathUtf8[0] != '\0')
+    {
+      const fs::path custom(cmd.defaultWorkspaceTemplatePathUtf8);
+      if (!custom.empty() && fs::exists(custom))
+      {
+        std::vector<std::string> boot;
+        const std::string u8 = custom.u8string();
+        if (LoadGoSurveyFile(cmd, u8.c_str(), boot))
+        {
+          appendLines(boot);
+          return;
+        }
+        appendLines(boot);
+        cmdLog.push_back("Startup: custom template failed to load; trying bundled default-template.gs.");
+      }
+      else
+      {
+        cmdLog.push_back("Startup: custom template path not found; trying bundled default-template.gs.");
+      }
+    }
+
+    if (tryLoadPath(ResolveDefaultWorkspaceTemplateGsPath()))
+      return;
+    cmdLog.push_back("Startup: bundled default-template.gs not found; starting with an empty drawing.");
+  }
 
 } // namespace
 
-static void GlfwErrorCallback(int error, const char* description) {
+static void GlfwErrorCallback(int error, const char *description)
+{
   std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
 }
 
-int main() {
+int main()
+{
   glfwSetErrorCallback(GlfwErrorCallback);
   if (!glfwInit())
     return 1;
@@ -85,8 +96,9 @@ int main() {
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
   GlfwApplySplashStageWindowHints();
 
-  GLFWwindow* window = glfwCreateWindow(1600, 900, "GoSurvey", nullptr, nullptr);
-  if (!window) {
+  GLFWwindow *window = glfwCreateWindow(1600, 900, "GoSurvey", nullptr, nullptr);
+  if (!window)
+  {
     glfwTerminate();
     return 1;
   }
@@ -101,7 +113,8 @@ int main() {
   // One ViewportRenderer (owns its own FBO + texture) per open drawing tab.
   std::vector<std::unique_ptr<ViewportRenderer>> viewportRenderers;
   viewportRenderers.push_back(std::make_unique<ViewportRenderer>());
-  if (!viewportRenderers[0]->Init()) {
+  if (!viewportRenderers[0]->Init())
+  {
     PdfAttach_Shutdown();
     glfwDestroyWindow(window);
     glfwTerminate();
@@ -119,7 +132,7 @@ int main() {
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
-  ImGuiIO& io = ImGui::GetIO();
+  ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigInputTextEnterKeepActive = false; // CAD shell: Enter submits without selecting-all next keystroke
@@ -132,7 +145,7 @@ int main() {
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
 
-  //RunStartupSplash(window, 1.0);
+  // RunStartupSplash(window, 1.0);
   GlfwApplyMainStageWindowChrome(window);
 
   AppCommandState cmd;
@@ -140,11 +153,11 @@ int main() {
   const bool haveSavedDockIni = ImGuiLayout_ConfigureIniPath(cmd);
   std::vector<std::string> cmdLog;
   cmdLog.push_back("GoSurvey CAD shell ready.");
-  cmdLog.push_back( "Regenerating model.");
+  cmdLog.push_back("Regenerating model.");
   cmdLog.push_back("Drawing Created.");
   cmdLog.push_back("JSON database - ready...");
   TryLoadStartupWorkspaceTemplate(cmd, cmdLog);
-  cmd.activeDocSavedRevision = cmd.cadGpuRevision;  // loaded template counts as "clean"
+  cmd.activeDocSavedRevision = cmd.cadGpuRevision; // loaded template counts as "clean"
   // Re-apply user preferences so they override any template defaults (crosshair, snap, survey, etc.).
   LoadUserStartupPrefSettings(cmd);
   // Re-apply theme now that displayColorThemeIdx is known from saved prefs.
@@ -152,7 +165,8 @@ int main() {
     ApplyCadDarkTheme();
   else
     ApplyCadLightTheme();
-  if (!cmd.surveyPoints.empty()) {
+  if (!cmd.surveyPoints.empty())
+  {
     RepositionAllSurveyPointLabels(cmd);
     BumpCadGpuCache(cmd);
   }
@@ -171,14 +185,17 @@ int main() {
   bool gridVisible = false;
   // prevDrawingIdx lives in cmd — no local needed.
 
-  while (true) {
+  while (true)
+  {
     glfwPollEvents();
 
     // Intercept window-close so we can prompt about unsaved drawings.
-    if (glfwWindowShouldClose(window)) {
+    if (glfwWindowShouldClose(window))
+    {
       glfwSetWindowShouldClose(window, GLFW_FALSE);
       bool anyDirty = (cmd.cadGpuRevision != cmd.activeDocSavedRevision);
-      for (int i = 0; i < static_cast<int>(cmd.documents.size()) && !anyDirty; ++i) {
+      for (int i = 0; i < static_cast<int>(cmd.documents.size()) && !anyDirty; ++i)
+      {
         if (i != cmd.activeDrawingIdx &&
             cmd.documents[i].cadGpuRevision != cmd.documents[i].savedRevision)
           anyDirty = true;
@@ -196,8 +213,9 @@ int main() {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    ImGuiIO& ioFrame = ImGui::GetIO();
-    if (!ioFrame.WantTextInput) {
+    ImGuiIO &ioFrame = ImGui::GetIO();
+    if (!ioFrame.WantTextInput)
+    {
       if (ImGui::IsKeyPressed(ImGuiKey_F3, false))
         cmd.objectSnapEnabled = !cmd.objectSnapEnabled;
       if (ImGui::IsKeyPressed(ImGuiKey_F8, false))
@@ -205,25 +223,35 @@ int main() {
     }
     cmd.orthoMode = orthoEnabled;
 
-    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
-      if (cmd.copySurveyDupModalOpen) {
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+    {
+      if (cmd.copySurveyDupModalOpen)
+      {
         ApplyCopySurveyDuplicateModalResult(cmd, false, cmdLog);
         cmdBuf[0] = '\0';
-      } else if (cmd.mtextRichEditorOpen) {
+      }
+      else if (cmd.mtextRichEditorOpen)
+      {
         CancelMtextRichEditor(cmd, &cmdLog);
         cmdBuf[0] = '\0';
-      } else if (cmd.mtextGripMoveActive) {
+      }
+      else if (cmd.mtextGripMoveActive)
+      {
         AbortMtextGripInteraction(cmd);
         BumpCadGpuCache(cmd);
         cmdBuf[0] = '\0';
         cmdLog.push_back("MTEXT grip edit canceled.");
-      } else if (cmd.entityGripMoveActive) {
+      }
+      else if (cmd.entityGripMoveActive)
+      {
         RestoreEntityGripOriginal(cmd);
         ClearEntityGripInteraction(cmd);
         BumpCadGpuCache(cmd);
         cmdBuf[0] = '\0';
         cmdLog.push_back("Grip edit canceled.");
-      } else if (cmd.active != AppCommandState::Kind::None) {
+      }
+      else if (cmd.active != AppCommandState::Kind::None)
+      {
         using SAP = AppCommandState::SegmentAnglePickPhase;
         if ((cmd.active == AppCommandState::Kind::Line || cmd.active == AppCommandState::Kind::Polyline) &&
             cmd.segmentAnglePickPhase != SAP::Idle)
@@ -231,7 +259,9 @@ int main() {
         else
           CancelActiveCommand(cmd, cmdLog);
         cmdBuf[0] = '\0';
-      } else {
+      }
+      else
+      {
         const bool hadCreatePtsUi = cmd.showCreatePointsWindow;
         cmd.showCreatePointsWindow = false;
         ClearSelection(cmd);
@@ -242,13 +272,16 @@ int main() {
       }
     }
 
-    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !ImGui::GetIO().WantTextInput) {
+    if (ImGui::IsKeyPressed(ImGuiKey_Delete, false) && !ImGui::GetIO().WantTextInput)
+    {
       StartDeleteCommand(cmd, cmdLog);
     }
 
     const bool ctrlHeld = ImGui::GetIO().KeyCtrl;
-    if (ctrlHeld && !ImGui::GetIO().WantTextInput) {
-      if (ImGui::IsKeyPressed(ImGuiKey_Z, false)) {
+    if (ctrlHeld && !ImGui::GetIO().WantTextInput)
+    {
+      if (ImGui::IsKeyPressed(ImGuiKey_Z, false))
+      {
         if (ImGui::GetIO().KeyShift)
           DoRedo(cmd, cmdLog);
         else
@@ -262,7 +295,7 @@ int main() {
         StartPasteCommand(cmd, cmdLog);
     }
 
-    const ImGuiViewport* mainVp = ImGui::GetMainViewport();
+    const ImGuiViewport *mainVp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(mainVp->WorkPos);
     ImGui::SetNextWindowSize(mainVp->WorkSize);
     ImGui::SetNextWindowViewport(mainVp->ID);
@@ -286,14 +319,16 @@ int main() {
       const float menuStripH = ImGui::GetFrameHeight() + 6.f;
       ImGui::BeginChild("##GoSurveyMenuHost", ImVec2(0.f, menuStripH), false,
                         ImGuiWindowFlags_MenuBar | ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
-      if (ImGui::BeginMenuBar()) {
+      if (ImGui::BeginMenuBar())
+      {
         DrawMainMenuBar(cmd, cmdLog);
         ImGui::EndMenuBar();
       }
       ImGui::EndChild();
     }
 #else
-    if (ImGui::BeginMenuBar()) {
+    if (ImGui::BeginMenuBar())
+    {
       DrawMainMenuBar(cmd, cmdLog);
       ImGui::EndMenuBar();
     }
@@ -310,17 +345,20 @@ int main() {
     ImGuiID dockspaceId = ImGui::GetID("GoSurveyDockSpace");
     ImGui::DockSpace(dockspaceId, dockHostSize, 0);
 
-    if (cmd.pendingBuiltinDockLayoutReset) {
+    if (cmd.pendingBuiltinDockLayoutReset)
+    {
       cmd.pendingBuiltinDockLayoutReset = false;
-      SetupMainDockLayout(dockspaceId, dockHostSize);
-      ImGuiIO& ioDock = ImGui::GetIO();
+      SetupMainDockLayout(dockspaceId, dockHostSize, cmd.cmdLineClassicDock);
+      ImGuiIO &ioDock = ImGui::GetIO();
       if (ioDock.IniFilename && ioDock.IniFilename[0])
         ImGui::SaveIniSettingsToDisk(ioDock.IniFilename);
       dockLayoutDone = true;
       cmdLog.push_back("UI layout: reset to built-in dock split (saved to current layout .ini).");
-    } else if (!dockLayoutDone) {
+    }
+    else if (!dockLayoutDone)
+    {
       dockLayoutDone = true;
-      SetupMainDockLayout(dockspaceId, dockHostSize);
+      SetupMainDockLayout(dockspaceId, dockHostSize, cmd.cmdLineClassicDock);
     }
 
     ImGui::EndChild();
@@ -335,9 +373,11 @@ int main() {
       cmd.documents.emplace_back();
 
     // Erase renderer for a closed tab (must happen before provisioning so indices stay aligned).
-    if (cmd.pendingTabErase >= 0) {
+    if (cmd.pendingTabErase >= 0)
+    {
       const auto eraseAt = static_cast<size_t>(cmd.pendingTabErase);
-      if (eraseAt < viewportRenderers.size()) {
+      if (eraseAt < viewportRenderers.size())
+      {
         viewportRenderers[eraseAt]->Shutdown();
         viewportRenderers.erase(viewportRenderers.begin() + static_cast<std::ptrdiff_t>(eraseAt));
       }
@@ -350,21 +390,23 @@ int main() {
                                                   static_cast<int>(cmd.drawingTabs.size()) - 1));
 
     // Always provision renderers before any switch logic (New/Open menu items bypass switch detection).
-    while (viewportRenderers.size() <= static_cast<size_t>(cmd.activeDrawingIdx)) {
+    while (viewportRenderers.size() <= static_cast<size_t>(cmd.activeDrawingIdx))
+    {
       viewportRenderers.push_back(std::make_unique<ViewportRenderer>());
       viewportRenderers.back()->Init();
     }
 
     // Detect tab switch: save old document, restore new one.
     // cmd.prevDrawingIdx is the authoritative last-active index (also written by menu New/Open handlers).
-    if (cmd.activeDrawingIdx != cmd.prevDrawingIdx) {
+    if (cmd.activeDrawingIdx != cmd.prevDrawingIdx)
+    {
       SaveDocumentToSnapshot(cmd, cmd.prevDrawingIdx);
       RestoreDocumentFromSnapshot(cmd, cmd.activeDrawingIdx);
       cmd.prevDrawingIdx = cmd.activeDrawingIdx;
     }
 
     const size_t activeRendIdx = static_cast<size_t>(cmd.activeDrawingIdx);
-    ViewportRenderer& activeRenderer = *viewportRenderers[activeRendIdx];
+    ViewportRenderer &activeRenderer = *viewportRenderers[activeRendIdx];
 
     CadSnap::Hit snapHit{};
     DrawDrawingViewport(activeRenderer.ColorTexture(), cmd, cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)),
@@ -373,9 +415,10 @@ int main() {
     cmd.uiCursorWorldX = CadCoord::WorldXFromLocal(cmd, static_cast<float>(curX));
     cmd.uiCursorWorldY = CadCoord::WorldYFromLocal(cmd, static_cast<float>(curY));
     {
-      ImGuiIO& ioDim = ImGui::GetIO();
+      ImGuiIO &ioDim = ImGui::GetIO();
       if (!ioDim.WantTextInput && cmd.active == AppCommandState::Kind::DimLinear &&
-          cmd.dimPhase == AppCommandState::DimPhase::WaitDimLinePt) {
+          cmd.dimPhase == AppCommandState::DimPhase::WaitDimLinePt)
+      {
         if (ImGui::IsKeyPressed(ImGuiKey_H, false))
           CadDimLinearApplyHVHotkey(cmd, false, cmdLog);
         else if (ImGui::IsKeyPressed(ImGuiKey_V, false))
@@ -390,7 +433,7 @@ int main() {
     // LINE/POLYLINE AP: after two picks the bottom command InputText is hidden — Enter must still lock bearing.
     // Keyboard-only "A" then bearing: Enter with empty buffer cancels awaiting mode when no text field is focused.
     {
-      ImGuiIO& ioEnter = ImGui::GetIO();
+      ImGuiIO &ioEnter = ImGui::GetIO();
       const bool enterDown =
           ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false);
       if (enterDown && !ioEnter.WantTextInput && cmd.active != AppCommandState::Kind::None)
@@ -411,7 +454,8 @@ int main() {
     DrawTraverseEditorPanel(cmd, cmdLog);
     // After all panels have called Begin() their DockNode is set, so SetWindowFocus
     // can correctly update the dock node's SelectedTabId for the next frame.
-    if (cmd.pendingPropertiesFocus) {
+    if (cmd.pendingPropertiesFocus)
+    {
       ImGui::SetWindowFocus("Properties");
       cmd.pendingPropertiesFocus = false;
     }
@@ -433,8 +477,9 @@ int main() {
                               rubberLines);
 
     float selRectBuf[4]{};
-    const float* selRectPtr = nullptr;
-    if (cmd.selBoxWaitingSecond) {
+    const float *selRectPtr = nullptr;
+    if (cmd.selBoxWaitingSecond)
+    {
       selRectBuf[0] = std::min(cmd.selBoxAnchorX, static_cast<float>(curRawX));
       selRectBuf[1] = std::max(cmd.selBoxAnchorX, static_cast<float>(curRawX));
       selRectBuf[2] = std::min(cmd.selBoxAnchorY, static_cast<float>(curRawY));
@@ -451,7 +496,8 @@ int main() {
     BuildTransformPreview(cmd, previewCx, previewCy, &previewLines, &previewCircles);
 
     if (cmd.active == AppCommandState::Kind::Trim &&
-        cmd.trimPhase == AppCommandState::TrimPhase::CuttingLine_WaitP2) {
+        cmd.trimPhase == AppCommandState::TrimPhase::CuttingLine_WaitP2)
+    {
       float lx = static_cast<float>(curX);
       float ly = static_cast<float>(curY);
       ApplyOrthoConstrainFromAnchor(cmd.trimCutInfP1x, cmd.trimCutInfP1y, &lx, &ly, orthoEnabled);
@@ -468,11 +514,12 @@ int main() {
 
     std::vector<float> hoverLines;
     std::vector<float> hoverCircles;
-    if (cmd.activeSpaceIndex == kModelSpaceIndex)  // no model-entity hover in paper space (incl. floating)
+    if (cmd.activeSpaceIndex == kModelSpaceIndex) // no model-entity hover in paper space (incl. floating)
       BuildHoverHighlight(cmd, &hoverLines, &hoverCircles);
 
     std::vector<float> surveyMarkers;
-    if (!cmd.surveyPoints.empty()) {
+    if (!cmd.surveyPoints.empty())
+    {
       const float surveyCrossHalf =
           SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
       AppendAllSurveyPointMarkers(surveyCrossHalf, cmd.surveyPoints, &surveyMarkers);
@@ -504,51 +551,63 @@ int main() {
 
     // Live preview for selected PDF underlays during MOVE/COPY/ROTATE/SCALE.
     {
-      using K  = AppCommandState::Kind;
+      using K = AppCommandState::Kind;
       using MP = AppCommandState::ModifyPhase;
-      const bool isMove   = (cmd.active == K::Move || cmd.active == K::Copy) &&
-                            cmd.modifyPhase == MP::NeedDestination;
+      const bool isMove = (cmd.active == K::Move || cmd.active == K::Copy) &&
+                          cmd.modifyPhase == MP::NeedDestination;
       const bool isRotate = cmd.active == K::Rotate;
-      const bool isScale  = cmd.active == K::Scale && cmd.modifyPhase == MP::NeedDestination;
+      const bool isScale = cmd.active == K::Scale && cmd.modifyPhase == MP::NeedDestination;
 
       float dx = 0.f, dy = 0.f, theta = 0.f, sc = 1.f;
       bool hasPdfPreview = false;
-      if (isMove) {
+      if (isMove)
+      {
         dx = previewCx - cmd.modifyBaseX;
         dy = previewCy - cmd.modifyBaseY;
         hasPdfPreview = true;
-      } else if (isRotate) {
+      }
+      else if (isRotate)
+      {
         hasPdfPreview = CadRotatePreviewTheta(cmd, previewCx, previewCy, &theta);
-      } else if (isScale) {
+      }
+      else if (isScale)
+      {
         hasPdfPreview = CadScalePreviewFactor(cmd, previewCx, previewCy, &sc);
       }
 
-      if (hasPdfPreview) {
+      if (hasPdfPreview)
+      {
         constexpr float kRadToDeg = 180.f / 3.14159265f;
         const float cosT = std::cos(theta);
         const float sinT = std::sin(theta);
-        const float bx   = isRotate ? cmd.rotateBaseX : cmd.modifyBaseX;
-        const float by   = isRotate ? cmd.rotateBaseY : cmd.modifyBaseY;
-        for (const auto& e : cmd.selection) {
+        const float bx = isRotate ? cmd.rotateBaseX : cmd.modifyBaseX;
+        const float by = isRotate ? cmd.rotateBaseY : cmd.modifyBaseY;
+        for (const auto &e : cmd.selection)
+        {
           if (e.type != SelectedEntity::Type::PdfUnderlay)
             continue;
           const size_t idx = static_cast<size_t>(e.index);
           if (e.index < 0 || idx >= pdfRenderList.size())
             continue;
           PdfAttachment prev = pdfRenderList[idx]; // copy — modified insertX/Y/rot/scale only
-          if (isMove) {
+          if (isMove)
+          {
             prev.insertX += dx;
             prev.insertY += dy;
-          } else if (isRotate) {
-            const float rpx  = prev.insertX - bx;
-            const float rpy  = prev.insertY - by;
-            prev.insertX      = bx + cosT * rpx - sinT * rpy;
-            prev.insertY      = by + sinT * rpx + cosT * rpy;
+          }
+          else if (isRotate)
+          {
+            const float rpx = prev.insertX - bx;
+            const float rpy = prev.insertY - by;
+            prev.insertX = bx + cosT * rpx - sinT * rpy;
+            prev.insertY = by + sinT * rpx + cosT * rpy;
             prev.rotationDeg += theta * kRadToDeg;
-          } else { // scale
+          }
+          else
+          { // scale
             prev.insertX = bx + sc * (prev.insertX - bx);
             prev.insertY = by + sc * (prev.insertY - by);
-            prev.scale   = std::max(prev.scale * sc, 1e-9f);
+            prev.scale = std::max(prev.scale * sc, 1e-9f);
           }
           prev.fade *= 0.6f; // dim the preview to distinguish it from the original
           pdfRenderList.push_back(std::move(prev));
@@ -564,26 +623,26 @@ int main() {
     // leftover DXF geometry isn't hover-highlighted behind the sheet.
     const bool paperSpace = cmd.activeSpaceIndex != kModelSpaceIndex;
     static const std::vector<float> kEmptyVerts;
-    const std::vector<float>& sceneLines   = paperSpace ? kEmptyVerts : cmd.userLinesFlat;
-    const std::vector<float>& sceneCircles = paperSpace ? kEmptyVerts : cmd.userCirclesCxCyR;
-    const std::vector<float>& sceneRubber  = paperSpace ? kEmptyVerts : rubberLines;
+    const std::vector<float> &sceneLines = paperSpace ? kEmptyVerts : cmd.userLinesFlat;
+    const std::vector<float> &sceneCircles = paperSpace ? kEmptyVerts : cmd.userCirclesCxCyR;
+    const std::vector<float> &sceneRubber = paperSpace ? kEmptyVerts : rubberLines;
     activeRenderer.RenderScene(cmd.viewportPanX, cmd.viewportPanY, cmd.viewportZoom, fbW, fbH, sceneLines,
-                         sceneCircles, cmd.cadGpuRevision,
-                         sceneRubber, (paperSpace || !snapHit.valid) ? nullptr : &snapHit,
-                         std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f), paperSpace ? nullptr : selRectPtr,
-                         (paperSpace || previewLines.empty()) ? nullptr : &previewLines,
-                         (paperSpace || previewCircles.empty()) ? nullptr : &previewCircles,
-                         (paperSpace || highlightLines.empty()) ? nullptr : &highlightLines,
-                         (paperSpace || highlightCircles.empty()) ? nullptr : &highlightCircles,
-                         (paperSpace || hoverLines.empty()) ? nullptr : &hoverLines,
-                         (paperSpace || hoverCircles.empty()) ? nullptr : &hoverCircles,
-                         (paperSpace || surveyMarkers.empty()) ? nullptr : &surveyMarkers, &cmd.userLineAttrs,
-                         &cmd.userCircleAttrs, &ext, gridVisible, &cmd.drawingLayerTable, tuning,
-                         paperSpace ? nullptr : (pdfRenderList.empty() ? nullptr : &pdfRenderList),
-                         // Paper space: skip GL geometry; the ImGui overlay draws the sheet + viewports.
-                         cmd.activeSpaceIndex,
-                         (paperSpace || cmd.cadFilledRegions.empty()) ? nullptr : &cmd.cadFilledRegions,
-                         (paperSpace || cmd.cadFilledRegionAttrs.empty()) ? nullptr : &cmd.cadFilledRegionAttrs);
+                               sceneCircles, cmd.cadGpuRevision,
+                               sceneRubber, (paperSpace || !snapHit.valid) ? nullptr : &snapHit,
+                               std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f), paperSpace ? nullptr : selRectPtr,
+                               (paperSpace || previewLines.empty()) ? nullptr : &previewLines,
+                               (paperSpace || previewCircles.empty()) ? nullptr : &previewCircles,
+                               (paperSpace || highlightLines.empty()) ? nullptr : &highlightLines,
+                               (paperSpace || highlightCircles.empty()) ? nullptr : &highlightCircles,
+                               (paperSpace || hoverLines.empty()) ? nullptr : &hoverLines,
+                               (paperSpace || hoverCircles.empty()) ? nullptr : &hoverCircles,
+                               (paperSpace || surveyMarkers.empty()) ? nullptr : &surveyMarkers, &cmd.userLineAttrs,
+                               &cmd.userCircleAttrs, &ext, gridVisible, &cmd.drawingLayerTable, tuning,
+                               paperSpace ? nullptr : (pdfRenderList.empty() ? nullptr : &pdfRenderList),
+                               // Paper space: skip GL geometry; the ImGui overlay draws the sheet + viewports.
+                               cmd.activeSpaceIndex,
+                               (paperSpace || cmd.cadFilledRegions.empty()) ? nullptr : &cmd.cadFilledRegions,
+                               (paperSpace || cmd.cadFilledRegionAttrs.empty()) ? nullptr : &cmd.cadFilledRegionAttrs);
 
     ImGui::Render();
     int displayW = 0;
@@ -600,7 +659,7 @@ int main() {
   // Silently persist settings, preferences, and the current dock layout.
   SaveUserStartupPrefs(cmd);
   {
-    const ImGuiIO& ioSave = ImGui::GetIO();
+    const ImGuiIO &ioSave = ImGui::GetIO();
     if (ioSave.IniFilename && ioSave.IniFilename[0])
       ImGui::SaveIniSettingsToDisk(ioSave.IniFilename);
   }
@@ -612,14 +671,15 @@ int main() {
   ImGui::DestroyContext();
 
   // Release PDF textures before GL context is destroyed.
-  for (auto& att : cmd.pdfAttachments)
+  for (auto &att : cmd.pdfAttachments)
     PdfAttach_ReleaseTexture(att);
-  if (cmd.pdfDraftCache) {
+  if (cmd.pdfDraftCache)
+  {
     PdfDraftCache_Free(cmd.pdfDraftCache);
     cmd.pdfDraftCache = nullptr;
   }
 
-  for (auto& r : viewportRenderers)
+  for (auto &r : viewportRenderers)
     r->Shutdown();
   PdfAttach_Shutdown();
   glfwDestroyWindow(window);

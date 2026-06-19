@@ -148,6 +148,19 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   if (s.contains("undoHistoryMaxSize") && s["undoHistoryMaxSize"].is_number_integer())
     st.undoHistoryMaxSize = std::clamp(s["undoHistoryMaxSize"].get<int>(), 1, 200);
 
+  // --- Floating command bar (REQ-040) ---
+  b  ("cmdLineClassicDock", &st.cmdLineClassicDock);
+  b  ("cmdBarVisible",      &st.cmdBarVisible);
+  b  ("cmdBarAnchorValid",  &st.cmdBarAnchorValid);
+  num("cmdBarAnchorX",      &st.cmdBarAnchorX, -100000.f, 100000.f);
+  num("cmdBarAnchorY",      &st.cmdBarAnchorY, -100000.f, 100000.f);
+  num("cmdBarWidth",        &st.cmdBarWidth, 0.f, 100000.f);
+  num("cmdConsoleHeight",   &st.cmdConsoleHeight, 0.f, 100000.f);
+  num("cmdBarFadeDelaySec", &st.cmdBarFadeDelaySec, 0.5f, 60.f);
+  num("cmdBarOpacity",      &st.cmdBarOpacity, 0.3f, 1.f);
+  if (s.contains("cmdBarHistoryLines") && s["cmdBarHistoryLines"].is_number_integer())
+    st.cmdBarHistoryLines = std::clamp(s["cmdBarHistoryLines"].get<int>(), 1, 20);
+
   // --- Object snap (Drafting tab) ---
   b  ("objectSnapEnabled",         &st.objectSnapEnabled);
   b  ("objectSnapEndpoint",        &st.objectSnapEndpoint);
@@ -307,6 +320,18 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   // Object snap
   // Undo/Redo
   s["undoHistoryMaxSize"]         = st.undoHistoryMaxSize;
+
+  // Floating command bar (REQ-040)
+  s["cmdLineClassicDock"] = st.cmdLineClassicDock;
+  s["cmdBarVisible"]      = st.cmdBarVisible;
+  s["cmdBarAnchorValid"]  = st.cmdBarAnchorValid;
+  s["cmdBarAnchorX"]      = st.cmdBarAnchorX;
+  s["cmdBarAnchorY"]      = st.cmdBarAnchorY;
+  s["cmdBarWidth"]        = st.cmdBarWidth;
+  s["cmdConsoleHeight"]   = st.cmdConsoleHeight;
+  s["cmdBarFadeDelaySec"] = st.cmdBarFadeDelaySec;
+  s["cmdBarOpacity"]      = st.cmdBarOpacity;
+  s["cmdBarHistoryLines"] = st.cmdBarHistoryLines;
 
   s["objectSnapEnabled"]          = st.objectSnapEnabled;
   s["objectSnapEndpoint"]         = st.objectSnapEndpoint;

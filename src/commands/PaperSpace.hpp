@@ -2,8 +2,20 @@
 
 #include "CadEntities.hpp"
 
+#include <cmath>
+#include <cstdint>
 #include <string>
 #include <vector>
+
+// A selected native paper-space entity (REQ-037/039): index into the active layout's paper* stores.
+// Lives here (the dependency-free paper header) so both the command layer and header-only, unit-testable
+// selection helpers can name it. \c index: Line = segment (flat offset/6); others = index into the matching
+// paper* vector.
+struct PaperEntityRef {
+  enum class Type : std::uint8_t { Line = 0, Text = 1, Circle = 2, Arc = 3, Ellipse = 4, Polyline = 5 };
+  Type type = Type::Line;
+  int  index = 0;
+};
 
 // Paper space data model (REQ-025/026/031, ADR-006).
 //   Increment 1: named layouts, each a sheet with a paper size + orientation.
@@ -110,6 +122,20 @@ struct PaperLayout {
   std::vector<EntityAttributes> paperLineAttrs;
   std::vector<CadAnnotation>    paperTexts;
   std::vector<EntityAttributes> paperTextAttrs;
+  // Full primitive store (REQ-038, ADR-013): mirrors the model arrays exactly so clipboard paste can route
+  // model↔paper. Coordinates are paper inches. Each vector is parallel to its *Attrs vector.
+  std::vector<float>            paperCircles;     ///< flat cx,cy,r triples
+  std::vector<EntityAttributes> paperCircleAttrs;
+  std::vector<CadArc>           paperArcs;
+  std::vector<EntityAttributes> paperArcAttrs;
+  std::vector<CadEllipse>       paperEllipses;
+  std::vector<EntityAttributes> paperEllAttrs;
+  std::vector<int>              paperPolyOffsets;  ///< vertex-offset table (starts with 0); empty = no polylines
+  std::vector<float>            paperPolyVerts;    ///< flat x,y,z triples
+  std::vector<uint8_t>          paperPolyClosed;
+  std::vector<EntityAttributes> paperPolyAttrs;
+  std::vector<CadFilledRegion>  paperFilledRegions;     ///< Solid fills on the sheet, paper inches (REQ-038 addendum)
+  std::vector<EntityAttributes> paperFilledRegionAttrs;
   // Current page-setup plot fields (the layout's own setup). Paper size/orientation above are part of it.
   std::string pageSetupName;               // name of the applied named setup, or "" = <None>
   bool  fitToPaper = false;
@@ -152,5 +178,92 @@ inline bool SnapPaperInchPoint(const PaperLayout& L, float px, float py, float t
   }
   for (const CadAnnotation& a : L.paperTexts)
     consider(a.insX, a.insY);  // text insertion point
+  for (size_t i = 0; i + 2 < L.paperCircles.size(); i += 3) {
+    const float cx = L.paperCircles[i], cy = L.paperCircles[i + 1], r = L.paperCircles[i + 2];
+    consider(cx, cy);                                            // center
+    consider(cx + r, cy); consider(cx - r, cy);                 // east / west quadrants
+    consider(cx, cy + r); consider(cx, cy - r);                 // north / south quadrants
+  }
+  for (const CadArc& a : L.paperArcs) {
+    consider(a.cx, a.cy);                                                       // center
+    consider(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad));               // start
+    consider(a.cx + a.r * std::cos(a.startRad + a.sweepRad), a.cy + a.r * std::sin(a.startRad + a.sweepRad)); // end
+  }
+  for (const CadEllipse& e : L.paperEllipses)
+    consider(e.cx, e.cy);  // ellipse center
+  for (size_t v = 0; v + 2 < L.paperPolyVerts.size(); v += 3)
+    consider(L.paperPolyVerts[v], L.paperPolyVerts[v + 1]);  // polyline vertices
   return found;
+}
+
+// Approximate paper-text bounds in paper inches (REQ-039). The renderer treats the insertion point as the
+// TOP-LEFT (matching model AddText): the glyphs occupy [insY - h, insY] in paper Y and [insX, insX + w] in X.
+// Earlier code anchored the bounds above the text (insertion-as-bottom-left), so click-picking text was off by
+// ~one line height (TASK-012 debt); anchor downward to match the glyphs. Pure + header-only so it is testable.
+inline void PaperTextBoundsIn(const CadAnnotation& a, float* x0, float* y0, float* x1, float* y1) {
+  const float h = std::max(0.01f, a.plottedHeightInches);
+  const float w = std::max(h * 0.6f, h * 0.6f * static_cast<float>(a.text.size()));
+  *x0 = a.insX;
+  *y0 = a.insY - h;
+  *x1 = a.insX + w;
+  *y1 = a.insY;
+}
+
+// Box-select native paper-space geometry (REQ-039). Selects entities of every paper type inside the box
+// [bx0,by0]-[bx1,by1] (paper inches, already normalized so bx0<=bx1, by0<=by1). windowMode=true (L→R drag):
+// an entity is selected only when its bounding extent is fully inside the box; windowMode=false (R→L drag,
+// crossing): selected when its extent overlaps the box. Text selects by its top-left bounds (matching the
+// renderer + PickPaperEntityAt). Appends matches to \p out (does not clear). Pure + header-only.
+inline void SelectPaperEntitiesInBox(const PaperLayout& L, float bx0, float by0, float bx1, float by1,
+                                     bool windowMode, std::vector<PaperEntityRef>& out) {
+  auto boxSel = [&](float ex0, float ey0, float ex1, float ey1) {
+    return windowMode ? (ex0 >= bx0 && ex1 <= bx1 && ey0 >= by0 && ey1 <= by1)
+                      : (ex0 <= bx1 && ex1 >= bx0 && ey0 <= by1 && ey1 >= by0);
+  };
+  for (int si = 0; si < static_cast<int>(L.paperLines.size() / 6); ++si) {
+    const size_t i = static_cast<size_t>(si) * 6;
+    const float lx0 = std::min(L.paperLines[i], L.paperLines[i + 3]);
+    const float lx1 = std::max(L.paperLines[i], L.paperLines[i + 3]);
+    const float ly0 = std::min(L.paperLines[i + 1], L.paperLines[i + 4]);
+    const float ly1 = std::max(L.paperLines[i + 1], L.paperLines[i + 4]);
+    if (boxSel(lx0, ly0, lx1, ly1))
+      out.push_back({PaperEntityRef::Type::Line, si});
+  }
+  for (int ti = 0; ti < static_cast<int>(L.paperTexts.size()); ++ti) {
+    float tx0, ty0, tx1, ty1;
+    PaperTextBoundsIn(L.paperTexts[static_cast<size_t>(ti)], &tx0, &ty0, &tx1, &ty1);
+    if (boxSel(tx0, ty0, tx1, ty1))
+      out.push_back({PaperEntityRef::Type::Text, ti});
+  }
+  for (int ci = 0; ci < static_cast<int>(L.paperCircles.size() / 3); ++ci) {
+    const size_t i = static_cast<size_t>(ci) * 3;
+    const float cx = L.paperCircles[i], cy = L.paperCircles[i + 1], r = L.paperCircles[i + 2];
+    if (boxSel(cx - r, cy - r, cx + r, cy + r))
+      out.push_back({PaperEntityRef::Type::Circle, ci});
+  }
+  for (int ai = 0; ai < static_cast<int>(L.paperArcs.size()); ++ai) {
+    const CadArc& a = L.paperArcs[static_cast<size_t>(ai)];
+    if (boxSel(a.cx - a.r, a.cy - a.r, a.cx + a.r, a.cy + a.r))
+      out.push_back({PaperEntityRef::Type::Arc, ai});
+  }
+  for (int ei = 0; ei < static_cast<int>(L.paperEllipses.size()); ++ei) {
+    const CadEllipse& e = L.paperEllipses[static_cast<size_t>(ei)];
+    const float rad = std::sqrt(e.majVx * e.majVx + e.majVy * e.majVy);
+    if (boxSel(e.cx - rad, e.cy - rad, e.cx + rad, e.cy + rad))
+      out.push_back({PaperEntityRef::Type::Ellipse, ei});
+  }
+  const int nPoly = static_cast<int>(L.paperPolyOffsets.size()) - 1;
+  for (int pi = 0; pi < nPoly; ++pi) {
+    const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    float ex0 = 1e30f, ey0 = 1e30f, ex1 = -1e30f, ey1 = -1e30f;
+    for (int vi = v0; vi < v1; ++vi) {
+      const float vx = L.paperPolyVerts[static_cast<size_t>(vi * 3)];
+      const float vy = L.paperPolyVerts[static_cast<size_t>(vi * 3 + 1)];
+      ex0 = std::min(ex0, vx); ey0 = std::min(ey0, vy);
+      ex1 = std::max(ex1, vx); ey1 = std::max(ey1, vy);
+    }
+    if (v1 > v0 && boxSel(ex0, ey0, ex1, ey1))
+      out.push_back({PaperEntityRef::Type::Polyline, pi});
+  }
 }

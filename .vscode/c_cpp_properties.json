@@ -2,24 +2,32 @@
   "configurations": [
     {
       "name": "Win32",
+      "compileCommands": "${workspaceFolder}/build/compile_commands.json",
       "includePath": [
         "${workspaceFolder}/src",
         "${workspaceFolder}/src/app",
+        "${workspaceFolder}/src/commands",
+        "${workspaceFolder}/src/viewport",
         "${workspaceFolder}/src/ui",
-        "${workspaceFolder}/src/cad",
         "${workspaceFolder}/src/util",
         "${workspaceFolder}/src/io",
         "${workspaceFolder}/src/survey",
         "${workspaceFolder}/src/render",
         "${workspaceFolder}/src/platform",
+        "${workspaceFolder}/src/pdf",
+        "${workspaceFolder}/src/traverse",
+        "${workspaceFolder}/third_party",
+        "${workspaceFolder}/build/_deps",
         "${workspaceFolder}/build/_deps/glfw-src/include",
         "${workspaceFolder}/build/_deps/imgui-src",
         "${workspaceFolder}/build/_deps/imgui-src/backends",
-        "${workspaceFolder}/build/_deps/glew-src/include"
+        "${workspaceFolder}/build/_deps/imgui-src/misc/cpp",
+        "${workspaceFolder}/build/_deps/glew-src/include",
+        "${workspaceFolder}/build/_deps/pdfium_binaries-src/include"
       ],
-      "defines": ["GLEW_STATIC"],
+      "defines": ["GLEW_STATIC", "IMGUI_DEFINE_MATH_OPERATORS", "PDF_WINRT_ENABLED"],
       "cppStandard": "c++17",
-      "intelliSenseMode": "windows-msvc-x64"
+      "intelliSenseMode": "windows-clang-x64"
     }
   ],
   "version": 4

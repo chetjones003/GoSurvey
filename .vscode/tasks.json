@@ -1,0 +1,33 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "cmake-build-debug",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "--preset", "ninja-debug", "--target", "GoSurvey"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$gcc"],
+      "detail": "Build the Debug executable (build/debug/GoSurvey-<ver>.exe) with Ninja + clang. Ninja auto-reconfigures if CMakeLists changes."
+    },
+    {
+      "label": "cmake-configure-debug",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--preset", "ninja-debug"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": [],
+      "detail": "Configure the Ninja Debug preset (run once, or after deleting build/debug)."
+    },
+    {
+      "label": "cmake-build-release",
+      "type": "shell",
+      "command": "cmake",
+      "args": ["--build", "--preset", "ninja-release"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$gcc"],
+      "detail": "Build the optimized Release executable (build/GoSurvey-<ver>.exe)."
+    }
+  ]
+}

@@ -6,6 +6,7 @@
 #include "ShxFont.hpp"
 
 #include "CadLinetype.hpp"
+#include "CommandBar.hpp"
 #include "NumFormat.hpp"
 #include "DxfIo.hpp"
 #include "AppIcon.hpp"
@@ -424,7 +425,7 @@ static bool PropSectionHeader(const char* label) {
   return open;
 }
 
-void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size) {
+void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size, bool reserveCommandDock) {
   ImGui::DockBuilderRemoveNode(dockspace_id);
   ImGuiDockNodeFlags node_flags = ImGuiDockNodeFlags_DockSpace;
   ImGui::DockBuilderAddNode(dockspace_id, node_flags);
@@ -440,11 +441,15 @@ void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size) {
 
   ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Left, 0.22f, &dock_left, &dock_center);
   ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Right, 0.24f, &dock_right, &dock_center);
-  ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Down, 0.30f, &dock_bottom, &dock_center);
+  // REQ-040: only reserve the bottom dock for the classic docked command line. With the
+  // floating bar (default) the bottom strip would otherwise sit empty.
+  if (reserveCommandDock)
+    ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Down, 0.30f, &dock_bottom, &dock_center);
 
   ImGui::DockBuilderDockWindow("Reports", dock_left);
   ImGui::DockBuilderDockWindow("Properties", dock_left);  // docked last → active tab
-  ImGui::DockBuilderDockWindow("Command line", dock_bottom);
+  if (reserveCommandDock)
+    ImGui::DockBuilderDockWindow("Command line", dock_bottom);
   ImGui::DockBuilderDockWindow("Viewports", dock_center);
 
   ImGui::DockBuilderFinish(dockspace_id);
@@ -583,6 +588,12 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
     if (ImGui::MenuItem("Reset layout", nullptr))
       cmd.pendingBuiltinDockLayoutReset = true;
     ImGuiLayout_DrawViewLayoutMenu(cmd, log);
+    ImGui::Separator();
+    // REQ-040: command-line visibility + classic-dock toggle.
+    if (ImGui::MenuItem("Command line", "Ctrl+9", cmd.cmdBarVisible && !cmd.cmdLineClassicDock))
+      cmd.cmdBarVisible = !cmd.cmdBarVisible;
+    if (ImGui::MenuItem("Classic command dock", nullptr, cmd.cmdLineClassicDock))
+      cmd.cmdLineClassicDock = !cmd.cmdLineClassicDock;
     ImGui::Separator();
     if (ImGui::MenuItem("Settings...", nullptr))
       cmd.showSettingsWindow = true;
@@ -3804,6 +3815,215 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
 
 } // namespace
 
+// REQ-039: Properties for native paper-space entities. These live in per-layout stores (paper inches), not in
+// cmd.selection, so they get a dedicated panel branch rather than the model path. Shows General (Layer/Color
+// applied to the whole paper selection) plus a per-type Geometry/Text editor for a single selected object.
+static void DrawPaperEntityProps(AppCommandState& cmd) {
+  if (cmd.activeSpaceIndex < 0 || static_cast<size_t>(cmd.activeSpaceIndex) >= cmd.paperLayouts.size())
+    return;
+  PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
+  auto& selp = cmd.selectedPaperEntities;
+  using T = PaperEntityRef::Type;
+
+  // Drop refs that no longer point at a live object (store edited/undone since selection).
+  auto liveCount = [&](T t) -> int {
+    switch (t) {
+      case T::Line:     return static_cast<int>(L.paperLines.size() / 6);
+      case T::Text:     return static_cast<int>(L.paperTexts.size());
+      case T::Circle:   return static_cast<int>(L.paperCircles.size() / 3);
+      case T::Arc:      return static_cast<int>(L.paperArcs.size());
+      case T::Ellipse:  return static_cast<int>(L.paperEllipses.size());
+      case T::Polyline: return static_cast<int>(L.paperPolyOffsets.size()) - 1;
+    }
+    return 0;
+  };
+  selp.erase(std::remove_if(selp.begin(), selp.end(),
+                            [&](const PaperEntityRef& r) { return r.index < 0 || r.index >= liveCount(r.type); }),
+             selp.end());
+  if (selp.empty())
+    return;
+
+  auto attrsOf = [&](const PaperEntityRef& r) -> EntityAttributes* {
+    const size_t i = static_cast<size_t>(r.index);
+    switch (r.type) {
+      case T::Line:     return i < L.paperLineAttrs.size() ? &L.paperLineAttrs[i] : nullptr;
+      case T::Text:     return i < L.paperTextAttrs.size() ? &L.paperTextAttrs[i] : nullptr;
+      case T::Circle:   return i < L.paperCircleAttrs.size() ? &L.paperCircleAttrs[i] : nullptr;
+      case T::Arc:      return i < L.paperArcAttrs.size() ? &L.paperArcAttrs[i] : nullptr;
+      case T::Ellipse:  return i < L.paperEllAttrs.size() ? &L.paperEllAttrs[i] : nullptr;
+      case T::Polyline: return i < L.paperPolyAttrs.size() ? &L.paperPolyAttrs[i] : nullptr;
+    }
+    return nullptr;
+  };
+
+  int n[6] = {0, 0, 0, 0, 0, 0};
+  for (const auto& r : selp)
+    ++n[static_cast<int>(r.type)];
+  ImGui::Text("Selected: %d paper object(s)", static_cast<int>(selp.size()));
+  const int kinds = (n[0] > 0) + (n[1] > 0) + (n[2] > 0) + (n[3] > 0) + (n[4] > 0) + (n[5] > 0);
+  static const char* kPaperTypeName[6] = {"Line", "Text", "Circle", "Arc", "Ellipse", "Polyline"};
+  if (kinds > 1)
+    ImGui::TextDisabled("(Mixed: L %d, T %d, C %d, A %d, E %d, P %d)", n[0], n[1], n[2], n[3], n[4], n[5]);
+  else if (selp.size() == 1)
+    ImGui::TextDisabled("%s", kPaperTypeName[static_cast<int>(selp.front().type)]);
+  else
+    ImGui::TextDisabled("%d %ss", static_cast<int>(selp.size()), kPaperTypeName[static_cast<int>(selp.front().type)]);
+
+  // Merged layer/color across the selection ("" = mixed).
+  auto merged = [&](std::string EntityAttributes::*field) -> std::string {
+    std::string v;
+    bool first = true;
+    for (const auto& r : selp) {
+      const EntityAttributes* a = attrsOf(r);
+      if (!a)
+        continue;
+      if (first) { v = a->*field; first = false; }
+      else if (v != a->*field) return std::string();
+    }
+    return v;
+  };
+
+  // --- General: Layer + Color, applied to every selected paper entity ---
+  if (PropSectionHeader("General") && ImGui::BeginTable("props_paper_gen", 2, kPropTableFlags)) {
+    ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+    ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn(); ImGui::TextUnformatted("Layer");
+    ImGui::TableNextColumn();
+    {
+      const std::string ml = merged(&EntityAttributes::layer);
+      const char* prev = ml.empty() ? "(mixed)" : ml.c_str();
+      std::vector<std::string> layerOpts;
+      CollectAllDrawingLayers(cmd, &layerOpts);
+      ImGui::SetNextItemWidth(-1);
+      if (ImGui::BeginCombo("##paperlayer", prev)) {
+        for (const auto& opt : layerOpts) {
+          if (ImGui::Selectable(opt.c_str(), opt == ml)) {
+            for (const auto& r : selp)
+              if (EntityAttributes* a = attrsOf(r)) a->layer = opt;
+            BumpCadGpuCache(cmd);
+          }
+        }
+        ImGui::EndCombo();
+      }
+    }
+
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn(); ImGui::TextUnformatted("Color");
+    ImGui::TableNextColumn();
+    {
+      static const char* kColorOpts[] = {"ByLayer", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White"};
+      const std::string mc = merged(&EntityAttributes::color);
+      const char* prev = mc.empty() ? "(mixed)" : mc.c_str();
+      ImGui::SetNextItemWidth(-1);
+      if (ImGui::BeginCombo("##papercolor", prev)) {
+        for (const char* opt : kColorOpts) {
+          if (ImGui::Selectable(opt, mc == opt)) {
+            for (const auto& r : selp)
+              if (EntityAttributes* a = attrsOf(r)) a->color = opt;
+            BumpCadGpuCache(cmd);
+          }
+        }
+        ImGui::EndCombo();
+      }
+    }
+    ImGui::EndTable();
+  }
+
+  // --- Geometry / Text: only for a single selected object ---
+  if (selp.size() != 1)
+    return;
+  const PaperEntityRef r = selp.front();
+  const size_t i = static_cast<size_t>(r.index);
+  auto bump = [&]() { if (ImGui::IsItemDeactivatedAfterEdit()) BumpCadGpuCache(cmd); };
+  auto geomRow = [&](const char* label, float* v) {
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn(); ImGui::TextUnformatted(label);
+    ImGui::TableNextColumn(); ImGui::SetNextItemWidth(-1);
+    ImGui::InputFloat((std::string("##pg_") + label).c_str(), v, 0.f, 0.f, "%.4f");
+    bump();
+  };
+
+  if (r.type == T::Line && i * 6 + 5 < L.paperLines.size()) {
+    if (PropSectionHeader("Geometry") && ImGui::BeginTable("props_paper_line", 2, kPropTableFlags)) {
+      ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+      ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+      geomRow("Start X", &L.paperLines[i * 6]);
+      geomRow("Start Y", &L.paperLines[i * 6 + 1]);
+      geomRow("End X", &L.paperLines[i * 6 + 3]);
+      geomRow("End Y", &L.paperLines[i * 6 + 4]);
+      ImGui::EndTable();
+    }
+  } else if (r.type == T::Circle && i * 3 + 2 < L.paperCircles.size()) {
+    if (PropSectionHeader("Geometry") && ImGui::BeginTable("props_paper_circ", 2, kPropTableFlags)) {
+      ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+      ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+      geomRow("Center X", &L.paperCircles[i * 3]);
+      geomRow("Center Y", &L.paperCircles[i * 3 + 1]);
+      geomRow("Radius", &L.paperCircles[i * 3 + 2]);
+      ImGui::EndTable();
+    }
+  } else if (r.type == T::Arc && i < L.paperArcs.size()) {
+    CadArc& a = L.paperArcs[i];
+    if (PropSectionHeader("Geometry") && ImGui::BeginTable("props_paper_arc", 2, kPropTableFlags)) {
+      ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+      ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+      geomRow("Center X", &a.cx);
+      geomRow("Center Y", &a.cy);
+      geomRow("Radius", &a.r);
+      ImGui::EndTable();
+    }
+  } else if (r.type == T::Ellipse && i < L.paperEllipses.size()) {
+    CadEllipse& e = L.paperEllipses[i];
+    if (PropSectionHeader("Geometry") && ImGui::BeginTable("props_paper_ell", 2, kPropTableFlags)) {
+      ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+      ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+      geomRow("Center X", &e.cx);
+      geomRow("Center Y", &e.cy);
+      geomRow("Ratio", &e.ratio);
+      ImGui::EndTable();
+    }
+  } else if (r.type == T::Text && i < L.paperTexts.size()) {
+    CadAnnotation& a = L.paperTexts[i];
+    if (PropSectionHeader("Geometry") && ImGui::BeginTable("props_paper_txt", 2, kPropTableFlags)) {
+      ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+      ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+      geomRow("Insertion X", &a.insX);
+      geomRow("Insertion Y", &a.insY);
+      geomRow("Height (in)", &a.plottedHeightInches);
+      ImGui::EndTable();
+    }
+    // Text content: seed a buffer when the selected text index changes, edit writes back on change.
+    static int gPaperTextBufIdx = -1;
+    static char gPaperTextBuf[1024];
+    if (gPaperTextBufIdx != r.index) {
+      gPaperTextBufIdx = r.index;
+      ImStrncpy(gPaperTextBuf, a.text.c_str(), IM_ARRAYSIZE(gPaperTextBuf));
+      gPaperTextBuf[IM_ARRAYSIZE(gPaperTextBuf) - 1] = '\0';
+    }
+    if (PropSectionHeader("Text")) {
+      ImGui::TextUnformatted("Contents");
+      ImGui::SetNextItemWidth(-1);
+      if (ImGui::InputTextMultiline("##papertext", gPaperTextBuf, IM_ARRAYSIZE(gPaperTextBuf),
+                                    ImVec2(-1, ImGui::GetTextLineHeight() * 3.f))) {
+        a.text = gPaperTextBuf;
+        BumpCadGpuCache(cmd);
+      }
+    }
+  } else if (r.type == T::Polyline) {
+    if (PropSectionHeader("Geometry") && ImGui::BeginTable("props_paper_poly", 2, kPropTableFlags)) {
+      ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+      ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+      const int v0 = L.paperPolyOffsets[i];
+      const int v1 = L.paperPolyOffsets[i + 1];
+      PropRow("Vertices", std::to_string(v1 - v0));
+      PropRow("Closed", (i < L.paperPolyClosed.size() && L.paperPolyClosed[i]) ? "Yes" : "No");
+      ImGui::EndTable();
+    }
+  }
+}
+
 void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::SetNextWindowSize(ImVec2(320, 560), ImGuiCond_FirstUseEver);
   if (cmd.pendingPropertiesFocus)
@@ -3814,6 +4034,15 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     return;
   }
   cmd.propertiesPanelActive = true;
+
+  // REQ-039: in a paper layout (not floating model space), the active selection is native paper-space
+  // geometry, which lives in per-layout stores rather than cmd.selection. Show its dedicated panel.
+  if (cmd.activeSpaceIndex >= 0 && !InFloatingModelSpace(cmd) && !cmd.selectedPaperEntities.empty()) {
+    gPropsSelFingerprint = ~0ull;
+    DrawPaperEntityProps(cmd);
+    ImGui::End();
+    return;
+  }
 
   auto& svyIx = cmd.selectedSurveyPointIndices;
   svyIx.erase(std::remove_if(svyIx.begin(), svyIx.end(),
@@ -4175,9 +4404,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
       return "Bearing pick — Enter or +90/-45:";
     if (cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint && cmd.segmentAngleLockActive)
       return "LINE distance ± / click ray / X,Y / A clears:";
-    if (cmd.orthoMode)
-      return "Next — click / X,Y / @dx,dy / ortho / A or AP:";
-    return "Next — click / X,Y / @dx,dy / A or AP bearing:";
+    return "Next: click; X, Y; @dx,dy; [A]zimuth, [2P];";
   }
   if (cmd.active == AppCommandState::Kind::Polyline) {
     using SAP = AppCommandState::SegmentAnglePickPhase;
@@ -4486,9 +4713,11 @@ static std::string CadPointPromptLabel(const AppCommandState& cmd) {
   using K = AppCommandState::Kind;
   switch (cmd.active) {
   case K::Line:
+    // After the first point, show the same "Next: …" help as the command line
+    // (clickable shortcuts there; literal brackets here). REQ-024.
     return cmd.linePhase == AppCommandState::LinePhase::NeedFirstPoint
                ? std::string("Specify first point:")
-               : "Specify " + OrdinalWord(static_cast<int>(cmd.lineDraftSegments) + 2) + " point:";
+               : std::string("Next: click; X, Y; @dx,dy; [A]zimuth, [2P];");
   case K::Polyline:
     return cmd.polylinePhase == AppCommandState::PolylinePhase::NeedFirstPoint
                ? std::string("Specify first point:")
@@ -4819,6 +5048,51 @@ static bool   s_cmdSugPopupOpen = false;
 static ImVec2 s_cmdSugPopupMin = ImVec2(0.f, 0.f);
 static ImVec2 s_cmdSugPopupMax = ImVec2(0.f, 0.f);
 
+// REQ-040: render a command hint inline, turning [TOKEN] markers into clickable links
+// that submit the lowercased token (e.g. [A] → "a", [2P] → "2p"). This is the standard
+// for command prompts that offer keyword options; plain text uses the dim color. Items are
+// chained with SameLine(0,0); the caller positions the first segment.
+static void RenderClickableCommandHint(const char* hint, AppCommandState& cmd, std::vector<std::string>& log,
+                                       const ImVec4& dimCol) {
+  if (!hint || !hint[0])
+    return;
+  auto submit = [&](std::string tok) {
+    for (char& c : tok) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    char tmp[24];
+    std::snprintf(tmp, sizeof(tmp), "%s", tok.c_str());
+    ProcessCommandLineSubmit(tmp, static_cast<int>(sizeof(tmp)), cmd, log);
+  };
+  bool first = true;
+  std::string plain;
+  auto flushPlain = [&]() {
+    if (plain.empty())
+      return;
+    if (!first) ImGui::SameLine(0, 0);
+    ImGui::PushStyleColor(ImGuiCol_Text, dimCol);
+    ImGui::TextUnformatted(plain.c_str());
+    ImGui::PopStyleColor();
+    first = false;
+    plain.clear();
+  };
+  for (const char* p = hint; *p;) {
+    if (*p == '[') {
+      if (const char* close = std::strchr(p, ']')) {
+        flushPlain();
+        const std::string tok(p + 1, close);  // token without brackets
+        const std::string label = "[" + tok + "]";
+        if (!first) ImGui::SameLine(0, 0);
+        if (ImGui::TextLink(label.c_str())) submit(tok);
+        first = false;
+        p = close + 1;
+        continue;
+      }
+    }
+    plain.push_back(*p);
+    ++p;
+  }
+  flushPlain();
+}
+
 void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBufSize, AppCommandState& cmd) {
   const bool isDark = (cmd.displayColorThemeIdx == 0);
   // Console background is slightly distinct from the main workspace in both themes.
@@ -4828,13 +5102,73 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   const ImVec4 promptColor = isDark
       ? ImVec4(0.133f, 0.773f, 0.369f, 1.f)   // #22C55E bright green on dark
       : ImVec4(0.180f, 0.720f, 0.400f, 1.f);  // #2EB766 bright green on dark console
-  ImGui::SetNextWindowSize(ImVec2(900, 220), ImGuiCond_FirstUseEver);
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, consoleBg);
-  if (!ImGui::Begin("Command line", nullptr)) {
+  // REQ-040: floating AutoCAD-style command bar (default) vs the legacy docked panel
+  // (cmd.cmdLineClassicDock). One function, one shared input + autocomplete; only the
+  // surrounding chrome differs by `floating`.
+  const bool floating = !cmd.cmdLineClassicDock;
+
+  // Fade timer: reset whenever a log line is appended (drives the recent-history fade).
+  if (log.size() != cmd.cmdLogLastSizeForFade) {
+    cmd.cmdLogLastSizeForFade = log.size();
+    cmd.cmdLogLastChangeTime = ImGui::GetTime();
+  }
+  {
+    // F2 toggles the expanded console; Ctrl+9 hides/restores the bar. ESC is left to
+    // command-cancel (handled elsewhere) and never closes the console.
+    ImGuiIO& iok = ImGui::GetIO();
+    if (floating && ImGui::IsKeyPressed(ImGuiKey_F2, false))
+      cmd.cmdConsoleOpen = !cmd.cmdConsoleOpen;
+    if (floating && iok.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_9, false))
+      cmd.cmdBarVisible = !cmd.cmdBarVisible;
+  }
+  if (floating && !cmd.cmdBarVisible)
+    return;  // bar hidden; Ctrl+9 (or the View menu) restores it.
+
+  const float barRounding = 5.f;
+  const ImVec4 barBg = isDark ? ImVec4(0.078f, 0.090f, 0.106f, cmd.cmdBarOpacity)
+                              : ImVec4(0.247f, 0.247f, 0.247f, cmd.cmdBarOpacity);
+  ImGuiWindowFlags winFlags = 0;
+  if (floating) {
+    winFlags = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoCollapse |
+               ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
+               ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoScrollbar |
+               ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoFocusOnAppearing;
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    // Width is user-resizable (default ~half the viewport); the bar is pinned to the viewport
+    // bottom (Y locked) and only slides left/right (X). Anchor is the bottom-LEFT corner.
+    const float barW = std::clamp(cmd.cmdBarWidth > 1.f ? cmd.cmdBarWidth : vp->WorkSize.x * 0.5f, 320.f,
+                                  std::max(360.f, vp->WorkSize.x - 16.f));
+    cmd.cmdBarWidth = barW;
+    if (!cmd.cmdBarAnchorValid) {
+      cmd.cmdBarAnchorX = vp->WorkPos.x + (vp->WorkSize.x - barW) * 0.5f;
+      cmd.cmdBarAnchorValid = true;
+    }
+    // Clamp X on-screen. Guard the upper bound: when the bar is wider than the viewport
+    // (or WorkSize is tiny on the first frame) the max would fall below the min, which is
+    // undefined for std::clamp (and asserts in debug).
+    const float xMin = vp->WorkPos.x + 4.f;
+    const float xMax = vp->WorkPos.x + vp->WorkSize.x - barW - 4.f;
+    cmd.cmdBarAnchorX = std::clamp(cmd.cmdBarAnchorX, xMin, std::max(xMin, xMax));
+    // Pin the bar's bottom edge just above the status-bar strip (Y locked) — never below it.
+    const float bottomY = vp->WorkPos.y + vp->WorkSize.y - CadStatusBarStripHeightPx();
+    ImGui::SetNextWindowPos(ImVec2(cmd.cmdBarAnchorX, bottomY), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(barW, 0.f), ImVec2(barW, FLT_MAX));  // fixed width, auto height
+    ImGui::SetNextWindowBgAlpha(0.f);  // transparent; the bar background and history chips are painted manually
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f, 4.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);  // no enclosing box; only the chips + bar show
+  } else {
+    ImGui::SetNextWindowSize(ImVec2(900, 220), ImGuiCond_FirstUseEver);
+  }
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, floating ? ImVec4(0, 0, 0, 0) : consoleBg);
+  if (!ImGui::Begin(floating ? "##CommandBarFloat" : "Command line", nullptr, winFlags)) {
     ImGui::End();
     ImGui::PopStyleColor();
+    if (floating) ImGui::PopStyleVar(2);
     return;
   }
+  // Taller frames for the floating bar (a roomier input/icons row than the default).
+  if (floating)
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(ImGui::GetStyle().FramePadding.x, 7.f));
 
   const char* circFooter   = CircleCommandFooterHint(cmd);
   const char* lineFooter   = LineCommandFooterHint(cmd);
@@ -4865,11 +5199,11 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   // but only one short hint is visible (old line-budget heuristic summed +2 lines per hint category).
   const float sepBeforeInput = st.ItemSpacing.y + 1.f;
   float footerH = sepBeforeInput;
-  if (cmdInputOnViewport) {
-    footerH += ImGui::CalcTextSize("Command input follows the cursor on the drawing (viewport).", nullptr, false, wrapW).y;
-  } else {
-    footerH += ImGui::GetFrameHeight();
-  }
+  // The status line (input box OR the "follows the cursor" hint) always reserves one
+  // frame height, so the clickable footer hints below keep a stable position when the
+  // cursor crosses between the viewport and this panel — otherwise the taller input
+  // box that appears on hover shoves the [A]/[2P] links down out from under the mouse.
+  footerH += ImGui::GetFrameHeight();
   footerH += st.ItemSpacing.y;
   footerH += wrappedBlockH(circFooter);
   footerH += wrappedBlockH(lineFooter);
@@ -4890,8 +5224,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   const float scrollH = std::max(40.f, availY - footerH);
 
   {
-    // Build a contiguous UTF-8 buffer of the log for TextUnformatted (faster than per-line Text() calls, and the
-    // clipboard copy uses the same buffer). Also drives the AutoCAD-style "Copy log" button.
+    // Build a contiguous UTF-8 buffer of the log (selectable console + classic log + clipboard share it).
     size_t neededBytes = 1;
     for (const auto& line : log)
       neededBytes += line.size() + 1;
@@ -4906,8 +5239,10 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
         cmd.commandLogCacheBytes[pos++] = '\n';
     }
     cmd.commandLogCacheBytes[pos] = '\0';
+  }
 
-    // Header strip above the log: "Copy log" button (for debug paste) and "Clear scroll lock" if user has scrolled up.
+  if (!floating) {
+    // --- Classic docked scrolling log: Copy-log button + read-only TextUnformatted child. ---
     const float copyBtnW = ImGui::CalcTextSize("Copy log").x + ImGui::GetStyle().FramePadding.x * 2.f + 8.f;
     if (ImGui::Button("Copy log", ImVec2(copyBtnW, 0.f)))
       ImGui::SetClipboardText(cmd.commandLogCacheBytes.data());
@@ -4915,12 +5250,6 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     ImGui::SameLine();
     ImGui::TextDisabled("(%zu line%s)", log.size(), log.size() == 1 ? "" : "s");
 
-    // Canonical ImGui scrolling-log pattern: child window holds TextUnformatted, then SetScrollHereY(1) AT THE END
-    // of the child (after content is laid out so ScrollMaxY is current). InputTextMultiline can't autoscroll
-    // reliably in read-only mode because it never owns an active caret to scroll-into-view.
-    //
-    // Selection note: TextUnformatted doesn't support drag-selection; for debug paste use the "Copy log" button
-    // above (one click → whole log on clipboard). Right-click anywhere in the child also exposes the same action.
     const float headerH = ImGui::GetFrameHeightWithSpacing();
     const float logChildH = std::max(40.f, scrollH - headerH);
     ImGui::BeginChild("##CmdLogChild", ImVec2(0.f, logChildH), true, ImGuiWindowFlags_HorizontalScrollbar);
@@ -4932,24 +5261,133 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
         ImGui::SetClipboardText(cmd.commandLogCacheBytes.data());
       ImGui::EndPopup();
     }
-    const bool logGrew = (log.size() != cmd.commandLogLastSizeForAutoscroll);
-    if (logGrew) {
+    if (log.size() != cmd.commandLogLastSizeForAutoscroll) {
       cmd.commandLogLastSizeForAutoscroll = log.size();
       ImGui::SetScrollHereY(1.0f);
     }
     ImGui::EndChild();
+  } else if (cmd.cmdConsoleOpen) {
+    // --- F2 expanded console: selectable + copyable (drag-select then Ctrl+C), scrollable, stays open. ---
+    // Width fills the (fixed-width) bar window so the console matches the command line exactly.
+    float consoleH = cmd.cmdConsoleHeight > 1.f ? cmd.cmdConsoleHeight : ImGui::GetTextLineHeightWithSpacing() * 15.f;
+
+    // Top-edge height grip: drag up/down to resize the console (the bar stays bottom-pinned).
+    ImGui::InvisibleButton("##cb_hgrip", ImVec2(std::max(40.f, ImGui::GetContentRegionAvail().x), 6.f));
+    const bool hhov = ImGui::IsItemHovered() || ImGui::IsItemActive();
+    if (hhov) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeNS);
+    if (ImGui::IsItemActive()) consoleH -= ImGui::GetIO().MouseDelta.y;  // drag up = taller
+    consoleH = std::clamp(consoleH, ImGui::GetTextLineHeightWithSpacing() * 3.f, 1200.f);
+    cmd.cmdConsoleHeight = consoleH;
+    {
+      const ImVec2 gp = ImGui::GetItemRectMin(), gq = ImGui::GetItemRectMax();
+      const ImU32 gc = hhov ? IM_COL32(150, 190, 240, 255) : IM_COL32(150, 155, 165, 160);
+      const float gy = (gp.y + gq.y) * 0.5f, gmx = (gp.x + gq.x) * 0.5f;
+      ImGui::GetWindowDrawList()->AddLine(ImVec2(gmx - 18.f, gy), ImVec2(gmx + 18.f, gy), gc, 1.4f);
+    }
+
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, isDark ? ImVec4(0.086f, 0.098f, 0.114f, cmd.cmdBarOpacity)
+                                                   : ImVec4(0.235f, 0.235f, 0.235f, cmd.cmdBarOpacity));
+    ImGui::InputTextMultiline("##CmdConsole", cmd.commandLogCacheBytes.data(), cmd.commandLogCacheBytes.size(),
+                              ImVec2(-FLT_MIN, consoleH), ImGuiInputTextFlags_ReadOnly);
+    ImGui::PopStyleColor();
+  } else {
+    // --- Recent-history chips floating above the bar; fade out after the idle delay. ---
+    const float alpha = cmdbar::HistoryAlpha(ImGui::GetTime() - cmd.cmdLogLastChangeTime,
+                                             static_cast<double>(cmd.cmdBarFadeDelaySec), 0.8);
+    if (alpha > 0.004f && !log.empty()) {
+      ImDrawList* dl = ImGui::GetWindowDrawList();
+      const size_t startIx = cmdbar::LogTailStart(log.size(), cmd.cmdBarHistoryLines);
+      for (size_t i = startIx; i < log.size(); ++i) {
+        const std::string& s = log[i];
+        const ImVec2 ts = ImGui::CalcTextSize(s.c_str());
+        const ImVec2 p = ImGui::GetCursorScreenPos();
+        const float padx = 6.f, pady = 2.f;
+        dl->AddRectFilled(ImVec2(p.x - padx + 4.f, p.y - pady), ImVec2(p.x + ts.x + padx, p.y + ts.y + pady),
+                          ImGui::GetColorU32(ImVec4(0.f, 0.f, 0.f, 0.55f * alpha)), 3.f);
+        dl->AddText(p, ImGui::GetColorU32(ImVec4(0.86f, 0.88f, 0.92f, alpha)), s.c_str());
+        ImGui::Dummy(ImVec2(ts.x + padx, ts.y + pady));
+      }
+    }
   }
 
-  ImGui::Separator();
+  if (!floating)
+    ImGui::Separator();
   ImGui::PushID("GoSurveyCmdPanel");
 
   ImGuiIO& io = ImGui::GetIO();
+  // Type-to-focus: route queued chars now, but defer the focus to just before the
+  // InputText (the floating bar has toolbar icons between here and the field, so a
+  // SetKeyboardFocusHere here would land on a grip icon instead of the input).
+  bool wantFocusInput = false;
   if (!io.WantTextInput && io.InputQueueCharacters.Size > 0 && !cmdInputOnViewport) {
     RouteQueuedCharsToCmdBuf(cmdBuf, cmdBufSize, io);
-    ImGui::SetKeyboardFocusHere(0);
+    wantFocusInput = true;
   }
 
   const float inputAvailW = ImGui::GetContentRegionAvail().x;
+
+  // --- Floating bar chrome: background panel + toolbar icons (REQ-040). ---
+  const float barIconH = ImGui::GetFrameHeight();
+  if (floating) {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 rmin = ImGui::GetCursorScreenPos();
+    // Bar spans the full (fixed) window width: icons + prompt + input + expand.
+    dl->AddRectFilled(ImVec2(rmin.x - 2.f, rmin.y - 2.f),
+                      ImVec2(rmin.x + inputAvailW + 2.f, rmin.y + barIconH + 2.f),
+                      ImGui::GetColorU32(barBg), barRounding);
+
+    auto iconBtn = [&](const char* id, int kind) -> bool {
+      const ImVec2 p = ImGui::GetCursorScreenPos();
+      const bool clicked = ImGui::InvisibleButton(id, ImVec2(barIconH, barIconH));
+      const bool hov = ImGui::IsItemHovered();
+      ImDrawList* d = ImGui::GetWindowDrawList();
+      if (hov)
+        d->AddRectFilled(p, ImVec2(p.x + barIconH, p.y + barIconH), IM_COL32(255, 255, 255, 30), 3.f);
+      const ImU32 c = IM_COL32(205, 210, 220, 255);
+      const float cx = p.x + barIconH * 0.5f, cy = p.y + barIconH * 0.5f, r = barIconH * 0.22f;
+      switch (kind) {
+      case 0:  // drag grip (two columns of dots)
+        for (int gx = 0; gx < 2; ++gx)
+          for (int gy = 0; gy < 3; ++gy)
+            d->AddCircleFilled(ImVec2(cx - 2.f + gx * 4.f, cy - 4.f + gy * 4.f), 1.1f, c);
+        break;
+      case 1:  // close ×
+        d->AddLine(ImVec2(cx - r, cy - r), ImVec2(cx + r, cy + r), c, 1.6f);
+        d->AddLine(ImVec2(cx - r, cy + r), ImVec2(cx + r, cy - r), c, 1.6f);
+        break;
+      case 2:  // settings gear
+        d->AddCircle(ImVec2(cx, cy), r + 1.f, c, 8, 1.4f);
+        d->AddCircleFilled(ImVec2(cx, cy), 1.6f, c);
+        break;
+      case 3:  // prompt ">" + history caret
+        d->AddLine(ImVec2(cx - r - 1.f, cy - r), ImVec2(cx, cy), c, 1.4f);
+        d->AddLine(ImVec2(cx, cy), ImVec2(cx - r - 1.f, cy + r), c, 1.4f);
+        d->AddTriangleFilled(ImVec2(cx + r - 1.f, cy - 1.f), ImVec2(cx + r + 3.f, cy - 1.f),
+                             ImVec2(cx + r + 1.f, cy + 2.f), c);
+        break;
+      case 4:  // expand ▲
+        d->AddTriangleFilled(ImVec2(cx - r, cy + r * 0.6f), ImVec2(cx + r, cy + r * 0.6f),
+                             ImVec2(cx, cy - r * 0.8f), c);
+        break;
+      }
+      return clicked;
+    };
+
+    iconBtn("##cb_grip", 0);
+    if (ImGui::IsItemActive()) cmd.cmdBarAnchorX += io.MouseDelta.x;  // X only — the bar is bottom-locked
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive()) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    ItemHelpTooltip("Drag to slide the command line left/right");
+    ImGui::SameLine(0, 2);
+    if (iconBtn("##cb_close", 1)) cmd.cmdBarVisible = false;
+    ItemHelpTooltip("Hide the command line (Ctrl+9 restores)");
+    ImGui::SameLine(0, 2);
+    if (iconBtn("##cb_cfg", 2)) ImGui::OpenPopup("##cmdBarCfg");
+    ItemHelpTooltip("Command line settings");
+    ImGui::SameLine(0, 2);
+    if (iconBtn("##cb_hist", 3)) ImGui::OpenPopup("##cmdBarHist");
+    ItemHelpTooltip("Recent commands");
+    ImGui::SameLine(0, 4);
+  }
 
   // nanoCAD-style command autocomplete. State persists; popup drawn after End().
   static int  s_cmdSel = 0;
@@ -4970,23 +5408,84 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   ImVec2 cmdInputMin(0, 0), cmdInputMax(0, 0);
   bool   cmdShowSug = false;
 
-  if (!cmdInputOnViewport) {
+  // The floating bar always shows its input + expand chevron (so neither flickers as the
+  // cursor crosses onto the drawing); the classic dock swaps in a "follows the cursor"
+  // note while the at-crosshair dynamic input is active. Either way only the focused field
+  // receives keystrokes, so there is no double routing.
+  if (!cmdInputOnViewport || floating) {
     ImGuiInputTextFlags flags = ImGuiInputTextFlags_EnterReturnsTrue |
                                 ImGuiInputTextFlags_CallbackAlways |
                                 ImGuiInputTextFlags_CallbackCompletion |  // Tab completes to highlighted
                                 ImGuiInputTextFlags_EscapeClearsAll;      // Esc clears the buffer (unfreezes crosshair)
-    ImGui::PushStyleColor(ImGuiCol_Text, promptColor);
-    ImGui::TextUnformatted(">");
-    ImGui::PopStyleColor();
-    const float promptW = ImGui::GetItemRectSize().x + st.ItemSpacing.x * 0.5f;
-    ImGui::SameLine(0, st.ItemSpacing.x * 0.5f);
-    ImGui::SetNextItemWidth(std::max(64.f, inputAvailW - sendBtnW - st.ItemSpacing.x - promptW));
-    bool exec = ImGui::InputTextWithHint("##CommandLineInput", CommandInputHint(cmd), cmdBuf,
+    float inputW;
+    const bool activeHint = floating && cmd.active != AppCommandState::Kind::None;
+    if (floating) {
+      // The active command's hint is the prompt — rendered inline with clickable [option]
+      // links (REQ-040), replacing the plain placeholder. Idle shows "Type a command".
+      if (activeHint) {
+        ImGui::AlignTextToFramePadding();
+        RenderClickableCommandHint(CommandInputHint(cmd), cmd, log, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        ImGui::SameLine(0, 6);
+      }
+      inputW = std::max(80.f, ImGui::GetContentRegionAvail().x - barIconH - 19.f);  // reserve chevron + width grip
+    } else {
+      ImGui::PushStyleColor(ImGuiCol_Text, promptColor);
+      ImGui::TextUnformatted(">");
+      ImGui::PopStyleColor();
+      const float promptW = ImGui::GetItemRectSize().x + st.ItemSpacing.x * 0.5f;
+      ImGui::SameLine(0, st.ItemSpacing.x * 0.5f);
+      inputW = std::max(64.f, inputAvailW - sendBtnW - st.ItemSpacing.x - promptW);
+    }
+    ImGui::SetNextItemWidth(inputW);
+    if (wantFocusInput) ImGui::SetKeyboardFocusHere();
+    const char* placeholder = floating ? (activeHint ? "" : "Type a command") : CommandInputHint(cmd);
+    if (floating) {
+      // White input field with near-black text (placeholder a mid-gray so it reads on white).
+      ImGui::PushStyleColor(ImGuiCol_FrameBg,        ImVec4(0.97f, 0.97f, 0.97f, 1.f));
+      ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(1.00f, 1.00f, 1.00f, 1.f));
+      ImGui::PushStyleColor(ImGuiCol_FrameBgActive,  ImVec4(1.00f, 1.00f, 1.00f, 1.f));
+      ImGui::PushStyleColor(ImGuiCol_Text,           ImVec4(0.08f, 0.08f, 0.08f, 1.f));
+      ImGui::PushStyleColor(ImGuiCol_TextDisabled,   ImVec4(0.45f, 0.45f, 0.45f, 1.f));
+    }
+    bool exec = ImGui::InputTextWithHint("##CommandLineInput", placeholder, cmdBuf,
                                          static_cast<size_t>(cmdBufSize), flags, CommandLineInputCallback, nullptr);
+    if (floating) ImGui::PopStyleColor(5);
     cmdInputMin = ImGui::GetItemRectMin();
     cmdInputMax = ImGui::GetItemRectMax();
     const bool inputActive = ImGui::IsItemActive();
     ImGui::SetItemDefaultFocus();
+    if (floating) {
+      ImGui::SameLine(0, 4);
+      const ImVec2 ep = ImGui::GetCursorScreenPos();
+      if (ImGui::InvisibleButton("##cb_expand", ImVec2(barIconH, barIconH))) cmd.cmdConsoleOpen = !cmd.cmdConsoleOpen;
+      const bool ehov = ImGui::IsItemHovered();
+      ImDrawList* d = ImGui::GetWindowDrawList();
+      if (ehov) d->AddRectFilled(ep, ImVec2(ep.x + barIconH, ep.y + barIconH), IM_COL32(255, 255, 255, 30), 3.f);
+      const ImU32 ec = IM_COL32(205, 210, 220, 255);
+      const float ecx = ep.x + barIconH * 0.5f, ecy = ep.y + barIconH * 0.5f, er = barIconH * 0.22f;
+      // ▲ when collapsed (expand), ▼ when the console is open (collapse).
+      if (cmd.cmdConsoleOpen)
+        d->AddTriangleFilled(ImVec2(ecx - er, ecy - er * 0.6f), ImVec2(ecx + er, ecy - er * 0.6f),
+                             ImVec2(ecx, ecy + er * 0.8f), ec);
+      else
+        d->AddTriangleFilled(ImVec2(ecx - er, ecy + er * 0.6f), ImVec2(ecx + er, ecy + er * 0.6f),
+                             ImVec2(ecx, ecy - er * 0.8f), ec);
+      ItemHelpTooltip("Expand/collapse the command history (F2)");
+
+      // Right-edge width grip: drag to resize the bar's width.
+      ImGui::SameLine(0, 4);
+      const ImVec2 gp = ImGui::GetCursorScreenPos();
+      ImGui::InvisibleButton("##cb_wgrip", ImVec2(7.f, barIconH));
+      const bool whov = ImGui::IsItemHovered() || ImGui::IsItemActive();
+      if (whov) ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+      if (ImGui::IsItemActive()) cmd.cmdBarWidth = std::max(320.f, cmd.cmdBarWidth + io.MouseDelta.x);
+      {
+        const ImU32 gc = whov ? IM_COL32(150, 190, 240, 255) : IM_COL32(150, 155, 165, 200);
+        const float gcx = gp.x + 3.5f;
+        d->AddLine(ImVec2(gcx, gp.y + 3.f), ImVec2(gcx, gp.y + barIconH - 3.f), gc, 1.4f);
+      }
+      ItemHelpTooltip("Drag to resize the command line width");
+    }
 
     std::string query(cmdBuf);
     while (!query.empty() && std::isspace(static_cast<unsigned char>(query.front()))) query.erase(query.begin());
@@ -5033,8 +5532,6 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       if (inputActive) { s_cmdSugVisible = false; s_cmdHighlight.clear(); }
     }
 
-    ImGui::SameLine(0, st.ItemSpacing.x);
-    //const bool sendClicked = ImGui::Button("Send", ImVec2(sendBtnW, 0.f));
     if (exec) {
       // Enter with the list open runs the highlighted command. The list state is read from the persisted
       // s_cmd* values because Enter deactivates the input, so cmdShowSug/cmdSug are already empty this frame.
@@ -5048,18 +5545,59 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
     }
   } else {
+    // Match the input box's vertical footprint so the footer hints below don't shift.
+    ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("Command input follows the cursor on the drawing (viewport).");
   }
 
-  auto renderHint = [](const char* s) {
-    if (!s || !s[0]) return;
+  // Floating bar: the prompt lives in the input field's placeholder (CommandInputHint),
+  // so the separate footer-hint lines are suppressed — the bar stays a clean single line.
+  // Classic dock keeps the wrapped hint lines below the input.
+  auto renderHint = [&](const char* s) {
+    if (floating || !s || !s[0]) return;
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextWrapped("%s", s);
     ImGui::PopStyleColor();
   };
 
   renderHint(circFooter);
-  renderHint(lineFooter);
+
+  // LINE basic next-point hint: render [A]/[2P] as clickable links that start the
+  // azimuth-entry / two-pick-bearing sub-modes (same as typing "a" / "2p"). Other
+  // LINE states (and all other commands) use the plain renderHint path.
+  {
+    using LP = AppCommandState::LinePhase;
+    using SAPx = AppCommandState::SegmentAnglePickPhase;
+    const bool lineNextClickable =
+        !floating && cmd.active == AppCommandState::Kind::Line && cmd.linePhase == LP::NeedNextPoint &&
+        !cmd.segmentAngleKeyboardAwaitBearing && !cmd.segmentAngleLockActive &&
+        cmd.segmentAnglePickPhase == SAPx::Idle;
+    if (lineNextClickable) {
+      auto submitToken = [&](const char* tok) {
+        char tmp[16];
+        std::snprintf(tmp, sizeof(tmp), "%s", tok);
+        ProcessCommandLineSubmit(tmp, static_cast<int>(sizeof(tmp)), cmd, log);
+      };
+      const ImVec4 dim = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+      auto dimText = [&](const char* t) {
+        ImGui::PushStyleColor(ImGuiCol_Text, dim);
+        ImGui::TextUnformatted(t);
+        ImGui::PopStyleColor();
+      };
+      dimText("Next: click; X, Y; @dx,dy; ");
+      ImGui::SameLine(0.f, 0.f);
+      if (ImGui::TextLink("[A]")) submitToken("a");
+      ImGui::SameLine(0.f, 0.f);
+      dimText("zimuth, ");
+      ImGui::SameLine(0.f, 0.f);
+      if (ImGui::TextLink("[2P]")) submitToken("2p");
+      ImGui::SameLine(0.f, 0.f);
+      dimText(";");
+    } else {
+      renderHint(lineFooter);
+    }
+  }
+
   renderHint(modFooter);
   renderHint(scaleFooter);
   renderHint(rotFooter);
@@ -5071,10 +5609,48 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   renderHint(zmFooter);
   renderHint(drawXFooter);
 
+  // --- Command-bar popups (REQ-040): settings (wrench) and recent-command history (>_ ▾). ---
+  if (ImGui::BeginPopup("##cmdBarCfg")) {
+    ImGui::TextDisabled("Command line");
+    ImGui::Separator();
+    ImGui::SetNextItemWidth(160.f);
+    ImGui::SliderFloat("Fade delay (s)", &cmd.cmdBarFadeDelaySec, 0.5f, 30.f, "%.1f");
+    ImGui::SetNextItemWidth(160.f);
+    ImGui::SliderFloat("Opacity", &cmd.cmdBarOpacity, 0.3f, 1.f, "%.2f");
+    ImGui::SetNextItemWidth(160.f);
+    ImGui::SliderInt("History lines", &cmd.cmdBarHistoryLines, 1, 10);
+    ImGui::Separator();
+    bool classic = cmd.cmdLineClassicDock;
+    if (ImGui::Checkbox("Use classic docked panel", &classic))
+      cmd.cmdLineClassicDock = classic;
+    ImGui::EndPopup();
+  }
+  if (ImGui::BeginPopup("##cmdBarHist")) {
+    if (cmd.cmdEnteredHistory.empty()) {
+      ImGui::TextDisabled("(no recent commands)");
+    } else {
+      // Newest first; clicking re-runs the entry.
+      for (size_t k = cmd.cmdEnteredHistory.size(); k-- > 0;) {
+        const std::string& h = cmd.cmdEnteredHistory[k];
+        ImGui::PushID(static_cast<int>(k));
+        if (ImGui::Selectable(h.c_str())) {
+          std::snprintf(cmdBuf, static_cast<size_t>(cmdBufSize), "%s", h.c_str());
+          ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+        }
+        ImGui::PopID();
+      }
+    }
+    ImGui::EndPopup();
+  }
+
   ImGui::PopID();
 
+  // FramePadding was pushed AFTER Begin (inside the window) so it must be popped BEFORE End;
+  // WindowPadding + WindowBorderSize were pushed BEFORE Begin so they pop after End.
+  if (floating) ImGui::PopStyleVar();  // FramePadding
   ImGui::End();
   ImGui::PopStyleColor();
+  if (floating) ImGui::PopStyleVar(2);  // WindowPadding + WindowBorderSize
 
   // --- nanoCAD-style command autocomplete popup (anchored at the drawing crosshair) ---
   s_cmdSugPopupOpen = false;
@@ -5289,16 +5865,27 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
     by0 = std::min(cmd.mtxtY1, cmd.mtxtY2);
     by1 = std::max(cmd.mtxtY1, cmd.mtxtY2);
   } else {
-    if (cmd.mtextRichEditorAnnIndex < 0 ||
-        static_cast<size_t>(cmd.mtextRichEditorAnnIndex) >= cmd.cadAnnotations.size())
+    // REQ-039 phase 2: the target may be a model annotation or the active layout's paper text.
+    CadAnnotation* ap = MtextRichEditorTargetAnnotation(cmd);
+    if (!ap)
       return;
-    const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(cmd.mtextRichEditorAnnIndex)];
-    if (a.kind != CadAnnotation::Kind::Mtext)
-      return;
-    bx0 = a.boxMinX;
-    bx1 = a.boxMaxX;
-    by0 = a.boxMinY;
-    by1 = a.boxMaxY;
+    const CadAnnotation& a = *ap;
+    if (a.kind == CadAnnotation::Kind::Mtext && a.boxMaxX > a.boxMinX && a.boxMaxY > a.boxMinY) {
+      bx0 = a.boxMinX;
+      bx1 = a.boxMaxX;
+      by0 = a.boxMinY;
+      by1 = a.boxMaxY;
+    } else {
+      // Single-line TEXT (or a boxless MTEXT): synth a box anchored at the top-left insertion point. Paper
+      // coords are inches (height = plotted inches); model coords are world units (× drawing scale).
+      const float h = cmd.mtextRichEditorPaper ? std::max(0.01f, a.plottedHeightInches)
+                                               : CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch);
+      const float w = std::max(h * 0.6f, h * 0.6f * static_cast<float>(a.text.size()));
+      bx0 = a.insX;
+      bx1 = a.insX + w;
+      by1 = a.insY;
+      by0 = a.insY - h;
+    }
   }
 
   const float denx = worldRight - worldLeft + 1e-12f;
@@ -5325,6 +5912,8 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
   float w = std::max(300.f, boxScreenW);
   w = std::min(w, imgMax.x - imgMin.x - 4.f);
 
+  // Single-line TEXT (REQ-039 phase 2): plain box — no MTEXT rich tags, toolbar, or multiline.
+  const bool plain = cmd.mtextRichEditorPlain && !cmd.mtextRichEditorPlacement;
   const ImGuiStyle& ist = ImGui::GetStyle();
   const float innerW = std::max(24.f, w - ist.WindowPadding.x * 2.f);
   int editorLineCount = 1;
@@ -5334,12 +5923,13 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
   }
   const float lh = ImGui::GetTextLineHeightWithSpacing();
   const float editorH =
-      std::clamp(static_cast<float>(editorLineCount) * lh + ist.FramePadding.y * 2.f + 12.f, 96.f, 420.f);
+      plain ? ImGui::GetFrameHeight()
+            : std::clamp(static_cast<float>(editorLineCount) * lh + ist.FramePadding.y * 2.f + 12.f, 96.f, 420.f);
   const float hintH = ImGui::GetTextLineHeightWithSpacing() + 4.f;
-  const float fmtRowH = ImGui::GetFrameHeightWithSpacing() + 4.f;
+  const float fmtRowH = plain ? 0.f : ImGui::GetFrameHeightWithSpacing() + 4.f;
   const float btnRowH = ImGui::GetFrameHeightWithSpacing() + 8.f;
-  const float hContent = ist.WindowPadding.y * 2.f + hintH + ist.ItemSpacing.y + editorH + ist.ItemSpacing.y + fmtRowH +
-                         ist.ItemSpacing.y + btnRowH;
+  const float hContent = ist.WindowPadding.y * 2.f + hintH + ist.ItemSpacing.y + editorH + ist.ItemSpacing.y +
+                         fmtRowH + ist.ItemSpacing.y + btnRowH;
 
   float wxp = sx0 + kPad;
   float wyp = sy0 + kPad;
@@ -5355,22 +5945,31 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
     editorWinFlags |= ImGuiWindowFlags_AlwaysVerticalScrollbar;
   if (ImGui::BeginChild("##MtextRichEditor", ImVec2(w, h), ImGuiChildFlags_Borders, editorWinFlags)) {
     ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + innerW);
-    ImGui::TextDisabled("%s",
-                        "Rich tags: [[b]],[[i]],[[u]],[[caps]]…[[/…]]. Ctrl+Enter: normalize. Esc: cancel unsaved.");
+    ImGui::TextDisabled("%s", plain ? "Edit text. Enter or Save to update. Esc to cancel."
+                                    : "Rich tags: [[b]],[[i]],[[u]],[[caps]]…[[/…]]. Ctrl+Enter: normalize. Esc: cancel unsaved.");
     ImGui::PopTextWrapPos();
     if (cmd.mtextRichEditorFocusRequest) {
       ImGui::SetKeyboardFocusHere(0);
       cmd.mtextRichEditorFocusRequest = false;
     }
-    ImGuiInputTextFlags flags = ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackAlways |
-                                ImGuiInputTextFlags_CallbackCharFilter;
-    ImGui::InputTextMultiline("##mtext_rte_body", &cmd.mtextRichEditorBuf, ImVec2(-FLT_MIN, editorH), flags,
-                              MtextRichEditorInputCallback, static_cast<void*>(&cmd));
-    const ImGuiID bodyId = ImGui::GetItemID();
-    ImGuiIO& io = ImGui::GetIO();
-    if (ImGui::GetActiveID() == bodyId && io.KeyCtrl &&
-        (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)))
-      cmd.mtextRichEditorBuf = MtextRichNormalize(cmd.mtextRichEditorBuf);
+    if (plain) {
+      // Single-line TEXT: a plain box, Enter commits. No rich callback (no run tags on a TEXT object).
+      if (ImGui::InputText("##plain_text_body", &cmd.mtextRichEditorBuf, ImGuiInputTextFlags_EnterReturnsTrue)) {
+        CommitMtextRichEditor(cmd, log);
+        ImGui::EndChild();
+        ImGui::PopStyleColor();
+        return;
+      }
+    } else {
+      ImGuiInputTextFlags flags = ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackAlways |
+                                  ImGuiInputTextFlags_CallbackCharFilter;
+      ImGui::InputTextMultiline("##mtext_rte_body", &cmd.mtextRichEditorBuf, ImVec2(-FLT_MIN, editorH), flags,
+                                MtextRichEditorInputCallback, static_cast<void*>(&cmd));
+      const ImGuiID bodyId = ImGui::GetItemID();
+      ImGuiIO& io = ImGui::GetIO();
+      if (ImGui::GetActiveID() == bodyId && io.KeyCtrl &&
+          (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)))
+        cmd.mtextRichEditorBuf = MtextRichNormalize(cmd.mtextRichEditorBuf);
 
     ImGui::PushID("mtext_rte_tb");
     if (ImGui::SmallButton("B"))
@@ -5416,6 +6015,7 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
       ImGui::SetTooltip("Type new ASCII in ALL CAPS");
     ImGui::PopID();
+    }  // end rich (!plain) body
 
     const float saveW = ImGui::CalcTextSize("Save").x + ist.FramePadding.x * 2.f + 16.f;
     const float cancelW = ImGui::CalcTextSize("Cancel").x + ist.FramePadding.x * 2.f + 16.f;
@@ -5806,10 +6406,22 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     log.push_back("TEXT — height in paper inches (Enter = sheet default):");
   }
 
+  // Paper-space PASTE (REQ-038, ADR-013): the click places the clipboard into the active layout's paper
+  // store at the cursor (paper inches, snapped). The pasted entities become the paper selection.
+  if (!modelSpace && !InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::Paste &&
+      cmd.modifyPhase == AppCommandState::ModifyPhase::NeedDestination && hovered &&
+      ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
+    float px = 0.f, py = 0.f;
+    paperPick(&px, &py);
+    CommitClipboardPasteAt(cmd, px, py, log);
+    consumedPaperClick = true;
+  }
+
   // Paper-space viewport selection + grip edit + MOVE/COPY (REQ-035). Active only while idle of the
   // rectangular-viewport command and in a paper layout.
   if (!modelSpace && !InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::None &&
-      cmd.activeSpaceIndex >= 0 && cmd.activeSpaceIndex < static_cast<int>(cmd.paperLayouts.size())) {
+      !cmd.mtextRichEditorOpen && cmd.activeSpaceIndex >= 0 &&
+      cmd.activeSpaceIndex < static_cast<int>(cmd.paperLayouts.size())) {
     PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
     float curX = 0.f, curY = 0.f;
     screenToPaperIn(&curX, &curY);
@@ -5821,6 +6433,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     }
     const float pxPerWorld = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
     const float gripTolIn = 7.f / std::max(1.e-6f, pxPerWorld);
+    // Pick tolerance for native paper entities (line/text/…), used by hover, click-select and double-click edit.
+    const float entityPickTolIn = std::max(gripTolIn, 6.f / std::max(1.e-6f, pxPerWorld));
     const bool clickL = hovered && !consumedPaperClick && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
                         mx >= 0 && mx < avail.x && my >= 0 && my < avail.y;
 
@@ -5828,8 +6442,23 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // at the same spot, so it's distinct from a two-corner window box. The first click may have started a
     // window box (interior clicks do) — cancel it and enter the viewport instead.
     bool enteredFloat = false;
+    bool openedPaperTextEdit = false;
     if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 &&
         my < avail.y && cmd.paperMovePhase == 0 && cmd.paperGripCorner == -2) {
+      // REQ-039 phase 2: double-clicking a native paper text opens the in-place editor (takes priority over
+      // entering a viewport's floating model space).
+      PaperEntityRef dpr;
+      if (PickPaperEntityAt(L, curX, curY, entityPickTolIn, &dpr) && dpr.type == PaperEntityRef::Type::Text) {
+        cmd.paperSelBoxActive = false;  // discard the box the first click of the double-click started
+        ClearViewportSelection(cmd);
+        ClearPaperEntitySelection(cmd);
+        TogglePaperEntitySelection(cmd, dpr, false);
+        OpenPaperTextEditor(cmd, cmd.activeSpaceIndex, dpr.index, &log);
+        openedPaperTextEdit = true;
+      }
+    }
+    if (!openedPaperTextEdit && hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) && mx >= 0 &&
+        mx < avail.x && my >= 0 && my < avail.y && cmd.paperMovePhase == 0 && cmd.paperGripCorner == -2) {
       for (int vi = static_cast<int>(L.viewports.size()) - 1; vi >= 0; --vi) {
         const Viewport& v = L.viewports[static_cast<size_t>(vi)];
         if (curX >= v.paperXIn && curX <= v.paperXIn + v.paperWIn && curY >= v.paperYIn &&
@@ -5862,8 +6491,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       return nullptr;
     };
 
-    // Native paper-entity click selection (REQ-037): a click on a paper line/text selects it (Shift toggles).
-    const float entityPickTolIn = std::max(gripTolIn, 6.f / std::max(1.e-6f, pxPerWorld));
+    // Hover pre-highlight parity (REQ-039): when idle and not mid-gesture, light up the paper entity under the
+    // cursor (mirrors the model viewportHoverEntity). Cleared otherwise so the highlight does not linger.
+    cmd.paperHoverValid = false;
+    if (hovered && !cmd.paperSelBoxActive && cmd.paperMovePhase == 0 && cmd.paperRotatePhase == 0 &&
+        cmd.paperGripCorner == -2 && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
+      PaperEntityRef hr;
+      if (PickPaperEntityAt(L, curX, curY, entityPickTolIn, &hr)) {
+        cmd.paperHoverValid = true;
+        cmd.paperHover = hr;
+      }
+    }
     auto tryPaperEntityClick = [&]() -> bool {
       PaperEntityRef pr;
       if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
@@ -5872,6 +6510,37 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ClearViewportSelection(cmd);
       TogglePaperEntitySelection(cmd, pr, ImGui::GetIO().KeyShift);
       return true;
+    };
+
+    // Close an open window-select box at (closeX,closeY) (REQ-039). Shared by click-click (second click) and
+    // press-drag-release. Same convention as model geometry: left-to-right = window (fully inside);
+    // right-to-left = crossing (any overlap). Selects viewports and every native paper-entity type.
+    auto closePaperSelBox = [&](float closeX, float closeY) {
+      const bool windowMode = closeX >= cmd.paperSelBoxX0In;
+      const float bx0 = std::min(cmd.paperSelBoxX0In, closeX), bx1 = std::max(cmd.paperSelBoxX0In, closeX);
+      const float by0 = std::min(cmd.paperSelBoxY0In, closeY), by1 = std::max(cmd.paperSelBoxY0In, closeY);
+      cmd.selectedViewports.clear();
+      for (int vi = 0; vi < static_cast<int>(L.viewports.size()); ++vi) {
+        const Viewport& v = L.viewports[static_cast<size_t>(vi)];
+        const float vx0 = v.paperXIn, vy0 = v.paperYIn, vx1 = v.paperXIn + v.paperWIn, vy1 = v.paperYIn + v.paperHIn;
+        // A viewport is a hollow rectangle outline, not a filled object. WINDOW (L→R) selects it only when
+        // the whole border is inside the box; CROSSING (R→L) selects it only when the box actually touches a
+        // border edge — a box drawn entirely inside the viewport interior touches no visible geometry and
+        // must NOT select it (issue #4).
+        const bool overlap = vx0 <= bx1 && vx1 >= bx0 && vy0 <= by1 && vy1 >= by0;
+        const bool boxInsideInterior = bx0 > vx0 && bx1 < vx1 && by0 > vy0 && by1 < vy1;
+        const bool sel = windowMode ? (vx0 >= bx0 && vx1 <= bx1 && vy0 >= by0 && vy1 <= by1)
+                                    : (overlap && !boxInsideInterior);
+        if (sel)
+          cmd.selectedViewports.push_back(vi);
+      }
+      cmd.selectedViewportIndex = cmd.selectedViewports.empty() ? -1 : cmd.selectedViewports.back();
+      cmd.selectedViewportLayout = cmd.selectedViewports.empty() ? -1 : cmd.activeSpaceIndex;
+      // Native paper geometry in the same box (REQ-039): one shared, unit-tested helper for every type.
+      cmd.selectedPaperEntities.clear();
+      SelectPaperEntitiesInBox(L, bx0, by0, bx1, by1, windowMode, cmd.selectedPaperEntities);
+      cmd.paperSelBoxActive = false;
+      BumpCadGpuCache(cmd);
     };
 
     if (clickL && cmd.paperMovePhase == 1) {  // MOVE/COPY: base point
@@ -5899,50 +6568,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       cmd.paperGripCorner = -2;
       log.push_back("Viewport edited.");
     } else if (clickL && cmd.paperSelBoxActive) {
-      // A window-select box is open — this click closes it (priority over grip/body picking). Same
-      // convention as model geometry: left-to-right = window (viewport fully inside); right-to-left =
-      // crossing (any overlap).
-      const bool windowMode = curX >= cmd.paperSelBoxX0In;
-      const float bx0 = std::min(cmd.paperSelBoxX0In, curX), bx1 = std::max(cmd.paperSelBoxX0In, curX);
-      const float by0 = std::min(cmd.paperSelBoxY0In, curY), by1 = std::max(cmd.paperSelBoxY0In, curY);
-      cmd.selectedViewports.clear();
-      for (int vi = 0; vi < static_cast<int>(L.viewports.size()); ++vi) {
-        const Viewport& v = L.viewports[static_cast<size_t>(vi)];
-        const float vx0 = v.paperXIn, vy0 = v.paperYIn, vx1 = v.paperXIn + v.paperWIn, vy1 = v.paperYIn + v.paperHIn;
-        // A viewport is a hollow rectangle outline, not a filled object. WINDOW (L→R) selects it only when
-        // the whole border is inside the box; CROSSING (R→L) selects it only when the box actually touches a
-        // border edge — a box drawn entirely inside the viewport interior touches no visible geometry and
-        // must NOT select it (issue #4).
-        const bool overlap = vx0 <= bx1 && vx1 >= bx0 && vy0 <= by1 && vy1 >= by0;
-        const bool boxInsideInterior = bx0 > vx0 && bx1 < vx1 && by0 > vy0 && by1 < vy1;
-        const bool sel = windowMode ? (vx0 >= bx0 && vx1 <= bx1 && vy0 >= by0 && vy1 <= by1)
-                                    : (overlap && !boxInsideInterior);
-        if (sel)
-          cmd.selectedViewports.push_back(vi);
-      }
-      cmd.selectedViewportIndex = cmd.selectedViewports.empty() ? -1 : cmd.selectedViewports.back();
-      cmd.selectedViewportLayout = cmd.selectedViewports.empty() ? -1 : cmd.activeSpaceIndex;
-      // Native paper geometry in the same box (REQ-037): lines by bounds; text by insertion point.
-      cmd.selectedPaperEntities.clear();
-      for (int si = 0; si < static_cast<int>(L.paperLines.size() / 6); ++si) {
-        const size_t i = static_cast<size_t>(si) * 6;
-        const float lx0 = std::min(L.paperLines[i], L.paperLines[i + 3]);
-        const float lx1 = std::max(L.paperLines[i], L.paperLines[i + 3]);
-        const float ly0 = std::min(L.paperLines[i + 1], L.paperLines[i + 4]);
-        const float ly1 = std::max(L.paperLines[i + 1], L.paperLines[i + 4]);
-        const bool sel = windowMode ? (lx0 >= bx0 && lx1 <= bx1 && ly0 >= by0 && ly1 <= by1)
-                                    : (lx0 <= bx1 && lx1 >= bx0 && ly0 <= by1 && ly1 >= by0);
-        if (sel)
-          cmd.selectedPaperEntities.push_back({PaperEntityRef::Type::Line, si});
-      }
-      for (int ti = 0; ti < static_cast<int>(L.paperTexts.size()); ++ti) {
-        const CadAnnotation& a = L.paperTexts[static_cast<size_t>(ti)];
-        if (a.insX >= bx0 && a.insX <= bx1 && a.insY >= by0 && a.insY <= by1)
-          cmd.selectedPaperEntities.push_back({PaperEntityRef::Type::Text, ti});
-      }
-      cmd.paperSelBoxActive = false;
-      BumpCadGpuCache(cmd);
-    } else if (clickL && !enteredFloat) {
+      // A window-select box is open — this click closes it (priority over grip/body picking). Click-click flow.
+      closePaperSelBox(curX, curY);
+    } else if (clickL && !enteredFloat && !openedPaperTextEdit) {
       // 1) a grip of the single selected viewport?
       int gripCorner = -2;
       if (Viewport* v = primaryVp()) {
@@ -5992,6 +6620,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           cmd.paperSelBoxY0In = curY;
         }
       }
+    }
+
+    // Press-drag-release window box (bug #1): if the user pressed and dragged more than a few pixels,
+    // releasing closes the open box right away (AutoCAD's drag-select). A near-zero drag is treated as a
+    // plain click, leaving the box open for the click-click flow above.
+    if (cmd.paperSelBoxActive && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
+      const ImVec2 dd = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
+      if (std::sqrt(dd.x * dd.x + dd.y * dd.y) > 4.f)
+        closePaperSelBox(curX, curY);
     }
 
     // Live grip edit: the grabbed viewport follows the cursor until the commit click.
@@ -6267,14 +6904,32 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const bool blockEntityHover = cmd.active != AK::None || cmd.dimGripMoveActive ||
                                     cmd.entityGripMoveActive || cmd.mtextGripMoveActive || cmd.selBoxWaitingSecond;
       if (!blockEntityHover) {
-        SelectedEntity hoverHit{};
-        float hoverD2 = 0.f;
-        const float hoverTol = CadHoverEntityPickTolWorld(cmd);
-        if (PickClosestCadEntity(cmd, rawX, rawY, hoverTol, &hoverHit, &hoverD2)) {
+        // Text annotations are picked by bounding box and take priority over geometry, mirroring
+        // click-to-select (the annotation pick runs before the entity pick on a click). Hovering text
+        // pre-highlights it in model space, matching the paper-space hover (REQ-039). Dims keep their
+        // existing no-hover behavior — only TEXT/MTEXT pre-highlight.
+        int annHover = modelSpace ? PickCadAnnotationAt(static_cast<float>(rawX), static_cast<float>(rawY),
+                                                        cmd, halfH, avail.y)
+                                  : -1;
+        if (annHover >= 0) {
+          const CadAnnotation::Kind hk = cmd.cadAnnotations[static_cast<size_t>(annHover)].kind;
+          if (hk != CadAnnotation::Kind::Text && hk != CadAnnotation::Kind::Mtext)
+            annHover = -1;
+        }
+        if (annHover >= 0) {
           cmd.viewportHoverEntityValid = true;
-          cmd.viewportHoverEntity = hoverHit;
+          cmd.viewportHoverEntity.type = SelectedEntity::Type::Annotation;
+          cmd.viewportHoverEntity.index = annHover;
         } else {
-          cmd.viewportHoverEntityValid = false;
+          SelectedEntity hoverHit{};
+          float hoverD2 = 0.f;
+          const float hoverTol = CadHoverEntityPickTolWorld(cmd);
+          if (PickClosestCadEntity(cmd, rawX, rawY, hoverTol, &hoverHit, &hoverD2)) {
+            cmd.viewportHoverEntityValid = true;
+            cmd.viewportHoverEntity = hoverHit;
+          } else {
+            cmd.viewportHoverEntityValid = false;
+          }
         }
       } else {
         cmd.viewportHoverEntityValid = false;
@@ -6989,8 +7644,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
       if (!handled && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
         const int dIx = PickCadAnnotationAt(rawPickX, rawPickY, cmd, halfH, avail.y);
-        if (dIx >= 0 && static_cast<size_t>(dIx) < cmd.cadAnnotations.size() &&
-            cmd.cadAnnotations[static_cast<size_t>(dIx)].kind == CadAnnotation::Kind::Mtext) {
+        const CadAnnotation::Kind dKind =
+            (dIx >= 0 && static_cast<size_t>(dIx) < cmd.cadAnnotations.size())
+                ? cmd.cadAnnotations[static_cast<size_t>(dIx)].kind
+                : CadAnnotation::Kind::DimAligned;  // any non-text sentinel
+        // REQ-039 phase 2: double-click any text (MTEXT or single-line TEXT) opens the in-place editor.
+        if (dIx >= 0 &&
+            (dKind == CadAnnotation::Kind::Mtext || dKind == CadAnnotation::Kind::Text)) {
           AbortMtextGripInteraction(cmd);
           ClearDimGripInteraction(cmd);
           ClearCadSelection(cmd);
@@ -7406,6 +8066,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     {
       constexpr ImU32 kPaperGeomCol = IM_COL32(20, 20, 25, 255);
       constexpr ImU32 kPaperSelCol = IM_COL32(59, 130, 246, 255);
+      constexpr ImU32 kPaperHoverCol = IM_COL32(130, 180, 240, 255);  // hover pre-highlight (lighter blue), REQ-039
       const float pxPerPaperIn = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
       auto isPaperSel = [&](PaperEntityRef::Type t, int idx) {
         for (const PaperEntityRef& r : cmd.selectedPaperEntities)
@@ -7413,25 +8074,236 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             return true;
         return false;
       };
-      for (size_t i = 0; i + 5 < L.paperLines.size(); i += 6) {
-        const bool sel = isPaperSel(PaperEntityRef::Type::Line, static_cast<int>(i / 6));
-        sdl->AddLine(w2s(L.paperLines[i], L.paperLines[i + 1]), w2s(L.paperLines[i + 3], L.paperLines[i + 4]),
-                     sel ? kPaperSelCol : kPaperGeomCol, sel ? 2.0f : 1.2f);
-      }
-      ImFont* paperFont = ImGui::GetFont();
-      for (size_t ti = 0; ti < L.paperTexts.size(); ++ti) {
-        const CadAnnotation& a = L.paperTexts[ti];
-        if (a.text.empty())
+      // Hover parity (REQ-039): the idle entity under the cursor draws in the hover color (selection wins).
+      auto isPaperHover = [&](PaperEntityRef::Type t, int idx) {
+        return cmd.active == AppCommandState::Kind::None && cmd.paperHoverValid && cmd.paperHover.type == t &&
+               cmd.paperHover.index == idx;
+      };
+      auto paperCol = [&](bool sel, PaperEntityRef::Type t, int idx) -> ImU32 {
+        return sel ? kPaperSelCol : (isPaperHover(t, idx) ? kPaperHoverCol : kPaperGeomCol);
+      };
+      auto paperWid = [&](bool sel, PaperEntityRef::Type t, int idx) -> float {
+        return sel ? 2.0f : (isPaperHover(t, idx) ? 1.6f : 1.2f);
+      };
+      // Solid fills (REQ-038 addendum) — drawn first so linework/text sits on top. The model GL pass fills
+      // these even-odd over all loops (concave + island holes); the paper overlay has no stencil, so replicate
+      // even-odd with a screen-space scanline fill: per row, pair sorted edge crossings and fill the odd spans.
+      for (size_t fi = 0; fi < L.paperFilledRegions.size(); ++fi) {
+        const CadFilledRegion& fr = L.paperFilledRegions[fi];
+        if (fr.loopStart.empty() || fr.verts.size() < 6)
           continue;
-        const bool sel = isPaperSel(PaperEntityRef::Type::Text, static_cast<int>(ti));
-        const float hPx = std::max(6.f, a.plottedHeightInches * pxPerPaperIn);
-        const ImVec2 p = w2s(a.insX, a.insY);  // insertion ≈ bottom-left; ImGui draws from top-left.
-        sdl->AddText(paperFont, hPx, ImVec2(p.x, p.y - hPx), sel ? kPaperSelCol : kPaperGeomCol, a.text.c_str());
-        if (sel) {
-          const float w = std::max(hPx * 0.6f, hPx * 0.6f * static_cast<float>(a.text.size()));
-          sdl->AddRect(ImVec2(p.x, p.y - hPx), ImVec2(p.x + w, p.y), kPaperSelCol, 0.f, 0, 1.f);
+        float rgba[4] = {0.85f, 0.85f, 0.85f, 1.f};
+        if (fi < L.paperFilledRegionAttrs.size()) {
+          const EntityAttributes& fa = L.paperFilledRegionAttrs[fi];
+          const CadLayerRow* lr = FindDrawingLayerRowCi(cmd, fa.layer.empty() ? std::string("0") : fa.layer);
+          ResolveEntityRgbaForViewport(fa, lr, 0.85f, 0.85f, 0.85f, rgba);
+        }
+        const ImU32 fillCol = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
+                                       static_cast<int>(rgba[2] * 255.f), 255);
+        // Build screen-space edges (every loop, each closed) and the screen y-extent (clamped to the canvas).
+        std::vector<ImVec4> edges;  // (x0,y0,x1,y1)
+        float yMin = 1e30f, yMax = -1e30f;
+        for (size_t lp = 0; lp < fr.loopStart.size(); ++lp) {
+          const int begin = fr.loopStart[lp];
+          const int cnt = fr.loopCount(lp);
+          if (cnt < 3)
+            continue;
+          for (int k = 0; k < cnt; ++k) {
+            const int a = begin + k, b = begin + (k + 1) % cnt;
+            const ImVec2 pa = w2s(fr.verts[static_cast<size_t>(a) * 2], fr.verts[static_cast<size_t>(a) * 2 + 1]);
+            const ImVec2 pb = w2s(fr.verts[static_cast<size_t>(b) * 2], fr.verts[static_cast<size_t>(b) * 2 + 1]);
+            edges.push_back(ImVec4(pa.x, pa.y, pb.x, pb.y));
+            yMin = std::min({yMin, pa.y, pb.y});
+            yMax = std::max({yMax, pa.y, pb.y});
+          }
+        }
+        if (edges.empty())
+          continue;
+        yMin = std::max(yMin, imgPos.y);
+        yMax = std::min(yMax, imgPos.y + avail.y);
+        std::vector<float> xs;
+        for (float y = std::floor(yMin) + 0.5f; y < yMax; y += 1.f) {
+          xs.clear();
+          for (const ImVec4& e : edges) {
+            const float y0 = e.y, y1 = e.w;
+            if ((y >= y0 && y < y1) || (y >= y1 && y < y0))
+              xs.push_back(e.x + (y - y0) * (e.z - e.x) / (y1 - y0));
+          }
+          if (xs.size() < 2)
+            continue;
+          std::sort(xs.begin(), xs.end());
+          for (size_t s = 0; s + 1 < xs.size(); s += 2)  // even-odd: fill between consecutive crossing pairs
+            sdl->AddRectFilled(ImVec2(xs[s], y - 0.5f), ImVec2(xs[s + 1], y + 0.5f), fillCol);
         }
       }
+      for (size_t i = 0; i + 5 < L.paperLines.size(); i += 6) {
+        const int idx = static_cast<int>(i / 6);
+        const bool sel = isPaperSel(PaperEntityRef::Type::Line, idx);
+        sdl->AddLine(w2s(L.paperLines[i], L.paperLines[i + 1]), w2s(L.paperLines[i + 3], L.paperLines[i + 4]),
+                     paperCol(sel, PaperEntityRef::Type::Line, idx), paperWid(sel, PaperEntityRef::Type::Line, idx));
+      }
+      // Circles / arcs / ellipses / polylines (REQ-038, ADR-013), paper inches → screen via w2s (handles the
+      // y-flip), so arcs/ellipses are tessellated through w2s rather than ImGui's screen-space PathArcTo.
+      auto strokePaperPath = [&](const std::vector<ImVec2>& pts, bool closed, ImU32 col, float th) {
+        for (size_t k = 0; k + 1 < pts.size(); ++k)
+          sdl->AddLine(pts[k], pts[k + 1], col, th);
+        if (closed && pts.size() >= 2)
+          sdl->AddLine(pts.back(), pts.front(), col, th);
+      };
+      for (size_t ci = 0; ci + 2 < L.paperCircles.size(); ci += 3) {
+        const int idx = static_cast<int>(ci / 3);
+        const bool sel = isPaperSel(PaperEntityRef::Type::Circle, idx);
+        sdl->AddCircle(w2s(L.paperCircles[ci], L.paperCircles[ci + 1]), L.paperCircles[ci + 2] * pxPerPaperIn,
+                       paperCol(sel, PaperEntityRef::Type::Circle, idx), 0, paperWid(sel, PaperEntityRef::Type::Circle, idx));
+      }
+      for (size_t ai = 0; ai < L.paperArcs.size(); ++ai) {
+        const int idx = static_cast<int>(ai);
+        const bool sel = isPaperSel(PaperEntityRef::Type::Arc, idx);
+        const CadArc& a = L.paperArcs[ai];
+        constexpr int kSeg = 48;
+        std::vector<ImVec2> pts;
+        pts.reserve(kSeg + 1);
+        for (int s = 0; s <= kSeg; ++s) {
+          const float t = a.startRad + a.sweepRad * (static_cast<float>(s) / kSeg);
+          pts.push_back(w2s(a.cx + a.r * std::cos(t), a.cy + a.r * std::sin(t)));
+        }
+        strokePaperPath(pts, false, paperCol(sel, PaperEntityRef::Type::Arc, idx), paperWid(sel, PaperEntityRef::Type::Arc, idx));
+      }
+      for (size_t ei = 0; ei < L.paperEllipses.size(); ++ei) {
+        const int idx = static_cast<int>(ei);
+        const bool sel = isPaperSel(PaperEntityRef::Type::Ellipse, idx);
+        const CadEllipse& e = L.paperEllipses[ei];
+        const float mnx = -e.majVy * e.ratio, mny = e.majVx * e.ratio;  // minor axis = perp(major) × ratio
+        constexpr int kSeg = 64;
+        std::vector<ImVec2> pts;
+        pts.reserve(kSeg);
+        for (int s = 0; s < kSeg; ++s) {
+          const float t = 6.2831853f * (static_cast<float>(s) / kSeg);
+          const float ct = std::cos(t), stt = std::sin(t);
+          pts.push_back(w2s(e.cx + e.majVx * ct + mnx * stt, e.cy + e.majVy * ct + mny * stt));
+        }
+        strokePaperPath(pts, true, paperCol(sel, PaperEntityRef::Type::Ellipse, idx), paperWid(sel, PaperEntityRef::Type::Ellipse, idx));
+      }
+      const int nPaperPoly = static_cast<int>(L.paperPolyOffsets.size()) - 1;
+      for (int pi = 0; pi < nPaperPoly; ++pi) {
+        const bool sel = isPaperSel(PaperEntityRef::Type::Polyline, pi);
+        const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+        const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+        std::vector<ImVec2> pts;
+        pts.reserve(static_cast<size_t>(std::max(0, v1 - v0)));
+        for (int vi = v0; vi < v1; ++vi)
+          pts.push_back(w2s(L.paperPolyVerts[static_cast<size_t>(vi * 3)], L.paperPolyVerts[static_cast<size_t>(vi * 3 + 1)]));
+        const bool closed = static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)];
+        strokePaperPath(pts, closed, paperCol(sel, PaperEntityRef::Type::Polyline, pi), paperWid(sel, PaperEntityRef::Type::Polyline, pi));
+      }
+      ImFont* paperFont = ImGui::GetFont();
+      // Draw a paper text/mtext entity with its real typeface + styling (REQ-038): SHX stroke fonts render
+      // from the .shx file, TrueType via FontReg (faux bold/italic), MTEXT via the rich wrapper. Height scales
+      // with zoom (plotted inches × px/inch), clamped [1, max] so it tracks the sheet instead of a fixed floor.
+      auto drawPaperText = [&](const CadAnnotation& a, bool sel, bool hover) {
+        if (a.text.empty())
+          return;
+        const ImU32 col = sel ? kPaperSelCol : (hover ? kPaperHoverCol : kPaperGeomCol);
+        const ImVec2 p = w2s(a.insX, a.insY);  // insertion ≈ bottom-left
+        if (a.kind == CadAnnotation::Kind::Mtext) {
+          const float hPx = std::clamp(a.plottedHeightInches * pxPerPaperIn, 1.f, cmd.viewportMtextMaxPx);
+          const ImVec2 tl = w2s(a.boxMinX, a.boxMaxY);   // top-left of the MTEXT box
+          const ImVec2 brc = w2s(a.boxMaxX, a.boxMinY);  // bottom-right
+          // Honor MTEXT attachment (group 71): col 0/1/2 = left/center/right, row 0/1/2 = top/middle/bottom.
+          const int acol = (a.mtextAttach - 1) % 3;
+          const int arow = (a.mtextAttach - 1) / 3;
+          float pw = 8.f, ph = hPx * 1.22f;
+          MtextRichNaturalContentPx(paperFont, hPx, a.text, &pw, &ph, a.fontFamily);
+          float drawX = tl.x + 4.f, drawY = tl.y + 4.f;
+          if (acol == 1)      drawX = tl.x + 0.5f * ((brc.x - tl.x) - pw);
+          else if (acol == 2) drawX = std::max(tl.x + 4.f, brc.x - pw - 4.f);
+          if (arow == 1)      drawY = tl.y + 0.5f * ((brc.y - tl.y) - ph);
+          else if (arow == 2) drawY = std::max(tl.y + 4.f, brc.y - ph - 4.f);
+          float wrapPx = std::max(8.f, (brc.x - tl.x) - 8.f);
+          if (acol != 0)
+            wrapPx = std::max(pw, 8.f);
+          Shx::Font* sfm = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+          sdl->PushClipRect(tl, brc, true);
+          if (sfm && sfm->valid()) {
+            // SHX MTEXT: flatten the rich wire, split on hard newlines, stroke each line (mirrors model).
+            const std::string plain = MtextRichFlattenToPlain(a.text);
+            const bool underline = a.text.find("[[u]]") != std::string::npos;
+            const float lineH = hPx * 1.4f;
+            const float thick = std::max(1.f, hPx * 0.05f);
+            std::vector<std::string> lines;
+            {
+              std::string ln;
+              for (char ch : plain) {
+                if (ch == '\n') { lines.push_back(ln); ln.clear(); }
+                else ln += ch;
+              }
+              lines.push_back(ln);
+            }
+            float ly = drawY;
+            for (const std::string& ln : lines) {
+              const float w = Shx::MeasureWidthPx(*sfm, ln, hPx);
+              float lx = drawX;
+              if (acol == 1)      lx = tl.x + 0.5f * ((brc.x - tl.x) - w);
+              else if (acol == 2) lx = std::max(tl.x + 4.f, brc.x - w - 4.f);
+              const ImVec2 base(lx, ly + hPx);
+              Shx::DrawText(sdl, *sfm, base, hPx, 0.f, col, ln, thick);
+              if (underline) {
+                const float uy = base.y + std::max(1.5f, hPx * 0.12f);
+                sdl->AddLine(ImVec2(lx, uy), ImVec2(lx + w, uy), col, thick);
+              }
+              ly += lineH;
+            }
+          } else {
+            MtextRichDrawWrapped(sdl, paperFont, hPx, ImVec2(drawX, drawY), wrapPx, col, a.text, a.fontFamily);
+          }
+          sdl->PopClipRect();
+          if (sel)
+            sdl->AddRect(tl, brc, kPaperSelCol, 0.f, 0, 1.f);
+          return;
+        }
+        // Single-line TEXT: the model treats the insertion point as TOP-left (SHX baseline one cap-height down,
+        // ImGui AddText from the top-left). Match it so pasted TEXT lands in its row instead of on the rule.
+        const float hPx = std::clamp(a.plottedHeightInches * pxPerPaperIn, 1.f, cmd.viewportTextMaxPx);
+        Shx::Font* sf = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+        if (sf && sf->valid()) {
+          const float thick = std::max(1.f, hPx * 0.05f);
+          const ImVec2 base(p.x, p.y + hPx);  // p = top-left; baseline sits one cap-height below
+          Shx::DrawText(sdl, *sf, base, hPx, -a.rotationRad, col, a.text, thick);
+          if (a.underline) {
+            const float w = Shx::MeasureWidthPx(*sf, a.text, hPx);
+            const float uy = base.y + std::max(1.5f, hPx * 0.12f);
+            sdl->AddLine(ImVec2(base.x, uy), ImVec2(base.x + w, uy), col, thick);
+          }
+          if (sel) {
+            const float w = Shx::MeasureWidthPx(*sf, a.text, hPx);
+            sdl->AddRect(p, ImVec2(p.x + std::max(w, hPx * 0.6f), p.y + hPx), kPaperSelCol, 0.f, 0, 1.f);
+          }
+          return;
+        }
+        bool realBold = false, realItalic = false;
+        ImFont* tf = a.fontFamily.empty() ? paperFont
+                                          : FontReg::Resolve(a.fontFamily, a.bold, a.italic, &realBold, &realItalic);
+        if (!tf)
+          tf = paperFont;
+        const ImVec2 tp = p;  // insertion = top-left (matches model AddText)
+        const ImVec2 ext = tf->CalcTextSizeA(hPx, FLT_MAX, 0.f, a.text.c_str());
+        if (a.bold && !realBold) {
+          sdl->AddText(tf, hPx, ImVec2(tp.x + 0.6f, tp.y), col, a.text.c_str());
+          sdl->AddText(tf, hPx, ImVec2(tp.x - 0.6f, tp.y), col, a.text.c_str());
+        }
+        if (a.italic && !realItalic)
+          sdl->AddText(tf, hPx, ImVec2(tp.x + 0.4f, tp.y), col, a.text.c_str());
+        sdl->AddText(tf, hPx, tp, col, a.text.c_str());
+        if (a.underline) {
+          const float uy = tp.y + ext.y - std::max(1.f, hPx * 0.07f);
+          sdl->AddLine(ImVec2(tp.x, uy), ImVec2(tp.x + ext.x, uy), col, std::max(1.f, hPx * 0.06f));
+        }
+        if (sel)
+          sdl->AddRect(tp, ImVec2(tp.x + std::max(ext.x, hPx * 0.6f), tp.y + ext.y), kPaperSelCol, 0.f, 0, 1.f);
+      };
+      for (size_t ti = 0; ti < L.paperTexts.size(); ++ti)
+        drawPaperText(L.paperTexts[ti], isPaperSel(PaperEntityRef::Type::Text, static_cast<int>(ti)),
+                      isPaperHover(PaperEntityRef::Type::Text, static_cast<int>(ti)));
     }
     const float curPX = static_cast<float>(worldLeft + (mx / std::max(avail.x, 1.f)) * (worldRight - worldLeft));
     const float curPY = static_cast<float>(worldTop - (my / std::max(avail.y, 1.f)) * (worldTop - worldBottom));
@@ -7455,6 +8327,68 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       sdl->AddRect(ImVec2(g.x - 5.f, g.y - 5.f), ImVec2(g.x + 5.f, g.y + 5.f), IM_COL32(120, 220, 120, 255), 0.f,
                    0, 1.5f);
     }
+    // Paper-space PASTE preview (REQ-038): ghost the clipboard at the (snapped) cursor before the placing click.
+    if (!InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::Paste &&
+        cmd.modifyPhase == AppCommandState::ModifyPhase::NeedDestination && hovered && !cmd.clipboard.empty()) {
+      const float gdx = snapCurPX - cmd.clipboard.basePtX;
+      const float gdy = snapCurPY - cmd.clipboard.basePtY;
+      const float pxPerPaperIn2 = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
+      const ImU32 ghost = IM_COL32(59, 130, 246, 210);
+      const CadClipboard& cb = cmd.clipboard;
+      for (size_t i = 0; i + 5 < cb.lines.size(); i += 6)
+        sdl->AddLine(w2s(cb.lines[i] + gdx, cb.lines[i + 1] + gdy), w2s(cb.lines[i + 3] + gdx, cb.lines[i + 4] + gdy),
+                     ghost, 1.4f);
+      for (size_t i = 0; i + 2 < cb.circles.size(); i += 3)
+        sdl->AddCircle(w2s(cb.circles[i] + gdx, cb.circles[i + 1] + gdy), cb.circles[i + 2] * pxPerPaperIn2, ghost, 0, 1.4f);
+      for (const CadArc& a : cb.arcs) {
+        constexpr int kSeg = 40;
+        ImVec2 prev{};
+        for (int s = 0; s <= kSeg; ++s) {
+          const float t = a.startRad + a.sweepRad * (static_cast<float>(s) / kSeg);
+          const ImVec2 p = w2s(a.cx + a.r * std::cos(t) + gdx, a.cy + a.r * std::sin(t) + gdy);
+          if (s > 0)
+            sdl->AddLine(prev, p, ghost, 1.4f);
+          prev = p;
+        }
+      }
+      for (const CadEllipse& e : cb.ellipses) {
+        const float mnx = -e.majVy * e.ratio, mny = e.majVx * e.ratio;
+        constexpr int kSeg = 56;
+        ImVec2 first{}, prev{};
+        for (int s = 0; s < kSeg; ++s) {
+          const float t = 6.2831853f * (static_cast<float>(s) / kSeg);
+          const ImVec2 p = w2s(e.cx + e.majVx * std::cos(t) + mnx * std::sin(t) + gdx,
+                               e.cy + e.majVy * std::cos(t) + mny * std::sin(t) + gdy);
+          if (s == 0)
+            first = p;
+          else
+            sdl->AddLine(prev, p, ghost, 1.4f);
+          prev = p;
+        }
+        sdl->AddLine(prev, first, ghost, 1.4f);
+      }
+      const int nGhostPoly = static_cast<int>(cb.polyOffsets.size()) - 1;
+      for (int pi = 0; pi < nGhostPoly; ++pi) {
+        const int v0 = cb.polyOffsets[static_cast<size_t>(pi)];
+        const int v1 = cb.polyOffsets[static_cast<size_t>(pi + 1)];
+        for (int vi = v0; vi + 1 < v1; ++vi)
+          sdl->AddLine(w2s(cb.polyVerts[static_cast<size_t>(vi * 3)] + gdx, cb.polyVerts[static_cast<size_t>(vi * 3 + 1)] + gdy),
+                       w2s(cb.polyVerts[static_cast<size_t>(vi * 3 + 3)] + gdx, cb.polyVerts[static_cast<size_t>(vi * 3 + 4)] + gdy),
+                       ghost, 1.4f);
+        if (static_cast<size_t>(pi) < cb.polyClosed.size() && cb.polyClosed[static_cast<size_t>(pi)] && v1 - v0 >= 2)
+          sdl->AddLine(w2s(cb.polyVerts[static_cast<size_t>((v1 - 1) * 3)] + gdx, cb.polyVerts[static_cast<size_t>((v1 - 1) * 3 + 1)] + gdy),
+                       w2s(cb.polyVerts[static_cast<size_t>(v0 * 3)] + gdx, cb.polyVerts[static_cast<size_t>(v0 * 3 + 1)] + gdy),
+                       ghost, 1.4f);
+      }
+      ImFont* pf = ImGui::GetFont();
+      for (const CadAnnotation& a : cb.annotations) {
+        if ((a.kind != CadAnnotation::Kind::Text && a.kind != CadAnnotation::Kind::Mtext) || a.text.empty())
+          continue;
+        const float hPx = std::clamp(a.plottedHeightInches * pxPerPaperIn2, 1.f, cmd.viewportTextMaxPx);
+        const ImVec2 p = w2s(a.insX + gdx, a.insY + gdy);
+        sdl->AddText(pf, hPx, ImVec2(p.x, p.y - hPx), ghost, a.text.c_str());
+      }
+    }
     // Paper-entity MOVE/COPY ghost + ROTATE preview (REQ-037): selected geometry transformed by the cursor.
     if (!cmd.selectedPaperEntities.empty() && hovered && (cmd.paperMovePhase == 2 || cmd.paperRotatePhase == 2)) {
       const ImU32 ghostCol = (cmd.paperMovePhase == 2 && cmd.paperMoveIsCopy) ? IM_COL32(120, 220, 120, 220)
@@ -7469,15 +8403,72 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           return w2s(bX + (x - bX) * ca - (y - bY) * sa, bY + (x - bX) * sa + (y - bY) * ca);
         return w2s(x + dX, y + dY);
       };
+      const float pxPerPaperInG = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
       for (const PaperEntityRef& r : cmd.selectedPaperEntities) {
-        if (r.type == PaperEntityRef::Type::Line) {
+        switch (r.type) {
+        case PaperEntityRef::Type::Line: {
           const size_t i = static_cast<size_t>(r.index) * 6;
           if (i + 5 < L.paperLines.size())
             sdl->AddLine(xf(L.paperLines[i], L.paperLines[i + 1]), xf(L.paperLines[i + 3], L.paperLines[i + 4]),
                          ghostCol, 1.5f);
-        } else if (r.index >= 0 && static_cast<size_t>(r.index) < L.paperTexts.size()) {
-          const CadAnnotation& a = L.paperTexts[static_cast<size_t>(r.index)];
-          sdl->AddCircleFilled(xf(a.insX, a.insY), 3.f, ghostCol);
+          break;
+        }
+        case PaperEntityRef::Type::Circle: {
+          const size_t i = static_cast<size_t>(r.index) * 3;
+          if (i + 2 < L.paperCircles.size())
+            sdl->AddCircle(xf(L.paperCircles[i], L.paperCircles[i + 1]), L.paperCircles[i + 2] * pxPerPaperInG,
+                           ghostCol, 0, 1.5f);
+          break;
+        }
+        case PaperEntityRef::Type::Arc: {
+          if (r.index >= 0 && static_cast<size_t>(r.index) < L.paperArcs.size()) {
+            const CadArc& a = L.paperArcs[static_cast<size_t>(r.index)];
+            ImVec2 prev{};
+            for (int sgi = 0; sgi <= 40; ++sgi) {
+              const float t = a.startRad + a.sweepRad * (static_cast<float>(sgi) / 40.f);
+              const ImVec2 p = xf(a.cx + a.r * std::cos(t), a.cy + a.r * std::sin(t));
+              if (sgi > 0)
+                sdl->AddLine(prev, p, ghostCol, 1.5f);
+              prev = p;
+            }
+          }
+          break;
+        }
+        case PaperEntityRef::Type::Ellipse: {
+          if (r.index >= 0 && static_cast<size_t>(r.index) < L.paperEllipses.size()) {
+            const CadEllipse& e = L.paperEllipses[static_cast<size_t>(r.index)];
+            const float mnx = -e.majVy * e.ratio, mny = e.majVx * e.ratio;
+            ImVec2 first{}, prev{};
+            for (int sgi = 0; sgi < 56; ++sgi) {
+              const float t = 6.2831853f * (static_cast<float>(sgi) / 56.f);
+              const ImVec2 p = xf(e.cx + e.majVx * std::cos(t) + mnx * std::sin(t),
+                                  e.cy + e.majVy * std::cos(t) + mny * std::sin(t));
+              if (sgi == 0) first = p; else sdl->AddLine(prev, p, ghostCol, 1.5f);
+              prev = p;
+            }
+            sdl->AddLine(prev, first, ghostCol, 1.5f);
+          }
+          break;
+        }
+        case PaperEntityRef::Type::Polyline: {
+          const int pi = r.index;
+          if (pi >= 0 && static_cast<size_t>(pi + 1) < L.paperPolyOffsets.size()) {
+            const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+            const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+            for (int vi = v0; vi + 1 < v1; ++vi)
+              sdl->AddLine(xf(L.paperPolyVerts[static_cast<size_t>(vi * 3)], L.paperPolyVerts[static_cast<size_t>(vi * 3 + 1)]),
+                           xf(L.paperPolyVerts[static_cast<size_t>(vi * 3 + 3)], L.paperPolyVerts[static_cast<size_t>(vi * 3 + 4)]),
+                           ghostCol, 1.5f);
+          }
+          break;
+        }
+        case PaperEntityRef::Type::Text: {
+          if (r.index >= 0 && static_cast<size_t>(r.index) < L.paperTexts.size()) {
+            const CadAnnotation& a = L.paperTexts[static_cast<size_t>(r.index)];
+            sdl->AddCircleFilled(xf(a.insX, a.insY), 3.f, ghostCol);
+          }
+          break;
+        }
         }
       }
       if (rotating)
@@ -7608,7 +8599,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       (cmd.active == AK::DimAligned || cmd.active == AK::DimLinear) && cmd.dimPhase == ADP::WaitDimLinePt &&
       outCursorX && outCursorY;
 
-  if (!cmd.cadAnnotations.empty() || !transformAnnPreviews.empty() || showMtextCmdDraft || showDimCmdDraft) {
+  // Model annotations live in MODEL coordinates; draw them only when the model is the active canvas (model
+  // space or floating model space). In a paper layout the canvas is the sheet (paper inches), so drawing
+  // model text here would paint it at local-coord positions on the sheet — the stray "artifacts" bug (REQ-038).
+  const bool modelAnnotationsVisible = modelSpace || InFloatingModelSpace(cmd);
+  if (modelAnnotationsVisible &&
+      (!cmd.cadAnnotations.empty() || !transformAnnPreviews.empty() || showMtextCmdDraft || showDimCmdDraft)) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     auto worldToScreen = [&](float wx, float wy, ImVec2* out) {
       const double denx = worldRight - worldLeft + 1e-12;
@@ -7980,6 +8976,83 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
     }
 
+    // Screen rect that hugs a rendered annotation glyph. For single-line TEXT we mirror the renderer's
+    // anchor exactly (top-left = worldToScreen(insX,insY), height = the same clamped fontPx, width = the
+    // measured glyph width) so the highlight tracks the visible glyph regardless of rough-bounds estimates.
+    // For MTEXT the box (boxMin/boxMax) already bounds the wrapped text.
+    auto annScreenRect = [&](const CadAnnotation& a, ImVec2* rmin, ImVec2* rmax) {
+      if (a.kind == CadAnnotation::Kind::Mtext) {
+        ImVec2 sa{}, sb{};
+        worldToScreen(a.boxMinX, a.boxMinY, &sa);
+        worldToScreen(a.boxMaxX, a.boxMaxY, &sb);
+        rmin->x = std::min(sa.x, sb.x);
+        rmin->y = std::min(sa.y, sb.y);
+        rmax->x = std::max(sa.x, sb.x);
+        rmax->y = std::max(sa.y, sb.y);
+        return;
+      }
+      const float hW = CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch);
+      const float fpx = std::clamp(hW / std::max(worldPerPxY, 1.e-6f), 1.f, cmd.viewportTextMaxPx);
+      ImVec2 sp{};
+      worldToScreen(a.insX, a.insY, &sp);
+      float tw = 0.f;
+      Shx::Font* sf = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+      if (sf && sf->valid()) {
+        tw = Shx::MeasureWidthPx(*sf, a.text, fpx);
+      } else {
+        bool rb = false, ri = false;
+        ImFont* tf = a.fontFamily.empty() ? font : FontReg::Resolve(a.fontFamily, a.bold, a.italic, &rb, &ri);
+        if (!tf) tf = font;
+        tw = tf->CalcTextSizeA(fpx, FLT_MAX, 0.f, a.text.c_str()).x;
+      }
+      rmin->x = sp.x;
+      rmin->y = sp.y;
+      rmax->x = sp.x + std::max(tw, 4.f);
+      rmax->y = sp.y + fpx;
+    };
+
+    // Selected single-line TEXT: a selection rectangle around the glyph so the selection is visible (parity
+    // with MTEXT above). Grips/grip-drag for single-line TEXT are deferred to the grip phase.
+    for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
+      const CadAnnotation& a = cmd.cadAnnotations[ai];
+      if (a.kind != CadAnnotation::Kind::Text || !isAnnSelected(ai))
+        continue;
+      ImVec2 rmin{}, rmax{};
+      annScreenRect(a, &rmin, &rmax);
+      dl->AddRect(ImVec2(rmin.x - 1.f, rmin.y - 1.f), ImVec2(rmax.x + 1.f, rmax.y + 1.f), kAnnSelCol, 0.f, 0, 2.f);
+    }
+
+    // TEMP DEBUG (REQ-039): draw the actual PickCadAnnotationAt rough-bounds region in red for every TEXT,
+    // so we can see where detection believes the glyph is vs where it renders (blue). Remove after diagnosis.
+    for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
+      const CadAnnotation& a = cmd.cadAnnotations[ai];
+      if (a.kind != CadAnnotation::Kind::Text)
+        continue;
+      float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
+      CadAnnotationRoughBounds(a, cmd.modelUnitsPerPlottedInch, &mnX, &mnY, &mxX, &mxY);
+      ImVec2 sa{}, sb{};
+      worldToScreen(mnX, mnY, &sa);
+      worldToScreen(mxX, mxY, &sb);
+      dl->AddRect(ImVec2(std::min(sa.x, sb.x), std::min(sa.y, sb.y)),
+                  ImVec2(std::max(sa.x, sb.x), std::max(sa.y, sb.y)), IM_COL32(255, 60, 60, 255), 0.f, 0, 1.5f);
+    }
+
+    // Hover pre-highlight for text annotations (idle, not selected) — mirrors the paper-space hover (REQ-039).
+    if (cmd.viewportHoverEntityValid &&
+        cmd.viewportHoverEntity.type == SelectedEntity::Type::Annotation) {
+      const int hi = cmd.viewportHoverEntity.index;
+      if (hi >= 0 && static_cast<size_t>(hi) < cmd.cadAnnotations.size() &&
+          !isAnnSelected(static_cast<size_t>(hi))) {
+        const CadAnnotation& ha = cmd.cadAnnotations[static_cast<size_t>(hi)];
+        if (ha.kind == CadAnnotation::Kind::Text || ha.kind == CadAnnotation::Kind::Mtext) {
+          ImVec2 rmin{}, rmax{};
+          annScreenRect(ha, &rmin, &rmax);
+          dl->AddRect(ImVec2(rmin.x - 2.f, rmin.y - 2.f), ImVec2(rmax.x + 2.f, rmax.y + 2.f),
+                      IM_COL32(130, 180, 240, 200), 0.f, 0, 1.4f);
+        }
+      }
+    }
+
     for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
       const CadAnnotation& a = cmd.cadAnnotations[ai];
       if ((a.kind != CadAnnotation::Kind::DimAligned && a.kind != CadAnnotation::Kind::DimLinear) ||
@@ -8019,7 +9092,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     dlHov->AddCircle(cH, std::max(rPxH, 4.f), IM_COL32(100, 215, 255, 230), 48, 2.25f);
   }
 
-  if (!cmd.surveyPoints.empty() && cmd.surveyPointShowIdInViewport) {
+  if (modelAnnotationsVisible && !cmd.surveyPoints.empty() && cmd.surveyPointShowIdInViewport) {
+    // Survey points are model-only (ADR-009); their IDs use model coordinates, so only label them on the
+    // model canvas — never paint them onto a paper sheet at local-coord positions (REQ-038 artifact fix).
     ImDrawList* dlS = ImGui::GetWindowDrawList();
     const float worldPerPxYL = (worldTop - worldBottom) / std::max(avail.y, 1.f);
     const float hWorldL =
@@ -8193,56 +9268,52 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     ImGui::Dummy(ImVec2(0.f, 4.f));
 
     if (pointEntry) {
-      // Two live coordinate fields: track the crosshair's world X/Y at the display
-      // precision until the user types into a field (which locks it). Tab switches
-      // fields; Enter (or a viewport click) commits. REQ-024.
+      // Single live coordinate field: tracks the crosshair's world X,Y at the
+      // display precision until the user types (which locks it). The field accepts
+      // absolute "x,y", relative "@dx,dy", bearings, distances, or any other input
+      // ProcessCommandLineSubmit understands. Enter — or a viewport click —
+      // commits. REQ-024.
       double liveWx = 0.0, liveWy = 0.0;
       if (outCursorX && outCursorY)
         CadCoord::WorldFromLocal(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &liveWx,
                                  &liveWy);
 
-      static char dxBuf[64] = {0}, dyBuf[64] = {0};
-      static bool xLocked = false, yLocked = false;
-      if (promptChanged) { xLocked = false; yLocked = false; }
+      static char dynBuf[160] = {0};
+      static bool dynLocked = false;
+      if (promptChanged) dynLocked = false;
 
       const int prec = cmd.displayLinearPrecision;
-      if (!xLocked) std::snprintf(dxBuf, sizeof(dxBuf), "%s", FormatLinear(liveWx, prec).c_str());
-      if (!yLocked) std::snprintf(dyBuf, sizeof(dyBuf), "%s", FormatLinear(liveWy, prec).c_str());
+      if (!dynLocked)
+        std::snprintf(dynBuf, sizeof(dynBuf), "%s,%s", FormatLinear(liveWx, prec).c_str(),
+                      FormatLinear(liveWy, prec).c_str());
 
-      const float fieldW = std::clamp(120.f * io.FontGlobalScale, 84.f, 220.f);
-      const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue;
-
-      const ImGuiID idX = ImGui::GetID("##dynX");
-      const ImGuiID idY = ImGui::GetID("##dynY");
+      const ImGuiID idDyn = ImGui::GetID("##dynPt");
       const ImGuiID activeId = ImGui::GetActiveID();
 
-      // Type-to-start: the first keystroke with neither field focused begins entry
-      // in X immediately — clear the live value, capture the typed char, then lock
-      // and focus X. (Without seeding, ImGui's first key only grabs focus, so it
-      // took two presses to start typing.)
-      if (activeId != idX && activeId != idY && !io.WantTextInput && io.InputQueueCharacters.Size > 0) {
-        dxBuf[0] = '\0';
-        xLocked = true;
-        RouteQueuedCharsToCmdBuf(dxBuf, static_cast<int>(sizeof(dxBuf)), io);
-        ImGui::SetKeyboardFocusHere();  // focus X (the next item)
+      // Type-to-start: the first keystroke with the field unfocused begins fresh
+      // entry immediately — clear the live value, capture the typed char, then lock
+      // and focus the field. (Without seeding, ImGui's first key only grabs focus,
+      // so it took two presses to start typing.)
+      if (activeId != idDyn && !io.WantTextInput && io.InputQueueCharacters.Size > 0) {
+        dynBuf[0] = '\0';
+        dynLocked = true;
+        RouteQueuedCharsToCmdBuf(dynBuf, static_cast<int>(sizeof(dynBuf)), io);
+        ImGui::SetKeyboardFocusHere();
       }
 
+      const float fieldW = std::clamp(240.f * io.FontGlobalScale, 160.f, 360.f);
+      // CallbackAlways + CommandLineInputCallback collapses the select-all ImGui
+      // applies when SetKeyboardFocusHere takes the field — otherwise the seeded
+      // first character stays highlighted and the next keystroke replaces it.
+      const ImGuiInputTextFlags pf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
       ImGui::SetNextItemWidth(fieldW);
-      const bool xEnter = ImGui::InputText("##dynX", dxBuf, sizeof(dxBuf), pf);
-      // Clicking/Tabbing into a field clears its live readout for fresh entry.
-      if (ImGui::IsItemActivated() && !xLocked) { dxBuf[0] = '\0'; xLocked = true; }
-      if (ImGui::IsItemEdited()) xLocked = true;
-      ImGui::SameLine(0.f, 6.f);
-      ImGui::SetNextItemWidth(fieldW);
-      const bool yEnter = ImGui::InputText("##dynY", dyBuf, sizeof(dyBuf), pf);
-      if (ImGui::IsItemActivated() && !yLocked) { dyBuf[0] = '\0'; yLocked = true; }
-      if (ImGui::IsItemEdited()) yLocked = true;
+      const bool dynEnter = ImGui::InputText("##dynPt", dynBuf, sizeof(dynBuf), pf, CommandLineInputCallback);
+      // Clicking into the field clears its live readout for fresh entry.
+      if (ImGui::IsItemActivated() && !dynLocked) { dynBuf[0] = '\0'; dynLocked = true; }
+      if (ImGui::IsItemEdited()) dynLocked = true;
 
-      if (xEnter || yEnter) {
-        char combined[160];
-        std::snprintf(combined, sizeof(combined), "%s,%s", dxBuf, dyBuf);
-        ProcessCommandLineSubmit(combined, static_cast<int>(sizeof(combined)), cmd, log);
-      }
+      if (dynEnter)
+        ProcessCommandLineSubmit(dynBuf, static_cast<int>(sizeof(dynBuf)), cmd, log);
     } else {
       // Single field for non-point prompts (bearing/angle/distance/option/command).
       if (!io.WantTextInput && io.InputQueueCharacters.Size > 0) {

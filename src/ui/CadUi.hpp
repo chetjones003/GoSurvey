@@ -20,7 +20,7 @@ bool CadUiTitleBarLogoQuery(ImTextureID* outTexture, ImVec2* outDimsPx);
 
 /// One-time layout: properties (left), reports (right), command line (bottom), drawing (center). Status toggles
 /// (OSNAP, ORTHO, …) are a separate fixed strip at the bottom of the main work area (see \ref DrawCadStatusBarStrip).
-void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size);
+void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size, bool reserveCommandDock = true);
 
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log);
 /// Ribbon under the menu bar: sectioned icon toolbars (Draw, Modify, View, …) plus a fixed-width layer strip; hover for tooltips.

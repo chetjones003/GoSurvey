@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Debug GoSurvey (Ninja)",
+      "type": "cppvsdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/build/debug/GoSurvey-0.4.0.exe",
+      "args": [],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}/build/debug",
+      "environment": [],
+      "console": "integratedTerminal",
+      "preLaunchTask": "cmake-build-debug"
+    }
+  ]
+}

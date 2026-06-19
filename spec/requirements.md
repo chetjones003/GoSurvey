@@ -318,21 +318,24 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: should
 - Type: functional
 - Statement: When the active command prompt expects a coordinate point, the
-  cursor dynamic-input shows a prompt label plus **two coordinate fields** (X and
-  Y) that continuously display the crosshair's current **world** coordinates at
-  the configured display precision (REQ-020 `displayLinearPrecision`). The active
-  field is highlighted; typing overrides (locks) that field to the typed value;
-  Tab moves between the fields; Enter — or a viewport click — commits the point.
-  Prompts that do not expect a point (bearing/angle/distance/option/command-name
-  entry) keep a single input field. There is no Send button; commit is by Enter
+  cursor dynamic-input shows a prompt label plus a **single coordinate field**
+  that continuously displays the crosshair's current **world** coordinates
+  (`x,y`) at the configured display precision (REQ-020 `displayLinearPrecision`).
+  Typing overrides (locks) the field to the typed value; the field accepts any
+  point input the command line understands — absolute `x,y`, relative `@dx,dy`,
+  bearing/distance, etc. Enter — or a viewport click — commits the point. Prompts
+  that do not expect a point (bearing/angle/distance/option/command-name entry)
+  likewise keep a single input field. There is no Send button; commit is by Enter
   or click.
-- Acceptance: starting LINE shows the "first point" prompt with two boxes that
-  track the cursor's easting/northing; typing locks the X field; Tab focuses Y;
-  Enter commits the shown/typed X,Y and a viewport click still places the point;
-  a non-point prompt (e.g. circle radius, bearing entry) shows a single field.
+- Acceptance: starting LINE shows the "first point" prompt with a single box that
+  tracks the cursor's easting/northing as `x,y`; typing locks the field; entering
+  `@dx,dy` or a bearing/distance places the relative point; Enter commits the
+  shown/typed value and a viewport click still places the point; a non-point
+  prompt (e.g. circle radius, bearing entry) also shows a single field.
 - Owner-layer: UI
 - Status: accepted
-- Revisions: 2026-06-12 — initial.
+- Revisions: 2026-06-12 — initial; 2026-06-19 — single coordinate field instead
+  of two X/Y boxes, so relative/bearing/distance entry works in the same field.
 
 ### REQ-025 — Model and Paper space with layout tabs and a space toggle
 - Purpose: compose a model onto sheets, the way AutoCAD model/paper space works
@@ -537,6 +540,126 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-06-16 — initial (Paper Space Inc 5; SPEC GAP resolution, ADR-009).
 
+### REQ-038 — Clipboard copy/paste within and across model & paper space
+- Purpose: reuse existing geometry — e.g. copy a DXF title block from model space
+  onto a paper-space sheet layout — and duplicate by copy/paste like AutoCAD
+- Priority: should
+- Type: functional
+- Statement: **Ctrl+C** copies the **active space's** current selection (model
+  entities when model/floating-model space is active; the active paper layout's
+  entities when a paper layout is active) into an in-process clipboard. **Ctrl+V**
+  begins an **interactive paste**: a live preview tracks the cursor and a single
+  viewport click places the copied entities **into the currently active space** at
+  the click point. Crossing spaces uses **1:1 raw units** — coordinates transfer
+  verbatim (model local units ↔ paper inches) with **no scale conversion**; this is
+  an explicit, user-initiated coordinate transfer (the sanctioned exception to
+  ADR-009's "no implicit coordinate-space mixing"). Pasted entities become the new
+  active-space selection (immediately editable) and preserve their properties
+  (layer, color, linetype, text style/typeface). Copy/paste works **model→paper,
+  paper→model, and within the same space**. **Ctrl+V with an empty clipboard does
+  nothing** (no crash). Survey points and survey-specific tools remain model-only.
+  The clipboard is in-memory only (not persisted; DXF persistence of the new paper
+  types stays deferred per the ADR-013 amendment).
+- Acceptance: (1) a model-space selection + Ctrl+C, switch to a paper layout +
+  Ctrl+V shows a cursor-tracking preview and a click places the copies in paper
+  space; (2) the reverse (paper→model) works the same way; (3) same-space copy/paste
+  produces a duplicate placed by click; (4) a copied DXF title block (lines + text,
+  plus any circle/arc) appears on the sheet with geometry intact; (5) pasted entities
+  are the active selection immediately after placement; (6) they keep layer, color,
+  and text style; (7) Ctrl+V with an empty clipboard is a no-op; (8) crossing spaces
+  uses 1:1 raw units (a copied known length transfers numerically unchanged).
+- Owner-layer: Commands / UI / Domain / IO
+- Status: accepted
+- Revisions: 2026-06-17 — initial (clipboard copy/paste across spaces; ADR-013).
+
+### REQ-039 — Paper-space objects have full model-space parity
+- Purpose: paper space is a peer object space, not a second-class one — the user edits a
+  sheet's native geometry with the exact UX they use in model space (the user asked for
+  full parity)
+- Priority: should
+- Type: functional
+- Statement: While a paper layout is the active space and **not** in floating model space,
+  the layout's native paper-space objects (lines, text, circles, arcs, ellipses, polylines —
+  REQ-037/038, ADR-009/013) support the **same** interaction surface as model-space objects:
+  (a) **selection** — single click (Shift to add/toggle) and **window/crossing box** selection
+  using the same left-to-right=window / right-to-left=crossing rule, with hover pre-highlight;
+  (b) **grips** — selected objects show grips whose drag edits geometry, mirroring model grips
+  (line endpoints/midpoint, circle center/quadrants, arc, ellipse, polyline vertices, text
+  insertion); (c) the **Properties panel** shows and **edits** the selected paper object(s) —
+  General (layer/color/linetype/lineweight/transparency) and per-type Geometry and Text
+  (contents/height/rotation/style) — the same panel used for model selection; (d) **object
+  snapping** to paper objects; (e) **draw** commands LINE, TEXT, MTEXT, CIRCLE, ARC, ELLIPSE,
+  POLYLINE create into the active layout's paper store (paper inches); (f) **modify** commands
+  MOVE, COPY, ROTATE, SCALE, DELETE, JOIN, TRIM, OFFSET operate on the paper selection.
+  Additionally, **double-clicking a text object opens an in-place editor** to edit its
+  contents — implemented for **both** model space and paper space (the same shared editor).
+  Survey-specific tools (survey points, CSV import) remain **model-only**; paper edits never
+  alter model geometry; coordinates never cross spaces implicitly (REQ-038's 1:1 paste is the
+  one sanctioned exception). Paper-space objects and their edits **persist per layout in the
+  native `.gs`** (REQ-031/037 pattern); DXF persistence of paper objects stays deferred.
+- Acceptance: in a paper layout — (1) a window box (L→R) selects paper objects fully inside it
+  and a crossing box (R→L) selects any it touches, for every paper object type; (2) clicking a
+  paper text selects it with no vertical offset, and double-clicking any text (model or paper)
+  opens an inline editor whose committed text replaces the object's contents; (3) selecting
+  paper object(s) populates the Properties panel and edits made there apply to the object(s);
+  (4) selected paper objects show grips and dragging a grip edits the geometry; (5) CIRCLE,
+  ARC, ELLIPSE, POLYLINE, and MTEXT draw onto the sheet, and SCALE/JOIN/TRIM/OFFSET operate on
+  the paper selection; (6) none of these paper edits change model geometry; (7) a `.gs`
+  round-trip restores the edited paper objects per layout.
+- Owner-layer: UI / Commands / Domain / IO
+- Status: accepted
+- Revisions: 2026-06-18 — initial (paper-space object parity; ADR-014). Delivered incrementally:
+  Phase 1 selection/text-pick/Properties, Phase 2 in-place text editor, Phase 3 grips, Phase 4
+  draw + modify parity.
+
+### REQ-040 — AutoCAD-style floating command line with fading history and an F2 console
+- Purpose: the command line should read and behave like AutoCAD's — a compact
+  floating input over the drawing, a brief glance at recent prompts, and an
+  expandable text console — without sacrificing the existing input affordances
+  (the user asked for this redesign from reference screenshots)
+- Priority: should
+- Type: functional
+- Statement: In addition to the existing dockable "Command line" window (which
+  **remains available** via a toggle), the application provides a **compact
+  floating command bar** overlaid on the drawing area, anchored bottom-center by
+  default, **draggable**, with its on-screen position and visibility **persisted**
+  across sessions (UserPrefs, the `UserPrefs`/`AppCommandState` settings pattern —
+  no new global). The bar carries: a drag grip, a **close (×)** control that hides
+  the bar, a **settings (wrench)** control that opens command-line settings (fade
+  delay, opacity, history-line count), a prompt glyph with a **history dropdown**
+  of recently entered commands, the **command input** (placeholder "Type a
+  command"), and an **expand** control. When hidden, the bar is restored by
+  **Ctrl+9** and/or a View-menu toggle. After commands run, the **last few**
+  (default 3, configurable) command-log lines float **above** the input on
+  semi-transparent backgrounds and **fade out** after a configurable idle delay
+  (default ~4 s). **F2 toggles** an **expanded console** that shows the recent log
+  (default ~15 visible lines, scrollable through the full log) on a near-opaque
+  background and stays until F2 is pressed again. **ESC always cancels the active
+  command** and never closes the console. Console/history text is **selectable and
+  copyable** (replacing the prior "Copy log" button). The redesign **preserves**:
+  the command-name autocomplete popup, the at-crosshair dynamic-cursor input
+  (REQ-024), and the clickable `[A]`/`[2P]` footer hints.
+- Acceptance: (1) on launch a compact floating bar shows at bottom-center with the
+  "Type a command" placeholder, can be dragged, and its position/visibility are
+  restored next session; (2) running commands makes the last ~3 log lines appear
+  above the bar and fade out after the idle delay; (3) F2 expands the console
+  (recent lines, scrollable) and F2 again collapses it; (4) ESC cancels the active
+  command whether or not the console is open; (5) console/history text can be
+  selected with the mouse and copied; (6) × hides the bar and Ctrl+9 (or the menu)
+  restores it; (7) autocomplete, the dynamic-cursor input, and the clickable
+  `[A]`/`[2P]` hints still work; (8) the dockable Command line window is still
+  available.
+- Owner-layer: UI
+- Status: accepted
+- Revisions: 2026-06-19 — initial (floating command bar + fading history + F2
+  console; ADR-015). 2026-06-19 — the active command's hint is the prompt rendered
+  **in the input line** (replacing the placeholder), with `[token]` markers shown as
+  **clickable links** that submit the option (the standard for any command offering
+  keyword options); idle shows a "Type a command" placeholder. 2026-06-19 — the bar is
+  **pinned to the viewport bottom edge** (vertical position locked); the user slides it
+  left/right and resizes its **width** (right-edge grip) and the F2 console **height**
+  (top-edge grip); position/width/console-height persist.
+
 ---
 
 ## Performance requirements
@@ -644,7 +767,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-021 | Domain/UI | `AngleFormatTests` (DD/DMS/Surveyor's, direction/base, default parity) | accepted |
 | REQ-022 | UI/IO | manual (insertion units stored + sampled; survey precision independent) | accepted |
 | REQ-023 | IO | runtime DXF round-trip (survey points reconstructed via XDATA; existing points preserved + merged, id conflict → overwrite/offset prompt; foreign POINT → cross-lines) | accepted |
-| REQ-024 | UI | manual (LINE shows two live coord boxes; type locks X; Tab→Y; Enter/click commits; non-point prompt single field) | accepted |
+| REQ-024 | UI | manual (LINE shows one live coord box tracking x,y; type locks it; @dx,dy / bearing accepted; Enter/click commits; non-point prompt single field) | accepted |
 | REQ-025 | UI/Domain | manual (Model + Paper layout tabs; add/rename/delete; MODEL/PAPER status button toggles) | accepted |
 | REQ-026 | UI/Domain | manual (paper size + orientation render the sheet outline at physical size) | accepted |
 | REQ-027 | UI/Domain/Renderer | manual (≥2 viewports at different scales; create/move/resize/scale) | accepted |
@@ -658,6 +781,9 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-035 | UI/Commands | manual (viewport click/window select + grips; MOVE/COPY/DELETE act on viewports) | accepted |
 | REQ-036 | UI/Commands/Renderer | manual (double-click into viewport edits model through it; leave returns to paper) | accepted |
 | REQ-037 | Domain/UI/Commands/Renderer/IO | manual (draw lines+text on a sheet; move/copy/rotate/delete/snap; not in model or other layouts; .gs round-trip) | accepted |
+| REQ-038 | Commands/UI/Domain/IO | `ClipboardTests` (paste offset per type; paper snap; .gs round-trip of new paper types) + manual (model↔paper, same-space; title block to sheet; pasted = selection; props preserved; empty no-op; 1:1) | accepted |
+| REQ-039 | UI/Commands/Domain/IO | `PaperSpaceTests` (paper text bounds top-left; box-select hit per type) + manual (box-select; double-click text edit model+paper; Properties show/edit; grips; draw/modify parity; no model change; .gs round-trip) | accepted |
+| REQ-040 | UI | `CommandLineTests` (fade-alpha vs elapsed time; recent-tail line selection) + manual (floating bar draggable + position/visibility persist; last ~3 lines fade after idle; F2 toggles console; ESC always cancels; select-to-copy; ×/Ctrl+9 hide/restore; autocomplete + dynamic input + [A]/[2P] preserved; dock still available) | accepted |
 
 ---
 
