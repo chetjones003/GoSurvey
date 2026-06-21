@@ -19,7 +19,10 @@
 
 
 struct SelectedEntity {
-  enum class Type { LineSeg = 0, Circle = 1, Annotation = 2, Polyline = 3, Arc = 4, Ellipse = 5, PdfUnderlay = 6 };
+  enum class Type {
+    LineSeg = 0, Circle = 1, Annotation = 2, Polyline = 3, Arc = 4, Ellipse = 5, PdfUnderlay = 6,
+    FilledRegion = 7  ///< Solid hatch fill (CadFilledRegion) — selectable/editable (REQ-042, ADR-016).
+  };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
 };
@@ -200,6 +203,7 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadFilledRegionAttrs;
   std::vector<SurveyPoint>      surveyPoints;
   std::vector<CadLayerRow>      drawingLayerTable;
+  std::vector<TextStyle>        textStyles;    ///< Named text styles (REQ-044) — undoable so style edits undo.
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<PaperLayout>      paperLayouts;  ///< Paper layouts incl. native paper geometry (REQ-037/038) — undoable.
   double worldDocumentOriginX = 0.0;
@@ -236,6 +240,8 @@ struct DrawingDocument {
   std::vector<SurveyPoint>      surveyPoints;
   std::vector<int>              selectedSurveyPointIndices;
   std::vector<CadLayerRow>      drawingLayerTable;
+  std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
+  std::string                   activeTextStyleName = "Standard";  ///< Style for new TEXT/MTEXT.
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<SelectedEntity>   selection;
   std::vector<PaperLayout>      paperLayouts;            ///< Paper-space layouts (REQ-025); empty = none.
@@ -252,6 +258,13 @@ struct DrawingDocument {
 void SaveDocumentToSnapshot(AppCommandState& cmd, int idx);
 /// Copy \p cmd.documents[idx] back into the active fields of \p cmd.  Cancels any in-progress command.
 void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx);
+
+/// Active text style (REQ-044): the entry in \c st.textStyles named by \c st.activeTextStyleName, falling
+/// back to "Standard"; nullptr only if the table is somehow empty. Used by the dropdown and the create path.
+const TextStyle* ActiveTextStyle(const AppCommandState& st);
+/// Set the active text style and sync the new-text default height to it, so newly drawn TEXT/MTEXT adopt
+/// the style's height through the existing height plumbing (bake-on-write — ADR-020).
+void SetActiveTextStyle(AppCommandState& st, const std::string& name);
 
 // --- Paper space (REQ-025) ---
 /// Append a new paper layout with a unique default name; returns its index.
@@ -360,6 +373,8 @@ struct AppCommandState {
     Paste,
     /// Paper space: create a rectangular viewport by two clicks (REQ-033).
     PaperRectViewport,
+    /// HATCH: pick an internal point; trace the enclosing boundary and fill it (REQ-043).
+    Hatch,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -389,6 +404,7 @@ struct AppCommandState {
     case Kind::Align:         return "ALIGN";
     case Kind::Paste:         return "PASTE";
     case Kind::PaperRectViewport: return "MVIEW";
+    case Kind::Hatch:         return "HATCH";
     default:                  return "";
     }
   }
@@ -679,6 +695,19 @@ struct AppCommandState {
   std::vector<CadFilledRegion> cadFilledRegions;
   std::vector<EntityAttributes> cadFilledRegionAttrs;
 
+  // --- HATCH command (REQ-043) ---
+  /// Boundary loop traced under the cursor while HATCH is active (flat local x,y); valid drives the preview.
+  std::vector<float> hatchPreviewLoop;
+  bool hatchPreviewValid = false;
+  /// Live appearance from the HATCH ribbon (ADR-019). color/transparency/layer apply now; angle/scale are
+  /// stored for the pattern render path (Phase 3). Empty pattern = SOLID.
+  float hatchColorRgb[3] = {0.78f, 0.78f, 0.78f};
+  float hatchTransparency01 = 0.f;
+  std::string hatchLayer;            ///< empty → current layer (MakeNewEntityAttrs default)
+  float hatchAngleDeg = 0.f;
+  float hatchScale = 1.f;
+  std::string hatchPatternName;      ///< "" or "SOLID" = solid fill; e.g. "ANSI31" for a line pattern
+
   // --- Selection (idle box pick + move/copy/rotate) ---
   std::vector<SelectedEntity> selection;
 
@@ -822,9 +851,15 @@ struct AppCommandState {
   bool         qsAppendToExisting = false;
   /// Layer manager (LAYER / ribbon LAY). Rows are synced with geometry-used names.
   bool showLayerManagerWindow = false;
+  /// Text style manager (STYLE / ribbon). Create / rename / delete / edit named text styles (REQ-044).
+  bool showTextStyleManagerWindow = false;
   /// Current layer for new geometry (ribbon combo + command defaults).
   std::string currentLayer = "0";
   std::vector<CadLayerRow> drawingLayerTable;
+  /// Named text styles for this drawing (REQ-044 / ADR-020). "Standard" is always present.
+  std::vector<TextStyle> textStyles;
+  /// Active text style for new TEXT/MTEXT (the STYLE dropdown). Empty resolves to "Standard".
+  std::string activeTextStyleName = "Standard";
   /// Viewport CAD crosshair (Drawing1): RGB 0–1, arm length as fraction of viewport width/height, pickbox half-size in px.
   float viewportCrosshairR = 1.f;
   float viewportCrosshairG = 0.8392157f;
@@ -949,6 +984,11 @@ struct AppCommandState {
   bool surveyImportPreviewDirty = true;
   std::string surveyImportPreviewText;
   std::string surveyImportPreviewValidation;
+  /// REQ-041: a file-level problem (missing/empty/locked/no valid rows) blocks import.
+  bool surveyImportFileBlocked = true;
+  /// REQ-041: rows that would import vs. rows that would be skipped (parse error / duplicate ID).
+  int surveyImportValidRowCount = 0;
+  int surveyImportBadRowCount = 0;
   std::vector<std::pair<std::string, std::string>> surveyReportTabs;
   int surveyReportSelectedTab = 0;
   bool surveyReportSelectLatestPending = false;
@@ -1444,6 +1484,19 @@ void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1
 /// Closest CAD entity within tolerance (later draw order wins on tie). False if none.
 bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float tolWorld, SelectedEntity* out,
                           float* outDistSq);
+/// True if (x,y) is inside the filled region: inside its outer loop (0) and outside every hole loop (REQ-042).
+bool CadFilledRegionContainsPoint(const CadFilledRegion& fr, double x, double y);
+/// HATCH command (REQ-043): begin picking an internal point.
+void StartHatchCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Trace the smallest closed boundary enclosing (wx,wy) from existing model geometry (lines/polylines/arcs/
+/// circles/ellipses). Returns the ordered loop (flat local x,y) or false when no closed region contains it.
+bool CadHatchTraceAt(const AppCommandState& st, double wx, double wy, std::vector<float>* outLoop);
+/// Create a solid filled region from \p loop using the live HATCH appearance; selects it. Caller-agnostic of
+/// the undo snapshot? No — this pushes its own snapshot. Returns false if the loop is degenerate.
+bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std::vector<std::string>& log);
+/// Index of the smallest-area filled region containing (wx,wy), or -1. Lowest pick priority (fills sit under
+/// linework) — the click handler calls this only after geometry/annotation picks miss (REQ-042).
+int PickFilledRegionAt(const AppCommandState& st, double wx, double wy);
 /// World pick tolerance for OFFSET entity selection (geometry scale + screen aperture).
 [[nodiscard]] float CadOffsetEntityPickTolWorld(const AppCommandState& st);
 /// Tight world pick tolerance for the idle hover highlight: fixed small pixel aperture so the cursor must

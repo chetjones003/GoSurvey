@@ -19,6 +19,13 @@
     },
     "currentLayer": "0",
     "defaultPlottedTextHeightInches": 0.125,
+    "activeTextStyleName": "Standard",
+    "textStyles": [
+      {
+        "name": "Standard",
+        "heightInches": 0.125
+      }
+    ],
     "ellAttrs": [],
     "ellipses": [],
     "layers": [

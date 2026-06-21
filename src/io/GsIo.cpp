@@ -1,6 +1,7 @@
 #include "GsIo.hpp"
 
 #include "CadCommands.hpp"
+#include "TextStyle.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
 
@@ -102,6 +103,14 @@ void CadAnnotationToJson(const CadAnnotation& a, json& o) {
   if (a.bold)      o["bold"] = true;
   if (a.italic)    o["italic"] = true;
   if (a.underline) o["underline"] = true;
+  // Text style reference + overrides (REQ-044). Written only when set so older readers/files are unaffected.
+  if (!a.styleName.empty()) o["styleName"] = a.styleName;
+  if (a.obliqueDeg != 0.f)  o["obliqueDeg"] = a.obliqueDeg;
+  if (a.ovFont)    o["ovFont"] = true;
+  if (a.ovHeight)  o["ovHeight"] = true;
+  if (a.ovOblique) o["ovOblique"] = true;
+  if (a.ovBold)    o["ovBold"] = true;
+  if (a.ovItalic)  o["ovItalic"] = true;
   o["dimExt1X"] = a.dimExt1X;
   o["dimExt1Y"] = a.dimExt1Y;
   o["dimExt2X"] = a.dimExt2X;
@@ -135,6 +144,13 @@ CadAnnotation CadAnnotationFromJson(const json& o) {
   a.bold               = o.value("bold",               a.bold);
   a.italic             = o.value("italic",             a.italic);
   a.underline          = o.value("underline",          a.underline);
+  a.styleName          = o.value("styleName",          a.styleName);
+  a.obliqueDeg         = o.value("obliqueDeg",         a.obliqueDeg);
+  a.ovFont             = o.value("ovFont",             a.ovFont);
+  a.ovHeight           = o.value("ovHeight",           a.ovHeight);
+  a.ovOblique          = o.value("ovOblique",          a.ovOblique);
+  a.ovBold             = o.value("ovBold",             a.ovBold);
+  a.ovItalic           = o.value("ovItalic",           a.ovItalic);
   a.dimExt1X           = o.value("dimExt1X",           a.dimExt1X);
   a.dimExt1Y           = o.value("dimExt1Y",           a.dimExt1Y);
   a.dimExt2X           = o.value("dimExt2X",           a.dimExt2X);
@@ -249,6 +265,22 @@ json BuildRoot(const AppCommandState& st) {
   doc["drawingInsUnits"] = st.drawingInsUnits;
   doc["defaultPlottedTextHeightInches"] = st.defaultPlottedTextHeightInches;
   doc["currentLayer"] = st.currentLayer;
+  // Named text styles (REQ-044). Additive — older readers ignore it; no kGsFormatVersion bump.
+  doc["activeTextStyleName"] = st.activeTextStyleName;
+  {
+    json styles = json::array();
+    for (const TextStyle& s : st.textStyles) {
+      json o;
+      o["name"] = s.name;
+      if (!s.fontFamily.empty()) o["fontFamily"] = s.fontFamily;
+      o["heightInches"] = s.heightInches;
+      if (s.obliqueDeg != 0.f) o["obliqueDeg"] = s.obliqueDeg;
+      if (s.bold)   o["bold"] = true;
+      if (s.italic) o["italic"] = true;
+      styles.push_back(std::move(o));
+    }
+    doc["textStyles"] = std::move(styles);
+  }
   // Paper space layouts (REQ-031). Viewports/frozen layers persist in a later increment.
   {
     json layouts = json::array();
@@ -460,6 +492,11 @@ json BuildRoot(const AppCommandState& st) {
     json o;
     o["verts"] = fr.verts;
     o["loops"] = fr.loopStart;
+    if (!fr.patternName.empty()) {  // omit for solid fills so legacy files stay byte-identical (ADR-018)
+      o["pattern"] = fr.patternName;
+      o["patAngle"] = fr.patternAngleDeg;
+      o["patScale"] = fr.patternScale;
+    }
     fills.push_back(std::move(o));
   }
   doc["filledRegions"] = std::move(fills);
@@ -906,6 +943,37 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   else
     st.currentLayer = "0";
 
+  // Named text styles (REQ-044). Read tolerantly: a missing table (older .gs) synthesizes "Standard",
+  // so existing text — which carries no styleName — renders from its own fields, unchanged.
+  const bool hadTextStyles =
+      doc.contains("textStyles") && doc["textStyles"].is_array() && !doc["textStyles"].empty();
+  st.textStyles.clear();
+  if (hadTextStyles) {
+    for (const auto& o : doc["textStyles"]) {
+      TextStyle s;
+      s.name         = o.value("name", std::string());
+      s.fontFamily   = o.value("fontFamily", std::string());
+      s.heightInches = o.value("heightInches", 0.125f);
+      s.obliqueDeg   = o.value("obliqueDeg", 0.f);
+      s.bold         = o.value("bold", false);
+      s.italic       = o.value("italic", false);
+      if (!s.name.empty()) st.textStyles.push_back(std::move(s));
+    }
+  }
+  TextStyles::EnsureStandard(st.textStyles);
+  st.activeTextStyleName = doc.value("activeTextStyleName", std::string(TextStyles::kStandardName));
+  if (!TextStyles::Find(st.textStyles, st.activeTextStyleName))
+    st.activeTextStyleName = TextStyles::kStandardName;
+  // Keep the active style's height and the new-text default height consistent. For an older file (no
+  // table) the synthesized "Standard" inherits the file's default so new-text height is unchanged; for a
+  // file that carries styles the active style drives the new-text height.
+  if (!hadTextStyles) {
+    if (TextStyle* standard = TextStyles::Find(st.textStyles, TextStyles::kStandardName))
+      standard->heightInches = std::max(st.defaultPlottedTextHeightInches, 1.e-6f);
+  } else if (const TextStyle* active = TextStyles::Find(st.textStyles, st.activeTextStyleName)) {
+    st.defaultPlottedTextHeightInches = std::max(active->heightInches, 1.e-6f);
+  }
+
   st.userLinesFlat.clear();
   for (const auto& v : doc["lineVerts"])
     st.userLinesFlat.push_back(v.get<float>());
@@ -967,6 +1035,12 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         if (el.contains("loops"))
           for (const auto& v : el["loops"])
             fr.loopStart.push_back(v.get<int>());
+        if (el.contains("pattern"))  // absent → solid (ADR-018; legacy fills read back as SOLID)
+          fr.patternName = el["pattern"].get<std::string>();
+        if (el.contains("patAngle"))
+          fr.patternAngleDeg = el["patAngle"].get<float>();
+        if (el.contains("patScale"))
+          fr.patternScale = el["patScale"].get<float>();
       } else if (el.is_array()) {
         for (const auto& v : el)
           fr.verts.push_back(v.get<float>());
@@ -1102,6 +1176,7 @@ bool LoadGoSurveyFile(AppCommandState& st, const char* pathUtf8, std::vector<std
     st.surveyPointIdBuffers.clear();
     st.selectedSurveyPointIndices.clear();
     st.drawingLayerTable.clear();
+    st.textStyles.clear();
 
     ApplyDocumentFromJson(st, doc, log);
 

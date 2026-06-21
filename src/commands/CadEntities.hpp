@@ -19,6 +19,19 @@ struct EntityAttributes {
   float transparency = -1.f;
 };
 
+/// A named text style (REQ-044 / ADR-020): reusable font + size + slant + weight applied to TEXT/MTEXT.
+/// Color is intentionally NOT a style property — it stays a layer/object property (AutoCAD-faithful).
+/// The drawing owns a \c std::vector<TextStyle>; each \ref CadAnnotation references one by \c styleName
+/// with per-property override flags (bake-on-write resolution — see TextStyle.hpp).
+struct TextStyle {
+  std::string name;            ///< Unique within the drawing; "Standard" always exists and is not deletable.
+  std::string fontFamily;      ///< "" = app default; a TrueType family ("Arial") or an SHX name ("romans.shx").
+  float heightInches = 0.125f; ///< Plotted text height in inches (model height = this × drawing scale).
+  float obliqueDeg = 0.f;      ///< Slant angle in degrees (>0 shears glyph tops to the right).
+  bool bold = false;
+  bool italic = false;
+};
+
 /// Single-line TEXT, MTEXT box, or aligned linear dimension drawn over the viewport (world coordinates;
 /// for paper-space entities the coordinates are paper inches — see ADR-009).
 struct CadAnnotation {
@@ -42,6 +55,17 @@ struct CadAnnotation {
   bool bold = false;
   bool italic = false;
   bool underline = false;
+  /// Named text style this annotation references (REQ-044 / ADR-020). Empty = no style: the font/height/
+  /// oblique/bold/italic fields resolve from the annotation's own stored values (legacy / DXF-imported
+  /// text, so older drawings render unchanged). Resolution is bake-on-write (see TextStyle.hpp): the
+  /// fields above always hold the effective values, so renderers read them directly.
+  std::string styleName;
+  /// Oblique (slant) angle in degrees — effective value (from the style unless \c ovOblique). SHX strokes
+  /// shear faithfully; TTF approximates (ImGui has no glyph shear).
+  float obliqueDeg = 0.f;
+  /// Per-property override flags: when set, this annotation's own field wins over its style and a style
+  /// edit does not re-bake that property (ADR-020).
+  bool ovFont = false, ovHeight = false, ovOblique = false, ovBold = false, ovItalic = false;
   /// \c Kind::DimAligned / \c DimLinear / \c DimAngular — extension or ray points (on measured geometry).
   float dimExt1X = 0.f, dimExt1Y = 0.f, dimExt2X = 0.f, dimExt2Y = 0.f;
   /// \c Kind::DimAngular — vertex (center) of the measured angle.
@@ -86,6 +110,14 @@ struct CadFilledRegion {
   std::vector<float> verts;      ///< Flat x,y pairs for all loops, concatenated (local storage coordinates).
   std::vector<int>   loopStart;  ///< Pair-index where each loop begins; loopStart[0]==0. Loop k spans
                                  ///< [loopStart[k], loopStart[k+1]) (last loop runs to verts.size()/2).
+  /// Hatch pattern (REQ-043, ADR-018). Empty or "SOLID" → a solid fill (the ADR-011 behaviour). Otherwise a
+  /// line pattern name ("ANSI31", "ANSI37", "NET") rendered as a clipped line family driven by angle + scale.
+  /// Legacy/imported solid fills deserialize with an empty pattern, so they read back as SOLID.
+  std::string patternName;
+  float patternAngleDeg = 0.f;   ///< Extra rotation added to the pattern's base direction(s).
+  float patternScale = 1.f;      ///< Multiplies the line spacing (larger = sparser).
+  /// True when this region is a solid fill (no line pattern).
+  bool isSolid() const { return patternName.empty() || patternName == "SOLID"; }
   /// Vertex (pair) count of loop \p k.
   int loopCount(size_t k) const {
     const int begin = loopStart[k];

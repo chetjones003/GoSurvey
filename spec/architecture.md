@@ -515,3 +515,52 @@ A change is rejected if it breaks any of these:
   even-odd rule, so concave shapes and island holes (e.g. the logo's counters) are correct. Colour resolves
   like the model (`ResolveEntityRgbaForViewport` with the layer row). DXF persistence of paper fills stays
   deferred (.gs only).
+
+### ADR-020 — Document-owned text-style table + bake-on-write resolution with per-property overrides   (2026-06-21, accepted)
+- Context:    REQ-044 adds AutoCAD-style named text styles (font, height, oblique, bold/italic) with a
+  live reference from each text to its style, per-text Properties overrides, an active style for new
+  text, a management dialog, and `.gs` persistence. The font subsystem already exists (ADR-012/012a:
+  `FontReg` TTF + `Shx` strokes; `CadAnnotation` already carries `fontFamily`/`bold`/`italic`/
+  `plottedHeightInches`), but there is **no named-style concept** — a DXF STYLE is flattened onto each
+  text's own font, and the render/measure pipeline reads each annotation's own fields directly in ~12
+  sites. Adding a document-owned style table, a `.gs` format addition, and renderer oblique are new
+  Domain data + ownership + a data-format change → architectural, not a Workshop choice (architecture
+  §3, §10.1 single-owner, §11.4 no speculative types).
+- Decision:   (a) **`TextStyle`** value type (name, fontFamily, heightInches, obliqueDeg, bold, italic)
+  in `CadEntities.hpp` so model and paper text reuse it (no circular include, mirrors the
+  `CadAnnotation`/`EntityAttributes` sharing). The **drawing/document owns** `std::vector<TextStyle>
+  textStyles`, threaded through `DrawingDocument`, the undo `DrawingGeometrySnapshot`, and tab
+  save/restore exactly like `drawingLayerTable`; the **active style name** lives on `AppCommandState`
+  (the settings pattern — no new global). A reserved **"Standard"** style always exists.
+  (b) **`CadAnnotation` gains** `styleName`, `obliqueDeg`, and per-property override flags
+  (`ovFont/ovHeight/ovOblique/ovBold/ovItalic`). An **empty `styleName` resolves from the annotation's
+  own fields** — so legacy/older-file text and DXF-imported text are unchanged.
+  (c) **Bake-on-write** resolution (chosen over resolve-on-read): the annotation's existing fields
+  always hold the **effective** values, so the ~12 render/measure/export sites are **untouched**.
+  Creating text copies the active style's properties into the new annotation; **editing a style
+  re-bakes** every referencing annotation's non-overridden fields from the new style values; a
+  Properties edit sets that property's override flag. A pure, unit-tested helper (the
+  NumFormat/AngleFormat/SurveyCsvValidate precedent) owns resolve/re-bake/ensure-Standard. The live
+  reference (≥2 uses: create + style-edit re-bake + Properties) is a concrete function, not an
+  abstraction (§11.4).
+  (d) **Persistence:** add an additive top-level `textStyles` array and the new annotation fields to
+  the `.gs` JSON, read tolerantly with defaults and **no `kGsFormatVersion` bump**, so older files
+  still load (a missing table synthesizes "Standard"). DXF STYLE-table round-trip is **deferred**.
+  (e) **Oblique rendering:** true shear for SHX stroke text (transform stroke points by
+  `x += y·tan(oblique)`); best-effort/faux for TTF (ImGui has no glyph shear) — a recorded limitation.
+  No new dependency, no new global.
+- Alternatives: (a) **resolve-on-read** (every render site calls a resolver) — rejected: changes a
+  dozen hot/tested sites for no user-visible gain; bake-on-write preserves the live semantic via
+  re-bake at far lower regression risk. (b) **template-only styles** (no live reference) — rejected by
+  the user (they want editing a style to ripple and to override specific text). (c) **color as a style
+  property** — rejected by the user (AutoCAD-faithful: color stays a layer/object property). (d) **a
+  unified cross-space style/entity abstraction** — rejected (§11.4 speculative; per-space stores already
+  chosen in ADR-006/009). (e) **bump the `.gs` version** — rejected: the strict version-equality check
+  (GsIo.cpp) would reject older files; additive tolerant keys keep them loadable (REQ-044 acceptance).
+- Consequences: `TextStyle` + one document-owned vector threaded like `drawingLayerTable`; `CadAnnotation`
+  grows a style ref + override flags + oblique; one pure resolve/re-bake helper reused by create/edit/
+  Properties; `.gs` gains an additive section with no version bump; the renderer learns SHX oblique
+  (faux for TTF). Dangling `styleName` (after a delete) is safe — the resolver treats an unknown style as
+  legacy (own fields); the dialog blocks deleting "Standard"/in-use styles. Delivered incrementally
+  (Phase 1 data model + persistence + active dropdown + create; Phase 2 STYLE dialog + re-bake; Phase 3
+  Properties overrides + oblique) so each slice is independently verifiable.

@@ -447,6 +447,7 @@ int main()
     DrawUnitsDialog(cmd, &cmdLog);
     ImGuiLayout_DrawLayoutPopups(cmd, cmdLog);
     DrawLayerManagerWindow(cmd, &cmdLog);
+    DrawTextStyleManagerWindow(cmd, &cmdLog);
     DrawViewPointsPanel(cmd, cmdLog);
     DrawImportPointsPanel(cmd, cmdLog);
     DrawExportPointsPanel(cmd, cmdLog);

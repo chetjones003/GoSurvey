@@ -660,6 +660,167 @@ requirements is a planning failure, not a sign of rigor.
   left/right and resizes its **width** (right-edge grip) and the F2 console **height**
   (top-edge grip); position/width/console-height persist.
 
+### REQ-041 — Import Points pre-import validation with specific diagnostics
+- Purpose: data integrity and no silent failure for CSV point import, surfaced to
+  the user before import (serves the import goal; the UI expression of REQ-001 /
+  REQ-201 — the user asked to know *why* a file will not import)
+- Priority: should
+- Type: functional
+- Statement: The Import points window validates the selected file **before any
+  import** and surfaces specific, actionable diagnostics. It distinguishes and
+  names file-state failures — **file not found**, **file is empty**, and **file
+  exists but cannot be opened** (e.g. open/locked in another application) — with
+  distinct messages, not one generic read error. The validation summary flags
+  **duplicate point IDs** both **within the file** (naming the ID and the
+  conflicting line numbers) and **against survey points already in the session**
+  (naming the ID and line), in addition to the existing per-row column/number/ID
+  parse errors. The summary shows an **overall status**: "Ready to import — N
+  point(s)" when importable, or "Cannot import — <reason>" when a file-level
+  problem blocks it. **File-level problems** (not found, empty, unreadable/locked,
+  or zero valid rows) **disable the Import action**. When **only row-level
+  problems** exist, Import remains enabled but pressing it first **asks the user to
+  confirm** importing the N valid rows and skipping the M bad rows before any
+  change is made. A skipped row still writes no partial or guessed value into the
+  model (REQ-001 preserved). This is a display/validation layer over the existing
+  importer; stored coordinates, the local-storage invariant, and import behavior
+  for accepted rows are unchanged.
+- Acceptance:
+  - selecting a path that does not exist shows "File not found"; an **empty** file
+    shows "File is empty"; a file **open/locked in another application** shows a
+    message naming that it could not be opened (not a generic error); in all three
+    the Import action is **disabled**;
+  - a file containing a **duplicate ID within itself** shows "Duplicate point ID N
+    (line X and line Y)"; a file whose ID equals an **existing session point**
+    shows "Point ID N already exists in the drawing (line X)";
+  - a fully valid file shows "Ready to import — N point(s)" and Import is enabled;
+  - a file with **only row-level problems** shows the per-row messages, keeps
+    Import enabled, and pressing Import **prompts to confirm** importing the valid
+    rows and skipping the bad rows before any change;
+  - a skipped row writes no value into the model (REQ-001 preserved).
+- Owner-layer: UI (window, overall status, confirm prompt), IO (file-state
+  classification, duplicate/parse diagnostics)
+- Status: accepted
+- Revisions: 2026-06-20 — initial. 2026-06-20 — for PENZD layouts the trailing
+  description column is **optional**: a P,N,E,Z row (4 columns, no description) is a
+  valid point and imports with an empty description (a missing description is no
+  longer flagged as "too few columns"). 2026-06-20 — **elevation (Z) is also
+  optional**: the required minimum is the ID (if present) plus the two horizontal
+  coordinates (P,N,E for PENZD; N,E/E,N for NEZ/ENZ); a missing or blank Z defaults
+  to 0. A Z that is present but unparseable is still an error (REQ-001).
+
+### REQ-042 — Hatch fills are selectable, editable entities
+- Purpose: a hatch (imported `SOLID` `HATCH` → `CadFilledRegion`, ADR-011, or one created by
+  REQ-043) must be a first-class object the user can pick and remove/transform, not a stuck
+  background fill (the user could not select or delete imported hatches)
+- Priority: should
+- Type: functional
+- Statement: Solid filled regions (`CadFilledRegion`) become a selectable entity type
+  (`SelectedEntity::Type::FilledRegion`), with the same interaction surface as other CAD
+  objects in model space: (a) **single-click pick** — clicking anywhere **inside** the fill
+  (point-in-polygon against the outer loop, **excluding** hole loops) selects it, with Shift to
+  add/toggle and a **hover pre-highlight**; (b) **window/crossing box** selection (same
+  L→R=window / R→L=crossing rule) — a fill is hit when its loops are inside the window box, or
+  the box crosses/contains it for crossing; (c) a **selection highlight** that reads clearly
+  over the fill; (d) **DELETE** removes the selected fill(s); (e) **MOVE** and **COPY**
+  translate the fill (all loop vertices) and (COPY) clipboard-paste it, replacing the prior
+  bbox-enclosure copy heuristic for directly selected fills (ADR-013 addendum) with true
+  selection; every such edit is **undoable** and persists through `.gs` (REQ-031/ADR-011) and
+  the existing `HATCH` DXF export. Rotate/scale/mirror/grips for fills are **out of scope** for
+  this requirement (a later REQ). Pattern hatches that import as boundary **outlines** are
+  already selectable as their line entities and are unaffected.
+- Acceptance:
+  - clicking inside an imported solid hatch selects and highlights it; clicking outside it (or
+    inside one of its holes) does not;
+  - a window box that encloses the fill selects it; a crossing box that touches it selects it;
+  - hovering a fill shows a pre-highlight;
+  - DELETE removes the selected fill and **Undo** restores it (geometry + color + layer);
+  - MOVE relocates the fill and Undo restores the original position; COPY + paste produces an
+    offset duplicate; a `.gs` round-trip restores the result;
+  - existing selection of lines/circles/arcs/etc. and existing hatch fill rendering are unchanged.
+- Owner-layer: Commands / Domain / UI / Renderer / IO
+- Status: accepted
+- Revisions: 2026-06-20 — initial (ADR-016; amends ADR-013 addendum "fills aren't a selectable
+  entity type").
+
+### REQ-043 — HATCH command with internal-point boundary detection, live preview, patterns, and a dynamic ribbon
+- Purpose: the user can fill a region bounded by existing geometry by picking an internal point
+  (AutoCAD `HATCH`/`BHATCH` pick-point workflow), choosing pattern and appearance, and seeing a
+  live preview (the user asked for a HATCH command)
+- Priority: should
+- Type: functional
+- Statement: A **HATCH** command fills a closed region of existing geometry. (a) **Internal
+  point** — the command prompts for a point inside the area to hatch. (b) **Boundary
+  detection** — from the candidate point the command traces the **smallest closed loop** that
+  encloses it, built from a planar graph of nearby boundary geometry (lines, polylines, arcs,
+  circles); arcs/circles are tessellated for the trace. If **no closed region** contains the
+  point, the command reports it and places nothing (REQ-201 — no silent failure, no guessed
+  fill). (c) **Live preview** — while the cursor is inside a detected region the candidate fill
+  is previewed with the active pattern/appearance; outside any region no preview shows. (d)
+  **Placement** — clicking inside a detected region creates a hatch filling it; the created
+  hatch is a `CadFilledRegion` (REQ-042 — immediately selectable/movable/deletable) and persists
+  (`.gs`, `HATCH` DXF export). (e) **Patterns** — the hatch may be **SOLID** or a line **pattern**
+  (e.g. ANSI31) rendered clipped to the boundary and driven by **angle** and **scale**; pattern
+  name + angle + scale are stored on the region. (f) **Dynamic ribbon tab** — while HATCH is
+  active a contextual ribbon tab (the ADR-008 contextual-ribbon pattern) shows hatch-type
+  **thumbnail** swatches (a **placeholder** set this pass) and **live** controls for **color**,
+  **transparency**, **layer**, **angle**, and **scale** that apply to the hatch being created.
+- Acceptance:
+  - running HATCH prompts for an internal point;
+  - moving the cursor **inside** a closed region shows a preview fill; moving it where no closed
+    region contains it shows **no** preview;
+  - clicking inside a detected region creates a hatch that exactly fills that region;
+  - if the point is in no closed region, the command reports "no closed boundary found" and
+    creates nothing;
+  - the created hatch honors the ribbon's selected pattern, angle, scale, color, transparency,
+    and layer;
+  - the created hatch is immediately selectable/deletable/movable (REQ-042) and survives a `.gs`
+    round-trip.
+- Owner-layer: Commands (command + boundary trace) / Renderer (pattern fill + preview) / UI
+  (dynamic ribbon) / Domain+IO (pattern fields on `CadFilledRegion`)
+- Status: accepted
+- Revisions: 2026-06-20 — initial. ADR-017 (boundary tracing), ADR-018 (pattern storage +
+  rendering; amends ADR-011 "solid fills only"), ADR-019 (dynamic HATCH ribbon; extends ADR-008).
+  Delivered incrementally: Phase 2 = command + trace + preview + SOLID + ribbon (color/
+  transparency/layer live); Phase 3 = line patterns driven by angle/scale + thumbnails.
+
+### REQ-044 — Named text styles (create/manage, live reference with per-text overrides)
+- Purpose: let the user define and reuse AutoCAD-style named text formatting instead of the
+  single de-facto font/height — the user asked to create text styles like AutoCAD and switch
+  between them
+- Priority: should
+- Type: functional
+- Statement: A drawing owns a table of named **text styles**, each defining **font**, **height**
+  (plotted inches), **oblique angle**, and **bold/italic**. (Color is **not** a style property —
+  it remains a layer/object property edited in the Properties panel, matching AutoCAD STYLE.) A
+  default style **"Standard"** always exists and cannot be deleted. The user **creates, renames,
+  deletes, and edits** styles in a **management dialog** (AutoCAD STYLE-like) and selects the
+  **active** style from a **dropdown**; newly created text adopts the active style. Each text
+  object keeps a **live reference** to its style: **editing a style updates every text using it**,
+  **except** properties the user has **overridden** on specific selected text via the Properties
+  panel (font, height, oblique, bold/italic — each overridable independently). **Switching the
+  active style affects only newly created text**, never existing text. Text styles and each text's
+  style reference + overrides **persist in the native `.gs` file**; **older `.gs` files load with
+  every existing text rendered exactly as before** (text with no style reference resolves from its
+  own stored fields). DXF STYLE-table round-trip is **deferred** (import continues to flatten a
+  DXF STYLE onto the text's own font; the imported text carries no style reference). Stored
+  coordinates, the local-storage invariant, and all non-text behavior are unchanged.
+- Acceptance:
+  - creating a style in the dialog, setting it active, then drawing text produces text in that
+    style's font/height/oblique/bold/italic;
+  - switching the active style changes only **new** text; existing text is unchanged;
+  - **editing a style** updates every text referencing it, except properties overridden on
+    specific text;
+  - overriding font/height/oblique (or color, via the existing General color) on selected text in
+    the Properties panel changes only that text and survives a later edit of its style;
+  - saving and reloading a `.gs` file preserves all styles and each text's reference + overrides;
+  - opening an **older** `.gs` file leaves every existing text visually unchanged.
+- Owner-layer: Domain (style table + resolution) / UI (dialog, dropdown, Properties) / IO (.gs)
+- Status: accepted
+- Revisions: 2026-06-21 — initial (ADR-020). Delivered incrementally: Phase 1 = data model +
+  Standard + active-style dropdown + create path + `.gs` persistence; Phase 2 = STYLE management
+  dialog (create/rename/delete/edit + re-bake referencing text); Phase 3 = Properties per-text
+  overrides + oblique rendering.
+
 ---
 
 ## Performance requirements
@@ -784,6 +945,10 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-038 | Commands/UI/Domain/IO | `ClipboardTests` (paste offset per type; paper snap; .gs round-trip of new paper types) + manual (model↔paper, same-space; title block to sheet; pasted = selection; props preserved; empty no-op; 1:1) | accepted |
 | REQ-039 | UI/Commands/Domain/IO | `PaperSpaceTests` (paper text bounds top-left; box-select hit per type) + manual (box-select; double-click text edit model+paper; Properties show/edit; grips; draw/modify parity; no model change; .gs round-trip) | accepted |
 | REQ-040 | UI | `CommandLineTests` (fade-alpha vs elapsed time; recent-tail line selection) + manual (floating bar draggable + position/visibility persist; last ~3 lines fade after idle; F2 toggles console; ESC always cancels; select-to-copy; ×/Ctrl+9 hide/restore; autocomplete + dynamic input + [A]/[2P] preserved; dock still available) | accepted |
+| REQ-041 | UI/IO | `SurveyCsvValidateTests` (file-state classification; duplicate-ID detection within file + vs session) + manual (distinct not-found/empty/locked messages; Import disabled on file-level; row-only prompts to confirm skip; overall status string) | accepted |
+| REQ-042 | Commands/Domain/UI/Renderer/IO | `HatchTests` (point-in-polygon-with-holes pick; box-select hit; move translates loops; .gs round-trip) + manual (click inside selects; outside/in-hole does not; delete/move/copy + undo; hover; box-select) | accepted |
+| REQ-043 | Commands/Renderer/UI/Domain/IO | `HatchTests` (boundary trace: closed rect → loop, gap → none, nested → smallest; pattern/angle/scale stored) + manual (prompt internal point; inside→preview, outside→none; click fills region; no-region message; ribbon color/transparency/layer/angle/scale honored; selectable) | accepted |
+| REQ-044 | Domain/UI/IO | `TextStyleTests` (resolve/bake from style; override keeps per-text value while non-overridden props re-bake on style edit; legacy empty-style text unchanged; dimensions ignored) + manual (active-style dropdown; new text adopts active style; `.gs` round-trip of table + per-annotation style; old `.gs` unchanged; Phase 2 STYLE dialog create/rename/delete/edit ripple; Phase 3 Properties overrides + oblique) | accepted |
 
 ---
 

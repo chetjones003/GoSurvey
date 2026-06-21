@@ -1,6 +1,9 @@
 #include "CadCommands.hpp"
+#include "TextStyle.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadLinetype.hpp"
+#include "HatchGeom.hpp"
+#include "HatchBoundary.hpp"
 #include "geom2d.hpp"
 #include "NumFormat.hpp"
 #include "MtextRichFormat.hpp"
@@ -27,6 +30,9 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <numeric>
+
+// REQ-044: stamp the active text style onto a new user TEXT/MTEXT (defined below, used at the commit sites).
+static void StampActiveTextStyleOnNewText(AppCommandState& st, CadAnnotation& a);
 
 void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   if (idx < 0 || static_cast<size_t>(idx) >= cmd.documents.size()) return;
@@ -55,6 +61,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.surveyPoints           = cmd.surveyPoints;
   doc.selectedSurveyPointIndices = cmd.selectedSurveyPointIndices;
   doc.drawingLayerTable      = cmd.drawingLayerTable;
+  doc.textStyles             = cmd.textStyles;
+  doc.activeTextStyleName    = cmd.activeTextStyleName;
   doc.pdfAttachments         = cmd.pdfAttachments;
   doc.selection              = cmd.selection;
   doc.paperLayouts           = cmd.paperLayouts;
@@ -92,6 +100,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.surveyPoints               = doc.surveyPoints;
   cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
   cmd.drawingLayerTable          = doc.drawingLayerTable;
+  cmd.textStyles                 = doc.textStyles;
+  cmd.activeTextStyleName        = doc.activeTextStyleName;
   cmd.pdfAttachments             = doc.pdfAttachments;
   cmd.selection                  = doc.selection;
   cmd.paperLayouts               = doc.paperLayouts;
@@ -1068,6 +1078,7 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
   snap.cadFilledRegionAttrs = st.cadFilledRegionAttrs;
   snap.surveyPoints         = st.surveyPoints;
   snap.drawingLayerTable    = st.drawingLayerTable;
+  snap.textStyles           = st.textStyles;  // style edits are undoable (REQ-044)
   snap.pdfAttachments       = st.pdfAttachments;
   snap.paperLayouts         = st.paperLayouts;  // native paper geometry is undoable (REQ-037/038)
   // Zero GL texture IDs: restored snapshots must not reference freed GPU resources.
@@ -1098,6 +1109,7 @@ static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySn
   st.cadFilledRegionAttrs = snap.cadFilledRegionAttrs;
   st.surveyPoints         = snap.surveyPoints;
   st.drawingLayerTable    = snap.drawingLayerTable;
+  st.textStyles           = snap.textStyles;
   st.pdfAttachments       = snap.pdfAttachments;
   st.paperLayouts         = snap.paperLayouts;
   st.selectedPaperEntities.clear();  // restored layouts invalidate paper-entity indices
@@ -1943,6 +1955,7 @@ const CmdEntry kRegistry[] = {
     {"polyline", "pl", "Draw a connected polyline"},
     {"arc", "", "Draw an arc"},
     {"ellipse", "el", "Draw an ellipse"},
+    {"hatch", "h, bhatch", "Fill a closed area (pick an internal point)"},
     {"text", "", "Place single-line text"},
     {"mtext", "mt", "Place multiline text"},
     {"dimaligned", "dal", "Aligned dimension"},
@@ -1969,6 +1982,7 @@ const CmdEntry kRegistry[] = {
     {"help", "", "Show command help"},
     {"regen", "re", "Regenerate the drawing"},
     {"layer", "la", "Open the Layer manager"},
+    {"style", "st, ddstyle", "Text style manager: create / edit named text styles"},
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"pdfattach", "pa", "Attach a PDF underlay"},
     {"overkill",     "ok", "Remove duplicate geometry"},
@@ -2310,6 +2324,12 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     log.push_back("UNITS — drawing units dialog opened.");
     return true;
   }
+  if (primary == "style") {
+    TextStyles::EnsureStandard(st.textStyles);
+    st.showTextStyleManagerWindow = true;
+    log.push_back("STYLE — text style manager opened.");
+    return true;
+  }
   if (primary == "move") {
     StartMoveCommand(st, log);
     return true;
@@ -2340,6 +2360,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "offset") {
     StartOffsetCommand(st, log);
+    return true;
+  }
+  if (primary == "hatch" || primary == "bhatch" || primary == "h") {
+    StartHatchCommand(st, log);
     return true;
   }
   if (primary == "zoomextents") {
@@ -2730,6 +2754,21 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
       hits.push_back(e);
     }
   }
+  // Filled regions (REQ-042): hit-test the outer-loop bounding box, matching annotations/arcs/PDF — window
+  // requires the bbox fully inside; crossing requires the bbox to intersect the rect.
+  for (size_t fi = 0; fi < st.cadFilledRegions.size(); ++fi) {
+    float fmnX = 0.f, fmxX = 0.f, fmnY = 0.f, fmxY = 0.f;
+    if (!hatchgeom::OuterBounds(st.cadFilledRegions[fi], &fmnX, &fmnY, &fmxX, &fmxY))
+      continue;
+    const bool hit = windowMode ? (fmnX >= mnX && fmxX <= mxX && fmnY >= mnY && fmxY <= mxY)
+                                : !(fmxX < mnX || fmnX > mxX || fmxY < mnY || fmnY > mxY);
+    if (hit) {
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::FilledRegion;
+      e.index = static_cast<int>(fi);
+      hits.push_back(e);
+    }
+  }
   if (includeSurveyPoints) {
     for (size_t si = 0; si < st.surveyPoints.size(); ++si) {
       const SurveyPoint& sp = st.surveyPoints[si];
@@ -2931,9 +2970,20 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   std::vector<EntityAttributes> newArcAttrs;
   std::vector<CadEllipse> newEll;
   std::vector<EntityAttributes> newEllAttrs;
+  std::vector<CadFilledRegion> newFills;
+  std::vector<EntityAttributes> newFillAttrs;
 
   for (const auto& e : st.selection) {
-    if (e.type == SelectedEntity::Type::LineSeg) {
+    if (e.type == SelectedEntity::Type::FilledRegion) {
+      const size_t fk = static_cast<size_t>(e.index);
+      if (fk < st.cadFilledRegions.size()) {
+        CadFilledRegion fr = st.cadFilledRegions[fk];
+        hatchgeom::Translate(fr, dx, dy);
+        newFills.push_back(std::move(fr));
+        newFillAttrs.push_back(fk < st.cadFilledRegionAttrs.size() ? st.cadFilledRegionAttrs[fk]
+                                                                   : EntityAttributes{});
+      }
+    } else if (e.type == SelectedEntity::Type::LineSeg) {
       size_t k = static_cast<size_t>(e.index) * 6;
       if (k + 5 < st.userLinesFlat.size()) {
         for (int j = 0; j < 6; ++j)
@@ -3044,9 +3094,11 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   st.userArcAttrs.insert(st.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
   st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
   st.userEllAttrs.insert(st.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
+  st.cadFilledRegions.insert(st.cadFilledRegions.end(), newFills.begin(), newFills.end());
+  st.cadFilledRegionAttrs.insert(st.cadFilledRegionAttrs.end(), newFillAttrs.begin(), newFillAttrs.end());
 
   if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
-      st.userPolylineVerts.size() != polyVertsBefore)
+      !newFills.empty() || st.userPolylineVerts.size() != polyVertsBefore)
     BumpCadGpuCache(st);
 }
 
@@ -3136,7 +3188,7 @@ static void CommitPasteIntoModel(AppCommandState& st, float dx, float dy) {
     st.cadAnnotationAttrs.push_back(cb.annotationAttrs[i]);
     st.selection.push_back({ST::Annotation, static_cast<int>(st.cadAnnotations.size()) - 1});
   }
-  for (size_t i = 0; i < cb.filledRegions.size(); ++i) {  // solid fills (not selectable → not added to selection)
+  for (size_t i = 0; i < cb.filledRegions.size(); ++i) {  // solid fills — now selectable (REQ-042)
     CadFilledRegion fr = cb.filledRegions[i];
     for (size_t v = 0; v + 1 < fr.verts.size(); v += 2) {
       fr.verts[v] += dx;
@@ -3144,6 +3196,7 @@ static void CommitPasteIntoModel(AppCommandState& st, float dx, float dy) {
     }
     st.cadFilledRegions.push_back(std::move(fr));
     st.cadFilledRegionAttrs.push_back(cb.filledRegionAttrs[i]);
+    st.selection.push_back({ST::FilledRegion, static_cast<int>(st.cadFilledRegions.size()) - 1});
   }
   BumpCadGpuCache(st);
 }
@@ -3655,6 +3708,14 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy) {
       continue;
     st.pdfAttachments[static_cast<size_t>(e.index)].insertX += dx;
     st.pdfAttachments[static_cast<size_t>(e.index)].insertY += dy;
+  }
+  // Filled regions (REQ-042): translate every loop vertex.
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::FilledRegion)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadFilledRegions.size())
+      continue;
+    hatchgeom::Translate(st.cadFilledRegions[static_cast<size_t>(e.index)], dx, dy);
   }
   ApplyTranslationToSelectedSurveyPoints(st, dx, dy);
   BumpCadGpuCache(st);
@@ -5631,10 +5692,12 @@ void CommitClipboardPasteAt(AppCommandState& st, float x, float y, std::vector<s
 // not an independently selectable entity, so a copy carries the fills inside the selection's bounding box.
 static void CopyEnclosedFilledRegions(CadClipboard& cb, const std::vector<CadFilledRegion>& regions,
                                       const std::vector<EntityAttributes>& attrs, float mnX, float mnY, float mxX,
-                                      float mxY) {
+                                      float mxY, const std::set<int>* skipIdx = nullptr) {
   if (mnX > mxX)
     return;
   for (size_t i = 0; i < regions.size(); ++i) {
+    if (skipIdx && skipIdx->count(static_cast<int>(i)))
+      continue;  // already copied as a directly-selected fill (REQ-042)
     const CadFilledRegion& fr = regions[i];
     if (fr.verts.size() < 6)
       continue;
@@ -5772,6 +5835,7 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
     mnX = std::min(mnX, x); mnY = std::min(mnY, y);
     mxX = std::max(mxX, x); mxY = std::max(mxY, y);
   };
+  std::set<int> directFills;  // fill indices copied because they were directly selected (REQ-042)
 
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg) {
@@ -5841,9 +5905,23 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       cb.annotationAttrs.push_back(k < st.cadAnnotationAttrs.size()
                                        ? st.cadAnnotationAttrs[k] : EntityAttributes{});
       expandBbox(st.cadAnnotations[k].insX, st.cadAnnotations[k].insY);
+    } else if (e.type == SelectedEntity::Type::FilledRegion) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= st.cadFilledRegions.size())
+        continue;
+      directFills.insert(static_cast<int>(k));
+      const CadFilledRegion& fr = st.cadFilledRegions[k];
+      cb.filledRegions.push_back(fr);
+      cb.filledRegionAttrs.push_back(k < st.cadFilledRegionAttrs.size() ? st.cadFilledRegionAttrs[k]
+                                                                        : EntityAttributes{});
+      for (size_t v = 0; v + 1 < fr.verts.size(); v += 2)
+        expandBbox(fr.verts[v], fr.verts[v + 1]);
     }
   }
-  CopyEnclosedFilledRegions(cb, st.cadFilledRegions, st.cadFilledRegionAttrs, mnX, mnY, mxX, mxY);
+  // Directly-selected fills are copied above; CopyEnclosedFilledRegions adds any *other* fills inside the
+  // selection bbox (e.g. a title block's logo hatch carried with its linework — ADR-013 addendum), skipping
+  // the ones already taken so they aren't duplicated.
+  CopyEnclosedFilledRegions(cb, st.cadFilledRegions, st.cadFilledRegionAttrs, mnX, mnY, mxX, mxY, &directFills);
 
   if (mnX > mxX) {
     cb.basePtX = 0.f;
@@ -6871,6 +6949,7 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
       ann.insY = ann.boxMinY;
       ann.plottedHeightInches = st.defaultPlottedTextHeightInches;
       ann.text = normalized;
+      StampActiveTextStyleOnNewText(st, ann);  // REQ-044: new MTEXT adopts the active text style
       st.cadAnnotations.push_back(std::move(ann));
       st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
       BumpCadGpuCache(st);
@@ -7079,6 +7158,38 @@ void SyncDrawingLayerTableWithGeometry(AppCommandState& st) {
     st.currentLayer = "0";
   if (!have.count(st.currentLayer))
     st.currentLayer = "0";
+  // Text styles (REQ-044): guarantee the baseline "Standard" style and a valid active style.
+  TextStyles::EnsureStandard(st.textStyles);
+  if (st.activeTextStyleName.empty() || !TextStyles::Find(st.textStyles, st.activeTextStyleName))
+    st.activeTextStyleName = TextStyles::kStandardName;
+}
+
+const TextStyle* ActiveTextStyle(const AppCommandState& st) {
+  const std::string name = st.activeTextStyleName.empty() ? std::string(TextStyles::kStandardName)
+                                                          : st.activeTextStyleName;
+  if (const TextStyle* s = TextStyles::Find(st.textStyles, name)) return s;
+  return TextStyles::Find(st.textStyles, TextStyles::kStandardName);
+}
+
+void SetActiveTextStyle(AppCommandState& st, const std::string& name) {
+  st.activeTextStyleName = name;
+  if (const TextStyle* s = ActiveTextStyle(st))
+    st.defaultPlottedTextHeightInches = std::max(s->heightInches, 1.e-6f);
+}
+
+// Stamp the active text style onto a freshly built user TEXT/MTEXT (REQ-044 create path). Font/oblique/
+// bold/italic come from the style; height is left as the caller set it (it already equals the style height
+// via the SetActiveTextStyle → defaultPlottedTextHeightInches sync), and any height typed at the TEXT
+// prompt is preserved. Per-property overrides land in a later phase.
+static void StampActiveTextStyleOnNewText(AppCommandState& st, CadAnnotation& a) {
+  const TextStyle* s = ActiveTextStyle(st);
+  if (!s) return;
+  a.styleName = s->name;
+  a.ovFont = a.ovHeight = a.ovOblique = a.ovBold = a.ovItalic = false;
+  a.fontFamily = s->fontFamily;
+  a.obliqueDeg = s->obliqueDeg;
+  a.bold = s->bold;
+  a.italic = s->italic;
 }
 
 static bool ValidNewLayerNameChars(const std::string& n) {
@@ -7609,6 +7720,21 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
       st.userEllAttrs.erase(st.userEllAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
+  // Filled regions (REQ-042): erase from cadFilledRegions + parallel attrs, highest index first.
+  std::set<int> fillIx;
+  const size_t nFill = st.cadFilledRegions.size();
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::FilledRegion && e.index >= 0 && static_cast<size_t>(e.index) < nFill)
+      fillIx.insert(e.index);
+  }
+  std::vector<int> fv(fillIx.begin(), fillIx.end());
+  std::sort(fv.begin(), fv.end(), std::greater<int>());
+  for (int idx : fv) {
+    st.cadFilledRegions.erase(st.cadFilledRegions.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.cadFilledRegionAttrs.size())
+      st.cadFilledRegionAttrs.erase(st.cadFilledRegionAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
   // PDF underlays: release GL texture and erase from highest index downward.
   std::set<int> pdfIx;
   const size_t nPdf = st.pdfAttachments.size();
@@ -7625,7 +7751,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   }
 
   const size_t nDel = lineIx.size() + circIx.size() + annIx.size() + arcIx.size() + ellIx.size() +
-                      polyIx.size() + pdfIx.size();
+                      polyIx.size() + pdfIx.size() + fillIx.size();
   st.selection.clear();
   AbortMtextGripInteraction(st);
   ClearDimGripInteraction(st);
@@ -8326,6 +8452,138 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     return false;
   *out = bestE;
   *outDistSq = static_cast<float>(best);
+  return true;
+}
+
+bool CadFilledRegionContainsPoint(const CadFilledRegion& fr, double x, double y) {
+  return hatchgeom::ContainsPoint(fr, x, y);
+}
+
+int PickFilledRegionAt(const AppCommandState& st, double wx, double wy) {
+  int best = -1;
+  double bestArea = 0.0;
+  for (size_t i = 0; i < st.cadFilledRegions.size(); ++i) {
+    if (!hatchgeom::ContainsPoint(st.cadFilledRegions[i], wx, wy))
+      continue;
+    const double area = hatchgeom::OuterAreaAbs(st.cadFilledRegions[i]);
+    if (best < 0 || area < bestArea) {
+      best = static_cast<int>(i);
+      bestArea = area;
+    }
+  }
+  return best;
+}
+
+void StartHatchCommand(AppCommandState& st, std::vector<std::string>& log) {
+  st.active = AppCommandState::Kind::Hatch;
+  st.lastCommand = AppCommandState::Kind::Hatch;
+  st.hatchPreviewValid = false;
+  st.hatchPreviewLoop.clear();
+  ClearCadSelection(st);
+  log.push_back("HATCH — pick an internal point inside a closed area (Esc to cancel).");
+}
+
+// Gather every model boundary segment into \p out (local coordinates): line segments, polyline edges
+// (closing edge when closed), and tessellated arcs/circles/ellipses. Used by the HATCH boundary trace.
+static void CadCollectBoundarySegments(const AppCommandState& st, std::vector<hatchboundary::Seg>* out) {
+  const auto& L = st.userLinesFlat;
+  for (size_t i = 0; i + 5 < L.size(); i += 6)
+    out->push_back({L[i], L[i + 1], L[i + 3], L[i + 4]});
+
+  const int nPoly = static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
+  for (int pi = 0; pi < nPoly; ++pi) {
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    for (int vi = v0; vi + 1 < v1; ++vi)
+      out->push_back({st.userPolylineVerts[static_cast<size_t>(vi * 3)],
+                      st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)],
+                      st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)],
+                      st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)]});
+    const bool closed =
+        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+    if (closed && v1 - v0 >= 2)
+      out->push_back({st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)],
+                      st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)],
+                      st.userPolylineVerts[static_cast<size_t>(v0 * 3)],
+                      st.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)]});
+  }
+
+  auto tessellate = [&](auto pointAt, int n) {
+    float px = 0.f, py = 0.f;
+    for (int i = 0; i <= n; ++i) {
+      float x = 0.f, y = 0.f;
+      pointAt(i, &x, &y);
+      if (i > 0)
+        out->push_back({px, py, x, y});
+      px = x;
+      py = y;
+    }
+  };
+  const auto& C = st.userCirclesCxCyR;
+  for (size_t ci = 0; ci + 2 < C.size(); ci += 3) {
+    const float cx = C[ci], cy = C[ci + 1], r = C[ci + 2];
+    tessellate([&](int i, float* x, float* y) {
+      const double a = 6.283185307179586 * i / 48.0;
+      *x = cx + r * static_cast<float>(std::cos(a));
+      *y = cy + r * static_cast<float>(std::sin(a));
+    }, 48);
+  }
+  for (const CadArc& a : st.userArcs) {
+    tessellate([&](int i, float* x, float* y) {
+      const double t = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * (i / 48.0);
+      *x = a.cx + a.r * static_cast<float>(std::cos(t));
+      *y = a.cy + a.r * static_cast<float>(std::sin(t));
+    }, 48);
+  }
+  for (const CadEllipse& el : st.userEllipses) {
+    const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    if (ma < 1e-8)
+      continue;
+    const double ux = el.majVx / ma, uy = el.majVy / ma;
+    const double mb = ma * static_cast<double>(el.ratio);
+    tessellate([&](int i, float* x, float* y) {
+      const double t = 6.283185307179586 * i / 64.0;
+      const double cc = std::cos(t), ss = std::sin(t);
+      *x = el.cx + static_cast<float>(ux * ma * cc - uy * mb * ss);
+      *y = el.cy + static_cast<float>(uy * ma * cc + ux * mb * ss);
+    }, 64);
+  }
+}
+
+bool CadHatchTraceAt(const AppCommandState& st, double wx, double wy, std::vector<float>* outLoop) {
+  if (!outLoop)
+    return false;
+  std::vector<hatchboundary::Seg> segs;
+  CadCollectBoundarySegments(st, &segs);
+  return hatchboundary::TraceEnclosingLoop(segs, wx, wy, outLoop);
+}
+
+bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std::vector<std::string>& log) {
+  if (loop.size() < 6)
+    return false;
+  PushUndoSnapshot(st, "Hatch");
+  CadFilledRegion fr;
+  fr.verts = loop;
+  fr.loopStart = {0};
+  fr.patternName = st.hatchPatternName;  // "" / "SOLID" = solid; else a line pattern (ADR-018)
+  fr.patternAngleDeg = st.hatchAngleDeg;
+  fr.patternScale = std::max(0.01f, st.hatchScale);
+  EntityAttributes at = MakeNewEntityAttrs(st);
+  if (!st.hatchLayer.empty())
+    at.layer = st.hatchLayer;
+  char hex[8];
+  std::snprintf(hex, sizeof(hex), "#%02X%02X%02X", static_cast<int>(std::lround(st.hatchColorRgb[0] * 255.f)),
+                static_cast<int>(std::lround(st.hatchColorRgb[1] * 255.f)),
+                static_cast<int>(std::lround(st.hatchColorRgb[2] * 255.f)));
+  at.color = hex;
+  at.transparency = std::clamp(st.hatchTransparency01, 0.f, 1.f);
+  st.cadFilledRegions.push_back(std::move(fr));
+  st.cadFilledRegionAttrs.push_back(at);
+  ClearCadSelection(st);
+  st.selection.push_back({SelectedEntity::Type::FilledRegion,
+                          static_cast<int>(st.cadFilledRegions.size()) - 1});
+  BumpCadGpuCache(st);
+  log.push_back("HATCH — solid fill placed.");
   return true;
 }
 
@@ -10501,21 +10759,19 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         return;
       }
       st.textPhase = TP::WaitRotation;
-      log.push_back("TEXT rotation ° clockwise from north (decimal/DMS) — Enter for 0:");
+      log.push_back("TEXT rotation ° clockwise from north (decimal/DMS) — Enter for 90 (horizontal):");
       return;
     }
     if (st.textPhase == TP::WaitRotation) {
       const std::string tr = StringUtil::trimCopy(line);
-      if (tr.empty())
-        st.textRotDraft = 0.f;
-      else {
-        float deg = 0.f;
-        if (!ParseAngleDegrees(tr, &deg)) {
-          log.push_back("TEXT — could not parse angle.");
-          return;
-        }
-        st.textRotDraft = MathAngleRadFromBearingCwNorthDeg(deg);
+      // Bearing convention (clockwise from north): 0 = north (text runs up), 90 = east (reads
+      // left-to-right). Enter defaults to 90 (horizontal), matching AutoCAD's default text orientation.
+      float deg = 90.f;
+      if (!tr.empty() && !ParseAngleDegrees(tr, &deg)) {
+        log.push_back("TEXT — could not parse angle.");
+        return;
       }
+      st.textRotDraft = MathAngleRadFromBearingCwNorthDeg(deg);
       st.textPhase = TP::WaitString;
       log.push_back("TEXT — enter content:");
       return;
@@ -10537,6 +10793,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           L->paperTextAttrs.push_back(MakeNewEntityAttrs(st));
         } else {
           ann.plottedHeightInches = st.textHeightDraft / std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+          StampActiveTextStyleOnNewText(st, ann);  // REQ-044: new TEXT adopts the active text style
           st.cadAnnotations.push_back(std::move(ann));
           st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
         }
@@ -11850,6 +12107,7 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
     case K::Join:       StartJoinCommand(st, log);       break;
     case K::Trim:       StartTrimCommand(st, log);       break;
     case K::Offset:     StartOffsetCommand(st, log);     break;
+    case K::Hatch:      StartHatchCommand(st, log);      break;
     default: break;
   }
 }

@@ -975,6 +975,8 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
       const CadFilledRegion& fr = (*filledRegions)[fi];
       if (fr.loopStart.empty() || fr.verts.size() < 6)
         continue;
+      if (!fr.isSolid())
+        continue;  // line-pattern hatches are drawn as clipped lines in the ImGui overlay (REQ-043)
       fan.clear();
       double mnx = 1e300, mxx = -1e300, mny = 1e300, mxy = -1e300;
       auto vx = [&](int p) { return fr.verts[static_cast<size_t>(p) * 2 + 0]; };

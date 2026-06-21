@@ -52,7 +52,16 @@ void DrawImportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
   ImGui::Separator();
   ImGui::TextUnformatted("Validation summary");
   ImGui::BeginChild("imp_val", ImVec2(0, 110), true, ImGuiWindowFlags_HorizontalScrollbar);
-  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.82f, 0.88f, 0.95f, 1.f));
+  // REQ-041: green when the file is fully valid and importable; red when there are any
+  // validation errors (a file-level block or skippable bad rows); neutral before a pick.
+  ImVec4 valColor;
+  if (!cmd.surveyImportCsvPath[0])
+    valColor = ImVec4(0.82f, 0.88f, 0.95f, 1.f); // neutral: nothing selected yet
+  else if (!cmd.surveyImportFileBlocked && cmd.surveyImportBadRowCount == 0)
+    valColor = ImVec4(0.40f, 0.85f, 0.45f, 1.f); // green: clean and ready to import
+  else
+    valColor = ImVec4(0.95f, 0.45f, 0.45f, 1.f); // red: validation errors present
+  ImGui::PushStyleColor(ImGuiCol_Text, valColor);
   ImGui::TextUnformatted(cmd.surveyImportPreviewValidation.c_str());
   ImGui::PopStyleColor();
   ImGui::EndChild();
@@ -65,13 +74,38 @@ void DrawImportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
   ImGui::PopStyleColor();
   ImGui::EndChild();
 
+  // REQ-041: a file-level problem (missing/empty/locked/no valid rows) disables Import.
+  const bool blocked = cmd.surveyImportFileBlocked;
+  if (blocked)
+    ImGui::BeginDisabled();
   if (ImGui::Button("Import")) {
-    if (SurveyCsvImportFile(cmd, log))
+    if (cmd.surveyImportBadRowCount > 0)
+      ImGui::OpenPopup("Confirm import##imp"); // row-level problems: confirm skipping them first
+    else if (SurveyCsvImportFile(cmd, log))
       cmd.surveyImportPreviewDirty = true;
   }
+  if (blocked)
+    ImGui::EndDisabled();
   ImGui::SameLine();
   if (ImGui::Button("Refresh preview"))
     cmd.surveyImportPreviewDirty = true;
+
+  // REQ-041: row-level problems don't block, but the user confirms importing the valid
+  // rows and skipping the bad ones before any change is made.
+  if (ImGui::BeginPopupModal("Confirm import##imp", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::Text("Import %d valid row(s) and skip %d bad row(s)?", cmd.surveyImportValidRowCount,
+                cmd.surveyImportBadRowCount);
+    ImGui::Spacing();
+    if (ImGui::Button("Import", ImVec2(120, 0))) {
+      if (SurveyCsvImportFile(cmd, log))
+        cmd.surveyImportPreviewDirty = true;
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120, 0)))
+      ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+  }
 
   ImGui::End();
 }

@@ -227,12 +227,16 @@ add_custom_command(TARGET GoSurvey POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources"
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/layouts"
   COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
+  COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:GoSurvey>/resources/hatches"
   COMMAND ${CMAKE_COMMAND} -E copy_if_different
           "${GOSURVEY_DEFAULT_TEMPLATE}"
           "$<TARGET_FILE_DIR:GoSurvey>/resources/default-template.gs"
   COMMAND ${CMAKE_COMMAND} -E copy_directory
           "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons"
           "$<TARGET_FILE_DIR:GoSurvey>/resources/icons"
+  COMMAND ${CMAKE_COMMAND} -E copy_directory
+          "${CMAKE_CURRENT_SOURCE_DIR}/resources/hatches"
+          "$<TARGET_FILE_DIR:GoSurvey>/resources/hatches"
   COMMENT "Copy resources beside executable")
 
 # Copy pdfium.dll next to the executable so it can be found at runtime.
@@ -266,6 +270,9 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AngleFormatTests.cpp
     tests/PaperSpaceTests.cpp
     tests/CommandLineTests.cpp
+    tests/SurveyCsvValidateTests.cpp
+    tests/HatchGeomTests.cpp
+    tests/TextStyleTests.cpp
     src/traverse/TraverseCalc.cpp
     src/traverse/TraverseLeastSquares.cpp
     src/traverse/FbkImport.cpp

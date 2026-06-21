@@ -6,6 +6,8 @@
 #include "ShxFont.hpp"
 
 #include "CadLinetype.hpp"
+#include "TextStyle.hpp"
+#include "HatchPattern.hpp"
 #include "CommandBar.hpp"
 #include "NumFormat.hpp"
 #include "DxfIo.hpp"
@@ -31,6 +33,70 @@
 #include <cfloat>
 #include <cstdint>
 #include <string>
+#include <fstream>
+#include <sstream>
+#include <filesystem>
+
+#include "HatchPat.hpp"
+
+// Render a sample string in a text style's font/bold/italic, fit into box [tl, tl+sz] (REQ-044). Shared by
+// the ribbon style flyout thumbnails and the Text Style dialog preview. Defined near the dialog below.
+static void DrawTextStyleSample(ImDrawList* dl, ImVec2 tl, ImVec2 sz, const TextStyle& s, const char* sample,
+                                ImU32 col);
+
+// Hatch pattern library (REQ-043 follow-up): parse resources/hatches/acadiso.pat once and cache the
+// definitions. Returns the cached list (empty if the file is missing). The .pat parser is pure + tested.
+static const std::vector<hatchpat::Def>& HatchLibrary() {
+  static std::vector<hatchpat::Def> defs;
+  static bool loaded = false;
+  if (!loaded) {
+    loaded = true;
+    const std::filesystem::path p =
+        ResolveBundledAssetPath(std::filesystem::path("resources") / "hatches" / "acadiso.pat");
+    if (!p.empty()) {
+      std::ifstream f(p, std::ios::binary);
+      if (f) {
+        std::stringstream ss;
+        ss << f.rdbuf();
+        hatchpat::Parse(ss.str(), &defs);
+      }
+    }
+  }
+  return defs;
+}
+
+// Draw a small preview of a hatch pattern inside the rect [mn,mx]: a solid swatch for SOLID, otherwise the
+// pattern's line family generated at a characteristic scale (~5 of its densest repeats) and clipped to the box.
+static void DrawHatchThumbnail(ImDrawList* dl, ImVec2 mn, ImVec2 mx, const hatchpat::Def& def, ImU32 col) {
+  const float pad = 3.f;
+  const ImVec2 a(mn.x + pad, mn.y + pad), b(mx.x - pad, mx.y - pad);
+  double minSp = 1e30;
+  for (const auto& L : def.lines)
+    if (std::fabs(L.dy) > 1e-6) minSp = std::min(minSp, std::fabs(L.dy));
+  if (def.name == "SOLID" || def.lines.empty() || minSp > 1e29) {
+    dl->AddRectFilled(a, b, col, 1.f);
+    return;
+  }
+  const double S = minSp * 5.0;  // region side in pattern units → ~5 repeats of the densest family
+  CadFilledRegion fr;
+  fr.verts = {0.f, 0.f, static_cast<float>(S), 0.f, static_cast<float>(S), static_cast<float>(S), 0.f,
+              static_cast<float>(S)};
+  fr.loopStart = {0};
+  fr.patternName = def.name;
+  fr.patternScale = 1.f;
+  std::vector<float> segs;
+  hatchpattern::BuildSegments(fr, def, &segs);
+  const float cw = b.x - a.x, ch = b.y - a.y;
+  dl->PushClipRect(a, b, true);
+  for (size_t s = 0; s + 3 < segs.size(); s += 4) {
+    const float x0 = a.x + static_cast<float>(segs[s] / S) * cw;
+    const float y0 = b.y - static_cast<float>(segs[s + 1] / S) * ch;  // flip Y to screen
+    const float x1 = a.x + static_cast<float>(segs[s + 2] / S) * cw;
+    const float y1 = b.y - static_cast<float>(segs[s + 3] / S) * ch;
+    dl->AddLine(ImVec2(x0, y0), ImVec2(x1, y1), col, 1.f);
+  }
+  dl->PopClipRect();
+}
 
 // True when a font name refers to an SHX stroke font (rendered from the real .shx, not a TrueType).
 static bool CadIsShxFontName(const std::string& s) {
@@ -739,6 +805,7 @@ enum class RibbonIconKind : std::uint8_t {
   ClipboardCopy,
   ClipboardPaste,
   Traverse,
+  Hatch,
 };
 
 static ImVec2 RibbonLerp(const ImVec2& a, const ImVec2& b, float u, float v) {
@@ -997,6 +1064,20 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     const float ySeg = c.y + h * 0.18f;
     dl->AddLine(ImVec2(mn.x + w * 0.1f, ySeg), ImVec2(c.x - w * 0.12f, ySeg), col, t);
     dl->AddLine(ImVec2(c.x + w * 0.12f, ySeg), ImVec2(mx.x - w * 0.1f, ySeg), col, t);
+    break;
+  }
+  case RibbonIconKind::Hatch: {
+    // A square outline filled with diagonal hatch strokes (the HATCH command).
+    const ImVec2 b0 = RibbonLerp(mn, mx, 0.2f, 0.78f);
+    const ImVec2 b1 = RibbonLerp(mn, mx, 0.8f, 0.22f);
+    const float bx0 = std::min(b0.x, b1.x), bx1 = std::max(b0.x, b1.x);
+    const float by0 = std::min(b0.y, b1.y), by1 = std::max(b0.y, b1.y);
+    dl->AddRect(ImVec2(bx0, by0), ImVec2(bx1, by1), col, 0.f, 0, t);
+    dl->PushClipRect(ImVec2(bx0, by0), ImVec2(bx1, by1), true);
+    const float bw = bx1 - bx0;
+    for (float off = -bw + 0.25f * bw; off < bw; off += 0.28f * bw)  // 45° lines, clipped to the box
+      dl->AddLine(ImVec2(bx0 + off, by1), ImVec2(bx0 + off + (by1 - by0), by0), acc, t * 0.8f);
+    dl->PopClipRect();
     break;
   }
   case RibbonIconKind::Offset: {
@@ -1305,6 +1386,7 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::Polyline:       return "polyline";
   case RibbonIconKind::Arc:            return "arc";
   case RibbonIconKind::Ellipse:        return "ellipse";
+  case RibbonIconKind::Hatch:          return "hatch";
   case RibbonIconKind::Dim:            return "dim";
   case RibbonIconKind::DimLinear:      return "dimlinear";
   case RibbonIconKind::Id:             return "id";
@@ -1359,7 +1441,8 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
   struct M { const char* n; RibbonIconKind k; };
   static const M m[] = {
     {"LINE", RibbonIconKind::Line}, {"CIRCLE", RibbonIconKind::Circle}, {"POLYLINE", RibbonIconKind::Polyline},
-    {"ARC", RibbonIconKind::Arc}, {"ELLIPSE", RibbonIconKind::Ellipse}, {"TEXT", RibbonIconKind::Text},
+    {"ARC", RibbonIconKind::Arc}, {"ELLIPSE", RibbonIconKind::Ellipse}, {"HATCH", RibbonIconKind::Hatch},
+    {"TEXT", RibbonIconKind::Text},
     {"MTEXT", RibbonIconKind::Mtext}, {"DIMALIGNED", RibbonIconKind::Dim}, {"DIMLINEAR", RibbonIconKind::DimLinear},
     {"ID", RibbonIconKind::Id}, {"INVERSE", RibbonIconKind::SurveyInverse}, {"MOVE", RibbonIconKind::Move},
     {"COPY", RibbonIconKind::Copy}, {"ROTATE", RibbonIconKind::Rotate}, {"SCALE", RibbonIconKind::Scale},
@@ -1522,10 +1605,11 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   };
 
   const float wEdit = 8.f + largeW + 4.f + colW({"Copy", "Undo", "Redo"});
-  const float wDraw = 8.f + gridCell * 3.f + 4.f * 2.f;
+  const float wDraw = 8.f + gridCell * 4.f + 4.f * 3.f;
   const float wMod  = 8.f + largeW + 4.f + colW({"Copy", "Rotate", "Scale"}) + 4.f +
                       colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror"});
-  const float wAnn  = 8.f + colW({"Text", "Mtext"});
+  const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
+  const float wAnn  = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
   const float wInq  = 8.f + colW({"Aligned", "Linear", "ID Point"});
   const float wSrv  = 8.f + largeW + 4.f + colW({"Inverse", "Traverse"});
   const float wView = 8.f + colW({"Extents", "Window"});
@@ -1599,13 +1683,17 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     if (gridBtn("##RibbonPLine", RibbonIconKind::Polyline))
       StartPolylineCommand(cmd, log);
     RibbonItemHelp("Polyline — chain of segments; optional close.\nCommand bar: POLYLINE or PL");
-    if (gridBtn("##RibbonArc", RibbonIconKind::Arc))  // wraps to the second row
+    ImGui::SameLine(0, 4);
+    if (gridBtn("##RibbonArc", RibbonIconKind::Arc))
       StartArcCommand(cmd, log);
     RibbonItemHelp("Arc — three-point arc (start, mid, end).\nCommand bar: ARC");
-    ImGui::SameLine(0, 4);
-    if (gridBtn("##RibbonEllipse", RibbonIconKind::Ellipse))
+    if (gridBtn("##RibbonEllipse", RibbonIconKind::Ellipse))  // wraps to the second row
       StartEllipseCommand(cmd, log);
     RibbonItemHelp("Ellipse — center, axis endpoint, then ratio on command line.\nCommand bar: ELLIPSE or EL");
+    ImGui::SameLine(0, 4);
+    if (gridBtn("##RibbonHatch", RibbonIconKind::Hatch))
+      StartHatchCommand(cmd, log);
+    RibbonItemHelp("Hatch — pick an internal point to fill a closed area.\nCommand bar: HATCH or H");
     ImGui::SameLine(0, 4);
     if (gridBtn("##RibbonPdfAttach", RibbonIconKind::PdfAttach))
       StartPdfAttachCommand(cmd, log);
@@ -1677,6 +1765,56 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     if (smallBtn("##RibbonMtext", RibbonIconKind::Mtext, "Mtext", cw))
       StartMtextCommand(cmd, log);
     RibbonItemHelp("Mtext — multiline in a frame; after box, edit in the on-drawing editor (Ctrl+Enter reformats; Save to place). Double-click MTEXT to edit.\nCommand bar: MTEXT or MT");
+    ImGui::EndGroup();
+    // Active text style for new TEXT/MTEXT (REQ-044): an AutoCAD-style flyout of thumbnail previews.
+    ImGui::SameLine(0, 4);
+    ImGui::BeginGroup();
+    ImGui::TextUnformatted("Text style");
+    {
+      TextStyles::EnsureStandard(cmd.textStyles);
+      const TextStyle* active = ActiveTextStyle(cmd);
+      const std::string preview = active ? active->name : std::string("Standard");
+      if (ImGui::Button((preview + "##RibbonTextStyle").c_str(), ImVec2(annStyleW, 0.f)))
+        ImGui::OpenPopup("##textstyleflyout");
+      RibbonItemHelp("Active text style for new TEXT/MTEXT (REQ-044). Click for thumbnail previews.");
+      if (ImGui::BeginPopup("##textstyleflyout")) {
+        const float cardW = 132.f, thumbH = 50.f, gap = 8.f;
+        const int perRow = 3;
+        const float labelH = ImGui::GetTextLineHeight() + 4.f;
+        ImDrawList* dl = ImGui::GetWindowDrawList();
+        for (size_t i = 0; i < cmd.textStyles.size(); ++i) {
+          const TextStyle& s = cmd.textStyles[i];
+          ImGui::PushID(static_cast<int>(i));
+          if (i % static_cast<size_t>(perRow) != 0)
+            ImGui::SameLine(0, gap);
+          const ImVec2 p0 = ImGui::GetCursorScreenPos();
+          const bool sel = (s.name == cmd.activeTextStyleName);
+          if (ImGui::InvisibleButton("##card", ImVec2(cardW, thumbH + labelH))) {
+            SetActiveTextStyle(cmd, s.name);
+            ImGui::CloseCurrentPopup();
+          }
+          const bool hovered = ImGui::IsItemHovered();
+          const ImVec2 thBR(p0.x + cardW, p0.y + thumbH);
+          dl->AddRectFilled(p0, thBR, IM_COL32(245, 245, 245, 255), 3.f);
+          dl->AddRect(p0, thBR,
+                      sel ? IM_COL32(90, 160, 230, 255)
+                          : (hovered ? IM_COL32(150, 150, 150, 255) : IM_COL32(90, 90, 90, 255)),
+                      3.f, 0, sel ? 2.f : 1.f);
+          dl->PushClipRect(p0, thBR, true);
+          DrawTextStyleSample(dl, p0, ImVec2(cardW, thumbH), s, "AaBb123", IM_COL32(20, 20, 20, 255));
+          dl->PopClipRect();
+          dl->AddText(ImVec2(p0.x + 2.f, p0.y + thumbH + 2.f), IM_COL32(232, 232, 232, 255), s.name.c_str());
+          ImGui::PopID();
+        }
+        ImGui::Separator();
+        if (ImGui::Selectable("Manage Text Styles…")) {
+          TextStyles::EnsureStandard(cmd.textStyles);
+          cmd.showTextStyleManagerWindow = true;
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndPopup();
+      }
+    }
     ImGui::EndGroup();
   }
   RibbonSectionEnd();
@@ -1821,6 +1959,183 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     RibbonSectionEnd();
     } // selPdfCtxIdx >= 0
   } // contextual PDF block
+
+  // Contextual "Hatch" section (ADR-019). Shown while the HATCH command is active (editing the creation
+  // defaults) OR when filled-region hatch(es) are selected — then the controls edit the selected object(s)'
+  // pattern / color / transparency / layer / angle / scale live and undoably (REQ-042/043).
+  std::vector<int> hatchSel;
+  for (const auto& e : cmd.selection)
+    if (e.type == SelectedEntity::Type::FilledRegion && e.index >= 0 &&
+        static_cast<size_t>(e.index) < cmd.cadFilledRegions.size())
+      hatchSel.push_back(e.index);
+  const bool hatchEditing = !hatchSel.empty();
+  if (cmd.active == AppCommandState::Kind::Hatch || hatchEditing) {
+    ImGui::SameLine(0, 8);
+    const float wHatchCtx = 360.f;
+    RibbonSectionBegin("RibbonSecHatchCtx", hatchEditing ? "Hatch (selected)" : "Hatch", wHatchCtx, panelH);
+    {
+      const std::vector<hatchpat::Def>& lib = HatchLibrary();
+
+      // Working values shown in the widgets: seeded from the first selected hatch when editing, else from
+      // the creation defaults on AppCommandState.
+      std::string wPattern = cmd.hatchPatternName;
+      float wRgb[3] = {cmd.hatchColorRgb[0], cmd.hatchColorRgb[1], cmd.hatchColorRgb[2]};
+      float wTrans = cmd.hatchTransparency01;
+      std::string wLayer = cmd.hatchLayer.empty() ? cmd.currentLayer : cmd.hatchLayer;
+      float wAngle = cmd.hatchAngleDeg;
+      float wScale = cmd.hatchScale;
+      if (hatchEditing) {
+        const CadFilledRegion& fr0 = cmd.cadFilledRegions[static_cast<size_t>(hatchSel[0])];
+        wPattern = fr0.patternName;
+        wAngle = fr0.patternAngleDeg;
+        wScale = fr0.patternScale;
+        if (static_cast<size_t>(hatchSel[0]) < cmd.cadFilledRegionAttrs.size()) {
+          const EntityAttributes& a0 = cmd.cadFilledRegionAttrs[static_cast<size_t>(hatchSel[0])];
+          const CadLayerRow* lr = FindDrawingLayerRowCi(cmd, a0.layer);
+          float rgba[4] = {0.78f, 0.78f, 0.78f, 1.f};
+          ResolveEntityRgbaForViewport(a0, lr, 0.78f, 0.78f, 0.78f, rgba);
+          wRgb[0] = rgba[0]; wRgb[1] = rgba[1]; wRgb[2] = rgba[2];
+          wTrans = a0.transparency < 0.f ? 0.f : a0.transparency;
+          if (!a0.layer.empty()) wLayer = a0.layer;
+        }
+      }
+      const std::string curPat = wPattern.empty() ? std::string("SOLID") : wPattern;
+
+      // Push one undo snapshot at the start of an edit interaction (called on widget grab / discrete change).
+      auto snapEdit = [&]() { if (hatchEditing) PushUndoSnapshot(cmd, "Edit hatch"); };
+      auto setPattern = [&](const std::string& p) {
+        if (hatchEditing) { snapEdit(); for (int i : hatchSel) cmd.cadFilledRegions[static_cast<size_t>(i)].patternName = p; BumpCadGpuCache(cmd); }
+        else cmd.hatchPatternName = p;
+      };
+      auto setColor = [&](const float c[3]) {
+        if (hatchEditing) {
+          char hex[8];
+          std::snprintf(hex, sizeof(hex), "#%02X%02X%02X", static_cast<int>(std::lround(c[0] * 255.f)),
+                        static_cast<int>(std::lround(c[1] * 255.f)), static_cast<int>(std::lround(c[2] * 255.f)));
+          for (int i : hatchSel) if (static_cast<size_t>(i) < cmd.cadFilledRegionAttrs.size()) cmd.cadFilledRegionAttrs[static_cast<size_t>(i)].color = hex;
+          BumpCadGpuCache(cmd);
+        } else { cmd.hatchColorRgb[0] = c[0]; cmd.hatchColorRgb[1] = c[1]; cmd.hatchColorRgb[2] = c[2]; }
+      };
+      auto setTrans = [&](float t) {
+        if (hatchEditing) { for (int i : hatchSel) if (static_cast<size_t>(i) < cmd.cadFilledRegionAttrs.size()) cmd.cadFilledRegionAttrs[static_cast<size_t>(i)].transparency = t; BumpCadGpuCache(cmd); }
+        else cmd.hatchTransparency01 = t;
+      };
+      auto setLayer = [&](const std::string& ln) {
+        if (hatchEditing) { snapEdit(); for (int i : hatchSel) if (static_cast<size_t>(i) < cmd.cadFilledRegionAttrs.size()) cmd.cadFilledRegionAttrs[static_cast<size_t>(i)].layer = ln; BumpCadGpuCache(cmd); }
+        else cmd.hatchLayer = ln;
+      };
+      auto setAngle = [&](float v) {
+        if (hatchEditing) { for (int i : hatchSel) cmd.cadFilledRegions[static_cast<size_t>(i)].patternAngleDeg = v; BumpCadGpuCache(cmd); }
+        else cmd.hatchAngleDeg = v;
+      };
+      auto setScale = [&](float v) {
+        v = std::max(0.01f, v);
+        if (hatchEditing) { for (int i : hatchSel) cmd.cadFilledRegions[static_cast<size_t>(i)].patternScale = v; BumpCadGpuCache(cmd); }
+        else cmd.hatchScale = v;
+      };
+
+      static hatchpat::Def s_solidDef = [] { hatchpat::Def d; d.name = "SOLID"; return d; }();
+      const ImU32 swInk = IM_COL32(static_cast<int>(wRgb[0] * 255.f), static_cast<int>(wRgb[1] * 255.f),
+                                   static_cast<int>(wRgb[2] * 255.f), 255);
+      ImDrawList* tdl = ImGui::GetWindowDrawList();
+      ImGui::BeginGroup();
+      ImGui::TextDisabled("Pattern");
+      // The current-pattern swatch is a button that opens a thumbnail palette of every pattern.
+      const ImVec2 p0 = ImGui::GetCursorScreenPos();
+      const float sz = 34.f;
+      const bool openPalette = ImGui::InvisibleButton("##hatchPatBtn", ImVec2(sz, sz));
+      const hatchpat::Def* curDef = hatchpat::Find(lib, curPat);
+      tdl->AddRectFilled(p0, ImVec2(p0.x + sz, p0.y + sz),
+                         ImGui::IsItemHovered() ? IM_COL32(55, 66, 82, 255) : IM_COL32(38, 38, 42, 255), 2.f);
+      DrawHatchThumbnail(tdl, p0, ImVec2(p0.x + sz, p0.y + sz), curDef ? *curDef : s_solidDef, swInk);
+      tdl->AddRect(p0, ImVec2(p0.x + sz, p0.y + sz), IM_COL32(120, 120, 120, 255), 2.f, 0, 1.f);
+      if (openPalette)
+        ImGui::OpenPopup("HatchPatPalette");
+      ImGui::SameLine(0, 5);
+      ImGui::AlignTextToFramePadding();
+      ImGui::TextUnformatted(curPat.c_str());
+      ImGui::EndGroup();
+
+      if (ImGui::BeginPopup("HatchPatPalette")) {
+        ImGui::TextDisabled("Hatch pattern — click to choose");
+        ImGui::Separator();
+        constexpr int kCols = 6;
+        constexpr float kCell = 50.f;
+        ImGui::BeginChild("##hpgrid", ImVec2(kCols * (kCell + 4.f) + 8.f, 320.f), false);
+        ImDrawList* gdl = ImGui::GetWindowDrawList();
+        // SOLID first, then every parsed pattern.
+        std::vector<std::pair<std::string, const hatchpat::Def*>> entries;
+        entries.emplace_back("SOLID", &s_solidDef);
+        for (const hatchpat::Def& d : lib)
+          if (d.name != "SOLID")
+            entries.emplace_back(d.name, &d);
+        for (size_t i = 0; i < entries.size(); ++i) {
+          if (i % kCols != 0)
+            ImGui::SameLine(0, 4);
+          const std::string& nm = entries[i].first;
+          const hatchpat::Def* def = entries[i].second;
+          const ImVec2 c0 = ImGui::GetCursorScreenPos();
+          const bool clicked = ImGui::InvisibleButton((std::string("##hp_") + nm).c_str(), ImVec2(kCell, kCell));
+          const bool hov = ImGui::IsItemHovered();
+          const bool selected = (curPat == nm);
+          gdl->AddRectFilled(c0, ImVec2(c0.x + kCell, c0.y + kCell),
+                             hov ? IM_COL32(55, 66, 82, 255) : IM_COL32(38, 38, 42, 255), 3.f);
+          DrawHatchThumbnail(gdl, c0, ImVec2(c0.x + kCell, c0.y + kCell), *def, IM_COL32(225, 225, 225, 255));
+          gdl->AddRect(c0, ImVec2(c0.x + kCell, c0.y + kCell),
+                       selected ? IM_COL32(86, 156, 214, 255) : IM_COL32(90, 90, 95, 255), 3.f, 0,
+                       selected ? 2.f : 1.f);
+          if (hov) {
+            if (def && !def->description.empty())
+              ImGui::SetTooltip("%s — %s", nm.c_str(), def->description.c_str());
+            else
+              ImGui::SetTooltip("%s", nm.c_str());
+          }
+          if (clicked) {
+            setPattern(nm);
+            ImGui::CloseCurrentPopup();
+          }
+        }
+        ImGui::EndChild();
+        ImGui::EndPopup();
+      }
+      ImGui::SameLine(0, 8);
+
+      ImGui::BeginGroup();
+      ImGui::SetNextItemWidth(150.f);
+      ImGui::ColorEdit3("Color##hatch", wRgb, ImGuiColorEditFlags_NoInputs);
+      if (ImGui::IsItemActivated()) snapEdit();
+      if (ImGui::IsItemEdited()) setColor(wRgb);
+      float transPct = wTrans * 100.f;
+      ImGui::SetNextItemWidth(150.f);
+      const bool transChanged = ImGui::SliderFloat("Transp##hatch", &transPct, 0.f, 90.f, "%.0f%%");
+      if (ImGui::IsItemActivated()) snapEdit();
+      if (transChanged) setTrans(transPct / 100.f);
+      ImGui::SetNextItemWidth(150.f);
+      {
+        std::vector<std::string> layerList;
+        CollectAllDrawingLayers(cmd, &layerList);
+        if (ImGui::BeginCombo("Layer##hatch", wLayer.c_str())) {
+          for (const std::string& ln : layerList)
+            if (ImGui::Selectable(ln.c_str(), ln == wLayer))
+              setLayer(ln);
+          ImGui::EndCombo();
+        }
+      }
+      ImGui::EndGroup();
+      ImGui::SameLine(0, 8);
+      ImGui::BeginGroup();
+      ImGui::SetNextItemWidth(90.f);
+      const bool angChanged = ImGui::InputFloat("Angle##hatch", &wAngle, 0.f, 0.f, "%.0f\xC2\xB0");
+      if (ImGui::IsItemActivated()) snapEdit();
+      if (angChanged) setAngle(wAngle);
+      ImGui::SetNextItemWidth(90.f);
+      const bool scChanged = ImGui::InputFloat("Scale##hatch", &wScale, 0.f, 0.f, "%.2f");
+      if (ImGui::IsItemActivated()) snapEdit();
+      if (scChanged) setScale(wScale);
+      ImGui::EndGroup();
+    }
+    RibbonSectionEnd();
+  }
 
   ImGui::EndChild();
 
@@ -2889,6 +3204,27 @@ void DrawEditableGeneralSection(AppCommandState& cmd, const std::vector<Selected
       }
     }
 
+    // Current text style for new TEXT/MTEXT (REQ-044). The full STYLE management dialog lands in Phase 2.
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted("Current text style");
+    ImGui::TableNextColumn();
+    ImGui::SetNextItemWidth(-1);
+    {
+      const TextStyle* active = ActiveTextStyle(cmd);
+      const char* preview = active ? active->name.c_str() : "Standard";
+      if (ImGui::BeginCombo("##curtextstyle", preview)) {
+        for (const TextStyle& s : cmd.textStyles) {
+          const bool sel = (s.name == cmd.activeTextStyleName);
+          if (ImGui::Selectable(s.name.c_str(), sel))
+            SetActiveTextStyle(cmd, s.name);
+          if (sel)
+            ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+      }
+    }
+
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
     ImGui::TextUnformatted("Default text height (in)");
@@ -3238,6 +3574,7 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
       BumpCadGpuCache(cmd);
 
     if (ann.kind == CadAnnotation::Kind::Text) {
+      // Bearing convention (clockwise from north): 0 = north (text runs up), 90 = east (left-to-right).
       float rotDeg = BearingCwNorthDegFromMathAngleRad(ann.rotationRad);
       ImGui::TableNextRow();
       ImGui::TableNextColumn();
@@ -4452,7 +4789,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     case AppCommandState::TextCmdPhase::WaitHeight:
       return "TEXT height:";
     case AppCommandState::TextCmdPhase::WaitRotation:
-      return "TEXT rotation ° CW from N:";
+      return "TEXT rotation ° CW from N (0 = up):";
     case AppCommandState::TextCmdPhase::WaitString:
       return "TEXT content:";
     }
@@ -5904,16 +6241,44 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
   const float sx0 = std::min({p00.x, p01.x, p10.x, p11.x});
   const float sx1 = std::max({p00.x, p01.x, p10.x, p11.x});
   const float sy0 = std::min({p00.y, p01.y, p10.y, p11.y});
+  const float sy1 = std::max({p00.y, p01.y, p10.y, p11.y});
 
   const ImVec2 imgMin(imgPos.x, imgPos.y);
   const ImVec2 imgMax(imgPos.x + avail.x, imgPos.y + avail.y);
+
+  // Single-line TEXT (REQ-039): edit in place. A bare, blue-bordered input box sits right over the text —
+  // no hint line, no surrounding panel, no Save/Cancel buttons. Enter commits; Esc cancels (main.cpp).
+  if (cmd.mtextRichEditorPlain && !cmd.mtextRichEditorPlacement) {
+    const ImGuiStyle& ist0 = ImGui::GetStyle();
+    const float boxW = std::clamp(sx1 - sx0 + 8.f, 48.f, imgMax.x - imgMin.x - 4.f);
+    const float boxH = std::max(ImGui::GetFrameHeight(), sy1 - sy0);
+    const float ex = std::clamp(sx0 - 2.f, imgMin.x + 2.f, imgMax.x - boxW - 2.f);
+    const float ey = std::clamp(sy0 - ist0.FramePadding.y, imgMin.y + 2.f, imgMax.y - boxH - 2.f);
+    ImGui::SetCursorScreenPos(ImVec2(ex, ey));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
+    ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(86, 156, 214, 255));  // steel-blue selection border
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(30, 45, 66, 235));   // dark blue-gray fill
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(225, 232, 240, 255));
+    if (cmd.mtextRichEditorFocusRequest) {
+      ImGui::SetKeyboardFocusHere(0);
+      cmd.mtextRichEditorFocusRequest = false;
+    }
+    ImGui::SetNextItemWidth(boxW);
+    const bool committed =
+        ImGui::InputText("##plain_text_inplace", &cmd.mtextRichEditorBuf, ImGuiInputTextFlags_EnterReturnsTrue);
+    ImGui::PopStyleColor(3);
+    ImGui::PopStyleVar();
+    if (committed)
+      CommitMtextRichEditor(cmd, log);
+    return;
+  }
+
   constexpr float kPad = 3.f;
   const float boxScreenW = std::max(140.f, sx1 - sx0 - 2.f * kPad);
   float w = std::max(300.f, boxScreenW);
   w = std::min(w, imgMax.x - imgMin.x - 4.f);
 
-  // Single-line TEXT (REQ-039 phase 2): plain box — no MTEXT rich tags, toolbar, or multiline.
-  const bool plain = cmd.mtextRichEditorPlain && !cmd.mtextRichEditorPlacement;
+  // Rich MTEXT editor (multiline + formatting toolbar). Single-line TEXT uses the in-place box above.
   const ImGuiStyle& ist = ImGui::GetStyle();
   const float innerW = std::max(24.f, w - ist.WindowPadding.x * 2.f);
   int editorLineCount = 1;
@@ -5923,10 +6288,9 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
   }
   const float lh = ImGui::GetTextLineHeightWithSpacing();
   const float editorH =
-      plain ? ImGui::GetFrameHeight()
-            : std::clamp(static_cast<float>(editorLineCount) * lh + ist.FramePadding.y * 2.f + 12.f, 96.f, 420.f);
+      std::clamp(static_cast<float>(editorLineCount) * lh + ist.FramePadding.y * 2.f + 12.f, 96.f, 420.f);
   const float hintH = ImGui::GetTextLineHeightWithSpacing() + 4.f;
-  const float fmtRowH = plain ? 0.f : ImGui::GetFrameHeightWithSpacing() + 4.f;
+  const float fmtRowH = ImGui::GetFrameHeightWithSpacing() + 4.f;
   const float btnRowH = ImGui::GetFrameHeightWithSpacing() + 8.f;
   const float hContent = ist.WindowPadding.y * 2.f + hintH + ist.ItemSpacing.y + editorH + ist.ItemSpacing.y +
                          fmtRowH + ist.ItemSpacing.y + btnRowH;
@@ -5945,22 +6309,14 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
     editorWinFlags |= ImGuiWindowFlags_AlwaysVerticalScrollbar;
   if (ImGui::BeginChild("##MtextRichEditor", ImVec2(w, h), ImGuiChildFlags_Borders, editorWinFlags)) {
     ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + innerW);
-    ImGui::TextDisabled("%s", plain ? "Edit text. Enter or Save to update. Esc to cancel."
-                                    : "Rich tags: [[b]],[[i]],[[u]],[[caps]]…[[/…]]. Ctrl+Enter: normalize. Esc: cancel unsaved.");
+    ImGui::TextDisabled("%s",
+                        "Rich tags: [[b]],[[i]],[[u]],[[caps]]…[[/…]]. Ctrl+Enter: normalize. Esc: cancel unsaved.");
     ImGui::PopTextWrapPos();
     if (cmd.mtextRichEditorFocusRequest) {
       ImGui::SetKeyboardFocusHere(0);
       cmd.mtextRichEditorFocusRequest = false;
     }
-    if (plain) {
-      // Single-line TEXT: a plain box, Enter commits. No rich callback (no run tags on a TEXT object).
-      if (ImGui::InputText("##plain_text_body", &cmd.mtextRichEditorBuf, ImGuiInputTextFlags_EnterReturnsTrue)) {
-        CommitMtextRichEditor(cmd, log);
-        ImGui::EndChild();
-        ImGui::PopStyleColor();
-        return;
-      }
-    } else {
+    {
       ImGuiInputTextFlags flags = ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackAlways |
                                   ImGuiInputTextFlags_CallbackCharFilter;
       ImGui::InputTextMultiline("##mtext_rte_body", &cmd.mtextRichEditorBuf, ImVec2(-FLT_MIN, editorH), flags,
@@ -6015,7 +6371,7 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
     if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
       ImGui::SetTooltip("Type new ASCII in ALL CAPS");
     ImGui::PopID();
-    }  // end rich (!plain) body
+    }  // end rich MTEXT body
 
     const float saveW = ImGui::CalcTextSize("Save").x + ist.FramePadding.x * 2.f + 16.f;
     const float cancelW = ImGui::CalcTextSize("Cancel").x + ist.FramePadding.x * 2.f + 16.f;
@@ -6891,6 +7247,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     } else
       cmd.offsetHoverHighlightValid = false;
 
+    // HATCH live preview (REQ-043): each frame, trace the closed region under the cursor so the fill
+    // previews while the cursor is inside one and clears when it is not.
+    if (cmd.active == AppCommandState::Kind::Hatch) {
+      if (hovered && CadHatchTraceAt(cmd, rawX, rawY, &cmd.hatchPreviewLoop) && cmd.hatchPreviewLoop.size() >= 6) {
+        cmd.hatchPreviewValid = true;
+      } else {
+        cmd.hatchPreviewValid = false;
+        cmd.hatchPreviewLoop.clear();
+      }
+    }
+
     using AK = AppCommandState::Kind;
     const bool blockSurveyHover = cmd.active != AK::None || cmd.dimGripMoveActive || cmd.entityGripMoveActive ||
                                   cmd.mtextGripMoveActive || cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond;
@@ -6928,7 +7295,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             cmd.viewportHoverEntityValid = true;
             cmd.viewportHoverEntity = hoverHit;
           } else {
-            cmd.viewportHoverEntityValid = false;
+            // Filled-region hover (REQ-042): lowest priority, only when no linework is under the cursor.
+            const int frHover = PickFilledRegionAt(cmd, rawX, rawY);
+            if (frHover >= 0) {
+              cmd.viewportHoverEntityValid = true;
+              cmd.viewportHoverEntity.type = SelectedEntity::Type::FilledRegion;
+              cmd.viewportHoverEntity.index = frHover;
+            } else {
+              cmd.viewportHoverEntityValid = false;
+            }
           }
         }
       } else {
@@ -7362,6 +7737,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         SubmitViewportPick(cmd, commitX, commitY, log);
       }
     }
+    else if (cmd.active == K::Hatch) {
+      // HATCH (REQ-043): trace the region under the click and fill it; the command stays active on a miss
+      // so the user can click another spot (REQ-201 — nothing placed when no closed boundary is found).
+      std::vector<float> loop;
+      if (CadHatchTraceAt(cmd, rawPickX, rawPickY, &loop) && CadHatchCommitLoop(cmd, loop, log)) {
+        cmd.active = K::None;
+        cmd.hatchPreviewValid = false;
+        cmd.hatchPreviewLoop.clear();
+      } else {
+        log.push_back("HATCH — no closed boundary found there; click inside a closed area (Esc to cancel).");
+      }
+    }
     else if (cmd.active == K::Line || cmd.active == K::Circle || cmd.active == K::Polyline ||
              cmd.active == K::Arc || cmd.active == K::Ellipse || cmd.active == K::Text ||
              cmd.active == K::Mtext || cmd.active == K::DimAligned || cmd.active == K::DimLinear ||
@@ -7731,6 +8118,31 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
               [&](const SelectedEntity& x) { return x.type == clickHit.type && x.index == clickHit.index; });
             if (!alreadySelected)
               cmd.selection.push_back(clickHit);
+          }
+          EnsureAttrCounts(cmd);
+          cmd.selBoxWaitingSecond = false;
+          handled = true;
+        }
+      }
+
+      // Filled-region (hatch) pick — lowest priority, only after annotation + geometry picks miss, so a fill
+      // never steals a click from linework on top of it (REQ-042). Clicking anywhere inside the fill selects it.
+      if (!handled) {
+        const int frIx = PickFilledRegionAt(cmd, rawPickX, rawPickY);
+        if (frIx >= 0) {
+          AbortMtextGripInteraction(cmd);
+          ClearDimGripInteraction(cmd);
+          SelectedEntity fe{};
+          fe.type = SelectedEntity::Type::FilledRegion;
+          fe.index = frIx;
+          auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
+            return x.type == SelectedEntity::Type::FilledRegion && x.index == frIx;
+          });
+          if (keyShift) {
+            if (it != cmd.selection.end())
+              cmd.selection.erase(it);
+          } else if (it == cmd.selection.end()) {
+            cmd.selection.push_back(fe);
           }
           EnsureAttrCounts(cmd);
           cmd.selBoxWaitingSecond = false;
@@ -8603,6 +9015,64 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // space or floating model space). In a paper layout the canvas is the sheet (paper inches), so drawing
   // model text here would paint it at local-coord positions on the sheet — the stray "artifacts" bug (REQ-038).
   const bool modelAnnotationsVisible = modelSpace || InFloatingModelSpace(cmd);
+
+  // HATCH preview (REQ-043): translucent fill + bright outline of the candidate region under the cursor.
+  if (modelAnnotationsVisible && cmd.active == AK::Hatch && cmd.hatchPreviewValid &&
+      cmd.hatchPreviewLoop.size() >= 6) {
+    ImDrawList* pdl = ImGui::GetWindowDrawList();
+    const double denx = worldRight - worldLeft + 1e-12;
+    const double deny = worldTop - worldBottom + 1e-12;
+    std::vector<ImVec2> pts;
+    pts.reserve(cmd.hatchPreviewLoop.size() / 2);
+    for (size_t i = 0; i + 1 < cmd.hatchPreviewLoop.size(); i += 2) {
+      const float u = static_cast<float>((static_cast<double>(cmd.hatchPreviewLoop[i]) - worldLeft) / denx);
+      const float v = static_cast<float>((worldTop - static_cast<double>(cmd.hatchPreviewLoop[i + 1])) / deny);
+      pts.push_back(ImVec2(imgPos.x + u * avail.x, imgPos.y + v * avail.y));
+    }
+    const int r = static_cast<int>(cmd.hatchColorRgb[0] * 255.f);
+    const int g = static_cast<int>(cmd.hatchColorRgb[1] * 255.f);
+    const int b = static_cast<int>(cmd.hatchColorRgb[2] * 255.f);
+    pdl->AddConvexPolyFilled(pts.data(), static_cast<int>(pts.size()), IM_COL32(r, g, b, 80));
+    pdl->AddPolyline(pts.data(), static_cast<int>(pts.size()), IM_COL32(r, g, b, 235), ImDrawFlags_Closed, 2.0f);
+  }
+
+  // Hatch line patterns (REQ-043, ADR-018): draw each non-solid region's clipped pattern lines in its resolved
+  // colour. Solid fills render under the linework in the GL pass; line patterns render here in the overlay.
+  if (modelAnnotationsVisible && !cmd.cadFilledRegions.empty()) {
+    ImDrawList* hdl = ImGui::GetWindowDrawList();
+    const double denx = worldRight - worldLeft + 1e-12;
+    const double deny = worldTop - worldBottom + 1e-12;
+    std::vector<float> segs;
+    for (size_t fi = 0; fi < cmd.cadFilledRegions.size(); ++fi) {
+      const CadFilledRegion& fr = cmd.cadFilledRegions[fi];
+      if (fr.isSolid())
+        continue;
+      const hatchpat::Def* pdef = hatchpat::Find(HatchLibrary(), fr.patternName);
+      if (!pdef)
+        continue;
+      segs.clear();
+      if (hatchpattern::BuildSegments(fr, *pdef, &segs) == 0)
+        continue;
+      float rgba[4] = {0.78f, 0.78f, 0.78f, 1.f};
+      const EntityAttributes* ap = fi < cmd.cadFilledRegionAttrs.size() ? &cmd.cadFilledRegionAttrs[fi] : nullptr;
+      if (ap) {
+        const CadLayerRow* lr = FindDrawingLayerRowCi(cmd, ap->layer);
+        ResolveEntityRgbaForViewport(*ap, lr, 0.78f, 0.78f, 0.78f, rgba);
+      }
+      const ImU32 col = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
+                                 static_cast<int>(rgba[2] * 255.f),
+                                 static_cast<int>(std::clamp(rgba[3], 0.f, 1.f) * 255.f));
+      for (size_t s = 0; s + 3 < segs.size(); s += 4) {
+        const float u0 = static_cast<float>((static_cast<double>(segs[s]) - worldLeft) / denx);
+        const float v0 = static_cast<float>((worldTop - static_cast<double>(segs[s + 1])) / deny);
+        const float u1 = static_cast<float>((static_cast<double>(segs[s + 2]) - worldLeft) / denx);
+        const float v1 = static_cast<float>((worldTop - static_cast<double>(segs[s + 3])) / deny);
+        hdl->AddLine(ImVec2(imgPos.x + u0 * avail.x, imgPos.y + v0 * avail.y),
+                     ImVec2(imgPos.x + u1 * avail.x, imgPos.y + v1 * avail.y), col, 1.0f);
+      }
+    }
+  }
+
   if (modelAnnotationsVisible &&
       (!cmd.cadAnnotations.empty() || !transformAnnPreviews.empty() || showMtextCmdDraft || showDimCmdDraft)) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
@@ -8645,11 +9115,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                                    static_cast<int>(rgba[2] * 255.f), static_cast<int>(rgba[3] * 255.f));
         // An SHX font (romans.shx, …) is rendered from the real .shx file as strokes — an exact match to
         // AutoCAD. Anything else uses the resolved TrueType (with faux bold/italic for missing variants).
+        // Both are drawn UNROTATED (top-left at sp), then their vertices are rotated about sp below — the
+        // same insertion-point pivot CadAnnotationRoughBounds uses — so the glyph always matches its
+        // hit-box/selection box. Rotation is clockwise-from-north (rotationRad is CCW-from-+X math): a
+        // bearing of 0 → rotationRad π/2 → text runs up; 90 → horizontal left-to-right.
+        const int vtx0 = dl->VtxBuffer.Size;
         Shx::Font* sf = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
         if (sf && sf->valid()) {
           const float thick = std::max(1.f, fontPx * 0.05f);
           const ImVec2 baselinePt(sp.x, sp.y + fontPx);  // sp = top-left; baseline sits one cap-height down
-          Shx::DrawText(dl, *sf, baselinePt, fontPx, -a.rotationRad, col, a.text, thick);
+          Shx::DrawText(dl, *sf, baselinePt, fontPx, 0.f, col, a.text, thick);
           if (a.underline) {
             const float w = Shx::MeasureWidthPx(*sf, a.text, fontPx);
             const float uy = baselinePt.y + std::max(1.5f, fontPx * 0.12f);
@@ -8672,6 +9147,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           if (a.underline) {
             const float uy = sp.y + ext.y - std::max(1.f, fontPx * 0.07f);
             dl->AddLine(ImVec2(sp.x, uy), ImVec2(sp.x + ext.x, uy), col, std::max(1.f, fontPx * 0.06f));
+          }
+        }
+        // Rotate the just-emitted glyph vertices about the insertion point (screen y grows down, so the
+        // screen angle is −rotationRad — matching the SHX stroke convention this replaced).
+        if (a.rotationRad != 0.f) {
+          const float ang = -a.rotationRad;
+          const float ca = std::cos(ang), sa = std::sin(ang);
+          for (int vi = vtx0; vi < dl->VtxBuffer.Size; ++vi) {
+            ImVec2& p = dl->VtxBuffer[static_cast<size_t>(vi)].pos;
+            const float dx = p.x - sp.x, dy = p.y - sp.y;
+            p.x = sp.x + dx * ca - dy * sa;
+            p.y = sp.y + dx * sa + dy * ca;
           }
         }
       } else if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
@@ -9011,30 +9498,44 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       rmax->y = sp.y + fpx;
     };
 
-    // Selected single-line TEXT: a selection rectangle around the glyph so the selection is visible (parity
+    // Four screen corners that hug a single-line TEXT glyph, rotated about its insertion point exactly as
+    // the glyph is drawn (top-left pivot, screen angle −rotationRad) so the box follows rotated text.
+    auto annTextCorners = [&](const CadAnnotation& a, float padPx, ImVec2 c[4]) {
+      const float hW = CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch);
+      const float fpx = std::clamp(hW / std::max(worldPerPxY, 1.e-6f), 1.f, cmd.viewportTextMaxPx);
+      ImVec2 sp{};
+      worldToScreen(a.insX, a.insY, &sp);
+      float tw = 0.f;
+      Shx::Font* sf = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+      if (sf && sf->valid()) {
+        tw = Shx::MeasureWidthPx(*sf, a.text, fpx);
+      } else {
+        bool rb = false, ri = false;
+        ImFont* tf = a.fontFamily.empty() ? font : FontReg::Resolve(a.fontFamily, a.bold, a.italic, &rb, &ri);
+        if (!tf) tf = font;
+        tw = tf->CalcTextSizeA(fpx, FLT_MAX, 0.f, a.text.c_str()).x;
+      }
+      tw = std::max(tw, 4.f);
+      const float ang = -a.rotationRad;
+      const float ca = std::cos(ang), sa = std::sin(ang);
+      auto rot = [&](float lx, float ly) {
+        return ImVec2(sp.x + lx * ca - ly * sa, sp.y + lx * sa + ly * ca);
+      };
+      c[0] = rot(-padPx, -padPx);
+      c[1] = rot(tw + padPx, -padPx);
+      c[2] = rot(tw + padPx, fpx + padPx);
+      c[3] = rot(-padPx, fpx + padPx);
+    };
+
+    // Selected single-line TEXT: a selection box around the glyph so the selection is visible (parity
     // with MTEXT above). Grips/grip-drag for single-line TEXT are deferred to the grip phase.
     for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
       const CadAnnotation& a = cmd.cadAnnotations[ai];
       if (a.kind != CadAnnotation::Kind::Text || !isAnnSelected(ai))
         continue;
-      ImVec2 rmin{}, rmax{};
-      annScreenRect(a, &rmin, &rmax);
-      dl->AddRect(ImVec2(rmin.x - 1.f, rmin.y - 1.f), ImVec2(rmax.x + 1.f, rmax.y + 1.f), kAnnSelCol, 0.f, 0, 2.f);
-    }
-
-    // TEMP DEBUG (REQ-039): draw the actual PickCadAnnotationAt rough-bounds region in red for every TEXT,
-    // so we can see where detection believes the glyph is vs where it renders (blue). Remove after diagnosis.
-    for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
-      const CadAnnotation& a = cmd.cadAnnotations[ai];
-      if (a.kind != CadAnnotation::Kind::Text)
-        continue;
-      float mnX = 0.f, mnY = 0.f, mxX = 0.f, mxY = 0.f;
-      CadAnnotationRoughBounds(a, cmd.modelUnitsPerPlottedInch, &mnX, &mnY, &mxX, &mxY);
-      ImVec2 sa{}, sb{};
-      worldToScreen(mnX, mnY, &sa);
-      worldToScreen(mxX, mxY, &sb);
-      dl->AddRect(ImVec2(std::min(sa.x, sb.x), std::min(sa.y, sb.y)),
-                  ImVec2(std::max(sa.x, sb.x), std::max(sa.y, sb.y)), IM_COL32(255, 60, 60, 255), 0.f, 0, 1.5f);
+      ImVec2 c[4];
+      annTextCorners(a, 1.f, c);
+      dl->AddPolyline(c, 4, kAnnSelCol, ImDrawFlags_Closed, 2.f);
     }
 
     // Hover pre-highlight for text annotations (idle, not selected) — mirrors the paper-space hover (REQ-039).
@@ -9044,7 +9545,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (hi >= 0 && static_cast<size_t>(hi) < cmd.cadAnnotations.size() &&
           !isAnnSelected(static_cast<size_t>(hi))) {
         const CadAnnotation& ha = cmd.cadAnnotations[static_cast<size_t>(hi)];
-        if (ha.kind == CadAnnotation::Kind::Text || ha.kind == CadAnnotation::Kind::Mtext) {
+        if (ha.kind == CadAnnotation::Kind::Text) {
+          ImVec2 c[4];
+          annTextCorners(ha, 2.f, c);
+          dl->AddPolyline(c, 4, IM_COL32(130, 180, 240, 200), ImDrawFlags_Closed, 1.4f);
+        } else if (ha.kind == CadAnnotation::Kind::Mtext) {
           ImVec2 rmin{}, rmax{};
           annScreenRect(ha, &rmin, &rmax);
           dl->AddRect(ImVec2(rmin.x - 2.f, rmin.y - 2.f), ImVec2(rmax.x + 2.f, rmax.y + 2.f),
@@ -10191,6 +10696,276 @@ void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
   ImGui::SameLine();
   if (ImGui::Button("Load"))
     LoadSurveyPointsFromJsonFile(cmd, pathBuf, log);
+
+  ImGui::End();
+}
+
+// Quick-pick fonts shared by the dialog combo: a TrueType family ("Arial") or an SHX file name
+// ("romans.shx"). Anything FontReg / Shx can resolve works.
+static const char* kTextStyleFonts[] = {
+    "",          "romans.shx", "romand.shx", "romanc.shx", "txt.shx",         "simplex.shx",
+    "isocp.shx", "italic.shx", "Arial",      "Times New Roman", "Consolas",   "Tahoma",
+};
+
+static void DrawTextStyleSample(ImDrawList* dl, ImVec2 tl, ImVec2 sz, const TextStyle& s, const char* sample,
+                                ImU32 col) {
+  const float pad = 6.f;
+  const float maxH = std::max(6.f, sz.y - 2.f * pad);
+  const float maxW = std::max(6.f, sz.x - 2.f * pad);
+  // Cap the glyph height so a tall preview box doesn't balloon the sample; then shrink to fit the width.
+  float capPx = std::min(maxH, 48.f);
+  Shx::Font* sf = CadIsShxFontName(s.fontFamily) ? Shx::Resolve(s.fontFamily) : nullptr;
+  bool rb = false, ri = false;
+  ImFont* tf = s.fontFamily.empty() ? ImGui::GetFont() : FontReg::Resolve(s.fontFamily, s.bold, s.italic, &rb, &ri);
+  if (!tf) tf = ImGui::GetFont();
+  auto measure = [&](float cp) -> float {
+    if (sf && sf->valid()) return Shx::MeasureWidthPx(*sf, sample, cp);
+    return tf->CalcTextSizeA(cp, FLT_MAX, 0.f, sample).x;
+  };
+  const float w = measure(capPx);
+  if (w > maxW && w > 0.f)
+    capPx *= maxW / w;
+  capPx = std::clamp(capPx, 4.f, 240.f);
+  const ImVec2 org(tl.x + pad, tl.y + (sz.y - capPx) * 0.5f);  // vertically centered
+  if (sf && sf->valid())
+    Shx::DrawText(dl, *sf, ImVec2(org.x, org.y + capPx), capPx, 0.f, col, sample, std::max(1.f, capPx * 0.05f));
+  else
+    dl->AddText(tf, capPx, org, col, sample);
+}
+
+void DrawTextStyleManagerWindow(AppCommandState& cmd, std::vector<std::string>* log) {
+  std::vector<std::string> discard;
+  if (!log)
+    log = &discard;
+  TextStyles::EnsureStandard(cmd.textStyles);
+  if (cmd.activeTextStyleName.empty() || !TextStyles::Find(cmd.textStyles, cmd.activeTextStyleName))
+    cmd.activeTextStyleName = TextStyles::kStandardName;
+  if (!cmd.showTextStyleManagerWindow)
+    return;
+
+  ImGui::SetNextWindowSize(ImVec2(720, 470), ImGuiCond_FirstUseEver);
+  bool open = cmd.showTextStyleManagerWindow;
+  if (!ImGui::Begin("Text Style", &open)) {
+    cmd.showTextStyleManagerWindow = open;
+    ImGui::End();
+    return;
+  }
+  cmd.showTextStyleManagerWindow = open;
+
+  static int selIdx = 0;
+  if (selIdx < 0 || selIdx >= static_cast<int>(cmd.textStyles.size()))
+    selIdx = 0;
+  // Default the selection to the current style when the window first appears each session.
+  static bool firstShow = true;
+  if (firstShow) {
+    for (size_t i = 0; i < cmd.textStyles.size(); ++i)
+      if (cmd.textStyles[i].name == cmd.activeTextStyleName) selIdx = static_cast<int>(i);
+    firstShow = false;
+  }
+
+  ImGui::Text("Current text style:  %s", cmd.activeTextStyleName.c_str());
+  ImGui::Separator();
+
+  bool styleChanged = false;
+  int deleteIdx = -1;
+  const float footer = ImGui::GetFrameHeightWithSpacing() + 8.f;
+
+  // ── Left: styles list + live preview ───────────────────────────────────────────────────────────
+  ImGui::BeginChild("##tsleft", ImVec2(220.f, -footer), false);
+  ImGui::TextUnformatted("Styles:");
+  ImGui::BeginChild("##tslist", ImVec2(0, 200.f), true);
+  for (size_t i = 0; i < cmd.textStyles.size(); ++i) {
+    const bool sel = (static_cast<int>(i) == selIdx);
+    if (ImGui::Selectable(cmd.textStyles[i].name.c_str(), sel))
+      selIdx = static_cast<int>(i);
+  }
+  ImGui::EndChild();
+  ImGui::SetNextItemWidth(-1);
+  ImGui::BeginDisabled(true);  // filter is cosmetic for now
+  if (ImGui::BeginCombo("##allstyles", "All styles"))
+    ImGui::EndCombo();
+  ImGui::EndDisabled();
+  ImGui::Spacing();
+  {
+    const ImVec2 pmn = ImGui::GetCursorScreenPos();
+    const ImVec2 psz(ImGui::GetContentRegionAvail().x, std::max(70.f, ImGui::GetContentRegionAvail().y));
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(pmn, ImVec2(pmn.x + psz.x, pmn.y + psz.y), IM_COL32(250, 250, 250, 255), 3.f);
+    dl->AddRect(pmn, ImVec2(pmn.x + psz.x, pmn.y + psz.y), IM_COL32(90, 90, 90, 255), 3.f, 0, 1.f);
+    dl->PushClipRect(pmn, ImVec2(pmn.x + psz.x, pmn.y + psz.y), true);
+    DrawTextStyleSample(dl, pmn, psz, cmd.textStyles[static_cast<size_t>(selIdx)], "AaBb12",
+                        IM_COL32(20, 20, 20, 255));
+    dl->PopClipRect();
+    ImGui::Dummy(psz);
+  }
+  ImGui::EndChild();
+
+  ImGui::SameLine();
+
+  // ── Middle: font / size / effects (the AutoCAD groups; unsupported effects shown disabled) ───────
+  TextStyle& s = cmd.textStyles[static_cast<size_t>(selIdx)];
+  const bool isStandard = (s.name == TextStyles::kStandardName);
+  bool inUse = false;
+  for (const auto& a : cmd.cadAnnotations)
+    if (TextStyles::IsStyleableText(a) && a.styleName == s.name) {
+      inUse = true;
+      break;
+    }
+
+  ImGui::BeginChild("##tsmid", ImVec2(-150.f, -footer), false);
+  ImGui::SeparatorText("Font");
+  ImGui::TextUnformatted("Font Name:");
+  ImGui::SetNextItemWidth(230.f);
+  if (ImGui::BeginCombo("##fontname", s.fontFamily.empty() ? "(default)" : s.fontFamily.c_str())) {
+    for (const char* fn : kTextStyleFonts) {
+      const char* label = (fn[0] == '\0') ? "(default)" : fn;
+      if (ImGui::Selectable(label, s.fontFamily == fn)) {
+        s.fontFamily = fn;
+        styleChanged = true;
+      }
+    }
+    ImGui::EndCombo();
+  }
+  {
+    static bool dummyBigFont = false;
+    ImGui::BeginDisabled(true);
+    ImGui::Checkbox("Use Big Font", &dummyBigFont);
+    ImGui::EndDisabled();
+  }
+  ImGui::TextUnformatted("Font Style:");
+  ImGui::SetNextItemWidth(160.f);
+  {
+    const char* fsNames[] = {"Regular", "Bold", "Italic", "Bold Italic"};
+    const int fsIdx = (s.bold && s.italic) ? 3 : s.italic ? 2 : s.bold ? 1 : 0;
+    if (ImGui::BeginCombo("##fstyle", fsNames[fsIdx])) {
+      for (int k = 0; k < 4; ++k) {
+        if (ImGui::Selectable(fsNames[k], k == fsIdx)) {
+          s.bold = (k == 1 || k == 3);
+          s.italic = (k == 2 || k == 3);
+          styleChanged = true;
+        }
+      }
+      ImGui::EndCombo();
+    }
+  }
+
+  ImGui::SeparatorText("Size");
+  {
+    static bool dummyAnno = false;
+    ImGui::BeginDisabled(true);
+    ImGui::Checkbox("Annotative", &dummyAnno);
+    ImGui::EndDisabled();
+  }
+  ImGui::TextUnformatted("Height");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(120.f);
+  ImGui::InputFloat("##h", &s.heightInches, 0.f, 0.f, "%.4f");
+  if (ImGui::IsItemDeactivatedAfterEdit()) {
+    if (s.heightInches <= 0.f)
+      s.heightInches = 0.0625f;
+    styleChanged = true;
+  }
+
+  ImGui::SeparatorText("Effects");
+  {
+    static bool dUpside = false, dBackwards = false, dVertical = false;
+    static float dWidthFactor = 1.f;
+    ImGui::BeginDisabled(true);  // these effects are not modeled yet (visual parity with AutoCAD)
+    ImGui::Checkbox("Upside down", &dUpside);
+    ImGui::Checkbox("Backwards", &dBackwards);
+    ImGui::Checkbox("Vertical", &dVertical);
+    ImGui::TextUnformatted("Width Factor");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(100.f);
+    ImGui::InputFloat("##wf", &dWidthFactor, 0.f, 0.f, "%.4f");
+    ImGui::EndDisabled();
+  }
+  ImGui::TextUnformatted("Oblique Angle");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(100.f);
+  ImGui::InputFloat("##ob", &s.obliqueDeg, 0.f, 0.f, "%.3f");
+  if (ImGui::IsItemDeactivatedAfterEdit())
+    styleChanged = true;
+  ImGui::EndChild();
+
+  ImGui::SameLine();
+
+  // ── Right: Set Current / New… / Delete ───────────────────────────────────────────────────────────
+  ImGui::BeginGroup();
+  if (ImGui::Button("Set Current", ImVec2(132.f, 0.f)))
+    SetActiveTextStyle(cmd, s.name);
+  if (ImGui::Button("New...", ImVec2(132.f, 0.f)))
+    ImGui::OpenPopup("New Text Style");
+  ImGui::BeginDisabled(isStandard || inUse);
+  if (ImGui::Button("Delete", ImVec2(132.f, 0.f)))
+    deleteIdx = selIdx;
+  ImGui::EndDisabled();
+  if ((isStandard || inUse) && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    ImGui::SetTooltip(isStandard ? "Standard cannot be deleted."
+                                 : "Style is in use by existing text — cannot delete.");
+  ImGui::EndGroup();
+
+  // New-style modal.
+  if (ImGui::BeginPopupModal("New Text Style", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    static char newNameBuf[120] = "Style1";
+    ImGui::TextUnformatted("Style name:");
+    ImGui::SetNextItemWidth(240.f);
+    ImGui::InputText("##newname", newNameBuf, IM_ARRAYSIZE(newNameBuf));
+    const std::string nm = TrimUi(std::string(newNameBuf));
+    const bool dup = !nm.empty() && TextStyles::Find(cmd.textStyles, nm) != nullptr;
+    if (dup)
+      ImGui::TextColored(ImVec4(1.f, 0.5f, 0.4f, 1.f), "A style with that name already exists.");
+    ImGui::BeginDisabled(nm.empty() || dup);
+    if (ImGui::Button("OK", ImVec2(110.f, 0.f))) {
+      PushUndoSnapshot(cmd, "Add text style");
+      TextStyle ns = s;  // seed from the selected style
+      ns.name = nm;
+      cmd.textStyles.push_back(ns);
+      selIdx = static_cast<int>(cmd.textStyles.size()) - 1;
+      log->push_back("Text style added: " + nm);
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(110.f, 0.f)))
+      ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+  }
+
+  // ── Footer: Apply / Cancel / Help ────────────────────────────────────────────────────────────────
+  ImGui::Separator();
+  const float bw = 90.f;
+  ImGui::SetCursorPosX(ImGui::GetWindowWidth() - (bw + 8.f) * 3.f);
+  if (ImGui::Button("Apply", ImVec2(bw, 0.f))) {
+    // Edits already apply live; Apply just re-confirms (re-bake + cache).
+    TextStyles::RebakeAllForStyle(cmd.cadAnnotations, s);
+    BumpCadGpuCache(cmd);
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", ImVec2(bw, 0.f)))
+    cmd.showTextStyleManagerWindow = false;
+  ImGui::SameLine();
+  ImGui::BeginDisabled(true);
+  ImGui::Button("Help", ImVec2(bw, 0.f));
+  ImGui::EndDisabled();
+
+  // Apply edits to referencing text (live reference) + keep the new-text default height in sync.
+  if (styleChanged) {
+    TextStyles::RebakeAllForStyle(cmd.cadAnnotations, s);
+    if (cmd.activeTextStyleName == s.name)
+      SetActiveTextStyle(cmd, s.name);
+    BumpCadGpuCache(cmd);
+  }
+  if (deleteIdx >= 0 && deleteIdx < static_cast<int>(cmd.textStyles.size())) {
+    PushUndoSnapshot(cmd, "Delete text style");
+    const std::string nm = cmd.textStyles[static_cast<size_t>(deleteIdx)].name;
+    cmd.textStyles.erase(cmd.textStyles.begin() + deleteIdx);
+    if (cmd.activeTextStyleName == nm)
+      SetActiveTextStyle(cmd, TextStyles::kStandardName);
+    if (selIdx >= static_cast<int>(cmd.textStyles.size()))
+      selIdx = static_cast<int>(cmd.textStyles.size()) - 1;
+    log->push_back("Text style deleted: " + nm);
+  }
 
   ImGui::End();
 }

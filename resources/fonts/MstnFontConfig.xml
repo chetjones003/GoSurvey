@@ -1,0 +1,276 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FontConfig>
+
+ <Languages>            <!-- specify the default fonts for each language -->
+    <LangInfo>
+        <Language>English</Language>
+        <DefaultRscFont>Standard</DefaultRscFont>
+        <DefaultTTFont>Arial</DefaultTTFont>
+        <DefaultShxFont>simplex,msdefault</DefaultShxFont>
+        <DefaultShxBigFont>bigfont,kanjibig</DefaultShxBigFont>
+    </LangInfo>
+
+    <LangInfo>
+        <Language>Japanese</Language>
+        <DefaultRscFont>Kanji</DefaultRscFont>
+        <DefaultTTFont>MS Gothic</DefaultTTFont>
+        <DefaultShxFont>kanji</DefaultShxFont>
+        <DefaultShxBigFont>bigfont,kanjibig</DefaultShxBigFont>
+        <CustomFontCreation>True</CustomFontCreation>
+    </LangInfo>
+
+    <LangInfo>
+        <Language>SimpChinese</Language>
+        <DefaultRscFont>Standard</DefaultRscFont>
+        <DefaultTTFont>SimSun</DefaultTTFont>
+        <DefaultShxFont>simplex,msdefault</DefaultShxFont>
+        <DefaultShxBigFont>gbcbig</DefaultShxBigFont>
+        <CustomFontCreation>True</CustomFontCreation>
+    </LangInfo>
+
+    <LangInfo>
+        <Language>TradChinese</Language>     <!-- also used for HongKongChinese -->
+        <DefaultRscFont>chinese_traditional</DefaultRscFont>
+        <DefaultTTFont>MingLiU</DefaultTTFont>
+        <DefaultShxFont>tradch</DefaultShxFont>
+        <DefaultShxBigFont>chineset</DefaultShxBigFont>
+        <CustomFontCreation>True</CustomFontCreation>
+    </LangInfo>
+
+    <LangInfo>
+        <Language>Korean</Language>
+        <DefaultRscFont>Gothic_single</DefaultRscFont>
+        <DefaultTTFont>GulimChe</DefaultTTFont>
+        <DefaultShxFont>kor</DefaultShxFont>
+        <DefaultShxBigFont>whgtxt,korbig</DefaultShxBigFont>
+        <CustomFontCreation>True</CustomFontCreation>
+    </LangInfo>
+
+    <LangInfo>
+        <Language>Arabic</Language>
+        <DefaultRscFont>Standard</DefaultRscFont>
+        <DefaultTTFont>Arial</DefaultTTFont>
+        <DefaultShxFont>simplex,msdefault</DefaultShxFont>
+        <DefaultShxBigFont>bigfont,kanjibig</DefaultShxBigFont>
+        <TTFontLayout>2</TTFontLayout>
+    </LangInfo>
+
+    <LangInfo>
+        <Language>Hebrew</Language>
+        <DefaultRscFont>Standard</DefaultRscFont>
+        <DefaultTTFont>Arial</DefaultTTFont>
+        <DefaultShxFont>simplex,msdefault</DefaultShxFont>
+        <DefaultShxBigFont>bigfont,kanjibig</DefaultShxBigFont>
+        <TTFontLayout>1</TTFontLayout>
+    </LangInfo>
+
+    <LangInfo>
+        <Language>Thai</Language>
+        <DefaultRscFont>Standard</DefaultRscFont>
+        <DefaultTTFont>Arial</DefaultTTFont>
+        <DefaultShxFont>simplex,msdefault</DefaultShxFont>
+        <DefaultShxBigFont>bigfont,kanjibig</DefaultShxBigFont>
+        <TTFontLayout>3</TTFontLayout>
+    </LangInfo>
+
+    <LangInfo>
+        <Language>Vietnamese</Language>
+        <DefaultRscFont>Standard</DefaultRscFont>
+        <DefaultTTFont>Arial</DefaultTTFont>
+        <DefaultShxFont>simplex,msdefault</DefaultShxFont>
+        <DefaultShxBigFont>bigfont,kanjibig</DefaultShxBigFont>
+    </LangInfo>
+
+ </Languages>
+
+ <Fonts>
+<!-- put RSC fonts here -->
+    <RscFontInfo>
+        <Name>architectural,block_outline,char_fast_font,compressed,engineering,fancy,iso_fontleft,iso_fontright,
+              italics,low_res_filled,standard,uppercase,working</Name>
+        <Hidden>False</Hidden>
+        <CodePage>1252</CodePage>
+        <DiameterChar>201</DiameterChar>
+        <PlusMinusChar>200</PlusMinusChar>
+        <DegreeChar>94</DegreeChar>
+        <CreateShxUnifont>True</CreateShxUnifont>
+        <CreateEditorTempFont>True</CreateEditorTempFont>
+    </RscFontInfo>
+
+    <RscFontInfo>
+        <Name>intl_engineering,intl_iso</Name>
+        <Hidden>False</Hidden>
+        <CodePage>1252</CodePage>
+        <DegreeChar>176</DegreeChar>
+        <DiameterChar>248</DiameterChar>
+        <PlusMinusChar>177</PlusMinusChar>
+        <CreateShxUnifont>True</CreateShxUnifont>
+        <CreateEditorTempFont>True</CreateEditorTempFont>
+    </RscFontInfo>
+
+    <RscFontInfo>
+        <Name>intl_working</Name>
+        <Hidden>False</Hidden>
+        <CodePage>1252</CodePage>
+        <DegreeChar>94</DegreeChar>
+        <DiameterChar>248</DiameterChar>
+        <PlusMinusChar>240</PlusMinusChar>
+        <CreateShxUnifont>True</CreateShxUnifont>
+        <CreateEditorTempFont>True</CreateEditorTempFont>
+    </RscFontInfo>
+
+    <RscFontInfo>
+        <Name>ansi_symbols,feature_control_symbols</Name>
+        <Hidden>False</Hidden>
+        <CodePage>1252</CodePage>
+        <DegreeChar>94</DegreeChar>
+        <DiameterChar>110</DiameterChar>
+        <PlusMinusChar>126</PlusMinusChar>
+        <CreateShxUnifont>False</CreateShxUnifont>
+        <CreateEditorTempFont>True</CreateEditorTempFont>
+    </RscFontInfo>
+
+    <RscFontInfo>
+        <Name>font_iso,gen_eng</Name>
+        <Hidden>False</Hidden>
+        <CodePage>1252</CodePage>
+        <DegreeChar>94</DegreeChar>
+        <DiameterChar>126</DiameterChar>
+        <PlusMinusChar>200</PlusMinusChar>
+        <CreateShxUnifont>True</CreateShxUnifont>
+        <CreateEditorTempFont>True</CreateEditorTempFont>
+    </RscFontInfo>
+
+    <RscFontInfo>
+        <Name>iges1001</Name>
+        <Hidden>False</Hidden>
+        <CodePage>1252</CodePage>
+        <DegreeChar>94</DegreeChar>
+        <DiameterChar>110</DiameterChar>
+        <PlusMinusChar>200</PlusMinusChar>
+        <CreateShxUnifont>True</CreateShxUnifont>
+        <CreateEditorTempFont>True</CreateEditorTempFont>
+    </RscFontInfo>
+
+    <RscFontInfo>
+        <Name>iges1002</Name>
+        <Hidden>False</Hidden>
+        <CodePage>1252</CodePage>
+        <DegreeChar>94</DegreeChar>
+        <DiameterChar>201</DiameterChar>
+        <PlusMinusChar>35</PlusMinusChar>
+        <CreateShxUnifont>True</CreateShxUnifont>
+        <CreateEditorTempFont>True</CreateEditorTempFont>
+    </RscFontInfo>
+
+    <RscFontInfo>
+        <Name>iges1003</Name>
+        <Hidden>False</Hidden>
+        <CodePage>1252</CodePage>
+        <DegreeChar>94</DegreeChar>
+        <DiameterChar>201</DiameterChar>
+        <PlusMinusChar>35</PlusMinusChar>
+        <CreateShxUnifont>True</CreateShxUnifont>
+        <CreateEditorTempFont>True</CreateEditorTempFont>
+    </RscFontInfo>
+
+    <RscFontInfo>
+        <Name>cs_char_fast_font,cs_font_iso,cs_font_eng</Name>
+        <Hidden>False</Hidden>
+        <CodePage>1250</CodePage>
+    </RscFontInfo>
+
+    <RscFontInfo>
+        <Name>kanji</Name>
+        <Hidden>False</Hidden>
+        <CodePage>932</CodePage>
+        <DiameterChar>934</DiameterChar>
+        <DegreeChar>33163</DegreeChar>
+        <PlusMinusChar>33149</PlusMinusChar>
+        <CreateShxUnifont>True</CreateShxUnifont>
+        <CreateEditorTempFont>False</CreateEditorTempFont>
+    </RscFontInfo>
+
+    <RscFontInfo>
+        <Name>myongjo_outline,myongjo_fill,gothic_outline,gothic_fill,myongjo_single,gothic_single</Name>
+        <Hidden>False</Hidden>
+        <CodePage>949</CodePage>
+        <CreateShxUnifont>True</CreateShxUnifont>
+        <CreateEditorTempFont>False</CreateEditorTempFont>
+    </RscFontInfo>
+
+    <RscFontInfo>
+        <Name>chinese_traditional</Name>
+        <Hidden>False</Hidden>
+        <CodePage>950</CodePage>
+        <CreateShxUnifont>True</CreateShxUnifont>
+        <CreateEditorTempFont>False</CreateEditorTempFont>
+    </RscFontInfo>
+
+    <RscFontInfo>
+        <Name>atisb,atisn</Name>
+        <Hidden>False</Hidden>
+        <CodePage>1256</CodePage>
+        <CreateShxUnifont>True</CreateShxUnifont>
+        <CreateEditorTempFont>True</CreateEditorTempFont>
+    </RscFontInfo>
+
+    <RscFontInfo>
+        <Name>*</Name>                      <!-- for RSC fonts not listed above -->
+        <Hidden>False</Hidden>
+        <DegreeChar>94</DegreeChar>
+        <DiameterChar>216</DiameterChar>
+        <PlusMinusChar>200</PlusMinusChar>
+        <CreateShxUnifont>True</CreateShxUnifont>
+        <CreateEditorTempFont>True</CreateEditorTempFont>
+    </RscFontInfo>
+
+<!-- put SHX fonts here -->
+    <ShxFontInfo>     <!-- Japanese SHX fonts -->
+        <Name>kanji,kanjibig,bigfont,extfont,extfont2,@extfont2,spec_bar,spec_sl,special</Name>
+        <CodePage>932</CodePage>
+        <Hidden>False</Hidden>
+    </ShxFontInfo>
+
+    <ShxFontInfo>     <!-- Simplified Chinese SHX fonts -->
+        <Name>gbcbig,tssdchn,hzjd,hztxt</Name>
+        <CodePage>936</CodePage>
+        <Hidden>False</Hidden>
+    </ShxFontInfo>
+
+    <ShxFontInfo>    <!-- Traditional Chinese SHX fonts -->
+        <Name>tradch,chineset,tradchbig,chinese_traditionalbig</Name>
+        <CodePage>950</CodePage>
+        <Hidden>False</Hidden>
+    </ShxFontInfo>
+
+    <ShxFontInfo>   <!-- Korean SHX fonts -->
+        <Name>whgdtxt,whgtxt,whtgtxt,whtmtxt,kor,korbig,myongjo_outlinebig,myongjo_fillbig,gothic_outlinebig,gothic_fillbig,myongjo_singlebig,gothic_singlebig</Name>
+        <CodePage>949</CodePage>
+        <Hidden>False</Hidden>
+    </ShxFontInfo>
+
+    <ShxFontInfo>   <!-- Cyrillic SHX fonts -->
+        <Name>russ</Name>
+        <CodePage>1251</CodePage>
+        <Hidden>False</Hidden>
+    </ShxFontInfo>
+
+    <ShxFontInfo>                           <!-- for SHX fonts not listed above -->
+        <Name>*</Name>
+        <Hidden>False</Hidden>
+        <CreateEditorTempFont>True</CreateEditorTempFont>
+    </ShxFontInfo>
+
+<!-- this section allows hiding (removing from user interface) TrueType fonts -->
+    <TTFontInfo>
+        <Name>*</Name>
+        <Hidden>False</Hidden>              <!-- set this to True to hide all TrueType Fonts -->
+    </TTFontInfo>
+
+ </Fonts>
+
+ <HideDuplicateNames>True</HideDuplicateNames> <!-- Hide fonts with the same name as another font of a different type. Set to False to
+                                                    show all fonts, even if another font with the same name but a different type exists. -->
+
+</FontConfig>

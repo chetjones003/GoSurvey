@@ -2,6 +2,7 @@
 
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
+#include "SurveyCsvValidate.hpp"
 #include "SurveyPoints.hpp"
 
 #include <algorithm>
@@ -12,6 +13,8 @@
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <system_error>
+#include <unordered_set>
 
 #include <filesystem>
 
@@ -187,7 +190,11 @@ struct ParseOutcome {
 ParseOutcome ParseDataRow(const std::vector<std::string>& cells, SurveyCsvLayout layout, bool hasIdColumn,
                           int* autoIdCounter) {
   ParseOutcome o;
-  const size_t need = hasIdColumn ? 5 : 3;
+  // REQ-041: elevation (Z) and the trailing description are optional. The required
+  // minimum is the ID (if present) plus the two horizontal coordinates: P,N,E for the
+  // PENZD layouts, N,E (or E,N) for NEZ/ENZ. A missing Z defaults to 0; a missing
+  // description is empty. A Z that *is* present but unparseable is still an error.
+  const size_t need = hasIdColumn ? 3 : 2;
   if (cells.size() < need) {
     o.err = "too few columns (need " + std::to_string(need) + ", got " + std::to_string(cells.size()) + ")";
     return o;
@@ -211,11 +218,11 @@ ParseOutcome ParseDataRow(const std::vector<std::string>& cells, SurveyCsvLayout
       o.err = "E (easting) is not a valid number";
       return o;
     }
-    if (!ParseDoubleStrict(cells[3], &z)) {
+    if (cells.size() > 3 && !Trim(cells[3]).empty() && !ParseDoubleStrict(cells[3], &z)) {
       o.err = "Z is not a valid number";
       return o;
-    }
-    desc = Trim(cells[4]);
+    } // else z stays 0 — no elevation provided defaults to 0
+    desc = cells.size() > 4 ? Trim(cells[4]) : std::string();
   } else if (layout == SurveyCsvLayout::PENZD_PE) {
     if (!ParseIntStrict(cells[0], &o.pt.id)) {
       o.err = "P (ID) is not a valid integer";
@@ -229,11 +236,11 @@ ParseOutcome ParseDataRow(const std::vector<std::string>& cells, SurveyCsvLayout
       o.err = "N (northing) is not a valid number";
       return o;
     }
-    if (!ParseDoubleStrict(cells[3], &z)) {
+    if (cells.size() > 3 && !Trim(cells[3]).empty() && !ParseDoubleStrict(cells[3], &z)) {
       o.err = "Z is not a valid number";
       return o;
-    }
-    desc = Trim(cells[4]);
+    } // else z stays 0 — no elevation provided defaults to 0
+    desc = cells.size() > 4 ? Trim(cells[4]) : std::string();
   } else if (layout == SurveyCsvLayout::NEZ) {
     if (!autoIdCounter) {
       o.err = "internal: missing auto ID";
@@ -248,10 +255,10 @@ ParseOutcome ParseDataRow(const std::vector<std::string>& cells, SurveyCsvLayout
       o.err = "E (easting) is not a valid number";
       return o;
     }
-    if (!ParseDoubleStrict(cells[2], &z)) {
+    if (cells.size() > 2 && !Trim(cells[2]).empty() && !ParseDoubleStrict(cells[2], &z)) {
       o.err = "Z is not a valid number";
       return o;
-    }
+    } // else z stays 0 — no elevation provided defaults to 0
   } else if (layout == SurveyCsvLayout::ENZ) {
     if (!autoIdCounter) {
       o.err = "internal: missing auto ID";
@@ -266,10 +273,10 @@ ParseOutcome ParseDataRow(const std::vector<std::string>& cells, SurveyCsvLayout
       o.err = "N (northing) is not a valid number";
       return o;
     }
-    if (!ParseDoubleStrict(cells[2], &z)) {
+    if (cells.size() > 2 && !Trim(cells[2]).empty() && !ParseDoubleStrict(cells[2], &z)) {
       o.err = "Z is not a valid number";
       return o;
-    }
+    } // else z stays 0 — no elevation provided defaults to 0
   } else {
     o.err = "unknown layout";
     return o;
@@ -374,6 +381,9 @@ SurveyCsvLayout SurveyCsvLayoutFromUiIndex(int idx) {
 void SurveyCsvRefreshImportPreview(AppCommandState& st) {
   st.surveyImportPreviewText.clear();
   st.surveyImportPreviewValidation.clear();
+  st.surveyImportFileBlocked = true; // assume blocked until a valid, importable file proves otherwise
+  st.surveyImportValidRowCount = 0;
+  st.surveyImportBadRowCount = 0;
 
   if (!st.surveyImportCsvPath[0]) {
     st.surveyImportPreviewValidation = "Pick a CSV file to preview.";
@@ -381,10 +391,33 @@ void SurveyCsvRefreshImportPreview(AppCommandState& st) {
     return;
   }
 
+  // REQ-041: classify the file before any import so the user gets a specific reason.
+  const fs::path path = fs::u8path(std::string(st.surveyImportCsvPath));
+  std::error_code ec;
+  const bool exists = fs::exists(path, ec) && !ec && fs::is_regular_file(path, ec);
+  bool empty = false;
+  if (exists) {
+    const auto sz = fs::file_size(path, ec);
+    empty = !ec && sz == 0;
+  }
+  bool canOpen = false;
+  if (exists && !empty) {
+    std::ifstream probe;
+    canOpen = OpenInput(st.surveyImportCsvPath, &probe);
+  }
+  const survey_csv::FileState fstate = survey_csv::ClassifyFileState(exists, empty, canOpen);
+  if (fstate != survey_csv::FileState::Ok) {
+    st.surveyImportPreviewValidation = std::string("Cannot import — ") + survey_csv::FileStateMessage(fstate);
+    st.surveyImportPreviewDirty = false;
+    return;
+  }
+
   std::string blob;
   constexpr size_t kPreviewCap = 256 * 1024;
   if (!ReadFileLimited(st.surveyImportCsvPath, &blob, kPreviewCap, nullptr)) {
-    st.surveyImportPreviewValidation = "Could not read the file for preview.";
+    // The probe opened the file but the read failed — treat as a file-level block.
+    st.surveyImportPreviewValidation =
+        std::string("Cannot import — ") + survey_csv::FileStateMessage(survey_csv::FileState::CannotOpen);
     st.surveyImportPreviewDirty = false;
     return;
   }
@@ -401,9 +434,10 @@ void SurveyCsvRefreshImportPreview(AppCommandState& st) {
   int previewAuto = MaxSurveyPointId(st.surveyPoints) + 1;
   previewAuto = std::max(previewAuto, st.createPointsNextId);
 
-  int okRows = 0;
-  int badRows = 0;
+  int parsedOk = 0;
+  int parseFail = 0;
   std::vector<std::string> problems;
+  std::vector<survey_csv::RowId> rowsWithId; // parsed rows carrying an explicit ID, in source order
   constexpr int kMaxProblems = 24;
 
   for (size_t li = startRow; li < lines.size(); ++li) {
@@ -413,21 +447,54 @@ void SurveyCsvRefreshImportPreview(AppCommandState& st) {
     int autoCounter = previewAuto;
     ParseOutcome pr = ParseDataRow(cells, layout, hasId, hasId ? nullptr : &autoCounter);
     if (!pr.ok) {
-      ++badRows;
+      ++parseFail;
       if (static_cast<int>(problems.size()) < kMaxProblems)
         problems.push_back("Line " + std::to_string(li + 1) + ": " + pr.err);
     } else {
-      ++okRows;
-      if (!hasId)
+      ++parsedOk;
+      if (hasId)
+        rowsWithId.push_back({pr.pt.id, li + 1});
+      else
         previewAuto = autoCounter;
     }
   }
 
+  // REQ-041: flag duplicate IDs — within the file and against existing session points —
+  // mirroring the importer's skip rules so the valid/skip counts are accurate.
+  std::unordered_set<int> sessionIds;
+  if (hasId) {
+    sessionIds.reserve(st.surveyPoints.size());
+    for (const auto& p : st.surveyPoints)
+      sessionIds.insert(p.id);
+  }
+  const survey_csv::DuplicateScan dup = survey_csv::ScanDuplicateIds(rowsWithId, sessionIds);
+  for (const auto& m : dup.messages) {
+    if (static_cast<int>(problems.size()) < kMaxProblems)
+      problems.push_back(m);
+  }
+
+  const int duplicateBad = static_cast<int>(dup.badLines.size());
+  const int okRows = parsedOk - duplicateBad; // rows that would actually import
+  const int badRows = parseFail + duplicateBad;
+  st.surveyImportValidRowCount = okRows;
+  st.surveyImportBadRowCount = badRows;
+
   std::ostringstream summ;
+  // REQ-041: overall status first. Zero importable rows is a file-level block.
+  if (okRows <= 0) {
+    st.surveyImportFileBlocked = true;
+    summ << "Cannot import — no valid data rows.\n";
+  } else {
+    st.surveyImportFileBlocked = false;
+    summ << "Ready to import — " << okRows << " point(s)";
+    if (badRows > 0)
+      summ << " (" << badRows << " row(s) will be skipped)";
+    summ << ".\n";
+  }
   summ << "Layout: " << HeaderLine(layout) << (hasId ? " (with point IDs)" : " (IDs assigned on import)") << '\n';
   if (blob.size() >= kPreviewCap)
     summ << "Preview data truncated at " << kPreviewCap << " bytes; import reads the full file.\n";
-  summ << "Non-empty data rows scanned: " << (okRows + badRows) << " — OK: " << okRows << ", problems: " << badRows
+  summ << "Non-empty data rows scanned: " << (parsedOk + parseFail) << " — OK: " << okRows << ", problems: " << badRows
        << '\n';
   for (const auto& p : problems)
     summ << p << '\n';

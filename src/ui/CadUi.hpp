@@ -68,6 +68,10 @@ void DrawSurveyReportsPanel(AppCommandState& cmd);
 
 void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
+/// Text style manager (STYLE, REQ-044): create / rename / delete / edit named text styles. Editing a
+/// style re-bakes its referencing, non-overridden text (live reference); "Standard" cannot be deleted.
+void DrawTextStyleManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+
 /// Modal after COPY when survey points were selected — duplicate ID policy for new survey rows.
 void DrawCopySurveyDuplicateModal(AppCommandState& cmd, std::vector<std::string>& log);
 

@@ -441,6 +441,29 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     appendEllipsePolylineStrip(hlLines, lineZ, cmd.userEllipses[k], 56);
   } else if (e.type == SelectedEntity::Type::Polyline) {
     appendCommittedPolylineStrip(hlLines, lineZ, cmd, e.index);
+  } else if (e.type == SelectedEntity::Type::FilledRegion) {
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= cmd.cadFilledRegions.size())
+      return;
+    const CadFilledRegion& fr = cmd.cadFilledRegions[k];
+    // Outline every loop (outer + holes) as closed line-segment pairs (GL_LINES) so the selection/hover
+    // highlight traces the hatch boundary on top of the fill (REQ-042).
+    for (size_t loop = 0; loop < fr.loopStart.size(); ++loop) {
+      const int begin = fr.loopStart[loop];
+      const int cnt = fr.loopCount(loop);
+      if (cnt < 2)
+        continue;
+      for (int i = 0; i < cnt; ++i) {
+        const int a = begin + i;
+        const int b = begin + (i + 1) % cnt;
+        hlLines->push_back(fr.verts[static_cast<size_t>(a) * 2]);
+        hlLines->push_back(fr.verts[static_cast<size_t>(a) * 2 + 1]);
+        hlLines->push_back(lineZ);
+        hlLines->push_back(fr.verts[static_cast<size_t>(b) * 2]);
+        hlLines->push_back(fr.verts[static_cast<size_t>(b) * 2 + 1]);
+        hlLines->push_back(lineZ);
+      }
+    }
   }
 }
 
