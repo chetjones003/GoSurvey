@@ -375,6 +375,8 @@ struct AppCommandState {
     PaperRectViewport,
     /// HATCH: pick an internal point; trace the enclosing boundary and fill it (REQ-043).
     Hatch,
+    /// PAN: interactive view pan — left-drag pans the active view; Esc/Enter/right-click exits (REQ-045).
+    Pan,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -405,6 +407,7 @@ struct AppCommandState {
     case Kind::Paste:         return "PASTE";
     case Kind::PaperRectViewport: return "MVIEW";
     case Kind::Hatch:         return "HATCH";
+    case Kind::Pan:           return "PAN";
     default:                  return "";
     }
   }
@@ -1508,6 +1511,9 @@ void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, floa
 
 void StartZoomExtentsCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartZoomWindowCommand(AppCommandState& st, std::vector<std::string>& log);
+/// PAN command (REQ-045): enters interactive pan mode — left-drag pans the active view (hand cursor);
+/// Esc / Enter / right-click exits. Reuses the existing middle-drag view-pan math.
+void StartPanCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Applies pending zoom-extents or zoom-window requests using current framebuffer size.
 void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY, float* zoom, int fbW, int fbH,
                                 float viewportAspect, std::vector<std::string>& log);

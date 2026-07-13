@@ -1974,6 +1974,7 @@ const CmdEntry kRegistry[] = {
     {"offset", "o", "Offset at a distance"},
     {"zoomextents", "ze", "Zoom to drawing extents"},
     {"zoomwindow", "zw", "Zoom to a window"},
+    {"pan", "p", "Pan the view (drag with the left mouse button)"},
     {"createpoints", "crtpts", "Create survey points"},
     {"viewpoints", "vwpts", "View / edit survey points"},
     {"importpoints", "imppts", "Import survey points"},
@@ -2372,6 +2373,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "zoomwindow") {
     StartZoomWindowCommand(st, log);
+    return true;
+  }
+  if (primary == "pan") {
+    StartPanCommand(st, log);
     return true;
   }
   if (primary == "createpoints") {
@@ -9983,6 +9988,21 @@ void StartZoomWindowCommand(AppCommandState& st, std::vector<std::string>& log) 
       "cancels.");
 }
 
+void StartPanCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  // PAN coexists with any view state but is its own command; cancel an in-progress draw/edit first.
+  if (st.active != K::None && st.active != K::Pan) {
+    log.push_back("PAN — finish or cancel the active command first.");
+    return;
+  }
+  ResetAllCadDraftTools(st);
+  ResetModifyRotateDraft(st);
+  st.active      = K::Pan;
+  st.lastCommand = K::Pan;
+  st.selBoxWaitingSecond = false;
+  log.push_back("PAN — drag with the left mouse button. Press Esc, Enter, or right-click to exit.");
+}
+
 void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY, float* zoom, int fbW, int fbH,
                                 float viewportAspect, std::vector<std::string>& log) {
   if (fbW <= 0 || fbH <= 0)
@@ -10173,6 +10193,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("INVERSE canceled.");
   else if (st.active == AppCommandState::Kind::Zoom)
     log.push_back("ZOOM WINDOW canceled.");
+  else if (st.active == AppCommandState::Kind::Pan)
+    log.push_back("PAN — exited.");
   else if (st.active == AppCommandState::Kind::PdfAttach)
     log.push_back("PDFATTACH canceled.");
   else if (st.active == AppCommandState::Kind::Paste)
@@ -10437,6 +10459,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   }
 
   if (line.empty()) {
+    if (st.active == K::Pan) {
+      // Enter (or right-click in Enter mode) exits PAN; Esc exits via CancelActiveCommand.
+      st.active = K::None;
+      log.push_back("PAN — exited.");
+      return;
+    }
     if (st.active == K::Line && st.linePhase == AppCommandState::LinePhase::NeedNextPoint) {
       // Blank Enter ends the current line chain; restart LINE for the next one.
       ResetSegmentAngleLock(st);

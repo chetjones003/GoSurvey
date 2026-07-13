@@ -821,6 +821,29 @@ requirements is a planning failure, not a sign of rigor.
   dialog (create/rename/delete/edit + re-bake referencing text); Phase 3 = Properties per-text
   overrides + oblique rendering.
 
+### REQ-045 — PAN command (interactive view pan via the command line)
+- Purpose: AutoCAD-style typed panning — the user asked for a PAN command because only
+  middle-mouse drag panned the view
+- Priority: should
+- Type: functional
+- Statement: A `PAN` command (alias `P`), recognized at the command line like every other
+  command, enters an interactive **pan mode**: the cursor becomes a **hand** and dragging with
+  the **left** mouse button pans the active view 1:1 with the cursor. Pressing **Esc**,
+  **Enter**, or **right-clicking** exits pan mode and restores the prior cursor and active tool.
+  Pan mode operates in model space, paper space, and floating model space, reusing the **same
+  view transform** as the existing middle-mouse-drag pan — which continues to work unchanged.
+  This is a UI-layer interaction over the existing view pan; no geometry, coordinate, or storage
+  behavior changes (REQ-101 fidelity untouched).
+- Acceptance:
+  - typing `PAN` or `P` enters pan mode and the cursor changes to a hand;
+  - left-mouse drag moves the view by the drag delta (1:1) in the active space;
+  - Esc, Enter, or right-click exits pan mode and restores the prior cursor and active tool;
+  - existing middle-mouse-drag pan still works unchanged;
+  - pan mode works in both model space and floating/paper space.
+- Owner-layer: UI
+- Status: accepted
+- Revisions: 2026-06-21 — initial.
+
 ---
 
 ## Performance requirements
@@ -949,6 +972,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-042 | Commands/Domain/UI/Renderer/IO | `HatchTests` (point-in-polygon-with-holes pick; box-select hit; move translates loops; .gs round-trip) + manual (click inside selects; outside/in-hole does not; delete/move/copy + undo; hover; box-select) | accepted |
 | REQ-043 | Commands/Renderer/UI/Domain/IO | `HatchTests` (boundary trace: closed rect → loop, gap → none, nested → smallest; pattern/angle/scale stored) + manual (prompt internal point; inside→preview, outside→none; click fills region; no-region message; ribbon color/transparency/layer/angle/scale honored; selectable) | accepted |
 | REQ-044 | Domain/UI/IO | `TextStyleTests` (resolve/bake from style; override keeps per-text value while non-overridden props re-bake on style edit; legacy empty-style text unchanged; dimensions ignored) + manual (active-style dropdown; new text adopts active style; `.gs` round-trip of table + per-annotation style; old `.gs` unchanged; Phase 2 STYLE dialog create/rename/delete/edit ripple; Phase 3 Properties overrides + oblique) | accepted |
+| REQ-045 | UI | manual (PAN/P enters pan; hand cursor; left-drag pans 1:1; Esc/Enter/right-click exits + restores cursor/tool; middle-drag unchanged; model/paper/floating) | accepted |
 
 ---
 

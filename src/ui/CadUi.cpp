@@ -6615,7 +6615,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       *zoom = static_cast<float>(z1);
     }
 
-    if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+    // PAN command (REQ-045): while pan mode is active, a LEFT-drag pans the view exactly like the
+    // built-in middle-drag (which keeps working). Both routes share the same view-pan math.
+    const bool panDrag = ImGui::IsMouseDragging(ImGuiMouseButton_Middle) ||
+                         (cmd.active == AppCommandState::Kind::Pan &&
+                          ImGui::IsMouseDragging(ImGuiMouseButton_Left));
+    if (panDrag) {
       ImVec2 d = ImGui::GetIO().MouseDelta;
       const double aspectD = static_cast<double>(avail.x) / static_cast<double>(std::max(avail.y, 1.f));
       const double halfH = (1.0 / std::max(static_cast<double>(*zoom), 1.e-9)) * 50.0;
@@ -6674,7 +6679,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           vp.scaleModelPerPaperIn = s1;
           BumpCadGpuCache(cmd);
         }
-        if (ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) {
+        // PAN command (REQ-045): left-drag pans the viewport's model framing like the middle-drag.
+        const bool vpPanDrag = ImGui::IsMouseDragging(ImGuiMouseButton_Middle) ||
+                               (cmd.active == AppCommandState::Kind::Pan &&
+                                ImGui::IsMouseDragging(ImGuiMouseButton_Left));
+        if (vpPanDrag) {
           const ImVec2 d = ImGui::GetIO().MouseDelta;
           const double dPaperX = static_cast<double>(d.x / std::max(avail.x, 1.f)) * (worldRight - worldLeft);
           const double dPaperY = static_cast<double>(d.y / std::max(avail.y, 1.f)) * (worldTop - worldBottom);
@@ -6791,7 +6800,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const float gripTolIn = 7.f / std::max(1.e-6f, pxPerWorld);
     // Pick tolerance for native paper entities (line/text/…), used by hover, click-select and double-click edit.
     const float entityPickTolIn = std::max(gripTolIn, 6.f / std::max(1.e-6f, pxPerWorld));
-    const bool clickL = hovered && !consumedPaperClick && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+    const bool clickL = hovered && !consumedPaperClick && cmd.active != AppCommandState::Kind::Pan &&
+                        ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
                         mx >= 0 && mx < avail.x && my >= 0 && my < avail.y;
 
     // Double-click inside a viewport → floating model space (REQ-036). A real double-click is two clicks
@@ -7088,7 +7098,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         //   - a box is open  → close it (window L→R / crossing R→L);
         //   - hovering an object → select it directly (Shift toggles), like the model click-to-select;
         //   - empty space    → arm a selection box.
-        if (hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
+        if (hovered && cmd.active != AppCommandState::Kind::Pan &&
+            ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
             !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
           const float gripTolWorld = 10.f * worldPerPx;  // grip hit radius (~10px) in model units
           if (cmd.entityGripMoveActive) {
@@ -7654,7 +7665,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   const bool overCmdSugPopup =
       s_cmdSugPopupOpen && ImGui::IsMouseHoveringRect(s_cmdSugPopupMin, s_cmdSugPopupMax, false);
-  if (modelSpace && hovered && !overCmdSugPopup && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 &&
+  if (modelSpace && hovered && !overCmdSugPopup && cmd.active != AppCommandState::Kind::Pan &&
+      ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 &&
       mx < avail.x && my >= 0 && my < avail.y) {
     if (cmd.dimGripMoveActive) {
       cmd.dimGripMoveActive = false;
@@ -9720,8 +9732,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   }
 
   const bool showViewportCmdPalette =
-      cmd.active != VK::None && cmd.viewportCmdPaletteEngaged && cmdBuf && cmdBufSize > 0 &&
-      !cmd.mtextRichEditorOpen;
+      cmd.active != VK::None && cmd.active != VK::Pan && cmd.viewportCmdPaletteEngaged && cmdBuf &&
+      cmdBufSize > 0 && !cmd.mtextRichEditorOpen;
   cmd.viewportDrawingHovered = showViewportCmdPalette;
 
   // Detect the palette's open edge so the two-field coordinate input resets its
@@ -9849,7 +9861,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       (cmd.active == AppCommandState::Kind::None) && cmdBuf && cmdBuf[0] != '\0';
   const bool liveHover = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y;
   const bool frozenHair = typingCommand && s_lastCrosshairScreen.x >= 0.f;
-  if (liveHover || frozenHair) {
+  // PAN command (REQ-045): show a hand instead of the CAD crosshair while pan mode is active.
+  const bool panMode = cmd.active == AppCommandState::Kind::Pan;
+  if (panMode && liveHover)
+    ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+  if (!panMode && (liveHover || frozenHair)) {
     const ImVec2 imgMin = imgPos;
     const ImVec2 imgMax(imgPos.x + avail.x, imgPos.y + avail.y);
     float cx, cy;
