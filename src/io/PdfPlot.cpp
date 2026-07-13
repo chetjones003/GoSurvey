@@ -2,6 +2,10 @@
 
 #include "CadCommands.hpp"
 #include "PaperSpace.hpp"
+#include "ShxFont.hpp"           // shared lower-layer SHX stroke geometry (ADR-022)
+#include "MtextRichFormat.hpp"   // MtextRichFlattenToPlain (already used by DxfIo)
+
+#include <cctype>
 
 #include <fpdfview.h>
 #include <fpdf_edit.h>
@@ -114,12 +118,21 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
 
     for (const Viewport& vp : L.viewports) {
       // Per-viewport layer color override → packed 0xRRGGBB (0 = no override → black).
-      auto overrideRgb = [&](const std::string& layer) -> uint32_t {
-        const std::string* ov = ViewportLayerColorOverride(vp, layer);
-        if (!ov)
-          return 0x000000u;
+      // REQ-046/048: plot stroke color as packed 0xRRGGBB. A per-viewport VP Color override wins;
+      // otherwise the entity's TRUE color (entity color, else layer color) — full-color plot (ADR-007
+      // amended). \p entityColor is "ByLayer" for entities with none (e.g. survey points).
+      auto resolveRgb = [&](const std::string& layer, const std::string& entityColor) -> uint32_t {
         float rgba[4] = {0.f, 0.f, 0.f, 1.f};
-        ResolveStoredColorForViewport(*ov, 0.f, 0.f, 0.f, 0.f, rgba);
+        if (const std::string* ov = ViewportLayerColorOverride(vp, layer)) {
+          ResolveStoredColorForViewport(*ov, 0.f, 0.f, 0.f, 0.f, rgba);
+        } else {
+          std::string col = entityColor;
+          if (col.empty() || col == "ByLayer") {
+            const CadLayerRow* lr = FindDrawingLayerRowCi(st, layer);
+            col = (lr && !lr->color.empty() && lr->color != "ByLayer") ? lr->color : "White";
+          }
+          ResolveStoredColorForViewport(col, 0.f, 0.f, 0.f, 0.f, rgba);
+        }
         return (static_cast<uint32_t>(rgba[0] * 255.f) << 16) | (static_cast<uint32_t>(rgba[1] * 255.f) << 8) |
                static_cast<uint32_t>(rgba[2] * 255.f);
       };
@@ -145,7 +158,9 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
         if (idx < st.userLineAttrs.size() &&
             (!plottable(st.userLineAttrs[idx].layer) || IsLayerFrozenInViewport(vp, st.userLineAttrs[idx].layer)))
           continue;
-        curColor = (idx < st.userLineAttrs.size()) ? overrideRgb(st.userLineAttrs[idx].layer) : 0x000000u;
+        curColor = (idx < st.userLineAttrs.size())
+                       ? resolveRgb(st.userLineAttrs[idx].layer, st.userLineAttrs[idx].color)
+                       : 0x000000u;
         emitModelSeg(st.userLinesFlat[i] + oX, st.userLinesFlat[i + 1] + oY, st.userLinesFlat[i + 3] + oX,
                      st.userLinesFlat[i + 4] + oY);
       }
@@ -154,7 +169,9 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
         if (pi < st.userPolylineAttrs.size() &&
             (!plottable(st.userPolylineAttrs[pi].layer) || IsLayerFrozenInViewport(vp, st.userPolylineAttrs[pi].layer)))
           continue;
-        curColor = (pi < st.userPolylineAttrs.size()) ? overrideRgb(st.userPolylineAttrs[pi].layer) : 0x000000u;
+        curColor = (pi < st.userPolylineAttrs.size())
+                       ? resolveRgb(st.userPolylineAttrs[pi].layer, st.userPolylineAttrs[pi].color)
+                       : 0x000000u;
         const int start = st.userPolylineOffsets[pi];
         const int end = (pi + 1 < st.userPolylineOffsets.size())
                             ? st.userPolylineOffsets[pi + 1]
@@ -171,7 +188,9 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
         if (idx < st.userCircleAttrs.size() &&
             (!plottable(st.userCircleAttrs[idx].layer) || IsLayerFrozenInViewport(vp, st.userCircleAttrs[idx].layer)))
           continue;
-        curColor = (idx < st.userCircleAttrs.size()) ? overrideRgb(st.userCircleAttrs[idx].layer) : 0x000000u;
+        curColor = (idx < st.userCircleAttrs.size())
+                       ? resolveRgb(st.userCircleAttrs[idx].layer, st.userCircleAttrs[idx].color)
+                       : 0x000000u;
         const double cx = st.userCirclesCxCyR[i] + oX, cy = st.userCirclesCxCyR[i + 1] + oY;
         const double r = st.userCirclesCxCyR[i + 2];
         constexpr int kSeg = 72;
@@ -189,7 +208,9 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
       for (size_t ai = 0; ai < st.userArcs.size(); ++ai) {
         if (ai < st.userArcAttrs.size() && IsLayerFrozenInViewport(vp, st.userArcAttrs[ai].layer))
           continue;
-        curColor = (ai < st.userArcAttrs.size()) ? overrideRgb(st.userArcAttrs[ai].layer) : 0x000000u;
+        curColor = (ai < st.userArcAttrs.size())
+                       ? resolveRgb(st.userArcAttrs[ai].layer, st.userArcAttrs[ai].color)
+                       : 0x000000u;
         const CadArc& a = st.userArcs[ai];
         const int kSeg = std::clamp(static_cast<int>(std::fabs(a.sweepRad) / 0.1f) + 2, 2, 256);
         double pxp = 0, pyp = 0;
@@ -207,7 +228,7 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
       for (const SurveyPoint& sp : st.surveyPoints) {
         if (!plottable(sp.layer) || IsLayerFrozenInViewport(vp, sp.layer))
           continue;
-        curColor = overrideRgb(sp.layer);
+        curColor = resolveRgb(sp.layer, "ByLayer");
         float pcx, pcy;
         m2p(static_cast<double>(sp.easting) + oX, static_cast<double>(sp.northing) + oY, &pcx, &pcy);
         constexpr float hc = 0.05f;
@@ -225,6 +246,168 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
         addSeg(vx1, vy0, vx1, vy1);
         addSeg(vx1, vy1, vx0, vy1);
         addSeg(vx0, vy1, vx0, vy0);
+      }
+    }
+
+    // Native paper-space sheet geometry (REQ-049): lines/circles/arcs/ellipses/polylines drawn directly
+    // on the sheet — already in paper inches, so emitted straight (no viewport transform). Colored per
+    // REQ-048 (entity color, else layer color; per-viewport overrides do not apply to the sheet); layers
+    // that are off/frozen/non-plottable are excluded. Native sheet TEXT is pending (see task log C2).
+    {
+      auto sheetRgb = [&](const std::string& layer, const std::string& entityColor) -> uint32_t {
+        std::string col = entityColor;
+        if (col.empty() || col == "ByLayer") {
+          const CadLayerRow* lr = FindDrawingLayerRowCi(st, layer);
+          col = (lr && !lr->color.empty() && lr->color != "ByLayer") ? lr->color : "White";
+        }
+        float rgba[4] = {0.f, 0.f, 0.f, 1.f};
+        ResolveStoredColorForViewport(col, 0.f, 0.f, 0.f, 0.f, rgba);
+        return (static_cast<uint32_t>(rgba[0] * 255.f) << 16) | (static_cast<uint32_t>(rgba[1] * 255.f) << 8) |
+               static_cast<uint32_t>(rgba[2] * 255.f);
+      };
+      auto sheetAttr = [&](const std::vector<EntityAttributes>& v, size_t i) -> const EntityAttributes* {
+        return i < v.size() ? &v[i] : nullptr;
+      };
+      // Lines.
+      for (size_t i = 0; i + 5 < L.paperLines.size(); i += 6) {
+        const EntityAttributes* a = sheetAttr(L.paperLineAttrs, i / 6);
+        if (a && !plottable(a->layer)) continue;
+        curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        addSeg(L.paperLines[i], L.paperLines[i + 1], L.paperLines[i + 3], L.paperLines[i + 4]);
+      }
+      // Circles (sampled to a polygon).
+      for (size_t i = 0; i + 2 < L.paperCircles.size(); i += 3) {
+        const EntityAttributes* a = sheetAttr(L.paperCircleAttrs, i / 3);
+        if (a && !plottable(a->layer)) continue;
+        curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        const float cx = L.paperCircles[i], cy = L.paperCircles[i + 1], r = L.paperCircles[i + 2];
+        constexpr int kSeg = 72;
+        for (int k = 0; k < kSeg; ++k) {
+          const float t0 = 6.2831853f * static_cast<float>(k) / kSeg, t1 = 6.2831853f * static_cast<float>(k + 1) / kSeg;
+          addSeg(cx + r * std::cos(t0), cy + r * std::sin(t0), cx + r * std::cos(t1), cy + r * std::sin(t1));
+        }
+      }
+      // Arcs (sampled).
+      for (size_t ai = 0; ai < L.paperArcs.size(); ++ai) {
+        const EntityAttributes* a = sheetAttr(L.paperArcAttrs, ai);
+        if (a && !plottable(a->layer)) continue;
+        curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        const CadArc& arc = L.paperArcs[ai];
+        const int kSeg = std::clamp(static_cast<int>(std::fabs(arc.sweepRad) / 0.1f) + 2, 2, 256);
+        float pxp = 0, pyp = 0;
+        for (int k = 0; k <= kSeg; ++k) {
+          const float t = arc.startRad + arc.sweepRad * (static_cast<float>(k) / static_cast<float>(kSeg));
+          const float wx = arc.cx + arc.r * std::cos(t), wy = arc.cy + arc.r * std::sin(t);
+          if (k > 0) addSeg(pxp, pyp, wx, wy);
+          pxp = wx; pyp = wy;
+        }
+      }
+      // Ellipses (sampled).
+      for (size_t ei = 0; ei < L.paperEllipses.size(); ++ei) {
+        const EntityAttributes* a = sheetAttr(L.paperEllAttrs, ei);
+        if (a && !plottable(a->layer)) continue;
+        curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        const CadEllipse& e = L.paperEllipses[ei];
+        const float mnx = -e.majVy * e.ratio, mny = e.majVx * e.ratio;  // minor axis = perp(major) × ratio
+        constexpr int kSeg = 64;
+        float pxp = 0, pyp = 0;
+        for (int k = 0; k <= kSeg; ++k) {
+          const float t = 6.2831853f * (static_cast<float>(k) / static_cast<float>(kSeg));
+          const float ct = std::cos(t), stt = std::sin(t);
+          const float wx = e.cx + e.majVx * ct + mnx * stt, wy = e.cy + e.majVy * ct + mny * stt;
+          if (k > 0) addSeg(pxp, pyp, wx, wy);
+          pxp = wx; pyp = wy;
+        }
+      }
+      // Polylines.
+      const int nPoly = static_cast<int>(L.paperPolyOffsets.size()) - 1;
+      for (int pi = 0; pi < nPoly; ++pi) {
+        const EntityAttributes* a = sheetAttr(L.paperPolyAttrs, static_cast<size_t>(pi));
+        if (a && !plottable(a->layer)) continue;
+        curColor = a ? sheetRgb(a->layer, a->color) : 0x000000u;
+        const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+        const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+        for (int vi = v0; vi + 1 < v1; ++vi)
+          addSeg(L.paperPolyVerts[static_cast<size_t>(vi * 3)], L.paperPolyVerts[static_cast<size_t>(vi * 3 + 1)],
+                 L.paperPolyVerts[static_cast<size_t>((vi + 1) * 3)],
+                 L.paperPolyVerts[static_cast<size_t>((vi + 1) * 3 + 1)]);
+        if (static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)] &&
+            v1 - v0 >= 2)
+          addSeg(L.paperPolyVerts[static_cast<size_t>((v1 - 1) * 3)], L.paperPolyVerts[static_cast<size_t>((v1 - 1) * 3 + 1)],
+                 L.paperPolyVerts[static_cast<size_t>(v0 * 3)], L.paperPolyVerts[static_cast<size_t>(v0 * 3 + 1)]);
+      }
+
+      // Native sheet TEXT (REQ-049): SHX (stroke) fonts plot faithfully as their strokes via the shared
+      // font module (ADR-022). TrueType text is not yet plotted — logged once as debt, never silently
+      // dropped (REQ-201). Paper inches, +y up; insertion = top-left (baseline one cap-height below).
+      auto isShxName = [](const std::string& f) {
+        if (f.size() < 4) return false;
+        std::string e = f.substr(f.size() - 4);
+        for (char& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        return e == ".shx";
+      };
+      auto emitShxLine = [&](Shx::Font& font, const std::string& s, float baseX, float baseY, float H, float rot) {
+        const float sc = H / font.capHeight();
+        const float cr = std::cos(rot), sr = std::sin(rot);
+        float penX = 0.f;
+        for (unsigned char ch : s) {
+          if (ch == '\n') continue;
+          const Shx::Glyph* g = font.glyph(ch);
+          if (!g) continue;
+          for (const auto& stroke : g->strokes) {
+            for (size_t k = 0; k + 1 < stroke.size(); ++k) {
+              auto mp = [&](const Shx::Vec2& p, float* ox, float* oy) {
+                const float gx = (penX + p.x) * sc, gy = p.y * sc;
+                *ox = baseX + gx * cr - gy * sr;
+                *oy = baseY + gx * sr + gy * cr;
+              };
+              float x0, y0, x1, y1;
+              mp(stroke[k], &x0, &y0);
+              mp(stroke[k + 1], &x1, &y1);
+              addSeg(x0, y0, x1, y1);
+            }
+          }
+          penX += g->advance;
+        }
+      };
+      bool warnedTtfText = false;
+      for (size_t ti = 0; ti < L.paperTexts.size(); ++ti) {
+        const CadAnnotation& a = L.paperTexts[ti];
+        if (a.text.empty())
+          continue;
+        const EntityAttributes* at = sheetAttr(L.paperTextAttrs, ti);
+        if (at && !plottable(at->layer))
+          continue;
+        if (!isShxName(a.fontFamily)) {
+          if (!warnedTtfText) {
+            log.push_back("PLOT — note: TrueType sheet text is not yet plotted (SHX text is). See REQ-049 debt.");
+            warnedTtfText = true;
+          }
+          continue;
+        }
+        Shx::Font* font = Shx::Resolve(a.fontFamily);
+        if (!font || !font->valid())
+          continue;
+        curColor = at ? sheetRgb(at->layer, at->color) : 0x000000u;
+        const float H = a.plottedHeightInches < 0.01f ? 0.01f : a.plottedHeightInches;  // avoid win max macro
+        if (a.kind == CadAnnotation::Kind::Mtext) {
+          const std::string plain = MtextRichFlattenToPlain(a.text);
+          const float lineH = H * 1.4f;
+          float baseY = a.boxMaxY - H;  // top line baseline (box top, one cap-height down)
+          std::string ln;
+          auto flushLine = [&]() {
+            emitShxLine(*font, ln, a.boxMinX, baseY, H, 0.f);
+            baseY -= lineH;
+            ln.clear();
+          };
+          for (char ch : plain) {
+            if (ch == '\n') flushLine();
+            else ln += ch;
+          }
+          flushLine();
+        } else {
+          emitShxLine(*font, a.text, a.insX, a.insY - H, H, a.rotationRad);
+        }
       }
     }
 

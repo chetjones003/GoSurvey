@@ -183,6 +183,7 @@ src/
   renderer/     GL backend, buffers, shaders
   domain/       entities, invariants, compute
   io/           format readers/writers
+  font/         SHX stroke-font geometry — pure, no rendering (shared by ui + io; ADR-022)
   platform/     window, files, GL context
 build/          all build artifacts (never in source tree)
 spec/           this specification layer

@@ -1,19 +1,24 @@
 #pragma once
 
-#include <imgui.h>
-
 #include <string>
 #include <vector>
 
-// SHX stroke-font rendering (ADR-012 follow-up): AutoCAD .shx fonts (romans, txt, simplex, …) are
-// compiled vector "shape" fonts with no TrueType equivalent. To match AutoCAD exactly we parse the real
-// .shx files and draw each glyph as line strokes — the same way AutoCAD renders them. Files are located
-// in the installed Autodesk font folders (or a folder configured by the app).
+// SHX stroke-font geometry (ADR-012 follow-up; relocated to a shared lower layer per ADR-022 so both UI
+// and IO/plot can use it). AutoCAD .shx fonts (romans, txt, simplex, …) are compiled vector "shape" fonts
+// with no TrueType equivalent; we parse the real .shx files and produce each glyph as line strokes, the
+// way AutoCAD renders them. This header is PURE geometry — no imgui, no rendering; the UI draw adapter
+// lives in ui/ShxDraw. Files are located in the installed Autodesk font folders.
 namespace Shx {
+
+/// Plain 2-D point in font units — no imgui dependency (this module sits below UI).
+struct Vec2 {
+  float x = 0.f;
+  float y = 0.f;
+};
 
 /// A parsed glyph: stroke polylines in font units (+x right, +y up, baseline at y=0) plus advance width.
 struct Glyph {
-  std::vector<std::vector<ImVec2>> strokes;
+  std::vector<std::vector<Vec2>> strokes;
   float advance = 0.f;
 };
 
@@ -42,10 +47,5 @@ Font* Resolve(const std::string& fontName);
 
 /// Width of \p text in pixels at the given pixel cap-height, using \p font's advances.
 float MeasureWidthPx(Font& font, const std::string& text, float capPx);
-
-/// Draw \p text with \p font as strokes. \p baseline is the screen-space baseline-left point; the glyph
-/// cap height maps to \p capPx; \p rotRad rotates CCW about \p baseline (screen y grows downward).
-void DrawText(ImDrawList* dl, Font& font, ImVec2 baseline, float capPx, float rotRad, ImU32 col,
-              const std::string& text, float thicknessPx);
 
 }  // namespace Shx

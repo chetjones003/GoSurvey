@@ -919,6 +919,58 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-07-13 — initial. Root cause: ORTHO defaulted on (`main.cpp` orthoEnabled=true) and
   F8 was gated behind text-input focus, so it could not be reliably turned off.
 
+### REQ-048 — True entity/layer colors in paper space (on screen and in the plot)
+- Purpose: paper space should show a drawing in its real colors like model space and AutoCAD — the
+  user could only see a flat neutral color (color appeared only for REQ-046 VP Color overrides)
+- Priority: should
+- Type: functional
+- Statement: In a paper layout, both **model geometry shown through viewports** (every viewport,
+  always — including the floating viewport) and **native paper-space sheet geometry** (lines, text,
+  circles, arcs, ellipses, polylines, filled regions) render in their **true color** — the entity's
+  own color, or its layer's color when the entity is ByLayer — resolved by the existing
+  `ResolveEntityRgbaForViewport` path, instead of the flat neutral `kVpModelCol` / `kPaperGeomCol`.
+  Precedence: a REQ-046 **VP Color override** wins over the entity/layer color; **selection and hover
+  highlight** colors still win over the base color; per-viewport **frozen** layers (REQ-028) and
+  **off / non-plottable** layers remain hidden/excluded (only color resolution changes, not
+  visibility). Colors are resolved at **render and plot time** from existing attributes — no geometry,
+  coordinate, or storage change (REQ-101 untouched). The **PDF plot** prints these true colors
+  (**amends ADR-007**: the plot is full-color, not monochrome; the REQ-046 per-color path grouping is
+  the mechanism). Delivered incrementally: (A) on-screen colors — viewport model + native sheet;
+  (B) plot colors for model-through-viewport geometry; (C) plot colors for native sheet geometry
+  (depends on REQ-049 adding sheet geometry to the plot).
+- Acceptance:
+  - model geometry in every viewport shows its true entity/layer color on screen; a VP Color override
+    still wins; selected/hovered objects still show the selection/hover color;
+  - native sheet geometry shows its true entity/layer color on screen;
+  - the PDF plot prints model-through-viewport geometry (and, with REQ-049, native sheet geometry) in
+    true colors, VP Color override still winning;
+  - per-viewport frozen and off/non-plottable layers remain hidden/excluded exactly as before;
+  - stored geometry/coordinates are unchanged and model-space rendering is unchanged.
+- Owner-layer: UI / Renderer / IO
+- Status: accepted
+- Revisions: 2026-07-13 — initial (ASSUMPTION-1 follow-up from REQ-046; amends ADR-007 to full color).
+
+### REQ-049 — Plot native paper-space sheet geometry and text
+- Purpose: title blocks and sheet annotations must appear in the plotted PDF — today the plot renders
+  only model-through-viewport stroked geometry, so native sheet lines/text and all text are omitted
+- Priority: should
+- Type: functional
+- Statement: The PDF plot renders **native paper-space sheet geometry** (lines, circles, arcs,
+  ellipses, polylines, filled regions — already in paper inches) and **text** (single-line TEXT and
+  MTEXT), so sheets plot as composed. **Stroke (SHX) fonts** plot as their actual stroke geometry (the
+  same strokes drawn on screen), which is faithful and reuses the existing SHX renderer; **TTF text**
+  is plotted best-effort (approach chosen during implementation; if faithful TTF outline emission is
+  not tractable in this increment it is documented as debt, not silently dropped — REQ-201). Plotted
+  sheet geometry and text honor layer on/frozen/plottable state and are colored per REQ-048.
+- Acceptance:
+  - a layout with native sheet lines/geometry plots them at their sheet position;
+  - single-line TEXT and SHX MTEXT on the sheet appear in the plot at the correct position/size;
+  - plotted sheet geometry/text is colored per REQ-048 and excluded when its layer is off/non-plottable;
+  - any TTF-text limitation is recorded as documented technical debt, not a silent omission.
+- Owner-layer: IO / Renderer
+- Status: accepted
+- Revisions: 2026-07-13 — initial (enables REQ-048 increment C; PDF text rendering is a new capability).
+
 ---
 
 ## Performance requirements
@@ -1050,6 +1102,8 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-045 | UI | manual (PAN/P enters pan; hand cursor; left-drag pans 1:1; Esc/Enter/right-click exits + restores cursor/tool; middle-drag unchanged; model/paper/floating) | accepted |
 | REQ-046 | UI/Commands/Domain/Renderer/IO | `PaperSpaceTests` (VP color override set/get/clear; per-viewport independence; VPFREEZE adds / VPTHAW removes a layer in the vp's frozen set) + manual (panel gone; Layer Manager VP Freeze/VP Color columns gated on current viewport; freeze/color affect current vp only; VPFREEZE/VPTHAW pick; `.gs` round-trip of frozen + color; PDF plot shows frozen absent + override colored) | accepted |
 | REQ-047 | UI/Commands | `OrthoConstrainTests` (constraint off = no-op at any angle; on = snaps to nearer H/V axis; snap-independent math) + manual (fresh drawing draws free-angle; F8/status toggles ORTHO incl. while the command bar is focused; object snap overrides ORTHO) | accepted |
+| REQ-048 | UI/Renderer/IO | manual (viewport model + native sheet show true entity/layer colors on screen; VP Color override + selection/hover still win; frozen/off/non-plottable unchanged; PDF plot prints true colors) | accepted |
+| REQ-049 | IO/Renderer | manual (native sheet geometry + TEXT/MTEXT appear in the plotted PDF at correct position/size, colored per REQ-048; off/non-plottable excluded; any TTF-text limit recorded as debt) | accepted |
 
 ---
 

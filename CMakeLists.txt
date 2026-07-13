@@ -118,8 +118,11 @@ add_executable(GoSurvey
   src/ui/ImGuiLayout.cpp
   src/ui/MtextRichFormat.cpp
   src/ui/FontRegistry.cpp
-  src/ui/ShxFont.cpp
+  src/ui/ShxDraw.cpp
   src/ui/PdfAttachDialog.cpp
+
+  # Fonts (shared lower layer — SHX stroke geometry, ADR-022)
+  src/font/ShxFont.cpp
 
   # Survey / COGO
   src/survey/SurveyPoints.cpp
@@ -160,6 +163,7 @@ target_include_directories(GoSurvey PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/render
   ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
   ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/font
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party
   ${NLOHMANN_JSON_INCLUDE}
 )

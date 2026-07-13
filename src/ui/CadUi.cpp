@@ -3,7 +3,7 @@
 #include "ViewportPickPolicy.hpp"
 #include "MtextRichFormat.hpp"
 #include "FontRegistry.hpp"
-#include "ShxFont.hpp"
+#include "ShxDraw.hpp"
 
 #include "CadLinetype.hpp"
 #include "TextStyle.hpp"
@@ -8318,7 +8318,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // overlay this increment; the GL-batch pass is tracked tech debt (TASK-002 §7).
     const double oX = cmd.worldDocumentOriginX;
     const double oY = cmd.worldDocumentOriginY;
-    constexpr ImU32 kVpModelCol = IM_COL32(25, 25, 30, 255);
     for (int vi = 0; vi < static_cast<int>(L.viewports.size()); ++vi) {
       const Viewport& vp = L.viewports[static_cast<size_t>(vi)];
       const ImVec2 r0 = w2s(vp.paperXIn, vp.paperYIn);
@@ -8338,14 +8337,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // but GL is skipped in paper space, so style the overlay strokes here for the active floating viewport.
       const bool isFloatVp = InFloatingModelSpace(cmd) && cmd.floatingViewportLayout == cmd.activeSpaceIndex &&
                              vi == cmd.floatingViewportIndex;
-      // REQ-046: base color for model geometry inside this viewport — the layer's per-viewport color
-      // override when set, else the default viewport linework color (kVpModelCol).
-      auto vpBaseCol = [&](const std::string& layer) -> ImU32 {
-        const std::string* ov = ViewportLayerColorOverride(vp, layer);
-        if (!ov)
-          return kVpModelCol;
+      // Base color for model geometry inside this viewport: a per-viewport VP Color override (REQ-046)
+      // wins; otherwise the entity's TRUE color — its own color, or its layer's color when ByLayer
+      // (REQ-048), resolved like model space. \p entityColor is "ByLayer" for entities that have none.
+      auto vpBaseCol = [&](const std::string& layer, const std::string& entityColor) -> ImU32 {
         float rgba[4] = {0.1f, 0.1f, 0.12f, 1.f};
-        ResolveStoredColorForViewport(*ov, 0.f, 0.1f, 0.1f, 0.12f, rgba);
+        if (const std::string* ov = ViewportLayerColorOverride(vp, layer)) {
+          ResolveStoredColorForViewport(*ov, 0.f, 0.1f, 0.1f, 0.12f, rgba);  // REQ-046 override wins
+        } else {
+          std::string col = entityColor;  // REQ-048: entity color, else layer color
+          if (col.empty() || col == "ByLayer") {
+            const CadLayerRow* lr = FindDrawingLayerRowCi(cmd, layer);
+            col = (lr && !lr->color.empty() && lr->color != "ByLayer") ? lr->color : "White";
+          }
+          ResolveStoredColorForViewport(col, 0.f, 0.1f, 0.1f, 0.12f, rgba);
+        }
         return IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
                         static_cast<int>(rgba[2] * 255.f), 255);
       };
@@ -8376,7 +8382,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const ImVec2 s1 = m2s(cmd.userLinesFlat[i + 3] + oX, cmd.userLinesFlat[i + 4] + oY);
         ImU32 lc;
         float lw;
-        entStyle(SelectedEntity::Type::LineSeg, static_cast<int>(lineIdx), vpBaseCol(attr.layer), lc, lw);
+        entStyle(SelectedEntity::Type::LineSeg, static_cast<int>(lineIdx), vpBaseCol(attr.layer, attr.color), lc, lw);
         sdl->AddLine(s0, s1, lc, lw);
       }
       // Polylines (REQ-028: skip frozen layers).
@@ -8390,7 +8396,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                             : static_cast<int>(cmd.userPolylineVerts.size() / 3);
         ImU32 pc;
         float pw;
-        entStyle(SelectedEntity::Type::Polyline, static_cast<int>(pi), vpBaseCol(attr.layer), pc, pw);
+        entStyle(SelectedEntity::Type::Polyline, static_cast<int>(pi), vpBaseCol(attr.layer, attr.color), pc, pw);
         ImVec2 prev{};
         bool have = false;
         for (int k = start; k < end; ++k) {
@@ -8412,7 +8418,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float rPx = cmd.userCirclesCxCyR[i + 2] * pxPerModel;
         ImU32 cc2;
         float cw;
-        entStyle(SelectedEntity::Type::Circle, static_cast<int>(circleIdx), vpBaseCol(attr.layer), cc2, cw);
+        entStyle(SelectedEntity::Type::Circle, static_cast<int>(circleIdx), vpBaseCol(attr.layer, attr.color), cc2, cw);
         if (rPx >= 0.5f)
           sdl->AddCircle(c, rPx, cc2, 0, cw);
       }
@@ -8425,7 +8431,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const int segs = std::clamp(static_cast<int>(std::fabs(arc.sweepRad) / 0.15f) + 2, 2, 180);
         ImU32 ac;
         float aw;
-        entStyle(SelectedEntity::Type::Arc, static_cast<int>(arcIdx), vpBaseCol(attr.layer), ac, aw);
+        entStyle(SelectedEntity::Type::Arc, static_cast<int>(arcIdx), vpBaseCol(attr.layer, attr.color), ac, aw);
         ImVec2 prev{};
         for (int k = 0; k <= segs; ++k) {
           const float t = arc.startRad + arc.sweepRad * (static_cast<float>(k) / static_cast<float>(segs));
@@ -8441,7 +8447,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       for (const SurveyPoint& sp : cmd.surveyPoints) {
         if (IsLayerFrozenInViewport(vp, sp.layer))
           continue;
-        const ImU32 spCol = vpBaseCol(sp.layer);  // REQ-046: honor a per-viewport color override
+        const ImU32 spCol = vpBaseCol(sp.layer, "ByLayer");  // REQ-046/048: VP override, else layer color
         const ImVec2 c = m2s(static_cast<double>(sp.easting) + oX, static_cast<double>(sp.northing) + oY);
         sdl->AddLine(ImVec2(c.x - crossPx, c.y), ImVec2(c.x + crossPx, c.y), spCol, 1.0f);
         sdl->AddLine(ImVec2(c.x, c.y - crossPx), ImVec2(c.x, c.y + crossPx), spCol, 1.0f);
@@ -8537,7 +8543,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // Native paper-space geometry (REQ-037): committed sheet lines + text, drawn on top of the viewports
     // (in paper inches via w2s — a title block / annotations sit above viewport content).
     {
-      constexpr ImU32 kPaperGeomCol = IM_COL32(20, 20, 25, 255);
       constexpr ImU32 kPaperSelCol = IM_COL32(59, 130, 246, 255);
       constexpr ImU32 kPaperHoverCol = IM_COL32(130, 180, 240, 255);  // hover pre-highlight (lighter blue), REQ-039
       const float pxPerPaperIn = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
@@ -8552,8 +8557,34 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         return cmd.active == AppCommandState::Kind::None && cmd.paperHoverValid && cmd.paperHover.type == t &&
                cmd.paperHover.index == idx;
       };
+      // REQ-048: true entity/layer color for a native sheet entity (lines/text/circles/arcs/ellipses/
+      // polylines), resolved like model space. Attrs are the parallel *Attrs vectors on the layout.
+      auto paperAttrs = [&](PaperEntityRef::Type t, int idx) -> const EntityAttributes* {
+        auto at = [](const std::vector<EntityAttributes>& v, int i) -> const EntityAttributes* {
+          return (i >= 0 && static_cast<size_t>(i) < v.size()) ? &v[static_cast<size_t>(i)] : nullptr;
+        };
+        switch (t) {
+        case PaperEntityRef::Type::Line:     return at(L.paperLineAttrs, idx);
+        case PaperEntityRef::Type::Text:     return at(L.paperTextAttrs, idx);
+        case PaperEntityRef::Type::Circle:   return at(L.paperCircleAttrs, idx);
+        case PaperEntityRef::Type::Arc:      return at(L.paperArcAttrs, idx);
+        case PaperEntityRef::Type::Ellipse:  return at(L.paperEllAttrs, idx);
+        case PaperEntityRef::Type::Polyline: return at(L.paperPolyAttrs, idx);
+        }
+        return nullptr;
+      };
+      auto paperTrueCol = [&](PaperEntityRef::Type t, int idx) -> ImU32 {
+        const EntityAttributes* a = paperAttrs(t, idx);
+        float rgba[4] = {0.08f, 0.08f, 0.1f, 1.f};
+        if (a) {
+          const CadLayerRow* lr = FindDrawingLayerRowCi(cmd, a->layer.empty() ? std::string("0") : a->layer);
+          ResolveEntityRgbaForViewport(*a, lr, 0.08f, 0.08f, 0.1f, rgba);
+        }
+        return IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
+                        static_cast<int>(rgba[2] * 255.f), 255);
+      };
       auto paperCol = [&](bool sel, PaperEntityRef::Type t, int idx) -> ImU32 {
-        return sel ? kPaperSelCol : (isPaperHover(t, idx) ? kPaperHoverCol : kPaperGeomCol);
+        return sel ? kPaperSelCol : (isPaperHover(t, idx) ? kPaperHoverCol : paperTrueCol(t, idx));
       };
       auto paperWid = [&](bool sel, PaperEntityRef::Type t, int idx) -> float {
         return sel ? 2.0f : (isPaperHover(t, idx) ? 1.6f : 1.2f);
@@ -8673,10 +8704,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // Draw a paper text/mtext entity with its real typeface + styling (REQ-038): SHX stroke fonts render
       // from the .shx file, TrueType via FontReg (faux bold/italic), MTEXT via the rich wrapper. Height scales
       // with zoom (plotted inches × px/inch), clamped [1, max] so it tracks the sheet instead of a fixed floor.
-      auto drawPaperText = [&](const CadAnnotation& a, bool sel, bool hover) {
+      auto drawPaperText = [&](const CadAnnotation& a, bool sel, bool hover, ImU32 baseCol) {
         if (a.text.empty())
           return;
-        const ImU32 col = sel ? kPaperSelCol : (hover ? kPaperHoverCol : kPaperGeomCol);
+        const ImU32 col = sel ? kPaperSelCol : (hover ? kPaperHoverCol : baseCol);  // REQ-048 true color
         const ImVec2 p = w2s(a.insX, a.insY);  // insertion ≈ bottom-left
         if (a.kind == CadAnnotation::Kind::Mtext) {
           const float hPx = std::clamp(a.plottedHeightInches * pxPerPaperIn, 1.f, cmd.viewportMtextMaxPx);
@@ -8776,7 +8807,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       };
       for (size_t ti = 0; ti < L.paperTexts.size(); ++ti)
         drawPaperText(L.paperTexts[ti], isPaperSel(PaperEntityRef::Type::Text, static_cast<int>(ti)),
-                      isPaperHover(PaperEntityRef::Type::Text, static_cast<int>(ti)));
+                      isPaperHover(PaperEntityRef::Type::Text, static_cast<int>(ti)),
+                      paperTrueCol(PaperEntityRef::Type::Text, static_cast<int>(ti)));
     }
     const float curPX = static_cast<float>(worldLeft + (mx / std::max(avail.x, 1.f)) * (worldRight - worldLeft));
     const float curPY = static_cast<float>(worldTop - (my / std::max(avail.y, 1.f)) * (worldTop - worldBottom));
