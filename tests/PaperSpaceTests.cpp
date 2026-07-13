@@ -99,6 +99,82 @@ TEST_CASE("Viewport frozen layers toggle", "[paperspace]") {
   REQUIRE_FALSE(IsLayerFrozenInViewport(vp, "Layer2"));
 }
 
+// REQ-028 acceptance: a layer frozen in one viewport is hidden ONLY in that viewport — it stays
+// visible in other viewports (and in model space, which never consults a viewport's frozen set).
+// This is the predicate both the on-screen viewport render (CadUi) and the PDF plot (PdfPlot) apply.
+TEST_CASE("Frozen layer is hidden only in its own viewport (REQ-028)", "[paperspace]") {
+  Viewport vpA;  // freeze "Utilities" here
+  Viewport vpB;  // leave everything thawed here
+  ToggleFrozenLayerInViewport(vpA, "Utilities");
+
+  // Hidden in vpA, visible in vpB.
+  REQUIRE(IsLayerFrozenInViewport(vpA, "Utilities"));
+  REQUIRE_FALSE(IsLayerFrozenInViewport(vpB, "Utilities"));
+
+  // A different layer is untouched in both viewports.
+  REQUIRE_FALSE(IsLayerFrozenInViewport(vpA, "Boundary"));
+  REQUIRE_FALSE(IsLayerFrozenInViewport(vpB, "Boundary"));
+
+  // Freezing the same layer in vpB is independent of vpA (thawing one leaves the other frozen).
+  ToggleFrozenLayerInViewport(vpB, "Utilities");
+  REQUIRE(IsLayerFrozenInViewport(vpB, "Utilities"));
+  ToggleFrozenLayerInViewport(vpA, "Utilities");  // thaw in A only
+  REQUIRE_FALSE(IsLayerFrozenInViewport(vpA, "Utilities"));
+  REQUIRE(IsLayerFrozenInViewport(vpB, "Utilities"));
+}
+
+// REQ-046: VPFREEZE freezes (idempotent add) and VPTHAW thaws (remove) a layer in a viewport.
+TEST_CASE("VPFREEZE freezes and VPTHAW thaws a layer in a viewport (REQ-046)", "[paperspace]") {
+  Viewport vp;
+  FreezeLayerInViewport(vp, "Grid");
+  REQUIRE(IsLayerFrozenInViewport(vp, "Grid"));
+  REQUIRE(vp.frozenLayers.size() == 1);
+  FreezeLayerInViewport(vp, "Grid");  // idempotent — no duplicate
+  REQUIRE(vp.frozenLayers.size() == 1);
+  ThawLayerInViewport(vp, "Grid");
+  REQUIRE_FALSE(IsLayerFrozenInViewport(vp, "Grid"));
+  ThawLayerInViewport(vp, "Grid");  // thawing an already-thawed layer is a no-op
+  REQUIRE(vp.frozenLayers.empty());
+}
+
+// REQ-046: per-viewport layer COLOR override — set/replace, query, clear, keeping the arrays parallel.
+TEST_CASE("Per-viewport layer color override set/replace/clear (REQ-046)", "[paperspace]") {
+  Viewport vp;
+  REQUIRE(ViewportLayerColorOverride(vp, "Roads") == nullptr);
+
+  SetViewportLayerColor(vp, "Roads", "Red");
+  const std::string* c = ViewportLayerColorOverride(vp, "Roads");
+  REQUIRE(c != nullptr);
+  REQUIRE(*c == "Red");
+  REQUIRE(vp.vpColorLayers.size() == 1);
+  REQUIRE(vp.vpColorValues.size() == 1);
+
+  // Setting the same layer again replaces the color, not appends.
+  SetViewportLayerColor(vp, "Roads", "Blue");
+  REQUIRE(vp.vpColorLayers.size() == 1);
+  REQUIRE(*ViewportLayerColorOverride(vp, "Roads") == "Blue");
+
+  // A second layer is independent.
+  SetViewportLayerColor(vp, "Water", "Cyan");
+  REQUIRE(vp.vpColorLayers.size() == 2);
+  REQUIRE(*ViewportLayerColorOverride(vp, "Water") == "Cyan");
+  REQUIRE(*ViewportLayerColorOverride(vp, "Roads") == "Blue");
+
+  // Clearing removes one entry and keeps the parallel arrays in step.
+  ClearViewportLayerColor(vp, "Roads");
+  REQUIRE(ViewportLayerColorOverride(vp, "Roads") == nullptr);
+  REQUIRE(vp.vpColorLayers.size() == 1);
+  REQUIRE(vp.vpColorValues.size() == 1);
+  REQUIRE(*ViewportLayerColorOverride(vp, "Water") == "Cyan");
+}
+
+TEST_CASE("Per-viewport color override is independent per viewport (REQ-046)", "[paperspace]") {
+  Viewport a, b;
+  SetViewportLayerColor(a, "Contours", "Green");
+  REQUIRE(*ViewportLayerColorOverride(a, "Contours") == "Green");
+  REQUIRE(ViewportLayerColorOverride(b, "Contours") == nullptr);  // untouched in the other viewport
+}
+
 TEST_CASE("Paper-space object snap finds endpoints, midpoints, text (REQ-037)", "[paperspace]") {
   PaperLayout L;
   // One paper line from (0,0) to (10,0): endpoints (0,0),(10,0) and midpoint (5,0).

@@ -70,14 +70,14 @@ A lightweight board that complements the milestones. Keep each column honest.
   3a. Layout contextual ribbon + Rectangular viewport command w/ preview (REQ-032, REQ-033).
   3b. Viewports selectable; MOVE/COPY/DELETE operate on them (REQ-035).
   3c. Floating model space — double-click to edit model through a viewport (REQ-036).
-  3d. Polygonal viewport (REQ-034) — needs the GL per-viewport transform/clip pass.
-  3e. Per-viewport layer freeze (REQ-028).
+  3d. ~~Polygonal viewport (REQ-034)~~ — **WITHDRAWN 2026-07-13** (unneeded complexity; was blocked on the GL clip pass). See decision log.
+  3e. ✅ Per-viewport layer freeze (REQ-028) — freeze/thaw per viewport; on-screen + PDF plot honor it.
   4. ✅ Plot single + batch to vector PDF via PDFium (REQ-029, REQ-030) — per-layer "plottable"
      toggle + viewport-on-layer; geometry/borders on off/frozen/non-plottable layers excluded.
 - **Deferred:** DXF persistence of layouts/viewports; direct-to-OS-printer; GL
   per-viewport transform/clip pass (perf + polygonal/MSPACE drawing); plot color/plot-styles and
   PDF-underlay content in plots — see ADR-006/007/008 debt.
-- **Status:** Inc 1, 2, 3a, 3b, 3c, 4 done; 3d (polygonal), 3e (per-vp freeze) remain.
+- **Status:** Inc 1, 2, 3a, 3b, 3c, 3e, 4 done; 3d (polygonal, REQ-034) withdrawn. Milestone complete.
 
 ### Next (accepted, sequenced, not started)
 - `<REQ-101 — coordinate tolerance regression>`

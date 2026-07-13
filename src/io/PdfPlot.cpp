@@ -10,8 +10,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <filesystem>
+#include <map>
 #include <unordered_map>
 #include <vector>
 
@@ -101,11 +103,26 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
     if (!page)
       continue;
 
-    // Accumulate all stroked segments (paper inches) for this page into one path object for efficiency.
-    std::vector<std::array<float, 4>> segs;  // x0,y0,x1,y1 in paper inches
-    auto addSeg = [&](float ax, float ay, float bx, float by) { segs.push_back({ax, ay, bx, by}); };
+    // Accumulate stroked segments (paper inches) for this page, grouped by stroke color so a per-viewport
+    // layer color override (REQ-046) prints in its color; everything else stays black. std::map keeps a
+    // deterministic emit order for build reproducibility (REQ-200). Key = 0xRRGGBB, default 0x000000.
+    std::map<uint32_t, std::vector<std::array<float, 4>>> segsByColor;
+    uint32_t curColor = 0x000000u;  // set per entity before emitting
+    auto addSeg = [&](float ax, float ay, float bx, float by) {
+      segsByColor[curColor].push_back({ax, ay, bx, by});
+    };
 
     for (const Viewport& vp : L.viewports) {
+      // Per-viewport layer color override → packed 0xRRGGBB (0 = no override → black).
+      auto overrideRgb = [&](const std::string& layer) -> uint32_t {
+        const std::string* ov = ViewportLayerColorOverride(vp, layer);
+        if (!ov)
+          return 0x000000u;
+        float rgba[4] = {0.f, 0.f, 0.f, 1.f};
+        ResolveStoredColorForViewport(*ov, 0.f, 0.f, 0.f, 0.f, rgba);
+        return (static_cast<uint32_t>(rgba[0] * 255.f) << 16) | (static_cast<uint32_t>(rgba[1] * 255.f) << 8) |
+               static_cast<uint32_t>(rgba[2] * 255.f);
+      };
       const float vx0 = vp.paperXIn, vy0 = vp.paperYIn;
       const float vx1 = vp.paperXIn + vp.paperWIn, vy1 = vp.paperYIn + vp.paperHIn;
       const float cxp = (vx0 + vx1) * 0.5f, cyp = (vy0 + vy1) * 0.5f;
@@ -122,18 +139,22 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
           addSeg(p0x, p0y, p1x, p1y);
       };
 
-      // Lines.
+      // Lines (REQ-028: also skip layers frozen in THIS viewport, matching the on-screen viewport render).
       for (size_t i = 0; i + 5 < st.userLinesFlat.size(); i += 6) {
         const size_t idx = i / 6;
-        if (idx < st.userLineAttrs.size() && !plottable(st.userLineAttrs[idx].layer))
+        if (idx < st.userLineAttrs.size() &&
+            (!plottable(st.userLineAttrs[idx].layer) || IsLayerFrozenInViewport(vp, st.userLineAttrs[idx].layer)))
           continue;
+        curColor = (idx < st.userLineAttrs.size()) ? overrideRgb(st.userLineAttrs[idx].layer) : 0x000000u;
         emitModelSeg(st.userLinesFlat[i] + oX, st.userLinesFlat[i + 1] + oY, st.userLinesFlat[i + 3] + oX,
                      st.userLinesFlat[i + 4] + oY);
       }
       // Polylines.
       for (size_t pi = 0; pi < st.userPolylineOffsets.size(); ++pi) {
-        if (pi < st.userPolylineAttrs.size() && !plottable(st.userPolylineAttrs[pi].layer))
+        if (pi < st.userPolylineAttrs.size() &&
+            (!plottable(st.userPolylineAttrs[pi].layer) || IsLayerFrozenInViewport(vp, st.userPolylineAttrs[pi].layer)))
           continue;
+        curColor = (pi < st.userPolylineAttrs.size()) ? overrideRgb(st.userPolylineAttrs[pi].layer) : 0x000000u;
         const int start = st.userPolylineOffsets[pi];
         const int end = (pi + 1 < st.userPolylineOffsets.size())
                             ? st.userPolylineOffsets[pi + 1]
@@ -147,8 +168,10 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
       // Circles (sampled to a polygon).
       for (size_t i = 0; i + 2 < st.userCirclesCxCyR.size(); i += 3) {
         const size_t idx = i / 3;
-        if (idx < st.userCircleAttrs.size() && !plottable(st.userCircleAttrs[idx].layer))
+        if (idx < st.userCircleAttrs.size() &&
+            (!plottable(st.userCircleAttrs[idx].layer) || IsLayerFrozenInViewport(vp, st.userCircleAttrs[idx].layer)))
           continue;
+        curColor = (idx < st.userCircleAttrs.size()) ? overrideRgb(st.userCircleAttrs[idx].layer) : 0x000000u;
         const double cx = st.userCirclesCxCyR[i] + oX, cy = st.userCirclesCxCyR[i + 1] + oY;
         const double r = st.userCirclesCxCyR[i + 2];
         constexpr int kSeg = 72;
@@ -162,8 +185,12 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
           pyp = wy;
         }
       }
-      // Arcs (sampled).
-      for (const CadArc& a : st.userArcs) {
+      // Arcs (sampled). REQ-028: skip layers frozen in this viewport (matches the on-screen viewport render).
+      for (size_t ai = 0; ai < st.userArcs.size(); ++ai) {
+        if (ai < st.userArcAttrs.size() && IsLayerFrozenInViewport(vp, st.userArcAttrs[ai].layer))
+          continue;
+        curColor = (ai < st.userArcAttrs.size()) ? overrideRgb(st.userArcAttrs[ai].layer) : 0x000000u;
+        const CadArc& a = st.userArcs[ai];
         const int kSeg = std::clamp(static_cast<int>(std::fabs(a.sweepRad) / 0.1f) + 2, 2, 256);
         double pxp = 0, pyp = 0;
         for (int k = 0; k <= kSeg; ++k) {
@@ -178,8 +205,9 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
       }
       // Survey-point crosses (fixed 0.05" on the sheet).
       for (const SurveyPoint& sp : st.surveyPoints) {
-        if (!plottable(sp.layer))
+        if (!plottable(sp.layer) || IsLayerFrozenInViewport(vp, sp.layer))
           continue;
+        curColor = overrideRgb(sp.layer);
         float pcx, pcy;
         m2p(static_cast<double>(sp.easting) + oX, static_cast<double>(sp.northing) + oY, &pcx, &pcy);
         constexpr float hc = 0.05f;
@@ -190,8 +218,9 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
         if (ClipSeg(vx0, vy0, vx1, vy1, cx2, cy2, dx2, dy2))
           addSeg(cx2, cy2, dx2, dy2);
       }
-      // Viewport border — only if the viewport's layer is plottable.
+      // Viewport border — only if the viewport's layer is plottable. Always black.
       if (plottable(vp.layer)) {
+        curColor = 0x000000u;
         addSeg(vx0, vy0, vx1, vy0);
         addSeg(vx1, vy0, vx1, vy1);
         addSeg(vx1, vy1, vx0, vy1);
@@ -199,14 +228,18 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
       }
     }
 
-    if (!segs.empty()) {
+    // One stroked path object per color group (REQ-046: overridden layers print in their color).
+    for (const auto& [color, segs] : segsByColor) {
+      if (segs.empty())
+        continue;
       FPDF_PAGEOBJECT path = FPDFPageObj_CreateNewPath(segs[0][0] * kPtPerIn, segs[0][1] * kPtPerIn);
       FPDFPath_LineTo(path, segs[0][2] * kPtPerIn, segs[0][3] * kPtPerIn);
       for (size_t i = 1; i < segs.size(); ++i) {
         FPDFPath_MoveTo(path, segs[i][0] * kPtPerIn, segs[i][1] * kPtPerIn);
         FPDFPath_LineTo(path, segs[i][2] * kPtPerIn, segs[i][3] * kPtPerIn);
       }
-      FPDFPageObj_SetStrokeColor(path, 0, 0, 0, 255);
+      FPDFPageObj_SetStrokeColor(path, static_cast<int>((color >> 16) & 0xff), static_cast<int>((color >> 8) & 0xff),
+                                 static_cast<int>(color & 0xff), 255);
       FPDFPageObj_SetStrokeWidth(path, 0.5f);
       FPDFPath_SetDrawMode(path, 0 /*no fill*/, 1 /*stroke*/);
       FPDFPage_InsertObject(page, path);

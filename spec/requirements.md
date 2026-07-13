@@ -398,7 +398,10 @@ requirements is a planning failure, not a sign of rigor.
   it.
 - Owner-layer: UI / Domain / Renderer
 - Status: accepted
-- Revisions: 2026-06-15 — initial.
+- Revisions: 2026-06-15 — initial. 2026-07-13 — the freeze **UI** moved from the standalone
+  "Frozen Layers" panel to the Layer Manager's **VP Freeze** column and the **VPFREEZE/VPTHAW**
+  commands (REQ-046); the per-viewport freeze data model and semantics are unchanged. 2026-07-13
+  — plotted output now honors per-viewport frozen layers (TASK-017), matching the on-screen render.
 
 ### REQ-029 — Plot a single layout to PDF at true scale
 - Purpose: produce a printable sheet at correct plot scale
@@ -473,7 +476,7 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-06-15 — initial (Inc 3a).
 
-### REQ-034 — Polygonal viewport command
+### REQ-034 — Polygonal viewport command  *(WITHDRAWN)*
 - Purpose: non-rectangular viewports
 - Priority: could
 - Type: functional
@@ -484,8 +487,11 @@ requirements is a planning failure, not a sign of rigor.
 - Acceptance: clicking ≥3 vertices then closing creates a viewport that clips the
   model to the polygon; preview tracks the in-progress boundary.
 - Owner-layer: UI / Commands / Renderer
-- Status: accepted
+- Status: **withdrawn** (2026-07-13 — see decision log). Never implemented.
 - Revisions: 2026-06-15 — initial (Inc 3d; depends on the GL clip pass).
+  2026-07-13 — **withdrawn**: rectangular viewports (REQ-033) cover current needs;
+  polygonal viewports were blocked on the deferred/reverted GL per-viewport clip
+  pass and judged unneeded complexity. May be re-proposed if a real need arises.
 
 ### REQ-035 — Viewports are selectable; MOVE/COPY/DELETE operate on them
 - Purpose: edit viewports with the same UX as model objects
@@ -844,6 +850,75 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-06-21 — initial.
 
+### REQ-046 — Per-viewport layer overrides: VP Freeze + VP Color in the Layer Manager, and VPFREEZE/VPTHAW commands
+- Purpose: AutoCAD-style per-viewport layer control — the user manages how each layer
+  appears **in a given viewport** (frozen or recolored) from the Layer Manager and by
+  picking objects, replacing the ad-hoc "Frozen Layers" panel
+- Priority: should
+- Type: functional
+- Statement: Per-viewport layer state is controlled two ways, both targeting the **current
+  viewport** — defined as the **floating** viewport when the user is inside one (REQ-036),
+  else the **single selected** viewport in paper space, else **none** (controls disabled).
+  (a) **Layer Manager columns** — the LAYER manager gains a **VP Freeze** column (checkbox)
+  that freezes/thaws the row's layer in the current viewport (the REQ-028 per-viewport freeze
+  set), and a **VP Color** column (color picker) that sets a **per-viewport color override**
+  for the row's layer; both are editable only when a current viewport exists. The standalone
+  "Frozen Layers" panel is **removed**. (b) **VPFREEZE / VPTHAW commands** — `VPFREEZE`
+  prompts "Select objects" and freezes each picked entity's layer in the current viewport;
+  `VPTHAW` is the inverse (thaws the picked layers). Esc or an empty selection changes nothing.
+  A **VP Color override** recolors that layer's entities **only within its viewport** — on
+  screen and in the **PDF plot** (this amends the ADR-007 monochrome-vector plot for
+  per-viewport layer color; layers with no override keep the existing rendering). Because the
+  on-screen viewport currently draws model linework in a fixed color (the GL true-color pass is
+  deferred), the override colors **only the overridden layers**; general true-color viewport
+  rendering is out of scope. All per-viewport freeze and color state is **strictly per
+  viewport** — model space and other viewports are unaffected — and **persists per viewport in
+  the native `.gs`** (extends REQ-031, the `frozenLayers` pattern; missing/garbage → empty, no
+  crash). DXF persistence of per-viewport overrides stays deferred.
+- Acceptance:
+  - the standalone "Frozen Layers" panel no longer appears;
+  - with a current viewport, the Layer Manager shows the **VP Freeze** and **VP Color** columns;
+    with no current viewport, they are disabled;
+  - checking **VP Freeze** for a layer hides that layer's geometry in the current viewport only
+    (still visible in other viewports and in model space); unchecking restores it (REQ-028);
+  - setting **VP Color** for a layer renders that layer's entities in the override color within
+    the current viewport only; clearing the override reverts to the normal color;
+  - **VPFREEZE** → select objects → those entities' layers are frozen in the current viewport
+    only; **VPTHAW** → select objects → those layers are thawed; Esc / empty pick changes nothing;
+  - a `.gs` save/load round-trips per-viewport frozen layers **and** color overrides;
+  - a PDF plot of a viewport shows frozen layers **absent** and VP-Color layers in their
+    **override color**, matching the screen;
+  - existing global layer freeze/color and model-space rendering are unchanged.
+- Owner-layer: UI / Commands / Domain / Renderer / IO
+- Status: accepted
+- Revisions: 2026-07-13 — initial (ADR-021; amends ADR-007 for per-viewport plot color;
+  supersedes the REQ-028 "Frozen Layers" panel UI).
+
+### REQ-047 — ORTHO mode: optional H/V drawing constraint, off by default, reliably toggleable
+- Purpose: draw commands must be able to place points at any angle — the user could only draw
+  orthogonal lines because ORTHO was forced on and could not be reliably turned off
+- Priority: should
+- Type: functional
+- Statement: **ORTHO** is an optional drawing constraint that, when **on**, snaps a draft/committed
+  point onto the horizontal or vertical line through the current anchor (whichever axis the cursor is
+  farther along), matching AutoCAD. ORTHO is **off by default** — with ORTHO off, LINE and the other
+  draft commands commit to the **actual** cursor/typed point at **any angle**. ORTHO is toggled by
+  **F8** and by the status-bar **ORTHO** button; **F8 works even while the command bar has keyboard
+  focus** (it is a mode key, not text). **Object snap overrides ORTHO** (a snapped point wins). This is
+  a UI/interaction constraint over the existing draw path; it changes no geometry, coordinate, or
+  storage behavior (REQ-101 fidelity untouched). (The same mode-key rule applies to **F3** object-snap.)
+- Acceptance:
+  - a fresh drawing has ORTHO **off**; drawing a LINE between two non-aligned points produces a segment
+    at the true angle (not snapped to H/V);
+  - turning ORTHO **on** (F8 or the status button) constrains the next LINE segment to horizontal or
+    vertical from the anchor; turning it off again restores free-angle drawing;
+  - **F8 toggles ORTHO even while the command bar is focused** (typing a command does not disable F8);
+  - when a point is object-snapped, ORTHO does not override the snap.
+- Owner-layer: UI (default + key/status toggles) / Commands (the pure ORTHO constraint helper)
+- Status: accepted
+- Revisions: 2026-07-13 — initial. Root cause: ORTHO defaulted on (`main.cpp` orthoEnabled=true) and
+  F8 was gated behind text-input focus, so it could not be reliably turned off.
+
 ---
 
 ## Performance requirements
@@ -961,7 +1036,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-031 | IO | manual (layouts/viewports/scales/paper/frozen-layers round-trip through .gs) | accepted |
 | REQ-032 | UI | manual (Layout ribbon shows in paper space; normal ribbon in model) | accepted |
 | REQ-033 | UI/Commands | manual (two-click rectangular viewport with rubber-band preview; Esc cancels) | accepted |
-| REQ-034 | UI/Commands/Renderer | manual (polygonal viewport clips model to the polygon) — Inc 3d | accepted |
+| REQ-034 | UI/Commands/Renderer | ~~manual (polygonal viewport clips model to the polygon) — Inc 3d~~ | withdrawn (2026-07-13) |
 | REQ-035 | UI/Commands | manual (viewport click/window select + grips; MOVE/COPY/DELETE act on viewports) | accepted |
 | REQ-036 | UI/Commands/Renderer | manual (double-click into viewport edits model through it; leave returns to paper) | accepted |
 | REQ-037 | Domain/UI/Commands/Renderer/IO | manual (draw lines+text on a sheet; move/copy/rotate/delete/snap; not in model or other layouts; .gs round-trip) | accepted |
@@ -973,6 +1048,8 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-043 | Commands/Renderer/UI/Domain/IO | `HatchTests` (boundary trace: closed rect → loop, gap → none, nested → smallest; pattern/angle/scale stored) + manual (prompt internal point; inside→preview, outside→none; click fills region; no-region message; ribbon color/transparency/layer/angle/scale honored; selectable) | accepted |
 | REQ-044 | Domain/UI/IO | `TextStyleTests` (resolve/bake from style; override keeps per-text value while non-overridden props re-bake on style edit; legacy empty-style text unchanged; dimensions ignored) + manual (active-style dropdown; new text adopts active style; `.gs` round-trip of table + per-annotation style; old `.gs` unchanged; Phase 2 STYLE dialog create/rename/delete/edit ripple; Phase 3 Properties overrides + oblique) | accepted |
 | REQ-045 | UI | manual (PAN/P enters pan; hand cursor; left-drag pans 1:1; Esc/Enter/right-click exits + restores cursor/tool; middle-drag unchanged; model/paper/floating) | accepted |
+| REQ-046 | UI/Commands/Domain/Renderer/IO | `PaperSpaceTests` (VP color override set/get/clear; per-viewport independence; VPFREEZE adds / VPTHAW removes a layer in the vp's frozen set) + manual (panel gone; Layer Manager VP Freeze/VP Color columns gated on current viewport; freeze/color affect current vp only; VPFREEZE/VPTHAW pick; `.gs` round-trip of frozen + color; PDF plot shows frozen absent + override colored) | accepted |
+| REQ-047 | UI/Commands | `OrthoConstrainTests` (constraint off = no-op at any angle; on = snaps to nearer H/V axis; snap-independent math) + manual (fresh drawing draws free-angle; F8/status toggles ORTHO incl. while the command bar is focused; object snap overrides ORTHO) | accepted |
 
 ---
 

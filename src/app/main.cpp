@@ -181,7 +181,7 @@ int main()
 
   bool dockLayoutDone = haveSavedDockIni;
   const float ribbonH = 130.f;
-  bool orthoEnabled = true;
+  bool orthoEnabled = false;  // REQ-047: ORTHO is off by default (AutoCAD convention) — free-angle drawing
   bool gridVisible = false;
   // prevDrawingIdx lives in cmd — no local needed.
 
@@ -213,14 +213,13 @@ int main()
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    ImGuiIO &ioFrame = ImGui::GetIO();
-    if (!ioFrame.WantTextInput)
-    {
-      if (ImGui::IsKeyPressed(ImGuiKey_F3, false))
-        cmd.objectSnapEnabled = !cmd.objectSnapEnabled;
-      if (ImGui::IsKeyPressed(ImGuiKey_F8, false))
-        orthoEnabled = !orthoEnabled;
-    }
+    // REQ-047: F3 (object snap) and F8 (ortho) are MODE toggles — like AutoCAD they must work even while
+    // the command bar has keyboard focus. They are not text characters, so handling them during
+    // WantTextInput never interferes with typing a command.
+    if (ImGui::IsKeyPressed(ImGuiKey_F3, false))
+      cmd.objectSnapEnabled = !cmd.objectSnapEnabled;
+    if (ImGui::IsKeyPressed(ImGuiKey_F8, false))
+      orthoEnabled = !orthoEnabled;
     cmd.orthoMode = orthoEnabled;
 
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))

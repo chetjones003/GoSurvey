@@ -273,6 +273,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/SurveyCsvValidateTests.cpp
     tests/HatchGeomTests.cpp
     tests/TextStyleTests.cpp
+    tests/OrthoConstrainTests.cpp
     src/traverse/TraverseCalc.cpp
     src/traverse/TraverseLeastSquares.cpp
     src/traverse/FbkImport.cpp

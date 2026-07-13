@@ -303,6 +303,15 @@ void ToggleFrozenLayerInViewport(Viewport& vp, const std::string& layerName);
 /// Check if a layer is frozen in a viewport.
 bool IsLayerFrozenInViewport(const Viewport& vp, const std::string& layerName);
 
+// --- Per-viewport layer overrides UI/commands (REQ-046) ---
+/// The "current viewport" the Layer Manager VP columns and VPFREEZE/VPTHAW act on: the floating
+/// viewport if inside one (REQ-036), else the single selected viewport in the active paper layout,
+/// else nullptr (no current viewport → VP controls disabled).
+Viewport* CurrentViewport(AppCommandState& st);
+/// Begin VPFREEZE / VPTHAW: pick entities in the current (floating) viewport to freeze/thaw their layers.
+void StartVpFreezeCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartVpThawCommand(AppCommandState& st, std::vector<std::string>& log);
+
 // --- Floating model space (REQ-036) ---
 bool InFloatingModelSpace(const AppCommandState& cmd);
 
@@ -377,6 +386,9 @@ struct AppCommandState {
     Hatch,
     /// PAN: interactive view pan — left-drag pans the active view; Esc/Enter/right-click exits (REQ-045).
     Pan,
+    /// VPFREEZE / VPTHAW: pick entities in the current viewport; their layers freeze/thaw in it (REQ-046).
+    VpFreeze,
+    VpThaw,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -408,6 +420,8 @@ struct AppCommandState {
     case Kind::PaperRectViewport: return "MVIEW";
     case Kind::Hatch:         return "HATCH";
     case Kind::Pan:           return "PAN";
+    case Kind::VpFreeze:      return "VPFREEZE";
+    case Kind::VpThaw:        return "VPTHAW";
     default:                  return "";
     }
   }

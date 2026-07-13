@@ -1,4 +1,5 @@
 #include "CadCommands.hpp"
+#include "OrthoConstrain.hpp"
 #include "TextStyle.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadLinetype.hpp"
@@ -1975,6 +1976,8 @@ const CmdEntry kRegistry[] = {
     {"zoomextents", "ze", "Zoom to drawing extents"},
     {"zoomwindow", "zw", "Zoom to a window"},
     {"pan", "p", "Pan the view (drag with the left mouse button)"},
+    {"vpfreeze", "vpf", "Freeze the picked entities' layers in the current viewport"},
+    {"vpthaw", "vpt", "Thaw the picked entities' layers in the current viewport"},
     {"createpoints", "crtpts", "Create survey points"},
     {"viewpoints", "vwpts", "View / edit survey points"},
     {"importpoints", "imppts", "Import survey points"},
@@ -2377,6 +2380,14 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "pan") {
     StartPanCommand(st, log);
+    return true;
+  }
+  if (primary == "vpfreeze") {
+    StartVpFreezeCommand(st, log);
+    return true;
+  }
+  if (primary == "vpthaw") {
+    StartVpThawCommand(st, log);
     return true;
   }
   if (primary == "createpoints") {
@@ -5182,11 +5193,8 @@ static bool ApplySegmentAnglePickToViewportPick(AppCommandState& st, float& wx, 
   }
   if (st.segmentAngleLockActive)
     ApplySegmentAngleLockToWorldPick(st.anchorX, st.anchorY, st.segmentLockUx, st.segmentLockUy, &wx, &wy, false);
-  else if (st.orthoMode) {
-    const float dx = wx - st.anchorX, dy = wy - st.anchorY;
-    if (std::fabs(dx) >= std::fabs(dy)) wy = st.anchorY;
-    else wx = st.anchorX;
-  }
+  else
+    OrthoConstrainPoint(st.anchorX, st.anchorY, &wx, &wy, st.orthoMode);  // no-op when ORTHO off (REQ-047)
   return false;
 }
 
@@ -6609,14 +6617,7 @@ bool ParseStoragePoint(const AppCommandState& st, const std::string& raw, float*
 }
 
 void ApplyOrthoConstrainFromAnchor(float anchorX, float anchorY, float* wx, float* wy, bool ortho) {
-  if (!ortho || !wx || !wy)
-    return;
-  const float dx = *wx - anchorX;
-  const float dy = *wy - anchorY;
-  if (std::fabs(dx) >= std::fabs(dy))
-    *wy = anchorY;
-  else
-    *wx = anchorX;
+  OrthoConstrainPoint(anchorX, anchorY, wx, wy, ortho);  // REQ-047: one tested implementation
 }
 
 void ApplySegmentAngleLockToWorldPick(float anchorX, float anchorY, float lockUx, float lockUy, float* wx, float* wy,
@@ -10003,6 +10004,47 @@ void StartPanCommand(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back("PAN — drag with the left mouse button. Press Esc, Enter, or right-click to exit.");
 }
 
+Viewport* CurrentViewport(AppCommandState& st) {
+  if (st.activeSpaceIndex < 0 || st.activeSpaceIndex >= static_cast<int>(st.paperLayouts.size()))
+    return nullptr;
+  PaperLayout& L = st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+  // Floating viewport wins when the user is editing the model through one (REQ-036).
+  if (InFloatingModelSpace(st) && st.floatingViewportLayout == st.activeSpaceIndex &&
+      st.floatingViewportIndex >= 0 && st.floatingViewportIndex < static_cast<int>(L.viewports.size()))
+    return &L.viewports[static_cast<size_t>(st.floatingViewportIndex)];
+  // Else the single selected viewport in paper space.
+  if (st.selectedViewports.size() == 1 && st.selectedViewportIndex >= 0 &&
+      st.selectedViewportIndex < static_cast<int>(L.viewports.size()))
+    return &L.viewports[static_cast<size_t>(st.selectedViewportIndex)];
+  return nullptr;
+}
+
+// VPFREEZE / VPTHAW (REQ-046): pick entities in the current viewport; the picked layers freeze/thaw in it.
+// The pick itself is handled in the floating-viewport click path (CadUi); here we just enter the mode.
+static void StartVpFreezeThaw(AppCommandState& st, bool freeze, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  const char* name = freeze ? "VPFREEZE" : "VPTHAW";
+  if (CurrentViewport(st) == nullptr) {
+    log.push_back(std::string(name) +
+                  " — no current viewport. Double-click into a viewport (or select one) first.");
+    return;
+  }
+  if (st.active != K::None && st.active != K::VpFreeze && st.active != K::VpThaw) {
+    log.push_back(std::string(name) + " — finish or cancel the active command first.");
+    return;
+  }
+  ResetAllCadDraftTools(st);
+  ResetModifyRotateDraft(st);
+  st.active      = freeze ? K::VpFreeze : K::VpThaw;
+  st.lastCommand = st.active;
+  st.selBoxWaitingSecond = false;
+  log.push_back(std::string(name) + " — select objects to " + (freeze ? "freeze" : "thaw") +
+                " their layer in this viewport. Press Esc or Enter to exit.");
+}
+
+void StartVpFreezeCommand(AppCommandState& st, std::vector<std::string>& log) { StartVpFreezeThaw(st, true, log); }
+void StartVpThawCommand(AppCommandState& st, std::vector<std::string>& log) { StartVpFreezeThaw(st, false, log); }
+
 void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY, float* zoom, int fbW, int fbH,
                                 float viewportAspect, std::vector<std::string>& log) {
   if (fbW <= 0 || fbH <= 0)
@@ -10195,6 +10237,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("ZOOM WINDOW canceled.");
   else if (st.active == AppCommandState::Kind::Pan)
     log.push_back("PAN — exited.");
+  else if (st.active == AppCommandState::Kind::VpFreeze)
+    log.push_back("VPFREEZE — exited.");
+  else if (st.active == AppCommandState::Kind::VpThaw)
+    log.push_back("VPTHAW — exited.");
   else if (st.active == AppCommandState::Kind::PdfAttach)
     log.push_back("PDFATTACH canceled.");
   else if (st.active == AppCommandState::Kind::Paste)
@@ -10463,6 +10509,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       // Enter (or right-click in Enter mode) exits PAN; Esc exits via CancelActiveCommand.
       st.active = K::None;
       log.push_back("PAN — exited.");
+      return;
+    }
+    if (st.active == K::VpFreeze || st.active == K::VpThaw) {
+      // Enter exits VPFREEZE/VPTHAW; Esc exits via CancelActiveCommand (REQ-046).
+      const char* nm = st.active == K::VpFreeze ? "VPFREEZE" : "VPTHAW";
+      st.active = K::None;
+      log.push_back(std::string(nm) + " — exited.");
       return;
     }
     if (st.active == K::Line && st.linePhase == AppCommandState::LinePhase::NeedNextPoint) {

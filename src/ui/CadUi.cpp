@@ -7073,8 +7073,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           }
         }
         // Hover highlight (REQ-036): entity under the cursor when idle, for the in-viewport highlight below.
+        // Also active during VPFREEZE/VPTHAW (REQ-046) so the user sees the object they are about to pick.
         cmd.viewportHoverEntityValid = false;
-        if (!midCmd) {
+        const bool vpFreezePick =
+            cmd.active == AppCommandState::Kind::VpFreeze || cmd.active == AppCommandState::Kind::VpThaw;
+        if (!midCmd || vpFreezePick) {
           SelectedEntity hoverHit{};
           float hoverD2 = 0.f;
           const float hoverTol = std::max(1.e-6f, 8.f * worldPerPx);
@@ -7102,7 +7105,41 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
             !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
           const float gripTolWorld = 10.f * worldPerPx;  // grip hit radius (~10px) in model units
-          if (cmd.entityGripMoveActive) {
+          if (vpFreezePick) {
+            // REQ-046: clicking an object freezes/thaws its LAYER in this floating viewport; stay in the
+            // command for more picks (Esc/Enter exits). Empty click (no hover) changes nothing.
+            if (cmd.viewportHoverEntityValid) {
+              auto layerOf = [&](const SelectedEntity& e) -> std::string {
+                using T = SelectedEntity::Type;
+                auto at = [](const std::vector<EntityAttributes>& v, int idx) -> std::string {
+                  return (idx >= 0 && static_cast<size_t>(idx) < v.size()) ? v[static_cast<size_t>(idx)].layer
+                                                                           : std::string();
+                };
+                switch (e.type) {
+                case T::LineSeg:      return at(cmd.userLineAttrs, e.index);
+                case T::Polyline:     return at(cmd.userPolylineAttrs, e.index);
+                case T::Circle:       return at(cmd.userCircleAttrs, e.index);
+                case T::Arc:          return at(cmd.userArcAttrs, e.index);
+                case T::Ellipse:      return at(cmd.userEllAttrs, e.index);
+                case T::Annotation:   return at(cmd.cadAnnotationAttrs, e.index);
+                case T::FilledRegion: return at(cmd.cadFilledRegionAttrs, e.index);
+                default:              return std::string();
+                }
+              };
+              const std::string lyr = layerOf(cmd.viewportHoverEntity);
+              if (!lyr.empty()) {
+                Viewport& fvp = FL.viewports[static_cast<size_t>(cmd.floatingViewportIndex)];
+                if (cmd.active == AppCommandState::Kind::VpFreeze) {
+                  FreezeLayerInViewport(fvp, lyr);
+                  log.push_back("VPFREEZE — froze layer '" + lyr + "' in this viewport.");
+                } else {
+                  ThawLayerInViewport(fvp, lyr);
+                  log.push_back("VPTHAW — thawed layer '" + lyr + "' in this viewport.");
+                }
+                BumpCadGpuCache(cmd);
+              }
+            }
+          } else if (cmd.entityGripMoveActive) {
             // Commit the grip drag — geometry was updated live by the (ungated) grip-drag block above.
             ClearEntityGripInteraction(cmd);
             BumpCadGpuCache(cmd);
@@ -8301,8 +8338,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // but GL is skipped in paper space, so style the overlay strokes here for the active floating viewport.
       const bool isFloatVp = InFloatingModelSpace(cmd) && cmd.floatingViewportLayout == cmd.activeSpaceIndex &&
                              vi == cmd.floatingViewportIndex;
-      auto entStyle = [&](SelectedEntity::Type t, int idx, ImU32& col, float& wid) {
-        col = kVpModelCol;
+      // REQ-046: base color for model geometry inside this viewport — the layer's per-viewport color
+      // override when set, else the default viewport linework color (kVpModelCol).
+      auto vpBaseCol = [&](const std::string& layer) -> ImU32 {
+        const std::string* ov = ViewportLayerColorOverride(vp, layer);
+        if (!ov)
+          return kVpModelCol;
+        float rgba[4] = {0.1f, 0.1f, 0.12f, 1.f};
+        ResolveStoredColorForViewport(*ov, 0.f, 0.1f, 0.1f, 0.12f, rgba);
+        return IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
+                        static_cast<int>(rgba[2] * 255.f), 255);
+      };
+      auto entStyle = [&](SelectedEntity::Type t, int idx, ImU32 baseCol, ImU32& col, float& wid) {
+        col = baseCol;
         wid = 1.0f;
         if (!isFloatVp)
           return;
@@ -8328,7 +8376,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const ImVec2 s1 = m2s(cmd.userLinesFlat[i + 3] + oX, cmd.userLinesFlat[i + 4] + oY);
         ImU32 lc;
         float lw;
-        entStyle(SelectedEntity::Type::LineSeg, static_cast<int>(lineIdx), lc, lw);
+        entStyle(SelectedEntity::Type::LineSeg, static_cast<int>(lineIdx), vpBaseCol(attr.layer), lc, lw);
         sdl->AddLine(s0, s1, lc, lw);
       }
       // Polylines (REQ-028: skip frozen layers).
@@ -8342,7 +8390,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                             : static_cast<int>(cmd.userPolylineVerts.size() / 3);
         ImU32 pc;
         float pw;
-        entStyle(SelectedEntity::Type::Polyline, static_cast<int>(pi), pc, pw);
+        entStyle(SelectedEntity::Type::Polyline, static_cast<int>(pi), vpBaseCol(attr.layer), pc, pw);
         ImVec2 prev{};
         bool have = false;
         for (int k = start; k < end; ++k) {
@@ -8364,7 +8412,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float rPx = cmd.userCirclesCxCyR[i + 2] * pxPerModel;
         ImU32 cc2;
         float cw;
-        entStyle(SelectedEntity::Type::Circle, static_cast<int>(circleIdx), cc2, cw);
+        entStyle(SelectedEntity::Type::Circle, static_cast<int>(circleIdx), vpBaseCol(attr.layer), cc2, cw);
         if (rPx >= 0.5f)
           sdl->AddCircle(c, rPx, cc2, 0, cw);
       }
@@ -8377,7 +8425,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const int segs = std::clamp(static_cast<int>(std::fabs(arc.sweepRad) / 0.15f) + 2, 2, 180);
         ImU32 ac;
         float aw;
-        entStyle(SelectedEntity::Type::Arc, static_cast<int>(arcIdx), ac, aw);
+        entStyle(SelectedEntity::Type::Arc, static_cast<int>(arcIdx), vpBaseCol(attr.layer), ac, aw);
         ImVec2 prev{};
         for (int k = 0; k <= segs; ++k) {
           const float t = arc.startRad + arc.sweepRad * (static_cast<float>(k) / static_cast<float>(segs));
@@ -8393,9 +8441,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       for (const SurveyPoint& sp : cmd.surveyPoints) {
         if (IsLayerFrozenInViewport(vp, sp.layer))
           continue;
+        const ImU32 spCol = vpBaseCol(sp.layer);  // REQ-046: honor a per-viewport color override
         const ImVec2 c = m2s(static_cast<double>(sp.easting) + oX, static_cast<double>(sp.northing) + oY);
-        sdl->AddLine(ImVec2(c.x - crossPx, c.y), ImVec2(c.x + crossPx, c.y), kVpModelCol, 1.0f);
-        sdl->AddLine(ImVec2(c.x, c.y - crossPx), ImVec2(c.x, c.y + crossPx), kVpModelCol, 1.0f);
+        sdl->AddLine(ImVec2(c.x - crossPx, c.y), ImVec2(c.x + crossPx, c.y), spCol, 1.0f);
+        sdl->AddLine(ImVec2(c.x, c.y - crossPx), ImVec2(c.x, c.y + crossPx), spCol, 1.0f);
       }
       // Entity grips (REQ-036): squares at each selected entity's grip points; the grabbed grip is hot.
       if (isFloatVp) {
@@ -10041,26 +10090,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   DrawMtextRichEditorOverlay(cmd, log, static_cast<float>(worldLeft), static_cast<float>(worldRight),
                              static_cast<float>(worldBottom), static_cast<float>(worldTop), imgPos, avail);
 
-  // REQ-028: Per-viewport layer freeze UI. Shows layer checkboxes when a viewport is selected in paper space.
-  if (cmd.activeSpaceIndex >= 0 && cmd.activeSpaceIndex < static_cast<int>(cmd.paperLayouts.size()) &&
-      cmd.selectedViewports.size() == 1 && cmd.selectedViewportIndex >= 0) {
-    PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
-    if (cmd.selectedViewportIndex < static_cast<int>(L.viewports.size())) {
-      Viewport& vp = L.viewports[static_cast<size_t>(cmd.selectedViewportIndex)];
-      ImGui::Separator();
-      if (ImGui::CollapsingHeader("Frozen Layers")) {
-        ImGui::BeginChild("##frozenLayersChild", ImVec2(-1.f, 80.f), ImGuiChildFlags_Borders);
-        for (const auto& row : cmd.drawingLayerTable) {
-          bool frozen = IsLayerFrozenInViewport(vp, row.name);
-          if (ImGui::Checkbox(row.name.c_str(), &frozen)) {
-            ToggleFrozenLayerInViewport(vp, row.name);
-            BumpCadGpuCache(cmd);
-          }
-        }
-        ImGui::EndChild();
-      }
-    }
-  }
+  // REQ-046: the per-viewport layer freeze UI moved from this standalone panel to the Layer Manager's
+  // VP Freeze / VP Color columns and the VPFREEZE / VPTHAW commands. (Panel removed.)
 
   *outFbW = vpFbW;
   *outFbH = vpFbH;
@@ -11022,7 +11053,10 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
   ImGui::Separator();
   const ImGuiTableFlags tflags =
       ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY;
-  if (ImGui::BeginTable("laymgr", 11, tflags, ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 16.f))) {
+  // REQ-046: "current viewport" the VP Freeze / VP Color columns act on (nullptr in model space or when
+  // no single viewport is current → those columns are disabled).
+  Viewport* vpCur = CurrentViewport(cmd);
+  if (ImGui::BeginTable("laymgr", 13, tflags, ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 16.f))) {
     ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.16f);
     ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 36.f);
     ImGui::TableSetupColumn("Freeze", ImGuiTableColumnFlags_WidthFixed, 52.f);
@@ -11033,6 +11067,8 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
     ImGui::TableSetupColumn("Linetype", ImGuiTableColumnFlags_WidthStretch, 0.11f);
     ImGui::TableSetupColumn("Lineweight", ImGuiTableColumnFlags_WidthStretch, 0.10f);
     ImGui::TableSetupColumn("Transparency", ImGuiTableColumnFlags_WidthStretch, 0.10f);
+    ImGui::TableSetupColumn("VP Freeze", ImGuiTableColumnFlags_WidthFixed, 64.f);
+    ImGui::TableSetupColumn("VP Color", ImGuiTableColumnFlags_WidthStretch, 0.12f);
     ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 72.f);
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 1.f, 1.f));
     ImGui::TableHeadersRow();
@@ -11175,6 +11211,51 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
           }
           ImGui::EndCombo();
         }
+      }
+
+      // REQ-046: VP Freeze — freeze/thaw this layer in the current viewport (disabled when none).
+      ImGui::TableNextColumn();
+      {
+        ImGui::BeginDisabled(vpCur == nullptr);
+        bool vpFrozen = vpCur && IsLayerFrozenInViewport(*vpCur, row.name);
+        if (ImGui::Checkbox("##vpfr", &vpFrozen) && vpCur) {
+          if (vpFrozen)
+            FreezeLayerInViewport(*vpCur, row.name);
+          else
+            ThawLayerInViewport(*vpCur, row.name);
+          BumpCadGpuCache(cmd);
+        }
+        ImGui::EndDisabled();
+      }
+
+      // REQ-046: VP Color — per-viewport color override for this layer ("(none)" clears it).
+      ImGui::TableNextColumn();
+      ImGui::SetNextItemWidth(-1);
+      {
+        ImGui::BeginDisabled(vpCur == nullptr);
+        const std::string* ov = vpCur ? ViewportLayerColorOverride(*vpCur, row.name) : nullptr;
+        char vcprev[120];
+        ImStrncpy(vcprev, ov ? ColorStorageToPreviewLabel(*ov).c_str() : "(none)", sizeof(vcprev));
+        vcprev[sizeof(vcprev) - 1] = '\0';
+        if (ImGui::BeginCombo("##vpcol", vcprev)) {
+          if (ImGui::Selectable("(none)", ov == nullptr) && vpCur) {
+            ClearViewportLayerColor(*vpCur, row.name);
+            BumpCadGpuCache(cmd);
+          }
+          for (const auto& p : kNamedColors) {
+            if (std::string(p.storage) == "ByLayer")
+              continue;
+            const bool sel = ov && *ov == p.storage;
+            if (ImGui::Selectable(p.label, sel) && vpCur) {
+              SetViewportLayerColor(*vpCur, row.name, p.storage);
+              BumpCadGpuCache(cmd);
+            }
+            if (sel)
+              ImGui::SetItemDefaultFocus();
+          }
+          ImGui::EndCombo();
+        }
+        ImGui::EndDisabled();
       }
 
       ImGui::TableNextColumn();

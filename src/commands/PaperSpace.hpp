@@ -57,6 +57,11 @@ struct Viewport {
   float scaleModelPerPaperIn = 50.f;  // model units per paper inch (AutoCAD viewport scale)
   std::string layer = "0";            // viewport's layer; if not plottable, its border is omitted from plots
   std::vector<std::string> frozenLayers;  // layer names hidden only in this viewport (REQ-028)
+  // Per-viewport layer COLOR override (REQ-046): parallel arrays (layer name -> override color, same
+  // storage encoding as CadLayerRow::color). An entry recolors that layer's entities only within this
+  // viewport (on screen and in the plot). No entry = the layer's normal color.
+  std::vector<std::string> vpColorLayers;
+  std::vector<std::string> vpColorValues;
 
   float safeScale() const { return scaleModelPerPaperIn > 1.e-6f ? scaleModelPerPaperIn : 1.e-6f; }
 };
@@ -87,6 +92,52 @@ inline bool IsLayerFrozenInViewport(const Viewport& vp, const std::string& layer
       return true;
   }
   return false;
+}
+
+// VPFREEZE / VPTHAW (REQ-046): freeze (ensure present) or thaw (ensure absent) a layer in a viewport.
+// Unlike ToggleFrozenLayerInViewport these are idempotent — freezing an already-frozen layer is a no-op.
+inline void FreezeLayerInViewport(Viewport& vp, const std::string& layerName) {
+  if (!IsLayerFrozenInViewport(vp, layerName))
+    vp.frozenLayers.push_back(layerName);
+}
+
+inline void ThawLayerInViewport(Viewport& vp, const std::string& layerName) {
+  for (size_t i = 0; i < vp.frozenLayers.size(); ++i) {
+    if (vp.frozenLayers[i] == layerName) {
+      vp.frozenLayers.erase(vp.frozenLayers.begin() + static_cast<std::ptrdiff_t>(i));
+      return;
+    }
+  }
+}
+
+// Per-viewport layer COLOR override (REQ-046): set/replace, clear, and query a layer's override color
+// (CadLayerRow::color encoding) within a viewport. Query returns nullptr when the layer has no override.
+inline void SetViewportLayerColor(Viewport& vp, const std::string& layerName, const std::string& colorStorage) {
+  for (size_t i = 0; i < vp.vpColorLayers.size(); ++i) {
+    if (vp.vpColorLayers[i] == layerName) {
+      vp.vpColorValues[i] = colorStorage;
+      return;
+    }
+  }
+  vp.vpColorLayers.push_back(layerName);
+  vp.vpColorValues.push_back(colorStorage);
+}
+
+inline void ClearViewportLayerColor(Viewport& vp, const std::string& layerName) {
+  for (size_t i = 0; i < vp.vpColorLayers.size(); ++i) {
+    if (vp.vpColorLayers[i] == layerName) {
+      vp.vpColorLayers.erase(vp.vpColorLayers.begin() + static_cast<std::ptrdiff_t>(i));
+      vp.vpColorValues.erase(vp.vpColorValues.begin() + static_cast<std::ptrdiff_t>(i));
+      return;
+    }
+  }
+}
+
+inline const std::string* ViewportLayerColorOverride(const Viewport& vp, const std::string& layerName) {
+  for (size_t i = 0; i < vp.vpColorLayers.size() && i < vp.vpColorValues.size(); ++i)
+    if (vp.vpColorLayers[i] == layerName)
+      return &vp.vpColorValues[i];
+  return nullptr;
 }
 
 // A named page setup (paper size + orientation + plot settings) the user can apply to layouts via the

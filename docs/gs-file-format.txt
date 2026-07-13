@@ -115,6 +115,11 @@ nlohmann::json (numbers may serialize as integers or floats; the loader uses
             scaleModelPerPaperIn      (number)  model units per paper inch (viewport scale)
             layer                     (string)  viewport's layer (for plotting)
             frozenLayers              (array of strings, optional) — REQ-028; layers hidden only in this viewport
+            vpColorLayers             (array of strings, optional) — REQ-046; layers with a per-viewport color
+                                        override in this viewport. Parallel to vpColorValues (same length).
+            vpColorValues             (array of strings, optional) — REQ-046; the override color per layer in
+                                        vpColorLayers (same color-name encoding as a layer's "color"). Missing or
+                                        unequal-length arrays load only the paired string entries (no crash).
       A missing or malformed array loads as zero layouts (model space only).
 
   activeSpaceIndex (integer, default -1)

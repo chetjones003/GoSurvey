@@ -314,6 +314,8 @@ json BuildRoot(const AppCommandState& st) {
         vo["scaleModelPerPaperIn"] = v.scaleModelPerPaperIn;
         vo["layer"] = v.layer;
         vo["frozenLayers"] = v.frozenLayers;
+        vo["vpColorLayers"] = v.vpColorLayers;    // REQ-046: per-viewport layer color override (parallel arrays)
+        vo["vpColorValues"] = v.vpColorValues;
         vps.push_back(vo);
       }
       o["viewports"] = vps;
@@ -802,6 +804,19 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
             for (const auto& fl : vo["frozenLayers"]) {
               if (fl.is_string())
                 v.frozenLayers.push_back(fl.get<std::string>());
+            }
+          }
+          // REQ-046: per-viewport layer color override (kept as equal-length parallel arrays).
+          if (vo.contains("vpColorLayers") && vo["vpColorLayers"].is_array() && vo.contains("vpColorValues") &&
+              vo["vpColorValues"].is_array()) {
+            const auto& ls = vo["vpColorLayers"];
+            const auto& cs = vo["vpColorValues"];
+            const size_t n = std::min(ls.size(), cs.size());
+            for (size_t k = 0; k < n; ++k) {
+              if (ls[k].is_string() && cs[k].is_string()) {
+                v.vpColorLayers.push_back(ls[k].get<std::string>());
+                v.vpColorValues.push_back(cs[k].get<std::string>());
+              }
             }
           }
           l.viewports.push_back(v);
