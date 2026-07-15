@@ -278,6 +278,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/HatchGeomTests.cpp
     tests/TextStyleTests.cpp
     tests/OrthoConstrainTests.cpp
+    tests/ColorContrastTests.cpp
     src/traverse/TraverseCalc.cpp
     src/traverse/TraverseLeastSquares.cpp
     src/traverse/FbkImport.cpp

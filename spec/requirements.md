@@ -949,6 +949,13 @@ requirements is a planning failure, not a sign of rigor.
 - Owner-layer: UI / Renderer / IO
 - Status: accepted
 - Revisions: 2026-07-13 — initial (ASSUMPTION-1 follow-up from REQ-046; amends ADR-007 to full color).
+  2026-07-13 — **background-adaptive white/black** (AutoCAD color-7 behavior): a resolved color that is
+  near-white renders **black** on a light background (the paper sheet / plot page), and a near-black
+  color renders **white** on a dark background, so linework and text stay legible. This adaptation
+  applies to the paper-space resolve sites (model-through-viewport, native sheet geometry, native sheet
+  text) on screen and in the plot; other colors are unchanged. Acceptance: with a layer/entity/VP-Color
+  set to white, its geometry and text are **visible (black)** on the white sheet and in the plotted PDF;
+  non-white colors are unaffected.
 
 ### REQ-049 — Plot native paper-space sheet geometry and text
 - Purpose: title blocks and sheet annotations must appear in the plotted PDF — today the plot renders

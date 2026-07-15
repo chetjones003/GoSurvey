@@ -4,6 +4,7 @@
 #include "PaperSpace.hpp"
 #include "ShxFont.hpp"           // shared lower-layer SHX stroke geometry (ADR-022)
 #include "MtextRichFormat.hpp"   // MtextRichFlattenToPlain (already used by DxfIo)
+#include "ColorContrast.hpp"     // background-adaptive white/black (REQ-048 refinement)
 
 #include <cctype>
 
@@ -133,6 +134,7 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
           }
           ResolveStoredColorForViewport(col, 0.f, 0.f, 0.f, 0.f, rgba);
         }
+        AdaptWhiteBlackToBackground(&rgba[0], &rgba[1], &rgba[2], true);  // REQ-048: legible on the white page
         return (static_cast<uint32_t>(rgba[0] * 255.f) << 16) | (static_cast<uint32_t>(rgba[1] * 255.f) << 8) |
                static_cast<uint32_t>(rgba[2] * 255.f);
       };
@@ -262,6 +264,7 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
         }
         float rgba[4] = {0.f, 0.f, 0.f, 1.f};
         ResolveStoredColorForViewport(col, 0.f, 0.f, 0.f, 0.f, rgba);
+        AdaptWhiteBlackToBackground(&rgba[0], &rgba[1], &rgba[2], true);  // REQ-048: legible on the white page
         return (static_cast<uint32_t>(rgba[0] * 255.f) << 16) | (static_cast<uint32_t>(rgba[1] * 255.f) << 8) |
                static_cast<uint32_t>(rgba[2] * 255.f);
       };

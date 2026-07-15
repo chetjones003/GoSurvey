@@ -4,6 +4,7 @@
 #include "MtextRichFormat.hpp"
 #include "FontRegistry.hpp"
 #include "ShxDraw.hpp"
+#include "ColorContrast.hpp"
 
 #include "CadLinetype.hpp"
 #include "TextStyle.hpp"
@@ -8352,6 +8353,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           }
           ResolveStoredColorForViewport(col, 0.f, 0.1f, 0.1f, 0.12f, rgba);
         }
+        AdaptWhiteBlackToBackground(&rgba[0], &rgba[1], &rgba[2], true);  // REQ-048: legible on the white sheet
         return IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
                         static_cast<int>(rgba[2] * 255.f), 255);
       };
@@ -8580,6 +8582,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const CadLayerRow* lr = FindDrawingLayerRowCi(cmd, a->layer.empty() ? std::string("0") : a->layer);
           ResolveEntityRgbaForViewport(*a, lr, 0.08f, 0.08f, 0.1f, rgba);
         }
+        AdaptWhiteBlackToBackground(&rgba[0], &rgba[1], &rgba[2], true);  // REQ-048: legible on the white sheet
         return IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
                         static_cast<int>(rgba[2] * 255.f), 255);
       };
