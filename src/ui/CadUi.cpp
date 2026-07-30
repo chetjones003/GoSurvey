@@ -6554,15 +6554,35 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
 
   ImGui::SetCursorScreenPos(ImVec2(ex, ey + rulerH));
   {
-    // Draw at the MTEXT's own on-screen size so the editing view matches the committed result, floored so
-    // it stays legible when zoomed out (TASK-024 ASSUMPTION-1).
-    float editFontPx = ImGui::GetFontSize();
-    if (target) {
-      const float hWorldEdit = cmd.mtextRichEditorPaper
-                                   ? std::max(0.01f, target->plottedHeightInches)
-                                   : CadAnnotationHeightWorld(*target, cmd.modelUnitsPerPlottedInch);
+    // True WYSIWYG size: the editor draws at exactly the size the committed MTEXT will draw at, so
+    // pressing Enter never resizes the text. This mirrors the render's sizing term for term — the same
+    // per-viewport scale selection (REQ-050) and the same clamp. The old [10, 96] px window was its own
+    // independent clamp, so any text whose real size fell outside it visibly jumped on commit: large
+    // text was shown shrunk, small text shown enlarged.
+    // While *placing*, no annotation exists yet, so take the plotted height CommitMtextRichEditor is
+    // about to stamp (`defaultPlottedTextHeightInches` — the style stamp copies font/oblique/bold/
+    // italic but deliberately not height). Falling back to the UI font size here is what made a newly
+    // placed MTEXT jump to a completely different size the moment it was accepted.
+    const bool isLabel = target && target->surveyPointLabelFor >= 0;
+    const float plottedH = target ? std::max(0.01f, target->plottedHeightInches)
+                                  : std::max(0.01f, cmd.defaultPlottedTextHeightInches);
+    float editFontPx;
+    {
       const float worldPerPxY = (worldTop - worldBottom) / std::max(1.f, avail.y);
-      editFontPx = std::clamp(hWorldEdit / std::max(worldPerPxY, 1.e-6f), 10.f, 96.f);
+      // Paper space pans/zooms in paper inches, so worldPerPxY is already inches-per-pixel there and
+      // the plotted height needs no conversion; model space scales it by the units-per-inch the
+      // render would use (REQ-050: the current viewport's scale when editing through one).
+      float hEdit = plottedH;
+      if (!cmd.mtextRichEditorPaper) {
+        float mup = cmd.modelUnitsPerPlottedInch;
+        if (!isLabel)
+          if (const Viewport* mvp = CurrentViewport(cmd))
+            mup = std::max(mvp->scaleModelPerPaperIn, 1.e-6f);
+        hEdit = plottedH * std::max(mup, 1.e-6f);
+      }
+      const float minPx = isLabel ? cmd.viewportMtextMinPx : 1.f;
+      const float maxPx = isLabel ? cmd.viewportMtextMaxPx : 8192.f;
+      editFontPx = std::clamp(hEdit / std::max(worldPerPxY, 1.e-6f), minPx, maxPx);
     }
     const std::string& baseFam = target ? target->fontFamily : std::string();
     float usedH = boxH;
@@ -9428,15 +9448,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           float pw = 8.f, ph = hPx * 1.22f;
           MtextRichNaturalContentPx(paperFont, hPx, a.text, &pw, &ph, a.fontFamily);
           float drawX = tl.x + 4.f, drawY = tl.y + 4.f;
+          // Anchor to the box without clamping back inside it — see the model-space path.
           if (acol == 1)      drawX = tl.x + 0.5f * ((brc.x - tl.x) - pw);
-          else if (acol == 2) drawX = std::max(tl.x + 4.f, brc.x - pw - 4.f);
+          else if (acol == 2) drawX = brc.x - pw - 4.f;
           if (arow == 1)      drawY = tl.y + 0.5f * ((brc.y - tl.y) - ph);
-          else if (arow == 2) drawY = std::max(tl.y + 4.f, brc.y - ph - 4.f);
+          else if (arow == 2) drawY = brc.y - ph - 4.f;
           float wrapPx = std::max(8.f, (brc.x - tl.x) - 8.f);
           if (acol != 0)
             wrapPx = std::max(pw, 8.f);
           Shx::Font* sfm = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
-          sdl->PushClipRect(tl, brc, true);
+          // Box wraps, box does not hide (mirrors model space): clip to the viewport, not to the box.
+          sdl->PushClipRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), true);
           if (sfm && sfm->valid()) {
             // SHX MTEXT: flatten the rich wire, split on hard newlines, stroke each line (mirrors model).
             const std::string plain = MtextRichFlattenToPlain(a.text);
@@ -10154,13 +10176,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const int arow = (a.mtextAttach - 1) / 3;
           float pw = 8.f, ph = fontPx * 1.22f;
           MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, a.fontFamily);
+          // Anchor to the box, but never clamp back inside it: content taller or wider than the box
+          // must overhang rather than be shoved in (and then clipped away).
           if (acol == 1)      drawX = rx0 + 0.5f * ((rx1 - rx0) - pw);
-          else if (acol == 2) drawX = std::max(rx0 + 4.f, rx1 - pw - 4.f);
+          else if (acol == 2) drawX = rx1 - pw - 4.f;
           if (arow == 1)      drawY = ry0 + 0.5f * ((ry1 - ry0) - ph);
-          else if (arow == 2) drawY = std::max(ry0 + 4.f, ry1 - ph - 4.f);
+          else if (arow == 2) drawY = ry1 - ph - 4.f;
           if (acol != 0) wrapW = std::max(pw, 8.f);
         }
-        dl->PushClipRect(ImVec2(rx0, ry0), ImVec2(rx1, ry1), true);
+        // The box governs where lines WRAP (wrapW above) and nothing else — it must never hide text.
+        // Clipping to it dropped every line past the box's height, so a box that was short (or that the
+        // user had dragged narrow) silently swallowed content. Clip to the viewport instead, purely so
+        // overhanging text cannot paint over the surrounding UI.
+        dl->PushClipRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), true);
         Shx::Font* sfm = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
         if (sfm && sfm->valid()) {
           // Render MTEXT as SHX strokes (exact AutoCAD match), line by line, honoring the attachment.

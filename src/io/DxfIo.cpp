@@ -1255,9 +1255,23 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       bool haveDir = false, haveRot = false;
       std::string txt, styleName;
       bool isSurveyLabel = false;
+      // AutoCAD 2018+ (AC1032) appends an "Embedded Object" (group 101) to MTEXT — a second serialization
+      // of the same text that REUSES the entity's group codes with different meanings: 10/20/30 is the
+      // X-axis direction, 11/21/31 the insertion point, 40 the reference-rectangle width, 41/42/43 the
+      // rectangle/extent sizes, 71/72 fixed flags. Feeding those to the entity fields overwrote the
+      // insertion point with the direction vector (~1,0), read the insertion point as a direction (a
+      // garbage rotation), and replaced the text height with the box width — so every label landed far
+      // off the drawing at a wildly wrong size. The embedded object is a separate object per the DXF
+      // spec, so skip its codes; XDATA (>= 1000) still trails it and is still read.
+      bool inEmbedded = false;
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
+        if (c == 101) { inEmbedded = true; continue; }
+        if (inEmbedded) {
+          if (c < 1000) continue;
+          inEmbedded = false;
+        }
         base.parse(c, v);
         if      (c == 10) ParseDouble(v, &ix);
         else if (c == 20) ParseDouble(v, &iy);

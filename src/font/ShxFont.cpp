@@ -23,6 +23,20 @@ const float kDirY[16] = {0, 0.5f, 1, 1, 1, 1, 1, 0.5f, 0, -0.5f, -1, -1, -1, -1,
 
 int8_t S8(unsigned char b) { return static_cast<int8_t>(b); }
 
+// Segments needed to keep an arc's chord sagging less than \p sagitta font units from the true curve.
+// Callers pass a tolerance derived from the font's cap height, so the result is resolution-independent:
+// tiny arcs stay cheap while a full bowl gets enough segments to read as a curve. Glyphs are built once
+// and cached, so this cost is paid per glyph per font, never per frame.
+int ArcSegments(double radius, double sweepAbs, double sagitta) {
+  if (!(radius > sagitta) || !(sweepAbs > 0.0))
+    return 2;
+  const double maxStep = 2.0 * std::acos(std::max(-1.0, 1.0 - sagitta / radius));
+  if (!(maxStep > 1e-9))
+    return 96;
+  const double n = std::ceil(sweepAbs / maxStep);
+  return static_cast<int>(std::min(96.0, std::max(2.0, n)));
+}
+
 // Bytes consumed by the shape command starting at bc[i] (the command byte + its operands). Used to skip
 // the command that follows a 0x0E (vertical-text-only) flag in horizontal text.
 size_t CommandSpan(const std::vector<unsigned char>& bc, size_t i) {
@@ -116,9 +130,34 @@ void Font::buildGlyph(unsigned code, Glyph* out) {
   bool penDown = false;
   std::vector<std::pair<float, float>> stack;
   std::vector<Vec2> curStroke;
+  // Arc flattening tolerance in font units, tied to the cap height so every font flattens equally
+  // finely. capHeight/3000 keeps the sag well under a pixel for text up to ~1000 px tall — far past
+  // any readable size — which is what removes the visible faceting on bowls and rounds.
+  const double arcSagitta = static_cast<double>(capHeight()) / 3000.0;
   auto flush = [&]() {
-    if (curStroke.size() >= 2)
-      out->strokes.push_back(curStroke);
+    if (curStroke.size() >= 2) {
+      // Split the stroke wherever it turns sharply. A thick anti-aliased polyline miters every joint,
+      // and at a near-reversal the two outer offsets cross each other and leave an unfilled sliver —
+      // the dark nicks that showed up on serifed stroke fonts. Cutting the run at the cusp means only
+      // gentle joints are ever mitred; the two pieces then simply overlap at the corner, which is what
+      // a corner should look like. Done here, at build time, so it costs nothing per frame — and it is
+      // safe for consumers that walk strokes segment by segment, which see the same segments either way.
+      constexpr float kCuspCos = 0.259f;  // cos 75° — sharper than this starts a new polyline
+      size_t begin = 0;
+      for (size_t k = 1; k + 1 < curStroke.size(); ++k) {
+        const float ax = curStroke[k].x - curStroke[k - 1].x, ay = curStroke[k].y - curStroke[k - 1].y;
+        const float bx = curStroke[k + 1].x - curStroke[k].x, by = curStroke[k + 1].y - curStroke[k].y;
+        const float la = std::hypot(ax, ay), lb = std::hypot(bx, by);
+        if (la < 1e-6f || lb < 1e-6f)
+          continue;
+        if ((ax * bx + ay * by) / (la * lb) < kCuspCos) {
+          out->strokes.emplace_back(curStroke.begin() + static_cast<std::ptrdiff_t>(begin),
+                                    curStroke.begin() + static_cast<std::ptrdiff_t>(k) + 1);
+          begin = k;
+        }
+      }
+      out->strokes.emplace_back(curStroke.begin() + static_cast<std::ptrdiff_t>(begin), curStroke.end());
+    }
     curStroke.clear();
   };
   auto moveTo = [&](float nx, float ny) {
@@ -145,10 +184,13 @@ void Font::buildGlyph(unsigned code, Glyph* out) {
     const float apo = R * std::cos(ang * 0.5f);
     const float nlx = -chordy / chord, nly = chordx / chord;  // left normal
     const float mx = (sx + ex) * 0.5f, my = (sy + ey) * 0.5f;
-    const float cx = mx - nlx * apo, cy = my - nly * apo;
+    // Centre sits at +apothem along the LEFT normal. R and apo carry the sweep's sign, so this one
+    // expression puts the centre on the correct side for both directions and for major (>180°) arcs;
+    // subtracting instead mirrored the centre, so every bulge arc swept away from its own end point.
+    const float cx = mx + nlx * apo, cy = my + nly * apo;
     const float a0 = std::atan2(sy - cy, sx - cx);
     const float radius = std::hypot(sx - cx, sy - cy);
-    const int seg = std::max(2, static_cast<int>(std::fabs(ang) / 0.3f) + 2);
+    const int seg = ArcSegments(radius, std::fabs(ang), arcSagitta);
     for (int k = 1; k <= seg; ++k) {
       const float t = a0 + ang * (static_cast<float>(k) / seg);
       moveTo(cx + radius * std::cos(t), cy + radius * std::sin(t));
@@ -186,19 +228,23 @@ void Font::buildGlyph(unsigned code, Glyph* out) {
             vec(static_cast<float>(dx), static_cast<float>(dy));
           }
           break;
-        case 0x0A: {  // octant arc: radius, ±(start<<4 | count)
+        case 0x0A: {  // octant arc: radius, then bit7 = clockwise, bits 6-4 = start octant, bits 3-0 = count
           if (i + 1 < code_.size()) {
             const float r = static_cast<float>(code_[i]) * scale;
-            const int s2 = S8(code_[i + 1]);
+            const unsigned char sc = code_[i + 1];
             i += 2;
-            const bool ccw = s2 >= 0;
-            const int a = std::abs(s2);
+            // bit 7 is a direction FLAG, not a sign: the magnitude is the low 7 bits. Reading it as a
+            // two's-complement int and taking abs() (0xA4 -> 92 instead of 0x24) decoded the wrong
+            // start octant, so the arc was built around a bogus centre and left the pen — and hence
+            // the glyph's advance width — badly wrong.
+            const bool ccw = (sc & 0x80) == 0;
+            const int a = sc & 0x7F;
             const int startOct = (a >> 4) & 0x7;
-            int cnt = a & 0x7; if (cnt == 0) cnt = 8;
+            int cnt = a & 0x0F; if (cnt == 0 || cnt > 8) cnt = 8;
             const double a0 = startOct * kPi / 4.0;
             const double cx = px - r * std::cos(a0), cy = py - r * std::sin(a0);
             const double sweep = (ccw ? 1 : -1) * cnt * kPi / 4.0;
-            const int seg = std::max(2, cnt * 3);
+            const int seg = ArcSegments(r, std::fabs(sweep), arcSagitta);
             for (int k = 1; k <= seg; ++k) {
               const double t = a0 + sweep * (static_cast<double>(k) / seg);
               moveTo(static_cast<float>(cx + r * std::cos(t)), static_cast<float>(cy + r * std::sin(t)));
@@ -210,17 +256,17 @@ void Font::buildGlyph(unsigned code, Glyph* out) {
           if (i + 4 < code_.size()) {
             const int startOff = code_[i], endOff = code_[i + 1];
             const float r = static_cast<float>(code_[i + 2] * 256 + code_[i + 3]) * scale;
-            const int s2 = S8(code_[i + 4]);
+            const unsigned char sc = code_[i + 4];
             i += 5;
-            const bool ccw = s2 >= 0;
-            const int a = std::abs(s2);
+            const bool ccw = (sc & 0x80) == 0;  // direction flag + 7-bit magnitude, as for 0x0A above
+            const int a = sc & 0x7F;
             const int startOct = (a >> 4) & 0x7;
-            int cnt = a & 0x7; if (cnt == 0) cnt = 8;
+            int cnt = a & 0x0F; if (cnt == 0 || cnt > 8) cnt = 8;
             const double a0 = (startOct + startOff / 256.0) * kPi / 4.0;
             const double aEnd = ((startOct + cnt) - endOff / 256.0) * kPi / 4.0;
             const double cx = px - r * std::cos(a0), cy = py - r * std::sin(a0);
             const double sweep = (ccw ? 1 : -1) * std::fabs(aEnd - a0);
-            const int seg = std::max(2, cnt * 3);
+            const int seg = ArcSegments(r, std::fabs(sweep), arcSagitta);
             for (int k = 1; k <= seg; ++k) {
               const double t = a0 + sweep * (static_cast<double>(k) / seg);
               moveTo(static_cast<float>(cx + r * std::cos(t)), static_cast<float>(cy + r * std::sin(t)));
@@ -230,9 +276,14 @@ void Font::buildGlyph(unsigned code, Glyph* out) {
         }
         case 0x0C: if (i + 2 < code_.size()) { bulgeTo(S8(code_[i]), S8(code_[i + 1]), S8(code_[i + 2])); i += 3; } break;
         case 0x0D:
-          while (i + 2 < code_.size()) {
-            const int dx = S8(code_[i]); const int dy = S8(code_[i + 1]); const int bl = S8(code_[i + 2]); i += 3;
+          // Triples of (dx, dy, bulge) ending at a (0,0) displacement — the terminator is the 2-byte
+          // pair only, with no bulge byte, which is what CommandSpan already assumes. Consuming a
+          // third byte for it desynchronised everything after the list.
+          while (i + 1 < code_.size()) {
+            const int dx = S8(code_[i]); const int dy = S8(code_[i + 1]); i += 2;
             if (dx == 0 && dy == 0) break;
+            if (i >= code_.size()) break;
+            const int bl = S8(code_[i]); ++i;
             bulgeTo(dx, dy, bl);
           }
           break;

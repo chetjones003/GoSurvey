@@ -5,6 +5,7 @@
 #include "MtextRichSpans.hpp"
 #include "MtextTextOps.hpp"
 #include "RichTextLayout.hpp"
+#include "ShxDraw.hpp"
 
 #include <imgui_internal.h>
 
@@ -21,6 +22,17 @@ namespace {
 constexpr float kLineSpacing = 1.22f;  // matches MtextRichFormat's wrapped-draw line height
 constexpr size_t kUndoDepth = 64;
 
+/// True when a font name refers to an SHX stroke font. Local copy of the same predicate in
+/// MtextRichFormat.cpp / CadUi.cpp — see the task log on why it is not hoisted into the Shx module.
+bool IsShxFontName(const std::string& s) {
+  if (s.size() < 4)
+    return false;
+  std::string ext = s.substr(s.size() - 4);
+  for (char& c : ext)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return ext == ".shx";
+}
+
 /// The typeface a span draws in: its [[font:…]] override, else the annotation's base family, else the
 /// UI font. Mirrors MtextRichFormat's resolution so the editor and the drawn MTEXT agree.
 ImFont* ResolveSpanFont(const MtextRichSpan& sp, const std::string& baseFamily, ImFont* fallback,
@@ -32,6 +44,25 @@ ImFont* ResolveSpanFont(const MtextRichSpan& sp, const std::string& baseFamily, 
     return fallback;
   ImFont* f = FontReg::Resolve(fam, sp.bold, sp.italic, outRealBold, outRealItalic);
   return f ? f : fallback;
+}
+
+/// The SHX stroke font a span draws in, or nullptr when it is a TrueType span. The editor must
+/// resolve this the same way MtextRichFormat does, or an SHX run would be measured with TrueType
+/// metrics here and drawn as strokes in the viewport — putting the caret and the wrap in the wrong
+/// place the moment the two disagree.
+Shx::Font* ResolveSpanShx(const MtextRichSpan& sp, const std::string& baseFamily) {
+  const std::string& fam = !sp.font.empty() ? sp.font : baseFamily;
+  if (!IsShxFontName(fam))
+    return nullptr;
+  Shx::Font* f = Shx::Resolve(fam);
+  return (f && f->valid()) ? f : nullptr;
+}
+
+/// Width of one cell's glyph, through whichever font that span actually draws with.
+float CellWidthPx(Shx::Font* sf, ImFont* f, float fontPx, const std::string& g) {
+  if (sf)
+    return Shx::MeasureWidthPx(*sf, g, fontPx);
+  return f->CalcTextSizeA(fontPx, FLT_MAX, 0.f, g.c_str(), g.c_str() + g.size()).x;
 }
 
 ImU32 SpanColor(const MtextRichSpan& sp, ImU32 base) {
@@ -81,11 +112,13 @@ bool RichTextEditDraw(const char* strId, AppCommandState& cmd, float boxW, float
 
   // Per-span font resolution is cached: a span is usually many characters, and Resolve does real work.
   std::vector<ImFont*> spanFont(spans.size(), uiFont);
+  std::vector<Shx::Font*> spanShx(spans.size(), nullptr);
   std::vector<bool> spanFauxBold(spans.size(), false);
   for (size_t s = 0; s < spans.size(); ++s) {
     bool rb = false, ri = false;
     spanFont[s] = ResolveSpanFont(spans[s], baseFontFamily, uiFont, &rb, &ri);
-    spanFauxBold[s] = spans[s].bold && !rb;
+    spanShx[s] = ResolveSpanShx(spans[s], baseFontFamily);
+    spanFauxBold[s] = spans[s].bold && !rb && spanShx[s] == nullptr;  // SHX has no faux-bold strike
   }
   for (richtext::Cell& c : cells) {
     if (c.isNewline) {
@@ -94,9 +127,10 @@ bool RichTextEditDraw(const char* strId, AppCommandState& cmd, float boxW, float
     }
     const size_t si = static_cast<size_t>(std::max(0, c.spanIndex));
     ImFont* f = si < spanFont.size() ? spanFont[si] : uiFont;
+    Shx::Font* sf = si < spanShx.size() ? spanShx[si] : nullptr;
     const bool caps = si < spans.size() && spans[si].caps;
     const std::string g = CellGlyph(cmd.mtextRichEditorBuf, c, caps);
-    c.w = f->CalcTextSizeA(fontPx, FLT_MAX, 0.f, g.c_str(), g.c_str() + g.size()).x;
+    c.w = CellWidthPx(sf, f, fontPx, g);
     if (si < spanFauxBold.size() && spanFauxBold[si])
       c.w += std::max(0.5f, fontPx * 0.03f);  // faux-bold double-strike offset
   }
@@ -422,11 +456,13 @@ bool RichTextEditDraw(const char* strId, AppCommandState& cmd, float boxW, float
     MtextRichBuildSpans(cmd.mtextRichEditorBuf, &spans);
     richtext::BuildCells(cmd.mtextRichEditorBuf, spans, &cells);
     spanFont.assign(spans.size(), uiFont);
+    spanShx.assign(spans.size(), nullptr);
     spanFauxBold.assign(spans.size(), false);
     for (size_t s = 0; s < spans.size(); ++s) {
       bool rb = false, ri = false;
       spanFont[s] = ResolveSpanFont(spans[s], baseFontFamily, uiFont, &rb, &ri);
-      spanFauxBold[s] = spans[s].bold && !rb;
+      spanShx[s] = ResolveSpanShx(spans[s], baseFontFamily);
+      spanFauxBold[s] = spans[s].bold && !rb && spanShx[s] == nullptr;
     }
     for (richtext::Cell& c : cells) {
       if (c.isNewline) {
@@ -435,9 +471,10 @@ bool RichTextEditDraw(const char* strId, AppCommandState& cmd, float boxW, float
       }
       const size_t si = static_cast<size_t>(std::max(0, c.spanIndex));
       ImFont* f = si < spanFont.size() ? spanFont[si] : uiFont;
+      Shx::Font* sf = si < spanShx.size() ? spanShx[si] : nullptr;
       const bool caps = si < spans.size() && spans[si].caps;
       const std::string g = CellGlyph(cmd.mtextRichEditorBuf, c, caps);
-      c.w = f->CalcTextSizeA(fontPx, FLT_MAX, 0.f, g.c_str(), g.c_str() + g.size()).x;
+      c.w = CellWidthPx(sf, f, fontPx, g);
     }
     richtext::WrapCells(&cells, textW);
     cmd.mtextEditCaret = std::clamp(cmd.mtextEditCaret, 0, static_cast<int>(cells.size()));
@@ -463,7 +500,13 @@ bool RichTextEditDraw(const char* strId, AppCommandState& cmd, float boxW, float
   ImDrawList* dl = ImGui::GetWindowDrawList();
   dl->AddRectFilled(bb.Min, bb.Max, IM_COL32(58, 58, 58, 240));
   dl->AddRect(bb.Min, bb.Max, focused ? IM_COL32(124, 160, 196, 255) : IM_COL32(120, 124, 130, 255));
-  dl->PushClipRect(ImVec2(bb.Min.x + 1.f, bb.Min.y + 1.f), ImVec2(bb.Max.x - 1.f, bb.Max.y - 1.f), true);
+  // Vertical extent clips (this is a scrolling region), horizontal does not. The box width decides
+  // where lines WRAP; a single word too long to fit cannot be wrapped, and the committed MTEXT lets it
+  // overhang — so the editor must too, or the text would appear cut off here and whole after commit.
+  // There is no horizontal scroll to reveal it otherwise. The generous X range is intersected with the
+  // current clip, so this can never paint outside the window.
+  dl->PushClipRect(ImVec2(bb.Min.x + 1.f - 4096.f, bb.Min.y + 1.f),
+                   ImVec2(bb.Max.x - 1.f + 4096.f, bb.Max.y - 1.f), true);
 
   const ImVec2 textOrigin(origin.x + pad, origin.y + pad - cmd.mtextEditScrollY);
   const int a = selMin(), b = selMax();
@@ -497,13 +540,21 @@ bool RichTextEditDraw(const char* strId, AppCommandState& cmd, float boxW, float
       continue;
     const MtextRichSpan& sp = spans[si];
     ImFont* f = spanFont[si];
+    Shx::Font* sf = spanShx[si];
     const ImU32 col = SpanColor(sp, baseColor);
     const std::string g = CellGlyph(cmd.mtextRichEditorBuf, c, sp.caps);
     const ImVec2 at(textOrigin.x + c.x, textOrigin.y + static_cast<float>(c.line) * lineH);
-    dl->AddText(f, fontPx, at, col, g.c_str(), g.c_str() + g.size());
-    if (spanFauxBold[si])  // no bold face available: double-strike a hair to the right
-      dl->AddText(f, fontPx, ImVec2(at.x + std::max(0.5f, fontPx * 0.03f), at.y), col, g.c_str(),
-                  g.c_str() + g.size());
+    if (sf) {
+      // Stroke the glyph from the .shx, baseline one cap-height below the cell's top-left — the same
+      // anchoring MtextRichFormat uses, so what is typed matches what is drawn after commit.
+      Shx::DrawText(dl, *sf, ImVec2(at.x, at.y + fontPx), fontPx, 0.f, col, g,
+                    std::max(1.f, fontPx * 0.05f));
+    } else {
+      dl->AddText(f, fontPx, at, col, g.c_str(), g.c_str() + g.size());
+      if (spanFauxBold[si])  // no bold face available: double-strike a hair to the right
+        dl->AddText(f, fontPx, ImVec2(at.x + std::max(0.5f, fontPx * 0.03f), at.y), col, g.c_str(),
+                    g.c_str() + g.size());
+    }
     if (sp.underline) {
       const float uy = at.y + fontPx * 1.02f;
       dl->AddLine(ImVec2(at.x, uy), ImVec2(at.x + c.w, uy), col, std::max(1.f, fontPx * 0.06f));

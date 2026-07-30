@@ -1,13 +1,27 @@
 #include "MtextRichFormat.hpp"
 #include "FontRegistry.hpp"
+#include "ShxDraw.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <string>
 #include <vector>
 
 namespace {
+
+// True when a font name refers to an SHX stroke font. Deliberately a local copy of the same predicate
+// in CadUi.cpp (and PdfPlot.cpp): hoisting it into the Shx module would change that module's public
+// API, which is an architectural decision the Workshop may not take on its own. See the task log.
+bool IsShxFontName(const std::string& s) {
+  if (s.size() < 4)
+    return false;
+  std::string ext = s.substr(s.size() - 4);
+  for (char& c : ext)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return ext == ".shx";
+}
 
 struct RichRun {
   std::string text;
@@ -103,6 +117,7 @@ static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, I
 
   float maxInkY = origin.y + lineH * 0.2f;
   const float uThick = std::max(1.f, fontPx * 0.06f);
+  std::string shxBuf;  // reused across runs — the Shx entry points take std::string, not a char range
 
   for (const RichRun& r : runs) {
     std::string disp = r.text;
@@ -115,14 +130,37 @@ static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, I
     // bold/italic variants fall back to faux double-strike / nudge.
     const std::string& fam = !r.font.empty() ? r.font : baseFontFamily;
     bool realBold = false, realItalic = false;
+    // An SHX run draws from the real .shx as strokes, exactly as whole-object SHX text already does.
+    // Without this branch a [[font:romans.shx]] run fell through to FontReg, which substitutes a
+    // TrueType — so picking an SHX font for a *selection* silently produced Arial/Times/Consolas.
+    Shx::Font* sf = IsShxFontName(fam) ? Shx::Resolve(fam) : nullptr;
+    if (sf && !sf->valid())
+      sf = nullptr;
     ImFont* rf = fam.empty() ? font : FontReg::Resolve(fam, r.bold, r.italic, &realBold, &realItalic);
     if (!rf)
       rf = font;
     const bool fauxBold = r.bold && !realBold;
     const bool fauxItalic = r.italic && !realItalic;
+    // Measure through the same font the run will be drawn with, so wrapping, the reported content
+    // width and the box height all agree with the glyphs actually on screen.
+    auto measure = [&](const char* a, const char* b) -> ImVec2 {
+      if (sf) {
+        shxBuf.assign(a, b);
+        return ImVec2(Shx::MeasureWidthPx(*sf, shxBuf, fontPx), fontPx);
+      }
+      return rf->CalcTextSizeA(fontPx, FLT_MAX, 0.f, a, b);
+    };
     auto drawSeg = [&](const char* a, const char* b, ImVec2 at) {
       if (!dl)
         return;
+      if (sf) {
+        // Shx::DrawText is baseline-anchored; the layout pen is a top-left one cap-height above it,
+        // the same relationship the whole-object SHX path uses.
+        shxBuf.assign(a, b);
+        Shx::DrawText(dl, *sf, ImVec2(at.x, at.y + fontPx), fontPx, 0.f, col, shxBuf,
+                      std::max(1.f, fontPx * 0.05f));
+        return;
+      }
       if (fauxBold) {
         dl->AddText(rf, fontPx, ImVec2(at.x + 0.55f, at.y), col, a, b);
         dl->AddText(rf, fontPx, ImVec2(at.x - 0.55f, at.y), col, a, b);
@@ -145,7 +183,7 @@ static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, I
       while (wend < end && *wend != ' ' && *wend != '\n')
         ++wend;
       if (wend > s) {
-        ImVec2 sz = rf->CalcTextSizeA(fontPx, FLT_MAX, 0.f, s, wend);
+        const ImVec2 sz = measure(s, wend);
         if (pen.x + sz.x > xMax && pen.x > x0 + 0.5f) {
           pen.x = x0;
           pen.y += lineH;
@@ -158,7 +196,7 @@ static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, I
         s = wend;
       }
       if (s < end && *s == ' ') {
-        ImVec2 sp = rf->CalcTextSizeA(fontPx, FLT_MAX, 0.f, s, s + 1);
+        const ImVec2 sp = measure(s, s + 1);
         if (pen.x + sp.x > xMax && pen.x > x0 + 0.5f) {
           pen.x = x0;
           pen.y += lineH;
