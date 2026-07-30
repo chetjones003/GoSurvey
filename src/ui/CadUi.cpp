@@ -2,6 +2,9 @@
 #include "CadCoordinateFrame.hpp"
 #include "ViewportPickPolicy.hpp"
 #include "MtextRichFormat.hpp"
+#include "MtextToolbar.hpp"
+#include "MtextTextOps.hpp"
+#include "RichTextEdit.hpp"
 #include "FontRegistry.hpp"
 #include "ShxDraw.hpp"
 #include "ColorContrast.hpp"
@@ -134,26 +137,10 @@ bool CadUiTitleBarLogoQuery(ImTextureID* outTexture, ImVec2* outDimsPx) {
 
 namespace {
 
-static int MtextRichEditorInputCallback(ImGuiInputTextCallbackData* data) {
-  auto* cmd = static_cast<AppCommandState*>(data->UserData);
-  if (!cmd)
-    return 0;
-  if (data->EventFlag == ImGuiInputTextFlags_CallbackAlways) {
-    cmd->mtextRichEditorCursor = data->CursorPos;
-    int a = data->SelectionStart;
-    int b = data->SelectionEnd;
-    if (a > b)
-      std::swap(a, b);
-    cmd->mtextRichEditorSelStart = a;
-    cmd->mtextRichEditorSelEnd = b;
-  }
-  if (data->EventFlag == ImGuiInputTextFlags_CallbackCharFilter && cmd->mtextRichEditorTypingAllCaps) {
-    const unsigned c = static_cast<unsigned>(data->EventChar);
-    if (c >= static_cast<unsigned>('a') && c <= static_cast<unsigned>('z'))
-      data->EventChar = static_cast<ImWchar>(c - static_cast<unsigned>('a' - 'A'));
-  }
-  return 0;
-}
+// ADR-023 removed the InputTextMultiline callback that used to cache the selection and up-case typed
+// characters: RichTextEdit publishes the raw selection offsets itself and applies the ALL-CAPS toggle as
+// it consumes the character queue. The two helpers below still serve the toolbar, which works in raw
+// byte offsets exactly as before.
 
 static void MtextRichInsertAtCaret(AppCommandState& cmd, const char* utf8) {
   int pos = cmd.mtextRichEditorCursor;
@@ -2408,6 +2395,13 @@ struct NamedColorPreset {
   float r;
   float g;
   float b;
+};
+
+// Font choices offered by the STYLE dialog and the MTEXT "Text Formatting" panel's font picker
+// (REQ-044 / REQ-051). "" = the application default font. Defined here so both use sites see it.
+static const char* kTextStyleFonts[] = {
+    "",          "romans.shx", "romand.shx", "romanc.shx", "txt.shx",         "simplex.shx",
+    "isocp.shx", "italic.shx", "Arial",      "Times New Roman", "Consolas",   "Tahoma",
 };
 
 static const NamedColorPreset kNamedColors[] = {
@@ -6187,6 +6181,233 @@ static int HitTestMtextGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 
   return -1;
 }
 
+// ===================== MTEXT "Text Formatting" panel (REQ-051) =====================
+// The AutoCAD/nanoCAD-style MTEXT editor: a floating, draggable two-row toolbar whose position and
+// ruler/expanded state persist (UserPrefs, the REQ-040 cmdBar* pattern), over the in-place edit box with
+// a column ruler. Controls the stored text model already supports are live — text style, per-selection
+// font and colour ([[font:…]]/[[color:…]] run tags), B/I/U, uppercase, symbol, justification
+// (mtextAttach), and whole-object height/oblique/entity colour. Every other control is drawn disabled and
+// names itself in a tooltip, so the panel never implies a capability the drawing cannot store; each is a
+// recorded REQ-051 follow-up. Pure geometry/string decisions live in ui/MtextToolbar.hpp (tested).
+
+static void DrawTextStyleSample(ImDrawList* dl, ImVec2 tl, ImVec2 sz, const TextStyle& s, const char* sample,
+                                ImU32 col);  // defined with the STYLE dialog, below
+
+/// Tooltip that still shows on a *disabled* control — how every not-yet-implemented button names itself.
+static void MtextTbTip(const char* text) {
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled | ImGuiHoveredFlags_DelayShort))
+    ImGui::SetTooltip("%s", text);
+}
+
+/// Pictographic toolbar glyphs. Drawn from primitives (the command-bar iconBtn precedent) rather than font
+/// characters, so the panel does not depend on the loaded font covering ¶, ↔, arrows, and the like.
+enum class MtextTbGlyph {
+  Annotative, Mask, Undo, Redo, Stack, Ruler, ExpandDown, ExpandUp, Columns, Attach, Paragraph,
+  AlignLeft, AlignCenter, AlignRight, AlignJust, AlignDist, LineSpacing, Lists, Field, Oblique,
+  Tracking, WidthFactor,
+};
+
+static void MtextTbDrawGlyph(ImDrawList* d, ImVec2 c, float box, ImU32 col, MtextTbGlyph g) {
+  const float h = box * 0.5f;  // half-extent the glyph is drawn within
+  // A horizontal rule at vertical fraction \p yf spanning horizontal fractions [x0f,x1f] of the box.
+  auto bar = [&](float yf, float x0f, float x1f) {
+    const float y = c.y + h * yf;
+    d->AddLine(ImVec2(c.x + h * x0f, y), ImVec2(c.x + h * x1f, y), col, 1.4f);
+  };
+  // The four-line text block shared by the paragraph-alignment family.
+  auto lines4 = [&](float a0, float a1, float b0, float b1) {
+    bar(-0.75f, a0, a1);
+    bar(-0.25f, b0, b1);
+    bar(0.25f, a0, a1);
+    bar(0.75f, b0, b1);
+  };
+  auto arrowUp = [&](float x, float yTop, float yBot) {
+    d->AddLine(ImVec2(x, yTop), ImVec2(x, yBot), col, 1.3f);
+    d->AddLine(ImVec2(x, yTop), ImVec2(x - 2.5f, yTop + 3.f), col, 1.3f);
+    d->AddLine(ImVec2(x, yTop), ImVec2(x + 2.5f, yTop + 3.f), col, 1.3f);
+  };
+  switch (g) {
+  case MtextTbGlyph::Annotative:  // a triangular "annotation scale" marker
+    d->AddTriangle(ImVec2(c.x, c.y - h * 0.8f), ImVec2(c.x - h * 0.8f, c.y + h * 0.7f),
+                   ImVec2(c.x + h * 0.8f, c.y + h * 0.7f), col, 1.3f);
+    break;
+  case MtextTbGlyph::Mask:  // background mask: a filled swatch behind a rule
+    d->AddRectFilled(ImVec2(c.x - h * 0.8f, c.y - h * 0.2f), ImVec2(c.x + h * 0.8f, c.y + h * 0.8f), col);
+    bar(-0.7f, -0.8f, 0.8f);
+    break;
+  case MtextTbGlyph::Undo:
+  case MtextTbGlyph::Redo: {
+    const bool fwd = (g == MtextTbGlyph::Redo);
+    const float a0 = fwd ? 3.6f : 5.8f, a1 = fwd ? 5.9f : 8.1f;  // half-arc, mirrored
+    d->PathArcTo(ImVec2(c.x, c.y + h * 0.25f), h * 0.7f, a0, a1, 12);
+    d->PathStroke(col, 0, 1.4f);
+    const float tipX = c.x + (fwd ? h * 0.7f : -h * 0.7f);
+    d->AddTriangleFilled(ImVec2(tipX, c.y - h * 0.75f), ImVec2(tipX - 3.f, c.y - h * 0.15f),
+                         ImVec2(tipX + 3.f, c.y - h * 0.15f), col);
+    break;
+  }
+  case MtextTbGlyph::Stack:  // stacked fraction: two rules split by a divider
+    bar(-0.6f, -0.5f, 0.5f);
+    bar(0.f, -0.8f, 0.8f);
+    bar(0.6f, -0.5f, 0.5f);
+    break;
+  case MtextTbGlyph::Ruler:  // a ruler strip with ticks
+    d->AddRect(ImVec2(c.x - h * 0.9f, c.y - h * 0.45f), ImVec2(c.x + h * 0.9f, c.y + h * 0.45f), col, 0.f, 0, 1.2f);
+    for (int i = -1; i <= 1; ++i)
+      d->AddLine(ImVec2(c.x + h * 0.45f * static_cast<float>(i), c.y - h * 0.45f),
+                 ImVec2(c.x + h * 0.45f * static_cast<float>(i), c.y), col, 1.1f);
+    break;
+  case MtextTbGlyph::ExpandDown:
+    d->AddTriangleFilled(ImVec2(c.x - h * 0.6f, c.y - h * 0.3f), ImVec2(c.x + h * 0.6f, c.y - h * 0.3f),
+                         ImVec2(c.x, c.y + h * 0.5f), col);
+    break;
+  case MtextTbGlyph::ExpandUp:
+    d->AddTriangleFilled(ImVec2(c.x - h * 0.6f, c.y + h * 0.3f), ImVec2(c.x + h * 0.6f, c.y + h * 0.3f),
+                         ImVec2(c.x, c.y - h * 0.5f), col);
+    break;
+  case MtextTbGlyph::Columns:  // two text columns
+    for (int i = 0; i < 2; ++i) {
+      const float x = c.x + (i ? h * 0.15f : -h * 0.85f);
+      d->AddRect(ImVec2(x, c.y - h * 0.8f), ImVec2(x + h * 0.7f, c.y + h * 0.8f), col, 0.f, 0, 1.2f);
+    }
+    break;
+  case MtextTbGlyph::Attach:  // justification: a box with its active corner marked
+    d->AddRect(ImVec2(c.x - h * 0.85f, c.y - h * 0.85f), ImVec2(c.x + h * 0.85f, c.y + h * 0.85f), col, 0.f, 0,
+               1.2f);
+    d->AddRectFilled(ImVec2(c.x - h * 0.7f, c.y - h * 0.7f), ImVec2(c.x - h * 0.2f, c.y - h * 0.35f), col);
+    break;
+  case MtextTbGlyph::Paragraph:  // ¶
+    d->AddCircle(ImVec2(c.x - h * 0.1f, c.y - h * 0.3f), h * 0.45f, col, 10, 1.3f);
+    d->AddLine(ImVec2(c.x + h * 0.35f, c.y - h * 0.75f), ImVec2(c.x + h * 0.35f, c.y + h * 0.85f), col, 1.3f);
+    d->AddLine(ImVec2(c.x - h * 0.1f, c.y + h * 0.15f), ImVec2(c.x - h * 0.1f, c.y + h * 0.85f), col, 1.3f);
+    break;
+  case MtextTbGlyph::AlignLeft:    lines4(-0.85f, 0.85f, -0.85f, 0.2f); break;
+  case MtextTbGlyph::AlignCenter:  lines4(-0.85f, 0.85f, -0.5f, 0.5f); break;
+  case MtextTbGlyph::AlignRight:   lines4(-0.85f, 0.85f, -0.2f, 0.85f); break;
+  case MtextTbGlyph::AlignJust:    lines4(-0.85f, 0.85f, -0.85f, 0.85f); break;
+  case MtextTbGlyph::AlignDist:
+    lines4(-0.85f, 0.85f, -0.85f, 0.85f);
+    d->AddLine(ImVec2(c.x, c.y - h * 0.95f), ImVec2(c.x, c.y + h * 0.95f), col, 1.f);
+    break;
+  case MtextTbGlyph::LineSpacing:  // vertical double arrow beside text rules
+    arrowUp(c.x - h * 0.6f, c.y - h * 0.85f, c.y + h * 0.85f);
+    bar(-0.75f, 0.f, 0.85f);
+    bar(0.f, 0.f, 0.85f);
+    bar(0.75f, 0.f, 0.85f);
+    break;
+  case MtextTbGlyph::Lists:  // bulleted rules
+    for (int i = -1; i <= 1; ++i) {
+      const float yf = static_cast<float>(i) * 0.7f;
+      d->AddCircleFilled(ImVec2(c.x - h * 0.7f, c.y + h * yf), 1.4f, col);
+      bar(yf, -0.35f, 0.85f);
+    }
+    break;
+  case MtextTbGlyph::Field:  // a field placeholder box
+    d->AddRect(ImVec2(c.x - h * 0.85f, c.y - h * 0.5f), ImVec2(c.x + h * 0.85f, c.y + h * 0.5f), col, 0.f, 0,
+               1.2f);
+    bar(0.f, -0.5f, 0.5f);
+    break;
+  case MtextTbGlyph::Oblique:  // a slanted stroke
+    d->AddLine(ImVec2(c.x - h * 0.45f, c.y + h * 0.8f), ImVec2(c.x + h * 0.6f, c.y - h * 0.8f), col, 1.5f);
+    break;
+  case MtextTbGlyph::Tracking:  // a↔b letter spacing
+  case MtextTbGlyph::WidthFactor: {
+    const float y = c.y + (g == MtextTbGlyph::Tracking ? h * 0.55f : 0.f);
+    d->AddLine(ImVec2(c.x - h * 0.85f, y), ImVec2(c.x + h * 0.85f, y), col, 1.3f);
+    d->AddLine(ImVec2(c.x - h * 0.85f, y), ImVec2(c.x - h * 0.45f, y - 3.f), col, 1.3f);
+    d->AddLine(ImVec2(c.x - h * 0.85f, y), ImVec2(c.x - h * 0.45f, y + 3.f), col, 1.3f);
+    d->AddLine(ImVec2(c.x + h * 0.85f, y), ImVec2(c.x + h * 0.45f, y - 3.f), col, 1.3f);
+    d->AddLine(ImVec2(c.x + h * 0.85f, y), ImVec2(c.x + h * 0.45f, y + 3.f), col, 1.3f);
+    if (g == MtextTbGlyph::Tracking)
+      bar(-0.6f, -0.85f, 0.85f);
+    break;
+  }
+  }
+}
+
+/// Square glyph button sized to the toolbar row. \p on draws it pressed (a toggle that is currently set).
+static bool MtextTbIconButton(const char* id, MtextTbGlyph g, bool on = false) {
+  const float box = ImGui::GetFrameHeight();
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  const bool clicked = ImGui::InvisibleButton(id, ImVec2(box, box));
+  const bool hov = ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled);
+  const bool held = ImGui::IsItemActive();
+  ImDrawList* d = ImGui::GetWindowDrawList();
+  if (on || held)
+    d->AddRectFilled(p, ImVec2(p.x + box, p.y + box), ImGui::GetColorU32(ImGuiCol_ButtonActive));
+  else if (hov)
+    d->AddRectFilled(p, ImVec2(p.x + box, p.y + box), ImGui::GetColorU32(ImGuiCol_ButtonHovered));
+  MtextTbDrawGlyph(d, ImVec2(p.x + box * 0.5f, p.y + box * 0.5f), box * 0.62f,
+                   ImGui::GetColorU32(ImGuiCol_Text), g);
+  return clicked;
+}
+
+/// Letter button (B, I, U, …) with the toolbar's square footprint, so letters and glyphs line up.
+static bool MtextTbLetterButton(const char* id, const char* letter, bool strikeThrough = false,
+                                bool overLine = false) {
+  const float box = ImGui::GetFrameHeight();
+  const ImVec2 p = ImGui::GetCursorScreenPos();
+  const bool clicked = ImGui::InvisibleButton(id, ImVec2(box, box));
+  ImDrawList* d = ImGui::GetWindowDrawList();
+  if (ImGui::IsItemActive())
+    d->AddRectFilled(p, ImVec2(p.x + box, p.y + box), ImGui::GetColorU32(ImGuiCol_ButtonActive));
+  else if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    d->AddRectFilled(p, ImVec2(p.x + box, p.y + box), ImGui::GetColorU32(ImGuiCol_ButtonHovered));
+  const ImU32 col = ImGui::GetColorU32(ImGuiCol_Text);
+  const ImVec2 ts = ImGui::CalcTextSize(letter);
+  const ImVec2 tp(p.x + (box - ts.x) * 0.5f, p.y + (box - ts.y) * 0.5f);
+  d->AddText(tp, col, letter);
+  if (strikeThrough)
+    d->AddLine(ImVec2(tp.x - 1.f, tp.y + ts.y * 0.55f), ImVec2(tp.x + ts.x + 1.f, tp.y + ts.y * 0.55f), col, 1.2f);
+  if (overLine)
+    d->AddLine(ImVec2(tp.x - 1.f, tp.y + 1.f), ImVec2(tp.x + ts.x + 1.f, tp.y + 1.f), col, 1.2f);
+  return clicked;
+}
+
+/// Symbols offered by both the toolbar's @ dropdown and the Options menu's Character Set submenu.
+static const struct MtextSymbolPick {
+  const char* label;
+  const char* utf8;
+} kMtextSymbolPicks[] = {
+    {"\xCF\x80 pi", "\xCF\x80"},                // U+03C0
+    {"\xCE\xA3 Sigma", "\xCE\xA3"},             // U+03A3
+    {"\xE2\x88\x9E infinity", "\xE2\x88\x9E"},  // U+221E
+    {"\xE2\x89\xA4 leq", "\xE2\x89\xA4"},       // U+2264
+    {"\xE2\x89\xA5 geq", "\xE2\x89\xA5"},       // U+2265
+    {"\xC2\xB1 plus-minus", "\xC2\xB1"},        // U+00B1
+    {"\xE2\x88\x9A sqrt", "\xE2\x88\x9A"},      // U+221A
+    {"\xE2\x88\xAB integral", "\xE2\x88\xAB"},  // U+222B
+    {"\xC3\x97 times", "\xC3\x97"},             // U+00D7
+    {"\xC2\xB7 dot", "\xC2\xB7"},               // U+00B7
+    {"\xCE\xB1 alpha", "\xCE\xB1"},             // U+03B1
+    {"\xCE\xB8 theta", "\xCE\xB8"},             // U+03B8
+    {"\xC2\xB0 degrees", "\xC2\xB0"},           // U+00B0
+};
+
+/// The column ruler drawn above the in-place box (REQ-051). Visual at this revision: it shows the column's
+/// extent and its indent markers; dragging to re-column the text is a recorded follow-up.
+static void MtextTbDrawRuler(ImDrawList* d, ImVec2 tl, float w, float h) {
+  const ImU32 frame = IM_COL32(96, 96, 96, 255);
+  const ImU32 face = IM_COL32(66, 66, 66, 255);
+  const ImU32 tick = IM_COL32(200, 205, 212, 255);
+  d->AddRectFilled(tl, ImVec2(tl.x + w, tl.y + h), face);
+  d->AddRect(tl, ImVec2(tl.x + w, tl.y + h), frame, 0.f, 0, 1.f);
+  // Left indent marker (the reference's "L") and the right column-width marker (a diamond).
+  const float midY = tl.y + h * 0.5f;
+  d->AddLine(ImVec2(tl.x + 5.f, tl.y + 3.f), ImVec2(tl.x + 5.f, tl.y + h - 3.f), tick, 1.4f);
+  d->AddLine(ImVec2(tl.x + 5.f, tl.y + h - 3.f), ImVec2(tl.x + 11.f, tl.y + h - 3.f), tick, 1.4f);
+  const float dx = tl.x + w - 8.f;
+  d->AddQuadFilled(ImVec2(dx, midY - 4.f), ImVec2(dx + 4.f, midY), ImVec2(dx, midY + 4.f),
+                   ImVec2(dx - 4.f, midY), tick);
+  // Ticks span the column between the two markers; minor every 6px, every 3rd taller.
+  const float x0 = tl.x + 16.f;
+  const float span = (dx - 6.f) - x0;
+  for (const auto& t : mtexttoolbar::RulerTicks(span, 6.f, 3)) {
+    const float tickH = t.isMajor ? h * 0.42f : h * 0.24f;
+    d->AddLine(ImVec2(x0 + t.offsetPx, midY - tickH), ImVec2(x0 + t.offsetPx, midY + tickH), tick, 1.f);
+  }
+}
+
 static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::string>& log, float worldLeft,
                                        float worldRight, float worldBottom, float worldTop, ImVec2 imgPos,
                                        ImVec2 avail) {
@@ -6274,115 +6495,598 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
     return;
   }
 
-  constexpr float kPad = 3.f;
-  const float boxScreenW = std::max(140.f, sx1 - sx0 - 2.f * kPad);
-  float w = std::max(300.f, boxScreenW);
-  w = std::min(w, imgMax.x - imgMin.x - 4.f);
-
-  // Rich MTEXT editor (multiline + formatting toolbar). Single-line TEXT uses the in-place box above.
+  // ---- Rich MTEXT: the in-place box (over the text, with its column ruler) + the floating panel ----
+  // REQ-051. Single-line TEXT took the bare-box branch above and never reaches here.
   const ImGuiStyle& ist = ImGui::GetStyle();
-  const float innerW = std::max(24.f, w - ist.WindowPadding.x * 2.f);
-  int editorLineCount = 1;
-  for (unsigned char ch : cmd.mtextRichEditorBuf) {
-    if (ch == '\n')
-      ++editorLineCount;
-  }
-  const float lh = ImGui::GetTextLineHeightWithSpacing();
-  const float editorH =
-      std::clamp(static_cast<float>(editorLineCount) * lh + ist.FramePadding.y * 2.f + 12.f, 96.f, 420.f);
-  const float hintH = ImGui::GetTextLineHeightWithSpacing() + 4.f;
-  const float fmtRowH = ImGui::GetFrameHeightWithSpacing() + 4.f;
-  const float btnRowH = ImGui::GetFrameHeightWithSpacing() + 8.f;
-  const float hContent = ist.WindowPadding.y * 2.f + hintH + ist.ItemSpacing.y + editorH + ist.ItemSpacing.y +
-                         fmtRowH + ist.ItemSpacing.y + btnRowH;
+  ImGuiIO& io = ImGui::GetIO();
+  ImDrawList* dl = ImGui::GetWindowDrawList();
 
-  float wxp = sx0 + kPad;
-  float wyp = sy0 + kPad;
-  wxp = std::clamp(wxp, imgMin.x + 2.f, imgMax.x - w - 2.f);
-  const float maxChildH = imgMax.y - imgMin.y - 4.f;
-  float h = std::min(hContent, maxChildH);
-  wyp = std::clamp(wyp, imgMin.y + 2.f, imgMax.y - h - 2.f);
+  // What the whole-object controls write. Null while *placing* — the MTEXT does not exist yet, so those
+  // controls fall back to the defaults CommitMtextRichEditor will stamp onto it, or are disabled.
+  CadAnnotation* target = MtextRichEditorTargetAnnotation(cmd);
+  EntityAttributes* targetAttr = MtextRichEditorTargetAttrs(cmd);
+  const bool placing = cmd.mtextRichEditorPlacement;
+  const bool hasSel = cmd.mtextRichEditorSelStart != cmd.mtextRichEditorSelEnd;
 
-  ImGui::SetCursorScreenPos(ImVec2(wxp, wyp));
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
-  ImGuiWindowFlags editorWinFlags = 0;
-  if (hContent > h + 0.5f)
-    editorWinFlags |= ImGuiWindowFlags_AlwaysVerticalScrollbar;
-  if (ImGui::BeginChild("##MtextRichEditor", ImVec2(w, h), ImGuiChildFlags_Borders, editorWinFlags)) {
-    ImGui::PushTextWrapPos(ImGui::GetCursorPos().x + innerW);
-    ImGui::TextDisabled("%s",
-                        "Rich tags: [[b]],[[i]],[[u]],[[caps]]…[[/…]]. Ctrl+Enter: normalize. Esc: cancel unsaved.");
-    ImGui::PopTextWrapPos();
-    if (cmd.mtextRichEditorFocusRequest) {
-      ImGui::SetKeyboardFocusHere(0);
-      cmd.mtextRichEditorFocusRequest = false;
+  // ---------------------------- in-place edit box + column ruler ----------------------------
+  // WYSIWYG box (ADR-023): text wraps at the MTEXT's column and the box grows with it, starting one line
+  // tall. RichTextEditDraw does the layout, so the height it reports is authoritative — the estimate here
+  // only positions the box before it is drawn.
+  const float lh = ImGui::GetTextLineHeight();
+  const float rulerH = cmd.mtextPanelRulerVisible ? 15.f : 0.f;
+  const float oneLineH = lh + ist.FramePadding.y * 2.f + 2.f;
+  const float maxBoxW = std::max(60.f, imgMax.x - imgMin.x - 8.f);
+  const float maxBoxH = std::max(oneLineH, imgMax.y - imgMin.y - 8.f - rulerH);
+  const float boxW = std::clamp(sx1 - sx0, 60.f, maxBoxW);
+  const float boxH = std::min(std::max(oneLineH, cmd.mtextEditLastHeight), std::min(360.f, maxBoxH));
+  const float ex = std::clamp(sx0, imgMin.x + 4.f, std::max(imgMin.x + 4.f, imgMax.x - boxW - 4.f));
+  const float ey = std::clamp(sy0 - rulerH, imgMin.y + 4.f,
+                              std::max(imgMin.y + 4.f, imgMax.y - boxH - rulerH - 4.f));
+  if (cmd.mtextPanelRulerVisible) {
+    MtextTbDrawRuler(dl, ImVec2(ex, ey), boxW, rulerH);
+    // The ruler's right marker sets the MTEXT's column width — the same geometry edit a grip drag makes,
+    // so it takes an undo snapshot once per drag rather than one per frame of motion.
+    ImGui::SetCursorScreenPos(ImVec2(ex + boxW - 14.f, ey));
+    ImGui::InvisibleButton("##mtext_ruler_width", ImVec2(16.f, std::max(6.f, rulerH)));
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+      ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+    ItemHelpTooltip("Drag to set the text column width");
+    if (ImGui::IsItemActivated() && target && !cmd.mtextRulerDragActive) {
+      PushUndoSnapshot(cmd, "MTEXT width");
+      cmd.mtextRulerDragActive = true;
     }
-    {
-      ImGuiInputTextFlags flags = ImGuiInputTextFlags_AllowTabInput | ImGuiInputTextFlags_CallbackAlways |
-                                  ImGuiInputTextFlags_CallbackCharFilter;
-      ImGui::InputTextMultiline("##mtext_rte_body", &cmd.mtextRichEditorBuf, ImVec2(-FLT_MIN, editorH), flags,
-                                MtextRichEditorInputCallback, static_cast<void*>(&cmd));
-      const ImGuiID bodyId = ImGui::GetItemID();
-      ImGuiIO& io = ImGui::GetIO();
-      if (ImGui::GetActiveID() == bodyId && io.KeyCtrl &&
-          (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false)))
-        cmd.mtextRichEditorBuf = MtextRichNormalize(cmd.mtextRichEditorBuf);
+    if (ImGui::IsItemActive() && io.MouseDelta.x != 0.f) {
+      const float worldPerPx = (worldRight - worldLeft) / std::max(1.f, avail.x);
+      const float dWorld = io.MouseDelta.x * worldPerPx;
+      const float minW = 60.f * worldPerPx;  // keep the column at least grabbable-wide on screen
+      if (target) {
+        target->boxMaxX = std::max(target->boxMinX + minW, target->boxMaxX + dWorld);
+      } else if (placing) {
+        // Placement drags the box the user is rubber-banding: move whichever corner is on the right.
+        float& right = (cmd.mtxtX2 >= cmd.mtxtX1) ? cmd.mtxtX2 : cmd.mtxtX1;
+        const float left = (cmd.mtxtX2 >= cmd.mtxtX1) ? cmd.mtxtX1 : cmd.mtxtX2;
+        right = std::max(left + minW, right + dWorld);
+      }
+    }
+    if (!ImGui::IsItemActive())
+      cmd.mtextRulerDragActive = false;
+  }
 
-    ImGui::PushID("mtext_rte_tb");
-    if (ImGui::SmallButton("B"))
-      MtextRichWrapSelection(cmd, "[[b]]", "[[/b]]");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("I"))
-      MtextRichWrapSelection(cmd, "[[i]]", "[[/i]]");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("U"))
-      MtextRichWrapSelection(cmd, "[[u]]", "[[/u]]");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("CAPS"))
-      MtextRichWrapSelection(cmd, "[[caps]]", "[[/caps]]");
-    ImGui::SameLine();
-    ImGui::SetNextItemWidth(std::min(140.f, std::max(72.f, ImGui::GetContentRegionAvail().x * 0.28f)));
-    static const struct {
-      const char* label;
-      const char* utf8;
-    } kMathPick[] = {
-        {"\xCF\x80 pi", "\xCF\x80"},               // U+03C0
-        {"\xCE\xA3 Sigma", "\xCE\xA3"},           // U+03A3
-        {"\xE2\x88\x9E infinity", "\xE2\x88\x9E"}, // U+221E
-        {"\xE2\x89\xA4 leq", "\xE2\x89\xA4"},     // U+2264
-        {"\xE2\x89\xA5 geq", "\xE2\x89\xA5"},     // U+2265
-        {"\xC2\xB1 plus-minus", "\xC2\xB1"},       // U+00B1
-        {"\xE2\x88\x9A sqrt", "\xE2\x88\x9A"},     // U+221A
-        {"\xE2\x88\xAB integral", "\xE2\x88\xAB"}, // U+222B
-        {"\xC3\x97 times", "\xC3\x97"},           // U+00D7
-        {"\xC2\xB7 dot", "\xC2\xB7"},             // U+00B7
-        {"\xCE\xB1 alpha", "\xCE\xB1"},           // U+03B1
-        {"\xCE\xB8 theta", "\xCE\xB8"},           // U+03B8
-        {"\xC2\xB0 degrees", "\xC2\xB0"},         // U+00B0
-    };
-    if (ImGui::BeginCombo("##mtext_math_ins", "Insert…")) {
-      for (const auto& e : kMathPick) {
-        if (ImGui::Selectable(e.label))
-          MtextRichInsertAtCaret(cmd, e.utf8);
+  ImGui::SetCursorScreenPos(ImVec2(ex, ey + rulerH));
+  {
+    // Draw at the MTEXT's own on-screen size so the editing view matches the committed result, floored so
+    // it stays legible when zoomed out (TASK-024 ASSUMPTION-1).
+    float editFontPx = ImGui::GetFontSize();
+    if (target) {
+      const float hWorldEdit = cmd.mtextRichEditorPaper
+                                   ? std::max(0.01f, target->plottedHeightInches)
+                                   : CadAnnotationHeightWorld(*target, cmd.modelUnitsPerPlottedInch);
+      const float worldPerPxY = (worldTop - worldBottom) / std::max(1.f, avail.y);
+      editFontPx = std::clamp(hWorldEdit / std::max(worldPerPxY, 1.e-6f), 10.f, 96.f);
+    }
+    const std::string& baseFam = target ? target->fontFamily : std::string();
+    float usedH = boxH;
+    RichTextEditDraw("##mtext_rte_body", cmd, boxW, editFontPx, IM_COL32(228, 232, 238, 255), baseFam,
+                     std::min(360.f, maxBoxH), &usedH);
+    cmd.mtextEditLastHeight = usedH;  // next frame positions the box from the height actually used
+    // Ctrl+Enter places the text (plain Enter breaks the line). It used to re-normalise the buffer, which
+    // was redundant — CommitMtextRichEditor normalises on the way out anyway.
+    if (io.KeyCtrl &&
+        (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false))) {
+      CommitMtextRichEditor(cmd, log);
+      return;  // nothing is pushed at this point — the panel's style push happens further down
+    }
+  }
+
+  // ------------------------------- "Text Formatting" panel -------------------------------
+  // Sized from its content; the first time it opens it sits just above the text, then it stays wherever
+  // the user drags it (persisted). Anything that does not fit scrolls horizontally rather than clipping.
+  const float rowH = ImGui::GetFrameHeight();
+  const float titleH = ImGui::GetTextLineHeight() + 6.f;
+  // The panel auto-sizes to its content (never clipped, never scrolled). Its size is only known after it
+  // is laid out, so last frame's measurement places it and spans its caption; it converges immediately and
+  // is re-measured below every frame.
+  const float panelW = std::max(240.f, cmd.mtextPanelMeasuredW);
+  const float panelH = std::max(titleH + rowH * 2.f, cmd.mtextPanelMeasuredH);
+  if (!cmd.mtextPanelAnchorValid) {
+    cmd.mtextPanelAnchorX = sx0;
+    cmd.mtextPanelAnchorY = ey - panelH - 10.f;
+    cmd.mtextPanelAnchorValid = true;
+  }
+  float px = 0.f, py = 0.f;
+  mtexttoolbar::ClampPanelAnchor(cmd.mtextPanelAnchorX, cmd.mtextPanelAnchorY, panelW, panelH, imgMin.x + 2.f,
+                                 imgMin.y + 2.f, imgMax.x - 2.f, imgMax.y - 2.f, &px, &py);
+  cmd.mtextPanelAnchorX = px;
+  cmd.mtextPanelAnchorY = py;
+
+  ImGui::SetCursorScreenPos(ImVec2(px, py));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImGui::GetStyleColorVec4(ImGuiCol_WindowBg));
+  if (ImGui::BeginChild("##MtextFormattingPanel", ImVec2(0.f, 0.f),
+                        ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeX | ImGuiChildFlags_AutoResizeY |
+                            ImGuiChildFlags_AlwaysAutoResize,
+                        ImGuiWindowFlags_NoScrollbar)) {
+    ImGui::PushID("mtext_fmt");
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3.f, 3.f));
+
+    // --- caption: drag to move the panel (the anchor is what persists) ---
+    {
+      const ImVec2 cp = ImGui::GetCursorScreenPos();
+      // Span last frame's measured content width. Using the *measured* width (rather than a guess) keeps
+      // the caption from being the thing that dictates the panel's width, so the two converge instead of
+      // fighting each other.
+      const float capW = std::max(200.f, cmd.mtextPanelMeasuredW - ist.WindowPadding.x * 2.f);
+      ImGui::InvisibleButton("##caption", ImVec2(capW, titleH));
+      if (ImGui::IsItemActive()) {
+        cmd.mtextPanelAnchorX += io.MouseDelta.x;
+        cmd.mtextPanelAnchorY += io.MouseDelta.y;
+      }
+      if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+      ImDrawList* pdl = ImGui::GetWindowDrawList();
+      pdl->AddRectFilled(cp, ImVec2(cp.x + capW, cp.y + titleH), IM_COL32(124, 160, 196, 255));
+      pdl->AddText(ImVec2(cp.x + 6.f, cp.y + 3.f), IM_COL32(16, 24, 34, 255), "Text Formatting");
+      ItemHelpTooltip("Drag to move the Text Formatting panel");
+    }
+
+    // ------------------------------- row 1 -------------------------------
+    // Text style — assigning re-bakes font/height/oblique from the style (REQ-044 / ADR-020).
+    TextStyles::EnsureStandard(cmd.textStyles);
+    const std::string curStyle = target ? target->styleName : cmd.activeTextStyleName;
+    ImGui::SetNextItemWidth(110.f);
+    if (ImGui::BeginCombo("##style", curStyle.empty() ? "(none)" : curStyle.c_str())) {
+      for (const TextStyle& s : cmd.textStyles) {
+        if (ImGui::Selectable(s.name.c_str(), s.name == curStyle)) {
+          if (target)
+            TextStyles::Assign(*target, s);
+          else
+            cmd.activeTextStyleName = s.name;
+        }
       }
       ImGui::EndCombo();
     }
+    MtextTbTip("Text style");
     ImGui::SameLine();
-    ImGui::Checkbox("Abc##mtext_caps", &cmd.mtextRichEditorTypingAllCaps);
-    if (ImGui::IsItemHovered(ImGuiHoveredFlags_DelayShort))
-      ImGui::SetTooltip("Type new ASCII in ALL CAPS");
-    ImGui::PopID();
-    }  // end rich MTEXT body
 
-    const float saveW = ImGui::CalcTextSize("Save").x + ist.FramePadding.x * 2.f + 16.f;
-    const float cancelW = ImGui::CalcTextSize("Cancel").x + ist.FramePadding.x * 2.f + 16.f;
-    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.f, ImGui::GetContentRegionAvail().x - saveW - cancelW -
-                                                                     ist.ItemInnerSpacing.x));
-    if (ImGui::Button(cmd.mtextRichEditorPlacement ? "Place##mtext_rte_ok" : "Save##mtext_rte_ok"))
+    // Font — applies to the selected characters via a [[font:…]] run, or to the whole object when nothing
+    // is selected (also the only way to go back to the default font, which has no run tag).
+    const std::string baseFont = target ? target->fontFamily : std::string();
+    ImGui::SetNextItemWidth(150.f);
+    if (ImGui::BeginCombo("##font", baseFont.empty() ? "(default)" : baseFont.c_str())) {
+      for (const char* fn : kTextStyleFonts) {
+        const std::string f(fn);
+        const char* label = f.empty() ? "(default)" : fn;
+        // Preview each choice in its own typeface, as the STYLE dialog's picker does.
+        const ImVec2 rowTL = ImGui::GetCursorScreenPos();
+        const bool picked = ImGui::Selectable(label, f == baseFont, 0, ImVec2(0.f, rowH));
+        if (!f.empty()) {
+          TextStyle preview;
+          preview.fontFamily = f;
+          DrawTextStyleSample(ImGui::GetWindowDrawList(), ImVec2(rowTL.x + 150.f, rowTL.y),
+                              ImVec2(120.f, rowH), preview, "AaBb123", ImGui::GetColorU32(ImGuiCol_Text));
+        }
+        if (picked) {
+          const auto tags = mtexttoolbar::FontRunTags(f);
+          if (hasSel && !tags.open.empty()) {
+            MtextRichWrapSelection(cmd, tags.open.c_str(), tags.close.c_str());
+          } else if (target) {
+            target->fontFamily = f;
+            target->ovFont = true;  // a per-text override: a later style edit must not undo this
+          }
+        }
+      }
+      ImGui::EndCombo();
+    }
+    MtextTbTip("Font — applies to the selected text, or to the whole MTEXT when nothing is selected");
+    ImGui::SameLine();
+
+    ImGui::BeginDisabled();
+    MtextTbIconButton("##annotative", MtextTbGlyph::Annotative);
+    ImGui::EndDisabled();
+    MtextTbTip("Annotative (not yet supported)");
+    ImGui::SameLine();
+
+    // Height — whole object, in plotted inches. While placing, this sets the height the new MTEXT gets.
+    {
+      float hgt = target ? target->plottedHeightInches : cmd.defaultPlottedTextHeightInches;
+      ImGui::SetNextItemWidth(76.f);
+      if (ImGui::InputFloat("##height", &hgt, 0.f, 0.f, "%.4f")) {
+        hgt = std::clamp(hgt, 0.0001f, 1000.f);
+        if (target) {
+          target->plottedHeightInches = hgt;
+          target->ovHeight = true;
+        } else {
+          cmd.defaultPlottedTextHeightInches = hgt;
+        }
+      }
+    }
+    MtextTbTip("Text height (plotted inches) — applies to the whole MTEXT");
+    ImGui::SameLine();
+
+    if (MtextTbLetterButton("##bold", "B"))
+      MtextRichWrapSelection(cmd, "[[b]]", "[[/b]]");
+    MtextTbTip("Bold");
+    ImGui::SameLine();
+    if (MtextTbLetterButton("##italic", "I"))
+      MtextRichWrapSelection(cmd, "[[i]]", "[[/i]]");
+    MtextTbTip("Italic");
+    ImGui::SameLine();
+    ImGui::BeginDisabled();
+    MtextTbLetterButton("##strike", "A", /*strikeThrough=*/true);
+    ImGui::EndDisabled();
+    MtextTbTip("Strikethrough (not yet supported)");
+    ImGui::SameLine();
+    if (MtextTbLetterButton("##under", "U"))
+      MtextRichWrapSelection(cmd, "[[u]]", "[[/u]]");
+    MtextTbTip("Underline");
+    ImGui::SameLine();
+    ImGui::BeginDisabled();
+    MtextTbLetterButton("##overline", "O", /*strikeThrough=*/false, /*overLine=*/true);
+    ImGui::EndDisabled();
+    MtextTbTip("Overline (not yet supported)");
+    ImGui::SameLine();
+
+    // Per-selection colour ([[color:RRGGBB]]). Disabled with no selection: unlike font there is no
+    // sensible whole-object meaning here — that is what the entity-colour combo to the right is for.
+    {
+      ImGui::BeginDisabled(!hasSel);
+      const ImU32 sw = IM_COL32((cmd.mtextPanelRunColor >> 16) & 0xFF, (cmd.mtextPanelRunColor >> 8) & 0xFF,
+                                cmd.mtextPanelRunColor & 0xFF, 255);
+      const ImVec2 cp = ImGui::GetCursorScreenPos();
+      const bool open = ImGui::InvisibleButton("##runcolor", ImVec2(rowH, rowH));
+      ImDrawList* pdl = ImGui::GetWindowDrawList();
+      pdl->AddRectFilled(ImVec2(cp.x + 2.f, cp.y + 2.f), ImVec2(cp.x + rowH - 2.f, cp.y + rowH - 5.f), sw);
+      pdl->AddRect(ImVec2(cp.x + 2.f, cp.y + 2.f), ImVec2(cp.x + rowH - 2.f, cp.y + rowH - 5.f),
+                   IM_COL32(30, 30, 30, 255));
+      ImGui::EndDisabled();
+      if (open)
+        ImGui::OpenPopup("##runcolorpick");
+      MtextTbTip(hasSel ? "Colour the selected text" : "Colour the selected text — select characters first");
+      if (ImGui::BeginPopup("##runcolorpick")) {
+        for (const auto& p : kNamedColors) {
+          if (std::string(p.storage) == "ByLayer")
+            continue;  // a run tag is a literal colour; "ByLayer" has no meaning inside the text
+          const unsigned int rgb = (static_cast<unsigned int>(p.r * 255.f) << 16) |
+                                   (static_cast<unsigned int>(p.g * 255.f) << 8) |
+                                   static_cast<unsigned int>(p.b * 255.f);
+          ImGui::ColorButton(p.label, ImVec4(p.r, p.g, p.b, 1.f), ImGuiColorEditFlags_NoTooltip,
+                             ImVec2(16.f, 16.f));
+          ImGui::SameLine();
+          if (ImGui::Selectable(p.label)) {
+            cmd.mtextPanelRunColor = rgb;
+            const auto tags = mtexttoolbar::ColorRunTags(rgb);
+            MtextRichWrapSelection(cmd, tags.open.c_str(), tags.close.c_str());
+            ImGui::CloseCurrentPopup();
+          }
+        }
+        ImGui::EndPopup();
+      }
+    }
+    ImGui::SameLine();
+
+    ImGui::BeginDisabled();
+    MtextTbIconButton("##mask", MtextTbGlyph::Mask);
+    ImGui::EndDisabled();
+    MtextTbTip("Background mask (not yet supported)");
+    ImGui::SameLine();
+    ImGui::BeginDisabled();
+    MtextTbIconButton("##undo", MtextTbGlyph::Undo);
+    ImGui::EndDisabled();
+    MtextTbTip("Undo — use Ctrl+Z inside the text box");
+    ImGui::SameLine();
+    ImGui::BeginDisabled();
+    MtextTbIconButton("##redo", MtextTbGlyph::Redo);
+    ImGui::EndDisabled();
+    MtextTbTip("Redo — use Ctrl+Y inside the text box");
+    ImGui::SameLine();
+    ImGui::BeginDisabled();
+    MtextTbIconButton("##stack", MtextTbGlyph::Stack);
+    ImGui::EndDisabled();
+    MtextTbTip("Stacked fractions (not yet supported)");
+    ImGui::SameLine();
+
+    // Entity colour — the whole object's colour row, ByLayer included (disabled while placing: the
+    // attributes are created by MakeNewEntityAttrs on commit).
+    {
+      ImGui::BeginDisabled(targetAttr == nullptr);
+      const std::string curCol = targetAttr ? targetAttr->color : std::string("ByLayer");
+      ImGui::SetNextItemWidth(112.f);
+      if (ImGui::BeginCombo("##entcolor", curCol.empty() ? "ByLayer" : curCol.c_str())) {
+        for (const auto& p : kNamedColors) {
+          ImGui::ColorButton(p.label, ImVec4(p.r, p.g, p.b, 1.f), ImGuiColorEditFlags_NoTooltip,
+                             ImVec2(16.f, 16.f));
+          ImGui::SameLine();
+          if (ImGui::Selectable(p.label, curCol == p.storage) && targetAttr)
+            targetAttr->color = p.storage;
+        }
+        ImGui::EndCombo();
+      }
+      ImGui::EndDisabled();
+      MtextTbTip(targetAttr ? "Object colour" : "Object colour — available once the MTEXT is placed");
+    }
+    ImGui::SameLine();
+
+    if (MtextTbIconButton("##ruler", MtextTbGlyph::Ruler, cmd.mtextPanelRulerVisible))
+      cmd.mtextPanelRulerVisible = !cmd.mtextPanelRulerVisible;
+    MtextTbTip("Show/hide the ruler");
+    ImGui::SameLine();
+
+    if (ImGui::Button(placing ? "Place" : "OK"))
       CommitMtextRichEditor(cmd, log);
     ImGui::SameLine();
-    if (ImGui::Button("Cancel##mtext_rte_cancel"))
+    if (ImGui::Button("Cancel"))
       CancelMtextRichEditor(cmd, &log);
+    ImGui::SameLine();
+    // The chevron opens the Options menu, as in AutoCAD. Items the stored text model can support are
+    // live; the rest are disabled and name themselves, matching the toolbar rows above.
+    if (MtextTbIconButton("##options", MtextTbGlyph::ExpandDown))
+      ImGui::OpenPopup("##mtextOptions");
+    MtextTbTip("Options");
+    if (ImGui::BeginPopup("##mtextOptions")) {
+      size_t selA = static_cast<size_t>(std::max(0, cmd.mtextRichEditorSelStart));
+      size_t selB = static_cast<size_t>(std::max(0, cmd.mtextRichEditorSelEnd));
+      selA = std::min(selA, cmd.mtextRichEditorBuf.size());
+      selB = std::min(selB, cmd.mtextRichEditorBuf.size());
+      const bool sel = selB > selA;
+
+      ImGui::BeginDisabled();
+      ImGui::MenuItem("Insert Field...", "Ctrl+F");
+      ImGui::EndDisabled();
+      MtextTbTip("Fields are not supported yet");
+
+      if (ImGui::MenuItem("Import Text...")) {
+        char path[1024] = {0};
+        if (BrowseOpenFileCsvUtf8(path, sizeof(path))) {  // any text file; the filter offers All (*.*)
+          std::ifstream f(path, std::ios::binary);
+          if (f) {
+            std::stringstream ss;
+            ss << f.rdbuf();
+            std::string t = ss.str();
+            // Insert as literal text: strip CR and collapse "[[" so an imported file cannot inject a tag.
+            std::string safe;
+            safe.reserve(t.size());
+            for (size_t i = 0; i < t.size(); ++i) {
+              if (t[i] == '\r')
+                continue;
+              if (t[i] == '[' && i + 1 < t.size() && t[i + 1] == '[') {
+                safe += '[';
+                ++i;
+                continue;
+              }
+              safe += t[i];
+            }
+            const size_t at = std::min(static_cast<size_t>(std::max(0, cmd.mtextRichEditorCursor)),
+                                       cmd.mtextRichEditorBuf.size());
+            cmd.mtextRichEditorBuf.insert(at, safe);
+            log.push_back("MTEXT — imported text from " + std::string(path));
+          } else {
+            log.push_back("MTEXT — could not read that file.");
+          }
+        }
+      }
+      MtextTbTip("Insert the contents of a text file at the caret");
+
+      ImGui::Separator();
+      ImGui::BeginDisabled();
+      if (ImGui::BeginMenu("Paragraph Alignment")) ImGui::EndMenu();
+      ImGui::MenuItem("Paragraph...");
+      if (ImGui::BeginMenu("Bullets and Lists")) ImGui::EndMenu();
+      if (ImGui::BeginMenu("Columns")) ImGui::EndMenu();
+      ImGui::EndDisabled();
+      MtextTbTip("Paragraph and column properties are not stored yet");
+
+      ImGui::Separator();
+      if (ImGui::MenuItem("Find and Replace...", "Ctrl+R"))
+        cmd.mtextFindReplaceOpen = true;
+
+      if (ImGui::BeginMenu("Change Case")) {
+        // Rewrites the characters themselves (not a [[caps]] run), so the change is permanent and
+        // survives export — which is what AutoCAD's Change Case does.
+        const size_t a2 = sel ? selA : 0;
+        const size_t b2 = sel ? selB : cmd.mtextRichEditorBuf.size();
+        if (ImGui::MenuItem("UPPERCASE"))
+          mtextops::UpperRange(cmd.mtextRichEditorBuf, a2, b2);
+        if (ImGui::MenuItem("lowercase"))
+          mtextops::LowerRange(cmd.mtextRichEditorBuf, a2, b2);
+        ImGui::TextDisabled("%s", sel ? "(selected text)" : "(whole MTEXT)");
+        ImGui::EndMenu();
+      }
+
+      ImGui::MenuItem("All CAPS", nullptr, &cmd.mtextRichEditorTypingAllCaps);
+      MtextTbTip("Type new ASCII in ALL CAPS");
+      ImGui::MenuItem("Autocorrect cAPS Lock", nullptr, &cmd.mtextEditAutocorrectCapsLock);
+      MtextTbTip("Fix a word typed with Caps Lock inverted (hELLO becomes Hello)");
+
+      if (ImGui::BeginMenu("Character Set")) {
+        for (const auto& e : kMtextSymbolPicks) {
+          if (ImGui::MenuItem(e.label))
+            MtextRichInsertAtCaret(cmd, e.utf8);
+        }
+        ImGui::EndMenu();
+      }
+
+      ImGui::Separator();
+      ImGui::BeginDisabled();
+      ImGui::MenuItem("Combine Paragraphs");
+      ImGui::EndDisabled();
+      if (ImGui::BeginMenu("Remove Formatting")) {
+        if (ImGui::MenuItem("From selected text", nullptr, false, sel))
+          mtextops::RemoveFormattingRange(cmd.mtextRichEditorBuf, selA, selB);
+        if (ImGui::MenuItem("From the whole MTEXT"))
+          cmd.mtextRichEditorBuf = MtextRichFlattenToPlain(cmd.mtextRichEditorBuf);
+        ImGui::EndMenu();
+      }
+      ImGui::BeginDisabled();
+      ImGui::MenuItem("Background Mask...");
+      ImGui::EndDisabled();
+      MtextTbTip("Background masking is not supported yet");
+
+      ImGui::Separator();
+      if (ImGui::BeginMenu("Editor Settings")) {
+        ImGui::MenuItem("Show Options Row", nullptr, &cmd.mtextPanelRow2Visible);
+        ImGui::MenuItem("Show Ruler", nullptr, &cmd.mtextPanelRulerVisible);
+        ImGui::EndMenu();
+      }
+      if (ImGui::MenuItem("Help", "F1"))
+        log.push_back("MTEXT — Ctrl+Enter places the text, Esc cancels. Enter breaks the line. "
+                      "Select characters to apply a font, colour, or B/I/U to just them.");
+      ImGui::EndPopup();
+    }
+
+    // Find and Replace, opened from the Options menu.
+    if (cmd.mtextFindReplaceOpen) {
+      ImGui::OpenPopup("Find and Replace##mtextFR");
+      cmd.mtextFindReplaceOpen = false;
+      cmd.mtextFindStatus.clear();
+    }
+    if (ImGui::BeginPopup("Find and Replace##mtextFR")) {
+      ImGui::SetNextItemWidth(200.f);
+      ImGui::InputText("Find", cmd.mtextFindBuf, sizeof(cmd.mtextFindBuf));
+      ImGui::SetNextItemWidth(200.f);
+      ImGui::InputText("Replace with", cmd.mtextReplaceBuf, sizeof(cmd.mtextReplaceBuf));
+      ImGui::Checkbox("Match case", &cmd.mtextFindMatchCase);
+      if (ImGui::Button("Replace All")) {
+        const int n = mtextops::FindReplaceAll(cmd.mtextRichEditorBuf, cmd.mtextFindBuf, cmd.mtextReplaceBuf,
+                                          cmd.mtextFindMatchCase);
+        cmd.mtextFindStatus = (n > 0) ? (std::to_string(n) + " replaced") : "Not found";
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Close"))
+        ImGui::CloseCurrentPopup();
+      if (!cmd.mtextFindStatus.empty())
+        ImGui::TextDisabled("%s", cmd.mtextFindStatus.c_str());
+      ImGui::EndPopup();
+    }
+
+    // ------------------------------- row 2 -------------------------------
+    if (cmd.mtextPanelRow2Visible) {
+      ImGui::BeginDisabled();
+      MtextTbIconButton("##columns", MtextTbGlyph::Columns);
+      ImGui::EndDisabled();
+      MtextTbTip("Columns (not yet supported)");
+      ImGui::SameLine();
+
+      // Justification = the MTEXT attachment point (DXF group 71), which the renderer already honours.
+      {
+        ImGui::BeginDisabled(target == nullptr);
+        const int curAttach = target ? target->mtextAttach : 1;
+        ImGui::SetNextItemWidth(120.f);
+        if (ImGui::BeginCombo("##attach", mtexttoolbar::AttachLabel(curAttach))) {
+          for (int k = 1; k <= 9; ++k) {
+            if (ImGui::Selectable(mtexttoolbar::AttachLabel(k), k == curAttach) && target)
+              target->mtextAttach = k;
+          }
+          ImGui::EndCombo();
+        }
+        ImGui::EndDisabled();
+        MtextTbTip(target ? "Justification (attachment point)"
+                          : "Justification — available once the MTEXT is placed");
+      }
+      ImGui::SameLine();
+
+      // Paragraph properties are per-paragraph state the annotation does not store — all disabled.
+      struct DisabledTb {
+        const char* id;
+        MtextTbGlyph glyph;
+        const char* tip;
+      };
+      static const DisabledTb kParaTb[] = {
+          {"##para", MtextTbGlyph::Paragraph, "Paragraph (not yet supported)"},
+          {"##alignL", MtextTbGlyph::AlignLeft, "Align left (not yet supported)"},
+          {"##alignC", MtextTbGlyph::AlignCenter, "Align center (not yet supported)"},
+          {"##alignR", MtextTbGlyph::AlignRight, "Align right (not yet supported)"},
+          {"##alignJ", MtextTbGlyph::AlignJust, "Justify (not yet supported)"},
+          {"##alignD", MtextTbGlyph::AlignDist, "Distribute (not yet supported)"},
+          {"##spacing", MtextTbGlyph::LineSpacing, "Line spacing (not yet supported)"},
+          {"##lists", MtextTbGlyph::Lists, "Bullets and numbering (not yet supported)"},
+          {"##field", MtextTbGlyph::Field, "Insert field (not yet supported)"},
+      };
+      for (const auto& b : kParaTb) {
+        ImGui::BeginDisabled();
+        MtextTbIconButton(b.id, b.glyph);
+        ImGui::EndDisabled();
+        MtextTbTip(b.tip);
+        ImGui::SameLine();
+      }
+
+      if (MtextTbLetterButton("##upper", "A"))
+        MtextRichWrapSelection(cmd, "[[caps]]", "[[/caps]]");
+      MtextTbTip("UPPERCASE the selected text");
+      ImGui::SameLine();
+      ImGui::BeginDisabled();
+      MtextTbLetterButton("##lower", "a");
+      ImGui::EndDisabled();
+      MtextTbTip("lowercase (not yet supported)");
+      ImGui::SameLine();
+      ImGui::BeginDisabled();
+      MtextTbLetterButton("##super", "x2");
+      ImGui::EndDisabled();
+      MtextTbTip("Superscript (not yet supported)");
+      ImGui::SameLine();
+      ImGui::BeginDisabled();
+      MtextTbLetterButton("##sub", "x2");
+      ImGui::EndDisabled();
+      MtextTbTip("Subscript (not yet supported)");
+      ImGui::SameLine();
+
+      // Symbol insertion (the same list the Options menu's Character Set offers).
+      ImGui::SetNextItemWidth(90.f);
+      if (ImGui::BeginCombo("##symbol", "@")) {
+        for (const auto& e : kMtextSymbolPicks) {
+          if (ImGui::Selectable(e.label))
+            MtextRichInsertAtCaret(cmd, e.utf8);
+        }
+        ImGui::EndCombo();
+      }
+      MtextTbTip("Insert a symbol at the caret");
+      ImGui::SameLine();
+
+      // Oblique — whole object, in degrees (the annotation stores it; SHX shears faithfully, TTF approximates).
+      {
+        ImGui::BeginDisabled(target == nullptr);
+        MtextTbIconButton("##obliqueIcon", MtextTbGlyph::Oblique);
+        ImGui::SameLine();
+        float ob = target ? target->obliqueDeg : 0.f;
+        ImGui::SetNextItemWidth(78.f);
+        if (ImGui::InputFloat("##oblique", &ob, 0.f, 0.f, "%.4f") && target) {
+          target->obliqueDeg = std::clamp(ob, -85.f, 85.f);
+          target->ovOblique = true;
+        }
+        ImGui::EndDisabled();
+        MtextTbTip(target ? "Oblique angle (degrees) — applies to the whole MTEXT"
+                          : "Oblique angle — available once the MTEXT is placed");
+      }
+      ImGui::SameLine();
+
+      ImGui::BeginDisabled();
+      MtextTbIconButton("##trackIcon", MtextTbGlyph::Tracking);
+      ImGui::SameLine();
+      float tracking = 1.f;
+      ImGui::SetNextItemWidth(78.f);
+      ImGui::InputFloat("##tracking", &tracking, 0.f, 0.f, "%.4f");
+      ImGui::EndDisabled();
+      MtextTbTip("Tracking / character spacing (not yet supported)");
+      ImGui::SameLine();
+
+      ImGui::BeginDisabled();
+      MtextTbIconButton("##widthIcon", MtextTbGlyph::WidthFactor);
+      ImGui::SameLine();
+      float widthFactor = 1.f;
+      ImGui::SetNextItemWidth(78.f);
+      ImGui::InputFloat("##width", &widthFactor, 0.f, 0.f, "%.4f");
+      ImGui::EndDisabled();
+      MtextTbTip("Width factor (not yet supported)");
+      ImGui::SameLine();
+
+      ImGui::Checkbox("Abc", &cmd.mtextRichEditorTypingAllCaps);
+      MtextTbTip("Type new ASCII in ALL CAPS");
+    }
+
+    ImGui::PopStyleVar();
+    ImGui::PopID();
+    // Feed this frame's auto-sized extent back for next frame's placement and caption span.
+    const ImVec2 measured = ImGui::GetWindowSize();
+    cmd.mtextPanelMeasuredW = measured.x;
+    cmd.mtextPanelMeasuredH = measured.y;
   }
   ImGui::EndChild();
   ImGui::PopStyleColor();
@@ -8713,7 +9417,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const ImU32 col = sel ? kPaperSelCol : (hover ? kPaperHoverCol : baseCol);  // REQ-048 true color
         const ImVec2 p = w2s(a.insX, a.insY);  // insertion ≈ bottom-left
         if (a.kind == CadAnnotation::Kind::Mtext) {
-          const float hPx = std::clamp(a.plottedHeightInches * pxPerPaperIn, 1.f, cmd.viewportMtextMaxPx);
+          // Same reasoning as the model path: sheet MTEXT must keep scaling with zoom, so the ceiling here
+          // is only a rasterisation sanity bound, not the survey-label legibility cap.
+          const float hPx = std::clamp(a.plottedHeightInches * pxPerPaperIn, 1.f, 8192.f);
           const ImVec2 tl = w2s(a.boxMinX, a.boxMaxY);   // top-left of the MTEXT box
           const ImVec2 brc = w2s(a.boxMaxX, a.boxMinY);  // bottom-right
           // Honor MTEXT attachment (group 71): col 0/1/2 = left/center/right, row 0/1/2 = top/middle/bottom.
@@ -9365,8 +10071,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           if (const Viewport* mvp = CurrentViewport(cmd))
             mtextMup = std::max(mvp->scaleModelPerPaperIn, 1.e-6f);
         const float hWorldMtext = CadAnnotationHeightWorld(a, mtextMup);
+        // The screen-size cap belongs to survey-point labels only: those are sized for legibility, not to
+        // scale. Applying it to plain MTEXT made the text stop growing once zoomed past ~128 px while the
+        // geometry around it kept scaling — the text is a model-space object and must scale with the view
+        // (REQ-050). The remaining ceiling is only a rasterisation sanity bound.
+        const float mtextMaxPx = (a.surveyPointLabelFor >= 0) ? cmd.viewportMtextMaxPx : 8192.f;
         const float fontPx =
-            std::clamp(hWorldMtext / std::max(worldPerPxY, 1.e-6f), mtextMinPx, cmd.viewportMtextMaxPx);
+            std::clamp(hWorldMtext / std::max(worldPerPxY, 1.e-6f), mtextMinPx, mtextMaxPx);
         ImU32 col = colFallback;
         if (attrPtr) {
           float rgba[4];
@@ -10792,11 +11503,6 @@ void DrawCreatePointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
 
 // Quick-pick fonts shared by the dialog combo: a TrueType family ("Arial") or an SHX file name
 // ("romans.shx"). Anything FontReg / Shx can resolve works.
-static const char* kTextStyleFonts[] = {
-    "",          "romans.shx", "romand.shx", "romanc.shx", "txt.shx",         "simplex.shx",
-    "isocp.shx", "italic.shx", "Arial",      "Times New Roman", "Consolas",   "Tahoma",
-};
-
 static void DrawTextStyleSample(ImDrawList* dl, ImVec2 tl, ImVec2 sz, const TextStyle& s, const char* sample,
                                 ImU32 col) {
   const float pad = 6.f;

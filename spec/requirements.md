@@ -1018,6 +1018,73 @@ requirements is a planning failure, not a sign of rigor.
 
 ---
 
+### REQ-051 — MTEXT edits through an AutoCAD-style "Text Formatting" panel
+- Purpose: the MTEXT editor should read and behave like AutoCAD's/nanoCAD's — a floating "Text
+  Formatting" toolbar with the style, font, height, and colour controls where a surveyor reaches
+  for them, over an in-place editing box — instead of a bare multiline box whose only formatting
+  affordance is hand-typed rich-text tags (the user asked for this redesign from a reference
+  screenshot)
+- Priority: should
+- Type: functional
+- Statement: Editing an MTEXT in place (REQ-039's shared editor — **model** MTEXT, including the MTEXT
+  placement command's text entry, and **native paper-space** MTEXT) presents a **floating panel titled
+  "Text Formatting"**, **draggable** by its title bar, with its on-screen position and its ruler/expanded
+  state **persisted** across edits and sessions (UserPrefs, the REQ-040 `cmdBar*` pattern — no new global).
+  The panel carries **two toolbar rows** laid out in the reference order: row 1 = text style, font,
+  annotative, height, bold, italic, strikethrough, underline, overline, background mask, undo, redo,
+  stacking, entity colour, ruler toggle, **OK**, and an **expand control** that collapses row 2; row 2 =
+  columns, MTEXT justification, paragraph, five paragraph-alignment buttons, line spacing, lists, insert
+  field, uppercase, lowercase, superscript, subscript, symbol, oblique, tracking, width factor.
+  The panel **sizes itself to its content**: every control is reachable without scrolling the panel.
+  A **column ruler** sits above the in-place box; the ruler toggle shows and hides it, and its **right
+  marker drags to set the MTEXT's column width** (an undoable edit of the annotation's box). The
+  in-place box **edits WYSIWYG** (ADR-023): text **wraps at the MTEXT's column width**, the box is **one
+  line tall and grows as the text wraps** or breaks, formatting **renders as formatting** (bold, italic,
+  underline, uppercase, per-run font and colour), and the `[[…]]` wire tags are **never shown**. The box
+  shows **no corner resize handle**: dragging the box corner is not implemented, and an affordance that
+  invites a drag it cannot perform would misrepresent the editor.
+  **Controls that the stored text model already supports are functional**: text style (applies per
+  REQ-044/ADR-020), **font per selected characters**, **colour per selected characters**, bold, italic,
+  underline, uppercase, symbol insertion, MTEXT justification (the 9-way attachment point), and —
+  **whole-object** — text height, oblique angle, and entity colour. **Every remaining control is present
+  but disabled and names itself in a tooltip**; each is a separate follow-up requirement, so the panel
+  never implies a capability the drawing cannot store.
+  **Single-line TEXT keeps its existing bare in-place box** (AutoCAD-faithful — no toolbar). The
+  **rich-text wire format and every stored `CadAnnotation` field are unchanged**, so `.gs`, DXF, and PDF
+  round-trips of MTEXT behave exactly as before.
+- Acceptance:
+  - double-clicking a model MTEXT opens a panel titled "Text Formatting" with two toolbar rows and a
+    ruler above the in-place box;
+  - dragging the panel by its title bar moves it, and it reopens at that position on a later edit and
+    after an application restart;
+  - selecting part of the text and choosing a font changes **only** those characters, the rest keeping
+    theirs; the same holds for the per-selection colour control;
+  - changing height changes the whole MTEXT's plotted height; changing oblique slants the whole MTEXT;
+    the entity-colour control changes the object's colour (ByLayer honoured);
+  - the text-style dropdown lists the drawing's styles and applying one re-bakes the MTEXT per REQ-044;
+  - bold/italic/underline/uppercase and symbol insertion behave as they did before the redesign;
+  - the justification dropdown sets the MTEXT attachment point and the text re-lays out in its box;
+  - every disabled control does nothing and shows a tooltip naming it; the ruler toggle hides and
+    shows the ruler; the expand control collapses and restores row 2;
+  - paper-space MTEXT opens the same panel; **single-line TEXT still opens the bare in-place box**;
+  - OK commits and Esc cancels as before, and a `.gs` save/reload plus a DXF export of edited MTEXT are
+    unchanged.
+- Owner-layer: UI (panel + in-place editor) / IO (UserPrefs persistence)
+- Status: accepted
+- Revisions: 2026-07-30 — initial. Scope deliberately bounded to controls the existing rich-text wire
+  format and `CadAnnotation` already support, so no data-format change is implied; the disabled controls
+  (paragraph properties, columns, fields, stacking, super/subscript, tracking, width factor, annotative,
+  background mask, strikethrough, overline, in-panel undo/redo) and a drag-to-resize box corner are
+  recorded follow-ups.
+    2026-07-30 (same day, after the first user review) — the panel now sizes itself to its content
+    (it clipped its second row); the ruler's width drag is **un-deferred** and implemented; the in-place
+    box opens one line tall and grows per line of text. The word-wrap gap this exposed (ImGui's
+    `InputTextMultiline` has none) was escalated and resolved as **ADR-023**: the box now edits WYSIWYG
+    through the in-tree `ui/RichTextEdit` widget — text wraps at the column, the box grows with it, and
+    the wire tags are hidden. Delivered under TASK-024.
+
+---
+
 ## Performance requirements
 
 > Performance is a requirement, not an afterthought — but always paired with a
@@ -1150,6 +1217,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-048 | UI/Renderer/IO | manual (viewport model + native sheet show true entity/layer colors on screen; VP Color override + selection/hover still win; frozen/off/non-plottable unchanged; PDF plot prints true colors) | accepted |
 | REQ-049 | IO/Renderer | manual (native sheet geometry + TEXT/MTEXT appear in the plotted PDF at correct position/size, colored per REQ-048; off/non-plottable excluded; any TTF-text limit recorded as debt) | accepted |
 | REQ-050 | Renderer | manual (MTEXT edited through a viewport at a non-drawing scale sizes off the viewport scale = constant plotted height; plain model view unchanged; single-line TEXT unchanged; survey labels unchanged) | accepted |
+| REQ-051 | UI/IO | `MtextToolbarTests` (panel-anchor clamp in-bounds/off-screen/oversized; font+colour run-tag composition incl. empty family = no tag; ruler tick spacing + zero-width = no ticks; attach label 1–9 + out-of-range fallback) + manual (panel titled "Text Formatting" with two rows + ruler; drag persists across edits and restart; font/colour apply to the selection only; height/oblique/entity colour whole-object; style dropdown re-bakes per REQ-044; B/I/U/caps/symbol unchanged; justification re-lays out; disabled controls inert with naming tooltips; ruler + expand toggles; paper MTEXT same panel; single-line TEXT still bare box; OK/Esc + `.gs`/DXF round-trip unchanged) | accepted |
 
 ---
 

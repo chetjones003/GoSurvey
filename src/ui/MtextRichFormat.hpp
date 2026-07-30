@@ -2,7 +2,11 @@
 
 #include <imgui.h>
 
+#include "MtextRichSpans.hpp"  // MtextRichSpan + MtextRichBuildSpans (pure; ADR-023)
+
+#include <cstdint>
 #include <string>
+#include <vector>
 
 struct ImDrawList;
 struct ImFont;

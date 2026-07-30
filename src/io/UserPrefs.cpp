@@ -161,6 +161,16 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   if (s.contains("cmdBarHistoryLines") && s["cmdBarHistoryLines"].is_number_integer())
     st.cmdBarHistoryLines = std::clamp(s["cmdBarHistoryLines"].get<int>(), 1, 20);
 
+  // --- MTEXT "Text Formatting" panel (REQ-051) ---
+  b  ("mtextPanelAnchorValid",  &st.mtextPanelAnchorValid);
+  num("mtextPanelAnchorX",      &st.mtextPanelAnchorX, -100000.f, 100000.f);
+  num("mtextPanelAnchorY",      &st.mtextPanelAnchorY, -100000.f, 100000.f);
+  b  ("mtextPanelRulerVisible", &st.mtextPanelRulerVisible);
+  b  ("mtextPanelRow2Visible",  &st.mtextPanelRow2Visible);
+  b  ("mtextEditAutocorrectCapsLock", &st.mtextEditAutocorrectCapsLock);
+  if (s.contains("mtextPanelRunColor") && s["mtextPanelRunColor"].is_number_integer())
+    st.mtextPanelRunColor = s["mtextPanelRunColor"].get<unsigned int>() & 0xFFFFFFu;
+
   // --- Object snap (Drafting tab) ---
   b  ("objectSnapEnabled",         &st.objectSnapEnabled);
   b  ("objectSnapEndpoint",        &st.objectSnapEndpoint);
@@ -332,6 +342,15 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["cmdBarFadeDelaySec"] = st.cmdBarFadeDelaySec;
   s["cmdBarOpacity"]      = st.cmdBarOpacity;
   s["cmdBarHistoryLines"] = st.cmdBarHistoryLines;
+
+  // MTEXT "Text Formatting" panel (REQ-051)
+  s["mtextPanelAnchorValid"]  = st.mtextPanelAnchorValid;
+  s["mtextPanelAnchorX"]      = st.mtextPanelAnchorX;
+  s["mtextPanelAnchorY"]      = st.mtextPanelAnchorY;
+  s["mtextPanelRulerVisible"] = st.mtextPanelRulerVisible;
+  s["mtextPanelRow2Visible"]  = st.mtextPanelRow2Visible;
+  s["mtextEditAutocorrectCapsLock"] = st.mtextEditAutocorrectCapsLock;
+  s["mtextPanelRunColor"]     = st.mtextPanelRunColor;
 
   s["objectSnapEnabled"]          = st.objectSnapEnabled;
   s["objectSnapEndpoint"]         = st.objectSnapEndpoint;

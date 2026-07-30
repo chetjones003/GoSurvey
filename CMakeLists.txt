@@ -117,6 +117,7 @@ add_executable(GoSurvey
   src/ui/SplashScreen.cpp
   src/ui/ImGuiLayout.cpp
   src/ui/MtextRichFormat.cpp
+  src/ui/RichTextEdit.cpp
   src/ui/FontRegistry.cpp
   src/ui/ShxDraw.cpp
   src/ui/PdfAttachDialog.cpp
@@ -280,6 +281,9 @@ if(GOSURVEY_BUILD_TESTS)
     tests/OrthoConstrainTests.cpp
     tests/ColorContrastTests.cpp
     tests/PlotFontTests.cpp
+    tests/MtextToolbarTests.cpp
+    tests/RichTextLayoutTests.cpp
+    tests/MtextTextOpsTests.cpp
     src/traverse/TraverseCalc.cpp
     src/traverse/TraverseLeastSquares.cpp
     src/traverse/FbkImport.cpp

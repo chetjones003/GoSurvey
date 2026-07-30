@@ -179,6 +179,7 @@ Keep code grouped by subsystem, not by file kind. Avoid a junk-drawer `utils/`.
 src/
   app/          application lifecycle, wiring
   ui/           panels, viewport, input
+                RichTextEdit — WYSIWYG rich-text edit widget for MTEXT (ADR-023)
   commands/     parsing, validation, execution
   renderer/     GL backend, buffers, shaders
   domain/       entities, invariants, compute
@@ -565,3 +566,44 @@ A change is rejected if it breaks any of these:
   legacy (own fields); the dialog blocks deleting "Standard"/in-use styles. Delivered incrementally
   (Phase 1 data model + persistence + active dropdown + create; Phase 2 STYLE dialog + re-bake; Phase 3
   Properties overrides + oblique) so each slice is independently verifiable.
+
+### ADR-023 — WYSIWYG MTEXT editing: an offset-carrying rich-span API + an in-tree rich text edit widget   (2026-07-30, accepted)
+- Context:    REQ-051 delivered the "Text Formatting" panel over ImGui's `InputTextMultiline`. That widget
+  has **no word wrap**, so the in-place box cannot grow as text reaches the MTEXT's column width, and the
+  user edits the raw wire string with `[[b]]…[[/b]]` tags visible. The user chose full WYSIWYG: text wraps
+  at the column, the box grows with it, formatting renders as formatting, and tags never appear. No stock
+  ImGui widget does this, so a new editing widget is required — a new UI module and a public-API addition
+  to `MtextRichFormat`, both architectural decisions rather than Workshop choices (§3, §11.4).
+- Decision:
+  (a) **`MtextRichFormat` gains an offset-carrying span API.** Its run parser is internal and discards
+  where each run came from; the editor needs exactly that. `MtextRichBuildSpans(wire, &spans)` returns each
+  text span's `[rawBegin, rawEnd)` byte range in the wire plus its resolved styling. The existing internal
+  `BuildRuns` is re-expressed in terms of it, so there is **one** parser, not two that can disagree.
+  (b) **A new UI module `ui/RichTextEdit`** owns the widget: layout (wrap the spans' visible characters
+  into lines at a column width), the caret/selection model, key and mouse input, and styled drawing. It is
+  a concrete widget with a single call site, not an interface or a template — §11.4 governs speculative
+  abstraction, and this is the module that *implements* one required behavior, not indirection over two.
+  (c) **The caret and selection anchor are VISIBLE character indices**, and the widget publishes the
+  corresponding **raw byte offsets** into the existing `mtextRichEditorSelStart/End`. This is the load-
+  bearing choice: every toolbar control (B/I/U, caps, the font picker, the colour swatch) already works by
+  wrapping a raw byte range, so all of them keep working **unchanged**. It also means an edit may freely
+  re-run `MtextRichNormalize` — normalisation preserves visible text, so a visible-index caret survives it.
+  (d) **Typed text inherits the styling to its left**: the insertion point for visible index `i` is the end
+  of visible character `i-1`, which lands *inside* the preceding run rather than before its opening tag.
+  (e) **The editor renders at the MTEXT's own on-screen size** (the size the viewport draws it at, floored
+  at a legible minimum), and wraps at the box width the ruler drag sets — so the editing view matches the
+  committed result.
+- Alternatives: (a) keep `InputTextMultiline` and accept no wrap — rejected by the user. (b) hard-wrap the
+  buffer on commit — rejected: it rewrites the user's text, and re-widening the column cannot reflow it.
+  (c) vendor a third-party text-editor widget (e.g. ImGuiColorTextEdit) — rejected under the REQ-300
+  dependency policy: it is a code-editor with no rich-run model, so it would need as much adaptation as
+  writing the layout, plus a dependency. (d) model selection as (run, offset) pairs instead of raw byte
+  offsets — rejected: it would force a rewrite of every toolbar control for no gain, since the raw offset
+  is recoverable from the visible index anyway.
+- Consequences: `MtextRichFormat` grows a public span API (its internal parser refactored beneath it, no
+  behavior change); `ui/RichTextEdit` is new; `DrawMtextRichEditorOverlay` swaps the widget and keeps
+  publishing raw offsets. **The rich wire format, `CadAnnotation`, `.gs`, DXF, and the PDF plot are all
+  unchanged** — this is an editing-surface decision only. The widget must re-provide what the stock one
+  gave for free: caret movement, shift/mouse selection, word double-click, clipboard, and an in-editor
+  undo stack. Pure layout and index-mapping logic is unit-tested; drawing and input stay manual, per the
+  UI convention. Risk acknowledged: this replaces a working editor, so MTEXT editing is the blast radius.

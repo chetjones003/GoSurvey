@@ -9,17 +9,6 @@
 
 namespace {
 
-struct StyleDepth {
-  int b = 0;
-  int i = 0;
-  int u = 0;
-  int c = 0;
-  // Color stack: each entry is a packed 0xRRGGBB value (no alpha).
-  std::vector<uint32_t> colorStack;
-  // Font-family stack: each entry a TrueType family / SHX name; empty stack = base font.
-  std::vector<std::string> fontStack;
-};
-
 struct RichRun {
   std::string text;
   bool bold = false;
@@ -31,123 +20,30 @@ struct RichRun {
   std::string font;           // per-run typeface override; empty = base font
 };
 
-bool Starts(const std::string& s, size_t i, const char* tag) {
-  const size_t n = std::strlen(tag);
-  return i + n <= s.size() && std::memcmp(s.data() + i, tag, n) == 0;
-}
 
-void ApplyCapsAscii(std::string* t) {
-  for (char& ch : *t) {
-    if (ch >= 'a' && ch <= 'z')
-      ch = static_cast<char>(ch - 'a' + 'A');
-  }
-}
-
-// Try to parse [[color:RRGGBB]] at position i. Returns true and advances i past the tag.
-bool TryParseColorOpen(const std::string& s, size_t i, size_t* outEnd, uint32_t* outRgb) {
-  // Minimum: [[color:RRGGBB]] = 16 chars
-  if (i + 16 > s.size())
-    return false;
-  if (!Starts(s, i, "[[color:"))
-    return false;
-  // Expect 6 hex digits then "]]"
-  const size_t hexStart = i + 8;
-  if (hexStart + 8 > s.size())
-    return false;
-  if (s[hexStart + 6] != ']' || s[hexStart + 7] != ']')
-    return false;
-  // Parse the 6 hex digits
-  uint32_t rgb = 0;
-  for (int k = 0; k < 6; ++k) {
-    const char c = s[hexStart + static_cast<size_t>(k)];
-    uint32_t nibble;
-    if (c >= '0' && c <= '9')      nibble = static_cast<uint32_t>(c - '0');
-    else if (c >= 'a' && c <= 'f') nibble = static_cast<uint32_t>(c - 'a' + 10);
-    else if (c >= 'A' && c <= 'F') nibble = static_cast<uint32_t>(c - 'A' + 10);
-    else return false;
-    rgb = (rgb << 4) | nibble;
-  }
-  *outEnd = hexStart + 8;
-  *outRgb = rgb;
-  return true;
-}
+inline void ApplyCapsAscii(std::string* t) { MtextRichApplyCapsAscii(t); }
 
 void BuildRuns(const std::string& wire, std::vector<RichRun>* outRuns) {
+  // One parser (ADR-023): runs are the spans plus their text, so the editor and the draw/measure paths
+  // can never disagree about where a tag begins.
+  std::vector<MtextRichSpan> spans;
+  MtextRichBuildSpans(wire, &spans);
   outRuns->clear();
-  StyleDepth st;
-  std::string acc;
-  auto flush = [&]() {
-    if (acc.empty())
-      return;
+  outRuns->reserve(spans.size());
+  for (const MtextRichSpan& s : spans) {
     RichRun r;
-    r.text = acc;
-    r.bold = st.b > 0;
-    r.italic = st.i > 0;
-    r.underline = st.u > 0;
-    r.caps = st.c > 0;
-    if (!st.colorStack.empty()) {
-      r.hasColorOverride = true;
-      r.colorOverride = st.colorStack.back();
-    }
-    if (!st.fontStack.empty())
-      r.font = st.fontStack.back();
+    r.text = wire.substr(s.rawBegin, s.rawEnd - s.rawBegin);
+    r.bold = s.bold;
+    r.italic = s.italic;
+    r.underline = s.underline;
+    r.caps = s.caps;
+    r.hasColorOverride = s.hasColor;
+    r.colorOverride = s.color;
+    r.font = s.font;
     outRuns->push_back(std::move(r));
-    acc.clear();
-  };
-
-  for (size_t i = 0; i < wire.size();) {
-    if (wire[i] == '[' && i + 1 < wire.size() && wire[i + 1] == '[') {
-      bool hit = false;
-      if (Starts(wire, i, "[[b]]"))          { flush(); ++st.b; i += 5; hit = true; }
-      else if (Starts(wire, i, "[[/b]]"))    { flush(); st.b = std::max(0, st.b - 1); i += 6; hit = true; }
-      else if (Starts(wire, i, "[[i]]"))     { flush(); ++st.i; i += 5; hit = true; }
-      else if (Starts(wire, i, "[[/i]]"))    { flush(); st.i = std::max(0, st.i - 1); i += 6; hit = true; }
-      else if (Starts(wire, i, "[[u]]"))     { flush(); ++st.u; i += 5; hit = true; }
-      else if (Starts(wire, i, "[[/u]]"))    { flush(); st.u = std::max(0, st.u - 1); i += 6; hit = true; }
-      else if (Starts(wire, i, "[[caps]]"))  { flush(); ++st.c; i += 8; hit = true; }
-      else if (Starts(wire, i, "[[/caps]]")) { flush(); st.c = std::max(0, st.c - 1); i += 9; hit = true; }
-      else if (Starts(wire, i, "[[/color]]")) {
-        flush();
-        if (!st.colorStack.empty())
-          st.colorStack.pop_back();
-        i += 10;
-        hit = true;
-      } else if (Starts(wire, i, "[[/font]]")) {
-        flush();
-        if (!st.fontStack.empty())
-          st.fontStack.pop_back();
-        i += 9;
-        hit = true;
-      } else if (Starts(wire, i, "[[font:")) {
-        const size_t nameStart = i + 7;
-        const size_t close = wire.find("]]", nameStart);
-        if (close != std::string::npos) {
-          flush();
-          st.fontStack.push_back(wire.substr(nameStart, close - nameStart));
-          i = close + 2;
-          hit = true;
-        }
-      } else {
-        size_t afterTag = 0;
-        uint32_t rgb = 0;
-        if (TryParseColorOpen(wire, i, &afterTag, &rgb)) {
-          flush();
-          st.colorStack.push_back(rgb);
-          i = afterTag;
-          hit = true;
-        }
-      }
-      if (!hit) {
-        acc += wire[i];
-        ++i;
-      }
-    } else {
-      acc += wire[i];
-      ++i;
-    }
   }
-  flush();
 }
+
 
 void SerializeRuns(const std::vector<RichRun>& runs, std::string* out) {
   out->clear();

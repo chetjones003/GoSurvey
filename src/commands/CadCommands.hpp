@@ -601,6 +601,50 @@ struct AppCommandState {
   int mtextRichEditorSelEnd = 0;
   bool mtextRichEditorTypingAllCaps = false;
 
+  // --- WYSIWYG editor state (ADR-023) ---
+  // The caret and selection anchor are **visible character indices** (tags are not characters); the widget
+  // publishes the matching raw byte offsets into mtextRichEditorSelStart/End above, so the formatting
+  // toolbar keeps working on byte ranges exactly as it did. Plain members, no new type: the ui/ widget
+  // must not become a dependency of the commands layer.
+  int mtextEditCaret = 0;
+  int mtextEditAnchor = 0;            ///< caret == anchor means no selection
+  /// The editor owns keyboard focus. Deliberately NOT ImGui's ActiveID: holding that persistently makes
+  /// ImGui refuse to hover any other item, which dead-locks every other control in the application. The
+  /// widget only takes ActiveID for the duration of a drag-select, exactly as a stock widget does.
+  bool mtextEditFocused = false;
+  bool mtextEditMouseSelecting = false;
+  float mtextEditScrollY = 0.f;       ///< px scrolled when the text outgrows the box's height cap
+  double mtextEditBlinkT = 0.0;       ///< ImGui time the caret last moved (restarts the blink)
+  std::vector<std::string> mtextEditUndo;  ///< in-editor Ctrl+Z snapshots (drawing undo is separate)
+  std::vector<std::string> mtextEditRedo;
+  float mtextEditLastHeight = 0.f;    ///< height the wrapped layout used last frame (positions the box)
+  /// Fix a word typed with Caps Lock inverted ("hELLO" → "Hello") when it is finished. Persisted.
+  bool mtextEditAutocorrectCapsLock = false;
+  // Find and Replace (the Options menu). Buffers are small fixed arrays to match the other UI text fields.
+  bool mtextFindReplaceOpen = false;
+  char mtextFindBuf[128] = {0};
+  char mtextReplaceBuf[128] = {0};
+  bool mtextFindMatchCase = false;
+  std::string mtextFindStatus;        ///< "3 replaced" / "not found", shown under the fields
+
+  // --- MTEXT "Text Formatting" panel chrome (REQ-051) ---
+  // Unlike the fields above, this is not per-edit state: it survives closing the editor and is persisted
+  // (UserPrefs, the \c cmdBar* pattern of REQ-040), so the panel reopens where the user left it.
+  // \ref CloseMtextRichEditorUi deliberately does not touch it.
+  bool mtextPanelAnchorValid = false;    ///< false → place near the MTEXT box this frame. Persisted.
+  float mtextPanelAnchorX = 0.f;         ///< panel top-LEFT anchor in screen px. Persisted.
+  float mtextPanelAnchorY = 0.f;
+  bool mtextPanelRulerVisible = true;    ///< column ruler shown above the in-place box. Persisted.
+  bool mtextPanelRow2Visible = true;     ///< second toolbar row shown (the expand control). Persisted.
+  unsigned int mtextPanelRunColor = 0xFFFFFFu;  ///< last colour picked for the per-selection swatch (RGB).
+  /// Panel size measured last frame (the panel auto-sizes to its content). Used to clamp the anchor and to
+  /// span the caption before this frame's size is known — session-only, deliberately not persisted, since a
+  /// stale size from a different font/DPI would misplace the panel for one frame.
+  float mtextPanelMeasuredW = 0.f;
+  float mtextPanelMeasuredH = 0.f;
+  /// True while the ruler's width marker is being dragged (so the undo snapshot is pushed exactly once).
+  bool mtextRulerDragActive = false;
+
   enum class DimPhase { WaitExt1, WaitExt2, WaitDimLinePt } dimPhase = DimPhase::WaitExt1;
   /// \c Kind::DimAngular — vertex then two ray points then arc radius pick.
   enum class DimAngularPhase { WaitVertex, WaitRay1, WaitRay2, WaitArc } dimAngularPhase = DimAngularPhase::WaitVertex;
@@ -1295,6 +1339,13 @@ inline void CloseMtextRichEditorUi(AppCommandState& st) {
   st.mtextRichEditorSelStart = 0;
   st.mtextRichEditorSelEnd = 0;
   st.mtextRichEditorTypingAllCaps = false;
+  st.mtextEditCaret = 0;
+  st.mtextEditAnchor = 0;
+  st.mtextEditFocused = false;
+  st.mtextEditMouseSelecting = false;
+  st.mtextEditScrollY = 0.f;
+  st.mtextEditUndo.clear();
+  st.mtextEditRedo.clear();
 }
 
 /// The annotation the in-place text editor is currently editing (REQ-039 phase 2): a model
@@ -1318,6 +1369,29 @@ inline CadAnnotation* MtextRichEditorTargetAnnotation(AppCommandState& st) {
   if (static_cast<size_t>(ix) >= st.cadAnnotations.size())
     return nullptr;
   return &st.cadAnnotations[static_cast<size_t>(ix)];
+}
+
+/// The attributes parallel to \ref MtextRichEditorTargetAnnotation — the entity colour/layer/linetype row
+/// of the text being edited (REQ-051's colour control writes it). Same nullptr cases, plus a parallel-vector
+/// length mismatch, which is never expected but must not index out of range.
+inline EntityAttributes* MtextRichEditorTargetAttrs(AppCommandState& st) {
+  if (!st.mtextRichEditorOpen || st.mtextRichEditorPlacement)
+    return nullptr;
+  const int ix = st.mtextRichEditorAnnIndex;
+  if (ix < 0)
+    return nullptr;
+  if (st.mtextRichEditorPaper) {
+    if (st.mtextRichEditorPaperLayout < 0 ||
+        static_cast<size_t>(st.mtextRichEditorPaperLayout) >= st.paperLayouts.size())
+      return nullptr;
+    PaperLayout& L = st.paperLayouts[static_cast<size_t>(st.mtextRichEditorPaperLayout)];
+    if (static_cast<size_t>(ix) >= L.paperTextAttrs.size())
+      return nullptr;
+    return &L.paperTextAttrs[static_cast<size_t>(ix)];
+  }
+  if (static_cast<size_t>(ix) >= st.cadAnnotationAttrs.size())
+    return nullptr;
+  return &st.cadAnnotationAttrs[static_cast<size_t>(ix)];
 }
 
 
