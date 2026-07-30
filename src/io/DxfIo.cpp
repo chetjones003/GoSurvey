@@ -5,6 +5,7 @@
 #include "CadLinetype.hpp"
 #include "DxfColors.hpp"
 #include "MtextRichFormat.hpp"
+#include "TextStyle.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -536,20 +537,24 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
 
   constexpr int kMaxInsertDepth = 64;
 
-  // Resolve a TEXT/MTEXT style name (DXF group 7; empty → "Standard") to its font + italic flag.
-  auto resolveStyle = [&](const std::string& styleName, std::string* outFont, bool* outItalic) {
+  // Resolve a TEXT/MTEXT style name (DXF group 7; empty → "Standard") to its registered style name (for the
+  // annotation's live style reference, REQ-044) + font + italic flag. The returned name matches a drawing
+  // TextStyle registered by RegisterDxfTextStylesIntoDrawing, so a style edit ripples to this annotation.
+  auto resolveStyle = [&](const std::string& styleName, std::string* outStyleName, std::string* outFont,
+                          bool* outItalic) {
+    *outStyleName = styleName.empty() ? std::string("Standard") : styleName;
     *outFont = std::string();
     *outItalic = false;
     if (!textStyles)
       return;
-    const std::string key = styleName.empty() ? std::string("Standard") : styleName;
-    auto it = textStyles->find(key);
+    auto it = textStyles->find(*outStyleName);
     if (it == textStyles->end()) {
       // case-insensitive fallback
       for (const auto& kv : *textStyles)
-        if (EqCiStr(kv.first, key)) { it = textStyles->find(kv.first); break; }
+        if (EqCiStr(kv.first, *outStyleName)) { it = textStyles->find(kv.first); break; }
     }
     if (it != textStyles->end()) {
+      *outStyleName = it->first;  // canonical registered name (matches the drawing's TextStyle)
       *outFont = it->second.font;
       *outItalic = it->second.italic;
     }
@@ -1208,9 +1213,9 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       const bool underline = hasUnderlineCode(txt);
       txt = DxfPercentCodesToPlain(txt);
       if (txt.empty()) { i = j; continue; }
-      std::string styleFont;
+      std::string styleRef, styleFont;
       bool styleItalic = false;
-      resolveStyle(styleName, &styleFont, &styleItalic);
+      resolveStyle(styleName, &styleRef, &styleFont, &styleItalic);
       // When the text is non-left/baseline aligned, group 11/21 carries the true placement point
       // (group 10/20 is then the unused first-fit point), so prefer it.
       const bool useAlignPt = haveAlign && (halign != 0 || valign != 0);
@@ -1233,6 +1238,10 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       an.fontFamily = styleFont;
       an.italic = styleItalic;
       an.underline = underline;
+      // REQ-044: link to the imported STYLE so editing that style ripples to this text. The DXF group-40
+      // height is per-text, so it is an override (ovHeight) — a style edit changes font/italic, not height.
+      an.styleName = styleRef;
+      an.ovHeight = true;
       st.cadAnnotations.push_back(an);
       st.cadAnnotationAttrs.push_back(base.makeAttr(layerRgb));
       i = j;
@@ -1267,9 +1276,9 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       if (isSurveyLabel) { i = j; continue; }
       txt = DxfMtextToRichWire(txt);  // preserve \L underline, \f font, bold/italic as rich tags
       if (txt.empty()) { i = j; continue; }
-      std::string styleFont;
+      std::string styleRef, styleFont;
       bool styleItalic = false;
-      resolveStyle(styleName, &styleFont, &styleItalic);
+      resolveStyle(styleName, &styleRef, &styleFont, &styleItalic);
       // Rotation: prefer the X-axis direction vector (group 11/21); else group 50 degrees.
       double rotModel = 0;
       if (haveDir && (std::fabs(dirX) > 1e-12 || std::fabs(dirY) > 1e-12))
@@ -1300,6 +1309,10 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       an.text = txt;
       an.fontFamily = styleFont;  // base typeface; per-run [[font:…]] tags may override
       an.italic = styleItalic;
+      // REQ-044: link to the imported STYLE (font/italic ripple on a style edit); DXF group-40 height is a
+      // per-text override so the imported box height is preserved.
+      an.styleName = styleRef;
+      an.ovHeight = true;
       an.boxMinX = static_cast<float>(left);
       an.boxMaxX = static_cast<float>(left + boxW);
       an.boxMinY = static_cast<float>(top - boxH);
@@ -1585,6 +1598,33 @@ void BuildTextStyleTable(const std::vector<DxfPair>& t, std::unordered_map<std::
   }
 }
 
+// Register each imported DXF STYLE record as a live GoSurvey text style (REQ-044) so that editing the
+// style later updates every TEXT/MTEXT that references it — completing the DXF STYLE-table round-trip that
+// ADR-020 deferred. A style already present in the drawing is left as-is, except that an unset (empty) font
+// is filled from the DXF, so a user/session-defined style is never clobbered. Name matching is exact: the
+// imported entities link by the same DXF style name, so the reference always resolves to a real style.
+void RegisterDxfTextStylesIntoDrawing(AppCommandState& st,
+                                      const std::unordered_map<std::string, DxfTextStyle>& dxf) {
+  TextStyles::EnsureStandard(st.textStyles);
+  for (const auto& kv : dxf) {
+    const std::string& name = kv.first;
+    if (name.empty())
+      continue;
+    if (TextStyle* existing = TextStyles::Find(st.textStyles, name)) {
+      if (existing->fontFamily.empty() && !kv.second.font.empty()) {
+        existing->fontFamily = kv.second.font;
+        existing->italic = kv.second.italic;
+      }
+      continue;
+    }
+    TextStyle s;
+    s.name = name;
+    s.fontFamily = kv.second.font;
+    s.italic = kv.second.italic;
+    st.textStyles.push_back(s);
+  }
+}
+
 uint32_t AttrResolvedRgbPacked(const EntityAttributes& e,
                                const std::unordered_map<std::string, uint32_t>& layerRgbHint) {
   const std::string& c = e.color;
@@ -1688,6 +1728,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
 
   std::unordered_map<std::string, DxfTextStyle> textStyles;
   BuildTextStyleTable(pairs, &textStyles);
+  RegisterDxfTextStylesIntoDrawing(st, textStyles);  // REQ-044: imported STYLEs become live text styles
 
   size_t eb = 0, ee = 0;
   const bool hasEntitiesSec = FindSectionBounds(pairs, "ENTITIES", &eb, &ee);

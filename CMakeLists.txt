@@ -279,6 +279,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/TextStyleTests.cpp
     tests/OrthoConstrainTests.cpp
     tests/ColorContrastTests.cpp
+    tests/PlotFontTests.cpp
     src/traverse/TraverseCalc.cpp
     src/traverse/TraverseLeastSquares.cpp
     src/traverse/FbkImport.cpp

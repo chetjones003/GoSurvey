@@ -5,6 +5,7 @@
 #include "ShxFont.hpp"           // shared lower-layer SHX stroke geometry (ADR-022)
 #include "MtextRichFormat.hpp"   // MtextRichFlattenToPlain (already used by DxfIo)
 #include "ColorContrast.hpp"     // background-adaptive white/black (REQ-048 refinement)
+#include "PlotFont.hpp"          // pure font-name/encoding helpers for TTF plot text (REQ-049)
 
 #include <cctype>
 
@@ -66,6 +67,19 @@ bool ClipSeg(float xmin, float ymin, float xmax, float ymax, float& x0, float& y
   return false;
 }
 
+// Resolve a TrueType family name (REQ-049) to its .ttf file under the Windows Fonts directory, probing the
+// pure candidate list (alias, then de-spaced) from PlotFont.hpp. Returns "" if none exists (caller then
+// substitutes a base-14 font). The Fonts path matches the FontRegistry / CadCommands convention.
+std::string ResolveTtfPath(const std::string& family) {
+  const fs::path fonts = "C:/Windows/Fonts";
+  for (const std::string& fn : plotfont::TtfCandidates(family)) {
+    const fs::path p = fonts / fn;
+    if (fs::exists(p))
+      return p.u8string();
+  }
+  return {};
+}
+
 }  // namespace
 
 bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutIndices, const char* pathUtf8,
@@ -97,6 +111,46 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
   const double oX = st.worldDocumentOriginX;
   const double oY = st.worldDocumentOriginY;
   int pages = 0;
+
+  // TrueType fonts embedded for native sheet text (REQ-049). Loaded once per document, keyed by family, and
+  // closed after the save. A family that cannot be embedded from its .ttf degrades to the closest base-14
+  // font and is logged once (REQ-201 — never silently dropped).
+  std::unordered_map<std::string, FPDF_FONT> fontCache;
+  std::unordered_map<std::string, bool> ttfWarned;
+  auto plotFont = [&](const std::string& family) -> FPDF_FONT {
+    const std::string key = plotfont::LowerAscii(family);
+    if (auto it = fontCache.find(key); it != fontCache.end())
+      return it->second;
+    FPDF_FONT font = nullptr;
+    const std::string path = ResolveTtfPath(family);
+    if (!path.empty()) {
+      std::ifstream f(fs::u8path(path), std::ios::binary | std::ios::ate);
+      if (f) {
+        const std::streamsize sz = f.tellg();
+        f.seekg(0);
+        std::vector<uint8_t> bytes(static_cast<size_t>(sz));
+        if (sz > 0 && f.read(reinterpret_cast<char*>(bytes.data()), sz))
+          font = FPDFText_LoadFont(doc, bytes.data(), static_cast<uint32_t>(bytes.size()), FPDF_FONT_TRUETYPE,
+                                   /*cid=*/0);
+      }
+    }
+    if (!font) {  // best-effort base-14 substitute — text still appears, and we note the family once
+      font = FPDFText_LoadStandardFont(doc, plotfont::StandardSubstitute(family));
+      if (!ttfWarned[key]) {
+        log.push_back("PLOT — note: could not embed TrueType font '" + family + "'; substituted " +
+                      plotfont::StandardSubstitute(family) + " (REQ-049 debt).");
+        ttfWarned[key] = true;
+      }
+    }
+    fontCache[key] = font;
+    return font;
+  };
+  auto closeFonts = [&]() {
+    for (auto& [k, f] : fontCache)
+      if (f)
+        FPDFFont_Close(f);
+    fontCache.clear();
+  };
 
   for (int li : layoutIndices) {
     if (li < 0 || static_cast<size_t>(li) >= st.paperLayouts.size())
@@ -271,6 +325,62 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
       auto sheetAttr = [&](const std::vector<EntityAttributes>& v, size_t i) -> const EntityAttributes* {
         return i < v.size() ? &v[i] : nullptr;
       };
+
+      // Solid sheet fills (REQ-049 — closes the ADR-011 plot gap). Every native filled region plots as a
+      // solid fill in its resolved entity/layer color, matching the on-screen paper overlay (which
+      // scanline-fills every region regardless of pattern). One PDF path per region, all loops closed and
+      // filled even-odd so concave outlines and island holes render correctly. Inserted first so fills sit
+      // under the linework, as on screen. No REQ-048 white/black adaptation here — fills carry their true
+      // color (the overlay does not adapt them either).
+      auto fillRgb = [&](size_t fi) -> uint32_t {
+        float rgba[4] = {0.85f, 0.85f, 0.85f, 1.f};  // on-screen default when a region has no attrs
+        if (fi < L.paperFilledRegionAttrs.size()) {
+          const EntityAttributes& fa = L.paperFilledRegionAttrs[fi];
+          std::string col = fa.color;
+          if (col.empty() || col == "ByLayer") {
+            const CadLayerRow* lr = FindDrawingLayerRowCi(st, fa.layer.empty() ? std::string("0") : fa.layer);
+            col = (lr && !lr->color.empty() && lr->color != "ByLayer") ? lr->color : "White";
+          }
+          ResolveStoredColorForViewport(col, 0.f, 0.f, 0.f, 0.f, rgba);
+        }
+        return (static_cast<uint32_t>(rgba[0] * 255.f) << 16) | (static_cast<uint32_t>(rgba[1] * 255.f) << 8) |
+               static_cast<uint32_t>(rgba[2] * 255.f);
+      };
+      for (size_t fi = 0; fi < L.paperFilledRegions.size(); ++fi) {
+        const CadFilledRegion& fr = L.paperFilledRegions[fi];
+        if (fr.loopStart.empty() || fr.verts.size() < 6)
+          continue;
+        if (fi < L.paperFilledRegionAttrs.size() && !plottable(L.paperFilledRegionAttrs[fi].layer))
+          continue;
+        FPDF_PAGEOBJECT fillObj = nullptr;
+        for (size_t lp = 0; lp < fr.loopStart.size(); ++lp) {
+          const int begin = fr.loopStart[lp];
+          const int cnt = fr.loopCount(lp);
+          if (cnt < 3)
+            continue;
+          for (int k = 0; k < cnt; ++k) {
+            const size_t vi = static_cast<size_t>(begin + k);
+            const float vx = fr.verts[vi * 2] * kPtPerIn, vy = fr.verts[vi * 2 + 1] * kPtPerIn;
+            if (!fillObj) {
+              fillObj = FPDFPageObj_CreateNewPath(vx, vy);  // first subpath starts here (implicit MoveTo)
+              if (!fillObj) break;
+            } else if (k == 0) {
+              FPDFPath_MoveTo(fillObj, vx, vy);             // start of a subsequent loop
+            } else {
+              FPDFPath_LineTo(fillObj, vx, vy);
+            }
+          }
+          if (fillObj)
+            FPDFPath_Close(fillObj);
+        }
+        if (!fillObj)
+          continue;
+        const uint32_t rgb = fillRgb(fi);
+        FPDFPageObj_SetFillColor(fillObj, (rgb >> 16) & 0xffu, (rgb >> 8) & 0xffu, rgb & 0xffu, 255u);
+        FPDFPath_SetDrawMode(fillObj, FPDF_FILLMODE_ALTERNATE, /*stroke=*/0);
+        FPDFPage_InsertObject(page, fillObj);
+      }
+
       // Lines.
       for (size_t i = 0; i + 5 < L.paperLines.size(); i += 6) {
         const EntityAttributes* a = sheetAttr(L.paperLineAttrs, i / 6);
@@ -341,8 +451,9 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
       }
 
       // Native sheet TEXT (REQ-049): SHX (stroke) fonts plot faithfully as their strokes via the shared
-      // font module (ADR-022). TrueType text is not yet plotted — logged once as debt, never silently
-      // dropped (REQ-201). Paper inches, +y up; insertion = top-left (baseline one cap-height below).
+      // font module (ADR-022); TrueType families embed as real PDF text objects (or a logged base-14
+      // substitute). Paper inches, +y up; single-line insertion = top-left (baseline one cap-height below);
+      // MTEXT honors its attachment point (see below).
       auto isShxName = [](const std::string& f) {
         if (f.size() < 4) return false;
         std::string e = f.substr(f.size() - 4);
@@ -373,7 +484,42 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
           penX += g->advance;
         }
       };
-      bool warnedTtfText = false;
+      // TrueType text (REQ-049): each line becomes a real PDF text object in the embedded font (or a base-14
+      // substitute), sized so the cap height ≈ the plotted text height, positioned/rotated by matrix and
+      // colored per REQ-048. Baseline origin matches the SHX path (one cap-height below the top-left).
+      constexpr float kCapEmRatio = 0.7f;  // nominal cap-height / em — see decision log (2026-07-15)
+      auto emitTtfLine = [&](FPDF_FONT font, const std::string& s, float baseXin, float baseYin, float Hin,
+                             float rot, uint32_t rgb) {
+        if (!font || s.empty())
+          return;
+        FPDF_PAGEOBJECT to = FPDFPageObj_CreateTextObj(doc, font, Hin * kPtPerIn / kCapEmRatio);
+        if (!to)
+          return;
+        std::vector<unsigned short> u16 = plotfont::Utf8ToUtf16(s);
+        FPDFText_SetText(to, u16.data());
+        FPDFPageObj_SetFillColor(to, (rgb >> 16) & 0xffu, (rgb >> 8) & 0xffu, rgb & 0xffu, 255u);
+        const float cr = std::cos(rot), sr = std::sin(rot);
+        FS_MATRIX m{cr, sr, -sr, cr, baseXin * kPtPerIn, baseYin * kPtPerIn};
+        FPDFPageObj_SetMatrix(to, &m);
+        FPDFPage_InsertObject(page, to);
+      };
+      // Width (paper inches) of a single TTF line — needed for MTEXT center/right attachment. Builds a
+      // throwaway text object, reads its ink bounds, and discards it (side-bearing vs advance is negligible
+      // for alignment). Matches the SHX width path (Shx::MeasureWidthPx) so mixed sheets align the same way.
+      auto measureTtfWidthIn = [&](FPDF_FONT font, const std::string& s, float Hin) -> float {
+        if (!font || s.empty())
+          return 0.f;
+        FPDF_PAGEOBJECT to = FPDFPageObj_CreateTextObj(doc, font, Hin * kPtPerIn / kCapEmRatio);
+        if (!to)
+          return 0.f;
+        std::vector<unsigned short> u16 = plotfont::Utf8ToUtf16(s);
+        FPDFText_SetText(to, u16.data());
+        float l = 0.f, b = 0.f, r = 0.f, t = 0.f, w = 0.f;
+        if (FPDFPageObj_GetBounds(to, &l, &b, &r, &t))
+          w = (r - l) / kPtPerIn;
+        FPDFPageObj_Destroy(to);
+        return w;
+      };
       for (size_t ti = 0; ti < L.paperTexts.size(); ++ti) {
         const CadAnnotation& a = L.paperTexts[ti];
         if (a.text.empty())
@@ -381,35 +527,61 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
         const EntityAttributes* at = sheetAttr(L.paperTextAttrs, ti);
         if (at && !plottable(at->layer))
           continue;
-        if (!isShxName(a.fontFamily)) {
-          if (!warnedTtfText) {
-            log.push_back("PLOT — note: TrueType sheet text is not yet plotted (SHX text is). See REQ-049 debt.");
-            warnedTtfText = true;
-          }
-          continue;
-        }
-        Shx::Font* font = Shx::Resolve(a.fontFamily);
-        if (!font || !font->valid())
-          continue;
-        curColor = at ? sheetRgb(at->layer, at->color) : 0x000000u;
+        const uint32_t rgb = at ? sheetRgb(at->layer, at->color) : 0x000000u;
         const float H = a.plottedHeightInches < 0.01f ? 0.01f : a.plottedHeightInches;  // avoid win max macro
+        const bool shx = isShxName(a.fontFamily);
+        Shx::Font* sfont = shx ? Shx::Resolve(a.fontFamily) : nullptr;
+        if (shx && (!sfont || !sfont->valid()))
+          continue;
+        FPDF_FONT tfont = shx ? nullptr : plotFont(a.fontFamily);  // embedded TTF (or base-14 substitute)
+        if (!shx && !tfont)
+          continue;
+        curColor = rgb;  // stroke color for the SHX branch
+        auto emitLine = [&](const std::string& s, float bx, float by, float rot) {
+          if (shx)
+            emitShxLine(*sfont, s, bx, by, H, rot);
+          else
+            emitTtfLine(tfont, s, bx, by, H, rot, rgb);
+        };
         if (a.kind == CadAnnotation::Kind::Mtext) {
           const std::string plain = MtextRichFlattenToPlain(a.text);
           const float lineH = H * 1.4f;
-          float baseY = a.boxMaxY - H;  // top line baseline (box top, one cap-height down)
-          std::string ln;
-          auto flushLine = [&]() {
-            emitShxLine(*font, ln, a.boxMinX, baseY, H, 0.f);
-            baseY -= lineH;
-            ln.clear();
-          };
-          for (char ch : plain) {
-            if (ch == '\n') flushLine();
-            else ln += ch;
+          std::vector<std::string> lines;
+          {
+            std::string ln;
+            for (char ch : plain) {
+              if (ch == '\n') { lines.push_back(ln); ln.clear(); }
+              else ln += ch;
+            }
+            lines.push_back(ln);
           }
-          flushLine();
+          // Honor MTEXT attachment (group 71) exactly like the on-screen paper overlay: col 0/1/2 =
+          // left/center/right, row 0/1/2 = top/middle/bottom. Without this, center/middle title-block values
+          // (e.g. "DRY COOLER") plot at the box's top-left and collide with their labels.
+          const int acol = (a.mtextAttach - 1) % 3;
+          const int arow = (a.mtextAttach - 1) / 3;
+          const float boxW = a.boxMaxX - a.boxMinX;
+          const float boxH = a.boxMaxY - a.boxMinY;
+          const float blockH = static_cast<float>(lines.size()) * lineH;
+          float blockTopY = a.boxMaxY;                                     // top (arow 0)
+          if (arow == 1)      blockTopY = a.boxMinY + 0.5f * (boxH + blockH);  // middle
+          else if (arow == 2) blockTopY = a.boxMinY + blockH;                  // bottom
+          auto lineWidthIn = [&](const std::string& s) -> float {
+            if (s.empty()) return 0.f;
+            return shx ? Shx::MeasureWidthPx(*sfont, s, H) : measureTtfWidthIn(tfont, s, H);
+          };
+          float baseY = blockTopY - H;  // baseline of the top line (one cap-height below its top)
+          for (const std::string& ln : lines) {
+            if (!ln.empty()) {
+              float x = a.boxMinX;
+              if (acol == 1)      x = a.boxMinX + 0.5f * (boxW - lineWidthIn(ln));
+              else if (acol == 2) x = a.boxMaxX - lineWidthIn(ln);
+              emitLine(ln, x, baseY, 0.f);
+            }
+            baseY -= lineH;
+          }
         } else {
-          emitShxLine(*font, a.text, a.insX, a.insY - H, H, a.rotationRad);
+          emitLine(a.text, a.insX, a.insY - H, a.rotationRad);
         }
       }
     }
@@ -436,6 +608,7 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
   }
 
   if (pages == 0) {
+    closeFonts();
     FPDF_CloseDocument(doc);
     log.push_back("PLOT — no plottable layouts.");
     return false;
@@ -443,6 +616,7 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
 
   std::ofstream os(fs::u8path(std::string(pathUtf8)), std::ios::binary);
   if (!os) {
+    closeFonts();
     FPDF_CloseDocument(doc);
     log.push_back(std::string("PLOT — could not open output file: ") + pathUtf8);
     return false;
@@ -452,6 +626,7 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
   writer.fw.WriteBlock = &WriteBlockCb;
   writer.os = &os;
   const FPDF_BOOL ok = FPDF_SaveAsCopy(doc, &writer.fw, 0);
+  closeFonts();  // font handles were needed through the save; release before closing the document
   FPDF_CloseDocument(doc);
   os.close();
   if (!ok) {

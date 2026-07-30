@@ -807,9 +807,13 @@ requirements is a planning failure, not a sign of rigor.
   active style affects only newly created text**, never existing text. Text styles and each text's
   style reference + overrides **persist in the native `.gs` file**; **older `.gs` files load with
   every existing text rendered exactly as before** (text with no style reference resolves from its
-  own stored fields). DXF STYLE-table round-trip is **deferred** (import continues to flatten a
-  DXF STYLE onto the text's own font; the imported text carries no style reference). Stored
-  coordinates, the local-storage invariant, and all non-text behavior are unchanged.
+  own stored fields). **DXF import registers the drawing's STYLE table as live text styles**: each DXF
+  `STYLE` record becomes a named text style (font + oblique/italic), and every imported TEXT/MTEXT holds a
+  **live reference** to its style (DXF group 7), so editing that style updates the imported text — the same
+  as native text. The imported per-text **height is a per-text override** (DXF group 40), so a style edit
+  changes font/oblique, not each label's height. A pre-existing drawing style is never clobbered (an unset
+  font is filled from the DXF; a user-set font is kept). Stored coordinates, the local-storage invariant,
+  and all non-text behavior are unchanged.
 - Acceptance:
   - creating a style in the dialog, setting it active, then drawing text produces text in that
     style's font/height/oblique/bold/italic;
@@ -819,13 +823,17 @@ requirements is a planning failure, not a sign of rigor.
   - overriding font/height/oblique (or color, via the existing General color) on selected text in
     the Properties panel changes only that text and survives a later edit of its style;
   - saving and reloading a `.gs` file preserves all styles and each text's reference + overrides;
-  - opening an **older** `.gs` file leaves every existing text visually unchanged.
+  - opening an **older** `.gs` file leaves every existing text visually unchanged;
+  - **importing a DXF** registers its STYLE table as text styles, and editing an imported style's font
+    updates every imported TEXT/MTEXT that references it (heights unchanged, being per-text overrides).
 - Owner-layer: Domain (style table + resolution) / UI (dialog, dropdown, Properties) / IO (.gs)
 - Status: accepted
 - Revisions: 2026-06-21 — initial (ADR-020). Delivered incrementally: Phase 1 = data model +
   Standard + active-style dropdown + create path + `.gs` persistence; Phase 2 = STYLE management
   dialog (create/rename/delete/edit + re-bake referencing text); Phase 3 = Properties per-text
-  overrides + oblique rendering.
+  overrides + oblique rendering. 2026-07-29 — DXF STYLE-table round-trip un-deferred: import now
+  registers the STYLE table as live text styles and links imported TEXT/MTEXT to them (imported height
+  is a per-text override); editing an imported style's font ripples to the imported text.
 
 ### REQ-045 — PAN command (interactive view pan via the command line)
 - Purpose: AutoCAD-style typed panning — the user asked for a PAN command because only
@@ -977,6 +985,36 @@ requirements is a planning failure, not a sign of rigor.
 - Owner-layer: IO / Renderer
 - Status: accepted
 - Revisions: 2026-07-13 — initial (enables REQ-048 increment C; PDF text rendering is a new capability).
+    2026-07-15 — TTF-text debt resolved: TrueType sheet text is now plotted by embedding the real font
+    (Windows Fonts-dir resolution → `FPDFText_LoadFont` → real PDF text objects, sized/positioned/colored
+    per REQ-048), degrading to a base-14 standard font (logged, REQ-201) when the font file can't be
+    resolved. `.ttc` collections and filled regions (ADR-011) remain the only recorded plot-text/geometry gaps.
+
+---
+
+### REQ-050 — MTEXT is sized by the viewport scale (constant plotted height per viewport)
+- Purpose: MTEXT is a plotted annotation — its size on the final sheet must be governed by the scale of
+  the viewport it is shown through, not by a single drawing-wide scale, so the same MTEXT reads at its
+  intended plotted height through viewports at different scales
+- Priority: should
+- Type: functional
+- Statement: A plain MTEXT entity stores a **plotted height (inches)**; its **model (world) height is
+  derived at render time from the scale of the viewport it is drawn through** — the viewport being edited
+  in place (floating model space) when one is active, otherwise the drawing's model plot scale
+  (`modelUnitsPerPlottedInch`). Consequently the MTEXT's **plotted height stays constant on the sheet**
+  regardless of that viewport's scale, and (like any model entity) it still scales on screen with zoom.
+  Single-line **TEXT keeps the drawing plot scale** (plotted-inch × `modelUnitsPerPlottedInch`) — a
+  specified plotted text height — and is unchanged. **Survey-point label MTEXT is unchanged** (its own
+  layout owns its size, and it keeps its readability floor). No stored coordinates or heights change.
+- Acceptance:
+  - editing model MTEXT through a viewport whose scale differs from the drawing plot scale sizes the MTEXT
+    off the viewport's scale (constant plotted height), not the drawing scale;
+  - in the plain model view (no active viewport) MTEXT is sized off the drawing plot scale, unchanged;
+  - single-line TEXT sizing is unchanged; survey-point labels are unchanged.
+- Owner-layer: Renderer (viewport MTEXT sizing)
+- Status: accepted
+- Revisions: 2026-07-29 — initial. On-screen viewport render only; matching the PDF plot's MTEXT sizing to
+  the per-viewport scale is a noted consistency follow-up if the two diverge.
 
 ---
 
@@ -1105,12 +1143,13 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-041 | UI/IO | `SurveyCsvValidateTests` (file-state classification; duplicate-ID detection within file + vs session) + manual (distinct not-found/empty/locked messages; Import disabled on file-level; row-only prompts to confirm skip; overall status string) | accepted |
 | REQ-042 | Commands/Domain/UI/Renderer/IO | `HatchTests` (point-in-polygon-with-holes pick; box-select hit; move translates loops; .gs round-trip) + manual (click inside selects; outside/in-hole does not; delete/move/copy + undo; hover; box-select) | accepted |
 | REQ-043 | Commands/Renderer/UI/Domain/IO | `HatchTests` (boundary trace: closed rect → loop, gap → none, nested → smallest; pattern/angle/scale stored) + manual (prompt internal point; inside→preview, outside→none; click fills region; no-region message; ribbon color/transparency/layer/angle/scale honored; selectable) | accepted |
-| REQ-044 | Domain/UI/IO | `TextStyleTests` (resolve/bake from style; override keeps per-text value while non-overridden props re-bake on style edit; legacy empty-style text unchanged; dimensions ignored) + manual (active-style dropdown; new text adopts active style; `.gs` round-trip of table + per-annotation style; old `.gs` unchanged; Phase 2 STYLE dialog create/rename/delete/edit ripple; Phase 3 Properties overrides + oblique) | accepted |
+| REQ-044 | Domain/UI/IO | `TextStyleTests` (resolve/bake from style; override keeps per-text value while non-overridden props re-bake on style edit; legacy empty-style text unchanged; dimensions ignored) + manual (active-style dropdown; new text adopts active style; `.gs` round-trip of table + per-annotation style; old `.gs` unchanged; Phase 2 STYLE dialog create/rename/delete/edit ripple; Phase 3 Properties overrides + oblique; DXF import registers STYLE table + links imported TEXT/MTEXT so editing an imported style's font updates them, heights preserved) | accepted |
 | REQ-045 | UI | manual (PAN/P enters pan; hand cursor; left-drag pans 1:1; Esc/Enter/right-click exits + restores cursor/tool; middle-drag unchanged; model/paper/floating) | accepted |
 | REQ-046 | UI/Commands/Domain/Renderer/IO | `PaperSpaceTests` (VP color override set/get/clear; per-viewport independence; VPFREEZE adds / VPTHAW removes a layer in the vp's frozen set) + manual (panel gone; Layer Manager VP Freeze/VP Color columns gated on current viewport; freeze/color affect current vp only; VPFREEZE/VPTHAW pick; `.gs` round-trip of frozen + color; PDF plot shows frozen absent + override colored) | accepted |
 | REQ-047 | UI/Commands | `OrthoConstrainTests` (constraint off = no-op at any angle; on = snaps to nearer H/V axis; snap-independent math) + manual (fresh drawing draws free-angle; F8/status toggles ORTHO incl. while the command bar is focused; object snap overrides ORTHO) | accepted |
 | REQ-048 | UI/Renderer/IO | manual (viewport model + native sheet show true entity/layer colors on screen; VP Color override + selection/hover still win; frozen/off/non-plottable unchanged; PDF plot prints true colors) | accepted |
 | REQ-049 | IO/Renderer | manual (native sheet geometry + TEXT/MTEXT appear in the plotted PDF at correct position/size, colored per REQ-048; off/non-plottable excluded; any TTF-text limit recorded as debt) | accepted |
+| REQ-050 | Renderer | manual (MTEXT edited through a viewport at a non-drawing scale sizes off the viewport scale = constant plotted height; plain model view unchanged; single-line TEXT unchanged; survey labels unchanged) | accepted |
 
 ---
 

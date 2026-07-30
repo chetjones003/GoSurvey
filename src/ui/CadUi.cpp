@@ -9357,8 +9357,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         // Survey-point labels keep the readability floor (stay legible at any zoom); plain MTEXT is
         // model-sized and scales with the drawing (no floor) so it stays proportional when zoomed out.
         const float mtextMinPx = (a.surveyPointLabelFor >= 0) ? cmd.viewportMtextMinPx : 1.f;
+        // REQ-050: plain MTEXT is sized off the viewport's scale — the viewport being edited through (floating
+        // model space) else the drawing scale — so its plotted height stays constant on the sheet regardless
+        // of that viewport's scale. Survey labels keep the global drawing scale (their own layout owns size).
+        float mtextMup = cmd.modelUnitsPerPlottedInch;
+        if (a.surveyPointLabelFor < 0)
+          if (const Viewport* mvp = CurrentViewport(cmd))
+            mtextMup = std::max(mvp->scaleModelPerPaperIn, 1.e-6f);
+        const float hWorldMtext = CadAnnotationHeightWorld(a, mtextMup);
         const float fontPx =
-            std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), mtextMinPx, cmd.viewportMtextMaxPx);
+            std::clamp(hWorldMtext / std::max(worldPerPxY, 1.e-6f), mtextMinPx, cmd.viewportMtextMaxPx);
         ImU32 col = colFallback;
         if (attrPtr) {
           float rgba[4];
