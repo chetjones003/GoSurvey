@@ -184,6 +184,32 @@ constexpr float kHugePickDistSq = 1.e30f;
   return std::isfinite(static_cast<double>(*outCx)) && std::isfinite(static_cast<double>(*outCy));
 }
 
+// Does polyline \p pi bound an area, so a geometric center is meaningful? Two ways to be closed: the
+// explicit closed flag (RECT and CLOSE set it), or vertices drawn back onto the start point — a "joined"
+// polyline, which AutoCAD also gives a geometric center. The coincidence test is relative to the polyline's
+// own extent so it holds at survey-scale and at millimetre-scale alike.
+[[nodiscard]] bool PolylineBoundsArea(const AppCommandState& cmd, int pi, int v0, int v1) {
+  if (v1 - v0 < 3)
+    return false;
+  if (static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)])
+    return true;
+  if (v1 - v0 < 4)
+    return false;  // first == last leaves only two distinct corners — no area
+  const std::vector<float>& V = cmd.userPolylineVerts;
+  float mnX = V[static_cast<size_t>(v0 * 3)], mxX = mnX;
+  float mnY = V[static_cast<size_t>(v0 * 3 + 1)], mxY = mnY;
+  for (int i = v0; i < v1; ++i) {
+    mnX = std::min(mnX, V[static_cast<size_t>(i * 3)]);
+    mxX = std::max(mxX, V[static_cast<size_t>(i * 3)]);
+    mnY = std::min(mnY, V[static_cast<size_t>(i * 3 + 1)]);
+    mxY = std::max(mxY, V[static_cast<size_t>(i * 3 + 1)]);
+  }
+  const float tol = std::max(1.e-6f * std::hypot(mxX - mnX, mxY - mnY), 1.e-9f);
+  const float dx = V[static_cast<size_t>((v1 - 1) * 3)] - V[static_cast<size_t>(v0 * 3)];
+  const float dy = V[static_cast<size_t>((v1 - 1) * 3 + 1)] - V[static_cast<size_t>(v0 * 3 + 1)];
+  return std::hypot(dx, dy) <= tol;
+}
+
 struct SnapPickAccum {
   Hit best{};
   float bestPickDistSq = 0.f;
@@ -335,14 +361,14 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     }
   }
 
-  const auto& C = cmd.userCirclesCxCyR;
-  if (C.size() % 3 == 0 && cmd.objectSnapCenter) {
-    for (size_t i = 0; i + 2 < C.size(); i += 3) {
+  const auto& C = cmd.userCirclesCxCyZR;
+  if (C.size() % 4 == 0 && cmd.objectSnapCenter) {  // cx,cy,z,r
+    for (size_t i = 0; i + 3 < C.size(); i += 4) {
       if (exclude.valid && exclude.type == SelectedEntity::Type::Circle &&
-          exclude.index == static_cast<int>(i / 3)) continue;
+          exclude.index == static_cast<int>(i / 4)) continue;
       const float cx = C[i];
       const float cy = C[i + 1];
-      const float r = C[i + 2];
+      const float r = C[i + 3];
       const float p2 = CircleCenterPickDistSq(wx, wy, cx, cy, r, tolWorld);
       ConsiderSnap(&acc, wx, wy, cx, cy, Kind::Center, p2, tolWorld);
     }
@@ -375,7 +401,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     if (closed && v1 - v0 >= 2)
       considerEdge(v1 - 1, v0);
 
-    if (cmd.objectSnapGeometricCenter && closed && v1 - v0 >= 3) {
+    if (cmd.objectSnapGeometricCenter && PolylineBoundsArea(cmd, pi, v0, v1)) {
       float gcx = 0.f;
       float gcy = 0.f;
       if (ClosedPolylineCentroid(cmd.userPolylineVerts, v0, v1, &gcx, &gcy)) {
@@ -801,9 +827,9 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     break;
   }
   case Kind::Center: {
-    const auto& C = cmd.userCirclesCxCyR;
-    if (C.size() % 3 == 0) {
-      for (size_t i = 0; i + 2 < C.size(); i += 3)
+    const auto& C = cmd.userCirclesCxCyZR;
+    if (C.size() % 4 == 0) {  // cx,cy,z,r
+      for (size_t i = 0; i + 3 < C.size(); i += 4)
         PushSnapPickerEntry(C[i], C[i + 1], Kind::Center, sortWorldX, sortWorldY, out);
     }
     for (const CadEllipse& el : cmd.userEllipses) {
@@ -890,9 +916,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     for (int pi = 0; pi < polyCount; ++pi) {
       const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
       const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-      const bool closed =
-          static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
-      if (!closed || v1 - v0 < 3)
+      if (!PolylineBoundsArea(cmd, pi, v0, v1))
         continue;
       float gcx = 0.f;
       float gcy = 0.f;
@@ -931,12 +955,12 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
         gripCandidate(cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4]);
       }
     } else if (sel.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(sel.index) * 3;
-      if (k + 2 < cmd.userCirclesCxCyR.size()) {
-        const float cx = cmd.userCirclesCxCyR[k];
-        const float cy = cmd.userCirclesCxCyR[k + 1];
+      const size_t k = static_cast<size_t>(sel.index) * 4;
+      if (k + 3 < cmd.userCirclesCxCyZR.size()) {
+        const float cx = cmd.userCirclesCxCyZR[k];
+        const float cy = cmd.userCirclesCxCyZR[k + 1];
         gripCandidate(cx, cy);
-        gripCandidate(cx + cmd.userCirclesCxCyR[k + 2], cy);
+        gripCandidate(cx + cmd.userCirclesCxCyZR[k + 3], cy);
       }
     } else if (sel.type == SelectedEntity::Type::Polyline) {
       const int np = static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);

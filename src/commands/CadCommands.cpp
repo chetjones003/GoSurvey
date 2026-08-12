@@ -17,6 +17,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <functional>
 #include <array>
 #include <cctype>
 #include <cstddef>
@@ -45,7 +46,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.worldDocumentOriginY   = cmd.worldDocumentOriginY;
   doc.userLinesFlat          = cmd.userLinesFlat;
   doc.userLineAttrs          = cmd.userLineAttrs;
-  doc.userCirclesCxCyR       = cmd.userCirclesCxCyR;
+  doc.userCirclesCxCyZR       = cmd.userCirclesCxCyZR;
   doc.userCircleAttrs        = cmd.userCircleAttrs;
   doc.userArcs               = cmd.userArcs;
   doc.userArcAttrs           = cmd.userArcAttrs;
@@ -84,7 +85,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.worldDocumentOriginY       = doc.worldDocumentOriginY;
   cmd.userLinesFlat              = doc.userLinesFlat;
   cmd.userLineAttrs              = doc.userLineAttrs;
-  cmd.userCirclesCxCyR           = doc.userCirclesCxCyR;
+  cmd.userCirclesCxCyZR           = doc.userCirclesCxCyZR;
   cmd.userCircleAttrs            = doc.userCircleAttrs;
   cmd.userArcs                   = doc.userArcs;
   cmd.userArcAttrs               = doc.userArcAttrs;
@@ -804,6 +805,7 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
   float bestD2 = tolWorld * tolWorld;
   int bestWhich = -1;
   SelectedEntity bestSel{};
+  float bestGripX = 0.f, bestGripY = 0.f;
   auto tryGrip = [&](const SelectedEntity& sel, float gx, float gy, int which) {
     const float dx = lx - gx, dy = ly - gy;
     const float d2 = dx * dx + dy * dy;
@@ -811,6 +813,8 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
       bestD2 = d2;
       bestWhich = which;
       bestSel = sel;
+      bestGripX = gx;  // ORTHO / typed-distance anchor for the drag (REQ-047)
+      bestGripY = gy;
     }
   };
   for (const SelectedEntity& sel : cmd.selection) {
@@ -824,9 +828,9 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
       break;
     }
     case SelectedEntity::Type::Circle: {
-      const size_t k = static_cast<size_t>(sel.index) * 3;
-      if (k + 2 < cmd.userCirclesCxCyR.size()) {
-        const float cx = cmd.userCirclesCxCyR[k], cy = cmd.userCirclesCxCyR[k + 1], r = cmd.userCirclesCxCyR[k + 2];
+      const size_t k = static_cast<size_t>(sel.index) * 4;
+      if (k + 3 < cmd.userCirclesCxCyZR.size()) {
+        const float cx = cmd.userCirclesCxCyZR[k], cy = cmd.userCirclesCxCyZR[k + 1], r = cmd.userCirclesCxCyZR[k + 3];
         tryGrip(sel, cx, cy, 0);
         tryGrip(sel, cx + r, cy, 1);
       }
@@ -877,6 +881,9 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
   cmd.entityGripType = bestSel.type;
   cmd.entityGripEntityIndex = bestSel.index;
   cmd.entityGripWhich = bestWhich;
+  cmd.entityGripAnchorX = bestGripX;
+  cmd.entityGripAnchorY = bestGripY;
+  cmd.entityGripTypedDistanceValid = false;
   switch (bestSel.type) {  // store originals for RMB / Esc cancel
   case SelectedEntity::Type::LineSeg: {
     const size_t k = static_cast<size_t>(bestSel.index) * 6;
@@ -887,10 +894,10 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
     break;
   }
   case SelectedEntity::Type::Circle: {
-    const size_t k = static_cast<size_t>(bestSel.index) * 3;
-    cmd.entityGripOrigCx = cmd.userCirclesCxCyR[k];
-    cmd.entityGripOrigCy = cmd.userCirclesCxCyR[k + 1];
-    cmd.entityGripOrigR = cmd.userCirclesCxCyR[k + 2];
+    const size_t k = static_cast<size_t>(bestSel.index) * 4;
+    cmd.entityGripOrigCx = cmd.userCirclesCxCyZR[k];
+    cmd.entityGripOrigCy = cmd.userCirclesCxCyZR[k + 1];
+    cmd.entityGripOrigR = cmd.userCirclesCxCyZR[k + 3];
     break;
   }
   case SelectedEntity::Type::Polyline: {
@@ -1063,7 +1070,7 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
   DrawingGeometrySnapshot snap;
   snap.userLinesFlat        = st.userLinesFlat;
   snap.userLineAttrs        = st.userLineAttrs;
-  snap.userCirclesCxCyR     = st.userCirclesCxCyR;
+  snap.userCirclesCxCyZR     = st.userCirclesCxCyZR;
   snap.userCircleAttrs      = st.userCircleAttrs;
   snap.userArcs             = st.userArcs;
   snap.userArcAttrs         = st.userArcAttrs;
@@ -1094,7 +1101,7 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
 static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySnapshot& snap) {
   st.userLinesFlat        = snap.userLinesFlat;
   st.userLineAttrs        = snap.userLineAttrs;
-  st.userCirclesCxCyR     = snap.userCirclesCxCyR;
+  st.userCirclesCxCyZR     = snap.userCirclesCxCyZR;
   st.userCircleAttrs      = snap.userCircleAttrs;
   st.userArcs             = snap.userArcs;
   st.userArcAttrs         = snap.userArcAttrs;
@@ -1954,6 +1961,8 @@ const CmdEntry kRegistry[] = {
     {"line", "l", "Draw line segments"},
     {"circle", "c", "Draw a circle"},
     {"polyline", "pl", "Draw a connected polyline"},
+    {"rect", "rectang, rectangle", "Draw a rectangle (two opposite corners)"},
+    {"trimstate", "", "TRIM mode: 0 = draw a line to trim (default), 1 = pick cutting edges"},
     {"arc", "", "Draw an arc"},
     {"ellipse", "el", "Draw an ellipse"},
     {"hatch", "h, bhatch", "Fill a closed area (pick an internal point)"},
@@ -2118,6 +2127,11 @@ void ResetEllipseDraft(AppCommandState& st) {
   st.ellMajEx = st.ellMajEy = 0.f;
 }
 
+void ResetRectDraft(AppCommandState& st) {
+  st.rectPhase = AppCommandState::RectPhase::WaitFirstCorner;
+  st.rectX1 = st.rectY1 = 0.f;
+}
+
 void ResetTextCmdDraft(AppCommandState& st) {
   st.textPhase = AppCommandState::TextCmdPhase::WaitInsertion;
   st.textInsX = st.textInsY = 0.f;
@@ -2154,6 +2168,7 @@ static void ResetAllCadDraftTools(AppCommandState& st) {
   ResetPolylineDraft(st);
   ResetArcDraft(st);
   ResetEllipseDraft(st);
+  ResetRectDraft(st);
   ResetTextCmdDraft(st);
   ResetMtextDraft(st);
   ResetDimDraft(st);
@@ -2219,9 +2234,12 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<
     return;
   }
   PushUndoSnapshot(st, "Circle");
-  st.userCirclesCxCyR.push_back(cx);
-  st.userCirclesCxCyR.push_back(cy);
-  st.userCirclesCxCyR.push_back(r);
+  st.userCirclesCxCyZR.push_back(cx);
+  st.userCirclesCxCyZR.push_back(cy);
+  // Z = 0: a new circle is drawn on the plan work plane. It becomes the UCS elevation once the
+  // work plane exists (REQ-058 / TASK-035).
+  st.userCirclesCxCyZR.push_back(0.f);
+  st.userCirclesCxCyZR.push_back(r);
   st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
   ResetCircleDraft(st);
@@ -2269,6 +2287,14 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "polyline") {
     StartPolylineCommand(st, log);
+    return true;
+  }
+  if (primary == "rect") {
+    StartRectCommand(st, log);
+    return true;
+  }
+  if (primary == "trimstate") {
+    StartTrimStateCommand(st, log);
     return true;
   }
   if (primary == "arc") {
@@ -2602,7 +2628,12 @@ void EllipseRoughBounds(const CadEllipse& e, float* outMnX, float* outMxX, float
   }
 }
 
-bool PolylineHitsRect(const AppCommandState& st, int pi, float mnX, float mxX, float mnY, float mxY, bool windowMode) {
+/// \param toTest Optional world->test-space mapping. Null keeps the historical plan behaviour
+///        (world XY tested against a world rect). When the camera is orbited the caller supplies a
+///        projection so vertices are tested in SCREEN space, where the drag rectangle actually is
+///        (REQ-058). Per-vertex projection keeps the polyline test exact rather than conservative.
+bool PolylineHitsRect(const AppCommandState& st, int pi, float mnX, float mxX, float mnY, float mxY, bool windowMode,
+                      const std::function<void(float, float, float, float*, float*)>* toTest) {
   if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
     return false;
   const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
@@ -2613,28 +2644,36 @@ bool PolylineHitsRect(const AppCommandState& st, int pi, float mnX, float mxX, f
   const bool closed =
       static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
   const int nVert = v1 - v0;
+  // Vertex in test space: identity in plan view, projected when the caller supplies a mapping.
+  auto vert = [&](int vi, float* ox, float* oy) {
+    const size_t k = static_cast<size_t>(vi) * 3;
+    if (toTest && *toTest)
+      (*toTest)(V[k], V[k + 1], V[k + 2], ox, oy);
+    else {
+      *ox = V[k];
+      *oy = V[k + 1];
+    }
+  };
   if (windowMode) {
     for (int vi = v0; vi < v1; ++vi) {
-      const float x = V[static_cast<size_t>(vi * 3 + 0)];
-      const float y = V[static_cast<size_t>(vi * 3 + 1)];
+      float x, y;
+      vert(vi, &x, &y);
       if (!PointInsideClosedRect(x, y, mnX, mxX, mnY, mxY))
         return false;
     }
     return true;
   }
   for (int vi = v0; vi + 1 < v1; ++vi) {
-    const float x0 = V[static_cast<size_t>(vi * 3 + 0)];
-    const float y0 = V[static_cast<size_t>(vi * 3 + 1)];
-    const float x1 = V[static_cast<size_t>((vi + 1) * 3 + 0)];
-    const float y1 = V[static_cast<size_t>((vi + 1) * 3 + 1)];
+    float x0, y0, x1, y1;
+    vert(vi, &x0, &y0);
+    vert(vi + 1, &x1, &y1);
     if (SegIntersectsAABB(x0, y0, x1, y1, mnX, mxX, mnY, mxY))
       return true;
   }
   if (closed && nVert >= 2) {
-    const float x0 = V[static_cast<size_t>((v1 - 1) * 3 + 0)];
-    const float y0 = V[static_cast<size_t>((v1 - 1) * 3 + 1)];
-    const float x1 = V[static_cast<size_t>(v0 * 3 + 0)];
-    const float y1 = V[static_cast<size_t>(v0 * 3 + 1)];
+    float x0, y0, x1, y1;
+    vert(v1 - 1, &x0, &y0);
+    vert(v0, &x1, &y1);
     if (SegIntersectsAABB(x0, y0, x1, y1, mnX, mxX, mnY, mxY))
       return true;
   }
@@ -2642,7 +2681,52 @@ bool PolylineHitsRect(const AppCommandState& st, int pi, float mnX, float mxX, f
 }
 
 void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb, float yb, bool subtract,
-                              bool windowMode, bool includeSurveyPoints) {
+                              bool windowMode, bool includeSurveyPoints, const Camera* cam, float vpW,
+                              float vpH) {
+  // Under an orbited camera a screen rectangle is NOT a world-axis-aligned rectangle — it projects
+  // to a rotated quad — so testing world bounds against a world AABB selects the wrong objects
+  // (REQ-058). When \p cam is supplied the whole test moves to SCREEN space: the drag corners and
+  // every entity's bounds are projected, and the comparisons below are unchanged.
+  //
+  // Projecting an entity's world bounding box gives a conservative screen box (the bound of the
+  // projection, not the projection of the bound), so crossing mode can occasionally include an
+  // object whose box grazes the rect. Lines — by far the most-selected entity — are projected
+  // endpoint-wise and stay exact. Recorded as a limitation rather than hidden.
+  const bool proj = cam != nullptr && vpW > 0.f && vpH > 0.f;
+  auto SP = [&](float wx, float wy, float wz, float* sx, float* sy) {
+    if (!proj) {
+      *sx = wx;
+      *sy = wy;
+      return;
+    }
+    cam->WorldToScreen(static_cast<double>(wx), static_cast<double>(wy), static_cast<double>(wz), vpW, vpH, sx, sy);
+  };
+  // A world box -> the screen box that bounds its projected corners.
+  auto SPBox = [&](float bx0, float by0, float bx1, float by1, float* o0x, float* o0y, float* o1x, float* o1y) {
+    if (!proj) {
+      *o0x = bx0; *o0y = by0; *o1x = bx1; *o1y = by1;
+      return;
+    }
+    // Inputs are copied BEFORE anything is written: callers pass the same variables as in and out
+    // to transform a box in place, so writing first would clobber the corners still to be read.
+    const float cxs[4] = {bx0, bx1, bx0, bx1};
+    const float cys[4] = {by0, by0, by1, by1};
+    float lo0x = 1e30f, lo0y = 1e30f, lo1x = -1e30f, lo1y = -1e30f;
+    for (int i = 0; i < 4; ++i) {
+      float ax, ay;
+      SP(cxs[i], cys[i], 0.f, &ax, &ay);
+      lo0x = std::min(lo0x, ax); lo1x = std::max(lo1x, ax);
+      lo0y = std::min(lo0y, ay); lo1y = std::max(lo1y, ay);
+    }
+    *o0x = lo0x; *o0y = lo0y; *o1x = lo1x; *o1y = lo1y;
+  };
+  // Same mapping as \c SP, in the type PolylineHitsRect accepts so polylines test per-vertex.
+  const std::function<void(float, float, float, float*, float*)> projFn =
+      [&](float wx, float wy, float wz, float* sx, float* sy) { SP(wx, wy, wz, sx, sy); };
+  if (proj) {  // the drag corners arrive in world coords; move them to screen too
+    SP(xa, ya, 0.f, &xa, &ya);
+    SP(xb, yb, 0.f, &xb, &yb);
+  }
   float mnX = std::min(xa, xb);
   float mxX = std::max(xa, xb);
   float mnY = std::min(ya, yb);
@@ -2662,10 +2746,11 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
   const auto& L = st.userLinesFlat;
   if (L.size() % 6 == 0) {
     for (size_t i = 0; i + 5 < L.size(); i += 6) {
-      const float x0 = L[i];
-      const float y0 = L[i + 1];
-      const float x1 = L[i + 3];
-      const float y1 = L[i + 4];
+      // Endpoint-wise projection keeps the line test EXACT in screen space (each endpoint carries
+      // its own Z, so a sloped line is tested where it actually appears).
+      float x0, y0, x1, y1;
+      SP(L[i], L[i + 1], L[i + 2], &x0, &y0);
+      SP(L[i + 3], L[i + 4], L[i + 5], &x1, &y1);
       bool hit = false;
       if (windowMode)
         hit = PointInsideClosedRect(x0, y0, mnX, mxX, mnY, mxY) &&
@@ -2680,21 +2765,27 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
       }
     }
   }
-  const auto& C = st.userCirclesCxCyR;
-  if (C.size() % 3 == 0) {
-    for (size_t ci = 0; ci + 2 < C.size(); ci += 3) {
+  const auto& C = st.userCirclesCxCyZR;
+  if (C.size() % 4 == 0) {
+    for (size_t ci = 0; ci + 3 < C.size(); ci += 4) {
       const float cx = C[ci];
       const float cy = C[ci + 1];
-      const float r = C[ci + 2];
+      const float r = C[ci + 3];
       bool hit = false;
-      if (windowMode)
+      if (proj) {
+        // A circle projects to an ellipse; test its bounding box (conservative, see the note above).
+        float b0x, b0y, b1x, b1y;
+        SPBox(cx - r, cy - r, cx + r, cy + r, &b0x, &b0y, &b1x, &b1y);
+        hit = windowMode ? (b0x >= mnX && b1x <= mxX && b0y >= mnY && b1y <= mxY)
+                         : !(b1x < mnX || b0x > mxX || b1y < mnY || b0y > mxY);
+      } else if (windowMode)
         hit = CircleFullyInsideRect(cx, cy, r, mnX, mxX, mnY, mxY);
       else
         hit = CircleIntersectsAABB(cx, cy, r, mnX, mxX, mnY, mxY);
       if (hit) {
         SelectedEntity e{};
         e.type = SelectedEntity::Type::Circle;
-        e.index = static_cast<int>(ci / 3);
+        e.index = static_cast<int>(ci / 4);
         hits.push_back(e);
       }
     }
@@ -2706,6 +2797,7 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
     float amxX = 0.f;
     float amxY = 0.f;
     CadAnnotationRoughBounds(st.cadAnnotations[ai], st.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
+    SPBox(amnX, amnY, amxX, amxY, &amnX, &amnY, &amxX, &amxY);  // screen space when orbited
     bool hit = false;
     if (windowMode)
       hit = amnX >= mnX && amxX <= mxX && amnY >= mnY && amxY <= mxY;
@@ -2727,6 +2819,7 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
     ArcRoughBounds(st.userArcs[ai], &amnX, &amxX, &amnY, &amxY, &any);
     if (!any)
       continue;
+    SPBox(amnX, amnY, amxX, amxY, &amnX, &amnY, &amxX, &amxY);  // screen space when orbited
     bool hit = false;
     if (windowMode)
       hit = amnX >= mnX && amxX <= mxX && amnY >= mnY && amxY <= mxY;
@@ -2748,6 +2841,7 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
     EllipseRoughBounds(st.userEllipses[ei], &emnX, &emxX, &emnY, &emxY, &any);
     if (!any)
       continue;
+    SPBox(emnX, emnY, emxX, emxY, &emnX, &emnY, &emxX, &emxY);  // screen space when orbited
     bool hit = false;
     if (windowMode)
       hit = emnX >= mnX && emxX <= mxX && emnY >= mnY && emxY <= mxY;
@@ -2763,7 +2857,7 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
   const int nPoly =
       static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < nPoly; ++pi) {
-    if (PolylineHitsRect(st, pi, mnX, mxX, mnY, mxY, windowMode)) {
+    if (PolylineHitsRect(st, pi, mnX, mxX, mnY, mxY, windowMode, proj ? &projFn : nullptr)) {
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Polyline;
       e.index = pi;
@@ -2776,6 +2870,7 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
     float fmnX = 0.f, fmxX = 0.f, fmnY = 0.f, fmxY = 0.f;
     if (!hatchgeom::OuterBounds(st.cadFilledRegions[fi], &fmnX, &fmnY, &fmxX, &fmxY))
       continue;
+    SPBox(fmnX, fmnY, fmxX, fmxY, &fmnX, &fmnY, &fmxX, &fmxY);  // screen space when orbited
     const bool hit = windowMode ? (fmnX >= mnX && fmxX <= mxX && fmnY >= mnY && fmxY <= mxY)
                                 : !(fmxX < mnX || fmnX > mxX || fmxY < mnY || fmnY > mxY);
     if (hit) {
@@ -2788,7 +2883,11 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
   if (includeSurveyPoints) {
     for (size_t si = 0; si < st.surveyPoints.size(); ++si) {
       const SurveyPoint& sp = st.surveyPoints[si];
-      const bool hitPoint = PointInsideClosedRect(sp.easting, sp.northing, mnX, mxX, mnY, mxY);
+      // The point's elevation IS its Z (REQ-057), so an orbited box-select tests it where it is
+      // actually drawn rather than at its plan position.
+      float spx, spy;
+      SP(sp.easting, sp.northing, sp.elevation, &spx, &spy);
+      const bool hitPoint = PointInsideClosedRect(spx, spy, mnX, mxX, mnY, mxY);
       bool hitLabel = false;
       const int lix = sp.labelMtextAnnIndex;
       if (lix >= 0 && static_cast<size_t>(lix) < st.cadAnnotations.size()) {
@@ -2799,6 +2898,7 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
           float amxX = 0.f;
           float amxY = 0.f;
           CadAnnotationRoughBounds(lab, st.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
+          SPBox(amnX, amnY, amxX, amxY, &amnX, &amnY, &amxX, &amxY);  // screen space when orbited
           if (windowMode)
             hitLabel = amnX >= mnX && amxX <= mxX && amnY >= mnY && amxY <= mxY;
           else
@@ -3014,11 +3114,12 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         newLineAttrs.push_back(a);
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
-      size_t k = static_cast<size_t>(e.index) * 3;
-      if (k + 2 < st.userCirclesCxCyR.size()) {
-        newCircles.push_back(st.userCirclesCxCyR[k] + dx);
-        newCircles.push_back(st.userCirclesCxCyR[k + 1] + dy);
-        newCircles.push_back(st.userCirclesCxCyR[k + 2]);
+      size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 < st.userCirclesCxCyZR.size()) {
+        newCircles.push_back(st.userCirclesCxCyZR[k] + dx);
+        newCircles.push_back(st.userCirclesCxCyZR[k + 1] + dy);
+        newCircles.push_back(st.userCirclesCxCyZR[k + 2]);  // z
+        newCircles.push_back(st.userCirclesCxCyZR[k + 3]);  // r
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
           a = st.userCircleAttrs[static_cast<size_t>(e.index)];
@@ -3101,7 +3202,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
     }
   }
   st.userLinesFlat.insert(st.userLinesFlat.end(), newLines.begin(), newLines.end());
-  st.userCirclesCxCyR.insert(st.userCirclesCxCyR.end(), newCircles.begin(), newCircles.end());
+  st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
   st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
   st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
   st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
@@ -3135,11 +3236,13 @@ static void CommitPasteIntoModel(AppCommandState& st, float dx, float dy) {
     st.userLineAttrs.push_back(cb.lineAttrs[i / 6]);
     st.selection.push_back({ST::LineSeg, static_cast<int>(st.userLineAttrs.size()) - 1});
   }
-  for (size_t i = 0; i + 2 < cb.circles.size() + 1; i += 3) {
-    st.userCirclesCxCyR.push_back(cb.circles[i + 0] + dx);
-    st.userCirclesCxCyR.push_back(cb.circles[i + 1] + dy);
-    st.userCirclesCxCyR.push_back(cb.circles[i + 2]);
-    st.userCircleAttrs.push_back(cb.circleAttrs[i / 3]);
+  // Clipboard → model: both are cx,cy,z,r, so Z carries through a paste unchanged (REQ-057).
+  for (size_t i = 0; i + 3 < cb.circlesCxCyZR.size() + 1; i += 4) {
+    st.userCirclesCxCyZR.push_back(cb.circlesCxCyZR[i + 0] + dx);
+    st.userCirclesCxCyZR.push_back(cb.circlesCxCyZR[i + 1] + dy);
+    st.userCirclesCxCyZR.push_back(cb.circlesCxCyZR[i + 2]);
+    st.userCirclesCxCyZR.push_back(cb.circlesCxCyZR[i + 3]);
+    st.userCircleAttrs.push_back(cb.circleAttrs[i / 4]);
     st.selection.push_back({ST::Circle, static_cast<int>(st.userCircleAttrs.size()) - 1});
   }
   for (size_t i = 0; i < cb.arcs.size(); ++i) {
@@ -3206,9 +3309,11 @@ static void CommitPasteIntoModel(AppCommandState& st, float dx, float dy) {
   }
   for (size_t i = 0; i < cb.filledRegions.size(); ++i) {  // solid fills — now selectable (REQ-042)
     CadFilledRegion fr = cb.filledRegions[i];
-    for (size_t v = 0; v + 1 < fr.verts.size(); v += 2) {
-      fr.verts[v] += dx;
-      fr.verts[v + 1] += dy;
+    // Model-space paste: offset X/Y and carry the clipboard's Z through unchanged (REQ-057) —
+    // paste must not flatten elevation.
+    for (size_t v = 0; v + 2 < fr.vertsXyz.size(); v += 3) {
+      fr.vertsXyz[v] += dx;
+      fr.vertsXyz[v + 1] += dy;
     }
     st.cadFilledRegions.push_back(std::move(fr));
     st.cadFilledRegionAttrs.push_back(cb.filledRegionAttrs[i]);
@@ -3236,11 +3341,14 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
     L.paperLineAttrs.push_back(cb.lineAttrs[i / 6]);
     st.selectedPaperEntities.push_back({PT::Line, static_cast<int>(L.paperLines.size() / 6) - 1});
   }
-  for (size_t i = 0; i + 2 < cb.circles.size() + 1; i += 3) {
-    L.paperCircles.push_back(cb.circles[i + 0] + dx);
-    L.paperCircles.push_back(cb.circles[i + 1] + dy);
-    L.paperCircles.push_back(cb.circles[i + 2]);
-    L.paperCircleAttrs.push_back(cb.circleAttrs[i / 3]);
+  // Clipboard (cx,cy,z,r) → paper (cx,cy,r): Z is DROPPED at the sheet boundary, not carried.
+  // A sheet is 2D (ADR-025 (g)), so an elevated model circle pasted onto paper lands flat —
+  // deliberate and visible, rather than silently keeping an elevation paper cannot represent.
+  for (size_t i = 0; i + 3 < cb.circlesCxCyZR.size() + 1; i += 4) {
+    L.paperCircles.push_back(cb.circlesCxCyZR[i + 0] + dx);
+    L.paperCircles.push_back(cb.circlesCxCyZR[i + 1] + dy);
+    L.paperCircles.push_back(cb.circlesCxCyZR[i + 3]);  // radius — [i+2] is the discarded Z
+    L.paperCircleAttrs.push_back(cb.circleAttrs[i / 4]);
     st.selectedPaperEntities.push_back({PT::Circle, static_cast<int>(L.paperCircles.size() / 3) - 1});
   }
   for (size_t i = 0; i < cb.arcs.size(); ++i) {
@@ -3306,9 +3414,10 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
   }
   for (size_t i = 0; i < cb.filledRegions.size(); ++i) {  // solid fills onto the sheet (not selectable)
     CadFilledRegion fr = cb.filledRegions[i];
-    for (size_t v = 0; v + 1 < fr.verts.size(); v += 2) {
-      fr.verts[v] += dx;
-      fr.verts[v + 1] += dy;
+    for (size_t v = 0; v + 2 < fr.vertsXyz.size(); v += 3) {
+      fr.vertsXyz[v] += dx;
+      fr.vertsXyz[v + 1] += dy;
+      fr.vertsXyz[v + 2] = 0.f;  // landing on a sheet: paper space is 2D (ADR-025 (g))
     }
     L.paperFilledRegions.push_back(std::move(fr));
     L.paperFilledRegionAttrs.push_back(cb.filledRegionAttrs[i]);
@@ -3369,14 +3478,15 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         newLineAttrs.push_back(a);
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
-      size_t k = static_cast<size_t>(e.index) * 3;
-      if (k + 2 < st.userCirclesCxCyR.size()) {
-        float cx = st.userCirclesCxCyR[k];
-        float cy = st.userCirclesCxCyR[k + 1];
-        float r = st.userCirclesCxCyR[k + 2];
+      size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 < st.userCirclesCxCyZR.size()) {
+        float cx = st.userCirclesCxCyZR[k];
+        float cy = st.userCirclesCxCyZR[k + 1];
+        float r = st.userCirclesCxCyZR[k + 3];
         RotateAroundBase(bx, by, rad, &cx, &cy);
         newCircles.push_back(cx);
         newCircles.push_back(cy);
+        newCircles.push_back(st.userCirclesCxCyZR[k + 2]);  // z — rotation is about the Z axis
         newCircles.push_back(r);
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
@@ -3487,7 +3597,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
     }
   }
   st.userLinesFlat.insert(st.userLinesFlat.end(), newLines.begin(), newLines.end());
-  st.userCirclesCxCyR.insert(st.userCirclesCxCyR.end(), newCircles.begin(), newCircles.end());
+  st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
   st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
   st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
   st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
@@ -3540,9 +3650,9 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Circle)
       continue;
-    size_t k = static_cast<size_t>(e.index) * 3;
-    if (k + 2 < st.userCirclesCxCyR.size()) {
-      RotateAroundBase(bx, by, rad, &st.userCirclesCxCyR[k], &st.userCirclesCxCyR[k + 1]);
+    size_t k = static_cast<size_t>(e.index) * 4;
+    if (k + 3 < st.userCirclesCxCyZR.size()) {
+      RotateAroundBase(bx, by, rad, &st.userCirclesCxCyZR[k], &st.userCirclesCxCyZR[k + 1]);
     }
   }
   for (const auto& e : st.selection) {
@@ -3658,10 +3768,10 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy) {
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Circle)
       continue;
-    size_t k = static_cast<size_t>(e.index) * 3;
-    if (k + 2 < st.userCirclesCxCyR.size()) {
-      st.userCirclesCxCyR[k] += dx;
-      st.userCirclesCxCyR[k + 1] += dy;
+    size_t k = static_cast<size_t>(e.index) * 4;
+    if (k + 3 < st.userCirclesCxCyZR.size()) {
+      st.userCirclesCxCyZR[k] += dx;
+      st.userCirclesCxCyZR[k + 1] += dy;
     }
   }
   for (const auto& e : st.selection) {
@@ -3783,10 +3893,10 @@ static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outC
         ++n;
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 3;
-      if (k + 2 < st.userCirclesCxCyR.size()) {
-        accx += static_cast<double>(st.userCirclesCxCyR[k]);
-        accy += static_cast<double>(st.userCirclesCxCyR[k + 1]);
+      const size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 < st.userCirclesCxCyZR.size()) {
+        accx += static_cast<double>(st.userCirclesCxCyZR[k]);
+        accy += static_cast<double>(st.userCirclesCxCyZR[k + 1]);
         ++n;
       }
     } else if (e.type == SelectedEntity::Type::Arc) {
@@ -3873,11 +3983,11 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
         }
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 3;
-      if (k + 2 < st.userCirclesCxCyR.size()) {
-        const float cx = st.userCirclesCxCyR[k];
-        const float cy = st.userCirclesCxCyR[k + 1];
-        const float r = st.userCirclesCxCyR[k + 2];
+      const size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 < st.userCirclesCxCyZR.size()) {
+        const float cx = st.userCirclesCxCyZR[k];
+        const float cy = st.userCirclesCxCyZR[k + 1];
+        const float r = st.userCirclesCxCyZR[k + 3];
         m = std::max(m, std::hypot(cx - bx, cy - by) + r);
       }
     } else if (e.type == SelectedEntity::Type::Arc) {
@@ -4009,10 +4119,10 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc) {
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::Circle)
       continue;
-    size_t k = static_cast<size_t>(e.index) * 3;
-    if (k + 2 < st.userCirclesCxCyR.size()) {
-      ScalePtAroundBase(bx, by, sc, &st.userCirclesCxCyR[k], &st.userCirclesCxCyR[k + 1]);
-      st.userCirclesCxCyR[k + 2] *= sc;
+    size_t k = static_cast<size_t>(e.index) * 4;
+    if (k + 3 < st.userCirclesCxCyZR.size()) {
+      ScalePtAroundBase(bx, by, sc, &st.userCirclesCxCyZR[k], &st.userCirclesCxCyZR[k + 1]);
+      st.userCirclesCxCyZR[k + 3] *= sc;
     }
   }
   for (const auto& e : st.selection) {
@@ -4733,8 +4843,10 @@ static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std
   PushUndoSnapshot(st, "Offset line");
   const float x0 = st.userLinesFlat[k];
   const float y0 = st.userLinesFlat[k + 1];
+  const float z0 = st.userLinesFlat[k + 2];  // read before push_back may reallocate
   const float x1 = st.userLinesFlat[k + 3];
   const float y1 = st.userLinesFlat[k + 4];
+  const float z1 = st.userLinesFlat[k + 5];
   const float dx = x1 - x0;
   const float dy = y1 - y0;
   if (std::hypot(dx, dy) < 1e-8f) {
@@ -4747,12 +4859,14 @@ static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std
   const float oy0 = y0 + ny * signedD;
   const float ox1 = x1 + nx * signedD;
   const float oy1 = y1 + ny * signedD;
+  // The offset copy stays on the source line's plane — offsetting an elevated line must not
+  // flatten it (REQ-057). The offset itself is horizontal, so each end keeps its own Z.
   st.userLinesFlat.push_back(ox0);
   st.userLinesFlat.push_back(oy0);
-  st.userLinesFlat.push_back(0.f);
+  st.userLinesFlat.push_back(z0);
   st.userLinesFlat.push_back(ox1);
   st.userLinesFlat.push_back(oy1);
-  st.userLinesFlat.push_back(0.f);
+  st.userLinesFlat.push_back(z1);
   if (static_cast<size_t>(lineIx) < st.userLineAttrs.size())
     st.userLineAttrs.push_back(st.userLineAttrs[static_cast<size_t>(lineIx)]);
   else
@@ -4762,21 +4876,23 @@ static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std
 }
 
 static bool CommitOffsetCircle(AppCommandState& st, int ci, float signedD, std::vector<std::string>& log) {
-  const size_t k = static_cast<size_t>(ci) * 3;
-  if (k + 2 >= st.userCirclesCxCyR.size())
+  const size_t k = static_cast<size_t>(ci) * 4;
+  if (k + 3 >= st.userCirclesCxCyZR.size())
     return false;
   PushUndoSnapshot(st, "Offset circle");
-  const float cx = st.userCirclesCxCyR[k];
-  const float cy = st.userCirclesCxCyR[k + 1];
-  const float r = st.userCirclesCxCyR[k + 2];
+  const float cx = st.userCirclesCxCyZR[k];
+  const float cy = st.userCirclesCxCyZR[k + 1];
+  const float cz = st.userCirclesCxCyZR[k + 2];  // read before any push_back reallocates
+  const float r = st.userCirclesCxCyZR[k + 3];
   const float nr = r + signedD;
   if (nr <= 1e-6f) {
     log.push_back("OFFSET — resulting circle radius too small.");
     return false;
   }
-  st.userCirclesCxCyR.push_back(cx);
-  st.userCirclesCxCyR.push_back(cy);
-  st.userCirclesCxCyR.push_back(nr);
+  st.userCirclesCxCyZR.push_back(cx);
+  st.userCirclesCxCyZR.push_back(cy);
+  st.userCirclesCxCyZR.push_back(cz);  // the offset copy stays on the source circle's plane
+  st.userCirclesCxCyZR.push_back(nr);
   if (static_cast<size_t>(ci) < st.userCircleAttrs.size())
     st.userCircleAttrs.push_back(st.userCircleAttrs[static_cast<size_t>(ci)]);
   else
@@ -4923,10 +5039,20 @@ static bool CommitOffsetPolyline(AppCommandState& st, int pi, float signedD, std
   if (st.userPolylineOffsets.empty())
     st.userPolylineOffsets.push_back(0);
   const int baseVert = st.userPolylineOffsets.back();
-  for (const auto& p : out) {
-    st.userPolylineVerts.push_back(p.first);
-    st.userPolylineVerts.push_back(p.second);
-    st.userPolylineVerts.push_back(0.f);
+  // Carry the source's elevations rather than flattening (REQ-057). The offset is rebuilt from
+  // edge intersections, so its vertex count only usually matches the source; when it does, Z maps
+  // 1:1, and when it does not the first vertex's Z is used for the whole run — never 0, which
+  // would silently drop a sloped polyline onto the datum.
+  std::vector<float> srcZ;  // captured before appending, so the reads never alias the writes
+  srcZ.reserve(static_cast<size_t>(nv));
+  for (int i = v0; i < v1; ++i)
+    srcZ.push_back(st.userPolylineVerts[static_cast<size_t>(i) * 3 + 2]);
+  const bool zMaps1to1 = out.size() == srcZ.size();
+  const float fallbackZ = srcZ.empty() ? 0.f : srcZ.front();
+  for (size_t oi = 0; oi < out.size(); ++oi) {
+    st.userPolylineVerts.push_back(out[oi].first);
+    st.userPolylineVerts.push_back(out[oi].second);
+    st.userPolylineVerts.push_back(zMaps1to1 ? srcZ[oi] : fallbackZ);
   }
   st.userPolylineOffsets.push_back(baseVert + static_cast<int>(out.size()));
   st.userPolylineClosed.push_back(closed ? 1u : 0u);
@@ -4992,12 +5118,12 @@ static void HandleOffsetThroughPick(AppCommandState& st, float px, float py, std
     break;
   }
   case SelectedEntity::Type::Circle: {
-    const size_t k = static_cast<size_t>(e.index) * 3;
-    if (k + 2 >= st.userCirclesCxCyR.size())
+    const size_t k = static_cast<size_t>(e.index) * 4;
+    if (k + 3 >= st.userCirclesCxCyZR.size())
       return;
-    const float cx = st.userCirclesCxCyR[k];
-    const float cy = st.userCirclesCxCyR[k + 1];
-    const float r = st.userCirclesCxCyR[k + 2];
+    const float cx = st.userCirclesCxCyZR[k];
+    const float cy = st.userCirclesCxCyZR[k + 1];
+    const float r = st.userCirclesCxCyZR[k + 3];
     signedD = SignedSideCircle(cx, cy, r, px, py);
     break;
   }
@@ -5042,12 +5168,12 @@ static void HandleOffsetSidePick(AppCommandState& st, float px, float py, std::v
     break;
   }
   case SelectedEntity::Type::Circle: {
-    const size_t k = static_cast<size_t>(e.index) * 3;
-    if (k + 2 >= st.userCirclesCxCyR.size())
+    const size_t k = static_cast<size_t>(e.index) * 4;
+    if (k + 3 >= st.userCirclesCxCyZR.size())
       return;
-    const float cx = st.userCirclesCxCyR[k];
-    const float cy = st.userCirclesCxCyR[k + 1];
-    const float r = st.userCirclesCxCyR[k + 2];
+    const float cx = st.userCirclesCxCyZR[k];
+    const float cy = st.userCirclesCxCyZR[k + 1];
+    const float r = st.userCirclesCxCyZR[k + 3];
     const float side = SignedSideCircle(cx, cy, r, px, py);
     sgn = side >= 0.f ? 1.f : -1.f;
     break;
@@ -5205,12 +5331,19 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   using RP = AppCommandState::RotatePhase;
   using SP = AppCommandState::ScalePhase;
 
+  // Box-selection projects to screen space only when the view is actually orbited; in plan view a
+  // null camera keeps the historical world-rect test byte-for-byte (REQ-058).
+  const Camera boxSelCamValue = CadViewCamera(st);
+  const Camera* const boxSelCam = CadViewIsPlan(st) ? nullptr : &boxSelCamValue;
+  const Camera* const boxSelCam2 = boxSelCam;
+  const Camera* const boxSelCam3 = boxSelCam;
   auto finishBox = [&]() {
     const bool inclSurvey = (st.active == AppCommandState::Kind::None || st.active == K::Move ||
                              st.active == K::Copy || st.active == K::Rotate || st.active == K::Scale ||
                              st.active == K::Align);
     ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, wx, wy, windowSelectionSubtract,
-                             fenceLeftToRightWindowMode, inclSurvey);
+                             fenceLeftToRightWindowMode, inclSurvey, boxSelCam, st.uiViewportWidthPx,
+                             st.uiViewportHeightPx);
     st.selBoxWaitingSecond = false;
     log.push_back("Fence — CAD " + std::to_string(st.selection.size()) + ", survey " +
                   std::to_string(st.selectedSurveyPointIndices.size()) +
@@ -5230,6 +5363,22 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     const bool nextPt = st.polylinePhase == PP::NeedNextPoint;
     if (!ApplySegmentAnglePickToViewportPick(st, wx, wy, nextPt, log))
       SubmitPolylineVertex(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::Rect) {
+    using RectP = AppCommandState::RectPhase;
+    if (st.rectPhase == RectP::WaitFirstCorner) {
+      st.rectX1 = wx;
+      st.rectY1 = wy;
+      st.rectPhase = RectP::WaitSecondCorner;
+      // The anchor is the base for relative (@dx,dy) entry, exactly as it is for LINE.
+      st.anchorX = wx;
+      st.anchorY = wy;
+      log.push_back("RECT — pick the opposite corner (or type X,Y / @dx,dy):");
+    } else {
+      CommitRectangle(st, st.rectX1, st.rectY1, wx, wy, log);
+    }
     return;
   }
 
@@ -5476,7 +5625,8 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   if (st.active == K::Join) {
     if (st.selBoxWaitingSecond) {
       ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, wx, wy, windowSelectionSubtract,
-                               fenceLeftToRightWindowMode, false);
+                               fenceLeftToRightWindowMode, false, boxSelCam2, st.uiViewportWidthPx,
+                               st.uiViewportHeightPx);
       st.selBoxWaitingSecond = false;
       if (st.selection.empty())
         log.push_back("Nothing selected — pick two corners again.");
@@ -5492,7 +5642,8 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   if (st.active == K::Delete) {
     if (st.selBoxWaitingSecond) {
       ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, wx, wy, windowSelectionSubtract,
-                               fenceLeftToRightWindowMode, false);
+                               fenceLeftToRightWindowMode, false, boxSelCam3, st.uiViewportWidthPx,
+                               st.uiViewportHeightPx);
       st.selBoxWaitingSecond = false;
       if (st.selection.empty())
         log.push_back("Nothing selected — pick two corners again.");
@@ -5712,11 +5863,13 @@ static void CopyEnclosedFilledRegions(CadClipboard& cb, const std::vector<CadFil
     if (skipIdx && skipIdx->count(static_cast<int>(i)))
       continue;  // already copied as a directly-selected fill (REQ-042)
     const CadFilledRegion& fr = regions[i];
-    if (fr.verts.size() < 6)
+    if (fr.vertsXyz.size() < 9)  // < 3 vertices × 3 floats
       continue;
     bool inside = true;
-    for (size_t v = 0; v + 1 < fr.verts.size(); v += 2)
-      if (fr.verts[v] < mnX || fr.verts[v] > mxX || fr.verts[v + 1] < mnY || fr.verts[v + 1] > mxY) {
+    // Enclosure is tested in plan (X/Y) only — the selection box is a 2D window (REQ-038 addendum).
+    for (size_t v = 0; v + 2 < fr.vertsXyz.size(); v += 3)
+      if (fr.vertsXyz[v] < mnX || fr.vertsXyz[v] > mxX || fr.vertsXyz[v + 1] < mnY ||
+          fr.vertsXyz[v + 1] > mxY) {
         inside = false;
         break;
       }
@@ -5762,9 +5915,11 @@ static void CopyPaperSelectionToClipboard(AppCommandState& st, PaperLayout& L, s
       const size_t k = static_cast<size_t>(r.index) * 3;
       if (k + 2 >= L.paperCircles.size())
         break;
-      cb.circles.push_back(L.paperCircles[k]);
-      cb.circles.push_back(L.paperCircles[k + 1]);
-      cb.circles.push_back(L.paperCircles[k + 2]);
+      // Paper (cx,cy,r) → clipboard (cx,cy,z,r): a sheet has no elevation, so Z enters as 0.
+      cb.circlesCxCyZR.push_back(L.paperCircles[k]);
+      cb.circlesCxCyZR.push_back(L.paperCircles[k + 1]);
+      cb.circlesCxCyZR.push_back(0.f);
+      cb.circlesCxCyZR.push_back(L.paperCircles[k + 2]);  // radius
       cb.circleAttrs.push_back(attrAt(L.paperCircleAttrs, r.index));
       expandBbox(L.paperCircles[k], L.paperCircles[k + 1]);
       break;
@@ -5862,15 +6017,16 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       expandBbox(st.userLinesFlat[k], st.userLinesFlat[k + 1]);
       expandBbox(st.userLinesFlat[k + 3], st.userLinesFlat[k + 4]);
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 3;
-      if (k + 2 >= st.userCirclesCxCyR.size())
+      const size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 >= st.userCirclesCxCyZR.size())
         continue;
-      cb.circles.push_back(st.userCirclesCxCyR[k]);
-      cb.circles.push_back(st.userCirclesCxCyR[k + 1]);
-      cb.circles.push_back(st.userCirclesCxCyR[k + 2]);
+      cb.circlesCxCyZR.push_back(st.userCirclesCxCyZR[k]);
+      cb.circlesCxCyZR.push_back(st.userCirclesCxCyZR[k + 1]);
+      cb.circlesCxCyZR.push_back(st.userCirclesCxCyZR[k + 2]);  // z survives a model copy
+      cb.circlesCxCyZR.push_back(st.userCirclesCxCyZR[k + 3]);
       cb.circleAttrs.push_back(static_cast<size_t>(e.index) < st.userCircleAttrs.size()
                                    ? st.userCircleAttrs[static_cast<size_t>(e.index)] : EntityAttributes{});
-      expandBbox(st.userCirclesCxCyR[k], st.userCirclesCxCyR[k + 1]);
+      expandBbox(st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1]);
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= st.userArcs.size())
@@ -5927,8 +6083,8 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       cb.filledRegions.push_back(fr);
       cb.filledRegionAttrs.push_back(k < st.cadFilledRegionAttrs.size() ? st.cadFilledRegionAttrs[k]
                                                                         : EntityAttributes{});
-      for (size_t v = 0; v + 1 < fr.verts.size(); v += 2)
-        expandBbox(fr.verts[v], fr.verts[v + 1]);
+      for (size_t v = 0; v + 2 < fr.vertsXyz.size(); v += 3)
+        expandBbox(fr.vertsXyz[v], fr.vertsXyz[v + 1]);
     }
   }
   // Directly-selected fills are copied above; CopyEnclosedFilledRegions adds any *other* fills inside the
@@ -6241,12 +6397,12 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
       consider(static_cast<double>(L[i + 3]), static_cast<double>(L[i + 4]));
     }
   }
-  const auto& C = st.userCirclesCxCyR;
-  if (C.size() % 3 == 0) {
-    for (size_t ci = 0; ci + 2 < C.size(); ci += 3) {
+  const auto& C = st.userCirclesCxCyZR;
+  if (C.size() % 4 == 0) {
+    for (size_t ci = 0; ci + 3 < C.size(); ci += 4) {
       const double cx = static_cast<double>(C[ci]);
       const double cy = static_cast<double>(C[ci + 1]);
-      const double r = std::fabs(static_cast<double>(C[ci + 2]));
+      const double r = std::fabs(static_cast<double>(C[ci + 3]));
       if (r <= 1e-12)
         continue;
       consider(cx - r, cy - r);
@@ -6320,8 +6476,8 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   }
 
   for (const CadFilledRegion& fr : st.cadFilledRegions)
-    for (size_t i = 0; i + 1 < fr.verts.size(); i += 2)
-      consider(static_cast<double>(fr.verts[i]), static_cast<double>(fr.verts[i + 1]));
+    for (size_t i = 0; i + 2 < fr.vertsXyz.size(); i += 3)
+      consider(static_cast<double>(fr.vertsXyz[i]), static_cast<double>(fr.vertsXyz[i + 1]));
 
   if (!any)
     return false;
@@ -6367,12 +6523,12 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
       out.push_back(b);
     }
   }
-  const auto& C = st.userCirclesCxCyR;
-  if (C.size() % 3 == 0) {
-    for (size_t ci = 0; ci + 2 < C.size(); ci += 3) {
+  const auto& C = st.userCirclesCxCyZR;
+  if (C.size() % 4 == 0) {
+    for (size_t ci = 0; ci + 3 < C.size(); ci += 4) {
       const double cx = static_cast<double>(C[ci]);
       const double cy = static_cast<double>(C[ci + 1]);
-      const double r = std::fabs(static_cast<double>(C[ci + 2]));
+      const double r = std::fabs(static_cast<double>(C[ci + 3]));
       if (r <= 1e-12)
         continue;
       EntityBox b{};
@@ -6474,7 +6630,7 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
   if (outSkipped)
     *outSkipped = 0;
   std::vector<EntityBox> ents;
-  ents.reserve(st.userLinesFlat.size() / 6 + st.userCirclesCxCyR.size() / 3 + st.userArcs.size() +
+  ents.reserve(st.userLinesFlat.size() / 6 + st.userCirclesCxCyZR.size() / 4 + st.userArcs.size() +
                st.userEllipses.size() + st.cadAnnotations.size() + st.surveyPoints.size() +
                (st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1));
   CollectEntityBoxes(st, ents);
@@ -6774,19 +6930,16 @@ bool TryParseSegmentAngleLockCommand(AppCommandState& st, const std::string& lin
   return true;
 }
 
-bool OrthoUnitTowardPoint(float anchorX, float anchorY, float targetX, float targetY, float* ux, float* uy) {
-  const float dx = targetX - anchorX;
-  const float dy = targetY - anchorY;
-  if (std::fabs(dx) < 1.e-12f && std::fabs(dy) < 1.e-12f)
-    return false;
-  if (std::fabs(dx) >= std::fabs(dy)) {
-    *ux = dx >= 0.f ? 1.f : -1.f;
-    *uy = 0.f;
-  } else {
-    *ux = 0.f;
-    *uy = dy >= 0.f ? 1.f : -1.f;
-  }
-  return true;
+// Direct-distance entry (REQ-047): the ORTHO axis unit vector from the draft anchor toward the crosshair.
+// `uiCursorWorld*` is published in WORLD coordinates while `anchor*` is LOCAL storage, so the crosshair is
+// converted to local first — passing the two frames straight to OrthoUnitTowardPoint added the document
+// origin to dx alone and pinned every typed distance to +X (see OrthoConstrain.hpp).
+bool OrthoUnitTowardUiCursorFromAnchor(const AppCommandState& st, float* ux, float* uy) {
+  float cursorLocalX = 0.f;
+  float cursorLocalY = 0.f;
+  CadCoord::LocalFromWorld(st, static_cast<double>(st.uiCursorWorldX), static_cast<double>(st.uiCursorWorldY),
+                           &cursorLocalX, &cursorLocalY);
+  return OrthoUnitTowardPoint(st.anchorX, st.anchorY, cursorLocalX, cursorLocalY, ux, uy);
 }
 
 bool ParseSingleFloatToken(const std::string& raw, float* out) {
@@ -6852,6 +7005,75 @@ void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.active = AppCommandState::Kind::Ellipse;
   st.ellPhase = AppCommandState::EllipsePhase::WaitCenter;
   log.push_back("ELLIPSE — center, major axis endpoint, then minor/major ratio (0-1] on command line (Enter=0.5).");
+}
+
+void StartRectCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selectedSurveyPointIndices.clear();
+  st.selBoxWaitingSecond = false;
+  st.active = AppCommandState::Kind::Rect;
+  st.lastCommand = AppCommandState::Kind::Rect;
+  st.rectPhase = AppCommandState::RectPhase::WaitFirstCorner;
+  log.push_back("RECT — pick the first corner (or type X,Y):");
+}
+
+// REQ-053: a rectangle is a 4-vertex CLOSED polyline, matching AutoCAD's RECTANG (which produces an
+// LWPOLYLINE). Storing it that way means DXF/DWG write, grips, snaps — including the geometric center —
+// and the offset/trim/join paths all work on it with no new entity type.
+void CommitRectangle(AppCommandState& st, float x1, float y1, float x2, float y2,
+                     std::vector<std::string>& log) {
+  const float mnX = std::min(x1, x2);
+  const float mxX = std::max(x1, x2);
+  const float mnY = std::min(y1, y2);
+  const float mxY = std::max(y1, y2);
+  if (mxX - mnX < 1.e-9f || mxY - mnY < 1.e-9f) {
+    log.push_back("RECT — corners give a zero-width or zero-height rectangle; pick again.");
+    st.rectPhase = AppCommandState::RectPhase::WaitFirstCorner;
+    return;
+  }
+
+  const float xs[4] = {mnX, mxX, mxX, mnX};
+  const float ys[4] = {mnY, mnY, mxY, mxY};
+
+  PushUndoSnapshot(st, "Rectangle");
+  if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
+    // Paper-space RECT (REQ-037): the corners are paper inches; commit to the layout's paper store.
+    const int baseVert = L->paperPolyOffsets.empty() ? 0 : L->paperPolyOffsets.back();
+    for (int i = 0; i < 4; ++i) {
+      L->paperPolyVerts.push_back(xs[i]);
+      L->paperPolyVerts.push_back(ys[i]);
+      L->paperPolyVerts.push_back(0.f);
+    }
+    if (L->paperPolyOffsets.empty())
+      L->paperPolyOffsets.push_back(baseVert);
+    L->paperPolyOffsets.push_back(baseVert + 4);
+    L->paperPolyClosed.push_back(1u);
+    L->paperPolyAttrs.push_back(MakeNewEntityAttrs(st));
+  } else {
+    if (st.userPolylineOffsets.empty())
+      st.userPolylineOffsets.push_back(0);
+    const int baseVert = st.userPolylineOffsets.back();
+    for (int i = 0; i < 4; ++i) {
+      st.userPolylineVerts.push_back(xs[i]);
+      st.userPolylineVerts.push_back(ys[i]);
+      // Z = 0 — see SubmitLineVertex: new geometry sits on the work plane (REQ-058 pending).
+      st.userPolylineVerts.push_back(0.f);
+    }
+    st.userPolylineOffsets.push_back(baseVert + 4);
+    st.userPolylineClosed.push_back(1u);
+    st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
+  }
+
+  char msg[128];
+  std::snprintf(msg, sizeof(msg), "RECT — %.6g x %.6g rectangle created.",
+                static_cast<double>(mxX - mnX), static_cast<double>(mxY - mnY));
+  log.push_back(msg);
+
+  st.active = AppCommandState::Kind::None;
+  ResetRectDraft(st);
+  EnsureAttrCounts(st);
+  BumpCadGpuCache(st);
 }
 
 void StartTextCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -7091,7 +7313,7 @@ void EnsureAttrCounts(AppCommandState& st) {
     st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
-  const size_t nc = st.userCirclesCxCyR.size() / 3;
+  const size_t nc = st.userCirclesCxCyZR.size() / 4;
   while (st.userCircleAttrs.size() < nc) {
     st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
@@ -7334,6 +7556,130 @@ bool CadDeleteDrawingLayer(AppCommandState& st, const std::string& nameRaw, std:
   return true;
 }
 
+void ApplyEntityGripPoint(AppCommandState& st, float x, float y) {
+  if (!st.entityGripMoveActive)
+    return;
+  const int idx = st.entityGripEntityIndex;
+  if (idx < 0)
+    return;
+  switch (st.entityGripType) {
+  case SelectedEntity::Type::LineSeg: {
+    if (static_cast<size_t>(idx) * 6 + 5 >= st.userLinesFlat.size())
+      return;
+    const size_t k = static_cast<size_t>(idx) * 6;
+    if (st.entityGripWhich == 0) {
+      st.userLinesFlat[k] = x;
+      st.userLinesFlat[k + 1] = y;
+    } else if (st.entityGripWhich == 1) {
+      st.userLinesFlat[k + 3] = x;
+      st.userLinesFlat[k + 4] = y;
+    }
+    return;
+  }
+  case SelectedEntity::Type::Circle: {
+    if (static_cast<size_t>(idx) * 4 + 3 >= st.userCirclesCxCyZR.size())
+      return;
+    const size_t k = static_cast<size_t>(idx) * 4;
+    float& cx = st.userCirclesCxCyZR[k];
+    float& cy = st.userCirclesCxCyZR[k + 1];
+    float& r = st.userCirclesCxCyZR[k + 3];
+    if (st.entityGripWhich == 0) {
+      cx = x;
+      cy = y;
+    } else if (st.entityGripWhich == 1) {
+      r = std::hypot(x - cx, y - cy);
+    }
+    return;
+  }
+  case SelectedEntity::Type::Polyline: {
+    const int np = st.userPolylineOffsets.size() > 0 ? static_cast<int>(st.userPolylineOffsets.size() - 1) : 0;
+    if (idx >= np)
+      return;
+    const int startV = st.userPolylineOffsets[static_cast<size_t>(idx)];
+    const int globalV = startV + st.entityGripWhich;
+    const size_t xIdx = static_cast<size_t>(globalV) * 3;
+    if (xIdx + 1 >= st.userPolylineVerts.size())
+      return;
+    st.userPolylineVerts[xIdx] = x;
+    st.userPolylineVerts[xIdx + 1] = y;
+    return;
+  }
+  case SelectedEntity::Type::Arc: {
+    if (static_cast<size_t>(idx) >= st.userArcs.size())
+      return;
+    CadArc& a = st.userArcs[static_cast<size_t>(idx)];
+    if (st.entityGripWhich == 0) {
+      a.cx = x;
+      a.cy = y;
+    } else if (st.entityGripWhich == 1) {
+      a.r = std::hypot(x - a.cx, y - a.cy);
+      a.startRad = std::atan2(y - a.cy, x - a.cx);
+    } else if (st.entityGripWhich == 2) {
+      a.r = std::hypot(x - a.cx, y - a.cy);
+      a.sweepRad = std::atan2(y - a.cy, x - a.cx) - a.startRad;
+    }
+    return;
+  }
+  case SelectedEntity::Type::Ellipse: {
+    if (static_cast<size_t>(idx) >= st.userEllipses.size())
+      return;
+    CadEllipse& el = st.userEllipses[static_cast<size_t>(idx)];
+    if (st.entityGripWhich == 0) {
+      el.cx = x;
+      el.cy = y;
+    } else if (st.entityGripWhich == 1) {
+      el.majVx = x - el.cx;
+      el.majVy = y - el.cy;
+    } else if (st.entityGripWhich == 2) {
+      const float majLen2 = el.majVx * el.majVx + el.majVy * el.majVy;
+      if (majLen2 < 1e-12f)
+        return;
+      el.ratio = std::clamp(((x - el.cx) * -el.majVy + (y - el.cy) * el.majVx) / majLen2, 0.f, 1.f);
+    }
+    return;
+  }
+  default:
+    return;
+  }
+}
+
+// "Similar" = same object type AND same layer AND same colour, matching AutoCAD's SELECTSIMILAR with
+// layer and colour in SELECTSIMILARMODE. Type alone swept up every line in the drawing, which is not a
+// useful selection on a survey plan where layer *is* the classification.
+namespace {
+
+/// Layer names are compared case-insensitively and an empty name means layer "0" (the storage default),
+/// so entities that differ only in how their layer was spelled still match.
+bool SelectSimilarAttrsMatch(const EntityAttributes& a, const EntityAttributes& b) {
+  const std::string la = StringUtil::toLowerAsciiCopy(a.layer.empty() ? std::string("0") : a.layer);
+  const std::string lb = StringUtil::toLowerAsciiCopy(b.layer.empty() ? std::string("0") : b.layer);
+  if (la != lb)
+    return false;
+  // Colour is a free-form string ("ByLayer", "Red", "#RRGGBB") — compare case-insensitively so
+  // "ByLayer" and "BYLAYER" are the same colour, which is how the rest of the code treats them.
+  const std::string ca = StringUtil::toLowerAsciiCopy(a.color.empty() ? std::string("ByLayer") : a.color);
+  const std::string cb = StringUtil::toLowerAsciiCopy(b.color.empty() ? std::string("ByLayer") : b.color);
+  return ca == cb;
+}
+
+/// Attributes of one entity, or defaults when the parallel attr array is short (older drawings).
+EntityAttributes SelectSimilarAttrsOf(const AppCommandState& st, const SelectedEntity& e) {
+  const auto pick = [](const std::vector<EntityAttributes>& v, int i) {
+    return (i >= 0 && static_cast<size_t>(i) < v.size()) ? v[static_cast<size_t>(i)] : EntityAttributes{};
+  };
+  switch (e.type) {
+  case SelectedEntity::Type::LineSeg:    return pick(st.userLineAttrs, e.index);
+  case SelectedEntity::Type::Circle:     return pick(st.userCircleAttrs, e.index);
+  case SelectedEntity::Type::Polyline:   return pick(st.userPolylineAttrs, e.index);
+  case SelectedEntity::Type::Arc:        return pick(st.userArcAttrs, e.index);
+  case SelectedEntity::Type::Ellipse:    return pick(st.userEllAttrs, e.index);
+  case SelectedEntity::Type::Annotation: return pick(st.cadAnnotationAttrs, e.index);
+  default:                               return EntityAttributes{};
+  }
+}
+
+} // namespace
+
 void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::string>* log) {
   AbortMtextGripInteraction(st);
   ClearDimGripInteraction(st);
@@ -7342,69 +7688,58 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
   if (!st.selection.empty()) {
     st.selectedSurveyPointIndices.clear();
     const SelectedEntity& lead = st.selection.front();
+    const EntityAttributes want = SelectSimilarAttrsOf(st, lead);
     std::vector<SelectedEntity> next;
+
+    // Candidate of the lead's type; keep it only when its layer and colour match the lead's.
+    const auto consider = [&](SelectedEntity::Type type, int index) {
+      SelectedEntity e{};
+      e.type = type;
+      e.index = index;
+      if (SelectSimilarAttrsMatch(SelectSimilarAttrsOf(st, e), want))
+        next.push_back(e);
+    };
+
     switch (lead.type) {
     case SelectedEntity::Type::LineSeg: {
       const size_t n = st.userLinesFlat.size() / 6;
-      for (size_t i = 0; i < n; ++i) {
-        SelectedEntity e{};
-        e.type = SelectedEntity::Type::LineSeg;
-        e.index = static_cast<int>(i);
-        next.push_back(e);
-      }
+      for (size_t i = 0; i < n; ++i)
+        consider(SelectedEntity::Type::LineSeg, static_cast<int>(i));
       break;
     }
     case SelectedEntity::Type::Circle: {
-      const size_t n = st.userCirclesCxCyR.size() / 3;
-      for (size_t i = 0; i < n; ++i) {
-        SelectedEntity e{};
-        e.type = SelectedEntity::Type::Circle;
-        e.index = static_cast<int>(i);
-        next.push_back(e);
-      }
+      const size_t n = st.userCirclesCxCyZR.size() / 4;
+      for (size_t i = 0; i < n; ++i)
+        consider(SelectedEntity::Type::Circle, static_cast<int>(i));
       break;
     }
     case SelectedEntity::Type::Polyline: {
       const int np =
           st.userPolylineOffsets.size() > 1 ? static_cast<int>(st.userPolylineOffsets.size()) - 1 : 0;
-      for (int i = 0; i < np; ++i) {
-        SelectedEntity e{};
-        e.type = SelectedEntity::Type::Polyline;
-        e.index = i;
-        next.push_back(e);
-      }
+      for (int i = 0; i < np; ++i)
+        consider(SelectedEntity::Type::Polyline, i);
       break;
     }
     case SelectedEntity::Type::Arc: {
-      for (size_t i = 0; i < st.userArcs.size(); ++i) {
-        SelectedEntity e{};
-        e.type = SelectedEntity::Type::Arc;
-        e.index = static_cast<int>(i);
-        next.push_back(e);
-      }
+      for (size_t i = 0; i < st.userArcs.size(); ++i)
+        consider(SelectedEntity::Type::Arc, static_cast<int>(i));
       break;
     }
     case SelectedEntity::Type::Ellipse: {
-      for (size_t i = 0; i < st.userEllipses.size(); ++i) {
-        SelectedEntity e{};
-        e.type = SelectedEntity::Type::Ellipse;
-        e.index = static_cast<int>(i);
-        next.push_back(e);
-      }
+      for (size_t i = 0; i < st.userEllipses.size(); ++i)
+        consider(SelectedEntity::Type::Ellipse, static_cast<int>(i));
       break;
     }
     case SelectedEntity::Type::Annotation: {
+      // Annotations narrow further by annotation kind: TEXT is not similar to a dimension even on
+      // one layer in one colour.
       const int lix = lead.index;
       if (lix < 0 || static_cast<size_t>(lix) >= st.cadAnnotations.size())
         break;
-      const CadAnnotation::Kind want = st.cadAnnotations[static_cast<size_t>(lix)].kind;
+      const CadAnnotation::Kind wantKind = st.cadAnnotations[static_cast<size_t>(lix)].kind;
       for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
-        if (st.cadAnnotations[ai].kind == want) {
-          SelectedEntity e{};
-          e.type = SelectedEntity::Type::Annotation;
-          e.index = static_cast<int>(ai);
-          next.push_back(e);
-        }
+        if (st.cadAnnotations[ai].kind == wantKind)
+          consider(SelectedEntity::Type::Annotation, static_cast<int>(ai));
       }
       break;
     }
@@ -7414,8 +7749,12 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
     st.selection = std::move(next);
     EnsureAttrCounts(st);
     BumpCadGpuCache(st);
-    if (log)
-      log->push_back("Select similar — " + std::to_string(st.selection.size()) + " object(s).");
+    if (log) {
+      const std::string layerName = want.layer.empty() ? std::string("0") : want.layer;
+      const std::string colorName = want.color.empty() ? std::string("ByLayer") : want.color;
+      log->push_back("Select similar — " + std::to_string(st.selection.size()) +
+                     " object(s) on layer " + layerName + ", colour " + colorName + ".");
+    }
     return;
   }
 
@@ -7440,7 +7779,7 @@ void ClearCadGeometry(AppCommandState& st) {
   st.worldDocumentOriginY = 0.0;
   st.userLinesFlat.clear();
   st.userLineAttrs.clear();
-  st.userCirclesCxCyR.clear();
+  st.userCirclesCxCyZR.clear();
   st.userCircleAttrs.clear();
   st.userArcs.clear();
   st.userArcAttrs.clear();
@@ -7650,7 +7989,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::set<int> ellIx;
   std::set<int> polyIx;
   const size_t nLines = st.userLinesFlat.size() / 6;
-  const size_t nCirc = st.userCirclesCxCyR.size() / 3;
+  const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
   const size_t nAnn = st.cadAnnotations.size();
   const size_t nArc = st.userArcs.size();
   const size_t nEll = st.userEllipses.size();
@@ -7690,11 +8029,11 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::vector<int> cv(circIx.begin(), circIx.end());
   std::sort(cv.begin(), cv.end(), std::greater<int>());
   for (int idx : cv) {
-    const size_t k = static_cast<size_t>(idx) * 3;
-    if (k + 2 >= st.userCirclesCxCyR.size())
+    const size_t k = static_cast<size_t>(idx) * 4;
+    if (k + 3 >= st.userCirclesCxCyZR.size())
       continue;
-    st.userCirclesCxCyR.erase(st.userCirclesCxCyR.begin() + static_cast<std::ptrdiff_t>(k),
-                              st.userCirclesCxCyR.begin() + static_cast<std::ptrdiff_t>(k + 3));
+    st.userCirclesCxCyZR.erase(st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k),
+                              st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k + 3));
     if (static_cast<size_t>(idx) < st.userCircleAttrs.size())
       st.userCircleAttrs.erase(st.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
@@ -7810,12 +8149,12 @@ static void CollectCutSegments(const AppCommandState& st, const SelectedEntity& 
     return;
   }
   if (cut.type == ST::Circle) {
-    const size_t k = static_cast<size_t>(cut.index) * 3;
-    if (k + 2 >= st.userCirclesCxCyR.size())
+    const size_t k = static_cast<size_t>(cut.index) * 4;
+    if (k + 3 >= st.userCirclesCxCyZR.size())
       return;
-    const float cx = st.userCirclesCxCyR[k];
-    const float cy = st.userCirclesCxCyR[k + 1];
-    const float r = st.userCirclesCxCyR[k + 2];
+    const float cx = st.userCirclesCxCyZR[k];
+    const float cy = st.userCirclesCxCyZR[k + 1];
+    const float r = st.userCirclesCxCyZR[k + 3];
     constexpr int n = 48;
     const double dcx = static_cast<double>(cx);
     const double dcy = static_cast<double>(cy);
@@ -7961,12 +8300,12 @@ static void CollectAllDrawingCutSegmentsExceptTarget(const AppCommandState& st, 
       CollectCutSegments(st, cut, out);
     }
   }
-  const auto& C = st.userCirclesCxCyR;
-  if (C.size() % 3 == 0) {
-    for (size_t ci = 0; ci + 2 < C.size(); ci += 3) {
+  const auto& C = st.userCirclesCxCyZR;
+  if (C.size() % 4 == 0) {
+    for (size_t ci = 0; ci + 3 < C.size(); ci += 4) {
       SelectedEntity cut{};
       cut.type = SelectedEntity::Type::Circle;
-      cut.index = static_cast<int>(ci / 3);
+      cut.index = static_cast<int>(ci / 4);
       CollectCutSegments(st, cut, out);
     }
   }
@@ -8339,10 +8678,34 @@ static double PickDistSqPointSegmentD(double px, double py, double ax, double ay
 }
 
 bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float tolWorld, SelectedEntity* out,
-                          float* outDistSq) {
+                          float* outDistSq, const ray3d::Ray* pickRay) {
   if (!out || !outDistSq)
     return false;
   const double tol2 = static_cast<double>(tolWorld) * static_cast<double>(tolWorld);
+
+  // Distance metric (REQ-058). With no ray this is the historical plan-view XY distance, unchanged
+  // and bit-identical. With a ray — an orbited camera — it is the true 3D distance from the
+  // cursor's ray to the geometry, which is the only way to pick something that is elevated: the
+  // ray crosses the work plane at one XY and the elevated entity at another, so an XY test would
+  // measure against the wrong point entirely.
+  //
+  // Only the METRIC changes here. Entity enumeration, strides and indexing are shared by both
+  // paths, so the orbited path cannot drift out of step with the plan path.
+  const bool useRay = pickRay != nullptr && pickRay->valid();
+  auto d2Point = [&](double px, double py, double pz) -> double {
+    if (!useRay) {
+      const double dx = wx - px, dy = wy - py;
+      return dx * dx + dy * dy;
+    }
+    const double d = ray3d::RayPointDistance(*pickRay, ray3d::Vec3{px, py, pz});
+    return d * d;
+  };
+  auto d2Segment = [&](double ax, double ay, double az, double bx, double by, double bz) -> double {
+    if (!useRay)
+      return PickDistSqPointSegmentD(wx, wy, ax, ay, bx, by);
+    const double d = ray3d::RaySegmentDistance(*pickRay, ray3d::Vec3{ax, ay, az}, ray3d::Vec3{bx, by, bz});
+    return d * d;
+  };
   bool any = false;
   double best = 0.0;
   SelectedEntity bestE{};
@@ -8362,22 +8725,37 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       SelectedEntity e{};
       e.type = SelectedEntity::Type::LineSeg;
       e.index = static_cast<int>(i / 6);
-      const double d2 = PickDistSqPointSegmentD(wx, wy, L[i], L[i + 1], L[i + 3], L[i + 4]);
+      const double d2 = d2Segment(L[i], L[i + 1], L[i + 2], L[i + 3], L[i + 4], L[i + 5]);
       consider(e, d2);
     }
   }
-  const auto& C = st.userCirclesCxCyR;
-  if (C.size() % 3 == 0) {
-    for (size_t ci = 0; ci + 2 < C.size(); ci += 3) {
+  const auto& C = st.userCirclesCxCyZR;
+  if (C.size() % 4 == 0) {
+    for (size_t ci = 0; ci + 3 < C.size(); ci += 4) {
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Circle;
-      e.index = static_cast<int>(ci / 3);
+      e.index = static_cast<int>(ci / 4);
       const double cx = static_cast<double>(C[ci]);
       const double cy = static_cast<double>(C[ci + 1]);
-      const double r = static_cast<double>(C[ci + 2]);
-      const double d = std::hypot(wx - cx, wy - cy);
-      const double dr = d - r;
-      consider(e, dr * dr);
+      const double cz = static_cast<double>(C[ci + 2]);
+      const double r = static_cast<double>(C[ci + 3]);
+      if (!useRay) {
+        // Plan view keeps the exact analytic distance-to-circumference — unchanged.
+        const double d = std::hypot(wx - cx, wy - cy);
+        const double dr = d - r;
+        consider(e, dr * dr);
+      } else {
+        // Orbited: sample the circumference on the circle's own plane, matching how arcs and
+        // ellipses are already picked in this function.
+        double bestD2 = 1e300;
+        constexpr int n = 48;
+        constexpr double twopi = 6.28318530717958647692;
+        for (int i = 0; i < n; ++i) {
+          const double ang = twopi * static_cast<double>(i) / static_cast<double>(n);
+          bestD2 = std::min(bestD2, d2Point(cx + r * std::cos(ang), cy + r * std::sin(ang), cz));
+        }
+        consider(e, bestD2);
+      }
     }
   }
   for (size_t ai = 0; ai < st.userArcs.size(); ++ai) {
@@ -8392,9 +8770,7 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       const double ang = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u;
       const double x = static_cast<double>(a.cx) + static_cast<double>(a.r) * std::cos(ang);
       const double y = static_cast<double>(a.cy) + static_cast<double>(a.r) * std::sin(ang);
-      const double dx = wx - x;
-      const double dy = wy - y;
-      bestD2 = std::min(bestD2, dx * dx + dy * dy);
+      bestD2 = std::min(bestD2, d2Point(x, y, static_cast<double>(a.z)));
     }
     consider(e, bestD2);
   }
@@ -8419,9 +8795,7 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
         const double s = std::sin(ang);
         const double x = static_cast<double>(el.cx) + ux * (ma * c) + px * (mb * s);
         const double y = static_cast<double>(el.cy) + uy * (ma * c) + py * (mb * s);
-        const double dx = wx - x;
-        const double dy = wy - y;
-        bestD2 = std::min(bestD2, dx * dx + dy * dy);
+        bestD2 = std::min(bestD2, d2Point(x, y, static_cast<double>(el.z)));
       }
     }
     consider(e, bestD2);
@@ -8438,18 +8812,16 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     e.index = pi;
     double bestD2 = 1e300;
     for (int vi = v0; vi + 1 < v1; ++vi) {
-      const double ax = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(vi * 3)]);
-      const double ay = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)]);
-      const double bx = static_cast<double>(st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)]);
-      const double by = static_cast<double>(st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)]);
-      bestD2 = std::min(bestD2, PickDistSqPointSegmentD(wx, wy, ax, ay, bx, by));
+      const size_t A = static_cast<size_t>(vi) * 3, B = static_cast<size_t>(vi + 1) * 3;
+      bestD2 = std::min(bestD2, d2Segment(st.userPolylineVerts[A], st.userPolylineVerts[A + 1],
+                                          st.userPolylineVerts[A + 2], st.userPolylineVerts[B],
+                                          st.userPolylineVerts[B + 1], st.userPolylineVerts[B + 2]));
     }
     if (closed && v1 - v0 >= 2) {
-      const double ax = static_cast<double>(st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)]);
-      const double ay = static_cast<double>(st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)]);
-      const double bx = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(v0 * 3)]);
-      const double by = static_cast<double>(st.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)]);
-      bestD2 = std::min(bestD2, PickDistSqPointSegmentD(wx, wy, ax, ay, bx, by));
+      const size_t A = static_cast<size_t>(v1 - 1) * 3, B = static_cast<size_t>(v0) * 3;
+      bestD2 = std::min(bestD2, d2Segment(st.userPolylineVerts[A], st.userPolylineVerts[A + 1],
+                                          st.userPolylineVerts[A + 2], st.userPolylineVerts[B],
+                                          st.userPolylineVerts[B + 1], st.userPolylineVerts[B + 2]));
     }
     consider(e, bestD2);
   }
@@ -8525,9 +8897,9 @@ static void CadCollectBoundarySegments(const AppCommandState& st, std::vector<ha
       py = y;
     }
   };
-  const auto& C = st.userCirclesCxCyR;
-  for (size_t ci = 0; ci + 2 < C.size(); ci += 3) {
-    const float cx = C[ci], cy = C[ci + 1], r = C[ci + 2];
+  const auto& C = st.userCirclesCxCyZR;
+  for (size_t ci = 0; ci + 3 < C.size(); ci += 4) {
+    const float cx = C[ci], cy = C[ci + 1], r = C[ci + 3];
     tessellate([&](int i, float* x, float* y) {
       const double a = 6.283185307179586 * i / 48.0;
       *x = cx + r * static_cast<float>(std::cos(a));
@@ -8569,7 +8941,15 @@ bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std
     return false;
   PushUndoSnapshot(st, "Hatch");
   CadFilledRegion fr;
-  fr.verts = loop;
+  // \p loop is the traced boundary as flat local x,y pairs; the store is interleaved x,y,z
+  // (ADR-025 (a)). A hatch is created in the plan view of the current drawing, so Z = 0 until
+  // the UCS work plane exists (REQ-058/TASK-035).
+  fr.vertsXyz.reserve(loop.size() / 2 * 3);
+  for (size_t i = 0; i + 1 < loop.size(); i += 2) {
+    fr.vertsXyz.push_back(loop[i + 0]);
+    fr.vertsXyz.push_back(loop[i + 1]);
+    fr.vertsXyz.push_back(0.f);
+  }
   fr.loopStart = {0};
   fr.patternName = st.hatchPatternName;  // "" / "SOLID" = solid; else a line pattern (ADR-018)
   fr.patternAngleDeg = st.hatchAngleDeg;
@@ -8672,12 +9052,12 @@ static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, floa
       break;
     }
     case T::Circle: {
-      const size_t k = static_cast<size_t>(e.index) * 3;
-      if (k + 2 >= st.userCirclesCxCyR.size())
+      const size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 >= st.userCirclesCxCyZR.size())
         return false;
-      const float cx = st.userCirclesCxCyR[k];
-      const float cy = st.userCirclesCxCyR[k + 1];
-      const float r = st.userCirclesCxCyR[k + 2];
+      const float cx = st.userCirclesCxCyZR[k];
+      const float cy = st.userCirclesCxCyZR[k + 1];
+      const float r = st.userCirclesCxCyZR[k + 3];
       const float side = OfsSignedSideCircle(cx, cy, r, px, py);
       sgn = side >= 0.f ? 1.f : -1.f;
       break;
@@ -8771,10 +9151,10 @@ static bool TryOffsetSignedDFromCursor(const AppCommandState& st, float px, floa
       break;
     }
     case T::Circle: {
-      const size_t k = static_cast<size_t>(e.index) * 3;
-      if (k + 2 >= st.userCirclesCxCyR.size())
+      const size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 >= st.userCirclesCxCyZR.size())
         return false;
-      signedD = OfsSignedSideCircle(st.userCirclesCxCyR[k], st.userCirclesCxCyR[k + 1], st.userCirclesCxCyR[k + 2], px,
+      signedD = OfsSignedSideCircle(st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1], st.userCirclesCxCyZR[k + 3], px,
                                   py);
       break;
     }
@@ -8969,12 +9349,12 @@ void CadOffsetAppendLivePreview(const AppCommandState& cmd, float cursorWx, floa
     break;
   }
   case T::Circle: {
-    const size_t k = static_cast<size_t>(e.index) * 3;
-    if (k + 2 >= cmd.userCirclesCxCyR.size())
+    const size_t k = static_cast<size_t>(e.index) * 4;
+    if (k + 3 >= cmd.userCirclesCxCyZR.size())
       return;
-    const float cx = cmd.userCirclesCxCyR[k];
-    const float cy = cmd.userCirclesCxCyR[k + 1];
-    const float r = cmd.userCirclesCxCyR[k + 2];
+    const float cx = cmd.userCirclesCxCyZR[k];
+    const float cy = cmd.userCirclesCxCyZR[k + 1];
+    const float r = cmd.userCirclesCxCyZR[k + 3];
     const float nr = r + signedD;
     if (nr <= 1e-6f)
       return;
@@ -9717,13 +10097,14 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
   // 2. CIRCLES — remove exact duplicates (same center + radius)
   // =========================================================================
   {
-    const size_t nC = st.userCirclesCxCyR.size() / 3;
-    struct Circ { float cx, cy, r; EntityAttributes attr; };
+    const size_t nC = st.userCirclesCxCyZR.size() / 4;
+    struct Circ { float cx, cy, z, r; EntityAttributes attr; };
     std::vector<Circ> cs;
     cs.reserve(nC);
     for (size_t i = 0; i < nC; ++i) {
-      const size_t k = i * 3;
-      cs.push_back({ st.userCirclesCxCyR[k], st.userCirclesCxCyR[k + 1], st.userCirclesCxCyR[k + 2],
+      const size_t k = i * 4;
+      cs.push_back({ st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1], st.userCirclesCxCyZR[k + 2],
+                     st.userCirclesCxCyZR[k + 3],
                      i < st.userCircleAttrs.size() ? st.userCircleAttrs[i] : MakeNewEntityAttrs(st) });
     }
     // Sort by radius then center; allows early break on radius mismatch
@@ -9738,18 +10119,21 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
       for (size_t j = i + 1; j < cs.size(); ++j) {
         if (cs[j].r - cs[i].r > tol) break; // sorted by r; no more matching radii
         if (dead[j]) continue;
-        const float dx = cs[j].cx - cs[i].cx, dy = cs[j].cy - cs[i].cy;
+        // Z participates: two circles sharing a centre in plan but sitting at different
+        // elevations are distinct objects in 3D, not duplicates (REQ-057).
+        const float dx = cs[j].cx - cs[i].cx, dy = cs[j].cy - cs[i].cy, dz = cs[j].z - cs[i].z;
         const float dr = cs[j].r  - cs[i].r;
-        if (dx * dx + dy * dy < tolSq && dr * dr < tolSq) { dead[j] = true; ++nRemoved; }
+        if (dx * dx + dy * dy + dz * dz < tolSq && dr * dr < tolSq) { dead[j] = true; ++nRemoved; }
       }
     }
-    st.userCirclesCxCyR.clear();
+    st.userCirclesCxCyZR.clear();
     st.userCircleAttrs.clear();
     for (size_t i = 0; i < cs.size(); ++i) {
       if (!dead[i]) {
-        st.userCirclesCxCyR.push_back(cs[i].cx);
-        st.userCirclesCxCyR.push_back(cs[i].cy);
-        st.userCirclesCxCyR.push_back(cs[i].r);
+        st.userCirclesCxCyZR.push_back(cs[i].cx);
+        st.userCirclesCxCyZR.push_back(cs[i].cy);
+        st.userCirclesCxCyZR.push_back(cs[i].z);
+        st.userCirclesCxCyZR.push_back(cs[i].r);
         st.userCircleAttrs.push_back(cs[i].attr);
       }
     }
@@ -9762,7 +10146,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
   // =========================================================================
   {
     const size_t nA = st.userArcs.size();
-    const size_t nC = st.userCirclesCxCyR.size() / 3;
+    const size_t nC = st.userCirclesCxCyZR.size() / 4;
     std::vector<bool> dead(nA, false);
 
     // 3a — arcs over full circles
@@ -9770,9 +10154,9 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
       if (dead[i]) continue;
       const CadArc& a = st.userArcs[i];
       for (size_t c = 0; c < nC; ++c) {
-        const float dx = a.cx - st.userCirclesCxCyR[c * 3];
-        const float dy = a.cy - st.userCirclesCxCyR[c * 3 + 1];
-        const float dr = a.r  - st.userCirclesCxCyR[c * 3 + 2];
+        const float dx = a.cx - st.userCirclesCxCyZR[c * 4];
+        const float dy = a.cy - st.userCirclesCxCyZR[c * 4 + 1];
+        const float dr = a.r  - st.userCirclesCxCyZR[c * 4 + 3];
         if (dx * dx + dy * dy < tolSq && dr * dr < tolSq) { dead[i] = true; ++nRemoved; break; }
       }
     }
@@ -9922,12 +10306,42 @@ void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
   st.active = AppCommandState::Kind::Trim;
-  st.trimPhase = AppCommandState::TrimPhase::SelectCuttingEdges;
   st.trimCutters.clear();
   st.selBoxWaitingSecond = false;
-  log.push_back(
-      "TRIM — pick cutting edges, Enter; trim clicks — or type L, draw on the segment to trim (two clicks). ESC "
-      "cancels.");
+  // TRIMSTATE picks the starting mode (REQ-056). 0 is smart trim: no cutting edges to pick, just draw a
+  // line across what should go.
+  if (st.trimState == 1) {
+    st.trimPhase = AppCommandState::TrimPhase::SelectCuttingEdges;
+    log.push_back(
+        "TRIM — pick cutting edges, Enter, then click the pieces to trim (L switches to line trim). ESC cancels.");
+  } else {
+    st.trimPhase = AppCommandState::TrimPhase::CuttingLine_WaitP1;
+    log.push_back(
+        "TRIM — draw a line across what should go: first point (T picks cutting edges instead). ESC cancels.");
+  }
+}
+
+void StartTrimStateCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::TrimState;
+  char buf[128];
+  std::snprintf(buf, sizeof(buf), "Enter new value for TRIMSTATE <%d>:  (0 = draw a line to trim, 1 = pick cutting edges)",
+                st.trimState);
+  log.push_back(buf);
+}
+
+// Shared by the prompt and the inline `TRIMSTATE 1` form. Returns false (with a message) on a bad value,
+// so neither entry point can quietly accept something outside 0/1 (REQ-201).
+bool ApplyTrimStateValue(AppCommandState& st, int value, std::vector<std::string>& log) {
+  if (value != 0 && value != 1) {
+    log.push_back("TRIMSTATE — value must be 0 (draw a line to trim) or 1 (pick cutting edges).");
+    return false;
+  }
+  st.trimState = value;
+  log.push_back(value == 1 ? "TRIMSTATE = 1 — TRIM starts by picking cutting edges."
+                           : "TRIMSTATE = 0 — TRIM starts by drawing a line across what should go.");
+  return true;
 }
 
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -10203,6 +10617,10 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("ARC canceled.");
   else if (st.active == AppCommandState::Kind::Ellipse)
     log.push_back("ELLIPSE canceled.");
+  else if (st.active == AppCommandState::Kind::Rect)
+    log.push_back("RECT canceled.");
+  else if (st.active == AppCommandState::Kind::TrimState)
+    log.push_back("TRIMSTATE unchanged (" + std::to_string(st.trimState) + ").");
   else if (st.active == AppCommandState::Kind::Text)
     log.push_back("TEXT canceled.");
   else if (st.active == AppCommandState::Kind::Mtext)
@@ -10375,6 +10793,8 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
     L->paperLines.push_back(0.f);
     L->paperLineAttrs.push_back(MakeNewEntityAttrs(st));
   } else {
+    // Z = 0: new geometry lands on the active work plane, which is world XY until the UCS
+    // exists (REQ-058 / TASK-035). This is the one place that decision needs to change.
     st.userLinesFlat.push_back(st.anchorX);
     st.userLinesFlat.push_back(st.anchorY);
     st.userLinesFlat.push_back(0.f);
@@ -10445,6 +10865,44 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   using LP = AppCommandState::LinePhase;
   using PP = AppCommandState::PolylinePhase;
   using SAP = AppCommandState::SegmentAnglePickPhase;
+
+  // Grip stretch, direct-distance entry (REQ-047): with a grip armed there is no active command, so a bare
+  // number would otherwise be dispatched as a command name. Consume it here and pin the grip that far along
+  // the ORTHO axis the crosshair indicates. Anything else falls through to normal command dispatch, so the
+  // command line still works while a grip is up.
+  if (st.entityGripMoveActive) {
+    float gripDist = 0.f;
+    if (ParseSingleFloatToken(line, &gripDist)) {
+      if (std::fabs(gripDist) < 1e-20f) {
+        log.push_back("Grip — distance must be non-zero.");
+        return;
+      }
+      float cursorLocalX = 0.f;
+      float cursorLocalY = 0.f;
+      CadCoord::LocalFromWorld(st, static_cast<double>(st.uiCursorWorldX), static_cast<double>(st.uiCursorWorldY),
+                               &cursorLocalX, &cursorLocalY);
+      float ux = 0.f;
+      float uy = 0.f;
+      if (!OrthoUnitTowardPoint(st.entityGripAnchorX, st.entityGripAnchorY, cursorLocalX, cursorLocalY, &ux, &uy)) {
+        log.push_back("Grip distance needs a direction — move the crosshair off the grip, then enter a distance.");
+        return;
+      }
+      st.entityGripTypedX = st.entityGripAnchorX + ux * gripDist;
+      st.entityGripTypedY = st.entityGripAnchorY + uy * gripDist;
+      st.entityGripTypedDistanceValid = true;
+      // Arming the grip already pushed the pre-drag undo snapshot, so the typed placement just overwrites
+      // whatever the live drag had put there — one undo returns the entity to where it started.
+      ApplyEntityGripPoint(st, st.entityGripTypedX, st.entityGripTypedY);
+      char gripMsg[128];
+      std::snprintf(gripMsg, sizeof(gripMsg), "Grip stretched %.6g %s.",
+                    static_cast<double>(std::fabs(gripDist)),
+                    ux > 0.f ? "right" : (ux < 0.f ? "left" : (uy > 0.f ? "up" : "down")));
+      log.push_back(gripMsg);
+      ClearEntityGripInteraction(st);
+      BumpCadGpuCache(st);
+      return;
+    }
+  }
 
   const bool segPickNeedAdjust =
       ((st.active == K::Line && st.linePhase == LP::NeedNextPoint) ||
@@ -10578,6 +11036,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     std::string plotTok;
     issIdle >> plotTok;
     plotTok = StringUtil::toLowerAsciiCopy(plotTok);
+    // `TRIMSTATE 1` sets it in one line; a bare `TRIMSTATE` falls through to the registry and prompts.
+    if (plotTok == "trimstate") {
+      int tv = 0;
+      if (issIdle >> tv) {
+        ApplyTrimStateValue(st, tv, log);
+        return;
+      }
+    }
     if (plotTok == "plotscale" || plotTok == "pscale") {
       float pv = 0.f;
       if (!(issIdle >> pv) || pv <= 0.f)
@@ -10605,12 +11071,31 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
+  if (st.active == AppCommandState::Kind::TrimState) {
+    const std::string tsIn = StringUtil::trimCopy(line);
+    if (tsIn.empty()) {  // bare Enter keeps the current value, as an AutoCAD system-variable prompt does
+      log.push_back("TRIMSTATE unchanged (" + std::to_string(st.trimState) + ").");
+      st.active = AppCommandState::Kind::None;
+      return;
+    }
+    int tv = 0;
+    std::istringstream tsIss(tsIn);
+    if (!(tsIss >> tv) || !(tsIss >> std::ws).eof()) {
+      log.push_back("TRIMSTATE — enter 0 or 1 (blank Enter keeps the current value).");
+      return;
+    }
+    if (ApplyTrimStateValue(st, tv, log))
+      st.active = AppCommandState::Kind::None;
+    return;
+  }
+
   if (st.active == AppCommandState::Kind::Trim) {
     using TP = AppCommandState::TrimPhase;
     const std::string low = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(line));
+    // L and T switch modes mid-run, so either style is reachable whatever TRIMSTATE is set to.
     if (low == "l" || low == "line") {
-      if (st.trimPhase != TP::SelectCuttingEdges)
-        log.push_back("TRIM — L only while picking cutting edges (ESC and restart TRIM if stuck).");
+      if (st.trimPhase == TP::CuttingLine_WaitP1 || st.trimPhase == TP::CuttingLine_WaitP2)
+        log.push_back("TRIM — already drawing the trim line; pick its points in the viewport.");
       else {
         st.trimCutters.clear();
         st.trimPhase = TP::CuttingLine_WaitP1;
@@ -10618,7 +11103,17 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       }
       return;
     }
-    log.push_back("TRIM — viewport picks, or type L to trim by drawing on the segment (two clicks); ESC cancels.");
+    if (low == "t" || low == "cutting" || low == "edges") {
+      if (st.trimPhase == TP::SelectCuttingEdges || st.trimPhase == TP::SelectTrimTargets)
+        log.push_back("TRIM — already picking cutting edges.");
+      else {
+        st.trimCutters.clear();
+        st.trimPhase = TP::SelectCuttingEdges;
+        log.push_back("TRIM — pick cutting edges (hover highlights), Enter when done, then click pieces to trim.");
+      }
+      return;
+    }
+    log.push_back("TRIM — viewport picks; L draws the trim line, T picks cutting edges; ESC cancels.");
     return;
   }
 
@@ -10790,7 +11285,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       if (ParseSingleFloatToken(line, &dist)) {
         float ux = 0.f;
         float uy = 0.f;
-        if (!OrthoUnitTowardPoint(st.anchorX, st.anchorY, st.uiCursorWorldX, st.uiCursorWorldY, &ux, &uy))
+        if (!OrthoUnitTowardUiCursorFromAnchor(st, &ux, &uy))
           log.push_back(
               "Ortho distance needs cursor direction — move crosshair away from anchor, then enter distance.");
         else
@@ -10920,7 +11415,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       if (ParseSingleFloatToken(line, &dist)) {
         float ux = 0.f;
         float uy = 0.f;
-        if (!OrthoUnitTowardPoint(st.anchorX, st.anchorY, st.uiCursorWorldX, st.uiCursorWorldY, &ux, &uy))
+        if (!OrthoUnitTowardUiCursorFromAnchor(st, &ux, &uy))
           log.push_back(
               "Ortho distance needs cursor direction — move crosshair away from anchor, then enter distance.");
         else {
@@ -10935,6 +11430,29 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     log.push_back(
         std::string("Could not parse point. Use X,Y or X Y") +
         (allowRel ? "; @dx,dy; A / 2P (two picks); A 45 +90; ortho distance toward cursor." : "."));
+    return;
+  }
+
+  if (st.active == K::Rect) {
+    using RectP = AppCommandState::RectPhase;
+    const bool second = st.rectPhase == RectP::WaitSecondCorner;
+    float px = 0.f;
+    float py = 0.f;
+    if (ParseStoragePoint(st, line, &px, &py, second, st.rectX1, st.rectY1)) {
+      if (second) {
+        CommitRectangle(st, st.rectX1, st.rectY1, px, py, log);
+      } else {
+        st.rectX1 = px;
+        st.rectY1 = py;
+        st.anchorX = px;
+        st.anchorY = py;
+        st.rectPhase = RectP::WaitSecondCorner;
+        log.push_back("RECT — pick the opposite corner (or type X,Y / @dx,dy):");
+      }
+      return;
+    }
+    log.push_back(std::string("RECT — could not parse point. Use X,Y") +
+                  (second ? " or @dx,dy for an exact width x height." : "."));
     return;
   }
 
@@ -11240,11 +11758,11 @@ const char* TrimCommandFooterHint(const AppCommandState& st) {
     return "";
   switch (st.trimPhase) {
   case TP::SelectCuttingEdges:
-    return "TRIM: Cutting edges | Enter | type L — draw on segment to trim (2 clicks, done) | ESC cancel";
+    return "TRIM: Pick cutting edges (hover highlights) | Enter | type L — draw the trim line | ESC cancel";
   case TP::CuttingLine_WaitP1:
-    return "TRIM line-trim: First point on/near edge | ESC cancel";
+    return "TRIM: First point of the trim line | type T — pick cutting edges instead | ESC cancel";
   case TP::CuttingLine_WaitP2:
-    return "TRIM line-trim: Second point — dashed = removed part (midpoint picks side) | Ortho | ESC";
+    return "TRIM: Second point — dashed = removed part (midpoint picks side) | Ortho | ESC";
   case TP::SelectTrimTargets:
     return "TRIM: Click segment near end to remove | Enter done | ESC cancel";
   }
@@ -11703,6 +12221,8 @@ void VectorizePdfAttachmentLines(AppCommandState& st, int pdfIndex, std::vector<
   for (size_t i = 0; i + 3 < snap.size(); i += 4) {
     const float sx1 = snap[i]     * att.scale, sy1 = snap[i + 1] * att.scale;
     const float sx2 = snap[i + 2] * att.scale, sy2 = snap[i + 3] * att.scale;
+    // Z = 0 is correct here regardless of the UCS: a PDF underlay is a flat raster/vector
+    // sheet with no elevation of its own.
     st.userLinesFlat.push_back(att.insertX + sx1 * cosR - sy1 * sinR);
     st.userLinesFlat.push_back(att.insertY + sx1 * sinR + sy1 * cosR);
     st.userLinesFlat.push_back(0.f);
@@ -11832,10 +12352,10 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
   }
 
   // Circles
-  for (size_t i = 0; i + 2 < st.userCirclesCxCyR.size(); i += 3) {
+  for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4) {
     if (selective && !sCircles.count(static_cast<int>(i / 3))) continue;
-    HelmertPt(a, b, tx, ty, &st.userCirclesCxCyR[i], &st.userCirclesCxCyR[i + 1]);
-    st.userCirclesCxCyR[i + 2] *= sc;
+    HelmertPt(a, b, tx, ty, &st.userCirclesCxCyZR[i], &st.userCirclesCxCyZR[i + 1]);
+    st.userCirclesCxCyZR[i + 3] *= sc;
   }
 
   // Arcs
@@ -12173,6 +12693,7 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
     case K::Line:       StartLineCommand(st, log);       break;
     case K::Circle:     StartCircleCommand(st, log);     break;
     case K::Polyline:   StartPolylineCommand(st, log);   break;
+    case K::Rect:       StartRectCommand(st, log);       break;
     case K::Arc:        StartArcCommand(st, log);        break;
     case K::Ellipse:    StartEllipseCommand(st, log);    break;
     case K::Text:       StartTextCommand(st, log);       break;

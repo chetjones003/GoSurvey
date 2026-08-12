@@ -239,16 +239,16 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
                        st.userPolylineVerts[static_cast<size_t>(k + 1) * 3 + 1] + oY);
       }
       // Circles (sampled to a polygon).
-      for (size_t i = 0; i + 2 < st.userCirclesCxCyR.size(); i += 3) {
-        const size_t idx = i / 3;
+      for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4) {  // cx,cy,z,r
+        const size_t idx = i / 4;
         if (idx < st.userCircleAttrs.size() &&
             (!plottable(st.userCircleAttrs[idx].layer) || IsLayerFrozenInViewport(vp, st.userCircleAttrs[idx].layer)))
           continue;
         curColor = (idx < st.userCircleAttrs.size())
                        ? resolveRgb(st.userCircleAttrs[idx].layer, st.userCircleAttrs[idx].color)
                        : 0x000000u;
-        const double cx = st.userCirclesCxCyR[i] + oX, cy = st.userCirclesCxCyR[i + 1] + oY;
-        const double r = st.userCirclesCxCyR[i + 2];
+        const double cx = st.userCirclesCxCyZR[i] + oX, cy = st.userCirclesCxCyZR[i + 1] + oY;
+        const double r = st.userCirclesCxCyZR[i + 3];  // [i+2] is Z — the plot is a flat projection
         constexpr int kSeg = 72;
         double pxp = 0, pyp = 0;
         for (int k = 0; k <= kSeg; ++k) {
@@ -348,7 +348,7 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
       };
       for (size_t fi = 0; fi < L.paperFilledRegions.size(); ++fi) {
         const CadFilledRegion& fr = L.paperFilledRegions[fi];
-        if (fr.loopStart.empty() || fr.verts.size() < 6)
+        if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)  // < 3 vertices × 3 floats
           continue;
         if (fi < L.paperFilledRegionAttrs.size() && !plottable(L.paperFilledRegionAttrs[fi].layer))
           continue;
@@ -360,7 +360,8 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
             continue;
           for (int k = 0; k < cnt; ++k) {
             const size_t vi = static_cast<size_t>(begin + k);
-            const float vx = fr.verts[vi * 2] * kPtPerIn, vy = fr.verts[vi * 2 + 1] * kPtPerIn;
+            // Paper fills are 2D (ADR-025 (g)) — Z is ignored here, the sheet has no depth.
+            const float vx = fr.vertsXyz[vi * 3] * kPtPerIn, vy = fr.vertsXyz[vi * 3 + 1] * kPtPerIn;
             if (!fillObj) {
               fillObj = FPDFPageObj_CreateNewPath(vx, vy);  // first subpath starts here (implicit MoveTo)
               if (!fillObj) break;

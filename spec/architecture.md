@@ -180,12 +180,18 @@ src/
   app/          application lifecycle, wiring
   ui/           panels, viewport, input
                 RichTextEdit — WYSIWYG rich-text edit widget for MTEXT (ADR-023)
+                ViewCube — 3D view-orientation widget (ADR-025)
   commands/     parsing, validation, execution
   renderer/     GL backend, buffers, shaders
+                Camera — eye/target/up + projection → view & projection matrices (ADR-025)
   domain/       entities, invariants, compute
   io/           format readers/writers
   font/         SHX stroke-font geometry — pure, no rendering (shared by ui + io; ADR-022)
+  util/         pure, dependency-free math and formatting — unit-testable without GL or a window
+                geom2d, NumFormat, AngleFormat, StringUtil
+                ray3d — screen→world ray, ray×plane, ray↔entity distance (ADR-025)
   platform/     window, files, GL context
+third_party/    vendored dependencies (each recorded in the decision log; REQ-300)
 build/          all build artifacts (never in source tree)
 spec/           this specification layer
 ```
@@ -202,6 +208,14 @@ A change is rejected if it breaks any of these:
 6. No `gl*` (or other backend) calls outside the Renderer/Platform boundary.
 7. No allocation/logging/virtual dispatch added to a measured hot path without a
    profile justifying it.
+8. **Geometry coordinates are interleaved XYZ — never split across a sidecar array.**
+   Every flat geometry store carries its Z inline (`userLinesFlat` stride 6,
+   `userPolylineVerts` stride 3, `userCirclesCxCyZR` stride 4,
+   `CadFilledRegion::vertsXyz` stride 3). Adding a parallel Z array beside an
+   existing store is a blocking finding: it splits one coordinate across two
+   allocations (§5) and introduces a desync failure mode that interleaving cannot
+   have. Widening a stride is done **with a rename**, so every affected site is a
+   compile error rather than a silent misread (ADR-025 (a)).
 
 ## 12. Architecture decision records (ADRs)
 
@@ -567,6 +581,48 @@ A change is rejected if it breaks any of these:
   (Phase 1 data model + persistence + active dropdown + create; Phase 2 STYLE dialog + re-bake; Phase 3
   Properties overrides + oblique) so each slice is independently verifiable.
 
+### ADR-024 — DWG support in phases: an external-converter route first, a native codec after   (2026-07-30, accepted)
+- Context:    REQ-052 requires opening and saving DWG. DWG is Autodesk's proprietary native format: it is
+  bit-packed rather than byte-aligned, paged and compressed with a custom LZ77 variant, CRC-guarded, and
+  organised as a handle graph rather than a stream. Autodesk publishes no specification; the only public
+  description is the ODA's reverse-engineered document, which stops at R2013. The reference drawing the
+  user supplied (`26-084 - Master.dwg`) is **AC1032 / R2018 — undocumented anywhere**. A from-scratch
+  reader plus writer is a 10,000+ line, multi-month effort. Choosing how DWG is read at all is an
+  architectural decision (§3, §11), not a Workshop choice, so it was escalated as a SPEC GAP and decided
+  by the user.
+- Decision:
+  (a) **Phase 1 converts DWG ↔ DXF out of process** and reuses the existing `io/DxfIo`. `io/DwgIo` owns
+  converter discovery (an env override, then ODA File Converter, then any installed AutoCAD
+  `accoreconsole`), the temporary working directories, and the conversion; it exposes only
+  `ImportDwgFile` / `ExportDwgFile` / `DwgVersionName` / `FindDwgConverter`. **That four-function seam is
+  the point**: replacing the converter with a native codec later changes nothing above `io/`.
+  (b) **`platform/ProcessRun` is a new Platform-layer module** holding the one thing IO must not know:
+  how to launch a child process, quote its arguments, and bound its lifetime. IO → Platform is a downward
+  dependency (§2), so `io/DwgIo` may use it.
+  (c) **Phase 1's save is explicitly lossy and says so before writing.** The payload is the DXF export, so
+  blocks, extra layouts, elevations, attributes and proxies cannot survive. The destination is written only
+  after a good converted file exists.
+  (d) **Later phases build a native in-tree codec** (see `docs/dwg-plan.txt`), reading R2000→R2018 and
+  writing at least R2000. Phase 1 doubles as the **test oracle** for that work: the same drawing can be
+  parsed natively and by the converter and the two results diffed.
+- Alternatives: (a) native codec first — rejected as the *first* step only: it delays any DWG capability by
+  months, and R2018 must be reverse-engineered against samples, which is far easier with a working oracle.
+  It remains the destination. (b) vendor **LibreDWG** — was excluded when the licence question was open
+  (GPL-3.0 would relicense GoSurvey); the user has since confirmed GoSurvey is open-source and
+  GPL-compatible, so LibreDWG is **back on the table for the native phase** and should be reconsidered
+  there rather than writing a codec from scratch. (c) licence the **ODA Drawings SDK** — correct and
+  complete, but a paid annual membership and a heavy binary SDK in a repo whose `third_party/` is a single
+  header. (d) treat the converter route as permanent — rejected: it requires software GoSurvey does not
+  ship, and it can never satisfy the user's decision that a save must preserve objects GoSurvey does not
+  model, because DXF cannot carry them.
+- Consequences: two new modules (`io/DwgIo`, `platform/ProcessRun`); DWG menu entries disable themselves
+  with an explanatory tooltip when no converter is present; `AppCommandState` gains two fields for the
+  export confirmation. **DWG capability is gated on software the user installs** — acceptable for Phase 1,
+  never for the shipped product, which is why the native phase is not optional. The known-lossy save is
+  recorded technical debt with an explicit removal condition: it is retired when the native writer plus
+  the unknown-object preservation channel land. Risk acknowledged: users may read "GoSurvey saves DWG" as
+  lossless, which is why the confirmation dialog enumerates what is dropped rather than warning vaguely.
+
 ### ADR-023 — WYSIWYG MTEXT editing: an offset-carrying rich-span API + an in-tree rich text edit widget   (2026-07-30, accepted)
 - Context:    REQ-051 delivered the "Text Formatting" panel over ImGui's `InputTextMultiline`. That widget
   has **no word wrap**, so the in-place box cannot grow as text reaches the MTEXT's column width, and the
@@ -607,3 +663,82 @@ A change is rejected if it breaks any of these:
   gave for free: caret movement, shift/mouse selection, word double-click, clipboard, and an in-editor
   undo stack. Pure layout and index-mapping logic is unit-tested; drawing and input stay manual, per the
   UI convention. Risk acknowledged: this replaces a working editor, so MTEXT editing is the blast radius.
+
+### ADR-025 — 3D model space: additive Z storage, a Camera value type, and ray-based input   (2026-08-11, accepted)
+- Context:    REQ-057–061 move GoSurvey from a plan-view 2D drawing surface to a true 3D model space.
+  The obstacle is not the camera math — it is that **coordinates are not behind a point type**. They live
+  in flat `std::vector<float>` arrays with implicit strides (`userLinesFlat` 4, `userCirclesCxCyR` 3,
+  `userPolylineVerts` 2, `CadFilledRegion::verts` 2) plus loose scalar fields (`.cx`/`.cy` on arcs and
+  ellipses, `insX`/`insY` on annotations) — roughly **1,450 reference sites**, and each store exists in
+  **three** copies (live `AppCommandState`, the undo `DrawingGeometrySnapshot`, and the per-tab struct).
+  Input is equally 2D: one plan-view `w2s` mapping with ~40 call sites in `CadUi.cpp`, and picking/snapping
+  written against screen-space distance in X/Y. Choosing the storage layout, the camera model, and how a
+  click becomes a world coordinate are architectural decisions, not Workshop choices (§2, §5, §11).
+- Decision:
+  (a) **Z is interleaved, and every geometry store uses the same convention.** *(Amended 2026-08-11 —
+  see the correction note below; the original D1 specified parallel sidecar Z arrays and was decided on
+  an incorrect reading of the existing strides.)* Two of the four flat stores are **already XYZ**:
+  `userLinesFlat` is stride 6 (`x,y,z,x,y,z` per segment) and `userPolylineVerts` is stride 3 (`x,y,z`),
+  both writing a hard-coded `0.f` into a Z slot that has always existed — which is why the GL vertex
+  format is already 3-component. Those two need **no structural change**, only real values at the append
+  sites. The two stores that lack a Z slot are widened to match: `userCirclesCxCyR` (`cx,cy,r`) becomes
+  **`userCirclesCxCyZR`** (`cx,cy,z,r` — the centre's XYZ stays contiguous), and `CadFilledRegion::verts`
+  (`x,y`) becomes **`vertsXyz`** (`x,y,z`). `CadArc`, `CadEllipse` and `CadAnnotation` gain a scalar `z`
+  / `insZ`. **Both widened arrays are renamed as part of the widening**: the rename makes every one of the
+  ~52 affected sites a **compile error** rather than a silently-misread stride, which converts the exact
+  hazard the original D1 was invented to avoid into a problem the compiler solves. The result is one
+  uniform interleaved-XYZ convention across all geometry, honouring §5 (a coordinate is one cache line)
+  instead of conceding against it.
+  (b) **Z is absolute** — no `worldDocumentOriginZ`. The local-storage invariant (`world = local +
+  worldDocumentOrigin`) stays **X/Y-only**, and that asymmetry is documented at the invariant's definition
+  in `CadCoordinateFrame.hpp`. The origin exists for 1e6-ft state-plane easting/northing; elevations span
+  roughly −1,000…30,000 ft, where float resolves ~0.002 ft against REQ-101's 0.01 ft.
+  (c) **A `Camera` value type** (eye, target, up, projection mode, fov/extent, near/far) owned by the
+  Renderer layer, producing view and projection matrices. It is a **value, not an abstraction**: it has
+  three present-day uses (the model viewport, each paper-space `Viewport` under REQ-061, and the PDF plot),
+  satisfying §11.4. There is **no camera interface, no scene graph, and no second rendering backend** — the
+  anti-requirement holds, this stays OpenGL.
+  (d) **Input becomes ray-based, in a pure module.** Screen → world ray, ray × plane, and ray-to-entity
+  distance live in a dependency-free unit-testable module beside `util/geom2d`, so the 3D picking and
+  snapping math is tested without a GL context or a window (the ADR-002 layering pressure). The existing
+  `w2s` plan-view mapping becomes the degenerate case of the camera transform rather than a parallel path,
+  so there is one transform, not two that can disagree.
+  (e) **Drawing resolves against an active work plane (UCS)** stored on `AppCommandState` (the settings
+  pattern — no new global), defaulting to world XY so plan-view behaviour is unchanged.
+  (f) **Two vendored dependencies** (REQ-300, decision log 2026-08-11): **ImGuizmo** (MIT) for the REQ-060
+  manipulator and **ImOGuizmo** for the REQ-059 orientation gizmo. Both consume the matrices (c) produces
+  and neither introduces a rendering abstraction. They are `third_party/` code and are not modified in
+  place except through a recorded fork decision. **ImOGuizmo ships unmodified**: it draws its stock
+  axis-ball, and REQ-059 was amended the same day to drop the labelled-cube + compass-ring mockup as a
+  target rather than fork the header (decision log, 2026-08-11 — the user's ruling on FINDING-2). If that
+  appearance is wanted later, forking this header is the cheapest route and needs a new decision entry.
+  (g) **Paper-space sheet geometry stays 2D.** A sheet is 2D by definition; the ADR-009/013 `PaperLayout`
+  stores are untouched. Only `Viewport` gains a camera (REQ-061), persisted additively in `.gs` with no
+  `kGsFormatVersion` bump, so older files load with every viewport in plan view (the ADR-020 (d) precedent).
+- **Correction note (2026-08-11).** As first written, (a) specified parallel sidecar Z arrays for every
+  store, justified by a claim that `userLinesFlat` was stride 4 and `userPolylineVerts` stride 2, putting
+  ~1,450 coordinate sites at risk from any stride widening. **That claim was wrong** — it was inferred from
+  a grep pattern rather than from reading an append site. `userLinesFlat` has always been stride 6 and
+  `userPolylineVerts` stride 3, both already carrying Z. The real structural work is ~52 sites across the
+  two stores that genuinely lack a Z slot. The error was caught in TASK-034 step 1, before any storage code
+  was written; the task was marked **blocked: SPEC GAP** and the user ruled to widen rather than keep the
+  sidecar design. Recorded here rather than quietly rewritten, because the original rationale is what
+  justified architecture invariant §11.8, which this amendment deletes.
+- Alternatives: (a) **parallel sidecar Z arrays** (the original D1) — now rejected: with lines and polylines
+  already interleaved, sidecars for the remaining two stores would leave the codebase with two conventions
+  for the same concept, and the desync hazard they introduce is worse than the 52-site edit they avoid.
+  (b) **migrate to `std::vector<Vec3>`** —
+  safest of all (a missed site is a compile error) but the largest diff by far, rewriting all ~1,450 sites
+  plus the GL upload path, `.gs`, DXF and the undo snapshots; swapping the storage model is a bigger change
+  than adding 3D. (c) **2.5D — Z as data with the viewport left in plan** — rejected by the user: a ViewCube
+  with no orbit is decoration. (d) **write the gizmos in-tree** — rejected by the user under (f). (e) **a
+  scene-graph / camera-hierarchy abstraction** — rejected as speculative (§11.4); a camera is a value type.
+- Consequences: geometry gains a parallel Z array per store, tripled across the three copies, and all of it
+  funnels through one mutation helper — the single most important invariant this ADR adds. The renderer
+  learns a matrix pipeline and depth handling; `w2s` collapses into it. Picking and snapping become ray
+  tests in a new pure module. `AppCommandState` gains a camera and a UCS. `.gs` gains additive Z and
+  per-viewport camera keys with **no version bump**; DXF group 30 stops being discarded. Two small
+  third-party files enter `third_party/`. **REQ-100 becomes a real gate** for the first time (decision log,
+  same day), because orbit makes framerate user-visible. Blast radius acknowledged: this touches the two
+  12.5k-line files, the renderer, all of IO, snapping, picking and paper space — which is why it is split
+  into five independently shippable requirements rather than one, each passing Verification on its own.

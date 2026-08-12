@@ -1,5 +1,6 @@
 #include "CadUi.hpp"
 #include "CadCoordinateFrame.hpp"
+#include "ViewCube.hpp"  // in-tree orientation widget (REQ-059)
 #include "ViewportPickPolicy.hpp"
 #include "MtextRichFormat.hpp"
 #include "MtextToolbar.hpp"
@@ -14,6 +15,7 @@
 #include "HatchPattern.hpp"
 #include "CommandBar.hpp"
 #include "NumFormat.hpp"
+#include "DwgIo.hpp"
 #include "DxfIo.hpp"
 #include "AppIcon.hpp"
 #include "GsIo.hpp"
@@ -83,8 +85,19 @@ static void DrawHatchThumbnail(ImDrawList* dl, ImVec2 mn, ImVec2 mx, const hatch
   }
   const double S = minSp * 5.0;  // region side in pattern units → ~5 repeats of the densest family
   CadFilledRegion fr;
-  fr.verts = {0.f, 0.f, static_cast<float>(S), 0.f, static_cast<float>(S), static_cast<float>(S), 0.f,
-              static_cast<float>(S)};
+  // Pattern-preview swatch: a flat square at Z = 0, as x,y,z triplets (ADR-025 (a)).
+  fr.vertsXyz = {0.f,
+                 0.f,
+                 0.f,
+                 static_cast<float>(S),
+                 0.f,
+                 0.f,
+                 static_cast<float>(S),
+                 static_cast<float>(S),
+                 0.f,
+                 0.f,
+                 static_cast<float>(S),
+                 0.f};
   fr.loopStart = {0};
   fr.patternName = def.name;
   fr.patternScale = 1.f;
@@ -511,6 +524,7 @@ void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size, boo
 
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
   static char dxfPath[4096]{};
+  static char dwgPath[4096]{};
   static char gsPath[4096]{};
 #if !defined(_WIN32)
   if (g_menuBarLogoTex && g_menuBarLogoDims.x > 0.f && g_menuBarLogoDims.y > 0.f) {
@@ -598,6 +612,28 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
     if (ImGui::MenuItem("Export DXF...", nullptr)) {
       if (BrowseSaveFileDxfUtf8(dxfPath, sizeof(dxfPath), "drawing.dxf"))
         ExportDxfFile(cmd, dxfPath, log);
+    }
+    ImGui::Separator();
+    {
+      // DWG needs an external converter in Phase 1 (ADR-024); grey the items out and say why
+      // rather than letting the user hit a failure inside a file dialog.
+      const DwgConverter& conv = FindDwgConverter();
+      if (ImGui::MenuItem("Import DWG...", nullptr, false, conv.available())) {
+        if (BrowseOpenFileDwgUtf8(dwgPath, sizeof(dwgPath)))
+          ImportDwgFile(cmd, dwgPath, log);
+      }
+      if (ImGui::MenuItem("Export DWG...", nullptr, false, conv.available())) {
+        if (BrowseSaveFileDwgUtf8(dwgPath, sizeof(dwgPath), "drawing.dwg")) {
+          cmd.dwgPendingExportPath = dwgPath;
+          cmd.dwgLossyExportModal  = true;
+        }
+      }
+      if (!conv.available() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip(
+            "DWG needs a converter: install the free ODA File Converter, or set\n"
+            "GOSURVEY_DWG_CONVERTER to ODAFileConverter.exe or accoreconsole.exe.");
+      else if (conv.available() && ImGui::IsItemHovered())
+        ImGui::SetTooltip("Using %s", conv.displayName.c_str());
     }
     ImGui::Separator();
     if (ImGui::MenuItem("Quit Application", nullptr)) {
@@ -763,6 +799,7 @@ enum class RibbonIconKind : std::uint8_t {
   Line,
   Circle,
   Polyline,
+  Rect,
   Arc,
   Ellipse,
   Dim,
@@ -889,6 +926,17 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     RibbonGripSquare(dl, apt(a0), grip, acc, acc, t);
     RibbonGripSquare(dl, apt((a0 + a1) * 0.5f), grip, acc, acc, t);
     RibbonGripSquare(dl, apt(a1), grip, acc, acc, t);
+    break;
+  }
+  case RibbonIconKind::Rect: {
+    // Rectangle with grips on the two picked (opposite) corners, matching how the command is driven.
+    const float rw = w * 0.34f;
+    const float rh = h * 0.24f;
+    const ImVec2 lo(c.x - rw, c.y - rh);
+    const ImVec2 hi(c.x + rw, c.y + rh);
+    dl->AddRect(lo, hi, col, 0.f, 0, t);
+    RibbonGripSquare(dl, lo, grip, acc, acc, t);
+    RibbonGripSquare(dl, hi, grip, acc, acc, t);
     break;
   }
   case RibbonIconKind::Ellipse: {
@@ -1372,6 +1420,7 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::Line:           return "line";
   case RibbonIconKind::Circle:         return "circle";
   case RibbonIconKind::Polyline:       return "polyline";
+  case RibbonIconKind::Rect:           return "rect";
   case RibbonIconKind::Arc:            return "arc";
   case RibbonIconKind::Ellipse:        return "ellipse";
   case RibbonIconKind::Hatch:          return "hatch";
@@ -1429,6 +1478,7 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
   struct M { const char* n; RibbonIconKind k; };
   static const M m[] = {
     {"LINE", RibbonIconKind::Line}, {"CIRCLE", RibbonIconKind::Circle}, {"POLYLINE", RibbonIconKind::Polyline},
+    {"RECT", RibbonIconKind::Rect},
     {"ARC", RibbonIconKind::Arc}, {"ELLIPSE", RibbonIconKind::Ellipse}, {"HATCH", RibbonIconKind::Hatch},
     {"TEXT", RibbonIconKind::Text},
     {"MTEXT", RibbonIconKind::Mtext}, {"DIMALIGNED", RibbonIconKind::Dim}, {"DIMLINEAR", RibbonIconKind::DimLinear},
@@ -1671,6 +1721,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     if (gridBtn("##RibbonPLine", RibbonIconKind::Polyline))
       StartPolylineCommand(cmd, log);
     RibbonItemHelp("Polyline — chain of segments; optional close.\nCommand bar: POLYLINE or PL");
+    ImGui::SameLine(0, 4);
+    if (gridBtn("##RibbonRect", RibbonIconKind::Rect))
+      StartRectCommand(cmd, log);
+    RibbonItemHelp("Rectangle — two opposite corners; stored as a closed polyline.\nCommand bar: RECT, RECTANG or RECTANGLE");
     ImGui::SameLine(0, 4);
     if (gridBtn("##RibbonArc", RibbonIconKind::Arc))
       StartArcCommand(cmd, log);
@@ -2290,12 +2344,12 @@ bool ReadLineEndpoints(const AppCommandState& cmd, int idx, float* x0, float* y0
 }
 
 bool ReadCircle(const AppCommandState& cmd, int idx, float* cx, float* cy, float* r) {
-  const size_t k = static_cast<size_t>(idx) * 3;
-  if (k + 2 >= cmd.userCirclesCxCyR.size())
+  const size_t k = static_cast<size_t>(idx) * 4;
+  if (k + 3 >= cmd.userCirclesCxCyZR.size())
     return false;
-  *cx = cmd.userCirclesCxCyR[k];
-  *cy = cmd.userCirclesCxCyR[k + 1];
-  *r = cmd.userCirclesCxCyR[k + 2];
+  *cx = cmd.userCirclesCxCyZR[k];
+  *cy = cmd.userCirclesCxCyZR[k + 1];
+  *r = cmd.userCirclesCxCyZR[k + 3];
   return true;
 }
 
@@ -2338,8 +2392,8 @@ void CollectGeneralAttrs(const AppCommandState& cmd, const std::vector<SelectedE
       lws->push_back(a.lineweightMm);
       trans->push_back(a.transparency);
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 3;
-      if (k + 2 >= cmd.userCirclesCxCyR.size())
+      const size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 >= cmd.userCirclesCxCyZR.size())
         continue;
       const EntityAttributes& a = CircleAttr(cmd, e.index);
       layers->push_back(a.layer);
@@ -2733,8 +2787,8 @@ void ApplyLayerToSelection(AppCommandState& cmd, const std::string& v) {
         continue;
       cmd.userLineAttrs[static_cast<size_t>(e.index)].layer = v;
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 3;
-      if (k + 2 >= cmd.userCirclesCxCyR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
+      const size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 >= cmd.userCirclesCxCyZR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
         continue;
       cmd.userCircleAttrs[static_cast<size_t>(e.index)].layer = v;
     } else if (e.type == SelectedEntity::Type::Annotation) {
@@ -2776,8 +2830,8 @@ void ApplyColorToSelection(AppCommandState& cmd, const std::string& v) {
         continue;
       cmd.userLineAttrs[static_cast<size_t>(e.index)].color = v;
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 3;
-      if (k + 2 >= cmd.userCirclesCxCyR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
+      const size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 >= cmd.userCirclesCxCyZR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
         continue;
       cmd.userCircleAttrs[static_cast<size_t>(e.index)].color = v;
     } else if (e.type == SelectedEntity::Type::Annotation) {
@@ -2818,8 +2872,8 @@ void ApplyLinetypeToSelection(AppCommandState& cmd, const std::string& v) {
         continue;
       cmd.userLineAttrs[static_cast<size_t>(e.index)].linetype = v;
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 3;
-      if (k + 2 >= cmd.userCirclesCxCyR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
+      const size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 >= cmd.userCirclesCxCyZR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
         continue;
       cmd.userCircleAttrs[static_cast<size_t>(e.index)].linetype = v;
     } else if (e.type == SelectedEntity::Type::Annotation) {
@@ -2859,8 +2913,8 @@ void ApplyLineweightToSelection(AppCommandState& cmd, float mm) {
         continue;
       cmd.userLineAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 3;
-      if (k + 2 >= cmd.userCirclesCxCyR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
+      const size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 >= cmd.userCirclesCxCyZR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
         continue;
       cmd.userCircleAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
     } else if (e.type == SelectedEntity::Type::Annotation) {
@@ -2900,8 +2954,8 @@ void ApplyTransparencyToSelection(AppCommandState& cmd, float a) {
         continue;
       cmd.userLineAttrs[static_cast<size_t>(e.index)].transparency = stored;
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 3;
-      if (k + 2 >= cmd.userCirclesCxCyR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
+      const size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 >= cmd.userCirclesCxCyZR.size() || static_cast<size_t>(e.index) >= cmd.userCircleAttrs.size())
         continue;
       cmd.userCircleAttrs[static_cast<size_t>(e.index)].transparency = stored;
     } else if (e.type == SelectedEntity::Type::Annotation) {
@@ -3256,6 +3310,27 @@ void DrawEditableGeneralSection(AppCommandState& cmd, const std::vector<Selected
   }
 }
 
+// One editable coordinate row in the model-space Properties panel.
+//
+// Undo is taken on **activation** (the frame the field gains focus), not on commit: by the time
+// ImGui reports IsItemDeactivatedAfterEdit the value has already been overwritten, so a snapshot
+// there would record the NEW value and Ctrl+Z would be a no-op. Snapshotting on activation is what
+// makes REQ-057's "edit Z, then Ctrl+Z restores it" actually hold — and it closes the same gap for
+// the X/Y/radius rows, which were never undoable before this.
+static void PropGeomRow(AppCommandState& cmd, const char* label, const char* id, float* v,
+                        const char* fmt, const char* undoLabel) {
+  ImGui::TableNextRow();
+  ImGui::TableNextColumn();
+  ImGui::TextUnformatted(label);
+  ImGui::TableNextColumn();
+  ImGui::SetNextItemWidth(-1);
+  ImGui::InputFloat(id, v, 0.f, 0.f, fmt);
+  if (ImGui::IsItemActivated())
+    PushUndoSnapshot(cmd, undoLabel);
+  if (ImGui::IsItemDeactivatedAfterEdit())
+    BumpCadGpuCache(cmd);
+}
+
 void DrawSingleLineGeometryEditable(AppCommandState& cmd, int lineIdx) {
   if (!PropSectionHeader("Geometry"))
     return;
@@ -3264,49 +3339,23 @@ void DrawSingleLineGeometryEditable(AppCommandState& cmd, int lineIdx) {
     return;
   float* x0 = &cmd.userLinesFlat[k];
   float* y0 = &cmd.userLinesFlat[k + 1];
+  float* z0 = &cmd.userLinesFlat[k + 2];
   float* x1 = &cmd.userLinesFlat[k + 3];
   float* y1 = &cmd.userLinesFlat[k + 4];
+  float* z1 = &cmd.userLinesFlat[k + 5];
   const std::string cfmt = DisplayFloatFmt(cmd.displayLinearPrecision);
 
   if (ImGui::BeginTable("props_geom_line_ed", 2, kPropTableFlags)) {
     ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
 
-    ImGui::TableNextRow();
-    ImGui::TableNextColumn();
-    ImGui::TextUnformatted("Start X");
-    ImGui::TableNextColumn();
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##lsx", x0, 0.f, 0.f, cfmt.c_str());
-    if (ImGui::IsItemDeactivatedAfterEdit())
-      BumpCadGpuCache(cmd);
-
-    ImGui::TableNextRow();
-    ImGui::TableNextColumn();
-    ImGui::TextUnformatted("Start Y");
-    ImGui::TableNextColumn();
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##lsy", y0, 0.f, 0.f, cfmt.c_str());
-    if (ImGui::IsItemDeactivatedAfterEdit())
-      BumpCadGpuCache(cmd);
-
-    ImGui::TableNextRow();
-    ImGui::TableNextColumn();
-    ImGui::TextUnformatted("End X");
-    ImGui::TableNextColumn();
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##lex", x1, 0.f, 0.f, cfmt.c_str());
-    if (ImGui::IsItemDeactivatedAfterEdit())
-      BumpCadGpuCache(cmd);
-
-    ImGui::TableNextRow();
-    ImGui::TableNextColumn();
-    ImGui::TextUnformatted("End Y");
-    ImGui::TableNextColumn();
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##ley", y1, 0.f, 0.f, cfmt.c_str());
-    if (ImGui::IsItemDeactivatedAfterEdit())
-      BumpCadGpuCache(cmd);
+    // Per-endpoint Z (REQ-057): a line may be genuinely sloped, so each end carries its own.
+    PropGeomRow(cmd, "Start X", "##lsx", x0, cfmt.c_str(), "Edit line X");
+    PropGeomRow(cmd, "Start Y", "##lsy", y0, cfmt.c_str(), "Edit line Y");
+    PropGeomRow(cmd, "Start Z", "##lsz", z0, cfmt.c_str(), "Edit line Z");
+    PropGeomRow(cmd, "End X", "##lex", x1, cfmt.c_str(), "Edit line X");
+    PropGeomRow(cmd, "End Y", "##ley", y1, cfmt.c_str(), "Edit line Y");
+    PropGeomRow(cmd, "End Z", "##lez", z1, cfmt.c_str(), "Edit line Z");
 
     ImGui::EndTable();
   }
@@ -3323,7 +3372,21 @@ void DrawSingleLineGeometryEditable(AppCommandState& cmd, int lineIdx) {
   if (ImGui::BeginTable("props_geom_line_derived", 2, kPropTableFlags)) {
     ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+    // "Length" keeps its established meaning — HORIZONTAL distance — because changing it would
+    // silently alter a shipped readout that survey work depends on. The slope distance and grade
+    // appear only when the line actually has rise, so a flat drawing looks exactly as before.
     PropRow("Length", lenStr.c_str());
+    const float dz = *z1 - *z0;
+    if (dz != 0.f) {
+      const float slope = std::sqrt(dx * dx + dy * dy + dz * dz);
+      PropRow("Length (slope)", FormatLinear(static_cast<double>(slope), cmd.displayLinearPrecision).c_str());
+      PropRow("Rise", FormatLinear(static_cast<double>(dz), cmd.displayLinearPrecision).c_str());
+      if (len > 1e-6f) {
+        char gradeBuf[64];
+        std::snprintf(gradeBuf, sizeof(gradeBuf), "%.2f%%", static_cast<double>(dz / len) * 100.0);
+        PropRow("Grade", gradeBuf);
+      }
+    }
     PropRow("Rotation rel. north", bearStr.c_str());
     ImGui::EndTable();
   }
@@ -3332,46 +3395,25 @@ void DrawSingleLineGeometryEditable(AppCommandState& cmd, int lineIdx) {
 void DrawSingleCircleGeometryEditable(AppCommandState& cmd, int circleIdx) {
   if (!PropSectionHeader("Geometry"))
     return;
-  const size_t k = static_cast<size_t>(circleIdx) * 3;
-  if (k + 2 >= cmd.userCirclesCxCyR.size())
+  const size_t k = static_cast<size_t>(circleIdx) * 4;
+  if (k + 3 >= cmd.userCirclesCxCyZR.size())
     return;
-  float* cx = &cmd.userCirclesCxCyR[k];
-  float* cy = &cmd.userCirclesCxCyR[k + 1];
-  float* r = &cmd.userCirclesCxCyR[k + 2];
+  float* cx = &cmd.userCirclesCxCyZR[k];
+  float* cy = &cmd.userCirclesCxCyZR[k + 1];
+  float* cz = &cmd.userCirclesCxCyZR[k + 2];
+  float* r = &cmd.userCirclesCxCyZR[k + 3];
   const std::string cfmt = DisplayFloatFmt(cmd.displayLinearPrecision);
 
   if (ImGui::BeginTable("props_geom_circ_ed", 2, kPropTableFlags)) {
     ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
     ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
 
-    ImGui::TableNextRow();
-    ImGui::TableNextColumn();
-    ImGui::TextUnformatted("Center X");
-    ImGui::TableNextColumn();
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##cx", cx, 0.f, 0.f, cfmt.c_str());
-    if (ImGui::IsItemDeactivatedAfterEdit())
-      BumpCadGpuCache(cmd);
-
-    ImGui::TableNextRow();
-    ImGui::TableNextColumn();
-    ImGui::TextUnformatted("Center Y");
-    ImGui::TableNextColumn();
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##cy", cy, 0.f, 0.f, cfmt.c_str());
-    if (ImGui::IsItemDeactivatedAfterEdit())
-      BumpCadGpuCache(cmd);
-
-    ImGui::TableNextRow();
-    ImGui::TableNextColumn();
-    ImGui::TextUnformatted("Radius");
-    ImGui::TableNextColumn();
-    ImGui::SetNextItemWidth(-1);
-    ImGui::InputFloat("##cr", r, 0.f, 0.f, cfmt.c_str());
+    PropGeomRow(cmd, "Center X", "##cx", cx, cfmt.c_str(), "Edit circle X");
+    PropGeomRow(cmd, "Center Y", "##cy", cy, cfmt.c_str(), "Edit circle Y");
+    PropGeomRow(cmd, "Center Z", "##cz", cz, cfmt.c_str(), "Edit circle Z");
+    PropGeomRow(cmd, "Radius", "##cr", r, cfmt.c_str(), "Edit circle radius");
     if (*r < 1e-6f)
       *r = 1e-6f;
-    if (ImGui::IsItemDeactivatedAfterEdit())
-      BumpCadGpuCache(cmd);
 
     ImGui::EndTable();
   }
@@ -3533,6 +3575,8 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1);
     ImGui::InputFloat("##ainsx", &ann.insX, 0.f, 0.f, cfmt.c_str());
+    if (ImGui::IsItemActivated())
+      PushUndoSnapshot(cmd, "Edit text X");
     if (ImGui::IsItemDeactivatedAfterEdit()) {
       if (ann.kind == CadAnnotation::Kind::Mtext) {
         const float dx = ann.insX - ann.boxMinX;
@@ -3548,6 +3592,8 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
     ImGui::TableNextColumn();
     ImGui::SetNextItemWidth(-1);
     ImGui::InputFloat("##ainsy", &ann.insY, 0.f, 0.f, cfmt.c_str());
+    if (ImGui::IsItemActivated())
+      PushUndoSnapshot(cmd, "Edit text Y");
     if (ImGui::IsItemDeactivatedAfterEdit()) {
       if (ann.kind == CadAnnotation::Kind::Mtext) {
         const float dy = ann.insY - ann.boxMinY;
@@ -3556,6 +3602,10 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
       }
       BumpCadGpuCache(cmd);
     }
+
+    // Insertion Z (REQ-057). Unlike X/Y this needs no MTEXT box sync — the box is a 2D extent in
+    // the text's own plane, so raising the text carries the box with it implicitly.
+    PropGeomRow(cmd, "Insertion Z", "##ainsz", &ann.insZ, cfmt.c_str(), "Edit text Z");
 
     ImGui::TableNextRow();
     ImGui::TableNextColumn();
@@ -4757,6 +4807,13 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
       return "POLYLINE next — ortho / X,Y / A / AP / CLOSE:";
     return "POLYLINE next — X,Y / A / AP / CLOSE:";
   }
+  if (cmd.active == AppCommandState::Kind::Rect) {
+    return cmd.rectPhase == AppCommandState::RectPhase::WaitFirstCorner
+               ? "RECT first corner — click or X,Y:"
+               : "RECT opposite corner — click / X,Y / @dx,dy:";
+  }
+  if (cmd.active == AppCommandState::Kind::TrimState)
+    return "TRIMSTATE — 0 = draw a line to trim, 1 = pick cutting edges:";
   if (cmd.active == AppCommandState::Kind::Arc) {
     switch (cmd.arcPhase) {
     case AppCommandState::ArcPhase::WaitStart:
@@ -4966,6 +5023,7 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
     return false;
   }
   case K::Arc: return true;
+  case K::Rect: return true;  // both corners are point prompts (REQ-024/REQ-053)
   case K::Ellipse: {
     using EP = AppCommandState::EllipsePhase;
     return cmd.ellPhase == EP::WaitCenter || cmd.ellPhase == EP::WaitMajorEnd;
@@ -5061,6 +5119,9 @@ static std::string CadPointPromptLabel(const AppCommandState& cmd) {
     case AppCommandState::ArcPhase::WaitEnd:   return "Specify end point:";
     }
     return "Specify point:";
+  case K::Rect:
+    return cmd.rectPhase == AppCommandState::RectPhase::WaitFirstCorner ? "Specify first corner point:"
+                                                                       : "Specify other corner point:";
   case K::Ellipse:
     return cmd.ellPhase == AppCommandState::EllipsePhase::WaitCenter ? "Specify center point:"
                                                                      : "Specify axis endpoint:";
@@ -7251,8 +7312,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // Append "##<uid>" so each tab has a unique ImGui ID even when two tabs share the same display name.
       const std::string tabLabel = cmd.drawingTabs[i].name + "##dt" + std::to_string(cmd.drawingTabs[i].uid);
       if (ImGui::BeginTabItem(tabLabel.c_str(), &tabOpen, tflags)) {
-        cmd.activeDrawingIdx = i;
-        cmd.pendingDrawingTabSwitch = false;  // consumed
+        // While a programmatic switch is pending, ignore the selection ImGui reports for any OTHER tab.
+        // Tabs are submitted in index order, so the tab that is still selected this frame is reached
+        // BEFORE the newly created one — without this guard it overwrote activeDrawingIdx back to itself
+        // and consumed the pending flag, and New / Open / "+" left the user on the old tab.
+        if (!cmd.pendingDrawingTabSwitch || i == cmd.activeDrawingIdx) {
+          cmd.activeDrawingIdx = i;
+          cmd.pendingDrawingTabSwitch = false;  // consumed
+        }
         ImGui::EndTabItem();
       }
       if (!tabOpen && cmd.drawingTabs.size() > 1) {
@@ -7312,6 +7379,22 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // viewport interaction is handled separately (REQ-025/027).
   const bool modelSpace = cmd.activeSpaceIndex == kModelSpaceIndex;
 
+  // ViewCube geometry is computed HERE, before any click handling, even though the widget is drawn
+  // at the end of this function. Clicks are consumed early, so a widget that only knows its own
+  // bounds at draw time cannot defend them — pressing a face or the home button was starting a
+  // box-selection drag in the viewport behind it (REQ-059: the widget consumes clicks only within
+  // its own bounds, and geometry elsewhere still picks normally).
+  constexpr float kViewCubeSize = 148.f;
+  constexpr float kViewCubePad = 10.f;
+  const float viewCubeX = imgPos.x + avail.x - kViewCubeSize - kViewCubePad;
+  const float viewCubeY = imgPos.y + kViewCubePad;
+  const ImVec2 vcMouse = ImGui::GetIO().MousePos;
+  const bool overViewCube = modelSpace && vcMouse.x >= viewCubeX && vcMouse.x <= viewCubeX + kViewCubeSize &&
+                            vcMouse.y >= viewCubeY && vcMouse.y <= viewCubeY + kViewCubeSize;
+
+  // Advance any in-flight ViewCube animation (REQ-059).
+  CadTickViewAnimation(cmd, ImGui::GetIO().DeltaTime);
+
   // Floating model space (REQ-036): Esc does NOT exit — it cancels the active model command so the user
   // keeps editing in the viewport. Exit is via double-click outside the viewport (below), the FLOAT
   // button, or PSPACE.
@@ -7340,11 +7423,33 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       *zoom = static_cast<float>(z1);
     }
 
+    // ORBIT (REQ-058): Shift + middle-drag tumbles the camera about the pan point, matching
+    // AutoCAD's 3DORBIT binding. Plain middle-drag still pans, so nothing existing changes.
+    // Model space only — a paper sheet is 2D (ADR-025 (g)) and must never tilt.
+    const bool orbitDrag = modelSpace && ImGui::GetIO().KeyShift &&
+                           ImGui::IsMouseDragging(ImGuiMouseButton_Middle);
+    if (orbitDrag) {
+      const ImVec2 d = ImGui::GetIO().MouseDelta;
+      // Degrees per pixel: a full window drag sweeps roughly half a turn horizontally, which is
+      // the responsiveness AutoCAD's constrained orbit has.
+      constexpr float kDegPerPx = 0.4f;
+      Camera c = CadViewCamera(cmd);
+      // CAMERA-relative orbit (user's stated convention): dragging left swings the camera left, so
+      // the model appears to rotate RIGHT; dragging up lifts the camera, so the model rotates DOWN.
+      // Increasing azimuth spins the scene counter-clockwise on screen, so a leftward drag
+      // (negative d.x) must DECREASE azimuth — hence both coefficients are positive.
+      c.Orbit(d.x * kDegPerPx, d.y * kDegPerPx);
+      cmd.viewAnimActive = false;  // a hand orbit wins over any ViewCube animation still easing
+      cmd.viewportAzimuthDeg = c.azimuthDeg;
+      cmd.viewportElevationDeg = c.elevationDeg;
+    }
+
     // PAN command (REQ-045): while pan mode is active, a LEFT-drag pans the view exactly like the
     // built-in middle-drag (which keeps working). Both routes share the same view-pan math.
-    const bool panDrag = ImGui::IsMouseDragging(ImGuiMouseButton_Middle) ||
-                         (cmd.active == AppCommandState::Kind::Pan &&
-                          ImGui::IsMouseDragging(ImGuiMouseButton_Left));
+    const bool panDrag = !orbitDrag &&
+                         (ImGui::IsMouseDragging(ImGuiMouseButton_Middle) ||
+                          (cmd.active == AppCommandState::Kind::Pan &&
+                           ImGui::IsMouseDragging(ImGuiMouseButton_Left)));
     if (panDrag) {
       ImVec2 d = ImGui::GetIO().MouseDelta;
       const double aspectD = static_cast<double>(avail.x) / static_cast<double>(std::max(avail.y, 1.f));
@@ -7354,6 +7459,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       *panY += (static_cast<double>(d.y) / static_cast<double>(std::max(avail.y, 1.f))) * (2.0 * halfH);
     }
   }
+
+  // Publish the viewport size so the command layer can project geometry to screen for box-select
+  // under an orbited camera (REQ-058) — it has no other way to learn the aspect.
+  cmd.uiViewportWidthPx = avail.x;
+  cmd.uiViewportHeightPx = avail.y;
 
   const int vpFbW = static_cast<int>(std::max(1.f, std::floor(avail.x)));
   const int vpFbH = static_cast<int>(std::max(1.f, std::floor(avail.y)));
@@ -7479,6 +7589,26 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         px = cmd.anchorX;
     }
     SubmitLineVertex(cmd, px, py, log);
+    consumedPaperClick = true;
+  }
+
+  // Paper-space RECT (REQ-037 / REQ-053): both corners are picked in paper inches; CommitRectangle routes
+  // the closed polyline to the active layout's paper store. ORTHO is not applied — the shape is already
+  // axis-aligned, and constraining a corner would collapse it to a line.
+  if (!modelSpace && !InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::Rect && hovered &&
+      ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
+    float px = 0.f, py = 0.f;
+    paperPick(&px, &py);
+    if (cmd.rectPhase == AppCommandState::RectPhase::WaitFirstCorner) {
+      cmd.rectX1 = px;
+      cmd.rectY1 = py;
+      cmd.anchorX = px;
+      cmd.anchorY = py;
+      cmd.rectPhase = AppCommandState::RectPhase::WaitSecondCorner;
+      log.push_back("RECT — pick the opposite corner (or type X,Y / @dx,dy):");
+    } else {
+      CommitRectangle(cmd, cmd.rectX1, cmd.rectY1, px, py, log);
+    }
     consumedPaperClick = true;
   }
 
@@ -7995,11 +8125,49 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (!InFloatingModelSpace(cmd)) {
     cmd.viewportSnapPickValid = false;
   }
-  if (!InFloatingModelSpace(cmd) && hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
-    const float u = mx / std::max(avail.x, 1.f);
-    const float v = my / std::max(avail.y, 1.f);
-    const double rawX = worldLeft + static_cast<double>(u) * (worldRight - worldLeft);
-    const double rawY = worldTop - static_cast<double>(v) * (worldTop - worldBottom);
+  // THE model-space input seam (REQ-058). Everything downstream — snap, hover, entity picking,
+  // hatch tracing, command submission — consumes rawX/rawY, so orbit-awareness is this one
+  // substitution rather than a sweep of every consumer.
+  //
+  // Plan view and paper space keep the original linear arithmetic **bit-identical** (paper is 2D
+  // by definition — ADR-025 (g) — and plan view is REQ-058's parity guarantee). Only an orbited
+  // model view takes the ray path.
+  //
+  // `cursorValid` is false when an orbited ray misses the work plane (an edge-on UCS). That is a
+  // real state, not an error to paper over: there is no world point under the cursor, so the block
+  // is skipped exactly as if the cursor were outside the viewport. Inventing a coordinate here
+  // would drop geometry somewhere the user never pointed (REQ-201).
+  bool cursorValid = !InFloatingModelSpace(cmd) && hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y;
+  double rawX = 0.0, rawY = 0.0;
+  double rawZ = 0.0;
+  if (cursorValid) {
+    const bool orbited = modelSpace && !CadViewIsPlan(cmd);
+    if (orbited) {
+      const Camera curCam = CadViewCamera(cmd);
+      ray3d::Vec3 hit;
+      if (ray3d::RayPlaneIntersect(curCam.ScreenRay(mx, my, avail.x, avail.y), CadActiveWorkPlane(cmd), &hit)) {
+        rawX = hit.x;
+        rawY = hit.y;
+        rawZ = hit.z;
+      } else {
+        cursorValid = false;  // work plane edge-on to the view: no point under the cursor
+      }
+    } else {
+      const float u = mx / std::max(avail.x, 1.f);
+      const float v = my / std::max(avail.y, 1.f);
+      rawX = worldLeft + static_cast<double>(u) * (worldRight - worldLeft);
+      rawY = worldTop - static_cast<double>(v) * (worldTop - worldBottom);
+    }
+  }
+  if (cursorValid) {
+    cmd.uiCursorWorldZ = static_cast<float>(rawZ);
+
+    // The cursor's world ray, built once and handed to every pick in this block. Null in plan
+    // view and paper space so those keep the exact pre-3D XY test (REQ-058 parity).
+    const bool pickByRay = modelSpace && !CadViewIsPlan(cmd);
+    const ray3d::Ray cursorRay =
+        pickByRay ? CadViewCamera(cmd).ScreenRay(mx, my, avail.x, avail.y) : ray3d::Ray{};
+    const ray3d::Ray* cursorRayPtr = pickByRay ? &cursorRay : nullptr;
 
     if (outCursorRawX)
       *outCursorRawX = rawX;
@@ -8011,7 +8179,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       SelectedEntity hit{};
       float d2 = 0.f;
       const float offTol = CadOffsetEntityPickTolWorld(cmd);
-      if (PickClosestCadEntity(cmd, rawX, rawY, offTol, &hit, &d2)) {
+      if (PickClosestCadEntity(cmd, rawX, rawY, offTol, &hit, &d2, cursorRayPtr)) {
         cmd.offsetHoverHighlightValid = true;
         cmd.offsetHoverEntity = hit;
       } else {
@@ -8041,7 +8209,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     // Idle hover: detect CAD entity under cursor for subtle highlight feedback.
     {
-      const bool blockEntityHover = cmd.active != AK::None || cmd.dimGripMoveActive ||
+      // TRIM's cutting-edge and target picks are entity picks, so they get the same hover feedback as
+      // idle selection — you can see what a click will take before you take it (REQ-056). Every other
+      // command still suppresses hover, since their clicks mean coordinates rather than objects.
+      using TPh = AppCommandState::TrimPhase;
+      const bool trimEntityPick = cmd.active == AK::Trim && (cmd.trimPhase == TPh::SelectCuttingEdges ||
+                                                             cmd.trimPhase == TPh::SelectTrimTargets);
+      const bool blockEntityHover = (cmd.active != AK::None && !trimEntityPick) || cmd.dimGripMoveActive ||
                                     cmd.entityGripMoveActive || cmd.mtextGripMoveActive || cmd.selBoxWaitingSecond;
       if (!blockEntityHover) {
         // Text annotations are picked by bounding box and take priority over geometry, mirroring
@@ -8239,100 +8413,23 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (cmd.entityGripMoveActive && cmd.entityGripEntityIndex >= 0 && outCursorX && outCursorY && hovered &&
       mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
     // Snap to other geometry if OSNAP fired (entity's own geometry is excluded); otherwise raw cursor.
-    const float curWx = cmd.viewportSnapPickValid
+    const float curWxRaw = cmd.viewportSnapPickValid
         ? cmd.viewportSnapPickWorldX
         : (outCursorRawX ? static_cast<float>(*outCursorRawX) : static_cast<float>(*outCursorX));
-    const float curWy = cmd.viewportSnapPickValid
+    const float curWyRaw = cmd.viewportSnapPickValid
         ? cmd.viewportSnapPickWorldY
         : (outCursorRawY ? static_cast<float>(*outCursorRawY) : static_cast<float>(*outCursorY));
-    const int idx = cmd.entityGripEntityIndex;
-    switch (cmd.entityGripType) {
-      case SelectedEntity::Type::LineSeg: {
-        if (idx < 0 || static_cast<size_t>(idx) * 6 + 5 >= cmd.userLinesFlat.size())
-          break;
-        const size_t k = static_cast<size_t>(idx) * 6;
-        if (cmd.entityGripWhich == 0) {
-          cmd.userLinesFlat[k] = curWx;
-          cmd.userLinesFlat[k + 1] = curWy;
-        } else if (cmd.entityGripWhich == 1) {
-          cmd.userLinesFlat[k + 3] = curWx;
-          cmd.userLinesFlat[k + 4] = curWy;
-        }
-        break;
-      }
-      case SelectedEntity::Type::Circle: {
-        if (idx < 0 || static_cast<size_t>(idx) * 3 + 2 >= cmd.userCirclesCxCyR.size())
-          break;
-        const size_t k = static_cast<size_t>(idx) * 3;
-        float& cx = cmd.userCirclesCxCyR[k];
-        float& cy = cmd.userCirclesCxCyR[k + 1];
-        float& r = cmd.userCirclesCxCyR[k + 2];
-        if (cmd.entityGripWhich == 0) {
-          cx = curWx;
-          cy = curWy;
-        } else if (cmd.entityGripWhich == 1) {
-          r = std::hypot(curWx - cx, curWy - cy);
-        }
-        break;
-      }
-      case SelectedEntity::Type::Polyline: {
-        const int np = cmd.userPolylineOffsets.size() > 0 ? static_cast<int>(cmd.userPolylineOffsets.size() - 1) : 0;
-        if (idx < 0 || idx >= np)
-          break;
-        const int startV = cmd.userPolylineOffsets[static_cast<size_t>(idx)];
-        const int viLocal = cmd.entityGripWhich;
-        const int globalV = startV + viLocal;
-        const size_t xIdx = static_cast<size_t>(globalV) * 3;
-        if (xIdx + 1 >= cmd.userPolylineVerts.size())
-          break;
-        cmd.userPolylineVerts[xIdx] = curWx;
-        cmd.userPolylineVerts[xIdx + 1] = curWy;
-        break;
-      }
-      case SelectedEntity::Type::Arc: {
-        if (idx < 0 || static_cast<size_t>(idx) >= cmd.userArcs.size())
-          break;
-        CadArc& a = cmd.userArcs[static_cast<size_t>(idx)];
-        if (cmd.entityGripWhich == 0) {
-          a.cx = curWx;
-          a.cy = curWy;
-        } else if (cmd.entityGripWhich == 1) {
-          a.r = std::hypot(curWx - a.cx, curWy - a.cy);
-          a.startRad = std::atan2(curWy - a.cy, curWx - a.cx);
-        } else if (cmd.entityGripWhich == 2) {
-          a.r = std::hypot(curWx - a.cx, curWy - a.cy);
-          const float endRad = std::atan2(curWy - a.cy, curWx - a.cx);
-          a.sweepRad = endRad - a.startRad;
-        }
-        break;
-      }
-      case SelectedEntity::Type::Ellipse: {
-        if (idx < 0 || static_cast<size_t>(idx) >= cmd.userEllipses.size())
-          break;
-        CadEllipse& el = cmd.userEllipses[static_cast<size_t>(idx)];
-        if (cmd.entityGripWhich == 0) {
-          el.cx = curWx;
-          el.cy = curWy;
-        } else if (cmd.entityGripWhich == 1) {
-          el.majVx = curWx - el.cx;
-          el.majVy = curWy - el.cy;
-        } else if (cmd.entityGripWhich == 2) {
-          const float majLen2 = el.majVx * el.majVx + el.majVy * el.majVy;
-          if (majLen2 < 1e-12f)
-            break;
-          const float dx = curWx - el.cx;
-          const float dy = curWy - el.cy;
-          const float perpX = -el.majVy;
-          const float perpY = el.majVx;
-          const float ratioNew = std::clamp((dx * perpX + dy * perpY) / majLen2, 0.f, 1.f);
-          el.ratio = ratioNew;
-        }
-        break;
-      }
-      default:
-        break;
-    }
 
+    // ORTHO constrains the dragged point to the H/V line through the grip's start (REQ-047). An object snap
+    // still beats ORTHO, matching the draw commands, so the constraint is skipped on a snapped cursor.
+    float curWx = curWxRaw;
+    float curWy = curWyRaw;
+    if (!cmd.viewportSnapPickValid)
+      ApplyOrthoConstrainFromAnchor(cmd.entityGripAnchorX, cmd.entityGripAnchorY, &curWx, &curWy, cmd.orthoMode);
+
+    cmd.entityGripLiveDistance =
+        std::hypot(curWx - cmd.entityGripAnchorX, curWy - cmd.entityGripAnchorY);
+    ApplyEntityGripPoint(cmd, curWx, curWy);
     BumpCadGpuCache(cmd);
   }
 
@@ -8351,12 +8448,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       break;
     }
     case SelectedEntity::Type::Circle: {
-      if (idx < 0 || static_cast<size_t>(idx) * 3 + 2 >= cmd.userCirclesCxCyR.size())
+      if (idx < 0 || static_cast<size_t>(idx) * 4 + 3 >= cmd.userCirclesCxCyZR.size())
         break;
-      const size_t k = static_cast<size_t>(idx) * 3;
-      cmd.userCirclesCxCyR[k] = cmd.entityGripOrigCx;
-      cmd.userCirclesCxCyR[k + 1] = cmd.entityGripOrigCy;
-      cmd.userCirclesCxCyR[k + 2] = cmd.entityGripOrigR;
+      const size_t k = static_cast<size_t>(idx) * 4;
+      cmd.userCirclesCxCyZR[k] = cmd.entityGripOrigCx;
+      cmd.userCirclesCxCyZR[k + 1] = cmd.entityGripOrigCy;
+      cmd.userCirclesCxCyZR[k + 3] = cmd.entityGripOrigR;
       break;
     }
     case SelectedEntity::Type::Polyline: {
@@ -8427,8 +8524,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   const bool overCmdSugPopup =
       s_cmdSugPopupOpen && ImGui::IsMouseHoveringRect(s_cmdSugPopupMin, s_cmdSugPopupMax, false);
-  if (modelSpace && hovered && !overCmdSugPopup && cmd.active != AppCommandState::Kind::Pan &&
-      ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 &&
+  if (modelSpace && hovered && !overCmdSugPopup && !overViewCube &&
+      cmd.active != AppCommandState::Kind::Pan && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 &&
       mx < avail.x && my >= 0 && my < avail.y) {
     if (cmd.dimGripMoveActive) {
       cmd.dimGripMoveActive = false;
@@ -8464,10 +8561,24 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const float commitX = haveSnapPick ? cmd.viewportSnapPickWorldX : *outCursorX;
     const float commitY = haveSnapPick ? cmd.viewportSnapPickWorldY : *outCursorY;
 
+    // Mouse -> world for CLICK handling. This is a second, independent conversion from the hover
+    // seam above and must branch the same way, or hover highlights an entity that the click then
+    // fails to select (REQ-058). Plan view and paper space keep the exact previous arithmetic.
     const float uPick = mx / std::max(avail.x, 1.f);
     const float vPick = my / std::max(avail.y, 1.f);
-    const double rawPickX = worldLeft + static_cast<double>(uPick) * (worldRight - worldLeft);
-    const double rawPickY = worldTop - static_cast<double>(vPick) * (worldTop - worldBottom);
+    double rawPickX = worldLeft + static_cast<double>(uPick) * (worldRight - worldLeft);
+    double rawPickY = worldTop - static_cast<double>(vPick) * (worldTop - worldBottom);
+    const bool pickOrbited = modelSpace && !CadViewIsPlan(cmd);
+    const Camera pickCam = CadViewCamera(cmd);
+    const ray3d::Ray pickRay = pickOrbited ? pickCam.ScreenRay(mx, my, avail.x, avail.y) : ray3d::Ray{};
+    const ray3d::Ray* pickRayPtr = pickOrbited ? &pickRay : nullptr;
+    if (pickOrbited) {
+      ray3d::Vec3 pickHit;
+      if (ray3d::RayPlaneIntersect(pickRay, CadActiveWorkPlane(cmd), &pickHit)) {
+        rawPickX = pickHit.x;
+        rawPickY = pickHit.y;
+      }
+    }
     const float rawPickXf = static_cast<float>(rawPickX);
     const float rawPickYf = static_cast<float>(rawPickY);
 
@@ -8523,7 +8634,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         log.push_back("HATCH — no closed boundary found there; click inside a closed area (Esc to cancel).");
       }
     }
+    // Point-picking draw commands: the click is a coordinate, handed straight to the command state
+    // machine. A command missing from this list silently ignores every viewport click and appears to
+    // hang on its first prompt — which is exactly what RECT did before it was added here.
     else if (cmd.active == K::Line || cmd.active == K::Circle || cmd.active == K::Polyline ||
+             cmd.active == K::Rect ||
              cmd.active == K::Arc || cmd.active == K::Ellipse || cmd.active == K::Text ||
              cmd.active == K::Mtext || cmd.active == K::DimAligned || cmd.active == K::DimLinear ||
              cmd.active == K::DimAngular ||
@@ -8665,10 +8780,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (!handled && !cmd.selection.empty()) {
         const double denx = worldRight - worldLeft + 1e-12;
         const double deny = worldTop - worldBottom + 1e-12;
+        // Grips must be hit-tested where they are DRAWN, so this projects through the camera
+        // (REQ-058). In plan view it reduces to the previous arithmetic exactly; orbited, the old
+        // mapping would place the hit targets somewhere other than the visible grip squares.
+        const Camera gripCam = CadViewCamera(cmd);
         auto wtsRel = [&](double wx, double wy) -> ImVec2 {
+          if (modelSpace) {
+            float sx = 0.f, sy = 0.f;
+            gripCam.WorldToScreen(wx, wy, 0.0, avail.x, avail.y, &sx, &sy);
+            return ImVec2(sx, sy);  // relative to image top-left
+          }
           const float u = static_cast<float>((wx - worldLeft) / denx);
           const float v = static_cast<float>((worldTop - wy) / deny);
-          return ImVec2(u * avail.x, v * avail.y); // relative to image top-left
+          return ImVec2(u * avail.x, v * avail.y);
         };
 
         const float gripHitPx = 10.f;
@@ -8677,11 +8801,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         int bestWhich = -1;
         SelectedEntity bestSel{};
 
+        float bestGripX = 0.f, bestGripY = 0.f;
         auto tryGrip = [&](const SelectedEntity& sel, float gx, float gy, int which) {
           ImVec2 p = wtsRel(gx, gy);
           const float dx = mx - p.x, dy = my - p.y;
           const float d2 = dx * dx + dy * dy;
-          if (d2 < bestD2) { bestD2 = d2; bestWhich = which; bestSel = sel; }
+          if (d2 < bestD2) {
+            bestD2 = d2; bestWhich = which; bestSel = sel;
+            bestGripX = gx; bestGripY = gy;  // ORTHO / typed-distance anchor for the drag (REQ-047)
+          }
         };
 
         for (const SelectedEntity& sel : cmd.selection) {
@@ -8695,11 +8823,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             break;
           }
           case SelectedEntity::Type::Circle: {
-            const size_t k = static_cast<size_t>(sel.index) * 3;
-            if (k + 2 < cmd.userCirclesCxCyR.size()) {
-              const float cx = cmd.userCirclesCxCyR[k];
-              const float cy = cmd.userCirclesCxCyR[k + 1];
-              const float r  = cmd.userCirclesCxCyR[k + 2];
+            const size_t k = static_cast<size_t>(sel.index) * 4;
+            if (k + 3 < cmd.userCirclesCxCyZR.size()) {
+              const float cx = cmd.userCirclesCxCyZR[k];
+              const float cy = cmd.userCirclesCxCyZR[k + 1];
+              const float r  = cmd.userCirclesCxCyZR[k + 3];
               tryGrip(sel, cx,     cy, 0);
               tryGrip(sel, cx + r, cy, 1);
             }
@@ -8744,10 +8872,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
 
         if (bestWhich >= 0) {
+          // Snapshot the pre-drag state, as the floating-viewport grab already does
+          // (TryBeginEntityGripAtLocal) — one undo takes the entity back to where the stretch started,
+          // whether it was placed by dragging or by typing a distance.
+          PushUndoSnapshot(cmd, "Grip edit");
           cmd.entityGripMoveActive = true;
           cmd.entityGripType = bestSel.type;
           cmd.entityGripEntityIndex = bestSel.index;
           cmd.entityGripWhich = bestWhich;
+          // The grip's own starting position is the base of the stretch: ORTHO constrains the new point to
+          // the H/V line through it, and a typed distance runs along that axis (REQ-047).
+          cmd.entityGripAnchorX = bestGripX;
+          cmd.entityGripAnchorY = bestGripY;
+          cmd.entityGripTypedDistanceValid = false;
 
           // Store originals for RMB cancel.
           switch (bestSel.type) {
@@ -8760,10 +8897,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             break;
           }
           case SelectedEntity::Type::Circle: {
-            const size_t k = static_cast<size_t>(bestSel.index) * 3;
-            cmd.entityGripOrigCx = cmd.userCirclesCxCyR[k];
-            cmd.entityGripOrigCy = cmd.userCirclesCxCyR[k + 1];
-            cmd.entityGripOrigR  = cmd.userCirclesCxCyR[k + 2];
+            const size_t k = static_cast<size_t>(bestSel.index) * 4;
+            cmd.entityGripOrigCx = cmd.userCirclesCxCyZR[k];
+            cmd.entityGripOrigCy = cmd.userCirclesCxCyZR[k + 1];
+            cmd.entityGripOrigR  = cmd.userCirclesCxCyZR[k + 3];
             break;
           }
           case SelectedEntity::Type::Polyline: {
@@ -8876,7 +9013,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         SelectedEntity clickHit{};
         float clickD2 = 0.f;
         const float clickTol = CadOffsetEntityPickTolWorld(cmd);
-        if (PickClosestCadEntity(cmd, rawPickX, rawPickY, clickTol, &clickHit, &clickD2)) {
+        // Same ray the hover used, so what highlights is what selects (REQ-058).
+        if (PickClosestCadEntity(cmd, rawPickX, rawPickY, clickTol, &clickHit, &clickD2, pickRayPtr)) {
           AbortMtextGripInteraction(cmd);
           ClearDimGripInteraction(cmd);
           if (keyShift) {
@@ -9135,13 +9273,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       }
       // Circles (REQ-028: skip frozen layers).
-      for (size_t i = 0; i + 2 < cmd.userCirclesCxCyR.size(); i += 3) {
-        const size_t circleIdx = i / 3;
+      for (size_t i = 0; i + 3 < cmd.userCirclesCxCyZR.size(); i += 4) {
+        const size_t circleIdx = i / 4;
         const EntityAttributes& attr = CircleAttr(cmd, static_cast<int>(circleIdx));
         if (IsLayerFrozenInViewport(vp, attr.layer))
           continue;
-        const ImVec2 c = m2s(cmd.userCirclesCxCyR[i] + oX, cmd.userCirclesCxCyR[i + 1] + oY);
-        const float rPx = cmd.userCirclesCxCyR[i + 2] * pxPerModel;
+        const ImVec2 c = m2s(cmd.userCirclesCxCyZR[i] + oX, cmd.userCirclesCxCyZR[i + 1] + oY);
+        const float rPx = cmd.userCirclesCxCyZR[i + 3] * pxPerModel;
         ImU32 cc2;
         float cw;
         entStyle(SelectedEntity::Type::Circle, static_cast<int>(circleIdx), vpBaseCol(attr.layer, attr.color), cc2, cw);
@@ -9201,10 +9339,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             break;
           }
           case SelectedEntity::Type::Circle: {
-            const size_t k = static_cast<size_t>(sel.index) * 3;
-            if (k + 2 < cmd.userCirclesCxCyR.size()) {
-              drawGrip(cmd.userCirclesCxCyR[k], cmd.userCirclesCxCyR[k + 1], hot(0));
-              drawGrip(cmd.userCirclesCxCyR[k] + cmd.userCirclesCxCyR[k + 2], cmd.userCirclesCxCyR[k + 1], hot(1));
+            const size_t k = static_cast<size_t>(sel.index) * 4;
+            if (k + 3 < cmd.userCirclesCxCyZR.size()) {
+              drawGrip(cmd.userCirclesCxCyZR[k], cmd.userCirclesCxCyZR[k + 1], hot(0));
+              drawGrip(cmd.userCirclesCxCyZR[k] + cmd.userCirclesCxCyZR[k + 3], cmd.userCirclesCxCyZR[k + 1], hot(1));
             }
             break;
           }
@@ -9321,7 +9459,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // even-odd with a screen-space scanline fill: per row, pair sorted edge crossings and fill the odd spans.
       for (size_t fi = 0; fi < L.paperFilledRegions.size(); ++fi) {
         const CadFilledRegion& fr = L.paperFilledRegions[fi];
-        if (fr.loopStart.empty() || fr.verts.size() < 6)
+        if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)  // < 3 vertices × 3 floats
           continue;
         float rgba[4] = {0.85f, 0.85f, 0.85f, 1.f};
         if (fi < L.paperFilledRegionAttrs.size()) {
@@ -9341,8 +9479,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             continue;
           for (int k = 0; k < cnt; ++k) {
             const int a = begin + k, b = begin + (k + 1) % cnt;
-            const ImVec2 pa = w2s(fr.verts[static_cast<size_t>(a) * 2], fr.verts[static_cast<size_t>(a) * 2 + 1]);
-            const ImVec2 pb = w2s(fr.verts[static_cast<size_t>(b) * 2], fr.verts[static_cast<size_t>(b) * 2 + 1]);
+            const ImVec2 pa =
+                w2s(fr.vertsXyz[static_cast<size_t>(a) * 3], fr.vertsXyz[static_cast<size_t>(a) * 3 + 1]);
+            const ImVec2 pb =
+                w2s(fr.vertsXyz[static_cast<size_t>(b) * 3], fr.vertsXyz[static_cast<size_t>(b) * 3 + 1]);
             edges.push_back(ImVec4(pa.x, pa.y, pb.x, pb.y));
             yMin = std::min({yMin, pa.y, pb.y});
             yMax = std::max({yMax, pa.y, pb.y});
@@ -9557,6 +9697,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
       sdl->AddLine(w2s(cmd.anchorX, cmd.anchorY), w2s(snapCurPX, snapCurPY), IM_COL32(59, 130, 246, 230), 1.5f);
     }
+    // Paper-space RECT rubber band (REQ-053): the axis-aligned rectangle spanned by the first corner and
+    // the (snapped) cursor.
+    if (!InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::Rect &&
+        cmd.rectPhase == AppCommandState::RectPhase::WaitSecondCorner && hovered) {
+      const ImVec2 ra = w2s(cmd.rectX1, cmd.rectY1);
+      const ImVec2 rb = w2s(snapCurPX, snapCurPY);
+      sdl->AddRect(ImVec2(std::min(ra.x, rb.x), std::min(ra.y, rb.y)),
+                   ImVec2(std::max(ra.x, rb.x), std::max(ra.y, rb.y)), IM_COL32(59, 130, 246, 230), 0.f, 0, 1.5f);
+    }
     // Object-snap glyph (REQ-037): green square at the snapped paper point.
     if (paperSnapActive && hovered) {
       const ImVec2 g = w2s(paperSnapXIn, paperSnapYIn);
@@ -9574,8 +9723,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       for (size_t i = 0; i + 5 < cb.lines.size(); i += 6)
         sdl->AddLine(w2s(cb.lines[i] + gdx, cb.lines[i + 1] + gdy), w2s(cb.lines[i + 3] + gdx, cb.lines[i + 4] + gdy),
                      ghost, 1.4f);
-      for (size_t i = 0; i + 2 < cb.circles.size(); i += 3)
-        sdl->AddCircle(w2s(cb.circles[i] + gdx, cb.circles[i + 1] + gdy), cb.circles[i + 2] * pxPerPaperIn2, ghost, 0, 1.4f);
+      // Clipboard circles are cx,cy,z,r; the paste ghost is drawn in plan, so z is ignored here.
+      for (size_t i = 0; i + 3 < cb.circlesCxCyZR.size(); i += 4)
+        sdl->AddCircle(w2s(cb.circlesCxCyZR[i] + gdx, cb.circlesCxCyZR[i + 1] + gdy),
+                       cb.circlesCxCyZR[i + 3] * pxPerPaperIn2, ghost, 0, 1.4f);
       for (const CadArc& a : cb.arcs) {
         constexpr int kSeg = 40;
         ImVec2 prev{};
@@ -9780,6 +9931,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (lineRubber || plineRubber)
         sdl->AddLine(mlToScreen(cmd.anchorX, cmd.anchorY), mlToScreen(drawLX, drawLY),
                      IM_COL32(90, 220, 120, 230), 1.5f);
+      // RECT rubber band through a floating viewport (REQ-036 / REQ-053).
+      if (cmd.active == AppCommandState::Kind::Rect &&
+          cmd.rectPhase == AppCommandState::RectPhase::WaitSecondCorner) {
+        const ImVec2 ra = mlToScreen(cmd.rectX1, cmd.rectY1);
+        const ImVec2 rb = mlToScreen(drawLX, drawLY);
+        sdl->AddRect(ImVec2(std::min(ra.x, rb.x), std::min(ra.y, rb.y)),
+                     ImVec2(std::max(ra.x, rb.x), std::max(ra.y, rb.y)), IM_COL32(90, 220, 120, 230), 0.f, 0, 1.5f);
+      }
       // The cursor crosshair itself is the full CAD crosshair drawn later (at the raw mouse in floating mode);
       // no small marker here. Keep the snap glyph below.
       if (floatingSnapHit.valid) {  // object-snap glyph (green square), sized to match the model-space glyph
@@ -9844,14 +10003,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (modelAnnotationsVisible && cmd.active == AK::Hatch && cmd.hatchPreviewValid &&
       cmd.hatchPreviewLoop.size() >= 6) {
     ImDrawList* pdl = ImGui::GetWindowDrawList();
-    const double denx = worldRight - worldLeft + 1e-12;
-    const double deny = worldTop - worldBottom + 1e-12;
     std::vector<ImVec2> pts;
     pts.reserve(cmd.hatchPreviewLoop.size() / 2);
+    const Camera hatchCam = CadViewCamera(cmd);
     for (size_t i = 0; i + 1 < cmd.hatchPreviewLoop.size(); i += 2) {
-      const float u = static_cast<float>((static_cast<double>(cmd.hatchPreviewLoop[i]) - worldLeft) / denx);
-      const float v = static_cast<float>((worldTop - static_cast<double>(cmd.hatchPreviewLoop[i + 1])) / deny);
-      pts.push_back(ImVec2(imgPos.x + u * avail.x, imgPos.y + v * avail.y));
+      // Camera-projected so the preview outline stays on the geometry it traced when orbited
+      // (REQ-058); identical to the previous mapping in plan view.
+      float sx = 0.f, sy = 0.f;
+      hatchCam.WorldToScreen(static_cast<double>(cmd.hatchPreviewLoop[i]),
+                             static_cast<double>(cmd.hatchPreviewLoop[i + 1]), 0.0, avail.x, avail.y, &sx, &sy);
+      pts.push_back(ImVec2(imgPos.x + sx, imgPos.y + sy));
     }
     const int r = static_cast<int>(cmd.hatchColorRgb[0] * 255.f);
     const int g = static_cast<int>(cmd.hatchColorRgb[1] * 255.f);
@@ -9864,8 +10025,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // colour. Solid fills render under the linework in the GL pass; line patterns render here in the overlay.
   if (modelAnnotationsVisible && !cmd.cadFilledRegions.empty()) {
     ImDrawList* hdl = ImGui::GetWindowDrawList();
-    const double denx = worldRight - worldLeft + 1e-12;
-    const double deny = worldTop - worldBottom + 1e-12;
+    const Camera hatchCam = CadViewCamera(cmd);
     std::vector<float> segs;
     for (size_t fi = 0; fi < cmd.cadFilledRegions.size(); ++fi) {
       const CadFilledRegion& fr = cmd.cadFilledRegions[fi];
@@ -9887,10 +10047,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                                  static_cast<int>(rgba[2] * 255.f),
                                  static_cast<int>(std::clamp(rgba[3], 0.f, 1.f) * 255.f));
       for (size_t s = 0; s + 3 < segs.size(); s += 4) {
-        const float u0 = static_cast<float>((static_cast<double>(segs[s]) - worldLeft) / denx);
-        const float v0 = static_cast<float>((worldTop - static_cast<double>(segs[s + 1])) / deny);
-        const float u1 = static_cast<float>((static_cast<double>(segs[s + 2]) - worldLeft) / denx);
-        const float v1 = static_cast<float>((worldTop - static_cast<double>(segs[s + 3])) / deny);
+        // Camera-projected (REQ-058): pattern lines must stay inside their region when orbited.
+        float px0 = 0.f, py0 = 0.f, px1 = 0.f, py1 = 0.f;
+        hatchCam.WorldToScreen(static_cast<double>(segs[s]), static_cast<double>(segs[s + 1]), 0.0, avail.x,
+                               avail.y, &px0, &py0);
+        hatchCam.WorldToScreen(static_cast<double>(segs[s + 2]), static_cast<double>(segs[s + 3]), 0.0, avail.x,
+                               avail.y, &px1, &py1);
+        const float u0 = px0 / std::max(avail.x, 1.f), v0 = py0 / std::max(avail.y, 1.f);
+        const float u1 = px1 / std::max(avail.x, 1.f), v1 = py1 / std::max(avail.y, 1.f);
         hdl->AddLine(ImVec2(imgPos.x + u0 * avail.x, imgPos.y + v0 * avail.y),
                      ImVec2(imgPos.x + u1 * avail.x, imgPos.y + v1 * avail.y), col, 1.0f);
       }
@@ -9900,13 +10064,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (modelAnnotationsVisible &&
       (!cmd.cadAnnotations.empty() || !transformAnnPreviews.empty() || showMtextCmdDraft || showDimCmdDraft)) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
-    auto worldToScreen = [&](float wx, float wy, ImVec2* out) {
-      const double denx = worldRight - worldLeft + 1e-12;
-      const double deny = worldTop - worldBottom + 1e-12;
-      const float u = static_cast<float>((static_cast<double>(wx) - worldLeft) / denx);
-      const float v = static_cast<float>((worldTop - static_cast<double>(wy)) / deny);
-      out->x = imgPos.x + u * avail.x;
-      out->y = imgPos.y + v * avail.y;
+    // Annotations are drawn by ImGui, not GL, so they do NOT inherit the renderer's MVP: without
+    // routing through the camera they would stay in plan positions while an orbit tilts the
+    // linework around them (REQ-058). In plan view `Camera::WorldToScreen` reduces exactly to the
+    // previous linear mapping — asserted by a parity test — so nothing changes until the user
+    // actually orbits. Coordinates here are LOCAL storage space, which is also the camera's
+    // target space, so no rebase is involved.
+    const Camera annCam = CadViewCamera(cmd);
+    auto worldToScreen = [&](float wx, float wy, ImVec2* out, float wz = 0.f) {
+      float px = 0.f, py = 0.f;
+      annCam.WorldToScreen(static_cast<double>(wx), static_cast<double>(wy), static_cast<double>(wz), avail.x,
+                           avail.y, &px, &py);
+      out->x = imgPos.x + px;
+      out->y = imgPos.y + py;
     };
     const float worldPerPxY = static_cast<float>((worldTop - worldBottom) / static_cast<double>(std::max(avail.y, 1.f)));
     constexpr ImU32 kAnnCol = IM_COL32(230, 232, 238, 255);
@@ -9921,7 +10091,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const float hWorld = CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch);
       if (a.kind == CadAnnotation::Kind::Text) {
         ImVec2 sp{};
-        worldToScreen(a.insX, a.insY, &sp);
+        worldToScreen(a.insX, a.insY, &sp, a.insZ);
         // CAD TEXT is model-sized: scale with the drawing (no min-px floor), so it stays proportional when
         // zoomed out instead of ballooning at the readability floor. Only cap the upper end.
         const float fontPx =
@@ -10076,8 +10246,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         AddAlignedDimText(dl, font, fontPx, sp, screenAng, kDimTextCol, a.text.c_str());
       } else {
         ImVec2 sa{}, sb{};
-        worldToScreen(a.boxMinX, a.boxMinY, &sa);
-        worldToScreen(a.boxMaxX, a.boxMaxY, &sb);
+        worldToScreen(a.boxMinX, a.boxMinY, &sa, a.insZ);
+        worldToScreen(a.boxMaxX, a.boxMaxY, &sb, a.insZ);
         const float rx0 = std::min(sa.x, sb.x);
         const float ry0 = std::min(sa.y, sb.y);
         const float rx1 = std::max(sa.x, sb.x);
@@ -10130,7 +10300,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             const float distToPoint = std::hypot(lsp.easting - lcx, lsp.northing - lcy);
             if (distToPoint > halfDiag * 1.1f) {
               ImVec2 ptScreen{};
-              worldToScreen(lsp.easting, lsp.northing, &ptScreen);
+              worldToScreen(lsp.easting, lsp.northing, &ptScreen, lsp.elevation);
               const float cx_s = 0.5f * (rx0 + rx1);
               const float cy_s = 0.5f * (ry0 + ry1);
               // Direction from label to point in screen space.
@@ -10275,8 +10445,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // Survey-linked labels: grips only (no selection rectangle).
       if (a.surveyPointLabelFor < 0) {
         ImVec2 sa{}, sb{};
-        worldToScreen(a.boxMinX, a.boxMinY, &sa);
-        worldToScreen(a.boxMaxX, a.boxMaxY, &sb);
+        worldToScreen(a.boxMinX, a.boxMinY, &sa, a.insZ);
+        worldToScreen(a.boxMaxX, a.boxMaxY, &sb, a.insZ);
         const float rx0 = std::min(sa.x, sb.x);
         const float ry0 = std::min(sa.y, sb.y);
         const float rx1 = std::max(sa.x, sb.x);
@@ -10313,8 +10483,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     auto annScreenRect = [&](const CadAnnotation& a, ImVec2* rmin, ImVec2* rmax) {
       if (a.kind == CadAnnotation::Kind::Mtext) {
         ImVec2 sa{}, sb{};
-        worldToScreen(a.boxMinX, a.boxMinY, &sa);
-        worldToScreen(a.boxMaxX, a.boxMaxY, &sb);
+        worldToScreen(a.boxMinX, a.boxMinY, &sa, a.insZ);
+        worldToScreen(a.boxMaxX, a.boxMaxY, &sb, a.insZ);
         rmin->x = std::min(sa.x, sb.x);
         rmin->y = std::min(sa.y, sb.y);
         rmax->x = std::max(sa.x, sb.x);
@@ -10324,7 +10494,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const float hW = CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch);
       const float fpx = std::clamp(hW / std::max(worldPerPxY, 1.e-6f), 1.f, cmd.viewportTextMaxPx);
       ImVec2 sp{};
-      worldToScreen(a.insX, a.insY, &sp);
+      worldToScreen(a.insX, a.insY, &sp, a.insZ);
       float tw = 0.f;
       Shx::Font* sf = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
       if (sf && sf->valid()) {
@@ -10347,7 +10517,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const float hW = CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch);
       const float fpx = std::clamp(hW / std::max(worldPerPxY, 1.e-6f), 1.f, cmd.viewportTextMaxPx);
       ImVec2 sp{};
-      worldToScreen(a.insX, a.insY, &sp);
+      worldToScreen(a.insX, a.insY, &sp, a.insZ);
       float tw = 0.f;
       Shx::Font* sf = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
       if (sf && sf->valid()) {
@@ -10451,13 +10621,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         std::clamp(hWorldL / std::max(worldPerPxYL, 1.e-6f), cmd.viewportTextMinPx, cmd.viewportTextMaxPx);
     ImFont* fontL = ImGui::GetFont();
     constexpr ImU32 kPtIdCol = IM_COL32(255, 248, 200, 255);
+    // Camera-projected (REQ-058): reduces to the previous mapping in plan view, and keeps this
+    // overlay on the geometry once the view is orbited.
+    const Camera ovCamA = CadViewCamera(cmd);
     auto wts = [&](float wx, float wy, ImVec2* o) {
-      const float denx = worldRight - worldLeft + 1e-12f;
-      const float deny = worldTop - worldBottom + 1e-12f;
-      const float u = (wx - worldLeft) / denx;
-      const float v = (worldTop - wy) / deny;
-      o->x = imgPos.x + u * avail.x;
-      o->y = imgPos.y + v * avail.y;
+      float sx = 0.f, sy = 0.f;
+      ovCamA.WorldToScreen(static_cast<double>(wx), static_cast<double>(wy), 0.0, avail.x, avail.y, &sx, &sy);
+      o->x = imgPos.x + sx;
+      o->y = imgPos.y + sy;
     };
     for (const auto& p : cmd.surveyPoints) {
       ImVec2 sp{};
@@ -10477,19 +10648,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const float gripHalf = cmd.gripSizePx;
     constexpr ImU32 kGripFillE = IM_COL32(59, 130, 246, 255);
     constexpr ImU32 kGripBorderE = IM_COL32(30, 64, 175, 255);
-
-    const float denx = worldRight - worldLeft + 1e-12f;
-    const float deny = worldTop - worldBottom + 1e-12f;
-    auto wts = [&](float wx, float wy, ImVec2* o) {
-      const float u = (wx - worldLeft) / denx;
-      const float v = (worldTop - wy) / deny;
-      o->x = imgPos.x + u * avail.x;
-      o->y = imgPos.y + v * avail.y;
+    // Grip squares must land ON the geometry they belong to, so this projects through the camera
+    // (REQ-058). Drawn with the plan mapping they sat off the object once the view was orbited —
+    // and the grip HIT test already projects, so the two would also have disagreed.
+    const Camera ovCamB = CadViewCamera(cmd);
+    auto wts = [&](float wx, float wy, ImVec2* o, float wz = 0.f) {
+      float sx = 0.f, sy = 0.f;
+      ovCamB.WorldToScreen(static_cast<double>(wx), static_cast<double>(wy), static_cast<double>(wz), avail.x,
+                           avail.y, &sx, &sy);
+      o->x = imgPos.x + sx;
+      o->y = imgPos.y + sy;
     };
 
-    auto drawGrip = [&](float wx, float wy) {
+    auto drawGrip = [&](float wx, float wy, float wz = 0.f) {
       ImVec2 gp{};
-      wts(wx, wy, &gp);
+      wts(wx, wy, &gp, wz);
       dlG->AddRectFilled(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf),
                           kGripFillE);
       dlG->AddRect(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf),
@@ -10500,15 +10673,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (sel.type == SelectedEntity::Type::LineSeg) {
         const size_t k = static_cast<size_t>(sel.index) * 6;
         if (k + 5 < cmd.userLinesFlat.size()) {
-          drawGrip(cmd.userLinesFlat[k], cmd.userLinesFlat[k + 1]);
-          drawGrip(cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4]);
+          // Each endpoint carries its own Z, so a sloped line's grips sit on its actual ends.
+          drawGrip(cmd.userLinesFlat[k], cmd.userLinesFlat[k + 1], cmd.userLinesFlat[k + 2]);
+          drawGrip(cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4], cmd.userLinesFlat[k + 5]);
         }
       } else if (sel.type == SelectedEntity::Type::Circle) {
-        const size_t k = static_cast<size_t>(sel.index) * 3;
-        if (k + 2 < cmd.userCirclesCxCyR.size()) {
-          const float cx = cmd.userCirclesCxCyR[k];
-          const float cy = cmd.userCirclesCxCyR[k + 1];
-          const float r = cmd.userCirclesCxCyR[k + 2];
+        const size_t k = static_cast<size_t>(sel.index) * 4;
+        if (k + 3 < cmd.userCirclesCxCyZR.size()) {
+          const float cx = cmd.userCirclesCxCyZR[k];
+          const float cy = cmd.userCirclesCxCyZR[k + 1];
+          const float r = cmd.userCirclesCxCyZR[k + 3];
           drawGrip(cx, cy);
           drawGrip(cx + r, cy);
         }
@@ -10680,6 +10854,109 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     ImGui::PopStyleVar(2);
   }
 
+  // Grip stretch dynamic input (REQ-024 / REQ-047). A grip drag runs with no active command, so the
+  // command palette above never appears for it. This is the same box at the cursor, showing the live
+  // stretch distance with its text SELECTED — so typing a distance replaces it, exactly like AutoCAD.
+  static char s_gripBuf[96] = {0};
+  // The exact string we last forced into the field. Comparing against it is how the callback tells
+  // "the user typed" from "we refreshed it" — ImGui applies keystrokes BEFORE CallbackAlways fires,
+  // so without this the refresh would overwrite the first character the user typed.
+  static char s_gripPushed[96] = {0};
+  static bool s_gripLocked = false;
+  static bool s_gripShownPrev = false;
+  const bool showGripDynInput =
+      cmd.entityGripMoveActive && !cmd.mtextRichEditorOpen && cmd.active == AppCommandState::Kind::None;
+  if (!showGripDynInput) {  // drag ended — next one starts with a fresh, unlocked field
+    s_gripShownPrev = false;
+    s_gripBuf[0] = '\0';
+    s_gripPushed[0] = '\0';
+    s_gripLocked = false;
+  }
+  if (showGripDynInput) {
+    ImGuiIO& ioGrip = ImGui::GetIO();
+    const ImGuiViewport* gripViewport = ImGui::GetMainViewport();
+    const float gripPad = 14.f;
+    const float gripEstW = 260.f;
+    const float gripEstH = 78.f;
+    ImVec2 gp(mouse.x + gripPad, mouse.y + gripPad);
+    gp.x = std::clamp(gp.x, gripViewport->WorkPos.x + 4.f,
+                      gripViewport->WorkPos.x + gripViewport->WorkSize.x - gripEstW - 8.f);
+    gp.y = std::clamp(gp.y, gripViewport->WorkPos.y + 4.f,
+                      gripViewport->WorkPos.y + gripViewport->WorkSize.y - gripEstH - 8.f);
+
+    ImGui::SetNextWindowPos(gp, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.94f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.f, 8.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.f);
+    ImGui::Begin("##ViewportGripInput", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoDocking);
+
+    const ImVec4 gripHintCol = (cmd.displayColorThemeIdx == 0)
+        ? ImVec4(0.90f, 0.93f, 0.98f, 1.f)
+        : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    ImGui::PushStyleColor(ImGuiCol_Text, gripHintCol);
+    ImGui::TextUnformatted(cmd.orthoMode ? "Specify stretch distance (ortho):" : "Specify stretch distance:");
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0.f, 4.f));
+
+    // The live value the field mirrors until the user types over it.
+    const std::string liveText =
+        FormatLinear(static_cast<double>(cmd.entityGripLiveDistance), cmd.displayLinearPrecision);
+
+    if (!s_gripShownPrev) {  // opening edge: fresh drag, fresh field
+      s_gripBuf[0] = '\0';
+      s_gripPushed[0] = '\0';
+      s_gripLocked = false;
+    }
+    s_gripShownPrev = true;
+
+    struct GripDynState { const char* live; bool* locked; char* pushed; size_t pushedSize; };
+    GripDynState gds{liveText.c_str(), &s_gripLocked, s_gripPushed, sizeof(s_gripPushed)};
+
+    const auto gripCb = [](ImGuiInputTextCallbackData* data) -> int {
+      auto* s = static_cast<GripDynState*>(data->UserData);
+      if (!s || *s->locked)
+        return 0;
+      if (std::strcmp(data->Buf, s->pushed) != 0) {
+        *s->locked = true;  // the buffer changed and we did not change it — the user typed
+        return 0;
+      }
+      if (std::strcmp(data->Buf, s->live) != 0) {
+        data->DeleteChars(0, data->BufTextLen);
+        data->InsertChars(0, s->live);
+        std::snprintf(s->pushed, s->pushedSize, "%s", s->live);
+      }
+      // Keep the whole value selected so the next keystroke replaces it.
+      data->SelectionStart = 0;
+      data->SelectionEnd = data->BufTextLen;
+      data->CursorPos = data->BufTextLen;
+      return 0;
+    };
+
+    // Hold focus while the value is still live, so the selection is visible and typing lands here.
+    if (!s_gripLocked && ImGui::GetActiveID() != ImGui::GetID("##gripDist"))
+      ImGui::SetKeyboardFocusHere();
+
+    ImGui::SetNextItemWidth(std::clamp(200.f * ioGrip.FontGlobalScale, 140.f, 320.f));
+    const bool gripEnter =
+        ImGui::InputText("##gripDist", s_gripBuf, sizeof(s_gripBuf),
+                         ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways,
+                         +gripCb, &gds);
+    if (ImGui::IsItemEdited())
+      s_gripLocked = true;
+
+    if (gripEnter) {
+      ProcessCommandLineSubmit(s_gripBuf, static_cast<int>(sizeof(s_gripBuf)), cmd, log);
+      s_gripBuf[0] = '\0';
+      s_gripPushed[0] = '\0';
+      s_gripLocked = false;
+    }
+    ImGui::End();
+    ImGui::PopStyleVar(2);
+  }
+
   // CAD-style crosshair (viewport only): OS cursor hidden; position follows world cursor (sticky OSNAP blend in
   // command). Pick box matches object snap aperture; arms from Settings.
   //
@@ -10712,12 +10989,27 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // floating model space outCursorX/Y are model-local coords (a different space), so that mapping would
       // throw the crosshair off-screen — keep it at the raw mouse there (the snap glyph shows the snap).
       if (outCursorX && outCursorY && !InFloatingModelSpace(cmd)) {
-        const float denx = worldRight - worldLeft + 1.e-12f;
-        const float deny = worldTop - worldBottom + 1.e-12f;
-        const float uSnap = (*outCursorX - worldLeft) / denx;
-        const float vSnap = (worldTop - *outCursorY) / deny;
-        cx = imgPos.x + uSnap * avail.x;
-        cy = imgPos.y + vSnap * avail.y;
+        // This exists so the crosshair jumps to the SNAPPED point rather than the raw mouse.
+        // It must project through the camera: with an orbited view the plan mapping sends the
+        // crosshair to a completely different pixel, and as the azimuth sweeps it traces a circle
+        // around the target and flips to the far side of the viewport past 90 degrees.
+        // In plan view (and paper space) the camera projection reduces exactly to the old
+        // arithmetic, so this is a no-op there. Unsnapped, the ray→world→screen round trip returns
+        // the mouse position, so the crosshair still sits under the cursor.
+        if (modelSpace) {
+          float sx = 0.f, sy = 0.f;
+          CadViewCamera(cmd).WorldToScreen(static_cast<double>(*outCursorX), static_cast<double>(*outCursorY),
+                                           static_cast<double>(cmd.uiCursorWorldZ), avail.x, avail.y, &sx, &sy);
+          cx = imgPos.x + sx;
+          cy = imgPos.y + sy;
+        } else {
+          const float denx = worldRight - worldLeft + 1.e-12f;
+          const float deny = worldTop - worldBottom + 1.e-12f;
+          const float uSnap = (*outCursorX - worldLeft) / denx;
+          const float vSnap = (worldTop - *outCursorY) / deny;
+          cx = imgPos.x + uSnap * avail.x;
+          cy = imgPos.y + vSnap * avail.y;
+        }
       }
       // Remember the live crosshair so the popup can anchor here, and so the position
       // is preserved once we freeze on the next typed character.
@@ -10757,6 +11049,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     wdl->PopClipRect();
   }
 
+  // ---- ViewCube (REQ-059) ----------------------------------------------------------------------
+  // Model space only: a paper sheet is 2D (ADR-025 (g)) and has no orientation to show.
+  if (modelSpace && avail.x > 40.f && avail.y > 40.f) {
+    const ImVec2 mp = ImGui::GetIO().MousePos;
+    const viewcube::Result vc =
+        viewcube::Draw(ImGui::GetWindowDrawList(), CadViewCamera(cmd), viewCubeX, viewCubeY, kViewCubeSize, mp.x,
+                       mp.y, ImGui::IsMouseClicked(ImGuiMouseButton_Left), cmd.ucsAzimuthDeg);
+    if (vc.changed)
+      CadStartViewAnimation(cmd, vc.azimuthDeg, vc.elevationDeg);  // ease, don't jump (REQ-059)
+  }
+
   if (ImGui::BeginPopup("##drawing1_vp_ctx")) {
     using AK = AppCommandState::Kind;
     const bool gripActive = cmd.dimGripMoveActive || cmd.entityGripMoveActive ||
@@ -10791,8 +11094,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (ImGui::MenuItem("Scale"))  { StartScaleCommand(cmd, log);  ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Delete")) { StartDeleteCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         ImGui::Separator();
-        if (ImGui::MenuItem("Select similar"))
+        if (ImGui::MenuItem("Select similar")) {
           SelectSimilarToCurrentSelection(cmd, &log);
+          ImGui::CloseCurrentPopup();
+        }
         if (ImGui::MenuItem("Selection...")) {
           cmd.selectionCycleEntities     = cmd.selection;
           cmd.selectionCycleSurveyPoints = cmd.selectedSurveyPointIndices;
@@ -11000,8 +11305,8 @@ static void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& l
     case QP::Radius: {
       float r = 0.f;
       if (e.type == T::Circle) {
-        const size_t k = (size_t)e.index * 3;
-        if (k + 2 < cmd.userCirclesCxCyR.size()) r = cmd.userCirclesCxCyR[k + 2];
+        const size_t k = (size_t)e.index * 4;
+        if (k + 3 < cmd.userCirclesCxCyZR.size()) r = cmd.userCirclesCxCyZR[k + 3];
       } else if (e.type == T::Arc && (size_t)e.index < cmd.userArcs.size()) {
         r = cmd.userArcs[(size_t)e.index].r;
       }
@@ -11052,7 +11357,7 @@ static void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& l
   if (cmd.qsApplyTo == AppCommandState::QsApplyTo::EntireDrawing) {
     const int nLines = (int)(cmd.userLinesFlat.size() / 6);
     for (int i = 0; i < nLines; ++i)  addCad({SelectedEntity::Type::LineSeg, i});
-    const int nCirc = (int)(cmd.userCirclesCxCyR.size() / 3);
+    const int nCirc = (int)(cmd.userCirclesCxCyZR.size() / 4);
     for (int i = 0; i < nCirc; ++i)   addCad({SelectedEntity::Type::Circle, i});
     for (int i = 0; i < (int)cmd.userArcs.size(); ++i)      addCad({SelectedEntity::Type::Arc, i});
     for (int i = 0; i < (int)cmd.userEllipses.size(); ++i)  addCad({SelectedEntity::Type::Ellipse, i});
@@ -12066,6 +12371,51 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
 
 // DELETED: duplicate BoxBegin and DrawSettingsPanel — do not re-add here.
 
+
+void DrawDwgLossyExportModal(AppCommandState& cmd, std::vector<std::string>& log) {
+  if (cmd.dwgLossyExportModal) {
+    ImGui::OpenPopup("Export DWG##dwglossy");
+    cmd.dwgLossyExportModal = false;
+  }
+
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing, ImVec2(0.5f, 0.5f));
+  if (!ImGui::BeginPopupModal("Export DWG##dwglossy", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    return;
+
+  const std::filesystem::path dst(cmd.dwgPendingExportPath);
+  const bool overwriting = std::filesystem::exists(dst);
+
+  ImGui::TextUnformatted("GoSurvey writes DWG through DXF, so this export drops:");
+  ImGui::Spacing();
+  ImGui::BulletText("block definitions and inserts (geometry is written exploded)");
+  ImGui::BulletText("paper-space layouts beyond the first");
+  ImGui::BulletText("elevations, block attributes, multileaders and tables");
+  ImGui::BulletText("Civil 3D objects, proxies and anything else GoSurvey does not model");
+  ImGui::Spacing();
+
+  if (overwriting) {
+    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.90f, 0.45f, 0.20f, 1.0f));
+    ImGui::TextWrapped("%s already exists. Overwriting it will permanently discard the data listed above.",
+                       dst.filename().string().c_str());
+    ImGui::PopStyleColor();
+    ImGui::Spacing();
+  }
+
+  ImGui::Separator();
+  ImGui::Spacing();
+
+  if (ImGui::Button(overwriting ? "Overwrite" : "Export", ImVec2(120, 0))) {
+    ExportDwgFile(cmd, cmd.dwgPendingExportPath.c_str(), log);
+    cmd.dwgPendingExportPath.clear();
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", ImVec2(120, 0))) {
+    cmd.dwgPendingExportPath.clear();
+    ImGui::CloseCurrentPopup();
+  }
+  ImGui::EndPopup();
+}
 
 void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log) {
   if (cmd.confirmCloseModal) {

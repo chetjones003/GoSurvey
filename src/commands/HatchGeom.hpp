@@ -22,10 +22,10 @@ inline bool PointInLoop(const CadFilledRegion& fr, std::size_t loop, double x, d
     return false;
   bool in = false;
   for (int i = 0, j = cnt - 1; i < cnt; j = i++) {
-    const double xi = fr.verts[static_cast<std::size_t>(begin + i) * 2];
-    const double yi = fr.verts[static_cast<std::size_t>(begin + i) * 2 + 1];
-    const double xj = fr.verts[static_cast<std::size_t>(begin + j) * 2];
-    const double yj = fr.verts[static_cast<std::size_t>(begin + j) * 2 + 1];
+    const double xi = fr.vertsXyz[static_cast<std::size_t>(begin + i) * 3];
+    const double yi = fr.vertsXyz[static_cast<std::size_t>(begin + i) * 3 + 1];
+    const double xj = fr.vertsXyz[static_cast<std::size_t>(begin + j) * 3];
+    const double yj = fr.vertsXyz[static_cast<std::size_t>(begin + j) * 3 + 1];
     if (((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi))
       in = !in;
   }
@@ -54,10 +54,10 @@ inline double OuterAreaAbs(const CadFilledRegion& fr) {
     return 0.0;
   double a = 0.0;
   for (int i = 0, j = cnt - 1; i < cnt; j = i++) {
-    const double xi = fr.verts[static_cast<std::size_t>(begin + i) * 2];
-    const double yi = fr.verts[static_cast<std::size_t>(begin + i) * 2 + 1];
-    const double xj = fr.verts[static_cast<std::size_t>(begin + j) * 2];
-    const double yj = fr.verts[static_cast<std::size_t>(begin + j) * 2 + 1];
+    const double xi = fr.vertsXyz[static_cast<std::size_t>(begin + i) * 3];
+    const double yi = fr.vertsXyz[static_cast<std::size_t>(begin + i) * 3 + 1];
+    const double xj = fr.vertsXyz[static_cast<std::size_t>(begin + j) * 3];
+    const double yj = fr.vertsXyz[static_cast<std::size_t>(begin + j) * 3 + 1];
     a += xj * yi - xi * yj;
   }
   return std::fabs(a) * 0.5;
@@ -73,8 +73,8 @@ inline bool OuterBounds(const CadFilledRegion& fr, float* mnX, float* mnY, float
     return false;
   float lmnX = 1e30f, lmxX = -1e30f, lmnY = 1e30f, lmxY = -1e30f;
   for (int v = 0; v < cnt; ++v) {
-    const float x = fr.verts[static_cast<std::size_t>(begin + v) * 2];
-    const float y = fr.verts[static_cast<std::size_t>(begin + v) * 2 + 1];
+    const float x = fr.vertsXyz[static_cast<std::size_t>(begin + v) * 3];
+    const float y = fr.vertsXyz[static_cast<std::size_t>(begin + v) * 3 + 1];
     lmnX = std::fmin(lmnX, x); lmxX = std::fmax(lmxX, x);
     lmnY = std::fmin(lmnY, y); lmxY = std::fmax(lmxY, y);
   }
@@ -82,11 +82,11 @@ inline bool OuterBounds(const CadFilledRegion& fr, float* mnX, float* mnY, float
   return true;
 }
 
-/// Translate every loop vertex by (dx,dy).
+/// Translate every loop vertex by (dx,dy). Z is untouched — a planar move does not change elevation.
 inline void Translate(CadFilledRegion& fr, float dx, float dy) {
-  for (std::size_t v = 0; v + 1 < fr.verts.size(); v += 2) {
-    fr.verts[v] += dx;
-    fr.verts[v + 1] += dy;
+  for (std::size_t v = 0; v + 2 < fr.vertsXyz.size(); v += 3) {
+    fr.vertsXyz[v] += dx;
+    fr.vertsXyz[v + 1] += dy;
   }
 }
 

@@ -26,9 +26,15 @@ FetchContent_Declare(pdfium_binaries
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 
+# Pinned to a COMMIT, not the `docking` branch: a moving branch means two clean builds of the
+# same GoSurvey commit compile different ImGui, which violates REQ-200 (deterministic build).
+# This SHA is v1.92.9 on `docking` (2026-07-30) — the commit already in use when the pin landed,
+# so pinning changed nothing about the produced binary. ImGuizmo (REQ-060) compiles against ImGui
+# internals, so a floating ImGui would turn an upstream change into a mystery build break.
+# To update: bump the SHA deliberately, rebuild, and re-run the test suite.
 FetchContent_Declare(imgui
   GIT_REPOSITORY https://github.com/ocornut/imgui.git
-  GIT_TAG docking
+  GIT_TAG 81cfcb8c1fed1e4dac8bcdc059ce811c17b6194c
 )
 
 FetchContent_Declare(glew
@@ -120,6 +126,7 @@ add_executable(GoSurvey
   src/ui/RichTextEdit.cpp
   src/ui/FontRegistry.cpp
   src/ui/ShxDraw.cpp
+  src/ui/ViewCube.cpp
   src/ui/PdfAttachDialog.cpp
 
   # Fonts (shared lower layer — SHX stroke geometry, ADR-022)
@@ -138,6 +145,8 @@ add_executable(GoSurvey
   src/io/UserPrefs.cpp
   src/io/SurveyCsv.cpp
   src/io/DxfIo.cpp
+  src/io/DwgIo.cpp
+  src/io/DwgProbe.cpp
   src/io/DxfColors.cpp
   src/io/PdfPlot.cpp
 
@@ -147,6 +156,7 @@ add_executable(GoSurvey
   # Platform
   src/platform/AppIcon.cpp
   src/platform/WinFileDialogs.cpp
+  src/platform/ProcessRun.cpp
 
   # Geometry math (util)
   src/util/geom2d.cpp
@@ -277,6 +287,9 @@ if(GOSURVEY_BUILD_TESTS)
     tests/CommandLineTests.cpp
     tests/SurveyCsvValidateTests.cpp
     tests/HatchGeomTests.cpp
+    tests/ZStoreTests.cpp
+    tests/Ray3dTests.cpp
+    tests/CameraTests.cpp
     tests/TextStyleTests.cpp
     tests/OrthoConstrainTests.cpp
     tests/ColorContrastTests.cpp
@@ -284,13 +297,19 @@ if(GOSURVEY_BUILD_TESTS)
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
     tests/MtextTextOpsTests.cpp
+    tests/DxfEntityEmitTests.cpp
+    tests/DwgProbeTests.cpp
     src/traverse/TraverseCalc.cpp
     src/traverse/TraverseLeastSquares.cpp
     src/traverse/FbkImport.cpp
+    # DWG version detection + converter discovery. Deliberately its own TU (see DwgProbe.cpp):
+    # it depends only on <filesystem>, so tests link it without DxfIo and the GUI stack.
+    src/io/DwgProbe.cpp
   )
   target_include_directories(GoSurveyTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/traverse
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/io
   )
   target_compile_definitions(GoSurveyTests PRIVATE
     GOSURVEY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"

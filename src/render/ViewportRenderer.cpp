@@ -746,8 +746,8 @@ void ViewportRenderer::SetSize(int width, int height) {
   EnsureFramebuffer(width, height);
 }
 
-void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbWidth, int fbHeight,
-                                   const std::vector<float>& userLines, const std::vector<float>& circlesCxCyR,
+void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
+                                   const std::vector<float>& userLines, const std::vector<float>& circlesCxCyZR,
                                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
                                    const CadSnap::Hit* snapOverlay, float snapGlyphHalfPx,
                                    const float* selectionFillRect, const std::vector<float>* previewLines,
@@ -803,7 +803,11 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
   const float aspect = static_cast<float>(fbW_) / static_cast<float>(std::max(fbH_, 1));
   // Zoom clamp here matches the wheel/MMB pan clamps in DrawDrawingViewport: wide enough for million-unit drawings
   // without quantizing halfHd at extreme zooms.
-  const double halfHd = (1.0 / std::max(static_cast<double>(zoom), 1.e-9)) * 50.0;
+  // Pan and zoom are carried by the camera now: the target is the pan point and orthoHalfH is the
+  // zoom expressed directly. These locals keep the rest of the function unchanged.
+  const double panX = cam.targetX;
+  const double panY = cam.targetY;
+  const double halfHd = static_cast<double>(cam.orthoHalfH);
   const double halfWd = halfHd * static_cast<double>(aspect);
   const float halfH = static_cast<float>(halfHd);
   const float halfW = static_cast<float>(halfWd);
@@ -812,11 +816,22 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
   float proj[16];
   Ortho(-halfW, halfW, -halfH, halfH, -1000.f, 1000.f, proj);
 
+  // The camera rotation (REQ-058). Identity in plan view, so the composed matrices below are
+  // bit-identical to the pre-3D pipeline until the user actually orbits.
+  float viewRot[16];
+  cam.ViewRotation(viewRot);
+
   float model[16];
   TranslateMat(0.f, 0.f, 0.f, model);
 
+  // MVP = Proj · R · Model. The rotation sits between the projection and every world-space
+  // translation, which is what keeps the anchor/pan offset applied in WORLD space (FINDING-3):
+  // reversing these two makes geometry swim during orbit at state-plane coordinates.
+  float projRot[16];
+  MulMat4(proj, viewRot, projRot);
+
   float mvp[16];
-  MulMat4(proj, model, mvp);
+  MulMat4(projRot, model, mvp);
 
   constexpr GLfloat kLwMain = 1.35f;
   constexpr GLfloat kLwHiLine = 2.65f;
@@ -973,14 +988,14 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
     std::vector<float> fan;
     for (size_t fi = 0; fi < filledRegions->size(); ++fi) {
       const CadFilledRegion& fr = (*filledRegions)[fi];
-      if (fr.loopStart.empty() || fr.verts.size() < 6)
+      if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)  // < 3 vertices × 3 floats
         continue;
       if (!fr.isSolid())
         continue;  // line-pattern hatches are drawn as clipped lines in the ImGui overlay (REQ-043)
       fan.clear();
       double mnx = 1e300, mxx = -1e300, mny = 1e300, mxy = -1e300;
-      auto vx = [&](int p) { return fr.verts[static_cast<size_t>(p) * 2 + 0]; };
-      auto vy = [&](int p) { return fr.verts[static_cast<size_t>(p) * 2 + 1]; };
+      auto vx = [&](int p) { return fr.vertsXyz[static_cast<size_t>(p) * 3 + 0]; };
+      auto vy = [&](int p) { return fr.vertsXyz[static_cast<size_t>(p) * 3 + 1]; };
       for (size_t li = 0; li < fr.loopStart.size(); ++li) {
         const int begin = fr.loopStart[li];
         const int cnt = fr.loopCount(li);
@@ -1056,7 +1071,7 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
 
   // --- Committed lines + circles (single batched draw each; per-vertex color shader; GPU cache keyed by cadGpuRevision)
   const bool hasLines = !userLines.empty() && userLines.size() % 6 == 0;
-  const bool hasCircles = !circlesCxCyR.empty() && circlesCxCyR.size() % 3 == 0;
+  const bool hasCircles = !circlesCxCyZR.empty() && circlesCxCyZR.size() % 4 == 0;
   const bool hasExt =
       extended &&
       (((extended->arcs != nullptr) && !extended->arcs->empty()) ||
@@ -1214,7 +1229,7 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
             circBatchPx = nextPx;
           }
         };
-        const size_t nCirc = circlesCxCyR.size() / 3;
+        const size_t nCirc = circlesCxCyZR.size() / 4;
         for (size_t ci = 0; ci < nCirc; ++ci) {
           EntityAttributes attr{};
           if (circleEntityAttrs && ci < circleEntityAttrs->size())
@@ -1223,10 +1238,10 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
           const int vb = static_cast<int>(cpuVcCircles_.size() / 7);
           const float lwMm = EffectiveEntityLineweightMm(attr, lr);
           maybeSplitCirc(vb, LineweightMmToDevicePx(lwMm));
-          const float cr = circlesCxCyR[ci * 3 + 2];
+          const float cr = circlesCxCyZR[ci * 4 + 3];
           const int circSegs = CircleTessellationSegmentCount(static_cast<double>(cr), static_cast<double>(halfH),
                                                               fbHeight, tuning.arcCircleSmoothnessCap);
-          AppendCircleVcDashed(cpuVcCircles_, circlesCxCyR[ci * 3], circlesCxCyR[ci * 3 + 1], cr,
+          AppendCircleVcDashed(cpuVcCircles_, circlesCxCyZR[ci * 4], circlesCxCyZR[ci * 4 + 1], cr,
                                circSegs, 0.f, dashPatScale, attr, lr, kCircDefaultR, kCircDefaultG, kCircDefaultB,
                                viewAnchorX, viewAnchorY);
           circVert = static_cast<int>(cpuVcCircles_.size() / 7);
@@ -1259,7 +1274,10 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
     TranslateMat(static_cast<float>(cachedViewAnchorX_ - panX), static_cast<float>(cachedViewAnchorY_ - panY), 0.f,
                  cachedModel);
     float cachedMvp[16];
-    MulMat4(proj, cachedModel, cachedMvp);
+    // Proj · R · Translate — the anchor offset is a WORLD-space correction, so it must be applied
+    // before the camera rotation. This is the exact composition asserted by the
+    // "Anchor offset composes before the view rotation" test in CameraTests.
+    MulMat4(projRot, cachedModel, cachedMvp);
     glUniformMatrix4fv(locVcMvp, 1, GL_FALSE, cachedMvp);
     if (!cpuVcLines_.empty()) {
       glBindVertexArray(vaoVcLines_);
@@ -1309,10 +1327,10 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
     glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(hvLineRel.size() / 3));
     glLineWidth(kLwMain);
   }
-  if (hoverCircles && !hoverCircles->empty() && hoverCircles->size() % 3 == 0) {
+  if (hoverCircles && !hoverCircles->empty() && hoverCircles->size() % 4 == 0) {
     std::vector<float> hvCircGeom;
-    for (size_t i = 0; i + 2 < hoverCircles->size(); i += 3) {
-      const float hr = (*hoverCircles)[i + 2];
+    for (size_t i = 0; i + 3 < hoverCircles->size(); i += 4) {
+      const float hr = (*hoverCircles)[i + 3];
       const int hvSegs = CircleTessellationSegmentCount(static_cast<double>(hr), static_cast<double>(halfH), fbHeight,
                                                         tuning.arcCircleSmoothnessCap);
       AppendCircleLineApprox(hvCircGeom, (*hoverCircles)[i], (*hoverCircles)[i + 1], hr, hvSegs, 0.017f,
@@ -1341,10 +1359,10 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
     glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(hlLineRel.size() / 3));
     glLineWidth(kLwMain);
   }
-  if (highlightCircles && !highlightCircles->empty() && highlightCircles->size() % 3 == 0) {
+  if (highlightCircles && !highlightCircles->empty() && highlightCircles->size() % 4 == 0) {
     std::vector<float> hlCircGeom;
-    for (size_t i = 0; i + 2 < highlightCircles->size(); i += 3) {
-      const float hr = (*highlightCircles)[i + 2];
+    for (size_t i = 0; i + 3 < highlightCircles->size(); i += 4) {
+      const float hr = (*highlightCircles)[i + 3];
       const int hlSegs = CircleTessellationSegmentCount(static_cast<double>(hr), static_cast<double>(halfH), fbHeight,
                                                         tuning.arcCircleSmoothnessCap);
       AppendCircleLineApprox(hlCircGeom, (*highlightCircles)[i], (*highlightCircles)[i + 1], hr, hlSegs, 0.018f,
@@ -1413,10 +1431,10 @@ void ViewportRenderer::RenderScene(double panX, double panY, float zoom, int fbW
     glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(previewLineRel.size() / 3));
     glDisable(GL_BLEND);
   }
-  if (previewCircles && !previewCircles->empty() && previewCircles->size() % 3 == 0) {
+  if (previewCircles && !previewCircles->empty() && previewCircles->size() % 4 == 0) {
     std::vector<float> circleGeom;
-    for (size_t i = 0; i + 2 < previewCircles->size(); i += 3) {
-      const float pr = (*previewCircles)[i + 2];
+    for (size_t i = 0; i + 3 < previewCircles->size(); i += 4) {
+      const float pr = (*previewCircles)[i + 3];
       const int prevSegs =
           CircleTessellationSegmentCount(static_cast<double>(pr), halfHd, fbHeight, tuning.arcCircleSmoothnessCap);
       AppendCircleLineApprox(circleGeom, (*previewCircles)[i], (*previewCircles)[i + 1], pr, prevSegs, 0.032f,

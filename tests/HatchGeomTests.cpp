@@ -20,8 +20,8 @@ namespace {
 // A 10×10 outer square (0,0)-(10,10) with a 4×4 square hole (3,3)-(7,7).
 CadFilledRegion SquareWithHole() {
   CadFilledRegion fr;
-  fr.verts = {0, 0, 10, 0, 10, 10, 0, 10,   // outer loop (loop 0)
-              3, 3, 7, 3, 7, 7, 3, 7};       // hole loop  (loop 1)
+  fr.vertsXyz = {0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0,   // outer loop (loop 0), x,y,z triplets
+                 3, 3, 0, 7,  3, 0, 7,  7,  0, 3, 7,  0};  // hole loop  (loop 1)
   fr.loopStart = {0, 4};
   return fr;
 }
@@ -46,7 +46,7 @@ TEST_CASE("OuterAreaAbs ignores winding and holes", "[hatch]") {
 
   // Reverse the outer winding — area magnitude is unchanged.
   CadFilledRegion cw;
-  cw.verts = {0, 0, 0, 10, 10, 10, 10, 0};
+  cw.vertsXyz = {0, 0, 0, 0, 10, 0, 10, 10, 0, 10, 0, 0};
   cw.loopStart = {0};
   REQUIRE(hatchgeom::OuterAreaAbs(cw) == 100.0);
 }
@@ -55,10 +55,10 @@ TEST_CASE("Smallest enclosing region wins on overlap (pick priority)", "[hatch]"
   // The pick logic in PickFilledRegionAt prefers the smallest-area region that contains the point.
   std::vector<CadFilledRegion> regions;
   CadFilledRegion big;
-  big.verts = {0, 0, 20, 0, 20, 20, 0, 20};
+  big.vertsXyz = {0, 0, 0, 20, 0, 0, 20, 20, 0, 0, 20, 0};
   big.loopStart = {0};
   CadFilledRegion small;
-  small.verts = {5, 5, 9, 5, 9, 9, 5, 9};
+  small.vertsXyz = {5, 5, 0, 9, 5, 0, 9, 9, 0, 5, 9, 0};
   small.loopStart = {0};
   regions.push_back(big);
   regions.push_back(small);
@@ -87,7 +87,7 @@ TEST_CASE("OuterBounds reports the outer-loop AABB", "[hatch]") {
   REQUIRE(mxY == 10.f);
 
   CadFilledRegion degenerate;  // fewer than 3 verts → no bounds
-  degenerate.verts = {1, 1, 2, 2};
+  degenerate.vertsXyz = {1, 1, 0, 2, 2, 0};
   degenerate.loopStart = {0};
   REQUIRE_FALSE(hatchgeom::OuterBounds(degenerate, &mnX, &mnY, &mxX, &mxY));
 }
@@ -97,11 +97,14 @@ TEST_CASE("Translate moves every loop vertex and preserves containment", "[hatch
   hatchgeom::Translate(fr, 100.f, -50.f);
 
   // Outer first vertex moved by the delta.
-  REQUIRE(fr.verts[0] == 100.f);
-  REQUIRE(fr.verts[1] == -50.f);
-  // Hole vertex moved too (loop 1 starts at pair index 4 → floats 8,9).
-  REQUIRE(fr.verts[8] == 103.f);
-  REQUIRE(fr.verts[9] == -47.f);
+  REQUIRE(fr.vertsXyz[0] == 100.f);
+  REQUIRE(fr.vertsXyz[1] == -50.f);
+  // Hole vertex moved too (loop 1 starts at vertex index 4 → floats 12,13 at stride 3).
+  REQUIRE(fr.vertsXyz[12] == 103.f);
+  REQUIRE(fr.vertsXyz[13] == -47.f);
+  // Z is untouched by a planar translate (ADR-025 D2 — elevation is not a pan offset).
+  REQUIRE(fr.vertsXyz[2] == 0.f);
+  REQUIRE(fr.vertsXyz[14] == 0.f);
 
   // A point that was inside the ring before is inside the translated ring at the shifted location.
   REQUIRE(hatchgeom::ContainsPoint(fr, 101.0, -45.0));
@@ -170,7 +173,7 @@ hatchpat::Def Ansi31Def() {
 
 TEST_CASE("Pattern generation: solid region yields no segments", "[hatch][pattern]") {
   CadFilledRegion fr;
-  fr.verts = {0, 0, 10, 0, 10, 10, 0, 10};
+  fr.vertsXyz = {0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0};
   fr.loopStart = {0};
   // default patternName empty → solid
   std::vector<float> segs;
@@ -180,7 +183,7 @@ TEST_CASE("Pattern generation: solid region yields no segments", "[hatch][patter
 
 TEST_CASE("Pattern generation: line family is clipped inside the region", "[hatch][pattern]") {
   CadFilledRegion fr;
-  fr.verts = {0, 0, 10, 0, 10, 10, 0, 10};
+  fr.vertsXyz = {0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0};
   fr.loopStart = {0};
   fr.patternName = "ANSI31";  // single 45° family
   fr.patternScale = 1.f;
@@ -205,8 +208,8 @@ TEST_CASE("Pattern generation: line family is clipped inside the region", "[hatc
 
 TEST_CASE("Pattern generation: a hole carves gaps (midpoints avoid the hole)", "[hatch][pattern]") {
   CadFilledRegion fr;
-  fr.verts = {0, 0, 20, 0, 20, 20, 0, 20,    // outer
-              7, 7, 13, 7, 13, 13, 7, 13};   // hole
+  fr.vertsXyz = {0, 0, 0, 20, 0, 0, 20, 20, 0, 0,  20, 0,    // outer
+                 7, 7, 0, 13, 7, 0, 13, 13, 0, 7,  13, 0};   // hole
   fr.loopStart = {0, 4};
   fr.patternName = "ANSI31";
   std::vector<float> segs;
@@ -222,7 +225,7 @@ TEST_CASE("Pattern generation: a hole carves gaps (midpoints avoid the hole)", "
 
 TEST_CASE("Pattern generation: larger scale produces fewer lines", "[hatch][pattern]") {
   CadFilledRegion fr;
-  fr.verts = {0, 0, 40, 0, 40, 40, 0, 40};
+  fr.vertsXyz = {0, 0, 0, 40, 0, 0, 40, 40, 0, 0, 40, 0};
   fr.loopStart = {0};
   fr.patternName = "ANSI31";
   fr.patternScale = 1.f;

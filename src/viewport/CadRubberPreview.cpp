@@ -174,6 +174,13 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     }
   }
 
+  // RECT (REQ-053): after the first corner, rubber-band the axis-aligned rectangle to the cursor. ORTHO is
+  // deliberately NOT applied — it would collapse the rectangle to a line, and the shape is already
+  // axis-aligned, which is what ORTHO is for.
+  if (cmd.active == AppCommandState::Kind::Rect &&
+      cmd.rectPhase == AppCommandState::RectPhase::WaitSecondCorner)
+    AppendWorldRectRubberViewRel(rubberLines, cmd.rectX1, cmd.rectY1, curXf, curYf, 0., 0.);
+
   if (cmd.active == AppCommandState::Kind::Arc) {
     using AP = AppCommandState::ArcPhase;
     if (cmd.arcPhase == AP::WaitMid)

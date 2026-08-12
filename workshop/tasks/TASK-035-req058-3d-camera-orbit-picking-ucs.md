@@ -1,0 +1,271 @@
+# TASK-035 — Orbitable 3D camera, ray picking, and a UCS work plane
+
+- Type:    feature
+- Status:  plan
+- Opened:  2026-08-11
+- Owner:   Workshop
+
+## 1. Authority
+
+- Requirements: **REQ-058** (accepted), **REQ-100** (accepted — the 16 ms / 250k-segment budget
+  becomes a real gate here for the first time). Enables REQ-059/060/061.
+- Architecture: **ADR-025** (c) Camera value type, (d) ray-based input in a pure module,
+  (e) UCS on `AppCommandState`.
+- Constraints: REQ-101 (±0.01 ft), REQ-200, REQ-201, REQ-301, architecture §11 invariants.
+- Acceptance (verbatim from REQ-058):
+  - plan view renders pixel-comparable to the pre-change build on a reference drawing;
+  - endpoint / midpoint / center / intersection snaps resolve correctly from an orbited camera,
+    verified against hand-computed coordinates within REQ-101;
+  - LINE, ARC, CIRCLE and TEXT drawn on a non-default UCS land on that plane within REQ-101;
+  - the existing test suite stays green;
+  - the REQ-100 frame budget is met while orbiting.
+- Owning subsystem: Renderer (matrices), util (pure ray math), UI/Commands (input, picking, snap).
+
+## 2. Scope
+
+- **In scope:** `render/Camera` value type; `util/ray3d` pure module; view rotation inserted into
+  the renderer MVP; orbit input; the model cursor seam becoming ray×work-plane; ray-based entity
+  picking when orbited; a UCS on `AppCommandState`; the REQ-100 bench scene.
+- **Out of scope:** the view gizmo (REQ-059/TASK-036), manipulation gizmos (REQ-060/TASK-037),
+  per-viewport paper cameras (REQ-061/TASK-038). **Hidden-line removal / shaded visual styles** —
+  see the depth decision below; that is a future REQ, not this one. Paper space stays 2D.
+
+## 3. Architectural boundary check (workflow.md §4)
+
+- [x] **No** — proceed. Camera, ray module, and UCS placement were all decided in ADR-025 before
+      this task opened. No new abstraction (Camera is a value type with three concrete uses),
+      no new dependency, no new global (UCS lives on `AppCommandState`, the settings pattern),
+      no new backend. The one judgment call below (depth) is a *visual-style* choice that
+      preserves current behaviour, not an architectural change — recorded as ASSUMPTION-1.
+
+## 4. Questions
+
+| # | Question | Asked | Answer |
+|---|----------|-------|--------|
+| Q1 | Full 3D vs 2.5D? | 2026-08-11 | Full 3D with free orbit. |
+| Q2 | Orbit input binding? | — | Shift+middle-drag (AutoCAD 3DORBIT convention); plain middle-drag keeps panning. Reversible, no spec impact. |
+
+## 5. Assumptions
+
+```
+ASSUMPTION-1: Depth testing stays DISABLED; orbit shows all edges (no hidden-line removal).
+- Because:       ViewportRenderer.cpp:783 explicitly disables GL_DEPTH_TEST today, and this is
+                 exactly AutoCAD's "2D Wireframe" visual style, which does not hide back edges
+                 even when orbited. Enabling depth would silently change how every existing
+                 drawing looks the moment the user tilts the view.
+- Risk if wrong: users expect solid-looking occlusion when orbiting.
+- Validate by:   show the user an orbited render; if occlusion is wanted it is a visual-style
+                 REQ (with a style selector), not a silent default flip. The depth renderbuffer
+                 already exists (msDepthRbo_), so enabling it later is a one-line change.
+```
+
+```
+ASSUMPTION-2: The existing CPU geometry cache survives orbit without re-tessellation.
+- Because:       circles/arcs are tessellated as planar polylines in world space; rotating the
+                 camera is a matrix op, not a geometry op. Verified by reading the rebuild
+                 trigger (ViewportRenderer.cpp:1069-1080): it keys on pan drift, zoom change and
+                 cadGpuRevision — none of which an orbit touches.
+- Risk if wrong: orbit thrashes the cache and REQ-100 fails.
+- Validate by:   the REQ-100 bench asserts the 95th-pct frame during a scripted orbit.
+```
+
+## 6. Plan
+
+### The two findings that shape this
+
+**(1) The MVP already works in camera-relative coordinates.** Reading the pipeline:
+`proj = Ortho(±halfW, ±halfH)` is centred on the origin and contains **no pan**; committed vertices
+are cached *relative to* `cachedViewAnchor`; and `cachedModel = Translate(cachedAnchor − pan)`
+brings them to `v_world − pan`. So the shader already receives **offsets from the camera target**
+— which is precisely what a view matrix wants. Adding orbit is therefore an *insertion*, not a
+rewrite:
+
+```
+today:  MVP = Ortho · Translate(cachedAnchor − pan)
+after:  MVP = Ortho · R · Translate(cachedAnchor − pan)
+```
+
+`R` is the camera rotation about the target. This ordering is FINDING-3 from the REQ-057 review,
+and it is load-bearing: the anchor/pan subtraction must happen **in world space, before** the
+rotation. Reversed, geometry swims during orbit at large (state-plane) coordinates in a way that
+looks like a camera bug but is a cache bug.
+
+**(2) Model-space input has ONE seam.** `CadUi.cpp:8085-8088` computes `rawX`/`rawY` from the
+cursor, and every downstream consumer — snap, hover, offset pick, hatch trace, command submission
+— reads those two values. Orbit-aware input is therefore one substitution at one place, not a
+sweep of the 103 sites that reference the view extents. Those 103 are read-only uses of
+`worldLeft/Right/Top/Bottom`, which remain exactly correct in plan view.
+
+### Phases (each independently verifiable)
+
+**Phase A — pure modules, zero behaviour change.**
+- `src/render/Camera.hpp/.cpp` — `Camera{eye|target, up, projection, orthoHalfH, fovDeg, near, far}`
+  producing view and projection matrices; a `Camera::Plan()` factory whose matrices reproduce the
+  current ortho exactly.
+- `src/util/ray3d.hpp` — `ScreenToWorldRay`, `RayPlaneIntersect`, `RaySegmentDistance`,
+  `RayPointDistance`. Pure, no GL, no ImGui.
+- `tests/CameraTests.cpp`, `tests/Ray3dTests.cpp` — including the FINDING-3 composition test at a
+  state-plane origin, and a parity test that `Camera::Plan()` equals the existing ortho within 1e-6.
+
+**Phase B — renderer + orbit.**
+- Insert `R` into both MVP compositions (the main batch and the cached-VC batch).
+- `Camera` replaces `panX/panY/zoom` in `RenderScene` (FINDING-4 — a net parameter *reduction*).
+- Shift+middle-drag orbits; plain middle-drag still pans; plan view is the startup default.
+- Depth stays off (ASSUMPTION-1).
+
+**Phase C — input + picking.**
+- The `rawX/rawY` seam becomes: plan view → existing arithmetic (bit-identical); orbited →
+  `RayPlaneIntersect(ScreenToWorldRay(cam, mouse), activeUcs)`.
+- `PickClosestCadEntity` gains an orbited path using `RaySegmentDistance`; snapping resolves in 3D.
+
+**Phase D — UCS.**
+- `AppCommandState` gains the active work plane (origin + normal, default world XY).
+- Draw commands resolve clicks against it (they already consume `rawX/rawY`, so this mostly falls
+  out of Phase C).
+
+**Phase E — REQ-100 bench.** A committed 250k-segment scene + scripted orbit; record the
+95th-percentile frame.
+
+### Test approach
+
+- Happy path: plan-view parity (matrix + visual); snaps from an orbited camera against
+  hand-computed coordinates within REQ-101; draw on a tilted UCS lands on that plane.
+- Failure mode: ray parallel to the work plane (no intersection — must not produce a NaN
+  coordinate or a silent (0,0) click); zero-length ray; plane behind the camera; degenerate
+  camera (eye == target) must not produce a NaN matrix.
+
+### Steps
+
+- [ ] A1. `util/ray3d.hpp` + `Ray3dTests` (pure, testable first).
+- [ ] A2. `render/Camera` + `CameraTests` incl. plan-view parity and the FINDING-3 composition.
+- [ ] B1. Insert `R` into both MVP paths; `Camera` into `RenderScene`.
+- [ ] B2. Orbit input; plan-view default; verify plan view is unchanged.
+- [ ] C1. Cursor seam → ray×plane when orbited.
+- [ ] C2. Ray-based picking + 3D snap.
+- [ ] D1. UCS on `AppCommandState` + draw routing.
+- [ ] E1. Bench scene; record REQ-100 numbers.
+- [ ] F. Self-verify (§9), submit.
+
+## 7. Workflow-specific notes
+
+- Feature: pre-flight answered. Tests-first for both pure modules (A1/A2 precede every change
+  that depends on them being correct).
+
+## 8. Implementation log
+
+- 2026-08-11 — opened. Authority + Plan complete. Pipeline studied before planning: the MVP is
+  already camera-relative, and model input has a single seam — both recorded above because they
+  are what make this task a series of insertions rather than a rewrite.
+- 2026-08-11 — **Phase A complete.** `util/ray3d.hpp` (16 tests) and `render/Camera.hpp`
+  (13 tests) — both pure, both GL-free, both linked into the test target without the UI stack.
+  Suite 802 → 917 assertions / 154 cases. Two real bugs caught **by the tests, not by review**:
+    * `RaySegmentDistance` had a **negated denominator** in the closest-approach solve. Every pick
+      would have clamped to a segment endpoint — "picking works but is inaccurate", the kind of
+      defect that survives casual use for months.
+    * `ForwardWorld` re-derived the view direction from azimuth/elevation independently of
+      `ViewRotation`, and the two **disagreed on the sign of the azimuth term**. `ScreenRay` and
+      `WorldToScreen` were therefore inconsistent at any non-zero azimuth: picking would miss what
+      was drawn, but only once the user orbited off the meridian. Fixed by deriving forward FROM
+      the rotation matrix — one derivation, one convention. Caught by the round-trip test.
+- 2026-08-11 — **Phase B (renderer + orbit) largely complete.** `RenderScene` takes a `Camera` in
+  place of `panX/panY/zoom` (FINDING-4 — a net parameter reduction), the rotation is inserted as
+  `MVP = Proj · R · Translate(anchor − pan)` in **both** MVP paths (FINDING-3 ordering, asserted by
+  a test that also proves the reversed order differs), and Shift+middle-drag orbits in model space
+  only. Plan view is the default and renders unchanged; app builds, launches and runs.
+  `CadViewCamera(st)` derives the camera from the canonical pan/zoom plus two new orientation
+  fields, so "the camera" cannot drift from "the view".
+- 2026-08-11 — **Scope finding not in the original plan: the ImGui overlay does not inherit the
+  MVP.** Model text, MTEXT, dimensions, survey-point labels, grips and snap glyphs are drawn by
+  ImGui through an axis-aligned `worldToScreen` lambda built from `worldLeft/Right/Top/Bottom`
+  (`CadUi.cpp:9973`, plus ~17 inline uses of the same arithmetic). Orbiting therefore tilts the GL
+  linework while every annotation stays in its plan position — orbit is not *correct* without
+  fixing this, so it belongs in Phase B rather than being deferred. `Camera::WorldToScreen` added
+  (with a test proving it reduces EXACTLY to the legacy mapping in plan view, and a round-trip
+  test against `ScreenRay`); converting the model-space overlay call sites to it is the next step.
+  Paper-space lambdas (`w2s`, `m2s`) are deliberately left alone — a sheet is 2D (ADR-025 (g)).
+- 2026-08-11 — Overlay conversion done: the `worldToScreen` lambda now routes through
+  `Camera::WorldToScreen` (one lambda body, 14 call sites), and annotation/survey-label sites pass
+  their `insZ` / `elevation` so text rises with the geometry it belongs to.
+- 2026-08-11 — **DEFECT FOUND FROM TASK-034 STEP 1B — seven aliased stride-3 circle sites.**
+  While reading `PickClosestCadEntity` for the ray work I found `const auto& C =
+  st.userCirclesCxCyZR;` followed by `C.size() % 3`, `ci += 3`, `C[ci + 2]` and `ci / 3`. **Seven
+  such sites existed** (`CadCommands.cpp` 2708, 6316, 6442, 8219, 8624, 8783 + an index divisor at
+  2722) — box-select, two extents/bbox walks, TRIM cutting-edge collection, entity picking, and
+  hatch-boundary tessellation. All were reading a Z as a radius and stepping through circles at the
+  wrong stride: **box-select, picking, snapping and TRIM were all silently wrong for circles.**
+  **Why the step-1b audit missed them:** the rename makes every *direct* use a compile error, but a
+  local alias (`const auto& C = …`) hides the identifier, so the closing grep — which looked for
+  the array name and a stride pattern on the same line — could not see them. This is the honest
+  limit of rename-driven refactoring, and it is now recorded as such rather than filed as a
+  one-off. Re-audited with an alias-aware AWK sweep over every `auto& C = …CirclesCxCyZR` block;
+  clean. `paperCircles` confirmed still stride 3 (11 sites), as ADR-025 (g) requires.
+  **These were not caught by tests** because `CadCommands.cpp` is not linkable by the test target
+  (it pulls the UI/GL stack) — the same structural gap already recorded against REQ-057's DXF
+  round-trip. Splitting that file's pure logic is a SPEC GAP, not a Workshop choice; see §11.
+- 2026-08-11 — **Phase C complete.** The input seam now branches: plan view and paper space keep
+  the original linear arithmetic **bit-identical**; an orbited model view resolves the cursor as
+  ray × work plane. A miss (edge-on UCS) sets `cursorValid = false` and the cursor/snap/hover block
+  is skipped — the same state as the cursor being outside the viewport — rather than inventing a
+  coordinate (REQ-201).
+  `PickClosestCadEntity` gained an optional `const ray3d::Ray*`: when supplied, only the **distance
+  metric** changes (via `d2Point` / `d2Segment`), while entity enumeration, strides and indexing
+  stay shared between the plan and orbited paths so the two cannot drift apart. Lines, polylines,
+  arcs and ellipses measure in true 3D; circles keep the exact analytic distance-to-circumference
+  in plan view and sample their circumference when orbited. A null ray reproduces the previous
+  behaviour exactly. `AppCommandState` gained the UCS (origin + normal, default world XY) and
+  `uiCursorWorldZ`.
+- 2026-08-11 — **User testing round 1. Five defects reported, all root-caused and fixed.** This is
+  the entry that matters most in this log: the pure-module tests were green and the app ran, yet
+  orbit was unusable, because **every overlay path that projects world → screen had to be found,
+  and I had converted only one of them.**
+    1. *"the mouse moves in a circle / wraps to the other side"* — the CROSSHAIR (`CadUi.cpp` ~10930)
+       took the snapped cursor's world position and re-projected it with the **plan** mapping. So
+       mouse → ray → world was right, then world → screen was wrong, and as the azimuth swept, the
+       crosshair traced a circle about the target and flipped past 90°. Now camera-projected.
+    2. *"dragging left/right feels backwards"* — the azimuth delta followed the CAMERA; dragging
+       should push the MODEL. Negated.
+    3. *"hover highlights but clicking selects nothing"* — click selection used `rawPickX/rawPickY`,
+       a **second, independent** mouse→world conversion (`CadUi.cpp` ~8542) that I had not
+       converted, so hover (fixed) and click (unfixed) disagreed about where the cursor was. Both
+       now branch identically, and the click pick receives the same ray the hover used.
+    4. *"box select does not work"* — a screen rectangle is not a world-axis-aligned rectangle once
+       the camera rotates, so the world-AABB test was wrong by construction.
+       `ComputeSelectionFromRect` now takes an optional camera + viewport size and moves the whole
+       test to SCREEN space: lines and polylines project per-vertex (exact), other types project
+       their bounds (conservative — a grazing box can be included in crossing mode; recorded, not
+       hidden). Needed `uiViewportWidthPx/HeightPx` on `AppCommandState` because the command layer
+       cannot otherwise know the viewport aspect.
+    5. *"changing a line's elevation shows the original AND the changed line"* — the selection
+       highlight was built at a fixed overlay depth (`lineZ`) while the geometry sat at its real Z,
+       so an orbited view drew the object twice. Highlights (line, arc, ellipse, polyline) now use
+       each entity's own Z; `appendCommittedPolylineStrip` lost its flat-Z parameter entirely since
+       it only ever draws committed geometry.
+  **Lesson recorded:** "convert the projection" was not one change, it was five, spread across
+  drawing, hit-testing and selection. The pure Camera/ray tests could not catch any of them —
+  they all live in `CadUi.cpp`/`CadCommands.cpp`, which the test target cannot link. That is now
+  the third distinct defect class traced to the same structural gap.
+- 2026-08-11 — **REQ-059 view gizmo delivered (was TASK-036).** ImOGuizmo vendored to
+  `third_party/imoguizmo.hpp` (MIT, 422 lines, unmodified per the user's FINDING-2 ruling), drawn
+  top-right of the model viewport. It owns a view MATRIX and mutates it, while the camera here is
+  parametrised by azimuth/elevation, so `Camera::SetFromViewRotation` decomposes the returned
+  matrix back — **round-trip tested across 36 orientations**, including the pole case where azimuth
+  is degenerate and must be left alone rather than snapped (snapping would spin the drawing when
+  the top handle is clicked). Z-up comes from `CoordinateSystem::XZY`.
+
+## 9. Self-verification
+
+- [ ] build-project        — PASS
+- [ ] architecture-review  — PASS
+- [ ] code-review          — PASS
+- [ ] dependency-audit     — n-a (no dependency added; ImGuizmo arrives in TASK-037)
+- [ ] performance-review   — PASS (REQ-100 numbers recorded)
+- [ ] testing              — PASS
+
+## 10. Verification result
+
+- Submitted:  <pending>
+- Verdict:    <pending>
+
+## 11. Outcome
+
+- <pending>

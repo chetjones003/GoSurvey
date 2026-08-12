@@ -922,10 +922,39 @@ requirements is a planning failure, not a sign of rigor.
     vertical from the anchor; turning it off again restores free-angle drawing;
   - **F8 toggles ORTHO even while the command bar is focused** (typing a command does not disable F8);
   - when a point is object-snapped, ORTHO does not override the snap.
-- Owner-layer: UI (default + key/status toggles) / Commands (the pure ORTHO constraint helper)
+- ORTHO also governs **direct-distance entry** and **grip editing**:
+  - **Direct-distance entry.** With ORTHO on and a draft anchor set, typing a bare distance places the
+    next point that far from the anchor **along the axis the crosshair indicates** — left, right, up or
+    down. The direction comes from the crosshair, so the anchor and the crosshair must be compared in the
+    **same coordinate frame**: storage is local (world = local + document origin), so a world-space
+    crosshair is converted to local first.
+  - **Grip editing.** Dragging a grip is a draw operation and obeys ORTHO the same way: the dragged point
+    is constrained to the horizontal or vertical line through **the grip's position when it was armed**,
+    an object snap still wins, and typing a bare distance places the grip that far along that axis and
+    ends the stretch (AutoCAD's grip behaviour). One undo returns the entity to its pre-drag state
+    whether it was placed by dragging or by typing. While a grip is armed the **cursor dynamic-input box**
+    (REQ-024) is shown even though no command is active: it displays the **live stretch distance**,
+    following the cursor and updating as the grip moves, with its text **selected** so a keystroke replaces
+    it. Enter commits the shown or typed distance.
+- Acceptance (direct-distance and grips):
+  - with ORTHO on, a first LINE point placed and the crosshair held to the **left** of it, typing `50`
+    draws a 50-unit segment to the **left** — and likewise right, up and down;
+  - the same holds on a drawing whose document origin is a state-plane coordinate, not only on a fresh
+    drawing at the origin;
+  - with ORTHO on, dragging a line's endpoint grip moves it only horizontally or vertically from where
+    the grip started; turning ORTHO off restores free dragging;
+  - with a grip armed, the dynamic-input box appears at the cursor showing the live distance with its text
+    selected; typing `25` replaces it, moves the grip 25 units along the crosshair's axis and completes
+    the stretch; one undo restores the original geometry; Esc cancels the drag with the box focused.
+- Owner-layer: UI (default + key/status toggles, the grip drag) / Commands (the pure ORTHO constraint and
+  axis-direction helpers, the typed-distance paths)
 - Status: accepted
 - Revisions: 2026-07-13 — initial. Root cause: ORTHO defaulted on (`main.cpp` orthoEnabled=true) and
   F8 was gated behind text-input focus, so it could not be reliably turned off.
+  2026-08-11 — extended to direct-distance entry and grip editing. Two defects fixed: (a) the LINE and
+  POLYLINE typed-distance paths compared a **world**-space crosshair against a **local** anchor, so any
+  drawing with a non-zero document origin had the origin added to dx alone and every typed distance drew
+  to the **right**; (b) grip dragging ignored ORTHO entirely and had no typed-distance entry.
 
 ### REQ-048 — True entity/layer colors in paper space (on screen and in the plot)
 - Purpose: paper space should show a drawing in its real colors like model space and AutoCAD — the
@@ -1085,6 +1114,321 @@ requirements is a planning failure, not a sign of rigor.
 
 ---
 
+### REQ-052 — Open and save DWG drawings
+- Purpose: DWG is the format surveying clients, engineers and consultants actually exchange. A CAD
+  product for survey work that can only read DXF cannot be handed a client's drawing, and the user
+  has asked for DWG to eventually become GoSurvey's **native** format in place of `.gs`
+  (see the open follow-ups below and `docs/dwg-plan.txt`).
+- Priority: must
+- Type: functional
+- Statement: GoSurvey **opens** a DWG drawing and **saves** one, through File menu entries that sit
+  alongside the DXF entries and use the same import log. DWG is Autodesk's proprietary format and
+  AC1032 (R2018) has no public specification, so this requirement is satisfied in **phases**
+  (ADR-024): Phase 1 converts DWG ↔ DXF out of process using a converter already installed on the
+  machine and reuses `DxfIo`; later phases replace that with an in-tree codec. Whatever the phase,
+  the behaviour below holds.
+  On **open**: the file's format tag is read and reported by release name; a file that is not a DWG
+  is refused with that reason rather than mis-parsed; when no converter is available the failure
+  states exactly what to install and how to point GoSurvey at it; and every limitation the import
+  route imposes is written to the log, not left for the user to discover.
+  On **save**: because Phase 1's payload is the DXF export, the save is **lossy** — it cannot carry
+  block definitions, extra layouts, elevations, attributes, or the Civil 3D objects and proxies a
+  client drawing contains. A save therefore **states what it will drop before writing anything**,
+  and never overwrites the destination unless a good converted file exists, so a failed save cannot
+  destroy the previous drawing.
+- Acceptance:
+  - File ▸ Import DWG opens a real R2018 drawing and its geometry appears in model space;
+  - a non-DWG file, a missing file, and a machine with no converter each produce a specific, actionable
+    message and leave the drawing untouched;
+  - File ▸ Export DWG shows what the export drops, names the destination when it would be overwritten,
+    and writes nothing if cancelled;
+  - the DWG that GoSurvey writes **opens in AutoCAD with no recovery prompt** and contains the
+    entities, layers and text that were exported;
+  - a failed conversion leaves no temporary directories behind and does not modify the destination.
+- Status: accepted
+- Notes:
+  2026-07-30 — Phase 1 delivered under TASK-030 (ADR-024, converter route). Verified against
+  `26-084 - Master.dwg` (AC1032, Civil 3D lineage) and by writing a DWG that AutoCAD 2026 reopens.
+  Building Phase 1 exposed a **pre-existing DXF conformance defect**: the TEXT emitter wrote group
+  73 without the second `AcDbText` subclass marker, so AutoCAD rejected GoSurvey's DXF outright
+  ("Unexpected DXF group code: 73 — drawing discarded"). Fixed in the same task; it had been
+  silently breaking DXF export to AutoCAD, not only DWG.
+  2026-07-30 — Phase 1b delivered under TASK-031: the DXF TEXT record layout and the DWG probe
+  (version detection + converter discovery) were extracted into units the test target can link, and
+  11 test cases committed over them — including the group-73 regression above. Proven by mutation
+  test (re-introducing the defect fails 4 assertions) and by byte-identical export output before and
+  after the refactor. Suite: 698 assertions / 109 cases. Remaining emitters are still untested
+  (TASK-031 DEBT-4).
+  Open follow-ups, each its own requirement: a native in-tree codec; preservation of objects
+  GoSurvey does not model (the user's decision is that a save **must** preserve them, which Phase 1
+  cannot do); first-class blocks; multiple layouts; elevations; and the migration of `.gs` to DWG
+  as the native format. All are itemised in `docs/dwg-plan.txt`.
+
+### REQ-053 — RECT command, and polylines survive a DXF/DWG save
+- Purpose: rectangles are the most-drawn shape in survey deliverables (parcels, structures, title-block
+  panels, detail frames) and the user had to draw four separate lines for each. Building it also exposed
+  that **no polyline of any kind was written to DXF** — every polyline was dropped from an export in
+  silence, so a rectangle would have been unshareable even once it could be drawn.
+- Priority: must
+- Type: functional
+- Statement: **RECT** (aliases `RECTANG`, `RECTANGLE`) draws an axis-aligned rectangle from **two
+  opposite corners**, picked in the viewport or typed on the command line; the second corner also accepts
+  `@dx,dy`, which is how a rectangle of an exact width and height is drawn. Between the corners the
+  rectangle rubber-bands to the cursor. RECT is a **first-class draw command**: it has a ribbon button,
+  a cursor dynamic-input prompt at each corner (REQ-024), right-click repeat, and it draws into **model,
+  paper and floating-model space** like the other draw commands (REQ-036/REQ-037). ORTHO deliberately
+  does **not** constrain the second corner — the shape is already axis-aligned and constraining it would
+  collapse the rectangle to a line. A rectangle is stored as a **4-vertex closed polyline** — the same
+  representation AutoCAD's RECTANG produces (an LWPOLYLINE) — so it is not a new entity type and it
+  inherits selection, grips, snaps, MOVE/COPY/ROTATE/SCALE, `.gs` persistence and layer/colour handling
+  from the existing polyline. **Every polyline, rectangle or not, is written to DXF as an `LWPOLYLINE`**
+  carrying its true vertex count, its closed flag, and its layer/colour/linetype/lineweight/transparency;
+  DWG save inherits this because it converts from the DXF (REQ-052). Degenerate corners (zero width or
+  height) are rejected with a message rather than stored (REQ-201).
+- Acceptance:
+  - `RECT` + two viewport picks creates one rectangle; it selects, highlights and reports as a single
+    object, not four lines;
+  - the ribbon's Rectangle button starts it, each corner shows its dynamic-input prompt, and right-click
+    repeat re-runs it;
+  - drawing it on a paper layout puts it in that layout's paper store, not the model;
+  - the second corner typed as `@100,50` produces a rectangle exactly 100 wide and 50 tall;
+  - two coincident (or axis-collinear) corners are refused with a message and the command restarts;
+  - the rectangle's four corners snap as endpoints, its edges as midpoints, and its interior offers a
+    **geometric centre** (REQ-047's snap set);
+  - exporting a drawing containing a rectangle writes an `LWPOLYLINE` with group 90 = 4, group 70 = 1,
+    and four 10/20 vertex pairs; re-opening that DXF shows the rectangle;
+  - the export log states how many `LWPOLYLINE`s were written (REQ-201).
+- Owner-layer: Commands (the command + closed-polyline commit) / IO (`DxfIo` + the pure `DxfEntityEmit`
+  record) / Viewport (rubber preview)
+- Status: accepted
+- Revisions: 2026-08-11 — initial. Found while implementing: `ExportDxfFile_Impl` had no polyline branch
+  at all, so this requirement also covers the export gap it uncovered.
+
+### REQ-054 — Right-click selection menu, and Select similar matches type + layer + colour
+- Purpose: on a survey plan the **layer** is the classification — parcel lines, contours, utilities and
+  text all coexist as the same geometric primitive. "Select every line in the drawing" is never the
+  selection a surveyor wants; "select every line on this layer, in this colour" is.
+- Priority: should
+- Type: functional
+- Statement: Right-clicking in the drawing **with a selection** opens the selection shortcut menu
+  (MOVE/COPY/ROTATE/SCALE/DELETE, Select similar, Selection…, Clear selection) — this is the shipped
+  AutoCAD default for Right-Click Customization's *Edit Mode*, and it remains user-configurable in
+  Settings. **Select similar** replaces the selection with every object that matches the lead object on
+  **all three** of: object type (annotations narrow further by annotation kind — TEXT is not similar to a
+  dimension), **layer**, and **colour**. Layer and colour compare case-insensitively, an unset layer means
+  layer `0` and an unset colour means `ByLayer`, so entities differing only in spelling still match. The
+  command reports the count together with the layer and colour it matched on (REQ-201).
+- Acceptance:
+  - right-clicking with objects selected opens the shortcut menu rather than repeating the last command,
+    on an existing profile as well as a fresh one;
+  - with one line on layer `PARCEL` selected, Select similar picks up the other `PARCEL` lines and leaves
+    lines on other layers, and lines of a different colour, unselected;
+  - selecting a TEXT and running it does not sweep in dimensions;
+  - the command line states the count, the layer and the colour.
+- Owner-layer: Commands (`SelectSimilarToCurrentSelection`) / UI (the shortcut menu) / IO (the preference
+  default and its one-time migration)
+- Status: accepted
+- Revisions: 2026-08-11 — initial. Recorded as a SPEC GAP: Select similar and the right-click menu were
+  already implemented with no governing requirement, and Select similar matched on object type alone.
+  The menu was also unreachable, because `rightClickEditMode` shipped defaulted to RepeatLastCommand.
+
+### REQ-055 — A newly opened drawing is the focused tab, and a drawing reopens at the view it was saved at
+- Purpose: two interruptions to the basic open/save loop. Creating or opening a drawing left the user on
+  the *previous* tab, so every File > New and File > Open needed a manual tab click to reach the drawing
+  just asked for. And a saved drawing reopened at the default view rather than where the user left it,
+  so every reopen started with a zoom/pan hunt to get back to the work.
+- Priority: should
+- Type: functional
+- Statement: **Tab focus.** Creating a drawing (File > New, the tab bar's "+") or opening one
+  (File > Open) makes that drawing's tab the **active, focused** tab in the same action — no second click.
+  Closing a tab likewise focuses the tab that takes its place.
+  **Saved view.** Saving a drawing records the drawing viewport's **pan and zoom**, and opening it restores
+  them, so the drawing reopens looking at what the user left on screen. The pan is stored in **world**
+  coordinates: loading may rebase the document origin (large-coordinate rebase), and a local pan would
+  silently point somewhere else in the drawing after that. The saved view is an **additive** `.gs` key —
+  older files still load, and fall back to framing the drawing.
+- Acceptance:
+  - File > New shows the new empty drawing immediately, with its tab selected;
+  - File > Open shows the opened drawing immediately, with its tab selected, with two or more tabs open;
+  - pan and zoom somewhere specific, save, close, reopen — the drawing is at that same pan and zoom;
+  - the same holds for a drawing on state-plane coordinates, where opening rebases the document origin;
+  - a `.gs` saved before this requirement still opens, framed to its drawing rather than at a stale view.
+- Owner-layer: UI (tab bar selection) / IO (`GsIo` view key)
+- Status: accepted
+- Revisions: 2026-08-11 — initial. Root causes: the tab loop assigned `activeDrawingIdx` and consumed
+  `pendingDrawingTabSwitch` from whichever tab ImGui reported selected, and tabs are submitted in index
+  order — so the still-selected old tab always won before the new tab was reached. The `.gs` writer had
+  no view state at all.
+
+### REQ-056 — TRIM defaults to smart line trim, controlled by the TRIMSTATE system variable
+- Purpose: the common trim is "get rid of that bit" — the user knows what should go, not which object is
+  doing the cutting. Making cutting-edge selection mandatory put a bookkeeping step in front of every
+  trim. The drawn-line trim was already implemented but hidden behind an `L` option nobody would find.
+- Priority: should
+- Type: functional
+- Statement: **TRIM** starts in the mode named by the **TRIMSTATE** system variable:
+  - **TRIMSTATE 0 (default)** — *smart trim*: two clicks draw a line across the drawing, and the pieces
+    that line crosses are trimmed. No cutting edges are picked.
+  - **TRIMSTATE 1** — *classic*: pick cutting edges, Enter, then click the pieces to trim.
+  Within a run, **T** switches to picking cutting edges and **L** back to the drawn line, so either mode
+  stays reachable whatever TRIMSTATE is set to. `TRIMSTATE` typed bare prompts
+  `Enter new value for TRIMSTATE <n>:` and a blank Enter keeps the current value; `TRIMSTATE 1` sets it in
+  one line. Only 0 and 1 are accepted — anything else is refused with a message (REQ-201). The value
+  **persists in user preferences**, so it is a setting rather than a per-session mode.
+  While picking cutting edges (and trim targets), entity picking uses the **existing hover highlight and
+  selection highlight**: the object under the cursor pre-highlights, and picked cutting edges stay
+  highlighted as a selection. TRIM is the only command that relaxes the "no entity hover during a
+  command" rule, because its clicks name objects rather than coordinates.
+- Acceptance:
+  - on a fresh profile, TRIM prompts for the first point of a trim line — no cutting-edge step;
+  - two clicks across a segment trim it, and the command ends;
+  - `TRIMSTATE 1` then TRIM prompts for cutting edges; the mode survives a restart;
+  - a bare `TRIMSTATE` shows the current value and blank Enter leaves it unchanged; `TRIMSTATE 2` is
+    refused with a message and the value is unchanged;
+  - `T` during a line trim switches to cutting edges, `L` during edge picking switches back;
+  - hovering an object while picking cutting edges highlights it; picked edges stay highlighted; hovering
+    an already-picked edge does not double-highlight.
+- Owner-layer: Commands (mode + the TRIMSTATE command) / UI (hover gate) / Viewport (highlight) /
+  IO (preference persistence)
+- Status: accepted
+- Revisions: 2026-08-11 — initial. The drawn-line trim already existed as the `L` option; this makes it
+  the default and gives the choice a name.
+
+---
+
+## 3D model space requirements
+
+> These cover the move from a plan-view 2D drawing surface to a true 3D model space
+> (ADR-025). They are deliberately split into five independently shippable requirements:
+> REQ-057 puts Z into the data, REQ-058 puts a camera in front of it, REQ-059/060 are the
+> navigation and manipulation surfaces, and REQ-061 carries the camera into paper space.
+> Paper-space *sheet* geometry stays 2D throughout — a sheet is 2D by definition
+> (ADR-009/013 stores are unchanged).
+
+### REQ-057 — 3D coordinates through the model, IO, and Properties
+- Purpose: surveyors work in three dimensions; today elevation is captured but never drawn,
+  so terrain, layered utilities and vertical relationships are invisible and uncheckable
+- Priority: must
+- Type: functional
+- Statement: Every model-space entity carries a Z coordinate — lines, polylines, circles,
+  arcs, ellipses, filled regions, text/MTEXT, dimensions and survey points. Z is stored
+  **interleaved** with X and Y in every flat geometry store, one uniform convention across all
+  geometry (ADR-025 (a), amended 2026-08-11), and **absolutely**, with no `worldDocumentOriginZ`
+  (ADR-025 D2 — the local-origin invariant stays X/Y-only). `SurveyPoint::elevation` **is**
+  the point's Z: no duplicate field and no conversion step, so existing drawings gain true
+  relief with no re-import. Z survives a round-trip through DXF (group 30), DWG and `.gs`.
+  The Properties panel displays and edits Z per entity type, and that edit is undoable.
+- Acceptance:
+  - importing a DXF fixture with non-zero Z and re-exporting reproduces every group-30 value
+    within REQ-101 tolerance;
+  - a `.gs` saved with 3D geometry reloads with every Z bit-identical;
+  - a legacy `.gs` carrying no Z loads with all Z = 0 and renders identically to pre-change;
+  - editing Z in Properties moves the entity, and Ctrl+Z restores the previous value;
+  - a survey point reports its stored elevation as its Z with no import or conversion step;
+  - a circle or filled region survives insert, erase-from-the-middle and undo with its Z still
+    attached to the right entity (asserted in tests — the stride-widening regression).
+- Owner-layer: Domain (storage), IO (persistence), UI (Properties)
+- Status: accepted
+- Revisions: 2026-08-11 — initial. 2026-08-11 — **amended**: the statement originally specified
+  additive parallel Z arrays per ADR-025 D1. That design rested on an incorrect reading of the
+  existing strides (`userLinesFlat` and `userPolylineVerts` already carry Z inline). Corrected to
+  interleaved XYZ throughout; see the ADR-025 correction note and the decision log.
+
+### REQ-058 — Orbitable 3D camera with ray picking and a UCS work plane
+- Purpose: make the third dimension inspectable and drawable-in
+- Priority: must
+- Type: functional
+- Statement: The model viewport is driven by a camera (eye / target / up → view matrix) with
+  selectable orthographic or perspective projection. The user can orbit freely. **Plan view
+  with orthographic projection is the startup default and reproduces the previous 2D
+  behaviour.** Picking becomes a screen-ray → world-ray test and object snapping resolves in
+  3D. Drawing input resolves as ray × the **active work plane (UCS)**, which defaults to the
+  world XY plane. Every existing 2D command continues to work unchanged while the camera is
+  in plan view.
+- Acceptance:
+  - plan view renders pixel-comparable to the pre-change build on a reference drawing;
+  - endpoint / midpoint / center / intersection snaps resolve correctly from an orbited
+    camera, verified against hand-computed coordinates within REQ-101;
+  - LINE, ARC, CIRCLE and TEXT drawn on a non-default UCS land on that plane within REQ-101;
+  - the existing test suite stays green;
+  - the REQ-100 frame budget is met while orbiting.
+- Owner-layer: Renderer (matrices, draw), UI / Commands (input, picking, snap)
+- Status: accepted
+- Revisions: 2026-08-11 — initial.
+
+### REQ-059 — ViewCube (view navigation widget)
+- Purpose: direct, discoverable view control and continuous orientation feedback
+- Priority: should
+- Type: functional
+- Statement: A **labelled ViewCube surrounded by a W/N/S/E compass ring** occupies the model
+  viewport's top-right corner and tracks the camera orientation continuously. Appearance follows
+  the mockup supplied with the original feature request. The widget carries:
+  - **six labelled faces** — TOP, BOTTOM, FRONT, BACK, LEFT, RIGHT — each label drawn on its face
+    whenever that face is visible, shrunk to fit rather than omitted;
+  - **two rotation arrows** that square the view up with the next compass direction (N/E/S/W)
+    clockwise or counter-clockwise, **relative to the active coordinate system** — under a rotated
+    UCS they square to the UCS's north, not the world's;
+  - a **home button** that sets the SW isometric view (azimuth 45° from the active coordinate
+    system, elevation atan(1/√2) ≈ 35.264°).
+  Clicking a face sets the camera to that standard view. **Every orientation change the widget
+  initiates is animated**, not snapped — a hard jump makes it easy to lose track of which way the
+  model turned. A manual orbit cancels an animation in flight.
+- Acceptance:
+  - clicking TOP, FRONT and a side face each set the camera to the corresponding standard view;
+  - every visible face shows its label, including the long ones (BOTTOM, FRONT, RIGHT);
+  - each rotation arrow moves the view to the next quarter turn **even when already square**, and
+    preserves the current elevation — it is a rotation, not a view preset;
+  - the home button reaches SW isometric from any starting orientation;
+  - after any orbit the cube's displayed orientation matches the camera;
+  - **a click anywhere on the widget — face, arrow or home — never reaches the viewport behind it**
+    and in particular never begins a selection; geometry outside the widget still picks normally;
+  - orientation changes ease to the target and settle within 0.5 s, taking the short way around the
+    compass; a manual orbit during one takes over immediately;
+  - **in plan view (the startup default) the widget is legible** — this is the condition the first
+    implementation failed.
+- Owner-layer: UI
+- Status: accepted
+- Revisions: 2026-08-11 — initial. 2026-08-11 — amended to ImOGuizmo's stock axis-ball after
+  FINDING-2 (the adopted dependency could not render the mockup unmodified). 2026-08-11 —
+  **amended back**: shipped and observed, the axis-ball collapses to a point in plan view and
+  conveyed no orientation, so the cube is now built in-tree and the mockup is the target again.
+  The legibility clause above was added so this cannot regress silently.
+
+### REQ-060 — 3D manipulation gizmo for the current selection
+- Purpose: direct manipulation instead of coordinate entry
+- Priority: should
+- Type: functional
+- Statement: With a selection active, a translate / rotate / scale gizmo operates on it in 3D,
+  driven by the REQ-058 camera matrices. Each gizmo drag is a single undoable operation and
+  produces the same result as the equivalent MOVE / ROTATE / SCALE command.
+- Acceptance:
+  - translate, rotate and scale each move the selection as displayed, and one Ctrl+Z restores
+    the prior state in a single step;
+  - a gizmo drag and the equivalent typed command produce coordinates agreeing within REQ-101;
+  - no gizmo is drawn when the selection is empty.
+- Owner-layer: UI (widget), Commands (apply + undo)
+- Status: accepted
+- Revisions: 2026-08-11 — initial.
+
+### REQ-061 — Per-viewport camera in paper space
+- Purpose: put a plan view and an isometric on the same sheet
+- Priority: should
+- Type: functional
+- Statement: `PaperLayout` geometry remains 2D paper inches (ADR-009/013 stores unchanged).
+  Each `Viewport` gains a stored camera direction, up vector and projection, persisted
+  additively in `.gs`. Screen rendering and the PDF plot each render a viewport's model
+  content from that viewport's own camera.
+- Acceptance:
+  - a layout with two viewports — one plan, one isometric — renders both correctly on screen
+    and plots both correctly to PDF;
+  - a legacy `.gs` loads with every viewport in plan view and renders identically to
+    pre-change.
+- Owner-layer: Domain (data), Renderer (draw), IO (`.gs` + plot)
+- Status: accepted
+- Revisions: 2026-08-11 — initial.
+
+---
+
 ## Performance requirements
 
 > Performance is a requirement, not an afterthought — but always paired with a
@@ -1095,13 +1439,18 @@ requirements is a planning failure, not a sign of rigor.
 - Purpose: interactive responsiveness (desktop/OpenGL)
 - Priority: should
 - Type: performance
-- Statement: The viewport sustains `<60 FPS / 16 ms>` while displaying a scene
-  of `<N>` primitives on the reference hardware.
-- Acceptance: the benchmark scene profiled on the reference machine stays within
-  budget at the 95th-percentile frame.
+- Statement: The viewport holds a **16 ms frame (60 FPS) at the 95th-percentile
+  frame while continuously orbiting a 250,000-line-segment scene** on the
+  reference machine. 250k segments is the density of a real topo with contours;
+  continuous orbit is the worst case, because orbiting defeats any plan-view
+  culling.
+- Acceptance: a committed benchmark scene profiled on the reference machine stays
+  within budget at the 95th-percentile frame during a scripted orbit.
 - Owner-layer: Renderer
-- Status: proposed
-- Revisions: `<date>` — initial.
+- Status: accepted
+- Revisions: 2026-08-11 — placeholder `<60 FPS / 16 ms>` / `<N>` replaced with a
+  measurable budget, because REQ-058 makes framerate user-visible for the first
+  time and R5 could not otherwise have a testable acceptance condition.
 
 ### REQ-101 — Numerical tolerance
 - Purpose: domain correctness (CAD/survey)
@@ -1213,10 +1562,20 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-044 | Domain/UI/IO | `TextStyleTests` (resolve/bake from style; override keeps per-text value while non-overridden props re-bake on style edit; legacy empty-style text unchanged; dimensions ignored) + manual (active-style dropdown; new text adopts active style; `.gs` round-trip of table + per-annotation style; old `.gs` unchanged; Phase 2 STYLE dialog create/rename/delete/edit ripple; Phase 3 Properties overrides + oblique; DXF import registers STYLE table + links imported TEXT/MTEXT so editing an imported style's font updates them, heights preserved) | accepted |
 | REQ-045 | UI | manual (PAN/P enters pan; hand cursor; left-drag pans 1:1; Esc/Enter/right-click exits + restores cursor/tool; middle-drag unchanged; model/paper/floating) | accepted |
 | REQ-046 | UI/Commands/Domain/Renderer/IO | `PaperSpaceTests` (VP color override set/get/clear; per-viewport independence; VPFREEZE adds / VPTHAW removes a layer in the vp's frozen set) + manual (panel gone; Layer Manager VP Freeze/VP Color columns gated on current viewport; freeze/color affect current vp only; VPFREEZE/VPTHAW pick; `.gs` round-trip of frozen + color; PDF plot shows frozen absent + override colored) | accepted |
-| REQ-047 | UI/Commands | `OrthoConstrainTests` (constraint off = no-op at any angle; on = snaps to nearer H/V axis; snap-independent math) + manual (fresh drawing draws free-angle; F8/status toggles ORTHO incl. while the command bar is focused; object snap overrides ORTHO) | accepted |
+| REQ-047 | UI/Commands | `OrthoConstrainTests` (constraint off = no-op at any angle; on = snaps to nearer H/V axis; snap-independent math; direct-distance direction resolves +X/-X/+Y/-Y and refuses a crosshair on the anchor; frame sensitivity — a local crosshair keeps -X where a world-space one is forced to +X) + manual (fresh drawing draws free-angle; F8/status toggles ORTHO incl. while the command bar is focused; object snap overrides ORTHO; typed distance draws left/up/down on a state-plane drawing; grip drag constrained to H/V from the armed grip; typed grip distance completes the stretch and one undo restores it) | accepted |
 | REQ-048 | UI/Renderer/IO | manual (viewport model + native sheet show true entity/layer colors on screen; VP Color override + selection/hover still win; frozen/off/non-plottable unchanged; PDF plot prints true colors) | accepted |
 | REQ-049 | IO/Renderer | manual (native sheet geometry + TEXT/MTEXT appear in the plotted PDF at correct position/size, colored per REQ-048; off/non-plottable excluded; any TTF-text limit recorded as debt) | accepted |
 | REQ-050 | Renderer | manual (MTEXT edited through a viewport at a non-drawing scale sizes off the viewport scale = constant plotted height; plain model view unchanged; single-line TEXT unchanged; survey labels unchanged) | accepted |
+| REQ-052 | IO/UI/Platform | `DxfEntityEmitTests` (TEXT declares AcDbText twice with group 73 in the second subclass — the shipped regression; group 7 an AcDbText property; entity groups inside AcDbEntity; 440 omitted when opaque + 0x02000000 packing) + `DwgProbeTests` (all ten release tags; "not a DWG" vs "unknown DWG"; short/empty/missing/null files; converter override honoured, classified case-insensitively, bogus path never trusted, cache holds until rescan) + manual/harness (real R2018 DWG imports; export states what it drops; the written DWG reopens in AutoCAD 2026 with its entities, layers and text; no temp dirs leaked) | accepted (Phase 1 + 1b) |
+| REQ-057 | Domain/IO/UI | planned — DXF group-30 round-trip within REQ-101; `.gs` Z bit-identical on reload; legacy `.gs` loads all-zero Z; Properties Z edit undoable; survey elevation reads back as Z; parallel Z arrays stay length-locked across insert/erase/undo | accepted |
+| REQ-058 | Renderer/UI/Commands | planned — plan view pixel-comparable to pre-change; snaps correct from an orbited camera within REQ-101; draw on a non-default UCS lands on that plane; existing suite green; REQ-100 met while orbiting | accepted |
+| REQ-059 | UI | planned — manual (+Z / −Y / an off-axis handle animate correctly and settle < 0.5 s; gizmo tracks the camera after orbit; clicks outside the gizmo still pick geometry). Appearance is ImOGuizmo stock — the mockup is not the target (amended 2026-08-11) | accepted |
+| REQ-060 | UI/Commands | planned — manual (translate/rotate/scale each apply and undo in one step; gizmo result matches the typed command within REQ-101; no gizmo with an empty selection) | accepted |
+| REQ-061 | Domain/Renderer/IO | planned — manual (two viewports, one plan one isometric, correct on screen and in the PDF plot; legacy `.gs` opens all-plan and renders unchanged) | accepted |
+| REQ-056 | Commands/UI/Viewport/IO | manual (fresh profile: TRIM prompts for a trim line and two clicks trim + end; `TRIMSTATE 1` restores cutting-edge picking and survives a restart; bare `TRIMSTATE` shows the value, blank Enter keeps it, `TRIMSTATE 2` refused; T/L switch mid-run; hover pre-highlights a candidate edge, picked edges stay highlighted, an already-picked edge does not double-highlight) | accepted |
+| REQ-055 | UI/IO | manual (File > New and File > Open land on the new tab with 2+ tabs open; "+" likewise; closing a tab focuses its replacement; pan/zoom survives save → close → reopen, including on a state-plane drawing that rebases on load; a pre-REQ-055 `.gs` opens framed to its drawing) | accepted |
+| REQ-054 | Commands/UI/IO | manual (right-click with a selection opens the shortcut menu on an existing profile and a fresh one; Select similar on a `PARCEL` line picks up only `PARCEL` lines of that colour; a TEXT does not sweep in dimensions; the log states count + layer + colour) | accepted |
+| REQ-053 | Commands/IO/Viewport | `DxfEntityEmitTests` (LWPOLYLINE group 90 = true vertex count and precedes 70, both before the first vertex; closed flag 1/0; every vertex emitted in order as a 10/20 pair; AcDbPolyline marker exactly once; vertex-less record emits nothing rather than a 90-of-zero; 440 omitted when opaque and placed inside AcDbEntity) + manual (RECT by two picks is one selectable object; `@dx,dy` gives an exact width x height; degenerate corners refused; corners/midpoints/geometric centre snap; export log counts LWPOLYLINEs; the DXF reopens with the rectangle; DWG save carries it) | accepted |
 | REQ-051 | UI/IO | `MtextToolbarTests` (panel-anchor clamp in-bounds/off-screen/oversized; font+colour run-tag composition incl. empty family = no tag; ruler tick spacing + zero-width = no ticks; attach label 1–9 + out-of-range fallback) + manual (panel titled "Text Formatting" with two rows + ruler; drag persists across edits and restart; font/colour apply to the selection only; height/oblique/entity colour whole-object; style dropdown re-bakes per REQ-044; B/I/U/caps/symbol unchanged; justification re-lays out; disabled controls inert with naming tooltips; ruler + expand toggles; paper MTEXT same panel; single-line TEXT still bare box; OK/Esc + `.gs`/DXF round-trip unchanged) | accepted |
 
 ---

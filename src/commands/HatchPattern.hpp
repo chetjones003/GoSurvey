@@ -33,8 +33,8 @@ inline void ClipLine(const CadFilledRegion& fr, double px, double nx, double ny,
     if (cnt < 3) continue;
     for (int i = 0; i < cnt; ++i) {
       const int a = begin + i, b = begin + (i + 1) % cnt;
-      const double ax = fr.verts[static_cast<size_t>(a) * 2], ay = fr.verts[static_cast<size_t>(a) * 2 + 1];
-      const double bx = fr.verts[static_cast<size_t>(b) * 2], by = fr.verts[static_cast<size_t>(b) * 2 + 1];
+      const double ax = fr.vertsXyz[static_cast<size_t>(a) * 3], ay = fr.vertsXyz[static_cast<size_t>(a) * 3 + 1];
+      const double bx = fr.vertsXyz[static_cast<size_t>(b) * 3], by = fr.vertsXyz[static_cast<size_t>(b) * 3 + 1];
       const double ex = bx - ax, ey = by - ay;
       const double det = ex * dy - dx * ey;
       if (std::fabs(det) < 1e-12) continue;
@@ -97,7 +97,7 @@ inline void EmitDashed(double px, double nx, double ny, double dx, double dy, do
 /// Appends the clipped pattern segments (flat x0,y0,x1,y1 in the region's local coordinates) to \p outSegs,
 /// generated from \p def with the region's patternScale/patternAngleDeg. Returns the number appended.
 inline int BuildSegments(const CadFilledRegion& fr, const hatchpat::Def& def, std::vector<float>* outSegs) {
-  if (!outSegs || fr.isSolid() || fr.loopStart.empty() || fr.verts.size() < 6 || def.lines.empty())
+  if (!outSegs || fr.isSolid() || fr.loopStart.empty() || fr.vertsXyz.size() < 9 || def.lines.empty())
     return 0;
   float mnX = 0, mnY = 0, mxX = 0, mxY = 0;
   if (!hatchgeom::OuterBounds(fr, &mnX, &mnY, &mxX, &mxY))
@@ -127,7 +127,7 @@ inline int BuildSegments(const CadFilledRegion& fr, const hatchpat::Def& def, st
     double pMin = 1e300, pMax = -1e300;
     const int oc = fr.loopCount(0);
     for (int i = 0; i < oc; ++i) {
-      const double vx = fr.verts[static_cast<size_t>(i) * 2], vy = fr.verts[static_cast<size_t>(i) * 2 + 1];
+      const double vx = fr.vertsXyz[static_cast<size_t>(i) * 3], vy = fr.vertsXyz[static_cast<size_t>(i) * 3 + 1];
       const double pp = vx * nx + vy * ny;
       pMin = std::min(pMin, pp);
       pMax = std::max(pMax, pp);

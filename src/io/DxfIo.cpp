@@ -4,6 +4,7 @@
 #include "CadCoordinateFrame.hpp"
 #include "CadLinetype.hpp"
 #include "DxfColors.hpp"
+#include "DxfEntityEmit.hpp"
 #include "MtextRichFormat.hpp"
 #include "TextStyle.hpp"
 
@@ -567,7 +568,13 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     *endIdxOut = jj;
   };
 
-  auto appendSegXF = [&](double x0, double y0, double x1, double y1, const EntityAttributes& at) {
+  // \p z0 / \p z1 are DXF group 30 / 31 elevations (REQ-057). They default to 0 so the many
+  // callers that build inherently flat geometry (expanded POINT cross-lines, tessellated curves,
+  // dimension leaders) stay unchanged. Z is carried through **unrebased**: the document origin is
+  // X/Y-only (ADR-025 D2), and \c xf is a 2D transform, so a block INSERT's Z scale/translation is
+  // not applied — a known limitation, recorded rather than silently approximated.
+  auto appendSegXF = [&](double x0, double y0, double x1, double y1, const EntityAttributes& at,
+                         double z0 = 0.0, double z1 = 0.0) {
     double ox0 = 0, oy0 = 0, ox1 = 0, oy1 = 0;
     xf.apply(x0, y0, &ox0, &oy0);
     xf.apply(x1, y1, &ox1, &oy1);
@@ -575,10 +582,10 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     UpdateCoordMag(coordMagMax, ox1, oy1);
     st.userLinesFlat.push_back(static_cast<float>(ox0 - st.worldDocumentOriginX));
     st.userLinesFlat.push_back(static_cast<float>(oy0 - st.worldDocumentOriginY));
-    st.userLinesFlat.push_back(0.f);
+    st.userLinesFlat.push_back(static_cast<float>(z0));
     st.userLinesFlat.push_back(static_cast<float>(ox1 - st.worldDocumentOriginX));
     st.userLinesFlat.push_back(static_cast<float>(oy1 - st.worldDocumentOriginY));
-    st.userLinesFlat.push_back(0.f);
+    st.userLinesFlat.push_back(static_cast<float>(z1));
     st.userLineAttrs.push_back(at);
   };
 
@@ -673,7 +680,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     }
   };
 
-  auto appendCircleXF = [&](double cx, double cy, double rad, const EntityAttributes& at) {
+  auto appendCircleXF = [&](double cx, double cy, double rad, const EntityAttributes& at, double cz = 0.0) {
     if (rad <= 1e-9)
       return;
     if (xf.isIdentity()) {
@@ -681,9 +688,10 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       xf.apply(cx, cy, &ocx, &ocy);
       UpdateCoordMag(coordMagMax, ocx, ocy);
       UpdateCoordMag(coordMagMax, ocx + rad, ocy);
-      st.userCirclesCxCyR.push_back(static_cast<float>(ocx - st.worldDocumentOriginX));
-      st.userCirclesCxCyR.push_back(static_cast<float>(ocy - st.worldDocumentOriginY));
-      st.userCirclesCxCyR.push_back(static_cast<float>(rad));
+      st.userCirclesCxCyZR.push_back(static_cast<float>(ocx - st.worldDocumentOriginX));
+      st.userCirclesCxCyZR.push_back(static_cast<float>(ocy - st.worldDocumentOriginY));
+      st.userCirclesCxCyZR.push_back(static_cast<float>(cz));  // group 30 (REQ-057), unrebased
+      st.userCirclesCxCyZR.push_back(static_cast<float>(rad));
       st.userCircleAttrs.push_back(at);
       return;
     }
@@ -695,7 +703,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       const double ly0 = cy + rad * std::sin(u0);
       const double lx1 = cx + rad * std::cos(u1);
       const double ly1 = cy + rad * std::sin(u1);
-      appendSegXF(lx0, ly0, lx1, ly1, at);
+      appendSegXF(lx0, ly0, lx1, ly1, at, cz, cz);  // the tessellated ring stays on its own plane
     }
   };
 
@@ -779,20 +787,24 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       double ox = 0, oy = 0;
       xf.apply(mx, my, &ox, &oy);
       UpdateCoordMag(coordMagMax, ox, oy);
-      region.verts.push_back(static_cast<float>(ox - st.worldDocumentOriginX));
-      region.verts.push_back(static_cast<float>(oy - st.worldDocumentOriginY));
+      region.vertsXyz.push_back(static_cast<float>(ox - st.worldDocumentOriginX));
+      region.vertsXyz.push_back(static_cast<float>(oy - st.worldDocumentOriginY));
+      // Z: a HATCH's boundary vertices are 10/20 only — the elevation lives on the HATCH entity
+      // itself (group 30), which this parser does not yet read. Kept at 0 so widening the store
+      // is a pure refactor; real elevations land with the group-30 work (REQ-057, TASK-034 step 6).
+      region.vertsXyz.push_back(0.f);
     };
     auto endLoop = [&]() {
       // Drop a just-finished loop that has fewer than 3 vertices (degenerate).
       if (!region.loopStart.empty()) {
         const int start = region.loopStart.back();
-        if (static_cast<int>(region.verts.size() / 2) - start < 3) {
-          region.verts.resize(static_cast<size_t>(start) * 2);
+        if (static_cast<int>(region.vertsXyz.size() / 3) - start < 3) {
+          region.vertsXyz.resize(static_cast<size_t>(start) * 3);
           region.loopStart.pop_back();
         }
       }
     };
-    auto beginLoop = [&]() { region.loopStart.push_back(static_cast<int>(region.verts.size() / 2)); };
+    auto beginLoop = [&]() { region.loopStart.push_back(static_cast<int>(region.vertsXyz.size() / 3)); };
     size_t k = lo;
     bool inBoundary = false;
     bool polylineBoundary = false;
@@ -872,7 +884,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       ++k;
     }
     endLoop();
-    if (!region.loopStart.empty() && region.verts.size() >= 6) {
+    if (!region.loopStart.empty() && region.vertsXyz.size() >= 9) {  // >= 3 vertices × 3 floats
       st.cadFilledRegions.push_back(std::move(region));
       st.cadFilledRegionAttrs.push_back(at);
     }
@@ -1004,7 +1016,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         else if (c == 21) ParseDouble(v, &y1);
         else if (c == 31) ParseDouble(v, &z1);
       }
-      appendSegXF(x0, y0, x1, y1, base.makeAttr(layerRgb));
+      appendSegXF(x0, y0, x1, y1, base.makeAttr(layerRgb), z0, z1);  // groups 30/31 (REQ-057)
       i = j;
       continue;
     }
@@ -1012,6 +1024,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     if (typ == "LWPOLYLINE") {
       PendingLw lw;
       double pendX = NAN;
+      double lwElev = 0.0;  // DXF group 38 — the polyline's constant Z (absent → 0)
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
@@ -1023,6 +1036,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
           lw.has420 = ParseIntFlexible(v, &lw.rgb420);
         else if (c == 70)
           ParseIntFlexible(v, &lw.flags);
+        else if (c == 38)
+          ParseDouble(v, &lwElev);  // LWPOLYLINE carries ONE elevation for all vertices (REQ-057)
         else if (c == 10) {
           ParseDouble(v, &pendX);
         } else if (c == 20) {
@@ -1041,9 +1056,10 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       if (nv >= 2) {
         for (int a = 0; a < nv - 1; ++a)
           appendSegXF(lw.vx[static_cast<size_t>(a)], lw.vy[static_cast<size_t>(a)], lw.vx[static_cast<size_t>(a + 1)],
-                      lw.vy[static_cast<size_t>(a + 1)], at);
+                      lw.vy[static_cast<size_t>(a + 1)], at, lwElev, lwElev);
         if ((lw.flags & 1) != 0 && nv >= 3)
-          appendSegXF(lw.vx[static_cast<size_t>(nv - 1)], lw.vy[static_cast<size_t>(nv - 1)], lw.vx[0], lw.vy[0], at);
+          appendSegXF(lw.vx[static_cast<size_t>(nv - 1)], lw.vy[static_cast<size_t>(nv - 1)], lw.vx[0], lw.vy[0], at,
+                      lwElev, lwElev);
       }
       i = j;
       continue;
@@ -1061,7 +1077,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         else if (c == 30) ParseDouble(v, &cz);
         else if (c == 40) ParseDouble(v, &rad);
       }
-      appendCircleXF(cx, cy, rad, base.makeAttr(layerRgb));
+      appendCircleXF(cx, cy, rad, base.makeAttr(layerRgb), cz);  // group 30 (REQ-057)
       i = j;
       continue;
     }
@@ -1101,7 +1117,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
           const double ly0 = cy + rad * std::sin(u0);
           const double lx1 = cx + rad * std::cos(u1);
           const double ly1 = cy + rad * std::sin(u1);
-          appendSegXF(lx0, ly0, lx1, ly1, at);
+          appendSegXF(lx0, ly0, lx1, ly1, at, cz, cz);  // the arc stays on its group-30 plane
         }
       }
       i = j;
@@ -1662,7 +1678,7 @@ void BuildExportLayerRgbHint(const AppCommandState& st, std::unordered_map<std::
   const size_t nSeg = st.userLinesFlat.size() / 6;
   for (size_t i = 0; i < nSeg && i < st.userLineAttrs.size(); ++i)
     layers.insert(st.userLineAttrs[i].layer.empty() ? std::string("0") : st.userLineAttrs[i].layer);
-  const size_t nCirc = st.userCirclesCxCyR.size() / 3;
+  const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
   for (size_t i = 0; i < nCirc && i < st.userCircleAttrs.size(); ++i)
     layers.insert(st.userCircleAttrs[i].layer.empty() ? std::string("0") : st.userCircleAttrs[i].layer);
   for (size_t i = 0; i < st.cadAnnotationAttrs.size(); ++i) {
@@ -1876,7 +1892,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
     ParseEntityRegion(pairs, eb, ee, st, layerRgb, &blockDefs, xfRoot, 0, &coordMagMax, &skippedPaper,
                       &skippedViewport, &skipped, &skipHist, &embeddedPoints, &textStyles);
 
-  const bool noGeom = st.userLinesFlat.empty() && st.userCirclesCxCyR.empty();
+  const bool noGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty();
   if ((!hasEntitiesSec || noGeom) && hasModelSpace) {
     if (!hasEntitiesSec)
       log.push_back("DXF import — ENTITIES section missing; reading geometry from *MODEL_SPACE block.");
@@ -1887,7 +1903,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   }
 
   const size_t nLines = st.userLinesFlat.size() / 6;
-  const size_t nCirc = st.userCirclesCxCyR.size() / 3;
+  const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
   std::ostringstream os;
   os << "DXF import — " << nLines << " line segment(s), " << nCirc << " circle(s).";
   log.push_back(os.str());
@@ -2013,7 +2029,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   layerNames.insert("0");
 
   const size_t nSeg = st.userLinesFlat.size() / 6;
-  const size_t nCirc = st.userCirclesCxCyR.size() / 3;
+  const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
   const size_t nLayerRows = layerNames.size();
   // Symbol handles (hex, unique): fixed small IDs for tables/rows where handle < layer base (0x10),
   // then layer rows 0x10.., then VPORT, VIEW, UCS, APPID, DIMSTYLE, BLOCK_RECORD, BLOCK pairs.
@@ -2120,9 +2136,9 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     accExtZ(static_cast<double>(st.userLinesFlat[i * 6 + 5]));
   }
   for (size_t ci = 0; ci < nCirc; ++ci) {
-    const double cx = static_cast<double>(st.userCirclesCxCyR[ci * 3]);
-    const double cy = static_cast<double>(st.userCirclesCxCyR[ci * 3 + 1]);
-    const double rr = std::fabs(static_cast<double>(st.userCirclesCxCyR[ci * 3 + 2]));
+    const double cx = static_cast<double>(st.userCirclesCxCyZR[ci * 4]);
+    const double cy = static_cast<double>(st.userCirclesCxCyZR[ci * 4 + 1]);
+    const double rr = std::fabs(static_cast<double>(st.userCirclesCxCyZR[ci * 4 + 3]));
     accExt(cx - rr, cy - rr);
     accExt(cx + rr, cy + rr);
   }
@@ -2177,12 +2193,31 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   };
 
   auto dxfEmitTransparency440IfNeeded = [&](float transparency01) {
-    if (transparency01 <= 1e-5f)
-      return;
-    const unsigned char b =
-        static_cast<unsigned char>(std::lround(std::clamp(transparency01, 0.f, 1.f) * 255.f));
-    const int pack = static_cast<int>(0x02000000u | static_cast<unsigned int>(b));
-    emitPair(440, std::to_string(pack));
+    int pack = 0;
+    if (DxfTransparency440(transparency01, &pack))
+      emitPair(440, std::to_string(pack));
+  };
+  // Same packing, but returning the value instead of emitting it — for record descriptors
+  // (DxfEntityEmit.hpp) that carry group 440 as an optional pre-formatted field.
+  auto dxfTransparency440Str = [](float transparency01, std::string* out) -> bool {
+    int pack = 0;
+    if (!DxfTransparency440(transparency01, &pack))
+      return false;
+    if (out)
+      *out = std::to_string(pack);
+    return true;
+  };
+  auto emitTextRecord = [&](const DxfTextRecord& rec) {
+    std::vector<DxfOutPair> pairs;
+    DxfAppendTextRecord(rec, &pairs);
+    for (const DxfOutPair& p : pairs)
+      emitPair(p.code, p.value);
+  };
+  auto emitLwPolylineRecord = [&](const DxfLwPolylineRecord& rec) {
+    std::vector<DxfOutPair> pairs;
+    DxfAppendLwPolylineRecord(rec, &pairs);
+    for (const DxfOutPair& p : pairs)
+      emitPair(p.code, p.value);
   };
   auto dxfEntityLineweight370Str = [](const EntityAttributes& at) -> std::string {
     if (at.lineweightMm < 0.f)
@@ -2850,9 +2885,10 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     const uint32_t rgb =
         AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
     const int entAci = DxfNearestAciFromRgbPacked(rgb);
-    const float cx = st.userCirclesCxCyR[ci * 3];
-    const float cy = st.userCirclesCxCyR[ci * 3 + 1];
-    const float rr = st.userCirclesCxCyR[ci * 3 + 2];
+    const float cx = st.userCirclesCxCyZR[ci * 4];
+    const float cy = st.userCirclesCxCyZR[ci * 4 + 1];
+    const float cz = st.userCirclesCxCyZR[ci * 4 + 2];
+    const float rr = st.userCirclesCxCyZR[ci * 4 + 3];
 
     const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
     const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
@@ -2862,11 +2898,58 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     emitPair(100, "AcDbCircle");
     emitPair(10, std::to_string(worldX(cx)));
     emitPair(20, std::to_string(worldY(cy)));
-    emitPair(30, "0.0");
+    emitPair(30, std::to_string(static_cast<double>(cz)));  // elevation (REQ-057), absolute
     emitPair(40, std::to_string(static_cast<double>(rr)));
     emitPair(210, "0.0");
     emitPair(220, "0.0");
     emitPair(230, "1.0");
+  }
+
+  // Polylines — including every RECT, which is stored as a 4-vertex closed polyline (REQ-053). Before this
+  // the exporter had no LWPOLYLINE branch at all, so polylines were dropped from the DXF without a word.
+  size_t nPolyOut = 0;
+  {
+    const int polyCount =
+        static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
+    for (int pi = 0; pi < polyCount; ++pi) {
+      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      if (v1 - v0 < 2)
+        continue;
+      EntityAttributes at{};
+      if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
+        at = st.userPolylineAttrs[static_cast<size_t>(pi)];
+      const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+      const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
+      const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
+
+      char hb[24];
+      std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+
+      DxfLwPolylineRecord rec;
+      rec.handleHex = hb;
+      rec.ownerHandleHex = hBrModel;
+      rec.layer = layer8;
+      rec.linetype = DxfExportEntityLtype6(at);
+      rec.colorAci = std::to_string(DxfNearestAciFromRgbPacked(rgb));
+      rec.lineweight370 = dxfEntityLineweight370Str(at);
+      rec.hasTransparency =
+          dxfTransparency440Str(EffectiveEntityTransparency01(at, lyr), &rec.transparency440);
+      rec.closed = static_cast<size_t>(pi) < st.userPolylineClosed.size() &&
+                   st.userPolylineClosed[static_cast<size_t>(pi)] != 0;
+      // LWPOLYLINE carries ONE elevation (group 38) for the whole polyline, so a genuinely 3D
+      // polyline cannot round-trip through it — the first vertex's Z is written and the rest are
+      // dropped. Recorded as technical debt in the TASK-034 log: carrying per-vertex Z needs the
+      // 3D POLYLINE/VERTEX entity pair, which is its own change.
+      if (v1 > v0)
+        rec.elevation38 = std::to_string(static_cast<double>(st.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]));
+      rec.vertices.reserve(static_cast<size_t>(v1 - v0));
+      for (int vi = v0; vi < v1; ++vi)
+        rec.vertices.emplace_back(std::to_string(worldX(st.userPolylineVerts[static_cast<size_t>(vi * 3)])),
+                                  std::to_string(worldY(st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)])));
+      emitLwPolylineRecord(rec);
+      ++nPolyOut;
+    }
   }
 
   size_t nPointOut = 0;
@@ -2936,30 +3019,25 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       const std::string txt = (an.underline ? std::string("%%u") : std::string()) + sanitizeDxfText(an.text);
       const double rotRad = static_cast<double>(an.rotationRad);
       const double hWorld = static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
-      emitPair(0, "TEXT");
-      emitPair(5, hb);
-      emitPair(330, hBrModel);
-      emitPair(100, "AcDbEntity");
-      emitPair(8, layer);
-      emitPair(6, DxfExportEntityLtype6(at));
-      emitPair(7, "Standard");
-      emitPair(62, std::to_string(entAci));
-      emitPair(370, dxfEntityLineweight370Str(at));
-      dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, annLyr));
-      emitPair(100, "AcDbText");
+      // Record layout (incl. the mandatory second AcDbText subclass) lives in DxfEntityEmit.hpp
+      // so it can be unit-tested without the GUI stack — see that header for why.
+      DxfTextRecord rec;
+      rec.handleHex = hb;
+      rec.ownerHandleHex = hBrModel;
+      rec.layer = layer;
+      rec.linetype = DxfExportEntityLtype6(at);
+      rec.colorAci = std::to_string(entAci);
+      rec.lineweight370 = dxfEntityLineweight370Str(at);
+      rec.hasTransparency = dxfTransparency440Str(EffectiveEntityTransparency01(at, annLyr),
+                                                  &rec.transparency440);
       // insX/insY is the top-left; DXF group 10/20 is the baseline (one text height lower).
-      emitPair(10, std::to_string(static_cast<double>(an.insX)));
-      emitPair(20, std::to_string(static_cast<double>(an.insY) - hWorld));
-      emitPair(30, "0.0");
-      emitPair(40, std::to_string(hWorld));
-      emitPair(50, std::to_string(rotRad * (180.0 / kPi))); // DXF group 50 is DEGREES
-      emitPair(71, "0");
-      emitPair(72, "0");
-      emitPair(73, "0");
-      emitPair(210, "0.0");
-      emitPair(220, "0.0");
-      emitPair(230, "1.0");
-      emitPair(1, txt);
+      rec.x = std::to_string(static_cast<double>(an.insX));
+      rec.y = std::to_string(static_cast<double>(an.insY) - hWorld);
+      rec.z = std::to_string(static_cast<double>(an.insZ));  // elevation (REQ-057)
+      rec.height = std::to_string(hWorld);
+      rec.text = txt;
+      rec.rotationDeg = std::to_string(rotRad * (180.0 / kPi)); // DXF group 50 is DEGREES
+      emitTextRecord(rec);
       ++nTextOut;
     } else if (an.kind == CadAnnotation::Kind::DimAligned || an.kind == CadAnnotation::Kind::DimLinear) {
       float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
@@ -2981,12 +3059,14 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
         emitPair(0, "LINE");
         emitEntityHeader(hb, layer, at, entAci, annLyr);
         emitPair(100, "AcDbLine");
+        // A dimension's leader/extension lines sit on the dimension's own plane (REQ-057).
+        const std::string dimZ = std::to_string(static_cast<double>(an.insZ));
         emitPair(10, std::to_string(static_cast<double>(x0)));
         emitPair(20, std::to_string(static_cast<double>(y0)));
-        emitPair(30, "0.0");
+        emitPair(30, dimZ);
         emitPair(11, std::to_string(static_cast<double>(x1)));
         emitPair(21, std::to_string(static_cast<double>(y1)));
-        emitPair(31, "0.0");
+        emitPair(31, dimZ);
         emitPair(210, "0.0");
         emitPair(220, "0.0");
         emitPair(230, "1.0");
@@ -2999,29 +3079,23 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
       const std::string txt = sanitizeDxfText(an.text);
       const double rotRad = static_cast<double>(an.rotationRad);
-      emitPair(0, "TEXT");
-      emitPair(5, hb);
-      emitPair(330, hBrModel);
-      emitPair(100, "AcDbEntity");
-      emitPair(8, layer);
-      emitPair(6, DxfExportEntityLtype6(at));
-      emitPair(7, "Standard");
-      emitPair(62, std::to_string(entAci));
-      emitPair(370, dxfEntityLineweight370Str(at));
-      dxfEmitTransparency440IfNeeded(EffectiveEntityTransparency01(at, annLyr));
-      emitPair(100, "AcDbText");
-      emitPair(10, std::to_string(static_cast<double>(an.insX)));
-      emitPair(20, std::to_string(static_cast<double>(an.insY)));
-      emitPair(30, "0.0");
-      emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch))));
-      emitPair(50, std::to_string(rotRad * (180.0 / kPi))); // DXF group 50 is DEGREES
-      emitPair(71, "0");
-      emitPair(72, "0");
-      emitPair(73, "0");
-      emitPair(210, "0.0");
-      emitPair(220, "0.0");
-      emitPair(230, "1.0");
-      emitPair(1, txt);
+      DxfTextRecord rec;
+      rec.handleHex = hb;
+      rec.ownerHandleHex = hBrModel;
+      rec.layer = layer;
+      rec.linetype = DxfExportEntityLtype6(at);
+      rec.colorAci = std::to_string(entAci);
+      rec.lineweight370 = dxfEntityLineweight370Str(at);
+      rec.hasTransparency = dxfTransparency440Str(EffectiveEntityTransparency01(at, annLyr),
+                                                  &rec.transparency440);
+      rec.x = std::to_string(static_cast<double>(an.insX));
+      rec.y = std::to_string(static_cast<double>(an.insY));
+      rec.z = std::to_string(static_cast<double>(an.insZ));  // elevation (REQ-057)
+      rec.height =
+          std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch)));
+      rec.text = txt;
+      rec.rotationDeg = std::to_string(rotRad * (180.0 / kPi)); // DXF group 50 is DEGREES
+      emitTextRecord(rec);
       ++nTextOut;
     } else {
       char hb[24];
@@ -3054,7 +3128,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       const double insYw = arow == 0 ? bMxY : arow == 1 ? 0.5 * (bMnY + bMxY) : bMnY;
       emitPair(10, std::to_string(insXw));
       emitPair(20, std::to_string(insYw));
-      emitPair(30, "0.0");
+      emitPair(30, std::to_string(static_cast<double>(an.insZ)));  // elevation (REQ-057)
       emitPair(40, std::to_string(static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch))));
       emitPair(41, std::to_string(static_cast<double>(bw)));
       emitPair(71, std::to_string(attach));
@@ -3079,7 +3153,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   size_t nHatchOut = 0;
   for (size_t fi = 0; fi < st.cadFilledRegions.size(); ++fi) {
     const CadFilledRegion& fr = st.cadFilledRegions[fi];
-    if (fr.loopStart.empty() || fr.verts.size() < 6)
+    if (fr.loopStart.empty() || fr.vertsXyz.size() < 9)  // < 3 vertices × 3 floats
       continue;
     EntityAttributes at{};
     if (fi < st.cadFilledRegionAttrs.size())
@@ -3113,16 +3187,16 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       emitPair(73, "1");  // closed
       emitPair(93, std::to_string(cnt));
       for (int v = 0; v < cnt; ++v) {
-        emitPair(10, std::to_string(worldX(fr.verts[static_cast<size_t>(begin + v) * 2 + 0])));
-        emitPair(20, std::to_string(worldY(fr.verts[static_cast<size_t>(begin + v) * 2 + 1])));
+        emitPair(10, std::to_string(worldX(fr.vertsXyz[static_cast<size_t>(begin + v) * 3 + 0])));
+        emitPair(20, std::to_string(worldY(fr.vertsXyz[static_cast<size_t>(begin + v) * 3 + 1])));
       }
       emitPair(97, "0");  // number of source boundary objects
     }
     emitPair(75, "0");  // hatch style = normal
     emitPair(76, "1");  // predefined pattern type
     emitPair(98, "1");  // one seed point
-    emitPair(10, std::to_string(worldX(fr.verts[0])));
-    emitPair(20, std::to_string(worldY(fr.verts[1])));
+    emitPair(10, std::to_string(worldX(fr.vertsXyz[0])));
+    emitPair(20, std::to_string(worldY(fr.vertsXyz[1])));
     ++nHatchOut;
   }
 
@@ -3162,6 +3236,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   emitPair(0, "EOF");
 
   log.push_back("DXF export — wrote " + std::to_string(nSeg) + " LINE(s), " + std::to_string(nCirc) + " CIRCLE(s), " +
+                std::to_string(nPolyOut) + " LWPOLYLINE(s), " +
                 std::to_string(nPointOut) + " POINT(s), " + std::to_string(nTextOut) + " TEXT, " +
                 std::to_string(nMtextOut) + " MTEXT, " + std::to_string(nDimExplodedLines) + " LINE(s) from dimensions, " +
                 std::to_string(nHatchOut) + " HATCH(es).");

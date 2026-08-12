@@ -141,8 +141,19 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   u8clamped("rightClickDefaultMode",  &tmp, 1); st.rightClickDefaultMode  = static_cast<AppCommandState::RightClickDefaultMode>(tmp);
   tmp = static_cast<uint8_t>(st.rightClickEditMode);
   u8clamped("rightClickEditMode",     &tmp, 1); st.rightClickEditMode     = static_cast<AppCommandState::RightClickEditMode>(tmp);
+  // Schema 1 corrects a shipped default: Edit Mode was RepeatLastCommand, which made the selection
+  // shortcut menu (and with it Select similar) unreachable. Profiles written before schema 1 carry the old
+  // default as if it were a choice, so the migration re-applies the compiled default once. Later profiles
+  // keep whatever the user picked in Settings.
+  if (!(s.contains("prefsSchemaVersion") && s["prefsSchemaVersion"].is_number_integer() &&
+        s["prefsSchemaVersion"].get<int>() >= 1))
+    st.rightClickEditMode = AppCommandState::RightClickEditMode::ShortcutMenu;
   tmp = static_cast<uint8_t>(st.rightClickCommandMode);
   u8clamped("rightClickCommandMode",  &tmp, 2); st.rightClickCommandMode  = static_cast<AppCommandState::RightClickCommandMode>(tmp);
+
+  // --- TRIMSTATE (REQ-056): 0 = draw a line to trim, 1 = pick cutting edges ---
+  if (s.contains("trimState") && s["trimState"].is_number_integer())
+    st.trimState = std::clamp(s["trimState"].get<int>(), 0, 1);
 
   // --- Undo/Redo ---
   if (s.contains("undoHistoryMaxSize") && s["undoHistoryMaxSize"].is_number_integer())
@@ -320,6 +331,12 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
 
   // Panel focus restoration
   s["focusedSidePanel"] = st.propertiesPanelActive ? "Properties" : "Reports";
+
+  // Bumped when a shipped default is corrected and existing profiles must pick the new value up once
+  // (see the load side). 1 = Edit Mode right-click opens the selection shortcut menu.
+  s["prefsSchemaVersion"] = 1;
+
+  s["trimState"] = st.trimState;
 
   // Right-click behavior
   s["rightClickRepeatLastCommand"] = st.rightClickRepeatLastCommand;

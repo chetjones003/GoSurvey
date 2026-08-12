@@ -1,0 +1,840 @@
+================================================================================
+GoSurvey — DWG READ/WRITE PLAN
+================================================================================
+Status:      DECIDED. Phase 1 SHIPPED (REQ-052 / ADR-024 / TASK-030, 2026-07-30).
+             Phases 2-6 are the outstanding work.
+Created:     2026-07-30
+Updated:     2026-07-30 (route decided; Phase 1 built and verified; PART 11 added)
+Reference:   Analysis of "C:\Users\chetj\OneDrive\Desktop\26-084 - Master.dwg"
+
+This file is the extensive feature list requested. It is organized as:
+
+  PART 1  What the reference DWG actually contains (measured, not guessed)
+  PART 2  What DWG is, and why it is not "DXF but binary"
+  PART 3  GoSurvey's current baseline (what we can and cannot represent today)
+  PART 4  The codec route — DECIDED (was SPEC GAP DWG-GAP-01)
+  PART 5  Gap list A — DWG codec work (format level)
+  PART 6  Gap list B — data-model work (things we cannot represent at all)
+  PART 7  Gap list C — application/UI work
+  PART 8  Phased build plan (tasks, ordered, with exit criteria)
+  PART 9  Test strategy and acceptance evidence
+  PART 10 Risks, technical debt, and open questions
+  PART 11 Making DWG the NATIVE format (retiring .gs)
+
+--------------------------------------------------------------------------------
+DECISIONS RECORDED 2026-07-30  (see spec/project.md decision log)
+--------------------------------------------------------------------------------
+  D1. ROUTE = "converter now, native codec after". Phase 1 ships immediately and
+      doubles as the test oracle for the native work.               [ DONE ]
+
+  D2. LICENSING = open source, GPL-compatible.
+      => LibreDWG is NOT excluded after all. This materially changes PART 4: the
+         native phase should reconsider vendoring LibreDWG (weeks) rather than
+         writing a codec from scratch (months). See "REVISED RECOMMENDATION".
+
+  D3. SAVE MUST PRESERVE objects GoSurvey does not model (proxies, Civil 3D
+      data, tables, dynamic blocks).
+      => DM-08 is promoted to CRITICAL and is now a hard requirement.
+      => The converter route can NEVER be the permanent save path, because DXF
+         cannot carry those objects. Phase 1's save is time-boxed debt (DEBT-1
+         in TASK-030).
+
+  D4. DIRECTION: .gs is to be phased out in favour of .dwg as the native format.
+      => New PART 11. Blocked on the native codec; recorded now so the DWG work
+         is designed toward it instead of retrofitted later.
+
+  D5. Every missing feature in PART 6/7 is to be BUILT, not merely listed. They
+      are a backlog, not an FYI. Each still becomes its own REQ before
+      implementation (CLAUDE.md step 1) — that is the ordering rule, not a
+      reason to defer.
+
+--------------------------------------------------------------------------------
+WHAT PHASE 1 ACTUALLY DELIVERED (TASK-030)
+--------------------------------------------------------------------------------
+  File > Import DWG / Export DWG, backed by src/io/DwgIo + src/platform/ProcessRun.
+  Converter discovery: GOSURVEY_DWG_CONVERTER env override -> ODA File Converter
+  -> newest installed AutoCAD accoreconsole. Menu items disable themselves with
+  an explanatory tooltip when none is found.
+
+  Verified: the reference R2018 drawing imports; non-DWG / missing file / no
+  converter are each refused with a specific reason; the DWG GoSurvey writes
+  REOPENS IN AUTOCAD 2026 with its entities, layers and text intact; no temp
+  directories leak.
+
+  Defect found and fixed on the way (PRE-EXISTING, wider than DWG): DxfIo's TEXT
+  emitters wrote group 73 without the second "100 AcDbText" subclass marker, so
+  AutoCAD rejected ANY GoSurvey DXF containing single-line TEXT outright —
+  "Unexpected DXF group code: 73 ... drawing discarded". Both emitters reordered
+  to the DXF reference. This had been silently breaking DXF interchange, not just
+  DWG. It also demonstrates DEBT-2 below: DXF/DWG IO has no committed automated
+  test, which is why a defect this severe survived.
+
+================================================================================
+PART 1 — WHAT THE REFERENCE DWG ACTUALLY CONTAINS
+================================================================================
+
+Measured by converting the file to DXF with the locally installed AutoCAD 2026
+accoreconsole and inventorying the result. This is ground truth for scoping.
+
+1.1 File-level facts
+--------------------
+  Format tag            AC1032  (AutoCAD 2018 / R2018 — the current DWG format)
+  Size                  1,290,312 bytes
+  $ACADVER              AC1032
+  $EXTMIN               0.333, 0.180, 0.0
+  $EXTMAX               3126.002, 5651.529, 118.235   <- non-zero Z extent
+  $INSUNITS             6
+  $LUNITS / $LUPREC     2 (decimal) / 3
+  $AUNITS / $AUPREC     1 (deg/min/sec) / 3
+  $DIMSCALE             5.0
+  $MEASUREMENT          0 (imperial)
+  $HANDSEED             0x77618  (~489,000 handles ever issued)
+
+  Provenance: Civil 3D / Land Desktop lineage. Registered applications include
+  AeccLand100, AeccLand130, AECBASE, AeccUiQTO*, ADE/MapGWS, AcAecLayerStandard.
+  Ten ACAD_PROXY_OBJECTs are present (Civil-3D-owned objects with no enabler in
+  a third-party reader).
+
+1.2 Entity inventory — model + paper space (ENTITIES section)
+-------------------------------------------------------------
+  HATCH             1364      <- dominant entity; GoSurvey imports these already
+  CIRCLE             711
+  LINE               280
+  LWPOLYLINE          97
+  MTEXT               80
+  ATTRIB              14      <- NOT SUPPORTED today
+  SOLID                8      <- 2D solid; NOT SUPPORTED today
+  INSERT               3
+  VIEWPORT             2
+  MULTILEADER          1      <- NOT SUPPORTED today
+  ACAD_TABLE           1      <- NOT SUPPORTED today
+  TEXT                 1
+  SEQEND               1
+
+1.3 Entity inventory — inside block definitions (BLOCKS section)
+-----------------------------------------------------------------
+  LINE              5425      <- 95% of the drawing's geometry lives in blocks
+  LWPOLYLINE         431
+  HATCH              157
+  ARC                 88
+  MTEXT               79
+  INSERT              28      <- nested blocks
+  CIRCLE              14
+  ATTDEF              14      <- NOT SUPPORTED today
+  ELLIPSE             10
+  SOLID                8
+  VIEWPORT             5
+  POINT                3
+  TEXT                 1
+
+  This is the single most important number in this document. GoSurvey's DXF
+  importer explodes INSERT into loose geometry. For a *viewer* that is
+  acceptable. For DWG round-trip it is not: saving would replace 14 block
+  definitions and 31 insertions with ~6,000 loose primitives, permanently
+  destroying the customer's drawing structure. See DM-01.
+
+1.4 Symbol tables
+-----------------
+  LAYER         61   (named e.g. "00 Pile T4B", "1 Fence", "1 OHE", "Defpoints")
+  LTYPE         11   ByBlock, ByLayer, Continuous, CENTER2, HIDDEN2, PHANTOM,
+                     PHANTOM2, DASHED2, DASHDOT2, FENCELINE1, OHE_LINE
+                     ^ FENCELINE1 and OHE_LINE are COMPLEX linetypes (embedded
+                       shape/text elements). Not supported today.
+  STYLE         14   Standard, Annotative, Legend, North Arrow Text, BILL, BEST,
+                     ROMANS, Survey, Point Label, style1, ROMANT, CJ,
+                     DynamicDimensions, (one unnamed)
+  DIMSTYLE       8   Standard, Annotative, Full, ARC, COLOR, NORMAL, name, CJ
+  BLOCK_RECORD  14   *Model_Space, *Paper_Space, *Paper_Space0/4/7, Benchmark,
+                     "SS TITLE BLOCK CJ", *U1, *U2, *T6, *U8, *U9, *U10,
+                     _AEC_GRIPS_NONE
+                     ^ *U#/*T# are ANONYMOUS blocks — dynamic-block and table
+                       evaluations. Confirmed by APPIDs AcDbDynamicBlockTrueName2
+                       and AcDbDynamicBlockGUID.
+  VPORT          1   UCS 0   VIEW 0   APPID 52
+
+1.5 Objects (non-graphical) that carry meaning
+-----------------------------------------------
+  LAYOUT             5    <- FIVE paper-space layouts. GoSurvey has one.
+  PLOTSETTINGS       5
+  SCALE             42    <- annotative scale list (AcadAnnotative APPID present)
+  XRECORD          371
+  DICTIONARY       174
+  SORTENTSTABLE      5    <- draw-order overrides
+  MLEADERSTYLE       3
+  TABLESTYLE         2 + CELLSTYLEMAP 2 + TABLEGEOMETRY 1
+  ACAD_PROXY_OBJECT 10
+  DATALINK           6 + DATATABLE 1 + FIELDLIST 1   <- fields / linked data
+  ACDBASSOC*         9    <- associative network (arrays, dependencies)
+  MATERIAL/VISUALSTYLE/SUN/RENDER settings — irrelevant to a 2D survey app
+  ACDB_MTEXTATTRIBUTEOBJECTCONTEXTDATA_CLASS 12  <- annotative MTEXT contexts
+
+  Also present: AcCmTransparency and PLOTTRANSPARENCY APPIDs (per-object
+  transparency, which our EntityAttributes already models).
+
+================================================================================
+PART 2 — WHAT DWG IS (AND WHY THIS IS A LARGE PROJECT)
+================================================================================
+
+DXF is a documented ASCII (or binary) tagged interchange format. Autodesk
+publishes a full reference for it, and GoSurvey already reads and writes it in
+src/io/DxfIo.cpp (~3,000 lines).
+
+DWG is a different thing entirely:
+
+  2.1  It is Autodesk's native, proprietary, undocumented on-disk format.
+       Autodesk publishes no specification. The only public description is the
+       Open Design Alliance's "Open Design Specification for .dwg files", which
+       is reverse-engineered, is licensed to ODA members, and documents versions
+       only up to R2013 (v5.3). R2018 / AC1032 — the format of the reference
+       file — is NOT publicly documented. Every third-party R2018 reader in
+       existence is reverse-engineered.
+
+  2.2  It is bit-packed, not byte-aligned. Fields are BITSHORT, BITLONG,
+       BITDOUBLE, "default double" (delta-encoded against a default), 2-bit
+       length prefixes, handle references encoded as 4-bit code + N bytes.
+       Nothing can be read with a struct cast; every field advances a bit cursor.
+
+  2.3  It is a paged, compressed container. R2004+ files consist of a scrambled
+       file header, a system section page map, a section map, and per-section
+       data pages compressed with a custom LZ77 variant, each guarded by CRC32
+       (and R2004+ uses a Reed-Solomon-coded system section). R2018 changed the
+       section/page arrangement again relative to R2004-R2013.
+
+  2.4  It is a handle graph, not a stream. Every object owns a handle; ownership
+       and reference are expressed as handle links; an object map (handle ->
+       file offset) must be built and written correctly or AutoCAD rejects the
+       file. From R2010 each object additionally carries a separate string
+       stream and handle stream located by bit offsets from the object end.
+
+  2.5  Writing is materially harder than reading. A writer must synthesize a
+       complete, self-consistent database: every required symbol table, the
+       named object dictionary, layouts, the object map, section CRCs, and a
+       correct $HANDSEED. AutoCAD's tolerance for malformed DWG is low — the
+       usual failure mode is a flat refusal to open, not a degraded open.
+
+  2.6  Escape hatch worth knowing: AutoCAD opens ALL older DWG versions. A
+       writer does not have to emit AC1032. Emitting AC1015 (R2000) is far
+       simpler — no compression, no page maps, a flat section-locator table —
+       and every AutoCAD, BricsCAD, Civil 3D and DWG TrueView since 2000 reads
+       it. This asymmetry (read new, write old) is the standard strategy and it
+       roughly halves the writer effort.
+
+================================================================================
+PART 3 — GoSurvey BASELINE (what exists today)
+================================================================================
+
+3.1 What DxfIo.cpp already imports
+-----------------------------------
+  LINE, LWPOLYLINE, POLYLINE (+VERTEX/SEQEND), CIRCLE, ARC, ELLIPSE, POINT,
+  TEXT, MTEXT, DIMENSION, HATCH, INSERT (exploded), ACAD_TABLE (partial);
+  VIEWPORT and paper-space entities (group 67) are skipped on import.
+  Symbol tables: LAYER, LTYPE, STYLE (REQ-044 round-trip).
+  Survey-point identity survives via GOSURVEY XDATA (ADR-005).
+
+3.2 What DxfIo.cpp writes
+--------------------------
+  LINE, CIRCLE, POINT, TEXT, MTEXT, HATCH + full symbol tables, *Model_Space /
+  *Paper_Space blocks, minimal CLASSES/OBJECTS. Tagged AC1032.
+
+3.3 The in-memory model (src/commands/CadEntities.hpp, CadCommands.hpp)
+-----------------------------------------------------------------------
+  Geometry is stored as parallel std::vector<float> arrays in LOCAL coordinates,
+  with a double worldDocumentOriginX/Y (world = local + origin). Types:
+    lines (flat x,y pairs) | circles (cx,cy,r) | CadArc | CadEllipse |
+    polylines | CadAnnotation (Text/Mtext/DimAligned/DimLinear/DimAngular) |
+    CadFilledRegion (hatch) | SurveyPoint | TextStyle
+  Per-entity: EntityAttributes { layer, color, linetype, lineweightMm,
+  transparency }.
+
+3.4 Structural limits of that model, relative to DWG
+-----------------------------------------------------
+  (a) 2D only. There is no Z on any primitive. The reference file has a 118 ft
+      Z extent.
+  (b) float storage. Mitigated by the local-origin scheme (see memory:
+      "Local storage invariant"), which is exactly the right design and must be
+      preserved by any DWG importer — subtract the origin in double BEFORE
+      narrowing to float.
+  (c) No block table. Blocks are exploded at import; there is no BlockRecord
+      type, no INSERT entity, no nesting, no attributes.
+  (d) One paper layout. The reference file has five.
+  (e) No handle identity. Entities are array indices. DWG round-trip needs
+      stable per-entity handles to avoid rewriting the whole database.
+  (f) No object-preservation channel. Anything we do not understand is dropped
+      on save.
+
+================================================================================
+PART 4 — SPEC GAP DWG-GAP-01: THE CODEC ROUTE (BLOCKING)
+================================================================================
+
+This is an architectural decision. Per CLAUDE.md the Workshop may not make it.
+Four routes, with honest costs.
+
+  ROUTE A — Native in-tree DWG codec, written from scratch
+  --------------------------------------------------------
+    Read:  R13/R14, R2000, R2004, R2007, R2010, R2013, R2018
+    Write: R2000 (AC1015) only, per 2.6
+    Deps:  none (consistent with CLAUDE.md rule 3, "minimize dependencies")
+    Cost:  Reader ~6,000-10,000 lines; writer ~4,000-6,000 lines. Realistically
+           3-6 months of focused work to reach "opens real consultant drawings
+           without corruption".
+    Risk:  HIGH on R2018 specifically — undocumented, must be reverse-engineered
+           against sample files. Also the highest-value asset: no license, no
+           runtime dependency, no per-seat cost, ships in one exe.
+    Note:  Feasible to sequence: R2000 read+write first (fully documented, and
+           it validates the whole bit-codec), then R2004/R2007/R2010/R2013, then
+           R2018. Every step is independently shippable.
+
+  ROUTE B — Vendor LibreDWG (GNU)
+  --------------------------------
+    Read:  R13..R2018 (R2018 support is partial/experimental upstream)
+    Write: R13..R2000 (encoder is limited)
+    Deps:  libredwg
+    Cost:  Weeks, not months, to integrate.
+    Risk:  LICENSE. LibreDWG is GPL-3.0. Linking it makes GoSurvey GPL-3.0.
+           If GoSurvey is ever sold, licensed, or distributed without full
+           corresponding source, this route is not available. This must be
+           answered before anything else.
+
+  ROUTE C — ODA Drawings SDK (Open Design Alliance / former Teigha)
+  -----------------------------------------------------------------
+    Read/Write: every DWG version, correctly, including proxies and Civil 3D
+                objects with the appropriate modules.
+    Deps:  ODA SDK (large binary SDK)
+    Cost:  Weeks to integrate. Highest correctness, lowest engineering risk.
+    Risk:  Commercial ODA membership required (annual fee, four figures+), plus
+           redistribution terms. Adds a heavy third-party binary to a repo whose
+           entire third_party/ directory is currently one header (stb_image.h).
+
+  ROUTE D — External converter shim (DWG <-> DXF out of process)
+  --------------------------------------------------------------
+    How:   On open, convert DWG -> DXF and feed the existing ImportDxfFile.
+           On save, write DXF and convert DXF -> DWG.
+           Converter is either ODA File Converter (free download, redistribution
+           restricted) or, where present, the user's own AutoCAD accoreconsole
+           (this is exactly how the PART 1 analysis was produced).
+    Cost:  DAYS. Reuses all 3,000 lines of existing DXF code.
+    Risk:  Requires software we do not ship to be installed on the user's
+           machine. Slow (seconds per open). Fidelity is capped by our DXF
+           importer, not by DWG. Not a product-quality answer on its own.
+    Value: It is, however, an excellent INTERIM answer and an excellent TEST
+           ORACLE for Route A — every native-reader result can be diffed against
+           the converter's DXF for the same file.
+
+  ORIGINAL RECOMMENDATION (accepted as D1)
+  ----------------------------------------
+    D now, A as the product. Ship Route D behind the same File > Open / Save As
+    entry points within days so DWG files are usable immediately and so we have
+    a reference oracle; then build Route A in the phases of PART 8, switching
+    the entry points over version-by-version as the native codec passes the
+    oracle.
+
+  REVISED RECOMMENDATION FOR THE NATIVE PHASE  (after D2: GPL is available)
+  ------------------------------------------------------------------------
+    Route B was ruled out ONLY by licensing, and that constraint is now gone.
+    Before starting Phase 2, evaluate LibreDWG against writing Route A:
+
+      * LibreDWG gets R13-R2018 reading in WEEKS, not months, and removes the
+        single largest schedule risk in this document (CODEC-06, undocumented
+        R2018). Its encoder is limited (R13-R2000), which is fine: PART 2 §2.6
+        already says the writer should target R2000.
+      * Its object model is a full DWG database, which is what D3's
+        preservation channel (DM-08) actually needs — a converter cannot give
+        us that, and hand-writing it is most of Route A's cost.
+      * Against it: a large C dependency in a repo whose third_party/ is one
+        header, GPL-3.0 reaching the whole product, and less control over
+        behaviour we may need to tune for survey drawings.
+
+    Recommendation: prototype LibreDWG against the PART 1 golden inventory
+    before committing to either. If it reads the reference file faithfully,
+    take it and spend the saved months on PART 6 instead — the data-model gaps
+    are what actually limit the product, not the parser.
+
+  QUESTIONS — ANSWERED
+  --------------------
+    Q1. Commercial / closed-source?  -> NO. Open source, GPL-compatible (D2).
+    Q2. Budget for an ODA membership? -> Not pursued; D2 makes B the cheap path.
+    Q3. Which DWG versions must OPEN?  -> R2000 through R2018 (unchanged proposal).
+    Q4. Which version should SAVE emit? -> Phase 1 emits AC1032/R2018 to match
+        what DxfIo already tags. The native writer should target R2000 per §2.6,
+        with UI-03 offering the choice.
+    Q5. Must a save PRESERVE objects we don't understand? -> YES (D3). This is
+        now a hard requirement and is what rules the converter route out as a
+        permanent save path.
+
+================================================================================
+PART 5 — GAP LIST A: DWG CODEC WORK (format level)
+================================================================================
+
+Applies to Route A. Each item is a candidate task.
+
+  CODEC-01  Bit-stream primitives (reader + writer)
+            BIT, BB, 3B, BS, BL, BLL, BD, 2BD, 3BD, RC/RS/RL/RD, MC, MS,
+            default-double (DD), bit-extrusion, bit-thickness, CMC (color),
+            TV (text value, R2007+ = UTF-16), handle refs (4-bit code + bytes).
+            Foundation for everything. Fully unit-testable in isolation.
+
+  CODEC-02  R2000 (AC1015) container
+            File header, section-locator records (header/classes/object map/
+            unknown), CRC8 checks, sentinel GUIDs. No compression. Simplest
+            container; validates CODEC-01 end to end.
+
+  CODEC-03  R2004+ container
+            Scrambled 0x80-byte header, Reed-Solomon system section, section
+            page map, section map, per-page LZ77-variant decompression, CRC32.
+
+  CODEC-04  R2007 container delta
+            Different (stronger) page encoding; UTF-16 strings throughout.
+
+  CODEC-05  R2010/R2013 object framing
+            Per-object string stream + handle stream located by bit offsets
+            from the object's end. Required or every string reads as garbage.
+
+  CODEC-06  R2018 (AC1032) container + framing
+            HIGHEST RISK ITEM IN THE PROJECT. Undocumented. Must be
+            reverse-engineered against sample files, using the Route-D
+            converter output as the oracle.
+
+  CODEC-07  Header variables section
+            Read/write the ~250 header variables. We only *use* a dozen
+            ($EXTMIN/$EXTMAX/$INSUNITS/$LUNITS/$LUPREC/$AUNITS/$AUPREC/
+            $DIMSCALE/$LTSCALE/$PDMODE/$CELTYPE/$HANDSEED/$MEASUREMENT) but a
+            writer must emit all of them in order with valid defaults.
+
+  CODEC-08  CLASSES section
+            Maps class numbers >= 500 to DXF names (MULTILEADER, ACAD_TABLE,
+            IMAGE, WIPEOUT, LWPLINE, HATCH, XRECORD, ...). Without it, custom
+            object types cannot be identified at all.
+
+  CODEC-09  Object map / handle directory
+            Read the handle->offset map; on write, build it, page it correctly,
+            and set $HANDSEED. A wrong object map = file will not open.
+
+  CODEC-10  Symbol tables (read + write)
+            BLOCK_RECORD, LAYER, LTYPE, STYLE, DIMSTYLE, VPORT, UCS, VIEW,
+            APPID. Note the reference file has 61 layers / 11 ltypes /
+            14 styles / 8 dimstyles / 52 appids — all of which must survive.
+
+  CODEC-11  Named object dictionary + LAYOUT objects
+            ACAD_LAYOUT, ACAD_PLOTSETTINGS, ACAD_SCALELIST, ACAD_MLEADERSTYLE,
+            ACAD_TABLESTYLE, ACAD_GROUP, ACAD_IMAGE_DICT. Layouts are how paper
+            space exists at all.
+
+  CODEC-12  Common entity data
+            The shared preamble every entity carries: handle, size, EED/XDATA,
+            layer/ltype/lweight/color/ltscale/invisibility/plotstyle/material
+            handles, ownership + reactor + xdictionary handles.
+
+  CODEC-13  Entity decoders — tier 1 (present in the reference file)
+            LINE, CIRCLE, ARC, ELLIPSE, POINT, LWPOLYLINE, POLYLINE_2D/3D +
+            VERTEX + SEQEND, TEXT, MTEXT, ATTRIB, ATTDEF, INSERT/MINSERT,
+            SOLID, HATCH, VIEWPORT, MULTILEADER, ACAD_TABLE.
+
+  CODEC-14  Entity decoders — tier 2 (common in survey/civil work generally)
+            SPLINE, LEADER, TOLERANCE, all DIMENSION subtypes (aligned, linear,
+            angular 2/3-pt, radial, diametric, ordinate), RAY, XLINE, MLINE,
+            3DFACE, TRACE, SHAPE, IMAGE/IMAGEDEF, WIPEOUT, OLE2FRAME.
+
+  CODEC-15  EED / XDATA
+            Required both to preserve third-party data and — critically — to
+            round-trip GoSurvey's own survey-point identity (ADR-005) through
+            DWG the way it already does through DXF.
+
+  CODEC-16  Proxy entity/object pass-through
+            ACAD_PROXY_ENTITY / ACAD_PROXY_OBJECT (10 in the reference file).
+            Decode enough to preserve the raw blob and its graphics, never to
+            interpret it.
+
+  CODEC-17  Writer: R2000 emitter
+            Full database synthesis: header, classes, all symbol tables, named
+            object dictionary, layouts, entities, object map, CRCs.
+
+  CODEC-18  Writer: validation harness
+            Emit -> reopen with our own reader -> compare; and emit -> open in
+            AutoCAD/TrueView -> confirm no recover prompt.
+
+================================================================================
+PART 6 — GAP LIST B: DATA-MODEL WORK
+================================================================================
+
+These are gaps in GoSurvey itself. They are needed regardless of codec route —
+Route D hits every one of them too, because the limits are in our model, not in
+the file format. Each is a candidate REQ.
+
+  DM-01  BLOCKS AS FIRST-CLASS OBJECTS                        [ CRITICAL ]
+         Today INSERT is exploded (DxfIo.cpp:1431). The reference file keeps
+         ~6,000 primitives inside 14 block definitions with 31 insertions,
+         including nested INSERTs. Needed: a BlockRecord table (name, base
+         point, entity lists), a CadInsert entity (block ref, insertion point,
+         X/Y/Z scale, rotation, column/row array), nesting, and rendering by
+         reference rather than by explosion.
+         Without this, "save DWG" is a drawing-destroying operation.
+
+  DM-02  BLOCK ATTRIBUTES (ATTDEF / ATTRIB)                    [ HIGH ]
+         14 ATTDEF + 14 ATTRIB in the reference file. This is how the
+         "SS TITLE BLOCK CJ" title block carries project number, date, sheet
+         name, scale. A survey app that cannot fill in a title block is not
+         finished. Needs: tag/prompt/default/value, flags (invisible, constant,
+         verify, preset), per-insert value overrides, and an edit UI (ATTEDIT).
+
+  DM-03  Z COORDINATE / ELEVATION                              [ HIGH ]
+         The reference file has a 118 ft Z extent. For a SURVEY product,
+         elevation is not optional — it is the payload.
+         CORRECTION (found while building Phase 1): line geometry is ALREADY
+         stored 6 floats per segment — x0,y0,z0,x1,y1,z1 — with the z slots
+         written as 0 (see CadCommands.cpp, and DxfIo's nSeg = size()/6). So the
+         line array needs no layout change; it needs the z slots populated and
+         honoured. Circles/arcs/ellipses/annotations still carry no Z.
+         That makes this cheaper than first estimated, but still wide: render,
+         snap, clipboard, and both IO paths all assume z = 0. Must be an ADR.
+
+  DM-04  MULTIPLE PAPER LAYOUTS                                [ HIGH ]
+         Five LAYOUTs in the reference file; GoSurvey models one. Needs a
+         layout list, per-layout entity stores + viewports + plot settings, a
+         tab UI, and layout add/rename/delete/reorder/copy.
+
+  DM-05  ENTITY HANDLES / STABLE IDENTITY                      [ HIGH ]
+         Entities are array indices today. DWG round-trip and any future
+         "preserve what we didn't touch" strategy require a stable handle on
+         every entity, allocated from $HANDSEED and preserved across load/save.
+
+  DM-06  MULTILEADER + LEADER                                  [ MEDIUM ]
+         Present in the file; 3 MLEADERSTYLEs defined. Leaders are how survey
+         drawings annotate. Needs entity, style table, and a MLEADER command.
+
+  DM-07  ACAD_TABLE                                            [ MEDIUM ]
+         One table + 2 TABLESTYLEs + CELLSTYLEMAP + TABLEGEOMETRY. Legend and
+         point tables in survey sheets are TABLEs. DxfIo has partial handling;
+         a real implementation needs a table entity with cells and styles.
+
+  DM-08  UNKNOWN-OBJECT PRESERVATION CHANNEL                   [ CRITICAL — DECIDED ]
+         The reference file contains ACAD_PROXY_OBJECT, ACDBASSOC* networks,
+         DATALINK/DATATABLE/FIELDLIST, SORTENTSTABLE, MATERIAL, VISUALSTYLE,
+         RAPIDRTRENDERSETTINGS, ACDB*VIEWSTYLE — hundreds of objects we will
+         never model.
+         DECIDED (D3): keep the raw source objects and re-emit them untouched.
+         Consequences, all now binding:
+           * the reader and writer must share ONE object database — the reader
+             cannot throw away what it did not understand;
+           * Route D can never be the permanent save path (DXF cannot carry
+             these), so Phase 1's save is time-boxed debt;
+           * this is most of the argument for LibreDWG in the revised PART 4
+             recommendation: it already has the database model this needs.
+
+  DM-09  DYNAMIC BLOCKS                                        [ MEDIUM ]
+         AcDbDynamicBlockTrueName2 / AcDbDynamicBlockGUID APPIDs and the
+         *U1/*U2/*U8/*U9/*U10/*T6 anonymous blocks confirm dynamic blocks are
+         in use. Full authoring is out of scope. Minimum viable: display the
+         evaluated anonymous block correctly, and preserve the dynamic
+         definition untouched on save (depends on DM-08).
+
+  DM-10  ANNOTATIVE SCALING                                    [ MEDIUM ]
+         42 SCALE objects, AcadAnnotative/AcadAnnoPO APPIDs, and 12
+         MTEXTATTRIBUTEOBJECTCONTEXTDATA entries. GoSurvey already models
+         plotted-inch text height per viewport (REQ-050) — this is the same
+         idea, and the existing design should extend to it cleanly.
+
+  DM-11  COMPLEX LINETYPES                                     [ MEDIUM ]
+         FENCELINE1 and OHE_LINE embed shapes/text in the dash pattern. Today
+         CadLinetype handles dash patterns only. Survey drawings live on
+         fencelines, overhead-electric, and property lines — this is visible on
+         every sheet.
+
+  DM-12  2D SOLID + TRACE                                      [ LOW ]
+         8 SOLIDs in the file. Trivially representable as a CadFilledRegion.
+
+  DM-13  SPLINE                                                [ MEDIUM ]
+         Not in this file, but universal in road/alignment work. Needs NURBS
+         evaluation for display and snap.
+
+  DM-14  FULL DIMENSION FAMILY + DIMSTYLE TABLE                [ MEDIUM ]
+         8 DIMSTYLEs in the file; GoSurvey models 3 dimension kinds and no
+         dimension-style table. DWG round-trip requires the table.
+
+  DM-15  XREFS (external references)                           [ MEDIUM ]
+         Not in this file, but standard practice in the survey/engineering
+         workflow this product targets. Needs BLOCK_RECORD xref flags, path
+         resolution, and layer name mangling.
+
+  DM-16  IMAGE / PDF UNDERLAY / WIPEOUT                        [ LOW-MEDIUM ]
+         GoSurvey already attaches PDFs (src/pdf/PdfAttach.cpp). DWG models
+         these as IMAGE/PDFUNDERLAY/WIPEOUT + definition objects in the named
+         object dictionary; connecting the two is mostly mapping work.
+
+  DM-17  DRAW ORDER (SORTENTSTABLE)                            [ LOW ]
+         5 in the file. With 1364 hatches, draw order is not cosmetic — it
+         decides what is visible.
+
+  DM-18  GROUPS, LAYER STATES, LAYER FILTERS                   [ LOW ]
+
+  DM-19  UCS SUPPORT                                           [ LOW ]
+         No UCS in this file (0 entries) but the table must round-trip.
+
+  DM-20  UNITS RECONCILIATION                                  [ MEDIUM ]
+         $INSUNITS=6 (meters) against extents that are plainly feet, with
+         $MEASUREMENT=0 (imperial). Real drawings lie. The importer needs an
+         explicit units decision and a UI to confirm/override — this connects
+         to the already-planned UNITS dialog (see memory: display precision).
+
+================================================================================
+PART 7 — GAP LIST C: APPLICATION / UI WORK
+================================================================================
+
+  UI-01  File dialogs: BrowseOpenFileDwgUtf8 / BrowseSaveFileDwgUtf8 alongside
+         the existing DXF/GS ones in src/platform/WinFileDialogs.hpp.
+  UI-02  Unified File > Open / Save As that dispatches on extension
+         (.gs / .dxf / .dwg) instead of separate per-format menu entries.
+  UI-03  "Save As DWG version" selector (R2000 / R2004 / R2007 / R2010 / R2013 /
+         R2018), defaulting to whatever route Q4 decides.
+  UI-04  Import report panel. DxfIo already returns a log vector; DWG will
+         produce many more findings (unsupported objects, dropped proxies,
+         units assumptions). This needs to be a real dialog, not console lines.
+  UI-05  Lossy-save warning. If DM-08 lands as "drop unknown objects", saving
+         over a source DWG must warn explicitly and loudly, and default to
+         Save As rather than Save.
+  UI-06  Progress + cancel for large files. 1.3 MB here is small; production
+         survey DWGs run 50-200 MB.
+  UI-07  Recent files, file association, drag-and-drop .dwg onto the window.
+  UI-08  Read-only / recovery mode for files that fail to parse cleanly —
+         salvage what parsed, refuse to save over the original.
+
+================================================================================
+PART 8 — PHASED BUILD PLAN
+================================================================================
+
+  PHASE 0 — DECIDE (blocking)                                      [ DONE ]
+    T0.1  Answer Q1-Q5 of PART 4.                                  [ DONE ]
+    T0.2  Record the route as ADR-024; log the decision in project.md. [ DONE ]
+    T0.3  Write REQ-052 with acceptance conditions.                [ DONE ]
+    Exit: accepted REQ-052 + recorded ADR-024.                     [ MET ]
+
+  PHASE 1 — INTERIM CAPABILITY (Route D, days)                     [ DONE ]
+    T1.1  Converter discovery (env override / ODA / accoreconsole). [ DONE ]
+    T1.2  DWG open = convert to DXF in a temp dir -> ImportDxfFile. [ DONE ]
+    T1.3  DWG save = ExportDxfFile -> convert to DWG.               [ DONE ]
+    T1.4  UI-01, UI-04(log), UI-05(lossy-save confirmation).        [ DONE ]
+    T1.5  Clear, non-blaming error when no converter is present.    [ DONE ]
+    T1.6  UI-02 unified extension-dispatching File > Open/Save As.  [ OPEN ]
+    T1.7  Converter path configurable in Settings, not just via
+          the GOSURVEY_DWG_CONVERTER env var (DEBT-3).              [ OPEN ]
+    Exit: reference file opens and re-saves; limits stated.         [ MET ]
+
+  PHASE 1b — CLOSE THE TEST GAP                           [ DONE — TASK-031 ]
+    Rationale: the group-73 defect (see header) shipped because GoSurveyTests
+    cannot link DxfIo/DwgIo — they drag in CadCommands.cpp -> pdfium/WinRT/ImGui.
+    T1b.1 Extract testable logic behind a seam the test target can link. [ DONE ]
+          -> io/DxfEntityEmit.hpp  (header-only TEXT record composition +
+             the group-440 transparency packing)
+          -> io/DwgProbe.cpp       (version detection + converter discovery;
+             a TU split, so ADR-024's four-function seam is unchanged)
+    T1b.2 Commit real tests for converter discovery, version detection and
+          the refusal paths.                                             [ DONE ]
+    T1b.3 Test asserting a TEXT record carries BOTH AcDbText subclass
+          markers — the exact regression fixed in TASK-030.              [ DONE ]
+    Exit: DXF/DWG IO has committed coverage running in ctest.            [ MET ]
+
+    Result: 698 assertions / 109 cases (from 611 / 98); ctest 109/109.
+    PROVEN, not assumed — two checks that matter more than the count:
+      * MUTATION TEST: re-introducing the defect (deleting the second AcDbText
+        marker) fails 4 assertions across 3 sections. The tests catch the bug
+        that actually shipped.
+      * FIDELITY: the real ExportDxfFile output is BYTE-IDENTICAL before and
+        after the refactor (8281 bytes both), so no behaviour moved.
+    Also fixed: converter classification compared "accoreconsole"/"ACCORECONSOLE"
+    literally, so "AccoreConsole.exe" was misclassified. Now case-insensitive.
+
+    STILL UNCOVERED (DEBT-4, TASK-031 §6): only the TEXT record was extracted —
+    it is the one that broke and the one with the non-obvious two-subclass rule.
+    LINE, CIRCLE, POINT, MTEXT, HATCH and the DIMENSION expansions remain
+    untested, as do section/symbol-table structure and every import path.
+    Removal condition: extract each remaining emitter the same way as it is next
+    touched, rather than in one large speculative refactor.
+
+  PHASE 2 — NATIVE READ FOUNDATION
+    T2.1  CODEC-01 bit primitives + unit tests (the single highest-leverage
+          task in the project).
+    T2.2  CODEC-02 R2000 container.
+    T2.3  CODEC-07/08/09 header, classes, object map.
+    T2.4  CODEC-10/11 symbol tables + layouts.
+    T2.5  CODEC-12 common entity data.
+    T2.6  CODEC-13 tier-1 entity decoders.
+    Exit: an R2000 DWG opens natively with correct layers, geometry, and text.
+
+  PHASE 3 — MODERN CONTAINERS
+    T3.1  CODEC-03 R2004.   T3.2  CODEC-04 R2007.
+    T3.3  CODEC-05 R2010/R2013 string+handle streams.
+    T3.4  CODEC-06 R2018 — reverse-engineered against the Phase-1 converter
+          oracle, with the reference file as the primary specimen.
+    Exit: "26-084 - Master.dwg" opens natively and matches the Phase-1
+          converter result within tolerance.
+
+  PHASE 4 — MODEL GAPS (can run parallel to Phase 2/3; independently valuable)
+    T4.1  DM-01 blocks + inserts        <- do this first; it is load-bearing
+    T4.2  DM-05 handles
+    T4.3  DM-02 attributes
+    T4.4  DM-04 multiple layouts
+    T4.5  DM-03 Z/elevation             <- needs its own ADR; invasive
+    T4.6  DM-11 complex linetypes, DM-12 solids, DM-17 draw order
+    T4.7  DM-06 multileader, DM-07 tables, DM-13 splines, DM-14 dimstyles
+    Exit: the reference drawing renders with block structure intact.
+
+  PHASE 5 — NATIVE WRITE
+    T5.1  CODEC-17 R2000 emitter.
+    T5.2  CODEC-18 validation harness (round-trip + AutoCAD open test).
+    T5.3  DM-08 preservation channel, if Q5 = yes.
+    T5.4  UI-03 version selector.
+    Exit: GoSurvey writes a DWG that AutoCAD 2026 opens with no recover prompt.
+
+  PHASE 6 — HARDENING
+    T6.1  Fuzz/corrupt-input resistance; never crash, never write over a source
+          file that failed to parse.
+    T6.2  Large-file performance (target: 50 MB in a few seconds).
+    T6.3  A corpus of real drawings from multiple producers (AutoCAD, Civil 3D,
+          BricsCAD, Carlson, TBC) as regression fixtures.
+
+================================================================================
+PART 9 — TEST STRATEGY
+================================================================================
+
+  9.1  Unit tests on the bit codec — every primitive, round-tripped, including
+       edge values and bit-boundary crossings. This is where correctness is
+       cheapest to establish and most expensive to skip.
+  9.2  Golden-file tests. For each sample DWG, a checked-in inventory (entity
+       counts per type, per layer, extents, table contents) that the reader must
+       reproduce exactly. The PART 1 inventory of the reference file is the
+       first such golden record.
+  9.3  Oracle diffing. Convert the same DWG with the Phase-1 external converter
+       and diff our parse against that DXF. Automatable and ruthless.
+  9.4  Round-trip tests. read -> write -> read; the second read must equal the
+       first. Then read -> write -> open in AutoCAD, asserting no AUDIT errors.
+  9.5  Negative tests. Truncated files, wrong CRCs, bad handles, unknown
+       classes, version tags we do not support. Every one must produce a clear
+       message and leave the app usable.
+  9.6  Precision tests. State-plane coordinates through the local-origin scheme,
+       asserting no float-narrowing drift — the existing invariant (world =
+       local + worldDocumentOrigin, subtract in double) is a hard requirement of
+       any DWG importer.
+
+================================================================================
+PART 10 — RISKS, DEBT, OPEN QUESTIONS
+================================================================================
+
+  R1  R2018 is undocumented. This is the schedule risk. Mitigation: land R2000
+      through R2013 first (all documented by ODA's spec) so the product is
+      useful before R2018 is solved, and keep the converter oracle available.
+  R2  Licensing. Route B silently converts GoSurvey to GPL-3.0. Answer Q1 first.
+  R3  Writing a bad DWG is worse than not writing one. A file AutoCAD refuses,
+      or silently opens with lost data, damages trust more than a missing
+      feature. Phase 5 does not ship without 9.4.
+  R4  DM-01 (blocks) is a prerequisite hiding in plain sight. Explode-on-import
+      is fine for a viewer and fatal for an editor. It should be built early
+      even if the codec route slips.
+  R5  DM-03 (Z) is invasive and touches render, snap, clipboard, DXF IO, GS IO,
+      and paper space. Scope it as its own ADR, not as part of DWG work.
+  R6  Scale. 1.3 MB / ~7,000 entities is a small drawing. The product must be
+      designed for 100x that.
+  R7  Analysis dependency. PART 1 was produced with the locally installed
+      AutoCAD 2026. That is fine for analysis and for Phase 1, but it must never
+      become a shipping requirement for end users.
+
+  OPEN QUESTIONS (repeat of PART 4, for tracking)
+    Q1  Commercial/closed-source distribution?      -> gates Route B
+    Q2  Budget for ODA membership?                  -> gates Route C
+    Q3  Which DWG versions must open?
+    Q4  Which version does save emit?
+    Q5  Must save preserve objects we don't model?  -> gates DM-08, and largely
+                                                       decides whether Route D
+                                                       can ever be the save path
+
+================================================================================
+PART 11 — MAKING DWG THE NATIVE FORMAT (RETIRING .gs)
+================================================================================
+
+Direction D4. Not yet a requirement: it must be written up as its own REQ + ADR
+before any code. Recorded here so the DWG work is designed toward it.
+
+11.1 What .gs carries today that a plain DWG does not
+------------------------------------------------------
+  This is the crux. Switching native formats is not a file-extension change; it
+  is a question of where GoSurvey's own data lives. From src/io/GsIo.cpp and
+  AppCommandState, .gs persists at least:
+
+    * survey points (id, N/E/elev, description, layer, label style, label
+      offsets) and their bidirectional link to label MTEXT
+    * traverse observations, setups, and least-squares adjustment state
+    * paper layouts: sheet size/orientation, viewports, per-viewport scale,
+      per-viewport frozen layers and colour overrides
+    * the text-style table with per-annotation override flags
+    * hatch pattern/angle/scale per filled region
+    * worldDocumentOriginX/Y — the local-storage invariant
+    * drawing tabs, undo stack sizing, active layout, user settings
+
+  A DWG must carry ALL of it, or "native" is a downgrade.
+
+11.2 Where each piece goes in a DWG
+------------------------------------
+  There is a precedent already working in this codebase: ADR-005 round-trips
+  survey points through DXF using a registered GOSURVEY XDATA schema. The same
+  idea scales to DWG:
+
+  P-01  Entity-level data -> EED (extended entity data) under a registered
+        "GOSURVEY" application name. Direct analogue of the ADR-005 XDATA
+        schema; survey-point identity moves across almost unchanged.
+  P-02  Drawing-level data (traverse observations, text-style overrides,
+        drawing tabs, settings) -> XRECORDs under a GOSURVEY dictionary in the
+        named object dictionary. This is exactly how AutoCAD verticals store
+        their own data, so the file stays valid for everyone else.
+  P-03  Layouts / viewports / frozen layers / VP colour -> NATIVE DWG LAYOUT +
+        VIEWPORT objects, not custom data. These are real DWG concepts and
+        must map onto them (DM-04), or the drawing will not read correctly in
+        AutoCAD. Only the genuinely GoSurvey-specific extras go in EED.
+  P-04  worldDocumentOriginX/Y -> a GOSURVEY XRECORD. It must survive exactly,
+        in double precision: the local-storage invariant depends on it.
+  P-05  Hatch pattern/angle/scale -> native HATCH fields (DM-12/REQ-043
+        already model these), not custom data.
+
+11.3 Ordering constraints
+--------------------------
+  C-01  BLOCKED on the native codec. The converter route cannot carry any of
+        P-01..P-05: DXF loses it and the converter would strip it. Nothing in
+        PART 11 can begin during Phase 1.
+  C-02  BLOCKED on DM-08 (preservation). A native format that drops a client's
+        Civil 3D data on every save is not a native format.
+  C-03  BLOCKED on DM-01 (blocks), DM-04 (layouts), DM-05 (handles). Saving the
+        native document means saving its real structure, not an exploded copy.
+  C-04  .gs must remain READABLE indefinitely. Existing drawings are user data.
+        The migration is: keep loading .gs, save DWG by default, offer .gs
+        export for a deprecation period, and never silently rewrite a .gs file.
+
+11.4 Proposed sequence (after the native codec lands)
+------------------------------------------------------
+  N-1  Registered GOSURVEY EED/dictionary schema, versioned from day one, with
+       a written spec alongside spec/gs-file-format.txt.
+  N-2  Survey points + labels through EED (port ADR-005).
+  N-3  Layouts/viewports onto native DWG objects (needs DM-04).
+  N-4  Traverse + text styles + settings through the GOSURVEY dictionary.
+  N-5  Round-trip equivalence gate: load a .gs, save as DWG, reload, and assert
+       the document is identical to the .gs load — field by field. This is the
+       gate that makes the switch safe, and it should be automated before the
+       default changes.
+  N-6  Flip the default: File > Save writes .dwg. .gs load retained; .gs save
+       demoted to an export.
+  N-7  Deprecation notice + a documented removal release.
+
+11.5 Risk
+----------
+  The failure mode is silent data loss on the user's own drawings — the worst
+  category this project has. N-5 is not optional, and the default must not flip
+  until it passes on a real corpus.
+
+================================================================================
+END — Phases 1 and 1b shipped (TASK-030, TASK-031).
+
+Recommended next: PHASE 4 T4.1 — DM-01, blocks as first-class objects. It is the
+load-bearing gap. Import explodes INSERT today, so ~6,000 of the reference
+drawing's primitives lose their 14 block definitions and 31 insertions; until
+that is fixed, no save can be safe on a client drawing, whichever codec is
+underneath. It is also independent of the codec route, so it can proceed while
+the LibreDWG-vs-native question in PART 4 is settled.
+
+Phases 2, 3, 5, 6 and PART 11 remain. Each item becomes its own REQ first.
+================================================================================

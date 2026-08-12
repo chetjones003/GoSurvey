@@ -3,6 +3,7 @@
 #include "CadCommands.hpp"
 #include "geom2d.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <vector>
 
@@ -22,56 +23,70 @@ void scalePreviewPt(float baseX, float baseY, float scale, float* inOutX, float*
   *inOutY = baseY + scale * (*inOutY - baseY);
 }
 
-void appendArcPolylineStrip(std::vector<float>* out, float z, const CadArc& a, int n) {
+// Preview curves must be tessellated the way the renderer tessellates the committed ones, or the preview
+// is a visibly different size from the object it previews. These mirror ViewportRenderer's segment counts
+// (and its 8 / 16 floors); when the view is unknown they fall back to the old fixed counts.
+float g_previewOrthoHalfH = -1.f;
+int g_previewFbHeightPx = 0;
+int g_previewSmoothnessCap = 20000;
+
+void appendArcPolylineStrip(std::vector<float>* out, float z, const CadArc& a, int fallbackN) {
+  int n = fallbackN;
+  if (g_previewOrthoHalfH > 0.f && g_previewFbHeightPx > 0)
+    n = std::max(8, CircleTessellationSegmentCount(static_cast<double>(a.r),
+                                                   static_cast<double>(g_previewOrthoHalfH),
+                                                   g_previewFbHeightPx, g_previewSmoothnessCap));
   AppendArcLineSegments(*out, static_cast<double>(a.cx), static_cast<double>(a.cy), static_cast<double>(a.r),
                         static_cast<double>(a.startRad), static_cast<double>(a.sweepRad), n, z);
 }
 
-void appendEllipsePolylineStrip(std::vector<float>* out, float z, const CadEllipse& el, int n) {
+void appendEllipsePolylineStrip(std::vector<float>* out, float z, const CadEllipse& el, int fallbackN) {
+  int n = fallbackN;
+  if (g_previewOrthoHalfH > 0.f && g_previewFbHeightPx > 0) {
+    // Ellipses scale with the major semi-axis — the worst-case chord — as the renderer does.
+    const double majLen = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    n = std::max(16, CircleTessellationSegmentCount(majLen, static_cast<double>(g_previewOrthoHalfH),
+                                                    g_previewFbHeightPx, g_previewSmoothnessCap));
+  }
   AppendEllipseLineSegments(*out, static_cast<double>(el.cx), static_cast<double>(el.cy),
                             static_cast<double>(el.majVx), static_cast<double>(el.majVy),
                             static_cast<double>(el.ratio), n, z);
 }
 
-void appendCommittedPolylineStrip(std::vector<float>* out, float z, const AppCommandState& cmd, int pi) {
+// Draws a COMMITTED polyline, so it uses each vertex's own Z rather than a caller-supplied flat
+// depth (REQ-057/058). A highlight or hover stroke drawn at a fixed Z would sit on the datum while
+// the polyline itself sat at elevation, showing the object twice in an orbited view.
+void appendCommittedPolylineStrip(std::vector<float>* out, const AppCommandState& cmd, int pi) {
   if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
     return;
   const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
   const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
   const bool closed =
       static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
-  for (int vi = v0; vi + 1 < v1; ++vi) {
-    const float x0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3)];
-    const float y0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
-    const float x1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
-    const float y1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
-    out->push_back(x0);
-    out->push_back(y0);
-    out->push_back(z);
-    out->push_back(x1);
-    out->push_back(y1);
-    out->push_back(z);
-  }
-  if (closed && v1 - v0 >= 2) {
-    const float x0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
-    const float y0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)];
-    const float x1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3)];
-    const float y1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)];
-    out->push_back(x0);
-    out->push_back(y0);
-    out->push_back(z);
-    out->push_back(x1);
-    out->push_back(y1);
-    out->push_back(z);
-  }
+  auto emit = [&](int a, int b) {
+    const size_t A = static_cast<size_t>(a) * 3, B = static_cast<size_t>(b) * 3;
+    out->push_back(cmd.userPolylineVerts[A]);
+    out->push_back(cmd.userPolylineVerts[A + 1]);
+    out->push_back(cmd.userPolylineVerts[A + 2]);
+    out->push_back(cmd.userPolylineVerts[B]);
+    out->push_back(cmd.userPolylineVerts[B + 1]);
+    out->push_back(cmd.userPolylineVerts[B + 2]);
+  };
+  for (int vi = v0; vi + 1 < v1; ++vi)
+    emit(vi, vi + 1);
+  if (closed && v1 - v0 >= 2)
+    emit(v1 - 1, v0);
 }
 
 } // namespace
 
 void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, std::vector<float>* prevLines,
-                           std::vector<float>* prevCircles) {
+                           std::vector<float>* prevCircles, float orthoHalfHeightWorld, int framebufferHeightPx) {
   prevLines->clear();
   prevCircles->clear();
+  g_previewOrthoHalfH = orthoHalfHeightWorld;
+  g_previewFbHeightPx = framebufferHeightPx;
+  g_previewSmoothnessCap = std::clamp(cmd.displayArcCircleSmoothness, 8, 20000);
   using K = AppCommandState::Kind;
   using MP = AppCommandState::ModifyPhase;
   using OP = AppCommandState::OffsetPhase;
@@ -98,12 +113,13 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           prevLines->push_back(0.f);
         }
       } else if (e.type == SelectedEntity::Type::Circle) {
-        const size_t k = static_cast<size_t>(e.index) * 3;
-        if (k + 2 >= cmd.userCirclesCxCyR.size())
+        const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
+        if (k + 3 >= cmd.userCirclesCxCyZR.size())
           continue;
-        prevCircles->push_back(cmd.userCirclesCxCyR[k] + dx);
-        prevCircles->push_back(cmd.userCirclesCxCyR[k + 1] + dy);
-        prevCircles->push_back(cmd.userCirclesCxCyR[k + 2]);
+        prevCircles->push_back(cmd.userCirclesCxCyZR[k] + dx);
+        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 1] + dy);
+        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);  // z rides along unchanged
+        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
         if (k >= cmd.userArcs.size())
@@ -163,10 +179,11 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       prevLines->push_back(0.f);
     }
     // Circles
-    for (size_t i = 0; i + 2 < cb.circles.size() + 1; i += 3) {
-      prevCircles->push_back(cb.circles[i + 0] + dx);
-      prevCircles->push_back(cb.circles[i + 1] + dy);
-      prevCircles->push_back(cb.circles[i + 2]);
+    for (size_t i = 0; i + 3 < cb.circlesCxCyZR.size() + 1; i += 4) {  // cx,cy,z,r
+      prevCircles->push_back(cb.circlesCxCyZR[i + 0] + dx);
+      prevCircles->push_back(cb.circlesCxCyZR[i + 1] + dy);
+      prevCircles->push_back(cb.circlesCxCyZR[i + 2]);
+      prevCircles->push_back(cb.circlesCxCyZR[i + 3]);
     }
     // Arcs
     for (const auto& a : cb.arcs) {
@@ -247,16 +264,17 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           prevLines->push_back(0.f);
         }
       } else if (e.type == SelectedEntity::Type::Circle) {
-        const size_t k = static_cast<size_t>(e.index) * 3;
-        if (k + 2 >= cmd.userCirclesCxCyR.size())
+        const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
+        if (k + 3 >= cmd.userCirclesCxCyZR.size())
           continue;
-        float x = cmd.userCirclesCxCyR[k];
-        float y = cmd.userCirclesCxCyR[k + 1];
-        float r = cmd.userCirclesCxCyR[k + 2];
+        float x = cmd.userCirclesCxCyZR[k];
+        float y = cmd.userCirclesCxCyZR[k + 1];
+        float r = cmd.userCirclesCxCyZR[k + 3];
         scalePreviewPt(bx, by, sc, &x, &y);
         r *= sc;
         prevCircles->push_back(x);
         prevCircles->push_back(y);
+        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);  // SCALE is planar here — z unscaled
         prevCircles->push_back(r);
       } else if (e.type == SelectedEntity::Type::Arc) {
         const size_t k = static_cast<size_t>(e.index);
@@ -342,15 +360,16 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         prevLines->push_back(0.f);
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
-      const size_t k = static_cast<size_t>(e.index) * 3;
-      if (k + 2 >= cmd.userCirclesCxCyR.size())
+      const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
+      if (k + 3 >= cmd.userCirclesCxCyZR.size())
         continue;
-      float x = cmd.userCirclesCxCyR[k];
-      float y = cmd.userCirclesCxCyR[k + 1];
+      float x = cmd.userCirclesCxCyZR[k];
+      float y = cmd.userCirclesCxCyZR[k + 1];
       rotatePreviewPt(bx, by, theta, &x, &y);
       prevCircles->push_back(x);
       prevCircles->push_back(y);
-      prevCircles->push_back(cmd.userCirclesCxCyR[k + 2]);
+      prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);  // rotation is about the Z axis
+      prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= cmd.userArcs.size())
@@ -420,27 +439,31 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     for (int i = 0; i < 2; ++i) {
       hlLines->push_back(cmd.userLinesFlat[k + i * 3]);
       hlLines->push_back(cmd.userLinesFlat[k + i * 3 + 1]);
-      hlLines->push_back(lineZ);
+      // The entity's OWN Z, not a flat overlay depth (REQ-057/058). Drawing the highlight at a
+      // fixed Z put it on the datum while the line sat at its elevation, so an orbited view showed
+      // the object twice — once real, once highlighted in the wrong place.
+      hlLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
     }
   } else if (e.type == SelectedEntity::Type::Circle) {
-    const size_t k = static_cast<size_t>(e.index) * 3;
-    if (k + 2 >= cmd.userCirclesCxCyR.size())
+    const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
+    if (k + 3 >= cmd.userCirclesCxCyZR.size())
       return;
-    hlCircles->push_back(cmd.userCirclesCxCyR[k]);
-    hlCircles->push_back(cmd.userCirclesCxCyR[k + 1]);
-    hlCircles->push_back(cmd.userCirclesCxCyR[k + 2]);
+    hlCircles->push_back(cmd.userCirclesCxCyZR[k]);
+    hlCircles->push_back(cmd.userCirclesCxCyZR[k + 1]);
+    hlCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);
+    hlCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
   } else if (e.type == SelectedEntity::Type::Arc) {
     const size_t k = static_cast<size_t>(e.index);
     if (k >= cmd.userArcs.size())
       return;
-    appendArcPolylineStrip(hlLines, lineZ, cmd.userArcs[k], 48);
+    appendArcPolylineStrip(hlLines, cmd.userArcs[k].z, cmd.userArcs[k], 48);  // arc plane, not a flat depth
   } else if (e.type == SelectedEntity::Type::Ellipse) {
     const size_t k = static_cast<size_t>(e.index);
     if (k >= cmd.userEllipses.size())
       return;
-    appendEllipsePolylineStrip(hlLines, lineZ, cmd.userEllipses[k], 56);
+    appendEllipsePolylineStrip(hlLines, cmd.userEllipses[k].z, cmd.userEllipses[k], 56);
   } else if (e.type == SelectedEntity::Type::Polyline) {
-    appendCommittedPolylineStrip(hlLines, lineZ, cmd, e.index);
+    appendCommittedPolylineStrip(hlLines, cmd, e.index);
   } else if (e.type == SelectedEntity::Type::FilledRegion) {
     const size_t k = static_cast<size_t>(e.index);
     if (k >= cmd.cadFilledRegions.size())
@@ -456,11 +479,13 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
       for (int i = 0; i < cnt; ++i) {
         const int a = begin + i;
         const int b = begin + (i + 1) % cnt;
-        hlLines->push_back(fr.verts[static_cast<size_t>(a) * 2]);
-        hlLines->push_back(fr.verts[static_cast<size_t>(a) * 2 + 1]);
+        // Highlight strokes keep using lineZ (the overlay's fixed draw depth), not the vertex's own
+        // Z — depth-correct highlighting arrives with the camera in REQ-058/TASK-035.
+        hlLines->push_back(fr.vertsXyz[static_cast<size_t>(a) * 3]);
+        hlLines->push_back(fr.vertsXyz[static_cast<size_t>(a) * 3 + 1]);
         hlLines->push_back(lineZ);
-        hlLines->push_back(fr.verts[static_cast<size_t>(b) * 2]);
-        hlLines->push_back(fr.verts[static_cast<size_t>(b) * 2 + 1]);
+        hlLines->push_back(fr.vertsXyz[static_cast<size_t>(b) * 3]);
+        hlLines->push_back(fr.vertsXyz[static_cast<size_t>(b) * 3 + 1]);
         hlLines->push_back(lineZ);
       }
     }
@@ -477,6 +502,12 @@ void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<float>* hlL
   if (cmd.active == AppCommandState::Kind::Offset && cmd.offsetPhase == AppCommandState::OffsetPhase::WaitSelectEntity &&
       cmd.offsetHoverHighlightValid)
     AppendEntityHighlight(cmd, cmd.offsetHoverEntity, kLineZ, hlLines, hlCircles);
+  // TRIM cutting edges read as a selection while they are being picked (REQ-056): they are chosen the way
+  // a selection is chosen, so they get the selection's highlight rather than an appearance of their own.
+  if (cmd.active == AppCommandState::Kind::Trim) {
+    for (const auto& c : cmd.trimCutters)
+      AppendEntityHighlight(cmd, c, kLineZ, hlLines, hlCircles);
+  }
 }
 
 void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLines,
@@ -485,11 +516,18 @@ void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLi
   hoverCircles->clear();
   if (!cmd.viewportHoverEntityValid)
     return;
-  // Skip if already selected — selection highlight takes visual precedence.
+  // Skip if already selected — selection highlight takes visual precedence. An already-picked TRIM
+  // cutting edge counts as selected here for the same reason (REQ-056).
   const SelectedEntity& e = cmd.viewportHoverEntity;
   for (const auto& sel : cmd.selection) {
     if (sel.type == e.type && sel.index == e.index)
       return;
+  }
+  if (cmd.active == AppCommandState::Kind::Trim) {
+    for (const auto& c : cmd.trimCutters) {
+      if (c.type == e.type && c.index == e.index)
+        return;
+    }
   }
   constexpr float kLineZ = 0.011f;
   AppendEntityHighlight(cmd, e, kLineZ, hoverLines, hoverCircles);

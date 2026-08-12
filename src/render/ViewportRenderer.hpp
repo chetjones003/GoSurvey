@@ -25,7 +25,7 @@ public:
 
   void SetSize(int width, int height);
 
-  /// \param circlesCxCyR (cx, cy, r) triplets; drawn as line loops in the XY plane.
+  /// \param circlesCxCyZR (cx, cy, r) triplets; drawn as line loops in the XY plane.
   /// \param rubberLines GL_LINES vertex data (x,y,z pairs of endpoints) for transient previews.
   /// \param snapOverlay Active object snap glyph (green); nullptr or invalid — skip.
   /// \param snapGlyphHalfPx Screen-space half-extent (pixels) for snap glyph geometry (see Settings → Object snap).
@@ -36,8 +36,12 @@ public:
   /// \param lineEntityAttrs / circleEntityAttrs parallel to segments/circles; nullptr uses fixed defaults.
   /// \param extended Optional arcs / ellipses / polylines (same shader batch as lines).
   /// \param showGrid draws the minor grid in model space (toggle from UI).
-  void RenderScene(double panX, double panY, float zoom, int fbWidth, int fbHeight,
-                   const std::vector<float>& userLines, const std::vector<float>& circlesCxCyR,
+  /// \param cam The model camera (REQ-058 / ADR-025 (c)). Replaces the former panX/panY/zoom
+  ///            triple — the target IS the pan and \c orthoHalfH IS the zoom, so this is a net
+  ///            parameter reduction rather than an addition to an already long signature.
+  ///            A plan-view camera reproduces the pre-3D pipeline exactly.
+  void RenderScene(const Camera& cam, int fbWidth, int fbHeight,
+                   const std::vector<float>& userLines, const std::vector<float>& circlesCxCyZR,
                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
                    const CadSnap::Hit* snapOverlay, float snapGlyphHalfPx, const float* selectionFillRect,
                    const std::vector<float>* previewLines,

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CadEntities.hpp"
+#include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
 #include "PdfAttach.hpp"
 #include "PaperSpace.hpp"
 #include "SurveyPoints.hpp"
@@ -158,7 +159,10 @@ struct CadClipboard {
 
   std::vector<float>            lines;
   std::vector<EntityAttributes> lineAttrs;
-  std::vector<float>            circles;
+  /// Flat cx,cy,z,r quads (REQ-057 / ADR-025 (a)). A copy from paper space stores z = 0, and a
+  /// paste into paper space drops z — the sheet is 2D (ADR-025 (g)), so Z collapses at that
+  /// boundary rather than silently riding along.
+  std::vector<float>            circlesCxCyZR;
   std::vector<EntityAttributes> circleAttrs;
   std::vector<CadArc>           arcs;
   std::vector<EntityAttributes> arcAttrs;
@@ -177,7 +181,7 @@ struct CadClipboard {
   bool fromPaper = false;
 
   bool empty() const {
-    return lines.empty() && circles.empty() && arcs.empty() && ellipses.empty() &&
+    return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
            (polyOffsets.size() <= 1) && annotations.empty() && filledRegions.empty();
   }
 };
@@ -187,7 +191,7 @@ struct CadClipboard {
 struct DrawingGeometrySnapshot {
   std::vector<float>            userLinesFlat;
   std::vector<EntityAttributes> userLineAttrs;
-  std::vector<float>            userCirclesCxCyR;
+  std::vector<float>            userCirclesCxCyZR;
   std::vector<EntityAttributes> userCircleAttrs;
   std::vector<CadArc>           userArcs;
   std::vector<EntityAttributes> userArcAttrs;
@@ -218,12 +222,14 @@ struct DrawingDocument {
   double viewportPanX = 0.0;
   double viewportPanY = 0.0;
   float  viewportZoom = 1.f;
+  float  viewportAzimuthDeg = 0.f;    ///< Camera orientation per tab (REQ-058); plan view by default.
+  float  viewportElevationDeg = 90.f;
   double worldDocumentOriginX = 0.0;
   double worldDocumentOriginY = 0.0;
 
   std::vector<float>            userLinesFlat;
   std::vector<EntityAttributes> userLineAttrs;
-  std::vector<float>            userCirclesCxCyR;
+  std::vector<float>            userCirclesCxCyZR;
   std::vector<EntityAttributes> userCircleAttrs;
   std::vector<CadArc>           userArcs;
   std::vector<EntityAttributes> userArcAttrs;
@@ -389,6 +395,11 @@ struct AppCommandState {
     /// VPFREEZE / VPTHAW: pick entities in the current viewport; their layers freeze/thaw in it (REQ-046).
     VpFreeze,
     VpThaw,
+    /// RECT: two opposite corners produce an axis-aligned rectangle, stored as a 4-vertex CLOSED polyline
+    /// exactly as AutoCAD's RECTANG produces an LWPOLYLINE (REQ-053).
+    Rect,
+    /// TRIMSTATE: system-variable prompt waiting for a new value (REQ-056).
+    TrimState,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -422,6 +433,8 @@ struct AppCommandState {
     case Kind::Pan:           return "PAN";
     case Kind::VpFreeze:      return "VPFREEZE";
     case Kind::VpThaw:        return "VPTHAW";
+    case Kind::Rect:          return "RECT";
+    case Kind::TrimState:     return "TRIMSTATE";
     default:                  return "";
     }
   }
@@ -436,7 +449,9 @@ struct AppCommandState {
   enum class RightClickEditMode     : uint8_t { RepeatLastCommand = 0, ShortcutMenu = 1 };
   enum class RightClickCommandMode  : uint8_t { Enter = 0, ShortcutMenuAlways = 1, ShortcutMenuWhenOptions = 2 };
   RightClickDefaultMode rightClickDefaultMode   = RightClickDefaultMode::RepeatLastCommand;
-  RightClickEditMode    rightClickEditMode      = RightClickEditMode::RepeatLastCommand;
+  // AutoCAD ships Edit Mode on the shortcut menu: with a selection, right-click offers MOVE/COPY/ROTATE/
+  // SCALE/DELETE and Select similar. Repeating the last command there hides that menu entirely.
+  RightClickEditMode    rightClickEditMode      = RightClickEditMode::ShortcutMenu;
   RightClickCommandMode rightClickCommandMode   = RightClickCommandMode::Enter;
 
   /// Plot scale: one plotted inch equals this many drawing units (e.g. 50 for 1 inch = 50 feet).
@@ -574,6 +589,12 @@ struct AppCommandState {
   float ellCx = 0.f, ellCy = 0.f;
   float ellMajEx = 0.f, ellMajEy = 0.f;
 
+  /// RECT (REQ-053): first corner, then the opposite corner. The second point also accepts `@dx,dy`, which
+  /// is how a rectangle of an exact width and height is drawn.
+  enum class RectPhase { WaitFirstCorner, WaitSecondCorner } rectPhase = RectPhase::WaitFirstCorner;
+
+  float rectX1 = 0.f, rectY1 = 0.f;
+
   enum class TextCmdPhase { WaitInsertion, WaitHeight, WaitRotation, WaitString } textPhase = TextCmdPhase::WaitInsertion;
 
   float textInsX = 0.f, textInsY = 0.f;
@@ -670,6 +691,41 @@ struct AppCommandState {
   double viewportPanX = 0.;
   double viewportPanY = 0.;
   float viewportZoom = 1.f;
+  /// Camera orientation about the pan point (REQ-058 / ADR-025 (c)). Pan and zoom remain the
+  /// single source of truth for WHERE the camera looks and HOW FAR — these two add only the
+  /// direction, so a \ref Camera built by \ref CadViewCamera cannot drift from the view.
+  /// Defaults are plan view, which reproduces the pre-3D pipeline exactly.
+  float viewportAzimuthDeg = 0.f;
+  float viewportElevationDeg = 90.f;
+
+  /// ViewCube orientation animation (REQ-059). A face/arrow/home press sets a target and the view
+  /// eases to it over \ref kViewAnimSeconds instead of snapping, so the user keeps their bearings —
+  /// a hard jump makes it easy to lose track of which way the model turned. Orbiting by hand
+  /// cancels any animation in flight so the drag is never fighting an interpolation.
+  bool  viewAnimActive = false;
+  float viewAnimFromAz = 0.f, viewAnimFromEl = 90.f;
+  float viewAnimToAz = 0.f, viewAnimToEl = 90.f;
+  float viewAnimT = 0.f;  ///< 0..1 progress.
+
+  /// Active work plane / UCS (REQ-058 / ADR-025 (e)). A click resolves as ray × this plane, so it
+  /// is where new geometry lands. The default — origin at Z = 0 with a +Z normal — is the world XY
+  /// plane, under which every pre-3D drawing behaviour is unchanged.
+  double ucsOriginX = 0.0, ucsOriginY = 0.0, ucsOriginZ = 0.0;
+  double ucsNormalX = 0.0, ucsNormalY = 0.0, ucsNormalZ = 1.0;
+  /// Rotation of the active coordinate system about its normal, in degrees. The ViewCube's compass
+  /// letters and its square-up arrows are relative to this, so under a rotated UCS "square with
+  /// north" means the UCS's north (REQ-059). 0 = the WCS, which is the only value anything sets
+  /// today — the UCS command that would change it is still outstanding.
+  float ucsAzimuthDeg = 0.f;
+  /// Elevation of the cursor's work-plane intersection, published alongside the existing
+  /// \c uiCursorWorldX/Y so readouts and future 3D-aware commands can see it.
+  float uiCursorWorldZ = 0.f;
+  /// Model viewport size in pixels, published by the UI each frame. The command layer needs it to
+  /// project geometry to screen for box-selection under an orbited camera (REQ-058); it has no
+  /// other way to know the viewport's aspect. Zero means "not yet known" — callers fall back to
+  /// the plan-space test, which is correct whenever the view is unrotated anyway.
+  float uiViewportWidthPx = 0.f;
+  float uiViewportHeightPx = 0.f;
 
   /// LINE/POLYLINE — pick bearing from two reference clicks (\p AP), optional +/- adjustment, then lock.
   enum class SegmentAnglePickPhase : uint8_t { Idle, WaitP1, WaitP2, WaitAdjustOrCommit };
@@ -708,8 +764,10 @@ struct AppCommandState {
   float c3p1x = 0.f, c3p1y = 0.f;
   float c3p2x = 0.f, c3p2y = 0.f;
 
-  /// Each circle: center X, center Y, radius (world units).
-  std::vector<float> userCirclesCxCyR;
+  /// Each circle: center X, center Y, center Z, radius (world units) — stride 4 (REQ-057 /
+  /// ADR-025 (a)). The centre's XYZ is contiguous so it reads like a point; the radius trails it.
+  /// Z is absolute (ADR-025 D2) and the circle's plane stays parallel to XY, matching CadArc::z.
+  std::vector<float> userCirclesCxCyZR;
   std::vector<EntityAttributes> userCircleAttrs;
   std::vector<CadArc> userArcs;
   std::vector<EntityAttributes> userArcAttrs;
@@ -723,14 +781,19 @@ struct AppCommandState {
   std::vector<EntityAttributes> userPolylineAttrs;
   /// POLYLINE command draft — XYZ vertices (two or more before commit).
   std::vector<float> polylineDraftVerts;
-  /// Civil 3D / AutoCAD-style TRIM: cutting edges first, then trim clicks (Enter advances / finishes).
-  /// Alternative: type \p L on command line, then two points define an infinite cutting line (rubber + preview).
+  /// TRIM has two modes, chosen by the \c TRIMSTATE system variable (REQ-056):
+  ///   0 (default) — smart trim: two clicks draw a line across the pieces to remove, no edges to pick;
+  ///   1           — classic: pick cutting edges, Enter, then click the pieces to trim.
+  /// Within a run, \p T switches to picking cutting edges and \p L back to the drawn line, so either mode
+  /// is reachable whatever TRIMSTATE says.
   enum class TrimPhase {
     SelectCuttingEdges,
     CuttingLine_WaitP1,
     CuttingLine_WaitP2,
     SelectTrimTargets,
   } trimPhase = TrimPhase::SelectCuttingEdges;
+  /// \c TRIMSTATE: 0 = smart line trim (default), 1 = pick cutting edges first. Persisted in user prefs.
+  int trimState = 0;
   std::vector<SelectedEntity> trimCutters;
   /// Draft endpoints while TRIM \p L waits for second point (rubber band). First shot completes trim and clears TRIM.
   float trimCutInfP1x = 0.f, trimCutInfP1y = 0.f, trimCutInfP2x = 0.f, trimCutInfP2y = 0.f;
@@ -838,6 +901,21 @@ struct AppCommandState {
   float entityGripOrigEllCx = 0.f, entityGripOrigEllCy = 0.f;
   float entityGripDownWorldX = 0.f; // reserved
   float entityGripDownWorldY = 0.f; // reserved
+
+  /// Base of the active grip stretch, in local storage coordinates: the grip's position when it was armed.
+  /// ORTHO snaps the dragged point onto the H/V line through it, and a typed distance runs along that axis
+  /// (REQ-047). Set when the grip is armed; only meaningful while \c entityGripMoveActive.
+  float entityGripAnchorX = 0.f;
+  float entityGripAnchorY = 0.f;
+  /// A distance typed on the command line while a grip is armed pins the grip that far along the ORTHO axis
+  /// the crosshair indicates, so the cursor stops driving it until the drag is committed or canceled.
+  bool  entityGripTypedDistanceValid = false;
+  float entityGripTypedX = 0.f;
+  float entityGripTypedY = 0.f;
+  /// Distance from \c entityGripAnchor to the (ORTHO-constrained, snap-aware) point the grip is currently
+  /// being dragged to. Written by the viewport drag each frame so the cursor's dynamic-input box can show
+  /// the live stretch distance (REQ-024).
+  float entityGripLiveDistance = 0.f;
 
   // --- MOVE / COPY ---
   enum class ModifyPhase { PickSelection, NeedBase, NeedDestination } modifyPhase = ModifyPhase::PickSelection;
@@ -1102,6 +1180,12 @@ struct AppCommandState {
   bool confirmCloseModal = false;  ///< Set by the main loop to open the "Unsaved Changes" dialog.
   bool closeConfirmed    = false;  ///< Set by the dialog to signal the main loop to exit.
 
+  // --- DWG export confirmation (REQ-052) ---
+  /// Set when the user has chosen a DWG save path; the dialog states what Phase 1 export drops
+  /// before anything is written, because a DWG save can overwrite a drawing GoSurvey did not author.
+  bool        dwgLossyExportModal = false;
+  std::string dwgPendingExportPath;  ///< Destination chosen in the save dialog, written only on confirm.
+
   // -------------------------------------------------------------------------
   // ALIGN command state (Helmert transformation)
   // -------------------------------------------------------------------------
@@ -1269,6 +1353,76 @@ inline float DefaultAnnotationTextHeightWorld(const AppCommandState& st) {
   return st.defaultPlottedTextHeightInches * st.modelUnitsPerPlottedInch;
 }
 
+/// Build the model viewport's camera from the canonical view state (REQ-058 / ADR-025 (c)).
+///
+/// The camera is **derived, never stored**: pan is the target, zoom is the ortho half-height, and
+/// only the two orientation angles are new state. Constructing it fresh at each use makes drift
+/// between "the camera" and "the view" impossible. Commands → Renderer is a downward dependency
+/// (architecture §2), so including the Camera value type here is legal.
+///
+/// `halfH = (1/zoom) * 50` reproduces the constant the renderer and the UI have always shared; the
+/// near/far range matches the pre-3D `Ortho(..., -1000, 1000)` so plan view is bit-identical.
+inline Camera CadViewCamera(const AppCommandState& st) {
+  Camera c = Camera::Plan(st.viewportPanX, st.viewportPanY,
+                          (1.f / std::max(st.viewportZoom, 1.e-9f)) * 50.f);
+  c.azimuthDeg = st.viewportAzimuthDeg;
+  c.elevationDeg = st.viewportElevationDeg;
+  c.nearZ = -1000.f;
+  c.farZ = 1000.f;
+  return c;
+}
+
+/// True when the model view is unrotated — the case in which every pre-3D screen/world mapping,
+/// pick test and snap remains exactly valid and is therefore used unchanged (REQ-058 acceptance:
+/// "plan view renders pixel-comparable to the pre-change build").
+inline bool CadViewIsPlan(const AppCommandState& st) {
+  return std::fabs(st.viewportElevationDeg - 90.f) < 1e-4f && std::fabs(st.viewportAzimuthDeg) < 1e-4f;
+}
+
+/// Duration of a ViewCube orientation change, in seconds. Short enough not to feel sluggish, long
+/// enough to read the rotation — REQ-059 requires the view to settle within 0.5 s.
+inline constexpr float kViewAnimSeconds = 0.28f;
+
+/// Begin easing the view to \p az / \p el (REQ-059). Azimuth travels the SHORT way around, so a
+/// move from 350° to 45° turns 55° forward rather than 305° backward.
+inline void CadStartViewAnimation(AppCommandState& st, float az, float el) {
+  st.viewAnimFromAz = st.viewportAzimuthDeg;
+  st.viewAnimFromEl = st.viewportElevationDeg;
+  // Unwrapped target, so the lerp below cannot take the long way round (Camera::ShortestAzimuthDelta).
+  st.viewAnimToAz = st.viewportAzimuthDeg + Camera::ShortestAzimuthDelta(st.viewportAzimuthDeg, az);
+  st.viewAnimToEl = el;
+  st.viewAnimT = 0.f;
+  st.viewAnimActive = true;
+}
+
+/// Advance an in-flight view animation by \p dtSeconds. No-op when nothing is animating.
+inline void CadTickViewAnimation(AppCommandState& st, float dtSeconds) {
+  if (!st.viewAnimActive)
+    return;
+  st.viewAnimT += (dtSeconds > 0.f ? dtSeconds : 0.f) / kViewAnimSeconds;
+  if (st.viewAnimT >= 1.f) {
+    st.viewAnimT = 1.f;
+    st.viewAnimActive = false;
+  }
+  const float t = st.viewAnimT;
+  const float e = t * t * (3.f - 2.f * t);  // smoothstep: eases in and out, no overshoot
+  float az = st.viewAnimFromAz + (st.viewAnimToAz - st.viewAnimFromAz) * e;
+  while (az < 0.f)
+    az += 360.f;
+  while (az >= 360.f)
+    az -= 360.f;
+  st.viewportAzimuthDeg = az;
+  st.viewportElevationDeg = st.viewAnimFromEl + (st.viewAnimToEl - st.viewAnimFromEl) * e;
+}
+
+/// The active work plane (UCS) a viewport click resolves against (REQ-058 / ADR-025 (e)).
+inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) {
+  ray3d::Plane p;
+  p.point = {st.ucsOriginX, st.ucsOriginY, st.ucsOriginZ};
+  p.normal = {st.ucsNormalX, st.ucsNormalY, st.ucsNormalZ};
+  return p;
+}
+
 
 /// Capture the active tab's current geometry into the undo stack; clears redo stack; trims to undoHistoryMaxSize.
 void PushUndoSnapshot(AppCommandState& st, const std::string& description);
@@ -1410,6 +1564,7 @@ inline void ClearEntityGripInteraction(AppCommandState& st) {
   st.entityGripWhich = -1;
   st.entityGripDownWorldX = 0.f;
   st.entityGripDownWorldY = 0.f;
+  st.entityGripTypedDistanceValid = false;
 }
 
 inline void RestoreEntityGripOriginal(AppCommandState& st) {
@@ -1428,12 +1583,12 @@ inline void RestoreEntityGripOriginal(AppCommandState& st) {
     break;
   }
   case SelectedEntity::Type::Circle: {
-    if (idx < 0 || static_cast<size_t>(idx) * 3 + 2 >= st.userCirclesCxCyR.size())
+    if (idx < 0 || static_cast<size_t>(idx) * 4 + 3 >= st.userCirclesCxCyZR.size())
       return;
-    const size_t k = static_cast<size_t>(idx) * 3;
-    st.userCirclesCxCyR[k] = st.entityGripOrigCx;
-    st.userCirclesCxCyR[k + 1] = st.entityGripOrigCy;
-    st.userCirclesCxCyR[k + 2] = st.entityGripOrigR;
+    const size_t k = static_cast<size_t>(idx) * 4;
+    st.userCirclesCxCyZR[k] = st.entityGripOrigCx;
+    st.userCirclesCxCyZR[k + 1] = st.entityGripOrigCy;
+    st.userCirclesCxCyZR[k + 3] = st.entityGripOrigR;  // [k+2] is Z — a grip drag does not change it
     break;
   }
   case SelectedEntity::Type::Polyline: {
@@ -1501,8 +1656,10 @@ void ApplyOrthoConstrainFromAnchor(float anchorX, float anchorY, float* wx, floa
 void ApplySegmentAngleLockToWorldPick(float anchorX, float anchorY, float lockUx, float lockUy, float* wx, float* wy,
                                       bool forwardOnly);
 
-/// Unit axis (-U,+U,+X,+Y) from anchor toward (targetX, targetY). False if target coincides with anchor.
-bool OrthoUnitTowardPoint(float anchorX, float anchorY, float targetX, float targetY, float* ux, float* uy);
+/// ORTHO axis unit vector from the draft anchor toward the crosshair, converting the world-space crosshair
+/// into local storage first (REQ-047). False if the crosshair coincides with the anchor.
+/// The pure form lives in `OrthoConstrain.hpp` as \c OrthoUnitTowardPoint (both points in one frame).
+bool OrthoUnitTowardUiCursorFromAnchor(const AppCommandState& st, float* ux, float* uy);
 /// Trimmed input parses as exactly one float (allows negative).
 bool ParseSingleFloatToken(const std::string& raw, float* out);
 
@@ -1529,6 +1686,17 @@ void StartCircleCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartPolylineCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// TRIMSTATE (REQ-056): prompt for a new value, echoing the current one.
+void StartTrimStateCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Validate and apply a TRIMSTATE value (0 or 1). False + a logged message when out of range.
+bool ApplyTrimStateValue(AppCommandState& st, int value, std::vector<std::string>& log);
+
+/// RECT (REQ-053): two opposite corners create an axis-aligned rectangle.
+void StartRectCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Store the rectangle spanned by the two corners as a 4-vertex closed polyline, ending the command.
+/// Degenerate corners (zero width or height) are rejected and the command restarts at the first corner.
+void CommitRectangle(AppCommandState& st, float x1, float y1, float x2, float y2, std::vector<std::string>& log);
 void StartTextCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartMtextCommand(AppCommandState& st, std::vector<std::string>& log);
 void OpenMtextRichEditorForPlacement(AppCommandState& st, std::vector<std::string>* log);
@@ -1573,8 +1741,13 @@ void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1
                                         float fenceP2y, float pickPreviewX, float pickPreviewY,
                                         std::vector<float>* previewLinesOut);
 /// Closest CAD entity within tolerance (later draw order wins on tie). False if none.
+/// \param pickRay When non-null AND valid, entities are measured against this world ray in 3D
+///        instead of against \p wx,\p wy in plan (REQ-058). Pass it whenever the camera is
+///        orbited: the ray crosses the work plane at one XY and an elevated entity at another, so
+///        the plan test would measure to the wrong place. Null (the default) keeps the exact
+///        pre-3D behaviour, which is what plan view continues to use.
 bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float tolWorld, SelectedEntity* out,
-                          float* outDistSq);
+                          float* outDistSq, const ray3d::Ray* pickRay = nullptr);
 /// True if (x,y) is inside the filled region: inside its outer loop (0) and outside every hole loop (REQ-042).
 bool CadFilledRegionContainsPoint(const CadFilledRegion& fr, double x, double y);
 /// HATCH command (REQ-043): begin picking an internal point.
@@ -1610,6 +1783,11 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
 /// Clears window-selection draft state and CAD entity selection only (not survey point pick).
 void ClearCadSelection(AppCommandState& st);
 /// Replace selection with all entities of the same kind as the first selected item (or all survey points).
+/// Move the armed grip to (x, y) in local storage coordinates — the one place grip geometry is written, so
+/// the mouse drag and command-line distance entry cannot drift apart. No-op when no grip is armed.
+/// Callers own the undo snapshot and \ref BumpCadGpuCache.
+void ApplyEntityGripPoint(AppCommandState& st, float x, float y);
+
 void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::string>* log);
 /// Removes all committed CAD lines/circles and clears CAD selection (survey points unchanged).
 void ClearCadGeometry(AppCommandState& st);

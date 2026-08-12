@@ -39,3 +39,58 @@ TEST_CASE("ORTHO on snaps to the nearer H/V axis through the anchor (REQ-047)", 
     REQUIRE(y == Approx(ay));
   }
 }
+
+// REQ-047 direct-distance entry: typing a length during LINE/POLYLINE must build the segment along the
+// axis the crosshair indicates, in BOTH directions on BOTH axes. All four quadrants are covered because the
+// reported failure was that every typed distance drew to the right (+X) regardless of the crosshair.
+TEST_CASE("ORTHO direct-distance direction follows the crosshair on all four axes (REQ-047)", "[ortho]") {
+  const float ax = 10.f, ay = 10.f;
+  float ux = 0.f, uy = 0.f;
+
+  SECTION("crosshair right -> +X") {
+    REQUIRE(OrthoUnitTowardPoint(ax, ay, 40.f, 12.f, &ux, &uy));
+    REQUIRE(ux == Approx(1.f));
+    REQUIRE(uy == Approx(0.f));
+  }
+
+  SECTION("crosshair left -> -X") {
+    REQUIRE(OrthoUnitTowardPoint(ax, ay, -20.f, 12.f, &ux, &uy));
+    REQUIRE(ux == Approx(-1.f));
+    REQUIRE(uy == Approx(0.f));
+  }
+
+  SECTION("crosshair up -> +Y") {
+    REQUIRE(OrthoUnitTowardPoint(ax, ay, 12.f, 40.f, &ux, &uy));
+    REQUIRE(ux == Approx(0.f));
+    REQUIRE(uy == Approx(1.f));
+  }
+
+  SECTION("crosshair down -> -Y") {
+    REQUIRE(OrthoUnitTowardPoint(ax, ay, 12.f, -20.f, &ux, &uy));
+    REQUIRE(ux == Approx(0.f));
+    REQUIRE(uy == Approx(-1.f));
+  }
+
+  SECTION("crosshair on the anchor has no direction") {
+    REQUIRE_FALSE(OrthoUnitTowardPoint(ax, ay, ax, ay, &ux, &uy));
+  }
+}
+
+// REQ-047 / local-storage invariant: the axis choice must be made with anchor and crosshair in the SAME
+// frame. This is the shape of the bug that was fixed — a state-plane document origin leaked into dx only,
+// so |dx| always dominated and the direction collapsed to +X. Passing local-frame values keeps the
+// leftward/downward answers that the mixed-frame call could never produce.
+TEST_CASE("ORTHO direction is frame-sensitive: local crosshair keeps -X (REQ-047)", "[ortho]") {
+  constexpr float kDocumentOriginX = 2000000.f;  // state-plane easting, as in a Civil 3D import
+  const float anchorLocalX = 10.f, anchorLocalY = 10.f;
+  const float cursorLocalX = -20.f, cursorLocalY = 12.f;  // crosshair is LEFT of the anchor
+  float ux = 0.f, uy = 0.f;
+
+  // Correct: both points local.
+  REQUIRE(OrthoUnitTowardPoint(anchorLocalX, anchorLocalY, cursorLocalX, cursorLocalY, &ux, &uy));
+  REQUIRE(ux == Approx(-1.f));
+
+  // The defect: the crosshair still carrying the document origin swamps dy and forces +X.
+  REQUIRE(OrthoUnitTowardPoint(anchorLocalX, anchorLocalY, cursorLocalX + kDocumentOriginX, cursorLocalY, &ux, &uy));
+  REQUIRE(ux == Approx(1.f));
+}

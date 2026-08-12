@@ -470,6 +470,7 @@ int main()
     DrawPdfAttachDialog(cmd, cmdLog);
     DrawAlignResultsWindow(cmd, cmdLog);
     DrawCloseConfirmModal(cmd, cmdLog);
+    DrawDwgLossyExportModal(cmd, cmdLog);
 
     std::vector<float> rubberLines;
     const float orthoHalfH = (1.f / std::max(cmd.viewportZoom, 1.e-9f)) * 50.f;
@@ -493,7 +494,7 @@ int main()
         cmd.active == AppCommandState::Kind::Offset ? static_cast<float>(curRawX) : static_cast<float>(curX);
     const float previewCy =
         cmd.active == AppCommandState::Kind::Offset ? static_cast<float>(curRawY) : static_cast<float>(curY);
-    BuildTransformPreview(cmd, previewCx, previewCy, &previewLines, &previewCircles);
+    BuildTransformPreview(cmd, previewCx, previewCy, &previewLines, &previewCircles, orthoHalfH, fbH);
 
     if (cmd.active == AppCommandState::Kind::Trim &&
         cmd.trimPhase == AppCommandState::TrimPhase::CuttingLine_WaitP2)
@@ -624,9 +625,11 @@ int main()
     const bool paperSpace = cmd.activeSpaceIndex != kModelSpaceIndex;
     static const std::vector<float> kEmptyVerts;
     const std::vector<float> &sceneLines = paperSpace ? kEmptyVerts : cmd.userLinesFlat;
-    const std::vector<float> &sceneCircles = paperSpace ? kEmptyVerts : cmd.userCirclesCxCyR;
+    const std::vector<float> &sceneCircles = paperSpace ? kEmptyVerts : cmd.userCirclesCxCyZR;
     const std::vector<float> &sceneRubber = paperSpace ? kEmptyVerts : rubberLines;
-    activeRenderer.RenderScene(cmd.viewportPanX, cmd.viewportPanY, cmd.viewportZoom, fbW, fbH, sceneLines,
+    // The camera is derived from the canonical pan/zoom plus the two orientation angles, so it
+    // cannot disagree with the view state (REQ-058 / ADR-025 (c)).
+    activeRenderer.RenderScene(CadViewCamera(cmd), fbW, fbH, sceneLines,
                                sceneCircles, cmd.cadGpuRevision,
                                sceneRubber, (paperSpace || !snapHit.valid) ? nullptr : &snapHit,
                                std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f), paperSpace ? nullptr : selRectPtr,

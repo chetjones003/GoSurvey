@@ -39,6 +39,10 @@ struct CadAnnotation {
   Kind kind = Kind::Text;
   float insX = 0.f;
   float insY = 0.f;
+  /// Elevation of the insertion point (REQ-057 / ADR-025). **Absolute**, not offset by
+  /// \c worldDocumentOrigin — the local-storage rebase is X/Y-only (ADR-025 D2, see
+  /// CadCoordinateFrame.hpp). Always 0 for paper-space text: a sheet is 2D (ADR-025 (g)).
+  float insZ = 0.f;
   /// Text height in plotted inches (constant on sheet); model height = this × drawing scale.
   float plottedHeightInches = 0.125f;
   /// CCW from +X (math \c atan2); UI shows clockwise-from-north via \c BearingCwNorthDegFromMathAngleRad.
@@ -92,6 +96,10 @@ struct CadArc {
   float r = 0.f;
   float startRad = 0.f;
   float sweepRad = 0.f;
+  /// Elevation of the arc's plane (REQ-057 / ADR-025). The arc stays parallel to XY — a
+  /// tilted arc would need a plane normal, which no accepted requirement asks for. Absolute
+  /// (ADR-025 D2). Always 0 in paper space (ADR-025 (g)).
+  float z = 0.f;
 };
 
 /// Axis-aligned ellipse: center + major-axis vector (semi-major length = |majV|) + minor/major ratio (0,1].
@@ -101,15 +109,22 @@ struct CadEllipse {
   float majVx = 1.f;
   float majVy = 0.f;
   float ratio = 0.5f;
+  /// Elevation of the ellipse's plane (REQ-057 / ADR-025) — parallel to XY, absolute
+  /// (ADR-025 D2), always 0 in paper space (ADR-025 (g)). Same rationale as \ref CadArc::z.
+  float z = 0.f;
 };
 
 /// A solid-filled region (ADR-011), imported from a SOLID-fill HATCH. Holds one or more closed boundary
 /// loops in the same local coordinate frame as line geometry: loop 0 is the outer boundary, any further
 /// loops are holes (islands). Rendered filled with even-odd rule in the GL pass and re-exported as a HATCH.
 struct CadFilledRegion {
-  std::vector<float> verts;      ///< Flat x,y pairs for all loops, concatenated (local storage coordinates).
-  std::vector<int>   loopStart;  ///< Pair-index where each loop begins; loopStart[0]==0. Loop k spans
-                                 ///< [loopStart[k], loopStart[k+1]) (last loop runs to verts.size()/2).
+  /// Flat **x,y,z triplets** for all loops, concatenated (local storage coordinates for X/Y; Z is
+  /// absolute — ADR-025 D2). Renamed from `verts` when Z was interleaved (REQ-057 / ADR-025 (a)): the
+  /// rename is deliberate, so every site that assumed the old stride-2 layout fails to compile rather
+  /// than silently reading a Y as an X. Z is always 0 for paper-space regions — a sheet is 2D (ADR-025 (g)).
+  std::vector<float> vertsXyz;
+  std::vector<int>   loopStart;  ///< Vertex index where each loop begins; loopStart[0]==0. Loop k spans
+                                 ///< [loopStart[k], loopStart[k+1]) (last loop runs to vertsXyz.size()/3).
   /// Hatch pattern (REQ-043, ADR-018). Empty or "SOLID" → a solid fill (the ADR-011 behaviour). Otherwise a
   /// line pattern name ("ANSI31", "ANSI37", "NET") rendered as a clipped line family driven by angle + scale.
   /// Legacy/imported solid fills deserialize with an empty pattern, so they read back as SOLID.
@@ -118,10 +133,10 @@ struct CadFilledRegion {
   float patternScale = 1.f;      ///< Multiplies the line spacing (larger = sparser).
   /// True when this region is a solid fill (no line pattern).
   bool isSolid() const { return patternName.empty() || patternName == "SOLID"; }
-  /// Vertex (pair) count of loop \p k.
+  /// Vertex count of loop \p k.
   int loopCount(size_t k) const {
     const int begin = loopStart[k];
-    const int end = (k + 1 < loopStart.size()) ? loopStart[k + 1] : static_cast<int>(verts.size() / 2);
+    const int end = (k + 1 < loopStart.size()) ? loopStart[k + 1] : static_cast<int>(vertsXyz.size() / 3);
     return end - begin;
   }
 };

@@ -90,6 +90,8 @@ void CadAnnotationToJson(const CadAnnotation& a, json& o) {
   o["kind"] = AnnotationKindTag(a.kind);
   o["insX"] = a.insX;
   o["insY"] = a.insY;
+  if (a.insZ != 0.f)  // additive, omitted when flat (REQ-057 / ADR-025)
+    o["insZ"] = a.insZ;
   o["plottedHeightInches"] = a.plottedHeightInches;
   o["rotationRad"] = a.rotationRad;
   o["text"] = a.text;
@@ -132,6 +134,7 @@ CadAnnotation CadAnnotationFromJson(const json& o) {
     a.kind = AnnotationKindFromString(o["kind"].get<std::string>());
   a.insX               = o.value("insX",               a.insX);
   a.insY               = o.value("insY",               a.insY);
+  a.insZ               = o.value("insZ",               a.insZ);  // absent → 0 (REQ-057)
   a.plottedHeightInches = o.value("plottedHeightInches", a.plottedHeightInches);
   a.rotationRad        = o.value("rotationRad",        a.rotationRad);
   a.text               = o.value("text",               a.text);
@@ -171,6 +174,10 @@ void CadArcToJson(const CadArc& a, json& o) {
   o["r"] = a.r;
   o["startRad"] = a.startRad;
   o["sweepRad"] = a.sweepRad;
+  // Additive, and omitted when flat (REQ-057 / ADR-025): a drawing with no elevations still
+  // serializes byte-identically to a pre-3D one, and older builds ignore the key.
+  if (a.z != 0.f)
+    o["z"] = a.z;
 }
 
 CadArc CadArcFromJson(const json& o) {
@@ -180,6 +187,7 @@ CadArc CadArcFromJson(const json& o) {
   a.r        = o.value("r",        a.r);
   a.startRad = o.value("startRad", a.startRad);
   a.sweepRad = o.value("sweepRad", a.sweepRad);
+  a.z        = o.value("z",        a.z);  // absent → 0: legacy arcs load flat (REQ-057)
   return a;
 }
 
@@ -189,6 +197,8 @@ void CadEllipseToJson(const CadEllipse& e, json& o) {
   o["majVx"] = e.majVx;
   o["majVy"] = e.majVy;
   o["ratio"] = e.ratio;
+  if (e.z != 0.f)  // additive, omitted when flat — see CadArcToJson
+    o["z"] = e.z;
 }
 
 CadEllipse CadEllipseFromJson(const json& o) {
@@ -198,6 +208,7 @@ CadEllipse CadEllipseFromJson(const json& o) {
   e.majVx = o.value("majVx", e.majVx);
   e.majVy = o.value("majVy", e.majVy);
   e.ratio = o.value("ratio", e.ratio);
+  e.z     = o.value("z",     e.z);  // absent → 0: legacy ellipses load flat (REQ-057)
   return e;
 }
 
@@ -383,7 +394,14 @@ json BuildRoot(const AppCommandState& st) {
         json pfills = json::array();
         for (const CadFilledRegion& fr : l.paperFilledRegions) {
           json fo;
-          fo["verts"] = fr.verts;
+          // Paper fills are 2D by definition (ADR-025 (g)) — write the XY pairs the schema has
+          // always held and no Z sidecar, so these entries stay byte-identical to older files.
+          json pv = json::array();
+          for (size_t i = 0; i + 2 < fr.vertsXyz.size(); i += 3) {
+            pv.push_back(fr.vertsXyz[i + 0]);
+            pv.push_back(fr.vertsXyz[i + 1]);
+          }
+          fo["verts"] = std::move(pv);
           fo["loops"] = fr.loopStart;
           pfills.push_back(std::move(fo));
         }
@@ -420,7 +438,26 @@ json BuildRoot(const AppCommandState& st) {
     lineAttrs.push_back(std::move(o));
   }
   doc["lineAttrs"] = std::move(lineAttrs);
-  doc["circles"] = st.userCirclesCxCyR;
+  // In memory circles are cx,cy,z,r (stride 4). On disk the long-standing "circles" key stays
+  // cx,cy,r triples and Z rides in an additive "circlesZ" (one per circle), omitted when all zero
+  // — same tolerant-key pattern as filled regions (ADR-020 (d)), no kGsFormatVersion bump. An
+  // older build therefore still reads correct flat circles, and unchanged drawings still save
+  // byte-identically.
+  {
+    json cxyr = json::array();
+    json cz = json::array();
+    bool anyZ = false;
+    for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4) {
+      cxyr.push_back(st.userCirclesCxCyZR[i + 0]);
+      cxyr.push_back(st.userCirclesCxCyZR[i + 1]);
+      cxyr.push_back(st.userCirclesCxCyZR[i + 3]);  // radius
+      cz.push_back(st.userCirclesCxCyZR[i + 2]);    // z
+      anyZ = anyZ || st.userCirclesCxCyZR[i + 2] != 0.f;
+    }
+    doc["circles"] = std::move(cxyr);
+    if (anyZ)
+      doc["circlesZ"] = std::move(cz);
+  }
   json circleAttrs = json::array();
   for (const auto& a : st.userCircleAttrs) {
     json o;
@@ -492,7 +529,25 @@ json BuildRoot(const AppCommandState& st) {
   json fills = json::array();
   for (const auto& fr : st.cadFilledRegions) {
     json o;
-    o["verts"] = fr.verts;
+    // The in-memory store is interleaved XYZ (ADR-025 (a)), but the ON-DISK schema keeps the
+    // long-standing XY "verts" array and adds Z as an additive "vertsZ" sidecar (the ADR-020 (d)
+    // tolerant-key pattern, no kGsFormatVersion bump). That is deliberate and is NOT a §11.8
+    // violation — §11.8 governs in-memory geometry stores, not the wire format. Splitting here
+    // buys both directions: an older build still reads "verts" and gets correct flat geometry,
+    // and a newer build reads the Z back. "vertsZ" is omitted entirely when every Z is 0, so
+    // existing drawings continue to serialize byte-identically.
+    json xy = json::array();
+    json zs = json::array();
+    bool anyZ = false;
+    for (size_t i = 0; i + 2 < fr.vertsXyz.size(); i += 3) {
+      xy.push_back(fr.vertsXyz[i + 0]);
+      xy.push_back(fr.vertsXyz[i + 1]);
+      zs.push_back(fr.vertsXyz[i + 2]);
+      anyZ = anyZ || fr.vertsXyz[i + 2] != 0.f;
+    }
+    o["verts"] = std::move(xy);
+    if (anyZ)
+      o["vertsZ"] = std::move(zs);
     o["loops"] = fr.loopStart;
     if (!fr.patternName.empty()) {  // omit for solid fills so legacy files stay byte-identical (ADR-018)
       o["pattern"] = fr.patternName;
@@ -536,6 +591,16 @@ json BuildRoot(const AppCommandState& st) {
   json cpo;
   CreatePointsOptionsToJson(st.createPointsOpts, cpo);
   doc["createPointsOptions"] = std::move(cpo);
+
+  // Saved view (REQ-055): reopen the drawing looking at what the user left on screen.
+  // The pan is the view CENTRE in local storage space, but it is written in WORLD coordinates —
+  // loading may rebase the document origin (MaybeRebaseLargeCoordinates), which would silently move a
+  // local pan somewhere else in the drawing. World coordinates are invariant under that rebase.
+  json view;
+  view["panWorldX"] = st.viewportPanX + st.worldDocumentOriginX;
+  view["panWorldY"] = st.viewportPanY + st.worldDocumentOriginY;
+  view["zoom"] = st.viewportZoom;
+  doc["view"] = std::move(view);
 
   root["document"] = std::move(doc);
 
@@ -907,13 +972,20 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           for (const auto& el : o["paperFilledRegions"])
             if (el.is_object()) {
               CadFilledRegion fr;
-              if (el.contains("verts"))
-                for (const auto& v : el["verts"])
-                  fr.verts.push_back(v.get<float>());
+              // "verts" is XY on disk; the store is interleaved XYZ. Paper fills are always
+              // Z = 0 (ADR-025 (g)), so expand the pairs with a zero Z.
+              if (el.contains("verts")) {
+                const auto& pv = el["verts"];
+                for (size_t i = 0; i + 1 < pv.size(); i += 2) {
+                  fr.vertsXyz.push_back(pv[i + 0].get<float>());
+                  fr.vertsXyz.push_back(pv[i + 1].get<float>());
+                  fr.vertsXyz.push_back(0.f);
+                }
+              }
               if (el.contains("loops"))
                 for (const auto& v : el["loops"])
                   fr.loopStart.push_back(v.get<int>());
-              if (fr.loopStart.empty() && fr.verts.size() >= 6)
+              if (fr.loopStart.empty() && fr.vertsXyz.size() >= 9)  // >= 3 vertices × 3 floats
                 fr.loopStart.push_back(0);
               l.paperFilledRegions.push_back(std::move(fr));
             }
@@ -996,9 +1068,21 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   for (const auto& o : doc["lineAttrs"])
     st.userLineAttrs.push_back(EntityAttributesFromJson(o));
 
-  st.userCirclesCxCyR.clear();
-  for (const auto& v : doc["circles"])
-    st.userCirclesCxCyR.push_back(v.get<float>());
+  // "circles" is cx,cy,r on disk; "circlesZ" is the additive per-circle Z (absent → all flat,
+  // which is exactly how every pre-3D drawing loads).
+  st.userCirclesCxCyZR.clear();
+  {
+    const auto& cxyr = doc["circles"];
+    const bool hasZ = doc.contains("circlesZ");
+    const auto& cz = hasZ ? doc["circlesZ"] : cxyr;  // cz unread unless hasZ
+    size_t ci = 0;
+    for (size_t i = 0; i + 2 < cxyr.size(); i += 3, ++ci) {
+      st.userCirclesCxCyZR.push_back(cxyr[i + 0].get<float>());          // cx
+      st.userCirclesCxCyZR.push_back(cxyr[i + 1].get<float>());          // cy
+      st.userCirclesCxCyZR.push_back(hasZ && ci < cz.size() ? cz[ci].get<float>() : 0.f);
+      st.userCirclesCxCyZR.push_back(cxyr[i + 2].get<float>());          // r
+    }
+  }
   st.userCircleAttrs.clear();
   for (const auto& o : doc["circleAttrs"])
     st.userCircleAttrs.push_back(EntityAttributesFromJson(o));
@@ -1044,9 +1128,20 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       CadFilledRegion fr;
       // Current form: {verts, loops}. Legacy form (pre-multi-loop): a bare flat vertex array = one loop.
       if (el.is_object()) {
-        if (el.contains("verts"))
-          for (const auto& v : el["verts"])
-            fr.verts.push_back(v.get<float>());
+        // "verts" is XY on disk; "vertsZ" is the additive per-vertex Z sidecar (REQ-057 /
+        // ADR-025 (a)). Absent or short → Z = 0, which is exactly how every pre-3D drawing
+        // loads: flat, and rendering identically to before.
+        if (el.contains("verts")) {
+          const auto& pv = el["verts"];
+          const bool hasZ = el.contains("vertsZ");
+          const auto& pz = hasZ ? el["vertsZ"] : pv;  // pz unread unless hasZ
+          size_t vi = 0;
+          for (size_t i = 0; i + 1 < pv.size(); i += 2, ++vi) {
+            fr.vertsXyz.push_back(pv[i + 0].get<float>());
+            fr.vertsXyz.push_back(pv[i + 1].get<float>());
+            fr.vertsXyz.push_back(hasZ && vi < pz.size() ? pz[vi].get<float>() : 0.f);
+          }
+        }
         if (el.contains("loops"))
           for (const auto& v : el["loops"])
             fr.loopStart.push_back(v.get<int>());
@@ -1057,10 +1152,14 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         if (el.contains("patScale"))
           fr.patternScale = el["patScale"].get<float>();
       } else if (el.is_array()) {
-        for (const auto& v : el)
-          fr.verts.push_back(v.get<float>());
+        // Legacy pre-multi-loop form: a bare flat XY array = one loop. Expand to XYZ at Z = 0.
+        for (size_t i = 0; i + 1 < el.size(); i += 2) {
+          fr.vertsXyz.push_back(el[i + 0].get<float>());
+          fr.vertsXyz.push_back(el[i + 1].get<float>());
+          fr.vertsXyz.push_back(0.f);
+        }
       }
-      if (fr.loopStart.empty() && fr.verts.size() >= 6)
+      if (fr.loopStart.empty() && fr.vertsXyz.size() >= 9)  // >= 3 vertices × 3 floats
         fr.loopStart.push_back(0);
       st.cadFilledRegions.push_back(std::move(fr));
     }
@@ -1104,6 +1203,26 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.createPointsOpts = CreatePointsOptions{};
 
   CadCoord::MaybeRebaseLargeCoordinates(st, &log);
+
+  // Saved view (REQ-055). Applied AFTER the rebase above, because that is what fixes
+  // worldDocumentOrigin — converting the stored world pan to local any earlier would use an origin the
+  // drawing no longer has. Files written before this key fall back to framing the drawing, which is
+  // still better than the default view they get today; an empty drawing keeps the default.
+  if (doc.contains("view") && doc["view"].is_object()) {
+    const json& view = doc["view"];
+    const double panWorldX = view.value("panWorldX", 0.0);
+    const double panWorldY = view.value("panWorldY", 0.0);
+    const float zoom = view.value("zoom", 1.f);
+    st.viewportPanX = panWorldX - st.worldDocumentOriginX;
+    st.viewportPanY = panWorldY - st.worldDocumentOriginY;
+    // Clamp to the range the zoom controls themselves use, so a corrupt or hand-edited value cannot
+    // leave the drawing on an unrecoverable view (REQ-201).
+    st.viewportZoom = std::clamp(zoom, 1.e-9f, 1.e9f);
+  } else {
+    const int fbW = std::max(st.viewportLastFbW, 1);
+    const int fbH = std::max(st.viewportLastFbH, 1);
+    CadCoord::FitViewportToDrawing(st, static_cast<float>(fbW) / static_cast<float>(fbH), fbW, fbH);
+  }
 
   for (size_t i = 0; i < st.surveyPoints.size(); ++i) {
     int& li = st.surveyPoints[i].labelMtextAnnIndex;

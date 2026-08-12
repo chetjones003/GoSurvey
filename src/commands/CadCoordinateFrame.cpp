@@ -33,8 +33,10 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
     add2(&st.userLinesFlat[i], &st.userLinesFlat[i + 1]);
     add2(&st.userLinesFlat[i + 3], &st.userLinesFlat[i + 4]);
   }
-  for (size_t i = 0; i + 2 < st.userCirclesCxCyR.size(); i += 3)
-    add2(&st.userCirclesCxCyR[i], &st.userCirclesCxCyR[i + 1]);
+  // Stride 4 (cx,cy,z,r): only the centre's X and Y rebase. Z is absolute (ADR-025 D2) and the
+  // radius is a length, not a position — neither may take a document-origin offset.
+  for (size_t i = 0; i + 3 < st.userCirclesCxCyZR.size(); i += 4)
+    add2(&st.userCirclesCxCyZR[i], &st.userCirclesCxCyZR[i + 1]);
   for (CadArc& a : st.userArcs)
     add2(&a.cx, &a.cy);
   for (CadEllipse& el : st.userEllipses)
@@ -50,9 +52,11 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
       add2(&an.dimExt2X, &an.dimExt2Y);
     }
   }
+  // Stride 3, but only X and Y are rebased — Z is absolute and never carries a document origin
+  // (ADR-025 D2). The +2 slot is deliberately skipped.
   for (CadFilledRegion& fr : st.cadFilledRegions)
-    for (size_t i = 0; i + 1 < fr.verts.size(); i += 2)
-      add2(&fr.verts[i], &fr.verts[i + 1]);
+    for (size_t i = 0; i + 2 < fr.vertsXyz.size(); i += 3)
+      add2(&fr.vertsXyz[i], &fr.vertsXyz[i + 1]);
   for (SurveyPoint& p : st.surveyPoints)
     add2(&p.easting, &p.northing);
 }
