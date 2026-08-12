@@ -110,7 +110,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         for (int i = 0; i < 2; ++i) {
           prevLines->push_back(cmd.userLinesFlat[k + i * 3] + dx);
           prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 1] + dy);
-          prevLines->push_back(0.f);
+          prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);  // keep the endpoint's elevation
         }
       } else if (e.type == SelectedEntity::Type::Circle) {
         const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
@@ -127,7 +127,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         CadArc a = cmd.userArcs[k];
         a.cx += dx;
         a.cy += dy;
-        appendArcPolylineStrip(prevLines, 0.f, a, 48);
+        appendArcPolylineStrip(prevLines, a.z, a, 48);
       } else if (e.type == SelectedEntity::Type::Ellipse) {
         const size_t k = static_cast<size_t>(e.index);
         if (k >= cmd.userEllipses.size())
@@ -135,7 +135,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         CadEllipse el = cmd.userEllipses[k];
         el.cx += dx;
         el.cy += dy;
-        appendEllipsePolylineStrip(prevLines, 0.f, el, 56);
+        appendEllipsePolylineStrip(prevLines, el.z, el, 56);
       } else if (e.type == SelectedEntity::Type::Polyline) {
         const int pi = e.index;
         if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
@@ -147,18 +147,18 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         for (int vi = v0; vi + 1 < v1; ++vi) {
           prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3)] + dx);
           prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)] + dy);
-          prevLines->push_back(0.f);
+          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
           prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)] + dx);
           prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)] + dy);
-          prevLines->push_back(0.f);
+          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
         }
         if (closed && v1 - v0 >= 2) {
           prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)] + dx);
           prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)] + dy);
-          prevLines->push_back(0.f);
+          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
           prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3)] + dx);
           prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)] + dy);
-          prevLines->push_back(0.f);
+          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]);
         }
       }
     }
@@ -173,10 +173,10 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     for (size_t i = 0; i + 5 < cb.lines.size() + 1; i += 6) {
       prevLines->push_back(cb.lines[i + 0] + dx);
       prevLines->push_back(cb.lines[i + 1] + dy);
-      prevLines->push_back(0.f);
+      prevLines->push_back(cb.lines[i + 2]);
       prevLines->push_back(cb.lines[i + 3] + dx);
       prevLines->push_back(cb.lines[i + 4] + dy);
-      prevLines->push_back(0.f);
+      prevLines->push_back(cb.lines[i + 5]);
     }
     // Circles
     for (size_t i = 0; i + 3 < cb.circlesCxCyZR.size() + 1; i += 4) {  // cx,cy,z,r
@@ -190,14 +190,14 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       CadArc pa = a;
       pa.cx += dx;
       pa.cy += dy;
-      appendArcPolylineStrip(prevLines, 0.f, pa, 48);
+      appendArcPolylineStrip(prevLines, pa.z, pa, 48);
     }
     // Ellipses
     for (const auto& el : cb.ellipses) {
       CadEllipse pe = el;
       pe.cx += dx;
       pe.cy += dy;
-      appendEllipsePolylineStrip(prevLines, 0.f, pe, 56);
+      appendEllipsePolylineStrip(prevLines, pe.z, pe, 56);
     }
     // Polylines
     const int nPoly = static_cast<int>(cb.polyOffsets.size()) - 1;
@@ -209,18 +209,18 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       for (int vi = v0; vi + 1 < v1; ++vi) {
         prevLines->push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 0)] + dx);
         prevLines->push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 1)] + dy);
-        prevLines->push_back(0.f);
+        prevLines->push_back(cb.polyVerts[static_cast<size_t>(vi * 3 + 2)]);
         prevLines->push_back(cb.polyVerts[static_cast<size_t>((vi + 1) * 3 + 0)] + dx);
         prevLines->push_back(cb.polyVerts[static_cast<size_t>((vi + 1) * 3 + 1)] + dy);
-        prevLines->push_back(0.f);
+        prevLines->push_back(cb.polyVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
       }
       if (closed && v1 - v0 >= 2) {
         prevLines->push_back(cb.polyVerts[static_cast<size_t>((v1 - 1) * 3 + 0)] + dx);
         prevLines->push_back(cb.polyVerts[static_cast<size_t>((v1 - 1) * 3 + 1)] + dy);
-        prevLines->push_back(0.f);
+        prevLines->push_back(cb.polyVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
         prevLines->push_back(cb.polyVerts[static_cast<size_t>(v0 * 3 + 0)] + dx);
         prevLines->push_back(cb.polyVerts[static_cast<size_t>(v0 * 3 + 1)] + dy);
-        prevLines->push_back(0.f);
+        prevLines->push_back(cb.polyVerts[static_cast<size_t>(v0 * 3 + 2)]);
       }
     }
     return;
@@ -231,19 +231,21 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     if (cmd.scalePhase == SP::Ref_WaitP2) {
       prevLines->push_back(cmd.scaleRefP1X);
       prevLines->push_back(cmd.scaleRefP1Y);
-      prevLines->push_back(0.f);
+      // Reference/measure rubber: drawn on the work plane, since it marks distances the user is
+      // picking rather than geometry belonging to an object (REQ-058).
+      prevLines->push_back(CadCommitElevation(cmd));
       prevLines->push_back(curX);
       prevLines->push_back(curY);
-      prevLines->push_back(0.f);
+      prevLines->push_back(CadCommitElevation(cmd));
       return;
     }
     if (cmd.scalePhase == SP::NewLength_WaitP2) {
       prevLines->push_back(cmd.scaleNewLenP1X);
       prevLines->push_back(cmd.scaleNewLenP1Y);
-      prevLines->push_back(0.f);
+      prevLines->push_back(CadCommitElevation(cmd));
       prevLines->push_back(curX);
       prevLines->push_back(curY);
-      prevLines->push_back(0.f);
+      prevLines->push_back(CadCommitElevation(cmd));
     }
     float sc = 1.f;
     if (!CadScalePreviewFactor(cmd, curX, curY, &sc))
@@ -261,7 +263,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           scalePreviewPt(bx, by, sc, &x, &y);
           prevLines->push_back(x);
           prevLines->push_back(y);
-          prevLines->push_back(0.f);
+          prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
         }
       } else if (e.type == SelectedEntity::Type::Circle) {
         const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
@@ -283,7 +285,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         CadArc a = cmd.userArcs[k];
         scalePreviewPt(bx, by, sc, &a.cx, &a.cy);
         a.r *= sc;
-        appendArcPolylineStrip(prevLines, 0.f, a, 48);
+        appendArcPolylineStrip(prevLines, a.z, a, 48);
       } else if (e.type == SelectedEntity::Type::Ellipse) {
         const size_t k = static_cast<size_t>(e.index);
         if (k >= cmd.userEllipses.size())
@@ -295,7 +297,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         scalePreviewPt(bx, by, sc, &mx, &my);
         el.majVx = mx - el.cx;
         el.majVy = my - el.cy;
-        appendEllipsePolylineStrip(prevLines, 0.f, el, 56);
+        appendEllipsePolylineStrip(prevLines, el.z, el, 56);
       } else if (e.type == SelectedEntity::Type::Polyline) {
         const int pi = e.index;
         if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
@@ -313,10 +315,10 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           scalePreviewPt(bx, by, sc, &x1, &y1);
           prevLines->push_back(x0);
           prevLines->push_back(y0);
-          prevLines->push_back(0.f);
+          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
           prevLines->push_back(x1);
           prevLines->push_back(y1);
-          prevLines->push_back(0.f);
+          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
         }
         if (closed && v1 - v0 >= 2) {
           float x0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
@@ -327,10 +329,10 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
           scalePreviewPt(bx, by, sc, &x1, &y1);
           prevLines->push_back(x0);
           prevLines->push_back(y0);
-          prevLines->push_back(0.f);
+          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
           prevLines->push_back(x1);
           prevLines->push_back(y1);
-          prevLines->push_back(0.f);
+          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]);
         }
       }
     }
@@ -357,7 +359,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         rotatePreviewPt(bx, by, theta, &x, &y);
         prevLines->push_back(x);
         prevLines->push_back(y);
-        prevLines->push_back(0.f);
+        prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
       const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
@@ -377,7 +379,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       CadArc a = cmd.userArcs[k];
       rotatePreviewPt(bx, by, theta, &a.cx, &a.cy);
       a.startRad += theta;
-      appendArcPolylineStrip(prevLines, 0.f, a, 48);
+      appendArcPolylineStrip(prevLines, a.z, a, 48);
     } else if (e.type == SelectedEntity::Type::Ellipse) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= cmd.userEllipses.size())
@@ -389,7 +391,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       rotatePreviewPt(bx, by, theta, &mx, &my);
       el.majVx = mx - el.cx;
       el.majVy = my - el.cy;
-      appendEllipsePolylineStrip(prevLines, 0.f, el, 56);
+      appendEllipsePolylineStrip(prevLines, el.z, el, 56);
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
       if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
@@ -407,10 +409,10 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         rotatePreviewPt(bx, by, theta, &x1, &y1);
         prevLines->push_back(x0);
         prevLines->push_back(y0);
-        prevLines->push_back(0.f);
+        prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
         prevLines->push_back(x1);
         prevLines->push_back(y1);
-        prevLines->push_back(0.f);
+        prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
       }
       if (closed && v1 - v0 >= 2) {
         float x0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
@@ -421,10 +423,10 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         rotatePreviewPt(bx, by, theta, &x1, &y1);
         prevLines->push_back(x0);
         prevLines->push_back(y0);
-        prevLines->push_back(0.f);
+        prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
         prevLines->push_back(x1);
         prevLines->push_back(y1);
-        prevLines->push_back(0.f);
+        prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]);
       }
     }
   }

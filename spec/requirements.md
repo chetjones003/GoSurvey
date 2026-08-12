@@ -1351,10 +1351,19 @@ requirements is a planning failure, not a sign of rigor.
     camera, verified against hand-computed coordinates within REQ-101;
   - LINE, ARC, CIRCLE and TEXT drawn on a non-default UCS land on that plane within REQ-101;
   - the existing test suite stays green;
-  - the REQ-100 frame budget is met while orbiting.
+  - the REQ-100 frame budget is met while orbiting;
+  - **every entity type** — not only lines — snaps, previews and commits at the correct elevation
+    under an orbited view;
+  - **snap glyphs face the viewer** at any orientation rather than lying in the work plane, where
+    they foreshorten to an unreadable edge near a horizontal view. They are UI markers, not geometry.
 - Owner-layer: Renderer (matrices, draw), UI / Commands (input, picking, snap)
-- Status: accepted
-- Revisions: 2026-08-11 — initial.
+- Status: accepted — **partially implemented, NOT signed off.** Camera, orbit, ray picking, 3D
+  snapping and the ELEV work plane are in use, but only LINE is carried through the full pipeline;
+  CIRCLE is known broken and the remaining types are unverified. REQ-100 is unmeasured. See
+  TASK-035 §10b (GAP-1/2/3).
+- Revisions: 2026-08-11 — initial. 2026-08-11 — acceptance extended with the two conditions above
+  once 3D drawing was actually exercised: "it works for lines" did not generalise, and a snap glyph
+  built as flat world geometry is unreadable in a near-horizontal view.
 
 ### REQ-059 — ViewCube (view navigation widget)
 - Purpose: direct, discoverable view control and continuous orientation feedback

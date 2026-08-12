@@ -397,3 +397,60 @@ TEST_CASE("ShortestAzimuthDelta always takes the short way round", "[camera]") {
     for (float b = 0.f; b < 360.f; b += 23.f)
       REQUIRE(std::fabs(Camera::ShortestAzimuthDelta(a, b)) <= 180.f + 1e-4f);
 }
+
+// ---------------------------------------------------------------------------
+// Snap tolerance under an orbited camera (REQ-058).
+//
+// Object snapping compares a candidate's distance from the cursor RAY against a world tolerance
+// derived from a pixel aperture. This pins that the two are in the same units and the same scale,
+// which is what makes snapping fire at all once the view is orbited.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("A candidate a few pixels from the cursor is inside the snap tolerance", "[camera][snap]") {
+  constexpr float kW = 1600.f, kH = 900.f, kHalfH = 50.f, kAperturePx = 14.f;
+  // The tolerance CadSnap::WorldToleranceFromPixels produces.
+  const float worldPerPx = (2.f * kHalfH) / kH;
+  const float tol = kAperturePx * worldPerPx;
+
+  Camera cam = Camera::Plan(0.0, 0.0, kHalfH);
+  cam.Orbit(30.f, -65.f);  // a typical working orbit (elevation 25)
+
+  const ray3d::Vec3 endpoint{20.0, 30.0, 0.0};
+  float px = 0.f, py = 0.f;
+  cam.WorldToScreen(endpoint.x, endpoint.y, endpoint.z, kW, kH, &px, &py);
+
+  // Dead on: essentially zero distance.
+  REQUIRE(ray3d::RayPointDistance(cam.ScreenRay(px, py, kW, kH), endpoint) == Approx(0.0).margin(1e-3));
+
+  // Five pixels off: comfortably inside the aperture.
+  const double dNear = ray3d::RayPointDistance(cam.ScreenRay(px + 5.f, py, kW, kH), endpoint);
+  INFO("5px offset -> " << dNear << " world, tol " << tol);
+  REQUIRE(dNear < static_cast<double>(tol));
+
+  // Fifty pixels off: comfortably outside it, so the tolerance still discriminates.
+  const double dFar = ray3d::RayPointDistance(cam.ScreenRay(px + 50.f, py, kW, kH), endpoint);
+  REQUIRE(dFar > static_cast<double>(tol));
+}
+
+TEST_CASE("Elevated geometry is reachable when the work plane is not", "[camera][snap]") {
+  // The case that motivated ray-based snapping: the cursor ray crosses the work plane (Z=0) at one
+  // XY and an elevated endpoint at another. A plan-view XY test measures to the wrong place; the
+  // ray test finds the endpoint the user is actually pointing at.
+  constexpr float kW = 1600.f, kH = 900.f, kHalfH = 50.f;
+  Camera cam = Camera::Plan(0.0, 0.0, kHalfH);
+  cam.Orbit(0.f, -60.f);  // elevation 30
+
+  const ray3d::Vec3 raised{10.0, 10.0, 25.0};
+  float px = 0.f, py = 0.f;
+  cam.WorldToScreen(raised.x, raised.y, raised.z, kW, kH, &px, &py);
+  const ray3d::Ray r = cam.ScreenRay(px, py, kW, kH);
+
+  REQUIRE(ray3d::RayPointDistance(r, raised) == Approx(0.0).margin(1e-3));
+
+  // Where that same ray meets the work plane is a genuinely different point — which is exactly why
+  // the plan-view test could not find the endpoint.
+  ray3d::Vec3 onPlane;
+  REQUIRE(ray3d::RayPlaneIntersect(r, ray3d::Plane{}, &onPlane));
+  const double planDist = std::hypot(onPlane.x - raised.x, onPlane.y - raised.y);
+  REQUIRE(planDist > 10.0);
+}

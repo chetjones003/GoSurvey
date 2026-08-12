@@ -42,6 +42,9 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.viewportPanX           = cmd.viewportPanX;
   doc.viewportPanY           = cmd.viewportPanY;
   doc.viewportZoom           = cmd.viewportZoom;
+  doc.viewportPanZ           = cmd.viewportPanZ;
+  doc.viewportAzimuthDeg     = cmd.viewportAzimuthDeg;    // camera orientation is per-drawing (REQ-058)
+  doc.viewportElevationDeg   = cmd.viewportElevationDeg;
   doc.worldDocumentOriginX   = cmd.worldDocumentOriginX;
   doc.worldDocumentOriginY   = cmd.worldDocumentOriginY;
   doc.userLinesFlat          = cmd.userLinesFlat;
@@ -81,6 +84,10 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.viewportPanX               = doc.viewportPanX;
   cmd.viewportPanY               = doc.viewportPanY;
   cmd.viewportZoom               = doc.viewportZoom;
+  cmd.viewportPanZ               = doc.viewportPanZ;
+  cmd.viewportAzimuthDeg         = doc.viewportAzimuthDeg;
+  cmd.viewportElevationDeg       = doc.viewportElevationDeg;
+  cmd.viewAnimActive             = false;  // never resume another tab's animation
   cmd.worldDocumentOriginX       = doc.worldDocumentOriginX;
   cmd.worldDocumentOriginY       = doc.worldDocumentOriginY;
   cmd.userLinesFlat              = doc.userLinesFlat;
@@ -1963,6 +1970,7 @@ const CmdEntry kRegistry[] = {
     {"polyline", "pl", "Draw a connected polyline"},
     {"rect", "rectang, rectangle", "Draw a rectangle (two opposite corners)"},
     {"trimstate", "", "TRIM mode: 0 = draw a line to trim (default), 1 = pick cutting edges"},
+    {"elev", "ucs", "Elevation new geometry is drawn at (W = world Z 0)"},
     {"arc", "", "Draw an arc"},
     {"ellipse", "el", "Draw an ellipse"},
     {"hatch", "h, bhatch", "Fill a closed area (pick an internal point)"},
@@ -2236,9 +2244,8 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<
   PushUndoSnapshot(st, "Circle");
   st.userCirclesCxCyZR.push_back(cx);
   st.userCirclesCxCyZR.push_back(cy);
-  // Z = 0: a new circle is drawn on the plan work plane. It becomes the UCS elevation once the
-  // work plane exists (REQ-058 / TASK-035).
-  st.userCirclesCxCyZR.push_back(0.f);
+  // A new circle lands on the active work plane (REQ-058) — the ELEV command moves it.
+  st.userCirclesCxCyZR.push_back(CadCommitElevation(st));
   st.userCirclesCxCyZR.push_back(r);
   st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
   BumpCadGpuCache(st);
@@ -2291,6 +2298,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "rect") {
     StartRectCommand(st, log);
+    return true;
+  }
+  if (primary == "elev" || primary == "ucs") {
+    StartElevCommand(st, log);
     return true;
   }
   if (primary == "trimstate") {
@@ -4614,6 +4625,7 @@ static void CommitArcThreePoints(AppCommandState& st, float ax, float ay, float 
   arc.r = r;
   arc.startRad = static_cast<float>(sr);
   arc.sweepRad = static_cast<float>(sw);
+  arc.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
   PushUndoSnapshot(st, "Arc");
   st.userArcs.push_back(arc);
   st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
@@ -7057,8 +7069,8 @@ void CommitRectangle(AppCommandState& st, float x1, float y1, float x2, float y2
     for (int i = 0; i < 4; ++i) {
       st.userPolylineVerts.push_back(xs[i]);
       st.userPolylineVerts.push_back(ys[i]);
-      // Z = 0 — see SubmitLineVertex: new geometry sits on the work plane (REQ-058 pending).
-      st.userPolylineVerts.push_back(0.f);
+      // Lands on the active work plane (REQ-058) — see SubmitLineVertex.
+      st.userPolylineVerts.push_back(CadCommitElevation(st));
     }
     st.userPolylineOffsets.push_back(baseVert + 4);
     st.userPolylineClosed.push_back(1u);
@@ -7177,6 +7189,7 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
       ann.insY = ann.boxMinY;
       ann.plottedHeightInches = st.defaultPlottedTextHeightInches;
       ann.text = normalized;
+      ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
       StampActiveTextStyleOnNewText(st, ann);  // REQ-044: new MTEXT adopts the active text style
       st.cadAnnotations.push_back(std::move(ann));
       st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
@@ -10344,6 +10357,46 @@ bool ApplyTrimStateValue(AppCommandState& st, int value, std::vector<std::string
   return true;
 }
 
+// ELEV — set the elevation new geometry is drawn at (REQ-058).
+//
+// This is the UCS in the only form the application currently produces: the work plane stays
+// parallel to world XY and moves in Z. AutoCAD splits the same idea across ELEV (elevation) and
+// UCS (a full coordinate system); only the elevation half exists here, so it carries AutoCAD's
+// name for that half rather than pretending to be a full UCS.
+void StartElevCommand(AppCommandState& st, std::vector<std::string>& log) {
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::Elev;
+  char buf[160];
+  std::snprintf(buf, sizeof(buf), "Specify new default elevation <%.4f>:  (W = back to world Z 0)",
+                static_cast<double>(CadWorkPlaneElevation(st)));
+  log.push_back(buf);
+}
+
+// Shared by the prompt and the inline `ELEV 12.5` form, so neither can set a value the other would
+// reject (REQ-201).
+bool ApplyElevValue(AppCommandState& st, double z, std::vector<std::string>& log) {
+  if (!std::isfinite(z)) {
+    log.push_back("ELEV — elevation must be a finite number.");
+    return false;
+  }
+  st.ucsOriginZ = z;
+  char buf[128];
+  std::snprintf(buf, sizeof(buf), "Elevation = %.4f — new geometry is drawn on this plane.", z);
+  log.push_back(buf);
+  return true;
+}
+
+// Reset the work plane to world XY. Kept separate from ApplyElevValue so the status readout and
+// the "W" option have one shared meaning of "world".
+void ApplyUcsWorld(AppCommandState& st, std::vector<std::string>& log) {
+  st.ucsOriginX = st.ucsOriginY = st.ucsOriginZ = 0.0;
+  st.ucsNormalX = st.ucsNormalY = 0.0;
+  st.ucsNormalZ = 1.0;
+  st.ucsAzimuthDeg = 0.f;
+  log.push_back("UCS = World — new geometry is drawn on the world XY plane.");
+}
+
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // paper space: geometry + viewports
     const bool hadEntities = !st.selectedPaperEntities.empty();
@@ -10621,6 +10674,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("RECT canceled.");
   else if (st.active == AppCommandState::Kind::TrimState)
     log.push_back("TRIMSTATE unchanged (" + std::to_string(st.trimState) + ").");
+  else if (st.active == AppCommandState::Kind::Elev)
+    log.push_back("Elevation unchanged.");
   else if (st.active == AppCommandState::Kind::Text)
     log.push_back("TEXT canceled.");
   else if (st.active == AppCommandState::Kind::Mtext)
@@ -10736,6 +10791,7 @@ static void FinishEllipseFromRatio(AppCommandState& st, float ratio, std::vector
   ell.majVx = vx0;
   ell.majVy = vy0;
   ell.ratio = ratio;
+  ell.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
   PushUndoSnapshot(st, "Ellipse");
   st.userEllipses.push_back(ell);
   st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
@@ -10776,6 +10832,7 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
 
   if (st.linePhase == AppCommandState::LinePhase::NeedFirstPoint) {
     st.anchorX = x;
+    st.anchorZ = CadCommitElevation(st);
     st.anchorY = y;
     st.linePhase = AppCommandState::LinePhase::NeedNextPoint;
     log.push_back("First point set. Next: click; X, Y; @dx,dy; [A]zimuth, [2P];");
@@ -10793,19 +10850,20 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
     L->paperLines.push_back(0.f);
     L->paperLineAttrs.push_back(MakeNewEntityAttrs(st));
   } else {
-    // Z = 0: new geometry lands on the active work plane, which is world XY until the UCS
-    // exists (REQ-058 / TASK-035). This is the one place that decision needs to change.
+    // New geometry lands on the active work plane (REQ-058); ELEV moves that plane, and the
+    // default is world XY, so this is 0 until the user changes it.
     st.userLinesFlat.push_back(st.anchorX);
     st.userLinesFlat.push_back(st.anchorY);
-    st.userLinesFlat.push_back(0.f);
+    st.userLinesFlat.push_back(st.anchorZ);          // the anchor's own elevation
     st.userLinesFlat.push_back(x);
     st.userLinesFlat.push_back(y);
-    st.userLinesFlat.push_back(0.f);
+    st.userLinesFlat.push_back(CadCommitElevation(st));  // this end's (snap overrides ELEV)
     st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
   }
   BumpCadGpuCache(st);
 
   st.anchorX = x;
+  st.anchorZ = CadCommitElevation(st);
   st.anchorY = y;
   ++st.lineDraftSegments;
   log.push_back("Segment added — next point or ESC to finish.");
@@ -10821,8 +10879,9 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
     st.polylineDraftVerts.clear();
     st.polylineDraftVerts.push_back(x);
     st.polylineDraftVerts.push_back(y);
-    st.polylineDraftVerts.push_back(0.f);
+    st.polylineDraftVerts.push_back(CadCommitElevation(st));  // snap overrides ELEV (REQ-058)
     st.anchorX = x;
+    st.anchorZ = CadCommitElevation(st);
     st.anchorY = y;
     st.polyFirstX = x;
     st.polyFirstY = y;
@@ -10834,9 +10893,10 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
 
   st.polylineDraftVerts.push_back(x);
   st.polylineDraftVerts.push_back(y);
-  st.polylineDraftVerts.push_back(0.f);
+  st.polylineDraftVerts.push_back(CadCommitElevation(st));  // snap overrides ELEV (REQ-058)
   ++st.polyDraftSegments;
   st.anchorX = x;
+  st.anchorZ = CadCommitElevation(st);
   st.anchorY = y;
   log.push_back("POLYLINE vertex added.");
   return true;
@@ -11044,6 +11104,30 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         return;
       }
     }
+    // `ELEV 12.5` / `UCS W` — the inline forms. Falling through to the prompt when no argument
+    // follows is what makes bare `ELEV` still work.
+    if (plotTok == "elev" || plotTok == "ucs") {
+      std::string evArg;
+      if (issIdle >> evArg) {
+        const std::string evLow = StringUtil::toLowerAsciiCopy(evArg);
+        if (evLow == "w" || evLow == "world") {
+          ApplyUcsWorld(st, log);
+          return;
+        }
+        try {
+          size_t used = 0;
+          const double ez = std::stod(evArg, &used);
+          if (used == evArg.size()) {
+            ApplyElevValue(st, ez, log);
+            return;
+          }
+        } catch (...) {
+          // Not a number — fall through to the message below rather than silently ignoring it.
+        }
+        log.push_back("ELEV — usage: ELEV <elevation>, or ELEV W for world.");
+        return;
+      }
+    }
     if (plotTok == "plotscale" || plotTok == "pscale") {
       float pv = 0.f;
       if (!(issIdle >> pv) || pv <= 0.f)
@@ -11085,6 +11169,32 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     if (ApplyTrimStateValue(st, tv, log))
+      st.active = AppCommandState::Kind::None;
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Elev) {
+    const std::string evIn = StringUtil::trimCopy(line);
+    if (evIn.empty()) {  // bare Enter keeps the current plane, as a system-variable prompt does
+      char buf[96];
+      std::snprintf(buf, sizeof(buf), "Elevation unchanged (%.4f).", static_cast<double>(CadWorkPlaneElevation(st)));
+      log.push_back(buf);
+      st.active = AppCommandState::Kind::None;
+      return;
+    }
+    const std::string evLow = StringUtil::toLowerAsciiCopy(evIn);
+    if (evLow == "w" || evLow == "world") {
+      ApplyUcsWorld(st, log);
+      st.active = AppCommandState::Kind::None;
+      return;
+    }
+    double ez = 0.0;
+    std::istringstream evIss(evIn);
+    if (!(evIss >> ez) || !(evIss >> std::ws).eof()) {
+      log.push_back("ELEV — enter an elevation, or W for world (blank Enter keeps the current value).");
+      return;
+    }
+    if (ApplyElevValue(st, ez, log))
       st.active = AppCommandState::Kind::None;
     return;
   }
@@ -11369,6 +11479,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           L->paperTextAttrs.push_back(MakeNewEntityAttrs(st));
         } else {
           ann.plottedHeightInches = st.textHeightDraft / std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+          ann.insZ = CadCommitElevation(st);  // model TEXT: snap overrides ELEV (REQ-058)
           StampActiveTextStyleOnNewText(st, ann);  // REQ-044: new TEXT adopts the active text style
           st.cadAnnotations.push_back(std::move(ann));
           st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));

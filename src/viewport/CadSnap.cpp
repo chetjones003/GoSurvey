@@ -211,15 +211,30 @@ constexpr float kHugePickDistSq = 1.e30f;
 }
 
 struct SnapPickAccum {
+  /// When set, candidates are measured against this world ray instead of the plan-view XY
+  /// distance (REQ-058). The cursor ray crosses the work plane at one XY and elevated geometry at
+  /// another, so a plan test measures to the wrong place and nothing within tolerance is found —
+  /// which is why snapping appeared to stop working entirely once the view was orbited.
+  const ray3d::Ray* ray = nullptr;
   Hit best{};
   float bestPickDistSq = 0.f;
   int bestPri = -1;
   float bestTieDistSq = 0.f;
 };
 
+/// \param snapZ elevation of the candidate point. Only consulted when \c acc->ray is set; the
+///        plan-view path ignores Z exactly as it always has.
 void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float snapY, Kind kind, float pickDistSq,
-                  float tolWorld) {
+                  float tolWorld, float snapZ = 0.f) {
   const float tol2 = tolWorld * tolWorld;
+  // Orbited: re-measure the candidate against the cursor ray in 3D. Doing it here — at the one
+  // place every candidate funnels through — means each generator keeps its own 2D construction
+  // logic and only the comparison changes.
+  if (acc->ray) {
+    const double d = ray3d::RayPointDistance(
+        *acc->ray, ray3d::Vec3{static_cast<double>(snapX), static_cast<double>(snapY), static_cast<double>(snapZ)});
+    pickDistSq = static_cast<float>(d * d);
+  }
   if (!(pickDistSq <= tol2) || pickDistSq > 1.e28f)
     return;
   const int pri = Priority(kind);
@@ -230,6 +245,7 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     acc->best.kind = kind;
     acc->best.x = snapX;
     acc->best.y = snapY;
+    acc->best.z = snapZ;
     acc->bestPickDistSq = pickDistSq;
     acc->bestPri = pri;
     acc->bestTieDistSq = tie;
@@ -239,6 +255,7 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     acc->best.kind = kind;
     acc->best.x = snapX;
     acc->best.y = snapY;
+    acc->best.z = snapZ;
     acc->bestPickDistSq = pickDistSq;
     acc->bestPri = pri;
     acc->bestTieDistSq = tie;
@@ -250,15 +267,17 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     acc->best.kind = kind;
     acc->best.x = snapX;
     acc->best.y = snapY;
+    acc->best.z = snapZ;
     acc->bestPri = pri;
     acc->bestTieDistSq = tie;
   }
 }
 
-void Consider(SnapPickAccum* acc, float wx, float wy, float px, float py, Kind kind, float tolWorld) {
+void Consider(SnapPickAccum* acc, float wx, float wy, float px, float py, Kind kind, float tolWorld,
+              float pz = 0.f) {
   const float dx = px - wx;
   const float dy = py - wy;
-  ConsiderSnap(acc, wx, wy, px, py, kind, dx * dx + dy * dy, tolWorld);
+  ConsiderSnap(acc, wx, wy, px, py, kind, dx * dx + dy * dy, tolWorld, pz);
 }
 
 /// Foot of perpendicular from \p ref onto segment AB (clamped). Cursor \p wx,\p wy only gates distance.
@@ -334,8 +353,10 @@ void AppendPerpendicularFromRef(float refX, float refY, float wx, float wy, floa
 } // namespace
 
 Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActive, float tolWorld,
-             SnapExclude exclude) {
+             SnapExclude exclude, const ray3d::Ray* pickRay) {
   SnapPickAccum acc{};
+  // Null (plan view, paper space) leaves every candidate measured exactly as before.
+  acc.ray = (pickRay && pickRay->valid()) ? pickRay : nullptr;
 
   float refPx = 0.f;
   float refPy = 0.f;
@@ -350,12 +371,14 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       const float y0 = L[i + 1];
       const float x1 = L[i + 3];
       const float y1 = L[i + 4];
+      const float z0 = L[i + 2];
+      const float z1 = L[i + 5];
       if (cmd.objectSnapEndpoint) {
-        Consider(&acc, wx, wy, x0, y0, Kind::Endpoint, tolWorld);
-        Consider(&acc, wx, wy, x1, y1, Kind::Endpoint, tolWorld);
+        Consider(&acc, wx, wy, x0, y0, Kind::Endpoint, tolWorld, z0);
+        Consider(&acc, wx, wy, x1, y1, Kind::Endpoint, tolWorld, z1);
       }
       if (cmd.objectSnapMidpoint)
-        Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld);
+        Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld, 0.5f * (z0 + z1));
       if (havePerpRef)
         AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc);
     }
@@ -370,7 +393,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       const float cy = C[i + 1];
       const float r = C[i + 3];
       const float p2 = CircleCenterPickDistSq(wx, wy, cx, cy, r, tolWorld);
-      ConsiderSnap(&acc, wx, wy, cx, cy, Kind::Center, p2, tolWorld);
+      ConsiderSnap(&acc, wx, wy, cx, cy, Kind::Center, p2, tolWorld, C[i + 2]);
     }
   }
 
@@ -387,12 +410,14 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       const float ay = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 1)];
       const float bx = cmd.userPolylineVerts[static_cast<size_t>(ib * 3)];
       const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
+      const float az = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 2)];
+      const float bz = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 2)];
       if (cmd.objectSnapEndpoint) {
-        Consider(&acc, wx, wy, ax, ay, Kind::Endpoint, tolWorld);
-        Consider(&acc, wx, wy, bx, by, Kind::Endpoint, tolWorld);
+        Consider(&acc, wx, wy, ax, ay, Kind::Endpoint, tolWorld, az);
+        Consider(&acc, wx, wy, bx, by, Kind::Endpoint, tolWorld, bz);
       }
       if (cmd.objectSnapMidpoint)
-        Consider(&acc, wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld);
+        Consider(&acc, wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld, 0.5f * (az + bz));
       if (havePerpRef)
         AppendPerpendicularFromRef(refPx, refPy, wx, wy, ax, ay, bx, by, tolWorld, &acc);
     };
@@ -426,9 +451,9 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       double ex = 0.;
       double ey = 0.;
       CirclePointWorld(dcx, dcy, dr, static_cast<double>(a.startRad), &ex, &ey);
-      Consider(&acc, wx, wy, static_cast<float>(ex), static_cast<float>(ey), Kind::Endpoint, tolWorld);
+      Consider(&acc, wx, wy, static_cast<float>(ex), static_cast<float>(ey), Kind::Endpoint, tolWorld, a.z);
       CirclePointWorld(dcx, dcy, dr, tEnd, &ex, &ey);
-      Consider(&acc, wx, wy, static_cast<float>(ex), static_cast<float>(ey), Kind::Endpoint, tolWorld);
+      Consider(&acc, wx, wy, static_cast<float>(ex), static_cast<float>(ey), Kind::Endpoint, tolWorld, a.z);
     }
     for (int i = 0; i < kArcSnapSeg; ++i) {
       const double u0 = static_cast<double>(i) / static_cast<double>(kArcSnapSeg);
@@ -461,7 +486,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       continue;
     if (cmd.objectSnapCenter) {
       const float p2 = EllipseCenterPickDistSq(wx, wy, el, tolWorld);
-      ConsiderSnap(&acc, wx, wy, el.cx, el.cy, Kind::Center, p2, tolWorld);
+      ConsiderSnap(&acc, wx, wy, el.cx, el.cy, Kind::Center, p2, tolWorld, el.z);
     }
     const float ux = el.majVx / ma;
     const float uy = el.majVy / ma;
@@ -491,7 +516,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
         SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
     for (const SurveyPoint& sp : cmd.surveyPoints) {
       const float p2 = MinDistSqToSurveyMarker(wx, wy, sp.easting, sp.northing, arm);
-      ConsiderSnap(&acc, wx, wy, sp.easting, sp.northing, Kind::SurveyCenter, p2, tolWorld);
+      ConsiderSnap(&acc, wx, wy, sp.easting, sp.northing, Kind::SurveyCenter, p2, tolWorld, sp.elevation);  // elevation IS the point's Z (REQ-057)
     }
   }
 

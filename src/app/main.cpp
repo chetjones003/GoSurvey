@@ -425,9 +425,12 @@ int main()
       }
     }
     DrawCommandLinePanel(cmdLog, cmdBuf, static_cast<int>(sizeof(cmdBuf)), cmd);
+    // Z was hard-coded 0 while the readout claimed to show a coordinate — it now reports the
+    // cursor's real elevation (the work plane, or the snapped point's own Z). Absolute, never
+    // rebased: the document origin is X/Y-only (ADR-025 D2).
     DrawCadStatusBarStrip(cmd, CadCoord::WorldXFromLocal(cmd, static_cast<float>(curX)),
-                          CadCoord::WorldYFromLocal(cmd, static_cast<float>(curY)), 0.f, &orthoEnabled,
-                          &gridVisible);
+                          CadCoord::WorldYFromLocal(cmd, static_cast<float>(curY)), cmd.uiCursorWorldZ,
+                          &orthoEnabled, &gridVisible);
 
     // LINE/POLYLINE AP: after two picks the bottom command InputText is hidden — Enter must still lock bearing.
     // Keyboard-only "A" then bearing: Enter with empty buffer cancels awaiting mode when no text field is focused.

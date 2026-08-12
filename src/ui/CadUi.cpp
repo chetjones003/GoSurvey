@@ -5304,8 +5304,17 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   {
     const int p = cmd.displayLinearPrecision;
     ImGui::AlignTextToFramePadding();
-    ImGui::Text("X %s  Y %s  Z %s  |  UCS: World", FormatLinear(cursorX, p).c_str(),
-                FormatLinear(cursorY, p).c_str(), FormatLinear(cursorZ, p).c_str());
+    // The UCS field used to be the literal word "World". It now reports the actual work plane, so
+    // a raised elevation is visible — otherwise geometry silently lands somewhere the user did not
+    // expect and nothing on screen says why (REQ-058 / REQ-201).
+    if (CadUcsIsWorld(cmd)) {
+      ImGui::Text("X %s  Y %s  Z %s  |  UCS: World", FormatLinear(cursorX, p).c_str(),
+                  FormatLinear(cursorY, p).c_str(), FormatLinear(cursorZ, p).c_str());
+    } else {
+      ImGui::Text("X %s  Y %s  Z %s  |  UCS: Elev %s", FormatLinear(cursorX, p).c_str(),
+                  FormatLinear(cursorY, p).c_str(), FormatLinear(cursorZ, p).c_str(),
+                  FormatLinear(static_cast<double>(CadWorkPlaneElevation(cmd)), p).c_str());
+    }
   }
 
   // ---- RIGHT (right-aligned): space toggle + mode tools ----
@@ -6181,8 +6190,8 @@ static void AddAlignedDimText(ImDrawList* dl, ImFont* font, float fontPx, const 
   RotateImDrawListVertsXY(dl, v0, v1, pivotSp, std::cos(screenAngRad), std::sin(screenAngRad));
 }
 
-static int HitTestDimGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 avail, float worldLeft, float worldRight,
-                          float worldBottom, float worldTop, const CadAnnotation& ann, float gripRadiusPx) {
+static int HitTestDimGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 avail, const Camera& cam,
+                          const CadAnnotation& ann, float gripRadiusPx) {
   if (ann.kind != CadAnnotation::Kind::DimAligned && ann.kind != CadAnnotation::Kind::DimLinear)
     return -1;
   float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
@@ -6190,14 +6199,15 @@ static int HitTestDimGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 av
     return -1;
   const float wx[5] = {ann.dimExt1X, ann.dimExt2X, sx1, sx2, ann.insX};
   const float wy[5] = {ann.dimExt1Y, ann.dimExt2Y, sy1, sy2, ann.insY};
-  const float denx = worldRight - worldLeft + 1e-12f;
-  const float deny = worldTop - worldBottom + 1e-12f;
   const float r2 = gripRadiusPx * gripRadiusPx;
+  // Camera-projected so the grip targets stay under the grips as drawn (REQ-058); in plan view
+  // this reduces to the previous linear mapping exactly.
   for (int i = 4; i >= 0; --i) {
-    const float u = (wx[i] - worldLeft) / denx;
-    const float v = (worldTop - wy[i]) / deny;
-    const float sx = imgPos.x + u * avail.x;
-    const float sy = imgPos.y + v * avail.y;
+    float sx = 0.f, sy = 0.f;
+    cam.WorldToScreen(static_cast<double>(wx[i]), static_cast<double>(wy[i]), static_cast<double>(ann.insZ),
+                      avail.x, avail.y, &sx, &sy);
+    sx += imgPos.x;
+    sy += imgPos.y;
     const float dx = mouseSx - sx;
     const float dy = mouseSy - sy;
     if (dx * dx + dy * dy <= r2)
@@ -6206,21 +6216,21 @@ static int HitTestDimGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 av
   return -1;
 }
 
-static int HitTestMtextGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 avail, float worldLeft,
-                            float worldRight, float worldBottom, float worldTop, const CadAnnotation& ann,
-                            float gripRadiusPx) {
+static int HitTestMtextGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 avail, const Camera& cam,
+                            const CadAnnotation& ann, float gripRadiusPx) {
   if (ann.kind != CadAnnotation::Kind::Mtext)
     return -1;
-  const float denx = worldRight - worldLeft + 1e-12f;
-  const float deny = worldTop - worldBottom + 1e-12f;
   const float r2 = gripRadiusPx * gripRadiusPx;
+  // Camera-projected — see HitTestDimGrip.
+  auto toScreen = [&](float wx, float wy, float* sx, float* sy) {
+    cam.WorldToScreen(static_cast<double>(wx), static_cast<double>(wy), static_cast<double>(ann.insZ), avail.x,
+                      avail.y, sx, sy);
+    *sx += imgPos.x;
+    *sy += imgPos.y;
+  };
   if (ann.surveyPointLabelFor >= 0) {
-    const float cx = 0.5f * (ann.boxMinX + ann.boxMaxX);
-    const float cy = 0.5f * (ann.boxMinY + ann.boxMaxY);
-    const float u = (cx - worldLeft) / denx;
-    const float v = (worldTop - cy) / deny;
-    const float sx = imgPos.x + u * avail.x;
-    const float sy = imgPos.y + v * avail.y;
+    float sx = 0.f, sy = 0.f;
+    toScreen(0.5f * (ann.boxMinX + ann.boxMaxX), 0.5f * (ann.boxMinY + ann.boxMaxY), &sx, &sy);
     const float dx = mouseSx - sx;
     const float dy = mouseSy - sy;
     if (dx * dx + dy * dy <= r2)
@@ -6230,10 +6240,8 @@ static int HitTestMtextGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 
   const float wx[4] = {ann.boxMinX, ann.boxMaxX, ann.boxMaxX, ann.boxMinX};
   const float wy[4] = {ann.boxMinY, ann.boxMinY, ann.boxMaxY, ann.boxMaxY};
   for (int i = 0; i < 4; ++i) {
-    const float u = (wx[i] - worldLeft) / denx;
-    const float v = (worldTop - wy[i]) / deny;
-    const float sx = imgPos.x + u * avail.x;
-    const float sy = imgPos.y + v * avail.y;
+    float sx = 0.f, sy = 0.f;
+    toScreen(wx[i], wy[i], &sx, &sy);
     const float dx = mouseSx - sx;
     const float dy = mouseSy - sy;
     if (dx * dx + dy * dy <= r2)
@@ -6510,7 +6518,19 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
 
   const float denx = worldRight - worldLeft + 1e-12f;
   const float deny = worldTop - worldBottom + 1e-12f;
+  // Model space projects through the camera so the editor box sits over the text it is editing
+  // when the view is orbited (REQ-058); paper space keeps the sheet's own 2D mapping, since a
+  // sheet never tilts (ADR-025 (g)). Plan view is identical either way.
+  const Camera edCam = CadViewCamera(cmd);
+  const bool edPaper = cmd.mtextRichEditorPaper;
   auto ws = [&](float wx, float wy, ImVec2* o) {
+    if (!edPaper) {
+      float sx = 0.f, sy = 0.f;
+      edCam.WorldToScreen(static_cast<double>(wx), static_cast<double>(wy), 0.0, avail.x, avail.y, &sx, &sy);
+      o->x = imgPos.x + sx;
+      o->y = imgPos.y + sy;
+      return;
+    }
     const float u = (wx - worldLeft) / denx;
     const float v = (worldTop - wy) / deny;
     o->x = imgPos.x + u * avail.x;
@@ -7455,8 +7475,25 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const double aspectD = static_cast<double>(avail.x) / static_cast<double>(std::max(avail.y, 1.f));
       const double halfH = (1.0 / std::max(static_cast<double>(*zoom), 1.e-9)) * 50.0;
       const double halfW = halfH * aspectD;
-      *panX -= (static_cast<double>(d.x) / static_cast<double>(std::max(avail.x, 1.f))) * (2.0 * halfW);
-      *panY += (static_cast<double>(d.y) / static_cast<double>(std::max(avail.y, 1.f))) * (2.0 * halfH);
+      const double wx = (static_cast<double>(d.x) / static_cast<double>(std::max(avail.x, 1.f))) * (2.0 * halfW);
+      const double wy = (static_cast<double>(d.y) / static_cast<double>(std::max(avail.y, 1.f))) * (2.0 * halfH);
+      if (modelSpace && !CadViewIsPlan(cmd)) {
+        // Pan along the CAMERA's right/up axes, not world X/Y (REQ-058). Once the view tilts, the
+        // screen axes no longer line up with world axes, so moving the target in world XY makes
+        // the model slide diagonally and at the wrong rate — the "not 1 to 1" feel. Moving along
+        // the camera basis keeps the point under the cursor under the cursor, which is what pan
+        // means. The up axis has a Z component when tilted, which is why the target needs a Z.
+        float R[16];
+        CadViewCamera(cmd).ViewRotation(R);
+        const double rx = R[0], ry = R[4], rz = R[8];  // camera right, in world axes
+        const double ux = R[1], uy = R[5], uz = R[9];  // camera up, in world axes
+        *panX += -rx * wx + ux * wy;
+        *panY += -ry * wx + uy * wy;
+        cmd.viewportPanZ += -rz * wx + uz * wy;
+      } else {
+        *panX -= wx;
+        *panY += wy;
+      }
     }
   }
 
@@ -8144,13 +8181,28 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const bool orbited = modelSpace && !CadViewIsPlan(cmd);
     if (orbited) {
       const Camera curCam = CadViewCamera(cmd);
+      const ray3d::Ray curRay = curCam.ScreenRay(mx, my, avail.x, avail.y);
       ray3d::Vec3 hit;
-      if (ray3d::RayPlaneIntersect(curCam.ScreenRay(mx, my, avail.x, avail.y), CadActiveWorkPlane(cmd), &hit)) {
+      if (ray3d::RayPlaneIntersect(curRay, CadActiveWorkPlane(cmd), &hit)) {
         rawX = hit.x;
         rawY = hit.y;
         rawZ = hit.z;
       } else {
-        cursorValid = false;  // work plane edge-on to the view: no point under the cursor
+        // The work plane is edge-on — exactly what a FRONT / BACK / LEFT / RIGHT view is against
+        // the default world-XY plane. There is no intersection, but refusing a coordinate here
+        // blanks the crosshair and makes those views unusable. Fall back to a plane through the
+        // work-plane origin that FACES the camera, which always yields a point and is what the
+        // user is visually pointing at in an elevation view.
+        ray3d::Plane facing;
+        facing.point = CadActiveWorkPlane(cmd).point;
+        facing.normal = ray3d::Scale(curCam.ForwardWorld(), -1.0);
+        if (ray3d::RayPlaneIntersect(curRay, facing, &hit)) {
+          rawX = hit.x;
+          rawY = hit.y;
+          rawZ = hit.z;
+        } else {
+          cursorValid = false;  // genuinely degenerate (zero-size viewport); no point exists
+        }
       }
     } else {
       const float u = mx / std::max(avail.x, 1.f);
@@ -8284,11 +8336,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           exclude.type  = cmd.entityGripType;
           exclude.index = cmd.entityGripEntityIndex;
         }
-        snap = CadSnap::FindBest(rawX, rawY, cmd, midCmd, tol, exclude);
+        snap = CadSnap::FindBest(rawX, rawY, cmd, midCmd, tol, exclude, cursorRayPtr);  // 3D when orbited (REQ-058)
         if (snap.valid) {
           cmd.viewportSnapPickValid = true;
           cmd.viewportSnapPickWorldX = snap.x;
           cmd.viewportSnapPickWorldY = snap.y;
+          cmd.viewportSnapPickWorldZ = snap.z;  // osnap overrides the work-plane elevation (REQ-058)
           if (out_snap)
             *out_snap = snap;
           const double dx = static_cast<double>(snap.x) - rawX;
@@ -8305,6 +8358,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           }
           *outCursorX = rawX + alpha * dx;
           *outCursorY = rawY + alpha * dy;
+          // Carry the snapped point's elevation too, so the crosshair — which projects through the
+          // camera — is drawn at the point it snapped to rather than on the work plane (REQ-058).
+          // Eased by the same alpha as X/Y so the crosshair does not jump in Z ahead of the pull.
+          cmd.uiCursorWorldZ = static_cast<float>(rawZ + alpha * (static_cast<double>(snap.z) - rawZ));
         } else {
           if (out_snap)
             out_snap->valid = false;
@@ -8574,10 +8631,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const ray3d::Ray* pickRayPtr = pickOrbited ? &pickRay : nullptr;
     if (pickOrbited) {
       ray3d::Vec3 pickHit;
-      if (ray3d::RayPlaneIntersect(pickRay, CadActiveWorkPlane(cmd), &pickHit)) {
-        rawPickX = pickHit.x;
-        rawPickY = pickHit.y;
+      // Same edge-on fallback as the hover seam above — the two must resolve the cursor
+      // identically or clicking lands somewhere other than where the crosshair sat.
+      ray3d::Plane pickPlane = CadActiveWorkPlane(cmd);
+      if (!ray3d::RayPlaneIntersect(pickRay, pickPlane, &pickHit)) {
+        pickPlane.normal = ray3d::Scale(pickCam.ForwardWorld(), -1.0);
+        ray3d::RayPlaneIntersect(pickRay, pickPlane, &pickHit);
       }
+      rawPickX = pickHit.x;
+      rawPickY = pickHit.y;
     }
     const float rawPickXf = static_cast<float>(rawPickX);
     const float rawPickYf = static_cast<float>(rawPickY);
@@ -8701,17 +8763,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (aix >= 0 && static_cast<size_t>(aix) < cmd.cadAnnotations.size()) {
           const CadAnnotation& can = cmd.cadAnnotations[static_cast<size_t>(aix)];
           if (can.kind == CadAnnotation::Kind::Mtext) {
-            gripCorner =
-                HitTestMtextGrip(mouse.x, mouse.y, imgPos, avail, static_cast<float>(worldLeft),
-                                 static_cast<float>(worldRight), static_cast<float>(worldBottom),
-                                 static_cast<float>(worldTop), can,
-                                 10.f);
+            gripCorner = HitTestMtextGrip(mouse.x, mouse.y, imgPos, avail, CadViewCamera(cmd), can, 10.f);
           } else if (can.kind == CadAnnotation::Kind::DimAligned || can.kind == CadAnnotation::Kind::DimLinear) {
             dimGripHit =
-                HitTestDimGrip(mouse.x, mouse.y, imgPos, avail, static_cast<float>(worldLeft),
-                               static_cast<float>(worldRight), static_cast<float>(worldBottom),
-                               static_cast<float>(worldTop), can,
-                               10.f);
+                HitTestDimGrip(mouse.x, mouse.y, imgPos, avail, CadViewCamera(cmd), can, 10.f);
           }
         }
       }
@@ -9090,12 +9145,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   // --- PDF overlays: insertion bounding-box preview + selection border ---
   {
-    const double denx = std::max(worldRight - worldLeft, 1e-12);
-    const double deny = std::max(worldTop - worldBottom, 1e-12);
+    // PDF underlays are model-space attachments, so their overlay projects through the camera
+    // (REQ-058). They are flat sheets with no elevation of their own, hence Z = 0.
+    const Camera pdfCam = CadViewCamera(cmd);
     auto wts = [&](float wx, float wy) -> ImVec2 {
-      const float u = static_cast<float>((static_cast<double>(wx) - worldLeft) / denx);
-      const float v = static_cast<float>((worldTop - static_cast<double>(wy)) / deny);
-      return {imgPos.x + u * avail.x, imgPos.y + v * avail.y};
+      float sx = 0.f, sy = 0.f;
+      pdfCam.WorldToScreen(static_cast<double>(wx), static_cast<double>(wy), 0.0, avail.x, avail.y, &sx, &sy);
+      return {imgPos.x + sx, imgPos.y + sy};
     };
     ImDrawList* dl = ImGui::GetWindowDrawList();
 
@@ -10171,13 +10227,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const ImU32 lineCol = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
                                        static_cast<int>(rgba[2] * 255.f), static_cast<int>(rgba[3] * 255.f));
         constexpr ImU32 kDimTextCol = IM_COL32(248, 250, 252, 255);
-        const float denx = worldRight - worldLeft + 1.e-12f;
-        const float deny = worldTop - worldBottom + 1.e-12f;
+        // Dimension geometry is overlay-drawn, so it projects through the camera like everything
+        // else (REQ-058); it sits on the dimension's own plane. Identical to the previous mapping
+        // in plan view.
+        const Camera dimCam = CadViewCamera(cmd);
+        const float dimZ = a.insZ;
         auto ws = [&](float wx, float wy, ImVec2* o) {
-          const float u = (wx - worldLeft) / denx;
-          const float v = (worldTop - wy) / deny;
-          o->x = imgPos.x + u * avail.x;
-          o->y = imgPos.y + v * avail.y;
+          float sx = 0.f, sy = 0.f;
+          dimCam.WorldToScreen(static_cast<double>(wx), static_cast<double>(wy), static_cast<double>(dimZ),
+                               avail.x, avail.y, &sx, &sy);
+          o->x = imgPos.x + sx;
+          o->y = imgPos.y + sy;
         };
         const float fontPx =
             std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), cmd.viewportDimTextMinPx, cmd.viewportDimTextMaxPx);
@@ -10240,9 +10300,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
         ImVec2 sp{};
         ws(a.insX, a.insY, &sp);
-        const float dsx = std::cos(a.rotationRad) * avail.x / denx;
-        const float dsy = -std::sin(a.rotationRad) * avail.y / deny;
-        const float screenAng = std::atan2(dsy, dsx);
+        // On-screen text angle by projecting a short step ALONG the text direction, rather than
+        // scaling the world angle by the view extents. Same result in plan view, and correct under
+        // an orbited camera where the two axes no longer scale independently (REQ-058).
+        ImVec2 spDir{};
+        const float dirStep = std::max(1.e-4f, hWorld);
+        ws(a.insX + std::cos(a.rotationRad) * dirStep, a.insY + std::sin(a.rotationRad) * dirStep, &spDir);
+        const float screenAng = std::atan2(spDir.y - sp.y, spDir.x - sp.x);
         AddAlignedDimText(dl, font, fontPx, sp, screenAng, kDimTextCol, a.text.c_str());
       } else {
         ImVec2 sa{}, sb{};
@@ -10596,11 +10660,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       static_cast<size_t>(cmd.viewportHoverSurveyPointIndex) < cmd.surveyPoints.size()) {
     const SurveyPoint& hp = cmd.surveyPoints[static_cast<size_t>(cmd.viewportHoverSurveyPointIndex)];
     ImDrawList* dlHov = ImGui::GetWindowDrawList();
-    const float denxH = worldRight - worldLeft + 1e-12f;
-    const float denyH = worldTop - worldBottom + 1e-12f;
-    const float uH = (hp.easting - worldLeft) / denxH;
-    const float vH = (worldTop - hp.northing) / denyH;
-    const ImVec2 cH(imgPos.x + uH * avail.x, imgPos.y + vH * avail.y);
+    // Camera-projected at the point's own elevation (REQ-057/058) so the hover ring stays on the
+    // marker it belongs to when the view is orbited.
+    float hsx = 0.f, hsy = 0.f;
+    CadViewCamera(cmd).WorldToScreen(static_cast<double>(hp.easting), static_cast<double>(hp.northing),
+                                     static_cast<double>(hp.elevation), avail.x, avail.y, &hsx, &hsy);
+    const ImVec2 cH(imgPos.x + hsx, imgPos.y + hsy);
     const float worldPerPxYH = (worldTop - worldBottom) / std::max(avail.y, 1.f);
     const float armH =
         SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);

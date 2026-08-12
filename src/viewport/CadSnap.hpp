@@ -11,6 +11,10 @@ struct Hit {
   Kind kind = Kind::Endpoint;
   float x = 0.f;
   float y = 0.f;
+  /// Elevation of the snapped point (REQ-057/058). Without it the snap glyph is drawn on the
+  /// datum while the point it marks sits at its own elevation, so the marker floats away from the
+  /// geometry as soon as the view is orbited. Zero for flat drawings, which is every pre-3D one.
+  float z = 0.f;
 };
 
 struct SnapCandidateEntry {
@@ -34,7 +38,7 @@ struct SnapExclude {
 };
 
 [[nodiscard]] Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActive,
-                           float tolWorld, SnapExclude exclude = {});
+                           float tolWorld, SnapExclude exclude = {}, const ray3d::Ray* pickRay = nullptr);
 
 /// Grip-only snap: checks grip points of all selected entities (CAD, MTEXT, survey points).
 /// Returns Kind::Grip. No glyph is drawn for this kind. Works regardless of OSNAP toggle.

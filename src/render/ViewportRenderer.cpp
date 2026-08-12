@@ -450,7 +450,10 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, float halfWorld, int fbHeig
   float sy = 0.f;
   WorldToViewRelativeFloat(static_cast<double>(snap.x), static_cast<double>(snap.y), viewAnchorX, viewAnchorY, &sx,
                            &sy);
-  const float zSnap = 0.045f;
+  // The glyph sits at the snapped point's own elevation, with a hair of lift so it still draws
+  // over coincident geometry (REQ-057/058). Pinning it to a constant put the marker on the datum
+  // while the point it marks was elevated, so it drifted away from the geometry under orbit.
+  const float zSnap = snap.z + 0.045f;
   const float mh = std::clamp(glyphHalfPx, 3.f, 48.f) * (2.f * halfWorld) / static_cast<float>(std::max(fbHeight, 1));
   const int snapCircSegs = std::max(16, static_cast<int>(mh * 40.f));
   switch (snap.kind) {
@@ -822,7 +825,13 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   cam.ViewRotation(viewRot);
 
   float model[16];
-  TranslateMat(0.f, 0.f, 0.f, model);
+  // Vertices arrive with XY relative to the view anchor but Z ABSOLUTE, so the camera's target
+  // elevation has to be subtracted here — the anchoring only ever covered X and Y. Without it the
+  // GL geometry and the ImGui overlay (which projects through Camera::WorldToScreen, and that DOES
+  // subtract targetZ) drift apart vertically as soon as the view is panned while orbited, so the
+  // crosshair and snap glyph stop landing on the lines they belong to.
+  const float panZf = static_cast<float>(cam.targetZ);
+  TranslateMat(0.f, 0.f, -panZf, model);
 
   // MVP = Proj · R · Model. The rotation sits between the projection and every world-space
   // translation, which is what keeps the anchor/pan offset applied in WORLD space (FINDING-3):
@@ -1271,8 +1280,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     // on-screen position. When the cache was rebuilt this frame this offset is zero; otherwise it absorbs all of the
     // accumulated pan without touching the vertex buffer or re-tessellating curves.
     float cachedModel[16];
-    TranslateMat(static_cast<float>(cachedViewAnchorX_ - panX), static_cast<float>(cachedViewAnchorY_ - panY), 0.f,
-                 cachedModel);
+    TranslateMat(static_cast<float>(cachedViewAnchorX_ - panX), static_cast<float>(cachedViewAnchorY_ - panY),
+                 -panZf, cachedModel);  // Z is absolute in the cache too — see the `model` note above
     float cachedMvp[16];
     // Proj · R · Translate — the anchor offset is a WORLD-space correction, so it must be applied
     // before the camera rotation. This is the exact composition asserted by the

@@ -600,6 +600,16 @@ json BuildRoot(const AppCommandState& st) {
   view["panWorldX"] = st.viewportPanX + st.worldDocumentOriginX;
   view["panWorldY"] = st.viewportPanY + st.worldDocumentOriginY;
   view["zoom"] = st.viewportZoom;
+  // Camera orientation and work plane (REQ-058), additive and omitted at their defaults so a
+  // drawing that was never orbited still serializes exactly as before.
+  if (st.viewportPanZ != 0.0)
+    view["panZ"] = st.viewportPanZ;
+  if (st.viewportAzimuthDeg != 0.f)
+    view["azimuthDeg"] = st.viewportAzimuthDeg;
+  if (st.viewportElevationDeg != 90.f)
+    view["elevationDeg"] = st.viewportElevationDeg;
+  if (st.ucsOriginZ != 0.0)
+    view["ucsElevation"] = st.ucsOriginZ;
   doc["view"] = std::move(view);
 
   root["document"] = std::move(doc);
@@ -1218,6 +1228,13 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     // Clamp to the range the zoom controls themselves use, so a corrupt or hand-edited value cannot
     // leave the drawing on an unrecoverable view (REQ-201).
     st.viewportZoom = std::clamp(zoom, 1.e-9f, 1.e9f);
+    // Absent keys give plan view at world elevation, which is how every pre-3D drawing loads.
+    // Elevation is clamped for the same reason the zoom is: a hand-edited value must not leave the
+    // camera somewhere it cannot be recovered from (REQ-201).
+    st.viewportPanZ = view.value("panZ", 0.0);
+    st.viewportAzimuthDeg = view.value("azimuthDeg", 0.f);
+    st.viewportElevationDeg = std::clamp(view.value("elevationDeg", 90.f), -90.f, 90.f);
+    st.ucsOriginZ = view.value("ucsElevation", 0.0);
   } else {
     const int fbW = std::max(st.viewportLastFbW, 1);
     const int fbH = std::max(st.viewportLastFbH, 1);

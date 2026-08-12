@@ -222,6 +222,7 @@ struct DrawingDocument {
   double viewportPanX = 0.0;
   double viewportPanY = 0.0;
   float  viewportZoom = 1.f;
+  double viewportPanZ = 0.0;          ///< Camera target elevation per tab (REQ-058).
   float  viewportAzimuthDeg = 0.f;    ///< Camera orientation per tab (REQ-058); plan view by default.
   float  viewportElevationDeg = 90.f;
   double worldDocumentOriginX = 0.0;
@@ -400,6 +401,7 @@ struct AppCommandState {
     Rect,
     /// TRIMSTATE: system-variable prompt waiting for a new value (REQ-056).
     TrimState,
+    Elev,        ///< Set the elevation new geometry is drawn at (REQ-058).
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -493,6 +495,11 @@ struct AppCommandState {
   bool viewportSnapPickValid = false;
   float viewportSnapPickWorldX = 0.f;
   float viewportSnapPickWorldY = 0.f;
+  /// Elevation of the snapped point. An object snap yields the object's ACTUAL 3D point, so it
+  /// overrides the current work-plane elevation — snapping to the end of a line on the datum while
+  /// ELEV is 5 must give you that endpoint, not a point 5 above it (AutoCAD-faithful, REQ-058).
+  /// Only meaningful while \ref viewportSnapPickValid.
+  float viewportSnapPickWorldZ = 0.f;
   /// Command-line log cache for the selectable read-only multiline (rebuilt each frame from \ref log).
   std::vector<char> commandLogCacheBytes;
   size_t commandLogLastSizeForAutoscroll = 0;
@@ -682,6 +689,10 @@ struct AppCommandState {
 
   float anchorX = 0.f;
   float anchorY = 0.f;
+  /// Elevation the anchor was committed at (REQ-058). Recorded per-vertex rather than taken from
+  /// the work plane at commit time, because a line's two ends can legitimately differ: the anchor
+  /// may have snapped to something on the datum while the far end snaps to something elevated.
+  float anchorZ = 0.f;
   /// From UI — ortho constrains LINE segment picks / typed ortho distances toward cursor.
   bool orthoMode = false;
   /// Last drawing viewport cursor (world), updated each frame for LINE ortho distance entry.
@@ -690,6 +701,11 @@ struct AppCommandState {
   /// Drawing viewport pan/zoom (local coordinates; pan is view center in storage space).
   double viewportPanX = 0.;
   double viewportPanY = 0.;
+  /// Camera target elevation (REQ-058). Pan is a 3D point once the view can tilt: dragging up in
+  /// an orbited view moves the target along the camera's UP axis, which has a Z component, so a
+  /// target constrained to Z = 0 cannot follow the cursor and the pan stops feeling 1:1.
+  /// Always 0 in plan view, where the up axis lies in the XY plane.
+  double viewportPanZ = 0.;
   float viewportZoom = 1.f;
   /// Camera orientation about the pan point (REQ-058 / ADR-025 (c)). Pan and zoom remain the
   /// single source of truth for WHERE the camera looks and HOW FAR — these two add only the
@@ -1365,6 +1381,7 @@ inline float DefaultAnnotationTextHeightWorld(const AppCommandState& st) {
 inline Camera CadViewCamera(const AppCommandState& st) {
   Camera c = Camera::Plan(st.viewportPanX, st.viewportPanY,
                           (1.f / std::max(st.viewportZoom, 1.e-9f)) * 50.f);
+  c.targetZ = st.viewportPanZ;
   c.azimuthDeg = st.viewportAzimuthDeg;
   c.elevationDeg = st.viewportElevationDeg;
   c.nearZ = -1000.f;
@@ -1413,6 +1430,34 @@ inline void CadTickViewAnimation(AppCommandState& st, float dtSeconds) {
     az -= 360.f;
   st.viewportAzimuthDeg = az;
   st.viewportElevationDeg = st.viewAnimFromEl + (st.viewAnimToEl - st.viewAnimFromEl) * e;
+}
+
+/// Elevation at which newly drawn geometry lands — the active work plane's Z (REQ-058).
+///
+/// Exact while the work plane stays parallel to XY, which is all the UCS command currently
+/// produces. A tilted plane would make Z vary across the plane, and the creation sites would then
+/// need the click's own intersection Z (\c uiCursorWorldZ) rather than this constant — recorded so
+/// the limitation is visible if tilted UCS support is ever added.
+inline float CadWorkPlaneElevation(const AppCommandState& st) {
+  return static_cast<float>(st.ucsOriginZ);
+}
+
+/// Elevation a click should COMMIT at: the snapped point's own Z when an object snap is active,
+/// otherwise the work plane (REQ-058).
+///
+/// This is the AutoCAD rule — an object snap returns the object's real 3D point, so snapping to
+/// the end of a line lying on the datum gives you that endpoint even when ELEV is set well above
+/// it. Without the override, snapped geometry would be silently lifted to the current elevation
+/// and would not touch the thing it was snapped to.
+inline float CadCommitElevation(const AppCommandState& st) {
+  return st.viewportSnapPickValid ? st.viewportSnapPickWorldZ : CadWorkPlaneElevation(st);
+}
+
+/// True when the work plane is the world XY plane at Z = 0 — the default, and what the status bar
+/// reports as "World".
+inline bool CadUcsIsWorld(const AppCommandState& st) {
+  return st.ucsOriginZ == 0.0 && st.ucsOriginX == 0.0 && st.ucsOriginY == 0.0 && st.ucsNormalZ == 1.0 &&
+         st.ucsNormalX == 0.0 && st.ucsNormalY == 0.0 && st.ucsAzimuthDeg == 0.f;
 }
 
 /// The active work plane (UCS) a viewport click resolves against (REQ-058 / ADR-025 (e)).
@@ -1691,6 +1736,10 @@ void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartTrimStateCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Validate and apply a TRIMSTATE value (0 or 1). False + a logged message when out of range.
 bool ApplyTrimStateValue(AppCommandState& st, int value, std::vector<std::string>& log);
+/// ELEV — set the work-plane elevation new geometry is drawn at (REQ-058).
+void StartElevCommand(AppCommandState& st, std::vector<std::string>& log);
+bool ApplyElevValue(AppCommandState& st, double z, std::vector<std::string>& log);
+void ApplyUcsWorld(AppCommandState& st, std::vector<std::string>& log);
 
 /// RECT (REQ-053): two opposite corners create an axis-aligned rectangle.
 void StartRectCommand(AppCommandState& st, std::vector<std::string>& log);

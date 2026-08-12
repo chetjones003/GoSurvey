@@ -1,7 +1,7 @@
 # TASK-035 — Orbitable 3D camera, ray picking, and a UCS work plane
 
 - Type:    feature
-- Status:  plan
+- Status:  implement (paused — see §10b for the gaps that block completion)
 - Opened:  2026-08-11
 - Owner:   Workshop
 
@@ -214,6 +214,49 @@ sweep of the 103 sites that reference the view extents. Those 103 are read-only 
   in plan view and sample their circumference when orbited. A null ray reproduces the previous
   behaviour exactly. `AppCommandState` gained the UCS (origin + normal, default world XY) and
   `uiCursorWorldZ`.
+- 2026-08-11 — **Projection sweep finished — ELEVEN overlay sites in total.** Rather than wait for
+  the next user report, swept `CadUi.cpp` for every world→screen mapping built from
+  `worldLeft/Right/Top/Bottom`. Beyond the seven found reactively (annotations, crosshair,
+  click-pick, box-select, highlights, hover, grips) there were four more: **dimension drawing**,
+  the **dimension text's on-screen angle**, the **survey-point hover ring**, and the **PDF underlay
+  overlay**. The three helpers that took the extents as parameters (`HitTestDimGrip`,
+  `HitTestMtextGrip`, `DrawMtextRichEditorOverlay`) now take a `Camera` instead.
+  The dim-text angle was the subtle one: it scaled the world rotation by the view extents, which is
+  only valid while the two axes scale independently. It now projects a short step ALONG the text
+  direction and measures the screen angle — same answer in plan view, correct when orbited.
+  Audited to completion: every surviving extent-based projection is on a paper-space branch
+  (`!edPaper`, `modelSpace`, the sheet outline, or the crosshair's paper `else`), which is correct
+  because a sheet never tilts (ADR-025 (g)).
+  **The lesson, stated once:** "route the overlay through the camera" read like one change and was
+  eleven, because the same plan-view arithmetic had been copy-pasted into every drawing, hover and
+  hit-test site over the life of the file. None of it was reachable by the Camera/ray tests, which
+  are pure and were green throughout. A shared projection helper — rather than a local lambda per
+  site — is what would have made this one edit; that refactor is worth doing but is a separate,
+  spec-visible change.
+- 2026-08-11 — **Phase D complete: the ELEV command and work-plane wiring.** REQ-058's third
+  acceptance condition ("geometry drawn on a non-default UCS lands on that plane") was previously
+  untestable because nothing could move the work plane.
+  **Named ELEV, not UCS.** AutoCAD splits the idea: ELEV sets the elevation new geometry is drawn
+  at, UCS defines a whole coordinate system. Only the elevation half exists here (the plane stays
+  parallel to XY), so it carries the name of the half it actually implements rather than claiming
+  to be a full UCS. `UCS` is accepted as an alias so the obvious guess works, and `ELEV W` /
+  `UCS W` resets to world. Both the prompt and the inline `ELEV 12.5` form route through one
+  `ApplyElevValue`, so neither can accept a value the other rejects (the TRIMSTATE precedent).
+  Creation sites now read `CadWorkPlaneElevation(st)` instead of pushing a literal 0: lines,
+  polylines (draft and commit), RECT, circles, arcs, ellipses, TEXT and MTEXT. **Model space only**
+  — paper TEXT keeps Z = 0, since a sheet is 2D (ADR-025 (g)).
+  Reading the elevation from the state at the creation site — rather than threading a Z argument
+  through every command signature — is exact while the plane stays parallel to XY, which is all
+  ELEV produces. A tilted plane would make Z vary across it and the sites would need the click's
+  own intersection Z; that limitation is documented on `CadWorkPlaneElevation`.
+  **Two silent-loss gaps found and closed while wiring this**: the camera orientation was saved to
+  neither the per-tab `DrawingDocument` nor `.gs`, so switching tabs or reopening a drawing would
+  quietly throw the view away. Both now persist (`.gs` keys additive and omitted at their defaults,
+  so an un-orbited drawing serializes byte-identically; elevation clamped on load like the zoom).
+  Tab restore also clears any in-flight animation rather than resuming another tab's.
+  The status bar's UCS field reported the literal word "World"; it now reports the real plane
+  ("UCS: Elev 25.0000"), because otherwise geometry lands at an unexpected elevation with nothing
+  on screen explaining why (REQ-201).
 - 2026-08-11 — **User testing round 1. Five defects reported, all root-caused and fixed.** This is
   the entry that matters most in this log: the pure-module tests were green and the app ran, yet
   orbit was unusable, because **every overlay path that projects world → screen had to be found,
@@ -266,6 +309,66 @@ sweep of the 103 sites that reference the view extents. Those 103 are read-only 
 - Submitted:  <pending>
 - Verdict:    <pending>
 
+## 10b. Known gaps — carried forward (recorded 2026-08-11, end of session)
+
+User-reported after a working session with 3D lines. **LINE is the only entity fully carried
+through the 3D pipeline; treat every other entity type as needing the same treatment until proven
+otherwise.**
+
+```
+GAP-1 — Only LINE is fully 3D end-to-end. CIRCLE is confirmed broken; assume all others are.
+- Confirmed:   lines snap in 3D, preview at the right elevation, commit where previewed.
+               Circles do NOT — verified by the user.
+- Untested:    arc, ellipse, polyline, rect, text/mtext, dimensions, hatch/filled regions,
+               survey points. Some had Z threaded through creation and preview in this task, but
+               none were exercised in an orbited view, so "wired" is not "working".
+- The shape of the fix is now known from LINE, and it is FOUR separate places per entity type —
+  which is why this keeps recurring:
+    1. snap candidates pass the entity's real Z to Consider/ConsiderSnap (CadSnap.cpp),
+    2. the rubber/transform preview emits real Z (CadRubberPreview.cpp, TransformPreview.cpp),
+    3. creation commits at CadCommitElevation (CadCommands.cpp),
+    4. any overlay drawing projects through Camera::WorldToScreen (CadUi.cpp).
+  Missing any ONE of the four produces a different, plausible-looking wrong behaviour, which is
+  how each of these shipped: the geometry is right and one stage disagrees.
+- Suggested approach: take circle first as the second worked example, then sweep the rest by type
+  against the four-point checklist rather than by bug report.
+```
+
+```
+GAP-2 — Snap glyphs should face the viewer, not lie on the work plane.
+- Now:         BuildSnapOverlayLines (ViewportRenderer.cpp ~445) builds each glyph — the endpoint
+               square, midpoint triangle, centre circle — as flat geometry in the world XY plane
+               at the snap point's elevation. Correct in plan view; under an orbit the glyph
+               foreshortens with the plane and goes edge-on and unreadable near a horizontal view.
+- Wanted:      the glyph is a UI marker, not geometry. It should be screen-facing (billboarded) so
+               it reads the same at any orientation, and stay a constant pixel size as it already
+               does via glyphHalfPx.
+- Shape of the fix: build the glyph in the CAMERA's right/up basis about the snap point rather
+  than in world XY — i.e. offsets `p + right*u + up*v` using rows 0 and 1 of Camera::ViewRotation,
+  the same basis Camera::ScreenRay already uses. BuildSnapOverlayLines would need the camera
+  passed in; it currently takes only the view anchor.
+- Same question applies to the survey-point cross markers and grip squares, which are also drawn
+  as flat world geometry. Grips are ImGui-drawn (screen-space already, so fine); the survey cross
+  is GL and would foreshorten.
+```
+
+```
+GAP-3 — Perpendicular and intersection snaps have no Z.
+- They construct their candidate points in 2D and pass no elevation, so they default to 0 and are
+  measured against the cursor ray at the wrong depth. Endpoint, midpoint, centre, quadrant and
+  survey-point snaps are correct.
+```
+
 ## 11. Outcome
 
-- <pending>
+- Status at end of session: **REQ-058 substantially delivered for LINE; not complete.** Camera,
+  orbit, ray picking, 3D snapping, the UCS/ELEV command and the ViewCube (REQ-059) all work and are
+  in use. What is NOT done: the per-entity sweep (GAP-1), screen-facing snap glyphs (GAP-2),
+  perpendicular/intersection snap Z (GAP-3), and the REQ-100 benchmark.
+- **REQ-058 cannot be signed off** until GAP-1 is closed: its acceptance says geometry drawn on a
+  non-default UCS lands on that plane, and that is only demonstrated for lines.
+- **REQ-100 is unmeasured.** The budget is now a real number (16 ms @ 250k segments, 95th pct,
+  scripted orbit) but no bench scene exists, so the perf gate is open, not passed.
+- Tests: 742 → 1934 assertions, 115 → 159 cases. New pure modules `util/ray3d` and `render/Camera`
+  are fully covered; `CadUi.cpp` / `CadCommands.cpp` remain unlinkable by the test target, which is
+  the structural gap behind every defect class in this task.
