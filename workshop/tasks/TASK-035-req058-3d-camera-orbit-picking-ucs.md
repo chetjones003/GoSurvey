@@ -372,3 +372,88 @@ GAP-3 — Perpendicular and intersection snaps have no Z.
 - Tests: 742 → 1934 assertions, 115 → 159 cases. New pure modules `util/ray3d` and `render/Camera`
   are fully covered; `CadUi.cpp` / `CadCommands.cpp` remain unlinkable by the test target, which is
   the structural gap behind every defect class in this task.
+
+## 12. Follow-up — 2026-08-12: curve elevation is dropped at render, and the view clips at Z 1000
+
+Started from a user report that a 3-point circle vanishes on the third click in TOP view, in an
+imported DXF. Three defects, all verified in the running app. DEFECT-C is the reported one; A and B
+were found while chasing it and are independent. All three sit in places GAP-1's four-point
+checklist does not look: the **render pass** (A, B) and the **preview's input point** (C).
+
+```
+DEFECT-A — Circles, arcs and ellipses render at Z = 0, whatever elevation they were committed at.
+- Where:  ViewportRenderer.cpp — the committed-geometry pass passed a literal 0.f as the z argument
+          to AppendCircleVcDashed / AppendArcVcDashed / AppendEllipseVcDashed, so the entity's own
+          z (circlesCxCyZR[ci*4+2], CadArc::z, CadEllipse::z) was read for nothing. Line segments
+          were unaffected — they carry z per vertex through CadTessellateLinetypeSegmentVc, which
+          is why LINE looked "fully 3D end-to-end" and the curves did not.
+- Also:   the hover / selection-highlight / preview circle overlays passed 0.017f / 0.018f / 0.032f.
+          Those were depth-ORDER biases from the flat renderer; depth testing is off (draw order
+          decides), so once the view could tilt they were simply wrong elevations. Now they use
+          [i+2], the elevation the producer already puts in the array.
+- Proof:  two identical circles, one at ELEV 0 and one at ELEV 6, then orbit. Before: they stayed
+          at the same screen height. After: they separate by the elevation difference.
+- Checklist consequence: GAP-1's four places are not four, they are FIVE. Add
+    5. the committed-geometry render pass emits the entity's real Z (ViewportRenderer.cpp).
+  An entity can pass all four earlier stages — snap, preview, commit, overlay — and still be drawn
+  on the wrong plane, which is exactly what circle did.
+```
+
+```
+DEFECT-B — Anything above Z 1000 is clipped out of the viewport, including in plan view.
+- Where:  the ortho near/far was the literal Ortho(..., -1000.f, 1000.f) in ViewportRenderer.cpp,
+          with CadViewCamera setting a matching +/-1000 on the camera. Both were carried over from
+          the pre-3D pipeline for bit-identical plan-view parity, and were harmless only while
+          nothing had a Z.
+- Impact: a surveyed site sits a few thousand feet up. Every entity committed at that elevation —
+          ELEV set by hand, or a Z inherited from an object snap, or a DXF CIRCLE imported with its
+          group-30 elevation — is clipped away and never drawn. In PLAN VIEW, where Z cannot affect
+          screen position at all, so nothing on screen explains the disappearance.
+- Fix:    the renderer takes near/far from the camera; CadViewCamera uses the Camera default
+          +/-100000. Depth testing is off, so range costs nothing but clipping reach.
+- Proof:  a LINE and a 3-point CIRCLE drawn at ELEV 1500, in TOP view. Before: neither appears.
+          After: both appear, alongside a Z-0 line for reference.
+- Parity note: plan view stays pixel-identical for content inside the old range — an orthographic
+  z has no effect on x/y, so widening the range only stops discarding geometry.
+```
+
+```
+DEFECT-C — ROOT CAUSE of the report. The draft preview and the click commit at DIFFERENT points.
+- Where:  main.cpp fed AppendCadDraftRubberLines / BuildTransformPreview the CURSOR (curX/curY),
+          while SubmitViewportPick commits at commitX/commitY — the snapped point (CadUi ~8617).
+          Those are not the same point. On a valid snap the cursor is only EASED toward it by the
+          magnet (CadUi ~8359: `*outCursorX = rawX + alpha * dx`, alpha capped at 0.92), so the
+          preview always trails the commit.
+- Why it usually hides: for endpoint/midpoint snaps the candidate is accepted only within the
+          aperture (14 px), so the gap is at most ~1.7 px and reads as a rounding wobble.
+- Why it is ruinous here: a CENTRE snap is accepted by hovering the RIM but returns the CENTRE, so
+          the committed point is a full radius from the cursor — arbitrarily far. `dist` is then way
+          past the magnet's outer radius, alpha collapses to ~0, and the preview sits on the cursor
+          while the commit lands on the centre. Same shape for perpendicular/intersection.
+- Why CIRCLE 3P and not LINE: a line drawn to the wrong point is a line to the wrong point — off,
+          but on screen. A circumcircle is not local in its inputs: displace the third point and the
+          centre and radius diverge without bound. The user previews a normal circle, commits three
+          different points, and gets a circle whose visible arc is nowhere near the view. Hence the
+          exact report — "Circle complete." in the log and nothing on screen.
+- Needs geometry to reproduce: a fresh drawing has no snap candidates, which is why every scripted
+          repro in an empty drawing (plan TOP, rotated top, tilted, ELEV 0/10/100/1500, typed entry)
+          drew correctly. The user's drawing was an imported DXF.
+- Fix:    main.cpp computes commitCurX/commitCurY once — the snapped point when
+          viewportSnapPickValid, else the cursor — and feeds it to the draft rubber, the transform
+          preview and the TRIM cutting-line preview. The crosshair keeps its magnet easing (it is a
+          pointer affordance, and the snap glyph already marks the true point); the previews now
+          show what will actually be built. OFFSET keeps the raw cursor: its side-of-line test is
+          about where the pointer is, not where a point would land.
+- Proof:  a circle, then LINE with the cursor parked on its rim. Before: rubber band ends at the
+          crosshair, green centre marker 200 px away at the centre where the click commits. After:
+          rubber band runs to the centre.
+- Rule this establishes: a preview that does not consume the commit point is not a preview. Any new
+  draft visual must read the commit point, not the cursor — call it point 6 on GAP-1's checklist.
+```
+
+- Tests: 1934 assertions, 159 cases — unchanged and green. None of the three defects is reachable
+  from the test target (ViewportRenderer needs a GL context; main.cpp's frame loop is not linkable),
+  which is the same structural gap §11 records. All three were found and verified by driving the
+  built app with scripted mouse/keyboard input and reading screenshots.
+- Still open: GAP-1's remaining entity types, GAP-2, GAP-3, REQ-100. REQ-058 still cannot be signed
+  off — but circle, arc and ellipse now satisfy its acceptance at the render stage.

@@ -1376,16 +1376,22 @@ inline float DefaultAnnotationTextHeightWorld(const AppCommandState& st) {
 /// between "the camera" and "the view" impossible. Commands → Renderer is a downward dependency
 /// (architecture §2), so including the Camera value type here is legal.
 ///
-/// `halfH = (1/zoom) * 50` reproduces the constant the renderer and the UI have always shared; the
-/// near/far range matches the pre-3D `Ortho(..., -1000, 1000)` so plan view is bit-identical.
+/// `halfH = (1/zoom) * 50` reproduces the constant the renderer and the UI have always shared.
+///
+/// The near/far range is the Camera's own +/-100000, NOT the pre-3D `Ortho(..., -1000, 1000)`.
+/// The old +/-1000 was carried over from the flat renderer, where nothing ever had a Z; once Z is
+/// real it silently clips every entity above 1000 out of the view — and a surveyed site sits at an
+/// elevation of a few thousand feet, so that is the whole drawing, in plan view, where Z should not
+/// affect visibility at all. Widening costs nothing: depth testing is off (draw order decides), so
+/// the range only ever determines what survives clipping.
 inline Camera CadViewCamera(const AppCommandState& st) {
   Camera c = Camera::Plan(st.viewportPanX, st.viewportPanY,
                           (1.f / std::max(st.viewportZoom, 1.e-9f)) * 50.f);
   c.targetZ = st.viewportPanZ;
   c.azimuthDeg = st.viewportAzimuthDeg;
   c.elevationDeg = st.viewportElevationDeg;
-  c.nearZ = -1000.f;
-  c.farZ = 1000.f;
+  c.nearZ = -100000.f;
+  c.farZ = 100000.f;
   return c;
 }
 

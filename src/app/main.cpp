@@ -475,10 +475,22 @@ int main()
     DrawCloseConfirmModal(cmd, cmdLog);
     DrawDwgLossyExportModal(cmd, cmdLog);
 
+    // The point a click would COMMIT at, which is NOT the cursor. When an object snap is acquired,
+    // SubmitViewportPick commits at the snap point (CadUi: commitX/commitY), while curX/curY is only
+    // eased TOWARD it by the magnet — 92% at most, and far less out toward the magnet's outer radius
+    // of 2.75 apertures. Previewing at the cursor therefore draws a shape the commit will not
+    // produce. Harmless-looking for a line, which lands a few pixels off; ruinous for a 3-point
+    // circle, where nudging the third point toward collinear sends the circumcentre and radius
+    // arbitrarily far and the committed circle is nowhere near the previewed one.
+    const double commitCurX =
+        cmd.viewportSnapPickValid ? static_cast<double>(cmd.viewportSnapPickWorldX) : curX;
+    const double commitCurY =
+        cmd.viewportSnapPickValid ? static_cast<double>(cmd.viewportSnapPickWorldY) : curY;
+
     std::vector<float> rubberLines;
     const float orthoHalfH = (1.f / std::max(cmd.viewportZoom, 1.e-9f)) * 50.f;
-    AppendCadDraftRubberLines(cmd, curX, curY, orthoEnabled, cmd.viewportPanX, cmd.viewportPanY, orthoHalfH, fbH,
-                              rubberLines);
+    AppendCadDraftRubberLines(cmd, commitCurX, commitCurY, orthoEnabled, cmd.viewportPanX, cmd.viewportPanY,
+                              orthoHalfH, fbH, rubberLines);
 
     float selRectBuf[4]{};
     const float *selRectPtr = nullptr;
@@ -493,17 +505,20 @@ int main()
 
     std::vector<float> previewLines;
     std::vector<float> previewCircles;
+    // Same rule as the draft rubber above: preview where the commit will land. OFFSET keeps the raw
+    // cursor — its side-of-the-line test is about which side the pointer is on, not a snapped point.
     const float previewCx =
-        cmd.active == AppCommandState::Kind::Offset ? static_cast<float>(curRawX) : static_cast<float>(curX);
+        cmd.active == AppCommandState::Kind::Offset ? static_cast<float>(curRawX) : static_cast<float>(commitCurX);
     const float previewCy =
-        cmd.active == AppCommandState::Kind::Offset ? static_cast<float>(curRawY) : static_cast<float>(curY);
+        cmd.active == AppCommandState::Kind::Offset ? static_cast<float>(curRawY) : static_cast<float>(commitCurY);
     BuildTransformPreview(cmd, previewCx, previewCy, &previewLines, &previewCircles, orthoHalfH, fbH);
 
     if (cmd.active == AppCommandState::Kind::Trim &&
         cmd.trimPhase == AppCommandState::TrimPhase::CuttingLine_WaitP2)
     {
-      float lx = static_cast<float>(curX);
-      float ly = static_cast<float>(curY);
+      // TRIM's cutting-line points commit through commitX/commitY too (SubmitTrimViewportPick).
+      float lx = static_cast<float>(commitCurX);
+      float ly = static_cast<float>(commitCurY);
       ApplyOrthoConstrainFromAnchor(cmd.trimCutInfP1x, cmd.trimCutInfP1y, &lx, &ly, orthoEnabled);
       PushRubberSegViewRel(rubberLines, cmd.trimCutInfP1x, cmd.trimCutInfP1y, lx, ly, cmd.viewportPanX,
                            cmd.viewportPanY);

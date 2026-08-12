@@ -817,7 +817,12 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   const double viewAnchorX = panX;
   const double viewAnchorY = panY;
   float proj[16];
-  Ortho(-halfW, halfW, -halfH, halfH, -1000.f, 1000.f, proj);
+  // Near/far come from the camera, not the pre-3D literal +/-1000. That literal was harmless while
+  // nothing had a Z; with real elevations it clips every entity above 1000 out of the view, even in
+  // plan view where Z cannot affect what is on screen — and a surveyed site sits a few thousand feet
+  // up, so that is the entire drawing. Depth testing is off (draw order decides), so a wide range
+  // costs nothing.
+  Ortho(-halfW, halfW, -halfH, halfH, cam.nearZ, cam.farZ, proj);
 
   // The camera rotation (REQ-058). Identity in plan view, so the composed matrices below are
   // bit-identical to the pre-3D pipeline until the user actually orbits.
@@ -1180,7 +1185,9 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             const int arcSegs = std::max(
                 8, CircleTessellationSegmentCount(static_cast<double>(a.r), static_cast<double>(halfH), fbHeight,
                                                   arcCap));
-            AppendArcVcDashed(cpuVcLines_, (*extended->arcs)[i], arcSegs, 0.f, dashPatScale, attr, lr, kLineDefaultR,
+            // The arc's own elevation, not 0 — a curve drawn on an ELEV work plane must render on
+            // that plane, exactly as line segments already do (REQ-058).
+            AppendArcVcDashed(cpuVcLines_, (*extended->arcs)[i], arcSegs, a.z, dashPatScale, attr, lr, kLineDefaultR,
                               kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY);
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
@@ -1200,7 +1207,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             const int ellSegs = std::max(
                 16, CircleTessellationSegmentCount(majLen, static_cast<double>(halfH), fbHeight,
                                                    tuning.arcCircleSmoothnessCap));
-            AppendEllipseVcDashed(cpuVcLines_, (*extended->ellipses)[i], ellSegs, 0.f, dashPatScale, attr, lr,
+            AppendEllipseVcDashed(cpuVcLines_, (*extended->ellipses)[i], ellSegs, e.z, dashPatScale, attr, lr,
                                    kLineDefaultR, kLineDefaultG, kLineDefaultB, viewAnchorX, viewAnchorY);
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
@@ -1251,8 +1258,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
           const int circSegs = CircleTessellationSegmentCount(static_cast<double>(cr), static_cast<double>(halfH),
                                                               fbHeight, tuning.arcCircleSmoothnessCap);
           AppendCircleVcDashed(cpuVcCircles_, circlesCxCyZR[ci * 4], circlesCxCyZR[ci * 4 + 1], cr,
-                               circSegs, 0.f, dashPatScale, attr, lr, kCircDefaultR, kCircDefaultG, kCircDefaultB,
-                               viewAnchorX, viewAnchorY);
+                               circSegs, circlesCxCyZR[ci * 4 + 2], dashPatScale, attr, lr, kCircDefaultR,
+                               kCircDefaultG, kCircDefaultB, viewAnchorX, viewAnchorY);
           circVert = static_cast<int>(cpuVcCircles_.size() / 7);
         }
         if (circVert > circBatchStart && circBatchPx >= 0.f)
@@ -1342,8 +1349,11 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       const float hr = (*hoverCircles)[i + 3];
       const int hvSegs = CircleTessellationSegmentCount(static_cast<double>(hr), static_cast<double>(halfH), fbHeight,
                                                         tuning.arcCircleSmoothnessCap);
-      AppendCircleLineApprox(hvCircGeom, (*hoverCircles)[i], (*hoverCircles)[i + 1], hr, hvSegs, 0.017f,
-                             viewAnchorX, viewAnchorY);
+      // [i+2] is the circle's elevation. The old literal was a depth-order bias from the flat
+      // renderer; depth testing is off (draw order decides), so it only ever misplaced the ring
+      // once the view could tilt.
+      AppendCircleLineApprox(hvCircGeom, (*hoverCircles)[i], (*hoverCircles)[i + 1], hr, hvSegs,
+                             (*hoverCircles)[i + 2], viewAnchorX, viewAnchorY);
     }
     if (!hvCircGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
@@ -1374,8 +1384,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       const float hr = (*highlightCircles)[i + 3];
       const int hlSegs = CircleTessellationSegmentCount(static_cast<double>(hr), static_cast<double>(halfH), fbHeight,
                                                         tuning.arcCircleSmoothnessCap);
-      AppendCircleLineApprox(hlCircGeom, (*highlightCircles)[i], (*highlightCircles)[i + 1], hr, hlSegs, 0.018f,
-                             viewAnchorX, viewAnchorY);
+      AppendCircleLineApprox(hlCircGeom, (*highlightCircles)[i], (*highlightCircles)[i + 1], hr, hlSegs,
+                             (*highlightCircles)[i + 2], viewAnchorX, viewAnchorY);
     }
     if (!hlCircGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
@@ -1446,8 +1456,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       const float pr = (*previewCircles)[i + 3];
       const int prevSegs =
           CircleTessellationSegmentCount(static_cast<double>(pr), halfHd, fbHeight, tuning.arcCircleSmoothnessCap);
-      AppendCircleLineApprox(circleGeom, (*previewCircles)[i], (*previewCircles)[i + 1], pr, prevSegs, 0.032f,
-                             viewAnchorX, viewAnchorY);
+      AppendCircleLineApprox(circleGeom, (*previewCircles)[i], (*previewCircles)[i + 1], pr, prevSegs,
+                             (*previewCircles)[i + 2], viewAnchorX, viewAnchorY);
     }
     if (!circleGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
