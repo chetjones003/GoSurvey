@@ -190,6 +190,8 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   b  ("objectSnapPerpendicular",   &st.objectSnapPerpendicular);
   b  ("objectSnapSurveyPoint",     &st.objectSnapSurveyPoint);
   b  ("objectSnapGeometricCenter", &st.objectSnapGeometricCenter);
+  b  ("objectSnapIntersection", &st.objectSnapIntersection);
+  b  ("objectSnapApparentIntersection", &st.objectSnapApparentIntersection);
   num("objectSnapAperturePx",      &st.objectSnapAperturePx,  4.f, 64.f);
   num("objectSnapGlyphHalfPx",     &st.objectSnapGlyphHalfPx, 3.f, 48.f);
   num("gripSizePx",                &st.gripSizePx,            2.f, 20.f);
@@ -376,6 +378,8 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["objectSnapPerpendicular"]    = st.objectSnapPerpendicular;
   s["objectSnapSurveyPoint"]      = st.objectSnapSurveyPoint;
   s["objectSnapGeometricCenter"]  = st.objectSnapGeometricCenter;
+  s["objectSnapIntersection"]     = st.objectSnapIntersection;
+  s["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
   s["objectSnapAperturePx"]       = st.objectSnapAperturePx;
   s["objectSnapGlyphHalfPx"]      = st.objectSnapGlyphHalfPx;
   s["gripSizePx"]                 = st.gripSizePx;

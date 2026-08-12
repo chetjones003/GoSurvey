@@ -160,6 +160,8 @@ add_executable(GoSurvey
 
   # Geometry math (util)
   src/util/geom2d.cpp
+  src/util/curveintersect.cpp
+  src/util/benchscene.cpp
 )
 
 target_include_directories(GoSurvey PRIVATE
@@ -299,12 +301,23 @@ if(GOSURVEY_BUILD_TESTS)
     tests/MtextTextOpsTests.cpp
     tests/DxfEntityEmitTests.cpp
     tests/DwgProbeTests.cpp
+    tests/LinetypeTessellationTests.cpp
+    tests/CurveIntersectTests.cpp
+    tests/BenchSceneTests.cpp
     src/traverse/TraverseCalc.cpp
     src/traverse/TraverseLeastSquares.cpp
     src/traverse/FbkImport.cpp
     # DWG version detection + converter discovery. Deliberately its own TU (see DwgProbe.cpp):
     # it depends only on <filesystem>, so tests link it without DxfIo and the GUI stack.
     src/io/DwgProbe.cpp
+    # Linetype dash tessellation, including per-vertex Z (REQ-058). Standalone like DwgProbe.cpp —
+    # only <string>/<vector>/<cmath>/<cctype> — so it links without the GUI stack.
+    src/commands/CadLinetype.cpp
+    # Intersection math behind the INT/APPINT snaps (REQ-062). Pure and dependency-free on purpose:
+    # this is where REQ-101 is actually enforced, and it must be testable without a GL context.
+    src/util/curveintersect.cpp
+    # REQ-100 bench scene generator + frame statistics. Pure and deterministic by design.
+    src/util/benchscene.cpp
   )
   target_include_directories(GoSurveyTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

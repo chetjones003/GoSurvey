@@ -58,12 +58,27 @@ struct AppCommandState;
 
 float SurveyPointCrossHalfWorldFromPaper(float crossSpanPlottedInches, float modelUnitsPerPlottedInch);
 
+/// Camera right/up as world-space unit vectors, used to build screen-facing markers (REQ-058).
+///
+/// Passed in as plain components rather than as a `Camera`: survey is a domain module and the
+/// camera lives in the renderer, so taking one here would invert the layering (architecture §11).
+/// The default is world +X / +Y, which is exactly plan view — so an un-plumbed caller keeps the
+/// pre-3D geometry.
+struct MarkerBillboardBasis {
+  float rightX = 1.f, rightY = 0.f, rightZ = 0.f;
+  float upX = 0.f, upY = 1.f, upZ = 0.f;
+};
+
 /// Appends two GL_LINES segments (x,y,z triplets) forming an X centered at the point.
+///
+/// The X is built in the \p basis plane, not in world XY: it is a marker, not geometry, so it must
+/// stay readable at any orientation instead of foreshortening to an edge near a horizontal view
+/// (REQ-058 / GAP-2).
 void AppendSurveyPointCrossVertices(float easting, float northing, float elevationZ, float halfExtentWorld,
-                                    std::vector<float>* outLines);
+                                    std::vector<float>* outLines, const MarkerBillboardBasis& basis = {});
 
 void AppendAllSurveyPointMarkers(float crossHalfWorld, const std::vector<SurveyPoint>& pts,
-                                 std::vector<float>* outLines);
+                                 std::vector<float>* outLines, const MarkerBillboardBasis& basis = {});
 
 void ResetCreatePointsNextIdFromSettings(AppCommandState& st);
 

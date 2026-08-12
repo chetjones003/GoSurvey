@@ -1357,13 +1357,18 @@ requirements is a planning failure, not a sign of rigor.
   - **snap glyphs face the viewer** at any orientation rather than lying in the work plane, where
     they foreshorten to an unreadable edge near a horizontal view. They are UI markers, not geometry.
 - Owner-layer: Renderer (matrices, draw), UI / Commands (input, picking, snap)
-- Status: accepted — **partially implemented, NOT signed off.** Camera, orbit, ray picking, 3D
-  snapping and the ELEV work plane are in use, but only LINE is carried through the full pipeline;
-  CIRCLE is known broken and the remaining types are unverified. REQ-100 is unmeasured. See
-  TASK-035 §10b (GAP-1/2/3).
+- Status: accepted — **SIGNED OFF 2026-08-12.** Every acceptance condition is met:
+  plan-view parity (asserted by `CameraTests`, not assumed); snaps from an orbited camera;
+  intersection snaps (REQ-062 / TASK-038 — the snap named here did not exist until then);
+  **every entity type** snapping, previewing and committing at the correct elevation (TASK-036
+  closed GAP-1/GAP-3, fourteen defects across six pipeline stages); screen-facing snap glyphs
+  (TASK-037 closed GAP-2); the suite green; and the REQ-100 frame budget measured at p95 8.93 ms
+  against 16 ms (TASK-039).
 - Revisions: 2026-08-11 — initial. 2026-08-11 — acceptance extended with the two conditions above
   once 3D drawing was actually exercised: "it works for lines" did not generalise, and a snap glyph
   built as flat world geometry is unreadable in a near-horizontal view.
+  2026-08-12 — signed off. The prior status ("only LINE is carried through; CIRCLE is known broken")
+  had been stale since TASK-036 and is superseded.
 
 ### REQ-059 — ViewCube (view navigation widget)
 - Purpose: direct, discoverable view control and continuous orientation feedback
@@ -1436,6 +1441,37 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-08-11 — initial.
 
+### REQ-062 — Intersection and apparent-intersection object snaps
+- Purpose: snap to where objects meet — and, in a 3D view, to where they only *look* like they meet
+- Priority: must
+- Type: functional
+- Statement: Two new object snaps join the existing set.
+  **Intersection** returns a point where two objects genuinely meet in 3D: their XY paths cross
+  *and* their elevations agree at that crossing within REQ-101. **Apparent intersection** returns a
+  point where two objects cross **as projected into the current view** but need not meet in space —
+  the case a plan view cannot distinguish and an orbited one makes obvious. Where the two candidate
+  3D points differ, apparent intersection returns the one **nearer the camera**: the object the user
+  is visually pointing at. Both are per-type toggles alongside Endpoint / Midpoint / Center, persist
+  in user preferences and `.gs`, and appear in the Shift+right-click snap-override menu.
+  Coverage is every drawable pair of line segments, polyline edges, arcs, circles and ellipses.
+  Intersections are computed analytically wherever a closed form exists and refined numerically
+  otherwise; a tessellated approximation does not satisfy REQ-101 and is not acceptable.
+- Acceptance:
+  - two segments that cross in XY at the same elevation report an Intersection snap at the crossing,
+    verified against hand-computed coordinates within REQ-101;
+  - the same two segments at elevations differing by more than REQ-101 report **no** Intersection —
+    and do report an Apparent intersection whenever the view projects them across each other;
+  - a line crossing a circle reports both intersection points at the exact analytic coordinates, not
+    the chord approximations a tessellated circle would give (a 24-chord arc is off by ~0.86 ft at
+    r = 100, which is 86× REQ-101);
+  - an intersection outside an arc's sweep, or beyond a segment's ends, is not reported;
+  - apparent intersection follows the view: two skew objects that cross on screen stop reporting a
+    snap once the camera orbits so their projections separate;
+  - in plan view an Apparent intersection at equal elevations coincides with the Intersection.
+- Owner-layer: util (pure intersection math), viewport (snap), UI (toggles, menu, glyph)
+- Status: accepted
+- Revisions: 2026-08-12 — initial.
+
 ---
 
 ## Performance requirements
@@ -1456,10 +1492,16 @@ requirements is a planning failure, not a sign of rigor.
 - Acceptance: a committed benchmark scene profiled on the reference machine stays
   within budget at the 95th-percentile frame during a scripted orbit.
 - Owner-layer: Renderer
-- Status: accepted
+- Status: accepted — **MET 2026-08-12**, p95 **8.93 ms** against the 16 ms budget at 250,000
+  segments, on the reference machine now recorded in `project.md` §7. Run it with the `BENCH`
+  command; the scene generator and its statistics are `src/util/benchscene.*`. The budget still
+  holds at 750k segments (p95 12.10 ms) and is exceeded at 1M (19.61 ms), so there is 3–4× headroom
+  over the required density. See TASK-039.
 - Revisions: 2026-08-11 — placeholder `<60 FPS / 16 ms>` / `<N>` replaced with a
   measurable budget, because REQ-058 makes framerate user-visible for the first
   time and R5 could not otherwise have a testable acceptance condition.
+  2026-08-12 — reference machine named (it was undefined, which made the budget unreproducible);
+  first measurement recorded.
 
 ### REQ-101 — Numerical tolerance
 - Purpose: domain correctness (CAD/survey)
@@ -1533,7 +1575,7 @@ requirements is a planning failure, not a sign of rigor.
 | Requirement | Layer | Test(s) | Status |
 |-------------|-------|---------|--------|
 | REQ-001 | IO | `<TEST-001>` | accepted |
-| REQ-100 | Renderer | `<bench-frame>` | proposed |
+| REQ-100 | Renderer | `BenchSceneTests` (exact segment count; byte-identical regeneration; segment count changes density not extent; iso-elevation contours; nearest-rank percentile) + the `BENCH` command on the reference machine (`project.md` §7) — p95 8.93 ms vs 16 ms at 250k segments, 2026-08-12 | accepted |
 | REQ-101 | compute | `<regression set>` | proposed |
 | REQ-010 | UI | manual (FBK import shows raw rows) | implemented |
 | REQ-011 | compute | `TraverseTests` "ComputeStats" | implemented |
@@ -1577,10 +1619,11 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-050 | Renderer | manual (MTEXT edited through a viewport at a non-drawing scale sizes off the viewport scale = constant plotted height; plain model view unchanged; single-line TEXT unchanged; survey labels unchanged) | accepted |
 | REQ-052 | IO/UI/Platform | `DxfEntityEmitTests` (TEXT declares AcDbText twice with group 73 in the second subclass — the shipped regression; group 7 an AcDbText property; entity groups inside AcDbEntity; 440 omitted when opaque + 0x02000000 packing) + `DwgProbeTests` (all ten release tags; "not a DWG" vs "unknown DWG"; short/empty/missing/null files; converter override honoured, classified case-insensitively, bogus path never trusted, cache holds until rescan) + manual/harness (real R2018 DWG imports; export states what it drops; the written DWG reopens in AutoCAD 2026 with its entities, layers and text; no temp dirs leaked) | accepted (Phase 1 + 1b) |
 | REQ-057 | Domain/IO/UI | planned — DXF group-30 round-trip within REQ-101; `.gs` Z bit-identical on reload; legacy `.gs` loads all-zero Z; Properties Z edit undoable; survey elevation reads back as Z; parallel Z arrays stay length-locked across insert/erase/undo | accepted |
-| REQ-058 | Renderer/UI/Commands | planned — plan view pixel-comparable to pre-change; snaps correct from an orbited camera within REQ-101; draw on a non-default UCS lands on that plane; existing suite green; REQ-100 met while orbiting | accepted |
+| REQ-058 | Renderer/UI/Commands | `CameraTests` (plan-view parity, anchor-before-rotation composition, billboard basis) + `Ray3dTests` + `LinetypeTessellationTests` (per-vertex Z) + `CurveIntersectTests` + `BenchSceneTests`; manual/scripted in-app before/after for the render, overlay and glyph stages that no test target can link (TASK-036/037/039) | accepted — signed off 2026-08-12 |
 | REQ-059 | UI | planned — manual (+Z / −Y / an off-axis handle animate correctly and settle < 0.5 s; gizmo tracks the camera after orbit; clicks outside the gizmo still pick geometry). Appearance is ImOGuizmo stock — the mockup is not the target (amended 2026-08-11) | accepted |
 | REQ-060 | UI/Commands | planned — manual (translate/rotate/scale each apply and undo in one step; gizmo result matches the typed command within REQ-101; no gizmo with an empty selection) | accepted |
 | REQ-061 | Domain/Renderer/IO | planned — manual (two viewports, one plan one isometric, correct on screen and in the PDF plot; legacy `.gs` opens all-plan and renders unchanged) | accepted |
+| REQ-062 | util/Viewport/UI | `CurveIntersectTests` (seg×seg incl. parallel/collinear/endpoint-touch; seg×circle two-root/tangent/miss; arc sweep and segment-range filtering; circle×circle incl. concentric and tangent; ellipse×curve refined to REQ-101 against hand-computed roots; projection into a view basis) + manual (elevation-separated segments give APPINT but not INT; orbiting until projections separate drops the APPINT) | accepted |
 | REQ-056 | Commands/UI/Viewport/IO | manual (fresh profile: TRIM prompts for a trim line and two clicks trim + end; `TRIMSTATE 1` restores cutting-edge picking and survives a restart; bare `TRIMSTATE` shows the value, blank Enter keeps it, `TRIMSTATE 2` refused; T/L switch mid-run; hover pre-highlights a candidate edge, picked edges stay highlighted, an already-picked edge does not double-highlight) | accepted |
 | REQ-055 | UI/IO | manual (File > New and File > Open land on the new tab with 2+ tabs open; "+" likewise; closing a tab focuses its replacement; pan/zoom survives save → close → reopen, including on a state-plane drawing that rebases on load; a pre-REQ-055 `.gs` opens framed to its drawing) | accepted |
 | REQ-054 | Commands/UI/IO | manual (right-click with a selection opens the shortcut menu on an existing profile and a fresh one; Select similar on a `PARCEL` line picks up only `PARCEL` lines of that colour; a TEXT does not sweep in dimensions; the log states count + layer + colour) | accepted |

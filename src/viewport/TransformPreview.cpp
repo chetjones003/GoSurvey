@@ -432,8 +432,11 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
   }
 }
 
+/// Highlight strokes for one entity, each at the entity's OWN elevation (REQ-058). This used to
+/// take a flat `lineZ` draw depth; with the filled region converted, no type needs one — depth
+/// testing is off, so draw ORDER decides occlusion and the Z is free to mean elevation.
 static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEntity& e,
-                                   float lineZ, std::vector<float>* hlLines, std::vector<float>* hlCircles) {
+                                  std::vector<float>* hlLines, std::vector<float>* hlCircles) {
   if (e.type == SelectedEntity::Type::LineSeg) {
     const size_t k = static_cast<size_t>(e.index) * 6;
     if (k + 5 >= cmd.userLinesFlat.size())
@@ -481,14 +484,16 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
       for (int i = 0; i < cnt; ++i) {
         const int a = begin + i;
         const int b = begin + (i + 1) % cnt;
-        // Highlight strokes keep using lineZ (the overlay's fixed draw depth), not the vertex's own
-        // Z — depth-correct highlighting arrives with the camera in REQ-058/TASK-035.
+        // The vertex's OWN Z, not the overlay's fixed draw depth (REQ-058) — the last entity type
+        // in this file still using lineZ. Depth testing is off, so lineZ only ever ordered the draw;
+        // once the view can tilt it is simply a wrong elevation, and the highlight detaches from
+        // the hatch it is meant to trace.
         hlLines->push_back(fr.vertsXyz[static_cast<size_t>(a) * 3]);
         hlLines->push_back(fr.vertsXyz[static_cast<size_t>(a) * 3 + 1]);
-        hlLines->push_back(lineZ);
+        hlLines->push_back(fr.vertsXyz[static_cast<size_t>(a) * 3 + 2]);
         hlLines->push_back(fr.vertsXyz[static_cast<size_t>(b) * 3]);
         hlLines->push_back(fr.vertsXyz[static_cast<size_t>(b) * 3 + 1]);
-        hlLines->push_back(lineZ);
+        hlLines->push_back(fr.vertsXyz[static_cast<size_t>(b) * 3 + 2]);
       }
     }
   }
@@ -498,17 +503,16 @@ void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<float>* hlL
                              std::vector<float>* hlCircles) {
   hlLines->clear();
   hlCircles->clear();
-  constexpr float kLineZ = 0.012f;
   for (const auto& e : cmd.selection)
-    AppendEntityHighlight(cmd, e, kLineZ, hlLines, hlCircles);
+    AppendEntityHighlight(cmd, e, hlLines, hlCircles);
   if (cmd.active == AppCommandState::Kind::Offset && cmd.offsetPhase == AppCommandState::OffsetPhase::WaitSelectEntity &&
       cmd.offsetHoverHighlightValid)
-    AppendEntityHighlight(cmd, cmd.offsetHoverEntity, kLineZ, hlLines, hlCircles);
+    AppendEntityHighlight(cmd, cmd.offsetHoverEntity, hlLines, hlCircles);
   // TRIM cutting edges read as a selection while they are being picked (REQ-056): they are chosen the way
   // a selection is chosen, so they get the selection's highlight rather than an appearance of their own.
   if (cmd.active == AppCommandState::Kind::Trim) {
     for (const auto& c : cmd.trimCutters)
-      AppendEntityHighlight(cmd, c, kLineZ, hlLines, hlCircles);
+      AppendEntityHighlight(cmd, c, hlLines, hlCircles);
   }
 }
 
@@ -531,6 +535,5 @@ void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLi
         return;
     }
   }
-  constexpr float kLineZ = 0.011f;
-  AppendEntityHighlight(cmd, e, kLineZ, hoverLines, hoverCircles);
+  AppendEntityHighlight(cmd, e, hoverLines, hoverCircles);
 }

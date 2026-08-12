@@ -42,11 +42,12 @@ when" and the requirements it closes.
 - **Done when:** `<the regression dataset passes at the stated tolerance>`
 - **Status:** `<planned>`
 
-### M3 — `<Interactive performance>`
-- **Goal:** `<Smooth editing at target scene size>`
+### M3 — Interactive performance
+- **Goal:** Smooth editing and orbiting at target scene size
 - **Delivers:** REQ-100
-- **Done when:** `<benchmark scene holds the frame budget on reference hardware>`
-- **Status:** `<planned>`
+- **Done when:** the benchmark scene holds the frame budget on reference hardware
+- **Status:** **done 2026-08-12** — p95 8.93 ms against the 16 ms budget at 250,000 segments under
+  continuous orbit, on the reference machine recorded in `project.md` §7. Run with `BENCH`.
 
 > Add milestones until the in-scope list in `project.md` is covered. Stop there.
 
@@ -117,7 +118,7 @@ M1 walking skeleton
 | Risk | Impact | Mitigation / spike |
 |------|--------|--------------------|
 | `<Reference data unavailable for tolerance test>` | blocks M2 verification | `<obtain dataset / build synthetic reference>` |
-| `<GL driver variance across target GPUs>` | perf budget unmet on some HW | `<define reference hardware; spike early>` |
+| GL driver variance across target GPUs | perf budget unmet on some HW | **Mitigated 2026-08-12**: reference hardware is defined (`project.md` §7) and REQ-100 is measurable on demand via `BENCH`. Residual risk stands — the budget is only known on that one machine, and it holds to 750k segments there, so a weaker GPU has 3–4× less headroom than the figure suggests |
 | `<…>` | `<…>` | `<…>` |
 
 ---

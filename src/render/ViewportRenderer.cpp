@@ -177,30 +177,6 @@ void AppendCircleLineApprox(std::vector<float>& out, float cx, float cy, float r
   }
 }
 
-void AppendCircleLineApproxViewRel(std::vector<float>& out, float viewCx, float viewCy, float r, int segments,
-                                   float z) {
-  if (r <= 1e-6f || segments < 1)
-    return;
-  const double dr = static_cast<double>(r);
-  const double dcx = static_cast<double>(viewCx);
-  const double dcy = static_cast<double>(viewCy);
-  constexpr double kTwoPi = 6.283185307179586;
-  for (int i = 0; i < segments; ++i) {
-    const double t0 = kTwoPi * static_cast<double>(i) / static_cast<double>(segments);
-    const double t1 = kTwoPi * static_cast<double>(i + 1) / static_cast<double>(segments);
-    const double c0 = std::cos(t0);
-    const double s0 = std::sin(t0);
-    const double c1 = std::cos(t1);
-    const double s1 = std::sin(t1);
-    out.push_back(static_cast<float>(dcx + dr * c0));
-    out.push_back(static_cast<float>(dcy + dr * s0));
-    out.push_back(z);
-    out.push_back(static_cast<float>(dcx + dr * c1));
-    out.push_back(static_cast<float>(dcy + dr * s1));
-    out.push_back(z);
-  }
-}
-
 const CadLayerRow* LookupLayerRowCi(const std::vector<CadLayerRow>* layers, const std::string& layerName) {
   if (!layers)
     return nullptr;
@@ -225,7 +201,11 @@ float LineweightMmToDevicePx(float mm) {
   return std::clamp(0.65f + mm * 5.25f, 1.f, 16.f);
 }
 
-void AppendPolylineEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput& eg, float z, float defR,
+/// A polyline is the one committed type whose vertices each carry their own elevation (REQ-057), so
+/// it is tessellated against a per-vertex Z array rather than one flat chain elevation. Passing a
+/// single z here drew a polyline up a slope — or one imported from DXF with per-vertex group-38
+/// elevations — as if it were level, in every view (REQ-058).
+void AppendPolylineEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput& eg, float defR,
                            float defG, float defB, float dashPatScale, double viewAnchorX, double viewAnchorY) {
   const auto* V = eg.polylineVerts;
   const auto* O = eg.polylineOffsets;
@@ -252,13 +232,15 @@ void AppendPolylineEdgesVc(std::vector<float>& out, const CadExtendedGeometryInp
     if (nv < 2)
       continue;
     std::vector<float> xy(static_cast<size_t>(nv * 2));
+    std::vector<float> zs(static_cast<size_t>(nv));
     for (int k = 0; k < nv; ++k) {
       const int vi = v0 + k;
       WorldToViewRelativeFloat(static_cast<double>((*V)[static_cast<size_t>(vi * 3 + 0)]),
                                static_cast<double>((*V)[static_cast<size_t>(vi * 3 + 1)]), viewAnchorX,
                                viewAnchorY, &xy[static_cast<size_t>(k * 2)], &xy[static_cast<size_t>(k * 2 + 1)]);
+      zs[static_cast<size_t>(k)] = (*V)[static_cast<size_t>(vi * 3 + 2)];  // absolute, not view-relative (ADR-025 D2)
     }
-    CadTessellateLinetypeChainVc(xy.data(), nv, z, closed, lt, dashPatScale, rgba, &out);
+    CadTessellateLinetypeChainVc(xy.data(), nv, 0.f, closed, lt, dashPatScale, rgba, &out, zs.data());
   }
 }
 
@@ -342,45 +324,80 @@ void AppendCircleVcDashed(std::vector<float>& out, float cx, float cy, float r, 
   CadTessellateLinetypeChainVc(xy.data(), segments + 1, z, true, lt, dashPatScale, rgba, &out);
 }
 
-void AppendSnapSquareOutline(std::vector<float>& out, float cx, float cy, float z, float h) {
-  auto seg = [&](float x0, float y0, float x1, float y1) {
-    out.push_back(x0);
-    out.push_back(y0);
-    out.push_back(z);
-    out.push_back(x1);
-    out.push_back(y1);
-    out.push_back(z);
-  };
-  seg(cx - h, cy - h, cx + h, cy - h);
-  seg(cx + h, cy - h, cx + h, cy + h);
-  seg(cx + h, cy + h, cx - h, cy + h);
-  seg(cx - h, cy + h, cx - h, cy - h);
+/// A snap glyph's drawing frame: the point it marks, plus the camera's right/up axes in world
+/// coordinates (REQ-058).
+///
+/// Snap glyphs are UI markers, not geometry. Built as flat world-XY shapes they lie in the work
+/// plane, so an orbit foreshortens them and a near-horizontal view collapses them to an unreadable
+/// edge — GAP-2. Building each one as `centre + right*u + up*v` makes it face the viewer at any
+/// orientation while keeping the constant pixel size `glyphHalfPx` already gives it.
+///
+/// \c cx,\c cy are view-relative XY and \c cz is absolute world Z (the mixed convention the whole
+/// overlay pipeline uses). Adding a world-space offset is valid in that frame because the
+/// view-relative transform is a pure XY translation.
+struct SnapGlyphFrame {
+  float cx = 0.f, cy = 0.f, cz = 0.f;
+  ray3d::Vec3 right{1.0, 0.0, 0.0};
+  ray3d::Vec3 up{0.0, 1.0, 0.0};
+
+  /// One segment between two points given in glyph-plane offsets (\p u across, \p v up).
+  void seg(std::vector<float>& out, float u0, float v0, float u1, float v1) const {
+    auto emit = [&](float u, float v) {
+      out.push_back(cx + static_cast<float>(right.x) * u + static_cast<float>(up.x) * v);
+      out.push_back(cy + static_cast<float>(right.y) * u + static_cast<float>(up.y) * v);
+      out.push_back(cz + static_cast<float>(right.z) * u + static_cast<float>(up.z) * v);
+    };
+    emit(u0, v0);
+    emit(u1, v1);
+  }
+};
+
+void AppendSnapSquareOutline(std::vector<float>& out, const SnapGlyphFrame& f, float h) {
+  f.seg(out, -h, -h, h, -h);
+  f.seg(out, h, -h, h, h);
+  f.seg(out, h, h, -h, h);
+  f.seg(out, -h, h, -h, -h);
 }
 
-void AppendSnapTriangleOutline(std::vector<float>& out, float cx, float cy, float z, float h) {
-  auto seg = [&](float x0, float y0, float x1, float y1) {
-    out.push_back(x0);
-    out.push_back(y0);
-    out.push_back(z);
-    out.push_back(x1);
-    out.push_back(y1);
-    out.push_back(z);
-  };
-  seg(cx, cy + h, cx - h, cy - h);
-  seg(cx - h, cy - h, cx + h, cy - h);
-  seg(cx + h, cy - h, cx, cy + h);
+void AppendSnapTriangleOutline(std::vector<float>& out, const SnapGlyphFrame& f, float h) {
+  f.seg(out, 0.f, h, -h, -h);
+  f.seg(out, -h, -h, h, -h);
+  f.seg(out, h, -h, 0.f, h);
 }
 
-void AppendSnapCrossInSquare(std::vector<float>& out, float cx, float cy, float z, float h) {
-  out.insert(out.end(),
-             {cx - h, cy, z, cx + h, cy, z, cx, cy - h, z, cx, cy + h, z});
+void AppendSnapCrossInSquare(std::vector<float>& out, const SnapGlyphFrame& f, float h) {
+  f.seg(out, -h, 0.f, h, 0.f);
+  f.seg(out, 0.f, -h, 0.f, h);
 }
 
 /// Two diagonal segments (×); \p halfDiag is half the segment length along each diagonal from center.
-void AppendSnapDiagonalCross(std::vector<float>& out, float cx, float cy, float z, float halfDiag) {
+void AppendSnapDiagonalCross(std::vector<float>& out, const SnapGlyphFrame& f, float halfDiag) {
   const float h = halfDiag;
-  out.insert(out.end(),
-             {cx - h, cy - h, z, cx + h, cy + h, z, cx - h, cy + h, z, cx + h, cy - h, z});
+  f.seg(out, -h, -h, h, h);
+  f.seg(out, -h, h, h, -h);
+}
+
+/// Diamond outline — the apparent-intersection glyph's frame (REQ-062). Distinct at a glance from
+/// the endpoint square and the geometric-centre square-plus-cross.
+void AppendSnapDiamondOutline(std::vector<float>& out, const SnapGlyphFrame& f, float h) {
+  f.seg(out, 0.f, h, h, 0.f);
+  f.seg(out, h, 0.f, 0.f, -h);
+  f.seg(out, 0.f, -h, -h, 0.f);
+  f.seg(out, -h, 0.f, 0.f, h);
+}
+
+/// Closed circle approximation in the glyph's own plane, so it stays a circle rather than
+/// flattening to an ellipse under orbit.
+void AppendSnapCircle(std::vector<float>& out, const SnapGlyphFrame& f, float r, int segments) {
+  if (r <= 0.f || segments < 3)
+    return;
+  constexpr double kTwoPi = 6.283185307179586;
+  for (int i = 0; i < segments; ++i) {
+    const double t0 = kTwoPi * static_cast<double>(i) / static_cast<double>(segments);
+    const double t1 = kTwoPi * static_cast<double>(i + 1) / static_cast<double>(segments);
+    f.seg(out, r * static_cast<float>(std::cos(t0)), r * static_cast<float>(std::sin(t0)),
+          r * static_cast<float>(std::cos(t1)), r * static_cast<float>(std::sin(t1)));
+  }
 }
 
 void AppendWorldRectOutline(std::vector<float>& o, float xa, float ya, float xb, float yb, float z, double viewAnchorX,
@@ -442,44 +459,57 @@ void ConvertLineVertsWorldToView(const std::vector<float>& world, double viewAnc
   }
 }
 
-void BuildSnapOverlayLines(const CadSnap::Hit& snap, float halfWorld, int fbHeight, float glyphHalfPx,
-                           double viewAnchorX, double viewAnchorY, std::vector<float>& out) {
+void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float halfWorld, int fbHeight,
+                           float glyphHalfPx, double viewAnchorX, double viewAnchorY, std::vector<float>& out) {
   if (!snap.valid)
     return;
-  float sx = 0.f;
-  float sy = 0.f;
-  WorldToViewRelativeFloat(static_cast<double>(snap.x), static_cast<double>(snap.y), viewAnchorX, viewAnchorY, &sx,
-                           &sy);
+  SnapGlyphFrame f;
+  WorldToViewRelativeFloat(static_cast<double>(snap.x), static_cast<double>(snap.y), viewAnchorX, viewAnchorY, &f.cx,
+                           &f.cy);
   // The glyph sits at the snapped point's own elevation, with a hair of lift so it still draws
   // over coincident geometry (REQ-057/058). Pinning it to a constant put the marker on the datum
   // while the point it marks was elevated, so it drifted away from the geometry under orbit.
-  const float zSnap = snap.z + 0.045f;
+  f.cz = snap.z + 0.045f;
+  // Screen-facing, not work-plane-aligned (REQ-058 / GAP-2). In plan view right/up are world +X/+Y,
+  // so every glyph below is built from exactly the offsets it used before.
+  f.right = cam.RightWorld();
+  f.up = cam.UpWorld();
   const float mh = std::clamp(glyphHalfPx, 3.f, 48.f) * (2.f * halfWorld) / static_cast<float>(std::max(fbHeight, 1));
   const int snapCircSegs = std::max(16, static_cast<int>(mh * 40.f));
   switch (snap.kind) {
   case CadSnap::Kind::Endpoint:
-    AppendSnapSquareOutline(out, sx, sy, zSnap, mh);
+    AppendSnapSquareOutline(out, f, mh);
     break;
   case CadSnap::Kind::Midpoint:
-    AppendSnapTriangleOutline(out, sx, sy, zSnap, mh);
+    AppendSnapTriangleOutline(out, f, mh);
     break;
   case CadSnap::Kind::Center:
-    AppendCircleLineApproxViewRel(out, sx, sy, mh * 0.85f, snapCircSegs, zSnap);
+    AppendSnapCircle(out, f, mh * 0.85f, snapCircSegs);
     break;
   case CadSnap::Kind::SurveyCenter: {
     const float R = mh * 0.62f;
-    AppendCircleLineApproxViewRel(out, sx, sy, R, snapCircSegs, zSnap);
+    AppendSnapCircle(out, f, R, snapCircSegs);
     // × slightly larger than the circle (tips past radius R in diagonal directions).
-    AppendSnapDiagonalCross(out, sx, sy, zSnap, R * 0.78f);
+    AppendSnapDiagonalCross(out, f, R * 0.78f);
     break;
   }
   case CadSnap::Kind::GeometricCenter:
-    AppendSnapSquareOutline(out, sx, sy, zSnap, mh);
-    AppendSnapDiagonalCross(out, sx, sy, zSnap, mh * 0.42f);
+    AppendSnapSquareOutline(out, f, mh);
+    AppendSnapDiagonalCross(out, f, mh * 0.42f);
     break;
   case CadSnap::Kind::Perpendicular:
-    AppendSnapSquareOutline(out, sx, sy, zSnap, mh);
-    AppendSnapCrossInSquare(out, sx, sy, zSnap, mh * 0.55f);
+    AppendSnapSquareOutline(out, f, mh);
+    AppendSnapCrossInSquare(out, f, mh * 0.55f);
+    break;
+  case CadSnap::Kind::Intersection:
+    // A plain X — the objects genuinely cross here (REQ-062).
+    AppendSnapDiagonalCross(out, f, mh);
+    break;
+  case CadSnap::Kind::ApparentIntersection:
+    // The same X inside a diamond: it reads as "an intersection, qualified" — the objects line up
+    // in this view but need not touch, so the marker should not be mistaken for a real one.
+    AppendSnapDiagonalCross(out, f, mh * 0.62f);
+    AppendSnapDiamondOutline(out, f, mh);
     break;
   case CadSnap::Kind::Grip:
     break; // grip snap is silent — no glyph drawn
@@ -1008,8 +1038,14 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         continue;  // line-pattern hatches are drawn as clipped lines in the ImGui overlay (REQ-043)
       fan.clear();
       double mnx = 1e300, mxx = -1e300, mny = 1e300, mxy = -1e300;
+      // The stencil cover quad spans the region's XY bounds and so needs one elevation; a filled
+      // region is planar in practice, so the mean vertex Z is that plane and is exact whenever the
+      // loops share an elevation (REQ-058).
+      double zSum = 0.;
+      int zCount = 0;
       auto vx = [&](int p) { return fr.vertsXyz[static_cast<size_t>(p) * 3 + 0]; };
       auto vy = [&](int p) { return fr.vertsXyz[static_cast<size_t>(p) * 3 + 1]; };
+      auto vz = [&](int p) { return fr.vertsXyz[static_cast<size_t>(p) * 3 + 2]; };
       for (size_t li = 0; li < fr.loopStart.size(); ++li) {
         const int begin = fr.loopStart[li];
         const int cnt = fr.loopCount(li);
@@ -1018,19 +1054,21 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         for (int v = 1; v + 1 < cnt; ++v) {
           fan.push_back(vx(begin) - static_cast<float>(viewAnchorX));
           fan.push_back(vy(begin) - static_cast<float>(viewAnchorY));
-          fan.push_back(0.f);
+          fan.push_back(vz(begin));
           fan.push_back(vx(begin + v) - static_cast<float>(viewAnchorX));
           fan.push_back(vy(begin + v) - static_cast<float>(viewAnchorY));
-          fan.push_back(0.f);
+          fan.push_back(vz(begin + v));
           fan.push_back(vx(begin + v + 1) - static_cast<float>(viewAnchorX));
           fan.push_back(vy(begin + v + 1) - static_cast<float>(viewAnchorY));
-          fan.push_back(0.f);
+          fan.push_back(vz(begin + v + 1));
         }
         for (int v = 0; v < cnt; ++v) {
           mnx = std::min(mnx, static_cast<double>(vx(begin + v)));
           mxx = std::max(mxx, static_cast<double>(vx(begin + v)));
           mny = std::min(mny, static_cast<double>(vy(begin + v)));
           mxy = std::max(mxy, static_cast<double>(vy(begin + v)));
+          zSum += static_cast<double>(vz(begin + v));
+          ++zCount;
         }
       }
       if (fan.empty())
@@ -1054,8 +1092,9 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glUniform4f(locCol, rgba[0], rgba[1], rgba[2], 1.f);
       const float qx0 = static_cast<float>(mnx - viewAnchorX), qy0 = static_cast<float>(mny - viewAnchorY);
       const float qx1 = static_cast<float>(mxx - viewAnchorX), qy1 = static_cast<float>(mxy - viewAnchorY);
-      const float quad[18] = {qx0, qy0, 0.f, qx1, qy0, 0.f, qx1, qy1, 0.f,
-                              qx0, qy0, 0.f, qx1, qy1, 0.f, qx0, qy1, 0.f};
+      const float qz = (zCount > 0) ? static_cast<float>(zSum / static_cast<double>(zCount)) : 0.f;
+      const float quad[18] = {qx0, qy0, qz, qx1, qy0, qz, qx1, qy1, qz,
+                              qx0, qy0, qz, qx1, qy1, qz, qx0, qy1, qz};
       glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STREAM_DRAW);
       glDrawArrays(GL_TRIANGLES, 0, 6);
     }
@@ -1222,7 +1261,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
           const CadLayerRow* lr0 =
               LookupLayerRowCi(drawingLayers, attr0.layer.empty() ? std::string("0") : attr0.layer);
           maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr0, lr0)));
-          AppendPolylineEdgesVc(cpuVcLines_, *extended, 0.f, kLineDefaultR, kLineDefaultG, kLineDefaultB,
+          AppendPolylineEdgesVc(cpuVcLines_, *extended, kLineDefaultR, kLineDefaultG, kLineDefaultB,
                                 dashPatScale, viewAnchorX, viewAnchorY);
           lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
         }
@@ -1488,7 +1527,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // --- Object snap glyph (green, screen-stable size) ---
   if (snapOverlay && snapOverlay->valid) {
     std::vector<float> snapGeom;
-    BuildSnapOverlayLines(*snapOverlay, halfH, fbH_, snapGlyphHalfPx, viewAnchorX, viewAnchorY, snapGeom);
+    BuildSnapOverlayLines(*snapOverlay, cam, halfH, fbH_, snapGlyphHalfPx, viewAnchorX, viewAnchorY, snapGeom);
     if (!snapGeom.empty()) {
       glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
       glUniform4f(locCol, 0.15f, 0.92f, 0.38f, 1.f);

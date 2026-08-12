@@ -4,7 +4,22 @@
 
 namespace CadSnap {
 
-enum class Kind { Endpoint, Midpoint, Center, Perpendicular, SurveyCenter, GeometricCenter, Grip };
+enum class Kind {
+  Endpoint,
+  Midpoint,
+  Center,
+  Perpendicular,
+  SurveyCenter,
+  GeometricCenter,
+  /// Objects that genuinely meet in 3D: their XY paths cross AND their elevations agree there
+  /// within REQ-101 (REQ-062).
+  Intersection,
+  /// Objects that cross **as projected into the current view** but need not meet in space — the
+  /// case a plan view cannot distinguish and an orbited one makes obvious. Where the two candidate
+  /// points differ, the one nearer the camera is returned (REQ-062).
+  ApparentIntersection,
+  Grip
+};
 
 struct Hit {
   bool valid = false;
@@ -59,10 +74,14 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     return 2; ///< Same tier as circle center; distance breaks ties
   case Kind::Center:
     return 2; ///< Circle centers beat segment midpoint when snap distances tie
+  case Kind::Intersection:
+    return 3; ///< As precise a feature as an endpoint — a real crossing of two objects (REQ-062)
   case Kind::GeometricCenter:
     return 1; ///< Closed-shape centroid; same tier as midpoint (distance breaks ties)
   case Kind::Midpoint:
     return 1;
+  case Kind::ApparentIntersection:
+    return 1; ///< A weaker claim than Intersection: the objects may not touch at all (REQ-062)
   case Kind::Perpendicular:
     return 0;
   case Kind::Grip:

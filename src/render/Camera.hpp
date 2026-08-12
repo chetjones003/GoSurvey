@@ -137,6 +137,25 @@ struct Camera {
     return ray3d::Normalize(ray3d::Vec3{-r[2], -r[6], -r[10]});
   }
 
+  /// World-space camera RIGHT (screen +X) — row 0 of the view rotation.
+  ///
+  /// Derived from `ViewRotation` for the same reason `ForwardWorld` is: one derivation, one
+  /// convention. Used to build screen-facing (billboarded) UI markers about a world point —
+  /// `p + RightWorld()*u + UpWorld()*v` — so a glyph reads the same at any orientation instead of
+  /// foreshortening with the work plane (REQ-058).
+  [[nodiscard]] ray3d::Vec3 RightWorld() const {
+    float r[16];
+    ViewRotation(r);
+    return ray3d::Normalize(ray3d::Vec3{r[0], r[4], r[8]});
+  }
+
+  /// World-space camera UP (screen +Y) — row 1 of the view rotation. See \ref RightWorld.
+  [[nodiscard]] ray3d::Vec3 UpWorld() const {
+    float r[16];
+    ViewRotation(r);
+    return ray3d::Normalize(ray3d::Vec3{r[1], r[5], r[9]});
+  }
+
   /// Signed shortest turn from \p fromDeg to \p toDeg, in (-180, 180].
   ///
   /// Animating an orientation change has to take the short way around: interpolating raw degrees

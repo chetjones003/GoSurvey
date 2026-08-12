@@ -543,6 +543,35 @@ struct AppCommandState {
   /// Scales arrow length derived from annotation height (1 = default).
   float viewportDimArrowScale = 1.f;
   /// Object snap master (F3, status bar OSNAP). Per-type toggles: right-click OSNAP or Settings → Object snap.
+  /// One REQ-100 frame-budget run: the bench scene, the scripted orbit, and the timings.
+  ///
+  /// The scene is SWAPPED into the active drawing's polyline arrays and swapped back when the run
+  /// ends, so a benchmark can never cost the user their drawing. That is also why the saved arrays
+  /// live here rather than the bench building a document of its own — there is no "new drawing"
+  /// entry point in the command layer to build one with.
+  struct BenchRun {
+    bool active = false;
+    bool sceneInstalled = false;
+    int frameIndex = 0;
+    int framesTotal = 0;
+    int warmupFrames = 0;   ///< Frames discarded before timing starts (shader/VBO upload, cache fill).
+    int segmentCount = 0;
+    double orbitDegPerFrame = 0.0;
+    std::vector<double> frameMs;
+
+    std::vector<float> savedPolyVerts;
+    std::vector<int> savedPolyOffsets;
+    std::vector<std::uint8_t> savedPolyClosed;
+    std::vector<EntityAttributes> savedPolyAttrs;
+    float savedAzimuthDeg = 0.f;
+    float savedElevationDeg = 90.f;
+    float savedZoom = 1.f;
+    double savedPanX = 0.0;
+    double savedPanY = 0.0;
+    double savedPanZ = 0.0;
+  };
+  BenchRun bench;
+
   bool objectSnapEnabled = true;
   bool objectSnapEndpoint = true;
   bool objectSnapMidpoint = true;
@@ -550,6 +579,11 @@ struct AppCommandState {
   bool objectSnapPerpendicular = true;
   bool objectSnapSurveyPoint = true;
   bool objectSnapGeometricCenter = true;
+  /// Snap where two objects genuinely meet in 3D (REQ-062).
+  bool objectSnapIntersection = true;
+  /// Snap where two objects only *appear* to meet in the current view (REQ-062). Off by default,
+  /// as in AutoCAD: it fires on objects that do not touch, which is surprising unless asked for.
+  bool objectSnapApparentIntersection = false;
   /// Screen-space aperture (pixels) for object snap tolerance and related viewport picks.
   float objectSnapAperturePx = 14.f;
   /// Half-size in screen pixels for green object-snap glyphs (square / triangle / circle overlay).
@@ -1742,6 +1776,12 @@ void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartTrimStateCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Validate and apply a TRIMSTATE value (0 or 1). False + a logged message when out of range.
 bool ApplyTrimStateValue(AppCommandState& st, int value, std::vector<std::string>& log);
+
+/// REQ-100 frame-budget benchmark. \ref StartFrameBudgetBench installs the bench scene and the
+/// scripted orbit; the frame loop drives it and calls \ref FinishFrameBudgetBench, which restores
+/// the user's drawing and camera and reports the p95 verdict.
+bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::vector<std::string>& log);
+void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log);
 /// ELEV — set the work-plane elevation new geometry is drawn at (REQ-058).
 void StartElevCommand(AppCommandState& st, std::vector<std::string>& log);
 bool ApplyElevValue(AppCommandState& st, double z, std::vector<std::string>& log);

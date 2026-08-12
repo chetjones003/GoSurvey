@@ -185,9 +185,50 @@ int main()
   bool gridVisible = false;
   // prevDrawingIdx lives in cmd — no local needed.
 
+  // REQ-100 bench state that belongs to the loop rather than to the command layer.
+  bool benchVsyncOff = false;
+  double benchPrevTime = 0.0;
+
   while (true)
   {
     glfwPollEvents();
+
+    // --- REQ-100 frame-budget benchmark ---------------------------------------------------------
+    // Timed at the TOP of the iteration, so each sample is the full frame-to-frame cost the user
+    // actually feels: poll, UI, snap/hover, render, swap.
+    //
+    // Vsync must be off for the whole run. With glfwSwapInterval(1) every frame is pinned to a
+    // multiple of the refresh interval, so the measurement would report the monitor rather than the
+    // renderer — ~16.7 ms whatever the scene costs, and a clean 16 ms "pass" that means nothing.
+    if (cmd.bench.active)
+    {
+      if (!benchVsyncOff)
+      {
+        glfwSwapInterval(0);
+        benchVsyncOff = true;
+        benchPrevTime = glfwGetTime();
+      }
+      else
+      {
+        const double nowT = glfwGetTime();
+        // Warm-up frames are discarded: the first frames of a run pay for shader compilation, the
+        // 250k-segment VBO upload and the tessellation cache, none of which recur while orbiting.
+        if (cmd.bench.frameIndex >= cmd.bench.warmupFrames)
+          cmd.bench.frameMs.push_back((nowT - benchPrevTime) * 1000.0);
+        benchPrevTime = nowT;
+      }
+      ++cmd.bench.frameIndex;
+      // The scripted orbit. Azimuth only: it keeps every contour on screen for the whole run, so
+      // no frame is cheap merely because the geometry left the viewport.
+      cmd.viewportAzimuthDeg =
+          static_cast<float>(std::fmod(cmd.viewportAzimuthDeg + cmd.bench.orbitDegPerFrame, 360.0));
+      if (cmd.bench.frameIndex >= cmd.bench.framesTotal + cmd.bench.warmupFrames)
+      {
+        FinishFrameBudgetBench(cmd, cmdLog);
+        glfwSwapInterval(1);
+        benchVsyncOff = false;
+      }
+    }
 
     // Intercept window-close so we can prompt about unsaved drawings.
     if (glfwWindowShouldClose(window))
@@ -541,7 +582,19 @@ int main()
     {
       const float surveyCrossHalf =
           SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
-      AppendAllSurveyPointMarkers(surveyCrossHalf, cmd.surveyPoints, &surveyMarkers);
+      // Screen-facing marker crosses (REQ-058 / GAP-2): a survey X is a marker, not geometry, so it
+      // is built in the camera's plane. Plan view gives world +X/+Y and the pre-3D geometry back.
+      const Camera markerCam = CadViewCamera(cmd);
+      const ray3d::Vec3 mr = markerCam.RightWorld();
+      const ray3d::Vec3 mu = markerCam.UpWorld();
+      MarkerBillboardBasis markerBasis;
+      markerBasis.rightX = static_cast<float>(mr.x);
+      markerBasis.rightY = static_cast<float>(mr.y);
+      markerBasis.rightZ = static_cast<float>(mr.z);
+      markerBasis.upX = static_cast<float>(mu.x);
+      markerBasis.upY = static_cast<float>(mu.y);
+      markerBasis.upZ = static_cast<float>(mu.z);
+      AppendAllSurveyPointMarkers(surveyCrossHalf, cmd.surveyPoints, &surveyMarkers, markerBasis);
     }
 
     CadExtendedGeometryInput ext{};

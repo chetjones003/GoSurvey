@@ -120,11 +120,21 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
                                std::vector<float>& rubberLines) {
   const float curXf = static_cast<float>(curX);
   const float curYf = static_cast<float>(curY);
+  // The elevation this command will COMMIT at (REQ-058). A rubber drawn on the datum while the
+  // geometry lands on the work plane reads as correct in plan view and is plainly wrong the moment
+  // the view tilts — the same class of defect as TASK-035 DEFECT-C.
+  //
+  // LINE and POLYLINE take their far end from here and their near end from cmd.anchorZ, because a
+  // segment genuinely spans two elevations. ARC and ELLIPSE are planar entities committed at ONE
+  // elevation (CadArc::z / CadEllipse::z), and their draft state keeps no Z for the first pick, so
+  // both ends of their construction rubber sit on the plane the entity will land on.
+  const float zc = CadCommitElevation(cmd);
 
   if (cmd.active == AppCommandState::Kind::Line && cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint) {
     using SAP = AppCommandState::SegmentAnglePickPhase;
     if (cmd.segmentAnglePickPhase == SAP::WaitP2)
-      PushRubberSegViewRel(rubberLines, cmd.segmentPickRefX1, cmd.segmentPickRefY1, curXf, curYf, 0., 0.);
+      PushRubberSegViewRel(rubberLines, cmd.segmentPickRefX1, cmd.segmentPickRefY1, curXf, curYf, 0., 0.,
+                           zc, zc);
     else if (cmd.segmentAnglePickPhase == SAP::WaitAdjustOrCommit) {
       const float th = MathAngleRadFromBearingCwNorthDeg(cmd.segmentPickDraftBearingDeg);
       const float ux = std::cos(th);
@@ -133,7 +143,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       float ly = curYf;
       ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, ux, uy, &lx, &ly, false);
       PushRubberSegViewRel(rubberLines, cmd.anchorX, cmd.anchorY, lx, ly, 0., 0., cmd.anchorZ,
-                           CadCommitElevation(cmd));
+                           zc);
     } else {
       float lx = curXf;
       float ly = curYf;
@@ -143,7 +153,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       else
         ApplyOrthoConstrainFromAnchor(cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled);
       PushRubberSegViewRel(rubberLines, cmd.anchorX, cmd.anchorY, lx, ly, 0., 0., cmd.anchorZ,
-                           CadCommitElevation(cmd));  // preview at the elevation it will commit to
+                           zc);  // preview at the elevation it will commit to
     }
   }
 
@@ -157,7 +167,8 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       PushRubberSegViewRel(rubberLines, d[i], d[i + 1], d[i + 3], d[i + 4], 0., 0., d[i + 2], d[i + 5]);
 
     if (cmd.segmentAnglePickPhase == SAP::WaitP2)
-      PushRubberSegViewRel(rubberLines, cmd.segmentPickRefX1, cmd.segmentPickRefY1, curXf, curYf, 0., 0.);
+      PushRubberSegViewRel(rubberLines, cmd.segmentPickRefX1, cmd.segmentPickRefY1, curXf, curYf, 0., 0.,
+                           zc, zc);
     else if (cmd.segmentAnglePickPhase == SAP::WaitAdjustOrCommit) {
       const float th = MathAngleRadFromBearingCwNorthDeg(cmd.segmentPickDraftBearingDeg);
       const float ux = std::cos(th);
@@ -166,7 +177,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       ly = curYf;
       ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, ux, uy, &lx, &ly, false);
       PushRubberSegViewRel(rubberLines, cmd.anchorX, cmd.anchorY, lx, ly, 0., 0., cmd.anchorZ,
-                           CadCommitElevation(cmd));
+                           zc);
     } else {
       if (cmd.segmentAngleLockActive)
         ApplySegmentAngleLockToWorldPick(cmd.anchorX, cmd.anchorY, cmd.segmentLockUx, cmd.segmentLockUy, &lx, &ly,
@@ -174,7 +185,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       else
         ApplyOrthoConstrainFromAnchor(cmd.anchorX, cmd.anchorY, &lx, &ly, orthoEnabled);
       PushRubberSegViewRel(rubberLines, cmd.anchorX, cmd.anchorY, lx, ly, 0., 0., cmd.anchorZ,
-                           CadCommitElevation(cmd));
+                           zc);
     }
   }
 
@@ -183,38 +194,38 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
   // axis-aligned, which is what ORTHO is for.
   if (cmd.active == AppCommandState::Kind::Rect &&
       cmd.rectPhase == AppCommandState::RectPhase::WaitSecondCorner)
-    AppendWorldRectRubberViewRel(rubberLines, cmd.rectX1, cmd.rectY1, curXf, curYf, 0., 0., CadCommitElevation(cmd));
+    AppendWorldRectRubberViewRel(rubberLines, cmd.rectX1, cmd.rectY1, curXf, curYf, 0., 0., zc);
 
   if (cmd.active == AppCommandState::Kind::Arc) {
     using AP = AppCommandState::ArcPhase;
     if (cmd.arcPhase == AP::WaitMid)
-      PushRubberSegViewRel(rubberLines, cmd.arcAx, cmd.arcAy, curXf, curYf, 0., 0.);
+      PushRubberSegViewRel(rubberLines, cmd.arcAx, cmd.arcAy, curXf, curYf, 0., 0., zc, zc);
     else if (cmd.arcPhase == AP::WaitEnd)
       AppendArcRubberWorld(rubberLines, cmd.arcAx, cmd.arcAy, cmd.arcBx, cmd.arcBy, curXf, curYf, orthoHalfH,
-                           fbHeightPx, cmd.displayArcCircleSmoothness, CadCommitElevation(cmd));
+                           fbHeightPx, cmd.displayArcCircleSmoothness, zc);
   }
 
   if (cmd.active == AppCommandState::Kind::Ellipse && cmd.ellPhase == AppCommandState::EllipsePhase::WaitMajorEnd)
-    PushRubberSegViewRel(rubberLines, cmd.ellCx, cmd.ellCy, curXf, curYf, 0., 0.);
+    PushRubberSegViewRel(rubberLines, cmd.ellCx, cmd.ellCy, curXf, curYf, 0., 0., zc, zc);
 
   if ((cmd.active == AppCommandState::Kind::DimAligned || cmd.active == AppCommandState::Kind::DimLinear) &&
       cmd.dimPhase == AppCommandState::DimPhase::WaitExt2)
-    PushRubberSegViewRel(rubberLines, cmd.dimE1x, cmd.dimE1y, curXf, curYf, 0., 0.);
+    PushRubberSegViewRel(rubberLines, cmd.dimE1x, cmd.dimE1y, curXf, curYf, 0., 0., zc, zc);
 
   if (cmd.active == AppCommandState::Kind::SurveyInverse &&
       cmd.surveyInversePhase == AppCommandState::SurveyInversePhase::WaitTo)
-    PushRubberSegViewRel(rubberLines, cmd.surveyInverseFromX, cmd.surveyInverseFromY, curXf, curYf, 0., 0.);
+    PushRubberSegViewRel(rubberLines, cmd.surveyInverseFromX, cmd.surveyInverseFromY, curXf, curYf, 0., 0., zc, zc);
 
   if (cmd.active == AppCommandState::Kind::DimAngular) {
     using DAP = AppCommandState::DimAngularPhase;
     if (cmd.dimAngularPhase == DAP::WaitRay1)
-      PushRubberSegViewRel(rubberLines, cmd.dimAngVx, cmd.dimAngVy, curXf, curYf, 0., 0.);
+      PushRubberSegViewRel(rubberLines, cmd.dimAngVx, cmd.dimAngVy, curXf, curYf, 0., 0., zc, zc);
     else if (cmd.dimAngularPhase == DAP::WaitRay2) {
-      PushRubberSegViewRel(rubberLines, cmd.dimAngVx, cmd.dimAngVy, cmd.dimE1x, cmd.dimE1y, 0., 0.);
-      PushRubberSegViewRel(rubberLines, cmd.dimAngVx, cmd.dimAngVy, curXf, curYf, 0., 0.);
+      PushRubberSegViewRel(rubberLines, cmd.dimAngVx, cmd.dimAngVy, cmd.dimE1x, cmd.dimE1y, 0., 0., zc, zc);
+      PushRubberSegViewRel(rubberLines, cmd.dimAngVx, cmd.dimAngVy, curXf, curYf, 0., 0., zc, zc);
     } else if (cmd.dimAngularPhase == DAP::WaitArc) {
-      PushRubberSegViewRel(rubberLines, cmd.dimAngVx, cmd.dimAngVy, cmd.dimE1x, cmd.dimE1y, 0., 0.);
-      PushRubberSegViewRel(rubberLines, cmd.dimAngVx, cmd.dimAngVy, cmd.dimE2x, cmd.dimE2y, 0., 0.);
+      PushRubberSegViewRel(rubberLines, cmd.dimAngVx, cmd.dimAngVy, cmd.dimE1x, cmd.dimE1y, 0., 0., zc, zc);
+      PushRubberSegViewRel(rubberLines, cmd.dimAngVx, cmd.dimAngVy, cmd.dimE2x, cmd.dimE2y, 0., 0., zc, zc);
     }
   }
 
@@ -224,7 +235,7 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       const float dx = curXf - cmd.circleCx;
       const float dy = curYf - cmd.circleCy;
       AppendCircleRubberWorld(rubberLines, cmd.circleCx, cmd.circleCy, std::sqrt(dx * dx + dy * dy), orthoHalfH,
-                              fbHeightPx, cmd.displayArcCircleSmoothness, CadCommitElevation(cmd));
+                              fbHeightPx, cmd.displayArcCircleSmoothness, zc);
     } else if (cmd.circlePhase == CP::ThreeP_WaitP2) {
       const float dx = curXf - cmd.c3p1x;
       const float dy = curYf - cmd.c3p1y;
@@ -232,14 +243,14 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       const float rPrev = 0.5f * chord;
       if (rPrev > 1e-6f)
         AppendCircleRubberWorld(rubberLines, (cmd.c3p1x + curXf) * 0.5f, (cmd.c3p1y + curYf) * 0.5f, rPrev, orthoHalfH,
-                                fbHeightPx, cmd.displayArcCircleSmoothness, CadCommitElevation(cmd));
+                                fbHeightPx, cmd.displayArcCircleSmoothness, zc);
     } else if (cmd.circlePhase == CP::ThreeP_WaitP3) {
       float ox = 0.f;
       float oy = 0.f;
       float rCirc = 0.f;
       if (ComputeCircumcircle(cmd.c3p1x, cmd.c3p1y, cmd.c3p2x, cmd.c3p2y, curXf, curYf, &ox, &oy, &rCirc))
         AppendCircleRubberWorld(rubberLines, ox, oy, rCirc, orthoHalfH, fbHeightPx, cmd.displayArcCircleSmoothness,
-                                CadCommitElevation(cmd));
+                                zc);
     }
   }
 
@@ -249,9 +260,9 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
       float lx = curXf;
       float ly = curYf;
       ApplyOrthoConstrainFromAnchor(cmd.mtxtX1, cmd.mtxtY1, &lx, &ly, orthoEnabled);
-      AppendWorldRectRubberViewRel(rubberLines, cmd.mtxtX1, cmd.mtxtY1, lx, ly, 0., 0., CadCommitElevation(cmd));
+      AppendWorldRectRubberViewRel(rubberLines, cmd.mtxtX1, cmd.mtxtY1, lx, ly, 0., 0., zc);
     } else if (cmd.mtextPhase == MPtxt::WaitString)
       AppendWorldRectRubberViewRel(rubberLines, cmd.mtxtX1, cmd.mtxtY1, cmd.mtxtX2, cmd.mtxtY2, 0., 0.,
-                                   CadCommitElevation(cmd));
+                                   zc);
   }
 }

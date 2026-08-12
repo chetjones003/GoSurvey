@@ -454,3 +454,82 @@ TEST_CASE("Elevated geometry is reachable when the work plane is not", "[camera]
   const double planDist = std::hypot(onPlane.x - raised.x, onPlane.y - raised.y);
   REQUIRE(planDist > 10.0);
 }
+
+// --- Billboard basis (REQ-058 / GAP-2) --------------------------------------------------------
+//
+// Snap glyphs and survey-point crosses are UI markers, not geometry. Built flat in world XY they
+// lie in the work plane and foreshorten to an unreadable edge near a horizontal view. They are now
+// built as `centre + RightWorld()*u + UpWorld()*v`, so what these tests pin down is that the two
+// axes really are the screen axes at any orientation.
+
+TEST_CASE("In plan view the billboard basis is world +X / +Y", "[camera][billboard]") {
+  // Plan-view parity for markers: with this basis every glyph is built from exactly the offsets it
+  // used before the change, so the pre-3D appearance is preserved by construction.
+  const Camera cam = Camera::Plan(1000.0, -2000.0, 75.f);
+  const ray3d::Vec3 r = cam.RightWorld();
+  const ray3d::Vec3 u = cam.UpWorld();
+
+  REQUIRE(r.x == Approx(1.0).margin(1e-6));
+  REQUIRE(r.y == Approx(0.0).margin(1e-6));
+  REQUIRE(r.z == Approx(0.0).margin(1e-6));
+  REQUIRE(u.x == Approx(0.0).margin(1e-6));
+  REQUIRE(u.y == Approx(1.0).margin(1e-6));
+  REQUIRE(u.z == Approx(0.0).margin(1e-6));
+}
+
+TEST_CASE("Right, up and forward stay orthonormal under orbit", "[camera][billboard]") {
+  // A glyph built on a skewed or non-unit basis would shear or change size as the view turned.
+  const float azs[] = {0.f, 37.f, 123.f, -95.f, 250.f};
+  const float els[] = {90.f, 61.f, 12.f, -40.f, -89.f};
+  for (float az : azs) {
+    for (float el : els) {
+      Camera cam = Camera::Plan(0.0, 0.0, 50.f);
+      cam.azimuthDeg = az;
+      cam.elevationDeg = el;
+      const ray3d::Vec3 r = cam.RightWorld();
+      const ray3d::Vec3 u = cam.UpWorld();
+      const ray3d::Vec3 f = cam.ForwardWorld();
+
+      REQUIRE(ray3d::Dot(r, r) == Approx(1.0).margin(1e-5));
+      REQUIRE(ray3d::Dot(u, u) == Approx(1.0).margin(1e-5));
+      REQUIRE(ray3d::Dot(r, u) == Approx(0.0).margin(1e-5));
+      REQUIRE(ray3d::Dot(r, f) == Approx(0.0).margin(1e-5));
+      REQUIRE(ray3d::Dot(u, f) == Approx(0.0).margin(1e-5));
+    }
+  }
+}
+
+TEST_CASE("The billboard axes are the screen axes at any orientation", "[camera][billboard]") {
+  // The property that actually makes a glyph face the viewer: stepping along RightWorld must move
+  // purely +x on screen, and along UpWorld purely -y (screen y grows downward). If this holds, a
+  // square built from those offsets projects to a square however the camera is turned — which is
+  // the whole of GAP-2.
+  constexpr float kW = 900.f, kH = 700.f;
+  const float azs[] = {0.f, 44.f, 160.f, -78.f};
+  const float els[] = {90.f, 55.f, 8.f, -33.f};
+  for (float az : azs) {
+    for (float el : els) {
+      Camera cam = Camera::Plan(250.0, 130.0, 60.f);
+      cam.azimuthDeg = az;
+      cam.elevationDeg = el;
+      const ray3d::Vec3 r = cam.RightWorld();
+      const ray3d::Vec3 u = cam.UpWorld();
+
+      const ray3d::Vec3 c{250.0, 130.0, 40.0};  // an ELEVATED centre, not one on the datum
+      constexpr double kStep = 5.0;
+      float cxS = 0.f, cyS = 0.f, rxS = 0.f, ryS = 0.f, uxS = 0.f, uyS = 0.f;
+      cam.WorldToScreen(c.x, c.y, c.z, kW, kH, &cxS, &cyS);
+      cam.WorldToScreen(c.x + r.x * kStep, c.y + r.y * kStep, c.z + r.z * kStep, kW, kH, &rxS, &ryS);
+      cam.WorldToScreen(c.x + u.x * kStep, c.y + u.y * kStep, c.z + u.z * kStep, kW, kH, &uxS, &uyS);
+
+      // Stepping along right: screen x advances, screen y does not move at all.
+      REQUIRE(rxS > cxS);
+      REQUIRE(ryS == Approx(cyS).margin(1e-3));
+      // Stepping along up: screen y decreases, screen x does not move at all.
+      REQUIRE(uyS < cyS);
+      REQUIRE(uxS == Approx(cxS).margin(1e-3));
+      // Both steps cover the same screen distance — the glyph stays square, not sheared.
+      REQUIRE(std::fabs(rxS - cxS) == Approx(std::fabs(uyS - cyS)).margin(1e-3));
+    }
+  }
+}

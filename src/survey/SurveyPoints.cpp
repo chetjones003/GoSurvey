@@ -19,37 +19,35 @@ float SurveyPointCrossHalfWorldFromPaper(float crossSpanPlottedInches, float mod
 }
 
 void AppendSurveyPointCrossVertices(float easting, float northing, float elevationZ, float halfExtentWorld,
-                                    std::vector<float>* outLines) {
+                                    std::vector<float>* outLines, const MarkerBillboardBasis& basis) {
   if (!outLines || halfExtentWorld <= 0.f)
     return;
-  const float z = elevationZ;
-  const float e = easting;
-  const float n = northing;
   const float s = halfExtentWorld;
-  outLines->push_back(e - s);
-  outLines->push_back(n - s);
-  outLines->push_back(z);
-  outLines->push_back(e + s);
-  outLines->push_back(n + s);
-  outLines->push_back(z);
-  outLines->push_back(e - s);
-  outLines->push_back(n + s);
-  outLines->push_back(z);
-  outLines->push_back(e + s);
-  outLines->push_back(n - s);
-  outLines->push_back(z);
+  // Offsets are in the marker's own plane (u across, v up), mapped into world through the basis.
+  // With the default basis this reduces to the previous world-XY arithmetic exactly.
+  auto emit = [&](float u, float v) {
+    outLines->push_back(easting + basis.rightX * u + basis.upX * v);
+    outLines->push_back(northing + basis.rightY * u + basis.upY * v);
+    outLines->push_back(elevationZ + basis.rightZ * u + basis.upZ * v);
+  };
+  emit(-s, -s);
+  emit(s, s);
+  emit(-s, s);
+  emit(s, -s);
 }
 
 void AppendAllSurveyPointMarkers(float crossHalfWorld, const std::vector<SurveyPoint>& pts,
-                                 std::vector<float>* outLines) {
+                                 std::vector<float>* outLines, const MarkerBillboardBasis& basis) {
   if (!outLines || pts.empty())
     return;
-  constexpr float kBaseZ = 0.055f;
+  // The point's OWN elevation (REQ-057/058). This used to be `0.055f + elevation * 1e-6f` — a
+  // draw-ORDER bias from the flat renderer, with a microscopic elevation term to keep coincident
+  // markers stably ordered. Depth testing is off, so Z never ordered anything (draw order does);
+  // once the view could tilt, that constant simply pinned every marker to the datum while its own
+  // snap, hover ring and ID label had moved to the real elevation.
   const float h = std::max(crossHalfWorld, 1.e-8f);
-  for (const auto& p : pts) {
-    const float z = kBaseZ + p.elevation * 1.e-6f;
-    AppendSurveyPointCrossVertices(p.easting, p.northing, z, h, outLines);
-  }
+  for (const auto& p : pts)
+    AppendSurveyPointCrossVertices(p.easting, p.northing, p.elevation, h, outLines, basis);
 }
 
 namespace {

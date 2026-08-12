@@ -180,36 +180,26 @@ void CadTessellateLinetypeSegmentVc(float x0, float y0, float z0, float x1, floa
 }
 
 void CadTessellateLinetypeChainVc(const float* xy, int nPts, float z, bool closed, const std::string& linetypeName,
-                                  float patternScaleWorld, const float rgba[4], std::vector<float>* outVerts7) {
+                                  float patternScaleWorld, const float rgba[4], std::vector<float>* outVerts7,
+                                  const float* zPerPt) {
   if (!xy || nPts < 2 || !outVerts7)
     return;
+  // Elevation of point i: its own when the caller supplied a per-vertex array, else the chain's.
+  const auto zAt = [&](int i) { return zPerPt ? zPerPt[i] : z; };
   const std::string canon = CadCanonicalLinetypeNameForDxf(linetypeName);
-  if (CadLinetypeIsSolidCi(canon)) {
-    const int nSeg = closed ? nPts : nPts - 1;
-    for (int i = 0; i < nSeg; ++i) {
-      const int j = (i + 1) % nPts;
-      EmitSolidSegVc(xy[i * 2], xy[i * 2 + 1], z, xy[j * 2], xy[j * 2 + 1], z, rgba, outVerts7);
-    }
-    return;
-  }
-  const Pattern* pat = FindPatternCi(canon);
-  if (!pat) {
-    const int nSeg = closed ? nPts : nPts - 1;
-    for (int i = 0; i < nSeg; ++i) {
-      const int j = (i + 1) % nPts;
-      EmitSolidSegVc(xy[i * 2], xy[i * 2 + 1], z, xy[j * 2], xy[j * 2 + 1], z, rgba, outVerts7);
-    }
-    return;
-  }
-  const double sc = std::max(static_cast<double>(patternScaleWorld), 1e-9);
+  const Pattern* pat = CadLinetypeIsSolidCi(canon) ? nullptr : FindPatternCi(canon);
   double cyc = 0;
-  for (int i = 0; i < pat->count; ++i)
-    cyc += std::fabs(pat->elems[i]) * sc;
-  if (cyc < 1e-12) {
+  const double sc = std::max(static_cast<double>(patternScaleWorld), 1e-9);
+  if (pat) {
+    for (int i = 0; i < pat->count; ++i)
+      cyc += std::fabs(pat->elems[i]) * sc;
+  }
+  // Solid linetype, unknown pattern name, or a degenerate zero-length cycle: one segment per edge.
+  if (!pat || cyc < 1e-12) {
     const int nSeg = closed ? nPts : nPts - 1;
     for (int i = 0; i < nSeg; ++i) {
       const int j = (i + 1) % nPts;
-      EmitSolidSegVc(xy[i * 2], xy[i * 2 + 1], z, xy[j * 2], xy[j * 2 + 1], z, rgba, outVerts7);
+      EmitSolidSegVc(xy[i * 2], xy[i * 2 + 1], zAt(i), xy[j * 2], xy[j * 2 + 1], zAt(j), rgba, outVerts7);
     }
     return;
   }
@@ -222,6 +212,8 @@ void CadTessellateLinetypeChainVc(const float* xy, int nPts, float z, bool close
     const float y0 = xy[si * 2 + 1];
     const float x1 = xy[j * 2];
     const float y1 = xy[j * 2 + 1];
+    const float z0 = zAt(si);
+    const float z1 = zAt(j);
     const float dx = x1 - x0;
     const float dy = y1 - y0;
     const float slen = std::hypot(dx, dy);
@@ -229,6 +221,12 @@ void CadTessellateLinetypeChainVc(const float* xy, int nPts, float z, bool close
       continue;
     const float ux = dx / slen;
     const float uy = dy / slen;
+    // Each dash starts and ends partway along the edge, so its endpoints take the edge's
+    // elevation interpolated at the same parameter — otherwise a dashed sloped segment would
+    // stair-step between two flat levels.
+    const auto zAlong = [&](double along) {
+      return z0 + (z1 - z0) * static_cast<float>(along / static_cast<double>(slen));
+    };
     double u = 0;
     while (u < static_cast<double>(slen) - 1e-9) {
       const double inCyc = std::fmod(patAcc, cyc);
@@ -253,7 +251,7 @@ void CadTessellateLinetypeChainVc(const float* xy, int nPts, float z, bool close
         const float sy = y0 + uy * static_cast<float>(u);
         const float ex = x0 + ux * static_cast<float>(u + step);
         const float ey = y0 + uy * static_cast<float>(u + step);
-        EmitSolidSegVc(sx, sy, z, ex, ey, z, rgba, outVerts7);
+        EmitSolidSegVc(sx, sy, zAlong(u), ex, ey, zAlong(u + step), rgba, outVerts7);
       }
       patAcc += step;
       u += step;

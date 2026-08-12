@@ -657,6 +657,8 @@ json BuildRoot(const AppCommandState& st) {
   settings["objectSnapPerpendicular"] = st.objectSnapPerpendicular;
   settings["objectSnapSurveyPoint"] = st.objectSnapSurveyPoint;
   settings["objectSnapGeometricCenter"] = st.objectSnapGeometricCenter;
+  settings["objectSnapIntersection"] = st.objectSnapIntersection;
+  settings["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
   settings["objectSnapAperturePx"] = st.objectSnapAperturePx;
   settings["objectSnapGlyphHalfPx"] = st.objectSnapGlyphHalfPx;
 
@@ -825,6 +827,8 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
   b(s, "objectSnapPerpendicular", &st.objectSnapPerpendicular);
   b(s, "objectSnapSurveyPoint", &st.objectSnapSurveyPoint);
   b(s, "objectSnapGeometricCenter", &st.objectSnapGeometricCenter);
+  b(s, "objectSnapIntersection", &st.objectSnapIntersection);
+  b(s, "objectSnapApparentIntersection", &st.objectSnapApparentIntersection);
   num(s, "objectSnapAperturePx", &st.objectSnapAperturePx);
   num(s, "objectSnapGlyphHalfPx", &st.objectSnapGlyphHalfPx);
   st.objectSnapAperturePx = std::clamp(st.objectSnapAperturePx, 4.f, 64.f);

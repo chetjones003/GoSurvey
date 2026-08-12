@@ -5380,6 +5380,8 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
         ImGui::Checkbox("Perpendicular", &cmd.objectSnapPerpendicular);
         ImGui::Checkbox("Survey point", &cmd.objectSnapSurveyPoint);
         ImGui::Checkbox("Geometric center (closed polyline)", &cmd.objectSnapGeometricCenter);
+        ImGui::Checkbox("Intersection", &cmd.objectSnapIntersection);
+        ImGui::Checkbox("Apparent intersection", &cmd.objectSnapApparentIntersection);
         ImGui::EndPopup();
       }
       ImGui::SameLine(0, sp);
@@ -7213,6 +7215,10 @@ static const char* SnapKindLabelForUi(CadSnap::Kind k) {
     return "Survey";
   case CadSnap::Kind::GeometricCenter:
     return "Geo center";
+  case CadSnap::Kind::Intersection:
+    return "Intersection";
+  case CadSnap::Kind::ApparentIntersection:
+    return "Apparent int";
   case CadSnap::Kind::Grip:
     return "Grip";
   }
@@ -8839,10 +8845,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         // (REQ-058). In plan view it reduces to the previous arithmetic exactly; orbited, the old
         // mapping would place the hit targets somewhere other than the visible grip squares.
         const Camera gripCam = CadViewCamera(cmd);
-        auto wtsRel = [&](double wx, double wy) -> ImVec2 {
+        auto wtsRel = [&](double wx, double wy, double wz) -> ImVec2 {
           if (modelSpace) {
             float sx = 0.f, sy = 0.f;
-            gripCam.WorldToScreen(wx, wy, 0.0, avail.x, avail.y, &sx, &sy);
+            gripCam.WorldToScreen(wx, wy, wz, avail.x, avail.y, &sx, &sy);
             return ImVec2(sx, sy);  // relative to image top-left
           }
           const float u = static_cast<float>((wx - worldLeft) / denx);
@@ -8857,8 +8863,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         SelectedEntity bestSel{};
 
         float bestGripX = 0.f, bestGripY = 0.f;
-        auto tryGrip = [&](const SelectedEntity& sel, float gx, float gy, int which) {
-          ImVec2 p = wtsRel(gx, gy);
+        // \p gz is the grip's own elevation (REQ-058). A grip hit-tested at Z 0 while its entity
+        // sits at elevation puts the click target somewhere other than the visible square as soon
+        // as the view tilts — the same reason the projection itself was camera-routed.
+        auto tryGrip = [&](const SelectedEntity& sel, float gx, float gy, float gz, int which) {
+          ImVec2 p = wtsRel(gx, gy, static_cast<double>(gz));
           const float dx = mx - p.x, dy = my - p.y;
           const float d2 = dx * dx + dy * dy;
           if (d2 < bestD2) {
@@ -8872,8 +8881,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           case SelectedEntity::Type::LineSeg: {
             const size_t k = static_cast<size_t>(sel.index) * 6;
             if (k + 5 < cmd.userLinesFlat.size()) {
-              tryGrip(sel, cmd.userLinesFlat[k],     cmd.userLinesFlat[k + 1], 0);
-              tryGrip(sel, cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4], 1);
+              tryGrip(sel, cmd.userLinesFlat[k],     cmd.userLinesFlat[k + 1], cmd.userLinesFlat[k + 2], 0);
+              tryGrip(sel, cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4], cmd.userLinesFlat[k + 5], 1);
             }
             break;
           }
@@ -8882,9 +8891,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             if (k + 3 < cmd.userCirclesCxCyZR.size()) {
               const float cx = cmd.userCirclesCxCyZR[k];
               const float cy = cmd.userCirclesCxCyZR[k + 1];
+              const float cz = cmd.userCirclesCxCyZR[k + 2];
               const float r  = cmd.userCirclesCxCyZR[k + 3];
-              tryGrip(sel, cx,     cy, 0);
-              tryGrip(sel, cx + r, cy, 1);
+              tryGrip(sel, cx,     cy, cz, 0);
+              tryGrip(sel, cx + r, cy, cz, 1);
             }
             break;
           }
@@ -8895,8 +8905,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
               const int endV   = cmd.userPolylineOffsets[static_cast<size_t>(sel.index + 1)];
               for (int vi = 0; vi < endV - startV; ++vi) {
                 const size_t xIdx = static_cast<size_t>(startV + vi) * 3;
-                if (xIdx + 1 >= cmd.userPolylineVerts.size()) break;
-                tryGrip(sel, cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1], vi);
+                if (xIdx + 2 >= cmd.userPolylineVerts.size()) break;
+                tryGrip(sel, cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1],
+                        cmd.userPolylineVerts[xIdx + 2], vi);
               }
             }
             break;
@@ -8905,9 +8916,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
               const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
               const float endRad = a.startRad + a.sweepRad;
-              tryGrip(sel, a.cx, a.cy, 0);
-              tryGrip(sel, a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), 1);
-              tryGrip(sel, a.cx + a.r * std::cos(endRad),     a.cy + a.r * std::sin(endRad),     2);
+              tryGrip(sel, a.cx, a.cy, a.z, 0);
+              tryGrip(sel, a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), a.z, 1);
+              tryGrip(sel, a.cx + a.r * std::cos(endRad),     a.cy + a.r * std::sin(endRad),     a.z, 2);
             }
             break;
           }
@@ -8915,9 +8926,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
               const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
               const float perpX = -el.majVy, perpY = el.majVx;
-              tryGrip(sel, el.cx,                                 el.cy,                                 0);
-              tryGrip(sel, el.cx + el.majVx,                     el.cy + el.majVy,                     1);
-              tryGrip(sel, el.cx + perpX * el.ratio,              el.cy + perpY * el.ratio,              2);
+              tryGrip(sel, el.cx,                    el.cy,                    el.z, 0);
+              tryGrip(sel, el.cx + el.majVx,         el.cy + el.majVy,         el.z, 1);
+              tryGrip(sel, el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, el.z, 2);
             }
             break;
           }
@@ -10062,12 +10073,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     std::vector<ImVec2> pts;
     pts.reserve(cmd.hatchPreviewLoop.size() / 2);
     const Camera hatchCam = CadViewCamera(cmd);
+    // The preview sits on the elevation CadHatchCommitLoop will commit the region at, not on the
+    // datum (REQ-058) — a preview that does not consume the commit point is not a preview.
+    const double hatchPreviewZ = static_cast<double>(CadCommitElevation(cmd));
     for (size_t i = 0; i + 1 < cmd.hatchPreviewLoop.size(); i += 2) {
       // Camera-projected so the preview outline stays on the geometry it traced when orbited
       // (REQ-058); identical to the previous mapping in plan view.
       float sx = 0.f, sy = 0.f;
       hatchCam.WorldToScreen(static_cast<double>(cmd.hatchPreviewLoop[i]),
-                             static_cast<double>(cmd.hatchPreviewLoop[i + 1]), 0.0, avail.x, avail.y, &sx, &sy);
+                             static_cast<double>(cmd.hatchPreviewLoop[i + 1]), hatchPreviewZ, avail.x, avail.y, &sx,
+                             &sy);
       pts.push_back(ImVec2(imgPos.x + sx, imgPos.y + sy));
     }
     const int r = static_cast<int>(cmd.hatchColorRgb[0] * 255.f);
@@ -10093,6 +10108,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       segs.clear();
       if (hatchpattern::BuildSegments(fr, *pdef, &segs) == 0)
         continue;
+      // BuildSegments clips the pattern against the boundary in XY and returns no elevations, so
+      // the family is drawn on the region's own plane — its mean vertex Z, which is exact for the
+      // planar case every hatch is (REQ-058). Without it the pattern stayed on the datum while its
+      // solid-filled counterpart and its boundary moved with the orbit.
+      double frZSum = 0.;
+      size_t frZCount = 0;
+      for (size_t vi = 2; vi < fr.vertsXyz.size(); vi += 3) {
+        frZSum += static_cast<double>(fr.vertsXyz[vi]);
+        ++frZCount;
+      }
+      const double frZ = frZCount ? frZSum / static_cast<double>(frZCount) : 0.;
       float rgba[4] = {0.78f, 0.78f, 0.78f, 1.f};
       const EntityAttributes* ap = fi < cmd.cadFilledRegionAttrs.size() ? &cmd.cadFilledRegionAttrs[fi] : nullptr;
       if (ap) {
@@ -10105,9 +10131,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       for (size_t s = 0; s + 3 < segs.size(); s += 4) {
         // Camera-projected (REQ-058): pattern lines must stay inside their region when orbited.
         float px0 = 0.f, py0 = 0.f, px1 = 0.f, py1 = 0.f;
-        hatchCam.WorldToScreen(static_cast<double>(segs[s]), static_cast<double>(segs[s + 1]), 0.0, avail.x,
+        hatchCam.WorldToScreen(static_cast<double>(segs[s]), static_cast<double>(segs[s + 1]), frZ, avail.x,
                                avail.y, &px0, &py0);
-        hatchCam.WorldToScreen(static_cast<double>(segs[s + 2]), static_cast<double>(segs[s + 3]), 0.0, avail.x,
+        hatchCam.WorldToScreen(static_cast<double>(segs[s + 2]), static_cast<double>(segs[s + 3]), frZ, avail.x,
                                avail.y, &px1, &py1);
         const float u0 = px0 / std::max(avail.x, 1.f), v0 = py0 / std::max(avail.y, 1.f);
         const float u1 = px1 / std::max(avail.x, 1.f), v1 = py1 / std::max(avail.y, 1.f);
@@ -10521,7 +10547,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float cx = 0.5f * (a.boxMinX + a.boxMaxX);
         const float cy = 0.5f * (a.boxMinY + a.boxMaxY);
         ImVec2 gp{};
-        worldToScreen(cx, cy, &gp);
+        worldToScreen(cx, cy, &gp, a.insZ);  // the label's own elevation, as its selection rect uses
         dl->AddRectFilled(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf),
                           kGripFill);
         dl->AddRect(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf), kGripBorder,
@@ -10531,7 +10557,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float wy[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
         for (int c = 0; c < 4; ++c) {
           ImVec2 gp{};
-          worldToScreen(wx[c], wy[c], &gp);
+          worldToScreen(wx[c], wy[c], &gp, a.insZ);
           dl->AddRectFilled(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf),
                             kGripFill);
           dl->AddRect(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf), kGripBorder,
@@ -10647,7 +10673,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const float wy[5] = {a.dimExt1Y, a.dimExt2Y, sy1, sy2, a.insY};
       for (int c = 0; c < 5; ++c) {
         ImVec2 gp{};
-        worldToScreen(wx[c], wy[c], &gp);
+        worldToScreen(wx[c], wy[c], &gp, a.insZ);  // the dimension's plane (REQ-058)
         dl->AddRectFilled(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf),
                           kGripFill);
         dl->AddRect(ImVec2(gp.x - gripHalf, gp.y - gripHalf), ImVec2(gp.x + gripHalf, gp.y + gripHalf), kGripBorder,
@@ -10689,15 +10715,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // Camera-projected (REQ-058): reduces to the previous mapping in plan view, and keeps this
     // overlay on the geometry once the view is orbited.
     const Camera ovCamA = CadViewCamera(cmd);
-    auto wts = [&](float wx, float wy, ImVec2* o) {
+    auto wts = [&](float wx, float wy, float wz, ImVec2* o) {
       float sx = 0.f, sy = 0.f;
-      ovCamA.WorldToScreen(static_cast<double>(wx), static_cast<double>(wy), 0.0, avail.x, avail.y, &sx, &sy);
+      ovCamA.WorldToScreen(static_cast<double>(wx), static_cast<double>(wy), static_cast<double>(wz), avail.x, avail.y,
+                           &sx, &sy);
       o->x = imgPos.x + sx;
       o->y = imgPos.y + sy;
     };
     for (const auto& p : cmd.surveyPoints) {
       ImVec2 sp{};
-      wts(p.easting, p.northing, &sp);
+      wts(p.easting, p.northing, p.elevation, &sp);  // elevation IS the point's Z (REQ-057)
       char idb[32];
       std::snprintf(idb, sizeof(idb), "%d", p.id);
       dlS->AddText(fontL, fontPxL, ImVec2(sp.x + 6.f, sp.y - fontPxL * 0.35f), kPtIdCol, idb);
@@ -10747,9 +10774,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (k + 3 < cmd.userCirclesCxCyZR.size()) {
           const float cx = cmd.userCirclesCxCyZR[k];
           const float cy = cmd.userCirclesCxCyZR[k + 1];
+          const float cz = cmd.userCirclesCxCyZR[k + 2];
           const float r = cmd.userCirclesCxCyZR[k + 3];
-          drawGrip(cx, cy);
-          drawGrip(cx + r, cy);
+          drawGrip(cx, cy, cz);
+          drawGrip(cx + r, cy, cz);
         }
       } else if (sel.type == SelectedEntity::Type::Polyline) {
         const int np = cmd.userPolylineOffsets.size() > 0 ? static_cast<int>(cmd.userPolylineOffsets.size() - 1) : 0;
@@ -10758,27 +10786,29 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const int endV = cmd.userPolylineOffsets[static_cast<size_t>(sel.index + 1)];
           for (int vi = 0; vi < endV - startV; ++vi) {
             const size_t xIdx = static_cast<size_t>(startV + vi) * 3;
-            if (xIdx + 1 >= cmd.userPolylineVerts.size())
+            if (xIdx + 2 >= cmd.userPolylineVerts.size())
               break;
-            drawGrip(cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1]);
+            // Each vertex carries its own Z, so a polyline up a slope keeps its grips on it.
+            drawGrip(cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1],
+                     cmd.userPolylineVerts[xIdx + 2]);
           }
         }
       } else if (sel.type == SelectedEntity::Type::Arc) {
         if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
           const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
-          drawGrip(a.cx, a.cy);
-          drawGrip(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad));
+          drawGrip(a.cx, a.cy, a.z);
+          drawGrip(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), a.z);
           const float endRad = a.startRad + a.sweepRad;
-          drawGrip(a.cx + a.r * std::cos(endRad), a.cy + a.r * std::sin(endRad));
+          drawGrip(a.cx + a.r * std::cos(endRad), a.cy + a.r * std::sin(endRad), a.z);
         }
       } else if (sel.type == SelectedEntity::Type::Ellipse) {
         if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
           const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
-          drawGrip(el.cx, el.cy);
-          drawGrip(el.cx + el.majVx, el.cy + el.majVy);
+          drawGrip(el.cx, el.cy, el.z);
+          drawGrip(el.cx + el.majVx, el.cy + el.majVy, el.z);
           const float perpX = -el.majVy;
           const float perpY = el.majVx;
-          drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio);
+          drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, el.z);
         }
       }
     }
@@ -11202,6 +11232,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         goSnapKind(CadSnap::Kind::SurveyCenter);
       if (cmd.objectSnapGeometricCenter && ImGui::Selectable("Geometric center"))
         goSnapKind(CadSnap::Kind::GeometricCenter);
+      if (cmd.objectSnapIntersection && ImGui::Selectable("Intersection"))
+        goSnapKind(CadSnap::Kind::Intersection);
+      if (cmd.objectSnapApparentIntersection && ImGui::Selectable("Apparent intersection"))
+        goSnapKind(CadSnap::Kind::ApparentIntersection);
     } else {
       char title[96];
       std::snprintf(title, sizeof(title), "%s — all in model (sorted by distance from click)",

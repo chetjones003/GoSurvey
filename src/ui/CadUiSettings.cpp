@@ -357,6 +357,15 @@ static void DrawSettingsDraftingTab(AppCommandState& cmd) {
   ImGui::Checkbox("Perpendicular (when a reference point applies)", &cmd.objectSnapPerpendicular);
   ImGui::Checkbox("Survey point", &cmd.objectSnapSurveyPoint);
   ImGui::Checkbox("Geometric center (closed polyline)", &cmd.objectSnapGeometricCenter);
+  ImGui::Checkbox("Intersection (objects that actually meet)", &cmd.objectSnapIntersection);
+  ItemHelpTooltip("Snaps where two objects genuinely cross in 3D — their paths meet AND their "
+                  "elevations agree there.");
+  ImGui::Checkbox("Apparent intersection (objects that only look like they meet)",
+                  &cmd.objectSnapApparentIntersection);
+  ItemHelpTooltip("Snaps where two objects cross as seen from the current view but need not touch — "
+                  "e.g. a line passing over another at a different elevation. The point returned is on "
+                  "whichever object is nearer the camera. Off by default: it fires on objects that do "
+                  "not meet.");
   ImGui::Separator();
   ImGui::TextWrapped(
       "With a command active (LINE, CIRCLE, …), Shift+right-click anywhere on the drawing: choose a snap type, "

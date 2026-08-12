@@ -2,6 +2,7 @@
 
 #include "SurveyPoints.hpp"
 #include "geom2d.hpp"
+#include "util/curveintersect.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -280,9 +281,28 @@ void Consider(SnapPickAccum* acc, float wx, float wy, float px, float py, Kind k
   ConsiderSnap(acc, wx, wy, px, py, kind, dx * dx + dy * dy, tolWorld, pz);
 }
 
+/// Mean vertex elevation of polyline loop [\p v0,\p v1) — the elevation of its geometric centre.
+///
+/// A centroid has no single Z once the loop is non-planar, so it gets the same averaging the
+/// centroid already is in X and Y (REQ-058). Exact for the planar case, which is every rectangle
+/// and every pre-3D polyline.
+[[nodiscard]] float PolylineLoopMeanZ(const std::vector<float>& verts, int v0, int v1) {
+  if (v1 <= v0)
+    return 0.f;
+  double zSum = 0.;
+  for (int vi = v0; vi < v1; ++vi)
+    zSum += static_cast<double>(verts[static_cast<size_t>(vi * 3 + 2)]);
+  return static_cast<float>(zSum / static_cast<double>(v1 - v0));
+}
+
 /// Foot of perpendicular from \p ref onto segment AB (clamped). Cursor \p wx,\p wy only gates distance.
+///
+/// \param az,bz elevations of A and B. The foot lies at parameter \p t along AB, so its elevation
+///        is the same interpolation (REQ-058). Without it the candidate defaulted to Z 0 and was
+///        measured against the cursor ray at the wrong depth — the snap was either missed entirely
+///        or accepted and then committed on the datum instead of on the segment.
 void AppendPerpendicularFromRef(float refX, float refY, float wx, float wy, float ax, float ay, float bx, float by,
-                                float tolWorld, SnapPickAccum* acc) {
+                                float tolWorld, SnapPickAccum* acc, float az = 0.f, float bz = 0.f) {
   const float vx = bx - ax;
   const float vy = by - ay;
   const float len2 = vx * vx + vy * vy;
@@ -292,7 +312,243 @@ void AppendPerpendicularFromRef(float refX, float refY, float wx, float wy, floa
   t = std::clamp(t, 0.f, 1.f);
   const float qx = ax + t * vx;
   const float qy = ay + t * vy;
-  Consider(acc, wx, wy, qx, qy, Kind::Perpendicular, tolWorld);
+  Consider(acc, wx, wy, qx, qy, Kind::Perpendicular, tolWorld, az + t * (bz - az));
+}
+
+// --- Intersection snaps (REQ-062) ---------------------------------------------------------------
+//
+// Both INT and APPINT are pairwise, which makes them the only snaps whose cost is not linear in the
+// drawing. They stay affordable because an intersection point lies ON both objects, so an object
+// can only contribute if it passes within the snap aperture of the cursor — see GatherNearCursor,
+// which reduces the pairwise work to the handful of objects actually under the pointer.
+
+/// A line segment or polyline edge, with the elevation of each end (REQ-057).
+struct IsectSeg {
+  double x0 = 0.0, y0 = 0.0, z0 = 0.0;
+  double x1 = 0.0, y1 = 0.0, z1 = 0.0;
+  [[nodiscard]] curveisect::Seg xy() const { return curveisect::Seg{{x0, y0}, {x1, y1}}; }
+  [[nodiscard]] double zAt(double t) const { return z0 + (z1 - z0) * t; }
+};
+
+/// A circle, arc or ellipse. These are planar and parallel to XY (ADR-025), so one elevation.
+struct IsectConic {
+  curveisect::Conic k;
+  double z = 0.0;
+};
+
+/// Distance from the cursor to a point, measured the way ConsiderSnap will measure it: against the
+/// 3D pick ray when the view is orbited, in plan XY otherwise.
+[[nodiscard]] double CursorDistanceTo(const ray3d::Ray* ray, double wx, double wy, double px, double py, double pz) {
+  if (ray)
+    return ray3d::RayPointDistance(*ray, ray3d::Vec3{px, py, pz});
+  return std::hypot(px - wx, py - wy);
+}
+
+/// Conservative near-cursor test for a whole object, from its bounding sphere.
+///
+/// An intersection lies on the object, so if the object never comes within \p tol of the cursor it
+/// cannot produce an accepted candidate. By the triangle inequality
+/// `dist(cursor, centre) ≤ dist(cursor, P) + radius`, so this rejects only objects that could not
+/// have contributed — no true intersection is lost to the cull.
+[[nodiscard]] bool NearCursor(const ray3d::Ray* ray, double wx, double wy, double cx, double cy, double cz,
+                              double radius, double tol) {
+  return CursorDistanceTo(ray, wx, wy, cx, cy, cz) <= tol + radius;
+}
+
+/// Collect the segments and conics close enough to the cursor to take part in an intersection.
+void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double tol, const ray3d::Ray* ray,
+                      std::vector<IsectSeg>* segs, std::vector<IsectConic>* conics) {
+  const auto& L = cmd.userLinesFlat;
+  if (L.size() % 6 == 0) {
+    for (size_t i = 0; i + 5 < L.size(); i += 6) {
+      IsectSeg s{L[i], L[i + 1], L[i + 2], L[i + 3], L[i + 4], L[i + 5]};
+      const double mx = 0.5 * (s.x0 + s.x1);
+      const double my = 0.5 * (s.y0 + s.y1);
+      const double mz = 0.5 * (s.z0 + s.z1);
+      const double r = 0.5 * std::sqrt((s.x1 - s.x0) * (s.x1 - s.x0) + (s.y1 - s.y0) * (s.y1 - s.y0) +
+                                       (s.z1 - s.z0) * (s.z1 - s.z0));
+      if (NearCursor(ray, wx, wy, mx, my, mz, r, tol))
+        segs->push_back(s);
+    }
+  }
+
+  const int polyCount =
+      static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
+  for (int pi = 0; pi < polyCount; ++pi) {
+    const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const bool closed =
+        static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+    auto addEdge = [&](int ia, int ib) {
+      const auto& V = cmd.userPolylineVerts;
+      IsectSeg s{V[static_cast<size_t>(ia * 3)],     V[static_cast<size_t>(ia * 3 + 1)],
+                 V[static_cast<size_t>(ia * 3 + 2)], V[static_cast<size_t>(ib * 3)],
+                 V[static_cast<size_t>(ib * 3 + 1)], V[static_cast<size_t>(ib * 3 + 2)]};
+      const double mx = 0.5 * (s.x0 + s.x1);
+      const double my = 0.5 * (s.y0 + s.y1);
+      const double mz = 0.5 * (s.z0 + s.z1);
+      const double r = 0.5 * std::sqrt((s.x1 - s.x0) * (s.x1 - s.x0) + (s.y1 - s.y0) * (s.y1 - s.y0) +
+                                       (s.z1 - s.z0) * (s.z1 - s.z0));
+      if (NearCursor(ray, wx, wy, mx, my, mz, r, tol))
+        segs->push_back(s);
+    };
+    for (int vi = v0; vi + 1 < v1; ++vi)
+      addEdge(vi, vi + 1);
+    if (closed && v1 - v0 >= 2)
+      addEdge(v1 - 1, v0);
+  }
+
+  const auto& C = cmd.userCirclesCxCyZR;
+  if (C.size() % 4 == 0) {
+    for (size_t i = 0; i + 3 < C.size(); i += 4) {
+      if (C[i + 3] <= 1.e-6f)
+        continue;
+      if (NearCursor(ray, wx, wy, C[i], C[i + 1], C[i + 2], C[i + 3], tol))
+        conics->push_back(IsectConic{curveisect::MakeCircle(C[i], C[i + 1], C[i + 3]), C[i + 2]});
+    }
+  }
+
+  for (const CadArc& a : cmd.userArcs) {
+    if (a.r <= 1.e-6f)
+      continue;
+    if (NearCursor(ray, wx, wy, a.cx, a.cy, a.z, a.r, tol))
+      conics->push_back(IsectConic{curveisect::MakeArc(a.cx, a.cy, a.r, a.startRad, a.sweepRad), a.z});
+  }
+
+  for (const CadEllipse& el : cmd.userEllipses) {
+    const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    if (ma < 1.e-8)
+      continue;
+    if (NearCursor(ray, wx, wy, el.cx, el.cy, el.z, ma, tol))
+      conics->push_back(IsectConic{curveisect::MakeEllipse(el.cx, el.cy, el.majVx, el.majVy, el.ratio), el.z});
+  }
+}
+
+/// One resolved intersection point in world space.
+struct IsectCandidate {
+  double x = 0.0, y = 0.0, z = 0.0;
+};
+
+/// True 3-D intersections: the XY paths cross AND the elevations agree there within REQ-101.
+///
+/// The elevation test is what separates INT from APPINT. Two segments crossing in plan at different
+/// elevations do not touch, and reporting a snap there would place geometry on nothing.
+void ComputeTrueIntersections(const std::vector<IsectSeg>& segs, const std::vector<IsectConic>& conics,
+                              std::vector<IsectCandidate>* out) {
+  constexpr double kReq101 = 0.01;  ///< ±0.01 ft — the project coordinate tolerance.
+  std::vector<curveisect::Hit2> hits;
+
+  for (size_t i = 0; i < segs.size(); ++i) {
+    for (size_t j = i + 1; j < segs.size(); ++j) {
+      hits.clear();
+      curveisect::IntersectSegSeg(segs[i].xy(), segs[j].xy(), &hits);
+      for (const auto& h : hits) {
+        const double za = segs[i].zAt(h.tA);
+        const double zb = segs[j].zAt(h.tB);
+        if (std::fabs(za - zb) > kReq101)
+          continue;  // they cross in plan but miss in space — that is APPINT's business, not INT's
+        out->push_back(IsectCandidate{h.p.x, h.p.y, 0.5 * (za + zb)});
+      }
+    }
+  }
+
+  for (const IsectSeg& s : segs) {
+    for (const IsectConic& c : conics) {
+      hits.clear();
+      curveisect::IntersectSegConic(s.xy(), c.k, &hits);
+      for (const auto& h : hits) {
+        const double za = s.zAt(h.tA);
+        if (std::fabs(za - c.z) > kReq101)
+          continue;
+        out->push_back(IsectCandidate{h.p.x, h.p.y, 0.5 * (za + c.z)});
+      }
+    }
+  }
+
+  for (size_t i = 0; i < conics.size(); ++i) {
+    for (size_t j = i + 1; j < conics.size(); ++j) {
+      if (std::fabs(conics[i].z - conics[j].z) > kReq101)
+        continue;  // parallel planes at different heights never meet
+      hits.clear();
+      curveisect::IntersectConicConic(conics[i].k, conics[j].k, &hits);
+      for (const auto& h : hits)
+        out->push_back(IsectCandidate{h.p.x, h.p.y, 0.5 * (conics[i].z + conics[j].z)});
+    }
+  }
+}
+
+/// Apparent intersections: the objects cross **as projected into the view**, whether or not they
+/// meet in space.
+///
+/// Everything is projected into the camera's right/up plane and intersected there. Two properties
+/// make this work with no second implementation of the math:
+///   - projection is linear, so a segment stays a segment and a conic stays a conic — an orbited
+///     circle really does project to an ellipse, and `curveisect::Conic` represents that exactly;
+///   - the projection preserves each shape's parametrization, so a parameter solved on screen reads
+///     straight back as the world point via the *unprojected* shape.
+/// Of the two candidate world points, the one NEARER THE CAMERA is returned — the object the user
+/// is visually pointing at (REQ-062; AutoCAD uses "the first object picked", which we have no
+/// equivalent of).
+void ComputeApparentIntersections(const Camera& cam, const std::vector<IsectSeg>& segs,
+                                  const std::vector<IsectConic>& conics, std::vector<IsectCandidate>* out) {
+  const ray3d::Vec3 rW = cam.RightWorld();
+  const ray3d::Vec3 uW = cam.UpWorld();
+  const ray3d::Vec3 fW = cam.ForwardWorld();
+  const double right[3] = {rW.x, rW.y, rW.z};
+  const double up[3] = {uW.x, uW.y, uW.z};
+
+  // Depth along the view direction; smaller is nearer the eye.
+  const auto depth = [&](double x, double y, double z) { return x * fW.x + y * fW.y + z * fW.z; };
+  const auto emitNearer = [&](double xa, double ya, double za, double xb, double yb, double zb) {
+    const bool aNearer = depth(xa, ya, za) <= depth(xb, yb, zb);
+    out->push_back(IsectCandidate{aNearer ? xa : xb, aNearer ? ya : yb, aNearer ? za : zb});
+  };
+
+  std::vector<curveisect::Hit2> hits;
+
+  for (size_t i = 0; i < segs.size(); ++i) {
+    const curveisect::Seg pi = curveisect::ProjectSeg(segs[i].x0, segs[i].y0, segs[i].z0, segs[i].x1, segs[i].y1,
+                                                      segs[i].z1, right, up);
+    for (size_t j = i + 1; j < segs.size(); ++j) {
+      const curveisect::Seg pj = curveisect::ProjectSeg(segs[j].x0, segs[j].y0, segs[j].z0, segs[j].x1, segs[j].y1,
+                                                        segs[j].z1, right, up);
+      hits.clear();
+      curveisect::IntersectSegSeg(pi, pj, &hits);
+      for (const auto& h : hits) {
+        const IsectSeg& A = segs[i];
+        const IsectSeg& B = segs[j];
+        emitNearer(A.x0 + (A.x1 - A.x0) * h.tA, A.y0 + (A.y1 - A.y0) * h.tA, A.zAt(h.tA),
+                   B.x0 + (B.x1 - B.x0) * h.tB, B.y0 + (B.y1 - B.y0) * h.tB, B.zAt(h.tB));
+      }
+    }
+  }
+
+  for (const IsectSeg& s : segs) {
+    const curveisect::Seg ps = curveisect::ProjectSeg(s.x0, s.y0, s.z0, s.x1, s.y1, s.z1, right, up);
+    for (const IsectConic& c : conics) {
+      const curveisect::Conic pc = curveisect::ProjectConic(c.k, c.z, right, up);
+      hits.clear();
+      curveisect::IntersectSegConic(ps, pc, &hits);
+      for (const auto& h : hits) {
+        const curveisect::Vec2 onCurve = c.k.point(h.tB);  // the UNPROJECTED conic, same parameter
+        emitNearer(s.x0 + (s.x1 - s.x0) * h.tA, s.y0 + (s.y1 - s.y0) * h.tA, s.zAt(h.tA), onCurve.x, onCurve.y, c.z);
+      }
+    }
+  }
+
+  for (size_t i = 0; i < conics.size(); ++i) {
+    const curveisect::Conic pi = curveisect::ProjectConic(conics[i].k, conics[i].z, right, up);
+    for (size_t j = i + 1; j < conics.size(); ++j) {
+      const curveisect::Conic pj = curveisect::ProjectConic(conics[j].k, conics[j].z, right, up);
+      hits.clear();
+      curveisect::IntersectConicConic(pi, pj, &hits);
+      for (const auto& h : hits) {
+        const curveisect::Vec2 pa = conics[i].k.point(h.tA);
+        const curveisect::Vec2 pb = conics[j].k.point(h.tB);
+        emitNearer(pa.x, pa.y, conics[i].z, pb.x, pb.y, conics[j].z);
+      }
+    }
+  }
 }
 
 [[nodiscard]] bool PerpendicularReference(const AppCommandState& cmd, float* refX, float* refY) {
@@ -380,7 +636,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       if (cmd.objectSnapMidpoint)
         Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld, 0.5f * (z0 + z1));
       if (havePerpRef)
-        AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc);
+        AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc, z0, z1);
     }
   }
 
@@ -419,7 +675,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       if (cmd.objectSnapMidpoint)
         Consider(&acc, wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld, 0.5f * (az + bz));
       if (havePerpRef)
-        AppendPerpendicularFromRef(refPx, refPy, wx, wy, ax, ay, bx, by, tolWorld, &acc);
+        AppendPerpendicularFromRef(refPx, refPy, wx, wy, ax, ay, bx, by, tolWorld, &acc, az, bz);
     };
     for (int vi = v0; vi + 1 < v1; ++vi)
       considerEdge(vi, vi + 1);
@@ -431,7 +687,8 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       float gcy = 0.f;
       if (ClosedPolylineCentroid(cmd.userPolylineVerts, v0, v1, &gcx, &gcy)) {
         const float p2 = ClosedPolyGeometricPickDistSq(wx, wy, cmd.userPolylineVerts, v0, v1);
-        ConsiderSnap(&acc, wx, wy, gcx, gcy, Kind::GeometricCenter, p2, tolWorld);
+        ConsiderSnap(&acc, wx, wy, gcx, gcy, Kind::GeometricCenter, p2, tolWorld,
+                     PolylineLoopMeanZ(cmd.userPolylineVerts, v0, v1));
       }
     }
   }
@@ -468,10 +725,10 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       CirclePointWorld(dcx, dcy, dr, t1, &x1, &y1);
       if (cmd.objectSnapMidpoint)
         Consider(&acc, wx, wy, static_cast<float>(0.5 * (x0 + x1)), static_cast<float>(0.5 * (y0 + y1)), Kind::Midpoint,
-                 tolWorld);
+                 tolWorld, a.z);  // the arc's plane, same as its endpoint candidates above
       if (havePerpRef)
         AppendPerpendicularFromRef(refPx, refPy, wx, wy, static_cast<float>(x0), static_cast<float>(y0),
-                                   static_cast<float>(x1), static_cast<float>(y1), tolWorld, &acc);
+                                   static_cast<float>(x1), static_cast<float>(y1), tolWorld, &acc, a.z, a.z);
     }
   }
 
@@ -505,9 +762,34 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       const float x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
       const float y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
       if (cmd.objectSnapMidpoint)
-        Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld);
+        Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld,
+                 el.z);  // the ellipse's plane, same as its centre candidate above
       if (havePerpRef)
-        AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc);
+        AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc, el.z, el.z);
+    }
+  }
+
+  // Intersection / apparent intersection (REQ-062). Gathered once and shared: both walk the same
+  // near-cursor object list, and the cull is the only thing that keeps a pairwise snap affordable.
+  if (cmd.objectSnapIntersection || cmd.objectSnapApparentIntersection) {
+    std::vector<IsectSeg> isectSegs;
+    std::vector<IsectConic> isectConics;
+    GatherNearCursor(cmd, wx, wy, static_cast<double>(tolWorld), acc.ray, &isectSegs, &isectConics);
+    if (isectSegs.size() + isectConics.size() >= 2) {
+      std::vector<IsectCandidate> cand;
+      if (cmd.objectSnapIntersection) {
+        ComputeTrueIntersections(isectSegs, isectConics, &cand);
+        for (const IsectCandidate& c : cand)
+          Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(c.x),
+                   static_cast<float>(c.y), Kind::Intersection, tolWorld, static_cast<float>(c.z));
+      }
+      if (cmd.objectSnapApparentIntersection) {
+        cand.clear();
+        ComputeApparentIntersections(CadViewCamera(cmd), isectSegs, isectConics, &cand);
+        for (const IsectCandidate& c : cand)
+          Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(c.x),
+                   static_cast<float>(c.y), Kind::ApparentIntersection, tolWorld, static_cast<float>(c.z));
+      }
     }
   }
 
@@ -675,13 +957,17 @@ bool CommandHasPerpendicularSnapReference(const AppCommandState& cmd, bool comma
   return PerpendicularReference(cmd, &rx, &ry);
 }
 
+/// \param pz the candidate's elevation (REQ-058). The picker hands its chosen entry straight back
+///        as the snap result, so an entry built without a Z commits on the datum however carefully
+///        FindBest resolves elevation for the same point.
 void PushSnapPickerEntry(float px, float py, Kind kind, float sortWx, float sortWy,
-                         std::vector<SnapCandidateEntry>& out) {
+                         std::vector<SnapCandidateEntry>& out, float pz = 0.f) {
   SnapCandidateEntry e;
   e.hit.valid = true;
   e.hit.kind = kind;
   e.hit.x = px;
   e.hit.y = py;
+  e.hit.z = pz;
   const float dx = px - sortWx;
   const float dy = py - sortWy;
   e.distSq = dx * dx + dy * dy;
@@ -689,7 +975,7 @@ void PushSnapPickerEntry(float px, float py, Kind kind, float sortWx, float sort
 }
 
 void PushPerpFootEntry(float refX, float refY, float ax, float ay, float bx, float by, float sortWx, float sortWy,
-                       std::vector<SnapCandidateEntry>& out) {
+                       std::vector<SnapCandidateEntry>& out, float az = 0.f, float bz = 0.f) {
   const float vx = bx - ax;
   const float vy = by - ay;
   const float len2 = vx * vx + vy * vy;
@@ -699,7 +985,7 @@ void PushPerpFootEntry(float refX, float refY, float ax, float ay, float bx, flo
   t = std::clamp(t, 0.f, 1.f);
   const float qx = ax + t * vx;
   const float qy = ay + t * vy;
-  PushSnapPickerEntry(qx, qy, Kind::Perpendicular, sortWx, sortWy, out);
+  PushSnapPickerEntry(qx, qy, Kind::Perpendicular, sortWx, sortWy, out, az + t * (bz - az));
 }
 
 void SortDedupeSnapPicker(std::vector<SnapCandidateEntry>& v) {
@@ -734,8 +1020,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     const auto& L = cmd.userLinesFlat;
     if (L.size() % 6 == 0) {
       for (size_t i = 0; i + 5 < L.size(); i += 6) {
-        PushSnapPickerEntry(L[i], L[i + 1], Kind::Endpoint, sortWorldX, sortWorldY, out);
-        PushSnapPickerEntry(L[i + 3], L[i + 4], Kind::Endpoint, sortWorldX, sortWorldY, out);
+        PushSnapPickerEntry(L[i], L[i + 1], Kind::Endpoint, sortWorldX, sortWorldY, out, L[i + 2]);
+        PushSnapPickerEntry(L[i + 3], L[i + 4], Kind::Endpoint, sortWorldX, sortWorldY, out, L[i + 5]);
       }
     }
     const int polyCount =
@@ -750,8 +1036,10 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         const float ay = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 1)];
         const float bx = cmd.userPolylineVerts[static_cast<size_t>(ib * 3)];
         const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
-        PushSnapPickerEntry(ax, ay, Kind::Endpoint, sortWorldX, sortWorldY, out);
-        PushSnapPickerEntry(bx, by, Kind::Endpoint, sortWorldX, sortWorldY, out);
+        PushSnapPickerEntry(ax, ay, Kind::Endpoint, sortWorldX, sortWorldY, out,
+                            cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 2)]);
+        PushSnapPickerEntry(bx, by, Kind::Endpoint, sortWorldX, sortWorldY, out,
+                            cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 2)]);
       };
       for (int vi = v0; vi + 1 < v1; ++vi)
         pushEdge(vi, vi + 1);
@@ -763,9 +1051,9 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         continue;
       const float tEnd = a.startRad + a.sweepRad;
       PushSnapPickerEntry(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), Kind::Endpoint,
-                          sortWorldX, sortWorldY, out);
+                          sortWorldX, sortWorldY, out, a.z);
       PushSnapPickerEntry(a.cx + a.r * std::cos(tEnd), a.cy + a.r * std::sin(tEnd), Kind::Endpoint, sortWorldX,
-                          sortWorldY, out);
+                          sortWorldY, out, a.z);
     }
     break;
   }
@@ -777,7 +1065,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         const float y0 = L[i + 1];
         const float x1 = L[i + 3];
         const float y1 = L[i + 4];
-        PushSnapPickerEntry(0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out);
+        PushSnapPickerEntry(0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, sortWorldX, sortWorldY, out,
+                            0.5f * (L[i + 2] + L[i + 5]));
       }
     }
     const int polyCount =
@@ -792,7 +1081,9 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         const float ay = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 1)];
         const float bx = cmd.userPolylineVerts[static_cast<size_t>(ib * 3)];
         const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
-        PushSnapPickerEntry(0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, sortWorldX, sortWorldY, out);
+        PushSnapPickerEntry(0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, sortWorldX, sortWorldY, out,
+                            0.5f * (cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 2)] +
+                                    cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 2)]));
       };
       for (int vi = v0; vi + 1 < v1; ++vi)
         pushEdgeMid(vi, vi + 1);
@@ -818,7 +1109,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         CirclePointWorld(dcx, dcy, dr, t0, &x0, &y0);
         CirclePointWorld(dcx, dcy, dr, t1, &x1, &y1);
         PushSnapPickerEntry(static_cast<float>(0.5 * (x0 + x1)), static_cast<float>(0.5 * (y0 + y1)), Kind::Midpoint,
-                            sortWorldX, sortWorldY, out);
+                            sortWorldX, sortWorldY, out, a.z);
       }
     }
     constexpr int kEllSnapSeg = 36;
@@ -846,7 +1137,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         const double x1 = ecx + ux * (ma * c1) + px * (mb * s1);
         const double y1 = ecy + uy * (ma * c1) + py * (mb * s1);
         PushSnapPickerEntry(static_cast<float>(0.5 * (x0 + x1)), static_cast<float>(0.5 * (y0 + y1)), Kind::Midpoint,
-                            sortWorldX, sortWorldY, out);
+                            sortWorldX, sortWorldY, out, el.z);
       }
     }
     break;
@@ -855,13 +1146,13 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     const auto& C = cmd.userCirclesCxCyZR;
     if (C.size() % 4 == 0) {  // cx,cy,z,r
       for (size_t i = 0; i + 3 < C.size(); i += 4)
-        PushSnapPickerEntry(C[i], C[i + 1], Kind::Center, sortWorldX, sortWorldY, out);
+        PushSnapPickerEntry(C[i], C[i + 1], Kind::Center, sortWorldX, sortWorldY, out, C[i + 2]);
     }
     for (const CadEllipse& el : cmd.userEllipses) {
       const float ma = std::hypot(el.majVx, el.majVy);
       if (ma < 1e-8f)
         continue;
-      PushSnapPickerEntry(el.cx, el.cy, Kind::Center, sortWorldX, sortWorldY, out);
+      PushSnapPickerEntry(el.cx, el.cy, Kind::Center, sortWorldX, sortWorldY, out, el.z);
     }
     break;
   }
@@ -871,7 +1162,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     const auto& L = cmd.userLinesFlat;
     if (L.size() % 6 == 0) {
       for (size_t i = 0; i + 5 < L.size(); i += 6)
-        PushPerpFootEntry(refPx, refPy, L[i], L[i + 1], L[i + 3], L[i + 4], sortWorldX, sortWorldY, out);
+        PushPerpFootEntry(refPx, refPy, L[i], L[i + 1], L[i + 3], L[i + 4], sortWorldX, sortWorldY, out, L[i + 2],
+                          L[i + 5]);
     }
     const int polyCount =
         static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
@@ -885,7 +1177,9 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         const float ay = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 1)];
         const float bx = cmd.userPolylineVerts[static_cast<size_t>(ib * 3)];
         const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
-        PushPerpFootEntry(refPx, refPy, ax, ay, bx, by, sortWorldX, sortWorldY, out);
+        PushPerpFootEntry(refPx, refPy, ax, ay, bx, by, sortWorldX, sortWorldY, out,
+                          cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 2)],
+                          cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 2)]);
       };
       for (int vi = v0; vi + 1 < v1; ++vi)
         pushEdgePerp(vi, vi + 1);
@@ -905,7 +1199,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         const float y0 = a.cy + a.r * std::sin(t0);
         const float x1 = a.cx + a.r * std::cos(t1);
         const float y1 = a.cy + a.r * std::sin(t1);
-        PushPerpFootEntry(refPx, refPy, x0, y0, x1, y1, sortWorldX, sortWorldY, out);
+        PushPerpFootEntry(refPx, refPy, x0, y0, x1, y1, sortWorldX, sortWorldY, out, a.z, a.z);
       }
     }
     constexpr int kEllSnapSeg = 36;
@@ -930,7 +1224,7 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
         const float y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
         const float x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
         const float y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
-        PushPerpFootEntry(refPx, refPy, x0, y0, x1, y1, sortWorldX, sortWorldY, out);
+        PushPerpFootEntry(refPx, refPy, x0, y0, x1, y1, sortWorldX, sortWorldY, out, el.z, el.z);
       }
     }
     break;
@@ -946,14 +1240,39 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       float gcx = 0.f;
       float gcy = 0.f;
       if (ClosedPolylineCentroid(cmd.userPolylineVerts, v0, v1, &gcx, &gcy))
-        PushSnapPickerEntry(gcx, gcy, Kind::GeometricCenter, sortWorldX, sortWorldY, out);
+        PushSnapPickerEntry(gcx, gcy, Kind::GeometricCenter, sortWorldX, sortWorldY, out,
+                            PolylineLoopMeanZ(cmd.userPolylineVerts, v0, v1));
     }
     break;
   }
   case Kind::SurveyCenter:
     for (const SurveyPoint& sp : cmd.surveyPoints)
-      PushSnapPickerEntry(sp.easting, sp.northing, Kind::SurveyCenter, sortWorldX, sortWorldY, out);
+      PushSnapPickerEntry(sp.easting, sp.northing, Kind::SurveyCenter, sortWorldX, sortWorldY, out,
+                          sp.elevation);  // elevation IS the point's Z (REQ-057)
     break;
+  case Kind::Intersection:
+  case Kind::ApparentIntersection: {
+    // Unlike every other kind, these are PAIRWISE — "all in the model" would be O(n²) over the
+    // whole drawing, which on a real topo is unbounded work for a menu. So the list is the
+    // intersections within roughly one screen height of the click, which is the neighbourhood the
+    // user is choosing from anyway. The menu title says "all in model"; for these two it is not,
+    // and that is a deliberate trade rather than an oversight.
+    const double searchR = static_cast<double>(1.f / std::max(cmd.viewportZoom, 1.e-9f)) * 50.0;
+    std::vector<IsectSeg> segs;
+    std::vector<IsectConic> conics;
+    GatherNearCursor(cmd, sortWorldX, sortWorldY, searchR, nullptr, &segs, &conics);
+    if (segs.size() + conics.size() < 2)
+      break;
+    std::vector<IsectCandidate> cand;
+    if (kind == Kind::Intersection)
+      ComputeTrueIntersections(segs, conics, &cand);
+    else
+      ComputeApparentIntersections(CadViewCamera(cmd), segs, conics, &cand);
+    for (const IsectCandidate& c : cand)
+      PushSnapPickerEntry(static_cast<float>(c.x), static_cast<float>(c.y), kind, sortWorldX, sortWorldY, out,
+                          static_cast<float>(c.z));
+    break;
+  }
   case Kind::Grip:
     break; // grip snap points are per-selection, not gathered globally
   }
@@ -964,11 +1283,14 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
   SnapPickAccum acc{};
   const float tol2 = tolWorld * tolWorld;
 
-  auto gripCandidate = [&](float gx, float gy) {
+  /// \param gz the grip's own elevation (REQ-058). Grip snap outranks every geometry snap
+  ///        (Priority(Grip) == 4), so a grip reported at Z 0 does not merely miss — it WINS over
+  ///        a correct endpoint candidate and drags the commit down to the datum.
+  auto gripCandidate = [&](float gx, float gy, float gz) {
     const float dx = gx - static_cast<float>(wx);
     const float dy = gy - static_cast<float>(wy);
     if (dx * dx + dy * dy <= tol2)
-      ConsiderSnap(&acc, wx, wy, gx, gy, Kind::Grip, 0.f, tolWorld);
+      ConsiderSnap(&acc, wx, wy, gx, gy, Kind::Grip, 0.f, tolWorld, gz);
   };
 
   // CAD entity grips
@@ -976,16 +1298,17 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
     if (sel.type == SelectedEntity::Type::LineSeg) {
       const size_t k = static_cast<size_t>(sel.index) * 6;
       if (k + 5 < cmd.userLinesFlat.size()) {
-        gripCandidate(cmd.userLinesFlat[k],     cmd.userLinesFlat[k + 1]);
-        gripCandidate(cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4]);
+        gripCandidate(cmd.userLinesFlat[k],     cmd.userLinesFlat[k + 1], cmd.userLinesFlat[k + 2]);
+        gripCandidate(cmd.userLinesFlat[k + 3], cmd.userLinesFlat[k + 4], cmd.userLinesFlat[k + 5]);
       }
     } else if (sel.type == SelectedEntity::Type::Circle) {
       const size_t k = static_cast<size_t>(sel.index) * 4;
       if (k + 3 < cmd.userCirclesCxCyZR.size()) {
         const float cx = cmd.userCirclesCxCyZR[k];
         const float cy = cmd.userCirclesCxCyZR[k + 1];
-        gripCandidate(cx, cy);
-        gripCandidate(cx + cmd.userCirclesCxCyZR[k + 3], cy);
+        const float cz = cmd.userCirclesCxCyZR[k + 2];
+        gripCandidate(cx, cy, cz);
+        gripCandidate(cx + cmd.userCirclesCxCyZR[k + 3], cy, cz);
       }
     } else if (sel.type == SelectedEntity::Type::Polyline) {
       const int np = static_cast<int>(cmd.userPolylineOffsets.size() > 0 ? cmd.userPolylineOffsets.size() - 1 : 0);
@@ -994,37 +1317,38 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
         const int endV   = cmd.userPolylineOffsets[static_cast<size_t>(sel.index + 1)];
         for (int vi = 0; vi < endV - startV; ++vi) {
           const size_t xIdx = static_cast<size_t>(startV + vi) * 3;
-          if (xIdx + 1 >= cmd.userPolylineVerts.size()) break;
-          gripCandidate(cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1]);
+          if (xIdx + 2 >= cmd.userPolylineVerts.size()) break;
+          gripCandidate(cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1],
+                        cmd.userPolylineVerts[xIdx + 2]);
         }
       }
     } else if (sel.type == SelectedEntity::Type::Arc) {
       if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
         const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
         const float endRad = a.startRad + a.sweepRad;
-        gripCandidate(a.cx, a.cy);
-        gripCandidate(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad));
-        gripCandidate(a.cx + a.r * std::cos(endRad),     a.cy + a.r * std::sin(endRad));
+        gripCandidate(a.cx, a.cy, a.z);
+        gripCandidate(a.cx + a.r * std::cos(a.startRad), a.cy + a.r * std::sin(a.startRad), a.z);
+        gripCandidate(a.cx + a.r * std::cos(endRad),     a.cy + a.r * std::sin(endRad),     a.z);
       }
     } else if (sel.type == SelectedEntity::Type::Ellipse) {
       if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userEllipses.size()) {
         const CadEllipse& el = cmd.userEllipses[static_cast<size_t>(sel.index)];
         const float perpX = -el.majVy, perpY = el.majVx;
-        gripCandidate(el.cx, el.cy);
-        gripCandidate(el.cx + el.majVx,            el.cy + el.majVy);
-        gripCandidate(el.cx + perpX * el.ratio,     el.cy + perpY * el.ratio);
+        gripCandidate(el.cx, el.cy, el.z);
+        gripCandidate(el.cx + el.majVx,            el.cy + el.majVy,            el.z);
+        gripCandidate(el.cx + perpX * el.ratio,     el.cy + perpY * el.ratio,    el.z);
       }
     } else if (sel.type == SelectedEntity::Type::Annotation) {
       if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadAnnotations.size()) {
         const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(sel.index)];
         if (a.kind == CadAnnotation::Kind::Mtext) {
           if (a.surveyPointLabelFor >= 0) {
-            gripCandidate(0.5f * (a.boxMinX + a.boxMaxX), 0.5f * (a.boxMinY + a.boxMaxY));
+            gripCandidate(0.5f * (a.boxMinX + a.boxMaxX), 0.5f * (a.boxMinY + a.boxMaxY), a.insZ);
           } else {
-            gripCandidate(a.boxMinX, a.boxMinY);
-            gripCandidate(a.boxMaxX, a.boxMinY);
-            gripCandidate(a.boxMaxX, a.boxMaxY);
-            gripCandidate(a.boxMinX, a.boxMaxY);
+            gripCandidate(a.boxMinX, a.boxMinY, a.insZ);
+            gripCandidate(a.boxMaxX, a.boxMinY, a.insZ);
+            gripCandidate(a.boxMaxX, a.boxMaxY, a.insZ);
+            gripCandidate(a.boxMinX, a.boxMaxY, a.insZ);
           }
         }
       }
@@ -1035,7 +1359,8 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
   for (const int idx : cmd.selectedSurveyPointIndices) {
     if (idx >= 0 && static_cast<size_t>(idx) < cmd.surveyPoints.size())
       gripCandidate(cmd.surveyPoints[static_cast<size_t>(idx)].easting,
-                    cmd.surveyPoints[static_cast<size_t>(idx)].northing);
+                    cmd.surveyPoints[static_cast<size_t>(idx)].northing,
+                    cmd.surveyPoints[static_cast<size_t>(idx)].elevation);  // elevation IS Z (REQ-057)
   }
 
   return acc.best;

@@ -23,5 +23,14 @@ void CadTessellateLinetypePolylineVc(const float* xy, int nPts, float z, const s
                                     float patternScaleWorld, const float rgba[4], std::vector<float>* outVerts7);
 
 /// Multi-segment path; when \p closed, includes edge from last point back to first (for circles).
+///
+/// \param z         elevation for the whole chain — correct for the planar producers (circle, arc,
+///                  ellipse), whose geometry carries exactly one Z.
+/// \param zPerPt    optional per-point elevations, \p nPts entries, overriding \p z when non-null.
+///                  A POLYLINE stores a Z per vertex (REQ-057), so tessellating it against a single
+///                  z drew a sloped chain as if it were level; dash endpoints interpolate between
+///                  the two vertex elevations so a dashed sloped line rises with its segment
+///                  (REQ-058). Null reproduces the flat behaviour exactly.
 void CadTessellateLinetypeChainVc(const float* xyPairs, int nPts, float z, bool closed, const std::string& linetypeName,
-                                 float patternScaleWorld, const float rgba[4], std::vector<float>* outVerts7);
+                                 float patternScaleWorld, const float rgba[4], std::vector<float>* outVerts7,
+                                 const float* zPerPt = nullptr);

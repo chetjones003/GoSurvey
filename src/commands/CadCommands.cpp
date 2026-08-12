@@ -6,6 +6,7 @@
 #include "HatchGeom.hpp"
 #include "HatchBoundary.hpp"
 #include "geom2d.hpp"
+#include "util/benchscene.hpp"
 #include "NumFormat.hpp"
 #include "MtextRichFormat.hpp"
 #include "FontRegistry.hpp"
@@ -1472,6 +1473,7 @@ bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const float dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAligned;
+  d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
   d.dimExt1X = x1;
   d.dimExt1Y = y1;
   d.dimExt2X = x2;
@@ -1558,6 +1560,7 @@ bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy,
   }
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimLinear;
+  d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
   d.dimExt1X = x1;
   d.dimExt1Y = y1;
   d.dimExt2X = x2;
@@ -1682,6 +1685,7 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const float vx = st.dimAngVx, vy = st.dimAngVy;
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAngular;
+  d.insZ = CadCommitElevation(st);  // the draft previews at the elevation it will commit to (REQ-058)
   d.dimAngVertexX = vx;
   d.dimAngVertexY = vy;
   d.dimExt1X = st.dimE1x;
@@ -1970,6 +1974,7 @@ const CmdEntry kRegistry[] = {
     {"polyline", "pl", "Draw a connected polyline"},
     {"rect", "rectang, rectangle", "Draw a rectangle (two opposite corners)"},
     {"trimstate", "", "TRIM mode: 0 = draw a line to trim (default), 1 = pick cutting edges"},
+    {"bench", "", "REQ-100 frame-budget benchmark: BENCH [segments] [frames]"},
     {"elev", "ucs", "Elevation new geometry is drawn at (W = world Z 0)"},
     {"arc", "", "Draw an arc"},
     {"ellipse", "el", "Draw an ellipse"},
@@ -2200,6 +2205,7 @@ static void ResetAllCadDraftTools(AppCommandState& st) {
 static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
   CadAnnotation d{};
   d.kind = CadAnnotation::Kind::DimAngular;
+  d.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
   d.dimAngVertexX = st.dimAngVx;
   d.dimAngVertexY = st.dimAngVy;
   d.dimExt1X = st.dimE1x;
@@ -4664,6 +4670,7 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   std::snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(len));
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimAligned;
+  ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
   ann.dimExt1X = x1;
   ann.dimExt1Y = y1;
   ann.dimExt2X = x2;
@@ -4716,6 +4723,7 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   std::snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(meas));
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimLinear;
+  ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
   ann.dimExt1X = x1;
   ann.dimExt1Y = y1;
   ann.dimExt2X = x2;
@@ -8955,13 +8963,15 @@ bool CadHatchCommitLoop(AppCommandState& st, const std::vector<float>& loop, std
   PushUndoSnapshot(st, "Hatch");
   CadFilledRegion fr;
   // \p loop is the traced boundary as flat local x,y pairs; the store is interleaved x,y,z
-  // (ADR-025 (a)). A hatch is created in the plan view of the current drawing, so Z = 0 until
-  // the UCS work plane exists (REQ-058/TASK-035).
+  // (ADR-025 (a)). The work plane exists now, so the region lands on it like every other created
+  // entity (REQ-058) rather than always on the datum. The tracer works in XY and returns no
+  // elevations, so all vertices share one Z — a hatch is planar anyway.
+  const float hatchZ = CadCommitElevation(st);
   fr.vertsXyz.reserve(loop.size() / 2 * 3);
   for (size_t i = 0; i + 1 < loop.size(); i += 2) {
     fr.vertsXyz.push_back(loop[i + 0]);
     fr.vertsXyz.push_back(loop[i + 1]);
-    fr.vertsXyz.push_back(0.f);
+    fr.vertsXyz.push_back(hatchZ);
   }
   fr.loopStart = {0};
   fr.patternName = st.hatchPatternName;  // "" / "SOLID" = solid; else a line pattern (ADR-018)
@@ -10387,6 +10397,161 @@ bool ApplyElevValue(AppCommandState& st, double z, std::vector<std::string>& log
   return true;
 }
 
+// --- REQ-100 frame-budget benchmark -------------------------------------------------------------
+
+/// Install the bench scene, saving the user's polylines so the run cannot cost them their drawing.
+///
+/// The camera is saved too and forced to a fixed starting orientation: a benchmark that began from
+/// whatever the user was looking at would measure a different amount of geometry every run, and the
+/// number would not be comparable to the one in the requirement.
+bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::vector<std::string>& log) {
+  if (st.bench.active) {
+    log.push_back("BENCH — a run is already in progress.");
+    return false;
+  }
+  if (st.activeSpaceIndex != kModelSpaceIndex) {
+    log.push_back("BENCH — switch to model space first (REQ-100 measures the model viewport).");
+    return false;
+  }
+  if (segments < 1 || frames < 1) {
+    log.push_back("BENCH — segment count and frame count must both be positive.");
+    return false;
+  }
+
+  AppCommandState::BenchRun& b = st.bench;
+  b.savedPolyVerts = st.userPolylineVerts;
+  b.savedPolyOffsets = st.userPolylineOffsets;
+  b.savedPolyClosed = st.userPolylineClosed;
+  b.savedPolyAttrs = st.userPolylineAttrs;
+  b.savedAzimuthDeg = st.viewportAzimuthDeg;
+  b.savedElevationDeg = st.viewportElevationDeg;
+  b.savedZoom = st.viewportZoom;
+  b.savedPanX = st.viewportPanX;
+  b.savedPanY = st.viewportPanY;
+  b.savedPanZ = st.viewportPanZ;
+
+  b.segmentCount =
+      benchscene::BuildContourScene(segments, &st.userPolylineVerts, &st.userPolylineOffsets, &st.userPolylineClosed);
+  st.userPolylineAttrs.assign(st.userPolylineClosed.size(), MakeNewEntityAttrs(st));
+
+  // Frame the whole scene from a tilted view. The framing is computed from the geometry rather than
+  // hard-coded: if any of the scene falls outside the viewport the GPU stops rasterising it and the
+  // benchmark measures less than the density the requirement names. Sizing to the scene's bounding
+  // SPHERE means that stays true through the whole orbit, at every azimuth.
+  double mnX = 1e300, mxX = -1e300, mnY = 1e300, mxY = -1e300, mnZ = 1e300, mxZ = -1e300;
+  for (size_t i = 0; i + 2 < st.userPolylineVerts.size(); i += 3) {
+    mnX = std::min(mnX, static_cast<double>(st.userPolylineVerts[i]));
+    mxX = std::max(mxX, static_cast<double>(st.userPolylineVerts[i]));
+    mnY = std::min(mnY, static_cast<double>(st.userPolylineVerts[i + 1]));
+    mxY = std::max(mxY, static_cast<double>(st.userPolylineVerts[i + 1]));
+    mnZ = std::min(mnZ, static_cast<double>(st.userPolylineVerts[i + 2]));
+    mxZ = std::max(mxZ, static_cast<double>(st.userPolylineVerts[i + 2]));
+  }
+  const double cx = 0.5 * (mnX + mxX);
+  const double cy = 0.5 * (mnY + mxY);
+  const double cz = 0.5 * (mnZ + mxZ);
+  const double radius =
+      0.5 * std::sqrt((mxX - mnX) * (mxX - mnX) + (mxY - mnY) * (mxY - mnY) + (mxZ - mnZ) * (mxZ - mnZ));
+  st.viewportPanX = cx;
+  st.viewportPanY = cy;
+  st.viewportPanZ = cz;
+  const double halfH = std::max(radius * 1.05, 1.0);  // 5% margin so nothing clips at the edge
+  st.viewportZoom = static_cast<float>(50.0 / halfH);
+  st.viewportAzimuthDeg = 0.f;
+  st.viewportElevationDeg = 55.f;
+
+  b.frameMs.clear();
+  b.frameMs.reserve(static_cast<size_t>(frames));
+  b.framesTotal = frames;
+  b.warmupFrames = 60;
+  b.frameIndex = 0;
+  b.orbitDegPerFrame = 0.5;  // a full turn every 720 frames — continuous, and never repeats a frame
+  b.sceneInstalled = true;
+  b.active = true;
+  BumpCadGpuCache(st);
+
+  char msg[224];
+  std::snprintf(msg, sizeof(msg),
+                "BENCH — REQ-100: %d segments, %d frames (%d warm-up), continuous orbit. Vsync is disabled for the "
+                "run; the drawing is restored when it finishes.",
+                b.segmentCount, frames, b.warmupFrames);
+  log.push_back(msg);
+  return true;
+}
+
+/// Restore the drawing and camera, and report. Called from the frame loop when the run completes.
+void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) {
+  AppCommandState::BenchRun& b = st.bench;
+  if (!b.active)
+    return;
+  if (b.sceneInstalled) {
+    st.userPolylineVerts = std::move(b.savedPolyVerts);
+    st.userPolylineOffsets = std::move(b.savedPolyOffsets);
+    st.userPolylineClosed = std::move(b.savedPolyClosed);
+    st.userPolylineAttrs = std::move(b.savedPolyAttrs);
+    b.savedPolyVerts.clear();
+    b.savedPolyOffsets.clear();
+    b.savedPolyClosed.clear();
+    b.savedPolyAttrs.clear();
+    st.viewportAzimuthDeg = b.savedAzimuthDeg;
+    st.viewportElevationDeg = b.savedElevationDeg;
+    st.viewportZoom = b.savedZoom;
+    st.viewportPanX = b.savedPanX;
+    st.viewportPanY = b.savedPanY;
+    st.viewportPanZ = b.savedPanZ;
+    b.sceneInstalled = false;
+    BumpCadGpuCache(st);
+  }
+  b.active = false;
+
+  const benchscene::FrameStats s = benchscene::Summarize(b.frameMs);
+  if (s.frames < 1) {
+    log.push_back("BENCH — no frames were timed; nothing to report.");
+    return;
+  }
+  constexpr double kBudgetMs = 16.0;  // REQ-100
+  const bool pass = s.p95Ms <= kBudgetMs;
+  char msg[320];
+  std::snprintf(msg, sizeof(msg), "BENCH — %d segments, %d timed frames: p95 %.2f ms (budget %.0f ms) — %s.",
+                b.segmentCount, s.frames, s.p95Ms, kBudgetMs, pass ? "PASS" : "FAIL");
+  log.push_back(msg);
+  std::snprintf(msg, sizeof(msg), "BENCH — min %.2f  median %.2f  mean %.2f  p95 %.2f  p99 %.2f  max %.2f ms.",
+                s.minMs, s.medianMs, s.meanMs, s.p95Ms, s.p99Ms, s.maxMs);
+  log.push_back(msg);
+
+  // Also written to a file: a benchmark's value is in the record, and reading six figures off a
+  // fading command line is how a number gets transcribed wrong into a completion report.
+  const std::filesystem::path dir = UserDataDirectory();
+  if (!dir.empty()) {
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    std::ofstream f(dir / "bench-req100.txt", std::ios::app);
+    if (f) {
+      const std::time_t t = std::time(nullptr);
+      char timeBuf[32];
+      struct tm tmInfo{};
+#ifdef _WIN32
+      localtime_s(&tmInfo, &t);
+#else
+      localtime_r(&t, &tmInfo);
+#endif
+      std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &tmInfo);
+      f << timeBuf << "  REQ-100 frame budget\n"
+        << "  segments      " << b.segmentCount << "\n"
+        << "  timed frames  " << s.frames << " (after " << b.warmupFrames << " warm-up)\n"
+        << "  orbit         " << b.orbitDegPerFrame << " deg/frame, vsync off\n"
+        << "  min           " << s.minMs << " ms\n"
+        << "  median        " << s.medianMs << " ms\n"
+        << "  mean          " << s.meanMs << " ms\n"
+        << "  p95           " << s.p95Ms << " ms   <-- REQ-100 is judged on this\n"
+        << "  p99           " << s.p99Ms << " ms\n"
+        << "  max           " << s.maxMs << " ms\n"
+        << "  budget        " << kBudgetMs << " ms  => " << (pass ? "PASS" : "FAIL") << "\n\n";
+    }
+  }
+  b.frameMs.clear();
+}
+
 // Reset the work plane to world XY. Kept separate from ApplyElevValue so the status readout and
 // the "W" option have one shared meaning of "world".
 void ApplyUcsWorld(AppCommandState& st, std::vector<std::string>& log) {
@@ -11103,6 +11268,19 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         ApplyTrimStateValue(st, tv, log);
         return;
       }
+    }
+    // `BENCH` runs the REQ-100 frame-budget measurement at the budget's own density; `BENCH <segs>`
+    // and `BENCH <segs> <frames>` override it for a quick check or a longer sample.
+    if (plotTok == "bench") {
+      int segs = 250000;  // REQ-100: the density of a real topo with contours
+      int frames = 900;   // ~1.25 turns of the scripted orbit after warm-up
+      int v = 0;
+      if (issIdle >> v)
+        segs = v;
+      if (issIdle >> v)
+        frames = v;
+      StartFrameBudgetBench(st, segs, frames, log);
+      return;
     }
     // `ELEV 12.5` / `UCS W` — the inline forms. Falling through to the prompt when no argument
     // follows is what makes bare `ELEV` still work.
