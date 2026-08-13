@@ -204,7 +204,20 @@ A change is rejected if it breaks any of these:
 2. No subsystem doing another subsystem's job.
 3. No new global mutable state.
 4. No new abstraction without ≥2 present-day concrete uses.
-5. Every resource has exactly one visible owner.
+5. **Every *mutable* resource has exactly one visible owner.** Shared ownership of an
+   **immutable** payload is permitted, and is the intended pattern for large read-only
+   geometry (amended 2026-08-12, decision log). The invariant exists to prevent
+   mutation-ordering hazards — two owners disagreeing about when a thing changed — and
+   data that cannot change cannot have them. The permission is narrow and comes with
+   conditions: the shared type must be held as `shared_ptr<const T>` so the compiler
+   enforces the immutability the exemption rests on, and "editing" such a resource means
+   **replacing the pointer**, never writing through it. A `shared_ptr<T>` to mutable data
+   is still a blocking finding.
+   *Raised by TASK-041:* `DrawingGeometrySnapshot` deep-copies every geometry array and
+   50 frames are kept, so a 2M-triangle mesh (REQ-063's own ceiling, ~53 MB) would cost
+   ~2.6 GB of undo stack — and would be re-copied by every unrelated edit. ADR-026 (c)
+   had already made meshes non-editable, so the payload was immutable before the problem
+   was found; this amendment records that immutability as the thing that makes sharing safe.
 6. No `gl*` (or other backend) calls outside the Renderer/Platform boundary.
 7. No allocation/logging/virtual dispatch added to a measured hot path without a
    profile justifying it.
@@ -742,3 +755,97 @@ A change is rejected if it breaks any of these:
   same day), because orbit makes framerate user-visible. Blast radius acknowledged: this touches the two
   12.5k-line files, the renderer, all of IO, snapping, picking and paper space — which is why it is split
   into five independently shippable requirements rather than one, each passing Verification on its own.
+
+### ADR-026 — Imported 3D models: a mesh entity, a glTF reader, and visual styles   (2026-08-12, accepted)
+- Context:    REQ-063/064/065 exist because of a concrete file: `ENTERPRISE PIPING.dwg`, an AutoCAD
+  Plant 3D model of a pipe rack. Analysing it settled what is and is not possible, and the ADR turns on
+  those facts rather than on preference:
+  - **267 model-space objects, of which 255 (95%) are Plant 3D custom objects** (`ACPPPIPE` 76,
+    `ACPPCONNECTOR` 110, `ACPPPIPEINLINEASSET` 59, `ACPPSTRUCTUREBEAM` 10). Only 11 are real `3DSOLID`s
+    (the concrete foundations) and one is a point-cloud reference.
+  - Those `AcPp*` classes resolve **only** with Autodesk's Plant 3D object enabler. A probe on this
+    machine reported zero proxies purely because Plant 3D is installed; to any reader without the
+    enabler — LibreDWG, ODA's base SDK, GoSurvey — they are proxy stubs with no geometry. The enabler
+    is not licensable to an independent application. **No amount of work on our own DWG codec (ADR-024)
+    reaches this geometry.** That is the fact that forces an interchange format.
+  - `STLOUT` on the model reported "266 found" and wrote a file containing **952 triangles** — the 11
+    foundations. It silently discarded every piping object. A pipeline built on it would look like it
+    worked and would lose 95% of the model (the REQ-201 hazard, arriving from outside our code).
+  - `EXPORTTOAUTOCAD` (custom objects → plain entities) ran 7+ minutes at 867 MB without producing a
+    file before being stopped. Inconclusive, but not a foundation to build on.
+- Decision:
+  (a) **Interchange, not custom-object decoding.** GoSurvey reads a neutral tessellated format and does
+  not attempt to decode vendor custom objects, now or later. This is a boundary, not a staging post:
+  the alternative requires a licence we cannot obtain.
+  (b) **glTF 2.0 (`.gltf` + `.glb`) is that format** (REQ-065). It carries the four things the target
+  actually needs — triangles, vertex normals, per-object names, and base colours — in one binary file,
+  and it is the only candidate that needs no second format to be useful. Chosen over: **OBJ** (text,
+  verbose, materials in a sidecar `.mtl`, no normals guarantee), **FBX** (proprietary, binary variant
+  awkward, far larger surface for the same result), **STL** (triangles only — no colour, no names, no
+  usable normals, so every model renders as one grey blob) and **STEP/ACIS** (B-rep: needs a geometry
+  kernel to tessellate, which is a larger project than everything else here combined).
+  (c) **A mesh is a new entity type, and it is reference geometry** (REQ-063). It stores interleaved XYZ
+  positions (§11.8 applies unchanged), one normal per vertex, `uint32` indices, and a per-part colour.
+  GoSurvey **does not author or edit meshes**: no command creates one, no grip moves a vertex, and they
+  are excluded from DXF/DWG export, which has no lossless representation. They are visible, selectable,
+  erasable, layer-controlled, and included in extents. Treating them as draftable would drag mesh
+  editing, mesh snapping and mesh export into scope for no requirement that asks for it.
+  (d) **A parser is written in-tree; no glTF library is vendored.** glTF is JSON plus a binary buffer,
+  and the subset REQ-065 needs — `POSITION`, `NORMAL`, indices, node transforms, `baseColorFactor` — is
+  a few hundred lines against a published spec. The dependency policy's three questions (project.md §7)
+  answer "yes / marginal / partly": it can be done simply in-tree, and a full library carries texture,
+  animation, skin, sparse-accessor and extension handling that REQ-065 explicitly excludes. **The parser
+  is a pure module** beside `util/curveintersect` and `util/benchscene` — dependency-free, so it is unit
+  tested without a GL context, which is the standing lesson of TASK-035 §11.
+  (e) **Visual styles turn depth testing on; 2D Wireframe keeps it off** (REQ-064). This supersedes
+  ADR-025 ASSUMPTION-1, which left depth testing disabled precisely until a visual-style requirement
+  existed. Style is per-viewport state (each REQ-061 `Viewport` carries its own), and **2D Wireframe
+  must stay pixel-identical to today** — the same parity gate REQ-058 was held to, for the same reason:
+  every existing drawing is a 2D wireframe drawing.
+  (f) **Shading needs a second shader, not a rendering abstraction.** The line shader stays; a triangle
+  shader with a camera-space headlight is added beside it. No material system, no scene graph, no render
+  graph, no backend abstraction — the ADR-025 (c) anti-requirement stands, this remains OpenGL with
+  concrete draw paths. Two shaders are two shaders.
+  (g) **Meshes are excluded from object snapping in this ADR.** Snapping to a mesh means snapping to
+  vertices or faces of a tessellation, which is a different question from snapping to CAD geometry
+  (a tessellated cylinder has no centre, and its "vertices" are artefacts of the export resolution).
+  If it is wanted it is its own requirement, and the REQ-062 pairwise-cost analysis applies with far
+  more geometry.
+- Alternatives: **(1) decode Plant 3D objects directly** — impossible without Autodesk's enabler, as
+  above. **(2) Route via `EXPORTTOAUTOCAD` → `3DSOLID` → our DWG reader** — still ACIS B-rep at the end,
+  so it needs a kernel; and the export step did not complete here. **(3) STL only** — the smallest
+  parser, but it discards colour and object identity, which is most of what makes the reference
+  screenshot readable; and on this file it silently drops the piping. **(4) Vendor a glTF library**
+  (cgltf/tinygltf) — reconsider if the in-tree parser exceeds ~600 lines or a real file needs sparse
+  accessors or Draco; that is the trigger to revisit, recorded here so the choice is not re-litigated
+  from scratch. **(5) Point-cloud import instead** — the source project is a scan and does reference a
+  point cloud, which for a survey tool may be worth more than piping solids; it is a different
+  requirement and is not displaced by this one.
+- Consequences: a new entity store, a new `.gs` section (additive, no version bump — the ADR-020 (d)
+  precedent), a second shader and the first use of the depth buffer that `msDepthRbo_` has always
+  allocated. Selection, extents, layer state and the undo snapshot all grow a mesh case; DXF/DWG export
+  grows an explicit, logged exclusion rather than a silent one. **REQ-100 gains a second dimension** —
+  the budget is defined on 250k line segments, and a shaded mesh scene is a different cost profile, so
+  the bench needs a mesh case before REQ-064 can claim the budget. Not addressed here and deliberately
+  left open: mesh snapping (g), textures, and any editing of imported geometry.
+
+#### ADR-026 addendum — DWG as an import route   (2026-08-12, accepted)
+- Context: ADR-026 (a) ruled out decoding vendor custom objects and (b) chose glTF as the interchange
+  format. Both hold. What the original ADR got wrong was **assuming a glTF producer would be
+  available**: it named Navisworks, which is not installed on the reference machine, so the decision
+  left the user with a format they had no way to produce. That is the gap this addendum closes.
+- Decision: **GoSurvey converts DWG 3D content itself, by driving an installed AutoCAD.** The chain
+  is EXPLODE (the vendor's own object enabler emits plain 3D solids — the one thing it will do for
+  us without a licence) → STLOUT (tessellation) → STL → mesh. This is **not** a new mechanism: it is
+  ADR-024's converter route applied to 3D content, reusing that ADR's `FindDwgConverter` discovery
+  and the existing `RunProcessAndWait`. STL becomes a supported input format in its own right,
+  because it is the chain's intermediate and costs one small parser.
+- Consequences: importing a DWG now depends on an installed AutoCAD **at import time**, which is a
+  runtime dependency on software we do not ship — stated to the user when absent, and specifically:
+  an ODA File Converter is *not* sufficient (it translates DWG→DXF but cannot tessellate solids) and
+  says so by name. The conversion runs on a **copy**, because it explodes the model and must never
+  touch the user's file. What survives is geometry, position and scale; what does not is per-object
+  colour and naming, since STL carries neither — so a DWG import is one grey part where a glTF import
+  keeps its structure. **glTF remains the preferred route** and the one to use when a producer
+  exists. Recovering colour by grouping exploded solids per colour is the obvious next step and is
+  deliberately not attempted here.

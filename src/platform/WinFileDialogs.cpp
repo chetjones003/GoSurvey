@@ -152,6 +152,28 @@ bool BrowseOpenFileFbkUtf8(char* utf8Out, size_t utf8Cap) {
   return WideToUtf8(wfile, utf8Out, utf8Cap);
 }
 
+bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap) {
+  if (!utf8Out || utf8Cap < 4)
+    return false;
+  wchar_t wfile[MAX_PATH]{};
+  OPENFILENAMEW ofn{};
+  ofn.lStructSize = sizeof(ofn);
+  ofn.lpstrFile = wfile;
+  ofn.nMaxFile = MAX_PATH;
+  // DWG is listed with the model formats because IMPORTMODEL converts it transparently via an
+  // installed AutoCAD — from the user's side it is just another model file (REQ-065).
+  ofn.lpstrFilter = L"3D models (*.glb;*.gltf;*.stl;*.dwg)\0*.glb;*.gltf;*.stl;*.dwg\0"
+                    L"glTF (*.glb;*.gltf)\0*.glb;*.gltf\0"
+                    L"STL (*.stl)\0*.stl\0"
+                    L"AutoCAD drawing (*.dwg)\0*.dwg\0"
+                    L"All (*.*)\0*.*\0\0";
+  ofn.nFilterIndex = 1;
+  ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+  if (!GetOpenFileNameW(&ofn))
+    return false;
+  return WideToUtf8(wfile, utf8Out, utf8Cap);
+}
+
 bool BrowseSaveFileGsUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNameUtf8) {
   if (!utf8Out || utf8Cap < 4)
     return false;
@@ -339,6 +361,13 @@ bool BrowseOpenFilePdfUtf8(char* utf8Out, size_t utf8Cap) {
 }
 
 bool BrowseOpenFileFbkUtf8(char* utf8Out, size_t utf8Cap) {
+  if (utf8Out && utf8Cap > 0)
+    utf8Out[0] = '\0';
+  (void)utf8Cap;
+  return false;
+}
+
+bool BrowseOpenFileGltfUtf8(char* utf8Out, size_t utf8Cap) {
   if (utf8Out && utf8Cap > 0)
     utf8Out[0] = '\0';
   (void)utf8Cap;

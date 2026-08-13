@@ -80,6 +80,22 @@ A lightweight board that complements the milestones. Keep each column honest.
   PDF-underlay content in plots — see ADR-006/007/008 debt.
 - **Status:** Inc 1, 2, 3a, 3b, 3c, 3e, 4 done; 3d (polygonal, REQ-034) withdrawn. Milestone complete.
 
+### M-Models — Imported 3D models
+- **Goal:** open a real plant / structural model and see it shaded, like the reference screenshot.
+- **Delivers:** REQ-063 (mesh entity), REQ-064 (visual styles), REQ-065 (glTF import) — ADR-026.
+- **Sequence is forced by dependency**, and each step is independently shippable:
+  1. **REQ-064 visual styles** first, on the geometry we already have. It is the only one with no
+     new entity or parser behind it, it pays off immediately under orbit, and it puts the depth
+     buffer and the triangle shader in place before anything needs them. Its parity gate
+     (2D Wireframe pixel-identical) is also the cheapest to prove while there are no meshes.
+  2. **REQ-063 mesh entity** — store, `.gs`, selection, extents, layer state, undo.
+  3. **REQ-065 glTF import** — the parser lands last, when there is somewhere to put the result.
+- **Done when:** a `.glb` exported from the source Plant 3D model opens in GoSurvey, shaded, with
+  its parts distinguishable by colour, and REQ-100 still holds in Shaded.
+- **Status:** **complete 2026-08-12** — REQ-064 (TASK-040), REQ-063 (TASK-041), REQ-065 (TASK-042) all delivered. A `.glb` opens shaded with its parts distinguishable by colour.
+- **Deliberately out of scope:** snapping to meshes (ADR-026 (g)), textures, editing imported
+  geometry, and decoding vendor custom objects (impossible — see ADR-026 Context).
+
 ### Next (accepted, sequenced, not started)
 - `<REQ-101 — coordinate tolerance regression>`
 - `<REQ-100 — frame-budget benchmark>`

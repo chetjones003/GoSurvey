@@ -1650,7 +1650,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   const float wAnn  = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
   const float wInq  = 8.f + colW({"Aligned", "Linear", "ID Point"});
   const float wSrv  = 8.f + largeW + 4.f + colW({"Inverse", "Traverse"});
-  const float wView = 8.f + colW({"Extents", "Window"});
+  const float wView = 8.f + colW({"Extents", "Window"}) + 8.f + 132.f;  // + the visual-style combo (REQ-064)
   // REQ-032 contextual ribbon: Layout tools in paper space, but the normal model ribbon while editing a
   // viewport in place (floating model space, REQ-036) so the draw/modify tools are available.
   const bool  ribbonPaperSpace = cmd.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(cmd);
@@ -1948,6 +1948,22 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     if (smallBtn("##RibbonZWindow", RibbonIconKind::ZoomWindow, "Window", cw))
       StartZoomWindowCommand(cmd, log);
     RibbonItemHelp("Zoom window — zoom to a rectangle you pick with two clicks.\nCommand bar: ZOOMWINDOW or ZW");
+    ImGui::EndGroup();
+    // Visual style (REQ-064). Sits in View because it is a property of how this viewport draws,
+    // not of the drawing — the same reasoning that put it on RenderTuning rather than on an entity.
+    ImGui::SameLine(0, 8);
+    ImGui::BeginGroup();
+    ImGui::TextUnformatted("Visual style");
+    ImGui::SetNextItemWidth(132.f);
+    int vsIdx = static_cast<int>(cmd.viewportVisualStyle);
+    const char* kVsItems[] = {"2D Wireframe", "Hidden", "Shaded"};
+    if (ImGui::Combo("##RibbonVisualStyle", &vsIdx, kVsItems, IM_ARRAYSIZE(kVsItems)))
+      cmd.viewportVisualStyle = static_cast<VisualStyle>(vsIdx);
+    RibbonItemHelp("How the viewport draws.\n"
+                   "2D Wireframe — every edge visible, no depth testing (the classic view).\n"
+                   "Hidden — near geometry hides far geometry.\n"
+                   "Shaded — filled surfaces lit from the camera.\n"
+                   "Command bar: VISUALSTYLE (VS) 2D | HIDDEN | SHADED");
     ImGui::EndGroup();
   }
   RibbonSectionEnd();

@@ -613,6 +613,7 @@ int main()
     tuning.arcCircleSmoothnessCap = std::clamp(cmd.displayArcCircleSmoothness, 8, 20000);
     tuning.hardwareAcceleration = cmd.systemHardwareAcceleration;
     tuning.smoothLineDisplay = cmd.gfxSmoothLineDisplay;
+    tuning.visualStyle = cmd.viewportVisualStyle;  // REQ-064
     tuning.bgR = std::clamp(cmd.viewportBgR, 0.f, 1.f);
     tuning.bgG = std::clamp(cmd.viewportBgG, 0.f, 1.f);
     tuning.bgB = std::clamp(cmd.viewportBgB, 0.f, 1.f);
@@ -716,7 +717,10 @@ int main()
                                // Paper space: skip GL geometry; the ImGui overlay draws the sheet + viewports.
                                cmd.activeSpaceIndex,
                                (paperSpace || cmd.cadFilledRegions.empty()) ? nullptr : &cmd.cadFilledRegions,
-                               (paperSpace || cmd.cadFilledRegionAttrs.empty()) ? nullptr : &cmd.cadFilledRegionAttrs);
+                               (paperSpace || cmd.cadFilledRegionAttrs.empty()) ? nullptr : &cmd.cadFilledRegionAttrs,
+                               // Meshes are model-space only, like every other GL entity (REQ-063).
+                               (paperSpace || cmd.cadMeshes.empty()) ? nullptr : &cmd.cadMeshes,
+                               (paperSpace || cmd.cadMeshAttrs.empty()) ? nullptr : &cmd.cadMeshAttrs);
 
     ImGui::Render();
     int displayW = 0;

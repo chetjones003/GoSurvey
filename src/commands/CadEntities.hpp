@@ -1,7 +1,58 @@
 #pragma once
 
+#include <cstdint>
 #include <string>
 #include <vector>
+
+/// How the model viewport draws (REQ-064 / ADR-026 (e)).
+///
+/// Depth testing was left OFF by ADR-025 ASSUMPTION-1 precisely until a visual-style requirement
+/// existed, because enabling it silently would have changed how every existing drawing looks the
+/// moment the view tilted. This enum is that requirement arriving: **Wireframe2D keeps depth
+/// testing off and is bit-for-bit the pre-REQ-064 renderer**, and only the other styles turn it on.
+enum class VisualStyle : std::uint8_t {
+  Wireframe2D = 0,  ///< Default. Every edge visible; draw order decides. AutoCAD's "2D Wireframe".
+  Hidden = 1,       ///< Wireframe plus depth testing: near geometry occludes far.
+  Shaded = 2,       ///< Filled surfaces with diffuse headlight shading, edges still drawn.
+};
+
+/// Canonical name, for the command line, the ribbon and `.gs`.
+[[nodiscard]] inline const char* VisualStyleName(VisualStyle s) {
+  switch (s) {
+  case VisualStyle::Wireframe2D: return "2D Wireframe";
+  case VisualStyle::Hidden:      return "Hidden";
+  case VisualStyle::Shaded:      return "Shaded";
+  }
+  return "2D Wireframe";
+}
+
+/// Parse a user-typed style name. Case-insensitive, tolerant of the spellings someone actually
+/// types (`2D`, `wireframe`, `h`, `shaded`, and the raw enum ordinals `0`/`1`/`2`).
+///
+/// Lives here, in the dependency-free header, rather than beside the command: it is the one piece of
+/// this feature that is pure logic with a real bug class — a mistyped alias silently accepting the
+/// wrong style — and here it is reachable by the test target. Returns false and leaves \p out
+/// untouched on anything unrecognised, so a bad command cannot change the view (REQ-201).
+[[nodiscard]] inline bool VisualStyleFromName(const std::string& raw, VisualStyle* out) {
+  if (!out)
+    return false;
+  std::string v;
+  v.reserve(raw.size());
+  for (char c : raw) {
+    if (c == ' ' || c == '\t')
+      continue;  // "2d wireframe" and "2dwireframe" are the same request
+    v.push_back(static_cast<char>((c >= 'A' && c <= 'Z') ? (c - 'A' + 'a') : c));
+  }
+  if (v == "2d" || v == "2dwireframe" || v == "wireframe" || v == "w" || v == "0")
+    *out = VisualStyle::Wireframe2D;
+  else if (v == "hidden" || v == "h" || v == "1")
+    *out = VisualStyle::Hidden;
+  else if (v == "shaded" || v == "s" || v == "2")
+    *out = VisualStyle::Shaded;
+  else
+    return false;
+  return true;
+}
 
 // Pure CAD entity value types, dependency-free so both the model-space command layer
 // (CadCommands.hpp) and the paper-space data model (PaperSpace.hpp) can reuse them
@@ -112,6 +163,47 @@ struct CadEllipse {
   /// Elevation of the ellipse's plane (REQ-057 / ADR-025) — parallel to XY, absolute
   /// (ADR-025 D2), always 0 in paper space (ADR-025 (g)). Same rationale as \ref CadArc::z.
   float z = 0.f;
+};
+
+/// One named sub-range of a mesh — a single object from the imported model (REQ-063).
+///
+/// Parts exist so an imported model keeps its structure: a pipe run stays distinguishable from a
+/// valve, and each carries the base colour its source material declared. They are a *drawing*
+/// division, not a selection one — see \ref CadMesh.
+struct CadMeshPart {
+  std::string name;
+  int indexBegin = 0;  ///< First index into CadMesh::indices.
+  int indexCount = 0;  ///< Number of indices (a multiple of 3).
+  float r = 0.78f;
+  float g = 0.78f;
+  float b = 0.78f;
+};
+
+/// An imported triangle mesh (REQ-063 / ADR-026 (c)) — **reference geometry, never authored here**.
+///
+/// No command creates one, no grip moves a vertex, and it is excluded from DXF/DWG export, which
+/// has no lossless representation for it. It participates in layers, selection, erase and extents.
+///
+/// **Held as `shared_ptr<const CadMesh>`** by both the live state and every undo snapshot
+/// (architecture §11.5 as amended 2026-08-12). That is not an optimisation detail — it is what
+/// makes the entity affordable at all: snapshots deep-copy every other geometry store, 50 frames
+/// deep, so a 2M-triangle mesh would otherwise cost ~2.6 GB of undo stack and be re-copied by every
+/// unrelated edit. Immutability is the precondition for that sharing, so a mesh is *replaced*,
+/// never modified in place.
+struct CadMesh {
+  /// Interleaved x,y,z — architecture §11.8, the same convention as every other geometry store.
+  std::vector<float> vertsXyz;
+  /// One unit normal per vertex, parallel to \ref vertsXyz (stride 3, same vertex count).
+  std::vector<float> normalsXyz;
+  /// Triangle list. `uint32_t` because REQ-063's 2M-triangle ceiling is 6M indices — well past
+  /// what 16-bit indices could address, and the acceptance says so explicitly.
+  std::vector<std::uint32_t> indices;
+  std::vector<CadMeshPart> parts;
+  /// Source file the model came from, for the Properties panel and the log.
+  std::string sourceName;
+
+  [[nodiscard]] int vertexCount() const { return static_cast<int>(vertsXyz.size() / 3); }
+  [[nodiscard]] int triangleCount() const { return static_cast<int>(indices.size() / 3); }
 };
 
 /// A solid-filled region (ADR-011), imported from a SOLID-fill HATCH. Holds one or more closed boundary

@@ -4,6 +4,7 @@
 #include "TextStyle.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
+#include "util/meshgeom.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -557,6 +558,46 @@ json BuildRoot(const AppCommandState& st) {
     fills.push_back(std::move(o));
   }
   doc["filledRegions"] = std::move(fills);
+
+  // Imported meshes (REQ-063). Additive section — omitted entirely when there are none, so every
+  // pre-REQ-063 drawing still serializes byte-identically and no kGsFormatVersion bump is needed
+  // (the ADR-020 (d) tolerant-key precedent).
+  //
+  // Positions and normals are written as flat float arrays and indices as flat integers: the JSON
+  // is large for a big model, but it is exact. Vertex positions must reload bit-identically
+  // (REQ-063 acceptance), which is why nothing here is rounded or reformatted on the way out.
+  if (!st.cadMeshes.empty()) {
+    json meshes = json::array();
+    for (const auto& mp : st.cadMeshes) {
+      if (!mp)
+        continue;
+      json m;
+      m["verts"] = mp->vertsXyz;
+      m["normals"] = mp->normalsXyz;
+      m["indices"] = mp->indices;
+      if (!mp->sourceName.empty())
+        m["source"] = mp->sourceName;
+      json parts = json::array();
+      for (const CadMeshPart& p : mp->parts) {
+        json jp;
+        jp["name"] = p.name;
+        jp["begin"] = p.indexBegin;
+        jp["count"] = p.indexCount;
+        jp["rgb"] = json::array({p.r, p.g, p.b});
+        parts.push_back(std::move(jp));
+      }
+      m["parts"] = std::move(parts);
+      meshes.push_back(std::move(m));
+    }
+    doc["meshes"] = std::move(meshes);
+    json meshAttrs = json::array();
+    for (const auto& a : st.cadMeshAttrs) {
+      json o;
+      EntityAttributesToJson(a, o);
+      meshAttrs.push_back(std::move(o));
+    }
+    doc["meshAttrs"] = std::move(meshAttrs);
+  }
   json fillAttrs = json::array();
   for (const auto& a : st.cadFilledRegionAttrs) {
     json o;
@@ -657,6 +698,7 @@ json BuildRoot(const AppCommandState& st) {
   settings["objectSnapPerpendicular"] = st.objectSnapPerpendicular;
   settings["objectSnapSurveyPoint"] = st.objectSnapSurveyPoint;
   settings["objectSnapGeometricCenter"] = st.objectSnapGeometricCenter;
+  settings["viewportVisualStyle"] = static_cast<int>(st.viewportVisualStyle);
   settings["objectSnapIntersection"] = st.objectSnapIntersection;
   settings["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
   settings["objectSnapAperturePx"] = st.objectSnapAperturePx;
@@ -819,6 +861,15 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
   num(s, "viewportDimArrowScale", &st.viewportDimArrowScale);
   num(s, "viewportDimTextMinPx", &st.viewportDimTextMinPx);
   num(s, "viewportDimTextMaxPx", &st.viewportDimTextMaxPx);
+
+  // Visual style (REQ-064). Read through a range check rather than a raw cast: an out-of-range or
+  // hand-edited value must land on the default style, not on an enum value that does not exist.
+  if (s.contains("viewportVisualStyle") && s["viewportVisualStyle"].is_number_integer()) {
+    const int vsRaw = s["viewportVisualStyle"].get<int>();
+    st.viewportVisualStyle = (vsRaw >= 0 && vsRaw <= static_cast<int>(VisualStyle::Shaded))
+                                 ? static_cast<VisualStyle>(vsRaw)
+                                 : VisualStyle::Wireframe2D;
+  }
 
   b(s, "objectSnapEnabled", &st.objectSnapEnabled);
   b(s, "objectSnapEndpoint", &st.objectSnapEndpoint);
@@ -1134,6 +1185,84 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.cadAnnotationAttrs.clear();
   for (const auto& o : doc["annotationAttrs"])
     st.cadAnnotationAttrs.push_back(EntityAttributesFromJson(o));
+
+  // Imported meshes (REQ-063). Guarded with contains(), so a pre-REQ-063 drawing simply has none —
+  // the "legacy .gs loads unchanged" acceptance condition.
+  //
+  // Every mesh is VALIDATED before it is stored. A malformed or truncated file must be refused with
+  // a specific reason rather than partly loaded (REQ-201): an index that overruns the vertex array
+  // would otherwise reach the GPU, where it is an out-of-bounds read rather than an error message.
+  st.cadMeshes.clear();
+  st.cadMeshAttrs.clear();
+  if (doc.contains("meshes") && doc["meshes"].is_array()) {
+    int meshIdx = 0;
+    for (const auto& el : doc["meshes"]) {
+      ++meshIdx;
+      if (!el.is_object())
+        continue;
+      auto m = std::make_shared<CadMesh>();
+      if (el.contains("verts"))
+        m->vertsXyz = el["verts"].get<std::vector<float>>();
+      if (el.contains("normals"))
+        m->normalsXyz = el["normals"].get<std::vector<float>>();
+      if (el.contains("indices"))
+        m->indices = el["indices"].get<std::vector<std::uint32_t>>();
+      if (el.contains("source"))
+        m->sourceName = el["source"].get<std::string>();
+      std::vector<std::pair<int, int>> partRanges;
+      if (el.contains("parts") && el["parts"].is_array()) {
+        for (const auto& jp : el["parts"]) {
+          CadMeshPart p;
+          if (jp.contains("name"))
+            p.name = jp["name"].get<std::string>();
+          if (jp.contains("begin"))
+            p.indexBegin = jp["begin"].get<int>();
+          if (jp.contains("count"))
+            p.indexCount = jp["count"].get<int>();
+          if (jp.contains("rgb") && jp["rgb"].is_array() && jp["rgb"].size() == 3) {
+            p.r = jp["rgb"][0].get<float>();
+            p.g = jp["rgb"][1].get<float>();
+            p.b = jp["rgb"][2].get<float>();
+          }
+          partRanges.emplace_back(p.indexBegin, p.indexCount);
+          m->parts.push_back(std::move(p));
+        }
+      }
+      const meshgeom::MeshProblem problem =
+          meshgeom::ValidateMesh(m->vertsXyz, m->normalsXyz, m->indices, partRanges);
+      if (problem != meshgeom::MeshProblem::Ok) {
+        log.push_back(std::string("Mesh ") + std::to_string(meshIdx) + " skipped — " +
+                      meshgeom::MeshProblemText(problem) + ".");
+        continue;
+      }
+      if (m->normalsXyz.empty() && !m->indices.empty())
+        meshgeom::ComputeVertexNormals(m->vertsXyz, m->indices, &m->normalsXyz);
+      // One part covering everything, so a mesh saved without parts still draws.
+      if (m->parts.empty() && !m->indices.empty()) {
+        CadMeshPart p;
+        p.indexBegin = 0;
+        p.indexCount = static_cast<int>(m->indices.size());
+        m->parts.push_back(std::move(p));
+      }
+      st.cadMeshes.push_back(std::move(m));
+    }
+  }
+  if (doc.contains("meshAttrs") && doc["meshAttrs"].is_array())
+    for (const auto& o : doc["meshAttrs"])
+      st.cadMeshAttrs.push_back(EntityAttributesFromJson(o));
+  st.cadMeshAttrs.resize(st.cadMeshes.size());  // keep the parallel arrays length-locked
+  if (!st.cadMeshes.empty()) {
+    // REQ-063 requires the count to be REPORTED, not merely survived: a silent truncation and a
+    // successful load are indistinguishable without it.
+    long long tris = 0;
+    long long parts = 0;
+    for (const auto& mp : st.cadMeshes) {
+      tris += mp->triangleCount();
+      parts += static_cast<long long>(mp->parts.size());
+    }
+    log.push_back("Loaded " + std::to_string(st.cadMeshes.size()) + " mesh(es): " + std::to_string(tris) +
+                  " triangles, " + std::to_string(parts) + " part(s).");
+  }
 
   // Filled regions (ADR-011) — guarded with contains() so older .gs files load unchanged.
   st.cadFilledRegions.clear();

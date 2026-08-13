@@ -22,7 +22,8 @@
 struct SelectedEntity {
   enum class Type {
     LineSeg = 0, Circle = 1, Annotation = 2, Polyline = 3, Arc = 4, Ellipse = 5, PdfUnderlay = 6,
-    FilledRegion = 7  ///< Solid hatch fill (CadFilledRegion) — selectable/editable (REQ-042, ADR-016).
+    FilledRegion = 7, ///< Solid hatch fill (CadFilledRegion) — selectable/editable (REQ-042, ADR-016).
+    Mesh = 8          ///< Imported triangle mesh (REQ-063). Selectable and erasable, never edited.
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -205,6 +206,10 @@ struct DrawingGeometrySnapshot {
   std::vector<EntityAttributes> cadAnnotationAttrs;
   std::vector<CadFilledRegion>  cadFilledRegions;
   std::vector<EntityAttributes> cadFilledRegionAttrs;
+  /// Imported meshes (REQ-063). Shared, not copied: see CadMesh's note and architecture §11.5 as
+  /// amended 2026-08-12 — a snapshot of a 2M-triangle model is a refcount bump, not ~53 MB.
+  std::vector<std::shared_ptr<const CadMesh>> cadMeshes;
+  std::vector<EntityAttributes> cadMeshAttrs;
   std::vector<SurveyPoint>      surveyPoints;
   std::vector<CadLayerRow>      drawingLayerTable;
   std::vector<TextStyle>        textStyles;    ///< Named text styles (REQ-044) — undoable so style edits undo.
@@ -244,6 +249,8 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadAnnotationAttrs;
   std::vector<CadFilledRegion>  cadFilledRegions;
   std::vector<EntityAttributes> cadFilledRegionAttrs;
+  std::vector<std::shared_ptr<const CadMesh>> cadMeshes;  ///< REQ-063; shared, see CadMesh's note.
+  std::vector<EntityAttributes> cadMeshAttrs;
   std::vector<SurveyPoint>      surveyPoints;
   std::vector<int>              selectedSurveyPointIndices;
   std::vector<CadLayerRow>      drawingLayerTable;
@@ -572,6 +579,9 @@ struct AppCommandState {
   };
   BenchRun bench;
 
+  /// Model viewport visual style (REQ-064). Default is the pre-REQ-064 renderer, exactly.
+  VisualStyle viewportVisualStyle = VisualStyle::Wireframe2D;
+
   bool objectSnapEnabled = true;
   bool objectSnapEndpoint = true;
   bool objectSnapMidpoint = true;
@@ -868,6 +878,14 @@ struct AppCommandState {
   /// Solid-filled regions (ADR-011), imported from SOLID-fill HATCH; rendered filled in the overlay.
   std::vector<CadFilledRegion> cadFilledRegions;
   std::vector<EntityAttributes> cadFilledRegionAttrs;
+
+  /// Imported triangle meshes (REQ-063 / ADR-026). Reference geometry: nothing in the command layer
+  /// creates or edits one — REQ-065's glTF importer produces them and ERASE removes them.
+  ///
+  /// `shared_ptr<const>` so undo snapshots share the payload rather than copying it (architecture
+  /// §11.5 as amended). "Editing" a mesh means replacing the pointer; never write through it.
+  std::vector<std::shared_ptr<const CadMesh>> cadMeshes;
+  std::vector<EntityAttributes> cadMeshAttrs;
 
   // --- HATCH command (REQ-043) ---
   /// Boundary loop traced under the cursor while HATCH is active (flat local x,y); valid drives the preview.

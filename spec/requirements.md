@@ -1472,6 +1472,97 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted
 - Revisions: 2026-08-12 — initial.
 
+### REQ-063 — Triangle mesh entity
+- Purpose: hold imported 3D model geometry that GoSurvey does not author
+- Priority: must
+- Type: functional
+- Statement: A new entity type stores a triangle mesh: interleaved XYZ positions (architecture
+  §11.8), a vertex normal per position, triangle indices, and a per-mesh material colour. Meshes are
+  grouped into named **parts** so one imported model keeps its object structure — a pipe run remains
+  distinguishable from a valve. Meshes are **reference geometry, not draftable**: GoSurvey does not
+  create or edit them, they carry no linetype or lineweight, and no command modifies their vertices.
+  They participate in layers, visibility, selection, delete, and view extents; they are excluded from
+  object snapping (REQ-064 covers what snapping, if anything, they get) and from DXF/DWG export,
+  which has no lossless representation for them.
+- Acceptance:
+  - a mesh of N triangles round-trips through `.gs` with vertex positions bit-identical on reload;
+  - a legacy `.gs` with no mesh section loads unchanged;
+  - meshes are included in zoom-extents and in the drawing's bounding box;
+  - erasing a mesh is undoable in one step;
+  - a mesh on a frozen or off layer is not drawn, and one on a non-plottable layer is not plotted;
+  - memory: a 2-million-triangle model loads and reports its triangle count without exhausting a
+    32-bit index space or silently truncating.
+- Owner-layer: Domain (store), IO (`.gs`), Renderer (draw)
+- Status: accepted (2026-08-12)
+- Revisions: 2026-08-12 — initial draft.
+
+### REQ-064 — Shaded visual styles
+- Purpose: make 3D models readable as solids rather than as a thicket of edges
+- Priority: must
+- Type: functional
+- Statement: The model viewport gains a **visual style** selector with at least
+  **2D Wireframe** (today's behaviour, and the default), **Hidden** (wireframe with depth testing,
+  so near geometry occludes far), and **Shaded** (filled triangles with diffuse lighting from a
+  headlight, plus optional edges). Depth testing is enabled for every style except 2D Wireframe.
+  Entity colour resolution is unchanged (REQ-048); shading multiplies it. The style is per-viewport
+  state, persisted in `.gs` and in user preferences, and each paper-space viewport (REQ-061) carries
+  its own.
+- Acceptance:
+  - **2D Wireframe renders pixel-identical to the pre-change build on a reference drawing** — the
+    existing behaviour is preserved exactly, not approximately;
+  - in Hidden and Shaded, a near object occludes a far one, and the draw-order artefacts that a
+    depth-less renderer shows under orbit are gone;
+  - in Shaded, a curved surface shows a lighting gradient rather than a flat fill, and the lighting
+    follows the camera when orbiting;
+  - switching styles does not alter geometry, selection, snapping results, or the plot;
+  - the REQ-100 frame budget is met in Shaded at the REQ-063 mesh density chosen for the bench.
+- Owner-layer: Renderer (draw), UI (selector), IO (persistence)
+- Status: accepted (2026-08-12)
+- Revisions: 2026-08-12 — initial draft. Supersedes ADR-025 ASSUMPTION-1, which deliberately left
+  depth testing off pending a visual-style requirement; this is that requirement.
+
+### REQ-065 — glTF / GLB model import
+- Purpose: get real 3D models — plant, structural, scanned-and-modelled — into the drawing
+- Priority: must
+- Type: functional
+- Statement: GoSurvey imports 3D models into REQ-063 meshes from **glTF 2.0** (`.gltf` + external
+  buffers, and self-contained `.glb`), **STL** (binary and ASCII), and **DWG** — the last by driving
+  an installed AutoCAD to explode and tessellate its 3D solids, because a DWG's 3D content may be
+  vendor custom objects that only the vendor's own enabler can decode (ADR-026 Context, amended
+  2026-08-12). One command accepts all three; the user picks a file and does not have to know which
+  route it takes. STL carries no colour or object names, and the DWG route goes through STL, so both
+  produce a single unnamed part — **reported at import**, not left to be discovered.
+  Node hierarchy is flattened to world space with each node's transform applied,
+  and node names are kept as part names. Base-colour factors from PBR materials become per-mesh
+  colours; textures, animation, cameras, lights, skins and morph targets are **out of scope and
+  reported as skipped**, never dropped silently (REQ-201). The import prompts for a unit scale and an
+  insertion point, defaulting to the file's declared units where present, because model authoring
+  units (commonly inches or millimetres) rarely match a survey drawing's feet. Imported coordinates
+  are converted to the local storage frame in double before being stored (the local-storage
+  invariant), so a model placed at state-plane coordinates keeps sub-hundredth precision.
+- Acceptance:
+  - a `.glb` of known triangle count imports with that exact count, and its bounding box matches the
+    source dimensions within REQ-101 after the unit scale;
+  - a nested node hierarchy with non-identity transforms lands in the right place — verified against
+    hand-computed coordinates for at least one doubly-nested node;
+  - per-node names and base colours survive, so an imported model is not one undifferentiated blob;
+  - a file containing textures/animation imports its geometry and **states in the log what it
+    skipped**;
+  - a malformed or truncated file is rejected with a specific message and leaves the drawing
+    unchanged — no partial import;
+  - importing at state-plane coordinates keeps vertex precision within REQ-101;
+  - a binary and an ASCII STL of the same solid import to the same triangle count and bounds, and a
+    binary STL whose header begins "solid" is not misread as ASCII;
+  - selecting a `.dwg` imports its 3D solids without any pre-conversion step by the user, and states
+    which converter was used and what the route dropped;
+  - a `.dwg` is never modified by the import — the conversion explodes a copy;
+  - when no capable converter is installed, the import says so specifically (a DWG→DXF-only
+    converter is not sufficient and must be named as such), and changes nothing.
+- Owner-layer: IO (parsers + conversion), Domain (store), UI (prompt), Platform (process, dialog)
+- Status: accepted (2026-08-12)
+- Revisions: 2026-08-12 — initial draft. Route chosen over OBJ/FBX/STL — see ADR-026 and the
+  decision log.
+
 ---
 
 ## Performance requirements
@@ -1623,6 +1714,9 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-059 | UI | planned — manual (+Z / −Y / an off-axis handle animate correctly and settle < 0.5 s; gizmo tracks the camera after orbit; clicks outside the gizmo still pick geometry). Appearance is ImOGuizmo stock — the mockup is not the target (amended 2026-08-11) | accepted |
 | REQ-060 | UI/Commands | planned — manual (translate/rotate/scale each apply and undo in one step; gizmo result matches the typed command within REQ-101; no gizmo with an empty selection) | accepted |
 | REQ-061 | Domain/Renderer/IO | planned — manual (two viewports, one plan one isometric, correct on screen and in the PDF plot; legacy `.gs` opens all-plan and renders unchanged) | accepted |
+| REQ-063 | Domain/IO/Renderer | planned — `.gs` round-trip bit-identical; legacy `.gs` loads; extents include meshes; erase undoable in one step; layer freeze/off/non-plottable honoured; 2M-triangle model loads without index overflow | accepted |
+| REQ-064 | Renderer/UI/IO | planned — 2D Wireframe **pixel-identical** to pre-change (the parity gate, as REQ-058 had); occlusion correct in Hidden/Shaded; lighting follows the camera; style change does not alter geometry/selection/snap/plot; REQ-100 met in Shaded | accepted |
+| REQ-065 | IO/Domain/UI | planned — exact triangle count; bbox within REQ-101 after unit scale; doubly-nested node transform hand-verified; names + base colours survive; skipped features reported not silent (REQ-201); malformed file leaves drawing unchanged; state-plane precision within REQ-101 | accepted |
 | REQ-062 | util/Viewport/UI | `CurveIntersectTests` (seg×seg incl. parallel/collinear/endpoint-touch; seg×circle two-root/tangent/miss; arc sweep and segment-range filtering; circle×circle incl. concentric and tangent; ellipse×curve refined to REQ-101 against hand-computed roots; projection into a view basis) + manual (elevation-separated segments give APPINT but not INT; orbiting until projections separate drops the APPINT) | accepted |
 | REQ-056 | Commands/UI/Viewport/IO | manual (fresh profile: TRIM prompts for a trim line and two clicks trim + end; `TRIMSTATE 1` restores cutting-edge picking and survives a restart; bare `TRIMSTATE` shows the value, blank Enter keeps it, `TRIMSTATE 2` refused; T/L switch mid-run; hover pre-highlights a candidate edge, picked edges stay highlighted, an already-picked edge does not double-highlight) | accepted |
 | REQ-055 | UI/IO | manual (File > New and File > Open land on the new tab with 2+ tabs open; "+" likewise; closing a tab focuses its replacement; pan/zoom survives save → close → reopen, including on a state-plane drawing that rebases on load; a pre-REQ-055 `.gs` opens framed to its drawing) | accepted |

@@ -10,6 +10,8 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <limits>
+#include <memory>
 #include <cstring>
 #include <string>
 #include <vector>
@@ -48,6 +50,46 @@ in vec4 vColor;
 out vec4 FragColor;
 void main() {
   FragColor = vColor;
+}
+)";
+
+// Diffuse-lit triangles for the Shaded visual style (REQ-064 / ADR-026 (f)).
+//
+// A headlight: the light direction IS the view direction, so a surface facing the camera is fully
+// lit and one turning edge-on falls to ambient. That is what makes an orbit read as shape rather
+// than as a flat silhouette, and it needs no light position, no scene lighting model and no
+// material system — the anti-requirement in ADR-025 (c) still holds.
+//
+// `abs(dot(N, V))` deliberately, not `max(dot(N, V), 0)`: lighting is TWO-SIDED. Imported meshes
+// routinely have inconsistent triangle winding, and open surfaces (a hatch, a wall) are legitimately
+// viewed from behind. One-sided lighting renders those faces black, which reads as a hole in the
+// model rather than as a back face.
+/// Ambient floor for Shaded. Not zero: a surface turned edge-on should read as dark, not as a hole,
+/// and geometry that has fallen out of the light must still be pickable by eye.
+constexpr float kShadedAmbient = 0.25f;
+
+const char* kShadedVs = R"(#version 330 core
+layout(location = 0) in vec3 aPos;
+layout(location = 1) in vec3 aNormal;
+uniform mat4 uMVP;
+out vec3 vNormal;
+void main() {
+  gl_Position = uMVP * vec4(aPos, 1.0);
+  vNormal = aNormal;
+}
+)";
+
+const char* kShadedFs = R"(#version 330 core
+in vec3 vNormal;
+uniform vec4 uColor;
+uniform vec3 uViewDir;   // world-space direction the camera looks ALONG
+uniform float uAmbient;
+out vec4 FragColor;
+void main() {
+  vec3 n = normalize(vNormal);
+  float d = abs(dot(n, normalize(uViewDir)));
+  float i = uAmbient + (1.0 - uAmbient) * d;
+  FragColor = vec4(uColor.rgb * i, uColor.a);
 }
 )";
 
@@ -544,6 +586,15 @@ void ViewportRenderer::Ortho(float left, float right, float bottom, float top, f
   m[15] = 1.f;
 }
 
+void ViewportRenderer::ReleaseMeshGpu() {
+  for (MeshGpuEntry& e : meshGpu_) {
+    if (e.ebo) glDeleteBuffers(1, &e.ebo);
+    if (e.vbo) glDeleteBuffers(1, &e.vbo);
+    if (e.vao) glDeleteVertexArrays(1, &e.vao);
+  }
+  meshGpu_.clear();
+}
+
 bool ViewportRenderer::EnsureShader() {
   if (lineProgram_)
     return true;
@@ -565,6 +616,26 @@ bool ViewportRenderer::EnsureShader() {
   vcLineProgram_ = LinkProgram(vcVs, vcFs);
   if (!vcLineProgram_)
     return false;
+
+  GLuint shVs = CompileShader(GL_VERTEX_SHADER, kShadedVs);
+  GLuint shFs = CompileShader(GL_FRAGMENT_SHADER, kShadedFs);
+  if (!shVs || !shFs)
+    return false;
+  shadedProgram_ = LinkProgram(shVs, shFs);
+  if (!shadedProgram_)
+    return false;
+  glGenVertexArrays(1, &vaoShaded_);
+  glGenBuffers(1, &vboShaded_);
+  glBindVertexArray(vaoShaded_);
+  glBindBuffer(GL_ARRAY_BUFFER, vboShaded_);
+  {
+    const GLsizei shStride = static_cast<GLsizei>(6 * sizeof(float));  // xyz + normal
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, shStride, nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, shStride, reinterpret_cast<const void*>(sizeof(float) * 3));
+  }
+  glBindVertexArray(0);
 
   glGenVertexArrays(1, &vaoLines_);
   glGenBuffers(1, &vboLines_);
@@ -653,6 +724,19 @@ void ViewportRenderer::DestroyShader() {
     vaoLines_ = 0;
   }
   gridProgram_ = 0;
+  ReleaseMeshGpu();
+  if (shadedProgram_) {
+    glDeleteProgram(shadedProgram_);
+    shadedProgram_ = 0;
+  }
+  if (vaoShaded_) {
+    glDeleteVertexArrays(1, &vaoShaded_);
+    vaoShaded_ = 0;
+  }
+  if (vboShaded_) {
+    glDeleteBuffers(1, &vboShaded_);
+    vboShaded_ = 0;
+  }
   if (vcLineProgram_) {
     glDeleteProgram(vcLineProgram_);
     vcLineProgram_ = 0;
@@ -794,7 +878,9 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const std::vector<PdfAttachment>* pdfAttachments,
                                    int activeSpaceIndex,
                                    const std::vector<CadFilledRegion>* filledRegions,
-                                   const std::vector<EntityAttributes>* filledRegionAttrs) {
+                                   const std::vector<EntityAttributes>* filledRegionAttrs,
+                                   const std::vector<std::shared_ptr<const CadMesh>>* meshes,
+                                   const std::vector<EntityAttributes>* meshAttrs) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -813,8 +899,32 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   }
   glBindFramebuffer(GL_FRAMEBUFFER, (useMsaa && msFbo_) ? msFbo_ : fbo_);
   glViewport(0, 0, fbW_, fbH_);
-  glDisable(GL_DEPTH_TEST);
-  glDepthMask(GL_FALSE);
+
+  // --- Visual style (REQ-064 / ADR-026 (e)) ------------------------------------------------------
+  // 2D Wireframe takes exactly the path it always took: depth test off, depth writes off, draw order
+  // decides. That is not a style implemented in terms of the new system — it IS the old code path,
+  // which is what makes the pixel-parity acceptance condition hold by construction rather than by
+  // inspection. The draw ORDER below is untouched for every style, for the same reason.
+  const bool depthOn = tuning.visualStyle != VisualStyle::Wireframe2D;
+  const bool shadeSurfaces = tuning.visualStyle == VisualStyle::Shaded;
+  // Enables depth test + writes for the passes that represent geometry at a real elevation.
+  const auto depthForGeometry = [&]() {
+    if (depthOn) {
+      glEnable(GL_DEPTH_TEST);
+      glDepthFunc(GL_LEQUAL);
+      glDepthMask(GL_TRUE);
+    } else {
+      glDisable(GL_DEPTH_TEST);
+      glDepthMask(GL_FALSE);
+    }
+  };
+  // Overlays are UI, never occluded: a selection highlight that hides behind the object it is
+  // highlighting is a bug, and a snap marker you cannot see is worse than none.
+  const auto depthForOverlay = [&]() {
+    glDisable(GL_DEPTH_TEST);
+    glDepthMask(GL_FALSE);
+  };
+  depthForGeometry();
 
   glClearColor(tuning.bgR, tuning.bgG, tuning.bgB, 1.f);
   glClearStencil(0);
@@ -1017,6 +1127,145 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glBindVertexArray(0);
   }
 
+  // --- Imported meshes (REQ-063) -----------------------------------------------------------------
+  // Drawn only in Shaded: a two-million-triangle model rendered as edges is a black rectangle, and
+  // no requirement asks for a mesh wireframe. In the wireframe styles a mesh is simply not drawn,
+  // which is stated in the UI rather than left to be discovered.
+  //
+  // Placed before the linework so CAD geometry drawn at the same elevation reads on top of a
+  // surface rather than being z-fought by it — the same reasoning that puts filled regions under
+  // the linework below.
+  if (shadeSurfaces && meshes && !meshes->empty()) {
+    // Evict entries whose mesh has been erased. The weak_ptr is what makes this safe: a raw pointer
+    // key could be matched by a NEW mesh allocated at the freed address, which would draw the wrong
+    // geometry from a stale buffer.
+    for (size_t i = 0; i < meshGpu_.size();) {
+      if (meshGpu_[i].mesh.expired()) {
+        if (meshGpu_[i].ebo) glDeleteBuffers(1, &meshGpu_[i].ebo);
+        if (meshGpu_[i].vbo) glDeleteBuffers(1, &meshGpu_[i].vbo);
+        if (meshGpu_[i].vao) glDeleteVertexArrays(1, &meshGpu_[i].vao);
+        meshGpu_.erase(meshGpu_.begin() + static_cast<std::ptrdiff_t>(i));
+      } else {
+        ++i;
+      }
+    }
+
+    glUseProgram(shadedProgram_);
+    const ray3d::Vec3 fwd = cam.ForwardWorld();
+    glUniform3f(glGetUniformLocation(shadedProgram_, "uViewDir"), static_cast<float>(fwd.x),
+                static_cast<float>(fwd.y), static_cast<float>(fwd.z));
+    glUniform1f(glGetUniformLocation(shadedProgram_, "uAmbient"), kShadedAmbient);
+    const GLint locShColor = glGetUniformLocation(shadedProgram_, "uColor");
+    const GLint locShMvp = glGetUniformLocation(shadedProgram_, "uMVP");
+    glDisable(GL_BLEND);
+
+    // Same drift budget as the linework cache: vertices are stored relative to the anchor they were
+    // built with, and the residual pan is absorbed by the MVP until it grows large enough to matter
+    // for float precision.
+    const double meshAnchorDriftBudget = std::max(halfHd * 0.5, 1.e-12);
+
+    for (size_t mi = 0; mi < meshes->size(); ++mi) {
+      const std::shared_ptr<const CadMesh>& mp = (*meshes)[mi];
+      if (!mp || mp->indices.empty() || mp->vertsXyz.empty())
+        continue;
+      // Layer visibility: a mesh on an off or frozen layer is not drawn (REQ-063 acceptance).
+      const EntityAttributes* attr =
+          (meshAttrs && mi < meshAttrs->size()) ? &(*meshAttrs)[mi] : nullptr;
+      const CadLayerRow* lr =
+          attr ? LookupLayerRowCi(drawingLayers, attr->layer.empty() ? std::string("0") : attr->layer) : nullptr;
+      if (lr && (!lr->on || lr->frozen))
+        continue;
+
+      MeshGpuEntry* entry = nullptr;
+      for (MeshGpuEntry& e : meshGpu_) {
+        if (e.mesh.lock().get() == mp.get()) {
+          entry = &e;
+          break;
+        }
+      }
+      if (!entry) {
+        meshGpu_.push_back(MeshGpuEntry{});
+        entry = &meshGpu_.back();
+        entry->mesh = mp;
+        glGenVertexArrays(1, &entry->vao);
+        glGenBuffers(1, &entry->vbo);
+        glGenBuffers(1, &entry->ebo);
+        glBindVertexArray(entry->vao);
+        // Indices never depend on the anchor, so they are uploaded exactly once per mesh.
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, entry->ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, static_cast<GLsizeiptr>(mp->indices.size() * sizeof(std::uint32_t)),
+                     mp->indices.data(), GL_STATIC_DRAW);
+        entry->indexCount = static_cast<int>(mp->indices.size());
+        glBindBuffer(GL_ARRAY_BUFFER, entry->vbo);
+        const GLsizei shStride = static_cast<GLsizei>(6 * sizeof(float));
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, shStride, nullptr);
+        glEnableVertexAttribArray(1);
+        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, shStride, reinterpret_cast<const void*>(sizeof(float) * 3));
+        glBindVertexArray(0);
+        entry->anchorX = std::numeric_limits<double>::quiet_NaN();  // force the vertex upload below
+      }
+
+      const bool anchorStale = !(std::fabs(viewAnchorX - entry->anchorX) <= meshAnchorDriftBudget &&
+                                 std::fabs(viewAnchorY - entry->anchorY) <= meshAnchorDriftBudget);
+      if (anchorStale) {
+        // ONE vertex per vertex — not one per index. For the 2M-triangle case that is 1M vertices
+        // (24 MB) uploaded when the anchor moves, in place of 6M expanded vertices (144 MB) every
+        // single frame. The indexed draw is what the index array was for.
+        cpuShadedTris_.clear();
+        cpuShadedTris_.resize(mp->vertsXyz.size() * 2);  // 6 floats per vertex
+        const bool haveNormals = mp->normalsXyz.size() == mp->vertsXyz.size();
+        const size_t vcount = mp->vertsXyz.size() / 3;
+        for (size_t v = 0; v < vcount; ++v) {
+          float rx = 0.f;
+          float ry = 0.f;
+          WorldToViewRelativeFloat(static_cast<double>(mp->vertsXyz[v * 3]),
+                                   static_cast<double>(mp->vertsXyz[v * 3 + 1]), viewAnchorX, viewAnchorY, &rx, &ry);
+          float* o = &cpuShadedTris_[v * 6];
+          o[0] = rx;
+          o[1] = ry;
+          o[2] = mp->vertsXyz[v * 3 + 2];  // Z is absolute (ADR-025 D2)
+          o[3] = haveNormals ? mp->normalsXyz[v * 3] : 0.f;
+          o[4] = haveNormals ? mp->normalsXyz[v * 3 + 1] : 0.f;
+          o[5] = haveNormals ? mp->normalsXyz[v * 3 + 2] : 1.f;
+        }
+        glBindBuffer(GL_ARRAY_BUFFER, entry->vbo);
+        glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(cpuShadedTris_.size() * sizeof(float)),
+                     cpuShadedTris_.data(), GL_STATIC_DRAW);
+        entry->anchorX = viewAnchorX;
+        entry->anchorY = viewAnchorY;
+      }
+
+      // The cached vertices are relative to entry->anchor; absorb the difference in the MVP, before
+      // the view rotation — the composition CameraTests pins down.
+      float meshModel[16];
+      TranslateMat(static_cast<float>(entry->anchorX - panX), static_cast<float>(entry->anchorY - panY), -panZf,
+                   meshModel);
+      float meshMvp[16];
+      MulMat4(projRot, meshModel, meshMvp);
+      glUniformMatrix4fv(locShMvp, 1, GL_FALSE, meshMvp);
+
+      glBindVertexArray(entry->vao);
+      for (const CadMeshPart& part : mp->parts) {
+        const int begin = std::max(0, part.indexBegin);
+        const int count = std::max(0, std::min(part.indexCount, entry->indexCount - begin));
+        if (count <= 0)
+          continue;
+        // The part's own colour, unless the entity/layer overrides it — a mesh obeys layer colour
+        // like anything else, and falls back to what the source model declared.
+        float rgba[4] = {part.r, part.g, part.b, 1.f};
+        if (attr && !(attr->color.empty() || attr->color == "ByLayer"))
+          ResolveEntityRgbaForViewport(*attr, lr, part.r, part.g, part.b, rgba);
+        glUniform4f(locShColor, rgba[0], rgba[1], rgba[2], 1.f);
+        glDrawElements(GL_TRIANGLES, count, GL_UNSIGNED_INT,
+                       reinterpret_cast<const void*>(static_cast<std::uintptr_t>(begin) * sizeof(std::uint32_t)));
+      }
+    }
+    glBindVertexArray(0);
+    glUseProgram(lineProgram_);
+    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+  }
+
   // --- Solid-filled regions (ADR-011): even-odd stencil fill, drawn under the linework so it is plottable
   // and behind outlines. Each loop is fan-triangulated and INVERTed into the stencil (concave + holes via
   // even-odd parity); a covering quad then fills where parity is odd and resets the stencil to 0. ---
@@ -1074,11 +1323,19 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       if (fan.empty())
         continue;
       // Pass 1: parity into stencil (no color write).
+      //
+      // Depth WRITES are off for this pass even when depth testing is on (REQ-064). The fan covers
+      // the whole loop including area that even-odd parity will subtract — the holes in a hatch with
+      // islands — so letting it write depth would occlude geometry seen through those holes. Only
+      // pass 2, which the stencil confines to the region's true area, writes depth.
+      const GLboolean wantDepthWrite = depthOn ? GL_TRUE : GL_FALSE;
+      glDepthMask(GL_FALSE);
       glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
       glStencilFunc(GL_ALWAYS, 0, 0xFF);
       glStencilOp(GL_KEEP, GL_KEEP, GL_INVERT);
       glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(fan.size() * sizeof(float)), fan.data(), GL_STREAM_DRAW);
       glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(fan.size() / 3));
+      glDepthMask(wantDepthWrite);
       // Pass 2: fill the odd-parity region, resetting stencil to 0 as the covering quad draws.
       float rgba[4] = {0.85f, 0.85f, 0.85f, 1.f};
       if (filledRegionAttrs && fi < filledRegionAttrs->size()) {
@@ -1089,14 +1346,43 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
       glStencilFunc(GL_NOTEQUAL, 0, 0xFF);
       glStencilOp(GL_KEEP, GL_KEEP, GL_ZERO);
-      glUniform4f(locCol, rgba[0], rgba[1], rgba[2], 1.f);
       const float qx0 = static_cast<float>(mnx - viewAnchorX), qy0 = static_cast<float>(mny - viewAnchorY);
       const float qx1 = static_cast<float>(mxx - viewAnchorX), qy1 = static_cast<float>(mxy - viewAnchorY);
       const float qz = (zCount > 0) ? static_cast<float>(zSum / static_cast<double>(zCount)) : 0.f;
-      const float quad[18] = {qx0, qy0, qz, qx1, qy0, qz, qx1, qy1, qz,
-                              qx0, qy0, qz, qx1, qy1, qz, qx0, qy1, qz};
-      glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STREAM_DRAW);
-      glDrawArrays(GL_TRIANGLES, 0, 6);
+
+      if (shadeSurfaces) {
+        // Shaded: the same stencil-confined quad, through the lit program. A filled region is
+        // planar and parallel to XY (ADR-025), so its normal is +Z — which is why this dims as the
+        // view orbits toward edge-on, and is the visible proof that lighting is live before REQ-063
+        // brings surfaces with varied normals.
+        const float sq[36] = {qx0, qy0, qz, 0.f, 0.f, 1.f, qx1, qy0, qz, 0.f, 0.f, 1.f,
+                              qx1, qy1, qz, 0.f, 0.f, 1.f, qx0, qy0, qz, 0.f, 0.f, 1.f,
+                              qx1, qy1, qz, 0.f, 0.f, 1.f, qx0, qy1, qz, 0.f, 0.f, 1.f};
+        glUseProgram(shadedProgram_);
+        glUniformMatrix4fv(glGetUniformLocation(shadedProgram_, "uMVP"), 1, GL_FALSE, mvp);
+        glUniform4f(glGetUniformLocation(shadedProgram_, "uColor"), rgba[0], rgba[1], rgba[2], 1.f);
+        const ray3d::Vec3 fwd = cam.ForwardWorld();
+        glUniform3f(glGetUniformLocation(shadedProgram_, "uViewDir"), static_cast<float>(fwd.x),
+                    static_cast<float>(fwd.y), static_cast<float>(fwd.z));
+        glUniform1f(glGetUniformLocation(shadedProgram_, "uAmbient"), kShadedAmbient);
+        glBindVertexArray(vaoShaded_);
+        glBindBuffer(GL_ARRAY_BUFFER, vboShaded_);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(sq), sq, GL_STREAM_DRAW);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+        // Back to the flat program and its buffer for the next region's parity pass.
+        glUseProgram(lineProgram_);
+        glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+        glBindBuffer(GL_ARRAY_BUFFER, vboLines_);
+        glBindVertexArray(vaoLines_);
+        glEnableVertexAttribArray(0);
+        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(float) * 3, nullptr);
+      } else {
+        glUniform4f(locCol, rgba[0], rgba[1], rgba[2], 1.f);
+        const float quad[18] = {qx0, qy0, qz, qx1, qy0, qz, qx1, qy1, qz,
+                                qx0, qy0, qz, qx1, qy1, qz, qx0, qy1, qz};
+        glBufferData(GL_ARRAY_BUFFER, sizeof(quad), quad, GL_STREAM_DRAW);
+        glDrawArrays(GL_TRIANGLES, 0, 6);
+      }
     }
     glDisable(GL_STENCIL_TEST);
     glStencilOp(GL_KEEP, GL_KEEP, GL_KEEP);
@@ -1369,6 +1655,20 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
 
   glDisable(GL_BLEND);
   glLineWidth(kLwMain);
+
+  // ============================================================================================
+  // From here down everything is OVERLAY — hover, selection, rubber, window-select, transform
+  // previews, survey markers, the snap glyph and the gizmo. None of it is depth-tested in any style
+  // (REQ-064): it is UI drawn on top of the model, and the draw order that has always decided its
+  // layering keeps deciding it.
+  //
+  // Survey markers are in this group deliberately. They are billboarded, constant-pixel-size
+  // markers (TASK-037/GAP-2) — a UI presentation of a point, not a solid at that point — and a
+  // surveyor looking for a point behind a shaded surface still needs to see it. AutoCAD occludes
+  // POINT objects; we do not, because ours are screen-facing markers. Revisit if that reads wrong
+  // once meshes land (REQ-063), when there will be real surfaces to hide behind.
+  // ============================================================================================
+  depthForOverlay();
 
   // --- Hover highlight (subtle blue stroke drawn before selection so selection always wins) ---
   if (hoverLines && !hoverLines->empty() && hoverLines->size() % 6 == 0) {

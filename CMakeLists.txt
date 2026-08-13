@@ -161,6 +161,10 @@ add_executable(GoSurvey
   # Geometry math (util)
   src/util/geom2d.cpp
   src/util/curveintersect.cpp
+  src/util/meshgeom.cpp
+  src/util/gltfimport.cpp
+  src/util/stlimport.cpp
+  src/io/DwgMeshConvert.cpp
   src/util/benchscene.cpp
 )
 
@@ -304,6 +308,11 @@ if(GOSURVEY_BUILD_TESTS)
     tests/LinetypeTessellationTests.cpp
     tests/CurveIntersectTests.cpp
     tests/BenchSceneTests.cpp
+    tests/VisualStyleTests.cpp
+    tests/MeshGeomTests.cpp
+    tests/MeshGsRoundTripTests.cpp
+    tests/GltfImportTests.cpp
+    tests/StlImportTests.cpp
     src/traverse/TraverseCalc.cpp
     src/traverse/TraverseLeastSquares.cpp
     src/traverse/FbkImport.cpp
@@ -318,11 +327,20 @@ if(GOSURVEY_BUILD_TESTS)
     src/util/curveintersect.cpp
     # REQ-100 bench scene generator + frame statistics. Pure and deterministic by design.
     src/util/benchscene.cpp
+    # REQ-063 mesh validation + bounds + normals. Pure; the GPU-facing checks must be testable.
+    src/util/meshgeom.cpp
+    # REQ-065 glTF reader. Pure and GL-free by design (ADR-026 (d)) so it is tested without a window.
+    src/util/gltfimport.cpp
+    src/util/stlimport.cpp
   )
   target_include_directories(GoSurveyTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${CMAKE_CURRENT_SOURCE_DIR}/src/traverse
     ${CMAKE_CURRENT_SOURCE_DIR}/src/io
+    # For the REQ-063 `.gs` round-trip test: GsIo.cpp itself is not linkable here (it pulls the
+    # whole command layer), but the serializer it relies on is, and that is where the precision
+    # risk actually lives.
+    ${NLOHMANN_JSON_INCLUDE}
   )
   target_compile_definitions(GoSurveyTests PRIVATE
     GOSURVEY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"

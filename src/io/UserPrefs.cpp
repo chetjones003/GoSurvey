@@ -182,6 +182,14 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   if (s.contains("mtextPanelRunColor") && s["mtextPanelRunColor"].is_number_integer())
     st.mtextPanelRunColor = s["mtextPanelRunColor"].get<unsigned int>() & 0xFFFFFFu;
 
+  // --- Visual style (REQ-064) --- range-checked, so a bad value falls back to the default style.
+  if (s.contains("viewportVisualStyle") && s["viewportVisualStyle"].is_number_integer()) {
+    const int vsRaw = s["viewportVisualStyle"].get<int>();
+    st.viewportVisualStyle = (vsRaw >= 0 && vsRaw <= static_cast<int>(VisualStyle::Shaded))
+                                 ? static_cast<VisualStyle>(vsRaw)
+                                 : VisualStyle::Wireframe2D;
+  }
+
   // --- Object snap (Drafting tab) ---
   b  ("objectSnapEnabled",         &st.objectSnapEnabled);
   b  ("objectSnapEndpoint",        &st.objectSnapEndpoint);
@@ -378,6 +386,7 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["objectSnapPerpendicular"]    = st.objectSnapPerpendicular;
   s["objectSnapSurveyPoint"]      = st.objectSnapSurveyPoint;
   s["objectSnapGeometricCenter"]  = st.objectSnapGeometricCenter;
+  s["viewportVisualStyle"]        = static_cast<int>(st.viewportVisualStyle);
   s["objectSnapIntersection"]     = st.objectSnapIntersection;
   s["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
   s["objectSnapAperturePx"]       = st.objectSnapAperturePx;

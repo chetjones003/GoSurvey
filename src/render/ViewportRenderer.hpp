@@ -5,6 +5,7 @@
 #include "PdfAttach.hpp"
 
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 /// Render-time tuning sourced from Settings → Display / System (AutoCAD Options analog).
@@ -16,6 +17,9 @@ struct RenderTuning {
   float bgR = 0.f;                  ///< Display → Window Elements: viewport background (clear) color. Default black preserves prior behavior.
   float bgG = 0.f;
   float bgB = 0.f;
+  /// REQ-064. Defaulting to Wireframe2D is what keeps every existing call site — and the pixel
+  /// output it produces — unchanged: that style takes the same depth-off path as before.
+  VisualStyle visualStyle = VisualStyle::Wireframe2D;
 };
 
 class ViewportRenderer {
@@ -58,7 +62,12 @@ public:
                    int activeSpaceIndex = -1,
                    // Solid-filled regions (ADR-011) drawn under the linework via stencil even-odd fill.
                    const std::vector<CadFilledRegion>* filledRegions = nullptr,
-                   const std::vector<EntityAttributes>* filledRegionAttrs = nullptr);
+                   const std::vector<EntityAttributes>* filledRegionAttrs = nullptr,
+                   // Imported meshes (REQ-063). Shaded style fills them; the wireframe styles draw
+                   // nothing for them — a triangle soup rendered as edges is unreadable, and there
+                   // is no "mesh wireframe" behaviour any requirement asks for.
+                   const std::vector<std::shared_ptr<const CadMesh>>* meshes = nullptr,
+                   const std::vector<EntityAttributes>* meshAttrs = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 
@@ -88,6 +97,28 @@ private:
 
   unsigned int lineProgram_ = 0;
   unsigned int vcLineProgram_ = 0;
+  /// Diffuse-lit triangles for the Shaded style (REQ-064). Its own VAO because its vertex layout is
+  /// position + normal, unlike every other program here.
+  unsigned int shadedProgram_ = 0;
+  unsigned int vaoShaded_ = 0;
+  unsigned int vboShaded_ = 0;
+  std::vector<float> cpuShadedTris_;  ///< x,y,z,nx,ny,nz per vertex; scratch for the filled-region quad.
+
+  /// One mesh's GPU residency (REQ-063). Meshes are **immutable** (ADR-026 (c)), so the buffers
+  /// only ever need rebuilding when the view ANCHOR drifts far enough to cost float precision —
+  /// never because the geometry changed. That is what makes an indexed, uploaded-once draw correct
+  /// here, where the linework cache has to also watch a revision counter.
+  struct MeshGpuEntry {
+    std::weak_ptr<const CadMesh> mesh;  ///< identity AND liveness: an expired entry is evicted.
+    unsigned int vao = 0;
+    unsigned int vbo = 0;
+    unsigned int ebo = 0;
+    double anchorX = 0.0;  ///< view anchor the vertex positions are relative to.
+    double anchorY = 0.0;
+    int indexCount = 0;
+  };
+  std::vector<MeshGpuEntry> meshGpu_;
+  void ReleaseMeshGpu();
   unsigned int vaoLines_ = 0;
   unsigned int vboLines_ = 0;
 

@@ -7,6 +7,12 @@
 #include "HatchBoundary.hpp"
 #include "geom2d.hpp"
 #include "util/benchscene.hpp"
+#include "util/meshgeom.hpp"
+#include "util/gltfimport.hpp"
+#include "util/stlimport.hpp"
+#include "DwgMeshConvert.hpp"
+#include "DwgIo.hpp"
+#include "WinFileDialogs.hpp"
 #include "NumFormat.hpp"
 #include "MtextRichFormat.hpp"
 #include "FontRegistry.hpp"
@@ -64,6 +70,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadAnnotationAttrs     = cmd.cadAnnotationAttrs;
   doc.cadFilledRegions       = cmd.cadFilledRegions;
   doc.cadFilledRegionAttrs   = cmd.cadFilledRegionAttrs;
+  doc.cadMeshes              = cmd.cadMeshes;      // pointers, not payloads (REQ-063)
+  doc.cadMeshAttrs           = cmd.cadMeshAttrs;
   doc.surveyPoints           = cmd.surveyPoints;
   doc.selectedSurveyPointIndices = cmd.selectedSurveyPointIndices;
   doc.drawingLayerTable      = cmd.drawingLayerTable;
@@ -107,6 +115,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadAnnotationAttrs         = doc.cadAnnotationAttrs;
   cmd.cadFilledRegions           = doc.cadFilledRegions;
   cmd.cadFilledRegionAttrs       = doc.cadFilledRegionAttrs;
+  cmd.cadMeshes                  = doc.cadMeshes;
+  cmd.cadMeshAttrs               = doc.cadMeshAttrs;
   cmd.surveyPoints               = doc.surveyPoints;
   cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
   cmd.drawingLayerTable          = doc.drawingLayerTable;
@@ -1076,6 +1086,10 @@ static void WriteUndoHistoryLogLine(const std::string& msg) {
 
 static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st, const std::string& description) {
   DrawingGeometrySnapshot snap;
+  // Meshes copy as pointers, not payloads (architecture §11.5 as amended 2026-08-12) — this line is
+  // O(number of meshes), not O(triangles), which is what makes undo affordable with a model loaded.
+  snap.cadMeshes            = st.cadMeshes;
+  snap.cadMeshAttrs         = st.cadMeshAttrs;
   snap.userLinesFlat        = st.userLinesFlat;
   snap.userLineAttrs        = st.userLineAttrs;
   snap.userCirclesCxCyZR     = st.userCirclesCxCyZR;
@@ -1123,6 +1137,8 @@ static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySn
   st.cadAnnotationAttrs   = snap.cadAnnotationAttrs;
   st.cadFilledRegions     = snap.cadFilledRegions;
   st.cadFilledRegionAttrs = snap.cadFilledRegionAttrs;
+  st.cadMeshes            = snap.cadMeshes;
+  st.cadMeshAttrs         = snap.cadMeshAttrs;
   st.surveyPoints         = snap.surveyPoints;
   st.drawingLayerTable    = snap.drawingLayerTable;
   st.textStyles           = snap.textStyles;
@@ -1975,6 +1991,8 @@ const CmdEntry kRegistry[] = {
     {"rect", "rectang, rectangle", "Draw a rectangle (two opposite corners)"},
     {"trimstate", "", "TRIM mode: 0 = draw a line to trim (default), 1 = pick cutting edges"},
     {"bench", "", "REQ-100 frame-budget benchmark: BENCH [segments] [frames]"},
+    {"visualstyle", "vs, vscurrent", "Viewport visual style: 2D / HIDDEN / SHADED"},
+    {"importmodel", "gltf, import3d", "Import a glTF/GLB 3D model as reference geometry"},
     {"elev", "ucs", "Elevation new geometry is drawn at (W = world Z 0)"},
     {"arc", "", "Draw an arc"},
     {"ellipse", "el", "Draw an ellipse"},
@@ -6499,6 +6517,18 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     for (size_t i = 0; i + 2 < fr.vertsXyz.size(); i += 3)
       consider(static_cast<double>(fr.vertsXyz[i]), static_cast<double>(fr.vertsXyz[i + 1]));
 
+  // Meshes (REQ-063). Their precomputed bounds, not their vertices: this path runs for small
+  // drawings, and "small" counts entities — one mesh can still hold two million triangles.
+  for (const auto& mp : st.cadMeshes) {
+    if (!mp)
+      continue;
+    const meshgeom::Bounds mb = meshgeom::ComputeBounds(mp->vertsXyz);
+    if (!mb.valid)
+      continue;
+    consider(static_cast<double>(mb.mnX), static_cast<double>(mb.mnY));
+    consider(static_cast<double>(mb.mxX), static_cast<double>(mb.mxY));
+  }
+
   if (!any)
     return false;
   *outMnX = mnX;
@@ -6640,6 +6670,26 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
       b.cy = 0.5 * (b.mnY + b.mxY);
       out.push_back(b);
     }
+  }
+
+  // Imported meshes (REQ-063: "meshes are included in zoom-extents and the drawing's bounding
+  // box"). One box per mesh rather than per triangle — the extents pass is an outlier-trimmed
+  // statistic over ENTITIES, and feeding it two million triangles would both swamp that statistic
+  // and make ZE cost a full mesh walk per invocation.
+  for (const auto& mp : st.cadMeshes) {
+    if (!mp)
+      continue;
+    const meshgeom::Bounds mb = meshgeom::ComputeBounds(mp->vertsXyz);
+    if (!mb.valid)
+      continue;
+    EntityBox b{};
+    b.mnX = static_cast<double>(mb.mnX);
+    b.mxX = static_cast<double>(mb.mxX);
+    b.mnY = static_cast<double>(mb.mnY);
+    b.mxY = static_cast<double>(mb.mxY);
+    b.cx = 0.5 * (b.mnX + b.mxX);
+    b.cy = 0.5 * (b.mnY + b.mxY);
+    out.push_back(b);
   }
 }
 
@@ -7814,6 +7864,8 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadAnnotationAttrs.clear();
   st.cadFilledRegions.clear();
   st.cadFilledRegionAttrs.clear();
+  st.cadMeshes.clear();
+  st.cadMeshAttrs.clear();
   ClearPendingOneShotObjectSnap(st);
   ClearCadSelection(st);
   BumpCadGpuCache(st);
@@ -8101,6 +8153,22 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
       st.cadFilledRegionAttrs.erase(st.cadFilledRegionAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
+  // Imported meshes (REQ-063: "erasing a mesh is undoable in one step" — the caller has already
+  // pushed one snapshot for this whole erase, so removing the pointer here is that one step).
+  std::set<int> meshIx;
+  const size_t nMesh = st.cadMeshes.size();
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::Mesh && e.index >= 0 && static_cast<size_t>(e.index) < nMesh)
+      meshIx.insert(e.index);
+  }
+  std::vector<int> mv(meshIx.begin(), meshIx.end());
+  std::sort(mv.begin(), mv.end(), std::greater<int>());
+  for (int idx : mv) {
+    st.cadMeshes.erase(st.cadMeshes.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (static_cast<size_t>(idx) < st.cadMeshAttrs.size())
+      st.cadMeshAttrs.erase(st.cadMeshAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
   // PDF underlays: release GL texture and erase from highest index downward.
   std::set<int> pdfIx;
   const size_t nPdf = st.pdfAttachments.size();
@@ -8117,7 +8185,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   }
 
   const size_t nDel = lineIx.size() + circIx.size() + annIx.size() + arcIx.size() + ellIx.size() +
-                      polyIx.size() + pdfIx.size() + fillIx.size();
+                      polyIx.size() + pdfIx.size() + fillIx.size() + meshIx.size();
   st.selection.clear();
   AbortMtextGripInteraction(st);
   ClearDimGripInteraction(st);
@@ -10552,6 +10620,101 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
   b.frameMs.clear();
 }
 
+/// Import a glTF/GLB model as a REQ-063 mesh (REQ-065).
+///
+/// Nothing touches the drawing until the parse has fully succeeded — the undo snapshot is pushed
+/// *after* the importer returns ok, so a malformed file leaves the drawing exactly as it was, which
+/// is what REQ-065's "no partial import" condition means in practice.
+bool ImportGltfModel(AppCommandState& st, const std::string& path, double unitScale, double insX, double insY,
+                     double insZ, std::vector<std::string>& log) {
+  modelimport::Options opt;
+  opt.unitScale = unitScale;
+  opt.insertX = insX;
+  opt.insertY = insY;
+  opt.insertZ = insZ;
+
+  // Dispatch on the file's kind. A DWG cannot be read for 3D content directly — its geometry may be
+  // vendor custom objects that only the vendor's enabler can decode — so it is routed through an
+  // installed AutoCAD, which is ADR-024's converter pattern applied to 3D (ADR-026 addendum).
+  std::string ext = std::filesystem::u8path(path).extension().u8string();
+  ext = StringUtil::toLowerAsciiCopy(ext);
+
+  modelimport::Result r;
+  if (ext == ".dwg") {
+    std::string whyNot;
+    if (!dwgmesh::ConversionAvailable(&whyNot)) {
+      log.push_back("Cannot import a DWG model — " + whyNot);
+      return false;
+    }
+    log.push_back("Converting the DWG's 3D solids via " + FindDwgConverter().displayName +
+                  " — this can take a few minutes on a large model.");
+    const dwgmesh::ConvertResult cr = dwgmesh::ConvertDwgToMesh(path, opt);
+    if (!cr.ok) {
+      log.push_back("Model import failed — " + cr.error);
+      return false;
+    }
+    r = cr.model;
+  } else if (ext == ".stl") {
+    r = stl::ImportStlFile(path, opt);
+  } else {
+    r = gltf::ImportGltfFile(path, opt);  // .glb / .gltf, and the fallback for an odd extension
+  }
+
+  if (!r.ok) {
+    log.push_back("Model import failed — " + r.error);
+    return false;
+  }
+
+  auto mesh = std::make_shared<CadMesh>();
+  mesh->vertsXyz = r.vertsXyz;
+  mesh->normalsXyz = r.normalsXyz;
+  mesh->indices = r.indices;
+  mesh->sourceName = std::filesystem::u8path(path).filename().u8string();
+  mesh->parts.reserve(r.parts.size());
+  for (const modelimport::Part& p : r.parts) {
+    CadMeshPart cp;
+    cp.name = p.name;
+    cp.indexBegin = p.indexBegin;
+    cp.indexCount = p.indexCount;
+    cp.r = p.r;
+    cp.g = p.g;
+    cp.b = p.b;
+    mesh->parts.push_back(std::move(cp));
+  }
+
+  PushUndoSnapshot(st, "Import model");
+  st.cadMeshes.push_back(std::move(mesh));
+  st.cadMeshAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+
+  char msg[320];
+  std::snprintf(msg, sizeof(msg), "Imported %s — %d triangles, %d parts, scale %.6g.",
+                st.cadMeshes.back()->sourceName.c_str(), r.triangleCount(),
+                static_cast<int>(r.parts.size()), unitScale);
+  log.push_back(msg);
+  // REQ-065 / REQ-201: what did not come in is stated, never dropped in silence.
+  if (!r.skipped.empty()) {
+    std::string s = "Not imported (geometry only): ";
+    for (size_t i = 0; i < r.skipped.size(); ++i)
+      s += (i ? ", " : "") + r.skipped[i];
+    log.push_back(s + ".");
+  }
+  return true;
+}
+
+/// Shared by the prompt and the inline `VS SHADED` form, so neither can set a value the other would
+/// reject (REQ-201). Accepts the AutoCAD-ish spellings a user is likely to try.
+bool ApplyVisualStyleValue(AppCommandState& st, const std::string& raw, std::vector<std::string>& log) {
+  VisualStyle s = st.viewportVisualStyle;
+  if (!VisualStyleFromName(StringUtil::trimCopy(raw), &s)) {
+    log.push_back("VISUALSTYLE — enter 2D, HIDDEN or SHADED.");
+    return false;
+  }
+  st.viewportVisualStyle = s;
+  log.push_back(std::string("Visual style = ") + VisualStyleName(s) + ".");
+  return true;
+}
+
 // Reset the work plane to world XY. Kept separate from ApplyElevValue so the status readout and
 // the "W" option have one shared meaning of "world".
 void ApplyUcsWorld(AppCommandState& st, std::vector<std::string>& log) {
@@ -11268,6 +11431,67 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         ApplyTrimStateValue(st, tv, log);
         return;
       }
+    }
+    // `IMPORTMODEL [path] [scale] [x] [y] [z]` (REQ-065). Bare form opens the file browser and uses
+    // scale 1 at the origin, stating both — the same shape as the other file commands, and the form
+    // that makes the import scriptable for verification.
+    if (plotTok == "importmodel" || plotTok == "gltf" || plotTok == "import3d") {
+      std::string path;
+      double scale = 1.0;
+      double ix = 0.0;
+      double iy = 0.0;
+      double iz = 0.0;
+      std::string rest;
+      std::getline(issIdle, rest);
+      rest = StringUtil::trimCopy(rest);
+      // A path may contain spaces, so quoted-first: "C:\a b\m.glb" 0.0833 100 200
+      if (!rest.empty() && rest.front() == '"') {
+        const size_t close = rest.find('"', 1);
+        if (close != std::string::npos) {
+          path = rest.substr(1, close - 1);
+          rest = StringUtil::trimCopy(rest.substr(close + 1));
+        }
+      } else if (!rest.empty()) {
+        std::istringstream ps(rest);
+        ps >> path;
+        std::getline(ps, rest);
+      }
+      {
+        std::istringstream ns(rest);
+        double v = 0.0;
+        if (ns >> v) scale = v;
+        if (ns >> v) ix = v;
+        if (ns >> v) iy = v;
+        if (ns >> v) iz = v;
+      }
+      if (path.empty()) {
+        char buf[1024]{};
+        if (!BrowseOpenFileGltfUtf8(buf, sizeof(buf))) {
+          log.push_back("IMPORTMODEL — cancelled.");
+          return;
+        }
+        path = buf;
+        log.push_back("IMPORTMODEL — unit scale 1, insertion 0,0,0. "
+                      "Use IMPORTMODEL \"<path>\" <scale> <x> <y> <z> to place it otherwise.");
+      }
+      if (!std::isfinite(scale) || scale == 0.0) {
+        log.push_back("IMPORTMODEL — unit scale must be a non-zero finite number.");
+        return;
+      }
+      ImportGltfModel(st, path, scale, ix, iy, iz, log);
+      return;
+    }
+    // `VS SHADED` in one line; a bare `VISUALSTYLE` reports the current value and lists the options,
+    // the same shape as a system-variable prompt (the TRIMSTATE precedent).
+    if (plotTok == "visualstyle" || plotTok == "vs" || plotTok == "vscurrent") {
+      std::string vsArg;
+      if (issIdle >> vsArg) {
+        ApplyVisualStyleValue(st, vsArg, log);
+      } else {
+        log.push_back(std::string("Visual style = ") + VisualStyleName(st.viewportVisualStyle) +
+                      ". Usage: VS 2D | HIDDEN | SHADED.");
+      }
+      return;
     }
     // `BENCH` runs the REQ-100 frame-budget measurement at the budget's own density; `BENCH <segs>`
     // and `BENCH <segs> <frames>` override it for a quick check or a longer sample.
