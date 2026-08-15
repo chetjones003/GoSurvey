@@ -118,6 +118,46 @@ ASSUMPTION-2: `SEE_MASK_NOASYNC` + immediate exit gives the installer enough tim
   elevation and the installer handoff are all written and compiled but unexercised. What IS
   verified is the part that decides whether to offer an update at all.
 
+### First live update — 2026-08-15 (0.5.0-beta.7 → beta.8, user-driven)
+
+The dialog appeared correctly, the download and SHA-256 verification succeeded, and the installer
+applied the update. **Three defects surfaced, all in this task's own work:**
+
+**D1 — the app did not reopen after updating (REQ-078 acceptance failure).** `/RESTARTAPPLICATIONS`
+only restarts applications that **Restart Manager itself shut down**, and `LaunchInstallerAndExit`
+exits this process immediately — long before Setup performs its Restart Manager scan. Nothing was
+ever registered, so nothing was restarted. The flag could never have worked in this design; the
+ADR-029 (f) claim that Inno "closes, replaces and restarts the app" was half right, and the
+untested half was the one that mattered.
+*Fix:* the app passes `/RELAUNCH=1`, and the installer carries a `[Run]` entry gated on that
+parameter via a `Check` function. It uses `runasoriginaluser`, without which the relaunched app
+would inherit Setup's elevation and start writing prefs and drawings as administrator.
+*Gated on the parameter rather than on "was this silent" so an IT deployment script running
+`/SILENT` still does not pop a GUI onto someone's screen.*
+**This defect needs two releases to clear.** The flag is passed by the *running* app, so the
+installed beta.8 — which lacks the fix — will still fail to relaunch when it installs beta.9. The
+first self-restarting update is beta.9 → beta.10. The installer half is verifiable immediately by
+running the new installer with `/RELAUNCH=1` by hand.
+
+**D2 — the dialog shrank horizontally mid-download.** `ImGuiWindowFlags_AlwaysAutoResize` re-fits
+the window to its content every frame, while `SetNextWindowSize` used `ImGuiCond_Appearing` and so
+applied exactly once. When the phase changed from `UpdateReady` (wide — release-notes child plus
+three buttons) to `Downloading` (narrow — one line and a Cancel button), the window collapsed
+sideways while the progress bar ran. *Fix:* pin the width with `ImGuiCond_Always` and let only the
+height auto-fit; `NoResize` replaces `AlwaysAutoResize`.
+
+**D3 — the rolling prerelease accumulated installers.** `gh release upload --clobber` only replaces
+an asset of the *same name*, and the installer filename carries the version, so `channel-beta`
+held both beta.7 and beta.8 (~6 MB each, unbounded). The manifest always pointed at the right one,
+so nothing was broken — but "a single rolling prerelease" was only half true. *Fix:* the publish
+step prunes superseded `GoSurvey-*-Installer.exe` assets after uploading (after, so a failed upload
+leaves the previous installer in place rather than an empty release). The stale beta.7 asset was
+deleted by hand.
+
+**Also observed, not a defect:** GitHub's CDN served a stale `latest.json` for a few minutes after
+`--clobber` replaced it. Harmless under the 24-hour check throttle, but it briefly looked like the
+clobber had failed — worth knowing before it misleads someone mid-diagnosis.
+
 ## 9. Self-verification  (run BEFORE submitting — verification/skills/)
 - [x] build-project        — PASS. Clean configure + build; three self-found defects fixed (§8).
 - [x] architecture-review  — PASS.

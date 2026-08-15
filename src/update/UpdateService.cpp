@@ -246,10 +246,16 @@ bool LaunchInstallerAndExit(UpdateState& st)
 
   const std::wstring exe = std::filesystem::u8path(st.available.installerUrl).wstring();
 
-  // /SILENT shows only a progress window; /CLOSEAPPLICATIONS + /RESTARTAPPLICATIONS let Inno
-  // close this process via the AppMutex and bring it back afterwards (ADR-029 (f)). This is
-  // what makes a separate updater binary unnecessary.
-  const std::wstring args = L"/SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS";
+  // /SILENT shows only a progress window. /CLOSEAPPLICATIONS lets Inno shut down any GoSurvey
+  // still running (via the AppMutex) rather than failing on a locked file.
+  //
+  // /RELAUNCH=1 is what actually brings the app back, and it is not interchangeable with
+  // /RESTARTAPPLICATIONS. That flag only restarts applications Restart Manager itself closed,
+  // and this process exits immediately below — long before Setup performs its Restart Manager
+  // scan — so nothing is ever registered for it to restart. The first live update proved it:
+  // the app closed, updated, and never reopened. The installer's [Run] entry keyed on this
+  // parameter does the relaunch instead, as the original (non-elevated) user.
+  const std::wstring args = L"/SILENT /CLOSEAPPLICATIONS /RELAUNCH=1";
 
   // ShellExecuteEx rather than CreateProcess: the installer needs elevation (the install lives
   // in Program Files), and "runas" is what raises the UAC prompt. CreateProcess would simply

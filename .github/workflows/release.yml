@@ -251,6 +251,22 @@ jobs:
           gh release upload channel-beta `
             "installer\Output\${{ steps.manifest.outputs.name }}" `
             "installer\Output\latest.json" --clobber
+
+          # Prune superseded installers. --clobber only replaces an asset of the SAME name, and
+          # the installer filename carries the version, so without this every beta adds ~6 MB to
+          # the release forever and "a single rolling prerelease" stops being true. latest.json
+          # keeps its name and is genuinely clobbered, so it is left alone.
+          #
+          # Pruning AFTER the upload, not before: if the upload fails, the release keeps the
+          # previous installer and the manifest still resolves, rather than being left empty.
+          $keep = "${{ steps.manifest.outputs.name }}"
+          $stale = gh release view channel-beta --json assets -q '.assets[].name' |
+                   Where-Object { $_ -like 'GoSurvey-*-Installer.exe' -and $_ -ne $keep }
+          foreach ($asset in $stale) {
+            Write-Host "Deleting superseded asset: $asset"
+            gh release delete-asset channel-beta $asset --yes
+          }
+
           gh release edit channel-beta --title "GoSurvey ${{ steps.ver.outputs.full }} (beta)"
 
       - name: Publish the stable release

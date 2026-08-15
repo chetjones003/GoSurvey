@@ -110,8 +110,27 @@ Root: HKA; Subkey: "Software\Classes\{#MyAppAssocKey}\shell\open\command"; Value
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
+[Code]
+// True when Setup was started by the in-app updater with /RELAUNCH=1 (REQ-078).
+//
+// Needed because /RESTARTAPPLICATIONS cannot do this job: it only restarts applications that
+// Restart Manager itself shut down, and the updater's own process has already exited by the time
+// Setup performs its Restart Manager scan. Nothing is registered, so nothing is restarted — which
+// is exactly what happened in the first live update: the app closed and never came back.
+//
+// Gated on the parameter rather than on "was this a silent install" so that an ordinary scripted
+// deployment (/SILENT from an IT script) still does NOT pop a GUI on someone's screen.
+function WantsRelaunch: Boolean;
+begin
+  Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;
+
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+; The updater's relaunch. `runasoriginaluser` matters: Setup is elevated, and without it GoSurvey
+; would come back running as administrator — writing prefs and drawings with admin ownership that
+; the user's normal session then cannot modify.
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait runasoriginaluser; Check: WantsRelaunch
 
 [UninstallRun]
 ; Clear Windows icon cache to ensure new icon is displayed on reinstall

@@ -40,13 +40,22 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
   if (!ImGui::IsPopupOpen(kTitle))
     ImGui::OpenPopup(kTitle);
 
-  ImGui::SetNextWindowSize(ImVec2(560.f, 0.f), ImGuiCond_Appearing);
+  // Width is PINNED every frame; only the height auto-fits (the 0.f component).
+  //
+  // It used to be ImGuiCond_Appearing + AlwaysAutoResize, which re-fitted the window to its
+  // content on every frame. The explicit width therefore applied once and was then ignored, so
+  // the moment the phase changed from UpdateReady (wide: release-notes child and three buttons)
+  // to Downloading (narrow: one line of text and a Cancel button) the window visibly shrank
+  // sideways mid-download. Reported from the first live update, and it looks like a glitch
+  // rather than a layout decision.
+  ImGui::SetNextWindowSize(ImVec2(560.f, 0.f), ImGuiCond_Always);
   ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
                           ImVec2(0.5f, 0.5f));
 
   // No close button and no click-away dismissal: every exit from this dialog is one of the
-  // three explicit choices below, so "I closed the window" can never be mistaken for a decision.
-  if (!ImGui::BeginPopupModal(kTitle, nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+  // explicit choices below, so "I closed the window" can never be mistaken for a decision.
+  // NoResize because the width is ours to control now, not the user's to drag.
+  if (!ImGui::BeginPopupModal(kTitle, nullptr, ImGuiWindowFlags_NoResize))
     return;
 
   switch (upd.phase)
