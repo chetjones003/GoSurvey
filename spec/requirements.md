@@ -1961,9 +1961,16 @@ requirements is a planning failure, not a sign of rigor.
   this budget** — a rebuild runs off the UI thread (REQ-069) and is measured separately.
 - Acceptance: a committed benchmark scene profiled on the reference machine stays
   within budget at the 95th-percentile frame during a scripted orbit, **in each of the three
-  profiles above**.
+  profiles above**, **built with the toolchain named in `project.md` §7**. A frame budget is a
+  property of a binary, not of source code: the compiler chooses the vectorisation, inlining and
+  layout that decide it, so a figure measured with a different compiler is a different result.
 - Owner-layer: Renderer
-- Status: accepted — **MET 2026-08-12**, p95 **8.93 ms** against the 16 ms budget at 250,000
+- Status: accepted — **measurement INVALIDATED 2026-08-15 by the MSVC toolchain pin** (decision
+  log). The figure below was measured on a **clang** build, which is what the project was
+  unknowingly producing at the time; it is retained as the last known-good number but must not be
+  quoted as current until re-run under MSVC with `BENCH`. Nothing suggests the budget now fails —
+  it simply has not been measured on the binary the project now ships.
+  Previously: **MET 2026-08-12**, p95 **8.93 ms** against the 16 ms budget at 250,000
   segments, on the reference machine now recorded in `project.md` §7. Run it with the `BENCH`
   command; the scene generator and its statistics are `src/util/benchscene.*`. The budget still
   holds at 750k segments (p95 12.10 ms) and is exceeded at 1M (19.61 ms), so there is 3–4× headroom
@@ -1977,6 +1984,11 @@ requirements is a planning failure, not a sign of rigor.
   had already noted the budget "gains a second dimension" for meshes without writing it down; the
   surface case (REQ-068…072) is a third, and a single-number budget cannot be claimed by a feature
   whose cost profile it never measured.
+  2026-08-15 — acceptance now names the toolchain, and the recorded measurement is marked invalid.
+  The project pinned MSVC after discovering it had been building with clang against a spec that
+  said MSVC (decision log). This is the same class of gap the 2026-08-12 revision closed for
+  hardware: a performance number is meaningless without stating the machine, and equally
+  meaningless without stating the compiler. Re-measure with `BENCH` and record the MSVC figure.
 
 ### REQ-101 — Numerical tolerance
 - Purpose: domain correctness (CAD/survey)

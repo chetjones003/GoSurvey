@@ -176,9 +176,15 @@ ASSUMPTION-3: `github.run_number` is monotonically increasing per workflow, maki
                           moved. CI still pins clang deliberately — it must reproduce the binary
                           that actually ships — but the project is no longer clang-*only*, and the
                           `if(MSVC)` branches in `CMakeLists.txt` are live again rather than dead.
-                          **Residual risk:** nothing in CI compiles with MSVC, so this can rot
-                          again exactly as it did before. A second matrix leg would prevent that,
-                          at the cost of doubling CI time — offered, not assumed.
+                          **Superseded same day:** rather than keep two toolchains in play, the
+                          project pinned MSVC in `CMakePresets.json` for both presets and CI
+                          stopped passing any compiler of its own (decision log 2026-08-15). The
+                          residual risk this entry described — MSVC support rotting because CI
+                          never exercised it — is gone, because MSVC is now the only compiler
+                          either side uses. Local build/ reconfigured and verified: 248/248,
+                          309/309.
+                          (0b) **REQ-100's recorded p95 (8.93 ms) is now invalid** — it was
+                          measured on a clang build. Needs a `BENCH` re-run under MSVC.
                           (1) `ilammy/msvc-dev-cmd@v1` is a third-party action on a moving tag;
                           SHA-pin it if the supply-chain surface matters.
                           (2) The signing step is a deliberate no-op (ADR-029 D5).
