@@ -127,10 +127,25 @@ end;
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
-; The updater's relaunch. `runasoriginaluser` matters: Setup is elevated, and without it GoSurvey
-; would come back running as administrator — writing prefs and drawings with admin ownership that
-; the user's normal session then cannot modify.
-Filename: "{app}\{#MyAppExeName}"; Flags: nowait runasoriginaluser; Check: WantsRelaunch
+; The updater's relaunch, routed through Explorer.
+;
+; Launching non-elevated is the requirement, not a nicety: Setup runs elevated, so a direct exec
+; would bring GoSurvey back as administrator and it would then write prefs and drawings with admin
+; ownership that the user's own session cannot modify.
+;
+; `runasoriginaluser` is the flag meant for this and it was tried first. Setup's log showed it
+; accepted the entry ("Run as: Original user", "Type: Exec", correct Filename) and then silently
+; produced no process — it depends on obtaining the original user's shell token, which is not
+; reliably available when Setup was started from a context that was already elevated. Handing the
+; path to Explorer instead makes the shell perform the launch, so the new process inherits
+; Explorer's non-elevated token. Verified directly: launched, and measured as non-elevated via
+; the process token.
+;
+; Cost of this route, accepted: Explorer returns immediately and reports nothing, so Setup cannot
+; tell whether the app actually started, and on a machine with no running shell the relaunch is a
+; silent no-op. Both are acceptable for a best-effort restart -- the update itself has already
+; succeeded by this point.
+Filename: "{win}\explorer.exe"; Parameters: """{app}\{#MyAppExeName}"""; Flags: nowait; Check: WantsRelaunch
 
 [UninstallRun]
 ; Clear Windows icon cache to ensure new icon is displayed on reinstall

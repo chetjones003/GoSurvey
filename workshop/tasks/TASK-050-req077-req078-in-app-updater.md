@@ -134,6 +134,18 @@ parameter via a `Check` function. It uses `runasoriginaluser`, without which the
 would inherit Setup's elevation and start writing prefs and drawings as administrator.
 *Gated on the parameter rather than on "was this silent" so an IT deployment script running
 `/SILENT` still does not pop a GUI onto someone's screen.*
+*Second iteration, 2026-08-15:* the first fix used Inno's `runasoriginaluser` flag, and it **did
+not work**. Setup's own log proved the parameter plumbing was fine — `-- Run entry --`, `Run as:
+Original user`, `Type: Exec`, correct `Filename` — and then no process appeared, with no error.
+The flag needs the original user's shell token, which is not reliably obtainable when Setup was
+started from an already-elevated context. Replaced with a launch through `{win}\explorer.exe`,
+which makes the shell perform the exec so the new process inherits Explorer's non-elevated token.
+**Verified directly rather than assumed:** launched successfully and measured **non-elevated** by
+reading `TokenElevation` off the process token. This route also behaves identically whether Setup
+was elevated by UAC or started already-elevated, which the flag did not.
+*Accepted cost:* Explorer reports nothing back, so Setup cannot confirm the app started, and on a
+machine with no running shell the relaunch is a silent no-op.
+
 **This defect needs two releases to clear.** The flag is passed by the *running* app, so the
 installed beta.8 — which lacks the fix — will still fail to relaunch when it installs beta.9. The
 first self-restarting update is beta.9 → beta.10. The installer half is verifiable immediately by
