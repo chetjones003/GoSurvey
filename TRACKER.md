@@ -2,14 +2,23 @@
 
 ## BUGS
 
-### [BUG-012] Double-clicking a .gs file opens GoSurvey empty — OPEN
-    - `int main()` in src/app/main.cpp takes no argv, so the application cannot receive a file
+### [BUG-012] Double-clicking a .gs file opens GoSurvey empty — FIXED 2026-08-15
+    - `int main()` in src/app/main.cpp took no argv, so the application could not receive a file
       path from the command line at all.
     - The installer registers `.gs` with `shell\open\command = "...\GoSurvey.exe" "%1"`, so the
-      path IS passed — and silently ignored. The drawing never opens.
+      path WAS passed — and silently dropped. The drawing never opened.
     - Pre-existing; found while verifying REQ-079's reader change (TASK-051), not caused by it.
-    - Fix: take `int main(int argc, char** argv)`, and if argv[1] is an existing file, load it
-      instead of the startup template. Worth checking DXF/DWG paths get the same treatment.
+    - Fix: read the WIDE command line (CommandLineToArgvW) rather than adding argc/argv. argv is
+      encoded in the process ANSI codepage, so a drawing under a path containing characters
+      outside it would have arrived mangled and failed to open on a machine where the file
+      plainly exists. A command-line file wins over the startup template; one that fails to load
+      falls back to the template AND says so (REQ-201), because silence there looks identical to
+      the original bug.
+    - Verified: samples\surface-demo.gs opens and renders via the exact command line Explorer
+      uses; a malformed .gs falls back with the app alive and responsive; a directory argument is
+      ignored.
+    - Follow-up, not done: DXF/DWG paths are not handled (only .gs is associated today), and the
+      drawing tab still reads "Drawing 1" rather than the opened file's name.
 
 ### [BUG-011] ViewportRenderer did not compile with MSVC — FIXED 2026-08-15
     - Symptom: ~50 x C2362 in ViewportRenderer.cpp, "initialization of 'x' is skipped by

@@ -32,6 +32,8 @@
 
 #ifdef _WIN32
 #include <windows.h>
+// CommandLineToArgvW — see FirstExistingFileArgumentUtf8. Excluded by WIN32_LEAN_AND_MEAN.
+#include <shellapi.h>
 #endif
 
 #include <GL/glew.h>
@@ -51,6 +53,44 @@
 
 namespace
 {
+
+  /// Returns the first command-line argument naming an existing file, as UTF-8, or empty.
+  ///
+  /// BUG-012: the installer registers `.gs` with `shell\open\command = "...GoSurvey.exe" "%1"`,
+  /// so Explorer has always passed the path — and `main()` took no arguments, so it was silently
+  /// dropped and double-clicking a drawing opened an empty session.
+  ///
+  /// Reads the WIDE command line rather than adding `argc`/`argv` to `main`. `argv` is encoded in
+  /// the process ANSI codepage, so a drawing under a path containing characters outside it would
+  /// arrive mangled and fail to open — on a machine where the file plainly exists. The rest of the
+  /// codebase is UTF-8 end to end, and this keeps that true from the first line of `main`.
+  static std::string FirstExistingFileArgumentUtf8()
+  {
+#ifdef _WIN32
+    int     argc  = 0;
+    LPWSTR *argvW = ::CommandLineToArgvW(::GetCommandLineW(), &argc);
+    if (!argvW)
+      return std::string();
+
+    std::string result;
+    for (int i = 1; i < argc; ++i)   // [0] is our own exe path
+    {
+      const std::filesystem::path p(argvW[i]);
+      std::error_code             ec;
+      // is_regular_file, not exists: a directory argument is not something to open, and the
+      // error_code overload keeps a permission failure from throwing during startup.
+      if (!p.empty() && std::filesystem::is_regular_file(p, ec))
+      {
+        result = p.u8string();
+        break;
+      }
+    }
+    ::LocalFree(argvW);
+    return result;
+#else
+    return std::string();
+#endif
+  }
 
   static void TryLoadStartupWorkspaceTemplate(AppCommandState &cmd, std::vector<std::string> &cmdLog)
   {
@@ -210,8 +250,27 @@ int main()
   cmdLog.push_back("Regenerating model.");
   cmdLog.push_back("Drawing Created.");
   cmdLog.push_back("JSON database - ready...");
-  TryLoadStartupWorkspaceTemplate(cmd, cmdLog);
-  cmd.activeDocSavedRevision = cmd.cadGpuRevision; // loaded template counts as "clean"
+  // BUG-012: a drawing passed on the command line wins over the startup template. Someone who
+  // double-clicked a .gs wants that drawing, not a blank sheet built from their template.
+  bool openedFromCommandLine = false;
+  {
+    const std::string startupFile = FirstExistingFileArgumentUtf8();
+    if (!startupFile.empty())
+    {
+      std::vector<std::string> boot;
+      openedFromCommandLine = LoadGoSurveyFile(cmd, startupFile.c_str(), boot);
+      for (auto &s : boot)
+        cmdLog.push_back(std::move(s));
+      // A file that will not open falls back to the normal startup path rather than leaving the
+      // user staring at nothing, but it says so — REQ-201, and silence here would look identical
+      // to the bug this fixes.
+      if (!openedFromCommandLine)
+        cmdLog.push_back("Could not open " + startupFile + "; starting from the usual template.");
+    }
+  }
+  if (!openedFromCommandLine)
+    TryLoadStartupWorkspaceTemplate(cmd, cmdLog);
+  cmd.activeDocSavedRevision = cmd.cadGpuRevision; // loaded drawing/template counts as "clean"
   // Re-apply user preferences so they override any template defaults (crosshair, snap, survey, etc.).
   LoadUserStartupPrefSettings(cmd);
   // Re-apply theme now that displayColorThemeIdx is known from saved prefs.
