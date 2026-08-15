@@ -56,8 +56,15 @@ jobs:
         with:
           path: ${{ env.DEPS_CACHE_PATH }}
           # CMakeLists.txt holds every pinned dependency ref (glfw 3.4, the imgui SHA, glew
-          # 2.2.0, the pdfium URL, Catch2 v3.5.2), so its hash is exactly the right key: it
-          # changes when and only when a dependency does.
+          # 2.2.0, the pdfium URL, Catch2 v3.5.2), so hashing it can never serve a STALE
+          # dependency tree — that is the property that matters for correctness.
+          #
+          # It is a coarse key, though: any edit to the file misses, including a version bump or
+          # adding a source file, neither of which touches a dependency. `restore-keys` is what
+          # makes that cheap rather than a full re-download — a miss falls back to the newest
+          # `deps-<os>-*` entry, which is almost always the right tree. Narrowing the key to just
+          # the FetchContent block would need that block in its own file; not worth it while the
+          # fallback keeps a miss at seconds rather than minutes.
           key: deps-${{ runner.os }}-${{ hashFiles('CMakeLists.txt') }}
           restore-keys: deps-${{ runner.os }}-
 
