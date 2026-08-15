@@ -212,6 +212,15 @@ Let tools enforce mechanical style so reviews can focus on substance.
 - Tests are deterministic and independent — no shared mutable global state, no
   ordering dependencies.
 - A test result counts only after the test actually ran.
+- **`TEST_CASE` names are ASCII.** Prose in this project uses em dashes freely and should keep
+  doing so — in comments, in the spec, in UI strings. But a *test name* is not prose: it is
+  round-tripped through `catch_discover_tests` into a CTest filter, and a non-ASCII character
+  is mangled by the intervening codepage, so the filter matches nothing and CTest reports
+  `***Failed` / "No test cases matched". The test body is never reached and never runs.
+  *Found 2026-08-15:* four tests failed this way for weeks while passing when run by hand —
+  the exact failure the line above is about. Windows resource scripts have the same
+  constraint for the same reason (`llvm-rc` rejects an 8-bit codepoint outright), so the rule
+  is: ASCII in anything a toolchain re-parses, em dashes anywhere a human reads.
 
 ## 13. Review order
 

@@ -144,7 +144,7 @@ TEST_CASE("Entity Z defaults to zero and survives a copy", "[zstore]") {
 // Paper space stays 2D — paperCircles must remain stride 3 (ADR-025 (g)).
 // ---------------------------------------------------------------------------
 
-TEST_CASE("Paper circles are stride 3 — a sheet has no elevation", "[zstore][paperspace]") {
+TEST_CASE("Paper circles are stride 3 - a sheet has no elevation", "[zstore][paperspace]") {
   // Model circles are cx,cy,z,r but paper circles are deliberately still cx,cy,r. If someone
   // "helpfully" widens paperCircles to match the model, these two pure helpers break: box-select
   // would read a radius as a Z, and the snap would place quadrant points at the wrong offsets.

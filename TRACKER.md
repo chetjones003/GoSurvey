@@ -2,6 +2,19 @@
 
 ## BUGS
 
+### [BUG-010] Four tests reported ***Failed while their bodies never ran — FIXED 2026-08-15
+    - Symptom: `ctest` reported 4 failures (paper-circle stride, mesh state-plane origin, id sweep
+      idempotence, erased-id resolution) that PASSED when run individually by name.
+    - Root cause: each of those four `TEST_CASE` names contained an em dash. `catch_discover_tests`
+      round-trips the name into a CTest filter through a codepage that mangles it, so Catch2
+      received a filter matching nothing, printed "No test cases matched", and exited non-zero.
+      The tested logic was never at fault and the test bodies never executed.
+    - Fix: ASCII-only `TEST_CASE` names. Suite went 305/309 -> 309/309.
+    - Prevention: rule recorded in `spec/coding-standards.md` §12 — ASCII in anything a toolchain
+      re-parses (test names, `.rc` scripts), em dashes anywhere a human reads.
+    - Why it mattered: REQ-202's release pipeline gates publication on a green `ctest`, so this
+      would have blocked every automated release while looking like a real product defect.
+
 ## FEATURES
 
 ### [FEAT-002] Traverse Editor

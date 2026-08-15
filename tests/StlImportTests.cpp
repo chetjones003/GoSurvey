@@ -109,7 +109,7 @@ TEST_CASE("Unit scale and insertion preserve REQ-101 at drawing-local coordinate
   CHECK(r.vertsXyz[1] == Approx(-2500.0).margin(0.01));
 }
 
-TEST_CASE("Mesh vertices cannot hold raw state-plane coordinates — and that is the origin's job",
+TEST_CASE("Mesh vertices cannot hold raw state-plane coordinates - and that is the origin's job",
           "[stl][precision]") {
   // This test documents a LIMIT rather than a feature, because the limit is invisible and the
   // failure it causes looks like a modelling error.

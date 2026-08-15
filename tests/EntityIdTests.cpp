@@ -60,7 +60,7 @@ TEST_CASE("Sweep assigns an id to every entity and never hands out 0", "[entityi
   REQUIRE(d.nextId == 6);
 }
 
-TEST_CASE("Sweep is idempotent — an assigned id is never renumbered", "[entityid]") {
+TEST_CASE("Sweep is idempotent - an assigned id is never renumbered", "[entityid]") {
   FakeDrawing d;
   d.lines = NAttrs(2);
   d.sweep();
@@ -82,7 +82,7 @@ TEST_CASE("A new entity beside assigned ones only fills the gap", "[entityid]") 
   REQUIRE(IdsOf(d.lines) == std::vector<std::uint64_t>{1, 2, 3});
 }
 
-TEST_CASE("An erased entity's id resolves to nothing — NOT to its index successor", "[entityid]") {
+TEST_CASE("An erased entity's id resolves to nothing - NOT to its index successor", "[entityid]") {
   // The regression the requirement is built on. Before REQ-076 the reference was the index, so
   // after this erase a stored "1" designated what is now `attrs[1]` — a different entity, silently.
   FakeDrawing d;
