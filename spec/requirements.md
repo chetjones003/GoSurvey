@@ -1563,6 +1563,297 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-08-12 — initial draft. Route chosen over OBJ/FBX/STL — see ADR-026 and the
   decision log.
 
+### REQ-066 — Raw description on survey points
+- Purpose: let a point group match the field code even after the description has been edited
+- Priority: must
+- Type: functional
+- Statement: `SurveyPoint` gains a **`rawDescription`** field holding the description as collected in
+  the field. It is written once at import and is **never rewritten** by description expansion or by
+  a user edit of `description`; the two are independent. It is persisted additively in `.gs` and in
+  the `GOSURVEY` DXF XDATA schema (ADR-005), so neither format gains a version bump. A record with no
+  raw description — every point in every drawing written before this requirement — loads with the
+  field empty, and any consumer that matches on it falls back to `description`.
+- Acceptance:
+  - a point imported with a field code keeps that code in `rawDescription` after `description` is
+    edited to something else;
+  - a legacy `.gs`, and a legacy DXF point carrying the pre-REQ-066 XDATA, both load with
+    `rawDescription` empty and are matched on `description` instead — not skipped, not defaulted to
+    the description's text;
+  - `rawDescription` round-trips `.gs` and DXF unchanged, including when empty.
+- Owner-layer: Domain (field), IO (`.gs`, DXF XDATA)
+- Status: accepted (2026-08-12)
+- Revisions: 2026-08-12 — initial. Raised while specifying REQ-067: raw-description matching was
+  requested and no raw description was stored anywhere.
+
+### REQ-067 — Point groups
+- Purpose: name a set of survey points once and reuse it — chiefly as a surface's data source
+- Priority: must
+- Type: functional
+- Statement: A **point group** is a named, persisted, drawing-owned object whose membership is a
+  **rule**, not a frozen list. A rule combines any of: **point-id ranges** (`1-500, 1200,
+  1400-1450`), a **description** wildcard, a **raw-description** wildcard (REQ-066), and an
+  **explicit id list** picked in the drawing. **Criteria combine as a union (OR)**: a point joins the
+  group if it matches *any* filled-in criterion, and an empty criterion contributes nothing rather
+  than matching everything. So `ids 1-500` + `desc EG*` resolves to every point numbered 1–500 plus
+  every `EG` point, and a hand-picked point is always in its own group regardless of the other
+  criteria. Narrowing a group by exclusion is **not** in this release. Membership is evaluated on
+  demand from the current point set, so points imported after the group was defined join it without
+  the group being edited; the explicit-id part is by definition unaffected by new points. A group is **not an entity**: it
+  has no geometry, no layer, no colour, is not drawn, is not selectable in the viewport, and is not
+  exported. Groups are owned by the drawing and are undoable, so creating or editing one can be
+  undone in a single step. A point that is deleted leaves no trace in any group.
+- Acceptance:
+  - a group defined as `EG*` resolves to exactly the points whose description matches and to no
+    others; the same rule against `rawDescription` resolves independently of an edited description;
+  - importing further `EG` points and re-resolving includes them with no edit to the group;
+  - an id-range rule `1-10, 20-30` excludes 11–19, and includes both endpoints;
+  - an explicit-id group is unchanged by newly imported points;
+  - deleting a point removes it from every group's resolved membership and leaves no dangling id
+    behind in the stored rule;
+  - a rule that matches nothing resolves to an empty group and says so — it is not an error, and it
+    is not silently treated as "all points" (REQ-201);
+  - a group with **no** criterion filled resolves to **empty**, not to every point — the difference
+    between "no filter" and "match everything" is exactly the mistake that would silently put a whole
+    drawing into a surface;
+  - a rule with two criteria filled resolves to the **union** of their matches, and a hand-picked id
+    stays in the group even when it matches neither wildcard nor any id range;
+  - groups round-trip `.gs`, and a legacy `.gs` with no group section loads unchanged.
+- Owner-layer: Domain (rule + resolution), IO (`.gs`), UI (editor)
+- Status: accepted (2026-08-12)
+- Revisions: 2026-08-12 — initial.
+  2026-08-15 — **criteria combine as a union (OR), and exclusion is out of scope.** "Combines any of"
+  was ambiguous enough to change what the feature does, and it was resolved by the user before any
+  code rather than guessed at (workflow §5). OR is what makes the hand-pick list meaningful: under
+  AND, a manually picked point outside the id range would be dropped from its own group. Also
+  pinned down: an all-empty rule resolves to **empty**, never to "all points".
+
+### REQ-068 — TIN surface entity
+- Purpose: hold a triangulated terrain model — the object every other surface requirement acts on
+- Priority: must
+- Type: functional
+- Statement: A **surface** is a named, drawing-owned object holding a triangulation: interleaved XYZ
+  vertices (architecture §11.8), triangle indices, and the per-triangle adjacency that contouring and
+  analysis need. The triangulation is **immutable once built and replaced wholesale on rebuild**, and
+  is therefore held as `shared_ptr<const>` by both the live state and every undo snapshot
+  (architecture §11.5, as amended 2026-08-12) — a surface must not be deep-copied by unrelated edits.
+  Surfaces participate in layers, visibility, selection, erase, undo and view extents. They are
+  **excluded from DXF and DWG export**, which has no representation GoSurvey can write losslessly,
+  and the exclusion is **stated in the export log** (REQ-201), never silent. A surface is persisted in
+  `.gs` in an additive section.
+- Acceptance:
+  - a surface round-trips `.gs` with vertex positions bit-identical on reload;
+  - a legacy `.gs` with no surface section loads unchanged;
+  - surfaces are included in zoom-extents and in the drawing's bounding box;
+  - erasing a surface is undoable in one step, and the restored surface is the same triangulation;
+  - a surface on a frozen or off layer is not drawn, and one on a non-plottable layer is not plotted;
+  - **an edit unrelated to the surface — drawing a line — does not copy the triangulation**: the
+    undo snapshot shares the payload, asserted on the shared pointer rather than by inspection;
+  - exporting a drawing containing a surface names the surface as excluded in the log.
+- Owner-layer: Domain (store), IO (`.gs`), Renderer (draw)
+- Status: accepted (2026-08-12)
+- Revisions: 2026-08-12 — initial.
+
+### REQ-069 — Surface definition: point groups, breaklines, boundaries, dynamic rebuild
+- Purpose: make a surface a live model of its inputs rather than a one-time snapshot
+- Priority: must
+- Type: functional
+- Statement: A surface stores an **ordered, editable definition** whose items are **point groups**
+  (REQ-067), **breaklines** (existing 3D lines and polylines designated as such), and **boundaries**
+  (closed polylines typed **outer**, **hide** or **show**). Breaklines and boundaries are referenced
+  by **stable entity id** (REQ-076), never by array index. Triangulation is **constrained**: no
+  triangle edge crosses a breakline. Boundaries apply in definition order — an outer boundary clips
+  the surface to itself, a hide boundary removes surface inside it, and a show boundary restores
+  surface inside a hide. Standard breaklines only; proximity, wall and non-destructive breaklines are
+  out of scope.
+
+  The surface is **dynamic**: when a definition source changes — a consumed point moves or is
+  deleted, a breakline or boundary polyline is edited, a group's membership changes — the surface is
+  marked out of date and **retriangulates**, with no user action. Rebuild is **coalesced to at most
+  one per command / undo boundary**, so an edit touching many sources rebuilds once, not once per
+  source. The rebuild runs **off the UI thread** (architecture §8): the edit completes immediately,
+  the surface is visibly marked stale until the result arrives, and **a result whose definition is no
+  longer current — because of an undo or a further edit — is discarded, not applied**. Deleting a
+  referenced entity removes that item from the definition; it never leaves a dangling reference.
+
+  Inputs that have no correct answer are **reported, not absorbed** (REQ-001, REQ-201): breaklines
+  that cross in plan at different elevations, duplicate points at the same plan location with
+  different elevations, and a definition that yields fewer than three non-collinear points each
+  produce a specific message stating what the build did.
+- Acceptance:
+  - a breakline across a saddle produces triangle edges along it, and **no triangle crosses it**,
+    verified against hand-computed expected edges on a committed dataset;
+  - an outer boundary clips the surface to itself; a hide boundary leaves a void; a show boundary
+    inside a hide restores surface there;
+  - moving a survey point the surface consumes changes the surface with no manual rebuild;
+  - a single MOVE of N consumed points triggers **one** rebuild, not N;
+  - undo issued while a rebuild is in flight leaves the surface consistent with the undone state —
+    the in-flight result is discarded;
+  - deleting a polyline used as a breakline removes it from the definition, and the surface rebuilds
+    without it, with no dangling id;
+  - crossing breaklines at different elevations produce a named diagnostic and a stated outcome;
+  - a definition of fewer than three non-collinear points fails with a specific message and leaves no
+    partial surface;
+  - the definition round-trips `.gs`, ids intact.
+- Owner-layer: Domain (definition, rebuild), util (triangulation), Commands (designate/edit)
+- Status: accepted (2026-08-12)
+- Revisions: 2026-08-12 — initial.
+
+### REQ-070 — Surface styles
+- Purpose: control what a surface looks like without changing what it is
+- Priority: must
+- Type: functional
+- Statement: A **surface style** is a named, reusable, drawing-owned object referenced by surfaces —
+  the ADR-020 text-style pattern, a document-owned table rather than a per-surface copy, so editing a
+  style changes every surface using it. A style controls: **minor and major contour interval**, each
+  with colour and lineweight; **triangle** display; **surface border**; **point** display; and the
+  REQ-072 band and arrow settings. **Contours are display geometry, not entities**: they are
+  regenerated from the triangulation and the style, are never stored in `.gs`, never appear in
+  selection, and never appear in the drawing's entity counts. Changing a style property must not
+  re-triangulate the surface.
+- Acceptance:
+  - changing the contour interval updates the display **without rebuilding the triangulation** and
+    adds no entity to the drawing or to the saved `.gs`;
+  - two surfaces sharing a style both change when the style is edited;
+  - a style with triangles off and contours on draws only contours; with both off and border on,
+    only the border;
+  - a major interval that is not a whole multiple of the minor interval is rejected with a specific
+    message rather than producing mis-labelled contours;
+  - styles round-trip `.gs`; a legacy `.gs` loads unchanged; a surface whose style was deleted falls
+    back to a default style rather than failing to draw.
+- Owner-layer: Domain (table), Renderer (draw), UI (editor), IO (`.gs`)
+- Status: accepted (2026-08-12)
+- Revisions: 2026-08-12 — initial.
+
+### REQ-071 — Contour extraction
+- Purpose: get contours out as real geometry when they must be edited, labelled or handed over
+- Priority: should
+- Type: functional
+- Statement: A command bakes a surface's **currently displayed** contours into ordinary polyline
+  entities on a chosen layer. The result is normal drawing geometry — editable, snappable, exportable
+  — and is **deliberately not linked to the surface**: a later rebuild does not change it, and it is
+  not removed when the surface is erased. The command reports how many polylines it created at which
+  interval (REQ-201).
+- Acceptance:
+  - extraction produces polylines at exactly the displayed contour elevations, each vertex within
+    REQ-101 of the linear interpolation along the triangle edge it came from;
+  - extracting twice produces two independent sets, neither affecting the other;
+  - rebuilding the surface afterwards leaves already-extracted polylines untouched;
+  - the created count and interval are reported;
+  - extracting from a surface whose style has contours disabled creates nothing and says so, rather
+    than silently extracting a hidden interval.
+- Owner-layer: Commands, Domain
+- Status: accepted (2026-08-12)
+- Revisions: 2026-08-12 — initial.
+
+### REQ-072 — Elevation banding, slope banding, and slope arrows
+- Purpose: read grade and drainage off the surface directly — the reason the surface exists
+- Priority: must
+- Type: functional
+- Statement: A surface style carries an editable **range table** — band count, breakpoints, and a
+  colour per band — driving per-triangle colouring by **elevation** or by **slope**, with an on-screen
+  **legend** whose ranges are the table's. Separately, **slope arrows** draw per triangle in the
+  downhill direction of that triangle's plane, coloured by grade. Banding, arrows and the plain style
+  display are independent toggles.
+- Acceptance:
+  - a triangle of known elevation and of known slope each take the colour their band prescribes,
+    including at an exact breakpoint, where the band a value falls into is defined and tested rather
+    than left to float comparison;
+  - the legend's displayed ranges equal the table's, and change with it;
+  - on a planar tilted surface every arrow points the same direction, and that direction matches the
+    hand-computed downhill vector within REQ-101;
+  - a perfectly flat triangle produces no arrow direction and is drawn as flat rather than as an
+    arbitrary direction;
+  - turning banding off restores the style's plain display unchanged.
+- Owner-layer: Domain (band assignment), Renderer (draw), UI (table + legend)
+- Status: accepted (2026-08-12)
+- Revisions: 2026-08-12 — initial.
+
+### REQ-073 — Surface-to-surface volumes
+- Purpose: earthwork — the number a grading design is judged by
+- Priority: must
+- Type: functional
+- Statement: Given two surfaces, GoSurvey reports **cut**, **fill** and **net** volume over the area
+  the two have **in common**, together with that common area, and offers a cut/fill colour map over
+  the same region. The comparison region is stated explicitly in the result, because a volume quoted
+  without the area it covers is not a result.
+- Acceptance:
+  - two planar surfaces offset by a known constant over a known common area report cut, fill and net
+    within a stated tolerance of the hand-computed value;
+  - two surfaces that do not overlap report zero volume and say so, rather than reporting a number
+    derived from no common area;
+  - partial overlap reports volumes over the overlap only, and states the common area used;
+  - the cut/fill map colours cut and fill distinctly and shows nothing outside the common area;
+  - comparing a surface with itself reports zero net within tolerance.
+- Owner-layer: Domain (compute), UI (report + map)
+- Status: accepted (2026-08-12)
+- Revisions: 2026-08-12 — initial.
+
+### REQ-074 — Spot elevation and grade readout
+- Purpose: the constant, small question while grading — how high is it here, and what is the grade
+- Priority: should
+- Type: functional
+- Statement: Picking a location on a surface reports the **interpolated elevation** at that point.
+  Picking two reports **grade**, **slope percentage**, and the horizontal and vertical distance
+  between them. A pick outside the surface reports that it is outside; it never extrapolates.
+- Acceptance:
+  - elevation at a point inside a triangle of known plane equals the planar interpolation within
+    REQ-101;
+  - a pick outside the surface, or inside a hide-boundary void, reports "outside surface" and no
+    elevation;
+  - grade between two points on a known plane matches the hand-computed value within REQ-101;
+  - two picks at the same location report zero distance rather than dividing by zero.
+- Owner-layer: Commands, UI
+- Status: accepted (2026-08-12)
+- Revisions: 2026-08-12 — initial.
+
+### REQ-075 — Surface Manager
+- Purpose: one place to see and edit every surface in the drawing
+- Priority: should
+- Type: functional
+- Statement: A panel lists the drawing's surfaces and supports create, rename, delete, **edit the
+  definition** (add, remove and reorder point groups, breaklines and boundaries — REQ-069), assign a
+  style (REQ-070), and force a rebuild. For each surface it shows point count, triangle count,
+  elevation range, and whether the surface is currently out of date or rebuilding.
+- Acceptance:
+  - every REQ-069 definition operation is reachable from the panel;
+  - a rebuild is reflected in the displayed counts and elevation range;
+  - a surface that is out of date or rebuilding is shown as such, and the state clears when the
+    rebuild lands;
+  - deleting a surface from the panel is undoable in one step;
+  - renaming to a name already in use is refused with a specific message.
+- Owner-layer: UI, Commands
+- Status: accepted (2026-08-12)
+- Revisions: 2026-08-12 — initial.
+
+### REQ-076 — Stable entity identity
+- Purpose: let one object reference another and survive an erase
+- Priority: must
+- Type: functional
+- Statement: Every drawing entity carries a **stable identity** — a per-drawing monotonically
+  increasing id, assigned at creation, **persisted in `.gs`, and never reused** within a drawing, so
+  a reference to a deleted entity resolves to nothing rather than to whatever later took its array
+  slot. Cross-object references (a surface's breaklines and boundaries, a survey point's label) are
+  stored **by id, never by array index**. Entities loaded from a drawing written before this
+  requirement are assigned ids on load, in a deterministic order, so a legacy file is not a special
+  case anywhere above IO. Resolving an id to an entity is by an index built on demand — no
+  per-entity map is stored, and no reference-fixup pass runs at erase.
+- Acceptance:
+  - an entity's id is unchanged by erasing a different entity, by undo/redo, by copy/paste, and by a
+    `.gs` save/load round trip;
+  - a reference to an erased entity resolves to **nothing**, and specifically not to the entity that
+    moved into its former index;
+  - a pasted copy of an entity receives a **new** id, distinct from its source's;
+  - a legacy `.gs` loads with ids assigned deterministically — loading the same file twice yields the
+    same ids;
+  - ids are not reused after an erase within a session, and are still not reused after a save/load;
+  - `SurveyPoint`'s annotation-label reference is migrated to an id, and the index-fixup loop in
+    `EraseCadAnnotationAtIndex` is deleted rather than duplicated.
+- Owner-layer: Domain (id allocation + resolution), IO (`.gs`)
+- Status: accepted (2026-08-12)
+- Revisions: 2026-08-12 — initial. Raised as a blocking Verification finding against REQ-069: the
+  codebase addresses entities by array index and compacts on erase, so a stored reference silently
+  re-points to a different entity. See ADR-027 and the decision log.
+
 ---
 
 ## Performance requirements
@@ -1580,8 +1871,17 @@ requirements is a planning failure, not a sign of rigor.
   reference machine. 250k segments is the density of a real topo with contours;
   continuous orbit is the worst case, because orbiting defeats any plan-view
   culling.
+
+  The budget has **three cost profiles**, not one, and the bench carries a case for each:
+  (a) **line segments** — 250,000, the original case; (b) **shaded meshes** — the REQ-063 density
+  chosen for the bench (ADR-026); and (c) **a surface** — **100,000 points / ~200,000 triangles,
+  contoured and orbited**, which is a large but ordinary topo survey. A surface is its own profile
+  because contours are regenerated display geometry (REQ-070) rather than stored vertices, so its
+  per-frame cost does not follow from either of the other two. **Triangulation time is not part of
+  this budget** — a rebuild runs off the UI thread (REQ-069) and is measured separately.
 - Acceptance: a committed benchmark scene profiled on the reference machine stays
-  within budget at the 95th-percentile frame during a scripted orbit.
+  within budget at the 95th-percentile frame during a scripted orbit, **in each of the three
+  profiles above**.
 - Owner-layer: Renderer
 - Status: accepted — **MET 2026-08-12**, p95 **8.93 ms** against the 16 ms budget at 250,000
   segments, on the reference machine now recorded in `project.md` §7. Run it with the `BENCH`
@@ -1593,6 +1893,10 @@ requirements is a planning failure, not a sign of rigor.
   time and R5 could not otherwise have a testable acceptance condition.
   2026-08-12 — reference machine named (it was undefined, which made the budget unreproducible);
   first measurement recorded.
+  2026-08-12 — split into three cost profiles (segments / shaded meshes / contoured surface). ADR-026
+  had already noted the budget "gains a second dimension" for meshes without writing it down; the
+  surface case (REQ-068…072) is a third, and a single-number budget cannot be claimed by a feature
+  whose cost profile it never measured.
 
 ### REQ-101 — Numerical tolerance
 - Purpose: domain correctness (CAD/survey)
@@ -1722,6 +2026,17 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-055 | UI/IO | manual (File > New and File > Open land on the new tab with 2+ tabs open; "+" likewise; closing a tab focuses its replacement; pan/zoom survives save → close → reopen, including on a state-plane drawing that rebases on load; a pre-REQ-055 `.gs` opens framed to its drawing) | accepted |
 | REQ-054 | Commands/UI/IO | manual (right-click with a selection opens the shortcut menu on an existing profile and a fresh one; Select similar on a `PARCEL` line picks up only `PARCEL` lines of that colour; a TEXT does not sweep in dimensions; the log states count + layer + colour) | accepted |
 | REQ-053 | Commands/IO/Viewport | `DxfEntityEmitTests` (LWPOLYLINE group 90 = true vertex count and precedes 70, both before the first vertex; closed flag 1/0; every vertex emitted in order as a 10/20 pair; AcDbPolyline marker exactly once; vertex-less record emits nothing rather than a 90-of-zero; 440 omitted when opaque and placed inside AcDbEntity) + manual (RECT by two picks is one selectable object; `@dx,dy` gives an exact width x height; degenerate corners refused; corners/midpoints/geometric centre snap; export log counts LWPOLYLINEs; the DXF reopens with the rectangle; DWG save carries it) | accepted |
+| REQ-066 | Domain/IO | planned — raw desc survives a description edit; legacy `.gs` + legacy XDATA load empty and fall back to `description`; empty value round-trips | accepted |
+| REQ-067 | Domain/IO/UI | planned — `PointGroupTests` (id-range endpoints + gaps; description vs raw-description wildcard independence; explicit-id group unaffected by new points; deleted point leaves no dangling id; empty match reported not silent) + `.gs` round-trip; legacy `.gs` unchanged | accepted |
+| REQ-068 | Domain/IO/Renderer | planned — `.gs` round-trip bit-identical; legacy `.gs` loads; extents include surfaces; erase undoable in one step; layer freeze/off/non-plottable honoured; **unrelated edit does not copy the TIN** (asserted on the shared pointer); DXF/DWG export names the exclusion | accepted |
+| REQ-069 | Domain/util/Commands | planned — `TinBuildTests` (breakline appears as an edge and nothing crosses it, vs hand-computed edges; outer clip / hide void / show restore; <3 non-collinear points fails with no partial surface; crossing breaklines at different Z diagnosed) + manual (point move rebuilds with no user action; one MOVE of N points = one rebuild; undo during an in-flight rebuild discards it; deleting a breakline entity removes the definition item) | accepted |
+| REQ-070 | Domain/Renderer/UI/IO | planned — interval change does not re-triangulate and adds no entity to drawing or `.gs`; shared style edits both surfaces; major-not-a-multiple-of-minor refused; deleted style falls back to default; `.gs` round-trip | accepted |
+| REQ-071 | Commands/Domain | planned — extracted vertices within REQ-101 of edge interpolation; two extractions independent; rebuild leaves extracted polylines untouched; count + interval reported; contours-disabled extraction creates nothing and says so | accepted |
+| REQ-072 | Domain/Renderer/UI | planned — `SurfaceAnalysisTests` (band assignment incl. exact breakpoints; downhill vector on a tilted plane vs hand-computed; flat triangle yields no direction) + manual (legend matches table; banding off restores plain display) | accepted |
+| REQ-073 | Domain/UI | planned — `SurfaceVolumeTests` (two planes offset by a known constant over a known area vs hand-computed; no overlap = zero + stated; partial overlap uses overlap only and reports the common area; self-comparison = zero) | accepted |
+| REQ-074 | Commands/UI | planned — elevation vs planar interpolation within REQ-101; pick outside surface / inside a void reports outside and no elevation; grade on a known plane hand-verified; coincident picks report zero distance not a divide-by-zero | accepted |
+| REQ-075 | UI/Commands | planned — manual (every REQ-069 definition op reachable; counts + elevation range update on rebuild; stale/rebuilding shown and cleared; delete undoable in one step; duplicate rename refused) | accepted |
+| REQ-076 | Domain/IO | planned — `EntityIdTests` (id survives erase of another entity, undo/redo, copy/paste, `.gs` round-trip; reference to an erased entity resolves to nothing, not to its index successor; paste yields a new id; legacy load is deterministic across two loads; no reuse within a session or across save/load) + the `EraseCadAnnotationAtIndex` fixup loop deleted, not duplicated | accepted |
 | REQ-051 | UI/IO | `MtextToolbarTests` (panel-anchor clamp in-bounds/off-screen/oversized; font+colour run-tag composition incl. empty family = no tag; ruler tick spacing + zero-width = no ticks; attach label 1–9 + out-of-range fallback) + manual (panel titled "Text Formatting" with two rows + ruler; drag persists across edits and restart; font/colour apply to the selection only; height/oblique/entity colour whole-object; style dropdown re-bakes per REQ-044; B/I/U/caps/symbol unchanged; justification re-lays out; disabled controls inert with naming tooltips; ruler + expand toggles; paper MTEXT same panel; single-line TEXT still bare box; OK/Esc + `.gs`/DXF round-trip unchanged) | accepted |
 
 ---

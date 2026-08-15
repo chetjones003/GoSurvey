@@ -96,6 +96,46 @@ A lightweight board that complements the milestones. Keep each column honest.
 - **Deliberately out of scope:** snapping to meshes (ADR-026 (g)), textures, editing imported
   geometry, and decoding vendor custom objects (impossible — see ADR-026 Context).
 
+### M-Surfaces — TIN surfaces for grading and drainage (incremental)
+- **Goal:** turn survey shots into a terrain model you can contour, read grade off, and compute
+  earthwork against.
+- **Delivers:** REQ-066 (raw description), REQ-067 (point groups), REQ-068 (surface entity),
+  REQ-069 (definition + dynamic rebuild), REQ-070 (styles), REQ-071 (contour extraction),
+  REQ-072 (banding + slope arrows), REQ-073 (volumes), REQ-074 (spot/grade readout),
+  REQ-075 (Surface Manager), REQ-076 (stable entity identity) — ADR-027, ADR-028.
+- **Sequence is forced by dependency**, and each step is independently shippable:
+  1. **REQ-076 stable entity identity** (ADR-027). A prerequisite, not a surface feature: without it
+     a surface cannot safely reference a breakline. Ships alone and pays off immediately by deleting
+     the `labelMtextAnnIndex` fix-up sprawl.
+  2. **REQ-066 + REQ-067 — raw description and point groups.** No surface yet. Independently useful
+     (a named, rule-based set of points), independently testable, and it needs nothing from step 1.
+     Can run in parallel with it.
+  3. **REQ-068 — the surface entity**, triangulated from point groups only. First visible surface.
+     The REQ-100 surface bench case lands here.
+  4. **REQ-074 — spot elevation and grade readout.** Small, and it is what you reach for constantly
+     once a surface exists.
+  5. **REQ-069 — breaklines, boundaries, dynamic rebuild.** Needs step 1. The hardest step:
+     constrained triangulation plus the background-rebuild worker.
+  6. **REQ-070 + REQ-071 — styles and contours**, then extraction. Re-run the REQ-100 surface case.
+  7. **REQ-072 — elevation/slope banding and slope arrows.** Re-run REQ-100.
+  8. **REQ-073 — cut/fill volumes.** Last, because it needs two trustworthy surfaces.
+  9. **REQ-075 — Surface Manager.** Grows across steps 3–8; consolidated and finished here.
+- **Done when:** a real topo's points build a contoured surface with breaklines honoured, slope
+  arrows show where water goes, cut/fill against a proposed surface reports a hand-verifiable
+  volume, and REQ-100 holds in the surface profile.
+- **Status:** **steps 1–2 done.**
+  - Step 1 — REQ-076 / ADR-027 (TASK-044), **2026-08-12**: every entity carries a stable,
+    never-reused id, cross-object references are by id, and the `labelMtextAnnIndex` fix-up sprawl
+    is deleted. Legacy `.gs` label migration verified against a real legacy file.
+  - Step 2 — REQ-066 + REQ-067 (TASK-045), **2026-08-15**: points carry a raw description, and
+    named point groups resolve by rule (id ranges / description / raw description / picks, combined
+    as a union) with a live member count in the manager.
+  - Step 3 — REQ-068, the surface entity itself, is next. It is the first step that puts a surface
+    on screen, and it carries the REQ-100 surface bench case.
+- **Deliberately out of scope:** grading design objects and feature lines, contour smoothing
+  (linear contours only), proximity / wall / non-destructive breaklines, surface import from
+  Civil 3D, and DEM / point-cloud sources. See ADR-028.
+
 ### Next (accepted, sequenced, not started)
 - `<REQ-101 — coordinate tolerance regression>`
 - `<REQ-100 — frame-budget benchmark>`

@@ -153,8 +153,29 @@ never a convenience.
 > State it even if the answer is "single-threaded." Ambiguity here causes the
 > worst bugs.
 
-- **Threading:** `<single-threaded UI + one worker pool for IO/compute>`
-- **Ownership across threads:** `<data is moved to a worker, results moved back; no shared mutable state without a documented lock>`
+- **Threading: a single-threaded UI, plus detached one-shot worker threads for long compute.** There
+  is no thread pool, no job system, and no scheduler — introducing one is an architectural decision,
+  not a Workshop choice. GoSurvey's entire drawing state (`AppCommandState`) is owned by the UI
+  thread and is **never** read or written from a worker.
+- **The one-shot worker pattern** (written down 2026-08-12; it was already in use, undocumented, in
+  `PdfAttach` and `AppCommandState::AsyncBuild`). Every background task follows it, and a task that
+  needs something else is escalated rather than improvised:
+  1. **Inputs are copied, not referenced.** The worker receives its own copy of everything it needs.
+     It holds no pointer into `AppCommandState`.
+  2. **The task's state is heap-allocated** (`unique_ptr` to a struct holding the `std::thread`, an
+     `std::atomic<bool> done`, and the result), so its atomics don't make the owning state
+     non-copyable.
+  3. **The worker's last act is a release store to `done`.** The UI thread polls `done` each frame
+     and consumes the result; that acquire/release pair is the only synchronisation, and there is no
+     mutex to get wrong.
+  4. **Results are validated against a generation counter before being applied.** The state may have
+     moved on — an undo, a further edit — while the worker ran. A stale result is **discarded**, not
+     applied to a state it was not computed from.
+  5. **Cancellation is cooperative**, via an `std::atomic<bool>` the worker polls.
+- **Ownership across threads:** data is copied into the worker, the result is moved back on the UI
+  thread. There is no shared mutable state and therefore no lock to document. A `shared_ptr<const T>`
+  crossing a thread boundary is permitted (§11.5 — the payload is immutable); a `shared_ptr<T>` is
+  not.
 - **Rust note:** lean on `Send`/`Sync` to make this a compile-time guarantee.
 - **Go note:** "share memory by communicating" — pass ownership over channels;
   don't share structs across goroutines without a mutex you can point to.
@@ -190,6 +211,9 @@ src/
   util/         pure, dependency-free math and formatting — unit-testable without GL or a window
                 geom2d, NumFormat, AngleFormat, StringUtil
                 ray3d — screen→world ray, ray×plane, ray↔entity distance (ADR-025)
+                tinbuild — constrained Delaunay triangulation, double predicates (ADR-028)
+                tincontour — contour extraction and band assignment from a TIN (ADR-028)
+                tinanalysis — slope, downhill direction, surface-to-surface volumes (ADR-028)
   platform/     window, files, GL context
 third_party/    vendored dependencies (each recorded in the decision log; REQ-300)
 build/          all build artifacts (never in source tree)
@@ -229,6 +253,16 @@ A change is rejected if it breaks any of these:
    allocations (§5) and introduces a desync failure mode that interleaving cannot
    have. Widening a stride is done **with a rename**, so every affected site is a
    compile error rather than a silent misread (ADR-025 (a)).
+9. **A reference from one object to another is a stable id — never an array index.**
+   Entities are stored in flat arrays that **compact on erase**, so an index is not a name: after a
+   delete it silently designates a different entity. Storing an index across an object boundary, or
+   adding a fix-up pass that walks references decrementing them at an erase site, is a blocking
+   finding. Use the REQ-076 id and resolve it through an index built on demand.
+   *Raised by the REQ-069 verification:* the codebase's one pre-existing cross-reference
+   (`SurveyPoint::labelMtextAnnIndex` ↔ `CadAnnotation::surveyPointLabelFor`) is an index pair, and
+   keeping it correct already costs a decrement loop in `EraseCadAnnotationAtIndex` plus ~46
+   maintenance sites across 7 files. It works because it is one reference maintained at one erase
+   site. It does not generalise, and surfaces would have needed several more.
 
 ## 12. Architecture decision records (ADRs)
 
@@ -849,3 +883,122 @@ A change is rejected if it breaks any of these:
   keeps its structure. **glTF remains the preferred route** and the one to use when a producer
   exists. Recovering colour by grouping exploded solids per colour is the obvious next step and is
   deliberately not attempted here.
+
+### ADR-027 — Stable entity identity   (2026-08-12, accepted)
+- Context:  Raised as a **blocking Verification finding against REQ-069**, before any code was
+  written. A dynamic surface must reference the polylines used as its breaklines and boundaries.
+  GoSurvey has no way to do that safely: `EntityAttributes` carries layer, colour, linetype,
+  lineweight and transparency — **no identity** — and entities are addressed by their index into flat
+  parallel arrays that **compact on erase** (`ErasePolylineByIndex`, `EraseCadAnnotationAtIndex`).
+  A stored index therefore does not survive the deletion of any earlier entity; it silently comes to
+  mean a *different* entity. The failure is invisible — the surface rebuilds, against the wrong
+  breakline.
+  The codebase already demonstrates both the pattern and its ceiling. `SurveyPoint::labelMtextAnnIndex`
+  points at an annotation by index, and correctness is bought with a decrement loop inside the erase
+  function plus roughly **46 maintenance sites across 7 files** for that one reference. It is
+  survivable at one reference maintained at one erase site; REQ-069 would have added several more,
+  each needing fix-up at every erase path of every entity type, plus undo restore, DXF-import
+  replacement, and paste. A missed site does not crash.
+- Decision:
+  (a) **Every entity carries a per-drawing `uint64` id**, assigned from a monotonic counter at
+  creation, persisted in `.gs`, and **never reused within a drawing** — so a reference to a deleted
+  entity resolves to *nothing*, which is the whole point. The counter is per drawing, not global, so
+  ids are stable across sessions and independent of tab order.
+  (b) **Cross-object references are stored by id.** Storing an index across an object boundary
+  becomes architecture invariant §11.9, a blocking finding.
+  (c) **Resolution is by an index built on demand**, not a stored per-entity map. The dominant access
+  is "resolve a definition's handful of ids at rebuild", not "look up an id every frame", so a map
+  kept permanently in sync would be cost and desync risk paid for nothing (§5).
+  (d) **Legacy drawings are assigned ids at load**, deterministically by entity order, so nothing
+  above the IO layer has a legacy case to handle.
+  (e) **`labelMtextAnnIndex` migrates to an id and the decrement loop is deleted.** The existing
+  index reference is not left beside the new mechanism — two conventions in one codebase is exactly
+  what ADR-025's stride correction was reversed to avoid.
+- Alternatives: **(1) surfaces snapshot breakline geometry at add time** — no identity needed, but
+  breaklines become static while point groups stay dynamic, a split model the user would feel on
+  every grade-break adjustment; offered and declined. **(2) Defer breaklines entirely** — smallest
+  scope, but a surface without breaklines cannot represent a curb, swale or ridge, which is most of
+  grading; offered and declined. **(3) Tombstones — mark erased entries dead instead of compacting**
+  — keeps indices valid without adding a field, but leaks memory over a session, complicates every
+  iteration site in the renderer, and makes `.gs` files grow with deletions. **(4) Generational
+  handles (index + generation)** — the standard game-engine answer, and a good one, but it only pays
+  off with slot reuse, which (3) already rejected; a plain monotonic id is simpler and enough.
+- Consequences: this touches entity creation for every type, `.gs` (an additive per-entity field),
+  copy/paste (a pasted entity gets a **new** id — it is a different object), DXF/DWG import, and undo
+  snapshot restore. It is a **prerequisite for REQ-069** and is sequenced ahead of it. It also pays a
+  debt: the `labelMtextAnnIndex` sprawl gets deleted rather than extended, and every future
+  cross-reference — dimensions to their measured entities, labels to their objects, future feature
+  lines — becomes free rather than being another 46-site obligation. Ids are **not** exposed in the
+  UI and are **not** a user-facing handle in this ADR; if a `SELECT id` or scripting surface is
+  wanted later, that is its own requirement.
+
+### ADR-028 — TIN surfaces: a definition-driven model, in-tree constrained Delaunay, and style-generated display geometry   (2026-08-12, accepted)
+- Context:  REQ-066…075 add terrain modelling for grading and drainage. Three properties of the
+  existing codebase decide most of the design before preference enters: the undo snapshot deep-copies
+  every geometry array across 50 frames (so a large payload must be shared, not copied — §11.5);
+  coordinates are interleaved XYZ floats in local storage space (§11.8, plus the local-storage
+  invariant); and REQ-064 already put a triangle shader and the depth buffer in place, so shading a
+  surface needs no new rendering mechanism.
+- Decision:
+  (a) **A surface is a definition plus a derived triangulation, and the two have different
+  lifetimes.** The definition (ordered point groups, breaklines, boundaries — REQ-069) is small,
+  editable, and lives as a plain member. The triangulation is large, **immutable, and replaced
+  wholesale on rebuild**, so it is held as `shared_ptr<const CadTin>` exactly as `CadMesh` is
+  (§11.5). At the REQ-100 surface profile — 100k points, ~200k triangles — a by-value TIN would cost
+  roughly 7 MB per undo frame, ~350 MB of undo stack, re-paid by every unrelated edit. This is the
+  same trap TASK-041 found for meshes, seen coming this time rather than after the fact.
+  (b) **Contours, bands, arrows and the border are display geometry generated from the style, never
+  entities** (REQ-070). They are not stored in `.gs`, are not selectable, and do not appear in entity
+  counts. This is what makes "change the interval" instant and keeps a 1-ft interval on a large topo
+  from putting hundreds of thousands of polylines into the file and into every undo snapshot.
+  REQ-071's EXTRACT is the deliberate, explicit escape hatch when real polylines are wanted, and what
+  it produces is **unlinked** — a bake, not a live view.
+  (c) **Constrained Delaunay is written in-tree, in `util/`, as a pure GL-free module** beside
+  `curveintersect`, `gltfimport` and `benchscene` — so it is unit tested without a GL context, the
+  standing lesson of TASK-035 §11. The REQ-300 three questions answer yes / yes / yes: it is a
+  well-published algorithm, the realistic libraries are either licence-incompatible (Triangle is
+  non-commercial) or enormous (CGAL), and it is the one part of this feature we most need to be able
+  to debug ourselves. **Revisit trigger, recorded so it is not re-litigated from scratch:** if the
+  module exceeds ~1,200 lines, or fails robustness on real survey data, reconsider a small
+  header-only CDT library.
+  (d) **Geometric predicates are computed in `double`; storage stays `float`.** Orientation and
+  in-circle tests are the classic float-instability case: a sign flip yields a visibly wrong triangle
+  or a non-terminating edge-flip loop, and REQ-101's ±0.01 ft leaves no margin for it. Coordinates
+  are widened at the predicate, not in the store — §11.8 is unchanged.
+  (e) **Rebuild is a §8 one-shot worker, coalesced per command.** The definition is marked dirty by an
+  edit and **at most one** rebuild is issued per command / undo boundary, so a MOVE of 500 points
+  rebuilds once. The worker gets a **copy** of its inputs and holds no pointer into
+  `AppCommandState`; its result carries the definition generation it was computed from and is
+  **discarded** if that generation is stale on completion. This is the existing `AsyncBuild` pattern
+  (`AppCommandState::pdfAttachAsync`) as its second concrete use — which is what makes writing it
+  into §8 legitimate rather than speculative (§11.4).
+  (f) **Surfaces are not written to DXF or DWG, and the exclusion is logged** (REQ-068) — the ADR-026
+  (c) precedent for meshes, for the same reason and with the same REQ-201 obligation. Extracted
+  contours are ordinary polylines and export normally.
+  (g) **Point groups are rules, not lists, and are not entities** (REQ-067). No geometry, no layer, no
+  selection, not drawn. They resolve against the current point set on demand, which is what makes a
+  surface pick up points imported after it was defined. `SurveyPoint` already carries a stable `id`,
+  so groups needed no part of ADR-027.
+  (h) **No new abstraction.** A surface is a concrete type, triangulation is a free function over
+  arrays, the style table is the ADR-020 document-owned-table pattern, and shading reuses the REQ-064
+  triangle shader. There is no surface interface, no analysis-plugin seam, and no scene graph — the
+  ADR-025 (c) / ADR-026 (f) anti-requirement stands.
+- Alternatives: **(1) contours as real entities** — editable and exportable immediately, but they go
+  stale against the surface the moment it rebuilds, and the entity count is punitive; declined by the
+  user in favour of (b) + EXTRACT. **(2) A static surface — snapshot the inputs, rebuild on command**
+  — much simpler (no identity requirement, no worker, no coalescing) but the definition is not
+  editable afterwards and every change is a manual rebuild; offered and declined. **(3) Rebuild
+  synchronously on the UI thread** — keeps the codebase single-threaded, at the price of freezing the
+  UI on every edit to a large surface; offered and declined. **(4) Grid/DEM surfaces instead of a
+  TIN** — cheaper to contour and analyse, but a grid cannot represent a breakline, which is the
+  feature's whole point. **(5) Grading objects and feature lines in the same release** — the Civil 3D
+  workflow; explicitly out of scope, and a separate milestone once surfaces are trustworthy.
+- Consequences: new pure modules under `util/` (triangulation, contouring, surface analysis); new
+  domain stores for surfaces, point groups and surface styles, each growing a case in selection,
+  extents, layer state, the undo snapshot and `.gs`; a second use of the REQ-064 triangle shader; and
+  a **third REQ-100 cost profile** with its own bench case, since contour regeneration is a per-frame
+  cost that neither the segment nor the mesh profile measures. **Sequencing is forced**: REQ-076 /
+  ADR-027 precedes REQ-069, and REQ-068 precedes everything that analyses a surface. Deliberately
+  left open and not designed for: contour smoothing (linear contours only), proximity / wall /
+  non-destructive breaklines, surface import from Civil 3D, DEM and point-cloud sources, and grading
+  design objects.
