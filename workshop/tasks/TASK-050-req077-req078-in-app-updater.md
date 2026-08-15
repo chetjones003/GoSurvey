@@ -155,7 +155,9 @@ ASSUMPTION-2: `SEE_MASK_NOASYNC` + immediate exit gives the installer enough tim
 | nothing downloads without a click | ✅ by construction — no code path calls `BeginDownload` except the button |
 | corrupted download fails hash, is deleted, is reported | ⚠️ written; not exercised |
 | dirty drawing routes through the unsaved-changes modal | ⚠️ written (reuses the existing path); not exercised |
-| after install, one `GoSurvey.exe`, shortcuts resolve | ❌ **unverified** — needs a real upgrade (ASSUMPTION-1) |
+| after install, one `GoSurvey.exe`, shortcuts resolve | ✅ **verified 2026-08-15** — real 0.4.0 → 0.5.0-beta.7 upgrade; old binary swept, shortcut + `.gs` association resolve (TASK-048 ASSUMPTION-2) |
+| manifest published and reachable at the channel URL | ✅ verified — `releases/download/channel-beta/latest.json` serves the beta manifest; the stable URL 404s, correctly, until a non-prerelease exists |
+| downloaded installer matches the manifest SHA-256 | ✅ verified against the published artifact by hand (byte-exact) |
 
 ## 10. Verification result
 - Submitted:  2026-08-15

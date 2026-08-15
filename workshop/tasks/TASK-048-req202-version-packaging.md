@@ -68,6 +68,17 @@ ASSUMPTION-1: The install location stays {autopf} (Program Files), so applying a
 - Validate by:   confirmed with the user before TASK-050 ships the update flow that triggers it.
 ```
 ```
+ASSUMPTION-2 — **VALIDATED 2026-08-15.** Upgraded a real installed 0.4.0 with the published
+              `GoSurvey-0.5.0-beta.7-Installer.exe` (`/VERYSILENT`, exit code 0). Result in
+              `C:\Program Files\GoSurvey`: `GoSurvey-0.4.0.exe` **gone**, one `GoSurvey.exe`
+              present reporting FileVersion `0.5.0-beta.7`, upgraded in place rather than
+              installed alongside (AppId unchanged, `unins000.dat` rewritten). The Start Menu
+              shortcut resolves to the new path, and the `.gs` association reads
+              `"C:\Program Files\GoSurvey\GoSurvey.exe" "%1"` — version-free, so it will survive
+              every future upgrade. This closes the REQ-078 acceptance condition about the
+              install directory, which had been the largest untested claim in the packaging work.
+              Original text follows.
+
 ASSUMPTION-2: Inno Setup's [InstallDelete] runs early enough to remove GoSurvey-0.4.0.exe from an
               existing install before [Files] lays down GoSurvey.exe, leaving exactly one binary.
 - Because:       the ordering is documented behaviour, but the case that matters (upgrading in place
