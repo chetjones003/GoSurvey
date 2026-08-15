@@ -901,6 +901,16 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     goto finish_render;
   }
 
+  // Model-space geometry, in its own block scope so that `finish_render` sits OUTSIDE the scope
+  // of everything declared below.
+  //
+  // This brace is load-bearing, not cosmetic. Jumping over a declaration *into its scope* is
+  // ill-formed C++ ([stmt.dcl]/3) — MSVC rejects it with ~50 × C2362 here, and clang merely
+  // accepts what it should not, which is why this stood for so long: the project is built with
+  // clang, so no one ever saw it. Jumping to a label outside the scope, as this now does, is
+  // legal for both. The epilogue reads only `useMsaa`, `fbo_`, `msFbo_`, `fbW_`, `fbH_`, all
+  // declared above the jump, so nothing it needs lives inside this block.
+  {
   const float aspect = static_cast<float>(fbW_) / static_cast<float>(std::max(fbH_, 1));
   // Zoom clamp here matches the wheel/MMB pan clamps in DrawDrawingViewport: wide enough for million-unit drawings
   // without quantizing halfHd at extreme zooms.
@@ -1813,6 +1823,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   glUniform4f(locCol, 0.25f, 0.55f, 1.f, 1.f);
   glDrawArrays(GL_LINES, 4, 2);
   glLineWidth(kLwMain);
+  }  // end model-space geometry scope (see the note at its opening brace)
 
 finish_render:
   glBindVertexArray(0);

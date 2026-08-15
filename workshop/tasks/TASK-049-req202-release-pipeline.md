@@ -167,14 +167,18 @@ ASSUMPTION-3: `github.run_number` is monotonically increasing per workflow, maki
   implemented; none has been observed, because observing them requires a push.
 - Tests added:            none — see §7
 - Docs updated:           this log
-- Technical debt:         (0) **The codebase does not compile with MSVC** (~50 × C2362 in
-                          `ViewportRenderer.cpp`, from a `goto` over initializations — ill-formed
-                          C++ that clang accepts). CI pins clang to match the developer build, so
-                          this is contained, not fixed. It means the project is effectively
-                          clang-only today while `CMakeLists.txt` still carries `if(MSVC)`
-                          branches implying otherwise. Removal condition: either restructure the
-                          `goto` and keep both compilers green, or record clang-only as a
-                          decision and drop the dead MSVC branches.
+- Technical debt:         (0) ~~The codebase does not compile with MSVC.~~ **CLEARED 2026-08-15.**
+                          The skipped region now has its own block scope, so `finish_render` sits
+                          outside the scope of everything the jump passes over — legal under
+                          [stmt.dcl]/3 for both compilers. Verified both ways: **MSVC 309/309**
+                          (separate `cl.exe` build tree) and **clang 309/309**. The change is 11
+                          added lines and **no modified ones**, so no render behaviour could have
+                          moved. CI still pins clang deliberately — it must reproduce the binary
+                          that actually ships — but the project is no longer clang-*only*, and the
+                          `if(MSVC)` branches in `CMakeLists.txt` are live again rather than dead.
+                          **Residual risk:** nothing in CI compiles with MSVC, so this can rot
+                          again exactly as it did before. A second matrix leg would prevent that,
+                          at the cost of doubling CI time — offered, not assumed.
                           (1) `ilammy/msvc-dev-cmd@v1` is a third-party action on a moving tag;
                           SHA-pin it if the supply-chain surface matters.
                           (2) The signing step is a deliberate no-op (ADR-029 D5).

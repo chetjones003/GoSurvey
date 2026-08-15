@@ -2,6 +2,21 @@
 
 ## BUGS
 
+### [BUG-011] ViewportRenderer did not compile with MSVC — FIXED 2026-08-15
+    - Symptom: ~50 x C2362 in ViewportRenderer.cpp, "initialization of 'x' is skipped by
+      'goto finish_render'". Never seen locally because CMakePresets' ninja-release pins no
+      compiler, so CMake picks clang off PATH; surfaced on the first CI build, where
+      msvc-dev-cmd puts cl.exe first.
+    - Root cause: `goto finish_render` (paper-space early-exit) jumped over ~50 initialized
+      declarations INTO their scope, which is ill-formed C++ ([stmt.dcl]/3). MSVC was correct
+      to reject it; clang was the lenient one.
+    - Fix: give the skipped model-space region its own block scope, so the label sits outside
+      the scope of everything jumped over. 11 added lines, 0 modified — the goto and all 900
+      lines of render code are untouched, so no behaviour could change.
+    - Verified: MSVC 309/309 (separate cl.exe build tree) and clang 309/309.
+    - Residual: CI builds only with clang, so this can regress unnoticed. A second matrix leg
+      would catch it.
+
 ### [BUG-010] Four tests reported ***Failed while their bodies never ran — FIXED 2026-08-15
     - Symptom: `ctest` reported 4 failures (paper-circle stride, mesh state-plane origin, id sweep
       idempotence, erased-id resolution) that PASSED when run individually by name.
