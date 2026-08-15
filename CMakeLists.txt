@@ -203,6 +203,7 @@ add_executable(GoSurvey
   src/util/gltfimport.cpp
   src/util/stlimport.cpp
   src/io/DwgMeshConvert.cpp
+  src/io/GsMigrate.cpp
   src/util/tinbuild.cpp
   src/util/benchscene.cpp
 )
@@ -235,7 +236,8 @@ target_link_libraries(GoSurvey PRIVATE
 if(WIN32)
   # winhttp + bcrypt: the REQ-077/078 update check's HTTPS fetch and SHA-256 (ADR-029 (e)).
   # Both ship with Windows, which is why this adds no third-party dependency under REQ-300.
-  target_link_libraries(GoSurvey PRIVATE comdlg32 winhttp bcrypt)
+  # ole32 is for the Network List Manager connectivity query in HttpFetch.cpp (REQ-077).
+  target_link_libraries(GoSurvey PRIVATE comdlg32 winhttp bcrypt ole32)
   target_sources(GoSurvey PRIVATE src/platform/WinFrameControls.cpp)
 
   # Embed the application icon so Windows shows it in Explorer, the taskbar,
@@ -373,6 +375,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PointGroupTests.cpp
     tests/TinBuildTests.cpp
     tests/UpdateCheckTests.cpp
+    tests/GsMigrateTests.cpp
     src/traverse/TraverseCalc.cpp
     src/traverse/TraverseLeastSquares.cpp
     src/traverse/FbkImport.cpp
@@ -406,6 +409,9 @@ if(GOSURVEY_BUILD_TESTS)
     # Wrong version ordering has NO symptom (the user is simply never offered an update), which is
     # exactly why it must be pinned by a test rather than noticed in use.
     src/update/UpdateCheck.cpp
+    # REQ-079 .gs forward migration. Pure by ADR-030 (d) — JSON in, JSON out — so the composition
+    # logic is testable without the command layer that GsIo.cpp drags in.
+    src/io/GsMigrate.cpp
   )
   target_include_directories(GoSurveyTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

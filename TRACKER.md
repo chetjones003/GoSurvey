@@ -2,6 +2,15 @@
 
 ## BUGS
 
+### [BUG-012] Double-clicking a .gs file opens GoSurvey empty — OPEN
+    - `int main()` in src/app/main.cpp takes no argv, so the application cannot receive a file
+      path from the command line at all.
+    - The installer registers `.gs` with `shell\open\command = "...\GoSurvey.exe" "%1"`, so the
+      path IS passed — and silently ignored. The drawing never opens.
+    - Pre-existing; found while verifying REQ-079's reader change (TASK-051), not caused by it.
+    - Fix: take `int main(int argc, char** argv)`, and if argv[1] is an existing file, load it
+      instead of the startup template. Worth checking DXF/DWG paths get the same treatment.
+
 ### [BUG-011] ViewportRenderer did not compile with MSVC — FIXED 2026-08-15
     - Symptom: ~50 x C2362 in ViewportRenderer.cpp, "initialization of 'x' is skipped by
       'goto finish_render'". Never seen locally because CMakePresets' ninja-release pins no

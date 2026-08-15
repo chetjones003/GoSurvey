@@ -69,6 +69,15 @@ void BeginStartupCheck(UpdateState& st, const std::string& ownerRepo)
   if (st.task || st.phase != Phase::Idle)
     return;                              // already running or already showing something
 
+  // REQ-077: with no route to the internet there is nothing to check, so skip entirely rather
+  // than show a modal that can only end in a timeout. This is what keeps the gate from punishing
+  // a surveyor opening the program somewhere with no signal.
+  if (!HasInternetConnectivity())
+  {
+    LogSilently("check skipped: no internet connectivity reported");
+    return;
+  }
+
   // Inputs are COPIED into the worker (architecture §8, rule 1) — it holds no pointer back into
   // UpdateState, let alone AppCommandState.
   const Channel     channel = st.prefs.useBetaChannel ? Channel::Beta : Channel::Stable;

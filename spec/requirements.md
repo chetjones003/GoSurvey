@@ -1950,6 +1950,46 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted (2026-08-15)
 - Revisions: 2026-08-15 — initial. See ADR-029 and the decision log.
 
+### REQ-079 — `.gs` files carry a format version and are migrated forward on load
+- Purpose: an old drawing opens in a new build, always, and the rare case where it cannot is stated
+  rather than discovered
+- Priority: must
+- Type: functional
+- Statement: Every `.gs` file records the format version that wrote it. A build opens **any file at
+  or below its own version**, migrating older ones forward on load; the user is not asked, and the
+  file on disk is unchanged until they save.
+
+  Migration runs on the **parsed JSON**, before the typed loader sees it, as a chain of
+  single-version steps (v1→v2→v3). Each step is a pure function of the document tree, so a drawing
+  five versions old is carried forward by composing steps that were each written and tested against
+  one change.
+
+  A file written by a **newer** build is refused — not guessed at — with a message naming the
+  version that wrote it and the version this build understands. That is the only case where a
+  drawing legitimately does not open, and it is a downgrade, never a loss.
+
+  **A change that cannot be expressed as a migration is a breaking change**, and is treated as one:
+  it is declared deliberately, surfaced in the update dialog before the user accepts the update
+  (REQ-078), and is expected to be rare. Backward compatibility is the default and the burden of
+  proof is on breaking it.
+- Acceptance:
+  - a file at the current version loads with no migration and is byte-identical on resave;
+  - a file at an older version loads, and the resulting drawing is equivalent to the same content
+    saved at the current version;
+  - migrations compose — a file two or more versions old is carried forward through every
+    intermediate step in order;
+  - a file written by a newer build is refused with a message naming both versions, and the
+    application is left in its prior state, not a half-loaded one;
+  - a file with a missing, non-integer, or zero/negative version is refused as malformed;
+  - a migration that fails reports which step failed and loads nothing;
+  - the current build opens every `.gs` in `samples/` (the regression corpus).
+- Owner-layer: IO (`GsIo` reader), util/IO (`GsMigrate`, pure)
+- Status: accepted (2026-08-15)
+- Revisions: 2026-08-15 — initial. Raised on discovering that `.gs` has carried a `version` field
+  since the beginning while the reader compared it with `!=`: bumping it would have made **every
+  existing drawing unopenable**, so the field was unusable and eleven changes across REQ-044…076
+  were forced through a "tolerant key, no version bump" workaround instead. See ADR-030.
+
 ---
 
 ## Performance requirements

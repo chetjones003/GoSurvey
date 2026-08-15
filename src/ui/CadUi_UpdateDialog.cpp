@@ -73,6 +73,20 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
       ImGui::ProgressBar(-1.f * static_cast<float>(ImGui::GetTime()), ImVec2(-1.f, 0.f), "");
       ImGui::TextDisabled("GoSurvey %s - %s channel", upd.runningVersion.c_str(),
                           upd.prefs.useBetaChannel ? "beta" : "stable");
+      ImGui::Separator();
+      // An escape hatch for the case the connectivity pre-check cannot catch: a captive portal or
+      // a network that answers but never completes, where the gate would otherwise hold the user
+      // for the full timeout.
+      if (ImGui::Button("Continue without checking", ImVec2(220.f, 0.f)))
+      {
+        // The worker is deliberately left running rather than cancelled. WinHttpReadData is
+        // already blocked and cannot be interrupted, and destroying the task here would join that
+        // thread on the UI thread — reintroducing exactly the freeze this button exists to avoid.
+        // Dropping to Idle means PollUpdateTask discards the result when it lands (the stale-task
+        // path), which is correct: the user has said they do not want it.
+        upd.phase = Phase::Idle;
+        ImGui::CloseCurrentPopup();
+      }
       break;
     }
 

@@ -1072,3 +1072,46 @@ A change is rejected if it breaks any of these:
   debt and the pipeline carries a no-op signing step so it can be filled in without restructuring.
   Deliberately not designed for: delta/patch updates, rollback to a previous version, per-user
   (non-elevated) installation, staged rollouts, and any platform other than Windows x64.
+
+### ADR-030 — `.gs` forward migration on the JSON tree   (2026-08-15, accepted)
+- Context: `.gs` has written a `version` field since the beginning, and the reader compared it with
+  `!=`. Bumping `kGsFormatVersion` would therefore have made **every existing drawing unopenable**,
+  so the field was unusable in practice and the version has never moved off 1. Eleven changes
+  across REQ-044…REQ-076 were instead forced through a "tolerant key, additive only, no version
+  bump" workaround, each carrying a comment saying so. That worked while every change was purely
+  additive, and it has no answer for a change that is not — a renamed field, a changed unit, a
+  restructured store. The project was one non-additive change away from either breaking every file
+  or abandoning the version field entirely.
+- Decision:
+  (a) **The reader accepts any version at or below its own** and refuses only *newer* files, naming
+  both versions. A newer file is a downgrade problem, not a corruption problem, and guessing at it
+  risks silently misreading data.
+  (b) **Migration runs on the parsed JSON, before the typed loader.** The alternative — loading into
+  the typed model and fixing it up afterwards — means every migration is written against the
+  *current* structs, so a migration written today silently changes meaning when those structs change
+  tomorrow. A JSON step is frozen against the shape it was written for and stays correct forever.
+  (c) **One step per version increment, composed in order.** A v1 file reaching a v4 build runs
+  v1→v2→v3→v4. Each step is written and tested against exactly one change, which is the only way the
+  cost stays constant as versions accumulate.
+  (d) **Steps are pure `json → json` functions** and live in `io/GsMigrate.*`, testable without a
+  window, a GL context, or the command layer — the `DwgProbe.cpp` / `EntityId.cpp` precedent.
+  (e) **The step table is passed in to the applying function**, which gives the chaining logic two
+  present-day concrete uses (the production table and synthetic tables in tests) and so satisfies
+  REQ-301. Without that, the composition logic — the part most likely to be wrong — would be
+  reachable only through whatever migrations happen to exist.
+  (f) **Additive changes still do not bump the version.** The tolerant-key pattern remains correct
+  and cheapest for them; this ADR exists for the changes it cannot express.
+- Alternatives: **(1) Keep the tolerant-key pattern forever** — zero new code, but it cannot rename,
+  restructure or change the meaning of a field, and the version stays decorative. **(2) Migrate the
+  typed model after load** — no JSON plumbing, but migrations rot against struct changes as in (b).
+  **(3) Convert files in place on open** — one-time cost per file, but it mutates the user's data as
+  a side effect of opening it, and a crash mid-write loses the drawing. Migration is in memory; the
+  file changes only when the user saves. **(4) Refuse old files and ship a converter tool** — honest
+  but hostile, and the conversion logic has to exist either way.
+- Consequences: a new pure module and its tests; the reader's version check becomes a range plus a
+  migration call. **The version field becomes usable for the first time**, which means future
+  non-additive changes have a route that does not break existing drawings. The genuinely
+  unmigratable change remains possible, and REQ-078/REQ-079 require it to be declared and shown to
+  the user before they accept the update rather than discovered afterwards. `samples/` becomes a
+  regression corpus that must keep opening. Deliberately not designed for: backward migration
+  (writing an older version), partial or best-effort migration, or repairing corrupt files.

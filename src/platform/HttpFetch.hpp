@@ -14,6 +14,16 @@
 ///
 /// All functions are blocking and are called from a worker thread, never the UI thread.
 
+/// True when Windows reports an actual route to the internet (IPv4 or IPv6).
+///
+/// Used to skip the REQ-077 check entirely when there is nothing to reach, so a user opening
+/// GoSurvey on a job site with no signal sees no dialog at all rather than waiting out a timeout.
+///
+/// This is a local query against the Network List Manager — no network round trip, so it is safe
+/// to call on the UI thread. It is a fast NEGATIVE, not a guarantee: a captive portal or a
+/// LAN-only network still reports connectivity, which is why the fetch keeps its own timeout.
+bool HasInternetConnectivity();
+
 /// GETs \p url and appends the response body to \p out.
 ///
 /// Returns false on any failure — unresolvable host, timeout, TLS failure, or any status other

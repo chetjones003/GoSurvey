@@ -1,6 +1,7 @@
 #include "GsIo.hpp"
 
 #include "CadCommands.hpp"
+#include "GsMigrate.hpp"
 #include "TextStyle.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
@@ -1632,14 +1633,27 @@ bool LoadGoSurveyFile(AppCommandState& st, const char* pathUtf8, std::vector<std
     log.push_back(".gs: not a GoSurvey file (missing format \"gosurvey\").");
     return false;
   }
-  if (!root.contains("version") || !root["version"].is_number_integer() ||
-      root["version"].get<int>() != kGsFormatVersion) {
-    log.push_back(".gs: unsupported version (expected " + std::to_string(kGsFormatVersion) + ").");
+  // REQ-079 / ADR-030: accept any version at or below this build's, migrating older documents
+  // forward. This used to be `!= kGsFormatVersion`, which meant bumping the version would have
+  // made every existing drawing unopenable — the reason the field sat at 1 while eleven changes
+  // were routed around it via the tolerant-key pattern.
+  if (!root.contains("version") || !root["version"].is_number_integer()) {
+    log.push_back(".gs: missing or malformed format version.");
     return false;
   }
   if (!root.contains("document") || !root["document"].is_object()) {
     log.push_back(".gs: missing document object.");
     return false;
+  }
+  {
+    const int   fileVersion = root["version"].get<int>();
+    std::string migrateErr;
+    // Migration happens in memory, on the parsed tree, BEFORE the typed loader runs. The file on
+    // disk is untouched until the user saves (ADR-030 (3)).
+    if (!MigrateGsDocument(root["document"], fileVersion, kGsFormatVersion, log, migrateErr)) {
+      log.push_back(".gs: " + migrateErr);
+      return false;
+    }
   }
   const json& doc = root["document"];
   if (!ValidateDocumentJson(doc, log))

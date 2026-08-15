@@ -7,6 +7,7 @@
 #include <windows.h>
 
 #include <bcrypt.h>
+#include <netlistmgr.h>
 #include <winhttp.h>
 
 #include <cstdio>
@@ -167,6 +168,42 @@ long long QueryContentLength(HINTERNET request)
 }
 
 }  // namespace
+
+bool HasInternetConnectivity()
+{
+  // COM may or may not already be initialised on the calling thread, and this function must not
+  // disturb whatever the caller set up. CoInitializeEx returns RPC_E_CHANGED_MODE when COM is
+  // already live under a different threading model — that is not a failure, it just means we
+  // must not uninitialise it on the way out.
+  const HRESULT initHr    = ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
+  const bool    weInitCom = SUCCEEDED(initHr);
+
+  bool                 connected = false;
+  INetworkListManager* nlm       = nullptr;
+  if (SUCCEEDED(::CoCreateInstance(CLSID_NetworkListManager, nullptr, CLSCTX_ALL,
+                                   IID_INetworkListManager, reinterpret_cast<void**>(&nlm))) &&
+      nlm)
+  {
+    NLM_CONNECTIVITY connectivity = NLM_CONNECTIVITY_DISCONNECTED;
+    if (SUCCEEDED(nlm->GetConnectivity(&connectivity)))
+    {
+      connected = (connectivity & (NLM_CONNECTIVITY_IPV4_INTERNET |
+                                   NLM_CONNECTIVITY_IPV6_INTERNET)) != 0;
+    }
+    nlm->Release();
+  }
+  else
+  {
+    // If the query itself cannot be made, assume connected and let the fetch's timeout decide.
+    // Failing open matters: treating an unavailable NLM as "offline" would silently disable
+    // update checking on machines where it works perfectly well.
+    connected = true;
+  }
+
+  if (weInitCom)
+    ::CoUninitialize();
+  return connected;
+}
 
 bool HttpGetString(const std::string& url, int timeoutMs, std::string& out, std::string& errorOut)
 {
