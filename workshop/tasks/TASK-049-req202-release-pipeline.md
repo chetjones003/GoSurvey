@@ -141,6 +141,19 @@ ASSUMPTION-3: `github.run_number` is monotonically increasing per workflow, maki
   actually was. Porting the renderer to be MSVC-clean is a real refactor in a hot path, is not
   what REQ-202 asks for, and would mean CI shipping a binary built by a toolchain the project has
   never otherwise used. Recorded as debt instead.
+- 2026-08-15 **Run 31911817777 — MSVC build/test/installer all green; failed at "Write the update
+  manifest" with `Unexpected token 'MSVC'`.** Cause: `notes = "${{ github.event.head_commit.message }}"`
+  interpolated the commit message into the PowerShell *source*, and that commit's message contained
+  the quoted phrase `"MSVC toolchain"`, which closed the string literal early.
+  **This is a script-injection hole, not a quoting nit.** A `${{ }}` expression is substituted into
+  the script text before pwsh parses it, so a commit message containing PowerShell would have run
+  on the runner — which holds a `contents: write` token, i.e. the ability to publish releases and
+  push tags. It failed by accident this time; it would not have failed on purpose. Fixed with
+  GitHub's documented pattern: untrusted context passed via `env:` and read as `$env:VAR`, where it
+  is data the script reads rather than text the script is made of. `github.ref_name` was audited
+  and moved the same way. Every remaining `${{ }}` inside a `run:` block was checked and is
+  machine-generated and constrained (version strings from a `[0-9.]+` regex, `run_number`,
+  `github.repository`, `github.token`).
 - 2026-08-15 **Unverified before that run:** the workflow had never run. No YAML validator, `python` or `yamllint`
   is available on this machine, so even its syntax is unchecked. `gh` (2.92.0, authenticated as
   chetjones003) is present, so the publish steps' commands are at least the right ones for the
