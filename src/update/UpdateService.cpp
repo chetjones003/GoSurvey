@@ -18,15 +18,17 @@
 namespace update {
 namespace {
 
-/// How long the check waits before giving up. Short on purpose: this runs unattended at every
-/// launch, and a user on a job site with no signal must not pay for it.
-constexpr int kCheckTimeoutMs = 5000;
+/// How long the check waits before giving up.
+///
+/// This is now the worst case a user waits at startup, not a background cost: REQ-077 (amended)
+/// makes the check modal, so an unreachable network is time the surveyor spends staring at a
+/// progress bar before they can work. Shortened from 5s to 3s when the check became blocking —
+/// ample for a few hundred bytes of JSON on any working connection, and the shortest the offline
+/// case can be made without giving up on slow ones.
+constexpr int kCheckTimeoutMs = 3000;
 
 /// The installer download is user-initiated and much larger, so it gets a real budget.
 constexpr int kDownloadTimeoutMs = 120000;
-
-/// REQ-077: at most one check per 24 hours per install.
-constexpr long long kThrottleSeconds = 24 * 60 * 60;
 
 /// The REQ-077 failure path. Logged, never surfaced — the one sanctioned silent failure in the
 /// project (ADR-029 (h), decision log 2026-08-15). Note the narrowness: this is used by the
@@ -58,7 +60,7 @@ std::string UpdateDownloadDir()
   return (std::filesystem::u8path(base) / "GoSurvey" / "updates").u8string();
 }
 
-void BeginStartupCheck(UpdateState& st, const std::string& ownerRepo, long long nowUnix)
+void BeginStartupCheck(UpdateState& st, const std::string& ownerRepo)
 {
   st.runningVersion = GOSURVEY_VERSION_FULL;
 
@@ -66,10 +68,6 @@ void BeginStartupCheck(UpdateState& st, const std::string& ownerRepo, long long 
     return;                              // REQ-077: disabled means no network request, at all
   if (st.task || st.phase != Phase::Idle)
     return;                              // already running or already showing something
-  if (st.prefs.lastCheckUnix != 0 && nowUnix - st.prefs.lastCheckUnix < kThrottleSeconds)
-    return;                              // inside the 24-hour window
-
-  st.prefs.lastCheckUnix = nowUnix;
 
   // Inputs are COPIED into the worker (architecture §8, rule 1) — it holds no pointer back into
   // UpdateState, let alone AppCommandState.

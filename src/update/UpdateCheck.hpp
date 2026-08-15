@@ -23,7 +23,9 @@ struct UpdatePrefs {
   bool        enabled        = true;   ///< REQ-077: the user can switch the check off entirely
   bool        useBetaChannel = false;
   std::string skippedVersion;          ///< "Skip this version" — suppresses that version only
-  long long   lastCheckUnix  = 0;      ///< throttle anchor; 0 = never checked
+  // No throttle anchor. REQ-077 (amended) checks on EVERY launch: the manifest is a CDN-served
+  // release asset rather than a rate-limited API call, so there is nothing a throttle protects,
+  // and one made "checks when the app opens" false on any second launch the same day.
 };
 
 /// A parsed version. `prereleaseLabel` is empty for a release build; a release always outranks

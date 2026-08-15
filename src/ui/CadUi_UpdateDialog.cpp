@@ -33,8 +33,8 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
 {
   using update::Phase;
 
-  if (upd.phase == Phase::Idle || upd.phase == Phase::Checking)
-    return;   // the check itself is silent — the user is never told it is happening
+  if (upd.phase == Phase::Idle)
+    return;
 
   const char* kTitle = "Software Update";
   if (!ImGui::IsPopupOpen(kTitle))
@@ -60,6 +60,22 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
 
   switch (upd.phase)
   {
+    case Phase::Checking:
+    {
+      // REQ-077 (amended): the check gates the session. This dialog is the gate — modal, so no
+      // drawing can be started on a build that is about to ask to replace itself.
+      //
+      // A negative fraction makes ImGui animate an indeterminate bar. That animation is only
+      // possible because the fetch is on a worker: a UI thread blocked on a socket cannot
+      // repaint, so a literally-blocking check would show a frozen window and Windows would
+      // paint it as "Not Responding".
+      ImGui::TextUnformatted("Checking for updates...");
+      ImGui::ProgressBar(-1.f * static_cast<float>(ImGui::GetTime()), ImVec2(-1.f, 0.f), "");
+      ImGui::TextDisabled("GoSurvey %s - %s channel", upd.runningVersion.c_str(),
+                          upd.prefs.useBetaChannel ? "beta" : "stable");
+      break;
+    }
+
     case Phase::UpdateReady:
     {
       ImGui::Text("GoSurvey %s is available.", upd.available.version.c_str());

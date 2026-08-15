@@ -1872,30 +1872,46 @@ requirements is a planning failure, not a sign of rigor.
   **release channel** (`stable` or `beta`) whether a newer version exists, by fetching a small JSON
   manifest over HTTPS.
 
-  The check is subordinate to the application, never the other way round: it runs **off the UI
-  thread**, adds no measurable time to startup, times out, and on any failure — no network, DNS
-  failure, timeout, malformed JSON, HTTP error — it is silent and the application behaves exactly as
-  if no update existed. A user on a disconnected job-site laptop must not be able to tell that the
-  feature is present. The check is throttled to at most **once per 24 hours** per install, and a
-  setting disables it outright.
+  The check runs **on every launch** and **gates the session**: until it finishes, the application
+  shows a modal "Checking for updates" dialog with a progress indicator and accepts no other input.
+  The user therefore always knows the state of their install before doing any work, and can never
+  begin a drawing on a build that is about to ask to replace itself.
+
+  Two properties keep that from becoming a hang. The fetch still runs **off the UI thread** — a
+  blocked UI thread cannot repaint, so the progress indicator could not animate and Windows would
+  mark the app "Not Responding"; the thread is what makes the modal honest rather than frozen. And
+  the check is **hard-bounded by a short timeout**, after which it gives up and the session starts.
+
+  On any failure — no network, DNS failure, timeout, malformed JSON, HTTP error — the dialog closes
+  and the application proceeds exactly as if no update existed, with nothing shown to the user. A
+  setting disables the check outright, in which case no dialog appears and no request is made.
 - Acceptance:
   - the version shown in the UI, the version embedded in the executable's Windows version resource,
     the installer's `AppVersion`, and the git tag all derive from the one CMake value — changing that
     value changes all of them and no other edit is required;
-  - startup time with the network unreachable is indistinguishable from startup with the check
-    disabled (the check never blocks the first frame);
+  - **every** launch with the check enabled performs the check — two launches a minute apart both
+    issue a request;
+  - the checking dialog blocks all other interaction until it resolves, and the application remains
+    responsive and repainting throughout (never "Not Responding");
+  - with the network unreachable, the session starts within the stated timeout and shows no error;
   - each of no-network, timeout, HTTP 404/500, and malformed JSON leaves the application running
-    normally with no dialog and no error shown to the user — the failure is logged, not surfaced
-    (this is the deliberate, recorded exception to REQ-201; see the decision log);
+    normally with no error shown to the user — the failure is logged, not surfaced (this is the
+    deliberate, recorded exception to REQ-201; see the decision log);
   - a `stable` install is never offered a prerelease;
-  - a second launch within 24 hours performs no network request;
-  - with the setting disabled, no network request is made at any time;
+  - with the setting disabled, no dialog appears and no network request is made at any time;
   - version ordering is correct across the prerelease boundary — `0.5.0-beta.2` < `0.5.0-beta.10` <
     `0.5.0`, and an equal or older remote version produces no prompt.
 - Owner-layer: util (version compare + manifest parse, pure), Platform (HTTPS transport), UI
-  (version display + setting), IO (`UserPrefs` throttle + channel)
+  (version display + checking dialog + setting), IO (`UserPrefs` channel)
 - Status: accepted (2026-08-15)
 - Revisions: 2026-08-15 — initial. See ADR-029 and the decision log.
+  2026-08-15 — **amended: the check now gates startup instead of hiding behind it.** The 24-hour
+  throttle is removed (it made "checks when the app opens" false roughly half the time), and the
+  non-blocking, invisible check is replaced by a modal with a progress indicator. This reverses the
+  original "a user must not be able to tell the feature is present" in favour of "a user always
+  knows what build they are about to work on" — a deliberate user decision, recorded in the
+  decision log, not a drift. The off-thread fetch survives the change for a technical reason rather
+  than a policy one: it is what allows the modal to animate and stay responsive.
 
 ### REQ-078 — An update is applied only after the user chooses it
 - Purpose: keep the user in control of when their CAD session ends

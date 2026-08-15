@@ -64,12 +64,12 @@ struct UpdateState {
   bool awaitingUnsavedCheck = false;
 };
 
-/// Starts the REQ-077 background check if it is due: enabled, not already running, and outside
-/// the 24-hour throttle window. Returns immediately, always. Does nothing at all when disabled.
+/// Starts the REQ-077 check. Runs on every launch; does nothing at all when the setting is off.
 ///
-/// \p nowUnix is passed in rather than read here so the throttle is decided by the caller's
-/// clock and can be reasoned about in one place.
-void BeginStartupCheck(UpdateState& st, const std::string& ownerRepo, long long nowUnix);
+/// Returns immediately — the fetch is on a worker. The caller is expected to keep
+/// `Phase::Checking` modal until `PollUpdateTask` resolves it, which is what makes the check
+/// gate the session (REQ-077 amended) without freezing the UI thread.
+void BeginStartupCheck(UpdateState& st, const std::string& ownerRepo);
 
 /// Polls the in-flight task and advances `phase`. Call once per frame from the UI thread.
 ///

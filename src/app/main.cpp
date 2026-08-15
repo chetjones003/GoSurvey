@@ -198,10 +198,9 @@ int main()
   // state is owned here, so no drawing state is ever touched from a background thread.
   update::UpdateState updateState;
   updateState.prefs = cmd.updatePrefs;
-  // Fires at most one HTTPS request, on a detached worker, at most once per 24 hours, and does
-  // nothing at all when the user has switched the check off.
-  update::BeginStartupCheck(updateState, "chetjones003/GoSurvey",
-                            static_cast<long long>(std::time(nullptr)));
+  // Runs on EVERY launch (no throttle) and gates the session: the dialog stays modal until it
+  // resolves. Does nothing at all when the user has switched the check off.
+  update::BeginStartupCheck(updateState, "chetjones003/GoSurvey");
   /// Set once the user has confirmed an update and the app is exiting to hand over to the
   /// installer, so the normal quit path can tell the two cases apart.
   bool updateExitPending = false;
@@ -622,7 +621,6 @@ int main()
     // check itself. Sync the rest back so SaveUserStartupPrefs persists both.
     cmd.updatePrefs.enabled        = updateState.prefs.enabled;
     cmd.updatePrefs.useBetaChannel = updateState.prefs.useBetaChannel;
-    cmd.updatePrefs.lastCheckUnix  = updateState.prefs.lastCheckUnix;
     DrawDwgLossyExportModal(cmd, cmdLog);
 
     // The point a click would COMMIT at, which is NOT the cursor. When an object snap is acquired,
