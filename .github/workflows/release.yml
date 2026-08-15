@@ -39,7 +39,38 @@ jobs:
           fetch-depth: 0
 
       - name: Set up MSVC
+        # Supplies the Windows SDK, the linker and the MSVC ABI headers. It does NOT decide the
+        # compiler — see the clang step below.
         uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Locate clang
+        # GoSurvey is built with clang targeting the MSVC ABI, which is what a developer machine
+        # uses (CMakePresets pins clang explicitly for ninja-debug, and ninja-release picks up
+        # whatever is first on PATH — clang, locally). CI must build the SAME thing it ships.
+        #
+        # This is not a preference: the codebase does not currently compile with cl.exe. MSVC
+        # rejects `goto finish_render` in ViewportRenderer.cpp for jumping over ~50 variable
+        # initializations (C2362) — which is correct, and clang is the lenient one. Porting the
+        # renderer to be MSVC-clean is real work with real risk in a hot path, and it is not
+        # this pipeline's job. Recorded as debt in TASK-049.
+        id: clang
+        shell: pwsh
+        run: |
+          $clangPath = (Get-Command clang.exe -ErrorAction SilentlyContinue).Source
+          if (-not $clangPath) {
+            $candidate = 'C:\Program Files\LLVM\bin\clang.exe'
+            if (-not (Test-Path $candidate)) {
+              Write-Host "LLVM not present on the runner image - installing."
+              choco install llvm -y --no-progress
+            }
+            if (-not (Test-Path $candidate)) { throw "clang.exe not found after install attempt" }
+            $clangPath = $candidate
+          }
+          $bin = Split-Path $clangPath -Parent
+          Write-Host "Using clang from $bin"
+          "cc=$bin\clang.exe"   | Out-File $env:GITHUB_OUTPUT -Append
+          "cxx=$bin\clang++.exe" | Out-File $env:GITHUB_OUTPUT -Append
+          & "$bin\clang.exe" --version
 
       - name: Install Ninja
         # The repo's CMakePresets.json uses the Ninja generator. Installing it rather than
@@ -121,6 +152,8 @@ jobs:
       - name: Configure
         run: >
           cmake --preset ninja-release
+          -DCMAKE_C_COMPILER="${{ steps.clang.outputs.cc }}"
+          -DCMAKE_CXX_COMPILER="${{ steps.clang.outputs.cxx }}"
           -DGOSURVEY_VERSION_SUFFIX="${{ steps.ver.outputs.suffix }}"
           -DGOSURVEY_VERSION_BUILD=${{ github.run_number }}
 

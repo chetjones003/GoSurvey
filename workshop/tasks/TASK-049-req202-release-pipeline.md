@@ -126,7 +126,22 @@ ASSUMPTION-3: `github.run_number` is monotonically increasing per workflow, maki
   build, test, fail, and publish nothing** until those 4 are resolved. This is the pipeline behaving
   as specified, not a defect in it — but it makes the feature inert on arrival, so it is the user's
   call, not the Workshop's. Raised rather than quietly weakened.
-- 2026-08-15 **Unverified:** the workflow has never run. No YAML validator, `python` or `yamllint`
+- 2026-08-15 **First real run (31910767883): FAILED at Build, and it found something.** The
+  workflow itself parsed and ran; checkout, MSVC setup, Ninja, cache, version resolution and
+  configure all passed, and the branch-gated steps correctly skipped. The build then failed with
+  ~50 × **C2362** in `ViewportRenderer.cpp`: `goto finish_render` jumps over that many variable
+  initializations.
+  **This is not a regression and not caused by anything in this workstream.** It is a compiler
+  difference that had never been visible before: `ninja-release` pins no compiler, so locally
+  CMake picks **clang** off PATH (`C:\Program Files\LLVM\bin`), while `msvc-dev-cmd` puts
+  `cl.exe` first on the runner. So the first CI build was the first time this codebase had ever
+  been compiled with MSVC — and it does not compile with MSVC. MSVC is the correct one here:
+  jumping over an initialization is ill-formed C++, and clang is being permissive.
+  **Fix: pin clang in CI**, matching what a developer builds and what the shipped 0.4.0 installer
+  actually was. Porting the renderer to be MSVC-clean is a real refactor in a hot path, is not
+  what REQ-202 asks for, and would mean CI shipping a binary built by a toolchain the project has
+  never otherwise used. Recorded as debt instead.
+- 2026-08-15 **Unverified before that run:** the workflow had never run. No YAML validator, `python` or `yamllint`
   is available on this machine, so even its syntax is unchecked. `gh` (2.92.0, authenticated as
   chetjones003) is present, so the publish steps' commands are at least the right ones for the
   installed CLI. First real verification is a push.
@@ -152,7 +167,15 @@ ASSUMPTION-3: `github.run_number` is monotonically increasing per workflow, maki
   implemented; none has been observed, because observing them requires a push.
 - Tests added:            none — see §7
 - Docs updated:           this log
-- Technical debt:         (1) `ilammy/msvc-dev-cmd@v1` is a third-party action on a moving tag;
+- Technical debt:         (0) **The codebase does not compile with MSVC** (~50 × C2362 in
+                          `ViewportRenderer.cpp`, from a `goto` over initializations — ill-formed
+                          C++ that clang accepts). CI pins clang to match the developer build, so
+                          this is contained, not fixed. It means the project is effectively
+                          clang-only today while `CMakeLists.txt` still carries `if(MSVC)`
+                          branches implying otherwise. Removal condition: either restructure the
+                          `goto` and keep both compilers green, or record clang-only as a
+                          decision and drop the dead MSVC branches.
+                          (1) `ilammy/msvc-dev-cmd@v1` is a third-party action on a moving tag;
                           SHA-pin it if the supply-chain surface matters.
                           (2) The signing step is a deliberate no-op (ADR-029 D5).
                           (3) REQ-200 now rests on a runner image we do not control (roadmap risk
