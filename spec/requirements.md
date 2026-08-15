@@ -1856,6 +1856,86 @@ requirements is a planning failure, not a sign of rigor.
 
 ---
 
+## Distribution requirements
+
+> How a build reaches a user, and how a running install learns that a newer one
+> exists. These are the first requirements in the project whose acceptance
+> depends on a machine other than the user's.
+
+### REQ-077 — The application knows its version and checks its channel for a newer one
+- Purpose: a user runs a current build without having to go looking for one
+- Priority: should
+- Type: functional
+- Statement: The application carries its own version, derived from a **single source** — the CMake
+  `project(VERSION)` — so that the binary, the installer, the git tag and the release title cannot
+  disagree. The version is displayed in the UI. On startup the application asks its configured
+  **release channel** (`stable` or `beta`) whether a newer version exists, by fetching a small JSON
+  manifest over HTTPS.
+
+  The check is subordinate to the application, never the other way round: it runs **off the UI
+  thread**, adds no measurable time to startup, times out, and on any failure — no network, DNS
+  failure, timeout, malformed JSON, HTTP error — it is silent and the application behaves exactly as
+  if no update existed. A user on a disconnected job-site laptop must not be able to tell that the
+  feature is present. The check is throttled to at most **once per 24 hours** per install, and a
+  setting disables it outright.
+- Acceptance:
+  - the version shown in the UI, the version embedded in the executable's Windows version resource,
+    the installer's `AppVersion`, and the git tag all derive from the one CMake value — changing that
+    value changes all of them and no other edit is required;
+  - startup time with the network unreachable is indistinguishable from startup with the check
+    disabled (the check never blocks the first frame);
+  - each of no-network, timeout, HTTP 404/500, and malformed JSON leaves the application running
+    normally with no dialog and no error shown to the user — the failure is logged, not surfaced
+    (this is the deliberate, recorded exception to REQ-201; see the decision log);
+  - a `stable` install is never offered a prerelease;
+  - a second launch within 24 hours performs no network request;
+  - with the setting disabled, no network request is made at any time;
+  - version ordering is correct across the prerelease boundary — `0.5.0-beta.2` < `0.5.0-beta.10` <
+    `0.5.0`, and an equal or older remote version produces no prompt.
+- Owner-layer: util (version compare + manifest parse, pure), Platform (HTTPS transport), UI
+  (version display + setting), IO (`UserPrefs` throttle + channel)
+- Status: accepted (2026-08-15)
+- Revisions: 2026-08-15 — initial. See ADR-029 and the decision log.
+
+### REQ-078 — An update is applied only after the user chooses it
+- Purpose: keep the user in control of when their CAD session ends
+- Priority: should
+- Type: functional
+- Statement: When REQ-077 finds a newer version, the application **presents it and waits**. It
+  displays the new version, the current version, and the release notes carried in the manifest,
+  offering exactly three outcomes: install now, be reminded at the next launch, or skip this version
+  permanently. There is no silent download and no silent install — this application holds unsaved
+  drawings, and an unannounced restart destroys work.
+
+  On the user's choice to install, the application downloads the installer, **verifies it against the
+  SHA-256 recorded in the manifest**, and refuses to execute it on any mismatch. Before handing over,
+  it routes through the existing unsaved-changes path, so a user with a dirty drawing is asked to
+  save rather than losing it to the restart. The installer is then run non-interactively and the
+  application exits; the installer replaces the files and relaunches the application.
+
+  The hash is an **integrity** check, not an authenticity one: it and the installer come from the same
+  host over the same TLS connection, so it detects corruption and a truncated download, not a
+  compromised publisher. Authenticity requires Authenticode signing, which is recorded as technical
+  debt rather than claimed (see the decision log).
+- Acceptance:
+  - no download begins, and no installer runs, without an explicit user click;
+  - "Skip this version" suppresses that version permanently but a *later* version still prompts;
+  - "Remind me later" prompts again on the next launch;
+  - a deliberately corrupted download fails the hash check, is deleted, does not execute, and reports
+    the failure to the user (REQ-201 applies here — unlike the REQ-077 check, this path was
+    user-initiated, so silence would be wrong);
+  - a drawing with unsaved changes triggers the existing unsaved-changes modal before the application
+    exits, and cancelling there cancels the update;
+  - after the installer runs, the previous versioned executables (`GoSurvey-0.*.exe`) are gone from
+    the install directory, one `GoSurvey.exe` remains, and desktop/Start-menu shortcuts and the `.gs`
+    file association still resolve;
+  - a partially downloaded file left by a killed process does not block or corrupt the next attempt.
+- Owner-layer: UI (dialog), Platform (download, hash, process launch), IO (`UserPrefs` skip state)
+- Status: accepted (2026-08-15)
+- Revisions: 2026-08-15 — initial. See ADR-029 and the decision log.
+
+---
+
 ## Performance requirements
 
 > Performance is a requirement, not an afterthought — but always paired with a
@@ -1937,6 +2017,46 @@ requirements is a planning failure, not a sign of rigor.
 - Owner-layer: all
 - Status: accepted
 - Revisions: `<date>` — initial.
+
+### REQ-202 — Releases are produced by the pipeline, not by hand
+- Purpose: make a release an act of pushing, not a procedure to remember
+- Priority: should
+- Type: quality
+- Statement: Building the installer is done by CI from a clean checkout, never from a developer
+  workstation. Pushing to the repository builds, runs the test suite, and — depending on where it
+  was pushed — packages and publishes:
+
+  | Push target | Result |
+  |---|---|
+  | any other branch | build + test; installer kept as a workflow artifact; nothing published |
+  | `beta` | installer published to a **single rolling prerelease** tagged `channel-beta`, whose assets are replaced each time |
+  | `master` | version-gated stable release: tagged `v<version>` and published, **only if** that tag does not already exist |
+
+  The version gate is what makes "push to master" safe to do repeatedly: the release step is a no-op
+  when `project(VERSION)` still matches the newest release, so a documentation push to master does
+  not republish, retag, or re-notify users. Bumping the version *is* the act of releasing.
+
+  Every published release carries the installer, a `latest.json` manifest (version, download URL,
+  SHA-256, size, release notes), and nothing that the machine could not regenerate from the tagged
+  commit. A failing test suite blocks publication.
+
+  This is REQ-200 extended one step: REQ-200 says a clean build of a fixed commit is reproducible;
+  this says the artifact users actually receive **is** that build, rather than whatever happened to
+  be in a developer's `build/` directory.
+- Acceptance:
+  - a push to a feature branch produces a downloadable installer artifact and creates no release
+    and no tag;
+  - a push to `beta` leaves exactly one `channel-beta` prerelease in the releases list regardless of
+    how many times it is pushed, carrying the newest installer;
+  - a push to `master` with an unchanged version publishes nothing and fails nothing;
+  - a push to `master` with a bumped version creates tag `v<version>` and a stable release;
+  - a failing `ctest` run publishes no release;
+  - the installer's `AppVersion`, the release tag, and the manifest's `version` field are equal on
+    every published release;
+  - the manifest's SHA-256 matches the published installer.
+- Owner-layer: Build/Platform
+- Status: accepted (2026-08-15)
+- Revisions: 2026-08-15 — initial. See ADR-029 and the decision log.
 
 ---
 
@@ -2037,6 +2157,9 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-074 | Commands/UI | planned — elevation vs planar interpolation within REQ-101; pick outside surface / inside a void reports outside and no elevation; grade on a known plane hand-verified; coincident picks report zero distance not a divide-by-zero | accepted |
 | REQ-075 | UI/Commands | planned — manual (every REQ-069 definition op reachable; counts + elevation range update on rebuild; stale/rebuilding shown and cleared; delete undoable in one step; duplicate rename refused) | accepted |
 | REQ-076 | Domain/IO | planned — `EntityIdTests` (id survives erase of another entity, undo/redo, copy/paste, `.gs` round-trip; reference to an erased entity resolves to nothing, not to its index successor; paste yields a new id; legacy load is deterministic across two loads; no reuse within a session or across save/load) + the `EraseCadAnnotationAtIndex` fixup loop deleted, not duplicated | accepted |
+| REQ-077 | util/Platform/UI/IO | `UpdateCheckTests` (17 cases / 101 assertions, green 2026-08-15: ordering incl. `0.5.0-beta.2` < `0.5.0-beta.10` < `0.5.0`; release outranks its own prereleases but not the next version's; malformed versions refused not coerced; manifest parse of good/malformed/missing-field documents; channel → URL) — remaining conditions (no delay offline, 24 h throttle, disabled = no request) written but **not yet exercised**; needs a published manifest. Was: planned — `UpdateCheckTests` (version ordering across the prerelease boundary incl. `0.5.0-beta.2` < `0.5.0-beta.10` < `0.5.0`; equal/older yields no update; manifest parse of a good document, a malformed one, and one missing required fields; channel → URL selection; stable never selects a prerelease) + manual (network unplugged = no dialog, no delay, no error; second launch inside 24 h issues no request; setting off issues no request) | accepted |
+| REQ-078 | UI/Platform/IO | `UpdateCheckTests` (skip suppresses that version but not a later one — green 2026-08-15); the download / hash / unsaved-guard / install paths are implemented but **unexercised — no manifest has been published yet**, and no real upgrade has been performed (TASK-050 ASSUMPTION-1). Was: planned — `UpdateCheckTests` (skip-state suppresses that version but not a later one) + manual (nothing downloads without a click; corrupted download fails the hash, is deleted, and is reported; dirty drawing hits the unsaved-changes modal and cancel aborts the update; after install one `GoSurvey.exe` remains, old `GoSurvey-0.*.exe` gone, shortcuts + `.gs` association still resolve; killed mid-download then retried succeeds) | accepted |
+| REQ-202 | Build/Platform | planned — observed pipeline behaviour (feature branch → artifact only, no tag; repeated `beta` pushes → exactly one `channel-beta` prerelease; unchanged version on master → no publish, no failure; bumped version → `v<version>` tag + release; failing ctest → no release; tag == AppVersion == manifest version; manifest SHA-256 matches the asset) | accepted |
 | REQ-051 | UI/IO | `MtextToolbarTests` (panel-anchor clamp in-bounds/off-screen/oversized; font+colour run-tag composition incl. empty family = no tag; ruler tick spacing + zero-width = no ticks; attach label 1–9 + out-of-range fallback) + manual (panel titled "Text Formatting" with two rows + ruler; drag persists across edits and restart; font/colour apply to the selection only; height/oblique/entity colour whole-object; style dropdown re-bakes per REQ-044; B/I/U/caps/symbol unchanged; justification re-lays out; disabled controls inert with naming tooltips; ruler + expand toggles; paper MTEXT same panel; single-line TEXT still bare box; OK/Esc + `.gs`/DXF round-trip unchanged) | accepted |
 
 ---

@@ -69,7 +69,8 @@ what keeps subsystems from absorbing each other's work.
 | **UI / Viewport** | User interaction, presenting state | Core domain logic |
 | **Entities / Domain** | Domain data + its invariants | How it is drawn or edited |
 | **IO** | Reading/writing formats | Domain meaning beyond parse/serialize |
-| **Platform** | OS, windowing, file handles, GL context | Anything domain-specific |
+| **Platform** | OS, windowing, file handles, GL context, outbound HTTPS | Anything domain-specific |
+| **Update** | Deciding whether a fetched manifest describes a newer build | Fetching it, downloading, or presenting it (Platform / UI do those) |
 
 ## 4. Ownership model
 
@@ -214,7 +215,8 @@ src/
                 tinbuild — constrained Delaunay triangulation, double predicates (ADR-028)
                 tincontour — contour extraction and band assignment from a TIN (ADR-028)
                 tinanalysis — slope, downhill direction, surface-to-surface volumes (ADR-028)
-  platform/     window, files, GL context
+  update/       version ordering + manifest parse — pure, no network (ADR-029)
+  platform/     window, files, GL context, WinHTTP fetch + SHA-256 (ADR-029)
 third_party/    vendored dependencies (each recorded in the decision log; REQ-300)
 build/          all build artifacts (never in source tree)
 spec/           this specification layer
@@ -1002,3 +1004,71 @@ A change is rejected if it breaks any of these:
   left open and not designed for: contour smoothing (linear contours only), proximity / wall /
   non-destructive breaklines, surface import from Civil 3D, DEM and point-cloud sources, and grading
   design objects.
+
+### ADR-029 — Distribution: a CI-built installer, a manifest asset, and an updater with no updater binary   (2026-08-15, accepted)
+- Context: releases are built by hand today — CMake bumped locally, a fresh `<version>.iss` copied
+  from the previous one with absolute `C:\Users\chetj\...` paths inside it, ISCC run on the developer
+  machine, the result uploaded manually. Two `.iss` files already exist (`0.3.1`, `0.4.0`) and the
+  `installer/` directory is **gitignored**, so the script that produces the shipped artifact is not
+  under version control. Meanwhile an installed copy has no way to learn that a newer one exists, and
+  the executable is named `GoSurvey-<version>.exe`, so the path to the running program changes with
+  every release. REQ-077, REQ-078 and REQ-202 are the response. The binding constraint is REQ-300:
+  the project has **no networking code and no HTTP dependency anywhere**, and an updater needs one.
+- Decision:
+  (a) **The CMake `project(VERSION)` is the single source of the version.** A generated
+  `Version.hpp` (`configure_file`) gives the application its version; CI reads the same value to
+  drive the installer's `AppVersion`, the git tag, and the manifest. Nothing else stores a version
+  number. The value names the release being *worked toward*, so it is bumped after a stable release,
+  not before one, and every beta in the cycle is `<version>-beta.<n>`.
+  (b) **The executable is renamed to a stable `GoSurvey.exe`**, with `[InstallDelete]` sweeping
+  `GoSurvey-0.*.exe` out of existing installs. A version-stamped filename breaks shortcuts, the `.gs`
+  association's `shell\open\command` path, and any form of self-replacement — it is incompatible with
+  REQ-078 as written.
+  (c) **One tracked, parameterized `installer/GoSurvey.iss`** replacing the per-version copies. Paths
+  are relative to the script; version and source root arrive as ISCC `/D` defines with `#ifndef`
+  defaults so a local double-click still works. `installer/` is un-ignored except its `Output/`.
+  (d) **The update manifest is a release asset, not the GitHub API.** `stable` reads
+  `releases/latest/download/latest.json`, which GitHub defines to exclude prereleases — so a stable
+  install is *structurally* unable to see a beta, rather than filtering one out in client code.
+  `beta` reads `releases/download/channel-beta/latest.json`, a fixed tag whose assets CI clobbers.
+  Both are permanent URLs needing no authentication and subject to no rate limit.
+  (e) **HTTPS via WinHTTP** (`winhttp.lib`). It ships with Windows and brings TLS, so it satisfies
+  REQ-300 without adding a dependency at all. JSON parses with the already-vendored nlohmann.
+  (f) **There is no updater executable.** Applying an update means running the downloaded Inno
+  installer with `/SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS`; Inno already knows how to close
+  the app, replace files, and relaunch. This requires an `AppMutex` shared by the application and the
+  script so Inno can find the running instance. Writing a separate updater binary would mean a second
+  program to build, sign, version and debug in order to do what the installer does already.
+  (g) **The version comparison and manifest parse are a pure `util/` module**, testable with no
+  window and no network, following the `DwgProbe.cpp` / `EntityId.cpp` precedent. The WinHTTP call
+  and the process launch stay in `platform/` and are not unit-tested. Prerelease ordering is the part
+  most likely to be quietly wrong, and it is the part that decides whether a user is offered an
+  update at all.
+  (h) **The REQ-077 check is the project's one sanctioned silent failure.** REQ-201 forbids empty
+  error paths; a background update check that reports its own failures would show a network error to
+  every user who opens the program on a job site with no signal. The failure is logged and not
+  surfaced. The narrowness matters: REQ-078's user-initiated download reports failures normally.
+- Alternatives: **(1) The GitHub Releases REST API** — one code path for both channels, but it is
+  rate-limited to 60 requests/hour per IP unauthenticated (an office behind one NAT shares that
+  budget), returns a large payload for a five-field question, and requires client-side prerelease
+  filtering that (d) gets from the platform for free. **(2) libcurl or cpr** — a real HTTP library,
+  rejected under REQ-300 because WinHTTP answers all three policy questions on a Windows-only
+  product. **(3) A dedicated updater binary** — the conventional design, and the right one if the
+  installer could not close the running app; Inno can, so it would be a second artifact earning
+  nothing. **(4) Silent background updates** — rejected by the user; this program holds unsaved
+  drawings. **(5) Publishing a prerelease per push to a feature branch** — accumulates dozens of
+  release rows; the rolling `channel-beta` tag in (d) gives the same dogfooding with one row.
+  **(6) Deriving the version bump from conventional-commit prefixes** — `.gitmessage.txt` prescribes
+  them but the actual history does not use them (`3D model import: …`, `Task logs for TASK-044..047`),
+  so it would misfire; the bump is a recorded human decision instead.
+- Consequences: a new `src/update/` module and the project's **first outbound network call** — with
+  it, the first failure mode that depends on a machine we do not control, and a new class of
+  requirement whose acceptance cannot be checked purely offline. `winhttp` joins the link line. The
+  executable rename is a one-time compatibility event for installed 0.4.x copies, handled by
+  `[InstallDelete]`. CI build time becomes a standing cost, mitigated by caching `build/_deps` (glfw,
+  imgui, glew, Catch2 and pdfium are all `FetchContent`). **The integrity/authenticity gap is
+  accepted, not closed:** SHA-256 detects corruption but the hash ships beside the binary, so the
+  trust anchor is TLS plus GitHub account security. Authenticode signing is recorded as technical
+  debt and the pipeline carries a no-op signing step so it can be filled in without restructuring.
+  Deliberately not designed for: delta/patch updates, rollback to a previous version, per-user
+  (non-elevated) installation, staged rollouts, and any platform other than Windows x64.

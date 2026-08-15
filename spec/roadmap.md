@@ -136,6 +136,23 @@ A lightweight board that complements the milestones. Keep each column honest.
   (linear contours only), proximity / wall / non-destructive breaklines, surface import from
   Civil 3D, and DEM / point-cloud sources. See ADR-028.
 
+### M-Distribution — Automated releases and in-app updates (incremental)
+- **Accepted 2026-08-15** (REQ-077, REQ-078, REQ-202, ADR-029). Runs in parallel with M-Surfaces:
+  it touches the build, the installer and one new module, and shares no code with surfaces.
+- The steps are sequenced so the pipeline is proven before anything depends on it:
+  - Step 1 — TASK-048, the packaging refactor: one generated `Version.hpp`, the executable renamed
+    to `GoSurvey.exe`, `installer/` un-ignored and its two per-version scripts collapsed into one
+    parameterized `GoSurvey.iss`, and the `AppMutex` that lets Inno close a running instance.
+  - Step 2 — TASK-049, the CI pipeline (REQ-202): build + test on every push, artifact-only on
+    feature branches, a rolling `channel-beta` prerelease from the `beta` branch, and a
+    version-gated stable release from `master`.
+  - Step 3 — TASK-050, the updater (REQ-077 + REQ-078). Deliberately last: it consumes the manifest
+    that step 2 produces, so by the time it is written its input already exists and is observable.
+- **Deliberately out of scope:** delta/patch updates, rollback to a previous version, per-user
+  (non-elevated) installation, staged rollouts, and any platform but Windows x64. See ADR-029.
+- **Known debt on entry:** the installer is unsigned, so SmartScreen will warn on download and the
+  SHA-256 proves integrity but not authenticity. Tracked as debt, not as a solved problem.
+
 ### Next (accepted, sequenced, not started)
 - `<REQ-101 — coordinate tolerance regression>`
 - `<REQ-100 — frame-budget benchmark>`
@@ -175,6 +192,8 @@ M1 walking skeleton
 |------|--------|--------------------|
 | `<Reference data unavailable for tolerance test>` | blocks M2 verification | `<obtain dataset / build synthetic reference>` |
 | GL driver variance across target GPUs | perf budget unmet on some HW | **Mitigated 2026-08-12**: reference hardware is defined (`project.md` §7) and REQ-100 is measurable on demand via `BENCH`. Residual risk stands — the budget is only known on that one machine, and it holds to 750k segments there, so a weaker GPU has 3–4× less headroom than the figure suggests |
+| The installer is unsigned (ADR-029, D5) | SmartScreen warns on every download, and an auto-offered update is exactly the context where users are least equipped to judge that warning | Accepted for now. The pipeline carries a no-op signing step so a cert drops in without restructuring. Since the 2023 CA/Browser hardware-key rules this needs a cloud signing service (Azure Trusted Signing / SSL.com eSigner / DigiCert KeyLocker), not a `.pfx` in a CI secret — pricing and eligibility to be confirmed when pursued |
+| The release pipeline runs on hardware we do not control | A GitHub runner image change (Inno Setup version, MSVC toolset, Windows SDK) can break releases without a commit touching the repo | Pin what can be pinned; the version gate means a broken pipeline fails loudly on master without publishing a bad release. Residual risk stands: REQ-200 reproducibility is now asserted against a moving runner image |
 | `<…>` | `<…>` | `<…>` |
 
 ---
@@ -196,4 +215,5 @@ M1 walking skeleton
 | Date | Change | Reason |
 |------|--------|--------|
 | `<2026-06-10>` | `<Initial roadmap>` | `<—>` |
+| 2026-08-15 | Added **M-Distribution** (REQ-077/078/202, ADR-029), running in parallel with M-Surfaces | User asked for automated releases and an auto-updater. It parallelises safely because it touches the build, the installer and one new module, sharing no code with surfaces — and it pays down an existing gap rather than adding scope: the installer script was gitignored and machine-specific, so REQ-200's reproducibility promise did not reach the artifact users actually received |
 | `<…>` | `<Moved X from Later to Now>` | `<user need materialized>` |
