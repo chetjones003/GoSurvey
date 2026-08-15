@@ -4,6 +4,8 @@
 #include <string>
 #include <vector>
 
+#include "PointGroupRule.hpp"
+
 enum class SurveyPointLabelStyle : uint8_t {
   None = 0,
   NumberDesc,
@@ -34,10 +36,22 @@ struct SurveyPoint {
   float northing = 0.f;
   float elevation = 0.f;
   std::string description;
+  /// The field code as collected, never rewritten by an edit to \ref description (REQ-066).
+  ///
+  /// The two are independent on purpose: a crew codes `EG`, the office expands or edits the
+  /// description, and a point group keyed on the raw code must still match afterwards (REQ-067).
+  /// **Empty means "this point predates REQ-066"** — every drawing written before it, and every
+  /// pre-REQ-066 DXF — and consumers fall back to \ref description rather than skipping the point.
+  std::string rawDescription;
   std::string layer;
   SurveyPointLabelStyle labelStyle = SurveyPointLabelStyle::NumberDesc;
-  /// Index into \ref AppCommandState::cadAnnotations for linked MTEXT label, or -1.
-  int labelMtextAnnIndex = -1;
+  /// Stable id (\ref EntityAttributes::id) of this point's linked MTEXT label, or 0 for none.
+  ///
+  /// **An id, not an index** (REQ-076 / architecture §11.9). It was `labelMtextAnnIndex`, and
+  /// keeping it correct cost a decrement loop inside `EraseCadAnnotationAtIndex` — erasing any
+  /// annotation had to walk every survey point and renumber. That loop is deleted; an id needs no
+  /// fix-up because it never means anything but the entity it was issued to.
+  std::uint64_t labelMtextAnnId = 0;
 };
 enum class SurveyDuplicatePolicy { Notify, Renumber, Merge, Overwrite };
 
@@ -79,6 +93,31 @@ void AppendSurveyPointCrossVertices(float easting, float northing, float elevati
 
 void AppendAllSurveyPointMarkers(float crossHalfWorld, const std::vector<SurveyPoint>& pts,
                                  std::vector<float>* outLines, const MarkerBillboardBasis& basis = {});
+
+/// Resolve a survey point's label link to an index into \c st.cadAnnotations, or -1 if there is none.
+///
+/// The link is stored as a stable entity id (REQ-076), so this is the one place that turns it back
+/// into an index — and the index is a return value, never something a caller stores.
+[[nodiscard]] int FindSurveyLabelAnnIndex(const AppCommandState& st, const SurveyPoint& p);
+
+/// Resolve a label MTEXT's back-link to an index into \c st.surveyPoints, or -1 if there is none.
+///
+/// The argument is a \c SurveyPoint::id (the point number), not an array position — that is what
+/// \c CadAnnotation::surveyPointLabelForId now holds (REQ-076).
+[[nodiscard]] int SurveyPointIndexForId(const AppCommandState& st, int surveyPointId);
+
+/// Indices into \c st.surveyPoints of every point matching \p group (REQ-067).
+///
+/// Computed fresh on every call — a group stores a rule, never a member list (ASSUMPTION-3). Returns
+/// indices rather than ids because callers immediately want the points; ids are what get *stored*.
+///
+/// \param log optional; receives a line when the rule names ranges it could not parse, and when a
+///        configured rule resolves to nothing — both are things the user needs told (REQ-201).
+[[nodiscard]] std::vector<int> ResolvePointGroup(const AppCommandState& st, const PointGroup& group,
+                                                 std::vector<std::string>* log = nullptr);
+
+/// Index of the group named \p name (case-insensitive), or -1.
+[[nodiscard]] int FindPointGroupIndex(const AppCommandState& st, const std::string& name);
 
 void ResetCreatePointsNextIdFromSettings(AppCommandState& st);
 

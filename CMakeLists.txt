@@ -101,6 +101,8 @@ add_executable(GoSurvey
   # Command system
   src/commands/CadCommands.cpp
   src/commands/CadLinetype.cpp
+  src/commands/EntityId.cpp
+  src/survey/PointGroupRule.cpp
   src/commands/CadCoordinateFrame.cpp
 
   # Viewport system
@@ -120,6 +122,8 @@ add_executable(GoSurvey
   src/ui/CadUi_SurveyReports.cpp
   src/ui/CadUi_ImportExportPoints.cpp
   src/ui/CadUi_TraverseEditor.cpp
+  src/ui/CadUi_PointGroups.cpp
+  src/ui/CadUi_Surfaces.cpp
   src/ui/SplashScreen.cpp
   src/ui/ImGuiLayout.cpp
   src/ui/MtextRichFormat.cpp
@@ -165,6 +169,7 @@ add_executable(GoSurvey
   src/util/gltfimport.cpp
   src/util/stlimport.cpp
   src/io/DwgMeshConvert.cpp
+  src/util/tinbuild.cpp
   src/util/benchscene.cpp
 )
 
@@ -313,6 +318,9 @@ if(GOSURVEY_BUILD_TESTS)
     tests/MeshGsRoundTripTests.cpp
     tests/GltfImportTests.cpp
     tests/StlImportTests.cpp
+    tests/EntityIdTests.cpp
+    tests/PointGroupTests.cpp
+    tests/TinBuildTests.cpp
     src/traverse/TraverseCalc.cpp
     src/traverse/TraverseLeastSquares.cpp
     src/traverse/FbkImport.cpp
@@ -332,6 +340,16 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-065 glTF reader. Pure and GL-free by design (ADR-026 (d)) so it is tested without a window.
     src/util/gltfimport.cpp
     src/util/stlimport.cpp
+    # REQ-076 stable entity identity. Standalone like DwgProbe.cpp — only <cstdint>/<vector> and the
+    # POD attribute struct — so the never-reuse and resolve-to-nothing rules are tested without the
+    # GUI stack that AppCommandState drags in.
+    src/commands/EntityId.cpp
+    # REQ-067 point-group membership rules. Pure like EntityId.cpp: the union-vs-intersection
+    # semantics are a recorded user decision and must be testable without the GUI stack.
+    src/survey/PointGroupRule.cpp
+    # REQ-068 Delaunay triangulation. Pure by ADR-028 (c); its double-precision predicates are the
+    # part a float build gets silently wrong, so they must be pinned without a GL context.
+    src/util/tinbuild.cpp
   )
   target_include_directories(GoSurveyTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CadEntities.hpp"
+#include "EntityId.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
 #include "PdfAttach.hpp"
 #include "PaperSpace.hpp"
@@ -210,7 +211,13 @@ struct DrawingGeometrySnapshot {
   /// amended 2026-08-12 — a snapshot of a 2M-triangle model is a refcount bump, not ~53 MB.
   std::vector<std::shared_ptr<const CadMesh>> cadMeshes;
   std::vector<EntityAttributes> cadMeshAttrs;
+  /// TIN surfaces (REQ-068). Shared payload, not copied — see CadTin and architecture §11.5.
+  std::vector<CadSurface>       cadSurfaces;
+  std::vector<EntityAttributes> cadSurfaceAttrs;
   std::vector<SurveyPoint>      surveyPoints;
+  /// Named point groups (REQ-067). Undoable, like textStyles — creating or editing one is a
+  /// single-step undo. Rules only; membership is never stored.
+  std::vector<PointGroup>       pointGroups;
   std::vector<CadLayerRow>      drawingLayerTable;
   std::vector<TextStyle>        textStyles;    ///< Named text styles (REQ-044) — undoable so style edits undo.
   std::vector<PdfAttachment>    pdfAttachments;
@@ -232,6 +239,9 @@ struct DrawingDocument {
   float  viewportElevationDeg = 90.f;
   double worldDocumentOriginX = 0.0;
   double worldDocumentOriginY = 0.0;
+  /// Per-drawing entity-id counter (REQ-076). Saved/restored with the tab so two open drawings
+  /// number independently; see AppCommandState::nextEntityId for why undo never rewinds it.
+  std::uint64_t nextEntityId = 1;
 
   std::vector<float>            userLinesFlat;
   std::vector<EntityAttributes> userLineAttrs;
@@ -251,7 +261,10 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadFilledRegionAttrs;
   std::vector<std::shared_ptr<const CadMesh>> cadMeshes;  ///< REQ-063; shared, see CadMesh's note.
   std::vector<EntityAttributes> cadMeshAttrs;
+  std::vector<CadSurface>       cadSurfaces;       ///< TIN surfaces (REQ-068).
+  std::vector<EntityAttributes> cadSurfaceAttrs;
   std::vector<SurveyPoint>      surveyPoints;
+  std::vector<PointGroup>       pointGroups;            ///< Named point groups (REQ-067).
   std::vector<int>              selectedSurveyPointIndices;
   std::vector<CadLayerRow>      drawingLayerTable;
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
@@ -566,10 +579,16 @@ struct AppCommandState {
     double orbitDegPerFrame = 0.0;
     std::vector<double> frameMs;
 
+    /// Points in the surface profile (REQ-100 as amended, ADR-028). 0 = the line-segment profile.
+    int surfacePointCount = 0;
+    int surfaceTriangleCount = 0;
+
     std::vector<float> savedPolyVerts;
     std::vector<int> savedPolyOffsets;
     std::vector<std::uint8_t> savedPolyClosed;
     std::vector<EntityAttributes> savedPolyAttrs;
+    std::vector<CadSurface> savedSurfaces;            ///< restored verbatim after a surface run
+    std::vector<EntityAttributes> savedSurfaceAttrs;
     float savedAzimuthDeg = 0.f;
     float savedElevationDeg = 90.f;
     float savedZoom = 1.f;
@@ -803,6 +822,20 @@ struct AppCommandState {
   /// cancels).
   bool segmentAngleKeyboardAwaitBearing = false;
 
+  /// Next stable entity id to hand out for this drawing (REQ-076 / ADR-027). Monotonic, persisted
+  /// in `.gs`, and **never rewound** — in particular it is deliberately NOT part of
+  /// \ref DrawingGeometrySnapshot, so draw → undo → draw gives the second entity a *new* id rather
+  /// than reusing the undone one's. Reuse is the one thing an identity must not do.
+  std::uint64_t nextEntityId = 1;
+  /// \ref cadGpuRevision at the last \ref EnsureEntityIds sweep. The sweep early-outs when geometry
+  /// has not changed since, which is what makes it safe to call unconditionally every frame — the
+  /// common case is one integer compare, not a walk of every entity (architecture §11.7).
+  ///
+  /// Deliberately **64-bit against a 32-bit revision**, so \ref kEntityIdSweepNever can be a value
+  /// the revision cannot reach. A 32-bit sentinel would collide once every 2^32 edits and skip the
+  /// sweep for that drawing — rare enough to never be reproduced, and silent when it happened.
+  std::uint64_t entityIdSweepRevision = kEntityIdSweepNever;
+
   /// Line vertices for GL: pairs (x,y,z) per endpoint; each segment is two endpoints.
   std::vector<float> userLinesFlat;
   std::vector<EntityAttributes> userLineAttrs;
@@ -886,6 +919,11 @@ struct AppCommandState {
   /// §11.5 as amended). "Editing" a mesh means replacing the pointer; never write through it.
   std::vector<std::shared_ptr<const CadMesh>> cadMeshes;
   std::vector<EntityAttributes> cadMeshAttrs;
+
+  /// TIN surfaces (REQ-068). The heavy triangulation hangs off a shared_ptr inside each CadSurface,
+  /// so copying this vector — which every undo snapshot does — is strings and refcount bumps.
+  std::vector<CadSurface> cadSurfaces;
+  std::vector<EntityAttributes> cadSurfaceAttrs;
 
   // --- HATCH command (REQ-043) ---
   /// Boundary loop traced under the cursor while HATCH is active (flat local x,y); valid drives the preview.
@@ -1029,6 +1067,8 @@ struct AppCommandState {
 
   // --- Survey / COGO points (in-memory database; optional JSON file) ---
   std::vector<SurveyPoint> surveyPoints;
+  /// Named point groups (REQ-067) — drawing-owned rules, resolved on demand, never cached.
+  std::vector<PointGroup> pointGroups;
   CreatePointsOptions createPointsOpts;
   int createPointsNextId = 1;
   bool showCreatePointsWindow = false;
@@ -1060,6 +1100,8 @@ struct AppCommandState {
   bool showLayerManagerWindow = false;
   /// Text style manager (STYLE / ribbon). Create / rename / delete / edit named text styles (REQ-044).
   bool showTextStyleManagerWindow = false;
+  bool showPointGroupManagerWindow = false;  ///< Point Group manager (REQ-067).
+  bool showSurfaceManagerWindow = false;     ///< Surfaces panel (REQ-068).
   /// Current layer for new geometry (ribbon combo + command defaults).
   std::string currentLayer = "0";
   std::vector<CadLayerRow> drawingLayerTable;
@@ -1526,6 +1568,81 @@ inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) {
   return p;
 }
 
+
+/// Which entity array a \ref EntityRef designates. Mirrors SelectedEntity::Type for the kinds that
+/// carry an EntityAttributes, which is exactly the set REQ-076 gives an id.
+enum class EntityKind : std::uint8_t {
+  Line = 0, Circle, Arc, Ellipse, Polyline, Annotation, FilledRegion, Mesh
+};
+
+/// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
+///
+/// The index is deliberately a **return value, not something you store** — it is valid only until
+/// the next erase, which is the whole reason ids exist (architecture §11.9). Store the id; resolve
+/// when you need to touch the entity.
+struct EntityRef {
+  EntityKind kind = EntityKind::Line;
+  int        index = -1;   ///< -1 = the id does not resolve (erased, or never existed).
+  [[nodiscard]] bool valid() const { return index >= 0; }
+};
+
+/// Assign a stable id to every entity that lacks one (REQ-076 / ADR-027).
+///
+/// **Idempotent**: an entity that already has an id keeps it, always. Only `id == 0` is filled, from
+/// \ref AppCommandState::nextEntityId, in a fixed array order — which is what makes assignment
+/// deterministic for a legacy `.gs` (same file, same ids, every load).
+///
+/// Deliberately called only at **cold boundaries** — before an undo snapshot, before a `.gs` save,
+/// and before a reference is taken — never per frame (architecture §11.7). Assigning at the 127
+/// sites that construct an EntityAttributes was rejected: a missed site there is not a compile
+/// error, it is a silently id-less entity (the ADR-025 (a) lesson).
+/// Append every visible surface's triangle edges to \p out as world-space line vertices
+/// (x,y,z per endpoint, two endpoints per segment) — the buffer `ViewportRenderer` draws (REQ-068).
+///
+/// Surfaces on an off or frozen layer are skipped here rather than in the renderer, which keeps
+/// layer policy in one place and the renderer ignorant of it.
+///
+/// **Rebuild only when the geometry revision changes**: a 200k-triangle surface is 600k segments,
+/// and regenerating that every frame would burn the REQ-100 budget on work whose input did not move.
+void AppendSurfaceEdgeLines(const AppCommandState& st, std::vector<float>* out);
+
+/// Index of the surface named \p name (case-insensitive), or -1 (REQ-068).
+[[nodiscard]] int FindSurfaceIndex(const AppCommandState& st, const std::string& name);
+
+/// (Re)build \p surface's triangulation from its source point groups (REQ-068).
+///
+/// Replaces the shared pointer wholesale rather than writing through it — the condition the
+/// architecture §11.5 sharing exemption rests on. Reports what it did and, on failure, leaves the
+/// surface's previous triangulation untouched rather than half-replacing it (REQ-001).
+///
+/// Returns true when a surface was produced.
+bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log);
+
+/// Create a named surface from \p groupNames and build it. Returns the new surface's index, or -1
+/// when the name is taken or the build produced nothing.
+int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
+                                 const std::vector<std::string>& groupNames,
+                                 std::vector<std::string>& log);
+
+/// Erase a surface by index, keeping its attribute array in step. Callers own the undo snapshot.
+void EraseSurfaceAtIndex(AppCommandState& st, size_t index);
+
+void EnsureEntityIds(AppCommandState& st);
+
+/// Take the next id immediately, for the caller to stamp on an entity it is creating.
+///
+/// For the case \ref EnsureEntityIds cannot serve: code that creates an entity **and stores a
+/// reference to it in the same breath** — a survey point and its label (REQ-023) — where waiting
+/// for the sweep would mean writing down a reference to id 0.
+[[nodiscard]] std::uint64_t AllocEntityId(AppCommandState& st);
+
+/// Resolve a stable id to its array and current index, or an invalid ref if the entity is gone.
+///
+/// Linear over the attribute arrays: ADR-027 (c) deliberately keeps **no stored id→index map**,
+/// because the dominant access is "resolve a handful of ids when something rebuilds", not a
+/// per-frame lookup, and a permanent map would cost sync risk for nothing (architecture §5).
+/// Resolving many ids at once? Build a local map from the same arrays and throw it away after.
+[[nodiscard]] EntityRef FindEntityById(const AppCommandState& st, std::uint64_t id);
 
 /// Capture the active tab's current geometry into the undo stack; clears redo stack; trims to undoHistoryMaxSize.
 void PushUndoSnapshot(AppCommandState& st, const std::string& description);

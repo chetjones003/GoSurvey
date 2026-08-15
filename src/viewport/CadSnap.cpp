@@ -1342,7 +1342,7 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
       if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadAnnotations.size()) {
         const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(sel.index)];
         if (a.kind == CadAnnotation::Kind::Mtext) {
-          if (a.surveyPointLabelFor >= 0) {
+          if (a.surveyPointLabelForId >= 0) {
             gripCandidate(0.5f * (a.boxMinX + a.boxMaxX), 0.5f * (a.boxMinY + a.boxMaxY), a.insZ);
           } else {
             gripCandidate(a.boxMinX, a.boxMinY, a.insZ);

@@ -335,6 +335,26 @@ int main()
         StartPasteCommand(cmd, cmdLog);
     }
 
+    // TIN surface triangle edges (REQ-068), rebuilt only when the geometry revision moves. At the
+    // REQ-100 surface density this buffer is ~600k segments; regenerating it every frame would
+    // spend the frame budget re-deriving something whose input has not changed.
+    static std::vector<float> surfaceEdges;
+    static std::uint32_t surfaceEdgesRevision = 0xFFFFFFFFu;
+    static int surfaceEdgesTab = -1;
+    if (surfaceEdgesRevision != cmd.cadGpuRevision || surfaceEdgesTab != cmd.activeDrawingIdx) {
+      surfaceEdgesRevision = cmd.cadGpuRevision;
+      surfaceEdgesTab = cmd.activeDrawingIdx;  // two tabs can sit at the same revision
+      surfaceEdges.clear();
+      AppendSurfaceEdgeLines(cmd, &surfaceEdges);
+    }
+
+    // Stable entity ids (REQ-076 / ADR-027). Called once here, after the frame's input has been
+    // handled and before any panel can save, reference or snapshot an entity — so nothing above
+    // ever observes an id-less entity. It early-outs on an unchanged geometry revision, so a frame
+    // that drew nothing pays one integer compare. Assigning at the ~127 sites that construct an
+    // EntityAttributes was rejected: a missed site there is silent, not a compile error.
+    EnsureEntityIds(cmd);
+
     const ImGuiViewport *mainVp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(mainVp->WorkPos);
     ImGui::SetNextWindowSize(mainVp->WorkSize);
@@ -491,6 +511,8 @@ int main()
     ImGuiLayout_DrawLayoutPopups(cmd, cmdLog);
     DrawLayerManagerWindow(cmd, &cmdLog);
     DrawTextStyleManagerWindow(cmd, &cmdLog);
+    DrawPointGroupManagerWindow(cmd, &cmdLog);
+    DrawSurfaceManagerWindow(cmd, &cmdLog);
     DrawViewPointsPanel(cmd, cmdLog);
     DrawImportPointsPanel(cmd, cmdLog);
     DrawExportPointsPanel(cmd, cmdLog);
@@ -533,16 +555,8 @@ int main()
     AppendCadDraftRubberLines(cmd, commitCurX, commitCurY, orthoEnabled, cmd.viewportPanX, cmd.viewportPanY,
                               orthoHalfH, fbH, rubberLines);
 
-    float selRectBuf[4]{};
-    const float *selRectPtr = nullptr;
-    if (cmd.selBoxWaitingSecond)
-    {
-      selRectBuf[0] = std::min(cmd.selBoxAnchorX, static_cast<float>(curRawX));
-      selRectBuf[1] = std::max(cmd.selBoxAnchorX, static_cast<float>(curRawX));
-      selRectBuf[2] = std::min(cmd.selBoxAnchorY, static_cast<float>(curRawY));
-      selRectBuf[3] = std::max(cmd.selBoxAnchorY, static_cast<float>(curRawY));
-      selRectPtr = selRectBuf;
-    }
+    // The selection box is drawn by the CadUi overlay (TASK-047), screen-aligned from the same two
+    // projected corners the hit test uses, so it no longer needs to reach the GL renderer at all.
 
     std::vector<float> previewLines;
     std::vector<float> previewCircles;
@@ -704,7 +718,7 @@ int main()
     activeRenderer.RenderScene(CadViewCamera(cmd), fbW, fbH, sceneLines,
                                sceneCircles, cmd.cadGpuRevision,
                                sceneRubber, (paperSpace || !snapHit.valid) ? nullptr : &snapHit,
-                               std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f), paperSpace ? nullptr : selRectPtr,
+                               std::clamp(cmd.objectSnapGlyphHalfPx, 3.f, 48.f),
                                (paperSpace || previewLines.empty()) ? nullptr : &previewLines,
                                (paperSpace || previewCircles.empty()) ? nullptr : &previewCircles,
                                (paperSpace || highlightLines.empty()) ? nullptr : &highlightLines,
@@ -720,7 +734,9 @@ int main()
                                (paperSpace || cmd.cadFilledRegionAttrs.empty()) ? nullptr : &cmd.cadFilledRegionAttrs,
                                // Meshes are model-space only, like every other GL entity (REQ-063).
                                (paperSpace || cmd.cadMeshes.empty()) ? nullptr : &cmd.cadMeshes,
-                               (paperSpace || cmd.cadMeshAttrs.empty()) ? nullptr : &cmd.cadMeshAttrs);
+                               (paperSpace || cmd.cadMeshAttrs.empty()) ? nullptr : &cmd.cadMeshAttrs,
+                               // TIN surface edges (REQ-068), model space only like every GL entity.
+                               (paperSpace || surfaceEdges.empty()) ? nullptr : &surfaceEdges);
 
     ImGui::Render();
     int displayW = 0;

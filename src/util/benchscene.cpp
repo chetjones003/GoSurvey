@@ -112,4 +112,43 @@ FrameStats Summarize(const std::vector<double>& frameMs) {
   return s;
 }
 
+int BuildSurfacePointScene(int targetPoints, std::vector<float>* outXyz) {
+  if (!outXyz || targetPoints <= 0)
+    return 0;
+  outXyz->clear();
+  outXyz->reserve(static_cast<size_t>(targetPoints) * 3);
+
+  // A jittered grid rather than pure random scatter: it fills the extent evenly, the way a real
+  // topo survey does, and it cannot produce the clustered coincident points that would turn the
+  // measurement into a test of de-duplication. Deterministic — a fixed seed and an integer LCG, no
+  // clock and no entropy, so the same commit measures the same geometry (REQ-200 in spirit).
+  const int side = static_cast<int>(std::sqrt(static_cast<double>(targetPoints))) + 1;
+  const double extent = 5000.0;  // feet across, a realistic site
+  const double step = extent / static_cast<double>(side);
+
+  std::uint32_t seed = 20260815u;
+  auto next01 = [&seed]() {
+    seed = seed * 1664525u + 1013904223u;
+    return static_cast<double>((seed >> 8) & 0xFFFFu) / 65535.0;
+  };
+
+  int made = 0;
+  for (int i = 0; i < side && made < targetPoints; ++i) {
+    for (int j = 0; j < side && made < targetPoints; ++j) {
+      // Jitter stays inside the cell, so no two sites can collide.
+      const double x = (static_cast<double>(i) + 0.15 + 0.7 * next01()) * step;
+      const double y = (static_cast<double>(j) + 0.15 + 0.7 * next01()) * step;
+      // Smooth terrain: two sinusoids, ~60 ft of relief. Contours over this are long and smooth,
+      // which is what REQ-070 will eventually be measured against.
+      const double z = 100.0 + 20.0 * std::sin(x / 400.0) + 10.0 * std::cos(y / 260.0) +
+                       6.0 * std::sin((x + y) / 900.0);
+      outXyz->push_back(static_cast<float>(x));
+      outXyz->push_back(static_cast<float>(y));
+      outXyz->push_back(static_cast<float>(z));
+      ++made;
+    }
+  }
+  return made;
+}
+
 } // namespace benchscene

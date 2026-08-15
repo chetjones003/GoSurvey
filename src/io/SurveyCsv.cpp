@@ -290,6 +290,10 @@ ParseOutcome ParseDataRow(const std::vector<std::string>& cells, SurveyCsvLayout
   o.pt.northing = static_cast<float>(n);
   o.pt.elevation = z;
   o.pt.description = desc;
+  // A CSV's description column IS the code the crew entered, so it is the raw description too
+  // (REQ-066). Both are seeded here and diverge later, when the office edits `description` — which
+  // is the whole point of keeping the raw one.
+  o.pt.rawDescription = desc;
   o.pt.layer = "0";
   o.ok = true;
   return o;

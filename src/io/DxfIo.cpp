@@ -1153,7 +1153,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       double px = 0, py = 0, pz = 0;
       bool isGoSurvey = false, inGoSurveyXdata = false;
       int sid = 0, slabel = 0;
-      std::string sdesc;
+      std::string sdesc, sraw;
+      int nGoSurveyStrings = 0;  // how many XDATA 1000s seen; position identifies which field
       for (size_t k = i + 1; k < j; ++k) {
         const int c = t[k].code;
         const std::string& v = t[k].value;
@@ -1164,7 +1165,13 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         else if (c == 1001) { inGoSurveyXdata = (v == "GOSURVEY"); if (inGoSurveyXdata) isGoSurvey = true; }
         else if (inGoSurveyXdata && c == 1071) ParseIntFlexible(v, &sid);
         else if (inGoSurveyXdata && c == 1070) ParseIntFlexible(v, &slabel);
-        else if (inGoSurveyXdata && c == 1000) sdesc = v;
+        else if (inGoSurveyXdata && c == 1000) {
+          // Order is the discriminator (REQ-066): first 1000 = description, second = raw
+          // description. A pre-REQ-066 POINT carries only the first, so sraw stays empty.
+          if (nGoSurveyStrings == 0) sdesc = v;
+          else if (nGoSurveyStrings == 1) sraw = v;
+          ++nGoSurveyStrings;
+        }
       }
       const auto at = base.makeAttr(layerRgb);
       if (isGoSurvey) {
@@ -1179,6 +1186,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         sp.northing  = static_cast<float>(wy - st.worldDocumentOriginY);
         sp.elevation = static_cast<float>(pz);
         sp.description = sdesc;
+        sp.rawDescription = sraw;  // empty for a pre-REQ-066 DXF — the documented fallback case
         sp.layer = at.layer.empty() ? std::string("0") : at.layer;
         sp.labelStyle = static_cast<SurveyPointLabelStyle>(
             std::clamp(slabel, 0, static_cast<int>(SurveyPointLabelStyle::NumberNorthEastElev)));
@@ -1787,7 +1795,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
     if (oldOriginX != 0.0 || oldOriginY != 0.0)
       CadCoord::ShiftAllStorageBy(st, oldOriginX, oldOriginY);
     for (SurveyPoint& p : st.surveyPoints)
-      p.labelMtextAnnIndex = -1;
+      p.labelMtextAnnId = 0;
   }
 
   // Parse HEADER $EXTMIN/$EXTMAX to set the world origin before entity parsing.
@@ -1941,7 +1949,7 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
         w.northing = static_cast<float>(static_cast<double>(sp.northing) + st.worldDocumentOriginY);
         embeddedConflictsWorld.push_back(w);
       } else {
-        sp.labelMtextAnnIndex = -1;
+        sp.labelMtextAnnId = 0;
         st.surveyPoints.push_back(sp);
       }
     }
@@ -2978,14 +2986,22 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     // Coordinates stay in 10/20/30 and layer in 8; a reader that ignores the
     // GOSURVEY app id still sees a valid POINT.
     {
-      std::string desc = p.description;
-      for (char& c : desc)
-        if (c == '\r' || c == '\n') c = ' ';
-      if (desc.size() > 255) desc.resize(255);
+      auto flatten = [](std::string s) {
+        for (char& c : s)
+          if (c == '\r' || c == '\n') c = ' ';
+        if (s.size() > 255) s.resize(255);  // XDATA string limit
+        return s;
+      };
       emitPair(1001, "GOSURVEY");
       emitPair(1071, std::to_string(p.id));
       emitPair(1070, std::to_string(static_cast<int>(p.labelStyle)));
-      emitPair(1000, desc);
+      // Two 1000 strings, distinguished by ORDER: first = description, second = raw description
+      // (REQ-066). 1000 is the only general string code XDATA offers, so position is the only
+      // discriminator available; the reader counts them the same way. A pre-REQ-066 file emits one,
+      // which is why an old DXF loads with rawDescription empty rather than misreading the
+      // description as a field code.
+      emitPair(1000, flatten(p.description));
+      emitPair(1000, flatten(p.rawDescription));
     }
     ++nPointOut;
   }
@@ -3143,7 +3159,7 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       emitPair(1, txt);
       // Survey-point label marker (REQ-023): import skips these and lets the
       // reconstructed point regenerate its own linked label (avoids duplicates).
-      if (an.surveyPointLabelFor >= 0)
+      if (an.surveyPointLabelForId >= 0)
         emitPair(1001, "GOSURVEY");
       ++nMtextOut;
     }
@@ -3240,6 +3256,19 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
                 std::to_string(nPointOut) + " POINT(s), " + std::to_string(nTextOut) + " TEXT, " +
                 std::to_string(nMtextOut) + " MTEXT, " + std::to_string(nDimExplodedLines) + " LINE(s) from dimensions, " +
                 std::to_string(nHatchOut) + " HATCH(es).");
+
+  // REQ-068 / ADR-028 (f): surfaces have no lossless DXF representation and are not written. The
+  // exclusion is NAMED rather than left to be discovered — a drawing that quietly lost its surface
+  // on export and a drawing that never had one look identical in the resulting file (REQ-201). Same
+  // treatment REQ-063 meshes get.
+  if (!st.cadSurfaces.empty()) {
+    std::string names;
+    for (size_t i = 0; i < st.cadSurfaces.size(); ++i)
+      names += (i ? ", " : "") + st.cadSurfaces[i].name;
+    log.push_back("DXF export — excluded " + std::to_string(st.cadSurfaces.size()) +
+                  " TIN surface(s) (no DXF representation): " + names +
+                  ". Extract contours first if they are needed in the DXF.");
+  }
   return true;
 }
 

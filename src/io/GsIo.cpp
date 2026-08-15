@@ -19,6 +19,7 @@ constexpr int kGsFormatVersion = 1;
 using nlohmann::json;
 
 void EntityAttributesToJson(const EntityAttributes& e, json& o) {
+  o["id"] = e.id;  // REQ-076 stable identity; additive, no format-version bump (ADR-020 (d))
   o["layer"] = e.layer;
   o["color"] = e.color;
   o["linetype"] = e.linetype;
@@ -28,6 +29,10 @@ void EntityAttributesToJson(const EntityAttributes& e, json& o) {
 
 EntityAttributes EntityAttributesFromJson(const json& o) {
   EntityAttributes e;
+  // A file written before REQ-076 has no "id", so every entity loads as 0 and EnsureEntityIds
+  // assigns in its fixed array order — which is why loading the same legacy file twice yields the
+  // same ids, as REQ-076's acceptance requires.
+  e.id           = o.value("id",           static_cast<std::uint64_t>(0));
   e.layer        = o.value("layer",        e.layer);
   e.color        = o.value("color",        e.color);
   e.linetype     = o.value("linetype",     e.linetype);
@@ -121,7 +126,7 @@ void CadAnnotationToJson(const CadAnnotation& a, json& o) {
   o["dimSignedOffset"] = a.dimSignedOffset;
   if (a.kind == CadAnnotation::Kind::DimLinear)
     o["dimLinearVertical"] = a.dimLinearVertical;
-  o["surveyPointLabelFor"] = a.surveyPointLabelFor;
+  o["surveyPointLabelForId"] = a.surveyPointLabelForId;  // a point id since REQ-076, not an index
   if (a.surveyLabelHasUserOffset) {
     o["surveyLabelHasUserOffset"] = true;
     o["surveyLabelUserOffsetEast"] = a.surveyLabelUserOffsetEast;
@@ -162,7 +167,12 @@ CadAnnotation CadAnnotationFromJson(const json& o) {
   a.dimSignedOffset    = o.value("dimSignedOffset",    a.dimSignedOffset);
   if (a.kind == CadAnnotation::Kind::DimLinear)
     a.dimLinearVertical = o.value("dimLinearVertical", a.dimLinearVertical);
-  a.surveyPointLabelFor = o.value("surveyPointLabelFor", a.surveyPointLabelFor);
+  // REQ-076 files carry a point id. Pre-REQ-076 files carry "surveyPointLabelFor", a survey-point
+  // *index*; it is read into the same field and converted to an id by ReconcileSurveyLabelLinks,
+  // which detects a legacy file by the absence of the document's "nextEntityId".
+  a.surveyPointLabelForId = o.contains("surveyPointLabelForId")
+                                ? o.value("surveyPointLabelForId", -1)
+                                : o.value("surveyPointLabelFor", -1);
   a.surveyLabelHasUserOffset    = o.value("surveyLabelHasUserOffset",    a.surveyLabelHasUserOffset);
   a.surveyLabelUserOffsetEast   = o.value("surveyLabelUserOffsetEast",   a.surveyLabelUserOffsetEast);
   a.surveyLabelUserOffsetNorth  = o.value("surveyLabelUserOffsetNorth",  a.surveyLabelUserOffsetNorth);
@@ -273,6 +283,25 @@ json BuildRoot(const AppCommandState& st) {
   json doc;
   doc["worldDocumentOriginX"] = st.worldDocumentOriginX;
   doc["worldDocumentOriginY"] = st.worldDocumentOriginY;
+  // REQ-076: the id counter is saved so ids are not reused across a save/load, which is what makes a
+  // stored reference safe over a file's whole life rather than only within one session.
+  doc["nextEntityId"] = st.nextEntityId;
+  // Named point groups (REQ-067). Additive section — a reader that does not know it ignores it, and
+  // a file without it loads with no groups. Rules only: membership is resolved from the current
+  // points on demand, so persisting a member list would only let it go stale.
+  {
+    json groups = json::array();
+    for (const PointGroup& g : st.pointGroups) {
+      json o;
+      o["name"] = g.name;
+      o["idRanges"] = g.rule.idRangesText;
+      o["descriptionMatch"] = g.rule.descriptionMatch;
+      o["rawDescriptionMatch"] = g.rule.rawDescriptionMatch;
+      o["explicitIds"] = g.rule.explicitIds;
+      groups.push_back(std::move(o));
+    }
+    doc["pointGroups"] = std::move(groups);
+  }
   doc["modelUnitsPerPlottedInch"] = st.modelUnitsPerPlottedInch;
   doc["drawingInsUnits"] = st.drawingInsUnits;
   doc["defaultPlottedTextHeightInches"] = st.defaultPlottedTextHeightInches;
@@ -598,6 +627,35 @@ json BuildRoot(const AppCommandState& st) {
     }
     doc["meshAttrs"] = std::move(meshAttrs);
   }
+
+  // TIN surfaces (REQ-068). Additive and omitted when there are none, so a pre-REQ-068 drawing still
+  // serializes byte-identically — the same ADR-020 (d) precedent the mesh section above follows.
+  //
+  // The triangulation is written out rather than rebuilt on load, for two reasons: rebuilding would
+  // make opening a drawing depend on its point groups still resolving the same way, and REQ-068's
+  // acceptance requires vertex positions to reload **bit-identically**, which only storing them can
+  // guarantee. Nothing here is rounded or reformatted on the way out.
+  if (!st.cadSurfaces.empty()) {
+    json surfaces = json::array();
+    for (const CadSurface& s : st.cadSurfaces) {
+      json o;
+      o["name"] = s.name;
+      o["sourcePointGroups"] = s.sourcePointGroups;
+      if (s.tin) {
+        o["verts"] = s.tin->vertsXyz;
+        o["indices"] = s.tin->indices;
+      }
+      surfaces.push_back(std::move(o));
+    }
+    doc["surfaces"] = std::move(surfaces);
+    json surfAttrs = json::array();
+    for (const auto& a : st.cadSurfaceAttrs) {
+      json o;
+      EntityAttributesToJson(a, o);
+      surfAttrs.push_back(std::move(o));
+    }
+    doc["surfaceAttrs"] = std::move(surfAttrs);
+  }
   json fillAttrs = json::array();
   for (const auto& a : st.cadFilledRegionAttrs) {
     json o;
@@ -622,9 +680,10 @@ json BuildRoot(const AppCommandState& st) {
     o["northing"] = p.northing;
     o["elevation"] = p.elevation;
     o["description"] = p.description;
+    o["rawDescription"] = p.rawDescription;  // REQ-066; additive, no format-version bump
     o["layer"] = p.layer;
     o["labelStyle"] = static_cast<int>(p.labelStyle);
-    o["labelMtextAnnIndex"] = p.labelMtextAnnIndex;
+    o["labelMtextAnnId"] = p.labelMtextAnnId;  // annotation entity id since REQ-076, not an index
     survey.push_back(std::move(o));
   }
   doc["surveyPoints"] = std::move(survey);
@@ -889,6 +948,33 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
 void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std::string>& log) {
   st.worldDocumentOriginX = doc.value("worldDocumentOriginX", 0.0);
   st.worldDocumentOriginY = doc.value("worldDocumentOriginY", 0.0);
+  // A legacy file has no counter; 1 is correct there because every entity in it also has no id, so
+  // the post-load EnsureEntityIds numbers the whole drawing from 1. EnsureEntityIds independently
+  // raises the counter above any id actually present, so a hand-edited or newer file cannot make it
+  // hand out an id that is already in use.
+  st.nextEntityId = doc.value("nextEntityId", static_cast<std::uint64_t>(1));
+
+  // Point groups (REQ-067). Absent in every file written before them → no groups, which is the
+  // "legacy `.gs` loads unchanged" acceptance condition.
+  st.pointGroups.clear();
+  if (doc.contains("pointGroups") && doc["pointGroups"].is_array()) {
+    for (const auto& o : doc["pointGroups"]) {
+      if (!o.is_object())
+        continue;
+      PointGroup g;
+      g.name = o.value("name", std::string());
+      if (g.name.empty())
+        continue;  // an unnamed group cannot be referenced or edited; dropping it beats keeping it
+      g.rule.idRangesText = o.value("idRanges", std::string());
+      g.rule.descriptionMatch = o.value("descriptionMatch", std::string());
+      g.rule.rawDescriptionMatch = o.value("rawDescriptionMatch", std::string());
+      if (o.contains("explicitIds") && o["explicitIds"].is_array())
+        for (const auto& v : o["explicitIds"])
+          if (v.is_number_integer())
+            g.rule.explicitIds.push_back(v.get<int>());
+      st.pointGroups.push_back(std::move(g));
+    }
+  }
   st.modelUnitsPerPlottedInch = doc.value("modelUnitsPerPlottedInch", 50.f);
   st.drawingInsUnits = doc.value("drawingInsUnits", 2);
   // Paper space layouts (REQ-031). Missing/garbage → no layouts, model space (no crash).
@@ -1251,6 +1337,50 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     for (const auto& o : doc["meshAttrs"])
       st.cadMeshAttrs.push_back(EntityAttributesFromJson(o));
   st.cadMeshAttrs.resize(st.cadMeshes.size());  // keep the parallel arrays length-locked
+
+  // TIN surfaces (REQ-068). Guarded, so a drawing written before them simply has none.
+  st.cadSurfaces.clear();
+  st.cadSurfaceAttrs.clear();
+  if (doc.contains("surfaces") && doc["surfaces"].is_array()) {
+    for (const auto& el : doc["surfaces"]) {
+      if (!el.is_object())
+        continue;
+      CadSurface s;
+      s.name = el.value("name", std::string());
+      if (s.name.empty())
+        continue;  // an unnamed surface cannot be referenced or managed
+      if (el.contains("sourcePointGroups") && el["sourcePointGroups"].is_array())
+        for (const auto& g : el["sourcePointGroups"])
+          if (g.is_string())
+            s.sourcePointGroups.push_back(g.get<std::string>());
+      if (el.contains("verts") && el["verts"].is_array() && el.contains("indices") &&
+          el["indices"].is_array()) {
+        auto tin = std::make_shared<CadTin>();
+        tin->vertsXyz = el["verts"].get<std::vector<float>>();
+        tin->indices = el["indices"].get<std::vector<std::uint32_t>>();
+        // A triangulation whose arrays do not agree is corrupt; drop it rather than let the renderer
+        // index past the end of the vertex array (REQ-201 — refuse, do not absorb).
+        const bool sane = (tin->vertsXyz.size() % 3 == 0) && (tin->indices.size() % 3 == 0);
+        bool inRange = sane;
+        const std::uint32_t nv = static_cast<std::uint32_t>(tin->vertsXyz.size() / 3);
+        if (sane)
+          for (std::uint32_t ix : tin->indices)
+            if (ix >= nv) {
+              inRange = false;
+              break;
+            }
+        if (inRange)
+          s.tin = std::move(tin);
+        else
+          log.push_back("Surface \"" + s.name + "\": stored triangulation is inconsistent — dropped.");
+      }
+      st.cadSurfaces.push_back(std::move(s));
+    }
+  }
+  if (doc.contains("surfaceAttrs") && doc["surfaceAttrs"].is_array())
+    for (const auto& o : doc["surfaceAttrs"])
+      st.cadSurfaceAttrs.push_back(EntityAttributesFromJson(o));
+  st.cadSurfaceAttrs.resize(st.cadSurfaces.size());  // length-locked, as with meshes
   if (!st.cadMeshes.empty()) {
     // REQ-063 requires the count to be REPORTED, not merely survived: a silent truncation and a
     // successful load are indistinguishable without it.
@@ -1329,12 +1459,19 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       p.elevation = o.value("elevation", 0.f);
       if (o.contains("description") && o["description"].is_string())
         p.description = o["description"].get<std::string>();
+      // Absent in every pre-REQ-066 file, which is exactly the "loads empty and falls back to
+      // description" case the acceptance calls for — not an error, not a copy of the description.
+      if (o.contains("rawDescription") && o["rawDescription"].is_string())
+        p.rawDescription = o["rawDescription"].get<std::string>();
       if (o.contains("layer") && o["layer"].is_string())
         p.layer = o["layer"].get<std::string>();
       const int ls = o.value("labelStyle", static_cast<int>(SurveyPointLabelStyle::NumberDesc));
       if (ls >= 0 && ls <= static_cast<int>(SurveyPointLabelStyle::NumberNorthEastElev))
         p.labelStyle = static_cast<SurveyPointLabelStyle>(ls);
-      p.labelMtextAnnIndex = o.value("labelMtextAnnIndex", -1);
+      // The pre-REQ-076 "labelMtextAnnIndex" is deliberately not read: a legacy file's links are
+      // rebuilt from the annotation side alone (see ReconcileSurveyLabelLinks), which needs one
+      // direction, not two that could disagree.
+      p.labelMtextAnnId = o.value("labelMtextAnnId", static_cast<std::uint64_t>(0));
       st.surveyPoints.push_back(std::move(p));
     }
   }
@@ -1374,23 +1511,80 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     CadCoord::FitViewportToDrawing(st, static_cast<float>(fbW) / static_cast<float>(fbH), fbW, fbH);
   }
 
-  for (size_t i = 0; i < st.surveyPoints.size(); ++i) {
-    int& li = st.surveyPoints[i].labelMtextAnnIndex;
-    if (li >= 0 && static_cast<size_t>(li) < st.cadAnnotations.size()) {
-      CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(li)];
-      if (a.kind != CadAnnotation::Kind::Mtext || a.surveyPointLabelFor != static_cast<int>(i))
-        li = -1;
-    } else
-      li = -1;
+  // Survey-point ↔ label links (REQ-076). Ids must exist before either branch runs: the legacy path
+  // writes an annotation's id into a point, and the current path validates against ids.
+  EnsureAttrCounts(st);
+  EnsureEntityIds(st);
+
+  // A file with no document-level "nextEntityId" predates REQ-076, so every label link in it is an
+  // array index. One flag for the whole file rather than a per-annotation marker, because the format
+  // changed as a unit — a file cannot be half-migrated.
+  const bool legacyIndexLinks = !doc.contains("nextEntityId");
+
+  if (legacyIndexLinks) {
+    // Rebuild both halves from the annotation side. That direction alone is sufficient, and using
+    // only one source means the two cannot contradict each other — which the old index pair could,
+    // and which is why the code below it existed at all.
+    for (SurveyPoint& p : st.surveyPoints)
+      p.labelMtextAnnId = 0;
+    int migrated = 0;
+    int skippedNotMtext = 0;
+    int skippedBadIndex = 0;
+    int skippedNoId = 0;
+    for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
+      CadAnnotation& a = st.cadAnnotations[ai];
+      const int legacyPointIndex = a.surveyPointLabelForId;  // still an index on this path
+      a.surveyPointLabelForId = -1;
+      if (legacyPointIndex < 0)
+        continue;  // not a label at all — an ordinary annotation
+      if (a.kind != CadAnnotation::Kind::Mtext) {
+        ++skippedNotMtext;
+        continue;
+      }
+      if (static_cast<size_t>(legacyPointIndex) >= st.surveyPoints.size()) {
+        ++skippedBadIndex;
+        continue;
+      }
+      const std::uint64_t annId = st.cadAnnotationAttrs[ai].id;
+      if (annId == 0) {
+        // Would silently produce an unlinked label and a duplicate on the next step (REQ-201).
+        ++skippedNoId;
+        continue;
+      }
+      SurveyPoint& p = st.surveyPoints[static_cast<size_t>(legacyPointIndex)];
+      a.surveyPointLabelForId = p.id;
+      p.labelMtextAnnId = annId;
+      ++migrated;
+    }
+    if (migrated > 0 || skippedNotMtext > 0 || skippedBadIndex > 0 || skippedNoId > 0) {
+      std::string msg = "Migrated " + std::to_string(migrated) +
+                        " survey-point label link(s) from the pre-REQ-076 format.";
+      if (skippedNotMtext > 0)
+        msg += " Skipped " + std::to_string(skippedNotMtext) + " (annotation is not MTEXT).";
+      if (skippedBadIndex > 0)
+        msg += " Skipped " + std::to_string(skippedBadIndex) + " (point index out of range).";
+      if (skippedNoId > 0)
+        msg += " Skipped " + std::to_string(skippedNoId) + " (annotation had no entity id).";
+      log.push_back(msg);
+    }
+    return;
+  }
+
+  // Current files: drop any half-link. Both directions must agree, or neither is trusted — a label
+  // pointing at a point that does not point back is an orphan, not a label.
+  for (SurveyPoint& p : st.surveyPoints) {
+    const int ai = FindSurveyLabelAnnIndex(st, p);
+    if (ai < 0 || st.cadAnnotations[static_cast<size_t>(ai)].kind != CadAnnotation::Kind::Mtext ||
+        st.cadAnnotations[static_cast<size_t>(ai)].surveyPointLabelForId != p.id)
+      p.labelMtextAnnId = 0;
   }
   for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
     CadAnnotation& a = st.cadAnnotations[ai];
-    const int sp = a.surveyPointLabelFor;
-    if (sp >= 0 && static_cast<size_t>(sp) < st.surveyPoints.size()) {
-      if (st.surveyPoints[static_cast<size_t>(sp)].labelMtextAnnIndex != static_cast<int>(ai))
-        a.surveyPointLabelFor = -1;
-    } else if (sp >= 0)
-      a.surveyPointLabelFor = -1;
+    if (a.surveyPointLabelForId < 0)
+      continue;
+    const int pi = SurveyPointIndexForId(st, a.surveyPointLabelForId);
+    if (pi < 0 || st.surveyPoints[static_cast<size_t>(pi)].labelMtextAnnId != st.cadAnnotationAttrs[ai].id)
+      a.surveyPointLabelForId = -1;
   }
 }
 
@@ -1470,11 +1664,20 @@ bool LoadGoSurveyFile(AppCommandState& st, const char* pathUtf8, std::vector<std
     EnsureAttrCounts(st);
     SyncDrawingLayerTableWithGeometry(st);
     RepositionAllSurveyPointLabels(st);
+    int recreated = 0;
     for (size_t i = 0; i < st.surveyPoints.size(); ++i) {
       if (st.surveyPoints[i].labelStyle != SurveyPointLabelStyle::None &&
-          st.surveyPoints[i].labelMtextAnnIndex < 0)
+          FindSurveyLabelAnnIndex(st, st.surveyPoints[i]) < 0) {
         EnsureSurveyPointLabelMtext(st, i, &log);
+        ++recreated;
+      }
     }
+    // Loud on purpose (REQ-201): a point whose label link did not survive the load gets a *new*
+    // label, and if the old one is still in the drawing the user sees two. Silence here is what
+    // makes that look like a rendering bug instead of a link that failed to resolve.
+    if (recreated > 0)
+      log.push_back("Recreated " + std::to_string(recreated) +
+                    " survey-point label(s) whose link did not resolve on load.");
     RepositionAllSurveyPointLabels(st);
     BumpCadGpuCache(st);
     log.push_back(std::string("Opened GoSurvey workspace (.gs): ") + pathUtf8);

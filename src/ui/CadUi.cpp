@@ -1649,7 +1649,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
   const float wAnn  = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
   const float wInq  = 8.f + colW({"Aligned", "Linear", "ID Point"});
-  const float wSrv  = 8.f + largeW + 4.f + colW({"Inverse", "Traverse"});
+  const float wSrv  = 8.f + largeW + 4.f + colW({"Inverse", "Traverse", "Groups", "Surfaces"});
   const float wView = 8.f + colW({"Extents", "Window"}) + 8.f + 132.f;  // + the visual-style combo (REQ-064)
   // REQ-032 contextual ribbon: Layout tools in paper space, but the normal model ribbon while editing a
   // viewport in place (floating model space, REQ-036) so the draw/modify tools are available.
@@ -1890,7 +1890,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         "Command bar: CREATEPOINTS or CRTPTS");
 
     ImGui::SameLine(0, 4);
-    const float cw = colW({"Inverse", "Traverse"});
+    const float cw = colW({"Inverse", "Traverse", "Groups", "Surfaces"});
     ImGui::BeginGroup();
     if (smallBtn("##RibbonInverse", RibbonIconKind::SurveyInverse, "Inverse", cw))
       StartSurveyInverseCommand(cmd, log);
@@ -1900,6 +1900,17 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     if (smallBtn("##RibbonTraverse", RibbonIconKind::Traverse, "Traverse", cw))
       cmd.showTraverseEditorWindow = true;
     RibbonItemHelp("Traverse Editor — enter traverse leg observations (horizontal angles, distances, vertical angles)\nto compute coordinates and closure. Face 1/Face 2 support included.");
+    if (smallBtn("##RibbonSurfaces", RibbonIconKind::SurveyPoint, "Surfaces", cw))
+      cmd.showSurfaceManagerWindow = true;
+    RibbonItemHelp(
+        "Surfaces — build a TIN surface by triangulating the points in one or more point groups, "
+        "then rebuild it as the survey changes.");
+    if (smallBtn("##RibbonPointGroups", RibbonIconKind::SurveyPoint, "Groups", cw))
+      cmd.showPointGroupManagerWindow = true;
+    RibbonItemHelp(
+        "Point Groups — name a set of points by rule: number ranges, description, raw description, or "
+        "picks.\nMembership is re-evaluated from the current points, so a later import joins the group "
+        "automatically.");
     ImGui::EndGroup();
   }
   RibbonSectionEnd();
@@ -3791,11 +3802,59 @@ void DrawAnnotationGeometryOnly(const AppCommandState& cmd, const std::vector<Se
   ImGui::TextDisabled("Select a single TEXT or MTEXT to edit content and box here.");
 }
 
+/// Screen-space context for picking a survey point in an orbited view (REQ-058).
+///
+/// In **plan** view a point's screen position depends only on its easting/northing, so the plain XY
+/// test below is exact — and it is kept, unchanged, for parity with the pre-3D behaviour.
+///
+/// Once the view tilts this stops being true. The marker is DRAWN at the point's own elevation
+/// (REQ-057), so it moves on screen, while the cursor's world position is its ray hit on the work
+/// plane at Z = 0. An XY test then picks the point whose *plan* position lies under the cursor,
+/// which is not the point the user can see there — on a 35 ft-relief surface that is hundreds of
+/// pixels away. Supplying this makes the test agree with what is on screen, which is the only
+/// definition of "the point under my cursor" that means anything.
+struct SurveyPickScreen {
+  const Camera* cam = nullptr;  ///< null = plan view → keep the pre-3D XY test
+  float viewW = 0.f;
+  float viewH = 0.f;
+  float cursorX = 0.f;  ///< cursor in the same space Camera::WorldToScreen produces
+  float cursorY = 0.f;
+};
+
 int PickSurveyPointIndex(const std::vector<SurveyPoint>& pts, double wx, double wy, float surveyCrossHalfWorld,
-                         float viewportHeightPx, float orthoHalfHeightWorld, float viewportPickAperturePx) {
+                         float viewportHeightPx, float orthoHalfHeightWorld, float viewportPickAperturePx,
+                         const SurveyPickScreen* screen = nullptr) {
   if (pts.empty())
     return -1;
   const float arm = std::max(surveyCrossHalfWorld, 1.e-8f);
+
+  if (screen && screen->cam) {
+    // Same rule as the world-space path — the larger of the marker's own half-extent and the pick
+    // aperture, times the same 1.38 — but measured in pixels, because that is the space the marker
+    // is actually drawn in once the view is orbited.
+    const float worldPerPx = (2.f * orthoHalfHeightWorld) / std::max(viewportHeightPx, 1.f);
+    const float armPx = arm / std::max(worldPerPx, 1.e-6f);
+    const float radPx = std::max(armPx, viewportPickAperturePx) * 1.38f;
+    const float r2px = radPx * radPx;
+    int best = -1;
+    float bestD2 = 0.f;
+    for (size_t i = 0; i < pts.size(); ++i) {
+      float sx = 0.f, sy = 0.f;
+      // The point's OWN elevation: this is the whole fix. Projecting at Z = 0 would reproduce the
+      // plan test with extra steps.
+      screen->cam->WorldToScreen(static_cast<double>(pts[i].easting), static_cast<double>(pts[i].northing),
+                                 static_cast<double>(pts[i].elevation), screen->viewW, screen->viewH, &sx, &sy);
+      const float dx = sx - screen->cursorX;
+      const float dy = sy - screen->cursorY;
+      const float d2 = dx * dx + dy * dy;
+      if (d2 <= r2px && (best < 0 || d2 < bestD2)) {
+        bestD2 = d2;
+        best = static_cast<int>(i);
+      }
+    }
+    return best;
+  }
+
   const float tol = CadSnap::WorldToleranceFromPixels(viewportHeightPx, orthoHalfHeightWorld, viewportPickAperturePx);
   const double radius = static_cast<double>(std::max(arm, tol)) * 1.38;
   const double r2 = radius * radius;
@@ -3813,6 +3872,29 @@ int PickSurveyPointIndex(const std::vector<SurveyPoint>& pts, double wx, double 
     }
   }
   return best;
+}
+
+/// Pick the survey point under the cursor, choosing the screen-space test automatically when the
+/// view is not plan.
+///
+/// Exists so hover and both click paths make the **same** decision. They previously each called the
+/// picker directly, and any site left on the plan-only test would highlight one point while another
+/// got selected — the two disagreeing is a worse bug than either being wrong consistently.
+int PickSurveyPointAtCursor(const AppCommandState& cmd, double wx, double wy, float surveyCrossHalfWorld,
+                            float viewW, float viewH, float orthoHalfHeightWorld, float cursorScreenX,
+                            float cursorScreenY) {
+  const Camera cam = CadViewCamera(cmd);
+  SurveyPickScreen s;
+  const bool plan = CadViewIsPlan(cmd);
+  if (!plan) {
+    s.cam = &cam;
+    s.viewW = viewW;
+    s.viewH = viewH;
+    s.cursorX = cursorScreenX;
+    s.cursorY = cursorScreenY;
+  }
+  return PickSurveyPointIndex(cmd.surveyPoints, wx, wy, surveyCrossHalfWorld, viewH, orthoHalfHeightWorld,
+                              cmd.objectSnapAperturePx, plan ? nullptr : &s);
 }
 
 void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* log) {
@@ -3860,13 +3942,14 @@ void DrawSurveyPointPickProps(AppCommandState& cmd, std::vector<std::string>* lo
         }
       }
       // Label color (via cadAnnotationAttrs of the linked label).
-      if (p.labelMtextAnnIndex >= 0 && static_cast<size_t>(p.labelMtextAnnIndex) < cmd.cadAnnotationAttrs.size()) {
+      const int labelAnnIx = FindSurveyLabelAnnIndex(cmd, p);
+      if (labelAnnIx >= 0 && static_cast<size_t>(labelAnnIx) < cmd.cadAnnotationAttrs.size()) {
         ImGui::TableNextRow();
         ImGui::TableNextColumn();
         ImGui::TextUnformatted("Label color");
         ImGui::TableNextColumn();
         ImGui::SetNextItemWidth(-FLT_MIN);
-        EntityAttributes& lattr = cmd.cadAnnotationAttrs[static_cast<size_t>(p.labelMtextAnnIndex)];
+        EntityAttributes& lattr = cmd.cadAnnotationAttrs[static_cast<size_t>(labelAnnIx)];
         if (ImGui::InputText("##svy_lbl_color", &lattr.color, ImGuiInputTextFlags_EnterReturnsTrue))
           BumpCadGpuCache(cmd);
         if (ImGui::IsItemDeactivatedAfterEdit())
@@ -6246,7 +6329,7 @@ static int HitTestMtextGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 
     *sx += imgPos.x;
     *sy += imgPos.y;
   };
-  if (ann.surveyPointLabelFor >= 0) {
+  if (ann.surveyPointLabelForId >= 0) {
     float sx = 0.f, sy = 0.f;
     toScreen(0.5f * (ann.boxMinX + ann.boxMaxX), 0.5f * (ann.boxMinY + ann.boxMaxY), &sx, &sy);
     const float dx = mouseSx - sx;
@@ -6662,7 +6745,7 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
     // about to stamp (`defaultPlottedTextHeightInches` — the style stamp copies font/oblique/bold/
     // italic but deliberately not height). Falling back to the UI font size here is what made a newly
     // placed MTEXT jump to a completely different size the moment it was accepted.
-    const bool isLabel = target && target->surveyPointLabelFor >= 0;
+    const bool isLabel = target && target->surveyPointLabelForId >= 0;
     const float plottedH = target ? std::max(0.01f, target->plottedHeightInches)
                                   : std::max(0.01f, cmd.defaultPlottedTextHeightInches);
     float editFontPx;
@@ -7301,7 +7384,7 @@ static void ApplyGripMagnetToGrips(AppCommandState& cmd, double rawX, double raw
       offer(a.insX, a.insY);
     }
   } else if (a.kind == CadAnnotation::Kind::Mtext) {
-    if (a.surveyPointLabelFor >= 0)
+    if (a.surveyPointLabelForId >= 0)
       offer(0.5f * (a.boxMinX + a.boxMaxX), 0.5f * (a.boxMinY + a.boxMaxY));
     else {
       offer(a.boxMinX, a.boxMinY);
@@ -8278,8 +8361,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                                   cmd.mtextGripMoveActive || cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond;
     if (!cmd.surveyPoints.empty() && !blockSurveyHover)
       cmd.viewportHoverSurveyPointIndex =
-          PickSurveyPointIndex(cmd.surveyPoints, rawX, rawY, surveyCrossHalfW, avail.y, halfH,
-                               cmd.objectSnapAperturePx);
+          PickSurveyPointAtCursor(cmd, rawX, rawY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my);
 
     // Idle hover: detect CAD entity under cursor for subtle highlight feedback.
     {
@@ -8422,7 +8504,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     if (gi < cmd.cadAnnotations.size()) {
       CadAnnotation& ann = cmd.cadAnnotations[gi];
       if (ann.kind == CadAnnotation::Kind::Mtext) {
-        if (ann.surveyPointLabelFor >= 0 && cmd.mtextGripCorner == 4) {
+        if (ann.surveyPointLabelForId >= 0 && cmd.mtextGripCorner == 4) {
           const float dx = curWx - cmd.mtextGripDownWorldX;
           const float dy = curWy - cmd.mtextGripDownWorldY;
           ann.boxMinX = cmd.mtextGripOrigBoxMinX + dx;
@@ -8619,8 +8701,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (gripAnnIdx >= 0 && static_cast<size_t>(gripAnnIdx) < cmd.cadAnnotations.size() &&
           cmd.mtextGripCorner == 4) {
         CadAnnotation& gripAnn = cmd.cadAnnotations[static_cast<size_t>(gripAnnIdx)];
-        const int spi = gripAnn.surveyPointLabelFor;
-        if (spi >= 0 && static_cast<size_t>(spi) < cmd.surveyPoints.size()) {
+        const int spi = SurveyPointIndexForId(cmd, gripAnn.surveyPointLabelForId);
+        if (spi >= 0) {
           const SurveyPoint& sp = cmd.surveyPoints[static_cast<size_t>(spi)];
           const float newCx = 0.5f * (gripAnn.boxMinX + gripAnn.boxMaxX);
           const float newCy = 0.5f * (gripAnn.boxMinY + gripAnn.boxMaxY);
@@ -8678,8 +8760,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const int hitIx =
           cmd.surveyPoints.empty()
               ? -1
-              : PickSurveyPointIndex(cmd.surveyPoints, rawPickX, rawPickY, surveyCrossHalfW, avail.y, halfH,
-                                     cmd.objectSnapAperturePx);
+              : PickSurveyPointAtCursor(cmd, rawPickX, rawPickY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my);
       if (hitIx >= 0) {
         ClearCadSelection(cmd);
         ApplySurveyPointClickSelection(cmd, hitIx, keyShift, &log);
@@ -8833,7 +8914,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.mtextGripAnnotationIndex = aix;
         cmd.mtextGripCorner = gripCorner;
         cmd.mtextGripMoveActive = true;
-        if (ann.surveyPointLabelFor >= 0 && gripCorner == 4) {
+        if (ann.surveyPointLabelForId >= 0 && gripCorner == 4) {
           if (outCursorX && outCursorY) {
             cmd.mtextGripDownWorldX = commitX;
             cmd.mtextGripDownWorldY = commitY;
@@ -9040,9 +9121,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           cmd.selection.push_back(se);
           EnsureAttrCounts(cmd);
           const CadAnnotation& da = cmd.cadAnnotations[static_cast<size_t>(dIx)];
-          if (da.kind == CadAnnotation::Kind::Mtext && da.surveyPointLabelFor >= 0) {
+          if (da.kind == CadAnnotation::Kind::Mtext && da.surveyPointLabelForId >= 0) {
             ApplyLinkedSurveyForAnnotationPick(cmd, dIx, false);
-            SyncSurveyPointLinkedMtextSelection(cmd, da.surveyPointLabelFor);
+            SyncSurveyPointLinkedMtextSelection(cmd, SurveyPointIndexForId(cmd, da.surveyPointLabelForId));
           } else
             cmd.selectedSurveyPointIndices.clear();
           OpenMtextRichEditorForAnnotation(cmd, dIx, &log);
@@ -9058,7 +9139,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           ClearDimGripInteraction(cmd);
           const CadAnnotation& pickedAnn = cmd.cadAnnotations[static_cast<size_t>(annIx)];
           const bool linkedSurvey =
-              pickedAnn.kind == CadAnnotation::Kind::Mtext && pickedAnn.surveyPointLabelFor >= 0;
+              pickedAnn.kind == CadAnnotation::Kind::Mtext && pickedAnn.surveyPointLabelForId >= 0;
           SelectedEntity se;
           se.type = SelectedEntity::Type::Annotation;
           se.index = annIx;
@@ -9080,7 +9161,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
               cmd.selectedSurveyPointIndices.clear();
             cmd.selection.push_back(se);
             if (linkedSurvey)
-              SyncSurveyPointLinkedMtextSelection(cmd, pickedAnn.surveyPointLabelFor);
+              SyncSurveyPointLinkedMtextSelection(cmd,
+                                                  SurveyPointIndexForId(cmd, pickedAnn.surveyPointLabelForId));
           }
           EnsureAttrCounts(cmd);
           cmd.selBoxWaitingSecond = false;
@@ -9146,8 +9228,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
       if (!handled) {
         if (!cmd.surveyPoints.empty()) {
-          const int hitIx = PickSurveyPointIndex(cmd.surveyPoints, rawPickX, rawPickY, surveyCrossHalfW, avail.y,
-                                                 halfH, cmd.objectSnapAperturePx);
+          const int hitIx = PickSurveyPointAtCursor(cmd, rawPickX, rawPickY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my);
           if (hitIx >= 0) {
             ClearCadSelection(cmd);
             ApplySurveyPointClickSelection(cmd, hitIx, keyShift, &log);
@@ -10360,12 +10441,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float ry1 = std::max(sa.y, sb.y);
         // Survey-point labels keep the readability floor (stay legible at any zoom); plain MTEXT is
         // model-sized and scales with the drawing (no floor) so it stays proportional when zoomed out.
-        const float mtextMinPx = (a.surveyPointLabelFor >= 0) ? cmd.viewportMtextMinPx : 1.f;
+        const float mtextMinPx = (a.surveyPointLabelForId >= 0) ? cmd.viewportMtextMinPx : 1.f;
         // REQ-050: plain MTEXT is sized off the viewport's scale — the viewport being edited through (floating
         // model space) else the drawing scale — so its plotted height stays constant on the sheet regardless
         // of that viewport's scale. Survey labels keep the global drawing scale (their own layout owns size).
         float mtextMup = cmd.modelUnitsPerPlottedInch;
-        if (a.surveyPointLabelFor < 0)
+        if (a.surveyPointLabelForId < 0)
           if (const Viewport* mvp = CurrentViewport(cmd))
             mtextMup = std::max(mvp->scaleModelPerPaperIn, 1.e-6f);
         const float hWorldMtext = CadAnnotationHeightWorld(a, mtextMup);
@@ -10373,7 +10454,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         // scale. Applying it to plain MTEXT made the text stop growing once zoomed past ~128 px while the
         // geometry around it kept scaling — the text is a model-space object and must scale with the view
         // (REQ-050). The remaining ceiling is only a rasterisation sanity bound.
-        const float mtextMaxPx = (a.surveyPointLabelFor >= 0) ? cmd.viewportMtextMaxPx : 8192.f;
+        const float mtextMaxPx = (a.surveyPointLabelForId >= 0) ? cmd.viewportMtextMaxPx : 8192.f;
         const float fontPx =
             std::clamp(hWorldMtext / std::max(worldPerPxY, 1.e-6f), mtextMinPx, mtextMaxPx);
         ImU32 col = colFallback;
@@ -10386,7 +10467,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         float drawX = rx0 + 4.f;
         float drawY = ry0 + 4.f;
         float wrapW = std::max(8.f, rx1 - rx0 - 8.f);
-        if (a.surveyPointLabelFor >= 0) {
+        if (a.surveyPointLabelForId >= 0) {
           float pw = 8.f;
           float ph = fontPx * 1.22f;
           MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, a.fontFamily);
@@ -10395,9 +10476,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           wrapW = std::max(pw, 8.f);
 
           // Draw leader line from label to point when label is manually offset far enough.
-          if (a.surveyLabelHasUserOffset &&
-              static_cast<size_t>(a.surveyPointLabelFor) < cmd.surveyPoints.size()) {
-            const SurveyPoint& lsp = cmd.surveyPoints[static_cast<size_t>(a.surveyPointLabelFor)];
+          const int leaderPi =
+              a.surveyLabelHasUserOffset ? SurveyPointIndexForId(cmd, a.surveyPointLabelForId) : -1;
+          if (leaderPi >= 0) {
+            const SurveyPoint& lsp = cmd.surveyPoints[static_cast<size_t>(leaderPi)];
             const float lcx = 0.5f * (a.boxMinX + a.boxMaxX);
             const float lcy = 0.5f * (a.boxMinY + a.boxMaxY);
             const float bwHalf = 0.5f * std::fabs(a.boxMaxX - a.boxMinX);
@@ -10549,7 +10631,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (a.kind != CadAnnotation::Kind::Mtext || !isAnnSelected(ai))
         continue;
       // Survey-linked labels: grips only (no selection rectangle).
-      if (a.surveyPointLabelFor < 0) {
+      if (a.surveyPointLabelForId < 0) {
         ImVec2 sa{}, sb{};
         worldToScreen(a.boxMinX, a.boxMinY, &sa, a.insZ);
         worldToScreen(a.boxMaxX, a.boxMaxY, &sb, a.insZ);
@@ -10559,7 +10641,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float ry1 = std::max(sa.y, sb.y);
         dl->AddRect(ImVec2(rx0, ry0), ImVec2(rx1, ry1), kAnnSelCol, 0.f, 0, 2.f);
       }
-      if (a.surveyPointLabelFor >= 0) {
+      if (a.surveyPointLabelForId >= 0) {
         const float cx = 0.5f * (a.boxMinX + a.boxMaxX);
         const float cy = 0.5f * (a.boxMinY + a.boxMaxY);
         ImVec2 gp{};
@@ -10698,23 +10780,101 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     }
   }
 
-  if (cmd.viewportHoverSurveyPointIndex >= 0 &&
-      static_cast<size_t>(cmd.viewportHoverSurveyPointIndex) < cmd.surveyPoints.size()) {
-    const SurveyPoint& hp = cmd.surveyPoints[static_cast<size_t>(cmd.viewportHoverSurveyPointIndex)];
-    ImDrawList* dlHov = ImGui::GetWindowDrawList();
-    // Camera-projected at the point's own elevation (REQ-057/058) so the hover ring stays on the
-    // marker it belongs to when the view is orbited.
-    float hsx = 0.f, hsy = 0.f;
-    CadViewCamera(cmd).WorldToScreen(static_cast<double>(hp.easting), static_cast<double>(hp.northing),
-                                     static_cast<double>(hp.elevation), avail.x, avail.y, &hsx, &hsy);
-    const ImVec2 cH(imgPos.x + hsx, imgPos.y + hsy);
-    const float worldPerPxYH = (worldTop - worldBottom) / std::max(avail.y, 1.f);
-    const float armH =
+  // --- Survey point marker highlights: hover and selection (REQ-058) -----------------------------
+  // Both highlight the point's OWN X rather than ringing it: a ring says "something is here" where a
+  // coloured X says "this one".
+  //
+  // A selected survey point previously showed nothing at all. Its linked label DID highlight — the
+  // label is a CadAnnotation and so lives in `cmd.selection`, which `BuildSelectionHighlight` walks
+  // — but survey points live in `selectedSurveyPointIndices`, which that function never sees. So the
+  // label lit up and the point it belongs to did not.
+  //
+  // Drawn here rather than added to BuildSelectionHighlight because the X is **billboarded**: its
+  // shape depends on the camera, and that function takes only the command state. This is the same
+  // reason the markers themselves are built with a basis in main.cpp.
+  if (!cmd.surveyPoints.empty()) {
+    const Camera hlCam = CadViewCamera(cmd);
+    const ray3d::Vec3 hr = hlCam.RightWorld();
+    const ray3d::Vec3 hu = hlCam.UpWorld();
+    MarkerBillboardBasis hlBasis;
+    hlBasis.rightX = static_cast<float>(hr.x);
+    hlBasis.rightY = static_cast<float>(hr.y);
+    hlBasis.rightZ = static_cast<float>(hr.z);
+    hlBasis.upX = static_cast<float>(hu.x);
+    hlBasis.upY = static_cast<float>(hu.y);
+    hlBasis.upZ = static_cast<float>(hu.z);
+
+    const float armHl =
         SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
-    const float tolH = CadSnap::WorldToleranceFromPixels(avail.y, halfH, cmd.objectSnapAperturePx);
-    const float rWorldH = std::max(armH, tolH) * 1.38f;
-    const float rPxH = rWorldH / std::max(worldPerPxYH, 1e-6f);
-    dlHov->AddCircle(cH, std::max(rPxH, 4.f), IM_COL32(100, 215, 255, 230), 48, 2.25f);
+    ImDrawList* dlMk = ImGui::GetWindowDrawList();
+    std::vector<float> mkCross;  // reused across points: 4 vertices, two segments forming the X
+
+    // The highlight geometry comes from AppendSurveyPointCrossVertices — the very function that
+    // builds the drawn marker — in the same camera basis, so highlight and marker cannot drift apart
+    // in size or angle.
+    const auto highlightMarker = [&](const SurveyPoint& sp, ImU32 col, float thick) {
+      mkCross.clear();
+      AppendSurveyPointCrossVertices(sp.easting, sp.northing, sp.elevation, armHl, &mkCross, hlBasis);
+      if (mkCross.size() != 12)
+        return;
+      ImVec2 q[4];
+      for (int v = 0; v < 4; ++v) {
+        float sx = 0.f, sy = 0.f;
+        hlCam.WorldToScreen(static_cast<double>(mkCross[static_cast<size_t>(v) * 3 + 0]),
+                            static_cast<double>(mkCross[static_cast<size_t>(v) * 3 + 1]),
+                            static_cast<double>(mkCross[static_cast<size_t>(v) * 3 + 2]), avail.x, avail.y, &sx,
+                            &sy);
+        q[v] = ImVec2(imgPos.x + sx, imgPos.y + sy);
+      }
+      dlMk->AddLine(q[0], q[1], col, thick);
+      dlMk->AddLine(q[2], q[3], col, thick);
+    };
+
+    // Yellow matches the selection highlight every other entity type uses (the renderer's
+    // highlightLines colour, 1.00/0.92/0.15); blue matches hover. Reusing those exact colours is
+    // what makes a selected point read as "selected" without the user learning a second language.
+    constexpr ImU32 kMarkerSelCol = IM_COL32(255, 235, 38, 255);
+    constexpr ImU32 kMarkerHovCol = IM_COL32(100, 215, 255, 255);
+
+    const int hovIx = cmd.viewportHoverSurveyPointIndex;
+    const bool hovValid = hovIx >= 0 && static_cast<size_t>(hovIx) < cmd.surveyPoints.size();
+    const bool hovAlsoSelected =
+        hovValid && std::find(cmd.selectedSurveyPointIndices.begin(), cmd.selectedSurveyPointIndices.end(),
+                              hovIx) != cmd.selectedSurveyPointIndices.end();
+    // Selection takes visual precedence over hover — the same rule BuildHoverHighlight applies to
+    // entities, so a selected point does not flicker to hover blue when the cursor crosses it.
+    if (hovValid && !hovAlsoSelected)
+      highlightMarker(cmd.surveyPoints[static_cast<size_t>(hovIx)], kMarkerHovCol, 2.6f);
+
+    for (int spi : cmd.selectedSurveyPointIndices)
+      if (spi >= 0 && static_cast<size_t>(spi) < cmd.surveyPoints.size())
+        highlightMarker(cmd.surveyPoints[static_cast<size_t>(spi)], kMarkerSelCol, 2.8f);
+  }
+
+  // --- Box selection, screen-aligned (REQ-058) ---------------------------------------------------
+  // Drawn here as a screen-space rectangle rather than in GL as world geometry on the XY plane.
+  // The old world-space rectangle projected to a parallelogram lying on the datum once the view was
+  // orbited, which was not merely ugly: the hit test projects the TWO drag corners and forms an
+  // axis-aligned SCREEN rectangle from them, so the drawn box and the region that actually selects
+  // were different shapes. Building it from the same two projected corners the hit test uses makes
+  // the box show exactly what it will select, in every orientation.
+  //
+  // Z = 0 for both corners, matching the hit test's own `SP(xa, ya, 0.f, ...)`: the drag happens on
+  // the work plane, and using anything else here would re-introduce the same disagreement.
+  //
+  // Colours are carried over from the removed GL stage unchanged, so a plan-view drag — the default
+  // view and the common case — looks exactly as it did before.
+  if (modelSpace && cmd.selBoxWaitingSecond) {
+    const Camera selCam = CadViewCamera(cmd);
+    float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
+    selCam.WorldToScreen(static_cast<double>(cmd.selBoxAnchorX), static_cast<double>(cmd.selBoxAnchorY), 0.0,
+                         avail.x, avail.y, &ax, &ay);
+    selCam.WorldToScreen(rawX, rawY, 0.0, avail.x, avail.y, &bx, &by);
+    const ImVec2 mnSel(imgPos.x + std::min(ax, bx), imgPos.y + std::min(ay, by));
+    const ImVec2 mxSel(imgPos.x + std::max(ax, bx), imgPos.y + std::max(ay, by));
+    ImDrawList* dlSel = ImGui::GetWindowDrawList();
+    dlSel->AddRectFilled(mnSel, mxSel, IM_COL32(64, 140, 255, 56));
+    dlSel->AddRect(mnSel, mxSel, IM_COL32(115, 199, 255, 230), 0.f, 0, 1.5f);
   }
 
   if (modelAnnotationsVisible && !cmd.surveyPoints.empty() && cmd.surveyPointShowIdInViewport) {

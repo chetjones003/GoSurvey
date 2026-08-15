@@ -32,6 +32,23 @@ namespace benchscene {
 int BuildContourScene(int targetSegments, std::vector<float>* verts, std::vector<int>* offsets,
                       std::vector<std::uint8_t>* closed);
 
+/// Builds the point set for the REQ-100 **surface** cost profile: \p targetPoints scattered shots
+/// over a smooth undulating terrain, ready to hand to `BuildTin`.
+///
+/// A surface is its own profile because its per-frame cost does not follow from either of the other
+/// two (ADR-028, REQ-100 as amended): its triangle edges are regenerated display geometry, not
+/// stored line segments, so neither the 250k-segment case nor the shaded-mesh case measures it.
+/// 100,000 points is the density REQ-100 names — a large but ordinary topo — and yields ~200,000
+/// triangles, i.e. ~600,000 edges under the default triangle display.
+///
+/// The terrain is a sum of two sinusoids rather than noise: it is smooth (so contouring it later
+/// produces realistic long contours rather than confetti), deterministic, and free of the
+/// degenerate coincident points that would make the measurement about de-duplication.
+///
+/// \param outXyz filled with interleaved x,y,z triples.
+/// \returns the number of points produced.
+int BuildSurfacePointScene(int targetPoints, std::vector<float>* outXyz);
+
 /// Nearest-rank percentile of \p samples, \p p in [0, 100]. Takes the vector by value: it sorts.
 ///
 /// Nearest-rank rather than an interpolating definition because the requirement is about a frame

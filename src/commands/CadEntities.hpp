@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -60,6 +61,14 @@ enum class VisualStyle : std::uint8_t {
 
 /// Display / CAD metadata stored per entity (parallel index to line segments or circles).
 struct EntityAttributes {
+  /// Stable per-drawing identity (REQ-076 / ADR-027). Assigned from \ref AppCommandState::nextEntityId
+  /// by \ref EnsureEntityIds, persisted in `.gs`, and **never reused within a drawing** — so a
+  /// reference to a deleted entity resolves to nothing rather than to whatever took its array slot.
+  ///
+  /// **0 means unassigned**, which is a transient state between an entity's creation and the next
+  /// sweep. Cross-object references store this id, never an array index (architecture §11.9): the
+  /// entity arrays compact on erase, so an index is not a name.
+  std::uint64_t id = 0;
   std::string layer = "0";
   std::string color = "ByLayer";
   /// "ByLayer", "ByBlock", or a linetype table name such as "Continuous" / "DASHED" / "CENTER".
@@ -130,8 +139,14 @@ struct CadAnnotation {
   float dimSignedOffset = 0.f;
   /// \c Kind::DimLinear only — if true, measures |Y2−Y1| with a vertical dimension line; if false, |X2−X1| with horizontal dim line.
   bool dimLinearVertical = false;
-  /// If >= 0, this MTEXT is the viewport label for \c surveyPoints[this index] (bidirectional link).
-  int surveyPointLabelFor = -1;
+  /// If >= 0, this MTEXT is the viewport label for the survey point whose \c SurveyPoint::id is this
+  /// value (bidirectional link; the other half is \c SurveyPoint::labelMtextAnnId).
+  ///
+  /// **A point id, not an array index** (REQ-076 / architecture §11.9). Renamed from
+  /// `surveyPointLabelFor` when it stopped being an index, deliberately: the rename turns every one
+  /// of its ~35 read sites into a compile error rather than letting an index-shaped assumption
+  /// survive as silently wrong data (the ADR-025 (a) lesson).
+  int surveyPointLabelForId = -1;
   /// When true, the label was manually dragged and these world-unit offsets from the point override the global defaults.
   bool surveyLabelHasUserOffset = false;
   float surveyLabelUserOffsetEast = 0.f;
@@ -204,6 +219,58 @@ struct CadMesh {
 
   [[nodiscard]] int vertexCount() const { return static_cast<int>(vertsXyz.size() / 3); }
   [[nodiscard]] int triangleCount() const { return static_cast<int>(indices.size() / 3); }
+};
+
+/// The triangulation of a TIN surface (REQ-068 / ADR-028 (a)) — the large, **immutable** half.
+///
+/// Held as `shared_ptr<const CadTin>` by both the live state and every undo snapshot, exactly as
+/// \ref CadMesh is and for the same reason (architecture §11.5, amended 2026-08-12).
+/// `DrawingGeometrySnapshot` deep-copies every geometry array across 50 frames, so a by-value TIN at
+/// REQ-100's surface density (~200k triangles) would cost roughly 7 MB per frame — ~350 MB of undo
+/// stack, **re-paid every time an unrelated edit happens**, because drawing a line copies the whole
+/// model with it. That is the trap TASK-041 found for meshes; here it was designed out in advance.
+///
+/// "Editing" a surface means **replacing this pointer** with a freshly built triangulation, never
+/// writing through it — which is the condition the §11.5 exemption rests on.
+struct CadTin {
+  /// Interleaved x,y,z (architecture §11.8). X/Y are local storage coordinates (world = local +
+  /// worldDocumentOrigin); Z is absolute, per ADR-025 D2 — the same convention as every other store.
+  std::vector<float> vertsXyz;
+  /// Triangle list, 3 indices per triangle, counter-clockwise. `uint32` to match \ref CadMesh and to
+  /// leave headroom well past REQ-100's ~200k-triangle surface profile.
+  std::vector<std::uint32_t> indices;
+
+  [[nodiscard]] int vertexCount() const { return static_cast<int>(vertsXyz.size() / 3); }
+  [[nodiscard]] int triangleCount() const { return static_cast<int>(indices.size() / 3); }
+};
+
+/// A named TIN surface (REQ-068).
+///
+/// Small and copyable: the heavy triangulation hangs off a shared pointer, so copying a surface —
+/// which every undo snapshot does — is a couple of strings and a refcount bump.
+///
+/// Surfaces are **not written to DXF or DWG**: there is no representation GoSurvey can write
+/// losslessly, and the exclusion is stated in the export log rather than left to be discovered
+/// (ADR-028 (f), REQ-201) — the same treatment \ref CadMesh gets.
+struct CadSurface {
+  std::string name;  ///< Unique within the drawing.
+
+  /// Names of the point groups supplying the surface's points (REQ-067).
+  ///
+  /// **By name, not by index** — a name is a stable identifier, so architecture §11.9 is satisfied,
+  /// and it mirrors how a CadAnnotation references a text style (ADR-020). A name that no longer
+  /// resolves is reported at build time rather than quietly producing an empty surface.
+  std::vector<std::string> sourcePointGroups;
+
+  /// The built triangulation, or null when the surface has never been built.
+  std::shared_ptr<const CadTin> tin;
+
+  /// What the last build did, kept for the UI and the log (REQ-201). Not persisted — a reload
+  /// re-reports on the next build.
+  std::string lastBuildMessage;
+
+  [[nodiscard]] int vertexCount() const { return tin ? tin->vertexCount() : 0; }
+  [[nodiscard]] int triangleCount() const { return tin ? tin->triangleCount() : 0; }
 };
 
 /// A solid-filled region (ADR-011), imported from a SOLID-fill HATCH. Holds one or more closed boundary

@@ -140,6 +140,47 @@ bool ExtractJsonStringField(const std::string& obj, const char* key, std::string
 
 } // namespace
 
+std::vector<int> ResolvePointGroup(const AppCommandState& st, const PointGroup& group,
+                                   std::vector<std::string>* log) {
+  std::vector<std::string> badTokens;
+  const std::vector<PointIdRange> ranges = ParseIdRanges(group.rule.idRangesText, &badTokens);
+  if (log && !badTokens.empty()) {
+    std::string msg = "Point group \"" + group.name + "\": ignored unparseable id range(s):";
+    for (const std::string& t : badTokens)
+      msg += " \"" + t + "\"";
+    log->push_back(msg);
+  }
+
+  std::vector<int> out;
+  for (size_t i = 0; i < st.surveyPoints.size(); ++i) {
+    const SurveyPoint& p = st.surveyPoints[i];
+    if (PointMatchesRule(group.rule, ranges, p.id, p.description, p.rawDescription))
+      out.push_back(static_cast<int>(i));
+  }
+
+  // A configured rule that finds nothing is a legitimate result, not an error — but it is also the
+  // single most confusing outcome to meet in silence, so it is said out loud (REQ-201). An *empty*
+  // rule is not reported here: it resolves to nothing by definition, and the editor shows that.
+  if (log && out.empty() && !group.rule.empty())
+    log->push_back("Point group \"" + group.name + "\" matches no points.");
+  return out;
+}
+
+int FindPointGroupIndex(const AppCommandState& st, const std::string& name) {
+  auto eqCI = [](const std::string& a, const std::string& b) {
+    if (a.size() != b.size())
+      return false;
+    for (size_t i = 0; i < a.size(); ++i)
+      if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
+        return false;
+    return true;
+  };
+  for (size_t i = 0; i < st.pointGroups.size(); ++i)
+    if (eqCI(st.pointGroups[i].name, name))
+      return static_cast<int>(i);
+  return -1;
+}
+
 void ResetCreatePointsNextIdFromSettings(AppCommandState& st) {
   st.createPointsNextId = st.createPointsOpts.startNumber;
 }
@@ -163,6 +204,9 @@ bool TryPlaceSurveyPoint(AppCommandState& st, float easting, float northing, flo
     p.elevation = elevation;
     p.layer = opts.layer;
     p.description = opts.defaultDescription;
+    // A point created here carries what the user typed, so the raw code is the same string
+    // (REQ-066). They diverge only when the description is later edited.
+    p.rawDescription = opts.defaultDescription;
     st.surveyPoints.push_back(std::move(p));
     log.push_back("Survey point " + std::to_string(id) + " — E " + std::to_string(easting) + " N " +
                   std::to_string(northing) + " Z " + std::to_string(elevation));
@@ -212,6 +256,10 @@ bool TryPlaceSurveyPoint(AppCommandState& st, float easting, float northing, flo
     p.elevation = elevation;
     p.layer = opts.layer;
     p.description = opts.defaultDescription;
+    // Overwrite replaces the point, so the raw code is replaced with it. Merge (above) deliberately
+    // does NOT touch rawDescription: it appends to the description of a point that keeps its
+    // original field code, and REQ-066 says the raw code is not rewritten by description edits.
+    p.rawDescription = opts.defaultDescription;
     log.push_back("Survey point " + std::to_string(idTry) + " overwritten.");
     advanceSequential(idTry);
     EnsureSurveyPointLabelMtext(st, static_cast<size_t>(ix), &log);
@@ -259,7 +307,7 @@ void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, floa
       }
       const int nid = NextFreeId(pts, srcId, step);
       copy.id = nid;
-      copy.labelMtextAnnIndex = -1;
+      copy.labelMtextAnnId = 0;   // a copied point is a new point: it owns no label yet (REQ-076)
       pts.push_back(std::move(copy));
       buffers.push_back(std::to_string(nid));
       ++added;
@@ -269,7 +317,7 @@ void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, floa
     case SurveyDuplicatePolicy::Renumber: {
       const int nid = NextFreeId(pts, srcId, step);
       copy.id = nid;
-      copy.labelMtextAnnIndex = -1;
+      copy.labelMtextAnnId = 0;   // a copied point is a new point: it owns no label yet (REQ-076)
       pts.push_back(std::move(copy));
       buffers.push_back(std::to_string(nid));
       ++added;
@@ -295,7 +343,7 @@ void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, floa
       } else {
         const int nid = NextFreeId(pts, srcId, step);
         copy.id = nid;
-        copy.labelMtextAnnIndex = -1;
+        copy.labelMtextAnnId = 0;   // a copied point is a new point: it owns no label yet (REQ-076)
         pts.push_back(std::move(copy));
         buffers.push_back(std::to_string(nid));
         ++added;
@@ -314,7 +362,7 @@ void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, floa
       } else {
         const int nid = NextFreeId(pts, srcId, step);
         copy.id = nid;
-        copy.labelMtextAnnIndex = -1;
+        copy.labelMtextAnnId = 0;   // a copied point is a new point: it owns no label yet (REQ-076)
         pts.push_back(std::move(copy));
         buffers.push_back(std::to_string(nid));
         ++added;
@@ -399,7 +447,7 @@ void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float b
       }
       const int nid = NextFreeId(pts, srcId, step);
       copy.id = nid;
-      copy.labelMtextAnnIndex = -1;
+      copy.labelMtextAnnId = 0;   // a copied point is a new point: it owns no label yet (REQ-076)
       pts.push_back(std::move(copy));
       buffers.push_back(std::to_string(nid));
       ++added;
@@ -409,7 +457,7 @@ void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float b
     case SurveyDuplicatePolicy::Renumber: {
       const int nid = NextFreeId(pts, srcId, step);
       copy.id = nid;
-      copy.labelMtextAnnIndex = -1;
+      copy.labelMtextAnnId = 0;   // a copied point is a new point: it owns no label yet (REQ-076)
       pts.push_back(std::move(copy));
       buffers.push_back(std::to_string(nid));
       ++added;
@@ -435,7 +483,7 @@ void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float b
       } else {
         const int nid = NextFreeId(pts, srcId, step);
         copy.id = nid;
-        copy.labelMtextAnnIndex = -1;
+        copy.labelMtextAnnId = 0;   // a copied point is a new point: it owns no label yet (REQ-076)
         pts.push_back(std::move(copy));
         buffers.push_back(std::to_string(nid));
         ++added;
@@ -454,7 +502,7 @@ void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float b
       } else {
         const int nid = NextFreeId(pts, srcId, step);
         copy.id = nid;
-        copy.labelMtextAnnIndex = -1;
+        copy.labelMtextAnnId = 0;   // a copied point is a new point: it owns no label yet (REQ-076)
         pts.push_back(std::move(copy));
         buffers.push_back(std::to_string(nid));
         ++added;
@@ -489,24 +537,44 @@ void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float b
   }
 }
 
+int FindSurveyLabelAnnIndex(const AppCommandState& st, const SurveyPoint& p) {
+  if (p.labelMtextAnnId == 0)
+    return -1;
+  const EntityRef r = FindEntityById(st, p.labelMtextAnnId);
+  // An id that resolves to some other entity kind means the annotation was erased and the id was
+  // never issued again — so this is "no label", not "look somewhere else" (REQ-076).
+  if (!r.valid() || r.kind != EntityKind::Annotation)
+    return -1;
+  return r.index;
+}
+
+int SurveyPointIndexForId(const AppCommandState& st, int surveyPointId) {
+  if (surveyPointId < 0)
+    return -1;
+  return FindSurveyPointIndexById(st.surveyPoints, surveyPointId);
+}
+
 void RemoveSurveyPointAt(AppCommandState& st, size_t index) {
   if (index >= st.surveyPoints.size())
     return;
-  int annIx = st.surveyPoints[index].labelMtextAnnIndex;
+  const int doomedPointId = st.surveyPoints[index].id;
+  int annIx = FindSurveyLabelAnnIndex(st, st.surveyPoints[index]);
+  // Also honour a label that claims this point but is not claimed back — the two halves can
+  // disagree after an import, and dropping such a label is what keeps an orphan off the screen.
   for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
     if (st.cadAnnotations[ai].kind == CadAnnotation::Kind::Mtext &&
-        st.cadAnnotations[ai].surveyPointLabelFor == static_cast<int>(index))
+        st.cadAnnotations[ai].surveyPointLabelForId == doomedPointId)
       annIx = static_cast<int>(ai);
   }
   if (annIx >= 0 && static_cast<size_t>(annIx) < st.cadAnnotations.size())
     EraseCadAnnotationAtIndex(st, static_cast<size_t>(annIx));
 
-  for (CadAnnotation& a : st.cadAnnotations) {
-    if (a.surveyPointLabelFor > static_cast<int>(index))
-      --a.surveyPointLabelFor;
-    else if (a.surveyPointLabelFor == static_cast<int>(index))
-      a.surveyPointLabelFor = -1;
-  }
+  // Clear only the links that named *this* point. No renumbering pass: the back-link is a point id
+  // (REQ-076), and erasing an earlier point no longer changes what any other link means — which is
+  // the entire reason this is an id and not the index it used to be.
+  for (CadAnnotation& a : st.cadAnnotations)
+    if (a.surveyPointLabelForId == doomedPointId)
+      a.surveyPointLabelForId = -1;
 
   st.surveyPoints.erase(st.surveyPoints.begin() + static_cast<std::ptrdiff_t>(index));
   if (index < st.surveyPointIdBuffers.size())
@@ -582,8 +650,8 @@ void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) 
   if (pointIndex >= st.surveyPoints.size())
     return;
   const SurveyPoint& p = st.surveyPoints[pointIndex];
-  const int aix = p.labelMtextAnnIndex;
-  if (aix < 0 || static_cast<size_t>(aix) >= st.cadAnnotations.size())
+  const int aix = FindSurveyLabelAnnIndex(st, p);
+  if (aix < 0)
     return;
   CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(aix)];
   if (a.kind != CadAnnotation::Kind::Mtext)
@@ -624,6 +692,11 @@ void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) 
   a.boxMaxY = cy + bhClamped * 0.5f;
   a.insX = a.boxMinX;
   a.insY = a.boxMinY;
+  // The label sits at its POINT's elevation (REQ-057/058). Without this, insZ keeps its 0 default —
+  // and insZ is absolute (ADR-025 D2), so every label was pinned to the datum while its point moved
+  // to real elevation, which is exactly what an orbit made visible. The draw path already reads
+  // insZ everywhere; this assignment was the only thing missing.
+  a.insZ = p.elevation;
 }
 
 void RepositionAllSurveyPointLabels(AppCommandState& st) {
@@ -655,7 +728,7 @@ void ResolveConflictingWorldSurveyPoints(AppCommandState& st, const std::vector<
     sp.id = id;
     sp.easting = static_cast<float>(static_cast<double>(w.easting) - st.worldDocumentOriginX);
     sp.northing = static_cast<float>(static_cast<double>(w.northing) - st.worldDocumentOriginY);
-    sp.labelMtextAnnIndex = -1;
+    sp.labelMtextAnnId = 0;
     st.surveyPoints.push_back(sp);
     EnsureSurveyPointLabelMtext(st, st.surveyPoints.size() - 1, log);
   }
@@ -666,9 +739,10 @@ void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::ve
     return;
   SurveyPoint& p = st.surveyPoints[pointIndex];
   if (p.labelStyle == SurveyPointLabelStyle::None) {
-    if (p.labelMtextAnnIndex >= 0 && static_cast<size_t>(p.labelMtextAnnIndex) < st.cadAnnotations.size())
-      EraseCadAnnotationAtIndex(st, static_cast<size_t>(p.labelMtextAnnIndex));
-    p.labelMtextAnnIndex = -1;
+    const int existing = FindSurveyLabelAnnIndex(st, p);
+    if (existing >= 0)
+      EraseCadAnnotationAtIndex(st, static_cast<size_t>(existing));
+    p.labelMtextAnnId = 0;
     BumpCadGpuCache(st);
     return;
   }
@@ -676,17 +750,18 @@ void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::ve
   const std::string body =
       FormatSurveyPointLabelPlain(p, p.labelStyle, st.surveyLabelTemplates, st.surveyPointDisplayPrecision,
                                   st.worldDocumentOriginX, st.worldDocumentOriginY);
-  if (p.labelMtextAnnIndex >= 0 && static_cast<size_t>(p.labelMtextAnnIndex) < st.cadAnnotations.size()) {
-    CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(p.labelMtextAnnIndex)];
+  const int existing = FindSurveyLabelAnnIndex(st, p);
+  if (existing >= 0) {
+    CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(existing)];
     if (a.kind == CadAnnotation::Kind::Mtext) {
       a.text = body;
-      a.surveyPointLabelFor = static_cast<int>(pointIndex);
+      a.surveyPointLabelForId = p.id;
       a.plottedHeightInches = std::max(st.surveyPointLabelPlottedHeightInches, 0.04f);
       RepositionSurveyLabelMtextForPoint(st, pointIndex);
       BumpCadGpuCache(st);
       return;
     }
-    p.labelMtextAnnIndex = -1;
+    p.labelMtextAnnId = 0;
   }
 
   CadAnnotation ann{};
@@ -694,11 +769,15 @@ void EnsureSurveyPointLabelMtext(AppCommandState& st, size_t pointIndex, std::ve
   ann.text = body;
   ann.plottedHeightInches = std::max(st.surveyPointLabelPlottedHeightInches, 0.04f);
   ann.rotationRad = 0.f;
-  ann.surveyPointLabelFor = static_cast<int>(pointIndex);
+  ann.surveyPointLabelForId = p.id;
   st.cadAnnotations.push_back(std::move(ann));
   while (st.cadAnnotationAttrs.size() < st.cadAnnotations.size())
     st.cadAnnotationAttrs.emplace_back();
-  p.labelMtextAnnIndex = static_cast<int>(st.cadAnnotations.size() - 1);
+  // Allocate eagerly rather than waiting for the sweep: the point records the id in the next line,
+  // and a reference to id 0 would be a reference to nothing (REQ-076).
+  const std::uint64_t labelId = AllocEntityId(st);
+  st.cadAnnotationAttrs.back().id = labelId;
+  p.labelMtextAnnId = labelId;
   RepositionSurveyLabelMtextForPoint(st, pointIndex);
   if (log)
     log->push_back("Survey label MTEXT created for point " + std::to_string(p.id) + ".");

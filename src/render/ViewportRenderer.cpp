@@ -442,49 +442,6 @@ void AppendSnapCircle(std::vector<float>& out, const SnapGlyphFrame& f, float r,
   }
 }
 
-void AppendWorldRectOutline(std::vector<float>& o, float xa, float ya, float xb, float yb, float z, double viewAnchorX,
-                            double viewAnchorY) {
-  const float mnX = std::min(xa, xb);
-  const float mxX = std::max(xa, xb);
-  const float mnY = std::min(ya, yb);
-  const float mxY = std::max(ya, yb);
-  auto seg = [&](float x0, float y0, float x1, float y1) {
-    float rx0 = 0.f;
-    float ry0 = 0.f;
-    float rx1 = 0.f;
-    float ry1 = 0.f;
-    WorldToViewRelativeFloat(static_cast<double>(x0), static_cast<double>(y0), viewAnchorX, viewAnchorY, &rx0, &ry0);
-    WorldToViewRelativeFloat(static_cast<double>(x1), static_cast<double>(y1), viewAnchorX, viewAnchorY, &rx1, &ry1);
-    o.push_back(rx0);
-    o.push_back(ry0);
-    o.push_back(z);
-    o.push_back(rx1);
-    o.push_back(ry1);
-    o.push_back(z);
-  };
-  seg(mnX, mnY, mxX, mnY);
-  seg(mxX, mnY, mxX, mxY);
-  seg(mxX, mxY, mnX, mxY);
-  seg(mnX, mxY, mnX, mnY);
-}
-
-void AppendWorldRectFillTris(std::vector<float>& o, float xa, float ya, float xb, float yb, float z, double viewAnchorX,
-                             double viewAnchorY) {
-  const float mnX = std::min(xa, xb);
-  const float mxX = std::max(xa, xb);
-  const float mnY = std::min(ya, yb);
-  const float mxY = std::max(ya, yb);
-  float c[4][2];
-  const float corners[4][2] = {{mnX, mnY}, {mxX, mnY}, {mxX, mxY}, {mnX, mxY}};
-  for (int i = 0; i < 4; ++i)
-    WorldToViewRelativeFloat(static_cast<double>(corners[i][0]), static_cast<double>(corners[i][1]), viewAnchorX,
-                             viewAnchorY, &c[i][0], &c[i][1]);
-  const float tri[] = {
-      c[0][0], c[0][1], z, c[1][0], c[1][1], z, c[2][0], c[2][1], z,
-      c[0][0], c[0][1], z, c[2][0], c[2][1], z, c[3][0], c[3][1], z,
-  };
-  o.insert(o.end(), tri, tri + sizeof(tri) / sizeof(tri[0]));
-}
 
 void ConvertLineVertsWorldToView(const std::vector<float>& world, double viewAnchorX, double viewAnchorY,
                                  std::vector<float>* rel) {
@@ -867,7 +824,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const std::vector<float>& userLines, const std::vector<float>& circlesCxCyZR,
                                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
                                    const CadSnap::Hit* snapOverlay, float snapGlyphHalfPx,
-                                   const float* selectionFillRect, const std::vector<float>* previewLines,
+                                   const std::vector<float>* previewLines,
                                    const std::vector<float>* previewCircles, const std::vector<float>* highlightLines,
                                    const std::vector<float>* highlightCircles, const std::vector<float>* hoverLines,
                                    const std::vector<float>* hoverCircles, const std::vector<float>* surveyMarkers,
@@ -880,7 +837,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const std::vector<CadFilledRegion>* filledRegions,
                                    const std::vector<EntityAttributes>* filledRegionAttrs,
                                    const std::vector<std::shared_ptr<const CadMesh>>* meshes,
-                                   const std::vector<EntityAttributes>* meshAttrs) {
+                                   const std::vector<EntityAttributes>* meshAttrs,
+                                   const std::vector<float>* surfaceEdges) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -990,7 +948,6 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   constexpr GLfloat kLwMain = 1.35f;
   constexpr GLfloat kLwHiLine = 2.65f;
   constexpr GLfloat kLwHiCirc = 2.45f;
-  constexpr GLfloat kLwFence = 1.1f;
   constexpr GLfloat kLwSurvey = 1.65f;
   constexpr GLfloat kLwSnap = 1.35f;
   constexpr GLfloat kLwGizmo = 1.1f;
@@ -1749,32 +1706,10 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   }
 
   // --- Window selection preview (semi-transparent fill + outline) ---
-  if (selectionFillRect) {
-    const float xa = selectionFillRect[0];
-    const float xb = selectionFillRect[1];
-    const float ya = selectionFillRect[2];
-    const float yb = selectionFillRect[3];
-    std::vector<float> fillGeom;
-    std::vector<float> lineGeom;
-    AppendWorldRectFillTris(fillGeom, xa, ya, xb, yb, 0.035f, viewAnchorX, viewAnchorY);
-    AppendWorldRectOutline(lineGeom, xa, ya, xb, yb, 0.036f, viewAnchorX, viewAnchorY);
-    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-    glEnable(GL_BLEND);
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    if (!fillGeom.empty()) {
-      glUniform4f(locCol, 0.25f, 0.55f, 1.f, 0.22f);
-      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(fillGeom.size() * sizeof(float)), fillGeom.data(),
-                   GL_STREAM_DRAW);
-      glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(fillGeom.size() / 3));
-    }
-    glUniform4f(locCol, 0.45f, 0.78f, 1.f, 0.9f);
-    glLineWidth(kLwFence);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(lineGeom.size() * sizeof(float)), lineGeom.data(),
-                 GL_STREAM_DRAW);
-    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(lineGeom.size() / 3));
-    glDisable(GL_BLEND);
-    glLineWidth(kLwMain);
-  }
+  // The selection box used to be drawn here, as a world-space rectangle on the XY plane. It moved to
+  // a screen-space ImGui overlay in CadUi (TASK-047): world geometry projects to a parallelogram
+  // once the view is orbited, and the hit test forms an axis-aligned SCREEN rectangle from the two
+  // drag corners — so the drawn box and the region that selects disagreed in every non-plan view.
 
   // --- Move/copy/rotate preview geometry ---
   if (previewLines && !previewLines->empty() && previewLines->size() % 6 == 0) {
@@ -1808,6 +1743,20 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
       glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(circleGeom.size() / 3));
       glDisable(GL_BLEND);
     }
+  }
+
+  // --- TIN surface triangle edges (REQ-068) ---
+  // Drawn before the survey markers so a point's X stays readable on top of its own surface.
+  if (surfaceEdges && !surfaceEdges->empty() && surfaceEdges->size() % 6 == 0) {
+    std::vector<float> surfRel;
+    ConvertLineVertsWorldToView(*surfaceEdges, viewAnchorX, viewAnchorY, &surfRel);
+    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+    glUseProgram(lineProgram_);
+    glUniform4f(locCol, 0.42f, 0.62f, 0.78f, 1.f);  // muted steel blue: present, never competing
+    glLineWidth(kLwMain);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(surfRel.size() * sizeof(float)), surfRel.data(),
+                 GL_STREAM_DRAW);
+    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(surfRel.size() / 3));
   }
 
   // --- Survey points (X markers, apparent size ~constant on screen) ---

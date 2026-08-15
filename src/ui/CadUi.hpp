@@ -71,6 +71,11 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log 
 /// Text style manager (STYLE, REQ-044): create / rename / delete / edit named text styles. Editing a
 /// style re-bakes its referencing, non-overridden text (live reference); "Standard" cannot be deleted.
 void DrawTextStyleManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+/// Point Group manager (REQ-067): create/rename/delete groups and edit their rules, with the
+/// resolved member count shown live so an empty or non-matching rule is visible immediately.
+void DrawPointGroupManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+/// Surfaces panel (REQ-068): create a TIN surface from point groups, rebuild, rename, delete.
+void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
 /// Modal after COPY when survey points were selected — duplicate ID policy for new survey rows.
 void DrawCopySurveyDuplicateModal(AppCommandState& cmd, std::vector<std::string>& log);

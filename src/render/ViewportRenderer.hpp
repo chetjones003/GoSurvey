@@ -33,7 +33,6 @@ public:
   /// \param rubberLines GL_LINES vertex data (x,y,z pairs of endpoints) for transient previews.
   /// \param snapOverlay Active object snap glyph (green); nullptr or invalid — skip.
   /// \param snapGlyphHalfPx Screen-space half-extent (pixels) for snap glyph geometry (see Settings → Object snap).
-  /// \param selectionFillRect axis-aligned window in world XY: minX, maxX, minY, maxY; nullptr skips.
   /// \param previewLines / previewCircles transient geometry (same layout as user geometry).
   /// \param highlightLines / highlightCircles selected entities redrawn on top (accent stroke).
   /// \param cadGpuRevision from AppCommandState — bumps invalidate GPU caches for committed geometry.
@@ -47,7 +46,7 @@ public:
   void RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                    const std::vector<float>& userLines, const std::vector<float>& circlesCxCyZR,
                    std::uint32_t cadGpuRevision, const std::vector<float>& rubberLines,
-                   const CadSnap::Hit* snapOverlay, float snapGlyphHalfPx, const float* selectionFillRect,
+                   const CadSnap::Hit* snapOverlay, float snapGlyphHalfPx,
                    const std::vector<float>* previewLines,
                    const std::vector<float>* previewCircles, const std::vector<float>* highlightLines,
                    const std::vector<float>* highlightCircles, const std::vector<float>* hoverLines,
@@ -67,7 +66,18 @@ public:
                    // nothing for them — a triangle soup rendered as edges is unreadable, and there
                    // is no "mesh wireframe" behaviour any requirement asks for.
                    const std::vector<std::shared_ptr<const CadMesh>>* meshes = nullptr,
-                   const std::vector<EntityAttributes>* meshAttrs = nullptr);
+                   const std::vector<EntityAttributes>* meshAttrs = nullptr,
+                   // TIN surface triangle edges (REQ-068), as flat world-space line vertices —
+                   // x,y,z per endpoint, two endpoints per segment, exactly like \p surveyMarkers.
+                   //
+                   // Edges rather than shaded faces, and drawn in EVERY visual style: a TIN's
+                   // triangles are the thing a surveyor reads, and the default style is 2D
+                   // Wireframe — a surface visible only in Shaded would be invisible in the view
+                   // users spend most of their time in. This is the opposite of the mesh rule above
+                   // for the opposite reason: a mesh is an imported solid, a TIN is a network.
+                   // Caller-side buffer, built only when the geometry revision changes, and already
+                   // filtered for layer visibility (REQ-068).
+                   const std::vector<float>* surfaceEdges = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 

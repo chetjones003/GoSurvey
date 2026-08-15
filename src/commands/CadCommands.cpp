@@ -8,6 +8,7 @@
 #include "geom2d.hpp"
 #include "util/benchscene.hpp"
 #include "util/meshgeom.hpp"
+#include "util/tinbuild.hpp"
 #include "util/gltfimport.hpp"
 #include "util/stlimport.hpp"
 #include "DwgMeshConvert.hpp"
@@ -39,9 +40,11 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <numeric>
+#include <utility>
 
 // REQ-044: stamp the active text style onto a new user TEXT/MTEXT (defined below, used at the commit sites).
 static void StampActiveTextStyleOnNewText(AppCommandState& st, CadAnnotation& a);
+
 
 void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   if (idx < 0 || static_cast<size_t>(idx) >= cmd.documents.size()) return;
@@ -54,6 +57,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.viewportElevationDeg   = cmd.viewportElevationDeg;
   doc.worldDocumentOriginX   = cmd.worldDocumentOriginX;
   doc.worldDocumentOriginY   = cmd.worldDocumentOriginY;
+  doc.nextEntityId           = cmd.nextEntityId;  // per-drawing id counter (REQ-076)
   doc.userLinesFlat          = cmd.userLinesFlat;
   doc.userLineAttrs          = cmd.userLineAttrs;
   doc.userCirclesCxCyZR       = cmd.userCirclesCxCyZR;
@@ -72,7 +76,10 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadFilledRegionAttrs   = cmd.cadFilledRegionAttrs;
   doc.cadMeshes              = cmd.cadMeshes;      // pointers, not payloads (REQ-063)
   doc.cadMeshAttrs           = cmd.cadMeshAttrs;
+  doc.cadSurfaces            = cmd.cadSurfaces;
+  doc.cadSurfaceAttrs        = cmd.cadSurfaceAttrs;
   doc.surveyPoints           = cmd.surveyPoints;
+  doc.pointGroups            = cmd.pointGroups;
   doc.selectedSurveyPointIndices = cmd.selectedSurveyPointIndices;
   doc.drawingLayerTable      = cmd.drawingLayerTable;
   doc.textStyles             = cmd.textStyles;
@@ -99,6 +106,11 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.viewAnimActive             = false;  // never resume another tab's animation
   cmd.worldDocumentOriginX       = doc.worldDocumentOriginX;
   cmd.worldDocumentOriginY       = doc.worldDocumentOriginY;
+  cmd.nextEntityId               = doc.nextEntityId;  // per-drawing id counter (REQ-076)
+  // Force a re-sweep for the incoming drawing. The guard compares against cadGpuRevision, which is
+  // per-document and restored just below — two tabs can legitimately sit at the same revision, and
+  // a match there would wrongly certify this drawing's entities as already swept.
+  cmd.entityIdSweepRevision      = kEntityIdSweepNever;
   cmd.userLinesFlat              = doc.userLinesFlat;
   cmd.userLineAttrs              = doc.userLineAttrs;
   cmd.userCirclesCxCyZR           = doc.userCirclesCxCyZR;
@@ -117,7 +129,10 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadFilledRegionAttrs       = doc.cadFilledRegionAttrs;
   cmd.cadMeshes                  = doc.cadMeshes;
   cmd.cadMeshAttrs               = doc.cadMeshAttrs;
+  cmd.cadSurfaces                = doc.cadSurfaces;
+  cmd.cadSurfaceAttrs            = doc.cadSurfaceAttrs;
   cmd.surveyPoints               = doc.surveyPoints;
+  cmd.pointGroups                = doc.pointGroups;
   cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
   cmd.drawingLayerTable          = doc.drawingLayerTable;
   cmd.textStyles                 = doc.textStyles;
@@ -1090,6 +1105,9 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
   // O(number of meshes), not O(triangles), which is what makes undo affordable with a model loaded.
   snap.cadMeshes            = st.cadMeshes;
   snap.cadMeshAttrs         = st.cadMeshAttrs;
+  // Surfaces copy as strings + a refcount bump, never as triangles (REQ-068, architecture §11.5).
+  snap.cadSurfaces          = st.cadSurfaces;
+  snap.cadSurfaceAttrs      = st.cadSurfaceAttrs;
   snap.userLinesFlat        = st.userLinesFlat;
   snap.userLineAttrs        = st.userLineAttrs;
   snap.userCirclesCxCyZR     = st.userCirclesCxCyZR;
@@ -1107,6 +1125,7 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
   snap.cadFilledRegions     = st.cadFilledRegions;
   snap.cadFilledRegionAttrs = st.cadFilledRegionAttrs;
   snap.surveyPoints         = st.surveyPoints;
+  snap.pointGroups          = st.pointGroups;   // group edits are undoable (REQ-067)
   snap.drawingLayerTable    = st.drawingLayerTable;
   snap.textStyles           = st.textStyles;  // style edits are undoable (REQ-044)
   snap.pdfAttachments       = st.pdfAttachments;
@@ -1139,7 +1158,10 @@ static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySn
   st.cadFilledRegionAttrs = snap.cadFilledRegionAttrs;
   st.cadMeshes            = snap.cadMeshes;
   st.cadMeshAttrs         = snap.cadMeshAttrs;
+  st.cadSurfaces          = snap.cadSurfaces;
+  st.cadSurfaceAttrs      = snap.cadSurfaceAttrs;
   st.surveyPoints         = snap.surveyPoints;
+  st.pointGroups          = snap.pointGroups;
   st.drawingLayerTable    = snap.drawingLayerTable;
   st.textStyles           = snap.textStyles;
   st.pdfAttachments       = snap.pdfAttachments;
@@ -1151,10 +1173,209 @@ static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySn
 
 } // namespace
 
+namespace {
+
+/// The fixed order the id sweep walks, and the order \ref FindEntityById searches.
+///
+/// **Order is load-bearing**: it is what makes assignment deterministic, and therefore what makes a
+/// legacy `.gs` load with the same ids every time (REQ-076). Appending a new entity kind is safe;
+/// reordering the existing entries would renumber every legacy drawing on its next load.
+const EntityKind kEntityKindsInSweepOrder[] = {
+    EntityKind::Line,       EntityKind::Circle,       EntityKind::Arc,  EntityKind::Ellipse,
+    EntityKind::Polyline,   EntityKind::Annotation,   EntityKind::FilledRegion, EntityKind::Mesh};
+
+/// The attribute array for a kind. One accessor for both the const and mutable walks, so the
+/// two can never disagree about which arrays are covered.
+template <typename StateT>
+auto* AttrsForKind(StateT& st, EntityKind k) {
+  switch (k) {
+  case EntityKind::Line:         return &st.userLineAttrs;
+  case EntityKind::Circle:       return &st.userCircleAttrs;
+  case EntityKind::Arc:          return &st.userArcAttrs;
+  case EntityKind::Ellipse:      return &st.userEllAttrs;
+  case EntityKind::Polyline:     return &st.userPolylineAttrs;
+  case EntityKind::Annotation:   return &st.cadAnnotationAttrs;
+  case EntityKind::FilledRegion: return &st.cadFilledRegionAttrs;
+  case EntityKind::Mesh:         return &st.cadMeshAttrs;
+  }
+  return &st.userLineAttrs;
+}
+
+} // namespace
+
+void AppendSurfaceEdgeLines(const AppCommandState& st, std::vector<float>* out) {
+  if (!out)
+    return;
+  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+    const CadSurface& s = st.cadSurfaces[si];
+    if (!s.tin || s.tin->indices.empty())
+      continue;
+    // Layer visibility (REQ-068: a surface on a frozen or off layer is not drawn).
+    if (si < st.cadSurfaceAttrs.size()) {
+      const std::string& lname = st.cadSurfaceAttrs[si].layer;
+      const auto it = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+                                   [&](const CadLayerRow& r) { return r.name == lname; });
+      if (it != st.drawingLayerTable.end() && (!it->on || it->frozen))
+        continue;
+    }
+    const CadTin& t = *s.tin;
+    const auto emit = [&](std::uint32_t a, std::uint32_t b) {
+      out->push_back(t.vertsXyz[a * 3 + 0]);
+      out->push_back(t.vertsXyz[a * 3 + 1]);
+      out->push_back(t.vertsXyz[a * 3 + 2]);
+      out->push_back(t.vertsXyz[b * 3 + 0]);
+      out->push_back(t.vertsXyz[b * 3 + 1]);
+      out->push_back(t.vertsXyz[b * 3 + 2]);
+    };
+    // Each interior edge is emitted twice, once per adjoining triangle. De-duplicating would cost a
+    // hash of every edge to halve a buffer the line pipeline already handles at this size (REQ-100's
+    // measured envelope is 750k segments); that trade is worth revisiting only if the surface
+    // profile misses its budget.
+    for (size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+      emit(t.indices[i], t.indices[i + 1]);
+      emit(t.indices[i + 1], t.indices[i + 2]);
+      emit(t.indices[i + 2], t.indices[i]);
+    }
+  }
+}
+
+int FindSurfaceIndex(const AppCommandState& st, const std::string& name) {
+  auto eqCI = [](const std::string& a, const std::string& b) {
+    if (a.size() != b.size())
+      return false;
+    for (size_t i = 0; i < a.size(); ++i)
+      if (std::tolower(static_cast<unsigned char>(a[i])) != std::tolower(static_cast<unsigned char>(b[i])))
+        return false;
+    return true;
+  };
+  for (size_t i = 0; i < st.cadSurfaces.size(); ++i)
+    if (eqCI(st.cadSurfaces[i].name, name))
+      return static_cast<int>(i);
+  return -1;
+}
+
+bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
+  // Gather points from every named group. Groups are referenced by name (REQ-067), so a name that
+  // no longer resolves is reported rather than silently contributing nothing — otherwise a renamed
+  // group would quietly shrink a surface with no indication why.
+  std::vector<TinInputPoint> pts;
+  int unresolvedGroups = 0;
+  for (const std::string& gname : surface.sourcePointGroups) {
+    const int gi = FindPointGroupIndex(st, gname);
+    if (gi < 0) {
+      ++unresolvedGroups;
+      log.push_back("Surface \"" + surface.name + "\": point group \"" + gname + "\" no longer exists.");
+      continue;
+    }
+    for (int pi : ResolvePointGroup(st, st.pointGroups[static_cast<size_t>(gi)], &log)) {
+      const SurveyPoint& p = st.surveyPoints[static_cast<size_t>(pi)];
+      // Triangulate in WORLD coordinates, in double: at state-plane magnitudes the local frame is
+      // what keeps float storage precise, but the predicates need the real spacing between points
+      // (ADR-028 (d)). The result is converted back to local below.
+      pts.push_back({static_cast<double>(p.easting) + st.worldDocumentOriginX,
+                     static_cast<double>(p.northing) + st.worldDocumentOriginY, p.elevation});
+    }
+  }
+  (void)unresolvedGroups;
+
+  const TinBuildResult r = BuildTin(pts);
+  if (!r.ok()) {
+    // No partial surface, and the previous triangulation is left alone (REQ-001).
+    surface.lastBuildMessage = r.message;
+    log.push_back("Surface \"" + surface.name + "\" not built: " + r.message);
+    return false;
+  }
+
+  auto tin = std::make_shared<CadTin>();
+  tin->vertsXyz.resize(r.vertsXyz.size());
+  for (int i = 0; i < r.vertexCount(); ++i) {
+    // Back to the local storage frame (the local-storage invariant): world = local + origin.
+    tin->vertsXyz[static_cast<size_t>(i) * 3 + 0] =
+        static_cast<float>(static_cast<double>(r.vertsXyz[static_cast<size_t>(i) * 3 + 0]) - st.worldDocumentOriginX);
+    tin->vertsXyz[static_cast<size_t>(i) * 3 + 1] =
+        static_cast<float>(static_cast<double>(r.vertsXyz[static_cast<size_t>(i) * 3 + 1]) - st.worldDocumentOriginY);
+    tin->vertsXyz[static_cast<size_t>(i) * 3 + 2] = r.vertsXyz[static_cast<size_t>(i) * 3 + 2];  // Z absolute
+  }
+  tin->indices = r.indices;
+
+  // Replace the pointer, never write through it (architecture §11.5).
+  surface.tin = std::move(tin);
+  surface.lastBuildMessage = r.message;
+
+  std::string msg = "Surface \"" + surface.name + "\": " + std::to_string(surface.vertexCount()) +
+                    " points, " + std::to_string(surface.triangleCount()) + " triangles.";
+  if (!r.message.empty())
+    msg += " " + r.message;
+  log.push_back(msg);
+  return true;
+}
+
+int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
+                                 const std::vector<std::string>& groupNames,
+                                 std::vector<std::string>& log) {
+  if (name.empty()) {
+    log.push_back("Surface name cannot be empty.");
+    return -1;
+  }
+  if (FindSurfaceIndex(st, name) >= 0) {
+    log.push_back("A surface named \"" + name + "\" already exists.");
+    return -1;
+  }
+  CadSurface s;
+  s.name = name;
+  s.sourcePointGroups = groupNames;
+  if (!BuildSurfaceFromSources(st, s, log))
+    return -1;  // nothing built → no surface added, rather than an empty one to puzzle over
+
+  st.cadSurfaces.push_back(std::move(s));
+  EnsureAttrCounts(st);  // owns attribute-array growth for every entity type, surfaces included
+  BumpCadGpuCache(st);
+  return static_cast<int>(st.cadSurfaces.size()) - 1;
+}
+
+void EraseSurfaceAtIndex(AppCommandState& st, size_t index) {
+  if (index >= st.cadSurfaces.size())
+    return;
+  st.cadSurfaces.erase(st.cadSurfaces.begin() + static_cast<std::ptrdiff_t>(index));
+  if (index < st.cadSurfaceAttrs.size())
+    st.cadSurfaceAttrs.erase(st.cadSurfaceAttrs.begin() + static_cast<std::ptrdiff_t>(index));
+  BumpCadGpuCache(st);
+}
+
+void EnsureEntityIds(AppCommandState& st) {
+  // Geometry has not changed since the last sweep, so nothing can be missing an id. This is what
+  // lets callers invoke it unconditionally — including once a frame — without paying for a walk.
+  if (st.entityIdSweepRevision == st.cadGpuRevision)
+    return;
+  st.entityIdSweepRevision = st.cadGpuRevision;
+
+  std::vector<std::vector<EntityAttributes>*> arrays;
+  arrays.reserve(std::size(kEntityKindsInSweepOrder));
+  for (EntityKind k : kEntityKindsInSweepOrder)
+    arrays.push_back(AttrsForKind(st, k));
+  st.nextEntityId = AssignMissingEntityIds(arrays, st.nextEntityId);
+}
+
+std::uint64_t AllocEntityId(AppCommandState& st) { return st.nextEntityId++; }
+
+EntityRef FindEntityById(const AppCommandState& st, std::uint64_t id) {
+  for (EntityKind k : kEntityKindsInSweepOrder) {
+    const int ix = FindEntityIndexById(*AttrsForKind(st, k), id);
+    if (ix >= 0)
+      return {k, ix};
+  }
+  // Erased, or never issued. Note this is NOT the entity that took its index — that is the point.
+  return {};
+}
+
+
 void PushUndoSnapshot(AppCommandState& st, const std::string& description) {
   const int idx = st.activeDrawingIdx;
   if (idx < 0 || static_cast<size_t>(idx) >= st.documents.size())
     return;
+  // Ids before the copy, so every undo frame is id-complete and a restored frame carries the same
+  // identities it was captured with (REQ-076 — "unchanged by undo/redo").
+  EnsureEntityIds(st);
   auto& doc = st.documents[static_cast<size_t>(idx)];
   doc.undoStack.push_back(CaptureGeometrySnapshot(st, description));
   doc.redoStack.clear();
@@ -2924,10 +3145,10 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
       SP(sp.easting, sp.northing, sp.elevation, &spx, &spy);
       const bool hitPoint = PointInsideClosedRect(spx, spy, mnX, mxX, mnY, mxY);
       bool hitLabel = false;
-      const int lix = sp.labelMtextAnnIndex;
-      if (lix >= 0 && static_cast<size_t>(lix) < st.cadAnnotations.size()) {
+      const int lix = FindSurveyLabelAnnIndex(st, sp);
+      if (lix >= 0) {
         const CadAnnotation& lab = st.cadAnnotations[static_cast<size_t>(lix)];
-        if (lab.kind == CadAnnotation::Kind::Mtext && lab.surveyPointLabelFor == static_cast<int>(si)) {
+        if (lab.kind == CadAnnotation::Kind::Mtext && lab.surveyPointLabelForId == sp.id) {
           float amnX = 0.f;
           float amnY = 0.f;
           float amxX = 0.f;
@@ -3164,7 +3385,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.cadAnnotations.size()) {
         CadAnnotation c = st.cadAnnotations[k];
-        c.surveyPointLabelFor = -1;
+        c.surveyPointLabelForId = -1;
         c.insX += dx;
         c.insY += dy;
         if (c.kind == CadAnnotation::Kind::Mtext) {
@@ -3319,7 +3540,7 @@ static void CommitPasteIntoModel(AppCommandState& st, float dx, float dy) {
   }
   for (size_t i = 0; i < cb.annotations.size(); ++i) {
     CadAnnotation a = cb.annotations[i];
-    a.surveyPointLabelFor = -1;  // strip survey link so pasted labels are independent
+    a.surveyPointLabelForId = -1;  // strip survey link so pasted labels are independent
     a.surveyLabelHasUserOffset = false;
     a.insX += dx;
     a.insY += dy;
@@ -3430,7 +3651,7 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
       continue;
     }
     CadAnnotation a = src;
-    a.surveyPointLabelFor = -1;
+    a.surveyPointLabelForId = -1;
     a.surveyLabelHasUserOffset = false;
     a.insX += dx;
     a.insY += dy;
@@ -3464,6 +3685,17 @@ static int CommitPasteIntoPaper(AppCommandState& st, PaperLayout& L, float dx, f
 // Paste clipboard geometry into the ACTIVE space (model or the active paper layout) with (dx, dy) applied.
 // Routes by ActivePaperGeometryTarget (ADR-009/013). Caller pushes the undo snapshot.
 static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, std::vector<std::string>& log) {
+  // A pasted entity is a *different* entity and must not inherit its source's identity (REQ-076).
+  // Cleared on the clipboard rather than on the destination arrays because this is the one place
+  // both paste paths (PASTE and PASTEORIG) and both destination spaces pass through; the next
+  // EnsureEntityIds then mints fresh ids. Re-clearing on a repeat paste is a harmless no-op.
+  ClearEntityIdsFrom(st.clipboard.lineAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.circleAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.arcAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.ellAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.polyAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.annotationAttrs, 0);
+  ClearEntityIdsFrom(st.clipboard.filledRegionAttrs, 0);
   if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
     st.selection.clear();  // crossing into paper: model selection no longer applies
     const int skipped = CommitPasteIntoPaper(st, *L, dx, dy);
@@ -3532,7 +3764,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.cadAnnotations.size()) {
         CadAnnotation c = st.cadAnnotations[k];
-        c.surveyPointLabelFor = -1;
+        c.surveyPointLabelForId = -1;
         RotateAroundBase(bx, by, rad, &c.insX, &c.insY);
         if (c.kind == CadAnnotation::Kind::Text) {
           c.rotationRad += rad;
@@ -6529,6 +6761,19 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     consider(static_cast<double>(mb.mxX), static_cast<double>(mb.mxY));
   }
 
+  // TIN surfaces (REQ-068: "surfaces are included in zoom-extents and in the drawing's bounding
+  // box"). Their bounds, not their vertices, for the same reason meshes use theirs above — a single
+  // surface can hold 200k triangles.
+  for (const CadSurface& s : st.cadSurfaces) {
+    if (!s.tin)
+      continue;
+    const meshgeom::Bounds sb = meshgeom::ComputeBounds(s.tin->vertsXyz);
+    if (!sb.valid)
+      continue;
+    consider(static_cast<double>(sb.mnX), static_cast<double>(sb.mnY));
+    consider(static_cast<double>(sb.mxX), static_cast<double>(sb.mxY));
+  }
+
   if (!any)
     return false;
   *outMnX = mnX;
@@ -6687,6 +6932,23 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
     b.mxX = static_cast<double>(mb.mxX);
     b.mnY = static_cast<double>(mb.mnY);
     b.mxY = static_cast<double>(mb.mxY);
+    b.cx = 0.5 * (b.mnX + b.mxX);
+    b.cy = 0.5 * (b.mnY + b.mxY);
+    out.push_back(b);
+  }
+
+  // TIN surfaces (REQ-068), one box per surface — same reasoning as the meshes above.
+  for (const CadSurface& s : st.cadSurfaces) {
+    if (!s.tin)
+      continue;
+    const meshgeom::Bounds sb = meshgeom::ComputeBounds(s.tin->vertsXyz);
+    if (!sb.valid)
+      continue;
+    EntityBox b{};
+    b.mnX = static_cast<double>(sb.mnX);
+    b.mxX = static_cast<double>(sb.mxX);
+    b.mnY = static_cast<double>(sb.mnY);
+    b.mxY = static_cast<double>(sb.mxY);
     b.cx = 0.5 * (b.mnX + b.mxX);
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
@@ -7278,9 +7540,9 @@ void CommitMtextRichEditor(AppCommandState& st, std::vector<std::string>& log) {
         ann->text = std::move(t);
       } else {
         ann->text = MtextRichNormalize(st.mtextRichEditorBuf);
-        if (!paper && ann->surveyPointLabelFor >= 0 &&
-            static_cast<size_t>(ann->surveyPointLabelFor) < st.surveyPoints.size())
-          RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(ann->surveyPointLabelFor));
+        const int linkedPi = paper ? -1 : SurveyPointIndexForId(st, ann->surveyPointLabelForId);
+        if (linkedPi >= 0)
+          RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(linkedPi));
       }
       BumpCadGpuCache(st);
       log.push_back(paper ? "Paper text updated." : (plain ? "TEXT updated." : "MTEXT updated."));
@@ -7405,6 +7667,10 @@ void EnsureAttrCounts(AppCommandState& st) {
   const size_t na = st.cadAnnotations.size();
   while (st.cadAnnotationAttrs.size() < na) {
     st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
+    grew = true;
+  }
+  while (st.cadSurfaceAttrs.size() < st.cadSurfaces.size()) {  // REQ-068
+    st.cadSurfaceAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
   if (grew)
@@ -7848,6 +8114,11 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
 void ClearCadGeometry(AppCommandState& st) {
   st.worldDocumentOriginX = 0.0;
   st.worldDocumentOriginY = 0.0;
+  // A cleared drawing is a new drawing: its id space restarts. Ids are unique *within* a drawing
+  // (REQ-076), not globally, and every entity that could have held one is about to be erased. A
+  // `.gs` load overwrites this from the file immediately after clearing.
+  st.nextEntityId = 1;
+  st.entityIdSweepRevision = kEntityIdSweepNever;  // whatever is loaded next must be swept
   st.userLinesFlat.clear();
   st.userLineAttrs.clear();
   st.userCirclesCxCyZR.clear();
@@ -7950,19 +8221,18 @@ static void ErasePolylineByIndex(AppCommandState& st, int pi) {
 void EraseCadAnnotationAtIndex(AppCommandState& st, size_t annIndex) {
   if (annIndex >= st.cadAnnotations.size())
     return;
-  const CadAnnotation& doomed = st.cadAnnotations[annIndex];
-  const int ownerPi = doomed.surveyPointLabelFor;
-  if (ownerPi >= 0 && static_cast<size_t>(ownerPi) < st.surveyPoints.size()) {
-    SurveyPoint& sp = st.surveyPoints[static_cast<size_t>(ownerPi)];
-    if (sp.labelMtextAnnIndex == static_cast<int>(annIndex))
-      sp.labelMtextAnnIndex = -1;
-  }
-  for (SurveyPoint& q : st.surveyPoints) {
-    if (q.labelMtextAnnIndex == static_cast<int>(annIndex))
-      q.labelMtextAnnIndex = -1;
-    else if (q.labelMtextAnnIndex > static_cast<int>(annIndex))
-      --q.labelMtextAnnIndex;
-  }
+  // Clear the owning point's link. There is deliberately **no renumbering pass** here any more:
+  // survey points reference their label by stable id (REQ-076 / architecture §11.9), so erasing an
+  // annotation cannot change what any other point's link means. The loop this replaces walked every
+  // survey point decrementing indices, and it was the evidence that index references do not scale —
+  // one reference pair, ~46 maintenance sites (ADR-027 Context).
+  const std::uint64_t doomedId = annIndex < st.cadAnnotationAttrs.size()
+                                     ? st.cadAnnotationAttrs[annIndex].id
+                                     : 0;
+  if (doomedId != 0)
+    for (SurveyPoint& q : st.surveyPoints)
+      if (q.labelMtextAnnId == doomedId)
+        q.labelMtextAnnId = 0;
   st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
                                     [&](const SelectedEntity& e) {
                                       return e.type == SelectedEntity::Type::Annotation &&
@@ -8005,8 +8275,8 @@ void SyncSurveyPointLinkedMtextSelection(AppCommandState& st, int surveyPointInd
   const bool selected =
       std::find(st.selectedSurveyPointIndices.begin(), st.selectedSurveyPointIndices.end(), surveyPointIndex) !=
       st.selectedSurveyPointIndices.end();
-  const int annIx = st.surveyPoints[static_cast<size_t>(surveyPointIndex)].labelMtextAnnIndex;
-  if (annIx < 0 || static_cast<size_t>(annIx) >= st.cadAnnotations.size())
+  const int annIx = FindSurveyLabelAnnIndex(st, st.surveyPoints[static_cast<size_t>(surveyPointIndex)]);
+  if (annIx < 0)
     return;
   const auto hasAnnSel = [&]() {
     return std::find_if(st.selection.begin(), st.selection.end(), [&](const SelectedEntity& e) {
@@ -8033,10 +8303,10 @@ void ApplyLinkedSurveyForAnnotationPick(AppCommandState& st, int annIndex, bool 
   if (annIndex < 0 || static_cast<size_t>(annIndex) >= st.cadAnnotations.size())
     return;
   const CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(annIndex)];
-  if (a.kind != CadAnnotation::Kind::Mtext || a.surveyPointLabelFor < 0)
+  if (a.kind != CadAnnotation::Kind::Mtext || a.surveyPointLabelForId < 0)
     return;
-  const int spi = a.surveyPointLabelFor;
-  if (static_cast<size_t>(spi) >= st.surveyPoints.size())
+  const int spi = SurveyPointIndexForId(st, a.surveyPointLabelForId);
+  if (spi < 0)
     return;
   auto& sv = st.selectedSurveyPointIndices;
   const auto sit = std::find(sv.begin(), sv.end(), spi);
@@ -10491,6 +10761,8 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   b.savedPolyOffsets = st.userPolylineOffsets;
   b.savedPolyClosed = st.userPolylineClosed;
   b.savedPolyAttrs = st.userPolylineAttrs;
+  b.savedSurfaces = st.cadSurfaces;
+  b.savedSurfaceAttrs = st.cadSurfaceAttrs;
   b.savedAzimuthDeg = st.viewportAzimuthDeg;
   b.savedElevationDeg = st.viewportElevationDeg;
   b.savedZoom = st.viewportZoom;
@@ -10498,22 +10770,64 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   b.savedPanY = st.viewportPanY;
   b.savedPanZ = st.viewportPanZ;
 
-  b.segmentCount =
-      benchscene::BuildContourScene(segments, &st.userPolylineVerts, &st.userPolylineOffsets, &st.userPolylineClosed);
-  st.userPolylineAttrs.assign(st.userPolylineClosed.size(), MakeNewEntityAttrs(st));
+  if (b.surfacePointCount > 0) {
+    // Surface profile (REQ-100 as amended / ADR-028): the scene is ONE surface, and the line stores
+    // are emptied so the measurement is the surface's cost and nothing else. Triangle edges are
+    // regenerated display geometry, which is exactly why this profile is not implied by the other
+    // two and has to be measured on its own.
+    st.userPolylineVerts.clear();
+    st.userPolylineOffsets.assign(1, 0);
+    st.userPolylineClosed.clear();
+    st.userPolylineAttrs.clear();
+
+    std::vector<float> ptsXyz;
+    const int n = benchscene::BuildSurfacePointScene(b.surfacePointCount, &ptsXyz);
+    std::vector<TinInputPoint> pts;
+    pts.reserve(static_cast<size_t>(n));
+    for (int i = 0; i < n; ++i)
+      pts.push_back({static_cast<double>(ptsXyz[static_cast<size_t>(i) * 3 + 0]),
+                     static_cast<double>(ptsXyz[static_cast<size_t>(i) * 3 + 1]),
+                     ptsXyz[static_cast<size_t>(i) * 3 + 2]});
+    const TinBuildResult tr = BuildTin(pts);
+    if (!tr.ok()) {
+      log.push_back(std::string("BENCH — surface scene failed to triangulate: ") + tr.message);
+      return false;
+    }
+    auto tin = std::make_shared<CadTin>();
+    tin->vertsXyz = tr.vertsXyz;
+    tin->indices = tr.indices;
+    CadSurface bs;
+    bs.name = "BENCH surface";
+    bs.tin = std::move(tin);
+    b.surfaceTriangleCount = bs.triangleCount();
+    st.cadSurfaces.assign(1, std::move(bs));
+    st.cadSurfaceAttrs.assign(1, MakeNewEntityAttrs(st));
+    b.segmentCount = b.surfaceTriangleCount * 3;  // edges drawn, for the report
+  } else {
+    b.segmentCount = benchscene::BuildContourScene(segments, &st.userPolylineVerts, &st.userPolylineOffsets,
+                                                   &st.userPolylineClosed);
+    st.userPolylineAttrs.assign(st.userPolylineClosed.size(), MakeNewEntityAttrs(st));
+  }
 
   // Frame the whole scene from a tilted view. The framing is computed from the geometry rather than
   // hard-coded: if any of the scene falls outside the viewport the GPU stops rasterising it and the
   // benchmark measures less than the density the requirement names. Sizing to the scene's bounding
   // SPHERE means that stays true through the whole orbit, at every azimuth.
   double mnX = 1e300, mxX = -1e300, mnY = 1e300, mxY = -1e300, mnZ = 1e300, mxZ = -1e300;
-  for (size_t i = 0; i + 2 < st.userPolylineVerts.size(); i += 3) {
-    mnX = std::min(mnX, static_cast<double>(st.userPolylineVerts[i]));
-    mxX = std::max(mxX, static_cast<double>(st.userPolylineVerts[i]));
-    mnY = std::min(mnY, static_cast<double>(st.userPolylineVerts[i + 1]));
-    mxY = std::max(mxY, static_cast<double>(st.userPolylineVerts[i + 1]));
-    mnZ = std::min(mnZ, static_cast<double>(st.userPolylineVerts[i + 2]));
-    mxZ = std::max(mxZ, static_cast<double>(st.userPolylineVerts[i + 2]));
+  // Whichever store the profile filled: the contour scene lives in the polylines, the surface
+  // profile in the TIN. Framing from the wrong one would put the scene off screen and measure a
+  // viewport with nothing in it.
+  const std::vector<float>& frameVerts =
+      (b.surfacePointCount > 0 && !st.cadSurfaces.empty() && st.cadSurfaces[0].tin)
+          ? st.cadSurfaces[0].tin->vertsXyz
+          : st.userPolylineVerts;
+  for (size_t i = 0; i + 2 < frameVerts.size(); i += 3) {
+    mnX = std::min(mnX, static_cast<double>(frameVerts[i]));
+    mxX = std::max(mxX, static_cast<double>(frameVerts[i]));
+    mnY = std::min(mnY, static_cast<double>(frameVerts[i + 1]));
+    mxY = std::max(mxY, static_cast<double>(frameVerts[i + 1]));
+    mnZ = std::min(mnZ, static_cast<double>(frameVerts[i + 2]));
+    mxZ = std::max(mxZ, static_cast<double>(frameVerts[i + 2]));
   }
   const double cx = 0.5 * (mnX + mxX);
   const double cy = 0.5 * (mnY + mxY);
@@ -10557,10 +10871,14 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
     st.userPolylineOffsets = std::move(b.savedPolyOffsets);
     st.userPolylineClosed = std::move(b.savedPolyClosed);
     st.userPolylineAttrs = std::move(b.savedPolyAttrs);
+    st.cadSurfaces = std::move(b.savedSurfaces);
+    st.cadSurfaceAttrs = std::move(b.savedSurfaceAttrs);
     b.savedPolyVerts.clear();
     b.savedPolyOffsets.clear();
     b.savedPolyClosed.clear();
     b.savedPolyAttrs.clear();
+    b.savedSurfaces.clear();
+    b.savedSurfaceAttrs.clear();
     st.viewportAzimuthDeg = b.savedAzimuthDeg;
     st.viewportElevationDeg = b.savedElevationDeg;
     st.viewportZoom = b.savedZoom;
@@ -10580,8 +10898,18 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
   constexpr double kBudgetMs = 16.0;  // REQ-100
   const bool pass = s.p95Ms <= kBudgetMs;
   char msg[320];
-  std::snprintf(msg, sizeof(msg), "BENCH — %d segments, %d timed frames: p95 %.2f ms (budget %.0f ms) — %s.",
-                b.segmentCount, s.frames, s.p95Ms, kBudgetMs, pass ? "PASS" : "FAIL");
+  if (b.surfacePointCount > 0)
+    // Name the profile: REQ-100 has three, and a p95 quoted without saying which one it measured is
+    // as unreproducible as one quoted without the reference machine.
+    std::snprintf(msg, sizeof(msg),
+                  "BENCH (surface) — %d points, %d triangles (%d edges), %d timed frames: "
+                  "p95 %.2f ms (budget %.0f ms) — %s.",
+                  b.surfacePointCount, b.surfaceTriangleCount, b.segmentCount, s.frames, s.p95Ms,
+                  kBudgetMs, pass ? "PASS" : "FAIL");
+  else
+    std::snprintf(msg, sizeof(msg),
+                  "BENCH — %d segments, %d timed frames: p95 %.2f ms (budget %.0f ms) — %s.",
+                  b.segmentCount, s.frames, s.p95Ms, kBudgetMs, pass ? "PASS" : "FAIL");
   log.push_back(msg);
   std::snprintf(msg, sizeof(msg), "BENCH — min %.2f  median %.2f  mean %.2f  p95 %.2f  p99 %.2f  max %.2f ms.",
                 s.minMs, s.medianMs, s.meanMs, s.p95Ms, s.p99Ms, s.maxMs);
@@ -11498,6 +11826,34 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (plotTok == "bench") {
       int segs = 250000;  // REQ-100: the density of a real topo with contours
       int frames = 900;   // ~1.25 turns of the scripted orbit after warm-up
+      st.bench.surfacePointCount = 0;
+      st.bench.surfaceTriangleCount = 0;
+
+      // `BENCH SURFACE [points] [frames]` selects the surface cost profile (REQ-100 as amended,
+      // ADR-028). A surface is measured separately because its edges are regenerated display
+      // geometry — neither the segment nor the mesh profile predicts its cost.
+      std::string benchArg;
+      const std::streampos afterTok = issIdle.tellg();
+      if (issIdle >> benchArg) {
+        std::string lower;
+        for (char c : benchArg)
+          lower.push_back(static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        if (lower == "surface" || lower == "surf" || lower == "s") {
+          int pts = 100000;  // REQ-100's surface profile: ~200k triangles
+          int v = 0;
+          if (issIdle >> v)
+            pts = v;
+          if (issIdle >> v)
+            frames = v;
+          st.bench.surfacePointCount = pts;
+          StartFrameBudgetBench(st, 1, frames, log);
+          return;
+        }
+        issIdle.clear();
+        issIdle.seekg(afterTok);  // not "surface": re-read the token as a segment count
+      } else {
+        issIdle.clear();
+      }
       int v = 0;
       if (issIdle >> v)
         segs = v;
@@ -12911,7 +13267,7 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
   // Annotations — skip survey-linked MTEXT; repositioned after survey pts below.
   for (size_t ani = 0; ani < st.cadAnnotations.size(); ++ani) {
     auto& ann = st.cadAnnotations[ani];
-    if (ann.surveyPointLabelFor >= 0)
+    if (ann.surveyPointLabelForId >= 0)
       continue;
     if (selective && !sAnns.count(static_cast<int>(ani))) continue;
     HelmertPt(a, b, tx, ty, &ann.insX, &ann.insY);
