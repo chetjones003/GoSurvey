@@ -1,0 +1,25 @@
+#pragma once
+
+// GENERATED FILE — do not edit. CMake configures this from src/app/Version.hpp.in
+// into the build tree (REQ-200: generated artifacts never land in the source tree).
+//
+// The version has exactly one source: `project(GoSurvey VERSION ...)` in CMakeLists.txt
+// (ADR-029 (a)). The installer's AppVersion, the git tag, the release manifest and the
+// values below all derive from it, so they cannot drift apart.
+//
+// The number names the release being *worked toward*, not the last one shipped: it is
+// bumped just after a stable release, and every beta in the cycle is `<version>-beta.<n>`.
+
+#define GOSURVEY_VERSION_MAJOR @PROJECT_VERSION_MAJOR@
+#define GOSURVEY_VERSION_MINOR @PROJECT_VERSION_MINOR@
+#define GOSURVEY_VERSION_PATCH @PROJECT_VERSION_PATCH@
+
+/// Dotted release version, e.g. "0.5.0". Never carries a prerelease suffix.
+#define GOSURVEY_VERSION_STRING "@PROJECT_VERSION@"
+
+/// The build's full version as it should be shown and compared, e.g. "0.5.0" for a
+/// stable build or "0.5.0-beta.7" for a CI beta. CI passes -DGOSURVEY_VERSION_SUFFIX;
+/// a developer build leaves it empty and is therefore indistinguishable from a release
+/// build by version alone — which is correct, because a local build is not a release
+/// and must never be compared against one.
+#define GOSURVEY_VERSION_FULL "@PROJECT_VERSION@@GOSURVEY_VERSION_SUFFIX@"

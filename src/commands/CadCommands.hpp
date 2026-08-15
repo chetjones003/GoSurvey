@@ -9,6 +9,7 @@
 #include "AngleFormat.hpp"
 #include "traverse/TraverseCalc.hpp"
 #include "traverse/TraverseLeastSquares.hpp"
+#include "update/UpdateCheck.hpp"  // update::UpdatePrefs only — pure, no network, no <thread>
 
 #include <algorithm>
 #include <atomic>
@@ -887,6 +888,10 @@ struct AppCommandState {
   } trimPhase = TrimPhase::SelectCuttingEdges;
   /// \c TRIMSTATE: 0 = smart line trim (default), 1 = pick cutting edges first. Persisted in user prefs.
   int trimState = 0;
+  /// REQ-077: update-check settings (enabled, channel, skipped version, throttle anchor).
+  /// Only the persisted settings live here — the in-flight worker state is `update::UpdateState`,
+  /// owned by the application loop, so `AppCommandState` gains no thread and stays copyable.
+  update::UpdatePrefs updatePrefs;
   std::vector<SelectedEntity> trimCutters;
   /// Draft endpoints while TRIM \p L waits for second point (rubber band). First shot completes trim and clears TRIM.
   float trimCutInfP1x = 0.f, trimCutInfP1y = 0.f, trimCutInfP2x = 0.f, trimCutInfP2y = 0.f;

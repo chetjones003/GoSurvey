@@ -1,3 +1,16 @@
+// NOMINMAX must precede EVERY header here, not just <windows.h> below: several of the
+// includes that follow pull <windows.h> in themselves, and by the time this file's own
+// include of it is reached the min/max macros are already defined and shadow std::max /
+// std::min at their call sites. Same reason as PdfAttach.cpp and WinFrameControls.cpp.
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#endif
+
 #include "CadCommands.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "CadRubberPreview.hpp"
@@ -13,6 +26,13 @@
 #include "SplashScreen.hpp"
 #include "UserPrefs.hpp"
 #include "ImGuiLayout.hpp"
+#include "UpdateService.hpp"
+
+#include <ctime>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
@@ -85,8 +105,31 @@ static void GlfwErrorCallback(int error, const char *description)
   std::fprintf(stderr, "GLFW error %d: %s\n", error, description);
 }
 
+#ifdef _WIN32
+/// Publishes the mutex Inno Setup looks for (`AppMutex` in installer/GoSurvey.iss) so the
+/// installer can detect a running GoSurvey and close it rather than failing to replace a
+/// locked executable. This is what lets REQ-078 apply an update with no separate updater
+/// binary (ADR-029 (f)).
+///
+/// It is deliberately NOT single-instance enforcement: a second instance finds the mutex
+/// already present, ignores that, and runs normally. Both namespaces are published because
+/// the installer runs elevated and may not share the local one; failing to create the
+/// global mutex is not an error worth reporting, since the local one still serves.
+/// Handles are intentionally never closed — the process holds them until it exits, which
+/// is precisely the lifetime the installer needs to observe.
+static void PublishInstallerDetectionMutex()
+{
+  ::CreateMutexW(nullptr, FALSE, L"GoSurveyAppMutex");
+  ::CreateMutexW(nullptr, FALSE, L"Global\\GoSurveyAppMutex");
+}
+#endif
+
 int main()
 {
+#ifdef _WIN32
+  PublishInstallerDetectionMutex();
+#endif
+
   glfwSetErrorCallback(GlfwErrorCallback);
   if (!glfwInit())
     return 1;
@@ -150,6 +193,18 @@ int main()
 
   AppCommandState cmd;
   LoadUserStartupPrefs(cmd);
+
+  // REQ-077: the update check. Only the persisted settings live in AppCommandState; the worker
+  // state is owned here, so no drawing state is ever touched from a background thread.
+  update::UpdateState updateState;
+  updateState.prefs = cmd.updatePrefs;
+  // Fires at most one HTTPS request, on a detached worker, at most once per 24 hours, and does
+  // nothing at all when the user has switched the check off.
+  update::BeginStartupCheck(updateState, "chetjones003/GoSurvey",
+                            static_cast<long long>(std::time(nullptr)));
+  /// Set once the user has confirmed an update and the app is exiting to hand over to the
+  /// installer, so the normal quit path can tell the two cases apart.
+  bool updateExitPending = false;
   const bool haveSavedDockIni = ImGuiLayout_ConfigureIniPath(cmd);
   std::vector<std::string> cmdLog;
   cmdLog.push_back("GoSurvey CAD shell ready.");
@@ -230,6 +285,17 @@ int main()
       }
     }
 
+    // REQ-077/078: advance the background check or download, then let a confirmed update exit
+    // through the SAME unsaved-changes path a normal quit uses. Reusing it rather than repeating
+    // the dirty check is the point — one code path decides whether work is at risk.
+    update::PollUpdateTask(updateState);
+    if (updateState.awaitingUnsavedCheck)
+    {
+      updateState.awaitingUnsavedCheck = false;
+      updateExitPending                = true;
+      glfwSetWindowShouldClose(window, GLFW_TRUE);
+    }
+
     // Intercept window-close so we can prompt about unsaved drawings.
     if (glfwWindowShouldClose(window))
     {
@@ -247,8 +313,23 @@ int main()
         cmd.closeConfirmed = true;
     }
 
+    // The user cancelled the save prompt, so the update is cancelled too — the installer is not
+    // run, and the verified download stays on disk for the next offer.
+    if (updateExitPending && !cmd.closeConfirmed && !cmd.confirmCloseModal &&
+        !glfwWindowShouldClose(window))
+    {
+      updateExitPending  = false;
+      updateState.phase  = update::Phase::ReadyToLaunch;
+    }
+
     if (cmd.closeConfirmed)
+    {
+      // Work is saved or deliberately discarded by this point, so it is safe to hand over.
+      // Inno closes this process via the AppMutex, replaces the files, and restarts us.
+      if (updateExitPending)
+        update::LaunchInstallerAndExit(updateState);
       break;
+    }
 
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
@@ -536,6 +617,12 @@ int main()
     DrawPdfAttachDialog(cmd, cmdLog);
     DrawAlignResultsWindow(cmd, cmdLog);
     DrawCloseConfirmModal(cmd, cmdLog);
+    DrawUpdateDialog(cmd, updateState);
+    // The dialog writes skip state into cmd.updatePrefs; the throttle anchor is written by the
+    // check itself. Sync the rest back so SaveUserStartupPrefs persists both.
+    cmd.updatePrefs.enabled        = updateState.prefs.enabled;
+    cmd.updatePrefs.useBetaChannel = updateState.prefs.useBetaChannel;
+    cmd.updatePrefs.lastCheckUnix  = updateState.prefs.lastCheckUnix;
     DrawDwgLossyExportModal(cmd, cmdLog);
 
     // The point a click would COMMIT at, which is NOT the cursor. When an object snap is acquired,

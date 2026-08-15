@@ -105,6 +105,11 @@ void DrawAlignResultsWindow(AppCommandState& cmd, std::vector<std::string>& log)
 /// Sets cmd.closeConfirmed = true when the user accepts close (with or without saving).
 void DrawCloseConfirmModal(AppCommandState& cmd, std::vector<std::string>& log);
 
+namespace update { struct UpdateState; }
+/// REQ-078: presents an available update and waits for an explicit choice. Draws nothing while
+/// the background check is running — the check itself is never shown to the user.
+void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd);
+
 /// Confirms a DWG export before anything is written, stating what the Phase 1 converter route
 /// drops (REQ-052). Writes to \c cmd.dwgPendingExportPath only when the user accepts.
 void DrawDwgLossyExportModal(AppCommandState& cmd, std::vector<std::string>& log);

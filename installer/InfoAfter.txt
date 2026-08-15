@@ -1,0 +1,124 @@
+================================================================================
+  GoSurvey 0.3.1 — Precision Survey CAD
+================================================================================
+
+Thank you for installing GoSurvey.  Launch the application from the Start Menu
+or desktop shortcut to get started.  A default workspace template is loaded
+automatically on first run.
+
+
+QUICK COMMAND REFERENCE
+-------------------------------------------------------------------------------
+All commands are entered at the command prompt at the bottom of the screen.
+Press Enter to execute.  Press Escape to cancel the current command.
+
+  DRAWING
+    LINE     (L)    Draw lines.  Use @dx,dy for relative entry.
+                    Type A or ANGLE to switch to bearing input,
+                    then enter a bearing (e.g. N45E, S30W, or 90).
+    POLYLINE (PL)   Draw a connected series of line segments.
+                    Type CLOSE to close the polyline back to its start.
+    ARC             Draw a 3-point arc (start, point on arc, end).
+    ELLIPSE         Draw an ellipse (center, axis endpoint, axis ratio).
+    CIRCLE   (C)    Draw a circle by center and radius.
+    TEXT            Place single-line text.
+    MTEXT           Place multi-line text with basic rich formatting.
+
+  DIMENSIONS
+    DIMALIGNED  (DAL)   Aligned dimension between two points.
+    DIMLINEAR   (DLI)   Horizontal or vertical dimension.
+    DIMANGULAR  (DAN)   Angular dimension between two lines.
+
+  EDITING
+    MOVE     (M)    Move selected entities.
+    COPY     (CP)   Copy selected entities.
+    ROTATE   (RO)   Rotate selected entities.
+    SCALE    (SC)   Scale selected entities.
+    OFFSET   (O)    Offset a line, circle, or arc by distance or through-click.
+    TRIM            Trim geometry to cutting edges (Civil 3D-style workflow:
+                    pick cutting edges, press Enter, click segments to trim).
+    JOIN            Join collinear lines and coaxial arcs into single entities.
+    DELETE   (DEL)  Delete selected entities.
+    OVERKILL (OK)   Remove zero-length/duplicate entities, merge collinear
+                    overlapping lines, remove arcs subsumed by circles.
+
+  SELECTION
+    Left-click      Select a single entity.
+    Two-click box   Click two corners to define a selection window (uses
+                    unsnapped cursor position).
+    Escape          Deselect / cancel current command.
+
+  VIEW
+    ZOOM EXTENTS  (ZE)    Fit all geometry in the viewport.
+    ZOOM WINDOW   (ZW)    Zoom into a picked window.
+    REGEN         (RE)    Regenerate the display.
+    Scroll wheel          Zoom in / out.
+    Middle-mouse drag     Pan.
+
+  PDF UNDERLAY
+    PDFATTACH  (PA)   Attach a PDF page as a scaled underlay.  The underlay
+                      renders with a transparent background and supports
+                      object snapping to visible geometry — endpoints,
+                      corners, and junctions are detected from the
+                      rasterized page image.  Snap to midpoints and
+                      perpendiculars is also supported.
+
+  SURVEY
+    CRTPTS    Create survey points.
+    VWPTS     View and manage survey points.
+    IMPPTS    Import survey points from CSV.
+    EXPPTS    Export survey points to CSV.
+    INVERSE   (INV)  Report distance and bearing between two picked points.
+    ID               Report world coordinates of a picked point.
+
+  UTILITY
+    LAYER     (LA)      Open the layer manager.
+    PLOTSCALE (PSCALE)  Set the drawing plot scale.
+    REGEN     (RE)      Regenerate display.
+
+
+COORDINATE ENTRY
+-------------------------------------------------------------------------------
+  Absolute     x,y                    e.g.  100,250
+  Relative     @dx,dy                 e.g.  @25,-10
+  Bearing      A<bearing>             e.g.  A90  (due East)
+               or A alone, then type the bearing on the next prompt
+
+  Bearings can be entered as:
+    Decimal degrees clockwise from North  (e.g. 45.5)
+    DMS                                   (e.g. 45d30m00s)
+    Quadrant                              (e.g. N45E, S30W)
+
+
+OBJECT SNAPS
+-------------------------------------------------------------------------------
+  Endpoint, Midpoint, Center, and Perpendicular snaps are active while any
+  drawing command is in progress.  The snap indicator appears at the cursor
+  when a snap target is found within the current aperture.
+
+  PDF underlay snaps detect visible geometry topology from the rasterized page
+  so that snap targets correspond to what you actually see, not to internal PDF
+  path structure.
+
+
+FILES
+-------------------------------------------------------------------------------
+  Workspaces         Saved as .gs files (JSON format).
+  Import / Export    DXF — compatible with AutoCAD and Civil 3D.
+  Survey points      CSV import and export.
+
+
+SUPPORT
+-------------------------------------------------------------------------------
+  Source code and issue tracker:
+  https://github.com/chetjones003/GoSurvey
+
+
+================================================================================
+  Third-Party Notices
+================================================================================
+  PDFium      BSD 3-Clause  —  https://pdfium.googlesource.com/pdfium/
+  GLFW        zlib License  —  https://www.glfw.org/
+  GLEW        BSD/MIT       —  https://glew.sourceforge.net/
+  Dear ImGui  MIT License   —  https://github.com/ocornut/imgui
+================================================================================

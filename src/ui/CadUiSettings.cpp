@@ -8,6 +8,7 @@
 #include "NumFormat.hpp"
 #include "SurveyPoints.hpp"
 #include "UserPrefs.hpp"
+#include "Version.hpp"
 #include "WinFileDialogs.hpp"
 
 #include <imgui_stdlib.h>
@@ -309,6 +310,23 @@ static void DrawSystemGeneralOptions(AppCommandState& cmd) {
   ImGui::Checkbox("Allow long symbol names", &cmd.systemAllowLongSymbolNames);
 }
 
+/// REQ-077: the update check is switchable, and switching it off means no network request is
+/// ever made — not a suppressed prompt. The version is shown here too, so a user reporting a
+/// problem has somewhere to read it off.
+static void DrawSystemUpdates(AppCommandState& cmd) {
+  ImGui::TextDisabled("Version %s", GOSURVEY_VERSION_FULL);
+  ImGui::Checkbox("Check for updates on startup", &cmd.updatePrefs.enabled);
+  ImGui::BeginDisabled(!cmd.updatePrefs.enabled);
+  ImGui::Checkbox("Include beta releases", &cmd.updatePrefs.useBetaChannel);
+  ImGui::EndDisabled();
+  if (!cmd.updatePrefs.skippedVersion.empty()) {
+    ImGui::TextDisabled("Skipping %s", cmd.updatePrefs.skippedVersion.c_str());
+    ImGui::SameLine();
+    // Without this the only way out of a skip is editing the prefs file by hand.
+    if (ImGui::SmallButton("Clear##unskip")) cmd.updatePrefs.skippedVersion.clear();
+  }
+}
+
 static void DrawSettingsSystemTab(AppCommandState& cmd) {
   if (ImGui::BeginTable("##sys_layout", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
     ImGui::TableNextRow();
@@ -324,6 +342,7 @@ static void DrawSettingsSystemTab(AppCommandState& cmd) {
     ImGui::TableSetColumnIndex(1);
     BoxBegin("General Options", 140.f); DrawSystemGeneralOptions(cmd); BoxEnd();
     BoxBegin("Help", 70.f); ImGui::Checkbox("Access online content when available", &cmd.systemAccessOnlineContent); BoxEnd();
+    BoxBegin("Updates", 110.f); DrawSystemUpdates(cmd); BoxEnd();
     BoxBegin("InfoCenter", 70.f);
     ImGui::BeginDisabled(); ImGui::Button("Balloon Notifications", ImVec2(-FLT_MIN, 0.f)); ImGui::EndDisabled();
     BoxEnd();

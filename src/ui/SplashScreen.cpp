@@ -2,6 +2,7 @@
 
 #include "AppIcon.hpp"
 #include "CadUi.hpp"
+#include "Version.hpp"
 #include "WinFrameControls.hpp"
 
 #include <GL/glew.h>
@@ -26,10 +27,14 @@ void GlfwApplySplashStageWindowHints() {
 void GlfwApplyMainStageWindowChrome(GLFWwindow* window) {
   if (!window)
     return;
+  // REQ-077: the running build states its version. GOSURVEY_VERSION_FULL is generated from
+  // the one CMake project version (ADR-029 (a)), so this cannot drift from the installer.
+  static const std::string kWindowTitle =
+      std::string("GoSurvey ") + GOSURVEY_VERSION_FULL + " — CAD";
 #if defined(_WIN32)
   glfwSetWindowAttrib(window, GLFW_DECORATED, GLFW_FALSE);
   glfwSetWindowAttrib(window, GLFW_RESIZABLE, GLFW_TRUE);
-  glfwSetWindowTitle(window, "GoSurvey — CAD");
+  glfwSetWindowTitle(window, kWindowTitle.c_str());
   GlfwPlatformInstallBorderlessResize(window);
   glfwMaximizeWindow(window);
   glfwFocusWindow(window);

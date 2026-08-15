@@ -155,6 +155,18 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   if (s.contains("trimState") && s["trimState"].is_number_integer())
     st.trimState = std::clamp(s["trimState"].get<int>(), 0, 1);
 
+  // --- Update check (REQ-077) ---
+  if (s.contains("updateCheckEnabled") && s["updateCheckEnabled"].is_boolean())
+    st.updatePrefs.enabled = s["updateCheckEnabled"].get<bool>();
+  if (s.contains("updateUseBetaChannel") && s["updateUseBetaChannel"].is_boolean())
+    st.updatePrefs.useBetaChannel = s["updateUseBetaChannel"].get<bool>();
+  if (s.contains("updateSkippedVersion") && s["updateSkippedVersion"].is_string())
+    st.updatePrefs.skippedVersion = s["updateSkippedVersion"].get<std::string>();
+  // A clock that has moved backwards (or a hand-edited file) must not park the throttle in the
+  // future and suppress every future check, so a negative value is floored rather than trusted.
+  if (s.contains("updateLastCheckUnix") && s["updateLastCheckUnix"].is_number_integer())
+    st.updatePrefs.lastCheckUnix = std::max(0LL, s["updateLastCheckUnix"].get<long long>());
+
   // --- Undo/Redo ---
   if (s.contains("undoHistoryMaxSize") && s["undoHistoryMaxSize"].is_number_integer())
     st.undoHistoryMaxSize = std::clamp(s["undoHistoryMaxSize"].get<int>(), 1, 200);
@@ -347,6 +359,12 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["prefsSchemaVersion"] = 1;
 
   s["trimState"] = st.trimState;
+
+  // Update check (REQ-077)
+  s["updateCheckEnabled"]   = st.updatePrefs.enabled;
+  s["updateUseBetaChannel"] = st.updatePrefs.useBetaChannel;
+  s["updateSkippedVersion"] = st.updatePrefs.skippedVersion;
+  s["updateLastCheckUnix"]  = st.updatePrefs.lastCheckUnix;
 
   // Right-click behavior
   s["rightClickRepeatLastCommand"] = st.rightClickRepeatLastCommand;

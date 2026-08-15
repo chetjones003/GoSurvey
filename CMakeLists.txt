@@ -5,6 +5,34 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# ---------------------------------------------------------------------------
+# Version (ADR-029 (a)) — `project(VERSION)` above is the ONE source.
+#
+# It names the release being worked toward, so it is bumped just after a stable
+# release ships. CI passes GOSURVEY_VERSION_SUFFIX ("-beta.7") and
+# GOSURVEY_VERSION_BUILD (7) for a prerelease; a stable build and a developer
+# build leave both at their defaults.
+#
+# Both generated files land in the build tree, never the source tree (REQ-200).
+# ---------------------------------------------------------------------------
+set(GOSURVEY_VERSION_SUFFIX "" CACHE STRING
+    "Prerelease suffix appended to the version, e.g. -beta.7 (empty for a stable build)")
+set(GOSURVEY_VERSION_BUILD "0" CACHE STRING
+    "Fourth field of the Windows VERSIONINFO quad; the beta number, or 0 for a stable build")
+
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/app/Version.hpp.in"
+  "${CMAKE_BINARY_DIR}/generated/Version.hpp"
+  @ONLY)
+
+# The same version, in a form Inno Setup's preprocessor can #include, so that running
+# installer/GoSurvey.iss by hand picks up the CMake version instead of a stale literal.
+# CI overrides these with ISCC /D defines; the script prefers the defines when present.
+file(WRITE "${CMAKE_BINARY_DIR}/generated/version.iss"
+"; GENERATED FILE - do not edit. Written by CMakeLists.txt from project(VERSION).\n\
+#define AppVersion \"${PROJECT_VERSION}${GOSURVEY_VERSION_SUFFIX}\"\n\
+#define AppVersionQuad \"${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR}.${PROJECT_VERSION_PATCH}.${GOSURVEY_VERSION_BUILD}\"\n")
+
 find_package(OpenGL REQUIRED)
 
 include(FetchContent)
@@ -124,6 +152,7 @@ add_executable(GoSurvey
   src/ui/CadUi_TraverseEditor.cpp
   src/ui/CadUi_PointGroups.cpp
   src/ui/CadUi_Surfaces.cpp
+  src/ui/CadUi_UpdateDialog.cpp
   src/ui/SplashScreen.cpp
   src/ui/ImGuiLayout.cpp
   src/ui/MtextRichFormat.cpp
@@ -161,6 +190,11 @@ add_executable(GoSurvey
   src/platform/AppIcon.cpp
   src/platform/WinFileDialogs.cpp
   src/platform/ProcessRun.cpp
+  src/platform/HttpFetch.cpp
+
+  # Update check (REQ-077/078, ADR-029)
+  src/update/UpdateCheck.cpp
+  src/update/UpdateService.cpp
 
   # Geometry math (util)
   src/util/geom2d.cpp
@@ -186,8 +220,10 @@ target_include_directories(GoSurvey PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
   ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
   ${CMAKE_CURRENT_SOURCE_DIR}/src/font
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/update
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party
   ${NLOHMANN_JSON_INCLUDE}
+  ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(GoSurvey PRIVATE
   imgui_backend
@@ -197,7 +233,9 @@ target_link_libraries(GoSurvey PRIVATE
   pdfium
 )
 if(WIN32)
-  target_link_libraries(GoSurvey PRIVATE comdlg32)
+  # winhttp + bcrypt: the REQ-077/078 update check's HTTPS fetch and SHA-256 (ADR-029 (e)).
+  # Both ship with Windows, which is why this adds no third-party dependency under REQ-300.
+  target_link_libraries(GoSurvey PRIVATE comdlg32 winhttp bcrypt)
   target_sources(GoSurvey PRIVATE src/platform/WinFrameControls.cpp)
 
   # Embed the application icon so Windows shows it in Explorer, the taskbar,
@@ -205,6 +243,15 @@ if(WIN32)
   target_sources(GoSurvey PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/resources/icons/app.rc"
   )
+
+  # Version resource, so the shipped .exe reports its version to Explorer's Properties
+  # dialog and to the installer (ADR-029 (a)). Separate from app.rc because app.rc
+  # resolves "app.ico" relative to itself and cannot be moved into the build tree.
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/resources/version.rc.in"
+    "${CMAKE_BINARY_DIR}/generated/version.rc"
+    @ONLY)
+  target_sources(GoSurvey PRIVATE "${CMAKE_BINARY_DIR}/generated/version.rc")
 
   # Windows.Data.Pdf via C++/WinRT (fast hardware-accelerated thumbnail path).
   # Locate the cppwinrt headers in whichever Windows SDK version is installed.
@@ -234,7 +281,11 @@ endif()
 target_compile_definitions(GoSurvey PRIVATE GLEW_STATIC)
 
 if(WIN32)
-  set_target_properties(GoSurvey PROPERTIES OUTPUT_NAME "GoSurvey-${PROJECT_VERSION}" WIN32_EXECUTABLE TRUE)
+  # Stable, version-free filename (ADR-029 (b)). A version-stamped name changes the path
+  # of the installed program on every release, which breaks shortcuts, the .gs association's
+  # shell\open\command, and any form of self-replacement — all three of which REQ-078 needs.
+  # Existing GoSurvey-<version>.exe files are swept by [InstallDelete] in installer/GoSurvey.iss.
+  set_target_properties(GoSurvey PROPERTIES OUTPUT_NAME "GoSurvey" WIN32_EXECUTABLE TRUE)
   if(MSVC)
     target_link_options(GoSurvey PRIVATE /ENTRY:mainCRTStartup)
   elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
@@ -321,6 +372,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/EntityIdTests.cpp
     tests/PointGroupTests.cpp
     tests/TinBuildTests.cpp
+    tests/UpdateCheckTests.cpp
     src/traverse/TraverseCalc.cpp
     src/traverse/TraverseLeastSquares.cpp
     src/traverse/FbkImport.cpp
@@ -350,6 +402,10 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-068 Delaunay triangulation. Pure by ADR-028 (c); its double-precision predicates are the
     # part a float build gets silently wrong, so they must be pinned without a GL context.
     src/util/tinbuild.cpp
+    # REQ-077/078 version ordering + manifest parse. Pure by ADR-029 (g) — no network, no window.
+    # Wrong version ordering has NO symptom (the user is simply never offered an update), which is
+    # exactly why it must be pinned by a test rather than noticed in use.
+    src/update/UpdateCheck.cpp
   )
   target_include_directories(GoSurveyTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
