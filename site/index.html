@@ -146,36 +146,41 @@ img{max-width:100%;display:block}
 .hero .lede{font-size:var(--step-1);color:var(--ink-2);max-width:34ch;margin-top:1.15rem}
 .hero-cta{display:flex;flex-wrap:wrap;gap:.75rem;margin-top:2rem;align-items:center}
 
-/* Live readout — the site's status bar.
-   Fixed to the corner so the reading follows you down the page, the way the application keeps
-   its coordinate readout pinned to the bottom of the window. */
+/* Live readout — first item in the masthead, ahead of the wordmark.
+   The masthead is sticky, so the reading follows you down the page without needing its own
+   fixed positioning. */
 .readout{
-  position:fixed;left:0;bottom:0;z-index:40;
-  display:flex;align-items:center;gap:.55rem;
-  padding:.4rem .8rem;
-  background:color-mix(in srgb,var(--surface) 90%,transparent);
-  backdrop-filter:blur(8px);
-  border-top:1px solid var(--rule);
-  border-right:1px solid var(--rule);
-  border-top-right-radius:3px;
+  display:flex;align-items:center;gap:.5rem;flex:none;
   font-family:"IBM Plex Mono",ui-monospace,Consolas,monospace;
-  font-size:.74rem;letter-spacing:.06em;color:var(--ink-3);
+  font-size:.72rem;letter-spacing:.04em;color:var(--ink-3);
   font-variant-numeric:tabular-nums;
 }
-/* No pointer, no reading. Hidden rather than left showing a frozen zero it can never update. */
+/* Fixed slot, sized to the LONGEST state. Without it every leg and the closure would each be a
+   different width and shove the wordmark sideways on every click. */
+.readout .call{min-width:39ch;text-align:left}
+
+/* No pointer, no reading — hidden rather than left showing a frozen zero it can never update.
+   Also hidden when the bar gets tight, so it never crowds the wordmark and the nav. */
 @media (hover:none){.readout{display:none}}
+@media (max-width:56rem){.readout{display:none}}
 
 /* Nothing announces that this is clickable until you put the pointer on it — then it lights up
    in the accent, which is the hint. */
 .call{
   font:inherit;color:inherit;background:none;border:0;padding:0;
   cursor:pointer;white-space:nowrap;
-  border-bottom:1px dotted transparent;transition:color .15s,border-color .15s;
+  /* text-decoration, not border-bottom: the button is a fixed-width slot, and a border would
+     rule off the whole empty slot instead of just the reading. */
+  text-decoration:none;text-underline-offset:.3em;
+  transition:color .15s;
 }
-.call:hover,.call:focus-visible{color:var(--accent);border-bottom-color:var(--accent)}
-.call.is-closed{color:var(--accent);border-bottom-color:transparent}
+.call:hover,.call:focus-visible{color:var(--accent);text-decoration:underline dotted}
+.call.is-closed{color:var(--accent)}
 
-.trav{color:var(--ink-3);overflow:visible;flex:none}
+/* Always occupies its slot, even before the first click. Removing it from layout instead
+   (display:none) shoved the wordmark 34px sideways the moment the drawing appeared. */
+.trav{color:var(--ink-3);overflow:visible;flex:none;visibility:hidden}
+.trav.is-walking{visibility:visible}
 .trav .leg{
   stroke:currentColor;stroke-width:1.6;stroke-linecap:round;
   /* Each leg is drawn on by animating its dash offset; hidden legs sit at full offset. */
@@ -303,6 +308,20 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
 
 <header class="masthead">
   <div class="wrap">
+    <!-- Live readout, sitting where the application keeps its coordinate readout: always on
+         screen, never in the way. The masthead is already sticky, so it follows you down the
+         page for free. -->
+    <div class="readout" id="readout">
+      <button type="button" id="call" class="call"
+              aria-label="Live bearing and distance to the pointer. Activate to walk a survey traverse.">N 00°00&#39;00&quot; E &nbsp;·&nbsp; 0.00&#39;</button>
+      <svg id="trav" class="trav" viewBox="0 0 88 88" width="26" height="26" aria-hidden="true">
+        <polygon id="trav-fill" points="67.1,82 79.6,6 6,14.2" fill="currentColor" opacity="0"/>
+        <line class="leg" x1="67.1" y1="82"   x2="79.6" y2="6"/>
+        <line class="leg" x1="79.6" y1="6"    x2="6"    y2="14.2"/>
+        <line class="leg" x1="6"    y1="14.2" x2="67.1" y2="82"/>
+        <circle cx="67.1" cy="82" r="2.6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+      </svg>
+    </div>
     <a class="brand" href="#top">GoSurvey<span class="tick">·</span></a>
     <nav class="nav">
       <a href="#capabilities" class="hide-sm">Capabilities</a>
@@ -312,20 +331,6 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
     </nav>
   </div>
 </header>
-
-<!-- Live readout. Fixed like the application's own status bar, which is where a surveyor
-     expects a coordinate readout to live: always there, never in the way. -->
-<div class="readout" id="readout">
-  <button type="button" id="call" class="call"
-          aria-label="Live bearing and distance to the pointer. Activate to walk a survey traverse.">N 00°00&#39;00&quot; E &nbsp;·&nbsp; 0.00&#39;</button>
-  <svg id="trav" class="trav" viewBox="0 0 88 88" width="30" height="30" aria-hidden="true" hidden>
-    <polygon id="trav-fill" points="67.1,82 79.6,6 6,14.2" fill="currentColor" opacity="0"/>
-    <line class="leg" x1="67.1" y1="82"   x2="79.6" y2="6"/>
-    <line class="leg" x1="79.6" y1="6"    x2="6"    y2="14.2"/>
-    <line class="leg" x1="6"    y1="14.2" x2="67.1" y2="82"/>
-    <circle cx="67.1" cy="82" r="2.6" fill="none" stroke="currentColor" stroke-width="1.4"/>
-  </svg>
-</div>
 
 <main id="top">
 
@@ -563,8 +568,12 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
   ];
   var CLOSURE = "CLOSED · misclosure 0.0087' · 1:252,482";
   var HAIR = " ";      // hair space, so the arrow sits tight to the station names
+  // step 0 = not started, the live readout owns the text.
+  // steps 1..3 = the three calls, each shown as its own leg is drawn.
+  // step 4 = CLOSED. Step 0 is NOT the first call: while idle the readout is showing a live
+  // bearing, so if the first click advanced to LEGS[1] the opening call was never seen at all.
   var STEP_IDLE = 0;
-  var CLOSED = LEGS.length;
+  var CLOSED = LEGS.length + 1;
 
   var legEls = [].slice.call(trav.querySelectorAll(".leg"));
   legEls.forEach(function(el){
@@ -576,6 +585,9 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
 
   var step = STEP_IDLE;
   var walking = false;   // false until the first click: the traverse is never shown unasked
+  // The last live reading, so resetting after the closure restores it rather than leaving the
+  // closure text frozen until the pointer happens to move again.
+  var lastLive = call.textContent;
 
   function legText(i){
     return LEGS[i].from + HAIR + "→" + HAIR + LEGS[i].to +
@@ -590,16 +602,15 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
     var closed = walking && step >= CLOSED;
     trav.classList.toggle("is-closed", closed);
     call.classList.toggle("is-closed", closed);
-    // setAttribute, NOT `.hidden`: `hidden` is an HTMLElement property and this is an
-    // SVGElement, which does not implement it. Assigning `.hidden` on an SVG sets a stray JS
-    // property, leaves the content attribute in place, and the drawing stays display:none while
-    // every check reports hidden === false.
-    if(walking) trav.removeAttribute("hidden");
-    else        trav.setAttribute("hidden", "");
+    // A class toggling `visibility`, not the `hidden` attribute: the drawing has to keep its
+    // place in the bar so the wordmark beside it never moves.
+    trav.classList.toggle("is-walking", walking);
   }
 
   function showStep(){
-    call.textContent = (step >= CLOSED) ? CLOSURE : legText(step);
+    if(step === STEP_IDLE)     call.textContent = lastLive;   // hand the text back to the readout
+    else if(step >= CLOSED)    call.textContent = CLOSURE;
+    else                       call.textContent = legText(step - 1);
     paint();
   }
 
@@ -649,7 +660,8 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
     var dyUp = window.innerHeight / 2 - e.clientY;     // north is up, so screen y inverts
     var feet = Math.hypot(dx, dyUp);
     if(feet < 8) return;                               // too near the origin to bear a call
-    call.textContent = quadrant(dx, dyUp) + "  ·  " + feet.toFixed(2) + "'";
+    lastLive = quadrant(dx, dyUp) + "  ·  " + feet.toFixed(2) + "'";
+    call.textContent = lastLive;
   }, {passive:true});
 
   // No initial paint: the readout keeps the zeroed reading it ships with until the pointer
