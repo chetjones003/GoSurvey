@@ -193,6 +193,9 @@ jobs:
           # script reads at runtime and can never be parsed as code.
           # (Found the accidental way: a commit message containing "MSVC toolchain" ended a string
           # literal and failed the step with `Unexpected token 'MSVC'`.)
+          #
+          # Used ONLY to look for the `BREAKING-DRAWINGS:` marker. User-facing release notes come
+          # from RELEASE_NOTES.md — a commit message must never reach the update dialog.
           HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
         run: |
           $installer = Get-ChildItem installer\Output\*.exe | Select-Object -First 1
@@ -205,6 +208,65 @@ jobs:
           # correct at the moment it is written rather than depending on a later redirect.
           $url = "https://github.com/$repo/releases/download/$tag/$($installer.Name)"
 
+          # The .gs format version this build writes, read from the one place that defines it.
+          # The CLIENT compares it against its own compiled-in value, so no release history has to
+          # be consulted here and the comparison happens where the truth is actually known.
+          $fmtLine = Select-String -Path src\io\GsMigrate.hpp -Pattern 'kGsFormatVersion\s*=\s*(\d+)'
+          if (-not $fmtLine) { throw "Could not read kGsFormatVersion from src\io\GsMigrate.hpp" }
+          $gsFormatVersion = [int]$fmtLine.Matches[0].Groups[1].Value
+
+          # Release notes come from RELEASE_NOTES.md, NOT from the commit message.
+          #
+          # The manifest's notes are shown to surveyors inside the update dialog. Commit messages
+          # are written for developers and are full of things an end user should never be shown --
+          # file paths, requirement numbers, compiler behaviour. Piping them straight through put
+          # "the installer registers .gs with shell\open\command..." in front of users, which is
+          # how this was caught.
+          #
+          # The section key is the plain three-part version, so every beta in a cycle shows the
+          # notes for the release it is previewing.
+          $notes = ""
+          if (Test-Path RELEASE_NOTES.md) {
+            $lines = Get-Content RELEASE_NOTES.md
+            $start = -1
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match "^##\s+$([regex]::Escape($version))\s*$") { $start = $i + 1; break }
+            }
+            if ($start -ge 0) {
+              $collected = @()
+              for ($i = $start; $i -lt $lines.Count; $i++) {
+                if ($lines[$i] -match '^##\s+') { break }   # next version section
+                $collected += $lines[$i]
+              }
+              $notes = ($collected -join "`n").Trim()
+            }
+          }
+          if ([string]::IsNullOrWhiteSpace($notes)) {
+            # Never fall back to the commit message. A bland line is better than leaking
+            # developer detail into a surveyor's update prompt.
+            $notes = "See the releases page for what changed in this version."
+            Write-Host "::warning::No RELEASE_NOTES.md section for $version - using the fallback text."
+          }
+
+          # A GENUINE break -- existing drawings will not open -- cannot be detected automatically,
+          # because it need not move the format version at all. It is declared by the release
+          # author with a marker line in the commit message:
+          #
+          #   BREAKING-DRAWINGS: Surfaces built before 0.6 must be rebuilt.
+          #
+          # Read from the environment, never interpolated into this script (see the env: block).
+          $breaks  = $false
+          $warning = ""
+          $msg = $env:HEAD_COMMIT_MESSAGE
+          if ($msg) {
+            $m = [regex]::Match($msg, '(?m)^BREAKING-DRAWINGS:\s*(.+)$')
+            if ($m.Success) {
+              $breaks  = $true
+              $warning = $m.Groups[1].Value.Trim()
+              Write-Host "Release declares a drawing-breaking change: $warning"
+            }
+          }
+
           $manifest = [ordered]@{
             version     = "${{ steps.ver.outputs.full }}"
             channel     = "${{ steps.ver.outputs.channel }}"
@@ -215,7 +277,12 @@ jobs:
             # Reserved so that making an update mandatory later is a policy change, not a
             # protocol change: old clients already parse and ignore this field.
             mandatory   = $false
-            notes       = ($env:HEAD_COMMIT_MESSAGE ?? "")
+            gsFormatVersion = $gsFormatVersion
+            compatibility   = [ordered]@{
+              breaksExistingDrawings = $breaks
+              warning                = $warning
+            }
+            notes       = $notes
           }
           $manifest | ConvertTo-Json -Depth 4 | Out-File -Encoding utf8 installer\Output\latest.json
           "installer=$($installer.FullName)" | Out-File $env:GITHUB_OUTPUT -Append

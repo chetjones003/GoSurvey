@@ -15,7 +15,8 @@
 
 namespace {
 
-constexpr int kGsFormatVersion = 1;
+// kGsFormatVersion now lives in GsMigrate.hpp — it is the migration target, and the updater needs
+// to read it without pulling in this translation unit.
 
 using nlohmann::json;
 

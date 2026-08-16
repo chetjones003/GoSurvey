@@ -11,7 +11,7 @@ It is derived from the implementation in:
 
 Related types and defaults appear in:
 
-  src/cad/CadCommands.hpp   (geometry containers, EntityAttributes, CadAnnotation,
+  src/commands/CadCommands.hpp   (geometry containers, EntityAttributes, CadAnnotation,
                              CadLayerRow, AppCommandState fields)
   src/survey/SurveyPoints.hpp  (SurveyPoint, SurveyPointLabelStyle, CreatePointsOptions,
                                 SurveyLabelStyleTemplates, SurveyDuplicatePolicy)
@@ -54,20 +54,54 @@ Related types and defaults appear in:
 The root MUST be a JSON object with the following top-level keys:
 
   "format"    (string)  MUST be exactly:  gosurvey
-  "version"   (integer) Currently MUST be:  1
-                         (constant kGsFormatVersion in GsIo.cpp)
+  "version"   (integer) The format version that WROTE this file. Currently 1.
+                         (constant kGsFormatVersion in src/io/GsMigrate.hpp)
   "document"  (object)  Required. Drawing + survey payload (see section 3).
   "settings"  (object)  Optional. UI / viewport / OSNAP preferences (section 4).
 
 Any other top-level keys are ignored by the current loader.
 
-2.1 Version policy
+2.1 Version policy  (REQ-079 / ADR-030, revised 2026-08-15)
+  A build opens ANY file at or below its own format version, migrating older
+  documents forward on load. Only NEWER files are refused.
+
   LoadGoSurveyFile rejects the file if:
     • "format" is missing or not the string "gosurvey", OR
-    • "version" is missing, not an integer, or not equal to 1.
+    • "version" is missing or not an integer, OR
+    • "version" is <= 0, OR
+    • "version" is GREATER than kGsFormatVersion — i.e. the file was saved by a
+      newer GoSurvey. The message names both versions and says so, because
+      "unsupported version" sends people looking for a damaged file when the
+      real answer is that they need a newer build.
 
-  Future format versions would increment kGsFormatVersion and require migration
-  or loader updates.
+  HISTORICAL NOTE. Until 2026-08-15 this check was `!= kGsFormatVersion`, an
+  exact match. That made the version field unusable: incrementing it would have
+  made every existing drawing unopenable. It is why every change through
+  REQ-044..REQ-076 was made additively under the "tolerant key" rule and the
+  version never moved off 1. Documents written before that date are all
+  version 1 and load with no migration at all.
+
+2.2 How migration works
+  Migration runs on the PARSED JSON, before any typed loading, as a chain of
+  single-version steps (1->2->3...), each a pure function of the document tree.
+  A file several versions old composes through every intermediate step in order.
+
+  It happens IN MEMORY. The file on disk is never rewritten as a side effect of
+  opening it; it changes only when the user saves.
+
+  Steps live in src/io/GsMigrate.cpp. The table is currently EMPTY — the format
+  is still at version 1 — and additive changes should continue to use the
+  tolerant-key pattern rather than bumping the version. The chain exists for the
+  change that cannot be expressed additively: a renamed field, a changed unit, a
+  restructured store.
+
+  To add a format version:
+    1. bump kGsFormatVersion in src/io/GsMigrate.hpp;
+    2. add a GsMigrationStep whose fromVersion is the OLD version;
+    3. add a test loading a document in the old shape and asserting the new one;
+    4. if existing drawings will NOT open afterwards, say so in the release
+       commit with a `BREAKING-DRAWINGS: <what breaks>` line — the update
+       dialog shows it to users before they accept the update (REQ-078).
 
 
 --------------------------------------------------------------------------------
@@ -365,8 +399,10 @@ LoadGoSurveyFile performs the following steps:
 7.2 Root validation
   • root must be a JSON object.
   • root["format"] must exist and equal string "gosurvey".
-  • root["version"] must exist, be an integer, and equal 1.
+  • root["version"] must exist and be an integer.
   • root["document"] must exist and be an object.
+  • root["version"] is then compared against kGsFormatVersion: equal loads
+    directly, lower is migrated forward (section 2.2), higher is refused.
 
 7.3 Structural validation of document
   ValidateDocumentJson(doc, log) checks array lengths and polyline invariants

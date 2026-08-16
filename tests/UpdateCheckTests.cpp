@@ -220,6 +220,68 @@ TEST_CASE("An unparseable version on either side yields no update, with a reason
   CHECK_FALSE(reason.empty());
 }
 
+TEST_CASE("Compatibility: a matching format version raises nothing", "[update]")
+{
+  Manifest m = ManifestForVersion("0.6.0");
+  m.gsFormatVersion = 1;
+  CHECK(ClassifyCompatibility(m, 1) == CompatibilityRisk::None);
+}
+
+TEST_CASE("Compatibility: a newer .gs format warns forward-only", "[update]")
+{
+  // Old drawings still open in the new build (that is what migration is for); the loss is that
+  // drawings saved afterwards will not open in the version installed today.
+  Manifest m = ManifestForVersion("0.6.0");
+  m.gsFormatVersion = 2;
+  CHECK(ClassifyCompatibility(m, 1) == CompatibilityRisk::ForwardOnly);
+}
+
+TEST_CASE("Compatibility: a declared break outranks the format version", "[update]")
+{
+  // A semantic break need not move the format version, which is why it must be declarable.
+  Manifest m = ManifestForVersion("0.6.0");
+  m.gsFormatVersion        = 1;   // unchanged
+  m.breaksExistingDrawings = true;
+  m.compatibilityWarning   = "Surfaces built before 0.6 must be rebuilt.";
+  CHECK(ClassifyCompatibility(m, 1) == CompatibilityRisk::Breaking);
+}
+
+TEST_CASE("Compatibility: a manifest with no format version warns about nothing", "[update]")
+{
+  // Manifests published before the field existed must not make every update look risky.
+  Manifest m = ManifestForVersion("0.6.0");
+  CHECK(m.gsFormatVersion == 0);
+  CHECK(ClassifyCompatibility(m, 1) == CompatibilityRisk::None);
+}
+
+TEST_CASE("Compatibility: an older .gs format on the offered build warns about nothing", "[update]")
+{
+  Manifest m = ManifestForVersion("0.6.0");
+  m.gsFormatVersion = 1;
+  CHECK(ClassifyCompatibility(m, 3) == CompatibilityRisk::None);
+}
+
+TEST_CASE("The compatibility block parses, and is optional", "[update]")
+{
+  Manifest    m;
+  std::string err;
+
+  REQUIRE(ParseManifest(R"({
+    "version":"0.6.0","installerUrl":"u","sha256":"s",
+    "gsFormatVersion": 2,
+    "compatibility": { "breaksExistingDrawings": true, "warning": "Old surfaces must be rebuilt." }
+  })", m, err));
+  CHECK(m.gsFormatVersion == 2);
+  CHECK(m.breaksExistingDrawings);
+  CHECK(m.compatibilityWarning == "Old surfaces must be rebuilt.");
+
+  // Absent block: parses fine, declares nothing.
+  REQUIRE(ParseManifest(R"({"version":"0.6.0","installerUrl":"u","sha256":"s"})", m, err));
+  CHECK_FALSE(m.breaksExistingDrawings);
+  CHECK(m.compatibilityWarning.empty());
+  CHECK(m.gsFormatVersion == 0);
+}
+
 TEST_CASE("A beta user is offered the next beta", "[update]")
 {
   std::string reason;

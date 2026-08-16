@@ -1044,6 +1044,13 @@ A change is rejected if it breaks any of these:
   and the process launch stay in `platform/` and are not unit-tested. Prerelease ordering is the part
   most likely to be quietly wrong, and it is the part that decides whether a user is offered an
   update at all.
+  (i) **The manifest carries the `.gs` format version, and the client does the comparison.**
+  Added 2026-08-15 alongside REQ-079. CI reads `kGsFormatVersion` from `io/GsMigrate.hpp` into the
+  manifest; the running build compares it with its own. Doing it client-side rather than having CI
+  diff against the previous release keeps the pipeline stateless and puts the comparison where both
+  numbers are actually known. A genuine break — existing drawings will not open — is **declared by
+  the author** with a `BREAKING-DRAWINGS:` line in the commit message, because such a break need
+  not move the format version at all and therefore cannot be inferred.
   (h) **The REQ-077 check is the project's one sanctioned silent failure.** REQ-201 forbids empty
   error paths; a background update check that reports its own failures would show a network error to
   every user who opens the program on a job site with no signal. The failure is logged and not

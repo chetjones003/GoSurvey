@@ -13,6 +13,14 @@
 /// forever — it is frozen against the shape it was written for, and cannot rot when the structs
 /// it once matched are changed (ADR-030 (b)).
 
+/// The `.gs` format version this build writes, and the target every migration chain climbs to.
+///
+/// Declared here rather than inside GsIo.cpp so it is reachable without dragging in the command
+/// layer. The updater needs it: the release manifest carries the format version of the build
+/// being offered, and comparing that against this one is what lets the update dialog tell a user
+/// whether drawings saved by the new version will still open in the one they have (REQ-078).
+constexpr int kGsFormatVersion = 1;
+
 /// One single-version step. `fromVersion` is the version it upgrades FROM; it always produces
 /// `fromVersion + 1` (ADR-030 (c)) — a step that jumps two versions is two steps.
 struct GsMigrationStep {

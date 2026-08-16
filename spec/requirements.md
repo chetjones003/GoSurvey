@@ -1933,8 +1933,24 @@ requirements is a planning failure, not a sign of rigor.
   host over the same TLS connection, so it detects corruption and a truncated download, not a
   compromised publisher. Authenticity requires Authenticode signing, which is recorded as technical
   debt rather than claimed (see the decision log).
+  **Compatibility is stated before the user accepts, not discovered afterwards.** The manifest
+  carries the `.gs` format version the offered build writes, and the dialog compares it against
+  this build's. Two distinct outcomes are shown differently, because collapsing them would train
+  users to ignore both:
+  - **forward-only** (the offered build writes a newer format) — routine, stated plainly: existing
+    drawings still open, but drawings saved afterwards will not open in the installed version;
+  - **breaking** (existing drawings will not open) — prominent, and **declared by the release
+    author**, because a semantic break need not move the format version and so cannot be detected
+    automatically.
+
+  A warning informs the choice; it never removes it. The three buttons are unchanged.
 - Acceptance:
   - no download begins, and no installer runs, without an explicit user click;
+  - an offered build writing a newer `.gs` format shows the forward-only notice; one at the same
+    format shows nothing; a declared break shows the prominent warning and the author's text;
+  - a manifest with no compatibility information (one published before the field existed) warns
+    about nothing rather than treating absence as risk;
+  - the compatibility notice appears **above** the release notes, not below them;
   - "Skip this version" suppresses that version permanently but a *later* version still prompts;
   - "Remind me later" prompts again on the next launch;
   - a deliberately corrupted download fails the hash check, is deleted, does not execute, and reports

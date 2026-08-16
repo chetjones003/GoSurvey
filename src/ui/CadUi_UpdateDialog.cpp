@@ -6,6 +6,7 @@
 #include "CadUi.hpp"
 
 #include "CadCommands.hpp"
+#include "GsMigrate.hpp"   // kGsFormatVersion — what the offered build's format is compared against
 #include "UpdateService.hpp"
 
 #include <imgui.h>
@@ -49,7 +50,12 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
   // sideways mid-download. Reported from the first live update, and it looks like a glitch
   // rather than a layout decision.
   ImGui::SetNextWindowSize(ImVec2(560.f, 0.f), ImGuiCond_Always);
-  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Appearing,
+  // Re-centred EVERY frame, not just on appearing. The dialog's height changes as it moves
+  // between phases and as optional content (a compatibility warning, release notes) appears, and
+  // with a one-shot position it grows downward from wherever it first landed — which pushed the
+  // buttons off the bottom of the screen once the breaking-change warning was added. A modal
+  // whose only exits are its buttons must never be able to put them out of reach.
+  ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always,
                           ImVec2(0.5f, 0.5f));
 
   // No close button and no click-away dismissal: every exit from this dialog is one of the
@@ -95,6 +101,40 @@ void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd)
       ImGui::Text("GoSurvey %s is available.", upd.available.version.c_str());
       ImGui::TextDisabled("You are running %s.", upd.runningVersion.c_str());
       ImGui::Separator();
+
+      // REQ-078: compatibility comes BEFORE the release notes. A warning placed under a scrolling
+      // notes box is a warning nobody reads, and this is the one thing in the dialog that can
+      // cost the user their work.
+      switch (update::ClassifyCompatibility(upd.available, kGsFormatVersion))
+      {
+        case update::CompatibilityRisk::Breaking:
+        {
+          // Deliberately loud, and deliberately rare — it only appears when a release author has
+          // declared that existing drawings will not open.
+          const ImVec4 kAlert(1.f, 0.45f, 0.35f, 1.f);
+          ImGui::PushStyleColor(ImGuiCol_Text, kAlert);
+          ImGui::TextUnformatted("WARNING: this update cannot open your existing drawings.");
+          ImGui::PopStyleColor();
+          if (!upd.available.compatibilityWarning.empty())
+            ImGui::TextWrapped("%s", upd.available.compatibilityWarning.c_str());
+          ImGui::TextWrapped(
+              "Back up your drawings before continuing. If you are unsure, choose Remind Me "
+              "Later and check the release notes first.");
+          ImGui::Separator();
+          break;
+        }
+        case update::CompatibilityRisk::ForwardOnly:
+          // Routine and expected, so it is stated plainly rather than alarmingly: old drawings
+          // still open (that is what migration is for), you just cannot go back afterwards.
+          ImGui::TextWrapped(
+              "Note: this update changes the drawing file format. Your existing drawings will "
+              "still open, but drawings you save afterwards cannot be opened by GoSurvey %s.",
+              upd.runningVersion.c_str());
+          ImGui::Separator();
+          break;
+        case update::CompatibilityRisk::None:
+          break;
+      }
 
       if (!upd.available.notes.empty())
       {

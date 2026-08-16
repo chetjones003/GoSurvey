@@ -12,6 +12,7 @@ GoSurvey is a simple and modern computer-aided design (CAD) platform that provid
 - [Download and Install (Windows)](#download-and-install-windows)
   - [Installer (Recommended)](#installer-recommended)
   - [Runtime Requirement](#runtime-requirement)
+  - [Staying Up to Date](#staying-up-to-date)
 
 - [Layout at a Glance](#layout-at-a-glance)
 
@@ -93,6 +94,40 @@ GoSurvey is a simple and modern computer-aided design (CAD) platform that provid
 ### Runtime requirement
 
 If the app fails to start with a missing DLL error, install the latest **[Visual C++ Redistributable for x64](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist)** from Microsoft.
+
+### Staying up to date
+
+GoSurvey checks for a newer version **each time it opens**. A short "Checking for updates" dialog
+appears while it does; if there is no internet connection it is skipped entirely, and if the check
+is slow you can press **Continue without checking** and carry on.
+
+When an update exists you are shown what it is and asked. Nothing downloads or installs on its
+own — you choose **Update Now**, **Remind Me Later**, or **Skip This Version**. Choosing to update
+downloads the installer, verifies it against a SHA-256 published with the release, prompts you to
+save any open drawings, then installs and reopens GoSurvey.
+
+**Release channels** — *Settings → System → Updates*:
+
+| Setting | Meaning |
+|---|---|
+| **Check for updates on startup** | On by default. Turn it off and GoSurvey makes no network requests at all. |
+| **Include beta releases** | Off by default, so you follow **stable** releases. Turn it on to receive pre-release builds as they are published. |
+
+Both settings persist across launches and across updates. Betas are published more often and are
+less tested than stable releases; they are real working builds, but they are the ones where
+problems get found.
+
+**Drawing compatibility.** GoSurvey opens drawings saved by any older version, converting them as
+it loads — your `.gs` files keep working across updates, and the file on disk is not modified until
+you save. Two cases are called out in the update dialog before you accept:
+
+- if the update changes the drawing file format, you are told that drawings saved afterwards
+  cannot be opened by the version you have now;
+- in the rare case that an update genuinely cannot open existing drawings, that is shown as a
+  prominent warning with an explanation, so you can back up first or decline.
+
+The installer is not code-signed yet, so SmartScreen may warn on the download and Windows will ask
+for permission when an update is applied.
 
 ---
 

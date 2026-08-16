@@ -65,7 +65,33 @@ struct Manifest {
   /// Reserved by ADR-029 so that making an update mandatory later is a policy change rather
   /// than a protocol change. Parsed and carried; nothing acts on it yet.
   bool        mandatory = false;
+
+  /// The `.gs` format version the offered build writes (0 when the manifest predates this field).
+  /// Compared against this build's `kGsFormatVersion` to tell the user, before they accept,
+  /// whether drawings they save afterwards will still open in the version they have today.
+  int gsFormatVersion = 0;
+
+  /// Set only when a change genuinely cannot be migrated — i.e. **existing drawings will not
+  /// open** in the offered build. Declared deliberately by the release author, because no
+  /// automatic check can recognise a semantic break that the format version does not move for.
+  bool        breaksExistingDrawings = false;
+  std::string compatibilityWarning;   ///< author's description of what breaks
 };
+
+/// What the update dialog should warn about before the user accepts (REQ-078).
+enum class CompatibilityRisk {
+  None,          ///< same format version, nothing declared
+  ForwardOnly,   ///< the new build writes a NEWER .gs format: old drawings still open in it, but
+                 ///< drawings saved afterwards will not open in the currently-installed version
+  Breaking,      ///< the author declared that existing drawings will not open
+};
+
+/// Classifies \p manifest against the format version this build writes.
+///
+/// Deliberately distinguishes the two, because they are very different messages: "you cannot go
+/// back" is routine and expected, while "your existing work will not open" should be rare and
+/// alarming. Collapsing them into one warning would train users to ignore both.
+CompatibilityRisk ClassifyCompatibility(const Manifest& manifest, int runningGsFormatVersion);
 
 /// Parses `latest.json`. Returns false and sets \p errorOut on malformed JSON or a missing or
 /// wrong-typed required field. Required: version, installerUrl, sha256. A manifest missing any

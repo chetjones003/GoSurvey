@@ -15,11 +15,12 @@ This document describes how C++ sources are organised. All `#include "Header.hpp
 | `src/commands/` | CAD model and command orchestration: `AppCommandState` (`CadCommands.hpp`), all drawing/editing commands, command registry + fuzzy dispatch, footer hints, linetype metadata (`CadLinetype`), and the **document coordinate frame** (`CadCoordinateFrame` — local/world origin, rebase, zoom-extents). |
 | `src/viewport/` | Viewport interaction: object snap (`CadSnap`), rubber-band preview (`CadRubberPreview`), transform/selection preview (`TransformPreview`), pick policy. |
 | `src/util/` | Header-only helpers shared across domains (e.g. string utilities, `geom2d`, number/angle formatting). |
-| `src/io/` | Workspace `.gs` I/O (JSON via nlohmann), DXF import/export, user preferences, survey CSV import/export, DXF ACI colour tables. |
+| `src/io/` | Workspace `.gs` I/O (JSON via nlohmann), `.gs` forward migration (`GsMigrate` — pure JSON→JSON steps, and the home of `kGsFormatVersion`), DXF/DWG import/export, user preferences, survey CSV import/export, DXF ACI colour tables. |
 | `src/survey/` | In-memory survey / COGO points model (`SurveyPoint`, create-points bookkeeping, label styles, label MTEXT linking, merge/conflict helpers). |
 | `src/traverse/` | Traverse subsystem: raw-observation reduction (`TraverseCalc`), least-squares closure (`TraverseLeastSquares`), and Autodesk FBK raw-data import (`FbkImport`). |
 | `src/render/` | OpenGL viewport renderer — geometry batches, overlays, PDF texture drawing, view-relative tessellation. |
-| `src/platform/` | OS-specific helpers: Windows file dialogs, custom frame controls (title bar), application icon loading. |
+| `src/platform/` | OS-specific helpers: Windows file dialogs, custom frame controls (title bar), application icon loading, process launch, and HTTPS + SHA-256 + connectivity for the updater (`HttpFetch` — WinHTTP/BCrypt/NLM, no third-party dependency). |
+| `src/update/` | Update check (REQ-077/078, ADR-029): `UpdateCheck` is pure — version ordering, manifest parsing, compatibility classification — and `UpdateService` owns the worker and the phase state machine. No drawing state is touched from a worker. |
 | `src/pdf/` | PDF underlay subsystem: rasterisation pipeline (`PdfAttach.cpp`), async attach worker, snap geometry extraction, image-based snap-target detection, visibility mask, spatial endpoint grid. |
 
 ## Key data structures
@@ -181,8 +182,18 @@ Survey points export as native `POINT` entities at world coordinates carrying `G
 ## Build
 
 - **CMake 3.20+** with the `ninja-release` preset (see `CMakePresets.json`).
-- **Languages**: `CXX C RC` — the `RC` language compiles `resources/icons/app.rc` to embed the application icon in the Windows executable.
+- **Compiler: MSVC (`cl`), pinned in both presets.** Configuring therefore requires a **Developer
+  Command Prompt** — the Ninja generator does not locate MSVC on its own, and without it configure
+  fails loudly rather than silently picking up whatever else is on `PATH`. That silent pickup is
+  exactly what happened before the pin: the build had drifted to clang while `project.md` §7 said
+  MSVC, and nobody could see it because the project only ever built on one machine.
+- **Languages**: `CXX C RC` — the `RC` language compiles `resources/icons/app.rc` (icon) and the
+  generated `version.rc` (Windows version resource) into the executable.
+- **Version**: `project(VERSION)` in `CMakeLists.txt` is the single source. It generates
+  `Version.hpp`, the version resource, and `version.iss` for the installer; CI reads the same value
+  for the git tag and release manifest. Nothing else stores a version number.
 - `target_include_directories` adds `src` and all subdirectories so includes stay portable.
+- **CI** (`.github/workflows/release.yml`) builds, tests and packages every push; see REQ-202.
 
 ## Frame order (conceptual)
 

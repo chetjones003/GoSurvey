@@ -139,8 +139,36 @@ bool ParseManifest(const std::string& json, Manifest& out, std::string& errorOut
     out.size = j["size"].get<long long>();
   if (j.contains("mandatory") && j["mandatory"].is_boolean())
     out.mandatory = j["mandatory"].get<bool>();
+  if (j.contains("gsFormatVersion") && j["gsFormatVersion"].is_number_integer())
+    out.gsFormatVersion = j["gsFormatVersion"].get<int>();
+
+  // Compatibility block. Absent in manifests written before this field existed, which must read
+  // as "nothing declared" rather than as a failure — an older manifest is not a broken one.
+  if (j.contains("compatibility") && j["compatibility"].is_object())
+  {
+    const nlohmann::json& c = j["compatibility"];
+    if (c.contains("breaksExistingDrawings") && c["breaksExistingDrawings"].is_boolean())
+      out.breaksExistingDrawings = c["breaksExistingDrawings"].get<bool>();
+    if (c.contains("warning") && c["warning"].is_string())
+      out.compatibilityWarning = c["warning"].get<std::string>();
+  }
 
   return true;
+}
+
+CompatibilityRisk ClassifyCompatibility(const Manifest& manifest, int runningGsFormatVersion)
+{
+  // An explicit declaration outranks anything inferred: a semantic break need not move the
+  // format version at all, which is exactly why it cannot be detected automatically.
+  if (manifest.breaksExistingDrawings)
+    return CompatibilityRisk::Breaking;
+
+  // 0 means the manifest predates the field. Treat as "unknown, assume fine" rather than warning
+  // on every update from an older release.
+  if (manifest.gsFormatVersion > 0 && manifest.gsFormatVersion > runningGsFormatVersion)
+    return CompatibilityRisk::ForwardOnly;
+
+  return CompatibilityRisk::None;
 }
 
 std::string ManifestUrlForChannel(Channel channel, const std::string& ownerRepo)
