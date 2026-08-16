@@ -130,10 +130,18 @@ img{max-width:100%;display:block}
   backdrop-filter:blur(10px);
   border-bottom:1px solid var(--rule);
 }
-.masthead .wrap{display:flex;align-items:center;gap:1.5rem;height:3.75rem}
-.brand{display:flex;align-items:baseline;gap:.55rem;text-decoration:none;font-family:"IBM Plex Sans Condensed",sans-serif;font-weight:700;font-size:1.2rem;letter-spacing:-.01em}
+/* Three explicit columns rather than a flex row: the readout is centred in the BAR, not merely
+   placed after the wordmark, so its changing width can never shift the wordmark left or the nav
+   links right. The side columns are equal fractions, which is what keeps the middle one centred.
+   Columns are assigned explicitly so that hiding the readout on narrow screens leaves the nav in
+   column 3 instead of letting it reflow into the empty middle. */
+.masthead .wrap{
+  display:grid;grid-template-columns:1fr auto 1fr;
+  align-items:center;gap:1.5rem;height:3.75rem;
+}
+.brand{grid-column:1;justify-self:start;display:flex;align-items:baseline;gap:.55rem;text-decoration:none;font-family:"IBM Plex Sans Condensed",sans-serif;font-weight:700;font-size:1.2rem;letter-spacing:-.01em}
 .brand .tick{color:var(--accent)}
-.nav{margin-left:auto;display:flex;gap:1.5rem;align-items:center}
+.nav{grid-column:3;justify-self:end;display:flex;gap:1.5rem;align-items:center}
 .nav a{text-decoration:none;color:var(--ink-2);font-size:.94rem}
 .nav a:hover{color:var(--ink)}
 @media (max-width:44rem){.nav a.hide-sm{display:none}}
@@ -150,7 +158,8 @@ img{max-width:100%;display:block}
    The masthead is sticky, so the reading follows you down the page without needing its own
    fixed positioning. */
 .readout{
-  display:flex;align-items:center;gap:.5rem;flex:none;
+  grid-column:2;justify-self:center;
+  display:flex;align-items:center;gap:.5rem;
   font-family:"IBM Plex Mono",ui-monospace,Consolas,monospace;
   font-size:.72rem;letter-spacing:.04em;color:var(--ink-3);
   font-variant-numeric:tabular-nums;
@@ -162,7 +171,7 @@ img{max-width:100%;display:block}
 /* No pointer, no reading — hidden rather than left showing a frozen zero it can never update.
    Also hidden when the bar gets tight, so it never crowds the wordmark and the nav. */
 @media (hover:none){.readout{display:none}}
-@media (max-width:56rem){.readout{display:none}}
+@media (max-width:68rem){.readout{display:none}}
 
 /* Nothing announces that this is clickable until you put the pointer on it — then it lights up
    in the accent, which is the hint. */
@@ -308,9 +317,11 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
 
 <header class="masthead">
   <div class="wrap">
+    <a class="brand" href="#top">GoSurvey<span class="tick">·</span></a>
     <!-- Live readout, sitting where the application keeps its coordinate readout: always on
          screen, never in the way. The masthead is already sticky, so it follows you down the
-         page for free. -->
+         page for free. It is centred by the grid rather than by source order, so it cannot
+         push the wordmark or the nav links around. -->
     <div class="readout" id="readout">
       <button type="button" id="call" class="call"
               aria-label="Live bearing and distance to the pointer. Activate to walk a survey traverse.">N 00°00&#39;00&quot; E &nbsp;·&nbsp; 0.00&#39;</button>
@@ -322,7 +333,6 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
         <circle cx="67.1" cy="82" r="2.6" fill="none" stroke="currentColor" stroke-width="1.4"/>
       </svg>
     </div>
-    <a class="brand" href="#top">GoSurvey<span class="tick">·</span></a>
     <nav class="nav">
       <a href="#capabilities" class="hide-sm">Capabilities</a>
       <a href="#gallery" class="hide-sm">Screens</a>
