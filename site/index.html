@@ -1,0 +1,584 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoSurvey — survey drafting and COGO for Windows</title>
+<meta name="description" content="GoSurvey is a fast, modern CAD platform for land surveyors: bearings and distances, traverse adjustment, survey points, TIN surfaces, and plat sheets you can plot.">
+<link rel="icon" href="favicon.ico">
+
+<meta property="og:title" content="GoSurvey">
+<meta property="og:description" content="Survey drafting and COGO for Windows. Bearings, traverse closure, points, surfaces, and plats.">
+<meta property="og:type" content="website">
+<meta property="og:image" content="img/plat.png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+/* ---------------------------------------------------------------------------
+   Tokens. Light is the base; dark redefines only the values, so every rule
+   below styles through tokens and never inside a media query.
+   Palette is taken from the application itself: the CAD viewport's near-black,
+   the orange of its crosshair and survey-point markers, the steel blue of its
+   panel headers. Neutrals carry a blue bias so they read as chosen.
+--------------------------------------------------------------------------- */
+:root{
+  --paper:#f2f4f6;
+  --surface:#ffffff;
+  --surface-2:#e8ecf0;
+  --ink:#12161a;
+  --ink-2:#3d4753;
+  --ink-3:#69747f;
+  --rule:#c9d2da;
+  --rule-strong:#9aa7b3;
+  --accent:#c2551b;
+  --accent-ink:#ffffff;
+  --steel:#2f4f6b;
+  --ok:#1f7a4d;
+
+  --shadow:0 1px 2px rgba(18,22,26,.06), 0 8px 24px rgba(18,22,26,.07);
+  --measure:64ch;
+
+  --step--1:clamp(.82rem,.79rem + .12vw,.88rem);
+  --step-0:clamp(1rem,.96rem + .2vw,1.09rem);
+  --step-1:clamp(1.2rem,1.1rem + .5vw,1.45rem);
+  --step-2:clamp(1.55rem,1.35rem + 1vw,2.1rem);
+  --step-3:clamp(2.1rem,1.7rem + 2vw,3.4rem);
+  --step-4:clamp(2.6rem,1.9rem + 3.4vw,4.9rem);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0f1317;
+    --surface:#161b21;
+    --surface-2:#1e252c;
+    --ink:#e8edf2;
+    --ink-2:#b3bfca;
+    --ink-3:#8492a0;
+    --rule:#2b343d;
+    --rule-strong:#41505d;
+    --accent:#f0803c;
+    --accent-ink:#12161a;
+    --steel:#7fa8cc;
+    --ok:#4cc38a;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 12px 32px rgba(0,0,0,.45);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0f1317;
+  --surface:#161b21;
+  --surface-2:#1e252c;
+  --ink:#e8edf2;
+  --ink-2:#b3bfca;
+  --ink-3:#8492a0;
+  --rule:#2b343d;
+  --rule-strong:#41505d;
+  --accent:#f0803c;
+  --accent-ink:#12161a;
+  --steel:#7fa8cc;
+  --ok:#4cc38a;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 12px 32px rgba(0,0,0,.45);
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{
+  margin:0;
+  background:var(--paper);
+  color:var(--ink);
+  font-family:"IBM Plex Sans",ui-sans-serif,system-ui,"Segoe UI",sans-serif;
+  font-size:var(--step-0);
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3{
+  font-family:"IBM Plex Sans Condensed","IBM Plex Sans",ui-sans-serif,system-ui,sans-serif;
+  font-weight:600;
+  line-height:1.08;
+  letter-spacing:-.012em;
+  text-wrap:balance;
+  margin:0;
+}
+p{margin:0}
+a{color:inherit}
+img{max-width:100%;display:block}
+:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:2px}
+
+.wrap{width:min(100% - 2.5rem,74rem);margin-inline:auto}
+.mono{font-family:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace}
+.tnum{font-variant-numeric:tabular-nums}
+
+/* Drafting label: small caps-ish tag used for section eyebrows and title-block
+   cell headings. Letter-spaced because that is how drawing labels are set. */
+.label{
+  font-family:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+  font-size:.7rem;
+  letter-spacing:.16em;
+  text-transform:uppercase;
+  color:var(--ink-3);
+}
+
+/* ---------------- header ---------------- */
+.masthead{
+  position:sticky;top:0;z-index:50;
+  background:color-mix(in srgb,var(--paper) 88%,transparent);
+  backdrop-filter:blur(10px);
+  border-bottom:1px solid var(--rule);
+}
+.masthead .wrap{display:flex;align-items:center;gap:1.5rem;height:3.75rem}
+.brand{display:flex;align-items:baseline;gap:.55rem;text-decoration:none;font-family:"IBM Plex Sans Condensed",sans-serif;font-weight:700;font-size:1.2rem;letter-spacing:-.01em}
+.brand .tick{color:var(--accent)}
+.nav{margin-left:auto;display:flex;gap:1.5rem;align-items:center}
+.nav a{text-decoration:none;color:var(--ink-2);font-size:.94rem}
+.nav a:hover{color:var(--ink)}
+@media (max-width:44rem){.nav a.hide-sm{display:none}}
+
+/* ---------------- hero ---------------- */
+.hero{padding:clamp(3rem,7vw,6rem) 0 0}
+.hero-grid{display:grid;gap:2.5rem}
+@media (min-width:60rem){.hero-grid{grid-template-columns:minmax(0,1fr) minmax(0,1.05fr);align-items:center;gap:4rem}}
+.hero h1{font-size:var(--step-4);font-weight:700;letter-spacing:-.025em}
+.hero .lede{font-size:var(--step-1);color:var(--ink-2);max-width:34ch;margin-top:1.15rem}
+.hero-cta{display:flex;flex-wrap:wrap;gap:.75rem;margin-top:2rem;align-items:center}
+
+/* The bearing line: a real surveyor's call, used as the page's opening mark.
+   It is the vernacular of the subject rather than decoration. */
+.bearing{
+  display:flex;align-items:center;gap:.75rem;
+  margin-bottom:1.5rem;color:var(--ink-3);
+  font-family:"IBM Plex Mono",monospace;font-size:.78rem;letter-spacing:.08em;
+}
+.bearing::after{content:"";flex:1;height:1px;background:var(--rule);}
+
+.btn{
+  display:inline-flex;align-items:center;gap:.55rem;
+  padding:.72rem 1.25rem;border-radius:2px;
+  font-weight:600;font-size:.95rem;text-decoration:none;
+  border:1px solid transparent;transition:background .15s,border-color .15s,color .15s;
+}
+.btn-primary{background:var(--accent);color:var(--accent-ink)}
+.btn-primary:hover{background:color-mix(in srgb,var(--accent) 86%,#000)}
+.btn-ghost{border-color:var(--rule-strong);color:var(--ink)}
+.btn-ghost:hover{border-color:var(--ink-3);background:var(--surface-2)}
+.btn small{font-weight:400;opacity:.8;font-size:.82em}
+
+.shot{
+  border:1px solid var(--rule);
+  box-shadow:var(--shadow);
+  background:var(--surface);
+  border-radius:3px;overflow:hidden;
+}
+.shot img{width:100%;height:auto}
+.shot figcaption{
+  border-top:1px solid var(--rule);
+  padding:.6rem .85rem;background:var(--surface);
+  font-size:.8rem;color:var(--ink-3);
+}
+
+/* ---------------- section frame ---------------- */
+section{padding:clamp(3.5rem,7vw,6.5rem) 0}
+.sec-head{display:flex;flex-direction:column;gap:.7rem;margin-bottom:2.75rem;max-width:var(--measure)}
+.sec-head h2{font-size:var(--step-3)}
+.sec-head p{color:var(--ink-2);font-size:var(--step-1);max-width:50ch}
+
+/* ---------------- capabilities ---------------- */
+.caps{display:grid;gap:1px;background:var(--rule);border:1px solid var(--rule)}
+@media (min-width:46rem){.caps{grid-template-columns:repeat(2,1fr)}}
+@media (min-width:70rem){.caps{grid-template-columns:repeat(3,1fr)}}
+.cap{background:var(--paper);padding:1.6rem 1.5rem;display:flex;flex-direction:column;gap:.5rem}
+.cap h3{font-size:1.12rem;letter-spacing:0}
+.cap p{color:var(--ink-2);font-size:.95rem}
+.cap .cmds{margin-top:.35rem;display:flex;flex-wrap:wrap;gap:.35rem}
+.cmd{
+  font-family:"IBM Plex Mono",monospace;font-size:.72rem;
+  padding:.16rem .45rem;border:1px solid var(--rule-strong);
+  color:var(--ink-3);border-radius:2px;
+}
+
+/* ---------------- gallery ---------------- */
+.gallery{display:grid;gap:1.75rem}
+@media (min-width:56rem){.gallery{grid-template-columns:repeat(3,1fr)}}
+
+/* ---------------- downloads: drawing title block ----------------
+   A plat's title block is a bordered grid of labelled cells in the corner of
+   the sheet. Reusing it here is not ornament: each cell holds one real fact
+   about the build, which is exactly what a title block does on a drawing.
+------------------------------------------------------------------ */
+.tb{
+  border:2px solid var(--ink);
+  background:var(--surface);
+  display:grid;
+}
+.tb + .tb{margin-top:2rem}
+.tb-head{
+  display:flex;flex-wrap:wrap;align-items:baseline;gap:.5rem 1rem;
+  padding:1rem 1.25rem;border-bottom:1px solid var(--ink);
+}
+.tb-head h3{font-size:var(--step-2);letter-spacing:-.015em}
+.chip{
+  font-family:"IBM Plex Mono",monospace;font-size:.68rem;letter-spacing:.12em;
+  text-transform:uppercase;padding:.22rem .5rem;border-radius:2px;
+}
+.chip-stable{background:var(--ok);color:#fff}
+.chip-beta{background:var(--steel);color:#fff}
+:root[data-theme="dark"] .chip-stable,:root[data-theme="dark"] .chip-beta{color:#0f1317}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]) .chip-stable,
+  :root:not([data-theme="light"]) .chip-beta{color:#0f1317}
+}
+.tb-head .blurb{color:var(--ink-3);font-size:.9rem;width:100%}
+
+.tb-cells{display:grid;grid-template-columns:repeat(2,1fr);gap:1px;background:var(--rule)}
+@media (min-width:52rem){.tb-cells{grid-template-columns:repeat(4,1fr)}}
+.cell{background:var(--surface);padding:.85rem 1.25rem;min-width:0}
+.cell .val{
+  font-family:"IBM Plex Mono",monospace;font-size:.98rem;font-weight:500;
+  margin-top:.25rem;overflow-wrap:anywhere;font-variant-numeric:tabular-nums;
+}
+.tb-foot{padding:1.1rem 1.25rem;border-top:1px solid var(--rule);display:flex;flex-wrap:wrap;gap:.75rem;align-items:center}
+.tb-foot .note{font-size:.85rem;color:var(--ink-3);margin-left:auto;max-width:42ch}
+
+.dl-fallback{padding:1.25rem;border:1px dashed var(--rule-strong);color:var(--ink-2);font-size:.92rem}
+
+/* ---------------- steps ---------------- */
+.steps{display:grid;gap:1.25rem;counter-reset:s}
+@media (min-width:52rem){.steps{grid-template-columns:repeat(3,1fr)}}
+.step{border-top:2px solid var(--ink);padding-top:1rem;display:flex;flex-direction:column;gap:.4rem}
+.step h3{font-size:1.05rem}
+.step p{color:var(--ink-2);font-size:.94rem}
+
+/* ---------------- footer ---------------- */
+footer{border-top:1px solid var(--rule);padding:2.5rem 0 3.5rem;color:var(--ink-3);font-size:.9rem}
+footer .wrap{display:flex;flex-wrap:wrap;gap:1rem 2rem;align-items:center}
+footer a{color:var(--ink-2)}
+footer .right{margin-left:auto;display:flex;gap:1.5rem}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.01ms !important;transition-duration:.01ms !important}
+}
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="wrap">
+    <a class="brand" href="#top">GoSurvey<span class="tick">·</span></a>
+    <nav class="nav">
+      <a href="#capabilities" class="hide-sm">Capabilities</a>
+      <a href="#gallery" class="hide-sm">Screens</a>
+      <a href="#downloads">Download</a>
+      <a href="https://github.com/chetjones003/GoSurvey">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div>
+        <p class="bearing mono">N 45°30&#39;15&quot; E &nbsp;·&nbsp; 604.35&#39;</p>
+        <h1>Draw the way you<br>write a deed call.</h1>
+        <p class="lede">
+          A fast, modern CAD platform built for land surveyors — bearings and distances,
+          traverse adjustment, points, surfaces, and plat sheets you can plot.
+        </p>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="#downloads">Download for Windows</a>
+          <a class="btn btn-ghost" href="https://github.com/chetjones003/GoSurvey#readme">Read the manual</a>
+        </div>
+      </div>
+      <figure class="shot" style="margin:0">
+        <img src="img/plat.png" alt="A subdivision plat laid out on a sheet in GoSurvey, showing lot lines with bearings and distances, a line table, legend, surveyor&#39;s certificate and title block." width="2560" height="1528">
+        <figcaption>A finished plat on a layout sheet — model geometry through a scaled viewport.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="capabilities">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="label">Capabilities</span>
+        <h2>Everything between the field book and the recorded plat.</h2>
+        <p>Type a command, or use the ribbon. Every readout follows the units and bearing format you set once.</p>
+      </div>
+
+      <div class="caps">
+        <article class="cap">
+          <h3>Bearings and distances</h3>
+          <p>Enter geometry the way it is written: quadrant bearings, azimuths, DMS or decimal. Direct-distance entry, ortho, and relative <span class="mono">@dx,dy</span> chaining.</p>
+          <div class="cmds"><span class="cmd">LINE</span><span class="cmd">PLINE</span><span class="cmd">UNITS</span></div>
+        </article>
+
+        <article class="cap">
+          <h3>Traverse adjustment</h3>
+          <p>Reduce raw face 1 / face 2 observations, review per-leg statistics, and run a weighted least-squares closure with per-observation residuals to find the blunder.</p>
+          <div class="cmds"><span class="cmd">Traverse Editor</span><span class="cmd">FBK import</span></div>
+        </article>
+
+        <article class="cap">
+          <h3>Survey points</h3>
+          <p>Create, view and edit points with descriptions and elevations. Import and export PNEZD CSV. Points survive a DXF round trip with their numbers and descriptions intact.</p>
+          <div class="cmds"><span class="cmd">IMPPTS</span><span class="cmd">EXPPTS</span><span class="cmd">VWPTS</span></div>
+        </article>
+
+        <article class="cap">
+          <h3>Surfaces and contours</h3>
+          <p>Build a TIN from your shots to model existing ground, with breaklines and boundaries. Contours, elevation and slope banding, slope arrows, and cut/fill volumes.</p>
+          <div class="cmds"><span class="cmd">Surfaces</span><span class="cmd">Point groups</span></div>
+        </article>
+
+        <article class="cap">
+          <h3>Coordinate alignment</h3>
+          <p>Move a local-coordinate job onto real-world coordinates with a Helmert fit. Add control pairs, inspect the residuals, drop the outliers, then apply.</p>
+          <div class="cmds"><span class="cmd">ALIGN</span></div>
+        </article>
+
+        <article class="cap">
+          <h3>Plans and plotting</h3>
+          <p>Paper-space layouts with scaled viewports, per-viewport layer freeze and colour overrides, then plot single sheets or a whole set to vector PDF at true scale.</p>
+          <div class="cmds"><span class="cmd">Layouts</span><span class="cmd">Plot to PDF</span></div>
+        </article>
+
+        <article class="cap">
+          <h3>PDF underlays</h3>
+          <p>Attach a recorded plan as a reference and snap directly to the geometry you can see in it — endpoints, intersections and centres detected from the page itself.</p>
+          <div class="cmds"><span class="cmd">PDFATTACH</span></div>
+        </article>
+
+        <article class="cap">
+          <h3>Drawing exchange</h3>
+          <p>Import and export DXF, open DWG drawings, and bring in 3D models via glTF or STL when you need context around the survey.</p>
+          <div class="cmds"><span class="cmd">DXF</span><span class="cmd">DWG</span><span class="cmd">glTF</span></div>
+        </article>
+
+        <article class="cap">
+          <h3>Text and annotation</h3>
+          <p>Named text styles, a WYSIWYG MTEXT editor with a formatting panel, dimensions, hatching, and true-scale annotation sized off each viewport.</p>
+          <div class="cmds"><span class="cmd">MTEXT</span><span class="cmd">STYLE</span><span class="cmd">HATCH</span></div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="gallery" style="background:var(--surface-2)">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="label">Screens</span>
+        <h2>From raw observations to a sheet that plots.</h2>
+      </div>
+      <div class="gallery">
+        <figure class="shot" style="margin:0">
+          <img src="img/model.png" alt="GoSurvey model space with drawing geometry and the ribbon interface." loading="lazy" width="2560" height="1528">
+          <figcaption>Model space and the command line.</figcaption>
+        </figure>
+        <figure class="shot" style="margin:0">
+          <img src="img/points.png" alt="GoSurvey showing survey points with numbers, descriptions and elevations." loading="lazy" width="2560" height="1528">
+          <figcaption>Survey points, labelled and editable.</figcaption>
+        </figure>
+        <figure class="shot" style="margin:0">
+          <img src="img/traverse.png" alt="The GoSurvey Traverse Editor showing legs, observations and closure results." loading="lazy" width="2560" height="1528">
+          <figcaption>Traverse reduction and closure.</figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="downloads">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="label">Download</span>
+        <h2>Windows x64. Free to install.</h2>
+        <p>
+          Once installed, GoSurvey checks for new versions itself and asks before installing anything.
+          Choose your channel in <span class="mono">Settings → System → Updates</span>.
+        </p>
+      </div>
+
+      <div id="release-stable" class="tb">
+        <div class="tb-head">
+          <h3>Stable</h3>
+          <span class="chip chip-stable">Recommended</span>
+          <p class="blurb">Tested releases. This is the one to install if you are doing real work.</p>
+        </div>
+        <div class="tb-cells">
+          <div class="cell"><div class="label">Version</div><div class="val" data-f="version">—</div></div>
+          <div class="cell"><div class="label">Released</div><div class="val" data-f="date">—</div></div>
+          <div class="cell"><div class="label">Size</div><div class="val" data-f="size">—</div></div>
+          <div class="cell"><div class="label">Requires</div><div class="val">Windows x64</div></div>
+        </div>
+        <div class="tb-foot">
+          <a class="btn btn-primary" data-f="dl" href="https://github.com/chetjones003/GoSurvey/releases/latest">Download installer</a>
+          <a class="btn btn-ghost" data-f="notes" href="https://github.com/chetjones003/GoSurvey/releases/latest">Release notes</a>
+          <p class="note">Windows may warn that the publisher is unrecognised — the installer is not code-signed yet. Choose <strong>More info → Run anyway</strong>. A SHA-256 checksum is published with every release.</p>
+        </div>
+      </div>
+
+      <div id="release-beta" class="tb">
+        <div class="tb-head">
+          <h3>Beta</h3>
+          <span class="chip chip-beta">Preview</span>
+          <p class="blurb">The next release, published as it is built. Real working builds, but this is where problems are still being found — keep backups of drawings you care about.</p>
+        </div>
+        <div class="tb-cells">
+          <div class="cell"><div class="label">Version</div><div class="val" data-f="version">—</div></div>
+          <div class="cell"><div class="label">Released</div><div class="val" data-f="date">—</div></div>
+          <div class="cell"><div class="label">Size</div><div class="val" data-f="size">—</div></div>
+          <div class="cell"><div class="label">Requires</div><div class="val">Windows x64</div></div>
+        </div>
+        <div class="tb-foot">
+          <a class="btn btn-ghost" data-f="dl" href="https://github.com/chetjones003/GoSurvey/releases/tag/channel-beta">Download installer</a>
+          <a class="btn btn-ghost" data-f="notes" href="https://github.com/chetjones003/GoSurvey/releases/tag/channel-beta">Release notes</a>
+          <p class="note">Already running GoSurvey? Turn on <em>Include beta releases</em> in Settings instead of downloading by hand.</p>
+        </div>
+      </div>
+
+      <p class="dl-fallback" id="beta-none" hidden>
+        No beta build is published at the moment — the stable release above is the current one.
+      </p>
+
+      <p class="dl-fallback" id="dl-note" hidden>
+        Live release details could not be loaded just now.
+        <a href="https://github.com/chetjones003/GoSurvey/releases">Browse all releases on GitHub →</a>
+      </p>
+    </div>
+  </section>
+
+  <section style="background:var(--surface-2)">
+    <div class="wrap">
+      <div class="sec-head">
+        <span class="label">Getting started</span>
+        <h2>Installed and drawing in a few minutes.</h2>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <span class="label">First</span>
+          <h3>Install</h3>
+          <p>Download the installer above and run it. GoSurvey installs to Program Files and adds a Start Menu entry. If it will not start, install the Microsoft Visual C++ Redistributable for x64.</p>
+        </div>
+        <div class="step">
+          <span class="label">Then</span>
+          <h3>Set your units</h3>
+          <p>Run <span class="mono">UNITS</span> once and pick the precision and bearing format you work in — surveyor&#39;s bearings, DMS or decimal. Every readout and label follows it.</p>
+        </div>
+        <div class="step">
+          <span class="label">Then</span>
+          <h3>Bring in your data</h3>
+          <p>Import points from a PNEZD CSV, linework from DXF, or raw observations from an FBK file into the Traverse Editor. Either order keeps your points.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>GoSurvey — built by Chet Jones</span>
+    <span class="right">
+      <a href="https://github.com/chetjones003/GoSurvey">Source</a>
+      <a href="https://github.com/chetjones003/GoSurvey/issues">Report an issue</a>
+      <a href="https://github.com/chetjones003/GoSurvey/releases">All releases</a>
+    </span>
+  </div>
+</footer>
+
+<script>
+(function(){
+  "use strict";
+  var REPO = "chetjones003/GoSurvey";
+
+  function fmtSize(bytes){
+    if(!bytes) return "—";
+    return (bytes/1048576).toFixed(1) + " MB";
+  }
+  function fmtDate(iso){
+    if(!iso) return "—";
+    var d = new Date(iso);
+    if(isNaN(d)) return "—";
+    return d.toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"});
+  }
+  function set(root, field, text){
+    var el = root.querySelector('[data-f="'+field+'"]');
+    if(el) el.textContent = text;
+  }
+
+  // Version comes from the INSTALLER FILENAME, which carries it for both channels
+  // (GoSurvey-0.5.0-Installer.exe, GoSurvey-0.5.0-beta.16-Installer.exe).
+  //
+  // The published latest.json manifest would be the more direct source, but GitHub serves
+  // release assets with no Access-Control-Allow-Origin header, so a browser blocks that fetch
+  // — verified against the live release. The tag is no good either: the rolling beta's tag is
+  // literally "channel-beta". The filename is the one source that is correct for both and
+  // needs no extra request.
+  function versionFrom(release, installer){
+    if(installer){
+      var m = /^GoSurvey-(.+)-Installer\.exe$/i.exec(installer.name);
+      if(m) return m[1];
+    }
+    var t = (release.tag_name||"").replace(/^v/,"");
+    if(/^\d+\.\d+\.\d+/.test(t)) return t;
+    var n = /(\d+\.\d+\.\d+(?:-[\w.]+)?)/.exec(release.name||"");
+    return n ? n[1] : "—";
+  }
+
+  function fill(elId, release){
+    var root = document.getElementById(elId);
+    if(!root || !release) return false;
+
+    var installer = (release.assets||[]).filter(function(a){
+      return /Installer\.exe$/i.test(a.name);
+    })[0];
+
+    set(root,"version", versionFrom(release, installer));
+    set(root,"date", fmtDate(release.published_at || release.created_at));
+
+    var notes = root.querySelector('[data-f="notes"]');
+    if(notes && release.html_url) notes.href = release.html_url;
+
+    if(installer){
+      set(root,"size", fmtSize(installer.size));
+      var dl = root.querySelector('[data-f="dl"]');
+      if(dl){
+        dl.href = installer.browser_download_url;
+        dl.innerHTML = 'Download installer <small>' + fmtSize(installer.size) + '</small>';
+      }
+    }
+    return true;
+  }
+
+  function api(path){
+    return fetch("https://api.github.com/repos/"+REPO+path,{
+      headers:{"Accept":"application/vnd.github+json"}
+    }).then(function(r){ return r.ok ? r.json() : null; }).catch(function(){ return null; });
+  }
+
+  Promise.all([
+    api("/releases/latest"),
+    api("/releases/tags/channel-beta")
+  ]).then(function(res){
+    var okStable = fill("release-stable",res[0]);
+    var okBeta   = fill("release-beta",res[1]);
+
+    // A block of em dashes tells the reader nothing. Each missing case gets its own honest
+    // explanation instead.
+    if(okStable && !okBeta){
+      // There is genuinely no beta right now — the rolling prerelease can be absent between
+      // cycles, or deleted deliberately. Hide the empty block rather than show a dead one.
+      var beta = document.getElementById("release-beta");
+      var none = document.getElementById("beta-none");
+      if(beta) beta.hidden = true;
+      if(none) none.hidden = false;
+    } else if(!okStable && !okBeta){
+      // Both failed: almost always GitHub's 60/hour unauthenticated rate limit, which is a
+      // normal state for a public page rather than an error worth alarming over.
+      var n = document.getElementById("dl-note");
+      if(n) n.hidden = false;
+    }
+  });
+})();
+</script>
+
+</body>
+</html>

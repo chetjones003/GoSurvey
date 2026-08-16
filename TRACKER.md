@@ -50,6 +50,18 @@
 
 ## FEATURES
 
+### [FEAT-010] Clean up downloaded update installers — OPEN
+    - `%LOCALAPPDATA%\GoSurvey\updates` keeps every installer the updater has ever downloaded.
+      Nothing deletes them after a successful install, so it grows ~6 MB per update forever.
+      Observed 2026-08-16 holding both `0.5.0-beta.8` and `0.5.0` (~12 MB).
+    - Not a correctness problem — the hash check and install both work — purely disk hygiene.
+    - Fix: after `LaunchInstallerAndExit` succeeds, or on the next startup check, delete
+      `GoSurvey-*-Installer.exe` in that folder other than the one just applied. Next-startup is
+      safer: the app is exiting at launch time and the file is in use by the running installer.
+    - Watch out for: a partially downloaded file from a killed run (REQ-078 already deletes those
+      on failure, so anything left is from a hard kill), and not deleting an installer the user
+      may still be mid-install with.
+
 ### [FEAT-002] Traverse Editor
     - [ ]   Survey Traverse editor window that allows user
             to create legs of a traverse in different ways

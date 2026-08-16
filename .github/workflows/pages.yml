@@ -1,0 +1,50 @@
+# Publishes the marketing site in `site/` to GitHub Pages.
+#
+# Deliberately separate from release.yml: that workflow builds and ships the product and must not
+# be able to fail because of a typo in a web page, and this one must not wait on a ~4 minute C++
+# build to correct one. They share nothing.
+#
+# The page reads release data from the GitHub API at view time, so publishing a release does NOT
+# require re-deploying the site — it updates itself.
+
+name: pages
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never deploy two versions at once; let a newer push supersede one still queued.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4
