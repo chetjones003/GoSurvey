@@ -1,6 +1,61 @@
 # PROJECT ISSUE & FEATURE TRACKER
 
+> **BUG-014 onward are also GitHub issues.** The REQ-204 fuzz harness files findings to
+> github.com/chetjones003/GoSurvey/issues so they can be triaged and deduplicated by signature
+> (`docs/fuzz-harness.md` §6). They are recorded here too, because this file — not the issue
+> tracker — is what a future reader of the repo actually finds.
+
 ## BUGS
+
+### [BUG-017] CIRCLE stores an infinite radius — OPEN ([#59](https://github.com/chetjones003/GoSurvey/issues/59))
+    - Found 2026-08-16 by the REQ-204 fuzzer (seed 4737), minimized automatically 169 → 4 lines.
+    - A centre far from the picked point makes the derived radius overflow `float`, and the circle
+      is committed with `r = inf`. It is then saved, exported and fed to every extents/snap/render
+      calculation. Neither magnitude is exotic: `1e12` is an ordinary state-plane easting.
+    - Violates REQ-201 (the refusal is not reported — there is no refusal) and REQ-101.
+    - Repro: `NEW` / `CMD CIRCLE` / `CMD -1e+12,1e+38` / `PICK 50 15`.
+    - Fix shape: reject non-finite derived geometry at the commit site. Worth doing generally rather
+      than per-command — LINE, ARC, ELLIPSE and OFFSET all derive lengths from two user points.
+
+### [BUG-016] OFFSET duplicates the source entity's id — FIXED 2026-08-16 ([#58](https://github.com/chetjones003/GoSurvey/issues/58))
+    - Found 2026-08-16 by the REQ-204 fuzzer (seeds 2004 and 3555), minimized automatically
+      155 → 9 lines.
+    - Root cause: all five `CommitOffset*` functions copied the source's `EntityAttributes`
+      wholesale so the copy would inherit layer/colour/linetype/lineweight/transparency — and `id`
+      came with them. `EnsureEntityIds` only fills ids that are 0, so a copied non-zero id was never
+      repaired and was written to `.gs` permanently.
+    - Violates REQ-076 (ids unique, never reused) and through it architecture §11.9: a cross-object
+      reference *is* an id, so an id naming two entities makes every such reference ambiguous.
+    - The codebase already had the answer — `CopySelectionToClipboard` clears ids on copy via
+      `ClearEntityIdsFrom` (CadCommands.cpp:3698). OFFSET never got the same treatment.
+    - **Fixed (TASK-057)** with a `PushOffsetCopyAttrs` helper that does the copy and clears the id,
+      called from all five sites. One named helper rather than the same three lines in five places,
+      because the defect *was* five copies of a pattern all missing the same step.
+    - Regression test: `tests/headless/transcripts/regression-58-offset-entity-id.txt` — the
+      fuzzer's own minimized reproducer, kept verbatim. It also asserts `EXPECT LINES 2`, since an
+      id-collision check cannot fire if OFFSET silently stops producing anything.
+
+### [BUG-015] An empty drawing fails `.gs` resave idempotence — OPEN ([#57](https://github.com/chetjones003/GoSurvey/issues/57))
+    - Found 2026-08-16 by the REQ-204 `gs-roundtrip` oracle (seed 2), minimized 116 → 5 lines.
+    - Load materializes a default layer `"0"` and text style `"Standard"` that a newly created
+      drawing does not carry, so save → load → save is not byte-identical.
+    - Violates REQ-079's first acceptance condition. The deeper issue is that a new drawing is
+      briefly in a state the rest of the code is entitled to assume cannot happen — both are
+      documented as always existing.
+    - Masked in normal use because the startup template is loaded on launch and already has both.
+    - Fix shape: populate them at drawing creation, not in the loader.
+
+### [BUG-014] TEXT is saved to `.gs` with id 0 — OPEN ([#56](https://github.com/chetjones003/GoSurvey/issues/56))
+    - Found 2026-08-16 by the REQ-204 `gs-roundtrip` oracle on its first run.
+    - The TEXT commit path (`CadCommands.cpp`, both the model and paper branches) never calls
+      `BumpCadGpuCache`, so the `EnsureEntityIds` early-out — "geometry has not changed since the
+      last sweep, so nothing can be missing an id" — returns on a false premise. The annotation
+      keeps `id = 0` and is written out that way. The DIM* sibling paths do bump.
+    - Violates REQ-076; also breaks REQ-079 resave idempotence, since load then assigns the id.
+    - Rarely seen in the GUI because almost any later interaction bumps the revision and the sweep
+      catches up before a save. It needs a save with no intervening geometry change.
+    - `headless.gs-roundtrip.compare` is registered in CMakeLists but DISABLED against this and
+      BUG-015. Re-enabling it is the regression test for both.
 
 ### [BUG-013] On a hybrid laptop GoSurvey renders on the integrated GPU — FIXED 2026-08-15
     - Found 2026-08-15 by TASK-053's acceptance run, not by a report: the same scene measured
