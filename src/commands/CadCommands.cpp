@@ -2211,7 +2211,8 @@ const CmdEntry kRegistry[] = {
     {"polyline", "pl", "Draw a connected polyline"},
     {"rect", "rectang, rectangle", "Draw a rectangle (two opposite corners)"},
     {"trimstate", "", "TRIM mode: 0 = draw a line to trim (default), 1 = pick cutting edges"},
-    {"bench", "", "REQ-100 frame-budget benchmark: BENCH [segments] [frames]"},
+    {"bench", "",
+     "REQ-100 frame-budget benchmark: BENCH [segments] | BENCH SURFACE [points] | BENCH MESH [triangles]"},
     {"visualstyle", "vs, vscurrent", "Viewport visual style: 2D / HIDDEN / SHADED"},
     {"importmodel", "gltf, import3d", "Import a glTF/GLB 3D model as reference geometry"},
     {"elev", "ucs", "Elevation new geometry is drawn at (W = world Z 0)"},
@@ -10763,6 +10764,9 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   b.savedPolyAttrs = st.userPolylineAttrs;
   b.savedSurfaces = st.cadSurfaces;
   b.savedSurfaceAttrs = st.cadSurfaceAttrs;
+  b.savedMeshes = st.cadMeshes;
+  b.savedMeshAttrs = st.cadMeshAttrs;
+  b.savedVisualStyle = st.viewportVisualStyle;
   b.savedAzimuthDeg = st.viewportAzimuthDeg;
   b.savedElevationDeg = st.viewportElevationDeg;
   b.savedZoom = st.viewportZoom;
@@ -10770,7 +10774,38 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   b.savedPanY = st.viewportPanY;
   b.savedPanZ = st.viewportPanZ;
 
-  if (b.surfacePointCount > 0) {
+  if (b.meshTriangleCount > 0) {
+    // Shaded-mesh profile (REQ-100 (b), density decided 2026-08-15). The line stores are emptied
+    // for the same reason the surface profile empties them: the number has to be the mesh's cost
+    // and nothing else. Surfaces are cleared too, so the two large profiles can never overlap.
+    st.userPolylineVerts.clear();
+    st.userPolylineOffsets.assign(1, 0);
+    st.userPolylineClosed.clear();
+    st.userPolylineAttrs.clear();
+    st.cadSurfaces.clear();
+    st.cadSurfaceAttrs.clear();
+
+    auto mesh = std::make_shared<CadMesh>();
+    b.meshTriangleCount =
+        benchscene::BuildMeshScene(b.meshTriangleCount, &mesh->vertsXyz, &mesh->normalsXyz, &mesh->indices);
+    mesh->sourceName = "BENCH mesh";
+    // One part, deliberately: this is the shape TASK-041 measured the mesh path against, so the two
+    // numbers are comparable. A real import has hundreds of parts and therefore hundreds of draw
+    // calls — that per-part cost is NOT in this profile, and saying so is better than inventing a
+    // part count nobody chose.
+    CadMeshPart part;
+    part.name = "terrain";
+    part.indexBegin = 0;
+    part.indexCount = static_cast<int>(mesh->indices.size());
+    mesh->parts.push_back(part);
+    st.cadMeshes.assign(1, std::move(mesh));
+    st.cadMeshAttrs.assign(1, MakeNewEntityAttrs(st));
+
+    // The profile is *shaded* meshes. In 2D Wireframe the mesh is not drawn at all (TASK-041 §9),
+    // so measuring in the user's current style would measure whatever they happened to be in.
+    st.viewportVisualStyle = VisualStyle::Shaded;
+    b.segmentCount = 0;  // no line segments in this profile; the report prints triangles instead
+  } else if (b.surfacePointCount > 0) {
     // Surface profile (REQ-100 as amended / ADR-028): the scene is ONE surface, and the line stores
     // are emptied so the measurement is the surface's cost and nothing else. Triangle edges are
     // regenerated display geometry, which is exactly why this profile is not implied by the other
@@ -10815,12 +10850,14 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   // SPHERE means that stays true through the whole orbit, at every azimuth.
   double mnX = 1e300, mxX = -1e300, mnY = 1e300, mxY = -1e300, mnZ = 1e300, mxZ = -1e300;
   // Whichever store the profile filled: the contour scene lives in the polylines, the surface
-  // profile in the TIN. Framing from the wrong one would put the scene off screen and measure a
-  // viewport with nothing in it.
+  // profile in the TIN, the mesh profile in the mesh. Framing from the wrong one would put the
+  // scene off screen and measure a viewport with nothing in it.
   const std::vector<float>& frameVerts =
-      (b.surfacePointCount > 0 && !st.cadSurfaces.empty() && st.cadSurfaces[0].tin)
-          ? st.cadSurfaces[0].tin->vertsXyz
-          : st.userPolylineVerts;
+      (b.meshTriangleCount > 0 && !st.cadMeshes.empty() && st.cadMeshes[0])
+          ? st.cadMeshes[0]->vertsXyz
+          : ((b.surfacePointCount > 0 && !st.cadSurfaces.empty() && st.cadSurfaces[0].tin)
+                 ? st.cadSurfaces[0].tin->vertsXyz
+                 : st.userPolylineVerts);
   for (size_t i = 0; i + 2 < frameVerts.size(); i += 3) {
     mnX = std::min(mnX, static_cast<double>(frameVerts[i]));
     mxX = std::max(mxX, static_cast<double>(frameVerts[i]));
@@ -10852,11 +10889,20 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
   b.active = true;
   BumpCadGpuCache(st);
 
-  char msg[224];
+  char scene[64];
+  if (b.meshTriangleCount > 0)
+    std::snprintf(scene, sizeof(scene), "%d triangles, Shaded", b.meshTriangleCount);
+  else if (b.surfacePointCount > 0)
+    std::snprintf(scene, sizeof(scene), "%d points", b.surfacePointCount);
+  else
+    std::snprintf(scene, sizeof(scene), "%d segments", b.segmentCount);
+
+  char msg[256];
   std::snprintf(msg, sizeof(msg),
-                "BENCH — REQ-100: %d segments, %d frames (%d warm-up), continuous orbit. Vsync is disabled for the "
-                "run; the drawing is restored when it finishes.",
-                b.segmentCount, frames, b.warmupFrames);
+                "BENCH — REQ-100: %s, %d frames (%d warm-up), continuous orbit. Vsync is disabled for the "
+                "run; the drawing%s restored when it finishes.",
+                scene, frames, b.warmupFrames,
+                b.meshTriangleCount > 0 ? " and the visual style are" : " is");
   log.push_back(msg);
   return true;
 }
@@ -10873,6 +10919,11 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
     st.userPolylineAttrs = std::move(b.savedPolyAttrs);
     st.cadSurfaces = std::move(b.savedSurfaces);
     st.cadSurfaceAttrs = std::move(b.savedSurfaceAttrs);
+    st.cadMeshes = std::move(b.savedMeshes);
+    st.cadMeshAttrs = std::move(b.savedMeshAttrs);
+    st.viewportVisualStyle = b.savedVisualStyle;
+    b.savedMeshes.clear();
+    b.savedMeshAttrs.clear();
     b.savedPolyVerts.clear();
     b.savedPolyOffsets.clear();
     b.savedPolyClosed.clear();
@@ -10897,19 +10948,27 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
   }
   constexpr double kBudgetMs = 16.0;  // REQ-100
   const bool pass = s.p95Ms <= kBudgetMs;
+  // Name the profile, and describe the scene that produced the number: REQ-100 has three profiles,
+  // and a p95 quoted without saying which one it measured is as unreproducible as one quoted
+  // without the reference machine. Built once and used by BOTH the console line and the file
+  // record below — the record is the half that outlives the session, and it is the half that used
+  // to omit this (a surface run was preserved as "segments 599898", indistinguishable from a
+  // 600k-segment line scene).
+  const char* profileName = "line segments";
+  char scene[128];
+  std::snprintf(scene, sizeof(scene), "%d segments", b.segmentCount);
+  if (b.meshTriangleCount > 0) {
+    profileName = "shaded meshes";
+    std::snprintf(scene, sizeof(scene), "%d triangles, Shaded", b.meshTriangleCount);
+  } else if (b.surfacePointCount > 0) {
+    profileName = "surface";
+    std::snprintf(scene, sizeof(scene), "%d points, %d triangles (%d edges)", b.surfacePointCount,
+                  b.surfaceTriangleCount, b.segmentCount);
+  }
+
   char msg[320];
-  if (b.surfacePointCount > 0)
-    // Name the profile: REQ-100 has three, and a p95 quoted without saying which one it measured is
-    // as unreproducible as one quoted without the reference machine.
-    std::snprintf(msg, sizeof(msg),
-                  "BENCH (surface) — %d points, %d triangles (%d edges), %d timed frames: "
-                  "p95 %.2f ms (budget %.0f ms) — %s.",
-                  b.surfacePointCount, b.surfaceTriangleCount, b.segmentCount, s.frames, s.p95Ms,
-                  kBudgetMs, pass ? "PASS" : "FAIL");
-  else
-    std::snprintf(msg, sizeof(msg),
-                  "BENCH — %d segments, %d timed frames: p95 %.2f ms (budget %.0f ms) — %s.",
-                  b.segmentCount, s.frames, s.p95Ms, kBudgetMs, pass ? "PASS" : "FAIL");
+  std::snprintf(msg, sizeof(msg), "BENCH (%s) — %s, %d timed frames: p95 %.2f ms (budget %.0f ms) — %s.",
+                profileName, scene, s.frames, s.p95Ms, kBudgetMs, pass ? "PASS" : "FAIL");
   log.push_back(msg);
   std::snprintf(msg, sizeof(msg), "BENCH — min %.2f  median %.2f  mean %.2f  p95 %.2f  p99 %.2f  max %.2f ms.",
                 s.minMs, s.medianMs, s.meanMs, s.p95Ms, s.p99Ms, s.maxMs);
@@ -10933,7 +10992,8 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
 #endif
       std::strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &tmInfo);
       f << timeBuf << "  REQ-100 frame budget\n"
-        << "  segments      " << b.segmentCount << "\n"
+        << "  profile       " << profileName << "\n"
+        << "  scene         " << scene << "\n"
         << "  timed frames  " << s.frames << " (after " << b.warmupFrames << " warm-up)\n"
         << "  orbit         " << b.orbitDegPerFrame << " deg/frame, vsync off\n"
         << "  min           " << s.minMs << " ms\n"
@@ -11828,10 +11888,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       int frames = 900;   // ~1.25 turns of the scripted orbit after warm-up
       st.bench.surfacePointCount = 0;
       st.bench.surfaceTriangleCount = 0;
+      st.bench.meshTriangleCount = 0;
 
       // `BENCH SURFACE [points] [frames]` selects the surface cost profile (REQ-100 as amended,
-      // ADR-028). A surface is measured separately because its edges are regenerated display
-      // geometry — neither the segment nor the mesh profile predicts its cost.
+      // ADR-028), `BENCH MESH [triangles] [frames]` the shaded-mesh one (REQ-100 (b)). All three
+      // are measured separately because none predicts the others: a surface's edges are regenerated
+      // display geometry, and a shaded triangle is depth-tested and lit where a line segment is not.
       std::string benchArg;
       const std::streampos afterTok = issIdle.tellg();
       if (issIdle >> benchArg) {
@@ -11849,8 +11911,19 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           StartFrameBudgetBench(st, 1, frames, log);
           return;
         }
+        if (lower == "mesh" || lower == "m") {
+          int tris = 2000000;  // REQ-100 (b): the density decided 2026-08-15, TASK-041's fixture
+          int v = 0;
+          if (issIdle >> v)
+            tris = v;
+          if (issIdle >> v)
+            frames = v;
+          st.bench.meshTriangleCount = tris;
+          StartFrameBudgetBench(st, 1, frames, log);
+          return;
+        }
         issIdle.clear();
-        issIdle.seekg(afterTok);  // not "surface": re-read the token as a segment count
+        issIdle.seekg(afterTok);  // neither keyword: re-read the token as a segment count
       } else {
         issIdle.clear();
       }

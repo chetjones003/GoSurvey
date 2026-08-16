@@ -49,6 +49,34 @@ int BuildContourScene(int targetSegments, std::vector<float>* verts, std::vector
 /// \returns the number of points produced.
 int BuildSurfacePointScene(int targetPoints, std::vector<float>* outXyz);
 
+/// Builds the triangle mesh for the REQ-100 **shaded mesh** cost profile: a curved terrain surface
+/// of \p targetTriangles triangles, ready to become a `CadMesh`.
+///
+/// Meshes are their own profile because a shaded triangle costs nothing like a line segment: it
+/// carries a normal, it is depth-tested (ADR-026 (e)), and it occludes the geometry behind it.
+/// 2,000,000 triangles is the density REQ-100 (b) names — the fixture TASK-041 validated the mesh
+/// path against, so this profile has a known-good comparison point rather than a fresh guess.
+///
+/// The surface is the **same two-sinusoid terrain** \ref BuildSurfacePointScene uses, for two
+/// reasons: it is genuinely curved, so the profile measures real shading and self-occlusion under
+/// orbit rather than one flat gradient band; and it makes the mesh and surface profiles directly
+/// comparable at a matched size, which is the only way to see what the surface's regenerated edges
+/// actually cost.
+///
+/// Normals are computed **analytically** from the terrain's partial derivatives rather than
+/// averaged from adjacent faces: exact, independent of iteration order, and free of the
+/// accumulation that would make "byte-identical across runs" a property of the summation order
+/// instead of the geometry.
+///
+/// \param verts    filled with interleaved x,y,z triples (architecture §11.8)
+/// \param normals  filled with one unit normal per vertex, parallel to \p verts
+/// \param indices  filled with a triangle list, `size() == 3 * triangles`
+/// \returns the exact number of triangles produced — equal to \p targetTriangles for any positive
+///          value, for the same reason \ref BuildContourScene returns its segment count exactly:
+///          the benchmark must measure the density the requirement names.
+int BuildMeshScene(int targetTriangles, std::vector<float>* verts, std::vector<float>* normals,
+                   std::vector<std::uint32_t>* indices);
+
 /// Nearest-rank percentile of \p samples, \p p in [0, 100]. Takes the vector by value: it sorts.
 ///
 /// Nearest-rank rather than an interpolating definition because the requirement is about a frame

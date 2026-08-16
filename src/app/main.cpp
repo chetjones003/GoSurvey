@@ -164,6 +164,29 @@ static void PublishInstallerDetectionMutex()
 }
 #endif
 
+#ifdef _WIN32
+// BUG-013 — ask for the discrete GPU on a hybrid laptop.
+//
+// These two exported symbols are the documented way an application tells NVIDIA's and AMD's drivers
+// that it wants the high-performance part. They are read by the driver when the process starts, so
+// they must be *exported* (the linker would otherwise drop two variables nothing references) and
+// they cannot be changed once the application is running.
+//
+// Without them GoSurvey rendered on whatever Windows chose, which on the reference machine was the
+// integrated GPU: 250,000 line segments took 9.27 ms per frame instead of 1.38 ms, and a
+// 2,000,000-triangle shaded mesh missed the REQ-100 budget at 21.40 ms where the discrete GPU does
+// it in 1.97 ms. Nothing reported this for as long as the project has existed, because the symptom
+// is not an error — it is just slowness, on hardware bought to avoid exactly that.
+//
+// A user who wants the integrated GPU back (for battery life in the field) sets it in Settings,
+// which records the preference with Windows; see platform/GpuPreference.hpp for why that mechanism
+// rather than a flag of our own, and why it can only take effect at the next launch.
+extern "C" {
+__declspec(dllexport) DWORD NvOptimusEnablement = 1;
+__declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 1;
+}
+#endif
+
 int main()
 {
 #ifdef _WIN32

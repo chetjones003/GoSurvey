@@ -584,12 +584,22 @@ struct AppCommandState {
     int surfacePointCount = 0;
     int surfaceTriangleCount = 0;
 
+    /// Triangles in the shaded-mesh profile (REQ-100 (b)). 0 = not the mesh profile. At most one of
+    /// this and \ref surfacePointCount is non-zero; both zero means the line-segment profile.
+    int meshTriangleCount = 0;
+
     std::vector<float> savedPolyVerts;
     std::vector<int> savedPolyOffsets;
     std::vector<std::uint8_t> savedPolyClosed;
     std::vector<EntityAttributes> savedPolyAttrs;
     std::vector<CadSurface> savedSurfaces;            ///< restored verbatim after a surface run
     std::vector<EntityAttributes> savedSurfaceAttrs;
+    std::vector<std::shared_ptr<const CadMesh>> savedMeshes;  ///< restored verbatim after a mesh run
+    std::vector<EntityAttributes> savedMeshAttrs;
+    /// The mesh profile forces Shaded (REQ-100 (b) measures *shaded* meshes, and REQ-064's budget
+    /// condition is stated in Shaded). Saved so a bench run cannot leave the user in a style they
+    /// did not choose — which would also silently invalidate ADR-026 (e)'s 2D Wireframe parity.
+    VisualStyle savedVisualStyle = VisualStyle::Wireframe2D;
     float savedAzimuthDeg = 0.f;
     float savedElevationDeg = 90.f;
     float savedZoom = 1.f;
@@ -1199,6 +1209,15 @@ struct AppCommandState {
 
   // System tab — Hardware acceleration toggle, drives MSAA + line smoothing.
   bool systemHardwareAcceleration = true;
+  /// BUG-013: opt back to the integrated GPU on a hybrid laptop, for battery life in the field.
+  /// Default false — a CAD application should ask for the capable GPU, and until 2026-08-15 this
+  /// one asked for nothing and silently got the other one. Applied by writing Windows' own
+  /// per-application preference, so it takes effect at the **next launch**, not this one.
+  bool systemPreferIntegratedGpu = false;
+  /// Result of the last attempt to record that preference with Windows, shown beside the checkbox.
+  /// Empty until the user toggles it. It is shown rather than logged because the settings dialog is
+  /// where the user is looking when they change it (REQ-201).
+  std::string systemGpuPreferenceMessage;
   bool systemAutoCheckCertificationUpdate = true;
   bool systemDisplayOLETextSizeDialog = true;
   bool systemBeepOnError = false;

@@ -190,6 +190,7 @@ add_executable(GoSurvey
   src/platform/AppIcon.cpp
   src/platform/WinFileDialogs.cpp
   src/platform/ProcessRun.cpp
+  src/platform/GpuPreference.cpp
   src/platform/HttpFetch.cpp
 
   # Update check (REQ-077/078, ADR-029)
@@ -376,6 +377,10 @@ if(GOSURVEY_BUILD_TESTS)
     tests/TinBuildTests.cpp
     tests/UpdateCheckTests.cpp
     tests/GsMigrateTests.cpp
+    tests/GpuPreferenceTests.cpp
+    # BUG-013 per-application GPU preference. Win32 registry only — no GL, no window — so the value
+    # the user's choice actually turns into is testable without the application running.
+    src/platform/GpuPreference.cpp
     src/traverse/TraverseCalc.cpp
     src/traverse/TraverseLeastSquares.cpp
     src/traverse/FbkImport.cpp

@@ -4,6 +4,7 @@
 #include "CadUi.hpp"
 #include "CadUiHelpers.hpp"
 #include "AppIcon.hpp"
+#include "GpuPreference.hpp"
 #include "MtextRichFormat.hpp"
 #include "NumFormat.hpp"
 #include "SurveyPoints.hpp"
@@ -295,6 +296,22 @@ static void DrawSystemHardwareAccel(AppCommandState& cmd) {
   ImGui::TextDisabled("Current: HW accel %s, smooth lines %s.",
                       cmd.systemHardwareAcceleration ? "ON" : "OFF", cmd.gfxSmoothLineDisplay ? "ON" : "OFF");
   ImGui::Checkbox("Automatically check for certification update", &cmd.systemAutoCheckCertificationUpdate);
+
+  // BUG-013. GoSurvey asks for the discrete GPU by default (the exported driver symbols in
+  // main.cpp); this hands the choice back for a laptop running on battery. The write goes to
+  // Windows' own per-application preference, which is why it cannot apply until the next launch —
+  // the GPU is bound when the process starts, so anything claiming otherwise would be a lie.
+  if (ImGui::Checkbox("Prefer the integrated GPU (saves battery, slower)", &cmd.systemPreferIntegratedGpu)) {
+    std::string err;
+    const platform::GpuPreference pref = cmd.systemPreferIntegratedGpu ? platform::GpuPreference::PowerSaving
+                                                                       : platform::GpuPreference::HighPerformance;
+    if (platform::SetGpuPreferenceForThisExe(pref, &err))
+      cmd.systemGpuPreferenceMessage = "Saved. Takes effect the next time GoSurvey starts.";
+    else
+      cmd.systemGpuPreferenceMessage = "Could not save: " + err;  // REQ-201: never silently
+  }
+  if (!cmd.systemGpuPreferenceMessage.empty())
+    ImGui::TextDisabled("%s", cmd.systemGpuPreferenceMessage.c_str());
 }
 
 static void DrawSystemLayoutRegen(AppCommandState& cmd) {
@@ -331,7 +348,9 @@ static void DrawSettingsSystemTab(AppCommandState& cmd) {
   if (ImGui::BeginTable("##sys_layout", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
     ImGui::TableNextRow();
     ImGui::TableSetColumnIndex(0);
-    BoxBegin("Hardware Acceleration", 110.f); DrawSystemHardwareAccel(cmd); BoxEnd();
+    // 160 rather than 110: the BUG-013 GPU checkbox and the line that reports whether its setting
+    // was saved both live in this box, and at 110 the checkbox was clipped mid-word.
+    BoxBegin("Hardware Acceleration", 160.f); DrawSystemHardwareAccel(cmd); BoxEnd();
     BoxBegin("Current Pointing Device", 110.f);
     const char* devices[] = {"Current System Pointing Device"};
     int idx = 0; ImGui::SetNextItemWidth(-1.f); ImGui::Combo("##ptdev", &idx, devices, IM_ARRAYSIZE(devices));

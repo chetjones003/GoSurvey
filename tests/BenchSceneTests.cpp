@@ -8,6 +8,7 @@
 #include <catch2/catch_approx.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <utility>
 #include <vector>
@@ -109,6 +110,105 @@ TEST_CASE("An empty or degenerate request produces an empty scene", "[bench]") {
   CHECK(verts.empty());
   CHECK(benchscene::BuildContourScene(-5, &verts, &offsets, &closed) == 0);
   CHECK(benchscene::BuildContourScene(10, nullptr, &offsets, &closed) == 0);
+}
+
+TEST_CASE("The mesh bench scene contains exactly the requested triangle count", "[bench]") {
+  // REQ-100 (b) names 2,000,000 triangles (decided 2026-08-15). A generator that emitted whole grid
+  // cells and returned whatever that came to would measure a density nobody chose, and the
+  // difference would be invisible in the reported p95.
+  std::vector<float> verts, normals;
+  std::vector<std::uint32_t> indices;
+  for (int target : {1, 2, 3, 7, 800, 12345, 2000000}) {
+    const int produced = benchscene::BuildMeshScene(target, &verts, &normals, &indices);
+    INFO("target = " << target);
+    CHECK(produced == target);
+    CHECK(indices.size() == static_cast<size_t>(target) * 3);
+    CHECK(verts.size() % 3 == 0);
+    CHECK(normals.size() == verts.size());  // one normal per vertex, parallel arrays
+  }
+}
+
+TEST_CASE("The mesh bench scene is byte-identical across runs", "[bench]") {
+  std::vector<float> v1, n1, v2, n2;
+  std::vector<std::uint32_t> i1, i2;
+  benchscene::BuildMeshScene(20000, &v1, &n1, &i1);
+  benchscene::BuildMeshScene(20000, &v2, &n2, &i2);
+  REQUIRE(v1.size() == v2.size());
+  for (size_t i = 0; i < v1.size(); ++i)
+    REQUIRE(v1[i] == v2[i]);  // exact equality is the point
+  REQUIRE(n1.size() == n2.size());
+  for (size_t i = 0; i < n1.size(); ++i)
+    REQUIRE(n1[i] == n2[i]);
+  REQUIRE(i1 == i2);
+}
+
+TEST_CASE("Triangle count changes mesh DENSITY, not its extent", "[bench]") {
+  // The same trap the contour scene fell into: a mesh that grows past the viewport would let the
+  // GPU rasterise less of it as the count rises, and the benchmark would improve with size.
+  auto extentOf = [](int tris) {
+    std::vector<float> v, n;
+    std::vector<std::uint32_t> idx;
+    benchscene::BuildMeshScene(tris, &v, &n, &idx);
+    float mnX = v[0], mxX = v[0], mnY = v[1], mxY = v[1];
+    for (size_t i = 0; i + 2 < v.size(); i += 3) {
+      mnX = std::min(mnX, v[i]);     mxX = std::max(mxX, v[i]);
+      mnY = std::min(mnY, v[i + 1]); mxY = std::max(mxY, v[i + 1]);
+    }
+    return std::pair<float, float>(mxX - mnX, mxY - mnY);
+  };
+  const auto small = extentOf(5000);
+  const auto large = extentOf(500000);
+  // Exact here, unlike the contour case: the grid spans the plan extent whatever its resolution.
+  CHECK(large.first == Approx(small.first));
+  CHECK(large.second == Approx(small.second));
+}
+
+TEST_CASE("Mesh bench normals are unit length and its indices are in range", "[bench]") {
+  // A non-unit normal shades wrong, and an out-of-range index is an out-of-bounds read on the GPU
+  // — neither is visible in a frame time, which is why they are asserted here.
+  std::vector<float> verts, normals;
+  std::vector<std::uint32_t> indices;
+  const int tris = benchscene::BuildMeshScene(20000, &verts, &normals, &indices);
+  REQUIRE(tris == 20000);
+  const std::uint32_t vertexCount = static_cast<std::uint32_t>(verts.size() / 3);
+  for (std::uint32_t idx : indices)
+    REQUIRE(idx < vertexCount);
+  for (size_t i = 0; i + 2 < normals.size(); i += 3) {
+    const double len = std::sqrt(static_cast<double>(normals[i]) * normals[i] +
+                                 static_cast<double>(normals[i + 1]) * normals[i + 1] +
+                                 static_cast<double>(normals[i + 2]) * normals[i + 2]);
+    REQUIRE(len == Approx(1.0).epsilon(1e-5));
+  }
+}
+
+TEST_CASE("The mesh bench scene is genuinely curved", "[bench]") {
+  // A flat grid would shade as one gradient band, never self-occlude, and give a number that says
+  // nothing about a real shaded model — while still passing every other test here.
+  std::vector<float> verts, normals;
+  std::vector<std::uint32_t> indices;
+  benchscene::BuildMeshScene(20000, &verts, &normals, &indices);
+  REQUIRE(normals.size() > 300);
+  bool normalsVary = false, elevationVaries = false;
+  for (size_t i = 3; i + 2 < normals.size(); i += 3) {
+    if (normals[i] != normals[0] || normals[i + 1] != normals[1])
+      normalsVary = true;
+    if (verts[i + 2] != verts[2])
+      elevationVaries = true;
+  }
+  CHECK(normalsVary);
+  CHECK(elevationVaries);
+}
+
+TEST_CASE("An empty or degenerate mesh request produces an empty scene", "[bench]") {
+  std::vector<float> verts, normals;
+  std::vector<std::uint32_t> indices;
+  CHECK(benchscene::BuildMeshScene(0, &verts, &normals, &indices) == 0);
+  CHECK(verts.empty());
+  CHECK(indices.empty());
+  CHECK(benchscene::BuildMeshScene(-5, &verts, &normals, &indices) == 0);
+  CHECK(benchscene::BuildMeshScene(10, nullptr, &normals, &indices) == 0);
+  CHECK(benchscene::BuildMeshScene(10, &verts, nullptr, &indices) == 0);
+  CHECK(benchscene::BuildMeshScene(10, &verts, &normals, nullptr) == 0);
 }
 
 TEST_CASE("Nearest-rank percentile picks a real sample", "[bench]") {

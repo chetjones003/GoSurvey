@@ -1518,10 +1518,11 @@ requirements is a planning failure, not a sign of rigor.
   - switching styles does not alter geometry, selection, snapping results, or the plot;
   - the REQ-100 frame budget is met in Shaded at the REQ-063 mesh density chosen for the bench.
 - Owner-layer: Renderer (draw), UI (selector), IO (persistence)
-- Status: accepted (2026-08-12) — delivered, with **one acceptance condition still unverified**: the
-  frame budget in Shaded. `BENCH` has no mesh scene, so REQ-100's profile (b) has never been run
-  (TASK-041 §7, TASK-052 FINDING-1). What is known: depth testing alone costs ~2 ms at 250k segments
-  (TASK-040, clang, no meshes present). That is encouraging and is not the measurement.
+- Status: accepted (2026-08-12) — **fully delivered 2026-08-15.** The last unverified condition, the
+  frame budget in Shaded, now has a measurement behind it: REQ-100's profile (b) exists (TASK-053)
+  and reports **p95 1.97 ms** at 2,000,000 triangles in Shaded on the RTX 5060, against a 16 ms
+  budget. On the integrated GPU the same scene is 21.40 ms and fails — see BUG-013, which decides
+  which of those two the budget is judged on.
 - Revisions: 2026-08-12 — initial draft. Supersedes ADR-025 ASSUMPTION-1, which deliberately left
   depth testing off pending a visual-style requirement; this is that requirement.
 
@@ -2041,8 +2042,47 @@ requirements is a planning failure, not a sign of rigor.
   property of a binary, not of source code: the compiler chooses the vectorisation, inlining and
   layout that decide it, so a figure measured with a different compiler is a different result.
 - Owner-layer: Renderer
-- Status: accepted — **PARTLY MET. Re-measured under MSVC 2026-08-15** (TASK-052), on the reference
-  machine in `project.md` §7. Two of the three profiles pass; the third has never been runnable:
+- Status: accepted — **MET. All three profiles measured 2026-08-15** (TASK-052, TASK-053), and every
+  figure recorded before 22:42 that day was measured on the **wrong GPU** (TASK-053 FINDING-3).
+  GoSurvey exported neither `NvOptimusEnablement` nor `AmdPowerXpressRequestHighPerformance`, so on
+  this hybrid laptop it rendered on the integrated Radeon 610M while `project.md` §7 names an
+  RTX 5060. The machine was named and the compiler was named; the *device inside the machine* was
+  not. Fixed by TASK-054 (BUG-013) — the application now asks for the discrete GPU.
+
+  On the **RTX 5060** (forced via the per-application GPU preference), MSVC build:
+
+  | profile | scene | p95 | verdict |
+  |---|---|---|---|
+  | (a) line segments | 250,000 | **1.38 ms** | MET |
+  | (b) shaded meshes | 2,000,000 triangles, Shaded | **1.97 ms** | MET — the case exists as of TASK-053 |
+  | (c) surface | 100,000 points / 199,966 triangles | **10.28 ms** | MET |
+
+  **The budget is judged on the RTX 5060** (user decision, 2026-08-15), and the integrated-GPU
+  figures are kept beside it as a **documented floor** rather than discarded — both are recorded,
+  neither is quietly preferred. The floor is what a user sees on a machine whose discrete GPU is
+  disabled or absent:
+
+  | profile | RTX 5060 — judged | Radeon 610M — floor |
+  |---|---|---|
+  | (a) 250,000 segments | 1.38 ms | 9.27 ms |
+  | (b) 2,000,000 triangles, Shaded | 1.97 ms | 21.40 ms — over budget |
+  | (c) 100k-point surface | 10.28 ms | 9.32 ms |
+
+  Judging on the discrete GPU is only coherent because the application now **asks** for it
+  (BUG-013 / TASK-054, fixed 2026-08-15); before that fix the named reference device and the device
+  actually used were different things, which is what made every earlier figure misleading. The floor
+  row is why the fix matters: on the integrated GPU the mesh profile does not hold the budget.
+
+  Note on (c): the surface profile is **CPU-bound**. It moved 9.32 → 10.28 ms between the two GPUs —
+  slightly *worse* on the faster one — while (b), with ten times the triangles, runs at 1.97 ms. Its
+  cost is per-frame regeneration of triangle edges, not rasterisation, and it is the only profile
+  anywhere near the budget. Relevant before REQ-069/070/071 add contour regeneration on top of it.
+
+  Superseded figures, all **integrated-GPU** measurements: 8.93 ms (clang, TASK-039, 2026-08-12);
+  9.27 ms segments / 9.32 ms surface (MSVC, TASK-052, 2026-08-15); and the headroom sweep that put
+  the segment ceiling between 500k and 750k. On the RTX 5060, 1,000,000 segments runs at 2.30 ms.
+
+  Previously recorded here (retained for the audit trail):
   - (a) **line segments — MET**, p95 **9.27 ms** at 250,000 segments against the 16 ms budget;
   - (b) **shaded meshes — NOT MEASURED. `BENCH` has no mesh scene**, so this profile has no case to
     run. Predicted by TASK-041 §7 and still open; REQ-064's "budget met in Shaded" condition rests
@@ -2050,17 +2090,9 @@ requirements is a planning failure, not a sign of rigor.
   - (c) **surface — MET**, p95 **9.32 ms** at 100,000 points / 199,966 triangles. First measurement
     of this profile; it had no clang predecessor.
 
-  Run it with the `BENCH` command (`BENCH`, `BENCH <segments>`, `BENCH SURFACE`); the scene
-  generator and its statistics are `src/util/benchscene.*`, and every run also appends to
-  `%APPDATA%\GoSurvey\bench-req100.txt`.
-
-  **Headroom is ~2× the required density, not the 3–4× recorded under clang.** The budget holds at
-  500k segments (p95 11.09 ms) and is exceeded at 750k (16.49–18.09 ms across two runs) and at 1M
-  (21.94 ms). The 250k figure itself reproduces within 0.19 ms warm or cold, so the sweep is a
-  toolchain difference and not thermal drift — checked before recording (TASK-052 §4).
-
-  Superseded: p95 8.93 ms / holds to 750k, measured 2026-08-12 on a **clang** build (TASK-039).
-  Retained only as history; it must not be quoted as current.
+  Run it with the `BENCH` command (`BENCH`, `BENCH <segments>`, `BENCH SURFACE`, `BENCH MESH`); the
+  scene generators and statistics are `src/util/benchscene.*`, and every run appends to
+  `%APPDATA%\GoSurvey\bench-req100.txt`, **naming the profile it measured** (TASK-053).
 - Revisions: 2026-08-11 — placeholder `<60 FPS / 16 ms>` / `<N>` replaced with a
   measurable budget, because REQ-058 makes framerate user-visible for the first
   time and R5 could not otherwise have a testable acceptance condition.
@@ -2079,6 +2111,14 @@ requirements is a planning failure, not a sign of rigor.
   **not measured** rather than assumed, because no mesh bench scene exists. The headroom claim is
   corrected from 3–4× to ~2× the required density: that number described a clang binary the project
   no longer ships, and leaving it in place would have understated the risk on weaker hardware.
+  2026-08-15 (later) — profile (b) built and measured (TASK-053), and in the course of that the
+  **device** question surfaced: every figure above had been measured on the integrated GPU. The
+  acceptance conditions now need to name the GPU as they already name the machine and the compiler.
+  A budget is a property of a binary on a device; this requirement has now been wrong about all
+  three in turn, which is an argument for stating them, not for trusting the number.
+  **Resolved the same day:** the budget is judged on the RTX 5060 with the integrated figures kept
+  as a documented floor (decision log), and BUG-013 was fixed so the application actually requests
+  the device the budget names — the requirement and the binary now agree about the hardware.
 
 ### REQ-101 — Numerical tolerance
 - Purpose: domain correctness (CAD/survey)
@@ -2192,7 +2232,7 @@ requirements is a planning failure, not a sign of rigor.
 | Requirement | Layer | Test(s) | Status |
 |-------------|-------|---------|--------|
 | REQ-001 | IO | `<TEST-001>` | accepted |
-| REQ-100 | Renderer | `BenchSceneTests` (exact segment count; byte-identical regeneration; segment count changes density not extent; iso-elevation contours; nearest-rank percentile) + the `BENCH` command on the reference machine (`project.md` §7), MSVC — segments p95 9.27 ms and surface p95 9.32 ms vs 16 ms, 2026-08-15 (TASK-052); **mesh profile has no bench case** | accepted (profile (b) unverified) |
+| REQ-100 | Renderer | `BenchSceneTests` (exact segment count; byte-identical regeneration; segment count changes density not extent; iso-elevation contours; nearest-rank percentile) + the `BENCH` / `BENCH SURFACE` / `BENCH MESH` commands on the reference machine (`project.md` §7), MSVC, RTX 5060 — segments 1.38 ms, meshes 1.97 ms, surface 10.28 ms vs 16 ms, 2026-08-15 (TASK-052, TASK-053) | accepted (device pending BUG-013) |
 | REQ-101 | compute | `<regression set>` | proposed |
 | REQ-010 | UI | manual (FBK import shows raw rows) | implemented |
 | REQ-011 | compute | `TraverseTests` "ComputeStats" | implemented |

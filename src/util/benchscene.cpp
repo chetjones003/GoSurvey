@@ -20,6 +20,19 @@ namespace {
   return static_cast<double>(h) / 4294967295.0;  // [0, 1]
 }
 
+/// Elevation of the bench terrain at (\p x, \p y), and its two partial derivatives.
+///
+/// The same two-sinusoid surface `BuildSurfacePointScene` scatters its shots over. It is written
+/// out again there rather than routed through this helper **on purpose**: that scene's exact bytes
+/// back a recorded REQ-100 measurement (TASK-052), and re-expressing the arithmetic to save four
+/// lines is not worth any chance of moving it. Two copies of one formula, with the reason stated,
+/// beats a refactor that quietly invalidates a published number.
+void TerrainAt(double x, double y, double* z, double* dzdx, double* dzdy) {
+  *z = 100.0 + 20.0 * std::sin(x / 400.0) + 10.0 * std::cos(y / 260.0) + 6.0 * std::sin((x + y) / 900.0);
+  *dzdx = (20.0 / 400.0) * std::cos(x / 400.0) + (6.0 / 900.0) * std::cos((x + y) / 900.0);
+  *dzdy = -(10.0 / 260.0) * std::sin(y / 260.0) + (6.0 / 900.0) * std::cos((x + y) / 900.0);
+}
+
 constexpr int kVertsPerContour = 501;  ///< 500 segments each — long lines, like real contours.
 constexpr double kPlanExtentX = 5000.0;  ///< Plan size of the modelled sheet, in feet…
 constexpr double kPlanExtentY = 4000.0;  ///< …fixed, so segment count changes DENSITY, not area.
@@ -145,6 +158,73 @@ int BuildSurfacePointScene(int targetPoints, std::vector<float>* outXyz) {
       outXyz->push_back(static_cast<float>(x));
       outXyz->push_back(static_cast<float>(y));
       outXyz->push_back(static_cast<float>(z));
+      ++made;
+    }
+  }
+  return made;
+}
+
+int BuildMeshScene(int targetTriangles, std::vector<float>* verts, std::vector<float>* normals,
+                   std::vector<std::uint32_t>* indices) {
+  if (!verts || !normals || !indices || targetTriangles <= 0)
+    return 0;
+  verts->clear();
+  normals->clear();
+  indices->clear();
+
+  // A quad grid: two triangles per cell, so `side` cells per axis gives 2 * side^2 triangles. The
+  // grid spans the SAME fixed plan extent as the contour scene, so raising the triangle count makes
+  // the terrain finer rather than larger — the trap TASK-039 §3 documents, where a scene that grew
+  // past the viewport benchmarked faster the bigger it got.
+  int side = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(targetTriangles) / 2.0)));
+  if (side < 1)
+    side = 1;
+  const int cols = side + 1;  // vertices per axis
+  const double stepX = kPlanExtentX / static_cast<double>(side);
+  const double stepY = kPlanExtentY / static_cast<double>(side);
+
+  verts->reserve(static_cast<size_t>(cols) * static_cast<size_t>(cols) * 3);
+  normals->reserve(static_cast<size_t>(cols) * static_cast<size_t>(cols) * 3);
+  indices->reserve(static_cast<size_t>(targetTriangles) * 3);
+
+  for (int j = 0; j < cols; ++j) {
+    const double y = static_cast<double>(j) * stepY;
+    for (int i = 0; i < cols; ++i) {
+      const double x = static_cast<double>(i) * stepX;
+      double z = 0.0, dzdx = 0.0, dzdy = 0.0;
+      TerrainAt(x, y, &z, &dzdx, &dzdy);
+      verts->push_back(static_cast<float>(x));
+      verts->push_back(static_cast<float>(y));
+      verts->push_back(static_cast<float>(z));
+      // Surface normal of z = f(x, y) is (-df/dx, -df/dy, 1), normalized. Never degenerate: the z
+      // component is 1 before normalization, so the length is at least 1.
+      const double len = std::sqrt(dzdx * dzdx + dzdy * dzdy + 1.0);
+      normals->push_back(static_cast<float>(-dzdx / len));
+      normals->push_back(static_cast<float>(-dzdy / len));
+      normals->push_back(static_cast<float>(1.0 / len));
+    }
+  }
+
+  // Emit until the target is hit exactly, rather than emitting whole cells and returning whatever
+  // that came to. A profile that measures 2,000,048 triangles is not measuring the density the
+  // decision named, and the difference is invisible in the reported p95.
+  int made = 0;
+  for (int j = 0; j < side && made < targetTriangles; ++j) {
+    for (int i = 0; i < side && made < targetTriangles; ++i) {
+      const std::uint32_t v00 = static_cast<std::uint32_t>(j * cols + i);
+      const std::uint32_t v10 = v00 + 1;
+      const std::uint32_t v01 = v00 + static_cast<std::uint32_t>(cols);
+      const std::uint32_t v11 = v01 + 1;
+      // Counter-clockwise seen from +Z, so the analytic normals above face the same way the winding
+      // does. A back-facing half of the grid would measure a mesh half of which is not shaded.
+      indices->push_back(v00);
+      indices->push_back(v10);
+      indices->push_back(v11);
+      if (++made >= targetTriangles)
+        break;
+      indices->push_back(v00);
+      indices->push_back(v11);
+      indices->push_back(v01);
       ++made;
     }
   }

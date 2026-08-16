@@ -2,6 +2,40 @@
 
 ## BUGS
 
+### [BUG-013] On a hybrid laptop GoSurvey renders on the integrated GPU — FIXED 2026-08-15
+    - Found 2026-08-15 by TASK-053's acceptance run, not by a report: the same scene measured
+      9.27 ms at 21:21 and 13.13 ms at 22:39 on an unchanged binary. `nvidia-smi` showed the
+      RTX 5060 at 0% utilisation and 12 W idle *while the benchmark ran*; the process's 3D load was
+      on the AMD 610M.
+    - Root cause: GoSurvey exports neither `NvOptimusEnablement` (NVIDIA) nor
+      `AmdPowerXpressRequestHighPerformance` (AMD). Those two exported symbols are how a hybrid
+      laptop's driver is told an application wants the discrete GPU. Without them the choice falls
+      to Windows' heuristics, which are free to answer differently between launches — which is
+      exactly what happened here.
+    - Impact on users: most field laptops are hybrid. Those users are silently getting the weak
+      GPU for a 3D CAD application. Forced onto the discrete GPU the same scenes run **6-9x
+      faster** (250k segments 9.27 -> 1.38 ms; a 2M-triangle shaded mesh 21.40 -> 1.97 ms).
+    - Impact on the spec: every REQ-100 figure ever recorded — 8.93 ms (clang), 9.27 / 9.32 ms
+      (MSVC, TASK-052) and the whole headroom sweep — is an integrated-GPU number, while
+      `project.md` §7 names an RTX 5060. See TASK-053 FINDING-3.
+    - Fix: export both symbols from a translation unit that is definitely linked (they must survive
+      the linker — `main.cpp`, `extern "C" __declspec(dllexport) DWORD NvOptimusEnablement = 1;` and
+      the AMD equivalent). ~6 lines. Verify with `nvidia-smi` showing real utilisation during BENCH,
+      not by trusting the numbers to look better.
+    - Watch out for: this changes which GPU every user's session runs on, and on some machines the
+      discrete GPU costs battery life. It is a shipped-behaviour change and wants a recorded
+      decision, which is why TASK-053 escalated it rather than fixing it in passing.
+    - **Fixed (TASK-054)** with both halves the user asked for: the exported symbols make the
+      discrete GPU the default even on a machine with no registry state, and a Settings → System
+      checkbox ("Prefer the integrated GPU") records Windows' own per-application preference to hand
+      it back, effective next launch. Measured on the reference machine with nvidia-smi as the
+      instrument: exports alone -> discrete, 1.46 ms; setting checked -> integrated, 12.42 ms;
+      unchecked -> discrete, 1.38 ms. The override was proven, not assumed — had the preference not
+      beaten the exports, the checkbox would have been decorative.
+    - Verified through the real UI, not only the API: clicking the checkbox wrote `GpuPreference=1;`
+      and unchecking wrote `=2;`. 3 regression tests (registry round-trip, clear-removes-the-value,
+      idempotence) touch only the test executable's own key and restore it; suite 332/332.
+
 ### [BUG-012] Double-clicking a .gs file opens GoSurvey empty — FIXED 2026-08-15
     - `int main()` in src/app/main.cpp took no argv, so the application could not receive a file
       path from the command line at all.
@@ -50,7 +84,19 @@
 
 ## FEATURES
 
-### [FEAT-011] BENCH has no mesh case, and its file record does not name the profile — OPEN
+### [FEAT-011] BENCH has no mesh case, and its file record does not name the profile — DONE 2026-08-15
+    - Delivered by TASK-053. `BENCH MESH [triangles] [frames]` measures a 2,000,000-triangle shaded
+      terrain (the density decided 2026-08-15), forcing Shaded for the run and restoring the user's
+      style afterwards; `bench-req100.txt` now records `profile` and `scene` lines for all three
+      cases. Six new generator tests; suite 329/329.
+    - Result: **p95 1.97 ms against 16 ms** on the RTX 5060, so REQ-100 profile (b) and REQ-064's
+      "budget met in Shaded" both close. On the integrated GPU the same scene fails at 21.40 ms,
+      which is how BUG-013 was found.
+    - Known limit, stated up front: the scene is one mesh of one part, so per-part draw-call cost
+      (a real import has hundreds) is not in this profile.
+    - Original entry follows.
+
+### [FEAT-011 detail] the gap as originally filed
     - REQ-100 defines three cost profiles. `BENCH` implements two: `BENCH [segments]` and
       `BENCH SURFACE`. There is no mesh scene and no `BENCH MESH`, so profile (b) — shaded meshes at
       the REQ-063 density — has never been measured and cannot be. TASK-041 §7 called this out on

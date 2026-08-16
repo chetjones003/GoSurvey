@@ -46,13 +46,15 @@ when" and the requirements it closes.
 - **Goal:** Smooth editing and orbiting at target scene size
 - **Delivers:** REQ-100
 - **Done when:** the benchmark scene holds the frame budget on reference hardware
-- **Status:** **re-measured under MSVC 2026-08-15** (TASK-052) — p95 **9.27 ms** at 250,000 segments
-  and **9.32 ms** on the surface profile, both against the 16 ms budget, on the reference machine
-  recorded in `project.md` §7. Run with `BENCH` / `BENCH SURFACE`.
-  **Not fully done:** REQ-100's third profile — shaded meshes — has no bench scene, so it has never
-  been measured. The milestone is met for the geometry the project actually ships today and is left
-  open on that gap rather than closed over it (TRACKER FEAT-011).
-  The 2026-08-12 figure (8.93 ms) was a clang build and is superseded.
+- **Status:** **all three profiles measured 2026-08-15** (TASK-052, TASK-053). On the RTX 5060:
+  segments **1.38 ms**, shaded meshes **1.97 ms** at 2M triangles, surface **10.28 ms** — all against
+  16 ms. Run with `BENCH` / `BENCH SURFACE` / `BENCH MESH`.
+  **Milestone complete**, with the device question settled the same day it was found: until
+  2026-08-15 every figure had been measured on the machine's *integrated* GPU rather than the
+  RTX 5060 the spec names, because the application never asked for the discrete part. BUG-013
+  (TASK-054) fixed that, and the budget is judged on the RTX 5060 with the integrated figures kept
+  as a documented floor — on which the mesh profile fails at 21.40 ms.
+  The 2026-08-12 figure (8.93 ms) was a clang build on the integrated GPU and is superseded twice.
 
 > Add milestones until the in-scope list in `project.md` is covered. Stop there.
 
@@ -200,7 +202,7 @@ M1 walking skeleton
 | Risk | Impact | Mitigation / spike |
 |------|--------|--------------------|
 | `<Reference data unavailable for tolerance test>` | blocks M2 verification | `<obtain dataset / build synthetic reference>` |
-| GL driver variance across target GPUs | perf budget unmet on some HW | **Mitigated 2026-08-12**: reference hardware is defined (`project.md` §7) and REQ-100 is measurable on demand via `BENCH`. **Residual risk grew 2026-08-15** (TASK-052): under the pinned MSVC toolchain the budget holds to 500k segments and fails at 750k, so the headroom is **~2×** the required density, not the 3–4× measured under clang. A GPU roughly half as fast as the reference machine is at the budget, not comfortably inside it |
+| GL driver variance across target GPUs | perf budget unmet on some HW | **Mitigated 2026-08-12**: reference hardware is defined (`project.md` §7) and REQ-100 is measurable on demand via `BENCH`. **Rewritten 2026-08-15** (TASK-053): the risk turned out to be real and already happening, just not where this row was looking. The variance was not across users' GPUs but *within the reference machine* — the application had been rendering on its integrated GPU the whole time (BUG-013). On the RTX 5060 the headroom is very large (1M segments at 2.30 ms, 2M shaded triangles at 1.97 ms); on the integrated GPU the mesh profile fails outright. So the honest statement is: **GoSurvey's performance depends on which GPU it lands on, and today it does not choose.** **BUG-013 fixed the same day** (TASK-054): the application now requests the discrete GPU and a setting hands it back for battery life, so the 6-9x factor is chosen rather than suffered. Residual risk, now quantified rather than vague: on a machine with no discrete GPU the mesh profile misses the budget at 21.40 ms, which is REQ-100's documented floor |
 | The installer is unsigned (ADR-029, D5) | SmartScreen warns on every download, and an auto-offered update is exactly the context where users are least equipped to judge that warning | Accepted for now. The pipeline carries a no-op signing step so a cert drops in without restructuring. Since the 2023 CA/Browser hardware-key rules this needs a cloud signing service (Azure Trusted Signing / SSL.com eSigner / DigiCert KeyLocker), not a `.pfx` in a CI secret — pricing and eligibility to be confirmed when pursued |
 | The release pipeline runs on hardware we do not control | A GitHub runner image change (Inno Setup version, MSVC toolset, Windows SDK) can break releases without a commit touching the repo | Pin what can be pinned; the version gate means a broken pipeline fails loudly on master without publishing a bad release. Residual risk stands: REQ-200 reproducibility is now asserted against a moving runner image |
 | `<…>` | `<…>` | `<…>` |

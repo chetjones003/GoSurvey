@@ -18,6 +18,15 @@
   TASK-049 debt (0b), and the REQ-058 sign-off text, which quoted the invalidated 8.93 ms.
 - Owning subsystem: none — nothing is built here. The deliverable is a number and its record.
 
+> **SUPERSEDED THE SAME DAY — every number in this task was measured on the wrong GPU.**
+> TASK-053's acceptance run found that GoSurvey had been rendering on the machine's integrated
+> Radeon 610M, not the RTX 5060 `project.md` §7 names, because it exports neither
+> `NvOptimusEnablement` nor `AmdPowerXpressRequestHighPerformance` (BUG-013). On the RTX 5060 the
+> same scenes measure 1.38 ms (segments) and 10.28 ms (surface) rather than 9.27 and 9.32.
+> The reasoning in this task stands and the runs were real; the device they ran on was not the one
+> claimed. The headroom correction below (3–4× → ~2×) is likewise an integrated-GPU property.
+> Kept unedited as the audit trail — see TASK-053 §8, FINDING-3.
+
 ## 2. Result
 
 **Both measurable profiles PASS under MSVC.**

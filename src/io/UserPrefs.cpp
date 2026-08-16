@@ -72,6 +72,8 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
     st.angleDisplayBaseDeg = s["angleDisplayBaseDeg"].get<double>();
   if (s.contains("systemHardwareAcceleration") && s["systemHardwareAcceleration"].is_boolean())
     st.systemHardwareAcceleration = s["systemHardwareAcceleration"].get<bool>();
+  if (s.contains("systemPreferIntegratedGpu") && s["systemPreferIntegratedGpu"].is_boolean())
+    st.systemPreferIntegratedGpu = s["systemPreferIntegratedGpu"].get<bool>();
   if (s.contains("gfxSmoothLineDisplay") && s["gfxSmoothLineDisplay"].is_boolean())
     st.gfxSmoothLineDisplay = s["gfxSmoothLineDisplay"].get<bool>();
   if (s.contains("gfxAcceleratedFontDisplay") && s["gfxAcceleratedFontDisplay"].is_boolean())
@@ -305,6 +307,7 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["angleDisplayClockwise"]       = st.angleDisplayClockwise;
   s["angleDisplayBaseDeg"]         = st.angleDisplayBaseDeg;
   s["systemHardwareAcceleration"]  = st.systemHardwareAcceleration;
+  s["systemPreferIntegratedGpu"]   = st.systemPreferIntegratedGpu;
   s["gfxSmoothLineDisplay"]        = st.gfxSmoothLineDisplay;
   s["gfxAcceleratedFontDisplay"]   = st.gfxAcceleratedFontDisplay;
   s["gfxVideoMemoryCachingLevel"]  = st.gfxVideoMemoryCachingLevel;
