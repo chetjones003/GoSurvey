@@ -291,6 +291,8 @@ jobs:
             notes       = $notes
           }
           $manifest | ConvertTo-Json -Depth 4 | Out-File -Encoding utf8 installer\Output\latest.json
+          # Same text, as Markdown, for the GitHub release page body (see the publish steps).
+          Set-Content -Path installer\Output\release-body.md -Value $notes -Encoding UTF8
           "installer=$($installer.FullName)" | Out-File $env:GITHUB_OUTPUT -Append
           "name=$($installer.Name)"          | Out-File $env:GITHUB_OUTPUT -Append
           Get-Content installer\Output\latest.json
@@ -340,7 +342,11 @@ jobs:
             gh release delete-asset channel-beta $asset --yes
           }
 
-          gh release edit channel-beta --title "GoSurvey ${{ steps.ver.outputs.full }} (beta)"
+          # Title AND body refreshed each push, so the rolling release page describes the build
+          # currently attached to it rather than whichever one created it.
+          gh release edit channel-beta `
+            --title "GoSurvey ${{ steps.ver.outputs.full }} (beta)" `
+            --notes-file installer\Output\release-body.md
 
       - name: Publish the stable release
         if: github.ref_name == 'master' && steps.gate.outputs.publish == 'true'
@@ -350,11 +356,18 @@ jobs:
         run: |
           # `v` prefix, normalising the inconsistency in the existing tags (v0.1 ... v0.3.0, then
           # a bare 0.4.0). The old tag is left alone rather than rewriting published history.
+          # The release BODY is the authored RELEASE_NOTES.md section, not --generate-notes.
+          # The releases page is where the README sends users to download, so it is a
+          # user-facing surface: auto-generated notes would put the commit log in front of
+          # surveyors, which is the same mistake the manifest notes already had to be rescued
+          # from. The manifest step wrote the notes to a file; files persist across steps in a
+          # job, which avoids both the multi-line step-output delimiter dance and any chance of
+          # notes text being interpolated into this script.
           gh release create "v${{ steps.ver.outputs.version }}" `
             "installer\Output\${{ steps.manifest.outputs.name }}" `
             "installer\Output\latest.json" `
             --title "GoSurvey ${{ steps.ver.outputs.version }}" `
-            --generate-notes
+            --notes-file installer\Output\release-body.md
 
       - name: Report that the version gate held
         if: github.ref_name == 'master' && steps.gate.outputs.publish == 'false'
