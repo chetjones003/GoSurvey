@@ -153,7 +153,33 @@ img{max-width:100%;display:block}
   margin-bottom:1.5rem;color:var(--ink-3);
   font-family:"IBM Plex Mono",monospace;font-size:.78rem;letter-spacing:.08em;
 }
-.bearing::after{content:"";flex:1;height:1px;background:var(--rule);}
+.bearing::after{content:"";flex:1;height:1px;background:var(--rule);order:9}
+
+/* The traverse call. Looks like part of the page until you touch it — no badge, no tooltip,
+   just a pointer cursor and a hairline that firms up on hover. */
+.call{
+  font:inherit;color:inherit;background:none;border:0;padding:0;
+  cursor:pointer;white-space:nowrap;
+  border-bottom:1px dotted transparent;transition:color .15s,border-color .15s;
+}
+.call:hover,.call:focus-visible{color:var(--ink-2);border-bottom-color:var(--rule-strong)}
+.call.is-closed{color:var(--accent);border-bottom-color:transparent}
+
+.trav{color:var(--ink-3);overflow:visible;flex:none}
+.trav .leg{
+  stroke:currentColor;stroke-width:1.6;stroke-linecap:round;
+  /* Each leg is drawn on by animating its dash offset; hidden legs sit at full offset. */
+  stroke-dasharray:var(--len,120);stroke-dashoffset:var(--len,120);
+  transition:stroke-dashoffset .45s ease-out;
+}
+.trav .leg.drawn{stroke-dashoffset:0}
+.trav.is-closed{color:var(--accent)}
+.trav #trav-fill{transition:opacity .5s ease-out}
+.trav.is-closed #trav-fill{opacity:.14}
+@media (prefers-reduced-motion:reduce){
+  .trav .leg{transition:none}
+  .trav #trav-fill{transition:none}
+}
 
 .btn{
   display:inline-flex;align-items:center;gap:.55rem;
@@ -282,7 +308,17 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
   <section class="hero">
     <div class="wrap hero-grid">
       <div>
-        <p class="bearing mono">N 45°30&#39;15&quot; E &nbsp;·&nbsp; 604.35&#39;</p>
+        <p class="bearing mono">
+          <button type="button" id="call" class="call" aria-live="polite"
+                  aria-label="Traverse call. Activate to walk the traverse.">KCP2&#8202;→&#8202;KCP3 &nbsp;N 09°20&#39;12&quot; E &nbsp;·&nbsp; 696.16&#39;</button>
+          <svg id="trav" class="trav" viewBox="0 0 88 88" width="42" height="42" aria-hidden="true" hidden>
+            <polygon id="trav-fill" points="67.1,82 79.6,6 6,14.2" fill="currentColor" opacity="0"/>
+            <line class="leg" data-leg="0" x1="67.1" y1="82"   x2="79.6" y2="6"/>
+            <line class="leg" data-leg="1" x1="79.6" y1="6"    x2="6"    y2="14.2"/>
+            <line class="leg" data-leg="2" x1="6"    y1="14.2" x2="67.1" y2="82"/>
+            <circle cx="67.1" cy="82" r="2.6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          </svg>
+        </p>
         <h1>Get to work&hellip;<br>that&rsquo;s it</h1>
         <p class="lede">
           A fast, modern CAD platform built for surveyors — bearings and distances,
@@ -487,6 +523,126 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
     </span>
   </div>
 </footer>
+
+<script>
+/* ---------------------------------------------------------------------------
+   The traverse call.
+   Hover the hero and the call becomes a live bearing and distance from the
+   point of beginning to your cursor — the same readout the application keeps in
+   its status bar. Click it and you walk the real traverse leg by leg until it
+   closes.
+   The numbers are not invented: they are the reduced legs of "OCAPS TRAV" in
+   samples/closed_loop_trav.fbk, a Leica TS12 job that closes at 1:252,482.
+--------------------------------------------------------------------------- */
+(function(){
+  "use strict";
+
+  var call = document.getElementById("call");
+  var trav = document.getElementById("trav");
+  var hero = document.querySelector(".hero");
+  if(!call || !trav || !hero) return;
+
+  // dE/dN are what actually close; the azimuths are shown as quadrant bearings the way a
+  // deed would write them.
+  var LEGS = [
+    {from:"KCP2", to:"KCP3", bearing:"N 09°20'12\" E", dist:"696.16"},
+    {from:"KCP3", to:"KCP1", bearing:"S 83°39'50\" W", dist:"669.11"},
+    {from:"KCP1", to:"KCP2", bearing:"S 42°00'10\" E", dist:"825.03"}
+  ];
+  var CLOSURE = "CLOSED · misclosure 0.0087' · 1:252,482";
+  var HAIR = " ";      // hair space, so the arrow sits tight to the station names
+  var STEP_IDLE = 0;
+  var CLOSED = LEGS.length;
+
+  var legEls = [].slice.call(trav.querySelectorAll(".leg"));
+  legEls.forEach(function(el){
+    // Give each leg its own dash length so the draw-on covers exactly that segment.
+    var len = Math.hypot(el.x2.baseVal.value - el.x1.baseVal.value,
+                         el.y2.baseVal.value - el.y1.baseVal.value);
+    el.style.setProperty("--len", len.toFixed(2));
+  });
+
+  var step = STEP_IDLE;
+  var walking = false;
+
+  function legText(i){
+    return LEGS[i].from + HAIR + "→" + HAIR + LEGS[i].to +
+           "  " + LEGS[i].bearing + "  ·  " + LEGS[i].dist + "'";
+  }
+
+  function paint(){
+    // `i < step`, not `<=`: the call on screen is the one you are ABOUT to walk, so the legs
+    // drawn are the ones already behind you. At step 1 you have walked leg 0 and are looking at
+    // leg 1's call.
+    legEls.forEach(function(el,i){ el.classList.toggle("drawn", walking && i < step); });
+    var closed = walking && step >= CLOSED;
+    trav.classList.toggle("is-closed", closed);
+    call.classList.toggle("is-closed", closed);
+    // setAttribute, NOT `.hidden`: `hidden` is an HTMLElement property and this is an
+    // SVGElement, which does not implement it. Assigning `.hidden` on an SVG sets a stray JS
+    // property, leaves the content attribute in place, and the drawing stays display:none while
+    // every check reports hidden === false.
+    if(walking) trav.removeAttribute("hidden");
+    else        trav.setAttribute("hidden", "");
+  }
+
+  function showStep(){
+    call.textContent = (step >= CLOSED) ? CLOSURE : legText(step);
+    paint();
+  }
+
+  // --- click / keyboard: walk the traverse -------------------------------
+  call.addEventListener("click", function(){
+    if(step >= CLOSED){
+      // Past the closure: back to standing at the point of beginning, drawing cleared.
+      step = STEP_IDLE;
+      walking = false;
+    } else {
+      step += 1;
+      walking = true;
+    }
+    showStep();
+  });
+
+  // --- hover: live readout from the point of beginning -------------------
+  function dms(d){
+    var deg = Math.floor(d), mf = (d - deg) * 60, min = Math.floor(mf),
+        sec = Math.round((mf - min) * 60);
+    if(sec === 60){ sec = 0; min++; }
+    if(min === 60){ min = 0; deg++; }
+    function p(n){ return (n < 10 ? "0" : "") + n; }
+    return p(deg) + "°" + p(min) + "'" + p(sec) + '"';
+  }
+  function quadrant(dx, dyUp){
+    // Survey convention: azimuth clockwise from north, then split into quadrants.
+    var az = Math.atan2(dx, dyUp) * 180 / Math.PI;
+    if(az < 0) az += 360;
+    if(az <= 90)  return "N " + dms(az)       + " E";
+    if(az <= 180) return "S " + dms(180 - az) + " E";
+    if(az <= 270) return "S " + dms(az - 180) + " W";
+    return              "N " + dms(360 - az) + " W";
+  }
+
+  hero.addEventListener("pointermove", function(e){
+    // Mouse only: there is no hover on touch, and firing this mid-drag would be noise.
+    if(e.pointerType !== "mouse" || walking) return;
+    var r = call.getBoundingClientRect();
+    var dx    = e.clientX - r.left;          // east is +x
+    var dyUp  = r.top + r.height/2 - e.clientY;  // north is up, so screen y inverts
+    var feet  = Math.hypot(dx, dyUp);
+    if(feet < 8){ return; }                  // too close to the origin for a meaningful call
+    call.textContent = quadrant(dx, dyUp) + "  ·  " + feet.toFixed(2) + "'";
+  });
+
+  hero.addEventListener("pointerleave", function(){
+    if(walking) return;
+    step = STEP_IDLE;
+    showStep();
+  });
+
+  showStep();   // paints the idle call and leaves the drawing hidden until someone walks
+})();
+</script>
 
 <script>
 (function(){
