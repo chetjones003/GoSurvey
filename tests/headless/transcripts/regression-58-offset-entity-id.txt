@@ -1,0 +1,37 @@
+# Regression test for issue #58 — OFFSET must not give the copy its source's id.
+#
+# REQ-076: an entity id is stable and never reused within a drawing.
+# Architecture §11.9: a cross-object reference IS the id, so an id that names two
+# entities makes every such reference ambiguous.
+#
+# This transcript is the fuzzer's own minimized reproducer (seed 2004, 155 lines
+# reduced to 9 automatically), kept verbatim rather than tidied. It is the
+# REQ-203 promise in practice: a bug reproduced once becomes a file that runs on
+# every build.
+#
+# The UNDO matters and is not incidental — it is what leaves the drawing with a
+# single line whose id is 1 while nextEntityId has already moved past it, so the
+# duplicate that OFFSET creates is visible rather than masked by a later sweep.
+#
+# Fails before the fix with:
+#   entity-ids: id 1 is used by both userLineAttrs[0] and userLineAttrs[1]
+
+NEW
+CMD LINE
+CMD 100,0
+CMD 100,80
+CMD 0,80
+UNDO
+CMD OFFSET
+PICK 100 40
+PICK 50 0
+
+# The offset copy must actually EXIST. Without this line the test would also pass
+# if OFFSET silently stopped producing anything — an invariant about ids cannot
+# fire when there is no second entity to collide with, so "no violation" would be
+# a false green. One original plus one offset copy.
+EXPECT LINES 2
+
+# Explicit, though the driver already checks after every step: the point of this
+# file is the id invariant specifically.
+CHECK ALL

@@ -5107,6 +5107,32 @@ static float SignedSideCircle(float cx, float cy, float r, float px, float py) {
   return d - r;
 }
 
+/// Append the attribute row for an OFFSET copy of the entity at \p srcIndex within \p attrs.
+///
+/// The copy **inherits** layer, colour, linetype, lineweight and transparency from its source —
+/// that is what makes it read as an offset of that entity rather than a stranger on the current
+/// layer. It must **not** inherit the source's id.
+///
+/// Ids are unique and never reused within a drawing (REQ-076), and architecture §11.9 builds on
+/// that: a reference from one object to another *is* an id, so an id naming two entities makes
+/// every such reference ambiguous. \ref EnsureEntityIds only fills ids that are 0, so a copied
+/// non-zero id is never repaired — it persists to `.gs` and is permanent. Clearing it here hands
+/// assignment back to the sweep, exactly as the clipboard does via \ref ClearEntityIdsFrom
+/// (see CopySelectionToClipboard). Every caller bumps the GPU revision the sweep is gated on, so
+/// the fresh id is assigned before anything can observe or save the entity.
+///
+/// One helper rather than the same three lines in five places, deliberately: the defect this fixes
+/// (issue #58) was five copies of a correct-looking pattern that were all missing the same step.
+static void PushOffsetCopyAttrs(AppCommandState& st, std::vector<EntityAttributes>& attrs,
+                                int srcIndex) {
+  if (srcIndex >= 0 && static_cast<size_t>(srcIndex) < attrs.size()) {
+    attrs.push_back(attrs[static_cast<size_t>(srcIndex)]);
+    attrs.back().id = 0;  // REQ-076: assigned fresh by EnsureEntityIds, never inherited
+  } else {
+    attrs.push_back(MakeNewEntityAttrs(st));  // already id 0
+  }
+}
+
 static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std::vector<std::string>& log) {
   const size_t k = static_cast<size_t>(lineIx) * 6;
   if (k + 5 >= st.userLinesFlat.size())
@@ -5138,10 +5164,7 @@ static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std
   st.userLinesFlat.push_back(ox1);
   st.userLinesFlat.push_back(oy1);
   st.userLinesFlat.push_back(z1);
-  if (static_cast<size_t>(lineIx) < st.userLineAttrs.size())
-    st.userLineAttrs.push_back(st.userLineAttrs[static_cast<size_t>(lineIx)]);
-  else
-    st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+  PushOffsetCopyAttrs(st, st.userLineAttrs, lineIx);
   BumpCadGpuCache(st);
   return true;
 }
@@ -5164,10 +5187,7 @@ static bool CommitOffsetCircle(AppCommandState& st, int ci, float signedD, std::
   st.userCirclesCxCyZR.push_back(cy);
   st.userCirclesCxCyZR.push_back(cz);  // the offset copy stays on the source circle's plane
   st.userCirclesCxCyZR.push_back(nr);
-  if (static_cast<size_t>(ci) < st.userCircleAttrs.size())
-    st.userCircleAttrs.push_back(st.userCircleAttrs[static_cast<size_t>(ci)]);
-  else
-    st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
+  PushOffsetCopyAttrs(st, st.userCircleAttrs, ci);
   BumpCadGpuCache(st);
   return true;
 }
@@ -5185,10 +5205,7 @@ static bool CommitOffsetArc(AppCommandState& st, int ai, float signedD, std::vec
   CadArc o = a;
   o.r = nr;
   st.userArcs.push_back(o);
-  if (static_cast<size_t>(ai) < st.userArcAttrs.size())
-    st.userArcAttrs.push_back(st.userArcAttrs[static_cast<size_t>(ai)]);
-  else
-    st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+  PushOffsetCopyAttrs(st, st.userArcAttrs, ai);
   BumpCadGpuCache(st);
   return true;
 }
@@ -5212,10 +5229,7 @@ static bool CommitOffsetEllipse(AppCommandState& st, int ei, float signedD, std:
   o.majVx *= f;
   o.majVy *= f;
   st.userEllipses.push_back(o);
-  if (static_cast<size_t>(ei) < st.userEllAttrs.size())
-    st.userEllAttrs.push_back(st.userEllAttrs[static_cast<size_t>(ei)]);
-  else
-    st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
+  PushOffsetCopyAttrs(st, st.userEllAttrs, ei);
   BumpCadGpuCache(st);
   return true;
 }
@@ -5327,10 +5341,7 @@ static bool CommitOffsetPolyline(AppCommandState& st, int pi, float signedD, std
   }
   st.userPolylineOffsets.push_back(baseVert + static_cast<int>(out.size()));
   st.userPolylineClosed.push_back(closed ? 1u : 0u);
-  if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
-    st.userPolylineAttrs.push_back(st.userPolylineAttrs[static_cast<size_t>(pi)]);
-  else
-    st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
+  PushOffsetCopyAttrs(st, st.userPolylineAttrs, pi);
   BumpCadGpuCache(st);
   return true;
 }
