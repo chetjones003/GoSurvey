@@ -146,23 +146,33 @@ img{max-width:100%;display:block}
 .hero .lede{font-size:var(--step-1);color:var(--ink-2);max-width:34ch;margin-top:1.15rem}
 .hero-cta{display:flex;flex-wrap:wrap;gap:.75rem;margin-top:2rem;align-items:center}
 
-/* The bearing line: a real surveyor's call, used as the page's opening mark.
-   It is the vernacular of the subject rather than decoration. */
-.bearing{
-  display:flex;align-items:center;gap:.75rem;
-  margin-bottom:1.5rem;color:var(--ink-3);
-  font-family:"IBM Plex Mono",monospace;font-size:.78rem;letter-spacing:.08em;
+/* Live readout — the site's status bar.
+   Fixed to the corner so the reading follows you down the page, the way the application keeps
+   its coordinate readout pinned to the bottom of the window. */
+.readout{
+  position:fixed;left:0;bottom:0;z-index:40;
+  display:flex;align-items:center;gap:.55rem;
+  padding:.4rem .8rem;
+  background:color-mix(in srgb,var(--surface) 90%,transparent);
+  backdrop-filter:blur(8px);
+  border-top:1px solid var(--rule);
+  border-right:1px solid var(--rule);
+  border-top-right-radius:3px;
+  font-family:"IBM Plex Mono",ui-monospace,Consolas,monospace;
+  font-size:.74rem;letter-spacing:.06em;color:var(--ink-3);
+  font-variant-numeric:tabular-nums;
 }
-.bearing::after{content:"";flex:1;height:1px;background:var(--rule);order:9}
+/* No pointer, no reading. Hidden rather than left showing a frozen zero it can never update. */
+@media (hover:none){.readout{display:none}}
 
-/* The traverse call. Looks like part of the page until you touch it — no badge, no tooltip,
-   just a pointer cursor and a hairline that firms up on hover. */
+/* Nothing announces that this is clickable until you put the pointer on it — then it lights up
+   in the accent, which is the hint. */
 .call{
   font:inherit;color:inherit;background:none;border:0;padding:0;
   cursor:pointer;white-space:nowrap;
   border-bottom:1px dotted transparent;transition:color .15s,border-color .15s;
 }
-.call:hover,.call:focus-visible{color:var(--ink-2);border-bottom-color:var(--rule-strong)}
+.call:hover,.call:focus-visible{color:var(--accent);border-bottom-color:var(--accent)}
 .call.is-closed{color:var(--accent);border-bottom-color:transparent}
 
 .trav{color:var(--ink-3);overflow:visible;flex:none}
@@ -303,22 +313,25 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
   </div>
 </header>
 
+<!-- Live readout. Fixed like the application's own status bar, which is where a surveyor
+     expects a coordinate readout to live: always there, never in the way. -->
+<div class="readout" id="readout">
+  <button type="button" id="call" class="call"
+          aria-label="Live bearing and distance to the pointer. Activate to walk a survey traverse.">N 00°00&#39;00&quot; E &nbsp;·&nbsp; 0.00&#39;</button>
+  <svg id="trav" class="trav" viewBox="0 0 88 88" width="30" height="30" aria-hidden="true" hidden>
+    <polygon id="trav-fill" points="67.1,82 79.6,6 6,14.2" fill="currentColor" opacity="0"/>
+    <line class="leg" x1="67.1" y1="82"   x2="79.6" y2="6"/>
+    <line class="leg" x1="79.6" y1="6"    x2="6"    y2="14.2"/>
+    <line class="leg" x1="6"    y1="14.2" x2="67.1" y2="82"/>
+    <circle cx="67.1" cy="82" r="2.6" fill="none" stroke="currentColor" stroke-width="1.4"/>
+  </svg>
+</div>
+
 <main id="top">
 
   <section class="hero">
     <div class="wrap hero-grid">
       <div>
-        <p class="bearing mono">
-          <button type="button" id="call" class="call" aria-live="polite"
-                  aria-label="Traverse call. Activate to walk the traverse.">KCP2&#8202;→&#8202;KCP3 &nbsp;N 09°20&#39;12&quot; E &nbsp;·&nbsp; 696.16&#39;</button>
-          <svg id="trav" class="trav" viewBox="0 0 88 88" width="42" height="42" aria-hidden="true" hidden>
-            <polygon id="trav-fill" points="67.1,82 79.6,6 6,14.2" fill="currentColor" opacity="0"/>
-            <line class="leg" data-leg="0" x1="67.1" y1="82"   x2="79.6" y2="6"/>
-            <line class="leg" data-leg="1" x1="79.6" y1="6"    x2="6"    y2="14.2"/>
-            <line class="leg" data-leg="2" x1="6"    y1="14.2" x2="67.1" y2="82"/>
-            <circle cx="67.1" cy="82" r="2.6" fill="none" stroke="currentColor" stroke-width="1.4"/>
-          </svg>
-        </p>
         <h1>Get to work&hellip;<br>that&rsquo;s it</h1>
         <p class="lede">
           A fast, modern CAD platform built for surveyors — bearings and distances,
@@ -539,15 +552,14 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
 
   var call = document.getElementById("call");
   var trav = document.getElementById("trav");
-  var hero = document.querySelector(".hero");
-  if(!call || !trav || !hero) return;
+  if(!call || !trav) return;
 
   // dE/dN are what actually close; the azimuths are shown as quadrant bearings the way a
   // deed would write them.
   var LEGS = [
-    {from:"KCP2", to:"KCP3", bearing:"N 09°20'12\" E", dist:"696.16"},
-    {from:"KCP3", to:"KCP1", bearing:"S 83°39'50\" W", dist:"669.11"},
-    {from:"KCP1", to:"KCP2", bearing:"S 42°00'10\" E", dist:"825.03"}
+    {from:"CP1", to:"CP2", bearing:"N 09°20'12\" E", dist:"696.16"},
+    {from:"CP2", to:"CP3", bearing:"S 83°39'50\" W", dist:"669.11"},
+    {from:"CP3", to:"CP1", bearing:"S 42°00'10\" E", dist:"825.03"}
   ];
   var CLOSURE = "CLOSED · misclosure 0.0087' · 1:252,482";
   var HAIR = " ";      // hair space, so the arrow sits tight to the station names
@@ -563,7 +575,7 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
   });
 
   var step = STEP_IDLE;
-  var walking = false;
+  var walking = false;   // false until the first click: the traverse is never shown unasked
 
   function legText(i){
     return LEGS[i].from + HAIR + "→" + HAIR + LEGS[i].to +
@@ -623,24 +635,25 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
     return              "N " + dms(360 - az) + " W";
   }
 
-  hero.addEventListener("pointermove", function(e){
+  // Listening on the document, not one section: the readout is pinned to the viewport, so it
+  // should keep reading wherever you are on the page.
+  //
+  // The point of beginning is the centre of the viewport rather than the readout's own corner.
+  // From a corner almost everything on screen falls in one quadrant and the reading barely
+  // changes character; from the centre all four are reachable, so it actually moves through
+  // N-E, S-E, S-W and N-W as you cross the page.
+  document.addEventListener("pointermove", function(e){
     // Mouse only: there is no hover on touch, and firing this mid-drag would be noise.
     if(e.pointerType !== "mouse" || walking) return;
-    var r = call.getBoundingClientRect();
-    var dx    = e.clientX - r.left;          // east is +x
-    var dyUp  = r.top + r.height/2 - e.clientY;  // north is up, so screen y inverts
-    var feet  = Math.hypot(dx, dyUp);
-    if(feet < 8){ return; }                  // too close to the origin for a meaningful call
-    call.textContent = quadrant(dx, dyUp) + "  ·  " + feet.toFixed(2) + "'";
-  });
+    var dx   = e.clientX - window.innerWidth / 2;      // east is +x
+    var dyUp = window.innerHeight / 2 - e.clientY;     // north is up, so screen y inverts
+    var feet = Math.hypot(dx, dyUp);
+    if(feet < 8) return;                               // too near the origin to bear a call
+    call.textContent = quadrant(dx, dyUp) + "  ·  " + feet.toFixed(2) + "'";
+  }, {passive:true});
 
-  hero.addEventListener("pointerleave", function(){
-    if(walking) return;
-    step = STEP_IDLE;
-    showStep();
-  });
-
-  showStep();   // paints the idle call and leaves the drawing hidden until someone walks
+  // No initial paint: the readout keeps the zeroed reading it ships with until the pointer
+  // moves, and the traverse stays out of sight until someone clicks for it.
 })();
 </script>
 
