@@ -83,6 +83,10 @@
 
 *,*::before,*::after{box-sizing:border-box}
 html{-webkit-text-size-adjust:100%}
+/* The UA sheet hides [hidden] with display:none, which ANY author display rule outranks —
+   `.tb{display:grid}` kept the beta block on screen after JS hid it, next to the note
+   explaining its absence. Restore the attribute's meaning for every element. */
+[hidden]{display:none !important}
 body{
   margin:0;
   background:var(--paper);
