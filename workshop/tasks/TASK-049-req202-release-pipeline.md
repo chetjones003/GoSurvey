@@ -196,8 +196,14 @@ ASSUMPTION-3: `github.run_number` is monotonically increasing per workflow, maki
                           never exercised it — is gone, because MSVC is now the only compiler
                           either side uses. Local build/ reconfigured and verified: 248/248,
                           309/309.
-                          (0b) **REQ-100's recorded p95 (8.93 ms) is now invalid** — it was
-                          measured on a clang build. Needs a `BENCH` re-run under MSVC.
+                          (0b) ~~**REQ-100's recorded p95 (8.93 ms) is now invalid** — it was
+                          measured on a clang build. Needs a `BENCH` re-run under MSVC.~~
+                          **CLEARED 2026-08-15** by TASK-052: re-measured on the reference machine
+                          under MSVC at **p95 9.27 ms** (segments) and **9.32 ms** (surface), both
+                          inside the 16 ms budget. The required density barely moved; the *headroom*
+                          did — 750k segments passed under clang and fails under MSVC, so the
+                          "3–4× headroom" claim was corrected to ~2× across the spec and the roadmap
+                          risk table. That correction is the real content of this debt item.
                           (1) `ilammy/msvc-dev-cmd@v1` is a third-party action on a moving tag;
                           SHA-pin it if the supply-chain surface matters.
                           (2) The signing step is a deliberate no-op (ADR-029 D5).

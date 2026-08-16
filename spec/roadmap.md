@@ -46,8 +46,13 @@ when" and the requirements it closes.
 - **Goal:** Smooth editing and orbiting at target scene size
 - **Delivers:** REQ-100
 - **Done when:** the benchmark scene holds the frame budget on reference hardware
-- **Status:** **done 2026-08-12** — p95 8.93 ms against the 16 ms budget at 250,000 segments under
-  continuous orbit, on the reference machine recorded in `project.md` §7. Run with `BENCH`.
+- **Status:** **re-measured under MSVC 2026-08-15** (TASK-052) — p95 **9.27 ms** at 250,000 segments
+  and **9.32 ms** on the surface profile, both against the 16 ms budget, on the reference machine
+  recorded in `project.md` §7. Run with `BENCH` / `BENCH SURFACE`.
+  **Not fully done:** REQ-100's third profile — shaded meshes — has no bench scene, so it has never
+  been measured. The milestone is met for the geometry the project actually ships today and is left
+  open on that gap rather than closed over it (TRACKER FEAT-011).
+  The 2026-08-12 figure (8.93 ms) was a clang build and is superseded.
 
 > Add milestones until the in-scope list in `project.md` is covered. Stop there.
 
@@ -123,15 +128,19 @@ A lightweight board that complements the milestones. Keep each column honest.
 - **Done when:** a real topo's points build a contoured surface with breaklines honoured, slope
   arrows show where water goes, cut/fill against a proposed surface reports a hand-verifiable
   volume, and REQ-100 holds in the surface profile.
-- **Status:** **steps 1–2 done.**
+- **Status:** **steps 1–3 done.**
   - Step 1 — REQ-076 / ADR-027 (TASK-044), **2026-08-12**: every entity carries a stable,
     never-reused id, cross-object references are by id, and the `labelMtextAnnIndex` fix-up sprawl
     is deleted. Legacy `.gs` label migration verified against a real legacy file.
   - Step 2 — REQ-066 + REQ-067 (TASK-045), **2026-08-15**: points carry a raw description, and
     named point groups resolve by rule (id ranges / description / raw description / picks, combined
     as a union) with a live member count in the manager.
-  - Step 3 — REQ-068, the surface entity itself, is next. It is the first step that puts a surface
-    on screen, and it carries the REQ-100 surface bench case.
+  - Step 3 — REQ-068 (TASK-046), **2026-08-15**: point groups triangulate into a surface entity that
+    stores, saves, selects and renders, with the triangulator written in-tree. Held open until its
+    REQ-100 surface bench case was actually run — measured **p95 9.32 ms against 16 ms** at 100,000
+    points / 199,966 triangles under continuous orbit (TASK-052), so the budget is claimed on its
+    own profile rather than on the segment profile's behalf.
+  - Step 4 — REQ-074, spot elevation and grade readout, is next.
 - **Deliberately out of scope:** grading design objects and feature lines, contour smoothing
   (linear contours only), proximity / wall / non-destructive breaklines, surface import from
   Civil 3D, and DEM / point-cloud sources. See ADR-028.
@@ -191,7 +200,7 @@ M1 walking skeleton
 | Risk | Impact | Mitigation / spike |
 |------|--------|--------------------|
 | `<Reference data unavailable for tolerance test>` | blocks M2 verification | `<obtain dataset / build synthetic reference>` |
-| GL driver variance across target GPUs | perf budget unmet on some HW | **Mitigated 2026-08-12**: reference hardware is defined (`project.md` §7) and REQ-100 is measurable on demand via `BENCH`. Residual risk stands — the budget is only known on that one machine, and it holds to 750k segments there, so a weaker GPU has 3–4× less headroom than the figure suggests |
+| GL driver variance across target GPUs | perf budget unmet on some HW | **Mitigated 2026-08-12**: reference hardware is defined (`project.md` §7) and REQ-100 is measurable on demand via `BENCH`. **Residual risk grew 2026-08-15** (TASK-052): under the pinned MSVC toolchain the budget holds to 500k segments and fails at 750k, so the headroom is **~2×** the required density, not the 3–4× measured under clang. A GPU roughly half as fast as the reference machine is at the budget, not comfortably inside it |
 | The installer is unsigned (ADR-029, D5) | SmartScreen warns on every download, and an auto-offered update is exactly the context where users are least equipped to judge that warning | Accepted for now. The pipeline carries a no-op signing step so a cert drops in without restructuring. Since the 2023 CA/Browser hardware-key rules this needs a cloud signing service (Azure Trusted Signing / SSL.com eSigner / DigiCert KeyLocker), not a `.pfx` in a CI secret — pricing and eligibility to be confirmed when pursued |
 | The release pipeline runs on hardware we do not control | A GitHub runner image change (Inno Setup version, MSVC toolset, Windows SDK) can break releases without a commit touching the repo | Pin what can be pinned; the version gate means a broken pipeline fails loudly on master without publishing a bad release. Residual risk stands: REQ-200 reproducibility is now asserted against a moving runner image |
 | `<…>` | `<…>` | `<…>` |

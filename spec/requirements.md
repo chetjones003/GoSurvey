@@ -1363,7 +1363,8 @@ requirements is a planning failure, not a sign of rigor.
   **every entity type** snapping, previewing and committing at the correct elevation (TASK-036
   closed GAP-1/GAP-3, fourteen defects across six pipeline stages); screen-facing snap glyphs
   (TASK-037 closed GAP-2); the suite green; and the REQ-100 frame budget measured at p95 8.93 ms
-  against 16 ms (TASK-039).
+  against 16 ms (TASK-039) — **re-measured under MSVC 2026-08-15 at p95 9.27 ms, still met**
+  (TASK-052).
 - Revisions: 2026-08-11 — initial. 2026-08-11 — acceptance extended with the two conditions above
   once 3D drawing was actually exercised: "it works for lines" did not generalise, and a snap glyph
   built as flat world geometry is unreadable in a near-horizontal view.
@@ -1517,7 +1518,10 @@ requirements is a planning failure, not a sign of rigor.
   - switching styles does not alter geometry, selection, snapping results, or the plot;
   - the REQ-100 frame budget is met in Shaded at the REQ-063 mesh density chosen for the bench.
 - Owner-layer: Renderer (draw), UI (selector), IO (persistence)
-- Status: accepted (2026-08-12)
+- Status: accepted (2026-08-12) — delivered, with **one acceptance condition still unverified**: the
+  frame budget in Shaded. `BENCH` has no mesh scene, so REQ-100's profile (b) has never been run
+  (TASK-041 §7, TASK-052 FINDING-1). What is known: depth testing alone costs ~2 ms at 250k segments
+  (TASK-040, clang, no meshes present). That is encouraging and is not the measurement.
 - Revisions: 2026-08-12 — initial draft. Supersedes ADR-025 ASSUMPTION-1, which deliberately left
   depth testing off pending a visual-style requirement; this is that requirement.
 
@@ -2037,16 +2041,26 @@ requirements is a planning failure, not a sign of rigor.
   property of a binary, not of source code: the compiler chooses the vectorisation, inlining and
   layout that decide it, so a figure measured with a different compiler is a different result.
 - Owner-layer: Renderer
-- Status: accepted — **measurement INVALIDATED 2026-08-15 by the MSVC toolchain pin** (decision
-  log). The figure below was measured on a **clang** build, which is what the project was
-  unknowingly producing at the time; it is retained as the last known-good number but must not be
-  quoted as current until re-run under MSVC with `BENCH`. Nothing suggests the budget now fails —
-  it simply has not been measured on the binary the project now ships.
-  Previously: **MET 2026-08-12**, p95 **8.93 ms** against the 16 ms budget at 250,000
-  segments, on the reference machine now recorded in `project.md` §7. Run it with the `BENCH`
-  command; the scene generator and its statistics are `src/util/benchscene.*`. The budget still
-  holds at 750k segments (p95 12.10 ms) and is exceeded at 1M (19.61 ms), so there is 3–4× headroom
-  over the required density. See TASK-039.
+- Status: accepted — **PARTLY MET. Re-measured under MSVC 2026-08-15** (TASK-052), on the reference
+  machine in `project.md` §7. Two of the three profiles pass; the third has never been runnable:
+  - (a) **line segments — MET**, p95 **9.27 ms** at 250,000 segments against the 16 ms budget;
+  - (b) **shaded meshes — NOT MEASURED. `BENCH` has no mesh scene**, so this profile has no case to
+    run. Predicted by TASK-041 §7 and still open; REQ-064's "budget met in Shaded" condition rests
+    on the same gap. Until a mesh case exists, REQ-100 cannot be claimed in full;
+  - (c) **surface — MET**, p95 **9.32 ms** at 100,000 points / 199,966 triangles. First measurement
+    of this profile; it had no clang predecessor.
+
+  Run it with the `BENCH` command (`BENCH`, `BENCH <segments>`, `BENCH SURFACE`); the scene
+  generator and its statistics are `src/util/benchscene.*`, and every run also appends to
+  `%APPDATA%\GoSurvey\bench-req100.txt`.
+
+  **Headroom is ~2× the required density, not the 3–4× recorded under clang.** The budget holds at
+  500k segments (p95 11.09 ms) and is exceeded at 750k (16.49–18.09 ms across two runs) and at 1M
+  (21.94 ms). The 250k figure itself reproduces within 0.19 ms warm or cold, so the sweep is a
+  toolchain difference and not thermal drift — checked before recording (TASK-052 §4).
+
+  Superseded: p95 8.93 ms / holds to 750k, measured 2026-08-12 on a **clang** build (TASK-039).
+  Retained only as history; it must not be quoted as current.
 - Revisions: 2026-08-11 — placeholder `<60 FPS / 16 ms>` / `<N>` replaced with a
   measurable budget, because REQ-058 makes framerate user-visible for the first
   time and R5 could not otherwise have a testable acceptance condition.
@@ -2061,6 +2075,10 @@ requirements is a planning failure, not a sign of rigor.
   said MSVC (decision log). This is the same class of gap the 2026-08-12 revision closed for
   hardware: a performance number is meaningless without stating the machine, and equally
   meaningless without stating the compiler. Re-measure with `BENCH` and record the MSVC figure.
+  2026-08-15 — re-measured under MSVC (TASK-052). Profiles (a) and (c) pass; (b) is recorded as
+  **not measured** rather than assumed, because no mesh bench scene exists. The headroom claim is
+  corrected from 3–4× to ~2× the required density: that number described a clang binary the project
+  no longer ships, and leaving it in place would have understated the risk on weaker hardware.
 
 ### REQ-101 — Numerical tolerance
 - Purpose: domain correctness (CAD/survey)
@@ -2174,7 +2192,7 @@ requirements is a planning failure, not a sign of rigor.
 | Requirement | Layer | Test(s) | Status |
 |-------------|-------|---------|--------|
 | REQ-001 | IO | `<TEST-001>` | accepted |
-| REQ-100 | Renderer | `BenchSceneTests` (exact segment count; byte-identical regeneration; segment count changes density not extent; iso-elevation contours; nearest-rank percentile) + the `BENCH` command on the reference machine (`project.md` §7) — p95 8.93 ms vs 16 ms at 250k segments, 2026-08-12 | accepted |
+| REQ-100 | Renderer | `BenchSceneTests` (exact segment count; byte-identical regeneration; segment count changes density not extent; iso-elevation contours; nearest-rank percentile) + the `BENCH` command on the reference machine (`project.md` §7), MSVC — segments p95 9.27 ms and surface p95 9.32 ms vs 16 ms, 2026-08-15 (TASK-052); **mesh profile has no bench case** | accepted (profile (b) unverified) |
 | REQ-101 | compute | `<regression set>` | proposed |
 | REQ-010 | UI | manual (FBK import shows raw rows) | implemented |
 | REQ-011 | compute | `TraverseTests` "ComputeStats" | implemented |

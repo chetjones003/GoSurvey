@@ -50,6 +50,27 @@
 
 ## FEATURES
 
+### [FEAT-011] BENCH has no mesh case, and its file record does not name the profile — OPEN
+    - REQ-100 defines three cost profiles. `BENCH` implements two: `BENCH [segments]` and
+      `BENCH SURFACE`. There is no mesh scene and no `BENCH MESH`, so profile (b) — shaded meshes at
+      the REQ-063 density — has never been measured and cannot be. TASK-041 §7 called this out on
+      2026-08-12 and nothing has closed it since; TASK-052 hit it again on 2026-08-15.
+    - Two requirements are held open by it: REQ-100 itself (its acceptance says "in each of the
+      three profiles") and REQ-064, whose "budget met in Shaded" condition has no measurement behind
+      it. Both are marked accordingly in `spec/requirements.md` rather than reading as met.
+    - Fix (a): a mesh scene in `src/util/benchscene.*` at a stated triangle count, a `BENCH MESH
+      [tris] [frames]` branch beside the SURFACE one in `CadCommands.cpp`, and a generator test in
+      the shape of the existing ones (deterministic, byte-identical across runs, extent fixed so
+      density changes rather than area — the trap TASK-039 §3 documents).
+    - Fix (b), same writer, ~5 lines: `bench-req100.txt` records only `segments <n>`, so the surface
+      run appears as `segments 599898` and is indistinguishable from a 600k-segment line scene. The
+      console message names the profile and a comment right above the file writer explains exactly
+      why that matters — the permanent record is the half that missed it. Write the profile name,
+      and the point/triangle counts when it is a surface.
+    - Watch out for: the mesh profile needs the depth buffer and Shaded style active to mean
+      anything (TASK-040 measured depth testing at ~2 ms on its own, clang, with no meshes present),
+      and the bench must restore the visual style along with everything else it already restores.
+
 ### [FEAT-010] Clean up downloaded update installers — OPEN
     - `%LOCALAPPDATA%\GoSurvey\updates` keeps every installer the updater has ever downloaded.
       Nothing deletes them after a successful install, so it grows ~6 MB per update forever.

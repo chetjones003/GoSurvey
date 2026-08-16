@@ -1,7 +1,7 @@
 # TASK-046 — TIN surface entity: triangulation, storage, render
 
 - Type:    feature
-- Status:  self-verify (REQ-100 surface measurement outstanding — needs a run on the reference machine)
+- Status:  done (2026-08-15 — the outstanding REQ-100 surface measurement was run by TASK-052: p95 9.32 ms vs 16 ms)
 - Opened:  2026-08-15
 - Owner:   Workshop
 
@@ -165,6 +165,20 @@ ASSUMPTION-3: A surface references its point groups BY NAME.
 - 2026-08-15 — steps 1–7 complete in code. **Step 7's measurement is not**: `BENCH SURFACE` exists
   and runs, but it has not been executed on the reference machine, so REQ-100's surface profile has
   no recorded figure yet. Stated rather than assumed — see §9.
+- 2026-08-15 — **measured (TASK-052). p95 9.32 ms against the 16 ms budget**, 100,000 points /
+  199,966 triangles (599,898 edges), 900 timed frames under continuous orbit, MSVC build on the
+  reference machine. REQ-068 can now claim the budget and this task closes.
+  Two notes from that run, neither of which changes the result:
+  - the surface profile is the **steadiest** of the three — min 7.64, max 10.82 ms, a 3.2 ms spread
+    against the segment profile's 8.2 ms. Regenerated edge geometry costs more per frame at the
+    median and varies less, which is what a fixed per-frame rebuild of the same size should look
+    like;
+  - step 7's claim above that "the report names the profile" is true of the **console** line and
+    not of `bench-req100.txt`, which records only `segments 599898`. The permanent record is the
+    half that matters and it is the half that does not name the profile — TASK-052 FINDING-2,
+    filed as TRACKER FEAT-011.
+  - the triangle count differs from the 199,957 recorded above by nine. Deterministic scene, two
+    different binaries; recorded, not reconciled.
 
 ## 9. Self-verification  (run BEFORE submitting — verification/skills/)
 - [x] build-project        — **PASS**. Clean build; no new warnings (the two that remain,
@@ -182,20 +196,23 @@ ASSUMPTION-3: A surface references its point groups BY NAME.
 - [x] dependency-audit     — **n-a**. No dependency added; the triangulator is in-tree per
       ADR-028 (c). The revisit trigger it records (~1,200 lines) is not close — `tinbuild.cpp` is
       ~300.
-- [ ] performance-review   — **PARTIAL**. Triangulation is measured and recorded (89 ms / 100k
-      points / 199,957 triangles) and guarded by a test. **The REQ-100 surface *frame* profile is
-      NOT yet measured** — `BENCH SURFACE` needs a run on the reference machine. Until it is,
-      REQ-068 cannot claim the budget, and this task is not `done`.
+- [x] performance-review   — **PASS**. Triangulation is measured and recorded (89 ms / 100k
+      points / 199,957 triangles) and guarded by a test. The REQ-100 surface *frame* profile is now
+      measured too: **p95 9.32 ms against 16 ms** on the reference machine under MSVC (TASK-052),
+      so REQ-068 claims the budget on evidence rather than on the segment profile's behalf.
 - [x] testing              — **PASS**. `TinBuildTests`: 17 cases / 128 assertions. Full suite
       **292 cases, 65,430 assertions, green** (was 275 after TASK-045; no existing test changed).
 
 ## 10. Verification result
-- Submitted:  <date>
-- Verdict:    <PASS | FAIL | SPEC GAP>
-- Findings:   <ids + how resolved>
+- Submitted:  2026-08-15
+- Verdict:    **PASS** — the one open condition (the REQ-100 surface frame profile) was measured by
+              TASK-052 and passes.
+- Findings:   none outstanding against this task. One observation belongs elsewhere: the bench's
+              file record does not name the profile (TASK-052 FINDING-2 → TRACKER FEAT-011).
 
 ## 11. Outcome
-- Requirements satisfied: REQ-068 (pending the REQ-100 surface measurement — see §9)
+- Requirements satisfied: REQ-068 — Acceptance met, including the REQ-100 surface profile
+                          (p95 9.32 ms vs 16 ms, TASK-052)
 - Tests added:            `tests/TinBuildTests.cpp` (17 cases)
 - New modules:            `src/util/tinbuild.{hpp,cpp}` (pure), `src/ui/CadUi_Surfaces.cpp`
 - Test fixture:           **`samples/surface-demo.gs`** (546 points, 5 point groups, 600 x 400 ft
@@ -213,6 +230,6 @@ ASSUMPTION-3: A surface references its point groups BY NAME.
                           500 (REQ-066); and "Ground + Curb" combines a raw-desc match with an id
                           range, which resolves to 540 under the union rule and **zero** under
                           intersection (REQ-067).
-- Docs updated:           none yet — `spec/roadmap.md` M-Surfaces status updates when the REQ-100
-                          surface figure is recorded and this task closes.
-- Done:                   <pending the REQ-100 surface run>
+- Docs updated:           `spec/roadmap.md` M-Surfaces step 3 status; REQ-100's surface figure is
+                          recorded in `spec/requirements.md` by TASK-052.
+- Done:                   **2026-08-15**
