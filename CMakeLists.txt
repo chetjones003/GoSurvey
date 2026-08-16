@@ -101,31 +101,57 @@ target_include_directories(glew_static PUBLIC ${GLEW_ROOT}/include)
 target_compile_definitions(glew_static PUBLIC GLEW_STATIC)
 target_link_libraries(glew_static PUBLIC OpenGL::GL)
 
-set(IMGUI_SOURCES
+# ---------------------------------------------------------------------------
+# ImGui, split into core and backends (ADR-031 (c′)).
+#
+# The split exists because the headless target (REQ-203) needs ImGui *core* and must not have a
+# window or a GPU. That sounds contradictory until you know why: loading a `.gs` measures survey
+# label text through the current font and stores the result as annotation geometry
+# (SurveyPoints.cpp, RepositionSurveyLabelMtextForPoint), so the domain layer genuinely needs a
+# font atlas. Building an atlas is CPU work — only *uploading* it needs a GPU, and headless never
+# uploads. The backends are the part that require GLFW and OpenGL, so they, and only they, are
+# what the headless target leaves behind.
+# ---------------------------------------------------------------------------
+add_library(imgui_core STATIC
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
   ${imgui_SOURCE_DIR}/imgui_tables.cpp
   ${imgui_SOURCE_DIR}/imgui_widgets.cpp
   ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
-  ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
-  ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
-
-add_library(imgui_backend STATIC ${IMGUI_SOURCES})
-target_include_directories(imgui_backend PUBLIC
+target_include_directories(imgui_core PUBLIC
   ${imgui_SOURCE_DIR}
-  ${imgui_SOURCE_DIR}/backends
   ${imgui_SOURCE_DIR}/misc/cpp
 )
-target_link_libraries(imgui_backend PUBLIC glfw)
-target_compile_definitions(imgui_backend PUBLIC
+target_compile_definitions(imgui_core PUBLIC
   IMGUI_DEFINE_MATH_OPERATORS
 )
 
-add_executable(GoSurvey
-  # Application entry
-  src/app/main.cpp
+# The windowed application's backends. Linking this transitively brings in imgui_core and glfw, so
+# `imgui_backend` still means what it meant before this split and GoSurvey's link line is unchanged.
+add_library(imgui_backend STATIC
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
+  ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+)
+target_include_directories(imgui_backend PUBLIC
+  ${imgui_SOURCE_DIR}/backends
+)
+target_link_libraries(imgui_backend PUBLIC imgui_core glfw)
 
+# ---------------------------------------------------------------------------
+# Domain sources — shared by GoSurvey and gosurvey_headless (ADR-031 (a), REQ-203).
+#
+# ONE list, deliberately: a source added to the application must not be silently absent from the
+# headless driver, and the failure mode of forgetting is then a link error rather than a coverage
+# gap nobody notices. Everything here runs with no window and no GPU.
+#
+# Two members are *absent* on purpose, because each target supplies its own implementation of the
+# same pure header (the link-time platform seams, ADR-031 (b′)):
+#   src/platform/WinFileDialogs.cpp   -> headless: src/platform/HeadlessFileDialogs.cpp
+#   src/pdf/PdfAttach.cpp             -> headless: src/platform/HeadlessPdfAttach.cpp
+# PdfAttach.cpp is where <GL/glew.h> reaches the Commands layer, which is precisely why it is a seam.
+# ---------------------------------------------------------------------------
+set(GOSURVEY_DOMAIN_SOURCES
   # Command system
   src/commands/CadCommands.cpp
   src/commands/CadLinetype.cpp
@@ -133,8 +159,70 @@ add_executable(GoSurvey
   src/survey/PointGroupRule.cpp
   src/commands/CadCoordinateFrame.cpp
 
-  # Viewport system
+  # Object snapping (pure geometry; no GL despite living under viewport/)
   src/viewport/CadSnap.cpp
+
+  # Text measurement + font registry. In the domain set because label geometry depends on metrics
+  # (ADR-031 (c′)) — these need ImGui core, never a backend.
+  src/ui/MtextRichFormat.cpp
+  src/ui/FontRegistry.cpp
+  # SHX stroke text emitter. Here because MtextRichFormat's layout calls Shx::DrawText to measure
+  # SHX runs — it takes an ImDrawList but issues no GL of its own, so headless links it happily.
+  src/ui/ShxDraw.cpp
+
+  # Fonts (shared lower layer — SHX stroke geometry, ADR-022)
+  src/font/ShxFont.cpp
+
+  # Survey / COGO
+  src/survey/SurveyPoints.cpp
+
+  # Traverse engine
+  src/traverse/TraverseCalc.cpp
+  src/traverse/TraverseLeastSquares.cpp
+  src/traverse/FbkImport.cpp
+
+  # I/O
+  src/io/GsIo.cpp
+  # User preferences. In the domain set for UserDataDirectory(), which the BENCH command writes its
+  # results through — pure <filesystem>, no window.
+  src/io/UserPrefs.cpp
+  src/io/SurveyCsv.cpp
+  src/io/DxfIo.cpp
+  src/io/DwgIo.cpp
+  src/io/DwgProbe.cpp
+  src/io/DxfColors.cpp
+  src/io/DwgMeshConvert.cpp
+  src/io/GsMigrate.cpp
+
+  # Platform (OS process launch for the DWG converter — no window)
+  src/platform/ProcessRun.cpp
+  # Executable / user-data / bundled-asset paths. Split out of AppIcon.cpp (TASK-056) so resolving
+  # %APPDATA% no longer transitively requires GLEW and GLFW.
+  src/platform/AppPaths.cpp
+
+  # Update check (REQ-077/078, ADR-029) — UpdatePrefs is reachable from AppCommandState
+  src/update/UpdateCheck.cpp
+
+  # Geometry math (util)
+  src/util/geom2d.cpp
+  src/util/curveintersect.cpp
+  src/util/meshgeom.cpp
+  src/util/gltfimport.cpp
+  src/util/stlimport.cpp
+  src/util/tinbuild.cpp
+  src/util/benchscene.cpp
+
+  # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
+  src/util/docinvariants.cpp
+)
+
+add_executable(GoSurvey
+  ${GOSURVEY_DOMAIN_SOURCES}
+
+  # Application entry
+  src/app/main.cpp
+
+  # Viewport system
   src/viewport/CadRubberPreview.cpp
   src/viewport/TransformPreview.cpp
 
@@ -155,58 +243,24 @@ add_executable(GoSurvey
   src/ui/CadUi_UpdateDialog.cpp
   src/ui/SplashScreen.cpp
   src/ui/ImGuiLayout.cpp
-  src/ui/MtextRichFormat.cpp
   src/ui/RichTextEdit.cpp
-  src/ui/FontRegistry.cpp
-  src/ui/ShxDraw.cpp
   src/ui/ViewCube.cpp
   src/ui/PdfAttachDialog.cpp
 
-  # Fonts (shared lower layer — SHX stroke geometry, ADR-022)
-  src/font/ShxFont.cpp
-
-  # Survey / COGO
-  src/survey/SurveyPoints.cpp
-
-  # Traverse engine
-  src/traverse/TraverseCalc.cpp
-  src/traverse/TraverseLeastSquares.cpp
-  src/traverse/FbkImport.cpp
-
-  # I/O
-  src/io/GsIo.cpp
-  src/io/UserPrefs.cpp
-  src/io/SurveyCsv.cpp
-  src/io/DxfIo.cpp
-  src/io/DwgIo.cpp
-  src/io/DwgProbe.cpp
-  src/io/DxfColors.cpp
+  # I/O (windowed application only)
   src/io/PdfPlot.cpp
 
-  # PDF underlay
+  # PDF underlay — the real, GL-backed implementation (headless links a seam instead)
   src/pdf/PdfAttach.cpp
 
   # Platform
   src/platform/AppIcon.cpp
   src/platform/WinFileDialogs.cpp
-  src/platform/ProcessRun.cpp
   src/platform/GpuPreference.cpp
   src/platform/HttpFetch.cpp
 
   # Update check (REQ-077/078, ADR-029)
-  src/update/UpdateCheck.cpp
   src/update/UpdateService.cpp
-
-  # Geometry math (util)
-  src/util/geom2d.cpp
-  src/util/curveintersect.cpp
-  src/util/meshgeom.cpp
-  src/util/gltfimport.cpp
-  src/util/stlimport.cpp
-  src/io/DwgMeshConvert.cpp
-  src/io/GsMigrate.cpp
-  src/util/tinbuild.cpp
-  src/util/benchscene.cpp
 )
 
 target_include_directories(GoSurvey PRIVATE
@@ -329,6 +383,63 @@ if(WIN32)
 endif()
 
 # ---------------------------------------------------------------------------
+# gosurvey_headless (REQ-203 / ADR-031): the Commands layer, drivable with no window.
+#
+# Links ${GOSURVEY_DOMAIN_SOURCES} plus the two headless platform seams, and imgui_core WITHOUT
+# imgui_backend — so there is no GLFW, no GLEW, no OpenGL, and no window, while text still measures
+# through the same font the application uses (ADR-031 (c′), which is what makes REQ-203's
+# "save a .gs and diff against the GUI" condition meaningful rather than unmeetable).
+#
+# TEST-ONLY, like Catch2 (REQ-300): GoSurvey.exe neither links nor ships any of it.
+# ---------------------------------------------------------------------------
+option(GOSURVEY_BUILD_HEADLESS "Build the headless transcript driver (REQ-203)" ON)
+if(GOSURVEY_BUILD_HEADLESS)
+  add_executable(gosurvey_headless
+    ${GOSURVEY_DOMAIN_SOURCES}
+    src/platform/HeadlessFileDialogs.cpp
+    src/platform/HeadlessPdfAttach.cpp
+    tests/headless/HeadlessDriver.cpp
+    tests/headless/FuzzGenerator.cpp
+    tests/headless/Minimizer.cpp
+    tests/headless/FuzzMain.cpp
+  )
+
+  target_include_directories(gosurvey_headless PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/viewport
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/util
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/io
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/render
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/font
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/update
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+    ${NLOHMANN_JSON_INCLUDE}
+    ${CMAKE_BINARY_DIR}/generated
+  )
+
+  # imgui_core only. Adding imgui_backend here would drag in glfw and OpenGL and silently undo the
+  # property this target exists to hold.
+  target_link_libraries(gosurvey_headless PRIVATE imgui_core)
+  if(WIN32)
+    # comdlg32 for the file-dialog header's link compatibility; ole32/shell32 for <filesystem> and
+    # the shell paths ProcessRun uses. No opengl32, no glfw — verified by REQ-203's acceptance.
+    target_link_libraries(gosurvey_headless PRIVATE comdlg32 ole32 shell32)
+  endif()
+
+  if(MSVC)
+    target_compile_options(gosurvey_headless PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(gosurvey_headless PRIVATE -Wall -Wextra -Wpedantic)
+  endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Tests (ADR-002): domain regression suite via Catch2 + ctest.
 # Catch2 is a TEST-ONLY dependency (decision log, REQ-300) — GoSurvey does not
 # link it. The test target compiles only the pure-compute Domain sources, so it
@@ -378,6 +489,17 @@ if(GOSURVEY_BUILD_TESTS)
     tests/UpdateCheckTests.cpp
     tests/GsMigrateTests.cpp
     tests/GpuPreferenceTests.cpp
+    # REQ-204: one deliberately-broken fixture per document invariant. This is the second present-day
+    # concrete use of util/docinvariants (the headless driver is the first), which is what lets the
+    # module exist at all under architecture §11.4.
+    tests/DocInvariantsTests.cpp
+    src/util/docinvariants.cpp
+    # REQ-204 generator + minimizer. Both are pure — the generator takes its command list as a
+    # parameter, the minimizer takes a predicate — so reproducibility, termination and the attempt
+    # cap are testable here with no process launch and no GL.
+    tests/FuzzHarnessTests.cpp
+    tests/headless/FuzzGenerator.cpp
+    tests/headless/Minimizer.cpp
     # BUG-013 per-application GPU preference. Win32 registry only — no GL, no window — so the value
     # the user's choice actually turns into is testable without the application running.
     src/platform/GpuPreference.cpp
@@ -426,6 +548,17 @@ if(GOSURVEY_BUILD_TESTS)
     # whole command layer), but the serializer it relies on is, and that is where the precision
     # risk actually lives.
     ${NLOHMANN_JSON_INCLUDE}
+    # REQ-204 (DocInvariantsTests): CadCommands.hpp's header closure. Headers only — the test target
+    # still links no command, UI or GL translation unit, which is the property ADR-002 protects.
+    # AppCommandState is plain data, so constructing one costs nothing but these include paths.
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/render
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/update
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/util
+    # For FuzzHarnessTests, which includes headless/FuzzGenerator.hpp and headless/Minimizer.hpp.
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests
   )
   target_compile_definitions(GoSurveyTests PRIVATE
     GOSURVEY_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples"
@@ -439,4 +572,55 @@ if(GOSURVEY_BUILD_TESTS)
 
   include(Catch)
   catch_discover_tests(GoSurveyTests)
+
+  # REQ-203: the transcript corpus runs on every push and a non-zero exit fails the build (REQ-202).
+  # Registered here, inside GOSURVEY_BUILD_TESTS, because enable_testing() lives in this block —
+  # each transcript becomes its own ctest case so a failure names the transcript that failed.
+  if(GOSURVEY_BUILD_HEADLESS)
+    file(GLOB GOSURVEY_TRANSCRIPTS
+         "${CMAKE_CURRENT_SOURCE_DIR}/tests/headless/transcripts/*.txt")
+    foreach(_t ${GOSURVEY_TRANSCRIPTS})
+      get_filename_component(_name "${_t}" NAME_WE)
+      add_test(NAME headless.${_name}
+               COMMAND gosurvey_headless run "${_t}"
+                       --out "${CMAKE_BINARY_DIR}/headless-out/${_name}")
+      # Transcripts write only under the build tree (CON-07, REQ-200) and must not depend on the
+      # directory ctest happens to start them in.
+      set_tests_properties(headless.${_name} PROPERTIES
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+    endforeach()
+
+    # REQ-204: a small, fixed fuzz sweep on every push. Not a bug hunt — 12 seeds find nothing that
+    # 5000 seeds did not — but a canary for the HARNESS: if generation stops producing commands, the
+    # subprocess runner breaks, or the seed range stops being deterministic, this goes red instead of
+    # the fuzzer quietly reporting "0 failures" forever, which looks exactly like success.
+    #
+    # The seeds are pinned and known-clean at the time of writing. A future real failure here is a
+    # genuine finding and should be triaged, not silenced by moving the range.
+    add_test(NAME headless.fuzz-smoke
+             COMMAND gosurvey_headless fuzz --seeds 1..12
+                     --out "${CMAKE_BINARY_DIR}/headless-out/fuzz-smoke"
+                     --timeout-ms 30000)
+    set_tests_properties(headless.fuzz-smoke PROPERTIES
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
+
+    # REQ-204 `gs-roundtrip`: the transcript writes roundtrip-a.gs and roundtrip-b.gs; this compares
+    # them. Split from the transcript because file comparison is the one thing the driver would
+    # otherwise need a mode for, and it is expressible with `cmake -E`.
+    add_test(NAME headless.gs-roundtrip.compare
+             COMMAND ${CMAKE_COMMAND} -E compare_files
+                     "${CMAKE_BINARY_DIR}/headless-out/gs-roundtrip/roundtrip-a.gs"
+                     "${CMAKE_BINARY_DIR}/headless-out/gs-roundtrip/roundtrip-b.gs")
+    set_tests_properties(headless.gs-roundtrip.compare PROPERTIES
+      DEPENDS headless.gs-roundtrip
+      # DISABLED because this check currently FAILS, and it is right to fail: it found
+      # https://github.com/chetjones003/GoSurvey/issues/56 on its first run (a TEXT entity is saved
+      # with id 0 because the commit path never bumps the revision EnsureEntityIds gates on, so
+      # save->load->save is not idempotent — contradicting REQ-079's first acceptance condition).
+      #
+      # Disabled rather than deleted or marked WILL_FAIL: deleting loses the oracle, and WILL_FAIL
+      # would turn the *fix* into a red build. Re-enable by removing this property once #56 is
+      # closed — that flip is the regression test for it.
+      DISABLED TRUE)
+  endif()
 endif()

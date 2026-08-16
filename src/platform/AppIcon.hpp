@@ -2,6 +2,11 @@
 
 #include <filesystem>
 
+// The path helpers this header used to declare now live in AppPaths.hpp (TASK-056). Included here
+// so every existing caller of AppIcon.hpp keeps compiling unchanged; new code that only needs a
+// path should include AppPaths.hpp directly and stay clear of the GL/GLFW dependency below.
+#include "AppPaths.hpp"
+
 struct GLFWwindow;
 
 struct AppLogoGpu {

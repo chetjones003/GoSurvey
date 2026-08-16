@@ -2200,6 +2200,96 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted (2026-08-15)
 - Revisions: 2026-08-15 — initial. See ADR-029 and the decision log.
 
+### REQ-203 — The command layer is drivable without a window
+- Purpose: debuggability, maintainability — the interactive surface is the largest part of the
+  system with no automated coverage, and it is where users actually meet the bugs
+- Priority: should
+- Type: quality
+- Statement: The Commands layer runs to completion with **no window, no GL context, and no ImGui
+  context**. A headless driver executes a **transcript** — a line-oriented text file of command-line
+  submissions and viewport picks — against a real `AppCommandState`, and reports what the drawing
+  became.
+
+  Two consequences follow, and both are the point of the requirement rather than side effects:
+
+  - **The Commands layer names nothing above it.** Architecture §2 says this already; today nothing
+    enforces it, and one violation has accumulated (`LoadApplicationFont` in `CadCommands.cpp`
+    reaches into ImGui). A headless target that must link makes the linker the enforcer, so the next
+    violation is a build break instead of a review finding nobody happened to make.
+  - **A transcript is a regression test.** A bug reproduced by hand once becomes a file that runs on
+    every build, in the same form whether a human or a generator wrote it.
+
+  The driver reads a transcript, writes a machine-readable result (entity counts, emitted log lines,
+  invariant status), and exits non-zero on any failure. Reaching a native file dialog must not open
+  one: the platform dialog functions are answered from the transcript.
+
+  This requirement is about **drivability**, not about what is checked — the checks are REQ-204.
+- Acceptance:
+  - the headless target links with **no GLFW, no GLEW, no `gl*` symbol, and no ImGui backend** on
+    its link line, and its binary imports no `opengl32.dll` — proven by the link line and by
+    `dumpbin /DEPENDENTS`, not by inspection. *(Amended 2026-08-16: this condition originally said
+    "no imgui". ImGui **core** is on the headless link line deliberately — loading a `.gs` measures
+    label text through the current font and stores the result as geometry, so headless must measure
+    it with the same font the GUI uses or the diff condition below is unmeetable. See the ADR-031
+    amendment; the boundary that matters is no window and no GPU.)*
+  - a transcript drawing a line, a circle, and a polyline yields exactly what a user performing the
+    same steps yields, compared by saving `.gs` and diffing;
+  - a transcript step that reaches a file dialog is answered from the transcript and never blocks;
+  - a failing run exits non-zero naming the failure, the step index, and the transcript line;
+  - the same transcript run twice produces byte-identical output;
+  - the transcript corpus runs in CI on every push and a non-zero exit fails the build (REQ-202).
+- Owner-layer: Build/Platform (the target), Commands (`ProcessCommandLineSubmit` /
+  `SubmitViewportPick` as the driven entry points), Platform (the dialog seam)
+- Status: accepted (2026-08-16)
+- Revisions: 2026-08-16 — initial. See ADR-031 and the decision log.
+
+### REQ-204 — Randomized command sequences are checked against document invariants
+- Purpose: debuggability — find the state corruptions nobody thought to write a test for, and make
+  each one arrive as a reproducer rather than as a user's description of a crash
+- Priority: may
+- Type: quality
+- Statement: A generator produces REQ-203 transcripts from the command registry under a **seed**,
+  interleaving commands, picks, cancels, undo/redo, and space switches, with coordinates drawn from
+  a deliberately hostile distribution (NaN, infinity, 1e12, denormals, exact duplicates, collinear
+  and zero-length geometry). After **every** step the driver evaluates a fixed set of invariants.
+
+  The invariant set is the substance of this requirement. A fuzzer without oracles finds only
+  crashes, and crashes are the shallow half of the problem:
+
+  | Invariant | What a violation means |
+  |---|---|
+  | Undo then redo restores an identical document | The classic CAD defect class — an edit not fully captured by the snapshot |
+  | `.gs` save → load → save is byte-identical | A field written but not read, or read but not written (REQ-079) |
+  | DXF export → import → export is stable | An entity type silently dropped by an exporter with no branch for it |
+  | No coordinate is NaN or infinite | Degenerate input propagating into stored geometry |
+  | Local storage holds: `world = local + worldDocumentOrigin` | A world-coordinate value stored without subtracting the origin |
+  | Flat-store strides hold (§11.8) | A 3D-widening regression, silently misreading every subsequent vertex |
+  | Entity ids are unique and `nextEntityId` exceeds all of them | REQ-076 identity broken |
+  | Every selection index is in range for its store | A stale index surviving a compacting erase (§11.9) |
+  | Every submitted command emits at least one log line | REQ-201, checked rather than reviewed |
+
+  A run is reproducible from its seed alone. A failing run is **automatically minimized** to the
+  shortest transcript that still fails, and that minimized transcript — not the seed — is the
+  artifact a bug report carries, because it survives changes to the generator.
+
+  Fuzzing the **file parsers** (`DxfIo`, `GsIo`, glTF, STL, CSV) is the same requirement pointed at
+  a different input: there the mutated thing is bytes of a seed file rather than a command sequence,
+  and the oracle is "no crash, no hang, and a refusal is reported" (REQ-201).
+- Acceptance:
+  - the same `--seed N` twice produces an identical transcript and an identical result;
+  - **each listed invariant has a fixture that deliberately breaks it and proves the check fires** —
+    a check that has never failed is not known to be a check;
+  - a failing run emits a minimized transcript that reproduces the failure standalone under the
+    REQ-203 driver;
+  - minimization terminates, is bounded in attempts, and reports its reduction ratio;
+  - a clean run over a seed range exits zero and prints nothing but a summary;
+  - the generator is TEST-ONLY: the shipped `GoSurvey.exe` neither links nor contains it (REQ-300).
+- Owner-layer: Build/Platform (the target), Commands (the invariants' subject), util (the invariant
+  checks themselves, pure)
+- Status: accepted (2026-08-16)
+- Revisions: 2026-08-16 — initial. See ADR-031 and the decision log. Delivery is staged
+  (`docs/fuzz-harness.md` §8) and begins with the file parsers rather than the command driver.
+
 ---
 
 ## Constraint requirements
@@ -2303,6 +2393,8 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-078 | UI/Platform/IO | `UpdateCheckTests` (skip suppresses that version but not a later one — green 2026-08-15); the download / hash / unsaved-guard / install paths are implemented but **unexercised — no manifest has been published yet**, and no real upgrade has been performed (TASK-050 ASSUMPTION-1). Was: planned — `UpdateCheckTests` (skip-state suppresses that version but not a later one) + manual (nothing downloads without a click; corrupted download fails the hash, is deleted, and is reported; dirty drawing hits the unsaved-changes modal and cancel aborts the update; after install one `GoSurvey.exe` remains, old `GoSurvey-0.*.exe` gone, shortcuts + `.gs` association still resolve; killed mid-download then retried succeeds) | accepted |
 | REQ-202 | Build/Platform | planned — observed pipeline behaviour (feature branch → artifact only, no tag; repeated `beta` pushes → exactly one `channel-beta` prerelease; unchanged version on master → no publish, no failure; bumped version → `v<version>` tag + release; failing ctest → no release; tag == AppVersion == manifest version; manifest SHA-256 matches the asset) | accepted |
 | REQ-051 | UI/IO | `MtextToolbarTests` (panel-anchor clamp in-bounds/off-screen/oversized; font+colour run-tag composition incl. empty family = no tag; ruler tick spacing + zero-width = no ticks; attach label 1–9 + out-of-range fallback) + manual (panel titled "Text Formatting" with two rows + ruler; drag persists across edits and restart; font/colour apply to the selection only; height/oblique/entity colour whole-object; style dropdown re-bakes per REQ-044; B/I/U/caps/symbol unchanged; justification re-lays out; disabled controls inert with naming tooltips; ruler + expand toggles; paper MTEXT same panel; single-line TEXT still bare box; OK/Esc + `.gs`/DXF round-trip unchanged) | accepted |
+| REQ-203 | Build/Platform/Commands | planned — the `gosurvey_headless` link line carries no imgui/glfw/GLEW/`gl*` symbol; a hand-written transcript (line + circle + polyline) saves a `.gs` identical to the same steps performed in the GUI; a queued `DIALOG` answer satisfies a file-dialog call with no block; a deliberately-broken transcript exits non-zero naming invariant + step + line; the same transcript twice is byte-identical; CI runs the corpus per push | accepted |
+| REQ-204 | Build/Platform/Commands/util | planned — `--seed N` twice is identical; **one deliberately-broken fixture per invariant proving each check fires**; a failing run's minimized transcript reproduces standalone under the REQ-203 driver; minimization terminates within its bound and reports its ratio; a clean seed range prints only a summary; `GoSurvey.exe`'s link line contains no generator symbol | accepted |
 
 ---
 
@@ -2313,4 +2405,8 @@ requirements is a planning failure, not a sign of rigor.
 
 - "We do **not** require pluggable rendering backends — OpenGL only until a
   second backend is a real requirement (avoids speculative abstraction)."
+- We do **not** require automated testing of the rendered GUI — no UI-automation driver, no
+  screenshot diffing, no golden images. REQ-203 tests the Commands layer beneath the UI instead.
+  Pixel-level tests need an interactive desktop session, are flaky by construction, and mostly
+  exercise ImGui rather than GoSurvey. *(accepted 2026-08-16 alongside REQ-203; ADR-031 alt. (1).)*
 - `<…>`
