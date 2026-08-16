@@ -225,6 +225,12 @@ jobs:
           #
           # The section key is the plain three-part version, so every beta in a cycle shows the
           # notes for the release it is previewing.
+          #
+          # Read from the step OUTPUT, not from $version: each `run:` block is its own PowerShell
+          # process, so a variable set in the resolve step is empty here. It failed silently the
+          # first time -- the regex became "^##\s+\s*$", matched nothing, and every release got the
+          # fallback line. Safe to interpolate: this value is a [0-9.]+ string from a regex.
+          $version = "${{ steps.ver.outputs.version }}"
           $notes = ""
           if (Test-Path RELEASE_NOTES.md) {
             $lines = Get-Content RELEASE_NOTES.md
