@@ -15,7 +15,7 @@
       was structurally the wrong backend: Apps Script cannot set an HTTP status code, so every
       failure answered `200`; ~1k requests/day per Google account; counting meant reading the whole
       sheet; and a public unauthenticated writer with no schema, no validation and no dedupe.
-    - **D1, not KV** — despite `docs/telemetry-backend-guide.md` recommending KV. KV's free tier
+    - **D1, not KV** — despite the earlier backend notes recommending KV. KV's free tier
       allows ~1,000 writes/day and every ping is a write, so it would start dropping data at ~1k
       DAU: exactly the scale the telemetry exists to measure, and silently. D1 allows ~100k row
       writes/day and answers the questions in SQL.
@@ -80,7 +80,7 @@
       1. **Wrong URL path form.** `TelemetryPing.hpp` held
          `/macros/d/{ID}/userweb`, which answers **404** — it is not an Apps Script route at all.
          A deployed web app lives only at `/macros/s/{DEPLOYMENT_ID}/exec`. The bad form came from
-         `docs/google-sheets-setup.md` Step 3, which taught it in four places.
+         the Sheets setup guide's Step 3, which taught it in four places (guide since deleted).
       2. **Deployment is not public.** `/exec` on the correct path still answers **401** to POST
          and **302 → accounts.google.com** to GET, so `doPost` never runs. "Who has access" is set
          to `Anyone with Google Account`; GoSurvey pings anonymously and must have `Anyone`.

@@ -17,7 +17,7 @@ version-controlled alongside the client that talks to it.
 
 ## Why D1 and not KV
 
-The older `docs/telemetry-backend-guide.md` suggested Workers KV. Don't use it for this.
+An earlier draft of this setup suggested Workers KV. Don't use it for this.
 
 **KV's free tier allows 1,000 writes per day.** Every telemetry ping is a write, so that ceiling
 is hit at roughly 1,000 daily active users — precisely the scale this telemetry exists to detect.
@@ -274,5 +274,7 @@ The client-side hardening from that episode is kept, not reverted: `TelemetrySer
 requires the literal `"ok":true` acknowledgement rather than trusting a 2xx. It costs nothing and
 it is the check that would have caught the original failure on day one.
 
-**Rolling back** is a one-line change to `TelemetryEndpoint` plus a rebuild — the Sheets
-deployment and `docs/google-sheets-setup.md` are both left intact.
+The Sheets setup guide has been deleted now that this one supersedes it. The Apps Script
+deployment itself still exists, so a rollback is still a one-line change to `TelemetryEndpoint`
+plus a rebuild; the guide is recoverable from git history (`docs/google-sheets-setup.md`, removed
+2026-08-17) if it is ever actually needed.

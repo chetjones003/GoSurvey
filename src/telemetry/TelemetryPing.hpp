@@ -12,8 +12,9 @@
 /// it behind a custom domain instead of `*.workers.dev` — is a rebuild and a re-release, so the
 /// hostname wants settling before the first ship, not after.
 ///
-/// The previous Google Apps Script backend is retired but intact; rolling back is this line plus
-/// a rebuild (see `docs/google-sheets-setup.md`).
+/// The previous Google Apps Script backend is retired but its deployment still exists, so
+/// rolling back is this line plus a rebuild. Its setup guide was deleted once Cloudflare
+/// superseded it and lives in git history if ever needed.
 constexpr const char* TelemetryEndpoint = "https://gosurvey-telemetry.gosurvey.workers.dev/v1/ping";
 
 struct TelemetryPayload {
