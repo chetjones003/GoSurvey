@@ -2055,6 +2055,171 @@ requirements is a planning failure, not a sign of rigor.
   for now (licensing is deferred); (2) self-hosted endpoint (not third-party analytics vendor);
   (3) no opt-out toggle, always-on anonymous pings (PII-free by design). See ADR-032.
 
+### REQ-081 — The Dark theme reads as a coherent, separated UI
+- Purpose: the shell's panels must be tellable apart at a glance; a uniformly flat
+  surface hides where one panel ends and the next begins
+- Priority: should
+- Type: non-functional (appearance)
+- Statement: The **Dark** color theme presents a coherent dark UI in which docked
+  panels are distinguishable from each other and from the application ground
+  without reading their titles. Concretely:
+  - a panel surface is **lighter** than the dockspace ground behind it, and every
+    panel/dock node is delimited by a 1 px border **darker** than both — the
+    light-surface/dark-gap pairing is what produces the separation;
+  - input and property-value fields are **recessed** (darker than the panel
+    surface they sit on);
+  - a section header inside a panel is a full-width bar distinct from the panel
+    surface, with its disclosure triangle at the leading edge;
+  - one accent colour marks selection and active state across tabs, headers,
+    check marks and slider grabs;
+  - Properties coordinate rows carry a fixed-colour **axis badge** — X red,
+    Y green, Z blue;
+  - chrome painted directly through `ImDrawList` rather than through
+    `ImGuiCol_*` (toolbar band, ribbon panels, ribbon buttons, status bar,
+    autocomplete popup, property grid) follows the **active** theme instead of
+    fixed colours.
+
+  This requirement governs the **shell chrome only**. The drawing viewport is out
+  of its scope.
+- Acceptance:
+  - with Dark active, no chrome element renders in the classic theme's palette
+    (the `#464646` / `#3A3A3A` grays or the steel-blue `#3C5575` family);
+  - two adjacent docked panels are separated by a visible border line, and the
+    panel surface differs from the dockspace ground by a visible value step;
+  - switching Options → Display → *Color theme* Dark → Light → Dark leaves each
+    theme rendering its own palette, with no colour left over from the other on
+    the frame after the switch;
+  - the **Light** (nanoCAD classic) theme renders exactly as it does today —
+    this work does not change it;
+  - viewport contents — crosshair, grips, entity/layer colours, selection
+    highlight, snap markers, paper-space sheet — are unchanged;
+  - a Properties geometry row whose label ends in X, Y or Z shows the axis badge
+    in red, green or blue respectively; a non-axis row (e.g. Radius) shows none.
+  - **(added 2026-08-16, revision 2; clause 1 and the accent clause amended by
+    revision 3)** the palette is derived, not picked:
+    - every neutral is **achromatic** (R = G = B), so no surface carries a colour
+      cast and all chroma in the UI belongs to the accent and the semantic
+      triad — anything coloured is therefore meaningful;
+    - the neutral ladder steps on roughly even **CIE L\*** intervals, and each
+      structural relationship (panel over ground, seam under ground, field under
+      panel, header over panel, panel over tab strip) is a stated L\* distance
+      rather than an eyeballed one;
+    - primary text meets **WCAG AA at 7:1** on the panel surface and secondary
+      text meets **4.5:1** — `TextDisabled` carries real secondary content here
+      (hints, derived readouts, command hints), so it is held to the text bar,
+      not to the disabled-text exemption;
+    - the accent is one hue used at several lightnesses/alphas, warm against the
+      neutral ground so accented marks advance;
+    - the semantic triad (axis X/Y/Z, and any future danger/success/info) is
+      **equiluminant within ~2 L\***, so no member visually outranks the others,
+      and each carries its label at ≥ 4.5:1.
+  - **(added 2026-08-16, revision 4)** the shell states **elevation**, not just
+    separation: the ribbon and the docked panels read as plates above the drawing
+    canvas. A flat palette has no bevels to lean on, so this is carried by two
+    paired marks — a lit edge along the top of a raised plate, and a soft shadow
+    that plate casts onto the surface below it, landing **on the receiving
+    surface** (the drawing canvas), not in the gap between them. Light comes from
+    the top-left, matching the direction the classic theme's 3D bevels already
+    imply, so the two themes never disagree about where the light is.
+  - **(added 2026-08-16, revision 6)** inside a window, a **boxed or scrolling
+    region sits on its own tone**, one step below the window it is cut into, so a
+    scroll box reads as a well rather than as more window; and a **tab bar has a
+    strip behind it**, so unselected tabs sit on that strip and the selected one
+    stands on the body it belongs to. A child used purely to group layout is
+    exempt and stays on the window tone — nesting two inset tones defeats both.
+  - **(added 2026-08-16, revision 5)** a **floating window** — dialog, modal or
+    popup — reads as lifted off the shell rather than pasted onto it. It carries
+    a soft drop shadow on all sides, a lit top edge, and a title bar that is
+    visibly live when the window holds focus. This applies to **every** floating
+    window without each one opting in, so a dialog added later is covered the day
+    it is written; a theme opts out by setting no window shadow.
+- Owner-layer: UI (`src/ui/CadUi.cpp`)
+- Status: accepted (2026-08-16)
+- Revisions: 2026-08-16 — initial. Resolved as a SPEC GAP: both shipped themes
+  (`ApplyCadDarkTheme`, `ApplyCadLightTheme`) were written with no governing
+  requirement, and the `ImDrawList` chrome was hard-coded to the classic theme's
+  colours regardless of which theme was active. User supplied the Hazel editor as
+  the visual reference and chose (1) the **Dark** theme as the one to restyle,
+  leaving the classic theme intact, and (2) full parity including the
+  property-grid widgets. See ADR-033.
+  2026-08-16 (revision 2) — after seeing revision 1 running, the user asked that
+  the palette be put on a proper footing rather than left as hand-picked values.
+  Measuring the shipped ramp found three defects the eye had registered but not
+  named: the border (L\* 6.3) and the tab strip (L\* 6.8) were **0.5 L\* apart**,
+  so panel outlines were invisible where they mattered most; the four darkest
+  tones spanned 5 L\* while the three lightest spanned 16, which is what read as
+  flat in places and abrupt in others; `TextDisabled` sat at **3.93:1**, below
+  AA, while carrying real secondary content; and the axis triad spanned **13.6
+  L\*** (green at 56.4 vs red at 42.8), so the Y badge visually outranked the
+  others and its letter contrast was only 3.0:1. The added acceptance conditions
+  above state the rules those defects broke. No ADR — values only; the mechanism
+  is unchanged from ADR-033.
+  2026-08-16 (revision 3) — the user reviewed revision 2 and asked for **true
+  neutral** rather than its slight cool cast, resolving TASK-059's ASSUMPTION-1
+  against it. Clause 1 is amended from "one hue at low saturation" to
+  "achromatic", and the accent clause drops "near the neutrals' complement"
+  (a complement is undefined against a hueless ground). Each neutral was replaced
+  by the achromatic gray of **identical luminance**, so the L\* ladder, every
+  structural distance and every contrast ratio carry over unchanged — maximum
+  drift 0.14 L\*. Recorded because it makes the palette's one remaining chromatic
+  claim stronger, not weaker: with no cast on any surface, colour anywhere in the
+  shell now means something.
+  2026-08-16 (revision 4) — the user reported that the ribbon and the Properties
+  panel did not read as *above* the drawing, only as differently coloured. Value
+  contrast alone turned out not to carry elevation once the palette was neutral;
+  it needs the directional pair (lit top edge + cast shadow). Added as an
+  acceptance condition rather than as an implementation note because "which
+  surface receives the shadow" is the part that is easy to get wrong and looks
+  like nothing when it is — see TASK-060. Delivered alongside three layout
+  corrections that are not colour and are logged there.
+  2026-08-16 (revision 5) — the user asked that dialogs (settings, import points,
+  attach PDF, edit points, the traverse editor, the save-before-close prompt)
+  stand out. The cause was structural rather than per-dialog: a floating window's
+  fill is the *same* tone as the docked panel it covers, so nothing marked where
+  one ended and the other began. Stated as a property of floating windows in
+  general — not of the named dialogs — because a per-dialog fix would have to be
+  repeated for every dialog written afterwards and would be forgotten. See
+  TASK-061.
+
+### REQ-082 — Tabular data windows behave like a spreadsheet
+- Purpose: the Viewpoints and Layer Manager windows are the two places a surveyor
+  reads and edits many rows at once; a form that happens to be laid out in
+  columns is not usable at that scale
+- Priority: should
+- Type: functional
+- Statement: A window whose content is a table of records — today the **survey
+  points grid** (VIEWPOINTS) and the **Layer Manager** — behaves as a data grid,
+  not as a stack of form controls:
+  - **column sort**, ascending/descending by clicking a header, on every column
+    whose value has an order (multi-column sort where the table supports it).
+    Sorting reorders the **view only**; the underlying record order is unchanged;
+  - **resizable, reorderable and hideable** columns;
+  - the **header row stays visible** while the rows scroll;
+  - a cell's editor **fills its cell** and carries no frame of its own at rest —
+    the grid's own rules and row banding supply the structure — while remaining
+    fully editable, with the frame appearing on hover and while editing;
+  - **row height is uniform** and set by one line of text;
+  - a toggle cell (checkbox, radio) is **centred and visible in both states**.
+- Acceptance:
+  - clicking a sortable header reorders the displayed rows and marks that column;
+    clicking again reverses it;
+  - rows with equal keys keep a stable, non-flickering order between frames;
+  - after sorting, editing a row edits the record shown in that row, and deleting
+    a row deletes the record shown in that row — i.e. the view order never
+    rewires which record a control acts on;
+  - scrolling the rows leaves the header in place;
+  - an unchecked checkbox is visible;
+  - the record order saved to file is unaffected by any display sort.
+- Owner-layer: UI (`src/ui/CadUi.cpp`)
+- Status: accepted (2026-08-16)
+- Revisions: 2026-08-16 — initial. Raised by the user asking that these two
+  windows "behave more like a spreadsheet, like Google Sheets". Recorded as its
+  own requirement rather than as another REQ-081 revision because sorting and
+  column state are **behaviour a user relies on**, not appearance — and because
+  the third acceptance condition (view order must not rewire which record a
+  control acts on) is the one that makes this safe to build and belongs in the
+  spec rather than in a comment. See TASK-062.
+
 ---
 
 ## Performance requirements
@@ -2438,6 +2603,8 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-202 | Build/Platform | planned — observed pipeline behaviour (feature branch → artifact only, no tag; repeated `beta` pushes → exactly one `channel-beta` prerelease; unchanged version on master → no publish, no failure; bumped version → `v<version>` tag + release; failing ctest → no release; tag == AppVersion == manifest version; manifest SHA-256 matches the asset) | accepted |
 | REQ-051 | UI/IO | `MtextToolbarTests` (panel-anchor clamp in-bounds/off-screen/oversized; font+colour run-tag composition incl. empty family = no tag; ruler tick spacing + zero-width = no ticks; attach label 1–9 + out-of-range fallback) + manual (panel titled "Text Formatting" with two rows + ruler; drag persists across edits and restart; font/colour apply to the selection only; height/oblique/entity colour whole-object; style dropdown re-bakes per REQ-044; B/I/U/caps/symbol unchanged; justification re-lays out; disabled controls inert with naming tooltips; ruler + expand toggles; paper MTEXT same panel; single-line TEXT still bare box; OK/Esc + `.gs`/DXF round-trip unchanged) | accepted |
 | REQ-203 | Build/Platform/Commands | planned — the `gosurvey_headless` link line carries no imgui/glfw/GLEW/`gl*` symbol; a hand-written transcript (line + circle + polyline) saves a `.gs` identical to the same steps performed in the GUI; a queued `DIALOG` answer satisfies a file-dialog call with no block; a deliberately-broken transcript exits non-zero naming invariant + step + line; the same transcript twice is byte-identical; CI runs the corpus per push | accepted |
+| REQ-082 | UI | planned — manual (header click sorts + marks the column, second click reverses; equal keys stable; after sorting, edit/delete act on the record shown; header frozen while scrolling; unchecked checkbox visible; saved file order unaffected by display sort) | accepted |
+| REQ-081 | UI | planned — manual, side-by-side against the Hazel reference shots (adjacent docked panels separated by a visible border; panel surface lighter than the dockspace ground; recessed fields; Dark shows no `#464646`/steel-blue chrome; Dark→Light→Dark leaves no colour behind; Light pixel-unchanged; viewport contents unchanged; X/Y/Z badges present, Radius has none) | accepted |
 | REQ-204 | Build/Platform/Commands/util | planned — `--seed N` twice is identical; **one deliberately-broken fixture per invariant proving each check fires**; a failing run's minimized transcript reproduces standalone under the REQ-203 driver; minimization terminates within its bound and reports its ratio; a clean seed range prints only a summary; `GoSurvey.exe`'s link line contains no generator symbol | accepted |
 
 ---

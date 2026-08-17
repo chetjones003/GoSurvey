@@ -718,7 +718,27 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
 
   // Leave room for the separator + button row so they remain visible when content scrolls.
   const float footerH = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y + 4.f;
-  if (ImGui::BeginChild("##settings_content", ImVec2(0.f, -footerH))) {
+  // This child is a layout container, not a box: it must NOT take the recessed
+  // ChildBg, or the inset panels inside it would be the same tone as their own
+  // background and the "boxes in a dialog" reading would collapse.
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+  const bool contentVisible = ImGui::BeginChild("##settings_content", ImVec2(0.f, -footerH));
+  ImGui::PopStyleColor();  // popped unconditionally — BeginChild consumes it as it paints
+  if (contentVisible) {
+    // Tab strip. ImGui paints no background behind a plain tab bar, so tabs float
+    // on the dialog body and read as bare text. Filling the row first — with a
+    // rule under it — puts the unselected tabs on a recessed strip and leaves the
+    // selected one standing on the body it belongs to. The strip is exactly one
+    // frame tall, which is a tab bar's height by construction.
+    {
+      const ImVec2 p0 = ImGui::GetCursorScreenPos();
+      const float w = ImGui::GetContentRegionAvail().x;
+      const float h = ImGui::GetFrameHeight();
+      ImDrawList* dl = ImGui::GetWindowDrawList();
+      dl->AddRectFilled(p0, ImVec2(p0.x + w, p0.y + h), ImGui::GetColorU32(ImGuiCol_Tab));
+      dl->AddLine(ImVec2(p0.x, p0.y + h - 0.5f), ImVec2(p0.x + w, p0.y + h - 0.5f),
+                  ImGui::GetColorU32(ImGuiCol_Border), 1.f);
+    }
     const ImGuiTabBarFlags tabFlags = ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_NoCloseWithMiddleMouseButton;
     if (ImGui::BeginTabBar("##optionsTabs", tabFlags)) {
       if (ImGui::BeginTabItem("Files"))          { cmd.settingsActiveTabIdx = 0; DrawSettingsFilesTab(cmd, log);                                                       ImGui::EndTabItem(); }

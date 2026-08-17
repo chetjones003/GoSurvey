@@ -25,6 +25,12 @@ void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size, boo
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log);
 /// Ribbon under the menu bar: sectioned icon toolbars (Draw, Modify, View, …) plus a fixed-width layer strip; hover for tooltips.
 void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>& log);
+/// Drop shadow + lit top edge on every floating window and popup, so dialogs lift
+/// off the shell (REQ-081). Call once per frame AFTER all windows are submitted
+/// and BEFORE ImGui::Render(); it appends to each window's own draw list, which
+/// is what keeps each shadow at its own window's depth. No-op in a theme that
+/// sets no window shadow.
+void DrawFloatingWindowChrome();
 
 void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 

@@ -324,7 +324,9 @@ int main()
   int fbH = 650;
 
   bool dockLayoutDone = haveSavedDockIni;
-  const float ribbonH = 130.f;
+  // 130 of tools + the 9px gutter DrawRibbonBar leaves under the panel titles,
+  // so the buttons keep the size they had before the gutter was added.
+  const float ribbonH = 139.f;
   bool orthoEnabled = false;  // REQ-047: ORTHO is off by default (AutoCAD convention) — free-angle drawing
   bool gridVisible = false;
   // prevDrawingIdx lives in cmd — no local needed.
@@ -913,6 +915,10 @@ int main()
                                (paperSpace || cmd.cadMeshAttrs.empty()) ? nullptr : &cmd.cadMeshAttrs,
                                // TIN surface edges (REQ-068), model space only like every GL entity.
                                (paperSpace || surfaceEdges.empty()) ? nullptr : &surfaceEdges);
+
+    // Must be the last UI call of the frame: it walks the submitted windows and
+    // appends to their draw lists, so anything begun after it would be missed.
+    DrawFloatingWindowChrome();
 
     ImGui::Render();
     int displayW = 0;

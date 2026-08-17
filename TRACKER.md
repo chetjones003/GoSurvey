@@ -43,6 +43,50 @@
 
 ## BUGS
 
+### [BUG-023] VIEWPOINTS → Load crashed the application (access violation) — FIXED 2026-08-16
+    - Found 2026-08-16 while verifying the Viewpoints grid restyle, by clicking Load on a points
+      file. **The application terminates with `0xC0000005`** and loses any unsaved drawing.
+    - **Pre-existing, and confirmed so rather than assumed**: the change under test was stashed,
+      the pristine tree rebuilt, and the same click reproduced the same access violation. Nothing
+      in the restyle touched the fault.
+    - Cause: `LoadSurveyPointsFromJsonFile` (`survey/SurveyPoints.cpp`) clears
+      `st.surveyPointIdBuffers` at the top and **never refills it**, while filling
+      `st.surveyPoints` with N points. `surveyPointIdBuffers` is a parallel array the Viewpoints
+      grid indexes by point index. That grid resizes the buffers at the *top* of its function —
+      i.e. **before** it submits the Load button — so within the very frame the button fires, the
+      table walks N rows reading `surveyPointIdBuffers[i]` on an empty vector.
+    - Why it hid: the vector is empty only between a load and the next frame's resize, so any
+      loader that ran outside a Viewpoints frame (DXF import, `.gs` open) left the buffers to be
+      repaired on the next frame and looked fine. Only the button *inside* the grid's own frame
+      exposes it. A release build reads freed/`nullptr` storage rather than asserting.
+    - Fix, in two places on purpose: (1) the loader refills the buffers itself, so the invariant
+      belongs to the owner and every future caller inherits it; (2) the grid re-checks the length
+      immediately before reading rows, so any *other* control drawn above the table that mutates
+      the point list mid-frame cannot reopen the same hole.
+    - **Standing risk, not fixed here:** `surveyPointIdBuffers` being a parallel array at all is
+      the underlying hazard — nothing in the type system ties its length to `surveyPoints`.
+      Folding the edit buffer into `SurveyPoint` would remove this class of defect outright.
+      Recorded as follow-up debt.
+
+### [BUG-022] The Survey ribbon's "Groups" button was drawn outside its panel and never appeared — FIXED 2026-08-16
+    - Reported 2026-08-16 by the user ("the survey ribbon tab is not big enough to accommodate the
+      point group button"). Point Groups (REQ-067) shipped with a ribbon button that **no user could
+      ever have clicked** — the panel manager was only reachable from the command bar.
+    - Cause: a ribbon panel is exactly **three** small buttons tall by construction —
+      `rowH = floor((colH - 4) / 3)` in `DrawRibbonBar` — and the Survey section stacked **four**
+      (Inverse, Traverse, Surfaces, Groups) into a single `BeginGroup` column. The fourth was laid
+      out past the section's bottom edge and clipped away by the child window. Nothing warns: the
+      button is submitted, hit-tests against a clipped rect, and simply never draws.
+    - The same trap had already been hit and worked around in the Inquiry section, whose comment
+      says so verbatim: *"Two columns: the panel is three small buttons tall, so a fourth in one
+      column is clipped."* Survey was written afterwards and did not follow it.
+    - Fix: split Survey into two columns (Inverse/Traverse | Surfaces/Groups) and widen `wSrv` to
+      match, exactly as Inquiry does.
+    - **Standing risk, not fixed here:** the three-row limit is implicit in an expression rather
+      than asserted, so the next section to add a fourth button will fail the same silent way. A
+      debug assert in `RibbonSectionEnd` that the content fits its section would turn this class of
+      defect from invisible into loud. Recorded as follow-up debt.
+
 ### [BUG-021] Telemetry could never emit `install`, and re-minted its id every launch — FIXED 2026-08-16
     - Found 2026-08-16 while verifying BUG-020, from evidence rather than review: the local
       `gosurvey-user.json` held `lastActivePingDate` with **no** `installId`, a combination the
@@ -291,6 +335,23 @@
       would have blocked every automated release while looking like a real product defect.
 
 ## FEATURES
+
+### [FEAT-012] Keyboard navigation inside the data grids — OPEN (deferred 2026-08-16)
+    - The half of "behave like a spreadsheet" (REQ-082) that was deliberately **not** delivered in
+      0.5.1: moving between cells with Tab / Enter / arrows, Esc to abandon an edit, a visibly
+      focused cell that scrolls into view. Sorting, column resize/reorder/hide, frozen headers,
+      uniform rows and cell-filling editors all shipped; every cell edits exactly as before, so
+      nothing regressed by splitting it — the grids are simply navigated one control at a time.
+    - **Blocked on a spec decision, not on code.** REQ-082 as accepted says nothing about moving
+      between cells, so building it now would be implementing to an unwritten rule. Three questions
+      have to be answered first (see the task): does Enter commit-and-move-down or commit-and-stay;
+      does navigation past the last row create a record (a data decision — a new survey point needs
+      an ID); and do the arrow keys move between cells or move the caret inside a focused field.
+    - Plan, questions and the trap to avoid are in `workshop/tasks/TASK-063-req082-grid-keyboard-navigation.md`.
+      The trap, recorded there: the grids iterate a **view** while addressing records by **storage**
+      index, so navigation must walk the view or the cursor jumps whenever a sort is active.
+    - Explicitly out of scope until separately requested: range selection, fill-down/right, cell-range
+      copy/paste, one-step undo of a grid edit, formulas. Those are a spreadsheet *engine*, not a grid.
 
 ### [FEAT-011] BENCH has no mesh case, and its file record does not name the profile — DONE 2026-08-15
     - Delivered by TASK-053. `BENCH MESH [triangles] [frames]` measures a 2,000,000-triangle shaded
