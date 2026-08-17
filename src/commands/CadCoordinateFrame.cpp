@@ -140,7 +140,12 @@ bool MaybeRebaseLargeCoordinates(AppCommandState& st, std::vector<std::string>* 
   double mxY = 0.;
   if (!ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
     return false;
-  const double mag = std::max({std::fabs(mnX), std::fabs(mxX), std::fabs(mnY), std::fabs(mnY)});
+  // `mxY`, not `mnY` twice. The fourth slot read `mnY` again, so the maximum-Y extent was never
+  // considered and a drawing whose only large coordinate was a large POSITIVE Y was silently never
+  // rebased — the precision repair simply did not fire, with no symptom to notice. Demonstrated
+  // rather than deduced: a line from (0,0) to (0,1e+12) was not rebased while the identical case in
+  // X was. Found while diagnosing issue #61.
+  const double mag = std::max({std::fabs(mnX), std::fabs(mxX), std::fabs(mnY), std::fabs(mxY)});
   if (mag < kLargeCoordinateRebaseThreshold)
     return false;
   return RebaseDrawingToLocalOrigin(st, log);

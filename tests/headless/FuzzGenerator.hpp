@@ -44,20 +44,24 @@ struct Options {
   /// generated actions alone.
   bool emitPrelude = true;
 
-  /// Append the `gs-roundtrip` differential oracle (save -> load -> save -> compare) at the end.
+  /// Append the `gs-roundtrip` differential oracle at the end: save -> load -> save -> load -> save,
+  /// comparing the LAST TWO saves (see FuzzGenerator.cpp for why it is the last two).
   ///
-  /// **Off by default, on purpose** — still, after #56 and #57 were fixed.
+  /// **On by default since 2026-08-17**, and the history is worth keeping because it is the record of
+  /// a rule being followed rather than an issue being closed.
   ///
-  /// The original reason was #56 (a TEXT entity saved with id 0), and the note here said to make
-  /// this the default once #56 closed. Measuring rather than assuming: with #56 and #57 fixed, a
-  /// 1000-seed sweep still fails ~325 times, on two further defects — #61 (large coordinates break
-  /// resave idempotence) and #60 (erasing the last polyline writes a `.gs` that cannot be
-  /// reopened). Leaving it on would bury every new finding under #61, which is the exact
+  /// It was off for #56 (a TEXT entity saved with id 0), and the note here used to say "make this the
+  /// default once #56 closed". That was replaced with a stricter rule — *flip the default when a
+  /// `--roundtrip` sweep comes back clean, not when a particular issue closes* — precisely because
+  /// closing #56 turned out not to be enough: a 1000-seed sweep still failed ~325 times, on #57, #60
+  /// and #61. Leaving it on then would have buried every new finding under #61, which is the
   /// "noise buries signal" failure this harness exists to avoid.
   ///
-  /// Turn it on with `--roundtrip` to work on those two deliberately. Flip the default when a
-  /// `--roundtrip` sweep comes back clean — not when a particular issue closes.
-  bool emitRoundTrip = false;
+  /// The rule is now satisfied on its own terms: with #56, #57, #60 fixed and #61 resolved by
+  /// amending REQ-079 (decision D-2026-08-17-a) so the oracle compares B to C rather than A to B,
+  /// a **1000-seed `--roundtrip` sweep reports 0 failures** — measured, not assumed. Use
+  /// `--no-roundtrip` to skip it.
+  bool emitRoundTrip = true;
 };
 
 /// Commands the generator must never emit, with the reason. Exposed so a caller can report it and

@@ -1,4 +1,6 @@
-# REQ-204 `gs-roundtrip` oracle: save -> load -> save must be byte-identical.
+# REQ-204 `gs-roundtrip` oracle: save -> load -> save -> load -> save, and the LAST TWO saves must
+# be byte-identical. See the note above the comparison at the bottom for why it is the last two
+# rather than the first two.
 #
 # A differential oracle: it needs no knowledge of what the file SHOULD contain, only that two paths
 # through the code agree. That is what makes it able to find defects nobody predicted — a field
@@ -43,6 +45,20 @@ SAVEAS %OUT%/roundtrip-a.gs
 OPEN %OUT%/roundtrip-a.gs
 CHECK ALL
 SAVEAS %OUT%/roundtrip-b.gs
+OPEN %OUT%/roundtrip-b.gs
+CHECK ALL
+SAVEAS %OUT%/roundtrip-c.gs
 
-# REQ-079: a file at the current version loads with no migration and is byte-identical on resave.
-EXPECT SAMEFILE %OUT%/roundtrip-a.gs %OUT%/roundtrip-b.gs
+# REQ-079 as amended 2026-08-17 (decision D-2026-08-17-a): a file at the current version loads with
+# no migration OR NORMALIZATION and is byte-identical on resave.
+#
+# The comparison is B vs C, not A vs B. Loading a drawing whose coordinates are of state-plane
+# magnitude normalizes it — the document origin moves to the extents midpoint and every local
+# coordinate rebases — so the first resave is entitled to differ from the file that was read. The
+# normalization is idempotent, so the SECOND load changes nothing and B must equal C exactly.
+#
+# This geometry is small and near the origin, so no normalization actually fires here and A, B and C
+# are all identical. The comparison is written as B vs C anyway, so this transcript states the same
+# rule as the generator's oracle rather than a weaker special case of it — a reader should not have
+# to notice that two spellings of the round trip exist.
+EXPECT SAMEFILE %OUT%/roundtrip-b.gs %OUT%/roundtrip-c.gs

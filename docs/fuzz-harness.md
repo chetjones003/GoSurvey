@@ -143,7 +143,7 @@ void CheckDocumentInvariants(const AppCommandState&, std::vector<InvariantViolat
 | Id | Check | Rationale |
 |---|---|---|
 | `undo-redo-identity` | `UNDO` then `REDO` yields a document equal to the one before | The classic CAD defect: an edit that mutates state the snapshot doesn't capture |
-| `gs-roundtrip` | save → load → save is byte-identical | REQ-079. A field written but not read, or read but not written |
+| `gs-roundtrip` | save → load → save → load → save, and the **last two** are byte-identical | REQ-079 as amended 2026-08-17. A field written but not read, or read but not written. It is the last two rather than the first two because a load may legitimately *normalize* the drawing's storage (the large-coordinate origin rebase), and that normalization is idempotent — see #61 |
 | `dxf-export-stable` | export → import → export converges | Catches an exporter with no branch for an entity type — a known open gap for ARC/ELLIPSE |
 | `finite-coords` | no stored coordinate is NaN or ±inf | Degenerate input reaching storage |
 | `local-storage` | every stored coordinate is local; `world = local + worldDocumentOrigin` | The project's recurring bug class: a world-coordinate importer that forgot to subtract |
@@ -368,7 +368,7 @@ one de-risks the next.
 | **1** | The shared domain link surface: `GOSURVEY_DOMAIN_SOURCES`, `imgui_core` split from `imgui_backend`, the two platform seams, `platform/AppPaths` extracted from `AppIcon` | **done** |
 | **2** | `gosurvey_headless` + transcript format + driver | **done** — REQ-203 |
 | **3** | `docinvariants` + a deliberately-broken fixture per check | **done** — 8 invariants, 28 fixtures |
-| **4** | Differential oracles: `gs-roundtrip` (done — `EXPECT SAMEFILE`, found #56 and #57), `undo-redo-identity` and `dxf-export-stable` (**pending** — both need a document-equality predicate) | partial |
+| **4** | Differential oracles: `gs-roundtrip` (done — `EXPECT SAMEFILE`, found #56, #57, #60, #61, and **on by default since 2026-08-17** now that a 1000-seed sweep is clean), `undo-redo-identity` and `dxf-export-stable` (**pending** — both need a document-equality predicate) | partial |
 | **5** | Seeded generator + delta-debugging minimizer | **done** — found #58 and #59, minimizing 155→9 and 169→4 lines automatically |
 | **6** | Byte fuzzing of `DxfIo`/`GsIo`/glTF/STL/CSV over a seed corpus | **pending** — now cheap, since the link surface exists |
 | **7** | Triage agent + dedupe + `gh issue create` | **pending** — signature + in-run dedupe are implemented; cross-run `gh issue list` dedupe and filing are still manual |
@@ -387,7 +387,8 @@ what actually links**. Once that was measured, everything downstream got cheaper
 | [#59](https://github.com/chetjones003/GoSurvey/issues/59) | `CIRCLE` commits and stores an **infinite radius** when the centre is far enough from the picked point that the distance overflows `float` (REQ-201, REQ-101) | `finite-coords` invariant, seed 4737 | auto, 169 → 4 |
 | (no issue) | A **relative** coordinate `@dx,dy` resolves to a non-finite point: `ParseWorldPoint` computes `base + delta`, which overflows `float` while both are representable. The absolute path was already refused by stream extraction, so the relative branch was the one route to a non-finite coordinate from finite input — and the one with no check. LINE, POLYLINE and RECT (REQ-204, REQ-201) | probing #59's siblings by hand, not a seed | n/a — found by probe |
 | [#60](https://github.com/chetjones003/GoSurvey/issues/60) | Erasing the **last** polyline leaves `userPolylineOffsets` as `{0}`, which the writer serialises and the reader then refuses — **a saved drawing that can never be reopened**, the only finding so far that loses work (REQ-079) | `gs-roundtrip`, seed 28 `--roundtrip` | **auto-minimizer degenerated**; by hand, see below |
-| [#61](https://github.com/chetjones003/GoSurvey/issues/61) | A coordinate of state-plane magnitude (`-1e+12`) breaks `.gs` resave idempotence, hit by ~1/3 of seeds — which is why `fuzzgen::Options::emitRoundTrip` stays OFF by default (REQ-079) | `gs-roundtrip`, ~325/1000 seeds | auto, 116 → 8 |
+| [#61](https://github.com/chetjones003/GoSurvey/issues/61) | A coordinate of state-plane magnitude (`-1e+12`) breaks `.gs` resave idempotence, hit by ~1/3 of seeds. **Resolved as a spec defect, not a code defect** (decision D-2026-08-17-a): the origin rebase on load is the local-storage design working, so REQ-079 was amended to carve out normalization and require it to be idempotent instead. The oracle now compares B to C, and `emitRoundTrip` is **ON by default** — a 1000-seed sweep went from ~325 failures to **0** | `gs-roundtrip`, ~325/1000 seeds | auto, 116 → 8 |
+| (no issue) | The rebase threshold read `fabs(mnY)` **twice** and `fabs(mxY)` never, so a drawing whose only large coordinate was a large *positive* Y was silently never rebased — the precision repair simply did not fire. Found while diagnosing #61 and demonstrated by probe: `(0,0)→(0,1e+12)` was not rebased while `(0,0)→(1e+12,0)` was | reading the code #61 pointed at | n/a — found by probe |
 
 **Five defects were found in the harness itself before it found any of these**, which is the part
 worth remembering:

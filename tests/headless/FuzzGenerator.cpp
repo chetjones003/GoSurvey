@@ -261,11 +261,22 @@ std::vector<std::string> Generate(std::uint64_t seed, const std::vector<std::str
   lines.push_back("CHECK ALL");
 
   if (opt.emitRoundTrip) {
+    // TWO round trips, and the comparison is B vs C rather than A vs B (REQ-079 as amended
+    // 2026-08-17, decision D-2026-08-17-a). Loading a drawing whose coordinates are of state-plane
+    // magnitude NORMALIZES it — the document origin moves to the extents midpoint and every local
+    // coordinate rebases — so the first resave legitimately differs from the file that was read.
+    // That normalization is idempotent: the second load finds the origin already set and does
+    // nothing, so B and C must match exactly. Comparing B to C therefore still catches every defect
+    // A-vs-B caught (a field written but not read, or read but not written) while no longer failing
+    // on the one transformation the format is entitled to perform. Issue #61.
     lines.push_back("SAVEAS %OUT%/rt-a.gs");
     lines.push_back("OPEN %OUT%/rt-a.gs");
     lines.push_back("CHECK ALL");
     lines.push_back("SAVEAS %OUT%/rt-b.gs");
-    lines.push_back("EXPECT SAMEFILE %OUT%/rt-a.gs %OUT%/rt-b.gs");
+    lines.push_back("OPEN %OUT%/rt-b.gs");
+    lines.push_back("CHECK ALL");
+    lines.push_back("SAVEAS %OUT%/rt-c.gs");
+    lines.push_back("EXPECT SAMEFILE %OUT%/rt-b.gs %OUT%/rt-c.gs");
   }
 
   return lines;

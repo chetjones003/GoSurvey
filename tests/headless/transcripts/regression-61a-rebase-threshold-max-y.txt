@@ -1,0 +1,42 @@
+# Regression test for the max-Y half of the large-coordinate rebase threshold.
+#
+# Found while diagnosing issue #61, and independent of that issue's idempotence
+# question — this one is a plain typo with a silent effect.
+#
+# MaybeRebaseLargeCoordinates decided whether a loaded drawing needs a precision
+# rebase from:
+#     std::max({fabs(mnX), fabs(mxX), fabs(mnY), fabs(mnY)})
+# `mnY` twice, `mxY` never. So the maximum-Y extent was not considered, and a
+# drawing whose only large coordinate was a large POSITIVE Y was never rebased.
+# The precision repair simply did not fire, and nothing said so.
+#
+# Demonstrated rather than deduced. Before the fix, these two cases behaved
+# differently even though they are the same drawing rotated:
+#   LINE (0,0) -> (0,1e+12)   no rebase   (mxY — the dropped slot)
+#   LINE (0,0) -> (1e+12,0)   rebased     (mxX — the slot that was read)
+#
+# The assertion is the rebase MESSAGE rather than byte-identity, deliberately:
+# whether a rebased document should also resave byte-identically is issue #61's
+# open question, and this test must not depend on how that is answered. All it
+# pins is that the threshold looks at all four extents.
+
+NEW
+
+# Large positive Y only: mnY is 0 and mxY is 1e+12, so this is exactly the case
+# the dropped slot hid.
+CMD LINE
+CMD 0,0
+CMD 0,1e+12
+ESC
+
+# ComputeWorldExtents runs over stored geometry, and the rebase happens on load,
+# so the drawing has to make the round trip for the threshold to be consulted.
+SAVEAS %OUT%/maxy.gs
+OPEN %OUT%/maxy.gs
+
+# The rebase fired. Before the fix this message was absent — the drawing loaded
+# with worldDocumentOrigin still (0,0) and every local coordinate still at
+# state-plane magnitude, which is the precision problem the rebase exists to
+# solve.
+EXPECT LOG "Drawing origin shifted for precision"
+CHECK ALL

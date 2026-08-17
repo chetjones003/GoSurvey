@@ -180,7 +180,22 @@
       version/channel/os are compile-time or enumerated), and the test named "escapes special
       characters" asserts the *unescaped* string, so it documents the gap rather than closing it.
 
-### [BUG-019] Large coordinates break `.gs` resave idempotence — OPEN ([#61](https://github.com/chetjones003/GoSurvey/issues/61))
+### [BUG-025] The large-coordinate rebase threshold ignored the max-Y extent — FIXED 2026-08-17
+    - Found 2026-08-17 while diagnosing BUG-019, by reading the code that issue pointed at.
+    - `MaybeRebaseLargeCoordinates` decided whether a loaded drawing needs its precision rebase from
+      `std::max({fabs(mnX), fabs(mxX), fabs(mnY), fabs(mnY)})` — **`mnY` twice, `mxY` never**. So a
+      drawing whose only large coordinate was a large *positive* Y was never rebased: the precision
+      repair silently did not fire, and nothing reported it.
+    - **Demonstrated, not deduced.** Before the fix, two drawings that are the same shape rotated
+      behaved differently: `LINE (0,0)→(0,1e+12)` was not rebased, while `LINE (0,0)→(1e+12,0)` was.
+    - **Fixed (TASK-066)**: `fabs(mxY)` in the fourth slot.
+    - Worth recording: fixing it **raised** the `gs-roundtrip` failure rate from 48/150 to 53/150
+      seeds, because more drawings then correctly rebased and every rebase broke the old byte-identity
+      rule. That interaction is why the two were resolved in one task rather than separately.
+    - Regression test: `tests/headless/transcripts/regression-61a-rebase-threshold-max-y.txt`. It
+      asserts the rebase *message*, deliberately, so it does not depend on how BUG-019 was resolved.
+
+### [BUG-019] Large coordinates break `.gs` resave idempotence — RESOLVED 2026-08-17 as a **spec** defect ([#61](https://github.com/chetjones003/GoSurvey/issues/61))
     - Found 2026-08-16 by the `gs-roundtrip` oracle once BUG-014/015 were fixed and the oracle could
       see past them. ~325 of 1000 seeds hit it; minimized automatically 116 → 8 lines.
     - A drawing containing a coordinate of state-plane magnitude (`-1e+12`) is not byte-identical on
@@ -194,6 +209,43 @@
       amended. Determine that first.
     - This is why `fuzzgen::Options::emitRoundTrip` stays OFF by default: at ~1/3 of seeds it would
       bury every other finding.
+    - **The hypothesis was correct** (TASK-066). `MaybeRebaseLargeCoordinates`, called at the end of
+      `.gs` load (`GsIo.cpp:1487`), rebases the origin to the extents midpoint when the stored origin
+      is exactly `(0,0)` and the magnitude clears the threshold. Confirmed by diffing the two files
+      rather than by reading alone:
+      ```
+      file A:  origin (0, 0)                      local y = -999999995904
+      file B:  origin (106.625, -499999998125.5)  local y = -499999995904
+      ```
+    - **But the "so it's only the storage split" half was wrong, and that mattered.** The world
+      position does move — 1874.5 units on one endpoint of the reproducer. Chasing that down is what
+      produced the actual answer: the drift is bounded by the float spacing of the *rebased*
+      coordinate, which is never coarser than the spacing of the value it replaced. So the rebase
+      **cannot** make precision worse than the file already had, and for realistic data it is a large
+      improvement — a 5,000 ft survey at easting 2e6 goes from ~0.25 ft quantization to ~0.0002 ft.
+      The 1874-unit number is an artifact of a synthetic drawing that *spans* 1e12, where no float
+      storage can be precise. The rebase is right; only its interaction with REQ-079 was wrong.
+    - **Resolved as a SPEC GAP, not a code fix** — decision **D-2026-08-17-a**, recorded in
+      `spec/project.md`. REQ-079's first acceptance condition was asking the format to promise
+      something the precision design contradicts, so the *requirement* was wrong. Three options were
+      put to the user: (A) rebase at entry so a stored file is always already optimal; (B) amend the
+      requirement and compare the 2nd and 3rd saves; (C) add an `originNormalized` field so load never
+      re-decides. **The user chose (B).**
+    - What changed:
+      - REQ-079 now reads "no migration **and no normalization**", its Statement defines normalization
+        as a bounded, reported, non-lossy storage change, and a **new** acceptance condition requires
+        it to be **idempotent** — so the amendment strengthens the spec rather than merely excusing the
+        code. Idempotence is the condition that catches what would actually hurt: geometry drifting
+        further on every open/save cycle.
+      - The `gs-roundtrip` oracle compares **B to C** instead of A to B, in both the generator and
+        `tests/headless/transcripts/gs-roundtrip.txt`.
+      - **`fuzzgen::Options::emitRoundTrip` is now ON by default**, and the flip followed that
+        option's own written rule ("flip when a `--roundtrip` sweep comes back clean, not when a
+        particular issue closes") rather than the decision alone: a **1000-seed sweep reports 0
+        failures**, down from ~325. A 2000-seed sweep with the new default is also clean.
+        `--no-roundtrip` was added to skip it.
+    - Regression test: `tests/headless/transcripts/regression-61-large-coord-normalization.txt` —
+      asserts the normalization is reported on the first load and that B and C are byte-identical.
 
 ### [BUG-018] Erasing the last polyline writes a `.gs` that cannot be reopened — FIXED 2026-08-17 ([#60](https://github.com/chetjones003/GoSurvey/issues/60))
     - Found 2026-08-16 by the `gs-roundtrip` oracle (seed 28, `--roundtrip`). **The only finding so
@@ -245,7 +297,7 @@
       `polyline-offsets fires on a single-entry table` / `stays silent on an empty table`.
     - Seed 28 still fails — with `expect|SAMEFILE`, which is **BUG-019/#61** standing behind this
       one. A 120-seed `--roundtrip` sweep now shows that signature only, and no `io|OPEN failed` at
-      all.
+      all. **(Superseded 2026-08-17: BUG-019 is resolved, and seed 28 now passes outright.)**
 
 ### [BUG-024] A relative coordinate `@dx,dy` can resolve to a non-finite point — FIXED 2026-08-17
     - Found 2026-08-17 **while fixing BUG-017**, by probing the sibling commands issue #59 recommends

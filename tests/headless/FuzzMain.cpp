@@ -154,7 +154,11 @@ class Runner {
 int Usage() {
   std::fprintf(stderr,
                "usage: gosurvey_headless fuzz [--seed N | --seeds A..B] [--out <dir>]\n"
-               "                              [--timeout-ms N] [--max-attempts N]\n");
+               "                              [--timeout-ms N] [--max-attempts N]\n"
+               "                              [--roundtrip | --no-roundtrip]\n"
+               "\n"
+               "  the gs-roundtrip oracle is ON by default since 2026-08-17; --roundtrip is still\n"
+               "  accepted as a no-op, --no-roundtrip skips it\n");
   return 2;
 }
 
@@ -189,7 +193,9 @@ int FuzzMain(int argc, char** argv, const char* exePath) {
     } else if (a == "--max-attempts" && i + 1 < argc) {
       maxAttempts = std::atoi(argv[++i]);
     } else if (a == "--roundtrip") {
-      gopt.emitRoundTrip = true;
+      gopt.emitRoundTrip = true;  // now the default; still accepted so existing scripts and CI keep working
+    } else if (a == "--no-roundtrip") {
+      gopt.emitRoundTrip = false;
     } else {
       return Usage();
     }

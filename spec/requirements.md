@@ -1989,12 +1989,31 @@ requirements is a planning failure, not a sign of rigor.
   version that wrote it and the version this build understands. That is the only case where a
   drawing legitimately does not open, and it is a downgrade, never a loss.
 
+  **Normalization is distinct from migration, and is permitted.** A load may put a drawing into a
+  canonical *storage* form without changing what the drawing means. Today there is exactly one such
+  step: a file whose coordinates are of state-plane magnitude and whose `worldDocumentOrigin` is
+  `(0,0)` has its origin moved to the extents midpoint and its local coordinates rebased, because
+  geometry is stored `local` with `world = local + worldDocumentOrigin` and float precision depends on
+  the locals being small. This *is* a change to the bytes and is reported to the user, so a normalized
+  load is not byte-identical on resave and is not required to be. It must be **idempotent** — the
+  origin is then established, so a second load does nothing — and it must not be lossy beyond the
+  precision the file already had: the rebase's rounding is bounded by the float spacing of the
+  rebased coordinate, which is never coarser than the spacing of the value it replaced.
+
+  Normalization is deliberately *not* open-ended. Adding a second normalization step is a recorded
+  decision, not an implementation detail, because every one of them costs a load that rewrites the
+  user's file.
+
   **A change that cannot be expressed as a migration is a breaking change**, and is treated as one:
   it is declared deliberately, surfaced in the update dialog before the user accepts the update
   (REQ-078), and is expected to be rare. Backward compatibility is the default and the burden of
   proof is on breaking it.
 - Acceptance:
-  - a file at the current version loads with no migration and is byte-identical on resave;
+  - a file at the current version loads with no migration **and no normalization** and is
+    byte-identical on resave;
+  - **normalization is idempotent**: where a load does normalize (today the only case is the
+    large-coordinate origin rebase — see the Statement), the *second* resave is byte-identical to the
+    first. One transformation, never a drift that compounds per open/save cycle;
   - a file at an older version loads, and the resulting drawing is equivalent to the same content
     saved at the current version;
   - migrations compose — a file two or more versions old is carried forward through every
@@ -2010,6 +2029,16 @@ requirements is a planning failure, not a sign of rigor.
   since the beginning while the reader compared it with `!=`: bumping it would have made **every
   existing drawing unopenable**, so the field was unusable and eleven changes across REQ-044…076
   were forced through a "tolerant key, no version bump" workaround instead. See ADR-030.
+
+  2026-08-17 — **normalization carved out of the byte-identity condition**, and the idempotence
+  condition added in its place. Raised by issue #61: the fuzzer's `gs-roundtrip` oracle failed on
+  roughly a third of all seeds because loading a drawing with state-plane-magnitude coordinates
+  rebases the document origin, so the first resave differed. The requirement as written called that a
+  defect; investigation found it is the local-storage design working correctly — for a 5,000 ft survey
+  at easting 2e6 the rebase takes float quantization from ~0.25 ft to ~0.0002 ft. The original
+  condition was therefore asking the format to promise something the precision design contradicts.
+  Amended rather than the code changed, and the weaker promise replaced with a **stronger, testable
+  one** (idempotence) so the amendment is not simply an exemption. Decision D-2026-08-17-a.
 
 ### REQ-080 — Anonymous install and active-usage telemetry
 - Purpose: inform pricing and understand adoption without user accounts or subscriptions
