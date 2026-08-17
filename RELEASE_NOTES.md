@@ -18,6 +18,26 @@ short fallback message instead — which is a missed opportunity, not a failure.
 
 ## 0.5.1
 
+**Fixes worth knowing about**
+- Loading a points file from the survey points table no longer closes GoSurvey. It used to shut
+  the program down without warning, losing anything unsaved in the drawing.
+- The **Groups** button on the Survey toolbar now appears. It was missing, so point groups could
+  only be opened by typing the command.
+
+**A new look**
+- The dark theme has been rebuilt. Panels and dialogs now sit clearly in front of the drawing
+  instead of blending into it, and boxed areas inside a window read as their own panel.
+- The light theme is unchanged, and switching between them under Settings → Display still works
+  as before.
+
+**Points and layers tables**
+- Both tables now behave like a spreadsheet: click a column heading to sort by it, drag to resize
+  or reorder columns, and the heading row stays put while you scroll.
+- Rows are the height of one line, so many more points fit on screen at once.
+- Sorting only changes what you see. It never reorders the points in your drawing or in a saved
+  file, and editing or deleting a row always acts on the row you are looking at.
+- Coordinate rows in Properties now carry a coloured X, Y or Z marker.
+
 **Anonymous usage reporting — new in this release**
 - GoSurvey now reports anonymous usage, so development can be aimed at what people actually run
   rather than at guesses. This exists only to guide work on the program.
