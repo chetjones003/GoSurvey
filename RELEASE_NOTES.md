@@ -16,6 +16,22 @@ short fallback message instead — which is a missed opportunity, not a failure.
 
 ---
 
+## 0.5.2
+
+**Point files can be .txt as well as .csv**
+- Import points and Export points now accept both. A points file that came off your data collector
+  named `.txt` shows up in the file browser straight away, instead of only appearing once you
+  switch the file type to "All files".
+- The two are the same thing to GoSurvey. The file still has to be comma-separated, and the column
+  order you choose still decides how it is read.
+- When exporting, a name you type ending in `.csv` or `.txt` is saved exactly as you typed it. A
+  name with no ending gets the one you picked in the file type list.
+- A `.txt` whose columns are separated by spaces or tabs is **not** read. It lists the rows it
+  could not understand and adds nothing to the drawing, rather than guessing where the columns
+  are — save it comma-separated and import it again.
+
+---
+
 ## 0.5.1
 
 **Fixes worth knowing about**
