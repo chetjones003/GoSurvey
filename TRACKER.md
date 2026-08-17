@@ -7,6 +7,50 @@
 
 ## CHANGES
 
+### A typed state-plane coordinate was stored 0.025 ft off — REQ-101 accepted, origin now established at entry — 2026-08-17
+    - Raised by the user right after TASK-066 ("let's also rebase at entry") — the option
+      D-2026-08-17-a had declined hours earlier. Revisiting it needed a new recorded decision under
+      CON-03, and it got one (**D-2026-08-17-b**), because new evidence had appeared.
+    - **The evidence.** At easting 2e6, typing `2000000.10` stored `2000000.125` — **0.025 ft, 2.5x
+      REQ-101's own ±0.01 ft**, with no commit, save or load involved. `500000.03` stored as
+      `500000.03125`. This is why the earlier decision was incomplete rather than wrong: the load-time
+      normalization it chose fixed byte-stability and could never fix this, because it only rearranges
+      values that are already quantized.
+    - **The cause was ordering, not rounding.** `ParseWorldPoint` returns `float`, so a typed easting is
+      quantized *inside the parse*, at world magnitude (float spacing at 2e6 is 0.25 ft) — before the
+      document origin is ever subtracted. My first plan (call `MaybeRebaseLargeCoordinates` after each
+      commit) would not have worked at all, and finding that out is what produced the real design.
+    - **The fix**: parse typed points in **double** (`ParseWorldPointD`, with the `float` overload
+      delegating so there is one behaviour, not two), and establish the document origin ahead of
+      dispatch in `ProcessCommandLineSubmit` — the one place every typed coordinate passes through.
+      Narrowing then happens at *local* magnitude. Same input now stores within **~1.5e-9 ft**.
+    - Deliberately NOT in `ParseStoragePoint`: it takes `const AppCommandState&` (29 callers), and a
+      parse function that silently rebases the whole drawing is the wrong owner for a document-wide
+      mutation. One call site, no signature churn, no `const` removed.
+    - **Establishment is bounded at BOTH ends, and the upper bound exists because the tests caught my
+      own mistake.** With only a lower bound, building a frame around `1e38` made absurd values
+      *representable*, which **disarmed the non-finite guards added for #59 hours earlier** — the
+      circle was created instead of refused, and `regression-59`/`-59b` went red. Accommodating garbage
+      is worse than refusing it: a typo would silently produce a drawing in a nonsense frame.
+      `kMaxEstablishableOriginMagnitude` = 1e9, ~100x beyond any real projected system (state plane
+      tops out near 1e7 ft, UTM near 1e7 m), so it cannot reject real survey data. Those two
+      transcripts are now the bound's guard.
+    - Bonus: because the drawing is already normalized when written, even the **first** resave is
+      byte-identical — the payoff over TASK-066's load-time-only behaviour.
+    - **REQ-101 accepted** (was `proposed`, and unusable as authority while it stayed that way — the
+      defect it describes could not be fixed without accepting it first). Scoped to **stored** as well
+      as computed coordinates, with new conditions for one-time establishment and for an over-large
+      magnitude still being refused. Its reference-dataset condition remains outstanding and is marked
+      so in the traceability matrix rather than quietly claimed.
+    - Regression test: `tests/headless/transcripts/regression-req101-origin-at-entry.txt`. 404/404
+      ctest green; 1000-seed sweep clean. **Stated gap:** the transcript pins the mechanism, not the
+      arithmetic — no driver verb reads a stored coordinate back as a number, and ADR-002 keeps command
+      TUs out of the Catch2 target, so the ±0.01 ft figure is verified by inspecting the saved `.gs`.
+    - Still quantized at pick time: `SubmitViewportPick` takes `float` world coordinates, so a *picked*
+      point is already rounded before the Commands layer sees it. Out of scope on purpose — a pick's
+      precision is bounded by its pixel, and typed entry is where exact values are entered. See
+      TASK-067 §2.
+
 ### v0.5.1's `latest.json` was re-uploaded by hand to correct its release notes — 2026-08-17
     - **A deliberate deviation from REQ-202** ("releases are produced by the pipeline, not by
       hand"), recorded rather than done quietly. Only the `notes` field was changed; the manifest

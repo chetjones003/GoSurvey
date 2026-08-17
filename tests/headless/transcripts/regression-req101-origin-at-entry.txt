@@ -1,0 +1,81 @@
+# REQ-101 — a coordinate typed at state-plane magnitude must be STORED within tolerance.
+#
+# Decision D-2026-08-17-b: the document origin is established when the first large coordinate is
+# typed, BEFORE it is narrowed into the float local frame.
+#
+# The defect this pins, measured on the build before the change:
+#   typed  2000000.10  ->  stored  2000000.125     error 0.025 ft
+#   typed   500000.03  ->  stored   500000.03125   error 0.00125 ft
+# REQ-101 allows +/-0.01 ft, so the easting failed it by 2.5x — before any commit, save or load. The
+# cause was ordering, not rounding: narrowing to float BEFORE subtracting the origin quantizes at the
+# magnitude of the world value (float spacing at 2e6 is 0.25 ft), and nothing downstream can recover
+# it. The load-time rebase cannot help — it only rearranges values that are already quantized.
+#
+# After the change, the same input stores as:
+#   worldDocumentOrigin (2000000, 500000), local (0.10000000149, 0.029999999329)
+# i.e. a world error of ~1.5e-9 ft, because the narrowing now happens at LOCAL magnitude.
+#
+# What this transcript can and cannot assert, stated plainly rather than implied: the driver has no
+# verb that reads a stored coordinate back as a number, and ADR-002 keeps command translation units
+# out of the Catch2 target, so the arithmetic above is verified by inspecting the saved `.gs` (recorded
+# in TASK-067 with the before/after figures) rather than here. What this file pins is the mechanism
+# that produces it — that the frame is established, from the typed value, on the first large
+# coordinate, and that the result is stable across a round trip. If the establishment stops happening,
+# this goes red.
+
+NEW
+
+# A realistic state-plane easting/northing, with decimals finer than float can hold at that magnitude.
+CMD LINE
+CMD 2000000.00,500000.00
+CMD 2000000.10,500000.03
+ESC
+
+# The frame was established from the typed coordinate, and it is reported rather than silent (REQ-201).
+EXPECT LOG "Drawing origin shifted for precision"
+EXPECT LINES 1
+CHECK ALL
+
+# Establishment is ONE-TIME. A second large coordinate must not move the frame again: re-centring
+# would round every stored coordinate through float on each move, which is the compounding drift
+# REQ-079's idempotence condition forbids. The guard is MaybeRebaseLargeCoordinates' own
+# `origin != (0,0) -> return false`, and this is what proves it still holds at the entry path.
+CMD LINE
+CMD 2000500.00,500500.00
+CMD 2000500.25,500500.25
+ESC
+EXPECT LINES 2
+CHECK ALL
+
+# --- the upper bound -----------------------------------------------------------------------------
+# Establishment is bounded ABOVE as well (kMaxEstablishableOriginMagnitude, 1e9). Past that a value is
+# not a coordinate, and building a frame around it would make garbage *representable* rather than
+# refused — which is not hypothetical: without the bound, this change silently disarmed the non-finite
+# guards from issue #59, and regression-59/59b went red. Those two transcripts are the bound's real
+# guard; this section states the rule where the rest of the entry behaviour is documented.
+#
+# A fresh drawing, so the origin is back at (0,0) and establishment is armed again.
+NEW
+CMD CIRCLE
+CMD -1e+12,1e+38
+PICK 50 15
+
+# No frame was built for it, so the derived radius still overflows and is still refused (REQ-201).
+EXPECT CIRCLES 0
+EXPECT LOG "not a finite number"
+CHECK ALL
+
+# --- back to a realistic drawing for the round-trip check ----------------------------------------
+NEW
+CMD LINE
+CMD 2000000.00,500000.00
+CMD 2000000.10,500000.03
+ESC
+
+# The drawing was already normalized when written, so load has nothing to normalize and even the
+# FIRST resave is byte-identical. That is the payoff over the load-time-only behaviour of #61.
+SAVEAS %OUT%/req101-a.gs
+OPEN %OUT%/req101-a.gs
+CHECK ALL
+SAVEAS %OUT%/req101-b.gs
+EXPECT SAMEFILE %OUT%/req101-a.gs %OUT%/req101-b.gs

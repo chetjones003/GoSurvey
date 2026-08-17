@@ -1928,6 +1928,13 @@ bool ParseStoragePoint(const AppCommandState& st, const std::string& raw, float*
 
 bool ParseWorldPoint(const std::string& raw, float* ox, float* oy, bool allowRelative, float baseX, float baseY);
 
+/// Double-precision form, and the real implementation — the float overload above narrows its result.
+/// Prefer this wherever the value is destined for the local storage frame: narrowing before the
+/// document origin is subtracted quantizes at world magnitude and silently violates REQ-101 (at
+/// easting 2e6, `2000000.10` became `2000000.125`). See the definition for the measurement.
+bool ParseWorldPointD(const std::string& raw, double* ox, double* oy, bool allowRelative, double baseX,
+                      double baseY);
+
 /// If ortho: snaps dx/dy so segment from anchor is horizontal or vertical (CAD-style).
 void ApplyOrthoConstrainFromAnchor(float anchorX, float anchorY, float* wx, float* wy, bool ortho);
 

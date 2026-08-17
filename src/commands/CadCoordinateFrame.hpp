@@ -10,6 +10,19 @@ namespace CadCoord {
 
 constexpr double kLargeCoordinateRebaseThreshold = 100000.0;
 
+/// Upper bound on a coordinate the ENTRY-TIME origin establishment will accept as a document frame
+/// (REQ-101, decision D-2026-08-17-b). Above this a value is not a coordinate, it is garbage, and
+/// accommodating it would be worse than refusing it: establishing an origin at 1e38 makes an absurd
+/// value *representable*, so a typo silently produces a drawing in a nonsense frame instead of the
+/// refusal REQ-201 wants. It also disarmed the non-finite guards that issue #59 added — the two
+/// regression transcripts for #59 caught exactly that and are why this bound exists.
+///
+/// 1e9 is roughly 100x beyond any real projected system (state plane tops out near 1e7 ft, UTM near
+/// 1e7 m), so it cannot reject legitimate survey data. Values between this and the float limit are
+/// still handled — by the *load-time* normalization (REQ-079), which is bounded by extents rather
+/// than by one typed token, and by the commit-site finiteness guards when they are not.
+constexpr double kMaxEstablishableOriginMagnitude = 1.0e9;
+
 inline double WorldOriginX(const AppCommandState& st) { return st.worldDocumentOriginX; }
 inline double WorldOriginY(const AppCommandState& st) { return st.worldDocumentOriginY; }
 

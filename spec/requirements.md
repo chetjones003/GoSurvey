@@ -2362,13 +2362,44 @@ requirements is a planning failure, not a sign of rigor.
 - Purpose: domain correctness (CAD/survey)
 - Priority: must
 - Type: performance/quality
-- Statement: Computed `<coordinates>` match the reference dataset within
-  `<±0.01 ft>`.
-- Acceptance: the regression dataset passes at the stated tolerance (assert
-  against tolerance, never exact float equality).
-- Owner-layer: `<domain/compute>`
-- Status: proposed
-- Revisions: `<date>` — initial.
+- Statement: A coordinate is **stored** and **computed** within **±0.01 ft** of the value the user
+  supplied or the reference dataset states.
+
+  "Stored" is not a redundant word here. Geometry is held `local` in `float`, with
+  `world = local + worldDocumentOrigin`, so the error in a stored coordinate depends on the magnitude
+  of the value at the moment it is narrowed to `float` — not on the arithmetic that follows. Narrowing
+  a typed easting *before* the document origin is subtracted quantizes it at world magnitude: at
+  easting 2e6 the `float` spacing is 0.25 ft, so `2000000.10` was stored as `2000000.125`, an error of
+  0.025 ft that no later computation can undo. **The document origin is therefore established before a
+  coordinate of large magnitude is narrowed**, so the narrowing happens at local magnitude and the
+  same input stores within ~1e-4 ft.
+
+  Establishment is bounded at both ends, and both bounds are load-bearing. Below
+  `kLargeCoordinateRebaseThreshold` no frame is needed. Above
+  `kMaxEstablishableOriginMagnitude` a value is not a coordinate, and building a frame around it would
+  make garbage *representable* instead of refused — so it is left to the finiteness guards and
+  reported (REQ-201).
+- Acceptance:
+  - the regression dataset passes at the stated tolerance (assert against tolerance, never exact
+    float equality);
+  - **a coordinate typed at state-plane magnitude is STORED within tolerance**, not merely computed
+    within it — checked on a drawing whose document origin starts at `(0,0)`, which is the case that
+    fails if the origin is established too late;
+  - establishment is **one-time**: a second large coordinate does not move the frame again, since
+    re-centring would round every stored coordinate through `float` on each move (the compounding
+    drift REQ-079's idempotence condition forbids);
+  - a magnitude too large to be a coordinate does not become storable by acquiring a frame — the
+    refusal still happens and is still reported.
+- Owner-layer: Commands (`ParseWorldPointD`, the entry-time establishment), util/Commands
+  (`CadCoordinateFrame`)
+- Status: **accepted (2026-08-17)**
+- Revisions: 2026-08-17 — accepted, and the template placeholders replaced with the measured rule.
+  Promoted from `proposed` by decision **D-2026-08-17-b**, on evidence rather than on principle: a
+  coordinate typed at easting 2e6 was being stored 0.025 ft off, which is 2.5x this requirement's own
+  tolerance, before any commit, save or load. The requirement had stated the number since it was
+  drafted but was unusable as authority while it stayed `proposed` — so the defect it describes could
+  not be fixed without accepting it first. Scoped to **stored** as well as computed coordinates in the
+  same change, because storage was where the violation actually was.
 
 ---
 
@@ -2561,7 +2592,7 @@ requirements is a planning failure, not a sign of rigor.
 |-------------|-------|---------|--------|
 | REQ-001 | IO | `<TEST-001>` | accepted |
 | REQ-100 | Renderer | `BenchSceneTests` (exact segment count; byte-identical regeneration; segment count changes density not extent; iso-elevation contours; nearest-rank percentile) + the `BENCH` / `BENCH SURFACE` / `BENCH MESH` commands on the reference machine (`project.md` §7), MSVC, RTX 5060 — segments 1.38 ms, meshes 1.97 ms, surface 10.28 ms vs 16 ms, 2026-08-15 (TASK-052, TASK-053) | accepted (device pending BUG-013) |
-| REQ-101 | compute | `<regression set>` | proposed |
+| REQ-101 | Commands/compute | `headless.regression-req101-origin-at-entry` (a typed easting at 2e6 is stored within tolerance — measured 2000000.10 → origin 2000000 + local 0.10000000149, ~1.5e-9 ft, was 0.025 ft; establishment is one-time; an over-large magnitude is still refused; first resave byte-identical) + `headless.regression-59-circle-infinite-radius` / `-59b` (which double as the upper bound's guard). Reference-dataset half still `<regression set>` — pending, see below | **accepted** (typed-storage half verified; reference dataset outstanding) |
 | REQ-010 | UI | manual (FBK import shows raw rows) | implemented |
 | REQ-011 | compute | `TraverseTests` "ComputeStats" | implemented |
 | REQ-012 | compute | `TraverseTests` "Complementary distance" | implemented |

@@ -2194,6 +2194,22 @@ bool ParseTwoFloats(std::string s, float* x, float* y) {
   return true;
 }
 
+// Double-precision sibling of ParseTwoFloats, for the typed-coordinate path (REQ-101). Same grammar,
+// same comma-or-space separation; the only difference is that it does not throw away the decimals a
+// state-plane easting needs before the document origin has been subtracted.
+bool ParseTwoDoubles(std::string s, double* x, double* y) {
+  for (char& c : s) {
+    if (c == ',')
+      c = ' ';
+  }
+  std::istringstream iss(s);
+  if (!(iss >> *x))
+    return false;
+  if (!(iss >> *y))
+    return false;
+  return true;
+}
+
 bool ParseOneFloat(const std::string& s, float* v) {
   std::istringstream iss(StringUtil::trimCopy(s));
   return static_cast<bool>(iss >> *v);
@@ -7219,7 +7235,20 @@ bool ParseAngleDegrees(const std::string& raw, float* degreesOut) {
   return ParseAngleDegreesInternal(raw, degreesOut);
 }
 
-bool ParseWorldPoint(const std::string& raw, float* ox, float* oy, bool allowRelative, float baseX, float baseY) {
+// Parse a typed world point in DOUBLE (REQ-101). This is the real implementation; the float overload
+// below narrows its result.
+//
+// The precision this preserves is not academic. A typed easting is a decimal string, and narrowing it
+// to `float` before the document origin has been subtracted quantizes it at the magnitude of the
+// WORLD value: at easting 2e6 the float spacing is 0.25 ft, so `2000000.10` became `2000000.125` —
+// 0.025 ft of error introduced by the parse itself, before any commit, save or load, and REQ-101
+// allows 0.01 ft. Subtracting the origin first and narrowing afterwards quantizes at the magnitude of
+// the LOCAL value instead, which is small by construction, so the same input lands within ~1e-4 ft.
+// Nothing downstream can recover what the old order threw away.
+bool ParseWorldPointD(const std::string& raw, double* ox, double* oy, bool allowRelative, double baseX,
+                      double baseY) {
+  if (!ox || !oy)
+    return false;
   std::string s = StringUtil::trimCopy(raw);
   if (s.empty())
     return false;
@@ -7227,23 +7256,41 @@ bool ParseWorldPoint(const std::string& raw, float* ox, float* oy, bool allowRel
     if (!allowRelative)
       return false;
     s = StringUtil::trimCopy(s.substr(1));
-    float dx = 0.f;
-    float dy = 0.f;
-    if (!ParseTwoFloats(s, &dx, &dy))
+    double dx = 0.;
+    double dy = 0.;
+    if (!ParseTwoDoubles(s, &dx, &dy))
       return false;
     *ox = baseX + dx;
     *oy = baseY + dy;
-    // The sum can overflow float even though the base and the delta are each representable, and this
-    // is the ONE path into a coordinate that is non-finite from finite input. An absolute coordinate
-    // that overflows is already refused below — the stream extraction sets failbit — so re-checking
-    // here restores this function's own existing guarantee rather than adding a new rule. Every
-    // caller already reports a false return as a parse failure, which is what satisfies REQ-201.
+    // The sum can overflow even though the base and the delta are each representable, and this is the
+    // ONE path into a coordinate that is non-finite from finite input. An absolute coordinate that
+    // overflows is already refused below — the stream extraction sets failbit — so re-checking here
+    // restores this function's own existing guarantee rather than adding a new rule. Every caller
+    // already reports a false return as a parse failure, which is what satisfies REQ-201.
     // Found while fixing issue #59; reproduced for LINE, POLYLINE and RECT.
     if (!std::isfinite(*ox) || !std::isfinite(*oy))
       return false;
     return true;
   }
-  return ParseTwoFloats(s, ox, oy);
+  return ParseTwoDoubles(s, ox, oy);
+}
+
+bool ParseWorldPoint(const std::string& raw, float* ox, float* oy, bool allowRelative, float baseX, float baseY) {
+  if (!ox || !oy)
+    return false;
+  double wx = 0.;
+  double wy = 0.;
+  if (!ParseWorldPointD(raw, &wx, &wy, allowRelative, static_cast<double>(baseX), static_cast<double>(baseY)))
+    return false;
+  // Narrowing can overflow to infinity where the double did not, so the finiteness guarantee has to be
+  // re-checked at the narrower type rather than inherited from the call above.
+  const float fx = static_cast<float>(wx);
+  const float fy = static_cast<float>(wy);
+  if (!std::isfinite(fx) || !std::isfinite(fy))
+    return false;
+  *ox = fx;
+  *oy = fy;
+  return true;
 }
 
 bool ParseStoragePoint(const AppCommandState& st, const std::string& raw, float* lx, float* ly, bool allowRelative,
@@ -7253,12 +7300,16 @@ bool ParseStoragePoint(const AppCommandState& st, const std::string& raw, float*
   double baseWx = 0.;
   double baseWy = 0.;
   CadCoord::WorldFromLocal(st, baseLocalX, baseLocalY, &baseWx, &baseWy);
-  float wx = 0.f;
-  float wy = 0.f;
-  if (!ParseWorldPoint(raw, &wx, &wy, allowRelative, static_cast<float>(baseWx), static_cast<float>(baseWy)))
+  // Parsed in double and narrowed by LocalFromWorld only AFTER the origin is subtracted — that
+  // ordering is the whole point (REQ-101). The origin itself is established before dispatch, by
+  // MaybeEstablishDocumentOriginFromTypedPoint in ProcessCommandLineSubmit, so by the time any
+  // command's parse runs the frame can already represent what was typed.
+  double wx = 0.;
+  double wy = 0.;
+  if (!ParseWorldPointD(raw, &wx, &wy, allowRelative, baseWx, baseWy))
     return false;
-  CadCoord::LocalFromWorld(st, static_cast<double>(wx), static_cast<double>(wy), lx, ly);
-  return true;
+  CadCoord::LocalFromWorld(st, wx, wy, lx, ly);
+  return !std::isfinite(*lx) || !std::isfinite(*ly) ? false : true;
 }
 
 void ApplyOrthoConstrainFromAnchor(float anchorX, float anchorY, float* wx, float* wy, bool ortho) {
@@ -11810,10 +11861,53 @@ void SubmitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std
   SubmitViewportPickImpl(st, wx, wy, log, windowSelectionSubtract, fenceLeftToRightWindowMode);
 }
 
+// REQ-101 / decision D-2026-08-17-b: establish the document origin BEFORE a typed coordinate of
+// state-plane magnitude is narrowed into the float local frame.
+//
+// Why here, and not at the commit sites: this is the single place every typed coordinate passes
+// through before any command interprets it, so one call covers LINE, POLYLINE, RECT, CIRCLE and every
+// other command with no signature change and no `const` removed from the 29 ParseStoragePoint callers.
+// A "parse" function that silently rebased the whole drawing would also be the wrong owner for a
+// document-wide mutation.
+//
+// Why it fires at most once per drawing: MaybeRebaseLargeCoordinates' own guard is
+// `worldDocumentOrigin != (0,0) -> return false`, so once a frame is established this is inert. That
+// matters more than it looks — re-centring the origin as the drawing grew would round every stored
+// coordinate through float again on each move, which is exactly the compounding drift REQ-079's
+// idempotence condition forbids. One establishment, never a moving target.
+//
+// The origin deliberately becomes the FIRST large coordinate's neighbourhood rather than the eventual
+// extents centre. Precision only needs the locals to be small, not centred: a 5,000 ft site whose
+// origin sits at one corner still stores locals under 5,000, which float represents to ~1e-4 ft. This
+// also matches what the DXF importer already does when its header extents are untrustworthy.
+static void MaybeEstablishDocumentOriginFromTypedPoint(AppCommandState& st, const std::string& line,
+                                                       std::vector<std::string>& log) {
+  if (st.worldDocumentOriginX != 0.0 || st.worldDocumentOriginY != 0.0)
+    return;  // frame already established — inert, and must stay inert (see above)
+  double wx = 0.;
+  double wy = 0.;
+  // Absolute points only. A relative `@dx,dy` is resolved against an anchor that is already in the
+  // current frame, so it cannot be the first thing that needs a new one.
+  if (!ParseWorldPointD(line, &wx, &wy, /*allowRelative=*/false, 0., 0.))
+    return;  // not a coordinate at all — a command name, a distance, a bare Enter
+  const double mag = std::max(std::fabs(wx), std::fabs(wy));
+  if (mag < CadCoord::kLargeCoordinateRebaseThreshold)
+    return;  // small enough that the float local frame is already precise
+  // And an upper bound: past this a value is not a coordinate, and building a frame around it would
+  // make garbage representable instead of refused. See kMaxEstablishableOriginMagnitude.
+  if (mag > CadCoord::kMaxEstablishableOriginMagnitude)
+    return;
+  CadCoord::ApplyDocumentOriginRebase(st, wx, wy, &log);
+}
+
 void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st, std::vector<std::string>& log) {
   [&]() {
   (void)cmdBufSize;
   std::string line = StringUtil::trimCopy(std::string(cmdBuf));
+
+  // Before anything interprets this text (REQ-101). Placed ahead of dispatch so the frame is already
+  // able to represent the value by the time a command's ParseStoragePoint narrows it.
+  MaybeEstablishDocumentOriginFromTypedPoint(st, line, log);
 
   // Record the entry for the command bar's history dropdown (REQ-040): newest last,
   // skip blanks and consecutive duplicates, cap at 20.
