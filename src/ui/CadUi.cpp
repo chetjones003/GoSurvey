@@ -227,81 +227,259 @@ void RouteQueuedCharsToCmdBuf(char* cmdBuf, int cmdBufSize, ImGuiIO& io) {
 
 } // namespace
 
+// sRGB hex → ImGui color. The palettes below are designed in hex and validated
+// in hex (L* ladder, WCAG ratios), so they are written in hex here rather than
+// as rounded floats nobody can check against the design.
+static ImVec4 Hex(unsigned rgb, float a = 1.f) {
+  return ImVec4(static_cast<float>((rgb >> 16) & 0xFFu) / 255.f,
+                static_cast<float>((rgb >> 8) & 0xFFu) / 255.f,
+                static_cast<float>(rgb & 0xFFu) / 255.f, a);
+}
+static ImU32 HexU32(unsigned rgb, int a = 255) {
+  return IM_COL32((rgb >> 16) & 0xFFu, (rgb >> 8) & 0xFFu, rgb & 0xFFu, a);
+}
+
+// ---------------------------------------------------------------------------
+// Theme chrome palette (REQ-081 / ADR-033)
+// ---------------------------------------------------------------------------
+// Colors for the parts of the shell this file paints itself, through ImDrawList
+// or a PushStyleColor literal, rather than through a plain ImGuiCol_* lookup:
+// the toolbar/ribbon band, the ribbon button bevel, the status bar, the command
+// autocomplete popup, and the property grid. ImGui has no style slot meaning
+// "toolbar band" or "property value cell", so these used to be file-scope
+// constants in the classic theme's colors — which is why they rendered
+// identically no matter which theme was active.
+//
+// One instance, written by whichever ApplyCad*Theme() runs, read everywhere
+// else. Every theme entry point must fill EVERY field: a field left unwritten is
+// a piece of the previous theme still on screen after the user switches themes.
+struct UiChrome {
+  ImU32 bandFace;        // toolbar / ribbon strip background
+  ImU32 bandHilite;      // button bevel, light edge
+  ImU32 bandShadow;      // button bevel, dark edge; also the gripper's dark line
+  ImU32 bandSunken;      // pressed button face
+  ImU32 bandRaised;      // hovered button face
+  ImU32 statusBarFace;   // status bar window background
+  ImU32 statusStripFace; // the button strip inside it
+  ImU32 panelFill;       // fill under a property panel's last row
+  ImU32 propValueBg;     // recessed property VALUE cell
+  ImU32 headerFaceL;     // property section header bar, at rest, left of gradient
+  ImU32 headerFaceR;     // ... right of gradient (== left for a flat bar)
+  ImU32 headerHoverL;    // ... hovered
+  ImU32 headerHoverR;
+  ImU32 headerText;      // section header label
+  ImU32 headerEdgeTop;   // 1px edge along the bar's top (0 alpha = none)
+  ImU32 headerEdgeBot;   // 1px edge along its bottom
+  ImU32 headerGlyphBg;   // fill behind the collapse mark (box style only)
+  ImU32 headerGlyphEdge; // its outline (box style only)
+  ImU32 headerGlyph;     // the collapse mark itself
+  bool  headerBoxGlyph;  // true: classic [-]/[+] box; false: a disclosure triangle
+  ImU32 popupFace;       // command autocomplete popup background
+  ImU32 popupBorder;     // ... and its border
+  // Elevation. A flat palette has no bevels to lean on, so "this plate is above
+  // that surface" is carried by two marks: a 1px lit edge along the top of the
+  // raised plate, and a soft shadow the plate casts DOWN onto the surface below
+  // it. Zero alpha in either disables that half — which is how the classic
+  // theme, whose 3D look comes from its own bevels, opts out entirely.
+  ImU32 plateHilite;     // 1px lit edge along a raised plate's top
+  ImU32 plateShadow;     // cast shadow at full strength; fades to transparent
+  ImU32 windowShadow;    // halo around a FLOATING window, so it lifts off the shell
+  bool  axisBadges;      // draw the X/Y/Z badge on Properties coordinate rows
+  ImU32 axisX, axisY, axisZ; // badge fills
+  ImU32 axisText;        // badge letter
+};
+static UiChrome g_chrome;
+
 void ApplyCadDarkTheme() {
+  // Hazel-editor look (REQ-081): a light-ish panel surface floating on a darker
+  // ground, every panel outlined in something darker than both. That pairing —
+  // not the hue — is what makes two docked panels tellable apart, and it is what
+  // the previous palette lacked.
   ImGuiStyle& style = ImGui::GetStyle();
   ImVec4* colors = style.Colors;
 
-  style.WindowRounding = 4.f;
-  style.ChildRounding = 3.f;
-  style.FrameRounding = 3.f;
-  style.PopupRounding = 4.f;
-  style.ScrollbarRounding = 3.f;
-  style.GrabRounding = 3.f;
-  style.TabRounding = 3.f;
+  // Only FLOATING windows see WindowRounding — ImGui squares a window off when it
+  // is docked — so a softer corner here reads on dialogs and popups without
+  // touching the crisp seams the docked panels depend on.
+  style.WindowRounding = 5.f;
+  style.ChildRounding = 0.f;    // square children keep the seams between panels crisp
+  style.FrameRounding = 2.5f;
+  style.PopupRounding = 5.f;
+  style.ScrollbarRounding = 2.f;
+  style.GrabRounding = 2.f;
+  style.TabRounding = 0.f;      // a squared selected tab reads as continuous with its panel
   style.WindowBorderSize = 1.f;
-  style.FrameBorderSize = 0.f;
+  style.ChildBorderSize = 1.f;
+  style.PopupBorderSize = 1.f;
+  style.FrameBorderSize = 0.f;  // fields are read by their recess, not by an outline
   style.TabBorderSize = 0.f;
   style.ScrollbarSize = 12.f;
+  style.GrabMinSize = 10.f;
   style.WindowPadding = ImVec2(8, 8);
   style.FramePadding = ImVec2(6, 4);
   style.ItemSpacing = ImVec2(8, 6);
+  style.CellPadding = ImVec2(6, 3);  // the property grid's rows need the air
 
-  // Core UI palette — hex values match the FEAT-001 spec exactly
-  const ImVec4 workspace  = ImVec4(0.051f, 0.059f, 0.071f, 1.f);  // #0D0F12  Workspace Background
-  const ImVec4 secondary  = ImVec4(0.090f, 0.102f, 0.122f, 1.f);  // #171A1F  Secondary Background
-  const ImVec4 panel      = ImVec4(0.125f, 0.145f, 0.173f, 1.f);  // #20252C  Panel Background
-  const ImVec4 raised     = ImVec4(0.165f, 0.192f, 0.231f, 1.f);  // #2A313B  Raised Surface
-  const ImVec4 border     = ImVec4(0.227f, 0.263f, 0.310f, 1.f);  // #3A434F  Border
-  const ImVec4 separator  = ImVec4(0.294f, 0.337f, 0.392f, 1.f);  // #4B5664  Separator Lines
-  const ImVec4 blue       = ImVec4(0.231f, 0.510f, 0.965f, 1.f);  // #3B82F6  Primary Blue accent
-  const ImVec4 orange     = ImVec4(0.976f, 0.451f, 0.086f, 1.f);  // #F97316  Survey Orange (unused here; used in toggle buttons)
-  const ImVec4 text       = ImVec4(0.898f, 0.906f, 0.922f, 1.f);  // #E5E7EB  Command Text / primary text
+  // -------------------------------------------------------------------------
+  // Palette (REQ-081 revision 3). Derived, not picked — the rules are:
+  //
+  //  1. Every neutral is ACHROMATIC (R = G = B). No surface carries a colour
+  //     cast, so all chroma in the UI belongs to the accent and to the semantic
+  //     triad, and anything coloured is therefore meaningful by construction.
+  //     Revision 2 gave the neutrals a slight cool cast (H 220, S ~13%); the
+  //     user asked for true neutral, and each tone below is the achromatic gray
+  //     with the SAME luminance as its cool predecessor — so the ladder, every
+  //     structural distance and every contrast ratio are unchanged (max drift
+  //     0.14 L*). Do not "neutralise" a tone by dropping its blue channel: the
+  //     luminance weights are 0.2126/0.7152/0.0722, so that shifts lightness.
+  //  2. The neutral ladder steps on roughly even CIE L*. This is the fix that
+  //     matters: the ramp before revision 2 put the border at L* 6.3 and the tab
+  //     strip at L* 6.8 — 0.5 apart, i.e. no border at all where panels meet —
+  //     while surface->group jumped 5.2. Even steps in L*, not in hex, because
+  //     hex distance is not what the eye measures.
+  //  3. The accent is ONE hue (37 deg) at several lightnesses and alphas. Warm
+  //     marks on a neutral ground advance; that is what makes selection read
+  //     instantly without shouting, and with rule 1 it is the ONLY warm thing
+  //     on screen apart from the danger swatch.
+  //  4. Text is held to measured contrast on the panel surface, not to taste.
+  //  5. The semantic triad is equiluminant, so no member outranks the others.
+  //
+  // Every number below was validated before it was written; the ratios in the
+  // comments are computed, not estimated.
+  // -------------------------------------------------------------------------
 
-  (void)orange;
+  // Neutral ladder — achromatic, L* 3.3 / 6.3 / 9.3 / 11.8 / 16.1 / 20.8 / 25.8
+  const ImVec4 seam       = Hex(0x0C0C0C);  // L*  3.3  the gap between panels; darker than any surface
+  const ImVec4 field      = Hex(0x141414);  // L*  6.3  recessed input / property value cell
+  const ImVec4 ground     = Hex(0x1A1A1A);  // L*  9.3  app ground: dockspace, menu bar, status bar
+  const ImVec4 titlebar   = Hex(0x1F1F1F);  // L* 11.8  title bar + tab strip (unselected tabs)
+  const ImVec4 surface    = Hex(0x282828);  // L* 16.1  panel surface — the reference plane
+  const ImVec4 raised     = Hex(0x323232);  // L* 20.8  raised: group header bar, button face
+  const ImVec4 hover      = Hex(0x3D3D3D);  // L* 25.8  hover
+  // Structural distances this buys, in L*:
+  //   panel over ground 6.9 | seam under ground 5.9 | field under panel 9.8
+  //   header over panel 4.7 | panel over tab strip 4.4
+  const ImVec4 fieldHi    = Hex(0x191919);  // field, hovered
+  const ImVec4 fieldOn    = Hex(0x202020);  // field, being edited
+  const ImVec4 rule       = Hex(0x343434);  // table gridline — 5.6 L* over the surface, reads as a rule
+  // Boxed / scrolling regions inside a window sit one step BELOW the window, so
+  // a scroll box reads as a well cut into the dialog rather than as more dialog.
+  // One step down (not two) keeps the recessed fields inside it — which are two
+  // steps down at #141414 — still clearly recessed against it.
+  const ImVec4 inset      = titlebar;       // #1F1F1F, L* 11.8: 4.3 under the surface
+
+  // Text — measured on the panel surface (#282828)
+  const ImVec4 text       = Hex(0xD7D7D7);  // 10.24:1  AAA
+  const ImVec4 textDim    = Hex(0x9A9A9A);  //  5.24:1  AA. Was #808080 at 3.93:1 — a FAIL, and this
+                                            //  slot carries real secondary content (hints, derived
+                                            //  readouts, command hints), not just disabled items.
+
+  // Accent — H 37, one hue at three lightnesses; the only warm family here
+  const ImVec4 accentHi   = Hex(0xF0C67C);  //  9.18:1  marks on dark: check marks, tab overline
+  const ImVec4 accent     = Hex(0xE0AE5E);  //  7.29:1  fills and active states
+  //   ... and #C08F43 (5.11:1) is the ladder's pressed step. Its only present-day
+  //   use is the mode-toggle buttons in PushModeToggleButtonColors, so it is
+  //   written there rather than kept as an unused constant here.
+  const ImVec4 accentWash = Hex(0xE0AE5E, 0.13f);  // hovered row
+  const ImVec4 accentWash2= Hex(0xE0AE5E, 0.22f);  // selected row
+
+  // Semantic triad — equiluminant within 1.7 L*, each carrying #F2F2F2 at >= 4.5:1
+  const ImVec4 danger     = Hex(0xB34A4A);  // L* 45.6  H   0   4.70:1
+  const ImVec4 success    = Hex(0x3E7643);  // L* 44.8  H 127   4.84:1
+  const ImVec4 info       = Hex(0x3C6FB5);  // L* 46.5  H 215   4.54:1
+  const ImVec4 infoText   = Hex(0x6BA5E0);  //  5.68:1  the same info hue, lightened to be readable AS text
 
   colors[ImGuiCol_Text]                  = text;
-  colors[ImGuiCol_TextDisabled]          = separator;
-  colors[ImGuiCol_WindowBg]              = workspace;
-  colors[ImGuiCol_ChildBg]               = secondary;
-  colors[ImGuiCol_PopupBg]               = ImVec4(0.090f, 0.102f, 0.122f, 0.98f);
-  colors[ImGuiCol_Border]                = border;
+  colors[ImGuiCol_TextDisabled]          = textDim;
+  colors[ImGuiCol_WindowBg]              = surface;
+  colors[ImGuiCol_ChildBg]               = inset;
+  colors[ImGuiCol_PopupBg]               = surface;
+  colors[ImGuiCol_Border]                = seam;
   colors[ImGuiCol_BorderShadow]          = ImVec4(0.f, 0.f, 0.f, 0.f);
-  colors[ImGuiCol_FrameBg]               = panel;
-  colors[ImGuiCol_FrameBgHovered]        = raised;
-  colors[ImGuiCol_FrameBgActive]         = ImVec4(0.204f, 0.235f, 0.278f, 1.f);
-  colors[ImGuiCol_TitleBg]               = secondary;
-  colors[ImGuiCol_TitleBgActive]         = panel;
-  colors[ImGuiCol_TitleBgCollapsed]      = workspace;
-  colors[ImGuiCol_MenuBarBg]             = secondary;
-  colors[ImGuiCol_ScrollbarBg]           = workspace;
+  colors[ImGuiCol_FrameBg]               = field;
+  colors[ImGuiCol_FrameBgHovered]        = fieldHi;
+  colors[ImGuiCol_FrameBgActive]         = fieldOn;
+  colors[ImGuiCol_TitleBg]               = titlebar;
+  // One ladder step up, so the focused dialog's title bar reads as live without
+  // the panel-flash the classic theme's note warns about — ImGui paints a docked
+  // node's tab strip with this too, and a *contrasting* colour here makes every
+  // panel flare as focus moves. One step is a hint; a hue would be a flare.
+  colors[ImGuiCol_TitleBgActive]         = raised;
+  colors[ImGuiCol_TitleBgCollapsed]      = titlebar;
+  colors[ImGuiCol_MenuBarBg]             = ground;
+  colors[ImGuiCol_ScrollbarBg]           = ground;
   colors[ImGuiCol_ScrollbarGrab]         = raised;
-  colors[ImGuiCol_ScrollbarGrabHovered]  = border;
-  colors[ImGuiCol_ScrollbarGrabActive]   = separator;
-  colors[ImGuiCol_CheckMark]             = blue;
-  colors[ImGuiCol_SliderGrab]            = blue;
-  colors[ImGuiCol_SliderGrabActive]      = ImVec4(0.380f, 0.588f, 0.984f, 1.f);
-  colors[ImGuiCol_Button]                = panel;
-  colors[ImGuiCol_ButtonHovered]         = raised;
-  colors[ImGuiCol_ButtonActive]          = ImVec4(0.204f, 0.235f, 0.278f, 1.f);
-  colors[ImGuiCol_Header]                = panel;
-  colors[ImGuiCol_HeaderHovered]         = raised;
-  colors[ImGuiCol_HeaderActive]          = ImVec4(0.204f, 0.235f, 0.278f, 1.f);
-  colors[ImGuiCol_Separator]             = border;
-  colors[ImGuiCol_SeparatorHovered]      = separator;
-  colors[ImGuiCol_SeparatorActive]       = blue;
-  colors[ImGuiCol_ResizeGrip]            = ImVec4(0.231f, 0.510f, 0.965f, 0.15f);
-  colors[ImGuiCol_ResizeGripHovered]     = ImVec4(0.231f, 0.510f, 0.965f, 0.55f);
-  colors[ImGuiCol_ResizeGripActive]      = blue;
-  colors[ImGuiCol_Tab]                   = secondary;
+  colors[ImGuiCol_ScrollbarGrabHovered]  = hover;
+  colors[ImGuiCol_ScrollbarGrabActive]   = Hex(0x4A4A4A);
+  colors[ImGuiCol_CheckMark]             = accentHi;
+  colors[ImGuiCol_SliderGrab]            = hover;
+  colors[ImGuiCol_SliderGrabActive]      = accent;
+  colors[ImGuiCol_Button]                = raised;
+  colors[ImGuiCol_ButtonHovered]         = hover;
+  colors[ImGuiCol_ButtonActive]          = titlebar;  // pressed sinks below the surface
+  colors[ImGuiCol_Header]                = raised;
+  colors[ImGuiCol_HeaderHovered]         = accentWash;   // a warm wash on the hovered row
+  colors[ImGuiCol_HeaderActive]          = accentWash2;
+  colors[ImGuiCol_Separator]             = seam;
+  colors[ImGuiCol_SeparatorHovered]      = hover;
+  colors[ImGuiCol_SeparatorActive]       = accent;
+  colors[ImGuiCol_ResizeGrip]            = Hex(0xE0AE5E, 0.16f);
+  colors[ImGuiCol_ResizeGripHovered]     = Hex(0xE0AE5E, 0.47f);
+  colors[ImGuiCol_ResizeGripActive]      = accent;
+  colors[ImGuiCol_Tab]                   = titlebar;
   colors[ImGuiCol_TabHovered]            = raised;
-  colors[ImGuiCol_TabActive]             = ImVec4(0.063f, 0.141f, 0.345f, 1.f);  // dark blue tint
-  colors[ImGuiCol_TabUnfocused]          = workspace;
-  colors[ImGuiCol_TabUnfocusedActive]    = ImVec4(0.063f, 0.141f, 0.345f, 1.f);  // same as TabActive — showing tab is always blue
+  colors[ImGuiCol_TabActive]             = surface;  // selected tab == its panel, so the two read as one piece
+  colors[ImGuiCol_TabUnfocused]          = titlebar;
+  colors[ImGuiCol_TabUnfocusedActive]    = surface;
   // Keep the overline accent explicitly — ImGui may copy HeaderActive into it and ours changed.
-  colors[ImGuiCol_TabSelectedOverline]        = blue;
-  colors[ImGuiCol_TabDimmedSelectedOverline]  = blue;  // showing tab overline stays blue even without focus
-  colors[ImGuiCol_DockingPreview]        = ImVec4(0.231f, 0.510f, 0.965f, 0.35f);
-  colors[ImGuiCol_DockingEmptyBg]        = workspace;
+  colors[ImGuiCol_TabSelectedOverline]        = accentHi;
+  colors[ImGuiCol_TabDimmedSelectedOverline]  = Hex(0xE0AE5E, 0.40f);
+  colors[ImGuiCol_TextSelectedBg]        = Hex(0xE0AE5E, 0.30f);
+  colors[ImGuiCol_NavHighlight]          = accent;
+  colors[ImGuiCol_DragDropTarget]        = infoText;
+  colors[ImGuiCol_ModalWindowDimBg]      = Hex(0x0C0C0C, 0.65f);  // the dim is the seam colour, not black
+  // Tables were never set here, so the property grid drew ImGui's stock blue-gray
+  // borders under this theme however dark the rest of the panel got.
+  colors[ImGuiCol_TableHeaderBg]         = raised;
+  colors[ImGuiCol_TableBorderStrong]     = seam;
+  colors[ImGuiCol_TableBorderLight]      = rule;
+  colors[ImGuiCol_TableRowBg]            = ImVec4(0.f, 0.f, 0.f, 0.f);
+  colors[ImGuiCol_TableRowBgAlt]         = ImVec4(1.f, 1.f, 1.f, 0.02f);
+  colors[ImGuiCol_DockingPreview]        = Hex(0xE0AE5E, 0.35f);
+  colors[ImGuiCol_DockingEmptyBg]        = ground;
+
+  // Chrome, drawn from the same ladder so the hand-painted parts sit on the
+  // same steps as the ImGui-painted parts (that is the whole point of ADR-033).
+  g_chrome.bandFace        = HexU32(0x1F1F1F);  // toolbar band: one step under the panels
+  g_chrome.bandHilite      = HexU32(0x3D3D3D);
+  g_chrome.bandShadow      = HexU32(0x0C0C0C);
+  g_chrome.bandSunken      = HexU32(0x141414);  // pressed reads as a recess, like a field
+  g_chrome.bandRaised      = HexU32(0x323232);  // hover lifts to the group-header step
+  g_chrome.statusBarFace   = HexU32(0x1A1A1A);  // status bar sits on the ground
+  g_chrome.statusStripFace = HexU32(0x1A1A1A);
+  g_chrome.panelFill       = HexU32(0x282828);  // == surface, so empty space is still the panel
+  g_chrome.propValueBg     = HexU32(0x141414);  // == field, so a value cell is a recess
+  g_chrome.headerFaceL     = HexU32(0x323232);  // flat bar: both ends the same
+  g_chrome.headerFaceR     = HexU32(0x323232);
+  g_chrome.headerHoverL    = HexU32(0x3D3D3D);
+  g_chrome.headerHoverR    = HexU32(0x3D3D3D);
+  g_chrome.headerText      = HexU32(0xE0E0E0);  // a touch brighter than body text — it is a title
+  g_chrome.headerEdgeTop   = HexU32(0x000000, 0);  // no bevel; the bar is flat
+  g_chrome.headerEdgeBot   = HexU32(0x0C0C0C);
+  g_chrome.headerGlyphBg   = HexU32(0x000000, 0);
+  g_chrome.headerGlyphEdge = HexU32(0x000000, 0);
+  g_chrome.headerGlyph     = HexU32(0x9A9A9A);
+  g_chrome.headerBoxGlyph  = false;                // disclosure triangle, at the leading edge
+  g_chrome.popupFace       = HexU32(0x282828);
+  g_chrome.popupBorder     = HexU32(0x0C0C0C);
+  g_chrome.plateHilite     = IM_COL32(255, 255, 255, 20);  // a hint of light, not a visible white line
+  g_chrome.plateShadow     = IM_COL32(0, 0, 0, 115);       // fades to 0 over kPlateShadowPx
+  g_chrome.windowShadow    = IM_COL32(0, 0, 0, 150);       // innermost ring; fades out over 12px
+  g_chrome.axisBadges      = true;
+  g_chrome.axisX           = ImGui::ColorConvertFloat4ToU32(danger);
+  g_chrome.axisY           = ImGui::ColorConvertFloat4ToU32(success);
+  g_chrome.axisZ           = ImGui::ColorConvertFloat4ToU32(info);
+  g_chrome.axisText        = HexU32(0xF2F2F2);
 }
 
 void ApplyCadLightTheme() {
@@ -401,31 +579,240 @@ void ApplyCadLightTheme() {
   colors[ImGuiCol_DockingEmptyBg]        = face;        // empty MDI workspace = panel face (#464646)
   (void)mdiBlue;
   (void)dkShadow;
+
+  // REQ-081/ADR-033: these are the literals the hand-painted chrome used to carry
+  // inline, moved here verbatim so this theme renders exactly as it did before.
+  // Do not "tidy" them toward the palette constants above — the point of copying
+  // them unchanged is that this branch cannot regress.
+  g_chrome.bandFace        = IM_COL32( 70,  70,  70, 255);  // #464646 toolbar band
+  g_chrome.bandHilite      = IM_COL32( 86,  86,  86, 255);  // #565656 top-left bevel
+  g_chrome.bandShadow      = IM_COL32( 32,  32,  32, 255);  // #202020 bottom-right bevel
+  g_chrome.bandSunken      = IM_COL32( 58,  58,  58, 255);  // #3A3A3A pressed face
+  g_chrome.bandRaised      = IM_COL32(240, 240, 235, 255);  // raised face, lighter than the band
+  g_chrome.statusBarFace   = IM_COL32( 30,  30,  30, 255);
+  g_chrome.statusStripFace = IM_COL32( 70,  70,  70, 255);
+  g_chrome.panelFill       = IM_COL32( 70,  70,  70, 255);
+  g_chrome.propValueBg     = IM_COL32( 45,  45,  45, 255);  // #2D2D2D recessed value cell
+  g_chrome.headerFaceL     = IM_COL32( 48,  72, 104, 255);  // steel-blue gradient, left
+  g_chrome.headerFaceR     = IM_COL32( 60,  92, 134, 255);  // ... right
+  g_chrome.headerHoverL    = IM_COL32( 58,  88, 128, 255);
+  g_chrome.headerHoverR    = IM_COL32( 78, 118, 168, 255);
+  g_chrome.headerText      = IM_COL32(229, 231, 235, 255);
+  g_chrome.headerEdgeTop   = IM_COL32(255, 255, 255,  60);
+  g_chrome.headerEdgeBot   = IM_COL32(  0,   0,   0, 120);
+  g_chrome.headerGlyphBg   = IM_COL32(255, 255, 255, 255);
+  g_chrome.headerGlyphEdge = IM_COL32( 70,  90, 120, 255);
+  g_chrome.headerGlyph     = IM_COL32( 20,  50,  95, 255);
+  g_chrome.headerBoxGlyph  = true;
+  g_chrome.popupFace       = IM_COL32( 70,  70,  70, 255);
+  g_chrome.popupBorder     = IM_COL32(115, 115, 115, 255);
+  // No cast shadows: this theme already states elevation with its 3D bevels, and
+  // adding a second, contradictory depth cue would read as grime.
+  g_chrome.plateHilite     = IM_COL32(0, 0, 0, 0);
+  g_chrome.plateShadow     = IM_COL32(0, 0, 0, 0);
+  g_chrome.windowShadow    = IM_COL32(0, 0, 0, 0);
+  // nanoCAD 5 has no axis badges, and this theme is a reproduction of it —
+  // REQ-081's "the Light theme renders exactly as it does today" wins here.
+  g_chrome.axisBadges      = false;
+  g_chrome.axisX = g_chrome.axisY = g_chrome.axisZ = g_chrome.axisText = 0;
 }
+
+// ---------------------------------------------------------------------------
+// Elevation cues (REQ-081)
+// ---------------------------------------------------------------------------
+// How far a cast shadow reaches before it has faded out.
+constexpr float kPlateShadowPx = 9.f;
+
+/// A raised plate catches the light along its top edge. Call with the plate's
+/// own rect; draws a 1px line just inside the top.
+///
+/// Both of these push their own clip rect. A window's draw list is clipped to
+/// its CONTENT region, which excludes exactly the window-padding band these
+/// marks live in — without this they are computed, submitted, and then clipped
+/// away, which looks identical to not drawing them at all.
+static void PlateTopHilite(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx) {
+  if ((g_chrome.plateHilite >> IM_COL32_A_SHIFT) == 0 || mx.x <= mn.x)
+    return;
+  dl->PushClipRect(ImVec2(mn.x, mn.y), ImVec2(mx.x, mn.y + 2.f), false);
+  dl->AddLine(ImVec2(mn.x, mn.y + 0.5f), ImVec2(mx.x, mn.y + 0.5f), g_chrome.plateHilite, 1.f);
+  dl->PopClipRect();
+}
+
+/// Soft drop shadow drawn OUTSIDE a floating window's rect, as concentric
+/// rounded outlines fading to nothing. Concentric outlines rather than four
+/// gradient bands because the corners come out right for free, and a dozen
+/// 1px rects is not a cost worth a cleverer shape.
+static void DrawWindowDropShadow(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, float rounding) {
+  const ImU32 base = g_chrome.windowShadow;
+  const int a0 = static_cast<int>((base >> IM_COL32_A_SHIFT) & 0xFFu);
+  if (a0 == 0 || mx.x <= mn.x || mx.y <= mn.y)
+    return;
+  constexpr int   kSteps = 12;
+  constexpr float kDrop  = 2.f;  // light comes from the top, so the halo sits slightly low
+  dl->PushClipRect(ImVec2(mn.x - kSteps - 2.f, mn.y - kSteps - 2.f),
+                   ImVec2(mx.x + kSteps + 2.f, mx.y + kSteps + kDrop + 2.f), false);
+  for (int i = kSteps; i >= 1; --i) {
+    const float t = static_cast<float>(i) / static_cast<float>(kSteps);
+    const int a = static_cast<int>(static_cast<float>(a0) * (1.f - t) * (1.f - t));  // quadratic falloff
+    if (a <= 0)
+      continue;
+    const ImU32 c = (base & ~IM_COL32_A_MASK) | (static_cast<ImU32>(a) << IM_COL32_A_SHIFT);
+    const float f = static_cast<float>(i);
+    dl->AddRect(ImVec2(mn.x - f, mn.y - f + kDrop), ImVec2(mx.x + f, mx.y + f + kDrop), c,
+                rounding + f, 0, 1.f);
+  }
+  dl->PopClipRect();
+}
+
+/// The other half of the same cue: the surface BELOW a raised plate receives the
+/// shadow it casts. Call with the receiving surface's rect and say which of its
+/// edges have a plate over them — the shadow is drawn inside that rect, fading
+/// inward, so it lands on the lower surface where a real shadow would.
+///
+/// It has to be drawn LAST in the receiving window (over its content, not under
+/// it): ImGui renders each dock node as its own window, so a shadow drawn by the
+/// plate would be painted over by the very panel meant to receive it.
+static void CastShadowInto(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, bool fromTop, bool fromLeft) {
+  const ImU32 s = g_chrome.plateShadow;
+  if ((s >> IM_COL32_A_SHIFT) == 0)
+    return;
+  const ImU32 clear = s & ~IM_COL32_A_MASK;  // same colour, zero alpha — fades, never greys
+  const float d = std::min(kPlateShadowPx, std::min(mx.x - mn.x, mx.y - mn.y) * 0.5f);
+  if (d <= 0.f)
+    return;
+  dl->PushClipRect(mn, mx, false);
+  if (fromTop)
+    dl->AddRectFilledMultiColor(mn, ImVec2(mx.x, mn.y + d), s, s, clear, clear);
+  if (fromLeft)
+    dl->AddRectFilledMultiColor(mn, ImVec2(mn.x + d, mx.y), s, clear, clear, s);
+  dl->PopClipRect();
+}
+
+void DrawFloatingWindowChrome() {
+  if ((g_chrome.windowShadow >> IM_COL32_A_SHIFT) == 0)
+    return;
+  // Runs after every window has been submitted and before ImGui::Render(), so
+  // that no dialog has to opt in: settings, import points, attach PDF, edit
+  // points, the traverse editor, the save-before-close modal and every menu or
+  // combo popup get the same treatment from one place, and a dialog added later
+  // is covered the day it is written.
+  //
+  // Appending to a window's OWN draw list is what makes the layering right: draw
+  // lists are emitted in window order, so the halo lands over whatever is behind
+  // that window and under any window above it. A shared background or foreground
+  // list would put every shadow at one depth and get both of those wrong.
+  ImGuiContext& g = *GImGui;
+  for (ImGuiWindow* w : g.Windows) {
+    if (!w || !w->WasActive || w->Hidden)
+      continue;
+    if (w->Flags & ImGuiWindowFlags_ChildWindow)
+      continue;
+    if (w->DockIsActive || w->DockNodeAsHost)
+      continue;  // docked panels state their elevation with CastShadowInto instead
+    // A title bar means "dialog"; the popup/tooltip flags catch menus and combos.
+    // Everything else at top level is app furniture that paints its own edges —
+    // the dockspace host, the status-bar strip, the floating command bar — and a
+    // halo around those would trace a rect the user cannot see.
+    const bool isPopup = (w->Flags & (ImGuiWindowFlags_Popup | ImGuiWindowFlags_Tooltip)) != 0;
+    const bool hasTitleBar = (w->Flags & ImGuiWindowFlags_NoTitleBar) == 0;
+    if (!isPopup && !hasTitleBar)
+      continue;
+    const ImVec2 mn = w->Pos;
+    const ImVec2 mx(w->Pos.x + w->Size.x, w->Pos.y + w->Size.y);
+    DrawWindowDropShadow(w->DrawList, mn, mx, w->WindowRounding);
+    PlateTopHilite(w->DrawList, mn, mx);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Spreadsheet-style data grids (Viewpoints, Layer Manager)
+// ---------------------------------------------------------------------------
+// What stops an ImGui table reading as a spreadsheet is not the table — it is the
+// widgets in it. A default InputText carries its own filled, rounded frame and
+// sits inside the cell with padding around it, so a grid of them reads as a
+// column of little boxes. In a spreadsheet the CELL is the control: the widget
+// fills it edge to edge, has no frame of its own at rest, and the structure comes
+// from the table's own gridlines and row banding. A frame appears only on hover
+// and while editing, which is exactly the affordance Sheets gives you.
+//
+// Push before the row widgets, pop after. Each widget still needs
+// ImGui::SetNextItemWidth(-FLT_MIN) so it fills its column.
+static void PushGridCellStyle() {
+  // Read the frame colour BEFORE pushing over it — GetStyleColorVec4 returns the
+  // current (already-pushed) value, so reading it after would make the active
+  // cell transparent too and an edited cell would show no recess at all.
+  const ImVec4 frame = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+  const ImVec4 hovered = ImGui::GetStyleColorVec4(ImGuiCol_FrameBgHovered);
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 0.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 0.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.f, 2.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.f, 2.f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.f, 0.f, 0.f, 0.f));  // the row shows through
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, hovered);
+  ImGui::PushStyleColor(ImGuiCol_FrameBgActive, frame);
+}
+static void PopGridCellStyle() {
+  ImGui::PopStyleColor(3);
+  ImGui::PopStyleVar(4);
+}
+
+/// A checkbox inside a grid cell: centred in its column, and with its box drawn
+/// even when unchecked. PushGridCellStyle makes frames transparent so that text
+/// cells read as cells — which erases an unchecked checkbox completely, since a
+/// checkbox IS its frame. This puts the recess back for the tick boxes only.
+static bool GridCheckbox(const char* id, bool* v) {
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ImGui::ColorConvertU32ToFloat4(g_chrome.propValueBg));
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
+  const float avail = ImGui::GetContentRegionAvail().x;
+  const float box = ImGui::GetFrameHeight();
+  if (avail > box)
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - box) * 0.5f);
+  const bool changed = ImGui::Checkbox(id, v);
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor();
+  return changed;
+}
+
+/// Same treatment for the single-choice marker (the "Current" column).
+static bool GridRadio(const char* id, bool active) {
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, ImGui::ColorConvertU32ToFloat4(g_chrome.propValueBg));
+  const float avail = ImGui::GetContentRegionAvail().x;
+  const float box = ImGui::GetFrameHeight();
+  if (avail > box)
+    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail - box) * 0.5f);
+  const bool clicked = ImGui::RadioButton(id, active);
+  ImGui::PopStyleColor();
+  return clicked;
+}
+
+/// Flags every spreadsheet-style grid uses, so the two of them cannot drift.
+/// Sortable + Reorderable + Resizable + a frozen header is the Sheets contract.
+static constexpr ImGuiTableFlags kGridTableFlags =
+    ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
+    ImGuiTableFlags_ScrollX | ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable |
+    ImGuiTableFlags_Sortable | ImGuiTableFlags_SortMulti | ImGuiTableFlags_Hideable |
+    ImGuiTableFlags_SizingStretchProp;
 
 // ---------------------------------------------------------------------------
 // nanoCAD-style property grid helpers
 // ---------------------------------------------------------------------------
 
 // Shared flags for all 2-column property tables: full gridlines, transparent rows.
-// Rows are transparent so the gray panel face shows through the LABEL column,
-// giving nanoCAD's two-tone look automatically; only value cells are painted white.
+// Rows are transparent so the panel face shows through the LABEL column, giving
+// the two-tone look automatically; only value cells are painted.
 static constexpr ImGuiTableFlags kPropTableFlags =
     ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_Borders;
 
-// Recessed value column; the label column stays transparent (dark panel face).
-static constexpr ImU32 kPropValueBg = IM_COL32(45, 45, 45, 255); // #2D2D2D
-
-// Paint the value cell (column 1) of the current table row white, like nanoCAD.
+// Paint the value cell (column 1) of the current table row as a recess.
 // Call once per row (any time while that row is current). The label column is
-// left transparent so the gray panel face shows through.
+// left transparent so the panel face shows through.
 static void PropValueCellBg() {
-  ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, kPropValueBg, 1);
+  ImGui::TableSetBgColor(ImGuiTableBgTarget_CellBg, g_chrome.propValueBg, 1);
 }
 
-// Fill the panel's empty area below the last item with the neutral gray
-// workspace color (the grid above keeps its lighter window background for the
-// label column), so inactive space reads as quiet gray rather than blue.
+// Fill the panel's empty area below the last item with the panel face (the grid
+// above keeps its own background for the label column), so inactive space reads
+// as quiet panel rather than as whatever is behind the window.
 static void FillPropPanelEmpty() {
   ImGuiWindow* win = ImGui::GetCurrentWindow();
   if (!win) return;
@@ -434,7 +821,7 @@ static void FillPropPanelEmpty() {
   if (bottom <= top) return;
   win->DrawList->AddRectFilled(ImVec2(win->Pos.x, top),
                                ImVec2(win->Pos.x + win->Size.x, bottom),
-                               IM_COL32(70, 70, 70, 255));  // #464646 neutral panel fill
+                               g_chrome.panelFill);
 }
 
 // nanoCAD-style collapsible section header: blue gradient bar, navy bold-ish text,
@@ -462,32 +849,46 @@ static bool PropSectionHeader(const char* label) {
   if (pressed) { open = !open; storage->SetInt(id, open ? 1 : 0); }
 
   ImDrawList* dl = window->DrawList;
-  // Dark steel-blue gradient (lighter on the right), brighter when hovered.
-  const ImU32 cL = hovered ? IM_COL32( 58,  88, 128, 255) : IM_COL32( 48,  72, 104, 255);
-  const ImU32 cR = hovered ? IM_COL32( 78, 118, 168, 255) : IM_COL32( 60,  92, 134, 255);
+  // Bar face. The classic theme wants a steel-blue gradient; the Hazel theme sets
+  // both ends to the same tone, which makes this a flat fill for free.
+  const ImU32 cL = hovered ? g_chrome.headerHoverL : g_chrome.headerFaceL;
+  const ImU32 cR = hovered ? g_chrome.headerHoverR : g_chrome.headerFaceR;
   dl->AddRectFilledMultiColor(bb.Min, bb.Max, cL, cR, cR, cL);
-  // 3D edges: subtle highlight on top, shadow on bottom.
-  dl->AddLine(ImVec2(bb.Min.x, bb.Min.y), ImVec2(bb.Max.x, bb.Min.y), IM_COL32(255, 255, 255, 60));
-  dl->AddLine(ImVec2(bb.Min.x, bb.Max.y - 1), ImVec2(bb.Max.x, bb.Max.y - 1), IM_COL32(0, 0, 0, 120));
+  // Edges: a highlight above and a shadow below (classic 3D), or just the lower
+  // rule (Hazel) — an edge color with zero alpha draws nothing.
+  dl->AddLine(ImVec2(bb.Min.x, bb.Min.y), ImVec2(bb.Max.x, bb.Min.y), g_chrome.headerEdgeTop);
+  dl->AddLine(ImVec2(bb.Min.x, bb.Max.y - 1), ImVec2(bb.Max.x, bb.Max.y - 1), g_chrome.headerEdgeBot);
 
-  // [-]/[+] collapse box on the right.
-  const float boxSz = ImGui::GetFontSize() * 0.62f;
-  const ImVec2 boxC(bb.Max.x - boxSz, bb.Min.y + h * 0.5f);
-  const ImRect box(ImVec2(boxC.x - boxSz * 0.5f, boxC.y - boxSz * 0.5f),
-                   ImVec2(boxC.x + boxSz * 0.5f, boxC.y + boxSz * 0.5f));
-  dl->AddRectFilled(box.Min, box.Max, IM_COL32(255, 255, 255, 255));
-  dl->AddRect(box.Min, box.Max, IM_COL32(70, 90, 120, 255));
-  const ImU32 glyph = IM_COL32(20, 50, 95, 255);
-  const float my = (box.Min.y + box.Max.y) * 0.5f;
-  dl->AddLine(ImVec2(box.Min.x + 2, my), ImVec2(box.Max.x - 2, my), glyph); // horizontal (minus)
-  if (!open) {
-    const float mx = (box.Min.x + box.Max.x) * 0.5f;
-    dl->AddLine(ImVec2(mx, box.Min.y + 2), ImVec2(mx, box.Max.y - 2), glyph); // vertical → plus
+  const float fontSz = ImGui::GetFontSize();
+  float textX = bb.Min.x + 6.f;
+  if (g_chrome.headerBoxGlyph) {
+    // Classic: a [-]/[+] box at the trailing edge.
+    const float boxSz = fontSz * 0.62f;
+    const ImVec2 boxC(bb.Max.x - boxSz, bb.Min.y + h * 0.5f);
+    const ImRect box(ImVec2(boxC.x - boxSz * 0.5f, boxC.y - boxSz * 0.5f),
+                     ImVec2(boxC.x + boxSz * 0.5f, boxC.y + boxSz * 0.5f));
+    dl->AddRectFilled(box.Min, box.Max, g_chrome.headerGlyphBg);
+    dl->AddRect(box.Min, box.Max, g_chrome.headerGlyphEdge);
+    const float my = (box.Min.y + box.Max.y) * 0.5f;
+    dl->AddLine(ImVec2(box.Min.x + 2, my), ImVec2(box.Max.x - 2, my), g_chrome.headerGlyph); // minus
+    if (!open) {
+      const float mx = (box.Min.x + box.Max.x) * 0.5f;
+      dl->AddLine(ImVec2(mx, box.Min.y + 2), ImVec2(mx, box.Max.y - 2), g_chrome.headerGlyph); // → plus
+    }
+  } else {
+    // Hazel: a disclosure triangle at the LEADING edge, pointing down when open.
+    const float t = fontSz * 0.34f;
+    const ImVec2 c(bb.Min.x + 8.f + t, bb.Min.y + h * 0.5f);
+    if (open)
+      dl->AddTriangleFilled(ImVec2(c.x - t, c.y - t * 0.6f), ImVec2(c.x + t, c.y - t * 0.6f),
+                            ImVec2(c.x, c.y + t * 0.7f), g_chrome.headerGlyph);
+    else
+      dl->AddTriangleFilled(ImVec2(c.x - t * 0.6f, c.y - t), ImVec2(c.x + t * 0.7f, c.y),
+                            ImVec2(c.x - t * 0.6f, c.y + t), g_chrome.headerGlyph);
+    textX = c.x + t + 8.f;
   }
 
-  // Light title text on the dark steel bar.
-  dl->AddText(ImVec2(bb.Min.x + 6, bb.Min.y + (h - ImGui::GetFontSize()) * 0.5f),
-              IM_COL32(229, 231, 235, 255), label);
+  dl->AddText(ImVec2(textX, bb.Min.y + (h - fontSz) * 0.5f), g_chrome.headerText, label);
   (void)g;
   return open;
 }
@@ -723,13 +1124,10 @@ static void CollectAllDrawingLayers(const AppCommandState& cmd, std::vector<std:
 }
 
 
-// nanoCAD-classic toolbar band palette. One warm system-gray for the whole
-// strip (no Office-blue ribbon), with 3D bevel hi/lo tones for button states
-// and grippers. Kept here so the strip, sections and buttons stay in sync.
-constexpr ImU32 kBandFace   = IM_COL32( 70,  70,  70, 255);  // #464646 toolbar band
-constexpr ImU32 kBandHilite = IM_COL32( 86,  86,  86, 255);  // #565656 top-left bevel
-constexpr ImU32 kBandShadow = IM_COL32( 32,  32,  32, 255);  // #202020 bottom-right bevel
-constexpr ImU32 kBandSunken = IM_COL32( 58,  58,  58, 255);  // #3A3A3A pressed face
+// Toolbar band palette: one tone for the whole strip, plus hi/lo tones for button
+// states and grippers, so the strip, its sections and its buttons stay in sync.
+// The values come from the active theme (REQ-081/ADR-033) — these were fixed
+// constants in the classic theme's grays and so ignored the Dark theme entirely.
 
 // Height of the bottom title strip inside each ribbon panel (Civil 3D-style).
 constexpr float kRibbonTitleH = 17.f;
@@ -745,7 +1143,7 @@ static void RibbonSectionBegin(const char* childId, const char* title, float wid
   ImGui::BeginGroup();
   // Flat panel: same gray as the band, no border. Buttons float on a uniform
   // strip; the panel title is pinned at the bottom by RibbonSectionEnd.
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, kBandFace);
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, g_chrome.bandFace);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f, 2.f));
   ImGui::BeginChild(childId, ImVec2(width, height), false, ImGuiWindowFlags_NoScrollbar);
   ImGui::PopStyleVar();
@@ -789,8 +1187,8 @@ static void RibbonSectionEnd() {
   const ImVec2 mx = ImGui::GetItemRectMax();
   ImDrawList* pdl = ImGui::GetWindowDrawList();
   const float dx = mx.x + 4.f;
-  pdl->AddLine(ImVec2(dx, mn.y + 3.f), ImVec2(dx, mx.y - 3.f), kBandShadow, 1.f);
-  pdl->AddLine(ImVec2(dx + 1.f, mn.y + 3.f), ImVec2(dx + 1.f, mx.y - 3.f), kBandHilite, 1.f);
+  pdl->AddLine(ImVec2(dx, mn.y + 3.f), ImVec2(dx, mx.y - 3.f), g_chrome.bandShadow, 1.f);
+  pdl->AddLine(ImVec2(dx + 1.f, mn.y + 3.f), ImVec2(dx + 1.f, mx.y - 3.f), g_chrome.bandHilite, 1.f);
 
   ImGui::EndGroup();
 }
@@ -1499,10 +1897,10 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
 // Classic Win32/nanoCAD 3D button background: flat at rest; raised bevel on
 // hover (light top-left, dark bottom-right); sunken bevel when pressed.
 static void DrawRibbonButtonBevel(ImDrawList* dl, const ImRect& bb, bool sunken) {
-  const ImU32 face = sunken ? kBandSunken : IM_COL32(240, 240, 235, 255);  // raised face slightly lighter than band
+  const ImU32 face = sunken ? g_chrome.bandSunken : g_chrome.bandRaised;
   dl->AddRectFilled(bb.Min, bb.Max, face, 0.f);
-  const ImU32 tl = sunken ? kBandShadow : kBandHilite;  // top-left edge
-  const ImU32 br = sunken ? kBandHilite : kBandShadow;  // bottom-right edge
+  const ImU32 tl = sunken ? g_chrome.bandShadow : g_chrome.bandHilite;  // top-left edge
+  const ImU32 br = sunken ? g_chrome.bandHilite : g_chrome.bandShadow;  // bottom-right edge
   dl->AddLine(ImVec2(bb.Min.x, bb.Min.y + 0.5f), ImVec2(bb.Max.x - 1.f, bb.Min.y + 0.5f), tl, 1.f);
   dl->AddLine(ImVec2(bb.Min.x + 0.5f, bb.Min.y), ImVec2(bb.Min.x + 0.5f, bb.Max.y - 1.f), tl, 1.f);
   dl->AddLine(ImVec2(bb.Min.x, bb.Max.y - 0.5f), ImVec2(bb.Max.x, bb.Max.y - 0.5f), br, 1.f);
@@ -1608,13 +2006,17 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 3));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5, 4));
   // nanoCAD-style flat system-gray toolbar band; icons float on it as 3D buttons.
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, kBandFace);
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, g_chrome.bandFace);
   ImGui::BeginChild("RibbonStrip", ImVec2(0, height), true,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   ImGui::PopStyleColor();
 
   const ImGuiStyle& st = ImGui::GetStyle();
-  const float panelH = height - st.WindowPadding.y * 2.f;
+  // Gutter below the sections so the panel titles ("Draw", "Modify", …) are not
+  // flush against the ribbon's bottom edge. WindowPadding cannot express this —
+  // it is symmetric, and adding it at the top too would waste the band's height.
+  constexpr float kRibbonBottomGutter = 9.f;
+  const float panelH = height - st.WindowPadding.y * 2.f - kRibbonBottomGutter;
   constexpr float kLayerPanelW = 500.f;
 
   // Civil 3D-style panel metrics: a button column fills the height above the
@@ -1648,15 +2050,19 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                       colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror"});
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
   const float wAnn  = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
-  const float wInq  = 8.f + colW({"Aligned", "Linear", "ID Point"});
-  const float wSrv  = 8.f + largeW + 4.f + colW({"Inverse", "Traverse", "Groups", "Surfaces"});
+  // Two columns: the panel is three small buttons tall, so a fourth in one column is clipped.
+  const float wInq  = 8.f + colW({"Aligned", "Linear", "ID Point"}) + 4.f + colW({"Elev/Grade"});
+  // Two columns, as in Inquiry: the panel is three small buttons tall, so the
+  // fourth in a single column was drawn outside the section and never appeared.
+  const float wSrv  = 8.f + largeW + 4.f + colW({"Inverse", "Traverse"}) + 4.f +
+                      colW({"Surfaces", "Groups"});
   const float wView = 8.f + colW({"Extents", "Window"}) + 8.f + 132.f;  // + the visual-style combo (REQ-064)
   // REQ-032 contextual ribbon: Layout tools in paper space, but the normal model ribbon while editing a
   // viewport in place (floating model space, REQ-036) so the draw/modify tools are available.
   const bool  ribbonPaperSpace = cmd.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(cmd);
   const float wLayout = 8.f + largeW + 4.f + colW({"Poly VP"}) + 8.f + largeW + 4.f + colW({"Batch"});
 
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, kBandFace);
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, g_chrome.bandFace);
   ImGui::BeginChild("RibbonToolsLeft", ImVec2(-kLayerPanelW - st.ItemSpacing.x, panelH), false,
                     ImGuiWindowFlags_HorizontalScrollbar);
   ImGui::PopStyleColor();
@@ -1877,6 +2283,17 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       StartIdPointCommand(cmd, log);
     RibbonItemHelp("ID — list UCS (World) X,Y,Z at a point (click or type coordinates).\nCommand bar: ID");
     ImGui::EndGroup();
+
+    // Second column: the panel is three small buttons tall, so this cannot go under ID Point.
+    ImGui::SameLine(0, 4);
+    ImGui::BeginGroup();
+    if (smallBtn("##RibbonSurfElev", RibbonIconKind::Id, "Elev/Grade", colW({"Elev/Grade"})))
+      StartSurfaceElevGradeCommand(cmd, log);
+    RibbonItemHelp(
+        "Surface elevation and grade (REQ-074) — pick a point for its interpolated elevation on every "
+        "surface covering it; pick a second for the grade, slope and distances between them.\n"
+        "A pick off the surface says so rather than extrapolating.\nCommand bar: SURFELEV or SE");
+    ImGui::EndGroup();
   }
   RibbonSectionEnd();
   ImGui::SameLine(0, 8);
@@ -1890,22 +2307,27 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         "Command bar: CREATEPOINTS or CRTPTS");
 
     ImGui::SameLine(0, 4);
-    const float cw = colW({"Inverse", "Traverse", "Groups", "Surfaces"});
+    const float cwA = colW({"Inverse", "Traverse"});
     ImGui::BeginGroup();
-    if (smallBtn("##RibbonInverse", RibbonIconKind::SurveyInverse, "Inverse", cw))
+    if (smallBtn("##RibbonInverse", RibbonIconKind::SurveyInverse, "Inverse", cwA))
       StartSurveyInverseCommand(cmd, log);
     RibbonItemHelp(
         "Inverse — two-point survey leg: horizontal distance and bearing (clockwise from north) in the command log "
         "(World X=Easting, Y=Northing).\nCommand bar: INVERSE or INV");
-    if (smallBtn("##RibbonTraverse", RibbonIconKind::Traverse, "Traverse", cw))
+    if (smallBtn("##RibbonTraverse", RibbonIconKind::Traverse, "Traverse", cwA))
       cmd.showTraverseEditorWindow = true;
     RibbonItemHelp("Traverse Editor — enter traverse leg observations (horizontal angles, distances, vertical angles)\nto compute coordinates and closure. Face 1/Face 2 support included.");
-    if (smallBtn("##RibbonSurfaces", RibbonIconKind::SurveyPoint, "Surfaces", cw))
+    ImGui::EndGroup();
+
+    ImGui::SameLine(0, 4);
+    const float cwB = colW({"Surfaces", "Groups"});
+    ImGui::BeginGroup();
+    if (smallBtn("##RibbonSurfaces", RibbonIconKind::SurveyPoint, "Surfaces", cwB))
       cmd.showSurfaceManagerWindow = true;
     RibbonItemHelp(
         "Surfaces — build a TIN surface by triangulating the points in one or more point groups, "
         "then rebuild it as the survey changes.");
-    if (smallBtn("##RibbonPointGroups", RibbonIconKind::SurveyPoint, "Groups", cw))
+    if (smallBtn("##RibbonPointGroups", RibbonIconKind::SurveyPoint, "Groups", cwB))
       cmd.showPointGroupManagerWindow = true;
     RibbonItemHelp(
         "Point Groups — name a set of points by rule: number ranges, description, raw description, or "
@@ -2254,6 +2676,18 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ImGui::EndGroup();
   }
   RibbonSectionEnd();
+
+  // The ribbon is the topmost plate in the shell: light along its top edge, a
+  // hard dark rule along its bottom. The shadow it casts is drawn by the panels
+  // BELOW it (CastShadowInto) — see that function for why it cannot be drawn here.
+  {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 mn = ImGui::GetWindowPos();
+    const ImVec2 mx(mn.x + ImGui::GetWindowSize().x, mn.y + ImGui::GetWindowSize().y);
+    PlateTopHilite(dl, mn, mx);
+    if ((g_chrome.plateShadow >> IM_COL32_A_SHIFT) != 0)
+      dl->AddLine(ImVec2(mn.x, mx.y - 0.5f), ImVec2(mx.x, mx.y - 0.5f), g_chrome.bandShadow, 1.f);
+  }
 
   ImGui::EndChild();
   ImGui::PopStyleVar(2);
@@ -3344,12 +3778,42 @@ void DrawEditableGeneralSection(AppCommandState& cmd, const std::vector<Selected
 // there would record the NEW value and Ctrl+Z would be a no-op. Snapshotting on activation is what
 // makes REQ-057's "edit Z, then Ctrl+Z restores it" actually hold — and it closes the same gap for
 // the X/Y/radius rows, which were never undoable before this.
+// REQ-081: which axis a coordinate row edits, read off the end of its label
+// ("Start X" → 'X', "Center Z" → 'Z', "Radius" → 0). ASSUMPTION-1 in TASK-058:
+// every axis row in this file is labelled that way, and a row that is not simply
+// gets no badge.
+static char PropRowAxis(const char* label) {
+  const size_t n = label ? std::strlen(label) : 0;
+  if (n < 2 || label[n - 2] != ' ')
+    return 0;
+  const char c = label[n - 1];
+  return (c == 'X' || c == 'Y' || c == 'Z') ? c : 0;
+}
+
 static void PropGeomRow(AppCommandState& cmd, const char* label, const char* id, float* v,
                         const char* fmt, const char* undoLabel) {
   ImGui::TableNextRow();
   ImGui::TableNextColumn();
   ImGui::TextUnformatted(label);
   ImGui::TableNextColumn();
+
+  // A colored X/Y/Z chip left of the field, as in the reference. It is decoration
+  // only — the field keeps the whole remaining width and behaves exactly as before.
+  const char axis = g_chrome.axisBadges ? PropRowAxis(label) : 0;
+  if (axis) {
+    const float h = ImGui::GetFrameHeight();
+    const float w = std::max(h * 0.72f, ImGui::CalcTextSize("X").x + 8.f);
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const ImU32 fill = (axis == 'X') ? g_chrome.axisX : (axis == 'Y') ? g_chrome.axisY : g_chrome.axisZ;
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p, ImVec2(p.x + w, p.y + h), fill, ImGui::GetStyle().FrameRounding);
+    const char letter[2] = {axis, '\0'};
+    const ImVec2 ts = ImGui::CalcTextSize(letter);
+    dl->AddText(ImVec2(p.x + (w - ts.x) * 0.5f, p.y + (h - ts.y) * 0.5f), g_chrome.axisText, letter);
+    ImGui::Dummy(ImVec2(w, h));
+    ImGui::SameLine(0.f, 4.f);
+  }
+
   ImGui::SetNextItemWidth(-1);
   ImGui::InputFloat(id, v, 0.f, 0.f, fmt);
   if (ImGui::IsItemActivated())
@@ -4515,6 +4979,14 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     return;
   }
   cmd.propertiesPanelActive = true;
+  // A raised plate, like the ribbon. Drawn here rather than before End() because
+  // this function has several early returns and a 1px line at the very top edge
+  // sits above where any content can start (WindowPadding keeps it clear).
+  {
+    const ImVec2 wp = ImGui::GetWindowPos();
+    const ImVec2 ws = ImGui::GetWindowSize();
+    PlateTopHilite(ImGui::GetWindowDrawList(), wp, ImVec2(wp.x + ws.x, wp.y + ws.y));
+  }
 
   // REQ-039: in a paper layout (not floating model space), the active selection is native paper-space
   // geometry, which lives in per-layout stores rather than cmd.selection. Show its dedicated panel.
@@ -4764,21 +5236,27 @@ void PushModeToggleButtonColors(bool on, int themeIdx) {
   if (!on)
     return;
   if (themeIdx == 0) {
-    // Dark mode: dark blue tint — clearly "on" against deep panel background
-    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.063f, 0.141f, 0.345f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.086f, 0.180f, 0.420f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.051f, 0.114f, 0.290f, 1.f));
+    // Dark mode: the accent ladder, the same one that marks a selected tab, so
+    // "on" means one thing across the shell (REQ-081). Label is the seam tone
+    // rather than black — 8.96:1 on the accent fill.
+    ImGui::PushStyleColor(ImGuiCol_Button,        Hex(0xE0AE5E));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Hex(0xF0C67C));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  Hex(0xC08F43));
+    ImGui::PushStyleColor(ImGuiCol_Text,          Hex(0x161616));
   } else {
     // Light mode: Primary Blue fills — clearly active against light gray
     ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.231f, 0.510f, 0.965f, 1.f));
     ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.310f, 0.565f, 0.980f, 1.f));
     ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.180f, 0.431f, 0.831f, 1.f));
+    // This theme's own text color, pushed only so both branches pop the same
+    // count — the light branch's appearance is unchanged.
+    ImGui::PushStyleColor(ImGuiCol_Text,          ImVec4(0.898f, 0.906f, 0.922f, 1.f));
   }
 }
 
 void PopModeToggleButtonColors(bool on) {
   if (on)
-    ImGui::PopStyleColor(3);
+    ImGui::PopStyleColor(4);
 }
 
 static void ItemHelpTooltip(const char* text) {
@@ -5291,14 +5769,14 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
   ImGuiWindowFlags wf = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings |
                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoNavFocus;
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.117f, 0.117f, 0.117f, 1.f));  // #464646 gray band (matches toolbar)
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, g_chrome.statusBarFace);
   ImGui::Begin("##CadStatusBarStrip", nullptr, wf);
   ImGui::PopStyleColor();
 
   ImGui::Separator();
   const float statusBtnH = ImGui::GetFrameHeight();
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.275f, 0.275f, 0.275f, 1.f));  // #464646 gray band (matches toolbar)
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, g_chrome.statusStripFace);
   ImGui::BeginChild("StatusBarStrip", ImVec2(0, statusBtnH), false, ImGuiWindowFlags_HorizontalScrollbar);
   ImGui::PopStyleColor();
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(3.f, 0.f));
@@ -5600,10 +6078,10 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   const bool isDark = (cmd.displayColorThemeIdx == 0);
   // Console background is slightly distinct from the main workspace in both themes.
   const ImVec4 consoleBg = isDark
-      ? ImVec4(0.067f, 0.078f, 0.094f, 1.f)   // #111418 dark console
+      ? Hex(0x1A1A1A)                         // the ground step — recessed vs the #24282F panel
       : ImVec4(0.235f, 0.235f, 0.235f, 1.f);  // #3C3C3C console panel (recessed vs #464646 band)
   const ImVec4 promptColor = isDark
-      ? ImVec4(0.133f, 0.773f, 0.369f, 1.f)   // #22C55E bright green on dark
+      ? Hex(0x6CC07A)                         // the palette's success hue, lightened for text: 8.3:1
       : ImVec4(0.180f, 0.720f, 0.400f, 1.f);  // #2EB766 bright green on dark console
   // REQ-040: floating AutoCAD-style command bar (default) vs the legacy docked panel
   // (cmd.cmdLineClassicDock). One function, one shared input + autocomplete; only the
@@ -5628,7 +6106,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     return;  // bar hidden; Ctrl+9 (or the View menu) restores it.
 
   const float barRounding = 5.f;
-  const ImVec4 barBg = isDark ? ImVec4(0.078f, 0.090f, 0.106f, cmd.cmdBarOpacity)
+  const ImVec4 barBg = isDark ? Hex(0x1F1F1F, cmd.cmdBarOpacity)  // the title-bar step
                               : ImVec4(0.247f, 0.247f, 0.247f, cmd.cmdBarOpacity);
   ImGuiWindowFlags winFlags = 0;
   if (floating) {
@@ -5653,7 +6131,10 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     const float xMax = vp->WorkPos.x + vp->WorkSize.x - barW - 4.f;
     cmd.cmdBarAnchorX = std::clamp(cmd.cmdBarAnchorX, xMin, std::max(xMin, xMax));
     // Pin the bar's bottom edge just above the status-bar strip (Y locked) — never below it.
-    const float bottomY = vp->WorkPos.y + vp->WorkSize.y - CadStatusBarStripHeightPx();
+    // The gap matters: with the bar's bottom flush on the strip the two read as one
+    // welded block, and the bar stops looking like it floats over the drawing.
+    constexpr float kCmdBarLift = 10.f;
+    const float bottomY = vp->WorkPos.y + vp->WorkSize.y - CadStatusBarStripHeightPx() - kCmdBarLift;
     ImGui::SetNextWindowPos(ImVec2(cmd.cmdBarAnchorX, bottomY), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
     ImGui::SetNextWindowSizeConstraints(ImVec2(barW, 0.f), ImVec2(barW, FLT_MAX));  // fixed width, auto height
     ImGui::SetNextWindowBgAlpha(0.f);  // transparent; the bar background and history chips are painted manually
@@ -5788,7 +6269,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       ImGui::GetWindowDrawList()->AddLine(ImVec2(gmx - 18.f, gy), ImVec2(gmx + 18.f, gy), gc, 1.4f);
     }
 
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, isDark ? ImVec4(0.086f, 0.098f, 0.114f, cmd.cmdBarOpacity)
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, isDark ? Hex(0x141414, cmd.cmdBarOpacity)  // the field step
                                                    : ImVec4(0.235f, 0.235f, 0.235f, cmd.cmdBarOpacity));
     ImGui::InputTextMultiline("##CmdConsole", cmd.commandLogCacheBytes.data(), cmd.commandLogCacheBytes.size(),
                               ImVec2(-FLT_MIN, consoleH), ImGuiInputTextFlags_ReadOnly);
@@ -6202,8 +6683,8 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
                                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
                                 ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav;
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(1.f, padY));
-    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.275f, 0.275f, 0.275f, 1.f));  // #464646 list (matches panels)
-    ImGui::PushStyleColor(ImGuiCol_Border,  ImVec4(0.45f, 0.45f, 0.45f, 1.f));
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, g_chrome.popupFace);
+    ImGui::PushStyleColor(ImGuiCol_Border,  g_chrome.popupBorder);
     if (ImGui::Begin("##CmdSuggestPopup", nullptr, pf)) {
       ImDrawList* dl = ImGui::GetWindowDrawList();
       const float rowW = ImGui::GetContentRegionAvail().x;
@@ -11463,6 +11944,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   cmd.viewportPanY = *panY;
   cmd.viewportZoom = *zoom;
 
+  // The drawing canvas is the lowest plane in the shell, so it receives what the
+  // ribbon above it and the panel beside it cast. Top and left are where those
+  // sit in the shipped layout (SetupMainDockLayout), and they match the
+  // light-from-top-left convention the classic theme's bevels already use, so
+  // the two themes never disagree about where the light is.
+  //
+  // Cast onto the IMAGE rect, not the window rect. The window rect starts above
+  // the dock tab bar and its content is inset by WindowPadding, so a shadow
+  // aimed at it lands entirely on the tab strip and the padding band — drawn,
+  // but nowhere near the drawing it is supposed to fall across.
+  CastShadowInto(ImGui::GetWindowDrawList(), imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y),
+                 /*fromTop=*/true, /*fromLeft=*/true);
+
   ImGui::End();
 }
 
@@ -12408,30 +12902,66 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
   }
 
   ImGui::Separator();
-  const ImGuiTableFlags tflags =
-      ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_Resizable | ImGuiTableFlags_ScrollY;
   // REQ-046: "current viewport" the VP Freeze / VP Color columns act on (nullptr in model space or when
   // no single viewport is current → those columns are disabled).
   Viewport* vpCur = CurrentViewport(cmd);
-  if (ImGui::BeginTable("laymgr", 13, tflags, ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 16.f))) {
-    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch, 0.16f);
+  std::string pendingDeleteLayer;
+  if (ImGui::BeginTable("laymgr", 13, kGridTableFlags, ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 16.f))) {
+    ImGui::TableSetupScrollFreeze(1, 1);  // header AND the Name column stay put while scrolling
+    ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_DefaultSort, 0.16f);
     ImGui::TableSetupColumn("On", ImGuiTableColumnFlags_WidthFixed, 36.f);
     ImGui::TableSetupColumn("Freeze", ImGuiTableColumnFlags_WidthFixed, 52.f);
     ImGui::TableSetupColumn("Lock", ImGuiTableColumnFlags_WidthFixed, 44.f);
     ImGui::TableSetupColumn("Plot", ImGuiTableColumnFlags_WidthFixed, 40.f);
-    ImGui::TableSetupColumn("Current", ImGuiTableColumnFlags_WidthFixed, 64.f);
+    ImGui::TableSetupColumn("Current", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, 64.f);
     ImGui::TableSetupColumn("Color", ImGuiTableColumnFlags_WidthStretch, 0.12f);
     ImGui::TableSetupColumn("Linetype", ImGuiTableColumnFlags_WidthStretch, 0.11f);
     ImGui::TableSetupColumn("Lineweight", ImGuiTableColumnFlags_WidthStretch, 0.10f);
     ImGui::TableSetupColumn("Transparency", ImGuiTableColumnFlags_WidthStretch, 0.10f);
-    ImGui::TableSetupColumn("VP Freeze", ImGuiTableColumnFlags_WidthFixed, 64.f);
-    ImGui::TableSetupColumn("VP Color", ImGuiTableColumnFlags_WidthStretch, 0.12f);
-    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 72.f);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 1.f, 1.f));
+    ImGui::TableSetupColumn("VP Freeze", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, 64.f);
+    ImGui::TableSetupColumn("VP Color", ImGuiTableColumnFlags_WidthStretch | ImGuiTableColumnFlags_NoSort, 0.12f);
+    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, 72.f);
     ImGui::TableHeadersRow();
-    ImGui::PopStyleColor();
 
-    for (size_t i = 0; i < cmd.drawingLayerTable.size();) {
+    // Sorted VIEW only — `drawingLayerTable`'s own order is left alone, for the
+    // same reason as the Viewpoints grid: other code indexes into it.
+    static std::vector<size_t> layOrder;
+    layOrder.resize(cmd.drawingLayerTable.size());
+    for (size_t k = 0; k < layOrder.size(); ++k)
+      layOrder[k] = k;
+    if (ImGuiTableSortSpecs* ss = ImGui::TableGetSortSpecs()) {
+      if (ss->SpecsCount > 0) {
+        const auto& L = cmd.drawingLayerTable;
+        std::stable_sort(layOrder.begin(), layOrder.end(), [&](size_t a, size_t b) {
+          for (int s = 0; s < ss->SpecsCount; ++s) {
+            const ImGuiTableColumnSortSpecs& sp = ss->Specs[s];
+            auto cmpBool = [](bool x, bool y) { return x == y ? 0 : (x ? 1 : -1); };
+            int c = 0;
+            switch (sp.ColumnIndex) {
+              case 0: c = L[a].name.compare(L[b].name); break;
+              case 1: c = cmpBool(L[a].on, L[b].on); break;
+              case 2: c = cmpBool(L[a].frozen, L[b].frozen); break;
+              case 3: c = cmpBool(L[a].locked, L[b].locked); break;
+              case 4: c = cmpBool(L[a].plottable, L[b].plottable); break;
+              case 6: c = L[a].color.compare(L[b].color); break;
+              case 7: c = L[a].linetype.compare(L[b].linetype); break;
+              case 8: c = (L[a].lineweightMm < L[b].lineweightMm) ? -1
+                        : (L[a].lineweightMm > L[b].lineweightMm) ? 1 : 0; break;
+              case 9: c = (L[a].transparency < L[b].transparency) ? -1
+                        : (L[a].transparency > L[b].transparency) ? 1 : 0; break;
+              default: break;
+            }
+            if (c != 0)
+              return sp.SortDirection == ImGuiSortDirection_Ascending ? c < 0 : c > 0;
+          }
+          return a < b;
+        });
+      }
+    }
+
+    PushGridCellStyle();
+    for (size_t k = 0; k < layOrder.size(); ++k) {
+      const size_t i = layOrder[k];
       CadLayerRow& row = cmd.drawingLayerTable[i];
       ImGui::TableNextRow();
       ImGui::TableNextColumn();
@@ -12443,6 +12973,7 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
         char nmBuf[256];
         ImStrncpy(nmBuf, row.name.c_str(), IM_ARRAYSIZE(nmBuf));
         nmBuf[IM_ARRAYSIZE(nmBuf) - 1] = '\0';
+        ImGui::SetNextItemWidth(-FLT_MIN);
         if (ImGui::InputText("##nm", nmBuf, IM_ARRAYSIZE(nmBuf))) {
         }
         if (ImGui::IsItemDeactivatedAfterEdit()) {
@@ -12458,21 +12989,21 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
         }
       }
       ImGui::TableNextColumn();
-      if (ImGui::Checkbox("##on", &row.on))
+      if (GridCheckbox("##on", &row.on))
         BumpCadGpuCache(cmd);
       ImGui::TableNextColumn();
-      if (ImGui::Checkbox("##fr", &row.frozen))
+      if (GridCheckbox("##fr", &row.frozen))
         BumpCadGpuCache(cmd);
       ImGui::TableNextColumn();
-      if (ImGui::Checkbox("##lk", &row.locked))
+      if (GridCheckbox("##lk", &row.locked))
         BumpCadGpuCache(cmd);
       ImGui::TableNextColumn();
-      if (ImGui::Checkbox("##plot", &row.plottable))  // REQ-029/030: exclude from plots when off
+      if (GridCheckbox("##plot", &row.plottable))  // REQ-029/030: exclude from plots when off
         BumpCadGpuCache(cmd);
       if (ImGui::IsItemHovered())
         ImGui::SetTooltip("Plottable — when off, this layer's geometry (and viewports on it) is excluded from plots.");
       ImGui::TableNextColumn();
-      if (ImGui::RadioButton("##cur", cmd.currentLayer == row.name)) {
+      if (GridRadio("##cur", cmd.currentLayer == row.name)) {
         cmd.currentLayer = row.name;
         SyncDrawingLayerTableWithGeometry(cmd);
       }
@@ -12575,7 +13106,7 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
       {
         ImGui::BeginDisabled(vpCur == nullptr);
         bool vpFrozen = vpCur && IsLayerFrozenInViewport(*vpCur, row.name);
-        if (ImGui::Checkbox("##vpfr", &vpFrozen) && vpCur) {
+        if (GridCheckbox("##vpfr", &vpFrozen) && vpCur) {
           if (vpFrozen)
             FreezeLayerInViewport(*vpCur, row.name);
           else
@@ -12617,21 +13148,24 @@ void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log)
 
       ImGui::TableNextColumn();
       if (row.name != "0") {
-        if (ImGui::SmallButton("Delete")) {
-          std::string err;
-          if (!CadDeleteDrawingLayer(cmd, row.name, &err))
-            log->push_back("LAYER — " + err);
-          ImGui::PopID();
-          continue;
-        }
+        // Deferred to after the table: deleting mid-iteration invalidated both
+        // the row reference and the sort view built from the old indices.
+        if (ImGui::SmallButton("Delete"))
+          pendingDeleteLayer = row.name;
       } else {
         ImGui::TextDisabled("—");
       }
 
       ImGui::PopID();
-      ++i;
     }
+    PopGridCellStyle();
     ImGui::EndTable();
+  }
+
+  if (!pendingDeleteLayer.empty()) {
+    std::string err;
+    if (!CadDeleteDrawingLayer(cmd, pendingDeleteLayer, &err))
+      log->push_back("LAYER — " + err);
   }
 
   ImGui::Separator();
@@ -12911,28 +13445,71 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
 
   ImGui::Separator();
 
-  const ImGuiTableFlags tf = ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY |
-                             ImGuiTableFlags_Resizable | ImGuiTableFlags_Reorderable;
+  // Second line of defence for BUG-023. The resize at the top of this function
+  // runs BEFORE the Load button, so any control above that mutates the point list
+  // leaves the buffers short for the rest of the same frame. Re-checking here,
+  // immediately before the rows are read, makes that impossible by construction
+  // rather than by every such control remembering to do it.
+  if (cmd.surveyPointIdBuffers.size() != cmd.surveyPoints.size()) {
+    const size_t was = cmd.surveyPointIdBuffers.size();
+    cmd.surveyPointIdBuffers.resize(cmd.surveyPoints.size());
+    for (size_t i = was; i < cmd.surveyPoints.size(); ++i)
+      cmd.surveyPointIdBuffers[i] = std::to_string(cmd.surveyPoints[i].id);
+  }
+
   int pendingDelete = -1;
-  if (ImGui::BeginTable("survey_pts", 7, tf, ImVec2(0.f, -ImGui::GetFrameHeightWithSpacing()))) {
-    ImGui::TableSetupScrollFreeze(0, 1);
-    ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 64.f);
+  if (ImGui::BeginTable("survey_pts", 7, kGridTableFlags, ImVec2(0.f, -ImGui::GetFrameHeightWithSpacing()))) {
+    ImGui::TableSetupScrollFreeze(0, 1);  // header stays put while the rows scroll
+    ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_DefaultSort, 64.f);
     ImGui::TableSetupColumn("Easting", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("Northing", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("Elev", ImGuiTableColumnFlags_WidthFixed, 84.f);
     ImGui::TableSetupColumn("Layer", ImGuiTableColumnFlags_WidthStretch);
     ImGui::TableSetupColumn("Description", ImGuiTableColumnFlags_WidthStretch);
-    ImGui::TableSetupColumn("Del", ImGuiTableColumnFlags_WidthFixed, 56.f);
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 1.f, 1.f, 1.f));
+    ImGui::TableSetupColumn("Del", ImGuiTableColumnFlags_WidthFixed | ImGuiTableColumnFlags_NoSort, 56.f);
     ImGui::TableHeadersRow();
-	ImGui::PopStyleColor();
 
-    for (size_t i = 0; i < cmd.surveyPoints.size(); ++i) {
+    // Sorting reorders a VIEW, never `cmd.surveyPoints` itself. The vector's order
+    // is the identity of a point everywhere else — `surveyPointIdBuffers` is a
+    // parallel array indexed by it, labels are looked up by it, and delete takes
+    // an index — so sorting the storage to sort the display would silently
+    // rewire all of that. `order` is the only thing that moves.
+    static std::vector<size_t> order;
+    order.resize(cmd.surveyPoints.size());
+    for (size_t k = 0; k < order.size(); ++k)
+      order[k] = k;
+    if (ImGuiTableSortSpecs* ss = ImGui::TableGetSortSpecs()) {
+      if (ss->SpecsCount > 0) {
+        const auto& pts = cmd.surveyPoints;
+        std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+          for (int s = 0; s < ss->SpecsCount; ++s) {
+            const ImGuiTableColumnSortSpecs& sp = ss->Specs[s];
+            int c = 0;
+            switch (sp.ColumnIndex) {
+              case 0: c = (pts[a].id < pts[b].id) ? -1 : (pts[a].id > pts[b].id) ? 1 : 0; break;
+              case 1: c = (pts[a].easting < pts[b].easting) ? -1 : (pts[a].easting > pts[b].easting) ? 1 : 0; break;
+              case 2: c = (pts[a].northing < pts[b].northing) ? -1 : (pts[a].northing > pts[b].northing) ? 1 : 0; break;
+              case 3: c = (pts[a].elevation < pts[b].elevation) ? -1 : (pts[a].elevation > pts[b].elevation) ? 1 : 0; break;
+              case 4: c = pts[a].layer.compare(pts[b].layer); break;
+              case 5: c = pts[a].description.compare(pts[b].description); break;
+              default: break;
+            }
+            if (c != 0)
+              return sp.SortDirection == ImGuiSortDirection_Ascending ? c < 0 : c > 0;
+          }
+          return a < b;  // stable tie-break, so equal rows never shuffle between frames
+        });
+      }
+    }
+
+    PushGridCellStyle();
+    for (size_t k = 0; k < order.size(); ++k) {
+      const size_t i = order[k];
       SurveyPoint& p = cmd.surveyPoints[i];
       ImGui::TableNextRow();
       ImGui::TableNextColumn();
       ImGui::PushID(static_cast<int>(i));
-      ImGui::SetNextItemWidth(96.f);
+      ImGui::SetNextItemWidth(-FLT_MIN);
       ImGui::InputText("##id", &cmd.surveyPointIdBuffers[i]);
       if (ImGui::IsItemDeactivatedAfterEdit()) {
         std::string t = StringUtil::trimCopy(cmd.surveyPointIdBuffers[i]);
@@ -12962,6 +13539,7 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
       }
       ImGui::TableNextColumn();
       double de = static_cast<double>(CadCoord::WorldXFromLocal(cmd, p.easting));
+      ImGui::SetNextItemWidth(-FLT_MIN);
       ImGui::InputDouble("##e", &de, 0., 0., DisplayFloatFmt(cmd.surveyPointDisplayPrecision).c_str());
       if (ImGui::IsItemDeactivatedAfterEdit()) {
         const double wy = static_cast<double>(CadCoord::WorldYFromLocal(cmd, p.northing));
@@ -12970,6 +13548,7 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
       }
       ImGui::TableNextColumn();
       double dn = static_cast<double>(CadCoord::WorldYFromLocal(cmd, p.northing));
+      ImGui::SetNextItemWidth(-FLT_MIN);
       ImGui::InputDouble("##n", &dn, 0., 0., DisplayFloatFmt(cmd.surveyPointDisplayPrecision).c_str());
       if (ImGui::IsItemDeactivatedAfterEdit()) {
         const double wx = static_cast<double>(CadCoord::WorldXFromLocal(cmd, p.easting));
@@ -12978,19 +13557,25 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
       }
       ImGui::TableNextColumn();
       double dz = static_cast<double>(p.elevation);
+      ImGui::SetNextItemWidth(-FLT_MIN);
       ImGui::InputDouble("##z", &dz, 0., 0., DisplayFloatFmt(cmd.surveyPointDisplayPrecision).c_str());
       if (ImGui::IsItemDeactivatedAfterEdit()) {
         p.elevation = static_cast<float>(dz);
         EnsureSurveyPointLabelMtext(cmd, i, &log);
       }
       ImGui::TableNextColumn();
+      ImGui::SetNextItemWidth(-FLT_MIN);
       ImGui::InputText("##layer", &p.layer);
       if (ImGui::IsItemDeactivatedAfterEdit()) {
         RepositionSurveyLabelMtextForPoint(cmd, i);
         BumpCadGpuCache(cmd);
       }
       ImGui::TableNextColumn();
-      ImGui::InputTextMultiline("##desc", &p.description, ImVec2(-FLT_MIN, 52.f));
+      // Single line, not multiline: a 52px-tall description cell made every row
+      // three times the height of its own text, which is the main reason this
+      // read as a form rather than a sheet. A description is one line of text.
+      ImGui::SetNextItemWidth(-FLT_MIN);
+      ImGui::InputText("##desc", &p.description);
       if (ImGui::IsItemDeactivatedAfterEdit())
         EnsureSurveyPointLabelMtext(cmd, i, &log);
       ImGui::TableNextColumn();
@@ -12998,6 +13583,7 @@ void DrawViewPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) {
         pendingDelete = static_cast<int>(i);
       ImGui::PopID();
     }
+    PopGridCellStyle();
     ImGui::EndTable();
   }
 

@@ -2011,6 +2011,215 @@ requirements is a planning failure, not a sign of rigor.
   existing drawing unopenable**, so the field was unusable and eleven changes across REQ-044…076
   were forced through a "tolerant key, no version bump" workaround instead. See ADR-030.
 
+### REQ-080 — Anonymous install and active-usage telemetry
+- Purpose: inform pricing and understand adoption without user accounts or subscriptions
+- Priority: should
+- Type: functional
+- Statement: The application generates a random 128-bit anonymous install ID on first run and
+  persists it in the user preferences file. It sends two fire-and-forget telemetry events:
+  - `install` — exactly once, when the install ID is generated
+  - `active` — at most once per rolling 24-hour period, reporting current usage
+
+  The events are sent via HTTPS POST to a configurable endpoint (the `TelemetryEndpoint`
+  constant) as a minimal JSON payload: `installId`, `event`, `version`, `channel`, `os`.
+  **No personally identifiable information is included.** No username, hostname, email, or
+  hardware fingerprint is sent; the install ID is the only identifier.
+
+  The telemetry fires in a detached one-shot worker thread at startup, independent of any
+  other background tasks. It must never block the UI, gate a session, or fail the application
+  if the network is unavailable. Any network error (timeout, DNS failure, unreachable host) is
+  dropped silently. This is the same sanctioned silent-failure exception as REQ-077's update
+  check, for the same reason: a background reporting call has no actionable user recourse for
+  its own failure.
+
+  Distinction: a ping measures first *run*, not raw downloads. GitHub Releases download counts
+  (available freely on the asset page) complement this and measure downloads; this requirement
+  measures installs that have executed once.
+- Acceptance:
+  - on first run, an `install` event is sent exactly once; subsequent runs do not resend it;
+  - on any run, an `active` event is sent at most once per rolling 24-hour period, even if the
+    application is restarted multiple times in the same window;
+  - the payload JSON is well-formed and contains exactly the five fields (installId, event,
+    version, channel, os);
+  - no PII is included in any payload (absence of username, hostname, path, email, hardware ID);
+  - network failures (timeout, DNS, unreachable host, TLS error) do not raise an exception, log
+    a message, or otherwise fail the application;
+  - killing network access does not hang or freeze the startup;
+  - a privacy disclosure is present in the UNITS dialog or settings panel explaining what is sent;
+  - the current build sends pings to the configured endpoint and an inspector tool confirms the
+    payload shape and timing.
+- Owner-layer: Platform (PostJson), Telemetry (ping logic + rate limiting), IO (persistence)
+- Status: accepted (2026-08-16)
+- Revisions: 2026-08-16 — initial. Resolved as a SPEC GAP (no prior requirement existed for
+  telemetry). User answered three key questions: (1) tracking only, no license-key enforcement
+  for now (licensing is deferred); (2) self-hosted endpoint (not third-party analytics vendor);
+  (3) no opt-out toggle, always-on anonymous pings (PII-free by design). See ADR-032.
+
+### REQ-081 — The Dark theme reads as a coherent, separated UI
+- Purpose: the shell's panels must be tellable apart at a glance; a uniformly flat
+  surface hides where one panel ends and the next begins
+- Priority: should
+- Type: non-functional (appearance)
+- Statement: The **Dark** color theme presents a coherent dark UI in which docked
+  panels are distinguishable from each other and from the application ground
+  without reading their titles. Concretely:
+  - a panel surface is **lighter** than the dockspace ground behind it, and every
+    panel/dock node is delimited by a 1 px border **darker** than both — the
+    light-surface/dark-gap pairing is what produces the separation;
+  - input and property-value fields are **recessed** (darker than the panel
+    surface they sit on);
+  - a section header inside a panel is a full-width bar distinct from the panel
+    surface, with its disclosure triangle at the leading edge;
+  - one accent colour marks selection and active state across tabs, headers,
+    check marks and slider grabs;
+  - Properties coordinate rows carry a fixed-colour **axis badge** — X red,
+    Y green, Z blue;
+  - chrome painted directly through `ImDrawList` rather than through
+    `ImGuiCol_*` (toolbar band, ribbon panels, ribbon buttons, status bar,
+    autocomplete popup, property grid) follows the **active** theme instead of
+    fixed colours.
+
+  This requirement governs the **shell chrome only**. The drawing viewport is out
+  of its scope.
+- Acceptance:
+  - with Dark active, no chrome element renders in the classic theme's palette
+    (the `#464646` / `#3A3A3A` grays or the steel-blue `#3C5575` family);
+  - two adjacent docked panels are separated by a visible border line, and the
+    panel surface differs from the dockspace ground by a visible value step;
+  - switching Options → Display → *Color theme* Dark → Light → Dark leaves each
+    theme rendering its own palette, with no colour left over from the other on
+    the frame after the switch;
+  - the **Light** (nanoCAD classic) theme renders exactly as it does today —
+    this work does not change it;
+  - viewport contents — crosshair, grips, entity/layer colours, selection
+    highlight, snap markers, paper-space sheet — are unchanged;
+  - a Properties geometry row whose label ends in X, Y or Z shows the axis badge
+    in red, green or blue respectively; a non-axis row (e.g. Radius) shows none.
+  - **(added 2026-08-16, revision 2; clause 1 and the accent clause amended by
+    revision 3)** the palette is derived, not picked:
+    - every neutral is **achromatic** (R = G = B), so no surface carries a colour
+      cast and all chroma in the UI belongs to the accent and the semantic
+      triad — anything coloured is therefore meaningful;
+    - the neutral ladder steps on roughly even **CIE L\*** intervals, and each
+      structural relationship (panel over ground, seam under ground, field under
+      panel, header over panel, panel over tab strip) is a stated L\* distance
+      rather than an eyeballed one;
+    - primary text meets **WCAG AA at 7:1** on the panel surface and secondary
+      text meets **4.5:1** — `TextDisabled` carries real secondary content here
+      (hints, derived readouts, command hints), so it is held to the text bar,
+      not to the disabled-text exemption;
+    - the accent is one hue used at several lightnesses/alphas, warm against the
+      neutral ground so accented marks advance;
+    - the semantic triad (axis X/Y/Z, and any future danger/success/info) is
+      **equiluminant within ~2 L\***, so no member visually outranks the others,
+      and each carries its label at ≥ 4.5:1.
+  - **(added 2026-08-16, revision 4)** the shell states **elevation**, not just
+    separation: the ribbon and the docked panels read as plates above the drawing
+    canvas. A flat palette has no bevels to lean on, so this is carried by two
+    paired marks — a lit edge along the top of a raised plate, and a soft shadow
+    that plate casts onto the surface below it, landing **on the receiving
+    surface** (the drawing canvas), not in the gap between them. Light comes from
+    the top-left, matching the direction the classic theme's 3D bevels already
+    imply, so the two themes never disagree about where the light is.
+  - **(added 2026-08-16, revision 6)** inside a window, a **boxed or scrolling
+    region sits on its own tone**, one step below the window it is cut into, so a
+    scroll box reads as a well rather than as more window; and a **tab bar has a
+    strip behind it**, so unselected tabs sit on that strip and the selected one
+    stands on the body it belongs to. A child used purely to group layout is
+    exempt and stays on the window tone — nesting two inset tones defeats both.
+  - **(added 2026-08-16, revision 5)** a **floating window** — dialog, modal or
+    popup — reads as lifted off the shell rather than pasted onto it. It carries
+    a soft drop shadow on all sides, a lit top edge, and a title bar that is
+    visibly live when the window holds focus. This applies to **every** floating
+    window without each one opting in, so a dialog added later is covered the day
+    it is written; a theme opts out by setting no window shadow.
+- Owner-layer: UI (`src/ui/CadUi.cpp`)
+- Status: accepted (2026-08-16)
+- Revisions: 2026-08-16 — initial. Resolved as a SPEC GAP: both shipped themes
+  (`ApplyCadDarkTheme`, `ApplyCadLightTheme`) were written with no governing
+  requirement, and the `ImDrawList` chrome was hard-coded to the classic theme's
+  colours regardless of which theme was active. User supplied the Hazel editor as
+  the visual reference and chose (1) the **Dark** theme as the one to restyle,
+  leaving the classic theme intact, and (2) full parity including the
+  property-grid widgets. See ADR-033.
+  2026-08-16 (revision 2) — after seeing revision 1 running, the user asked that
+  the palette be put on a proper footing rather than left as hand-picked values.
+  Measuring the shipped ramp found three defects the eye had registered but not
+  named: the border (L\* 6.3) and the tab strip (L\* 6.8) were **0.5 L\* apart**,
+  so panel outlines were invisible where they mattered most; the four darkest
+  tones spanned 5 L\* while the three lightest spanned 16, which is what read as
+  flat in places and abrupt in others; `TextDisabled` sat at **3.93:1**, below
+  AA, while carrying real secondary content; and the axis triad spanned **13.6
+  L\*** (green at 56.4 vs red at 42.8), so the Y badge visually outranked the
+  others and its letter contrast was only 3.0:1. The added acceptance conditions
+  above state the rules those defects broke. No ADR — values only; the mechanism
+  is unchanged from ADR-033.
+  2026-08-16 (revision 3) — the user reviewed revision 2 and asked for **true
+  neutral** rather than its slight cool cast, resolving TASK-059's ASSUMPTION-1
+  against it. Clause 1 is amended from "one hue at low saturation" to
+  "achromatic", and the accent clause drops "near the neutrals' complement"
+  (a complement is undefined against a hueless ground). Each neutral was replaced
+  by the achromatic gray of **identical luminance**, so the L\* ladder, every
+  structural distance and every contrast ratio carry over unchanged — maximum
+  drift 0.14 L\*. Recorded because it makes the palette's one remaining chromatic
+  claim stronger, not weaker: with no cast on any surface, colour anywhere in the
+  shell now means something.
+  2026-08-16 (revision 4) — the user reported that the ribbon and the Properties
+  panel did not read as *above* the drawing, only as differently coloured. Value
+  contrast alone turned out not to carry elevation once the palette was neutral;
+  it needs the directional pair (lit top edge + cast shadow). Added as an
+  acceptance condition rather than as an implementation note because "which
+  surface receives the shadow" is the part that is easy to get wrong and looks
+  like nothing when it is — see TASK-060. Delivered alongside three layout
+  corrections that are not colour and are logged there.
+  2026-08-16 (revision 5) — the user asked that dialogs (settings, import points,
+  attach PDF, edit points, the traverse editor, the save-before-close prompt)
+  stand out. The cause was structural rather than per-dialog: a floating window's
+  fill is the *same* tone as the docked panel it covers, so nothing marked where
+  one ended and the other began. Stated as a property of floating windows in
+  general — not of the named dialogs — because a per-dialog fix would have to be
+  repeated for every dialog written afterwards and would be forgotten. See
+  TASK-061.
+
+### REQ-082 — Tabular data windows behave like a spreadsheet
+- Purpose: the Viewpoints and Layer Manager windows are the two places a surveyor
+  reads and edits many rows at once; a form that happens to be laid out in
+  columns is not usable at that scale
+- Priority: should
+- Type: functional
+- Statement: A window whose content is a table of records — today the **survey
+  points grid** (VIEWPOINTS) and the **Layer Manager** — behaves as a data grid,
+  not as a stack of form controls:
+  - **column sort**, ascending/descending by clicking a header, on every column
+    whose value has an order (multi-column sort where the table supports it).
+    Sorting reorders the **view only**; the underlying record order is unchanged;
+  - **resizable, reorderable and hideable** columns;
+  - the **header row stays visible** while the rows scroll;
+  - a cell's editor **fills its cell** and carries no frame of its own at rest —
+    the grid's own rules and row banding supply the structure — while remaining
+    fully editable, with the frame appearing on hover and while editing;
+  - **row height is uniform** and set by one line of text;
+  - a toggle cell (checkbox, radio) is **centred and visible in both states**.
+- Acceptance:
+  - clicking a sortable header reorders the displayed rows and marks that column;
+    clicking again reverses it;
+  - rows with equal keys keep a stable, non-flickering order between frames;
+  - after sorting, editing a row edits the record shown in that row, and deleting
+    a row deletes the record shown in that row — i.e. the view order never
+    rewires which record a control acts on;
+  - scrolling the rows leaves the header in place;
+  - an unchecked checkbox is visible;
+  - the record order saved to file is unaffected by any display sort.
+- Owner-layer: UI (`src/ui/CadUi.cpp`)
+- Status: accepted (2026-08-16)
+- Revisions: 2026-08-16 — initial. Raised by the user asking that these two
+  windows "behave more like a spreadsheet, like Google Sheets". Recorded as its
+  own requirement rather than as another REQ-081 revision because sorting and
+  column state are **behaviour a user relies on**, not appearance — and because
+  the third acceptance condition (view order must not rewire which record a
+  control acts on) is the one that makes this safe to build and belongs in the
+  spec rather than in a comment. See TASK-062.
+
 ---
 
 ## Performance requirements
@@ -2200,6 +2409,96 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted (2026-08-15)
 - Revisions: 2026-08-15 — initial. See ADR-029 and the decision log.
 
+### REQ-203 — The command layer is drivable without a window
+- Purpose: debuggability, maintainability — the interactive surface is the largest part of the
+  system with no automated coverage, and it is where users actually meet the bugs
+- Priority: should
+- Type: quality
+- Statement: The Commands layer runs to completion with **no window, no GL context, and no ImGui
+  context**. A headless driver executes a **transcript** — a line-oriented text file of command-line
+  submissions and viewport picks — against a real `AppCommandState`, and reports what the drawing
+  became.
+
+  Two consequences follow, and both are the point of the requirement rather than side effects:
+
+  - **The Commands layer names nothing above it.** Architecture §2 says this already; today nothing
+    enforces it, and one violation has accumulated (`LoadApplicationFont` in `CadCommands.cpp`
+    reaches into ImGui). A headless target that must link makes the linker the enforcer, so the next
+    violation is a build break instead of a review finding nobody happened to make.
+  - **A transcript is a regression test.** A bug reproduced by hand once becomes a file that runs on
+    every build, in the same form whether a human or a generator wrote it.
+
+  The driver reads a transcript, writes a machine-readable result (entity counts, emitted log lines,
+  invariant status), and exits non-zero on any failure. Reaching a native file dialog must not open
+  one: the platform dialog functions are answered from the transcript.
+
+  This requirement is about **drivability**, not about what is checked — the checks are REQ-204.
+- Acceptance:
+  - the headless target links with **no GLFW, no GLEW, no `gl*` symbol, and no ImGui backend** on
+    its link line, and its binary imports no `opengl32.dll` — proven by the link line and by
+    `dumpbin /DEPENDENTS`, not by inspection. *(Amended 2026-08-16: this condition originally said
+    "no imgui". ImGui **core** is on the headless link line deliberately — loading a `.gs` measures
+    label text through the current font and stores the result as geometry, so headless must measure
+    it with the same font the GUI uses or the diff condition below is unmeetable. See the ADR-031
+    amendment; the boundary that matters is no window and no GPU.)*
+  - a transcript drawing a line, a circle, and a polyline yields exactly what a user performing the
+    same steps yields, compared by saving `.gs` and diffing;
+  - a transcript step that reaches a file dialog is answered from the transcript and never blocks;
+  - a failing run exits non-zero naming the failure, the step index, and the transcript line;
+  - the same transcript run twice produces byte-identical output;
+  - the transcript corpus runs in CI on every push and a non-zero exit fails the build (REQ-202).
+- Owner-layer: Build/Platform (the target), Commands (`ProcessCommandLineSubmit` /
+  `SubmitViewportPick` as the driven entry points), Platform (the dialog seam)
+- Status: accepted (2026-08-16)
+- Revisions: 2026-08-16 — initial. See ADR-031 and the decision log.
+
+### REQ-204 — Randomized command sequences are checked against document invariants
+- Purpose: debuggability — find the state corruptions nobody thought to write a test for, and make
+  each one arrive as a reproducer rather than as a user's description of a crash
+- Priority: may
+- Type: quality
+- Statement: A generator produces REQ-203 transcripts from the command registry under a **seed**,
+  interleaving commands, picks, cancels, undo/redo, and space switches, with coordinates drawn from
+  a deliberately hostile distribution (NaN, infinity, 1e12, denormals, exact duplicates, collinear
+  and zero-length geometry). After **every** step the driver evaluates a fixed set of invariants.
+
+  The invariant set is the substance of this requirement. A fuzzer without oracles finds only
+  crashes, and crashes are the shallow half of the problem:
+
+  | Invariant | What a violation means |
+  |---|---|
+  | Undo then redo restores an identical document | The classic CAD defect class — an edit not fully captured by the snapshot |
+  | `.gs` save → load → save is byte-identical | A field written but not read, or read but not written (REQ-079) |
+  | DXF export → import → export is stable | An entity type silently dropped by an exporter with no branch for it |
+  | No coordinate is NaN or infinite | Degenerate input propagating into stored geometry |
+  | Local storage holds: `world = local + worldDocumentOrigin` | A world-coordinate value stored without subtracting the origin |
+  | Flat-store strides hold (§11.8) | A 3D-widening regression, silently misreading every subsequent vertex |
+  | Entity ids are unique and `nextEntityId` exceeds all of them | REQ-076 identity broken |
+  | Every selection index is in range for its store | A stale index surviving a compacting erase (§11.9) |
+  | Every submitted command emits at least one log line | REQ-201, checked rather than reviewed |
+
+  A run is reproducible from its seed alone. A failing run is **automatically minimized** to the
+  shortest transcript that still fails, and that minimized transcript — not the seed — is the
+  artifact a bug report carries, because it survives changes to the generator.
+
+  Fuzzing the **file parsers** (`DxfIo`, `GsIo`, glTF, STL, CSV) is the same requirement pointed at
+  a different input: there the mutated thing is bytes of a seed file rather than a command sequence,
+  and the oracle is "no crash, no hang, and a refusal is reported" (REQ-201).
+- Acceptance:
+  - the same `--seed N` twice produces an identical transcript and an identical result;
+  - **each listed invariant has a fixture that deliberately breaks it and proves the check fires** —
+    a check that has never failed is not known to be a check;
+  - a failing run emits a minimized transcript that reproduces the failure standalone under the
+    REQ-203 driver;
+  - minimization terminates, is bounded in attempts, and reports its reduction ratio;
+  - a clean run over a seed range exits zero and prints nothing but a summary;
+  - the generator is TEST-ONLY: the shipped `GoSurvey.exe` neither links nor contains it (REQ-300).
+- Owner-layer: Build/Platform (the target), Commands (the invariants' subject), util (the invariant
+  checks themselves, pure)
+- Status: accepted (2026-08-16)
+- Revisions: 2026-08-16 — initial. See ADR-031 and the decision log. Delivery is staged
+  (`docs/fuzz-harness.md` §8) and begins with the file parsers rather than the command driver.
+
 ---
 
 ## Constraint requirements
@@ -2303,6 +2602,10 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-078 | UI/Platform/IO | `UpdateCheckTests` (skip suppresses that version but not a later one — green 2026-08-15); the download / hash / unsaved-guard / install paths are implemented but **unexercised — no manifest has been published yet**, and no real upgrade has been performed (TASK-050 ASSUMPTION-1). Was: planned — `UpdateCheckTests` (skip-state suppresses that version but not a later one) + manual (nothing downloads without a click; corrupted download fails the hash, is deleted, and is reported; dirty drawing hits the unsaved-changes modal and cancel aborts the update; after install one `GoSurvey.exe` remains, old `GoSurvey-0.*.exe` gone, shortcuts + `.gs` association still resolve; killed mid-download then retried succeeds) | accepted |
 | REQ-202 | Build/Platform | planned — observed pipeline behaviour (feature branch → artifact only, no tag; repeated `beta` pushes → exactly one `channel-beta` prerelease; unchanged version on master → no publish, no failure; bumped version → `v<version>` tag + release; failing ctest → no release; tag == AppVersion == manifest version; manifest SHA-256 matches the asset) | accepted |
 | REQ-051 | UI/IO | `MtextToolbarTests` (panel-anchor clamp in-bounds/off-screen/oversized; font+colour run-tag composition incl. empty family = no tag; ruler tick spacing + zero-width = no ticks; attach label 1–9 + out-of-range fallback) + manual (panel titled "Text Formatting" with two rows + ruler; drag persists across edits and restart; font/colour apply to the selection only; height/oblique/entity colour whole-object; style dropdown re-bakes per REQ-044; B/I/U/caps/symbol unchanged; justification re-lays out; disabled controls inert with naming tooltips; ruler + expand toggles; paper MTEXT same panel; single-line TEXT still bare box; OK/Esc + `.gs`/DXF round-trip unchanged) | accepted |
+| REQ-203 | Build/Platform/Commands | planned — the `gosurvey_headless` link line carries no imgui/glfw/GLEW/`gl*` symbol; a hand-written transcript (line + circle + polyline) saves a `.gs` identical to the same steps performed in the GUI; a queued `DIALOG` answer satisfies a file-dialog call with no block; a deliberately-broken transcript exits non-zero naming invariant + step + line; the same transcript twice is byte-identical; CI runs the corpus per push | accepted |
+| REQ-082 | UI | planned — manual (header click sorts + marks the column, second click reverses; equal keys stable; after sorting, edit/delete act on the record shown; header frozen while scrolling; unchecked checkbox visible; saved file order unaffected by display sort) | accepted |
+| REQ-081 | UI | planned — manual, side-by-side against the Hazel reference shots (adjacent docked panels separated by a visible border; panel surface lighter than the dockspace ground; recessed fields; Dark shows no `#464646`/steel-blue chrome; Dark→Light→Dark leaves no colour behind; Light pixel-unchanged; viewport contents unchanged; X/Y/Z badges present, Radius has none) | accepted |
+| REQ-204 | Build/Platform/Commands/util | planned — `--seed N` twice is identical; **one deliberately-broken fixture per invariant proving each check fires**; a failing run's minimized transcript reproduces standalone under the REQ-203 driver; minimization terminates within its bound and reports its ratio; a clean seed range prints only a summary; `GoSurvey.exe`'s link line contains no generator symbol | accepted |
 
 ---
 
@@ -2313,4 +2616,8 @@ requirements is a planning failure, not a sign of rigor.
 
 - "We do **not** require pluggable rendering backends — OpenGL only until a
   second backend is a real requirement (avoids speculative abstraction)."
+- We do **not** require automated testing of the rendered GUI — no UI-automation driver, no
+  screenshot diffing, no golden images. REQ-203 tests the Commands layer beneath the UI instead.
+  Pixel-level tests need an interactive desktop session, are flaky by construction, and mostly
+  exercise ImGui rather than GoSurvey. *(accepted 2026-08-16 alongside REQ-203; ADR-031 alt. (1).)*
 - `<…>`

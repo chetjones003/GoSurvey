@@ -27,6 +27,8 @@
 #include "UserPrefs.hpp"
 #include "ImGuiLayout.hpp"
 #include "UpdateService.hpp"
+#include "TelemetryService.hpp"
+#include "Version.hpp"
 
 #include <ctime>
 
@@ -267,6 +269,12 @@ int main()
   /// Set once the user has confirmed an update and the app is exiting to hand over to the
   /// installer, so the normal quit path can tell the two cases apart.
   bool updateExitPending = false;
+
+  // REQ-080: anonymous telemetry. Fire-and-forget: does not gate the session, no UI, logs and
+  // swallows network errors. Runs independent of the update check in its own worker.
+  std::unique_ptr<telemetry::TelemetryTask> telemetryTask =
+      telemetry::BeginTelemetryPing(GOSURVEY_VERSION_FULL,
+                                    cmd.updatePrefs.useBetaChannel ? "beta" : "stable");
   const bool haveSavedDockIni = ImGuiLayout_ConfigureIniPath(cmd);
   std::vector<std::string> cmdLog;
   cmdLog.push_back("GoSurvey CAD shell ready.");
@@ -316,7 +324,9 @@ int main()
   int fbH = 650;
 
   bool dockLayoutDone = haveSavedDockIni;
-  const float ribbonH = 130.f;
+  // 130 of tools + the 9px gutter DrawRibbonBar leaves under the panel titles,
+  // so the buttons keep the size they had before the gutter was added.
+  const float ribbonH = 139.f;
   bool orthoEnabled = false;  // REQ-047: ORTHO is off by default (AutoCAD convention) — free-angle drawing
   bool gridVisible = false;
   // prevDrawingIdx lives in cmd — no local needed.
@@ -370,6 +380,7 @@ int main()
     // through the SAME unsaved-changes path a normal quit uses. Reusing it rather than repeating
     // the dirty check is the point — one code path decides whether work is at risk.
     update::PollUpdateTask(updateState);
+    telemetry::PollTelemetryTask(telemetryTask);
     if (updateState.awaitingUnsavedCheck)
     {
       updateState.awaitingUnsavedCheck = false;
@@ -904,6 +915,10 @@ int main()
                                (paperSpace || cmd.cadMeshAttrs.empty()) ? nullptr : &cmd.cadMeshAttrs,
                                // TIN surface edges (REQ-068), model space only like every GL entity.
                                (paperSpace || surfaceEdges.empty()) ? nullptr : &surfaceEdges);
+
+    // Must be the last UI call of the frame: it walks the submitted windows and
+    // appends to their draw lists, so anything begun after it would be missed.
+    DrawFloatingWindowChrome();
 
     ImGui::Render();
     int displayW = 0;

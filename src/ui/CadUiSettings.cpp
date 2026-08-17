@@ -344,6 +344,28 @@ static void DrawSystemUpdates(AppCommandState& cmd) {
   }
 }
 
+/// REQ-080's last acceptance condition: the anonymous usage ping is disclosed in the settings
+/// panel, in plain language, saying what leaves the machine and what does not.
+///
+/// It sits next to Updates on purpose — they are the two things that talk to the network, and a
+/// user checking on one is asking about the other. It is text, not a checkbox: the ping carries
+/// no personal data and has no opt-out by decision (spec/project.md, 2026-08-16, D3). Offering a
+/// toggle that did nothing, or implying consent that is not asked for, would be worse than
+/// saying so plainly.
+static void DrawSystemUsageData(AppCommandState& cmd) {
+  (void)cmd;
+  ImGui::TextWrapped(
+      "GoSurvey reports anonymous usage so development can be aimed at what people actually "
+      "run. It sends a random ID that identifies this installation only, the version, whether "
+      "you are on stable or beta, and that you are on Windows — once when installed, and at "
+      "most once a day after that.");
+  ImGui::Spacing();
+  ImGui::TextWrapped(
+      "It never sends your name, email, company, computer name, file names, drawings, survey "
+      "data, or location. The random ID is not derived from anything about you or your machine "
+      "and cannot be traced back to either.");
+}
+
 static void DrawSettingsSystemTab(AppCommandState& cmd) {
   if (ImGui::BeginTable("##sys_layout", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
     ImGui::TableNextRow();
@@ -362,6 +384,7 @@ static void DrawSettingsSystemTab(AppCommandState& cmd) {
     BoxBegin("General Options", 140.f); DrawSystemGeneralOptions(cmd); BoxEnd();
     BoxBegin("Help", 70.f); ImGui::Checkbox("Access online content when available", &cmd.systemAccessOnlineContent); BoxEnd();
     BoxBegin("Updates", 110.f); DrawSystemUpdates(cmd); BoxEnd();
+    BoxBegin("Anonymous Usage Data", 175.f); DrawSystemUsageData(cmd); BoxEnd();
     BoxBegin("InfoCenter", 70.f);
     ImGui::BeginDisabled(); ImGui::Button("Balloon Notifications", ImVec2(-FLT_MIN, 0.f)); ImGui::EndDisabled();
     BoxEnd();
@@ -695,7 +718,27 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
 
   // Leave room for the separator + button row so they remain visible when content scrolls.
   const float footerH = ImGui::GetFrameHeightWithSpacing() + ImGui::GetStyle().ItemSpacing.y + 4.f;
-  if (ImGui::BeginChild("##settings_content", ImVec2(0.f, -footerH))) {
+  // This child is a layout container, not a box: it must NOT take the recessed
+  // ChildBg, or the inset panels inside it would be the same tone as their own
+  // background and the "boxes in a dialog" reading would collapse.
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.f, 0.f, 0.f, 0.f));
+  const bool contentVisible = ImGui::BeginChild("##settings_content", ImVec2(0.f, -footerH));
+  ImGui::PopStyleColor();  // popped unconditionally — BeginChild consumes it as it paints
+  if (contentVisible) {
+    // Tab strip. ImGui paints no background behind a plain tab bar, so tabs float
+    // on the dialog body and read as bare text. Filling the row first — with a
+    // rule under it — puts the unselected tabs on a recessed strip and leaves the
+    // selected one standing on the body it belongs to. The strip is exactly one
+    // frame tall, which is a tab bar's height by construction.
+    {
+      const ImVec2 p0 = ImGui::GetCursorScreenPos();
+      const float w = ImGui::GetContentRegionAvail().x;
+      const float h = ImGui::GetFrameHeight();
+      ImDrawList* dl = ImGui::GetWindowDrawList();
+      dl->AddRectFilled(p0, ImVec2(p0.x + w, p0.y + h), ImGui::GetColorU32(ImGuiCol_Tab));
+      dl->AddLine(ImVec2(p0.x, p0.y + h - 0.5f), ImVec2(p0.x + w, p0.y + h - 0.5f),
+                  ImGui::GetColorU32(ImGuiCol_Border), 1.f);
+    }
     const ImGuiTabBarFlags tabFlags = ImGuiTabBarFlags_FittingPolicyScroll | ImGuiTabBarFlags_NoCloseWithMiddleMouseButton;
     if (ImGui::BeginTabBar("##optionsTabs", tabFlags)) {
       if (ImGui::BeginTabItem("Files"))          { cmd.settingsActiveTabIdx = 0; DrawSettingsFilesTab(cmd, log);                                                       ImGui::EndTabItem(); }

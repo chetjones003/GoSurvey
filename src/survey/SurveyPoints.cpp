@@ -872,6 +872,17 @@ bool LoadSurveyPointsFromJsonFile(AppCommandState& st, const char* path, std::ve
     search = objEnd + 1;
   }
 
+  // BUG-023: `surveyPointIdBuffers` is cleared above and MUST be refilled here.
+  // It is a parallel array the Viewpoints grid indexes with the point index, and
+  // that grid draws its Load button and its rows in the SAME frame — so a load
+  // that left the buffers empty had the table read `surveyPointIdBuffers[i]` on
+  // an empty vector for every row it had just gained. Refilled at the owner
+  // rather than patched at the reader: anything else that loads points inherits
+  // the same invariant for free.
+  st.surveyPointIdBuffers.resize(st.surveyPoints.size());
+  for (size_t i = 0; i < st.surveyPoints.size(); ++i)
+    st.surveyPointIdBuffers[i] = std::to_string(st.surveyPoints[i].id);
+
   for (size_t i = 0; i < st.surveyPoints.size(); ++i)
     EnsureSurveyPointLabelMtext(st, i, &log);
 

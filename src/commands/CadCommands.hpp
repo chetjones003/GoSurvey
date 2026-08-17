@@ -2,6 +2,9 @@
 
 #include "CadEntities.hpp"
 #include "EntityId.hpp"
+// TextStyles::DefaultTextStyles, for the textStyles member's initializer (issue #57). Pure and
+// dependency-free (string/vector/CadEntities.hpp), so this adds no cycle and no weight.
+#include "TextStyle.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
 #include "PdfAttach.hpp"
 #include "PaperSpace.hpp"
@@ -49,6 +52,19 @@ struct CadLayerRow {
   bool plottable = true;     ///< when false, geometry/viewports on this layer are excluded from plots (REQ-029/030).
 };
 
+
+/// The layer table a brand-new drawing starts with — layer "0" and nothing else.
+///
+/// Layer "0" is documented as always existing, and \ref SyncDrawingLayerTableWithGeometry
+/// synthesizes it when the table is empty. Issue #57: that synthesis happened on *load* but not at
+/// *creation*, so a new drawing and the same drawing reopened were not the same document. The
+/// definition lives here, beside \ref CadLayerRow, so the default row and the row the sync
+/// synthesizes cannot drift apart.
+inline std::vector<CadLayerRow> DefaultDrawingLayerTable() {
+  CadLayerRow zero;
+  zero.name = "0";
+  return {zero};
+}
 
 /// Resolve stored color string + transparency to RGBA for viewport/UI (0..1). \p defaultRgb used for ByLayer.
 void ResolveStoredColorForViewport(const std::string& colorStorage, float transparency, float defaultR,
@@ -402,6 +418,8 @@ struct AppCommandState {
     IdPoint,
     /// Two-point inverse: horizontal distance and bearing (clockwise from north) between picks (World X=E, Y=N).
     SurveyInverse,
+    /// REQ-074: one pick reports interpolated surface elevation, a second reports grade between them.
+    SurfaceElevGrade,
     /// PDF underlay attach — opens dialog, then optionally waits for viewport picks.
     PdfAttach,
     /// 2-D Helmert (similarity) transformation from user-picked control point pairs.
@@ -1094,6 +1112,15 @@ struct AppCommandState {
   enum class SurveyInversePhase { WaitFrom, WaitTo } surveyInversePhase = SurveyInversePhase::WaitFrom;
   float surveyInverseFromX = 0.f;
   float surveyInverseFromY = 0.f;
+
+  /// REQ-074 spot elevation / grade. The first pick is kept so the second can report grade against
+  /// it; the elevations are kept per surface, by name, because a point can be covered by more than
+  /// one surface (existing and proposed) and a grade must be computed within one surface, never
+  /// across two (Q1, TASK-055).
+  enum class SurfaceElevPhase { WaitFirst, WaitSecond } surfaceElevPhase = SurfaceElevPhase::WaitFirst;
+  double surfaceElevFromX = 0.0;
+  double surfaceElevFromY = 0.0;
+  std::vector<std::pair<std::string, double>> surfaceElevFromZ;
   bool showViewPointsWindow = false;
   bool showSettingsWindow = false;
   bool showQuickSelectWindow = false;
@@ -1119,9 +1146,17 @@ struct AppCommandState {
   bool showSurfaceManagerWindow = false;     ///< Surfaces panel (REQ-068).
   /// Current layer for new geometry (ribbon combo + command defaults).
   std::string currentLayer = "0";
-  std::vector<CadLayerRow> drawingLayerTable;
-  /// Named text styles for this drawing (REQ-044 / ADR-020). "Standard" is always present.
-  std::vector<TextStyle> textStyles;
+  /// Layer table. Layer "0" always exists, **including before anything has been loaded** (issue
+  /// #57): the loader used to synthesize it while a newly created drawing had an empty table, so a
+  /// new drawing was briefly in a state the rest of the code is entitled to assume cannot happen —
+  /// and `save -> load -> save` was not byte-identical, breaking REQ-079's first acceptance
+  /// condition. Initialising here rather than at each creation site means every route to a drawing
+  /// (File > New, the headless driver, an importer, a test) gets it, with no site left to forget.
+  /// Safe against loading, which `clear()`s this table before repopulating it (GsIo.cpp).
+  std::vector<CadLayerRow> drawingLayerTable = DefaultDrawingLayerTable();
+  /// Named text styles for this drawing (REQ-044 / ADR-020). "Standard" is always present — see the
+  /// layer-table note above; it had the same defect and has the same fix.
+  std::vector<TextStyle> textStyles = TextStyles::DefaultTextStyles();
   /// Active text style for new TEXT/MTEXT (the STYLE dropdown). Empty resolves to "Standard".
   std::string activeTextStyleName = "Standard";
   /// Viewport CAD crosshair (Drawing1): RGB 0–1, arm length as fraction of viewport width/height, pickbox half-size in px.
@@ -1962,6 +1997,10 @@ void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartDimLinearCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartDimAngularCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// REQ-074: pick a point for its interpolated surface elevation; pick a second for the grade
+/// between them. Reports every surface covering the pick, by name.
+void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartSurveyInverseCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log);

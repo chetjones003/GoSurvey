@@ -2226,6 +2226,7 @@ const CmdEntry kRegistry[] = {
     {"dimangular", "dan", "Angular dimension"},
     {"id", "", "Identify point coordinates"},
     {"inverse", "inv", "Inverse between two points"},
+    {"surfelev", "se", "Surface elevation at a point; grade between two"},
     {"plotscale", "pscale", "Set the plot scale"},
     {"move", "m", "Move objects"},
     {"copy", "cp", "Copy objects"},
@@ -2588,6 +2589,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "inverse") {
     StartSurveyInverseCommand(st, log);
+    return true;
+  }
+  if (primary == "surfelev") {
+    StartSurfaceElevGradeCommand(st, log);
     return true;
   }
   if (primary == "plotscale") {
@@ -5040,6 +5045,115 @@ static void CommitSurveyInverseSecondPoint(AppCommandState& st, float x2, float 
   st.surveyInversePhase = SIP::WaitFrom;
 }
 
+// --- REQ-074 spot elevation and grade ----------------------------------------------------------
+
+/// Interpolated elevation of every surface covering (\p x, \p y), paired with its name.
+///
+/// **Every** covering surface, not one of them (TASK-055 Q1): overlapping surfaces are the existing
+/// vs proposed case, which is the grading question this command exists to answer, and a bare number
+/// from an unnamed surface would be worse than no number at all.
+///
+/// Surfaces on an off or frozen layer are skipped, matching `AppendSurfaceEdgeLines` — the readout
+/// should describe the surfaces the user can see, and REQ-068 already established that rule.
+static std::vector<std::pair<std::string, double>> SurfaceElevationsAt(const AppCommandState& st, double x,
+                                                                       double y) {
+  std::vector<std::pair<std::string, double>> out;
+  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+    const CadSurface& s = st.cadSurfaces[si];
+    if (!s.tin || s.tin->indices.empty())
+      continue;
+    if (si < st.cadSurfaceAttrs.size()) {
+      const std::string& lname = st.cadSurfaceAttrs[si].layer;
+      const auto it = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+                                   [&](const CadLayerRow& r) { return r.name == lname; });
+      if (it != st.drawingLayerTable.end() && (!it->on || it->frozen))
+        continue;
+    }
+    double z = 0.0;
+    if (TinElevationAt(s.tin->vertsXyz, s.tin->indices, x, y, &z))
+      out.emplace_back(s.name, z);
+  }
+  return out;
+}
+
+/// First pick: report the elevation on each covering surface, and remember them for the grade.
+static void ReportSurfaceElevationAt(AppCommandState& st, double x, double y, std::vector<std::string>& log) {
+  st.surfaceElevFromX = x;
+  st.surfaceElevFromY = y;
+  st.surfaceElevFromZ = SurfaceElevationsAt(st, x, y);
+
+  if (st.cadSurfaces.empty()) {
+    log.push_back("SURFELEV — there are no surfaces in the drawing. Build one from a point group first.");
+    return;
+  }
+  if (st.surfaceElevFromZ.empty()) {
+    // REQ-074: "a pick outside the surface reports that it is outside; it never extrapolates."
+    log.push_back("SURFELEV — outside surface. No elevation at that point.");
+    return;
+  }
+  const int p = st.displayLinearPrecision;
+  for (const auto& e : st.surfaceElevFromZ)
+    log.push_back("SURFELEV — " + e.first + ": elevation " + FormatLinear(e.second, p));
+}
+
+/// Second pick: grade from the first, computed **within each surface**, never across two.
+static void ReportSurfaceGradeTo(AppCommandState& st, double x, double y, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  using SEP = AppCommandState::SurfaceElevPhase;
+  const int p = st.displayLinearPrecision;
+
+  const double dx = x - st.surfaceElevFromX;
+  const double dy = y - st.surfaceElevFromY;
+  const double run = std::hypot(dx, dy);
+
+  // REQ-074: "two picks at the same location report zero distance rather than dividing by zero."
+  // The threshold is kTinPlanEpsilon, not an arbitrary epsilon: below it the project already
+  // considers two positions to be the same site (it is what BuildTin de-duplicates on).
+  if (run < kTinPlanEpsilon) {
+    log.push_back("SURFELEV — both picks are at the same location: horizontal distance 0. No grade.");
+    st.active = K::None;
+    st.surfaceElevPhase = SEP::WaitFirst;
+    st.surfaceElevFromZ.clear();
+    return;
+  }
+
+  const std::vector<std::pair<std::string, double>> to = SurfaceElevationsAt(st, x, y);
+  bool reportedAny = false;
+  for (const auto& from : st.surfaceElevFromZ) {
+    // `from.first` rather than a structured binding: capturing one in the lambda below is a C++20
+    // extension, and this file is built as C++17.
+    const std::string& name = from.first;
+    const double z1 = from.second;
+    const auto it = std::find_if(to.begin(), to.end(), [&](const auto& e) { return e.first == name; });
+    if (it == to.end()) {
+      log.push_back("SURFELEV — " + name + ": second point is outside this surface. No grade.");
+      continue;
+    }
+    const double rise = it->second - z1;
+    const double slopePct = rise / run * 100.0;
+    char buf[320];
+    if (std::abs(rise) < 1e-9) {
+      // Flat: a run:rise ratio would be a division by zero, and "level" is what a surveyor would
+      // write on the sheet anyway.
+      std::snprintf(buf, sizeof(buf), "SURFELEV — %s: level (0.00%%)  horiz %s  vert %s", name.c_str(),
+                    FormatLinear(run, p).c_str(), FormatLinear(rise, p).c_str());
+    } else {
+      // Both conventions, because both are used: percent for the grade, run:rise for the slope.
+      std::snprintf(buf, sizeof(buf), "SURFELEV — %s: grade %.2f%%  slope %.2f:1  horiz %s  vert %s",
+                    name.c_str(), slopePct, run / std::abs(rise), FormatLinear(run, p).c_str(),
+                    FormatLinear(rise, p).c_str());
+    }
+    log.push_back(buf);
+    reportedAny = true;
+  }
+  if (!reportedAny && st.surfaceElevFromZ.empty())
+    log.push_back("SURFELEV — outside surface at the first point; no grade to report.");
+
+  st.active = K::None;
+  st.surfaceElevPhase = SEP::WaitFirst;
+  st.surfaceElevFromZ.clear();
+}
+
 namespace OffsetCmd {
 
 static void ResetOffsetDraft(AppCommandState& st) {
@@ -5107,6 +5221,32 @@ static float SignedSideCircle(float cx, float cy, float r, float px, float py) {
   return d - r;
 }
 
+/// Append the attribute row for an OFFSET copy of the entity at \p srcIndex within \p attrs.
+///
+/// The copy **inherits** layer, colour, linetype, lineweight and transparency from its source —
+/// that is what makes it read as an offset of that entity rather than a stranger on the current
+/// layer. It must **not** inherit the source's id.
+///
+/// Ids are unique and never reused within a drawing (REQ-076), and architecture §11.9 builds on
+/// that: a reference from one object to another *is* an id, so an id naming two entities makes
+/// every such reference ambiguous. \ref EnsureEntityIds only fills ids that are 0, so a copied
+/// non-zero id is never repaired — it persists to `.gs` and is permanent. Clearing it here hands
+/// assignment back to the sweep, exactly as the clipboard does via \ref ClearEntityIdsFrom
+/// (see CopySelectionToClipboard). Every caller bumps the GPU revision the sweep is gated on, so
+/// the fresh id is assigned before anything can observe or save the entity.
+///
+/// One helper rather than the same three lines in five places, deliberately: the defect this fixes
+/// (issue #58) was five copies of a correct-looking pattern that were all missing the same step.
+static void PushOffsetCopyAttrs(AppCommandState& st, std::vector<EntityAttributes>& attrs,
+                                int srcIndex) {
+  if (srcIndex >= 0 && static_cast<size_t>(srcIndex) < attrs.size()) {
+    attrs.push_back(attrs[static_cast<size_t>(srcIndex)]);
+    attrs.back().id = 0;  // REQ-076: assigned fresh by EnsureEntityIds, never inherited
+  } else {
+    attrs.push_back(MakeNewEntityAttrs(st));  // already id 0
+  }
+}
+
 static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std::vector<std::string>& log) {
   const size_t k = static_cast<size_t>(lineIx) * 6;
   if (k + 5 >= st.userLinesFlat.size())
@@ -5138,10 +5278,7 @@ static bool CommitOffsetLine(AppCommandState& st, int lineIx, float signedD, std
   st.userLinesFlat.push_back(ox1);
   st.userLinesFlat.push_back(oy1);
   st.userLinesFlat.push_back(z1);
-  if (static_cast<size_t>(lineIx) < st.userLineAttrs.size())
-    st.userLineAttrs.push_back(st.userLineAttrs[static_cast<size_t>(lineIx)]);
-  else
-    st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+  PushOffsetCopyAttrs(st, st.userLineAttrs, lineIx);
   BumpCadGpuCache(st);
   return true;
 }
@@ -5164,10 +5301,7 @@ static bool CommitOffsetCircle(AppCommandState& st, int ci, float signedD, std::
   st.userCirclesCxCyZR.push_back(cy);
   st.userCirclesCxCyZR.push_back(cz);  // the offset copy stays on the source circle's plane
   st.userCirclesCxCyZR.push_back(nr);
-  if (static_cast<size_t>(ci) < st.userCircleAttrs.size())
-    st.userCircleAttrs.push_back(st.userCircleAttrs[static_cast<size_t>(ci)]);
-  else
-    st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
+  PushOffsetCopyAttrs(st, st.userCircleAttrs, ci);
   BumpCadGpuCache(st);
   return true;
 }
@@ -5185,10 +5319,7 @@ static bool CommitOffsetArc(AppCommandState& st, int ai, float signedD, std::vec
   CadArc o = a;
   o.r = nr;
   st.userArcs.push_back(o);
-  if (static_cast<size_t>(ai) < st.userArcAttrs.size())
-    st.userArcAttrs.push_back(st.userArcAttrs[static_cast<size_t>(ai)]);
-  else
-    st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+  PushOffsetCopyAttrs(st, st.userArcAttrs, ai);
   BumpCadGpuCache(st);
   return true;
 }
@@ -5212,10 +5343,7 @@ static bool CommitOffsetEllipse(AppCommandState& st, int ei, float signedD, std:
   o.majVx *= f;
   o.majVy *= f;
   st.userEllipses.push_back(o);
-  if (static_cast<size_t>(ei) < st.userEllAttrs.size())
-    st.userEllAttrs.push_back(st.userEllAttrs[static_cast<size_t>(ei)]);
-  else
-    st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
+  PushOffsetCopyAttrs(st, st.userEllAttrs, ei);
   BumpCadGpuCache(st);
   return true;
 }
@@ -5327,10 +5455,7 @@ static bool CommitOffsetPolyline(AppCommandState& st, int pi, float signedD, std
   }
   st.userPolylineOffsets.push_back(baseVert + static_cast<int>(out.size()));
   st.userPolylineClosed.push_back(closed ? 1u : 0u);
-  if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
-    st.userPolylineAttrs.push_back(st.userPolylineAttrs[static_cast<size_t>(pi)]);
-  else
-    st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
+  PushOffsetCopyAttrs(st, st.userPolylineAttrs, pi);
   BumpCadGpuCache(st);
   return true;
 }
@@ -5805,6 +5930,18 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       return;
     }
     CommitSurveyInverseSecondPoint(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::SurfaceElevGrade) {
+    using SEP = AppCommandState::SurfaceElevPhase;
+    if (st.surfaceElevPhase == SEP::WaitFirst) {
+      ReportSurfaceElevationAt(st, wx, wy, log);
+      st.surfaceElevPhase = SEP::WaitSecond;
+      log.push_back("SURFELEV — second point for grade, or ESC to stop here.");
+      return;
+    }
+    ReportSurfaceGradeTo(st, wx, wy, log);
     return;
   }
 
@@ -7613,6 +7750,29 @@ void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.selBoxWaitingSecond = false;
   st.active = K::IdPoint;
   log.push_back("ID — specify point (click in drawing or type X,Y). UCS = World. ESC cancels.");
+}
+
+void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  using SEP = AppCommandState::SurfaceElevPhase;
+  if (st.active != K::None) {
+    log.push_back("SURFELEV — finish or cancel the active command first.");
+    return;
+  }
+  // Said before the first pick rather than after it: a user who has not built a surface yet should
+  // not have to click to find out there is nothing to read (REQ-201).
+  if (st.cadSurfaces.empty()) {
+    log.push_back("SURFELEV — there are no surfaces in the drawing. Build one from a point group first.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selectedSurveyPointIndices.clear();
+  st.selBoxWaitingSecond = false;
+  st.surfaceElevPhase = SEP::WaitFirst;
+  st.surfaceElevFromZ.clear();
+  st.active = K::SurfaceElevGrade;
+  log.push_back("SURFELEV — pick a point for its surface elevation; pick a second for grade. ESC cancels.");
 }
 
 void StartSurveyInverseCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -12118,6 +12278,29 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
+  if (st.active == K::SurfaceElevGrade) {
+    using SEP = AppCommandState::SurfaceElevPhase;
+    float px = 0.f;
+    float py = 0.f;
+    if (st.surfaceElevPhase == SEP::WaitFirst) {
+      if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
+        log.push_back("SURFELEV — type X,Y (World) or pick a point in the drawing.");
+        return;
+      }
+      ReportSurfaceElevationAt(st, px, py, log);
+      st.surfaceElevPhase = SEP::WaitSecond;
+      log.push_back("SURFELEV — second point for grade, or ESC to stop here.");
+      return;
+    }
+    if (!ParseStoragePoint(st, line, &px, &py, true, static_cast<float>(st.surfaceElevFromX),
+                           static_cast<float>(st.surfaceElevFromY))) {
+      log.push_back("SURFELEV — type X,Y or @dx,dy from the first point.");
+      return;
+    }
+    ReportSurfaceGradeTo(st, px, py, log);
+    return;
+  }
+
   if (st.active == K::Align) {
     using AP = AppCommandState::AlignPhase;
     // Empty Enter is handled above; PickSelection accepts no typed coordinates.
@@ -12315,6 +12498,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           st.cadAnnotations.push_back(std::move(ann));
           st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
         }
+        // Issue #56. Not a rendering concern — this is what makes the new entity get an id at all.
+        // MakeNewEntityAttrs leaves id 0 and relies on the EnsureEntityIds sweep, and that sweep
+        // early-outs on `entityIdSweepRevision == cadGpuRevision` with the reasoning "geometry has
+        // not changed since the last sweep, so nothing can be missing an id". Committing an entity
+        // without bumping the revision makes that premise false, so the sweep skipped this
+        // annotation and it was saved to `.gs` with id 0 (REQ-076), which also broke REQ-079 resave
+        // idempotence. Every other commit path bumps here; TEXT was the one that did not.
+        BumpCadGpuCache(st);
         log.push_back("TEXT placed.");
       } else
         log.push_back("TEXT — empty; canceled.");
@@ -12773,6 +12964,13 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
     if (st.surveyInversePhase == SIP::WaitFrom)
       return "INVERSE: First point — pick or X,Y (Easting, Northing) | ESC cancel";
     return "INVERSE: Second point — pick or X,Y / @ from first | ESC cancel";
+  }
+
+  if (st.active == K::SurfaceElevGrade) {
+    using SEP = AppCommandState::SurfaceElevPhase;
+    if (st.surfaceElevPhase == SEP::WaitFirst)
+      return "SURFELEV: Pick a point for its surface elevation | ESC cancel";
+    return "SURFELEV: Second point for grade | ESC stops after the elevation";
   }
 
   if (st.active == K::Polyline) {

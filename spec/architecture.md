@@ -1122,3 +1122,185 @@ A change is rejected if it breaks any of these:
   the user before they accept the update rather than discovered afterwards. `samples/` becomes a
   regression corpus that must keep opening. Deliberately not designed for: backward migration
   (writing an older version), partial or best-effort migration, or repairing corrupt files.
+
+### ADR-031 — Headless verification: a second target, a link-time dialog seam, and invariants beside the state   (2026-08-16, accepted)
+> **AMENDED 2026-08-16 — parts (b) and (c) below are superseded, and the Context's measurement was
+> partly wrong.** The original Context was derived from `grep`; re-deriving it from `dumpbin
+> /SYMBOLS` on the built objects contradicted two of its claims. Corrections, in the honest
+> direction: `DxfIo.cpp` needs **8** symbols from `CadCommands.cpp` and `GsIo.cpp` needs **9** — not
+> one and none — so the parsers are **not** free-standing and drag in `CadCommands.cpp`. And
+> `CadCommands.cpp` being the sole ImGui caller did **not** mean the domain layer was: it is also
+> reached from `SurveyPoints.cpp:666`, where sizing a survey label box calls `ImGui::GetFont()` and
+> measures text, writing the result into stored annotation geometry — which `GsIo.cpp` invokes on
+> every load. **Opening a drawing therefore requires a font.** That is not a movable outlier, and it
+> is escalated as a SPEC GAP in `workshop/tasks/TASK-056`; the resolution amends (b), (c), and
+> REQ-203's "links with no imgui" acceptance condition. The record below is left standing rather
+> than rewritten, because the *method* is the lesson: a link surface is measured with a symbol
+> dumper, never with `grep`, and this ADR is the evidence for that rule.
+
+- Context: REQ-203/204 require the Commands layer to run with no window. The measurement that makes
+  this cheap was taken before the decision: `CadCommands.hpp` and its **entire header closure**
+  (`CadEntities`, `Camera`, `PaperSpace`, `SurveyPoints`, `PdfAttach`, `traverse/*`) include no
+  imgui, no GLFW, and no GL — `AppCommandState` is plain data. `CadCommands.cpp` is 13,662 lines and
+  contains exactly **one** ImGui call, `LoadApplicationFont` at line 13609, which is a UI concern
+  sitting in the wrong layer. ~~`DxfIo.cpp` calls one symbol from `CadCommands.cpp`
+  (`ComputeWorldExtents`) and `GsIo.cpp` calls none.~~ *(false — see the amendment above.)* The
+  layering §2 already describes is, in
+  practice, almost achieved — it has simply never been *proven*, because nothing links the lower
+  layers on their own. The forces are therefore not "how do we decouple this" but "how do we hold on
+  to a decoupling we already have," and the answer wants to be enforcement, not refactoring.
+- Decision: six parts.
+
+  **(a) A second CMake target, `gosurvey_headless`, not a `--headless` flag on `GoSurvey.exe`.**
+  The flag would keep imgui/glfw/GL on the link line, so the one property worth proving — that
+  Commands names nothing above it — would stay unproven, and the layering would drift again. A
+  separate target makes the boundary a build error. The two targets share one
+  `GOSURVEY_DOMAIN_SOURCES` CMake list so a source added to the app is not silently absent from the
+  driver.
+
+  **(b) The file-dialog seam is resolved at link time, not behind a new interface.**
+  `platform/WinFileDialogs.hpp` is eleven free functions returning a UTF-8 path or `false`, and it
+  is the *entire* modal surface reachable from Commands. The headless target links a second
+  implementation of that same header which answers from the transcript. No virtual, no injection, no
+  new abstraction — REQ-301 is satisfied because nothing new is introduced; an existing header
+  simply gains a second implementation, which is what a platform header is for.
+
+  **(c) `LoadApplicationFont` moves from `CadCommands.cpp` to the UI layer.** It is the codebase's
+  one upward dependency and §2 already forbids it. This is the whole refactoring cost of the ADR.
+
+  **(d) The invariant checks live in a new pure module, `util/docinvariants`,** not inside the
+  driver. They have two present-day concrete uses (the Catch2 suite and the headless driver), so
+  §11.4 is met on the day they are written rather than aspirationally; a third use — asserting them
+  in debug builds of the real application — is available later without moving anything.
+
+  **(e) Two fuzzers of different shapes, because the inputs are different in kind.** Command
+  sequences get **structure-aware generation** from `kRegistry`: a byte-mutating fuzzer would spend
+  its entire budget rediscovering the command grammar before reaching a second command. File parsers
+  (`DxfIo`, `GsIo`, glTF, STL, CSV) get **byte mutation** over a seed corpus, which is exactly the
+  input model those parsers actually face. Coverage-guided fuzzing (MSVC `/fsanitize=fuzzer`) is
+  where the parser half should end up, and is deliberately left as a later step so the corpus and
+  triage discipline exist before the input rate rises.
+
+  **(f) ASAN (`/fsanitize=address`) is enabled on the headless and fuzz targets only,** never on the
+  shipped binary. The fuzz targets are TEST-ONLY under REQ-300 in the same sense Catch2 is.
+- Alternatives: **(1) Drive the real GUI** with a UI-automation tool or screenshot diffing —
+  rejected: it needs an interactive desktop session, it is slow enough that a fuzzer is pointless,
+  it is flaky by construction, and most of what it exercises is ImGui rather than GoSurvey.
+  **(2) Extract a "core" library** and have both the app and the driver link it — rejected as the
+  same thing with more moving parts: the measurement above shows the sources are already separable,
+  so a shared CMake source list achieves it without inventing a library boundary that would then
+  need defending (REQ-301). **(3) In-process libFuzzer straight onto `ProcessCommandLineSubmit`** —
+  rejected for the command path per (e), accepted in spirit for the parser path.
+  **(4) Record and replay real user sessions** — rejected for now: it needs a recorder in the
+  shipped UI (shipping code that exists only for testing) and it can only reproduce what a user
+  already did, which is the case that already has a bug report.
+- Consequences: a second target to keep green, and a CMake source list that must be edited instead
+  of an `add_executable` — the cost of (a), and the failure mode if it is ignored is a link error,
+  not a silent gap. One function moves layers. It becomes possible to attack the `DxfIo`/`GsIo`
+  coverage gap that this project has carried unresolved. The layering in §2 stops being a review
+  convention and becomes a linked artifact. **The real risk is not technical but editorial:** a
+  fuzzer produces findings faster than a person can act on them, so without minimization and
+  deduplication the output becomes noise that is rationally ignored, which is worse than no fuzzer
+  at all — REQ-204 therefore makes minimization an acceptance condition rather than a nicety.
+  **Deliberately out of scope of the spec:** the triage and issue-filing automation built on top of
+  this. That is developer tooling operating on the driver's output, it ships to no user, and it
+  belongs in `docs/fuzz-harness.md` and `verification/`, not in the product specification.
+
+#### ADR-031 amendment — the font belongs to the domain layer   (2026-08-16, accepted)
+
+Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
+
+- **(b′) There are two platform seams, not one, and both are resolved at link time.** The mechanism
+  is unchanged — a second implementation of an existing pure header, selected by which target links
+  it — but the membership was measured wrong. It is:
+  - `platform/WinFileDialogs.hpp` — of its 11 functions, exactly **one** (`BrowseOpenFileGltfUtf8`)
+    is reachable from `CadCommands.cpp`; the rest are called from the UI layer, which headless does
+    not link. The headless implementation answers from the transcript and returns `false` otherwise.
+  - `pdf/PdfAttach.hpp` — **three** symbols (`PdfAttach_Build`, `PdfAttach_ReleaseTexture`,
+    `PdfDraftCache_Free`) are reachable from `CadCommands.cpp`, and `PdfAttach.cpp` includes
+    `<GL/glew.h>` and calls `glGenTextures`/`glDeleteTextures`. This is how GL reaches the Commands
+    layer, and it is the seam that keeps it out of the headless link. The header is already pure
+    (`cstdint`/`string`/`vector`), so no change to it is required.
+
+- **(c′) `LoadApplicationFont` stays in the domain layer, and the headless target links ImGui core.**
+  The reversal of (c) is not a concession — it follows from a fact (c) did not know: **text metrics
+  are an input to stored geometry.** `SurveyPoints.cpp:666` sizes a survey label's box by measuring
+  its text through the current ImGui font and writes `boxMinX/boxMaxX/boxMinY/boxMaxY` onto the
+  annotation; `GsIo.cpp` calls that on every load. Font availability is therefore a **domain**
+  concern, and (c) had it exactly backwards when it moved font loading *up* to the UI.
+
+  The headless target links `imgui.cpp`, `imgui_draw.cpp`, `imgui_widgets.cpp`, `imgui_tables.cpp`
+  — **no backends, no GLFW, no GLEW** — creates a context with a dummy `DisplaySize`, and loads the
+  same Tahoma at the same size the application loads. Building a font atlas is CPU work; only
+  *uploading* it needs a GPU, and headless never uploads. **Validated before the decision** rather
+  than assumed (TASK-056 §5): the probe builds a 512×128 atlas, `ImGui::GetFont()` returns a real
+  font, text measures identically, and `dumpbin /DEPENDENTS` on the binary lists no `opengl32.dll`.
+
+  This is what makes REQ-203's "a transcript yields exactly what a user performing the same steps
+  yields, compared by saving `.gs` and diffing" a meaningful condition instead of an unmeetable one:
+  headless and GUI measure text with **the same code and the same font**, so a diff means a defect
+  rather than a font mismatch. Alternatives (a measurement seam; removing the font dependency from
+  label sizing) were rejected — see TASK-056 §3, but in short: the seam is an abstraction REQ-301
+  would refuse and would hide the fidelity problem instead of solving it, and removing the
+  dependency is a `.gs` format change made to serve a test harness.
+
+- **Consequence for (a): the enforcement claim weakens, and is restated honestly.** The linker no
+  longer proves "the Commands layer touches no UI library", because ImGui is on the headless link
+  line. What it still proves — and what REQ-203 is amended to require — is **no GLFW, no GLEW, no
+  `gl*`, and no ImGui backend**: no window, no GPU, no display. That is a real boundary, it is
+  enough for CI, and it is the boundary that was actually load-bearing for this work.
+
+### ADR-032 — Anonymous telemetry: WinHTTP POST, pure rate-limit logic, and local persistence   (2026-08-16, accepted)
+- Context: REQ-080 requires the application to report an anonymous install ID and active-usage
+  pings to a user-owned backend without gating the session or adding a network dependency (REQ-300).
+  The precedent is ADR-029 (the update checker), which already uses WinHTTP for HTTPS, fires
+  off-thread, and has a sanctioned silent-failure mode (REQ-201 exception). This ADR reuses that
+  pattern.
+- Decision:
+  (a) **WinHTTP is extended with a `PostJson` helper**, alongside the existing `GetToString` and
+  file-download functions. HTTP POSTs a JSON body and returns success on 2xx, failure otherwise.
+  This touches only `platform/HttpFetch.hpp/.cpp`, which is already owned by ADR-029. The project
+  carries no new HTTP dependency.
+
+  (b) **The telemetry logic is a pure `util/` module (`TelemetryPing.hpp/.cpp`), not in `platform/`
+  or anywhere near the network.** It builds the JSON payload, decides install-vs-active, and
+  decides whether 24 hours have elapsed since the last active ping. This is the same `util/`/
+  `platform/` split as `UpdateCheck.hpp`/`src/update/UpdateService.cpp` (ADR-029(g)), so it is
+  testable without a window or network using Catch2/ctest.
+
+  (c) **Persistence is an extension to the existing `gosurvey-user.json` file,** via `src/io/UserPrefs`.
+  Two new fields: `installId` (a random 128-bit hex string, generated once on first load if absent)
+  and `lastActivePingDate` (a `YYYY-MM-DD` string, updated after each active ping). No new storage
+  file or registry usage — the existing UserPrefs pattern is reused.
+
+  (d) **The worker thread is spawned at startup, alongside `UpdateService` (in `src/app/`), but
+  independent of it.** The update check gates the session on purpose (unsaved-work safety); the
+  telemetry ping fires asynchronously and must never add latency to that gate. Both fire in their
+  own worker threads using the architecture's one-shot-worker pattern (§8).
+
+  (e) **Any network error is dropped silently**, mirroring REQ-077/ADR-029(h). Timeout, DNS
+  failure, TLS error, unreachable host — all are caught, logged at trace level (REQ-201: a failure
+  is recorded, not silent), and swallowed. The application proceeds. This is the one place
+  REQ-201's "no silent failures" rule is deliberately waived, for the same reason as the update
+  check: a background call initiated by the system has no user-initiated failure recourse.
+
+  (f) **No new abstraction.** A telemetry service is instantiated once at startup (the same pattern
+  as `UpdateService`), configured with the endpoint URL and passed the current `AppVersion` and
+  `updateChannel` from settings. The TelemetryEndpoint is a compile-time constant string (in
+  `util/TelemetryPing.hpp`), changeable only by recompile, so it survives a settings reset and
+  cannot be redirected by user preference.
+- Alternatives: **(1) Extend the update-check modal to report telemetry** — couples two unrelated
+  concerns, and the update check gates the session while telemetry cannot be gated. **(2) Post to
+  GitHub Releases download-count statistics** — GitHub already tracks these freely; if desired,
+  pull them separately. This requirement measures first *run*, which GitHub does not. **(3)
+  Third-party analytics vendor (Plausible, PostHog)** — rejected per user decision; self-hosted
+  backend only, so data stays within the user's infrastructure. **(4) Opt-in toggle** — rejected
+  per user decision; PII-free pings are sent always, no opt-out. A consent preference is flagged as
+  a follow-up (not in this ADR) if legal/regulatory requirements change.
+- Consequences: new `src/telemetry/` module (TelemetryPing, pure logic); extension to
+  `platform/HttpFetch` with a `PostJson` helper; extension to `src/io/UserPrefs` with two new
+  JSON fields; new worker thread at startup (§8, one-shot pattern). The endpoint URL is a
+  compile-time constant and is the only knob that moves without a rebuild. No new third-party
+  dependency, no new abstraction, no wire-format change. The user is responsible for standing up
+  the receiving endpoint (e.g. a Cloudflare Worker + KV/D1); this ADR specifies only the client
+  side.

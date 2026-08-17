@@ -1,6 +1,258 @@
 # PROJECT ISSUE & FEATURE TRACKER
 
+> **BUG-014 onward are also GitHub issues.** The REQ-204 fuzz harness files findings to
+> github.com/chetjones003/GoSurvey/issues so they can be triaged and deduplicated by signature
+> (`docs/fuzz-harness.md` §6). They are recorded here too, because this file — not the issue
+> tracker — is what a future reader of the repo actually finds.
+
+## CHANGES
+
+### Telemetry backend moved from Google Sheets to Cloudflare Worker + D1 — 2026-08-16
+    - **Not a SPEC GAP.** ADR-032 delegates the receiving endpoint to the operator and names this
+      exact shape ("a Cloudflare Worker + KV/D1"); `TelemetryEndpoint` is the one knob it says may
+      move. REQ-080 is untouched — same five-field payload, same events, same client behaviour.
+    - Motivation was not that Sheets was broken (BUG-020/021 fixed it and it worked), but that it
+      was structurally the wrong backend: Apps Script cannot set an HTTP status code, so every
+      failure answered `200`; ~1k requests/day per Google account; counting meant reading the whole
+      sheet; and a public unauthenticated writer with no schema, no validation and no dedupe.
+    - **D1, not KV** — despite the earlier backend notes recommending KV. KV's free tier
+      allows ~1,000 writes/day and every ping is a write, so it would start dropping data at ~1k
+      DAU: exactly the scale the telemetry exists to measure, and silently. D1 allows ~100k row
+      writes/day and answers the questions in SQL.
+    - New `tools/telemetry-worker/` (Worker, schema, queries, offline tests). Plain JS with no
+      build step so deploying a 120-line endpoint needs no TypeScript toolchain. Not part of the
+      CMake build; deployed with wrangler on its own cadence.
+    - Server-side hardening the old backend had none of: field-shape validation with the offending
+      field named in the 400; a 2 KiB body cap; `INSERT OR IGNORE` behind two partial unique
+      indexes so a retried ping cannot inflate counts (install once ever per id, active once per
+      id per day).
+    - Privacy went **forward**, not sideways: no IP is stored (the Sheets script tried to and
+      crashed doing it), only Cloudflare's country code, which is server-derived and outside the
+      REQ-080 payload. Workers Logs left off deliberately — it retains client IPs.
+    - Client change is one constant plus a comment. The `"ok":true` body check from BUG-020 is
+      **kept**, not reverted: the Worker does return honest status codes, but a 200 can still come
+      from a captive portal, proxy or stale DNS rather than from our endpoint.
+    - Rollback is that same constant plus a rebuild; the Sheets deployment and its doc are intact.
+    - **Deployed and verified live 2026-08-17** at
+      `https://gosurvey-telemetry.gosurvey.workers.dev/v1/ping` (D1 `6a6a538a-…`). Checked against
+      the running endpoint, not just locally: valid ping → `200 {"ok":true,"stored":true}`; both
+      partial unique indexes confirmed present and both observed rejecting a same-day repeat as
+      `stored:false`; bad `channel`/`event`/missing fields → `400` naming the field; non-JSON →
+      `400`; wrong path → `404`; GET → `405`. Seven successful POSTs produced exactly two rows.
+      `country` resolved (`US`) and no IP was stored anywhere. Test rows deleted; table empty.
+
 ## BUGS
+
+### [BUG-023] VIEWPOINTS → Load crashed the application (access violation) — FIXED 2026-08-16
+    - Found 2026-08-16 while verifying the Viewpoints grid restyle, by clicking Load on a points
+      file. **The application terminates with `0xC0000005`** and loses any unsaved drawing.
+    - **Pre-existing, and confirmed so rather than assumed**: the change under test was stashed,
+      the pristine tree rebuilt, and the same click reproduced the same access violation. Nothing
+      in the restyle touched the fault.
+    - Cause: `LoadSurveyPointsFromJsonFile` (`survey/SurveyPoints.cpp`) clears
+      `st.surveyPointIdBuffers` at the top and **never refills it**, while filling
+      `st.surveyPoints` with N points. `surveyPointIdBuffers` is a parallel array the Viewpoints
+      grid indexes by point index. That grid resizes the buffers at the *top* of its function —
+      i.e. **before** it submits the Load button — so within the very frame the button fires, the
+      table walks N rows reading `surveyPointIdBuffers[i]` on an empty vector.
+    - Why it hid: the vector is empty only between a load and the next frame's resize, so any
+      loader that ran outside a Viewpoints frame (DXF import, `.gs` open) left the buffers to be
+      repaired on the next frame and looked fine. Only the button *inside* the grid's own frame
+      exposes it. A release build reads freed/`nullptr` storage rather than asserting.
+    - Fix, in two places on purpose: (1) the loader refills the buffers itself, so the invariant
+      belongs to the owner and every future caller inherits it; (2) the grid re-checks the length
+      immediately before reading rows, so any *other* control drawn above the table that mutates
+      the point list mid-frame cannot reopen the same hole.
+    - **Standing risk, not fixed here:** `surveyPointIdBuffers` being a parallel array at all is
+      the underlying hazard — nothing in the type system ties its length to `surveyPoints`.
+      Folding the edit buffer into `SurveyPoint` would remove this class of defect outright.
+      Recorded as follow-up debt.
+
+### [BUG-022] The Survey ribbon's "Groups" button was drawn outside its panel and never appeared — FIXED 2026-08-16
+    - Reported 2026-08-16 by the user ("the survey ribbon tab is not big enough to accommodate the
+      point group button"). Point Groups (REQ-067) shipped with a ribbon button that **no user could
+      ever have clicked** — the panel manager was only reachable from the command bar.
+    - Cause: a ribbon panel is exactly **three** small buttons tall by construction —
+      `rowH = floor((colH - 4) / 3)` in `DrawRibbonBar` — and the Survey section stacked **four**
+      (Inverse, Traverse, Surfaces, Groups) into a single `BeginGroup` column. The fourth was laid
+      out past the section's bottom edge and clipped away by the child window. Nothing warns: the
+      button is submitted, hit-tests against a clipped rect, and simply never draws.
+    - The same trap had already been hit and worked around in the Inquiry section, whose comment
+      says so verbatim: *"Two columns: the panel is three small buttons tall, so a fourth in one
+      column is clipped."* Survey was written afterwards and did not follow it.
+    - Fix: split Survey into two columns (Inverse/Traverse | Surfaces/Groups) and widen `wSrv` to
+      match, exactly as Inquiry does.
+    - **Standing risk, not fixed here:** the three-row limit is implicit in an expression rather
+      than asserted, so the next section to add a fourth button will fail the same silent way. A
+      debug assert in `RibbonSectionEnd` that the content fits its section would turn this class of
+      defect from invisible into loud. Recorded as follow-up debt.
+
+### [BUG-021] Telemetry could never emit `install`, and re-minted its id every launch — FIXED 2026-08-16
+    - Found 2026-08-16 while verifying BUG-020, from evidence rather than review: the local
+      `gosurvey-user.json` held `lastActivePingDate` with **no** `installId`, a combination the
+      code should not be able to produce.
+    - **Two coupled defects in `TelemetryWorker`, both from ordering:**
+      1. The worker generated the install id *before* calling `DecideEventToSend`, which tells
+         `install` from `active` precisely by whether an id already exists. The function never saw
+         an empty id, so the `install` branch was unreachable — **every first run on a new machine
+         reported `active`**, and `install` was dead code. `DecideEventToSend` itself is correct
+         and its tests always passed; only the caller was wrong, which is why tests did not catch it.
+      2. Because `install` never fired, the `if (event == "install")` block that persisted the id
+         never ran either, and the success path wrote only the date (`UpdateTelemetryIds("", today)`).
+         So **no id was ever stored** and a fresh one was minted on every launch. Unique-install
+         counts would have equalled total ping counts and repeat users would have been invisible —
+         the dataset would have been worthless, and silently so.
+    - The observed prefs state is exactly what these two produce together, and is the proof.
+    - **Fixed:** decide before minting; persist the id on the success path alongside the date.
+      Storing on acknowledgement rather than on attempt also means a first ping that never landed
+      is retried as `install` next launch instead of being downgraded to `active` forever. Cost: a
+      duplicate install row in the narrow case where the row is written but the reply is lost —
+      preferred over losing the install event on the offline-job-site path REQ-080 expects.
+    - Existing installs self-heal: an absent id now decides `install` on next launch.
+    - **Verified end to end 2026-08-16.** A real app launch wrote `event=install` with a 32-hex id
+      to the sheet — an event the old ordering could not emit — and `gosurvey-user.json` now holds
+      that same id (`a32726f3…`) alongside the date, where before it held the date alone.
+    - **Test gap, acknowledged:** the defect lives in `TelemetryWorker`, which needs UserPrefs and a
+      network, so no unit test covers it. Making it testable means extracting the ordering into a
+      seam that would have exactly one caller — rejected under CLAUDE.md rule 2. The pure decision
+      function is tested; the sequencing around it is not.
+
+### [BUG-020] Telemetry pings never reached Google Sheets — FIXED 2026-08-16
+    - Reported 2026-08-16: the app POSTs, the POST "succeeds", no row ever appears in the sheet.
+    - **Three independent defects, each sufficient on its own.** Confirmed by probing the live
+      endpoint, not inferred:
+      1. **Wrong URL path form.** `TelemetryPing.hpp` held
+         `/macros/d/{ID}/userweb`, which answers **404** — it is not an Apps Script route at all.
+         A deployed web app lives only at `/macros/s/{DEPLOYMENT_ID}/exec`. The bad form came from
+         the Sheets setup guide's Step 3, which taught it in four places (guide since deleted).
+      2. **Deployment is not public.** `/exec` on the correct path still answers **401** to POST
+         and **302 → accounts.google.com** to GET, so `doPost` never runs. "Who has access" is set
+         to `Anyone with Google Account`; GoSurvey pings anonymously and must have `Anyone`.
+      3. **The Apps Script would drop every row anyway.** `doPost` called
+         `e.source.getLocalAddress()` for an IP column. A `doPost` event has no `source` property
+         — Apps Script exposes no client IP at all — so it threw a `TypeError` on *every* request,
+         the `catch` returned `{"error":…}`, and `appendRow` was never reached.
+    - **Why it looked like success:** Apps Script cannot set an HTTP status code, so a thrown
+      handler and a sign-in redirect both answer `200`. `HttpPostJson` checked only the status, so
+      the client reported a successful ping in all three failure modes. That is what turned three
+      one-line defects into a day of debugging, and it is the part most worth keeping fixed.
+    - **Fixed:** URL corrected to `/exec`; `HttpPostJson` gained an optional `responseOut` and now
+      drains the body; `TelemetryWorker` requires the literal `"ok":true` acknowledgement and logs
+      the body otherwise; the documented Apps Script drops the IP column, guards a missing
+      `postData`, and takes a `LockService` lock around `appendRow` so concurrent pings cannot
+      interleave. Docs rewritten with a signed-out `curl` that distinguishes causes 1–3.
+    - **Owner action, done 2026-08-16:** defect 2 was a Google console setting. Redeployed with
+      access `Anyone` at script version 3; the deployment ID was preserved, so the constant in
+      `TelemetryPing.hpp` remained correct. Verified end to end — a signed-out `curl` to `/exec`
+      now returns `{"ok":true}` and appends a row.
+    - **Diagnostic trap, documented:** `curl -X POST -L` against `/exec` returns **`411 Length
+      Required`** even when everything works. `/exec` answers a `302` to
+      `script.googleusercontent.com`, which must be followed with a GET; `-X POST` pins the method
+      so curl re-POSTs with no body. This happens *after* `doPost` has run and written the row, so
+      it reads as a failure on a working endpoint. `-d` without `-X` is correct, and WinHTTP
+      converts the method properly, so GoSurvey never hits it. Both setup docs now say so.
+    - Also fixed in passing: `tests/TelemetryPingTests.cpp` used C++20 designated initializers in a
+      C++17 build, so the whole test binary failed to link and the ten telemetry tests had never
+      once run. Suite is 390 tests / 203,335 assertions green.
+    - **Known weakness, not fixed:** `BuildTelemetryJson` does not escape `"` or `\`, so a payload
+      field containing either emits invalid JSON. Unreachable today (install ids are generated hex;
+      version/channel/os are compile-time or enumerated), and the test named "escapes special
+      characters" asserts the *unescaped* string, so it documents the gap rather than closing it.
+
+### [BUG-019] Large coordinates break `.gs` resave idempotence — OPEN ([#61](https://github.com/chetjones003/GoSurvey/issues/61))
+    - Found 2026-08-16 by the `gs-roundtrip` oracle once BUG-014/015 were fixed and the oracle could
+      see past them. ~325 of 1000 seeds hit it; minimized automatically 116 → 8 lines.
+    - A drawing containing a coordinate of state-plane magnitude (`-1e+12`) is not byte-identical on
+      resave. Violates REQ-079's first acceptance condition.
+    - **Hypothesis, not a diagnosis:** the local-storage rebase. Geometry is stored local
+      (`world = local + worldDocumentOrigin`) and the origin is re-established when large
+      coordinates arrive; if load recomputes it differently, the local values shift. Fits the
+      trigger, but unconfirmed — worth reading the load path before acting.
+    - If the hypothesis holds the round trip is geometrically faithful and only the origin/local
+      split differs, which changes how much this matters and whether REQ-079 should be met or
+      amended. Determine that first.
+    - This is why `fuzzgen::Options::emitRoundTrip` stays OFF by default: at ~1/3 of seeds it would
+      bury every other finding.
+
+### [BUG-018] Erasing the last polyline writes a `.gs` that cannot be reopened — OPEN ([#60](https://github.com/chetjones003/GoSurvey/issues/60))
+    - Found 2026-08-16 by the `gs-roundtrip` oracle (seed 28, `--roundtrip`). **The only finding so
+      far that loses work.**
+    - Save reports success and writes the file; opening it fails with
+      `.gs: polylineOffsets invalid (expected empty or at least two entries)`. The drawing is gone.
+    - Root cause: `ErasePolylineByIndex` (`CadCommands.cpp:8354`) rebuilds the CSR offset array by
+      seeding `newOff` with 0 and appending one entry per *surviving* polyline. Erase the only
+      polyline (`np == 1`) and the loop body never runs, leaving `{0}` — a single-entry CSR array,
+      which is not how "zero polylines" is spelled. `CommitPolylineDraft` assumes empty, and
+      `GsIo.cpp:834` enforces empty-or-≥2 on read. Writer and reader disagree; the reader is right.
+    - Fix shape: `if (newOff.size() == 1) newOff.clear();` before the assignment. Check the paper
+      sibling `ErasePaperPolyline` (`CadCommands.cpp:566`) for the same shape.
+    - **Harness gap:** the `polyline-offsets` invariant does not catch `{0}` — it checks start-at-0,
+      monotonic, and ends-at-vertex-count, all of which `{0}` satisfies with zero vertices. Adding
+      the reader's own rule as an invariant would catch this at the moment of corruption instead of
+      at load, and is the right follow-up.
+
+### [BUG-017] CIRCLE stores an infinite radius — OPEN ([#59](https://github.com/chetjones003/GoSurvey/issues/59))
+    - Found 2026-08-16 by the REQ-204 fuzzer (seed 4737), minimized automatically 169 → 4 lines.
+    - A centre far from the picked point makes the derived radius overflow `float`, and the circle
+      is committed with `r = inf`. It is then saved, exported and fed to every extents/snap/render
+      calculation. Neither magnitude is exotic: `1e12` is an ordinary state-plane easting.
+    - Violates REQ-201 (the refusal is not reported — there is no refusal) and REQ-101.
+    - Repro: `NEW` / `CMD CIRCLE` / `CMD -1e+12,1e+38` / `PICK 50 15`.
+    - Fix shape: reject non-finite derived geometry at the commit site. Worth doing generally rather
+      than per-command — LINE, ARC, ELLIPSE and OFFSET all derive lengths from two user points.
+
+### [BUG-016] OFFSET duplicates the source entity's id — FIXED 2026-08-16 ([#58](https://github.com/chetjones003/GoSurvey/issues/58))
+    - Found 2026-08-16 by the REQ-204 fuzzer (seeds 2004 and 3555), minimized automatically
+      155 → 9 lines.
+    - Root cause: all five `CommitOffset*` functions copied the source's `EntityAttributes`
+      wholesale so the copy would inherit layer/colour/linetype/lineweight/transparency — and `id`
+      came with them. `EnsureEntityIds` only fills ids that are 0, so a copied non-zero id was never
+      repaired and was written to `.gs` permanently.
+    - Violates REQ-076 (ids unique, never reused) and through it architecture §11.9: a cross-object
+      reference *is* an id, so an id naming two entities makes every such reference ambiguous.
+    - The codebase already had the answer — `CopySelectionToClipboard` clears ids on copy via
+      `ClearEntityIdsFrom` (CadCommands.cpp:3698). OFFSET never got the same treatment.
+    - **Fixed (TASK-057)** with a `PushOffsetCopyAttrs` helper that does the copy and clears the id,
+      called from all five sites. One named helper rather than the same three lines in five places,
+      because the defect *was* five copies of a pattern all missing the same step.
+    - Regression test: `tests/headless/transcripts/regression-58-offset-entity-id.txt` — the
+      fuzzer's own minimized reproducer, kept verbatim. It also asserts `EXPECT LINES 2`, since an
+      id-collision check cannot fire if OFFSET silently stops producing anything.
+
+### [BUG-015] An empty drawing fails `.gs` resave idempotence — FIXED 2026-08-16 ([#57](https://github.com/chetjones003/GoSurvey/issues/57))
+    - Found 2026-08-16 by the REQ-204 `gs-roundtrip` oracle (seed 2), minimized 116 → 5 lines.
+    - Load materializes a default layer `"0"` and text style `"Standard"` that a newly created
+      drawing does not carry, so save → load → save is not byte-identical.
+    - Violates REQ-079's first acceptance condition. The deeper issue is that a new drawing is
+      briefly in a state the rest of the code is entitled to assume cannot happen — both are
+      documented as always existing.
+    - Masked in normal use because the startup template is loaded on launch and already has both.
+    - **Fixed (TASK-058)** by initialising both tables on `AppCommandState` itself —
+      `drawingLayerTable = DefaultDrawingLayerTable()` and `textStyles = TextStyles::DefaultTextStyles()`.
+      Chosen over patching each creation site so that *every* route to a drawing (File > New, the
+      headless driver, an importer, a test) gets it with no site left to forget. Safe because both
+      load paths `clear()` these tables before repopulating, so a loaded file still wins.
+    - The defaults are defined in terms of the same helpers the loader uses
+      (`SyncDrawingLayerTableWithGeometry`'s row, `TextStyles::EnsureStandard`), so the created and
+      synthesized versions cannot drift — a second literal would have been the same bug again.
+    - Regression test: `tests/headless/transcripts/regression-57-empty-drawing-roundtrip.txt`.
+
+### [BUG-014] TEXT is saved to `.gs` with id 0 — FIXED 2026-08-16 ([#56](https://github.com/chetjones003/GoSurvey/issues/56))
+    - Found 2026-08-16 by the REQ-204 `gs-roundtrip` oracle on its first run.
+    - The TEXT commit path (`CadCommands.cpp`, both the model and paper branches) never calls
+      `BumpCadGpuCache`, so the `EnsureEntityIds` early-out — "geometry has not changed since the
+      last sweep, so nothing can be missing an id" — returns on a false premise. The annotation
+      keeps `id = 0` and is written out that way. The DIM* sibling paths do bump.
+    - Violates REQ-076; also breaks REQ-079 resave idempotence, since load then assigns the id.
+    - Rarely seen in the GUI because almost any later interaction bumps the revision and the sweep
+      catches up before a save. It needs a save with no intervening geometry change.
+    - **Fixed (TASK-058)** by adding the missing `BumpCadGpuCache(st)` after the TEXT commit, placed
+      after the if/else so it covers the model and paper branches alike. An audit of every
+      `cadAnnotations.push_back` site confirmed TEXT was the only one missing it — the clipboard
+      paste site bumps once at the end of its loop, and the DIM* paths bump inline.
+    - Regression test: `tests/headless/transcripts/regression-56-text-entity-id.txt`. Detects it
+      through the round trip rather than by reading the id, so one assertion covers both the
+      unassigned id and the resave breakage it causes. TEXT now saves with `id: 1`.
 
 ### [BUG-013] On a hybrid laptop GoSurvey renders on the integrated GPU — FIXED 2026-08-15
     - Found 2026-08-15 by TASK-053's acceptance run, not by a report: the same scene measured
@@ -83,6 +335,23 @@
       would have blocked every automated release while looking like a real product defect.
 
 ## FEATURES
+
+### [FEAT-012] Keyboard navigation inside the data grids — OPEN (deferred 2026-08-16)
+    - The half of "behave like a spreadsheet" (REQ-082) that was deliberately **not** delivered in
+      0.5.1: moving between cells with Tab / Enter / arrows, Esc to abandon an edit, a visibly
+      focused cell that scrolls into view. Sorting, column resize/reorder/hide, frozen headers,
+      uniform rows and cell-filling editors all shipped; every cell edits exactly as before, so
+      nothing regressed by splitting it — the grids are simply navigated one control at a time.
+    - **Blocked on a spec decision, not on code.** REQ-082 as accepted says nothing about moving
+      between cells, so building it now would be implementing to an unwritten rule. Three questions
+      have to be answered first (see the task): does Enter commit-and-move-down or commit-and-stay;
+      does navigation past the last row create a record (a data decision — a new survey point needs
+      an ID); and do the arrow keys move between cells or move the caret inside a focused field.
+    - Plan, questions and the trap to avoid are in `workshop/tasks/TASK-063-req082-grid-keyboard-navigation.md`.
+      The trap, recorded there: the grids iterate a **view** while addressing records by **storage**
+      index, so navigation must walk the view or the cursor jumps whenever a sort is active.
+    - Explicitly out of scope until separately requested: range selection, fill-down/right, cell-range
+      copy/paste, one-step undo of a grid edit, formulas. Those are a spreadsheet *engine*, not a grid.
 
 ### [FEAT-011] BENCH has no mesh case, and its file record does not name the profile — DONE 2026-08-15
     - Delivered by TASK-053. `BENCH MESH [triangles] [frames]` measures a 2,000,000-triangle shaded

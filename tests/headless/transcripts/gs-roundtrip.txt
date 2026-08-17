@@ -1,0 +1,48 @@
+# REQ-204 `gs-roundtrip` oracle: save -> load -> save must be byte-identical.
+#
+# A differential oracle: it needs no knowledge of what the file SHOULD contain, only that two paths
+# through the code agree. That is what makes it able to find defects nobody predicted — a field
+# written but never read, or read but never written, shows up here as a diff and nowhere else
+# (REQ-079's first acceptance condition says the same thing about the current format version).
+#
+# The comparison is the last line of this file. It was briefly a separate ctest case driven by
+# `cmake -E compare_files`, DISABLED while issues #56 and #57 were open; both are fixed, so the
+# check is live again and lives here, where the rest of the scenario is. One artifact, one place to
+# read, and the driver's own `EXPECT SAMEFILE` does the work.
+
+NEW
+
+# Geometry spanning every store the writer handles differently, so the diff has something to catch.
+CMD LINE
+CMD 0,0
+CMD 100,0
+CMD 100,50
+ESC
+
+CMD CIRCLE
+CMD 50,25
+CMD 10
+ESC
+
+CMD POLYLINE
+CMD 0,100
+CMD 50,150
+CMD 100,100
+CMD END
+
+CMD TEXT
+CMD 10,10
+CMD 2.5
+CMD 0
+CMD ROUND TRIP
+ESC
+
+CHECK ALL
+
+SAVEAS %OUT%/roundtrip-a.gs
+OPEN %OUT%/roundtrip-a.gs
+CHECK ALL
+SAVEAS %OUT%/roundtrip-b.gs
+
+# REQ-079: a file at the current version loads with no migration and is byte-identical on resave.
+EXPECT SAMEFILE %OUT%/roundtrip-a.gs %OUT%/roundtrip-b.gs

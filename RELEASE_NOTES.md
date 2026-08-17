@@ -16,6 +16,33 @@ short fallback message instead — which is a missed opportunity, not a failure.
 
 ---
 
+## 0.5.1
+
+**Anonymous usage reporting — new in this release**
+- GoSurvey now reports anonymous usage, so development can be aimed at what people actually run
+  rather than at guesses. This exists only to guide work on the program.
+- What it sends: a random ID that identifies this installation and nothing else, the version you
+  are running, whether you are on stable or beta, and that you are on Windows. It sends this once
+  when installed, and at most once a day after that.
+- What it never sends: your name, email, company, computer name, file names, drawings, survey
+  data, or location. The random ID is not built from anything about you or your machine, and it
+  cannot be traced back to either.
+- Nothing you draw or measure ever leaves your computer.
+- You can read all of this inside the program, under Settings → System → Anonymous Usage Data.
+
+**Surfaces**
+- New **Elev/Grade** tool: pick a point to read its elevation on the surface, pick a second to get
+  the grade, slope and distance between them.
+- Where two surfaces overlap — existing and proposed — you get a named line for each, so you can
+  read both without switching anything.
+- A pick outside the surface says so instead of inventing a number.
+
+**Fixes**
+- Offsetting an object no longer produces a copy that shares the original's identity, which could
+  make later edits act on the wrong object.
+- On laptops with two graphics cards, GoSurvey now asks for the faster one instead of taking
+  whichever Windows offered.
+
 ## 0.5.0
 
 **Surfaces and points**

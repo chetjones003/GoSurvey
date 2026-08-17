@@ -1,0 +1,21 @@
+# Regression test for issue #57 — an EMPTY drawing must survive save -> load -> save.
+#
+# REQ-079, first acceptance condition: "a file at the current version loads with
+# no migration and is byte-identical on resave."
+#
+# The fuzzer's minimized reproducer (seed 2, 116 lines reduced to 5 automatically),
+# kept verbatim. Deliberately has NO geometry: the defect is in what a *new*
+# drawing lacks, not in what any entity contains, and adding entities would only
+# make the diff harder to read.
+#
+# Fails before the fix with:
+#   SAMEFILE: files differ at byte 714 (3197 vs 3533 bytes)
+# because load materializes a default layer "0" and text style "Standard" that a
+# newly created drawing does not carry, so the second write has two objects the
+# first did not.
+
+NEW
+SAVEAS %OUT%/rt-a.gs
+OPEN %OUT%/rt-a.gs
+SAVEAS %OUT%/rt-b.gs
+EXPECT SAMEFILE %OUT%/rt-a.gs %OUT%/rt-b.gs
