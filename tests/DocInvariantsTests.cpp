@@ -216,6 +216,31 @@ TEST_CASE("polyline-offsets fires when the array does not start at zero", "[doci
   REQUIRE(Contains(Fired(st), docinv::kPolylineOffsets));
 }
 
+// Issue #60. This is the exact state ErasePolylineByIndex used to leave behind when the drawing's
+// only polyline was erased, and it is the state the .gs writer then serialised into a file its own
+// reader refuses. The three checks above all pass on it — {0} with zero vertices starts at 0, never
+// goes backwards, and ends at the vertex count — so it needs its own fixture to prove the new rule
+// fires rather than being covered by accident.
+TEST_CASE("polyline-offsets fires on a single-entry table", "[docinvariants]") {
+  AppCommandState st = GoodDrawing();
+  st.userPolylineVerts.clear();  // zero polylines...
+  st.userPolylineOffsets = {0};  // ...but the table still claims to exist
+  st.userPolylineClosed.clear();
+  st.userPolylineAttrs.clear();
+  REQUIRE(Contains(Fired(st), docinv::kPolylineOffsets));
+}
+
+// The other half of the rule, and the one that would catch an over-eager fix: an EMPTY table with no
+// vertices is how zero polylines is legitimately spelled, so it must stay silent.
+TEST_CASE("polyline-offsets stays silent on an empty table", "[docinvariants]") {
+  AppCommandState st = GoodDrawing();
+  st.userPolylineVerts.clear();
+  st.userPolylineOffsets.clear();
+  st.userPolylineClosed.clear();
+  st.userPolylineAttrs.clear();
+  REQUIRE_FALSE(Contains(Fired(st), docinv::kPolylineOffsets));
+}
+
 // ---------------------------------------------------------------------------
 // selection-in-range (architecture §11.9)
 // ---------------------------------------------------------------------------

@@ -178,6 +178,17 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
     // the last polyline read the wrong span, which is silent — the geometry is simply drawn short
     // or long — so it is checked rather than assumed.
     if (!st.userPolylineOffsets.empty()) {
+      // A one-entry table is not a valid CSR array: it describes zero polylines while claiming a
+      // table exists, and "zero polylines" is spelled EMPTY. This is the .gs reader's own rule
+      // (GsIo: "expected empty or at least two entries"), lifted here so the corruption is caught at
+      // the moment it is created rather than at the load that refuses the file. Issue #60 slipped
+      // through the three checks around it — {0} with zero vertices starts at 0, never goes
+      // backwards, and ends at the vertex count — which is why the reader's rule has to be its own.
+      if (st.userPolylineOffsets.size() == 1) {
+        Add(out, docinv::kPolylineOffsets,
+            "userPolylineOffsets holds 1 entry; 0 polylines is spelled as an EMPTY table and the "
+            ".gs reader rejects a single entry");
+      }
       if (st.userPolylineOffsets.front() != 0) {
         Add(out, docinv::kPolylineOffsets,
             "userPolylineOffsets[0] = " + std::to_string(st.userPolylineOffsets.front()) +

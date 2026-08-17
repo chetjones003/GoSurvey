@@ -8372,6 +8372,13 @@ static void ErasePolylineByIndex(AppCommandState& st, int pi) {
     run += nvPer[static_cast<size_t>(i)];
     newOff.push_back(run);
   }
+  // Erasing the ONLY polyline leaves the seeded 0 with nothing appended after it, and `{0}` is not
+  // how this store spells "no polylines" — an EMPTY table is (CommitPolylineDraft seeds the 0 only
+  // when it has a polyline to describe, and GsIo's reader rejects a single entry outright). Writing
+  // `{0}` produced a .gs that saved successfully and could never be reopened: issue #60, REQ-079.
+  // The paper-space sibling ErasePaperPolyline has always done this; this store was the outlier.
+  if (newOff.size() == 1)
+    newOff.clear();
   st.userPolylineOffsets = std::move(newOff);
   if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
     st.userPolylineClosed.erase(st.userPolylineClosed.begin() + static_cast<std::ptrdiff_t>(pi));
@@ -10939,7 +10946,7 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
     // for the same reason the surface profile empties them: the number has to be the mesh's cost
     // and nothing else. Surfaces are cleared too, so the two large profiles can never overlap.
     st.userPolylineVerts.clear();
-    st.userPolylineOffsets.assign(1, 0);
+    st.userPolylineOffsets.clear();  // empty, not {0} — see ErasePolylineByIndex / issue #60
     st.userPolylineClosed.clear();
     st.userPolylineAttrs.clear();
     st.cadSurfaces.clear();
@@ -10971,7 +10978,7 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
     // regenerated display geometry, which is exactly why this profile is not implied by the other
     // two and has to be measured on its own.
     st.userPolylineVerts.clear();
-    st.userPolylineOffsets.assign(1, 0);
+    st.userPolylineOffsets.clear();  // empty, not {0} — see ErasePolylineByIndex / issue #60
     st.userPolylineClosed.clear();
     st.userPolylineAttrs.clear();
 

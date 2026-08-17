@@ -1,0 +1,74 @@
+# Regression test for issue #60 — erasing the LAST polyline must leave a .gs that reopens.
+#
+# REQ-079, first acceptance condition: "a file at the current version loads with
+# no migration and is byte-identical on resave." Here the file does not load at
+# all, which is that condition failing in its most severe form: save reports
+# success, and the drawing can never be opened again.
+#
+# NOT the fuzzer's minimized reproducer. The automatic minimizer degenerated on
+# seed 28, reducing to `NEW` + `OPEN %OUT%/rt-a.gs` — a transcript that fails for
+# the wrong reason, because a MISSING file also fails with `io|OPEN failed`. The
+# signature is too coarse to tell "file absent" from "file present but rejected".
+# So this reproducer is written by hand to pin the actual mechanism, and the
+# count assertions below are what keep it honest.
+#
+# Mechanism: ErasePolylineByIndex rebuilds the CSR offset table by seeding it
+# with 0 and appending one entry per SURVIVING polyline. Erase the only polyline
+# and the loop body never runs, leaving {0} — a one-entry CSR array. Zero
+# polylines is spelled EMPTY everywhere else (CommitPolylineDraft assumes it,
+# GsIo's reader enforces "empty or at least two entries"), so the writer and the
+# reader disagreed and only the reader was right.
+#
+# Fails before the fix at the CHECK ALL below with:
+#   polyline-offsets: userPolylineOffsets holds 1 entry (0 polylines is spelled
+#   as an EMPTY table; the .gs reader rejects a single entry)
+# and, with that check removed, at the OPEN with:
+#   io: OPEN failed  /  ".gs: polylineOffsets invalid (expected empty or at
+#   least two entries)."
+#
+# Why OVERKILL rather than DELETE: the erase has to be reachable from a
+# transcript, and DELETE acts on st.selection, which only the UI layer can fill —
+# single-entity click-select is not part of SubmitViewportPick, and the
+# selection-box anchor is set by BeginSelectionBoxCorner, which the driver has no
+# verb for. OVERKILL needs no selection and reaches the SAME
+# ErasePolylineByIndex, so it tests the defect rather than the plumbing. A
+# polyline whose vertices all coincide collapses to one distinct vertex, which is
+# exactly OVERKILL's "clean.size() < 2" erase case.
+
+NEW
+
+# One polyline, degenerate on purpose, and nothing else that could keep the file
+# loadable by accident.
+CMD POLYLINE
+CMD 10,10
+CMD 10,10
+CMD 10,10
+CMD END
+ESC
+EXPECT POLYLINES 1
+
+# The step that corrupts the offset table.
+CMD OVERKILL
+
+# The polyline must actually be GONE. Without this the test would also pass if
+# OVERKILL declined to erase anything — an empty offset table is trivially valid,
+# so "the file reopened" would be a false green over an OVERKILL that stopped
+# working.
+EXPECT POLYLINES 0
+
+# Catch the corruption where it happens rather than only at load. The
+# `polyline-offsets` invariant was extended with the reader's own rule as part of
+# this fix; before that extension it passed on {0}, which is the harness gap
+# issue #60 also reported.
+CHECK ALL
+
+# The round trip: this is what the user experiences. Before the fix SAVEAS
+# reported success and OPEN refused the file it had just written.
+SAVEAS %OUT%/erase-last-poly.gs
+OPEN %OUT%/erase-last-poly.gs
+EXPECT POLYLINES 0
+
+# And it still resaves byte-identically, so the fix restores REQ-079 in full
+# rather than only making the file openable.
+SAVEAS %OUT%/erase-last-poly-b.gs
+EXPECT SAMEFILE %OUT%/erase-last-poly.gs %OUT%/erase-last-poly-b.gs

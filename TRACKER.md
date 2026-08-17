@@ -195,7 +195,7 @@
     - This is why `fuzzgen::Options::emitRoundTrip` stays OFF by default: at ~1/3 of seeds it would
       bury every other finding.
 
-### [BUG-018] Erasing the last polyline writes a `.gs` that cannot be reopened — OPEN ([#60](https://github.com/chetjones003/GoSurvey/issues/60))
+### [BUG-018] Erasing the last polyline writes a `.gs` that cannot be reopened — FIXED 2026-08-17 ([#60](https://github.com/chetjones003/GoSurvey/issues/60))
     - Found 2026-08-16 by the `gs-roundtrip` oracle (seed 28, `--roundtrip`). **The only finding so
       far that loses work.**
     - Save reports success and writes the file; opening it fails with
@@ -211,6 +211,41 @@
       monotonic, and ends-at-vertex-count, all of which `{0}` satisfies with zero vertices. Adding
       the reader's own rule as an invariant would catch this at the moment of corruption instead of
       at load, and is the right follow-up.
+    - **Fixed (TASK-064)**, confirmed rather than assumed at every step. The corrupted file really
+      does contain `"polylineOffsets":[0]` with `"polylineVerts": []`, and the reproducer's
+      `CHECK ALL` — placed between the corruption and the save — **passed** on the unpatched build,
+      which is the harness gap demonstrated rather than reasoned about.
+      - `if (newOff.size() == 1) newOff.clear();` in `ErasePolylineByIndex`, as the issue proposed.
+        The paper sibling `ErasePaperPolyline` (`CadCommands.cpp:577`) already did exactly this and
+        says so in a comment, so the model store was the outlier and the fix is the existing
+        convention, not a new one.
+      - Two more sites created the same invalid state and are fixed with it: `StartFrameBudgetBench`
+        set `userPolylineOffsets.assign(1, 0)` in **both** the mesh and surface profiles. Left alone,
+        they would have made the new invariant false by construction — and a check that fires on the
+        codebase's own behaviour is a check that gets waived.
+      - The `polyline-offsets` invariant now carries the reader's rule ("empty, or at least two
+        entries") with a fixture that breaks it *and* one asserting the legitimate empty table stays
+        silent, since the false positive is the more expensive failure here.
+      - Safe because empty is the store's **normal** state, not a new one: all 20+ read sites already
+        guard it (`size() > 0 ? size() - 1 : 0`, `empty() ? 0 :`, `std::max(0, (int)size() - 1)`).
+        Checked by grep rather than assumed.
+    - **Two things this bug exposed, both left open deliberately:**
+      1. The `io` failure signature cannot tell "file absent" from "file present but rejected" —
+         both are `io|OPEN failed` — so the minimizer honestly reduced this to `NEW` + `OPEN`, a
+         2-line reproducer for a different bug. The same weakness was already fixed once for
+         `expect`. Hence the regression transcript is hand-written and asserts entity counts on both
+         sides of the round trip.
+      2. **The headless driver cannot drive selection at all**, so `DELETE` — the natural way to hit
+         this — is untestable from a transcript. `SubmitViewportPickImpl` has no idle
+         single-entity-select branch (click-select lives in the UI layer), and the window-select
+         anchor is set by `BeginSelectionBoxCorner`, which the driver has no verb for. The
+         reproducer uses `OVERKILL` instead: no selection needed, and it reaches the *same*
+         `ErasePolylineByIndex` via its degenerate-polyline erase. A REQ-203 coverage gap.
+    - Regression test: `tests/headless/transcripts/regression-60-erase-last-polyline.txt`, plus
+      `polyline-offsets fires on a single-entry table` / `stays silent on an empty table`.
+    - Seed 28 still fails — with `expect|SAMEFILE`, which is **BUG-019/#61** standing behind this
+      one. A 120-seed `--roundtrip` sweep now shows that signature only, and no `io|OPEN failed` at
+      all.
 
 ### [BUG-017] CIRCLE stores an infinite radius — OPEN ([#59](https://github.com/chetjones003/GoSurvey/issues/59))
     - Found 2026-08-16 by the REQ-204 fuzzer (seed 4737), minimized automatically 169 → 4 lines.
