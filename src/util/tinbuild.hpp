@@ -69,6 +69,32 @@ inline constexpr double kTinPlanEpsilon = 0.01;
 /// absorb).
 [[nodiscard]] TinBuildResult BuildTin(const std::vector<TinInputPoint>& points);
 
+/// Interpolated surface elevation at plan position (\p x, \p y) — REQ-074's spot elevation.
+///
+/// Finds the triangle covering the point and evaluates that triangle's plane there. Takes the raw
+/// arrays rather than a `CadTin` so it stays GUI-free and testable without a GL context, like
+/// everything else in this header; callers pass `tin->vertsXyz` and `tin->indices`.
+///
+/// **Containment is decided per triangle, never against the hull.** A convex-hull test would call a
+/// point in a concave notch "inside" and then hand back an extrapolated elevation for ground that
+/// was never surveyed — which REQ-074 forbids in as many words ("it never extrapolates"). Deciding
+/// per triangle makes concavities, and later REQ-069's boundary voids, outside by construction:
+/// there is simply no triangle there.
+///
+/// The arithmetic is done in `double` even though the vertices are `float` (architecture §11.8).
+/// At state-plane magnitudes a barycentric solve in float loses far more than REQ-101's ±0.01 ft to
+/// cancellation — the same failure BUG-001 hit in picking and ADR-028 (d) recorded for the
+/// triangulation predicates.
+///
+/// A point exactly on an edge or vertex is inside: shared edges must not have a gap between the two
+/// triangles that meet there, and either triangle's plane gives the same elevation on the edge they
+/// share.
+///
+/// \param outZ receives the elevation; untouched when the point is not on the surface.
+/// \returns true when a triangle covers the point.
+[[nodiscard]] bool TinElevationAt(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
+                                  double x, double y, double* outZ);
+
 // --- Predicates, exposed for testing -----------------------------------------------------------
 // These are the two functions the whole triangulation rests on, and a sign error in either is
 // invisible on most inputs. They are public so they can be pinned directly rather than only through

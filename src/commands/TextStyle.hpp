@@ -37,6 +37,17 @@ inline TextStyle& EnsureStandard(std::vector<TextStyle>& styles) {
   return styles.front();
 }
 
+/// The style table a brand-new drawing starts with — "Standard" and nothing else.
+///
+/// Defined in terms of \ref EnsureStandard so there is exactly one description of what "Standard"
+/// is; a second literal here could drift from the one the loader synthesizes, which is the class of
+/// difference issue #57 was made of.
+inline std::vector<TextStyle> DefaultTextStyles() {
+  std::vector<TextStyle> styles;
+  EnsureStandard(styles);
+  return styles;
+}
+
 /// True when this annotation is a kind that participates in text styles (TEXT / MTEXT, not dimensions).
 inline bool IsStyleableText(const CadAnnotation& a) {
   return a.kind == CadAnnotation::Kind::Text || a.kind == CadAnnotation::Kind::Mtext;

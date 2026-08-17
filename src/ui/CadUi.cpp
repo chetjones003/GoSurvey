@@ -1648,7 +1648,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                       colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror"});
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
   const float wAnn  = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
-  const float wInq  = 8.f + colW({"Aligned", "Linear", "ID Point"});
+  // Two columns: the panel is three small buttons tall, so a fourth in one column is clipped.
+  const float wInq  = 8.f + colW({"Aligned", "Linear", "ID Point"}) + 4.f + colW({"Elev/Grade"});
   const float wSrv  = 8.f + largeW + 4.f + colW({"Inverse", "Traverse", "Groups", "Surfaces"});
   const float wView = 8.f + colW({"Extents", "Window"}) + 8.f + 132.f;  // + the visual-style combo (REQ-064)
   // REQ-032 contextual ribbon: Layout tools in paper space, but the normal model ribbon while editing a
@@ -1876,6 +1877,17 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     if (smallBtn("##RibbonId", RibbonIconKind::Id, "ID Point", cw))
       StartIdPointCommand(cmd, log);
     RibbonItemHelp("ID — list UCS (World) X,Y,Z at a point (click or type coordinates).\nCommand bar: ID");
+    ImGui::EndGroup();
+
+    // Second column: the panel is three small buttons tall, so this cannot go under ID Point.
+    ImGui::SameLine(0, 4);
+    ImGui::BeginGroup();
+    if (smallBtn("##RibbonSurfElev", RibbonIconKind::Id, "Elev/Grade", colW({"Elev/Grade"})))
+      StartSurfaceElevGradeCommand(cmd, log);
+    RibbonItemHelp(
+        "Surface elevation and grade (REQ-074) — pick a point for its interpolated elevation on every "
+        "surface covering it; pick a second for the grade, slope and distances between them.\n"
+        "A pick off the surface says so rather than extrapolating.\nCommand bar: SURFELEV or SE");
     ImGui::EndGroup();
   }
   RibbonSectionEnd();
