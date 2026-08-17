@@ -104,9 +104,14 @@ Design notes that matter:
   terminate, and a transcript that cannot express it cannot express a polyline.
 - **`DIALOG` queues answers rather than configuring a mode.** A transcript that opens two
   files in sequence needs two different answers, and a mode cannot give them.
-- **Picks carry world coordinates, not screen coordinates.** `SubmitViewportPick` already
-  takes world coordinates, and screen coordinates would make every transcript depend on a
-  window size that does not exist.
+- **Picks carry LOCAL coordinates, not screen coordinates** — `world = local +
+  worldDocumentOrigin`. Screen coordinates would make every transcript depend on a window size that
+  does not exist. This bullet said **world** until 2026-08-17 and was simply wrong: `SubmitViewportPick`
+  takes local storage coordinates, its values go straight into the flat stores, and the parameters were
+  named `worldX`/`worldY` while every caller passed local. It matters for reading transcripts — on a
+  drawing whose origin has been established at easting 2e6, `PICK 10 10` means local `(10,10)`, i.e.
+  world `(2000010, 500010)`, not a point near the world origin. Pinned by
+  `transcripts/regression-pick-local-coordinates.txt`.
 - **`%OUT%` expands to a per-run temp directory.** Transcripts must never write into the
   source tree (REQ-200, CON-07), and a fuzz run writes a lot of files.
 

@@ -11855,10 +11855,15 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
   return true;
 }
 
-void SubmitViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log,
+// localX/localY are LOCAL storage coordinates, not world — see the declaration in CadCommands.hpp.
+// The `wx`/`wy` spelling inside SubmitViewportPickImpl and its callees is kept deliberately: those
+// names appear hundreds of times across the pick handlers, and renaming them would bury this
+// two-line clarification in an unreviewable diff. The space is stated here, at the entry point, which
+// is where a caller looks.
+void SubmitViewportPick(AppCommandState& st, float localX, float localY, std::vector<std::string>& log,
                          bool windowSelectionSubtract, bool fenceLeftToRightWindowMode) {
   ClearPendingOneShotObjectSnap(st);
-  SubmitViewportPickImpl(st, wx, wy, log, windowSelectionSubtract, fenceLeftToRightWindowMode);
+  SubmitViewportPickImpl(st, localX, localY, log, windowSelectionSubtract, fenceLeftToRightWindowMode);
 }
 
 // REQ-101 / decision D-2026-08-17-b: establish the document origin BEFORE a typed coordinate of

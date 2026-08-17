@@ -530,15 +530,21 @@ struct AppCommandState {
   /// Paper layout: native paper-space entity under the cursor when idle, for hover highlight parity (REQ-039).
   bool paperHoverValid = false;
   PaperEntityRef paperHover{};
-  /// When true, viewport picks should use the snapped world point (OSNAP) instead of the sticky-blended cursor.
+  /// When true, viewport picks should use the snapped point (OSNAP) instead of the sticky-blended cursor.
   bool viewportSnapPickValid = false;
-  float viewportSnapPickWorldX = 0.f;
-  float viewportSnapPickWorldY = 0.f;
+  /// **LOCAL** coordinates, not world — `world = local + worldDocumentOrigin`. These were named
+  /// `...WorldX/Y/Z` until 2026-08-17 while holding local values, which is the setup for the bug class
+  /// the `local-storage` invariant exists to catch (a world value stored without subtracting the
+  /// origin lands the geometry a full origin away). `CadSnap::Hit` carries stored coordinates
+  /// straight out of `userLinesFlat` and friends, so a snapped pick is bit-identical to the vertex it
+  /// snapped to — which is also why nothing here needs widening to double.
+  float viewportSnapPickLocalX = 0.f;
+  float viewportSnapPickLocalY = 0.f;
   /// Elevation of the snapped point. An object snap yields the object's ACTUAL 3D point, so it
   /// overrides the current work-plane elevation — snapping to the end of a line on the datum while
   /// ELEV is 5 must give you that endpoint, not a point 5 above it (AutoCAD-faithful, REQ-058).
   /// Only meaningful while \ref viewportSnapPickValid.
-  float viewportSnapPickWorldZ = 0.f;
+  float viewportSnapPickLocalZ = 0.f;
   /// Command-line log cache for the selectable read-only multiline (rebuilt each frame from \ref log).
   std::vector<char> commandLogCacheBytes;
   size_t commandLogLastSizeForAutoscroll = 0;
@@ -1609,7 +1615,7 @@ inline float CadWorkPlaneElevation(const AppCommandState& st) {
 /// it. Without the override, snapped geometry would be silently lifted to the current elevation
 /// and would not touch the thing it was snapped to.
 inline float CadCommitElevation(const AppCommandState& st) {
-  return st.viewportSnapPickValid ? st.viewportSnapPickWorldZ : CadWorkPlaneElevation(st);
+  return st.viewportSnapPickValid ? st.viewportSnapPickLocalZ : CadWorkPlaneElevation(st);
 }
 
 /// True when the work plane is the world XY plane at Z = 0 — the default, and what the status bar
@@ -2110,7 +2116,20 @@ void ApplyCopySurveyDuplicateModalResult(AppCommandState& st, bool applySurveyDu
 bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::string>& log);
 
 /// Viewport left-click during active commands.
-void SubmitViewportPick(AppCommandState& st, float worldX, float worldY, std::vector<std::string>& log,
+///
+/// \param localX,localY  **LOCAL** storage coordinates, NOT world — `world = local +
+///   worldDocumentOrigin`. These parameters were named `worldX`/`worldY` until 2026-08-17 while every
+///   caller passed local values, and the values go straight into the flat stores (see
+///   `SubmitLineVertex`), so passing a genuine world coordinate here places the geometry a full
+///   document origin away. That is the failure the `local-storage` document invariant exists to
+///   catch, and it is worth the explicit parameter names because this is the layer's main pick entry
+///   point. Pinned by `tests/headless/transcripts/regression-pick-local-coordinates.txt`.
+///
+///   The UI derives these from the view transform, whose pan is itself local
+///   (`ApplyDocumentOriginRebase` shifts `viewportPanX/Y`), and an OSNAP overrides them with a value
+///   read directly out of the geometry stores — so a snapped pick is exact and an unsnapped one is
+///   bounded by the pixel it came from (REQ-101).
+void SubmitViewportPick(AppCommandState& st, float localX, float localY, std::vector<std::string>& log,
                         bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false);
 
 void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st, std::vector<std::string>& log);

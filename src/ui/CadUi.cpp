@@ -7878,8 +7878,8 @@ static void ApplyGripMagnetToGrips(AppCommandState& cmd, double rawX, double raw
     *ioX = bx;
     *ioY = by;
     cmd.viewportSnapPickValid = true;
-    cmd.viewportSnapPickWorldX = bx;
-    cmd.viewportSnapPickWorldY = by;
+    cmd.viewportSnapPickLocalX = bx;
+    cmd.viewportSnapPickLocalY = by;
     if (out_snap) {
       out_snap->valid = true;
       out_snap->kind = CadSnap::Kind::Grip;
@@ -8543,8 +8543,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                                                       cmd, midCmd, tol, exclude);
           if (snap.valid) {
             cmd.viewportSnapPickValid = true;
-            cmd.viewportSnapPickWorldX = snap.x;
-            cmd.viewportSnapPickWorldY = snap.y;
+            cmd.viewportSnapPickLocalX = snap.x;
+            cmd.viewportSnapPickLocalY = snap.y;
             curMX = snap.x;
             curMY = snap.y;
             floatingSnapHit = snap;
@@ -8899,8 +8899,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       *outCursorX = cmd.pendingOneShotSnapX;
       *outCursorY = cmd.pendingOneShotSnapY;
       cmd.viewportSnapPickValid = true;
-      cmd.viewportSnapPickWorldX = cmd.pendingOneShotSnapX;
-      cmd.viewportSnapPickWorldY = cmd.pendingOneShotSnapY;
+      cmd.viewportSnapPickLocalX = cmd.pendingOneShotSnapX;
+      cmd.viewportSnapPickLocalY = cmd.pendingOneShotSnapY;
       if (out_snap) {
         out_snap->valid = true;
         out_snap->kind = static_cast<CadSnap::Kind>(cmd.pendingOneShotSnapKind);
@@ -8924,9 +8924,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         snap = CadSnap::FindBest(rawX, rawY, cmd, midCmd, tol, exclude, cursorRayPtr);  // 3D when orbited (REQ-058)
         if (snap.valid) {
           cmd.viewportSnapPickValid = true;
-          cmd.viewportSnapPickWorldX = snap.x;
-          cmd.viewportSnapPickWorldY = snap.y;
-          cmd.viewportSnapPickWorldZ = snap.z;  // osnap overrides the work-plane elevation (REQ-058)
+          cmd.viewportSnapPickLocalX = snap.x;
+          cmd.viewportSnapPickLocalY = snap.y;
+          cmd.viewportSnapPickLocalZ = snap.z;  // osnap overrides the work-plane elevation (REQ-058)
           if (out_snap)
             *out_snap = snap;
           const double dx = static_cast<double>(snap.x) - rawX;
@@ -8979,8 +8979,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // MTEXT box grips: first click arms; snapped cursor updates box live; second LMB commits (like dim / entity grips).
   if (cmd.mtextGripMoveActive && cmd.mtextGripAnnotationIndex >= 0 && outCursorX && outCursorY && hovered &&
       mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
-    const float curWx = cmd.viewportSnapPickValid ? cmd.viewportSnapPickWorldX : *outCursorX;
-    const float curWy = cmd.viewportSnapPickValid ? cmd.viewportSnapPickWorldY : *outCursorY;
+    const float curWx = cmd.viewportSnapPickValid ? cmd.viewportSnapPickLocalX : *outCursorX;
+    const float curWy = cmd.viewportSnapPickValid ? cmd.viewportSnapPickLocalY : *outCursorY;
     const size_t gi = static_cast<size_t>(cmd.mtextGripAnnotationIndex);
     if (gi < cmd.cadAnnotations.size()) {
       CadAnnotation& ann = cmd.cadAnnotations[gi];
@@ -9011,8 +9011,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   if (cmd.dimGripMoveActive && cmd.dimGripAnnotationIndex >= 0 && outCursorX && outCursorY && hovered &&
       mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
-    const float curWx = cmd.viewportSnapPickValid ? cmd.viewportSnapPickWorldX : *outCursorX;
-    const float curWy = cmd.viewportSnapPickValid ? cmd.viewportSnapPickWorldY : *outCursorY;
+    const float curWx = cmd.viewportSnapPickValid ? cmd.viewportSnapPickLocalX : *outCursorX;
+    const float curWy = cmd.viewportSnapPickValid ? cmd.viewportSnapPickLocalY : *outCursorY;
     const size_t gi = static_cast<size_t>(cmd.dimGripAnnotationIndex);
     if (gi < cmd.cadAnnotations.size()) {
       CadAnnotation& ann = cmd.cadAnnotations[gi];
@@ -9056,10 +9056,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
     // Snap to other geometry if OSNAP fired (entity's own geometry is excluded); otherwise raw cursor.
     const float curWxRaw = cmd.viewportSnapPickValid
-        ? cmd.viewportSnapPickWorldX
+        ? cmd.viewportSnapPickLocalX
         : (outCursorRawX ? static_cast<float>(*outCursorRawX) : static_cast<float>(*outCursorX));
     const float curWyRaw = cmd.viewportSnapPickValid
-        ? cmd.viewportSnapPickWorldY
+        ? cmd.viewportSnapPickLocalY
         : (outCursorRawY ? static_cast<float>(*outCursorRawY) : static_cast<float>(*outCursorY));
 
     // ORTHO constrains the dragged point to the H/V line through the grip's start (REQ-047). An object snap
@@ -9200,8 +9200,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     using RP = AppCommandState::RotatePhase;
 
     const bool haveSnapPick = outCursorX && outCursorY && cmd.viewportSnapPickValid;
-    const float commitX = haveSnapPick ? cmd.viewportSnapPickWorldX : *outCursorX;
-    const float commitY = haveSnapPick ? cmd.viewportSnapPickWorldY : *outCursorY;
+    const float commitX = haveSnapPick ? cmd.viewportSnapPickLocalX : *outCursorX;
+    const float commitY = haveSnapPick ? cmd.viewportSnapPickLocalY : *outCursorY;
 
     // Mouse -> world for CLICK handling. This is a second, independent conversion from the hover
     // seam above and must branch the same way, or hover highlights an entity that the click then

@@ -724,9 +724,9 @@ int main()
     // circle, where nudging the third point toward collinear sends the circumcentre and radius
     // arbitrarily far and the committed circle is nowhere near the previewed one.
     const double commitCurX =
-        cmd.viewportSnapPickValid ? static_cast<double>(cmd.viewportSnapPickWorldX) : curX;
+        cmd.viewportSnapPickValid ? static_cast<double>(cmd.viewportSnapPickLocalX) : curX;
     const double commitCurY =
-        cmd.viewportSnapPickValid ? static_cast<double>(cmd.viewportSnapPickWorldY) : curY;
+        cmd.viewportSnapPickValid ? static_cast<double>(cmd.viewportSnapPickLocalY) : curY;
 
     std::vector<float> rubberLines;
     const float orthoHalfH = (1.f / std::max(cmd.viewportZoom, 1.e-9f)) * 50.f;

@@ -7,6 +7,42 @@
 
 ## CHANGES
 
+### The whole pick path was named "world" while carrying "local" — renamed, documented, pinned — 2026-08-17
+    - Raised as "now fix picks too", following the note in TASK-067 that picks are "still quantized".
+      **That note was misleading, and the investigation corrected it rather than acting on it.** There
+      is no pick precision defect:
+      - **A snapped pick is already exact.** `CadSnap::FindBest` reads `userLinesFlat` and friends
+        directly and carries the stored float through `CadSnap::Hit` into `commitX`, which is stored
+        verbatim — bit-identical to the vertex snapped to.
+      - **An unsnapped pick is bounded by the pixel that produced it.** At a usable zoom that is
+        coarser than REQ-101's ±0.01 ft, and no downstream precision can recover it: the information
+        was never captured. Widening the pick path to double was considered and **rejected** — the
+        input is a pixel and the output is a float store, so the added precision is unobservable at
+        both ends.
+    - **What the investigation did find is a live trap.** Everything describing the pick path said the
+      opposite of what it does: `SubmitViewportPick(..., float worldX, float worldY, ...)`, the
+      `viewportSnapPickWorldX/Y/Z` fields (23 references), and `docs/fuzz-harness.md`, which asserted
+      outright *"Picks carry world coordinates … `SubmitViewportPick` already takes world coordinates"*.
+      Every caller passes **local** values, and they go straight into the flat stores.
+    - Proven, not inferred: with the origin established at easting 2e6, `PICK 10 10` stores local
+      `(10,10)`. And `rawPickX` is derived from the view transform, whose pan `ApplyDocumentOriginRebase`
+      shifts — so the pick path is uniformly local, just uniformly misnamed. No mixed-space bug.
+    - Why it was worth fixing rather than shrugging at: passing a genuine world coordinate to that
+      entry point places geometry a full document origin away — ~2,000,000 ft on a state-plane drawing.
+      That is precisely the failure the `local-storage` document invariant exists to catch, and this
+      project has a recorded history of it (the CSV importer had to be taught to subtract the origin in
+      double). A misleading parameter name on the layer's main pick entry point is how that bug gets
+      written a second time.
+    - Changed: parameters renamed to `localX`/`localY` with the space and the consequence documented at
+      the declaration; the three state fields renamed to `viewportSnapPickLocalX/Y/Z`; the false claim
+      in `docs/fuzz-harness.md` corrected; REQ-101 given an explicit note scoping picked points out of
+      its tolerance while requiring that picking add no error of its own.
+    - `wx`/`wy` inside `SubmitViewportPickImpl` and its callees are deliberately **left alone** — those
+      names appear hundreds of times across the pick handlers, and renaming them would bury a two-line
+      clarification in an unreviewable diff. The space is stated at the entry point, where a caller looks.
+    - Regression test: `tests/headless/transcripts/regression-pick-local-coordinates.txt` — a
+      coordinate-space test, not a precision one. 410/410 ctest green; 1000-seed sweep clean.
+
 ### A typed state-plane coordinate was stored 0.025 ft off — REQ-101 accepted, origin now established at entry — 2026-08-17
     - Raised by the user right after TASK-066 ("let's also rebase at entry") — the option
       D-2026-08-17-a had declined hours earlier. Revisiting it needed a new recorded decision under

@@ -1,0 +1,51 @@
+# Viewport picks carry LOCAL storage coordinates, not world (`world = local + worldDocumentOrigin`).
+#
+# Not a precision test — a coordinate-SPACE test. There was no defect in behaviour here; the defect
+# was that everything describing this path said the opposite of what it does:
+#   - `SubmitViewportPick(AppCommandState&, float worldX, float worldY, ...)`
+#   - `AppCommandState::viewportSnapPickWorldX / ...Y / ...Z`   (23 references)
+#   - docs/fuzz-harness.md: "Picks carry world coordinates ... SubmitViewportPick already takes world
+#     coordinates"
+# all while every caller passed local values that go straight into the flat stores. Renamed and
+# corrected 2026-08-17; this transcript is what stops the claim from drifting back.
+#
+# Why it is worth a test rather than just a comment: passing a genuine WORLD coordinate here places
+# the geometry a full document origin away — on a state-plane drawing, ~2,000,000 ft off. That is
+# exactly the failure the `local-storage` document invariant exists to catch, and this project has a
+# recorded history of it (the CSV importer had to be taught to subtract the origin in double). A
+# misleading parameter name on the layer's main pick entry point is how that bug gets written again.
+#
+# On precision, recorded here because it is the question that led to this test: picks need no
+# double-precision widening. An OSNAP overrides the cursor with a value read directly out of the
+# geometry stores (`CadSnap::Hit` carries `userLinesFlat` values through unchanged), so a snapped pick
+# is bit-identical to the vertex it snapped to. An unsnapped pick is bounded by the pixel that produced
+# it, which no amount of precision downstream can improve. See REQ-101.
+
+NEW
+
+# Establish a document origin at state-plane magnitude, the way a real drawing does (REQ-101,
+# D-2026-08-17-b). The typed point becomes the origin, so its own local coordinate is (0,0).
+CMD LINE
+CMD 2000000,500000
+EXPECT LOG "Drawing origin shifted for precision"
+
+# Now pick. If picks were world coordinates, this would be ~2,000,000 ft from the first vertex and the
+# local-storage invariant would fire on a stored coordinate of state-plane magnitude. Because they are
+# local, it is a 10x10 offset from it.
+PICK 10 10
+ESC
+
+EXPECT LINES 1
+
+# The load-bearing check. `local-storage` asserts every stored coordinate is local, and `finite-coords`
+# would also catch a wildly out-of-range value — so a regression to world-coordinate picks fails here
+# rather than silently drawing a line off the edge of the world.
+CHECK ALL
+
+# And it survives the round trip: the drawing was already normalized when written, so even the first
+# resave is byte-identical (REQ-079 as amended, plus the entry-time establishment above).
+SAVEAS %OUT%/pick-local-a.gs
+OPEN %OUT%/pick-local-a.gs
+CHECK ALL
+SAVEAS %OUT%/pick-local-b.gs
+EXPECT SAMEFILE %OUT%/pick-local-a.gs %OUT%/pick-local-b.gs
