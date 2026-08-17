@@ -1,0 +1,63 @@
+# Regression test for the SECOND non-finite mechanism found while fixing issue #59.
+#
+# Not in the issue's reproducer, and a different root cause from the circle: here
+# nothing is *derived* from a distance. A relative coordinate `@dx,dy` is resolved
+# as `base + delta`, and that addition overflows float even though the base and
+# the delta are each perfectly representable.
+#
+# ParseWorldPoint already refuses an ABSOLUTE coordinate that overflows float —
+# the stream extraction sets failbit, so `CMD 1e+40,0` is rejected and reported
+# as "Could not parse input". Its relative branch performed the addition AFTER
+# that check and never re-validated the sum, so the one path that can create a
+# non-finite coordinate out of finite input was the one path with no check. The
+# fix restores the function's own existing guarantee rather than adding a new
+# rule, which is why no new log message was needed: every caller already reports
+# a parse failure.
+#
+# Proven for all three commands below before the fix, each on its own:
+#   LINE     -> finite-coords: userLinesFlat[3] = inf
+#   POLYLINE -> finite-coords: userPolylineVerts[3] = inf
+#   RECT     -> finite-coords: userPolylineVerts[3] = inf
+# ARC, ELLIPSE and OFFSET were probed the same way at 1e+38 / 3e+38 magnitudes
+# and did NOT reproduce, so they are deliberately not "fixed" here — see
+# TASK-065 §2.
+
+NEW
+
+# --- LINE ---------------------------------------------------------------------
+# 2e+38 is representable; 2e+38 + 2e+38 = 4e+38 is not (FLT_MAX ~ 3.4e+38).
+CMD LINE
+CMD 2e+38,0
+CMD @2e+38,0
+ESC
+
+# The relative point is refused, so the segment is never created. One vertex was
+# accepted (the absolute first point) but no segment can exist without a second.
+EXPECT LINES 0
+EXPECT LOG "Could not parse"
+CHECK ALL
+
+# --- POLYLINE -----------------------------------------------------------------
+CMD POLYLINE
+CMD 2e+38,0
+CMD @2e+38,0
+CMD END
+ESC
+EXPECT POLYLINES 0
+CHECK ALL
+
+# --- RECT ---------------------------------------------------------------------
+# RECT takes two opposite corners and builds a closed polyline, so it lands in
+# the polyline store too.
+CMD RECT
+CMD 2e+38,0
+CMD @2e+38,2e+38
+ESC
+EXPECT POLYLINES 0
+CHECK ALL
+
+# The whole document is still storable after three refused commands — nothing was
+# half-committed on the way out.
+SAVEAS %OUT%/relcoord.gs
+OPEN %OUT%/relcoord.gs
+CHECK ALL

@@ -247,7 +247,33 @@
       one. A 120-seed `--roundtrip` sweep now shows that signature only, and no `io|OPEN failed` at
       all.
 
-### [BUG-017] CIRCLE stores an infinite radius — OPEN ([#59](https://github.com/chetjones003/GoSurvey/issues/59))
+### [BUG-024] A relative coordinate `@dx,dy` can resolve to a non-finite point — FIXED 2026-08-17
+    - Found 2026-08-17 **while fixing BUG-017**, by probing the sibling commands issue #59 recommends
+      guarding. Not in that issue, and **a different root cause**: nothing is derived from a
+      distance here.
+    - `ParseWorldPoint` resolves `@dx,dy` as `*ox = baseX + dx`. That sum overflows `float` while the
+      base and the delta are each perfectly representable — `2e+38 + 2e+38 = 4e+38`, and
+      `FLT_MAX ≈ 3.4e+38`. Reproduced independently for **LINE** (`userLinesFlat[3] = inf`),
+      **POLYLINE** and **RECT** (`userPolylineVerts[3] = inf`), all three because they consume the
+      same parser.
+    - Violates REQ-204 ("no coordinate is NaN or infinite") and REQ-201 (no refusal was reported —
+      there was no refusal).
+    - **What made the fix one line:** an *absolute* coordinate that overflows is **already** refused
+      and reported — `CMD 1e+40,0` fails stream extraction and the caller logs "Could not parse
+      input". So the relative branch was the one path that can manufacture a non-finite coordinate
+      out of finite input, and the one path with no check: it did the addition *after* the validation
+      and never re-validated. The guard restores this function's own existing guarantee rather than
+      inventing a new rule, which is why no new log message was needed.
+    - **Fixed (TASK-065)** with `if (!std::isfinite(*ox) || !std::isfinite(*oy)) return false;` after
+      the addition. Every caller already reports a false return as a parse failure, so REQ-201 is met
+      by construction — and asserted, not assumed: the regression transcript checks
+      `EXPECT LOG "Could not parse"`.
+    - Regression test: `tests/headless/transcripts/regression-59b-relative-coord-overflow.txt` —
+      one section per command, so a fix that only helped LINE would fail on POLYLINE or RECT.
+    - Not filed as a GitHub issue: it was found and fixed in the same task, so an issue would have
+      been opened and closed in one commit.
+
+### [BUG-017] CIRCLE stores an infinite radius — FIXED 2026-08-17 ([#59](https://github.com/chetjones003/GoSurvey/issues/59))
     - Found 2026-08-16 by the REQ-204 fuzzer (seed 4737), minimized automatically 169 → 4 lines.
     - A centre far from the picked point makes the derived radius overflow `float`, and the circle
       is committed with `r = inf`. It is then saved, exported and fed to every extents/snap/render
@@ -256,6 +282,32 @@
     - Repro: `NEW` / `CMD CIRCLE` / `CMD -1e+12,1e+38` / `PICK 50 15`.
     - Fix shape: reject non-finite derived geometry at the commit site. Worth doing generally rather
       than per-command — LINE, ARC, ELLIPSE and OFFSET all derive lengths from two user points.
+    - **Fixed (TASK-065)** at `CommitCircle`, covering all four CIRCLE routes (centre+radius typed,
+      centre+radius picked, and both 3P paths) because they all funnel through it.
+    - **The guard had to go BEFORE the existing `r < 1e-5f` test, and that is the whole lesson of this
+      bug rather than a detail:** `inf < 1e-5f` is false, so the radius-too-small check waved `inf`
+      straight through — and since every comparison against NaN is also false, it waved NaN through
+      too. A magnitude test cannot screen non-finite values; it is exactly the wrong tool, and it
+      looked like a validation.
+    - **The issue's "guard LINE, ARC, ELLIPSE and OFFSET too" recommendation was probed, not taken on
+      trust**, because guarding on a guess is a speculative fix:
+      | Probe | Result |
+      |---|---|
+      | ARC, three picks at `±1e+38` | arc committed, `finite-coords` **passed** |
+      | ELLIPSE, major axis endpoint `3e+38,3e+38` | ellipse committed, **passed** |
+      | OFFSET of a circle at distance `1e+38` | copy committed, **passed** |
+      | LINE with `@2e+38,0` | **FAILED** — but a *different* mechanism, filed as BUG-024 above |
+      So ARC/ELLIPSE/OFFSET are **probed-and-not-reproduced, not proven safe**, and deliberately not
+      guarded. If a seed ever reaches one it is a new finding with a real reproducer, which is worth
+      more than a guard added today on a hunch.
+    - The `IsStorableCoordinate()` helper the issue suggests was considered and **rejected**: once the
+      evidence was in, the two real mechanisms needed different checks in different places, so the
+      helper would have had one present-day use — REQ-301 violated in order to look general.
+    - Regression test: `tests/headless/transcripts/regression-59-circle-infinite-radius.txt` — the
+      fuzzer's own minimized reproducer (169 → 4 lines) verbatim, plus `EXPECT LOG` so a *silent*
+      refusal cannot pass (REQ-201).
+    - **Seed 4737 is now clean, and so is a full 5000-seed sweep** — the same sweep that originally
+      produced #56–#59.
 
 ### [BUG-016] OFFSET duplicates the source entity's id — FIXED 2026-08-16 ([#58](https://github.com/chetjones003/GoSurvey/issues/58))
     - Found 2026-08-16 by the REQ-204 fuzzer (seeds 2004 and 3555), minimized automatically

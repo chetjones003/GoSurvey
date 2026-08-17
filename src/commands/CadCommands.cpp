@@ -2484,6 +2484,17 @@ static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vec
 }
 
 void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<std::string>& log) {
+  // The radius is DERIVED from the distance between two points the user supplied, so it can overflow
+  // float while both of those points are perfectly representable: a centre at state-plane magnitude
+  // and a picked point far from it make dx*dx + dy*dy infinite, and sqrt(inf) is inf. Issue #59,
+  // REQ-204 ("no coordinate is NaN or infinite") and REQ-201 (the refusal is reported, not swallowed).
+  //
+  // This must come BEFORE the radius-too-small test, which cannot do the job: `inf < 1e-5f` is false
+  // and every comparison against NaN is false, so both slipped straight through it into the store.
+  if (!std::isfinite(cx) || !std::isfinite(cy) || !std::isfinite(r)) {
+    log.push_back("Circle rejected — the center or radius is not a finite number.");
+    return;
+  }
   if (r < 1e-5f) {
     log.push_back("Circle radius too small.");
     return;
@@ -7222,6 +7233,14 @@ bool ParseWorldPoint(const std::string& raw, float* ox, float* oy, bool allowRel
       return false;
     *ox = baseX + dx;
     *oy = baseY + dy;
+    // The sum can overflow float even though the base and the delta are each representable, and this
+    // is the ONE path into a coordinate that is non-finite from finite input. An absolute coordinate
+    // that overflows is already refused below — the stream extraction sets failbit — so re-checking
+    // here restores this function's own existing guarantee rather than adding a new rule. Every
+    // caller already reports a false return as a parse failure, which is what satisfies REQ-201.
+    // Found while fixing issue #59; reproduced for LINE, POLYLINE and RECT.
+    if (!std::isfinite(*ox) || !std::isfinite(*oy))
+      return false;
     return true;
   }
   return ParseTwoFloats(s, ox, oy);

@@ -1,0 +1,38 @@
+# Regression test for issue #59 — CIRCLE must not store an infinite radius.
+#
+# REQ-204: "No coordinate is NaN or infinite." REQ-201: a refusal is reported
+# rather than silently swallowed. REQ-101: a value that cannot be represented is
+# not a tolerance question, it is a failure.
+#
+# This transcript is the fuzzer's own minimized reproducer (seed 4737, 169 lines
+# reduced to 4 automatically), kept verbatim rather than tidied.
+#
+# The centre goes in at (-1e+12, 1e+38) — BOTH finite, both legitimately parsed.
+# The radius is then derived from the distance to the picked point, and dy*dy
+# overflows float, so sqrt() returns inf and the circle was committed with
+# r = inf. CommitCircle's only guard was `r < 1e-5f`, which inf passes (and NaN
+# passes too, since NaN fails every comparison).
+#
+# Neither magnitude is exotic: 1e12 is an ordinary state-plane easting — this
+# project has worldDocumentOrigin *because* of that magnitude — and 1e38 is near
+# FLT_MAX, the kind of value a corrupt import or a mis-scaled unit conversion
+# produces. The overflow needs only one of them to be large.
+#
+# Fails before the fix with:
+#   finite-coords: userCirclesCxCyZR[3] = inf
+
+NEW
+CMD CIRCLE
+CMD -1e+12,1e+38
+PICK 50 15
+
+# Nothing was stored. The refusal is the correct outcome, and REQ-201 requires it
+# to be reported — so assert both, not just the absence of the circle. Without
+# the log assertion this would also pass if the command silently did nothing,
+# which is the failure mode REQ-201 exists to prevent.
+EXPECT CIRCLES 0
+EXPECT LOG "not a finite number"
+
+# Explicit, though the driver checks after every step: this file is about the
+# finite-coords invariant specifically.
+CHECK ALL
