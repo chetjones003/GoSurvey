@@ -5,9 +5,10 @@
 # written but never read, or read but never written, shows up here as a diff and nowhere else
 # (REQ-079's first acceptance condition says the same thing about the current format version).
 #
-# The comparison itself is the `headless.gs-roundtrip.compare` ctest case, which diffs the two
-# files this transcript produces. Splitting it that way keeps the driver free of a file-comparison
-# mode it would otherwise need only here.
+# The comparison is the last line of this file. It was briefly a separate ctest case driven by
+# `cmake -E compare_files`, DISABLED while issues #56 and #57 were open; both are fixed, so the
+# check is live again and lives here, where the rest of the scenario is. One artifact, one place to
+# read, and the driver's own `EXPECT SAMEFILE` does the work.
 
 NEW
 
@@ -42,3 +43,6 @@ SAVEAS %OUT%/roundtrip-a.gs
 OPEN %OUT%/roundtrip-a.gs
 CHECK ALL
 SAVEAS %OUT%/roundtrip-b.gs
+
+# REQ-079: a file at the current version loads with no migration and is byte-identical on resave.
+EXPECT SAMEFILE %OUT%/roundtrip-a.gs %OUT%/roundtrip-b.gs

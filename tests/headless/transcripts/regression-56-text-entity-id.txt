@@ -1,0 +1,37 @@
+# Regression test for issue #56 — a TEXT entity must not be saved with id 0.
+#
+# REQ-076: every entity carries a stable, never-reused id. Zero means "unassigned"
+# (CadEntities.hpp) — a transient state between creation and the next
+# EnsureEntityIds sweep, which must never reach disk.
+#
+# Detected through the round-trip rather than by reading the id directly, because
+# that is what makes it observable end-to-end: with the id unassigned, the first
+# write stores 0 and the load assigns a real id, so the second write differs. One
+# assertion catches both the unassigned id and the resave-idempotence breakage it
+# causes (REQ-079).
+#
+# This transcript therefore only means anything once #57 is also fixed — before
+# that, an empty drawing already fails for an unrelated reason. Both landed
+# together in the same change for exactly that reason.
+#
+# Fails before the fix because annotationAttrs[0].id is 0 in rt-a.gs and non-zero
+# in rt-b.gs.
+
+NEW
+
+# One TEXT and nothing else. The commit path for TEXT is the one that never bumped
+# the GPU revision the EnsureEntityIds sweep is gated on.
+CMD TEXT
+CMD 10,10
+CMD 2.5
+CMD 0
+CMD REGRESSION
+ESC
+
+EXPECT ANNOTATIONS 1
+
+SAVEAS %OUT%/text-a.gs
+OPEN %OUT%/text-a.gs
+EXPECT ANNOTATIONS 1
+SAVEAS %OUT%/text-b.gs
+EXPECT SAMEFILE %OUT%/text-a.gs %OUT%/text-b.gs

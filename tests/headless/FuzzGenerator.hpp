@@ -46,11 +46,17 @@ struct Options {
 
   /// Append the `gs-roundtrip` differential oracle (save -> load -> save -> compare) at the end.
   ///
-  /// **Off by default, on purpose.** It currently fails for any drawing containing TEXT, because of
-  /// a known and already-filed defect (issue #56), so leaving it on would make every seed report the
-  /// same finding and bury anything new — the exact "noise buries signal" failure this harness is
-  /// supposed to avoid. Turn it on with `--roundtrip` to exercise the oracle deliberately, and make
-  /// it the default once #56 is closed.
+  /// **Off by default, on purpose** — still, after #56 and #57 were fixed.
+  ///
+  /// The original reason was #56 (a TEXT entity saved with id 0), and the note here said to make
+  /// this the default once #56 closed. Measuring rather than assuming: with #56 and #57 fixed, a
+  /// 1000-seed sweep still fails ~325 times, on two further defects — #61 (large coordinates break
+  /// resave idempotence) and #60 (erasing the last polyline writes a `.gs` that cannot be
+  /// reopened). Leaving it on would bury every new finding under #61, which is the exact
+  /// "noise buries signal" failure this harness exists to avoid.
+  ///
+  /// Turn it on with `--roundtrip` to work on those two deliberately. Flip the default when a
+  /// `--roundtrip` sweep comes back clean — not when a particular issue closes.
   bool emitRoundTrip = false;
 };
 
