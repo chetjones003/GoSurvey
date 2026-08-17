@@ -390,7 +390,8 @@ void SurveyCsvRefreshImportPreview(AppCommandState& st) {
   st.surveyImportBadRowCount = 0;
 
   if (!st.surveyImportCsvPath[0]) {
-    st.surveyImportPreviewValidation = "Pick a CSV file to preview.";
+    // REQ-083: .csv and .txt are the same format, so the prompt names both.
+    st.surveyImportPreviewValidation = "Pick a CSV or TXT point file to preview.";
     st.surveyImportPreviewDirty = false;
     return;
   }

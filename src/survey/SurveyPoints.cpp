@@ -906,7 +906,8 @@ void StartViewPointsCommand(AppCommandState& st, std::vector<std::string>& log) 
 void StartImportPointsCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.showImportPointsWindow = true;
   st.surveyImportPreviewDirty = true;
-  log.push_back("IMPORTPOINTS — choose CSV file, column order, and preview.");
+  // REQ-083: the importer accepts .csv and .txt alike, so the hint names both.
+  log.push_back("IMPORTPOINTS — choose CSV or TXT file, column order, and preview.");
 }
 
 void StartExportPointsCommand(AppCommandState& st, std::vector<std::string>& log) {

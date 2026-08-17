@@ -2249,6 +2249,56 @@ requirements is a planning failure, not a sign of rigor.
   control acts on) is the one that makes this safe to build and belongs in the
   spec rather than in a comment. See TASK-062.
 
+### REQ-083 — `.txt` and `.csv` are interchangeable point-file extensions
+- Purpose: point files leave data collectors and office packages with either
+  extension for identical comma-delimited content; the surveyor should not have
+  to defeat a file filter to import their own data (serves the import goal;
+  REQ-201 — the tool must not make a file look absent when it is present)
+- Priority: should
+- Type: functional
+- Statement: Import points and Export points treat **`.csv` and `.txt` as two
+  spellings of one format** — the comma-delimited point file already defined by
+  the layout combo (`P,N,E,Z,D` / `P,E,N,Z,D` / `N,E,Z` / `E,N,Z`). Concretely:
+  - the Import points chooser offers `.csv` **and** `.txt` under one default
+    filter, with `.csv`-only, `.txt`-only and *All* still selectable;
+  - the Export points chooser offers the same list, and a typed name **already
+    ending in `.csv` or `.txt` is written as typed** — only a name carrying
+    neither gets a default extension appended;
+  - **the extension carries no meaning.** Parsing and writing are decided by the
+    layout and the header-row setting alone; byte-identical content imports to
+    identical points and exports to identical bytes under either extension.
+  - **No delimiter is inferred.** A `.txt` delimited by tabs or spaces is *not*
+    silently accepted: it fails per row with the existing column diagnostic and
+    writes nothing into the model (REQ-001). Sniffing a delimiter would let one
+    ambiguous line decide how a whole file is read, which is the failure mode
+    REQ-001 exists to prevent; a delimiter *choice* is a separate requirement if
+    it is ever wanted.
+  - REQ-041's validation — file not found / empty / locked, duplicate IDs within
+    the file and against the session, per-row parse errors, the overall status
+    line, Import disabled on a file-level problem, and the confirm-skip prompt —
+    applies to a `.txt` exactly as it does to a `.csv`, with no second code path.
+- Acceptance:
+  - the Import points chooser lists `.txt` files with its **default** filter
+    selected, and picking one populates the path;
+  - the same comma-delimited bytes saved as `points.csv` and as `points.txt`
+    import to identical points (ID, northing, easting, elevation, description)
+    and produce an identical validation summary;
+  - a missing, empty, or locked `.txt` shows its REQ-041 message and Import is
+    disabled — the same message the `.csv` of that state shows;
+  - a space- or tab-delimited `.txt` reports the per-row column error and adds no
+    point to the drawing;
+  - in Export points, a typed name with no extension is saved with the chosen
+    filter's extension, and a name typed as `points.txt` is saved as
+    `points.txt` — not `points.txt.csv`; both files' bytes are identical for the
+    same drawing and layout.
+- Owner-layer: Platform (the two file choosers), UI (wording), IO (unchanged —
+  named here because it is the layer this requirement forbids from branching)
+- Status: accepted (2026-08-17)
+- Revisions: 2026-08-17 — initial. Raised by the user asking for `.txt` import
+  "alongside" `.csv`. Two questions were answered before drafting: parsing stays
+  **comma-only** (delimiter auto-detection was offered and declined), and the
+  change covers **export as well as import**.
+
 ---
 
 ## Performance requirements
@@ -2390,6 +2440,15 @@ requirements is a planning failure, not a sign of rigor.
     drift REQ-079's idempotence condition forbids);
   - a magnitude too large to be a coordinate does not become storable by acquiring a frame — the
     refusal still happens and is still reported.
+
+  **Picked points are scoped out of this tolerance, deliberately.** A viewport pick's accuracy is
+  bounded by the pixel it came from, so at a usable zoom it is coarser than ±0.01 ft and no arithmetic
+  downstream can improve it — the information was never captured. What *is* required is that picking
+  add no error of its own: picks are submitted in **local** storage coordinates (not world — see
+  `SubmitViewportPick`), and an object snap overrides the cursor with a value read directly out of the
+  geometry stores, so **a snapped pick is bit-identical to the vertex it snapped to**. That is the
+  property to protect, and it is why the pick path needs no widening to double. Exact values are
+  entered by typing, which is what the conditions above govern.
 - Owner-layer: Commands (`ParseWorldPointD`, the entry-time establishment), util/Commands
   (`CadCoordinateFrame`)
 - Status: **accepted (2026-08-17)**
@@ -2592,7 +2651,7 @@ requirements is a planning failure, not a sign of rigor.
 |-------------|-------|---------|--------|
 | REQ-001 | IO | `<TEST-001>` | accepted |
 | REQ-100 | Renderer | `BenchSceneTests` (exact segment count; byte-identical regeneration; segment count changes density not extent; iso-elevation contours; nearest-rank percentile) + the `BENCH` / `BENCH SURFACE` / `BENCH MESH` commands on the reference machine (`project.md` §7), MSVC, RTX 5060 — segments 1.38 ms, meshes 1.97 ms, surface 10.28 ms vs 16 ms, 2026-08-15 (TASK-052, TASK-053) | accepted (device pending BUG-013) |
-| REQ-101 | Commands/compute | `headless.regression-req101-origin-at-entry` (a typed easting at 2e6 is stored within tolerance — measured 2000000.10 → origin 2000000 + local 0.10000000149, ~1.5e-9 ft, was 0.025 ft; establishment is one-time; an over-large magnitude is still refused; first resave byte-identical) + `headless.regression-59-circle-infinite-radius` / `-59b` (which double as the upper bound's guard). Reference-dataset half still `<regression set>` — pending, see below | **accepted** (typed-storage half verified; reference dataset outstanding) |
+| REQ-101 | Commands/compute | `headless.regression-req101-origin-at-entry` (a typed easting at 2e6 is stored within tolerance — measured 2000000.10 → origin 2000000 + local 0.10000000149, ~1.5e-9 ft, was 0.025 ft; establishment is one-time; an over-large magnitude is still refused; first resave byte-identical) + `headless.regression-59-circle-infinite-radius` / `-59b` (which double as the upper bound's guard) + `headless.regression-pick-local-coordinates` (picks are local, so picking adds no error of its own). Reference-dataset half still `<regression set>` — pending, see below | **accepted** (typed-storage half verified; reference dataset outstanding) |
 | REQ-010 | UI | manual (FBK import shows raw rows) | implemented |
 | REQ-011 | compute | `TraverseTests` "ComputeStats" | implemented |
 | REQ-012 | compute | `TraverseTests` "Complementary distance" | implemented |
@@ -2665,6 +2724,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-203 | Build/Platform/Commands | planned — the `gosurvey_headless` link line carries no imgui/glfw/GLEW/`gl*` symbol; a hand-written transcript (line + circle + polyline) saves a `.gs` identical to the same steps performed in the GUI; a queued `DIALOG` answer satisfies a file-dialog call with no block; a deliberately-broken transcript exits non-zero naming invariant + step + line; the same transcript twice is byte-identical; CI runs the corpus per push | accepted |
 | REQ-082 | UI | planned — manual (header click sorts + marks the column, second click reverses; equal keys stable; after sorting, edit/delete act on the record shown; header frozen while scrolling; unchecked checkbox visible; saved file order unaffected by display sort) | accepted |
 | REQ-081 | UI | planned — manual, side-by-side against the Hazel reference shots (adjacent docked panels separated by a visible border; panel surface lighter than the dockspace ground; recessed fields; Dark shows no `#464646`/steel-blue chrome; Dark→Light→Dark leaves no colour behind; Light pixel-unchanged; viewport contents unchanged; X/Y/Z badges present, Radius has none) | accepted |
+| REQ-083 | Platform/UI | `PointFileExtTests` **green 2026-08-17** (5 cases / 26 assertions: a name ending `.csv`/`.txt` in any case gets nothing appended; a bare name gets the chosen filter's extension; a name ending in something else — `points.dat`, `job.2026` — still gets one; empty name; a trailing dot) + manual (Import chooser lists `.txt` under the default filter; the same bytes as `.csv` and as `.txt` import identically and validate identically; a locked `.txt` shows the REQ-041 message with Import disabled; a space-delimited `.txt` reports column errors and adds no point; Export typed as `points.txt` writes `points.txt`) — **the manual half is not yet run**: the Win32 chooser and the REQ-041 file-state path cannot be linked by the test target, and `IMPORTPOINTS` only opens the window (the import is a panel button) so the REQ-203 driver cannot reach it either. Fixtures for the pass: `samples/points-req083.{csv,txt}` (byte-identical) and `samples/points-req083-spaced.txt` | accepted |
 | REQ-204 | Build/Platform/Commands/util | planned — `--seed N` twice is identical; **one deliberately-broken fixture per invariant proving each check fires**; a failing run's minimized transcript reproduces standalone under the REQ-203 driver; minimization terminates within its bound and reports its ratio; a clean seed range prints only a summary; `GoSurvey.exe`'s link line contains no generator symbol | accepted |
 
 ---

@@ -5,10 +5,22 @@
 #include <windows.h>
 #include <commdlg.h>
 
+#include "util/PointFileExt.hpp"
+
 #include <cstring>
 #include <cwchar>
 
 namespace {
+
+// REQ-083: a point file is comma-delimited content that may be spelled `.csv` or `.txt`, so both
+// choosers offer the pair first and the single-extension entries after it for a user who wants to
+// narrow the listing. Index 3 is the Text-only entry — the one signal the common dialog gives that
+// an extension-less name was meant to be `.txt`.
+const wchar_t* const kPointFileFilter = L"Point file (*.csv;*.txt)\0*.csv;*.txt\0"
+                                        L"CSV (*.csv)\0*.csv\0"
+                                        L"Text (*.txt)\0*.txt\0"
+                                        L"All (*.*)\0*.*\0\0";
+constexpr int kPointFileTxtFilterIndex = 3;
 
 void Utf8ToWide(const char* utf8, wchar_t* wbuf, int wcap) {
   if (!utf8 || !wbuf || wcap <= 0) {
@@ -36,7 +48,7 @@ bool BrowseOpenFileCsvUtf8(char* utf8Out, size_t utf8Cap) {
   ofn.lStructSize = sizeof(ofn);
   ofn.lpstrFile = wfile;
   ofn.nMaxFile = MAX_PATH;
-  ofn.lpstrFilter = L"CSV (*.csv)\0*.csv\0All (*.*)\0*.*\0\0";
+  ofn.lpstrFilter = kPointFileFilter;
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
   if (!GetOpenFileNameW(&ofn))
@@ -272,20 +284,28 @@ bool BrowseSaveFileCsvUtf8(char* utf8Out, size_t utf8Cap, const char* defaultNam
   ofn.lStructSize = sizeof(ofn);
   ofn.lpstrFile = wfile;
   ofn.nMaxFile = MAX_PATH;
-  ofn.lpstrFilter = L"CSV (*.csv)\0*.csv\0All (*.*)\0*.*\0\0";
+  ofn.lpstrFilter = kPointFileFilter;
   ofn.nFilterIndex = 1;
   ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
   if (!GetSaveFileNameW(&ofn))
     return false;
 
-  wchar_t path[MAX_PATH]{};
-  wcscpy_s(path, wfile);
-  const size_t L = wcslen(path);
-  const bool hasCsv =
-      L >= 4 && (_wcsicmp(path + L - 4, L".csv") == 0);
-  if (!hasCsv && L + 4 < MAX_PATH)
-    wcscat_s(path, MAX_PATH, L".csv");
-  return WideToUtf8(path, utf8Out, utf8Cap);
+  if (!WideToUtf8(wfile, utf8Out, utf8Cap))
+    return false;
+
+  // REQ-083: the name is converted first so the extension rule can be a pure, tested function over
+  // narrow characters. A name already spelled `.csv` or `.txt` is written exactly as typed —
+  // appending unconditionally, as this did before, produced `points.txt.csv`.
+  const bool txtFilterChosen = ofn.nFilterIndex == kPointFileTxtFilterIndex;
+  const std::string_view ext = pointfile::ExtensionToAppend(utf8Out, txtFilterChosen);
+  if (!ext.empty()) {
+    const size_t len = std::strlen(utf8Out);
+    if (len + ext.size() + 1 > utf8Cap)
+      return false; // no room to name the file correctly; better no path than a truncated one
+    std::memcpy(utf8Out + len, ext.data(), ext.size());
+    utf8Out[len + ext.size()] = '\0';
+  }
+  return true;
 }
 
 #else
