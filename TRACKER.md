@@ -7,6 +7,27 @@
 
 ## CHANGES
 
+### v0.5.1's `latest.json` was re-uploaded by hand to correct its release notes — 2026-08-17
+    - **A deliberate deviation from REQ-202** ("releases are produced by the pipeline, not by
+      hand"), recorded rather than done quietly. Only the `notes` field was changed; the manifest
+      is otherwise the pipeline's own output.
+    - Why: `RELEASE_NOTES.md`'s `## 0.5.1` section had been written during the previous beta cycle
+      and described only telemetry, surfaces and the offset/GPU fixes. It was never updated for
+      what the stable release actually contained, so the update dialog offered users 0.5.1 without
+      mentioning **BUG-023 — a crash that closed the program and lost unsaved drawings**. That is
+      the single item most likely to make someone take the update.
+    - The alternative was a 0.5.2 whose only content is corrected prose, which spends a version
+      number and a second download on every user to fix a paragraph.
+    - Verified before upload, not after: the installer's SHA-256 and byte size were re-derived from
+      the published asset and matched the manifest; the edited file was parsed by **nlohmann/json,
+      the same parser `UpdateCheck.cpp` uses**, not just by a shell JSON reader; and all nine
+      non-`notes` fields were compared field-by-field against the original and found identical.
+      Re-verified after upload against what GitHub actually serves.
+    - **Follow-up worth having:** nothing in the pipeline notices that a stable release's notes
+      section was written for an earlier cycle — the version gate checks the tag, not the prose.
+      A release-review step that shows the notes for confirmation before publishing would have
+      caught this, and is cheaper than the alternative of catching it afterwards again.
+
 ### Telemetry backend moved from Google Sheets to Cloudflare Worker + D1 — 2026-08-16
     - **Not a SPEC GAP.** ADR-032 delegates the receiving endpoint to the operator and names this
       exact shape ("a Cloudflare Worker + KV/D1"); `TelemetryEndpoint` is the one knob it says may
