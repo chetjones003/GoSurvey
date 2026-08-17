@@ -2011,6 +2011,50 @@ requirements is a planning failure, not a sign of rigor.
   existing drawing unopenable**, so the field was unusable and eleven changes across REQ-044…076
   were forced through a "tolerant key, no version bump" workaround instead. See ADR-030.
 
+### REQ-080 — Anonymous install and active-usage telemetry
+- Purpose: inform pricing and understand adoption without user accounts or subscriptions
+- Priority: should
+- Type: functional
+- Statement: The application generates a random 128-bit anonymous install ID on first run and
+  persists it in the user preferences file. It sends two fire-and-forget telemetry events:
+  - `install` — exactly once, when the install ID is generated
+  - `active` — at most once per rolling 24-hour period, reporting current usage
+
+  The events are sent via HTTPS POST to a configurable endpoint (the `TelemetryEndpoint`
+  constant) as a minimal JSON payload: `installId`, `event`, `version`, `channel`, `os`.
+  **No personally identifiable information is included.** No username, hostname, email, or
+  hardware fingerprint is sent; the install ID is the only identifier.
+
+  The telemetry fires in a detached one-shot worker thread at startup, independent of any
+  other background tasks. It must never block the UI, gate a session, or fail the application
+  if the network is unavailable. Any network error (timeout, DNS failure, unreachable host) is
+  dropped silently. This is the same sanctioned silent-failure exception as REQ-077's update
+  check, for the same reason: a background reporting call has no actionable user recourse for
+  its own failure.
+
+  Distinction: a ping measures first *run*, not raw downloads. GitHub Releases download counts
+  (available freely on the asset page) complement this and measure downloads; this requirement
+  measures installs that have executed once.
+- Acceptance:
+  - on first run, an `install` event is sent exactly once; subsequent runs do not resend it;
+  - on any run, an `active` event is sent at most once per rolling 24-hour period, even if the
+    application is restarted multiple times in the same window;
+  - the payload JSON is well-formed and contains exactly the five fields (installId, event,
+    version, channel, os);
+  - no PII is included in any payload (absence of username, hostname, path, email, hardware ID);
+  - network failures (timeout, DNS, unreachable host, TLS error) do not raise an exception, log
+    a message, or otherwise fail the application;
+  - killing network access does not hang or freeze the startup;
+  - a privacy disclosure is present in the UNITS dialog or settings panel explaining what is sent;
+  - the current build sends pings to the configured endpoint and an inspector tool confirms the
+    payload shape and timing.
+- Owner-layer: Platform (PostJson), Telemetry (ping logic + rate limiting), IO (persistence)
+- Status: accepted (2026-08-16)
+- Revisions: 2026-08-16 — initial. Resolved as a SPEC GAP (no prior requirement existed for
+  telemetry). User answered three key questions: (1) tracking only, no license-key enforcement
+  for now (licensing is deferred); (2) self-hosted endpoint (not third-party analytics vendor);
+  (3) no opt-out toggle, always-on anonymous pings (PII-free by design). See ADR-032.
+
 ---
 
 ## Performance requirements

@@ -344,6 +344,28 @@ static void DrawSystemUpdates(AppCommandState& cmd) {
   }
 }
 
+/// REQ-080's last acceptance condition: the anonymous usage ping is disclosed in the settings
+/// panel, in plain language, saying what leaves the machine and what does not.
+///
+/// It sits next to Updates on purpose — they are the two things that talk to the network, and a
+/// user checking on one is asking about the other. It is text, not a checkbox: the ping carries
+/// no personal data and has no opt-out by decision (spec/project.md, 2026-08-16, D3). Offering a
+/// toggle that did nothing, or implying consent that is not asked for, would be worse than
+/// saying so plainly.
+static void DrawSystemUsageData(AppCommandState& cmd) {
+  (void)cmd;
+  ImGui::TextWrapped(
+      "GoSurvey reports anonymous usage so development can be aimed at what people actually "
+      "run. It sends a random ID that identifies this installation only, the version, whether "
+      "you are on stable or beta, and that you are on Windows — once when installed, and at "
+      "most once a day after that.");
+  ImGui::Spacing();
+  ImGui::TextWrapped(
+      "It never sends your name, email, company, computer name, file names, drawings, survey "
+      "data, or location. The random ID is not derived from anything about you or your machine "
+      "and cannot be traced back to either.");
+}
+
 static void DrawSettingsSystemTab(AppCommandState& cmd) {
   if (ImGui::BeginTable("##sys_layout", 2, ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_SizingStretchSame)) {
     ImGui::TableNextRow();
@@ -362,6 +384,7 @@ static void DrawSettingsSystemTab(AppCommandState& cmd) {
     BoxBegin("General Options", 140.f); DrawSystemGeneralOptions(cmd); BoxEnd();
     BoxBegin("Help", 70.f); ImGui::Checkbox("Access online content when available", &cmd.systemAccessOnlineContent); BoxEnd();
     BoxBegin("Updates", 110.f); DrawSystemUpdates(cmd); BoxEnd();
+    BoxBegin("Anonymous Usage Data", 175.f); DrawSystemUsageData(cmd); BoxEnd();
     BoxBegin("InfoCenter", 70.f);
     ImGui::BeginDisabled(); ImGui::Button("Balloon Notifications", ImVec2(-FLT_MIN, 0.f)); ImGui::EndDisabled();
     BoxEnd();

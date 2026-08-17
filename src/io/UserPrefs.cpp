@@ -427,3 +427,60 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
     return false;
   }
 }
+
+TelemetryIds GetTelemetryIds() {
+  TelemetryIds result;
+  const auto path = UserPrefsJsonPath();
+  std::ifstream f(path, std::ios::binary);
+  if (!f)
+    return result;
+
+  try {
+    nlohmann::json j;
+    f >> j;
+    if (!j.is_object())
+      return result;
+
+    if (j.contains("installId") && j["installId"].is_string())
+      result.installId = j["installId"].get<std::string>();
+    if (j.contains("lastActivePingDate") && j["lastActivePingDate"].is_string())
+      result.lastActivePingDate = j["lastActivePingDate"].get<std::string>();
+  } catch (...) {
+  }
+
+  return result;
+}
+
+bool UpdateTelemetryIds(const std::string& installId, const std::string& lastActivePingDate) {
+  const auto path = UserPrefsJsonPath();
+  nlohmann::json j = nlohmann::json::object();
+
+  try {
+    if (std::ifstream inf(path, std::ios::binary); inf)
+      inf >> j;
+  } catch (...) {
+    j = nlohmann::json::object();
+  }
+
+  if (!j.is_object())
+    j = nlohmann::json::object();
+
+  if (!installId.empty())
+    j["installId"] = installId;
+  if (!lastActivePingDate.empty())
+    j["lastActivePingDate"] = lastActivePingDate;
+
+  try {
+    if (const auto dir = path.parent_path(); !dir.empty()) {
+      std::error_code ec;
+      std::filesystem::create_directories(dir, ec);
+    }
+    std::ofstream f(path, std::ios::out | std::ios::binary | std::ios::trunc);
+    if (!f)
+      return false;
+    f << j.dump(2);
+    return f.good();
+  } catch (...) {
+    return false;
+  }
+}

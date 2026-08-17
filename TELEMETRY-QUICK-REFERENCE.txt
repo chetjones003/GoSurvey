@@ -1,0 +1,193 @@
+═══════════════════════════════════════════════════════════════════════════════
+  GOSURVEY TELEMETRY — QUICK REFERENCE
+═══════════════════════════════════════════════════════════════════════════════
+
+STEP 1: BUILD (5 min)
+─────────────────────────────────────────────────────────────────────────────
+1. Open: Developer Command Prompt for VS 2022 (NOT PowerShell!)
+2. Run:
+   cd C:\Users\chetj\source\repos\GoSurvey
+   cmake --preset ninja-release
+   cmake --build build/release --config Release --parallel 8
+   ctest --test-dir build/release --output-on-failure
+
+Result: build/release/GoSurvey.exe (telemetry included)
+
+STEP 2: PICK A BACKEND (choose one, 2 min)
+─────────────────────────────────────────────────────────────────────────────
+⭐ CLOUDFLARE WORKERS (Recommended)
+   - Deploy time: 5 min
+   - Free: 1M requests/day
+   - Setup: npm create cloudflare@latest my-telemetry
+   - Query: npx wrangler kv:key list --binding=TELEMETRY_KV
+   - Cost if scale up: ~$0.50/million requests
+
+⭐ SUPABASE (If you want SQL)
+   - Deploy time: 10 min
+   - Free: 500MB PostgreSQL
+   - Setup: Create account, run code from telemetry-backend-guide.md
+   - Query: SELECT COUNT(*) FROM pings;
+   - Cost if scale up: $0.03/GB
+
+✅ FIREBASE (Google ecosystem)
+   - Deploy time: 7 min
+   - Free: 500 concurrent, forever
+   - Setup: Enable Realtime Database
+   - Query: Firebase console UI or CLI
+   - Cost: Free for your scale
+
+✅ PLANETSCALE (MySQL)
+   - Deploy time: 8 min
+   - Free: 5GB forever
+   - Setup: Create DB, connect with MySQL client
+   - Query: Standard SQL
+   - Cost: Free for your scale
+
+✅ WEBHOOK.SITE (Testing only)
+   - Deploy time: 2 min
+   - Free: Yes (data expires 7 days)
+   - Setup: Go to https://webhook.site, copy URL
+   - Query: Watch in browser
+   - Cost: Free
+
+See docs/FREE-BACKENDS-COMPARISON.md for 10 options total
+
+STEP 3: DEPLOY BACKEND (5-10 min)
+─────────────────────────────────────────────────────────────────────────────
+Option 1 - Cloudflare Workers:
+  npm create cloudflare@latest my-telemetry
+  cd my-telemetry
+  npx wrangler deploy
+  → Get URL like: https://my-telemetry.your-account.workers.dev
+
+Option 2 - Firebase:
+  Go to https://console.firebase.google.com
+  Create project → Enable Realtime Database
+  → Get URL like: https://my-project.firebaseio.com
+
+Option 3 - Webhook.site:
+  Go to https://webhook.site
+  Copy your unique URL
+  → URL like: https://webhook.site/your-uuid
+
+Option 4 - Self-hosted:
+  npm install express
+  Create server.js (see telemetry-backend-guide.md)
+  npm start
+  → URL: http://localhost:3000/v1/ping
+
+STEP 4: UPDATE GOSURVEY (1 min)
+─────────────────────────────────────────────────────────────────────────────
+Edit: src/telemetry/TelemetryPing.hpp line 4
+
+Change:
+  constexpr const char* TelemetryEndpoint = "https://telemetry.example.com/v1/ping";
+
+To your actual endpoint (example):
+  constexpr const char* TelemetryEndpoint = "https://my-telemetry.your-account.workers.dev/v1/ping";
+
+Rebuild:
+  cmake --build build/release --config Release
+
+STEP 5: TEST (2 min)
+─────────────────────────────────────────────────────────────────────────────
+Run: build/release/GoSurvey.exe
+
+Check your backend for pings:
+
+Cloudflare:
+  npx wrangler kv:key list --binding=TELEMETRY_KV --limit=10
+
+Firebase:
+  Open https://console.firebase.google.com → Realtime Database → Data
+
+Webhook.site:
+  Watch https://webhook.site (pings appear in real-time)
+
+SQL-based (Supabase, PlanetScale):
+  SELECT COUNT(*) FROM pings;
+  SELECT COUNT(DISTINCT install_id) FROM pings WHERE event = 'install';
+
+═══════════════════════════════════════════════════════════════════════════════
+
+WHAT'S BEING SENT?
+─────────────────────────────────────────────────────────────────────────────
+{
+  "installId": "abc123def456...",  (random per machine, generated once)
+  "event": "install" or "active",  (install = first run, active = once/24h)
+  "version": "0.5.2",              (your app version)
+  "channel": "stable" or "beta",   (from user settings)
+  "os": "windows"                  (platform)
+}
+
+NO PII: No username, email, hostname, paths, or hardware fingerprint.
+
+═══════════════════════════════════════════════════════════════════════════════
+
+KEY METRICS TO WATCH (after 1-2 weeks)
+─────────────────────────────────────────────────────────────────────────────
+SELECT COUNT(DISTINCT install_id)
+  FROM pings WHERE event = 'install';
+  → Total unique installs ever
+
+SELECT COUNT(DISTINCT install_id)
+  FROM pings WHERE event = 'active' AND timestamp > now() - interval '7 days';
+  → Active users in last 7 days
+
+SELECT version, COUNT(DISTINCT install_id) as count
+  FROM pings GROUP BY version ORDER BY count DESC;
+  → Version adoption
+
+SELECT channel, COUNT(DISTINCT install_id) as users
+  FROM pings GROUP BY channel;
+  → Stable vs beta split
+
+═══════════════════════════════════════════════════════════════════════════════
+
+TROUBLESHOOTING
+─────────────────────────────────────────────────────────────────────────────
+Problem: "cl is not found" or "cmake not found"
+→ Use Developer Command Prompt for VS 2022 (not PowerShell!)
+
+Problem: No pings arrive at backend
+→ Check endpoint URL in TelemetryPing.hpp matches deployed URL
+→ Verify backend is running and accessible (test in browser)
+
+Problem: Build fails with "TelemetryService.hpp not found"
+→ Run cmake reconfigure: cmake --preset ninja-release
+
+Problem: Backend returns 500 error
+→ Check backend logs (Cloudflare dashboard, Firebase console, etc.)
+→ Verify JSON payload format (should have all 5 fields)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+DOCUMENTATION
+─────────────────────────────────────────────────────────────────────────────
+docs/BUILD-INSTRUCTIONS.md             → Full build guide
+docs/TELEMETRY-QUICKSTART.md           → 15-min end-to-end setup
+docs/FREE-BACKENDS-COMPARISON.md       → Deep dive into 10 options
+docs/telemetry-backend-guide.md        → Setup for 3 main backends
+TELEMETRY-SETUP.md                     → Master overview + checklist
+
+═══════════════════════════════════════════════════════════════════════════════
+
+COST IF YOU SCALE
+─────────────────────────────────────────────────────────────────────────────
+Cloudflare Workers
+  100 installs/mo:  Free
+  1K installs/mo:   Free
+  10K installs/mo:  ~$2.50
+
+Supabase
+  100 installs/mo:  Free
+  1K installs/mo:   Free
+  10K installs/mo:  ~$5
+
+Firebase
+  Any scale:        Free
+
+Self-hosted VPS
+  Any scale:        $3-5/mo
+
+═══════════════════════════════════════════════════════════════════════════════

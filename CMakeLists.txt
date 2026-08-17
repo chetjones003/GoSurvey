@@ -259,6 +259,10 @@ add_executable(GoSurvey
   src/platform/GpuPreference.cpp
   src/platform/HttpFetch.cpp
 
+  # Telemetry (REQ-080, ADR-032)
+  src/telemetry/TelemetryPing.cpp
+  src/telemetry/TelemetryService.cpp
+
   # Update check (REQ-077/078, ADR-029)
   src/update/UpdateService.cpp
 )
@@ -276,6 +280,7 @@ target_include_directories(GoSurvey PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
   ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
   ${CMAKE_CURRENT_SOURCE_DIR}/src/font
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
   ${CMAKE_CURRENT_SOURCE_DIR}/src/update
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party
   ${NLOHMANN_JSON_INCLUDE}
@@ -486,7 +491,9 @@ if(GOSURVEY_BUILD_TESTS)
     tests/EntityIdTests.cpp
     tests/PointGroupTests.cpp
     tests/TinBuildTests.cpp
+    tests/TinQueryTests.cpp
     tests/UpdateCheckTests.cpp
+    tests/TelemetryPingTests.cpp
     tests/GsMigrateTests.cpp
     tests/GpuPreferenceTests.cpp
     # REQ-204: one deliberately-broken fixture per document invariant. This is the second present-day
@@ -539,6 +546,9 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-079 .gs forward migration. Pure by ADR-030 (d) — JSON in, JSON out — so the composition
     # logic is testable without the command layer that GsIo.cpp drags in.
     src/io/GsMigrate.cpp
+    # REQ-080 telemetry. Pure by ADR-032 (b) — payload building, event decision, rate limiting —
+    # no network, so the timing logic is testable without HttpFetch or WinHTTP.
+    src/telemetry/TelemetryPing.cpp
   )
   target_include_directories(GoSurveyTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -555,6 +565,7 @@ if(GOSURVEY_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
     ${CMAKE_CURRENT_SOURCE_DIR}/src/render
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
     ${CMAKE_CURRENT_SOURCE_DIR}/src/update
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util
     # For FuzzHarnessTests, which includes headless/FuzzGenerator.hpp and headless/Minimizer.hpp.
@@ -604,23 +615,11 @@ if(GOSURVEY_BUILD_TESTS)
     set_tests_properties(headless.fuzz-smoke PROPERTIES
       WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 
-    # REQ-204 `gs-roundtrip`: the transcript writes roundtrip-a.gs and roundtrip-b.gs; this compares
-    # them. Split from the transcript because file comparison is the one thing the driver would
-    # otherwise need a mode for, and it is expressible with `cmake -E`.
-    add_test(NAME headless.gs-roundtrip.compare
-             COMMAND ${CMAKE_COMMAND} -E compare_files
-                     "${CMAKE_BINARY_DIR}/headless-out/gs-roundtrip/roundtrip-a.gs"
-                     "${CMAKE_BINARY_DIR}/headless-out/gs-roundtrip/roundtrip-b.gs")
-    set_tests_properties(headless.gs-roundtrip.compare PROPERTIES
-      DEPENDS headless.gs-roundtrip
-      # DISABLED because this check currently FAILS, and it is right to fail: it found
-      # https://github.com/chetjones003/GoSurvey/issues/56 on its first run (a TEXT entity is saved
-      # with id 0 because the commit path never bumps the revision EnsureEntityIds gates on, so
-      # save->load->save is not idempotent — contradicting REQ-079's first acceptance condition).
-      #
-      # Disabled rather than deleted or marked WILL_FAIL: deleting loses the oracle, and WILL_FAIL
-      # would turn the *fix* into a red build. Re-enable by removing this property once #56 is
-      # closed — that flip is the regression test for it.
-      DISABLED TRUE)
+    # The `gs-roundtrip` comparison was briefly a separate, DISABLED ctest case here while issues
+    # #56 and #57 were open. Both are fixed, so the check is live again and now lives inside the
+    # transcript itself as `EXPECT SAMEFILE` — one artifact instead of two, and it needs no
+    # knowledge of the build layout. Disabling it was the right call at the time (deleting would
+    # have lost the oracle; WILL_FAIL would have turned the fix into a red build), and re-enabling
+    # it is the regression test for both issues.
   endif()
 endif()

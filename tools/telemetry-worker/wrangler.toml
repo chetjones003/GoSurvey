@@ -1,0 +1,25 @@
+name = "gosurvey-telemetry"
+main = "src/index.js"
+
+# Pin the runtime date. Workers change behaviour by compatibility date, not by deploy date, so
+# an unpinned worker can shift under you on a redeploy months from now.
+compatibility_date = "2025-09-01"
+
+# `database_id` is filled in by `wrangler d1 create gosurvey-telemetry` — paste the id it prints.
+# The id is not a secret (it is useless without account credentials), so committing it is fine
+# and keeps the deploy reproducible.
+[[d1_databases]]
+binding = "DB"
+database_name = "gosurvey-telemetry"
+database_id = "6a6a538a-a9e2-489f-81e8-3908741d0fc5"
+
+# Deliberately absent:
+#
+#   [observability]  — Workers Logs retains request logs, which include client IPs. REQ-080 is a
+#                      no-PII requirement and the point of moving off the last backend was to
+#                      stop trying to record IPs. Leave logging off unless debugging, and turn it
+#                      back off afterwards.
+#
+#   routes / custom domain — workers.dev is sufficient and costs nothing. Adding a custom domain
+#                      changes the endpoint URL, which is a compile-time constant in the client
+#                      (ADR-032 (f)) and therefore a rebuild. Decide before shipping, not after.

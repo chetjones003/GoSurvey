@@ -1,0 +1,10 @@
+# Wrangler's local state, including the simulator's local D1 copy. Never the real database.
+.wrangler/
+
+# Only wrangler itself is ever installed here, and it is invoked via npx.
+node_modules/
+package-lock.json
+
+# Exports produced by `wrangler d1 export` — real telemetry data, not repo content.
+*.sql.bak
+telemetry-backup*.sql

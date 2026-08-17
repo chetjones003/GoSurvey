@@ -1249,3 +1249,58 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   line. What it still proves — and what REQ-203 is amended to require — is **no GLFW, no GLEW, no
   `gl*`, and no ImGui backend**: no window, no GPU, no display. That is a real boundary, it is
   enough for CI, and it is the boundary that was actually load-bearing for this work.
+
+### ADR-032 — Anonymous telemetry: WinHTTP POST, pure rate-limit logic, and local persistence   (2026-08-16, accepted)
+- Context: REQ-080 requires the application to report an anonymous install ID and active-usage
+  pings to a user-owned backend without gating the session or adding a network dependency (REQ-300).
+  The precedent is ADR-029 (the update checker), which already uses WinHTTP for HTTPS, fires
+  off-thread, and has a sanctioned silent-failure mode (REQ-201 exception). This ADR reuses that
+  pattern.
+- Decision:
+  (a) **WinHTTP is extended with a `PostJson` helper**, alongside the existing `GetToString` and
+  file-download functions. HTTP POSTs a JSON body and returns success on 2xx, failure otherwise.
+  This touches only `platform/HttpFetch.hpp/.cpp`, which is already owned by ADR-029. The project
+  carries no new HTTP dependency.
+
+  (b) **The telemetry logic is a pure `util/` module (`TelemetryPing.hpp/.cpp`), not in `platform/`
+  or anywhere near the network.** It builds the JSON payload, decides install-vs-active, and
+  decides whether 24 hours have elapsed since the last active ping. This is the same `util/`/
+  `platform/` split as `UpdateCheck.hpp`/`src/update/UpdateService.cpp` (ADR-029(g)), so it is
+  testable without a window or network using Catch2/ctest.
+
+  (c) **Persistence is an extension to the existing `gosurvey-user.json` file,** via `src/io/UserPrefs`.
+  Two new fields: `installId` (a random 128-bit hex string, generated once on first load if absent)
+  and `lastActivePingDate` (a `YYYY-MM-DD` string, updated after each active ping). No new storage
+  file or registry usage — the existing UserPrefs pattern is reused.
+
+  (d) **The worker thread is spawned at startup, alongside `UpdateService` (in `src/app/`), but
+  independent of it.** The update check gates the session on purpose (unsaved-work safety); the
+  telemetry ping fires asynchronously and must never add latency to that gate. Both fire in their
+  own worker threads using the architecture's one-shot-worker pattern (§8).
+
+  (e) **Any network error is dropped silently**, mirroring REQ-077/ADR-029(h). Timeout, DNS
+  failure, TLS error, unreachable host — all are caught, logged at trace level (REQ-201: a failure
+  is recorded, not silent), and swallowed. The application proceeds. This is the one place
+  REQ-201's "no silent failures" rule is deliberately waived, for the same reason as the update
+  check: a background call initiated by the system has no user-initiated failure recourse.
+
+  (f) **No new abstraction.** A telemetry service is instantiated once at startup (the same pattern
+  as `UpdateService`), configured with the endpoint URL and passed the current `AppVersion` and
+  `updateChannel` from settings. The TelemetryEndpoint is a compile-time constant string (in
+  `util/TelemetryPing.hpp`), changeable only by recompile, so it survives a settings reset and
+  cannot be redirected by user preference.
+- Alternatives: **(1) Extend the update-check modal to report telemetry** — couples two unrelated
+  concerns, and the update check gates the session while telemetry cannot be gated. **(2) Post to
+  GitHub Releases download-count statistics** — GitHub already tracks these freely; if desired,
+  pull them separately. This requirement measures first *run*, which GitHub does not. **(3)
+  Third-party analytics vendor (Plausible, PostHog)** — rejected per user decision; self-hosted
+  backend only, so data stays within the user's infrastructure. **(4) Opt-in toggle** — rejected
+  per user decision; PII-free pings are sent always, no opt-out. A consent preference is flagged as
+  a follow-up (not in this ADR) if legal/regulatory requirements change.
+- Consequences: new `src/telemetry/` module (TelemetryPing, pure logic); extension to
+  `platform/HttpFetch` with a `PostJson` helper; extension to `src/io/UserPrefs` with two new
+  JSON fields; new worker thread at startup (§8, one-shot pattern). The endpoint URL is a
+  compile-time constant and is the only knob that moves without a rebuild. No new third-party
+  dependency, no new abstraction, no wire-format change. The user is responsible for standing up
+  the receiving endpoint (e.g. a Cloudflare Worker + KV/D1); this ADR specifies only the client
+  side.

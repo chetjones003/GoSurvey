@@ -56,3 +56,18 @@ bool HttpDownloadFile(const std::string&                              url,
 bool ComputeFileSha256(const std::string& pathUtf8,
                        std::string&       hexOut,
                        std::string&       errorOut);
+
+/// POSTs a JSON body to \p url and returns true on 2xx, false on any other status or network error.
+///
+/// When \p responseOut is non-null the response body is stored there (capped at 64 KiB, which no
+/// acknowledgement should approach). A 2xx is NOT proof the far end did the work: Google Apps
+/// Script answers 200 even when its handler throws, reporting the failure only in the body. So
+/// the caller that cares must read the body, which is why this parameter exists.
+///
+/// Used by REQ-080 telemetry (ADR-032) to send anonymous usage pings. Failures are logged but
+/// not surfaced, the same silent-failure exception as REQ-077 (ADR-029 (h)).
+bool HttpPostJson(const std::string& url,
+                  const std::string& jsonBody,
+                  int                timeoutMs,
+                  std::string&       errorOut,
+                  std::string*       responseOut = nullptr);

@@ -1,0 +1,13 @@
+{
+  "name": "gosurvey-telemetry-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "REQ-080 telemetry receiver: Cloudflare Worker + D1. See docs/cloudflare-telemetry-setup.md",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "schema": "wrangler d1 execute gosurvey-telemetry --remote --file=./schema.sql",
+    "stats": "node stats.mjs",
+    "test": "node test.mjs"
+  }
+}

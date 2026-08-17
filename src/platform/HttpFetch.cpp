@@ -443,3 +443,126 @@ bool ComputeFileSha256(const std::string& pathUtf8, std::string& hexOut, std::st
   cleanup();
   return ok;
 }
+
+bool HttpPostJson(const std::string& url,
+                  const std::string& jsonBody,
+                  int                timeoutMs,
+                  std::string&       errorOut,
+                  std::string*       responseOut)
+{
+  errorOut.clear();
+  if (responseOut)
+    responseOut->clear();
+
+  const std::wstring wideUrl = Widen(url);
+  if (wideUrl.empty())
+  {
+    errorOut = "url is empty or not valid UTF-8";
+    return false;
+  }
+
+  URL_COMPONENTS parts{};
+  parts.dwStructSize     = sizeof(parts);
+  wchar_t hostName[256]  = {};
+  wchar_t urlPath[2048]  = {};
+  parts.lpszHostName     = hostName;
+  parts.dwHostNameLength = static_cast<DWORD>(std::size(hostName));
+  parts.lpszUrlPath      = urlPath;
+  parts.dwUrlPathLength  = static_cast<DWORD>(std::size(urlPath));
+
+  if (!::WinHttpCrackUrl(wideUrl.c_str(), 0, 0, &parts))
+  {
+    errorOut = LastErrorText("WinHttpCrackUrl");
+    return false;
+  }
+  if (parts.nScheme != INTERNET_SCHEME_HTTPS)
+  {
+    errorOut = "refusing a non-HTTPS url";
+    return false;
+  }
+
+  WinHttpSession s;
+  s.session = ::WinHttpOpen(kUserAgent, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+                            WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
+  if (!s.session)
+  {
+    errorOut = LastErrorText("WinHttpOpen");
+    return false;
+  }
+
+  ::WinHttpSetTimeouts(s.session, timeoutMs, timeoutMs, timeoutMs, timeoutMs);
+
+  s.connect = ::WinHttpConnect(s.session, hostName, parts.nPort, 0);
+  if (!s.connect)
+  {
+    errorOut = LastErrorText("WinHttpConnect");
+    return false;
+  }
+
+  s.request = ::WinHttpOpenRequest(s.connect, L"POST", urlPath, nullptr, WINHTTP_NO_REFERER,
+                                   WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+  if (!s.request)
+  {
+    errorOut = LastErrorText("WinHttpOpenRequest");
+    return false;
+  }
+
+  DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
+  ::WinHttpSetOption(s.request, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy,
+                     sizeof(redirectPolicy));
+
+  const std::wstring contentTypeHeader = L"Content-Type: application/json";
+  const DWORD bodySize = static_cast<DWORD>(jsonBody.size());
+
+  if (!::WinHttpSendRequest(s.request, contentTypeHeader.c_str(), -1,
+                            const_cast<char*>(jsonBody.data()), bodySize, bodySize, 0))
+  {
+    errorOut = LastErrorText("WinHttpSendRequest");
+    return false;
+  }
+
+  if (!::WinHttpReceiveResponse(s.request, nullptr))
+  {
+    errorOut = LastErrorText("WinHttpReceiveResponse");
+    return false;
+  }
+
+  DWORD status     = 0;
+  DWORD statusSize = sizeof(status);
+  if (!::WinHttpQueryHeaders(s.request,
+                             WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+                             WINHTTP_HEADER_NAME_BY_INDEX, &status, &statusSize,
+                             WINHTTP_NO_HEADER_INDEX))
+  {
+    errorOut = LastErrorText("WinHttpQueryHeaders");
+    return false;
+  }
+
+  // Drained even when the caller wants no copy: leaving a body unread stalls the connection
+  // teardown, and the status alone is not the whole answer (see the header note).
+  {
+    constexpr size_t  kMaxBytes = 64u * 1024u;
+    std::vector<char> buffer(8192);
+    for (;;)
+    {
+      DWORD available = 0;
+      if (!::WinHttpQueryDataAvailable(s.request, &available) || available == 0)
+        break;
+
+      const DWORD want = static_cast<DWORD>(
+          available < buffer.size() ? available : static_cast<DWORD>(buffer.size()));
+      DWORD read = 0;
+      if (!::WinHttpReadData(s.request, buffer.data(), want, &read) || read == 0)
+        break;
+
+      if (responseOut && responseOut->size() < kMaxBytes)
+        responseOut->append(buffer.data(), read);
+    }
+  }
+
+  if (status >= 200 && status < 300)
+    return true;
+
+  errorOut = "HTTP " + std::to_string(status);
+  return false;
+}
