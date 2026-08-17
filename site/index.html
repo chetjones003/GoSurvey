@@ -727,7 +727,19 @@ footer .right{margin-left:auto;display:flex;gap:1.5rem}
     })[0];
 
     set(root,"version", versionFrom(release, installer));
-    set(root,"date", fmtDate(release.published_at || release.created_at));
+
+    // Date comes from the INSTALLER ASSET, not the release, for the same reason the version
+    // does. The beta is a ROLLING release: every build replaces the assets on the one
+    // `channel-beta` tag, and GitHub leaves that release's `published_at` at whenever it was
+    // first published. So the beta block showed a date that never moved — it read 16 Aug while
+    // serving a build made on the 17th. The asset's `updated_at` is rewritten each upload and is
+    // the only field that tracks the build actually being offered.
+    //
+    // Stable is unaffected either way: each stable release gets its own fresh tag, so its
+    // `published_at` and its asset's `updated_at` are the same moment (verified on v0.5.0). The
+    // fallbacks are for a release with no installer attached, which is a broken publish anyway.
+    set(root,"date", fmtDate((installer && installer.updated_at) ||
+                             release.published_at || release.created_at));
 
     var notes = root.querySelector('[data-f="notes"]');
     if(notes && release.html_url) notes.href = release.html_url;
