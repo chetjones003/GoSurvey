@@ -69,6 +69,34 @@ TEST_CASE("Session collision is reported and skipped", "[surveycsv]") {
   REQUIRE(scan.badLines.count(17) == 1);
 }
 
+// BUG-014 / REQ-041 revision 3: the summary shown after an import reports what that import DID.
+// The guard that matters is the last one — a completed import must never carry the pre-import
+// failure wording, which is exactly what the panel showed when it re-validated the file it had
+// just consumed.
+TEST_CASE("A completed import is reported as an outcome, not as a validation failure", "[surveycsv]") {
+  const std::string clean = survey_csv::ImportOutcomeSummary(5, 0);
+  REQUIRE(clean.find("Imported 5 point(s)") != std::string::npos);
+  REQUIRE(clean.find("0 row(s) skipped") != std::string::npos);
+
+  // Skips are named, never rounded away — the count is why the panel stays open.
+  const std::string partial = survey_csv::ImportOutcomeSummary(3, 2);
+  REQUIRE(partial.find("Imported 3 point(s)") != std::string::npos);
+  REQUIRE(partial.find("2 row(s) skipped") != std::string::npos);
+
+  // An import that placed nothing still reports honestly rather than falling back to a file-level
+  // verdict it no longer has any basis for.
+  const std::string none = survey_csv::ImportOutcomeSummary(0, 4);
+  REQUIRE(none.find("Imported 0 point(s)") != std::string::npos);
+  REQUIRE(none.find("4 row(s) skipped") != std::string::npos);
+
+  // The regression itself: none of these may read as a refusal.
+  for (const std::string& s : {clean, partial, none}) {
+    REQUIRE(s.find("Cannot import") == std::string::npos);
+    REQUIRE(s.find("no valid data rows") == std::string::npos);
+    REQUIRE(s.find("already exists in the drawing") == std::string::npos);
+  }
+}
+
 // REQ-041: when an ID both collides with the session and repeats in the file, the
 // session-collision message takes precedence and every offending row is skipped.
 TEST_CASE("Session collision takes precedence over within-file duplicate", "[surveycsv]") {

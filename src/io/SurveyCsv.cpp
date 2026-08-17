@@ -388,6 +388,9 @@ void SurveyCsvRefreshImportPreview(AppCommandState& st) {
   st.surveyImportFileBlocked = true; // assume blocked until a valid, importable file proves otherwise
   st.surveyImportValidRowCount = 0;
   st.surveyImportBadRowCount = 0;
+  // REQ-041 rev 3: reaching a refresh means the user changed something, so a previous import's
+  // outcome is no longer what the panel is describing. This is the only place the flag is cleared.
+  st.surveyImportJustImported = false;
 
   if (!st.surveyImportCsvPath[0]) {
     // REQ-083: .csv and .txt are the same format, so the prompt names both.
@@ -584,7 +587,18 @@ bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
     CadCoord::MaybeRebaseLargeCoordinates(st, &log);
   log.push_back("IMPORTPOINTS — imported " + std::to_string(imported) + " point(s); skipped " +
                 std::to_string(skipped) + " row(s).");
-  st.surveyImportPreviewDirty = true;
+
+  // REQ-041 rev 3 (BUG-014): do NOT mark the preview dirty here. Re-validating now would scan this
+  // same file against a session that contains the points this import just created, so every row
+  // would collide with itself and a successful import would render as "Cannot import — no valid
+  // data rows". Report the outcome instead and leave it standing; the next user change to the
+  // path, layout or header setting marks the preview dirty and resumes normal validation.
+  st.surveyImportPreviewValidation = survey_csv::ImportOutcomeSummary(imported, skipped);
+  st.surveyImportFileBlocked = true; // the rows are in the drawing; importing them again is refused
+  st.surveyImportValidRowCount = 0;
+  st.surveyImportBadRowCount = 0;
+  st.surveyImportJustImported = true;
+  st.surveyImportPreviewDirty = false;
   return imported > 0 || skipped > 0;
 }
 

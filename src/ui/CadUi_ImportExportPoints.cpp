@@ -57,6 +57,9 @@ void DrawImportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
   ImVec4 valColor;
   if (!cmd.surveyImportCsvPath[0])
     valColor = ImVec4(0.82f, 0.88f, 0.95f, 1.f); // neutral: nothing selected yet
+  else if (cmd.surveyImportJustImported)
+    valColor = ImVec4(0.40f, 0.85f, 0.45f, 1.f); // REQ-041 rev 3: a finished import is a success,
+                                                 // even though Import is now blocked (BUG-014)
   else if (!cmd.surveyImportFileBlocked && cmd.surveyImportBadRowCount == 0)
     valColor = ImVec4(0.40f, 0.85f, 0.45f, 1.f); // green: clean and ready to import
   else
@@ -81,8 +84,8 @@ void DrawImportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
   if (ImGui::Button("Import")) {
     if (cmd.surveyImportBadRowCount > 0)
       ImGui::OpenPopup("Confirm import##imp"); // row-level problems: confirm skipping them first
-    else if (SurveyCsvImportFile(cmd, log))
-      cmd.surveyImportPreviewDirty = true;
+    else
+      SurveyCsvImportFile(cmd, log); // REQ-041 rev 3: the importer owns the panel state afterwards
   }
   if (blocked)
     ImGui::EndDisabled();
@@ -97,8 +100,7 @@ void DrawImportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log) 
                 cmd.surveyImportBadRowCount);
     ImGui::Spacing();
     if (ImGui::Button("Import", ImVec2(120, 0))) {
-      if (SurveyCsvImportFile(cmd, log))
-        cmd.surveyImportPreviewDirty = true;
+      SurveyCsvImportFile(cmd, log); // REQ-041 rev 3: the importer owns the panel state afterwards
       ImGui::CloseCurrentPopup();
     }
     ImGui::SameLine();

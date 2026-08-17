@@ -88,4 +88,18 @@ inline DuplicateScan ScanDuplicateIds(const std::vector<RowId>& rows,
   return out;
 }
 
+/// REQ-041 revision 3 — the validation summary shown **after** an import has run.
+///
+/// This replaces the pre-import text rather than adding to it, and the panel stops re-validating
+/// until the user changes something. The reason is BUG-014: re-validating the file that was just
+/// imported scans it against a session containing the points that import created, so every row
+/// collides with itself and a successful import renders as "Cannot import — no valid data rows".
+/// The counts are reported unconditionally, zeros included — "0 row(s) skipped" is the sentence
+/// that tells a surveyor nothing was silently dropped.
+inline std::string ImportOutcomeSummary(int imported, int skipped) {
+  return "Imported " + std::to_string(imported) + " point(s) — " + std::to_string(skipped) +
+         " row(s) skipped.\nAlready imported into this drawing. Pick another file, or change the "
+         "column order to import it again.\n";
+}
+
 } // namespace survey_csv

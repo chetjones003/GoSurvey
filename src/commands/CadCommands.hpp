@@ -1303,6 +1303,11 @@ struct AppCommandState {
   /// REQ-041: rows that would import vs. rows that would be skipped (parse error / duplicate ID).
   int surveyImportValidRowCount = 0;
   int surveyImportBadRowCount = 0;
+  /// REQ-041 rev 3 (BUG-014): an import has run and \ref surveyImportPreviewValidation holds its
+  /// outcome, not a validation verdict. Import is blocked because the rows are already in the
+  /// drawing — which is a success, so the panel must not colour it as an error. Cleared by
+  /// SurveyCsvRefreshImportPreview, i.e. by any change the user makes to path/layout/header.
+  bool surveyImportJustImported = false;
   std::vector<std::pair<std::string, std::string>> surveyReportTabs;
   int surveyReportSelectedTab = 0;
   bool surveyReportSelectLatestPending = false;

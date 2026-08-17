@@ -699,6 +699,14 @@ requirements is a planning failure, not a sign of rigor.
     (line X and line Y)"; a file whose ID equals an **existing session point**
     shows "Point ID N already exists in the drawing (line X)";
   - a fully valid file shows "Ready to import — N point(s)" and Import is enabled;
+  - **(added 2026-08-17, revision 3)** once an import has **run**, the summary reports
+    **what that import did** — "Imported N point(s) — M row(s) skipped." — and the
+    panel does **not** re-validate the file it just imported. Import is disabled,
+    because the file's rows are now in the drawing, and the summary says so rather
+    than presenting it as a failure: a completed import never renders as an error
+    colour and never shows the "Cannot import" wording. The outcome stands until the
+    user changes the path, the column order, or the header setting — any of which
+    resumes normal pre-import validation;
   - a file with **only row-level problems** shows the per-row messages, keeps
     Import enabled, and pressing Import **prompts to confirm** importing the valid
     rows and skipping the bad rows before any change;
@@ -713,6 +721,17 @@ requirements is a planning failure, not a sign of rigor.
   optional**: the required minimum is the ID (if present) plus the two horizontal
   coordinates (P,N,E for PENZD; N,E/E,N for NEZ/ENZ); a missing or blank Z defaults
   to 0. A Z that is present but unparseable is still an error (REQ-001).
+  2026-08-17 (revision 3) — **what the panel shows *after* an import was never
+  specified, and the unspecified behaviour was wrong.** The importer marked the
+  preview dirty on completion, so the panel immediately re-validated the same file
+  against a session that now contained the points that import had just created —
+  and reported a successful import of 5 points as "Cannot import — no valid data
+  rows", in red, with a duplicate-ID error for every row. Every statement in it was
+  literally true of a *second* import and every one of them was misleading about the
+  first. Recorded as a requirement revision rather than a quiet fix because the gap
+  was in the spec: REQ-041 defined the pre-import states exhaustively and said
+  nothing about the state after, so the code was not violating it. See BUG-014,
+  TASK-069, D-2026-08-17-d.
 
 ### REQ-042 — Hatch fills are selectable, editable entities
 - Purpose: a hatch (imported `SOLID` `HATCH` → `CadFilledRegion`, ADR-011, or one created by
