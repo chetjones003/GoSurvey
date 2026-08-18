@@ -1,7 +1,7 @@
 # TASK-024 — ADR-023: WYSIWYG MTEXT editing (in-tree rich text edit widget)
 
 - Type:    feature
-- Status:  self-verify (built clean; 87/87 unit tests green; awaiting user manual verification)
+- Status:  done — user verified in app 2026-08-18
 - Opened:  2026-07-30
 - Owner:   chetjones003
 
@@ -158,7 +158,7 @@ ASSUMPTION-3: An in-editor undo stack of plain buffer snapshots is sufficient.
 
 ## 10. Verification result
 - Submitted:  2026-07-30
-- Verdict:    PASS pending user manual verification.
+- Verdict:    PASS — user manual verification confirmed in app 2026-08-18.
 - Findings:   none blocking. Two plan deviations recorded in §8 (standalone pure header; state as plain
               members), both to preserve testability and layering rather than to cut scope.
 
@@ -172,7 +172,7 @@ ASSUMPTION-3: An in-editor undo stack of plain buffer snapshots is sufficient.
                           rich runs. Removal condition: teach both paths `Shx::DrawText` in one change, so
                           the editor and the drawn MTEXT never diverge.
                           No IME or right-to-left support (the stock widget had none either).
-- Done:                   pending user manual verification.
+- Done:                   2026-08-18 (user verified in app)
 
 ### Manual verification (user)
 1. Double-click an MTEXT: no `[[b]]` tags anywhere — bold shows as bold, colours as colours.

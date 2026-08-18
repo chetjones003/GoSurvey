@@ -1,7 +1,7 @@
 # TASK-068 — Accept `.txt` alongside `.csv` for point import and export (REQ-083)
 
 - Type:    feature
-- Status:  self-verify — automated checks green; four acceptance conditions need a GUI pass (§10)
+- Status:  done — GUI acceptance pass completed by the user in app 2026-08-18
 - Opened:  2026-08-17
 - Owner:   Claude Code (AI assistant)
 
@@ -205,8 +205,8 @@ ASSUMPTION-2: The Win32 open chooser shows both extensions from a single semicol
 
 ## 10. Verification result
 - Submitted:  2026-08-17
-- Verdict:    **PASS on everything automatable; four acceptance conditions remain UNVERIFIED** and
-  are not claimed. They need a GUI pass, because the Win32 common dialog and the REQ-041 file-state
+- Verdict:    **PASS.** Everything automatable passed 2026-08-17; the five GUI conditions below were
+  run and confirmed by the user in the application on 2026-08-18. They are now claimed, not pending:
   path cannot be linked by the test target and cannot be driven headlessly (see §8):
   1. Import → Browse… lists `samples/points-req083.txt` with the **default** filter selected.
   2. Importing `points-req083.csv` and `points-req083.txt` yields identical points and an identical
@@ -228,10 +228,10 @@ ASSUMPTION-2: The Win32 open chooser shows both extensions from a single semicol
   applied to all six choosers as its own task.
 
 ## 11. Outcome
-- Requirements satisfied: REQ-083 (Acceptance met: **partially — see §10**; the four GUI conditions
-  are pending a run, not failed)
+- Requirements satisfied: REQ-083 (Acceptance met: **yes** — the automatable half 2026-08-17, the
+  five GUI conditions confirmed by the user in app 2026-08-18)
 - Tests added:            `tests/PointFileExtTests.cpp` (5 cases, 26 assertions)
 - Refactors:              none
 - Docs updated:           `spec/requirements.md` (REQ-083 + trace row), `spec/project.md`
   (D-2026-08-17-c), `src/platform/WinFileDialogs.hpp` (contract comments)
-- Done:                   pending the GUI acceptance pass
+- Done:                   2026-08-18 (GUI acceptance pass confirmed by the user)

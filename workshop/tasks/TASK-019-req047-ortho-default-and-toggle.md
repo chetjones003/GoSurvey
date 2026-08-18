@@ -1,7 +1,7 @@
 # TASK-019 — REQ-047: ORTHO off by default + reliable F8 toggle (LINE stuck orthogonal)
 
 - Type:    bug
-- Status:  self-verify (awaiting user manual verification)
+- Status:  done — user verified in app 2026-08-18
 - Opened:  2026-07-13
 - Owner:   chetjones003
 
@@ -62,16 +62,16 @@
 - [x] dependency-audit     — n-a
 - [x] performance-review    — n-a (identical per-point math, now one inline function)
 - [x] testing              — PASS (58/58 ctest incl. 2 new `[ortho]` cases); default/F8 = manual
-- [ ] user manual verification — PENDING
+- [x] user manual verification — PASS 2026-08-18 (user confirmed in app)
 
 ## 8. Verification result
-- Verdict: PASS pending user manual verification.
+- Verdict: PASS — user manual verification confirmed 2026-08-18.
 - Findings: none blocking. Note: two CadUi paper-space inline ortho sites (6750, 8789) were left as-is
   (identical math, correct); deduping them to the helper is optional cleanup, not required for REQ-047.
 
 ## 9. Outcome
-- Requirements satisfied: REQ-047 (Acceptance: pending manual verification of default + F8 toggle).
+- Requirements satisfied: REQ-047 (Acceptance met: yes — default-off, F8/status toggle, H/V constraint and snap override all confirmed in app 2026-08-18).
 - Tests added:            tests/OrthoConstrainTests.cpp (2 cases / 8 assertions).
 - Refactors:              ortho constraint math → commands/OrthoConstrain.hpp (shared, tested).
 - Docs updated:           spec/requirements.md (REQ-047 + traceability), spec/project.md (decision log).
-- Done:                   pending user manual verification.
+- Done:                   2026-08-18 (user verified in app)

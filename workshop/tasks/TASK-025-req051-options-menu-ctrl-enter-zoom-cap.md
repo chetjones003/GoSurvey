@@ -1,7 +1,7 @@
 # TASK-025 — REQ-051: Ctrl+Enter places, MTEXT zoom-scaling fix, and the Options menu
 
 - Type:    feature + fix
-- Status:  self-verify (built clean; 98/98 unit tests green; awaiting user manual verification)
+- Status:  done — user verified in app 2026-08-18 (all three items)
 - Opened:  2026-07-30
 - Owner:   chetjones003
 
@@ -79,7 +79,7 @@ ASSUMPTION-1: "Import Text..." may reuse the existing CSV browse dialog (its fil
                              a tag boundary, and that a self-containing replacement terminates)
 
 ## 8. Verification result
-- Verdict: PASS pending user manual verification.
+- Verdict: PASS — user manual verification confirmed in app 2026-08-18 (Ctrl+Enter, MTEXT zoom scaling, Options menu).
 
 ## 9. Outcome
 - Requirements satisfied: REQ-051 as amended; REQ-050 defect fixed.
@@ -89,7 +89,7 @@ ASSUMPTION-1: "Import Text..." may reuse the existing CSV browse dialog (its fil
 - Technical debt:         REQ-051's statement text not yet updated for the Options menu (the decision log
                           carries it); Import Text reuses the CSV browse dialog (ASSUMPTION-1); the
                           disabled menu items remain follow-ups.
-- Done:                   pending user manual verification.
+- Done:                   2026-08-18 (user verified in app)
 
 ### Manual verification (user)
 1. Type in an MTEXT, press **Ctrl+Enter** → the text is placed. Plain Enter still breaks the line.

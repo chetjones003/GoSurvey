@@ -1,7 +1,7 @@
 # TASK-047 — Survey point defects in 3D: label elevation, hover highlight, selection box, pick space
 
 - Type:    bug
-- Status:  implement
+- Status:  done — user confirmed all three symptoms fixed in app 2026-08-18
 - Opened:  2026-08-15
 - Owner:   Workshop
 
@@ -182,7 +182,7 @@ label behaviour is visible.
 
 ## 10. Verification result
 - Submitted:  2026-08-15
-- Verdict:    PASS pending the user's manual confirmation of all three symptoms
+- Verdict:    PASS — user confirmed all three symptoms fixed under orbit in app 2026-08-18.
 - Findings:   none blocking. One inconsistency reported, not silently fixed (ASSUMPTION-2).
 
 ## 11. Outcome
@@ -190,4 +190,4 @@ label behaviour is visible.
                    selection box shape (REQ-058 violation, and a genuine draw-vs-select mismatch)
 - Tests added:     none possible — DEBT-7, stated in §7
 - Code removed:    43 lines of superseded renderer geometry + one renderer parameter
-- Done:            <pending user confirmation>
+- Done:            2026-08-18 (user confirmed in app)

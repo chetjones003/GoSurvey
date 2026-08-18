@@ -1,7 +1,7 @@
 # TASK-020 — REQ-048/049: true colors in paper space (incremental)
 
 - Type:    feature
-- Status:  self-verify (A+B verified by user; C1+C2 done, awaiting user verification)
+- Status:  done — A+B and C1+C2 all user-verified in app (C1+C2 confirmed 2026-08-18)
 - Opened:  2026-07-13
 - Owner:   chetjones003
 
@@ -67,10 +67,10 @@ ASSUMPTION-1: survey points are colored by their layer (they carry no per-entity
 - [x] performance-review    — a layer lookup (`FindDrawingLayerRowCi`, linear over layers) per entity per
       frame in the overlay + per plotted entity; layers are few — acceptable; matches model-space cost.
 - [x] testing              — 58/58 ctest green (no domain change); colors = manual per UI-REQ convention
-- [ ] user manual verification (A+B) — PENDING
+- [x] user manual verification — PASS. A+B confirmed earlier; C1+C2 (native sheet geometry + SHX text plot in true colors) confirmed by user 2026-08-18.
 
 ## 7. Verification result
-- Verdict: PASS pending user manual verification of A+B. Increment C not started.
+- Verdict: PASS — all increments user-verified; C1+C2 confirmed 2026-08-18.
 
 ## 8. Outcome (interim)
 - Requirements satisfied: REQ-048 increments A+B (screen + model-vp plot). REQ-048-C + REQ-049 pending.
@@ -78,4 +78,4 @@ ASSUMPTION-1: survey points are colored by their layer (they carry no per-entity
 - Docs updated:           spec/requirements.md (REQ-048/049 + traceability), spec/project.md (decision log).
 - Technical debt:         REQ-049 (native sheet + text plotting) not yet done — sheets still plot without
                           their native geometry/text; tracked as increment C.
-- Done:                   pending (A+B manual verification; then C).
+- Done:                   2026-08-18 (A+B verified earlier; C1+C2 verified in app)
