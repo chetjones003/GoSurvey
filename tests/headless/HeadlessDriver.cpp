@@ -16,6 +16,7 @@
 //     difference REQ-203's "save a .gs and diff" condition exists to detect.
 
 #include "CadCommands.hpp"
+#include "DxfIo.hpp"
 #include "GsIo.hpp"
 #include "HeadlessFileDialogs.hpp"
 #include "docinvariants.hpp"
@@ -201,6 +202,32 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       Fail(run, "io", "SAVEAS failed: " + path, sourceLine);
       return false;
     }
+  } else if (verb == "EXPORT" || verb == "IMPORT") {
+    // EXPORT <FORMAT> <path> / IMPORT <FORMAT> <path> — the interchange formats, as distinct from
+    // OPEN/SAVEAS which are the drawing's own `.gs`. Two words rather than an `EXPORTDXF` verb so
+    // the parser-fuzzing stage can add GLTF and STL without inventing a verb each
+    // (docs/fuzz-harness.md §8 stage 6).
+    //
+    // These are what make REQ-204's `dxf-export-stable` oracle expressible in a transcript, and
+    // therefore reachable by the minimizer, which is the property that decides whether a finding
+    // arrives as a reproducer or as a seed number.
+    std::string pathRaw;
+    const std::string fmt = UpperAscii(FirstWord(rest, &pathRaw));
+    const std::string path = ExpandVars(run, Trim(pathRaw));
+    if (path.empty()) {
+      Fail(run, "parse", verb + " " + fmt + " needs a path", sourceLine);
+      return false;
+    }
+    if (fmt != "DXF") {
+      Fail(run, "parse", verb + ": unsupported format " + fmt + " (expected DXF)", sourceLine);
+      return false;
+    }
+    const bool ok = (verb == "EXPORT") ? ExportDxfFile(run.st, path.c_str(), run.log)
+                                       : ImportDxfFile(run.st, path.c_str(), run.log);
+    if (!ok) {
+      Fail(run, "io", verb + " " + fmt + " failed: " + path, sourceLine);
+      return false;
+    }
   } else if (verb == "DIALOG") {
     std::string arg;
     const std::string kind = UpperAscii(FirstWord(rest, &arg));
@@ -296,26 +323,33 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
   } else if (verb == "EXPECT") {
     std::string arg;
     const std::string what = UpperAscii(FirstWord(rest, &arg));
-    if (what == "SAMEFILE") {
+    if (what == "SAMEFILE" || what == "DIFFERENTFILE") {
+      const bool wantSame = (what == "SAMEFILE");
       // EXPECT SAMEFILE <a> <b> — byte comparison. This is what makes the `gs-roundtrip` oracle
       // expressible in a transcript rather than needing a separate build-system step, which in turn
       // is what lets the fuzzer generate it.
+      //
+      // EXPECT DIFFERENTFILE <a> <b> is its counterpart, and it exists for one reason: an oracle
+      // shaped "do something, undo it, compare" PASSES TRIVIALLY when the something did not happen.
+      // A check that cannot fail reports success forever, which is the failure mode this harness has
+      // already been bitten by twice (docs/fuzz-harness.md §8). DIFFERENTFILE is how a generated
+      // transcript asserts that the document actually MOVED before asserting that it came back.
       std::istringstream fs2(ExpandVars(run, arg));
       std::string pa;
       std::string pb;
       if (!(fs2 >> pa >> pb)) {
-        Fail(run, "parse", "EXPECT SAMEFILE needs two paths", sourceLine);
+        Fail(run, "parse", "EXPECT " + what + " needs two paths", sourceLine);
         return false;
       }
       std::ifstream fa(pa, std::ios::binary);
       std::ifstream fb(pb, std::ios::binary);
       if (!fa || !fb) {
-        Fail(run, "io", "EXPECT SAMEFILE: cannot open " + (!fa ? pa : pb), sourceLine);
+        Fail(run, "io", "EXPECT " + what + ": cannot open " + (!fa ? pa : pb), sourceLine);
         return false;
       }
       const std::string sa((std::istreambuf_iterator<char>(fa)), std::istreambuf_iterator<char>());
       const std::string sb((std::istreambuf_iterator<char>(fb)), std::istreambuf_iterator<char>());
-      if (sa != sb) {
+      if (wantSame && sa != sb) {
         // Report the first differing offset: on a JSON document that is usually enough to name the
         // field, and it keeps the failure line short enough to read in a summary.
         size_t off = 0;
@@ -324,6 +358,14 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "expect",
              "SAMEFILE: files differ at byte " + std::to_string(off) + " (" +
                  std::to_string(sa.size()) + " vs " + std::to_string(sb.size()) + " bytes)",
+             sourceLine);
+        return false;
+      }
+      if (!wantSame && sa == sb) {
+        Fail(run, "expect",
+             "DIFFERENTFILE: files are identical (" + std::to_string(sa.size()) +
+                 " bytes) — the step between them changed nothing, so any check that follows is "
+                 "vacuous",
              sourceLine);
         return false;
       }

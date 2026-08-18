@@ -4,6 +4,7 @@
 #include "headless/Minimizer.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <set>
 #include <string>
 #include <vector>
@@ -54,6 +55,101 @@ TEST_CASE("A generated transcript starts from a known state", "[fuzz][generator]
     return l.rfind("CMD ", 0) == 0;
   });
   REQUIRE(newIt < cmdIt);
+}
+
+// ---------------------------------------------------------------------------
+// Differential oracle emission (REQ-204). The oracles themselves are exercised by the transcripts
+// under tests/headless/transcripts; what is tested here is that the GENERATOR emits them correctly
+// — off when asked, on when asked, and never sharing an output path with the other oracle.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("The undo-redo oracle is emitted only when asked", "[fuzz][generator]") {
+  fuzzgen::Options off;
+  off.emitUndoRedo = false;
+  const auto without = fuzzgen::Generate(77, SampleCommands(), off);
+  REQUIRE(std::find(without.begin(), without.end(), std::string("REDO ")) == without.end());
+  REQUIRE(std::none_of(without.begin(), without.end(), [](const std::string& l) {
+    return l.find("ur-a.gs") != std::string::npos;
+  }));
+
+  fuzzgen::Options on = off;
+  on.emitUndoRedo = true;
+  const auto with = fuzzgen::Generate(77, SampleCommands(), on);
+  REQUIRE(with.size() > without.size());
+
+  // The oracle is only an oracle if the comparison is there: a SAVEAS pair with no EXPECT SAMEFILE
+  // writes two files and asserts nothing, which is the vacuous-check failure this harness has
+  // already been bitten by (docs/fuzz-harness.md §8).
+  REQUIRE(std::find(with.begin(), with.end(),
+                    std::string("EXPECT SAMEFILE %OUT%/ur-a.gs %OUT%/ur-b.gs")) != with.end());
+  REQUIRE(std::find(with.begin(), with.end(), std::string("UNDO")) != with.end());
+  REQUIRE(std::find(with.begin(), with.end(), std::string("REDO")) != with.end());
+
+  // Both sides of the oracle, in order: the document must be shown to MOVE before it is shown to
+  // come back. A block carrying only the SAMEFILE half passes on a no-op undo — the false positive
+  // seed 260 produced, and the reason the anchor edit and this assertion both exist.
+  const auto moved = std::find(with.begin(), with.end(),
+                               std::string("EXPECT DIFFERENTFILE %OUT%/ur-a.gs %OUT%/ur-mid.gs"));
+  const auto restored = std::find(with.begin(), with.end(),
+                                  std::string("EXPECT SAMEFILE %OUT%/ur-a.gs %OUT%/ur-b.gs"));
+  REQUIRE(moved != with.end());
+  REQUIRE(moved < restored);
+}
+
+TEST_CASE("The two oracles never share an output file", "[fuzz][generator]") {
+  // A candidate that reads a file the OTHER oracle wrote is how a minimizer produces a confident
+  // lie — the failure recorded in docs/fuzz-harness.md §8, where shared state let a reduced
+  // transcript "fail" on a leftover artifact and describe no bug at all. Two oracles in one
+  // transcript are the same hazard, so their filenames are asserted disjoint rather than merely
+  // chosen carefully once.
+  fuzzgen::Options both;
+  both.emitUndoRedo = true;
+  both.emitRoundTrip = true;
+  const auto lines = fuzzgen::Generate(9, SampleCommands(), both);
+
+  std::set<std::string> undoRedoFiles;
+  std::set<std::string> roundTripFiles;
+  for (const std::string& l : lines) {
+    for (const char* f : {"ur-a.gs", "ur-mid.gs", "ur-b.gs"})
+      if (l.find(f) != std::string::npos)
+        undoRedoFiles.insert(f);
+    for (const char* f : {"rt-a.gs", "rt-b.gs", "rt-c.gs"})
+      if (l.find(f) != std::string::npos)
+        roundTripFiles.insert(f);
+  }
+  REQUIRE(undoRedoFiles.size() == 3);
+  REQUIRE(roundTripFiles.size() == 3);
+
+  std::vector<std::string> shared;
+  std::set_intersection(undoRedoFiles.begin(), undoRedoFiles.end(), roundTripFiles.begin(),
+                        roundTripFiles.end(), std::back_inserter(shared));
+  REQUIRE(shared.empty());
+}
+
+TEST_CASE("Emitting an oracle leaves the generated actions unchanged", "[fuzz][generator]") {
+  // The oracle is appended, never interleaved: the same seed must produce the same DRAWING whether
+  // or not it is being checked. If enabling an oracle changed the actions, a finding would not
+  // reproduce with the flag off and the minimized transcript would describe a different run.
+  fuzzgen::Options off;
+  off.emitUndoRedo = false;
+  fuzzgen::Options on = off;
+  on.emitUndoRedo = true;
+
+  const auto without = fuzzgen::Generate(31337, SampleCommands(), off);
+  const auto with = fuzzgen::Generate(31337, SampleCommands(), on);
+  REQUIRE(with.size() > without.size());
+
+  // The action prefix is everything before the first oracle line, found rather than counted: a
+  // hard-coded block length would make this test lie the moment an oracle grew a line.
+  //
+  // The boundary is taken from `without` only. In `with`, the undo-redo block begins EARLIER than
+  // its first SAVEAS, because that block opens with an anchor edit — so looking the boundary up in
+  // `with` would find a later line and compare the wrong ranges.
+  const auto endWithout = std::find_if(without.begin(), without.end(), [](const std::string& l) {
+    return l.rfind("SAVEAS %OUT%/", 0) == 0;
+  });
+  REQUIRE(endWithout != without.end());
+  REQUIRE(std::equal(without.begin(), endWithout, with.begin()));
 }
 
 TEST_CASE("Generation tolerates an empty command list", "[fuzz][generator]") {

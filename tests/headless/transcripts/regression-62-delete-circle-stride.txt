@@ -1,0 +1,65 @@
+# DELETE erases 3 floats from the stride-4 circle store, corrupting every circle after it.
+#
+# Issue #62. Registered DISABLED in CMakeLists.txt — it fails today, which is the point. Re-enable
+# it when #62 is fixed, joining the `regression-56..61` files beside it.
+#
+# ## Root cause
+#
+# `src/commands/CadCommands.cpp`, the erase loop for circles:
+#
+#     const size_t k = static_cast<size_t>(idx) * 4;
+#     if (k + 3 >= st.userCirclesCxCyZR.size())
+#       continue;
+#     st.userCirclesCxCyZR.erase(begin + k, begin + (k + 3));   // <-- 3, not 4
+#
+# `userCirclesCxCyZR` is stride 4 (cx, cy, z, r — architecture §11.8), so the erase removes THREE of
+# the four floats and orphans the fourth. The LINE loop twenty lines above is the same shape and is
+# correct: stride 6, `erase(k, k + 6)`.
+#
+# ## Why this is worse than the invariant makes it look
+#
+# `flat-strides` reports "size()=1 is not a multiple of 4", which reads like a cosmetic tail. It is
+# not. Every circle after the erased one is shifted by one float, so each reads its predecessor's
+# radius as its centre X:
+#
+#     before, three circles at (0,0) r1, (500,0) r2, (1000,0) r3:
+#         [0, 0, 0, 1,  500, 0, 0, 2,  1000, 0, 0, 3]
+#     after deleting the first:
+#         [1, 500, 0, 2,  1000, 0, 0, ...]
+#          ^cx ^cy    ^r
+#
+# The surviving circle now claims centre (1, 500) and radius 2. Nothing warns, and `SAVEAS` writes
+# the corrupted array straight to the `.gs`, so the damage outlives the session. Deleting one circle
+# silently moves every other circle in the drawing.
+
+NEW
+
+CMD CIRCLE
+CMD 0,0
+CMD 1
+ESC
+
+CMD CIRCLE
+CMD 500,0
+CMD 2
+ESC
+
+CMD CIRCLE
+CMD 1000,0
+CMD 3
+ESC
+
+CHECK ALL
+EXPECT CIRCLES 3
+
+# Select only the first circle, and prove that is what happened before deleting anything — a box
+# that selected nothing would make everything below pass for the wrong reason.
+BOX -10 -10 10 10
+EXPECT SELECTED 1
+
+CMD DELETE
+
+# Two circles must remain, and the store must still be a whole number of circles.
+# Today: CIRCLES reports 2 (integer division hides the orphan) and CHECK ALL fires `flat-strides`.
+EXPECT CIRCLES 2
+CHECK ALL

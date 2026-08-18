@@ -365,3 +365,173 @@ option (A) proposes, demonstrated rather than promised. Building the atlas is CP
                           `spec/project.md`
 - Findings filed:         #56, #57, #58, #59 — all `fuzz` / `bug` / `sev:corrupt`
 - Done:                   **not done** — open at the remainder above.
+
+---
+
+## 12. Increment 2 — stage 4, the two remaining oracles (opened 2026-08-18)
+
+- Scope chosen by the user 2026-08-18: `undo-redo-identity` and `dxf-export-stable`. Stages 6
+  (parser byte fuzzing), 7 (auto-file) and ASAN stay open and are **not** in this increment.
+
+### 12.1 The "document-equality predicate" blocker dissolves
+
+§11 records both oracles as blocked on a document-equality predicate, and calls it "a genuine design
+question (float tolerance under REQ-101, id renumbering, store ordering)". Re-reading it against
+what stage 4 already shipped: **the predicate exists and is already in use.** `gs-roundtrip` compares
+documents by saving each to `.gs` and diffing the bytes — `.gs` *is* the canonical serialization of
+an `AppCommandState`, and `EXPECT SAMEFILE` already performs the comparison.
+
+So `undo-redo-identity` is `SAVEAS a` → `UNDO` → `REDO` → `SAVEAS b` → `EXPECT SAMEFILE a b`, built
+entirely from verbs that exist. This is worth stating precisely because it is *stronger*, not
+weaker, than the hand-written predicate that was being deferred:
+
+- **float tolerance** — no tolerance at all. Undo/redo is not a computation, it is a restore; a bit
+  that moves is a defect, and REQ-101's tolerance is about geometry agreeing with reference data,
+  not about a snapshot agreeing with itself.
+- **id renumbering** — an id that changes across undo/redo violates REQ-076 outright. A predicate
+  that tolerated renumbering would have been defining the bug out of existence.
+- **store ordering** — likewise: a reordered store is a real difference, and §11.9's index-validity
+  invariant is exactly why it matters.
+
+A predicate that had to answer those three questions would have had to *choose* how much drift to
+forgive. Byte equality forgives none, needs no new abstraction (REQ-301), and adds no code.
+
+**No SPEC GAP is raised.** Nothing here changes a layer, an owner, a dependency or a data format;
+it adds test-only transcript verbs inside the subsystem that owns them, which is the same
+within-boundary judgement `EXPECT SAMEFILE` was added under.
+
+### 12.2 A vacuous oracle is the failure mode to design against
+
+`SAVEAS` → `UNDO` → `REDO` → `SAVEAS` → compare **passes trivially if `UNDO` does nothing at all.**
+That is the same class of defect as the `attr-counts` false positive and the lying minimizer in §8:
+a check that cannot fail, reporting success forever. So the transcript asserts the *intermediate*
+state too — after `UNDO` the entity counts must have changed, and after `REDO` they must be back.
+The oracle is then two-sided: it proves undo moved the document before it proves redo restored it.
+
+### 12.3 What `dxf-export-stable` can and cannot catch
+
+REQ-204's table glosses this invariant as "an entity type silently dropped by an exporter with no
+branch for it". Export → import → export **does not catch that**, and the distinction matters:
+
+| Defect | A=export(D0), D1=import(A), B=export(D1) | Caught by A vs B? |
+|---|---|---|
+| Exporter has no branch for a type | the type is absent from A, D1 and B alike | **No** — A == B |
+| Exporter writes it, importer drops it | present in A, absent from D1 and B | Yes — A != B |
+
+So the byte comparison catches exporter/importer *asymmetry*, and an entity dropped before it ever
+reaches the file is invisible to it. Catching that needs the document compared **across** the round
+trip, which is what `EXPECT <QUANTITY> <n>` already does. The transcript therefore has two halves,
+labelled, testing different things:
+
+- **survival** — entity counts before export vs after import (catches the missing branch);
+- **stability** — `EXPECT SAMEFILE` on the two exports (catches the asymmetry).
+
+Measured before writing either: `src/io/DxfIo.cpp`'s writer has branches for LINE, CIRCLE, POINT,
+LWPOLYLINE, MTEXT and HATCH/SOLID, and **no reference to `userArcs` or `userEllipses` anywhere in
+the export path**. So the survival half is expected to fire on its first run. That is the invariant
+working; the resulting defect is filed, not fixed here (a bug is its own task with its own
+authority).
+
+### 12.4 Plan
+
+- `tests/headless/HeadlessDriver.cpp` — `EXPORT DXF <path>` and `IMPORT DXF <path>`, mirroring
+  `SAVEAS`/`OPEN` onto `ExportDxfFile`/`ImportDxfFile`. Two-word form so stage 6 can add
+  `EXPORT GLTF` without another verb.
+- `tests/headless/transcripts/undo-redo-identity.txt` — the two-sided oracle of §12.2.
+- `tests/headless/transcripts/dxf-export-stable.txt` — the two halves of §12.3.
+- `tests/headless/FuzzGenerator.{hpp,cpp}` — `Options::emitUndoRedo`, emitting the oracle before the
+  round-trip block (distinct filenames, so the two oracles cannot read each other's artifacts —
+  §8's minimizer lesson).
+- `tests/headless/FuzzMain.cpp` — `--undo-redo` / `--no-undo-redo`.
+- `tests/FuzzHarnessTests.cpp` — the emission is covered like `emitRoundTrip` is.
+- `CMakeLists.txt` — register the new transcripts with ctest.
+- Default for `emitUndoRedo`: decided by **measurement, not by hope** — the §8 rule is to flip a
+  default when a sweep comes back clean, and a sweep is run before the default is set either way.
+- DXF generator emission is deliberately **out of this increment**: with the ARC/ELLIPSE gap open
+  every seed would report the same finding and bury the rest, which is the precedent `--roundtrip`
+  set while #56 was open. Stated here rather than left as a silent omission.
+
+### 12.5 Steps
+- [ ] driver verbs + build clean
+- [ ] `undo-redo-identity` transcript, two-sided
+- [ ] `dxf-export-stable` transcript, both halves; record what it finds
+- [ ] generator option + `FuzzHarnessTests` coverage
+- [ ] ctest registration; full suite green
+- [ ] sweep to decide the default; file any finding; update `docs/fuzz-harness.md` §8
+
+### 12.6 Implementation log
+
+- 2026-08-18 — driver verbs `EXPORT DXF <path>` / `IMPORT DXF <path>` added, mirroring `SAVEAS`/`OPEN`
+  onto `ExportDxfFile`/`ImportDxfFile`. Format as a separate word so stage 6 adds GLTF/STL without a
+  verb each. Build clean; the one MSVC warning on the touched file (C4530) was confirmed
+  **pre-existing** by rebuilding the file without the change, rather than assumed to be.
+- 2026-08-18 — `undo-redo-identity.txt`: five entity types created, wound back to empty over six
+  undos and forward again, plus a second scenario covering a MODIFY command (`DELETE` + `UNDO`).
+  Both scenarios assert entity counts on **both** sides, so neither can pass on a no-op undo.
+  Measured while writing it: `ARC` and `ELLIPSE` take viewport `PICK`s, not typed coordinates, and
+  undo granularity is per **committed entity** (a two-segment LINE is two undo steps).
+- 2026-08-18 — **FINDING A, while writing the modify scenario.** `BOX` select + `DELETE` on a
+  selection containing a circle fires `flat-strides`. Root-caused in `CadCommands.cpp`'s erase loop:
+  `userCirclesCxCyZR` is stride 4 and the erase removes `[k, k+3)`. Demonstrated the real
+  consequence rather than reporting the invariant text — three circles at `(0,0) r1`, `(500,0) r2`,
+  `(1000,0) r3`, delete the first, and the survivor claims centre `(1, 500)` radius 2, saved to
+  `.gs`. **Not fixed here** — a bug is its own task with its own authority, the same call §8 made
+  for #56. Minimized by hand to 8 lines: `transcripts/delete-circle-stride.txt`.
+- 2026-08-18 — **FINDINGS B and C**, both from `dxf-export-stable.txt` on its first run: the exporter
+  has no `userArcs`/`userEllipses` branch (a drawing of one ellipse exports **zero** entities), and
+  a LWPOLYLINE returns from a round trip as loose LINEs. Two different defects caught by the two
+  different halves — see §12.3, which predicted exactly this split before the transcript ran.
+- 2026-08-18 — both failing transcripts registered **`DISABLED TRUE`** in CMakeLists, not deleted and
+  not `WILL_FAIL`. Same call as `headless.gs-roundtrip.compare` while #56/#57 were open, and the
+  reasoning is in the CMake comment: `WILL_FAIL` goes green the moment the failure becomes a
+  *different* failure.
+- 2026-08-18 — generator: `Options::emitUndoRedo`, `--undo-redo` / `--no-undo-redo`, emitted before
+  the round-trip block with disjoint filenames (asserted by a test, not merely chosen carefully).
+- 2026-08-18 — **the oracle's first sweep filed a bug against correct behaviour, and it was mine.**
+  1000 seeds, 2 failures. The minimized reproducer was convincing until read closely: the minimizer
+  had deleted the oracle's own `UNDO` and kept an earlier random one, because `expect|SAMEFILE`
+  cannot distinguish them — the coarse-signature weakness of §8's sixth defect, third recurrence.
+  The underlying truth: **`UNDO` on an exhausted stack is a no-op while `REDO` after it is not**, so
+  the naive save/undo/redo/save shape moves the document forward and reports the difference as a
+  defect. Fixed at the root with (1) a seeded anchor edit — type varies, coordinates stay plain so
+  the commit is guaranteed — and (2) a new `EXPECT DIFFERENTFILE` across the undo. Recorded as the
+  seventh harness defect in `docs/fuzz-harness.md` §8.
+- 2026-08-18 — rebuilt oracle: **1000 seeds, 0 failures**, and because `DIFFERENTFILE` fails on a
+  no-op undo those 1000 passes are also 1000 proofs the check was not vacuous. Default flipped to
+  ON under §8's standing rule (flip on a clean sweep, not on an issue closing) — measured after the
+  fix, never before it. `DIFFERENTFILE` itself proven to fire by a deliberate fixture.
+- 2026-08-18 — full suite: **427/427 ctest cases pass**, 2 disabled by design.
+
+## 13. Self-verification — increment 2
+
+- [x] build-project       — PASS. `GoSurvey.exe`, `gosurvey_headless.exe`, `GoSurveyTests.exe` all
+      clean. No new warning; the one on the touched file was verified pre-existing by measurement.
+- [x] architecture-review — PASS. No new abstraction, layer, dependency, global or data-format
+      change. Two transcript verbs and one generator option, all inside `tests/`, none linked into
+      `GoSurvey.exe`. The "document-equality predicate" §11 deferred is **not built** — §12.1 shows
+      it already existed. No SPEC GAP: nothing here decides a layer, an owner or a format.
+- [x] code-review         — PASS. Three findings root-caused rather than described, each to a named
+      line. The one self-inflicted defect (the false-positive oracle) was fixed at its cause, not
+      papered over with a tolerance — a `SAMEFILE` that forgave a one-operation drift would have
+      been the noisiest possible answer and would have hidden the real thing it exists to catch.
+- [x] dependency-audit    — PASS. None added.
+- [x] performance-review  — n/a. Test-only. The 1000-seed sweep runs in ~49 s.
+- [x] testing             — PASS. 427/427. New: `undo-redo-identity` transcript, 4 generator cases in
+      `FuzzHarnessTests.cpp`. Failure modes proven, not assumed: `DIFFERENTFILE` demonstrated firing
+      on identical files, and the two disabled transcripts each fail on the defect they document.
+
+## 14. Increment-2 outcome
+
+- **Stage 4 is complete.** Both remaining oracles exist; `undo-redo-identity` is live in CI and on by
+  default in the fuzzer, `dxf-export-stable` is written and held disabled against its own findings.
+- REQ-204's oracle table is now **complete** — 8 single-state invariants plus `gs-roundtrip`,
+  `undo-redo-identity` and `dxf-export-stable`.
+- **Three product defects found, none fixed here** (each needs its own task):
+  A. `DELETE` corrupts the circle store — silent, persisted, moves every other circle. Severest.
+  B. DXF export drops ARC and ELLIPSE.
+  C. DXF import shatters LWPOLYLINE into loose lines.
+- One harness defect found and fixed: the false-positive undo/redo oracle (§8, seventh).
+- **Still open on TASK-056** (unchanged by this increment): stage 6 parser byte fuzzing, stage 7
+  triage/auto-file, ASAN.
+- Issues filed 2026-08-18 with the user's go-ahead: **#62** (A), **#63** (B), **#64** (C). The
+  transcripts carry the reproducers, which is the artifact that outlives the generator.

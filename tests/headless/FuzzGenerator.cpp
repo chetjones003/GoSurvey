@@ -260,6 +260,79 @@ std::vector<std::string> Generate(std::uint64_t seed, const std::vector<std::str
 
   lines.push_back("CHECK ALL");
 
+  if (opt.emitUndoRedo) {
+    // The ANCHOR EDIT is not decoration — it is what stops this oracle from lying, and the first
+    // version of it did lie. Measured on seed 260 of the first 1000-seed sweep:
+    //
+    //   UNDO at the BOTTOM of the undo stack is a no-op, and REDO afterwards is NOT.
+    //
+    // A fuzzed transcript issues undos at random, so it frequently arrives here with the stack
+    // already exhausted and a redo stack that is not. `SAVEAS` / `UNDO` / `REDO` / `SAVEAS` then
+    // moves the document FORWARD by one operation and the two files differ — which is correct
+    // editor behaviour (AutoCAD does the same) reported as a defect. That is a false-positive
+    // oracle, and docs/fuzz-harness.md §9 is explicit that a false positive is worse than no
+    // oracle: it files garbage and teaches everyone to ignore the harness.
+    //
+    // Committing one known entity immediately before the save fixes it at the root rather than by
+    // tolerance. It guarantees the undo stack is non-empty and that its top entry is exactly this
+    // edit, so UNDO must remove it and REDO must put it back. The commit also clears the redo
+    // stack, so REDO cannot reach anything older.
+    //
+    // The TYPE varies with the seed but the COORDINATES do not, and the split is deliberate. Each
+    // entity type has its own snapshot and restore path, which is where "an edit not fully captured
+    // by the snapshot" actually lives, so testing only LINE would leave most of the defect class
+    // unreached. Coordinates stay plain because the anchor's whole job is to be a GUARANTEED commit:
+    // a hostile value that the command legitimately refuses would leave the undo stack untouched and
+    // put the false positive straight back.
+    const int anchor = r.Int(0, 3);
+    const double ax = PlainScalar(r);
+    const double ay = PlainScalar(r);
+    if (anchor == 0) {
+      lines.push_back("CMD LINE");
+      lines.push_back("CMD " + Fmt(ax) + "," + Fmt(ay));
+      lines.push_back("CMD " + Fmt(ax + 100.0) + "," + Fmt(ay));
+      lines.push_back("ESC");
+    } else if (anchor == 1) {
+      lines.push_back("CMD CIRCLE");
+      lines.push_back("CMD " + Fmt(ax) + "," + Fmt(ay));
+      lines.push_back("CMD 12.5");
+      lines.push_back("ESC");
+    } else if (anchor == 2) {
+      lines.push_back("CMD POLYLINE");
+      lines.push_back("CMD " + Fmt(ax) + "," + Fmt(ay));
+      lines.push_back("CMD " + Fmt(ax + 40.0) + "," + Fmt(ay + 30.0));
+      lines.push_back("CMD " + Fmt(ax + 80.0) + "," + Fmt(ay));
+      lines.push_back("CMD END");
+    } else {
+      lines.push_back("CMD TEXT");
+      lines.push_back("CMD " + Fmt(ax) + "," + Fmt(ay));
+      lines.push_back("CMD 2.5");
+      lines.push_back("CMD 0");
+      lines.push_back("CMD ANCHOR");
+      lines.push_back("ESC");
+    }
+
+    // Distinct filenames from the round-trip block below, and never reused between the two oracles.
+    // docs/fuzz-harness.md §8 records why: candidates that share an output path let a minimized
+    // transcript "fail" on a file the previous candidate left behind, which is how a minimizer
+    // produces a confident lie. Two oracles in one transcript are the same hazard at a smaller
+    // scale.
+    lines.push_back("SAVEAS %OUT%/ur-a.gs");
+    lines.push_back("UNDO");
+    lines.push_back("CHECK ALL");
+    lines.push_back("SAVEAS %OUT%/ur-mid.gs");
+
+    // Two-sided: prove the document MOVED before proving it came back. Without this line the whole
+    // block passes on a no-op undo, which is exactly how the first version of this oracle managed
+    // to be both green and meaningless.
+    lines.push_back("EXPECT DIFFERENTFILE %OUT%/ur-a.gs %OUT%/ur-mid.gs");
+
+    lines.push_back("REDO");
+    lines.push_back("CHECK ALL");
+    lines.push_back("SAVEAS %OUT%/ur-b.gs");
+    lines.push_back("EXPECT SAMEFILE %OUT%/ur-a.gs %OUT%/ur-b.gs");
+  }
+
   if (opt.emitRoundTrip) {
     // TWO round trips, and the comparison is B vs C rather than A vs B (REQ-079 as amended
     // 2026-08-17, decision D-2026-08-17-a). Loading a drawing whose coordinates are of state-plane
