@@ -40,7 +40,10 @@ when" and the requirements it closes.
 - **Goal:** `<Computations match reference data>`
 - **Delivers:** REQ-101
 - **Done when:** `<the regression dataset passes at the stated tolerance>`
-- **Status:** `<planned>`
+- **Status:** **typed-storage half done, 2026-08-17** (TASK-067) — the document origin is established
+  at entry so a typed coordinate narrows to `float` at local rather than world magnitude; measured
+  ~1.5e-9 ft error where it was 0.025 ft. The reference-dataset half (an external dataset run through
+  the pipeline end to end) is still outstanding — see `spec/requirements.md` REQ-101.
 
 ### M3 — Interactive performance
 - **Goal:** Smooth editing and orbiting at target scene size
@@ -65,9 +68,9 @@ when" and the requirements it closes.
 A lightweight board that complements the milestones. Keep each column honest.
 
 ### Now (in flight — keep short)
-- **Paper Space — Increment 1** (REQ-025, REQ-026, REQ-031 partial): model/paper
-  spaces, layout tabs, MODEL/PAPER status toggle, paper size + orientation + sheet
-  outline, `.gs` persistence of layouts.
+- **M-Surfaces step 5 — REQ-069** (breaklines, boundaries, dynamic rebuild). Steps 1–4 are done (see
+  M-Surfaces status below); Paper Space (below) is also complete and no longer belongs in this
+  column.
 
 ### M-PaperSpace — Paper space & plotting (incremental)
 - **Goal:** compose the model onto sheets and plot them.
@@ -130,7 +133,7 @@ A lightweight board that complements the milestones. Keep each column honest.
 - **Done when:** a real topo's points build a contoured surface with breaklines honoured, slope
   arrows show where water goes, cut/fill against a proposed surface reports a hand-verifiable
   volume, and REQ-100 holds in the surface profile.
-- **Status:** **steps 1–3 done.**
+- **Status:** **steps 1–4 done.**
   - Step 1 — REQ-076 / ADR-027 (TASK-044), **2026-08-12**: every entity carries a stable,
     never-reused id, cross-object references are by id, and the `labelMtextAnnIndex` fix-up sprawl
     is deleted. Legacy `.gs` label migration verified against a real legacy file.
@@ -142,7 +145,14 @@ A lightweight board that complements the milestones. Keep each column honest.
     REQ-100 surface bench case was actually run — measured **p95 9.32 ms against 16 ms** at 100,000
     points / 199,966 triangles under continuous orbit (TASK-052), so the budget is claimed on its
     own profile rather than on the segment profile's behalf.
-  - Step 4 — REQ-074, spot elevation and grade readout, is next.
+  - Step 4 — REQ-074 (TASK-055), **2026-08-15**: `SURFELEV` / `SE` reports interpolated elevation at
+    a pick and grade/slope/horizontal/vertical distance between two, for every surface covering the
+    point, by name. Verified against `samples/surface-demo.gs` in the running application as well as
+    in unit tests (`TinQueryTests`). The hide-boundary half of the "outside surface" condition is
+    unreachable until REQ-069 lands (recorded as ASSUMPTION-1 in TASK-055, not claimed).
+  - Step 5 — REQ-069, breaklines/boundaries/dynamic rebuild, is next: the hardest step, needing
+    step 1's stable ids for a breakline to safely reference points, and adding the background-rebuild
+    worker.
 - **Deliberately out of scope:** grading design objects and feature lines, contour smoothing
   (linear contours only), proximity / wall / non-destructive breaklines, surface import from
   Civil 3D, and DEM / point-cloud sources. See ADR-028.
@@ -165,8 +175,8 @@ A lightweight board that complements the milestones. Keep each column honest.
   SHA-256 proves integrity but not authenticity. Tracked as debt, not as a solved problem.
 
 ### Next (accepted, sequenced, not started)
-- `<REQ-101 — coordinate tolerance regression>`
-- `<REQ-100 — frame-budget benchmark>`
+- **REQ-069 — breaklines, boundaries, dynamic rebuild** (M-Surfaces step 5).
+- REQ-101's reference-dataset half (M2) — the typed-storage half is done; see M2 status above.
 
 ### Later (real but deferred)
 - `<Second file format>` — deferred until a user actually needs it.
