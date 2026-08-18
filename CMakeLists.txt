@@ -616,9 +616,7 @@ if(GOSURVEY_BUILD_TESTS)
     #   dxf-export-stable              — #63: the exporter has no ARC or ELLIPSE branch (silent data
     #                                    loss). #64: a LWPOLYLINE comes back from a round trip as
     #                                    loose LINEs.
-    #   regression-62-delete-circle-stride — #62: DELETE erases 3 floats from the stride-4 circle
-    #                                    store, shifting every circle after it and saving the result.
-    foreach(_disabled dxf-export-stable regression-62-delete-circle-stride)
+    foreach(_disabled dxf-export-stable)
       if(TEST headless.${_disabled})
         set_tests_properties(headless.${_disabled} PROPERTIES DISABLED TRUE)
       endif()

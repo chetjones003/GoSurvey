@@ -1,36 +1,40 @@
-# DELETE erases 3 floats from the stride-4 circle store, corrupting every circle after it.
+# Regression for #62 — DELETE erased 3 floats from the stride-4 circle store, corrupting every
+# circle after the erased one. Fixed 2026-08-18 (TASK-071); this transcript keeps it fixed.
 #
-# Issue #62. Registered DISABLED in CMakeLists.txt — it fails today, which is the point. Re-enable
-# it when #62 is fixed, joining the `regression-56..61` files beside it.
+# ## The defect
 #
-# ## Root cause
-#
-# `src/commands/CadCommands.cpp`, the erase loop for circles:
+# `src/commands/CadCommands.cpp`, the circle loop in `ExecuteDeleteSelection`:
 #
 #     const size_t k = static_cast<size_t>(idx) * 4;
-#     if (k + 3 >= st.userCirclesCxCyZR.size())
-#       continue;
 #     st.userCirclesCxCyZR.erase(begin + k, begin + (k + 3));   // <-- 3, not 4
 #
-# `userCirclesCxCyZR` is stride 4 (cx, cy, z, r — architecture §11.8), so the erase removes THREE of
-# the four floats and orphans the fourth. The LINE loop twenty lines above is the same shape and is
-# correct: stride 6, `erase(k, k + 6)`.
+# `erase()` takes a half-open range, so `[k, k+3)` removed three floats from a stride-4 store
+# (cx, cy, z, r — architecture §11.8). The LINE loop twenty lines above is the same shape and was
+# always correct: stride 6, `erase(k, k + 6)`.
 #
-# ## Why this is worse than the invariant makes it look
+# ## Why `CHECK ALL` alone is not enough of a test
 #
-# `flat-strides` reports "size()=1 is not a multiple of 4", which reads like a cosmetic tail. It is
-# not. Every circle after the erased one is shifted by one float, so each reads its predecessor's
-# radius as its centre X:
+# `flat-strides` reports "size()=1 is not a multiple of 4", which reads like a cosmetic tail. The
+# real consequence is that every circle after the erased one shifted by one float and read its
+# predecessor's RADIUS as its centre X:
 #
-#     before, three circles at (0,0) r1, (500,0) r2, (1000,0) r3:
+#     three circles at (0,0) r1, (500,0) r2, (1000,0) r3:
 #         [0, 0, 0, 1,  500, 0, 0, 2,  1000, 0, 0, 3]
-#     after deleting the first:
+#     after deleting the first, before the fix:
 #         [1, 500, 0, 2,  1000, 0, 0, ...]
-#          ^cx ^cy    ^r
+#          ^cx ^cy    ^r     -> a circle at (1, 500) with radius 2
 #
-# The surviving circle now claims centre (1, 500) and radius 2. Nothing warns, and `SAVEAS` writes
-# the corrupted array straight to the `.gs`, so the damage outlives the session. Deleting one circle
-# silently moves every other circle in the drawing.
+# Nothing warned, and `SAVEAS` wrote the corrupted array straight out — so deleting one circle
+# silently and permanently moved every other circle in the drawing.
+#
+# So this transcript asserts WHERE THE SURVIVORS ARE, not merely that the store is well-formed. A
+# test that only ran `CHECK ALL` would pass on a fix that erased four floats from the wrong offset:
+# the array would be a clean multiple of 4 and every circle in it would still be in the wrong place.
+#
+# The assertions use box selection, and they rely on one measured behaviour: **a box selection
+# accumulates onto the current selection, and a box that hits nothing leaves it untouched.** That is
+# what lets each box below be read as "one more circle is exactly where it should be", and it is
+# also why the count after a box that must hit nothing is unchanged rather than zero.
 
 NEW
 
@@ -52,14 +56,34 @@ ESC
 CHECK ALL
 EXPECT CIRCLES 3
 
-# Select only the first circle, and prove that is what happened before deleting anything — a box
-# that selected nothing would make everything below pass for the wrong reason.
+# Select only the first circle, and prove that is what happened — a box that selected nothing, or
+# everything, would make every assertion below pass for the wrong reason.
 BOX -10 -10 10 10
 EXPECT SELECTED 1
 
 CMD DELETE
 
-# Two circles must remain, and the store must still be a whole number of circles.
-# Today: CIRCLES reports 2 (integer division hides the orphan) and CHECK ALL fires `flat-strides`.
 EXPECT CIRCLES 2
+CHECK ALL
+
+# ---------------------------------------------------------------------------
+# The survivors are still where they were put. Before the fix the first of these selected NOTHING,
+# because that circle had moved to (1, 500).
+# ---------------------------------------------------------------------------
+
+BOX 490 -10 510 10
+EXPECT SELECTED 1
+
+BOX 990 -10 1010 10
+EXPECT SELECTED 2
+
+# And nothing is at the corrupted location — the exact spot the shifted array put a circle. The
+# count must be UNCHANGED at 2, because a box that hits nothing adds nothing.
+BOX -10 490 10 510
+EXPECT SELECTED 2
+
+# The whole drawing holds exactly the two survivors and no stray geometry, so nothing was left
+# behind outside the boxes probed above.
+BOX -2000 -2000 2000 2000
+EXPECT SELECTED 2
 CHECK ALL

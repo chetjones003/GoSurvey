@@ -8655,8 +8655,12 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     const size_t k = static_cast<size_t>(idx) * 4;
     if (k + 3 >= st.userCirclesCxCyZR.size())
       continue;
+    // k + 4, not k + 3: erase() takes a HALF-OPEN range and this store is stride 4
+    // (cx, cy, z, r — architecture §11.8). Removing three floats left the array a non-multiple of
+    // the stride and shifted every later circle by one slot, so each read its predecessor's radius
+    // as its centre X — and SAVEAS wrote that out. Issue #62.
     st.userCirclesCxCyZR.erase(st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k),
-                              st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k + 3));
+                               st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k + 4));
     if (static_cast<size_t>(idx) < st.userCircleAttrs.size())
       st.userCircleAttrs.erase(st.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
