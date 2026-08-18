@@ -681,6 +681,7 @@ int main()
     DrawCreatePointsPanel(cmd, cmdLog);
     DrawSettingsPanel(cmd, &cmdLog);
     DrawUnitsDialog(cmd, &cmdLog);
+    DrawRightClickCustomizationDialog(cmd, &cmdLog);  // REQ-084 (a)
     ImGuiLayout_DrawLayoutPopups(cmd, cmdLog);
     DrawLayerManagerWindow(cmd, &cmdLog);
     DrawTextStyleManagerWindow(cmd, &cmdLog);
@@ -799,6 +800,7 @@ int main()
     ext.polylineClosed = &cmd.userPolylineClosed;
     ext.polylineAttrs = &cmd.userPolylineAttrs;
     ext.drawingLayers = &cmd.drawingLayerTable;
+    ext.hiddenEntityIds = &cmd.hiddenEntityIds;  // object isolation (REQ-084 (d) / ADR-034)
 
     activeRenderer.SetSize(fbW, fbH);
     RenderTuning tuning{};

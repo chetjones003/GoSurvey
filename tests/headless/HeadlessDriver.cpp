@@ -251,6 +251,40 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       }
     }
     SubmitViewportPick(run.st, x, y, run.log, windowSelectionSubtract, fenceLeftToRightWindowMode);
+  } else if (verb == "BOX") {
+    // BOX <x0> <y0> <x1> <y1> [WINDOW] [SUBTRACT] — a box selection from two world corners.
+    //
+    // PICK alone cannot express one: the FIRST corner is armed by the viewport's mouse handler
+    // (BeginSelectionBoxCorner), not by SubmitViewportPick, so a transcript that picked twice
+    // would arm nothing and then close a box that was never opened. Arming here writes the two
+    // public draft fields the viewport writes and hands the second corner to the same
+    // SubmitViewportPick the GUI calls — the selection itself still runs through product code.
+    //
+    // Default is CROSSING (touching selects), which is what the drag direction decides in the GUI.
+    std::istringstream is(rest);
+    float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
+    if (!(is >> x0 >> y0 >> x1 >> y1)) {
+      Fail(run, "parse", "BOX expects four world coordinates, got: " + rest, sourceLine);
+      return false;
+    }
+    std::string mod;
+    bool subtract = false;
+    bool windowMode = false;
+    while (is >> mod) {
+      const std::string m = UpperAscii(mod);
+      if (m == "SUBTRACT")
+        subtract = true;
+      else if (m == "WINDOW")
+        windowMode = true;
+      else {
+        Fail(run, "parse", "BOX: unknown modifier " + mod + " (expected WINDOW or SUBTRACT)", sourceLine);
+        return false;
+      }
+    }
+    run.st.selBoxWaitingSecond = true;
+    run.st.selBoxAnchorX = x0;
+    run.st.selBoxAnchorY = y0;
+    SubmitViewportPick(run.st, x1, y1, run.log, subtract, windowMode);
   } else if (verb == "ESC") {
     CancelActiveCommand(run.st, run.log);
   } else if (verb == "UNDO") {
@@ -332,8 +366,16 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         got = static_cast<long>(run.st.cadAnnotations.size());
       else if (what == "SURVEYPOINTS")
         got = static_cast<long>(run.st.surveyPoints.size());
+      // Not a geometry count: what the drawing currently considers picked. It is the only way to
+      // assert that something is NOT selectable — REQ-084's isolation gate, where the object is
+      // still in the drawing and must simply refuse to be picked.
+      else if (what == "SELECTED")
+        got = static_cast<long>(run.st.selection.size());
       else {
-        Fail(run, "parse", "EXPECT: unknown quantity " + what, sourceLine);
+        Fail(run, "parse",
+             "EXPECT: unknown quantity " + what +
+                 " (LINES CIRCLES POLYLINES ARCS ELLIPSES ANNOTATIONS SURVEYPOINTS SELECTED)",
+             sourceLine);
         return false;
       }
       if (got != want) {

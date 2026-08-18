@@ -7,6 +7,39 @@
 
 ## CHANGES
 
+### Right-click became customizable, and the shortcut menu became the drawing's action menu — 2026-08-18
+    - Asked for from AutoCAD reference screenshots: the Options → User Preferences right-click
+      surface and the drawing shortcut menu. REQ-084 + ADR-034 + TASK-070.
+    - **Right-Click Customization dialog.** The three context modes had existed since REQ-054 but sat
+      in a collapsing header as three unlabelled combo boxes; they now live in a dialog of their own,
+      as radio groups carrying the sentence that says when each applies, with **Apply & Close** /
+      **Cancel** (a true revert) / Help. New: **time-sensitive right-click** — quick click = ENTER,
+      longer click = shortcut menu, duration in ms. It ships **off**, so no existing profile changes
+      behaviour on upgrade; while on, Default and Command Mode grey out because the timer, not the
+      preference, decides them.
+    - **The shortcut menu** gained Recent Input (the same history the command bar shows — REQ-040 —
+      so the two cannot disagree), Isolate Objects, Clipboard, Basic Modify Tools, Pan / Zoom / Free
+      Orbit, Quick Select and Options. REQ-054's selection items are unchanged.
+    - **Object isolation is new** (ADR-034): a session-only sorted set of **stable entity ids**
+      (REQ-076) on the drawing. Ids, not indices — erase compacts the arrays, so an index would come
+      to name a different object. A hidden object is hidden **and unpickable**: gated at
+      `PickClosestCadEntity`'s single `consider` funnel and `ComputeSelectionFromRect`'s `hits` list,
+      so no pick site can be missed one at a time. Not persisted — a drawing always opens showing
+      everything. **`Kind::Orbit`** was added (mirroring `Kind::Pan`) so Free Orbit is a real command.
+    - **Three defects were found and fixed in self-review**, each recorded in TASK-070 §8: `Find…`
+      would have been a dead control (GoSurvey has no drawing-wide FIND — dropped, and REQ-084
+      revised to say so); the hidden set was global rather than per-drawing, which would have hidden
+      arbitrary objects after a tab switch or a `.gs` open; and Recent Input iterated the vector its
+      own re-submit mutated.
+    - **Known gap, unrelated and pre-existing** (TASK-070 DEBT-1): layer *off* / *frozen* hides
+      meshes and TIN surfaces in the GL renderer but **not** lines, arcs, ellipses, polylines or
+      filled regions. Found while planning the isolation gates. No requirement governs it yet.
+    - **Display Order deferred** by user decision (DEBT-2): it needs a persisted per-entity ordering
+      key threaded through render, `.gs` and DXF — a data-format change, so its own REQ.
+    - Tests: `RightClickTests` (the two pure rules) and a 57-step headless transcript that proves the
+      unpickable half through product code, including isolate-with-nothing-selected, end-isolation
+      twice, and save-while-isolated → reopen. 422/422 ctest.
+
 ### The whole pick path was named "world" while carrying "local" — renamed, documented, pinned — 2026-08-17
     - Raised as "now fix picks too", following the note in TASK-067 that picks are "still quantized".
       **That note was misleading, and the investigation corrected it rather than acting on it.** There

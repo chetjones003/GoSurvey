@@ -2318,6 +2318,128 @@ requirements is a planning failure, not a sign of rigor.
   **comma-only** (delimiter auto-detection was offered and declined), and the
   change covers **export as well as import**.
 
+### REQ-084 — Right-click is customizable, and the shortcut menu is the drawing's action menu
+- Purpose: right-click is the most-pressed button in a drafting session, and today
+  GoSurvey spends it badly. The three context modes exist (REQ-054) but are buried in
+  a collapsing header as three unlabelled combo boxes, so nobody finds them; and the
+  menu they select is a bare list of five modify commands, so choosing "Shortcut Menu"
+  trades a working ENTER for very little. Both halves are fixed together because
+  neither is worth much alone: a discoverable dialog that still opens a thin menu has
+  nothing to offer, and a rich menu nobody can reach is the state we are already in.
+- Priority: should
+- Type: functional
+- Statement:
+
+  **(a) The Right-Click Customization dialog.** Options → User Preferences carries a
+  **Right-click Customization…** button that opens a dialog of that name, laid out as
+  AutoCAD's is and owning every right-click preference:
+  - a **Turn on time-sensitive right-click** checkbox, with the rule it implies stated
+    under it (quick click = ENTER, longer click = shortcut menu) and a **Longer click
+    duration** field in **milliseconds**;
+  - three labelled groups of **radio buttons** — not combo boxes — each carrying the
+    sentence that says when it applies: **Default Mode** ("If no objects are selected,
+    right-click means") = Repeat Last Command | Shortcut Menu; **Edit Mode** ("If one
+    or more objects are selected") = Repeat Last Command | Shortcut Menu; **Command
+    Mode** ("If a command is in progress") = ENTER | Shortcut Menu: always enabled |
+    Shortcut Menu: enabled when command options are present;
+  - **Apply & Close**, **Cancel** and **Help** buttons. Apply & Close writes the
+    preferences to the user profile; **Cancel restores every value the dialog opened
+    with**, including the checkbox and the duration.
+
+  **Time-sensitive right-click is off by default**, so an existing profile's
+  right-click behaviour does not change on upgrade. While it is **on**, Default Mode
+  and Command Mode are **disabled** — the timer, not the preference, decides those two
+  contexts — and this is shown by greying them, never by silently ignoring them
+  (REQ-201). Edit Mode stays live, because a selection still chooses between repeating
+  and the menu.
+
+  **(b) What time-sensitive right-click does.** With it on, a right-click in the
+  drawing is classified by **how long the button is held**: released within the
+  configured duration it is an **ENTER** (the Command Mode ENTER path, and a repeat of
+  the last command when idle); held past the duration it opens the **shortcut menu**,
+  at the point of press. The menu therefore opens on release-or-elapse rather than on
+  press — that is inherent to the feature, not a defect. With it **off**, right-click
+  is classified on press exactly as it is today.
+
+  **(c) The shortcut menu.** With no command running, right-click's shortcut menu is
+  the drawing's action menu, in this order:
+  - **Repeat LAST** — named for the last command, absent when there is none;
+  - **Recent Input** (submenu) — the commands most recently entered, newest first;
+    choosing one runs it. This is the same history the command bar's dropdown shows
+    (REQ-040), so the two can never disagree;
+  - **Isolate Objects** (submenu) — Isolate Objects | Hide Objects | End Object
+    Isolation (see (d));
+  - **Clipboard** (submenu) — Cut | Copy | Paste, with Cut/Copy disabled on an empty
+    selection;
+  - **Basic Modify Tools** (submenu) — Move | Copy Selection | Rotate | Scale | Erase |
+    Offset | Trim | Join, disabled as a group when nothing is selected;
+  - **Pan**, **Zoom**, **Free Orbit** — the view commands;
+  - **Quick Select…** and **Options…**.
+
+  **Find… is deliberately absent.** GoSurvey's find/replace searches only the MTEXT buffer being
+  edited, and the drawing shortcut menu cannot open while that editor is up; there is no
+  drawing-wide FIND. The item would therefore be a control that does nothing, which REQ-201
+  forbids. It belongs to a drawing-wide FIND requirement, not to this menu.
+
+  With a **selection**, the modify commands and the REQ-054 selection items (Select
+  similar, Selection…, Clear selection) stay reachable as they are today. With a
+  **command running**, the menu remains the short Command-Mode menu (Enter / Cancel) —
+  a half-finished LINE is not the moment to offer Options.
+
+  **(d) Object isolation.** **Isolate Objects** hides everything except the selection;
+  **Hide Objects** hides the selection; **End Object Isolation** restores everything. A
+  hidden object is hidden **and unpickable** — it must not be draggable, box-
+  selectable, or hoverable while invisible, because an invisible object that still
+  answers a click is worse than one that is simply drawn. Isolation is keyed on the
+  **stable entity id** (REQ-076), never an array index, so an edit that compacts the
+  arrays cannot silently isolate a different object. Isolation is **session state**: it
+  is not written to `.gs`, and opening a drawing always shows all of it. It covers the
+  entity types that carry `EntityAttributes` — lines, circles, arcs, ellipses,
+  polylines, annotations, filled regions and meshes. Survey points and PDF underlays
+  are out of scope for this requirement, and the command says so when it skips them.
+
+  **Display Order is deliberately not in this menu.** It needs a persisted per-entity
+  ordering key threaded through render, `.gs` and DXF, which is a separate requirement,
+  not a menu item.
+- Acceptance:
+  - Options → User Preferences shows **Right-click Customization…**, and it opens a
+    dialog with the checkbox, the millisecond field and the three radio groups;
+  - ticking the checkbox greys Default Mode and Command Mode and leaves Edit Mode
+    usable; unticking restores all three;
+  - changing values and pressing **Cancel** leaves every preference at what it was when
+    the dialog opened; pressing **Apply & Close** and restarting the app reproduces the
+    chosen values — including the checkbox and the duration;
+  - with time-sensitive **on** at 250 ms: a quick right-click during LINE ends the
+    command as ENTER does, and a held right-click opens the shortcut menu instead;
+  - with time-sensitive **off**, right-click behaves exactly as it did before this
+    requirement, for all three modes;
+  - the idle shortcut menu shows Repeat / Recent Input / Isolate Objects / Clipboard /
+    Basic Modify Tools / Pan / Zoom / Free Orbit / Quick Select / Options; **Recent
+    Input** lists the commands just typed, newest first, and picking one runs it;
+  - **every** item in the menu does something when chosen — no entry is present that
+    cannot act (REQ-201);
+  - select two lines, **Isolate Objects** — the rest of the drawing disappears, a
+    box-select drag across where it was selects nothing, and hovering there highlights
+    nothing; **End Object Isolation** brings it all back;
+  - **Hide Objects** on a selection hides exactly that selection;
+  - saving a drawing with objects isolated and reopening it shows every object.
+- Owner-layer: UI (the dialog, the shortcut menu, the click-timing classification) /
+  Commands (isolation state, the isolate/hide/end commands, the pick gates, ORBIT) /
+  Render (the draw gates) / IO (`UserPrefs` for the two new preferences)
+- Status: accepted (2026-08-18)
+- Revisions: 2026-08-18 — initial. Raised by the user with reference screenshots of
+  AutoCAD's Right-Click Customization dialog and its drawing shortcut menu. Two
+  questions were answered before drafting: **Display Order** was offered and
+  deliberately deferred (it is a data-format change, not a menu item), and
+  time-sensitive right-click ships **off** by default so no existing profile changes
+  behaviour on upgrade. Supersedes REQ-054's Settings surface for these preferences —
+  REQ-054's Edit Mode default and its selection menu items are unchanged.
+  2026-08-18 — revised during implementation: **Find… dropped from the menu.** The
+  reference screenshot carries it, but GoSurvey has no drawing-wide FIND and the
+  existing find/replace is reachable only from inside the MTEXT editor, so the item
+  would have been inert. Stated above rather than shipped as a dead control (REQ-201),
+  and an acceptance condition added that no menu entry may be present that cannot act.
+
 ---
 
 ## Performance requirements

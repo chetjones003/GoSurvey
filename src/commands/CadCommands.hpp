@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <thread>
@@ -145,7 +146,47 @@ struct CadExtendedGeometryInput {
   const std::vector<uint8_t>* polylineClosed = nullptr;
   const std::vector<EntityAttributes>* polylineAttrs = nullptr;
   const std::vector<CadLayerRow>* drawingLayers = nullptr;
+  /// Sorted stable entity ids hidden by object isolation (REQ-084 (d), ADR-034); nullptr or empty
+  /// means nothing is hidden. Carried here rather than as another `RenderScene` parameter — that
+  /// signature is already long, and this struct is exactly "the extra per-entity data the renderer
+  /// needs", which is what the hidden set is.
+  const std::vector<std::uint64_t>* hiddenEntityIds = nullptr;
 };
+
+/// True when \p id is in the sorted hidden-id set. Empty set / unassigned id (0) → never hidden.
+/// Inline and early-outing so the non-isolated case costs one `empty()` test per entity (REQ-100).
+inline bool CadEntityIdHidden(const std::vector<std::uint64_t>* hidden, std::uint64_t id) {
+  if (!hidden || hidden->empty() || id == 0)
+    return false;
+  return std::binary_search(hidden->begin(), hidden->end(), id);
+}
+
+/// The set ISOLATEOBJECTS hides: sorted-unique `all` minus `keep` (REQ-084 (d)).
+///
+/// Pure and header-inline so it is covered by tests — `CadCommands.cpp`, which owns the command
+/// itself, pulls in the GUI stack and cannot be linked by the test target. Inputs need not arrive
+/// sorted; the result always is, which is the invariant \ref CadEntityIdHidden's binary search
+/// depends on.
+inline std::vector<std::uint64_t> CadIsolationHiddenSet(std::vector<std::uint64_t> all,
+                                                        std::vector<std::uint64_t> keep) {
+  auto sortUnique = [](std::vector<std::uint64_t>& v) {
+    std::sort(v.begin(), v.end());
+    v.erase(std::unique(v.begin(), v.end()), v.end());
+  };
+  sortUnique(all);
+  sortUnique(keep);
+  std::vector<std::uint64_t> hide;
+  hide.reserve(all.size());
+  std::set_difference(all.begin(), all.end(), keep.begin(), keep.end(), std::back_inserter(hide));
+  return hide;
+}
+
+/// Time-sensitive right-click verdict (REQ-084 (b)): true when the press was held long enough to
+/// mean "shortcut menu", false when it was a quick click and therefore an ENTER. Held exactly at
+/// the threshold counts as the menu, so the boundary belongs to one verdict and not to neither.
+inline bool CadRightClickHoldIsMenu(double heldMs, int thresholdMs) {
+  return heldMs >= static_cast<double>(thresholdMs);
+}
 
 
 inline float CadAnnotationHeightWorld(const CadAnnotation& a, float modelUnitsPerPlottedInch) {
@@ -288,6 +329,11 @@ struct DrawingDocument {
   std::string                   activeTextStyleName = "Standard";  ///< Style for new TEXT/MTEXT.
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<SelectedEntity>   selection;
+  /// Object isolation (REQ-084 (d)). PER TAB, and stored here for the same reason `selection` is:
+  /// entity ids are unique **within a drawing**, so carrying one tab's hidden set into another
+  /// would hide whatever objects happened to draw those numbers there. Never written to `.gs` —
+  /// this struct is the in-memory tab store, not the file format.
+  std::vector<std::uint64_t>    hiddenEntityIds;
   std::vector<PaperLayout>      paperLayouts;            ///< Paper-space layouts (REQ-025); empty = none.
   std::vector<PageSetup>        savedPageSetups;         ///< Drawing-wide named page setups.
   int                           activeSpaceIndex = kModelSpaceIndex;  ///< -1 = model; else index into paperLayouts.
@@ -441,6 +487,10 @@ struct AppCommandState {
     /// TRIMSTATE: system-variable prompt waiting for a new value (REQ-056).
     TrimState,
     Elev,        ///< Set the elevation new geometry is drawn at (REQ-058).
+    /// ORBIT: interactive free orbit — left-drag tumbles the model view; Esc/Enter/right-click
+    /// exits (REQ-084 (c)). Deliberately shaped like \c Kind::Pan, and reuses the same
+    /// Shift+middle-drag orbit math, so the shortcut menu's Free Orbit is a real command.
+    Orbit,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -476,6 +526,7 @@ struct AppCommandState {
     case Kind::VpThaw:        return "VPTHAW";
     case Kind::Rect:          return "RECT";
     case Kind::TrimState:     return "TRIMSTATE";
+    case Kind::Orbit:         return "ORBIT";
     default:                  return "";
     }
   }
@@ -494,6 +545,24 @@ struct AppCommandState {
   // SCALE/DELETE and Select similar. Repeating the last command there hides that menu entirely.
   RightClickEditMode    rightClickEditMode      = RightClickEditMode::ShortcutMenu;
   RightClickCommandMode rightClickCommandMode   = RightClickCommandMode::Enter;
+
+  // --- Time-sensitive right-click (REQ-084 (b)) ---
+  // OFF by default: turning it on changes how EVERY right-click in the drawing is read, so an
+  // existing profile must not acquire it on upgrade. While on, the hold duration — not
+  // \c rightClickDefaultMode / \c rightClickCommandMode — decides the Default and Command
+  // contexts, which is why the dialog greys those two groups rather than quietly ignoring them.
+  bool  rightClickTimeSensitive = false;   ///< Persisted.
+  /// Hold longer than this to get the shortcut menu; release sooner and it is an ENTER. Persisted.
+  /// AutoCAD's default is 250 ms; clamped to a sane range on load and in the dialog.
+  int   rightClickLongerClickMs = 250;
+  static constexpr int kRightClickMinMs = 100;
+  static constexpr int kRightClickMaxMs = 2000;
+  /// Live state for the classifier — the moment the button went down, and whether this press has
+  /// already been resolved. Not persisted: a press does not survive a restart.
+  double rightClickPressTimeSec  = 0.0;
+  bool   rightClickPressPending  = false;
+  /// Right-Click Customization dialog open (Options → User Preferences). Not persisted.
+  bool   showRightClickDialog    = false;
 
   /// Plot scale: one plotted inch equals this many drawing units (e.g. 50 for 1 inch = 50 feet).
   float modelUnitsPerPlottedInch = 50.f;
@@ -979,6 +1048,15 @@ struct AppCommandState {
 
   // --- Selection (idle box pick + move/copy/rotate) ---
   std::vector<SelectedEntity> selection;
+
+  /// Objects hidden by ISOLATEOBJECTS / HIDEOBJECTS, as **stable entity ids** (REQ-084 (d),
+  /// ADR-034). Kept SORTED so the per-entity test is a `binary_search`; empty is the overwhelming
+  /// case and every gate early-outs on it, so nothing is paid for a drawing with no isolation.
+  ///
+  /// Ids, not indices: erase compacts the entity arrays (architecture §11.9), so an index would
+  /// come to name a different object. **Session state** — deliberately not written to `.gs`, so a
+  /// drawing always opens showing everything.
+  std::vector<std::uint64_t> hiddenEntityIds;
 
   /// Two-click axis-aligned box (world XY): first corner placed, waiting second.
   bool selBoxWaitingSecond = false;
@@ -2086,6 +2164,22 @@ void StartZoomWindowCommand(AppCommandState& st, std::vector<std::string>& log);
 /// PAN command (REQ-045): enters interactive pan mode — left-drag pans the active view (hand cursor);
 /// Esc / Enter / right-click exits. Reuses the existing middle-drag view-pan math.
 void StartPanCommand(AppCommandState& st, std::vector<std::string>& log);
+/// ORBIT / Free Orbit (REQ-084 (c)): enters interactive orbit — left-drag tumbles the model view;
+/// Esc / Enter / right-click exits. Model space only: a paper sheet is 2D (ADR-025 (g)).
+void StartOrbitCommand(AppCommandState& st, std::vector<std::string>& log);
+
+// --- Object isolation (REQ-084 (d) / ADR-034) ----------------------------------------------
+/// The attributes of a selected entity, or nullptr for a type that carries none (survey points,
+/// PDF underlays) or an index that no longer resolves.
+const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, const SelectedEntity& e);
+/// True when \p e is currently isolated out. Entity types with no attributes are never hidden.
+bool CadSelectedEntityHidden(const AppCommandState& st, const SelectedEntity& e);
+/// ISOLATEOBJECTS — hide everything EXCEPT the current selection.
+void IsolateSelectedObjects(AppCommandState& st, std::vector<std::string>& log);
+/// HIDEOBJECTS — hide the current selection.
+void HideSelectedObjects(AppCommandState& st, std::vector<std::string>& log);
+/// UNISOLATEOBJECTS — show everything again. Reports when there was nothing hidden (REQ-201).
+void EndObjectIsolation(AppCommandState& st, std::vector<std::string>& log);
 /// Applies pending zoom-extents or zoom-window requests using current framebuffer size.
 void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY, float* zoom, int fbW, int fbH,
                                 float viewportAspect, std::vector<std::string>& log);

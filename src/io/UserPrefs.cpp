@@ -153,6 +153,15 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   tmp = static_cast<uint8_t>(st.rightClickCommandMode);
   u8clamped("rightClickCommandMode",  &tmp, 2); st.rightClickCommandMode  = static_cast<AppCommandState::RightClickCommandMode>(tmp);
 
+  // Time-sensitive right-click (REQ-084). A profile written before this requirement has neither
+  // key, so both keep the compiled defaults — which is exactly the "off by default, behaviour
+  // unchanged on upgrade" the requirement asks for. No schema bump is needed for that reason.
+  b("rightClickTimeSensitive", &st.rightClickTimeSensitive);
+  if (s.contains("rightClickLongerClickMs") && s["rightClickLongerClickMs"].is_number_integer())
+    st.rightClickLongerClickMs = std::clamp(s["rightClickLongerClickMs"].get<int>(),
+                                            AppCommandState::kRightClickMinMs,
+                                            AppCommandState::kRightClickMaxMs);
+
   // --- TRIMSTATE (REQ-056): 0 = draw a line to trim, 1 = pick cutting edges ---
   if (s.contains("trimState") && s["trimState"].is_number_integer())
     st.trimState = std::clamp(s["trimState"].get<int>(), 0, 1);
@@ -372,6 +381,8 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["rightClickDefaultMode"]       = static_cast<uint8_t>(st.rightClickDefaultMode);
   s["rightClickEditMode"]          = static_cast<uint8_t>(st.rightClickEditMode);
   s["rightClickCommandMode"]       = static_cast<uint8_t>(st.rightClickCommandMode);
+  s["rightClickTimeSensitive"]     = st.rightClickTimeSensitive;   // REQ-084
+  s["rightClickLongerClickMs"]     = st.rightClickLongerClickMs;   // REQ-084
 
   // Object snap
   // Undo/Redo

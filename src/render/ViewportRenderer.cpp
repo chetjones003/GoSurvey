@@ -260,6 +260,10 @@ void AppendPolylineEdgesVc(std::vector<float>& out, const CadExtendedGeometryInp
     EntityAttributes attr{};
     if (At && static_cast<size_t>(pi) < At->size())
       attr = (*At)[static_cast<size_t>(pi)];
+    // REQ-084 (d): a polyline isolated out is not drawn. Read from `eg` rather than a parameter —
+    // the hidden set travels with the extended geometry it describes.
+    if (CadEntityIdHidden(eg.hiddenEntityIds, attr.id))
+      continue;
     const CadLayerRow* lr = LookupLayerRowCi(eg.drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
     float rgba[4];
     ResolveEntityRgbaForViewport(attr, lr, defR, defG, defB, rgba);
@@ -1142,6 +1146,9 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
           attr ? LookupLayerRowCi(drawingLayers, attr->layer.empty() ? std::string("0") : attr->layer) : nullptr;
       if (lr && (!lr->on || lr->frozen))
         continue;
+      // REQ-084 (d): a mesh isolated out is not drawn.
+      if (attr && CadEntityIdHidden(extended ? extended->hiddenEntityIds : nullptr, attr->id))
+        continue;
 
       MeshGpuEntry* entry = nullptr;
       for (MeshGpuEntry& e : meshGpu_) {
@@ -1252,6 +1259,10 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         continue;
       if (!fr.isSolid())
         continue;  // line-pattern hatches are drawn as clipped lines in the ImGui overlay (REQ-043)
+      // REQ-084 (d): a fill isolated out is not drawn.
+      if (filledRegionAttrs && fi < filledRegionAttrs->size() &&
+          CadEntityIdHidden(extended ? extended->hiddenEntityIds : nullptr, (*filledRegionAttrs)[fi].id))
+        continue;
       fan.clear();
       double mnx = 1e300, mxx = -1e300, mny = 1e300, mxy = -1e300;
       // The stencil cover quad spans the region's XY bounds and so needs one elevation; a filled
@@ -1420,8 +1431,15 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         }
       };
 
+      // REQ-084 (d) / ADR-034: objects isolated out are not drawn. One pointer feeds every append
+      // loop below; when nothing is isolated the set is empty and each test is one `empty()` check,
+      // so the REQ-100 budget is untouched.
+      const std::vector<std::uint64_t>* const hiddenIds = extended ? extended->hiddenEntityIds : nullptr;
+
       auto appendUserLineSeg = [&](const EntityAttributes& attr, float x0, float y0, float z0, float x1, float y1,
                                    float z1, float dr, float dg, float db) {
+        if (CadEntityIdHidden(hiddenIds, attr.id))  // REQ-084 (d)
+          return;
         const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
         const int vertsBefore = static_cast<int>(cpuVcLines_.size() / 7);
         float rgba[4];
@@ -1464,6 +1482,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             EntityAttributes attr{};
             if (extended->arcAttrs && i < extended->arcAttrs->size())
               attr = (*extended->arcAttrs)[i];
+            if (CadEntityIdHidden(hiddenIds, attr.id))  // REQ-084 (d)
+              continue;
             const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
             const int vb = static_cast<int>(cpuVcLines_.size() / 7);
             const float lwMm = EffectiveEntityLineweightMm(attr, lr);
@@ -1489,6 +1509,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             EntityAttributes attr{};
             if (extended->ellAttrs && i < extended->ellAttrs->size())
               attr = (*extended->ellAttrs)[i];
+            if (CadEntityIdHidden(hiddenIds, attr.id))  // REQ-084 (d)
+              continue;
             const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
             const int vb = static_cast<int>(cpuVcLines_.size() / 7);
             maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr, lr)));
@@ -1542,6 +1564,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
           EntityAttributes attr{};
           if (circleEntityAttrs && ci < circleEntityAttrs->size())
             attr = (*circleEntityAttrs)[ci];
+          if (CadEntityIdHidden(hiddenIds, attr.id))  // REQ-084 (d)
+            continue;
           const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
           const int vb = static_cast<int>(cpuVcCircles_.size() / 7);
           const float lwMm = EffectiveEntityLineweightMm(attr, lr);

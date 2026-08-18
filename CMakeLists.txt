@@ -466,6 +466,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/AngleFormatTests.cpp
     tests/PaperSpaceTests.cpp
     tests/CommandLineTests.cpp
+    tests/RightClickTests.cpp
     tests/SurveyCsvValidateTests.cpp
     # REQ-083: the save dialog's default-extension rule. Header-only and pure, because
     # WinFileDialogs.cpp is Win32-only and cannot be linked here.

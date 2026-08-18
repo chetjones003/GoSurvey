@@ -34,6 +34,7 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <set>
 #include <sstream>
 #include <string_view>
@@ -86,6 +87,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.activeTextStyleName    = cmd.activeTextStyleName;
   doc.pdfAttachments         = cmd.pdfAttachments;
   doc.selection              = cmd.selection;
+  doc.hiddenEntityIds        = cmd.hiddenEntityIds;  // isolation is per-drawing (REQ-084 (d))
   doc.paperLayouts           = cmd.paperLayouts;
   doc.savedPageSetups        = cmd.savedPageSetups;
   doc.activeSpaceIndex       = cmd.activeSpaceIndex;
@@ -139,6 +141,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.activeTextStyleName        = doc.activeTextStyleName;
   cmd.pdfAttachments             = doc.pdfAttachments;
   cmd.selection                  = doc.selection;
+  cmd.hiddenEntityIds            = doc.hiddenEntityIds;  // isolation is per-drawing (REQ-084 (d))
   cmd.paperLayouts               = doc.paperLayouts;
   cmd.savedPageSetups            = doc.savedPageSetups;
   cmd.activeSpaceIndex           = doc.activeSpaceIndex;
@@ -2050,6 +2053,10 @@ int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float or
     return dx * dx + dy * dy;
   };
   for (int i = static_cast<int>(cmd.cadAnnotations.size()) - 1; i >= 0; --i) {
+    // REQ-084 (d): isolated-out text is not drawn, so it must not be pickable or hoverable.
+    if (!cmd.hiddenEntityIds.empty() && static_cast<size_t>(i) < cmd.cadAnnotationAttrs.size() &&
+        CadEntityIdHidden(&cmd.hiddenEntityIds, cmd.cadAnnotationAttrs[static_cast<size_t>(i)].id))
+      continue;
     const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(i)];
     if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
       float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
@@ -2255,6 +2262,10 @@ const CmdEntry kRegistry[] = {
     {"zoomextents", "ze", "Zoom to drawing extents"},
     {"zoomwindow", "zw", "Zoom to a window"},
     {"pan", "p", "Pan the view (drag with the left mouse button)"},
+    {"orbit", "3dorbit, 3do", "Free orbit the model view (drag with the left mouse button)"},
+    {"isolateobjects", "isolate", "Hide everything except the selection"},
+    {"hideobjects", "", "Hide the selected objects"},
+    {"unisolateobjects", "unisolate", "Show every object hidden by isolation"},
     {"vpfreeze", "vpf", "Freeze the picked entities' layers in the current viewport"},
     {"vpthaw", "vpt", "Thaw the picked entities' layers in the current viewport"},
     {"createpoints", "crtpts", "Create survey points"},
@@ -2695,6 +2706,24 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "pan") {
     StartPanCommand(st, log);
+    return true;
+  }
+  // REQ-084 (c): the shortcut menu's view + isolation entries are real commands, so they are also
+  // typeable. AutoCAD's aliases are kept so muscle memory carries over.
+  if (primary == "orbit" || primary == "3dorbit" || primary == "3do") {
+    StartOrbitCommand(st, log);
+    return true;
+  }
+  if (primary == "isolateobjects" || primary == "isolate") {
+    IsolateSelectedObjects(st, log);
+    return true;
+  }
+  if (primary == "hideobjects") {
+    HideSelectedObjects(st, log);
+    return true;
+  }
+  if (primary == "unisolateobjects" || primary == "unisolate") {
+    EndObjectIsolation(st, log);
     return true;
   }
   if (primary == "vpfreeze") {
@@ -3238,6 +3267,15 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
       e.index = pi;
       hits.push_back(e);
     }
+  }
+
+  // REQ-084 (d): drop isolated-out entities before the hits are applied, so a box drag across
+  // where they used to be selects nothing. One filter here covers window and crossing, add and
+  // subtract alike.
+  if (!st.hiddenEntityIds.empty()) {
+    hits.erase(std::remove_if(hits.begin(), hits.end(),
+                              [&](const SelectedEntity& e) { return CadSelectedEntityHidden(st, e); }),
+               hits.end());
   }
 
   if (subtract) {
@@ -8370,6 +8408,10 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadMeshAttrs.clear();
   ClearPendingOneShotObjectSnap(st);
   ClearCadSelection(st);
+  // Isolation is keyed on entity ids, and the id space restarts above — so a hidden set kept here
+  // would name whatever the next drawing happens to number the same way. This is also what makes
+  // "opening a drawing always shows all of it" true (REQ-084 (d)), since every load clears first.
+  st.hiddenEntityIds.clear();
   BumpCadGpuCache(st);
 }
 
@@ -9309,6 +9351,11 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
   auto consider = [&](const SelectedEntity& e, double d2) {
     if (d2 > tol2)
       return;
+    // REQ-084 (d): an isolated-out entity is invisible, so it must not answer a click either.
+    // Gated at this single funnel — every entity type this function enumerates passes through it,
+    // so there is no per-type gate to forget.
+    if (CadSelectedEntityHidden(st, e))
+      return;
     if (!any || d2 < best - 1e-12) {
       any = true;
       best = d2;
@@ -9438,6 +9485,10 @@ int PickFilledRegionAt(const AppCommandState& st, double wx, double wy) {
   int best = -1;
   double bestArea = 0.0;
   for (size_t i = 0; i < st.cadFilledRegions.size(); ++i) {
+    // REQ-084 (d): an isolated-out fill is invisible and must not answer a click.
+    if (!st.hiddenEntityIds.empty() && i < st.cadFilledRegionAttrs.size() &&
+        CadEntityIdHidden(&st.hiddenEntityIds, st.cadFilledRegionAttrs[i].id))
+      continue;
     if (!hatchgeom::ContainsPoint(st.cadFilledRegions[i], wx, wy))
       continue;
     const double area = hatchgeom::OuterAreaAbs(st.cadFilledRegions[i]);
@@ -11424,6 +11475,168 @@ void StartPanCommand(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back("PAN — drag with the left mouse button. Press Esc, Enter, or right-click to exit.");
 }
 
+void StartOrbitCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None && st.active != K::Orbit) {
+    log.push_back("ORBIT — finish or cancel the active command first.");
+    return;
+  }
+  // Paper space is 2D by definition (ADR-025 (g)) — a sheet has no orientation to tumble, and
+  // letting it tilt would put the plot geometry somewhere the plot cannot follow.
+  if (st.activeSpaceIndex != kModelSpaceIndex) {
+    log.push_back("ORBIT — model space only; a paper sheet is 2D.");
+    return;
+  }
+  ResetAllCadDraftTools(st);
+  ResetModifyRotateDraft(st);
+  st.active      = K::Orbit;
+  st.lastCommand = K::Orbit;
+  st.selBoxWaitingSecond = false;
+  log.push_back("ORBIT — drag with the left mouse button to tumble. Press Esc, Enter, or right-click to exit.");
+}
+
+// ---------------------------------------------------------------------------
+// Object isolation (REQ-084 (d) / ADR-034)
+// ---------------------------------------------------------------------------
+
+const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, const SelectedEntity& e) {
+  using T = SelectedEntity::Type;
+  if (e.index < 0)
+    return nullptr;
+  const size_t i = static_cast<size_t>(e.index);
+  auto at = [i](const std::vector<EntityAttributes>& v) -> const EntityAttributes* {
+    return i < v.size() ? &v[i] : nullptr;
+  };
+  switch (e.type) {
+  case T::LineSeg:      return at(st.userLineAttrs);
+  case T::Circle:       return at(st.userCircleAttrs);
+  case T::Polyline:     return at(st.userPolylineAttrs);
+  case T::Arc:          return at(st.userArcAttrs);
+  case T::Ellipse:      return at(st.userEllAttrs);
+  case T::Annotation:   return at(st.cadAnnotationAttrs);
+  case T::FilledRegion: return at(st.cadFilledRegionAttrs);
+  case T::Mesh:         return at(st.cadMeshAttrs);
+  // Survey points and PDF underlays carry no EntityAttributes and are out of REQ-084's scope.
+  default:              return nullptr;
+  }
+}
+
+bool CadSelectedEntityHidden(const AppCommandState& st, const SelectedEntity& e) {
+  if (st.hiddenEntityIds.empty())
+    return false;
+  const EntityAttributes* a = CadEntityAttrsForSelected(st, e);
+  return a && CadEntityIdHidden(&st.hiddenEntityIds, a->id);
+}
+
+namespace {
+
+/// Ids of the entity types isolation covers, in one place so "everything" and "the selection"
+/// can never disagree about what the set of isolatable objects is.
+void CollectIsolatableIds(const AppCommandState& st, std::vector<std::uint64_t>* out) {
+  auto take = [out](const std::vector<EntityAttributes>& v) {
+    for (const EntityAttributes& a : v)
+      if (a.id != 0)
+        out->push_back(a.id);
+  };
+  take(st.userLineAttrs);
+  take(st.userCircleAttrs);
+  take(st.userPolylineAttrs);
+  take(st.userArcAttrs);
+  take(st.userEllAttrs);
+  take(st.cadAnnotationAttrs);
+  take(st.cadFilledRegionAttrs);
+  take(st.cadMeshAttrs);
+}
+
+/// Ids of the current selection that isolation can act on, plus how many picks it had to skip
+/// (survey points / PDF underlays), so the caller can say so rather than silently dropping them.
+void CollectSelectedIsolatableIds(const AppCommandState& st, std::vector<std::uint64_t>* out, int* outSkipped) {
+  *outSkipped = 0;
+  for (const SelectedEntity& e : st.selection) {
+    const EntityAttributes* a = CadEntityAttrsForSelected(st, e);
+    if (a && a->id != 0)
+      out->push_back(a->id);
+    else
+      ++*outSkipped;
+  }
+  *outSkipped += static_cast<int>(st.selectedSurveyPointIndices.size());
+}
+
+void SortUniqueIds(std::vector<std::uint64_t>* v) {
+  std::sort(v->begin(), v->end());
+  v->erase(std::unique(v->begin(), v->end()), v->end());
+}
+
+/// Isolation hides objects, so leaving them selected would keep grips and the modify commands
+/// pointed at geometry the user can no longer see.
+void DropHiddenFromSelection(AppCommandState& st) {
+  auto& sel = st.selection;
+  sel.erase(std::remove_if(sel.begin(), sel.end(),
+                           [&](const SelectedEntity& e) { return CadSelectedEntityHidden(st, e); }),
+            sel.end());
+}
+
+void ReportSkippedPicks(int skipped, std::vector<std::string>& log) {
+  if (skipped > 0)
+    log.push_back("  (" + std::to_string(skipped) +
+                  " selected item(s) skipped — survey points and PDF underlays are not isolatable.)");
+}
+
+} // namespace
+
+void IsolateSelectedObjects(AppCommandState& st, std::vector<std::string>& log) {
+  EnsureEntityIds(st);  // an entity created this frame has id 0 until the sweep runs
+  std::vector<std::uint64_t> keep;
+  int skipped = 0;
+  CollectSelectedIsolatableIds(st, &keep, &skipped);
+  if (keep.empty()) {
+    log.push_back("ISOLATEOBJECTS — nothing isolatable is selected; nothing hidden.");
+    ReportSkippedPicks(skipped, log);
+    return;
+  }
+  SortUniqueIds(&keep);
+
+  std::vector<std::uint64_t> all;
+  CollectIsolatableIds(st, &all);
+
+  st.hiddenEntityIds = CadIsolationHiddenSet(std::move(all), keep);  // sorted, as the gates require
+  BumpCadGpuCache(st);
+  log.push_back("ISOLATEOBJECTS — " + std::to_string(keep.size()) + " object(s) isolated, " +
+                std::to_string(st.hiddenEntityIds.size()) + " hidden.");
+  ReportSkippedPicks(skipped, log);
+}
+
+void HideSelectedObjects(AppCommandState& st, std::vector<std::string>& log) {
+  EnsureEntityIds(st);
+  std::vector<std::uint64_t> hide;
+  int skipped = 0;
+  CollectSelectedIsolatableIds(st, &hide, &skipped);
+  if (hide.empty()) {
+    log.push_back("HIDEOBJECTS — nothing isolatable is selected; nothing hidden.");
+    ReportSkippedPicks(skipped, log);
+    return;
+  }
+  const size_t before = st.hiddenEntityIds.size();
+  st.hiddenEntityIds.insert(st.hiddenEntityIds.end(), hide.begin(), hide.end());
+  SortUniqueIds(&st.hiddenEntityIds);
+  DropHiddenFromSelection(st);
+  BumpCadGpuCache(st);
+  log.push_back("HIDEOBJECTS — " + std::to_string(st.hiddenEntityIds.size() - before) +
+                " object(s) hidden (" + std::to_string(st.hiddenEntityIds.size()) + " hidden in total).");
+  ReportSkippedPicks(skipped, log);
+}
+
+void EndObjectIsolation(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.hiddenEntityIds.empty()) {
+    log.push_back("UNISOLATEOBJECTS — nothing was hidden.");
+    return;
+  }
+  const size_t n = st.hiddenEntityIds.size();
+  st.hiddenEntityIds.clear();
+  BumpCadGpuCache(st);
+  log.push_back("UNISOLATEOBJECTS — " + std::to_string(n) + " object(s) shown.");
+}
+
 Viewport* CurrentViewport(AppCommandState& st) {
   if (st.activeSpaceIndex < 0 || st.activeSpaceIndex >= static_cast<int>(st.paperLayouts.size()))
     return nullptr;
@@ -11663,6 +11876,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("ZOOM WINDOW canceled.");
   else if (st.active == AppCommandState::Kind::Pan)
     log.push_back("PAN — exited.");
+  else if (st.active == AppCommandState::Kind::Orbit)
+    log.push_back("ORBIT — exited.");
   else if (st.active == AppCommandState::Kind::VpFreeze)
     log.push_back("VPFREEZE — exited.");
   else if (st.active == AppCommandState::Kind::VpThaw)
@@ -12028,6 +12243,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       // Enter (or right-click in Enter mode) exits PAN; Esc exits via CancelActiveCommand.
       st.active = K::None;
       log.push_back("PAN — exited.");
+      return;
+    }
+    if (st.active == K::Orbit) {
+      // Same contract as PAN above (REQ-084 (c)).
+      st.active = K::None;
+      log.push_back("ORBIT — exited.");
       return;
     }
     if (st.active == K::VpFreeze || st.active == K::VpThaw) {

@@ -8032,8 +8032,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // ORBIT (REQ-058): Shift + middle-drag tumbles the camera about the pan point, matching
     // AutoCAD's 3DORBIT binding. Plain middle-drag still pans, so nothing existing changes.
     // Model space only — a paper sheet is 2D (ADR-025 (g)) and must never tilt.
-    const bool orbitDrag = modelSpace && ImGui::GetIO().KeyShift &&
-                           ImGui::IsMouseDragging(ImGuiMouseButton_Middle);
+    // The ORBIT command (REQ-084 (c)) adds a LEFT-drag route to the same math, exactly as the PAN
+    // command does below for panning — one orbit implementation, two ways in.
+    const bool orbitDrag = modelSpace &&
+                           ((ImGui::GetIO().KeyShift && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) ||
+                            (cmd.active == AppCommandState::Kind::Orbit &&
+                             ImGui::IsMouseDragging(ImGuiMouseButton_Left)));
     if (orbitDrag) {
       const ImVec2 d = ImGui::GetIO().MouseDelta;
       // Degrees per pixel: a full window drag sweeps roughly half a turn horizontally, which is
@@ -8580,6 +8584,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         //   - hovering an object → select it directly (Shift toggles), like the model click-to-select;
         //   - empty space    → arm a selection box.
         if (hovered && cmd.active != AppCommandState::Kind::Pan &&
+            cmd.active != AppCommandState::Kind::Orbit &&
             ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
             !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
           const float gripTolWorld = 10.f * worldPerPx;  // grip hit radius (~10px) in model units
@@ -8667,6 +8672,60 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                                      cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
       const bool allowSnapCycle =
           cmd.active != AK::None && cmd.objectSnapEnabled && !blockSnapPickMenu;
+      using DM = AppCommandState::RightClickDefaultMode;
+      using EM = AppCommandState::RightClickEditMode;
+      using CM = AppCommandState::RightClickCommandMode;
+      const bool hasSel = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
+
+      // The preference-driven classification, shared by the press path and the time-sensitive
+      // release path so the two can never drift apart.
+      auto openShortcutMenu = [&]() { ImGui::OpenPopup("##drawing1_vp_ctx"); };
+      auto rightClickAsEnter = [&]() {
+        if (cmd.active != AK::None)
+          ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+        else if (cmd.lastCommand != AK::None)
+          RepeatLastCommand(cmd, log);
+      };
+      auto classifyByPreference = [&]() {
+        if (cmd.active != AK::None) {
+          switch (cmd.rightClickCommandMode) {
+          case CM::Enter:
+            ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+            break;
+          case CM::ShortcutMenuAlways:
+          case CM::ShortcutMenuWhenOptions:
+            openShortcutMenu();
+            break;
+          }
+        } else if (hasSel) {
+          switch (cmd.rightClickEditMode) {
+          case EM::RepeatLastCommand:
+            if (cmd.lastCommand != AK::None) RepeatLastCommand(cmd, log);
+            else openShortcutMenu();
+            break;
+          case EM::ShortcutMenu:
+            openShortcutMenu();
+            break;
+          }
+        } else {
+          switch (cmd.rightClickDefaultMode) {
+          case DM::RepeatLastCommand:
+            if (cmd.lastCommand != AK::None) RepeatLastCommand(cmd, log);
+            else openShortcutMenu();
+            break;
+          case DM::ShortcutMenu:
+            openShortcutMenu();
+            break;
+          }
+        }
+      };
+
+      // REQ-084 (b): with time-sensitive right-click ON, the DURATION of the press decides the
+      // Default and Command contexts — quick = ENTER, held = shortcut menu. A selection still goes
+      // through Edit Mode, which is why the dialog leaves that group enabled. The menu therefore
+      // opens on release-or-elapse rather than on press; that is the feature, not a defect.
+      const bool timeSensitive = cmd.rightClickTimeSensitive && !blockSnapPickMenu && !hasSel;
+
       if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         if (ioVpRmb.KeyShift && allowSnapCycle) {
           g_snapMenuSortX = static_cast<float>(rmbWx);
@@ -8674,45 +8733,33 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           g_snapMenuStep = 0;
           g_snapPickMenuScratch.clear();
           ImGui::OpenPopup("##gos_snap_pick");
+          cmd.rightClickPressPending = false;
         } else if (!blockSnapPickMenu) {
-          using DM = AppCommandState::RightClickDefaultMode;
-          using EM = AppCommandState::RightClickEditMode;
-          using CM = AppCommandState::RightClickCommandMode;
-          const bool hasSel = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
-          if (cmd.active != AK::None) {
-            switch (cmd.rightClickCommandMode) {
-            case CM::Enter:
-              ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
-              break;
-            case CM::ShortcutMenuAlways:
-            case CM::ShortcutMenuWhenOptions:
-              ImGui::OpenPopup("##drawing1_vp_ctx");
-              break;
-            }
-          } else if (hasSel) {
-            switch (cmd.rightClickEditMode) {
-            case EM::RepeatLastCommand:
-              if (cmd.lastCommand != AK::None) RepeatLastCommand(cmd, log);
-              else ImGui::OpenPopup("##drawing1_vp_ctx");
-              break;
-            case EM::ShortcutMenu:
-              ImGui::OpenPopup("##drawing1_vp_ctx");
-              break;
-            }
+          if (timeSensitive) {
+            cmd.rightClickPressPending = true;
+            cmd.rightClickPressTimeSec = ImGui::GetTime();
           } else {
-            switch (cmd.rightClickDefaultMode) {
-            case DM::RepeatLastCommand:
-              if (cmd.lastCommand != AK::None) RepeatLastCommand(cmd, log);
-              else ImGui::OpenPopup("##drawing1_vp_ctx");
-              break;
-            case DM::ShortcutMenu:
-              ImGui::OpenPopup("##drawing1_vp_ctx");
-              break;
-            }
+            classifyByPreference();
           }
+        }
+      } else if (cmd.rightClickPressPending) {
+        const double heldMs = (ImGui::GetTime() - cmd.rightClickPressTimeSec) * 1000.0;
+        if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+          cmd.rightClickPressPending = false;
+          if (!CadRightClickHoldIsMenu(heldMs, cmd.rightClickLongerClickMs))
+            rightClickAsEnter();
+          else
+            openShortcutMenu();  // released after the threshold without the frame that elapses it
+        } else if (CadRightClickHoldIsMenu(heldMs, cmd.rightClickLongerClickMs)) {
+          cmd.rightClickPressPending = false;
+          openShortcutMenu();    // still held: the menu appears the moment the threshold passes
         }
       }
     }
+    // A press that ends outside the viewport is abandoned, not resolved — otherwise the next
+    // right-click over the drawing would be measured from a press the user made somewhere else.
+    if (cmd.rightClickPressPending && !ImGui::IsMouseDown(ImGuiMouseButton_Right))
+      cmd.rightClickPressPending = false;
   }
 
   cmd.viewportLastSurveyLayoutOrthoHalfH = halfH;
@@ -9167,7 +9214,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const bool overCmdSugPopup =
       s_cmdSugPopupOpen && ImGui::IsMouseHoveringRect(s_cmdSugPopupMin, s_cmdSugPopupMax, false);
   if (modelSpace && hovered && !overCmdSugPopup && !overViewCube &&
-      cmd.active != AppCommandState::Kind::Pan && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 &&
+      cmd.active != AppCommandState::Kind::Pan && cmd.active != AppCommandState::Kind::Orbit &&
+      ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 &&
       mx < avail.x && my >= 0 && my < avail.y) {
     if (cmd.dimGripMoveActive) {
       cmd.dimGripMoveActive = false;
@@ -11077,6 +11125,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
       const EntityAttributes* ap =
           ai < cmd.cadAnnotationAttrs.size() ? &cmd.cadAnnotationAttrs[ai] : nullptr;
+      // Annotations are drawn by this overlay rather than the GL pass, so isolation is gated here
+      // (REQ-084 (d)); PickCadAnnotationAt gates the matching pick.
+      if (ap && CadEntityIdHidden(&cmd.hiddenEntityIds, ap->id))
+        continue;
       drawAnnotationVisual(cmd.cadAnnotations[ai], ap, kAnnCol);
     }
 
@@ -11722,7 +11774,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const bool liveHover = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y;
   const bool frozenHair = typingCommand && s_lastCrosshairScreen.x >= 0.f;
   // PAN command (REQ-045): show a hand instead of the CAD crosshair while pan mode is active.
-  const bool panMode = cmd.active == AppCommandState::Kind::Pan;
+  // ORBIT (REQ-084 (c)) is a drag mode too: the crosshair would say "pick a point", which is not
+  // what a left-drag does while it is active.
+  const bool panMode = cmd.active == AppCommandState::Kind::Pan ||
+                       cmd.active == AppCommandState::Kind::Orbit;
   if (panMode && liveHover)
     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
   if (!panMode && (liveHover || frozenHair)) {
@@ -11830,21 +11885,116 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImGui::CloseCurrentPopup();
       }
     } else if (!gripActive) {
-      // Edit Mode / Default Mode shortcut menu
+      // Edit Mode / Default Mode shortcut menu — the drawing's action menu (REQ-084 (c)).
       if (cmd.lastCommand != AK::None) {
         char repeatLabel[64];
         std::snprintf(repeatLabel, sizeof(repeatLabel), "Repeat %s",
                       AppCommandState::KindName(cmd.lastCommand));
         if (ImGui::MenuItem(repeatLabel))
           RepeatLastCommand(cmd, log);
-        ImGui::Separator();
       }
+
+      // Recent Input — the SAME history the command bar's dropdown shows (REQ-040), newest first,
+      // so the two surfaces cannot disagree about what was typed. Re-running is a plain submit
+      // through the command line, which is what typing it again would do.
+      if (ImGui::BeginMenu("Recent Input", !cmd.cmdEnteredHistory.empty())) {
+        // Chosen first, run after the loop. Re-submitting appends to this same history (and, at the
+        // 20-entry cap, erases its front), so running inside the loop would leave the rest of the
+        // frame walking a vector that had shifted under it.
+        std::string chosen;
+        for (size_t i = cmd.cmdEnteredHistory.size(); i-- > 0;) {
+          ImGui::PushID(static_cast<int>(i));
+          if (ImGui::MenuItem(cmd.cmdEnteredHistory[i].c_str()))
+            chosen = cmd.cmdEnteredHistory[i];
+          ImGui::PopID();
+        }
+        ImGui::EndMenu();
+        if (!chosen.empty()) {
+          char buf[256];
+          std::snprintf(buf, sizeof(buf), "%s", chosen.c_str());
+          ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
+          ImGui::CloseCurrentPopup();
+        }
+      }
+      ImGui::Separator();
+
+      // Isolate Objects (REQ-084 (d)).
+      if (ImGui::BeginMenu("Isolate Objects")) {
+        if (ImGui::MenuItem("Isolate Objects", nullptr, false, hasSel)) {
+          IsolateSelectedObjects(cmd, log);
+          ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::MenuItem("Hide Objects", nullptr, false, hasSel)) {
+          HideSelectedObjects(cmd, log);
+          ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::MenuItem("End Object Isolation", nullptr, false, !cmd.hiddenEntityIds.empty())) {
+          EndObjectIsolation(cmd, log);
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndMenu();
+      }
+
+      if (ImGui::BeginMenu("Clipboard")) {
+        const bool hasClip = !cmd.clipboard.empty();
+        if (ImGui::MenuItem("Cut", "Ctrl+X", false, hasSel)) {
+          // No CUT command exists; cut IS copy-then-erase, and spelling it out here keeps one
+          // owner for each half rather than a third path through the clipboard.
+          CopySelectionToClipboard(cmd, log);
+          StartDeleteCommand(cmd, log);
+          ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::MenuItem("Copy", "Ctrl+C", false, hasSel)) {
+          CopySelectionToClipboard(cmd, log);
+          ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::MenuItem("Paste", "Ctrl+V", false, hasClip)) {
+          StartPasteCommand(cmd, log);
+          ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::MenuItem("Paste at Original Coordinates", nullptr, false, hasClip)) {
+          StartPasteOrigCommand(cmd, log);
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndMenu();
+      }
+
+      if (ImGui::BeginMenu("Basic Modify Tools", hasSel)) {
+        if (ImGui::MenuItem("Move"))           { StartMoveCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Copy Selection")) { StartCopyCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Rotate"))         { StartRotateCommand(cmd, log); ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Scale"))          { StartScaleCommand(cmd, log);  ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Erase"))          { StartDeleteCommand(cmd, log); ImGui::CloseCurrentPopup(); }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Offset"))         { StartOffsetCommand(cmd, log); ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Trim"))           { StartTrimCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Join"))           { StartJoinCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
+        ImGui::EndMenu();
+      }
+      ImGui::Separator();
+
+      if (ImGui::MenuItem("Pan"))        { StartPanCommand(cmd, log);          ImGui::CloseCurrentPopup(); }
+      if (ImGui::MenuItem("Zoom"))       { StartZoomWindowCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
+      if (ImGui::MenuItem("Free Orbit")) { StartOrbitCommand(cmd, log);        ImGui::CloseCurrentPopup(); }
+      ImGui::Separator();
+
+      if (ImGui::MenuItem("Quick Select...")) {
+        StartQuickSelectCommand(cmd, log);
+        ImGui::CloseCurrentPopup();
+      }
+      // No "Find..." here. GoSurvey's find/replace (mtextFindReplaceOpen) lives inside the MTEXT
+      // text-formatting panel and searches only the buffer being edited — and the drawing shortcut
+      // menu cannot even open while that editor is up. A drawing-wide FIND does not exist, so the
+      // item would be a control that does nothing, which is the failure REQ-201 forbids. Recorded
+      // in REQ-084 and as TASK-070 DEBT-3; it returns when drawing-wide FIND is a requirement.
+      if (ImGui::MenuItem("Options...")) {
+        cmd.showSettingsWindow = true;
+        ImGui::CloseCurrentPopup();
+      }
+
+      // REQ-054's selection items stay exactly where they were — below the general actions, and
+      // only when there is a selection to act on.
       if (hasSel) {
-        if (ImGui::MenuItem("Move"))   { StartMoveCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
-        if (ImGui::MenuItem("Copy"))   { StartCopyCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
-        if (ImGui::MenuItem("Rotate")) { StartRotateCommand(cmd, log); ImGui::CloseCurrentPopup(); }
-        if (ImGui::MenuItem("Scale"))  { StartScaleCommand(cmd, log);  ImGui::CloseCurrentPopup(); }
-        if (ImGui::MenuItem("Delete")) { StartDeleteCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         ImGui::Separator();
         if (ImGui::MenuItem("Select similar")) {
           SelectSimilarToCurrentSelection(cmd, &log);
