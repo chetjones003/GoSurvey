@@ -528,6 +528,12 @@ int main()
     // EntityAttributes was rejected: a missed site there is silent, not a compile error.
     EnsureEntityIds(cmd);
 
+    // Surface dynamic rebuild (REQ-069). After EnsureEntityIds, so a breakline/boundary added this
+    // frame already has an id to be resolved by. Also revision-gated, and (unlike EnsureEntityIds)
+    // it does real work only for surfaces that are actually behind, dispatched to a background
+    // thread — see TickSurfaceRebuilds' own comment for the full contract.
+    TickSurfaceRebuilds(cmd, cmdLog);
+
     const ImGuiViewport *mainVp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(mainVp->WorkPos);
     ImGui::SetNextWindowSize(mainVp->WorkSize);

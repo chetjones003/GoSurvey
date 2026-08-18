@@ -244,6 +244,19 @@ struct CadTin {
   [[nodiscard]] int triangleCount() const { return static_cast<int>(indices.size() / 3); }
 };
 
+/// How a boundary ring affects the surface it is applied to (REQ-069). Mirrors
+/// \c TinBoundaryKind in `util/tinbuild.hpp` field-for-field — kept as a separate local type rather
+/// than an include of it, the same reason \ref CadTin mirrors `TinBuildResult`'s layout instead of
+/// including `tinbuild.hpp`: this header stays dependency-free (§11.4), and the conversion is one
+/// `switch` at the one call site that needs both types (`BuildSurfaceFromSources`).
+enum class CadBoundaryKind : std::uint8_t { Outer, Hide, Show };
+
+/// A boundary ring referenced by stable entity id (REQ-076) — must resolve to a **closed** polyline.
+struct CadSurfaceBoundary {
+  std::uint64_t entityId = 0;
+  CadBoundaryKind kind = CadBoundaryKind::Outer;
+};
+
 /// A named TIN surface (REQ-068).
 ///
 /// Small and copyable: the heavy triangulation hangs off a shared pointer, so copying a surface —
@@ -262,12 +275,31 @@ struct CadSurface {
   /// resolves is reported at build time rather than quietly producing an empty surface.
   std::vector<std::string> sourcePointGroups;
 
+  /// Breaklines forcing a triangulation edge along them (REQ-069) — each a Line or a Polyline in the
+  /// drawing, referenced by stable entity id (REQ-076, architecture §11.9), never by index. An id
+  /// that no longer resolves at rebuild time is dropped from this list, not left dangling
+  /// (`BuildSurfaceFromSources`) — REQ-069's "deleting a polyline used as a breakline removes it from
+  /// the definition."
+  std::vector<std::uint64_t> breaklineIds;
+
+  /// Boundary rings, applied in this exact order (REQ-069: "boundaries apply in definition order").
+  /// Same dangling-id handling as \ref breaklineIds.
+  std::vector<CadSurfaceBoundary> boundaries;
+
   /// The built triangulation, or null when the surface has never been built.
   std::shared_ptr<const CadTin> tin;
 
   /// What the last build did, kept for the UI and the log (REQ-201). Not persisted — a reload
   /// re-reports on the next build.
   std::string lastBuildMessage;
+
+  /// `cadGpuRevision` this surface was last built (or last attempted) against — REQ-069's dynamic
+  /// rebuild. `cadGpuRevision` already increments on every drawing mutation (it is what drives the
+  /// unsaved-changes indicator), so comparing against it needs no separate per-surface dirty flag and
+  /// no new mark-dirty call site at every point/line/polyline mutation: `builtAtRevision !=
+  /// cadGpuRevision` means "something changed since this surface was last built," whatever that
+  /// something was. Not persisted — a reload always looks current until the next real edit.
+  std::uint32_t builtAtRevision = 0xFFFFFFFFu;
 
   [[nodiscard]] int vertexCount() const { return tin ? tin->vertexCount() : 0; }
   [[nodiscard]] int triangleCount() const { return tin ? tin->triangleCount() : 0; }

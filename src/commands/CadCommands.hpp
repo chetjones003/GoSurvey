@@ -13,6 +13,7 @@
 #include "traverse/TraverseCalc.hpp"
 #include "traverse/TraverseLeastSquares.hpp"
 #include "update/UpdateCheck.hpp"  // update::UpdatePrefs only — pure, no network, no <thread>
+#include "util/tinbuild.hpp"       // TinBuildResult, for AppCommandState::SurfaceRebuildAsync (REQ-069)
 
 #include <algorithm>
 #include <atomic>
@@ -466,6 +467,10 @@ struct AppCommandState {
     SurveyInverse,
     /// REQ-074: one pick reports interpolated surface elevation, a second reports grade between them.
     SurfaceElevGrade,
+    /// REQ-069: one pick designates a Line/Polyline as a breakline on a named surface.
+    DesignateBreakline,
+    /// REQ-069: one pick designates a closed Polyline as a boundary ring (outer/hide/show) on a named surface.
+    DesignateBoundary,
     /// PDF underlay attach — opens dialog, then optionally waits for viewport picks.
     PdfAttach,
     /// 2-D Helmert (similarity) transformation from user-picked control point pairs.
@@ -527,6 +532,9 @@ struct AppCommandState {
     case Kind::Rect:          return "RECT";
     case Kind::TrimState:     return "TRIMSTATE";
     case Kind::Orbit:         return "ORBIT";
+    case Kind::SurfaceElevGrade:   return "SURFELEV";
+    case Kind::DesignateBreakline: return "DESIGNATEBREAKLINE";
+    case Kind::DesignateBoundary:  return "DESIGNATEBOUNDARY";
     default:                  return "";
     }
   }
@@ -1033,6 +1041,24 @@ struct AppCommandState {
   std::vector<CadSurface> cadSurfaces;
   std::vector<EntityAttributes> cadSurfaceAttrs;
 
+  /// One in-flight background rebuild per surface currently being retriangulated (REQ-069's dynamic
+  /// rebuild — architecture §8's one-shot worker pattern, its second concrete use after
+  /// \ref pdfAttachAsync and the first to implement the full contract: rules 4 and 5, generation
+  /// staleness and cooperative cancellation, which pdfAttachAsync's own struct does not itself carry).
+  /// Heap-allocated so the atomic/thread members don't affect this struct's own copyability — the
+  /// same reason \ref AsyncBuild is. Never part of \ref DrawingGeometrySnapshot or \ref
+  /// DrawingDocument: a background thread is live-only state, not drawing content.
+  struct SurfaceRebuildAsync {
+    std::string        surfaceName;   ///< which CadSurface this is for — surfaces have no entity id
+    std::thread        thread;
+    std::atomic<bool>  done{false};
+    std::atomic<bool>  cancel{false}; ///< cooperative; checked before the worker starts real work
+    std::uint32_t      generation = 0;  ///< cadGpuRevision at dispatch — a mismatch on completion means discard
+    double             originX = 0.0, originY = 0.0;
+    TinBuildResult      result;
+  };
+  std::vector<std::unique_ptr<SurfaceRebuildAsync>> surfaceRebuildAsync;
+
   // --- HATCH command (REQ-043) ---
   /// Boundary loop traced under the cursor while HATCH is active (flat local x,y); valid drives the preview.
   std::vector<float> hatchPreviewLoop;
@@ -1205,6 +1231,13 @@ struct AppCommandState {
   double surfaceElevFromX = 0.0;
   double surfaceElevFromY = 0.0;
   std::vector<std::pair<std::string, double>> surfaceElevFromZ;
+
+  /// REQ-069: the surface DESIGNATEBREAKLINE/DESIGNATEBOUNDARY is adding to, captured when the
+  /// command starts (from its inline argument) so the single pick that follows knows where to add.
+  std::string designateSurfaceName;
+  /// REQ-069: which ring kind DESIGNATEBOUNDARY is adding — irrelevant to DESIGNATEBREAKLINE.
+  CadBoundaryKind designateBoundaryKind = CadBoundaryKind::Outer;
+
   bool showViewPointsWindow = false;
   bool showSettingsWindow = false;
   bool showQuickSelectWindow = false;
@@ -1775,6 +1808,16 @@ int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
 /// Erase a surface by index, keeping its attribute array in step. Callers own the undo snapshot.
 void EraseSurfaceAtIndex(AppCommandState& st, size_t index);
 
+/// REQ-069's dynamic rebuild. Called once per frame (main.cpp, beside \ref EnsureEntityIds — both
+/// are revision-gated per-frame maintenance run before anything can save, reference or render a
+/// surface). Reaps any completed background rebuild — applying it if \c cadGpuRevision has not moved
+/// since it was dispatched, discarding it otherwise (architecture §8 rule 4: undo or a further edit
+/// while it ran) — then dispatches a fresh background rebuild for every surface whose
+/// \c builtAtRevision is behind the current revision and does not already have one in flight, which
+/// is what makes a single command that touches N points, or N surfaces, coalesce to at most one
+/// rebuild per surface rather than N.
+void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log);
+
 void EnsureEntityIds(AppCommandState& st);
 
 /// Take the next id immediately, for the caller to stamp on an entity it is creating.
@@ -2097,6 +2140,18 @@ void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log);
 /// REQ-074: pick a point for its interpolated surface elevation; pick a second for the grade
 /// between them. Reports every surface covering the pick, by name.
 void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// REQ-069: designate one picked Line/Polyline as a breakline on the named surface, appended to its
+/// definition by stable entity id. Refuses to start when \p surfaceName does not name an existing
+/// surface, reported before the pick rather than after it (REQ-201).
+void StartDesignateBreaklineCommand(AppCommandState& st, const std::string& surfaceName,
+                                    std::vector<std::string>& log);
+
+/// REQ-069: designate one picked CLOSED Polyline as a boundary ring of kind \p kind on the named
+/// surface, applied in the order it was added. Same refuse-before-pick rule as above.
+void StartDesignateBoundaryCommand(AppCommandState& st, const std::string& surfaceName, CadBoundaryKind kind,
+                                   std::vector<std::string>& log);
+
 void StartSurveyInverseCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log);

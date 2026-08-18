@@ -1257,11 +1257,110 @@ int FindSurfaceIndex(const AppCommandState& st, const std::string& name) {
   return -1;
 }
 
-bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
+namespace {
+
+/// A breakline/boundary source's vertex chain, in WORLD double coordinates (matching the convention
+/// \ref BuildSurfaceFromSources already uses for point-group points — ADR-028 (d)). Z is carried
+/// through as-is: it is stored absolute, not offset by the document origin (ADR-025 D2), the same
+/// rule \ref CadTin and \ref CadFilledRegion already follow.
+struct ResolvedChain {
+  std::vector<std::array<double, 3>> verts;
+  bool closed = false;
+};
+
+/// Resolves a breakline/boundary reference (REQ-069) to its vertex chain. A Line or a Polyline are
+/// both valid breakline sources; only a Polyline can be closed, so only a Polyline can ever satisfy
+/// \p requireClosed. Returns false (chain left empty) when the id does not resolve to a usable
+/// entity — the caller's job is to then drop that id from the definition, not to invent a chain.
+bool ResolveDefinitionChain(const AppCommandState& st, std::uint64_t id, bool requireClosed,
+                           ResolvedChain& out) {
+  out.verts.clear();
+  out.closed = false;
+  const EntityRef ref = FindEntityById(st, id);
+  if (!ref.valid())
+    return false;
+
+  if (ref.kind == EntityKind::Line) {
+    if (requireClosed)
+      return false;  // a 2-point line can never be a closed boundary ring
+    const size_t base = static_cast<size_t>(ref.index) * 6;
+    if (base + 5 >= st.userLinesFlat.size())
+      return false;
+    out.verts.push_back({static_cast<double>(st.userLinesFlat[base + 0]) + st.worldDocumentOriginX,
+                         static_cast<double>(st.userLinesFlat[base + 1]) + st.worldDocumentOriginY,
+                         static_cast<double>(st.userLinesFlat[base + 2])});
+    out.verts.push_back({static_cast<double>(st.userLinesFlat[base + 3]) + st.worldDocumentOriginX,
+                         static_cast<double>(st.userLinesFlat[base + 4]) + st.worldDocumentOriginY,
+                         static_cast<double>(st.userLinesFlat[base + 5])});
+    return true;
+  }
+
+  if (ref.kind == EntityKind::Polyline) {
+    const size_t pi = static_cast<size_t>(ref.index);
+    if (pi + 1 >= st.userPolylineOffsets.size())
+      return false;
+    const bool closed = pi < st.userPolylineClosed.size() && st.userPolylineClosed[pi] != 0;
+    if (requireClosed && !closed)
+      return false;
+    const int vBegin = st.userPolylineOffsets[pi], vEnd = st.userPolylineOffsets[pi + 1];
+    if (vEnd - vBegin < 2)
+      return false;
+    for (int v = vBegin; v < vEnd; ++v) {
+      const size_t base = static_cast<size_t>(v) * 3;
+      if (base + 2 >= st.userPolylineVerts.size())
+        return false;
+      out.verts.push_back({static_cast<double>(st.userPolylineVerts[base + 0]) + st.worldDocumentOriginX,
+                           static_cast<double>(st.userPolylineVerts[base + 1]) + st.worldDocumentOriginY,
+                           static_cast<double>(st.userPolylineVerts[base + 2])});
+    }
+    out.closed = closed;
+    return true;
+  }
+
+  return false;  // any other entity kind is not a valid breakline/boundary source
+}
+
+/// Appends one \ref TinConstraint per edge of \p chain — consecutive vertex pairs, plus the closing
+/// edge (last→first) when \p forceClosed or the source itself is closed.
+void AppendChainConstraints(const ResolvedChain& chain, bool forceClosed, std::vector<TinConstraint>& out) {
+  const size_t n = chain.verts.size();
+  if (n < 2)
+    return;
+  for (size_t i = 0; i + 1 < n; ++i) {
+    TinConstraint c;
+    c.ax = chain.verts[i][0]; c.ay = chain.verts[i][1]; c.az = static_cast<float>(chain.verts[i][2]);
+    c.bx = chain.verts[i + 1][0]; c.by = chain.verts[i + 1][1]; c.bz = static_cast<float>(chain.verts[i + 1][2]);
+    out.push_back(c);
+  }
+  if ((forceClosed || chain.closed) && n >= 3) {
+    TinConstraint c;
+    c.ax = chain.verts[n - 1][0]; c.ay = chain.verts[n - 1][1]; c.az = static_cast<float>(chain.verts[n - 1][2]);
+    c.bx = chain.verts[0][0]; c.by = chain.verts[0][1]; c.bz = static_cast<float>(chain.verts[0][2]);
+    out.push_back(c);
+  }
+}
+
+/// Everything a surface build needs, already resolved against \c AppCommandState — plain data, safe
+/// to copy into a worker thread with no further access to drawing state (architecture §8 rule 1).
+struct SurfaceBuildInputs {
+  std::vector<TinInputPoint> pts;
+  std::vector<TinConstraint> constraints;
+  std::vector<TinBoundaryLoop> cullLoops;
+  double originX = 0.0, originY = 0.0;
+};
+
+/// UI-thread only: resolves a surface's definition against CURRENT drawing state — point groups,
+/// breaklines, boundaries — pruning any id that no longer resolves (REQ-069) and logging what was
+/// dropped or found in conflict. This is the only part of a surface build that touches
+/// \c AppCommandState; everything after it (\ref RunSurfaceBuild) is pure and thread-safe.
+SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
+  SurfaceBuildInputs in;
+  in.originX = st.worldDocumentOriginX;
+  in.originY = st.worldDocumentOriginY;
+
   // Gather points from every named group. Groups are referenced by name (REQ-067), so a name that
   // no longer resolves is reported rather than silently contributing nothing — otherwise a renamed
   // group would quietly shrink a surface with no indication why.
-  std::vector<TinInputPoint> pts;
   int unresolvedGroups = 0;
   for (const std::string& gname : surface.sourcePointGroups) {
     const int gi = FindPointGroupIndex(st, gname);
@@ -1274,32 +1373,115 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
       const SurveyPoint& p = st.surveyPoints[static_cast<size_t>(pi)];
       // Triangulate in WORLD coordinates, in double: at state-plane magnitudes the local frame is
       // what keeps float storage precise, but the predicates need the real spacing between points
-      // (ADR-028 (d)). The result is converted back to local below.
-      pts.push_back({static_cast<double>(p.easting) + st.worldDocumentOriginX,
-                     static_cast<double>(p.northing) + st.worldDocumentOriginY, p.elevation});
+      // (ADR-028 (d)). The result is converted back to local by \ref ToLocalTin.
+      in.pts.push_back({static_cast<double>(p.easting) + st.worldDocumentOriginX,
+                        static_cast<double>(p.northing) + st.worldDocumentOriginY, p.elevation});
     }
   }
   (void)unresolvedGroups;
 
-  const TinBuildResult r = BuildTin(pts);
+  // Breaklines (REQ-069): resolve each by stable entity id, dropping — not merely skipping — any
+  // that no longer resolve, so the STORED definition never holds a dangling reference (§8 ASSUMPTION-1).
+  std::vector<std::uint64_t> resolvedBreaklineIds;
+  int droppedBreaklines = 0;
+  for (std::uint64_t id : surface.breaklineIds) {
+    ResolvedChain chain;
+    if (!ResolveDefinitionChain(st, id, /*requireClosed=*/false, chain)) {
+      ++droppedBreaklines;
+      continue;
+    }
+    resolvedBreaklineIds.push_back(id);
+    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints);
+  }
+  surface.breaklineIds = std::move(resolvedBreaklineIds);
+  if (droppedBreaklines > 0)
+    log.push_back("Surface \"" + surface.name + "\": " + std::to_string(droppedBreaklines) +
+                  " breakline(s) no longer exist and were removed from the definition.");
+
+  // Boundaries (REQ-069): same dangling-id handling; each ring's edges become constraints too (Q1),
+  // so the triangulation conforms exactly to the boundary and culling is exact, not approximate.
+  std::vector<CadSurfaceBoundary> resolvedBoundaries;
+  int droppedBoundaries = 0;
+  for (const CadSurfaceBoundary& b : surface.boundaries) {
+    ResolvedChain chain;
+    if (!ResolveDefinitionChain(st, b.entityId, /*requireClosed=*/true, chain)) {
+      ++droppedBoundaries;
+      continue;
+    }
+    resolvedBoundaries.push_back(b);
+    AppendChainConstraints(chain, /*forceClosed=*/true, in.constraints);
+    TinBoundaryLoop loop;
+    loop.kind = b.kind == CadBoundaryKind::Outer ? TinBoundaryKind::Outer
+              : b.kind == CadBoundaryKind::Hide  ? TinBoundaryKind::Hide
+                                                  : TinBoundaryKind::Show;
+    for (const auto& v : chain.verts)
+      loop.ring.push_back({v[0], v[1]});
+    in.cullLoops.push_back(std::move(loop));
+  }
+  surface.boundaries = std::move(resolvedBoundaries);
+  if (droppedBoundaries > 0)
+    log.push_back("Surface \"" + surface.name + "\": " + std::to_string(droppedBoundaries) +
+                  " boundary(ies) no longer exist and were removed from the definition.");
+
+  // Crossing breaklines at different elevations (REQ-069): reported by name and location so the
+  // conflict can actually be found and fixed, rather than left to be inferred from a stray edge.
+  for (const TinCrossingIssue& issue : TinFindCrossingConflicts(in.constraints))
+    log.push_back("Surface \"" + surface.name + "\": breaklines cross at (" +
+                  std::to_string(issue.x) + ", " + std::to_string(issue.y) +
+                  ") with different elevations (" + std::to_string(issue.zFromA) + " vs " +
+                  std::to_string(issue.zFromB) + ").");
+
+  return in;
+}
+
+/// Pure: the triangulation + boundary culling, given already-resolved inputs. Touches no
+/// \c AppCommandState, so it is safe to run on a worker thread (architecture §8) or synchronously.
+TinBuildResult RunSurfaceBuild(const SurfaceBuildInputs& in) {
+  TinBuildResult r = BuildTin(in.pts, in.constraints);
+  if (r.ok())
+    TinCullByBoundaries(r.indices, r.vertsXyz, in.cullLoops);
+  return r;
+}
+
+/// Converts a world-space \ref TinBuildResult into a local-frame \ref CadTin (the local-storage
+/// invariant: world = local + origin — architecture §11.8), or null when \p r has no surviving
+/// triangle (a successful build that boundaries clipped to nothing is still "no surface" — REQ-001).
+std::shared_ptr<CadTin> ToLocalTin(const TinBuildResult& r, double originX, double originY) {
+  if (!r.ok() || r.indices.empty())
+    return nullptr;
+  auto tin = std::make_shared<CadTin>();
+  tin->vertsXyz.resize(r.vertsXyz.size());
+  for (int i = 0; i < r.vertexCount(); ++i) {
+    tin->vertsXyz[static_cast<size_t>(i) * 3 + 0] =
+        static_cast<float>(static_cast<double>(r.vertsXyz[static_cast<size_t>(i) * 3 + 0]) - originX);
+    tin->vertsXyz[static_cast<size_t>(i) * 3 + 1] =
+        static_cast<float>(static_cast<double>(r.vertsXyz[static_cast<size_t>(i) * 3 + 1]) - originY);
+    tin->vertsXyz[static_cast<size_t>(i) * 3 + 2] = r.vertsXyz[static_cast<size_t>(i) * 3 + 2];  // Z absolute
+  }
+  tin->indices = r.indices;
+  return tin;
+}
+
+} // namespace
+
+bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
+  // Synchronous path: explicit user actions (create, the manual Rebuild button) that should show a
+  // result immediately rather than waiting a frame for the async path below to pick them up.
+  const SurfaceBuildInputs in = ResolveSurfaceInputs(st, surface, log);
+  const TinBuildResult r = RunSurfaceBuild(in);
+  surface.builtAtRevision = st.cadGpuRevision;
   if (!r.ok()) {
     // No partial surface, and the previous triangulation is left alone (REQ-001).
     surface.lastBuildMessage = r.message;
     log.push_back("Surface \"" + surface.name + "\" not built: " + r.message);
     return false;
   }
-
-  auto tin = std::make_shared<CadTin>();
-  tin->vertsXyz.resize(r.vertsXyz.size());
-  for (int i = 0; i < r.vertexCount(); ++i) {
-    // Back to the local storage frame (the local-storage invariant): world = local + origin.
-    tin->vertsXyz[static_cast<size_t>(i) * 3 + 0] =
-        static_cast<float>(static_cast<double>(r.vertsXyz[static_cast<size_t>(i) * 3 + 0]) - st.worldDocumentOriginX);
-    tin->vertsXyz[static_cast<size_t>(i) * 3 + 1] =
-        static_cast<float>(static_cast<double>(r.vertsXyz[static_cast<size_t>(i) * 3 + 1]) - st.worldDocumentOriginY);
-    tin->vertsXyz[static_cast<size_t>(i) * 3 + 2] = r.vertsXyz[static_cast<size_t>(i) * 3 + 2];  // Z absolute
+  std::shared_ptr<CadTin> tin = ToLocalTin(r, in.originX, in.originY);
+  if (!tin) {
+    surface.lastBuildMessage = "Boundaries left no surface.";
+    log.push_back("Surface \"" + surface.name + "\" not built: boundaries left no surface.");
+    return false;
   }
-  tin->indices = r.indices;
 
   // Replace the pointer, never write through it (architecture §11.5).
   surface.tin = std::move(tin);
@@ -1309,6 +1491,8 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
                     " points, " + std::to_string(surface.triangleCount()) + " triangles.";
   if (!r.message.empty())
     msg += " " + r.message;
+  if (r.constraintsUnresolved > 0)
+    msg += " " + std::to_string(r.constraintsUnresolved) + " constraint edge(s) could not be enforced.";
   log.push_back(msg);
   return true;
 }
@@ -1324,6 +1508,11 @@ int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
     log.push_back("A surface named \"" + name + "\" already exists.");
     return -1;
   }
+  // Bumped before the build (not after, as every other surface-mutating call site here does) so the
+  // freshly built surface's builtAtRevision already matches the revision this creation settles at —
+  // otherwise the very next TickSurfaceRebuilds tick would see it one revision stale and redispatch
+  // a redundant rebuild of a surface that was just built moments ago.
+  BumpCadGpuCache(st);
   CadSurface s;
   s.name = name;
   s.sourcePointGroups = groupNames;
@@ -1332,7 +1521,6 @@ int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
 
   st.cadSurfaces.push_back(std::move(s));
   EnsureAttrCounts(st);  // owns attribute-array growth for every entity type, surfaces included
-  BumpCadGpuCache(st);
   return static_cast<int>(st.cadSurfaces.size()) - 1;
 }
 
@@ -1343,6 +1531,87 @@ void EraseSurfaceAtIndex(AppCommandState& st, size_t index) {
   if (index < st.cadSurfaceAttrs.size())
     st.cadSurfaceAttrs.erase(st.cadSurfaceAttrs.begin() + static_cast<std::ptrdiff_t>(index));
   BumpCadGpuCache(st);
+}
+
+void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
+  using SurfaceJob = AppCommandState::SurfaceRebuildAsync;
+
+  // Reap finished workers first, so a surface freed up this frame can be redispatched this same
+  // frame rather than waiting one extra frame.
+  for (size_t i = 0; i < st.surfaceRebuildAsync.size();) {
+    SurfaceJob& job = *st.surfaceRebuildAsync[i];
+    if (!job.done.load(std::memory_order_acquire)) {
+      ++i;
+      continue;
+    }
+    job.thread.join();
+    const int si = FindSurfaceIndex(st, job.surfaceName);
+    // Applied only if the surface still exists AND nothing has changed since this job was
+    // dispatched (architecture §8 rule 4). Either condition failing means discard: the surface was
+    // erased, or an undo / further edit landed while this ran — REQ-069's "the in-flight result is
+    // discarded." A discarded surface simply looks dirty again next tick and gets redispatched.
+    if (si >= 0 && st.cadGpuRevision == job.generation) {
+      CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+      const TinBuildResult& r = job.result;
+      std::shared_ptr<CadTin> tin = ToLocalTin(r, job.originX, job.originY);
+      if (tin) {
+        surface.tin = std::move(tin);  // replace the pointer, never write through it (§11.5)
+        surface.lastBuildMessage = r.message;
+        std::string msg = "Surface \"" + surface.name + "\": " + std::to_string(surface.vertexCount()) +
+                          " points, " + std::to_string(surface.triangleCount()) + " triangles.";
+        if (!r.message.empty())
+          msg += " " + r.message;
+        if (r.constraintsUnresolved > 0)
+          msg += " " + std::to_string(r.constraintsUnresolved) + " constraint edge(s) could not be enforced.";
+        log.push_back(msg);
+      } else {
+        // No partial surface; the previous triangulation (if any) is left alone (REQ-001).
+        surface.lastBuildMessage = r.ok() ? "Boundaries left no surface." : r.message;
+        log.push_back("Surface \"" + surface.name + "\" not rebuilt: " + surface.lastBuildMessage);
+      }
+      surface.builtAtRevision = job.generation;
+    }
+    st.surfaceRebuildAsync.erase(st.surfaceRebuildAsync.begin() + static_cast<std::ptrdiff_t>(i));
+  }
+
+  // Dispatch a rebuild for every surface whose definition might have changed and does not already
+  // have one in flight — one dispatch per surface per revision is REQ-069's "at most one rebuild per
+  // command/undo boundary," since a command bumps cadGpuRevision once however many points it moved.
+  for (CadSurface& surface : st.cadSurfaces) {
+    if (surface.builtAtRevision == st.cadGpuRevision)
+      continue;
+    const bool alreadyRunning =
+        std::any_of(st.surfaceRebuildAsync.begin(), st.surfaceRebuildAsync.end(),
+                   [&](const std::unique_ptr<SurfaceJob>& j) { return j->surfaceName == surface.name; });
+    if (alreadyRunning)
+      continue;
+
+    // Resolution against AppCommandState happens HERE, on the UI thread — the worker below receives
+    // only the already-resolved, plain-data result and touches no drawing state (architecture §8
+    // rule 1). This is also where dangling breakline/boundary ids actually get dropped from the
+    // definition, so that observably happens the very next frame after the referenced entity is
+    // deleted, not only once the (possibly slower) background triangulation finishes.
+    std::vector<std::string> resolveLog;
+    SurfaceBuildInputs inputs = ResolveSurfaceInputs(st, surface, resolveLog);
+    for (std::string& m : resolveLog)
+      log.push_back(std::move(m));
+
+    auto job = std::make_unique<SurfaceJob>();
+    job->surfaceName = surface.name;
+    job->generation = st.cadGpuRevision;
+    job->originX = st.worldDocumentOriginX;
+    job->originY = st.worldDocumentOriginY;
+    SurfaceJob* jobPtr = job.get();
+    jobPtr->thread = std::thread([jobPtr, in = std::move(inputs)]() {
+      if (jobPtr->cancel.load(std::memory_order_acquire)) {
+        jobPtr->done.store(true, std::memory_order_release);
+        return;
+      }
+      jobPtr->result = RunSurfaceBuild(in);
+      jobPtr->done.store(true, std::memory_order_release);
+    });
+    st.surfaceRebuildAsync.push_back(std::move(job));
+  }
 }
 
 void EnsureEntityIds(AppCommandState& st) {
@@ -1527,6 +1796,7 @@ static float CadDimAngularPickRadius(float vx, float vy, float bisx, float bisy,
 } // namespace
 
 float CadOffsetEntityPickTolWorld(const AppCommandState& st);
+void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary, std::vector<std::string>& log);
 
 float RotateDeltaFromReferenceAndNewSegment(float refX1, float refY1, float refX2, float refY2,
                                              float newX1, float newY1, float newX2, float newY2) {
@@ -2250,6 +2520,8 @@ const CmdEntry kRegistry[] = {
     {"id", "", "Identify point coordinates"},
     {"inverse", "inv", "Inverse between two points"},
     {"surfelev", "se", "Surface elevation at a point; grade between two"},
+    {"designatebreakline", "dbl", "Add a picked line/polyline as a surface breakline"},
+    {"designateboundary", "dbd", "Add a picked closed polyline as a surface boundary (outer/hide/show)"},
     {"plotscale", "pscale", "Set the plot scale"},
     {"move", "m", "Move objects"},
     {"copy", "cp", "Copy objects"},
@@ -6010,6 +6282,15 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
+  if (st.active == K::DesignateBreakline) {
+    CommitDesignateAt(st, wx, wy, /*isBoundary=*/false, log);
+    return;
+  }
+  if (st.active == K::DesignateBoundary) {
+    CommitDesignateAt(st, wx, wy, /*isBoundary=*/true, log);
+    return;
+  }
+
   if (st.active == K::Align) {
     using AP = AppCommandState::AlignPhase;
     if (st.alignPhase == AP::PickSelection) {
@@ -7881,6 +8162,121 @@ void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>&
   st.surfaceElevFromZ.clear();
   st.active = K::SurfaceElevGrade;
   log.push_back("SURFELEV — pick a point for its surface elevation; pick a second for grade. ESC cancels.");
+}
+
+namespace {
+/// The stable id (REQ-076) of a picked Line or Polyline, or 0 for anything else / an out-of-range
+/// index — 0 is never a real id (\ref EntityAttributes::id), so it doubles as "not applicable" here.
+std::uint64_t EntityIdOfLineOrPolylinePick(const AppCommandState& st, const SelectedEntity& hit) {
+  const auto idOf = [](const std::vector<EntityAttributes>& v, int i) -> std::uint64_t {
+    return (i >= 0 && static_cast<size_t>(i) < v.size()) ? v[static_cast<size_t>(i)].id : 0;
+  };
+  switch (hit.type) {
+  case SelectedEntity::Type::LineSeg:  return idOf(st.userLineAttrs, hit.index);
+  case SelectedEntity::Type::Polyline: return idOf(st.userPolylineAttrs, hit.index);
+  default:                             return 0;
+  }
+}
+} // namespace
+
+void StartDesignateBreaklineCommand(AppCommandState& st, const std::string& surfaceName,
+                                    std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None) {
+    log.push_back("DESIGNATEBREAKLINE — finish or cancel the active command first.");
+    return;
+  }
+  if (FindSurfaceIndex(st, surfaceName) < 0) {
+    log.push_back("DESIGNATEBREAKLINE — no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.designateSurfaceName = surfaceName;
+  st.active = K::DesignateBreakline;
+  log.push_back("DESIGNATEBREAKLINE — pick a line or polyline to use as a breakline on \"" + surfaceName +
+               "\". ESC cancels.");
+}
+
+void StartDesignateBoundaryCommand(AppCommandState& st, const std::string& surfaceName, CadBoundaryKind kind,
+                                   std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None) {
+    log.push_back("DESIGNATEBOUNDARY — finish or cancel the active command first.");
+    return;
+  }
+  if (FindSurfaceIndex(st, surfaceName) < 0) {
+    log.push_back("DESIGNATEBOUNDARY — no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.designateSurfaceName = surfaceName;
+  st.designateBoundaryKind = kind;
+  st.active = K::DesignateBoundary;
+  const char* kindName = kind == CadBoundaryKind::Outer ? "outer" : kind == CadBoundaryKind::Hide ? "hide" : "show";
+  log.push_back(std::string("DESIGNATEBOUNDARY — pick a CLOSED polyline to use as a ") + kindName +
+               " boundary on \"" + surfaceName + "\". ESC cancels.");
+}
+
+/// Shared commit for both DESIGNATEBREAKLINE and DESIGNATEBOUNDARY: pick, validate, append to the
+/// target surface's definition, and trigger the dynamic rebuild (REQ-069) — a plain BumpCadGpuCache
+/// is enough, since TickSurfaceRebuilds' dirty check is exactly "cadGpuRevision moved."
+void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  const std::string cmdName = isBoundary ? "DESIGNATEBOUNDARY" : "DESIGNATEBREAKLINE";
+  const int si = FindSurfaceIndex(st, st.designateSurfaceName);
+  if (si < 0) {
+    log.push_back(cmdName + " — surface \"" + st.designateSurfaceName + "\" no longer exists.");
+    st.active = K::None;
+    return;
+  }
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+    log.push_back(cmdName + " — nothing under cursor; try again, or ESC to cancel.");
+    return;  // stays active — try again, matching OFFSET's WaitSelectEntity miss behaviour
+  }
+  if (hit.type != SelectedEntity::Type::LineSeg && hit.type != SelectedEntity::Type::Polyline) {
+    log.push_back(cmdName + " — that is not a line or polyline; try again, or ESC to cancel.");
+    return;
+  }
+  if (isBoundary && hit.type != SelectedEntity::Type::Polyline) {
+    log.push_back(cmdName + " — a boundary must be a closed polyline, not a line; try again, or ESC to cancel.");
+    return;
+  }
+  if (isBoundary) {
+    const size_t pi = static_cast<size_t>(hit.index);
+    const bool closed = pi < st.userPolylineClosed.size() && st.userPolylineClosed[pi] != 0;
+    if (!closed) {
+      log.push_back(cmdName + " — that polyline is not closed; try again, or ESC to cancel.");
+      return;
+    }
+  }
+  const std::uint64_t id = EntityIdOfLineOrPolylinePick(st, hit);
+  if (id == 0) {
+    log.push_back(cmdName + " — could not identify that entity; try again, or ESC to cancel.");
+    return;
+  }
+
+  CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  if (isBoundary) {
+    CadSurfaceBoundary b;
+    b.entityId = id;
+    b.kind = st.designateBoundaryKind;
+    surface.boundaries.push_back(b);
+    const char* kindName = b.kind == CadBoundaryKind::Outer ? "outer"
+                          : b.kind == CadBoundaryKind::Hide  ? "hide"
+                                                              : "show";
+    log.push_back("DESIGNATEBOUNDARY — added a " + std::string(kindName) + " boundary to \"" + surface.name + "\".");
+  } else {
+    surface.breaklineIds.push_back(id);
+    log.push_back("DESIGNATEBREAKLINE — added a breakline to \"" + surface.name + "\".");
+  }
+  BumpCadGpuCache(st);  // marks every surface's dirty check; TickSurfaceRebuilds picks this one up next frame
+  st.active = K::None;
 }
 
 void StartSurveyInverseCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -12484,6 +12880,44 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       }
       return;
     }
+    // `DESIGNATEBREAKLINE <surface name>` (REQ-069) — the whole remainder is the name (surface
+    // names can contain spaces, e.g. "Existing Ground"), so this reads the rest of the line rather
+    // than one `>>` token.
+    if (plotTok == "designatebreakline" || plotTok == "dbl") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      rest = StringUtil::trimCopy(rest);
+      if (rest.empty()) {
+        log.push_back("DESIGNATEBREAKLINE — usage: DESIGNATEBREAKLINE <surface name>.");
+        return;
+      }
+      StartDesignateBreaklineCommand(st, rest, log);
+      return;
+    }
+    // `DESIGNATEBOUNDARY <surface name> <OUTER|HIDE|SHOW>` — the kind is always the LAST token, so
+    // the surface name is whatever remains before it, spaces and all.
+    if (plotTok == "designateboundary" || plotTok == "dbd") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      rest = StringUtil::trimCopy(rest);
+      const size_t sp = rest.find_last_of(" \t");
+      const bool usageError = rest.empty() || sp == std::string::npos;
+      const std::string name = usageError ? std::string() : StringUtil::trimCopy(rest.substr(0, sp));
+      const std::string kindWord =
+          usageError ? std::string() : StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(rest.substr(sp + 1)));
+      CadBoundaryKind kind = CadBoundaryKind::Outer;
+      const bool kindOk = kindWord == "outer" || kindWord == "hide" || kindWord == "show";
+      if (kindWord == "hide")
+        kind = CadBoundaryKind::Hide;
+      else if (kindWord == "show")
+        kind = CadBoundaryKind::Show;
+      if (usageError || name.empty() || !kindOk) {
+        log.push_back("DESIGNATEBOUNDARY — usage: DESIGNATEBOUNDARY <surface name> <OUTER|HIDE|SHOW>.");
+        return;
+      }
+      StartDesignateBoundaryCommand(st, name, kind, log);
+      return;
+    }
   }
 
   if (st.active == AppCommandState::Kind::Delete) {
@@ -13322,6 +13756,11 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
       return "SURFELEV: Pick a point for its surface elevation | ESC cancel";
     return "SURFELEV: Second point for grade | ESC stops after the elevation";
   }
+
+  if (st.active == K::DesignateBreakline)
+    return "DESIGNATEBREAKLINE: Pick a line or polyline | ESC cancel";
+  if (st.active == K::DesignateBoundary)
+    return "DESIGNATEBOUNDARY: Pick a CLOSED polyline | ESC cancel";
 
   if (st.active == K::Polyline) {
     using SAP = AppCommandState::SegmentAnglePickPhase;

@@ -496,6 +496,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/PointGroupTests.cpp
     tests/TinBuildTests.cpp
     tests/TinQueryTests.cpp
+    tests/TinConstraintTests.cpp
     tests/UpdateCheckTests.cpp
     tests/TelemetryPingTests.cpp
     tests/GsMigrateTests.cpp

@@ -25,9 +25,60 @@ double TinInCircle(double ax, double ay, double bx, double by, double cx, double
   return alift * bcdet + blift * cadet + clift * abdet;
 }
 
+std::vector<TinCrossingIssue> TinFindCrossingConflicts(const std::vector<TinConstraint>& constraints) {
+  std::vector<TinCrossingIssue> issues;
+  for (size_t i = 0; i < constraints.size(); ++i) {
+    const TinConstraint& a = constraints[i];
+    const double rx = a.bx - a.ax, ry = a.by - a.ay;
+    for (size_t j = i + 1; j < constraints.size(); ++j) {
+      const TinConstraint& b = constraints[j];
+      const double sx = b.bx - b.ax, sy = b.by - b.ay;
+      // Standard vector line-intersection: t along a, u along b. r x s == 0 means parallel (or
+      // collinear) — no single crossing point to report a Z conflict at.
+      const double rxs = rx * sy - ry * sx;
+      if (std::fabs(rxs) < 1e-12)
+        continue;
+      const double qx = b.ax - a.ax, qy = b.ay - a.ay;
+      const double t = (qx * sy - qy * sx) / rxs;
+      const double u = (qx * ry - qy * rx) / rxs;
+      // Strict interior crossing only: two breaklines sharing an endpoint are not a conflict, they
+      // are the ordinary case of a breakline chain.
+      if (t <= 0.0 || t >= 1.0 || u <= 0.0 || u >= 1.0)
+        continue;
+      const float za = a.az + static_cast<float>(t) * (a.bz - a.az);
+      const float zb = b.az + static_cast<float>(u) * (b.bz - b.az);
+      if (std::fabs(za - zb) > static_cast<float>(kTinPlanEpsilon)) {
+        TinCrossingIssue issue;
+        issue.constraintIndexA = i;
+        issue.constraintIndexB = j;
+        issue.x = a.ax + t * rx;
+        issue.y = a.ay + t * ry;
+        issue.zFromA = za;
+        issue.zFromB = zb;
+        issues.push_back(issue);
+      }
+    }
+  }
+  return issues;
+}
+
 namespace {
 
 constexpr std::uint32_t kNone = 0xFFFFFFFFu;
+
+bool PointInPolygon(double px, double py, const std::vector<std::pair<double, double>>& ring) {
+  // Standard ray-casting test: count edges crossing the horizontal ray to the right of (px,py).
+  // Winding-independent, which is why TinBoundaryLoop documents that ring order does not matter.
+  bool inside = false;
+  const size_t n = ring.size();
+  for (size_t i = 0, j = n - 1; i < n; j = i++) {
+    const double xi = ring[i].first, yi = ring[i].second;
+    const double xj = ring[j].first, yj = ring[j].second;
+    if (((yi > py) != (yj > py)) && (px < (xj - xi) * (py - yi) / (yj - yi) + xi))
+      inside = !inside;
+  }
+  return inside;
+}
 
 /// A triangle plus its edge adjacency.
 ///
@@ -43,14 +94,28 @@ struct Tri {
 
 } // namespace
 
-TinBuildResult BuildTin(const std::vector<TinInputPoint>& points) {
+TinBuildResult BuildTin(const std::vector<TinInputPoint>& points, const std::vector<TinConstraint>& constraints) {
   TinBuildResult r;
+
+  // --- 0. Fold constraint vertices into the point set --------------------------------------------
+  // A breakline/boundary vertex is not required to already be one of \p points (REQ-069): it is
+  // inserted as an ordinary point, carrying its own elevation, exactly like a survey shot. Points
+  // come first so an existing survey point wins a tie against a coincident constraint vertex — the
+  // same "first occurrence wins" rule \ref duplicatesDropped already documents, just extended to a
+  // second source of points.
+  std::vector<TinInputPoint> pts = points;
+  pts.reserve(points.size() + constraints.size() * 2);
+  for (const TinConstraint& c : constraints) {
+    pts.push_back({c.ax, c.ay, c.az});
+    pts.push_back({c.bx, c.by, c.bz});
+  }
 
   // --- 1. De-duplicate plan positions -----------------------------------------------------------
   // Delaunay is undefined for coincident sites: they yield degenerate triangles or a flip loop that
   // never ends. Sorting by (x,y) groups candidates so the check is O(n log n) rather than O(n²).
-  std::vector<TinInputPoint> pts = points;
-  std::sort(pts.begin(), pts.end(), [](const TinInputPoint& p, const TinInputPoint& q) {
+  // A stable sort keeps ties in their original (points-then-constraints) order, which is what makes
+  // "first occurrence wins" mean what it says rather than an arbitrary sort-order artifact.
+  std::stable_sort(pts.begin(), pts.end(), [](const TinInputPoint& p, const TinInputPoint& q) {
     if (p.x != q.x)
       return p.x < q.x;
     return p.y < q.y;
@@ -65,6 +130,12 @@ TinBuildResult BuildTin(const std::vector<TinInputPoint>& points) {
         break;  // sorted by x: nothing earlier can be within epsilon
       if (std::fabs(p.y - uniq[k].y) <= kTinPlanEpsilon) {
         dup = true;
+        // A duplicate is expected (two shots of the same corner, a breakline vertex sitting on a
+        // survey point); a duplicate whose elevation actually DISAGREES is a data conflict and is
+        // counted separately so it can be reported rather than silently resolved by "first wins"
+        // (REQ-069, REQ-201).
+        if (std::fabs(static_cast<double>(p.z) - static_cast<double>(uniq[k].z)) > kTinPlanEpsilon)
+          ++r.conflictingDuplicates;
         break;
       }
     }
@@ -316,6 +387,132 @@ TinBuildResult BuildTin(const std::vector<TinInputPoint>& points) {
     hint = made.empty() ? hint : made[0];
   }
 
+  // --- 5.5 Expose constraint edges (breaklines, boundary rings) — REQ-069 ------------------------
+  // Flip-based insertion (Anglada/Sloan): for each constraint edge not already present, repeatedly
+  // flip whichever crossing triangle-edge currently forms a convex quad, until the constraint edge
+  // itself appears. A crossing edge that is not yet flippable is simply revisited on the next scan —
+  // other flips nearby make it flippable, the standard termination argument for this method. Runs
+  // are bounded so a pathological input is reported unresolved rather than looping forever.
+  if (!constraints.empty()) {
+    // uniq is sorted by (x,y) from step 1; every constraint endpoint was folded into pts in step 0,
+    // so this recovers WHICH uniq index it landed at rather than searching for something that might
+    // be absent.
+    auto findUniqIndex = [&](double x, double y) -> std::uint32_t {
+      auto it = std::lower_bound(uniq.begin(), uniq.end(), x - kTinPlanEpsilon,
+                                 [](const TinInputPoint& p, double v) { return p.x < v; });
+      for (; it != uniq.end() && it->x - x <= kTinPlanEpsilon; ++it)
+        if (std::fabs(it->y - y) <= kTinPlanEpsilon)
+          return static_cast<std::uint32_t>(it - uniq.begin());
+      return kNone;
+    };
+    auto edgeExists = [&](std::uint32_t a, std::uint32_t b) {
+      for (const Tri& t : tris) {
+        if (!t.alive)
+          continue;
+        for (int k = 0; k < 3; ++k)
+          if ((t.v[k] == a && t.v[(k + 1) % 3] == b) || (t.v[k] == b && t.v[(k + 1) % 3] == a))
+            return true;
+      }
+      return false;
+    };
+    // Sets tris[otherSlot]'s neighbour across the edge (fromB,fromA) — the SAME physical edge as
+    // (fromA,fromB) seen from the far side, by adjacency symmetry — to \p toSlot. No-op at the hull.
+    auto relink = [&](std::uint32_t otherSlot, std::uint32_t fromA, std::uint32_t fromB,
+                      std::uint32_t toSlot) {
+      if (otherSlot == kNone)
+        return;
+      Tri& o = tris[otherSlot];
+      for (int k = 0; k < 3; ++k) {
+        if (o.v[k] == fromB && o.v[(k + 1) % 3] == fromA) {
+          o.n[k] = toSlot;
+          return;
+        }
+      }
+    };
+
+    for (const TinConstraint& c : constraints) {
+      const std::uint32_t ia = findUniqIndex(c.ax, c.ay);
+      const std::uint32_t ib = findUniqIndex(c.bx, c.by);
+      if (ia == kNone || ib == kNone || ia == ib)
+        continue;  // zero-length, or (defensively) unresolved — step 0 guarantees resolution normally
+
+      const int budget = static_cast<int>(tris.size()) * 4 + 64;  // generous, finite
+      int guard = 0;
+      while (!edgeExists(ia, ib)) {
+        if (++guard > budget) {
+          ++r.constraintsUnresolved;
+          break;
+        }
+        bool flipped = false;
+        for (std::uint32_t ti = 0; ti < tris.size() && !flipped; ++ti) {
+          if (!tris[ti].alive)
+            continue;
+          for (int k = 0; k < 3 && !flipped; ++k) {
+            const std::uint32_t u = tris[ti].v[k], v = tris[ti].v[(k + 1) % 3];
+            if (u == ia || u == ib || v == ia || v == ib)
+              continue;  // an edge touching either endpoint cannot "cross" the segment
+
+            // Strict interior crossing of (ia,ib) against (u,v) — same test as TinFindCrossingConflicts.
+            const double rx = xs[ib] - xs[ia], ry = ys[ib] - ys[ia];
+            const double sx = xs[v] - xs[u], sy = ys[v] - ys[u];
+            const double rxs = rx * sy - ry * sx;
+            if (std::fabs(rxs) < 1e-12)
+              continue;
+            const double qx = xs[u] - xs[ia], qy = ys[u] - ys[ia];
+            const double tt = (qx * sy - qy * sx) / rxs;
+            const double uu = (qx * ry - qy * rx) / rxs;
+            if (tt <= 0.0 || tt >= 1.0 || uu <= 0.0 || uu >= 1.0)
+              continue;
+
+            const std::uint32_t p = tris[ti].v[(k + 2) % 3];
+            const std::uint32_t otherSlot = tris[ti].n[k];
+            if (otherSlot == kNone)
+              continue;  // a hull edge cannot cross a segment between two interior points
+            int k2 = -1;
+            for (int j = 0; j < 3; ++j)
+              if (tris[otherSlot].v[j] == v && tris[otherSlot].v[(j + 1) % 3] == u) { k2 = j; break; }
+            if (k2 < 0)
+              continue;  // adjacency inconsistency — defensive, should not happen
+            const std::uint32_t q = tris[otherSlot].v[(k2 + 2) % 3];
+
+            // Flip valid only if both new triangles would be non-inverted: exactly the condition
+            // that the quad (u,q,v,p) is convex, expressed as the orientation of the two halves the
+            // new diagonal p-q would cut it into.
+            if (!(TinOrient2D(xs[u], ys[u], xs[q], ys[q], xs[p], ys[p]) > 0.0 &&
+                  TinOrient2D(xs[q], ys[q], xs[v], ys[v], xs[p], ys[p]) > 0.0))
+              continue;
+
+            // Neighbours outside the quad, captured before the two slots are overwritten below.
+            const std::uint32_t nUQ = tris[otherSlot].n[(k2 + 1) % 3];  // edge u->q, in t2
+            const std::uint32_t nPU = tris[ti].n[(k + 2) % 3];          // edge p->u, in t1
+            const std::uint32_t nQV = tris[otherSlot].n[(k2 + 2) % 3];  // edge q->v, in t2
+            const std::uint32_t nVP = tris[ti].n[(k + 1) % 3];          // edge v->p, in t1
+
+            Tri& t1 = tris[ti];
+            Tri& t2 = tris[otherSlot];
+            t1.v[0] = u; t1.v[1] = q; t1.v[2] = p;
+            t1.n[0] = nUQ; t1.n[1] = otherSlot; t1.n[2] = nPU;
+            t2.v[0] = q; t2.v[1] = v; t2.v[2] = p;
+            t2.n[0] = nQV; t2.n[1] = nVP; t2.n[2] = ti;
+
+            relink(nUQ, u, q, ti);
+            relink(nPU, p, u, ti);
+            relink(nQV, q, v, otherSlot);
+            relink(nVP, v, p, otherSlot);
+
+            flipped = true;
+          }
+        }
+        if (!flipped) {
+          // A full scan found no flippable crossing edge — stuck, not merely slow. Report rather
+          // than spin: the mesh is left exactly as it was (no partial constraint applied).
+          ++r.constraintsUnresolved;
+          break;
+        }
+      }
+    }
+  }
+
   // --- 6. Strip the super-triangle and emit -----------------------------------------------------
   r.vertsXyz.reserve(uniq.size() * 3);
   for (const TinInputPoint& p : uniq) {
@@ -342,9 +539,16 @@ TinBuildResult BuildTin(const std::vector<TinInputPoint>& points) {
   }
 
   r.status = TinBuildStatus::Ok;
-  if (r.duplicatesDropped > 0)
+  if (r.duplicatesDropped > 0) {
     r.message = "Dropped " + std::to_string(r.duplicatesDropped) +
                 " point(s) sharing a plan position with an earlier point (first occurrence kept).";
+    if (r.conflictingDuplicates > 0)
+      r.message += " " + std::to_string(r.conflictingDuplicates) +
+                  " of those disagreed on elevation by more than the tolerance.";
+  }
+  if (r.constraintsUnresolved > 0)
+    r.message += (r.message.empty() ? "" : " ") + std::to_string(r.constraintsUnresolved) +
+                " constraint edge(s) could not be enforced.";
   return r;
 }
 
@@ -388,4 +592,58 @@ bool TinElevationAt(const std::vector<float>& vertsXyz, const std::vector<std::u
     return true;
   }
   return false;
+}
+
+void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<float>& vertsXyz,
+                         const std::vector<TinBoundaryLoop>& loops) {
+  if (loops.empty() || indices.size() < 3)
+    return;
+  const size_t triCount = indices.size() / 3;
+  const std::uint32_t vertexCount = static_cast<std::uint32_t>(vertsXyz.size() / 3);
+
+  // Present until an Outer loop first clips it away — matches BuildTin's own convex-hull-only
+  // surface, which is "no boundary" and therefore fully present.
+  std::vector<char> included(triCount, 1);
+
+  // Applied strictly in \p loops order, each loop mutating the CURRENT inclusion state — never
+  // recomputed from scratch — which is what makes "a show boundary inside a hide restores surface
+  // there" and "boundaries apply in definition order" both literally true rather than approximated.
+  for (const TinBoundaryLoop& loop : loops) {
+    if (loop.ring.size() < 3)
+      continue;  // degenerate ring: not enough vertices to enclose anything, skip rather than guess
+    for (size_t t = 0; t < triCount; ++t) {
+      const std::uint32_t a = indices[t * 3], b = indices[t * 3 + 1], c = indices[t * 3 + 2];
+      if (a >= vertexCount || b >= vertexCount || c >= vertexCount)
+        continue;  // corrupt index (e.g. a hand-edited .gs) — leave it as it was, do not read past the array
+      const double cx = (static_cast<double>(vertsXyz[a * 3]) + vertsXyz[b * 3] + vertsXyz[c * 3]) / 3.0;
+      const double cy =
+          (static_cast<double>(vertsXyz[a * 3 + 1]) + vertsXyz[b * 3 + 1] + vertsXyz[c * 3 + 1]) / 3.0;
+      const bool in = PointInPolygon(cx, cy, loop.ring);
+      switch (loop.kind) {
+      case TinBoundaryKind::Outer:
+        if (!in)
+          included[t] = 0;  // only ever clips down; multiple Outer loops intersect
+        break;
+      case TinBoundaryKind::Hide:
+        if (in)
+          included[t] = 0;
+        break;
+      case TinBoundaryKind::Show:
+        if (in)
+          included[t] = 1;  // restores regardless of current state — a no-op outside a prior Hide
+        break;
+      }
+    }
+  }
+
+  std::vector<std::uint32_t> kept;
+  kept.reserve(indices.size());
+  for (size_t t = 0; t < triCount; ++t) {
+    if (included[t]) {
+      kept.push_back(indices[t * 3]);
+      kept.push_back(indices[t * 3 + 1]);
+      kept.push_back(indices[t * 3 + 2]);
+    }
+  }
+  indices = std::move(kept);
 }

@@ -9300,7 +9300,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else {
         TryPlaceSurveyPoint(cmd, commitX, commitY, cmd.createPointsOpts.defaultElevation, log);
       }
-    } else if (cmd.active == K::Offset)
+    } else if (cmd.active == K::Offset || cmd.active == K::DesignateBreakline ||
+             cmd.active == K::DesignateBoundary)
+      // Entity-pick commands (REQ-069, like OFFSET's own WaitSelectEntity): the raw, unsnapped
+      // cursor position is what PickClosestCadEntity hit-tests against, not an OSNAP-adjusted commit
+      // point — a command missing from this list silently ignores every viewport click and appears
+      // to hang on its first prompt (see the comment on the point-picking list below).
       SubmitViewportPick(cmd, rawPickX, rawPickY, log);
     else if (cmd.active == K::PdfAttach &&
              cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint)

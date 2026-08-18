@@ -643,6 +643,19 @@ json BuildRoot(const AppCommandState& st) {
       json o;
       o["name"] = s.name;
       o["sourcePointGroups"] = s.sourcePointGroups;
+      // REQ-069: breaklines/boundaries are stored by stable entity id (REQ-076), never index —
+      // the same rule every other cross-object reference in this file follows.
+      o["breaklineIds"] = s.breaklineIds;
+      json boundaries = json::array();
+      for (const CadSurfaceBoundary& b : s.boundaries) {
+        json bo;
+        bo["entityId"] = b.entityId;
+        bo["kind"] = b.kind == CadBoundaryKind::Outer ? "outer"
+                    : b.kind == CadBoundaryKind::Hide  ? "hide"
+                                                        : "show";
+        boundaries.push_back(std::move(bo));
+      }
+      o["boundaries"] = std::move(boundaries);
       if (s.tin) {
         o["verts"] = s.tin->vertsXyz;
         o["indices"] = s.tin->indices;
@@ -1355,6 +1368,27 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         for (const auto& g : el["sourcePointGroups"])
           if (g.is_string())
             s.sourcePointGroups.push_back(g.get<std::string>());
+      // REQ-069. Ids are resolved lazily against the current drawing the next time the surface
+      // rebuilds (BuildSurfaceFromSources / ResolveSurfaceInputs) — the same lazy-resolution rule
+      // every other stable-id reference in this codebase already follows (ADR-027). An id that no
+      // longer resolves is silently absent here; it is reported and pruned on that next rebuild, not
+      // treated as a load-time error — a legacy file predating REQ-069 simply has none of either.
+      if (el.contains("breaklineIds") && el["breaklineIds"].is_array())
+        for (const auto& id : el["breaklineIds"])
+          if (id.is_number_unsigned())
+            s.breaklineIds.push_back(id.get<std::uint64_t>());
+      if (el.contains("boundaries") && el["boundaries"].is_array())
+        for (const auto& bo : el["boundaries"]) {
+          if (!bo.is_object() || !bo.contains("entityId") || !bo["entityId"].is_number_unsigned())
+            continue;
+          CadSurfaceBoundary b;
+          b.entityId = bo["entityId"].get<std::uint64_t>();
+          const std::string kindStr = bo.value("kind", std::string("outer"));
+          b.kind = kindStr == "hide" ? CadBoundaryKind::Hide
+                 : kindStr == "show" ? CadBoundaryKind::Show
+                                     : CadBoundaryKind::Outer;
+          s.boundaries.push_back(b);
+        }
       if (el.contains("verts") && el["verts"].is_array() && el.contains("indices") &&
           el["indices"].is_array()) {
         auto tin = std::make_shared<CadTin>();
