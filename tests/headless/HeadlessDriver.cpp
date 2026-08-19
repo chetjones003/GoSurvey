@@ -19,15 +19,19 @@
 #include "DxfIo.hpp"
 #include "GsIo.hpp"
 #include "HeadlessFileDialogs.hpp"
+#include "SurveyCsv.hpp"
+#include "SurveyPoints.hpp"
 #include "docinvariants.hpp"
 
 #include <imgui.h>
 
 #include <cstdio>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -122,12 +126,20 @@ struct Run {
 /// Expand %OUT% to the run's temp directory. Transcripts must never write into the source tree
 /// (CON-07 / REQ-200), and a fuzz run writes a lot of files.
 std::string ExpandVars(const Run& run, const std::string& s) {
-  const std::string token = "%OUT%";
+  // %OUT%  — this run's scratch directory.
+  // %DATA% — the repository's `samples/` directory, so a transcript can name a fixture file
+  //          without hard-coding whoever's checkout it was written in.
+  const std::pair<const char*, std::string> vars[] = {
+      {"%OUT%", run.outDir.string()},
+      {"%DATA%", std::string(GOSURVEY_SAMPLES_DIR)},
+  };
   std::string o = s;
-  for (size_t p = o.find(token); p != std::string::npos; p = o.find(token, p)) {
-    const std::string rep = run.outDir.string();
-    o.replace(p, token.size(), rep);
-    p += rep.size();
+  for (const auto& v : vars) {
+    const std::string token = v.first;
+    for (size_t p = o.find(token); p != std::string::npos; p = o.find(token, p)) {
+      o.replace(p, token.size(), v.second);
+      p += v.second.size();
+    }
   }
   return o;
 }
@@ -176,6 +188,22 @@ void TickFrame(Run& run) {
   EnsureEntityIds(run.st);
 }
 
+/// True when a point file's first row is a header (`P,N,E,Z,D`) rather than data.
+///
+/// Decided by the first cell alone: a point number is always a number, and a header's first column
+/// never is. That is the whole rule — a point file has no format marker to consult.
+bool FirstRowLooksLikeHeader(const std::string& path) {
+  std::ifstream f(path);
+  std::string line;
+  if (!f || !std::getline(f, line))
+    return false;
+  const std::string cell = Trim(line.substr(0, line.find_first_of(",; \t")));
+  if (cell.empty())
+    return false;
+  const char c = cell[0];
+  return !(c == '-' || c == '+' || c == '.' || (c >= '0' && c <= '9'));
+}
+
 // ---------------------------------------------------------------------------
 // Step execution
 // ---------------------------------------------------------------------------
@@ -218,14 +246,38 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       Fail(run, "parse", verb + " " + fmt + " needs a path", sourceLine);
       return false;
     }
-    if (fmt != "DXF") {
-      Fail(run, "parse", verb + ": unsupported format " + fmt + " (expected DXF)", sourceLine);
-      return false;
-    }
-    const bool ok = (verb == "EXPORT") ? ExportDxfFile(run.st, path.c_str(), run.log)
-                                       : ImportDxfFile(run.st, path.c_str(), run.log);
-    if (!ok) {
-      Fail(run, "io", verb + " " + fmt + " failed: " + path, sourceLine);
+    if (fmt == "POINTS") {
+      // IMPORT POINTS <path> — a survey point file (REQ-041 / REQ-083), which is how survey label
+      // geometry actually comes into a drawing.
+      //
+      // This is the one place the driver does NOT go through the command line, and the reason is
+      // that there is no command line to go through: IMPORTPOINTS only raises the import window,
+      // and the GUI's Import button is what fills these three fields and calls the importer. The
+      // driver sets exactly those fields and calls exactly that function, so the path under test is
+      // still the user's path — the window is a form, not logic.
+      if (verb == "EXPORT") {
+        Fail(run, "parse", "EXPORT POINTS is not driven; use IMPORT POINTS", sourceLine);
+        return false;
+      }
+      std::snprintf(run.st.surveyImportCsvPath, sizeof run.st.surveyImportCsvPath, "%s", path.c_str());
+      run.st.surveyImportCsvLayoutIdx = 0;  // P,N,E,Z,D — the layout every samples/ point file uses
+      // Skip a header row if there is one. The importer would otherwise reject it as an unparsable
+      // row and say so, which is correct behavior but reads as a failure in a transcript log.
+      run.st.surveyImportCsvSkipFirstRow = FirstRowLooksLikeHeader(path);
+      if (!SurveyCsvImportFile(run.st, run.log)) {
+        Fail(run, "io", "IMPORT POINTS failed: " + path, sourceLine);
+        return false;
+      }
+    } else if (fmt == "DXF") {
+      const bool ok = (verb == "EXPORT") ? ExportDxfFile(run.st, path.c_str(), run.log)
+                                         : ImportDxfFile(run.st, path.c_str(), run.log);
+      if (!ok) {
+        Fail(run, "io", verb + " " + fmt + " failed: " + path, sourceLine);
+        return false;
+      }
+    } else {
+      Fail(run, "parse", verb + ": unsupported format " + fmt + " (expected DXF or POINTS)",
+           sourceLine);
       return false;
     }
   } else if (verb == "DIALOG") {
@@ -344,6 +396,36 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     DoUndo(run.st, run.log);
   } else if (verb == "REDO") {
     DoRedo(run.st, run.log);
+  } else if (verb == "DUMP") {
+    // DUMP LABELS — every survey point's label box, in world units, beside the point it labels.
+    //
+    // Not an assertion. Label PLACEMENT is a relationship between two rectangles, and no
+    // `EXPECT <count>` can express it while a `.gs` diff shows it only as eight bare floats. This
+    // prints the two numbers that decide whether the placement rule holds — the box's offset from
+    // its point, and the box's size — so that a rule like "the anchor does not move when the text
+    // gets longer" can be read straight off the log.
+    const std::string what = UpperAscii(Trim(rest));
+    if (what != "LABELS") {
+      Fail(run, "parse", "DUMP expects LABELS, got: " + rest, sourceLine);
+      return false;
+    }
+    run.log.push_back("[dump] id | dx=left edge, dy=vertical centre, from point | box w,h | text");
+    for (const SurveyPoint& p : run.st.surveyPoints) {
+      const int aix = FindSurveyLabelAnnIndex(run.st, p);
+      if (aix < 0) {
+        run.log.push_back("[dump] " + std::to_string(p.id) + " | (no label)");
+        continue;
+      }
+      const CadAnnotation& a = run.st.cadAnnotations[static_cast<size_t>(aix)];
+      char buf[1024];
+      std::snprintf(buf, sizeof buf,
+                    "[dump] %d | dx=%+.4f dy=%+.4f | w=%.4f h=%.4f | \"%s\"", p.id,
+                    static_cast<double>(a.boxMinX - p.easting),
+                    static_cast<double>(0.5f * (a.boxMinY + a.boxMaxY) - p.northing),
+                    static_cast<double>(a.boxMaxX - a.boxMinX),
+                    static_cast<double>(a.boxMaxY - a.boxMinY), a.text.c_str());
+      run.log.push_back(buf);
+    }
   } else if (verb == "CHECK") {
     CheckInvariants(run, sourceLine);
   } else if (verb == "EXPECT") {
@@ -410,6 +492,79 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       }
       if (!found) {
         Fail(run, "expect", "no log line contains: " + needle, sourceLine);
+        return false;
+      }
+    } else if (what == "LABELANCHOR") {
+      // EXPECT LABELANCHOR — every survey label holds the same position relative to its own point,
+      // whatever its text says: same LEFT EDGE offset, same VERTICAL CENTRE offset.
+      //
+      // Two axes, two different reasons, and the asymmetry is the design rather than an oversight.
+      // X is where the marker was in danger: with a centred X, half of every added character came
+      // back west, so the longest description was the one that buried its own point. X is therefore
+      // pinned at the left edge and the box grows away east. Y was never exposed — the box already
+      // stands clear to the east — so Y is centred, which is what puts the label beside the point
+      // instead of hanging under it. Pinning `boxMaxY` here instead would re-assert the old
+      // hangs-below layout and fail the moment a label had two lines rather than one.
+      //
+      // The width check is a vacuity guard, in the spirit of EXPECT DIFFERENTFILE: six boxes of
+      // identical size would satisfy an equal-offsets test perfectly while proving nothing, because
+      // the text never varied. Offsets equal AND widths varying is what has content.
+      float dx0 = 0.f;
+      float dy0 = 0.f;
+      float w0 = 0.f;
+      bool first = true;
+      bool widthVaries = false;
+      long labels = 0;
+      for (const SurveyPoint& p : run.st.surveyPoints) {
+        const int aix = FindSurveyLabelAnnIndex(run.st, p);
+        if (aix < 0)
+          continue;
+        const CadAnnotation& a = run.st.cadAnnotations[static_cast<size_t>(aix)];
+        const float dx = a.boxMinX - p.easting;
+        const float dy = 0.5f * (a.boxMinY + a.boxMaxY) - p.northing;
+        const float w = a.boxMaxX - a.boxMinX;
+        ++labels;
+        if (dx < 0.f) {
+          Fail(run, "expect",
+               "LABELANCHOR: point " + std::to_string(p.id) + " starts west of its own marker (dx=" +
+                   std::to_string(dx) + ")",
+               sourceLine);
+          return false;
+        }
+        if (first) {
+          dx0 = dx;
+          dy0 = dy;
+          w0 = w;
+          first = false;
+          continue;
+        }
+        // Tolerance is a whisker: these offsets are the SAME arithmetic on the same two floats for
+        // every point, so anything beyond rounding means the text moved the anchor.
+        constexpr float kTol = 1.e-3f;
+        if (std::fabs(dx - dx0) > kTol || std::fabs(dy - dy0) > kTol) {
+          Fail(run, "expect",
+               "LABELANCHOR: point " + std::to_string(p.id) + " anchors at (" + std::to_string(dx) +
+                   ", " + std::to_string(dy) + ") but the first label anchors at (" +
+                   std::to_string(dx0) + ", " + std::to_string(dy0) +
+                   ") — the label's text is moving its anchor",
+               sourceLine);
+          return false;
+        }
+        if (std::fabs(w - w0) > kTol)
+          widthVaries = true;
+      }
+      if (labels < 2) {
+        Fail(run, "expect",
+             "LABELANCHOR: needs at least two labelled points to compare, found " +
+                 std::to_string(labels),
+             sourceLine);
+        return false;
+      }
+      if (!widthVaries) {
+        Fail(run, "expect",
+             "LABELANCHOR: every label box is the same width, so equal anchors prove nothing — "
+             "the fixture must vary the description text",
+             sourceLine);
         return false;
       }
     } else {

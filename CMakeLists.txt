@@ -432,6 +432,11 @@ if(GOSURVEY_BUILD_HEADLESS)
   # imgui_core only. Adding imgui_backend here would drag in glfw and OpenGL and silently undo the
   # property this target exists to hold.
   target_link_libraries(gosurvey_headless PRIVATE imgui_core)
+
+  # %DATA% in a transcript resolves to this, so a fixture is named relative to the repository
+  # rather than to whoever's checkout the transcript was written in.
+  target_compile_definitions(gosurvey_headless PRIVATE
+    GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples")
   if(WIN32)
     # comdlg32 for the file-dialog header's link compatibility; ole32/shell32 for <filesystem> and
     # the shell paths ProcessRun uses. No opengl32, no glfw — verified by REQ-203's acceptance.
