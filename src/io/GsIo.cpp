@@ -645,7 +645,18 @@ json BuildRoot(const AppCommandState& st) {
       o["sourcePointGroups"] = s.sourcePointGroups;
       // REQ-069: breaklines/boundaries are stored by stable entity id (REQ-076), never index —
       // the same rule every other cross-object reference in this file follows.
-      o["breaklineIds"] = s.breaklineIds;
+      //
+      // REQ-075 gave both a descriptive string, so breaklines became objects like boundaries already
+      // were. The old `breaklineIds` array of bare numbers is still READ below; it is no longer
+      // written, so a file makes exactly one trip through the change.
+      json breaklines = json::array();
+      for (const CadSurfaceBreakline& bl : s.breaklines) {
+        json blo;
+        blo["entityId"] = bl.entityId;
+        blo["description"] = bl.description;
+        breaklines.push_back(std::move(blo));
+      }
+      o["breaklines"] = std::move(breaklines);
       json boundaries = json::array();
       for (const CadSurfaceBoundary& b : s.boundaries) {
         json bo;
@@ -653,6 +664,7 @@ json BuildRoot(const AppCommandState& st) {
         bo["kind"] = b.kind == CadBoundaryKind::Outer ? "outer"
                     : b.kind == CadBoundaryKind::Hide  ? "hide"
                                                         : "show";
+        bo["name"] = b.name;
         boundaries.push_back(std::move(bo));
       }
       o["boundaries"] = std::move(boundaries);
@@ -1373,10 +1385,28 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       // every other stable-id reference in this codebase already follows (ADR-027). An id that no
       // longer resolves is silently absent here; it is reported and pruned on that next rebuild, not
       // treated as a load-time error — a legacy file predating REQ-069 simply has none of either.
-      if (el.contains("breaklineIds") && el["breaklineIds"].is_array())
+      //
+      // Breaklines are read in BOTH forms. `breaklines` is the current one, objects carrying the
+      // REQ-075 description; `breaklineIds` is what REQ-069 originally wrote, a bare id array. A
+      // drawing saved before REQ-075 therefore keeps its breaklines instead of silently losing them,
+      // and is written back in the new form — one migration, on first save, with no separate step.
+      if (el.contains("breaklines") && el["breaklines"].is_array()) {
+        for (const auto& blo : el["breaklines"]) {
+          if (!blo.is_object() || !blo.contains("entityId") || !blo["entityId"].is_number_unsigned())
+            continue;
+          CadSurfaceBreakline bl;
+          bl.entityId = blo["entityId"].get<std::uint64_t>();
+          bl.description = blo.value("description", std::string());
+          s.breaklines.push_back(std::move(bl));
+        }
+      } else if (el.contains("breaklineIds") && el["breaklineIds"].is_array()) {
         for (const auto& id : el["breaklineIds"])
-          if (id.is_number_unsigned())
-            s.breaklineIds.push_back(id.get<std::uint64_t>());
+          if (id.is_number_unsigned()) {
+            CadSurfaceBreakline bl;
+            bl.entityId = id.get<std::uint64_t>();
+            s.breaklines.push_back(std::move(bl));  // legacy: no description existed to carry
+          }
+      }
       if (el.contains("boundaries") && el["boundaries"].is_array())
         for (const auto& bo : el["boundaries"]) {
           if (!bo.is_object() || !bo.contains("entityId") || !bo["entityId"].is_number_unsigned())
@@ -1387,7 +1417,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           b.kind = kindStr == "hide" ? CadBoundaryKind::Hide
                  : kindStr == "show" ? CadBoundaryKind::Show
                                      : CadBoundaryKind::Outer;
-          s.boundaries.push_back(b);
+          b.name = bo.value("name", std::string());  // absent in a pre-REQ-075 file
+          s.boundaries.push_back(std::move(b));
         }
       if (el.contains("verts") && el["verts"].is_array() && el.contains("indices") &&
           el["indices"].is_array()) {

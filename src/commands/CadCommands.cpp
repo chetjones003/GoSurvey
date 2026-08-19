@@ -1382,18 +1382,18 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
 
   // Breaklines (REQ-069): resolve each by stable entity id, dropping — not merely skipping — any
   // that no longer resolve, so the STORED definition never holds a dangling reference (§8 ASSUMPTION-1).
-  std::vector<std::uint64_t> resolvedBreaklineIds;
+  std::vector<CadSurfaceBreakline> resolvedBreaklines;
   int droppedBreaklines = 0;
-  for (std::uint64_t id : surface.breaklineIds) {
+  for (const CadSurfaceBreakline& bl : surface.breaklines) {
     ResolvedChain chain;
-    if (!ResolveDefinitionChain(st, id, /*requireClosed=*/false, chain)) {
+    if (!ResolveDefinitionChain(st, bl.entityId, /*requireClosed=*/false, chain)) {
       ++droppedBreaklines;
       continue;
     }
-    resolvedBreaklineIds.push_back(id);
+    resolvedBreaklines.push_back(bl);
     AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints);
   }
-  surface.breaklineIds = std::move(resolvedBreaklineIds);
+  surface.breaklines = std::move(resolvedBreaklines);
   if (droppedBreaklines > 0)
     log.push_back("Surface \"" + surface.name + "\": " + std::to_string(droppedBreaklines) +
                   " breakline(s) no longer exist and were removed from the definition.");
@@ -1652,7 +1652,7 @@ void ReportSurfaces(const AppCommandState& st, std::vector<std::string>& log) {
     line += s.tin ? (std::to_string(s.vertexCount()) + " points, " + std::to_string(s.triangleCount()) +
                      " triangles")
                   : std::string("not built");
-    line += ", " + std::to_string(s.breaklineIds.size()) + " breakline(s), " +
+    line += ", " + std::to_string(s.breaklines.size()) + " breakline(s), " +
             std::to_string(s.boundaries.size()) + " boundary(ies).";
     log.push_back(line);
 
@@ -1661,16 +1661,17 @@ void ReportSurfaces(const AppCommandState& st, std::vector<std::string>& log) {
       log.push_back("  group " + std::to_string(i + 1) + ": \"" + s.sourcePointGroups[i] + "\"" +
                     (exists ? "" : "  (missing)"));
     }
-    for (size_t i = 0; i < s.breaklineIds.size(); ++i)
+    for (size_t i = 0; i < s.breaklines.size(); ++i)
       log.push_back("  breakline " + std::to_string(i + 1) + ": entity id " +
-                    std::to_string(s.breaklineIds[i]));
+                    std::to_string(s.breaklines[i].entityId) +
+                    (s.breaklines[i].description.empty() ? "" : "  \"" + s.breaklines[i].description + "\""));
     for (size_t i = 0; i < s.boundaries.size(); ++i) {
       const CadSurfaceBoundary& b = s.boundaries[i];
       const char* kindName = b.kind == CadBoundaryKind::Outer ? "outer"
                             : b.kind == CadBoundaryKind::Hide  ? "hide"
                                                                : "show";
       log.push_back("  boundary " + std::to_string(i + 1) + ": " + kindName + ", entity id " +
-                    std::to_string(b.entityId));
+                    std::to_string(b.entityId) + (b.name.empty() ? "" : "  \"" + b.name + "\""));
     }
     if (!s.lastBuildMessage.empty())
       log.push_back("  last build: " + s.lastBuildMessage);
@@ -1795,7 +1796,7 @@ void RunUndesignate(AppCommandState& st, const std::string& args, std::vector<st
   const int n = numOk ? static_cast<int>(parsed) : 0;  // 0 fails the range check below
 
   CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
-  const size_t count = isBoundary ? s.boundaries.size() : s.breaklineIds.size();
+  const size_t count = isBoundary ? s.boundaries.size() : s.breaklines.size();
   if (n < 1 || static_cast<size_t>(n) > count) {
     log.push_back("UNDESIGNATE — \"" + s.name + "\" has " + std::to_string(count) + " " + what +
                   "(s); " + f[2] + " is out of range (SURFACELIST numbers them).");
@@ -1805,7 +1806,7 @@ void RunUndesignate(AppCommandState& st, const std::string& args, std::vector<st
   if (isBoundary)
     s.boundaries.erase(s.boundaries.begin() + (n - 1));
   else
-    s.breaklineIds.erase(s.breaklineIds.begin() + (n - 1));
+    s.breaklines.erase(s.breaklines.begin() + (n - 1));
   log.push_back("UNDESIGNATE — removed " + what + " " + std::to_string(n) + " from \"" + s.name + "\".");
   BumpCadGpuCache(st);  // TickSurfaceRebuilds picks the change up; SURFACEREBUILD forces it now
 }
@@ -8470,15 +8471,24 @@ void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary,
     CadSurfaceBoundary b;
     b.entityId = id;
     b.kind = st.designateBoundaryKind;
+    b.name = st.designateBoundaryName;  // REQ-075; empty when the command was typed, not dialogued
     surface.boundaries.push_back(b);
     const char* kindName = b.kind == CadBoundaryKind::Outer ? "outer"
                           : b.kind == CadBoundaryKind::Hide  ? "hide"
                                                               : "show";
-    log.push_back("DESIGNATEBOUNDARY — added a " + std::string(kindName) + " boundary to \"" + surface.name + "\".");
+    log.push_back("DESIGNATEBOUNDARY — added a " + std::string(kindName) + " boundary" +
+                  (b.name.empty() ? "" : " \"" + b.name + "\"") + " to \"" + surface.name + "\".");
   } else {
-    surface.breaklineIds.push_back(id);
-    log.push_back("DESIGNATEBREAKLINE — added a breakline to \"" + surface.name + "\".");
+    CadSurfaceBreakline bl;
+    bl.entityId = id;
+    bl.description = st.designateBreaklineDescription;
+    surface.breaklines.push_back(bl);
+    log.push_back("DESIGNATEBREAKLINE — added a breakline" +
+                  (bl.description.empty() ? "" : " \"" + bl.description + "\"") + " to \"" + surface.name + "\".");
   }
+  // Consumed: a later typed DESIGNATE* must not inherit the last dialog's text.
+  st.designateBreaklineDescription.clear();
+  st.designateBoundaryName.clear();
   BumpCadGpuCache(st);  // marks every surface's dirty check; TickSurfaceRebuilds picks this one up next frame
   st.active = K::None;
 }

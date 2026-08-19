@@ -1249,6 +1249,11 @@ struct AppCommandState {
   std::string designateSurfaceName;
   /// REQ-069: which ring kind DESIGNATEBOUNDARY is adding — irrelevant to DESIGNATEBREAKLINE.
   CadBoundaryKind designateBoundaryKind = CadBoundaryKind::Outer;
+  /// REQ-075: the description / name the Add Breaklines and Add Boundaries dialogs collected before
+  /// the pick, stamped onto the definition item on commit. Empty when the command was typed rather
+  /// than started from the panel, which is the ordinary case for the command line.
+  std::string designateBreaklineDescription;
+  std::string designateBoundaryName;
 
   bool showViewPointsWindow = false;
   bool showSettingsWindow = false;

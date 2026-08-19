@@ -255,6 +255,20 @@ enum class CadBoundaryKind : std::uint8_t { Outer, Hide, Show };
 struct CadSurfaceBoundary {
   std::uint64_t entityId = 0;
   CadBoundaryKind kind = CadBoundaryKind::Outer;
+  /// What the user called it, for the Surface Manager's definition tree (REQ-075). Optional and
+  /// purely descriptive — the entity id is the identity, never this. Empty is normal.
+  std::string name;
+};
+
+/// A breakline referenced by stable entity id (REQ-076) — a Line or a Polyline in the drawing.
+///
+/// A struct rather than a bare id so it can carry the description the Add Breaklines dialog collects
+/// (REQ-075), mirroring \ref CadSurfaceBoundary. `.gs` writes these as objects and still reads the
+/// original `breaklineIds` array of bare numbers, so a drawing saved before REQ-075 loads unchanged.
+struct CadSurfaceBreakline {
+  std::uint64_t entityId = 0;
+  /// Descriptive only, like \ref CadSurfaceBoundary::name. Empty is normal.
+  std::string description;
 };
 
 /// A named TIN surface (REQ-068).
@@ -280,7 +294,7 @@ struct CadSurface {
   /// that no longer resolves at rebuild time is dropped from this list, not left dangling
   /// (`BuildSurfaceFromSources`) — REQ-069's "deleting a polyline used as a breakline removes it from
   /// the definition."
-  std::vector<std::uint64_t> breaklineIds;
+  std::vector<CadSurfaceBreakline> breaklines;
 
   /// Boundary rings, applied in this exact order (REQ-069: "boundaries apply in definition order").
   /// Same dangling-id handling as \ref breaklineIds.
