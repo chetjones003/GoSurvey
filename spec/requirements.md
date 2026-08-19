@@ -2442,6 +2442,107 @@ requirements is a planning failure, not a sign of rigor.
 
 ---
 
+### REQ-085 — 3D polyline
+- Purpose:     draw a linework string whose vertices each carry their own elevation, which is what a
+               breakline or a feature line is made of
+- Priority:    should
+- Type:        functional
+- Statement:   A `3DPOLY` command draws a polyline in which **every vertex has its own elevation**,
+               entered per vertex rather than taken from the ELEV work plane. An object snap
+               supplies the snapped point's Z (REQ-058, already the rule); with no snap the vertex
+               elevation may be typed. The result is an ordinary polyline in the existing store —
+               `userPolylineVerts` is already stride-3 XYZ — so it selects, moves, snaps, persists,
+               and may be designated a breakline (REQ-069) exactly as any polyline does.
+- Acceptance:
+  - a `3DPOLY` drawn with three vertices at three different typed elevations stores three different
+    Z values, and a `.gs` round trip preserves each;
+  - snapping a vertex to a survey point gives that vertex the point's elevation, with ELEV set to
+    an unrelated value;
+  - the result is accepted by `DESIGNATEBREAKLINE` and the surface honours its per-vertex elevations;
+  - the ordinary `POLYLINE` command is unchanged.
+- Owner-layer: Commands, UI
+- Status:      proposed
+- Revisions:   2026-08-19 — initial. Raised when the surface workflow was revisited: breaklines were
+               being drawn with `POLYLINE`, which commits every vertex at the ELEV plane unless the
+               user happens to snap, so a breakline drawn free-hand silently tore the surface down
+               to elevation 0 along its length.
+
+### REQ-086 — A point file as a surface data source
+- Purpose:     build a surface directly from a delivered point file, without importing thousands of
+               points into the drawing first
+- Priority:    should
+- Type:        functional
+- Statement:   A surface's definition may reference **point files** by path alongside its point
+               groups (REQ-069). A linked file is re-read on rebuild, so editing the file changes
+               the surface, and its points feed the triangulation **without becoming drawing survey
+               points**. A linked file may be **imported into the drawing** instead, which reads it
+               once through the REQ-083 import path, creates survey points and a point group, and
+               breaks the link. A path that no longer resolves is reported and the surface keeps its
+               last good triangulation (REQ-001), rather than silently shrinking.
+- Acceptance:
+  - a surface built from a linked file has the file's points in its triangulation and the drawing's
+    survey point count is unchanged;
+  - editing the file and rebuilding changes the triangle count;
+  - breaking the link creates survey points and a point group, and the surface still builds
+    identically afterwards;
+  - a missing file is named in the log, the surface is marked not-current, and the previous
+    triangulation is retained;
+  - a `.gs` round trip preserves the link, and a legacy `.gs` with no such array loads unchanged.
+- Owner-layer: Domain, IO, UI
+- Status:      proposed
+- Revisions:   2026-08-19 — initial. The file is read during the UI-thread resolve step
+               (`ResolveSurfaceInputs`), never on the rebuild worker, so REQ-069's worker stays pure
+               and touches no `AppCommandState` and no filesystem (architecture §8 rule 1).
+
+### REQ-087 — Feature line entity
+- Purpose:     a named 3D linework object that grading is designed with and that a surface can
+               consume as a breakline — the object a designer edits, as opposed to survey linework
+- Priority:    should
+- Type:        functional
+- Statement:   A **feature line** is a first-class drawing entity: an ordered chain of points each
+               with an elevation, carrying a name and a description. It may be created by drawing it
+               (`FEATURELINE`), or converted from existing lines, polylines, arcs or 3D polylines
+               (`FEATURELINESFROMOBJECTS`), which may optionally erase the source. Its geometry is
+               editable — insert and delete a PI — and it may be **added to a surface as a
+               breakline**, after which the surface tracks it dynamically like any other breakline
+               (REQ-069). It selects, moves, snaps, hides by layer, persists to `.gs`, and is
+               undoable in one step per operation, like every other entity (REQ-076 identity).
+- Acceptance:
+  - a feature line drawn with per-vertex elevations survives a `.gs` round trip byte-identically;
+  - converting a closed polyline yields a closed feature line with the same vertices;
+  - inserting a PI adds a vertex without changing the elevation of the existing ones;
+  - adding a feature line to a surface forces triangulation edges along it, and moving the feature
+    line rebuilds the surface with no user action;
+  - deleting the feature line removes it from the surface's definition (REQ-069's rule);
+  - a legacy `.gs` with no feature lines loads unchanged.
+- Owner-layer: Domain, IO, Renderer, UI, Commands
+- Status:      proposed
+- Revisions:   2026-08-19 — initial. Reverses ADR-028 alternative (5), which deferred feature lines
+               as "a separate milestone once surfaces are trustworthy"; this is that milestone.
+
+### REQ-088 — Feature line elevation editing
+- Purpose:     set and check grade along a feature line, which is the actual work of grading design
+- Priority:    should
+- Type:        functional
+- Statement:   A feature line's elevations are editable through a table showing, per point:
+               **station, elevation, length to the next point, grade back and grade ahead**. Editing
+               an elevation updates the adjacent grades; editing a grade updates the downstream
+               elevations. Points may be raised or lowered as a set by a delta. A feature line
+               additionally supports **elevation points** — points that carry an elevation but are
+               not geometry vertices, insertable and deletable independently of PIs.
+- Acceptance:
+  - typing an elevation updates grade back and grade ahead on the neighbouring rows and nowhere else;
+  - typing a grade ahead moves the next point's elevation and leaves the current one alone;
+  - stations and lengths agree with the feature line's plan geometry to REQ-101's tolerance;
+  - an elevation point changes the surface when the feature line is used as a breakline, and does
+    not add a plan vertex;
+  - every edit is undoable in one step and the surface rebuilds with no user action.
+- Owner-layer: UI, Domain
+- Status:      proposed
+- Revisions:   2026-08-19 — initial.
+
+---
+
 ## Performance requirements
 
 > Performance is a requirement, not an afterthought — but always paired with a

@@ -153,9 +153,41 @@ A lightweight board that complements the milestones. Keep each column honest.
   - Step 5 — REQ-069, breaklines/boundaries/dynamic rebuild, is next: the hardest step, needing
     step 1's stable ids for a breakline to safely reference points, and adding the background-rebuild
     worker.
-- **Deliberately out of scope:** grading design objects and feature lines, contour smoothing
-  (linear contours only), proximity / wall / non-destructive breaklines, surface import from
-  Civil 3D, and DEM / point-cloud sources. See ADR-028.
+- **Deliberately out of scope:** grading design objects, contour smoothing (linear contours only),
+  proximity / wall / non-destructive breaklines, surface import from Civil 3D, and DEM /
+  point-cloud sources. See ADR-028.
+  - **Feature lines moved out of this list 2026-08-19** (decision D-2026-08-19-a). ADR-028
+    alternative (5) deferred them as "a separate milestone once surfaces are trustworthy" rather
+    than declining them on merits; that milestone is **M-Grading** below. The rest of the list
+    stands, including the other breakline types.
+
+### M-Grading — Surface definition UI, 3D linework, and feature lines (incremental)
+- **Goal:** make a surface's definition editable where a designer expects to find it, and give them
+  the 3D linework grading is actually designed with.
+- **Delivers:** REQ-075 (already accepted, never built), REQ-085 (3D polyline), REQ-086 (point file
+  as a surface source), REQ-087 (feature line entity), REQ-088 (feature line elevation editing).
+- **Sequence** — chosen by the user 2026-08-19; each step is independently shippable:
+  1. **REQ-075 — Surface Manager panel.** An explorer tree: `Surfaces ▸ <surface> ▸ Definition ▸
+     Point Groups / Breaklines / Boundaries / Point Files`, right-click ▸ Add… / Remove / Refresh,
+     with **Add Boundaries** (name, type) and **Add Breaklines** (description, type) dialogs, plus
+     reorder, the stale/rebuilding indicator, and the counts REQ-075 already asks for. **Needs no
+     spec change** — REQ-075 has required this since 2026-08-12 and the current panel is explicitly
+     a stub. Boundary types are the three the engine has (outer / show / hide); breakline types are
+     Standard only. The Point Files node appears here but cannot act until step 2.
+  2. **REQ-085 + REQ-086 — 3D polyline and linked point files.** `3DPOLY` is an entry mode, not a
+     storage change: the polyline store is already stride-3 XYZ and `CadCommitElevation` already
+     returns a snapped point's own Z (REQ-058). Point files make the step-1 node live.
+  3. **REQ-087 + REQ-088 — feature lines and the elevation editor.** The largest step by far: a new
+     entity kind with its own store, and a station / elevation / grade table. Needs its own ADR
+     before implementation — see the open question below.
+- **Open before step 3 starts:** an ADR for the feature-line entity. ADR-028's consequences
+  paragraph is explicit that a new store grows a case in selection, extents, layer state, the undo
+  snapshot, `.gs`, DXF export, render, snap, pick, grips and properties; the project's own note on
+  3D entity work records that a missed site there is **silent in plan view**, not a compile error.
+  The ADR must enumerate those sites and say how elevation points (which carry an elevation but are
+  not plan vertices) are stored without breaking the flat-array stride invariant (architecture §11.8).
+- **Status:** proposed 2026-08-19. Step 1 may proceed immediately under REQ-075; steps 2–3 wait on
+  REQ-085…088 being accepted.
 
 ### M-Distribution — Automated releases and in-app updates (incremental)
 - **Accepted 2026-08-15** (REQ-077, REQ-078, REQ-202, ADR-029). Runs in parallel with M-Surfaces:
