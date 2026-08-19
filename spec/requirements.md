@@ -2461,11 +2461,16 @@ requirements is a planning failure, not a sign of rigor.
   - the result is accepted by `DESIGNATEBREAKLINE` and the surface honours its per-vertex elevations;
   - the ordinary `POLYLINE` command is unchanged.
 - Owner-layer: Commands, UI
-- Status:      proposed
+- Status:      accepted (2026-08-19)
 - Revisions:   2026-08-19 — initial. Raised when the surface workflow was revisited: breaklines were
                being drawn with `POLYLINE`, which commits every vertex at the ELEV plane unless the
                user happens to snap, so a breakline drawn free-hand silently tore the surface down
                to elevation 0 along its length.
+               2026-08-19 — accepted and implemented (TASK-075). One acceptance condition is NOT
+               covered by an automated test and is recorded as such rather than claimed: snapping a
+               vertex to a survey point cannot be driven headlessly, because `viewportSnapPickValid`
+               is set by the UI hover path the REQ-203 driver has no equivalent of. The code path is
+               shared with POLYLINE (`CadCommitElevation`), which REQ-058 already covers.
 
 ### REQ-086 — A point file as a surface data source
 - Purpose:     build a surface directly from a delivered point file, without importing thousands of

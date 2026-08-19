@@ -1,7 +1,7 @@
 # TASK-074 — Surface Manager panel: definition tree and Add dialogs
 
 - Type:    feature
-- Status:  self-verify
+- Status:  done
 - Opened:  2026-08-19
 - Owner:   chetjones003
 
@@ -90,7 +90,7 @@ ASSUMPTION-1: "Refresh" on a definition node means "rebuild this surface now".
   - [x] 3. Panel tree + counts + stale/rebuilding indicator.
   - [x] 4. Add Boundaries / Add Breaklines dialogs, wired to the existing pick commands.
   - [x] 5. Remove + reorder on definition items.
-  - [ ] 6. Self-verify, transcript green, completion report.
+  - [x] 6. Self-verify, transcript green, completion report.
 
 ## 7. Workflow-specific notes (Feature)
 - Pre-flight answered? Yes — the five decisions in D-2026-08-19-a.
@@ -123,15 +123,15 @@ ASSUMPTION-1: "Refresh" on a definition node means "rebuild this surface now".
 
 ## 10. Verification result
 - Submitted: 2026-08-19
-- Verdict:   PASS on everything checkable without a window. **Not yet visually verified** — the tree,
-             the context menus and the two modals compile and their command-layer targets are all
-             covered by the transcript, but ImGui layout and popup behaviour cannot be checked from
-             a test. Needs a look in the running application before this is called done.
+- Verdict:   **PASS.** Everything checkable without a window was green (445 ctest cases), and the
+             half that cannot be — ImGui layout, the context menus, the two modals — was confirmed
+             by the user in the running application 2026-08-19 ("looks okay"). Recorded as their
+             observation, not inferred from the build succeeding.
 
 ## 11. Outcome
-- Requirements satisfied: REQ-075 (pending the visual check above).
+- Requirements satisfied: REQ-075 — Acceptance met: yes, all five conditions.
 - Tests added: `transcripts/req075-legacy-breaklineids-migrate.txt` (13 steps) +
   `samples/legacy-breaklineids.gs` fixture.
 - Technical debt: none introduced. Q1 (greyed vs omitted type entries) is open and reversible.
 - Docs updated: this task log.
-- Done: pending user review in the application.
+- Done: 2026-08-19.

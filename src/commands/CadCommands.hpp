@@ -1255,6 +1255,21 @@ struct AppCommandState {
   std::string designateBreaklineDescription;
   std::string designateBoundaryName;
 
+  /// REQ-085: the active polyline draft is a **3D polyline** — vertices may carry a typed elevation.
+  ///
+  /// A flag on the existing POLYLINE draft rather than a `Kind` of its own. The two commands differ
+  /// only in how a vertex's Z is obtained; a separate `Kind` would have to be added to both viewport
+  /// dispatch lists, the status text, the prompt table and the ESC path — the twelve-site tax
+  /// ADR-028 warns about, paid for no behavioural difference. `userPolylineVerts` is already
+  /// stride-3 XYZ, so the STORE needs nothing.
+  bool polylineDraft3d = false;
+  /// Elevation peeled off a typed `x,y,z` for the vertex being submitted, consumed by
+  /// \ref SubmitPolylineVertex and cleared there. Invalid means "no Z was typed" — the vertex then
+  /// takes \ref CadCommitElevation, i.e. the snapped point's own Z or the work plane (REQ-058).
+  bool  polylineTypedZValid = false;
+  bool  polylineTypedZRelative = false;  ///< `@dx,dy,dz` — dz is relative to the previous vertex.
+  float polylineTypedZ = 0.f;
+
   bool showViewPointsWindow = false;
   bool showSettingsWindow = false;
   bool showQuickSelectWindow = false;
@@ -2119,6 +2134,10 @@ float RotateDeltaFromReferenceAndNewSegment(float refX1, float refY1, float refX
 void StartLineCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartCircleCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartPolylineCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// REQ-085: POLYLINE with per-vertex elevation entry. Shares POLYLINE's draft and `Kind` — the store
+/// is already stride-3 XYZ and the two commands differ only in where a vertex's Z comes from.
+void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log);
 

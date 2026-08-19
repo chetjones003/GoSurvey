@@ -2701,6 +2701,7 @@ const CmdEntry kRegistry[] = {
     {"line", "l", "Draw line segments"},
     {"circle", "c", "Draw a circle"},
     {"polyline", "pl", "Draw a connected polyline"},
+    {"3dpoly", "3dp, 3dpolyline", "Draw a polyline whose vertices each carry their own elevation"},
     {"rect", "rectang, rectangle", "Draw a rectangle (two opposite corners)"},
     {"trimstate", "", "TRIM mode: 0 = draw a line to trim (default), 1 = pick cutting edges"},
     {"bench", "",
@@ -2872,6 +2873,10 @@ void ResetPolylineDraft(AppCommandState& st) {
   st.polyFirstX = st.polyFirstY = 0.f;
   st.polyDraftSegments = 0;
   st.polylineDraftVerts.clear();
+  st.polylineDraft3d = false;  // REQ-085: the next POLYLINE is 2D unless 3DPOLY says otherwise
+  st.polylineTypedZValid = false;
+  st.polylineTypedZRelative = false;
+  st.polylineTypedZ = 0.f;
 }
 
 void ResetArcDraft(AppCommandState& st) {
@@ -3056,6 +3061,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "polyline") {
     StartPolylineCommand(st, log);
+    return true;
+  }
+  if (primary == "3dpoly") {
+    StartPolyline3dCommand(st, log);  // REQ-085
     return true;
   }
   if (primary == "rect") {
@@ -8051,6 +8060,17 @@ void StartPolylineCommand(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back("POLYLINE — like LINE (A / 2P bearing lock); CLOSE/CL; ortho; ESC cancels.");
 }
 
+void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log) {
+  // REQ-085. Same draft as POLYLINE — the store is already stride-3 XYZ — with per-vertex elevation
+  // entry switched on. ResetAllCadDraftTools inside StartPolylineCommand clears the flag, so it is
+  // set afterwards, not before.
+  StartPolylineCommand(st, log);
+  log.pop_back();  // replace POLYLINE's prompt rather than printing both
+  st.polylineDraft3d = true;
+  log.push_back("3DPOLY — vertices carry their own elevation: type X,Y,Z (or @dx,dy,dz), or snap. "
+                "X,Y alone uses the snapped point's elevation, else ELEV. CLOSE/CL, END, ESC cancels.");
+}
+
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
@@ -12657,30 +12677,56 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
     return false;
 
   using PP = AppCommandState::PolylinePhase;
+
+  // The vertex elevation, in priority order (REQ-085): an elevation typed on this line, then the
+  // ordinary rule — the snapped point's own Z, else the work plane (REQ-058). A typed Z is consumed
+  // here so it cannot leak into the NEXT vertex, which would silently repeat the last elevation.
+  float vz = CadCommitElevation(st);
+  if (st.polylineTypedZValid) {
+    vz = st.polylineTypedZRelative ? st.anchorZ + st.polylineTypedZ : st.polylineTypedZ;
+    st.polylineTypedZValid = false;
+    st.polylineTypedZRelative = false;
+  }
+  const char* who = st.polylineDraft3d ? "3DPOLY" : "POLYLINE";
+
   if (st.polylinePhase == PP::NeedFirstPoint) {
     st.polylineDraftVerts.clear();
     st.polylineDraftVerts.push_back(x);
     st.polylineDraftVerts.push_back(y);
-    st.polylineDraftVerts.push_back(CadCommitElevation(st));  // snap overrides ELEV (REQ-058)
+    st.polylineDraftVerts.push_back(vz);
     st.anchorX = x;
-    st.anchorZ = CadCommitElevation(st);
+    st.anchorZ = vz;
     st.anchorY = y;
     st.polyFirstX = x;
     st.polyFirstY = y;
     st.polyDraftSegments = 0;
     st.polylinePhase = PP::NeedNextPoint;
-    log.push_back("POLYLINE — next vertex (A + bearing then distance like LINE), CLOSE / END, or ESC.");
+    if (st.polylineDraft3d) {
+      // Reported for the same reason every later vertex is: the elevation is the thing 3DPOLY exists
+      // to control, and it is otherwise invisible until the drawing is saved (REQ-201).
+      char buf[96];
+      std::snprintf(buf, sizeof(buf), "3DPOLY first vertex at elevation %.3f.", static_cast<double>(vz));
+      log.push_back(buf);
+    }
+    log.push_back(std::string(who) +
+                  " — next vertex (A + bearing then distance like LINE), CLOSE / END, or ESC.");
     return true;
   }
 
   st.polylineDraftVerts.push_back(x);
   st.polylineDraftVerts.push_back(y);
-  st.polylineDraftVerts.push_back(CadCommitElevation(st));  // snap overrides ELEV (REQ-058)
+  st.polylineDraftVerts.push_back(vz);
   ++st.polyDraftSegments;
   st.anchorX = x;
-  st.anchorZ = CadCommitElevation(st);
+  st.anchorZ = vz;
   st.anchorY = y;
-  log.push_back("POLYLINE vertex added.");
+  if (st.polylineDraft3d) {
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "3DPOLY vertex added at elevation %.3f.", static_cast<double>(vz));
+    log.push_back(buf);
+  } else {
+    log.push_back("POLYLINE vertex added.");
+  }
   return true;
 }
 
@@ -13387,6 +13433,40 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   if (st.active == K::Polyline) {
     using PP = AppCommandState::PolylinePhase;
     const std::string low = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(line));
+
+    // REQ-085: peel a trailing `,z` off `x,y,z` so the shared 2D parser never sees it. That parser
+    // is REQ-101-critical and used by every command; widening it to three components to serve one
+    // command would put every other command's coordinate handling at risk for no gain. 3DPOLY only —
+    // a plain POLYLINE keeps refusing a third component rather than silently ignoring it.
+    std::string pointText = line;
+    if (st.polylineDraft3d) {
+      const std::string trimmed = StringUtil::trimCopy(line);
+      const size_t c1 = trimmed.find(',');
+      const size_t c2 = (c1 == std::string::npos) ? std::string::npos : trimmed.find(',', c1 + 1);
+      if (c2 != std::string::npos) {
+        // Strict about the field count, because the shared 2D parser is NOT: ParseTwoDoubles reads
+        // two numbers and ignores whatever follows, so `1,2,3,4` would otherwise land silently at
+        // (1,2). Refusing here keeps that quiet-drop out of the one command where a third field is
+        // meaningful. (The same silent drop still applies to LINE/POLYLINE/RECT — pre-existing, and
+        // reported rather than changed under this task.)
+        if (trimmed.find(',', c2 + 1) != std::string::npos) {
+          log.push_back("3DPOLY — too many coordinates: X,Y,Z or @dx,dy,dz.");
+          return;
+        }
+        const std::string zText = StringUtil::trimCopy(trimmed.substr(c2 + 1));
+        char* zEnd = nullptr;
+        const double zv = std::strtod(zText.c_str(), &zEnd);
+        if (!zText.empty() && zEnd && *zEnd == '\0' && std::isfinite(zv)) {
+          st.polylineTypedZ = static_cast<float>(zv);
+          st.polylineTypedZRelative = !trimmed.empty() && trimmed[0] == '@';
+          st.polylineTypedZValid = true;
+          pointText = trimmed.substr(0, c2);  // `x,y`, with any leading `@` still attached
+        } else {
+          log.push_back("3DPOLY — elevation must be a number: X,Y,Z or @dx,dy,dz.");
+          return;
+        }
+      }
+    }
     if (low == "close" || low == "cl") {
       CancelSegmentAnglePick(st, nullptr);
       if (st.polylinePhase != PP::NeedNextPoint || st.polyDraftSegments == 0)
@@ -13412,7 +13492,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
 
-    if (ParseStoragePoint(st, line, &px, &py, allowRel, st.anchorX, st.anchorY)) {
+    // `pointText` is `line` with any 3DPOLY elevation already peeled off; identical to `line` for a
+    // plain POLYLINE.
+    if (ParseStoragePoint(st, pointText, &px, &py, allowRel, st.anchorX, st.anchorY)) {
       SubmitPolylineVertex(st, px, py, log);
       return;
     }
