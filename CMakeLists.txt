@@ -506,6 +506,9 @@ if(GOSURVEY_BUILD_TESTS)
     # module exist at all under architecture §11.4.
     tests/DocInvariantsTests.cpp
     src/util/docinvariants.cpp
+    # REQ-069: the background rebuild worker's lifetime. Header-only against CadCommands.hpp (the
+    # struct and its destructor), so it needs no extra domain source on the link line.
+    tests/SurfaceRebuildLifetimeTests.cpp
     # REQ-204 generator + minimizer. Both are pure — the generator takes its command list as a
     # parameter, the minimizer takes a predicate — so reproducibility, termination and the attempt
     # cap are testable here with no process launch and no GL.

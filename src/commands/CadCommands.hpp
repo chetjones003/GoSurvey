@@ -1056,6 +1056,18 @@ struct AppCommandState {
     std::uint32_t      generation = 0;  ///< cadGpuRevision at dispatch — a mismatch on completion means discard
     double             originX = 0.0, originY = 0.0;
     TinBuildResult      result;
+
+    /// Joins the worker if it is still running. Without this, destroying a job whose thread is
+    /// still joinable calls std::terminate — and the ONLY other join site (\ref TickSurfaceRebuilds)
+    /// is reachable only once `done` is already set, so every path that drops a job mid-flight hit
+    /// that: closing the application with a rebuild in flight aborted the process instead of
+    /// exiting, and since cadGpuRevision moves on every drawing mutation, "edit then close" was
+    /// enough to trigger it. Joining after the reap path's own join is a no-op (not joinable).
+    ~SurfaceRebuildAsync() {
+      cancel.store(true, std::memory_order_release);  // lets a not-yet-started worker return at once
+      if (thread.joinable())
+        thread.join();
+    }
   };
   std::vector<std::unique_ptr<SurfaceRebuildAsync>> surfaceRebuildAsync;
 

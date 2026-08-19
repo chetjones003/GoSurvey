@@ -1614,6 +1614,204 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
   }
 }
 
+namespace {
+
+/// Splits `a, b, c` into trimmed fields.
+///
+/// Commas rather than spaces because surface names and point-group names routinely contain them
+/// ("Existing Ground", "Ground + Curb") — the same problem DESIGNATEBOUNDARY solves by reading its
+/// kind off the END of the line, which does not generalise to a variable-length group list. Empty
+/// fields are kept rather than skipped so the caller can reject them by name instead of silently
+/// building from a shorter list than the user typed.
+std::vector<std::string> SplitCommaFields(const std::string& s) {
+  std::vector<std::string> out;
+  size_t start = 0;
+  for (;;) {
+    const size_t comma = s.find(',', start);
+    const size_t len = (comma == std::string::npos) ? std::string::npos : comma - start;
+    out.push_back(StringUtil::trimCopy(s.substr(start, len)));
+    if (comma == std::string::npos)
+      break;
+    start = comma + 1;
+  }
+  return out;
+}
+
+/// The full definition of every surface, one line each, plus a line per definition item.
+///
+/// This is the only way to observe a surface without a window: a surface has no entity id, so
+/// nothing else in the command layer can report one, and the Surfaces panel is unreachable from the
+/// REQ-203 driver. The per-item indices printed here are exactly what UNDESIGNATE takes.
+void ReportSurfaces(const AppCommandState& st, std::vector<std::string>& log) {
+  if (st.cadSurfaces.empty()) {
+    log.push_back("SURFACELIST — no surfaces in the drawing.");
+    return;
+  }
+  for (const CadSurface& s : st.cadSurfaces) {
+    std::string line = "Surface \"" + s.name + "\": ";
+    line += s.tin ? (std::to_string(s.vertexCount()) + " points, " + std::to_string(s.triangleCount()) +
+                     " triangles")
+                  : std::string("not built");
+    line += ", " + std::to_string(s.breaklineIds.size()) + " breakline(s), " +
+            std::to_string(s.boundaries.size()) + " boundary(ies).";
+    log.push_back(line);
+
+    for (size_t i = 0; i < s.sourcePointGroups.size(); ++i) {
+      const bool exists = FindPointGroupIndex(st, s.sourcePointGroups[i]) >= 0;
+      log.push_back("  group " + std::to_string(i + 1) + ": \"" + s.sourcePointGroups[i] + "\"" +
+                    (exists ? "" : "  (missing)"));
+    }
+    for (size_t i = 0; i < s.breaklineIds.size(); ++i)
+      log.push_back("  breakline " + std::to_string(i + 1) + ": entity id " +
+                    std::to_string(s.breaklineIds[i]));
+    for (size_t i = 0; i < s.boundaries.size(); ++i) {
+      const CadSurfaceBoundary& b = s.boundaries[i];
+      const char* kindName = b.kind == CadBoundaryKind::Outer ? "outer"
+                            : b.kind == CadBoundaryKind::Hide  ? "hide"
+                                                               : "show";
+      log.push_back("  boundary " + std::to_string(i + 1) + ": " + kindName + ", entity id " +
+                    std::to_string(b.entityId));
+    }
+    if (!s.lastBuildMessage.empty())
+      log.push_back("  last build: " + s.lastBuildMessage);
+  }
+}
+
+/// `SURFACECREATE <name>, <group>[, <group>…]` — the command-line twin of the Surfaces panel's
+/// "New from group…". Every named group must resolve: a typo that silently contributed no points
+/// would produce a surface built from less than the user asked for, with nothing on screen saying so.
+void RunSurfaceCreate(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() < 2 || f[0].empty()) {
+    log.push_back("SURFACECREATE — usage: SURFACECREATE <name>, <point group>[, <point group>…].");
+    return;
+  }
+  std::vector<std::string> groups;
+  for (size_t i = 1; i < f.size(); ++i) {
+    if (f[i].empty()) {
+      log.push_back("SURFACECREATE — empty point group name in the list.");
+      return;
+    }
+    if (FindPointGroupIndex(st, f[i]) < 0) {
+      log.push_back("SURFACECREATE — no point group named \"" + f[i] + "\".");
+      return;
+    }
+    groups.push_back(f[i]);
+  }
+  PushUndoSnapshot(st, "Create surface");
+  CreateSurfaceFromPointGroups(st, f[0], groups, log);  // reports its own failure (REQ-201)
+}
+
+/// `SURFACERENAME <old>, <new>` — same duplicate-name refusal as the panel (REQ-075).
+void RunSurfaceRename(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+    log.push_back("SURFACERENAME — usage: SURFACERENAME <old name>, <new name>.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFACERENAME — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  const int clash = FindSurfaceIndex(st, f[1]);
+  if (clash >= 0 && clash != si) {
+    log.push_back("SURFACERENAME — a surface named \"" + f[1] + "\" already exists — rename refused.");
+    return;
+  }
+  PushUndoSnapshot(st, "Rename surface");
+  log.push_back("Renamed surface \"" + st.cadSurfaces[static_cast<size_t>(si)].name + "\" to \"" + f[1] + "\".");
+  st.cadSurfaces[static_cast<size_t>(si)].name = f[1];
+  BumpCadGpuCache(st);
+}
+
+/// `SURFACEDELETE <name>` — undoable in one step (REQ-068), like the panel's Delete.
+void RunSurfaceDelete(AppCommandState& st, const std::string& name, std::vector<std::string>& log) {
+  if (name.empty()) {
+    log.push_back("SURFACEDELETE — usage: SURFACEDELETE <surface name>.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, name);
+  if (si < 0) {
+    log.push_back("SURFACEDELETE — no surface named \"" + name + "\".");
+    return;
+  }
+  PushUndoSnapshot(st, "Delete surface");
+  log.push_back("Deleted surface \"" + st.cadSurfaces[static_cast<size_t>(si)].name + "\".");
+  EraseSurfaceAtIndex(st, static_cast<size_t>(si));
+}
+
+/// `SURFACEREBUILD [<name>]` — rebuilds one surface, or every surface when the name is omitted.
+/// Synchronous (\ref BuildSurfaceFromSources), so the result is in the log by the time the command
+/// returns — which is what lets a REQ-203 transcript assert on it without pumping a frame loop.
+void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector<std::string>& log) {
+  if (st.cadSurfaces.empty()) {
+    log.push_back("SURFACEREBUILD — no surfaces in the drawing.");
+    return;
+  }
+  if (name.empty()) {
+    PushUndoSnapshot(st, "Rebuild surfaces");
+    for (CadSurface& s : st.cadSurfaces)
+      BuildSurfaceFromSources(st, s, log);
+    BumpCadGpuCache(st);
+    return;
+  }
+  const int si = FindSurfaceIndex(st, name);
+  if (si < 0) {
+    log.push_back("SURFACEREBUILD — no surface named \"" + name + "\".");
+    return;
+  }
+  PushUndoSnapshot(st, "Rebuild surface");
+  BuildSurfaceFromSources(st, st.cadSurfaces[static_cast<size_t>(si)], log);
+  BumpCadGpuCache(st);
+}
+
+/// `UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY>, <n>` — removes one item from a surface's
+/// definition (REQ-069's "remove", the counterpart to DESIGNATEBREAKLINE/DESIGNATEBOUNDARY). \p n is
+/// 1-based and matches the numbering SURFACELIST prints. Deleting the referenced entity also removes
+/// the item, but only that entity's other uses go with it — this removes the item alone.
+void RunUndesignate(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() != 3 || f[0].empty()) {
+    log.push_back("UNDESIGNATE — usage: UNDESIGNATE <surface name>, <BREAKLINE|BOUNDARY>, <number>.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("UNDESIGNATE — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  const std::string what = StringUtil::toLowerAsciiCopy(f[1]);
+  const bool isBoundary = (what == "boundary");
+  if (!isBoundary && what != "breakline") {
+    log.push_back("UNDESIGNATE — second argument must be BREAKLINE or BOUNDARY.");
+    return;
+  }
+  // strtol rather than stoi: a non-numeric argument is a user typo, not an exceptional condition,
+  // and this translation unit is compiled without exception unwinding (C4530).
+  char* numEnd = nullptr;
+  const long parsed = std::strtol(f[2].c_str(), &numEnd, 10);
+  const bool numOk = !f[2].empty() && numEnd && *numEnd == '\0';
+  const int n = numOk ? static_cast<int>(parsed) : 0;  // 0 fails the range check below
+
+  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  const size_t count = isBoundary ? s.boundaries.size() : s.breaklineIds.size();
+  if (n < 1 || static_cast<size_t>(n) > count) {
+    log.push_back("UNDESIGNATE — \"" + s.name + "\" has " + std::to_string(count) + " " + what +
+                  "(s); " + f[2] + " is out of range (SURFACELIST numbers them).");
+    return;
+  }
+  PushUndoSnapshot(st, isBoundary ? "Remove surface boundary" : "Remove surface breakline");
+  if (isBoundary)
+    s.boundaries.erase(s.boundaries.begin() + (n - 1));
+  else
+    s.breaklineIds.erase(s.breaklineIds.begin() + (n - 1));
+  log.push_back("UNDESIGNATE — removed " + what + " " + std::to_string(n) + " from \"" + s.name + "\".");
+  BumpCadGpuCache(st);  // TickSurfaceRebuilds picks the change up; SURFACEREBUILD forces it now
+}
+
+} // namespace
+
 void EnsureEntityIds(AppCommandState& st) {
   // Geometry has not changed since the last sweep, so nothing can be missing an id. This is what
   // lets callers invoke it unconditionally — including once a frame — without paying for a walk.
@@ -2522,6 +2720,12 @@ const CmdEntry kRegistry[] = {
     {"surfelev", "se", "Surface elevation at a point; grade between two"},
     {"designatebreakline", "dbl", "Add a picked line/polyline as a surface breakline"},
     {"designateboundary", "dbd", "Add a picked closed polyline as a surface boundary (outer/hide/show)"},
+    {"surfacecreate", "sfcreate", "Create a surface from point groups: SURFACECREATE <name>, <group>[, <group>…]"},
+    {"surfacerename", "sfrename", "Rename a surface: SURFACERENAME <old>, <new>"},
+    {"surfacedelete", "sfdelete", "Delete a surface: SURFACEDELETE <name>"},
+    {"surfacerebuild", "sfrebuild", "Rebuild a surface now (all surfaces if no name): SURFACEREBUILD [<name>]"},
+    {"surfacelist", "sflist", "List every surface and its full definition"},
+    {"undesignate", "undes", "Remove one breakline/boundary: UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY>, <n>"},
     {"plotscale", "pscale", "Set the plot scale"},
     {"move", "m", "Move objects"},
     {"copy", "cp", "Copy objects"},
@@ -12878,6 +13082,32 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         BumpCadGpuCache(st);
         log.push_back("Plot scale: 1 plotted inch = " + std::to_string(pv) + " model units.");
       }
+      return;
+    }
+    // Surface definition commands (REQ-068/069). Each reads the WHOLE remainder of the line — names
+    // contain spaces — and splits on commas where it needs more than one argument. Together with
+    // DESIGNATEBREAKLINE/DESIGNATEBOUNDARY below they make every surface operation reachable without
+    // the Surfaces panel, which is what lets the REQ-203 driver exercise them at all: a surface has
+    // no entity id, and panel buttons are unreachable with no window.
+    if (plotTok == "surfacecreate" || plotTok == "sfcreate" || plotTok == "surfacerename" ||
+        plotTok == "sfrename" || plotTok == "surfacedelete" || plotTok == "sfdelete" ||
+        plotTok == "surfacerebuild" || plotTok == "sfrebuild" || plotTok == "surfacelist" ||
+        plotTok == "sflist" || plotTok == "undesignate" || plotTok == "undes") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      rest = StringUtil::trimCopy(rest);
+      if (plotTok == "surfacecreate" || plotTok == "sfcreate")
+        RunSurfaceCreate(st, rest, log);
+      else if (plotTok == "surfacerename" || plotTok == "sfrename")
+        RunSurfaceRename(st, rest, log);
+      else if (plotTok == "surfacedelete" || plotTok == "sfdelete")
+        RunSurfaceDelete(st, rest, log);
+      else if (plotTok == "surfacerebuild" || plotTok == "sfrebuild")
+        RunSurfaceRebuild(st, rest, log);
+      else if (plotTok == "surfacelist" || plotTok == "sflist")
+        ReportSurfaces(st, log);
+      else
+        RunUndesignate(st, rest, log);
       return;
     }
     // `DESIGNATEBREAKLINE <surface name>` (REQ-069) — the whole remainder is the name (surface

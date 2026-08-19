@@ -267,3 +267,49 @@ TEST_CASE("A hide boundary leaves a void, and a show boundary inside it restores
   CHECK(anyTriangleIn(restored, 40, 40, 60, 60));   // the show island is back
   CHECK_FALSE(anyTriangleIn(restored, 20, 20, 30, 30));  // still hidden outside the island
 }
+
+TEST_CASE("A show boundary cannot restore surface an outer boundary clipped away", "[tin][req069]") {
+  // Regression. Show and Outer originally shared ONE inclusion mask, so `included[t] = 1` could not
+  // tell which of the two had removed a triangle — and a Show ring lying outside an Outer ring
+  // pulled the clipped-away surface back, producing surface beyond the surface's own boundary. On a
+  // 5x5 flat grid an Outer ring over the left half kept 24 of 32 triangles; adding a Show ring in
+  // the right half restored all 32. TinCullByBoundaries now keeps the extent mask (Outer) and the
+  // void mask (Hide/Show) separate, which is what its header has always documented: a Show "only
+  // has a visible effect where an earlier Hide removed them".
+  const TinBuildResult tin = FlatGrid();
+  REQUIRE(tin.ok());
+
+  auto cull = [&](const std::vector<TinBoundaryLoop>& loops) {
+    std::vector<std::uint32_t> idx = tin.indices;
+    TinCullByBoundaries(idx, tin.vertsXyz, loops);
+    return idx.size() / 3;
+  };
+
+  TinBoundaryLoop outer;
+  outer.kind = TinBoundaryKind::Outer;
+  outer.ring = {{-10, -10}, {50, -10}, {50, 110}, {-10, 110}};  // keeps the left half only
+
+  TinBoundaryLoop showRight;
+  showRight.kind = TinBoundaryKind::Show;
+  showRight.ring = {{60, -10}, {110, -10}, {110, 110}, {60, 110}};  // wholly OUTSIDE the outer ring
+
+  const size_t all = tin.indices.size() / 3;
+  const size_t clipped = cull({outer});
+  REQUIRE(clipped > 0);
+  REQUIRE(clipped < all);  // the outer ring really did clip something, so the check below can fail
+
+  CHECK(cull({outer, showRight}) == clipped);  // the show ring must change nothing at all
+
+  // The order the two are declared in must not matter either: an extent is an intersection.
+  CHECK(cull({showRight, outer}) == clipped);
+
+  // And the feature Show exists for still works within the extent: a Hide inside the outer ring,
+  // then a Show over the same area, comes back to the outer-clipped count.
+  TinBoundaryLoop hideLeft;
+  hideLeft.kind = TinBoundaryKind::Hide;
+  hideLeft.ring = {{10, 10}, {40, 10}, {40, 90}, {10, 90}};
+  TinBoundaryLoop showLeft = hideLeft;
+  showLeft.kind = TinBoundaryKind::Show;
+  REQUIRE(cull({outer, hideLeft}) < clipped);
+  CHECK(cull({outer, hideLeft, showLeft}) == clipped);
+}

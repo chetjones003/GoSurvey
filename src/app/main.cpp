@@ -940,6 +940,12 @@ int main()
     glfwSwapBuffers(window);
   }
 
+  // Join any in-flight surface rebuild (REQ-069) here rather than leaving it to `cmd`'s destructor.
+  // The destructor is the actual safety net — it covers every path — but it runs after
+  // glfwTerminate(), so a slow triangulation would be waited out with the window already gone,
+  // which reads as a hang. Waiting here keeps the window up until the worker is done.
+  cmd.surfaceRebuildAsync.clear();
+
   // Silently persist settings, preferences, and the current dock layout.
   SaveUserStartupPrefs(cmd);
   {

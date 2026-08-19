@@ -601,13 +601,22 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
   const size_t triCount = indices.size() / 3;
   const std::uint32_t vertexCount = static_cast<std::uint32_t>(vertsXyz.size() / 3);
 
-  // Present until an Outer loop first clips it away — matches BuildTin's own convex-hull-only
-  // surface, which is "no boundary" and therefore fully present.
-  std::vector<char> included(triCount, 1);
+  // TWO independent masks, not one. An Outer ring defines the surface's EXTENT and only ever clips
+  // down (multiple Outer loops intersect); Hide/Show toggle VOIDS within that extent, in definition
+  // order. Sharing a single mask let a Show ring restore triangles an Outer ring had clipped —
+  // pulling surface back from outside the surface's own boundary — because "restore" could not tell
+  // which of the two had removed a triangle. Keeping them apart is what makes Show's documented
+  // contract ("only has a visible effect where an earlier Hide removed them") literally true.
+  //
+  // Both start present, matching BuildTin's own convex-hull-only surface: "no boundary" is "fully
+  // present".
+  std::vector<char> insideOuter(triCount, 1);
+  std::vector<char> shown(triCount, 1);
 
-  // Applied strictly in \p loops order, each loop mutating the CURRENT inclusion state — never
+  // Hide/Show are applied strictly in \p loops order, each mutating the CURRENT void state — never
   // recomputed from scratch — which is what makes "a show boundary inside a hide restores surface
   // there" and "boundaries apply in definition order" both literally true rather than approximated.
+  // Outer needs no ordering: intersection is commutative.
   for (const TinBoundaryLoop& loop : loops) {
     if (loop.ring.size() < 3)
       continue;  // degenerate ring: not enough vertices to enclose anything, skip rather than guess
@@ -622,15 +631,15 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
       switch (loop.kind) {
       case TinBoundaryKind::Outer:
         if (!in)
-          included[t] = 0;  // only ever clips down; multiple Outer loops intersect
+          insideOuter[t] = 0;  // only ever clips down; multiple Outer loops intersect
         break;
       case TinBoundaryKind::Hide:
         if (in)
-          included[t] = 0;
+          shown[t] = 0;
         break;
       case TinBoundaryKind::Show:
         if (in)
-          included[t] = 1;  // restores regardless of current state — a no-op outside a prior Hide
+          shown[t] = 1;  // undoes an earlier Hide only — never an Outer clip (see the masks above)
         break;
       }
     }
@@ -639,7 +648,7 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
   std::vector<std::uint32_t> kept;
   kept.reserve(indices.size());
   for (size_t t = 0; t < triCount; ++t) {
-    if (included[t]) {
+    if (insideOuter[t] && shown[t]) {
       kept.push_back(indices[t * 3]);
       kept.push_back(indices[t * 3 + 1]);
       kept.push_back(indices[t * 3 + 2]);

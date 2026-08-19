@@ -5620,6 +5620,10 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
   }
   case K::IdPoint: return true;
   case K::SurveyInverse: return true;
+  // REQ-074. Missing here as well as from the viewport click dispatch, so SURFELEV got neither
+  // typed-point entry nor a usable pick — the same pre-existing TASK-055 gap, in the second of the
+  // two lists a point-picking command has to appear in.
+  case K::SurfaceElevGrade: return true;
   case K::Circle: {
     using CP = AppCommandState::CirclePhase;
     return cmd.circlePhase == CP::WaitCenterOrMode || cmd.circlePhase == CP::ThreeP_WaitP1 ||
@@ -9341,7 +9345,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
              cmd.active == K::Arc || cmd.active == K::Ellipse || cmd.active == K::Text ||
              cmd.active == K::Mtext || cmd.active == K::DimAligned || cmd.active == K::DimLinear ||
              cmd.active == K::DimAngular ||
-             cmd.active == K::IdPoint || cmd.active == K::SurveyInverse || cmd.active == K::Paste)
+             cmd.active == K::IdPoint || cmd.active == K::SurveyInverse || cmd.active == K::Paste ||
+             cmd.active == K::SurfaceElevGrade)
       SubmitViewportPick(cmd, commitX, commitY, log);
     else if (cmd.active == K::Move || cmd.active == K::Copy || cmd.active == K::Scale) {
       if (cmd.modifyPhase == MP::PickSelection) {
