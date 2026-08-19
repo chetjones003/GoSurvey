@@ -450,8 +450,8 @@ static void DrawUserPrefsSurveyPoints(AppCommandState& cmd) {
     for (size_t i = 0; i < cmd.surveyPoints.size(); ++i)
       EnsureSurveyPointLabelMtext(cmd, i, nullptr);
   }
-  const bool le = ImGui::DragFloat("Label center east of point (plotted in)", &cmd.surveyLabelOffsetEastPlottedIn, 0.002f, -2.f, 4.f, "%.3f");
-  const bool ln = ImGui::DragFloat("Label center north of point (plotted in)", &cmd.surveyLabelOffsetNorthPlottedIn, 0.002f, -2.f, 4.f, "%.3f");
+  const bool le = ImGui::DragFloat("Label left edge east of point (plotted in)", &cmd.surveyLabelOffsetEastPlottedIn, 0.002f, -2.f, 4.f, "%.3f");
+  const bool ln = ImGui::DragFloat("Label centre north of point (plotted in)", &cmd.surveyLabelOffsetNorthPlottedIn, 0.002f, -2.f, 4.f, "%.3f");
   if (le || ln) {
     for (size_t i = 0; i < cmd.surveyPoints.size(); ++i)
       RepositionSurveyLabelMtextForPoint(cmd, i);
