@@ -68,9 +68,8 @@ when" and the requirements it closes.
 A lightweight board that complements the milestones. Keep each column honest.
 
 ### Now (in flight — keep short)
-- **M-Surfaces step 5 — REQ-069** (breaklines, boundaries, dynamic rebuild). Steps 1–4 are done (see
-  M-Surfaces status below); Paper Space (below) is also complete and no longer belongs in this
-  column.
+- **M-Surfaces step 6 — REQ-070 + REQ-071** (surface styles, contour extraction). Step 5 (REQ-069)
+  is done (see M-Surfaces status below).
 
 ### M-PaperSpace — Paper space & plotting (incremental)
 - **Goal:** compose the model onto sheets and plot them.
@@ -133,7 +132,7 @@ A lightweight board that complements the milestones. Keep each column honest.
 - **Done when:** a real topo's points build a contoured surface with breaklines honoured, slope
   arrows show where water goes, cut/fill against a proposed surface reports a hand-verifiable
   volume, and REQ-100 holds in the surface profile.
-- **Status:** **steps 1–4 done.**
+- **Status:** **steps 1–5 done.**
   - Step 1 — REQ-076 / ADR-027 (TASK-044), **2026-08-12**: every entity carries a stable,
     never-reused id, cross-object references are by id, and the `labelMtextAnnIndex` fix-up sprawl
     is deleted. Legacy `.gs` label migration verified against a real legacy file.
@@ -150,9 +149,24 @@ A lightweight board that complements the milestones. Keep each column honest.
     point, by name. Verified against `samples/surface-demo.gs` in the running application as well as
     in unit tests (`TinQueryTests`). The hide-boundary half of the "outside surface" condition is
     unreachable until REQ-069 lands (recorded as ASSUMPTION-1 in TASK-055, not claimed).
-  - Step 5 — REQ-069, breaklines/boundaries/dynamic rebuild, is next: the hardest step, needing
-    step 1's stable ids for a breakline to safely reference points, and adding the background-rebuild
-    worker.
+  - Step 5 — REQ-069 (TASK-072), **2026-08-18**: breaklines and boundary rings (outer/hide/show)
+    are part of a surface's definition, referenced by stable entity id and pruned when the reference
+    no longer resolves; constrained-edge insertion is flip-based (Anglada/Sloan) in `util/tinbuild`,
+    with crossing-elevation and duplicate-conflict diagnostics reported rather than absorbed. The
+    surface rebuilds dynamically off the UI thread — `cadGpuRevision`, already bumped at every
+    drawing mutation, doubles as the dirty signal and the async worker's generation check, so no new
+    mark-dirty call sites were needed. `AppCommandState::SurfaceRebuildAsync` is the first complete
+    implementation of architecture §8's one-shot-worker contract (generation staleness +
+    cooperative cancellation). New commands `DESIGNATEBREAKLINE`/`DBL` and `DESIGNATEBOUNDARY`/`DBD`.
+    Verified end to end in the running application against `samples/surface-demo.gs` (breakline
+    forcing, boundary void with restore, dangling-id pruning on delete, `.gs` round-trip across a
+    fresh process relaunch); full suite green at 405/405 cases, 203,846 assertions. One real bug
+    found and fixed within this task (`CadUi.cpp`'s viewport-click dispatch chain was missing the
+    two new command kinds); one pre-existing gap found and recorded against REQ-074 instead of
+    fixed (`SURFELEV`'s own viewport-click wiring is likely similarly missing from that chain — not
+    this task's to own). Constraint-insertion performance was not measured against REQ-100's
+    100k-point surface budget — recorded as a limit, not assumed fine, since the rebuild runs off
+    the UI thread regardless.
 - **Deliberately out of scope:** grading design objects, contour smoothing (linear contours only),
   proximity / wall / non-destructive breaklines, surface import from Civil 3D, and DEM /
   point-cloud sources. See ADR-028.
@@ -207,7 +221,8 @@ A lightweight board that complements the milestones. Keep each column honest.
   SHA-256 proves integrity but not authenticity. Tracked as debt, not as a solved problem.
 
 ### Next (accepted, sequenced, not started)
-- **REQ-069 — breaklines, boundaries, dynamic rebuild** (M-Surfaces step 5).
+- **REQ-070 + REQ-071 — surface styles, contour extraction** (M-Surfaces step 6). Re-run the REQ-100
+  surface bench case per the roadmap's own sequencing note.
 - REQ-101's reference-dataset half (M2) — the typed-storage half is done; see M2 status above.
 
 ### Later (real but deferred)
@@ -269,4 +284,5 @@ M1 walking skeleton
 |------|--------|--------|
 | `<2026-06-10>` | `<Initial roadmap>` | `<—>` |
 | 2026-08-15 | Added **M-Distribution** (REQ-077/078/202, ADR-029), running in parallel with M-Surfaces | User asked for automated releases and an auto-updater. It parallelises safely because it touches the build, the installer and one new module, sharing no code with surfaces — and it pays down an existing gap rather than adding scope: the installer script was gitignored and machine-specific, so REQ-200's reproducibility promise did not reach the artifact users actually received |
+| 2026-08-18 | M-Surfaces step 5 (REQ-069, TASK-072) closed PASS; "Now"/"Next" moved to step 6 (REQ-070 + REQ-071) | Breaklines, boundaries, and dynamic rebuild shipped and verified end to end in the running application; the roadmap's own forced sequencing puts styles/contours next |
 | `<…>` | `<Moved X from Later to Now>` | `<user need materialized>` |
