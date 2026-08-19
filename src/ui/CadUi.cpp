@@ -9233,10 +9233,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const int spi = SurveyPointIndexForId(cmd, gripAnn.surveyPointLabelForId);
         if (spi >= 0) {
           const SurveyPoint& sp = cmd.surveyPoints[static_cast<size_t>(spi)];
-          const float newCx = 0.5f * (gripAnn.boxMinX + gripAnn.boxMaxX);
-          const float newCy = 0.5f * (gripAnn.boxMinY + gripAnn.boxMaxY);
-          gripAnn.surveyLabelUserOffsetEast  = newCx - sp.easting;
-          gripAnn.surveyLabelUserOffsetNorth = newCy - sp.northing;
+          // Store what RepositionSurveyLabelMtextForPoint reads back: the LEFT edge in X, the
+          // vertical CENTRE in Y. Mixing the two up would make a dragged label jump on the next
+          // rebuild, by exactly half its own box.
+          gripAnn.surveyLabelUserOffsetEast  = gripAnn.boxMinX - sp.easting;
+          gripAnn.surveyLabelUserOffsetNorth = 0.5f * (gripAnn.boxMinY + gripAnn.boxMaxY) - sp.northing;
           gripAnn.surveyLabelHasUserOffset   = true;
         }
       }

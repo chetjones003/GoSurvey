@@ -684,12 +684,20 @@ void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) 
                                                     : st.surveyLabelOffsetEastPlottedIn * mup;
   const float offsetN = a.surveyLabelHasUserOffset ? a.surveyLabelUserOffsetNorth
                                                     : st.surveyLabelOffsetNorthPlottedIn * mup;
-  const float cx = p.easting + offsetE;
+  // X anchors the box's LEFT edge; Y centres the box on the point.
+  //
+  // The two axes differ because the marker is only ever in danger from one of them. A longer
+  // description grows the box east, and the left edge must not move while it does — that was the
+  // defect: a centred X sent half of every added character back west, until a long description
+  // swallowed the very point it described. Y has no such exposure. The box already stands
+  // `offsetE` clear to the east, so it cannot touch the marker no matter how tall it gets, and
+  // centring there is what puts the label beside the point rather than hanging beneath it.
+  const float ax = p.easting + offsetE;
   const float cy = p.northing + offsetN;
-  a.boxMinX = cx - bwClamped * 0.5f;
-  a.boxMaxX = cx + bwClamped * 0.5f;
-  a.boxMinY = cy - bhClamped * 0.5f;
+  a.boxMinX = ax;
+  a.boxMaxX = ax + bwClamped;
   a.boxMaxY = cy + bhClamped * 0.5f;
+  a.boxMinY = cy - bhClamped * 0.5f;
   a.insX = a.boxMinX;
   a.insY = a.boxMinY;
   // The label sits at its POINT's elevation (REQ-057/058). Without this, insZ keeps its 0 default —

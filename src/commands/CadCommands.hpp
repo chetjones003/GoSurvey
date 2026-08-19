@@ -582,9 +582,11 @@ struct AppCommandState {
   /// Plotted text height (inches) for survey point ID labels when \ref surveyPointShowIdInViewport is true.
   float surveyPointLabelPlottedHeightInches = 0.10f;
   SurveyLabelStyleTemplates surveyLabelTemplates;
-  /// Label MTEXT: east offset of label **centerline** from point (plotted inches × MUP → world).
+  /// Label MTEXT: east offset of the label's **left edge** from the point (plotted inches × MUP →
+  /// world). The box grows east from this edge, so longer text never grows back toward the point.
   float surveyLabelOffsetEastPlottedIn = 0.35f;
-  /// Optional north shift of label vertical center from point (plotted inches × MUP).
+  /// North offset of the label's **vertical centre** from the point (plotted inches × MUP). The box
+  /// is centred on this, so the label sits beside the point rather than hanging beneath it.
   float surveyLabelOffsetNorthPlottedIn = 0.f;
   /// Legacy fixed box (plotted inches); ignored for auto-sized survey-linked MTEXT labels.
   float surveyLabelBoxWidthPlottedIn = 1.5f;
