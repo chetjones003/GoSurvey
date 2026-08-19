@@ -313,3 +313,117 @@ TEST_CASE("A show boundary cannot restore surface an outer boundary clipped away
   REQUIRE(cull({outer, hideLeft}) < clipped);
   CHECK(cull({outer, hideLeft, showLeft}) == clipped);
 }
+
+TEST_CASE("A breakline through an intervening vertex is honoured as a chain, not reported failed",
+         "[tin][req069]") {
+  // Regression. Constraint insertion terminated on edgeExists(ia, ib) — the constraint as a SINGLE
+  // edge — which no triangulation can ever contain when a third vertex lies between the endpoints.
+  // Every such constraint was therefore counted unresolved, and that is the ORDINARY surveying case:
+  // a breakline drawn along a ridge through the shots that define it. The constraint is now split at
+  // the vertices lying on it and each link is enforced.
+  std::vector<TinInputPoint> pts = {
+      {0, 0, 10.f}, {10, 0, 10.f},  // the breakline's own endpoints
+      {5, 0, 10.f},                 // a shot sitting exactly ON it, strictly between them
+      {0, 10, 20.f}, {10, 10, 20.f}, {5, -10, 0.f},
+  };
+  std::vector<TinConstraint> cons(1);
+  cons[0].ax = 0;  cons[0].ay = 0; cons[0].az = 10.f;
+  cons[0].bx = 10; cons[0].by = 0; cons[0].bz = 10.f;
+
+  const TinBuildResult r = BuildTin(pts, cons);
+  REQUIRE(r.ok());
+  CHECK(r.constraintsUnresolved == 0);  // this was 1 before the split
+
+  // The breakline is present as the chain (0,0)-(5,0)-(10,0). That IS the breakline: both links
+  // lie along it, and no edge crosses it.
+  const std::uint32_t a = FindVertexIndex(r, 0, 0);
+  const std::uint32_t m = FindVertexIndex(r, 5, 0);
+  const std::uint32_t b = FindVertexIndex(r, 10, 0);
+  REQUIRE(a != 0xFFFFFFFFu);
+  REQUIRE(m != 0xFFFFFFFFu);
+  REQUIRE(b != 0xFFFFFFFFu);
+  CHECK(HasEdge(r, a, m));
+  CHECK(HasEdge(r, m, b));
+  CHECK(NoTriangleEdgeCrosses(r, a, m, 0, 0, 5, 0));
+  CHECK(NoTriangleEdgeCrosses(r, m, b, 5, 0, 10, 0));
+}
+
+TEST_CASE("Breaklines crossing at a shared vertex are both honoured and neither is reported",
+         "[tin][req069]") {
+  // The same defect seen from the other side: two breaklines meeting at a grid vertex reported TWO
+  // unresolved constraints while both were in fact fully present in the mesh, edge for edge. Their
+  // elevations agree at the crossing, so TinFindCrossingConflicts correctly says nothing — which is
+  // precisely why a spurious count here was the user's only (and misleading) signal.
+  std::vector<TinInputPoint> pts;
+  for (int i = 0; i <= 4; ++i)
+    for (int j = 0; j <= 4; ++j)
+      pts.push_back({i * 10.0, j * 10.0, 5.f});
+  std::vector<TinConstraint> cons(2);
+  cons[0].ax = 0;  cons[0].ay = 20; cons[0].bx = 40; cons[0].by = 20;  // horizontal through (20,20)
+  cons[1].ax = 20; cons[1].ay = 0;  cons[1].bx = 20; cons[1].by = 40;  // vertical   through (20,20)
+
+  CHECK(TinFindCrossingConflicts(cons).empty());  // same elevation: not a conflict
+
+  const TinBuildResult r = BuildTin(pts, cons);
+  REQUIRE(r.ok());
+  CHECK(r.constraintsUnresolved == 0);  // this was 2 before the split
+
+  // Every link of both chains is present.
+  for (int s = 0; s < 4; ++s) {
+    const std::uint32_t h0 = FindVertexIndex(r, s * 10.0, 20);
+    const std::uint32_t h1 = FindVertexIndex(r, (s + 1) * 10.0, 20);
+    const std::uint32_t v0 = FindVertexIndex(r, 20, s * 10.0);
+    const std::uint32_t v1 = FindVertexIndex(r, 20, (s + 1) * 10.0);
+    REQUIRE(h0 != 0xFFFFFFFFu);
+    REQUIRE(h1 != 0xFFFFFFFFu);
+    REQUIRE(v0 != 0xFFFFFFFFu);
+    REQUIRE(v1 != 0xFFFFFFFFu);
+    CHECK(HasEdge(r, h0, h1));
+    CHECK(HasEdge(r, v0, v1));
+  }
+}
+
+TEST_CASE("A constraint that genuinely cannot be enforced is still reported", "[tin][req069]") {
+  // The counterweight to the two cases above, and the reason they are safe: silencing a false alarm
+  // must not silence the real one. These two breaklines cross at (15,15), which is NOT a vertex —
+  // there is nothing to split at, and no triangulation can hold both edges. The count must still
+  // move, or `constraintsUnresolved` would have become a field that is always zero.
+  std::vector<TinInputPoint> pts;
+  for (int i = 0; i <= 4; ++i)
+    for (int j = 0; j <= 4; ++j)
+      pts.push_back({i * 10.0, j * 10.0, 5.f});
+  std::vector<TinConstraint> cons(2);
+  cons[0].ax = 0;  cons[0].ay = 15; cons[0].bx = 40; cons[0].by = 15;
+  cons[1].ax = 15; cons[1].ay = 0;  cons[1].bx = 15; cons[1].by = 40;
+
+  const TinBuildResult r = BuildTin(pts, cons);
+  REQUIRE(r.ok());
+  CHECK(r.constraintsUnresolved > 0);
+  CHECK(r.message.find("could not be enforced") != std::string::npos);
+}
+
+TEST_CASE("A vertex near a breakline but not on it is crossed, not treated as a split point",
+         "[tin][req069]") {
+  // The split tolerance is kTinPlanEpsilon perpendicular — the same distance that decides two points
+  // are the same site. A vertex further off than that is ordinary surrounding ground: the breakline
+  // must still be forced straight through as ONE edge, with that vertex's edges flipped out of the
+  // way, rather than the breakline bending to visit it.
+  std::vector<TinInputPoint> pts = {
+      {0, 0, 10.f}, {10, 0, 10.f},
+      {5, 0.5, 12.f},  // 0.5 off the segment — fifty times kTinPlanEpsilon
+      {0, 10, 20.f}, {10, 10, 20.f}, {5, -10, 0.f},
+  };
+  std::vector<TinConstraint> cons(1);
+  cons[0].ax = 0;  cons[0].ay = 0; cons[0].az = 10.f;
+  cons[0].bx = 10; cons[0].by = 0; cons[0].bz = 10.f;
+
+  const TinBuildResult r = BuildTin(pts, cons);
+  REQUIRE(r.ok());
+  CHECK(r.constraintsUnresolved == 0);
+  const std::uint32_t a = FindVertexIndex(r, 0, 0);
+  const std::uint32_t b = FindVertexIndex(r, 10, 0);
+  REQUIRE(a != 0xFFFFFFFFu);
+  REQUIRE(b != 0xFFFFFFFFu);
+  CHECK(HasEdge(r, a, b));  // one straight edge, not a chain via (5,0.5)
+  CHECK(NoTriangleEdgeCrosses(r, a, b, 0, 0, 10, 0));
+}

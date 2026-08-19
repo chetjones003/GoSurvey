@@ -27,11 +27,15 @@
       reachable from the REQ-203 driver rather than only from a human at the Surfaces panel.
     - **D.** (adjacent, one line each) SURFELEV's two missing viewport-dispatch entries — the
       pre-existing TASK-055 gap PR #65 found and recorded but did not fix.
+    - **E.** Split a constraint at the vertices lying on it, so a breakline through its own shots is
+      honoured as a chain instead of being reported as an unenforceable single edge.
 - Out of scope:
     - Genuine cooperative cancellation inside `BuildTin` — see SPEC GAP 2.
-    - The false "constraint edge(s) could not be enforced" diagnostic — see Findings below.
+    - The flip loop's cost on an unenforceable constraint — see Findings; it is an algorithm-quality
+      change (architectural), and it is pre-existing rather than introduced here.
     - Reordering definition items (REQ-075's "reorder"); only add/remove are covered.
-- Smallest change: a destructor; a second inclusion mask; six registry entries and one dispatch arm.
+- Smallest change: a destructor; a second inclusion mask; six registry entries and one dispatch arm;
+  a per-constraint split scan feeding the existing single-edge enforcement.
 
 ## 3. Architectural boundary check
 - Part A — no. A destructor restoring the class invariant the struct already documented.
@@ -103,6 +107,16 @@ ASSUMPTION-1: Commas separate the arguments of the new multi-argument surface co
   showRight}) == clipped )` FAILED with `28 == 16`. Restored.
 - 2026-08-19 Oracle check, part A: commented out the join, rebuilt → the whole test binary exited
   `0xC0000409` with no output, exactly the severity being guarded. Restored.
+- 2026-08-19 E: extracted single-edge exposure into `enforceEdge(ia, ib)`, then split each
+  constraint at the vertices on it and enforced the chain. A constraint counts as unresolved once
+  however many of its links failed, so the reported number stays "constraint edges", not flips.
+  Enforcement continues past a failed link rather than abandoning the rest of the breakline.
+- 2026-08-19 Oracle check, part E: disabled the split, rebuilt → exactly the two intended cases
+  failed (`TinConstraintTests.cpp` 335 and 369) while the "genuine failure still reported" and
+  "nearby vertex not split at" cases kept passing, which is the right split of responsibilities.
+  Restored.
+- 2026-08-19 Measured part E's cost before claiming it was free, and found a pre-existing
+  performance cliff in the process (recorded below). Part E is a net improvement on it.
 - 2026-08-19 Transcript authoring caught three of my own wrong assumptions, each corrected against
   the code rather than guessed: POLYLINE commits with `END` (not bare Enter) and needs a following
   `ESC`; `PICK` takes LOCAL coordinates while typed coordinates are world (this drawing's origin is
@@ -115,9 +129,11 @@ ASSUMPTION-1: Commas separate the arguments of the new multi-argument surface co
 - [x] architecture-review  — PASS for A/B/D; C escalated, not decided by the Workshop
 - [x] code-review          — PASS
 - [x] dependency-audit     — n/a (no dependency added)
-- [x] performance-review   — n/a for A/B/D. Note carried forward, not introduced here: constraint
-      insertion rescans all triangles per flip, so it is worst-case O(T²) per constraint edge.
-- [x] testing              — PASS (439 ctest cases; 422 Catch2 cases / 204,582 assertions)
+- [x] performance-review   — PASS, measured. Part E adds one O(vertices) scan per constraint
+      (60 x 10,000 = negligible) and *reduces* total time by removing failures — 43.2 s after vs
+      51.1 s before on the same pathological fixture. The remaining cliff is pre-existing and
+      recorded as a finding below with numbers.
+- [x] testing              — PASS (443 ctest cases; 426 Catch2 cases / 204,627 assertions)
 
 ## 10. Verification result
 - Submitted: 2026-08-19
@@ -145,16 +161,46 @@ threading a cancel token into `BuildTin` — a signature change to a pure util, 
 decision. Consequence today: the destructor's join is bounded by one full triangulation, so closing
 during a large rebuild waits rather than crashing.
 
-### Finding not fixed — a false "constraint edge(s) could not be enforced"
-The insertion loop terminates on `edgeExists(ia, ib)` — the constraint as a SINGLE edge — and never
-splits a constraint at an intervening vertex. Any breakline passing through a vertex between its
-endpoints therefore can never satisfy that test and is counted unresolved. Demonstrated twice: a
-breakline `(0,0)→(10,0)` with a shot at `(5,0)` reports 1 unresolved; two breaklines crossing at
-equal elevation report 2 unresolved **while both are fully present in the mesh, edge for edge**.
-The geometry is right and the diagnostic is wrong, and it reaches the user through
-`BuildSurfaceFromSources`' log line. The inverse case is worse: where the sub-edges are not Delaunay
-edges the breakline genuinely is not enforced, and it is reported by the same indistinguishable
-counter. A proper fix splits the constraint at intervening vertices and enforces each sub-segment.
+### FIXED (part E) — a false "constraint edge(s) could not be enforced"
+The insertion loop terminated on `edgeExists(ia, ib)` — the constraint as a SINGLE edge — which no
+triangulation can contain when a third vertex lies between the endpoints, and it never split the
+constraint there. Every such constraint was counted unresolved, and that is the ordinary surveying
+case: a breakline drawn along a ridge through the shots that define it.
+
+Measured before the fix: a breakline `(0,0)-(10,0)` with a shot at `(5,0)` reported 1 unresolved;
+two breaklines crossing at a shared grid vertex reported 2 — **while both were fully present in the
+mesh, edge for edge**. The geometry was right and the diagnostic was wrong, and it reached the user
+through `BuildSurfaceFromSources`' log line.
+
+Now each constraint is split at every vertex within `kTinPlanEpsilon` perpendicular of it and
+strictly between its endpoints (sorted along the segment), and each link is enforced by the existing
+single-edge routine. Both cases now report 0. The tolerance is deliberately the same one that
+decides two points are the same site: a vertex the rest of the system cannot distinguish from the
+segment must not be treated as off it, or the flip loop chases an edge through a vertex it can never
+cross.
+
+Guarded against becoming a false NEGATIVE, which was the real risk of this fix: a new test asserts
+the counter still fires for two breaklines crossing at (15,15), a non-vertex where nothing can be
+split and no triangulation holds both edges. Another asserts a vertex 0.5 off the segment (fifty
+times the epsilon) is still crossed rather than split at, so the breakline stays straight.
+
+### Finding NOT fixed — the flip loop's cost on an unenforceable constraint (pre-existing)
+Enforcing one edge calls `edgeExists` — an O(triangles) scan — once per flip, inside a loop bounded
+by `4 * triangles + 64`. A constraint that cannot be enforced therefore burns the whole budget at
+O(T) each. Measured on 10,000 points / ~20,000 triangles:
+
+| case | time |
+|---|---|
+| unconstrained build | 6.3 ms |
+| 99 enforceable breakline segments | 10.2 ms |
+| 60 segments of which ~11 unenforceable | **43 s** |
+
+So normal breaklines are cheap and the cliff is entirely per-unenforceable-constraint (~4 s each at
+that size). This is PR #65's code and is **not** a regression from part E — the same measurement
+against the pre-split commit was *slower* (51.1 s, 12 unresolved) than after it (43.2 s, 11), because
+splitting removes a whole class of failures. Part E therefore mitigates the cliff without removing
+it. A real fix walks the triangle strip the segment crosses via adjacency instead of rescanning all
+triangles, which is an algorithm change and so an architectural decision, not the Workshop's.
 
 ### Finding not fixed — world coordinates through a float (pre-existing, not PR #65)
 `TinBuildResult::vertsXyz` is `std::vector<float>` holding WORLD coordinates. At state-plane
@@ -164,9 +210,10 @@ predates this PR but is newly relevant: `TinCullByBoundaries` decides a triangle
 float-derived centroid against an exact-double boundary ring.
 
 ## 11. Outcome
-- Requirements satisfied: REQ-069 (A, B — Acceptance met: yes), REQ-203 (C — the definition
+- Requirements satisfied: REQ-069 (A, B, E — Acceptance met: yes), REQ-203 (C — the definition
   operations are now drivable), REQ-074 (D — SURFELEV's picks work at all).
-- Tests added: `tests/SurfaceRebuildLifetimeTests.cpp` (2 cases); one case in
-  `tests/TinConstraintTests.cpp`; `transcripts/req069-surface-definition-commands.txt` (48 steps).
+- Tests added: `tests/SurfaceRebuildLifetimeTests.cpp` (2 cases); five cases in
+  `tests/TinConstraintTests.cpp` (one for B, four for E);
+  `transcripts/req069-surface-definition-commands.txt` (48 steps).
 - Docs updated: this task log.
 - Done: pending user review.

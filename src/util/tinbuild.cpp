@@ -430,19 +430,15 @@ TinBuildResult BuildTin(const std::vector<TinInputPoint>& points, const std::vec
       }
     };
 
-    for (const TinConstraint& c : constraints) {
-      const std::uint32_t ia = findUniqIndex(c.ax, c.ay);
-      const std::uint32_t ib = findUniqIndex(c.bx, c.by);
-      if (ia == kNone || ib == kNone || ia == ib)
-        continue;  // zero-length, or (defensively) unresolved — step 0 guarantees resolution normally
-
+    // Exposes ONE edge (\p ia,\p ib) by flipping. Returns false if it could not be exposed within
+    // the flip budget, or if a full scan found no flippable crossing edge. The caller decides what
+    // that means for the constraint as a whole — a constraint is generally several of these.
+    auto enforceEdge = [&](std::uint32_t ia, std::uint32_t ib) -> bool {
       const int budget = static_cast<int>(tris.size()) * 4 + 64;  // generous, finite
       int guard = 0;
       while (!edgeExists(ia, ib)) {
-        if (++guard > budget) {
-          ++r.constraintsUnresolved;
-          break;
-        }
+        if (++guard > budget)
+          return false;
         bool flipped = false;
         for (std::uint32_t ti = 0; ti < tris.size() && !flipped; ++ti) {
           if (!tris[ti].alive)
@@ -503,13 +499,73 @@ TinBuildResult BuildTin(const std::vector<TinInputPoint>& points, const std::vec
             flipped = true;
           }
         }
-        if (!flipped) {
+        if (!flipped)
           // A full scan found no flippable crossing edge — stuck, not merely slow. Report rather
           // than spin: the mesh is left exactly as it was (no partial constraint applied).
-          ++r.constraintsUnresolved;
-          break;
-        }
+          return false;
       }
+      return true;
+    };
+
+    // Vertices lying ON the current constraint, paired with their parameter along it. Declared out
+    // here so the allocation is reused across constraints rather than made per segment.
+    std::vector<std::pair<double, std::uint32_t>> onSegment;
+
+    for (const TinConstraint& c : constraints) {
+      const std::uint32_t ia = findUniqIndex(c.ax, c.ay);
+      const std::uint32_t ib = findUniqIndex(c.bx, c.by);
+      if (ia == kNone || ib == kNone || ia == ib)
+        continue;  // zero-length, or (defensively) unresolved — step 0 guarantees resolution normally
+
+      // --- Split the constraint at every vertex lying on it ---------------------------------------
+      // No triangulation can contain an edge that passes THROUGH a third vertex, so a constraint
+      // spanning one is not a single edge and asking for it as one can never succeed. It is honoured
+      // as the CHAIN of edges between consecutive vertices along it instead — geometrically the same
+      // breakline. Without this split the loop below could not terminate on edgeExists() and every
+      // such constraint was counted unresolved, which is the ordinary surveying case: a breakline
+      // drawn along a ridge THROUGH the shots that define it. Measured before this change, a
+      // breakline (0,0)-(10,0) with a shot at (5,0) reported 1 unresolved, and two breaklines
+      // crossing at a shared grid vertex reported 2 — while both were in fact fully present in the
+      // mesh, edge for edge.
+      //
+      // "On" is kTinPlanEpsilon perpendicular, the same tolerance that decides two points are the
+      // same site: a vertex the rest of the system cannot distinguish from the segment must not be
+      // treated as off it here, or the flip loop chases an edge through a vertex it cannot cross.
+      onSegment.clear();
+      const double ax = xs[ia], ay = ys[ia];
+      const double dx = xs[ib] - ax, dy = ys[ib] - ay;
+      const double len2 = dx * dx + dy * dy;
+      if (len2 > 0.0) {
+        const double len = std::sqrt(len2);
+        for (std::uint32_t k = 0; k < nPts; ++k) {  // real vertices only — the super-triangle is not on anything
+          if (k == ia || k == ib)
+            continue;
+          const double px = xs[k] - ax, py = ys[k] - ay;
+          const double t = (px * dx + py * dy) / len2;
+          if (t <= 0.0 || t >= 1.0)
+            continue;  // beyond an endpoint: on the line perhaps, but not between them
+          if (std::fabs(px * dy - py * dx) / len <= kTinPlanEpsilon)
+            onSegment.push_back({t, k});
+        }
+        std::sort(onSegment.begin(), onSegment.end());
+      }
+
+      // Enforce every link of the chain, and keep going after a failure so one bad link does not
+      // silently abandon the rest of the breakline. The constraint counts as unresolved once,
+      // however many of its links failed — the number reported is constraint edges, not flips.
+      bool wholeChain = true;
+      std::uint32_t from = ia;
+      for (const std::pair<double, std::uint32_t>& hit : onSegment) {
+        if (hit.second == from)
+          continue;
+        if (!enforceEdge(from, hit.second))
+          wholeChain = false;
+        from = hit.second;
+      }
+      if (from != ib && !enforceEdge(from, ib))
+        wholeChain = false;
+      if (!wholeChain)
+        ++r.constraintsUnresolved;
     }
   }
 
