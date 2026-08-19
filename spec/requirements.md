@@ -2494,10 +2494,17 @@ requirements is a planning failure, not a sign of rigor.
     triangulation is retained;
   - a `.gs` round trip preserves the link, and a legacy `.gs` with no such array loads unchanged.
 - Owner-layer: Domain, IO, UI
-- Status:      proposed
+- Status:      accepted (2026-08-19)
 - Revisions:   2026-08-19 — initial. The file is read during the UI-thread resolve step
                (`ResolveSurfaceInputs`), never on the rebuild worker, so REQ-069's worker stays pure
                and touches no `AppCommandState` and no filesystem (architecture §8 rule 1).
+               2026-08-19 — accepted and implemented (TASK-076). The link stores the column LAYOUT
+               alongside the path, which the statement above did not say: a point file does not
+               describe its own column order, and a link that re-guessed would swap northing for
+               easting on reload. Also added during implementation: breaking the link is REFUSED
+               when the import brought in no points (REQ-083 skips rows whose point id already
+               exists), because dropping the link would then silently delete the file.s whole
+               contribution — the link is the only thing still supplying those points.
 
 ### REQ-087 — Feature line entity
 - Purpose:     a named 3D linework object that grading is designed with and that a surface can

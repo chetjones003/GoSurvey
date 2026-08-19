@@ -271,6 +271,18 @@ struct CadSurfaceBreakline {
   std::string description;
 };
 
+/// A point file a surface reads its points from directly (REQ-086) — a LINK, not an import: the file
+/// is re-read on every rebuild and its points never become drawing survey points.
+///
+/// The layout travels with the path because a point file does not describe its own column order, and
+/// a link that guessed would silently swap northing for easting on reload. Same reason
+/// \c skipFirstRow is stored rather than re-detected.
+struct CadSurfacePointFile {
+  std::string path;             ///< As the user gave it. Resolved at rebuild time, never cached.
+  int  layoutIndex = 0;         ///< Index into \c SurveyCsvLayoutFromUiIndex — the REQ-083 layouts.
+  bool skipFirstRow = false;    ///< The file has a header row.
+};
+
 /// A named TIN surface (REQ-068).
 ///
 /// Small and copyable: the heavy triangulation hangs off a shared pointer, so copying a surface —
@@ -289,6 +301,11 @@ struct CadSurface {
   /// resolves is reported at build time rather than quietly producing an empty surface.
   std::vector<std::string> sourcePointGroups;
 
+  /// Point files feeding the surface directly (REQ-086). Read on the UI thread during
+  /// `ResolveSurfaceInputs`, never on the rebuild worker — the worker stays pure and touches neither
+  /// \c AppCommandState nor the filesystem (architecture §8 rule 1).
+  std::vector<CadSurfacePointFile> sourcePointFiles;
+
   /// Breaklines forcing a triangulation edge along them (REQ-069) — each a Line or a Polyline in the
   /// drawing, referenced by stable entity id (REQ-076, architecture §11.9), never by index. An id
   /// that no longer resolves at rebuild time is dropped from this list, not left dangling
@@ -306,6 +323,16 @@ struct CadSurface {
   /// What the last build did, kept for the UI and the log (REQ-201). Not persisted — a reload
   /// re-reports on the next build.
   std::string lastBuildMessage;
+
+  /// The last rebuild was abandoned because a source could not be read (REQ-086) — the surface is
+  /// showing an older triangulation than its definition describes.
+  ///
+  /// Separate from \c builtAtRevision on purpose. That field is advanced even on this failure, so the
+  /// per-frame tick does NOT re-open a missing file sixty times a second; the retry happens on the
+  /// next drawing change or an explicit rebuild. Without this flag the surface would then read as
+  /// "current", which is exactly the silence REQ-086 is trying to prevent. Not persisted, like
+  /// \ref lastBuildMessage.
+  bool lastBuildIncomplete = false;
 
   /// `cadGpuRevision` this surface was last built (or last attempted) against — REQ-069's dynamic
   /// rebuild. `cadGpuRevision` already increments on every drawing mutation (it is what drives the

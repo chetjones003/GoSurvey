@@ -9,6 +9,7 @@
 #include "util/benchscene.hpp"
 #include "util/meshgeom.hpp"
 #include "util/tinbuild.hpp"
+#include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
 #include "util/gltfimport.hpp"
 #include "util/stlimport.hpp"
 #include "DwgMeshConvert.hpp"
@@ -1347,6 +1348,12 @@ struct SurfaceBuildInputs {
   std::vector<TinConstraint> constraints;
   std::vector<TinBoundaryLoop> cullLoops;
   double originX = 0.0, originY = 0.0;
+  /// A linked point file could not be read (REQ-086). The build is ABANDONED rather than run on what
+  /// is left: a surface whose file went missing must keep its last good triangulation, not quietly
+  /// rebuild itself smaller (REQ-001 — reject, never absorb). Distinct from a build that fails on its
+  /// own merits, because the inputs here are known-incomplete before the triangulator ever runs.
+  bool inputsIncomplete = false;
+  std::string incompleteReason;
 };
 
 /// UI-thread only: resolves a surface's definition against CURRENT drawing state — point groups,
@@ -1379,6 +1386,29 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
     }
   }
   (void)unresolvedGroups;
+
+  // Linked point files (REQ-086). Read HERE, on the UI thread, so the rebuild worker keeps touching
+  // neither AppCommandState nor the filesystem. Coordinates come out of the file already in world
+  // double, which is the frame the triangulator wants — no origin round trip.
+  for (const CadSurfacePointFile& pf : surface.sourcePointFiles) {
+    std::vector<SurveyFilePoint> filePts;
+    int skipped = 0;
+    std::string err;
+    if (!SurveyCsvReadPointsOnly(pf.path.c_str(), SurveyCsvLayoutFromUiIndex(pf.layoutIndex),
+                                 pf.skipFirstRow, &filePts, &skipped, &err)) {
+      // Named, not swallowed — and it stops the build (see SurfaceBuildInputs::inputsIncomplete).
+      in.inputsIncomplete = true;
+      in.incompleteReason = "point file \"" + pf.path + "\" could not be read (" + err + ")";
+      log.push_back("Surface \"" + surface.name + "\": " + in.incompleteReason +
+                    ". Keeping the previous triangulation.");
+      continue;
+    }
+    if (skipped > 0)
+      log.push_back("Surface \"" + surface.name + "\": point file \"" + pf.path + "\" — " +
+                    std::to_string(skipped) + " unreadable row(s) skipped.");
+    for (const SurveyFilePoint& p : filePts)
+      in.pts.push_back({p.easting, p.northing, p.elevation});
+  }
 
   // Breaklines (REQ-069): resolve each by stable entity id, dropping — not merely skipping — any
   // that no longer resolve, so the STORED definition never holds a dangling reference (§8 ASSUMPTION-1).
@@ -1468,8 +1498,18 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
   // Synchronous path: explicit user actions (create, the manual Rebuild button) that should show a
   // result immediately rather than waiting a frame for the async path below to pick them up.
   const SurfaceBuildInputs in = ResolveSurfaceInputs(st, surface, log);
+  if (in.inputsIncomplete) {
+    // REQ-086: a source that could not be read leaves the surface exactly as it was — no partial
+    // rebuild on what survived. The revision IS advanced so the tick does not reopen a missing file
+    // every frame; `lastBuildIncomplete` is what keeps the surface showing as not-current.
+    surface.builtAtRevision = st.cadGpuRevision;
+    surface.lastBuildIncomplete = true;
+    surface.lastBuildMessage = "Not rebuilt: " + in.incompleteReason + ".";
+    return false;
+  }
   const TinBuildResult r = RunSurfaceBuild(in);
   surface.builtAtRevision = st.cadGpuRevision;
+  surface.lastBuildIncomplete = false;
   if (!r.ok()) {
     // No partial surface, and the previous triangulation is left alone (REQ-001).
     surface.lastBuildMessage = r.message;
@@ -1570,6 +1610,7 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
         log.push_back("Surface \"" + surface.name + "\" not rebuilt: " + surface.lastBuildMessage);
       }
       surface.builtAtRevision = job.generation;
+      surface.lastBuildIncomplete = false;  // a result that landed means the inputs were complete
     }
     st.surfaceRebuildAsync.erase(st.surfaceRebuildAsync.begin() + static_cast<std::ptrdiff_t>(i));
   }
@@ -1595,6 +1636,18 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
     SurfaceBuildInputs inputs = ResolveSurfaceInputs(st, surface, resolveLog);
     for (std::string& m : resolveLog)
       log.push_back(std::move(m));
+
+    if (inputs.inputsIncomplete) {
+      // REQ-086: don't dispatch a worker to triangulate inputs already known to be short. The surface
+      // keeps the triangulation it has. The revision is advanced so this does not re-read a missing
+      // file every frame — `lastBuildIncomplete` carries the not-current state instead, and the retry
+      // comes with the next drawing change or an explicit rebuild. ResolveSurfaceInputs already
+      // logged which file and why.
+      surface.builtAtRevision = st.cadGpuRevision;
+      surface.lastBuildIncomplete = true;
+      surface.lastBuildMessage = "Not rebuilt: " + inputs.incompleteReason + ".";
+      continue;
+    }
 
     auto job = std::make_unique<SurfaceJob>();
     job->surfaceName = surface.name;
@@ -1653,13 +1706,20 @@ void ReportSurfaces(const AppCommandState& st, std::vector<std::string>& log) {
                      " triangles")
                   : std::string("not built");
     line += ", " + std::to_string(s.breaklines.size()) + " breakline(s), " +
-            std::to_string(s.boundaries.size()) + " boundary(ies).";
+            std::to_string(s.boundaries.size()) + " boundary(ies), " +
+            std::to_string(s.sourcePointFiles.size()) + " point file(s).";
     log.push_back(line);
 
     for (size_t i = 0; i < s.sourcePointGroups.size(); ++i) {
       const bool exists = FindPointGroupIndex(st, s.sourcePointGroups[i]) >= 0;
       log.push_back("  group " + std::to_string(i + 1) + ": \"" + s.sourcePointGroups[i] + "\"" +
                     (exists ? "" : "  (missing)"));
+    }
+    for (size_t i = 0; i < s.sourcePointFiles.size(); ++i) {
+      const CadSurfacePointFile& pf = s.sourcePointFiles[i];
+      const char* lay = pf.layoutIndex == 1 ? "PENZD" : pf.layoutIndex == 2 ? "NEZ" : pf.layoutIndex == 3 ? "ENZ" : "PNEZD";
+      log.push_back("  point file " + std::to_string(i + 1) + ": \"" + pf.path + "\" (" + lay +
+                    (pf.skipFirstRow ? ", header" : "") + ")");
     }
     for (size_t i = 0; i < s.breaklines.size(); ++i)
       log.push_back("  breakline " + std::to_string(i + 1) + ": entity id " +
@@ -1767,7 +1827,138 @@ void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector
   BumpCadGpuCache(st);
 }
 
-/// `UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY>, <n>` — removes one item from a surface's
+/// `SURFACEADDFILE <surface>, <path>[, <layout>[, HEADER]]` — links a point file into a surface's
+/// definition (REQ-086). The file is NOT imported: its points feed the triangulation and never become
+/// drawing survey points. `<layout>` is one of PNEZD / PENZD / NEZ / ENZ, defaulting to the first;
+/// `HEADER` says the file's first row is a header.
+///
+/// The file is read once here purely to refuse a path that cannot be read at all — linking something
+/// unreadable and only discovering it at the next rebuild would put the error a long way from the
+/// action that caused it (REQ-201).
+void RunSurfaceAddFile(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() < 2 || f[0].empty() || f[1].empty()) {
+    log.push_back("SURFACEADDFILE — usage: SURFACEADDFILE <surface>, <path>[, <PNEZD|PENZD|NEZ|ENZ>[, HEADER]].");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFACEADDFILE — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  CadSurfacePointFile pf;
+  pf.path = f[1];
+  if (f.size() >= 3 && !f[2].empty()) {
+    const std::string lay = StringUtil::toLowerAsciiCopy(f[2]);
+    if (lay == "pnezd")      pf.layoutIndex = 0;
+    else if (lay == "penzd") pf.layoutIndex = 1;
+    else if (lay == "nez")   pf.layoutIndex = 2;
+    else if (lay == "enz")   pf.layoutIndex = 3;
+    else {
+      log.push_back("SURFACEADDFILE — layout must be PNEZD, PENZD, NEZ or ENZ.");
+      return;
+    }
+  }
+  for (size_t i = 3; i < f.size(); ++i)
+    if (StringUtil::toLowerAsciiCopy(f[i]) == "header")
+      pf.skipFirstRow = true;
+
+  std::vector<SurveyFilePoint> probe;
+  int skipped = 0;
+  std::string err;
+  if (!SurveyCsvReadPointsOnly(pf.path.c_str(), SurveyCsvLayoutFromUiIndex(pf.layoutIndex), pf.skipFirstRow,
+                               &probe, &skipped, &err)) {
+    log.push_back("SURFACEADDFILE — cannot read \"" + pf.path + "\": " + err + ". Not linked.");
+    return;
+  }
+
+  PushUndoSnapshot(st, "Link point file to surface");
+  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  log.push_back("SURFACEADDFILE — linked \"" + pf.path + "\" to \"" + s.name + "\" (" +
+                std::to_string(probe.size()) + " point(s)" +
+                (skipped > 0 ? ", " + std::to_string(skipped) + " row(s) unreadable" : "") + ").");
+  s.sourcePointFiles.push_back(std::move(pf));
+  BumpCadGpuCache(st);
+}
+
+/// `SURFACEIMPORTFILE <surface>, <n>` — REQ-086's "break the link": reads the linked file once
+/// through the REQ-083 import path, so its points become real survey points in the drawing and a
+/// point group the surface references, then drops the link. The surface must still build identically
+/// afterwards, which is the acceptance condition this exists to satisfy.
+void RunSurfaceImportFile(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() != 2 || f[0].empty()) {
+    log.push_back("SURFACEIMPORTFILE — usage: SURFACEIMPORTFILE <surface>, <number> (SURFACELIST numbers them).");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFACEIMPORTFILE — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  char* numEnd = nullptr;
+  const long parsed = std::strtol(f[1].c_str(), &numEnd, 10);
+  const bool numOk = !f[1].empty() && numEnd && *numEnd == '\0';
+  const int n = numOk ? static_cast<int>(parsed) : 0;
+  if (n < 1 || static_cast<size_t>(n) > s.sourcePointFiles.size()) {
+    log.push_back("SURFACEIMPORTFILE — \"" + s.name + "\" has " + std::to_string(s.sourcePointFiles.size()) +
+                  " point file(s); " + f[1] + " is out of range.");
+    return;
+  }
+
+  const CadSurfacePointFile pf = s.sourcePointFiles[static_cast<size_t>(n - 1)];
+  PushUndoSnapshot(st, "Import surface point file");
+
+  // Drive the REQ-083 importer through its own state, so a file imported this way and a file imported
+  // from the Import Points panel go down exactly one code path.
+  const int savedLayout = st.surveyImportCsvLayoutIdx;
+  const bool savedSkip = st.surveyImportCsvSkipFirstRow;
+  std::string savedPath = st.surveyImportCsvPath;
+  std::snprintf(st.surveyImportCsvPath, sizeof(st.surveyImportCsvPath), "%s", pf.path.c_str());
+  st.surveyImportCsvLayoutIdx = pf.layoutIndex;
+  st.surveyImportCsvSkipFirstRow = pf.skipFirstRow;
+  const size_t before = st.surveyPoints.size();
+  const bool ok = SurveyCsvImportFile(st, log);
+  std::snprintf(st.surveyImportCsvPath, sizeof(st.surveyImportCsvPath), "%s", savedPath.c_str());
+  st.surveyImportCsvLayoutIdx = savedLayout;
+  st.surveyImportCsvSkipFirstRow = savedSkip;
+
+  if (!ok) {
+    log.push_back("SURFACEIMPORTFILE — import failed; the link is left in place.");
+    return;
+  }
+  const size_t added = st.surveyPoints.size() - before;
+  if (added == 0) {
+    // The importer skips rows whose point id already exists (REQ-083's rule), so a file whose ids
+    // collide with the drawing imports nothing. Breaking the link here would silently delete the
+    // file's contribution from the surface — the link is the only thing still supplying those
+    // points. Keep it, and say why.
+    log.push_back("SURFACEIMPORTFILE — no points were imported (see the lines above; duplicate point "
+                  "ids are skipped). The link to \"" + pf.path + "\" is left in place.");
+    return;
+  }
+
+  // A group covering exactly the points just imported, so the surface keeps the same points by the
+  // same rule every other source uses (REQ-067) rather than by a second mechanism.
+  PointGroup g;
+  g.name = "Imported: " + std::filesystem::path(pf.path).filename().string();
+  for (int i = 1; i < 10000 && FindPointGroupIndex(st, g.name) >= 0; ++i)
+    g.name = "Imported: " + std::filesystem::path(pf.path).filename().string() + " (" + std::to_string(i + 1) + ")";
+  // Explicit ids, not a description rule: the group must mean "exactly the points this file brought
+  // in", and a description wildcard would silently pick up unrelated shots that happen to match.
+  for (size_t i = before; i < st.surveyPoints.size(); ++i)
+    g.rule.explicitIds.push_back(st.surveyPoints[i].id);
+  st.pointGroups.push_back(g);
+
+  s.sourcePointGroups.push_back(g.name);
+  s.sourcePointFiles.erase(s.sourcePointFiles.begin() + (n - 1));
+  log.push_back("SURFACEIMPORTFILE — imported " + std::to_string(added) + " point(s) from \"" + pf.path +
+                "\" into point group \"" + g.name + "\"; the link is broken.");
+  BumpCadGpuCache(st);
+}
+
+/// `UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY|POINTFILE>, <n>` — removes one item from a surface's
 /// definition (REQ-069's "remove", the counterpart to DESIGNATEBREAKLINE/DESIGNATEBOUNDARY). \p n is
 /// 1-based and matches the numbering SURFACELIST prints. Deleting the referenced entity also removes
 /// the item, but only that entity's other uses go with it — this removes the item alone.
@@ -1784,8 +1975,9 @@ void RunUndesignate(AppCommandState& st, const std::string& args, std::vector<st
   }
   const std::string what = StringUtil::toLowerAsciiCopy(f[1]);
   const bool isBoundary = (what == "boundary");
-  if (!isBoundary && what != "breakline") {
-    log.push_back("UNDESIGNATE — second argument must be BREAKLINE or BOUNDARY.");
+  const bool isPointFile = (what == "pointfile");
+  if (!isBoundary && !isPointFile && what != "breakline") {
+    log.push_back("UNDESIGNATE — second argument must be BREAKLINE, BOUNDARY or POINTFILE.");
     return;
   }
   // strtol rather than stoi: a non-numeric argument is a user typo, not an exceptional condition,
@@ -1796,15 +1988,21 @@ void RunUndesignate(AppCommandState& st, const std::string& args, std::vector<st
   const int n = numOk ? static_cast<int>(parsed) : 0;  // 0 fails the range check below
 
   CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
-  const size_t count = isBoundary ? s.boundaries.size() : s.breaklines.size();
+  const size_t count = isBoundary     ? s.boundaries.size()
+                       : isPointFile  ? s.sourcePointFiles.size()
+                                      : s.breaklines.size();
   if (n < 1 || static_cast<size_t>(n) > count) {
     log.push_back("UNDESIGNATE — \"" + s.name + "\" has " + std::to_string(count) + " " + what +
                   "(s); " + f[2] + " is out of range (SURFACELIST numbers them).");
     return;
   }
-  PushUndoSnapshot(st, isBoundary ? "Remove surface boundary" : "Remove surface breakline");
+  PushUndoSnapshot(st, isBoundary    ? "Remove surface boundary"
+                       : isPointFile ? "Unlink surface point file"
+                                     : "Remove surface breakline");
   if (isBoundary)
     s.boundaries.erase(s.boundaries.begin() + (n - 1));
+  else if (isPointFile)
+    s.sourcePointFiles.erase(s.sourcePointFiles.begin() + (n - 1));
   else
     s.breaklines.erase(s.breaklines.begin() + (n - 1));
   log.push_back("UNDESIGNATE — removed " + what + " " + std::to_string(n) + " from \"" + s.name + "\".");
@@ -2727,7 +2925,9 @@ const CmdEntry kRegistry[] = {
     {"surfacedelete", "sfdelete", "Delete a surface: SURFACEDELETE <name>"},
     {"surfacerebuild", "sfrebuild", "Rebuild a surface now (all surfaces if no name): SURFACEREBUILD [<name>]"},
     {"surfacelist", "sflist", "List every surface and its full definition"},
-    {"undesignate", "undes", "Remove one breakline/boundary: UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY>, <n>"},
+    {"undesignate", "undes", "Remove one definition item: UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY|POINTFILE>, <n>"},
+    {"surfaceaddfile", "sfaddfile", "Link a point file into a surface: SURFACEADDFILE <surface>, <path>[, <layout>[, HEADER]]"},
+    {"surfaceimportfile", "sfimportfile", "Import a linked point file into the drawing and break the link"},
     {"plotscale", "pscale", "Set the plot scale"},
     {"move", "m", "Move objects"},
     {"copy", "cp", "Copy objects"},
@@ -13148,7 +13348,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     if (plotTok == "surfacecreate" || plotTok == "sfcreate" || plotTok == "surfacerename" ||
         plotTok == "sfrename" || plotTok == "surfacedelete" || plotTok == "sfdelete" ||
         plotTok == "surfacerebuild" || plotTok == "sfrebuild" || plotTok == "surfacelist" ||
-        plotTok == "sflist" || plotTok == "undesignate" || plotTok == "undes") {
+        plotTok == "sflist" || plotTok == "undesignate" || plotTok == "undes" ||
+        plotTok == "surfaceaddfile" || plotTok == "sfaddfile" || plotTok == "surfaceimportfile" ||
+        plotTok == "sfimportfile") {
       std::string rest;
       std::getline(issIdle, rest);
       rest = StringUtil::trimCopy(rest);
@@ -13162,6 +13364,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunSurfaceRebuild(st, rest, log);
       else if (plotTok == "surfacelist" || plotTok == "sflist")
         ReportSurfaces(st, log);
+      else if (plotTok == "surfaceaddfile" || plotTok == "sfaddfile")
+        RunSurfaceAddFile(st, rest, log);
+      else if (plotTok == "surfaceimportfile" || plotTok == "sfimportfile")
+        RunSurfaceImportFile(st, rest, log);
       else
         RunUndesignate(st, rest, log);
       return;

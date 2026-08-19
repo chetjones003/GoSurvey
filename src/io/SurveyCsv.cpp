@@ -524,6 +524,57 @@ void SurveyCsvRefreshImportPreview(AppCommandState& st) {
   st.surveyImportPreviewDirty = false;
 }
 
+bool SurveyCsvReadPointsOnly(const char* pathUtf8, SurveyCsvLayout layout, bool skipFirstRow,
+                             std::vector<SurveyFilePoint>* out, int* skippedOut, std::string* errorOut) {
+  if (out)
+    out->clear();
+  if (skippedOut)
+    *skippedOut = 0;
+  if (errorOut)
+    errorOut->clear();
+  if (!out || !pathUtf8 || !pathUtf8[0]) {
+    if (errorOut)
+      *errorOut = "no file path";
+    return false;
+  }
+
+  std::ifstream f;
+  if (!OpenInput(pathUtf8, &f)) {
+    if (errorOut)
+      *errorOut = "could not open the file";
+    return false;
+  }
+
+  const bool hasId = LayoutHasPointId(layout);
+  int autoId = 1;  // only feeds ParseDataRow's id column; nothing here is stored in the drawing
+  std::string line;
+  size_t lineNo = 0;
+
+  while (std::getline(f, line)) {
+    ++lineNo;
+    if (skipFirstRow && lineNo == 1)
+      continue;
+    if (Trim(line).empty())
+      continue;
+    std::vector<std::string> cells = SplitCsvLine(line);
+    int counter = autoId;
+    ParseOutcome pr = ParseDataRow(cells, layout, hasId, hasId ? nullptr : &counter);
+    if (!pr.ok) {
+      if (skippedOut)
+        ++*skippedOut;
+      continue;  // same tolerance as the importer: a bad row is skipped and counted, not fatal
+    }
+    if (!hasId)
+      autoId = counter;
+    SurveyFilePoint p;
+    p.easting = pr.worldE;   // world, in double — the surface builder triangulates in world (ADR-028 (d))
+    p.northing = pr.worldN;
+    p.elevation = pr.pt.elevation;
+    out->push_back(p);
+  }
+  return true;
+}
+
 bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
   if (!st.surveyImportCsvPath[0]) {
     log.push_back("IMPORTPOINTS — no file path.");

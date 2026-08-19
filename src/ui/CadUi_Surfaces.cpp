@@ -10,17 +10,19 @@
 // command line cannot drift apart — and the REQ-203 driver keeps testing the same code the panel
 // drives, which it could not reach through ImGui.
 //
-// Two nodes are deliberately inert and say so rather than pretending:
-//   - Point Files — REQ-086, still `proposed`. The node is in the agreed tree shape, its Add… is
-//     disabled, and hovering says why.
-//   - Breakline / boundary types beyond what the engine has. REQ-084's 2026-08-18 revision added an
-//     acceptance condition that no menu entry may be present that cannot act (Find… was dropped for
-//     exactly this), so Proximity / Wall / Non-destructive / Data Clip are **not listed** at all.
+// Point Files are LINKS (REQ-086): re-read on every rebuild, and their points never become drawing
+// survey points. "Import into drawing" on an item is the explicit break-the-link action.
+//
+// Breakline and boundary types beyond what the engine has are **not listed** at all — REQ-084's
+// 2026-08-18 revision added an acceptance condition that no menu entry may be present that cannot
+// act (Find… was dropped for exactly this), so Proximity / Wall / Non-destructive / Data Clip are
+// absent rather than greyed.
 
 #include "CadUi.hpp"
 
 #include "CadCommands.hpp"
 #include "SurveyPoints.hpp"
+#include "WinFileDialogs.hpp"  // REQ-086: Browse... on the Add Point File dialog
 
 #include <imgui.h>
 #include <imgui_stdlib.h>
@@ -98,13 +100,23 @@ std::string EntityLabel(const AppCommandState& cmd, std::uint64_t id) {
   return std::string(kind) + " #" + std::to_string(id);
 }
 
+/// REQ-086 point-file column layouts, in the order SurveyCsvLayoutFromUiIndex expects.
+const char* LayoutName(int layoutIndex) {
+  switch (layoutIndex) {
+  case 1:  return "PENZD";
+  case 2:  return "NEZ";
+  case 3:  return "ENZ";
+  default: return "PNEZD";
+  }
+}
+
 const char* BoundaryKindName(CadBoundaryKind k) {
   return k == CadBoundaryKind::Outer ? "Outer" : k == CadBoundaryKind::Hide ? "Hide" : "Show";
 }
 
 /// Which dialog wants opening after the tree is drawn. ImGui popups must be opened from the same id
 /// stack level they are begun at, so the tree records an intent and the caller acts on it.
-enum class PendingDialog { None, AddBreakline, AddBoundary, AddPointGroup };
+enum class PendingDialog { None, AddBreakline, AddBoundary, AddPointGroup, AddPointFile };
 
 /// Moves item \p i of \p v by \p delta, clamped. REQ-075 asks for reorder, and for boundaries the
 /// order is not cosmetic — REQ-069: "boundaries apply in definition order", so an outer ring after a
@@ -148,10 +160,12 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
   PendingDialog wantDialog = PendingDialog::None;
   int dialogSurface = -1;
   int rebuildIdx = -1;
-  struct RemoveReq { int surface = -1; int kind = 0; size_t index = 0; };  // kind: 0 group, 1 breakline, 2 boundary
+  struct RemoveReq { int surface = -1; int kind = 0; size_t index = 0; };  // 0 group, 1 breakline, 2 boundary, 3 point file
   RemoveReq removeReq;
   struct MoveReq { int surface = -1; int kind = 0; size_t index = 0; int delta = 0; };
   MoveReq moveReq;
+  struct ImportFileReq { int surface = -1; size_t index = 0; };
+  ImportFileReq importFileReq;
 
   const float footer = ImGui::GetFrameHeightWithSpacing() + 8.f;
 
@@ -298,18 +312,37 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
           ImGui::EndPopup();
         }
 
-        // ── Point Files ───────────────────────────────────────────────────────────────────────
-        // Present so the tree is the shape that was agreed, inert because REQ-086 is `proposed` and
-        // not accepted. It says so on hover rather than failing silently when clicked.
-        ImGui::BeginDisabled(true);
-        ImGui::TreeNodeEx("##pf", ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen |
-                                      ImGuiTreeNodeFlags_SpanAvailWidth,
-                          "Point Files (0)");
-        ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-          ImGui::SetTooltip("Building a surface directly from a point file is REQ-086,\n"
-                            "which is proposed and not yet accepted.\n"
-                            "Import the file under Survey > Import Points and use a point group.");
+        // ── Point Files (REQ-086) ─────────────────────────────────────────────────────────────
+        // A LINK, not an import: the file is re-read on every rebuild and its points never become
+        // drawing survey points. "Import into drawing" is the explicit break-the-link action.
+        if (ImGui::TreeNodeEx("##pf", ImGuiTreeNodeFlags_SpanAvailWidth, "Point Files (%d)",
+                              static_cast<int>(s.sourcePointFiles.size()))) {
+          if (ImGui::BeginPopupContextItem("##pfctx")) {
+            if (ImGui::MenuItem("Add..."))
+              { wantDialog = PendingDialog::AddPointFile; dialogSurface = static_cast<int>(si); }
+            ImGui::EndPopup();
+          }
+          for (size_t i = 0; i < s.sourcePointFiles.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i));
+            const CadSurfacePointFile& pf = s.sourcePointFiles[i];
+            ImGui::BulletText("%s  (%s%s)", pf.path.c_str(), LayoutName(pf.layoutIndex),
+                              pf.skipFirstRow ? ", header" : "");
+            if (ImGui::BeginPopupContextItem("##pfitem")) {
+              if (ImGui::MenuItem("Import into drawing (breaks the link)"))
+                { importFileReq = {static_cast<int>(si), i}; }
+              ImGui::Separator();
+              if (ImGui::MenuItem("Remove link"))
+                { removeReq = {static_cast<int>(si), 3, i}; }
+              ImGui::EndPopup();
+            }
+            ImGui::PopID();
+          }
+          ImGui::TreePop();
+        } else if (ImGui::BeginPopupContextItem("##pfctx")) {
+          if (ImGui::MenuItem("Add..."))
+            { wantDialog = PendingDialog::AddPointFile; dialogSurface = static_cast<int>(si); }
+          ImGui::EndPopup();
+        }
 
         ImGui::TreePop();  // Definition
       }
@@ -459,9 +492,10 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
     dlgSurface = dialogSurface;
     dlgText.clear();
     dlgBoundaryKind = 0;
-    ImGui::OpenPopup(wantDialog == PendingDialog::AddBreakline    ? "Add Breaklines"
-                     : wantDialog == PendingDialog::AddBoundary   ? "Add Boundaries"
-                                                                  : "Add Point Group");
+    ImGui::OpenPopup(wantDialog == PendingDialog::AddBreakline     ? "Add Breaklines"
+                     : wantDialog == PendingDialog::AddBoundary    ? "Add Boundaries"
+                     : wantDialog == PendingDialog::AddPointFile   ? "Add Point File"
+                                                                   : "Add Point Group");
   }
 
   const bool dlgSurfaceValid = dlgSurface >= 0 && dlgSurface < static_cast<int>(cmd.cadSurfaces.size());
@@ -523,6 +557,54 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
     ImGui::EndPopup();
   }
 
+  if (ImGui::BeginPopupModal("Add Point File", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    static int pfLayout = 0;
+    static bool pfHeader = false;
+    ImGui::TextUnformatted("Point file:");
+    ImGui::SetNextItemWidth(420.f);
+    ImGui::InputText("##pfpath", &dlgText);
+    ImGui::SameLine();
+    if (ImGui::Button("Browse...")) {
+      char buf[1024] = {0};
+      if (BrowseOpenFileCsvUtf8(buf, sizeof(buf)))
+        dlgText = buf;
+    }
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Column layout:");
+    ImGui::SetNextItemWidth(200.f);
+    // A point file does not describe its own column order, so the layout is stated, not guessed —
+    // guessing would swap northing for easting on a file that happens to parse either way.
+    const char* layouts[] = {"PNEZD", "PENZD", "NEZ", "ENZ"};
+    ImGui::Combo("##pflayout", &pfLayout, layouts, 4);
+    ImGui::SameLine();
+    ImGui::Checkbox("First row is a header", &pfHeader);
+    ImGui::Spacing();
+    ImGui::TextDisabled("The file stays LINKED: it is re-read whenever the surface rebuilds,\n"
+                        "and its points do not become drawing survey points. Use\n"
+                        "\"Import into drawing\" on the item to change that.");
+    ImGui::Spacing();
+    ImGui::BeginDisabled(dlgText.empty());
+    if (ImGui::Button("OK", ImVec2(120, 0))) {
+      if (dlgSurfaceValid) {
+        // Straight through the command line, so the panel and SURFACEADDFILE cannot disagree about
+        // what linking means — including refusing a path that cannot be read, and the undo snapshot.
+        std::string line = "SURFACEADDFILE " + cmd.cadSurfaces[static_cast<size_t>(dlgSurface)].name +
+                           ", " + dlgText + ", " + layouts[pfLayout];
+        if (pfHeader)
+          line += ", HEADER";
+        std::vector<char> buf(line.begin(), line.end());
+        buf.push_back('\0');
+        ProcessCommandLineSubmit(buf.data(), static_cast<int>(buf.size()), cmd, *log);
+      }
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(120, 0)))
+      ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+  }
+
   if (ImGui::BeginPopupModal("Add Point Group", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
     if (!dlgSurfaceValid) {
       ImGui::CloseCurrentPopup();
@@ -572,7 +654,10 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
 
   if (removeReq.surface >= 0 && removeReq.surface < static_cast<int>(cmd.cadSurfaces.size())) {
     CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(removeReq.surface)];
-    const char* what = removeReq.kind == 0 ? "point group" : removeReq.kind == 1 ? "breakline" : "boundary";
+    const char* what = removeReq.kind == 0   ? "point group"
+                       : removeReq.kind == 1 ? "breakline"
+                       : removeReq.kind == 2 ? "boundary"
+                                             : "point file link";
     bool removed = false;
     if (removeReq.kind == 0 && removeReq.index < s.sourcePointGroups.size()) {
       PushUndoSnapshot(cmd, "Remove point group from surface");
@@ -585,6 +670,10 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
     } else if (removeReq.kind == 2 && removeReq.index < s.boundaries.size()) {
       PushUndoSnapshot(cmd, "Remove surface boundary");
       s.boundaries.erase(s.boundaries.begin() + static_cast<std::ptrdiff_t>(removeReq.index));
+      removed = true;
+    } else if (removeReq.kind == 3 && removeReq.index < s.sourcePointFiles.size()) {
+      PushUndoSnapshot(cmd, "Unlink surface point file");
+      s.sourcePointFiles.erase(s.sourcePointFiles.begin() + static_cast<std::ptrdiff_t>(removeReq.index));
       removed = true;
     }
     if (removed) {
@@ -606,6 +695,17 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
       BumpCadGpuCache(cmd);
       log->push_back("Surface \"" + s.name + "\": reordered the definition.");
     }
+  }
+
+  if (importFileReq.surface >= 0 && importFileReq.surface < static_cast<int>(cmd.cadSurfaces.size())) {
+    // REQ-086's break-the-link, routed through the command so the panel and SURFACEIMPORTFILE share
+    // one definition of what it does — including refusing to drop the link when nothing imported.
+    const std::string line = "SURFACEIMPORTFILE " +
+                             cmd.cadSurfaces[static_cast<size_t>(importFileReq.surface)].name + ", " +
+                             std::to_string(importFileReq.index + 1);
+    std::vector<char> buf(line.begin(), line.end());
+    buf.push_back('\0');
+    ProcessCommandLineSubmit(buf.data(), static_cast<int>(buf.size()), cmd, *log);
   }
 
   if (deleteIdx >= 0 && deleteIdx < static_cast<int>(cmd.cadSurfaces.size())) {

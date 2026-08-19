@@ -643,6 +643,17 @@ json BuildRoot(const AppCommandState& st) {
       json o;
       o["name"] = s.name;
       o["sourcePointGroups"] = s.sourcePointGroups;
+      // REQ-086: linked point files travel with their layout, because a point file does not describe
+      // its own column order and a link that re-guessed would swap northing for easting on reload.
+      json pointFiles = json::array();
+      for (const CadSurfacePointFile& pf : s.sourcePointFiles) {
+        json pfo;
+        pfo["path"] = pf.path;
+        pfo["layoutIndex"] = pf.layoutIndex;
+        pfo["skipFirstRow"] = pf.skipFirstRow;
+        pointFiles.push_back(std::move(pfo));
+      }
+      o["sourcePointFiles"] = std::move(pointFiles);
       // REQ-069: breaklines/boundaries are stored by stable entity id (REQ-076), never index —
       // the same rule every other cross-object reference in this file follows.
       //
@@ -1385,6 +1396,17 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       // every other stable-id reference in this codebase already follows (ADR-027). An id that no
       // longer resolves is silently absent here; it is reported and pruned on that next rebuild, not
       // treated as a load-time error — a legacy file predating REQ-069 simply has none of either.
+      // REQ-086. Absent in any file written before it — a legacy drawing simply has no linked files.
+      if (el.contains("sourcePointFiles") && el["sourcePointFiles"].is_array())
+        for (const auto& pfo : el["sourcePointFiles"]) {
+          if (!pfo.is_object() || !pfo.contains("path") || !pfo["path"].is_string())
+            continue;
+          CadSurfacePointFile pf;
+          pf.path = pfo["path"].get<std::string>();
+          pf.layoutIndex = pfo.value("layoutIndex", 0);
+          pf.skipFirstRow = pfo.value("skipFirstRow", false);
+          s.sourcePointFiles.push_back(std::move(pf));
+        }
       //
       // Breaklines are read in BOTH forms. `breaklines` is the current one, objects carrying the
       // REQ-075 description; `breaklineIds` is what REQ-069 originally wrote, a bare id array. A

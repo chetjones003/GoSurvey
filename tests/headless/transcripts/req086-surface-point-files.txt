@@ -1,0 +1,86 @@
+# REQ-086 — a point file as a surface data source.
+#
+# The point of the requirement is that this is a LINK, not an import: the file is re-read on every
+# rebuild, and its points feed the triangulation WITHOUT becoming drawing survey points. Swapping one
+# fixture for a longer one stands in for "the file was edited", which a transcript must not do to a
+# file in the source tree (CON-07).
+#
+# Fixtures are PNEZD (P,N,E,Z,D): pad-points.csv has 7 points, pad-points-more.csv the same 7 plus 3.
+
+OPEN samples/surface-demo.gs
+CMD SURFACECREATE Pad, Existing Ground
+CMD SURFACELIST
+EXPECT LOG "Surface "Pad": 500 points, 982 triangles"
+
+# --- link: the file's points reach the triangulation ------------------------------------------------
+CMD SURFACEADDFILE Pad, samples/pad-points.csv
+EXPECT LOG "linked "samples/pad-points.csv""
+CMD SURFACEREBUILD Pad
+CMD SURFACELIST
+EXPECT LOG "Surface "Pad": 507 points, 1000 triangles"
+EXPECT LOG "point file 1: "samples/pad-points.csv" (PNEZD)"
+
+# ...and the DRAWING gained none of them. This is the assertion the whole requirement turns on:
+# a linked file is not an import.
+EXPECT SURVEYPOINTS 546
+
+# --- "editing the file" changes the surface ---------------------------------------------------------
+CMD UNDESIGNATE Pad, POINTFILE, 1
+CMD SURFACEADDFILE Pad, samples/pad-points-more.csv
+CMD SURFACEREBUILD Pad
+CMD SURFACELIST
+EXPECT LOG "Surface "Pad": 510 points"
+
+# --- a bad path is refused at the point of linking, not discovered at the next rebuild --------------
+CMD SURFACEADDFILE Pad, samples/no-such-file.csv
+EXPECT LOG "cannot read "samples/no-such-file.csv""
+CMD SURFACELIST
+EXPECT LOG "1 point file(s)"
+
+# --- break the link: the points become real drawing points and a group ------------------------------
+CMD SURFACEIMPORTFILE Pad, 1
+EXPECT LOG "the link is broken"
+EXPECT SURVEYPOINTS 556
+CMD SURFACELIST
+EXPECT LOG "0 point file(s)"
+EXPECT LOG "group 2: "Imported: pad-points-more.csv""
+
+# The surface must still build from the same points it had while linked.
+CMD SURFACEREBUILD Pad
+CMD SURFACELIST
+EXPECT LOG "Surface "Pad": 510 points"
+
+# --- the link survives a .gs round trip -------------------------------------------------------------
+CMD SURFACEADDFILE Pad, samples/pad-points.csv
+SAVEAS %OUT%/pf-a.gs
+OPEN %OUT%/pf-a.gs
+CMD SURFACELIST
+EXPECT LOG "point file 1: "samples/pad-points.csv" (PNEZD)"
+SAVEAS %OUT%/pf-b.gs
+EXPECT SAMEFILE %OUT%/pf-a.gs %OUT%/pf-b.gs
+
+CHECK ALL
+
+# --- a link whose file has gone: report it, and KEEP the last good triangulation --------------------
+# REQ-086: "a missing file is named in the log, the surface is marked not-current, and the previous
+# triangulation is retained" — a surface must not quietly rebuild itself smaller when a source
+# disappears (REQ-001: reject, never absorb).
+#
+# The fixture is a real saved drawing whose stored link path was edited to one that does not exist.
+# It cannot be produced by SURFACEADDFILE, which refuses an unreadable path up front — the file has
+# to go missing AFTER the link was made, which is exactly the case this covers.
+
+OPEN samples/missing-point-file.gs
+CMD SURFACELIST
+EXPECT LOG "Surface "Pad": 507 points, 1000 triangles"
+
+CMD SURFACEREBUILD Pad
+EXPECT LOG "point file "samples/pad-points-GONE.csv" could not be read"
+EXPECT LOG "Keeping the previous triangulation"
+
+# The triangulation is untouched — still the 507/1000 the file contributed to, not the 500/982 it
+# would collapse to if the missing source were simply dropped.
+CMD SURFACELIST
+EXPECT LOG "Surface "Pad": 507 points, 1000 triangles"
+
+CHECK ALL
