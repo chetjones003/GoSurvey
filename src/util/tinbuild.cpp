@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <deque>
 
 double TinOrient2D(double ax, double ay, double bx, double by, double cx, double cy) {
   return (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
@@ -390,9 +391,16 @@ TinBuildResult BuildTin(const std::vector<TinInputPoint>& points, const std::vec
   // --- 5.5 Expose constraint edges (breaklines, boundary rings) — REQ-069 ------------------------
   // Flip-based insertion (Anglada/Sloan): for each constraint edge not already present, repeatedly
   // flip whichever crossing triangle-edge currently forms a convex quad, until the constraint edge
-  // itself appears. A crossing edge that is not yet flippable is simply revisited on the next scan —
+  // itself appears. A crossing edge that is not yet flippable is simply revisited on the next pass —
   // other flips nearby make it flippable, the standard termination argument for this method. Runs
   // are bounded so a pathological input is reported unresolved rather than looping forever.
+  //
+  // The crossing edges are found by WALKING the corridor the segment cuts, through the adjacency
+  // links, and every lookup goes through a vertex→triangle index. Both used to be passes over the
+  // whole triangle array, which made enforcing one edge cost O(triangles) per flip inside a budget
+  // that was itself 4x the triangle count: a constraint that could not be enforced took about four
+  // seconds on a 20k-triangle surface, and a surface rebuilds on every drawing edit. Cost is now
+  // proportional to the ground the breakline crosses rather than to the size of the surface.
   if (!constraints.empty()) {
     // uniq is sorted by (x,y) from step 1; every constraint endpoint was folded into pts in step 0,
     // so this recovers WHICH uniq index it landed at rather than searching for something that might
@@ -405,15 +413,71 @@ TinBuildResult BuildTin(const std::vector<TinInputPoint>& points, const std::vec
           return static_cast<std::uint32_t>(it - uniq.begin());
       return kNone;
     };
-    auto edgeExists = [&](std::uint32_t a, std::uint32_t b) {
-      for (const Tri& t : tris) {
-        if (!t.alive)
-          continue;
+    // One incident triangle per vertex. Everything below is then local — an edge lookup and the
+    // corridor walk both cost O(vertex degree) rather than a pass over every triangle, which is what
+    // keeps enforcing a breakline proportional to the ground it crosses instead of to the size of
+    // the surface. Built here rather than maintained through step 5, which kills and creates
+    // triangles freely; from this point on only flips happen, and each one repairs its four entries.
+    std::vector<std::uint32_t> vertTri(static_cast<size_t>(nPts) + 3, kNone);
+    for (std::uint32_t ti = 0; ti < tris.size(); ++ti) {
+      if (!tris[ti].alive)
+        continue;
+      for (int k = 0; k < 3; ++k)
+        vertTri[tris[ti].v[k]] = ti;
+    }
+
+    // Visits every triangle incident to \p v, passing (slot, index of v within it), stopping early
+    // when \p f returns true. Crossing edge `i` — the one from v to the next vertex — pivots to the
+    // next triangle around v. Real vertices are strictly inside the super-triangle, so the cycle
+    // always closes rather than running off a hull edge; the guard is for a corrupt adjacency only.
+    auto forEachAround = [&](std::uint32_t v, auto&& f) {
+      const std::uint32_t start = vertTri[v];
+      if (start == kNone)
+        return;
+      std::uint32_t s = start;
+      for (int guard = 0; guard < 4096; ++guard) {
+        int i = -1;
         for (int k = 0; k < 3; ++k)
-          if ((t.v[k] == a && t.v[(k + 1) % 3] == b) || (t.v[k] == b && t.v[(k + 1) % 3] == a))
-            return true;
+          if (tris[s].v[k] == v) {
+            i = k;
+            break;
+          }
+        if (i < 0)
+          return;  // stale entry — defensive, should not happen
+        if (f(s, i))
+          return;
+        const std::uint32_t nxt = tris[s].n[i];
+        if (nxt == kNone)
+          return;
+        s = nxt;
+        if (s == start)
+          return;  // full cycle
       }
-      return false;
+    };
+
+    auto edgeExists = [&](std::uint32_t a, std::uint32_t b) {
+      bool found = false;
+      forEachAround(a, [&](std::uint32_t s, int i) {
+        if (tris[s].v[(i + 1) % 3] == b || tris[s].v[(i + 2) % 3] == b) {
+          found = true;
+          return true;
+        }
+        return false;
+      });
+      return found;
+    };
+
+    // Strict interior crossing of segment (p,q) against segment (u,v), by vertex index.
+    auto segmentsCross = [&](std::uint32_t p, std::uint32_t q, std::uint32_t u, std::uint32_t w) {
+      const double rx = xs[q] - xs[p], ry = ys[q] - ys[p];
+      const double sx = xs[w] - xs[u], sy = ys[w] - ys[u];
+      const double rxs = rx * sy - ry * sx;
+      if (std::fabs(rxs) < 1e-12)
+        return false;
+      const double qx = xs[u] - xs[p], qy = ys[u] - ys[p];
+      const double tt = (qx * sy - qy * sx) / rxs;
+      const double uu = (qx * ry - qy * rx) / rxs;
+      return tt > 0.0 && tt < 1.0 && uu > 0.0 && uu < 1.0;
     };
     // Sets tris[otherSlot]'s neighbour across the edge (fromB,fromA) — the SAME physical edge as
     // (fromA,fromB) seen from the far side, by adjacency symmetry — to \p toSlot. No-op at the hull.
@@ -430,86 +494,173 @@ TinBuildResult BuildTin(const std::vector<TinInputPoint>& points, const std::vec
       }
     };
 
-    // Exposes ONE edge (\p ia,\p ib) by flipping. Returns false if it could not be exposed within
-    // the flip budget, or if a full scan found no flippable crossing edge. The caller decides what
-    // that means for the constraint as a whole — a constraint is generally several of these.
-    auto enforceEdge = [&](std::uint32_t ia, std::uint32_t ib) -> bool {
-      const int budget = static_cast<int>(tris.size()) * 4 + 64;  // generous, finite
-      int guard = 0;
-      while (!edgeExists(ia, ib)) {
-        if (++guard > budget)
-          return false;
-        bool flipped = false;
-        for (std::uint32_t ti = 0; ti < tris.size() && !flipped; ++ti) {
-          if (!tris[ti].alive)
-            continue;
-          for (int k = 0; k < 3 && !flipped; ++k) {
-            const std::uint32_t u = tris[ti].v[k], v = tris[ti].v[(k + 1) % 3];
-            if (u == ia || u == ib || v == ia || v == ib)
-              continue;  // an edge touching either endpoint cannot "cross" the segment
-
-            // Strict interior crossing of (ia,ib) against (u,v) — same test as TinFindCrossingConflicts.
-            const double rx = xs[ib] - xs[ia], ry = ys[ib] - ys[ia];
-            const double sx = xs[v] - xs[u], sy = ys[v] - ys[u];
-            const double rxs = rx * sy - ry * sx;
-            if (std::fabs(rxs) < 1e-12)
-              continue;
-            const double qx = xs[u] - xs[ia], qy = ys[u] - ys[ia];
-            const double tt = (qx * sy - qy * sx) / rxs;
-            const double uu = (qx * ry - qy * rx) / rxs;
-            if (tt <= 0.0 || tt >= 1.0 || uu <= 0.0 || uu >= 1.0)
-              continue;
-
-            const std::uint32_t p = tris[ti].v[(k + 2) % 3];
-            const std::uint32_t otherSlot = tris[ti].n[k];
-            if (otherSlot == kNone)
-              continue;  // a hull edge cannot cross a segment between two interior points
-            int k2 = -1;
-            for (int j = 0; j < 3; ++j)
-              if (tris[otherSlot].v[j] == v && tris[otherSlot].v[(j + 1) % 3] == u) { k2 = j; break; }
-            if (k2 < 0)
-              continue;  // adjacency inconsistency — defensive, should not happen
-            const std::uint32_t q = tris[otherSlot].v[(k2 + 2) % 3];
-
-            // Flip valid only if both new triangles would be non-inverted: exactly the condition
-            // that the quad (u,q,v,p) is convex, expressed as the orientation of the two halves the
-            // new diagonal p-q would cut it into.
-            if (!(TinOrient2D(xs[u], ys[u], xs[q], ys[q], xs[p], ys[p]) > 0.0 &&
-                  TinOrient2D(xs[q], ys[q], xs[v], ys[v], xs[p], ys[p]) > 0.0))
-              continue;
-
-            // Neighbours outside the quad, captured before the two slots are overwritten below.
-            const std::uint32_t nUQ = tris[otherSlot].n[(k2 + 1) % 3];  // edge u->q, in t2
-            const std::uint32_t nPU = tris[ti].n[(k + 2) % 3];          // edge p->u, in t1
-            const std::uint32_t nQV = tris[otherSlot].n[(k2 + 2) % 3];  // edge q->v, in t2
-            const std::uint32_t nVP = tris[ti].n[(k + 1) % 3];          // edge v->p, in t1
-
-            Tri& t1 = tris[ti];
-            Tri& t2 = tris[otherSlot];
-            t1.v[0] = u; t1.v[1] = q; t1.v[2] = p;
-            t1.n[0] = nUQ; t1.n[1] = otherSlot; t1.n[2] = nPU;
-            t2.v[0] = q; t2.v[1] = v; t2.v[2] = p;
-            t2.n[0] = nQV; t2.n[1] = nVP; t2.n[2] = ti;
-
-            relink(nUQ, u, q, ti);
-            relink(nPU, p, u, ti);
-            relink(nQV, q, v, otherSlot);
-            relink(nVP, v, p, otherSlot);
-
-            flipped = true;
-          }
+    // Locates the triangle holding (u,v) as a DIRECTED edge: v[k] == u and v[k+1] == v.
+    auto findDirectedEdge = [&](std::uint32_t u, std::uint32_t v, std::uint32_t* slotOut, int* kOut) {
+      bool found = false;
+      forEachAround(u, [&](std::uint32_t s, int i) {
+        if (tris[s].v[(i + 1) % 3] == v) {
+          *slotOut = s;
+          *kOut = i;
+          found = true;
+          return true;
         }
-        if (!flipped)
-          // A full scan found no flippable crossing edge — stuck, not merely slow. Report rather
-          // than spin: the mesh is left exactly as it was (no partial constraint applied).
-          return false;
+        return false;
+      });
+      return found;
+    };
+
+    // The edges the segment (ia,ib) crosses, in order from ia, as VERTEX PAIRS — a (slot, edge
+    // index) does not survive a flip, and these have to. Walks the corridor by adjacency: find the
+    // triangle at ia the segment leaves through, then step across each crossed edge until the far
+    // endpoint is reached. Cost is the number of crossings, not the number of triangles.
+    //
+    // Part E's split guarantees no vertex lies strictly on the segment, which is what makes the walk
+    // unambiguous: it never has to decide what to do about passing exactly through a vertex.
+    std::vector<std::pair<std::uint32_t, std::uint32_t>> corridor;
+    auto collectCorridor = [&](std::uint32_t ia, std::uint32_t ib) -> bool {
+      corridor.clear();
+      std::uint32_t slot = kNone;
+      int kEdge = -1;
+      // The segment leaves ia through the triangle whose two other vertices straddle its direction.
+      forEachAround(ia, [&](std::uint32_t s, int i) {
+        const std::uint32_t b = tris[s].v[(i + 1) % 3], c = tris[s].v[(i + 2) % 3];
+        if (TinOrient2D(xs[ia], ys[ia], xs[b], ys[b], xs[ib], ys[ib]) > 0.0 &&
+            TinOrient2D(xs[ia], ys[ia], xs[c], ys[c], xs[ib], ys[ib]) < 0.0) {
+          slot = s;
+          kEdge = (i + 1) % 3;  // the far edge (b,c)
+          return true;
+        }
+        return false;
+      });
+      if (slot == kNone || kEdge < 0)
+        return false;
+
+      for (int guard = 0; guard < 1 << 20; ++guard) {
+        const std::uint32_t b = tris[slot].v[kEdge], c = tris[slot].v[(kEdge + 1) % 3];
+        corridor.push_back({b, c});
+        const std::uint32_t nxt = tris[slot].n[kEdge];
+        if (nxt == kNone)
+          return false;  // ran off the hull: impossible between two interior vertices
+        int j = -1;
+        for (int k = 0; k < 3; ++k)
+          if (tris[nxt].v[k] == c && tris[nxt].v[(k + 1) % 3] == b) {
+            j = k;
+            break;
+          }
+        if (j < 0)
+          return false;  // adjacency inconsistency — defensive, should not happen
+        const std::uint32_t z = tris[nxt].v[(j + 2) % 3];
+        if (z == ib)
+          return true;  // the far endpoint closes the corridor
+        // Of the two remaining edges, the segment leaves through whichever it actually crosses.
+        slot = nxt;
+        kEdge = segmentsCross(ia, ib, b, z) ? (j + 1) % 3 : (j + 2) % 3;
       }
-      return true;
+      return false;
+    };
+
+    // Exposes ONE edge (\p ia,\p ib) by flipping, and returns whether it ended up present.
+    //
+    // Sloan's queue: take a crossing edge; if its quad is convex, flip it and put the resulting
+    // diagonal back only when that still crosses the segment; if it is not convex, put it back to
+    // retry once neighbouring flips have opened it up. The queue only ever loses edges that stopped
+    // crossing, which is what makes progress monotone.
+    //
+    // Re-deriving the corridor after every flip instead — the obvious approach, and the first one
+    // written here — LIVELOCKS. Measured: with a five-million-flip budget the same two constraints
+    // stayed unresolved and the fixture took 750 ms, because a fresh walk keeps re-proposing the
+    // edge that was just flipped back. Ordering has to persist across flips, so it lives in a queue
+    // rather than being recomputed.
+    auto enforceEdge = [&](std::uint32_t ia, std::uint32_t ib) -> bool {
+      if (edgeExists(ia, ib))
+        return true;
+      if (!collectCorridor(ia, ib) || corridor.empty())
+        return false;
+
+      std::deque<std::pair<std::uint32_t, std::uint32_t>> pending(corridor.begin(), corridor.end());
+      // Bounded by the corridor, not by the mesh. The old bound was 4x the triangle COUNT with an
+      // O(triangles) scan inside it, which is what cost about four seconds per unenforceable
+      // constraint on a 20k-triangle surface.
+      const long long k0 = static_cast<long long>(pending.size());
+      const long long limit = std::min(64 + 16 * k0 * k0, 2000000LL);
+
+      for (long long guard = 0; !pending.empty(); ++guard) {
+        if (guard > limit)
+          return false;
+        const std::uint32_t u = pending.front().first, v = pending.front().second;
+        pending.pop_front();
+        if (u == ia || u == ib || v == ia || v == ib)
+          continue;  // an edge touching either endpoint cannot "cross" the segment
+        if (!segmentsCross(ia, ib, u, v))
+          continue;  // an earlier flip already cleared this one out of the way
+
+        std::uint32_t ti = kNone;
+        int k = -1;
+        if (!findDirectedEdge(u, v, &ti, &k))
+          continue;  // the edge is gone — nothing to flip
+        {
+          const std::uint32_t p = tris[ti].v[(k + 2) % 3];
+          const std::uint32_t otherSlot = tris[ti].n[k];
+          if (otherSlot == kNone)
+            continue;  // a hull edge cannot cross a segment between two interior points
+          int k2 = -1;
+          for (int j = 0; j < 3; ++j)
+            if (tris[otherSlot].v[j] == v && tris[otherSlot].v[(j + 1) % 3] == u) { k2 = j; break; }
+          if (k2 < 0)
+            continue;  // adjacency inconsistency — defensive, should not happen
+          const std::uint32_t q = tris[otherSlot].v[(k2 + 2) % 3];
+
+          // Flip valid only if both new triangles would be non-inverted: exactly the condition
+          // that the quad (u,q,v,p) is convex, expressed as the orientation of the two halves the
+          // new diagonal p-q would cut it into. Not convex yet — retry after its neighbours move.
+          if (!(TinOrient2D(xs[u], ys[u], xs[q], ys[q], xs[p], ys[p]) > 0.0 &&
+                TinOrient2D(xs[q], ys[q], xs[v], ys[v], xs[p], ys[p]) > 0.0)) {
+            pending.push_back({u, v});
+            continue;
+          }
+
+          // Neighbours outside the quad, captured before the two slots are overwritten below.
+          const std::uint32_t nUQ = tris[otherSlot].n[(k2 + 1) % 3];  // edge u->q, in t2
+          const std::uint32_t nPU = tris[ti].n[(k + 2) % 3];          // edge p->u, in t1
+          const std::uint32_t nQV = tris[otherSlot].n[(k2 + 2) % 3];  // edge q->v, in t2
+          const std::uint32_t nVP = tris[ti].n[(k + 1) % 3];          // edge v->p, in t1
+
+          Tri& t1 = tris[ti];
+          Tri& t2 = tris[otherSlot];
+          t1.v[0] = u; t1.v[1] = q; t1.v[2] = p;
+          t1.n[0] = nUQ; t1.n[1] = otherSlot; t1.n[2] = nPU;
+          t2.v[0] = q; t2.v[1] = v; t2.v[2] = p;
+          t2.n[0] = nQV; t2.n[1] = nVP; t2.n[2] = ti;
+
+          relink(nUQ, u, q, ti);
+          relink(nPU, p, u, ti);
+          relink(nQV, q, v, otherSlot);
+          relink(nVP, v, p, otherSlot);
+
+          // Repair the four vertices whose incident-triangle entry the flip could have
+          // invalidated: u left t2 and v left t1, so an entry pointing at the slot it left would
+          // send forEachAround into a triangle that no longer contains it. p and q are in both.
+          vertTri[u] = ti;
+          vertTri[p] = ti;
+          vertTri[q] = ti;
+          vertTri[v] = otherSlot;
+
+          // The new diagonal takes the old edge's place in the queue only while it still stands
+          // between the endpoints; otherwise this crossing is simply gone.
+          if (segmentsCross(ia, ib, p, q))
+            pending.push_back({p, q});
+        }
+      }
+      return edgeExists(ia, ib);
     };
 
     // Vertices lying ON the current constraint, paired with their parameter along it. Declared out
     // here so the allocation is reused across constraints rather than made per segment.
     std::vector<std::pair<double, std::uint32_t>> onSegment;
+    // Each constraint's chain of vertices, kept so the finished mesh can be checked against every
+    // one of them after all the flipping has settled.
+    std::vector<std::vector<std::uint32_t>> chains;
+    chains.reserve(constraints.size());
 
     for (const TinConstraint& c : constraints) {
       const std::uint32_t ia = findUniqIndex(c.ax, c.ay);
@@ -551,21 +702,36 @@ TinBuildResult BuildTin(const std::vector<TinInputPoint>& points, const std::vec
       }
 
       // Enforce every link of the chain, and keep going after a failure so one bad link does not
-      // silently abandon the rest of the breakline. The constraint counts as unresolved once,
-      // however many of its links failed — the number reported is constraint edges, not flips.
-      bool wholeChain = true;
-      std::uint32_t from = ia;
+      // silently abandon the rest of the breakline. The chain is kept for the verification pass
+      // below rather than the outcome being trusted here — see there for why.
+      std::vector<std::uint32_t>& chain = chains.emplace_back();
+      chain.push_back(ia);
       for (const std::pair<double, std::uint32_t>& hit : onSegment) {
-        if (hit.second == from)
+        if (hit.second == chain.back())
           continue;
-        if (!enforceEdge(from, hit.second))
-          wholeChain = false;
-        from = hit.second;
+        enforceEdge(chain.back(), hit.second);
+        chain.push_back(hit.second);
       }
-      if (from != ib && !enforceEdge(from, ib))
-        wholeChain = false;
-      if (!wholeChain)
-        ++r.constraintsUnresolved;
+      if (chain.back() != ib) {
+        enforceEdge(chain.back(), ib);
+        chain.push_back(ib);
+      }
+    }
+
+    // --- Count what is actually missing from the FINISHED mesh ------------------------------------
+    // Not what each insertion reported at the time it ran. Enforcing a later constraint can flip an
+    // earlier one away — two breaklines that genuinely cross cannot both be edges, and whichever is
+    // inserted second wins. Trusting the insertion-time outcome therefore let a breakline vanish
+    // with nothing reported at all: measured on two breaklines crossing at a non-vertex with equal
+    // elevations, where TinFindCrossingConflicts stays silent by design because the elevations
+    // agree. Checking the finished mesh is the only count that matches what the message claims.
+    for (const std::vector<std::uint32_t>& chain : chains) {
+      for (size_t i = 0; i + 1 < chain.size(); ++i) {
+        if (!edgeExists(chain[i], chain[i + 1])) {
+          ++r.constraintsUnresolved;
+          break;  // one constraint, counted once, however many of its links are missing
+        }
+      }
     }
   }
 

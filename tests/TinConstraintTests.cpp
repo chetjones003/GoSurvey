@@ -9,6 +9,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <vector>
@@ -426,4 +427,58 @@ TEST_CASE("A vertex near a breakline but not on it is crossed, not treated as a 
   REQUIRE(b != 0xFFFFFFFFu);
   CHECK(HasEdge(r, a, b));  // one straight edge, not a chain via (5,0.5)
   CHECK(NoTriangleEdgeCrosses(r, a, b, 0, 0, 10, 0));
+}
+
+TEST_CASE("Constraint insertion holds up at scale and leaves a consistent mesh", "[tin][req069]") {
+  // Exercises the corridor walk and the flip queue on a mesh big enough that the old approach — an
+  // O(triangles) scan per flip, inside a budget that was itself 4x the triangle count — took about
+  // four seconds per unenforceable constraint. It also checks the thing that rewrite could plausibly
+  // break: the vertex→triangle index and the neighbour links are now maintained across every flip,
+  // and a stale entry there would corrupt the mesh rather than merely slow it down.
+  std::vector<TinInputPoint> pts;
+  const int side = 40;  // 1600 points
+  for (int i = 0; i < side; ++i)
+    for (int j = 0; j < side; ++j)
+      pts.push_back({i * 10.0, j * 10.0, static_cast<float>((i * 7 + j * 13) % 40)});
+
+  // A long diagonal breakline: it crosses a great many triangles, which is exactly the corridor the
+  // walk has to follow. Its endpoints are grid vertices; its interior is not on any of them.
+  std::vector<TinConstraint> cons(1);
+  cons[0].ax = 5;   cons[0].ay = 0;   cons[0].az = 3.f;
+  cons[0].bx = 355; cons[0].by = 390; cons[0].bz = 3.f;
+
+  const TinBuildResult r = BuildTin(pts, cons);
+  REQUIRE(r.ok());
+  CHECK(r.constraintsUnresolved == 0);
+
+  // The constraint is present as a chain from one endpoint to the other, and nothing crosses it.
+  const std::uint32_t a = FindVertexIndex(r, 5, 0);
+  const std::uint32_t b = FindVertexIndex(r, 355, 390);
+  REQUIRE(a != 0xFFFFFFFFu);
+  REQUIRE(b != 0xFFFFFFFFu);
+  CHECK(NoTriangleEdgeCrosses(r, a, b, 5, 0, 355, 390));
+
+  // Mesh consistency: no triangle may be degenerate or wound clockwise. A stale adjacency entry
+  // during flipping shows up here as an inverted triangle long before it shows up as a wrong
+  // surface.
+  int inverted = 0;
+  for (size_t t = 0; t + 2 < r.indices.size(); t += 3) {
+    const std::uint32_t i0 = r.indices[t], i1 = r.indices[t + 1], i2 = r.indices[t + 2];
+    const double o = TinOrient2D(r.vertsXyz[i0 * 3], r.vertsXyz[i0 * 3 + 1],
+                                 r.vertsXyz[i1 * 3], r.vertsXyz[i1 * 3 + 1],
+                                 r.vertsXyz[i2 * 3], r.vertsXyz[i2 * 3 + 1]);
+    if (o <= 0.0)
+      ++inverted;
+  }
+  CHECK(inverted == 0);
+
+  // Every vertex is referenced by at least one triangle, and no index is out of range — the two
+  // ways a corrupted index buffer usually first shows itself.
+  std::vector<int> used(static_cast<size_t>(r.vertexCount()), 0);
+  for (const std::uint32_t i : r.indices) {
+    REQUIRE(i < static_cast<std::uint32_t>(r.vertexCount()));
+    used[i] = 1;
+  }
+  const int unused = static_cast<int>(std::count(used.begin(), used.end(), 0));
+  CHECK(unused == 0);
 }

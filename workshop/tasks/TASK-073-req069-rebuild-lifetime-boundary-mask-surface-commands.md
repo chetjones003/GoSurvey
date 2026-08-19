@@ -1,6 +1,6 @@
 # TASK-073 — Fix the surface rebuild worker's lifetime and the boundary Show mask; add surface commands
 
-- Type:    bug (parts A, B) + feature (part C)
+- Type:    bug (parts A, B, E, F) + feature (part C)
 - Status:  submitted
 - Opened:  2026-08-19
 - Owner:   chetjones003 (review of PR #65 before merge)
@@ -17,7 +17,7 @@
       `hide` removed it; "deleting a polyline used as a breakline removes it from the definition";
       "the in-flight result is discarded" on undo or a further edit.
     - REQ-203: the command layer is drivable with no window — a transcript reaches the behaviour.
-- Owning subsystem: `util/tinbuild` (part B), `commands/CadCommands` + `app/main` (parts A, C).
+- Owning subsystem: `util/tinbuild` (parts B, E, F), `commands/CadCommands` + `app/main` (parts A, C).
 
 ## 2. Scope
 - In scope:
@@ -29,11 +29,16 @@
       pre-existing TASK-055 gap PR #65 found and recorded but did not fix.
     - **E.** Split a constraint at the vertices lying on it, so a breakline through its own shots is
       honoured as a chain instead of being reported as an unenforceable single edge.
+    - **F.** Replace the mesh-wide scan in constraint insertion with a corridor walk and a flip
+      queue, removing the per-unenforceable-constraint cost cliff. Authorised by the user after the
+      finding was reported with measurements — see SPEC GAP 3.
 - Out of scope:
     - Genuine cooperative cancellation inside `BuildTin` — see SPEC GAP 2.
-    - The flip loop's cost on an unenforceable constraint — see Findings; it is an algorithm-quality
-      change (architectural), and it is pre-existing rather than introduced here.
     - Reordering definition items (REQ-075's "reorder"); only add/remove are covered.
+    - Inserting the intersection VERTEX where two constraints genuinely cross. Both are still
+      unsatisfiable together; the mesh keeps whichever was inserted second and the other is now
+      correctly reported (part F's verification pass). Doing better means adding a point that is in
+      no point group, which changes what a surface's vertices mean — a spec question, not a fix.
 - Smallest change: a destructor; a second inclusion mask; six registry entries and one dispatch arm;
   a per-constraint split scan feeding the existing single-edge enforcement.
 
@@ -44,6 +49,9 @@
   (command-surface) change, which CLAUDE.md §3 reserves to the Specification layer. Recorded as
   SPEC GAP 1; the user directed the change explicitly, which is the recorded decision.
 - Part D — no. Adding an existing `Kind` to the two lists every point-picking command appears in.
+- Part E — no. A pre-step feeding the existing single-edge enforcement; no signature change.
+- Part F — **yes.** Swapping how constraint edges are located and flipped is an algorithm change.
+  Reported with measurements and authorised by the user; recorded as SPEC GAP 3.
 
 ## 4. Questions
 | # | Question | Asked | Answer |
@@ -117,6 +125,13 @@ ASSUMPTION-1: Commas separate the arguments of the new multi-argument surface co
   Restored.
 - 2026-08-19 Measured part E's cost before claiming it was free, and found a pre-existing
   performance cliff in the process (recorded below). Part E is a net improvement on it.
+- 2026-08-19 F: replaced the mesh-wide scan with a vertex→triangle index, a corridor walk, and
+  Sloan's flip queue. The queue was necessary, not stylistic: re-walking after each flip livelocks
+  (proved by instrumenting the bail-out paths — none fired — and by a five-million-flip budget that
+  still left the same constraints unresolved).
+- 2026-08-19 F also moved the unresolved count to a verification pass over the FINISHED mesh, after
+  finding that a later constraint can flip an earlier one away and leave the count reading zero.
+- 2026-08-19 Measured before/after on the same fixture: 43,093 ms/11 unresolved -> 8.6 ms/0.
 - 2026-08-19 Transcript authoring caught three of my own wrong assumptions, each corrected against
   the code rather than guessed: POLYLINE commits with `END` (not bare Enter) and needs a following
   `ESC`; `PICK` takes LOCAL coordinates while typed coordinates are world (this drawing's origin is
@@ -129,11 +144,10 @@ ASSUMPTION-1: Commas separate the arguments of the new multi-argument surface co
 - [x] architecture-review  — PASS for A/B/D; C escalated, not decided by the Workshop
 - [x] code-review          — PASS
 - [x] dependency-audit     — n/a (no dependency added)
-- [x] performance-review   — PASS, measured. Part E adds one O(vertices) scan per constraint
-      (60 x 10,000 = negligible) and *reduces* total time by removing failures — 43.2 s after vs
-      51.1 s before on the same pathological fixture. The remaining cliff is pre-existing and
-      recorded as a finding below with numbers.
-- [x] testing              — PASS (443 ctest cases; 426 Catch2 cases / 204,627 assertions)
+- [x] performance-review   — PASS, measured. Part F removes the cliff entirely: the same fixture
+      goes from 43,093 ms with 11 unresolved to 8.6 ms with 0. Unconstrained builds and enforceable
+      breaklines are unchanged (6.5 ms and 9.7 ms at 10,000 points), so nothing was traded away.
+- [x] testing              — PASS (444 ctest cases; 427 Catch2 cases / 213,766 assertions)
 
 ## 10. Verification result
 - Submitted: 2026-08-19
@@ -149,6 +163,14 @@ commands is a public-API change the Workshop does not get to make on its own. It
 the user (Q1) and is implemented here; `spec/requirements.md` should record the command surface
 under REQ-069/REQ-075, and REQ-069's acceptance row should move from "manual" to naming
 `transcripts/req069-surface-definition-commands.txt`.
+
+### SPEC GAP 3 — the constrained-insertion algorithm (part F)
+Swapping how constraint edges are found and flipped is an algorithm change, which CLAUDE.md §3
+reserves to the Specification layer, and it is the kind that can trade correctness for speed if done
+carelessly. It was reported to the user with measurements first and authorised explicitly, which is
+the recorded decision. `spec/architecture.md`'s note on `util/tinbuild` should record that
+constrained insertion is now corridor-walk plus flip-queue (Sloan) rather than a mesh-wide scan, and
+that it maintains a vertex→triangle index across flips.
 
 ### SPEC GAP 2 — "cooperative cancellation" is not implemented
 `AppCommandState::SurfaceRebuildAsync::cancel` was **never set to true anywhere** in the tree before
@@ -184,23 +206,47 @@ the counter still fires for two breaklines crossing at (15,15), a non-vertex whe
 split and no triangulation holds both edges. Another asserts a vertex 0.5 off the segment (fifty
 times the epsilon) is still crossed rather than split at, so the breakline stays straight.
 
-### Finding NOT fixed — the flip loop's cost on an unenforceable constraint (pre-existing)
-Enforcing one edge calls `edgeExists` — an O(triangles) scan — once per flip, inside a loop bounded
-by `4 * triangles + 64`. A constraint that cannot be enforced therefore burns the whole budget at
-O(T) each. Measured on 10,000 points / ~20,000 triangles:
+### FIXED (part F) — the flip loop's cost on an unenforceable constraint
+Enforcing one edge called `edgeExists` — an O(triangles) scan — once per flip, and found the edge to
+flip by another O(triangles) scan, inside a loop bounded by `4 * triangles + 64`. A constraint that
+could not be enforced burned the whole budget at O(T) each.
 
-| case | time |
-|---|---|
-| unconstrained build | 6.3 ms |
-| 99 enforceable breakline segments | 10.2 ms |
-| 60 segments of which ~11 unenforceable | **43 s** |
+Three things replaced that, all local rather than mesh-wide:
+1. a **vertex→triangle index**, rebuilt once before insertion and repaired by each flip (four
+   entries), so an edge lookup costs the vertex's degree instead of the triangle count;
+2. a **corridor walk** — from `ia`, find the triangle the segment leaves through, then follow the
+   adjacency links across each crossed edge to `ib` — so finding the crossing edges costs the number
+   of crossings instead of the triangle count;
+3. **Sloan's flip queue**, holding crossing edges as vertex pairs (a slot/edge index does not
+   survive a flip): pop one, flip when its quad is convex and re-queue the new diagonal only while
+   it still crosses, otherwise re-queue it to retry once neighbours have opened it up.
 
-So normal breaklines are cheap and the cliff is entirely per-unenforceable-constraint (~4 s each at
-that size). This is PR #65's code and is **not** a regression from part E — the same measurement
-against the pre-split commit was *slower* (51.1 s, 12 unresolved) than after it (43.2 s, 11), because
-splitting removes a whole class of failures. Part E therefore mitigates the cliff without removing
-it. A real fix walks the triangle strip the segment crosses via adjacency instead of rescanning all
-triangles, which is an algorithm change and so an architectural decision, not the Workshop's.
+Point 3 was not optional and cost a full diagnostic cycle to find. Re-deriving the corridor after
+every flip — the obvious approach, written first — **livelocks**: a fresh walk keeps re-proposing the
+edge just flipped back. Measured with a five-million-flip budget: the same constraints stayed
+unresolved and the fixture took 750 ms instead of failing fast. Instrumenting the three bail-out
+paths showed none of them firing, which is what proved it was the budget and therefore a cycle,
+rather than a corridor that could not be built.
+
+Measured on the same fixture, 10,000 points / ~20,000 triangles:
+
+| | before (HEAD, part E) | after (part F) |
+|---|---|---|
+| unconstrained build | 6.3 ms | 6.5 ms |
+| 99 enforceable breakline segments | 10.2 ms | 9.7 ms |
+| 60 segments, some unenforceable | **43,093 ms**, 11 unresolved | **8.6 ms**, 0 unresolved |
+
+About 5,000x on the pathological case, and it now enforces constraints the old loop gave up on
+rather than trading accuracy for speed.
+
+### Also fixed by part F — a constraint could vanish with nothing reported
+Found while testing the above, and a defect in its own right. `constraintsUnresolved` was incremented
+from what each insertion reported **at the time it ran**, but enforcing a later constraint can flip an
+earlier one away: two breaklines that genuinely cross cannot both be edges, and whichever is inserted
+second wins. So a breakline could disappear from the mesh with the count still reading zero — and
+`TinFindCrossingConflicts` stays silent by design when their elevations agree. The count is now taken
+at the end, over the finished mesh, by checking every chain link of every constraint. That is the
+only count that matches what the message claims.
 
 ### Finding not fixed — world coordinates through a float (pre-existing, not PR #65)
 `TinBuildResult::vertsXyz` is `std::vector<float>` holding WORLD coordinates. At state-plane
@@ -212,8 +258,8 @@ float-derived centroid against an exact-double boundary ring.
 ## 11. Outcome
 - Requirements satisfied: REQ-069 (A, B, E — Acceptance met: yes), REQ-203 (C — the definition
   operations are now drivable), REQ-074 (D — SURFELEV's picks work at all).
-- Tests added: `tests/SurfaceRebuildLifetimeTests.cpp` (2 cases); five cases in
-  `tests/TinConstraintTests.cpp` (one for B, four for E);
+- Tests added: `tests/SurfaceRebuildLifetimeTests.cpp` (2 cases); six cases in
+  `tests/TinConstraintTests.cpp` (one for B, four for E, one scale/consistency case for F);
   `transcripts/req069-surface-definition-commands.txt` (48 steps).
 - Docs updated: this task log.
 - Done: pending user review.
