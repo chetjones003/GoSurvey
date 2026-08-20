@@ -209,7 +209,7 @@ ASSUMPTION-2: Inno Setup's [InstallDelete] runs early enough to remove GoSurvey-
               cleared by events, see §11 debt (1);
               (4) the pipeline that stands on this task's work has since built, packaged and
               published two stable releases (tags `v0.5.1`, `v0.5.2`) plus the rolling
-              `channel-beta` prerelease, currently `0.5.3-beta.43`.
+              `channel-beta` prerelease, whose ordinal advances on every push to `beta`.
               Closed as a pull request for review rather than merged directly, so the merge is the
               verification act (`verification.md` §4, §8). Precedent for closing a log this way:
               commit 343cae5, which recorded fifteen tasks the user had verified but never logged.
@@ -230,7 +230,7 @@ ASSUMPTION-2: Inno Setup's [InstallDelete] runs early enough to remove GoSurvey-
                           `installer\GoSurvey.iss`, and throws on a non-zero exit, so a run that
                           reaches its publish steps is proof the script compiled. It compiles on
                           every push to any branch, not only on releases: stable tags run through
-                          `v0.5.2`, and the rolling `channel-beta` prerelease is at `0.5.3-beta.43`.
+                          `v0.5.2`, with the rolling `channel-beta` prerelease on the 0.5.3 cycle.
                           The ISPP constructs §8 called unproven — `#ifexist`,
                           the `#include` of the generated version file, and `/D` precedence — are
                           exercised on every one of those runs.

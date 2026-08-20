@@ -1,7 +1,7 @@
 # TASK-049 — CI pipeline: build, test, package, publish
 
 - Type:    feature
-- Status:  self-verify (blocked on a user decision — see §4 Q1 and §8)
+- Status:  done — closed 2026-08-20; verdict and its basis in §10
 - Opened:  2026-08-15
 - Owner:   Workshop
 
@@ -158,6 +158,19 @@ ASSUMPTION-3: `github.run_number` is monotonically increasing per workflow, maki
   is available on this machine, so even its syntax is unchecked. `gh` (2.92.0, authenticated as
   chetjones003) is present, so the publish steps' commands are at least the right ones for the
   installed CLI. First real verification is a push.
+- 2026-08-17 **The stable publish is not atomic, and the version gate is what makes that survivable.**
+  Two concurrent master pushes at 0.5.2 (runs 32050794486, 32050818673) both reached "Publish the
+  stable release" and both died on `HTTP 503` from `api.github.com/repos/.../releases` — a transient
+  GitHub outage, not a workflow defect. Nothing was left half-published: no tag, no release. The next
+  master push (32051571650, six minutes later) found `v0.5.2` still absent, published it, and the
+  release has stood since. **Recorded because the recovery was automatic and could easily be mistaken
+  for luck.** It is not: the gate asks "does this tag exist on the remote?" rather than "is this
+  commit a release commit", so a failed publish leaves the answer unchanged and the next push simply
+  retries it. A gate keyed on the commit would have needed a human to notice and re-run.
+- 2026-08-20 **Closing the task.** No workflow change: the pipeline shipped 2026-08-15 and has run
+  ~57 times since. What closing it required was Q1 (long since **RESOLVED** — see §4) and the §9
+  testing row, which still read "NOT RUN". Every acceptance condition has now been checked against
+  the run history and the published artifacts rather than against the YAML; the evidence is in §9.
 
 ## 9. Self-verification  (run BEFORE submitting — verification/skills/)
 - [x] build-project        — n-a for the pipeline itself; the tree it builds is green (TASK-048).
@@ -168,16 +181,47 @@ ASSUMPTION-3: `github.run_number` is monotonically increasing per workflow, maki
       GitHub) plus `ilammy/msvc-dev-cmd@v1`, which is **not** first-party — noted as the one
       supply-chain surface introduced here, and a candidate for SHA-pinning.
 - [x] performance-review   — n-a. CI wall time is the only cost; addressed by the `_deps` cache.
-- [~] testing              — **NOT RUN. The pipeline has never executed.** §8 records why.
+- [x] testing              — ~~**NOT RUN. The pipeline has never executed.**~~ **RUN, 2026-08-20.**
+      A workflow is testable only by running it (§7), and it has now run ~57 times across feature
+      branches, `beta` and `master`. Each acceptance condition below is answered from the run
+      history and the published artifacts — not from re-reading the YAML, which is what §9
+      originally had to settle for.
+
+**Acceptance conditions (REQ-202), answered from observation:**
+| Condition (§1) | Evidence |
+|---|---|
+| feature branch → installer artifact, no release, no tag | ✅ run **31912058476** (`release-pipeline-req077-078-202`): artifact `GoSurvey-0.4.0-dev.5` uploaded, both publish steps skipped; no `dev` tag exists |
+| `beta` → exactly one `channel-beta` prerelease, however many pushes | ✅ ~20 pushes to `beta` (31912428949 … 32413924685) and the releases list holds **one** beta entry, currently `0.5.3-beta.44`, carrying the newest installer |
+| `master`, unchanged version → publishes nothing, fails nothing | ✅ run **32049139096**: green job, both publish steps skipped, "Report that the version gate held" ran |
+| `master`, bumped version → tag `v<version>` + stable release | ✅ tags `v0.5.0`, `v0.5.1`, `v0.5.2`, each with a stable release |
+| a failing `ctest` publishes no release | ⚠️ **never observed — no run has failed at Test.** The nearest evidence is run **31910767883**, which failed at Build and published nothing. Structurally the gate cannot be bypassed: Test precedes every publish step inside one job, and a failed step fails the job. Observed only in the negative, and said so |
+| installer `AppVersion` = release tag = manifest `version` | ✅ v0.5.2 checked three ways: the published installer's version resource reads `ProductVersion 0.5.2` / `FileVersion 0.5.2.0`, the tag is `v0.5.2`, the manifest's `version` is `"0.5.2"` |
+| manifest SHA-256 matches the published installer | ✅ **re-derived, not trusted.** Downloaded `GoSurvey-0.5.2-Installer.exe` (6 295 353 bytes) from the release and hashed it: `d1c238348eaedbd08bcc6202d26cbc0a52584b36b86181ab250d3d371e627eef` — byte-identical to the manifest's `sha256`, and the `size` field matches too |
 
 ## 10. Verification result
 - Submitted:  2026-08-15
-- Verdict:    <pending — blocked on Q1>
-- Findings:   Q1 (test gate vs. 4 pre-existing failures) raised to the user
+- Verdict:    **PASS**, recorded 2026-08-20. As with TASK-048, **no formal Verification pass was
+              run on this task** — this states what the verdict rests on instead of implying a
+              review that did not happen. The basis:
+              (1) Q1, the one thing this task was blocked on, was **answered by the user and the
+              answer implemented** — the four failures were root-caused (em dashes in `TEST_CASE`
+              names) and fixed; the test gate stays on and 309/309 pass;
+              (2) §9's checklist is complete, and its one weak row — `testing`, "NOT RUN" — has
+              been replaced by per-condition evidence from ~57 real runs;
+              (3) six of REQ-202's seven acceptance conditions are now **observed**, and the
+              seventh (a red `ctest` blocking publication) is recorded as unobserved rather than
+              claimed;
+              (4) the pipeline has published three stable releases and a rolling beta channel, and
+              survived a real GitHub API outage mid-publish without leaving a half-published
+              release (§8, 2026-08-17).
+              Closed by review rather than by the Workshop closing its own task.
+- Findings:   Q1 (test gate vs. 4 pre-existing failures) raised to the user — **resolved, §4**
 
 ## 11. Outcome
-- Requirements satisfied: REQ-202 — **claimed, not demonstrated.** Every acceptance condition is
-  implemented; none has been observed, because observing them requires a push.
+- Requirements satisfied: REQ-202 — ~~**claimed, not demonstrated.** Every acceptance condition is
+  implemented; none has been observed, because observing them requires a push.~~
+  **DEMONSTRATED 2026-08-20**, six conditions of seven by observation; the seventh (a red `ctest`
+  blocking publication) has never had the chance to fire and is recorded that way. See the §9 table.
 - Tests added:            none — see §7
 - Docs updated:           this log
 - Technical debt:         (0) ~~The codebase does not compile with MSVC.~~ **CLEARED 2026-08-15.**
@@ -205,8 +249,18 @@ ASSUMPTION-3: `github.run_number` is monotonically increasing per workflow, maki
                           "3–4× headroom" claim was corrected to ~2× across the spec and the roadmap
                           risk table. That correction is the real content of this debt item.
                           (1) `ilammy/msvc-dev-cmd@v1` is a third-party action on a moving tag;
-                          SHA-pin it if the supply-chain surface matters.
-                          (2) The signing step is a deliberate no-op (ADR-029 D5).
+                          SHA-pin it if the supply-chain surface matters. **STILL OPEN** —
+                          re-checked 2026-08-20, the workflow still uses the moving tag.
+                          (2) The signing step is a deliberate no-op (ADR-029 D5). **STILL OPEN.**
                           (3) REQ-200 now rests on a runner image we do not control (roadmap risk
-                          table).
-- Done:                   <pending>
+                          table). **STILL OPEN.**
+                          (4) **NEW, 2026-08-20 — the pipeline does not check the release notes it
+                          publishes.** The version gate reads the tag; nothing reads the prose. On
+                          2026-08-17 v0.5.1 shipped with a `## 0.5.1` notes section written during
+                          the previous beta cycle, so the update dialog offered users 0.5.1 without
+                          mentioning BUG-023, the crash that lost unsaved drawings. It was corrected
+                          by re-uploading `latest.json` **by hand** — a deliberate, recorded
+                          deviation from REQ-202's "produced by the pipeline, not by hand" (TRACKER,
+                          2026-08-17). Removal condition: a pre-publish step that shows the notes
+                          for the version being released and requires confirmation.
+- Done:                   2026-08-20
