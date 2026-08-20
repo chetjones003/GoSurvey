@@ -191,8 +191,9 @@ ASSUMPTION-2: Inno Setup's [InstallDelete] runs early enough to remove GoSurvey-
       and the identical 4 failures. They were root-caused and fixed under TASK-049 Q1: em dashes
       in the `TEST_CASE` names, which `catch_discover_tests` mangles into a filter that matches
       nothing. No test was added by this task: it contains no pure
-      function to test, and the acceptance conditions are observational (§6). The installer half is
-      **unverified** — see the ISCC entry in §8.
+      function to test, and the acceptance conditions are observational (§6). The installer half was
+      **unverified at submission** — see the ISCC entry in §8 — and has been verified since by the
+      pipeline compiling `installer\GoSurvey.iss` on every run; see §11 debt (1).
 
 ## 10. Verification result
 - Submitted:  2026-08-15
@@ -206,8 +207,9 @@ ASSUMPTION-2: Inno Setup's [InstallDelete] runs early enough to remove GoSurvey-
               against a real in-place 0.4.0 → 0.5.0-beta.7 upgrade on 2026-08-15;
               (3) the §8 blocker — `installer/GoSurvey.iss` written but never compiled — has been
               cleared by events, see §11 debt (1);
-              (4) three releases (v0.5.1, v0.5.2, 0.5.3) have since been built, packaged and
-              published through the pipeline that stands on this task's work.
+              (4) the pipeline that stands on this task's work has since built, packaged and
+              published two stable releases (tags `v0.5.1`, `v0.5.2`) plus the rolling
+              `channel-beta` prerelease, currently `0.5.3-beta.43`.
               Closed as a pull request for review rather than merged directly, so the merge is the
               verification act (`verification.md` §4, §8). Precedent for closing a log this way:
               commit 343cae5, which recorded fifteen tasks the user had verified but never logged.
@@ -225,9 +227,11 @@ ASSUMPTION-2: Inno Setup's [InstallDelete] runs early enough to remove GoSurvey-
                           removal condition = TASK-049's first successful runner build.~~
                           **CLEARED 2026-08-20** — the stated removal condition is met and has been
                           met many times over. `.github/workflows/release.yml` locates ISCC, compiles
-                          `installer\GoSurvey.iss`, and throws on a non-zero exit, so a release that
-                          publishes is proof the script compiled; tags run through `v0.5.2` with
-                          0.5.3 released since. The ISPP constructs §8 called unproven — `#ifexist`,
+                          `installer\GoSurvey.iss`, and throws on a non-zero exit, so a run that
+                          reaches its publish steps is proof the script compiled. It compiles on
+                          every push to any branch, not only on releases: stable tags run through
+                          `v0.5.2`, and the rolling `channel-beta` prerelease is at `0.5.3-beta.43`.
+                          The ISPP constructs §8 called unproven — `#ifexist`,
                           the `#include` of the generated version file, and `/D` precedence — are
                           exercised on every one of those runs.
                           (2) ~~The 4 pre-existing test failures block a clean `ctest`.~~
