@@ -510,6 +510,10 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-069: the background rebuild worker's lifetime. Header-only against CadCommands.hpp (the
     # struct and its destructor), so it needs no extra domain source on the link line.
     tests/SurfaceRebuildLifetimeTests.cpp
+    # REQ-087: the gate that decides the viewport has geometry to draw. Header-only against
+    # CadCommands.hpp — the predicate is pure, which is the whole reason it is testable at all
+    # while the rendering around it is not.
+    tests/ExtendedGeometryGateTests.cpp
     # REQ-204 generator + minimizer. Both are pure — the generator takes its command list as a
     # parameter, the minimizer takes a predicate — so reproducibility, termination and the attempt
     # cap are testable here with no process launch and no GL.

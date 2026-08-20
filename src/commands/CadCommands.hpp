@@ -161,6 +161,37 @@ struct CadExtendedGeometryInput {
   const std::vector<std::uint64_t>* hiddenEntityIds = nullptr;
 };
 
+/// True when a CSR chain store (polylines, feature lines) holds at least one entity.
+///
+/// `offsets` is CSR: N entities need N+1 offsets, so fewer than two offsets is zero entities — and
+/// an "empty" store is legitimately either `{}` or `{0}` (issue #60), which is exactly why this is a
+/// named predicate rather than an `!empty()` written out at each call site.
+[[nodiscard]] inline bool CadChainHasEntities(const std::vector<float>* verts,
+                                              const std::vector<int>* offsets) {
+  return verts != nullptr && offsets != nullptr && offsets->size() >= 2;
+}
+
+/// True when this extended input holds anything the viewport must draw.
+///
+/// A named predicate rather than a condition spelled out in the renderer, because it is a **list**,
+/// and a list is what this entity keeps falling out of: by 2026-08-20 a feature line had been
+/// omitted from the viewport-click routing (twice), CancelActiveCommand, ResetAllCadDraftTools, the
+/// rubber-band preview, and this gate — where the symptom was that a drawing containing ONLY a
+/// feature line rendered nothing at all, while still hovering and selecting, because the whole
+/// committed-geometry block was skipped. One predicate, one place to add the next entity kind, and
+/// a test that fails when someone forgets. REQ-087.
+[[nodiscard]] inline bool CadExtendedHasDrawableGeometry(const CadExtendedGeometryInput& e) {
+  if (e.arcs != nullptr && !e.arcs->empty())
+    return true;
+  if (e.ellipses != nullptr && !e.ellipses->empty())
+    return true;
+  if (CadChainHasEntities(e.polylineVerts, e.polylineOffsets))
+    return true;
+  if (CadChainHasEntities(e.featureLineVerts, e.featureLineOffsets))
+    return true;
+  return false;
+}
+
 /// True when \p id is in the sorted hidden-id set. Empty set / unassigned id (0) → never hidden.
 /// Inline and early-outing so the non-isolated case costs one `empty()` test per entity (REQ-100).
 inline bool CadEntityIdHidden(const std::vector<std::uint64_t>* hidden, std::uint64_t id) {

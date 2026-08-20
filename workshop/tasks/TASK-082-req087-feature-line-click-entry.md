@@ -195,3 +195,38 @@ COMPLETION REPORT — TASK-082 — 2026-08-20
   comment above one of them records that RECT was omitted the same way. That is now twice. A
   compile-time check — a switch over `Kind` with no `default:` — would make the next omission a
   build error rather than a silently dead command.
+
+---
+
+## 10. BUG-3, found by the user after TASK-082 shipped — a feature line rendered nothing
+
+**Symptom (2026-08-20, user screenshot):** a feature line drawn in an otherwise empty drawing was
+invisible, while the hover highlight showed it plainly. So the entity existed, was pickable, and was
+in the right place — it simply never drew.
+
+**Cause.** `ViewportRenderer.cpp`'s `hasExt` gate — "does the extended input hold anything to
+draw?" — was a hand-written list of arcs, ellipses and polylines. Feature lines were not in it. With
+`hasLines` and `hasCircles` also false, the **entire committed-geometry block was skipped**. Hover,
+selection and zoom-extents kept working because each is a separate path, which is exactly why it
+looked like a rendering-only fault rather than a missing gate.
+
+A second, independent coupling sat underneath it: the feature-line `AppendChainEdgesVc` call was
+**nested inside** `if (extended->polylineVerts && extended->polylineOffsets)`. Even with `hasExt`
+fixed, feature lines would have inherited whether the drawing happened to contain polylines. Two
+ways to disappear, one symptom.
+
+**Fix.** `CadExtendedHasDrawableGeometry` and `CadChainHasEntities` in `CadCommands.hpp` — named,
+pure predicates replacing the inline list — and the two chain stores each gated on their own through
+a shared `appendChainStore` lambda.
+
+**This is the fifth list.** By this point a feature line had been omitted from: the two
+viewport-click routing lists (BUG-1), `CancelActiveCommand`, `ResetAllCadDraftTools`, the rubber-band
+preview (BUG-2), and now the render gate. ADR-035 (g) predicted precisely this — *"a missed case is
+SILENT"* — and the count is the evidence, not an anecdote.
+
+**Test.** `tests/ExtendedGeometryGateTests.cpp`, 4 cases. Rendering needs a GL context the test
+target has no business creating, but the **predicate is pure and the predicate is where the defect
+lived**. Verified as an oracle: deleting the feature-line line from `CadExtendedHasDrawableGeometry`
+makes it fail with `REQUIRE( CadExtendedHasDrawableGeometry(e) ) ... false`. 462 ctest green.
+
+This raises the priority of FU-3 below from a nicety to the actual lesson of this task.

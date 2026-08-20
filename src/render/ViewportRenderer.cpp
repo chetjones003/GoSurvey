@@ -1392,12 +1392,10 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // --- Committed lines + circles (single batched draw each; per-vertex color shader; GPU cache keyed by cadGpuRevision)
   const bool hasLines = !userLines.empty() && userLines.size() % 6 == 0;
   const bool hasCircles = !circlesCxCyZR.empty() && circlesCxCyZR.size() % 4 == 0;
-  const bool hasExt =
-      extended &&
-      (((extended->arcs != nullptr) && !extended->arcs->empty()) ||
-       ((extended->ellipses != nullptr) && !extended->ellipses->empty()) ||
-       (extended->polylineVerts != nullptr && extended->polylineOffsets != nullptr &&
-        extended->polylineOffsets->size() >= 2));
+  // REQ-087: this list omitted feature lines, so a drawing holding ONLY a feature line skipped the
+  // entire committed-geometry block below and rendered nothing — while still hovering, selecting
+  // and zooming to extents, because those are different paths. Now one predicate, tested.
+  const bool hasExt = extended && CadExtendedHasDrawableGeometry(*extended);
   if (hasLines || hasCircles || hasExt) {
     // Drift budget for the anchor: cached vertex magnitudes can grow to roughly halfHd + drift. Letting drift reach
     // halfHd * 0.5 keeps view-relative coordinates well within float precision while letting pan move freely without
@@ -1529,26 +1527,31 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
         }
-        if (extended->polylineVerts && extended->polylineOffsets) {
+        // Polylines and feature lines: the same CSR shape and the same tessellation, but each gated
+        // on ITS OWN store. The feature-line append used to be nested inside the polyline block, so
+        // it inherited whether polylines existed — a coupling with no reason behind it and a second
+        // way for feature lines to vanish. REQ-087.
+        const auto appendChainStore = [&](const std::vector<float>* V, const std::vector<int>* O,
+                                          const std::vector<uint8_t>* Cl,
+                                          const std::vector<EntityAttributes>* At) {
+          if (!CadChainHasEntities(V, O))
+            return;
           const int vb = static_cast<int>(cpuVcLines_.size() / 7);
-          // Polylines: split batch using first segment's weight (per-entity variation not batched here).
+          // Split the batch on the FIRST entity's weight; per-entity variation is not batched here.
           EntityAttributes attr0{};
-          if (extended->polylineAttrs && extended->polylineOffsets->size() >= 2 &&
-              !extended->polylineAttrs->empty())
-            attr0 = (*extended->polylineAttrs)[0];
+          if (At && !At->empty())
+            attr0 = (*At)[0];
           const CadLayerRow* lr0 =
               LookupLayerRowCi(drawingLayers, attr0.layer.empty() ? std::string("0") : attr0.layer);
           maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr0, lr0)));
-          AppendChainEdgesVc(cpuVcLines_, *extended, extended->polylineVerts, extended->polylineOffsets,
-                             extended->polylineClosed, extended->polylineAttrs, kLineDefaultR,
-                             kLineDefaultG, kLineDefaultB, dashPatScale, viewAnchorX, viewAnchorY);
-          // REQ-087: feature lines, through the same tessellation — same CSR shape, same per-vertex Z.
-          AppendChainEdgesVc(cpuVcLines_, *extended, extended->featureLineVerts,
-                             extended->featureLineOffsets, extended->featureLineClosed,
-                             extended->featureLineAttrs, kLineDefaultR, kLineDefaultG, kLineDefaultB,
-                             dashPatScale, viewAnchorX, viewAnchorY);
+          AppendChainEdgesVc(cpuVcLines_, *extended, V, O, Cl, At, kLineDefaultR, kLineDefaultG,
+                             kLineDefaultB, dashPatScale, viewAnchorX, viewAnchorY);
           lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
-        }
+        };
+        appendChainStore(extended->polylineVerts, extended->polylineOffsets, extended->polylineClosed,
+                         extended->polylineAttrs);
+        appendChainStore(extended->featureLineVerts, extended->featureLineOffsets,
+                         extended->featureLineClosed, extended->featureLineAttrs);
         if (lineVertTotal > lineBatchStart && lineBatchPx >= 0.f)
           vcLineBatches_.push_back(VcLineBatch{lineBatchStart, lineVertTotal - lineBatchStart, lineBatchPx});
       }
