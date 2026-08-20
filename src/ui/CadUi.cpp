@@ -9349,6 +9349,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // machine. A command missing from this list silently ignores every viewport click and appears to
     // hang on its first prompt — which is exactly what RECT did before it was added here.
     else if (cmd.active == K::Line || cmd.active == K::Circle || cmd.active == K::Polyline ||
+             cmd.active == K::FeatureLine ||  // REQ-087 / TASK-082 BUG-1 — omitted until 2026-08-20
              cmd.active == K::Rect ||
              cmd.active == K::Arc || cmd.active == K::Ellipse || cmd.active == K::Text ||
              cmd.active == K::Mtext || cmd.active == K::DimAligned || cmd.active == K::DimLinear ||

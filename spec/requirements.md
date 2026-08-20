@@ -2536,6 +2536,11 @@ requirements is a planning failure, not a sign of rigor.
                and COPYCLIP. Status stays `proposed`: "snaps" is not built (stage 2b owes snap,
                grips, DXF and PDF plot), and until it is, the Statement above describes more than
                the code does.
+               2026-08-20 — TASK-082: FEATURELINE is drawable with the mouse. A click places X,Y
+               and the command prompts for the elevation (default: the previous point's). Fixes
+               a defect that made the command mouse-inoperable — K::FeatureLine was absent from
+               both viewport-click routing lists, so every click was silently discarded — and
+               adds the rubber-band preview the draft never had.
 
 ### REQ-088 — Feature line elevation editing
 - Purpose:     set and check grade along a feature line, which is the actual work of grading design

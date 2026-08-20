@@ -1035,6 +1035,23 @@ struct AppCommandState {
   /// The name typed when FEATURELINE started, stamped on the line at commit.
   std::string featureLineDraftName;
 
+  /// FEATURELINE two-phase vertex entry (TASK-082). A click supplies X and Y only, so the point is
+  /// held here while the command prompts for its elevation — the difference between this and
+  /// POLYLINE/3DPOLY, which take Z from the work plane without asking.
+  ///
+  /// A point that already carries an elevation (typed `X,Y,Z`) never lands here; it commits
+  /// straight away, because prompting would be asking a question already answered.
+  bool featureLinePendingPoint = false;
+  float featureLinePendingX = 0.f;
+  float featureLinePendingY = 0.f;
+  /// What a bare Enter accepts: the snapped point's Z if an object snap was active, else the
+  /// previous vertex's elevation, else the work plane. See TASK-082 ASSUMPTION-1.
+  float featureLinePendingDefaultZ = 0.f;
+  /// Armed by a bare `E` at the FEATURELINE prompt, consumed by the next point. Before clicking
+  /// worked, `E` had to be followed by coordinates on the same line; with a click supplying them,
+  /// the flag has to survive until the click arrives.
+  bool featureLineNextIsElevPoint = false;
+
   /// POLYLINE command draft — XYZ vertices (two or more before commit).
   std::vector<float> polylineDraftVerts;
   /// TRIM has two modes, chosen by the \c TRIMSTATE system variable (REQ-056):
@@ -2200,6 +2217,13 @@ void StartFeatureLineCommand(AppCommandState& st, const std::string& name, std::
 /// than a PI — geometrically it lies on the line either way (ADR-035 (a)).
 bool SubmitFeatureLineVertex(AppCommandState& st, float x, float y, bool isElevPoint,
                              std::vector<std::string>& log);
+
+/// Take an X,Y that arrived without an elevation — a viewport click, or a typed `X,Y` — and hold it
+/// while FEATURELINE prompts for one (TASK-082). A typed `X,Y,Z` bypasses this and commits directly.
+bool SubmitFeatureLinePoint(AppCommandState& st, float x, float y, std::vector<std::string>& log);
+
+/// Resolve the point held by \ref SubmitFeatureLinePoint at elevation \p z and add it to the draft.
+void CommitFeatureLinePendingPoint(AppCommandState& st, float z, std::vector<std::string>& log);
 
 /// Commit the feature-line draft into the store as one entity. \p closed joins last vertex to first.
 void CommitFeatureLineDraft(AppCommandState& st, bool closed, std::vector<std::string>& log);

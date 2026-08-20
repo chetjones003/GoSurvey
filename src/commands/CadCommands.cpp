@@ -3140,6 +3140,19 @@ void ResetPolylineDraft(AppCommandState& st) {
   st.polylineTypedZ = 0.f;
 }
 
+/// REQ-087 / TASK-082. The feature-line draft had no reset function at all: StartFeatureLineCommand
+/// cleared it by hand and ResetAllCadDraftTools did not touch it, so cancelling FEATURELINE left the
+/// draft vertices behind — harmless only because nothing read them, which BUG-2's preview changes.
+void ResetFeatureLineDraft(AppCommandState& st) {
+  st.featureLineDraftVerts.clear();
+  st.featureLineDraftElevPt.clear();
+  st.featureLineDraftName.clear();
+  st.featureLinePendingPoint = false;
+  st.featureLinePendingX = st.featureLinePendingY = 0.f;
+  st.featureLinePendingDefaultZ = 0.f;
+  st.featureLineNextIsElevPoint = false;
+}
+
 void ResetArcDraft(AppCommandState& st) {
   st.arcPhase = AppCommandState::ArcPhase::WaitStart;
   st.arcAx = st.arcAy = st.arcBx = st.arcBy = 0.f;
@@ -3190,6 +3203,7 @@ static void ResetSurveyInverseDraft(AppCommandState& st) {
 static void ResetAllCadDraftTools(AppCommandState& st) {
   ResetCircleDraft(st);
   ResetPolylineDraft(st);
+  ResetFeatureLineDraft(st);  // REQ-087: was missing, so a cancelled FEATURELINE kept its draft
   ResetArcDraft(st);
   ResetEllipseDraft(st);
   ResetRectDraft(st);
@@ -6754,6 +6768,33 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
+  // REQ-087 / TASK-082 BUG-1. Missing entirely until 2026-08-20, so every click during FEATURELINE
+  // was silently discarded and the command appeared to hang on its first prompt — the exact failure
+  // the comment above CadUi.cpp's point-picking list warns about. A transcript could not catch it
+  // because a transcript types coordinates and never clicks.
+  //
+  // A click carries X and Y only, so it goes to SubmitFeatureLinePoint, which prompts for the
+  // elevation rather than taking one from the work plane the way POLYLINE does.
+  if (st.active == K::FeatureLine) {
+    if (st.featureLinePendingPoint) {
+      // A second click while an elevation is owed. Move the pending point to where they clicked
+      // rather than ignoring it: the click is unambiguous, and silently dropping it would repeat
+      // BUG-1 in miniature.
+      st.featureLinePendingX = wx;
+      st.featureLinePendingY = wy;
+      char buf[192];
+      std::snprintf(buf, sizeof(buf),
+                    "FEATURELINE — point moved. Elevation for %s %zu <%.3f>:",
+                    st.featureLineNextIsElevPoint ? "elevation point" : "point",
+                    st.featureLineDraftElevPt.size() + 1,
+                    static_cast<double>(st.featureLinePendingDefaultZ));
+      log.push_back(buf);
+      return;
+    }
+    SubmitFeatureLinePoint(st, wx, wy, log);
+    return;
+  }
+
   if (st.active == K::Rect) {
     using RectP = AppCommandState::RectPhase;
     if (st.rectPhase == RectP::WaitFirstCorner) {
@@ -8572,23 +8613,22 @@ void StartPolylineCommand(AppCommandState& st, std::vector<std::string>& log) {
 }
 
 void StartFeatureLineCommand(AppCommandState& st, const std::string& name, std::vector<std::string>& log) {
-  // REQ-087. Vertex entry is 3DPOLY's — X,Y,Z or @dx,dy,dz, a snap supplying its own Z — because a
-  // feature line is 3D linework and typing its elevations is the whole point. What differs is where
-  // it commits: its own store (ADR-035 (g)), never the polyline arrays.
+  // REQ-087 / TASK-082. Drawn like LINE: a click gives X and Y, then the command PROMPTS for the
+  // elevation. That is the difference from POLYLINE and 3DPOLY, which take Z from the work plane
+  // without asking — right for tracing linework, wrong for a grading design, where every elevation
+  // is a decision. Typing X,Y,Z still commits in one go, since it already answers the prompt.
   ClearPendingViewportZoom(st);
-  ResetAllCadDraftTools(st);
+  ResetAllCadDraftTools(st);  // clears the feature-line draft, including any pending point
   ResetSegmentAngleLock(st);
   st.selectedSurveyPointIndices.clear();
   st.selBoxWaitingSecond = false;
   st.active = AppCommandState::Kind::FeatureLine;
-  st.featureLineDraftVerts.clear();
-  st.featureLineDraftElevPt.clear();
   st.featureLineDraftName = name;
   st.polylineTypedZValid = false;   // shared with the 3DPOLY peel below
   st.polylineTypedZRelative = false;
   log.push_back("FEATURELINE" + (name.empty() ? std::string() : " \"" + name + "\"") +
-                " — vertices carry their own elevation: X,Y,Z (or @dx,dy,dz), or snap. "
-                "E marks the next vertex an elevation point. CLOSE/CL, END, ESC cancels.");
+                " — click a point (you will be asked for its elevation), or type X,Y / X,Y,Z. "
+                "E marks the next point an elevation point. CLOSE/CL, END, ESC cancels.");
 }
 
 /// Appends one vertex to the feature-line draft. \p isElevPoint marks it an elevation point rather
@@ -8617,6 +8657,57 @@ bool SubmitFeatureLineVertex(AppCommandState& st, float x, float y, bool isElevP
                 st.featureLineDraftElevPt.size(), static_cast<double>(vz));
   log.push_back(buf);
   return true;
+}
+
+/// TASK-082: take an X,Y that arrived WITHOUT an elevation — a viewport click, or a typed `X,Y` —
+/// and hold it while the command prompts for one.
+///
+/// This is the difference between FEATURELINE and POLYLINE/3DPOLY. Those take Z from the work plane
+/// silently, which is right for linework being traced; a feature line is a grading design, where
+/// every elevation is a decision and the user asked to be asked.
+bool SubmitFeatureLinePoint(AppCommandState& st, float x, float y, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::FeatureLine)
+    return false;
+
+  // ASSUMPTION-1, in order. The snap override is CadCommitElevation's existing REQ-058 rule: an
+  // object snap returns the object's real 3D point, and offering anything else as the default would
+  // make snapping to a 3D object silently ignore the object. Otherwise the previous vertex, because
+  // grading a line means most points sit near the last one.
+  float defZ = CadWorkPlaneElevation(st);
+  if (st.viewportSnapPickValid)
+    defZ = st.viewportSnapPickLocalZ;
+  else if (st.featureLineDraftVerts.size() >= 3)
+    defZ = st.featureLineDraftVerts[st.featureLineDraftVerts.size() - 1];
+
+  st.featureLinePendingPoint = true;
+  st.featureLinePendingX = x;
+  st.featureLinePendingY = y;
+  st.featureLinePendingDefaultZ = defZ;
+
+  char buf[192];
+  std::snprintf(buf, sizeof(buf), "FEATURELINE — elevation for %s %zu <%.3f>:",
+                st.featureLineNextIsElevPoint ? "elevation point" : "point",
+                st.featureLineDraftElevPt.size() + 1, static_cast<double>(defZ));
+  log.push_back(buf);
+  return true;
+}
+
+/// TASK-082: resolve the pending point at \p z and add it to the draft.
+void CommitFeatureLinePendingPoint(AppCommandState& st, float z, std::vector<std::string>& log) {
+  if (!st.featureLinePendingPoint)
+    return;
+  const float x = st.featureLinePendingX;
+  const float y = st.featureLinePendingY;
+  const bool isElevPt = st.featureLineNextIsElevPoint;
+  st.featureLinePendingPoint = false;
+  st.featureLineNextIsElevPoint = false;
+  // Route through SubmitFeatureLineVertex rather than pushing here, so the draft is appended in
+  // exactly one place: typed X,Y,Z and click-then-elevation must not be able to disagree about what
+  // a vertex is.
+  st.polylineTypedZ = z;
+  st.polylineTypedZRelative = false;
+  st.polylineTypedZValid = true;
+  SubmitFeatureLineVertex(st, x, y, isElevPt, log);
 }
 
 void CommitFeatureLineDraft(AppCommandState& st, bool closed, std::vector<std::string>& log) {
@@ -13526,6 +13617,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("CIRCLE canceled.");
   else if (st.active == AppCommandState::Kind::Polyline)
     log.push_back("POLYLINE canceled.");
+  else if (st.active == AppCommandState::Kind::FeatureLine)
+    log.push_back("FEATURELINE canceled.");  // REQ-201: was silent
   else if (st.active == AppCommandState::Kind::Arc)
     log.push_back("ARC canceled.");
   else if (st.active == AppCommandState::Kind::Ellipse)
@@ -13959,6 +14052,13 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   }
 
   if (line.empty()) {
+    // TASK-082. FEATURELINE with a point awaiting its elevation: Enter accepts the default shown in
+    // the prompt. This has to be handled HERE, not in the FEATURELINE block further down, because a
+    // blank line never reaches that block — it is consumed by this one.
+    if (st.active == K::FeatureLine && st.featureLinePendingPoint) {
+      CommitFeatureLinePendingPoint(st, st.featureLinePendingDefaultZ, log);
+      return;
+    }
     if (st.active == K::Pan) {
       // Enter (or right-click in Enter mode) exits PAN; Esc exits via CancelActiveCommand.
       st.active = K::None;
@@ -14667,6 +14767,32 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // REQ-087. Same X,Y,Z entry as 3DPOLY — the peel below is shared — with one extra word: E marks
     // the next vertex an elevation point rather than a PI.
     const std::string lowFl = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(line));
+
+    // TASK-082. A point is waiting for its elevation, so THIS line is that elevation and nothing
+    // else — checked before CLOSE/END and before coordinate parsing, because "50" is a valid
+    // elevation and would otherwise be read as a malformed point.
+    if (st.featureLinePendingPoint) {
+      const std::string zText = StringUtil::trimCopy(line);
+      if (zText.empty()) {  // bare Enter accepts the default shown in the prompt
+        CommitFeatureLinePendingPoint(st, st.featureLinePendingDefaultZ, log);
+        return;
+      }
+      char* zEnd = nullptr;
+      const double zv = std::strtod(zText.c_str(), &zEnd);
+      if (!zEnd || *zEnd != '\0' || !std::isfinite(zv)) {
+        // Stay in the prompt. Dropping back to point entry would silently discard the point the
+        // user just clicked, and they would have no way to know which of the two it lost.
+        char buf[192];
+        std::snprintf(buf, sizeof(buf),
+                      "FEATURELINE — elevation must be a number. Type one, or Enter for <%.3f>:",
+                      static_cast<double>(st.featureLinePendingDefaultZ));
+        log.push_back(buf);
+        return;
+      }
+      CommitFeatureLinePendingPoint(st, static_cast<float>(zv), log);
+      return;
+    }
+
     if (lowFl == "close" || lowFl == "cl") {
       CommitFeatureLineDraft(st, true, log);
       return;
@@ -14682,10 +14808,17 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       nextIsElevPoint = true;
       flText = StringUtil::trimCopy(flText.substr(1));
       if (flText.empty()) {
-        log.push_back("FEATURELINE — E marks an elevation point; follow it with X,Y,Z.");
+        // TASK-082: bare E ARMS the flag rather than erroring. Before a click could supply X,Y, the
+        // only way to place a point was to type it, so E had to be followed by coordinates on the
+        // same line; now the coordinates arrive from the mouse and the flag has to wait for them.
+        st.featureLineNextIsElevPoint = true;
+        log.push_back("FEATURELINE — next point will be an elevation point. Click it, or type X,Y "
+                      "/ X,Y,Z.");
         return;
       }
     }
+    if (st.featureLineNextIsElevPoint)
+      nextIsElevPoint = true;  // armed by an earlier bare E
     // Peel a typed elevation, exactly as 3DPOLY does, and for the same reason: the shared 2D parser
     // is REQ-101-critical and must not learn about a third component.
     {
@@ -14712,12 +14845,22 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     float fx = 0.f, fy = 0.f;
     const bool flRel = !st.featureLineDraftVerts.empty();
     if (ParseStoragePoint(st, flText, &fx, &fy, flRel, st.anchorX, st.anchorY)) {
-      SubmitFeatureLineVertex(st, fx, fy, nextIsElevPoint, log);
+      // TASK-082 Q1: the rule is "a point that arrives WITHOUT an elevation prompts for one", not
+      // "clicks prompt". A typed X,Y,Z already carries its answer, so asking again would be noise —
+      // and it is the form every existing transcript uses. A typed X,Y takes the same path a click
+      // does.
+      if (st.polylineTypedZValid) {
+        st.featureLineNextIsElevPoint = false;  // consumed by this vertex
+        SubmitFeatureLineVertex(st, fx, fy, nextIsElevPoint, log);
+      } else {
+        st.featureLineNextIsElevPoint = nextIsElevPoint;  // survives until the elevation arrives
+        SubmitFeatureLinePoint(st, fx, fy, log);
+      }
       return;
     }
     st.polylineTypedZValid = false;  // the point failed to parse; do not carry the Z to the next try
-    log.push_back("FEATURELINE — type X,Y,Z (or @dx,dy,dz), E X,Y,Z for an elevation point, "
-                  "CLOSE, END, or ESC.");
+    log.push_back("FEATURELINE — click a point, or type X,Y / X,Y,Z (or @dx,dy,dz), E for an "
+                  "elevation point, CLOSE, END, or ESC.");
     return;
   }
 
