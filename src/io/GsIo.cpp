@@ -542,6 +542,35 @@ json BuildRoot(const AppCommandState& st) {
   }
   doc["polylineAttrs"] = std::move(polyAttrs);
 
+  // Feature lines (REQ-087). Same shape as polylines, plus the per-vertex elevation-point flag and
+  // the per-line name. All six arrays are additive — a drawing written before REQ-087 has none of
+  // them, and the reader guards on that.
+  doc["featureLineOffsets"] = st.featureLineOffsets;
+  doc["featureLineVerts"] = st.featureLineVerts;
+  json flClosed = json::array();
+  for (uint8_t c : st.featureLineClosed)
+    flClosed.push_back(static_cast<int>(c));
+  doc["featureLineClosed"] = std::move(flClosed);
+  json flElev = json::array();
+  for (uint8_t c : st.featureLineElevPt)
+    flElev.push_back(static_cast<int>(c));
+  doc["featureLineElevPt"] = std::move(flElev);
+  json flInfo = json::array();
+  for (const CadFeatureLineInfo& i : st.featureLineInfo) {
+    json o;
+    o["name"] = i.name;
+    o["description"] = i.description;
+    flInfo.push_back(std::move(o));
+  }
+  doc["featureLineInfo"] = std::move(flInfo);
+  json flAttrs = json::array();
+  for (const auto& a : st.featureLineAttrs) {
+    json o;
+    EntityAttributesToJson(a, o);
+    flAttrs.push_back(std::move(o));
+  }
+  doc["featureLineAttrs"] = std::move(flAttrs);
+
   json anns = json::array();
   for (const auto& a : st.cadAnnotations) {
     json o;
@@ -1302,6 +1331,40 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.userPolylineAttrs.clear();
   for (const auto& o : doc["polylineAttrs"])
     st.userPolylineAttrs.push_back(EntityAttributesFromJson(o));
+
+  // Feature lines (REQ-087). Every key is guarded, unlike the polyline block above, because these
+  // arrays are NEW: a drawing written before REQ-087 has none of them and `doc["..."]` on a missing
+  // key would throw rather than yield an empty surface.
+  st.featureLineOffsets.clear();
+  st.featureLineVerts.clear();
+  st.featureLineClosed.clear();
+  st.featureLineElevPt.clear();
+  st.featureLineInfo.clear();
+  st.featureLineAttrs.clear();
+  if (doc.contains("featureLineOffsets") && doc["featureLineOffsets"].is_array())
+    for (const auto& v : doc["featureLineOffsets"])
+      st.featureLineOffsets.push_back(v.get<int>());
+  if (doc.contains("featureLineVerts") && doc["featureLineVerts"].is_array())
+    for (const auto& v : doc["featureLineVerts"])
+      st.featureLineVerts.push_back(v.get<float>());
+  if (doc.contains("featureLineClosed") && doc["featureLineClosed"].is_array())
+    for (const auto& v : doc["featureLineClosed"])
+      st.featureLineClosed.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
+  if (doc.contains("featureLineElevPt") && doc["featureLineElevPt"].is_array())
+    for (const auto& v : doc["featureLineElevPt"])
+      st.featureLineElevPt.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
+  if (doc.contains("featureLineInfo") && doc["featureLineInfo"].is_array())
+    for (const auto& o : doc["featureLineInfo"]) {
+      CadFeatureLineInfo i;
+      if (o.is_object()) {
+        i.name = o.value("name", std::string());
+        i.description = o.value("description", std::string());
+      }
+      st.featureLineInfo.push_back(std::move(i));
+    }
+  if (doc.contains("featureLineAttrs") && doc["featureLineAttrs"].is_array())
+    for (const auto& o : doc["featureLineAttrs"])
+      st.featureLineAttrs.push_back(EntityAttributesFromJson(o));
 
   st.cadAnnotations.clear();
   for (const auto& o : doc["annotations"])

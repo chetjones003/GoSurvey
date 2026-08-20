@@ -271,6 +271,16 @@ struct CadSurfaceBreakline {
   std::string description;
 };
 
+/// Per-feature-line descriptive data (REQ-087), one entry per line, parallel to
+/// \c featureLineAttrs.
+///
+/// Kept out of \c EntityAttributes deliberately (ADR-035 (c)): that struct is clipboard-copied and
+/// DXF-exported, and a feature line's name has no meaning in either place.
+struct CadFeatureLineInfo {
+  std::string name;         ///< What the user called it. Not required to be unique.
+  std::string description;
+};
+
 /// A point file a surface reads its points from directly (REQ-086) — a LINK, not an import: the file
 /// is re-read on every rebuild and its points never become drawing survey points.
 ///

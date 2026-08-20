@@ -262,6 +262,13 @@ struct DrawingGeometrySnapshot {
   std::vector<float>            userPolylineVerts;
   std::vector<uint8_t>          userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
+  // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
+  std::vector<int>                featureLineOffsets;
+  std::vector<float>              featureLineVerts;
+  std::vector<uint8_t>            featureLineClosed;
+  std::vector<uint8_t>            featureLineElevPt;
+  std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<EntityAttributes>   featureLineAttrs;
   std::vector<CadAnnotation>    cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
   std::vector<CadFilledRegion>  cadFilledRegions;
@@ -314,6 +321,13 @@ struct DrawingDocument {
   std::vector<float>            userPolylineVerts;
   std::vector<uint8_t>          userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
+  // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
+  std::vector<int>                featureLineOffsets;
+  std::vector<float>              featureLineVerts;
+  std::vector<uint8_t>            featureLineClosed;
+  std::vector<uint8_t>            featureLineElevPt;
+  std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<EntityAttributes>   featureLineAttrs;
   std::vector<CadAnnotation>    cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
   std::vector<CadFilledRegion>  cadFilledRegions;
@@ -446,6 +460,9 @@ struct AppCommandState {
     Line,
     Circle,
     Polyline,
+    /// REQ-087. Its own command Kind, unlike 3DPOLY which is a mode of POLYLINE — a feature line
+    /// commits to a different store, so the two cannot share a commit path.
+    FeatureLine,
     Arc,
     Ellipse,
     Text,
@@ -503,6 +520,7 @@ struct AppCommandState {
     case Kind::Line:          return "LINE";
     case Kind::Circle:        return "CIRCLE";
     case Kind::Polyline:      return "POLYLINE";
+    case Kind::FeatureLine:   return "FEATURELINE";
     case Kind::Arc:           return "ARC";
     case Kind::Ellipse:       return "ELLIPSE";
     case Kind::Text:          return "TEXT";
@@ -984,6 +1002,32 @@ struct AppCommandState {
   std::vector<float> userPolylineVerts;
   std::vector<uint8_t> userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
+
+  /// Feature lines (REQ-087, ADR-035) — named 3D design linework, in their own store rather than
+  /// the polyline arrays, so a feature line is never mistaken for a polyline at the type level.
+  ///
+  /// Same CSR shape as polylines: line `i` owns vertices
+  /// [`featureLineOffsets[i]`, `featureLineOffsets[i+1]`), XYZ triplets in \ref featureLineVerts.
+  ///
+  /// \ref featureLineElevPt is per VERTEX, not per line: 1 marks an **elevation point** — a vertex
+  /// that carries an elevation but is not a PI (a corner). It lies on the line by construction, so
+  /// plan geometry is identical whether or not it is counted, and only PI-level operations
+  /// (insert/delete PI, grips) consult the flag (ADR-035 (a)). The obligation that buys: moving a PI
+  /// must re-project the elevation points on its adjacent segments, or the line grows a visible kink
+  /// (ADR-035 (b)).
+  std::vector<int> featureLineOffsets;
+  std::vector<float> featureLineVerts;
+  std::vector<uint8_t> featureLineClosed;
+  std::vector<uint8_t> featureLineElevPt;
+  std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<EntityAttributes> featureLineAttrs;
+
+  /// FEATURELINE command draft — XYZ vertices, and the elevation-point flag for each.
+  std::vector<float> featureLineDraftVerts;
+  std::vector<uint8_t> featureLineDraftElevPt;
+  /// The name typed when FEATURELINE started, stamped on the line at commit.
+  std::string featureLineDraftName;
+
   /// POLYLINE command draft — XYZ vertices (two or more before commit).
   std::vector<float> polylineDraftVerts;
   /// TRIM has two modes, chosen by the \c TRIMSTATE system variable (REQ-056):
@@ -1785,7 +1829,9 @@ inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) {
 /// Which entity array a \ref EntityRef designates. Mirrors SelectedEntity::Type for the kinds that
 /// carry an EntityAttributes, which is exactly the set REQ-076 gives an id.
 enum class EntityKind : std::uint8_t {
-  Line = 0, Circle, Arc, Ellipse, Polyline, Annotation, FilledRegion, Mesh
+  Line = 0, Circle, Arc, Ellipse, Polyline, Annotation, FilledRegion, Mesh,
+  FeatureLine  ///< REQ-087. Appended, never inserted — the value is not persisted, but reordering
+               ///< would still silently change every switch that lists kinds in order.
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -2134,6 +2180,9 @@ float RotateDeltaFromReferenceAndNewSegment(float refX1, float refY1, float refX
 void StartLineCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartCircleCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartPolylineCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// REQ-087: start a feature line — named 3D linework committing to its own store (ADR-035 (g)).
+void StartFeatureLineCommand(AppCommandState& st, const std::string& name, std::vector<std::string>& log);
 
 /// REQ-085: POLYLINE with per-vertex elevation entry. Shares POLYLINE's draft and `Kind` — the store
 /// is already stride-3 XYZ and the two commands differ only in where a vertex's Z comes from.

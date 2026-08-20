@@ -72,6 +72,12 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.userPolylineVerts      = cmd.userPolylineVerts;
   doc.userPolylineClosed     = cmd.userPolylineClosed;
   doc.userPolylineAttrs      = cmd.userPolylineAttrs;
+  doc.featureLineOffsets     = cmd.featureLineOffsets;   // REQ-087
+  doc.featureLineVerts       = cmd.featureLineVerts;
+  doc.featureLineClosed      = cmd.featureLineClosed;
+  doc.featureLineElevPt      = cmd.featureLineElevPt;
+  doc.featureLineInfo        = cmd.featureLineInfo;
+  doc.featureLineAttrs       = cmd.featureLineAttrs;
   doc.cadAnnotations         = cmd.cadAnnotations;
   doc.cadAnnotationAttrs     = cmd.cadAnnotationAttrs;
   doc.cadFilledRegions       = cmd.cadFilledRegions;
@@ -126,6 +132,12 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.userPolylineVerts          = doc.userPolylineVerts;
   cmd.userPolylineClosed         = doc.userPolylineClosed;
   cmd.userPolylineAttrs          = doc.userPolylineAttrs;
+  cmd.featureLineOffsets         = doc.featureLineOffsets;   // REQ-087
+  cmd.featureLineVerts           = doc.featureLineVerts;
+  cmd.featureLineClosed          = doc.featureLineClosed;
+  cmd.featureLineElevPt          = doc.featureLineElevPt;
+  cmd.featureLineInfo            = doc.featureLineInfo;
+  cmd.featureLineAttrs           = doc.featureLineAttrs;
   cmd.cadAnnotations             = doc.cadAnnotations;
   cmd.cadAnnotationAttrs         = doc.cadAnnotationAttrs;
   cmd.cadFilledRegions           = doc.cadFilledRegions;
@@ -1124,6 +1136,12 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
   snap.userPolylineVerts    = st.userPolylineVerts;
   snap.userPolylineClosed   = st.userPolylineClosed;
   snap.userPolylineAttrs    = st.userPolylineAttrs;
+  snap.featureLineOffsets   = st.featureLineOffsets;   // REQ-087
+  snap.featureLineVerts     = st.featureLineVerts;
+  snap.featureLineClosed    = st.featureLineClosed;
+  snap.featureLineElevPt    = st.featureLineElevPt;
+  snap.featureLineInfo      = st.featureLineInfo;
+  snap.featureLineAttrs     = st.featureLineAttrs;
   snap.cadAnnotations       = st.cadAnnotations;
   snap.cadAnnotationAttrs   = st.cadAnnotationAttrs;
   snap.cadFilledRegions     = st.cadFilledRegions;
@@ -1156,6 +1174,12 @@ static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySn
   st.userPolylineVerts    = snap.userPolylineVerts;
   st.userPolylineClosed   = snap.userPolylineClosed;
   st.userPolylineAttrs    = snap.userPolylineAttrs;
+  st.featureLineOffsets   = snap.featureLineOffsets;   // REQ-087
+  st.featureLineVerts     = snap.featureLineVerts;
+  st.featureLineClosed    = snap.featureLineClosed;
+  st.featureLineElevPt    = snap.featureLineElevPt;
+  st.featureLineInfo      = snap.featureLineInfo;
+  st.featureLineAttrs     = snap.featureLineAttrs;
   st.cadAnnotations       = snap.cadAnnotations;
   st.cadAnnotationAttrs   = snap.cadAnnotationAttrs;
   st.cadFilledRegions     = snap.cadFilledRegions;
@@ -1186,7 +1210,8 @@ namespace {
 /// reordering the existing entries would renumber every legacy drawing on its next load.
 const EntityKind kEntityKindsInSweepOrder[] = {
     EntityKind::Line,       EntityKind::Circle,       EntityKind::Arc,  EntityKind::Ellipse,
-    EntityKind::Polyline,   EntityKind::Annotation,   EntityKind::FilledRegion, EntityKind::Mesh};
+    EntityKind::Polyline,   EntityKind::Annotation,   EntityKind::FilledRegion, EntityKind::Mesh,
+    EntityKind::FeatureLine};
 
 /// The attribute array for a kind. One accessor for both the const and mutable walks, so the
 /// two can never disagree about which arrays are covered.
@@ -1201,6 +1226,7 @@ auto* AttrsForKind(StateT& st, EntityKind k) {
   case EntityKind::Annotation:   return &st.cadAnnotationAttrs;
   case EntityKind::FilledRegion: return &st.cadFilledRegionAttrs;
   case EntityKind::Mesh:         return &st.cadMeshAttrs;
+  case EntityKind::FeatureLine:  return &st.featureLineAttrs;
   }
   return &st.userLineAttrs;
 }
@@ -2900,6 +2926,8 @@ const CmdEntry kRegistry[] = {
     {"circle", "c", "Draw a circle"},
     {"polyline", "pl", "Draw a connected polyline"},
     {"3dpoly", "3dp, 3dpolyline", "Draw a polyline whose vertices each carry their own elevation"},
+    {"featureline", "fl", "Draw a feature line: named 3D linework with per-vertex elevations (REQ-087)"},
+    {"featurelinelist", "fllist", "List every feature line and its vertices"},
     {"rect", "rectang, rectangle", "Draw a rectangle (two opposite corners)"},
     {"trimstate", "", "TRIM mode: 0 = draw a line to trim (default), 1 = pick cutting edges"},
     {"bench", "",
@@ -8260,6 +8288,84 @@ void StartPolylineCommand(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back("POLYLINE — like LINE (A / 2P bearing lock); CLOSE/CL; ortho; ESC cancels.");
 }
 
+void StartFeatureLineCommand(AppCommandState& st, const std::string& name, std::vector<std::string>& log) {
+  // REQ-087. Vertex entry is 3DPOLY's — X,Y,Z or @dx,dy,dz, a snap supplying its own Z — because a
+  // feature line is 3D linework and typing its elevations is the whole point. What differs is where
+  // it commits: its own store (ADR-035 (g)), never the polyline arrays.
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  ResetSegmentAngleLock(st);
+  st.selectedSurveyPointIndices.clear();
+  st.selBoxWaitingSecond = false;
+  st.active = AppCommandState::Kind::FeatureLine;
+  st.featureLineDraftVerts.clear();
+  st.featureLineDraftElevPt.clear();
+  st.featureLineDraftName = name;
+  st.polylineTypedZValid = false;   // shared with the 3DPOLY peel below
+  st.polylineTypedZRelative = false;
+  log.push_back("FEATURELINE" + (name.empty() ? std::string() : " \"" + name + "\"") +
+                " — vertices carry their own elevation: X,Y,Z (or @dx,dy,dz), or snap. "
+                "E marks the next vertex an elevation point. CLOSE/CL, END, ESC cancels.");
+}
+
+/// Appends one vertex to the feature-line draft. \p isElevPoint marks it an elevation point rather
+/// than a PI (ADR-035 (a)) — geometrically it lies on the line either way.
+bool SubmitFeatureLineVertex(AppCommandState& st, float x, float y, bool isElevPoint,
+                             std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::FeatureLine)
+    return false;
+
+  float vz = CadCommitElevation(st);
+  if (st.polylineTypedZValid) {
+    vz = st.polylineTypedZRelative ? st.anchorZ + st.polylineTypedZ : st.polylineTypedZ;
+    st.polylineTypedZValid = false;
+    st.polylineTypedZRelative = false;
+  }
+  st.featureLineDraftVerts.push_back(x);
+  st.featureLineDraftVerts.push_back(y);
+  st.featureLineDraftVerts.push_back(vz);
+  st.featureLineDraftElevPt.push_back(isElevPoint ? 1u : 0u);
+  st.anchorX = x;
+  st.anchorY = y;
+  st.anchorZ = vz;
+  char buf[128];
+  std::snprintf(buf, sizeof(buf), "FEATURELINE %s %zu at elevation %.3f.",
+                isElevPoint ? "elevation point" : "PI",
+                st.featureLineDraftElevPt.size(), static_cast<double>(vz));
+  log.push_back(buf);
+  return true;
+}
+
+void CommitFeatureLineDraft(AppCommandState& st, bool closed, std::vector<std::string>& log) {
+  const size_t nvert = st.featureLineDraftVerts.size() / 3;
+  if (closed ? nvert < 3 : nvert < 2) {
+    log.push_back(std::string("FEATURELINE — need at least ") + (closed ? "three" : "two") +
+                  " vertices.");
+    return;
+  }
+  PushUndoSnapshot(st, closed ? "Feature line (closed)" : "Feature line");
+  if (st.featureLineOffsets.empty())
+    st.featureLineOffsets.push_back(0);
+  const int baseVert = st.featureLineOffsets.back();
+  st.featureLineVerts.insert(st.featureLineVerts.end(), st.featureLineDraftVerts.begin(),
+                             st.featureLineDraftVerts.end());
+  st.featureLineElevPt.insert(st.featureLineElevPt.end(), st.featureLineDraftElevPt.begin(),
+                              st.featureLineDraftElevPt.end());
+  st.featureLineOffsets.push_back(baseVert + static_cast<int>(nvert));
+  st.featureLineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
+  CadFeatureLineInfo info;
+  info.name = st.featureLineDraftName;
+  st.featureLineInfo.push_back(std::move(info));
+  st.featureLineAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  st.active = AppCommandState::Kind::None;
+  st.featureLineDraftVerts.clear();
+  st.featureLineDraftElevPt.clear();
+  st.featureLineDraftName.clear();
+  log.push_back(std::string("FEATURELINE ") + (closed ? "closed" : "complete") + " — " +
+                std::to_string(nvert) + " vertices.");
+}
+
 void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log) {
   // REQ-085. Same draft as POLYLINE — the store is already stride-3 XYZ — with per-vertex elevation
   // entry switched on. ResetAllCadDraftTools inside StartPolylineCommand clears the flag, so it is
@@ -13340,6 +13446,49 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       }
       return;
     }
+    // REQ-087. `FEATURELINE [<name>]` — the whole remainder is the name, so it may contain spaces.
+    if (plotTok == "featureline" || plotTok == "fl") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      StartFeatureLineCommand(st, StringUtil::trimCopy(rest), log);
+      return;
+    }
+    if (plotTok == "featurelinelist" || plotTok == "fllist") {
+      const size_t n = st.featureLineOffsets.empty() ? 0 : st.featureLineOffsets.size() - 1;
+      if (n == 0) {
+        log.push_back("FEATURELINELIST — no feature lines in the drawing.");
+        return;
+      }
+      for (size_t i = 0; i < n; ++i) {
+        const int b = st.featureLineOffsets[i], e = st.featureLineOffsets[i + 1];
+        const std::string nm = i < st.featureLineInfo.size() ? st.featureLineInfo[i].name : std::string();
+        const bool closed = i < st.featureLineClosed.size() && st.featureLineClosed[i] != 0;
+        int elevPts = 0;
+        for (int v = b; v < e; ++v)
+          if (static_cast<size_t>(v) < st.featureLineElevPt.size() && st.featureLineElevPt[v])
+            ++elevPts;
+        log.push_back("Feature line " + std::to_string(i + 1) + ": \"" + nm + "\" — " +
+                      std::to_string(e - b) + " vertices (" + std::to_string((e - b) - elevPts) +
+                      " PI, " + std::to_string(elevPts) + " elevation point(s))" +
+                      (closed ? ", closed" : "") + ", entity id " +
+                      std::to_string(i < st.featureLineAttrs.size() ? st.featureLineAttrs[i].id : 0));
+        for (int v = b; v < e; ++v) {
+          const size_t base = static_cast<size_t>(v) * 3;
+          if (base + 2 >= st.featureLineVerts.size())
+            break;
+          char buf[160];
+          std::snprintf(buf, sizeof(buf), "  %s %d: %.3f, %.3f, elevation %.3f",
+                        (static_cast<size_t>(v) < st.featureLineElevPt.size() && st.featureLineElevPt[v])
+                            ? "elev pt"
+                            : "PI     ",
+                        v - b + 1, static_cast<double>(st.featureLineVerts[base]),
+                        static_cast<double>(st.featureLineVerts[base + 1]),
+                        static_cast<double>(st.featureLineVerts[base + 2]));
+          log.push_back(buf);
+        }
+      }
+      return;
+    }
     // Surface definition commands (REQ-068/069). Each reads the WHOLE remainder of the line — names
     // contain spaces — and splits on commas where it needs more than one argument. Together with
     // DESIGNATEBREAKLINE/DESIGNATEBOUNDARY below they make every surface operation reachable without
@@ -13633,6 +13782,64 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     log.push_back("Could not parse ROTATE input — see command hints.");
+    return;
+  }
+
+  if (st.active == K::FeatureLine) {
+    // REQ-087. Same X,Y,Z entry as 3DPOLY — the peel below is shared — with one extra word: E marks
+    // the next vertex an elevation point rather than a PI.
+    const std::string lowFl = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(line));
+    if (lowFl == "close" || lowFl == "cl") {
+      CommitFeatureLineDraft(st, true, log);
+      return;
+    }
+    if (lowFl == "end") {
+      CommitFeatureLineDraft(st, false, log);
+      return;
+    }
+    bool nextIsElevPoint = false;
+    std::string flText = StringUtil::trimCopy(line);
+    if (!flText.empty() && (flText[0] == 'e' || flText[0] == 'E') &&
+        (flText.size() == 1 || flText[1] == ' ' || flText[1] == '\t')) {
+      nextIsElevPoint = true;
+      flText = StringUtil::trimCopy(flText.substr(1));
+      if (flText.empty()) {
+        log.push_back("FEATURELINE — E marks an elevation point; follow it with X,Y,Z.");
+        return;
+      }
+    }
+    // Peel a typed elevation, exactly as 3DPOLY does, and for the same reason: the shared 2D parser
+    // is REQ-101-critical and must not learn about a third component.
+    {
+      const size_t c1 = flText.find(',');
+      const size_t c2 = (c1 == std::string::npos) ? std::string::npos : flText.find(',', c1 + 1);
+      if (c2 != std::string::npos) {
+        if (flText.find(',', c2 + 1) != std::string::npos) {
+          log.push_back("FEATURELINE — too many coordinates: X,Y,Z or @dx,dy,dz.");
+          return;
+        }
+        const std::string zText = StringUtil::trimCopy(flText.substr(c2 + 1));
+        char* zEnd = nullptr;
+        const double zv = std::strtod(zText.c_str(), &zEnd);
+        if (zText.empty() || !zEnd || *zEnd != '\0' || !std::isfinite(zv)) {
+          log.push_back("FEATURELINE — elevation must be a number: X,Y,Z or @dx,dy,dz.");
+          return;
+        }
+        st.polylineTypedZ = static_cast<float>(zv);
+        st.polylineTypedZRelative = !flText.empty() && flText[0] == '@';
+        st.polylineTypedZValid = true;
+        flText = flText.substr(0, c2);
+      }
+    }
+    float fx = 0.f, fy = 0.f;
+    const bool flRel = !st.featureLineDraftVerts.empty();
+    if (ParseStoragePoint(st, flText, &fx, &fy, flRel, st.anchorX, st.anchorY)) {
+      SubmitFeatureLineVertex(st, fx, fy, nextIsElevPoint, log);
+      return;
+    }
+    st.polylineTypedZValid = false;  // the point failed to parse; do not carry the Z to the next try
+    log.push_back("FEATURELINE — type X,Y,Z (or @dx,dy,dz), E X,Y,Z for an elevation point, "
+                  "CLOSE, END, or ESC.");
     return;
   }
 

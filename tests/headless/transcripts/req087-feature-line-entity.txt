@@ -1,0 +1,72 @@
+# REQ-087 stage 1 — the feature line entity: store, creation, persistence.
+#
+# A feature line lives in its OWN store, not the polyline arrays (ADR-035 (g)). This transcript
+# checks the data layer end to end: it can be created with per-vertex elevations and elevation
+# points, it gets a stable entity id, it survives a .gs round trip, it undoes in one step, and it
+# does not disturb the polyline store.
+#
+# Stages 2 and 3 add render/pick/snap and the modify commands.
+
+NEW
+
+# --- a feature line with per-vertex elevations and an elevation point --------------------------
+CMD FEATURELINE Toe of slope
+CMD 0,0,100
+EXPECT LOG "FEATURELINE PI 1 at elevation 100.000"
+CMD 100,0,104
+EXPECT LOG "FEATURELINE PI 2 at elevation 104.000"
+# E marks the next vertex an elevation point: it carries an elevation but is not a corner.
+CMD E 150,0,103
+EXPECT LOG "FEATURELINE elevation point 3 at elevation 103.000"
+CMD 200,0,108
+CMD END
+EXPECT LOG "FEATURELINE complete — 4 vertices"
+
+CMD FEATURELINELIST
+EXPECT LOG "Feature line 1: "Toe of slope" — 4 vertices (3 PI, 1 elevation point(s))"
+EXPECT LOG "elev pt 3: 150.000, 0.000, elevation 103.000"
+
+# It is NOT a polyline — the polyline store is untouched, which is the whole point of ADR-035 (g).
+EXPECT POLYLINES 0
+
+# --- relative elevation works, as it does for 3DPOLY ---------------------------------------------
+CMD FEATURELINE Ditch
+CMD 0,50,200
+CMD @50,0,-2.5
+EXPECT LOG "FEATURELINE PI 2 at elevation 197.500"
+CMD @50,0,-2.5
+CMD END
+
+# --- malformed input is refused, not absorbed -----------------------------------------------------
+CMD FEATURELINE Bad
+CMD 0,0,1,2
+EXPECT LOG "too many coordinates"
+CMD 0,0,abc
+EXPECT LOG "elevation must be a number"
+ESC
+
+# --- undo removes the whole feature line in one step ----------------------------------------------
+CMD FEATURELINELIST
+EXPECT LOG "Feature line 2: "Ditch""
+UNDO
+CMD FEATURELINELIST
+EXPECT LOG "Feature line 1: "Toe of slope""
+REDO
+
+# --- .gs round trip preserves vertices, elevations, elevation points and the name ------------------
+SAVEAS %OUT%/fl-a.gs
+OPEN %OUT%/fl-a.gs
+CMD FEATURELINELIST
+EXPECT LOG "Feature line 1: "Toe of slope" — 4 vertices (3 PI, 1 elevation point(s))"
+EXPECT LOG "elev pt 3: 150.000, 0.000, elevation 103.000"
+EXPECT LOG "Feature line 2: "Ditch""
+SAVEAS %OUT%/fl-b.gs
+EXPECT SAMEFILE %OUT%/fl-a.gs %OUT%/fl-b.gs
+
+# --- a drawing written before REQ-087 has none of these arrays and must load unchanged -------------
+# samples/surface-demo.gs predates feature lines entirely.
+OPEN samples/surface-demo.gs
+CMD FEATURELINELIST
+EXPECT LOG "no feature lines in the drawing"
+
+CHECK ALL

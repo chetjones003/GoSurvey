@@ -379,3 +379,76 @@ TEST_CASE("FormatInvariantViolations names the invariant and the specifics", "[d
 TEST_CASE("FormatInvariantViolations is empty for a clean document", "[docinvariants]") {
   REQUIRE(FormatInvariantViolations({}).empty());
 }
+
+// --- REQ-087 feature lines --------------------------------------------------------------------
+// The elevation-point flag array is the one worth the most care: it is per VERTEX, and a short one
+// is SILENT. The missing tail simply reads as "all PIs", so elevation points disappear while the
+// plan geometry still looks exactly right (ADR-035 (a)). That is precisely the class of defect this
+// file exists for.
+
+namespace {
+/// A minimal, VALID one-feature-line drawing, so each fixture below breaks exactly one rule.
+AppCommandState FeatureLineDrawing() {
+  AppCommandState st = GoodDrawing();
+  st.featureLineVerts = {0.f, 0.f, 10.f, 10.f, 0.f, 11.f, 20.f, 0.f, 12.f};  // 3 vertices
+  st.featureLineOffsets = {0, 3};
+  st.featureLineClosed = {0};
+  st.featureLineElevPt = {0, 1, 0};
+  st.featureLineInfo.resize(1);
+  st.featureLineAttrs.resize(1);
+  st.featureLineAttrs[0].id = 900;
+  st.nextEntityId = 901;
+  return st;
+}
+}  // namespace
+
+TEST_CASE("a valid feature line trips nothing", "[docinvariants]") {
+  // The counterweight: without this, every fixture below could be passing for the wrong reason.
+  REQUIRE(Fired(FeatureLineDrawing()).empty());
+}
+
+TEST_CASE("feature-line-offsets fires when the elevation-point flags are short", "[docinvariants]") {
+  AppCommandState st = FeatureLineDrawing();
+  st.featureLineElevPt = {0, 1};  // 3 vertices, 2 flags — the third silently reads as a PI
+  REQUIRE(Contains(Fired(st), docinv::kFeatureLineOffsets));
+}
+
+TEST_CASE("feature-line-offsets fires when the last offset misses the vertex count",
+          "[docinvariants]") {
+  AppCommandState st = FeatureLineDrawing();
+  st.featureLineOffsets = {0, 2};  // 3 vertices stored, so the line reads short
+  REQUIRE(Contains(Fired(st), docinv::kFeatureLineOffsets));
+}
+
+TEST_CASE("feature-line-offsets fires on a single-entry table", "[docinvariants]") {
+  AppCommandState st = FeatureLineDrawing();
+  st.featureLineOffsets = {0};  // zero feature lines is spelled EMPTY, not {0}
+  st.featureLineVerts.clear();
+  st.featureLineElevPt.clear();
+  st.featureLineClosed.clear();
+  st.featureLineInfo.clear();
+  st.featureLineAttrs.clear();
+  REQUIRE(Contains(Fired(st), docinv::kFeatureLineOffsets));
+}
+
+TEST_CASE("flat-strides fires on a feature line vertex array that is not a whole number of XYZ",
+          "[docinvariants]") {
+  AppCommandState st = FeatureLineDrawing();
+  st.featureLineVerts.push_back(1.f);  // 10 floats is not a multiple of 3
+  REQUIRE(Contains(Fired(st), docinv::kFlatStrides));
+}
+
+TEST_CASE("attr-counts fires when a feature line has no info row", "[docinvariants]") {
+  AppCommandState st = FeatureLineDrawing();
+  st.featureLineInfo.clear();
+  REQUIRE(Contains(Fired(st), docinv::kAttrCounts));
+}
+
+TEST_CASE("entity-ids fires when a feature line reuses a polyline's id", "[docinvariants]") {
+  // A surface references a breakline by stable id (REQ-069/076), so a collision between stores
+  // would silently point a surface at the wrong entity.
+  AppCommandState st = FeatureLineDrawing();
+  REQUIRE(!st.userPolylineAttrs.empty());
+  st.featureLineAttrs[0].id = st.userPolylineAttrs[0].id;
+  REQUIRE(Contains(Fired(st), docinv::kEntityIds));
+}

@@ -60,5 +60,9 @@ inline constexpr const char* kPolylineOffsets = "polyline-offsets";
 inline constexpr const char* kRegionLoops = "region-loops";
 /// A survey point's label reference resolves to an annotation, or to nothing — never to a stale id.
 inline constexpr const char* kSurveyLabelLinks = "survey-label-links";
+/// REQ-087: a feature line's CSR offsets, and its per-VERTEX elevation-point flag array, which must
+/// be exactly one entry per vertex. A short flag array is silent — the missing tail simply reads as
+/// "all PIs", so elevation points vanish with the geometry still looking right (ADR-035 (a)).
+inline constexpr const char* kFeatureLineOffsets = "feature-line-offsets";
 
 }  // namespace docinv

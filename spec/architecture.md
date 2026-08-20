@@ -1304,3 +1304,93 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   dependency, no new abstraction, no wire-format change. The user is responsible for standing up
   the receiving endpoint (e.g. a Cloudflare Worker + KV/D1); this ADR specifies only the client
   side.
+
+### ADR-035 — Feature lines: a dedicated store, elevation points as flagged vertices   (2026-08-19, accepted)
+- Context: REQ-087 and REQ-088 add feature lines — named 3D linework with editable per-vertex
+  elevations, elevation points, and "add to surface as a breakline". ADR-028 alternative (5) deferred
+  them as "a separate milestone once surfaces are trustworthy"; decision D-2026-08-19-a opened that
+  milestone. Two structural questions have to be answered before any code: **where the geometry
+  lives**, and **what an elevation point actually is**. The second was recorded as the one genuinely
+  unsolved problem when M-Grading was planned.
+- **The measurement that frames this.** "A new entity store grows a case in selection, extents, layer
+  state, the undo snapshot, `.gs`, DXF export, render, snap, pick, grips and properties" (ADR-028) was
+  quoted to the user as roughly a dozen touch points. Counted rather than remembered, it is not:
+
+  | entity kind | sites | files |
+  |---|---|---|
+  | `cadMeshes` / `EntityKind::Mesh` — **display-only** | 32 | 5 |
+  | `userPolyline*` / `EntityKind::Polyline` — **editable** | **612** | **11** |
+
+  A feature line is editable — it must move, copy, rotate, scale, trim, offset, grip-edit and plot —
+  so Polyline is the honest comparison, not Mesh. The estimate the storage decision was taken on was
+  low by roughly fifty times, which is why that decision is re-opened below rather than built on.
+- Decision:
+  (a) **An elevation point is a flagged vertex in the ordinary vertex chain**, not a separate
+  structure. This is the question that looked hard and is not: an elevation point lies **on** the
+  line by construction, so including it in the plan vertex array is geometrically a no-op — the
+  polyline through the vertices has the identical plan shape either way. Rendering, extents, snapping,
+  picking and plotting therefore need to know nothing about it. Only PI-level operations (insert PI,
+  delete PI, grips) consult the flag. Storage stays stride-3 XYZ, so architecture §11.8's `% 3`
+  invariant is untouched and `docinvariants` needs no new rule.
+  (b) **The obligation this creates, stated so it is not discovered later:** moving a PI must
+  re-project the elevation points on its adjacent segments back onto the line. Skip that and the
+  feature line grows a visible kink. That failure is **loud** — it is wrong on screen in plan view —
+  which is the whole reason (a) is preferred to storing elevation points as (station, elevation)
+  pairs materialised on demand: that alternative cannot drift off the line, but a consumer that
+  forgets to materialise them loses elevation detail *silently*, and this project's own note on 3D
+  entity work records that silent-in-plan-view is the failure mode that costs weeks.
+  (c) **A feature line's identity is its stable entity id** (REQ-076 / ADR-027). Its name, description
+  and per-vertex elevation-point flags are **parallel arrays in its own store** (see (g)), indexed the
+  same way `featureLineAttrs` is — not fields on `EntityAttributes`, which is clipboard-copied and
+  DXF-exported and would carry them somewhere they do not belong. Had the geometry shared the polyline
+  store, this would instead have been an id-keyed side table (the ADR-020 / ADR-034 pattern); (g)
+  makes that unnecessary.
+  (d) **Surface integration reuses REQ-069 unchanged.** "Add to surface as breakline" designates the
+  feature line by its stable id exactly as `DESIGNATEBREAKLINE` designates a polyline; the
+  triangulator already folds a breakline's per-vertex elevations in. No new surface machinery.
+  (e) **The elevation editor (REQ-088) is a view, not a store.** Station, length, grade back and
+  grade ahead are all derived from the vertex chain on demand. Storing a grade would create a second
+  source of truth for the same elevation, and the two would disagree the moment geometry moved.
+  (f) **Not in this ADR and not designed for:** feature lines from an alignment, from a corridor, or
+  from a stepped offset; grading objects; feature line styles beyond a name; weeding and supplementing
+  factors. `Create Feature Line` and `Create Feature Lines from Objects` are the two creation paths.
+- (g) **The plan geometry lives in its own store** — `featureLineVerts` / `featureLineOffsets` /
+  `featureLineClosed` / `featureLineAttrs`, behind a ninth `EntityKind::FeatureLine`. **Decided by the
+  user 2026-08-19 with the measurement below in front of them**, after this ADR recommended the
+  cheaper alternative and was overruled on it. A feature line is then never mistaken for a polyline at
+  the type level, which is the property being bought. The two options as weighed:
+
+  **(1) Its own store** (`featureLineVerts` / `featureLineOffsets` / …). What the user chose on
+  2026-08-19, on the ~12-site estimate. Conceptually cleanest — a feature line is never mistaken for
+  a polyline. Costs a Polyline-shaped footprint: on the order of 600 sites across 11 files, because
+  every modify command, the snap engine, the transform preview, the DXF and PDF writers and the
+  invariant checks each need a new case. Each missed one is a feature line that silently cannot be
+  moved, snapped to, plotted or exported.
+
+  **(2) The existing polyline store, plus the (c) side table.** A feature line **is** a polyline in
+  the geometry arrays, and the side table is what makes it a feature line. Every existing command —
+  move, copy, rotate, trim, offset, grips, plot, DXF — works on it the day it ships, with no new case
+  anywhere. `EntityKind` stays at eight; "is this a feature line?" is a lookup, not a tag. The cost is
+  that the distinction is a convention rather than a type, so a command that *should* refuse a feature
+  line (or treat it differently) has to ask.
+
+  This ADR recommended (2) and the user chose (1), informed by the measurement rather than the
+  estimate it replaced. **The consequence is accepted deliberately, so it must be managed rather than
+  rediscovered:** the risk in (1) is not the volume of work, it is that a missed case is SILENT — a
+  feature line that cannot be trimmed, or is skipped by the PDF writer, looks like nothing at all
+  until someone needs it. The task plan therefore works from an enumerated checklist derived from the
+  `userPolyline` sites, and treats "every modify command names FeatureLine or deliberately refuses it"
+  as an acceptance condition rather than a review habit.
+- Alternatives: **(A) Elevation points as (station, elevation) pairs** — cannot drift off the line,
+  but every consumer must materialise them and a consumer that forgets loses elevation silently; see
+  (b). **(B) Feature lines as 3D polylines with no new concept at all** — REQ-085 already ships that;
+  it gives per-vertex elevation but no name, no elevation points, no elevation editor, and no way for
+  a command to know a line is a design object. Declined as not meeting REQ-087. **(C) Storing grades
+  alongside elevations** — makes the editor trivial and creates two sources of truth; see (e).
+- Consequences: a ninth entity kind with its own geometry store, attribute array and per-vertex flag
+  array; its `.gs` arrays (additive — a legacy drawing has none of them); new commands for creation,
+  conversion, PI editing and elevation editing; a panel for REQ-088. Every existing modify command,
+  the snap engine, the transform preview, the invariant checks and the DXF and PDF writers gain a
+  FeatureLine case or an explicit refusal, and **that enumeration is an acceptance condition, not a
+  review habit** — see (g). REQ-088's elevation editor is consequently sequenced AFTER the store is
+  complete and exercised, rather than beside it.

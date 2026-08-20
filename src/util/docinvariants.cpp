@@ -101,6 +101,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
   CheckStride(out, "userLinesFlat", st.userLinesFlat.size(), 6);       // two XYZ endpoints
   CheckStride(out, "userCirclesCxCyZR", st.userCirclesCxCyZR.size(), 4);
   CheckStride(out, "userPolylineVerts", st.userPolylineVerts.size(), 3);
+  CheckStride(out, "featureLineVerts", st.featureLineVerts.size(), 3);   // REQ-087, §11.8
   for (size_t i = 0; i < st.cadFilledRegions.size(); ++i) {
     const std::string label = "cadFilledRegions[" + std::to_string(i) + "].vertsXyz";
     CheckStride(out, label.c_str(), st.cadFilledRegions[i].vertsXyz.size(), 3);
@@ -110,6 +111,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
   CheckFinite(out, "userLinesFlat", st.userLinesFlat);
   CheckFinite(out, "userCirclesCxCyZR", st.userCirclesCxCyZR);
   CheckFinite(out, "userPolylineVerts", st.userPolylineVerts);
+  CheckFinite(out, "featureLineVerts", st.featureLineVerts);
   for (size_t i = 0; i < st.userArcs.size(); ++i) {
     const CadArc& a = st.userArcs[i];
     const std::string p = "userArcs[" + std::to_string(i) + "].";
@@ -202,6 +204,58 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
     }
   }
 
+  // --- Feature lines (REQ-087) -------------------------------------------------------------------
+  // Same CSR rules as polylines, plus one that is unique to this store: the elevation-point flag
+  // array is per VERTEX, and a short one is SILENT — the missing tail reads as "all PIs", so
+  // elevation points disappear while the geometry still looks exactly right (ADR-035 (a)).
+  {
+    const size_t featureLineCount = st.featureLineOffsets.empty() ? 0 : st.featureLineOffsets.size() - 1;
+    const int vertexCount = static_cast<int>(st.featureLineVerts.size() / 3);
+
+    CheckAttrCount(out, "feature lines", featureLineCount, st.featureLineAttrs.size());
+    CheckAttrCount(out, "feature-line closed-flags", featureLineCount, st.featureLineClosed.size());
+    CheckAttrCount(out, "feature-line info rows", featureLineCount, st.featureLineInfo.size());
+
+    if (st.featureLineElevPt.size() != static_cast<size_t>(vertexCount)) {
+      Add(out, docinv::kFeatureLineOffsets,
+          "featureLineElevPt holds " + std::to_string(st.featureLineElevPt.size()) +
+              " flags but featureLineVerts holds " + std::to_string(vertexCount) +
+              " vertices; the flag array is per vertex");
+    }
+
+    int prev = 0;
+    for (size_t i = 0; i < st.featureLineOffsets.size(); ++i) {
+      const int off = st.featureLineOffsets[i];
+      if (off < 0 || off > vertexCount) {
+        Add(out, docinv::kFeatureLineOffsets,
+            "featureLineOffsets[" + std::to_string(i) + "] = " + std::to_string(off) +
+                " is outside [0, " + std::to_string(vertexCount) + "]",
+            static_cast<int>(i));
+      } else if (off < prev) {
+        Add(out, docinv::kFeatureLineOffsets,
+            "featureLineOffsets[" + std::to_string(i) + "] = " + std::to_string(off) +
+                " goes backwards from " + std::to_string(prev),
+            static_cast<int>(i));
+      }
+      prev = off;
+    }
+    if (!st.featureLineOffsets.empty()) {
+      if (st.featureLineOffsets.size() == 1) {
+        Add(out, docinv::kFeatureLineOffsets,
+            "featureLineOffsets holds 1 entry; 0 feature lines is spelled as an EMPTY table");
+      }
+      if (st.featureLineOffsets.front() != 0) {
+        Add(out, docinv::kFeatureLineOffsets,
+            "featureLineOffsets[0] = " + std::to_string(st.featureLineOffsets.front()) + ", expected 0");
+      }
+      if (st.featureLineOffsets.back() != vertexCount) {
+        Add(out, docinv::kFeatureLineOffsets,
+            "featureLineOffsets.back() = " + std::to_string(st.featureLineOffsets.back()) +
+                " but featureLineVerts holds " + std::to_string(vertexCount) + " vertices");
+      }
+    }
+  }
+
   // --- Filled-region loop starts ----------------------------------------------------------------
   for (size_t r = 0; r < st.cadFilledRegions.size(); ++r) {
     const CadFilledRegion& fr = st.cadFilledRegions[r];
@@ -246,6 +300,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
     sweep("cadFilledRegionAttrs", st.cadFilledRegionAttrs);
     sweep("cadMeshAttrs", st.cadMeshAttrs);
     sweep("cadSurfaceAttrs", st.cadSurfaceAttrs);
+    sweep("featureLineAttrs", st.featureLineAttrs);  // REQ-087; a surface references these by id
   }
 
   // --- Selection (architecture §11.9) --------------------------------------------------------------
