@@ -1,0 +1,213 @@
+# REQ-087 stage 3 (TASK-079) — feature lines through the modify commands.
+#
+# REQ-087 says a feature line "selects, MOVES, snaps, hides by layer, persists to .gs, and is
+# undoable in one step per operation, like every other entity". This transcript is that clause.
+#
+# Every assertion below was run against unpatched code first and FAILED there, except where a
+# comment says otherwise. A regression test that has never failed is not evidence.
+
+# ---------------------------------------------------------------------------------------------
+# BUG-1 — COPY duplicated entity ids on EVERY entity type (TASK-079 §6).
+# Nothing to do with feature lines: the duplicate paths copied EntityAttributes wholesale, id
+# included, bypassing the id==0 / EnsureEntityIds mechanism the rest of the code uses. It survived
+# this long because no transcript ever ran CHECK ALL after a COPY. This step is that CHECK.
+# ---------------------------------------------------------------------------------------------
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+BOX -1 -1 11 1
+EXPECT SELECTED 1
+CMD COPY
+CMD 0,0
+CMD 0,50
+ESC
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T2 — MOVE translates every vertex and leaves elevations alone.
+# ---------------------------------------------------------------------------------------------
+NEW
+CMD FEATURELINE Ridge
+CMD 0,0,10
+CMD 100,0,12
+CMD END
+BOX -10 -10 110 10
+EXPECT SELECTED 1
+CMD MOVE
+CMD 0,0
+CMD 0,50
+ESC
+CMD FEATURELINELIST
+EXPECT LOG "PI      1: 0.000, 50.000, elevation 10.000"
+EXPECT LOG "PI      2: 100.000, 50.000, elevation 12.000"
+CHECK ALL
+
+# One undo returns it whole — REQ-087's "undoable in one step per operation".
+UNDO
+CMD FEATURELINELIST
+EXPECT LOG "PI      1: 0.000, 0.000, elevation 10.000"
+EXPECT LOG "PI      2: 100.000, 0.000, elevation 12.000"
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T3 — COPY yields a second feature line with its own id, carrying elevations and the closed flag.
+# The id assertion is ASSUMPTION-2: a surface tracks its breaklines BY ID (REQ-069), so two feature
+# lines sharing one id would make a surface follow whichever the sweep reached first.
+# ---------------------------------------------------------------------------------------------
+NEW
+CMD FEATURELINE Pad
+CMD 0,0,10
+CMD 100,0,12
+CMD 100,50,14
+CMD CLOSE
+BOX -10 -10 110 60
+EXPECT SELECTED 1
+CMD COPY
+CMD 0,0
+CMD 0,200
+ESC
+CMD FEATURELINELIST
+EXPECT LOG "Feature line 1: "Pad" — 3 vertices (3 PI, 0 elevation point(s)), closed, entity id 1"
+EXPECT LOG "Feature line 2: "Pad" — 3 vertices (3 PI, 0 elevation point(s)), closed, entity id 2"
+EXPECT LOG "PI      3: 100.000, 250.000, elevation 14.000"
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T4 — ROTATE takes a bearing CLOCKWISE FROM NORTH, which is the survey convention and not the
+# mathematical one: 90 degrees about the origin sends (100,50) to (50,-100), not to (-50,100).
+# Elevation is untouched, because the rotation is about the vertical axis.
+#
+# The second vertex is deliberately (100,50) rather than (100,0). Rotating (100,0) lands exactly on
+# the Y axis, where the float result is negative zero and the readout says "-0.000" — a printf
+# artifact, not a defect, but one that would make this test assert formatting instead of geometry.
+# ---------------------------------------------------------------------------------------------
+NEW
+CMD FEATURELINE Swing
+CMD 0,0,10
+CMD 100,50,12
+CMD END
+BOX -10 -10 110 60
+EXPECT SELECTED 1
+CMD ROTATE
+CMD 0,0
+CMD 90
+ESC
+CMD FEATURELINELIST
+EXPECT LOG "PI      2: 50.000, -100.000, elevation 12.000"
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T5 — SCALE doubles plan distance and leaves elevation alone. That asymmetry is deliberate and
+# matches the polyline behaviour it sits beside: SCALE is a plan operation here.
+# ---------------------------------------------------------------------------------------------
+NEW
+CMD FEATURELINE Grow
+CMD 0,0,10
+CMD 100,0,12
+CMD END
+BOX -10 -10 110 10
+CMD SCALE
+CMD 0,0
+CMD 2
+ESC
+CMD FEATURELINELIST
+EXPECT LOG "PI      2: 200.000, 0.000, elevation 12.000"
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T6 — REGRESSION GUARD, not a validation (TASK-079 §5). An elevation point lies ON the line by
+# construction; a whole-entity MOVE cannot break that, so this passes on unpatched code once MOVE
+# works at all. It is here to lock the property in BEFORE grips arrive, since single-PI editing is
+# the path that can actually break it (ADR-035 (b)) and that path is stage 2b, still unbuilt.
+# The midpoint of (0,0,10)-(100,50,20) is (50,25); after MOVE by (10,10) it must read (60,35).
+# ---------------------------------------------------------------------------------------------
+NEW
+CMD FEATURELINE Collinear
+CMD 0,0,10
+CMD E 50,25,15
+CMD 100,50,20
+CMD END
+CMD FEATURELINELIST
+EXPECT LOG "elev pt 2: 50.000, 25.000, elevation 15.000"
+BOX -10 -10 110 60
+EXPECT SELECTED 1
+CMD MOVE
+CMD 0,0
+CMD 10,10
+ESC
+CMD FEATURELINELIST
+EXPECT LOG "PI      1: 10.000, 10.000, elevation 10.000"
+EXPECT LOG "elev pt 2: 60.000, 35.000, elevation 15.000"
+EXPECT LOG "PI      3: 110.000, 60.000, elevation 20.000"
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T7 — the commands that REFUSE. TRIM, OFFSET and JOIN each have a defined meaning for a 2D chain
+# and an undefined one for a 3D chain carrying elevations: what elevation does a trimmed end take,
+# what does an offset copy sit at, which of two elevations wins at a joined endpoint? Neither
+# REQ-087 nor REQ-088 answers any of those, so the Workshop does not get to invent an answer
+# (CLAUDE.md layer rule 3). It says so instead — REQ-201. Silence is what ADR-035 (g) warns about.
+#
+# (EXTEND, FILLET and BREAK were listed in TASK-079's first draft as also needing refusals. They
+# have no commands in this codebase at all, for any entity type, so there is nothing to refuse.)
+#
+# Each refusal is exercised through the path a user actually reaches it by — JOIN off the selection,
+# TRIM and OFFSET off a pick — because that is where the silence was.
+# ---------------------------------------------------------------------------------------------
+NEW
+CMD FEATURELINE Refused
+CMD 0,0,10
+CMD 100,0,12
+CMD END
+
+# JOIN is selection-driven.
+BOX -10 -10 110 10
+EXPECT SELECTED 1
+CMD JOIN
+EXPECT LOG "JOIN — 1 feature line ignored"
+ESC
+
+# COPYCLIP is NOT tested here. It has no command-line verb at all — it is reachable only by Ctrl+C
+# from CadUi.cpp — so a transcript cannot invoke it. Same family of REQ-203 gap as TRIM's picks
+# below, recorded as TASK-079 FU-4. The change made there is that COPYCLIP used to count the
+# SELECTION rather than what it actually took, so a feature line reported "1 object(s) copied" and
+# then pasted nothing; it now reports 0 copied and names what it skipped.
+
+# OFFSET picks its entity. The pick lands on the line at its midpoint.
+CMD OFFSET
+PICK 50 0
+EXPECT LOG "OFFSET — 1 feature line ignored"
+ESC
+
+# TRIM needs the TRIMPICK verb rather than PICK. TRIM's clicks are the only pick-driven input in the
+# app that never reaches SubmitViewportPick — CadUi.cpp routes them straight to
+# SubmitTrimViewportPick — so PICK during TRIM does nothing at all, silently. That is a REQ-203 gap
+# in TRIM covering every entity type, not something feature lines introduced; TASK-079 FU-3.
+#
+# Cutting-edge refusal. TRIMSTATE 1 is the mode that picks objects; mode 0 draws a line instead.
+CMD TRIMSTATE 1
+CMD TRIM
+TRIMPICK 50 0
+EXPECT LOG "TRIM — 1 feature line ignored: a feature line cannot be a cutting edge"
+# Enter now proves the refusal actually refused: if the feature line had been recorded as a cutting
+# edge despite the message, TRIM would advance to picking targets instead of asking for an edge.
+CMD
+EXPECT LOG "TRIM — pick at least one cutting edge"
+ESC
+
+# Trim-target refusal. A real line is needed as the cutting edge first, so that the refusal under
+# test is the TARGET one and not the cutting-edge one above.
+CMD LINE
+CMD 50,-10
+CMD 50,10
+ESC
+CMD TRIM
+TRIMPICK 50 -5
+EXPECT LOG "TRIM — cutting edge added"
+CMD
+TRIMPICK 25 0
+EXPECT LOG "TRIM — 1 feature line ignored: trimming one has no defined elevation"
+ESC
+CHECK ALL

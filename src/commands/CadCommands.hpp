@@ -2191,6 +2191,14 @@ void StartPolylineCommand(AppCommandState& st, std::vector<std::string>& log);
 /// REQ-087: start a feature line — named 3D linework committing to its own store (ADR-035 (g)).
 void StartFeatureLineCommand(AppCommandState& st, const std::string& name, std::vector<std::string>& log);
 
+/// Append one vertex to the feature-line draft. \p isElevPoint marks it an elevation point rather
+/// than a PI — geometrically it lies on the line either way (ADR-035 (a)).
+bool SubmitFeatureLineVertex(AppCommandState& st, float x, float y, bool isElevPoint,
+                             std::vector<std::string>& log);
+
+/// Commit the feature-line draft into the store as one entity. \p closed joins last vertex to first.
+void CommitFeatureLineDraft(AppCommandState& st, bool closed, std::vector<std::string>& log);
+
 /// REQ-085: POLYLINE with per-vertex elevation entry. Shares POLYLINE's draft and `Kind` — the store
 /// is already stride-3 XYZ and the two commands differ only in where a vertex's Z comes from.
 void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log);

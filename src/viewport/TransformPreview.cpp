@@ -78,6 +78,50 @@ void appendCommittedPolylineStrip(std::vector<float>* out, const AppCommandState
     emit(v1 - 1, v0);
 }
 
+/// Append every selected feature line as a preview strip, with \p xf applied to each vertex's plan
+/// position and its own Z kept (REQ-057/058 — a preview drawn at a flat depth sits on the datum
+/// while the object sits at elevation, showing it twice in an orbited view).
+///
+/// The three transform previews below — move/copy, rotate, scale — differ ONLY in \p xf. Sharing one
+/// walk is the same reasoning as ForEachSelectedFeatureLine in CadCommands.cpp: a preview that
+/// disagrees with what the command actually commits is worse than no preview, because it looks
+/// right. REQ-087.
+template <class Xf>
+void appendFeatureLineStrip(std::vector<float>* out, const AppCommandState& cmd, int fi, Xf&& xf) {
+  if (fi < 0 || static_cast<size_t>(fi + 1) >= cmd.featureLineOffsets.size())
+    return;
+  const int v0 = cmd.featureLineOffsets[static_cast<size_t>(fi)];
+  const int v1 = cmd.featureLineOffsets[static_cast<size_t>(fi + 1)];
+  if (v1 - v0 < 2 || static_cast<size_t>(v1) * 3 > cmd.featureLineVerts.size())
+    return;
+  const bool closed = static_cast<size_t>(fi) < cmd.featureLineClosed.size() &&
+                      cmd.featureLineClosed[static_cast<size_t>(fi)];
+
+  auto emit = [&](int a, int b) {
+    const int idx[2] = {a, b};
+    for (int k = 0; k < 2; ++k) {
+      const size_t base = static_cast<size_t>(idx[k]) * 3;
+      float x = cmd.featureLineVerts[base];
+      float y = cmd.featureLineVerts[base + 1];
+      xf(&x, &y);
+      out->push_back(x);
+      out->push_back(y);
+      out->push_back(cmd.featureLineVerts[base + 2]);
+    }
+  };
+  for (int vi = v0; vi + 1 < v1; ++vi)
+    emit(vi, vi + 1);
+  if (closed)
+    emit(v1 - 1, v0);
+}
+
+template <class Xf>
+void appendSelectedFeatureLinePreview(std::vector<float>* out, const AppCommandState& cmd, Xf&& xf) {
+  for (const auto& e : cmd.selection)
+    if (e.type == SelectedEntity::Type::FeatureLine)
+      appendFeatureLineStrip(out, cmd, e.index, xf);
+}
+
 } // namespace
 
 void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, std::vector<float>* prevLines,
@@ -162,6 +206,10 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         }
       }
     }
+    appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {  // REQ-087
+      *x += dx;
+      *y += dy;
+    });
     return;
   }
 
@@ -336,6 +384,8 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
         }
       }
     }
+    appendSelectedFeatureLinePreview(  // REQ-087
+        prevLines, cmd, [&](float* x, float* y) { scalePreviewPt(bx, by, sc, x, y); });
     return;
   }
 
@@ -430,6 +480,8 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
       }
     }
   }
+  appendSelectedFeatureLinePreview(  // REQ-087
+      prevLines, cmd, [&](float* x, float* y) { rotatePreviewPt(bx, by, theta, x, y); });
 }
 
 /// Highlight strokes for one entity, each at the entity's OWN elevation (REQ-058). This used to
@@ -469,6 +521,11 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     appendEllipsePolylineStrip(hlLines, cmd.userEllipses[k].z, cmd.userEllipses[k], 56);
   } else if (e.type == SelectedEntity::Type::Polyline) {
     appendCommittedPolylineStrip(hlLines, cmd, e.index);
+  } else if (e.type == SelectedEntity::Type::FeatureLine) {
+    // REQ-087. Without this a selected feature line drew no highlight at all: it would pick, box-
+    // select and move correctly while giving the user nothing on screen to confirm what was
+    // selected. Identity transform — the highlight traces the committed geometry where it is.
+    appendFeatureLineStrip(hlLines, cmd, e.index, [](float*, float*) {});
   } else if (e.type == SelectedEntity::Type::FilledRegion) {
     const size_t k = static_cast<size_t>(e.index);
     if (k >= cmd.cadFilledRegions.size())

@@ -4135,8 +4135,104 @@ static void ApplyRotationToSelectedSurveyPoints(AppCommandState& st, float bx, f
   }
 }
 
+/// A duplicate is a NEW entity, so it takes the source's layer, colour and linetype but NOT its id.
+/// Zero is the "unassigned" marker `MakeNewEntityAttrs` already uses; `EnsureEntityIds` sweeps on the
+/// next `BumpCadGpuCache` and hands out a fresh one. Copying the id across instead — which both
+/// duplicate paths did until 2026-08-20 — leaves two entities claiming one identity, and every
+/// id-keyed lookup then resolves to whichever the sweep reaches first. A surface tracking a
+/// breakline by id (REQ-069) would silently follow the wrong line. REQ-076; TASK-079 BUG-1.
+static EntityAttributes DuplicatedEntityAttrs(EntityAttributes a) {
+  a.id = 0;
+  return a;
+}
+
+/// Visit each selected feature line once as (index, firstVertex, lastVertexExclusive).
+///
+/// The ranges are COLLECTED FIRST and visited afterwards, which is not incidental: two of the five
+/// callers append to `featureLineOffsets` while they work, and walking the offsets table as it grows
+/// would read from a reallocated buffer. Selections are small, so the copy costs nothing.
+///
+/// Five callers — translate, rotate, scale, and the two duplicate paths — plus the centroid and
+/// extent helpers. That is the point of it: ADR-035 (g) names a missed case as this entity's whole
+/// risk, and seven hand-copied CSR walks would be seven chances to miss one. REQ-087.
+template <class Fn>
+static void ForEachSelectedFeatureLine(const AppCommandState& st, Fn&& fn) {
+  std::vector<std::array<int, 3>> ranges;
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::FeatureLine)
+      continue;
+    const int fi = e.index;
+    if (fi < 0 || static_cast<size_t>(fi + 1) >= st.featureLineOffsets.size())
+      continue;
+    const int v0 = st.featureLineOffsets[static_cast<size_t>(fi)];
+    const int v1 = st.featureLineOffsets[static_cast<size_t>(fi + 1)];
+    if (v1 <= v0 || static_cast<size_t>(v1) * 3 > st.featureLineVerts.size())
+      continue;
+    ranges.push_back({fi, v0, v1});
+  }
+  for (const std::array<int, 3>& r : ranges)
+    fn(r[0], r[1], r[2]);
+}
+
+/// Apply \p xform to the plan position of every vertex of every selected feature line. Elevation is
+/// deliberately not offered: MOVE, ROTATE and SCALE are all plan operations here, matching the
+/// polyline behaviour they sit beside, and a transform that could silently alter Z would break the
+/// surface a feature line feeds (REQ-069) without touching its plan geometry.
+template <class Xf>
+static void TransformSelectedFeatureLinesInPlace(AppCommandState& st, Xf&& xform) {
+  ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
+    for (int vi = v0; vi < v1; ++vi) {
+      const size_t b = static_cast<size_t>(vi) * 3;
+      xform(&st.featureLineVerts[b], &st.featureLineVerts[b + 1]);
+    }
+  });
+}
+
+/// Append a copy of feature line \p fi, with \p xform applied to each vertex's plan position.
+///
+/// Everything that makes the line what it is carries across — elevations, the elevation-point flags,
+/// the closed flag, the name — and the id does not, because the copy is a new entity (REQ-076).
+/// The vertex range is validated BEFORE the first push so this cannot bail out half way and leave
+/// `featureLineVerts` longer than `featureLineOffsets` says it is; `EraseFeatureLineByIndex` already
+/// showed that the flags and the vertices are cut on different strides and that a length mismatch
+/// between them is completely silent.
+template <class Xf>
+static void AppendFeatureLineCopy(AppCommandState& st, int fi, int v0, int v1, Xf&& xform) {
+  const int nv = v1 - v0;
+  if (nv < 2 || static_cast<size_t>(v1) * 3 > st.featureLineVerts.size())
+    return;
+  if (st.featureLineOffsets.empty())
+    st.featureLineOffsets.push_back(0);
+  const int baseVert = st.featureLineOffsets.back();
+  for (int vi = v0; vi < v1; ++vi) {
+    const size_t b = static_cast<size_t>(vi) * 3;
+    float x = st.featureLineVerts[b];
+    float y = st.featureLineVerts[b + 1];
+    const float z = st.featureLineVerts[b + 2];
+    xform(&x, &y);
+    st.featureLineVerts.push_back(x);
+    st.featureLineVerts.push_back(y);
+    st.featureLineVerts.push_back(z);
+    st.featureLineElevPt.push_back(static_cast<size_t>(vi) < st.featureLineElevPt.size()
+                                       ? st.featureLineElevPt[static_cast<size_t>(vi)]
+                                       : static_cast<uint8_t>(0));
+  }
+  st.featureLineOffsets.push_back(baseVert + nv);
+  st.featureLineClosed.push_back(static_cast<size_t>(fi) < st.featureLineClosed.size()
+                                     ? st.featureLineClosed[static_cast<size_t>(fi)]
+                                     : static_cast<uint8_t>(0));
+  st.featureLineInfo.push_back(static_cast<size_t>(fi) < st.featureLineInfo.size()
+                                   ? st.featureLineInfo[static_cast<size_t>(fi)]
+                                   : CadFeatureLineInfo{});
+  st.featureLineAttrs.push_back(DuplicatedEntityAttrs(
+      static_cast<size_t>(fi) < st.featureLineAttrs.size()
+          ? st.featureLineAttrs[static_cast<size_t>(fi)]
+          : MakeNewEntityAttrs(st)));
+}
+
 static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float dy) {
   const size_t polyVertsBefore = st.userPolylineVerts.size();
+  const size_t featureVertsBefore = st.featureLineVerts.size();
   std::vector<float> newLines;
   std::vector<float> newCircles;
   std::vector<EntityAttributes> newLineAttrs;
@@ -4157,8 +4253,8 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         CadFilledRegion fr = st.cadFilledRegions[fk];
         hatchgeom::Translate(fr, dx, dy);
         newFills.push_back(std::move(fr));
-        newFillAttrs.push_back(fk < st.cadFilledRegionAttrs.size() ? st.cadFilledRegionAttrs[fk]
-                                                                   : EntityAttributes{});
+        newFillAttrs.push_back(DuplicatedEntityAttrs(
+            fk < st.cadFilledRegionAttrs.size() ? st.cadFilledRegionAttrs[fk] : EntityAttributes{}));
       }
     } else if (e.type == SelectedEntity::Type::LineSeg) {
       size_t k = static_cast<size_t>(e.index) * 6;
@@ -4172,7 +4268,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userLineAttrs.size())
           a = st.userLineAttrs[static_cast<size_t>(e.index)];
-        newLineAttrs.push_back(a);
+        newLineAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
       size_t k = static_cast<size_t>(e.index) * 4;
@@ -4184,7 +4280,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
           a = st.userCircleAttrs[static_cast<size_t>(e.index)];
-        newCircleAttrs.push_back(a);
+        newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
@@ -4208,7 +4304,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         EntityAttributes a{};
         if (k < st.cadAnnotationAttrs.size())
           a = st.cadAnnotationAttrs[k];
-        newAnnAttrs.push_back(a);
+        newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
@@ -4220,7 +4316,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         EntityAttributes at{};
         if (k < st.userArcAttrs.size())
           at = st.userArcAttrs[k];
-        newArcAttrs.push_back(at);
+        newArcAttrs.push_back(DuplicatedEntityAttrs(at));
       }
     } else if (e.type == SelectedEntity::Type::Ellipse) {
       const size_t k = static_cast<size_t>(e.index);
@@ -4232,7 +4328,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         EntityAttributes at{};
         if (k < st.userEllAttrs.size())
           at = st.userEllAttrs[k];
-        newEllAttrs.push_back(at);
+        newEllAttrs.push_back(DuplicatedEntityAttrs(at));
       }
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
@@ -4259,7 +4355,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
       EntityAttributes at{};
       if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
         at = st.userPolylineAttrs[static_cast<size_t>(pi)];
-      st.userPolylineAttrs.push_back(at);
+      st.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
     }
   }
   st.userLinesFlat.insert(st.userLinesFlat.end(), newLines.begin(), newLines.end());
@@ -4275,8 +4371,19 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   st.cadFilledRegions.insert(st.cadFilledRegions.end(), newFills.begin(), newFills.end());
   st.cadFilledRegionAttrs.insert(st.cadFilledRegionAttrs.end(), newFillAttrs.begin(), newFillAttrs.end());
 
+  // Feature lines (REQ-087). Appended after the loop above rather than inside it only for
+  // readability — ForEachSelectedFeatureLine snapshots its ranges, so growing the store mid-walk is
+  // safe either way.
+  ForEachSelectedFeatureLine(st, [&](int fi, int v0, int v1) {
+    AppendFeatureLineCopy(st, fi, v0, v1, [&](float* x, float* y) {
+      *x += dx;
+      *y += dy;
+    });
+  });
+
   if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
-      !newFills.empty() || st.userPolylineVerts.size() != polyVertsBefore)
+      !newFills.empty() || st.userPolylineVerts.size() != polyVertsBefore ||
+      st.featureLineVerts.size() != featureVertsBefore)
     BumpCadGpuCache(st);
 }
 
@@ -4515,6 +4622,7 @@ static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, st
 
 static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by, float rad) {
   const size_t polyVertsBefore = st.userPolylineVerts.size();
+  const size_t featureVertsBefore = st.featureLineVerts.size();
   std::vector<float> newLines;
   std::vector<float> newCircles;
   std::vector<EntityAttributes> newLineAttrs;
@@ -4547,7 +4655,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userLineAttrs.size())
           a = st.userLineAttrs[static_cast<size_t>(e.index)];
-        newLineAttrs.push_back(a);
+        newLineAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
       size_t k = static_cast<size_t>(e.index) * 4;
@@ -4563,7 +4671,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
           a = st.userCircleAttrs[static_cast<size_t>(e.index)];
-        newCircleAttrs.push_back(a);
+        newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
@@ -4606,7 +4714,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         EntityAttributes a{};
         if (k < st.cadAnnotationAttrs.size())
           a = st.cadAnnotationAttrs[k];
-        newAnnAttrs.push_back(a);
+        newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
@@ -4618,7 +4726,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         EntityAttributes at{};
         if (k < st.userArcAttrs.size())
           at = st.userArcAttrs[k];
-        newArcAttrs.push_back(at);
+        newArcAttrs.push_back(DuplicatedEntityAttrs(at));
       }
     } else if (e.type == SelectedEntity::Type::Ellipse) {
       const size_t k = static_cast<size_t>(e.index);
@@ -4634,7 +4742,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         EntityAttributes at{};
         if (k < st.userEllAttrs.size())
           at = st.userEllAttrs[k];
-        newEllAttrs.push_back(at);
+        newEllAttrs.push_back(DuplicatedEntityAttrs(at));
       }
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
@@ -4665,7 +4773,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
       EntityAttributes at{};
       if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
         at = st.userPolylineAttrs[static_cast<size_t>(pi)];
-      st.userPolylineAttrs.push_back(at);
+      st.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
     }
   }
   st.userLinesFlat.insert(st.userLinesFlat.end(), newLines.begin(), newLines.end());
@@ -4679,8 +4787,16 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
   st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
   st.userEllAttrs.insert(st.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
 
+  // Feature lines (REQ-087) — the same append as the translated path, differing only in the point
+  // function, which is exactly why both go through AppendFeatureLineCopy.
+  ForEachSelectedFeatureLine(st, [&](int fi, int v0, int v1) {
+    AppendFeatureLineCopy(st, fi, v0, v1,
+                          [&](float* x, float* y) { RotateAroundBase(bx, by, rad, x, y); });
+  });
+
   if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
-      st.userPolylineVerts.size() != polyVertsBefore)
+      st.userPolylineVerts.size() != polyVertsBefore ||
+      st.featureLineVerts.size() != featureVertsBefore)
     BumpCadGpuCache(st);
 }
 
@@ -4815,6 +4931,10 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     RotateAroundBase(bx, by, rad, &att.insertX, &att.insertY);
     att.rotationDeg += rad * kPdfRadToDeg;
   }
+  // Feature lines (REQ-087) — every vertex, PIs and elevation points alike, so the elevation points
+  // stay on the line (ADR-035 (b)).
+  TransformSelectedFeatureLinesInPlace(
+      st, [&](float* x, float* y) { RotateAroundBase(bx, by, rad, x, y); });
   ApplyRotationToSelectedSurveyPoints(st, bx, by, rad);
   BumpCadGpuCache(st);
 }
@@ -4915,6 +5035,11 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy) {
       continue;
     hatchgeom::Translate(st.cadFilledRegions[static_cast<size_t>(e.index)], dx, dy);
   }
+  // Feature lines (REQ-087) — see ApplyRotationToSelection.
+  TransformSelectedFeatureLinesInPlace(st, [&](float* x, float* y) {
+    *x += dx;
+    *y += dy;
+  });
   ApplyTranslationToSelectedSurveyPoints(st, dx, dy);
   BumpCadGpuCache(st);
 }
@@ -5026,6 +5151,20 @@ static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outC
       }
     }
   }
+  // Feature lines (REQ-087): one contribution per line, at its own vertex centroid — the same
+  // weighting the polyline branch above uses, so a selection of both is not skewed toward whichever
+  // happens to have more vertices.
+  ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
+    double sx = 0.0, sy = 0.0;
+    for (int vi = v0; vi < v1; ++vi) {
+      sx += static_cast<double>(st.featureLineVerts[static_cast<size_t>(vi) * 3]);
+      sy += static_cast<double>(st.featureLineVerts[static_cast<size_t>(vi) * 3 + 1]);
+    }
+    const double nv = static_cast<double>(v1 - v0);
+    accx += sx / nv;
+    accy += sy / nv;
+    ++n;
+  });
   for (int si : st.selectedSurveyPointIndices) {
     if (si >= 0 && static_cast<size_t>(si) < st.surveyPoints.size()) {
       accx += static_cast<double>(st.surveyPoints[static_cast<size_t>(si)].easting);
@@ -5129,6 +5268,14 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
       }
     }
   }
+  // Feature lines (REQ-087) — farthest vertex, as for a polyline.
+  ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
+    for (int vi = v0; vi < v1; ++vi) {
+      const float x = st.featureLineVerts[static_cast<size_t>(vi) * 3];
+      const float y = st.featureLineVerts[static_cast<size_t>(vi) * 3 + 1];
+      m = std::max(m, std::hypot(x - bx, y - by));
+    }
+  });
   for (int si : st.selectedSurveyPointIndices) {
     if (si >= 0 && static_cast<size_t>(si) < st.surveyPoints.size()) {
       const SurveyPoint& sp = st.surveyPoints[static_cast<size_t>(si)];
@@ -5289,6 +5436,9 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc) {
     ScalePtAroundBase(bx, by, sc, &att.insertX, &att.insertY);
     att.scale = std::max(att.scale * sc, 1e-9f);
   }
+  // Feature lines (REQ-087). Plan only — elevations are NOT scaled, matching the polyline above.
+  TransformSelectedFeatureLinesInPlace(
+      st, [&](float* x, float* y) { ScalePtAroundBase(bx, by, sc, x, y); });
   ApplyScaleToSelectedSurveyPoints(st, bx, by, sc);
   BumpCadGpuCache(st);
 }
@@ -6462,6 +6612,16 @@ static void HandleOffsetViewportPick(AppCommandState& st, float wx, float wy, st
       log.push_back("OFFSET — nothing under cursor; try again.");
       return;
     }
+    // REQ-087 / REQ-201. A feature line is pickable (it has to be, to select and move), so without
+    // this it would be accepted here and then dropped silently by CommitOffsetSigned's `default:`.
+    // Refusing is not a limitation we are hiding — offsetting a 3D chain has no defined answer for
+    // what elevation the offset copy carries, and neither REQ-087 nor REQ-088 supplies one, so the
+    // Workshop does not get to pick one (CLAUDE.md layer rule 3). Stays in the select phase.
+    if (hit.type == SelectedEntity::Type::FeatureLine) {
+      log.push_back("OFFSET — 1 feature line ignored: offsetting one has no defined elevation for "
+                    "the new line. Pick a line, circle, arc, ellipse, or polyline.");
+      return;
+    }
     st.offsetEntity = hit;
     st.offsetEntityValid = true;
     st.offsetPhase = OP::WaitDistanceOrThrough;
@@ -7316,7 +7476,23 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
     cb.basePtY = (mnY + mxY) * 0.5f;
   }
 
-  log.push_back("COPYCLIP — " + std::to_string(st.selection.size()) + " object(s) copied to clipboard.");
+  // REQ-087 / REQ-201. The clipboard has no feature-line store, so the walk above skips them — and
+  // the count below would still report them as copied, because it counts the SELECTION rather than
+  // what was actually taken. A user would then paste and find the feature line missing with no
+  // message anywhere. Copying them properly needs clipboard arrays, which is stage 3's successor,
+  // not stage 3; saying so is what stops the gap being invisible until someone loses work.
+  int featureLinesNotCopied = 0;
+  for (const auto& e : st.selection)
+    if (e.type == SelectedEntity::Type::FeatureLine)
+      ++featureLinesNotCopied;
+  log.push_back("COPYCLIP — " +
+                std::to_string(st.selection.size() - static_cast<size_t>(featureLinesNotCopied)) +
+                " object(s) copied to clipboard.");
+  if (featureLinesNotCopied > 0)
+    log.push_back("COPYCLIP — " + std::to_string(featureLinesNotCopied) + " feature line" +
+                  (featureLinesNotCopied == 1 ? "" : "s") +
+                  " not copied: the clipboard cannot carry a feature line yet. Use COPY to "
+                  "duplicate one in place.");
 }
 
 void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -11301,6 +11477,14 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
       log.push_back("TRIM — use a line, circle, arc, ellipse, or polyline as a cutting edge.");
       return false;
     }
+    // REQ-087 / REQ-201. Same reasoning as the Annotation refusal above it: a feature line is
+    // pickable, so it would otherwise be accepted as a cutting edge and then contribute no cut
+    // segments, leaving the user with "no cutting segments" and no idea why.
+    if (hit.type == SelectedEntity::Type::FeatureLine) {
+      log.push_back("TRIM — 1 feature line ignored: a feature line cannot be a cutting edge. Use a "
+                    "line, circle, arc, ellipse, or polyline.");
+      return false;
+    }
     for (const auto& c : st.trimCutters) {
       if (SelectedEntityMatches(c, hit)) {
         log.push_back("TRIM — already a cutting edge.");
@@ -11315,7 +11499,17 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
   TrimTargetEdge tgt{};
   float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f, d2 = 0.f;
   if (!PickClosestTrimTarget(st, wx, wy, tolWorld, &tgt, &ax, &ay, &bx, &by, &d2)) {
-    log.push_back("TRIM — nothing to trim at pick.");
+    // REQ-087 / REQ-201. "Nothing to trim" is a lie when there plainly IS something under the
+    // cursor and it happens to be a feature line. Say which it is: trimming one is undefined —
+    // the new end would need an elevation, and neither REQ-087 nor REQ-088 says where it comes from.
+    SelectedEntity under{};
+    float ud2 = 0.f;
+    if (PickClosestCadEntity(st, wx, wy, tolWorld, &under, &ud2) &&
+        under.type == SelectedEntity::Type::FeatureLine)
+      log.push_back("TRIM — 1 feature line ignored: trimming one has no defined elevation for the "
+                    "new end.");
+    else
+      log.push_back("TRIM — nothing to trim at pick.");
     return false;
   }
 
@@ -11336,6 +11530,21 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
 void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
   PushUndoSnapshot(st, "Join");
   using ST = SelectedEntity::Type;
+
+  // REQ-087 / REQ-201. Feature lines in the selection are skipped by the edge walk below, and until
+  // now that skip was silent — the user would see "JOIN — 2 edges joined" on a selection of three
+  // objects and have no way to learn which one was left out. Joining two feature lines is not
+  // merely unimplemented: it is undefined, because the shared endpoint would need one elevation and
+  // the two lines each supply their own, and nothing in REQ-087 or REQ-088 says which wins.
+  int featureLinesSkipped = 0;
+  for (const auto& se : st.selection)
+    if (se.type == ST::FeatureLine)
+      ++featureLinesSkipped;
+  if (featureLinesSkipped > 0)
+    log.push_back("JOIN — " + std::to_string(featureLinesSkipped) + " feature line" +
+                  (featureLinesSkipped == 1 ? "" : "s") +
+                  " ignored: joining feature lines has no defined elevation at the shared end.");
+
   struct Edge {
     float x0, y0, x1, y1;
     int lineIx;

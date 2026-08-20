@@ -312,6 +312,32 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     run.st.selBoxAnchorX = x0;
     run.st.selBoxAnchorY = y0;
     SubmitViewportPick(run.st, x1, y1, run.log, subtract, windowMode);
+  } else if (verb == "TRIMPICK") {
+    // TRIMPICK <x> <y> — one object pick while TRIM is active.
+    //
+    // PICK cannot express this. TRIM is the one pick-driven command whose clicks do NOT go through
+    // SubmitViewportPick: src/ui/CadUi.cpp routes them straight to SubmitTrimViewportPick and never
+    // reaches the shared path, so a transcript using PICK during TRIM silently does nothing at all.
+    // Every other pick-driven command — OFFSET included — is reachable with PICK.
+    //
+    // That asymmetry is a REQ-203 gap in TRIM itself, not something this verb fixes: TRIM's whole
+    // behaviour, for every entity type, is undrivable without it. Rerouting the input belongs in a
+    // task that owns TRIM. Until then this verb hands the click to the same entry point the GUI
+    // calls, exactly as BOX above arms the selection-box fields the viewport would arm.
+    std::istringstream is(rest);
+    float x = 0.f;
+    float y = 0.f;
+    if (!(is >> x >> y)) {
+      Fail(run, "parse", "TRIMPICK expects two world coordinates, got: " + rest, sourceLine);
+      return false;
+    }
+    if (run.st.active != AppCommandState::Kind::Trim) {
+      Fail(run, "state", "TRIMPICK requires TRIM to be the active command", sourceLine);
+      return false;
+    }
+    // The GUI derives this from the viewport height and the snap aperture; a transcript has no
+    // viewport, so it uses a fixed world tolerance. Picks in transcripts are placed ON the object.
+    SubmitTrimViewportPick(run.st, x, y, 1.f, run.log);
   } else if (verb == "ESC") {
     CancelActiveCommand(run.st, run.log);
   } else if (verb == "UNDO") {

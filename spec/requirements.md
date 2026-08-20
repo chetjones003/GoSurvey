@@ -2531,6 +2531,11 @@ requirements is a planning failure, not a sign of rigor.
 - Status:      proposed
 - Revisions:   2026-08-19 — initial. Reverses ADR-028 alternative (5), which deferred feature lines
                as "a separate milestone once surfaces are trustworthy"; this is that milestone.
+               2026-08-20 — TASK-079 landed the "moves" clause: MOVE, COPY, ROTATE and SCALE, with
+               previews and a selection highlight, and explicit refusals from TRIM, OFFSET, JOIN
+               and COPYCLIP. Status stays `proposed`: "snaps" is not built (stage 2b owes snap,
+               grips, DXF and PDF plot), and until it is, the Statement above describes more than
+               the code does.
 
 ### REQ-088 — Feature line elevation editing
 - Purpose:     set and check grade along a feature line, which is the actual work of grading design
