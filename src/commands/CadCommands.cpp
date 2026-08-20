@@ -37,6 +37,7 @@
 #include <fstream>
 #include <iterator>
 #include <set>
+#include <limits>
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
@@ -1339,6 +1340,36 @@ bool ResolveDefinitionChain(const AppCommandState& st, std::uint64_t id, bool re
       out.verts.push_back({static_cast<double>(st.userPolylineVerts[base + 0]) + st.worldDocumentOriginX,
                            static_cast<double>(st.userPolylineVerts[base + 1]) + st.worldDocumentOriginY,
                            static_cast<double>(st.userPolylineVerts[base + 2])});
+    }
+    out.closed = closed;
+    return true;
+  }
+
+  // REQ-087 / REQ-088. Without this a feature line does not merely fail to resolve — it resolves as
+  // ABSENT, and ResolveSurfaceInputs treats an unresolvable id as an entity that no longer exists,
+  // so it strips the breakline from the STORED definition and reports "breakline(s) no longer
+  // exist" about a line sitting in plain view. Designating one was silently self-undoing.
+  //
+  // Elevation points need no handling here, and that is ADR-035 (a) paying off rather than an
+  // omission: a flagged vertex is an ordinary vertex in the plan chain, so the triangulator folds
+  // its elevation in with every other vertex's and the constraint edge follows the line exactly.
+  if (ref.kind == EntityKind::FeatureLine) {
+    const size_t fi = static_cast<size_t>(ref.index);
+    if (fi + 1 >= st.featureLineOffsets.size())
+      return false;
+    const bool closed = fi < st.featureLineClosed.size() && st.featureLineClosed[fi] != 0;
+    if (requireClosed && !closed)
+      return false;
+    const int vBegin = st.featureLineOffsets[fi], vEnd = st.featureLineOffsets[fi + 1];
+    if (vEnd - vBegin < 2)
+      return false;
+    for (int v = vBegin; v < vEnd; ++v) {
+      const size_t base = static_cast<size_t>(v) * 3;
+      if (base + 2 >= st.featureLineVerts.size())
+        return false;
+      out.verts.push_back({static_cast<double>(st.featureLineVerts[base + 0]) + st.worldDocumentOriginX,
+                           static_cast<double>(st.featureLineVerts[base + 1]) + st.worldDocumentOriginY,
+                           static_cast<double>(st.featureLineVerts[base + 2])});
     }
     out.closed = closed;
     return true;
@@ -8616,6 +8647,348 @@ void CommitFeatureLineDraft(AppCommandState& st, bool closed, std::vector<std::s
                 std::to_string(nvert) + " vertices.");
 }
 
+// --- REQ-088 — feature line elevation editing ---------------------------------------------------
+//
+// ADR-035 (e): the elevation editor is a VIEW, not a store. Station, length, grade back and grade
+// ahead are all derived here on demand; nothing below adds a field to any store, and `.gs` is
+// untouched. The edits write elevations back into the existing stride-3 vertex array.
+
+namespace {
+
+/// Two points closer than this in plan are the same point. Well inside REQ-101's ±0.01 ft, so a
+/// grade over a run this short is reported as undefined rather than as a huge number.
+constexpr double kFeatureLinePlanEps = 1e-4;
+
+/// Vertex range [*v0, *v1) of feature line \p fi, with the vertex array proven long enough to
+/// address all of it — so every caller below can index without re-checking.
+bool FeatureLineRange(const AppCommandState& st, int fi, int* v0, int* v1) {
+  if (fi < 0 || static_cast<size_t>(fi + 1) >= st.featureLineOffsets.size())
+    return false;
+  const int a = st.featureLineOffsets[static_cast<size_t>(fi)];
+  const int b = st.featureLineOffsets[static_cast<size_t>(fi + 1)];
+  if (b - a < 2 || a < 0 || static_cast<size_t>(b) * 3 > st.featureLineVerts.size())
+    return false;
+  *v0 = a;
+  *v1 = b;
+  return true;
+}
+
+} // namespace
+
+bool BuildFeatureLineElevTable(const AppCommandState& st, int fi, std::vector<FeatureLineElevRow>* out) {
+  if (!out)
+    return false;
+  out->clear();
+  int v0 = 0, v1 = 0;
+  if (!FeatureLineRange(st, fi, &v0, &v1))
+    return false;
+  const int n = v1 - v0;
+  const bool closed = static_cast<size_t>(fi) < st.featureLineClosed.size() &&
+                      st.featureLineClosed[static_cast<size_t>(fi)] != 0;
+
+  const auto px = [&](int i) { return static_cast<double>(st.featureLineVerts[static_cast<size_t>(v0 + i) * 3]); };
+  const auto py = [&](int i) { return static_cast<double>(st.featureLineVerts[static_cast<size_t>(v0 + i) * 3 + 1]); };
+  const auto pz = [&](int i) { return st.featureLineVerts[static_cast<size_t>(v0 + i) * 3 + 2]; };
+  // PLAN length, not slope length — REQ-088 says stations and lengths agree with the feature line's
+  // plan geometry, and grade is rise over the horizontal run (as SURFELEV computes it).
+  const auto planLen = [&](int a, int b) { return std::hypot(px(b) - px(a), py(b) - py(a)); };
+
+  const double kNaN = std::numeric_limits<double>::quiet_NaN();
+  double station = 0.0;
+  for (int i = 0; i < n; ++i) {
+    // A closed line's last point continues to the first, and its first point is preceded by the
+    // last; an open line's ends simply have no such segment.
+    const int next = (i + 1 < n) ? i + 1 : (closed ? 0 : -1);
+    const int prev = (i > 0) ? i - 1 : (closed ? n - 1 : -1);
+
+    FeatureLineElevRow r;
+    r.vertexIndex = i;
+    r.isElevationPoint = static_cast<size_t>(v0 + i) < st.featureLineElevPt.size() &&
+                         st.featureLineElevPt[static_cast<size_t>(v0 + i)] != 0;
+    r.station = station;
+    r.elevation = pz(i);
+    r.lengthAhead = next >= 0 ? planLen(i, next) : 0.0;
+    r.gradeAheadPct = (next >= 0 && r.lengthAhead > kFeatureLinePlanEps)
+                          ? (static_cast<double>(pz(next)) - pz(i)) / r.lengthAhead * 100.0
+                          : kNaN;
+    const double lenBack = prev >= 0 ? planLen(prev, i) : 0.0;
+    r.gradeBackPct = (prev >= 0 && lenBack > kFeatureLinePlanEps)
+                         ? (static_cast<double>(pz(i)) - pz(prev)) / lenBack * 100.0
+                         : kNaN;
+    out->push_back(r);
+    station += r.lengthAhead;
+  }
+  return true;
+}
+
+namespace {
+
+/// Writable Z of point \p i of feature line \p fi. Callers have already validated the range.
+float& FeatureLineZ(AppCommandState& st, int v0, int i) {
+  return st.featureLineVerts[static_cast<size_t>(v0 + i) * 3 + 2];
+}
+
+/// Everything every elevation edit has to do around the mutation itself, in one place: validate the
+/// feature line and the point index, snapshot for undo, then bump the revision.
+///
+/// The bump is what makes REQ-088's last acceptance condition — "the surface rebuilds with no user
+/// action" — true without a line of new surface code: TickSurfaceRebuilds' dirty check is exactly
+/// "cadGpuRevision moved", so a feature line used as a breakline (REQ-069) re-triangulates on the
+/// next frame. Doing it in one place is also what makes "undoable in one step" uniform across all
+/// six edits rather than six chances to forget the snapshot.
+///
+/// **\p fn must call `commit()` immediately before its first mutation and not before.** The snapshot
+/// is deferred this way because several of these edits can only discover they must refuse after
+/// computing the table — and PushUndoSnapshot CLEARS THE REDO STACK. Pushing eagerly and popping on
+/// refusal would therefore destroy the user's redo history as the price of a rejected keystroke,
+/// which is a worse bug than the one it tidies.
+template <class Fn>
+bool EditFeatureLineElevations(AppCommandState& st, int flNumber, int pointNumber, bool needPoint,
+                               const char* undoLabel, std::vector<std::string>& log, Fn&& fn) {
+  const int fi = flNumber - 1;  // commands are 1-based; the store is 0-based
+  int v0 = 0, v1 = 0;
+  if (!FeatureLineRange(st, fi, &v0, &v1)) {
+    log.push_back("FLELEV — no feature line " + std::to_string(flNumber) + ".");
+    return false;
+  }
+  const int n = v1 - v0;
+  if (needPoint && (pointNumber < 1 || pointNumber > n)) {
+    log.push_back("FLELEV — feature line " + std::to_string(flNumber) + " has " + std::to_string(n) +
+                  " points; there is no point " + std::to_string(pointNumber) + ".");
+    return false;
+  }
+  bool pushed = false;
+  const auto commit = [&] {
+    if (!pushed) {
+      PushUndoSnapshot(st, undoLabel);
+      pushed = true;
+    }
+  };
+  if (!fn(fi, v0, n, commit))
+    return false;
+  BumpCadGpuCache(st);
+  return true;
+}
+
+} // namespace
+
+/// REQ-088: set one point's elevation outright.
+bool SetFeatureLinePointElevation(AppCommandState& st, int flNumber, int pointNumber, float elevation,
+                                  std::vector<std::string>& log) {
+  return EditFeatureLineElevations(
+      st, flNumber, pointNumber, true, "Feature line elevation", log,
+      [&](int /*fi*/, int v0, int /*n*/, const auto& commit) {
+        commit();
+        FeatureLineZ(st, v0, pointNumber - 1) = elevation;
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "FLELEV — feature line %d point %d elevation %.3f.",
+                      flNumber, pointNumber, static_cast<double>(elevation));
+        log.push_back(buf);
+        return true;
+      });
+}
+
+/// REQ-088: set the grade of the segment AHEAD of \p pointNumber, which moves the NEXT point.
+///
+/// ASSUMPTION-1: a grade edit holds the earlier point and moves the later one. The Acceptance pins
+/// this half — "typing a grade ahead moves the next point's elevation and leaves the current one
+/// alone" — and GRADEBACK below is the same rule seen from the other end.
+bool SetFeatureLineGradeAhead(AppCommandState& st, int flNumber, int pointNumber, double gradePct,
+                              std::vector<std::string>& log) {
+  return EditFeatureLineElevations(
+      st, flNumber, pointNumber, true, "Feature line grade ahead", log,
+      [&](int fi, int v0, int n, const auto& commit) {
+        std::vector<FeatureLineElevRow> rows;
+        if (!BuildFeatureLineElevTable(st, fi, &rows))
+          return false;
+        const int i = pointNumber - 1;
+        const bool closed = static_cast<size_t>(fi) < st.featureLineClosed.size() &&
+                            st.featureLineClosed[static_cast<size_t>(fi)] != 0;
+        const int next = (i + 1 < n) ? i + 1 : (closed ? 0 : -1);
+        if (next < 0) {
+          log.push_back("FLELEV — point " + std::to_string(pointNumber) +
+                        " is the last point of an open feature line; it has no grade ahead.");
+          return false;
+        }
+        if (rows[static_cast<size_t>(i)].lengthAhead <= kFeatureLinePlanEps) {
+          log.push_back("FLELEV — the segment ahead of point " + std::to_string(pointNumber) +
+                        " has no plan length, so a grade cannot set an elevation across it.");
+          return false;
+        }
+        commit();
+        FeatureLineZ(st, v0, next) =
+            static_cast<float>(static_cast<double>(FeatureLineZ(st, v0, i)) +
+                               gradePct / 100.0 * rows[static_cast<size_t>(i)].lengthAhead);
+        char buf[200];
+        std::snprintf(buf, sizeof(buf),
+                      "FLELEV — feature line %d grade ahead of point %d = %.2f%%; point %d is now %.3f.",
+                      flNumber, pointNumber, gradePct, next + 1,
+                      static_cast<double>(FeatureLineZ(st, v0, next)));
+        log.push_back(buf);
+        return true;
+      });
+}
+
+/// REQ-088: set the grade of the segment BEHIND \p pointNumber, which moves THIS point and holds the
+/// previous one — ASSUMPTION-1, and what "updates the downstream elevations" means read directionally.
+bool SetFeatureLineGradeBack(AppCommandState& st, int flNumber, int pointNumber, double gradePct,
+                             std::vector<std::string>& log) {
+  return EditFeatureLineElevations(
+      st, flNumber, pointNumber, true, "Feature line grade back", log,
+      [&](int fi, int v0, int n, const auto& commit) {
+        std::vector<FeatureLineElevRow> rows;
+        if (!BuildFeatureLineElevTable(st, fi, &rows))
+          return false;
+        const int i = pointNumber - 1;
+        const bool closed = static_cast<size_t>(fi) < st.featureLineClosed.size() &&
+                            st.featureLineClosed[static_cast<size_t>(fi)] != 0;
+        const int prev = (i > 0) ? i - 1 : (closed ? n - 1 : -1);
+        if (prev < 0) {
+          log.push_back("FLELEV — point " + std::to_string(pointNumber) +
+                        " is the first point of an open feature line; it has no grade back.");
+          return false;
+        }
+        const double lenBack = rows[static_cast<size_t>(prev)].lengthAhead;
+        if (lenBack <= kFeatureLinePlanEps) {
+          log.push_back("FLELEV — the segment behind point " + std::to_string(pointNumber) +
+                        " has no plan length, so a grade cannot set an elevation across it.");
+          return false;
+        }
+        commit();
+        FeatureLineZ(st, v0, i) = static_cast<float>(
+            static_cast<double>(FeatureLineZ(st, v0, prev)) + gradePct / 100.0 * lenBack);
+        char buf[200];
+        std::snprintf(buf, sizeof(buf),
+                      "FLELEV — feature line %d grade back of point %d = %.2f%%; point %d is now %.3f.",
+                      flNumber, pointNumber, gradePct, pointNumber,
+                      static_cast<double>(FeatureLineZ(st, v0, i)));
+        log.push_back(buf);
+        return true;
+      });
+}
+
+/// REQ-088: "Points may be raised or lowered as a set by a delta." A negative delta lowers.
+bool RaiseFeatureLineElevations(AppCommandState& st, int flNumber, float delta,
+                                std::vector<std::string>& log) {
+  return EditFeatureLineElevations(
+      st, flNumber, 0, false, "Feature line raise/lower", log, [&](int /*fi*/, int v0, int n, const auto& commit) {
+        commit();
+        for (int i = 0; i < n; ++i)
+          FeatureLineZ(st, v0, i) += delta;
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "FLELEV — feature line %d: all %d point(s) %s %.3f.",
+                      flNumber, n, delta < 0.f ? "lowered by" : "raised by",
+                      std::fabs(static_cast<double>(delta)));
+        log.push_back(buf);
+        return true;
+      });
+}
+
+/// REQ-088: insert an elevation point at plan station \p station.
+///
+/// The plan position is INTERPOLATED along the segment the station falls in, so the new vertex lies
+/// exactly on the line by construction — which is why ADR-035 (b)'s drift risk does not arise here.
+/// It carries the elevation-point flag, so it is not a PI: it changes the surface without changing
+/// the plan shape, which is REQ-088's fourth acceptance condition.
+bool InsertFeatureLineElevationPoint(AppCommandState& st, int flNumber, double station, float elevation,
+                                     std::vector<std::string>& log) {
+  return EditFeatureLineElevations(
+      st, flNumber, 0, false, "Insert elevation point", log, [&](int fi, int v0, int n, const auto& commit) {
+        std::vector<FeatureLineElevRow> rows;
+        if (!BuildFeatureLineElevTable(st, fi, &rows))
+          return false;
+        if (station <= kFeatureLinePlanEps) {
+          log.push_back("FLELEV — station must be past the start of the feature line.");
+          return false;
+        }
+        // Find the segment holding the station. The last row's lengthAhead is 0 on an open line, so
+        // a station past the end matches nothing and is reported rather than clamped.
+        int seg = -1;
+        double along = 0.0;
+        for (int i = 0; i + 1 < n; ++i) {
+          const double s0 = rows[static_cast<size_t>(i)].station;
+          const double len = rows[static_cast<size_t>(i)].lengthAhead;
+          if (station < s0 + len - kFeatureLinePlanEps) {
+            seg = i;
+            along = station - s0;
+            break;
+          }
+        }
+        if (seg < 0 || along <= kFeatureLinePlanEps) {
+          const double total = rows.back().station;
+          char buf[200];
+          std::snprintf(buf, sizeof(buf),
+                        "FLELEV — station %.3f is not inside a segment (the feature line runs 0.000 "
+                        "to %.3f, and a station AT an existing point would add nothing).",
+                        station, total);
+          log.push_back(buf);
+          return false;
+        }
+
+        const size_t a = static_cast<size_t>(v0 + seg) * 3;
+        const size_t b = static_cast<size_t>(v0 + seg + 1) * 3;
+        const double t = along / rows[static_cast<size_t>(seg)].lengthAhead;
+        const float nx = static_cast<float>(st.featureLineVerts[a] +
+                                            t * (st.featureLineVerts[b] - st.featureLineVerts[a]));
+        const float ny = static_cast<float>(st.featureLineVerts[a + 1] +
+                                            t * (st.featureLineVerts[b + 1] - st.featureLineVerts[a + 1]));
+
+        // Insert AFTER point `seg`, i.e. at vertex slot v0+seg+1. The three arrays are cut on
+        // different strides — verts by 3, flags by 1 — which EraseFeatureLineByIndex already showed
+        // is silent when it goes wrong, so both are done here together.
+        const int at = v0 + seg + 1;
+        commit();
+        const float v[3] = {nx, ny, elevation};
+        st.featureLineVerts.insert(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(at) * 3,
+                                   v, v + 3);
+        if (st.featureLineElevPt.size() < static_cast<size_t>(at))
+          st.featureLineElevPt.resize(static_cast<size_t>(at), 0);
+        st.featureLineElevPt.insert(st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(at),
+                                    static_cast<uint8_t>(1));
+        // Every feature line after this one starts a vertex later.
+        for (size_t k = static_cast<size_t>(fi) + 1; k < st.featureLineOffsets.size(); ++k)
+          st.featureLineOffsets[k] += 1;
+
+        char buf[200];
+        std::snprintf(buf, sizeof(buf),
+                      "FLELEV — feature line %d: elevation point added at station %.3f, elevation "
+                      "%.3f (now point %d of %d).",
+                      flNumber, station, static_cast<double>(elevation), seg + 2, n + 1);
+        log.push_back(buf);
+        return true;
+      });
+}
+
+/// REQ-088: delete an elevation point. Refuses a PI — removing one is geometry editing, which is
+/// REQ-087's "insert and delete a PI" and is not built. Refusing out loud beats silently deleting
+/// a vertex the user thought was only carrying an elevation.
+bool DeleteFeatureLineElevationPoint(AppCommandState& st, int flNumber, int pointNumber,
+                                     std::vector<std::string>& log) {
+  return EditFeatureLineElevations(
+      st, flNumber, pointNumber, true, "Delete elevation point", log,
+      [&](int fi, int v0, int /*n*/, const auto& commit) {
+        const int at = v0 + pointNumber - 1;
+        const bool isElevPt = static_cast<size_t>(at) < st.featureLineElevPt.size() &&
+                              st.featureLineElevPt[static_cast<size_t>(at)] != 0;
+        if (!isElevPt) {
+          log.push_back("FLELEV — point " + std::to_string(pointNumber) +
+                        " is a PI, not an elevation point. Deleting a PI changes the plan shape and "
+                        "is not an elevation edit.");
+          return false;
+        }
+        commit();
+        st.featureLineVerts.erase(
+            st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(at) * 3,
+            st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(at + 1) * 3);
+        st.featureLineElevPt.erase(st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(at));
+        for (size_t k = static_cast<size_t>(fi) + 1; k < st.featureLineOffsets.size(); ++k)
+          st.featureLineOffsets[k] -= 1;
+        log.push_back("FLELEV — feature line " + std::to_string(flNumber) + ": elevation point " +
+                      std::to_string(pointNumber) + " deleted.");
+        return true;
+      });
+}
+
 void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log) {
   // REQ-085. Same draft as POLYLINE — the store is already stride-3 XYZ — with per-vertex elevation
   // entry switched on. ResetAllCadDraftTools inside StartPolylineCommand clears the flag, so it is
@@ -8953,9 +9326,10 @@ std::uint64_t EntityIdOfLineOrPolylinePick(const AppCommandState& st, const Sele
     return (i >= 0 && static_cast<size_t>(i) < v.size()) ? v[static_cast<size_t>(i)].id : 0;
   };
   switch (hit.type) {
-  case SelectedEntity::Type::LineSeg:  return idOf(st.userLineAttrs, hit.index);
-  case SelectedEntity::Type::Polyline: return idOf(st.userPolylineAttrs, hit.index);
-  default:                             return 0;
+  case SelectedEntity::Type::LineSeg:     return idOf(st.userLineAttrs, hit.index);
+  case SelectedEntity::Type::Polyline:    return idOf(st.userPolylineAttrs, hit.index);
+  case SelectedEntity::Type::FeatureLine: return idOf(st.featureLineAttrs, hit.index);  // REQ-087
+  default:                                return 0;
   }
 }
 } // namespace
@@ -9020,19 +9394,27 @@ void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary,
     log.push_back(cmdName + " — nothing under cursor; try again, or ESC to cancel.");
     return;  // stays active — try again, matching OFFSET's WaitSelectEntity miss behaviour
   }
-  if (hit.type != SelectedEntity::Type::LineSeg && hit.type != SelectedEntity::Type::Polyline) {
-    log.push_back(cmdName + " — that is not a line or polyline; try again, or ESC to cancel.");
+  // REQ-087: a feature line is design linework whose whole purpose is to be a breakline, so it is
+  // accepted here alongside lines and polylines.
+  if (hit.type != SelectedEntity::Type::LineSeg && hit.type != SelectedEntity::Type::Polyline &&
+      hit.type != SelectedEntity::Type::FeatureLine) {
+    log.push_back(cmdName + " — that is not a line, polyline, or feature line; try again, or ESC to cancel.");
     return;
   }
-  if (isBoundary && hit.type != SelectedEntity::Type::Polyline) {
-    log.push_back(cmdName + " — a boundary must be a closed polyline, not a line; try again, or ESC to cancel.");
+  if (isBoundary && hit.type == SelectedEntity::Type::LineSeg) {
+    log.push_back(cmdName + " — a boundary must be a closed polyline or feature line, not a line; "
+                            "try again, or ESC to cancel.");
     return;
   }
   if (isBoundary) {
-    const size_t pi = static_cast<size_t>(hit.index);
-    const bool closed = pi < st.userPolylineClosed.size() && st.userPolylineClosed[pi] != 0;
+    const size_t ix = static_cast<size_t>(hit.index);
+    const bool closed = hit.type == SelectedEntity::Type::FeatureLine
+                            ? (ix < st.featureLineClosed.size() && st.featureLineClosed[ix] != 0)
+                            : (ix < st.userPolylineClosed.size() && st.userPolylineClosed[ix] != 0);
     if (!closed) {
-      log.push_back(cmdName + " — that polyline is not closed; try again, or ESC to cancel.");
+      log.push_back(cmdName + " — that " +
+                    (hit.type == SelectedEntity::Type::FeatureLine ? "feature line" : "polyline") +
+                    " is not closed; try again, or ESC to cancel.");
       return;
     }
   }
@@ -13857,6 +14239,106 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           log.push_back(buf);
         }
       }
+      return;
+    }
+    // REQ-088 — the elevation editor's whole command surface. One verb with sub-actions rather than
+    // seven top-level words, following UNDESIGNATE's shape:
+    //
+    //   FLELEV <n>                        list the table
+    //   FLELEV <n> SET        <point> <elev>
+    //   FLELEV <n> GRADEAHEAD <point> <pct>
+    //   FLELEV <n> GRADEBACK  <point> <pct>
+    //   FLELEV <n> RAISE      <delta>     negative lowers
+    //   FLELEV <n> INSERT     <station> <elev>
+    //   FLELEV <n> DELETE     <point>
+    //
+    // REQ-203: stage 2's panel routes its edited cells through exactly these, the way the Surfaces
+    // panel routes through ProcessCommandLineSubmit — so what the tests drive is what the UI drives.
+    if (plotTok == "flelev" || plotTok == "featurelineelev") {
+      std::istringstream& fe = issIdle;  // the verb is already consumed
+      int flNum = 0;
+      if (!(fe >> flNum)) {
+        log.push_back("FLELEV — usage: FLELEV <feature line #> [SET|GRADEAHEAD|GRADEBACK|RAISE|"
+                      "INSERT|DELETE ...]. FLELEV <n> alone lists the table.");
+        return;
+      }
+      std::string sub;
+      if (!(fe >> sub)) {
+        std::vector<FeatureLineElevRow> rows;
+        if (!BuildFeatureLineElevTable(st, flNum - 1, &rows)) {
+          log.push_back("FLELEV — no feature line " + std::to_string(flNum) + ".");
+          return;
+        }
+        const size_t ii = static_cast<size_t>(flNum - 1);
+        const std::string nm = ii < st.featureLineInfo.size() ? st.featureLineInfo[ii].name : std::string();
+        log.push_back("FLELEV — feature line " + std::to_string(flNum) + " \"" + nm + "\": " +
+                      std::to_string(rows.size()) + " points.");
+        log.push_back("   #  type     station    elevation   length ahead   grade back   grade ahead");
+        for (const FeatureLineElevRow& r : rows) {
+          // A dash, not "0.00%", where a segment does not exist — see FeatureLineElevRow. Printing
+          // zero there would state that the ground is level at a place that has no ground.
+          const auto gradeText = [](double pct, char* buf, size_t cap) -> const char* {
+            if (std::isnan(pct))
+              return "-";
+            std::snprintf(buf, cap, "%.2f%%", pct);
+            return buf;
+          };
+          char gbBuf[16], gaBuf[16];
+          const char* gb = gradeText(r.gradeBackPct, gbBuf, sizeof(gbBuf));
+          const char* ga = gradeText(r.gradeAheadPct, gaBuf, sizeof(gaBuf));
+          char buf[256];
+          std::snprintf(buf, sizeof(buf), "  %2d  %-7s  %9.3f  %11.3f  %13.3f  %11s  %12s",
+                        r.vertexIndex + 1, r.isElevationPoint ? "elev pt" : "PI", r.station,
+                        static_cast<double>(r.elevation), r.lengthAhead, gb, ga);
+          log.push_back(buf);
+        }
+        return;
+      }
+      for (char& c : sub)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      if (sub == "set" || sub == "gradeahead" || sub == "gradeback" || sub == "delete") {
+        int pt = 0;
+        if (!(fe >> pt)) {
+          log.push_back("FLELEV — " + sub + " needs a point number.");
+          return;
+        }
+        if (sub == "delete") {
+          DeleteFeatureLineElevationPoint(st, flNum, pt, log);
+          return;
+        }
+        double val = 0.0;
+        if (!(fe >> val)) {
+          log.push_back("FLELEV — " + sub + " needs a " + (sub == "set" ? "elevation." : "grade in percent."));
+          return;
+        }
+        if (sub == "set")
+          SetFeatureLinePointElevation(st, flNum, pt, static_cast<float>(val), log);
+        else if (sub == "gradeahead")
+          SetFeatureLineGradeAhead(st, flNum, pt, val, log);
+        else
+          SetFeatureLineGradeBack(st, flNum, pt, val, log);
+        return;
+      }
+      if (sub == "raise") {
+        double d = 0.0;
+        if (!(fe >> d)) {
+          log.push_back("FLELEV — RAISE needs a delta (negative lowers).");
+          return;
+        }
+        RaiseFeatureLineElevations(st, flNum, static_cast<float>(d), log);
+        return;
+      }
+      if (sub == "insert") {
+        double station = 0.0, elev = 0.0;
+        if (!(fe >> station) || !(fe >> elev)) {
+          log.push_back("FLELEV — INSERT needs a station and an elevation.");
+          return;
+        }
+        InsertFeatureLineElevationPoint(st, flNum, station, static_cast<float>(elev), log);
+        return;
+      }
+      log.push_back("FLELEV — unknown option \"" + sub +
+                    "\". Use SET, GRADEAHEAD, GRADEBACK, RAISE, INSERT, or DELETE.");
       return;
     }
     // Surface definition commands (REQ-068/069). Each reads the WHOLE remainder of the line — names

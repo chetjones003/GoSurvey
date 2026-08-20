@@ -2557,6 +2557,14 @@ requirements is a planning failure, not a sign of rigor.
 - Owner-layer: UI, Domain
 - Status:      proposed
 - Revisions:   2026-08-19 — initial.
+               2026-08-20 — TASK-080 stage 1: the derived table and the six edits, driven by
+               FLELEV. Four of five acceptance conditions verified headlessly; "rebuilds with no
+               user action" is verified up to the frame tick the REQ-203 driver does not have.
+               Also unblocked REQ-087's breakline clause — ResolveDefinitionChain had no
+               FeatureLine branch, so a feature line designated as a breakline resolved as ABSENT
+               and was stripped from the surface definition on the next rebuild. Status stays
+               `proposed`: the Statement says "editable through a TABLE", and stage 2 is what puts
+               one on screen.
 
 ---
 

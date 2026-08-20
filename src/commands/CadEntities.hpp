@@ -281,6 +281,29 @@ struct CadFeatureLineInfo {
   std::string description;
 };
 
+/// One row of a feature line's elevation table (REQ-088).
+///
+/// **Derived, never stored** — ADR-035 (e): "Storing a grade would create a second source of truth
+/// for the same elevation, and the two would disagree the moment geometry moved." Every field below
+/// is recomputed from the vertex chain each time the table is asked for, so moving the line in plan
+/// changes the stations and grades with no explicit invalidation anywhere.
+struct FeatureLineElevRow {
+  int    vertexIndex = 0;             ///< 0-based index within this feature line
+  bool   isElevationPoint = false;    ///< a flagged vertex rather than a PI (ADR-035 (a))
+  double station = 0.0;               ///< cumulative PLAN distance from the first point
+  float  elevation = 0.f;
+  double lengthAhead = 0.0;           ///< plan distance to the next point; 0 at an open line's end
+
+  /// Grade over the segment behind / ahead, as a percentage: rise / plan-run x 100, matching what
+  /// SURFELEV (REQ-074) already reports.
+  ///
+  /// **NaN, not 0, where there is no such segment.** The first point of an open line has no grade
+  /// back at all, and reporting that as "0.00%" would read as "level" — a statement about the
+  /// ground that happens to be false. Callers test with std::isnan and print a dash.
+  double gradeBackPct = 0.0;
+  double gradeAheadPct = 0.0;
+};
+
 /// A point file a surface reads its points from directly (REQ-086) — a LINK, not an import: the file
 /// is re-read on every rebuild and its points never become drawing survey points.
 ///

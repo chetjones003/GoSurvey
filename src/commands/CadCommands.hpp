@@ -2199,6 +2199,33 @@ bool SubmitFeatureLineVertex(AppCommandState& st, float x, float y, bool isElevP
 /// Commit the feature-line draft into the store as one entity. \p closed joins last vertex to first.
 void CommitFeatureLineDraft(AppCommandState& st, bool closed, std::vector<std::string>& log);
 
+// REQ-088 — feature line elevation editing. The table is DERIVED, never stored (ADR-035 (e)); the
+// edits write elevations back into the stride-3 vertex array. `flNumber` and `pointNumber` are
+// 1-based, matching what FEATURELINELIST and FLELEV print.
+
+/// Build feature line \p fi's elevation table: station, elevation, length ahead, grade back/ahead.
+/// False if \p fi is not a feature line with at least two points. Grades are NaN where no such
+/// segment exists — see FeatureLineElevRow.
+bool BuildFeatureLineElevTable(const AppCommandState& st, int fi, std::vector<FeatureLineElevRow>* out);
+
+bool SetFeatureLinePointElevation(AppCommandState& st, int flNumber, int pointNumber, float elevation,
+                                  std::vector<std::string>& log);
+/// Sets the grade of the segment AHEAD, which moves the NEXT point and leaves this one alone.
+bool SetFeatureLineGradeAhead(AppCommandState& st, int flNumber, int pointNumber, double gradePct,
+                              std::vector<std::string>& log);
+/// Sets the grade of the segment BEHIND, which moves THIS point and holds the previous one.
+bool SetFeatureLineGradeBack(AppCommandState& st, int flNumber, int pointNumber, double gradePct,
+                             std::vector<std::string>& log);
+/// Raises (or, with a negative delta, lowers) every point of the feature line as a set.
+bool RaiseFeatureLineElevations(AppCommandState& st, int flNumber, float delta,
+                                std::vector<std::string>& log);
+/// Adds an elevation point at plan \p station, interpolating its position so it lies ON the line.
+bool InsertFeatureLineElevationPoint(AppCommandState& st, int flNumber, double station, float elevation,
+                                     std::vector<std::string>& log);
+/// Removes an elevation point. Refuses a PI — that is geometry editing, not an elevation edit.
+bool DeleteFeatureLineElevationPoint(AppCommandState& st, int flNumber, int pointNumber,
+                                     std::vector<std::string>& log);
+
 /// REQ-085: POLYLINE with per-vertex elevation entry. Shares POLYLINE's draft and `Kind` — the store
 /// is already stride-3 XYZ and the two commands differ only in where a vertex's Z comes from.
 void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log);
