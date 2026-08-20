@@ -223,7 +223,10 @@ ASSUMPTION-3: `github.run_number` is monotonically increasing per workflow, maki
   **DEMONSTRATED 2026-08-20**, six conditions of seven by observation; the seventh (a red `ctest`
   blocking publication) has never had the chance to fire and is recorded that way. See the §9 table.
 - Tests added:            none — see §7
-- Docs updated:           this log
+- Docs updated:           this log, and `spec/requirements.md`'s REQ-202 traceability row — which
+                          still read "planned — observed pipeline behaviour" after this task closed,
+                          and now carries the same per-condition evidence and the same outstanding
+                          condition as §9
 - Technical debt:         (0) ~~The codebase does not compile with MSVC.~~ **CLEARED 2026-08-15.**
                           The skipped region now has its own block scope, so `finish_render` sits
                           outside the scope of everything the jump passes over — legal under
@@ -263,4 +266,15 @@ ASSUMPTION-3: `github.run_number` is monotonically increasing per workflow, maki
                           deviation from REQ-202's "produced by the pipeline, not by hand" (TRACKER,
                           2026-08-17). Removal condition: a pre-publish step that shows the notes
                           for the version being released and requires confirmation.
+                          (5) **The failing-test gate has never fired.** REQ-202's "a failing
+                          `ctest` publishes no release" is the one acceptance condition still
+                          unobserved (§9). No run has failed at Test; run `31910767883` failed at
+                          *Build* and published nothing, which shows the shape of the behaviour but
+                          not the branch the requirement names. Structurally the gate cannot be
+                          bypassed — Test precedes every publish step inside one job — so this is
+                          confirmed by reading, which is exactly what the other six conditions were
+                          until they were observed. Removal condition: one deliberate failing-test
+                          push to a throwaway branch, confirming the job stops before the publish
+                          steps and produces no tag, no release and no manifest. Cheap, and it is
+                          the difference between a gate and a comment.
 - Done:                   2026-08-20
