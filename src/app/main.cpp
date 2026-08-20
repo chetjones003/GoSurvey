@@ -436,6 +436,14 @@ int main()
       orthoEnabled = !orthoEnabled;
     cmd.orthoMode = orthoEnabled;
 
+    // Ctrl+S (BUG-026). The File menu has always ADVERTISED this shortcut, but ImGui's MenuItem
+    // shortcut argument is a label it draws — it installs no binding — so the key did nothing.
+    // Deliberately NOT gated on WantTextInput, unlike Ctrl+Z/C/V below: those have a meaning
+    // inside a text field and must yield to it, whereas Ctrl+S has none. That is the same rule
+    // F3/F8 follow above, and it is what lets a user save without first leaving the command bar.
+    if (ImGui::GetIO().KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_S, false))
+      SaveActiveDocument(cmd, cmdLog);
+
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
     {
       if (cmd.copySurveyDupModalOpen)

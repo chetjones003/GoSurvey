@@ -144,6 +144,56 @@
 
 ## BUGS
 
+### [BUG-026] Ctrl+S is advertised in the File menu but bound to nothing — FIXED 2026-08-20
+    - File ▸ Save draws the shortcut "Ctrl+S". Pressing Ctrl+S does **nothing at all**: no save, no
+      dialog, no log line, and the file's mtime does not move.
+    - Cause: `ImGui::MenuItem("Save", "Ctrl+S")` — ImGui's second argument is a **label it draws**,
+      right-aligned in the menu. It installs no binding. The application must handle the key itself,
+      and nothing did. `main.cpp` handles F3/F8 explicitly and has a `ctrlHeld && !WantTextInput`
+      block for Ctrl+Z/Y/C/V; Ctrl+S was never added to either. The shortcut has never worked in any
+      build — it has only ever been *drawn*.
+    - Found 2026-08-20 while learning the LINE command in the GUI, by using Ctrl+S to read committed
+      geometry back out of a `.gs`. Pre-existing in `master` @ `6024e0b`, not caused by anything under
+      test.
+    - Fix, in two parts: the File ▸ Save body is extracted to `SaveActiveDocument` (UI layer) and the
+      menu item now calls it; `main.cpp` binds Ctrl+S to the same function. Extracting rather than
+      duplicating is the point — the adopt-the-chosen-path step (which also renames the drawing tab)
+      lived only in the menu, so a hand-written key handler would have given Ctrl+S a subtly
+      *different* save than the menu's, which is how this class of bug survives.
+    - Deliberately **not** gated on `WantTextInput`, unlike Ctrl+Z/C/V beside it: those have a meaning
+      inside a text field and must yield to it, Ctrl+S has none. Same rule REQ-047 already applies to
+      F3/F8, and it is what lets a user save without first leaving the command bar.
+    - Verified in the running application: Ctrl+S with no path opens Save As (pressed *with the
+      command box focused*); completing it creates the file and renames the tab; a further edit plus
+      Ctrl+S re-saves silently with both lines present in the `.gs`; File ▸ Save still works. Suite
+      436/436.
+    - **Authority is not airtight and was not pretended to be:** no `accepted` REQ says this shortcut
+      exists. Fixed under REQ-201 (an advertised control that does nothing is a silent failure), with
+      the alternative — a requirement naming the application's accelerators, likely an amendment to
+      REQ-040 — written up in TASK-074 §1 for a spec decision. Ctrl+Z/Y/C/V and F3/F8 have the same
+      gap today.
+    - Follow-up, not done: keyboard accelerators have no automated coverage at all. They live in the
+      ImGui frame loop, which no harness drives, so the same class of bug can recur silently for any
+      shortcut. Closing that needs a way to inject key state into the frame loop — an architectural
+      change, not a bug fix.
+
+### [BUG-027] A `.gs` opened by file association leaves the drawing "never saved" — OPEN
+    - Launching `GoSurvey.exe "some\drawing.gs"` — which is exactly what the installer registers for
+      the `.gs` association — loads the drawing correctly, but the **first Save opens a Save As
+      dialog**, as though the file had never been on disk. The obvious answer is the file the user
+      just opened, and choosing it raises an overwrite confirmation on their own drawing.
+    - Cause: `main.cpp` calls `LoadGoSurveyFile` for the startup argument but never sets
+      `cmd.activeDocFilePath`. The File ▸ Open path *does* set it (`CadUi.cpp`). `LoadGoSurveyFile`
+      assigns `cmd.activeDocFilePath = doc.filePath`, but `filePath` is **not serialized into the
+      `.gs`** — there is no such key in a saved file — so it comes back empty every time.
+    - Found 2026-08-20 alongside BUG-026, by the same route. Same *shape* as BUG-012, documented in
+      that same function: the argument used to be dropped entirely, and is now honoured for loading
+      but not for identity.
+    - Not fixed here. BUG-026 was the requested scope; this one is recorded so it is not lost, and it
+      is worth a moment's thought first — whether the fix is `main.cpp` adopting the startup path, or
+      `LoadGoSurveyFile` adopting its own `pathUtf8` argument for every caller, is a small ownership
+      decision rather than an obvious one-liner.
+
 ### [BUG-023] VIEWPOINTS → Load crashed the application (access violation) — FIXED 2026-08-16
     - Found 2026-08-16 while verifying the Viewpoints grid restyle, by clicking Load on a points
       file. **The application terminates with `0xC0000005`** and loses any unsaved drawing.
