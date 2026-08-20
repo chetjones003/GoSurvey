@@ -297,6 +297,31 @@ int main()
       // to the bug this fixes.
       if (!openedFromCommandLine)
         cmdLog.push_back("Could not open " + startupFile + "; starting from the usual template.");
+      else
+      {
+        // BUG-027: loading a drawing is not the same as OWNING it. Until this ran, a .gs opened by
+        // double-click was loaded but anonymous - the tab still read "Drawing 1", and the first
+        // Save (menu or Ctrl+S) opened Save As and then asked permission to overwrite the user's
+        // own drawing. File > Open adopts its path for exactly this reason; the startup argument
+        // never did.
+        //
+        // Adopted HERE and not inside LoadGoSurveyFile: the startup TEMPLATE loads through that
+        // same function, and a blank drawing that adopted default-template.gs as its save target
+        // would overwrite the template on the next Ctrl+S. Only the caller knows whether the file
+        // it just read is the document or the mould for one.
+        std::error_code             absEc;
+        const std::filesystem::path argPath(startupFile);
+        // Absolute, because a relative argument would otherwise be re-resolved later against
+        // whatever the working directory happens to be by then.
+        const std::filesystem::path absPath = std::filesystem::absolute(argPath, absEc);
+        cmd.activeDocFilePath = absEc ? startupFile : absPath.u8string();
+        // u8string, not string: the tab label is drawn by ImGui, which reads UTF-8, and this path
+        // may contain characters the process ANSI codepage cannot spell.
+        const std::string tabName = argPath.stem().u8string();
+        if (!tabName.empty() && cmd.activeDrawingIdx >= 0 &&
+            cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
+          cmd.drawingTabs[cmd.activeDrawingIdx].name = tabName;
+      }
     }
   }
   if (!openedFromCommandLine)
@@ -435,6 +460,24 @@ int main()
     if (ImGui::IsKeyPressed(ImGuiKey_F8, false))
       orthoEnabled = !orthoEnabled;
     cmd.orthoMode = orthoEnabled;
+
+    // Ctrl+S (BUG-026). The File menu has always ADVERTISED this shortcut, but ImGui's MenuItem
+    // shortcut argument is a label it draws — it installs no binding — so the key did nothing.
+    // Deliberately NOT gated on WantTextInput, unlike Ctrl+Z/C/V below: those have a meaning
+    // inside a text field and must yield to it, whereas Ctrl+S has none. That is the same rule
+    // F3/F8 follow above, and it is what lets a user save without first leaving the command bar.
+    //
+    // Ctrl+S ONLY: Shift and Alt are excluded because this handler does not own those chords.
+    // Ctrl+Shift+S means "Save As" to most of the muscle memory that will meet this application,
+    // and answering it with a silent overwrite of the current file is the wrong answer to give
+    // unasked. AltGr is Ctrl+Alt on many keyboard layouts, so letting Alt through would turn
+    // typing an accented character in the command bar into a save.
+    {
+      const ImGuiIO &ioSave = ImGui::GetIO();
+      if (ioSave.KeyCtrl && !ioSave.KeyShift && !ioSave.KeyAlt &&
+          ImGui::IsKeyPressed(ImGuiKey_S, false))
+        SaveActiveDocument(cmd, cmdLog);
+    }
 
     if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
     {
