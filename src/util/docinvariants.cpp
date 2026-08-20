@@ -317,6 +317,10 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
       case T::PdfUnderlay:  return st.pdfAttachments.size();
       case T::FilledRegion: return st.cadFilledRegions.size();
       case T::Mesh:         return st.cadMeshes.size();
+      // REQ-087. Without this case the function returned 0 for a selected feature line, so the
+      // check fired on every valid selection of one — the exact inverse of a missed case, and
+      // caught by `-Wswitch` rather than by the MSVC build, which does not warn here.
+      case T::FeatureLine:  return st.featureLineOffsets.empty() ? 0 : st.featureLineOffsets.size() - 1;
       }
       return 0;
     };

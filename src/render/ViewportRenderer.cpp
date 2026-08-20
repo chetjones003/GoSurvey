@@ -247,12 +247,15 @@ float LineweightMmToDevicePx(float mm) {
 /// it is tessellated against a per-vertex Z array rather than one flat chain elevation. Passing a
 /// single z here drew a polyline up a slope — or one imported from DXF with per-vertex group-38
 /// elevations — as if it were level, in every view (REQ-058).
-void AppendPolylineEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput& eg, float defR,
-                           float defG, float defB, float dashPatScale, double viewAnchorX, double viewAnchorY) {
-  const auto* V = eg.polylineVerts;
-  const auto* O = eg.polylineOffsets;
-  const auto* Cl = eg.polylineClosed;
-  const auto* At = eg.polylineAttrs;
+/// Takes the four arrays explicitly rather than reading `eg.polyline*`, so the identical code draws
+/// FEATURE LINES too (REQ-087): their store has the same CSR shape, and a feature line is drawn like
+/// any other 3D chain. The elevation-point flag is deliberately not consulted — an elevation point
+/// lies on the line, so including it changes nothing about the plan shape (ADR-035 (a)).
+void AppendChainEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput& eg,
+                        const std::vector<float>* V, const std::vector<int>* O,
+                        const std::vector<uint8_t>* Cl, const std::vector<EntityAttributes>* At,
+                        float defR, float defG, float defB, float dashPatScale, double viewAnchorX,
+                        double viewAnchorY) {
   if (!V || !O || O->size() < 2)
     return;
   const int np = static_cast<int>(O->size()) - 1;
@@ -1536,8 +1539,14 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
           const CadLayerRow* lr0 =
               LookupLayerRowCi(drawingLayers, attr0.layer.empty() ? std::string("0") : attr0.layer);
           maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr0, lr0)));
-          AppendPolylineEdgesVc(cpuVcLines_, *extended, kLineDefaultR, kLineDefaultG, kLineDefaultB,
-                                dashPatScale, viewAnchorX, viewAnchorY);
+          AppendChainEdgesVc(cpuVcLines_, *extended, extended->polylineVerts, extended->polylineOffsets,
+                             extended->polylineClosed, extended->polylineAttrs, kLineDefaultR,
+                             kLineDefaultG, kLineDefaultB, dashPatScale, viewAnchorX, viewAnchorY);
+          // REQ-087: feature lines, through the same tessellation — same CSR shape, same per-vertex Z.
+          AppendChainEdgesVc(cpuVcLines_, *extended, extended->featureLineVerts,
+                             extended->featureLineOffsets, extended->featureLineClosed,
+                             extended->featureLineAttrs, kLineDefaultR, kLineDefaultG, kLineDefaultB,
+                             dashPatScale, viewAnchorX, viewAnchorY);
           lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
         }
         if (lineVertTotal > lineBatchStart && lineBatchPx >= 0.f)

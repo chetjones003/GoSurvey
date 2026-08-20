@@ -3664,17 +3664,20 @@ void EllipseRoughBounds(const CadEllipse& e, float* outMnX, float* outMxX, float
 ///        (world XY tested against a world rect). When the camera is orbited the caller supplies a
 ///        projection so vertices are tested in SCREEN space, where the drag rectangle actually is
 ///        (REQ-058). Per-vertex projection keeps the polyline test exact rather than conservative.
-bool PolylineHitsRect(const AppCommandState& st, int pi, float mnX, float mxX, float mnY, float mxY, bool windowMode,
-                      const std::function<void(float, float, float, float*, float*)>* toTest) {
-  if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+/// Takes the three arrays explicitly so FEATURE LINES box-select through the identical test
+/// (REQ-087): same CSR shape, so a separate copy could only drift.
+bool ChainHitsRect(const std::vector<int>& OFF, const std::vector<float>& V,
+                   const std::vector<uint8_t>& CLOSED, int pi, float mnX, float mxX, float mnY,
+                   float mxY, bool windowMode,
+                   const std::function<void(float, float, float, float*, float*)>* toTest) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= OFF.size())
     return false;
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const int v0 = OFF[static_cast<size_t>(pi)];
+  const int v1 = OFF[static_cast<size_t>(pi + 1)];
   if (v0 >= v1)
     return false;
-  const auto& V = st.userPolylineVerts;
   const bool closed =
-      static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+      static_cast<size_t>(pi) < CLOSED.size() && CLOSED[static_cast<size_t>(pi)];
   const int nVert = v1 - v0;
   // Vertex in test space: identity in plan view, projected when the caller supplies a mapping.
   auto vert = [&](int vi, float* ox, float* oy) {
@@ -3889,11 +3892,28 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
   const int nPoly =
       static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < nPoly; ++pi) {
-    if (PolylineHitsRect(st, pi, mnX, mxX, mnY, mxY, windowMode, proj ? &projFn : nullptr)) {
+    if (ChainHitsRect(st.userPolylineOffsets, st.userPolylineVerts, st.userPolylineClosed, pi, mnX, mxX,
+                      mnY, mxY, windowMode, proj ? &projFn : nullptr)) {
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Polyline;
       e.index = pi;
       hits.push_back(e);
+    }
+  }
+  // Feature lines (REQ-087) — the same test, through the same `hits` list, so a box drag treats them
+  // exactly as it treats polylines. ADR-034 names this and PickClosestCadEntity as the two selection
+  // funnels; both now know about feature lines.
+  {
+    const int nFl =
+        static_cast<int>(st.featureLineOffsets.size() > 0 ? st.featureLineOffsets.size() - 1 : 0);
+    for (int fi = 0; fi < nFl; ++fi) {
+      if (ChainHitsRect(st.featureLineOffsets, st.featureLineVerts, st.featureLineClosed, fi, mnX, mxX,
+                        mnY, mxY, windowMode, proj ? &projFn : nullptr)) {
+        SelectedEntity e{};
+        e.type = SelectedEntity::Type::FeatureLine;
+        e.index = fi;
+        hits.push_back(e);
+      }
     }
   }
   // Filled regions (REQ-042): hit-test the outer-loop bounding box, matching annotations/arcs/PDF — window
@@ -7671,6 +7691,24 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     }
   }
 
+  // Feature lines (REQ-087). This is the SMALL-drawing path — under 16 entities — and a drawing
+  // holding only feature lines lands here, so missing it would mean ZOOM EXTENTS reporting
+  // "nothing to frame" on a drawing that plainly has content.
+  {
+    const auto& FV = st.featureLineVerts;
+    const auto& FO = st.featureLineOffsets;
+    for (size_t fi = 0; fi + 1 < FO.size(); ++fi) {
+      const int v0 = FO[fi];
+      const int v1 = FO[fi + 1];
+      for (int vi = v0; vi < v1; ++vi) {
+        if (static_cast<size_t>(vi * 3 + 1) >= FV.size())
+          break;
+        consider(static_cast<double>(FV[static_cast<size_t>(vi * 3 + 0)]),
+                 static_cast<double>(FV[static_cast<size_t>(vi * 3 + 1)]));
+      }
+    }
+  }
+
   for (const CadFilledRegion& fr : st.cadFilledRegions)
     for (size_t i = 0; i + 2 < fr.vertsXyz.size(); i += 3)
       consider(static_cast<double>(fr.vertsXyz[i]), static_cast<double>(fr.vertsXyz[i + 1]));
@@ -7824,6 +7862,42 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
       for (int vi = v0; vi < v1; ++vi) {
         const double vx = static_cast<double>(PV[static_cast<size_t>(vi * 3 + 0)]);
         const double vy = static_cast<double>(PV[static_cast<size_t>(vi * 3 + 1)]);
+        if (!any) {
+          b.mnX = b.mxX = vx;
+          b.mnY = b.mxY = vy;
+          any = true;
+        } else {
+          b.mnX = std::min(b.mnX, vx);
+          b.mxX = std::max(b.mxX, vx);
+          b.mnY = std::min(b.mnY, vy);
+          b.mxY = std::max(b.mxY, vy);
+        }
+      }
+      if (!any)
+        continue;
+      b.cx = 0.5 * (b.mnX + b.mxX);
+      b.cy = 0.5 * (b.mnY + b.mxY);
+      out.push_back(b);
+    }
+  }
+
+  // Feature lines (REQ-087) — same CSR walk. Without this, ZOOM EXTENTS frames a drawing as though
+  // its feature lines were not there, which is the quiet kind of miss ADR-035 (g) warns about.
+  const auto& FO = st.featureLineOffsets;
+  const auto& FV = st.featureLineVerts;
+  if (FO.size() >= 2) {
+    for (size_t fi = 0; fi + 1 < FO.size(); ++fi) {
+      const int v0 = FO[fi];
+      const int v1 = FO[fi + 1];
+      if (v1 <= v0)
+        continue;
+      EntityBox b{};
+      bool any = false;
+      for (int vi = v0; vi < v1; ++vi) {
+        if (static_cast<size_t>(vi * 3 + 1) >= FV.size())
+          break;
+        const double vx = static_cast<double>(FV[static_cast<size_t>(vi * 3 + 0)]);
+        const double vy = static_cast<double>(FV[static_cast<size_t>(vi * 3 + 1)]);
         if (!any) {
           b.mnX = b.mxX = vx;
           b.mnY = b.mxY = vy;
@@ -9434,6 +9508,49 @@ static void ErasePolylineByIndex(AppCommandState& st, int pi) {
     st.userPolylineAttrs.erase(st.userPolylineAttrs.begin() + static_cast<std::ptrdiff_t>(pi));
 }
 
+/// REQ-087. The polyline eraser's twin, with one extra array: the per-VERTEX elevation-point flags
+/// are cut over the same [3a, 3b) span the vertices are — in flags, that is [a, b), not the triplet
+/// range. Getting that wrong would leave the flag array the right length overall while shifting every
+/// flag after the erased line by a vertex or three, which is silent (ADR-035 (a)).
+static void EraseFeatureLineByIndex(AppCommandState& st, int fi) {
+  if (fi < 0 || static_cast<size_t>(fi + 1) >= st.featureLineOffsets.size())
+    return;
+  const int nfl = static_cast<int>(st.featureLineOffsets.size()) - 1;
+  std::vector<int> nvPer(static_cast<size_t>(nfl));
+  for (int i = 0; i < nfl; ++i)
+    nvPer[static_cast<size_t>(i)] =
+        st.featureLineOffsets[static_cast<size_t>(i + 1)] - st.featureLineOffsets[static_cast<size_t>(i)];
+  const int a = st.featureLineOffsets[static_cast<size_t>(fi)];
+  const int b = st.featureLineOffsets[static_cast<size_t>(fi + 1)];
+  if (static_cast<size_t>(3 * b) <= st.featureLineVerts.size())
+    st.featureLineVerts.erase(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(3 * a),
+                              st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(3 * b));
+  if (static_cast<size_t>(b) <= st.featureLineElevPt.size())
+    st.featureLineElevPt.erase(st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(a),
+                               st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(b));
+  std::vector<int> newOff;
+  newOff.reserve(static_cast<size_t>(std::max(0, nfl - 1) + 1));
+  newOff.push_back(0);
+  int run = 0;
+  for (int i = 0; i < nfl; ++i) {
+    if (i == fi)
+      continue;
+    run += nvPer[static_cast<size_t>(i)];
+    newOff.push_back(run);
+  }
+  // Same rule as polylines, and for the same reason (issue #60): zero feature lines is spelled as an
+  // EMPTY table, never `{0}`. The invariant added for this store checks it too.
+  if (newOff.size() == 1)
+    newOff.clear();
+  st.featureLineOffsets = std::move(newOff);
+  if (static_cast<size_t>(fi) < st.featureLineClosed.size())
+    st.featureLineClosed.erase(st.featureLineClosed.begin() + static_cast<std::ptrdiff_t>(fi));
+  if (static_cast<size_t>(fi) < st.featureLineInfo.size())
+    st.featureLineInfo.erase(st.featureLineInfo.begin() + static_cast<std::ptrdiff_t>(fi));
+  if (static_cast<size_t>(fi) < st.featureLineAttrs.size())
+    st.featureLineAttrs.erase(st.featureLineAttrs.begin() + static_cast<std::ptrdiff_t>(fi));
+}
+
 void EraseCadAnnotationAtIndex(AppCommandState& st, size_t annIndex) {
   if (annIndex >= st.cadAnnotations.size())
     return;
@@ -9547,12 +9664,14 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::set<int> arcIx;
   std::set<int> ellIx;
   std::set<int> polyIx;
+  std::set<int> flIx;  // REQ-087
   const size_t nLines = st.userLinesFlat.size() / 6;
   const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
   const size_t nAnn = st.cadAnnotations.size();
   const size_t nArc = st.userArcs.size();
   const size_t nEll = st.userEllipses.size();
   const size_t nPoly = st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0;
+  const size_t nFl = st.featureLineOffsets.size() > 0 ? st.featureLineOffsets.size() - 1 : 0;
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 && static_cast<size_t>(e.index) < nLines)
       lineIx.insert(e.index);
@@ -9566,12 +9685,22 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
       ellIx.insert(e.index);
     else if (e.type == SelectedEntity::Type::Polyline && e.index >= 0 && static_cast<size_t>(e.index) < nPoly)
       polyIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::FeatureLine && e.index >= 0 &&
+             static_cast<size_t>(e.index) < nFl)
+      flIx.insert(e.index);  // REQ-087
   }
 
   std::vector<int> pv(polyIx.begin(), polyIx.end());
   std::sort(pv.begin(), pv.end(), std::greater<int>());
   for (int idx : pv)
     ErasePolylineByIndex(st, idx);
+
+  // REQ-087. Highest index first, like every other compacting erase here, so an earlier removal
+  // cannot shift an index that has not been used yet.
+  std::vector<int> flv(flIx.begin(), flIx.end());
+  std::sort(flv.begin(), flv.end(), std::greater<int>());
+  for (int idx : flv)
+    EraseFeatureLineByIndex(st, idx);
 
   std::vector<int> lv(lineIx.begin(), lineIx.end());
   std::sort(lv.begin(), lv.end(), std::greater<int>());
@@ -10408,6 +10537,37 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
                                           st.userPolylineVerts[B + 1], st.userPolylineVerts[B + 2]));
     }
     consider(e, bestD2);
+  }
+
+  // Feature lines (REQ-087) — identical segment walk, through the same `consider` funnel, which is
+  // what makes a feature line compete with every other entity on distance rather than being picked
+  // by a separate rule. ADR-034 relies on this being the single funnel; so does this.
+  {
+    const int nFl =
+        static_cast<int>(st.featureLineOffsets.size() > 0 ? st.featureLineOffsets.size() - 1 : 0);
+    const auto& FV = st.featureLineVerts;
+    for (int fi = 0; fi < nFl; ++fi) {
+      const int v0 = st.featureLineOffsets[static_cast<size_t>(fi)];
+      const int v1 = st.featureLineOffsets[static_cast<size_t>(fi + 1)];
+      const bool closed = static_cast<size_t>(fi) < st.featureLineClosed.size() &&
+                          st.featureLineClosed[static_cast<size_t>(fi)];
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::FeatureLine;
+      e.index = fi;
+      double bestD2 = 1e300;
+      for (int vi = v0; vi + 1 < v1; ++vi) {
+        const size_t A = static_cast<size_t>(vi) * 3, B = static_cast<size_t>(vi + 1) * 3;
+        if (B + 2 >= FV.size())
+          break;
+        bestD2 = std::min(bestD2, d2Segment(FV[A], FV[A + 1], FV[A + 2], FV[B], FV[B + 1], FV[B + 2]));
+      }
+      if (closed && v1 - v0 >= 2) {
+        const size_t A = static_cast<size_t>(v1 - 1) * 3, B = static_cast<size_t>(v0) * 3;
+        if (A + 2 < FV.size() && B + 2 < FV.size())
+          bestD2 = std::min(bestD2, d2Segment(FV[A], FV[A + 1], FV[A + 2], FV[B], FV[B + 1], FV[B + 2]));
+      }
+      consider(e, bestD2);
+    }
   }
 
   if (!any)
@@ -12456,6 +12616,7 @@ const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, con
   case T::Annotation:   return at(st.cadAnnotationAttrs);
   case T::FilledRegion: return at(st.cadFilledRegionAttrs);
   case T::Mesh:         return at(st.cadMeshAttrs);
+  case T::FeatureLine:  return at(st.featureLineAttrs);  // REQ-087 — layer, colour, and its stable id
   // Survey points and PDF underlays carry no EntityAttributes and are out of REQ-084's scope.
   default:              return nullptr;
   }

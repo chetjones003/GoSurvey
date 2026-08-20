@@ -30,7 +30,8 @@ struct SelectedEntity {
   enum class Type {
     LineSeg = 0, Circle = 1, Annotation = 2, Polyline = 3, Arc = 4, Ellipse = 5, PdfUnderlay = 6,
     FilledRegion = 7, ///< Solid hatch fill (CadFilledRegion) — selectable/editable (REQ-042, ADR-016).
-    Mesh = 8          ///< Imported triangle mesh (REQ-063). Selectable and erasable, never edited.
+    Mesh = 8,         ///< Imported triangle mesh (REQ-063). Selectable and erasable, never edited.
+    FeatureLine = 9   ///< Named 3D design linework (REQ-087, ADR-035). Its own store, not a polyline.
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -146,6 +147,12 @@ struct CadExtendedGeometryInput {
   const std::vector<int>* polylineOffsets = nullptr;
   const std::vector<uint8_t>* polylineClosed = nullptr;
   const std::vector<EntityAttributes>* polylineAttrs = nullptr;
+  // Feature lines (REQ-087). Same four arrays, same shape — the renderer draws both through one
+  // function, so a feature line cannot render differently from a polyline by accident.
+  const std::vector<float>* featureLineVerts = nullptr;
+  const std::vector<int>* featureLineOffsets = nullptr;
+  const std::vector<uint8_t>* featureLineClosed = nullptr;
+  const std::vector<EntityAttributes>* featureLineAttrs = nullptr;
   const std::vector<CadLayerRow>* drawingLayers = nullptr;
   /// Sorted stable entity ids hidden by object isolation (REQ-084 (d), ADR-034); nullptr or empty
   /// means nothing is hidden. Carried here rather than as another `RenderScene` parameter — that

@@ -70,3 +70,39 @@ CMD FEATURELINELIST
 EXPECT LOG "no feature lines in the drawing"
 
 CHECK ALL
+
+# --- stage 2: a feature line is pickable and deletable --------------------------------------------
+# Selection goes through PickClosestCadEntity's single `consider` funnel, so a feature line competes
+# with every other entity on distance rather than by a rule of its own. DELETE matters especially:
+# being able to create something you cannot remove is worse than not creating it.
+
+NEW
+CMD FEATURELINE Pickable
+CMD 0,0,10
+CMD 100,0,12
+CMD END
+CMD FEATURELINELIST
+EXPECT LOG "Feature line 1: "Pickable""
+
+# A crossing box over the line takes it. BOX and PICK are the two selection funnels ADR-034 names;
+# this exercises the box one.
+BOX -10 -10 110 10
+EXPECT SELECTED 1
+
+# DELETE removes it, and it is gone from the store — not merely deselected.
+CMD DELETE
+CMD FEATURELINELIST
+EXPECT LOG "no feature lines in the drawing"
+
+# Undo brings it back whole, in one step.
+UNDO
+CMD FEATURELINELIST
+EXPECT LOG "Feature line 1: "Pickable""
+
+# A box well away from it selects nothing, so the test is a real containment test.
+CMD SELECT
+ESC
+BOX 5000 5000 6000 6000
+EXPECT SELECTED 0
+
+CHECK ALL
