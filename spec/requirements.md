@@ -2555,7 +2555,7 @@ requirements is a planning failure, not a sign of rigor.
     not add a plan vertex;
   - every edit is undoable in one step and the surface rebuilds with no user action.
 - Owner-layer: UI, Domain
-- Status:      proposed
+- Status:      accepted
 - Revisions:   2026-08-19 — initial.
                2026-08-20 — TASK-080 stage 1: the derived table and the six edits, driven by
                FLELEV. Four of five acceptance conditions verified headlessly; "rebuilds with no
@@ -2565,6 +2565,10 @@ requirements is a planning failure, not a sign of rigor.
                and was stripped from the surface definition on the next rebuild. Status stays
                `proposed`: the Statement says "editable through a TABLE", and stage 2 is what puts
                one on screen.
+               2026-08-20 — TASK-081 stage 2: the Feature Line Elevations panel. Every cell edit
+               runs an FLELEV command, so the panel and the REQ-203 driver exercise one code
+               path. ACCEPTED. The panel's own rendering has no automated coverage and cannot
+               while the driver has no window; that is mitigated by the routing, not solved.
 
 ---
 

@@ -240,6 +240,7 @@ add_executable(GoSurvey
   src/ui/CadUi_TraverseEditor.cpp
   src/ui/CadUi_PointGroups.cpp
   src/ui/CadUi_Surfaces.cpp
+  src/ui/CadUi_FeatureLineElev.cpp
   src/ui/CadUi_UpdateDialog.cpp
   src/ui/SplashScreen.cpp
   src/ui/ImGuiLayout.cpp

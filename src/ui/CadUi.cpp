@@ -2327,6 +2327,14 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     RibbonItemHelp(
         "Surfaces — build a TIN surface by triangulating the points in one or more point groups, "
         "then rebuild it as the survey changes.");
+    // REQ-088. Sits with Surfaces because that is what a feature line's elevations are FOR — the
+    // line is design linework a surface consumes as a breakline.
+    if (smallBtn("##RibbonFlElev", RibbonIconKind::SurveyPoint, "Grades", cwB))
+      cmd.showFeatureLineElevWindow = true;
+    RibbonItemHelp(
+        "Feature Line Elevations — station, elevation, length, grade back and grade ahead for each "
+        "point of a feature line. Edit an elevation or a grade, raise or lower the whole line, and "
+        "add elevation points that change grade without changing the plan shape.");
     if (smallBtn("##RibbonPointGroups", RibbonIconKind::SurveyPoint, "Groups", cwB))
       cmd.showPointGroupManagerWindow = true;
     RibbonItemHelp(

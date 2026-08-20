@@ -241,3 +241,28 @@ PICK 36.39257518 39.69194649
 EXPECT LOG "SURFELEV — EG: elevation 500.000"
 ESC
 CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T9 — FLELEVEDIT, which opens the panel. Separate from FLELEV on purpose: FLELEV must stay usable
+# with no window (REQ-203), so the driver can read and edit the table without a panel existing.
+# What is testable here is the command's own contract — that it aims at a real feature line and
+# refuses a number that is not one. The panel's rendering is not headlessly testable at all; what
+# makes it trustworthy instead is that every cell it edits routes through the FLELEV commands
+# above, so the tests in this file are testing the panel's behaviour by proxy.
+# ---------------------------------------------------------------------------------------------
+NEW
+CMD FLELEVEDIT
+EXPECT LOG "no feature lines in the drawing"
+CMD FEATURELINE A
+CMD 0,0,10
+CMD 100,0,12
+CMD END
+CMD FEATURELINE B
+CMD 0,50,20
+CMD 100,50,22
+CMD END
+CMD FLELEVEDIT 2
+EXPECT LOG "elevation editor opened on feature line 2"
+CMD FLELEVEDIT 9
+EXPECT LOG "there is no feature line 9; the drawing has 2"
+CHECK ALL

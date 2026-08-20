@@ -2987,6 +2987,8 @@ const CmdEntry kRegistry[] = {
     {"undesignate", "undes", "Remove one definition item: UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY|POINTFILE>, <n>"},
     {"surfaceaddfile", "sfaddfile", "Link a point file into a surface: SURFACEADDFILE <surface>, <path>[, <layout>[, HEADER]]"},
     {"surfaceimportfile", "sfimportfile", "Import a linked point file into the drawing and break the link"},
+    {"flelev", "", "Feature line elevations: FLELEV <n> [SET|GRADEAHEAD|GRADEBACK|RAISE|INSERT|DELETE …]"},
+    {"flelevedit", "", "Open the feature line elevation editor: FLELEVEDIT [<n>]"},
     {"plotscale", "pscale", "Set the plot scale"},
     {"move", "m", "Move objects"},
     {"copy", "cp", "Copy objects"},
@@ -14254,6 +14256,30 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     //
     // REQ-203: stage 2's panel routes its edited cells through exactly these, the way the Surfaces
     // panel routes through ProcessCommandLineSubmit — so what the tests drive is what the UI drives.
+    // REQ-088: open the elevation editor, optionally aimed at a feature line. Separate from FLELEV
+    // so that FLELEV stays usable with no window (REQ-203) — the driver must be able to read and
+    // edit the table without a panel existing.
+    if (plotTok == "flelevedit" || plotTok == "featurelineelevedit") {
+      const int flCount =
+          st.featureLineOffsets.empty() ? 0 : static_cast<int>(st.featureLineOffsets.size()) - 1;
+      if (flCount <= 0) {
+        log.push_back("FLELEVEDIT — no feature lines in the drawing. Draw one with FEATURELINE first.");
+        return;
+      }
+      int which = 0;
+      if (issIdle >> which) {
+        if (which < 1 || which > flCount) {
+          log.push_back("FLELEVEDIT — there is no feature line " + std::to_string(which) + "; the "
+                        "drawing has " + std::to_string(flCount) + ".");
+          return;
+        }
+        st.featureLineElevIndex = which - 1;
+      }
+      st.showFeatureLineElevWindow = true;
+      log.push_back("FLELEVEDIT — elevation editor opened on feature line " +
+                    std::to_string(st.featureLineElevIndex + 1) + ".");
+      return;
+    }
     if (plotTok == "flelev" || plotTok == "featurelineelev") {
       std::istringstream& fe = issIdle;  // the verb is already consumed
       int flNum = 0;

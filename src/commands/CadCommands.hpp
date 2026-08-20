@@ -1344,6 +1344,11 @@ struct AppCommandState {
   bool showTextStyleManagerWindow = false;
   bool showPointGroupManagerWindow = false;  ///< Point Group manager (REQ-067).
   bool showSurfaceManagerWindow = false;     ///< Surfaces panel (REQ-068).
+  bool showFeatureLineElevWindow = false;    ///< Feature line elevation editor (REQ-088).
+  /// Which feature line the elevation editor is showing, 0-based. Held here rather than as a static
+  /// in the panel so that opening the editor from a selected feature line can aim it, and so it
+  /// survives the window being closed and reopened.
+  int featureLineElevIndex = 0;
   /// Current layer for new geometry (ribbon combo + command defaults).
   std::string currentLayer = "0";
   /// Layer table. Layer "0" always exists, **including before anything has been loaded** (issue

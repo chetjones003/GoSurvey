@@ -693,6 +693,7 @@ int main()
     DrawTextStyleManagerWindow(cmd, &cmdLog);
     DrawPointGroupManagerWindow(cmd, &cmdLog);
     DrawSurfaceManagerWindow(cmd, &cmdLog);
+    DrawFeatureLineElevationWindow(cmd, &cmdLog);  // REQ-088
     DrawViewPointsPanel(cmd, cmdLog);
     DrawImportPointsPanel(cmd, cmdLog);
     DrawExportPointsPanel(cmd, cmdLog);
