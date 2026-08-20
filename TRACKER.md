@@ -163,10 +163,15 @@
     - Deliberately **not** gated on `WantTextInput`, unlike Ctrl+Z/C/V beside it: those have a meaning
       inside a text field and must yield to it, Ctrl+S has none. Same rule REQ-047 already applies to
       F3/F8, and it is what lets a user save without first leaving the command bar.
+    - Bound to Ctrl+S and **nothing else**: Shift and Alt are excluded. Ctrl+Shift+S is "Save As" to
+      most of the muscle memory that will meet this application, and answering it with a silent
+      overwrite of the current file is the wrong answer to give unasked; AltGr is Ctrl+Alt on many
+      keyboard layouts, which — since this handler deliberately runs during text input — would turn
+      typing an accented character in the command bar into a save.
     - Verified in the running application: Ctrl+S with no path opens Save As (pressed *with the
       command box focused*); completing it creates the file and renames the tab; a further edit plus
       Ctrl+S re-saves silently with both lines present in the `.gs`; File ▸ Save still works. Suite
-      436/436.
+      411/411.
     - **Authority is not airtight and was not pretended to be:** no `accepted` REQ says this shortcut
       exists. Fixed under REQ-201 (an advertised control that does nothing is a silent failure), with
       the alternative — a requirement naming the application's accelerators, likely an amendment to
@@ -177,22 +182,32 @@
       shortcut. Closing that needs a way to inject key state into the frame loop — an architectural
       change, not a bug fix.
 
-### [BUG-027] A `.gs` opened by file association leaves the drawing "never saved" — OPEN
+### [BUG-027] A `.gs` opened by file association leaves the drawing "never saved" — FIXED 2026-08-20
     - Launching `GoSurvey.exe "some\drawing.gs"` — which is exactly what the installer registers for
       the `.gs` association — loads the drawing correctly, but the **first Save opens a Save As
       dialog**, as though the file had never been on disk. The obvious answer is the file the user
-      just opened, and choosing it raises an overwrite confirmation on their own drawing.
+      just opened, and choosing it raises an overwrite confirmation on their own drawing. The tab
+      also keeps calling it "Drawing 1", so nothing on screen names the file that is open.
     - Cause: `main.cpp` calls `LoadGoSurveyFile` for the startup argument but never sets
-      `cmd.activeDocFilePath`. The File ▸ Open path *does* set it (`CadUi.cpp`). `LoadGoSurveyFile`
-      assigns `cmd.activeDocFilePath = doc.filePath`, but `filePath` is **not serialized into the
-      `.gs`** — there is no such key in a saved file — so it comes back empty every time.
+      `cmd.activeDocFilePath`, and never renames the tab. The File ▸ Open path does both
+      (`CadUi.cpp`). Nothing else can fill the gap: `filePath` is **not serialized into the `.gs`** —
+      no such key exists in a saved file, and `GsIo.cpp` does not mention `activeDocFilePath` at all.
+      The only assignment outside the menu is `RestoreDocumentFromSnapshot`, which copies a path a
+      document already had.
     - Found 2026-08-20 alongside BUG-026, by the same route. Same *shape* as BUG-012, documented in
-      that same function: the argument used to be dropped entirely, and is now honoured for loading
-      but not for identity.
-    - Not fixed here. BUG-026 was the requested scope; this one is recorded so it is not lost, and it
-      is worth a moment's thought first — whether the fix is `main.cpp` adopting the startup path, or
-      `LoadGoSurveyFile` adopting its own `pathUtf8` argument for every caller, is a small ownership
-      decision rather than an obvious one-liner.
+      that same function: the argument used to be dropped entirely, and was then honoured for loading
+      but not for identity. Binding Ctrl+S (BUG-026) made it worse in practice — the cheap, reflexive
+      save is exactly the one that now stops to ask a question with an obvious answer.
+    - Fix: `main.cpp` adopts the startup path on a successful load — `activeDocFilePath` (made
+      absolute, so a relative argument is not re-resolved later against a different working
+      directory) and the drawing tab's name, both from the argument. The tab name uses `u8string`,
+      not `string`: ImGui draws it and reads UTF-8, and the path may hold characters the process ANSI
+      codepage cannot spell.
+    - **Ownership, which was the open question:** adopting inside `LoadGoSurveyFile` instead would be
+      wrong, not merely different. The startup *template* loads through that same function, so a
+      blank drawing would adopt `default-template.gs` as its save target and the next Ctrl+S would
+      overwrite the user's template. Only the caller knows whether the file it just read is the
+      document or the mould for one, so the caller adopts.
 
 ### [BUG-023] VIEWPOINTS → Load crashed the application (access violation) — FIXED 2026-08-16
     - Found 2026-08-16 while verifying the Viewpoints grid restyle, by clicking Load on a points
