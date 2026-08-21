@@ -667,10 +667,17 @@ void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) 
   const float fontPx =
       std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), st.viewportMtextMinPx, st.viewportMtextMaxPx);
 
-  const std::string norm = MtextRichNormalize(a.text);
+  // Measure through the label's OWN typeface, and through the same string the renderer draws.
+  //
+  // Both arguments used to be wrong in the same direction: the family was omitted, so the box was
+  // always sized for the application's default font, and the text was normalized first, so it was not
+  // literally the string the viewport measures. The box is the label's pick target and the rectangle
+  // the renderer centres the glyphs in — so a label the user gave a font to was drawn out of its own
+  // box, overhanging west toward the very marker the box exists to stand clear of, and picking it
+  // meant clicking somewhere other than the text. Nothing about the default-font case changes.
   float pw = 8.f;
   float ph = fontPx * 1.22f;
-  MtextRichNaturalContentPx(font, fontPx, norm, &pw, &ph);
+  MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, a.fontFamily);
 
   constexpr float kPadPx = 8.f;
   const float bw = (pw + 2.f * kPadPx) * worldPerPxY;

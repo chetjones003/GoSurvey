@@ -159,6 +159,18 @@ ImFont* Resolve(const std::string& fontNameOrShx, bool bold, bool italic, bool* 
     return it->second.font ? it->second.font : g_default;
   }
 
+  // A host without a texture-capable renderer (the REQ-203 headless driver) has ImGui LOCK the atlas
+  // for the whole frame, and adding a font to a locked atlas is an assertion failure — a crash, in a
+  // program whose whole job is to report what a document became. Loading is skipped there and the
+  // default font answers instead, which is what that host measured with before it ever asked for a
+  // typeface by name. The miss is deliberately NOT cached: the atlas is locked for this frame, not
+  // for this run, so the next unlocked caller must still get the real font.
+  if (ImFontAtlas* atlas = ImGui::GetIO().Fonts; !atlas || atlas->Locked) {
+    if (outRealBold) *outRealBold = false;
+    if (outRealItalic) *outRealItalic = false;
+    return g_default;
+  }
+
   bool gotBold = false, gotItalic = false;
   const std::string path = ResolvePath(norm, bold, italic, &gotBold, &gotItalic);
   ImFont* font = nullptr;
