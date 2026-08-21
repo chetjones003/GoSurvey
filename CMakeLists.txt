@@ -628,8 +628,11 @@ if(GOSURVEY_BUILD_TESTS)
     # miss. Each file's header says what it found; re-enable when that is fixed.
     #
     #   dxf-export-stable              — #63: the exporter has no ARC or ELLIPSE branch (silent data
-    #                                    loss). #64: a LWPOLYLINE comes back from a round trip as
-    #                                    loose LINEs.
+    #                                    loss). It also covered #64 (a LWPOLYLINE came back from a
+    #                                    round trip as loose LINEs), which was fixed on 2026-08-21
+    #                                    by TASK-083 — the regression for that half now lives in
+    #                                    `regression-64-dxf-polyline-identity.txt` and RUNS, so one
+    #                                    open defect does not keep the other's oracle off the suite.
     foreach(_disabled dxf-export-stable)
       if(TEST headless.${_disabled})
         set_tests_properties(headless.${_disabled} PROPERTIES DISABLED TRUE)

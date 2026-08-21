@@ -589,6 +589,38 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     st.userLineAttrs.push_back(at);
   };
 
+  // A DXF POLYLINE/LWPOLYLINE vertex on its way into the polyline store: model-space X/Y (still to
+  // be transformed and rebased) and the absolute Z the entity gave it.
+  struct ImportPolyVert {
+    double x = 0, y = 0, z = 0;
+  };
+
+  // Store a vertex run AS a polyline (REQ-053's four parallel arrays) rather than as loose segments.
+  // Until this existed the importer had no polyline sink at all — every POLYLINE and LWPOLYLINE was
+  // decomposed into `userLinesFlat`, so a DXF round trip shattered every polyline into unrelated
+  // lines (issue #64), and so did an ordinary import of any file Civil 3D wrote. Same transform and
+  // same `local = world - worldDocumentOrigin` rebase as appendSegXF; Z is carried unrebased, the
+  // document origin being X/Y-only (ADR-025 D2).
+  auto appendPolylineXF = [&](const std::vector<ImportPolyVert>& pts, bool closed,
+                              const EntityAttributes& at) {
+    if (pts.size() < 2)
+      return;
+    const int baseVert = st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.back();
+    if (st.userPolylineOffsets.empty())
+      st.userPolylineOffsets.push_back(baseVert);
+    for (const ImportPolyVert& p : pts) {
+      double ox = 0, oy = 0;
+      xf.apply(p.x, p.y, &ox, &oy);
+      UpdateCoordMag(coordMagMax, ox, oy);
+      st.userPolylineVerts.push_back(static_cast<float>(ox - st.worldDocumentOriginX));
+      st.userPolylineVerts.push_back(static_cast<float>(oy - st.worldDocumentOriginY));
+      st.userPolylineVerts.push_back(static_cast<float>(p.z));
+    }
+    st.userPolylineOffsets.push_back(baseVert + static_cast<int>(pts.size()));
+    st.userPolylineClosed.push_back(closed ? uint8_t{1} : uint8_t{0});
+    st.userPolylineAttrs.push_back(at);
+  };
+
   // Map a model-space (insertion, height, rotation) triple through the active INSERT transform into the
   // document's local frame, producing the annotation fields. plottedHeightInches is set so that
   // CadAnnotationHeightWorld(...) reproduces the model height (round-trips DXF group 40 exactly).
@@ -612,9 +644,12 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     return r;
   };
 
-  auto appendBulgeXF = [&](double x0, double y0, double x1, double y1, double bulge, const EntityAttributes& at) {
+  // \p z is the constant elevation the owning polyline sits on (LWPOLYLINE group 38); a bulge arc stays
+  // in that plane, so both the straight and the tessellated path carry it.
+  auto appendBulgeXF = [&](double x0, double y0, double x1, double y1, double bulge, const EntityAttributes& at,
+                           double z = 0.0) {
     if (std::fabs(bulge) < 1e-12) {
-      appendSegXF(x0, y0, x1, y1, at);
+      appendSegXF(x0, y0, x1, y1, at, z, z);
       return;
     }
     const double thetaMag = 4.0 * std::atan(std::fabs(bulge));
@@ -622,7 +657,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     const double dy = y1 - y0;
     const double chord = std::hypot(dx, dy);
     if (chord < 1e-12 || thetaMag < 1e-12) {
-      appendSegXF(x0, y0, x1, y1, at);
+      appendSegXF(x0, y0, x1, y1, at, z, z);
       return;
     }
     const double R = chord / (2.0 * std::sin(thetaMag * 0.5));
@@ -642,7 +677,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     for (int s = 0; s < nseg; ++s) {
       const double u0 = a0 + sweep * (static_cast<double>(s) / static_cast<double>(nseg));
       const double u1 = a0 + sweep * (static_cast<double>(s + 1) / static_cast<double>(nseg));
-      appendSegXF(cx + R * std::cos(u0), cy + R * std::sin(u0), cx + R * std::cos(u1), cy + R * std::sin(u1), at);
+      appendSegXF(cx + R * std::cos(u0), cy + R * std::sin(u0), cx + R * std::cos(u1), cy + R * std::sin(u1), at, z,
+                  z);
     }
   };
 
@@ -918,6 +954,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
     int flags = 0;
     std::vector<double> vx;
     std::vector<double> vy;
+    std::vector<double> vb;  // group 42 bulge, one per vertex (0 = the edge leaving it is straight)
   };
 
   size_t i = entBegin;
@@ -948,7 +985,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       }
 
       struct PolyVtx {
-        double x = 0, y = 0, bulge = 0;
+        double x = 0, y = 0, z = 0, bulge = 0;
       };
       std::vector<PolyVtx> verts;
 
@@ -963,6 +1000,8 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
             ParseDouble(v, &pv.x);
           else if (c == 20)
             ParseDouble(v, &pv.y);
+          else if (c == 30)
+            ParseDouble(v, &pv.z);  // a 3D POLYLINE gives every vertex its own elevation (REQ-057)
           else if (c == 42)
             ParseDouble(v, &pv.bulge);
         }
@@ -982,7 +1021,20 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
 
       const auto at = base.makeAttr(layerRgb);
       const int nv = static_cast<int>(verts.size());
-      if (nv >= 2) {
+      bool anyBulge = false;
+      for (const PolyVtx& pv : verts)
+        anyBulge = anyBulge || std::fabs(pv.bulge) > 1e-12;
+      if (nv >= 2 && !anyBulge) {
+        // The ordinary case: keep the entity's identity (REQ-053, REQ-204's round-trip invariant).
+        std::vector<ImportPolyVert> pts;
+        pts.reserve(verts.size());
+        for (const PolyVtx& pv : verts)
+          pts.push_back(ImportPolyVert{pv.x, pv.y, pv.z});
+        appendPolylineXF(pts, (flags70 & 1) != 0, at);
+      } else if (nv >= 2) {
+        // A bulge is an arc, and the polyline store carries no per-vertex bulge, so this one is
+        // tessellated into segments as it always was — the shape survives, the object does not
+        // (TASK-083 DEBT-1).
         for (int vi = 0; vi < nv - 1; ++vi)
           appendBulgeXF(verts[static_cast<size_t>(vi)].x, verts[static_cast<size_t>(vi)].y,
                         verts[static_cast<size_t>(vi + 1)].x, verts[static_cast<size_t>(vi + 1)].y,
@@ -1045,21 +1097,37 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
           if (ParseDouble(v, &yv) && std::isfinite(pendX)) {
             lw.vx.push_back(pendX);
             lw.vy.push_back(yv);
+            lw.vb.push_back(0.0);
             pendX = NAN;
           }
+        } else if (c == 42 && !lw.vb.empty()) {
+          ParseDouble(v, &lw.vb.back());  // group 42 trails the 10/20 pair of the vertex it bulges
         }
       }
       EntityAttributes at{};
       at.layer = lw.layer;
       at.color = EntityColorStorage(lw.c62, lw.has420, lw.rgb420, lw.layer, layerRgb);
       const int nv = static_cast<int>(lw.vx.size());
-      if (nv >= 2) {
+      bool anyBulge = false;
+      for (double b : lw.vb)
+        anyBulge = anyBulge || std::fabs(b) > 1e-12;
+      if (nv >= 2 && !anyBulge) {
+        // The ordinary case: keep the entity's identity (REQ-053, REQ-204's round-trip invariant).
+        std::vector<ImportPolyVert> pts;
+        pts.reserve(lw.vx.size());
+        for (int a = 0; a < nv; ++a)
+          pts.push_back(ImportPolyVert{lw.vx[static_cast<size_t>(a)], lw.vy[static_cast<size_t>(a)], lwElev});
+        appendPolylineXF(pts, (lw.flags & 1) != 0, at);
+      } else if (nv >= 2) {
+        // Bulges are arcs and the polyline store carries none, so this one tessellates into segments
+        // (TASK-083 DEBT-1). Reading group 42 at all is new: the arcs used to be flattened to their
+        // chords, silently changing the geometry rather than only its object identity.
         for (int a = 0; a < nv - 1; ++a)
-          appendSegXF(lw.vx[static_cast<size_t>(a)], lw.vy[static_cast<size_t>(a)], lw.vx[static_cast<size_t>(a + 1)],
-                      lw.vy[static_cast<size_t>(a + 1)], at, lwElev, lwElev);
+          appendBulgeXF(lw.vx[static_cast<size_t>(a)], lw.vy[static_cast<size_t>(a)], lw.vx[static_cast<size_t>(a + 1)],
+                        lw.vy[static_cast<size_t>(a + 1)], lw.vb[static_cast<size_t>(a)], at, lwElev);
         if ((lw.flags & 1) != 0 && nv >= 3)
-          appendSegXF(lw.vx[static_cast<size_t>(nv - 1)], lw.vy[static_cast<size_t>(nv - 1)], lw.vx[0], lw.vy[0], at,
-                      lwElev, lwElev);
+          appendBulgeXF(lw.vx[static_cast<size_t>(nv - 1)], lw.vy[static_cast<size_t>(nv - 1)], lw.vx[0], lw.vy[0],
+                        lw.vb[static_cast<size_t>(nv - 1)], at, lwElev);
       }
       i = j;
       continue;
@@ -1900,7 +1968,11 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
     ParseEntityRegion(pairs, eb, ee, st, layerRgb, &blockDefs, xfRoot, 0, &coordMagMax, &skippedPaper,
                       &skippedViewport, &skipped, &skipHist, &embeddedPoints, &textStyles);
 
-  const bool noGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty();
+  // Polylines count as geometry. Before they had a sink of their own, a file holding nothing but
+  // polylines still filled userLinesFlat; now it does not, and without this a polyline-only DXF
+  // would be judged empty and read a SECOND time out of the *MODEL_SPACE block — duplicating it.
+  const bool noGeom =
+      st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userPolylineOffsets.empty();
   if ((!hasEntitiesSec || noGeom) && hasModelSpace) {
     if (!hasEntitiesSec)
       log.push_back("DXF import — ENTITIES section missing; reading geometry from *MODEL_SPACE block.");
@@ -1912,8 +1984,10 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
 
   const size_t nLines = st.userLinesFlat.size() / 6;
   const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
+  const size_t nPoly = st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1;
   std::ostringstream os;
-  os << "DXF import — " << nLines << " line segment(s), " << nCirc << " circle(s).";
+  os << "DXF import — " << nLines << " line segment(s), " << nCirc << " circle(s), " << nPoly
+     << " polyline(s).";
   log.push_back(os.str());
   if (skippedPaper > 0)
     log.push_back("DXF import — skipped " + std::to_string(skippedPaper) +
@@ -2160,6 +2234,19 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     accExt(static_cast<double>(p.easting), static_cast<double>(p.northing));
     accExtZ(static_cast<double>(p.elevation));
   }
+  // Polylines are geometry too, and this sweep did not know they existed — REQ-053 gave the exporter
+  // a LWPOLYLINE branch but not an extents branch. The omission travels, because the IMPORTER sets
+  // the document origin from $EXTMIN/$EXTMAX: a drawing whose polylines lie outside its lines came
+  // back centred on the wrong point, and re-exported to different bytes (issue #64).
+  {
+    const size_t nPolyVert =
+        st.userPolylineOffsets.empty() ? 0u : static_cast<size_t>(st.userPolylineOffsets.back());
+    for (size_t vi = 0; vi < nPolyVert && vi * 3 + 2 < st.userPolylineVerts.size(); ++vi) {
+      accExt(static_cast<double>(st.userPolylineVerts[vi * 3]),
+             static_cast<double>(st.userPolylineVerts[vi * 3 + 1]));
+      accExtZ(static_cast<double>(st.userPolylineVerts[vi * 3 + 2]));
+    }
+  }
   if (!extAny) {
     extMnX = extMxX = extMnY = extMxY = 0.;
   } else {
@@ -2168,6 +2255,16 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     extMxX += pad;
     extMnY -= pad;
     extMxY += pad;
+    // Every entity below is written in WORLD coordinates (the `worldX`/`worldY` helpers add the
+    // document origin); the sweep above read the LOCAL store. Shift the result so the header
+    // describes the same frame as the body. Without this the file changed whenever the origin
+    // moved — and importing a file is precisely what moves it, so an export → import → export
+    // cycle never settled (REQ-204's stability invariant). Z needs no shift: the document origin
+    // is X/Y-only (ADR-025 D2).
+    extMnX += st.worldDocumentOriginX;
+    extMxX += st.worldDocumentOriginX;
+    extMnY += st.worldDocumentOriginY;
+    extMxY += st.worldDocumentOriginY;
   }
   if (!extZAny) {
     extMnZ = extMxZ = 0.;

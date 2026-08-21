@@ -7,6 +7,39 @@
 
 ## CHANGES
 
+### A polyline survives a DXF round trip as a polyline — 2026-08-21
+    - GitHub issue #64, found by the REQ-204 `dxf-export-stable` oracle (fuzz signature
+      `dxflwpolyasym`). REQ-204 + REQ-053 + TASK-083.
+    - **The importer had no polyline sink.** `ParseEntityRegion` decomposed every `POLYLINE` and
+      `LWPOLYLINE` into `userLinesFlat` segments, so a drawing that went out to DXF and came back
+      had had every polyline shattered into unrelated lines — "DXF import — 4 line segment(s)" for
+      a file holding two LINEs and one LWPOLYLINE. Not a mistake inside a shared path: the reader
+      predates the polyline store, which arrived with REQ-053 and taught only the *exporter* about
+      itself. The consequence was never confined to our own files — Civil 3D writes LWPOLYLINE
+      constantly, so **every** DXF a surveyor opened arrived with its parcel boundaries, breaklines
+      and alignments already destroyed as objects.
+    - **Fixing it uncovered a second asymmetry underneath**, which the first had been hiding:
+      `$EXTMIN`/`$EXTMAX` were swept from lines, circles, annotations and survey points and never
+      from polylines, **and** were written from the LOCAL store while every entity is written in
+      WORLD coordinates. So the header described a different frame from the body, and the file
+      changed whenever the document origin moved — and importing a file is precisely what moves it
+      (the origin is set FROM those extents). The round trip could not settle until both were
+      fixed. Found by the regression test, not by review.
+    - **Bulges now read.** Deciding "is this one polyline or an arc chain" meant reading group 42,
+      which the LWPOLYLINE reader had ignored entirely — its arcs were being flattened to their
+      chords, changing the geometry and not merely its object identity. A bulge-carrying polyline
+      still tessellates (the polyline store has no per-vertex bulge — TASK-083 DEBT-1), but it now
+      tessellates to the arc it describes. A 3D `POLYLINE`'s per-vertex group 30 is read too.
+    - **Two exporter gaps found while reading and deliberately NOT folded in** (TASK-083 §8):
+      `entityHandleCount` omits polylines, so the OBJECTS dictionary handles collide with entity
+      handles and `$HANDSEED` sits below the highest handle used; and the export's layer-name sweep
+      skips `userPolylineAttrs`. Both are export defects with their own reproducers.
+    - Tests: `regression-64-dxf-polyline-identity.txt` — 2 lines + 1 circle + an open polyline + a
+      RECT (closed polyline), export → NEW → import → export, counts on both sides and
+      `EXPECT SAMEFILE` on the two files. Fails before the fix with `LINES: expected 2, got 8`.
+      464/464 ctest. `dxf-export-stable` stays DISABLED for #63 alone, and now gets as far as
+      `ARCS: expected 1, got 0`.
+
 ### Right-click became customizable, and the shortcut menu became the drawing's action menu — 2026-08-18
     - Asked for from AutoCAD reference screenshots: the Options → User Preferences right-click
       surface and the drawing shortcut menu. REQ-084 + ADR-034 + TASK-070.
