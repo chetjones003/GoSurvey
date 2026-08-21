@@ -30,10 +30,17 @@
       chords, changing the geometry and not merely its object identity. A bulge-carrying polyline
       still tessellates (the polyline store has no per-vertex bulge — TASK-083 DEBT-1), but it now
       tessellates to the arc it describes. A 3D `POLYLINE`'s per-vertex group 30 is read too.
-    - **Two exporter gaps found while reading and deliberately NOT folded in** (TASK-083 §8):
-      `entityHandleCount` omits polylines, so the OBJECTS dictionary handles collide with entity
-      handles and `$HANDSEED` sits below the highest handle used; and the export's layer-name sweep
-      skips `userPolylineAttrs`. Both are export defects with their own reproducers.
+    - **Two exporter gaps found while reading and deliberately NOT folded in** (TASK-083 §8), both
+      confirmed by reproducer rather than inferred, and both the same family — a polyline entity
+      branch added without updating the sweeps around it:
+      - **#71**: `entityHandleCount` omits polylines, so the OBJECTS dictionary records collide with
+        entity handles and `$HANDSEED` can sit below the highest handle used. Six rectangles and
+        nothing else produce five duplicated handles and a `$HANDSEED` of `1004` against a handle
+        `1005` in use. Invisible to the round-trip oracle: both exports collide identically.
+      - **#72**: the export's layer-name sweep skips `userPolylineAttrs`, so a polyline is the one
+        entity that can reference a LAYER the exported file never defines. Reached by importing a
+        DXF whose LWPOLYLINE names a layer its own LAYER table omits; the same file with a LINE
+        instead exports the layer correctly, which is the asymmetry.
     - Tests: `regression-64-dxf-polyline-identity.txt` — 2 lines + 1 circle + an open polyline + a
       RECT (closed polyline), export → NEW → import → export, counts on both sides and
       `EXPECT SAMEFILE` on the two files. Fails before the fix with `LINES: expected 2, got 8`.

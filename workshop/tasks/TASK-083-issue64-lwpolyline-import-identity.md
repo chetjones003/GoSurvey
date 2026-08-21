@@ -98,14 +98,14 @@ ASSUMPTION-1: A polyline carrying bulges (arcs) must still be tessellated into l
 
 ## 8. Implementation log
 - 2026-08-21 opened from GitHub issue #64 (fuzz signature `dxflwpolyasym`).
-- 2026-08-21 OBS-1 (exporter, NOT fixed here): `ExportDxfFile_Impl`'s `entityHandleCount` sums
+- 2026-08-21 OBS-1 -> filed as issue #71 (exporter, NOT fixed here): `ExportDxfFile_Impl`'s `entityHandleCount` sums
   lines + circles + points + annotations and omits **polylines** (and arcs/ellipses, which have
   no branch at all — #63). `objDictRoot` is derived from that sum, so a drawing containing a
   polyline emits OBJECTS handles that **collide** with entity handles, and `$HANDSEED` is below
   the highest handle used. Invisible to the round-trip oracle because both exports collide
   identically. Reported separately rather than folded in — it is an export defect with its own
   reproducer.
-- 2026-08-21 OBS-2 (exporter, NOT fixed here): the export's `addLayerName` sweep covers line,
+- 2026-08-21 OBS-2 -> filed as issue #72 (exporter, NOT fixed here): the export's `addLayerName` sweep covers line,
   circle, annotation and survey-point layers but not `userPolylineAttrs`, so a polyline is the
   one entity that can name a layer the LAYER table does not define. Masked in practice because
   `drawingLayerTable` names are added too.
@@ -173,5 +173,6 @@ ASSUMPTION-1: A polyline carrying bulges (arcs) must still be tessellated into l
                           DISABLED — for #63 alone now)
 - Still open:              #63 (ARC/ELLIPSE have no export branch) keeps `dxf-export-stable`
                           DISABLED; it now reaches `ARCS: expected 1, got 0`. OBS-1 and OBS-2
-                          above are unfiled exporter defects.
+                          above are filed as #71 (duplicate handles) and #72 (undefined LAYER
+                          reference).
 - Done:                   2026-08-21
