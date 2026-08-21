@@ -98,9 +98,16 @@ static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, I
     return fontPx * 1.22f;
 
   const float lineH = fontPx * 1.22f;
-  ImVec2 pen = origin;
-  const float x0 = origin.x;
-  const float xMax = origin.x + std::max(8.f, maxWidth);
+  // The pen walks in LOCAL coordinates (0,0 is the origin); `origin` is added back only where a segment is
+  // actually drawn. It used to walk in screen coordinates, which meant the wrap test `pen.x + w > xMax`
+  // summed the run widths starting from a large base while the caller's measured natural width summed the
+  // same widths starting from zero — the two answers differed by a few ULPs. A survey-point label wraps at
+  // exactly its own natural width, so that tiny difference was the entire margin: the last word dropped to
+  // a second line at some zoom levels and not others. Local coordinates make the measure pass and the draw
+  // pass perform bit-identical arithmetic, so a line that measured as fitting always fits.
+  ImVec2 pen(0.f, 0.f);
+  const float x0 = 0.f;
+  const float xMax = std::max(8.f, maxWidth);
   float lineStartX = pen.x;
 
   auto segColor = [&](const RichRun& r) -> ImU32 {
@@ -115,7 +122,7 @@ static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, I
     return ImGui::ColorConvertFloat4ToU32(fc);
   };
 
-  float maxInkY = origin.y + lineH * 0.2f;
+  float maxInkY = lineH * 0.2f;
   const float uThick = std::max(1.f, fontPx * 0.06f);
   std::string shxBuf;  // reused across runs — the Shx entry points take std::string, not a char range
 
@@ -188,9 +195,10 @@ static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, I
           pen.x = x0;
           pen.y += lineH;
         }
-        drawSeg(s, wend, pen);
+        const ImVec2 at(origin.x + pen.x, origin.y + pen.y);
+        drawSeg(s, wend, at);
         if (dl && r.underline)
-          dl->AddLine(ImVec2(pen.x, pen.y + sz.y + 0.5f), ImVec2(pen.x + sz.x, pen.y + sz.y + 0.5f), col, uThick);
+          dl->AddLine(ImVec2(at.x, at.y + sz.y + 0.5f), ImVec2(at.x + sz.x, at.y + sz.y + 0.5f), col, uThick);
         pen.x += sz.x;
         maxInkY = std::max(maxInkY, pen.y + sz.y);
         s = wend;
@@ -201,9 +209,10 @@ static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, I
           pen.x = x0;
           pen.y += lineH;
         }
+        const ImVec2 at(origin.x + pen.x, origin.y + pen.y);
         if (dl && r.underline)
-          dl->AddLine(ImVec2(pen.x, pen.y + sp.y + 0.5f), ImVec2(pen.x + sp.x, pen.y + sp.y + 0.5f), col, uThick);
-        drawSeg(s, s + 1, pen);
+          dl->AddLine(ImVec2(at.x, at.y + sp.y + 0.5f), ImVec2(at.x + sp.x, at.y + sp.y + 0.5f), col, uThick);
+        drawSeg(s, s + 1, at);
         pen.x += sp.x;
         maxInkY = std::max(maxInkY, pen.y + sp.y);
         ++s;
@@ -212,7 +221,7 @@ static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, I
   }
   if (outMaxContentWidthPx)
     *outMaxContentWidthPx = std::max(*outMaxContentWidthPx, pen.x - lineStartX);
-  return std::max(maxInkY - origin.y, lineH);
+  return std::max(maxInkY, lineH);
 }
 
 } // namespace
