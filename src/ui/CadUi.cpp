@@ -12,6 +12,7 @@
 
 #include "CadLinetype.hpp"
 #include "TextStyle.hpp"
+#include "CadUiStyleWidgets.hpp"  // the shared colour / linetype / lineweight vocabulary
 #include "HatchPattern.hpp"
 #include "CommandBar.hpp"
 #include "NumFormat.hpp"
@@ -2912,26 +2913,12 @@ void CollectGeneralAttrs(const AppCommandState& cmd, const std::vector<SelectedE
   }
 }
 
-struct NamedColorPreset {
-  const char* label;
-  const char* storage;
-  float r;
-  float g;
-  float b;
-};
 
 // Font choices offered by the STYLE dialog and the MTEXT "Text Formatting" panel's font picker
 // (REQ-044 / REQ-051). "" = the application default font. Defined here so both use sites see it.
 static const char* kTextStyleFonts[] = {
     "",          "romans.shx", "romand.shx", "romanc.shx", "txt.shx",         "simplex.shx",
     "isocp.shx", "italic.shx", "Arial",      "Times New Roman", "Consolas",   "Tahoma",
-};
-
-static const NamedColorPreset kNamedColors[] = {
-    {"By Layer", "ByLayer", 1.f, 1.f, 1.f}, {"Red", "Red", 1.f, 0.f, 0.f}, {"Yellow", "Yellow", 1.f, 1.f, 0.f},
-    {"Green", "Green", 0.f, 1.f, 0.f},    {"Cyan", "Cyan", 0.f, 1.f, 1.f}, {"Blue", "Blue", 0.f, 0.f, 1.f},
-    {"Magenta", "Magenta", 1.f, 0.f, 1.f}, {"White", "White", 1.f, 1.f, 1.f}, {"Gray", "Gray", 0.5f, 0.5f, 0.5f},
-    {"Black", "Black", 0.f, 0.f, 0.f},    {"Orange", "Orange", 1.f, 0.5f, 0.f},
 };
 
 // Full named palette first, then any custom color strings from entities not in the palette.
@@ -2957,29 +2944,6 @@ static void CollectQsColorOptions(const AppCommandState& cmd,
   for (const auto& a : cmd.cadAnnotationAttrs) addExtra(a.color);
 }
 
-static const char* kEntityLinetypeLabels[] = {"By Layer", "By Block", "Continuous", "Dashed", "Hidden", "Center",
-                                            "Phantom", "Divide", "Border"};
-static const char* kEntityLinetypeStorage[] = {"ByLayer", "ByBlock", "Continuous", "DASHED", "HIDDEN", "CENTER",
-                                               "PHANTOM", "DIVIDE", "BORDER"};
-static constexpr int kEntityLinetypeCount =
-    static_cast<int>(sizeof(kEntityLinetypeLabels) / sizeof(kEntityLinetypeLabels[0]));
-
-static const char* kLayerLinetypeLabels[] = {"Continuous", "Dashed", "Hidden", "Center", "Phantom", "Divide", "Border"};
-static const char* kLayerLinetypeStorage[] = {"Continuous", "DASHED", "HIDDEN", "CENTER", "PHANTOM", "DIVIDE",
-                                                "BORDER"};
-static constexpr int kLayerLinetypeCount =
-    static_cast<int>(sizeof(kLayerLinetypeLabels) / sizeof(kLayerLinetypeLabels[0]));
-
-static constexpr float kUiLineweightMmPresets[] = {
-    -1.f,  0.f,   0.05f, 0.09f, 0.13f, 0.15f, 0.18f, 0.20f, 0.25f, 0.30f, 0.35f, 0.40f,
-    0.50f, 0.53f, 0.60f, 0.70f, 0.80f, 0.90f, 1.00f, 1.06f, 1.20f, 1.40f, 1.58f, 2.00f, 2.11f};
-static constexpr int kUiLineweightPresetCount =
-    static_cast<int>(sizeof(kUiLineweightMmPresets) / sizeof(kUiLineweightMmPresets[0]));
-
-static constexpr float kUiTransparencyPresets[] = {-1.f, 0.f, 0.25f, 0.5f, 0.75f, 0.9f, 1.f};
-static constexpr int kUiTransparencyPresetCount =
-    static_cast<int>(sizeof(kUiTransparencyPresets) / sizeof(kUiTransparencyPresets[0]));
-
 static int EntityLinetypeComboIndex(const std::string& s) {
   const std::string c = CadCanonicalLinetypeNameForDxf(s);
   for (int i = 0; i < kEntityLinetypeCount; ++i) {
@@ -2998,31 +2962,6 @@ static int LayerLinetypeComboIndex(const std::string& s) {
   return 0;
 }
 
-static void SnprintLineweightPresetLabel(char* buf, size_t cap, float mm, bool layerRow) {
-  if (mm < 0.f) {
-    if (layerRow)
-      std::snprintf(buf, cap, "Default");
-    else
-      std::snprintf(buf, cap, "By Layer");
-    return;
-  }
-  std::snprintf(buf, cap, "%.2f mm", static_cast<double>(mm));
-}
-
-static int LineweightPresetIndexFromMm(float mm) {
-  if (mm < 0.f)
-    return 0;
-  int best = 1;
-  float bestD = 1e18f;
-  for (int i = 1; i < kUiLineweightPresetCount; ++i) {
-    const float d = std::fabs(mm - kUiLineweightMmPresets[i]);
-    if (d < bestD) {
-      bestD = d;
-      best = i;
-    }
-  }
-  return best;
-}
 
 static int TransparencyPresetIndexFromValue(float a) {
   if (a < -0.5f)
