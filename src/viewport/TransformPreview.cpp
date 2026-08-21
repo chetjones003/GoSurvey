@@ -526,6 +526,17 @@ static void AppendEntityHighlight(const AppCommandState& cmd, const SelectedEnti
     // select and move correctly while giving the user nothing on screen to confirm what was
     // selected. Identity transform — the highlight traces the committed geometry where it is.
     appendFeatureLineStrip(hlLines, cmd, e.index, [](float*, float*) {});
+  } else if (e.type == SelectedEntity::Type::Surface) {
+    // REQ-068 / ADR-036 (b). The highlight traces the surface's BORDER, not its 600k triangle edges.
+    // Two reasons, and the second is the one that decides it: at REQ-100's profile the whole
+    // triangulation re-emitted here every frame is ~14 MB per frame, and even if it were free, a
+    // 200k-triangle mesh drawn in highlight yellow is a solid block rather than a shape you can read.
+    // The border says "this surface, this extent, including the voids its hide-boundaries left."
+    //
+    // Read from the cache (ADR-036 (e)); computing it here would put the O(n log n) walk back on the
+    // per-frame path this function is called from.
+    if (const std::vector<float>* border = SurfaceBorderEdges(cmd, static_cast<size_t>(e.index)))
+      hlLines->insert(hlLines->end(), border->begin(), border->end());
   } else if (e.type == SelectedEntity::Type::FilledRegion) {
     const size_t k = static_cast<size_t>(e.index);
     if (k >= cmd.cadFilledRegions.size())

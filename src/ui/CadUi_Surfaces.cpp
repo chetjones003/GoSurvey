@@ -64,10 +64,16 @@ bool SurfaceElevationRange(const CadSurface& s, float* lo, float* hi) {
 /// flight is an entry in `surfaceRebuildAsync`, and out-of-date is REQ-069's own dirty check.
 enum class SurfaceState { Current, Stale, Rebuilding };
 
-SurfaceState StateOf(const AppCommandState& cmd, const CadSurface& s) {
-  for (const auto& job : cmd.surfaceRebuildAsync)
-    if (job && job->surfaceName == s.name)
-      return SurfaceState::Rebuilding;
+SurfaceState StateOf(const AppCommandState& cmd, size_t surfaceIndex) {
+  const CadSurface& s = cmd.cadSurfaces[surfaceIndex];
+  // By stable id, matching how the job itself is keyed (ADR-036 (a)). Keying this on the name showed
+  // "Rebuilding" against the wrong surface the moment one was renamed mid-rebuild.
+  const std::uint64_t id =
+      surfaceIndex < cmd.cadSurfaceAttrs.size() ? cmd.cadSurfaceAttrs[surfaceIndex].id : 0;
+  if (id != 0)
+    for (const auto& job : cmd.surfaceRebuildAsync)
+      if (job && job->surfaceId == id)
+        return SurfaceState::Rebuilding;
   return s.builtAtRevision == cmd.cadGpuRevision ? SurfaceState::Current : SurfaceState::Stale;
 }
 
@@ -191,7 +197,7 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
       selIdx = static_cast<int>(si);
 
     // State chip, right-aligned on the surface row (REQ-075).
-    const SurfaceState state = StateOf(cmd, s);
+    const SurfaceState state = StateOf(cmd, si);
     if (state != SurfaceState::Current) {
       ImGui::SameLine();
       ImGui::TextColored(StateColor(state), "[%s]", StateLabel(state));
@@ -450,7 +456,7 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
     }
 
     ImGui::Spacing();
-    const SurfaceState state = StateOf(cmd, s);
+    const SurfaceState state = StateOf(cmd, static_cast<size_t>(selIdx));
     ImGui::TextUnformatted("Status:");
     ImGui::SameLine();
     ImGui::TextColored(StateColor(state), "%s", StateLabel(state));

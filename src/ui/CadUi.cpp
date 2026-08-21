@@ -5080,11 +5080,18 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   int nCirc = 0;
   int nAnn  = 0;
   int nPdf  = 0;
+  int nSurf = 0;
+  int firstSurfIx = -1;
   for (const auto& e : sel) {
     if      (e.type == SelectedEntity::Type::LineSeg)    ++nLine;
     else if (e.type == SelectedEntity::Type::Circle)     ++nCirc;
     else if (e.type == SelectedEntity::Type::Annotation) ++nAnn;
     else if (e.type == SelectedEntity::Type::PdfUnderlay)++nPdf;
+    else if (e.type == SelectedEntity::Type::Surface) {
+      ++nSurf;
+      if (firstSurfIx < 0)
+        firstSurfIx = e.index;
+    }
   }
 
   ImGui::Text("Selected: %d object(s)", static_cast<int>(sel.size()));
@@ -5105,6 +5112,10 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     ImGui::TextDisabled("Circle");
   else if (nPdf == 1)
     ImGui::TextDisabled("PDF Underlay");
+  else if (nSurf > 1)
+    ImGui::TextDisabled("%d surfaces", nSurf);
+  else if (nSurf == 1)
+    ImGui::TextDisabled("TIN Surface");
   else if (nAnn == 1) {
     int ix = -1;
     for (const auto& e : sel) {
@@ -5128,6 +5139,50 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::Separator();
 
   DrawEditableGeneralSection(cmd, sel);
+
+  // TIN surface (REQ-068 / ADR-036 (b)). Read-only by design: everything below is DERIVED from the
+  // definition, so an editable field here would be a second source of truth that the next rebuild
+  // overwrites. The definition itself is edited in the Surfaces panel, which the note points at.
+  if (nSurf == 1 && firstSurfIx >= 0 && static_cast<size_t>(firstSurfIx) < cmd.cadSurfaces.size()) {
+    const CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(firstSurfIx)];
+    if (PropSectionHeader("Surface")) {
+      if (ImGui::BeginTable("props_surface", 2, kPropTableFlags)) {
+        ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+        ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+        const auto row = [](const char* k, const std::string& v) {
+          ImGui::TableNextRow();
+          PropValueCellBg();
+          ImGui::TableNextColumn(); ImGui::TextUnformatted(k);
+          ImGui::TableNextColumn(); ImGui::TextUnformatted(v.c_str());
+        };
+        row("Name", s.name);
+        row("Points", std::to_string(s.vertexCount()));
+        row("Triangles", std::to_string(s.triangleCount()));
+        if (s.tin && s.tin->vertsXyz.size() >= 3) {
+          float lo = s.tin->vertsXyz[2], hi = lo;
+          for (size_t i = 2; i < s.tin->vertsXyz.size(); i += 3) {
+            lo = std::min(lo, s.tin->vertsXyz[i]);
+            hi = std::max(hi, s.tin->vertsXyz[i]);
+          }
+          const int p = cmd.displayLinearPrecision;
+          row("Elevation range", FormatLinear(lo, p) + " to " + FormatLinear(hi, p));
+        } else {
+          row("Elevation range", "\xe2\x80\x94");
+        }
+        row("Definition", std::to_string(s.sourcePointGroups.size()) + " group(s), " +
+                              std::to_string(s.sourcePointFiles.size()) + " file(s), " +
+                              std::to_string(s.breaklines.size()) + " breakline(s), " +
+                              std::to_string(s.boundaries.size()) + " boundary(ies)");
+        // REQ-086: a surface showing an older triangulation than its definition describes must SAY
+        // so. Reporting the counts above while staying silent about that is precisely the quiet
+        // "looks current" state the requirement exists to prevent.
+        if (s.lastBuildIncomplete)
+          row("Status", "out of date \xe2\x80\x94 " + s.lastBuildMessage);
+        ImGui::EndTable();
+      }
+      ImGui::TextDisabled("Read-only. Edit the definition in the Surfaces panel.");
+    }
+  }
 
   if (nLine == 0 && nCirc == 0 && nAnn > 0) {
     std::vector<SelectedEntity> annOnly;
@@ -12608,6 +12663,15 @@ static void FormatSelectedEntityLabel(const AppCommandState& cmd, const Selected
   }
   case T::PdfUnderlay:
     std::snprintf(buf, bufSize, "PDF Underlay %d", e.index + 1);
+    break;
+  case T::Surface:
+    // By NAME, not by ordinal (REQ-068). A surface is the one selectable object the user named
+    // themselves, and "Surface 2" in a list beside "Existing Ground" and "Proposed" would be the
+    // least useful of the three labels available.
+    if (static_cast<size_t>(e.index) < cmd.cadSurfaces.size())
+      std::snprintf(buf, bufSize, "Surface \"%s\"", cmd.cadSurfaces[static_cast<size_t>(e.index)].name.c_str());
+    else
+      std::snprintf(buf, bufSize, "Surface %d", e.index + 1);
     break;
   default:
     std::snprintf(buf, bufSize, "Entity %d", e.index + 1);

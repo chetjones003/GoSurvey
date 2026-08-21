@@ -31,7 +31,18 @@ struct SelectedEntity {
     LineSeg = 0, Circle = 1, Annotation = 2, Polyline = 3, Arc = 4, Ellipse = 5, PdfUnderlay = 6,
     FilledRegion = 7, ///< Solid hatch fill (CadFilledRegion) — selectable/editable (REQ-042, ADR-016).
     Mesh = 8,         ///< Imported triangle mesh (REQ-063). Selectable and erasable, never edited.
-    FeatureLine = 9   ///< Named 3D design linework (REQ-087, ADR-035). Its own store, not a polyline.
+    FeatureLine = 9,  ///< Named 3D design linework (REQ-087, ADR-035). Its own store, not a polyline.
+    /// TIN surface (REQ-068, ADR-036 (b)). **Display-only, like Mesh** — it selects, highlights,
+    /// erases and reports, and it never moves: a surface's geometry is DERIVED from its definition,
+    /// so a drag would be undone by the next rebuild (ADR-036 alternative (5), declined by the user
+    /// 2026-08-21). Every transform command refuses it with a stated reason (REQ-201) rather than
+    /// silently dropping it from the operation.
+    ///
+    /// A click on any visible component — a triangle edge, a contour, the border — selects the whole
+    /// surface. Component-level selection is forbidden by REQ-070 ("contours ... never appear in
+    /// selection") and has nothing to be selected *by*: a contour is regenerated display geometry
+    /// with no identity.
+    Surface = 10
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -1150,7 +1161,17 @@ struct AppCommandState {
   /// same reason \ref AsyncBuild is. Never part of \ref DrawingGeometrySnapshot or \ref
   /// DrawingDocument: a background thread is live-only state, not drawing content.
   struct SurfaceRebuildAsync {
-    std::string        surfaceName;   ///< which CadSurface this is for — surfaces have no entity id
+    /// Which CadSurface this is for, by **stable entity id** (REQ-076 / ADR-036 (a)) — never by name
+    /// and never by index.
+    ///
+    /// This was `std::string surfaceName` until surfaces gained an `EntityKind`, and the name key had
+    /// two failure modes that the id does not. A **rename** while a rebuild is in flight orphaned the
+    /// result: the reap looked the old name up, found nothing, discarded a completed triangulation,
+    /// and — because the in-flight check also matched on name — immediately dispatched a second
+    /// worker for the same surface. Worse, **erase-then-recreate under the same name** made the reap
+    /// find the *new* surface and apply the *old* one's triangulation to it. An id is not reused
+    /// within a drawing (REQ-076), so neither is reachable.
+    std::uint64_t      surfaceId = 0;
     std::thread        thread;
     std::atomic<bool>  done{false};
     std::atomic<bool>  cancel{false}; ///< cooperative; checked before the worker starts real work
@@ -1171,6 +1192,39 @@ struct AppCommandState {
     }
   };
   std::vector<std::unique_ptr<SurfaceRebuildAsync>> surfaceRebuildAsync;
+
+  /// Generated display geometry for one surface — ADR-036 (e).
+  ///
+  /// **Not a member of \ref CadSurface, deliberately.** `cadSurfaces` is assigned wholesale into
+  /// \ref DrawingDocument and into every \ref DrawingGeometrySnapshot, so a field on the surface
+  /// would be deep-copied into all 50 undo frames — the exact cost this cache exists to avoid,
+  /// arriving through the one door nobody thinks to check. A parallel container keyed by stable id
+  /// cannot be dragged along by those assignments.
+  ///
+  /// **Keyed by stable entity id, not by array index** (§11 invariant 9): `cadSurfaces` compacts on
+  /// erase, so an index key would start drawing one surface's border over another's triangulation
+  /// after a delete.
+  struct SurfaceDisplayCacheEntry {
+    std::uint64_t surfaceId = 0;
+
+    /// The triangulation this geometry was generated from — the staleness key. A rebuild REPLACES
+    /// the pointer wholesale (ADR-028 (a)), so pointer identity IS triangulation identity.
+    ///
+    /// `weak_ptr`, not a raw pointer, for the reason the mesh GPU cache already documents: a raw
+    /// pointer key can be matched by a NEW allocation at the freed address, which would silently
+    /// serve one surface's geometry for another's. An expired weak_ptr simply misses and regenerates.
+    /// Not a `shared_ptr` either — that would keep a superseded 7 MB triangulation alive for as long
+    /// as the cache entry lived.
+    std::weak_ptr<const CadTin> builtFrom;
+
+    /// Border edges: flat x,y,z pairs, six floats per segment (\c TinBorderEdges).
+    std::vector<float> borderEdges;
+  };
+
+  /// The display-geometry cache. Live-only: never in \ref DrawingGeometrySnapshot, never in
+  /// \ref DrawingDocument, never in `.gs` — which is what makes REQ-070's "never stored in `.gs`"
+  /// and "adds no entity to the drawing" structurally true rather than a rule someone must remember.
+  std::vector<SurfaceDisplayCacheEntry> surfaceDisplayCache;
 
   // --- HATCH command (REQ-043) ---
   /// Boundary loop traced under the cursor while HATCH is active (flat local x,y); valid drives the preview.
@@ -1892,8 +1946,14 @@ inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) {
 /// carry an EntityAttributes, which is exactly the set REQ-076 gives an id.
 enum class EntityKind : std::uint8_t {
   Line = 0, Circle, Arc, Ellipse, Polyline, Annotation, FilledRegion, Mesh,
-  FeatureLine  ///< REQ-087. Appended, never inserted — the value is not persisted, but reordering
+  FeatureLine, ///< REQ-087. Appended, never inserted — the value is not persisted, but reordering
                ///< would still silently change every switch that lists kinds in order.
+  /// REQ-068 / ADR-036 (a). Appended for a second, sharper reason than the one above: id assignment
+  /// walks the attribute arrays in `kEntityKindsInSweepOrder`, so inserting Surface anywhere but the
+  /// end would renumber every entity in every existing drawing on its next load — and REQ-069's
+  /// breakline and boundary references are stored by exactly those ids. Appending is what keeps a
+  /// legacy `.gs` loading with the ids it loaded with yesterday.
+  Surface
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -1927,8 +1987,42 @@ struct EntityRef {
 /// and regenerating that every frame would burn the REQ-100 budget on work whose input did not move.
 void AppendSurfaceEdgeLines(const AppCommandState& st, std::vector<float>* out);
 
+/// Bring \ref AppCommandState::surfaceDisplayCache up to date — ADR-036 (e). Called once a frame,
+/// beside \ref TickSurfaceRebuilds.
+///
+/// Regenerates an entry only when its staleness key has moved, and **returns before allocating**
+/// when nothing has: at REQ-100's ~200k-triangle profile the generation walks 600k edges, so an
+/// early-out placed after a `clear()` would still cost the frame it was written to save
+/// (§11 invariant 7). Entries whose surface id no longer resolves are reaped in the same pass, so an
+/// erased surface's geometry does not outlive it.
+void RefreshSurfaceDisplayGeometry(AppCommandState& st);
+
+/// Border edges of surface \p surfaceIndex from the cache, or nullptr when it has none (never built,
+/// or the cache has not caught up this frame). Six floats per segment.
+[[nodiscard]] const std::vector<float>* SurfaceBorderEdges(const AppCommandState& st, size_t surfaceIndex);
+
+/// Is surface \p surfaceIndex visible right now — built, on a layer that is on and not frozen, and
+/// not isolated out (REQ-068, REQ-084 (d))?
+///
+/// **One rule, three readers.** Drawing (\ref AppendSurfaceEdgeLines), picking
+/// (\ref PickClosestCadEntity) and the REQ-074 elevation readout each need it, and before this
+/// existed the first two carried hand-copied versions that had already drifted apart: neither
+/// consulted `hiddenEntityIds`, so an isolated-out surface stayed on screen. The point of a shared
+/// predicate is that "invisible" and "unclickable" cannot disagree — which is exactly what REQ-084
+/// (d) requires of every entity kind.
+[[nodiscard]] bool SurfaceVisible(const AppCommandState& st, size_t surfaceIndex);
+
 /// Index of the surface named \p name (case-insensitive), or -1 (REQ-068).
+///
+/// For a name the **user** typed — a command argument, a panel selection. For a reference held
+/// across time (an in-flight rebuild, a cross-object link), use \ref FindSurfaceIndexById: a name
+/// can be changed, and an erased name can be taken by a different surface.
 [[nodiscard]] int FindSurfaceIndex(const AppCommandState& st, const std::string& name);
+
+/// Index of the surface whose stable entity id is \p id, or -1 when it does not resolve — erased, or
+/// never assigned (REQ-076 / ADR-036 (a)). `id == 0` always returns -1: 0 means "unassigned", so
+/// matching on it would resolve to whichever surface happened not to have been swept yet.
+[[nodiscard]] int FindSurfaceIndexById(const AppCommandState& st, std::uint64_t id);
 
 /// (Re)build \p surface's triangulation from its source point groups (REQ-068).
 ///

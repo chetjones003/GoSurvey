@@ -321,6 +321,7 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
       // check fired on every valid selection of one — the exact inverse of a missed case, and
       // caught by `-Wswitch` rather than by the MSVC build, which does not warn here.
       case T::FeatureLine:  return st.featureLineOffsets.empty() ? 0 : st.featureLineOffsets.size() - 1;
+      case T::Surface:      return st.cadSurfaces.size();  // REQ-068 / ADR-036 (b)
       }
       return 0;
     };

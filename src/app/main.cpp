@@ -534,6 +534,14 @@ int main()
     // thread — see TickSurfaceRebuilds' own comment for the full contract.
     TickSurfaceRebuilds(cmd, cmdLog);
 
+    // Generated surface display geometry (ADR-036 (e)). After TickSurfaceRebuilds, so a
+    // triangulation that landed this frame is drawn from this frame rather than the next — and
+    // after EnsureEntityIds for the same reason it is: the cache is keyed on the stable id.
+    // Gated on its own staleness key, not on cadGpuRevision, which is what stops an unrelated edit
+    // from regenerating every surface's geometry (REQ-070: a style change must not retriangulate,
+    // and a line drawn elsewhere must not re-contour).
+    RefreshSurfaceDisplayGeometry(cmd);
+
     const ImGuiViewport *mainVp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(mainVp->WorkPos);
     ImGui::SetNextWindowSize(mainVp->WorkSize);

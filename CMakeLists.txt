@@ -503,6 +503,10 @@ if(GOSURVEY_BUILD_TESTS)
     tests/TinBuildTests.cpp
     tests/TinQueryTests.cpp
     tests/TinConstraintTests.cpp
+    # REQ-068 / REQ-070 border extraction (ADR-036 (b)). Pure, like the rest of tinbuild — and the
+    # border-vs-convex-hull distinction is the part that looks correct on simple data and is wrong
+    # on exactly the shapes real survey data produces (a hole, a notch).
+    tests/TinBorderTests.cpp
     tests/UpdateCheckTests.cpp
     tests/TelemetryPingTests.cpp
     tests/GsMigrateTests.cpp

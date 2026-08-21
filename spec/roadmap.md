@@ -68,8 +68,17 @@ when" and the requirements it closes.
 A lightweight board that complements the milestones. Keep each column honest.
 
 ### Now (in flight — keep short)
-- **M-Surfaces step 6 — REQ-070 + REQ-071** (surface styles, contour extraction). Step 5 (REQ-069)
-  is done (see M-Surfaces status below).
+- **M-Surfaces steps 6 + 7 — REQ-068 (selection), REQ-070, REQ-072.** Resequenced by
+  **D-2026-08-21-a**: the user asked for surface styles and a selectable surface together, so step 7
+  (REQ-072 banding + arrows) is pulled forward beside step 6 and **REQ-071 (contour EXTRACT) is
+  pushed back** to its own task. Three tasks, in this order — each blocked on the one before it:
+  - **TASK-084 — REQ-068's selection half**, never implemented. It also gives surfaces the stable
+    entity id (`EntityKind::Surface`) that everything below depends on.
+  - **TASK-085 — REQ-070 surface styles**: the style table, `util/contourgen`, the display-geometry
+    cache, the Surface Style dialog.
+  - **TASK-086 — REQ-072 analysis**: elevation/slope banding, slope arrows, the legend.
+  Step 5 (REQ-069) is done (see M-Surfaces status below). ADR-036 records the shape; it **amends
+  ADR-028 (h)** on the band-shading path.
 
 ### M-PaperSpace — Paper space & plotting (incremental)
 - **Goal:** compose the model onto sheets and plot them.
@@ -221,8 +230,16 @@ A lightweight board that complements the milestones. Keep each column honest.
   SHA-256 proves integrity but not authenticity. Tracked as debt, not as a solved problem.
 
 ### Next (accepted, sequenced, not started)
-- **REQ-070 + REQ-071 — surface styles, contour extraction** (M-Surfaces step 6). Re-run the REQ-100
-  surface bench case per the roadmap's own sequencing note.
+- **REQ-071 — contour extraction** (EXTRACT bakes displayed contours into unlinked polylines). Moved
+  out of "Now" by D-2026-08-21-a so a verification FAIL on styles cannot block it. `util/contourgen`
+  (TASK-085) emits the same flat-verts + offsets layout `userPolylineVerts` uses, so the follow-up is
+  small by construction rather than by hope.
+- **Surface plotting** — `src/io/PdfPlot.cpp` handles no surfaces at all, so REQ-068's "a surface on
+  a non-plottable layer is not plotted" is satisfied vacuously. Invisible today; the first thing a
+  user hits once styled contours exist. **No requirement covers it** — recorded as TASK-085 DEBT-1
+  and needing a REQ decision, not a quiet fix.
+- Re-run the REQ-100 surface bench case per the roadmap's own sequencing note — and note ADR-036 (e):
+  it must prove the display cache **holds across frames**, not merely that one regeneration is fast.
 - REQ-101's reference-dataset half (M2) — the typed-storage half is done; see M2 status above.
 
 ### Later (real but deferred)
@@ -285,4 +302,5 @@ M1 walking skeleton
 | `<2026-06-10>` | `<Initial roadmap>` | `<—>` |
 | 2026-08-15 | Added **M-Distribution** (REQ-077/078/202, ADR-029), running in parallel with M-Surfaces | User asked for automated releases and an auto-updater. It parallelises safely because it touches the build, the installer and one new module, sharing no code with surfaces — and it pays down an existing gap rather than adding scope: the installer script was gitignored and machine-specific, so REQ-200's reproducibility promise did not reach the artifact users actually received |
 | 2026-08-18 | M-Surfaces step 5 (REQ-069, TASK-072) closed PASS; "Now"/"Next" moved to step 6 (REQ-070 + REQ-071) | Breaklines, boundaries, and dynamic rebuild shipped and verified end to end in the running application; the roadmap's own forced sequencing puts styles/contours next |
+| 2026-08-21 | **Steps 6 and 7 merged and resequenced; REQ-071 pushed out; REQ-068's selection half pulled in** (D-2026-08-21-a, ADR-036). "Now" is TASK-084 → TASK-085 → TASK-086 | The user asked for surface styles and a selectable surface in one request. Reading the code first moved two things: REQ-068 already required selection and it was never built (so it is authority already held, and it supplies the stable id the style cache needs), and REQ-072's Analysis tab is part of what "surface styles" means to the user, so shipping step 6 without it would ship a dialog with a stubbed tab. REQ-071 moved out to keep the unit reviewable |
 | `<…>` | `<Moved X from Later to Now>` | `<user need materialized>` |

@@ -166,6 +166,22 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
 [[nodiscard]] bool TinElevationAt(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
                                   double x, double y, double* outZ);
 
+/// The triangulation's **border**: every edge belonging to exactly one triangle (REQ-068, REQ-070's
+/// "surface border" style component).
+///
+/// An interior edge is shared by two triangles; a border edge is not. That single rule gives the
+/// outer boundary and the rim of every hole a REQ-069 hide-boundary left behind, in one pass and with
+/// no special case for either — which is why the border is computed rather than tracked as the
+/// triangulation is culled.
+///
+/// **Not the convex hull.** A concave outline, and the void inside a hide boundary, are exactly the
+/// shapes a hull test gets wrong; the same distinction \ref TinElevationAt documents for containment.
+///
+/// \param out receives flat x,y,z pairs — six floats per border edge, the layout the line renderer
+///            and the highlight buffer both already consume. Cleared first.
+void TinBorderEdges(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
+                    std::vector<float>* out);
+
 // --- Predicates, exposed for testing -----------------------------------------------------------
 // These are the two functions the whole triangulation rests on, and a sign error in either is
 // invisible on most inputs. They are public so they can be pinned directly rather than only through

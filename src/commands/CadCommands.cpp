@@ -1209,10 +1209,14 @@ namespace {
 /// **Order is load-bearing**: it is what makes assignment deterministic, and therefore what makes a
 /// legacy `.gs` load with the same ids every time (REQ-076). Appending a new entity kind is safe;
 /// reordering the existing entries would renumber every legacy drawing on its next load.
+/// The order ids are handed out in. **Append only** — see \ref EntityKind. Reordering, or inserting
+/// anywhere but the end, renumbers every entity in every existing drawing on its next load, and
+/// REQ-069's breakline and boundary references are stored by exactly those ids.
 const EntityKind kEntityKindsInSweepOrder[] = {
     EntityKind::Line,       EntityKind::Circle,       EntityKind::Arc,  EntityKind::Ellipse,
     EntityKind::Polyline,   EntityKind::Annotation,   EntityKind::FilledRegion, EntityKind::Mesh,
-    EntityKind::FeatureLine};
+    EntityKind::FeatureLine,
+    EntityKind::Surface};  ///< REQ-068 / ADR-036 (a) — last, so the nine above keep their ids.
 
 /// The attribute array for a kind. One accessor for both the const and mutable walks, so the
 /// two can never disagree about which arrays are covered.
@@ -1228,27 +1232,86 @@ auto* AttrsForKind(StateT& st, EntityKind k) {
   case EntityKind::FilledRegion: return &st.cadFilledRegionAttrs;
   case EntityKind::Mesh:         return &st.cadMeshAttrs;
   case EntityKind::FeatureLine:  return &st.featureLineAttrs;
+  case EntityKind::Surface:      return &st.cadSurfaceAttrs;  // REQ-068 / ADR-036 (a)
   }
   return &st.userLineAttrs;
 }
 
 } // namespace
 
+bool SurfaceVisible(const AppCommandState& st, size_t surfaceIndex) {
+  if (surfaceIndex >= st.cadSurfaces.size())
+    return false;
+  const CadSurface& s = st.cadSurfaces[surfaceIndex];
+  if (!s.tin || s.tin->indices.empty())
+    return false;
+  if (surfaceIndex >= st.cadSurfaceAttrs.size())
+    return true;  // attrs are length-locked to cadSurfaces; a short array means "defaults", not hidden
+  const EntityAttributes& a = st.cadSurfaceAttrs[surfaceIndex];
+  // REQ-084 (d): an isolated-out surface is invisible, so it must not be drawn OR answer a click.
+  if (CadEntityIdHidden(&st.hiddenEntityIds, a.id))
+    return false;
+  // REQ-068: a surface on a frozen or off layer is not drawn.
+  const auto it = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+                               [&](const CadLayerRow& r) { return r.name == a.layer; });
+  return !(it != st.drawingLayerTable.end() && (!it->on || it->frozen));
+}
+
+void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
+  // Reap first: an entry whose surface id no longer resolves belongs to an erased surface. Ids are
+  // never reused (REQ-076), so "does not resolve" cannot mean "not yet created."
+  st.surfaceDisplayCache.erase(
+      std::remove_if(st.surfaceDisplayCache.begin(), st.surfaceDisplayCache.end(),
+                     [&](const AppCommandState::SurfaceDisplayCacheEntry& e) {
+                       return FindSurfaceIndexById(st, e.surfaceId) < 0;
+                     }),
+      st.surfaceDisplayCache.end());
+
+  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+    const std::uint64_t id = si < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[si].id : 0;
+    if (id == 0)
+      continue;  // not swept yet; it gets an entry next frame rather than one under an unusable key
+    const std::shared_ptr<const CadTin>& tin = st.cadSurfaces[si].tin;
+
+    auto it = std::find_if(st.surfaceDisplayCache.begin(), st.surfaceDisplayCache.end(),
+                           [&](const AppCommandState::SurfaceDisplayCacheEntry& e) { return e.surfaceId == id; });
+    if (it != st.surfaceDisplayCache.end() && it->builtFrom.lock() == tin)
+      continue;  // BEFORE any clear/reserve — see the header comment; this early-out is the budget
+
+    if (!tin) {
+      if (it != st.surfaceDisplayCache.end())
+        st.surfaceDisplayCache.erase(it);
+      continue;  // never built: no geometry, and no empty entry left behind to keep re-checking
+    }
+    if (it == st.surfaceDisplayCache.end()) {
+      st.surfaceDisplayCache.push_back({});
+      it = st.surfaceDisplayCache.end() - 1;
+      it->surfaceId = id;
+    }
+    it->builtFrom = tin;
+    TinBorderEdges(tin->vertsXyz, tin->indices, &it->borderEdges);
+  }
+}
+
+const std::vector<float>* SurfaceBorderEdges(const AppCommandState& st, size_t surfaceIndex) {
+  if (surfaceIndex >= st.cadSurfaceAttrs.size())
+    return nullptr;
+  const std::uint64_t id = st.cadSurfaceAttrs[surfaceIndex].id;
+  if (id == 0)
+    return nullptr;
+  for (const auto& e : st.surfaceDisplayCache)
+    if (e.surfaceId == id)
+      return e.borderEdges.empty() ? nullptr : &e.borderEdges;
+  return nullptr;
+}
+
 void AppendSurfaceEdgeLines(const AppCommandState& st, std::vector<float>* out) {
   if (!out)
     return;
   for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
-    const CadSurface& s = st.cadSurfaces[si];
-    if (!s.tin || s.tin->indices.empty())
+    if (!SurfaceVisible(st, si))
       continue;
-    // Layer visibility (REQ-068: a surface on a frozen or off layer is not drawn).
-    if (si < st.cadSurfaceAttrs.size()) {
-      const std::string& lname = st.cadSurfaceAttrs[si].layer;
-      const auto it = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
-                                   [&](const CadLayerRow& r) { return r.name == lname; });
-      if (it != st.drawingLayerTable.end() && (!it->on || it->frozen))
-        continue;
-    }
+    const CadSurface& s = st.cadSurfaces[si];
     const CadTin& t = *s.tin;
     const auto emit = [&](std::uint32_t a, std::uint32_t b) {
       out->push_back(t.vertsXyz[a * 3 + 0]);
@@ -1281,6 +1344,15 @@ int FindSurfaceIndex(const AppCommandState& st, const std::string& name) {
   };
   for (size_t i = 0; i < st.cadSurfaces.size(); ++i)
     if (eqCI(st.cadSurfaces[i].name, name))
+      return static_cast<int>(i);
+  return -1;
+}
+
+int FindSurfaceIndexById(const AppCommandState& st, std::uint64_t id) {
+  if (id == 0)
+    return -1;  // 0 is "unassigned", never a real id — it must not match the first id-less surface
+  for (size_t i = 0; i < st.cadSurfaceAttrs.size() && i < st.cadSurfaces.size(); ++i)
+    if (st.cadSurfaceAttrs[i].id == id)
       return static_cast<int>(i);
   return -1;
 }
@@ -1642,7 +1714,7 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
       continue;
     }
     job.thread.join();
-    const int si = FindSurfaceIndex(st, job.surfaceName);
+    const int si = FindSurfaceIndexById(st, job.surfaceId);
     // Applied only if the surface still exists AND nothing has changed since this job was
     // dispatched (architecture §8 rule 4). Either condition failing means discard: the surface was
     // erased, or an undo / further edit landed while this ran — REQ-069's "the in-flight result is
@@ -1675,12 +1747,20 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
   // Dispatch a rebuild for every surface whose definition might have changed and does not already
   // have one in flight — one dispatch per surface per revision is REQ-069's "at most one rebuild per
   // command/undo boundary," since a command bumps cadGpuRevision once however many points it moved.
-  for (CadSurface& surface : st.cadSurfaces) {
+  for (size_t sIdx = 0; sIdx < st.cadSurfaces.size(); ++sIdx) {
+    CadSurface& surface = st.cadSurfaces[sIdx];
     if (surface.builtAtRevision == st.cadGpuRevision)
+      continue;
+    // The id is assigned by EnsureEntityIds, which main.cpp runs immediately before this every frame.
+    // A surface created since that sweep has id 0 and is skipped for exactly one frame rather than
+    // dispatched under a key that cannot be looked up again.
+    const std::uint64_t surfaceId =
+        sIdx < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[sIdx].id : 0;
+    if (surfaceId == 0)
       continue;
     const bool alreadyRunning =
         std::any_of(st.surfaceRebuildAsync.begin(), st.surfaceRebuildAsync.end(),
-                   [&](const std::unique_ptr<SurfaceJob>& j) { return j->surfaceName == surface.name; });
+                   [&](const std::unique_ptr<SurfaceJob>& j) { return j->surfaceId == surfaceId; });
     if (alreadyRunning)
       continue;
 
@@ -1707,7 +1787,7 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
     }
 
     auto job = std::make_unique<SurfaceJob>();
-    job->surfaceName = surface.name;
+    job->surfaceId = surfaceId;
     job->generation = st.cadGpuRevision;
     job->originX = st.worldDocumentOriginX;
     job->originY = st.worldDocumentOriginY;
@@ -3963,6 +4043,42 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
       }
     }
   }
+  // TIN surfaces (REQ-068 / ADR-036 (b)) — hit-tested by their bounding box, matching filled regions
+  // and meshes rather than the per-segment chain test above. A surface is selected as a whole, so
+  // there is nothing a per-triangle test would decide differently: window mode requires the whole
+  // surface inside the rect and crossing requires it to overlap, and both answers come from the
+  // bounds. Walking 200k triangles to reach the same conclusion would only cost the frame.
+  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+    if (!SurfaceVisible(st, si))
+      continue;
+    const CadTin& t = *st.cadSurfaces[si].tin;
+    float smnX = 0.f, smxX = 0.f, smnY = 0.f, smxY = 0.f;
+    bool first = true;
+    for (size_t v = 0; v + 2 < t.vertsXyz.size(); v += 3) {
+      const float vx = t.vertsXyz[v], vy = t.vertsXyz[v + 1];
+      if (first) {
+        smnX = smxX = vx;
+        smnY = smxY = vy;
+        first = false;
+      } else {
+        smnX = std::min(smnX, vx);
+        smxX = std::max(smxX, vx);
+        smnY = std::min(smnY, vy);
+        smxY = std::max(smxY, vy);
+      }
+    }
+    if (first)
+      continue;
+    SPBox(smnX, smnY, smxX, smxY, &smnX, &smnY, &smxX, &smxY);  // screen space when orbited
+    const bool hit = windowMode ? (smnX >= mnX && smxX <= mxX && smnY >= mnY && smxY <= mxY)
+                                : !(smxX < mnX || smnX > mxX || smxY < mnY || smnY > mxY);
+    if (hit) {
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::Surface;
+      e.index = static_cast<int>(si);
+      hits.push_back(e);
+    }
+  }
   // Filled regions (REQ-042): hit-test the outer-loop bounding box, matching annotations/arcs/PDF — window
   // requires the bbox fully inside; crossing requires the bbox to intersect the rect.
   for (size_t fi = 0; fi < st.cadFilledRegions.size(); ++fi) {
@@ -4863,7 +4979,37 @@ static void FinalizeCopyTranslation(AppCommandState& st, float dx, float dy, std
   }
 }
 
-void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad) {
+/// Remove TIN surfaces from the selection before a transform runs, and **say so** (REQ-201).
+///
+/// ADR-036 (b)/(c): a surface is display-only. Its geometry is derived from its definition, so a
+/// translated surface would be silently un-translated by the next rebuild — a transform that appears
+/// to work and then quietly undoes itself is worse than one that declines.
+///
+/// The refusal is spoken rather than performed by omission. Every Apply* funnel below simply skips
+/// entity types it does not handle, so without this the user would drag a selection containing a
+/// surface, watch everything else move, and be told nothing about why one object stayed put. That
+/// silence is the exact failure mode ADR-035 (g) was written about.
+///
+/// Called from the funnels rather than from the Start* commands because a surface can be added to
+/// the selection by a window drag AFTER the command starts.
+void DropSurfacesFromSelectionForTransform(AppCommandState& st, const char* commandName,
+                                           std::vector<std::string>& log) {
+  const size_t before = st.selection.size();
+  st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
+                                    [](const SelectedEntity& e) {
+                                      return e.type == SelectedEntity::Type::Surface;
+                                    }),
+                     st.selection.end());
+  const size_t dropped = before - st.selection.size();
+  if (dropped == 0)
+    return;
+  log.push_back(std::string(commandName) + " — " + std::to_string(dropped) + " surface(s) excluded: a surface's" +
+                " shape comes from its definition, so moving it would be undone by the next rebuild." +
+                " Edit its definition in the Surfaces panel instead.");
+}
+
+void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad, std::vector<std::string>& log) {
+  DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
@@ -4986,7 +5132,8 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
   BumpCadGpuCache(st);
 }
 
-void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy) {
+void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, std::vector<std::string>& log) {
+  DropSurfacesFromSelectionForTransform(st, "MOVE", log);
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 &&
@@ -5361,9 +5508,10 @@ static void ApplyScaleToSelectedSurveyPoints(AppCommandState& st, float bx, floa
   }
 }
 
-void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc) {
+void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc, std::vector<std::string>& log) {
   if (!(sc > 0.f) || !std::isfinite(sc))
     return;
+  DropSurfacesFromSelectionForTransform(st, "SCALE", log);
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
@@ -5561,7 +5709,7 @@ bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineI
     if (isCopy)
       FinalizeCopyTranslation(st, dx, dy, log);
     else {
-      ApplyTranslationToSelection(st, dx, dy);
+      ApplyTranslationToSelection(st, dx, dy, log);
       // Stay in MOVE — same selection at new position, ready for another base+destination.
       st.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
       log.push_back("MOVE complete — base point (ESC to exit):");
@@ -5575,7 +5723,7 @@ bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineI
 static void FinishScaleCommand(AppCommandState& st, float scaleFactor, std::vector<std::string>& log) {
   PushUndoSnapshot(st, "Scale");
   const float s = std::max(scaleFactor, 1e-6f);
-  ApplyScaleToSelection(st, st.modifyBaseX, st.modifyBaseY, s);
+  ApplyScaleToSelection(st, st.modifyBaseX, st.modifyBaseY, s, log);
   st.active = AppCommandState::Kind::None;
   ResetModifyRotateDraft(st);
   log.push_back("SCALE complete.");
@@ -5721,7 +5869,7 @@ static void FinishRotateCommand(AppCommandState& st, float bx, float by, float r
       log.push_back("ROTATE COPY complete.");
     }
   } else {
-    ApplyRotationToSelection(st, bx, by, rad);
+    ApplyRotationToSelection(st, bx, by, rad, log);
     st.active = K::None;
     ResetModifyRotateDraft(st);
     log.push_back("ROTATE complete.");
@@ -6049,22 +6197,17 @@ static void CommitSurveyInverseSecondPoint(AppCommandState& st, float x2, float 
 /// vs proposed case, which is the grading question this command exists to answer, and a bare number
 /// from an unnamed surface would be worse than no number at all.
 ///
-/// Surfaces on an off or frozen layer are skipped, matching `AppendSurfaceEdgeLines` — the readout
-/// should describe the surfaces the user can see, and REQ-068 already established that rule.
+/// Invisible surfaces are skipped, via the shared \ref SurfaceVisible — the readout should describe
+/// the surfaces the user can see, and REQ-068 already established that rule. Routing through the
+/// shared predicate also fixed a real gap here: this walk checked layer on/frozen but not
+/// `hiddenEntityIds`, so SURFELEV reported an elevation from a surface REQ-084 (d) had isolated out.
 static std::vector<std::pair<std::string, double>> SurfaceElevationsAt(const AppCommandState& st, double x,
                                                                        double y) {
   std::vector<std::pair<std::string, double>> out;
   for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
-    const CadSurface& s = st.cadSurfaces[si];
-    if (!s.tin || s.tin->indices.empty())
+    if (!SurfaceVisible(st, si))
       continue;
-    if (si < st.cadSurfaceAttrs.size()) {
-      const std::string& lname = st.cadSurfaceAttrs[si].layer;
-      const auto it = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
-                                   [&](const CadLayerRow& r) { return r.name == lname; });
-      if (it != st.drawingLayerTable.end() && (!it->on || it->frozen))
-        continue;
-    }
+    const CadSurface& s = st.cadSurfaces[si];
     double z = 0.0;
     if (TinElevationAt(s.tin->vertsXyz, s.tin->indices, x, y, &z))
       out.emplace_back(s.name, z);
@@ -6669,6 +6812,16 @@ static void HandleOffsetViewportPick(AppCommandState& st, float wx, float wy, st
                     "the new line. Pick a line, circle, arc, ellipse, or polyline.");
       return;
     }
+    // REQ-068 / ADR-036 (c) — the same reasoning, one kind later. A surface became pickable, so
+    // without this it would be accepted here and then dropped by CommitOffsetSigned's `default:`,
+    // leaving the user having picked something and watched nothing happen. There is also no answer
+    // to offer: "offset a surface" would mean a second surface at a vertical or normal displacement,
+    // which is a grading operation no requirement defines.
+    if (hit.type == SelectedEntity::Type::Surface) {
+      log.push_back("OFFSET — 1 surface ignored: a surface cannot be offset. Pick a line, circle, "
+                    "arc, ellipse, or polyline.");
+      return;
+    }
     st.offsetEntity = hit;
     st.offsetEntityValid = true;
     st.offsetPhase = OP::WaitDistanceOrThrough;
@@ -7134,7 +7287,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       if (wasCopy)
         FinalizeCopyTranslation(st, dx, dy, log);
       else {
-        ApplyTranslationToSelection(st, dx, dy);
+        ApplyTranslationToSelection(st, dx, dy, log);
         // Stay in MOVE — same selection at new position, ready for another base+destination.
         st.modifyPhase = MP::NeedBase;
         log.push_back("MOVE complete — base point (ESC to exit):");
@@ -7443,6 +7596,24 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
   if (st.selection.empty()) {
     log.push_back("COPYCLIP — nothing selected. Select objects first.");
     return;
+  }
+  // A surface is not copyable (ADR-036 (b)): the clipboard carries geometry, and a surface's geometry
+  // is derived from a definition that names point groups, breaklines and boundaries in THIS drawing.
+  // Pasting the triangles alone would produce something that looks like a surface, rebuilds into
+  // nothing, and shares an id with the original. Refused out loud rather than by the silent skip the
+  // copy loop below would otherwise perform (REQ-201).
+  {
+    const size_t nSurf = static_cast<size_t>(std::count_if(
+        st.selection.begin(), st.selection.end(),
+        [](const SelectedEntity& e) { return e.type == SelectedEntity::Type::Surface; }));
+    if (nSurf > 0) {
+      log.push_back("COPYCLIP — " + std::to_string(nSurf) +
+                    " surface(s) not copied: a surface is defined by its point groups, breaklines and"
+                    " boundaries, which do not travel with a paste. Create a surface in the target"
+                    " drawing instead.");
+      if (nSurf == st.selection.size())
+        return;  // nothing else was selected — do not go on to clear the clipboard and report success
+    }
   }
   CadClipboard& cb = st.clipboard;
   cb = CadClipboard{};
@@ -10010,6 +10181,14 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
       }
       break;
     }
+    case SelectedEntity::Type::Surface: {
+      // REQ-068 / ADR-036 (b). Skips invisible surfaces, so SELECTSIMILAR cannot select something
+      // the user cannot see — the same rule the pick funnel applies (REQ-084 (d)).
+      for (size_t i = 0; i < st.cadSurfaces.size(); ++i)
+        if (SurfaceVisible(st, i))
+          consider(SelectedEntity::Type::Surface, static_cast<int>(i));
+      break;
+    }
     default:
       break;
     }
@@ -10437,6 +10616,27 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     st.cadMeshes.erase(st.cadMeshes.begin() + static_cast<std::ptrdiff_t>(idx));
     if (static_cast<size_t>(idx) < st.cadMeshAttrs.size())
       st.cadMeshAttrs.erase(st.cadMeshAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  // TIN surfaces (REQ-068: "erasing a surface is undoable in one step" — the caller has already
+  // pushed one snapshot for this whole erase, so removing it here is that one step).
+  //
+  // Goes through EraseSurfaceAtIndex rather than erasing the two vectors inline like the blocks
+  // above, so there is one erase path to keep correct. An in-flight rebuild (REQ-069) needs no
+  // cancellation here: the job is keyed on the surface's stable id (ADR-036 (a)), that id is never
+  // reused (REQ-076), so when the worker finishes `FindSurfaceIndexById` returns -1 and the result is
+  // discarded — REQ-069's own rule, reached without a second mechanism.
+  {
+    std::set<int> surfIx;
+    const size_t nSurf = st.cadSurfaces.size();
+    for (const auto& e : st.selection) {
+      if (e.type == SelectedEntity::Type::Surface && e.index >= 0 && static_cast<size_t>(e.index) < nSurf)
+        surfIx.insert(e.index);
+    }
+    std::vector<int> sv(surfIx.begin(), surfIx.end());
+    std::sort(sv.begin(), sv.end(), std::greater<int>());
+    for (int idx : sv)
+      EraseSurfaceAtIndex(st, static_cast<size_t>(idx));
   }
 
   // PDF underlays: release GL texture and erase from highest index downward.
@@ -11221,6 +11421,51 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     }
   }
 
+  // TIN surfaces (REQ-068 / ADR-036 (b)) — a click anywhere near a triangle edge selects the WHOLE
+  // surface, so this competes on distance through the same `consider` funnel as everything above.
+  //
+  // **Layer and isolation are filtered here, not in `consider`.** Every other kind reaches
+  // `consider` and is gated there by `CadSelectedEntityHidden`; a surface is gated one level earlier
+  // by `SurfaceVisible`, because that predicate also carries the layer rule the renderer applies to
+  // surfaces (REQ-068) and which `consider` does not know about. Filtering the whole surface once is
+  // also what keeps a hidden 200k-triangle surface from costing a full walk per frame.
+  //
+  // **The per-triangle plan-AABB reject is load-bearing, not a micro-optimisation.** Hover runs this
+  // every frame, and REQ-100's surface profile is ~200k triangles = 600k edges. Four compares that
+  // discard a triangle before three distance computations is the difference between a pick that fits
+  // the frame budget and one that does not. Under a ray (an orbited camera) the plan AABB does not
+  // bound the ray, so the reject is skipped rather than made approximately correct — a pick that
+  // silently misses is worse than a slow one.
+  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+    if (!SurfaceVisible(st, si))
+      continue;
+    const CadTin& t = *st.cadSurfaces[si].tin;
+    const std::vector<float>& V = t.vertsXyz;
+    SelectedEntity e{};
+    e.type = SelectedEntity::Type::Surface;
+    e.index = static_cast<int>(si);
+    double bestD2 = 1e300;
+    for (size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+      const size_t a = static_cast<size_t>(t.indices[i]) * 3;
+      const size_t b = static_cast<size_t>(t.indices[i + 1]) * 3;
+      const size_t c = static_cast<size_t>(t.indices[i + 2]) * 3;
+      if (a + 2 >= V.size() || b + 2 >= V.size() || c + 2 >= V.size())
+        break;
+      if (!useRay) {
+        const double lo_x = std::min(std::min(V[a], V[b]), V[c]);
+        const double hi_x = std::max(std::max(V[a], V[b]), V[c]);
+        const double lo_y = std::min(std::min(V[a + 1], V[b + 1]), V[c + 1]);
+        const double hi_y = std::max(std::max(V[a + 1], V[b + 1]), V[c + 1]);
+        if (wx < lo_x - tolWorld || wx > hi_x + tolWorld || wy < lo_y - tolWorld || wy > hi_y + tolWorld)
+          continue;
+      }
+      bestD2 = std::min(bestD2, d2Segment(V[a], V[a + 1], V[a + 2], V[b], V[b + 1], V[b + 2]));
+      bestD2 = std::min(bestD2, d2Segment(V[b], V[b + 1], V[b + 2], V[c], V[c + 1], V[c + 2]));
+      bestD2 = std::min(bestD2, d2Segment(V[c], V[c + 1], V[c + 2], V[a], V[a + 1], V[a + 2]));
+    }
+    consider(e, bestD2);
+  }
+
   if (!any)
     return false;
   *out = bestE;
@@ -11958,6 +12203,14 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
     if (hit.type == SelectedEntity::Type::FeatureLine) {
       log.push_back("TRIM — 1 feature line ignored: a feature line cannot be a cutting edge. Use a "
                     "line, circle, arc, ellipse, or polyline.");
+      return false;
+    }
+    // REQ-068 / ADR-036 (c). Same class as the two refusals above: a surface is pickable now, so it
+    // would otherwise be accepted as a cutting edge, contribute no cut segments, and leave the user
+    // with "no cutting segments" and nothing to explain it.
+    if (hit.type == SelectedEntity::Type::Surface) {
+      log.push_back("TRIM — 1 surface ignored: a surface cannot be a cutting edge. Use a line, "
+                    "circle, arc, ellipse, or polyline.");
       return false;
     }
     for (const auto& c : st.trimCutters) {
@@ -13301,6 +13554,11 @@ const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, con
   case T::FilledRegion: return at(st.cadFilledRegionAttrs);
   case T::Mesh:         return at(st.cadMeshAttrs);
   case T::FeatureLine:  return at(st.featureLineAttrs);  // REQ-087 — layer, colour, and its stable id
+  // REQ-068 / ADR-036 (a). A surface has carried an EntityAttributes since the store was written —
+  // it simply had no SelectedEntity::Type to be reached through, and no EntityKind, so its `id` was
+  // never assigned. Adding it here is what gives a surface REQ-084 isolation gating and Properties
+  // layer/colour, both inherited rather than re-implemented.
+  case T::Surface:      return at(st.cadSurfaceAttrs);
   // Survey points and PDF underlays carry no EntityAttributes and are out of REQ-084's scope.
   default:              return nullptr;
   }

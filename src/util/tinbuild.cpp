@@ -878,3 +878,51 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
   }
   indices = std::move(kept);
 }
+
+void TinBorderEdges(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
+                    std::vector<float>* out) {
+  if (!out)
+    return;
+  out->clear();
+
+  // Each undirected edge, keyed by its two vertex indices in ascending order — so the same edge
+  // reached from either of its two triangles produces the same key. Sorting and scanning for
+  // adjacent duplicates costs one sort instead of a hash map, and keeps the module dependency-free
+  // (architecture §11.4), which is the whole reason this file includes nothing but <algorithm>,
+  // <cmath> and <deque>.
+  std::vector<std::pair<std::uint32_t, std::uint32_t>> edges;
+  edges.reserve(indices.size());
+  const auto addEdge = [&](std::uint32_t a, std::uint32_t b) {
+    edges.emplace_back(std::min(a, b), std::max(a, b));
+  };
+  for (size_t i = 0; i + 2 < indices.size(); i += 3) {
+    addEdge(indices[i], indices[i + 1]);
+    addEdge(indices[i + 1], indices[i + 2]);
+    addEdge(indices[i + 2], indices[i]);
+  }
+  std::sort(edges.begin(), edges.end());
+
+  const size_t vcount = vertsXyz.size() / 3;
+  for (size_t i = 0; i < edges.size();) {
+    // How many triangles share this edge. A well-formed triangulation gives 1 (border) or 2
+    // (interior); a run of 3+ means a degenerate input, and treating it as interior is deliberate —
+    // an edge that many faces meet at is not an outline, and drawing it as one would present a
+    // triangulation defect as a border the user might try to edit.
+    size_t j = i + 1;
+    while (j < edges.size() && edges[j] == edges[i])
+      ++j;
+    if (j - i == 1) {
+      const size_t a = static_cast<size_t>(edges[i].first);
+      const size_t b = static_cast<size_t>(edges[i].second);
+      if (a < vcount && b < vcount) {
+        out->push_back(vertsXyz[a * 3]);
+        out->push_back(vertsXyz[a * 3 + 1]);
+        out->push_back(vertsXyz[a * 3 + 2]);
+        out->push_back(vertsXyz[b * 3]);
+        out->push_back(vertsXyz[b * 3 + 1]);
+        out->push_back(vertsXyz[b * 3 + 2]);
+      }
+    }
+    i = j;
+  }
+}

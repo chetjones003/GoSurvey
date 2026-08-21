@@ -29,7 +29,7 @@ TEST_CASE("Destroying an in-flight surface rebuild joins its worker instead of t
     std::vector<std::unique_ptr<AppCommandState::SurfaceRebuildAsync>> jobs;
     auto job = std::make_unique<AppCommandState::SurfaceRebuildAsync>();
     auto* p = job.get();
-    p->surfaceName = "In flight";
+    p->surfaceId = 1;  // any non-zero id; this test is about the thread's lifetime, not the lookup
     p->thread = std::thread([p, &workerRan, &workerFinished] {
       workerRan.store(true);
       // Long enough that the scope below is left while this is still running — the whole point.

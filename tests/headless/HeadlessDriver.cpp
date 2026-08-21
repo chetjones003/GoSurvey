@@ -29,6 +29,7 @@
 #include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <algorithm>
 #include <fstream>
 #include <sstream>
 #include <utility>
@@ -186,6 +187,10 @@ void CheckInvariants(Run& run, int sourceLine) {
 /// freshly created entity as id-less and diverge from the GUI on the first save.
 void TickFrame(Run& run) {
   EnsureEntityIds(run.st);
+  // The surface display-geometry cache (ADR-036 (e)), in the same order main.cpp's frame loop runs
+  // it: after ids, because it is keyed on them. TickSurfaceRebuilds is deliberately NOT called here —
+  // see the req069 transcript's header on why this driver uses the synchronous SURFACEREBUILD.
+  RefreshSurfaceDisplayGeometry(run.st);
 }
 
 /// True when a point file's first row is a header (`P,N,E,Z,D`) rather than data.
@@ -390,6 +395,18 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     // The GUI derives this from the viewport height and the snap aperture; a transcript has no
     // viewport, so it uses a fixed world tolerance. Picks in transcripts are placed ON the object.
     SubmitTrimViewportPick(run.st, x, y, 1.f, run.log);
+  } else if (verb == "CLIPCOPY") {
+    // CLIPCOPY — copy the current selection to the clipboard.
+    //
+    // There is no COPYCLIP command-line verb: the clipboard is bound to Ctrl+C in main.cpp and
+    // CadUi.cpp and reachable no other way, so a transcript cannot get at it through
+    // ProcessCommandLineSubmit. This hands the selection to the same CopySelectionToClipboard the
+    // key binding calls, exactly as BOX above arms the selection-box fields the viewport would arm
+    // and TRIMPICK hands a click to the entry point the GUI routes TRIM's clicks to.
+    //
+    // Like TRIMPICK's, this is a REQ-203 gap in the clipboard's own input routing rather than
+    // something this verb repairs — the whole of copy/paste is undrivable without it.
+    CopySelectionToClipboard(run.st, run.log);
   } else if (verb == "ESC") {
     CancelActiveCommand(run.st, run.log);
   } else if (verb == "UNDO") {
@@ -594,10 +611,28 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // still in the drawing and must simply refuse to be picked.
       else if (what == "SELECTED")
         got = static_cast<long>(run.st.selection.size());
-      else {
+      else if (what == "SURFACES")
+        got = static_cast<long>(run.st.cadSurfaces.size());
+      // How many of the CURRENT selection are TIN surfaces (REQ-068 / ADR-036 (b)). Distinct from
+      // SELECTED on purpose: "1 object is selected" and "the selected object is the surface" are
+      // different claims, and a surface pick that silently returned the polyline underneath it would
+      // satisfy the first. It is also the only way to assert a REFUSAL — that MOVE dropped the
+      // surface and kept everything else — which is ADR-036 (c)'s whole obligation.
+      else if (what == "SELECTEDSURFACES")
+        got = static_cast<long>(std::count_if(
+            run.st.selection.begin(), run.st.selection.end(),
+            [](const SelectedEntity& e) { return e.type == SelectedEntity::Type::Surface; }));
+      // Border segments the display cache holds for surface 0 (ADR-036 (e)). Asserts the cache is
+      // POPULATED, which is what the selection highlight reads; a highlight that silently drew
+      // nothing would otherwise look exactly like a surface that was never selected.
+      else if (what == "SURFACEBORDERSEGS") {
+        const std::vector<float>* b = run.st.cadSurfaces.empty() ? nullptr : SurfaceBorderEdges(run.st, 0);
+        got = b ? static_cast<long>(b->size() / 6) : 0;
+      } else {
         Fail(run, "parse",
              "EXPECT: unknown quantity " + what +
-                 " (LINES CIRCLES POLYLINES ARCS ELLIPSES ANNOTATIONS SURVEYPOINTS SELECTED)",
+                 " (LINES CIRCLES POLYLINES ARCS ELLIPSES ANNOTATIONS SURVEYPOINTS SELECTED"
+                 " SURFACES SELECTEDSURFACES SURFACEBORDERSEGS)",
              sourceLine);
         return false;
       }
