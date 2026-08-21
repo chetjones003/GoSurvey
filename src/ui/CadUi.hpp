@@ -84,6 +84,10 @@ void DrawTextStyleManagerWindow(AppCommandState& cmd, std::vector<std::string>* 
 /// Point Group manager (REQ-067): create/rename/delete groups and edit their rules, with the
 /// resolved member count shown live so an empty or non-matching rule is visible immediately.
 void DrawPointGroupManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+/// Surface Style editor (SURFSTYLE, REQ-070 / ADR-036 (i)): the named table of how a surface is
+/// DRAWN — contours, border, triangles, points. Editing a style changes every surface using it, and
+/// touches no surface definition, so nothing here can re-triangulate anything.
+void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 /// Surfaces panel (REQ-068): create a TIN surface from point groups, rebuild, rename, delete.
 void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 

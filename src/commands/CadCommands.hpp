@@ -5,6 +5,9 @@
 // TextStyles::DefaultTextStyles, for the textStyles member's initializer (issue #57). Pure and
 // dependency-free (string/vector/CadEntities.hpp), so this adds no cycle and no weight.
 #include "TextStyle.hpp"
+// SurfaceStyles::DefaultSurfaceStyles, for the surfaceStyles member's initializer — same reason,
+// same shape, and pure for the same reason (REQ-070 / ADR-036 (d)).
+#include "SurfaceStyle.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
 #include "PdfAttach.hpp"
 #include "PaperSpace.hpp"
@@ -335,6 +338,12 @@ struct DrawingGeometrySnapshot {
   std::vector<PointGroup>       pointGroups;
   std::vector<CadLayerRow>      drawingLayerTable;
   std::vector<TextStyle>        textStyles;    ///< Named text styles (REQ-044) — undoable so style edits undo.
+  /// Named surface styles (REQ-070 / ADR-036 (d)) — undoable for the same reason textStyles is.
+  ///
+  /// The generated contours and borders these describe are **not** here and never will be: they live
+  /// in `AppCommandState::surfaceDisplayCache`, which no snapshot touches (ADR-036 (e)). That split is
+  /// what lets a style edit be undoable without a single contour entering the undo stack.
+  std::vector<SurfaceStyle>     surfaceStyles;
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<PaperLayout>      paperLayouts;  ///< Paper layouts incl. native paper geometry (REQ-037/038) — undoable.
   double worldDocumentOriginX = 0.0;
@@ -390,6 +399,7 @@ struct DrawingDocument {
   std::vector<int>              selectedSurveyPointIndices;
   std::vector<CadLayerRow>      drawingLayerTable;
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
+  std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
   std::string                   activeTextStyleName = "Standard";  ///< Style for new TEXT/MTEXT.
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<SelectedEntity>   selection;
@@ -753,6 +763,18 @@ struct AppCommandState {
     /// Points in the surface profile (REQ-100 as amended, ADR-028). 0 = the line-segment profile.
     int surfacePointCount = 0;
     int surfaceTriangleCount = 0;
+    /// Contour levels the profile's style produces, and the segments they generate — REQ-100 profile
+    /// (c) is defined as a **contoured** surface, so the record has to say at what interval or the
+    /// number cannot be compared with the next run's.
+    double surfaceMinorIntervalFt = 0.0;
+    double surfaceMajorIntervalFt = 0.0;
+    int surfaceContourSegs = 0;
+    /// \ref AppCommandState::surfaceDisplayRegenCount at the first TIMED frame. The delta at the end
+    /// is ADR-036 (e)'s acceptance: the cache must hold across the run, so this must not grow with
+    /// the frame count.
+    std::uint64_t regenAtStart = 0;
+    bool regenBaselineTaken = false;
+    std::uint64_t regenDuringRun = 0;
 
     /// Triangles in the shaded-mesh profile (REQ-100 (b)). 0 = not the mesh profile. At most one of
     /// this and \ref surfacePointCount is non-zero; both zero means the line-segment profile.
@@ -1217,14 +1239,58 @@ struct AppCommandState {
     /// as the cache entry lived.
     std::weak_ptr<const CadTin> builtFrom;
 
-    /// Border edges: flat x,y,z pairs, six floats per segment (\c TinBorderEdges).
-    std::vector<float> borderEdges;
+    /// The style this geometry was generated from — the second half of the staleness key.
+    ///
+    /// The **resolved style by value**, not a revision counter. ADR-036 (e) names the key
+    /// "(tin pointer, style revision)"; a counter has to be bumped by every route that can change the
+    /// table, and undo restore, `.gs` load, tab switch and DXF import are four of them, so the one
+    /// that gets forgotten leaves stale contours on screen with nothing to point at. Comparing the
+    /// resolved value cannot be forgotten. A style is five small structs and two doubles, so the
+    /// comparison is cheaper than the allocation it prevents.
+    SurfaceStyle style;
+
+    /// All generated geometry, each in `GL_LINES` layout: flat x,y,z, six floats per segment.
+    /// Regenerated together, only on a staleness miss, and borrowed by
+    /// \ref CadSurfaceDisplayGeometry rather than copied into it.
+    std::vector<float> triangleEdges;  ///< Every triangulation edge (the pre-REQ-070 appearance).
+    std::vector<float> borderEdges;    ///< The outline: edges belonging to one triangle (\c TinBorderEdges).
+    std::vector<float> minorContours;  ///< Minor levels, excluding those that are also major.
+    std::vector<float> majorContours;
+
+    /// The style asked for more contour levels than the display path will generate, so the contour
+    /// buffers above are empty for a reason that has nothing to do with the style's toggles.
+    ///
+    /// Carried rather than left implicit because REQ-201 forbids absorbing a refusal: an interval of
+    /// 0.0001 ft over a 1,000 ft surface is a million contours, and a surface that simply stopped
+    /// showing any would look like a defect. The Surface Manager reads this and says so.
+    bool contoursSuppressed = false;
+    /// How many levels were asked for, for that message. 0 when nothing was suppressed.
+    int suppressedLevelCount = 0;
   };
 
   /// The display-geometry cache. Live-only: never in \ref DrawingGeometrySnapshot, never in
   /// \ref DrawingDocument, never in `.gs` — which is what makes REQ-070's "never stored in `.gs`"
   /// and "adds no entity to the drawing" structurally true rather than a rule someone must remember.
   std::vector<SurfaceDisplayCacheEntry> surfaceDisplayCache;
+
+  /// What the renderer is handed for surfaces this frame — batches borrowing the buffers above,
+  /// filtered for layer/isolation visibility and carrying each component's resolved colour and
+  /// lineweight. Rebuilt in the same pass as the cache, so a batch never outlives its buffer.
+  ///
+  /// Live-only for the same reason the cache is: nothing here is ever snapshotted or written.
+  CadSurfaceDisplayGeometry surfaceDisplayGeometry;
+
+  /// How many times \ref RefreshSurfaceDisplayGeometry has actually REGENERATED a surface's geometry
+  /// since the process started, as opposed to taking the early-out.
+  ///
+  /// Exists for one reason: ADR-036 (e)'s REQ-100 obligation is to prove **the cache holds across
+  /// frames**, not that a single generation is fast. A profile that timed one regeneration would pass
+  /// while the defect it exists to catch — regenerating 200,000 triangles' worth of contours every
+  /// frame — was fully present. BENCH reports the delta over the run: one per surface means the cache
+  /// held; one per frame means it did not.
+  ///
+  /// Live-only and never reset by a document change, so it counts work rather than describing state.
+  std::uint64_t surfaceDisplayRegenCount = 0;
 
   // --- HATCH command (REQ-043) ---
   /// Boundary loop traced under the cursor while HATCH is active (flat local x,y); valid drives the preview.
@@ -1446,6 +1512,8 @@ struct AppCommandState {
   bool showLayerManagerWindow = false;
   /// Text style manager (STYLE / ribbon). Create / rename / delete / edit named text styles (REQ-044).
   bool showTextStyleManagerWindow = false;
+  /// Surface Style editor (REQ-070 / ADR-036 (i)) — opened by SURFSTYLE and by the Surface Manager.
+  bool showSurfaceStyleWindow = false;
   bool showPointGroupManagerWindow = false;  ///< Point Group manager (REQ-067).
   bool showSurfaceManagerWindow = false;     ///< Surfaces panel (REQ-068).
   bool showFeatureLineElevWindow = false;    ///< Feature line elevation editor (REQ-088).
@@ -1466,6 +1534,11 @@ struct AppCommandState {
   /// Named text styles for this drawing (REQ-044 / ADR-020). "Standard" is always present — see the
   /// layer-table note above; it had the same defect and has the same fix.
   std::vector<TextStyle> textStyles = TextStyles::DefaultTextStyles();
+  /// Named surface styles for this drawing (REQ-070 / ADR-036 (d)). "Standard" is always present, and
+  /// it is initialised here rather than at each creation site for the reason the two tables above
+  /// document: a drawing that reaches the renderer with an empty table would be in a state the rest of
+  /// the code is entitled to assume cannot happen.
+  std::vector<SurfaceStyle> surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
   /// Active text style for new TEXT/MTEXT (the STYLE dropdown). Empty resolves to "Standard".
   std::string activeTextStyleName = "Standard";
   /// Viewport CAD crosshair (Drawing1): RGB 0–1, arm length as fraction of viewport width/height, pickbox half-size in px.
@@ -1977,28 +2050,45 @@ struct EntityRef {
 /// and before a reference is taken — never per frame (architecture §11.7). Assigning at the 127
 /// sites that construct an EntityAttributes was rejected: a missed site there is not a compile
 /// error, it is a silently id-less entity (the ADR-025 (a) lesson).
-/// Append every visible surface's triangle edges to \p out as world-space line vertices
-/// (x,y,z per endpoint, two endpoints per segment) — the buffer `ViewportRenderer` draws (REQ-068).
+/// Bring \ref AppCommandState::surfaceDisplayCache and \ref AppCommandState::surfaceDisplayGeometry
+/// up to date — ADR-036 (e). Called once a frame, beside \ref TickSurfaceRebuilds.
 ///
-/// Surfaces on an off or frozen layer are skipped here rather than in the renderer, which keeps
-/// layer policy in one place and the renderer ignorant of it.
+/// Generates each style component a surface asks for — triangle edges, border, minor and major
+/// contours — and leaves the buffer for a component that is switched off empty, so REQ-070's "a style
+/// with triangles off and contours on draws only contours" is a property of what exists rather than
+/// of what the renderer remembers to skip.
 ///
-/// **Rebuild only when the geometry revision changes**: a 200k-triangle surface is 600k segments,
-/// and regenerating that every frame would burn the REQ-100 budget on work whose input did not move.
-void AppendSurfaceEdgeLines(const AppCommandState& st, std::vector<float>* out);
-
-/// Bring \ref AppCommandState::surfaceDisplayCache up to date — ADR-036 (e). Called once a frame,
-/// beside \ref TickSurfaceRebuilds.
+/// Regenerates an entry only when its staleness key `(triangulation pointer, resolved style)` has
+/// moved, and **returns before allocating** when nothing has: at REQ-100's ~200k-triangle profile the
+/// generation walks 600k edges, so an early-out placed after a `clear()` would still cost the frame
+/// it was written to save (§11 invariant 7). Entries whose surface id no longer resolves are reaped
+/// in the same pass, so an erased surface's geometry does not outlive it.
 ///
-/// Regenerates an entry only when its staleness key has moved, and **returns before allocating**
-/// when nothing has: at REQ-100's ~200k-triangle profile the generation walks 600k edges, so an
-/// early-out placed after a `clear()` would still cost the frame it was written to save
-/// (§11 invariant 7). Entries whose surface id no longer resolves are reaped in the same pass, so an
-/// erased surface's geometry does not outlive it.
+/// The key does **not** include the surface's definition, and that is the mechanism behind REQ-070's
+/// central claim: changing a contour interval moves the style half of the key and nothing else, so
+/// the triangulation is never rebuilt and the `shared_ptr` it hangs from is never even touched.
+///
+/// The batch assembly at the end is redone every call — it copies pointers and colours, never
+/// vertices — because layer visibility and object isolation change with no surface geometry changing
+/// at all.
 void RefreshSurfaceDisplayGeometry(AppCommandState& st);
 
 /// Border edges of surface \p surfaceIndex from the cache, or nullptr when it has none (never built,
 /// or the cache has not caught up this frame). Six floats per segment.
+/// Contour segments currently held in the display cache, across every surface (REQ-100 profile (c)).
+///
+/// For the BENCH record: profile (c) is defined as a CONTOURED surface, so "how many contour
+/// segments were on screen" is part of what makes one run comparable with the next.
+[[nodiscard]] int SurfaceDisplayContourSegs(const AppCommandState& st);
+
+/// True when surface \p surfaceIndex asked for more contour levels than the display path generates,
+/// with \p levelsAsked filled in — REQ-201, so "no contours" is never left to look like a defect.
+///
+/// The display pass runs once a frame with no command in flight and nowhere to log, so it records the
+/// fact on the cache entry and the Surface Manager is what says it out loud.
+[[nodiscard]] bool SurfaceContoursSuppressed(const AppCommandState& st, size_t surfaceIndex,
+                                             int* levelsAsked);
+
 [[nodiscard]] const std::vector<float>* SurfaceBorderEdges(const AppCommandState& st, size_t surfaceIndex);
 
 /// Is surface \p surfaceIndex visible right now — built, on a layer that is on and not frozen, and

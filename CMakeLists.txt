@@ -210,6 +210,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/util/gltfimport.cpp
   src/util/stlimport.cpp
   src/util/tinbuild.cpp
+  src/util/contourgen.cpp
   src/util/benchscene.cpp
 
   # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
@@ -240,6 +241,7 @@ add_executable(GoSurvey
   src/ui/CadUi_TraverseEditor.cpp
   src/ui/CadUi_PointGroups.cpp
   src/ui/CadUi_Surfaces.cpp
+  src/ui/CadUi_SurfaceStyles.cpp
   src/ui/CadUi_FeatureLineElev.cpp
   src/ui/CadUi_UpdateDialog.cpp
   src/ui/SplashScreen.cpp
@@ -507,6 +509,15 @@ if(GOSURVEY_BUILD_TESTS)
     # border-vs-convex-hull distinction is the part that looks correct on simple data and is wrong
     # on exactly the shapes real survey data produces (a hole, a notch).
     tests/TinBorderTests.cpp
+    # REQ-070 contour generation (ADR-036 (f)). Pure marching triangles: the vertex-tie rule and the
+    # shared-edge chaining are both invisible on simple data and wrong on exactly the shapes a real
+    # surface produces — a saddle, a level grazing a vertex, a contour running off the border.
+    tests/ContourGenTests.cpp
+    # REQ-070 surface style table (ADR-036 (d)). Header-only and pure, so it needs no source entry
+    # below. Three of REQ-070's five acceptance conditions — the deleted-style fallback, the legacy
+    # empty-name fallback, and the rejection of a major interval that is not a whole multiple of the
+    # minor — are decided entirely here, before any geometry exists to look at.
+    tests/SurfaceStyleTests.cpp
     tests/UpdateCheckTests.cpp
     tests/TelemetryPingTests.cpp
     tests/GsMigrateTests.cpp
@@ -561,6 +572,9 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-068 Delaunay triangulation. Pure by ADR-028 (c); its double-precision predicates are the
     # part a float build gets silently wrong, so they must be pinned without a GL context.
     src/util/tinbuild.cpp
+    # REQ-070 contour generation. Pure by ADR-036 (f) — no GL, no document — so a half-open contour
+    # is caught against a hand-computed expectation rather than by looking at a viewport.
+    src/util/contourgen.cpp
     # REQ-077/078 version ordering + manifest parse. Pure by ADR-029 (g) — no network, no window.
     # Wrong version ordering has NO symptom (the user is simply never offered an update), which is
     # exactly why it must be pinned by a test rather than noticed in use.

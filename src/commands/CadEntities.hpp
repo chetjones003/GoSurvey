@@ -92,6 +92,108 @@ struct TextStyle {
   bool italic = false;
 };
 
+/// One drawable component of a surface style (REQ-070 / ADR-036 (d) (i)): the triangle edges, the
+/// border, the major or minor contours, or the points.
+///
+/// The four properties are encoded exactly as \ref EntityAttributes encodes the same four, so the
+/// resolvers the renderer already has (\c ResolveStoredColorForViewport, the lineweight helpers) work
+/// on a component unchanged, and there is no second parsing path to keep in step with the first.
+///
+/// **Layer and plot style are deliberately absent** (ADR-036 (i)). A surface has exactly one layer —
+/// its own \ref EntityAttributes — and GoSurvey has no plot-style table, so a per-component column for
+/// either could be shown but never honoured, and a control the product will not obey is worse than an
+/// absent one.
+struct SurfaceComponentStyle {
+  bool visible = true;
+  /// "ByLayer", a `#RRGGBB` literal, or a named preset — \ref EntityAttributes::color's encoding.
+  std::string color = "ByLayer";
+  std::string linetype = "ByLayer";
+  float lineweightMm = -1.f;  ///< Millimetres on paper; \c -1.f means ByLayer.
+
+  bool operator==(const SurfaceComponentStyle& o) const {
+    return visible == o.visible && color == o.color && linetype == o.linetype &&
+           lineweightMm == o.lineweightMm;
+  }
+  bool operator!=(const SurfaceComponentStyle& o) const { return !(*this == o); }
+};
+
+/// A named surface style (REQ-070 / ADR-036 (d)): how a surface is *drawn*, never what it is made of.
+///
+/// The drawing owns a \c std::vector<SurfaceStyle> and each \ref CadSurface references one by
+/// \c styleName, so editing a style changes every surface using it — which is REQ-070's stated point,
+/// and the reason a per-surface copy was declined (ADR-036 alternative (1)). "Standard" always exists
+/// and is not deletable, exactly as \ref TextStyle's does; a name that no longer resolves falls back
+/// to it rather than failing to draw.
+///
+/// **Resolution is on read, not bake-on-write** — the opposite of the choice ADR-020 made for text,
+/// and deliberately (ADR-036 (d)): a text style is baked because ~12 render sites read the baked
+/// value, whereas a surface style is read at exactly one place, the display-geometry generator.
+/// Baking would put a stale copy on the surface and would defeat REQ-070's central constraint, that
+/// changing a style property must not re-triangulate.
+struct SurfaceStyle {
+  std::string name;  ///< Unique within the drawing.
+
+  SurfaceComponentStyle triangles;
+  SurfaceComponentStyle border;
+  SurfaceComponentStyle majorContour;
+  SurfaceComponentStyle minorContour;
+  SurfaceComponentStyle points;
+
+  /// Contour intervals in feet. **double, not float**: these are multiplied by a step count to
+  /// produce each contour's elevation, so a 0.1 ft interval stored as `float` would put every level
+  /// slightly off the round number it is labelled with. They are a parameter, not a coordinate, so
+  /// architecture §11.8's float-storage rule does not reach them.
+  ///
+  /// The major interval must be a whole multiple of the minor one — REQ-070 makes rejecting anything
+  /// else an acceptance condition, because a major contour drawn at a level that is not also a minor
+  /// level is a mis-labelled contour. \c SurfaceStyles::IntervalsCompatible is that rule.
+  double minorIntervalFt = 2.0;
+  double majorIntervalFt = 10.0;
+
+  bool operator==(const SurfaceStyle& o) const {
+    return name == o.name && triangles == o.triangles && border == o.border &&
+           majorContour == o.majorContour && minorContour == o.minorContour && points == o.points &&
+           minorIntervalFt == o.minorIntervalFt && majorIntervalFt == o.majorIntervalFt;
+  }
+  bool operator!=(const SurfaceStyle& o) const { return !(*this == o); }
+};
+
+/// One drawable run of surface display geometry: a line buffer plus the appearance to draw it with
+/// (REQ-070 / ADR-036 (h)).
+///
+/// **The vertices are BORROWED, never owned.** They point into
+/// `AppCommandState::surfaceDisplayCache`, which is where the generated geometry actually lives, and
+/// a 200,000-triangle surface's edge buffer is ~14 MB — copying it into a batch list would double
+/// that on every rebuild for nothing. The batch list and the cache it points into are rebuilt
+/// together in \c RefreshSurfaceDisplayGeometry and consumed in the same frame, so a batch never
+/// outlives its buffer. **Nothing may hold one across a call to that function.**
+struct SurfaceDisplayBatch {
+  /// World-space x,y,z, six floats per segment — `GL_LINES` layout, the same one `surveyMarkers`
+  /// and the old `surfaceEdges` parameter used. Never null in a batch that reaches the renderer.
+  const std::vector<float>* verts = nullptr;
+  float rgba[4] = {1.f, 1.f, 1.f, 1.f};
+  /// Millimetres on paper, or \c -1.f for the renderer's default width. Millimetres and not pixels:
+  /// the mm-to-device conversion depends on the framebuffer, which is the renderer's business and
+  /// not the Domain's.
+  float lineweightMm = -1.f;
+};
+
+/// Everything drawn for the drawing's surfaces this frame (REQ-070 / ADR-036 (h)).
+///
+/// Replaces — rather than joins — the former flat `surfaceEdges` parameter on \c RenderScene. A
+/// signature already 24 parameters long does not get four more for components that are always built
+/// together and always consumed together.
+///
+/// Triangle-mesh batches for REQ-072's elevation and slope banding will join this struct; they are
+/// deliberately absent until TASK-086 defines what a band is.
+struct CadSurfaceDisplayGeometry {
+  /// In draw order: triangles first, then contours, then the border on top, so a border stays
+  /// readable over its own triangulation.
+  std::vector<SurfaceDisplayBatch> lines;
+
+  [[nodiscard]] bool empty() const { return lines.empty(); }
+};
+
 /// Single-line TEXT, MTEXT box, or aligned linear dimension drawn over the viewport (world coordinates;
 /// for paper-space entities the coordinates are paper inches — see ADR-009).
 struct CadAnnotation {
@@ -349,6 +451,14 @@ struct CadSurface {
   /// Boundary rings, applied in this exact order (REQ-069: "boundaries apply in definition order").
   /// Same dangling-id handling as \ref breaklineIds.
   std::vector<CadSurfaceBoundary> boundaries;
+
+  /// Named \ref SurfaceStyle this surface is drawn with (REQ-070 / ADR-036 (d)).
+  ///
+  /// **By name, not by index**, like \ref sourcePointGroups above and for the same reason
+  /// (architecture §11.9). Empty, or a name no longer in the table, resolves to "Standard" —
+  /// REQ-070's "a surface whose style was deleted falls back to a default style rather than failing
+  /// to draw", and also what every surface in every `.gs` written before this field existed reads as.
+  std::string styleName;
 
   /// The built triangulation, or null when the surface has never been built.
   std::shared_ptr<const CadTin> tin;

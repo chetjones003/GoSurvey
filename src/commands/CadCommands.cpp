@@ -9,6 +9,7 @@
 #include "util/benchscene.hpp"
 #include "util/meshgeom.hpp"
 #include "util/tinbuild.hpp"
+#include "util/contourgen.hpp"  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
 #include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
 #include "util/gltfimport.hpp"
 #include "util/stlimport.hpp"
@@ -92,6 +93,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.selectedSurveyPointIndices = cmd.selectedSurveyPointIndices;
   doc.drawingLayerTable      = cmd.drawingLayerTable;
   doc.textStyles             = cmd.textStyles;
+  doc.surfaceStyles          = cmd.surfaceStyles;
   doc.activeTextStyleName    = cmd.activeTextStyleName;
   doc.pdfAttachments         = cmd.pdfAttachments;
   doc.selection              = cmd.selection;
@@ -152,6 +154,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
   cmd.drawingLayerTable          = doc.drawingLayerTable;
   cmd.textStyles                 = doc.textStyles;
+  cmd.surfaceStyles              = doc.surfaceStyles;
   cmd.activeTextStyleName        = doc.activeTextStyleName;
   cmd.pdfAttachments             = doc.pdfAttachments;
   cmd.selection                  = doc.selection;
@@ -1151,6 +1154,7 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
   snap.pointGroups          = st.pointGroups;   // group edits are undoable (REQ-067)
   snap.drawingLayerTable    = st.drawingLayerTable;
   snap.textStyles           = st.textStyles;  // style edits are undoable (REQ-044)
+  snap.surfaceStyles        = st.surfaceStyles;  // and surface-style edits (REQ-070)
   snap.pdfAttachments       = st.pdfAttachments;
   snap.paperLayouts         = st.paperLayouts;  // native paper geometry is undoable (REQ-037/038)
   // Zero GL texture IDs: restored snapshots must not reference freed GPU resources.
@@ -1193,6 +1197,7 @@ static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySn
   st.pointGroups          = snap.pointGroups;
   st.drawingLayerTable    = snap.drawingLayerTable;
   st.textStyles           = snap.textStyles;
+  st.surfaceStyles        = snap.surfaceStyles;
   st.pdfAttachments       = snap.pdfAttachments;
   st.paperLayouts         = snap.paperLayouts;
   st.selectedPaperEntities.clear();  // restored layouts invalidate paper-entity indices
@@ -1257,6 +1262,142 @@ bool SurfaceVisible(const AppCommandState& st, size_t surfaceIndex) {
   return !(it != st.drawingLayerTable.end() && (!it->on || it->frozen));
 }
 
+namespace {
+
+/// Ceiling on how many contour levels one surface may generate at (REQ-070).
+///
+/// The generator's cost is proportional to total contour LENGTH, not to the level count — its inner
+/// loop only visits levels lying inside each triangle's own Z range — so a small interval on a flat
+/// surface is cheap and cannot run away on its own. This cap is not for that; it is for the value
+/// nobody typed. The style editor refuses an out-of-range interval where the user enters it, but a
+/// hand-edited `.gs` or a future importer can still present 0.0001 ft, and the display path must
+/// degrade instead of locking the UI up. 20,000 is far past any plan sheet — a 1,000 ft relief at a
+/// 0.05 ft interval — and well short of a hang.
+constexpr size_t kMaxContourLevels = 20000;
+
+/// Flatten \p r's chained polylines into the `GL_LINES` layout the renderer consumes: six floats per
+/// segment, both endpoints written out.
+///
+/// The doubling is deliberate. `GL_LINE_STRIP` would need one draw call per contour — thousands of
+/// them — where this needs one for all of them, and the existing surface/marker/snap paths are all
+/// already `GL_LINES`, so this keeps one layout in the renderer instead of two.
+void AppendContourLinesFrom(const ContourResult& r, std::vector<float>* out) {
+  for (int c = 0; c < r.contourCount(); ++c) {
+    const int begin = r.offsets[static_cast<size_t>(c)];
+    const int end = r.offsets[static_cast<size_t>(c) + 1];
+    const auto emit = [&](int v) {
+      out->push_back(r.vertsXyz[static_cast<size_t>(v) * 3 + 0]);
+      out->push_back(r.vertsXyz[static_cast<size_t>(v) * 3 + 1]);
+      out->push_back(r.vertsXyz[static_cast<size_t>(v) * 3 + 2]);
+    };
+    for (int v = begin; v + 1 < end; ++v) {
+      emit(v);
+      emit(v + 1);
+    }
+    // A closed contour's last vertex is not a repeat of its first (contourgen does not emit the seam
+    // twice), so the closing segment has to be written here or every ring would render with a gap.
+    if (end - begin > 2 && r.closed[static_cast<size_t>(c)]) {
+      emit(end - 1);
+      emit(begin);
+    }
+  }
+}
+
+/// Every triangulation edge of \p t in `GL_LINES` layout — the appearance a surface had before
+/// REQ-070, now the style's "triangles" component.
+void AppendTriangleEdges(const CadTin& t, std::vector<float>* out) {
+  const auto emit = [&](std::uint32_t a, std::uint32_t b) {
+    out->push_back(t.vertsXyz[a * 3 + 0]);
+    out->push_back(t.vertsXyz[a * 3 + 1]);
+    out->push_back(t.vertsXyz[a * 3 + 2]);
+    out->push_back(t.vertsXyz[b * 3 + 0]);
+    out->push_back(t.vertsXyz[b * 3 + 1]);
+    out->push_back(t.vertsXyz[b * 3 + 2]);
+  };
+  // Each interior edge is emitted twice, once per adjoining triangle. De-duplicating would cost a
+  // hash of every edge to halve a buffer the line pipeline already handles at this size (REQ-100's
+  // measured envelope is 750k segments); that trade is worth revisiting only if the surface profile
+  // misses its budget.
+  for (size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+    emit(t.indices[i], t.indices[i + 1]);
+    emit(t.indices[i + 1], t.indices[i + 2]);
+    emit(t.indices[i + 2], t.indices[i]);
+  }
+}
+
+/// How many levels \c ContourLevels would produce, without producing them.
+///
+/// The cap below has to be checked BEFORE the lists are built, not after: a 0.0001 ft interval over a
+/// 33 ft surface is 330,000 doubles materialised and immediately discarded, which took 2.4 s in
+/// testing — a visible stall to reach a decision that is pure arithmetic.
+double ContourLevelCount(double minZ, double maxZ, double interval) {
+  if (!std::isfinite(minZ) || !std::isfinite(maxZ) || !std::isfinite(interval) || interval <= 0.0 ||
+      maxZ < minZ)
+    return 0.0;
+  const double first = std::ceil(minZ / interval);
+  const double last = std::floor(maxZ / interval);
+  return last < first ? 0.0 : last - first + 1.0;
+}
+
+/// Split a surface's contour levels into major and minor, with the majors removed from the minors so
+/// no level is drawn twice.
+///
+/// A major level is a minor level by construction — the interval rule makes the major interval a
+/// whole multiple of the minor — so without the removal every major contour would be drawn once in
+/// each colour, and which one a user saw would depend on draw order rather than on the style.
+void SplitContourLevels(double minZ, double maxZ, const SurfaceStyle& style,
+                        std::vector<double>* minorOut, std::vector<double>* majorOut) {
+  minorOut->clear();
+  majorOut->clear();
+  if (style.majorContour.visible)
+    ContourLevels(minZ, maxZ, style.majorIntervalFt, majorOut);
+  if (!style.minorContour.visible)
+    return;
+
+  std::vector<double> allMinor;
+  ContourLevels(minZ, maxZ, style.minorIntervalFt, &allMinor);
+  if (majorOut->empty()) {
+    *minorOut = std::move(allMinor);
+    return;
+  }
+  // Matched with a tolerance, never `==`: both lists are `step * interval` products, and a level a
+  // plan reader calls "110" is not the same double when reached as 55x2 and as 11x10.
+  const double tol = std::max(1.0e-9, style.minorIntervalFt * 1.0e-9);
+  for (double lv : allMinor) {
+    const auto near = std::lower_bound(majorOut->begin(), majorOut->end(), lv - tol);
+    if (near != majorOut->end() && std::fabs(*near - lv) <= tol)
+      continue;
+    minorOut->push_back(lv);
+  }
+}
+
+/// The resolved RGBA and lineweight for one component of a surface, folding the ByLayer chain the
+/// same way an entity's own attributes do.
+///
+/// A component's "ByLayer" means the surface's own colour, which in turn may itself be ByLayer and
+/// resolve to the layer's. Doing it through the shared resolvers rather than by hand is what keeps a
+/// contour's ByLayer and a line's ByLayer meaning the same thing.
+SurfaceDisplayBatch ResolveComponentBatch(const AppCommandState& st, const EntityAttributes& surfAttr,
+                                          const SurfaceComponentStyle& comp,
+                                          const std::vector<float>* verts) {
+  SurfaceDisplayBatch b;
+  b.verts = verts;
+
+  const CadLayerRow* layer = FindDrawingLayerRowCi(st, surfAttr.layer);
+  // The surface's own effective colour first — that is what a component's ByLayer defers to.
+  float surfaceRgba[4] = {1.f, 1.f, 1.f, 1.f};
+  ResolveEntityRgbaForViewport(surfAttr, layer, 0.42f, 0.62f, 0.78f, surfaceRgba);
+  ResolveStoredColorForViewport(comp.color, surfAttr.transparency < 0.f ? 0.f : surfAttr.transparency,
+                                surfaceRgba[0], surfaceRgba[1], surfaceRgba[2], b.rgba);
+  b.rgba[3] = surfaceRgba[3];
+
+  b.lineweightMm = comp.lineweightMm >= 0.f ? comp.lineweightMm
+                                            : EffectiveEntityLineweightMm(surfAttr, layer);
+  return b;
+}
+
+} // namespace
+
 void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
   // Reap first: an entry whose surface id no longer resolves belongs to an erased surface. Ids are
   // never reused (REQ-076), so "does not resolve" cannot mean "not yet created."
@@ -1271,11 +1412,17 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
     const std::uint64_t id = si < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[si].id : 0;
     if (id == 0)
       continue;  // not swept yet; it gets an entry next frame rather than one under an unusable key
-    const std::shared_ptr<const CadTin>& tin = st.cadSurfaces[si].tin;
+    const CadSurface& surf = st.cadSurfaces[si];
+    const std::shared_ptr<const CadTin>& tin = surf.tin;
+
+    // Resolve-on-read (ADR-036 (d)): nothing is baked onto the surface, so a style edit touches the
+    // table and nothing else — which is why it cannot reach the definition and cannot retriangulate.
+    const SurfaceStyle* style = SurfaceStyles::Resolve(st.surfaceStyles, surf.styleName);
+    const SurfaceStyle resolved = style ? *style : SurfaceStyles::StandardSurfaceStyle();
 
     auto it = std::find_if(st.surfaceDisplayCache.begin(), st.surfaceDisplayCache.end(),
                            [&](const AppCommandState::SurfaceDisplayCacheEntry& e) { return e.surfaceId == id; });
-    if (it != st.surfaceDisplayCache.end() && it->builtFrom.lock() == tin)
+    if (it != st.surfaceDisplayCache.end() && it->builtFrom.lock() == tin && it->style == resolved)
       continue;  // BEFORE any clear/reserve — see the header comment; this early-out is the budget
 
     if (!tin) {
@@ -1289,8 +1436,136 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
       it->surfaceId = id;
     }
     it->builtFrom = tin;
-    TinBorderEdges(tin->vertsXyz, tin->indices, &it->borderEdges);
+    it->style = resolved;
+    ++st.surfaceDisplayRegenCount;  // past the early-out: this frame is doing the real work
+
+    // Each component is generated only when its own toggle is on, and its buffer is released when it
+    // is off — REQ-070's "a style with triangles off and contours on draws only contours" is then a
+    // property of what exists, not of what the renderer remembers to skip. `shrink_to_fit` because a
+    // 14 MB triangle-edge buffer left capacity-resident by a `clear()` would defeat turning it off.
+    const auto release = [](std::vector<float>* v) {
+      v->clear();
+      v->shrink_to_fit();
+    };
+
+    if (resolved.triangles.visible) {
+      // Cleared, not appended to. This entry may already hold the edges generated for the PREVIOUS
+      // style — a style edit is a cache miss on a triangulation that did not change — and appending
+      // to it would double the buffer on every edit. Capacity is kept, because what follows refills
+      // it to the same size.
+      it->triangleEdges.clear();
+      AppendTriangleEdges(*tin, &it->triangleEdges);
+    } else {
+      release(&it->triangleEdges);
+    }
+
+    if (resolved.border.visible)
+      TinBorderEdges(tin->vertsXyz, tin->indices, &it->borderEdges);
+    else
+      release(&it->borderEdges);
+
+    release(&it->minorContours);
+    release(&it->majorContours);
+    it->contoursSuppressed = false;
+    it->suppressedLevelCount = 0;
+    if (resolved.minorContour.visible || resolved.majorContour.visible) {
+      double minZ = 0.0, maxZ = 0.0;
+      bool haveZ = false;
+      for (size_t v = 2; v < tin->vertsXyz.size(); v += 3) {
+        const double z = static_cast<double>(tin->vertsXyz[v]);
+        if (!haveZ) {
+          minZ = maxZ = z;
+          haveZ = true;
+        } else {
+          minZ = std::min(minZ, z);
+          maxZ = std::max(maxZ, z);
+        }
+      }
+      if (haveZ) {
+        // The cap is on the pair, not on each list: two intervals that are individually sane can
+        // still be asked for together, and it is the total the frame pays for. Counted before
+        // anything is allocated, for the reason ContourLevelCount documents.
+        const double wanted =
+            (resolved.minorContour.visible ? ContourLevelCount(minZ, maxZ, resolved.minorIntervalFt) : 0.0) +
+            (resolved.majorContour.visible ? ContourLevelCount(minZ, maxZ, resolved.majorIntervalFt) : 0.0);
+        if (wanted > static_cast<double>(kMaxContourLevels)) {
+          // Recorded, never absorbed (REQ-201). Nothing here can log — this runs once a frame with no
+          // command in flight — so the fact is carried on the entry and the Surface Manager reports
+          // it. Silently drawing no contours would look like a defect in the generator.
+          it->contoursSuppressed = true;
+          it->suppressedLevelCount =
+              wanted > 2.0e9 ? 2000000000 : static_cast<int>(wanted);  // saturate, never overflow
+        } else {
+          std::vector<double> minorLevels, majorLevels;
+          SplitContourLevels(minZ, maxZ, resolved, &minorLevels, &majorLevels);
+          ContourResult r;
+          if (!minorLevels.empty()) {
+            GenerateContours(tin->vertsXyz, tin->indices, minorLevels, &r);
+            AppendContourLinesFrom(r, &it->minorContours);
+          }
+          if (!majorLevels.empty()) {
+            GenerateContours(tin->vertsXyz, tin->indices, majorLevels, &r);
+            AppendContourLinesFrom(r, &it->majorContours);
+          }
+        }
+      }
+    }
   }
+
+  // Assemble what the renderer is handed. Cheap by construction: the batches BORROW the buffers
+  // above (see SurfaceDisplayBatch), so this pass copies pointers and colours, never vertices, and
+  // is therefore safe to redo every frame — which it must be, because layer visibility and isolation
+  // can change without any surface's geometry changing at all.
+  st.surfaceDisplayGeometry.lines.clear();
+  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+    if (!SurfaceVisible(st, si))
+      continue;  // layer off/frozen or isolated out — filtered here, so the renderer stays ignorant
+    const std::uint64_t id = si < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[si].id : 0;
+    if (id == 0)
+      continue;
+    const auto it = std::find_if(st.surfaceDisplayCache.begin(), st.surfaceDisplayCache.end(),
+                                 [&](const AppCommandState::SurfaceDisplayCacheEntry& e) { return e.surfaceId == id; });
+    if (it == st.surfaceDisplayCache.end())
+      continue;
+    const EntityAttributes& attr = st.cadSurfaceAttrs[si];
+
+    // Draw order: triangles, then contours, then the border last so an outline stays readable over
+    // its own triangulation.
+    const auto add = [&](const SurfaceComponentStyle& comp, const std::vector<float>* verts) {
+      if (verts->empty())
+        return;
+      st.surfaceDisplayGeometry.lines.push_back(ResolveComponentBatch(st, attr, comp, verts));
+    };
+    add(it->style.triangles, &it->triangleEdges);
+    add(it->style.minorContour, &it->minorContours);
+    add(it->style.majorContour, &it->majorContours);
+    add(it->style.border, &it->borderEdges);
+  }
+}
+
+bool SurfaceContoursSuppressed(const AppCommandState& st, size_t surfaceIndex, int* levelsAsked) {
+  if (levelsAsked)
+    *levelsAsked = 0;
+  if (surfaceIndex >= st.cadSurfaceAttrs.size())
+    return false;
+  const std::uint64_t id = st.cadSurfaceAttrs[surfaceIndex].id;
+  if (id == 0)
+    return false;
+  for (const auto& e : st.surfaceDisplayCache) {
+    if (e.surfaceId != id)
+      continue;
+    if (levelsAsked)
+      *levelsAsked = e.suppressedLevelCount;
+    return e.contoursSuppressed;
+  }
+  return false;
+}
+
+int SurfaceDisplayContourSegs(const AppCommandState& st) {
+  size_t floats = 0;
+  for (const auto& e : st.surfaceDisplayCache)
+    floats += e.minorContours.size() + e.majorContours.size();
+  return static_cast<int>(floats / 6);
 }
 
 const std::vector<float>* SurfaceBorderEdges(const AppCommandState& st, size_t surfaceIndex) {
@@ -1303,34 +1578,6 @@ const std::vector<float>* SurfaceBorderEdges(const AppCommandState& st, size_t s
     if (e.surfaceId == id)
       return e.borderEdges.empty() ? nullptr : &e.borderEdges;
   return nullptr;
-}
-
-void AppendSurfaceEdgeLines(const AppCommandState& st, std::vector<float>* out) {
-  if (!out)
-    return;
-  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
-    if (!SurfaceVisible(st, si))
-      continue;
-    const CadSurface& s = st.cadSurfaces[si];
-    const CadTin& t = *s.tin;
-    const auto emit = [&](std::uint32_t a, std::uint32_t b) {
-      out->push_back(t.vertsXyz[a * 3 + 0]);
-      out->push_back(t.vertsXyz[a * 3 + 1]);
-      out->push_back(t.vertsXyz[a * 3 + 2]);
-      out->push_back(t.vertsXyz[b * 3 + 0]);
-      out->push_back(t.vertsXyz[b * 3 + 1]);
-      out->push_back(t.vertsXyz[b * 3 + 2]);
-    };
-    // Each interior edge is emitted twice, once per adjoining triangle. De-duplicating would cost a
-    // hash of every edge to halve a buffer the line pipeline already handles at this size (REQ-100's
-    // measured envelope is 750k segments); that trade is worth revisiting only if the surface
-    // profile misses its budget.
-    for (size_t i = 0; i + 2 < t.indices.size(); i += 3) {
-      emit(t.indices[i], t.indices[i + 1]);
-      emit(t.indices[i + 1], t.indices[i + 2]);
-      emit(t.indices[i + 2], t.indices[i]);
-    }
-  }
 }
 
 int FindSurfaceIndex(const AppCommandState& st, const std::string& name) {
@@ -2094,6 +2341,223 @@ void RunSurfaceImportFile(AppCommandState& st, const std::string& args, std::vec
                 "\" into point group \"" + g.name + "\"; the link is broken.");
   BumpCadGpuCache(st);
 }
+
+// SURFSTYLE (REQ-070) — the command form of the Surface Style editor.
+//
+// It exists alongside the dialog rather than instead of it for two reasons. A dialog cannot be
+// driven by a headless transcript, and REQ-070's acceptance conditions are end-to-end claims —
+// "changing the contour interval updates the display without rebuilding the triangulation", "two
+// surfaces sharing a style both change" — that no unit test can reach, because they are about what
+// the command state machine does to the document. The dialog calls the same helpers.
+//
+// **Comma-separated arguments**, like every other surface command: style names and surface names
+// routinely contain spaces ("Existing Ground", "Contours 1 ft"), so splitting on whitespace would
+// make half the names in a real drawing unaddressable. Same reason SURFACECREATE does it.
+//
+// Every edit goes through PushUndoSnapshot, so a style change is a single undo step. The ADR-020
+// document-owned-table pattern makes that free: the table is already in the geometry snapshot.
+
+/// The component \p word names, or nullptr with \p why set — REQ-201, so a typo says what it would
+/// have accepted rather than "invalid".
+SurfaceComponentStyle* SurfaceComponentByName(SurfaceStyle& s, const std::string& word,
+                                              std::string* why) {
+  const std::string w = StringUtil::toLowerAsciiCopy(word);
+  if (w == "triangles" || w == "triangle") return &s.triangles;
+  if (w == "border") return &s.border;
+  if (w == "major" || w == "majorcontour") return &s.majorContour;
+  if (w == "minor" || w == "minorcontour") return &s.minorContour;
+  if (w == "points" || w == "point") return &s.points;
+  if (why)
+    *why = "Unknown component \"" + word + "\" — expected triangles, border, major, minor or points.";
+  return nullptr;
+}
+
+/// Parse one interval field. A separate function so the message names the FIELD, not just the value:
+/// "the minor interval" is what the user has to go and fix.
+bool ParseIntervalField(const std::string& text, const char* which, double* out,
+                        std::vector<std::string>& log) {
+  try {
+    size_t used = 0;
+    const double v = std::stod(text, &used);
+    if (used == StringUtil::trimCopy(text).size()) {
+      *out = v;
+      return true;
+    }
+  } catch (...) {
+    // Not a number — reported below rather than silently treated as zero.
+  }
+  log.push_back(std::string("SURFSTYLE — the ") + which + " interval must be a number, not \"" +
+                text + "\".");
+  return false;
+}
+
+void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
+                             std::vector<std::string>& log) {
+  SurfaceStyles::EnsureStandard(st.surfaceStyles);
+
+  std::string rest;
+  const std::string verb = StringUtil::toLowerAsciiCopy(
+      StringUtil::trimCopy(args.substr(0, args.find_first_of(" \t,"))));
+  {
+    const size_t sp = args.find_first_of(" \t");
+    rest = sp == std::string::npos ? std::string() : StringUtil::trimCopy(args.substr(sp + 1));
+  }
+
+  if (verb.empty()) {
+    st.showSurfaceStyleWindow = true;
+    log.push_back("SURFSTYLE — surface style editor opened.");
+    return;
+  }
+
+  const auto usage = [&]() {
+    log.push_back("SURFSTYLE — usage: SURFSTYLE (opens the editor) | NEW <style> | DELETE <style> | "
+                  "INTERVAL <style>, <minor>, <major> | SHOW|HIDE <style>, "
+                  "<triangles|border|major|minor|points> | ASSIGN <surface>, <style>");
+  };
+
+  if (verb == "new") {
+    const std::string name = StringUtil::trimCopy(rest);
+    if (name.empty()) {
+      usage();
+      return;
+    }
+    if (SurfaceStyles::Find(st.surfaceStyles, name)) {
+      log.push_back("SURFSTYLE — a style named \"" + name + "\" already exists.");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface style");
+    // Copied from Standard rather than value-initialised: a new style that drew nothing would look
+    // like the create had failed.
+    SurfaceStyle s = SurfaceStyles::StandardSurfaceStyle();
+    s.name = name;
+    st.surfaceStyles.push_back(std::move(s));
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — created style \"" + name + "\" (copied from Standard).");
+    return;
+  }
+
+  if (verb == "delete") {
+    const std::string name = StringUtil::trimCopy(rest);
+    if (name.empty()) {
+      usage();
+      return;
+    }
+    if (name == SurfaceStyles::kStandardName) {
+      log.push_back("SURFSTYLE — \"Standard\" cannot be deleted; it is what every unresolved style "
+                    "name falls back to.");
+      return;
+    }
+    const auto it = std::find_if(st.surfaceStyles.begin(), st.surfaceStyles.end(),
+                                 [&](const SurfaceStyle& s) { return s.name == name; });
+    if (it == st.surfaceStyles.end()) {
+      log.push_back("SURFSTYLE — no style named \"" + name + "\".");
+      return;
+    }
+    // Deleting a style that surfaces are using is ALLOWED, unlike a text style. REQ-070 makes the
+    // fallback an acceptance condition — "a surface whose style was deleted falls back to a default
+    // style rather than failing to draw" — so refusing the delete would leave that path unreachable
+    // and untested. The surfaces keep their styleName, so re-creating a style with that name adopts
+    // them back rather than leaving the reference silently rewritten.
+    int usedBy = 0;
+    for (const CadSurface& s : st.cadSurfaces)
+      if (s.styleName == name)
+        ++usedBy;
+    PushUndoSnapshot(st, "Surface style");
+    st.surfaceStyles.erase(it);
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — deleted style \"" + name + "\"." +
+                  (usedBy > 0 ? " " + std::to_string(usedBy) +
+                                    " surface(s) using it now draw with \"Standard\"."
+                              : std::string()));
+    return;
+  }
+
+  if (verb == "interval") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 3 || f[0].empty()) {
+      usage();
+      return;
+    }
+    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    if (!s) {
+      log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
+      return;
+    }
+    double minor = 0.0, major = 0.0;
+    if (!ParseIntervalField(f[1], "minor", &minor, log) ||
+        !ParseIntervalField(f[2], "major", &major, log))
+      return;
+    // REQ-070: rejected with a SPECIFIC message, and rejected BEFORE the value is stored, so the
+    // invalid pair never exists to generate mis-labelled contours from.
+    std::string why;
+    if (!SurfaceStyles::IntervalsCompatible(minor, major, &why)) {
+      log.push_back("SURFSTYLE — " + why);
+      return;
+    }
+    PushUndoSnapshot(st, "Surface style");
+    s->minorIntervalFt = minor;
+    s->majorIntervalFt = major;
+    // Bumps the drawing revision because the DISPLAY changed, which is what marks the tab dirty. It
+    // does not mark any surface for rebuild: a surface's staleness is its triangulation pointer and
+    // its resolved style, never this counter (ADR-036 (e)) — which is exactly why an interval change
+    // cannot retriangulate.
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — \"" + s->name + "\" contours: minor " + SurfaceStyles::FormatFt(minor) +
+                  " ft, major " + SurfaceStyles::FormatFt(major) + " ft.");
+    return;
+  }
+
+  if (verb == "show" || verb == "hide") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+      usage();
+      return;
+    }
+    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    if (!s) {
+      log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
+      return;
+    }
+    std::string why;
+    SurfaceComponentStyle* comp = SurfaceComponentByName(*s, f[1], &why);
+    if (!comp) {
+      log.push_back("SURFSTYLE — " + why);
+      return;
+    }
+    PushUndoSnapshot(st, "Surface style");
+    comp->visible = (verb == "show");
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — \"" + s->name + "\" " + f[1] + " " +
+                  (comp->visible ? "shown." : "hidden."));
+    return;
+  }
+
+  if (verb == "assign") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+      usage();
+      return;
+    }
+    const int si = FindSurfaceIndex(st, f[0]);
+    if (si < 0) {
+      log.push_back("SURFSTYLE — no surface named \"" + f[0] + "\".");
+      return;
+    }
+    if (!SurfaceStyles::Find(st.surfaceStyles, f[1])) {
+      log.push_back("SURFSTYLE — no style named \"" + f[1] + "\".");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface style");
+    st.cadSurfaces[static_cast<size_t>(si)].styleName = f[1];
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — surface \"" + st.cadSurfaces[static_cast<size_t>(si)].name +
+                  "\" now uses style \"" + f[1] + "\".");
+    return;
+  }
+
+  usage();
+}
+
 
 /// `UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY|POINTFILE>, <n>` — removes one item from a surface's
 /// definition (REQ-069's "remove", the counterpart to DESIGNATEBREAKLINE/DESIGNATEBOUNDARY). \p n is
@@ -3096,6 +3560,7 @@ const CmdEntry kRegistry[] = {
     {"regen", "re", "Regenerate the drawing"},
     {"layer", "la", "Open the Layer manager"},
     {"style", "st, ddstyle", "Text style manager: create / edit named text styles"},
+    {"surfstyle", "ss", "Surface style editor: contours, triangles, border (REQ-070)"},
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"pdfattach", "pa", "Attach a PDF underlay"},
     {"overkill",     "ok", "Remove duplicate geometry"},
@@ -3468,6 +3933,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "inverse") {
     StartSurveyInverseCommand(st, log);
+    return true;
+  }
+  if (primary == "surfstyle") {
+    ExecuteSurfStyleCommand(st, std::string(), log);
     return true;
   }
   if (primary == "surfelev") {
@@ -9828,6 +10297,12 @@ void SyncDrawingLayerTableWithGeometry(AppCommandState& st) {
   TextStyles::EnsureStandard(st.textStyles);
   if (st.activeTextStyleName.empty() || !TextStyles::Find(st.textStyles, st.activeTextStyleName))
     st.activeTextStyleName = TextStyles::kStandardName;
+  // Surface styles (REQ-070): the same guarantee, and it is what a legacy `.gs` relies on — a file
+  // written before this table existed has no styles section at all, and every surface in it carries
+  // an empty styleName that must resolve to something drawable (ADR-036 (d)). Left to the loader
+  // alone it would hold for `.gs` and not for DXF import or a fresh document, so it lives in the one
+  // normalisation pass every route to a drawing already goes through.
+  SurfaceStyles::EnsureStandard(st.surfaceStyles);
 }
 
 const TextStyle* ActiveTextStyle(const AppCommandState& st) {
@@ -13162,7 +13637,19 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
     b.surfaceTriangleCount = bs.triangleCount();
     st.cadSurfaces.assign(1, std::move(bs));
     st.cadSurfaceAttrs.assign(1, MakeNewEntityAttrs(st));
-    b.segmentCount = b.surfaceTriangleCount * 3;  // edges drawn, for the report
+    b.segmentCount = b.surfaceTriangleCount * 3;  // triangulation edges, for the report
+
+    // REQ-100 profile (c) is defined as a **contoured** surface, and until REQ-070 landed this case
+    // measured an uncontoured one because contours did not exist. The bench surface carries no
+    // styleName, so it resolves to "Standard" — which draws contours and the border — and the record
+    // below states the interval, because a contour count is meaningless without it.
+    SurfaceStyles::EnsureStandard(st.surfaceStyles);
+    if (const SurfaceStyle* bstyle = SurfaceStyles::Resolve(st.surfaceStyles, std::string())) {
+      b.surfaceMinorIntervalFt = bstyle->minorIntervalFt;
+      b.surfaceMajorIntervalFt = bstyle->majorIntervalFt;
+    }
+    b.regenBaselineTaken = false;
+    b.regenDuringRun = 0;
   } else {
     b.segmentCount = benchscene::BuildContourScene(segments, &st.userPolylineVerts, &st.userPolylineOffsets,
                                                    &st.userPolylineClosed);
@@ -13286,9 +13773,11 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
     profileName = "shaded meshes";
     std::snprintf(scene, sizeof(scene), "%d triangles, Shaded", b.meshTriangleCount);
   } else if (b.surfacePointCount > 0) {
-    profileName = "surface";
-    std::snprintf(scene, sizeof(scene), "%d points, %d triangles (%d edges)", b.surfacePointCount,
-                  b.surfaceTriangleCount, b.segmentCount);
+    profileName = "surface (contoured)";
+    std::snprintf(scene, sizeof(scene), "%d points, %d triangles, contoured at %s/%s ft (%d contour segs)",
+                  b.surfacePointCount, b.surfaceTriangleCount,
+                  SurfaceStyles::FormatFt(b.surfaceMinorIntervalFt).c_str(),
+                  SurfaceStyles::FormatFt(b.surfaceMajorIntervalFt).c_str(), b.surfaceContourSegs);
   }
 
   char msg[320];
@@ -13298,6 +13787,18 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
   std::snprintf(msg, sizeof(msg), "BENCH — min %.2f  median %.2f  mean %.2f  p95 %.2f  p99 %.2f  max %.2f ms.",
                 s.minMs, s.medianMs, s.meanMs, s.p95Ms, s.p99Ms, s.maxMs);
   log.push_back(msg);
+
+  // ADR-036 (e)'s separate obligation, reported separately: the timing above would look identical
+  // whether the cache held or not on a fast enough machine, so "held" has to be its own claim.
+  const bool cacheHeld = b.regenDuringRun == 0;
+  if (b.surfacePointCount > 0) {
+    std::snprintf(msg, sizeof(msg),
+                  "BENCH — surface display cache regenerated %llu time(s) across %d timed frames "
+                  "(expected 0) — %s.",
+                  static_cast<unsigned long long>(b.regenDuringRun), s.frames,
+                  cacheHeld ? "HELD" : "NOT HELD, contours are being regenerated per frame");
+    log.push_back(msg);
+  }
 
   // Also written to a file: a benchmark's value is in the record, and reading six figures off a
   // fading command line is how a number gets transcribed wrong into a completion report.
@@ -13327,7 +13828,18 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
         << "  p95           " << s.p95Ms << " ms   <-- REQ-100 is judged on this\n"
         << "  p99           " << s.p99Ms << " ms\n"
         << "  max           " << s.maxMs << " ms\n"
-        << "  budget        " << kBudgetMs << " ms  => " << (pass ? "PASS" : "FAIL") << "\n\n";
+        << "  budget        " << kBudgetMs << " ms  => " << (pass ? "PASS" : "FAIL") << "\n";
+      if (b.surfacePointCount > 0) {
+        // The record's own half of ADR-036 (e). TASK-053's fix (b) applies here too: the permanent
+        // record is the half that gets missed, and a p95 with no statement of whether the cache held
+        // cannot be told apart from one measured with the defect present.
+        f << "  contour interval  minor " << SurfaceStyles::FormatFt(b.surfaceMinorIntervalFt)
+          << " ft, major " << SurfaceStyles::FormatFt(b.surfaceMajorIntervalFt) << " ft\n"
+          << "  contour segs      " << b.surfaceContourSegs << "\n"
+          << "  cache regens      " << b.regenDuringRun << " during the timed frames (expected 0)  => "
+          << (cacheHeld ? "HELD" : "NOT HELD") << "\n";
+      }
+      f << "\n";
     }
   }
   b.frameMs.clear();
@@ -14556,6 +15068,15 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         BumpCadGpuCache(st);
         log.push_back("Plot scale: 1 plotted inch = " + std::to_string(pv) + " model units.");
       }
+      return;
+    }
+    // REQ-070. `SURFSTYLE [<verb> …]` — bare opens the editor; the verbs are what a headless
+    // transcript drives, because REQ-070's acceptance conditions are end-to-end and a dialog is not
+    // reachable from one.
+    if (plotTok == "surfstyle") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ExecuteSurfStyleCommand(st, StringUtil::trimCopy(rest), log);
       return;
     }
     // REQ-087. `FEATURELINE [<name>]` — the whole remainder is the name, so it may contain spaces.

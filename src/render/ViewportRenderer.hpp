@@ -67,17 +67,22 @@ public:
                    // is no "mesh wireframe" behaviour any requirement asks for.
                    const std::vector<std::shared_ptr<const CadMesh>>* meshes = nullptr,
                    const std::vector<EntityAttributes>* meshAttrs = nullptr,
-                   // TIN surface triangle edges (REQ-068), as flat world-space line vertices —
-                   // x,y,z per endpoint, two endpoints per segment, exactly like \p surveyMarkers.
+                   // Generated surface display geometry (REQ-068 / REQ-070, ADR-036 (h)) — the
+                   // triangle edges, contours and border each visible surface's style asks for, as
+                   // coloured batches of flat world-space line vertices (x,y,z per endpoint, two
+                   // endpoints per segment, exactly like \p surveyMarkers).
                    //
-                   // Edges rather than shaded faces, and drawn in EVERY visual style: a TIN's
-                   // triangles are the thing a surveyor reads, and the default style is 2D
-                   // Wireframe — a surface visible only in Shaded would be invisible in the view
+                   // Lines rather than shaded faces, and drawn in EVERY visual style: a TIN's
+                   // triangles and contours are the thing a surveyor reads, and the default style is
+                   // 2D Wireframe — a surface visible only in Shaded would be invisible in the view
                    // users spend most of their time in. This is the opposite of the mesh rule above
                    // for the opposite reason: a mesh is an imported solid, a TIN is a network.
-                   // Caller-side buffer, built only when the geometry revision changes, and already
-                   // filtered for layer visibility (REQ-068).
-                   const std::vector<float>* surfaceEdges = nullptr);
+                   //
+                   // Caller-side, regenerated only when a surface's triangulation or its style
+                   // changes, already filtered for layer visibility and isolation (REQ-068,
+                   // REQ-084 (d)), and with every component's colour and lineweight already resolved
+                   // — so the renderer draws what it is given and decides nothing.
+                   const CadSurfaceDisplayGeometry* surfaceGeometry = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 

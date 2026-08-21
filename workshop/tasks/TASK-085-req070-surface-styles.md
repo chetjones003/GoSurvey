@@ -1,8 +1,10 @@
 # TASK-085 — Surface styles: the style table, contour generation, and the Surface Style editor
 
 - Type:    feature
-- Status:  plan  (**blocked on TASK-084** — the cache is keyed by a surface's stable entity id, which
-           does not exist until ADR-036 (a) lands; see FINDING-2)
+- Status:  in progress — step 1 complete (`util/contourgen` + `ContourGenTests`, green).
+           **Unblocked 2026-08-21**: TASK-084 landed, so `cadSurfaceAttrs` gives every surface a
+           stable id and `AppCommandState::surfaceDisplayCache` already exists, reaped and keyed by
+           it (`CadCommands.cpp:1259`). FINDING-2's precondition is satisfied.
 - Opened:  2026-08-21
 - Owner:   Workshop
 
@@ -80,7 +82,8 @@ selection, and never appear in the drawing's entity counts."
 |---|----------|-------|--------|
 | Q1 | Which of the ten Civil 3D Surface Style tabs are in scope? | 2026-08-21 | "Spec scope + Analysis". Grid and Watersheds refused as a SPEC GAP. |
 | Q2 | Is REQ-071 (contour EXTRACT) in this task? | 2026-08-21 | No — deferred to a follow-up so a FAIL here does not block it. |
-| Q3 | REQ-070 requires a major interval that is not a whole multiple of the minor to be **rejected**. Rejected at entry (the field refuses the value) or at generation? | — | **Answer before implementing step 5.** Recommendation: reject at entry with the specific message, so the invalid state never exists to be generated from. Raise with the user only if entry-time rejection turns out to block a legitimate editing sequence (e.g. typing "10" over "5" digit by digit). |
+| Q3 | REQ-070 requires a major interval that is not a whole multiple of the minor to be **rejected**. Rejected at entry (the field refuses the value) or at generation? | 2026-08-21 | **Warn inline, apply on commit.** The two fields accept any typing — the recommendation to refuse at entry was withdrawn on exactly the editing sequence it flagged: replacing "5" with "10" passes through "1". An invalid pair shows REQ-070's specific message beside the fields in red and holds OK disabled; the style table only ever receives a pair that passed the rule, so nothing invalid can be generated from. The SURFSTYLE command validates the whole pair at submission, where the sequence cannot arise. |
+| Q4 | What does the built-in "Standard" style show? Keeping triangles on changes no existing drawing's appearance; the Civil 3D default is contours + border with triangles off. Raised because it is a visible product default and the choice is the user's, not the Workshop's. | 2026-08-21 | **Civil 3D-faithful: triangles OFF.** A surface opens as a contour map. This is a deliberate change of appearance for drawings that already contain a surface, accepted as such — the triangulation is the model, the contours are the drawing. Pinned by `SurfaceStyleTests` and by the transcript so a later reader cannot mistake it for an oversight. |
 
 ## 5. Assumptions
 
@@ -201,12 +204,13 @@ Surface Manager's right pane.
 
 ### Steps
 
-- [ ] 1. `util/contourgen` + `ContourGenTests` — pure, no UI, no GL. Green before step 2 starts.
-- [ ] 2. `SurfaceStyle` + the table + `.gs` round-trip + `SurfaceStyleTests`.
-- [ ] 3. The display-geometry cache; `RenderScene` parameter replacement; delete `AppendSurfaceEdgeLines`.
-- [ ] 4. Renderer draws the coloured component batches.
-- [ ] 5. The dialog (answer Q3 first) + Surface Manager wiring.
-- [ ] 6. REQ-100 bench: assert the **cache holds across frames** (ASSUMPTION-2).
+- [x] 1. `util/contourgen` + `ContourGenTests` — pure, no UI, no GL. Green before step 2 starts.
+- [x] 2. `SurfaceStyle` + the table + `.gs` round-trip + `SurfaceStyleTests`.
+- [x] 3. The display-geometry cache; `RenderScene` parameter replacement; delete `AppendSurfaceEdgeLines`.
+- [x] 4. Renderer draws the coloured component batches.
+- [x] 5. The dialog (answer Q3 first) + Surface Manager wiring.
+- [~] 6. REQ-100 bench: assert the **cache holds across frames** (ASSUMPTION-2). Instrumented and
+        built; the run itself needs the reference machine — see the log.
 - [ ] 7. Self-verification (§9).
 
 ## 7. Workflow-specific notes
@@ -241,14 +245,145 @@ DEBT-1: A surface is never plotted. `src/io/PdfPlot.cpp` contains no surface or 
 - 2026-08-21 plan reviewed by Verification **before implementation** (workflow §3). FAIL — two
   blocking findings, both on cache placement (see §10). Plan corrected; ADR-036 (e) amended to carry
   the two placement rules so they bind the next reader as well as this one. DEBT-1 recorded above.
+- 2026-08-21 **step 1 done.** `src/util/contourgen.{hpp,cpp}` (marching triangles, topological
+  chaining, ASSUMPTION-1's tie rule) + `tests/ContourGenTests.cpp` — 18 cases / 426 assertions,
+  green; the full suite (462 cases / 214,216 assertions) and ctest (489/489) are green with it.
+  Coverage as planned, plus three cases the plan did not name and the module needs:
+    * **levels are measured from elevation zero, not from the surface's low point** — otherwise every
+      contour on the sheet moves the day one lower shot joins the surface;
+    * **a saddle yields two contours, not one** — the case that fails if chaining is ever weakened
+      from shared-edge to endpoint proximity;
+    * **level order in, contour order out** — a style hands over its major and minor levels
+      concatenated, duplicates and all, so normalisation belongs to the module, not to each caller.
+  ASSUMPTION-1 **validated**: a level running exactly through a vertex returns ONE continuous
+  contour, not two stopping either side of it.
+  Recorded for the step-3 reader, and deliberately not "fixed" here: the tie point comes out as a
+  repeated vertex, and a level exactly at a peak yields a zero-extent contour there. Both are correct
+  geometry — the contour at a peak's own elevation *is* a point — and both draw as nothing. REQ-071's
+  EXTRACT is the first place a duplicate vertex would be worth suppressing, so that call is left to
+  the task that owns it rather than pre-empted by this one.
+- 2026-08-21 **steps 2-4 done.** `SurfaceComponentStyle` / `SurfaceStyle` in `CadEntities.hpp`,
+  `CadSurface::styleName`, the pure `commands/SurfaceStyle.hpp` helper namespace, the table threaded
+  through `AppCommandState` / `DrawingDocument` / `DrawingGeometrySnapshot`, an additive `.gs`
+  section, the generating cache, and the `RenderScene` parameter replacement.
+  `AppendSurfaceEdgeLines` and `main.cpp`'s process-static `surfaceEdges` block are both deleted.
+  Tests: `SurfaceStyleTests` (17 cases) + `tests/headless/transcripts/req070-surface-styles-contours.txt`
+  (61 steps). Full suite 479 cases / 214,286 assertions and ctest 507/507 green.
+
+  Four decisions taken inside the plan's authority, each recorded because it is not the obvious one:
+
+  1. **The staleness key stores the RESOLVED STYLE BY VALUE, not a revision counter.** ADR-036 (e)
+     names the key "(tin pointer, style revision)". A counter must be bumped by every route that can
+     change the table, and undo restore, `.gs` load, tab switch and DXF import are four of them — the
+     one that gets forgotten leaves stale contours on screen with nothing to point at. A style is
+     five small structs and two doubles, so comparing the value costs less than the allocation it
+     prevents, and it cannot be forgotten. `SurfaceStyleTests`'s equality case guards the operator
+     the key rides on.
+  2. **Standard ships with triangles ON.** A surface drew as its triangle edges before this task, so
+     Standard keeps them and adds the border and both contour sets. A Civil 3D-faithful
+     contours-only default would silently change what every existing drawing shows on the day this
+     lands — a regression wearing a feature's clothes. **Worth the user's confirmation** (see below).
+  3. **A `SURFSTYLE` command was added beside the planned dialog.** Not in the plan, and required by
+     it: every one of REQ-070's acceptance conditions is an end-to-end claim about the command layer,
+     the cache and the undo stack acting together, and a dialog is unreachable from the transcript
+     driver. Comma-separated arguments, like every other surface command, because style and surface
+     names contain spaces. The dialog will call the same helpers.
+  4. **A contour-level ceiling (`kMaxContourLevels` = 20,000).** The generator's cost is proportional
+     to total contour LENGTH, not to the level count, so a small interval cannot run away on its own;
+     the cap is for the value nobody typed — a hand-edited `.gs` at 0.0001 ft — where the display
+     path must degrade rather than lock up. Documented at the constant.
+
+  **One defect found and fixed by the transcript, which is why it exists**: the triangle-edge buffer
+  was appended to rather than regenerated, so it DOUBLED on every style edit — 2,946 segments became
+  5,892 the first time an interval changed. Invisible in a unit test (the module is fine), invisible
+  on screen (coincident edges), and it would have compounded to hundreds of megabytes over a session.
+  `CadCommands.cpp` now clears before appending, with the reason at the line.
+
+  Deferred with the reason stated, not silently: **REQ-070's deleted-style fallback is proven by unit
+  test only**, because `SURFSTYLE` has no DELETE verb yet — it belongs with the dialog's delete
+  button in step 5, and the transcript will assert it there.
+
+- 2026-08-21 **Q3 and Q4 answered by the user** (see §4). Q4 reversed the Standard default recorded in
+  the step-2-4 entry above: triangles are now OFF, so a surface opens as a contour map. The unit case
+  and the transcript were rewritten to pin the new default rather than edited to agree with the code —
+  the assertion is that this is what was CHOSEN, which is what stops a later reader "fixing" it.
+
+- 2026-08-21 **step 5 done.** `src/ui/CadUi_SurfaceStyles.cpp` — the Surface Style editor: a style list
+  with New / Delete / rename, and the Information, Contours, Triangles, Borders, Points, Display and
+  Summary tabs of ADR-036 (i). Grid, Watersheds, Analysis, contour smoothing and the per-component
+  Layer / Plot Style columns are absent, each with the reason stated at the top of the file rather
+  than drawn as a disabled control (REQ-084's rule). The Surface Manager's right pane gained a style
+  dropdown and an "Edit..." button, and it names the fallback out loud when a surface's style has
+  been deleted.
+
+  Q3 implemented as answered: the interval pair is edited through scratch values that commit only
+  when `IntervalsCompatible` passes, the message shows inline in red, and OK is disabled meanwhile.
+
+  Two supporting changes:
+  - **`src/ui/CadUiStyleWidgets.hpp`** — the named colour palette, the linetype names and the
+    lineweight ladder **moved** out of `CadUi.cpp` (they were file-static) so the new dialog uses the
+    same lists rather than a second copy. A move, not a rewrite: the names are unchanged, so
+    `CadUi.cpp`'s ~40 call sites were untouched.
+  - **`SURFSTYLE DELETE`**, which deliberately does NOT refuse a style that is in use, unlike the
+    text-style manager. REQ-070 makes the deleted-style fallback an acceptance condition, so refusing
+    would leave that path unreachable and untestable. Surfaces keep their `styleName`, so re-creating
+    a style with that name adopts them back; the transcript asserts both halves.
+
+- 2026-08-21 **step 6 instrumented, run outstanding.** ASSUMPTION-2's obligation is that the bench
+  proves the cache **holds across frames**, not that one regeneration is fast — so timing alone cannot
+  discharge it, and on a fast enough machine a per-frame regeneration would still post a passing p95.
+  `AppCommandState::surfaceDisplayRegenCount` counts generations that got past the early-out; the
+  baseline is taken at the first TIMED frame (after warm-up has paid for the one legitimate
+  generation) and `BENCH SURFACE` now reports the delta, which must be 0, to the console AND to
+  `bench-req100.txt` — TASK-053's fix (b), the permanent record being the half that gets missed. The
+  record also states the contour interval and segment count, without which profile (c)'s number is not
+  comparable between runs.
+
+  **Not run.** REQ-100 is a frame-budget measurement: it needs a GL context and a real orbit, so no
+  headless path can produce it, and BUG-013 / TASK-053 FINDING-3 make a figure from a different GPU a
+  different result. It has to be `BENCH SURFACE` in the GUI on the RTX 5060 with the `project.md` §7
+  toolchain. Flagged to the user rather than estimated or skipped.
+
+- 2026-08-21 **self-review found and closed a REQ-201 gap this task introduced.** `kMaxContourLevels`
+  originally made a too-fine interval draw NO contours and say nothing — reachable from
+  `SURFSTYLE INTERVAL Standard, 0.0001, 0.001`, which passes the whole-multiple rule (0.001/0.0001 is
+  exactly 10) and asks for ~332,000 levels over this fixture's 33 ft of relief. A surface that
+  silently stopped showing contours would read as a defect in the generator.
+  Two changes: the cache entry now carries `contoursSuppressed` + the level count and the Surface
+  Manager reports it beside the style dropdown; and the count is decided ARITHMETICALLY before
+  anything is allocated (`ContourLevelCount`) rather than by building the level list and discarding
+  it — measured at 2.4 s for that interval before the change, 169 ms after, which makes the
+  pathological interval the *fastest* case rather than a stall. Both covered by the transcript,
+  including that the suppression is a state and not a latch.
+
+- 2026-08-21 **the app was launched on `samples/surface-demo.gs` and rendered without incident.** Not
+  a substitute for the bench, and said plainly: it confirms the renderer's parameter replacement does
+  not crash, nothing more. No screenshot was taken and no visual check of the contours themselves was
+  made — the geometry is proven by the transcript, the pixels are not.
 
 ## 9. Self-verification
-- [ ] build-project
-- [ ] architecture-review
-- [ ] code-review
-- [ ] dependency-audit — n/a (in-tree generator, ADR-028 (c))
-- [ ] performance-review — **required**; the REQ-100 third profile (ADR-028's own prediction)
-- [ ] testing
+- [x] build-project — clean, no new warnings. Reconfigured so the new transcript and
+      `SurfaceStyleTests` are picked up by ctest (a glob-added file is invisible until then).
+- [x] architecture-review — no Workshop architectural decision. Every shape was pre-decided by
+      ADR-036 (d)(e)(f)(h)(i) and D-2026-08-21-a. The one divergence — storing the resolved style BY
+      VALUE rather than a "style revision" counter — is a strictly stronger form of the key ADR-036
+      (e) names, and is documented at the field with the reason. FINDING-1 and FINDING-2 are both
+      satisfied structurally: the cache is a parallel container on `AppCommandState`, keyed by stable
+      id and reaped, and it appears in no snapshot, no document and no file.
+- [x] code-review (self) — found the REQ-201 suppression gap and the allocate-then-discard cost above,
+      both fixed. The triangle-buffer doubling was found earlier by the transcript.
+- [x] dependency-audit — n/a (in-tree generator, ADR-028 (c)); no manifest touched.
+- [~] performance-review — **required, and NOT complete.** The instrumentation that discharges
+      ASSUMPTION-2 is built and reports to both the console and `bench-req100.txt`, but `BENCH SURFACE`
+      has not been RUN: REQ-100 needs a GL context and a real orbit, and a figure from a different GPU
+      is a different result (BUG-013 / TASK-053 FINDING-3). This is the one thing standing between the
+      task and a completion report, and it is stated as outstanding rather than assumed to pass.
+- [x] testing — 479 cases / 214,286 assertions green; ctest 507/507 green. Per acceptance bullet:
+      contour geometry and the tie rule (`ContourGenTests`, 18 cases), the table and the interval rule
+      (`SurfaceStyleTests`, 17 cases), and every end-to-end condition — no retriangulation, no entity
+      added, the toggle matrix in both directions, two surfaces on one style, the deleted-style
+      fallback, `.gs` round-trip and byte-identical resave — in
+      `tests/headless/transcripts/req070-surface-styles-contours.txt` (82 steps).
 
 ## 10. Verification result
 

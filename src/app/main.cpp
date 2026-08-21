@@ -360,7 +360,22 @@ int main()
         // Warm-up frames are discarded: the first frames of a run pay for shader compilation, the
         // 250k-segment VBO upload and the tessellation cache, none of which recur while orbiting.
         if (cmd.bench.frameIndex >= cmd.bench.warmupFrames)
+        {
           cmd.bench.frameMs.push_back((nowT - benchPrevTime) * 1000.0);
+          // ADR-036 (e)'s REQ-100 obligation: the surface display cache must HOLD across frames, not
+          // merely regenerate quickly once. The baseline is taken at the first TIMED frame, after
+          // warm-up has paid for the one legitimate generation, so what the run reports is purely
+          // work that recurred while orbiting. It must stay 0.
+          if (!cmd.bench.regenBaselineTaken)
+          {
+            cmd.bench.regenAtStart      = cmd.surfaceDisplayRegenCount;
+            cmd.bench.regenBaselineTaken = true;
+            // Captured here, not at FinishFrameBudgetBench: by then the bench scene has already been
+            // swapped back out for the user's drawing and the cache holds their surfaces, not this one.
+            cmd.bench.surfaceContourSegs = SurfaceDisplayContourSegs(cmd);
+          }
+          cmd.bench.regenDuringRun = cmd.surfaceDisplayRegenCount - cmd.bench.regenAtStart;
+        }
         benchPrevTime = nowT;
       }
       ++cmd.bench.frameIndex;
@@ -508,18 +523,11 @@ int main()
         StartPasteCommand(cmd, cmdLog);
     }
 
-    // TIN surface triangle edges (REQ-068), rebuilt only when the geometry revision moves. At the
-    // REQ-100 surface density this buffer is ~600k segments; regenerating it every frame would
-    // spend the frame budget re-deriving something whose input has not changed.
-    static std::vector<float> surfaceEdges;
-    static std::uint32_t surfaceEdgesRevision = 0xFFFFFFFFu;
-    static int surfaceEdgesTab = -1;
-    if (surfaceEdgesRevision != cmd.cadGpuRevision || surfaceEdgesTab != cmd.activeDrawingIdx) {
-      surfaceEdgesRevision = cmd.cadGpuRevision;
-      surfaceEdgesTab = cmd.activeDrawingIdx;  // two tabs can sit at the same revision
-      surfaceEdges.clear();
-      AppendSurfaceEdgeLines(cmd, &surfaceEdges);
-    }
+    // The function-local `static std::vector<float> surfaceEdges` that used to live here is gone
+    // (ADR-036 (e)). It was per-PROCESS, not per-document, and carried a hand-rolled tab guard
+    // because two tabs can sit at the same revision; the cache on AppCommandState that replaced it
+    // deletes the guard along with the class of bug it patched. See RefreshSurfaceDisplayGeometry
+    // below, which is now the one place surface display geometry is produced.
 
     // Stable entity ids (REQ-076 / ADR-027). Called once here, after the frame's input has been
     // handled and before any panel can save, reference or snapshot an entity — so nothing above
@@ -701,6 +709,7 @@ int main()
     DrawTextStyleManagerWindow(cmd, &cmdLog);
     DrawPointGroupManagerWindow(cmd, &cmdLog);
     DrawSurfaceManagerWindow(cmd, &cmdLog);
+    DrawSurfaceStyleWindow(cmd, &cmdLog);
     DrawFeatureLineElevationWindow(cmd, &cmdLog);  // REQ-088
     DrawViewPointsPanel(cmd, cmdLog);
     DrawImportPointsPanel(cmd, cmdLog);
@@ -934,8 +943,13 @@ int main()
                                // Meshes are model-space only, like every other GL entity (REQ-063).
                                (paperSpace || cmd.cadMeshes.empty()) ? nullptr : &cmd.cadMeshes,
                                (paperSpace || cmd.cadMeshAttrs.empty()) ? nullptr : &cmd.cadMeshAttrs,
-                               // TIN surface edges (REQ-068), model space only like every GL entity.
-                               (paperSpace || surfaceEdges.empty()) ? nullptr : &surfaceEdges);
+                               // Generated surface geometry (REQ-068/REQ-070), model space only like
+                               // every GL entity. The batches borrow buffers owned by `cmd`, which
+                               // outlives this call — and nothing between the refresh above and here
+                               // regenerates them.
+                               (paperSpace || cmd.surfaceDisplayGeometry.empty())
+                                   ? nullptr
+                                   : &cmd.surfaceDisplayGeometry);
 
     // Must be the last UI call of the frame: it walks the submitted windows and
     // appends to their draw lists, so anything begun after it would be missed.
