@@ -1,7 +1,7 @@
 # TASK-029 — MTEXT edits at true rendered size; the box wraps but never hides text
 
 - Type:    bug
-- Status:  self-verify (awaiting user's on-screen confirmation)
+- Status:  done — user confirmed on screen 2026-08-18 (all six checks below)
 - Opened:  2026-07-30
 - Owner:   chetj
 
@@ -115,7 +115,7 @@ ASSUMPTION-1: in paper space the viewport pans/zooms in paper inches, so the edi
 
 ## 10. Verification result
 - Submitted:  2026-07-30
-- Verdict:    pending user confirmation. Worth checking specifically:
+- Verdict:    PASS — user confirmed on screen 2026-08-18. All six checks below were exercised:
   1. **the MTEXT command** (placing new text) — the preview must match the placed result;
   2. re-opening an existing MTEXT to edit, zoomed so the text is much larger than ~96 px;
   3. same zoomed far out, where the true size is under 10 px;
@@ -142,4 +142,4 @@ ASSUMPTION-1: in paper space the viewport pans/zooms in paper inches, so the edi
   Unifying means choosing one spacing model and changing the look of already-accepted imported text,
   so it belongs with the TASK-028 §11 observation about retiring that branch.
 - Docs updated:           none
-- Done:                   pending user confirmation
+- Done:                   2026-08-18 (user confirmed on screen)

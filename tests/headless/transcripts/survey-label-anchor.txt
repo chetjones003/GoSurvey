@@ -1,0 +1,49 @@
+# Survey label placement under growing description text.
+#
+# The defect this exists to catch: label boxes were positioned by their CENTRE in BOTH axes. A
+# centred X splits every width change in half and sends one half BACKWARD, so as a point's
+# description got longer the box's left edge walked west, into the point marker it was labelling.
+# The label a surveyor sees is the one with the long description, which is exactly the one that
+# landed on top of its own point. Measured on this fixture before the fix, the left edge crossed
+# west of the point at 29 characters (dx = -16.49) and reached dx = -98.36 at 103.
+#
+# The layout that replaced it is deliberately asymmetric, and the asymmetry is the point:
+#
+#   X — pinned at the box's LEFT EDGE, growing east, away from the marker. This is the axis the
+#       marker was in danger on, so it is the axis that may not depend on the text.
+#   Y — CENTRED on the point. Y was never exposed: the box already stands `offsetE` clear to the
+#       east, so it cannot reach the marker however tall it grows. Centring is what puts the label
+#       beside the point instead of hanging beneath it, which is what pinning the box's TOP edge
+#       (dy = 0) did — every label sat entirely below its own point, and every existing drawing's
+#       labels shifted down by half a box.
+#
+# `samples/points-label-lengths.csv` holds six points that differ in ONE respect — description
+# length, 0 to 103 characters — and share an easting, so the dumped offsets are directly
+# comparable down the column.
+#
+# What the dump must show:
+#
+#   - `dx` and `dy` IDENTICAL on all six rows, where dx is the left edge and dy the vertical
+#     centre. That is the anchor invariant: where the box sits is a property of the POINT, never
+#     of how much text hangs off it.
+#   - `w` growing with the description. Proof the rows actually differ — six identical boxes would
+#     satisfy the invariant above vacuously, which is the failure mode the DIFFERENTFILE check in
+#     `dxf-export-stable.txt` was added to close in its own oracle.
+#   - `dx` POSITIVE, so the box clears the marker to the east.
+#
+# Note `h`, which is NOT invariant and must not be: point 1 has an empty description and so one
+# line, the rest have two. That is exactly why `dy` is measured at the centre — a two-line label
+# is taller in both directions about a fixed centre, while its centre stays put.
+
+NEW
+IMPORT POINTS %DATA%/points-label-lengths.csv
+
+EXPECT SURVEYPOINTS 6
+# One MTEXT per point: every point carries the default NumberDesc label style.
+EXPECT ANNOTATIONS 6
+CHECK ALL
+
+# The assertion. DUMP alone would pass no matter where the boxes landed.
+EXPECT LABELANCHOR
+
+DUMP LABELS

@@ -1,7 +1,7 @@
 # TASK-017 — REQ-028 per-viewport layer freeze: audit + harden (plot WYSIWYG)
 
 - Type:    bug (hardening of shipped REQ-028)
-- Status:  self-verify
+- Status:  done — user verified in app 2026-08-18
 - Opened:  2026-07-13
 - Owner:   chetjones003
 
@@ -105,7 +105,7 @@ ASSUMPTION-1: plotted output should match the on-screen viewport (WYSIWYG) for f
 
 ## 10. Verification result
 - Submitted:  (pending)
-- Verdict:    (pending)
+- Verdict:    PASS — user manual verification confirmed 2026-08-18
 - Findings:   F2, F3 recorded as technical debt (see §2 / decision log).
 
 ## 11. Outcome
@@ -116,4 +116,4 @@ ASSUMPTION-1: plotted output should match the on-screen viewport (WYSIWYG) for f
                           (decision log ×2), spec/roadmap.md (3e done / 3d withdrawn)
 - Technical debt noted:   F2 (snap/pick through a frozen floating-viewport layer); F3 (arc global
                           plottable filter missing in plot) — both in the decision log / §2.
-- Done:                   (pending manual verification)
+- Done:                   2026-08-18 (user verified in app: frozen layer absent in that viewport only, on screen and in the plot)

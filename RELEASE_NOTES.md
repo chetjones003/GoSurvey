@@ -16,6 +16,44 @@ short fallback message instead — which is a missed opportunity, not a failure.
 
 ---
 
+## 0.5.3
+
+**Right-click now does what you tell it to**
+- **Settings → User Preferences → Right-click Customization…** opens a dialog where you set what
+  right-click means in each situation: with nothing selected, with objects selected, and part-way
+  through a command. Each one is either "repeat the last command" or "open the shortcut menu".
+- These choices already existed, but were buried in three unlabelled drop-downs. They are now
+  spelled out, and **Cancel** puts everything back the way it was when you opened the dialog.
+- New: **time-sensitive right-click**. Turn it on and a quick right-click acts as ENTER, while
+  holding the button a moment longer opens the shortcut menu — so you can finish a command and
+  reach the menu with the same button. You set how long "a moment" is, in milliseconds.
+- It is switched **off** to begin with, so right-click keeps behaving exactly as it does today
+  until you decide otherwise. With it on, the "no selection" and "during a command" choices grey
+  out, because the length of the click is deciding those instead.
+
+**A fuller right-click menu in the drawing**
+- **Recent Input** lists what you last typed at the command line, newest first. Pick one to run it
+  again.
+- **Isolate Objects** — see below.
+- **Clipboard** for cut, copy and paste, and **Basic Modify Tools** for move, copy, rotate, scale,
+  erase, offset, trim and join, without going back to the ribbon.
+- **Pan**, **Zoom** and **Free Orbit**, plus **Quick Select** and **Options**.
+
+**Isolate Objects — new**
+- Select what you are working on and choose **Isolate Objects**: everything else disappears until
+  you choose **End Object Isolation**. **Hide Objects** does the opposite and hides just what you
+  picked.
+- Hidden objects cannot be picked while they are hidden — a window drag across where they used to
+  be will not quietly pull them into your selection.
+- Nothing is deleted, and nothing is saved: a drawing always opens showing everything.
+
+**Free Orbit**
+- Orbiting the model is now a command as well as a shortcut. Choose **Free Orbit** from the
+  right-click menu (or type ORBIT) and drag with the left mouse button; Esc, Enter or a right-click
+  ends it. Shift and the middle mouse button still orbit as before.
+
+---
+
 ## 0.5.2
 
 **Point files can be .txt as well as .csv**

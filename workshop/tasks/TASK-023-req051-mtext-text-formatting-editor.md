@@ -1,7 +1,7 @@
 # TASK-023 — REQ-051: AutoCAD-style MTEXT "Text Formatting" in-place editor
 
 - Type:    feature
-- Status:  self-verify (built clean; 74/74 unit tests green; awaiting user manual verification)
+- Status:  done — user verified in app 2026-08-18 (against the reference screenshot)
 - Opened:  2026-07-30
 - Owner:   chetjones003
 
@@ -224,7 +224,7 @@ ASSUMPTION-3: The ruler's tick spacing should read in the MTEXT's own plotted in
 
 ## 10. Verification result
 - Submitted:  2026-07-30
-- Verdict:    PASS pending user manual verification against the reference screenshot.
+- Verdict:    PASS — user verified against the reference screenshot in app 2026-08-18.
 - Findings:   one self-raised and resolved — a decorative resize handle would misrepresent the editor;
               dropped and REQ-051 amended (see §8).
 
@@ -238,7 +238,7 @@ ASSUMPTION-3: The ruler's tick spacing should read in the MTEXT's own plotted in
                           the absent drag-to-resize — all recorded on REQ-051 as follow-ups.
                           Removal condition: a requirement per control, several needing a wire-format or
                           stored-field decision first (i.e. a spec decision, not a Workshop choice).
-- Done:                   pending user manual verification.
+- Done:                   2026-08-18 (user verified in app)
 
 ### Manual verification (user)
 1. Double-click a model MTEXT → a "Text Formatting" panel with two rows appears, ruler above the box.

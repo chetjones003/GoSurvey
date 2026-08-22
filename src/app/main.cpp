@@ -385,7 +385,22 @@ int main()
         // Warm-up frames are discarded: the first frames of a run pay for shader compilation, the
         // 250k-segment VBO upload and the tessellation cache, none of which recur while orbiting.
         if (cmd.bench.frameIndex >= cmd.bench.warmupFrames)
+        {
           cmd.bench.frameMs.push_back((nowT - benchPrevTime) * 1000.0);
+          // ADR-036 (e)'s REQ-100 obligation: the surface display cache must HOLD across frames, not
+          // merely regenerate quickly once. The baseline is taken at the first TIMED frame, after
+          // warm-up has paid for the one legitimate generation, so what the run reports is purely
+          // work that recurred while orbiting. It must stay 0.
+          if (!cmd.bench.regenBaselineTaken)
+          {
+            cmd.bench.regenAtStart      = cmd.surfaceDisplayRegenCount;
+            cmd.bench.regenBaselineTaken = true;
+            // Captured here, not at FinishFrameBudgetBench: by then the bench scene has already been
+            // swapped back out for the user's drawing and the cache holds their surfaces, not this one.
+            cmd.bench.surfaceContourSegs = SurfaceDisplayContourSegs(cmd);
+          }
+          cmd.bench.regenDuringRun = cmd.surfaceDisplayRegenCount - cmd.bench.regenAtStart;
+        }
         benchPrevTime = nowT;
       }
       ++cmd.bench.frameIndex;
@@ -551,18 +566,11 @@ int main()
         StartPasteCommand(cmd, cmdLog);
     }
 
-    // TIN surface triangle edges (REQ-068), rebuilt only when the geometry revision moves. At the
-    // REQ-100 surface density this buffer is ~600k segments; regenerating it every frame would
-    // spend the frame budget re-deriving something whose input has not changed.
-    static std::vector<float> surfaceEdges;
-    static std::uint32_t surfaceEdgesRevision = 0xFFFFFFFFu;
-    static int surfaceEdgesTab = -1;
-    if (surfaceEdgesRevision != cmd.cadGpuRevision || surfaceEdgesTab != cmd.activeDrawingIdx) {
-      surfaceEdgesRevision = cmd.cadGpuRevision;
-      surfaceEdgesTab = cmd.activeDrawingIdx;  // two tabs can sit at the same revision
-      surfaceEdges.clear();
-      AppendSurfaceEdgeLines(cmd, &surfaceEdges);
-    }
+    // The function-local `static std::vector<float> surfaceEdges` that used to live here is gone
+    // (ADR-036 (e)). It was per-PROCESS, not per-document, and carried a hand-rolled tab guard
+    // because two tabs can sit at the same revision; the cache on AppCommandState that replaced it
+    // deletes the guard along with the class of bug it patched. See RefreshSurfaceDisplayGeometry
+    // below, which is now the one place surface display geometry is produced.
 
     // Stable entity ids (REQ-076 / ADR-027). Called once here, after the frame's input has been
     // handled and before any panel can save, reference or snapshot an entity — so nothing above
@@ -570,6 +578,20 @@ int main()
     // that drew nothing pays one integer compare. Assigning at the ~127 sites that construct an
     // EntityAttributes was rejected: a missed site there is silent, not a compile error.
     EnsureEntityIds(cmd);
+
+    // Surface dynamic rebuild (REQ-069). After EnsureEntityIds, so a breakline/boundary added this
+    // frame already has an id to be resolved by. Also revision-gated, and (unlike EnsureEntityIds)
+    // it does real work only for surfaces that are actually behind, dispatched to a background
+    // thread — see TickSurfaceRebuilds' own comment for the full contract.
+    TickSurfaceRebuilds(cmd, cmdLog);
+
+    // Generated surface display geometry (ADR-036 (e)). After TickSurfaceRebuilds, so a
+    // triangulation that landed this frame is drawn from this frame rather than the next — and
+    // after EnsureEntityIds for the same reason it is: the cache is keyed on the stable id.
+    // Gated on its own staleness key, not on cadGpuRevision, which is what stops an unrelated edit
+    // from regenerating every surface's geometry (REQ-070: a style change must not retriangulate,
+    // and a line drawn elsewhere must not re-contour).
+    RefreshSurfaceDisplayGeometry(cmd);
 
     const ImGuiViewport *mainVp = ImGui::GetMainViewport();
     ImGui::SetNextWindowPos(mainVp->WorkPos);
@@ -724,11 +746,14 @@ int main()
     DrawCreatePointsPanel(cmd, cmdLog);
     DrawSettingsPanel(cmd, &cmdLog);
     DrawUnitsDialog(cmd, &cmdLog);
+    DrawRightClickCustomizationDialog(cmd, &cmdLog);  // REQ-084 (a)
     ImGuiLayout_DrawLayoutPopups(cmd, cmdLog);
     DrawLayerManagerWindow(cmd, &cmdLog);
     DrawTextStyleManagerWindow(cmd, &cmdLog);
     DrawPointGroupManagerWindow(cmd, &cmdLog);
     DrawSurfaceManagerWindow(cmd, &cmdLog);
+    DrawSurfaceStyleWindow(cmd, &cmdLog);
+    DrawFeatureLineElevationWindow(cmd, &cmdLog);  // REQ-088
     DrawViewPointsPanel(cmd, cmdLog);
     DrawImportPointsPanel(cmd, cmdLog);
     DrawExportPointsPanel(cmd, cmdLog);
@@ -841,7 +866,12 @@ int main()
     ext.polylineOffsets = &cmd.userPolylineOffsets;
     ext.polylineClosed = &cmd.userPolylineClosed;
     ext.polylineAttrs = &cmd.userPolylineAttrs;
+    ext.featureLineVerts = &cmd.featureLineVerts;      // REQ-087
+    ext.featureLineOffsets = &cmd.featureLineOffsets;
+    ext.featureLineClosed = &cmd.featureLineClosed;
+    ext.featureLineAttrs = &cmd.featureLineAttrs;
     ext.drawingLayers = &cmd.drawingLayerTable;
+    ext.hiddenEntityIds = &cmd.hiddenEntityIds;  // object isolation (REQ-084 (d) / ADR-034)
 
     activeRenderer.SetSize(fbW, fbH);
     RenderTuning tuning{};
@@ -956,8 +986,13 @@ int main()
                                // Meshes are model-space only, like every other GL entity (REQ-063).
                                (paperSpace || cmd.cadMeshes.empty()) ? nullptr : &cmd.cadMeshes,
                                (paperSpace || cmd.cadMeshAttrs.empty()) ? nullptr : &cmd.cadMeshAttrs,
-                               // TIN surface edges (REQ-068), model space only like every GL entity.
-                               (paperSpace || surfaceEdges.empty()) ? nullptr : &surfaceEdges);
+                               // Generated surface geometry (REQ-068/REQ-070), model space only like
+                               // every GL entity. The batches borrow buffers owned by `cmd`, which
+                               // outlives this call — and nothing between the refresh above and here
+                               // regenerates them.
+                               (paperSpace || cmd.surfaceDisplayGeometry.empty())
+                                   ? nullptr
+                                   : &cmd.surfaceDisplayGeometry);
 
     // Must be the last UI call of the frame: it walks the submitted windows and
     // appends to their draw lists, so anything begun after it would be missed.
@@ -974,6 +1009,12 @@ int main()
 
     glfwSwapBuffers(window);
   }
+
+  // Join any in-flight surface rebuild (REQ-069) here rather than leaving it to `cmd`'s destructor.
+  // The destructor is the actual safety net — it covers every path — but it runs after
+  // glfwTerminate(), so a slow triangulation would be waited out with the window already gone,
+  // which reads as a hang. Waiting here keeps the window up until the worker is done.
+  cmd.surfaceRebuildAsync.clear();
 
   // Silently persist settings, preferences, and the current dock layout.
   SaveUserStartupPrefs(cmd);

@@ -1,0 +1,89 @@
+# REQ-084 (d) — object isolation hides objects AND makes them unpickable.
+#
+# The unpickable half is the point. A hidden object that still answers a box drag is worse than one
+# that was never hidden: the user drags across empty space, gets a selection they cannot see, and
+# the next MOVE takes geometry with it. Rendering cannot be asserted from a headless run, but
+# selection can — and selection is the half that corrupts the drawing when it is wrong.
+#
+# The last section pins the rule that has no visible symptom until it bites: the hidden set is keyed
+# on entity ids, which restart per drawing, so a load must clear it. Without that, opening a second
+# drawing in the same session hides whichever objects happened to draw the same numbers.
+
+NEW
+
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+CMD LINE
+CMD 0,50
+CMD 100,50
+ESC
+CMD LINE
+CMD 0,100
+CMD 100,100
+ESC
+EXPECT LINES 3
+CHECK ALL
+
+# A crossing box over the whole drawing takes all three — the baseline the gate is measured against.
+BOX -10 -10 110 110
+EXPECT SELECTED 3
+
+# Isolate just the middle line.
+CMD SELECT
+BOX -10 40 110 60
+EXPECT SELECTED 1
+CMD ISOLATEOBJECTS
+EXPECT LOG "1 object(s) isolated, 2 hidden"
+
+# Nothing was erased — isolation is a visibility state, not an edit.
+EXPECT LINES 3
+CHECK ALL
+
+# The same whole-drawing box now finds ONLY the isolated line. Without the pick gate this is 3.
+CMD SELECT
+BOX -10 -10 110 110
+EXPECT SELECTED 1
+
+CMD UNISOLATEOBJECTS
+EXPECT LOG "2 object(s) shown."
+
+# ...and with isolation ended, the same box finds all three again.
+CMD SELECT
+BOX -10 -10 110 110
+EXPECT SELECTED 3
+
+# HIDEOBJECTS is the complement: it hides exactly what is selected, leaving the rest pickable.
+CMD SELECT
+BOX -10 40 110 60
+CMD HIDEOBJECTS
+EXPECT LOG "1 object(s) hidden"
+CMD SELECT
+BOX -10 -10 110 110
+EXPECT SELECTED 2
+
+# Ending isolation twice reports the second time rather than silently doing nothing (REQ-201).
+CMD UNISOLATEOBJECTS
+CMD UNISOLATEOBJECTS
+EXPECT LOG "nothing was hidden"
+
+# Isolating with an empty selection hides nothing. The alternative — "everything except nothing",
+# i.e. the whole drawing — would be indistinguishable from a crash.
+CMD SELECT
+CMD ISOLATEOBJECTS
+EXPECT LOG "nothing isolatable is selected"
+CMD SELECT
+BOX -10 -10 110 110
+EXPECT SELECTED 3
+
+# Save with objects isolated, reopen: the drawing comes back fully visible (REQ-084 (d)).
+CMD SELECT
+BOX -10 40 110 60
+CMD ISOLATEOBJECTS
+EXPECT LOG "1 object(s) isolated, 2 hidden"
+SAVEAS %OUT%/isolated.gs
+OPEN %OUT%/isolated.gs
+CHECK ALL
+BOX -10 -10 110 110
+EXPECT SELECTED 3

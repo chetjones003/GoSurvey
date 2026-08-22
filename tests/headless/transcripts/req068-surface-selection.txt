@@ -1,0 +1,133 @@
+# REQ-068 — a TIN surface is a selectable entity (ADR-036 (a)(b)(c)).
+#
+# REQ-068 has said "surfaces participate in layers, visibility, selection, erase, undo and view
+# extents" since 2026-08-12, and the selection half was never implemented: SelectedEntity::Type had
+# no Surface and PickClosestCadEntity never enumerated one. This transcript is that half.
+#
+# **On BOX rather than PICK.** Single-click entity selection lives in the UI layer, so this driver
+# cannot reach it — the same limitation req084-object-isolation works around, and for the same
+# reason. BOX exercises the other selection funnel (ComputeSelectionFromRect) for real. The
+# PickClosestCadEntity branch IS reached, through OFFSET: OFFSET picks with it and its pick is
+# reachable with a plain PICK, so an OFFSET refusal naming the surface proves the pick returned one.
+# Both funnels matter — ADR-034 names exactly these two, and either one alone would leave a surface
+# selectable by one route and not the other.
+#
+# **The refusals are the point, not a footnote.** A surface is display-only — its geometry is derived
+# from its definition, so a MOVE would be silently undone by the next rebuild. Every transform
+# therefore has to DROP it and SAY SO. A transform that quietly skipped the surface would look
+# identical to one that moved it and rebuilt, right up until a user noticed their surface had not
+# moved and could not find out why. So each refusal is asserted twice: the log line exists
+# (REQ-201), and the operation still did its job on everything else.
+
+OPEN samples/surface-demo.gs
+
+CMD SURFACECREATE Test EG, Existing Ground
+EXPECT SURFACES 1
+
+# The display cache holds the surface's border, which is what the selection highlight draws.
+# Asserted because "the highlight drew nothing" and "nothing was selected" look identical on screen
+# (ADR-036 (e)), so a cache that silently produced nothing would leave selection looking broken with
+# nothing failing.
+#
+# 16 is this surface's convex hull: the definition has no boundary rings, so an unconstrained
+# Delaunay build's border IS the hull, and every other edge is shared by two triangles. If a
+# boundary is ever added to the sample, this number is expected to change — it is a real property of
+# the fixture, not a magic constant.
+EXPECT SURFACEBORDERSEGS 16
+CHECK ALL
+
+# --- a crossing box selects the SURFACE -----------------------------------------------------------
+CMD SELECT
+BOX -500 -500 500 500
+EXPECT SELECTEDSURFACES 1
+
+# --- PickClosestCadEntity returns it, and OFFSET refuses it by name -------------------------------
+# OFFSET's entity pick goes through PickClosestCadEntity, and unlike TRIM it is reachable with a
+# plain PICK. Before this task the pick returned nothing at a surface; now it returns the surface,
+# and OFFSET has to decline it rather than accept it and silently produce nothing.
+#
+# 7.107, 16.881 is survey point #1's LOCAL position, and both a survey point's easting/northing and
+# the TIN's vertices are local (ResolveSurfaceInputs adds worldDocumentOrigin on the way in,
+# ToLocalTin takes it back out). It is a triangulation vertex, so it is an endpoint of several
+# triangle edges — distance zero from the pick, not "close enough".
+CMD SELECT
+CMD OFFSET
+PICK 7.107 16.881
+EXPECT LOG "1 surface ignored"
+EXPECT LOG "a surface cannot be offset"
+ESC
+
+# --- MOVE refuses it, out loud, and still moves everything else -----------------------------------
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+EXPECT LINES 1
+
+CMD SELECT
+BOX -500 -500 500 500
+EXPECT SELECTEDSURFACES 1
+
+CMD MOVE
+CMD 0,0
+CMD 10,0
+EXPECT LOG "surface(s) excluded"
+EXPECT LOG "would be undone by the next rebuild"
+# MOVE stays armed for another base point after it completes, so it must be dismissed or the next
+# command line is eaten as a coordinate.
+ESC
+# The refusal excluded ONE OBJECT; it did not abandon the command. A transform that bailed out
+# entirely on seeing a surface would satisfy an assertion on the log line alone, which is why the
+# counts follow it.
+EXPECT SURFACES 1
+EXPECT LINES 1
+
+# --- COPYCLIP refuses it for a different, stated reason -------------------------------------------
+CMD SELECT
+BOX -500 -500 500 500
+CLIPCOPY
+EXPECT LOG "surface(s) not copied"
+EXPECT LOG "point groups, breaklines and boundaries"
+
+# --- an invisible surface must not answer a pick (REQ-084 (d)) ------------------------------------
+CMD SELECT
+BOX -500 -500 500 500
+EXPECT SELECTEDSURFACES 1
+CMD HIDEOBJECTS
+
+# The surface still exists — hiding is a visibility state, not an edit.
+EXPECT SURFACES 1
+
+# ...and now refuses a box that just took it. This is the condition that matters: an isolated-out
+# object that still answers a drag gives the user a selection they cannot see.
+CMD SELECT
+BOX -500 -500 500 500
+EXPECT SELECTEDSURFACES 0
+
+# It refuses the entity pick too, not only the box — the two funnels are separate code and either
+# one alone would leave the object half-hidden.
+CMD OFFSET
+PICK 7.107 16.881
+EXPECT LOG "nothing under cursor"
+ESC
+
+CMD UNISOLATEOBJECTS
+CMD SELECT
+BOX -500 -500 500 500
+EXPECT SELECTEDSURFACES 1
+
+# --- erase, and one undo brings it back -----------------------------------------------------------
+CMD DELETE
+EXPECT SURFACES 0
+# The border cache entry went with it. An entry that outlived its surface would be drawn over
+# whichever surface compacted into the freed index (ADR-036 (e)).
+EXPECT SURFACEBORDERSEGS 0
+
+UNDO
+EXPECT SURFACES 1
+# Regenerated from the restored triangulation. The cache is live-only state that the undo snapshot
+# does not carry (ADR-036 (e)), so this is the frame tick rebuilding it — which is the property that
+# keeps contours out of the undo stack in the first place.
+EXPECT SURFACEBORDERSEGS 16
+
+CHECK ALL

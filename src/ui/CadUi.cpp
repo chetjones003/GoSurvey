@@ -12,6 +12,7 @@
 
 #include "CadLinetype.hpp"
 #include "TextStyle.hpp"
+#include "CadUiStyleWidgets.hpp"  // the shared colour / linetype / lineweight vocabulary
 #include "HatchPattern.hpp"
 #include "CommandBar.hpp"
 #include "NumFormat.hpp"
@@ -2334,6 +2335,14 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     RibbonItemHelp(
         "Surfaces — build a TIN surface by triangulating the points in one or more point groups, "
         "then rebuild it as the survey changes.");
+    // REQ-088. Sits with Surfaces because that is what a feature line's elevations are FOR — the
+    // line is design linework a surface consumes as a breakline.
+    if (smallBtn("##RibbonFlElev", RibbonIconKind::SurveyPoint, "Grades", cwB))
+      cmd.showFeatureLineElevWindow = true;
+    RibbonItemHelp(
+        "Feature Line Elevations — station, elevation, length, grade back and grade ahead for each "
+        "point of a feature line. Edit an elevation or a grade, raise or lower the whole line, and "
+        "add elevation points that change grade without changing the plan shape.");
     if (smallBtn("##RibbonPointGroups", RibbonIconKind::SurveyPoint, "Groups", cwB))
       cmd.showPointGroupManagerWindow = true;
     RibbonItemHelp(
@@ -2911,26 +2920,12 @@ void CollectGeneralAttrs(const AppCommandState& cmd, const std::vector<SelectedE
   }
 }
 
-struct NamedColorPreset {
-  const char* label;
-  const char* storage;
-  float r;
-  float g;
-  float b;
-};
 
 // Font choices offered by the STYLE dialog and the MTEXT "Text Formatting" panel's font picker
 // (REQ-044 / REQ-051). "" = the application default font. Defined here so both use sites see it.
 static const char* kTextStyleFonts[] = {
     "",          "romans.shx", "romand.shx", "romanc.shx", "txt.shx",         "simplex.shx",
     "isocp.shx", "italic.shx", "Arial",      "Times New Roman", "Consolas",   "Tahoma",
-};
-
-static const NamedColorPreset kNamedColors[] = {
-    {"By Layer", "ByLayer", 1.f, 1.f, 1.f}, {"Red", "Red", 1.f, 0.f, 0.f}, {"Yellow", "Yellow", 1.f, 1.f, 0.f},
-    {"Green", "Green", 0.f, 1.f, 0.f},    {"Cyan", "Cyan", 0.f, 1.f, 1.f}, {"Blue", "Blue", 0.f, 0.f, 1.f},
-    {"Magenta", "Magenta", 1.f, 0.f, 1.f}, {"White", "White", 1.f, 1.f, 1.f}, {"Gray", "Gray", 0.5f, 0.5f, 0.5f},
-    {"Black", "Black", 0.f, 0.f, 0.f},    {"Orange", "Orange", 1.f, 0.5f, 0.f},
 };
 
 // Full named palette first, then any custom color strings from entities not in the palette.
@@ -2956,29 +2951,6 @@ static void CollectQsColorOptions(const AppCommandState& cmd,
   for (const auto& a : cmd.cadAnnotationAttrs) addExtra(a.color);
 }
 
-static const char* kEntityLinetypeLabels[] = {"By Layer", "By Block", "Continuous", "Dashed", "Hidden", "Center",
-                                            "Phantom", "Divide", "Border"};
-static const char* kEntityLinetypeStorage[] = {"ByLayer", "ByBlock", "Continuous", "DASHED", "HIDDEN", "CENTER",
-                                               "PHANTOM", "DIVIDE", "BORDER"};
-static constexpr int kEntityLinetypeCount =
-    static_cast<int>(sizeof(kEntityLinetypeLabels) / sizeof(kEntityLinetypeLabels[0]));
-
-static const char* kLayerLinetypeLabels[] = {"Continuous", "Dashed", "Hidden", "Center", "Phantom", "Divide", "Border"};
-static const char* kLayerLinetypeStorage[] = {"Continuous", "DASHED", "HIDDEN", "CENTER", "PHANTOM", "DIVIDE",
-                                                "BORDER"};
-static constexpr int kLayerLinetypeCount =
-    static_cast<int>(sizeof(kLayerLinetypeLabels) / sizeof(kLayerLinetypeLabels[0]));
-
-static constexpr float kUiLineweightMmPresets[] = {
-    -1.f,  0.f,   0.05f, 0.09f, 0.13f, 0.15f, 0.18f, 0.20f, 0.25f, 0.30f, 0.35f, 0.40f,
-    0.50f, 0.53f, 0.60f, 0.70f, 0.80f, 0.90f, 1.00f, 1.06f, 1.20f, 1.40f, 1.58f, 2.00f, 2.11f};
-static constexpr int kUiLineweightPresetCount =
-    static_cast<int>(sizeof(kUiLineweightMmPresets) / sizeof(kUiLineweightMmPresets[0]));
-
-static constexpr float kUiTransparencyPresets[] = {-1.f, 0.f, 0.25f, 0.5f, 0.75f, 0.9f, 1.f};
-static constexpr int kUiTransparencyPresetCount =
-    static_cast<int>(sizeof(kUiTransparencyPresets) / sizeof(kUiTransparencyPresets[0]));
-
 static int EntityLinetypeComboIndex(const std::string& s) {
   const std::string c = CadCanonicalLinetypeNameForDxf(s);
   for (int i = 0; i < kEntityLinetypeCount; ++i) {
@@ -2997,31 +2969,6 @@ static int LayerLinetypeComboIndex(const std::string& s) {
   return 0;
 }
 
-static void SnprintLineweightPresetLabel(char* buf, size_t cap, float mm, bool layerRow) {
-  if (mm < 0.f) {
-    if (layerRow)
-      std::snprintf(buf, cap, "Default");
-    else
-      std::snprintf(buf, cap, "By Layer");
-    return;
-  }
-  std::snprintf(buf, cap, "%.2f mm", static_cast<double>(mm));
-}
-
-static int LineweightPresetIndexFromMm(float mm) {
-  if (mm < 0.f)
-    return 0;
-  int best = 1;
-  float bestD = 1e18f;
-  for (int i = 1; i < kUiLineweightPresetCount; ++i) {
-    const float d = std::fabs(mm - kUiLineweightMmPresets[i]);
-    if (d < bestD) {
-      bestD = d;
-      best = i;
-    }
-  }
-  return best;
-}
 
 static int TransparencyPresetIndexFromValue(float a) {
   if (a < -0.5f)
@@ -5079,11 +5026,18 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   int nCirc = 0;
   int nAnn  = 0;
   int nPdf  = 0;
+  int nSurf = 0;
+  int firstSurfIx = -1;
   for (const auto& e : sel) {
     if      (e.type == SelectedEntity::Type::LineSeg)    ++nLine;
     else if (e.type == SelectedEntity::Type::Circle)     ++nCirc;
     else if (e.type == SelectedEntity::Type::Annotation) ++nAnn;
     else if (e.type == SelectedEntity::Type::PdfUnderlay)++nPdf;
+    else if (e.type == SelectedEntity::Type::Surface) {
+      ++nSurf;
+      if (firstSurfIx < 0)
+        firstSurfIx = e.index;
+    }
   }
 
   ImGui::Text("Selected: %d object(s)", static_cast<int>(sel.size()));
@@ -5104,6 +5058,10 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     ImGui::TextDisabled("Circle");
   else if (nPdf == 1)
     ImGui::TextDisabled("PDF Underlay");
+  else if (nSurf > 1)
+    ImGui::TextDisabled("%d surfaces", nSurf);
+  else if (nSurf == 1)
+    ImGui::TextDisabled("TIN Surface");
   else if (nAnn == 1) {
     int ix = -1;
     for (const auto& e : sel) {
@@ -5127,6 +5085,50 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::Separator();
 
   DrawEditableGeneralSection(cmd, sel);
+
+  // TIN surface (REQ-068 / ADR-036 (b)). Read-only by design: everything below is DERIVED from the
+  // definition, so an editable field here would be a second source of truth that the next rebuild
+  // overwrites. The definition itself is edited in the Surfaces panel, which the note points at.
+  if (nSurf == 1 && firstSurfIx >= 0 && static_cast<size_t>(firstSurfIx) < cmd.cadSurfaces.size()) {
+    const CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(firstSurfIx)];
+    if (PropSectionHeader("Surface")) {
+      if (ImGui::BeginTable("props_surface", 2, kPropTableFlags)) {
+        ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+        ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+        const auto row = [](const char* k, const std::string& v) {
+          ImGui::TableNextRow();
+          PropValueCellBg();
+          ImGui::TableNextColumn(); ImGui::TextUnformatted(k);
+          ImGui::TableNextColumn(); ImGui::TextUnformatted(v.c_str());
+        };
+        row("Name", s.name);
+        row("Points", std::to_string(s.vertexCount()));
+        row("Triangles", std::to_string(s.triangleCount()));
+        if (s.tin && s.tin->vertsXyz.size() >= 3) {
+          float lo = s.tin->vertsXyz[2], hi = lo;
+          for (size_t i = 2; i < s.tin->vertsXyz.size(); i += 3) {
+            lo = std::min(lo, s.tin->vertsXyz[i]);
+            hi = std::max(hi, s.tin->vertsXyz[i]);
+          }
+          const int p = cmd.displayLinearPrecision;
+          row("Elevation range", FormatLinear(lo, p) + " to " + FormatLinear(hi, p));
+        } else {
+          row("Elevation range", "\xe2\x80\x94");
+        }
+        row("Definition", std::to_string(s.sourcePointGroups.size()) + " group(s), " +
+                              std::to_string(s.sourcePointFiles.size()) + " file(s), " +
+                              std::to_string(s.breaklines.size()) + " breakline(s), " +
+                              std::to_string(s.boundaries.size()) + " boundary(ies)");
+        // REQ-086: a surface showing an older triangulation than its definition describes must SAY
+        // so. Reporting the counts above while staying silent about that is precisely the quiet
+        // "looks current" state the requirement exists to prevent.
+        if (s.lastBuildIncomplete)
+          row("Status", "out of date \xe2\x80\x94 " + s.lastBuildMessage);
+        ImGui::EndTable();
+      }
+      ImGui::TextDisabled("Read-only. Edit the definition in the Surfaces panel.");
+    }
+  }
 
   if (nLine == 0 && nCirc == 0 && nAnn > 0) {
     std::vector<SelectedEntity> annOnly;
@@ -5627,6 +5629,10 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
   }
   case K::IdPoint: return true;
   case K::SurveyInverse: return true;
+  // REQ-074. Missing here as well as from the viewport click dispatch, so SURFELEV got neither
+  // typed-point entry nor a usable pick — the same pre-existing TASK-055 gap, in the second of the
+  // two lists a point-picking command has to appear in.
+  case K::SurfaceElevGrade: return true;
   case K::Circle: {
     using CP = AppCommandState::CirclePhase;
     return cmd.circlePhase == CP::WaitCenterOrMode || cmd.circlePhase == CP::ThreeP_WaitP1 ||
@@ -8039,8 +8045,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // ORBIT (REQ-058): Shift + middle-drag tumbles the camera about the pan point, matching
     // AutoCAD's 3DORBIT binding. Plain middle-drag still pans, so nothing existing changes.
     // Model space only — a paper sheet is 2D (ADR-025 (g)) and must never tilt.
-    const bool orbitDrag = modelSpace && ImGui::GetIO().KeyShift &&
-                           ImGui::IsMouseDragging(ImGuiMouseButton_Middle);
+    // The ORBIT command (REQ-084 (c)) adds a LEFT-drag route to the same math, exactly as the PAN
+    // command does below for panning — one orbit implementation, two ways in.
+    const bool orbitDrag = modelSpace &&
+                           ((ImGui::GetIO().KeyShift && ImGui::IsMouseDragging(ImGuiMouseButton_Middle)) ||
+                            (cmd.active == AppCommandState::Kind::Orbit &&
+                             ImGui::IsMouseDragging(ImGuiMouseButton_Left)));
     if (orbitDrag) {
       const ImVec2 d = ImGui::GetIO().MouseDelta;
       // Degrees per pixel: a full window drag sweeps roughly half a turn horizontally, which is
@@ -8587,6 +8597,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         //   - hovering an object → select it directly (Shift toggles), like the model click-to-select;
         //   - empty space    → arm a selection box.
         if (hovered && cmd.active != AppCommandState::Kind::Pan &&
+            cmd.active != AppCommandState::Kind::Orbit &&
             ImGui::IsMouseClicked(ImGuiMouseButton_Left) &&
             !ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
           const float gripTolWorld = 10.f * worldPerPx;  // grip hit radius (~10px) in model units
@@ -8674,6 +8685,60 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                                      cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
       const bool allowSnapCycle =
           cmd.active != AK::None && cmd.objectSnapEnabled && !blockSnapPickMenu;
+      using DM = AppCommandState::RightClickDefaultMode;
+      using EM = AppCommandState::RightClickEditMode;
+      using CM = AppCommandState::RightClickCommandMode;
+      const bool hasSel = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
+
+      // The preference-driven classification, shared by the press path and the time-sensitive
+      // release path so the two can never drift apart.
+      auto openShortcutMenu = [&]() { ImGui::OpenPopup("##drawing1_vp_ctx"); };
+      auto rightClickAsEnter = [&]() {
+        if (cmd.active != AK::None)
+          ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+        else if (cmd.lastCommand != AK::None)
+          RepeatLastCommand(cmd, log);
+      };
+      auto classifyByPreference = [&]() {
+        if (cmd.active != AK::None) {
+          switch (cmd.rightClickCommandMode) {
+          case CM::Enter:
+            ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
+            break;
+          case CM::ShortcutMenuAlways:
+          case CM::ShortcutMenuWhenOptions:
+            openShortcutMenu();
+            break;
+          }
+        } else if (hasSel) {
+          switch (cmd.rightClickEditMode) {
+          case EM::RepeatLastCommand:
+            if (cmd.lastCommand != AK::None) RepeatLastCommand(cmd, log);
+            else openShortcutMenu();
+            break;
+          case EM::ShortcutMenu:
+            openShortcutMenu();
+            break;
+          }
+        } else {
+          switch (cmd.rightClickDefaultMode) {
+          case DM::RepeatLastCommand:
+            if (cmd.lastCommand != AK::None) RepeatLastCommand(cmd, log);
+            else openShortcutMenu();
+            break;
+          case DM::ShortcutMenu:
+            openShortcutMenu();
+            break;
+          }
+        }
+      };
+
+      // REQ-084 (b): with time-sensitive right-click ON, the DURATION of the press decides the
+      // Default and Command contexts — quick = ENTER, held = shortcut menu. A selection still goes
+      // through Edit Mode, which is why the dialog leaves that group enabled. The menu therefore
+      // opens on release-or-elapse rather than on press; that is the feature, not a defect.
+      const bool timeSensitive = cmd.rightClickTimeSensitive && !blockSnapPickMenu && !hasSel;
+
       if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         if (ioVpRmb.KeyShift && allowSnapCycle) {
           g_snapMenuSortX = static_cast<float>(rmbWx);
@@ -8681,45 +8746,33 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           g_snapMenuStep = 0;
           g_snapPickMenuScratch.clear();
           ImGui::OpenPopup("##gos_snap_pick");
+          cmd.rightClickPressPending = false;
         } else if (!blockSnapPickMenu) {
-          using DM = AppCommandState::RightClickDefaultMode;
-          using EM = AppCommandState::RightClickEditMode;
-          using CM = AppCommandState::RightClickCommandMode;
-          const bool hasSel = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
-          if (cmd.active != AK::None) {
-            switch (cmd.rightClickCommandMode) {
-            case CM::Enter:
-              ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
-              break;
-            case CM::ShortcutMenuAlways:
-            case CM::ShortcutMenuWhenOptions:
-              ImGui::OpenPopup("##drawing1_vp_ctx");
-              break;
-            }
-          } else if (hasSel) {
-            switch (cmd.rightClickEditMode) {
-            case EM::RepeatLastCommand:
-              if (cmd.lastCommand != AK::None) RepeatLastCommand(cmd, log);
-              else ImGui::OpenPopup("##drawing1_vp_ctx");
-              break;
-            case EM::ShortcutMenu:
-              ImGui::OpenPopup("##drawing1_vp_ctx");
-              break;
-            }
+          if (timeSensitive) {
+            cmd.rightClickPressPending = true;
+            cmd.rightClickPressTimeSec = ImGui::GetTime();
           } else {
-            switch (cmd.rightClickDefaultMode) {
-            case DM::RepeatLastCommand:
-              if (cmd.lastCommand != AK::None) RepeatLastCommand(cmd, log);
-              else ImGui::OpenPopup("##drawing1_vp_ctx");
-              break;
-            case DM::ShortcutMenu:
-              ImGui::OpenPopup("##drawing1_vp_ctx");
-              break;
-            }
+            classifyByPreference();
           }
+        }
+      } else if (cmd.rightClickPressPending) {
+        const double heldMs = (ImGui::GetTime() - cmd.rightClickPressTimeSec) * 1000.0;
+        if (ImGui::IsMouseReleased(ImGuiMouseButton_Right)) {
+          cmd.rightClickPressPending = false;
+          if (!CadRightClickHoldIsMenu(heldMs, cmd.rightClickLongerClickMs))
+            rightClickAsEnter();
+          else
+            openShortcutMenu();  // released after the threshold without the frame that elapses it
+        } else if (CadRightClickHoldIsMenu(heldMs, cmd.rightClickLongerClickMs)) {
+          cmd.rightClickPressPending = false;
+          openShortcutMenu();    // still held: the menu appears the moment the threshold passes
         }
       }
     }
+    // A press that ends outside the viewport is abandoned, not resolved — otherwise the next
+    // right-click over the drawing would be measured from a press the user made somewhere else.
+    if (cmd.rightClickPressPending && !ImGui::IsMouseDown(ImGuiMouseButton_Right))
+      cmd.rightClickPressPending = false;
   }
 
   cmd.viewportLastSurveyLayoutOrthoHalfH = halfH;
@@ -9174,7 +9227,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const bool overCmdSugPopup =
       s_cmdSugPopupOpen && ImGui::IsMouseHoveringRect(s_cmdSugPopupMin, s_cmdSugPopupMax, false);
   if (modelSpace && hovered && !overCmdSugPopup && !overViewCube &&
-      cmd.active != AppCommandState::Kind::Pan && ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 &&
+      cmd.active != AppCommandState::Kind::Pan && cmd.active != AppCommandState::Kind::Orbit &&
+      ImGui::IsMouseClicked(ImGuiMouseButton_Left) && mx >= 0 &&
       mx < avail.x && my >= 0 && my < avail.y) {
     if (cmd.dimGripMoveActive) {
       cmd.dimGripMoveActive = false;
@@ -9192,10 +9246,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const int spi = SurveyPointIndexForId(cmd, gripAnn.surveyPointLabelForId);
         if (spi >= 0) {
           const SurveyPoint& sp = cmd.surveyPoints[static_cast<size_t>(spi)];
-          const float newCx = 0.5f * (gripAnn.boxMinX + gripAnn.boxMaxX);
-          const float newCy = 0.5f * (gripAnn.boxMinY + gripAnn.boxMaxY);
-          gripAnn.surveyLabelUserOffsetEast  = newCx - sp.easting;
-          gripAnn.surveyLabelUserOffsetNorth = newCy - sp.northing;
+          // Store what RepositionSurveyLabelMtextForPoint reads back: the LEFT edge in X, the
+          // vertical CENTRE in Y. Mixing the two up would make a dragged label jump on the next
+          // rebuild, by exactly half its own box.
+          gripAnn.surveyLabelUserOffsetEast  = gripAnn.boxMinX - sp.easting;
+          gripAnn.surveyLabelUserOffsetNorth = 0.5f * (gripAnn.boxMinY + gripAnn.boxMaxY) - sp.northing;
           gripAnn.surveyLabelHasUserOffset   = true;
         }
       }
@@ -9259,7 +9314,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else {
         TryPlaceSurveyPoint(cmd, commitX, commitY, cmd.createPointsOpts.defaultElevation, log);
       }
-    } else if (cmd.active == K::Offset)
+    } else if (cmd.active == K::Offset || cmd.active == K::DesignateBreakline ||
+             cmd.active == K::DesignateBoundary)
+      // Entity-pick commands (REQ-069, like OFFSET's own WaitSelectEntity): the raw, unsnapped
+      // cursor position is what PickClosestCadEntity hit-tests against, not an OSNAP-adjusted commit
+      // point — a command missing from this list silently ignores every viewport click and appears
+      // to hang on its first prompt (see the comment on the point-picking list below).
       SubmitViewportPick(cmd, rawPickX, rawPickY, log);
     else if (cmd.active == K::PdfAttach &&
              cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint)
@@ -9291,11 +9351,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // machine. A command missing from this list silently ignores every viewport click and appears to
     // hang on its first prompt — which is exactly what RECT did before it was added here.
     else if (cmd.active == K::Line || cmd.active == K::Circle || cmd.active == K::Polyline ||
+             cmd.active == K::FeatureLine ||  // REQ-087 / TASK-082 BUG-1 — omitted until 2026-08-20
              cmd.active == K::Rect ||
              cmd.active == K::Arc || cmd.active == K::Ellipse || cmd.active == K::Text ||
              cmd.active == K::Mtext || cmd.active == K::DimAligned || cmd.active == K::DimLinear ||
              cmd.active == K::DimAngular ||
-             cmd.active == K::IdPoint || cmd.active == K::SurveyInverse || cmd.active == K::Paste)
+             cmd.active == K::IdPoint || cmd.active == K::SurveyInverse || cmd.active == K::Paste ||
+             cmd.active == K::SurfaceElevGrade)
       SubmitViewportPick(cmd, commitX, commitY, log);
     else if (cmd.active == K::Move || cmd.active == K::Copy || cmd.active == K::Scale) {
       if (cmd.modifyPhase == MP::PickSelection) {
@@ -11084,6 +11146,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
       const EntityAttributes* ap =
           ai < cmd.cadAnnotationAttrs.size() ? &cmd.cadAnnotationAttrs[ai] : nullptr;
+      // Annotations are drawn by this overlay rather than the GL pass, so isolation is gated here
+      // (REQ-084 (d)); PickCadAnnotationAt gates the matching pick.
+      if (ap && CadEntityIdHidden(&cmd.hiddenEntityIds, ap->id))
+        continue;
       drawAnnotationVisual(cmd.cadAnnotations[ai], ap, kAnnCol);
     }
 
@@ -11729,7 +11795,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const bool liveHover = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y;
   const bool frozenHair = typingCommand && s_lastCrosshairScreen.x >= 0.f;
   // PAN command (REQ-045): show a hand instead of the CAD crosshair while pan mode is active.
-  const bool panMode = cmd.active == AppCommandState::Kind::Pan;
+  // ORBIT (REQ-084 (c)) is a drag mode too: the crosshair would say "pick a point", which is not
+  // what a left-drag does while it is active.
+  const bool panMode = cmd.active == AppCommandState::Kind::Pan ||
+                       cmd.active == AppCommandState::Kind::Orbit;
   if (panMode && liveHover)
     ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
   if (!panMode && (liveHover || frozenHair)) {
@@ -11837,21 +11906,116 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImGui::CloseCurrentPopup();
       }
     } else if (!gripActive) {
-      // Edit Mode / Default Mode shortcut menu
+      // Edit Mode / Default Mode shortcut menu — the drawing's action menu (REQ-084 (c)).
       if (cmd.lastCommand != AK::None) {
         char repeatLabel[64];
         std::snprintf(repeatLabel, sizeof(repeatLabel), "Repeat %s",
                       AppCommandState::KindName(cmd.lastCommand));
         if (ImGui::MenuItem(repeatLabel))
           RepeatLastCommand(cmd, log);
-        ImGui::Separator();
       }
+
+      // Recent Input — the SAME history the command bar's dropdown shows (REQ-040), newest first,
+      // so the two surfaces cannot disagree about what was typed. Re-running is a plain submit
+      // through the command line, which is what typing it again would do.
+      if (ImGui::BeginMenu("Recent Input", !cmd.cmdEnteredHistory.empty())) {
+        // Chosen first, run after the loop. Re-submitting appends to this same history (and, at the
+        // 20-entry cap, erases its front), so running inside the loop would leave the rest of the
+        // frame walking a vector that had shifted under it.
+        std::string chosen;
+        for (size_t i = cmd.cmdEnteredHistory.size(); i-- > 0;) {
+          ImGui::PushID(static_cast<int>(i));
+          if (ImGui::MenuItem(cmd.cmdEnteredHistory[i].c_str()))
+            chosen = cmd.cmdEnteredHistory[i];
+          ImGui::PopID();
+        }
+        ImGui::EndMenu();
+        if (!chosen.empty()) {
+          char buf[256];
+          std::snprintf(buf, sizeof(buf), "%s", chosen.c_str());
+          ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
+          ImGui::CloseCurrentPopup();
+        }
+      }
+      ImGui::Separator();
+
+      // Isolate Objects (REQ-084 (d)).
+      if (ImGui::BeginMenu("Isolate Objects")) {
+        if (ImGui::MenuItem("Isolate Objects", nullptr, false, hasSel)) {
+          IsolateSelectedObjects(cmd, log);
+          ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::MenuItem("Hide Objects", nullptr, false, hasSel)) {
+          HideSelectedObjects(cmd, log);
+          ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::MenuItem("End Object Isolation", nullptr, false, !cmd.hiddenEntityIds.empty())) {
+          EndObjectIsolation(cmd, log);
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndMenu();
+      }
+
+      if (ImGui::BeginMenu("Clipboard")) {
+        const bool hasClip = !cmd.clipboard.empty();
+        if (ImGui::MenuItem("Cut", "Ctrl+X", false, hasSel)) {
+          // No CUT command exists; cut IS copy-then-erase, and spelling it out here keeps one
+          // owner for each half rather than a third path through the clipboard.
+          CopySelectionToClipboard(cmd, log);
+          StartDeleteCommand(cmd, log);
+          ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::MenuItem("Copy", "Ctrl+C", false, hasSel)) {
+          CopySelectionToClipboard(cmd, log);
+          ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::MenuItem("Paste", "Ctrl+V", false, hasClip)) {
+          StartPasteCommand(cmd, log);
+          ImGui::CloseCurrentPopup();
+        }
+        if (ImGui::MenuItem("Paste at Original Coordinates", nullptr, false, hasClip)) {
+          StartPasteOrigCommand(cmd, log);
+          ImGui::CloseCurrentPopup();
+        }
+        ImGui::EndMenu();
+      }
+
+      if (ImGui::BeginMenu("Basic Modify Tools", hasSel)) {
+        if (ImGui::MenuItem("Move"))           { StartMoveCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Copy Selection")) { StartCopyCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Rotate"))         { StartRotateCommand(cmd, log); ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Scale"))          { StartScaleCommand(cmd, log);  ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Erase"))          { StartDeleteCommand(cmd, log); ImGui::CloseCurrentPopup(); }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Offset"))         { StartOffsetCommand(cmd, log); ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Trim"))           { StartTrimCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Join"))           { StartJoinCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
+        ImGui::EndMenu();
+      }
+      ImGui::Separator();
+
+      if (ImGui::MenuItem("Pan"))        { StartPanCommand(cmd, log);          ImGui::CloseCurrentPopup(); }
+      if (ImGui::MenuItem("Zoom"))       { StartZoomWindowCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
+      if (ImGui::MenuItem("Free Orbit")) { StartOrbitCommand(cmd, log);        ImGui::CloseCurrentPopup(); }
+      ImGui::Separator();
+
+      if (ImGui::MenuItem("Quick Select...")) {
+        StartQuickSelectCommand(cmd, log);
+        ImGui::CloseCurrentPopup();
+      }
+      // No "Find..." here. GoSurvey's find/replace (mtextFindReplaceOpen) lives inside the MTEXT
+      // text-formatting panel and searches only the buffer being edited — and the drawing shortcut
+      // menu cannot even open while that editor is up. A drawing-wide FIND does not exist, so the
+      // item would be a control that does nothing, which is the failure REQ-201 forbids. Recorded
+      // in REQ-084 and as TASK-070 DEBT-3; it returns when drawing-wide FIND is a requirement.
+      if (ImGui::MenuItem("Options...")) {
+        cmd.showSettingsWindow = true;
+        ImGui::CloseCurrentPopup();
+      }
+
+      // REQ-054's selection items stay exactly where they were — below the general actions, and
+      // only when there is a selection to act on.
       if (hasSel) {
-        if (ImGui::MenuItem("Move"))   { StartMoveCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
-        if (ImGui::MenuItem("Copy"))   { StartCopyCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
-        if (ImGui::MenuItem("Rotate")) { StartRotateCommand(cmd, log); ImGui::CloseCurrentPopup(); }
-        if (ImGui::MenuItem("Scale"))  { StartScaleCommand(cmd, log);  ImGui::CloseCurrentPopup(); }
-        if (ImGui::MenuItem("Delete")) { StartDeleteCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         ImGui::Separator();
         if (ImGui::MenuItem("Select similar")) {
           SelectSimilarToCurrentSelection(cmd, &log);
@@ -12445,6 +12609,15 @@ static void FormatSelectedEntityLabel(const AppCommandState& cmd, const Selected
   }
   case T::PdfUnderlay:
     std::snprintf(buf, bufSize, "PDF Underlay %d", e.index + 1);
+    break;
+  case T::Surface:
+    // By NAME, not by ordinal (REQ-068). A surface is the one selectable object the user named
+    // themselves, and "Surface 2" in a list beside "Existing Ground" and "Proposed" would be the
+    // least useful of the three labels available.
+    if (static_cast<size_t>(e.index) < cmd.cadSurfaces.size())
+      std::snprintf(buf, bufSize, "Surface \"%s\"", cmd.cadSurfaces[static_cast<size_t>(e.index)].name.c_str());
+    else
+      std::snprintf(buf, bufSize, "Surface %d", e.index + 1);
     break;
   default:
     std::snprintf(buf, bufSize, "Entity %d", e.index + 1);

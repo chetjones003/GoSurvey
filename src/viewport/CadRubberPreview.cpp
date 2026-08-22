@@ -189,6 +189,37 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
     }
   }
 
+  // FEATURELINE (REQ-087 / TASK-082 BUG-2): the draft had NO preview at all — nothing in
+  // viewport/, render/ or ui/ read featureLineDraftVerts. That was survivable while the only way to
+  // place a point was to type it; once a click places one, drawing with no preview means picking
+  // blind, so the click fix is not worth having without this.
+  //
+  // Each segment is drawn at its vertices' own elevations, as the polyline draft above is, so a
+  // feature line being drawn up a grade previews as the 3D chain it will become rather than flat.
+  if (cmd.active == AppCommandState::Kind::FeatureLine) {
+    const auto& d = cmd.featureLineDraftVerts;
+    for (size_t i = 0; i + 5 < d.size(); i += 3)
+      PushRubberSegViewRel(rubberLines, d[i], d[i + 1], d[i + 3], d[i + 4], 0., 0., d[i + 2], d[i + 5]);
+
+    if (!d.empty()) {
+      const float ax = d[d.size() - 3];
+      const float ay = d[d.size() - 2];
+      const float az = d[d.size() - 1];
+      if (cmd.featureLinePendingPoint) {
+        // An elevation is owed, so the point is FIXED where it was clicked — rubber-banding to the
+        // cursor here would suggest it is still being placed, and moving the mouse while typing an
+        // elevation would appear to move the point.
+        PushRubberSegViewRel(rubberLines, ax, ay, cmd.featureLinePendingX, cmd.featureLinePendingY,
+                             0., 0., az, cmd.featureLinePendingDefaultZ);
+      } else {
+        float lx = curXf;
+        float ly = curYf;
+        ApplyOrthoConstrainFromAnchor(ax, ay, &lx, &ly, orthoEnabled);
+        PushRubberSegViewRel(rubberLines, ax, ay, lx, ly, 0., 0., az, zc);
+      }
+    }
+  }
+
   // RECT (REQ-053): after the first corner, rubber-band the axis-aligned rectangle to the cursor. ORTHO is
   // deliberately NOT applied — it would collapse the rectangle to a line, and the shape is already
   // axis-aligned, which is what ORTHO is for.

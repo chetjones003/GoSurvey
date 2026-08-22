@@ -1,7 +1,7 @@
 # TASK-021 — REQ-049: plot TrueType sheet text (embed the real font)
 
 - Type:    feature (completes REQ-049's recorded TTF-text debt)
-- Status:  self-verify (built + unit-tested; awaiting user manual verification of a plotted PDF)
+- Status:  done — user verified a plotted PDF in app 2026-08-18 (after the §4b fixes)
 - Opened:  2026-07-15
 - Owner:   chetjones003
 
@@ -58,7 +58,7 @@ User plotted a title block and found two defects vs. the on-screen sheet:
    new `measureTtfWidthIn` (throwaway text obj → `FPDFPageObj_GetBounds`) so mixed SHX/TTF sheets align the
    same way. Single-line TEXT is unchanged (the overlay treats its insertion as top-left).
 - Build: clean, no warnings (only PdfPlot.cpp recompiled). Tests: 66/66 green (logic is PDFium emission —
-  manual per convention). Awaiting user re-plot to confirm both defects are resolved.
+  manual per convention). User re-plotted 2026-08-18 and confirmed both defects are resolved.
 
 ## 5. Assumptions
 ```
@@ -76,10 +76,10 @@ ASSUMPTION-1: CAD text "height" is treated as cap height; TTF em = H / 0.7 (nomi
 - [x] dependency-audit     — n-a (no dependency added; existing PDFium text APIs)
 - [x] performance-review   — fonts cached per document (loaded once per family); text objects are cheap; acceptable
 - [x] testing              — 66/66 ctest green (+4 PlotFont cases). PDF text emission itself is IO/PDFium — manual per convention.
-- [ ] user manual verification — PENDING (plot a title block; confirm TTF text renders in the real font, correct position/size/color)
+- [x] user manual verification — PASS 2026-08-18. Title block plotted: TTF text in the real embedded font at correct position/size/color, filled regions plot, center/middle MTEXT matches the screen.
 
 ## 7. Verification result
-- Verdict: PASS pending user manual verification of a plotted PDF.
+- Verdict: PASS — user verified a plotted PDF 2026-08-18, after the two §4b defects were fixed.
 
 ## 8. Outcome (interim)
 - Requirements satisfied: REQ-049 TTF-text debt closed (SHX + TTF sheet text both plot).
@@ -88,4 +88,4 @@ ASSUMPTION-1: CAD text "height" is treated as cap height; TTF em = H / 0.7 (nomi
 - Technical debt:         `.ttc` font collections and non-resolvable families substitute a base-14 font
                           (logged, not dropped); native sheet FILLED regions in the plot still deferred (ADR-011);
                           cap-em ratio is nominal 0.7 (ASSUMPTION-1).
-- Done:                   pending user manual verification.
+- Done:                   2026-08-18 (user verified in app)

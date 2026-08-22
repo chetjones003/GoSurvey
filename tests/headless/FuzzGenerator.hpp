@@ -62,6 +62,32 @@ struct Options {
   /// a **1000-seed `--roundtrip` sweep reports 0 failures** — measured, not assumed. Use
   /// `--no-roundtrip` to skip it.
   bool emitRoundTrip = true;
+
+  /// Append the `undo-redo-identity` differential oracle: save -> undo -> redo -> save, comparing
+  /// the two saves byte for byte (REQ-204's first invariant, "the classic CAD defect class").
+  ///
+  /// The comparison is `.gs` bytes for the same reason `emitRoundTrip`'s is: `.gs` is the canonical
+  /// serialization of an AppCommandState, so two states that write identical bytes are the same
+  /// document by the only definition the format admits. It needs no equality predicate, and it
+  /// forgives nothing — which is correct here, because undo is a restore rather than a computation
+  /// and REQ-101's tolerance has no bearing on a snapshot agreeing with itself.
+  ///
+  /// The emitted block opens with an ANCHOR EDIT (one committed line) and asserts
+  /// `EXPECT DIFFERENTFILE` across the undo before asserting `EXPECT SAMEFILE` across the redo.
+  /// Both exist because the naive shape lies in both directions, and the second was caught by
+  /// measurement rather than by reasoning — see the comment at the emission site in
+  /// FuzzGenerator.cpp for the seed that produced it.
+  ///
+  /// **On by default since 2026-08-18**, under the rule \ref emitRoundTrip records: flip a default
+  /// when a sweep comes back clean, not when a particular issue closes. Satisfied on its own terms
+  /// — a **1000-seed `--undo-redo` sweep reports 0 failures**, measured after the anchor edit was
+  /// added, not before. The sweep before it reported 2 failures which were the ORACLE'S fault, and
+  /// shipping that default would have filed a bug against correct behaviour.
+  ///
+  /// A clean sweep here also proves the oracle is not vacuous, which is unusual and worth saying:
+  /// `EXPECT DIFFERENTFILE` fails when the undo changed nothing, so 1000 passes means 1000 undos
+  /// that genuinely moved the document. Use `--no-undo-redo` to skip it.
+  bool emitUndoRedo = true;
 };
 
 /// Commands the generator must never emit, with the reason. Exposed so a caller can report it and

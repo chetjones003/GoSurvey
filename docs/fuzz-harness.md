@@ -91,10 +91,16 @@ PICK 305.2 118.9 SHIFT       # modifier flags map to the existing bool parameter
 ESC                          # cancel the active command
 UNDO / REDO                  # explicit, so the oracle can bracket them
 
+# ---- interchange (as distinct from OPEN/SAVEAS, which are the drawing's own .gs) ----
+EXPORT DXF %OUT%/out.dxf     # -> ExportDxfFile
+IMPORT DXF %OUT%/out.dxf     # -> ImportDxfFile
+
 # ---- checking ----
 CHECK ALL                    # run every invariant now (they also run after every step)
 EXPECT LINES 3               # assert a count; fails the run if wrong
 EXPECT LOG "Unknown command" # assert a log line was emitted (REQ-201 checks)
+EXPECT SAMEFILE a b          # byte-identical; the differential oracles' comparison
+EXPECT DIFFERENTFILE a b     # NOT byte-identical — asserts a step actually changed something
 DUMP entities.json           # write state for offline diffing
 ```
 
@@ -114,6 +120,13 @@ Design notes that matter:
   `transcripts/regression-pick-local-coordinates.txt`.
 - **`%OUT%` expands to a per-run temp directory.** Transcripts must never write into the
   source tree (REQ-200, CON-07), and a fuzz run writes a lot of files.
+- **`EXPECT DIFFERENTFILE` exists because differential oracles pass when nothing happened.**
+  "Do something, undo it, compare" is green on a document where the something never occurred, and a
+  check that cannot fail reports success forever. It is the counterweight to `SAMEFILE`: assert the
+  document moved, *then* assert it came back. Added 2026-08-18 after the undo/redo oracle shipped
+  without it and immediately produced a false finding (§8).
+- **`EXPORT`/`IMPORT` take the format as a separate word** (`EXPORT DXF <path>`), so stage 6 can add
+  `GLTF` and `STL` without inventing a verb per format.
 
 ### Driver CLI
 
@@ -147,9 +160,9 @@ void CheckDocumentInvariants(const AppCommandState&, std::vector<InvariantViolat
 
 | Id | Check | Rationale |
 |---|---|---|
-| `undo-redo-identity` | `UNDO` then `REDO` yields a document equal to the one before | The classic CAD defect: an edit that mutates state the snapshot doesn't capture |
+| `undo-redo-identity` | `UNDO` then `REDO` yields a document equal to the one before — where "equal" is byte-identical `.gs`, and the undo is preceded by an anchor edit and followed by `EXPECT DIFFERENTFILE` so the check cannot be vacuous | The classic CAD defect: an edit that mutates state the snapshot doesn't capture. Note `UNDO`/`REDO` are **not** inverses on an exhausted stack — see the seventh harness defect in §8 |
 | `gs-roundtrip` | save → load → save → load → save, and the **last two** are byte-identical | REQ-079 as amended 2026-08-17. A field written but not read, or read but not written. It is the last two rather than the first two because a load may legitimately *normalize* the drawing's storage (the large-coordinate origin rebase), and that normalization is idempotent — see #61 |
-| `dxf-export-stable` | export → import → export converges | Catches an exporter with no branch for an entity type — a known open gap for ARC/ELLIPSE |
+| `dxf-export-stable` | **two halves.** *survival*: entity counts before export == counts after import. *stability*: export → import → export converges | The two halves catch different defects, and the distinction was got wrong when this row was first written. Export→import→export does **not** catch an exporter with no branch: the type is missing from both files, so they match. It catches exporter/importer **asymmetry** (in the file, gone after the round trip). Catching the missing branch needs the *document* compared across the round trip, which is the survival half. Both fire today — ARC/ELLIPSE dropped, LWPOLYLINE shattered into lines |
 | `finite-coords` | no stored coordinate is NaN or ±inf | Degenerate input reaching storage |
 | `local-storage` | every stored coordinate is local; `world = local + worldDocumentOrigin` | The project's recurring bug class: a world-coordinate importer that forgot to subtract |
 | `flat-strides` | `userLinesFlat % 6`, `userPolylineVerts % 3`, `userCirclesCxCyZR % 4`, `vertsXyz % 3` | Architecture §11.8, in the exact terms that invariant is written |
@@ -373,7 +386,7 @@ one de-risks the next.
 | **1** | The shared domain link surface: `GOSURVEY_DOMAIN_SOURCES`, `imgui_core` split from `imgui_backend`, the two platform seams, `platform/AppPaths` extracted from `AppIcon` | **done** |
 | **2** | `gosurvey_headless` + transcript format + driver | **done** — REQ-203 |
 | **3** | `docinvariants` + a deliberately-broken fixture per check | **done** — 8 invariants, 28 fixtures |
-| **4** | Differential oracles: `gs-roundtrip` (done — `EXPECT SAMEFILE`, found #56, #57, #60, #61, and **on by default since 2026-08-17** now that a 1000-seed sweep is clean), `undo-redo-identity` and `dxf-export-stable` (**pending** — both need a document-equality predicate) | partial |
+| **4** | Differential oracles: `gs-roundtrip` (found #56, #57, #60, #61; **on by default since 2026-08-17**), `undo-redo-identity` (**on by default since 2026-08-18** — 1000-seed sweep clean), `dxf-export-stable` (transcript written, held DISABLED against #63 and #64) | **done** |
 | **5** | Seeded generator + delta-debugging minimizer | **done** — found #58 and #59, minimizing 155→9 and 169→4 lines automatically |
 | **6** | Byte fuzzing of `DxfIo`/`GsIo`/glTF/STL/CSV over a seed corpus | **pending** — now cheap, since the link surface exists |
 | **7** | Triage agent + dedupe + `gh issue create` | **pending** — signature + in-run dedupe are implemented; cross-run `gh issue list` dedupe and filing are still manual |
@@ -394,6 +407,9 @@ what actually links**. Once that was measured, everything downstream got cheaper
 | [#60](https://github.com/chetjones003/GoSurvey/issues/60) | Erasing the **last** polyline leaves `userPolylineOffsets` as `{0}`, which the writer serialises and the reader then refuses — **a saved drawing that can never be reopened**, the only finding so far that loses work (REQ-079) | `gs-roundtrip`, seed 28 `--roundtrip` | **auto-minimizer degenerated**; by hand, see below |
 | [#61](https://github.com/chetjones003/GoSurvey/issues/61) | A coordinate of state-plane magnitude (`-1e+12`) breaks `.gs` resave idempotence, hit by ~1/3 of seeds. **Resolved as a spec defect, not a code defect** (decision D-2026-08-17-a): the origin rebase on load is the local-storage design working, so REQ-079 was amended to carve out normalization and require it to be idempotent instead. The oracle now compares B to C, and `emitRoundTrip` is **ON by default** — a 1000-seed sweep went from ~325 failures to **0** | `gs-roundtrip`, ~325/1000 seeds | auto, 116 → 8 |
 | (no issue) | The rebase threshold read `fabs(mnY)` **twice** and `fabs(mxY)` never, so a drawing whose only large coordinate was a large *positive* Y was silently never rebased — the precision repair simply did not fire. Found while diagnosing #61 and demonstrated by probe: `(0,0)→(0,1e+12)` was not rebased while `(0,0)→(1e+12,0)` was | reading the code #61 pointed at | n/a — found by probe |
+| [#62](https://github.com/chetjones003/GoSurvey/issues/62) — **fixed 2026-08-18 (TASK-071)** | **`DELETE` erases 3 floats from the stride-4 circle store.** `userCirclesCxCyZR` holds `cx, cy, z, r`, and the erase loop removes `[k, k+3)` where the LINE loop twenty lines above correctly removes `[k, k+6)` from its stride-6 store. Every circle after the erased one shifts by one float and reads its predecessor's **radius as its centre X**: three circles at `(0,0) r1`, `(500,0) r2`, `(1000,0) r3` become, after deleting the first, a circle at `(1, 500)` with radius 2. Nothing warns, and `SAVEAS` writes the corrupted array to the `.gs`, so deleting one circle silently moves every other circle in the drawing — permanently | `flat-strides` invariant, reached by `BOX` select + `DELETE` while writing the `undo-redo-identity` transcript | by hand, 8 lines — `transcripts/delete-circle-stride.txt` |
+| [#63](https://github.com/chetjones003/GoSurvey/issues/63) | **DXF export drops ARC and ELLIPSE entirely.** `DxfIo.cpp`'s writer has branches for LINE, CIRCLE, POINT, LWPOLYLINE, MTEXT and HATCH/SOLID and mentions `userArcs`/`userEllipses` nowhere in the export path. Measured, not inferred: a drawing holding exactly one ellipse exports a DXF containing **zero entities of any kind**. This is precisely the defect REQ-204's `dxf-export-stable` row was written to describe | `dxf-export-stable` survival half, first run | `transcripts/dxf-export-stable.txt` |
+| [#64](https://github.com/chetjones003/GoSurvey/issues/64) — **fixed 2026-08-21 (TASK-083)** | **A LWPOLYLINE did not survive a DXF round trip as a polyline.** It exported correctly and the *importer* read it back as loose segments ("DXF import — 4 line segment(s)"), so a drawing that went out to DXF and back had every polyline shattered into unrelated lines. Distinct from the row above, and caught by a different half of the same oracle: this one is an exporter/importer **asymmetry**, so the two exports differ (7194 vs 7367 bytes). Root cause: the importer had no polyline sink — `ParseEntityRegion` predates the polyline store, which REQ-053 added and taught only the *exporter* about. Fixing it uncovered a second asymmetry underneath, invisible while the first one stood: `$EXTMIN`/`$EXTMAX` were swept from lines, circles, annotations and points only (never polylines) and were written from the **local** store while every entity is written in **world** — so the header described a different frame from the body, and the file changed whenever the origin moved. Importing is what moves it, so the cycle never settled | `dxf-export-stable` stability half | `transcripts/regression-64-dxf-polyline-identity.txt` |
 
 **Five defects were found in the harness itself before it found any of these**, which is the part
 worth remembering:
@@ -423,6 +439,37 @@ carries the reader's reason, an `io|OPEN failed` minimization has to be read by 
 regression transcript was written by hand for exactly that reason, and asserts entity counts on both
 sides of the round trip so it cannot pass for the wrong reason.
 
+A **seventh**, 2026-08-18, and it is the cleanest example yet of why a new oracle is measured before
+its default is flipped: **the first `undo-redo-identity` oracle reported a defect against correct
+behaviour.** The naive shape — `SAVEAS a` / `UNDO` / `REDO` / `SAVEAS b` / `EXPECT SAMEFILE a b` —
+assumes `UNDO` and `REDO` are inverses. They are not at the bottom of the stack:
+
+> **`UNDO` on an exhausted undo stack is a no-op. `REDO` after it is not.**
+
+A fuzzed transcript issues undos at random, so it often reaches the oracle with the undo stack empty
+and the redo stack full. The pair then moves the document *forward* by one operation, the files
+differ, and the harness reports a bug in behaviour that AutoCAD shares. A 1000-seed sweep produced
+2 such failures (seeds 260 and 263) and a minimized reproducer that looked entirely convincing —
+`POLYLINE`, `UNDO`, save, `REDO`, save, compare — until the question "which `UNDO` is that?" got
+asked. It was not the oracle's; the minimizer had deleted the oracle's own `UNDO` and kept an
+earlier random one, because `expect|SAMEFILE` cannot tell the two apart. **That is the coarse-signature
+weakness of the sixth defect, recurring a third time.**
+
+Two changes fix it at the root rather than by tolerance, and both are in `FuzzGenerator.cpp`:
+
+1. **An anchor edit** — one committed entity immediately before the first save — so the undo stack is
+   guaranteed non-empty and its top entry is known. The entity *type* varies with the seed (each type
+   has its own snapshot/restore path, which is where the defect class lives); the *coordinates* stay
+   plain, because a hostile value the command legitimately refuses would leave the stack untouched
+   and put the false positive straight back.
+2. **`EXPECT DIFFERENTFILE` across the undo**, before `EXPECT SAMEFILE` across the redo. This is what
+   makes the oracle two-sided: it proves the document moved before it proves it came back.
+
+The rebuilt oracle sweeps 1000 seeds with **0 failures** — and because `DIFFERENTFILE` fails on a
+no-op undo, those 1000 passes are also 1000 proofs that the check was not vacuous. The lesson to
+keep: **an oracle's first failures are more likely to be the oracle's fault than the product's**, and
+the only reason this one was caught is that a 10-line reproducer got read instead of filed.
+
 ---
 
 ## 9. Known risks
@@ -430,9 +477,19 @@ sides of the round trip so it cannot pass for the wrong reason.
 - **The oracles are where the bugs in *this* system will be.** A false-positive invariant
   files garbage issues and destroys trust in the harness faster than any amount of real
   findings builds it. Hence the deliberately-broken fixture per check.
-- **`undo-redo-identity` needs a document equality predicate**, and defining "equal" is a
-  real design question (float tolerance, id renumbering, ordering within stores). Getting it
-  wrong makes the best oracle also the noisiest. REQ-101 governs the tolerance.
+- ~~**`undo-redo-identity` needs a document equality predicate**, and defining "equal" is a
+  real design question (float tolerance, id renumbering, ordering within stores).~~
+  **Resolved 2026-08-18, by noticing the predicate already existed.** `gs-roundtrip` compares
+  documents by saving each to `.gs` and diffing the bytes, and `.gs` *is* the canonical
+  serialization of an `AppCommandState` — so `EXPECT SAMEFILE` over two saves is the predicate, and
+  it needs no new code. It is also the *strictest* available answer, which is the right one here and
+  is why the three sub-questions dissolve rather than needing decisions: undo is a **restore**, not
+  a computation, so REQ-101's tolerance has no bearing on a snapshot agreeing with itself; an id
+  that changes across undo/redo violates REQ-076 outright; and a reordered store is exactly what
+  §11.9 exists to worry about. A predicate that had to *choose* how much drift to forgive would
+  have been defining the bug out of existence.
+  **The risk this row named turned out to be real, but somewhere else** — see the seventh harness
+  defect in §8. The oracle's first version was noisy, and not because equality was too strict.
 - **Fuzzing finds shallow crashes fast and then plateaus.** That plateau is expected and is
   not a failure — it is the point at which the differential oracles start earning their keep.
 - **A second target drifts** if the shared source list is bypassed. Failure mode is a link

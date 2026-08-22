@@ -1,0 +1,67 @@
+# Issue #64 (fuzz signature `dxflwpolyasym`) — a polyline must come back from a DXF as a polyline.
+#
+# The importer had no polyline sink. `ParseEntityRegion` decomposed every POLYLINE and LWPOLYLINE
+# into `userLinesFlat` segments, so a round trip reported "DXF import — 4 line segment(s)" for a
+# drawing that went out holding two LINEs and one LWPOLYLINE. The consequence is not confined to
+# round-tripping our own files: Civil 3D writes LWPOLYLINE constantly, so every parcel boundary,
+# breakline and alignment a surveyor opened arrived already shattered into segments that could not
+# be selected, offset or edited as the objects they are.
+#
+# This is the STABILITY half of the `dxf-export-stable` oracle, narrowed to the one defect it found
+# in the importer. That transcript stays DISABLED because it also covers #63 (the exporter has no
+# ARC or ELLIPSE branch), which is a different defect and is still open — so this file exists to
+# hold #64 closed in the meantime, and deliberately draws no arc.
+#
+# Fails before the fix, twice:
+#   step "EXPECT LINES 2" after the import   -> LINES: expected 2, got 8
+#   step "EXPECT POLYLINES 2" after import   -> POLYLINES: expected 2, got 0
+#   step "EXPECT SAMEFILE"                   -> files differ
+
+NEW
+
+# Two ordinary lines, so the check cannot pass by the importer simply calling everything a polyline.
+CMD LINE
+CMD 0,0
+CMD 100,0
+CMD 100,50
+ESC
+
+# An OPEN polyline: three vertices, group 70 bit 0 clear.
+CMD POLYLINE
+CMD 0,100
+CMD 50,150
+CMD 100,100
+CMD END
+
+# A circle, because the extents half of this fix touches the sweep every entity type feeds.
+CMD CIRCLE
+CMD 50,25
+CMD 10
+ESC
+
+# A CLOSED polyline (REQ-053 stores a rectangle as a 4-vertex closed polyline). The closed flag is
+# the field a "store the vertices and forget the rest" fix would drop, and EXPECT SAMEFILE catches
+# that: group 70 would come back 0 where the first export wrote 1.
+CMD RECT
+CMD 200,0
+CMD 260,40
+
+CHECK ALL
+EXPECT LINES 2
+EXPECT CIRCLES 1
+EXPECT POLYLINES 2
+
+EXPORT DXF %OUT%/r64-a.dxf
+
+# SURVIVAL — what went out comes back, as the same kinds of object.
+NEW
+IMPORT DXF %OUT%/r64-a.dxf
+CHECK ALL
+EXPECT LINES 2
+EXPECT CIRCLES 1
+EXPECT POLYLINES 2
+
+# STABILITY — and the document that came back exports to the same bytes. This is what proves the
+# vertices, order, closed flag, elevation and layer/colour all survived, not merely the count.
+EXPORT DXF %OUT%/r64-b.dxf
+EXPECT SAMEFILE %OUT%/r64-a.dxf %OUT%/r64-b.dxf

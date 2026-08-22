@@ -5,6 +5,9 @@
 // TextStyles::DefaultTextStyles, for the textStyles member's initializer (issue #57). Pure and
 // dependency-free (string/vector/CadEntities.hpp), so this adds no cycle and no weight.
 #include "TextStyle.hpp"
+// SurfaceStyles::DefaultSurfaceStyles, for the surfaceStyles member's initializer — same reason,
+// same shape, and pure for the same reason (REQ-070 / ADR-036 (d)).
+#include "SurfaceStyle.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
 #include "PdfAttach.hpp"
 #include "PaperSpace.hpp"
@@ -13,10 +16,12 @@
 #include "traverse/TraverseCalc.hpp"
 #include "traverse/TraverseLeastSquares.hpp"
 #include "update/UpdateCheck.hpp"  // update::UpdatePrefs only — pure, no network, no <thread>
+#include "util/tinbuild.hpp"       // TinBuildResult, for AppCommandState::SurfaceRebuildAsync (REQ-069)
 
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <thread>
@@ -28,7 +33,19 @@ struct SelectedEntity {
   enum class Type {
     LineSeg = 0, Circle = 1, Annotation = 2, Polyline = 3, Arc = 4, Ellipse = 5, PdfUnderlay = 6,
     FilledRegion = 7, ///< Solid hatch fill (CadFilledRegion) — selectable/editable (REQ-042, ADR-016).
-    Mesh = 8          ///< Imported triangle mesh (REQ-063). Selectable and erasable, never edited.
+    Mesh = 8,         ///< Imported triangle mesh (REQ-063). Selectable and erasable, never edited.
+    FeatureLine = 9,  ///< Named 3D design linework (REQ-087, ADR-035). Its own store, not a polyline.
+    /// TIN surface (REQ-068, ADR-036 (b)). **Display-only, like Mesh** — it selects, highlights,
+    /// erases and reports, and it never moves: a surface's geometry is DERIVED from its definition,
+    /// so a drag would be undone by the next rebuild (ADR-036 alternative (5), declined by the user
+    /// 2026-08-21). Every transform command refuses it with a stated reason (REQ-201) rather than
+    /// silently dropping it from the operation.
+    ///
+    /// A click on any visible component — a triangle edge, a contour, the border — selects the whole
+    /// surface. Component-level selection is forbidden by REQ-070 ("contours ... never appear in
+    /// selection") and has nothing to be selected *by*: a contour is regenerated display geometry
+    /// with no identity.
+    Surface = 10
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -144,8 +161,85 @@ struct CadExtendedGeometryInput {
   const std::vector<int>* polylineOffsets = nullptr;
   const std::vector<uint8_t>* polylineClosed = nullptr;
   const std::vector<EntityAttributes>* polylineAttrs = nullptr;
+  // Feature lines (REQ-087). Same four arrays, same shape — the renderer draws both through one
+  // function, so a feature line cannot render differently from a polyline by accident.
+  const std::vector<float>* featureLineVerts = nullptr;
+  const std::vector<int>* featureLineOffsets = nullptr;
+  const std::vector<uint8_t>* featureLineClosed = nullptr;
+  const std::vector<EntityAttributes>* featureLineAttrs = nullptr;
   const std::vector<CadLayerRow>* drawingLayers = nullptr;
+  /// Sorted stable entity ids hidden by object isolation (REQ-084 (d), ADR-034); nullptr or empty
+  /// means nothing is hidden. Carried here rather than as another `RenderScene` parameter — that
+  /// signature is already long, and this struct is exactly "the extra per-entity data the renderer
+  /// needs", which is what the hidden set is.
+  const std::vector<std::uint64_t>* hiddenEntityIds = nullptr;
 };
+
+/// True when a CSR chain store (polylines, feature lines) holds at least one entity.
+///
+/// `offsets` is CSR: N entities need N+1 offsets, so fewer than two offsets is zero entities — and
+/// an "empty" store is legitimately either `{}` or `{0}` (issue #60), which is exactly why this is a
+/// named predicate rather than an `!empty()` written out at each call site.
+[[nodiscard]] inline bool CadChainHasEntities(const std::vector<float>* verts,
+                                              const std::vector<int>* offsets) {
+  return verts != nullptr && offsets != nullptr && offsets->size() >= 2;
+}
+
+/// True when this extended input holds anything the viewport must draw.
+///
+/// A named predicate rather than a condition spelled out in the renderer, because it is a **list**,
+/// and a list is what this entity keeps falling out of: by 2026-08-20 a feature line had been
+/// omitted from the viewport-click routing (twice), CancelActiveCommand, ResetAllCadDraftTools, the
+/// rubber-band preview, and this gate — where the symptom was that a drawing containing ONLY a
+/// feature line rendered nothing at all, while still hovering and selecting, because the whole
+/// committed-geometry block was skipped. One predicate, one place to add the next entity kind, and
+/// a test that fails when someone forgets. REQ-087.
+[[nodiscard]] inline bool CadExtendedHasDrawableGeometry(const CadExtendedGeometryInput& e) {
+  if (e.arcs != nullptr && !e.arcs->empty())
+    return true;
+  if (e.ellipses != nullptr && !e.ellipses->empty())
+    return true;
+  if (CadChainHasEntities(e.polylineVerts, e.polylineOffsets))
+    return true;
+  if (CadChainHasEntities(e.featureLineVerts, e.featureLineOffsets))
+    return true;
+  return false;
+}
+
+/// True when \p id is in the sorted hidden-id set. Empty set / unassigned id (0) → never hidden.
+/// Inline and early-outing so the non-isolated case costs one `empty()` test per entity (REQ-100).
+inline bool CadEntityIdHidden(const std::vector<std::uint64_t>* hidden, std::uint64_t id) {
+  if (!hidden || hidden->empty() || id == 0)
+    return false;
+  return std::binary_search(hidden->begin(), hidden->end(), id);
+}
+
+/// The set ISOLATEOBJECTS hides: sorted-unique `all` minus `keep` (REQ-084 (d)).
+///
+/// Pure and header-inline so it is covered by tests — `CadCommands.cpp`, which owns the command
+/// itself, pulls in the GUI stack and cannot be linked by the test target. Inputs need not arrive
+/// sorted; the result always is, which is the invariant \ref CadEntityIdHidden's binary search
+/// depends on.
+inline std::vector<std::uint64_t> CadIsolationHiddenSet(std::vector<std::uint64_t> all,
+                                                        std::vector<std::uint64_t> keep) {
+  auto sortUnique = [](std::vector<std::uint64_t>& v) {
+    std::sort(v.begin(), v.end());
+    v.erase(std::unique(v.begin(), v.end()), v.end());
+  };
+  sortUnique(all);
+  sortUnique(keep);
+  std::vector<std::uint64_t> hide;
+  hide.reserve(all.size());
+  std::set_difference(all.begin(), all.end(), keep.begin(), keep.end(), std::back_inserter(hide));
+  return hide;
+}
+
+/// Time-sensitive right-click verdict (REQ-084 (b)): true when the press was held long enough to
+/// mean "shortcut menu", false when it was a quick click and therefore an ENTER. Held exactly at
+/// the threshold counts as the menu, so the boundary belongs to one verdict and not to neither.
+inline bool CadRightClickHoldIsMenu(double heldMs, int thresholdMs) {
+  return heldMs >= static_cast<double>(thresholdMs);
+}
 
 
 inline float CadAnnotationHeightWorld(const CadAnnotation& a, float modelUnitsPerPlottedInch) {
@@ -220,6 +314,13 @@ struct DrawingGeometrySnapshot {
   std::vector<float>            userPolylineVerts;
   std::vector<uint8_t>          userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
+  // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
+  std::vector<int>                featureLineOffsets;
+  std::vector<float>              featureLineVerts;
+  std::vector<uint8_t>            featureLineClosed;
+  std::vector<uint8_t>            featureLineElevPt;
+  std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<EntityAttributes>   featureLineAttrs;
   std::vector<CadAnnotation>    cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
   std::vector<CadFilledRegion>  cadFilledRegions;
@@ -237,6 +338,12 @@ struct DrawingGeometrySnapshot {
   std::vector<PointGroup>       pointGroups;
   std::vector<CadLayerRow>      drawingLayerTable;
   std::vector<TextStyle>        textStyles;    ///< Named text styles (REQ-044) — undoable so style edits undo.
+  /// Named surface styles (REQ-070 / ADR-036 (d)) — undoable for the same reason textStyles is.
+  ///
+  /// The generated contours and borders these describe are **not** here and never will be: they live
+  /// in `AppCommandState::surfaceDisplayCache`, which no snapshot touches (ADR-036 (e)). That split is
+  /// what lets a style edit be undoable without a single contour entering the undo stack.
+  std::vector<SurfaceStyle>     surfaceStyles;
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<PaperLayout>      paperLayouts;  ///< Paper layouts incl. native paper geometry (REQ-037/038) — undoable.
   double worldDocumentOriginX = 0.0;
@@ -272,6 +379,13 @@ struct DrawingDocument {
   std::vector<float>            userPolylineVerts;
   std::vector<uint8_t>          userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
+  // Feature lines (REQ-087) — their own store, never the polyline arrays (ADR-035 (g)).
+  std::vector<int>                featureLineOffsets;
+  std::vector<float>              featureLineVerts;
+  std::vector<uint8_t>            featureLineClosed;
+  std::vector<uint8_t>            featureLineElevPt;
+  std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<EntityAttributes>   featureLineAttrs;
   std::vector<CadAnnotation>    cadAnnotations;
   std::vector<EntityAttributes> cadAnnotationAttrs;
   std::vector<CadFilledRegion>  cadFilledRegions;
@@ -285,9 +399,15 @@ struct DrawingDocument {
   std::vector<int>              selectedSurveyPointIndices;
   std::vector<CadLayerRow>      drawingLayerTable;
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
+  std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
   std::string                   activeTextStyleName = "Standard";  ///< Style for new TEXT/MTEXT.
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<SelectedEntity>   selection;
+  /// Object isolation (REQ-084 (d)). PER TAB, and stored here for the same reason `selection` is:
+  /// entity ids are unique **within a drawing**, so carrying one tab's hidden set into another
+  /// would hide whatever objects happened to draw those numbers there. Never written to `.gs` —
+  /// this struct is the in-memory tab store, not the file format.
+  std::vector<std::uint64_t>    hiddenEntityIds;
   std::vector<PaperLayout>      paperLayouts;            ///< Paper-space layouts (REQ-025); empty = none.
   std::vector<PageSetup>        savedPageSetups;         ///< Drawing-wide named page setups.
   int                           activeSpaceIndex = kModelSpaceIndex;  ///< -1 = model; else index into paperLayouts.
@@ -399,6 +519,9 @@ struct AppCommandState {
     Line,
     Circle,
     Polyline,
+    /// REQ-087. Its own command Kind, unlike 3DPOLY which is a mode of POLYLINE — a feature line
+    /// commits to a different store, so the two cannot share a commit path.
+    FeatureLine,
     Arc,
     Ellipse,
     Text,
@@ -420,6 +543,10 @@ struct AppCommandState {
     SurveyInverse,
     /// REQ-074: one pick reports interpolated surface elevation, a second reports grade between them.
     SurfaceElevGrade,
+    /// REQ-069: one pick designates a Line/Polyline as a breakline on a named surface.
+    DesignateBreakline,
+    /// REQ-069: one pick designates a closed Polyline as a boundary ring (outer/hide/show) on a named surface.
+    DesignateBoundary,
     /// PDF underlay attach — opens dialog, then optionally waits for viewport picks.
     PdfAttach,
     /// 2-D Helmert (similarity) transformation from user-picked control point pairs.
@@ -441,6 +568,10 @@ struct AppCommandState {
     /// TRIMSTATE: system-variable prompt waiting for a new value (REQ-056).
     TrimState,
     Elev,        ///< Set the elevation new geometry is drawn at (REQ-058).
+    /// ORBIT: interactive free orbit — left-drag tumbles the model view; Esc/Enter/right-click
+    /// exits (REQ-084 (c)). Deliberately shaped like \c Kind::Pan, and reuses the same
+    /// Shift+middle-drag orbit math, so the shortcut menu's Free Orbit is a real command.
+    Orbit,
   } active = Kind::None;
 
   static const char* KindName(Kind k) {
@@ -448,6 +579,7 @@ struct AppCommandState {
     case Kind::Line:          return "LINE";
     case Kind::Circle:        return "CIRCLE";
     case Kind::Polyline:      return "POLYLINE";
+    case Kind::FeatureLine:   return "FEATURELINE";
     case Kind::Arc:           return "ARC";
     case Kind::Ellipse:       return "ELLIPSE";
     case Kind::Text:          return "TEXT";
@@ -476,6 +608,10 @@ struct AppCommandState {
     case Kind::VpThaw:        return "VPTHAW";
     case Kind::Rect:          return "RECT";
     case Kind::TrimState:     return "TRIMSTATE";
+    case Kind::Orbit:         return "ORBIT";
+    case Kind::SurfaceElevGrade:   return "SURFELEV";
+    case Kind::DesignateBreakline: return "DESIGNATEBREAKLINE";
+    case Kind::DesignateBoundary:  return "DESIGNATEBOUNDARY";
     default:                  return "";
     }
   }
@@ -495,6 +631,24 @@ struct AppCommandState {
   RightClickEditMode    rightClickEditMode      = RightClickEditMode::ShortcutMenu;
   RightClickCommandMode rightClickCommandMode   = RightClickCommandMode::Enter;
 
+  // --- Time-sensitive right-click (REQ-084 (b)) ---
+  // OFF by default: turning it on changes how EVERY right-click in the drawing is read, so an
+  // existing profile must not acquire it on upgrade. While on, the hold duration — not
+  // \c rightClickDefaultMode / \c rightClickCommandMode — decides the Default and Command
+  // contexts, which is why the dialog greys those two groups rather than quietly ignoring them.
+  bool  rightClickTimeSensitive = false;   ///< Persisted.
+  /// Hold longer than this to get the shortcut menu; release sooner and it is an ENTER. Persisted.
+  /// AutoCAD's default is 250 ms; clamped to a sane range on load and in the dialog.
+  int   rightClickLongerClickMs = 250;
+  static constexpr int kRightClickMinMs = 100;
+  static constexpr int kRightClickMaxMs = 2000;
+  /// Live state for the classifier — the moment the button went down, and whether this press has
+  /// already been resolved. Not persisted: a press does not survive a restart.
+  double rightClickPressTimeSec  = 0.0;
+  bool   rightClickPressPending  = false;
+  /// Right-Click Customization dialog open (Options → User Preferences). Not persisted.
+  bool   showRightClickDialog    = false;
+
   /// Plot scale: one plotted inch equals this many drawing units (e.g. 50 for 1 inch = 50 feet).
   float modelUnitsPerPlottedInch = 50.f;
   float defaultPlottedTextHeightInches = 0.125f;
@@ -513,9 +667,11 @@ struct AppCommandState {
   /// Plotted text height (inches) for survey point ID labels when \ref surveyPointShowIdInViewport is true.
   float surveyPointLabelPlottedHeightInches = 0.10f;
   SurveyLabelStyleTemplates surveyLabelTemplates;
-  /// Label MTEXT: east offset of label **centerline** from point (plotted inches × MUP → world).
+  /// Label MTEXT: east offset of the label's **left edge** from the point (plotted inches × MUP →
+  /// world). The box grows east from this edge, so longer text never grows back toward the point.
   float surveyLabelOffsetEastPlottedIn = 0.35f;
-  /// Optional north shift of label vertical center from point (plotted inches × MUP).
+  /// North offset of the label's **vertical centre** from the point (plotted inches × MUP). The box
+  /// is centred on this, so the label sits beside the point rather than hanging beneath it.
   float surveyLabelOffsetNorthPlottedIn = 0.f;
   /// Legacy fixed box (plotted inches); ignored for auto-sized survey-linked MTEXT labels.
   float surveyLabelBoxWidthPlottedIn = 1.5f;
@@ -607,6 +763,18 @@ struct AppCommandState {
     /// Points in the surface profile (REQ-100 as amended, ADR-028). 0 = the line-segment profile.
     int surfacePointCount = 0;
     int surfaceTriangleCount = 0;
+    /// Contour levels the profile's style produces, and the segments they generate — REQ-100 profile
+    /// (c) is defined as a **contoured** surface, so the record has to say at what interval or the
+    /// number cannot be compared with the next run's.
+    double surfaceMinorIntervalFt = 0.0;
+    double surfaceMajorIntervalFt = 0.0;
+    int surfaceContourSegs = 0;
+    /// \ref AppCommandState::surfaceDisplayRegenCount at the first TIMED frame. The delta at the end
+    /// is ADR-036 (e)'s acceptance: the cache must hold across the run, so this must not grow with
+    /// the frame count.
+    std::uint64_t regenAtStart = 0;
+    bool regenBaselineTaken = false;
+    std::uint64_t regenDuringRun = 0;
 
     /// Triangles in the shaded-mesh profile (REQ-100 (b)). 0 = not the mesh profile. At most one of
     /// this and \ref surfacePointCount is non-zero; both zero means the line-segment profile.
@@ -907,6 +1075,49 @@ struct AppCommandState {
   std::vector<float> userPolylineVerts;
   std::vector<uint8_t> userPolylineClosed;
   std::vector<EntityAttributes> userPolylineAttrs;
+
+  /// Feature lines (REQ-087, ADR-035) — named 3D design linework, in their own store rather than
+  /// the polyline arrays, so a feature line is never mistaken for a polyline at the type level.
+  ///
+  /// Same CSR shape as polylines: line `i` owns vertices
+  /// [`featureLineOffsets[i]`, `featureLineOffsets[i+1]`), XYZ triplets in \ref featureLineVerts.
+  ///
+  /// \ref featureLineElevPt is per VERTEX, not per line: 1 marks an **elevation point** — a vertex
+  /// that carries an elevation but is not a PI (a corner). It lies on the line by construction, so
+  /// plan geometry is identical whether or not it is counted, and only PI-level operations
+  /// (insert/delete PI, grips) consult the flag (ADR-035 (a)). The obligation that buys: moving a PI
+  /// must re-project the elevation points on its adjacent segments, or the line grows a visible kink
+  /// (ADR-035 (b)).
+  std::vector<int> featureLineOffsets;
+  std::vector<float> featureLineVerts;
+  std::vector<uint8_t> featureLineClosed;
+  std::vector<uint8_t> featureLineElevPt;
+  std::vector<CadFeatureLineInfo> featureLineInfo;
+  std::vector<EntityAttributes> featureLineAttrs;
+
+  /// FEATURELINE command draft — XYZ vertices, and the elevation-point flag for each.
+  std::vector<float> featureLineDraftVerts;
+  std::vector<uint8_t> featureLineDraftElevPt;
+  /// The name typed when FEATURELINE started, stamped on the line at commit.
+  std::string featureLineDraftName;
+
+  /// FEATURELINE two-phase vertex entry (TASK-082). A click supplies X and Y only, so the point is
+  /// held here while the command prompts for its elevation — the difference between this and
+  /// POLYLINE/3DPOLY, which take Z from the work plane without asking.
+  ///
+  /// A point that already carries an elevation (typed `X,Y,Z`) never lands here; it commits
+  /// straight away, because prompting would be asking a question already answered.
+  bool featureLinePendingPoint = false;
+  float featureLinePendingX = 0.f;
+  float featureLinePendingY = 0.f;
+  /// What a bare Enter accepts: the snapped point's Z if an object snap was active, else the
+  /// previous vertex's elevation, else the work plane. See TASK-082 ASSUMPTION-1.
+  float featureLinePendingDefaultZ = 0.f;
+  /// Armed by a bare `E` at the FEATURELINE prompt, consumed by the next point. Before clicking
+  /// worked, `E` had to be followed by coordinates on the same line; with a click supplying them,
+  /// the flag has to survive until the click arrives.
+  bool featureLineNextIsElevPoint = false;
+
   /// POLYLINE command draft — XYZ vertices (two or more before commit).
   std::vector<float> polylineDraftVerts;
   /// TRIM has two modes, chosen by the \c TRIMSTATE system variable (REQ-056):
@@ -964,6 +1175,123 @@ struct AppCommandState {
   std::vector<CadSurface> cadSurfaces;
   std::vector<EntityAttributes> cadSurfaceAttrs;
 
+  /// One in-flight background rebuild per surface currently being retriangulated (REQ-069's dynamic
+  /// rebuild — architecture §8's one-shot worker pattern, its second concrete use after
+  /// \ref pdfAttachAsync and the first to implement the full contract: rules 4 and 5, generation
+  /// staleness and cooperative cancellation, which pdfAttachAsync's own struct does not itself carry).
+  /// Heap-allocated so the atomic/thread members don't affect this struct's own copyability — the
+  /// same reason \ref AsyncBuild is. Never part of \ref DrawingGeometrySnapshot or \ref
+  /// DrawingDocument: a background thread is live-only state, not drawing content.
+  struct SurfaceRebuildAsync {
+    /// Which CadSurface this is for, by **stable entity id** (REQ-076 / ADR-036 (a)) — never by name
+    /// and never by index.
+    ///
+    /// This was `std::string surfaceName` until surfaces gained an `EntityKind`, and the name key had
+    /// two failure modes that the id does not. A **rename** while a rebuild is in flight orphaned the
+    /// result: the reap looked the old name up, found nothing, discarded a completed triangulation,
+    /// and — because the in-flight check also matched on name — immediately dispatched a second
+    /// worker for the same surface. Worse, **erase-then-recreate under the same name** made the reap
+    /// find the *new* surface and apply the *old* one's triangulation to it. An id is not reused
+    /// within a drawing (REQ-076), so neither is reachable.
+    std::uint64_t      surfaceId = 0;
+    std::thread        thread;
+    std::atomic<bool>  done{false};
+    std::atomic<bool>  cancel{false}; ///< cooperative; checked before the worker starts real work
+    std::uint32_t      generation = 0;  ///< cadGpuRevision at dispatch — a mismatch on completion means discard
+    double             originX = 0.0, originY = 0.0;
+    TinBuildResult      result;
+
+    /// Joins the worker if it is still running. Without this, destroying a job whose thread is
+    /// still joinable calls std::terminate — and the ONLY other join site (\ref TickSurfaceRebuilds)
+    /// is reachable only once `done` is already set, so every path that drops a job mid-flight hit
+    /// that: closing the application with a rebuild in flight aborted the process instead of
+    /// exiting, and since cadGpuRevision moves on every drawing mutation, "edit then close" was
+    /// enough to trigger it. Joining after the reap path's own join is a no-op (not joinable).
+    ~SurfaceRebuildAsync() {
+      cancel.store(true, std::memory_order_release);  // lets a not-yet-started worker return at once
+      if (thread.joinable())
+        thread.join();
+    }
+  };
+  std::vector<std::unique_ptr<SurfaceRebuildAsync>> surfaceRebuildAsync;
+
+  /// Generated display geometry for one surface — ADR-036 (e).
+  ///
+  /// **Not a member of \ref CadSurface, deliberately.** `cadSurfaces` is assigned wholesale into
+  /// \ref DrawingDocument and into every \ref DrawingGeometrySnapshot, so a field on the surface
+  /// would be deep-copied into all 50 undo frames — the exact cost this cache exists to avoid,
+  /// arriving through the one door nobody thinks to check. A parallel container keyed by stable id
+  /// cannot be dragged along by those assignments.
+  ///
+  /// **Keyed by stable entity id, not by array index** (§11 invariant 9): `cadSurfaces` compacts on
+  /// erase, so an index key would start drawing one surface's border over another's triangulation
+  /// after a delete.
+  struct SurfaceDisplayCacheEntry {
+    std::uint64_t surfaceId = 0;
+
+    /// The triangulation this geometry was generated from — the staleness key. A rebuild REPLACES
+    /// the pointer wholesale (ADR-028 (a)), so pointer identity IS triangulation identity.
+    ///
+    /// `weak_ptr`, not a raw pointer, for the reason the mesh GPU cache already documents: a raw
+    /// pointer key can be matched by a NEW allocation at the freed address, which would silently
+    /// serve one surface's geometry for another's. An expired weak_ptr simply misses and regenerates.
+    /// Not a `shared_ptr` either — that would keep a superseded 7 MB triangulation alive for as long
+    /// as the cache entry lived.
+    std::weak_ptr<const CadTin> builtFrom;
+
+    /// The style this geometry was generated from — the second half of the staleness key.
+    ///
+    /// The **resolved style by value**, not a revision counter. ADR-036 (e) names the key
+    /// "(tin pointer, style revision)"; a counter has to be bumped by every route that can change the
+    /// table, and undo restore, `.gs` load, tab switch and DXF import are four of them, so the one
+    /// that gets forgotten leaves stale contours on screen with nothing to point at. Comparing the
+    /// resolved value cannot be forgotten. A style is five small structs and two doubles, so the
+    /// comparison is cheaper than the allocation it prevents.
+    SurfaceStyle style;
+
+    /// All generated geometry, each in `GL_LINES` layout: flat x,y,z, six floats per segment.
+    /// Regenerated together, only on a staleness miss, and borrowed by
+    /// \ref CadSurfaceDisplayGeometry rather than copied into it.
+    std::vector<float> triangleEdges;  ///< Every triangulation edge (the pre-REQ-070 appearance).
+    std::vector<float> borderEdges;    ///< The outline: edges belonging to one triangle (\c TinBorderEdges).
+    std::vector<float> minorContours;  ///< Minor levels, excluding those that are also major.
+    std::vector<float> majorContours;
+
+    /// The style asked for more contour levels than the display path will generate, so the contour
+    /// buffers above are empty for a reason that has nothing to do with the style's toggles.
+    ///
+    /// Carried rather than left implicit because REQ-201 forbids absorbing a refusal: an interval of
+    /// 0.0001 ft over a 1,000 ft surface is a million contours, and a surface that simply stopped
+    /// showing any would look like a defect. The Surface Manager reads this and says so.
+    bool contoursSuppressed = false;
+    /// How many levels were asked for, for that message. 0 when nothing was suppressed.
+    int suppressedLevelCount = 0;
+  };
+
+  /// The display-geometry cache. Live-only: never in \ref DrawingGeometrySnapshot, never in
+  /// \ref DrawingDocument, never in `.gs` — which is what makes REQ-070's "never stored in `.gs`"
+  /// and "adds no entity to the drawing" structurally true rather than a rule someone must remember.
+  std::vector<SurfaceDisplayCacheEntry> surfaceDisplayCache;
+
+  /// What the renderer is handed for surfaces this frame — batches borrowing the buffers above,
+  /// filtered for layer/isolation visibility and carrying each component's resolved colour and
+  /// lineweight. Rebuilt in the same pass as the cache, so a batch never outlives its buffer.
+  ///
+  /// Live-only for the same reason the cache is: nothing here is ever snapshotted or written.
+  CadSurfaceDisplayGeometry surfaceDisplayGeometry;
+
+  /// How many times \ref RefreshSurfaceDisplayGeometry has actually REGENERATED a surface's geometry
+  /// since the process started, as opposed to taking the early-out.
+  ///
+  /// Exists for one reason: ADR-036 (e)'s REQ-100 obligation is to prove **the cache holds across
+  /// frames**, not that a single generation is fast. A profile that timed one regeneration would pass
+  /// while the defect it exists to catch — regenerating 200,000 triangles' worth of contours every
+  /// frame — was fully present. BENCH reports the delta over the run: one per surface means the cache
+  /// held; one per frame means it did not.
+  ///
+  /// Live-only and never reset by a document change, so it counts work rather than describing state.
+  std::uint64_t surfaceDisplayRegenCount = 0;
+
   // --- HATCH command (REQ-043) ---
   /// Boundary loop traced under the cursor while HATCH is active (flat local x,y); valid drives the preview.
   std::vector<float> hatchPreviewLoop;
@@ -979,6 +1307,15 @@ struct AppCommandState {
 
   // --- Selection (idle box pick + move/copy/rotate) ---
   std::vector<SelectedEntity> selection;
+
+  /// Objects hidden by ISOLATEOBJECTS / HIDEOBJECTS, as **stable entity ids** (REQ-084 (d),
+  /// ADR-034). Kept SORTED so the per-entity test is a `binary_search`; empty is the overwhelming
+  /// case and every gate early-outs on it, so nothing is paid for a drawing with no isolation.
+  ///
+  /// Ids, not indices: erase compacts the entity arrays (architecture §11.9), so an index would
+  /// come to name a different object. **Session state** — deliberately not written to `.gs`, so a
+  /// drawing always opens showing everything.
+  std::vector<std::uint64_t> hiddenEntityIds;
 
   /// Two-click axis-aligned box (world XY): first corner placed, waiting second.
   bool selBoxWaitingSecond = false;
@@ -1127,6 +1464,33 @@ struct AppCommandState {
   double surfaceElevFromX = 0.0;
   double surfaceElevFromY = 0.0;
   std::vector<std::pair<std::string, double>> surfaceElevFromZ;
+
+  /// REQ-069: the surface DESIGNATEBREAKLINE/DESIGNATEBOUNDARY is adding to, captured when the
+  /// command starts (from its inline argument) so the single pick that follows knows where to add.
+  std::string designateSurfaceName;
+  /// REQ-069: which ring kind DESIGNATEBOUNDARY is adding — irrelevant to DESIGNATEBREAKLINE.
+  CadBoundaryKind designateBoundaryKind = CadBoundaryKind::Outer;
+  /// REQ-075: the description / name the Add Breaklines and Add Boundaries dialogs collected before
+  /// the pick, stamped onto the definition item on commit. Empty when the command was typed rather
+  /// than started from the panel, which is the ordinary case for the command line.
+  std::string designateBreaklineDescription;
+  std::string designateBoundaryName;
+
+  /// REQ-085: the active polyline draft is a **3D polyline** — vertices may carry a typed elevation.
+  ///
+  /// A flag on the existing POLYLINE draft rather than a `Kind` of its own. The two commands differ
+  /// only in how a vertex's Z is obtained; a separate `Kind` would have to be added to both viewport
+  /// dispatch lists, the status text, the prompt table and the ESC path — the twelve-site tax
+  /// ADR-028 warns about, paid for no behavioural difference. `userPolylineVerts` is already
+  /// stride-3 XYZ, so the STORE needs nothing.
+  bool polylineDraft3d = false;
+  /// Elevation peeled off a typed `x,y,z` for the vertex being submitted, consumed by
+  /// \ref SubmitPolylineVertex and cleared there. Invalid means "no Z was typed" — the vertex then
+  /// takes \ref CadCommitElevation, i.e. the snapped point's own Z or the work plane (REQ-058).
+  bool  polylineTypedZValid = false;
+  bool  polylineTypedZRelative = false;  ///< `@dx,dy,dz` — dz is relative to the previous vertex.
+  float polylineTypedZ = 0.f;
+
   bool showViewPointsWindow = false;
   bool showSettingsWindow = false;
   bool showQuickSelectWindow = false;
@@ -1148,8 +1512,15 @@ struct AppCommandState {
   bool showLayerManagerWindow = false;
   /// Text style manager (STYLE / ribbon). Create / rename / delete / edit named text styles (REQ-044).
   bool showTextStyleManagerWindow = false;
+  /// Surface Style editor (REQ-070 / ADR-036 (i)) — opened by SURFSTYLE and by the Surface Manager.
+  bool showSurfaceStyleWindow = false;
   bool showPointGroupManagerWindow = false;  ///< Point Group manager (REQ-067).
   bool showSurfaceManagerWindow = false;     ///< Surfaces panel (REQ-068).
+  bool showFeatureLineElevWindow = false;    ///< Feature line elevation editor (REQ-088).
+  /// Which feature line the elevation editor is showing, 0-based. Held here rather than as a static
+  /// in the panel so that opening the editor from a selected feature line can aim it, and so it
+  /// survives the window being closed and reopened.
+  int featureLineElevIndex = 0;
   /// Current layer for new geometry (ribbon combo + command defaults).
   std::string currentLayer = "0";
   /// Layer table. Layer "0" always exists, **including before anything has been loaded** (issue
@@ -1163,6 +1534,11 @@ struct AppCommandState {
   /// Named text styles for this drawing (REQ-044 / ADR-020). "Standard" is always present — see the
   /// layer-table note above; it had the same defect and has the same fix.
   std::vector<TextStyle> textStyles = TextStyles::DefaultTextStyles();
+  /// Named surface styles for this drawing (REQ-070 / ADR-036 (d)). "Standard" is always present, and
+  /// it is initialised here rather than at each creation site for the reason the two tables above
+  /// document: a drawing that reaches the renderer with an empty table would be in a state the rest of
+  /// the code is entitled to assume cannot happen.
+  std::vector<SurfaceStyle> surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
   /// Active text style for new TEXT/MTEXT (the STYLE dropdown). Empty resolves to "Standard".
   std::string activeTextStyleName = "Standard";
   /// Viewport CAD crosshair (Drawing1): RGB 0–1, arm length as fraction of viewport width/height, pickbox half-size in px.
@@ -1642,7 +2018,15 @@ inline ray3d::Plane CadActiveWorkPlane(const AppCommandState& st) {
 /// Which entity array a \ref EntityRef designates. Mirrors SelectedEntity::Type for the kinds that
 /// carry an EntityAttributes, which is exactly the set REQ-076 gives an id.
 enum class EntityKind : std::uint8_t {
-  Line = 0, Circle, Arc, Ellipse, Polyline, Annotation, FilledRegion, Mesh
+  Line = 0, Circle, Arc, Ellipse, Polyline, Annotation, FilledRegion, Mesh,
+  FeatureLine, ///< REQ-087. Appended, never inserted — the value is not persisted, but reordering
+               ///< would still silently change every switch that lists kinds in order.
+  /// REQ-068 / ADR-036 (a). Appended for a second, sharper reason than the one above: id assignment
+  /// walks the attribute arrays in `kEntityKindsInSweepOrder`, so inserting Surface anywhere but the
+  /// end would renumber every entity in every existing drawing on its next load — and REQ-069's
+  /// breakline and boundary references are stored by exactly those ids. Appending is what keeps a
+  /// legacy `.gs` loading with the ids it loaded with yesterday.
+  Surface
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -1666,18 +2050,69 @@ struct EntityRef {
 /// and before a reference is taken — never per frame (architecture §11.7). Assigning at the 127
 /// sites that construct an EntityAttributes was rejected: a missed site there is not a compile
 /// error, it is a silently id-less entity (the ADR-025 (a) lesson).
-/// Append every visible surface's triangle edges to \p out as world-space line vertices
-/// (x,y,z per endpoint, two endpoints per segment) — the buffer `ViewportRenderer` draws (REQ-068).
+/// Bring \ref AppCommandState::surfaceDisplayCache and \ref AppCommandState::surfaceDisplayGeometry
+/// up to date — ADR-036 (e). Called once a frame, beside \ref TickSurfaceRebuilds.
 ///
-/// Surfaces on an off or frozen layer are skipped here rather than in the renderer, which keeps
-/// layer policy in one place and the renderer ignorant of it.
+/// Generates each style component a surface asks for — triangle edges, border, minor and major
+/// contours — and leaves the buffer for a component that is switched off empty, so REQ-070's "a style
+/// with triangles off and contours on draws only contours" is a property of what exists rather than
+/// of what the renderer remembers to skip.
 ///
-/// **Rebuild only when the geometry revision changes**: a 200k-triangle surface is 600k segments,
-/// and regenerating that every frame would burn the REQ-100 budget on work whose input did not move.
-void AppendSurfaceEdgeLines(const AppCommandState& st, std::vector<float>* out);
+/// Regenerates an entry only when its staleness key `(triangulation pointer, resolved style)` has
+/// moved, and **returns before allocating** when nothing has: at REQ-100's ~200k-triangle profile the
+/// generation walks 600k edges, so an early-out placed after a `clear()` would still cost the frame
+/// it was written to save (§11 invariant 7). Entries whose surface id no longer resolves are reaped
+/// in the same pass, so an erased surface's geometry does not outlive it.
+///
+/// The key does **not** include the surface's definition, and that is the mechanism behind REQ-070's
+/// central claim: changing a contour interval moves the style half of the key and nothing else, so
+/// the triangulation is never rebuilt and the `shared_ptr` it hangs from is never even touched.
+///
+/// The batch assembly at the end is redone every call — it copies pointers and colours, never
+/// vertices — because layer visibility and object isolation change with no surface geometry changing
+/// at all.
+void RefreshSurfaceDisplayGeometry(AppCommandState& st);
+
+/// Border edges of surface \p surfaceIndex from the cache, or nullptr when it has none (never built,
+/// or the cache has not caught up this frame). Six floats per segment.
+/// Contour segments currently held in the display cache, across every surface (REQ-100 profile (c)).
+///
+/// For the BENCH record: profile (c) is defined as a CONTOURED surface, so "how many contour
+/// segments were on screen" is part of what makes one run comparable with the next.
+[[nodiscard]] int SurfaceDisplayContourSegs(const AppCommandState& st);
+
+/// True when surface \p surfaceIndex asked for more contour levels than the display path generates,
+/// with \p levelsAsked filled in — REQ-201, so "no contours" is never left to look like a defect.
+///
+/// The display pass runs once a frame with no command in flight and nowhere to log, so it records the
+/// fact on the cache entry and the Surface Manager is what says it out loud.
+[[nodiscard]] bool SurfaceContoursSuppressed(const AppCommandState& st, size_t surfaceIndex,
+                                             int* levelsAsked);
+
+[[nodiscard]] const std::vector<float>* SurfaceBorderEdges(const AppCommandState& st, size_t surfaceIndex);
+
+/// Is surface \p surfaceIndex visible right now — built, on a layer that is on and not frozen, and
+/// not isolated out (REQ-068, REQ-084 (d))?
+///
+/// **One rule, three readers.** Drawing (\ref AppendSurfaceEdgeLines), picking
+/// (\ref PickClosestCadEntity) and the REQ-074 elevation readout each need it, and before this
+/// existed the first two carried hand-copied versions that had already drifted apart: neither
+/// consulted `hiddenEntityIds`, so an isolated-out surface stayed on screen. The point of a shared
+/// predicate is that "invisible" and "unclickable" cannot disagree — which is exactly what REQ-084
+/// (d) requires of every entity kind.
+[[nodiscard]] bool SurfaceVisible(const AppCommandState& st, size_t surfaceIndex);
 
 /// Index of the surface named \p name (case-insensitive), or -1 (REQ-068).
+///
+/// For a name the **user** typed — a command argument, a panel selection. For a reference held
+/// across time (an in-flight rebuild, a cross-object link), use \ref FindSurfaceIndexById: a name
+/// can be changed, and an erased name can be taken by a different surface.
 [[nodiscard]] int FindSurfaceIndex(const AppCommandState& st, const std::string& name);
+
+/// Index of the surface whose stable entity id is \p id, or -1 when it does not resolve — erased, or
+/// never assigned (REQ-076 / ADR-036 (a)). `id == 0` always returns -1: 0 means "unassigned", so
+/// matching on it would resolve to whichever surface happened not to have been swept yet.
+[[nodiscard]] int FindSurfaceIndexById(const AppCommandState& st, std::uint64_t id);
 
 /// (Re)build \p surface's triangulation from its source point groups (REQ-068).
 ///
@@ -1696,6 +2131,16 @@ int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
 
 /// Erase a surface by index, keeping its attribute array in step. Callers own the undo snapshot.
 void EraseSurfaceAtIndex(AppCommandState& st, size_t index);
+
+/// REQ-069's dynamic rebuild. Called once per frame (main.cpp, beside \ref EnsureEntityIds — both
+/// are revision-gated per-frame maintenance run before anything can save, reference or render a
+/// surface). Reaps any completed background rebuild — applying it if \c cadGpuRevision has not moved
+/// since it was dispatched, discarding it otherwise (architecture §8 rule 4: undo or a further edit
+/// while it ran) — then dispatches a fresh background rebuild for every surface whose
+/// \c builtAtRevision is behind the current revision and does not already have one in flight, which
+/// is what makes a single command that touches N points, or N surfaces, coalesce to at most one
+/// rebuild per surface rather than N.
+void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log);
 
 void EnsureEntityIds(AppCommandState& st);
 
@@ -1981,6 +2426,55 @@ float RotateDeltaFromReferenceAndNewSegment(float refX1, float refY1, float refX
 void StartLineCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartCircleCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartPolylineCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// REQ-087: start a feature line — named 3D linework committing to its own store (ADR-035 (g)).
+void StartFeatureLineCommand(AppCommandState& st, const std::string& name, std::vector<std::string>& log);
+
+/// Append one vertex to the feature-line draft. \p isElevPoint marks it an elevation point rather
+/// than a PI — geometrically it lies on the line either way (ADR-035 (a)).
+bool SubmitFeatureLineVertex(AppCommandState& st, float x, float y, bool isElevPoint,
+                             std::vector<std::string>& log);
+
+/// Take an X,Y that arrived without an elevation — a viewport click, or a typed `X,Y` — and hold it
+/// while FEATURELINE prompts for one (TASK-082). A typed `X,Y,Z` bypasses this and commits directly.
+bool SubmitFeatureLinePoint(AppCommandState& st, float x, float y, std::vector<std::string>& log);
+
+/// Resolve the point held by \ref SubmitFeatureLinePoint at elevation \p z and add it to the draft.
+void CommitFeatureLinePendingPoint(AppCommandState& st, float z, std::vector<std::string>& log);
+
+/// Commit the feature-line draft into the store as one entity. \p closed joins last vertex to first.
+void CommitFeatureLineDraft(AppCommandState& st, bool closed, std::vector<std::string>& log);
+
+// REQ-088 — feature line elevation editing. The table is DERIVED, never stored (ADR-035 (e)); the
+// edits write elevations back into the stride-3 vertex array. `flNumber` and `pointNumber` are
+// 1-based, matching what FEATURELINELIST and FLELEV print.
+
+/// Build feature line \p fi's elevation table: station, elevation, length ahead, grade back/ahead.
+/// False if \p fi is not a feature line with at least two points. Grades are NaN where no such
+/// segment exists — see FeatureLineElevRow.
+bool BuildFeatureLineElevTable(const AppCommandState& st, int fi, std::vector<FeatureLineElevRow>* out);
+
+bool SetFeatureLinePointElevation(AppCommandState& st, int flNumber, int pointNumber, float elevation,
+                                  std::vector<std::string>& log);
+/// Sets the grade of the segment AHEAD, which moves the NEXT point and leaves this one alone.
+bool SetFeatureLineGradeAhead(AppCommandState& st, int flNumber, int pointNumber, double gradePct,
+                              std::vector<std::string>& log);
+/// Sets the grade of the segment BEHIND, which moves THIS point and holds the previous one.
+bool SetFeatureLineGradeBack(AppCommandState& st, int flNumber, int pointNumber, double gradePct,
+                             std::vector<std::string>& log);
+/// Raises (or, with a negative delta, lowers) every point of the feature line as a set.
+bool RaiseFeatureLineElevations(AppCommandState& st, int flNumber, float delta,
+                                std::vector<std::string>& log);
+/// Adds an elevation point at plan \p station, interpolating its position so it lies ON the line.
+bool InsertFeatureLineElevationPoint(AppCommandState& st, int flNumber, double station, float elevation,
+                                     std::vector<std::string>& log);
+/// Removes an elevation point. Refuses a PI — that is geometry editing, not an elevation edit.
+bool DeleteFeatureLineElevationPoint(AppCommandState& st, int flNumber, int pointNumber,
+                                     std::vector<std::string>& log);
+
+/// REQ-085: POLYLINE with per-vertex elevation entry. Shares POLYLINE's draft and `Kind` — the store
+/// is already stride-3 XYZ and the two commands differ only in where a vertex's Z comes from.
+void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartEllipseCommand(AppCommandState& st, std::vector<std::string>& log);
 
@@ -2019,6 +2513,18 @@ void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log);
 /// REQ-074: pick a point for its interpolated surface elevation; pick a second for the grade
 /// between them. Reports every surface covering the pick, by name.
 void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>& log);
+
+/// REQ-069: designate one picked Line/Polyline as a breakline on the named surface, appended to its
+/// definition by stable entity id. Refuses to start when \p surfaceName does not name an existing
+/// surface, reported before the pick rather than after it (REQ-201).
+void StartDesignateBreaklineCommand(AppCommandState& st, const std::string& surfaceName,
+                                    std::vector<std::string>& log);
+
+/// REQ-069: designate one picked CLOSED Polyline as a boundary ring of kind \p kind on the named
+/// surface, applied in the order it was added. Same refuse-before-pick rule as above.
+void StartDesignateBoundaryCommand(AppCommandState& st, const std::string& surfaceName, CadBoundaryKind kind,
+                                   std::vector<std::string>& log);
+
 void StartSurveyInverseCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log);
@@ -2086,6 +2592,22 @@ void StartZoomWindowCommand(AppCommandState& st, std::vector<std::string>& log);
 /// PAN command (REQ-045): enters interactive pan mode — left-drag pans the active view (hand cursor);
 /// Esc / Enter / right-click exits. Reuses the existing middle-drag view-pan math.
 void StartPanCommand(AppCommandState& st, std::vector<std::string>& log);
+/// ORBIT / Free Orbit (REQ-084 (c)): enters interactive orbit — left-drag tumbles the model view;
+/// Esc / Enter / right-click exits. Model space only: a paper sheet is 2D (ADR-025 (g)).
+void StartOrbitCommand(AppCommandState& st, std::vector<std::string>& log);
+
+// --- Object isolation (REQ-084 (d) / ADR-034) ----------------------------------------------
+/// The attributes of a selected entity, or nullptr for a type that carries none (survey points,
+/// PDF underlays) or an index that no longer resolves.
+const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, const SelectedEntity& e);
+/// True when \p e is currently isolated out. Entity types with no attributes are never hidden.
+bool CadSelectedEntityHidden(const AppCommandState& st, const SelectedEntity& e);
+/// ISOLATEOBJECTS — hide everything EXCEPT the current selection.
+void IsolateSelectedObjects(AppCommandState& st, std::vector<std::string>& log);
+/// HIDEOBJECTS — hide the current selection.
+void HideSelectedObjects(AppCommandState& st, std::vector<std::string>& log);
+/// UNISOLATEOBJECTS — show everything again. Reports when there was nothing hidden (REQ-201).
+void EndObjectIsolation(AppCommandState& st, std::vector<std::string>& log);
 /// Applies pending zoom-extents or zoom-window requests using current framebuffer size.
 void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY, float* zoom, int fbW, int fbH,
                                 float viewportAspect, std::vector<std::string>& log);

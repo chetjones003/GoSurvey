@@ -1,0 +1,268 @@
+# REQ-088 (TASK-080) — feature line elevation editing.
+#
+# ADR-035 (e) decided the shape of this before any code: the elevation editor is a VIEW, not a
+# store. Station, length, grade back and grade ahead are recomputed from the vertex chain every
+# time, so nothing here adds a field to any store and `.gs` is untouched.
+#
+# Every assertion was run against unpatched code first and failed there.
+
+# ---------------------------------------------------------------------------------------------
+# T1 — the table. Two 500 ft segments: (0,0,100) → (300,400,110) → (800,400,105).
+# 300-400-500 is a right triangle, so segment 1's plan length is exactly 500 and its grade is
+# 10/500 = 2.00%; segment 2 falls 5 over 500, so -1.00%.
+#
+# The dashes matter as much as the numbers. The first point has no segment behind it, so its grade
+# back is NOT "0.00%" — that would read as "level", a claim about ground that is not there. The
+# table carries NaN and prints a dash.
+# ---------------------------------------------------------------------------------------------
+NEW
+CMD FEATURELINE Ridge
+CMD 0,0,100
+CMD 300,400,110
+CMD 800,400,105
+CMD END
+CMD FLELEV 1
+EXPECT LOG "feature line 1 "Ridge": 3 points"
+EXPECT LOG "100.000        500.000            -         2.00%"
+EXPECT LOG "500.000      110.000        500.000        2.00%        -1.00%"
+EXPECT LOG "105.000          0.000       -1.00%             -"
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T2 — ASSUMPTION-3: station and length are PLAN distances, not slope distances.
+# A 3-4-5 triangle makes the two impossible to confuse: plan run 4, rise 3, slope length 5.
+# The length ahead must read 4.000. If it read 5.000 the grade would come out 60% instead of 75%,
+# which is the kind of wrong that looks entirely plausible on screen.
+# ---------------------------------------------------------------------------------------------
+NEW
+CMD FEATURELINE Slope
+CMD 0,0,0
+CMD 4,0,3
+CMD END
+CMD FLELEV 1
+EXPECT LOG "0.000        0.000          4.000            -        75.00%"
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T3 — ASSUMPTION-1 and -2. "Typing a grade ahead moves the next point's elevation and leaves the
+# current one alone" (REQ-088 acceptance, verbatim).
+#
+# Three 100 ft segments, all at elevation 10. Setting grade ahead of point 2 to 5% must put point 3
+# at 15.000 and leave points 1, 2 AND 4 exactly where they were — the last of those is
+# ASSUMPTION-2: the Statement says "downstream elevations" plural, but the Acceptance is singular
+# and specific, and a cascade would rewrite a whole designed profile from one keystroke.
+# ---------------------------------------------------------------------------------------------
+NEW
+CMD FEATURELINE Bench
+CMD 0,0,10
+CMD 100,0,10
+CMD 200,0,10
+CMD 300,0,10
+CMD END
+CMD FLELEV 1 GRADEAHEAD 2 5
+EXPECT LOG "grade ahead of point 2 = 5.00%; point 3 is now 15.000"
+CMD FLELEV 1
+EXPECT LOG "  1  PI"
+EXPECT LOG "0.000       10.000        100.000            -         0.00%"
+EXPECT LOG "200.000       15.000        100.000        5.00%        -5.00%"
+EXPECT LOG "300.000       10.000          0.000       -5.00%             -"
+CHECK ALL
+
+# One undo puts it back — REQ-088's last acceptance condition.
+UNDO
+CMD FLELEV 1
+EXPECT LOG "200.000       10.000        100.000        0.00%         0.00%"
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T4 — the other half of ASSUMPTION-1: GRADE BACK holds the EARLIER point and moves THIS one.
+# Grade back of point 2 set to 5% over the 100 ft segment behind it puts point 2 at 15.000 while
+# point 1 stays at 10.000. This is the one place REQ-088's Statement ("downstream") and Acceptance
+# ("leaves the current one alone", said only of grade ahead) could have been read apart.
+# ---------------------------------------------------------------------------------------------
+CMD FLELEV 1 GRADEBACK 2 5
+EXPECT LOG "grade back of point 2 = 5.00%; point 2 is now 15.000"
+CMD FLELEV 1
+EXPECT LOG "0.000       10.000        100.000            -         5.00%"
+EXPECT LOG "100.000       15.000        100.000        5.00%        -5.00%"
+CHECK ALL
+
+# The first point of an OPEN line has no segment behind it, so there is no grade back to set.
+CMD FLELEV 1 GRADEBACK 1 5
+EXPECT LOG "point 1 is the first point of an open feature line; it has no grade back"
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T5 — "typing an elevation updates grade back and grade ahead on the neighbouring rows and
+# nowhere else" (REQ-088 acceptance, verbatim). Point 3 moves to 20; that must change the grade
+# ahead of point 2, the grade back and ahead of point 3, and the grade back of point 4 — and leave
+# point 1's grade ahead (segment 1→2) untouched at 5.00%.
+# ---------------------------------------------------------------------------------------------
+CMD FLELEV 1 SET 3 20
+EXPECT LOG "point 3 elevation 20.000"
+CMD FLELEV 1
+EXPECT LOG "0.000       10.000        100.000            -         5.00%"
+EXPECT LOG "100.000       15.000        100.000        5.00%         5.00%"
+EXPECT LOG "200.000       20.000        100.000        5.00%       -10.00%"
+EXPECT LOG "300.000       10.000          0.000      -10.00%             -"
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T6 — RAISE moves every point as a set; a negative delta lowers.
+# ---------------------------------------------------------------------------------------------
+CMD FLELEV 1 RAISE -10
+EXPECT LOG "all 4 point(s) lowered by 10.000"
+CMD FLELEV 1
+EXPECT LOG "0.000        0.000        100.000            -         5.00%"
+EXPECT LOG "300.000        0.000          0.000      -10.00%             -"
+CHECK ALL
+UNDO
+CMD FLELEV 1
+EXPECT LOG "0.000       10.000        100.000            -         5.00%"
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T7 — elevation points. "Insertable and deletable independently of PIs", and — the load-bearing
+# half — an elevation point "does not add a plan vertex".
+#
+# It is stored AS a vertex (ADR-035 (a)), so "does not add a plan vertex" is a claim about SHAPE,
+# not about storage: the inserted point is interpolated onto the segment, so the plan polyline
+# through the vertices is identical before and after. Station 50 on the first 100 ft segment is
+# therefore at (50,0), and the two half-segments it creates are 50.000 long each.
+# ---------------------------------------------------------------------------------------------
+CMD FLELEV 1 INSERT 50 12.5
+EXPECT LOG "elevation point added at station 50.000, elevation 12.500 (now point 2 of 5)"
+CMD FLELEV 1
+EXPECT LOG "feature line 1 "Bench": 5 points"
+EXPECT LOG "  2  elev pt"
+EXPECT LOG "50.000       12.500         50.000        5.00%         5.00%"
+CHECK ALL
+
+# The elevation point lies exactly ON the line, so the grade is unchanged either side of it — 5.00%
+# before, 5.00% after. That is what proves it did not bend the plan geometry.
+EXPECT LOG "0.000       10.000         50.000            -         5.00%"
+
+# Deleting it is allowed; deleting a PI is not, and says so.
+CMD FLELEV 1 DELETE 1
+EXPECT LOG "point 1 is a PI, not an elevation point"
+CMD FLELEV 1
+EXPECT LOG "feature line 1 "Bench": 5 points"
+CMD FLELEV 1 DELETE 2
+EXPECT LOG "elevation point 2 deleted"
+CMD FLELEV 1
+EXPECT LOG "feature line 1 "Bench": 4 points"
+CHECK ALL
+
+# A refused edit must not consume an undo step. The undo below has to reach the INSERT, not a
+# no-op frame left behind by the refused DELETE — pushing a snapshot before a refusal would also
+# have cleared the redo stack, which is why the snapshot is taken only once an edit will succeed.
+UNDO
+CMD FLELEV 1
+EXPECT LOG "feature line 1 "Bench": 5 points"
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T8 — an elevation point changes the SURFACE when the feature line is a breakline, and the
+# surface rebuilds with no user action (REQ-088's fourth and fifth acceptance conditions).
+#
+# This is the condition BUG-1 blocked outright: ResolveDefinitionChain handled Line and Polyline
+# and returned false for everything else, so a feature line resolved as ABSENT — and
+# ResolveSurfaceInputs treats an unresolvable id as an entity that no longer exists, which means it
+# stripped the breakline from the STORED definition and reported "breakline(s) no longer exist"
+# about a line sitting in plain view. Designating one was silently self-undoing.
+# ---------------------------------------------------------------------------------------------
+# NOTE ON WHAT THIS CANNOT SHOW. REQ-088's fifth condition is "the surface rebuilds with NO USER
+# ACTION", and every rebuild below is an explicit SURFACEREBUILD. That is not the code cheating —
+# the dynamic rebuild is dispatched by TickSurfaceRebuilds, which main.cpp's frame loop drives and
+# this driver has no frame loop for (the same limitation req069-surface-definition-commands.txt
+# records). What IS shown here is the whole mechanism minus the tick: each edit bumps
+# cadGpuRevision, and TickSurfaceRebuilds' dirty check is exactly "cadGpuRevision moved". The tick
+# itself stays manually verified. Said plainly rather than left for someone to infer from the
+# presence of SURFACEREBUILD.
+#
+# The picks are LOCAL (world = local + worldDocumentOrigin); this drawing's origin is
+# (13.607424821993376, 0.30805350816929256), so world (50,40) — the midpoint of the ridge below —
+# is local (36.39257518, 39.69194649). The full precision matters: a pick a thousandth off the
+# constraint line interpolates into the neighbouring triangle and reads 499.9 instead of 500.000,
+# which would make this test look flaky rather than exact.
+OPEN samples/surface-demo.gs
+CMD SURFACECREATE EG, Ground + Curb
+CMD FEATURELINE Ridge
+CMD 30,40,500
+CMD 70,40,500
+CMD END
+CMD DESIGNATEBREAKLINE EG
+PICK 36.39257518 39.69194649
+EXPECT LOG "added a breakline"
+CHECK ALL
+
+# The breakline must SURVIVE the rebuild. This is the assertion BUG-1 fails: before the fix the
+# feature line resolved as absent, so the first rebuild stripped it from the definition and this
+# read "0 breakline(s)".
+CMD SURFACEREBUILD EG
+CMD SURFACELIST
+EXPECT LOG "1 breakline(s)"
+CHECK ALL
+
+# The surface follows the breakline exactly: elevation 500 on a drawing whose own points are
+# nowhere near it.
+CMD SURFELEV
+PICK 36.39257518 39.69194649
+EXPECT LOG "SURFELEV — EG: elevation 500.000"
+ESC
+CHECK ALL
+
+# Raising the feature line's elevations moves the surface with it.
+CMD FLELEV 1 RAISE 100
+EXPECT LOG "all 2 point(s) raised by 100.000"
+CMD SURFACEREBUILD EG
+CMD SURFELEV
+PICK 36.39257518 39.69194649
+EXPECT LOG "SURFELEV — EG: elevation 600.000"
+ESC
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# And the condition this whole task exists for: an ELEVATION POINT changes the surface, and does
+# not add a plan vertex.
+#
+# The ridge runs world x 30 → 70, so station 20 is world x = 50 — exactly the point picked above.
+# Dropping it to 500 while both ends stay at 600 makes the ridge a vee. The surface must read
+# 500.000 there, and the ridge must still run straight in plan from (30,40) to (70,40).
+# ---------------------------------------------------------------------------------------------
+CMD FLELEV 1 INSERT 20 500
+EXPECT LOG "elevation point added at station 20.000, elevation 500.000 (now point 2 of 3)"
+CMD FLELEV 1
+EXPECT LOG "  2  elev pt"
+EXPECT LOG "20.000      500.000         20.000     -500.00%       500.00%"
+CMD SURFACEREBUILD EG
+CMD SURFELEV
+PICK 36.39257518 39.69194649
+EXPECT LOG "SURFELEV — EG: elevation 500.000"
+ESC
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# T9 — FLELEVEDIT, which opens the panel. Separate from FLELEV on purpose: FLELEV must stay usable
+# with no window (REQ-203), so the driver can read and edit the table without a panel existing.
+# What is testable here is the command's own contract — that it aims at a real feature line and
+# refuses a number that is not one. The panel's rendering is not headlessly testable at all; what
+# makes it trustworthy instead is that every cell it edits routes through the FLELEV commands
+# above, so the tests in this file are testing the panel's behaviour by proxy.
+# ---------------------------------------------------------------------------------------------
+NEW
+CMD FLELEVEDIT
+EXPECT LOG "no feature lines in the drawing"
+CMD FEATURELINE A
+CMD 0,0,10
+CMD 100,0,12
+CMD END
+CMD FEATURELINE B
+CMD 0,50,20
+CMD 100,50,22
+CMD END
+CMD FLELEVEDIT 2
+EXPECT LOG "elevation editor opened on feature line 2"
+CMD FLELEVEDIT 9
+EXPECT LOG "there is no feature line 9; the drawing has 2"
+CHECK ALL

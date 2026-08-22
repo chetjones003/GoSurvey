@@ -1,0 +1,152 @@
+# REQ-204 `undo-redo-identity` oracle: undo then redo restores an IDENTICAL document.
+#
+# REQ-204 calls this "the classic CAD defect class — an edit not fully captured by the snapshot",
+# and it is the highest-value oracle in that table: an undo that restores 95% of a document is
+# indistinguishable from one that restores all of it until the missing 5% costs somebody a day.
+#
+# ## How two documents are compared
+#
+# By saving each to `.gs` and diffing the bytes, exactly as `gs-roundtrip` does. TASK-056 §11
+# recorded this oracle as blocked on "a document-equality predicate", treating float tolerance, id
+# renumbering and store ordering as open design questions. They are not questions here, and it is
+# worth writing down why the strictest possible answer is also the correct one:
+#
+#   - float tolerance — none. Undo is a RESTORE, not a computation. REQ-101's ±0.01 ft governs
+#     geometry agreeing with reference data; it has nothing to say about a snapshot agreeing with
+#     itself, and a bit that moves across undo/redo is a defect however small the number is.
+#   - id renumbering — an id that changes across undo/redo violates REQ-076 outright. A predicate
+#     that forgave it would define the bug out of existence.
+#   - store ordering — a reordered store is a real difference, and it is precisely what §11.9's
+#     selection-index invariant exists to worry about.
+#
+# So `EXPECT SAMEFILE` over two `.gs` writes IS the predicate, it needs no new code, and it forgives
+# nothing. `.gs` is the canonical serialization of an AppCommandState; if two states write the same
+# bytes they are the same document by the only definition the format admits.
+#
+# ## Why the intermediate assertions are not decoration
+#
+# `SAVEAS a` / `UNDO` / `REDO` / `SAVEAS b` / `EXPECT SAMEFILE a b` **passes trivially if UNDO does
+# nothing at all** — a check that cannot fail, reporting success forever. That is the same failure
+# this harness has already been bitten by twice (the `attr-counts` false positive and the minimizer
+# that lied, both in docs/fuzz-harness.md §8). So every undo below is followed by an assertion that
+# the document actually MOVED, and every redo by one that it came back. The oracle is two-sided on
+# purpose: it proves undo did something before it proves redo undid it.
+
+NEW
+
+# ---------------------------------------------------------------------------
+# Scenario 1 — creation across every store the writer handles differently, wound all the way back
+# to an empty drawing and all the way forward again.
+# ---------------------------------------------------------------------------
+
+CMD LINE
+CMD 0,0
+CMD 100,0
+CMD 100,50
+ESC
+
+CMD CIRCLE
+CMD 50,25
+CMD 10
+ESC
+
+# ARC takes viewport picks rather than typed coordinates — three of them: start, a point on the arc,
+# end. Typing them as CMD lines cancels the command, which is how this transcript was first written
+# and is worth the comment so it is not rediscovered.
+CMD ARC
+PICK 0 0
+PICK 20 20
+PICK 40 0
+ESC
+
+CMD POLYLINE
+CMD 0,100
+CMD 50,150
+CMD 100,100
+CMD END
+
+CMD TEXT
+CMD 10,10
+CMD 2.5
+CMD 0
+CMD UNDO REDO
+ESC
+
+CHECK ALL
+EXPECT LINES 2
+EXPECT CIRCLES 1
+EXPECT ARCS 1
+EXPECT POLYLINES 1
+EXPECT ANNOTATIONS 1
+
+SAVEAS %OUT%/ur-a.gs
+
+# Wind all the way back. Undo granularity is per COMMITTED ENTITY, not per command invocation, so
+# the two-segment LINE above accounts for two undo steps — measured, not assumed.
+UNDO
+UNDO
+UNDO
+UNDO
+UNDO
+UNDO
+
+# The document moved. Without this, everything below would pass against a no-op undo.
+EXPECT LINES 0
+EXPECT CIRCLES 0
+EXPECT ARCS 0
+EXPECT POLYLINES 0
+EXPECT ANNOTATIONS 0
+CHECK ALL
+
+REDO
+REDO
+REDO
+REDO
+REDO
+REDO
+
+EXPECT LINES 2
+EXPECT CIRCLES 1
+EXPECT ARCS 1
+EXPECT POLYLINES 1
+EXPECT ANNOTATIONS 1
+CHECK ALL
+
+SAVEAS %OUT%/ur-b.gs
+EXPECT SAMEFILE %OUT%/ur-a.gs %OUT%/ur-b.gs
+
+# ---------------------------------------------------------------------------
+# Scenario 2 — a MODIFY command, which is the half of the defect class creation cannot reach. An
+# erase has to restore geometry, the parallel attribute arrays, and the entity ids together; a
+# creation undo only has to drop a tail.
+#
+# The selection is deliberately lines-only. Including a circle here fails on an unrelated defect
+# found while writing this transcript — DELETE erases 3 floats from the stride-4 circle store,
+# corrupting every circle after the erased one — which is filed separately and has its own
+# regression transcript. Mixing it in would leave this oracle red for a reason that is not its own.
+# ---------------------------------------------------------------------------
+
+NEW
+
+CMD LINE
+CMD 0,0
+CMD 100,0
+CMD 100,50
+ESC
+
+CHECK ALL
+EXPECT LINES 2
+SAVEAS %OUT%/ur-mod-a.gs
+
+BOX -10 -10 200 200
+EXPECT SELECTED 2
+CMD DELETE
+EXPECT LINES 0
+CHECK ALL
+
+UNDO
+EXPECT LINES 2
+CHECK ALL
+
+SAVEAS %OUT%/ur-mod-b.gs
+EXPECT SAMEFILE %OUT%/ur-mod-a.gs %OUT%/ur-mod-b.gs

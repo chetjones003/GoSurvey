@@ -9,6 +9,8 @@
 #include "util/benchscene.hpp"
 #include "util/meshgeom.hpp"
 #include "util/tinbuild.hpp"
+#include "util/contourgen.hpp"  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
+#include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
 #include "util/gltfimport.hpp"
 #include "util/stlimport.hpp"
 #include "DwgMeshConvert.hpp"
@@ -34,7 +36,9 @@
 #include <ctime>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <set>
+#include <limits>
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
@@ -70,6 +74,12 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.userPolylineVerts      = cmd.userPolylineVerts;
   doc.userPolylineClosed     = cmd.userPolylineClosed;
   doc.userPolylineAttrs      = cmd.userPolylineAttrs;
+  doc.featureLineOffsets     = cmd.featureLineOffsets;   // REQ-087
+  doc.featureLineVerts       = cmd.featureLineVerts;
+  doc.featureLineClosed      = cmd.featureLineClosed;
+  doc.featureLineElevPt      = cmd.featureLineElevPt;
+  doc.featureLineInfo        = cmd.featureLineInfo;
+  doc.featureLineAttrs       = cmd.featureLineAttrs;
   doc.cadAnnotations         = cmd.cadAnnotations;
   doc.cadAnnotationAttrs     = cmd.cadAnnotationAttrs;
   doc.cadFilledRegions       = cmd.cadFilledRegions;
@@ -83,9 +93,11 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.selectedSurveyPointIndices = cmd.selectedSurveyPointIndices;
   doc.drawingLayerTable      = cmd.drawingLayerTable;
   doc.textStyles             = cmd.textStyles;
+  doc.surfaceStyles          = cmd.surfaceStyles;
   doc.activeTextStyleName    = cmd.activeTextStyleName;
   doc.pdfAttachments         = cmd.pdfAttachments;
   doc.selection              = cmd.selection;
+  doc.hiddenEntityIds        = cmd.hiddenEntityIds;  // isolation is per-drawing (REQ-084 (d))
   doc.paperLayouts           = cmd.paperLayouts;
   doc.savedPageSetups        = cmd.savedPageSetups;
   doc.activeSpaceIndex       = cmd.activeSpaceIndex;
@@ -123,6 +135,12 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.userPolylineVerts          = doc.userPolylineVerts;
   cmd.userPolylineClosed         = doc.userPolylineClosed;
   cmd.userPolylineAttrs          = doc.userPolylineAttrs;
+  cmd.featureLineOffsets         = doc.featureLineOffsets;   // REQ-087
+  cmd.featureLineVerts           = doc.featureLineVerts;
+  cmd.featureLineClosed          = doc.featureLineClosed;
+  cmd.featureLineElevPt          = doc.featureLineElevPt;
+  cmd.featureLineInfo            = doc.featureLineInfo;
+  cmd.featureLineAttrs           = doc.featureLineAttrs;
   cmd.cadAnnotations             = doc.cadAnnotations;
   cmd.cadAnnotationAttrs         = doc.cadAnnotationAttrs;
   cmd.cadFilledRegions           = doc.cadFilledRegions;
@@ -136,9 +154,11 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
   cmd.drawingLayerTable          = doc.drawingLayerTable;
   cmd.textStyles                 = doc.textStyles;
+  cmd.surfaceStyles              = doc.surfaceStyles;
   cmd.activeTextStyleName        = doc.activeTextStyleName;
   cmd.pdfAttachments             = doc.pdfAttachments;
   cmd.selection                  = doc.selection;
+  cmd.hiddenEntityIds            = doc.hiddenEntityIds;  // isolation is per-drawing (REQ-084 (d))
   cmd.paperLayouts               = doc.paperLayouts;
   cmd.savedPageSetups            = doc.savedPageSetups;
   cmd.activeSpaceIndex           = doc.activeSpaceIndex;
@@ -1120,6 +1140,12 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
   snap.userPolylineVerts    = st.userPolylineVerts;
   snap.userPolylineClosed   = st.userPolylineClosed;
   snap.userPolylineAttrs    = st.userPolylineAttrs;
+  snap.featureLineOffsets   = st.featureLineOffsets;   // REQ-087
+  snap.featureLineVerts     = st.featureLineVerts;
+  snap.featureLineClosed    = st.featureLineClosed;
+  snap.featureLineElevPt    = st.featureLineElevPt;
+  snap.featureLineInfo      = st.featureLineInfo;
+  snap.featureLineAttrs     = st.featureLineAttrs;
   snap.cadAnnotations       = st.cadAnnotations;
   snap.cadAnnotationAttrs   = st.cadAnnotationAttrs;
   snap.cadFilledRegions     = st.cadFilledRegions;
@@ -1128,6 +1154,7 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
   snap.pointGroups          = st.pointGroups;   // group edits are undoable (REQ-067)
   snap.drawingLayerTable    = st.drawingLayerTable;
   snap.textStyles           = st.textStyles;  // style edits are undoable (REQ-044)
+  snap.surfaceStyles        = st.surfaceStyles;  // and surface-style edits (REQ-070)
   snap.pdfAttachments       = st.pdfAttachments;
   snap.paperLayouts         = st.paperLayouts;  // native paper geometry is undoable (REQ-037/038)
   // Zero GL texture IDs: restored snapshots must not reference freed GPU resources.
@@ -1152,6 +1179,12 @@ static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySn
   st.userPolylineVerts    = snap.userPolylineVerts;
   st.userPolylineClosed   = snap.userPolylineClosed;
   st.userPolylineAttrs    = snap.userPolylineAttrs;
+  st.featureLineOffsets   = snap.featureLineOffsets;   // REQ-087
+  st.featureLineVerts     = snap.featureLineVerts;
+  st.featureLineClosed    = snap.featureLineClosed;
+  st.featureLineElevPt    = snap.featureLineElevPt;
+  st.featureLineInfo      = snap.featureLineInfo;
+  st.featureLineAttrs     = snap.featureLineAttrs;
   st.cadAnnotations       = snap.cadAnnotations;
   st.cadAnnotationAttrs   = snap.cadAnnotationAttrs;
   st.cadFilledRegions     = snap.cadFilledRegions;
@@ -1164,6 +1197,7 @@ static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySn
   st.pointGroups          = snap.pointGroups;
   st.drawingLayerTable    = snap.drawingLayerTable;
   st.textStyles           = snap.textStyles;
+  st.surfaceStyles        = snap.surfaceStyles;
   st.pdfAttachments       = snap.pdfAttachments;
   st.paperLayouts         = snap.paperLayouts;
   st.selectedPaperEntities.clear();  // restored layouts invalidate paper-entity indices
@@ -1180,9 +1214,14 @@ namespace {
 /// **Order is load-bearing**: it is what makes assignment deterministic, and therefore what makes a
 /// legacy `.gs` load with the same ids every time (REQ-076). Appending a new entity kind is safe;
 /// reordering the existing entries would renumber every legacy drawing on its next load.
+/// The order ids are handed out in. **Append only** — see \ref EntityKind. Reordering, or inserting
+/// anywhere but the end, renumbers every entity in every existing drawing on its next load, and
+/// REQ-069's breakline and boundary references are stored by exactly those ids.
 const EntityKind kEntityKindsInSweepOrder[] = {
     EntityKind::Line,       EntityKind::Circle,       EntityKind::Arc,  EntityKind::Ellipse,
-    EntityKind::Polyline,   EntityKind::Annotation,   EntityKind::FilledRegion, EntityKind::Mesh};
+    EntityKind::Polyline,   EntityKind::Annotation,   EntityKind::FilledRegion, EntityKind::Mesh,
+    EntityKind::FeatureLine,
+    EntityKind::Surface};  ///< REQ-068 / ADR-036 (a) — last, so the nine above keep their ids.
 
 /// The attribute array for a kind. One accessor for both the const and mutable walks, so the
 /// two can never disagree about which arrays are covered.
@@ -1197,46 +1236,348 @@ auto* AttrsForKind(StateT& st, EntityKind k) {
   case EntityKind::Annotation:   return &st.cadAnnotationAttrs;
   case EntityKind::FilledRegion: return &st.cadFilledRegionAttrs;
   case EntityKind::Mesh:         return &st.cadMeshAttrs;
+  case EntityKind::FeatureLine:  return &st.featureLineAttrs;
+  case EntityKind::Surface:      return &st.cadSurfaceAttrs;  // REQ-068 / ADR-036 (a)
   }
   return &st.userLineAttrs;
 }
 
 } // namespace
 
-void AppendSurfaceEdgeLines(const AppCommandState& st, std::vector<float>* out) {
-  if (!out)
-    return;
-  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
-    const CadSurface& s = st.cadSurfaces[si];
-    if (!s.tin || s.tin->indices.empty())
-      continue;
-    // Layer visibility (REQ-068: a surface on a frozen or off layer is not drawn).
-    if (si < st.cadSurfaceAttrs.size()) {
-      const std::string& lname = st.cadSurfaceAttrs[si].layer;
-      const auto it = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
-                                   [&](const CadLayerRow& r) { return r.name == lname; });
-      if (it != st.drawingLayerTable.end() && (!it->on || it->frozen))
-        continue;
-    }
-    const CadTin& t = *s.tin;
-    const auto emit = [&](std::uint32_t a, std::uint32_t b) {
-      out->push_back(t.vertsXyz[a * 3 + 0]);
-      out->push_back(t.vertsXyz[a * 3 + 1]);
-      out->push_back(t.vertsXyz[a * 3 + 2]);
-      out->push_back(t.vertsXyz[b * 3 + 0]);
-      out->push_back(t.vertsXyz[b * 3 + 1]);
-      out->push_back(t.vertsXyz[b * 3 + 2]);
+bool SurfaceVisible(const AppCommandState& st, size_t surfaceIndex) {
+  if (surfaceIndex >= st.cadSurfaces.size())
+    return false;
+  const CadSurface& s = st.cadSurfaces[surfaceIndex];
+  if (!s.tin || s.tin->indices.empty())
+    return false;
+  if (surfaceIndex >= st.cadSurfaceAttrs.size())
+    return true;  // attrs are length-locked to cadSurfaces; a short array means "defaults", not hidden
+  const EntityAttributes& a = st.cadSurfaceAttrs[surfaceIndex];
+  // REQ-084 (d): an isolated-out surface is invisible, so it must not be drawn OR answer a click.
+  if (CadEntityIdHidden(&st.hiddenEntityIds, a.id))
+    return false;
+  // REQ-068: a surface on a frozen or off layer is not drawn.
+  const auto it = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
+                               [&](const CadLayerRow& r) { return r.name == a.layer; });
+  return !(it != st.drawingLayerTable.end() && (!it->on || it->frozen));
+}
+
+namespace {
+
+/// Ceiling on how many contour levels one surface may generate at (REQ-070).
+///
+/// The generator's cost is proportional to total contour LENGTH, not to the level count — its inner
+/// loop only visits levels lying inside each triangle's own Z range — so a small interval on a flat
+/// surface is cheap and cannot run away on its own. This cap is not for that; it is for the value
+/// nobody typed. The style editor refuses an out-of-range interval where the user enters it, but a
+/// hand-edited `.gs` or a future importer can still present 0.0001 ft, and the display path must
+/// degrade instead of locking the UI up. 20,000 is far past any plan sheet — a 1,000 ft relief at a
+/// 0.05 ft interval — and well short of a hang.
+constexpr size_t kMaxContourLevels = 20000;
+
+/// Flatten \p r's chained polylines into the `GL_LINES` layout the renderer consumes: six floats per
+/// segment, both endpoints written out.
+///
+/// The doubling is deliberate. `GL_LINE_STRIP` would need one draw call per contour — thousands of
+/// them — where this needs one for all of them, and the existing surface/marker/snap paths are all
+/// already `GL_LINES`, so this keeps one layout in the renderer instead of two.
+void AppendContourLinesFrom(const ContourResult& r, std::vector<float>* out) {
+  for (int c = 0; c < r.contourCount(); ++c) {
+    const int begin = r.offsets[static_cast<size_t>(c)];
+    const int end = r.offsets[static_cast<size_t>(c) + 1];
+    const auto emit = [&](int v) {
+      out->push_back(r.vertsXyz[static_cast<size_t>(v) * 3 + 0]);
+      out->push_back(r.vertsXyz[static_cast<size_t>(v) * 3 + 1]);
+      out->push_back(r.vertsXyz[static_cast<size_t>(v) * 3 + 2]);
     };
-    // Each interior edge is emitted twice, once per adjoining triangle. De-duplicating would cost a
-    // hash of every edge to halve a buffer the line pipeline already handles at this size (REQ-100's
-    // measured envelope is 750k segments); that trade is worth revisiting only if the surface
-    // profile misses its budget.
-    for (size_t i = 0; i + 2 < t.indices.size(); i += 3) {
-      emit(t.indices[i], t.indices[i + 1]);
-      emit(t.indices[i + 1], t.indices[i + 2]);
-      emit(t.indices[i + 2], t.indices[i]);
+    for (int v = begin; v + 1 < end; ++v) {
+      emit(v);
+      emit(v + 1);
+    }
+    // A closed contour's last vertex is not a repeat of its first (contourgen does not emit the seam
+    // twice), so the closing segment has to be written here or every ring would render with a gap.
+    if (end - begin > 2 && r.closed[static_cast<size_t>(c)]) {
+      emit(end - 1);
+      emit(begin);
     }
   }
+}
+
+/// Every triangulation edge of \p t in `GL_LINES` layout — the appearance a surface had before
+/// REQ-070, now the style's "triangles" component.
+void AppendTriangleEdges(const CadTin& t, std::vector<float>* out) {
+  const auto emit = [&](std::uint32_t a, std::uint32_t b) {
+    out->push_back(t.vertsXyz[a * 3 + 0]);
+    out->push_back(t.vertsXyz[a * 3 + 1]);
+    out->push_back(t.vertsXyz[a * 3 + 2]);
+    out->push_back(t.vertsXyz[b * 3 + 0]);
+    out->push_back(t.vertsXyz[b * 3 + 1]);
+    out->push_back(t.vertsXyz[b * 3 + 2]);
+  };
+  // Each interior edge is emitted twice, once per adjoining triangle. De-duplicating would cost a
+  // hash of every edge to halve a buffer the line pipeline already handles at this size (REQ-100's
+  // measured envelope is 750k segments); that trade is worth revisiting only if the surface profile
+  // misses its budget.
+  for (size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+    emit(t.indices[i], t.indices[i + 1]);
+    emit(t.indices[i + 1], t.indices[i + 2]);
+    emit(t.indices[i + 2], t.indices[i]);
+  }
+}
+
+/// How many levels \c ContourLevels would produce, without producing them.
+///
+/// The cap below has to be checked BEFORE the lists are built, not after: a 0.0001 ft interval over a
+/// 33 ft surface is 330,000 doubles materialised and immediately discarded, which took 2.4 s in
+/// testing — a visible stall to reach a decision that is pure arithmetic.
+double ContourLevelCount(double minZ, double maxZ, double interval) {
+  if (!std::isfinite(minZ) || !std::isfinite(maxZ) || !std::isfinite(interval) || interval <= 0.0 ||
+      maxZ < minZ)
+    return 0.0;
+  const double first = std::ceil(minZ / interval);
+  const double last = std::floor(maxZ / interval);
+  return last < first ? 0.0 : last - first + 1.0;
+}
+
+/// Split a surface's contour levels into major and minor, with the majors removed from the minors so
+/// no level is drawn twice.
+///
+/// A major level is a minor level by construction — the interval rule makes the major interval a
+/// whole multiple of the minor — so without the removal every major contour would be drawn once in
+/// each colour, and which one a user saw would depend on draw order rather than on the style.
+void SplitContourLevels(double minZ, double maxZ, const SurfaceStyle& style,
+                        std::vector<double>* minorOut, std::vector<double>* majorOut) {
+  minorOut->clear();
+  majorOut->clear();
+  if (style.majorContour.visible)
+    ContourLevels(minZ, maxZ, style.majorIntervalFt, majorOut);
+  if (!style.minorContour.visible)
+    return;
+
+  std::vector<double> allMinor;
+  ContourLevels(minZ, maxZ, style.minorIntervalFt, &allMinor);
+  if (majorOut->empty()) {
+    *minorOut = std::move(allMinor);
+    return;
+  }
+  // Matched with a tolerance, never `==`: both lists are `step * interval` products, and a level a
+  // plan reader calls "110" is not the same double when reached as 55x2 and as 11x10.
+  const double tol = std::max(1.0e-9, style.minorIntervalFt * 1.0e-9);
+  for (double lv : allMinor) {
+    const auto near = std::lower_bound(majorOut->begin(), majorOut->end(), lv - tol);
+    if (near != majorOut->end() && std::fabs(*near - lv) <= tol)
+      continue;
+    minorOut->push_back(lv);
+  }
+}
+
+/// The resolved RGBA and lineweight for one component of a surface, folding the ByLayer chain the
+/// same way an entity's own attributes do.
+///
+/// A component's "ByLayer" means the surface's own colour, which in turn may itself be ByLayer and
+/// resolve to the layer's. Doing it through the shared resolvers rather than by hand is what keeps a
+/// contour's ByLayer and a line's ByLayer meaning the same thing.
+SurfaceDisplayBatch ResolveComponentBatch(const AppCommandState& st, const EntityAttributes& surfAttr,
+                                          const SurfaceComponentStyle& comp,
+                                          const std::vector<float>* verts) {
+  SurfaceDisplayBatch b;
+  b.verts = verts;
+
+  const CadLayerRow* layer = FindDrawingLayerRowCi(st, surfAttr.layer);
+  // The surface's own effective colour first — that is what a component's ByLayer defers to.
+  float surfaceRgba[4] = {1.f, 1.f, 1.f, 1.f};
+  ResolveEntityRgbaForViewport(surfAttr, layer, 0.42f, 0.62f, 0.78f, surfaceRgba);
+  ResolveStoredColorForViewport(comp.color, surfAttr.transparency < 0.f ? 0.f : surfAttr.transparency,
+                                surfaceRgba[0], surfaceRgba[1], surfaceRgba[2], b.rgba);
+  b.rgba[3] = surfaceRgba[3];
+
+  b.lineweightMm = comp.lineweightMm >= 0.f ? comp.lineweightMm
+                                            : EffectiveEntityLineweightMm(surfAttr, layer);
+  return b;
+}
+
+} // namespace
+
+void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
+  // Reap first: an entry whose surface id no longer resolves belongs to an erased surface. Ids are
+  // never reused (REQ-076), so "does not resolve" cannot mean "not yet created."
+  st.surfaceDisplayCache.erase(
+      std::remove_if(st.surfaceDisplayCache.begin(), st.surfaceDisplayCache.end(),
+                     [&](const AppCommandState::SurfaceDisplayCacheEntry& e) {
+                       return FindSurfaceIndexById(st, e.surfaceId) < 0;
+                     }),
+      st.surfaceDisplayCache.end());
+
+  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+    const std::uint64_t id = si < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[si].id : 0;
+    if (id == 0)
+      continue;  // not swept yet; it gets an entry next frame rather than one under an unusable key
+    const CadSurface& surf = st.cadSurfaces[si];
+    const std::shared_ptr<const CadTin>& tin = surf.tin;
+
+    // Resolve-on-read (ADR-036 (d)): nothing is baked onto the surface, so a style edit touches the
+    // table and nothing else — which is why it cannot reach the definition and cannot retriangulate.
+    const SurfaceStyle* style = SurfaceStyles::Resolve(st.surfaceStyles, surf.styleName);
+    const SurfaceStyle resolved = style ? *style : SurfaceStyles::StandardSurfaceStyle();
+
+    auto it = std::find_if(st.surfaceDisplayCache.begin(), st.surfaceDisplayCache.end(),
+                           [&](const AppCommandState::SurfaceDisplayCacheEntry& e) { return e.surfaceId == id; });
+    if (it != st.surfaceDisplayCache.end() && it->builtFrom.lock() == tin && it->style == resolved)
+      continue;  // BEFORE any clear/reserve — see the header comment; this early-out is the budget
+
+    if (!tin) {
+      if (it != st.surfaceDisplayCache.end())
+        st.surfaceDisplayCache.erase(it);
+      continue;  // never built: no geometry, and no empty entry left behind to keep re-checking
+    }
+    if (it == st.surfaceDisplayCache.end()) {
+      st.surfaceDisplayCache.push_back({});
+      it = st.surfaceDisplayCache.end() - 1;
+      it->surfaceId = id;
+    }
+    it->builtFrom = tin;
+    it->style = resolved;
+    ++st.surfaceDisplayRegenCount;  // past the early-out: this frame is doing the real work
+
+    // Each component is generated only when its own toggle is on, and its buffer is released when it
+    // is off — REQ-070's "a style with triangles off and contours on draws only contours" is then a
+    // property of what exists, not of what the renderer remembers to skip. `shrink_to_fit` because a
+    // 14 MB triangle-edge buffer left capacity-resident by a `clear()` would defeat turning it off.
+    const auto release = [](std::vector<float>* v) {
+      v->clear();
+      v->shrink_to_fit();
+    };
+
+    if (resolved.triangles.visible) {
+      // Cleared, not appended to. This entry may already hold the edges generated for the PREVIOUS
+      // style — a style edit is a cache miss on a triangulation that did not change — and appending
+      // to it would double the buffer on every edit. Capacity is kept, because what follows refills
+      // it to the same size.
+      it->triangleEdges.clear();
+      AppendTriangleEdges(*tin, &it->triangleEdges);
+    } else {
+      release(&it->triangleEdges);
+    }
+
+    if (resolved.border.visible)
+      TinBorderEdges(tin->vertsXyz, tin->indices, &it->borderEdges);
+    else
+      release(&it->borderEdges);
+
+    release(&it->minorContours);
+    release(&it->majorContours);
+    it->contoursSuppressed = false;
+    it->suppressedLevelCount = 0;
+    if (resolved.minorContour.visible || resolved.majorContour.visible) {
+      double minZ = 0.0, maxZ = 0.0;
+      bool haveZ = false;
+      for (size_t v = 2; v < tin->vertsXyz.size(); v += 3) {
+        const double z = static_cast<double>(tin->vertsXyz[v]);
+        if (!haveZ) {
+          minZ = maxZ = z;
+          haveZ = true;
+        } else {
+          minZ = std::min(minZ, z);
+          maxZ = std::max(maxZ, z);
+        }
+      }
+      if (haveZ) {
+        // The cap is on the pair, not on each list: two intervals that are individually sane can
+        // still be asked for together, and it is the total the frame pays for. Counted before
+        // anything is allocated, for the reason ContourLevelCount documents.
+        const double wanted =
+            (resolved.minorContour.visible ? ContourLevelCount(minZ, maxZ, resolved.minorIntervalFt) : 0.0) +
+            (resolved.majorContour.visible ? ContourLevelCount(minZ, maxZ, resolved.majorIntervalFt) : 0.0);
+        if (wanted > static_cast<double>(kMaxContourLevels)) {
+          // Recorded, never absorbed (REQ-201). Nothing here can log — this runs once a frame with no
+          // command in flight — so the fact is carried on the entry and the Surface Manager reports
+          // it. Silently drawing no contours would look like a defect in the generator.
+          it->contoursSuppressed = true;
+          it->suppressedLevelCount =
+              wanted > 2.0e9 ? 2000000000 : static_cast<int>(wanted);  // saturate, never overflow
+        } else {
+          std::vector<double> minorLevels, majorLevels;
+          SplitContourLevels(minZ, maxZ, resolved, &minorLevels, &majorLevels);
+          ContourResult r;
+          if (!minorLevels.empty()) {
+            GenerateContours(tin->vertsXyz, tin->indices, minorLevels, &r);
+            AppendContourLinesFrom(r, &it->minorContours);
+          }
+          if (!majorLevels.empty()) {
+            GenerateContours(tin->vertsXyz, tin->indices, majorLevels, &r);
+            AppendContourLinesFrom(r, &it->majorContours);
+          }
+        }
+      }
+    }
+  }
+
+  // Assemble what the renderer is handed. Cheap by construction: the batches BORROW the buffers
+  // above (see SurfaceDisplayBatch), so this pass copies pointers and colours, never vertices, and
+  // is therefore safe to redo every frame — which it must be, because layer visibility and isolation
+  // can change without any surface's geometry changing at all.
+  st.surfaceDisplayGeometry.lines.clear();
+  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+    if (!SurfaceVisible(st, si))
+      continue;  // layer off/frozen or isolated out — filtered here, so the renderer stays ignorant
+    const std::uint64_t id = si < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[si].id : 0;
+    if (id == 0)
+      continue;
+    const auto it = std::find_if(st.surfaceDisplayCache.begin(), st.surfaceDisplayCache.end(),
+                                 [&](const AppCommandState::SurfaceDisplayCacheEntry& e) { return e.surfaceId == id; });
+    if (it == st.surfaceDisplayCache.end())
+      continue;
+    const EntityAttributes& attr = st.cadSurfaceAttrs[si];
+
+    // Draw order: triangles, then contours, then the border last so an outline stays readable over
+    // its own triangulation.
+    const auto add = [&](const SurfaceComponentStyle& comp, const std::vector<float>* verts) {
+      if (verts->empty())
+        return;
+      st.surfaceDisplayGeometry.lines.push_back(ResolveComponentBatch(st, attr, comp, verts));
+    };
+    add(it->style.triangles, &it->triangleEdges);
+    add(it->style.minorContour, &it->minorContours);
+    add(it->style.majorContour, &it->majorContours);
+    add(it->style.border, &it->borderEdges);
+  }
+}
+
+bool SurfaceContoursSuppressed(const AppCommandState& st, size_t surfaceIndex, int* levelsAsked) {
+  if (levelsAsked)
+    *levelsAsked = 0;
+  if (surfaceIndex >= st.cadSurfaceAttrs.size())
+    return false;
+  const std::uint64_t id = st.cadSurfaceAttrs[surfaceIndex].id;
+  if (id == 0)
+    return false;
+  for (const auto& e : st.surfaceDisplayCache) {
+    if (e.surfaceId != id)
+      continue;
+    if (levelsAsked)
+      *levelsAsked = e.suppressedLevelCount;
+    return e.contoursSuppressed;
+  }
+  return false;
+}
+
+int SurfaceDisplayContourSegs(const AppCommandState& st) {
+  size_t floats = 0;
+  for (const auto& e : st.surfaceDisplayCache)
+    floats += e.minorContours.size() + e.majorContours.size();
+  return static_cast<int>(floats / 6);
+}
+
+const std::vector<float>* SurfaceBorderEdges(const AppCommandState& st, size_t surfaceIndex) {
+  if (surfaceIndex >= st.cadSurfaceAttrs.size())
+    return nullptr;
+  const std::uint64_t id = st.cadSurfaceAttrs[surfaceIndex].id;
+  if (id == 0)
+    return nullptr;
+  for (const auto& e : st.surfaceDisplayCache)
+    if (e.surfaceId == id)
+      return e.borderEdges.empty() ? nullptr : &e.borderEdges;
+  return nullptr;
 }
 
 int FindSurfaceIndex(const AppCommandState& st, const std::string& name) {
@@ -1254,11 +1595,155 @@ int FindSurfaceIndex(const AppCommandState& st, const std::string& name) {
   return -1;
 }
 
-bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
+int FindSurfaceIndexById(const AppCommandState& st, std::uint64_t id) {
+  if (id == 0)
+    return -1;  // 0 is "unassigned", never a real id — it must not match the first id-less surface
+  for (size_t i = 0; i < st.cadSurfaceAttrs.size() && i < st.cadSurfaces.size(); ++i)
+    if (st.cadSurfaceAttrs[i].id == id)
+      return static_cast<int>(i);
+  return -1;
+}
+
+namespace {
+
+/// A breakline/boundary source's vertex chain, in WORLD double coordinates (matching the convention
+/// \ref BuildSurfaceFromSources already uses for point-group points — ADR-028 (d)). Z is carried
+/// through as-is: it is stored absolute, not offset by the document origin (ADR-025 D2), the same
+/// rule \ref CadTin and \ref CadFilledRegion already follow.
+struct ResolvedChain {
+  std::vector<std::array<double, 3>> verts;
+  bool closed = false;
+};
+
+/// Resolves a breakline/boundary reference (REQ-069) to its vertex chain. A Line or a Polyline are
+/// both valid breakline sources; only a Polyline can be closed, so only a Polyline can ever satisfy
+/// \p requireClosed. Returns false (chain left empty) when the id does not resolve to a usable
+/// entity — the caller's job is to then drop that id from the definition, not to invent a chain.
+bool ResolveDefinitionChain(const AppCommandState& st, std::uint64_t id, bool requireClosed,
+                           ResolvedChain& out) {
+  out.verts.clear();
+  out.closed = false;
+  const EntityRef ref = FindEntityById(st, id);
+  if (!ref.valid())
+    return false;
+
+  if (ref.kind == EntityKind::Line) {
+    if (requireClosed)
+      return false;  // a 2-point line can never be a closed boundary ring
+    const size_t base = static_cast<size_t>(ref.index) * 6;
+    if (base + 5 >= st.userLinesFlat.size())
+      return false;
+    out.verts.push_back({static_cast<double>(st.userLinesFlat[base + 0]) + st.worldDocumentOriginX,
+                         static_cast<double>(st.userLinesFlat[base + 1]) + st.worldDocumentOriginY,
+                         static_cast<double>(st.userLinesFlat[base + 2])});
+    out.verts.push_back({static_cast<double>(st.userLinesFlat[base + 3]) + st.worldDocumentOriginX,
+                         static_cast<double>(st.userLinesFlat[base + 4]) + st.worldDocumentOriginY,
+                         static_cast<double>(st.userLinesFlat[base + 5])});
+    return true;
+  }
+
+  if (ref.kind == EntityKind::Polyline) {
+    const size_t pi = static_cast<size_t>(ref.index);
+    if (pi + 1 >= st.userPolylineOffsets.size())
+      return false;
+    const bool closed = pi < st.userPolylineClosed.size() && st.userPolylineClosed[pi] != 0;
+    if (requireClosed && !closed)
+      return false;
+    const int vBegin = st.userPolylineOffsets[pi], vEnd = st.userPolylineOffsets[pi + 1];
+    if (vEnd - vBegin < 2)
+      return false;
+    for (int v = vBegin; v < vEnd; ++v) {
+      const size_t base = static_cast<size_t>(v) * 3;
+      if (base + 2 >= st.userPolylineVerts.size())
+        return false;
+      out.verts.push_back({static_cast<double>(st.userPolylineVerts[base + 0]) + st.worldDocumentOriginX,
+                           static_cast<double>(st.userPolylineVerts[base + 1]) + st.worldDocumentOriginY,
+                           static_cast<double>(st.userPolylineVerts[base + 2])});
+    }
+    out.closed = closed;
+    return true;
+  }
+
+  // REQ-087 / REQ-088. Without this a feature line does not merely fail to resolve — it resolves as
+  // ABSENT, and ResolveSurfaceInputs treats an unresolvable id as an entity that no longer exists,
+  // so it strips the breakline from the STORED definition and reports "breakline(s) no longer
+  // exist" about a line sitting in plain view. Designating one was silently self-undoing.
+  //
+  // Elevation points need no handling here, and that is ADR-035 (a) paying off rather than an
+  // omission: a flagged vertex is an ordinary vertex in the plan chain, so the triangulator folds
+  // its elevation in with every other vertex's and the constraint edge follows the line exactly.
+  if (ref.kind == EntityKind::FeatureLine) {
+    const size_t fi = static_cast<size_t>(ref.index);
+    if (fi + 1 >= st.featureLineOffsets.size())
+      return false;
+    const bool closed = fi < st.featureLineClosed.size() && st.featureLineClosed[fi] != 0;
+    if (requireClosed && !closed)
+      return false;
+    const int vBegin = st.featureLineOffsets[fi], vEnd = st.featureLineOffsets[fi + 1];
+    if (vEnd - vBegin < 2)
+      return false;
+    for (int v = vBegin; v < vEnd; ++v) {
+      const size_t base = static_cast<size_t>(v) * 3;
+      if (base + 2 >= st.featureLineVerts.size())
+        return false;
+      out.verts.push_back({static_cast<double>(st.featureLineVerts[base + 0]) + st.worldDocumentOriginX,
+                           static_cast<double>(st.featureLineVerts[base + 1]) + st.worldDocumentOriginY,
+                           static_cast<double>(st.featureLineVerts[base + 2])});
+    }
+    out.closed = closed;
+    return true;
+  }
+
+  return false;  // any other entity kind is not a valid breakline/boundary source
+}
+
+/// Appends one \ref TinConstraint per edge of \p chain — consecutive vertex pairs, plus the closing
+/// edge (last→first) when \p forceClosed or the source itself is closed.
+void AppendChainConstraints(const ResolvedChain& chain, bool forceClosed, std::vector<TinConstraint>& out) {
+  const size_t n = chain.verts.size();
+  if (n < 2)
+    return;
+  for (size_t i = 0; i + 1 < n; ++i) {
+    TinConstraint c;
+    c.ax = chain.verts[i][0]; c.ay = chain.verts[i][1]; c.az = static_cast<float>(chain.verts[i][2]);
+    c.bx = chain.verts[i + 1][0]; c.by = chain.verts[i + 1][1]; c.bz = static_cast<float>(chain.verts[i + 1][2]);
+    out.push_back(c);
+  }
+  if ((forceClosed || chain.closed) && n >= 3) {
+    TinConstraint c;
+    c.ax = chain.verts[n - 1][0]; c.ay = chain.verts[n - 1][1]; c.az = static_cast<float>(chain.verts[n - 1][2]);
+    c.bx = chain.verts[0][0]; c.by = chain.verts[0][1]; c.bz = static_cast<float>(chain.verts[0][2]);
+    out.push_back(c);
+  }
+}
+
+/// Everything a surface build needs, already resolved against \c AppCommandState — plain data, safe
+/// to copy into a worker thread with no further access to drawing state (architecture §8 rule 1).
+struct SurfaceBuildInputs {
+  std::vector<TinInputPoint> pts;
+  std::vector<TinConstraint> constraints;
+  std::vector<TinBoundaryLoop> cullLoops;
+  double originX = 0.0, originY = 0.0;
+  /// A linked point file could not be read (REQ-086). The build is ABANDONED rather than run on what
+  /// is left: a surface whose file went missing must keep its last good triangulation, not quietly
+  /// rebuild itself smaller (REQ-001 — reject, never absorb). Distinct from a build that fails on its
+  /// own merits, because the inputs here are known-incomplete before the triangulator ever runs.
+  bool inputsIncomplete = false;
+  std::string incompleteReason;
+};
+
+/// UI-thread only: resolves a surface's definition against CURRENT drawing state — point groups,
+/// breaklines, boundaries — pruning any id that no longer resolves (REQ-069) and logging what was
+/// dropped or found in conflict. This is the only part of a surface build that touches
+/// \c AppCommandState; everything after it (\ref RunSurfaceBuild) is pure and thread-safe.
+SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
+  SurfaceBuildInputs in;
+  in.originX = st.worldDocumentOriginX;
+  in.originY = st.worldDocumentOriginY;
+
   // Gather points from every named group. Groups are referenced by name (REQ-067), so a name that
   // no longer resolves is reported rather than silently contributing nothing — otherwise a renamed
   // group would quietly shrink a surface with no indication why.
-  std::vector<TinInputPoint> pts;
   int unresolvedGroups = 0;
   for (const std::string& gname : surface.sourcePointGroups) {
     const int gi = FindPointGroupIndex(st, gname);
@@ -1271,32 +1756,148 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
       const SurveyPoint& p = st.surveyPoints[static_cast<size_t>(pi)];
       // Triangulate in WORLD coordinates, in double: at state-plane magnitudes the local frame is
       // what keeps float storage precise, but the predicates need the real spacing between points
-      // (ADR-028 (d)). The result is converted back to local below.
-      pts.push_back({static_cast<double>(p.easting) + st.worldDocumentOriginX,
-                     static_cast<double>(p.northing) + st.worldDocumentOriginY, p.elevation});
+      // (ADR-028 (d)). The result is converted back to local by \ref ToLocalTin.
+      in.pts.push_back({static_cast<double>(p.easting) + st.worldDocumentOriginX,
+                        static_cast<double>(p.northing) + st.worldDocumentOriginY, p.elevation});
     }
   }
   (void)unresolvedGroups;
 
-  const TinBuildResult r = BuildTin(pts);
+  // Linked point files (REQ-086). Read HERE, on the UI thread, so the rebuild worker keeps touching
+  // neither AppCommandState nor the filesystem. Coordinates come out of the file already in world
+  // double, which is the frame the triangulator wants — no origin round trip.
+  for (const CadSurfacePointFile& pf : surface.sourcePointFiles) {
+    std::vector<SurveyFilePoint> filePts;
+    int skipped = 0;
+    std::string err;
+    if (!SurveyCsvReadPointsOnly(pf.path.c_str(), SurveyCsvLayoutFromUiIndex(pf.layoutIndex),
+                                 pf.skipFirstRow, &filePts, &skipped, &err)) {
+      // Named, not swallowed — and it stops the build (see SurfaceBuildInputs::inputsIncomplete).
+      in.inputsIncomplete = true;
+      in.incompleteReason = "point file \"" + pf.path + "\" could not be read (" + err + ")";
+      log.push_back("Surface \"" + surface.name + "\": " + in.incompleteReason +
+                    ". Keeping the previous triangulation.");
+      continue;
+    }
+    if (skipped > 0)
+      log.push_back("Surface \"" + surface.name + "\": point file \"" + pf.path + "\" — " +
+                    std::to_string(skipped) + " unreadable row(s) skipped.");
+    for (const SurveyFilePoint& p : filePts)
+      in.pts.push_back({p.easting, p.northing, p.elevation});
+  }
+
+  // Breaklines (REQ-069): resolve each by stable entity id, dropping — not merely skipping — any
+  // that no longer resolve, so the STORED definition never holds a dangling reference (§8 ASSUMPTION-1).
+  std::vector<CadSurfaceBreakline> resolvedBreaklines;
+  int droppedBreaklines = 0;
+  for (const CadSurfaceBreakline& bl : surface.breaklines) {
+    ResolvedChain chain;
+    if (!ResolveDefinitionChain(st, bl.entityId, /*requireClosed=*/false, chain)) {
+      ++droppedBreaklines;
+      continue;
+    }
+    resolvedBreaklines.push_back(bl);
+    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints);
+  }
+  surface.breaklines = std::move(resolvedBreaklines);
+  if (droppedBreaklines > 0)
+    log.push_back("Surface \"" + surface.name + "\": " + std::to_string(droppedBreaklines) +
+                  " breakline(s) no longer exist and were removed from the definition.");
+
+  // Boundaries (REQ-069): same dangling-id handling; each ring's edges become constraints too (Q1),
+  // so the triangulation conforms exactly to the boundary and culling is exact, not approximate.
+  std::vector<CadSurfaceBoundary> resolvedBoundaries;
+  int droppedBoundaries = 0;
+  for (const CadSurfaceBoundary& b : surface.boundaries) {
+    ResolvedChain chain;
+    if (!ResolveDefinitionChain(st, b.entityId, /*requireClosed=*/true, chain)) {
+      ++droppedBoundaries;
+      continue;
+    }
+    resolvedBoundaries.push_back(b);
+    AppendChainConstraints(chain, /*forceClosed=*/true, in.constraints);
+    TinBoundaryLoop loop;
+    loop.kind = b.kind == CadBoundaryKind::Outer ? TinBoundaryKind::Outer
+              : b.kind == CadBoundaryKind::Hide  ? TinBoundaryKind::Hide
+                                                  : TinBoundaryKind::Show;
+    for (const auto& v : chain.verts)
+      loop.ring.push_back({v[0], v[1]});
+    in.cullLoops.push_back(std::move(loop));
+  }
+  surface.boundaries = std::move(resolvedBoundaries);
+  if (droppedBoundaries > 0)
+    log.push_back("Surface \"" + surface.name + "\": " + std::to_string(droppedBoundaries) +
+                  " boundary(ies) no longer exist and were removed from the definition.");
+
+  // Crossing breaklines at different elevations (REQ-069): reported by name and location so the
+  // conflict can actually be found and fixed, rather than left to be inferred from a stray edge.
+  for (const TinCrossingIssue& issue : TinFindCrossingConflicts(in.constraints))
+    log.push_back("Surface \"" + surface.name + "\": breaklines cross at (" +
+                  std::to_string(issue.x) + ", " + std::to_string(issue.y) +
+                  ") with different elevations (" + std::to_string(issue.zFromA) + " vs " +
+                  std::to_string(issue.zFromB) + ").");
+
+  return in;
+}
+
+/// Pure: the triangulation + boundary culling, given already-resolved inputs. Touches no
+/// \c AppCommandState, so it is safe to run on a worker thread (architecture §8) or synchronously.
+TinBuildResult RunSurfaceBuild(const SurfaceBuildInputs& in) {
+  TinBuildResult r = BuildTin(in.pts, in.constraints);
+  if (r.ok())
+    TinCullByBoundaries(r.indices, r.vertsXyz, in.cullLoops);
+  return r;
+}
+
+/// Converts a world-space \ref TinBuildResult into a local-frame \ref CadTin (the local-storage
+/// invariant: world = local + origin — architecture §11.8), or null when \p r has no surviving
+/// triangle (a successful build that boundaries clipped to nothing is still "no surface" — REQ-001).
+std::shared_ptr<CadTin> ToLocalTin(const TinBuildResult& r, double originX, double originY) {
+  if (!r.ok() || r.indices.empty())
+    return nullptr;
+  auto tin = std::make_shared<CadTin>();
+  tin->vertsXyz.resize(r.vertsXyz.size());
+  for (int i = 0; i < r.vertexCount(); ++i) {
+    tin->vertsXyz[static_cast<size_t>(i) * 3 + 0] =
+        static_cast<float>(static_cast<double>(r.vertsXyz[static_cast<size_t>(i) * 3 + 0]) - originX);
+    tin->vertsXyz[static_cast<size_t>(i) * 3 + 1] =
+        static_cast<float>(static_cast<double>(r.vertsXyz[static_cast<size_t>(i) * 3 + 1]) - originY);
+    tin->vertsXyz[static_cast<size_t>(i) * 3 + 2] = r.vertsXyz[static_cast<size_t>(i) * 3 + 2];  // Z absolute
+  }
+  tin->indices = r.indices;
+  return tin;
+}
+
+} // namespace
+
+bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
+  // Synchronous path: explicit user actions (create, the manual Rebuild button) that should show a
+  // result immediately rather than waiting a frame for the async path below to pick them up.
+  const SurfaceBuildInputs in = ResolveSurfaceInputs(st, surface, log);
+  if (in.inputsIncomplete) {
+    // REQ-086: a source that could not be read leaves the surface exactly as it was — no partial
+    // rebuild on what survived. The revision IS advanced so the tick does not reopen a missing file
+    // every frame; `lastBuildIncomplete` is what keeps the surface showing as not-current.
+    surface.builtAtRevision = st.cadGpuRevision;
+    surface.lastBuildIncomplete = true;
+    surface.lastBuildMessage = "Not rebuilt: " + in.incompleteReason + ".";
+    return false;
+  }
+  const TinBuildResult r = RunSurfaceBuild(in);
+  surface.builtAtRevision = st.cadGpuRevision;
+  surface.lastBuildIncomplete = false;
   if (!r.ok()) {
     // No partial surface, and the previous triangulation is left alone (REQ-001).
     surface.lastBuildMessage = r.message;
     log.push_back("Surface \"" + surface.name + "\" not built: " + r.message);
     return false;
   }
-
-  auto tin = std::make_shared<CadTin>();
-  tin->vertsXyz.resize(r.vertsXyz.size());
-  for (int i = 0; i < r.vertexCount(); ++i) {
-    // Back to the local storage frame (the local-storage invariant): world = local + origin.
-    tin->vertsXyz[static_cast<size_t>(i) * 3 + 0] =
-        static_cast<float>(static_cast<double>(r.vertsXyz[static_cast<size_t>(i) * 3 + 0]) - st.worldDocumentOriginX);
-    tin->vertsXyz[static_cast<size_t>(i) * 3 + 1] =
-        static_cast<float>(static_cast<double>(r.vertsXyz[static_cast<size_t>(i) * 3 + 1]) - st.worldDocumentOriginY);
-    tin->vertsXyz[static_cast<size_t>(i) * 3 + 2] = r.vertsXyz[static_cast<size_t>(i) * 3 + 2];  // Z absolute
+  std::shared_ptr<CadTin> tin = ToLocalTin(r, in.originX, in.originY);
+  if (!tin) {
+    surface.lastBuildMessage = "Boundaries left no surface.";
+    log.push_back("Surface \"" + surface.name + "\" not built: boundaries left no surface.");
+    return false;
   }
-  tin->indices = r.indices;
 
   // Replace the pointer, never write through it (architecture §11.5).
   surface.tin = std::move(tin);
@@ -1306,6 +1907,8 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
                     " points, " + std::to_string(surface.triangleCount()) + " triangles.";
   if (!r.message.empty())
     msg += " " + r.message;
+  if (r.constraintsUnresolved > 0)
+    msg += " " + std::to_string(r.constraintsUnresolved) + " constraint edge(s) could not be enforced.";
   log.push_back(msg);
   return true;
 }
@@ -1321,6 +1924,11 @@ int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
     log.push_back("A surface named \"" + name + "\" already exists.");
     return -1;
   }
+  // Bumped before the build (not after, as every other surface-mutating call site here does) so the
+  // freshly built surface's builtAtRevision already matches the revision this creation settles at —
+  // otherwise the very next TickSurfaceRebuilds tick would see it one revision stale and redispatch
+  // a redundant rebuild of a surface that was just built moments ago.
+  BumpCadGpuCache(st);
   CadSurface s;
   s.name = name;
   s.sourcePointGroups = groupNames;
@@ -1329,7 +1937,6 @@ int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
 
   st.cadSurfaces.push_back(std::move(s));
   EnsureAttrCounts(st);  // owns attribute-array growth for every entity type, surfaces included
-  BumpCadGpuCache(st);
   return static_cast<int>(st.cadSurfaces.size()) - 1;
 }
 
@@ -1341,6 +1948,669 @@ void EraseSurfaceAtIndex(AppCommandState& st, size_t index) {
     st.cadSurfaceAttrs.erase(st.cadSurfaceAttrs.begin() + static_cast<std::ptrdiff_t>(index));
   BumpCadGpuCache(st);
 }
+
+void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
+  using SurfaceJob = AppCommandState::SurfaceRebuildAsync;
+
+  // Reap finished workers first, so a surface freed up this frame can be redispatched this same
+  // frame rather than waiting one extra frame.
+  for (size_t i = 0; i < st.surfaceRebuildAsync.size();) {
+    SurfaceJob& job = *st.surfaceRebuildAsync[i];
+    if (!job.done.load(std::memory_order_acquire)) {
+      ++i;
+      continue;
+    }
+    job.thread.join();
+    const int si = FindSurfaceIndexById(st, job.surfaceId);
+    // Applied only if the surface still exists AND nothing has changed since this job was
+    // dispatched (architecture §8 rule 4). Either condition failing means discard: the surface was
+    // erased, or an undo / further edit landed while this ran — REQ-069's "the in-flight result is
+    // discarded." A discarded surface simply looks dirty again next tick and gets redispatched.
+    if (si >= 0 && st.cadGpuRevision == job.generation) {
+      CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+      const TinBuildResult& r = job.result;
+      std::shared_ptr<CadTin> tin = ToLocalTin(r, job.originX, job.originY);
+      if (tin) {
+        surface.tin = std::move(tin);  // replace the pointer, never write through it (§11.5)
+        surface.lastBuildMessage = r.message;
+        std::string msg = "Surface \"" + surface.name + "\": " + std::to_string(surface.vertexCount()) +
+                          " points, " + std::to_string(surface.triangleCount()) + " triangles.";
+        if (!r.message.empty())
+          msg += " " + r.message;
+        if (r.constraintsUnresolved > 0)
+          msg += " " + std::to_string(r.constraintsUnresolved) + " constraint edge(s) could not be enforced.";
+        log.push_back(msg);
+      } else {
+        // No partial surface; the previous triangulation (if any) is left alone (REQ-001).
+        surface.lastBuildMessage = r.ok() ? "Boundaries left no surface." : r.message;
+        log.push_back("Surface \"" + surface.name + "\" not rebuilt: " + surface.lastBuildMessage);
+      }
+      surface.builtAtRevision = job.generation;
+      surface.lastBuildIncomplete = false;  // a result that landed means the inputs were complete
+    }
+    st.surfaceRebuildAsync.erase(st.surfaceRebuildAsync.begin() + static_cast<std::ptrdiff_t>(i));
+  }
+
+  // Dispatch a rebuild for every surface whose definition might have changed and does not already
+  // have one in flight — one dispatch per surface per revision is REQ-069's "at most one rebuild per
+  // command/undo boundary," since a command bumps cadGpuRevision once however many points it moved.
+  for (size_t sIdx = 0; sIdx < st.cadSurfaces.size(); ++sIdx) {
+    CadSurface& surface = st.cadSurfaces[sIdx];
+    if (surface.builtAtRevision == st.cadGpuRevision)
+      continue;
+    // The id is assigned by EnsureEntityIds, which main.cpp runs immediately before this every frame.
+    // A surface created since that sweep has id 0 and is skipped for exactly one frame rather than
+    // dispatched under a key that cannot be looked up again.
+    const std::uint64_t surfaceId =
+        sIdx < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[sIdx].id : 0;
+    if (surfaceId == 0)
+      continue;
+    const bool alreadyRunning =
+        std::any_of(st.surfaceRebuildAsync.begin(), st.surfaceRebuildAsync.end(),
+                   [&](const std::unique_ptr<SurfaceJob>& j) { return j->surfaceId == surfaceId; });
+    if (alreadyRunning)
+      continue;
+
+    // Resolution against AppCommandState happens HERE, on the UI thread — the worker below receives
+    // only the already-resolved, plain-data result and touches no drawing state (architecture §8
+    // rule 1). This is also where dangling breakline/boundary ids actually get dropped from the
+    // definition, so that observably happens the very next frame after the referenced entity is
+    // deleted, not only once the (possibly slower) background triangulation finishes.
+    std::vector<std::string> resolveLog;
+    SurfaceBuildInputs inputs = ResolveSurfaceInputs(st, surface, resolveLog);
+    for (std::string& m : resolveLog)
+      log.push_back(std::move(m));
+
+    if (inputs.inputsIncomplete) {
+      // REQ-086: don't dispatch a worker to triangulate inputs already known to be short. The surface
+      // keeps the triangulation it has. The revision is advanced so this does not re-read a missing
+      // file every frame — `lastBuildIncomplete` carries the not-current state instead, and the retry
+      // comes with the next drawing change or an explicit rebuild. ResolveSurfaceInputs already
+      // logged which file and why.
+      surface.builtAtRevision = st.cadGpuRevision;
+      surface.lastBuildIncomplete = true;
+      surface.lastBuildMessage = "Not rebuilt: " + inputs.incompleteReason + ".";
+      continue;
+    }
+
+    auto job = std::make_unique<SurfaceJob>();
+    job->surfaceId = surfaceId;
+    job->generation = st.cadGpuRevision;
+    job->originX = st.worldDocumentOriginX;
+    job->originY = st.worldDocumentOriginY;
+    SurfaceJob* jobPtr = job.get();
+    jobPtr->thread = std::thread([jobPtr, in = std::move(inputs)]() {
+      if (jobPtr->cancel.load(std::memory_order_acquire)) {
+        jobPtr->done.store(true, std::memory_order_release);
+        return;
+      }
+      jobPtr->result = RunSurfaceBuild(in);
+      jobPtr->done.store(true, std::memory_order_release);
+    });
+    st.surfaceRebuildAsync.push_back(std::move(job));
+  }
+}
+
+namespace {
+
+/// Splits `a, b, c` into trimmed fields.
+///
+/// Commas rather than spaces because surface names and point-group names routinely contain them
+/// ("Existing Ground", "Ground + Curb") — the same problem DESIGNATEBOUNDARY solves by reading its
+/// kind off the END of the line, which does not generalise to a variable-length group list. Empty
+/// fields are kept rather than skipped so the caller can reject them by name instead of silently
+/// building from a shorter list than the user typed.
+std::vector<std::string> SplitCommaFields(const std::string& s) {
+  std::vector<std::string> out;
+  size_t start = 0;
+  for (;;) {
+    const size_t comma = s.find(',', start);
+    const size_t len = (comma == std::string::npos) ? std::string::npos : comma - start;
+    out.push_back(StringUtil::trimCopy(s.substr(start, len)));
+    if (comma == std::string::npos)
+      break;
+    start = comma + 1;
+  }
+  return out;
+}
+
+/// The full definition of every surface, one line each, plus a line per definition item.
+///
+/// This is the only way to observe a surface without a window: a surface has no entity id, so
+/// nothing else in the command layer can report one, and the Surfaces panel is unreachable from the
+/// REQ-203 driver. The per-item indices printed here are exactly what UNDESIGNATE takes.
+void ReportSurfaces(const AppCommandState& st, std::vector<std::string>& log) {
+  if (st.cadSurfaces.empty()) {
+    log.push_back("SURFACELIST — no surfaces in the drawing.");
+    return;
+  }
+  for (const CadSurface& s : st.cadSurfaces) {
+    std::string line = "Surface \"" + s.name + "\": ";
+    line += s.tin ? (std::to_string(s.vertexCount()) + " points, " + std::to_string(s.triangleCount()) +
+                     " triangles")
+                  : std::string("not built");
+    line += ", " + std::to_string(s.breaklines.size()) + " breakline(s), " +
+            std::to_string(s.boundaries.size()) + " boundary(ies), " +
+            std::to_string(s.sourcePointFiles.size()) + " point file(s).";
+    log.push_back(line);
+
+    for (size_t i = 0; i < s.sourcePointGroups.size(); ++i) {
+      const bool exists = FindPointGroupIndex(st, s.sourcePointGroups[i]) >= 0;
+      log.push_back("  group " + std::to_string(i + 1) + ": \"" + s.sourcePointGroups[i] + "\"" +
+                    (exists ? "" : "  (missing)"));
+    }
+    for (size_t i = 0; i < s.sourcePointFiles.size(); ++i) {
+      const CadSurfacePointFile& pf = s.sourcePointFiles[i];
+      const char* lay = pf.layoutIndex == 1 ? "PENZD" : pf.layoutIndex == 2 ? "NEZ" : pf.layoutIndex == 3 ? "ENZ" : "PNEZD";
+      log.push_back("  point file " + std::to_string(i + 1) + ": \"" + pf.path + "\" (" + lay +
+                    (pf.skipFirstRow ? ", header" : "") + ")");
+    }
+    for (size_t i = 0; i < s.breaklines.size(); ++i)
+      log.push_back("  breakline " + std::to_string(i + 1) + ": entity id " +
+                    std::to_string(s.breaklines[i].entityId) +
+                    (s.breaklines[i].description.empty() ? "" : "  \"" + s.breaklines[i].description + "\""));
+    for (size_t i = 0; i < s.boundaries.size(); ++i) {
+      const CadSurfaceBoundary& b = s.boundaries[i];
+      const char* kindName = b.kind == CadBoundaryKind::Outer ? "outer"
+                            : b.kind == CadBoundaryKind::Hide  ? "hide"
+                                                               : "show";
+      log.push_back("  boundary " + std::to_string(i + 1) + ": " + kindName + ", entity id " +
+                    std::to_string(b.entityId) + (b.name.empty() ? "" : "  \"" + b.name + "\""));
+    }
+    if (!s.lastBuildMessage.empty())
+      log.push_back("  last build: " + s.lastBuildMessage);
+  }
+}
+
+/// `SURFACECREATE <name>, <group>[, <group>…]` — the command-line twin of the Surfaces panel's
+/// "New from group…". Every named group must resolve: a typo that silently contributed no points
+/// would produce a surface built from less than the user asked for, with nothing on screen saying so.
+void RunSurfaceCreate(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() < 2 || f[0].empty()) {
+    log.push_back("SURFACECREATE — usage: SURFACECREATE <name>, <point group>[, <point group>…].");
+    return;
+  }
+  std::vector<std::string> groups;
+  for (size_t i = 1; i < f.size(); ++i) {
+    if (f[i].empty()) {
+      log.push_back("SURFACECREATE — empty point group name in the list.");
+      return;
+    }
+    if (FindPointGroupIndex(st, f[i]) < 0) {
+      log.push_back("SURFACECREATE — no point group named \"" + f[i] + "\".");
+      return;
+    }
+    groups.push_back(f[i]);
+  }
+  PushUndoSnapshot(st, "Create surface");
+  CreateSurfaceFromPointGroups(st, f[0], groups, log);  // reports its own failure (REQ-201)
+}
+
+/// `SURFACERENAME <old>, <new>` — same duplicate-name refusal as the panel (REQ-075).
+void RunSurfaceRename(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+    log.push_back("SURFACERENAME — usage: SURFACERENAME <old name>, <new name>.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFACERENAME — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  const int clash = FindSurfaceIndex(st, f[1]);
+  if (clash >= 0 && clash != si) {
+    log.push_back("SURFACERENAME — a surface named \"" + f[1] + "\" already exists — rename refused.");
+    return;
+  }
+  PushUndoSnapshot(st, "Rename surface");
+  log.push_back("Renamed surface \"" + st.cadSurfaces[static_cast<size_t>(si)].name + "\" to \"" + f[1] + "\".");
+  st.cadSurfaces[static_cast<size_t>(si)].name = f[1];
+  BumpCadGpuCache(st);
+}
+
+/// `SURFACEDELETE <name>` — undoable in one step (REQ-068), like the panel's Delete.
+void RunSurfaceDelete(AppCommandState& st, const std::string& name, std::vector<std::string>& log) {
+  if (name.empty()) {
+    log.push_back("SURFACEDELETE — usage: SURFACEDELETE <surface name>.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, name);
+  if (si < 0) {
+    log.push_back("SURFACEDELETE — no surface named \"" + name + "\".");
+    return;
+  }
+  PushUndoSnapshot(st, "Delete surface");
+  log.push_back("Deleted surface \"" + st.cadSurfaces[static_cast<size_t>(si)].name + "\".");
+  EraseSurfaceAtIndex(st, static_cast<size_t>(si));
+}
+
+/// `SURFACEREBUILD [<name>]` — rebuilds one surface, or every surface when the name is omitted.
+/// Synchronous (\ref BuildSurfaceFromSources), so the result is in the log by the time the command
+/// returns — which is what lets a REQ-203 transcript assert on it without pumping a frame loop.
+void RunSurfaceRebuild(AppCommandState& st, const std::string& name, std::vector<std::string>& log) {
+  if (st.cadSurfaces.empty()) {
+    log.push_back("SURFACEREBUILD — no surfaces in the drawing.");
+    return;
+  }
+  if (name.empty()) {
+    PushUndoSnapshot(st, "Rebuild surfaces");
+    for (CadSurface& s : st.cadSurfaces)
+      BuildSurfaceFromSources(st, s, log);
+    BumpCadGpuCache(st);
+    return;
+  }
+  const int si = FindSurfaceIndex(st, name);
+  if (si < 0) {
+    log.push_back("SURFACEREBUILD — no surface named \"" + name + "\".");
+    return;
+  }
+  PushUndoSnapshot(st, "Rebuild surface");
+  BuildSurfaceFromSources(st, st.cadSurfaces[static_cast<size_t>(si)], log);
+  BumpCadGpuCache(st);
+}
+
+/// `SURFACEADDFILE <surface>, <path>[, <layout>[, HEADER]]` — links a point file into a surface's
+/// definition (REQ-086). The file is NOT imported: its points feed the triangulation and never become
+/// drawing survey points. `<layout>` is one of PNEZD / PENZD / NEZ / ENZ, defaulting to the first;
+/// `HEADER` says the file's first row is a header.
+///
+/// The file is read once here purely to refuse a path that cannot be read at all — linking something
+/// unreadable and only discovering it at the next rebuild would put the error a long way from the
+/// action that caused it (REQ-201).
+void RunSurfaceAddFile(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() < 2 || f[0].empty() || f[1].empty()) {
+    log.push_back("SURFACEADDFILE — usage: SURFACEADDFILE <surface>, <path>[, <PNEZD|PENZD|NEZ|ENZ>[, HEADER]].");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFACEADDFILE — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  CadSurfacePointFile pf;
+  pf.path = f[1];
+  if (f.size() >= 3 && !f[2].empty()) {
+    const std::string lay = StringUtil::toLowerAsciiCopy(f[2]);
+    if (lay == "pnezd")      pf.layoutIndex = 0;
+    else if (lay == "penzd") pf.layoutIndex = 1;
+    else if (lay == "nez")   pf.layoutIndex = 2;
+    else if (lay == "enz")   pf.layoutIndex = 3;
+    else {
+      log.push_back("SURFACEADDFILE — layout must be PNEZD, PENZD, NEZ or ENZ.");
+      return;
+    }
+  }
+  for (size_t i = 3; i < f.size(); ++i)
+    if (StringUtil::toLowerAsciiCopy(f[i]) == "header")
+      pf.skipFirstRow = true;
+
+  std::vector<SurveyFilePoint> probe;
+  int skipped = 0;
+  std::string err;
+  if (!SurveyCsvReadPointsOnly(pf.path.c_str(), SurveyCsvLayoutFromUiIndex(pf.layoutIndex), pf.skipFirstRow,
+                               &probe, &skipped, &err)) {
+    log.push_back("SURFACEADDFILE — cannot read \"" + pf.path + "\": " + err + ". Not linked.");
+    return;
+  }
+
+  PushUndoSnapshot(st, "Link point file to surface");
+  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  log.push_back("SURFACEADDFILE — linked \"" + pf.path + "\" to \"" + s.name + "\" (" +
+                std::to_string(probe.size()) + " point(s)" +
+                (skipped > 0 ? ", " + std::to_string(skipped) + " row(s) unreadable" : "") + ").");
+  s.sourcePointFiles.push_back(std::move(pf));
+  BumpCadGpuCache(st);
+}
+
+/// `SURFACEIMPORTFILE <surface>, <n>` — REQ-086's "break the link": reads the linked file once
+/// through the REQ-083 import path, so its points become real survey points in the drawing and a
+/// point group the surface references, then drops the link. The surface must still build identically
+/// afterwards, which is the acceptance condition this exists to satisfy.
+void RunSurfaceImportFile(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() != 2 || f[0].empty()) {
+    log.push_back("SURFACEIMPORTFILE — usage: SURFACEIMPORTFILE <surface>, <number> (SURFACELIST numbers them).");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFACEIMPORTFILE — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  char* numEnd = nullptr;
+  const long parsed = std::strtol(f[1].c_str(), &numEnd, 10);
+  const bool numOk = !f[1].empty() && numEnd && *numEnd == '\0';
+  const int n = numOk ? static_cast<int>(parsed) : 0;
+  if (n < 1 || static_cast<size_t>(n) > s.sourcePointFiles.size()) {
+    log.push_back("SURFACEIMPORTFILE — \"" + s.name + "\" has " + std::to_string(s.sourcePointFiles.size()) +
+                  " point file(s); " + f[1] + " is out of range.");
+    return;
+  }
+
+  const CadSurfacePointFile pf = s.sourcePointFiles[static_cast<size_t>(n - 1)];
+  PushUndoSnapshot(st, "Import surface point file");
+
+  // Drive the REQ-083 importer through its own state, so a file imported this way and a file imported
+  // from the Import Points panel go down exactly one code path.
+  const int savedLayout = st.surveyImportCsvLayoutIdx;
+  const bool savedSkip = st.surveyImportCsvSkipFirstRow;
+  std::string savedPath = st.surveyImportCsvPath;
+  std::snprintf(st.surveyImportCsvPath, sizeof(st.surveyImportCsvPath), "%s", pf.path.c_str());
+  st.surveyImportCsvLayoutIdx = pf.layoutIndex;
+  st.surveyImportCsvSkipFirstRow = pf.skipFirstRow;
+  const size_t before = st.surveyPoints.size();
+  const bool ok = SurveyCsvImportFile(st, log);
+  std::snprintf(st.surveyImportCsvPath, sizeof(st.surveyImportCsvPath), "%s", savedPath.c_str());
+  st.surveyImportCsvLayoutIdx = savedLayout;
+  st.surveyImportCsvSkipFirstRow = savedSkip;
+
+  if (!ok) {
+    log.push_back("SURFACEIMPORTFILE — import failed; the link is left in place.");
+    return;
+  }
+  const size_t added = st.surveyPoints.size() - before;
+  if (added == 0) {
+    // The importer skips rows whose point id already exists (REQ-083's rule), so a file whose ids
+    // collide with the drawing imports nothing. Breaking the link here would silently delete the
+    // file's contribution from the surface — the link is the only thing still supplying those
+    // points. Keep it, and say why.
+    log.push_back("SURFACEIMPORTFILE — no points were imported (see the lines above; duplicate point "
+                  "ids are skipped). The link to \"" + pf.path + "\" is left in place.");
+    return;
+  }
+
+  // A group covering exactly the points just imported, so the surface keeps the same points by the
+  // same rule every other source uses (REQ-067) rather than by a second mechanism.
+  PointGroup g;
+  g.name = "Imported: " + std::filesystem::path(pf.path).filename().string();
+  for (int i = 1; i < 10000 && FindPointGroupIndex(st, g.name) >= 0; ++i)
+    g.name = "Imported: " + std::filesystem::path(pf.path).filename().string() + " (" + std::to_string(i + 1) + ")";
+  // Explicit ids, not a description rule: the group must mean "exactly the points this file brought
+  // in", and a description wildcard would silently pick up unrelated shots that happen to match.
+  for (size_t i = before; i < st.surveyPoints.size(); ++i)
+    g.rule.explicitIds.push_back(st.surveyPoints[i].id);
+  st.pointGroups.push_back(g);
+
+  s.sourcePointGroups.push_back(g.name);
+  s.sourcePointFiles.erase(s.sourcePointFiles.begin() + (n - 1));
+  log.push_back("SURFACEIMPORTFILE — imported " + std::to_string(added) + " point(s) from \"" + pf.path +
+                "\" into point group \"" + g.name + "\"; the link is broken.");
+  BumpCadGpuCache(st);
+}
+
+// SURFSTYLE (REQ-070) — the command form of the Surface Style editor.
+//
+// It exists alongside the dialog rather than instead of it for two reasons. A dialog cannot be
+// driven by a headless transcript, and REQ-070's acceptance conditions are end-to-end claims —
+// "changing the contour interval updates the display without rebuilding the triangulation", "two
+// surfaces sharing a style both change" — that no unit test can reach, because they are about what
+// the command state machine does to the document. The dialog calls the same helpers.
+//
+// **Comma-separated arguments**, like every other surface command: style names and surface names
+// routinely contain spaces ("Existing Ground", "Contours 1 ft"), so splitting on whitespace would
+// make half the names in a real drawing unaddressable. Same reason SURFACECREATE does it.
+//
+// Every edit goes through PushUndoSnapshot, so a style change is a single undo step. The ADR-020
+// document-owned-table pattern makes that free: the table is already in the geometry snapshot.
+
+/// The component \p word names, or nullptr with \p why set — REQ-201, so a typo says what it would
+/// have accepted rather than "invalid".
+SurfaceComponentStyle* SurfaceComponentByName(SurfaceStyle& s, const std::string& word,
+                                              std::string* why) {
+  const std::string w = StringUtil::toLowerAsciiCopy(word);
+  if (w == "triangles" || w == "triangle") return &s.triangles;
+  if (w == "border") return &s.border;
+  if (w == "major" || w == "majorcontour") return &s.majorContour;
+  if (w == "minor" || w == "minorcontour") return &s.minorContour;
+  if (w == "points" || w == "point") return &s.points;
+  if (why)
+    *why = "Unknown component \"" + word + "\" — expected triangles, border, major, minor or points.";
+  return nullptr;
+}
+
+/// Parse one interval field. A separate function so the message names the FIELD, not just the value:
+/// "the minor interval" is what the user has to go and fix.
+bool ParseIntervalField(const std::string& text, const char* which, double* out,
+                        std::vector<std::string>& log) {
+  try {
+    size_t used = 0;
+    const double v = std::stod(text, &used);
+    if (used == StringUtil::trimCopy(text).size()) {
+      *out = v;
+      return true;
+    }
+  } catch (...) {
+    // Not a number — reported below rather than silently treated as zero.
+  }
+  log.push_back(std::string("SURFSTYLE — the ") + which + " interval must be a number, not \"" +
+                text + "\".");
+  return false;
+}
+
+void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
+                             std::vector<std::string>& log) {
+  SurfaceStyles::EnsureStandard(st.surfaceStyles);
+
+  std::string rest;
+  const std::string verb = StringUtil::toLowerAsciiCopy(
+      StringUtil::trimCopy(args.substr(0, args.find_first_of(" \t,"))));
+  {
+    const size_t sp = args.find_first_of(" \t");
+    rest = sp == std::string::npos ? std::string() : StringUtil::trimCopy(args.substr(sp + 1));
+  }
+
+  if (verb.empty()) {
+    st.showSurfaceStyleWindow = true;
+    log.push_back("SURFSTYLE — surface style editor opened.");
+    return;
+  }
+
+  const auto usage = [&]() {
+    log.push_back("SURFSTYLE — usage: SURFSTYLE (opens the editor) | NEW <style> | DELETE <style> | "
+                  "INTERVAL <style>, <minor>, <major> | SHOW|HIDE <style>, "
+                  "<triangles|border|major|minor|points> | ASSIGN <surface>, <style>");
+  };
+
+  if (verb == "new") {
+    const std::string name = StringUtil::trimCopy(rest);
+    if (name.empty()) {
+      usage();
+      return;
+    }
+    if (SurfaceStyles::Find(st.surfaceStyles, name)) {
+      log.push_back("SURFSTYLE — a style named \"" + name + "\" already exists.");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface style");
+    // Copied from Standard rather than value-initialised: a new style that drew nothing would look
+    // like the create had failed.
+    SurfaceStyle s = SurfaceStyles::StandardSurfaceStyle();
+    s.name = name;
+    st.surfaceStyles.push_back(std::move(s));
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — created style \"" + name + "\" (copied from Standard).");
+    return;
+  }
+
+  if (verb == "delete") {
+    const std::string name = StringUtil::trimCopy(rest);
+    if (name.empty()) {
+      usage();
+      return;
+    }
+    if (name == SurfaceStyles::kStandardName) {
+      log.push_back("SURFSTYLE — \"Standard\" cannot be deleted; it is what every unresolved style "
+                    "name falls back to.");
+      return;
+    }
+    const auto it = std::find_if(st.surfaceStyles.begin(), st.surfaceStyles.end(),
+                                 [&](const SurfaceStyle& s) { return s.name == name; });
+    if (it == st.surfaceStyles.end()) {
+      log.push_back("SURFSTYLE — no style named \"" + name + "\".");
+      return;
+    }
+    // Deleting a style that surfaces are using is ALLOWED, unlike a text style. REQ-070 makes the
+    // fallback an acceptance condition — "a surface whose style was deleted falls back to a default
+    // style rather than failing to draw" — so refusing the delete would leave that path unreachable
+    // and untested. The surfaces keep their styleName, so re-creating a style with that name adopts
+    // them back rather than leaving the reference silently rewritten.
+    int usedBy = 0;
+    for (const CadSurface& s : st.cadSurfaces)
+      if (s.styleName == name)
+        ++usedBy;
+    PushUndoSnapshot(st, "Surface style");
+    st.surfaceStyles.erase(it);
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — deleted style \"" + name + "\"." +
+                  (usedBy > 0 ? " " + std::to_string(usedBy) +
+                                    " surface(s) using it now draw with \"Standard\"."
+                              : std::string()));
+    return;
+  }
+
+  if (verb == "interval") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 3 || f[0].empty()) {
+      usage();
+      return;
+    }
+    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    if (!s) {
+      log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
+      return;
+    }
+    double minor = 0.0, major = 0.0;
+    if (!ParseIntervalField(f[1], "minor", &minor, log) ||
+        !ParseIntervalField(f[2], "major", &major, log))
+      return;
+    // REQ-070: rejected with a SPECIFIC message, and rejected BEFORE the value is stored, so the
+    // invalid pair never exists to generate mis-labelled contours from.
+    std::string why;
+    if (!SurfaceStyles::IntervalsCompatible(minor, major, &why)) {
+      log.push_back("SURFSTYLE — " + why);
+      return;
+    }
+    PushUndoSnapshot(st, "Surface style");
+    s->minorIntervalFt = minor;
+    s->majorIntervalFt = major;
+    // Bumps the drawing revision because the DISPLAY changed, which is what marks the tab dirty. It
+    // does not mark any surface for rebuild: a surface's staleness is its triangulation pointer and
+    // its resolved style, never this counter (ADR-036 (e)) — which is exactly why an interval change
+    // cannot retriangulate.
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — \"" + s->name + "\" contours: minor " + SurfaceStyles::FormatFt(minor) +
+                  " ft, major " + SurfaceStyles::FormatFt(major) + " ft.");
+    return;
+  }
+
+  if (verb == "show" || verb == "hide") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+      usage();
+      return;
+    }
+    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    if (!s) {
+      log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
+      return;
+    }
+    std::string why;
+    SurfaceComponentStyle* comp = SurfaceComponentByName(*s, f[1], &why);
+    if (!comp) {
+      log.push_back("SURFSTYLE — " + why);
+      return;
+    }
+    PushUndoSnapshot(st, "Surface style");
+    comp->visible = (verb == "show");
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — \"" + s->name + "\" " + f[1] + " " +
+                  (comp->visible ? "shown." : "hidden."));
+    return;
+  }
+
+  if (verb == "assign") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+      usage();
+      return;
+    }
+    const int si = FindSurfaceIndex(st, f[0]);
+    if (si < 0) {
+      log.push_back("SURFSTYLE — no surface named \"" + f[0] + "\".");
+      return;
+    }
+    if (!SurfaceStyles::Find(st.surfaceStyles, f[1])) {
+      log.push_back("SURFSTYLE — no style named \"" + f[1] + "\".");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface style");
+    st.cadSurfaces[static_cast<size_t>(si)].styleName = f[1];
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — surface \"" + st.cadSurfaces[static_cast<size_t>(si)].name +
+                  "\" now uses style \"" + f[1] + "\".");
+    return;
+  }
+
+  usage();
+}
+
+
+/// `UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY|POINTFILE>, <n>` — removes one item from a surface's
+/// definition (REQ-069's "remove", the counterpart to DESIGNATEBREAKLINE/DESIGNATEBOUNDARY). \p n is
+/// 1-based and matches the numbering SURFACELIST prints. Deleting the referenced entity also removes
+/// the item, but only that entity's other uses go with it — this removes the item alone.
+void RunUndesignate(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() != 3 || f[0].empty()) {
+    log.push_back("UNDESIGNATE — usage: UNDESIGNATE <surface name>, <BREAKLINE|BOUNDARY>, <number>.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("UNDESIGNATE — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  const std::string what = StringUtil::toLowerAsciiCopy(f[1]);
+  const bool isBoundary = (what == "boundary");
+  const bool isPointFile = (what == "pointfile");
+  if (!isBoundary && !isPointFile && what != "breakline") {
+    log.push_back("UNDESIGNATE — second argument must be BREAKLINE, BOUNDARY or POINTFILE.");
+    return;
+  }
+  // strtol rather than stoi: a non-numeric argument is a user typo, not an exceptional condition,
+  // and this translation unit is compiled without exception unwinding (C4530).
+  char* numEnd = nullptr;
+  const long parsed = std::strtol(f[2].c_str(), &numEnd, 10);
+  const bool numOk = !f[2].empty() && numEnd && *numEnd == '\0';
+  const int n = numOk ? static_cast<int>(parsed) : 0;  // 0 fails the range check below
+
+  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  const size_t count = isBoundary     ? s.boundaries.size()
+                       : isPointFile  ? s.sourcePointFiles.size()
+                                      : s.breaklines.size();
+  if (n < 1 || static_cast<size_t>(n) > count) {
+    log.push_back("UNDESIGNATE — \"" + s.name + "\" has " + std::to_string(count) + " " + what +
+                  "(s); " + f[2] + " is out of range (SURFACELIST numbers them).");
+    return;
+  }
+  PushUndoSnapshot(st, isBoundary    ? "Remove surface boundary"
+                       : isPointFile ? "Unlink surface point file"
+                                     : "Remove surface breakline");
+  if (isBoundary)
+    s.boundaries.erase(s.boundaries.begin() + (n - 1));
+  else if (isPointFile)
+    s.sourcePointFiles.erase(s.sourcePointFiles.begin() + (n - 1));
+  else
+    s.breaklines.erase(s.breaklines.begin() + (n - 1));
+  log.push_back("UNDESIGNATE — removed " + what + " " + std::to_string(n) + " from \"" + s.name + "\".");
+  BumpCadGpuCache(st);  // TickSurfaceRebuilds picks the change up; SURFACEREBUILD forces it now
+}
+
+} // namespace
 
 void EnsureEntityIds(AppCommandState& st) {
   // Geometry has not changed since the last sweep, so nothing can be missing an id. This is what
@@ -1524,6 +2794,7 @@ static float CadDimAngularPickRadius(float vx, float vy, float bisx, float bisy,
 } // namespace
 
 float CadOffsetEntityPickTolWorld(const AppCommandState& st);
+void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary, std::vector<std::string>& log);
 
 float RotateDeltaFromReferenceAndNewSegment(float refX1, float refY1, float refX2, float refY2,
                                              float newX1, float newY1, float newX2, float newY2) {
@@ -2050,6 +3321,10 @@ int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float or
     return dx * dx + dy * dy;
   };
   for (int i = static_cast<int>(cmd.cadAnnotations.size()) - 1; i >= 0; --i) {
+    // REQ-084 (d): isolated-out text is not drawn, so it must not be pickable or hoverable.
+    if (!cmd.hiddenEntityIds.empty() && static_cast<size_t>(i) < cmd.cadAnnotationAttrs.size() &&
+        CadEntityIdHidden(&cmd.hiddenEntityIds, cmd.cadAnnotationAttrs[static_cast<size_t>(i)].id))
+      continue;
     const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(i)];
     if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
       float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
@@ -2225,6 +3500,9 @@ const CmdEntry kRegistry[] = {
     {"line", "l", "Draw line segments"},
     {"circle", "c", "Draw a circle"},
     {"polyline", "pl", "Draw a connected polyline"},
+    {"3dpoly", "3dp, 3dpolyline", "Draw a polyline whose vertices each carry their own elevation"},
+    {"featureline", "fl", "Draw a feature line: named 3D linework with per-vertex elevations (REQ-087)"},
+    {"featurelinelist", "fllist", "List every feature line and its vertices"},
     {"rect", "rectang, rectangle", "Draw a rectangle (two opposite corners)"},
     {"trimstate", "", "TRIM mode: 0 = draw a line to trim (default), 1 = pick cutting edges"},
     {"bench", "",
@@ -2243,6 +3521,18 @@ const CmdEntry kRegistry[] = {
     {"id", "", "Identify point coordinates"},
     {"inverse", "inv", "Inverse between two points"},
     {"surfelev", "se", "Surface elevation at a point; grade between two"},
+    {"designatebreakline", "dbl", "Add a picked line/polyline as a surface breakline"},
+    {"designateboundary", "dbd", "Add a picked closed polyline as a surface boundary (outer/hide/show)"},
+    {"surfacecreate", "sfcreate", "Create a surface from point groups: SURFACECREATE <name>, <group>[, <group>…]"},
+    {"surfacerename", "sfrename", "Rename a surface: SURFACERENAME <old>, <new>"},
+    {"surfacedelete", "sfdelete", "Delete a surface: SURFACEDELETE <name>"},
+    {"surfacerebuild", "sfrebuild", "Rebuild a surface now (all surfaces if no name): SURFACEREBUILD [<name>]"},
+    {"surfacelist", "sflist", "List every surface and its full definition"},
+    {"undesignate", "undes", "Remove one definition item: UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY|POINTFILE>, <n>"},
+    {"surfaceaddfile", "sfaddfile", "Link a point file into a surface: SURFACEADDFILE <surface>, <path>[, <layout>[, HEADER]]"},
+    {"surfaceimportfile", "sfimportfile", "Import a linked point file into the drawing and break the link"},
+    {"flelev", "", "Feature line elevations: FLELEV <n> [SET|GRADEAHEAD|GRADEBACK|RAISE|INSERT|DELETE …]"},
+    {"flelevedit", "", "Open the feature line elevation editor: FLELEVEDIT [<n>]"},
     {"plotscale", "pscale", "Set the plot scale"},
     {"move", "m", "Move objects"},
     {"copy", "cp", "Copy objects"},
@@ -2255,6 +3545,10 @@ const CmdEntry kRegistry[] = {
     {"zoomextents", "ze", "Zoom to drawing extents"},
     {"zoomwindow", "zw", "Zoom to a window"},
     {"pan", "p", "Pan the view (drag with the left mouse button)"},
+    {"orbit", "3dorbit, 3do", "Free orbit the model view (drag with the left mouse button)"},
+    {"isolateobjects", "isolate", "Hide everything except the selection"},
+    {"hideobjects", "", "Hide the selected objects"},
+    {"unisolateobjects", "unisolate", "Show every object hidden by isolation"},
     {"vpfreeze", "vpf", "Freeze the picked entities' layers in the current viewport"},
     {"vpthaw", "vpt", "Thaw the picked entities' layers in the current viewport"},
     {"createpoints", "crtpts", "Create survey points"},
@@ -2266,6 +3560,7 @@ const CmdEntry kRegistry[] = {
     {"regen", "re", "Regenerate the drawing"},
     {"layer", "la", "Open the Layer manager"},
     {"style", "st, ddstyle", "Text style manager: create / edit named text styles"},
+    {"surfstyle", "ss", "Surface style editor: contours, triangles, border (REQ-070)"},
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"pdfattach", "pa", "Attach a PDF underlay"},
     {"overkill",     "ok", "Remove duplicate geometry"},
@@ -2384,6 +3679,23 @@ void ResetPolylineDraft(AppCommandState& st) {
   st.polyFirstX = st.polyFirstY = 0.f;
   st.polyDraftSegments = 0;
   st.polylineDraftVerts.clear();
+  st.polylineDraft3d = false;  // REQ-085: the next POLYLINE is 2D unless 3DPOLY says otherwise
+  st.polylineTypedZValid = false;
+  st.polylineTypedZRelative = false;
+  st.polylineTypedZ = 0.f;
+}
+
+/// REQ-087 / TASK-082. The feature-line draft had no reset function at all: StartFeatureLineCommand
+/// cleared it by hand and ResetAllCadDraftTools did not touch it, so cancelling FEATURELINE left the
+/// draft vertices behind — harmless only because nothing read them, which BUG-2's preview changes.
+void ResetFeatureLineDraft(AppCommandState& st) {
+  st.featureLineDraftVerts.clear();
+  st.featureLineDraftElevPt.clear();
+  st.featureLineDraftName.clear();
+  st.featureLinePendingPoint = false;
+  st.featureLinePendingX = st.featureLinePendingY = 0.f;
+  st.featureLinePendingDefaultZ = 0.f;
+  st.featureLineNextIsElevPoint = false;
 }
 
 void ResetArcDraft(AppCommandState& st) {
@@ -2436,6 +3748,7 @@ static void ResetSurveyInverseDraft(AppCommandState& st) {
 static void ResetAllCadDraftTools(AppCommandState& st) {
   ResetCircleDraft(st);
   ResetPolylineDraft(st);
+  ResetFeatureLineDraft(st);  // REQ-087: was missing, so a cancelled FEATURELINE kept its draft
   ResetArcDraft(st);
   ResetEllipseDraft(st);
   ResetRectDraft(st);
@@ -2570,6 +3883,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
     StartPolylineCommand(st, log);
     return true;
   }
+  if (primary == "3dpoly") {
+    StartPolyline3dCommand(st, log);  // REQ-085
+    return true;
+  }
   if (primary == "rect") {
     StartRectCommand(st, log);
     return true;
@@ -2616,6 +3933,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "inverse") {
     StartSurveyInverseCommand(st, log);
+    return true;
+  }
+  if (primary == "surfstyle") {
+    ExecuteSurfStyleCommand(st, std::string(), log);
     return true;
   }
   if (primary == "surfelev") {
@@ -2695,6 +4016,24 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "pan") {
     StartPanCommand(st, log);
+    return true;
+  }
+  // REQ-084 (c): the shortcut menu's view + isolation entries are real commands, so they are also
+  // typeable. AutoCAD's aliases are kept so muscle memory carries over.
+  if (primary == "orbit" || primary == "3dorbit" || primary == "3do") {
+    StartOrbitCommand(st, log);
+    return true;
+  }
+  if (primary == "isolateobjects" || primary == "isolate") {
+    IsolateSelectedObjects(st, log);
+    return true;
+  }
+  if (primary == "hideobjects") {
+    HideSelectedObjects(st, log);
+    return true;
+  }
+  if (primary == "unisolateobjects" || primary == "unisolate") {
+    EndObjectIsolation(st, log);
     return true;
   }
   if (primary == "vpfreeze") {
@@ -2921,17 +4260,20 @@ void EllipseRoughBounds(const CadEllipse& e, float* outMnX, float* outMxX, float
 ///        (world XY tested against a world rect). When the camera is orbited the caller supplies a
 ///        projection so vertices are tested in SCREEN space, where the drag rectangle actually is
 ///        (REQ-058). Per-vertex projection keeps the polyline test exact rather than conservative.
-bool PolylineHitsRect(const AppCommandState& st, int pi, float mnX, float mxX, float mnY, float mxY, bool windowMode,
-                      const std::function<void(float, float, float, float*, float*)>* toTest) {
-  if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+/// Takes the three arrays explicitly so FEATURE LINES box-select through the identical test
+/// (REQ-087): same CSR shape, so a separate copy could only drift.
+bool ChainHitsRect(const std::vector<int>& OFF, const std::vector<float>& V,
+                   const std::vector<uint8_t>& CLOSED, int pi, float mnX, float mxX, float mnY,
+                   float mxY, bool windowMode,
+                   const std::function<void(float, float, float, float*, float*)>* toTest) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= OFF.size())
     return false;
-  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
-  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const int v0 = OFF[static_cast<size_t>(pi)];
+  const int v1 = OFF[static_cast<size_t>(pi + 1)];
   if (v0 >= v1)
     return false;
-  const auto& V = st.userPolylineVerts;
   const bool closed =
-      static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+      static_cast<size_t>(pi) < CLOSED.size() && CLOSED[static_cast<size_t>(pi)];
   const int nVert = v1 - v0;
   // Vertex in test space: identity in plan view, projected when the caller supplies a mapping.
   auto vert = [&](int vi, float* ox, float* oy) {
@@ -3146,10 +4488,63 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
   const int nPoly =
       static_cast<int>(st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0);
   for (int pi = 0; pi < nPoly; ++pi) {
-    if (PolylineHitsRect(st, pi, mnX, mxX, mnY, mxY, windowMode, proj ? &projFn : nullptr)) {
+    if (ChainHitsRect(st.userPolylineOffsets, st.userPolylineVerts, st.userPolylineClosed, pi, mnX, mxX,
+                      mnY, mxY, windowMode, proj ? &projFn : nullptr)) {
       SelectedEntity e{};
       e.type = SelectedEntity::Type::Polyline;
       e.index = pi;
+      hits.push_back(e);
+    }
+  }
+  // Feature lines (REQ-087) — the same test, through the same `hits` list, so a box drag treats them
+  // exactly as it treats polylines. ADR-034 names this and PickClosestCadEntity as the two selection
+  // funnels; both now know about feature lines.
+  {
+    const int nFl =
+        static_cast<int>(st.featureLineOffsets.size() > 0 ? st.featureLineOffsets.size() - 1 : 0);
+    for (int fi = 0; fi < nFl; ++fi) {
+      if (ChainHitsRect(st.featureLineOffsets, st.featureLineVerts, st.featureLineClosed, fi, mnX, mxX,
+                        mnY, mxY, windowMode, proj ? &projFn : nullptr)) {
+        SelectedEntity e{};
+        e.type = SelectedEntity::Type::FeatureLine;
+        e.index = fi;
+        hits.push_back(e);
+      }
+    }
+  }
+  // TIN surfaces (REQ-068 / ADR-036 (b)) — hit-tested by their bounding box, matching filled regions
+  // and meshes rather than the per-segment chain test above. A surface is selected as a whole, so
+  // there is nothing a per-triangle test would decide differently: window mode requires the whole
+  // surface inside the rect and crossing requires it to overlap, and both answers come from the
+  // bounds. Walking 200k triangles to reach the same conclusion would only cost the frame.
+  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+    if (!SurfaceVisible(st, si))
+      continue;
+    const CadTin& t = *st.cadSurfaces[si].tin;
+    float smnX = 0.f, smxX = 0.f, smnY = 0.f, smxY = 0.f;
+    bool first = true;
+    for (size_t v = 0; v + 2 < t.vertsXyz.size(); v += 3) {
+      const float vx = t.vertsXyz[v], vy = t.vertsXyz[v + 1];
+      if (first) {
+        smnX = smxX = vx;
+        smnY = smxY = vy;
+        first = false;
+      } else {
+        smnX = std::min(smnX, vx);
+        smxX = std::max(smxX, vx);
+        smnY = std::min(smnY, vy);
+        smxY = std::max(smxY, vy);
+      }
+    }
+    if (first)
+      continue;
+    SPBox(smnX, smnY, smxX, smxY, &smnX, &smnY, &smxX, &smxY);  // screen space when orbited
+    const bool hit = windowMode ? (smnX >= mnX && smxX <= mxX && smnY >= mnY && smxY <= mxY)
+                                : !(smxX < mnX || smnX > mxX || smxY < mnY || smnY > mxY);
+    if (hit) {
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::Surface;
+      e.index = static_cast<int>(si);
       hits.push_back(e);
     }
   }
@@ -3238,6 +4633,15 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
       e.index = pi;
       hits.push_back(e);
     }
+  }
+
+  // REQ-084 (d): drop isolated-out entities before the hits are applied, so a box drag across
+  // where they used to be selects nothing. One filter here covers window and crossing, add and
+  // subtract alike.
+  if (!st.hiddenEntityIds.empty()) {
+    hits.erase(std::remove_if(hits.begin(), hits.end(),
+                              [&](const SelectedEntity& e) { return CadSelectedEntityHidden(st, e); }),
+               hits.end());
   }
 
   if (subtract) {
@@ -3363,8 +4767,104 @@ static void ApplyRotationToSelectedSurveyPoints(AppCommandState& st, float bx, f
   }
 }
 
+/// A duplicate is a NEW entity, so it takes the source's layer, colour and linetype but NOT its id.
+/// Zero is the "unassigned" marker `MakeNewEntityAttrs` already uses; `EnsureEntityIds` sweeps on the
+/// next `BumpCadGpuCache` and hands out a fresh one. Copying the id across instead — which both
+/// duplicate paths did until 2026-08-20 — leaves two entities claiming one identity, and every
+/// id-keyed lookup then resolves to whichever the sweep reaches first. A surface tracking a
+/// breakline by id (REQ-069) would silently follow the wrong line. REQ-076; TASK-079 BUG-1.
+static EntityAttributes DuplicatedEntityAttrs(EntityAttributes a) {
+  a.id = 0;
+  return a;
+}
+
+/// Visit each selected feature line once as (index, firstVertex, lastVertexExclusive).
+///
+/// The ranges are COLLECTED FIRST and visited afterwards, which is not incidental: two of the five
+/// callers append to `featureLineOffsets` while they work, and walking the offsets table as it grows
+/// would read from a reallocated buffer. Selections are small, so the copy costs nothing.
+///
+/// Five callers — translate, rotate, scale, and the two duplicate paths — plus the centroid and
+/// extent helpers. That is the point of it: ADR-035 (g) names a missed case as this entity's whole
+/// risk, and seven hand-copied CSR walks would be seven chances to miss one. REQ-087.
+template <class Fn>
+static void ForEachSelectedFeatureLine(const AppCommandState& st, Fn&& fn) {
+  std::vector<std::array<int, 3>> ranges;
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::FeatureLine)
+      continue;
+    const int fi = e.index;
+    if (fi < 0 || static_cast<size_t>(fi + 1) >= st.featureLineOffsets.size())
+      continue;
+    const int v0 = st.featureLineOffsets[static_cast<size_t>(fi)];
+    const int v1 = st.featureLineOffsets[static_cast<size_t>(fi + 1)];
+    if (v1 <= v0 || static_cast<size_t>(v1) * 3 > st.featureLineVerts.size())
+      continue;
+    ranges.push_back({fi, v0, v1});
+  }
+  for (const std::array<int, 3>& r : ranges)
+    fn(r[0], r[1], r[2]);
+}
+
+/// Apply \p xform to the plan position of every vertex of every selected feature line. Elevation is
+/// deliberately not offered: MOVE, ROTATE and SCALE are all plan operations here, matching the
+/// polyline behaviour they sit beside, and a transform that could silently alter Z would break the
+/// surface a feature line feeds (REQ-069) without touching its plan geometry.
+template <class Xf>
+static void TransformSelectedFeatureLinesInPlace(AppCommandState& st, Xf&& xform) {
+  ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
+    for (int vi = v0; vi < v1; ++vi) {
+      const size_t b = static_cast<size_t>(vi) * 3;
+      xform(&st.featureLineVerts[b], &st.featureLineVerts[b + 1]);
+    }
+  });
+}
+
+/// Append a copy of feature line \p fi, with \p xform applied to each vertex's plan position.
+///
+/// Everything that makes the line what it is carries across — elevations, the elevation-point flags,
+/// the closed flag, the name — and the id does not, because the copy is a new entity (REQ-076).
+/// The vertex range is validated BEFORE the first push so this cannot bail out half way and leave
+/// `featureLineVerts` longer than `featureLineOffsets` says it is; `EraseFeatureLineByIndex` already
+/// showed that the flags and the vertices are cut on different strides and that a length mismatch
+/// between them is completely silent.
+template <class Xf>
+static void AppendFeatureLineCopy(AppCommandState& st, int fi, int v0, int v1, Xf&& xform) {
+  const int nv = v1 - v0;
+  if (nv < 2 || static_cast<size_t>(v1) * 3 > st.featureLineVerts.size())
+    return;
+  if (st.featureLineOffsets.empty())
+    st.featureLineOffsets.push_back(0);
+  const int baseVert = st.featureLineOffsets.back();
+  for (int vi = v0; vi < v1; ++vi) {
+    const size_t b = static_cast<size_t>(vi) * 3;
+    float x = st.featureLineVerts[b];
+    float y = st.featureLineVerts[b + 1];
+    const float z = st.featureLineVerts[b + 2];
+    xform(&x, &y);
+    st.featureLineVerts.push_back(x);
+    st.featureLineVerts.push_back(y);
+    st.featureLineVerts.push_back(z);
+    st.featureLineElevPt.push_back(static_cast<size_t>(vi) < st.featureLineElevPt.size()
+                                       ? st.featureLineElevPt[static_cast<size_t>(vi)]
+                                       : static_cast<uint8_t>(0));
+  }
+  st.featureLineOffsets.push_back(baseVert + nv);
+  st.featureLineClosed.push_back(static_cast<size_t>(fi) < st.featureLineClosed.size()
+                                     ? st.featureLineClosed[static_cast<size_t>(fi)]
+                                     : static_cast<uint8_t>(0));
+  st.featureLineInfo.push_back(static_cast<size_t>(fi) < st.featureLineInfo.size()
+                                   ? st.featureLineInfo[static_cast<size_t>(fi)]
+                                   : CadFeatureLineInfo{});
+  st.featureLineAttrs.push_back(DuplicatedEntityAttrs(
+      static_cast<size_t>(fi) < st.featureLineAttrs.size()
+          ? st.featureLineAttrs[static_cast<size_t>(fi)]
+          : MakeNewEntityAttrs(st)));
+}
+
 static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float dy) {
   const size_t polyVertsBefore = st.userPolylineVerts.size();
+  const size_t featureVertsBefore = st.featureLineVerts.size();
   std::vector<float> newLines;
   std::vector<float> newCircles;
   std::vector<EntityAttributes> newLineAttrs;
@@ -3385,8 +4885,8 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         CadFilledRegion fr = st.cadFilledRegions[fk];
         hatchgeom::Translate(fr, dx, dy);
         newFills.push_back(std::move(fr));
-        newFillAttrs.push_back(fk < st.cadFilledRegionAttrs.size() ? st.cadFilledRegionAttrs[fk]
-                                                                   : EntityAttributes{});
+        newFillAttrs.push_back(DuplicatedEntityAttrs(
+            fk < st.cadFilledRegionAttrs.size() ? st.cadFilledRegionAttrs[fk] : EntityAttributes{}));
       }
     } else if (e.type == SelectedEntity::Type::LineSeg) {
       size_t k = static_cast<size_t>(e.index) * 6;
@@ -3400,7 +4900,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userLineAttrs.size())
           a = st.userLineAttrs[static_cast<size_t>(e.index)];
-        newLineAttrs.push_back(a);
+        newLineAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
       size_t k = static_cast<size_t>(e.index) * 4;
@@ -3412,7 +4912,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
           a = st.userCircleAttrs[static_cast<size_t>(e.index)];
-        newCircleAttrs.push_back(a);
+        newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
@@ -3436,7 +4936,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         EntityAttributes a{};
         if (k < st.cadAnnotationAttrs.size())
           a = st.cadAnnotationAttrs[k];
-        newAnnAttrs.push_back(a);
+        newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
@@ -3448,7 +4948,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         EntityAttributes at{};
         if (k < st.userArcAttrs.size())
           at = st.userArcAttrs[k];
-        newArcAttrs.push_back(at);
+        newArcAttrs.push_back(DuplicatedEntityAttrs(at));
       }
     } else if (e.type == SelectedEntity::Type::Ellipse) {
       const size_t k = static_cast<size_t>(e.index);
@@ -3460,7 +4960,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
         EntityAttributes at{};
         if (k < st.userEllAttrs.size())
           at = st.userEllAttrs[k];
-        newEllAttrs.push_back(at);
+        newEllAttrs.push_back(DuplicatedEntityAttrs(at));
       }
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
@@ -3487,7 +4987,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
       EntityAttributes at{};
       if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
         at = st.userPolylineAttrs[static_cast<size_t>(pi)];
-      st.userPolylineAttrs.push_back(at);
+      st.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
     }
   }
   st.userLinesFlat.insert(st.userLinesFlat.end(), newLines.begin(), newLines.end());
@@ -3503,8 +5003,19 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   st.cadFilledRegions.insert(st.cadFilledRegions.end(), newFills.begin(), newFills.end());
   st.cadFilledRegionAttrs.insert(st.cadFilledRegionAttrs.end(), newFillAttrs.begin(), newFillAttrs.end());
 
+  // Feature lines (REQ-087). Appended after the loop above rather than inside it only for
+  // readability — ForEachSelectedFeatureLine snapshots its ranges, so growing the store mid-walk is
+  // safe either way.
+  ForEachSelectedFeatureLine(st, [&](int fi, int v0, int v1) {
+    AppendFeatureLineCopy(st, fi, v0, v1, [&](float* x, float* y) {
+      *x += dx;
+      *y += dy;
+    });
+  });
+
   if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
-      !newFills.empty() || st.userPolylineVerts.size() != polyVertsBefore)
+      !newFills.empty() || st.userPolylineVerts.size() != polyVertsBefore ||
+      st.featureLineVerts.size() != featureVertsBefore)
     BumpCadGpuCache(st);
 }
 
@@ -3743,6 +5254,7 @@ static void CommitPasteFromClipboard(AppCommandState& st, float dx, float dy, st
 
 static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by, float rad) {
   const size_t polyVertsBefore = st.userPolylineVerts.size();
+  const size_t featureVertsBefore = st.featureLineVerts.size();
   std::vector<float> newLines;
   std::vector<float> newCircles;
   std::vector<EntityAttributes> newLineAttrs;
@@ -3775,7 +5287,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userLineAttrs.size())
           a = st.userLineAttrs[static_cast<size_t>(e.index)];
-        newLineAttrs.push_back(a);
+        newLineAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Circle) {
       size_t k = static_cast<size_t>(e.index) * 4;
@@ -3791,7 +5303,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         EntityAttributes a{};
         if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
           a = st.userCircleAttrs[static_cast<size_t>(e.index)];
-        newCircleAttrs.push_back(a);
+        newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Annotation) {
       const size_t k = static_cast<size_t>(e.index);
@@ -3834,7 +5346,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         EntityAttributes a{};
         if (k < st.cadAnnotationAttrs.size())
           a = st.cadAnnotationAttrs[k];
-        newAnnAttrs.push_back(a);
+        newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
       }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
@@ -3846,7 +5358,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         EntityAttributes at{};
         if (k < st.userArcAttrs.size())
           at = st.userArcAttrs[k];
-        newArcAttrs.push_back(at);
+        newArcAttrs.push_back(DuplicatedEntityAttrs(at));
       }
     } else if (e.type == SelectedEntity::Type::Ellipse) {
       const size_t k = static_cast<size_t>(e.index);
@@ -3862,7 +5374,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
         EntityAttributes at{};
         if (k < st.userEllAttrs.size())
           at = st.userEllAttrs[k];
-        newEllAttrs.push_back(at);
+        newEllAttrs.push_back(DuplicatedEntityAttrs(at));
       }
     } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
@@ -3893,7 +5405,7 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
       EntityAttributes at{};
       if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
         at = st.userPolylineAttrs[static_cast<size_t>(pi)];
-      st.userPolylineAttrs.push_back(at);
+      st.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
     }
   }
   st.userLinesFlat.insert(st.userLinesFlat.end(), newLines.begin(), newLines.end());
@@ -3907,8 +5419,16 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
   st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
   st.userEllAttrs.insert(st.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
 
+  // Feature lines (REQ-087) — the same append as the translated path, differing only in the point
+  // function, which is exactly why both go through AppendFeatureLineCopy.
+  ForEachSelectedFeatureLine(st, [&](int fi, int v0, int v1) {
+    AppendFeatureLineCopy(st, fi, v0, v1,
+                          [&](float* x, float* y) { RotateAroundBase(bx, by, rad, x, y); });
+  });
+
   if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
-      st.userPolylineVerts.size() != polyVertsBefore)
+      st.userPolylineVerts.size() != polyVertsBefore ||
+      st.featureLineVerts.size() != featureVertsBefore)
     BumpCadGpuCache(st);
 }
 
@@ -3928,7 +5448,37 @@ static void FinalizeCopyTranslation(AppCommandState& st, float dx, float dy, std
   }
 }
 
-void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad) {
+/// Remove TIN surfaces from the selection before a transform runs, and **say so** (REQ-201).
+///
+/// ADR-036 (b)/(c): a surface is display-only. Its geometry is derived from its definition, so a
+/// translated surface would be silently un-translated by the next rebuild — a transform that appears
+/// to work and then quietly undoes itself is worse than one that declines.
+///
+/// The refusal is spoken rather than performed by omission. Every Apply* funnel below simply skips
+/// entity types it does not handle, so without this the user would drag a selection containing a
+/// surface, watch everything else move, and be told nothing about why one object stayed put. That
+/// silence is the exact failure mode ADR-035 (g) was written about.
+///
+/// Called from the funnels rather than from the Start* commands because a surface can be added to
+/// the selection by a window drag AFTER the command starts.
+void DropSurfacesFromSelectionForTransform(AppCommandState& st, const char* commandName,
+                                           std::vector<std::string>& log) {
+  const size_t before = st.selection.size();
+  st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
+                                    [](const SelectedEntity& e) {
+                                      return e.type == SelectedEntity::Type::Surface;
+                                    }),
+                     st.selection.end());
+  const size_t dropped = before - st.selection.size();
+  if (dropped == 0)
+    return;
+  log.push_back(std::string(commandName) + " — " + std::to_string(dropped) + " surface(s) excluded: a surface's" +
+                " shape comes from its definition, so moving it would be undone by the next rebuild." +
+                " Edit its definition in the Surfaces panel instead.");
+}
+
+void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad, std::vector<std::string>& log) {
+  DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
@@ -4043,11 +5593,16 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
     RotateAroundBase(bx, by, rad, &att.insertX, &att.insertY);
     att.rotationDeg += rad * kPdfRadToDeg;
   }
+  // Feature lines (REQ-087) — every vertex, PIs and elevation points alike, so the elevation points
+  // stay on the line (ADR-035 (b)).
+  TransformSelectedFeatureLinesInPlace(
+      st, [&](float* x, float* y) { RotateAroundBase(bx, by, rad, x, y); });
   ApplyRotationToSelectedSurveyPoints(st, bx, by, rad);
   BumpCadGpuCache(st);
 }
 
-void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy) {
+void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, std::vector<std::string>& log) {
+  DropSurfacesFromSelectionForTransform(st, "MOVE", log);
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 &&
@@ -4143,6 +5698,11 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy) {
       continue;
     hatchgeom::Translate(st.cadFilledRegions[static_cast<size_t>(e.index)], dx, dy);
   }
+  // Feature lines (REQ-087) — see ApplyRotationToSelection.
+  TransformSelectedFeatureLinesInPlace(st, [&](float* x, float* y) {
+    *x += dx;
+    *y += dy;
+  });
   ApplyTranslationToSelectedSurveyPoints(st, dx, dy);
   BumpCadGpuCache(st);
 }
@@ -4254,6 +5814,20 @@ static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outC
       }
     }
   }
+  // Feature lines (REQ-087): one contribution per line, at its own vertex centroid — the same
+  // weighting the polyline branch above uses, so a selection of both is not skewed toward whichever
+  // happens to have more vertices.
+  ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
+    double sx = 0.0, sy = 0.0;
+    for (int vi = v0; vi < v1; ++vi) {
+      sx += static_cast<double>(st.featureLineVerts[static_cast<size_t>(vi) * 3]);
+      sy += static_cast<double>(st.featureLineVerts[static_cast<size_t>(vi) * 3 + 1]);
+    }
+    const double nv = static_cast<double>(v1 - v0);
+    accx += sx / nv;
+    accy += sy / nv;
+    ++n;
+  });
   for (int si : st.selectedSurveyPointIndices) {
     if (si >= 0 && static_cast<size_t>(si) < st.surveyPoints.size()) {
       accx += static_cast<double>(st.surveyPoints[static_cast<size_t>(si)].easting);
@@ -4357,6 +5931,14 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
       }
     }
   }
+  // Feature lines (REQ-087) — farthest vertex, as for a polyline.
+  ForEachSelectedFeatureLine(st, [&](int /*fi*/, int v0, int v1) {
+    for (int vi = v0; vi < v1; ++vi) {
+      const float x = st.featureLineVerts[static_cast<size_t>(vi) * 3];
+      const float y = st.featureLineVerts[static_cast<size_t>(vi) * 3 + 1];
+      m = std::max(m, std::hypot(x - bx, y - by));
+    }
+  });
   for (int si : st.selectedSurveyPointIndices) {
     if (si >= 0 && static_cast<size_t>(si) < st.surveyPoints.size()) {
       const SurveyPoint& sp = st.surveyPoints[static_cast<size_t>(si)];
@@ -4395,9 +5977,10 @@ static void ApplyScaleToSelectedSurveyPoints(AppCommandState& st, float bx, floa
   }
 }
 
-void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc) {
+void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc, std::vector<std::string>& log) {
   if (!(sc > 0.f) || !std::isfinite(sc))
     return;
+  DropSurfacesFromSelectionForTransform(st, "SCALE", log);
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
   for (const auto& e : st.selection) {
     if (e.type != SelectedEntity::Type::LineSeg)
@@ -4517,6 +6100,9 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc) {
     ScalePtAroundBase(bx, by, sc, &att.insertX, &att.insertY);
     att.scale = std::max(att.scale * sc, 1e-9f);
   }
+  // Feature lines (REQ-087). Plan only — elevations are NOT scaled, matching the polyline above.
+  TransformSelectedFeatureLinesInPlace(
+      st, [&](float* x, float* y) { ScalePtAroundBase(bx, by, sc, x, y); });
   ApplyScaleToSelectedSurveyPoints(st, bx, by, sc);
   BumpCadGpuCache(st);
 }
@@ -4592,7 +6178,7 @@ bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineI
     if (isCopy)
       FinalizeCopyTranslation(st, dx, dy, log);
     else {
-      ApplyTranslationToSelection(st, dx, dy);
+      ApplyTranslationToSelection(st, dx, dy, log);
       // Stay in MOVE — same selection at new position, ready for another base+destination.
       st.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
       log.push_back("MOVE complete — base point (ESC to exit):");
@@ -4606,7 +6192,7 @@ bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineI
 static void FinishScaleCommand(AppCommandState& st, float scaleFactor, std::vector<std::string>& log) {
   PushUndoSnapshot(st, "Scale");
   const float s = std::max(scaleFactor, 1e-6f);
-  ApplyScaleToSelection(st, st.modifyBaseX, st.modifyBaseY, s);
+  ApplyScaleToSelection(st, st.modifyBaseX, st.modifyBaseY, s, log);
   st.active = AppCommandState::Kind::None;
   ResetModifyRotateDraft(st);
   log.push_back("SCALE complete.");
@@ -4752,7 +6338,7 @@ static void FinishRotateCommand(AppCommandState& st, float bx, float by, float r
       log.push_back("ROTATE COPY complete.");
     }
   } else {
-    ApplyRotationToSelection(st, bx, by, rad);
+    ApplyRotationToSelection(st, bx, by, rad, log);
     st.active = K::None;
     ResetModifyRotateDraft(st);
     log.push_back("ROTATE complete.");
@@ -5080,22 +6666,17 @@ static void CommitSurveyInverseSecondPoint(AppCommandState& st, float x2, float 
 /// vs proposed case, which is the grading question this command exists to answer, and a bare number
 /// from an unnamed surface would be worse than no number at all.
 ///
-/// Surfaces on an off or frozen layer are skipped, matching `AppendSurfaceEdgeLines` — the readout
-/// should describe the surfaces the user can see, and REQ-068 already established that rule.
+/// Invisible surfaces are skipped, via the shared \ref SurfaceVisible — the readout should describe
+/// the surfaces the user can see, and REQ-068 already established that rule. Routing through the
+/// shared predicate also fixed a real gap here: this walk checked layer on/frozen but not
+/// `hiddenEntityIds`, so SURFELEV reported an elevation from a surface REQ-084 (d) had isolated out.
 static std::vector<std::pair<std::string, double>> SurfaceElevationsAt(const AppCommandState& st, double x,
                                                                        double y) {
   std::vector<std::pair<std::string, double>> out;
   for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
-    const CadSurface& s = st.cadSurfaces[si];
-    if (!s.tin || s.tin->indices.empty())
+    if (!SurfaceVisible(st, si))
       continue;
-    if (si < st.cadSurfaceAttrs.size()) {
-      const std::string& lname = st.cadSurfaceAttrs[si].layer;
-      const auto it = std::find_if(st.drawingLayerTable.begin(), st.drawingLayerTable.end(),
-                                   [&](const CadLayerRow& r) { return r.name == lname; });
-      if (it != st.drawingLayerTable.end() && (!it->on || it->frozen))
-        continue;
-    }
+    const CadSurface& s = st.cadSurfaces[si];
     double z = 0.0;
     if (TinElevationAt(s.tin->vertsXyz, s.tin->indices, x, y, &z))
       out.emplace_back(s.name, z);
@@ -5690,6 +7271,26 @@ static void HandleOffsetViewportPick(AppCommandState& st, float wx, float wy, st
       log.push_back("OFFSET — nothing under cursor; try again.");
       return;
     }
+    // REQ-087 / REQ-201. A feature line is pickable (it has to be, to select and move), so without
+    // this it would be accepted here and then dropped silently by CommitOffsetSigned's `default:`.
+    // Refusing is not a limitation we are hiding — offsetting a 3D chain has no defined answer for
+    // what elevation the offset copy carries, and neither REQ-087 nor REQ-088 supplies one, so the
+    // Workshop does not get to pick one (CLAUDE.md layer rule 3). Stays in the select phase.
+    if (hit.type == SelectedEntity::Type::FeatureLine) {
+      log.push_back("OFFSET — 1 feature line ignored: offsetting one has no defined elevation for "
+                    "the new line. Pick a line, circle, arc, ellipse, or polyline.");
+      return;
+    }
+    // REQ-068 / ADR-036 (c) — the same reasoning, one kind later. A surface became pickable, so
+    // without this it would be accepted here and then dropped by CommitOffsetSigned's `default:`,
+    // leaving the user having picked something and watched nothing happen. There is also no answer
+    // to offer: "offset a surface" would mean a second surface at a vertical or normal displacement,
+    // which is a grading operation no requirement defines.
+    if (hit.type == SelectedEntity::Type::Surface) {
+      log.push_back("OFFSET — 1 surface ignored: a surface cannot be offset. Pick a line, circle, "
+                    "arc, ellipse, or polyline.");
+      return;
+    }
     st.offsetEntity = hit;
     st.offsetEntityValid = true;
     st.offsetPhase = OP::WaitDistanceOrThrough;
@@ -5786,6 +7387,33 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     const bool nextPt = st.polylinePhase == PP::NeedNextPoint;
     if (!ApplySegmentAnglePickToViewportPick(st, wx, wy, nextPt, log))
       SubmitPolylineVertex(st, wx, wy, log);
+    return;
+  }
+
+  // REQ-087 / TASK-082 BUG-1. Missing entirely until 2026-08-20, so every click during FEATURELINE
+  // was silently discarded and the command appeared to hang on its first prompt — the exact failure
+  // the comment above CadUi.cpp's point-picking list warns about. A transcript could not catch it
+  // because a transcript types coordinates and never clicks.
+  //
+  // A click carries X and Y only, so it goes to SubmitFeatureLinePoint, which prompts for the
+  // elevation rather than taking one from the work plane the way POLYLINE does.
+  if (st.active == K::FeatureLine) {
+    if (st.featureLinePendingPoint) {
+      // A second click while an elevation is owed. Move the pending point to where they clicked
+      // rather than ignoring it: the click is unambiguous, and silently dropping it would repeat
+      // BUG-1 in miniature.
+      st.featureLinePendingX = wx;
+      st.featureLinePendingY = wy;
+      char buf[192];
+      std::snprintf(buf, sizeof(buf),
+                    "FEATURELINE — point moved. Elevation for %s %zu <%.3f>:",
+                    st.featureLineNextIsElevPoint ? "elevation point" : "point",
+                    st.featureLineDraftElevPt.size() + 1,
+                    static_cast<double>(st.featureLinePendingDefaultZ));
+      log.push_back(buf);
+      return;
+    }
+    SubmitFeatureLinePoint(st, wx, wy, log);
     return;
   }
 
@@ -5972,6 +7600,15 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
+  if (st.active == K::DesignateBreakline) {
+    CommitDesignateAt(st, wx, wy, /*isBoundary=*/false, log);
+    return;
+  }
+  if (st.active == K::DesignateBoundary) {
+    CommitDesignateAt(st, wx, wy, /*isBoundary=*/true, log);
+    return;
+  }
+
   if (st.active == K::Align) {
     using AP = AppCommandState::AlignPhase;
     if (st.alignPhase == AP::PickSelection) {
@@ -6119,7 +7756,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       if (wasCopy)
         FinalizeCopyTranslation(st, dx, dy, log);
       else {
-        ApplyTranslationToSelection(st, dx, dy);
+        ApplyTranslationToSelection(st, dx, dy, log);
         // Stay in MOVE — same selection at new position, ready for another base+destination.
         st.modifyPhase = MP::NeedBase;
         log.push_back("MOVE complete — base point (ESC to exit):");
@@ -6429,6 +8066,24 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
     log.push_back("COPYCLIP — nothing selected. Select objects first.");
     return;
   }
+  // A surface is not copyable (ADR-036 (b)): the clipboard carries geometry, and a surface's geometry
+  // is derived from a definition that names point groups, breaklines and boundaries in THIS drawing.
+  // Pasting the triangles alone would produce something that looks like a surface, rebuilds into
+  // nothing, and shares an id with the original. Refused out loud rather than by the silent skip the
+  // copy loop below would otherwise perform (REQ-201).
+  {
+    const size_t nSurf = static_cast<size_t>(std::count_if(
+        st.selection.begin(), st.selection.end(),
+        [](const SelectedEntity& e) { return e.type == SelectedEntity::Type::Surface; }));
+    if (nSurf > 0) {
+      log.push_back("COPYCLIP — " + std::to_string(nSurf) +
+                    " surface(s) not copied: a surface is defined by its point groups, breaklines and"
+                    " boundaries, which do not travel with a paste. Create a surface in the target"
+                    " drawing instead.");
+      if (nSurf == st.selection.size())
+        return;  // nothing else was selected — do not go on to clear the clipboard and report success
+    }
+  }
   CadClipboard& cb = st.clipboard;
   cb = CadClipboard{};
   cb.fromPaper = false;  // copied from model space
@@ -6535,7 +8190,23 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
     cb.basePtY = (mnY + mxY) * 0.5f;
   }
 
-  log.push_back("COPYCLIP — " + std::to_string(st.selection.size()) + " object(s) copied to clipboard.");
+  // REQ-087 / REQ-201. The clipboard has no feature-line store, so the walk above skips them — and
+  // the count below would still report them as copied, because it counts the SELECTION rather than
+  // what was actually taken. A user would then paste and find the feature line missing with no
+  // message anywhere. Copying them properly needs clipboard arrays, which is stage 3's successor,
+  // not stage 3; saying so is what stops the gap being invisible until someone loses work.
+  int featureLinesNotCopied = 0;
+  for (const auto& e : st.selection)
+    if (e.type == SelectedEntity::Type::FeatureLine)
+      ++featureLinesNotCopied;
+  log.push_back("COPYCLIP — " +
+                std::to_string(st.selection.size() - static_cast<size_t>(featureLinesNotCopied)) +
+                " object(s) copied to clipboard.");
+  if (featureLinesNotCopied > 0)
+    log.push_back("COPYCLIP — " + std::to_string(featureLinesNotCopied) + " feature line" +
+                  (featureLinesNotCopied == 1 ? "" : "s") +
+                  " not copied: the clipboard cannot carry a feature line yet. Use COPY to "
+                  "duplicate one in place.");
 }
 
 void StartPasteCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -6910,6 +8581,24 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     }
   }
 
+  // Feature lines (REQ-087). This is the SMALL-drawing path — under 16 entities — and a drawing
+  // holding only feature lines lands here, so missing it would mean ZOOM EXTENTS reporting
+  // "nothing to frame" on a drawing that plainly has content.
+  {
+    const auto& FV = st.featureLineVerts;
+    const auto& FO = st.featureLineOffsets;
+    for (size_t fi = 0; fi + 1 < FO.size(); ++fi) {
+      const int v0 = FO[fi];
+      const int v1 = FO[fi + 1];
+      for (int vi = v0; vi < v1; ++vi) {
+        if (static_cast<size_t>(vi * 3 + 1) >= FV.size())
+          break;
+        consider(static_cast<double>(FV[static_cast<size_t>(vi * 3 + 0)]),
+                 static_cast<double>(FV[static_cast<size_t>(vi * 3 + 1)]));
+      }
+    }
+  }
+
   for (const CadFilledRegion& fr : st.cadFilledRegions)
     for (size_t i = 0; i + 2 < fr.vertsXyz.size(); i += 3)
       consider(static_cast<double>(fr.vertsXyz[i]), static_cast<double>(fr.vertsXyz[i + 1]));
@@ -7063,6 +8752,42 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
       for (int vi = v0; vi < v1; ++vi) {
         const double vx = static_cast<double>(PV[static_cast<size_t>(vi * 3 + 0)]);
         const double vy = static_cast<double>(PV[static_cast<size_t>(vi * 3 + 1)]);
+        if (!any) {
+          b.mnX = b.mxX = vx;
+          b.mnY = b.mxY = vy;
+          any = true;
+        } else {
+          b.mnX = std::min(b.mnX, vx);
+          b.mxX = std::max(b.mxX, vx);
+          b.mnY = std::min(b.mnY, vy);
+          b.mxY = std::max(b.mxY, vy);
+        }
+      }
+      if (!any)
+        continue;
+      b.cx = 0.5 * (b.mnX + b.mxX);
+      b.cy = 0.5 * (b.mnY + b.mxY);
+      out.push_back(b);
+    }
+  }
+
+  // Feature lines (REQ-087) — same CSR walk. Without this, ZOOM EXTENTS frames a drawing as though
+  // its feature lines were not there, which is the quiet kind of miss ADR-035 (g) warns about.
+  const auto& FO = st.featureLineOffsets;
+  const auto& FV = st.featureLineVerts;
+  if (FO.size() >= 2) {
+    for (size_t fi = 0; fi + 1 < FO.size(); ++fi) {
+      const int v0 = FO[fi];
+      const int v1 = FO[fi + 1];
+      if (v1 <= v0)
+        continue;
+      EntityBox b{};
+      bool any = false;
+      for (int vi = v0; vi < v1; ++vi) {
+        if (static_cast<size_t>(vi * 3 + 1) >= FV.size())
+          break;
+        const double vx = static_cast<double>(FV[static_cast<size_t>(vi * 3 + 0)]);
+        const double vy = static_cast<double>(FV[static_cast<size_t>(vi * 3 + 1)]);
         if (!any) {
           b.mnX = b.mxX = vx;
           b.mnY = b.mxY = vy;
@@ -7527,6 +9252,487 @@ void StartPolylineCommand(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back("POLYLINE — like LINE (A / 2P bearing lock); CLOSE/CL; ortho; ESC cancels.");
 }
 
+void StartFeatureLineCommand(AppCommandState& st, const std::string& name, std::vector<std::string>& log) {
+  // REQ-087 / TASK-082. Drawn like LINE: a click gives X and Y, then the command PROMPTS for the
+  // elevation. That is the difference from POLYLINE and 3DPOLY, which take Z from the work plane
+  // without asking — right for tracing linework, wrong for a grading design, where every elevation
+  // is a decision. Typing X,Y,Z still commits in one go, since it already answers the prompt.
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);  // clears the feature-line draft, including any pending point
+  ResetSegmentAngleLock(st);
+  st.selectedSurveyPointIndices.clear();
+  st.selBoxWaitingSecond = false;
+  st.active = AppCommandState::Kind::FeatureLine;
+  st.featureLineDraftName = name;
+  st.polylineTypedZValid = false;   // shared with the 3DPOLY peel below
+  st.polylineTypedZRelative = false;
+  log.push_back("FEATURELINE" + (name.empty() ? std::string() : " \"" + name + "\"") +
+                " — click a point (you will be asked for its elevation), or type X,Y / X,Y,Z. "
+                "E marks the next point an elevation point. CLOSE/CL, END, ESC cancels.");
+}
+
+/// Appends one vertex to the feature-line draft. \p isElevPoint marks it an elevation point rather
+/// than a PI (ADR-035 (a)) — geometrically it lies on the line either way.
+bool SubmitFeatureLineVertex(AppCommandState& st, float x, float y, bool isElevPoint,
+                             std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::FeatureLine)
+    return false;
+
+  float vz = CadCommitElevation(st);
+  if (st.polylineTypedZValid) {
+    vz = st.polylineTypedZRelative ? st.anchorZ + st.polylineTypedZ : st.polylineTypedZ;
+    st.polylineTypedZValid = false;
+    st.polylineTypedZRelative = false;
+  }
+  st.featureLineDraftVerts.push_back(x);
+  st.featureLineDraftVerts.push_back(y);
+  st.featureLineDraftVerts.push_back(vz);
+  st.featureLineDraftElevPt.push_back(isElevPoint ? 1u : 0u);
+  st.anchorX = x;
+  st.anchorY = y;
+  st.anchorZ = vz;
+  char buf[128];
+  std::snprintf(buf, sizeof(buf), "FEATURELINE %s %zu at elevation %.3f.",
+                isElevPoint ? "elevation point" : "PI",
+                st.featureLineDraftElevPt.size(), static_cast<double>(vz));
+  log.push_back(buf);
+  return true;
+}
+
+/// TASK-082: take an X,Y that arrived WITHOUT an elevation — a viewport click, or a typed `X,Y` —
+/// and hold it while the command prompts for one.
+///
+/// This is the difference between FEATURELINE and POLYLINE/3DPOLY. Those take Z from the work plane
+/// silently, which is right for linework being traced; a feature line is a grading design, where
+/// every elevation is a decision and the user asked to be asked.
+bool SubmitFeatureLinePoint(AppCommandState& st, float x, float y, std::vector<std::string>& log) {
+  if (st.active != AppCommandState::Kind::FeatureLine)
+    return false;
+
+  // ASSUMPTION-1, in order. The snap override is CadCommitElevation's existing REQ-058 rule: an
+  // object snap returns the object's real 3D point, and offering anything else as the default would
+  // make snapping to a 3D object silently ignore the object. Otherwise the previous vertex, because
+  // grading a line means most points sit near the last one.
+  float defZ = CadWorkPlaneElevation(st);
+  if (st.viewportSnapPickValid)
+    defZ = st.viewportSnapPickLocalZ;
+  else if (st.featureLineDraftVerts.size() >= 3)
+    defZ = st.featureLineDraftVerts[st.featureLineDraftVerts.size() - 1];
+
+  st.featureLinePendingPoint = true;
+  st.featureLinePendingX = x;
+  st.featureLinePendingY = y;
+  st.featureLinePendingDefaultZ = defZ;
+
+  char buf[192];
+  std::snprintf(buf, sizeof(buf), "FEATURELINE — elevation for %s %zu <%.3f>:",
+                st.featureLineNextIsElevPoint ? "elevation point" : "point",
+                st.featureLineDraftElevPt.size() + 1, static_cast<double>(defZ));
+  log.push_back(buf);
+  return true;
+}
+
+/// TASK-082: resolve the pending point at \p z and add it to the draft.
+void CommitFeatureLinePendingPoint(AppCommandState& st, float z, std::vector<std::string>& log) {
+  if (!st.featureLinePendingPoint)
+    return;
+  const float x = st.featureLinePendingX;
+  const float y = st.featureLinePendingY;
+  const bool isElevPt = st.featureLineNextIsElevPoint;
+  st.featureLinePendingPoint = false;
+  st.featureLineNextIsElevPoint = false;
+  // Route through SubmitFeatureLineVertex rather than pushing here, so the draft is appended in
+  // exactly one place: typed X,Y,Z and click-then-elevation must not be able to disagree about what
+  // a vertex is.
+  st.polylineTypedZ = z;
+  st.polylineTypedZRelative = false;
+  st.polylineTypedZValid = true;
+  SubmitFeatureLineVertex(st, x, y, isElevPt, log);
+}
+
+void CommitFeatureLineDraft(AppCommandState& st, bool closed, std::vector<std::string>& log) {
+  const size_t nvert = st.featureLineDraftVerts.size() / 3;
+  if (closed ? nvert < 3 : nvert < 2) {
+    log.push_back(std::string("FEATURELINE — need at least ") + (closed ? "three" : "two") +
+                  " vertices.");
+    return;
+  }
+  PushUndoSnapshot(st, closed ? "Feature line (closed)" : "Feature line");
+  if (st.featureLineOffsets.empty())
+    st.featureLineOffsets.push_back(0);
+  const int baseVert = st.featureLineOffsets.back();
+  st.featureLineVerts.insert(st.featureLineVerts.end(), st.featureLineDraftVerts.begin(),
+                             st.featureLineDraftVerts.end());
+  st.featureLineElevPt.insert(st.featureLineElevPt.end(), st.featureLineDraftElevPt.begin(),
+                              st.featureLineDraftElevPt.end());
+  st.featureLineOffsets.push_back(baseVert + static_cast<int>(nvert));
+  st.featureLineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
+  CadFeatureLineInfo info;
+  info.name = st.featureLineDraftName;
+  st.featureLineInfo.push_back(std::move(info));
+  st.featureLineAttrs.push_back(MakeNewEntityAttrs(st));
+  BumpCadGpuCache(st);
+  st.active = AppCommandState::Kind::None;
+  st.featureLineDraftVerts.clear();
+  st.featureLineDraftElevPt.clear();
+  st.featureLineDraftName.clear();
+  log.push_back(std::string("FEATURELINE ") + (closed ? "closed" : "complete") + " — " +
+                std::to_string(nvert) + " vertices.");
+}
+
+// --- REQ-088 — feature line elevation editing ---------------------------------------------------
+//
+// ADR-035 (e): the elevation editor is a VIEW, not a store. Station, length, grade back and grade
+// ahead are all derived here on demand; nothing below adds a field to any store, and `.gs` is
+// untouched. The edits write elevations back into the existing stride-3 vertex array.
+
+namespace {
+
+/// Two points closer than this in plan are the same point. Well inside REQ-101's ±0.01 ft, so a
+/// grade over a run this short is reported as undefined rather than as a huge number.
+constexpr double kFeatureLinePlanEps = 1e-4;
+
+/// Vertex range [*v0, *v1) of feature line \p fi, with the vertex array proven long enough to
+/// address all of it — so every caller below can index without re-checking.
+bool FeatureLineRange(const AppCommandState& st, int fi, int* v0, int* v1) {
+  if (fi < 0 || static_cast<size_t>(fi + 1) >= st.featureLineOffsets.size())
+    return false;
+  const int a = st.featureLineOffsets[static_cast<size_t>(fi)];
+  const int b = st.featureLineOffsets[static_cast<size_t>(fi + 1)];
+  if (b - a < 2 || a < 0 || static_cast<size_t>(b) * 3 > st.featureLineVerts.size())
+    return false;
+  *v0 = a;
+  *v1 = b;
+  return true;
+}
+
+} // namespace
+
+bool BuildFeatureLineElevTable(const AppCommandState& st, int fi, std::vector<FeatureLineElevRow>* out) {
+  if (!out)
+    return false;
+  out->clear();
+  int v0 = 0, v1 = 0;
+  if (!FeatureLineRange(st, fi, &v0, &v1))
+    return false;
+  const int n = v1 - v0;
+  const bool closed = static_cast<size_t>(fi) < st.featureLineClosed.size() &&
+                      st.featureLineClosed[static_cast<size_t>(fi)] != 0;
+
+  const auto px = [&](int i) { return static_cast<double>(st.featureLineVerts[static_cast<size_t>(v0 + i) * 3]); };
+  const auto py = [&](int i) { return static_cast<double>(st.featureLineVerts[static_cast<size_t>(v0 + i) * 3 + 1]); };
+  const auto pz = [&](int i) { return st.featureLineVerts[static_cast<size_t>(v0 + i) * 3 + 2]; };
+  // PLAN length, not slope length — REQ-088 says stations and lengths agree with the feature line's
+  // plan geometry, and grade is rise over the horizontal run (as SURFELEV computes it).
+  const auto planLen = [&](int a, int b) { return std::hypot(px(b) - px(a), py(b) - py(a)); };
+
+  const double kNaN = std::numeric_limits<double>::quiet_NaN();
+  double station = 0.0;
+  for (int i = 0; i < n; ++i) {
+    // A closed line's last point continues to the first, and its first point is preceded by the
+    // last; an open line's ends simply have no such segment.
+    const int next = (i + 1 < n) ? i + 1 : (closed ? 0 : -1);
+    const int prev = (i > 0) ? i - 1 : (closed ? n - 1 : -1);
+
+    FeatureLineElevRow r;
+    r.vertexIndex = i;
+    r.isElevationPoint = static_cast<size_t>(v0 + i) < st.featureLineElevPt.size() &&
+                         st.featureLineElevPt[static_cast<size_t>(v0 + i)] != 0;
+    r.station = station;
+    r.elevation = pz(i);
+    r.lengthAhead = next >= 0 ? planLen(i, next) : 0.0;
+    r.gradeAheadPct = (next >= 0 && r.lengthAhead > kFeatureLinePlanEps)
+                          ? (static_cast<double>(pz(next)) - pz(i)) / r.lengthAhead * 100.0
+                          : kNaN;
+    const double lenBack = prev >= 0 ? planLen(prev, i) : 0.0;
+    r.gradeBackPct = (prev >= 0 && lenBack > kFeatureLinePlanEps)
+                         ? (static_cast<double>(pz(i)) - pz(prev)) / lenBack * 100.0
+                         : kNaN;
+    out->push_back(r);
+    station += r.lengthAhead;
+  }
+  return true;
+}
+
+namespace {
+
+/// Writable Z of point \p i of feature line \p fi. Callers have already validated the range.
+float& FeatureLineZ(AppCommandState& st, int v0, int i) {
+  return st.featureLineVerts[static_cast<size_t>(v0 + i) * 3 + 2];
+}
+
+/// Everything every elevation edit has to do around the mutation itself, in one place: validate the
+/// feature line and the point index, snapshot for undo, then bump the revision.
+///
+/// The bump is what makes REQ-088's last acceptance condition — "the surface rebuilds with no user
+/// action" — true without a line of new surface code: TickSurfaceRebuilds' dirty check is exactly
+/// "cadGpuRevision moved", so a feature line used as a breakline (REQ-069) re-triangulates on the
+/// next frame. Doing it in one place is also what makes "undoable in one step" uniform across all
+/// six edits rather than six chances to forget the snapshot.
+///
+/// **\p fn must call `commit()` immediately before its first mutation and not before.** The snapshot
+/// is deferred this way because several of these edits can only discover they must refuse after
+/// computing the table — and PushUndoSnapshot CLEARS THE REDO STACK. Pushing eagerly and popping on
+/// refusal would therefore destroy the user's redo history as the price of a rejected keystroke,
+/// which is a worse bug than the one it tidies.
+template <class Fn>
+bool EditFeatureLineElevations(AppCommandState& st, int flNumber, int pointNumber, bool needPoint,
+                               const char* undoLabel, std::vector<std::string>& log, Fn&& fn) {
+  const int fi = flNumber - 1;  // commands are 1-based; the store is 0-based
+  int v0 = 0, v1 = 0;
+  if (!FeatureLineRange(st, fi, &v0, &v1)) {
+    log.push_back("FLELEV — no feature line " + std::to_string(flNumber) + ".");
+    return false;
+  }
+  const int n = v1 - v0;
+  if (needPoint && (pointNumber < 1 || pointNumber > n)) {
+    log.push_back("FLELEV — feature line " + std::to_string(flNumber) + " has " + std::to_string(n) +
+                  " points; there is no point " + std::to_string(pointNumber) + ".");
+    return false;
+  }
+  bool pushed = false;
+  const auto commit = [&] {
+    if (!pushed) {
+      PushUndoSnapshot(st, undoLabel);
+      pushed = true;
+    }
+  };
+  if (!fn(fi, v0, n, commit))
+    return false;
+  BumpCadGpuCache(st);
+  return true;
+}
+
+} // namespace
+
+/// REQ-088: set one point's elevation outright.
+bool SetFeatureLinePointElevation(AppCommandState& st, int flNumber, int pointNumber, float elevation,
+                                  std::vector<std::string>& log) {
+  return EditFeatureLineElevations(
+      st, flNumber, pointNumber, true, "Feature line elevation", log,
+      [&](int /*fi*/, int v0, int /*n*/, const auto& commit) {
+        commit();
+        FeatureLineZ(st, v0, pointNumber - 1) = elevation;
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "FLELEV — feature line %d point %d elevation %.3f.",
+                      flNumber, pointNumber, static_cast<double>(elevation));
+        log.push_back(buf);
+        return true;
+      });
+}
+
+/// REQ-088: set the grade of the segment AHEAD of \p pointNumber, which moves the NEXT point.
+///
+/// ASSUMPTION-1: a grade edit holds the earlier point and moves the later one. The Acceptance pins
+/// this half — "typing a grade ahead moves the next point's elevation and leaves the current one
+/// alone" — and GRADEBACK below is the same rule seen from the other end.
+bool SetFeatureLineGradeAhead(AppCommandState& st, int flNumber, int pointNumber, double gradePct,
+                              std::vector<std::string>& log) {
+  return EditFeatureLineElevations(
+      st, flNumber, pointNumber, true, "Feature line grade ahead", log,
+      [&](int fi, int v0, int n, const auto& commit) {
+        std::vector<FeatureLineElevRow> rows;
+        if (!BuildFeatureLineElevTable(st, fi, &rows))
+          return false;
+        const int i = pointNumber - 1;
+        const bool closed = static_cast<size_t>(fi) < st.featureLineClosed.size() &&
+                            st.featureLineClosed[static_cast<size_t>(fi)] != 0;
+        const int next = (i + 1 < n) ? i + 1 : (closed ? 0 : -1);
+        if (next < 0) {
+          log.push_back("FLELEV — point " + std::to_string(pointNumber) +
+                        " is the last point of an open feature line; it has no grade ahead.");
+          return false;
+        }
+        if (rows[static_cast<size_t>(i)].lengthAhead <= kFeatureLinePlanEps) {
+          log.push_back("FLELEV — the segment ahead of point " + std::to_string(pointNumber) +
+                        " has no plan length, so a grade cannot set an elevation across it.");
+          return false;
+        }
+        commit();
+        FeatureLineZ(st, v0, next) =
+            static_cast<float>(static_cast<double>(FeatureLineZ(st, v0, i)) +
+                               gradePct / 100.0 * rows[static_cast<size_t>(i)].lengthAhead);
+        char buf[200];
+        std::snprintf(buf, sizeof(buf),
+                      "FLELEV — feature line %d grade ahead of point %d = %.2f%%; point %d is now %.3f.",
+                      flNumber, pointNumber, gradePct, next + 1,
+                      static_cast<double>(FeatureLineZ(st, v0, next)));
+        log.push_back(buf);
+        return true;
+      });
+}
+
+/// REQ-088: set the grade of the segment BEHIND \p pointNumber, which moves THIS point and holds the
+/// previous one — ASSUMPTION-1, and what "updates the downstream elevations" means read directionally.
+bool SetFeatureLineGradeBack(AppCommandState& st, int flNumber, int pointNumber, double gradePct,
+                             std::vector<std::string>& log) {
+  return EditFeatureLineElevations(
+      st, flNumber, pointNumber, true, "Feature line grade back", log,
+      [&](int fi, int v0, int n, const auto& commit) {
+        std::vector<FeatureLineElevRow> rows;
+        if (!BuildFeatureLineElevTable(st, fi, &rows))
+          return false;
+        const int i = pointNumber - 1;
+        const bool closed = static_cast<size_t>(fi) < st.featureLineClosed.size() &&
+                            st.featureLineClosed[static_cast<size_t>(fi)] != 0;
+        const int prev = (i > 0) ? i - 1 : (closed ? n - 1 : -1);
+        if (prev < 0) {
+          log.push_back("FLELEV — point " + std::to_string(pointNumber) +
+                        " is the first point of an open feature line; it has no grade back.");
+          return false;
+        }
+        const double lenBack = rows[static_cast<size_t>(prev)].lengthAhead;
+        if (lenBack <= kFeatureLinePlanEps) {
+          log.push_back("FLELEV — the segment behind point " + std::to_string(pointNumber) +
+                        " has no plan length, so a grade cannot set an elevation across it.");
+          return false;
+        }
+        commit();
+        FeatureLineZ(st, v0, i) = static_cast<float>(
+            static_cast<double>(FeatureLineZ(st, v0, prev)) + gradePct / 100.0 * lenBack);
+        char buf[200];
+        std::snprintf(buf, sizeof(buf),
+                      "FLELEV — feature line %d grade back of point %d = %.2f%%; point %d is now %.3f.",
+                      flNumber, pointNumber, gradePct, pointNumber,
+                      static_cast<double>(FeatureLineZ(st, v0, i)));
+        log.push_back(buf);
+        return true;
+      });
+}
+
+/// REQ-088: "Points may be raised or lowered as a set by a delta." A negative delta lowers.
+bool RaiseFeatureLineElevations(AppCommandState& st, int flNumber, float delta,
+                                std::vector<std::string>& log) {
+  return EditFeatureLineElevations(
+      st, flNumber, 0, false, "Feature line raise/lower", log, [&](int /*fi*/, int v0, int n, const auto& commit) {
+        commit();
+        for (int i = 0; i < n; ++i)
+          FeatureLineZ(st, v0, i) += delta;
+        char buf[160];
+        std::snprintf(buf, sizeof(buf), "FLELEV — feature line %d: all %d point(s) %s %.3f.",
+                      flNumber, n, delta < 0.f ? "lowered by" : "raised by",
+                      std::fabs(static_cast<double>(delta)));
+        log.push_back(buf);
+        return true;
+      });
+}
+
+/// REQ-088: insert an elevation point at plan station \p station.
+///
+/// The plan position is INTERPOLATED along the segment the station falls in, so the new vertex lies
+/// exactly on the line by construction — which is why ADR-035 (b)'s drift risk does not arise here.
+/// It carries the elevation-point flag, so it is not a PI: it changes the surface without changing
+/// the plan shape, which is REQ-088's fourth acceptance condition.
+bool InsertFeatureLineElevationPoint(AppCommandState& st, int flNumber, double station, float elevation,
+                                     std::vector<std::string>& log) {
+  return EditFeatureLineElevations(
+      st, flNumber, 0, false, "Insert elevation point", log, [&](int fi, int v0, int n, const auto& commit) {
+        std::vector<FeatureLineElevRow> rows;
+        if (!BuildFeatureLineElevTable(st, fi, &rows))
+          return false;
+        if (station <= kFeatureLinePlanEps) {
+          log.push_back("FLELEV — station must be past the start of the feature line.");
+          return false;
+        }
+        // Find the segment holding the station. The last row's lengthAhead is 0 on an open line, so
+        // a station past the end matches nothing and is reported rather than clamped.
+        int seg = -1;
+        double along = 0.0;
+        for (int i = 0; i + 1 < n; ++i) {
+          const double s0 = rows[static_cast<size_t>(i)].station;
+          const double len = rows[static_cast<size_t>(i)].lengthAhead;
+          if (station < s0 + len - kFeatureLinePlanEps) {
+            seg = i;
+            along = station - s0;
+            break;
+          }
+        }
+        if (seg < 0 || along <= kFeatureLinePlanEps) {
+          const double total = rows.back().station;
+          char buf[200];
+          std::snprintf(buf, sizeof(buf),
+                        "FLELEV — station %.3f is not inside a segment (the feature line runs 0.000 "
+                        "to %.3f, and a station AT an existing point would add nothing).",
+                        station, total);
+          log.push_back(buf);
+          return false;
+        }
+
+        const size_t a = static_cast<size_t>(v0 + seg) * 3;
+        const size_t b = static_cast<size_t>(v0 + seg + 1) * 3;
+        const double t = along / rows[static_cast<size_t>(seg)].lengthAhead;
+        const float nx = static_cast<float>(st.featureLineVerts[a] +
+                                            t * (st.featureLineVerts[b] - st.featureLineVerts[a]));
+        const float ny = static_cast<float>(st.featureLineVerts[a + 1] +
+                                            t * (st.featureLineVerts[b + 1] - st.featureLineVerts[a + 1]));
+
+        // Insert AFTER point `seg`, i.e. at vertex slot v0+seg+1. The three arrays are cut on
+        // different strides — verts by 3, flags by 1 — which EraseFeatureLineByIndex already showed
+        // is silent when it goes wrong, so both are done here together.
+        const int at = v0 + seg + 1;
+        commit();
+        const float v[3] = {nx, ny, elevation};
+        st.featureLineVerts.insert(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(at) * 3,
+                                   v, v + 3);
+        if (st.featureLineElevPt.size() < static_cast<size_t>(at))
+          st.featureLineElevPt.resize(static_cast<size_t>(at), 0);
+        st.featureLineElevPt.insert(st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(at),
+                                    static_cast<uint8_t>(1));
+        // Every feature line after this one starts a vertex later.
+        for (size_t k = static_cast<size_t>(fi) + 1; k < st.featureLineOffsets.size(); ++k)
+          st.featureLineOffsets[k] += 1;
+
+        char buf[200];
+        std::snprintf(buf, sizeof(buf),
+                      "FLELEV — feature line %d: elevation point added at station %.3f, elevation "
+                      "%.3f (now point %d of %d).",
+                      flNumber, station, static_cast<double>(elevation), seg + 2, n + 1);
+        log.push_back(buf);
+        return true;
+      });
+}
+
+/// REQ-088: delete an elevation point. Refuses a PI — removing one is geometry editing, which is
+/// REQ-087's "insert and delete a PI" and is not built. Refusing out loud beats silently deleting
+/// a vertex the user thought was only carrying an elevation.
+bool DeleteFeatureLineElevationPoint(AppCommandState& st, int flNumber, int pointNumber,
+                                     std::vector<std::string>& log) {
+  return EditFeatureLineElevations(
+      st, flNumber, pointNumber, true, "Delete elevation point", log,
+      [&](int fi, int v0, int /*n*/, const auto& commit) {
+        const int at = v0 + pointNumber - 1;
+        const bool isElevPt = static_cast<size_t>(at) < st.featureLineElevPt.size() &&
+                              st.featureLineElevPt[static_cast<size_t>(at)] != 0;
+        if (!isElevPt) {
+          log.push_back("FLELEV — point " + std::to_string(pointNumber) +
+                        " is a PI, not an elevation point. Deleting a PI changes the plan shape and "
+                        "is not an elevation edit.");
+          return false;
+        }
+        commit();
+        st.featureLineVerts.erase(
+            st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(at) * 3,
+            st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(at + 1) * 3);
+        st.featureLineElevPt.erase(st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(at));
+        for (size_t k = static_cast<size_t>(fi) + 1; k < st.featureLineOffsets.size(); ++k)
+          st.featureLineOffsets[k] -= 1;
+        log.push_back("FLELEV — feature line " + std::to_string(flNumber) + ": elevation point " +
+                      std::to_string(pointNumber) + " deleted.");
+        return true;
+      });
+}
+
+void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log) {
+  // REQ-085. Same draft as POLYLINE — the store is already stride-3 XYZ — with per-vertex elevation
+  // entry switched on. ResetAllCadDraftTools inside StartPolylineCommand clears the flag, so it is
+  // set afterwards, not before.
+  StartPolylineCommand(st, log);
+  log.pop_back();  // replace POLYLINE's prompt rather than printing both
+  st.polylineDraft3d = true;
+  log.push_back("3DPOLY — vertices carry their own elevation: type X,Y,Z (or @dx,dy,dz), or snap. "
+                "X,Y alone uses the snapped point's elevation, else ELEV. CLOSE/CL, END, ESC cancels.");
+}
+
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
@@ -7845,6 +10051,139 @@ void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>&
   log.push_back("SURFELEV — pick a point for its surface elevation; pick a second for grade. ESC cancels.");
 }
 
+namespace {
+/// The stable id (REQ-076) of a picked Line or Polyline, or 0 for anything else / an out-of-range
+/// index — 0 is never a real id (\ref EntityAttributes::id), so it doubles as "not applicable" here.
+std::uint64_t EntityIdOfLineOrPolylinePick(const AppCommandState& st, const SelectedEntity& hit) {
+  const auto idOf = [](const std::vector<EntityAttributes>& v, int i) -> std::uint64_t {
+    return (i >= 0 && static_cast<size_t>(i) < v.size()) ? v[static_cast<size_t>(i)].id : 0;
+  };
+  switch (hit.type) {
+  case SelectedEntity::Type::LineSeg:     return idOf(st.userLineAttrs, hit.index);
+  case SelectedEntity::Type::Polyline:    return idOf(st.userPolylineAttrs, hit.index);
+  case SelectedEntity::Type::FeatureLine: return idOf(st.featureLineAttrs, hit.index);  // REQ-087
+  default:                                return 0;
+  }
+}
+} // namespace
+
+void StartDesignateBreaklineCommand(AppCommandState& st, const std::string& surfaceName,
+                                    std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None) {
+    log.push_back("DESIGNATEBREAKLINE — finish or cancel the active command first.");
+    return;
+  }
+  if (FindSurfaceIndex(st, surfaceName) < 0) {
+    log.push_back("DESIGNATEBREAKLINE — no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.designateSurfaceName = surfaceName;
+  st.active = K::DesignateBreakline;
+  log.push_back("DESIGNATEBREAKLINE — pick a line or polyline to use as a breakline on \"" + surfaceName +
+               "\". ESC cancels.");
+}
+
+void StartDesignateBoundaryCommand(AppCommandState& st, const std::string& surfaceName, CadBoundaryKind kind,
+                                   std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None) {
+    log.push_back("DESIGNATEBOUNDARY — finish or cancel the active command first.");
+    return;
+  }
+  if (FindSurfaceIndex(st, surfaceName) < 0) {
+    log.push_back("DESIGNATEBOUNDARY — no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.designateSurfaceName = surfaceName;
+  st.designateBoundaryKind = kind;
+  st.active = K::DesignateBoundary;
+  const char* kindName = kind == CadBoundaryKind::Outer ? "outer" : kind == CadBoundaryKind::Hide ? "hide" : "show";
+  log.push_back(std::string("DESIGNATEBOUNDARY — pick a CLOSED polyline to use as a ") + kindName +
+               " boundary on \"" + surfaceName + "\". ESC cancels.");
+}
+
+/// Shared commit for both DESIGNATEBREAKLINE and DESIGNATEBOUNDARY: pick, validate, append to the
+/// target surface's definition, and trigger the dynamic rebuild (REQ-069) — a plain BumpCadGpuCache
+/// is enough, since TickSurfaceRebuilds' dirty check is exactly "cadGpuRevision moved."
+void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  const std::string cmdName = isBoundary ? "DESIGNATEBOUNDARY" : "DESIGNATEBREAKLINE";
+  const int si = FindSurfaceIndex(st, st.designateSurfaceName);
+  if (si < 0) {
+    log.push_back(cmdName + " — surface \"" + st.designateSurfaceName + "\" no longer exists.");
+    st.active = K::None;
+    return;
+  }
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+    log.push_back(cmdName + " — nothing under cursor; try again, or ESC to cancel.");
+    return;  // stays active — try again, matching OFFSET's WaitSelectEntity miss behaviour
+  }
+  // REQ-087: a feature line is design linework whose whole purpose is to be a breakline, so it is
+  // accepted here alongside lines and polylines.
+  if (hit.type != SelectedEntity::Type::LineSeg && hit.type != SelectedEntity::Type::Polyline &&
+      hit.type != SelectedEntity::Type::FeatureLine) {
+    log.push_back(cmdName + " — that is not a line, polyline, or feature line; try again, or ESC to cancel.");
+    return;
+  }
+  if (isBoundary && hit.type == SelectedEntity::Type::LineSeg) {
+    log.push_back(cmdName + " — a boundary must be a closed polyline or feature line, not a line; "
+                            "try again, or ESC to cancel.");
+    return;
+  }
+  if (isBoundary) {
+    const size_t ix = static_cast<size_t>(hit.index);
+    const bool closed = hit.type == SelectedEntity::Type::FeatureLine
+                            ? (ix < st.featureLineClosed.size() && st.featureLineClosed[ix] != 0)
+                            : (ix < st.userPolylineClosed.size() && st.userPolylineClosed[ix] != 0);
+    if (!closed) {
+      log.push_back(cmdName + " — that " +
+                    (hit.type == SelectedEntity::Type::FeatureLine ? "feature line" : "polyline") +
+                    " is not closed; try again, or ESC to cancel.");
+      return;
+    }
+  }
+  const std::uint64_t id = EntityIdOfLineOrPolylinePick(st, hit);
+  if (id == 0) {
+    log.push_back(cmdName + " — could not identify that entity; try again, or ESC to cancel.");
+    return;
+  }
+
+  CadSurface& surface = st.cadSurfaces[static_cast<size_t>(si)];
+  if (isBoundary) {
+    CadSurfaceBoundary b;
+    b.entityId = id;
+    b.kind = st.designateBoundaryKind;
+    b.name = st.designateBoundaryName;  // REQ-075; empty when the command was typed, not dialogued
+    surface.boundaries.push_back(b);
+    const char* kindName = b.kind == CadBoundaryKind::Outer ? "outer"
+                          : b.kind == CadBoundaryKind::Hide  ? "hide"
+                                                              : "show";
+    log.push_back("DESIGNATEBOUNDARY — added a " + std::string(kindName) + " boundary" +
+                  (b.name.empty() ? "" : " \"" + b.name + "\"") + " to \"" + surface.name + "\".");
+  } else {
+    CadSurfaceBreakline bl;
+    bl.entityId = id;
+    bl.description = st.designateBreaklineDescription;
+    surface.breaklines.push_back(bl);
+    log.push_back("DESIGNATEBREAKLINE — added a breakline" +
+                  (bl.description.empty() ? "" : " \"" + bl.description + "\"") + " to \"" + surface.name + "\".");
+  }
+  // Consumed: a later typed DESIGNATE* must not inherit the last dialog's text.
+  st.designateBreaklineDescription.clear();
+  st.designateBoundaryName.clear();
+  BumpCadGpuCache(st);  // marks every surface's dirty check; TickSurfaceRebuilds picks this one up next frame
+  st.active = K::None;
+}
+
 void StartSurveyInverseCommand(AppCommandState& st, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
   using SIP = AppCommandState::SurveyInversePhase;
@@ -7958,6 +10297,12 @@ void SyncDrawingLayerTableWithGeometry(AppCommandState& st) {
   TextStyles::EnsureStandard(st.textStyles);
   if (st.activeTextStyleName.empty() || !TextStyles::Find(st.textStyles, st.activeTextStyleName))
     st.activeTextStyleName = TextStyles::kStandardName;
+  // Surface styles (REQ-070): the same guarantee, and it is what a legacy `.gs` relies on — a file
+  // written before this table existed has no styles section at all, and every surface in it carries
+  // an empty styleName that must resolve to something drawable (ADR-036 (d)). Left to the loader
+  // alone it would hold for `.gs` and not for DXF import or a fresh document, so it lives in the one
+  // normalisation pass every route to a drawing already goes through.
+  SurfaceStyles::EnsureStandard(st.surfaceStyles);
 }
 
 const TextStyle* ActiveTextStyle(const AppCommandState& st) {
@@ -8311,6 +10656,14 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
       }
       break;
     }
+    case SelectedEntity::Type::Surface: {
+      // REQ-068 / ADR-036 (b). Skips invisible surfaces, so SELECTSIMILAR cannot select something
+      // the user cannot see — the same rule the pick funnel applies (REQ-084 (d)).
+      for (size_t i = 0; i < st.cadSurfaces.size(); ++i)
+        if (SurfaceVisible(st, i))
+          consider(SelectedEntity::Type::Surface, static_cast<int>(i));
+      break;
+    }
     default:
       break;
     }
@@ -8370,6 +10723,10 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadMeshAttrs.clear();
   ClearPendingOneShotObjectSnap(st);
   ClearCadSelection(st);
+  // Isolation is keyed on entity ids, and the id space restarts above — so a hidden set kept here
+  // would name whatever the next drawing happens to number the same way. This is also what makes
+  // "opening a drawing always shows all of it" true (REQ-084 (d)), since every load clears first.
+  st.hiddenEntityIds.clear();
   BumpCadGpuCache(st);
 }
 
@@ -8454,6 +10811,49 @@ static void ErasePolylineByIndex(AppCommandState& st, int pi) {
     st.userPolylineClosed.erase(st.userPolylineClosed.begin() + static_cast<std::ptrdiff_t>(pi));
   if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
     st.userPolylineAttrs.erase(st.userPolylineAttrs.begin() + static_cast<std::ptrdiff_t>(pi));
+}
+
+/// REQ-087. The polyline eraser's twin, with one extra array: the per-VERTEX elevation-point flags
+/// are cut over the same [3a, 3b) span the vertices are — in flags, that is [a, b), not the triplet
+/// range. Getting that wrong would leave the flag array the right length overall while shifting every
+/// flag after the erased line by a vertex or three, which is silent (ADR-035 (a)).
+static void EraseFeatureLineByIndex(AppCommandState& st, int fi) {
+  if (fi < 0 || static_cast<size_t>(fi + 1) >= st.featureLineOffsets.size())
+    return;
+  const int nfl = static_cast<int>(st.featureLineOffsets.size()) - 1;
+  std::vector<int> nvPer(static_cast<size_t>(nfl));
+  for (int i = 0; i < nfl; ++i)
+    nvPer[static_cast<size_t>(i)] =
+        st.featureLineOffsets[static_cast<size_t>(i + 1)] - st.featureLineOffsets[static_cast<size_t>(i)];
+  const int a = st.featureLineOffsets[static_cast<size_t>(fi)];
+  const int b = st.featureLineOffsets[static_cast<size_t>(fi + 1)];
+  if (static_cast<size_t>(3 * b) <= st.featureLineVerts.size())
+    st.featureLineVerts.erase(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(3 * a),
+                              st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(3 * b));
+  if (static_cast<size_t>(b) <= st.featureLineElevPt.size())
+    st.featureLineElevPt.erase(st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(a),
+                               st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(b));
+  std::vector<int> newOff;
+  newOff.reserve(static_cast<size_t>(std::max(0, nfl - 1) + 1));
+  newOff.push_back(0);
+  int run = 0;
+  for (int i = 0; i < nfl; ++i) {
+    if (i == fi)
+      continue;
+    run += nvPer[static_cast<size_t>(i)];
+    newOff.push_back(run);
+  }
+  // Same rule as polylines, and for the same reason (issue #60): zero feature lines is spelled as an
+  // EMPTY table, never `{0}`. The invariant added for this store checks it too.
+  if (newOff.size() == 1)
+    newOff.clear();
+  st.featureLineOffsets = std::move(newOff);
+  if (static_cast<size_t>(fi) < st.featureLineClosed.size())
+    st.featureLineClosed.erase(st.featureLineClosed.begin() + static_cast<std::ptrdiff_t>(fi));
+  if (static_cast<size_t>(fi) < st.featureLineInfo.size())
+    st.featureLineInfo.erase(st.featureLineInfo.begin() + static_cast<std::ptrdiff_t>(fi));
+  if (static_cast<size_t>(fi) < st.featureLineAttrs.size())
+    st.featureLineAttrs.erase(st.featureLineAttrs.begin() + static_cast<std::ptrdiff_t>(fi));
 }
 
 void EraseCadAnnotationAtIndex(AppCommandState& st, size_t annIndex) {
@@ -8569,12 +10969,14 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::set<int> arcIx;
   std::set<int> ellIx;
   std::set<int> polyIx;
+  std::set<int> flIx;  // REQ-087
   const size_t nLines = st.userLinesFlat.size() / 6;
   const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
   const size_t nAnn = st.cadAnnotations.size();
   const size_t nArc = st.userArcs.size();
   const size_t nEll = st.userEllipses.size();
   const size_t nPoly = st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0;
+  const size_t nFl = st.featureLineOffsets.size() > 0 ? st.featureLineOffsets.size() - 1 : 0;
   for (const auto& e : st.selection) {
     if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 && static_cast<size_t>(e.index) < nLines)
       lineIx.insert(e.index);
@@ -8588,12 +10990,22 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
       ellIx.insert(e.index);
     else if (e.type == SelectedEntity::Type::Polyline && e.index >= 0 && static_cast<size_t>(e.index) < nPoly)
       polyIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::FeatureLine && e.index >= 0 &&
+             static_cast<size_t>(e.index) < nFl)
+      flIx.insert(e.index);  // REQ-087
   }
 
   std::vector<int> pv(polyIx.begin(), polyIx.end());
   std::sort(pv.begin(), pv.end(), std::greater<int>());
   for (int idx : pv)
     ErasePolylineByIndex(st, idx);
+
+  // REQ-087. Highest index first, like every other compacting erase here, so an earlier removal
+  // cannot shift an index that has not been used yet.
+  std::vector<int> flv(flIx.begin(), flIx.end());
+  std::sort(flv.begin(), flv.end(), std::greater<int>());
+  for (int idx : flv)
+    EraseFeatureLineByIndex(st, idx);
 
   std::vector<int> lv(lineIx.begin(), lineIx.end());
   std::sort(lv.begin(), lv.end(), std::greater<int>());
@@ -8613,8 +11025,12 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     const size_t k = static_cast<size_t>(idx) * 4;
     if (k + 3 >= st.userCirclesCxCyZR.size())
       continue;
+    // k + 4, not k + 3: erase() takes a HALF-OPEN range and this store is stride 4
+    // (cx, cy, z, r — architecture §11.8). Removing three floats left the array a non-multiple of
+    // the stride and shifted every later circle by one slot, so each read its predecessor's radius
+    // as its centre X — and SAVEAS wrote that out. Issue #62.
     st.userCirclesCxCyZR.erase(st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k),
-                              st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k + 3));
+                               st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k + 4));
     if (static_cast<size_t>(idx) < st.userCircleAttrs.size())
       st.userCircleAttrs.erase(st.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
   }
@@ -8675,6 +11091,27 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     st.cadMeshes.erase(st.cadMeshes.begin() + static_cast<std::ptrdiff_t>(idx));
     if (static_cast<size_t>(idx) < st.cadMeshAttrs.size())
       st.cadMeshAttrs.erase(st.cadMeshAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  // TIN surfaces (REQ-068: "erasing a surface is undoable in one step" — the caller has already
+  // pushed one snapshot for this whole erase, so removing it here is that one step).
+  //
+  // Goes through EraseSurfaceAtIndex rather than erasing the two vectors inline like the blocks
+  // above, so there is one erase path to keep correct. An in-flight rebuild (REQ-069) needs no
+  // cancellation here: the job is keyed on the surface's stable id (ADR-036 (a)), that id is never
+  // reused (REQ-076), so when the worker finishes `FindSurfaceIndexById` returns -1 and the result is
+  // discarded — REQ-069's own rule, reached without a second mechanism.
+  {
+    std::set<int> surfIx;
+    const size_t nSurf = st.cadSurfaces.size();
+    for (const auto& e : st.selection) {
+      if (e.type == SelectedEntity::Type::Surface && e.index >= 0 && static_cast<size_t>(e.index) < nSurf)
+        surfIx.insert(e.index);
+    }
+    std::vector<int> sv(surfIx.begin(), surfIx.end());
+    std::sort(sv.begin(), sv.end(), std::greater<int>());
+    for (int idx : sv)
+      EraseSurfaceAtIndex(st, static_cast<size_t>(idx));
   }
 
   // PDF underlays: release GL texture and erase from highest index downward.
@@ -9309,6 +11746,11 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
   auto consider = [&](const SelectedEntity& e, double d2) {
     if (d2 > tol2)
       return;
+    // REQ-084 (d): an isolated-out entity is invisible, so it must not answer a click either.
+    // Gated at this single funnel — every entity type this function enumerates passes through it,
+    // so there is no per-type gate to forget.
+    if (CadSelectedEntityHidden(st, e))
+      return;
     if (!any || d2 < best - 1e-12) {
       any = true;
       best = d2;
@@ -9423,6 +11865,82 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
     consider(e, bestD2);
   }
 
+  // Feature lines (REQ-087) — identical segment walk, through the same `consider` funnel, which is
+  // what makes a feature line compete with every other entity on distance rather than being picked
+  // by a separate rule. ADR-034 relies on this being the single funnel; so does this.
+  {
+    const int nFl =
+        static_cast<int>(st.featureLineOffsets.size() > 0 ? st.featureLineOffsets.size() - 1 : 0);
+    const auto& FV = st.featureLineVerts;
+    for (int fi = 0; fi < nFl; ++fi) {
+      const int v0 = st.featureLineOffsets[static_cast<size_t>(fi)];
+      const int v1 = st.featureLineOffsets[static_cast<size_t>(fi + 1)];
+      const bool closed = static_cast<size_t>(fi) < st.featureLineClosed.size() &&
+                          st.featureLineClosed[static_cast<size_t>(fi)];
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::FeatureLine;
+      e.index = fi;
+      double bestD2 = 1e300;
+      for (int vi = v0; vi + 1 < v1; ++vi) {
+        const size_t A = static_cast<size_t>(vi) * 3, B = static_cast<size_t>(vi + 1) * 3;
+        if (B + 2 >= FV.size())
+          break;
+        bestD2 = std::min(bestD2, d2Segment(FV[A], FV[A + 1], FV[A + 2], FV[B], FV[B + 1], FV[B + 2]));
+      }
+      if (closed && v1 - v0 >= 2) {
+        const size_t A = static_cast<size_t>(v1 - 1) * 3, B = static_cast<size_t>(v0) * 3;
+        if (A + 2 < FV.size() && B + 2 < FV.size())
+          bestD2 = std::min(bestD2, d2Segment(FV[A], FV[A + 1], FV[A + 2], FV[B], FV[B + 1], FV[B + 2]));
+      }
+      consider(e, bestD2);
+    }
+  }
+
+  // TIN surfaces (REQ-068 / ADR-036 (b)) — a click anywhere near a triangle edge selects the WHOLE
+  // surface, so this competes on distance through the same `consider` funnel as everything above.
+  //
+  // **Layer and isolation are filtered here, not in `consider`.** Every other kind reaches
+  // `consider` and is gated there by `CadSelectedEntityHidden`; a surface is gated one level earlier
+  // by `SurfaceVisible`, because that predicate also carries the layer rule the renderer applies to
+  // surfaces (REQ-068) and which `consider` does not know about. Filtering the whole surface once is
+  // also what keeps a hidden 200k-triangle surface from costing a full walk per frame.
+  //
+  // **The per-triangle plan-AABB reject is load-bearing, not a micro-optimisation.** Hover runs this
+  // every frame, and REQ-100's surface profile is ~200k triangles = 600k edges. Four compares that
+  // discard a triangle before three distance computations is the difference between a pick that fits
+  // the frame budget and one that does not. Under a ray (an orbited camera) the plan AABB does not
+  // bound the ray, so the reject is skipped rather than made approximately correct — a pick that
+  // silently misses is worse than a slow one.
+  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+    if (!SurfaceVisible(st, si))
+      continue;
+    const CadTin& t = *st.cadSurfaces[si].tin;
+    const std::vector<float>& V = t.vertsXyz;
+    SelectedEntity e{};
+    e.type = SelectedEntity::Type::Surface;
+    e.index = static_cast<int>(si);
+    double bestD2 = 1e300;
+    for (size_t i = 0; i + 2 < t.indices.size(); i += 3) {
+      const size_t a = static_cast<size_t>(t.indices[i]) * 3;
+      const size_t b = static_cast<size_t>(t.indices[i + 1]) * 3;
+      const size_t c = static_cast<size_t>(t.indices[i + 2]) * 3;
+      if (a + 2 >= V.size() || b + 2 >= V.size() || c + 2 >= V.size())
+        break;
+      if (!useRay) {
+        const double lo_x = std::min(std::min(V[a], V[b]), V[c]);
+        const double hi_x = std::max(std::max(V[a], V[b]), V[c]);
+        const double lo_y = std::min(std::min(V[a + 1], V[b + 1]), V[c + 1]);
+        const double hi_y = std::max(std::max(V[a + 1], V[b + 1]), V[c + 1]);
+        if (wx < lo_x - tolWorld || wx > hi_x + tolWorld || wy < lo_y - tolWorld || wy > hi_y + tolWorld)
+          continue;
+      }
+      bestD2 = std::min(bestD2, d2Segment(V[a], V[a + 1], V[a + 2], V[b], V[b + 1], V[b + 2]));
+      bestD2 = std::min(bestD2, d2Segment(V[b], V[b + 1], V[b + 2], V[c], V[c + 1], V[c + 2]));
+      bestD2 = std::min(bestD2, d2Segment(V[c], V[c + 1], V[c + 2], V[a], V[a + 1], V[a + 2]));
+    }
+    consider(e, bestD2);
+  }
+
   if (!any)
     return false;
   *out = bestE;
@@ -9438,6 +11956,10 @@ int PickFilledRegionAt(const AppCommandState& st, double wx, double wy) {
   int best = -1;
   double bestArea = 0.0;
   for (size_t i = 0; i < st.cadFilledRegions.size(); ++i) {
+    // REQ-084 (d): an isolated-out fill is invisible and must not answer a click.
+    if (!st.hiddenEntityIds.empty() && i < st.cadFilledRegionAttrs.size() &&
+        CadEntityIdHidden(&st.hiddenEntityIds, st.cadFilledRegionAttrs[i].id))
+      continue;
     if (!hatchgeom::ContainsPoint(st.cadFilledRegions[i], wx, wy))
       continue;
     const double area = hatchgeom::OuterAreaAbs(st.cadFilledRegions[i]);
@@ -10150,6 +12672,22 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
       log.push_back("TRIM — use a line, circle, arc, ellipse, or polyline as a cutting edge.");
       return false;
     }
+    // REQ-087 / REQ-201. Same reasoning as the Annotation refusal above it: a feature line is
+    // pickable, so it would otherwise be accepted as a cutting edge and then contribute no cut
+    // segments, leaving the user with "no cutting segments" and no idea why.
+    if (hit.type == SelectedEntity::Type::FeatureLine) {
+      log.push_back("TRIM — 1 feature line ignored: a feature line cannot be a cutting edge. Use a "
+                    "line, circle, arc, ellipse, or polyline.");
+      return false;
+    }
+    // REQ-068 / ADR-036 (c). Same class as the two refusals above: a surface is pickable now, so it
+    // would otherwise be accepted as a cutting edge, contribute no cut segments, and leave the user
+    // with "no cutting segments" and nothing to explain it.
+    if (hit.type == SelectedEntity::Type::Surface) {
+      log.push_back("TRIM — 1 surface ignored: a surface cannot be a cutting edge. Use a line, "
+                    "circle, arc, ellipse, or polyline.");
+      return false;
+    }
     for (const auto& c : st.trimCutters) {
       if (SelectedEntityMatches(c, hit)) {
         log.push_back("TRIM — already a cutting edge.");
@@ -10164,7 +12702,17 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
   TrimTargetEdge tgt{};
   float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f, d2 = 0.f;
   if (!PickClosestTrimTarget(st, wx, wy, tolWorld, &tgt, &ax, &ay, &bx, &by, &d2)) {
-    log.push_back("TRIM — nothing to trim at pick.");
+    // REQ-087 / REQ-201. "Nothing to trim" is a lie when there plainly IS something under the
+    // cursor and it happens to be a feature line. Say which it is: trimming one is undefined —
+    // the new end would need an elevation, and neither REQ-087 nor REQ-088 says where it comes from.
+    SelectedEntity under{};
+    float ud2 = 0.f;
+    if (PickClosestCadEntity(st, wx, wy, tolWorld, &under, &ud2) &&
+        under.type == SelectedEntity::Type::FeatureLine)
+      log.push_back("TRIM — 1 feature line ignored: trimming one has no defined elevation for the "
+                    "new end.");
+    else
+      log.push_back("TRIM — nothing to trim at pick.");
     return false;
   }
 
@@ -10185,6 +12733,21 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
 void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
   PushUndoSnapshot(st, "Join");
   using ST = SelectedEntity::Type;
+
+  // REQ-087 / REQ-201. Feature lines in the selection are skipped by the edge walk below, and until
+  // now that skip was silent — the user would see "JOIN — 2 edges joined" on a selection of three
+  // objects and have no way to learn which one was left out. Joining two feature lines is not
+  // merely unimplemented: it is undefined, because the shared endpoint would need one elevation and
+  // the two lines each supply their own, and nothing in REQ-087 or REQ-088 says which wins.
+  int featureLinesSkipped = 0;
+  for (const auto& se : st.selection)
+    if (se.type == ST::FeatureLine)
+      ++featureLinesSkipped;
+  if (featureLinesSkipped > 0)
+    log.push_back("JOIN — " + std::to_string(featureLinesSkipped) + " feature line" +
+                  (featureLinesSkipped == 1 ? "" : "s") +
+                  " ignored: joining feature lines has no defined elevation at the shared end.");
+
   struct Edge {
     float x0, y0, x1, y1;
     int lineIx;
@@ -11074,7 +13637,19 @@ bool StartFrameBudgetBench(AppCommandState& st, int segments, int frames, std::v
     b.surfaceTriangleCount = bs.triangleCount();
     st.cadSurfaces.assign(1, std::move(bs));
     st.cadSurfaceAttrs.assign(1, MakeNewEntityAttrs(st));
-    b.segmentCount = b.surfaceTriangleCount * 3;  // edges drawn, for the report
+    b.segmentCount = b.surfaceTriangleCount * 3;  // triangulation edges, for the report
+
+    // REQ-100 profile (c) is defined as a **contoured** surface, and until REQ-070 landed this case
+    // measured an uncontoured one because contours did not exist. The bench surface carries no
+    // styleName, so it resolves to "Standard" — which draws contours and the border — and the record
+    // below states the interval, because a contour count is meaningless without it.
+    SurfaceStyles::EnsureStandard(st.surfaceStyles);
+    if (const SurfaceStyle* bstyle = SurfaceStyles::Resolve(st.surfaceStyles, std::string())) {
+      b.surfaceMinorIntervalFt = bstyle->minorIntervalFt;
+      b.surfaceMajorIntervalFt = bstyle->majorIntervalFt;
+    }
+    b.regenBaselineTaken = false;
+    b.regenDuringRun = 0;
   } else {
     b.segmentCount = benchscene::BuildContourScene(segments, &st.userPolylineVerts, &st.userPolylineOffsets,
                                                    &st.userPolylineClosed);
@@ -11198,9 +13773,11 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
     profileName = "shaded meshes";
     std::snprintf(scene, sizeof(scene), "%d triangles, Shaded", b.meshTriangleCount);
   } else if (b.surfacePointCount > 0) {
-    profileName = "surface";
-    std::snprintf(scene, sizeof(scene), "%d points, %d triangles (%d edges)", b.surfacePointCount,
-                  b.surfaceTriangleCount, b.segmentCount);
+    profileName = "surface (contoured)";
+    std::snprintf(scene, sizeof(scene), "%d points, %d triangles, contoured at %s/%s ft (%d contour segs)",
+                  b.surfacePointCount, b.surfaceTriangleCount,
+                  SurfaceStyles::FormatFt(b.surfaceMinorIntervalFt).c_str(),
+                  SurfaceStyles::FormatFt(b.surfaceMajorIntervalFt).c_str(), b.surfaceContourSegs);
   }
 
   char msg[320];
@@ -11210,6 +13787,18 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
   std::snprintf(msg, sizeof(msg), "BENCH — min %.2f  median %.2f  mean %.2f  p95 %.2f  p99 %.2f  max %.2f ms.",
                 s.minMs, s.medianMs, s.meanMs, s.p95Ms, s.p99Ms, s.maxMs);
   log.push_back(msg);
+
+  // ADR-036 (e)'s separate obligation, reported separately: the timing above would look identical
+  // whether the cache held or not on a fast enough machine, so "held" has to be its own claim.
+  const bool cacheHeld = b.regenDuringRun == 0;
+  if (b.surfacePointCount > 0) {
+    std::snprintf(msg, sizeof(msg),
+                  "BENCH — surface display cache regenerated %llu time(s) across %d timed frames "
+                  "(expected 0) — %s.",
+                  static_cast<unsigned long long>(b.regenDuringRun), s.frames,
+                  cacheHeld ? "HELD" : "NOT HELD, contours are being regenerated per frame");
+    log.push_back(msg);
+  }
 
   // Also written to a file: a benchmark's value is in the record, and reading six figures off a
   // fading command line is how a number gets transcribed wrong into a completion report.
@@ -11239,7 +13828,18 @@ void FinishFrameBudgetBench(AppCommandState& st, std::vector<std::string>& log) 
         << "  p95           " << s.p95Ms << " ms   <-- REQ-100 is judged on this\n"
         << "  p99           " << s.p99Ms << " ms\n"
         << "  max           " << s.maxMs << " ms\n"
-        << "  budget        " << kBudgetMs << " ms  => " << (pass ? "PASS" : "FAIL") << "\n\n";
+        << "  budget        " << kBudgetMs << " ms  => " << (pass ? "PASS" : "FAIL") << "\n";
+      if (b.surfacePointCount > 0) {
+        // The record's own half of ADR-036 (e). TASK-053's fix (b) applies here too: the permanent
+        // record is the half that gets missed, and a p95 with no statement of whether the cache held
+        // cannot be told apart from one measured with the defect present.
+        f << "  contour interval  minor " << SurfaceStyles::FormatFt(b.surfaceMinorIntervalFt)
+          << " ft, major " << SurfaceStyles::FormatFt(b.surfaceMajorIntervalFt) << " ft\n"
+          << "  contour segs      " << b.surfaceContourSegs << "\n"
+          << "  cache regens      " << b.regenDuringRun << " during the timed frames (expected 0)  => "
+          << (cacheHeld ? "HELD" : "NOT HELD") << "\n";
+      }
+      f << "\n";
     }
   }
   b.frameMs.clear();
@@ -11422,6 +14022,174 @@ void StartPanCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.lastCommand = K::Pan;
   st.selBoxWaitingSecond = false;
   log.push_back("PAN — drag with the left mouse button. Press Esc, Enter, or right-click to exit.");
+}
+
+void StartOrbitCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None && st.active != K::Orbit) {
+    log.push_back("ORBIT — finish or cancel the active command first.");
+    return;
+  }
+  // Paper space is 2D by definition (ADR-025 (g)) — a sheet has no orientation to tumble, and
+  // letting it tilt would put the plot geometry somewhere the plot cannot follow.
+  if (st.activeSpaceIndex != kModelSpaceIndex) {
+    log.push_back("ORBIT — model space only; a paper sheet is 2D.");
+    return;
+  }
+  ResetAllCadDraftTools(st);
+  ResetModifyRotateDraft(st);
+  st.active      = K::Orbit;
+  st.lastCommand = K::Orbit;
+  st.selBoxWaitingSecond = false;
+  log.push_back("ORBIT — drag with the left mouse button to tumble. Press Esc, Enter, or right-click to exit.");
+}
+
+// ---------------------------------------------------------------------------
+// Object isolation (REQ-084 (d) / ADR-034)
+// ---------------------------------------------------------------------------
+
+const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, const SelectedEntity& e) {
+  using T = SelectedEntity::Type;
+  if (e.index < 0)
+    return nullptr;
+  const size_t i = static_cast<size_t>(e.index);
+  auto at = [i](const std::vector<EntityAttributes>& v) -> const EntityAttributes* {
+    return i < v.size() ? &v[i] : nullptr;
+  };
+  switch (e.type) {
+  case T::LineSeg:      return at(st.userLineAttrs);
+  case T::Circle:       return at(st.userCircleAttrs);
+  case T::Polyline:     return at(st.userPolylineAttrs);
+  case T::Arc:          return at(st.userArcAttrs);
+  case T::Ellipse:      return at(st.userEllAttrs);
+  case T::Annotation:   return at(st.cadAnnotationAttrs);
+  case T::FilledRegion: return at(st.cadFilledRegionAttrs);
+  case T::Mesh:         return at(st.cadMeshAttrs);
+  case T::FeatureLine:  return at(st.featureLineAttrs);  // REQ-087 — layer, colour, and its stable id
+  // REQ-068 / ADR-036 (a). A surface has carried an EntityAttributes since the store was written —
+  // it simply had no SelectedEntity::Type to be reached through, and no EntityKind, so its `id` was
+  // never assigned. Adding it here is what gives a surface REQ-084 isolation gating and Properties
+  // layer/colour, both inherited rather than re-implemented.
+  case T::Surface:      return at(st.cadSurfaceAttrs);
+  // Survey points and PDF underlays carry no EntityAttributes and are out of REQ-084's scope.
+  default:              return nullptr;
+  }
+}
+
+bool CadSelectedEntityHidden(const AppCommandState& st, const SelectedEntity& e) {
+  if (st.hiddenEntityIds.empty())
+    return false;
+  const EntityAttributes* a = CadEntityAttrsForSelected(st, e);
+  return a && CadEntityIdHidden(&st.hiddenEntityIds, a->id);
+}
+
+namespace {
+
+/// Ids of the entity types isolation covers, in one place so "everything" and "the selection"
+/// can never disagree about what the set of isolatable objects is.
+void CollectIsolatableIds(const AppCommandState& st, std::vector<std::uint64_t>* out) {
+  auto take = [out](const std::vector<EntityAttributes>& v) {
+    for (const EntityAttributes& a : v)
+      if (a.id != 0)
+        out->push_back(a.id);
+  };
+  take(st.userLineAttrs);
+  take(st.userCircleAttrs);
+  take(st.userPolylineAttrs);
+  take(st.userArcAttrs);
+  take(st.userEllAttrs);
+  take(st.cadAnnotationAttrs);
+  take(st.cadFilledRegionAttrs);
+  take(st.cadMeshAttrs);
+}
+
+/// Ids of the current selection that isolation can act on, plus how many picks it had to skip
+/// (survey points / PDF underlays), so the caller can say so rather than silently dropping them.
+void CollectSelectedIsolatableIds(const AppCommandState& st, std::vector<std::uint64_t>* out, int* outSkipped) {
+  *outSkipped = 0;
+  for (const SelectedEntity& e : st.selection) {
+    const EntityAttributes* a = CadEntityAttrsForSelected(st, e);
+    if (a && a->id != 0)
+      out->push_back(a->id);
+    else
+      ++*outSkipped;
+  }
+  *outSkipped += static_cast<int>(st.selectedSurveyPointIndices.size());
+}
+
+void SortUniqueIds(std::vector<std::uint64_t>* v) {
+  std::sort(v->begin(), v->end());
+  v->erase(std::unique(v->begin(), v->end()), v->end());
+}
+
+/// Isolation hides objects, so leaving them selected would keep grips and the modify commands
+/// pointed at geometry the user can no longer see.
+void DropHiddenFromSelection(AppCommandState& st) {
+  auto& sel = st.selection;
+  sel.erase(std::remove_if(sel.begin(), sel.end(),
+                           [&](const SelectedEntity& e) { return CadSelectedEntityHidden(st, e); }),
+            sel.end());
+}
+
+void ReportSkippedPicks(int skipped, std::vector<std::string>& log) {
+  if (skipped > 0)
+    log.push_back("  (" + std::to_string(skipped) +
+                  " selected item(s) skipped — survey points and PDF underlays are not isolatable.)");
+}
+
+} // namespace
+
+void IsolateSelectedObjects(AppCommandState& st, std::vector<std::string>& log) {
+  EnsureEntityIds(st);  // an entity created this frame has id 0 until the sweep runs
+  std::vector<std::uint64_t> keep;
+  int skipped = 0;
+  CollectSelectedIsolatableIds(st, &keep, &skipped);
+  if (keep.empty()) {
+    log.push_back("ISOLATEOBJECTS — nothing isolatable is selected; nothing hidden.");
+    ReportSkippedPicks(skipped, log);
+    return;
+  }
+  SortUniqueIds(&keep);
+
+  std::vector<std::uint64_t> all;
+  CollectIsolatableIds(st, &all);
+
+  st.hiddenEntityIds = CadIsolationHiddenSet(std::move(all), keep);  // sorted, as the gates require
+  BumpCadGpuCache(st);
+  log.push_back("ISOLATEOBJECTS — " + std::to_string(keep.size()) + " object(s) isolated, " +
+                std::to_string(st.hiddenEntityIds.size()) + " hidden.");
+  ReportSkippedPicks(skipped, log);
+}
+
+void HideSelectedObjects(AppCommandState& st, std::vector<std::string>& log) {
+  EnsureEntityIds(st);
+  std::vector<std::uint64_t> hide;
+  int skipped = 0;
+  CollectSelectedIsolatableIds(st, &hide, &skipped);
+  if (hide.empty()) {
+    log.push_back("HIDEOBJECTS — nothing isolatable is selected; nothing hidden.");
+    ReportSkippedPicks(skipped, log);
+    return;
+  }
+  const size_t before = st.hiddenEntityIds.size();
+  st.hiddenEntityIds.insert(st.hiddenEntityIds.end(), hide.begin(), hide.end());
+  SortUniqueIds(&st.hiddenEntityIds);
+  DropHiddenFromSelection(st);
+  BumpCadGpuCache(st);
+  log.push_back("HIDEOBJECTS — " + std::to_string(st.hiddenEntityIds.size() - before) +
+                " object(s) hidden (" + std::to_string(st.hiddenEntityIds.size()) + " hidden in total).");
+  ReportSkippedPicks(skipped, log);
+}
+
+void EndObjectIsolation(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.hiddenEntityIds.empty()) {
+    log.push_back("UNISOLATEOBJECTS — nothing was hidden.");
+    return;
+  }
+  const size_t n = st.hiddenEntityIds.size();
+  st.hiddenEntityIds.clear();
+  BumpCadGpuCache(st);
+  log.push_back("UNISOLATEOBJECTS — " + std::to_string(n) + " object(s) shown.");
 }
 
 Viewport* CurrentViewport(AppCommandState& st) {
@@ -11619,6 +14387,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("CIRCLE canceled.");
   else if (st.active == AppCommandState::Kind::Polyline)
     log.push_back("POLYLINE canceled.");
+  else if (st.active == AppCommandState::Kind::FeatureLine)
+    log.push_back("FEATURELINE canceled.");  // REQ-201: was silent
   else if (st.active == AppCommandState::Kind::Arc)
     log.push_back("ARC canceled.");
   else if (st.active == AppCommandState::Kind::Ellipse)
@@ -11663,6 +14433,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("ZOOM WINDOW canceled.");
   else if (st.active == AppCommandState::Kind::Pan)
     log.push_back("PAN — exited.");
+  else if (st.active == AppCommandState::Kind::Orbit)
+    log.push_back("ORBIT — exited.");
   else if (st.active == AppCommandState::Kind::VpFreeze)
     log.push_back("VPFREEZE — exited.");
   else if (st.active == AppCommandState::Kind::VpThaw)
@@ -11828,30 +14600,56 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
     return false;
 
   using PP = AppCommandState::PolylinePhase;
+
+  // The vertex elevation, in priority order (REQ-085): an elevation typed on this line, then the
+  // ordinary rule — the snapped point's own Z, else the work plane (REQ-058). A typed Z is consumed
+  // here so it cannot leak into the NEXT vertex, which would silently repeat the last elevation.
+  float vz = CadCommitElevation(st);
+  if (st.polylineTypedZValid) {
+    vz = st.polylineTypedZRelative ? st.anchorZ + st.polylineTypedZ : st.polylineTypedZ;
+    st.polylineTypedZValid = false;
+    st.polylineTypedZRelative = false;
+  }
+  const char* who = st.polylineDraft3d ? "3DPOLY" : "POLYLINE";
+
   if (st.polylinePhase == PP::NeedFirstPoint) {
     st.polylineDraftVerts.clear();
     st.polylineDraftVerts.push_back(x);
     st.polylineDraftVerts.push_back(y);
-    st.polylineDraftVerts.push_back(CadCommitElevation(st));  // snap overrides ELEV (REQ-058)
+    st.polylineDraftVerts.push_back(vz);
     st.anchorX = x;
-    st.anchorZ = CadCommitElevation(st);
+    st.anchorZ = vz;
     st.anchorY = y;
     st.polyFirstX = x;
     st.polyFirstY = y;
     st.polyDraftSegments = 0;
     st.polylinePhase = PP::NeedNextPoint;
-    log.push_back("POLYLINE — next vertex (A + bearing then distance like LINE), CLOSE / END, or ESC.");
+    if (st.polylineDraft3d) {
+      // Reported for the same reason every later vertex is: the elevation is the thing 3DPOLY exists
+      // to control, and it is otherwise invisible until the drawing is saved (REQ-201).
+      char buf[96];
+      std::snprintf(buf, sizeof(buf), "3DPOLY first vertex at elevation %.3f.", static_cast<double>(vz));
+      log.push_back(buf);
+    }
+    log.push_back(std::string(who) +
+                  " — next vertex (A + bearing then distance like LINE), CLOSE / END, or ESC.");
     return true;
   }
 
   st.polylineDraftVerts.push_back(x);
   st.polylineDraftVerts.push_back(y);
-  st.polylineDraftVerts.push_back(CadCommitElevation(st));  // snap overrides ELEV (REQ-058)
+  st.polylineDraftVerts.push_back(vz);
   ++st.polyDraftSegments;
   st.anchorX = x;
-  st.anchorZ = CadCommitElevation(st);
+  st.anchorZ = vz;
   st.anchorY = y;
-  log.push_back("POLYLINE vertex added.");
+  if (st.polylineDraft3d) {
+    char buf[96];
+    std::snprintf(buf, sizeof(buf), "3DPOLY vertex added at elevation %.3f.", static_cast<double>(vz));
+    log.push_back(buf);
+  } else {
+    log.push_back("POLYLINE vertex added.");
+  }
   return true;
 }
 
@@ -12024,10 +14822,23 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   }
 
   if (line.empty()) {
+    // TASK-082. FEATURELINE with a point awaiting its elevation: Enter accepts the default shown in
+    // the prompt. This has to be handled HERE, not in the FEATURELINE block further down, because a
+    // blank line never reaches that block — it is consumed by this one.
+    if (st.active == K::FeatureLine && st.featureLinePendingPoint) {
+      CommitFeatureLinePendingPoint(st, st.featureLinePendingDefaultZ, log);
+      return;
+    }
     if (st.active == K::Pan) {
       // Enter (or right-click in Enter mode) exits PAN; Esc exits via CancelActiveCommand.
       st.active = K::None;
       log.push_back("PAN — exited.");
+      return;
+    }
+    if (st.active == K::Orbit) {
+      // Same contract as PAN above (REQ-084 (c)).
+      st.active = K::None;
+      log.push_back("ORBIT — exited.");
       return;
     }
     if (st.active == K::VpFreeze || st.active == K::VpThaw) {
@@ -12259,6 +15070,252 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       }
       return;
     }
+    // REQ-070. `SURFSTYLE [<verb> …]` — bare opens the editor; the verbs are what a headless
+    // transcript drives, because REQ-070's acceptance conditions are end-to-end and a dialog is not
+    // reachable from one.
+    if (plotTok == "surfstyle") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ExecuteSurfStyleCommand(st, StringUtil::trimCopy(rest), log);
+      return;
+    }
+    // REQ-087. `FEATURELINE [<name>]` — the whole remainder is the name, so it may contain spaces.
+    if (plotTok == "featureline" || plotTok == "fl") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      StartFeatureLineCommand(st, StringUtil::trimCopy(rest), log);
+      return;
+    }
+    if (plotTok == "featurelinelist" || plotTok == "fllist") {
+      const size_t n = st.featureLineOffsets.empty() ? 0 : st.featureLineOffsets.size() - 1;
+      if (n == 0) {
+        log.push_back("FEATURELINELIST — no feature lines in the drawing.");
+        return;
+      }
+      for (size_t i = 0; i < n; ++i) {
+        const int b = st.featureLineOffsets[i], e = st.featureLineOffsets[i + 1];
+        const std::string nm = i < st.featureLineInfo.size() ? st.featureLineInfo[i].name : std::string();
+        const bool closed = i < st.featureLineClosed.size() && st.featureLineClosed[i] != 0;
+        int elevPts = 0;
+        for (int v = b; v < e; ++v)
+          if (static_cast<size_t>(v) < st.featureLineElevPt.size() && st.featureLineElevPt[v])
+            ++elevPts;
+        log.push_back("Feature line " + std::to_string(i + 1) + ": \"" + nm + "\" — " +
+                      std::to_string(e - b) + " vertices (" + std::to_string((e - b) - elevPts) +
+                      " PI, " + std::to_string(elevPts) + " elevation point(s))" +
+                      (closed ? ", closed" : "") + ", entity id " +
+                      std::to_string(i < st.featureLineAttrs.size() ? st.featureLineAttrs[i].id : 0));
+        for (int v = b; v < e; ++v) {
+          const size_t base = static_cast<size_t>(v) * 3;
+          if (base + 2 >= st.featureLineVerts.size())
+            break;
+          char buf[160];
+          std::snprintf(buf, sizeof(buf), "  %s %d: %.3f, %.3f, elevation %.3f",
+                        (static_cast<size_t>(v) < st.featureLineElevPt.size() && st.featureLineElevPt[v])
+                            ? "elev pt"
+                            : "PI     ",
+                        v - b + 1, static_cast<double>(st.featureLineVerts[base]),
+                        static_cast<double>(st.featureLineVerts[base + 1]),
+                        static_cast<double>(st.featureLineVerts[base + 2]));
+          log.push_back(buf);
+        }
+      }
+      return;
+    }
+    // REQ-088 — the elevation editor's whole command surface. One verb with sub-actions rather than
+    // seven top-level words, following UNDESIGNATE's shape:
+    //
+    //   FLELEV <n>                        list the table
+    //   FLELEV <n> SET        <point> <elev>
+    //   FLELEV <n> GRADEAHEAD <point> <pct>
+    //   FLELEV <n> GRADEBACK  <point> <pct>
+    //   FLELEV <n> RAISE      <delta>     negative lowers
+    //   FLELEV <n> INSERT     <station> <elev>
+    //   FLELEV <n> DELETE     <point>
+    //
+    // REQ-203: stage 2's panel routes its edited cells through exactly these, the way the Surfaces
+    // panel routes through ProcessCommandLineSubmit — so what the tests drive is what the UI drives.
+    // REQ-088: open the elevation editor, optionally aimed at a feature line. Separate from FLELEV
+    // so that FLELEV stays usable with no window (REQ-203) — the driver must be able to read and
+    // edit the table without a panel existing.
+    if (plotTok == "flelevedit" || plotTok == "featurelineelevedit") {
+      const int flCount =
+          st.featureLineOffsets.empty() ? 0 : static_cast<int>(st.featureLineOffsets.size()) - 1;
+      if (flCount <= 0) {
+        log.push_back("FLELEVEDIT — no feature lines in the drawing. Draw one with FEATURELINE first.");
+        return;
+      }
+      int which = 0;
+      if (issIdle >> which) {
+        if (which < 1 || which > flCount) {
+          log.push_back("FLELEVEDIT — there is no feature line " + std::to_string(which) + "; the "
+                        "drawing has " + std::to_string(flCount) + ".");
+          return;
+        }
+        st.featureLineElevIndex = which - 1;
+      }
+      st.showFeatureLineElevWindow = true;
+      log.push_back("FLELEVEDIT — elevation editor opened on feature line " +
+                    std::to_string(st.featureLineElevIndex + 1) + ".");
+      return;
+    }
+    if (plotTok == "flelev" || plotTok == "featurelineelev") {
+      std::istringstream& fe = issIdle;  // the verb is already consumed
+      int flNum = 0;
+      if (!(fe >> flNum)) {
+        log.push_back("FLELEV — usage: FLELEV <feature line #> [SET|GRADEAHEAD|GRADEBACK|RAISE|"
+                      "INSERT|DELETE ...]. FLELEV <n> alone lists the table.");
+        return;
+      }
+      std::string sub;
+      if (!(fe >> sub)) {
+        std::vector<FeatureLineElevRow> rows;
+        if (!BuildFeatureLineElevTable(st, flNum - 1, &rows)) {
+          log.push_back("FLELEV — no feature line " + std::to_string(flNum) + ".");
+          return;
+        }
+        const size_t ii = static_cast<size_t>(flNum - 1);
+        const std::string nm = ii < st.featureLineInfo.size() ? st.featureLineInfo[ii].name : std::string();
+        log.push_back("FLELEV — feature line " + std::to_string(flNum) + " \"" + nm + "\": " +
+                      std::to_string(rows.size()) + " points.");
+        log.push_back("   #  type     station    elevation   length ahead   grade back   grade ahead");
+        for (const FeatureLineElevRow& r : rows) {
+          // A dash, not "0.00%", where a segment does not exist — see FeatureLineElevRow. Printing
+          // zero there would state that the ground is level at a place that has no ground.
+          const auto gradeText = [](double pct, char* buf, size_t cap) -> const char* {
+            if (std::isnan(pct))
+              return "-";
+            std::snprintf(buf, cap, "%.2f%%", pct);
+            return buf;
+          };
+          char gbBuf[16], gaBuf[16];
+          const char* gb = gradeText(r.gradeBackPct, gbBuf, sizeof(gbBuf));
+          const char* ga = gradeText(r.gradeAheadPct, gaBuf, sizeof(gaBuf));
+          char buf[256];
+          std::snprintf(buf, sizeof(buf), "  %2d  %-7s  %9.3f  %11.3f  %13.3f  %11s  %12s",
+                        r.vertexIndex + 1, r.isElevationPoint ? "elev pt" : "PI", r.station,
+                        static_cast<double>(r.elevation), r.lengthAhead, gb, ga);
+          log.push_back(buf);
+        }
+        return;
+      }
+      for (char& c : sub)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      if (sub == "set" || sub == "gradeahead" || sub == "gradeback" || sub == "delete") {
+        int pt = 0;
+        if (!(fe >> pt)) {
+          log.push_back("FLELEV — " + sub + " needs a point number.");
+          return;
+        }
+        if (sub == "delete") {
+          DeleteFeatureLineElevationPoint(st, flNum, pt, log);
+          return;
+        }
+        double val = 0.0;
+        if (!(fe >> val)) {
+          log.push_back("FLELEV — " + sub + " needs a " + (sub == "set" ? "elevation." : "grade in percent."));
+          return;
+        }
+        if (sub == "set")
+          SetFeatureLinePointElevation(st, flNum, pt, static_cast<float>(val), log);
+        else if (sub == "gradeahead")
+          SetFeatureLineGradeAhead(st, flNum, pt, val, log);
+        else
+          SetFeatureLineGradeBack(st, flNum, pt, val, log);
+        return;
+      }
+      if (sub == "raise") {
+        double d = 0.0;
+        if (!(fe >> d)) {
+          log.push_back("FLELEV — RAISE needs a delta (negative lowers).");
+          return;
+        }
+        RaiseFeatureLineElevations(st, flNum, static_cast<float>(d), log);
+        return;
+      }
+      if (sub == "insert") {
+        double station = 0.0, elev = 0.0;
+        if (!(fe >> station) || !(fe >> elev)) {
+          log.push_back("FLELEV — INSERT needs a station and an elevation.");
+          return;
+        }
+        InsertFeatureLineElevationPoint(st, flNum, station, static_cast<float>(elev), log);
+        return;
+      }
+      log.push_back("FLELEV — unknown option \"" + sub +
+                    "\". Use SET, GRADEAHEAD, GRADEBACK, RAISE, INSERT, or DELETE.");
+      return;
+    }
+    // Surface definition commands (REQ-068/069). Each reads the WHOLE remainder of the line — names
+    // contain spaces — and splits on commas where it needs more than one argument. Together with
+    // DESIGNATEBREAKLINE/DESIGNATEBOUNDARY below they make every surface operation reachable without
+    // the Surfaces panel, which is what lets the REQ-203 driver exercise them at all: a surface has
+    // no entity id, and panel buttons are unreachable with no window.
+    if (plotTok == "surfacecreate" || plotTok == "sfcreate" || plotTok == "surfacerename" ||
+        plotTok == "sfrename" || plotTok == "surfacedelete" || plotTok == "sfdelete" ||
+        plotTok == "surfacerebuild" || plotTok == "sfrebuild" || plotTok == "surfacelist" ||
+        plotTok == "sflist" || plotTok == "undesignate" || plotTok == "undes" ||
+        plotTok == "surfaceaddfile" || plotTok == "sfaddfile" || plotTok == "surfaceimportfile" ||
+        plotTok == "sfimportfile") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      rest = StringUtil::trimCopy(rest);
+      if (plotTok == "surfacecreate" || plotTok == "sfcreate")
+        RunSurfaceCreate(st, rest, log);
+      else if (plotTok == "surfacerename" || plotTok == "sfrename")
+        RunSurfaceRename(st, rest, log);
+      else if (plotTok == "surfacedelete" || plotTok == "sfdelete")
+        RunSurfaceDelete(st, rest, log);
+      else if (plotTok == "surfacerebuild" || plotTok == "sfrebuild")
+        RunSurfaceRebuild(st, rest, log);
+      else if (plotTok == "surfacelist" || plotTok == "sflist")
+        ReportSurfaces(st, log);
+      else if (plotTok == "surfaceaddfile" || plotTok == "sfaddfile")
+        RunSurfaceAddFile(st, rest, log);
+      else if (plotTok == "surfaceimportfile" || plotTok == "sfimportfile")
+        RunSurfaceImportFile(st, rest, log);
+      else
+        RunUndesignate(st, rest, log);
+      return;
+    }
+    // `DESIGNATEBREAKLINE <surface name>` (REQ-069) — the whole remainder is the name (surface
+    // names can contain spaces, e.g. "Existing Ground"), so this reads the rest of the line rather
+    // than one `>>` token.
+    if (plotTok == "designatebreakline" || plotTok == "dbl") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      rest = StringUtil::trimCopy(rest);
+      if (rest.empty()) {
+        log.push_back("DESIGNATEBREAKLINE — usage: DESIGNATEBREAKLINE <surface name>.");
+        return;
+      }
+      StartDesignateBreaklineCommand(st, rest, log);
+      return;
+    }
+    // `DESIGNATEBOUNDARY <surface name> <OUTER|HIDE|SHOW>` — the kind is always the LAST token, so
+    // the surface name is whatever remains before it, spaces and all.
+    if (plotTok == "designateboundary" || plotTok == "dbd") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      rest = StringUtil::trimCopy(rest);
+      const size_t sp = rest.find_last_of(" \t");
+      const bool usageError = rest.empty() || sp == std::string::npos;
+      const std::string name = usageError ? std::string() : StringUtil::trimCopy(rest.substr(0, sp));
+      const std::string kindWord =
+          usageError ? std::string() : StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(rest.substr(sp + 1)));
+      CadBoundaryKind kind = CadBoundaryKind::Outer;
+      const bool kindOk = kindWord == "outer" || kindWord == "hide" || kindWord == "show";
+      if (kindWord == "hide")
+        kind = CadBoundaryKind::Hide;
+      else if (kindWord == "show")
+        kind = CadBoundaryKind::Show;
+      if (usageError || name.empty() || !kindOk) {
+        log.push_back("DESIGNATEBOUNDARY — usage: DESIGNATEBOUNDARY <surface name> <OUTER|HIDE|SHOW>.");
+        return;
+      }
+      StartDesignateBoundaryCommand(st, name, kind, log);
+      return;
+    }
   }
 
   if (st.active == AppCommandState::Kind::Delete) {
@@ -12485,9 +15542,144 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
+  if (st.active == K::FeatureLine) {
+    // REQ-087. Same X,Y,Z entry as 3DPOLY — the peel below is shared — with one extra word: E marks
+    // the next vertex an elevation point rather than a PI.
+    const std::string lowFl = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(line));
+
+    // TASK-082. A point is waiting for its elevation, so THIS line is that elevation and nothing
+    // else — checked before CLOSE/END and before coordinate parsing, because "50" is a valid
+    // elevation and would otherwise be read as a malformed point.
+    if (st.featureLinePendingPoint) {
+      const std::string zText = StringUtil::trimCopy(line);
+      if (zText.empty()) {  // bare Enter accepts the default shown in the prompt
+        CommitFeatureLinePendingPoint(st, st.featureLinePendingDefaultZ, log);
+        return;
+      }
+      char* zEnd = nullptr;
+      const double zv = std::strtod(zText.c_str(), &zEnd);
+      if (!zEnd || *zEnd != '\0' || !std::isfinite(zv)) {
+        // Stay in the prompt. Dropping back to point entry would silently discard the point the
+        // user just clicked, and they would have no way to know which of the two it lost.
+        char buf[192];
+        std::snprintf(buf, sizeof(buf),
+                      "FEATURELINE — elevation must be a number. Type one, or Enter for <%.3f>:",
+                      static_cast<double>(st.featureLinePendingDefaultZ));
+        log.push_back(buf);
+        return;
+      }
+      CommitFeatureLinePendingPoint(st, static_cast<float>(zv), log);
+      return;
+    }
+
+    if (lowFl == "close" || lowFl == "cl") {
+      CommitFeatureLineDraft(st, true, log);
+      return;
+    }
+    if (lowFl == "end") {
+      CommitFeatureLineDraft(st, false, log);
+      return;
+    }
+    bool nextIsElevPoint = false;
+    std::string flText = StringUtil::trimCopy(line);
+    if (!flText.empty() && (flText[0] == 'e' || flText[0] == 'E') &&
+        (flText.size() == 1 || flText[1] == ' ' || flText[1] == '\t')) {
+      nextIsElevPoint = true;
+      flText = StringUtil::trimCopy(flText.substr(1));
+      if (flText.empty()) {
+        // TASK-082: bare E ARMS the flag rather than erroring. Before a click could supply X,Y, the
+        // only way to place a point was to type it, so E had to be followed by coordinates on the
+        // same line; now the coordinates arrive from the mouse and the flag has to wait for them.
+        st.featureLineNextIsElevPoint = true;
+        log.push_back("FEATURELINE — next point will be an elevation point. Click it, or type X,Y "
+                      "/ X,Y,Z.");
+        return;
+      }
+    }
+    if (st.featureLineNextIsElevPoint)
+      nextIsElevPoint = true;  // armed by an earlier bare E
+    // Peel a typed elevation, exactly as 3DPOLY does, and for the same reason: the shared 2D parser
+    // is REQ-101-critical and must not learn about a third component.
+    {
+      const size_t c1 = flText.find(',');
+      const size_t c2 = (c1 == std::string::npos) ? std::string::npos : flText.find(',', c1 + 1);
+      if (c2 != std::string::npos) {
+        if (flText.find(',', c2 + 1) != std::string::npos) {
+          log.push_back("FEATURELINE — too many coordinates: X,Y,Z or @dx,dy,dz.");
+          return;
+        }
+        const std::string zText = StringUtil::trimCopy(flText.substr(c2 + 1));
+        char* zEnd = nullptr;
+        const double zv = std::strtod(zText.c_str(), &zEnd);
+        if (zText.empty() || !zEnd || *zEnd != '\0' || !std::isfinite(zv)) {
+          log.push_back("FEATURELINE — elevation must be a number: X,Y,Z or @dx,dy,dz.");
+          return;
+        }
+        st.polylineTypedZ = static_cast<float>(zv);
+        st.polylineTypedZRelative = !flText.empty() && flText[0] == '@';
+        st.polylineTypedZValid = true;
+        flText = flText.substr(0, c2);
+      }
+    }
+    float fx = 0.f, fy = 0.f;
+    const bool flRel = !st.featureLineDraftVerts.empty();
+    if (ParseStoragePoint(st, flText, &fx, &fy, flRel, st.anchorX, st.anchorY)) {
+      // TASK-082 Q1: the rule is "a point that arrives WITHOUT an elevation prompts for one", not
+      // "clicks prompt". A typed X,Y,Z already carries its answer, so asking again would be noise —
+      // and it is the form every existing transcript uses. A typed X,Y takes the same path a click
+      // does.
+      if (st.polylineTypedZValid) {
+        st.featureLineNextIsElevPoint = false;  // consumed by this vertex
+        SubmitFeatureLineVertex(st, fx, fy, nextIsElevPoint, log);
+      } else {
+        st.featureLineNextIsElevPoint = nextIsElevPoint;  // survives until the elevation arrives
+        SubmitFeatureLinePoint(st, fx, fy, log);
+      }
+      return;
+    }
+    st.polylineTypedZValid = false;  // the point failed to parse; do not carry the Z to the next try
+    log.push_back("FEATURELINE — click a point, or type X,Y / X,Y,Z (or @dx,dy,dz), E for an "
+                  "elevation point, CLOSE, END, or ESC.");
+    return;
+  }
+
   if (st.active == K::Polyline) {
     using PP = AppCommandState::PolylinePhase;
     const std::string low = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(line));
+
+    // REQ-085: peel a trailing `,z` off `x,y,z` so the shared 2D parser never sees it. That parser
+    // is REQ-101-critical and used by every command; widening it to three components to serve one
+    // command would put every other command's coordinate handling at risk for no gain. 3DPOLY only —
+    // a plain POLYLINE keeps refusing a third component rather than silently ignoring it.
+    std::string pointText = line;
+    if (st.polylineDraft3d) {
+      const std::string trimmed = StringUtil::trimCopy(line);
+      const size_t c1 = trimmed.find(',');
+      const size_t c2 = (c1 == std::string::npos) ? std::string::npos : trimmed.find(',', c1 + 1);
+      if (c2 != std::string::npos) {
+        // Strict about the field count, because the shared 2D parser is NOT: ParseTwoDoubles reads
+        // two numbers and ignores whatever follows, so `1,2,3,4` would otherwise land silently at
+        // (1,2). Refusing here keeps that quiet-drop out of the one command where a third field is
+        // meaningful. (The same silent drop still applies to LINE/POLYLINE/RECT — pre-existing, and
+        // reported rather than changed under this task.)
+        if (trimmed.find(',', c2 + 1) != std::string::npos) {
+          log.push_back("3DPOLY — too many coordinates: X,Y,Z or @dx,dy,dz.");
+          return;
+        }
+        const std::string zText = StringUtil::trimCopy(trimmed.substr(c2 + 1));
+        char* zEnd = nullptr;
+        const double zv = std::strtod(zText.c_str(), &zEnd);
+        if (!zText.empty() && zEnd && *zEnd == '\0' && std::isfinite(zv)) {
+          st.polylineTypedZ = static_cast<float>(zv);
+          st.polylineTypedZRelative = !trimmed.empty() && trimmed[0] == '@';
+          st.polylineTypedZValid = true;
+          pointText = trimmed.substr(0, c2);  // `x,y`, with any leading `@` still attached
+        } else {
+          log.push_back("3DPOLY — elevation must be a number: X,Y,Z or @dx,dy,dz.");
+          return;
+        }
+      }
+    }
     if (low == "close" || low == "cl") {
       CancelSegmentAnglePick(st, nullptr);
       if (st.polylinePhase != PP::NeedNextPoint || st.polyDraftSegments == 0)
@@ -12513,7 +15705,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
 
-    if (ParseStoragePoint(st, line, &px, &py, allowRel, st.anchorX, st.anchorY)) {
+    // `pointText` is `line` with any 3DPOLY elevation already peeled off; identical to `line` for a
+    // plain POLYLINE.
+    if (ParseStoragePoint(st, pointText, &px, &py, allowRel, st.anchorX, st.anchorY)) {
       SubmitPolylineVertex(st, px, py, log);
       return;
     }
@@ -13097,6 +16291,11 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
       return "SURFELEV: Pick a point for its surface elevation | ESC cancel";
     return "SURFELEV: Second point for grade | ESC stops after the elevation";
   }
+
+  if (st.active == K::DesignateBreakline)
+    return "DESIGNATEBREAKLINE: Pick a line or polyline | ESC cancel";
+  if (st.active == K::DesignateBoundary)
+    return "DESIGNATEBOUNDARY: Pick a CLOSED polyline | ESC cancel";
 
   if (st.active == K::Polyline) {
     using SAP = AppCommandState::SegmentAnglePickPhase;

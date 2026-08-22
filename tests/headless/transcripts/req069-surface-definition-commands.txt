@@ -1,0 +1,85 @@
+# REQ-068/069 surface definition, driven entirely from the command line.
+#
+# Every operation here used to be reachable only from the Surfaces panel, which has no window under
+# the REQ-203 driver — so none of REQ-069's acceptance conditions could be checked without a human
+# at a mouse. That is why REQ-069's row still reads "manual".
+#
+# Note the rebuilds are SYNCHRONOUS (SURFACEREBUILD -> BuildSurfaceFromSources). The dynamic
+# rebuild is dispatched by TickSurfaceRebuilds, which main.cpp's frame loop drives and this driver
+# has no frame loop for; SURFACEREBUILD is what makes the same work assertable here.
+
+OPEN samples/surface-demo.gs
+
+# --- nothing yet -------------------------------------------------------------------------------
+CMD SURFACELIST
+EXPECT LOG "no surfaces in the drawing"
+
+# --- create from a point group -------------------------------------------------------------------
+CMD SURFACECREATE Test EG, Existing Ground
+CMD SURFACELIST
+EXPECT LOG "Surface "Test EG""
+EXPECT LOG "group 1: "Existing Ground""
+
+# a name that is not a point group must be refused outright, not built empty
+CMD SURFACECREATE Bad One, No Such Group
+EXPECT LOG "no point group named "No Such Group""
+
+# duplicate surface name refused
+CMD SURFACECREATE Test EG, Ground + Curb
+EXPECT LOG "already exists"
+
+# --- a breakline: draw a polyline, then designate it ----------------------------------------------
+CMD POLYLINE
+CMD 10,10
+CMD 50,40
+CMD 90,10
+CMD END
+ESC
+EXPECT POLYLINES 1
+
+CMD DESIGNATEBREAKLINE Test EG
+# PICK is LOCAL (world = local + worldDocumentOrigin); this drawing's origin is (13.607, 0.308),
+# so the vertex typed as world 50,40 sits at local 36.393, 39.692.
+PICK 36.393 39.692
+EXPECT LOG "added a breakline"
+
+CMD SURFACEREBUILD Test EG
+CMD SURFACELIST
+EXPECT LOG "1 breakline(s)"
+
+# --- remove it again through the definition, not by deleting the entity ---------------------------
+CMD UNDESIGNATE Test EG, BREAKLINE, 1
+EXPECT LOG "removed breakline 1"
+CMD SURFACELIST
+EXPECT LOG "0 breakline(s)"
+
+# out-of-range index is reported, not silently ignored
+CMD UNDESIGNATE Test EG, BREAKLINE, 7
+EXPECT LOG "out of range"
+
+# --- rename, and refuse a clashing rename ---------------------------------------------------------
+# "Curb" is a curb line — its points are collinear, so it is correctly refused with no partial
+# surface (REQ-001). "Ground + Curb" is the group that actually triangulates.
+CMD SURFACECREATE Second, Ground + Curb
+CMD SURFACERENAME Test EG, Second
+EXPECT LOG "rename refused"
+CMD SURFACERENAME Test EG, Renamed EG
+EXPECT LOG "Renamed surface"
+CMD SURFACELIST
+EXPECT LOG "Surface "Renamed EG""
+
+# --- a surface survives a .gs round trip ----------------------------------------------------------
+SAVEAS %OUT%/surf-a.gs
+OPEN %OUT%/surf-a.gs
+CMD SURFACELIST
+EXPECT LOG "Surface "Renamed EG""
+SAVEAS %OUT%/surf-b.gs
+EXPECT SAMEFILE %OUT%/surf-a.gs %OUT%/surf-b.gs
+
+# --- delete ---------------------------------------------------------------------------------------
+CMD SURFACEDELETE Renamed EG
+EXPECT LOG "Deleted surface "Renamed EG""
+CMD SURFACEDELETE Renamed EG
+EXPECT LOG "no surface named"
+
+CHECK ALL

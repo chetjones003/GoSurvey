@@ -667,10 +667,17 @@ void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) 
   const float fontPx =
       std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), st.viewportMtextMinPx, st.viewportMtextMaxPx);
 
-  const std::string norm = MtextRichNormalize(a.text);
+  // Measure through the label's OWN typeface, and through the same string the renderer draws.
+  //
+  // Both arguments used to be wrong in the same direction: the family was omitted, so the box was
+  // always sized for the application's default font, and the text was normalized first, so it was not
+  // literally the string the viewport measures. The box is the label's pick target and the rectangle
+  // the renderer centres the glyphs in — so a label the user gave a font to was drawn out of its own
+  // box, overhanging west toward the very marker the box exists to stand clear of, and picking it
+  // meant clicking somewhere other than the text. Nothing about the default-font case changes.
   float pw = 8.f;
   float ph = fontPx * 1.22f;
-  MtextRichNaturalContentPx(font, fontPx, norm, &pw, &ph);
+  MtextRichNaturalContentPx(font, fontPx, a.text, &pw, &ph, a.fontFamily);
 
   constexpr float kPadPx = 8.f;
   const float bw = (pw + 2.f * kPadPx) * worldPerPxY;
@@ -684,12 +691,20 @@ void RepositionSurveyLabelMtextForPoint(AppCommandState& st, size_t pointIndex) 
                                                     : st.surveyLabelOffsetEastPlottedIn * mup;
   const float offsetN = a.surveyLabelHasUserOffset ? a.surveyLabelUserOffsetNorth
                                                     : st.surveyLabelOffsetNorthPlottedIn * mup;
-  const float cx = p.easting + offsetE;
+  // X anchors the box's LEFT edge; Y centres the box on the point.
+  //
+  // The two axes differ because the marker is only ever in danger from one of them. A longer
+  // description grows the box east, and the left edge must not move while it does — that was the
+  // defect: a centred X sent half of every added character back west, until a long description
+  // swallowed the very point it described. Y has no such exposure. The box already stands
+  // `offsetE` clear to the east, so it cannot touch the marker no matter how tall it gets, and
+  // centring there is what puts the label beside the point rather than hanging beneath it.
+  const float ax = p.easting + offsetE;
   const float cy = p.northing + offsetN;
-  a.boxMinX = cx - bwClamped * 0.5f;
-  a.boxMaxX = cx + bwClamped * 0.5f;
-  a.boxMinY = cy - bhClamped * 0.5f;
+  a.boxMinX = ax;
+  a.boxMaxX = ax + bwClamped;
   a.boxMaxY = cy + bhClamped * 0.5f;
+  a.boxMinY = cy - bhClamped * 0.5f;
   a.insX = a.boxMinX;
   a.insY = a.boxMinY;
   // The label sits at its POINT's elevation (REQ-057/058). Without this, insZ keeps its 0 default —

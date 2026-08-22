@@ -1,0 +1,76 @@
+# REQ-085 — 3DPOLY: every vertex carries its own elevation.
+#
+# The elevation is the whole point of the command and is otherwise invisible from a transcript, so
+# each vertex reports the elevation it committed at and this asserts on those lines.
+
+NEW
+
+# --- typed X,Y,Z: three vertices, three different elevations ---------------------------------------
+CMD 3DPOLY
+CMD 0,0,100
+EXPECT LOG "3DPOLY first vertex at elevation 100.000"
+CMD 50,0,110.25
+EXPECT LOG "3DPOLY vertex added at elevation 110.250"
+CMD 100,0,105.5
+EXPECT LOG "3DPOLY vertex added at elevation 105.500"
+CMD END
+ESC
+EXPECT POLYLINES 1
+
+# --- relative @dx,dy,dz is relative in Z too --------------------------------------------------------
+CMD 3DPOLY
+CMD 0,50,200
+CMD @10,0,5
+EXPECT LOG "3DPOLY vertex added at elevation 205.000"
+CMD @10,0,-30
+EXPECT LOG "3DPOLY vertex added at elevation 175.000"
+CMD END
+ESC
+EXPECT POLYLINES 2
+
+# --- X,Y with no Z falls back to the work plane (REQ-058), and ELEV is honoured ---------------------
+CMD ELEV 42
+CMD 3DPOLY
+CMD 0,100
+EXPECT LOG "3DPOLY first vertex at elevation 42.000"
+CMD 10,100
+EXPECT LOG "3DPOLY vertex added at elevation 42.000"
+CMD END
+ESC
+CMD ELEV 0
+
+# --- malformed input is refused, not silently flattened --------------------------------------------
+CMD 3DPOLY
+CMD 0,200,1,2
+EXPECT LOG "too many coordinates"
+CMD 0,200,abc
+EXPECT LOG "elevation must be a number"
+ESC
+
+# --- the elevations survive a .gs round trip -------------------------------------------------------
+SAVEAS %OUT%/p3d-a.gs
+OPEN %OUT%/p3d-a.gs
+EXPECT POLYLINES 3
+SAVEAS %OUT%/p3d-b.gs
+EXPECT SAMEFILE %OUT%/p3d-a.gs %OUT%/p3d-b.gs
+
+CHECK ALL
+
+# --- and a 3D polyline is accepted as a surface breakline (REQ-085's last condition) ---------------
+# The per-vertex elevations reaching the triangulation is covered by TinConstraintTests ("a breakline
+# vertex not among the surface points is folded in with its own elevation"); what this adds is that
+# the ENTITY a 3DPOLY produces is an ordinary polyline as far as REQ-069 is concerned.
+OPEN samples/surface-demo.gs
+CMD SURFACECREATE P3D, Existing Ground
+CMD 3DPOLY
+CMD 20,20,500
+CMD 60,45,505
+CMD END
+ESC
+CMD DESIGNATEBREAKLINE P3D
+PICK 46.393 44.692
+EXPECT LOG "added a breakline"
+CMD SURFACEREBUILD P3D
+CMD SURFACELIST
+EXPECT LOG "1 breakline(s)"
+CHECK ALL

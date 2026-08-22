@@ -1,7 +1,7 @@
 # TASK-028 — SHX stroke fonts in rich-text runs and the in-place editor
 
 - Type:    bug
-- Status:  self-verify (awaiting user's on-screen confirmation)
+- Status:  done — user confirmed on screen 2026-08-18
 - Opened:  2026-07-30
 - Owner:   chetj
 
@@ -107,8 +107,8 @@ ASSUMPTION-1: an SHX run should stroke-render with the same baseline/cap-height 
 
 ## 10. Verification result
 - Submitted:  2026-07-30
-- Verdict:    pending user confirmation — re-check the seven samples, and edit one in place to
-  confirm the editor shows the same glyphs it commits.
+- Verdict:    PASS — user confirmed on screen 2026-08-18: the seven samples render as strokes and
+  the in-place editor shows the same glyphs it commits.
 - Findings:   none outstanding
 
 ## 11. Outcome
@@ -126,4 +126,4 @@ ASSUMPTION-1: an SHX run should stroke-render with the same baseline/cap-height 
   core instead would make run formatting work for them too. Left alone here because it changes
   behaviour for already-working DXF-imported text (TASK-026/027), which deserves its own task.
 - Docs updated:           none
-- Done:                   pending user confirmation
+- Done:                   2026-08-18 (user confirmed on screen)

@@ -450,8 +450,8 @@ static void DrawUserPrefsSurveyPoints(AppCommandState& cmd) {
     for (size_t i = 0; i < cmd.surveyPoints.size(); ++i)
       EnsureSurveyPointLabelMtext(cmd, i, nullptr);
   }
-  const bool le = ImGui::DragFloat("Label center east of point (plotted in)", &cmd.surveyLabelOffsetEastPlottedIn, 0.002f, -2.f, 4.f, "%.3f");
-  const bool ln = ImGui::DragFloat("Label center north of point (plotted in)", &cmd.surveyLabelOffsetNorthPlottedIn, 0.002f, -2.f, 4.f, "%.3f");
+  const bool le = ImGui::DragFloat("Label left edge east of point (plotted in)", &cmd.surveyLabelOffsetEastPlottedIn, 0.002f, -2.f, 4.f, "%.3f");
+  const bool ln = ImGui::DragFloat("Label centre north of point (plotted in)", &cmd.surveyLabelOffsetNorthPlottedIn, 0.002f, -2.f, 4.f, "%.3f");
   if (le || ln) {
     for (size_t i = 0; i < cmd.surveyPoints.size(); ++i)
       RepositionSurveyLabelMtextForPoint(cmd, i);
@@ -636,30 +636,37 @@ static void DrawUserPrefsDimensions(AppCommandState& cmd) {
   if (cmd.viewportDimTextMaxPx < cmd.viewportDimTextMinPx) cmd.viewportDimTextMaxPx = cmd.viewportDimTextMinPx;
 }
 
+// REQ-084 (a): the three context modes moved OUT of this tab and into the Right-Click
+// Customization dialog, which is their single owner. What is left here is the door to it plus a
+// one-line summary of the current settings, so the tab still says what right-click does today
+// without duplicating (and eventually contradicting) the dialog's controls.
 static void DrawUserPrefsRightClick(AppCommandState& cmd) {
   using DM = AppCommandState::RightClickDefaultMode;
   using EM = AppCommandState::RightClickEditMode;
   using CM = AppCommandState::RightClickCommandMode;
 
-  ImGui::TextDisabled("Default Mode — if no objects are selected, right click means:");
-  static const char* kDMItems[] = { "Repeat last command", "Shortcut menu" };
-  int dmSel = static_cast<int>(cmd.rightClickDefaultMode);
-  if (ImGui::Combo("##rmb_default", &dmSel, kDMItems, 2))
-    cmd.rightClickDefaultMode = static_cast<DM>(dmSel);
+  ImGui::TextWrapped("Windows standard behavior");
+  ImGui::Spacing();
+  if (ImGui::Button("Right-click Customization...", ImVec2(230.f, 0.f)))
+    cmd.showRightClickDialog = true;
+  ItemHelpTooltip("Choose what right-click does with no selection, with a selection, and during a "
+                  "command — and whether a quick click means ENTER (time-sensitive right-click).");
 
   ImGui::Spacing();
-  ImGui::TextDisabled("Edit Mode — if one or more objects are selected, right click means:");
-  static const char* kEMItems[] = { "Repeat last command", "Shortcut menu" };
-  int emSel = static_cast<int>(cmd.rightClickEditMode);
-  if (ImGui::Combo("##rmb_edit", &emSel, kEMItems, 2))
-    cmd.rightClickEditMode = static_cast<EM>(emSel);
-
-  ImGui::Spacing();
-  ImGui::TextDisabled("Command Mode — if a command is in progress, right click means:");
-  static const char* kCMItems[] = { "ENTER", "Shortcut menu: always enabled", "Shortcut menu: enabled when options are present" };
-  int cmSel = static_cast<int>(cmd.rightClickCommandMode);
-  if (ImGui::Combo("##rmb_command", &cmSel, kCMItems, 3))
-    cmd.rightClickCommandMode = static_cast<CM>(cmSel);
+  const char* dm = cmd.rightClickDefaultMode == DM::RepeatLastCommand ? "Repeat Last Command" : "Shortcut Menu";
+  const char* em = cmd.rightClickEditMode    == EM::RepeatLastCommand ? "Repeat Last Command" : "Shortcut Menu";
+  const char* cm = cmd.rightClickCommandMode == CM::Enter ? "ENTER"
+                   : cmd.rightClickCommandMode == CM::ShortcutMenuAlways ? "Shortcut Menu (always)"
+                                                                        : "Shortcut Menu (when options present)";
+  if (cmd.rightClickTimeSensitive) {
+    // Say what actually governs, not what the stored preference says: with the timer on, Default
+    // and Command Mode do not decide anything, and printing them here would misinform (REQ-201).
+    ImGui::TextDisabled("Time-sensitive: on (%d ms) — quick click = ENTER, longer click = Shortcut Menu",
+                        cmd.rightClickLongerClickMs);
+    ImGui::TextDisabled("Edit Mode: %s", em);
+  } else {
+    ImGui::TextDisabled("Default: %s   |   Edit: %s   |   Command: %s", dm, em, cm);
+  }
 }
 
 static void DrawSettingsUserPrefsTab(AppCommandState& cmd) {
@@ -768,6 +775,163 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::End();
 
   DrawGraphicsPerformanceDialog(cmd, log);
+}
+
+// ---------------------------------------------------------------------------
+// Right-Click Customization dialog — REQ-084 (a).
+//
+// The single owner of the three context modes and of time-sensitive right-click. Laid out as
+// AutoCAD's is: the checkbox and its duration on top, then three labelled groups of RADIO buttons
+// (not combo boxes) each carrying the sentence that says when it applies.
+//
+// Cancel restores every value the dialog opened with — including the checkbox and the duration —
+// which is why the open edge is snapshotted, exactly as DrawUnitsDialog does for precision.
+// ---------------------------------------------------------------------------
+
+/// A titled group box: the label sits on the frame, the controls sit inside it. AutoCAD's dialog
+/// is read group-first, and three flat runs of radio buttons would not carry that reading.
+static void RmbGroupBegin(const char* label, float height) {
+  ImGui::Spacing();
+  ImGui::TextUnformatted(label);
+  ImGui::BeginChild((std::string("##rmbgrp_") + label).c_str(), ImVec2(0.f, height), true);
+  ImGui::Spacing();
+}
+static void RmbGroupEnd() { ImGui::EndChild(); }
+
+void DrawRightClickCustomizationDialog(AppCommandState& cmd, std::vector<std::string>* log) {
+  using DM = AppCommandState::RightClickDefaultMode;
+  using EM = AppCommandState::RightClickEditMode;
+  using CM = AppCommandState::RightClickCommandMode;
+
+  // Snapshot on the open edge so Cancel is a true revert (REQ-084 acceptance).
+  static bool gWasOpen = false;
+  static bool gSnapTimeSensitive = false;
+  static int  gSnapMs = 250;
+  static DM   gSnapDefault = DM::RepeatLastCommand;
+  static EM   gSnapEdit = EM::ShortcutMenu;
+  static CM   gSnapCommand = CM::Enter;
+  if (cmd.showRightClickDialog && !gWasOpen) {
+    gSnapTimeSensitive = cmd.rightClickTimeSensitive;
+    gSnapMs            = cmd.rightClickLongerClickMs;
+    gSnapDefault       = cmd.rightClickDefaultMode;
+    gSnapEdit          = cmd.rightClickEditMode;
+    gSnapCommand       = cmd.rightClickCommandMode;
+  }
+  gWasOpen = cmd.showRightClickDialog;
+  if (!cmd.showRightClickDialog)
+    return;
+
+  auto revert = [&]() {
+    cmd.rightClickTimeSensitive = gSnapTimeSensitive;
+    cmd.rightClickLongerClickMs = gSnapMs;
+    cmd.rightClickDefaultMode   = gSnapDefault;
+    cmd.rightClickEditMode      = gSnapEdit;
+    cmd.rightClickCommandMode   = gSnapCommand;
+  };
+
+  ImGui::SetNextWindowSize(ImVec2(560.f, 660.f), ImGuiCond_FirstUseEver);
+  bool open = true;
+  if (!ImGui::Begin("Right-Click Customization", &open, ImGuiWindowFlags_NoCollapse)) {
+    if (!open) {  // title-bar [X] is a Cancel, like every other dialog in this file
+      revert();
+      cmd.showRightClickDialog = false;
+    }
+    ImGui::End();
+    return;
+  }
+  if (!open) {
+    revert();
+    cmd.showRightClickDialog = false;
+    ImGui::End();
+    return;
+  }
+
+  // --- Time-sensitive right-click ---------------------------------------------------------
+  ImGui::Checkbox("Turn on time-sensitive right-click:", &cmd.rightClickTimeSensitive);
+  ImGui::Indent(24.f);
+  ImGui::TextUnformatted("Quick click for ENTER");
+  ImGui::TextUnformatted("Longer click to display Shortcut Menu");
+  ImGui::Spacing();
+  ImGui::BeginDisabled(!cmd.rightClickTimeSensitive);
+  ImGui::TextUnformatted("Longer click duration:");
+  ImGui::SameLine();
+  ImGui::SetNextItemWidth(70.f);
+  ImGui::InputInt("##rmb_ms", &cmd.rightClickLongerClickMs, 0, 0);
+  ImGui::SameLine();
+  ImGui::TextUnformatted("milliseconds");
+  ImGui::EndDisabled();
+  ImGui::Unindent(24.f);
+  // Clamp unconditionally: the field is typed into, so a 0 or a 99999 must not reach the
+  // classifier and make right-click either unusable or permanently an ENTER.
+  cmd.rightClickLongerClickMs = std::clamp(cmd.rightClickLongerClickMs, AppCommandState::kRightClickMinMs,
+                                           AppCommandState::kRightClickMaxMs);
+
+  // With the timer on, the hold duration decides the Default and Command contexts, so their stored
+  // preferences do not apply. Greying them says that; silently ignoring them would not (REQ-201).
+  const bool modesGoverned = cmd.rightClickTimeSensitive;
+  const float kGroupH = ImGui::GetFrameHeightWithSpacing() * 3.1f;
+
+  // --- Default Mode -----------------------------------------------------------------------
+  ImGui::BeginDisabled(modesGoverned);
+  RmbGroupBegin("Default Mode", kGroupH);
+  ImGui::TextUnformatted("If no objects are selected, right-click means");
+  {
+    int sel = static_cast<int>(cmd.rightClickDefaultMode);
+    if (ImGui::RadioButton("Repeat Last Command##dm", &sel, 0)) cmd.rightClickDefaultMode = DM::RepeatLastCommand;
+    if (ImGui::RadioButton("Shortcut Menu##dm", &sel, 1))       cmd.rightClickDefaultMode = DM::ShortcutMenu;
+  }
+  RmbGroupEnd();
+  ImGui::EndDisabled();
+
+  // --- Edit Mode --------------------------------------------------------------------------
+  // Never disabled: a selection still chooses between repeating and the menu, whatever the timer
+  // is doing (REQ-084 (a)).
+  RmbGroupBegin("Edit Mode", kGroupH);
+  ImGui::TextUnformatted("If one or more objects are selected, right-click means");
+  {
+    int sel = static_cast<int>(cmd.rightClickEditMode);
+    if (ImGui::RadioButton("Repeat Last Command##em", &sel, 0)) cmd.rightClickEditMode = EM::RepeatLastCommand;
+    if (ImGui::RadioButton("Shortcut Menu##em", &sel, 1))       cmd.rightClickEditMode = EM::ShortcutMenu;
+  }
+  RmbGroupEnd();
+
+  // --- Command Mode -----------------------------------------------------------------------
+  ImGui::BeginDisabled(modesGoverned);
+  RmbGroupBegin("Command Mode", ImGui::GetFrameHeightWithSpacing() * 4.1f);
+  ImGui::TextUnformatted("If a command is in progress, right-click means");
+  {
+    int sel = static_cast<int>(cmd.rightClickCommandMode);
+    if (ImGui::RadioButton("ENTER##cm", &sel, 0))
+      cmd.rightClickCommandMode = CM::Enter;
+    if (ImGui::RadioButton("Shortcut Menu: always enabled##cm", &sel, 1))
+      cmd.rightClickCommandMode = CM::ShortcutMenuAlways;
+    if (ImGui::RadioButton("Shortcut Menu: enabled when command options are present##cm", &sel, 2))
+      cmd.rightClickCommandMode = CM::ShortcutMenuWhenOptions;
+  }
+  RmbGroupEnd();
+  ImGui::EndDisabled();
+
+  ImGui::Spacing();
+  ImGui::Separator();
+  if (ImGui::Button("Apply && Close", ImVec2(150.f, 0.f))) {
+    if (SaveUserStartupPrefs(cmd)) {
+      if (log) log->push_back("Right-click customization saved (gosurvey-user.json).");
+    } else if (log) {
+      log->push_back("Error: failed to write gosurvey-user.json (check directory permissions).");
+    }
+    cmd.showRightClickDialog = false;
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", ImVec2(110.f, 0.f))) {
+    revert();
+    cmd.showRightClickDialog = false;
+  }
+  ImGui::SameLine();
+  ImGui::BeginDisabled();
+  ImGui::Button("Help", ImVec2(110.f, 0.f));
+  ImGui::EndDisabled();
+
+  ImGui::End();
 }
 
 // ---------------------------------------------------------------------------

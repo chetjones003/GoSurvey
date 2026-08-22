@@ -1304,3 +1304,229 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   dependency, no new abstraction, no wire-format change. The user is responsible for standing up
   the receiving endpoint (e.g. a Cloudflare Worker + KV/D1); this ADR specifies only the client
   side.
+
+### ADR-035 — Feature lines: a dedicated store, elevation points as flagged vertices   (2026-08-19, accepted)
+- Context: REQ-087 and REQ-088 add feature lines — named 3D linework with editable per-vertex
+  elevations, elevation points, and "add to surface as a breakline". ADR-028 alternative (5) deferred
+  them as "a separate milestone once surfaces are trustworthy"; decision D-2026-08-19-a opened that
+  milestone. Two structural questions have to be answered before any code: **where the geometry
+  lives**, and **what an elevation point actually is**. The second was recorded as the one genuinely
+  unsolved problem when M-Grading was planned.
+- **The measurement that frames this.** "A new entity store grows a case in selection, extents, layer
+  state, the undo snapshot, `.gs`, DXF export, render, snap, pick, grips and properties" (ADR-028) was
+  quoted to the user as roughly a dozen touch points. Counted rather than remembered, it is not:
+
+  | entity kind | sites | files |
+  |---|---|---|
+  | `cadMeshes` / `EntityKind::Mesh` — **display-only** | 32 | 5 |
+  | `userPolyline*` / `EntityKind::Polyline` — **editable** | **612** | **11** |
+
+  A feature line is editable — it must move, copy, rotate, scale, trim, offset, grip-edit and plot —
+  so Polyline is the honest comparison, not Mesh. The estimate the storage decision was taken on was
+  low by roughly fifty times, which is why that decision is re-opened below rather than built on.
+- Decision:
+  (a) **An elevation point is a flagged vertex in the ordinary vertex chain**, not a separate
+  structure. This is the question that looked hard and is not: an elevation point lies **on** the
+  line by construction, so including it in the plan vertex array is geometrically a no-op — the
+  polyline through the vertices has the identical plan shape either way. Rendering, extents, snapping,
+  picking and plotting therefore need to know nothing about it. Only PI-level operations (insert PI,
+  delete PI, grips) consult the flag. Storage stays stride-3 XYZ, so architecture §11.8's `% 3`
+  invariant is untouched and `docinvariants` needs no new rule.
+  (b) **The obligation this creates, stated so it is not discovered later:** moving a PI must
+  re-project the elevation points on its adjacent segments back onto the line. Skip that and the
+  feature line grows a visible kink. That failure is **loud** — it is wrong on screen in plan view —
+  which is the whole reason (a) is preferred to storing elevation points as (station, elevation)
+  pairs materialised on demand: that alternative cannot drift off the line, but a consumer that
+  forgets to materialise them loses elevation detail *silently*, and this project's own note on 3D
+  entity work records that silent-in-plan-view is the failure mode that costs weeks.
+  (c) **A feature line's identity is its stable entity id** (REQ-076 / ADR-027). Its name, description
+  and per-vertex elevation-point flags are **parallel arrays in its own store** (see (g)), indexed the
+  same way `featureLineAttrs` is — not fields on `EntityAttributes`, which is clipboard-copied and
+  DXF-exported and would carry them somewhere they do not belong. Had the geometry shared the polyline
+  store, this would instead have been an id-keyed side table (the ADR-020 / ADR-034 pattern); (g)
+  makes that unnecessary.
+  (d) **Surface integration reuses REQ-069 unchanged.** "Add to surface as breakline" designates the
+  feature line by its stable id exactly as `DESIGNATEBREAKLINE` designates a polyline; the
+  triangulator already folds a breakline's per-vertex elevations in. No new surface machinery.
+  (e) **The elevation editor (REQ-088) is a view, not a store.** Station, length, grade back and
+  grade ahead are all derived from the vertex chain on demand. Storing a grade would create a second
+  source of truth for the same elevation, and the two would disagree the moment geometry moved.
+  (f) **Not in this ADR and not designed for:** feature lines from an alignment, from a corridor, or
+  from a stepped offset; grading objects; feature line styles beyond a name; weeding and supplementing
+  factors. `Create Feature Line` and `Create Feature Lines from Objects` are the two creation paths.
+- (g) **The plan geometry lives in its own store** — `featureLineVerts` / `featureLineOffsets` /
+  `featureLineClosed` / `featureLineAttrs`, behind a ninth `EntityKind::FeatureLine`. **Decided by the
+  user 2026-08-19 with the measurement below in front of them**, after this ADR recommended the
+  cheaper alternative and was overruled on it. A feature line is then never mistaken for a polyline at
+  the type level, which is the property being bought. The two options as weighed:
+
+  **(1) Its own store** (`featureLineVerts` / `featureLineOffsets` / …). What the user chose on
+  2026-08-19, on the ~12-site estimate. Conceptually cleanest — a feature line is never mistaken for
+  a polyline. Costs a Polyline-shaped footprint: on the order of 600 sites across 11 files, because
+  every modify command, the snap engine, the transform preview, the DXF and PDF writers and the
+  invariant checks each need a new case. Each missed one is a feature line that silently cannot be
+  moved, snapped to, plotted or exported.
+
+  **(2) The existing polyline store, plus the (c) side table.** A feature line **is** a polyline in
+  the geometry arrays, and the side table is what makes it a feature line. Every existing command —
+  move, copy, rotate, trim, offset, grips, plot, DXF — works on it the day it ships, with no new case
+  anywhere. `EntityKind` stays at eight; "is this a feature line?" is a lookup, not a tag. The cost is
+  that the distinction is a convention rather than a type, so a command that *should* refuse a feature
+  line (or treat it differently) has to ask.
+
+  This ADR recommended (2) and the user chose (1), informed by the measurement rather than the
+  estimate it replaced. **The consequence is accepted deliberately, so it must be managed rather than
+  rediscovered:** the risk in (1) is not the volume of work, it is that a missed case is SILENT — a
+  feature line that cannot be trimmed, or is skipped by the PDF writer, looks like nothing at all
+  until someone needs it. The task plan therefore works from an enumerated checklist derived from the
+  `userPolyline` sites, and treats "every modify command names FeatureLine or deliberately refuses it"
+  as an acceptance condition rather than a review habit.
+- Alternatives: **(A) Elevation points as (station, elevation) pairs** — cannot drift off the line,
+  but every consumer must materialise them and a consumer that forgets loses elevation silently; see
+  (b). **(B) Feature lines as 3D polylines with no new concept at all** — REQ-085 already ships that;
+  it gives per-vertex elevation but no name, no elevation points, no elevation editor, and no way for
+  a command to know a line is a design object. Declined as not meeting REQ-087. **(C) Storing grades
+  alongside elevations** — makes the editor trivial and creates two sources of truth; see (e).
+- Consequences: a ninth entity kind with its own geometry store, attribute array and per-vertex flag
+  array; its `.gs` arrays (additive — a legacy drawing has none of them); new commands for creation,
+  conversion, PI editing and elevation editing; a panel for REQ-088. Every existing modify command,
+  the snap engine, the transform preview, the invariant checks and the DXF and PDF writers gain a
+  FeatureLine case or an explicit refusal, and **that enumeration is an acceptance condition, not a
+  review habit** — see (g). REQ-088's elevation editor is consequently sequenced AFTER the store is
+  complete and exercised, rather than beside it.
+
+### ADR-036 — Surface styles: a document-owned table, a display-geometry cache, and a Mesh-tier selectable surface   (2026-08-21, accepted)
+- Context: REQ-070 (surface styles) and REQ-072 (elevation/slope banding + slope arrows) are the
+  roadmap's current step, and the user asked for both together with "a surface should be a selectable
+  entity". Reading the code first changed what this ADR has to decide:
+  - **REQ-068 already requires selection** ("surfaces participate in layers, visibility, selection,
+    erase, undo and view extents") and it was never implemented. `SelectedEntity::Type`
+    (`CadCommands.hpp:30`) has no `Surface`, and `PickClosestCadEntity` never enumerates surfaces.
+    That half of the request is an unimplemented acceptance condition, not new authority.
+  - **A surface already carries an `EntityAttributes`** (`cadSurfaceAttrs`, persisted in `.gs` as
+    `surfaceAttrs`), so layer and colour are in place — but `EntityKind` has no `Surface` member, so
+    `EnsureEntityIds` never sweeps that array and **every surface's stable id is 0**. REQ-084's
+    isolation gate and REQ-076's reference model are both keyed on that id.
+  - **ADR-028 already pre-decided most of the style design**: (b) contours/bands/arrows/border are
+    display geometry generated from the style and never entities; (c) the generator is a pure GL-free
+    `util/` module; (h) the style table is the ADR-020 document-owned-table pattern and shading reuses
+    the REQ-064 triangle path. This ADR records the concrete shapes those decisions imply, and the
+    three genuinely open questions ADR-028 left: where the generated geometry is cached, how it
+    reaches the renderer, and what a selected surface can be *done to*.
+- **The measurement that frames this** (ADR-035's lesson: count, do not estimate). A new
+  `SelectedEntity::Type` costs whatever the tier it joins costs:
+
+  | tier | example | selection-related sites |
+  |---|---|---|
+  | **editable** — moves, rotates, trims, grips | `Polyline`, `Ellipse` | 40 (Ellipse); ~612 total store footprint (Polyline) |
+  | **display-only** — selects, highlights, erases | `Mesh` | 54 across 5 files, of which the *selection-specific* funnels are ~12 |
+
+  A surface is display-only by construction: its geometry is **derived from its definition**, so
+  dragging it would be a lie — the next rebuild would undo the drag. It therefore joins at the Mesh
+  tier, and the ~12 funnels are enumerated in (c) as an acceptance condition rather than left to be
+  found one silent gap at a time.
+- Decision:
+  (a) **`EntityKind::Surface` is appended to the sweep, and a surface's identity is its stable entity
+  id** (REQ-076 / ADR-027). `kEntityKindsInSweepOrder` gains `Surface` **at the end**, which is what
+  keeps legacy id assignment for the existing nine kinds bit-identical — a legacy `.gs` loads with the
+  same ids it loaded with yesterday, and surfaces pick up ids after them. `AttrsForKind` gains the one
+  case. `SurfaceRebuildAsync::surfaceName` — commented "surfaces have no entity id" — becomes the id,
+  which also closes a latent defect: a rename while a rebuild is in flight orphans the result, and two
+  renames could land a result on the wrong surface.
+  (b) **`SelectedEntity::Type::Surface` is appended as the tenth kind**, and a click anywhere on a
+  visible component — a triangle edge, a contour, the border — selects the **whole surface object**,
+  as Civil 3D does. Component-level selection is refused: REQ-070 states contours "never appear in
+  selection", and a contour has no persistent identity to select *by*.
+  (c) **A surface is display-only, and every transform command refuses it explicitly.** The funnels it
+  joins, enumerated so a miss is a failed test rather than a discovery: `PickClosestCadEntity`,
+  `ComputeSelectionFromRect`, `ExecuteDeleteSelection`, `CadSelectedEntityIdOf`,
+  `CadSelectedEntityHidden`, the hover/selection highlight buffers, the Properties panel,
+  `SelectSimilarToCurrentSelection`, the selection-cycling window, `CopySelectionToClipboard`, the
+  grip path, and the MOVE/COPY/ROTATE/SCALE/MIRROR/STRETCH/ALIGN snapshot. Those last **refuse with a
+  stated reason** (REQ-201) rather than silently dropping the surface from the operation — "silently
+  does nothing" is the exact failure mode ADR-035 (g) was written about.
+  (d) **`SurfaceStyle` is a document-owned table, the ADR-020 pattern**, referenced by
+  `CadSurface::styleName`. Editing a style changes every surface using it, which is REQ-070's stated
+  point. A name that no longer resolves falls back to a built-in default rather than failing to draw
+  (REQ-070 acceptance), so a deleted style is never a load error. "Standard" always exists and is not
+  deletable, exactly as `TextStyle`'s does. **Resolution is on read, not bake-on-write** — the
+  opposite of ADR-020's choice for text, and deliberately: a text style is baked because ~12 render
+  sites read the baked value, whereas a surface style is read at exactly one place, the
+  display-geometry generator, and baking it would defeat REQ-070's "changing a style property must not
+  re-triangulate."
+  (e) **Generated display geometry is a cache on `AppCommandState`, keyed by the surface's stable id,
+  with a staleness key of `(tin pointer, style revision)`** — and **never** in
+  `DrawingGeometrySnapshot`, `DrawingDocument` or `.gs`. This is what makes REQ-070's two hard
+  constraints structurally true rather than conventionally true: contours cannot enter the undo stack
+  or the file because there is nowhere for them to go, and changing an interval cannot retriangulate
+  because the staleness key does not include the definition. The `shared_ptr<const CadTin>` is the
+  natural first half of that staleness key — a rebuild replaces the pointer wholesale (ADR-028 (a)),
+  so pointer identity **is** triangulation identity.
+
+  **Two placement rules, both load-bearing, both found by reviewing this plan rather than the code
+  after it:**
+  - The cache is a **separate parallel container, never a member of `CadSurface`.** `cadSurfaces` is
+    assigned wholesale into the document and into every geometry snapshot
+    (`CadCommands.cpp:88, 148, 1126, 1190`), so a cache field on the surface would be deep-copied into
+    all 50 undo frames — precisely the cost this decision exists to avoid, arriving through the one
+    door nobody would think to check.
+  - It is keyed by **stable entity id, not by array index** (§11 invariant 9), which is why ADR-036
+    (a) must land before any of this. `cadSurfaces` compacts on erase, so an index-keyed cache would
+    silently start drawing one surface's contours over another's triangulation after a delete.
+  (f) **Contour generation is marching-triangles in a new pure `util/contourgen`**, beside `tinbuild`
+  and for the same reasons (ADR-028 (c)): unit-testable with no GL context, no new dependency. Linear
+  contours only — ADR-028 left smoothing explicitly undesigned, so the Civil 3D "Contour smoothing"
+  slider is **not** built. A contour crossing a triangle is one segment between two edge
+  interpolations; chaining those segments into polylines uses the shared-edge adjacency rather than
+  leaving a segment soup. **Elevations exactly on a vertex** are the known degenerate case and are
+  resolved by a single documented rule — a vertex Z equal to a contour level is treated as
+  infinitesimally above it — not by an independent float comparison at each of the three edges, which
+  is how a contour ends up half-open. This is the same "define the boundary case and test it"
+  obligation REQ-072 states for band breakpoints.
+  (g) **Banding and slope arrows reuse the existing unlit line program with per-band batching**, not a
+  new shader and not the REQ-064 shaded program. ADR-028 (h) said "shading reuses the REQ-064 triangle
+  shader"; that is **amended here** on a concrete ground found in the code: `shadedProgram_` applies
+  `abs(dot(N,V))` two-sided lighting, so a triangle would not display the colour its band prescribes —
+  and REQ-072's acceptance is that a triangle "takes the colour their band prescribes", read against a
+  legend showing that same colour. Lighting would make the legend a lie. A band table is at most a few
+  dozen colours, so the geometry is grouped into one CPU batch per band and drawn with one
+  `glUniform4f` + `glDrawArrays(GL_TRIANGLES)` each — no new shader, no new uniform, no per-vertex
+  colour attribute.
+  (h) **`RenderScene`'s `surfaceEdges` parameter is REPLACED, not joined, by a
+  `CadSurfaceDisplayGeometry*`** holding the coloured line batches, the coloured triangle batches and
+  the selection/hover state. The signature is already 24 parameters; adding four more for components
+  that are always built together and always consumed together would be the wrong shape as well as the
+  wrong length. Net parameter count is unchanged.
+  (i) **Which style tabs are built, and which are refused.** The user chose "spec scope + Analysis" on
+  2026-08-21. Built: **Information**, **Borders**, **Contours**, **Points**, **Triangles**,
+  **Analysis** (REQ-072), **Display** (per-component visible / colour / linetype / lineweight), and
+  **Summary**. **Not built, and each for a stated reason rather than an oversight:** **Grid** and
+  **Watersheds** have no requirement behind them — Watersheds in particular is a drainage-basin
+  *algorithm*, not a display option, and would be a SPEC GAP; contour **smoothing** is undesigned by
+  ADR-028; the Display tab's per-component **Layer** and **Plot Style** columns are omitted because a
+  surface has exactly one layer (its own `EntityAttributes`) and GoSurvey has no plot-style table — a
+  column that cannot be honoured is worse than an absent one.
+- Alternatives: **(1) Per-surface style copies instead of a table** — simpler, and loses REQ-070's
+  stated behaviour that editing a style changes every surface using it; declined by the requirement
+  itself. **(2) Bake-on-write style resolution**, mirroring ADR-020 — rejected in (d): the bake would
+  have to be invalidated on every style edit, which is precisely the work resolve-on-read avoids, and
+  the site count that justified baking for text (~12) is 1 here. **(3) Contours as cached entities on
+  a hidden layer** — makes them selectable and exportable for free, and puts hundreds of thousands of
+  polylines into every undo frame; this is ADR-028 alternative (1), already declined by the user, and
+  REQ-071's EXTRACT remains the escape hatch. **(4) Component-level selection** (click a contour, get
+  that contour) — Civil 3D does not do this either, and REQ-070 forbids it. **(5) Making a surface
+  transformable** — offered to the user on 2026-08-21 and declined: the triangulation is
+  `shared_ptr<const>` and shared with every undo frame (ADR-028 (a)), so a transform would either
+  deep-copy it per edit or write through a const pointer, and either way the next rebuild discards the
+  result.
+- Consequences: a tenth `EntityKind` and a tenth `SelectedEntity::Type`, both **appended**; a new
+  document-owned `surfaceStyles` table with an additive `.gs` section and a legacy-load default; a new
+  pure `util/contourgen` module and a `util/surfaceanalysis` for band assignment and downhill vectors;
+  a live-only display-geometry cache that is deliberately absent from the snapshot, the document and
+  the file; a replaced `RenderScene` surface parameter; a Surface Style editor dialog and a band
+  legend overlay; and **a third REQ-100 profile obligation** — ADR-028 already predicted this
+  ("contour regeneration is a per-frame cost that neither the segment nor the mesh profile measures"),
+  and (e)'s cache key is what keeps it off the per-frame path, so the bench case must prove **the
+  cache holds**, not merely that one regeneration is fast. Deliberately left undesigned: contour
+  smoothing, contour labelling, watershed analysis, grid display, surface legends in paper space, and
+  REQ-071's EXTRACT (deferred to its own task by the user, 2026-08-21).

@@ -247,12 +247,15 @@ float LineweightMmToDevicePx(float mm) {
 /// it is tessellated against a per-vertex Z array rather than one flat chain elevation. Passing a
 /// single z here drew a polyline up a slope — or one imported from DXF with per-vertex group-38
 /// elevations — as if it were level, in every view (REQ-058).
-void AppendPolylineEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput& eg, float defR,
-                           float defG, float defB, float dashPatScale, double viewAnchorX, double viewAnchorY) {
-  const auto* V = eg.polylineVerts;
-  const auto* O = eg.polylineOffsets;
-  const auto* Cl = eg.polylineClosed;
-  const auto* At = eg.polylineAttrs;
+/// Takes the four arrays explicitly rather than reading `eg.polyline*`, so the identical code draws
+/// FEATURE LINES too (REQ-087): their store has the same CSR shape, and a feature line is drawn like
+/// any other 3D chain. The elevation-point flag is deliberately not consulted — an elevation point
+/// lies on the line, so including it changes nothing about the plan shape (ADR-035 (a)).
+void AppendChainEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput& eg,
+                        const std::vector<float>* V, const std::vector<int>* O,
+                        const std::vector<uint8_t>* Cl, const std::vector<EntityAttributes>* At,
+                        float defR, float defG, float defB, float dashPatScale, double viewAnchorX,
+                        double viewAnchorY) {
   if (!V || !O || O->size() < 2)
     return;
   const int np = static_cast<int>(O->size()) - 1;
@@ -260,6 +263,10 @@ void AppendPolylineEdgesVc(std::vector<float>& out, const CadExtendedGeometryInp
     EntityAttributes attr{};
     if (At && static_cast<size_t>(pi) < At->size())
       attr = (*At)[static_cast<size_t>(pi)];
+    // REQ-084 (d): a polyline isolated out is not drawn. Read from `eg` rather than a parameter —
+    // the hidden set travels with the extended geometry it describes.
+    if (CadEntityIdHidden(eg.hiddenEntityIds, attr.id))
+      continue;
     const CadLayerRow* lr = LookupLayerRowCi(eg.drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
     float rgba[4];
     ResolveEntityRgbaForViewport(attr, lr, defR, defG, defB, rgba);
@@ -838,7 +845,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const std::vector<EntityAttributes>* filledRegionAttrs,
                                    const std::vector<std::shared_ptr<const CadMesh>>* meshes,
                                    const std::vector<EntityAttributes>* meshAttrs,
-                                   const std::vector<float>* surfaceEdges) {
+                                   const CadSurfaceDisplayGeometry* surfaceGeometry) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -1142,6 +1149,9 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
           attr ? LookupLayerRowCi(drawingLayers, attr->layer.empty() ? std::string("0") : attr->layer) : nullptr;
       if (lr && (!lr->on || lr->frozen))
         continue;
+      // REQ-084 (d): a mesh isolated out is not drawn.
+      if (attr && CadEntityIdHidden(extended ? extended->hiddenEntityIds : nullptr, attr->id))
+        continue;
 
       MeshGpuEntry* entry = nullptr;
       for (MeshGpuEntry& e : meshGpu_) {
@@ -1252,6 +1262,10 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         continue;
       if (!fr.isSolid())
         continue;  // line-pattern hatches are drawn as clipped lines in the ImGui overlay (REQ-043)
+      // REQ-084 (d): a fill isolated out is not drawn.
+      if (filledRegionAttrs && fi < filledRegionAttrs->size() &&
+          CadEntityIdHidden(extended ? extended->hiddenEntityIds : nullptr, (*filledRegionAttrs)[fi].id))
+        continue;
       fan.clear();
       double mnx = 1e300, mxx = -1e300, mny = 1e300, mxy = -1e300;
       // The stencil cover quad spans the region's XY bounds and so needs one elevation; a filled
@@ -1378,12 +1392,10 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
   // --- Committed lines + circles (single batched draw each; per-vertex color shader; GPU cache keyed by cadGpuRevision)
   const bool hasLines = !userLines.empty() && userLines.size() % 6 == 0;
   const bool hasCircles = !circlesCxCyZR.empty() && circlesCxCyZR.size() % 4 == 0;
-  const bool hasExt =
-      extended &&
-      (((extended->arcs != nullptr) && !extended->arcs->empty()) ||
-       ((extended->ellipses != nullptr) && !extended->ellipses->empty()) ||
-       (extended->polylineVerts != nullptr && extended->polylineOffsets != nullptr &&
-        extended->polylineOffsets->size() >= 2));
+  // REQ-087: this list omitted feature lines, so a drawing holding ONLY a feature line skipped the
+  // entire committed-geometry block below and rendered nothing — while still hovering, selecting
+  // and zooming to extents, because those are different paths. Now one predicate, tested.
+  const bool hasExt = extended && CadExtendedHasDrawableGeometry(*extended);
   if (hasLines || hasCircles || hasExt) {
     // Drift budget for the anchor: cached vertex magnitudes can grow to roughly halfHd + drift. Letting drift reach
     // halfHd * 0.5 keeps view-relative coordinates well within float precision while letting pan move freely without
@@ -1420,8 +1432,15 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
         }
       };
 
+      // REQ-084 (d) / ADR-034: objects isolated out are not drawn. One pointer feeds every append
+      // loop below; when nothing is isolated the set is empty and each test is one `empty()` check,
+      // so the REQ-100 budget is untouched.
+      const std::vector<std::uint64_t>* const hiddenIds = extended ? extended->hiddenEntityIds : nullptr;
+
       auto appendUserLineSeg = [&](const EntityAttributes& attr, float x0, float y0, float z0, float x1, float y1,
                                    float z1, float dr, float dg, float db) {
+        if (CadEntityIdHidden(hiddenIds, attr.id))  // REQ-084 (d)
+          return;
         const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
         const int vertsBefore = static_cast<int>(cpuVcLines_.size() / 7);
         float rgba[4];
@@ -1464,6 +1483,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             EntityAttributes attr{};
             if (extended->arcAttrs && i < extended->arcAttrs->size())
               attr = (*extended->arcAttrs)[i];
+            if (CadEntityIdHidden(hiddenIds, attr.id))  // REQ-084 (d)
+              continue;
             const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
             const int vb = static_cast<int>(cpuVcLines_.size() / 7);
             const float lwMm = EffectiveEntityLineweightMm(attr, lr);
@@ -1489,6 +1510,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             EntityAttributes attr{};
             if (extended->ellAttrs && i < extended->ellAttrs->size())
               attr = (*extended->ellAttrs)[i];
+            if (CadEntityIdHidden(hiddenIds, attr.id))  // REQ-084 (d)
+              continue;
             const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
             const int vb = static_cast<int>(cpuVcLines_.size() / 7);
             maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr, lr)));
@@ -1504,20 +1527,31 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
             lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
           }
         }
-        if (extended->polylineVerts && extended->polylineOffsets) {
+        // Polylines and feature lines: the same CSR shape and the same tessellation, but each gated
+        // on ITS OWN store. The feature-line append used to be nested inside the polyline block, so
+        // it inherited whether polylines existed — a coupling with no reason behind it and a second
+        // way for feature lines to vanish. REQ-087.
+        const auto appendChainStore = [&](const std::vector<float>* V, const std::vector<int>* O,
+                                          const std::vector<uint8_t>* Cl,
+                                          const std::vector<EntityAttributes>* At) {
+          if (!CadChainHasEntities(V, O))
+            return;
           const int vb = static_cast<int>(cpuVcLines_.size() / 7);
-          // Polylines: split batch using first segment's weight (per-entity variation not batched here).
+          // Split the batch on the FIRST entity's weight; per-entity variation is not batched here.
           EntityAttributes attr0{};
-          if (extended->polylineAttrs && extended->polylineOffsets->size() >= 2 &&
-              !extended->polylineAttrs->empty())
-            attr0 = (*extended->polylineAttrs)[0];
+          if (At && !At->empty())
+            attr0 = (*At)[0];
           const CadLayerRow* lr0 =
               LookupLayerRowCi(drawingLayers, attr0.layer.empty() ? std::string("0") : attr0.layer);
           maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr0, lr0)));
-          AppendPolylineEdgesVc(cpuVcLines_, *extended, kLineDefaultR, kLineDefaultG, kLineDefaultB,
-                                dashPatScale, viewAnchorX, viewAnchorY);
+          AppendChainEdgesVc(cpuVcLines_, *extended, V, O, Cl, At, kLineDefaultR, kLineDefaultG,
+                             kLineDefaultB, dashPatScale, viewAnchorX, viewAnchorY);
           lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
-        }
+        };
+        appendChainStore(extended->polylineVerts, extended->polylineOffsets, extended->polylineClosed,
+                         extended->polylineAttrs);
+        appendChainStore(extended->featureLineVerts, extended->featureLineOffsets,
+                         extended->featureLineClosed, extended->featureLineAttrs);
         if (lineVertTotal > lineBatchStart && lineBatchPx >= 0.f)
           vcLineBatches_.push_back(VcLineBatch{lineBatchStart, lineVertTotal - lineBatchStart, lineBatchPx});
       }
@@ -1542,6 +1576,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
           EntityAttributes attr{};
           if (circleEntityAttrs && ci < circleEntityAttrs->size())
             attr = (*circleEntityAttrs)[ci];
+          if (CadEntityIdHidden(hiddenIds, attr.id))  // REQ-084 (d)
+            continue;
           const CadLayerRow* lr = LookupLayerRowCi(drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
           const int vb = static_cast<int>(cpuVcCircles_.size() / 7);
           const float lwMm = EffectiveEntityLineweightMm(attr, lr);
@@ -1755,18 +1791,35 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     }
   }
 
-  // --- TIN surface triangle edges (REQ-068) ---
-  // Drawn before the survey markers so a point's X stays readable on top of its own surface.
-  if (surfaceEdges && !surfaceEdges->empty() && surfaceEdges->size() % 6 == 0) {
+  // --- Generated surface display geometry (REQ-068 / REQ-070) ---
+  // Drawn before the survey markers so a point's X stays readable on top of its own surface, and in
+  // the order the caller assembled: triangles, contours, then the border on top.
+  //
+  // One draw call per batch. A batch is a whole component of a whole surface, so a drawing with two
+  // surfaces costs at most eight — nowhere near enough to be worth interleaving into the vertex-
+  // coloured path, and this way the colour a style names is the colour that is set.
+  if (surfaceGeometry) {
     std::vector<float> surfRel;
-    ConvertLineVertsWorldToView(*surfaceEdges, viewAnchorX, viewAnchorY, &surfRel);
-    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-    glUseProgram(lineProgram_);
-    glUniform4f(locCol, 0.42f, 0.62f, 0.78f, 1.f);  // muted steel blue: present, never competing
-    glLineWidth(kLwMain);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(surfRel.size() * sizeof(float)), surfRel.data(),
-                 GL_STREAM_DRAW);
-    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(surfRel.size() / 3));
+    bool programBound = false;
+    for (const SurfaceDisplayBatch& b : surfaceGeometry->lines) {
+      if (!b.verts || b.verts->empty() || b.verts->size() % 6 != 0)
+        continue;
+      ConvertLineVertsWorldToView(*b.verts, viewAnchorX, viewAnchorY, &surfRel);
+      if (!programBound) {
+        glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+        glUseProgram(lineProgram_);
+        programBound = true;
+      }
+      glUniform4f(locCol, b.rgba[0], b.rgba[1], b.rgba[2], b.rgba[3]);
+      // -1 mm means "no width of its own" all the way down the ByLayer chain, which lands on the
+      // same default weight every other line in the drawing gets.
+      glLineWidth(b.lineweightMm >= 0.f ? LineweightMmToDevicePx(b.lineweightMm) : kLwMain);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(surfRel.size() * sizeof(float)), surfRel.data(),
+                   GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(surfRel.size() / 3));
+    }
+    if (programBound)
+      glLineWidth(kLwMain);  // restore, so the overlay passes below inherit the shared default
   }
 
   // --- Survey points (X markers, apparent size ~constant on screen) ---

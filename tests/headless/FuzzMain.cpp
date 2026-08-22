@@ -156,9 +156,12 @@ int Usage() {
                "usage: gosurvey_headless fuzz [--seed N | --seeds A..B] [--out <dir>]\n"
                "                              [--timeout-ms N] [--max-attempts N]\n"
                "                              [--roundtrip | --no-roundtrip]\n"
+               "                              [--undo-redo | --no-undo-redo]\n"
                "\n"
                "  the gs-roundtrip oracle is ON by default since 2026-08-17; --roundtrip is still\n"
-               "  accepted as a no-op, --no-roundtrip skips it\n");
+               "  accepted as a no-op, --no-roundtrip skips it\n"
+               "  the undo-redo-identity oracle is ON by default since 2026-08-18; --undo-redo is\n"
+               "  accepted as a no-op, --no-undo-redo skips it\n");
   return 2;
 }
 
@@ -196,6 +199,10 @@ int FuzzMain(int argc, char** argv, const char* exePath) {
       gopt.emitRoundTrip = true;  // now the default; still accepted so existing scripts and CI keep working
     } else if (a == "--no-roundtrip") {
       gopt.emitRoundTrip = false;
+    } else if (a == "--undo-redo") {
+      gopt.emitUndoRedo = true;
+    } else if (a == "--no-undo-redo") {
+      gopt.emitUndoRedo = false;
     } else {
       return Usage();
     }

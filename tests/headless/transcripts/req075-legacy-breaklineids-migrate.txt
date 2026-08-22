@@ -1,0 +1,32 @@
+# A `.gs` written BEFORE REQ-075 must not lose its breaklines.
+#
+# REQ-075's Add Breaklines dialog collects a description, so a breakline became an object
+# (`breaklines: [{entityId, description}]`) where REQ-069 had written a bare id array
+# (`breaklineIds: [7]`). The reader takes both. This is the case that cannot be checked by looking at
+# the screen — a dropped breakline looks exactly like a surface that never had one.
+#
+# The fixture is a real saved drawing with its breaklines block rewritten by hand to the old form.
+
+OPEN samples/legacy-breaklineids.gs
+
+# Read in the legacy form at all.
+CMD SURFACELIST
+EXPECT LOG "1 breakline(s)"
+
+# And the id still RESOLVES against the loaded drawing — a breakline that loaded but no longer
+# pointed at anything would be pruned on the next rebuild and silently drop back to zero.
+CMD SURFACEREBUILD Legacy EG
+CMD SURFACELIST
+EXPECT LOG "1 breakline(s)"
+
+# Saving migrates it to the current form, once, with no separate step; it survives that trip...
+SAVEAS %OUT%/mig-a.gs
+OPEN %OUT%/mig-a.gs
+CMD SURFACELIST
+EXPECT LOG "1 breakline(s)"
+
+# ...and the migration is idempotent, which is REQ-079's rule for every other normalisation.
+SAVEAS %OUT%/mig-b.gs
+EXPECT SAMEFILE %OUT%/mig-a.gs %OUT%/mig-b.gs
+
+CHECK ALL

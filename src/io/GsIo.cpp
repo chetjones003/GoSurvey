@@ -324,6 +324,41 @@ json BuildRoot(const AppCommandState& st) {
     }
     doc["textStyles"] = std::move(styles);
   }
+  // Named surface styles (REQ-070 / ADR-036 (d)). Additive, no kGsFormatVersion bump — ADR-020 (d),
+  // the same rule the mesh and surface sections follow.
+  //
+  // **Written only when the table holds more than the untouched default**, so a drawing with no
+  // surfaces — or one whose surfaces all use an unedited "Standard" — still serialises byte for byte
+  // as it did before this section existed. Resave idempotence is what BUG-015 and BUG-019 were both
+  // made of, and a section that appears on every file the moment it is opened is exactly that defect.
+  {
+    const bool onlyUntouchedStandard =
+        st.surfaceStyles.size() == 1 && st.surfaceStyles[0] == SurfaceStyles::StandardSurfaceStyle();
+    if (!st.surfaceStyles.empty() && !onlyUntouchedStandard) {
+      const auto componentToJson = [](const SurfaceComponentStyle& c) {
+        json o;
+        o["visible"] = c.visible;
+        o["color"] = c.color;
+        o["linetype"] = c.linetype;
+        o["lineweightMm"] = c.lineweightMm;
+        return o;
+      };
+      json styles = json::array();
+      for (const SurfaceStyle& s : st.surfaceStyles) {
+        json o;
+        o["name"] = s.name;
+        o["triangles"] = componentToJson(s.triangles);
+        o["border"] = componentToJson(s.border);
+        o["majorContour"] = componentToJson(s.majorContour);
+        o["minorContour"] = componentToJson(s.minorContour);
+        o["points"] = componentToJson(s.points);
+        o["minorIntervalFt"] = s.minorIntervalFt;
+        o["majorIntervalFt"] = s.majorIntervalFt;
+        styles.push_back(std::move(o));
+      }
+      doc["surfaceStyles"] = std::move(styles);
+    }
+  }
   // Paper space layouts (REQ-031). Viewports/frozen layers persist in a later increment.
   {
     json layouts = json::array();
@@ -542,6 +577,35 @@ json BuildRoot(const AppCommandState& st) {
   }
   doc["polylineAttrs"] = std::move(polyAttrs);
 
+  // Feature lines (REQ-087). Same shape as polylines, plus the per-vertex elevation-point flag and
+  // the per-line name. All six arrays are additive — a drawing written before REQ-087 has none of
+  // them, and the reader guards on that.
+  doc["featureLineOffsets"] = st.featureLineOffsets;
+  doc["featureLineVerts"] = st.featureLineVerts;
+  json flClosed = json::array();
+  for (uint8_t c : st.featureLineClosed)
+    flClosed.push_back(static_cast<int>(c));
+  doc["featureLineClosed"] = std::move(flClosed);
+  json flElev = json::array();
+  for (uint8_t c : st.featureLineElevPt)
+    flElev.push_back(static_cast<int>(c));
+  doc["featureLineElevPt"] = std::move(flElev);
+  json flInfo = json::array();
+  for (const CadFeatureLineInfo& i : st.featureLineInfo) {
+    json o;
+    o["name"] = i.name;
+    o["description"] = i.description;
+    flInfo.push_back(std::move(o));
+  }
+  doc["featureLineInfo"] = std::move(flInfo);
+  json flAttrs = json::array();
+  for (const auto& a : st.featureLineAttrs) {
+    json o;
+    EntityAttributesToJson(a, o);
+    flAttrs.push_back(std::move(o));
+  }
+  doc["featureLineAttrs"] = std::move(flAttrs);
+
   json anns = json::array();
   for (const auto& a : st.cadAnnotations) {
     json o;
@@ -642,7 +706,47 @@ json BuildRoot(const AppCommandState& st) {
     for (const CadSurface& s : st.cadSurfaces) {
       json o;
       o["name"] = s.name;
+      // REQ-070: the style is a reference by name, and it is omitted when empty so a surface that
+      // has never been given one writes exactly the bytes it wrote before styles existed.
+      if (!s.styleName.empty())
+        o["styleName"] = s.styleName;
       o["sourcePointGroups"] = s.sourcePointGroups;
+      // REQ-086: linked point files travel with their layout, because a point file does not describe
+      // its own column order and a link that re-guessed would swap northing for easting on reload.
+      json pointFiles = json::array();
+      for (const CadSurfacePointFile& pf : s.sourcePointFiles) {
+        json pfo;
+        pfo["path"] = pf.path;
+        pfo["layoutIndex"] = pf.layoutIndex;
+        pfo["skipFirstRow"] = pf.skipFirstRow;
+        pointFiles.push_back(std::move(pfo));
+      }
+      o["sourcePointFiles"] = std::move(pointFiles);
+      // REQ-069: breaklines/boundaries are stored by stable entity id (REQ-076), never index —
+      // the same rule every other cross-object reference in this file follows.
+      //
+      // REQ-075 gave both a descriptive string, so breaklines became objects like boundaries already
+      // were. The old `breaklineIds` array of bare numbers is still READ below; it is no longer
+      // written, so a file makes exactly one trip through the change.
+      json breaklines = json::array();
+      for (const CadSurfaceBreakline& bl : s.breaklines) {
+        json blo;
+        blo["entityId"] = bl.entityId;
+        blo["description"] = bl.description;
+        breaklines.push_back(std::move(blo));
+      }
+      o["breaklines"] = std::move(breaklines);
+      json boundaries = json::array();
+      for (const CadSurfaceBoundary& b : s.boundaries) {
+        json bo;
+        bo["entityId"] = b.entityId;
+        bo["kind"] = b.kind == CadBoundaryKind::Outer ? "outer"
+                    : b.kind == CadBoundaryKind::Hide  ? "hide"
+                                                        : "show";
+        bo["name"] = b.name;
+        boundaries.push_back(std::move(bo));
+      }
+      o["boundaries"] = std::move(boundaries);
       if (s.tin) {
         o["verts"] = s.tin->vertsXyz;
         o["indices"] = s.tin->indices;
@@ -1214,6 +1318,41 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.defaultPlottedTextHeightInches = std::max(active->heightInches, 1.e-6f);
   }
 
+  // Named surface styles (REQ-070 / ADR-036 (d)). Read tolerantly, every field with a default: a file
+  // with no section synthesizes "Standard" and every surface in it — whose styleName is empty —
+  // resolves to it, which is REQ-070's "a legacy `.gs` loads unchanged".
+  st.surfaceStyles.clear();
+  if (doc.contains("surfaceStyles") && doc["surfaceStyles"].is_array()) {
+    const auto componentFromJson = [](const json& o, SurfaceComponentStyle* c) {
+      if (!o.is_object())
+        return;
+      c->visible = o.value("visible", c->visible);
+      c->color = o.value("color", c->color);
+      c->linetype = o.value("linetype", c->linetype);
+      c->lineweightMm = o.value("lineweightMm", c->lineweightMm);
+    };
+    for (const auto& o : doc["surfaceStyles"]) {
+      if (!o.is_object())
+        continue;
+      // Seeded from the built-in default rather than from a value-initialised SurfaceStyle, so a key
+      // REQ-072 adds to this object later reads back as the default it was written against instead of
+      // as a zero nobody chose. ADR-020 (d)'s additive read, applied forward as well as backward.
+      SurfaceStyle s = SurfaceStyles::StandardSurfaceStyle();
+      s.name = o.value("name", std::string());
+      if (s.name.empty())
+        continue;  // an unnamed style cannot be referenced
+      componentFromJson(o.value("triangles", json::object()), &s.triangles);
+      componentFromJson(o.value("border", json::object()), &s.border);
+      componentFromJson(o.value("majorContour", json::object()), &s.majorContour);
+      componentFromJson(o.value("minorContour", json::object()), &s.minorContour);
+      componentFromJson(o.value("points", json::object()), &s.points);
+      s.minorIntervalFt = o.value("minorIntervalFt", s.minorIntervalFt);
+      s.majorIntervalFt = o.value("majorIntervalFt", s.majorIntervalFt);
+      st.surfaceStyles.push_back(std::move(s));
+    }
+  }
+  SurfaceStyles::EnsureStandard(st.surfaceStyles);
+
   st.userLinesFlat.clear();
   for (const auto& v : doc["lineVerts"])
     st.userLinesFlat.push_back(v.get<float>());
@@ -1266,6 +1405,40 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.userPolylineAttrs.clear();
   for (const auto& o : doc["polylineAttrs"])
     st.userPolylineAttrs.push_back(EntityAttributesFromJson(o));
+
+  // Feature lines (REQ-087). Every key is guarded, unlike the polyline block above, because these
+  // arrays are NEW: a drawing written before REQ-087 has none of them and `doc["..."]` on a missing
+  // key would throw rather than yield an empty surface.
+  st.featureLineOffsets.clear();
+  st.featureLineVerts.clear();
+  st.featureLineClosed.clear();
+  st.featureLineElevPt.clear();
+  st.featureLineInfo.clear();
+  st.featureLineAttrs.clear();
+  if (doc.contains("featureLineOffsets") && doc["featureLineOffsets"].is_array())
+    for (const auto& v : doc["featureLineOffsets"])
+      st.featureLineOffsets.push_back(v.get<int>());
+  if (doc.contains("featureLineVerts") && doc["featureLineVerts"].is_array())
+    for (const auto& v : doc["featureLineVerts"])
+      st.featureLineVerts.push_back(v.get<float>());
+  if (doc.contains("featureLineClosed") && doc["featureLineClosed"].is_array())
+    for (const auto& v : doc["featureLineClosed"])
+      st.featureLineClosed.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
+  if (doc.contains("featureLineElevPt") && doc["featureLineElevPt"].is_array())
+    for (const auto& v : doc["featureLineElevPt"])
+      st.featureLineElevPt.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
+  if (doc.contains("featureLineInfo") && doc["featureLineInfo"].is_array())
+    for (const auto& o : doc["featureLineInfo"]) {
+      CadFeatureLineInfo i;
+      if (o.is_object()) {
+        i.name = o.value("name", std::string());
+        i.description = o.value("description", std::string());
+      }
+      st.featureLineInfo.push_back(std::move(i));
+    }
+  if (doc.contains("featureLineAttrs") && doc["featureLineAttrs"].is_array())
+    for (const auto& o : doc["featureLineAttrs"])
+      st.featureLineAttrs.push_back(EntityAttributesFromJson(o));
 
   st.cadAnnotations.clear();
   for (const auto& o : doc["annotations"])
@@ -1351,10 +1524,67 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       s.name = el.value("name", std::string());
       if (s.name.empty())
         continue;  // an unnamed surface cannot be referenced or managed
+      // REQ-070. Absent in every file written before styles existed, and absent again in any file
+      // whose surfaces never left "Standard" — both read as empty, which resolves to the default on
+      // read (ADR-036 (d)). A name whose style was since deleted is NOT repaired here: it stays as
+      // written and falls back at draw time, so re-pointing the surface at a style with that name
+      // later restores it instead of finding the reference silently rewritten.
+      s.styleName = el.value("styleName", std::string());
       if (el.contains("sourcePointGroups") && el["sourcePointGroups"].is_array())
         for (const auto& g : el["sourcePointGroups"])
           if (g.is_string())
             s.sourcePointGroups.push_back(g.get<std::string>());
+      // REQ-069. Ids are resolved lazily against the current drawing the next time the surface
+      // rebuilds (BuildSurfaceFromSources / ResolveSurfaceInputs) — the same lazy-resolution rule
+      // every other stable-id reference in this codebase already follows (ADR-027). An id that no
+      // longer resolves is silently absent here; it is reported and pruned on that next rebuild, not
+      // treated as a load-time error — a legacy file predating REQ-069 simply has none of either.
+      // REQ-086. Absent in any file written before it — a legacy drawing simply has no linked files.
+      if (el.contains("sourcePointFiles") && el["sourcePointFiles"].is_array())
+        for (const auto& pfo : el["sourcePointFiles"]) {
+          if (!pfo.is_object() || !pfo.contains("path") || !pfo["path"].is_string())
+            continue;
+          CadSurfacePointFile pf;
+          pf.path = pfo["path"].get<std::string>();
+          pf.layoutIndex = pfo.value("layoutIndex", 0);
+          pf.skipFirstRow = pfo.value("skipFirstRow", false);
+          s.sourcePointFiles.push_back(std::move(pf));
+        }
+      //
+      // Breaklines are read in BOTH forms. `breaklines` is the current one, objects carrying the
+      // REQ-075 description; `breaklineIds` is what REQ-069 originally wrote, a bare id array. A
+      // drawing saved before REQ-075 therefore keeps its breaklines instead of silently losing them,
+      // and is written back in the new form — one migration, on first save, with no separate step.
+      if (el.contains("breaklines") && el["breaklines"].is_array()) {
+        for (const auto& blo : el["breaklines"]) {
+          if (!blo.is_object() || !blo.contains("entityId") || !blo["entityId"].is_number_unsigned())
+            continue;
+          CadSurfaceBreakline bl;
+          bl.entityId = blo["entityId"].get<std::uint64_t>();
+          bl.description = blo.value("description", std::string());
+          s.breaklines.push_back(std::move(bl));
+        }
+      } else if (el.contains("breaklineIds") && el["breaklineIds"].is_array()) {
+        for (const auto& id : el["breaklineIds"])
+          if (id.is_number_unsigned()) {
+            CadSurfaceBreakline bl;
+            bl.entityId = id.get<std::uint64_t>();
+            s.breaklines.push_back(std::move(bl));  // legacy: no description existed to carry
+          }
+      }
+      if (el.contains("boundaries") && el["boundaries"].is_array())
+        for (const auto& bo : el["boundaries"]) {
+          if (!bo.is_object() || !bo.contains("entityId") || !bo["entityId"].is_number_unsigned())
+            continue;
+          CadSurfaceBoundary b;
+          b.entityId = bo["entityId"].get<std::uint64_t>();
+          const std::string kindStr = bo.value("kind", std::string("outer"));
+          b.kind = kindStr == "hide" ? CadBoundaryKind::Hide
+                 : kindStr == "show" ? CadBoundaryKind::Show
+                                     : CadBoundaryKind::Outer;
+          b.name = bo.value("name", std::string());  // absent in a pre-REQ-075 file
+          s.boundaries.push_back(std::move(b));
+        }
       if (el.contains("verts") && el["verts"].is_array() && el.contains("indices") &&
           el["indices"].is_array()) {
         auto tin = std::make_shared<CadTin>();

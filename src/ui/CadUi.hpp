@@ -71,6 +71,10 @@ void DrawSettingsPanel(AppCommandState& cmd, std::vector<std::string>* log = nul
 /// Drawing Units dialog (UNITS command). REQ-020. Owns displayLinearPrecision.
 void DrawUnitsDialog(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
+/// Right-Click Customization dialog (Options → User Preferences). REQ-084 (a). Sole owner of the
+/// three context modes and the time-sensitive preference; Cancel reverts to the values it opened with.
+void DrawRightClickCustomizationDialog(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+
 void DrawImportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 
 void DrawExportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
@@ -85,8 +89,16 @@ void DrawTextStyleManagerWindow(AppCommandState& cmd, std::vector<std::string>* 
 /// Point Group manager (REQ-067): create/rename/delete groups and edit their rules, with the
 /// resolved member count shown live so an empty or non-matching rule is visible immediately.
 void DrawPointGroupManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+/// Surface Style editor (SURFSTYLE, REQ-070 / ADR-036 (i)): the named table of how a surface is
+/// DRAWN — contours, border, triangles, points. Editing a style changes every surface using it, and
+/// touches no surface definition, so nothing here can re-triangulate anything.
+void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 /// Surfaces panel (REQ-068): create a TIN surface from point groups, rebuild, rename, delete.
 void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+
+/// Feature line elevation editor (REQ-088). Every edit routes through the FLELEV command line, so
+/// the panel and the REQ-203 driver exercise the same code.
+void DrawFeatureLineElevationWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
 /// Modal after COPY when survey points were selected — duplicate ID policy for new survey rows.
 void DrawCopySurveyDuplicateModal(AppCommandState& cmd, std::vector<std::string>& log);

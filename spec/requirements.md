@@ -2318,6 +2318,263 @@ requirements is a planning failure, not a sign of rigor.
   **comma-only** (delimiter auto-detection was offered and declined), and the
   change covers **export as well as import**.
 
+### REQ-084 — Right-click is customizable, and the shortcut menu is the drawing's action menu
+- Purpose: right-click is the most-pressed button in a drafting session, and today
+  GoSurvey spends it badly. The three context modes exist (REQ-054) but are buried in
+  a collapsing header as three unlabelled combo boxes, so nobody finds them; and the
+  menu they select is a bare list of five modify commands, so choosing "Shortcut Menu"
+  trades a working ENTER for very little. Both halves are fixed together because
+  neither is worth much alone: a discoverable dialog that still opens a thin menu has
+  nothing to offer, and a rich menu nobody can reach is the state we are already in.
+- Priority: should
+- Type: functional
+- Statement:
+
+  **(a) The Right-Click Customization dialog.** Options → User Preferences carries a
+  **Right-click Customization…** button that opens a dialog of that name, laid out as
+  AutoCAD's is and owning every right-click preference:
+  - a **Turn on time-sensitive right-click** checkbox, with the rule it implies stated
+    under it (quick click = ENTER, longer click = shortcut menu) and a **Longer click
+    duration** field in **milliseconds**;
+  - three labelled groups of **radio buttons** — not combo boxes — each carrying the
+    sentence that says when it applies: **Default Mode** ("If no objects are selected,
+    right-click means") = Repeat Last Command | Shortcut Menu; **Edit Mode** ("If one
+    or more objects are selected") = Repeat Last Command | Shortcut Menu; **Command
+    Mode** ("If a command is in progress") = ENTER | Shortcut Menu: always enabled |
+    Shortcut Menu: enabled when command options are present;
+  - **Apply & Close**, **Cancel** and **Help** buttons. Apply & Close writes the
+    preferences to the user profile; **Cancel restores every value the dialog opened
+    with**, including the checkbox and the duration.
+
+  **Time-sensitive right-click is off by default**, so an existing profile's
+  right-click behaviour does not change on upgrade. While it is **on**, Default Mode
+  and Command Mode are **disabled** — the timer, not the preference, decides those two
+  contexts — and this is shown by greying them, never by silently ignoring them
+  (REQ-201). Edit Mode stays live, because a selection still chooses between repeating
+  and the menu.
+
+  **(b) What time-sensitive right-click does.** With it on, a right-click in the
+  drawing is classified by **how long the button is held**: released within the
+  configured duration it is an **ENTER** (the Command Mode ENTER path, and a repeat of
+  the last command when idle); held past the duration it opens the **shortcut menu**,
+  at the point of press. The menu therefore opens on release-or-elapse rather than on
+  press — that is inherent to the feature, not a defect. With it **off**, right-click
+  is classified on press exactly as it is today.
+
+  **(c) The shortcut menu.** With no command running, right-click's shortcut menu is
+  the drawing's action menu, in this order:
+  - **Repeat LAST** — named for the last command, absent when there is none;
+  - **Recent Input** (submenu) — the commands most recently entered, newest first;
+    choosing one runs it. This is the same history the command bar's dropdown shows
+    (REQ-040), so the two can never disagree;
+  - **Isolate Objects** (submenu) — Isolate Objects | Hide Objects | End Object
+    Isolation (see (d));
+  - **Clipboard** (submenu) — Cut | Copy | Paste, with Cut/Copy disabled on an empty
+    selection;
+  - **Basic Modify Tools** (submenu) — Move | Copy Selection | Rotate | Scale | Erase |
+    Offset | Trim | Join, disabled as a group when nothing is selected;
+  - **Pan**, **Zoom**, **Free Orbit** — the view commands;
+  - **Quick Select…** and **Options…**.
+
+  **Find… is deliberately absent.** GoSurvey's find/replace searches only the MTEXT buffer being
+  edited, and the drawing shortcut menu cannot open while that editor is up; there is no
+  drawing-wide FIND. The item would therefore be a control that does nothing, which REQ-201
+  forbids. It belongs to a drawing-wide FIND requirement, not to this menu.
+
+  With a **selection**, the modify commands and the REQ-054 selection items (Select
+  similar, Selection…, Clear selection) stay reachable as they are today. With a
+  **command running**, the menu remains the short Command-Mode menu (Enter / Cancel) —
+  a half-finished LINE is not the moment to offer Options.
+
+  **(d) Object isolation.** **Isolate Objects** hides everything except the selection;
+  **Hide Objects** hides the selection; **End Object Isolation** restores everything. A
+  hidden object is hidden **and unpickable** — it must not be draggable, box-
+  selectable, or hoverable while invisible, because an invisible object that still
+  answers a click is worse than one that is simply drawn. Isolation is keyed on the
+  **stable entity id** (REQ-076), never an array index, so an edit that compacts the
+  arrays cannot silently isolate a different object. Isolation is **session state**: it
+  is not written to `.gs`, and opening a drawing always shows all of it. It covers the
+  entity types that carry `EntityAttributes` — lines, circles, arcs, ellipses,
+  polylines, annotations, filled regions and meshes. Survey points and PDF underlays
+  are out of scope for this requirement, and the command says so when it skips them.
+
+  **Display Order is deliberately not in this menu.** It needs a persisted per-entity
+  ordering key threaded through render, `.gs` and DXF, which is a separate requirement,
+  not a menu item.
+- Acceptance:
+  - Options → User Preferences shows **Right-click Customization…**, and it opens a
+    dialog with the checkbox, the millisecond field and the three radio groups;
+  - ticking the checkbox greys Default Mode and Command Mode and leaves Edit Mode
+    usable; unticking restores all three;
+  - changing values and pressing **Cancel** leaves every preference at what it was when
+    the dialog opened; pressing **Apply & Close** and restarting the app reproduces the
+    chosen values — including the checkbox and the duration;
+  - with time-sensitive **on** at 250 ms: a quick right-click during LINE ends the
+    command as ENTER does, and a held right-click opens the shortcut menu instead;
+  - with time-sensitive **off**, right-click behaves exactly as it did before this
+    requirement, for all three modes;
+  - the idle shortcut menu shows Repeat / Recent Input / Isolate Objects / Clipboard /
+    Basic Modify Tools / Pan / Zoom / Free Orbit / Quick Select / Options; **Recent
+    Input** lists the commands just typed, newest first, and picking one runs it;
+  - **every** item in the menu does something when chosen — no entry is present that
+    cannot act (REQ-201);
+  - select two lines, **Isolate Objects** — the rest of the drawing disappears, a
+    box-select drag across where it was selects nothing, and hovering there highlights
+    nothing; **End Object Isolation** brings it all back;
+  - **Hide Objects** on a selection hides exactly that selection;
+  - saving a drawing with objects isolated and reopening it shows every object.
+- Owner-layer: UI (the dialog, the shortcut menu, the click-timing classification) /
+  Commands (isolation state, the isolate/hide/end commands, the pick gates, ORBIT) /
+  Render (the draw gates) / IO (`UserPrefs` for the two new preferences)
+- Status: accepted (2026-08-18)
+- Revisions: 2026-08-18 — initial. Raised by the user with reference screenshots of
+  AutoCAD's Right-Click Customization dialog and its drawing shortcut menu. Two
+  questions were answered before drafting: **Display Order** was offered and
+  deliberately deferred (it is a data-format change, not a menu item), and
+  time-sensitive right-click ships **off** by default so no existing profile changes
+  behaviour on upgrade. Supersedes REQ-054's Settings surface for these preferences —
+  REQ-054's Edit Mode default and its selection menu items are unchanged.
+  2026-08-18 — revised during implementation: **Find… dropped from the menu.** The
+  reference screenshot carries it, but GoSurvey has no drawing-wide FIND and the
+  existing find/replace is reachable only from inside the MTEXT editor, so the item
+  would have been inert. Stated above rather than shipped as a dead control (REQ-201),
+  and an acceptance condition added that no menu entry may be present that cannot act.
+
+---
+
+### REQ-085 — 3D polyline
+- Purpose:     draw a linework string whose vertices each carry their own elevation, which is what a
+               breakline or a feature line is made of
+- Priority:    should
+- Type:        functional
+- Statement:   A `3DPOLY` command draws a polyline in which **every vertex has its own elevation**,
+               entered per vertex rather than taken from the ELEV work plane. An object snap
+               supplies the snapped point's Z (REQ-058, already the rule); with no snap the vertex
+               elevation may be typed. The result is an ordinary polyline in the existing store —
+               `userPolylineVerts` is already stride-3 XYZ — so it selects, moves, snaps, persists,
+               and may be designated a breakline (REQ-069) exactly as any polyline does.
+- Acceptance:
+  - a `3DPOLY` drawn with three vertices at three different typed elevations stores three different
+    Z values, and a `.gs` round trip preserves each;
+  - snapping a vertex to a survey point gives that vertex the point's elevation, with ELEV set to
+    an unrelated value;
+  - the result is accepted by `DESIGNATEBREAKLINE` and the surface honours its per-vertex elevations;
+  - the ordinary `POLYLINE` command is unchanged.
+- Owner-layer: Commands, UI
+- Status:      accepted (2026-08-19)
+- Revisions:   2026-08-19 — initial. Raised when the surface workflow was revisited: breaklines were
+               being drawn with `POLYLINE`, which commits every vertex at the ELEV plane unless the
+               user happens to snap, so a breakline drawn free-hand silently tore the surface down
+               to elevation 0 along its length.
+               2026-08-19 — accepted and implemented (TASK-075). One acceptance condition is NOT
+               covered by an automated test and is recorded as such rather than claimed: snapping a
+               vertex to a survey point cannot be driven headlessly, because `viewportSnapPickValid`
+               is set by the UI hover path the REQ-203 driver has no equivalent of. The code path is
+               shared with POLYLINE (`CadCommitElevation`), which REQ-058 already covers.
+
+### REQ-086 — A point file as a surface data source
+- Purpose:     build a surface directly from a delivered point file, without importing thousands of
+               points into the drawing first
+- Priority:    should
+- Type:        functional
+- Statement:   A surface's definition may reference **point files** by path alongside its point
+               groups (REQ-069). A linked file is re-read on rebuild, so editing the file changes
+               the surface, and its points feed the triangulation **without becoming drawing survey
+               points**. A linked file may be **imported into the drawing** instead, which reads it
+               once through the REQ-083 import path, creates survey points and a point group, and
+               breaks the link. A path that no longer resolves is reported and the surface keeps its
+               last good triangulation (REQ-001), rather than silently shrinking.
+- Acceptance:
+  - a surface built from a linked file has the file's points in its triangulation and the drawing's
+    survey point count is unchanged;
+  - editing the file and rebuilding changes the triangle count;
+  - breaking the link creates survey points and a point group, and the surface still builds
+    identically afterwards;
+  - a missing file is named in the log, the surface is marked not-current, and the previous
+    triangulation is retained;
+  - a `.gs` round trip preserves the link, and a legacy `.gs` with no such array loads unchanged.
+- Owner-layer: Domain, IO, UI
+- Status:      accepted (2026-08-19)
+- Revisions:   2026-08-19 — initial. The file is read during the UI-thread resolve step
+               (`ResolveSurfaceInputs`), never on the rebuild worker, so REQ-069's worker stays pure
+               and touches no `AppCommandState` and no filesystem (architecture §8 rule 1).
+               2026-08-19 — accepted and implemented (TASK-076). The link stores the column LAYOUT
+               alongside the path, which the statement above did not say: a point file does not
+               describe its own column order, and a link that re-guessed would swap northing for
+               easting on reload. Also added during implementation: breaking the link is REFUSED
+               when the import brought in no points (REQ-083 skips rows whose point id already
+               exists), because dropping the link would then silently delete the file.s whole
+               contribution — the link is the only thing still supplying those points.
+
+### REQ-087 — Feature line entity
+- Purpose:     a named 3D linework object that grading is designed with and that a surface can
+               consume as a breakline — the object a designer edits, as opposed to survey linework
+- Priority:    should
+- Type:        functional
+- Statement:   A **feature line** is a first-class drawing entity: an ordered chain of points each
+               with an elevation, carrying a name and a description. It may be created by drawing it
+               (`FEATURELINE`), or converted from existing lines, polylines, arcs or 3D polylines
+               (`FEATURELINESFROMOBJECTS`), which may optionally erase the source. Its geometry is
+               editable — insert and delete a PI — and it may be **added to a surface as a
+               breakline**, after which the surface tracks it dynamically like any other breakline
+               (REQ-069). It selects, moves, snaps, hides by layer, persists to `.gs`, and is
+               undoable in one step per operation, like every other entity (REQ-076 identity).
+- Acceptance:
+  - a feature line drawn with per-vertex elevations survives a `.gs` round trip byte-identically;
+  - converting a closed polyline yields a closed feature line with the same vertices;
+  - inserting a PI adds a vertex without changing the elevation of the existing ones;
+  - adding a feature line to a surface forces triangulation edges along it, and moving the feature
+    line rebuilds the surface with no user action;
+  - deleting the feature line removes it from the surface's definition (REQ-069's rule);
+  - a legacy `.gs` with no feature lines loads unchanged.
+- Owner-layer: Domain, IO, Renderer, UI, Commands
+- Status:      proposed
+- Revisions:   2026-08-19 — initial. Reverses ADR-028 alternative (5), which deferred feature lines
+               as "a separate milestone once surfaces are trustworthy"; this is that milestone.
+               2026-08-20 — TASK-079 landed the "moves" clause: MOVE, COPY, ROTATE and SCALE, with
+               previews and a selection highlight, and explicit refusals from TRIM, OFFSET, JOIN
+               and COPYCLIP. Status stays `proposed`: "snaps" is not built (stage 2b owes snap,
+               grips, DXF and PDF plot), and until it is, the Statement above describes more than
+               the code does.
+               2026-08-20 — TASK-082: FEATURELINE is drawable with the mouse. A click places X,Y
+               and the command prompts for the elevation (default: the previous point's). Fixes
+               a defect that made the command mouse-inoperable — K::FeatureLine was absent from
+               both viewport-click routing lists, so every click was silently discarded — and
+               adds the rubber-band preview the draft never had.
+
+### REQ-088 — Feature line elevation editing
+- Purpose:     set and check grade along a feature line, which is the actual work of grading design
+- Priority:    should
+- Type:        functional
+- Statement:   A feature line's elevations are editable through a table showing, per point:
+               **station, elevation, length to the next point, grade back and grade ahead**. Editing
+               an elevation updates the adjacent grades; editing a grade updates the downstream
+               elevations. Points may be raised or lowered as a set by a delta. A feature line
+               additionally supports **elevation points** — points that carry an elevation but are
+               not geometry vertices, insertable and deletable independently of PIs.
+- Acceptance:
+  - typing an elevation updates grade back and grade ahead on the neighbouring rows and nowhere else;
+  - typing a grade ahead moves the next point's elevation and leaves the current one alone;
+  - stations and lengths agree with the feature line's plan geometry to REQ-101's tolerance;
+  - an elevation point changes the surface when the feature line is used as a breakline, and does
+    not add a plan vertex;
+  - every edit is undoable in one step and the surface rebuilds with no user action.
+- Owner-layer: UI, Domain
+- Status:      accepted
+- Revisions:   2026-08-19 — initial.
+               2026-08-20 — TASK-080 stage 1: the derived table and the six edits, driven by
+               FLELEV. Four of five acceptance conditions verified headlessly; "rebuilds with no
+               user action" is verified up to the frame tick the REQ-203 driver does not have.
+               Also unblocked REQ-087's breakline clause — ResolveDefinitionChain had no
+               FeatureLine branch, so a feature line designated as a breakline resolved as ABSENT
+               and was stripped from the surface definition on the next rebuild. Status stays
+               `proposed`: the Statement says "editable through a TABLE", and stage 2 is what puts
+               one on screen.
+               2026-08-20 — TASK-081 stage 2: the Feature Line Elevations panel. Every cell edit
+               runs an FLELEV command, so the panel and the REQ-203 driver exercise one code
+               path. ACCEPTED. The panel's own rendering has no automated coverage and cannot
+               while the driver has no window; that is mitigated by the routing, not solved.
+
 ---
 
 ## Performance requirements
@@ -2743,7 +3000,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-203 | Build/Platform/Commands | planned — the `gosurvey_headless` link line carries no imgui/glfw/GLEW/`gl*` symbol; a hand-written transcript (line + circle + polyline) saves a `.gs` identical to the same steps performed in the GUI; a queued `DIALOG` answer satisfies a file-dialog call with no block; a deliberately-broken transcript exits non-zero naming invariant + step + line; the same transcript twice is byte-identical; CI runs the corpus per push | accepted |
 | REQ-082 | UI | planned — manual (header click sorts + marks the column, second click reverses; equal keys stable; after sorting, edit/delete act on the record shown; header frozen while scrolling; unchecked checkbox visible; saved file order unaffected by display sort) | accepted |
 | REQ-081 | UI | planned — manual, side-by-side against the Hazel reference shots (adjacent docked panels separated by a visible border; panel surface lighter than the dockspace ground; recessed fields; Dark shows no `#464646`/steel-blue chrome; Dark→Light→Dark leaves no colour behind; Light pixel-unchanged; viewport contents unchanged; X/Y/Z badges present, Radius has none) | accepted |
-| REQ-083 | Platform/UI | `PointFileExtTests` **green 2026-08-17** (5 cases / 26 assertions: a name ending `.csv`/`.txt` in any case gets nothing appended; a bare name gets the chosen filter's extension; a name ending in something else — `points.dat`, `job.2026` — still gets one; empty name; a trailing dot) + manual (Import chooser lists `.txt` under the default filter; the same bytes as `.csv` and as `.txt` import identically and validate identically; a locked `.txt` shows the REQ-041 message with Import disabled; a space-delimited `.txt` reports column errors and adds no point; Export typed as `points.txt` writes `points.txt`) — **the manual half is not yet run**: the Win32 chooser and the REQ-041 file-state path cannot be linked by the test target, and `IMPORTPOINTS` only opens the window (the import is a panel button) so the REQ-203 driver cannot reach it either. Fixtures for the pass: `samples/points-req083.{csv,txt}` (byte-identical) and `samples/points-req083-spaced.txt` | accepted |
+| REQ-083 | Platform/UI | `PointFileExtTests` **green 2026-08-17** (5 cases / 26 assertions: a name ending `.csv`/`.txt` in any case gets nothing appended; a bare name gets the chosen filter's extension; a name ending in something else — `points.dat`, `job.2026` — still gets one; empty name; a trailing dot) + manual (Import chooser lists `.txt` under the default filter; the same bytes as `.csv` and as `.txt` import identically and validate identically; a locked `.txt` shows the REQ-041 message with Import disabled; a space-delimited `.txt` reports column errors and adds no point; Export typed as `points.txt` writes `points.txt`) — **the manual half was run and confirmed by the user in the application 2026-08-18**: the Win32 chooser and the REQ-041 file-state path cannot be linked by the test target, and `IMPORTPOINTS` only opens the window (the import is a panel button) so the REQ-203 driver cannot reach it either. Fixtures for the pass: `samples/points-req083.{csv,txt}` (byte-identical) and `samples/points-req083-spaced.txt` | accepted |
 | REQ-204 | Build/Platform/Commands/util | planned — `--seed N` twice is identical; **one deliberately-broken fixture per invariant proving each check fires**; a failing run's minimized transcript reproduces standalone under the REQ-203 driver; minimization terminates within its bound and reports its ratio; a clean seed range prints only a summary; `GoSurvey.exe`'s link line contains no generator symbol | accepted |
 
 ---

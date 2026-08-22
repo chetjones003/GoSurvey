@@ -1,7 +1,7 @@
 # TASK-069 — A completed import is reported as an outcome, not re-validated (BUG-014, REQ-041 rev 3)
 
 - Type:    bug
-- Status:  self-verify — automated green; the GUI confirmation is the user's screenshot repro
+- Status:  done — user re-ran the screenshot repro in app 2026-08-18
 - Opened:  2026-08-17
 - Owner:   Claude Code (AI assistant)
 
@@ -118,15 +118,15 @@ ASSUMPTION-1: A partially-successful import (some rows skipped) is still shown i
 
 ## 9. Verification result
 - Submitted:  2026-08-17
-- Verdict:    **PASS on the automatable half.** The acceptance condition is worded about a panel, so
-  the confirming evidence is the GUI: re-run the exact repro from the screenshots and check that the
-  summary reads "Imported 5 point(s) — 0 row(s) skipped." in the success colour with Import
+- Verdict:    **PASS.** The automatable half passed 2026-08-17; the GUI confirmation was run by the
+  user 2026-08-18 — the exact repro from the screenshots now reads the success outcome with Import
+  disabled, and changing the column order brings normal validation back.
   disabled, then change the column order and confirm normal validation resumes.
 - Findings:   none blocking.
 - Technical debt: none added. DEBT-REQ083-1 (overwrite prompt) is unrelated and still open.
 
 ## 10. Outcome
-- Requirements satisfied: REQ-041 rev 3 (Acceptance met: pending the GUI re-run above)
+- Requirements satisfied: REQ-041 rev 3 (Acceptance met: **yes** — GUI re-run confirmed 2026-08-18)
 - Tests added:            1 case / 15 assertions in `SurveyCsvValidateTests.cpp`
 - Docs updated:           `spec/requirements.md` (REQ-041 rev 3), `spec/project.md` (D-2026-08-17-d)
-- Done:                   pending the GUI re-run
+- Done:                   2026-08-18 (user confirmed the repro in app)

@@ -1,7 +1,7 @@
 # TASK-033 — TRIM defaults to smart line trim, behind a TRIMSTATE system variable
 
 - Type:    feature
-- Status:  self-verify (build green; awaiting the manual acceptance run — see §9)
+- Status:  done — user completed the manual acceptance run in app 2026-08-18
 - Opened:  2026-08-11
 - Owner:   chetjones003
 
@@ -132,3 +132,17 @@ COMPLETION REPORT — TASK-033 — 2026-08-11 (PROVISIONAL — acceptance run ou
 - Technical debt noted:    DEBT-1 (no automated coverage), DEBT-2 (no registry, by design)
 - Build:                   reproducible, clean on Windows (GoSurvey-0.4.0.exe relinked 2026-08-11)
 - Docs updated:            spec/requirements.md (REQ-056 + matrix row), spec/project.md (decision log)
+
+---
+
+ACCEPTANCE RUN — 2026-08-18
+- The manual GUI acceptance run §9 was waiting on is **complete**. The user confirmed in the running
+  application: TRIM opens in smart line-trim mode by default; TRIMSTATE (0/1) persists across sessions
+  and accepts both the prompt and inline forms; T/L switch mode mid-run; cutting-edge picking reuses
+  the existing hover and selection highlighting.
+- Verification verdict:  **PASS** — the PROVISIONAL completion report above is now final.
+- ASSUMPTION-1 (TRIMSTATE in prefs, not `.gs`): **validated**.
+- ASSUMPTION-2 (T as the option letter): **validated**.
+- Debt unchanged: DEBT-1 (no automated coverage), DEBT-2 (no registry, by design — build it on the
+  next system-variable request).
+- Done:  2026-08-18

@@ -1,7 +1,7 @@
 # TASK-022 — REQ-044: import DXF STYLE table as live text styles; REQ-050: MTEXT sized by viewport scale
 
 - Type:    feature + fix (un-defer REQ-044 DXF round-trip; new REQ-050)
-- Status:  self-verify (built clean; existing 66 unit tests green; awaiting user manual verification)
+- Status:  done — user verified in app 2026-08-18 (all four manual checks in §6)
 - Opened:  2026-07-29
 - Owner:   chetjones003
 
@@ -68,3 +68,11 @@ viewport text was imported text → editing a style's font changed nothing.
   scale is a noted follow-up if the two diverge (recorded on REQ-050).
 - Case-collision edge: a DXF style whose name differs only in case from an existing style registers a
   second style; imported text still links correctly. AutoCAD writes "Standard", so this is rare.
+
+## 8. Verification result
+- Submitted:  2026-08-18
+- Verdict:    **PASS** — user confirmed all four §6 manual checks in the running application:
+              DXF styles listed in STYLE, a font edit re-baked imported text with heights preserved,
+              a different style left that text alone, and MTEXT sized to the viewport scale while
+              TEXT and survey labels were unchanged.
+- Done:       2026-08-18

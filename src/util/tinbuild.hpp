@@ -12,12 +12,16 @@
 /// REQ-101's ±0.01 ft leaves no margin to absorb that, so coordinates are widened at the predicate
 /// rather than in the store (architecture §11.8 is unchanged).
 ///
-/// Constraints (breaklines) are **not** here: they belong to REQ-069, and building their machinery
-/// before that requirement is in flight would be scaffolding (REQ-301). The output addresses
-/// vertices by index, which is what constraint insertion will need to operate on.
+/// Constrained edges (breaklines, boundary rings — REQ-069) are enforced by flip-based insertion
+/// (Anglada/Sloan): after the unconstrained Delaunay triangulation is built, each constraint edge not
+/// already present is exposed by repeatedly flipping the triangle-edge it crosses whenever the local
+/// quad is convex, deferring the rest until a later pass makes them so. This is the standard method —
+/// it needs no segment-intersection retriangulation and it composes with the existing incremental
+/// Bowyer–Watson build rather than replacing it.
 
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 /// A point going into the triangulation. X/Y decide the topology; Z is carried through untouched.
@@ -52,22 +56,89 @@ struct TinBuildResult {
   /// dropped. Empty otherwise.
   std::string message;
 
+  /// Duplicates whose Z disagreed by more than \ref kTinPlanEpsilon at the same plan position — a
+  /// subset of \ref duplicatesDropped, called out because it means two shots of the same ground
+  /// disagree, not that the same shot was entered twice (REQ-069, REQ-201).
+  int conflictingDuplicates = 0;
+
+  /// Constraint edges (breaklines/boundary rings) whose exposure did not converge within the flip
+  /// budget — reported, not silently left crossed (REQ-069, REQ-201).
+  int constraintsUnresolved = 0;
+
   [[nodiscard]] bool ok() const { return status == TinBuildStatus::Ok; }
   [[nodiscard]] int vertexCount() const { return static_cast<int>(vertsXyz.size() / 3); }
   [[nodiscard]] int triangleCount() const { return static_cast<int>(indices.size() / 3); }
 };
+
+/// One edge of a breakline or boundary ring, in the caller's own coordinates — REQ-069. Endpoints are
+/// **not** required to already be in \p points passed to \ref BuildTin: a constraint's own vertices
+/// are inserted into the triangulation as ordinary points (deduplicated exactly like any other),
+/// carrying their own elevation. A boundary ring of N vertices is N \c TinConstraint edges, one per
+/// side, closing back to the first vertex.
+struct TinConstraint {
+  double ax = 0.0, ay = 0.0;
+  float  az = 0.f;
+  double bx = 0.0, by = 0.0;
+  float  bz = 0.f;
+};
+
+/// Two constraint segments that cross in plan but disagree on elevation at the crossing point, by
+/// more than \ref kTinPlanEpsilon — reported rather than silently triangulated one way or the other
+/// (REQ-069's named diagnostic for this case, REQ-201).
+struct TinCrossingIssue {
+  size_t constraintIndexA = 0;
+  size_t constraintIndexB = 0;
+  double x = 0.0, y = 0.0;
+  float  zFromA = 0.f, zFromB = 0.f;
+};
+
+/// Finds every pair of \p constraints that cross in plan with a Z disagreement at the crossing point.
+/// Pure geometry over the input segments — independent of whether they were ever built into a
+/// triangulation, so it can run before \ref BuildTin is even called and be reported up front.
+[[nodiscard]] std::vector<TinCrossingIssue> TinFindCrossingConflicts(const std::vector<TinConstraint>& constraints);
 
 /// Plan-distance below which two points are the same site. Matches REQ-101's ±0.01 ft: two shots
 /// closer than this in plan cannot be distinguished by the tolerance the rest of the system works to,
 /// and feeding both to Delaunay is undefined.
 inline constexpr double kTinPlanEpsilon = 0.01;
 
-/// Triangulate \p points in plan (X/Y), carrying Z through to the output vertices.
+/// Triangulate \p points in plan (X/Y), carrying Z through to the output vertices, honouring every
+/// edge in \p constraints (REQ-069): no output triangle edge crosses one. Constraint vertices are
+/// folded into the point set (see \ref TinConstraint); \p constraints defaults to empty, which is
+/// exactly REQ-068's unconstrained build — existing callers are unaffected.
 ///
 /// Returns a result whose `status` is `Ok` only when there is a surface; on any other status the
 /// vertex and index arrays are **empty** — there is no partial surface (REQ-001: reject, never
 /// absorb).
-[[nodiscard]] TinBuildResult BuildTin(const std::vector<TinInputPoint>& points);
+[[nodiscard]] TinBuildResult BuildTin(const std::vector<TinInputPoint>& points,
+                                      const std::vector<TinConstraint>& constraints = {});
+
+/// How a boundary ring (REQ-069) affects the surface it is applied to.
+enum class TinBoundaryKind : std::uint8_t {
+  Outer,  ///< Clips the surface to inside this ring.
+  Hide,   ///< Removes surface inside this ring, leaving a void.
+  Show,   ///< Restores surface inside this ring — meaningful inside a Hide.
+};
+
+/// A boundary ring: an ordered, implicitly-closed polygon in plan (X/Y). Vertex order does not need
+/// to be a particular winding — containment is tested by ray casting, which is winding-independent.
+struct TinBoundaryLoop {
+  TinBoundaryKind kind = TinBoundaryKind::Outer;
+  std::vector<std::pair<double, double>> ring;
+};
+
+/// Culls triangles from an already-built (\p vertsXyz, \p indices) by a sequence of boundary rings,
+/// applied in \p loops order (REQ-069: "boundaries apply in definition order"). A triangle's
+/// inclusion is decided by its **centroid**: exact when the ring's edges were also passed to
+/// \ref BuildTin as constraints (no triangle straddles a constrained boundary edge), an approximation
+/// otherwise. No \c Outer loop present means "no clip" (every triangle starts included); \c Hide
+/// removes centroids inside its ring; \c Show restores centroids inside its ring, which only has a
+/// visible effect where an earlier \c Hide removed them.
+///
+/// \p indices is filtered in place; \p vertsXyz is left untouched (culled vertices simply go
+/// unreferenced, exactly as convex-hull exclusion already works in \ref BuildTin).
+void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<float>& vertsXyz,
+                         const std::vector<TinBoundaryLoop>& loops);
 
 /// Interpolated surface elevation at plan position (\p x, \p y) — REQ-074's spot elevation.
 ///
@@ -94,6 +165,22 @@ inline constexpr double kTinPlanEpsilon = 0.01;
 /// \returns true when a triangle covers the point.
 [[nodiscard]] bool TinElevationAt(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
                                   double x, double y, double* outZ);
+
+/// The triangulation's **border**: every edge belonging to exactly one triangle (REQ-068, REQ-070's
+/// "surface border" style component).
+///
+/// An interior edge is shared by two triangles; a border edge is not. That single rule gives the
+/// outer boundary and the rim of every hole a REQ-069 hide-boundary left behind, in one pass and with
+/// no special case for either — which is why the border is computed rather than tracked as the
+/// triangulation is culled.
+///
+/// **Not the convex hull.** A concave outline, and the void inside a hide boundary, are exactly the
+/// shapes a hull test gets wrong; the same distinction \ref TinElevationAt documents for containment.
+///
+/// \param out receives flat x,y,z pairs — six floats per border edge, the layout the line renderer
+///            and the highlight buffer both already consume. Cleared first.
+void TinBorderEdges(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
+                    std::vector<float>* out);
 
 // --- Predicates, exposed for testing -----------------------------------------------------------
 // These are the two functions the whole triangulation rests on, and a sign error in either is

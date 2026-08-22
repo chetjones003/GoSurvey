@@ -1,7 +1,7 @@
 # TASK-018 — REQ-046: per-viewport layer overrides (VP Freeze + VP Color; VPFREEZE/VPTHAW)
 
 - Type:    feature
-- Status:  self-verify (awaiting user manual verification)
+- Status:  done — user verified in app 2026-08-18
 - Opened:  2026-07-13
 - Owner:   chetjones003
 
@@ -82,19 +82,19 @@ ASSUMPTION-1: VP Color colors only the overridden layers; other viewport linewor
 - [x] performance-review   — n-a (O(overrides) membership per drawn/plotted entity; overrides are tiny;
       plot groups by color via std::map — deterministic, negligible cost)
 - [x] testing              — PASS (56/56 ctest green incl. 3 new REQ-046 cases); UI/plot/`.gs` = manual
-- [ ] user manual verification — PENDING (run the app)
+- [x] user manual verification — PASS 2026-08-18 (user confirmed in app)
 
 ## 10. Verification result
 - Submitted:  2026-07-13 (self)
-- Verdict:    PASS pending user manual verification
+- Verdict:    PASS — user manual verification confirmed 2026-08-18
 - Findings:   none blocking. Residual debt (unchanged): snap/pick can still target a layer frozen in the
               floating viewport (TASK-017 F2). VP Color covers only overridden layers (ASSUMPTION-1).
 
 ## 11. Outcome
-- Requirements satisfied: REQ-046 (Acceptance: pending manual verification of the UI/plot/round-trip parts)
+- Requirements satisfied: REQ-046 (Acceptance met: yes — UI, plot and .gs round-trip parts confirmed by the user in app 2026-08-18)
 - Tests added:            tests/PaperSpaceTests.cpp — 3 REQ-046 cases (VPFREEZE/VPTHAW; color set/clear; independence)
 - Refactors:              PdfPlot single-path → per-color paths; entStyle gains a base-color parameter
 - Docs updated:           spec/requirements.md (REQ-046 + REQ-028 revision + traceability), spec/project.md
                           (REQ-046 + ADR-021 + ADR-007 amendment), spec/roadmap.md (implicitly), docs/gs-file-format.txt
 - Technical debt noted:   ASSUMPTION-1 (override-only viewport color); TASK-017 F2 (snap/pick vs frozen) unchanged
-- Done:                   pending user manual verification
+- Done:                   2026-08-18 (user verified in app)

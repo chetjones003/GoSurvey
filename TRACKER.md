@@ -7,6 +7,79 @@
 
 ## CHANGES
 
+### A polyline survives a DXF round trip as a polyline — 2026-08-21
+    - GitHub issue #64, found by the REQ-204 `dxf-export-stable` oracle (fuzz signature
+      `dxflwpolyasym`). REQ-204 + REQ-053 + TASK-083.
+    - **The importer had no polyline sink.** `ParseEntityRegion` decomposed every `POLYLINE` and
+      `LWPOLYLINE` into `userLinesFlat` segments, so a drawing that went out to DXF and came back
+      had had every polyline shattered into unrelated lines — "DXF import — 4 line segment(s)" for
+      a file holding two LINEs and one LWPOLYLINE. Not a mistake inside a shared path: the reader
+      predates the polyline store, which arrived with REQ-053 and taught only the *exporter* about
+      itself. The consequence was never confined to our own files — Civil 3D writes LWPOLYLINE
+      constantly, so **every** DXF a surveyor opened arrived with its parcel boundaries, breaklines
+      and alignments already destroyed as objects.
+    - **Fixing it uncovered a second asymmetry underneath**, which the first had been hiding:
+      `$EXTMIN`/`$EXTMAX` were swept from lines, circles, annotations and survey points and never
+      from polylines, **and** were written from the LOCAL store while every entity is written in
+      WORLD coordinates. So the header described a different frame from the body, and the file
+      changed whenever the document origin moved — and importing a file is precisely what moves it
+      (the origin is set FROM those extents). The round trip could not settle until both were
+      fixed. Found by the regression test, not by review.
+    - **Bulges now read.** Deciding "is this one polyline or an arc chain" meant reading group 42,
+      which the LWPOLYLINE reader had ignored entirely — its arcs were being flattened to their
+      chords, changing the geometry and not merely its object identity. A bulge-carrying polyline
+      still tessellates (the polyline store has no per-vertex bulge — TASK-083 DEBT-1), but it now
+      tessellates to the arc it describes. A 3D `POLYLINE`'s per-vertex group 30 is read too.
+    - **Two exporter gaps found while reading and deliberately NOT folded in** (TASK-083 §8), both
+      confirmed by reproducer rather than inferred, and both the same family — a polyline entity
+      branch added without updating the sweeps around it:
+      - **#71**: `entityHandleCount` omits polylines, so the OBJECTS dictionary records collide with
+        entity handles and `$HANDSEED` can sit below the highest handle used. Six rectangles and
+        nothing else produce five duplicated handles and a `$HANDSEED` of `1004` against a handle
+        `1005` in use. Invisible to the round-trip oracle: both exports collide identically.
+      - **#72**: the export's layer-name sweep skips `userPolylineAttrs`, so a polyline is the one
+        entity that can reference a LAYER the exported file never defines. Reached by importing a
+        DXF whose LWPOLYLINE names a layer its own LAYER table omits; the same file with a LINE
+        instead exports the layer correctly, which is the asymmetry.
+    - Tests: `regression-64-dxf-polyline-identity.txt` — 2 lines + 1 circle + an open polyline + a
+      RECT (closed polyline), export → NEW → import → export, counts on both sides and
+      `EXPECT SAMEFILE` on the two files. Fails before the fix with `LINES: expected 2, got 8`.
+      464/464 ctest. `dxf-export-stable` stays DISABLED for #63 alone, and now gets as far as
+      `ARCS: expected 1, got 0`.
+
+### Right-click became customizable, and the shortcut menu became the drawing's action menu — 2026-08-18
+    - Asked for from AutoCAD reference screenshots: the Options → User Preferences right-click
+      surface and the drawing shortcut menu. REQ-084 + ADR-034 + TASK-070.
+    - **Right-Click Customization dialog.** The three context modes had existed since REQ-054 but sat
+      in a collapsing header as three unlabelled combo boxes; they now live in a dialog of their own,
+      as radio groups carrying the sentence that says when each applies, with **Apply & Close** /
+      **Cancel** (a true revert) / Help. New: **time-sensitive right-click** — quick click = ENTER,
+      longer click = shortcut menu, duration in ms. It ships **off**, so no existing profile changes
+      behaviour on upgrade; while on, Default and Command Mode grey out because the timer, not the
+      preference, decides them.
+    - **The shortcut menu** gained Recent Input (the same history the command bar shows — REQ-040 —
+      so the two cannot disagree), Isolate Objects, Clipboard, Basic Modify Tools, Pan / Zoom / Free
+      Orbit, Quick Select and Options. REQ-054's selection items are unchanged.
+    - **Object isolation is new** (ADR-034): a session-only sorted set of **stable entity ids**
+      (REQ-076) on the drawing. Ids, not indices — erase compacts the arrays, so an index would come
+      to name a different object. A hidden object is hidden **and unpickable**: gated at
+      `PickClosestCadEntity`'s single `consider` funnel and `ComputeSelectionFromRect`'s `hits` list,
+      so no pick site can be missed one at a time. Not persisted — a drawing always opens showing
+      everything. **`Kind::Orbit`** was added (mirroring `Kind::Pan`) so Free Orbit is a real command.
+    - **Three defects were found and fixed in self-review**, each recorded in TASK-070 §8: `Find…`
+      would have been a dead control (GoSurvey has no drawing-wide FIND — dropped, and REQ-084
+      revised to say so); the hidden set was global rather than per-drawing, which would have hidden
+      arbitrary objects after a tab switch or a `.gs` open; and Recent Input iterated the vector its
+      own re-submit mutated.
+    - **Known gap, unrelated and pre-existing** (TASK-070 DEBT-1): layer *off* / *frozen* hides
+      meshes and TIN surfaces in the GL renderer but **not** lines, arcs, ellipses, polylines or
+      filled regions. Found while planning the isolation gates. No requirement governs it yet.
+    - **Display Order deferred** by user decision (DEBT-2): it needs a persisted per-entity ordering
+      key threaded through render, `.gs` and DXF — a data-format change, so its own REQ.
+    - Tests: `RightClickTests` (the two pure rules) and a 57-step headless transcript that proves the
+      unpickable half through product code, including isolate-with-nothing-selected, end-isolation
+      twice, and save-while-isolated → reopen. 422/422 ctest.
+
 ### The whole pick path was named "world" while carrying "local" — renamed, documented, pinned — 2026-08-17
     - Raised as "now fix picks too", following the note in TASK-067 that picks are "still quantized".
       **That note was misleading, and the investigation corrected it rather than acting on it.** There

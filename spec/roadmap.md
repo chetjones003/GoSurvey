@@ -40,7 +40,10 @@ when" and the requirements it closes.
 - **Goal:** `<Computations match reference data>`
 - **Delivers:** REQ-101
 - **Done when:** `<the regression dataset passes at the stated tolerance>`
-- **Status:** `<planned>`
+- **Status:** **typed-storage half done, 2026-08-17** (TASK-067) — the document origin is established
+  at entry so a typed coordinate narrows to `float` at local rather than world magnitude; measured
+  ~1.5e-9 ft error where it was 0.025 ft. The reference-dataset half (an external dataset run through
+  the pipeline end to end) is still outstanding — see `spec/requirements.md` REQ-101.
 
 ### M3 — Interactive performance
 - **Goal:** Smooth editing and orbiting at target scene size
@@ -65,9 +68,17 @@ when" and the requirements it closes.
 A lightweight board that complements the milestones. Keep each column honest.
 
 ### Now (in flight — keep short)
-- **Paper Space — Increment 1** (REQ-025, REQ-026, REQ-031 partial): model/paper
-  spaces, layout tabs, MODEL/PAPER status toggle, paper size + orientation + sheet
-  outline, `.gs` persistence of layouts.
+- **M-Surfaces steps 6 + 7 — REQ-068 (selection), REQ-070, REQ-072.** Resequenced by
+  **D-2026-08-21-a**: the user asked for surface styles and a selectable surface together, so step 7
+  (REQ-072 banding + arrows) is pulled forward beside step 6 and **REQ-071 (contour EXTRACT) is
+  pushed back** to its own task. Three tasks, in this order — each blocked on the one before it:
+  - **TASK-084 — REQ-068's selection half**, never implemented. It also gives surfaces the stable
+    entity id (`EntityKind::Surface`) that everything below depends on.
+  - **TASK-085 — REQ-070 surface styles**: the style table, `util/contourgen`, the display-geometry
+    cache, the Surface Style dialog.
+  - **TASK-086 — REQ-072 analysis**: elevation/slope banding, slope arrows, the legend.
+  Step 5 (REQ-069) is done (see M-Surfaces status below). ADR-036 records the shape; it **amends
+  ADR-028 (h)** on the band-shading path.
 
 ### M-PaperSpace — Paper space & plotting (incremental)
 - **Goal:** compose the model onto sheets and plot them.
@@ -130,7 +141,7 @@ A lightweight board that complements the milestones. Keep each column honest.
 - **Done when:** a real topo's points build a contoured surface with breaklines honoured, slope
   arrows show where water goes, cut/fill against a proposed surface reports a hand-verifiable
   volume, and REQ-100 holds in the surface profile.
-- **Status:** **steps 1–3 done.**
+- **Status:** **steps 1–5 done.**
   - Step 1 — REQ-076 / ADR-027 (TASK-044), **2026-08-12**: every entity carries a stable,
     never-reused id, cross-object references are by id, and the `labelMtextAnnIndex` fix-up sprawl
     is deleted. Legacy `.gs` label migration verified against a real legacy file.
@@ -142,10 +153,64 @@ A lightweight board that complements the milestones. Keep each column honest.
     REQ-100 surface bench case was actually run — measured **p95 9.32 ms against 16 ms** at 100,000
     points / 199,966 triangles under continuous orbit (TASK-052), so the budget is claimed on its
     own profile rather than on the segment profile's behalf.
-  - Step 4 — REQ-074, spot elevation and grade readout, is next.
-- **Deliberately out of scope:** grading design objects and feature lines, contour smoothing
-  (linear contours only), proximity / wall / non-destructive breaklines, surface import from
-  Civil 3D, and DEM / point-cloud sources. See ADR-028.
+  - Step 4 — REQ-074 (TASK-055), **2026-08-15**: `SURFELEV` / `SE` reports interpolated elevation at
+    a pick and grade/slope/horizontal/vertical distance between two, for every surface covering the
+    point, by name. Verified against `samples/surface-demo.gs` in the running application as well as
+    in unit tests (`TinQueryTests`). The hide-boundary half of the "outside surface" condition is
+    unreachable until REQ-069 lands (recorded as ASSUMPTION-1 in TASK-055, not claimed).
+  - Step 5 — REQ-069 (TASK-072), **2026-08-18**: breaklines and boundary rings (outer/hide/show)
+    are part of a surface's definition, referenced by stable entity id and pruned when the reference
+    no longer resolves; constrained-edge insertion is flip-based (Anglada/Sloan) in `util/tinbuild`,
+    with crossing-elevation and duplicate-conflict diagnostics reported rather than absorbed. The
+    surface rebuilds dynamically off the UI thread — `cadGpuRevision`, already bumped at every
+    drawing mutation, doubles as the dirty signal and the async worker's generation check, so no new
+    mark-dirty call sites were needed. `AppCommandState::SurfaceRebuildAsync` is the first complete
+    implementation of architecture §8's one-shot-worker contract (generation staleness +
+    cooperative cancellation). New commands `DESIGNATEBREAKLINE`/`DBL` and `DESIGNATEBOUNDARY`/`DBD`.
+    Verified end to end in the running application against `samples/surface-demo.gs` (breakline
+    forcing, boundary void with restore, dangling-id pruning on delete, `.gs` round-trip across a
+    fresh process relaunch); full suite green at 405/405 cases, 203,846 assertions. One real bug
+    found and fixed within this task (`CadUi.cpp`'s viewport-click dispatch chain was missing the
+    two new command kinds); one pre-existing gap found and recorded against REQ-074 instead of
+    fixed (`SURFELEV`'s own viewport-click wiring is likely similarly missing from that chain — not
+    this task's to own). Constraint-insertion performance was not measured against REQ-100's
+    100k-point surface budget — recorded as a limit, not assumed fine, since the rebuild runs off
+    the UI thread regardless.
+- **Deliberately out of scope:** grading design objects, contour smoothing (linear contours only),
+  proximity / wall / non-destructive breaklines, surface import from Civil 3D, and DEM /
+  point-cloud sources. See ADR-028.
+  - **Feature lines moved out of this list 2026-08-19** (decision D-2026-08-19-a). ADR-028
+    alternative (5) deferred them as "a separate milestone once surfaces are trustworthy" rather
+    than declining them on merits; that milestone is **M-Grading** below. The rest of the list
+    stands, including the other breakline types.
+
+### M-Grading — Surface definition UI, 3D linework, and feature lines (incremental)
+- **Goal:** make a surface's definition editable where a designer expects to find it, and give them
+  the 3D linework grading is actually designed with.
+- **Delivers:** REQ-075 (already accepted, never built), REQ-085 (3D polyline), REQ-086 (point file
+  as a surface source), REQ-087 (feature line entity), REQ-088 (feature line elevation editing).
+- **Sequence** — chosen by the user 2026-08-19; each step is independently shippable:
+  1. **REQ-075 — Surface Manager panel.** An explorer tree: `Surfaces ▸ <surface> ▸ Definition ▸
+     Point Groups / Breaklines / Boundaries / Point Files`, right-click ▸ Add… / Remove / Refresh,
+     with **Add Boundaries** (name, type) and **Add Breaklines** (description, type) dialogs, plus
+     reorder, the stale/rebuilding indicator, and the counts REQ-075 already asks for. **Needs no
+     spec change** — REQ-075 has required this since 2026-08-12 and the current panel is explicitly
+     a stub. Boundary types are the three the engine has (outer / show / hide); breakline types are
+     Standard only. The Point Files node appears here but cannot act until step 2.
+  2. **REQ-085 + REQ-086 — 3D polyline and linked point files.** `3DPOLY` is an entry mode, not a
+     storage change: the polyline store is already stride-3 XYZ and `CadCommitElevation` already
+     returns a snapped point's own Z (REQ-058). Point files make the step-1 node live.
+  3. **REQ-087 + REQ-088 — feature lines and the elevation editor.** The largest step by far: a new
+     entity kind with its own store, and a station / elevation / grade table. Needs its own ADR
+     before implementation — see the open question below.
+- **Open before step 3 starts:** an ADR for the feature-line entity. ADR-028's consequences
+  paragraph is explicit that a new store grows a case in selection, extents, layer state, the undo
+  snapshot, `.gs`, DXF export, render, snap, pick, grips and properties; the project's own note on
+  3D entity work records that a missed site there is **silent in plan view**, not a compile error.
+  The ADR must enumerate those sites and say how elevation points (which carry an elevation but are
+  not plan vertices) are stored without breaking the flat-array stride invariant (architecture §11.8).
+- **Status:** proposed 2026-08-19. Step 1 may proceed immediately under REQ-075; steps 2–3 wait on
+  REQ-085…088 being accepted.
 
 ### M-Distribution — Automated releases and in-app updates (incremental)
 - **Accepted 2026-08-15** (REQ-077, REQ-078, REQ-202, ADR-029). Runs in parallel with M-Surfaces:
@@ -184,8 +249,17 @@ A lightweight board that complements the milestones. Keep each column honest.
   true on exit** — no cert was obtained; the no-op signing step is still a no-op.
 
 ### Next (accepted, sequenced, not started)
-- `<REQ-101 — coordinate tolerance regression>`
-- `<REQ-100 — frame-budget benchmark>`
+- **REQ-071 — contour extraction** (EXTRACT bakes displayed contours into unlinked polylines). Moved
+  out of "Now" by D-2026-08-21-a so a verification FAIL on styles cannot block it. `util/contourgen`
+  (TASK-085) emits the same flat-verts + offsets layout `userPolylineVerts` uses, so the follow-up is
+  small by construction rather than by hope.
+- **Surface plotting** — `src/io/PdfPlot.cpp` handles no surfaces at all, so REQ-068's "a surface on
+  a non-plottable layer is not plotted" is satisfied vacuously. Invisible today; the first thing a
+  user hits once styled contours exist. **No requirement covers it** — recorded as TASK-085 DEBT-1
+  and needing a REQ decision, not a quiet fix.
+- Re-run the REQ-100 surface bench case per the roadmap's own sequencing note — and note ADR-036 (e):
+  it must prove the display cache **holds across frames**, not merely that one regeneration is fast.
+- REQ-101's reference-dataset half (M2) — the typed-storage half is done; see M2 status above.
 
 ### Later (real but deferred)
 - `<Second file format>` — deferred until a user actually needs it.
@@ -246,4 +320,6 @@ M1 walking skeleton
 |------|--------|--------|
 | `<2026-06-10>` | `<Initial roadmap>` | `<—>` |
 | 2026-08-15 | Added **M-Distribution** (REQ-077/078/202, ADR-029), running in parallel with M-Surfaces | User asked for automated releases and an auto-updater. It parallelises safely because it touches the build, the installer and one new module, sharing no code with surfaces — and it pays down an existing gap rather than adding scope: the installer script was gitignored and machine-specific, so REQ-200's reproducibility promise did not reach the artifact users actually received |
+| 2026-08-18 | M-Surfaces step 5 (REQ-069, TASK-072) closed PASS; "Now"/"Next" moved to step 6 (REQ-070 + REQ-071) | Breaklines, boundaries, and dynamic rebuild shipped and verified end to end in the running application; the roadmap's own forced sequencing puts styles/contours next |
+| 2026-08-21 | **Steps 6 and 7 merged and resequenced; REQ-071 pushed out; REQ-068's selection half pulled in** (D-2026-08-21-a, ADR-036). "Now" is TASK-084 → TASK-085 → TASK-086 | The user asked for surface styles and a selectable surface in one request. Reading the code first moved two things: REQ-068 already required selection and it was never built (so it is authority already held, and it supplies the stable id the style cache needs), and REQ-072's Analysis tab is part of what "surface styles" means to the user, so shipping step 6 without it would ship a dialog with a stubbed tab. REQ-071 moved out to keep the unit reviewable |
 | `<…>` | `<Moved X from Later to Now>` | `<user need materialized>` |
