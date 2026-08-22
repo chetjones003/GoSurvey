@@ -156,7 +156,8 @@ ranges equal the table's, and change with it" cannot drift. One source, two read
 ### Steps
 
 - [x] 1. `util/surfaceanalysis` + `SurfaceAnalysisTests` — green before anything draws.
-- [ ] 2. The range table on the style + `.gs` round-trip.
+- [~] 2. The range table on the style + `.gs` round-trip. Struct, equality and both I/O paths done;
+        the round-trip ASSERTION waits on step 4 — see the log.
 - [ ] 3. Band triangle batches + arrows in the cache; renderer draws them.
 - [ ] 4. The Analysis tab.
 - [ ] 5. The legend overlay, reading the table directly.
@@ -208,6 +209,45 @@ ranges equal the table's, and change with it" cannot drift. One source, two read
   ASSUMPTION-2 is now expressed in code as `kFlatGradePctDefault = 0.1` (%), a grade rather than a
   vector magnitude, as the assumption required. ASSUMPTION-1 is still open — it says to show the user
   the banded display on real data before treating it as settled, which cannot happen until step 3.
+
+- 2026-08-22 **step 2 — the range table is on the style; the round-trip assertion is not yet possible.**
+  `SurfaceBand` + `SurfaceAnalysisMode` in `CadEntities.hpp`, four fields on `SurfaceStyle`
+  (`analysisMode`, `bands`, `slopeArrowsOn`, `arrowBands`), and both `.gs` paths in `GsIo.cpp`.
+
+  * **Only the TOP of each band is stored.** Storing both ends would admit a table whose bands
+    overlap or leave a gap — a value with two colours, or none — and `AssignBand` reads exactly this
+    list. The lowest band having no bottom is the rule, not an omission.
+  * **One `bands` table whose meaning `analysisMode` sets**, not one table per mode. A triangle has
+    one colour (ASSUMPTION-1), so a second table could only ever be the one NOT on screen, and the
+    legend would have to guess which it was describing. `arrowBands` is separate because arrows are
+    always graded by SLOPE while `bands` may be showing elevation — same `SurfaceBand` type, same
+    `AssignBand` rule, so an arrow's colour is decided exactly as a band's is.
+  * **Off is the state a style STARTS in.** That is how REQ-072's "turning banding off restores the
+    style's plain display unchanged" is satisfied without a legacy branch in the reader: a `.gs`
+    written before REQ-072 carries none of these keys, and each style is seeded from
+    `StandardSurfaceStyle()` before the keys are read.
+  * **The analysis keys are written only when the style carries some**, so a pre-REQ-072 drawing —
+    and any style that never opens the Analysis tab — still resaves byte for byte. The section-level
+    rule TASK-085 used against BUG-015/BUG-019, applied per style.
+  * **A file's bands are sorted on read.** Each band carries its own colour, so ordering them repairs
+    a hand-edited or corrupt table without repainting anything, and `AssignBand`'s strictly-ascending
+    precondition then holds for any file. An unrecognised `analysisMode` degrades to None rather than
+    to an enum value no switch handles.
+  * The four fields joined `operator==`, which is the display cache's staleness key (ADR-036 (e)).
+    Tested on both halves of a band — recolouring one and moving its edge are the two edits a user
+    makes, and **neither changes the band count**, so a count-only comparison would miss both.
+
+  **Gap, stated rather than glossed: the `.gs` round-trip is not asserted yet.** `GsIo.cpp` cannot be
+  linked by `GoSurveyTests` (it pulls in the whole command layer — the reason `MeshGsRoundTripTests`
+  exercises the serializer directly), and REQ-072's values cannot be set from a transcript until the
+  Analysis tab or a `SURFSTYLE` subcommand exists. So what is proven today is the DEFAULTS half —
+  a style starts with analysis off, and equality notices every new field — and not the file half.
+  **Removal condition: at step 4, extend `req070-surface-styles-contours.txt` (or a sibling) to set
+  bands, save, reload and compare, plus a resave-idempotence step.** Step 2 stays `[~]` until then.
+
+  Full Catch2 suite green: **492 cases / 214,362 assertions**. `ctest` deliberately NOT re-run this
+  round — another session is driving `gosurvey_headless` in this same tree, and the transcript tests
+  share `build/headless-out`. It must be run before step 2 is closed.
 ## 9. Self-verification
 - [ ] build-project
 - [ ] architecture-review — **note the ADR-028 (h) amendment explicitly**; a reviewer reading ADR-028

@@ -117,6 +117,34 @@ struct SurfaceComponentStyle {
   bool operator!=(const SurfaceComponentStyle& o) const { return !(*this == o); }
 };
 
+/// One band of a surface analysis range table (REQ-072 / ADR-036 (g)).
+///
+/// Only the TOP of each band is stored. The bottom is the band below it, and the lowest band has no
+/// bottom at all — which is not a saving but the rule: `util/surfaceanalysis`'s \c AssignBand reads
+/// exactly this list, and storing both ends would let a table exist whose bands overlap or leave a
+/// gap, i.e. a value with two colours or none. Bands must be in **strictly ascending** order.
+struct SurfaceBand {
+  /// The top of the band: **feet** when the mode is Elevation, **percent grade** when it is Slope.
+  /// `double` for the same reason the contour intervals below are — a band edge is a parameter the
+  /// legend prints, not a coordinate, so architecture §11.8's float-storage rule does not reach it.
+  double upperBound = 0.0;
+  /// "ByLayer", a `#RRGGBB` literal, or a named preset — \ref EntityAttributes::color's encoding,
+  /// the same one \ref SurfaceComponentStyle uses, so a band colour is picked with the same control.
+  std::string color = "ByLayer";
+
+  bool operator==(const SurfaceBand& o) const {
+    return upperBound == o.upperBound && color == o.color;
+  }
+  bool operator!=(const SurfaceBand& o) const { return !(*this == o); }
+};
+
+/// Which quantity a surface's triangles are coloured by (REQ-072).
+///
+/// \c None is the default and is what REQ-072's "turning banding off restores the style's plain
+/// display unchanged" means: the plain display is the state a style STARTS in, not one it has to be
+/// returned to, so a drawing that never opens the Analysis tab cannot be affected by it.
+enum class SurfaceAnalysisMode { None = 0, Elevation = 1, Slope = 2 };
+
 /// A named surface style (REQ-070 / ADR-036 (d)): how a surface is *drawn*, never what it is made of.
 ///
 /// The drawing owns a \c std::vector<SurfaceStyle> and each \ref CadSurface references one by
@@ -150,10 +178,36 @@ struct SurfaceStyle {
   double minorIntervalFt = 2.0;
   double majorIntervalFt = 10.0;
 
+  /// REQ-072 analysis. All four default to "off", so a style that never visits the Analysis tab —
+  /// and every style in every drawing written before REQ-072 existed — displays exactly as it did.
+  SurfaceAnalysisMode analysisMode = SurfaceAnalysisMode::None;
+
+  /// The range table the triangles are coloured by. Its units follow \ref analysisMode: feet for
+  /// Elevation, percent grade for Slope. Strictly ascending; \c AssignBand depends on it.
+  ///
+  /// **One table, whose meaning the mode sets** — rather than one table per mode. A surface is banded
+  /// by elevation or by slope, never both at once (the triangle has one colour, ASSUMPTION-1), so a
+  /// second table could only ever be the one not being displayed, and the legend would have to guess
+  /// which of the two it was showing.
+  std::vector<SurfaceBand> bands;
+
+  /// REQ-072's slope arrows, independent of \ref analysisMode: a surveyor reads fall direction on an
+  /// unbanded surface as often as on a banded one, and the requirement lists them as separate
+  /// toggles.
+  bool slopeArrowsOn = false;
+
+  /// The arrows' own colour ramp, in **percent grade** — the same \ref SurfaceBand type and the same
+  /// \c AssignBand rule, so an arrow's colour is decided exactly as a band's is. Separate from
+  /// \ref bands because arrows are always graded by SLOPE, while \ref bands may be showing elevation.
+  /// Empty means every arrow takes the surface's own colour.
+  std::vector<SurfaceBand> arrowBands;
+
   bool operator==(const SurfaceStyle& o) const {
     return name == o.name && triangles == o.triangles && border == o.border &&
            majorContour == o.majorContour && minorContour == o.minorContour && points == o.points &&
-           minorIntervalFt == o.minorIntervalFt && majorIntervalFt == o.majorIntervalFt;
+           minorIntervalFt == o.minorIntervalFt && majorIntervalFt == o.majorIntervalFt &&
+           analysisMode == o.analysisMode && bands == o.bands &&
+           slopeArrowsOn == o.slopeArrowsOn && arrowBands == o.arrowBands;
   }
   bool operator!=(const SurfaceStyle& o) const { return !(*this == o); }
 };

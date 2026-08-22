@@ -343,6 +343,16 @@ json BuildRoot(const AppCommandState& st) {
         o["lineweightMm"] = c.lineweightMm;
         return o;
       };
+      const auto bandsToJson = [](const std::vector<SurfaceBand>& bands) {
+        json a = json::array();
+        for (const SurfaceBand& b : bands) {
+          json o;
+          o["upperBound"] = b.upperBound;
+          o["color"] = b.color;
+          a.push_back(std::move(o));
+        }
+        return a;
+      };
       json styles = json::array();
       for (const SurfaceStyle& s : st.surfaceStyles) {
         json o;
@@ -354,6 +364,18 @@ json BuildRoot(const AppCommandState& st) {
         o["points"] = componentToJson(s.points);
         o["minorIntervalFt"] = s.minorIntervalFt;
         o["majorIntervalFt"] = s.majorIntervalFt;
+        // REQ-072 analysis (ADR-036 (g)). Written only when the style actually carries some, so a
+        // drawing saved before REQ-072 existed — and any style that never opens the Analysis tab —
+        // still resaves byte for byte. The same rule the section around it follows, applied per
+        // style: a key that appears on every file the moment it is opened is what BUG-015 and
+        // BUG-019 were both made of.
+        if (s.analysisMode != SurfaceAnalysisMode::None || s.slopeArrowsOn || !s.bands.empty() ||
+            !s.arrowBands.empty()) {
+          o["analysisMode"] = static_cast<int>(s.analysisMode);
+          o["slopeArrowsOn"] = s.slopeArrowsOn;
+          o["bands"] = bandsToJson(s.bands);
+          o["arrowBands"] = bandsToJson(s.arrowBands);
+        }
         styles.push_back(std::move(o));
       }
       doc["surfaceStyles"] = std::move(styles);
@@ -1331,6 +1353,27 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       c->linetype = o.value("linetype", c->linetype);
       c->lineweightMm = o.value("lineweightMm", c->lineweightMm);
     };
+    // Each band carries its own colour, so sorting repairs a hand-edited or corrupt table without
+    // repainting anything: AssignBand requires strictly ascending bounds, and a descending pair would
+    // otherwise put a value in a band that is not its own. Reordering is the honest fix here; drawing
+    // from a table known to violate its own precondition is not.
+    const auto bandsFromJson = [](const json& a, std::vector<SurfaceBand>* out) {
+      out->clear();
+      if (!a.is_array())
+        return;
+      for (const auto& e : a) {
+        if (!e.is_object())
+          continue;
+        SurfaceBand b;
+        b.upperBound = e.value("upperBound", 0.0);
+        b.color = e.value("color", std::string("ByLayer"));
+        out->push_back(std::move(b));
+      }
+      std::stable_sort(out->begin(), out->end(),
+                       [](const SurfaceBand& x, const SurfaceBand& y) {
+                         return x.upperBound < y.upperBound;
+                       });
+    };
     for (const auto& o : doc["surfaceStyles"]) {
       if (!o.is_object())
         continue;
@@ -1348,6 +1391,21 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       componentFromJson(o.value("points", json::object()), &s.points);
       s.minorIntervalFt = o.value("minorIntervalFt", s.minorIntervalFt);
       s.majorIntervalFt = o.value("majorIntervalFt", s.majorIntervalFt);
+      // REQ-072 analysis. Absent keys leave the seeded defaults alone — banding off — which is what
+      // makes a pre-REQ-072 drawing open with its plain display rather than with a zeroed table.
+      if (o.contains("analysisMode")) {
+        // An unrecognised mode falls back to None rather than becoming an enum value no switch
+        // handles: a file written by a later version must degrade to "not banded", not to undefined.
+        const int mode = o.value("analysisMode", 0);
+        s.analysisMode = mode == 1   ? SurfaceAnalysisMode::Elevation
+                         : mode == 2 ? SurfaceAnalysisMode::Slope
+                                     : SurfaceAnalysisMode::None;
+      }
+      s.slopeArrowsOn = o.value("slopeArrowsOn", s.slopeArrowsOn);
+      if (o.contains("bands"))
+        bandsFromJson(o["bands"], &s.bands);
+      if (o.contains("arrowBands"))
+        bandsFromJson(o["arrowBands"], &s.arrowBands);
       st.surfaceStyles.push_back(std::move(s));
     }
   }

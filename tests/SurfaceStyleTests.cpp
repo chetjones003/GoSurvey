@@ -268,4 +268,46 @@ TEST_CASE("Style equality notices a change in any component or interval",
   CHECK(differs([](SurfaceStyle& s) { s.majorContour.linetype = "DASHED"; }));
   CHECK(differs([](SurfaceStyle& s) { s.minorContour.lineweightMm = 0.7f; }));
   CHECK(differs([](SurfaceStyle& s) { s.points.visible = !s.points.visible; }));
+
+  // REQ-072's analysis fields are part of the SAME staleness key, and for the same reason: a band
+  // edited without the cache noticing leaves the surface painted in its old colours, which reads as
+  // the edit never having taken — and the legend beside it would then be describing colours that are
+  // no longer on screen.
+  CHECK(differs([](SurfaceStyle& s) { s.analysisMode = SurfaceAnalysisMode::Elevation; }));
+  CHECK(differs([](SurfaceStyle& s) { s.slopeArrowsOn = true; }));
+  CHECK(differs([](SurfaceStyle& s) { s.bands.push_back(SurfaceBand{100.0, "Red"}); }));
+  CHECK(differs([](SurfaceStyle& s) { s.arrowBands.push_back(SurfaceBand{25.0, "Blue"}); }));
+
+  // Both halves of a band, not just how many there are: recolouring a band and moving its edge are
+  // the two edits a user actually makes on the Analysis tab, and neither changes the band COUNT.
+  SurfaceStyle banded = base;
+  banded.bands = {SurfaceBand{100.0, "Red"}, SurfaceBand{110.0, "Blue"}};
+
+  SurfaceStyle recoloured = banded;
+  recoloured.bands[1].color = "Green";
+  CHECK(recoloured != banded);
+
+  SurfaceStyle moved = banded;
+  moved.bands[1].upperBound = 111.0;
+  CHECK(moved != banded);
+}
+
+TEST_CASE("A style starts with analysis off, and that is the legacy state too",
+          "[surface][req072][style]") {
+  // REQ-072's "turning banding off restores the style's plain display unchanged" is satisfied by
+  // making OFF the state a style begins in. A `.gs` written before REQ-072 existed carries none of
+  // these keys, and the reader seeds each style from this same default — so an old drawing opens
+  // displaying exactly what it displayed before, without the reader needing a legacy branch.
+  const SurfaceStyle standard = SurfaceStyles::StandardSurfaceStyle();
+
+  CHECK(standard.analysisMode == SurfaceAnalysisMode::None);
+  CHECK(standard.bands.empty());
+  CHECK_FALSE(standard.slopeArrowsOn);
+  CHECK(standard.arrowBands.empty());
+
+  for (const SurfaceStyle& s : SurfaceStyles::DefaultSurfaceStyles()) {
+    INFO("style " << s.name);
+    CHECK(s.analysisMode == SurfaceAnalysisMode::None);
+    CHECK(s.bands.empty());
+  }
 }
