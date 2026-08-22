@@ -1,7 +1,7 @@
 # TASK-048 — One version source, a stable executable name, and a tracked installer script
 
 - Type:    refactor
-- Status:  implement
+- Status:  done — closed 2026-08-20; verdict and its basis in §10
 - Opened:  2026-08-15
 - Owner:   Workshop
 
@@ -60,6 +60,15 @@
 
 ## 5. Assumptions  (workflow.md §8)
 ```
+ASSUMPTION-1 — **VALIDATED IN PRACTICE 2026-08-20.** TASK-050 shipped and the update flow has since
+              run against a real `{autopf}` install: FEAT-010 records
+              `%LOCALAPPDATA%\GoSurvey\updates` holding the installers for both `0.5.0-beta.8` and
+              `0.5.0` on 2026-08-16, i.e. updates were downloaded and applied to a Program Files
+              install, UAC prompt included, and were accepted rather than reported as a problem.
+              The "validate by" condition below asked for confirmation *before* TASK-050 shipped;
+              that confirmation never happened as a discrete step, and use overtook it. Recorded
+              that way rather than back-dated. Original text follows.
+
 ASSUMPTION-1: The install location stays {autopf} (Program Files), so applying an update raises UAC.
 - Because:       the question was put to the user and answered only indirectly, via the separate
                  ruling that updates are never silent.
@@ -156,6 +165,11 @@ ASSUMPTION-2: Inno Setup's [InstallDelete] runs early enough to remove GoSurvey-
   generated version file, `/D` precedence) are unproven. Deferred to TASK-049, where the CI runner
   compiles it — which is also the machine whose result actually matters. Recorded so no one reads
   this task as evidence the script builds.
+- 2026-08-20 Status → done. No code changed: the work shipped on 2026-08-15 and the log simply never
+  recorded a verdict. What closing it required was checking the two conditions still left open —
+  §11's debt (1) and §5's ASSUMPTION-1 — against what has happened since. Both are resolved above,
+  each with the evidence that resolved it rather than by assertion. Submitted as a pull request so
+  the verdict is issued by review rather than by the Workshop closing its own task.
 
 ## 9. Self-verification  (run BEFORE submitting — verification/skills/)
 - [x] build-project        — PASS. Clean configure + build; `build/GoSurvey.exe` produced; two
@@ -177,12 +191,28 @@ ASSUMPTION-2: Inno Setup's [InstallDelete] runs early enough to remove GoSurvey-
       and the identical 4 failures. They were root-caused and fixed under TASK-049 Q1: em dashes
       in the `TEST_CASE` names, which `catch_discover_tests` mangles into a filter that matches
       nothing. No test was added by this task: it contains no pure
-      function to test, and the acceptance conditions are observational (§6). The installer half is
-      **unverified** — see the ISCC entry in §8.
+      function to test, and the acceptance conditions are observational (§6). The installer half was
+      **unverified at submission** — see the ISCC entry in §8 — and has been verified since by the
+      pipeline compiling `installer\GoSurvey.iss` on every run; see §11 debt (1).
 
 ## 10. Verification result
 - Submitted:  2026-08-15
-- Verdict:    <pending — awaiting Verification>
+- Verdict:    **PASS**, recorded 2026-08-20. **No formal Verification pass was ever run on this
+              task** — this line states what the verdict rests on rather than implying a review that
+              did not happen. The basis:
+              (1) §9's self-verification is complete — `build-project`, `architecture-review` and
+              `code-review` PASS, `dependency-audit` and `performance-review` n-a with reasons,
+              `testing` 309/309 with the four pre-existing failures root-caused and cleared;
+              (2) ASSUMPTION-2, the largest untested claim in the packaging work, was validated
+              against a real in-place 0.4.0 → 0.5.0-beta.7 upgrade on 2026-08-15;
+              (3) the §8 blocker — `installer/GoSurvey.iss` written but never compiled — has been
+              cleared by events, see §11 debt (1);
+              (4) the pipeline that stands on this task's work has since built, packaged and
+              published two stable releases (tags `v0.5.1`, `v0.5.2`) plus the rolling
+              `channel-beta` prerelease, whose ordinal advances on every push to `beta`.
+              Closed as a pull request for review rather than merged directly, so the merge is the
+              verification act (`verification.md` §4, §8). Precedent for closing a log this way:
+              commit 343cae5, which recorded fifteen tasks the user had verified but never logged.
 - Findings:   two self-found build defects, both fixed before submission (§8)
 
 ## 11. Outcome
@@ -193,10 +223,19 @@ ASSUMPTION-2: Inno Setup's [InstallDelete] runs early enough to remove GoSurvey-
 - Refactors:              executable renamed `GoSurvey-<version>.exe` → `GoSurvey.exe`
 - Docs updated:           spec/{requirements,architecture,project,roadmap}.md (spec layer, prior to
                           this task); this log
-- Technical debt:         (1) `installer/GoSurvey.iss` is uncompiled — no ISCC on this machine;
-                          removal condition = TASK-049's first successful runner build.
+- Technical debt:         (1) ~~`installer/GoSurvey.iss` is uncompiled — no ISCC on this machine;
+                          removal condition = TASK-049's first successful runner build.~~
+                          **CLEARED 2026-08-20** — the stated removal condition is met and has been
+                          met many times over. `.github/workflows/release.yml` locates ISCC, compiles
+                          `installer\GoSurvey.iss`, and throws on a non-zero exit, so a run that
+                          reaches its publish steps is proof the script compiled. It compiles on
+                          every push to any branch, not only on releases: stable tags run through
+                          `v0.5.2`, with the rolling `channel-beta` prerelease on the 0.5.3 cycle.
+                          The ISPP constructs §8 called unproven — `#ifexist`,
+                          the `#include` of the generated version file, and `/D` precedence — are
+                          exercised on every one of those runs.
                           (2) ~~The 4 pre-existing test failures block a clean `ctest`.~~
                           **CLEARED 2026-08-15** — root-caused (em dashes in `TEST_CASE` names,
                           mangled by `catch_discover_tests`) and fixed; 309/309 pass. See
                           TASK-049 Q1 and `coding-standards.md` §12.
-- Done:                   <pending>
+- Done:                   2026-08-20

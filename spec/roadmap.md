@@ -224,10 +224,29 @@ A lightweight board that complements the milestones. Keep each column honest.
     version-gated stable release from `master`.
   - Step 3 — TASK-050, the updater (REQ-077 + REQ-078). Deliberately last: it consumes the manifest
     that step 2 produces, so by the time it is written its input already exists and is observable.
+- **Status:** **all three steps done — the milestone is complete.** Closed 2026-08-20; the work
+  itself shipped 2026-08-15 and the logs simply had not recorded their verdicts.
+  - Step 1 — REQ-202 packaging (TASK-048), **2026-08-15**: one version source, `GoSurvey.exe`, and
+    a tracked parameterized `GoSurvey.iss`. Verified in-place against a real 0.4.0 → 0.5.0-beta.7
+    upgrade.
+  - Step 2 — REQ-202 pipeline (TASK-049), **2026-08-15**: six of REQ-202's seven acceptance
+    conditions are now confirmed by observation over ~57 runs — feature-branch artifacts, the
+    single rolling `channel-beta` prerelease, the version gate holding on an unchanged master push,
+    three stable tags, and a manifest whose SHA-256 was re-derived from the published installer.
+    The seventh (a red `ctest` blocking publication) has never had the chance to fire and is
+    recorded as unobserved rather than claimed.
+  - Step 3 — REQ-077 + REQ-078 updater (TASK-050), **2026-08-15**: the offer → download → verify →
+    install chain has run in production on real manifests. The first live update found three
+    defects, all fixed, including a `/RESTARTAPPLICATIONS` assumption that could never have worked.
+  - **Carried forward:** signing is still deferred (below); the pipeline does not check the release
+    notes it publishes (TASK-049 debt 4, after v0.5.1 shipped with the previous cycle's notes); the
+    self-relaunch after an update is unconfirmed either way (TASK-050 debt 4); four updater runtime
+    paths remain unexercised (TASK-050 debt 5).
 - **Deliberately out of scope:** delta/patch updates, rollback to a previous version, per-user
   (non-elevated) installation, staged rollouts, and any platform but Windows x64. See ADR-029.
 - **Known debt on entry:** the installer is unsigned, so SmartScreen will warn on download and the
-  SHA-256 proves integrity but not authenticity. Tracked as debt, not as a solved problem.
+  SHA-256 proves integrity but not authenticity. Tracked as debt, not as a solved problem. **Still
+  true on exit** — no cert was obtained; the no-op signing step is still a no-op.
 
 ### Next (accepted, sequenced, not started)
 - **REQ-071 — contour extraction** (EXTRACT bakes displayed contours into unlinked polylines). Moved
