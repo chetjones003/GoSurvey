@@ -1,7 +1,9 @@
 # TASK-086 — Surface analysis: elevation banding, slope banding, slope arrows, and the legend
 
 - Type:    feature
-- Status:  plan  (blocked on TASK-085 — the style table is where the range table lives)
+- Status:  in progress — step 1 complete (`util/surfaceanalysis` + `SurfaceAnalysisTests`, green).
+           **Unblocked 2026-08-22**: TASK-085's style table and display-geometry cache landed in
+           449c158, so the range table has somewhere to live and the batches have somewhere to go.
 - Opened:  2026-08-21
 - Owner:   Workshop
 
@@ -153,7 +155,7 @@ ranges equal the table's, and change with it" cannot drift. One source, two read
 
 ### Steps
 
-- [ ] 1. `util/surfaceanalysis` + `SurfaceAnalysisTests` — green before anything draws.
+- [x] 1. `util/surfaceanalysis` + `SurfaceAnalysisTests` — green before anything draws.
 - [ ] 2. The range table on the style + `.gs` round-trip.
 - [ ] 3. Band triangle batches + arrows in the cache; renderer draws them.
 - [ ] 4. The Analysis tab.
@@ -171,6 +173,41 @@ ranges equal the table's, and change with it" cannot drift. One source, two read
 
 - 2026-08-21 opened; ADR-036 (g) + D-2026-08-21-a recorded before planning. Status blocked on TASK-085.
 
+
+- 2026-08-22 **step 1 done — `util/surfaceanalysis` + `SurfaceAnalysisTests`, 12 cases green.**
+  Four functions, pure and `<vector>`-only, registered in all three CMake places `contourgen` occupies.
+  Full suite 491 cases / 214,350 assertions; ctest 519/519.
+
+  Two decisions inside the boundary, both written at the function rather than left to emerge:
+
+  * **Q2's `[lo, hi)` rule is the search, not a chain of comparisons.** `AssignBand` is a
+    `std::upper_bound`, which returns the first bound strictly greater than the value — which IS the
+    half-open rule, so a value on a breakpoint lands in the band above without the rule being
+    re-stated anywhere. The topmost band is closed at its top as a single explicit special case, for
+    the reason REQ-072 needs it: a range table is built to SPAN the surface, so the highest point sits
+    exactly on the last bound and would otherwise be the one unpainted triangle on every surface.
+    A value above the table returns -1 rather than clamping into the top band — clamping would hand
+    the caller a colour that misreads against the legend, which is the one thing REQ-072 forbids.
+  * **The flat threshold's boundary is defined AT the value.** A grade exactly equal to
+    `flatGradePct` is flat (no arrow), because the constant names the grade a drawing stops meaning
+    to show a direction for. Written as `!(gradePct > flatGradePct)` so a NaN grade is refused too —
+    spelled `<=` it would have been admitted.
+
+  **The downhill division is by the SIGNED nz, and that is load-bearing.** Reversing a triangle's
+  winding negates the whole normal, so dividing by the signed component cancels the two sign flips
+  and the fall direction comes out the same. Taking `abs` there instead reverses every arrow on
+  whichever half of the triangulation is wound the other way — and a surface where half the arrows
+  point uphill still looks plausible at a glance.
+
+  **The two rules above were mutation-checked, not merely asserted.** Swapping `upper_bound` for
+  `lower_bound` fails the breakpoint cases (`0 == 1`, `1 == 2`); dividing by `abs(nz)` fails the
+  winding case (`1.0 == Approx(-1.0)`). Both were restored and the suite re-run green. A boundary
+  test that passes because a division rounded its way is not a boundary test, so the numbers in the
+  exact-equality assertions are binary-exact fractions (run 2, rise 1 → exactly 50%) on purpose.
+
+  ASSUMPTION-2 is now expressed in code as `kFlatGradePctDefault = 0.1` (%), a grade rather than a
+  vector magnitude, as the assumption required. ASSUMPTION-1 is still open — it says to show the user
+  the banded display on real data before treating it as settled, which cannot happen until step 3.
 ## 9. Self-verification
 - [ ] build-project
 - [ ] architecture-review — **note the ADR-028 (h) amendment explicitly**; a reviewer reading ADR-028
