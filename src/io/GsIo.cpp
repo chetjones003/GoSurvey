@@ -324,6 +324,41 @@ json BuildRoot(const AppCommandState& st) {
     }
     doc["textStyles"] = std::move(styles);
   }
+  // Named surface styles (REQ-070 / ADR-036 (d)). Additive, no kGsFormatVersion bump — ADR-020 (d),
+  // the same rule the mesh and surface sections follow.
+  //
+  // **Written only when the table holds more than the untouched default**, so a drawing with no
+  // surfaces — or one whose surfaces all use an unedited "Standard" — still serialises byte for byte
+  // as it did before this section existed. Resave idempotence is what BUG-015 and BUG-019 were both
+  // made of, and a section that appears on every file the moment it is opened is exactly that defect.
+  {
+    const bool onlyUntouchedStandard =
+        st.surfaceStyles.size() == 1 && st.surfaceStyles[0] == SurfaceStyles::StandardSurfaceStyle();
+    if (!st.surfaceStyles.empty() && !onlyUntouchedStandard) {
+      const auto componentToJson = [](const SurfaceComponentStyle& c) {
+        json o;
+        o["visible"] = c.visible;
+        o["color"] = c.color;
+        o["linetype"] = c.linetype;
+        o["lineweightMm"] = c.lineweightMm;
+        return o;
+      };
+      json styles = json::array();
+      for (const SurfaceStyle& s : st.surfaceStyles) {
+        json o;
+        o["name"] = s.name;
+        o["triangles"] = componentToJson(s.triangles);
+        o["border"] = componentToJson(s.border);
+        o["majorContour"] = componentToJson(s.majorContour);
+        o["minorContour"] = componentToJson(s.minorContour);
+        o["points"] = componentToJson(s.points);
+        o["minorIntervalFt"] = s.minorIntervalFt;
+        o["majorIntervalFt"] = s.majorIntervalFt;
+        styles.push_back(std::move(o));
+      }
+      doc["surfaceStyles"] = std::move(styles);
+    }
+  }
   // Paper space layouts (REQ-031). Viewports/frozen layers persist in a later increment.
   {
     json layouts = json::array();
@@ -671,6 +706,10 @@ json BuildRoot(const AppCommandState& st) {
     for (const CadSurface& s : st.cadSurfaces) {
       json o;
       o["name"] = s.name;
+      // REQ-070: the style is a reference by name, and it is omitted when empty so a surface that
+      // has never been given one writes exactly the bytes it wrote before styles existed.
+      if (!s.styleName.empty())
+        o["styleName"] = s.styleName;
       o["sourcePointGroups"] = s.sourcePointGroups;
       // REQ-086: linked point files travel with their layout, because a point file does not describe
       // its own column order and a link that re-guessed would swap northing for easting on reload.
@@ -1279,6 +1318,41 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     st.defaultPlottedTextHeightInches = std::max(active->heightInches, 1.e-6f);
   }
 
+  // Named surface styles (REQ-070 / ADR-036 (d)). Read tolerantly, every field with a default: a file
+  // with no section synthesizes "Standard" and every surface in it — whose styleName is empty —
+  // resolves to it, which is REQ-070's "a legacy `.gs` loads unchanged".
+  st.surfaceStyles.clear();
+  if (doc.contains("surfaceStyles") && doc["surfaceStyles"].is_array()) {
+    const auto componentFromJson = [](const json& o, SurfaceComponentStyle* c) {
+      if (!o.is_object())
+        return;
+      c->visible = o.value("visible", c->visible);
+      c->color = o.value("color", c->color);
+      c->linetype = o.value("linetype", c->linetype);
+      c->lineweightMm = o.value("lineweightMm", c->lineweightMm);
+    };
+    for (const auto& o : doc["surfaceStyles"]) {
+      if (!o.is_object())
+        continue;
+      // Seeded from the built-in default rather than from a value-initialised SurfaceStyle, so a key
+      // REQ-072 adds to this object later reads back as the default it was written against instead of
+      // as a zero nobody chose. ADR-020 (d)'s additive read, applied forward as well as backward.
+      SurfaceStyle s = SurfaceStyles::StandardSurfaceStyle();
+      s.name = o.value("name", std::string());
+      if (s.name.empty())
+        continue;  // an unnamed style cannot be referenced
+      componentFromJson(o.value("triangles", json::object()), &s.triangles);
+      componentFromJson(o.value("border", json::object()), &s.border);
+      componentFromJson(o.value("majorContour", json::object()), &s.majorContour);
+      componentFromJson(o.value("minorContour", json::object()), &s.minorContour);
+      componentFromJson(o.value("points", json::object()), &s.points);
+      s.minorIntervalFt = o.value("minorIntervalFt", s.minorIntervalFt);
+      s.majorIntervalFt = o.value("majorIntervalFt", s.majorIntervalFt);
+      st.surfaceStyles.push_back(std::move(s));
+    }
+  }
+  SurfaceStyles::EnsureStandard(st.surfaceStyles);
+
   st.userLinesFlat.clear();
   for (const auto& v : doc["lineVerts"])
     st.userLinesFlat.push_back(v.get<float>());
@@ -1450,6 +1524,12 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       s.name = el.value("name", std::string());
       if (s.name.empty())
         continue;  // an unnamed surface cannot be referenced or managed
+      // REQ-070. Absent in every file written before styles existed, and absent again in any file
+      // whose surfaces never left "Standard" — both read as empty, which resolves to the default on
+      // read (ADR-036 (d)). A name whose style was since deleted is NOT repaired here: it stays as
+      // written and falls back at draw time, so re-pointing the surface at a style with that name
+      // later restores it instead of finding the reference silently rewritten.
+      s.styleName = el.value("styleName", std::string());
       if (el.contains("sourcePointGroups") && el["sourcePointGroups"].is_array())
         for (const auto& g : el["sourcePointGroups"])
           if (g.is_string())

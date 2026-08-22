@@ -1,0 +1,177 @@
+# REQ-070 — surface styles and generated contours (ADR-036 (d)(e)(f)(h)).
+#
+# Every one of REQ-070's acceptance conditions is an END-TO-END claim about what happens to the
+# document when a style is edited, and not one of them is reachable from a unit test:
+# `ContourGenTests` proves the geometry is right, `SurfaceStyleTests` proves the table resolves and
+# the interval rule rejects — but "changing the interval does not rebuild the triangulation" is a
+# statement about the command layer, the display cache and the undo stack acting together. That is
+# what this file is for.
+#
+# **On SURFSTYLE rather than the dialog.** The Surface Style editor is an ImGui window this driver
+# cannot reach, the same limitation req068-surface-selection works around. SURFSTYLE is the command
+# form of the same operations and calls the same helpers, so what is asserted here is the real edit
+# path and not a test-only shortcut.
+#
+# **The numbers are properties of the FIXTURE, read out of the running program with DUMP SURFACES.**
+# `samples/surface-demo.gs` triangulates to 982 triangles (2,946 directed edges, drawn only when the
+# style's triangle component is switched on) with a 16-segment border, and at the Standard 2 ft /
+# 10 ft intervals it contours to 867 minor and 203 major segments.
+# If the sample's points ever change, these change with it — they are facts about that data, not
+# magic constants, and DUMP SURFACES is how the next person re-reads them.
+
+OPEN samples/surface-demo.gs
+
+CMD SURFACECREATE Test EG, Existing Ground
+EXPECT SURFACES 1
+
+# --- the baseline: Standard opens a surface as a contour map -------------------------------------
+# Three batches — border, minor contours, major contours — and NO triangle batch. That is the
+# Civil 3D default the user chose on 2026-08-21, and asserting the triangle count is 0 is what pins
+# it: it is a deliberate change of appearance for drawings that already contain a surface, so a later
+# "fix" that turned triangles back on would be silently undoing a decision.
+EXPECT SURFACETRISEGS 0
+EXPECT SURFACEBORDERSEGS 16
+EXPECT SURFACEMINORSEGS 867
+EXPECT SURFACEMAJORSEGS 203
+EXPECT SURFACEBATCHES 3
+EXPECT SURFACETINGEN 1
+CHECK ALL
+
+# --- contours are NOT entities -------------------------------------------------------------------
+# REQ-070 states this separately from "never stored in .gs", and it is separately breakable: a UI
+# count or a selection funnel could start reporting them on its own. 867 contour segments are on
+# screen and the drawing still holds the polylines it opened with.
+EXPECT POLYLINES 0
+EXPECT LINES 0
+
+# --- changing the interval does NOT rebuild the triangulation ------------------------------------
+# REQ-070's central condition, and the one the whole cache design exists to satisfy. Halving the
+# minor interval doubles the contours, and SURFACETINGEN — the number of distinct triangulations
+# surface 0 has had — does not move. A design that keyed staleness on the drawing revision, as the
+# pre-ADR-036 code did, would fail this line and only this line.
+CMD SURFSTYLE INTERVAL Standard, 1, 5
+EXPECT LOG "minor 1 ft, major 5 ft"
+EXPECT SURFACEMINORSEGS 1707
+EXPECT SURFACEMAJORSEGS 418
+EXPECT SURFACETINGEN 1
+# ...and it added nothing to the drawing.
+EXPECT POLYLINES 0
+CHECK ALL
+
+# --- a major interval that is not a whole multiple is rejected, with the specific message ---------
+# Asserted on the MESSAGE and on the STATE: the rejection has to leave the previous pair in place,
+# or a refused edit would still have half-applied.
+CMD SURFSTYLE INTERVAL Standard, 2, 7
+EXPECT LOG "not a whole multiple"
+EXPECT LOG "Use 6 or 8 ft"
+EXPECT SURFACEMINORSEGS 1707
+EXPECT SURFACEMAJORSEGS 418
+
+# --- the toggle matrix: what is off is not generated, not merely not drawn ------------------------
+# "a style with triangles off and contours on draws only contours" — asserted from BOTH directions,
+# because a buffer that filled once and never emptied would satisfy only one of them. Turning
+# triangles on generates them; turning them off releases the buffer, so the claim is a property of
+# what exists rather than of what the renderer remembers to skip.
+CMD SURFSTYLE SHOW Standard, triangles
+EXPECT SURFACETRISEGS 2946
+EXPECT SURFACEBATCHES 4
+CMD SURFSTYLE HIDE Standard, triangles
+EXPECT SURFACETRISEGS 0
+EXPECT SURFACEMINORSEGS 1707
+EXPECT SURFACEBATCHES 3
+CHECK ALL
+
+# --- two surfaces sharing a style both change when the style is edited ----------------------------
+# The second surface is built from the same group, so both resolve "Standard" and both must move
+# together. Six batches (two surfaces x three visible components) before the edit; hiding the minor
+# contours on the one shared style takes both surfaces down to two components each.
+CMD SURFACECREATE Test EG2, Existing Ground
+EXPECT SURFACES 2
+EXPECT SURFACEBATCHES 6
+CMD SURFSTYLE HIDE Standard, minor
+EXPECT SURFACEBATCHES 4
+EXPECT SURFACEMINORSEGS 0
+EXPECT SURFACEMAJORSEGS 418
+
+# --- with everything off but the border, only the border ------------------------------------------
+CMD SURFSTYLE HIDE Standard, major
+EXPECT SURFACEBATCHES 2
+EXPECT SURFACEBORDERSEGS 16
+EXPECT SURFACEMAJORSEGS 0
+CHECK ALL
+
+# --- a style edit is one undo step, and undoing it brings the display back -------------------------
+# The table is document-owned, so it rides in the geometry snapshot like the text-style table does
+# and is undoable by construction (ADR-036 (d)). Asserted rather than assumed: "by construction" is
+# how a missing line in the snapshot copy goes unnoticed.
+UNDO
+EXPECT SURFACEMAJORSEGS 418
+EXPECT SURFACEBATCHES 4
+# ...and the triangulation still was not rebuilt by any of it.
+EXPECT SURFACETINGEN 1
+CHECK ALL
+
+# --- a style with a non-default name, assigned to one surface only ---------------------------------
+CMD SURFSTYLE NEW Contours1ft
+CMD SURFSTYLE INTERVAL Contours1ft, 1, 10
+CMD SURFSTYLE ASSIGN Test EG2, Contours1ft
+EXPECT LOG "now uses style"
+CHECK ALL
+
+# --- an interval nobody could type is refused by the display path, not obeyed ------------------------
+# 0.0001 ft over this surface's 33 ft of relief is ~332,000 contour levels. The dialog cannot produce
+# that, but a hand-edited `.gs` can, and the display pass has to degrade rather than lock the UI up.
+# Contours come out EMPTY and the surface still draws its border — the Surface Manager reports why
+# (REQ-201), which is the half that keeps this from looking like a defect in the generator.
+#
+# The level count is decided arithmetically before anything is allocated, so this step is fast; an
+# implementation that built the level list first and then rejected it took 2.4 s here.
+CMD SURFSTYLE SHOW Standard, minor
+CMD SURFSTYLE INTERVAL Standard, 0.0001, 0.001
+# Asserted on surface 0's own buffers rather than on the batch total: "Test EG2" is on a different
+# style and is unaffected, so a batch count here would be a claim about two surfaces at once.
+EXPECT SURFACEMINORSEGS 0
+EXPECT SURFACEMAJORSEGS 0
+EXPECT SURFACEBORDERSEGS 16
+CHECK ALL
+# Back to a sane interval and the contours return — the suppression is a state, not a latch. This
+# also puts the style back exactly as the section found it, so what follows is unaffected by it.
+CMD SURFSTYLE INTERVAL Standard, 1, 5
+EXPECT SURFACEMINORSEGS 1707
+EXPECT SURFACEMAJORSEGS 418
+CMD SURFSTYLE HIDE Standard, minor
+EXPECT SURFACEMINORSEGS 0
+EXPECT SURFACEMAJORSEGS 418
+
+# --- a deleted style falls back to the default rather than failing to draw ---------------------------
+# REQ-070's last acceptance condition, and the reason SURFSTYLE DELETE does NOT refuse a style that is
+# in use the way the text-style manager does: refusing would leave this path unreachable.
+#
+# "Test EG2" is on Contours1ft (1 ft minor, 10 ft major). Deleting that style must leave it DRAWING —
+# at Standard's intervals, since Standard is what it now resolves to. Surface 0 is unaffected, so the
+# counts below are surface 0's and are Standard's all along; the claim being made is that the drawing
+# survives the delete at all, which CHECK ALL and the reported fallback carry.
+CMD SURFSTYLE DELETE Contours1ft
+EXPECT LOG "now draw with"
+EXPECT SURFACES 2
+CHECK ALL
+# Re-creating a style with that name adopts the surface back: the reference was never rewritten.
+CMD SURFSTYLE NEW Contours1ft
+EXPECT LOG "created style"
+CHECK ALL
+
+# --- styles round-trip .gs, and reopening changes nothing -------------------------------------------
+# REQ-070's last acceptance condition. The reopened drawing must resolve the same styles to the same
+# geometry — a table that failed to persist would fall back to Standard and quietly redraw every
+# surface at the default interval, which looks like nothing went wrong.
+SAVEAS %OUT%/styles-a.gs
+OPEN %OUT%/styles-a.gs
+EXPECT SURFACES 2
+EXPECT SURFACEMINORSEGS 0
+EXPECT SURFACEMAJORSEGS 418
+EXPECT SURFACETRISEGS 0
+CHECK ALL
+
+# --- and the file is byte-identical on resave (REQ-079, ADR-020 (d)) ---------------------------------
+SAVEAS %OUT%/styles-b.gs
+EXPECT SAMEFILE %OUT%/styles-a.gs %OUT%/styles-b.gs

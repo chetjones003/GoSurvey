@@ -455,6 +455,49 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
       }
     }
 
+    // Style (REQ-070). By NAME, so two surfaces on the same style move together when it is edited —
+    // which is the point of a style table rather than a per-surface copy (ADR-036 (d)).
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Style");
+    SurfaceStyles::EnsureStandard(cmd.surfaceStyles);
+    const SurfaceStyle* resolved = SurfaceStyles::Resolve(cmd.surfaceStyles, s.styleName);
+    const bool fellBack = resolved && !s.styleName.empty() && resolved->name != s.styleName;
+    ImGui::SetNextItemWidth(-90.f);
+    if (ImGui::BeginCombo("##sfstyle", resolved ? resolved->name.c_str() : "(none)")) {
+      for (const SurfaceStyle& st : cmd.surfaceStyles) {
+        const bool sel = resolved && st.name == resolved->name;
+        if (ImGui::Selectable(st.name.c_str(), sel)) {
+          PushUndoSnapshot(cmd, "Surface style");
+          s.styleName = st.name;
+          BumpCadGpuCache(cmd);
+          log->push_back("Surface \"" + s.name + "\" now uses style \"" + st.name + "\".");
+        }
+        if (sel)
+          ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Edit...", ImVec2(-1, 0)))
+      cmd.showSurfaceStyleWindow = true;
+    // REQ-201: contours the display path declined to generate are said out loud, not left to look
+    // like the generator failing. Reachable only from an interval no dialog offers — a hand-edited
+    // `.gs`, or SURFSTYLE INTERVAL with a value in ten-thousandths.
+    int levelsAsked = 0;
+    if (SurfaceContoursSuppressed(cmd, static_cast<size_t>(selIdx), &levelsAsked)) {
+      ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.f),
+                         "Contours not drawn: this interval asks for %d levels over the surface's "
+                         "elevation range.", levelsAsked);
+      ImGui::TextDisabled("Use a larger contour interval in the style.");
+    }
+    if (fellBack) {
+      // REQ-070's deleted-style fallback, said out loud rather than silently substituted: the
+      // surface still names the missing style, so re-creating it adopts the surface back.
+      ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.f),
+                         "Style \"%s\" no longer exists — drawing with \"%s\".", s.styleName.c_str(),
+                         resolved->name.c_str());
+    }
+
     ImGui::Spacing();
     const SurfaceState state = StateOf(cmd, static_cast<size_t>(selIdx));
     ImGui::TextUnformatted("Status:");

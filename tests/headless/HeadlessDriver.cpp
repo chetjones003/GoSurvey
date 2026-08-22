@@ -122,6 +122,14 @@ struct Run {
 
   /// Log length before the current step, so a step's own output can be isolated (REQ-201 checks).
   size_t logMarkBeforeStep = 0;
+
+  /// How many DISTINCT triangulations surface 0 has had, counted by watching its `shared_ptr` across
+  /// frames (`EXPECT SURFACETINGEN`). A rebuild replaces the pointer wholesale (ADR-028 (a)), so a
+  /// change here means a retriangulation happened and an unchanged value means one did not — which
+  /// is REQ-070's "without rebuilding the triangulation", stated as something a transcript can fail.
+  int surfaceTinGeneration = 0;
+  std::weak_ptr<const CadTin> lastSurfaceTin;
+  bool sawSurfaceTin = false;
 };
 
 /// Expand %OUT% to the run's temp directory. Transcripts must never write into the source tree
@@ -191,6 +199,37 @@ void TickFrame(Run& run) {
   // it: after ids, because it is keyed on them. TickSurfaceRebuilds is deliberately NOT called here —
   // see the req069 transcript's header on why this driver uses the synchronous SURFACEREBUILD.
   RefreshSurfaceDisplayGeometry(run.st);
+
+  // Watch surface 0's triangulation identity, for EXPECT SURFACETINGEN. Compared with
+  // `owner_before`-free pointer equality against a locked weak_ptr rather than by holding a
+  // shared_ptr: keeping one alive here would pin a superseded triangulation for the whole run and
+  // change the very lifetime the assertion is about.
+  const std::shared_ptr<const CadTin> tin =
+      run.st.cadSurfaces.empty() ? nullptr : run.st.cadSurfaces[0].tin;
+  if (!run.sawSurfaceTin || run.lastSurfaceTin.lock() != tin) {
+    if (tin || run.sawSurfaceTin)
+      ++run.surfaceTinGeneration;
+    run.lastSurfaceTin = tin;
+    run.sawSurfaceTin = true;
+  }
+}
+
+/// Segment count of one of surface 0's cached display buffers (REQ-070 / ADR-036 (e)).
+///
+/// Reached through the surface's stable id, exactly as the drawing code does, so a transcript that
+/// erases a surface and asserts what the surviving one draws is testing the real lookup rather than
+/// an array position that happens to line up.
+size_t SurfaceCacheSegs(const AppCommandState& st,
+                        std::vector<float> AppCommandState::SurfaceDisplayCacheEntry::*member) {
+  if (st.cadSurfaces.empty() || st.cadSurfaceAttrs.empty())
+    return 0;
+  const std::uint64_t id = st.cadSurfaceAttrs[0].id;
+  if (id == 0)
+    return 0;
+  for (const auto& e : st.surfaceDisplayCache)
+    if (e.surfaceId == id)
+      return (e.*member).size() / 6;
+  return 0;
 }
 
 /// True when a point file's first row is a header (`P,N,E,Z,D`) rather than data.
@@ -422,9 +461,44 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     // its point, and the box's size — so that a rule like "the anchor does not move when the text
     // gets longer" can be read straight off the log.
     const std::string what = UpperAscii(Trim(rest));
-    if (what != "LABELS") {
-      Fail(run, "parse", "DUMP expects LABELS, got: " + rest, sourceLine);
+    if (what != "LABELS" && what != "SURFACES") {
+      Fail(run, "parse", "DUMP expects LABELS or SURFACES, got: " + rest, sourceLine);
       return false;
+    }
+    // DUMP SURFACES — every surface's style, its generated component sizes, and how many batches
+    // the renderer would be handed (REQ-070 / ADR-036 (e)).
+    //
+    // Not an assertion either, and here for the same reason DUMP LABELS is: the counts a transcript
+    // has to assert are properties of a FIXTURE — this triangulation at this interval — and reading
+    // them out of the running program is how they get into a transcript as a stated fact rather than
+    // as a number someone tuned until the test went green.
+    if (what == "SURFACES") {
+      run.log.push_back("[dump] surface | style | tris | border | minor | major (segments)");
+      for (size_t si = 0; si < run.st.cadSurfaces.size(); ++si) {
+        const CadSurface& s = run.st.cadSurfaces[si];
+        const std::uint64_t id = si < run.st.cadSurfaceAttrs.size() ? run.st.cadSurfaceAttrs[si].id : 0;
+        const auto it = std::find_if(
+            run.st.surfaceDisplayCache.begin(), run.st.surfaceDisplayCache.end(),
+            [&](const AppCommandState::SurfaceDisplayCacheEntry& e) { return e.surfaceId == id; });
+        char buf[512];
+        if (it == run.st.surfaceDisplayCache.end()) {
+          std::snprintf(buf, sizeof buf, "[dump] %s | %s | (no cache entry)", s.name.c_str(),
+                        s.styleName.empty() ? "(default)" : s.styleName.c_str());
+        } else {
+          std::snprintf(buf, sizeof buf, "[dump] %s | %s | %zu | %zu | %zu | %zu", s.name.c_str(),
+                        it->style.name.c_str(), it->triangleEdges.size() / 6,
+                        it->borderEdges.size() / 6, it->minorContours.size() / 6,
+                        it->majorContours.size() / 6);
+        }
+        run.log.push_back(buf);
+      }
+      run.log.push_back("[dump] batches handed to the renderer: " +
+                        std::to_string(run.st.surfaceDisplayGeometry.lines.size()) +
+                        ", tin generations: " + std::to_string(run.surfaceTinGeneration));
+      TickFrame(run);
+      if (run.checkEveryStep)
+        CheckInvariants(run, sourceLine);
+      return run.failures.empty();
     }
     run.log.push_back("[dump] id | dx=left edge, dy=vertical centre, from point | box w,h | text");
     for (const SurveyPoint& p : run.st.surveyPoints) {
@@ -628,11 +702,35 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       else if (what == "SURFACEBORDERSEGS") {
         const std::vector<float>* b = run.st.cadSurfaces.empty() ? nullptr : SurfaceBorderEdges(run.st, 0);
         got = b ? static_cast<long>(b->size() / 6) : 0;
-      } else {
+      }
+      // The rest of surface 0's generated display geometry (REQ-070 / ADR-036 (e)). These are what
+      // make REQ-070's toggle matrix assertable — "triangles off and contours on draws only
+      // contours" is a claim about which of these buffers is EMPTY, and a renderer that skipped a
+      // component it had nonetheless generated would pass an eyes-only check of the same thing.
+      else if (what == "SURFACETRISEGS")
+        got = static_cast<long>(SurfaceCacheSegs(run.st, &AppCommandState::SurfaceDisplayCacheEntry::triangleEdges));
+      else if (what == "SURFACEMINORSEGS")
+        got = static_cast<long>(SurfaceCacheSegs(run.st, &AppCommandState::SurfaceDisplayCacheEntry::minorContours));
+      else if (what == "SURFACEMAJORSEGS")
+        got = static_cast<long>(SurfaceCacheSegs(run.st, &AppCommandState::SurfaceDisplayCacheEntry::majorContours));
+      // How many batches the renderer would be handed, across every visible surface. Zero means
+      // nothing is drawn for surfaces at all, which is how "a surface on a frozen layer" and "a
+      // style with everything switched off" are told apart from a cache that simply never filled.
+      else if (what == "SURFACEBATCHES")
+        got = static_cast<long>(run.st.surfaceDisplayGeometry.lines.size());
+      // How many DISTINCT triangulations surface 0 has had since the transcript began. This is the
+      // only direct way to assert REQ-070's central condition — "changing the contour interval
+      // updates the display **without rebuilding the triangulation**". Segment counts cannot say it:
+      // a retriangulation that produced the same number of edges would pass one, and this cannot be
+      // satisfied by anything except the triangulation genuinely not being rebuilt.
+      else if (what == "SURFACETINGEN")
+        got = static_cast<long>(run.surfaceTinGeneration);
+      else {
         Fail(run, "parse",
              "EXPECT: unknown quantity " + what +
                  " (LINES CIRCLES POLYLINES ARCS ELLIPSES ANNOTATIONS SURVEYPOINTS SELECTED"
-                 " SURFACES SELECTEDSURFACES SURFACEBORDERSEGS)",
+                 " SURFACES SELECTEDSURFACES SURFACEBORDERSEGS SURFACETRISEGS SURFACEMINORSEGS"
+                 " SURFACEMAJORSEGS SURFACEBATCHES SURFACETINGEN)",
              sourceLine);
         return false;
       }
@@ -716,6 +814,7 @@ int RunTranscriptMain(int argc, char** argv) {
   std::string outDir;
   std::string sigPath;
   bool checkEveryStep = true;
+  bool printLog = false;
 
   for (int i = 3; i < argc; ++i) {
     const std::string a = argv[i];
@@ -725,6 +824,8 @@ int RunTranscriptMain(int argc, char** argv) {
       outDir = argv[++i];
     else if (a == "--sig" && i + 1 < argc)
       sigPath = argv[++i];
+    else if (a == "--print-log")
+      printLog = true;  // authoring aid: DUMP output is otherwise only visible on a failure
     else if (a == "--check-at-end")
       checkEveryStep = false;
     else
@@ -779,6 +880,13 @@ int RunTranscriptMain(int argc, char** argv) {
       std::fprintf(stderr, "  (+%zu more)\n", run.failures.size() - 1);
   } else {
     std::fprintf(stdout, "PASS %d steps, %zu log lines\n", run.stepIndex, run.log.size());
+  }
+  // `--print-log` is an authoring aid, not part of any test's verdict: DUMP output and command
+  // replies are otherwise only visible when a step fails, which is the wrong time to be reading the
+  // numbers a new transcript needs to assert.
+  if (printLog) {
+    for (const std::string& l : run.log)
+      std::fprintf(stdout, "%s\n", l.c_str());
   }
   if (pending != 0) {
     // Not a failure: the transcript queued an answer no command asked for. Worth saying, because it

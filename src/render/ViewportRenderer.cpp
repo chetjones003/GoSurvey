@@ -845,7 +845,7 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const std::vector<EntityAttributes>* filledRegionAttrs,
                                    const std::vector<std::shared_ptr<const CadMesh>>* meshes,
                                    const std::vector<EntityAttributes>* meshAttrs,
-                                   const std::vector<float>* surfaceEdges) {
+                                   const CadSurfaceDisplayGeometry* surfaceGeometry) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -1791,18 +1791,35 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     }
   }
 
-  // --- TIN surface triangle edges (REQ-068) ---
-  // Drawn before the survey markers so a point's X stays readable on top of its own surface.
-  if (surfaceEdges && !surfaceEdges->empty() && surfaceEdges->size() % 6 == 0) {
+  // --- Generated surface display geometry (REQ-068 / REQ-070) ---
+  // Drawn before the survey markers so a point's X stays readable on top of its own surface, and in
+  // the order the caller assembled: triangles, contours, then the border on top.
+  //
+  // One draw call per batch. A batch is a whole component of a whole surface, so a drawing with two
+  // surfaces costs at most eight — nowhere near enough to be worth interleaving into the vertex-
+  // coloured path, and this way the colour a style names is the colour that is set.
+  if (surfaceGeometry) {
     std::vector<float> surfRel;
-    ConvertLineVertsWorldToView(*surfaceEdges, viewAnchorX, viewAnchorY, &surfRel);
-    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
-    glUseProgram(lineProgram_);
-    glUniform4f(locCol, 0.42f, 0.62f, 0.78f, 1.f);  // muted steel blue: present, never competing
-    glLineWidth(kLwMain);
-    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(surfRel.size() * sizeof(float)), surfRel.data(),
-                 GL_STREAM_DRAW);
-    glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(surfRel.size() / 3));
+    bool programBound = false;
+    for (const SurfaceDisplayBatch& b : surfaceGeometry->lines) {
+      if (!b.verts || b.verts->empty() || b.verts->size() % 6 != 0)
+        continue;
+      ConvertLineVertsWorldToView(*b.verts, viewAnchorX, viewAnchorY, &surfRel);
+      if (!programBound) {
+        glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+        glUseProgram(lineProgram_);
+        programBound = true;
+      }
+      glUniform4f(locCol, b.rgba[0], b.rgba[1], b.rgba[2], b.rgba[3]);
+      // -1 mm means "no width of its own" all the way down the ByLayer chain, which lands on the
+      // same default weight every other line in the drawing gets.
+      glLineWidth(b.lineweightMm >= 0.f ? LineweightMmToDevicePx(b.lineweightMm) : kLwMain);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(surfRel.size() * sizeof(float)), surfRel.data(),
+                   GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(surfRel.size() / 3));
+    }
+    if (programBound)
+      glLineWidth(kLwMain);  // restore, so the overlay passes below inherit the shared default
   }
 
   // --- Survey points (X markers, apparent size ~constant on screen) ---
