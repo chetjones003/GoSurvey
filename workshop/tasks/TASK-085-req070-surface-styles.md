@@ -109,6 +109,9 @@ ASSUMPTION-2: Regenerating contours only when the (tin pointer, style revision) 
               REQ-100 budget outright.
 - Validate by: the REQ-100 bench case measures the CACHE HOLDING across frames, not one regeneration.
               A profile that only times a single generation would pass while the defect is present.
+- **VALIDATED 2026-08-22**: `BENCH SURFACE` reported 0 regens across 900 timed frames (HELD). The
+              count is GPU-independent, so this holds despite the run being off the reference
+              machine; REQ-100's p95 is a separate obligation and is still outstanding.
 ```
 
 ## 6. Plan
@@ -209,13 +212,13 @@ Surface Manager's right pane.
 - [x] 3. The display-geometry cache; `RenderScene` parameter replacement; delete `AppendSurfaceEdgeLines`.
 - [x] 4. Renderer draws the coloured component batches.
 - [x] 5. The dialog (answer Q3 first) + Surface Manager wiring.
-- [~] 6. REQ-100 bench: assert the **cache holds across frames** (ASSUMPTION-2). Instrumented and
-        built; the run itself needs the reference machine — see the log.
+- [~] 6. REQ-100 bench: assert the **cache holds across frames** (ASSUMPTION-2). Run 2026-08-22 —
+        cache HELD (0 regens / 900 timed frames). The p95 still needs the reference GPU.
 - [ ] 7. Self-verification (§9).
 
 ## 7. Workflow-specific notes
 
-- Feature: pre-flight answered (Q1, Q2); **Q3 is open and must be answered before step 5.**
+- Feature: pre-flight answered (Q1, Q2); Q3 answered 2026-08-21 and implemented in step 5 (see §4).
 - Tests-first for step 1 — a contour generator is exactly the kind of pure geometry that is cheap to
   test and expensive to debug through a viewport.
 
@@ -361,6 +364,24 @@ DEBT-1: A surface is never plotted. `src/io/PdfPlot.cpp` contains no surface or 
   not crash, nothing more. No screenshot was taken and no visual check of the contours themselves was
   made — the geometry is proven by the transcript, the pixels are not.
 
+- 2026-08-22 **step 6 RUN — the cache holds; the p95 is still owed.** `BENCH SURFACE` was driven in
+  the GUI: 100,000 points / 199,966 triangles, contoured at 2/10 ft (73,729 contour segs), 900 timed
+  frames after 60 warm-up, vsync off, 0.5 deg/frame orbit. Record appended to
+  `%APPDATA%\GoSurvey\bench-req100.txt`.
+
+  **cache regens 0 across the 900 timed frames => HELD.** This is what ASSUMPTION-2 actually claimed,
+  and the yesterday entry is right that timing alone could never have shown it — a per-frame
+  regeneration would still post a passing p95 on a quick enough machine. The count is a property of
+  the early-out in `CadCommands.cpp:1440`, identical on any GPU, so the hardware it was measured on
+  does not weaken it. ASSUMPTION-2 is discharged.
+
+  **The p95 is NOT REQ-100's number.** The run was on an **Intel Iris Xe** — a third machine, neither
+  the RTX 5060 nor the Radeon 610M that `project.md` §7 records. §7 is explicit: a figure quoted
+  without that hardware is not a result. It reported p95 6.77 ms against the 16 ms budget, recorded
+  here as an indication of the right order of magnitude and nothing more. It is also not comparable
+  to §7's 10.28 ms "surface" figure, which was taken 2026-08-15 on a scene that had no contours in it.
+  **`BENCH SURFACE` still has to be run on the reference machine before the completion report.**
+
 ## 9. Self-verification
 - [x] build-project — clean, no new warnings. Reconfigured so the new transcript and
       `SurfaceStyleTests` are picked up by ctest (a glob-added file is invisible until then).
@@ -373,11 +394,14 @@ DEBT-1: A surface is never plotted. `src/io/PdfPlot.cpp` contains no surface or 
 - [x] code-review (self) — found the REQ-201 suppression gap and the allocate-then-discard cost above,
       both fixed. The triangle-buffer doubling was found earlier by the transcript.
 - [x] dependency-audit — n/a (in-tree generator, ADR-028 (c)); no manifest touched.
-- [~] performance-review — **required, and NOT complete.** The instrumentation that discharges
-      ASSUMPTION-2 is built and reports to both the console and `bench-req100.txt`, but `BENCH SURFACE`
-      has not been RUN: REQ-100 needs a GL context and a real orbit, and a figure from a different GPU
-      is a different result (BUG-013 / TASK-053 FINDING-3). This is the one thing standing between the
-      task and a completion report, and it is stated as outstanding rather than assumed to pass.
+- [~] performance-review — **half discharged 2026-08-22, half still outstanding.** `BENCH SURFACE` has
+      now been RUN, and ASSUMPTION-2's actual obligation is met: **cache regens 0 during 900 timed
+      frames => HELD**. That half is a property of the caching logic, not of the hardware, so the
+      machine it was measured on does not weaken it. The p95 half is NOT discharged: the run was on an
+      **Intel Iris Xe**, which is neither of the reference machine's two GPUs, and `project.md` §7 is
+      explicit that a figure quoted without that hardware is not a result (BUG-013 / TASK-053
+      FINDING-3). The 6.77 ms it reported is recorded as an indication, not as REQ-100's number.
+      Re-run on the RTX 5060 before the completion report.
 - [x] testing — 479 cases / 214,286 assertions green; ctest 507/507 green. Per acceptance bullet:
       contour geometry and the tie rule (`ContourGenTests`, 18 cases), the table and the interval rule
       (`SurfaceStyleTests`, 17 cases), and every end-to-end condition — no retriangulation, no entity
