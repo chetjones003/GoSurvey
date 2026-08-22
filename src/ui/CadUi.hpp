@@ -22,6 +22,11 @@ bool CadUiTitleBarLogoQuery(ImTextureID* outTexture, ImVec2* outDimsPx);
 /// (OSNAP, ORTHO, …) are a separate fixed strip at the bottom of the main work area (see \ref DrawCadStatusBarStrip).
 void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size, bool reserveCommandDock = true);
 
+/// File ▸ Save, as a function rather than a menu-item body, so the menu and the Ctrl+S accelerator
+/// in `main.cpp` cannot drift apart. Saves straight to the drawing's own path when it has one and
+/// otherwise browses for a destination (adopting it, so the next save is silent).
+void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log);
+
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log);
 /// Ribbon under the menu bar: sectioned icon toolbars (Draw, Modify, View, …) plus a fixed-width layer strip; hover for tooltips.
 void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>& log);

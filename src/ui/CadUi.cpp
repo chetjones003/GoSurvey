@@ -924,6 +924,27 @@ void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size, boo
   ImGui::DockBuilderFinish(dockspace_id);
 }
 
+void SaveActiveDocument(AppCommandState& cmd, std::vector<std::string>& log) {
+  char gsPath[4096]{};
+  const std::string& path = cmd.activeDocFilePath;
+  if (!path.empty()) {
+    if (SaveGoSurveyFile(cmd, path.c_str(), log))
+      cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+    return;
+  }
+  // No path yet (a New drawing, or one opened by the `.gs` file association — see BUG-027). Browse,
+  // then ADOPT the destination: the tab takes the file's name and every later save is silent, which
+  // is what makes a second Ctrl+S mean "save" rather than "ask again".
+  if (!BrowseSaveFileGsUtf8(gsPath, sizeof(gsPath), "drawing.gs"))
+    return;
+  if (!SaveGoSurveyFile(cmd, gsPath, log))
+    return;
+  cmd.activeDocSavedRevision = cmd.cadGpuRevision;
+  cmd.activeDocFilePath      = std::string(gsPath);
+  if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
+    cmd.drawingTabs[cmd.activeDrawingIdx].name = std::filesystem::path(gsPath).stem().string();
+}
+
 void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
   static char dxfPath[4096]{};
   static char dwgPath[4096]{};
@@ -974,21 +995,7 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       }
     }
     if (ImGui::MenuItem("Save", "Ctrl+S")) {
-      const std::string& path = cmd.activeDocFilePath;
-      if (!path.empty()) {
-        if (SaveGoSurveyFile(cmd, path.c_str(), log))
-          cmd.activeDocSavedRevision = cmd.cadGpuRevision;
-      } else {
-        if (BrowseSaveFileGsUtf8(gsPath, sizeof(gsPath), "drawing.gs")) {
-          if (SaveGoSurveyFile(cmd, gsPath, log)) {
-            cmd.activeDocSavedRevision = cmd.cadGpuRevision;
-            cmd.activeDocFilePath      = std::string(gsPath);
-            if (cmd.activeDrawingIdx < static_cast<int>(cmd.drawingTabs.size()))
-              cmd.drawingTabs[cmd.activeDrawingIdx].name =
-                  std::filesystem::path(gsPath).stem().string();
-          }
-        }
-      }
+      SaveActiveDocument(cmd, log);
     }
     if (ImGui::MenuItem("Save As...")) {
       const std::string defName = cmd.activeDocFilePath.empty()

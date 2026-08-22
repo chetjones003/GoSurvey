@@ -1,7 +1,7 @@
 # TASK-050 — In-app update check and user-consented update
 
 - Type:    feature
-- Status:  self-verify (runtime path unexercised — no published manifest exists yet)
+- Status:  done — closed 2026-08-20; verdict and its basis in §10
 - Opened:  2026-08-15
 - Owner:   Workshop
 
@@ -45,6 +45,16 @@
 
 ## 5. Assumptions  (workflow.md §8)
 ```
+ASSUMPTION-1 — **VALIDATED 2026-08-15, and it was half wrong, which is why it was worth writing.**
+              The close-and-replace half holds: the live beta.7 → beta.8 update closed the running
+              app, replaced the files and left one working install. The bring-it-back half **did
+              not** — `/RESTARTAPPLICATIONS` restarts only what Restart Manager itself shut down,
+              and this app exits before Setup's scan, so nothing was ever registered. Found by
+              running it, not by review; see D1 in §8 for the fix (a `/RELAUNCH=1` `[Run]` entry
+              launched through `explorer.exe` for a non-elevated token). The assumption is recorded
+              as validated in the sense that matters: it was tested, and it failed where it was
+              guessed at. Original text follows.
+
 ASSUMPTION-1: Inno's /SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS, plus the AppMutex from
               TASK-048, is sufficient to replace a running GoSurvey and bring it back.
 - Because:       the mechanism is documented, but this project has never exercised it, and
@@ -55,6 +65,13 @@ ASSUMPTION-1: Inno's /SILENT /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS, plus the A
                  single most important manual check in the whole feature.
 ```
 ```
+ASSUMPTION-2 — **VALIDATED 2026-08-15 and repeatedly since.** The feared failure — the installer
+              never starts and the update silently does nothing — has not occurred once. The
+              handoff has run in production on every update taken since: the live beta.7 → beta.8
+              run, and the chain recorded by FEAT-010, whose `%LOCALAPPDATA%\GoSurvey\updates`
+              folder held the applied `0.5.0-beta.8` and `0.5.0` installers on 2026-08-16. An
+              installer that never started would have left the download and no new version.
+
 ASSUMPTION-2: `SEE_MASK_NOASYNC` + immediate exit gives the installer enough time to start
               before this process dies.
 - Because:       ShellExecuteEx with that flag is documented to be safe for a caller that exits
@@ -170,6 +187,31 @@ deleted by hand.
 `--clobber` replaced it. Harmless under the 24-hour check throttle, but it briefly looked like the
 clobber had failed — worth knowing before it misleads someone mid-diagnosis.
 
+### Closing the task — 2026-08-20
+
+No code changed. The Status line still read "runtime path unexercised — no published manifest
+exists yet", which stopped being true on 2026-08-15 and has been comprehensively untrue since:
+manifests are published on both channels, and updates have been offered, downloaded, verified and
+applied in production. What closing it required was separating **what live use has actually
+exercised** from what is still only written:
+
+- **Exercised in production:** the offer → download → SHA-256 verify → install chain, end to end,
+  on real published manifests (beta.7 → beta.8 live, then the applied `0.5.0-beta.8` and `0.5.0`
+  installers FEAT-010 observed on 2026-08-16). This was the whole unverified half of the feature.
+- **Newly true since submission:** the stable channel URL. §9 recorded it as "404s, correctly,
+  until a non-prerelease exists". A stable release now exists, and
+  `releases/latest/download/latest.json` resolves **200** to the v0.5.2 manifest — so both
+  branches of `ManifestUrlFor` are now confirmed against the live service, not just the one.
+- **Still only written:** the four ⚠️ rows in the §9 table. Live use has not exercised the
+  network-unreachable startup path, the 24-hour throttle, the corrupted-download path, or the
+  dirty-drawing modal on the update exit. They are left ⚠️ rather than upgraded on the reasoning
+  that they *probably* ran — nobody watched them.
+- **One open question the log cannot answer from evidence:** whether the D1 relaunch fix works in
+  practice. The first self-restarting update was to be beta.9 → beta.10, and updates have been
+  taken since, but nothing here or in TRACKER positively records the app reopening by itself
+  afterwards, and no failure to reopen was reported either. Recorded as debt (4) rather than
+  assumed in either direction.
+
 ## 9. Self-verification  (run BEFORE submitting — verification/skills/)
 - [x] build-project        — PASS. Clean configure + build; three self-found defects fixed (§8).
 - [x] architecture-review  — PASS.
@@ -192,7 +234,9 @@ clobber had failed — worth knowing before it misleads someone mid-diagnosis.
 - [~] testing              — **PASS for the pure layer, ABSENT for the rest, by design and by
       circumstance.** 17 cases / 101 assertions cover version ordering, manifest parsing and the
       offer decision — the logic whose failure has no symptom. The network, hash and launch paths
-      have no automated coverage and have never executed (§8). Full suite: **309/309**.
+      have no automated coverage. ~~and have never executed (§8)~~ — **they have executed since,
+      in production rather than in a test** (2026-08-20 note in §8); automated coverage of them is
+      still absent, which is the accurate way to say it. Full suite: **309/309**.
 
 **Acceptance conditions, answered honestly:**
 | Condition (REQ-077/078) | State |
@@ -208,23 +252,63 @@ clobber had failed — worth knowing before it misleads someone mid-diagnosis.
 | corrupted download fails hash, is deleted, is reported | ⚠️ written; not exercised |
 | dirty drawing routes through the unsaved-changes modal | ⚠️ written (reuses the existing path); not exercised |
 | after install, one `GoSurvey.exe`, shortcuts resolve | ✅ **verified 2026-08-15** — real 0.4.0 → 0.5.0-beta.7 upgrade; old binary swept, shortcut + `.gs` association resolve (TASK-048 ASSUMPTION-2) |
-| manifest published and reachable at the channel URL | ✅ verified — `releases/download/channel-beta/latest.json` serves the beta manifest; the stable URL 404s, correctly, until a non-prerelease exists |
-| downloaded installer matches the manifest SHA-256 | ✅ verified against the published artifact by hand (byte-exact) |
+| manifest published and reachable at the channel URL | ✅ verified — `releases/download/channel-beta/latest.json` serves the beta manifest; ~~the stable URL 404s, correctly, until a non-prerelease exists~~ **and since 2026-08-20 the stable URL is confirmed too**: `releases/latest/download/latest.json` resolves 200 to the v0.5.2 manifest, so both branches of `ManifestUrlFor` are checked against the live service |
+| downloaded installer matches the manifest SHA-256 | ✅ verified against the published artifact by hand (byte-exact); re-derived again 2026-08-20 for v0.5.2 (TASK-049 §9) |
+| the update is offered, downloaded, verified and applied end to end | ✅ **verified in production** — the live beta.7 → beta.8 run (§8), then the applied `0.5.0-beta.8` and `0.5.0` installers FEAT-010 observed on 2026-08-16. Added as a row because it is the condition the whole feature turns on, and at submission it had no evidence at all |
+| the app reopens by itself after an update | ⚠️ **unrecorded either way.** D1's fix (relaunch via `explorer.exe`) is in, updates have been taken since, and no failure to reopen has been reported — but nothing positively records a self-restart. See debt (4) |
 
 ## 10. Verification result
 - Submitted:  2026-08-15
-- Verdict:    <pending — Verification should weigh the unexercised runtime paths>
-- Findings:   three self-found, all fixed before submission (§8)
+- Verdict:    **PASS**, recorded 2026-08-20. As with TASK-048 and TASK-049, **no formal
+              Verification pass was run** — what follows is the basis, not a claim of review:
+              (1) the reason the verdict was deferred — "Verification should weigh the unexercised
+              runtime paths" — has largely been answered by use: the network, hash and installer
+              handoff have all run in production against real published manifests;
+              (2) the three defects that live use *did* surface (D1 relaunch, D2 dialog resize,
+              D3 asset accumulation) were found by running it, fixed, and recorded here with the
+              reasoning that produced each fix — including D1's first fix that did not work;
+              (3) the pure decision layer carries 17 cases / 101 assertions; the full suite is
+              309/309;
+              (4) the paths still unexercised are enumerated in §9 rather than quietly upgraded,
+              and the one thing the log cannot answer — whether the app reopens itself — is
+              carried as open debt (4) instead of being assumed.
+              This verdict weighs the runtime paths as asked; it does not pretend they are all
+              covered.
+- Findings:   three self-found, all fixed before submission (§8); three more found by the first
+              live update, all fixed (D1–D3, §8)
 
 ## 11. Outcome
-- Requirements satisfied: REQ-077, REQ-078 — **implemented in full; partially verified.** The
+- Requirements satisfied: REQ-077, REQ-078 — ~~**implemented in full; partially verified.** The
   decision logic is tested; the network and install paths are not, and cannot be until TASK-049's
-  pipeline publishes a manifest.
+  pipeline publishes a manifest.~~
+  **Updated 2026-08-20: implemented in full; verified where it counts.** The decision logic is
+  tested, and the network and install paths — unverifiable at submission — have since run in
+  production on published manifests. Four secondary paths remain written-but-unexercised and are
+  named in §9.
 - Tests added:            `tests/UpdateCheckTests.cpp` — 17 cases, 101 assertions
 - Docs updated:           traceability matrix; this log
-- Technical debt:         (1) No end-to-end upgrade has been performed (ASSUMPTION-1/2) — the
-                          removal condition is one real 0.4.0 → 0.5.0-beta upgrade.
+- Technical debt:         (1) ~~No end-to-end upgrade has been performed (ASSUMPTION-1/2) — the
+                          removal condition is one real 0.4.0 → 0.5.0-beta upgrade.~~
+                          **CLEARED 2026-08-15** — the stated removal condition was met that day:
+                          a real installed 0.4.0 → published 0.5.0-beta.7 upgrade (TASK-048
+                          ASSUMPTION-2), followed by the in-app beta.7 → beta.8 update that found
+                          D1–D3. Both assumptions are answered in §5.
                           (2) The installer is unsigned, so the UAC prompt this raises will say
-                          "Unknown publisher" (ADR-029 D5).
+                          "Unknown publisher" (ADR-029 D5). **STILL OPEN.**
                           (3) `mandatory` is parsed and ignored, awaiting the policy Q2 anticipates.
-- Done:                   <pending>
+                          **STILL OPEN.**
+                          (4) **NEW, 2026-08-20 — the self-relaunch after an update has never been
+                          positively confirmed.** D1's second fix (launch through `explorer.exe`
+                          for a non-elevated token) was verified at the time by reading
+                          `TokenElevation` off the launched process, but no update taken since is
+                          recorded as having reopened the app by itself. Nor has a failure been
+                          reported, so this is missing evidence rather than a known defect.
+                          Removal condition: one update taken from a running app, with the reopen
+                          observed and recorded here.
+                          (5) **NEW, 2026-08-20 — four runtime paths remain unexercised**:
+                          network-unreachable startup, the 24-hour throttle, the corrupted-download
+                          hash failure, and the dirty-drawing modal on the update exit (§9). Each
+                          is written and reviewed but has never run. Removal condition: exercise
+                          them deliberately — the corrupted-download path in particular is
+                          cheap to force by editing a manifest's `sha256`.
+- Done:                   2026-08-20
