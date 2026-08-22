@@ -1339,6 +1339,24 @@ double ContourLevelCount(double minZ, double maxZ, double interval) {
   return last < first ? 0.0 : last - first + 1.0;
 }
 
+/// What a surface's style says its contours are: the levels, split by component, or the reason there
+/// are none.
+///
+/// **One decision, two callers** — the per-frame display pass and REQ-071's EXTRACT. They MUST agree:
+/// REQ-071's first acceptance condition is that extraction produces polylines "at exactly the
+/// displayed contour elevations", and two functions that agree today drift tomorrow. Sharing the
+/// decision makes that condition true by construction rather than by inspection.
+struct SurfaceContourLevels {
+  std::vector<double> minor;  ///< Minor levels, with the majors already removed.
+  std::vector<double> major;
+  bool suppressed = false;    ///< The style asked for more levels than \ref kMaxContourLevels.
+  int levelsAsked = 0;        ///< How many, when suppressed. 0 otherwise.
+  double minZ = 0.0, maxZ = 0.0;
+  bool haveRange = false;     ///< False for a triangulation with no vertices.
+
+  [[nodiscard]] bool empty() const { return minor.empty() && major.empty(); }
+};
+
 /// Split a surface's contour levels into major and minor, with the majors removed from the minors so
 /// no level is drawn twice.
 ///
@@ -1369,6 +1387,46 @@ void SplitContourLevels(double minZ, double maxZ, const SurfaceStyle& style,
       continue;
     minorOut->push_back(lv);
   }
+}
+
+/// Everything both contour consumers need to decide from \p tin and \p style: the surface's Z range,
+/// the cap verdict, and the two level lists.
+///
+/// The order matters and is the whole point of sharing it. The Z range comes from the triangulation,
+/// the cap is checked ARITHMETICALLY before any list is built (a 0.0001 ft interval is ~332,000
+/// doubles materialised only to be discarded), and only then are the levels generated and the majors
+/// removed from the minors. A second implementation of that sequence would be a second chance to get
+/// the order — or the tolerance in the removal — subtly different.
+SurfaceContourLevels ResolveSurfaceContourLevels(const CadTin& tin, const SurfaceStyle& style) {
+  SurfaceContourLevels out;
+  for (size_t v = 2; v < tin.vertsXyz.size(); v += 3) {
+    const double z = static_cast<double>(tin.vertsXyz[v]);
+    if (!out.haveRange) {
+      out.minZ = out.maxZ = z;
+      out.haveRange = true;
+    } else {
+      out.minZ = std::min(out.minZ, z);
+      out.maxZ = std::max(out.maxZ, z);
+    }
+  }
+  if (!out.haveRange)
+    return out;  // no vertices: no range, no contours, and not an error
+  if (!style.minorContour.visible && !style.majorContour.visible)
+    return out;
+
+  // The cap is on the PAIR, not on each list: two intervals that are individually sane can still be
+  // asked for together, and it is the total that gets paid for.
+  const double wanted =
+      (style.minorContour.visible ? ContourLevelCount(out.minZ, out.maxZ, style.minorIntervalFt) : 0.0) +
+      (style.majorContour.visible ? ContourLevelCount(out.minZ, out.maxZ, style.majorIntervalFt) : 0.0);
+  if (wanted > static_cast<double>(kMaxContourLevels)) {
+    out.suppressed = true;
+    out.levelsAsked = wanted > 2.0e9 ? 2000000000 : static_cast<int>(wanted);  // saturate, never overflow
+    return out;
+  }
+
+  SplitContourLevels(out.minZ, out.maxZ, style, &out.minor, &out.major);
+  return out;
 }
 
 /// The resolved RGBA and lineweight for one component of a surface, folding the ByLayer chain the
@@ -1469,44 +1527,24 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
     it->contoursSuppressed = false;
     it->suppressedLevelCount = 0;
     if (resolved.minorContour.visible || resolved.majorContour.visible) {
-      double minZ = 0.0, maxZ = 0.0;
-      bool haveZ = false;
-      for (size_t v = 2; v < tin->vertsXyz.size(); v += 3) {
-        const double z = static_cast<double>(tin->vertsXyz[v]);
-        if (!haveZ) {
-          minZ = maxZ = z;
-          haveZ = true;
-        } else {
-          minZ = std::min(minZ, z);
-          maxZ = std::max(maxZ, z);
+      // The SAME decision REQ-071's EXTRACT makes, from the same function — which is what makes
+      // "extraction produces polylines at exactly the displayed contour elevations" structural.
+      const SurfaceContourLevels levels = ResolveSurfaceContourLevels(*tin, resolved);
+      if (levels.suppressed) {
+        // Recorded, never absorbed (REQ-201). Nothing here can log — this runs once a frame with no
+        // command in flight — so the fact is carried on the entry and the Surface Manager reports
+        // it. Silently drawing no contours would look like a defect in the generator.
+        it->contoursSuppressed = true;
+        it->suppressedLevelCount = levels.levelsAsked;
+      } else {
+        ContourResult r;
+        if (!levels.minor.empty()) {
+          GenerateContours(tin->vertsXyz, tin->indices, levels.minor, &r);
+          AppendContourLinesFrom(r, &it->minorContours);
         }
-      }
-      if (haveZ) {
-        // The cap is on the pair, not on each list: two intervals that are individually sane can
-        // still be asked for together, and it is the total the frame pays for. Counted before
-        // anything is allocated, for the reason ContourLevelCount documents.
-        const double wanted =
-            (resolved.minorContour.visible ? ContourLevelCount(minZ, maxZ, resolved.minorIntervalFt) : 0.0) +
-            (resolved.majorContour.visible ? ContourLevelCount(minZ, maxZ, resolved.majorIntervalFt) : 0.0);
-        if (wanted > static_cast<double>(kMaxContourLevels)) {
-          // Recorded, never absorbed (REQ-201). Nothing here can log — this runs once a frame with no
-          // command in flight — so the fact is carried on the entry and the Surface Manager reports
-          // it. Silently drawing no contours would look like a defect in the generator.
-          it->contoursSuppressed = true;
-          it->suppressedLevelCount =
-              wanted > 2.0e9 ? 2000000000 : static_cast<int>(wanted);  // saturate, never overflow
-        } else {
-          std::vector<double> minorLevels, majorLevels;
-          SplitContourLevels(minZ, maxZ, resolved, &minorLevels, &majorLevels);
-          ContourResult r;
-          if (!minorLevels.empty()) {
-            GenerateContours(tin->vertsXyz, tin->indices, minorLevels, &r);
-            AppendContourLinesFrom(r, &it->minorContours);
-          }
-          if (!majorLevels.empty()) {
-            GenerateContours(tin->vertsXyz, tin->indices, majorLevels, &r);
-            AppendContourLinesFrom(r, &it->majorContours);
-          }
+        if (!levels.major.empty()) {
+          GenerateContours(tin->vertsXyz, tin->indices, levels.major, &r);
+          AppendContourLinesFrom(r, &it->majorContours);
         }
       }
     }
@@ -2341,6 +2379,10 @@ void RunSurfaceImportFile(AppCommandState& st, const std::string& args, std::vec
                 "\" into point group \"" + g.name + "\"; the link is broken.");
   BumpCadGpuCache(st);
 }
+
+/// EXTRACT (REQ-071) — defined further down, beside the layer helpers it needs, and declared here
+/// because the command dispatch above reaches it first.
+void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log);
 
 // SURFSTYLE (REQ-070) — the command form of the Surface Style editor.
 //
@@ -3561,6 +3603,7 @@ const CmdEntry kRegistry[] = {
     {"layer", "la", "Open the Layer manager"},
     {"style", "st, ddstyle", "Text style manager: create / edit named text styles"},
     {"surfstyle", "ss", "Surface style editor: contours, triangles, border (REQ-070)"},
+    {"extract", "", "Bake a surface's displayed contours into polylines: EXTRACT <surface>[, <layer>]"},
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"pdfattach", "pa", "Attach a PDF underlay"},
     {"overkill",     "ok", "Remove duplicate geometry"},
@@ -3933,6 +3976,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "inverse") {
     StartSurveyInverseCommand(st, log);
+    return true;
+  }
+  if (primary == "extract") {
+    ExecuteExtractCommand(st, std::string(), log);
     return true;
   }
   if (primary == "surfstyle") {
@@ -10375,6 +10422,210 @@ bool CadAddDrawingLayer(AppCommandState& st, const std::string& raw, std::string
   return true;
 }
 
+namespace {
+
+// EXTRACT (REQ-071) — bake a surface's currently displayed contours into ordinary polylines.
+//
+// **The contours are regenerated here, not read back from the display cache**, and that is what makes
+// REQ-071's first acceptance condition ("at exactly the displayed contour elevations") structural
+// rather than a claim. `GenerateContours` is a pure function of (verts, indices, levels); this passes
+// the same triangulation pointer and the same resolved style the display pass resolved, through the
+// same `ResolveSurfaceContourLevels`, so the output is byte-identical to what is on screen. The cache
+// holds the FLATTENED GL_LINES form, which has thrown away the per-contour offsets and the closed
+// flag a polyline needs — so reading it back would be both harder and weaker.
+//
+// **The result is deliberately unlinked from the surface** (REQ-071's statement, not an oversight):
+// no back-reference is stored in either direction, so a later rebuild does not touch these polylines
+// and erasing the surface does not remove them. There is simply nothing joining them.
+
+/// Append one `ContourResult` as polylines carrying \p attrs. Returns how many were created.
+int AppendContoursAsPolylines(AppCommandState& st, const ContourResult& r, const EntityAttributes& attrs) {
+  int made = 0;
+  for (int c = 0; c < r.contourCount(); ++c) {
+    const int begin = r.offsets[static_cast<size_t>(c)];
+    const int end = r.offsets[static_cast<size_t>(c) + 1];
+    if (end - begin < 2)
+      continue;  // a one-vertex contour is a point, not a polyline — see contourgen on the peak case
+    if (st.userPolylineOffsets.empty())
+      st.userPolylineOffsets.push_back(0);
+    const int baseVert = st.userPolylineOffsets.back();
+    for (int v = begin; v < end; ++v) {
+      st.userPolylineVerts.push_back(r.vertsXyz[static_cast<size_t>(v) * 3 + 0]);
+      st.userPolylineVerts.push_back(r.vertsXyz[static_cast<size_t>(v) * 3 + 1]);
+      st.userPolylineVerts.push_back(r.vertsXyz[static_cast<size_t>(v) * 3 + 2]);
+    }
+    st.userPolylineOffsets.push_back(baseVert + (end - begin));
+    // Straight through from the generator: a contour that closed in the surface's interior becomes a
+    // closed polyline, and one that ran off the border stays open. Re-deriving it from the vertices
+    // would mean comparing floats for the seam, which is what contourgen avoids in the first place.
+    st.userPolylineClosed.push_back(r.closed[static_cast<size_t>(c)] ? 1u : 0u);
+    st.userPolylineAttrs.push_back(attrs);
+    ++made;
+  }
+  return made;
+}
+
+void ExecuteExtractCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  SurfaceStyles::EnsureStandard(st.surfaceStyles);
+
+  const std::vector<std::string> f = SplitCommaFields(StringUtil::trimCopy(args));
+  std::string surfaceName = f.empty() ? std::string() : f[0];
+  const std::string layerArg = f.size() > 1 ? f[1] : std::string();
+
+  if (f.size() > 2) {
+    log.push_back("EXTRACT — usage: EXTRACT <surface>[, <layer>]");
+    return;
+  }
+
+  // A drawing with exactly one surface does not need to be told which one. With more than one, the
+  // command names them rather than guessing — picking silently is how the wrong surface gets baked.
+  if (surfaceName.empty()) {
+    if (st.cadSurfaces.size() == 1) {
+      surfaceName = st.cadSurfaces[0].name;
+    } else if (st.cadSurfaces.empty()) {
+      log.push_back("EXTRACT — the drawing has no surfaces.");
+      return;
+    } else {
+      std::string names;
+      for (const CadSurface& s : st.cadSurfaces)
+        names += (names.empty() ? "" : ", ") + s.name;
+      log.push_back("EXTRACT — usage: EXTRACT <surface>[, <layer>]. Surfaces: " + names + ".");
+      return;
+    }
+  }
+
+  const int si = FindSurfaceIndex(st, surfaceName);
+  if (si < 0) {
+    log.push_back("EXTRACT — no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  const CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
+  if (!surf.tin || surf.tin->indices.empty()) {
+    log.push_back("EXTRACT — \"" + surf.name + "\" has never been built; nothing to extract.");
+    return;
+  }
+
+  const SurfaceStyle* stylePtr = SurfaceStyles::Resolve(st.surfaceStyles, surf.styleName);
+  const SurfaceStyle style = stylePtr ? *stylePtr : SurfaceStyles::StandardSurfaceStyle();
+
+  // REQ-071's last acceptance condition. Refused BEFORE anything is created, and the message says
+  // which style switched them off — "nothing happened" with no reason is the exact silence REQ-201
+  // exists to prevent.
+  if (!style.minorContour.visible && !style.majorContour.visible) {
+    log.push_back("EXTRACT — \"" + surf.name + "\" has both contour components switched off in style \"" +
+                  style.name + "\"; nothing extracted. Turn contours on in the Surface Style editor first.");
+    return;
+  }
+
+  const SurfaceContourLevels levels = ResolveSurfaceContourLevels(*surf.tin, style);
+  if (levels.suppressed) {
+    // ASSUMPTION-2: a style whose interval is too fine to DISPLAY is displaying no contours, so
+    // extracting some would be exactly the "silently extracting a hidden interval" the requirement
+    // forbids — and it is the runaway the display cap exists to prevent.
+    log.push_back("EXTRACT — \"" + surf.name + "\" style \"" + style.name + "\" asks for " +
+                  std::to_string(levels.levelsAsked) +
+                  " contour levels, more than are drawn, so none are displayed and none were "
+                  "extracted. Use a larger contour interval.");
+    return;
+  }
+  if (levels.empty()) {
+    log.push_back("EXTRACT — \"" + surf.name + "\" displays no contours at style \"" + style.name +
+                  "\"'s intervals over its " + SurfaceStyles::FormatFt(levels.minZ) + " to " +
+                  SurfaceStyles::FormatFt(levels.maxZ) + " ft range; nothing extracted.");
+    return;
+  }
+
+  // Resolve the target layer BEFORE the snapshot, so an invalid name refuses without leaving an undo
+  // step that did nothing.
+  std::string layer = st.currentLayer.empty() ? std::string("0") : st.currentLayer;
+  bool layerCreated = false;
+  if (!layerArg.empty()) {
+    if (const CadLayerRow* row = FindDrawingLayerRowCi(st, layerArg)) {
+      layer = row->name;  // the existing spelling, so a case variant does not become a second layer
+    } else {
+      if (!ValidNewLayerNameChars(StringUtil::trimCopy(layerArg))) {
+        log.push_back("EXTRACT — \"" + layerArg +
+                      "\" is not a valid layer name (empty, too long, or reserved characters).");
+        return;
+      }
+      layer = StringUtil::trimCopy(layerArg);
+      layerCreated = true;
+    }
+  }
+
+  // ONE snapshot for the whole command, so EXTRACT is a single undo step even when it also created
+  // the layer. CadAddDrawingLayer is deliberately not used: it pushes a snapshot of its own, which
+  // would make undoing an extraction take two presses.
+  PushUndoSnapshot(st, "Extract contours");
+  if (layerCreated) {
+    CadLayerRow row;
+    row.name = layer;
+    st.drawingLayerTable.push_back(row);
+  }
+
+  const auto attrsFor = [&](const SurfaceComponentStyle& comp) {
+    EntityAttributes a;
+    a.layer = layer;
+    // Q2: the extracted set looks like what was on screen, so a major contour stays heavier than a
+    // minor one once it is ordinary geometry. A component's "ByLayer" now resolves against the
+    // POLYLINE's layer, which is correct — it is an ordinary entity from here on.
+    a.color = comp.color;
+    a.linetype = comp.linetype;
+    a.lineweightMm = comp.lineweightMm;
+    a.transparency = -1.f;
+    return a;  // id stays 0; the next EnsureEntityIds sweep assigns it, like any created entity
+  };
+
+  ContourResult r;
+  int minorMade = 0, majorMade = 0;
+  if (!levels.minor.empty()) {
+    GenerateContours(surf.tin->vertsXyz, surf.tin->indices, levels.minor, &r);
+    minorMade = AppendContoursAsPolylines(st, r, attrsFor(style.minorContour));
+  }
+  if (!levels.major.empty()) {
+    GenerateContours(surf.tin->vertsXyz, surf.tin->indices, levels.major, &r);
+    majorMade = AppendContoursAsPolylines(st, r, attrsFor(style.majorContour));
+  }
+  BumpCadGpuCache(st);
+
+  // Levels existed but every contour at them was degenerate — a level sitting exactly on a peak is a
+  // single point, not a polyline (see contourgen). Reported as the nothing it is, rather than as
+  // "0 polyline(s)" wedged into a sentence that reads as a success.
+  if (minorMade + majorMade == 0) {
+    log.push_back("EXTRACT — \"" + surf.name + "\" produced no contour polylines at style \"" +
+                  style.name + "\"'s intervals; nothing was created.");
+    return;
+  }
+
+  // REQ-201, and Q3: BOTH intervals, each with its own count. Reporting one interval after
+  // extracting two sets would be true and misleading at the same time.
+  std::string msg = "EXTRACT — \"" + surf.name + "\": ";
+  if (minorMade > 0)
+    msg += std::to_string(minorMade) + " minor contour(s) at " +
+           SurfaceStyles::FormatFt(style.minorIntervalFt) + " ft";
+  if (minorMade > 0 && majorMade > 0)
+    msg += ", ";
+  if (majorMade > 0)
+    msg += std::to_string(majorMade) + " major contour(s) at " +
+           SurfaceStyles::FormatFt(style.majorIntervalFt) + " ft";
+  msg += " — " + std::to_string(minorMade + majorMade) + " polyline(s) on layer \"" + layer + "\"" +
+         (layerCreated ? " (created)" : "") + ".";
+  log.push_back(msg);
+
+  // Q4: a half-enabled style extracts the half that is displayed and SAYS which half it skipped,
+  // rather than refusing work the user can plainly see on screen.
+  if (!style.minorContour.visible)
+    log.push_back("EXTRACT — minor contours are switched off in style \"" + style.name +
+                  "\" and were not extracted.");
+  if (!style.majorContour.visible)
+    log.push_back("EXTRACT — major contours are switched off in style \"" + style.name +
+                  "\" and were not extracted.");
+  log.push_back("EXTRACT — the new polylines are ordinary geometry and are not linked to the "
+                "surface: rebuilding or erasing it leaves them unchanged.");
+}
+
+} // namespace
+
 bool CadRenameDrawingLayer(AppCommandState& st, const std::string& oldNameRaw, const std::string& newNameRaw,
                            std::string* err) {
   const std::string oldN = StringUtil::trimCopy(oldNameRaw);
@@ -15068,6 +15319,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         BumpCadGpuCache(st);
         log.push_back("Plot scale: 1 plotted inch = " + std::to_string(pv) + " model units.");
       }
+      return;
+    }
+    // REQ-071. `EXTRACT <surface>[, <layer>]` — comma-separated, because a surface name and a layer
+    // name both routinely contain spaces.
+    if (plotTok == "extract") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ExecuteExtractCommand(st, StringUtil::trimCopy(rest), log);
       return;
     }
     // REQ-070. `SURFSTYLE [<verb> …]` — bare opens the editor; the verbs are what a headless

@@ -1,0 +1,147 @@
+# REQ-071 — EXTRACT bakes the displayed contours into ordinary polylines (TASK-087, ADR-028 (b)).
+#
+# Every one of REQ-071's five acceptance conditions is about what happens to the DOCUMENT, and three
+# of them are about what happens to it LATER — after a second extraction, after a rebuild, after the
+# surface is erased. None of that is reachable from a unit test, which is why this file carries the
+# whole acceptance set.
+#
+# **On the numbers.** `samples/surface-demo.gs` spans 103.52 to 136.70 ft, so at Standard's 2 ft / 10
+# ft intervals it displays 21 minor and 5 major contours — 26 polylines. Those are properties of the
+# fixture, read out of the running program with DUMP SURFACES, and they move if the sample's points
+# ever do.
+#
+# **The load-bearing assertion is EXTRACTMATCHESDISPLAY**, not the counts. A wrong-but-plausible
+# extraction — one interval out, or the style's PREVIOUS contours — has exactly the same polyline
+# count as a correct one. That check compares the display cache's own contour segments against the
+# segments the created polylines carry, vertex for vertex, which is the pair REQ-071 says must be
+# equal.
+
+OPEN samples/surface-demo.gs
+
+CMD SURFACECREATE Test EG, Existing Ground
+EXPECT SURFACES 1
+EXPECT POLYLINES 0
+EXPECT SURFACEMINORSEGS 867
+EXPECT SURFACEMAJORSEGS 203
+CHECK ALL
+
+# --- extraction produces polylines at exactly the displayed contour elevations --------------------
+CMD EXTRACT Test EG
+EXPECT POLYLINES 26
+EXPECT LOG "21 minor contour(s) at 2 ft"
+EXPECT LOG "5 major contour(s) at 10 ft"
+EXPECT LOG "26 polyline(s) on layer"
+# The condition itself: what was created IS what is displayed.
+EXPECT EXTRACTMATCHESDISPLAY 1
+# ...and extracting did not disturb the display it copied from.
+EXPECT SURFACEMINORSEGS 867
+EXPECT SURFACEMAJORSEGS 203
+EXPECT SURFACETINGEN 1
+CHECK ALL
+
+# --- proof that the check above has teeth -----------------------------------------------------------
+# EXTRACTMATCHESDISPLAY would be worthless if it could only ever return 1. Moving the style's interval
+# makes the DISPLAY show different contours while the extracted polylines stay as they were — the two
+# sides genuinely diverge — and the check must notice. Putting the interval back makes them agree
+# again, which also demonstrates the extracted geometry did not follow the style: it is unlinked.
+CMD SURFSTYLE INTERVAL Standard, 1, 5
+EXPECT EXTRACTMATCHESDISPLAY 0
+EXPECT POLYLINES 26
+CMD SURFSTYLE INTERVAL Standard, 2, 10
+EXPECT EXTRACTMATCHESDISPLAY 1
+CHECK ALL
+
+# --- the created count and interval are reported (REQ-201) -----------------------------------------
+# BOTH intervals, each with its own count. A report naming one interval after extracting two sets
+# would be true and misleading at once, which is the failure REQ-201 exists to prevent.
+EXPECT LOG "not linked to the surface"
+
+# --- extracting twice produces two independent sets ------------------------------------------------
+# Asserted as a doubling AND, below, by erasing one set and finding the other intact — "52 polylines"
+# alone would also be satisfied by one set stored twice.
+CMD EXTRACT Test EG, C-TOPO
+EXPECT POLYLINES 52
+EXPECT LOG "(created)"
+CHECK ALL
+
+# --- EXTRACT is ONE undo step, even when it also created a layer -------------------------------------
+# CadAddDrawingLayer pushes a snapshot of its own, so the obvious implementation — create the layer,
+# then create the polylines — costs the user two presses of undo to reverse one command. This asserts
+# the single-snapshot choice: one UNDO removes the whole extraction, and REDO puts it back.
+UNDO
+EXPECT POLYLINES 26
+REDO
+EXPECT POLYLINES 52
+CHECK ALL
+
+# --- rebuilding the surface afterwards leaves already-extracted polylines untouched ------------------
+# The central "deliberately not linked" claim. The rebuild REPLACES the triangulation wholesale
+# (SURFACETINGEN moves), and the polylines must not move with it. Asserted on the geometry, not only
+# the count: a rebuild that regenerated them would leave the count identical.
+CMD SURFACEREBUILD Test EG
+EXPECT SURFACETINGEN 2
+EXPECT POLYLINES 52
+CHECK ALL
+
+# --- erasing the surface does not remove them -------------------------------------------------------
+# REQ-071 states this separately from the rebuild case, so it is asserted separately. After the
+# surface is gone there is no display cache left to compare against — the polylines are simply
+# ordinary geometry now, which is the whole point.
+CMD SURFACEDELETE Test EG
+EXPECT SURFACES 0
+EXPECT POLYLINES 52
+CHECK ALL
+
+# --- and they are ordinary geometry: they survive save -> reopen ------------------------------------
+# "normal drawing geometry — editable, snappable, exportable". A polyline that was secretly special
+# would not round-trip as one.
+SAVEAS %OUT%/extracted-a.gs
+OPEN %OUT%/extracted-a.gs
+EXPECT POLYLINES 52
+EXPECT SURFACES 0
+SAVEAS %OUT%/extracted-b.gs
+EXPECT SAMEFILE %OUT%/extracted-a.gs %OUT%/extracted-b.gs
+CHECK ALL
+
+# --- contours disabled: creates nothing, and says so -------------------------------------------------
+# REQ-071's last acceptance condition, and the reason it is stated at all: silently extracting an
+# interval the user cannot see is worse than refusing.
+OPEN samples/surface-demo.gs
+CMD SURFACECREATE Test EG, Existing Ground
+CMD SURFSTYLE HIDE Standard, minor
+CMD SURFSTYLE HIDE Standard, major
+EXPECT SURFACEMINORSEGS 0
+EXPECT SURFACEMAJORSEGS 0
+CMD EXTRACT Test EG
+EXPECT POLYLINES 0
+EXPECT LOG "both contour components switched off"
+EXPECT LOG "nothing extracted"
+CHECK ALL
+
+# --- one component off: the other is extracted, and the skip is reported ------------------------------
+# Refusing here would refuse work the user can plainly see on screen, so the enabled half is taken and
+# the message names the half that was not.
+CMD SURFSTYLE SHOW Standard, major
+CMD EXTRACT Test EG
+EXPECT POLYLINES 5
+EXPECT LOG "5 major contour(s) at 10 ft"
+EXPECT LOG "minor contours are switched off"
+EXPECT EXTRACTMATCHESDISPLAY 1
+CHECK ALL
+
+# --- an interval too fine to display is too fine to extract ------------------------------------------
+# ASSUMPTION-2. The display path already refuses this interval, so extracting from it would be exactly
+# the "silently extracting a hidden interval" the requirement forbids — and it is the runaway the
+# display cap exists to prevent in the first place.
+CMD SURFSTYLE INTERVAL Standard, 0.0001, 0.001
+EXPECT SURFACEMAJORSEGS 0
+CMD EXTRACT Test EG
+EXPECT POLYLINES 5
+EXPECT LOG "more than are drawn"
+CHECK ALL
+
+# --- refusals by name, not by crash --------------------------------------------------------------------
+CMD EXTRACT No Such Surface
+EXPECT LOG "no surface named"
+EXPECT POLYLINES 5
+CHECK ALL
