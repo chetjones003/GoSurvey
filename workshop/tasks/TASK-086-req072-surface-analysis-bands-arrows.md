@@ -248,6 +248,19 @@ ranges equal the table's, and change with it" cannot drift. One source, two read
   Full Catch2 suite green: **492 cases / 214,362 assertions**. `ctest` deliberately NOT re-run this
   round — another session is driving `gosurvey_headless` in this same tree, and the transcript tests
   share `build/headless-out`. It must be run before step 2 is closed.
+  **Verified again on a clean base 2026-08-22.** The suite run above shared a working tree with
+  TASK-087's then-uncommitted changes, which proves the two coexist but not that step 2 stands alone.
+  So the commit was cherry-picked onto `upstream/beta` in a separate worktree (`84e3843` on `16385ea`,
+  after step 1 merged as PR #75), built from scratch and re-run: **492 cases / 214,362 assertions**,
+  byte-identical to the shared-tree figure.
+
+  **`ctest` run and green, 2026-08-22 — the last outstanding item above is now closed.** The reason it
+  was deferred was that another session was driving `gosurvey_headless` in this tree and the transcript
+  tests share `build/headless-out`; that session's work (TASK-087 / REQ-071) merged as PR #76, so the
+  tree is no longer shared. Re-run on this branch — step 2 cherry-picked onto `upstream/beta` at
+  `6bf6b71`, which already carries step 1 (#75) and REQ-071 (#76) — **521/521 ctest**, with the Catch2
+  figure unchanged at 492 cases / 214,362 assertions.
+
 ## 9. Self-verification
 - [ ] build-project
 - [ ] architecture-review — **note the ADR-028 (h) amendment explicitly**; a reviewer reading ADR-028
