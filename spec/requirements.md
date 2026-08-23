@@ -2629,6 +2629,47 @@ requirements is a planning failure, not a sign of rigor.
                control did not highlight either). Status stays `accepted` rather than advancing to
                `implemented` until someone has watched it work.
 
+### REQ-090 — Survey point rollover readout
+- Purpose:     read a point's number and coordinates without clicking it or opening the point list —
+               the same question REQ-089 answers for a surface, asked far more often
+- Priority:    should
+- Type:        functional
+- Statement:   When the model-space cursor rests over a survey point's marker and has not moved for
+               the REQ-089 dwell period, a readout appears beside the cursor giving the point
+               **number**, its **layer**, and its **northing, easting and elevation**.
+
+               **Northing and easting are reported in WORLD coordinates.** Survey points are stored
+               local (`world = local + worldDocumentOrigin`, architecture §11 / `CadCoordinateFrame`),
+               so the readout resolves through `CadCoord::WorldXFromLocal` / `WorldYFromLocal` at
+               `surveyPointDisplayPrecision` — the same conversion and the same precision the
+               Properties panel already applies to the same point. Elevation is absolute and is NOT
+               rebased, because the local-storage rebase is X/Y-only.
+
+               **A survey point takes precedence over a surface.** Where the cursor rests on a point
+               that also lies inside a surface, the point's readout is shown and REQ-089's is not —
+               the same priority the pick funnel already applies, and the alternative (stacking both
+               blocks) would put a four-row panel between the user and the marker they are pointing
+               at. It reuses REQ-089's dwell, suppression rules and panel; there is one readout
+               beside the cursor, never two.
+- Acceptance:
+  - resting on a point marker for the dwell period shows the readout; moving the cursor hides it
+    immediately and re-arms the dwell;
+  - **northing and easting equal what the Properties panel shows for the same point, in a drawing
+    whose `worldDocumentOrigin` is NON-ZERO** — a local/world mix-up is invisible on a test drawing
+    near the origin and wrong by hundreds of thousands of feet on a real state-plane one, so the
+    condition names the case that can actually fail;
+  - elevation equals the point's stored elevation at `surveyPointDisplayPrecision`;
+  - the number shown is `SurveyPoint::id`;
+  - resting on a point that also lies inside a surface shows the point's readout and only that;
+  - no readout appears while a command is active, while a gesture is in progress, or in paper space.
+- Owner-layer: UI
+- Status:      accepted
+- Revisions:   2026-08-23 — initial. Widens the readout REQ-089 introduced, which
+               D-2026-08-23-a (4) scoped to surfaces with "a later requirement can widen it if the
+               readout proves useful". Requires no ADR for the same reasons REQ-089 did not, and one
+               fewer: the hit test already exists and already runs every frame
+               (`viewportHoverSurveyPointIndex`), so this adds no query at all.
+
 ---
 
 ## Performance requirements
