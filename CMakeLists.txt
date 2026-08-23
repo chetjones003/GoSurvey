@@ -245,6 +245,7 @@ add_executable(GoSurvey
   src/ui/CadUi_SurfaceStyles.cpp
   src/ui/CadUi_FeatureLineElev.cpp
   src/ui/CadUi_UpdateDialog.cpp
+  src/ui/CadUi_SignInGate.cpp
   src/ui/SplashScreen.cpp
   src/ui/ImGuiLayout.cpp
   src/ui/RichTextEdit.cpp
@@ -262,10 +263,16 @@ add_executable(GoSurvey
   src/platform/WinFileDialogs.cpp
   src/platform/GpuPreference.cpp
   src/platform/HttpFetch.cpp
+  src/platform/OAuthListener.cpp
+  src/platform/CredentialStore.cpp
 
   # Telemetry (REQ-080, ADR-032)
   src/telemetry/TelemetryPing.cpp
   src/telemetry/TelemetryService.cpp
+
+  # Accounts sign-in (REQ-091, ADR-037)
+  src/auth/AuthPing.cpp
+  src/auth/AuthService.cpp
 
   # Update check (REQ-077/078, ADR-029)
   src/update/UpdateService.cpp
@@ -285,6 +292,7 @@ target_include_directories(GoSurvey PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
   ${CMAKE_CURRENT_SOURCE_DIR}/src/font
   ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/auth
   ${CMAKE_CURRENT_SOURCE_DIR}/src/update
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party
   ${NLOHMANN_JSON_INCLUDE}
@@ -301,7 +309,9 @@ if(WIN32)
   # winhttp + bcrypt: the REQ-077/078 update check's HTTPS fetch and SHA-256 (ADR-029 (e)).
   # Both ship with Windows, which is why this adds no third-party dependency under REQ-300.
   # ole32 is for the Network List Manager connectivity query in HttpFetch.cpp (REQ-077).
-  target_link_libraries(GoSurvey PRIVATE comdlg32 winhttp bcrypt ole32)
+  # ws2_32 is the REQ-091 loopback OAuth listener's raw Winsock socket calls (ADR-037 (b));
+  # advapi32 is Windows Credential Manager (ADR-037 (c)). Both ship with Windows.
+  target_link_libraries(GoSurvey PRIVATE comdlg32 winhttp bcrypt ole32 ws2_32 advapi32)
   target_sources(GoSurvey PRIVATE src/platform/WinFrameControls.cpp)
 
   # Embed the application icon so Windows shows it in Explorer, the taskbar,
@@ -530,6 +540,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/HoverDwellTests.cpp
     tests/UpdateCheckTests.cpp
     tests/TelemetryPingTests.cpp
+    tests/AuthPingTests.cpp
     tests/GsMigrateTests.cpp
     tests/GpuPreferenceTests.cpp
     # REQ-204: one deliberately-broken fixture per document invariant. This is the second present-day
@@ -598,6 +609,11 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-080 telemetry. Pure by ADR-032 (b) — payload building, event decision, rate limiting —
     # no network, so the timing logic is testable without HttpFetch or WinHTTP.
     src/telemetry/TelemetryPing.cpp
+    # REQ-091 accounts sign-in. Pure by ADR-037 (d) — PKCE construction, base64url, the authorize
+    # URL, and the silent-refresh-vs-interactive decision — no network/window, same split as
+    # TelemetryPing above. The BCrypt SHA-256 call PKCE needs is in HttpFetch and is exercised by
+    # AuthService, not by this pure module or its tests.
+    src/auth/AuthPing.cpp
   )
   target_include_directories(GoSurveyTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -615,6 +631,7 @@ if(GOSURVEY_BUILD_TESTS)
     ${CMAKE_CURRENT_SOURCE_DIR}/src/render
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
     ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/auth
     ${CMAKE_CURRENT_SOURCE_DIR}/src/update
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util
     # For FuzzHarnessTests, which includes headless/FuzzGenerator.hpp and headless/Minimizer.hpp.

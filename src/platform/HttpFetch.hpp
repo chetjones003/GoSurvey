@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 /// HTTPS fetch and file hashing for the REQ-077/REQ-078 update check (ADR-029 (e)).
 ///
@@ -29,10 +30,15 @@ bool HasInternetConnectivity();
 /// Returns false on any failure — unresolvable host, timeout, TLS failure, or any status other
 /// than 200 — with a short reason in \p errorOut. For the REQ-077 startup check that reason is
 /// logged and never shown (ADR-029 (h)).
+///
+/// \p bearerToken, when non-empty, is sent as an `Authorization: Bearer <token>` header — used by
+/// REQ-092's license lookup (`AuthService::FetchLicenseTier`), which is the only caller that
+/// needs a header at all.
 bool HttpGetString(const std::string& url,
                    int               timeoutMs,
                    std::string&      out,
-                   std::string&      errorOut);
+                   std::string&      errorOut,
+                   const std::string& bearerToken = std::string());
 
 /// Downloads \p url to \p destPathUtf8, overwriting it.
 ///
@@ -56,6 +62,16 @@ bool HttpDownloadFile(const std::string&                              url,
 bool ComputeFileSha256(const std::string& pathUtf8,
                        std::string&       hexOut,
                        std::string&       errorOut);
+
+/// Computes the SHA-256 digest of \p data as raw bytes (not hex).
+///
+/// Used by REQ-091's PKCE code challenge (ADR-037 (d)): the challenge is
+/// BASE64URL(SHA256(code_verifier)), and base64url needs the raw digest, not a hex string. Shares
+/// the same BCrypt provider as `ComputeFileSha256`; this is the in-memory counterpart for a
+/// verifier string rather than a file on disk.
+bool ComputeSha256Bytes(const std::vector<unsigned char>& data,
+                        std::vector<unsigned char>&       digestOut,
+                        std::string&                      errorOut);
 
 /// POSTs a JSON body to \p url and returns true on 2xx, false on any other status or network error.
 ///

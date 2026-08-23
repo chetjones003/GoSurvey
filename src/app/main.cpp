@@ -28,6 +28,7 @@
 #include "ImGuiLayout.hpp"
 #include "UpdateService.hpp"
 #include "TelemetryService.hpp"
+#include "AuthService.hpp"
 #include "Version.hpp"
 
 #include <ctime>
@@ -272,9 +273,26 @@ int main()
 
   // REQ-080: anonymous telemetry. Fire-and-forget: does not gate the session, no UI, logs and
   // swallows network errors. Runs independent of the update check in its own worker.
-  std::unique_ptr<telemetry::TelemetryTask> telemetryTask =
-      telemetry::BeginTelemetryPing(GOSURVEY_VERSION_FULL,
-                                    cmd.updatePrefs.useBetaChannel ? "beta" : "stable");
+  //
+  // (Amended 2026-08-23, D-2026-08-23-e): no longer fired here, at raw process start. The
+  // payload now carries the REQ-091 signed-in email when known, and sign-in state is not yet
+  // resolved at this exact instant — silent refresh below hasn't run yet. So firing is deferred
+  // to the point the auth gate first resolves (see the poll loop), which costs no perceptible
+  // delay since the gate already blocks all other interaction until then. `telemetryFired`
+  // ensures this happens exactly once per launch, same as before.
+  std::unique_ptr<telemetry::TelemetryTask> telemetryTask;
+  bool                                      telemetryFired   = false;
+  const std::string telemetryChannel = cmd.updatePrefs.useBetaChannel ? "beta" : "stable";
+
+  // REQ-091: accounts sign-in. The heavier async state (the task, holding a thread) stays local
+  // here, same split as updateState/telemetryTask; only display flags live on AppCommandState.
+  // `authLastAttemptInteractive` distinguishes "the automatic startup silent-refresh found no
+  // stored session" (ordinary logged-out state, no error shown) from "the user clicked Sign In
+  // and it failed" (REQ-201: shown, not swallowed) — both complete through the same poll below.
+  std::unique_ptr<auth::AuthTask> authTask;
+  bool                            authLastAttemptInteractive = false;
+  authTask                                                   = auth::BeginSilentRefresh();
+  cmd.authBusy                                                = true;
   const bool haveSavedDockIni = ImGuiLayout_ConfigureIniPath(cmd);
   std::vector<std::string> cmdLog;
   cmdLog.push_back("GoSurvey CAD shell ready.");
@@ -421,6 +439,57 @@ int main()
     // the dirty check is the point — one code path decides whether work is at risk.
     update::PollUpdateTask(updateState);
     telemetry::PollTelemetryTask(telemetryTask);
+
+    // REQ-091: sign-in requests from the Settings panel. Ignored while a task is already in
+    // flight rather than queued — a second click while one attempt is running is a double-click,
+    // not two sign-ins.
+    if (cmd.authSignOutRequested)
+    {
+      cmd.authSignOutRequested = false;
+      auth::SignOut();
+      cmd.authSignedIn = false;
+      cmd.authEmail.clear();
+      cmd.authError.clear();
+    }
+    if (cmd.authSignInRequested)
+    {
+      cmd.authSignInRequested = false;
+      if (!authTask)
+      {
+        authTask                     = auth::BeginInteractiveSignIn();
+        authLastAttemptInteractive   = true;
+        cmd.authBusy                 = true;
+        cmd.authInteractiveBusy      = true;
+        cmd.authError.clear();
+      }
+    }
+    if (authTask && authTask->done.load(std::memory_order_acquire))
+    {
+      cmd.authBusy            = false;
+      cmd.authInteractiveBusy = false;
+      cmd.authSignedIn        = authTask->ok;
+      cmd.authEmail    = authTask->email;
+      // The silent startup refresh finding no stored session is the ordinary logged-out state,
+      // not a reported error (REQ-091 acceptance: an expired/revoked token just falls back to
+      // interactive sign-in). Only a user-initiated attempt's failure is shown.
+      cmd.authError    = (!authTask->ok && authLastAttemptInteractive) ? authTask->error : "";
+      // REQ-091 (amended): the launch gate closes on a successful sign-in, OR when there was no
+      // internet at all to attempt one with — never on an ordinary "no stored session" failure
+      // while online, which is what leaves the gate open to show the blocking prompt.
+      if (authTask->ok || authTask->skippedNoNetwork)
+        cmd.authGateResolved = true;
+      authTask.reset();
+    }
+    // REQ-080 (amended, D-2026-08-23-e): fires exactly once per launch, right after the auth
+    // gate first resolves — the earliest point sign-in state is actually known. `cmd.authEmail`
+    // is empty for a signed-out user (offline-skip case included), so this is a no-op change in
+    // payload shape for anyone not signed in.
+    if (cmd.authGateResolved && !telemetryFired)
+    {
+      telemetryFired = true;
+      telemetryTask   = telemetry::BeginTelemetryPing(
+          GOSURVEY_VERSION_FULL, telemetryChannel, cmd.authSignedIn ? cmd.authEmail : std::string());
+    }
     if (updateState.awaitingUnsavedCheck)
     {
       updateState.awaitingUnsavedCheck = false;
@@ -778,6 +847,10 @@ int main()
     DrawAlignResultsWindow(cmd, cmdLog);
     DrawCloseConfirmModal(cmd, cmdLog);
     DrawUpdateDialog(cmd, updateState);
+    // REQ-091 (amended): blocks every launch until authGateResolved — signed in, or no internet
+    // at all to sign in with. Stacks beneath the update dialog's modal (both gate the session;
+    // ImGui's modal stack lets whichever opened first take input priority).
+    DrawSignInGate(cmd);
     // The dialog writes skip state into cmd.updatePrefs; the throttle anchor is written by the
     // check itself. Sync the rest back so SaveUserStartupPrefs persists both.
     cmd.updatePrefs.enabled        = updateState.prefs.enabled;

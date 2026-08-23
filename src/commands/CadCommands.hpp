@@ -1170,6 +1170,22 @@ struct AppCommandState {
   /// Only the persisted settings live here — the in-flight worker state is `update::UpdateState`,
   /// owned by the application loop, so `AppCommandState` gains no thread and stays copyable.
   update::UpdatePrefs updatePrefs;
+  /// REQ-091: sign-in display state and UI requests. Only flags/strings live here — the in-flight
+  /// worker (`auth::AuthTask`, holding a thread) is owned by the application loop, same split as
+  /// `updatePrefs` above, so `AppCommandState` gains no thread and stays copyable.
+  bool        authSignedIn   = false;
+  bool        authBusy       = false;   ///< an interactive sign-in or silent refresh is in flight
+  bool        authInteractiveBusy = false;  ///< true only while the browser-based flow is running,
+                                            ///< for the "Waiting for browser..." button label
+  std::string authEmail;                ///< display only; the accounts-worker is the trust boundary
+  std::string authError;                ///< set only after a user-initiated sign-in attempt fails
+  bool        authSignInRequested  = false;  ///< set by the Settings panel's Sign In button
+  bool        authSignOutRequested = false;  ///< set by the Settings panel's Sign Out button
+  /// REQ-091 (amended): the launch-time sign-in gate (DrawSignInGate) blocks the session every
+  /// launch until this is true. Set true on a successful sign-in (interactive or silent) OR when
+  /// there is no internet connectivity at all (same offline exception REQ-077's update gate
+  /// uses) — never re-checked mid-session, so signing out later does not reopen the gate.
+  bool        authGateResolved = false;
   std::vector<SelectedEntity> trimCutters;
   /// Draft endpoints while TRIM \p L waits for second point (rubber band). First shot completes trim and clears TRIM.
   float trimCutInfP1x = 0.f, trimCutInfP1y = 0.f, trimCutInfP2x = 0.f, trimCutInfP2y = 0.f;

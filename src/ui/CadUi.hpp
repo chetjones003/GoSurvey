@@ -133,6 +133,11 @@ namespace update { struct UpdateState; }
 /// the background check is running — the check itself is never shown to the user.
 void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd);
 
+/// REQ-091 (amended): blocks the session every launch until \c cmd.authGateResolved — signed in,
+/// or no internet connectivity at all (REQ-077's same offline exception). Draws nothing once
+/// resolved; never re-opens later in the same session (e.g. after a manual sign-out).
+void DrawSignInGate(AppCommandState& cmd);
+
 /// Confirms a DWG export before anything is written, stating what the Phase 1 converter route
 /// drops (REQ-052). Writes to \c cmd.dwgPendingExportPath only when the user accepts.
 void DrawDwgLossyExportModal(AppCommandState& cmd, std::vector<std::string>& log);

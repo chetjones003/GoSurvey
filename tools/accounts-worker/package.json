@@ -1,0 +1,12 @@
+{
+  "name": "gosurvey-accounts-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "REQ-092 license-tier lookup: Cloudflare Worker + D1, JWT-verified. See docs/auth0-setup.md",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "schema": "wrangler d1 execute gosurvey-accounts --remote --file=./schema.sql",
+    "test": "node test.mjs"
+  }
+}

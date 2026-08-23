@@ -9,12 +9,19 @@ CREATE TABLE IF NOT EXISTS pings (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   ts         TEXT NOT NULL,   -- ISO-8601 UTC, full precision, server clock
   day        TEXT NOT NULL,   -- YYYY-MM-DD derived from ts; the dedupe and grouping key
-  install_id TEXT NOT NULL,   -- anonymous 128-bit id from the client; the ONLY identifier
+  install_id TEXT NOT NULL,   -- anonymous 128-bit id from the client; the durable identifier
   event      TEXT NOT NULL CHECK (event IN ('install', 'active')),
   version    TEXT NOT NULL,
   channel    TEXT NOT NULL CHECK (channel IN ('stable', 'beta')),
   os         TEXT NOT NULL,
-  country    TEXT             -- server-derived, country-level; NULL when Cloudflare omits it
+  country    TEXT,            -- server-derived, country-level; NULL when Cloudflare omits it
+  -- REQ-080 amended 2026-08-23 (D-2026-08-23-e): the REQ-091 signed-in email at ping time, or
+  -- NULL when signed out. Deliberately NOT a foreign key into gosurvey-accounts.users — the two
+  -- tables stay structurally independent (ADR-037 (e)); this is a same-shape optional field in
+  -- each, not a join target. If this table already exists (a pre-2026-08-23 deployment), this
+  -- column is added by a one-time `ALTER TABLE pings ADD COLUMN email TEXT;` instead — CREATE
+  -- TABLE IF NOT EXISTS does not retrofit an existing table.
+  email      TEXT
 );
 
 -- An install happens once per identity, ever. Without this a client retrying a ping whose reply
@@ -22,11 +29,16 @@ CREATE TABLE IF NOT EXISTS pings (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_pings_install_once
   ON pings (install_id) WHERE event = 'install';
 
--- An active ping counts once per identity per day. The client already throttles to a rolling
--- 24h, but the client is the thing whose clock and prefs file can be wrong; the store should not
--- depend on it being right.
-CREATE UNIQUE INDEX IF NOT EXISTS ux_pings_active_daily
-  ON pings (install_id, day) WHERE event = 'active';
+-- Amended 2026-08-23 (D-2026-08-23-f): DROPPED by explicit user decision. This used to dedupe
+-- "active" pings to one row per identity per day, matching the client's 24h throttle. The client
+-- throttle is gone too — a ping now fires every launch — so this table now measures LAUNCHES,
+-- not daily-active-identities, and multiple same-day rows for one install_id are expected, not a
+-- bug. Every analytics query in queries.sql already uses COUNT(DISTINCT install_id) rather than
+-- COUNT(*) for "how many users", so this drop does not silently break "active users" numbers —
+-- only a naive COUNT(*) would, and none of the shipped queries do that.
+--
+-- If this table was created before 2026-08-23, drop the index explicitly once:
+--   DROP INDEX IF EXISTS ux_pings_active_daily;
 
 -- Covers the two questions actually asked of this table: "how many active on/since date X" and
 -- "how many installs in period X".

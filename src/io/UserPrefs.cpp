@@ -454,15 +454,13 @@ TelemetryIds GetTelemetryIds() {
 
     if (j.contains("installId") && j["installId"].is_string())
       result.installId = j["installId"].get<std::string>();
-    if (j.contains("lastActivePingDate") && j["lastActivePingDate"].is_string())
-      result.lastActivePingDate = j["lastActivePingDate"].get<std::string>();
   } catch (...) {
   }
 
   return result;
 }
 
-bool UpdateTelemetryIds(const std::string& installId, const std::string& lastActivePingDate) {
+bool UpdateTelemetryIds(const std::string& installId) {
   const auto path = UserPrefsJsonPath();
   nlohmann::json j = nlohmann::json::object();
 
@@ -478,8 +476,6 @@ bool UpdateTelemetryIds(const std::string& installId, const std::string& lastAct
 
   if (!installId.empty())
     j["installId"] = installId;
-  if (!lastActivePingDate.empty())
-    j["lastActivePingDate"] = lastActivePingDate;
 
   try {
     if (const auto dir = path.parent_path(); !dir.empty()) {

@@ -1,9 +1,14 @@
 /**
  * GoSurvey telemetry receiver — REQ-080, ADR-032.
  *
- * A Cloudflare Worker that accepts the client's anonymous ping and appends one row to D1.
+ * A Cloudflare Worker that accepts the client's ping and appends one row to D1.
  * ADR-032 names this shape ("a Cloudflare Worker + KV/D1") and delegates the backend to the
  * operator; the client side is fixed by the ADR and this file must match it, not the reverse.
+ *
+ * Amended 2026-08-23 (D-2026-08-23-e): the ping is no longer unconditionally anonymous. When the
+ * client is signed in (REQ-091) at ping time it includes `email`; when signed out, `email` is an
+ * empty string and the row is exactly as anonymous as before. This was an explicit, user-directed
+ * reversal of REQ-080's original "no PII" promise — see spec/requirements.md and the decision log.
  *
  * Plain JavaScript on purpose. Wrangler runs it with no build step and no node_modules, so
  * nobody needs a TypeScript toolchain to deploy a 120-line endpoint (CLAUDE.md rule 1).
@@ -74,12 +79,22 @@ export default {
       }
     }
 
+    // REQ-080 amended 2026-08-23 (D-2026-08-23-e): the one deliberate, user-directed exception to
+    // "no PII" — the REQ-091 signed-in email, sent only when the client actually has one. Not in
+    // the strict FIELDS whitelist above because it's optional (an empty string is the ordinary
+    // signed-out case, not a rejected request); a present-but-malformed value is dropped to NULL
+    // rather than failing the whole ping, same tolerance gosurvey-accounts' email column uses.
+    const rawEmail = typeof payload.email === 'string' ? payload.email : '';
+    const email =
+      rawEmail && rawEmail.length <= 320 && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)
+        ? rawEmail
+        : null;
+
     const now = new Date();
     const ts = now.toISOString();
     const day = ts.slice(0, 10); // YYYY-MM-DD, the dedupe key
 
-    // Server-derived, country-level only, and never sent by the client — REQ-080 fixes the
-    // payload at exactly five fields and forbids PII, and this stays on the right side of both.
+    // Server-derived, country-level only, and never sent by the client.
     // Deliberately NOT the IP address: coarse geography is useful, a client IP is personal data.
     const country = request.cf?.country ?? null;
 
@@ -89,11 +104,11 @@ export default {
       // cannot inflate the counts. It does NOT dedupe a client that lost its stored id and
       // minted a new one — nothing server-side can, since that is by design a new identity.
       const result = await env.DB.prepare(
-        `INSERT OR IGNORE INTO pings (ts, day, install_id, event, version, channel, os, country)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO pings (ts, day, install_id, event, version, channel, os, country, email)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
         .bind(ts, day, payload.installId, payload.event, payload.version,
-              payload.channel, payload.os, country)
+              payload.channel, payload.os, country, email)
         .run();
 
       // `stored: false` means the row was a duplicate and was ignored. Still a success from the

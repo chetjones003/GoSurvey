@@ -17,26 +17,15 @@ TEST_CASE("TelemetryPing: Unique install IDs are different", "[telemetry]") {
 }
 
 TEST_CASE("TelemetryPing: DecideEventToSend returns install when ID is empty", "[telemetry]") {
-  REQUIRE(DecideEventToSend("", "") == "install");
-  REQUIRE(DecideEventToSend("", "2026-08-16") == "install");
+  REQUIRE(DecideEventToSend("") == "install");
 }
 
-TEST_CASE("TelemetryPing: DecideEventToSend returns active on first active event", "[telemetry]") {
+// REQ-080 amended 2026-08-23 (D-2026-08-23-f): the 24h throttle is gone by explicit user
+// decision — a ping fires every launch, so DecideEventToSend no longer has a "send nothing"
+// case at all once an install id exists.
+TEST_CASE("TelemetryPing: DecideEventToSend always returns active once an install id exists", "[telemetry]") {
   const std::string id = "abc123def456";
-  REQUIRE(DecideEventToSend(id, "") == "active");
-}
-
-TEST_CASE("TelemetryPing: DecideEventToSend returns empty when active ping already sent today", "[telemetry]") {
-  const std::string id = "abc123def456";
-  const std::string today = GetTodayDateString();
-  REQUIRE(DecideEventToSend(id, today) == "");
-}
-
-TEST_CASE("TelemetryPing: IsAfter24Hours detects day boundary", "[telemetry]") {
-  REQUIRE(IsAfter24Hours("2026-08-15", "2026-08-16"));
-  REQUIRE(IsAfter24Hours("2026-08-15", "2026-08-17"));
-  REQUIRE(!IsAfter24Hours("2026-08-16", "2026-08-16"));
-  REQUIRE(!IsAfter24Hours("2026-08-16", "2026-08-15"));
+  REQUIRE(DecideEventToSend(id) == "active");
 }
 
 TEST_CASE("TelemetryPing: BuildTelemetryJson creates valid JSON", "[telemetry]") {
@@ -53,6 +42,22 @@ TEST_CASE("TelemetryPing: BuildTelemetryJson creates valid JSON", "[telemetry]")
   REQUIRE(json.find("\"version\":\"0.5.2\"") != std::string::npos);
   REQUIRE(json.find("\"channel\":\"stable\"") != std::string::npos);
   REQUIRE(json.find("\"os\":\"windows\"") != std::string::npos);
+  // REQ-080 amended (D-2026-08-23-e): email is present but empty for a signed-out user — the
+  // default-constructed payload.email is "", not absent.
+  REQUIRE(json.find("\"email\":\"\"") != std::string::npos);
+}
+
+TEST_CASE("TelemetryPing: BuildTelemetryJson includes the signed-in email when present", "[telemetry]") {
+  TelemetryPayload payload;
+  payload.installId = "abc123def456";
+  payload.event     = "active";
+  payload.version   = "0.5.4";
+  payload.channel   = "stable";
+  payload.os        = "windows";
+  payload.email     = "surveyor@example.com";
+  const std::string json = BuildTelemetryJson(payload);
+
+  REQUIRE(json.find("\"email\":\"surveyor@example.com\"") != std::string::npos);
 }
 
 TEST_CASE("TelemetryPing: BuildTelemetryJson escapes special characters", "[telemetry]") {
@@ -67,21 +72,3 @@ TEST_CASE("TelemetryPing: BuildTelemetryJson escapes special characters", "[tele
   REQUIRE(json.find("id\"with\"quotes") != std::string::npos);
 }
 
-TEST_CASE("TelemetryPing: GetTodayDateString returns YYYY-MM-DD format", "[telemetry]") {
-  const std::string date = GetTodayDateString();
-  REQUIRE(date.length() == 10);
-  REQUIRE(date[4] == '-');
-  REQUIRE(date[7] == '-');
-  for (int i = 0; i < 10; ++i) {
-    if (i != 4 && i != 7) {
-      REQUIRE((date[i] >= '0' && date[i] <= '9'));
-    }
-  }
-}
-
-TEST_CASE("TelemetryPing: IsAfter24Hours handles invalid dates gracefully", "[telemetry]") {
-  REQUIRE(!IsAfter24Hours("", "2026-08-16"));
-  REQUIRE(!IsAfter24Hours("2026-08-16", ""));
-  REQUIRE(!IsAfter24Hours("invalid", "2026-08-16"));
-  REQUIRE(!IsAfter24Hours("2026-08-16", "invalid"));
-}

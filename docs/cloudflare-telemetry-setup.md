@@ -213,11 +213,18 @@ npx wrangler d1 export gosurvey-telemetry --remote --output=telemetry-backup.sql
 
 ## What is stored, and what is not
 
-Per ping, one row: timestamp, day, install id, event, version, channel, os, country.
+Per ping, one row: timestamp, day, install id, event, version, channel, os, country, email.
 
-- **The install id is the only identifier**, and it is a random 128-bit value generated on the
-  client. It is not derived from hardware, user, or machine name, and it cannot be reversed into
-  anything about the person.
+- **The install id is the durable anonymous identifier**, and it is a random 128-bit value
+  generated on the client. It is not derived from hardware, user, or machine name, and it cannot
+  be reversed into anything about the person.
+- **`email` is the one deliberate exception (amended 2026-08-23, D-2026-08-23-e).** When the
+  client is signed in (REQ-091) at the moment a ping fires, `email` carries the signed-in email;
+  when signed out, it is empty and stored as `NULL` — the row is exactly as anonymous as it was
+  before this amendment. A ping's firing and throttling never depend on sign-in state either way.
+  This was an explicit, informed user decision to reverse REQ-080's original no-PII promise, not
+  a defect or a Workshop judgment call — see the decision log (`spec/project.md`,
+  D-2026-08-23-e) and REQ-080's amended text for the reasoning.
 - **No IP address is stored.** The Worker reads Cloudflare's country code and nothing finer. A
   client IP is personal data under GDPR; a country code is not. The previous backend tried to log
   IPs and this one deliberately does not.
@@ -226,10 +233,12 @@ Per ping, one row: timestamp, day, install id, event, version, channel, os, coun
   reintroduce exactly what the line above removes. If you enable it to debug something, turn it
   off again afterwards.
 
-REQ-080 fixes the client payload at exactly five fields and forbids PII. `country` is derived
-server-side and is not part of the payload, so it sits on the right side of that line — but if
-you would rather not have it at all, drop the column from `schema.sql` and the two references in
-`src/index.js`.
+If you deployed this Worker before 2026-08-23, the `email` column does not exist on your table
+yet — `CREATE TABLE IF NOT EXISTS` in `schema.sql` will not retrofit it. Run this once, directly:
+
+```bash
+npx wrangler d1 execute gosurvey-telemetry --remote --command "ALTER TABLE pings ADD COLUMN email TEXT"
+```
 
 ---
 

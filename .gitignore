@@ -70,3 +70,6 @@ imgui.ini
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# --- Wrangler (Cloudflare Workers CLI local cache) ---
+.wrangler/

@@ -2066,42 +2066,80 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: The application generates a random 128-bit anonymous install ID on first run and
   persists it in the user preferences file. It sends two fire-and-forget telemetry events:
   - `install` — exactly once, when the install ID is generated
-  - `active` — at most once per rolling 24-hour period, reporting current usage
+  - `active` — **(amended 2026-08-23, D-2026-08-23-f) on every launch**, reporting current usage.
+    This used to be throttled to at most once per rolling 24-hour period; that throttle is gone
+    by explicit user decision. No `lastActivePingDate` is tracked or persisted any more — there
+    is nothing left to throttle against. The server enforces no per-day dedup either
+    (`ux_pings_active_daily` was dropped from `tools/telemetry-worker/schema.sql`), so this table
+    now measures **launches**, not daily-active-identities; every analytics query in `queries.sql`
+    already used `COUNT(DISTINCT install_id)` rather than `COUNT(*)`, so "how many active users"
+    numbers are unaffected — only a query counting rows would be.
 
   The events are sent via HTTPS POST to a configurable endpoint (the `TelemetryEndpoint`
-  constant) as a minimal JSON payload: `installId`, `event`, `version`, `channel`, `os`.
-  **No personally identifiable information is included.** No username, hostname, email, or
-  hardware fingerprint is sent; the install ID is the only identifier.
+  constant) as a JSON payload: `installId`, `event`, `version`, `channel`, `os`, and
+  `email`.
 
-  The telemetry fires in a detached one-shot worker thread at startup, independent of any
-  other background tasks. It must never block the UI, gate a session, or fail the application
-  if the network is unavailable. Any network error (timeout, DNS failure, unreachable host) is
-  dropped silently. This is the same sanctioned silent-failure exception as REQ-077's update
-  check, for the same reason: a background reporting call has no actionable user recourse for
-  its own failure.
+  **Amended 2026-08-23 (D-2026-08-23-e): this requirement no longer guarantees no PII.**
+  The original "no personally identifiable information" promise is reversed by explicit,
+  informed user decision — not discovered as a defect, not a Workshop judgment call. When
+  the user is signed in (REQ-091) at the moment a ping fires, `email` carries their signed-in
+  email address; when signed out, `email` is empty and the ping is exactly as anonymous as
+  before. **A ping's firing, throttling, and the `install`/`active` decision remain entirely
+  independent of sign-in state** — REQ-091's identity system is not a dependency of REQ-080's
+  telemetry, only an optional enrichment of it when both happen to be true at once. No
+  username, hostname, path, or hardware fingerprint is ever sent; `email` is the one addition,
+  and only when known.
+
+  The telemetry fires in a detached one-shot worker thread once per launch, independent of
+  any other background task's own success/failure — but its own firing point is no longer
+  "immediately at process start": it fires once REQ-091's launch gate resolves (signed in, or
+  the offline exception), so that whatever sign-in state is true at that moment is known
+  before the payload is built. This costs no perceptible delay in practice, since the gate
+  already blocks all other interaction until it resolves. It must never block the UI, gate a
+  session on its OWN account, or fail the application if the network is unavailable. Any
+  network error (timeout, DNS failure, unreachable host) is dropped silently. This is the same
+  sanctioned silent-failure exception as REQ-077's update check, for the same reason: a
+  background reporting call has no actionable user recourse for its own failure.
 
   Distinction: a ping measures first *run*, not raw downloads. GitHub Releases download counts
   (available freely on the asset page) complement this and measure downloads; this requirement
   measures installs that have executed once.
 - Acceptance:
   - on first run, an `install` event is sent exactly once; subsequent runs do not resend it;
-  - on any run, an `active` event is sent at most once per rolling 24-hour period, even if the
-    application is restarted multiple times in the same window;
-  - the payload JSON is well-formed and contains exactly the five fields (installId, event,
-    version, channel, os);
-  - no PII is included in any payload (absence of username, hostname, path, email, hardware ID);
+  - **(amended 2026-08-23)** on every run after the first, an `active` event is sent exactly once
+    per launch, with no throttle — opening the application 5 times in a day produces 5 rows, not
+    1; this REPLACES the original "at most once per rolling 24-hour period" condition;
+  - the payload JSON is well-formed and contains exactly six fields (installId, event, version,
+    channel, os, email);
+  - **(amended 2026-08-23)** `email` equals the signed-in email when REQ-091's sign-in state is
+    true at the moment the ping fires, and is empty otherwise — a ping never blocks on, waits
+    for, or is skipped because of sign-in state;
+  - **(amended 2026-08-23)** no username, hostname, file path, or hardware fingerprint is ever
+    included — `email` is the only field this requirement adds beyond the original five;
   - network failures (timeout, DNS, unreachable host, TLS error) do not raise an exception, log
     a message, or otherwise fail the application;
   - killing network access does not hang or freeze the startup;
-  - a privacy disclosure is present in the UNITS dialog or settings panel explaining what is sent;
+  - a privacy disclosure is present in the settings panel accurately describing current
+    behavior — including that a signed-in user's email is sent — not the pre-amendment promise;
   - the current build sends pings to the configured endpoint and an inspector tool confirms the
     payload shape and timing.
-- Owner-layer: Platform (PostJson), Telemetry (ping logic + rate limiting), IO (persistence)
+- Owner-layer: Platform (PostJson), Telemetry (ping logic + rate limiting), Auth (signed-in
+  email, read not owned), IO (persistence)
 - Status: accepted (2026-08-16)
 - Revisions: 2026-08-16 — initial. Resolved as a SPEC GAP (no prior requirement existed for
   telemetry). User answered three key questions: (1) tracking only, no license-key enforcement
   for now (licensing is deferred); (2) self-hosted endpoint (not third-party analytics vendor);
   (3) no opt-out toggle, always-on anonymous pings (PII-free by design). See ADR-032.
+  2026-08-23 — added `email` (D-2026-08-23-e), reversing the original no-PII acceptance
+  condition by explicit user decision, made after REQ-091 shipped and the user asked for it
+  directly. Scope decided in the same conversation: email only when signed in at ping time;
+  the ping's firing/throttling stays fully independent of sign-in state.
+  2026-08-23 — removed the 24h throttle (D-2026-08-23-f), reversing the original "at most once
+  per rolling 24-hour period" acceptance condition by explicit user decision. An `active` event
+  now fires every launch; `lastActivePingDate` is no longer tracked client-side and the server's
+  per-day unique index was dropped. This is the third REQ-080 acceptance-condition reversal in
+  one day (see D-2026-08-23-e above) — each recorded separately because each was its own
+  explicit ask, not one bundled decision.
 
 ### REQ-081 — The Dark theme reads as a coherent, separated UI
 - Purpose: the shell's panels must be tellable apart at a glance; a uniformly flat
@@ -2672,6 +2710,96 @@ requirements is a planning failure, not a sign of rigor.
 
 ---
 
+### REQ-091 — User accounts and sign-in (Auth0)
+- Purpose: identify a user for license/paid-tier enforcement, which anonymous REQ-080
+  telemetry is deliberately unable to do
+- Priority: should
+- Type: functional
+- Statement: The application supports signing in via **Google**, **Microsoft**
+  (Outlook/Live), or a self-registered **email + username + password** account, backed
+  by Auth0 (a managed identity provider) rather than an in-house auth backend. Sign-in
+  uses Auth0's hosted Universal Login page reached via the system browser — the
+  application never renders its own password form or OAuth-provider buttons and never
+  receives a raw password. The native app authenticates using the system-browser +
+  loopback-redirect + PKCE flow (RFC 8252): no embedded webview. The resulting refresh
+  token is stored via Windows Credential Manager, never in `gosurvey-user.json` or any
+  other plaintext file; access/ID tokens are kept in memory only and are never
+  persisted. On subsequent launches the application renews the session silently from
+  the stored refresh token, without reopening the browser, unless that token has expired
+  or been revoked, in which case interactive sign-in runs again. A signed-in user's
+  identity is verified against Auth0's issued token; the application does not trust an
+  unverified claim of identity from anywhere else.
+
+  This requirement covers identity and the session-level sign-in gate. It does not gate
+  any individual feature or command: the license/tier lookup (below) is a hook other
+  requirements will consume once what is gated and under what terms is decided —
+  inventing that scope here would be the spec guessing at business decisions it has no
+  authority over. The gate below governs SESSION ACCESS, which is a different thing.
+
+  **Launch gate (added 2026-08-23, D-2026-08-23-d, reverses this requirement's original
+  "no application feature is gated" condition):** every launch, until the user is signed
+  in, a modal window blocks the rest of the application — no drawing can be opened or
+  started. It offers only Sign In; there is no dismiss, skip, or close. The one
+  exception: when there is no internet connectivity at all, the gate is skipped entirely
+  and the application opens normally, signed out — the same offline exception REQ-077's
+  update-check gate uses, and for the same reason (a surveyor with no signal must not be
+  locked out of a program that has nothing to reach). The gate is resolved once per
+  launch and is not re-imposed if the user signs out later in the same session.
+- Acceptance:
+  - clicking "Sign In" opens the system browser to Auth0 Universal Login showing all
+    three configured options: Google, Microsoft, and email/username/password;
+  - completing sign-in by any of the three methods returns control to the application
+    (the loopback redirect is caught) and the settings panel shows "Signed in as
+    `<email>`";
+  - closing and reopening the application does not require interactive sign-in again
+    while the stored refresh token remains valid;
+  - an expired or revoked refresh token causes the next launch to require interactive
+    sign-in;
+  - the refresh token never appears in `gosurvey-user.json` or any other plaintext file
+    — verified by inspecting Windows Credential Manager rather than the prefs file;
+  - no individual command or feature is separately gated or blocked by sign-in state or
+    tier beyond the launch gate itself (mechanism only, per the scope note above);
+  - REQ-080's anonymous telemetry ping is unchanged by this requirement;
+  - **(added 2026-08-23)** on launch, with network reachable and no valid stored
+    session, a modal blocks all other interaction until Sign In succeeds — no close
+    button, no click-away dismissal;
+  - **(added 2026-08-23)** on launch, with `HasInternetConnectivity()` reporting no
+    route to the internet, the modal does not appear at all and the application opens
+    normally;
+  - **(added 2026-08-23)** signing out from the Settings panel later in the same
+    session does not reopen the launch gate.
+- Owner-layer: Platform (loopback listener, Credential Manager, connectivity check), Auth
+  (pure logic, mirrors Telemetry's split), UI (sign-in entry point/status, launch gate)
+- Status:      accepted
+- Revisions:   2026-08-23 — initial (D-2026-08-23-c). See ADR-037 for the Auth0/PKCE/
+               Credential-Manager technical shape and the REQ-300 dependency decision.
+               2026-08-23 — added the blocking launch gate with an offline exception
+               (D-2026-08-23-d), reversing the original "no application feature is
+               gated" condition for session access specifically (not for individual
+               features/tiers, which remain ungated).
+
+### REQ-092 — License-tier lookup endpoint
+- Purpose: give the application a place to learn a signed-in user's entitlement, ahead
+  of any requirement naming what that entitlement controls
+- Priority: should
+- Type: functional
+- Statement: A backend endpoint, separate from the REQ-080 telemetry Worker, verifies
+  the caller's Auth0-issued JWT and returns that user's license tier. New sign-ups
+  default to a single tier (e.g. `"free"`); nothing yet writes any other value — billing,
+  an admin tool, or a manual grant are explicitly future work, not part of this
+  requirement.
+- Acceptance:
+  - a request with no JWT, an invalid JWT, or an expired JWT is rejected (401/403) and
+    never reaches the tier lookup;
+  - a request with a valid JWT for a newly signed-up user returns the default tier;
+  - the endpoint's data store is separate from the telemetry Worker's, so a defect in
+    one cannot read or corrupt the other's data.
+- Owner-layer: Platform/backend (new Cloudflare Worker + D1 database, outside `src/`)
+- Status:      accepted
+- Revisions:   2026-08-23 — initial (D-2026-08-23-c). See ADR-037.
+
+---
+
 ## Performance requirements
 
 > Performance is a requirement, not an afterthought — but always paired with a
@@ -3097,6 +3225,9 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-081 | UI | planned — manual, side-by-side against the Hazel reference shots (adjacent docked panels separated by a visible border; panel surface lighter than the dockspace ground; recessed fields; Dark shows no `#464646`/steel-blue chrome; Dark→Light→Dark leaves no colour behind; Light pixel-unchanged; viewport contents unchanged; X/Y/Z badges present, Radius has none) | accepted |
 | REQ-083 | Platform/UI | `PointFileExtTests` **green 2026-08-17** (5 cases / 26 assertions: a name ending `.csv`/`.txt` in any case gets nothing appended; a bare name gets the chosen filter's extension; a name ending in something else — `points.dat`, `job.2026` — still gets one; empty name; a trailing dot) + manual (Import chooser lists `.txt` under the default filter; the same bytes as `.csv` and as `.txt` import identically and validate identically; a locked `.txt` shows the REQ-041 message with Import disabled; a space-delimited `.txt` reports column errors and adds no point; Export typed as `points.txt` writes `points.txt`) — **the manual half was run and confirmed by the user in the application 2026-08-18**: the Win32 chooser and the REQ-041 file-state path cannot be linked by the test target, and `IMPORTPOINTS` only opens the window (the import is a panel button) so the REQ-203 driver cannot reach it either. Fixtures for the pass: `samples/points-req083.{csv,txt}` (byte-identical) and `samples/points-req083-spaced.txt` | accepted |
 | REQ-204 | Build/Platform/Commands/util | planned — `--seed N` twice is identical; **one deliberately-broken fixture per invariant proving each check fires**; a failing run's minimized transcript reproduces standalone under the REQ-203 driver; minimization terminates within its bound and reports its ratio; a clean seed range prints only a summary; `GoSurvey.exe`'s link line contains no generator symbol | accepted |
+| REQ-091 | Platform/Auth/UI | `AuthPingTests` **green 2026-08-23** (10 cases / 124 assertions: PKCE verifier charset/length/uniqueness, base64url encode+decode incl. round-trip and RFC 4648 vectors, authorize-URL parameter/percent-encoding correctness including `audience`, silent-refresh-vs-interactive decision) + **live end-to-end, real Auth0 tenant, 2026-08-23**: Google sign-in completed, loopback redirect caught, settings panel showed "Signed in as `<email>`", menu-bar email display confirmed; one real defect found and fixed live (Auth0 rejects a wildcard loopback port — ADR-037 (b) amended to a fixed candidate-port list, D-2026-08-23 amendment); silent-refresh-keeps-user-signed-in path requires "Allow Offline Access" enabled on the Auth0 API (user found this off, turned it on) — re-verification of the full 30-day-persistence path is the user's next manual step | accepted |
+| REQ-092 | Platform/backend | `accounts-worker/test.mjs` **green 2026-08-23** (offline, real RSA keypair generated in-process: missing/malformed/tampered/expired/wrong-issuer/wrong-audience/alg-none/missing-subject tokens all rejected 401 before any D1 query; valid token for a new user returns the default tier and issues exactly one insert; valid token for an existing user returns their stored tier with no insert; D1 outage is 503; missing `AUTH0_DOMAIN` binding is 500, not misreported as unauthorized; email upsert/preserve-tier/malformed-dropped cases added when email wiring landed) + **live, 2026-08-23**: deployed Worker confirmed live (401/404 as expected), a real sign-in's `users` row confirmed via direct D1 query (`auth0_sub`, `tier: 'free'`, and — after the email wiring landed — a populated `email`) | accepted |
+| REQ-080 (amended) | Telemetry/Auth/UI/Platform | `TelemetryPingTests` **green 2026-08-23** (email-empty/email-present JSON cases; `DecideEventToSend` simplified to install-vs-always-active, throttle tests removed with the throttle) + `telemetry-worker/test.mjs` **green 2026-08-23** (valid/empty/malformed email stored-or-dropped-to-null; column-count assertions 8→9) + **live, 2026-08-23**: deployed Worker smoke-tested with a real POST carrying `email`, confirmed via direct D1 read-back; live migrations applied to the pre-existing deployed table (`ALTER TABLE pings ADD COLUMN email TEXT`, `DROP INDEX ux_pings_active_daily`) | accepted |
 
 ---
 

@@ -344,26 +344,70 @@ static void DrawSystemUpdates(AppCommandState& cmd) {
   }
 }
 
-/// REQ-080's last acceptance condition: the anonymous usage ping is disclosed in the settings
-/// panel, in plain language, saying what leaves the machine and what does not.
+/// REQ-080's last acceptance condition: the usage ping is disclosed in the settings panel, in
+/// plain language, saying what leaves the machine and what does not.
 ///
 /// It sits next to Updates on purpose — they are the two things that talk to the network, and a
-/// user checking on one is asking about the other. It is text, not a checkbox: the ping carries
-/// no personal data and has no opt-out by decision (spec/project.md, 2026-08-16, D3). Offering a
-/// toggle that did nothing, or implying consent that is not asked for, would be worse than
-/// saying so plainly.
+/// user checking on one is asking about the other. It is text, not a checkbox: the ping has no
+/// opt-out by decision (spec/project.md, 2026-08-16, D3). Offering a toggle that did nothing, or
+/// implying consent that is not asked for, would be worse than saying so plainly.
+///
+/// Amended 2026-08-23 (D-2026-08-23-e): this used to promise the ping was unconditionally
+/// anonymous ("never sends your name, email..."). That promise was reversed by explicit user
+/// decision — when signed in, the ping now includes the signed-in email — and leaving the old
+/// text in place would make it a lie the moment that shipped, not a stale detail. Kept honest
+/// rather than kept simple.
 static void DrawSystemUsageData(AppCommandState& cmd) {
-  (void)cmd;
   ImGui::TextWrapped(
-      "GoSurvey reports anonymous usage so development can be aimed at what people actually "
-      "run. It sends a random ID that identifies this installation only, the version, whether "
-      "you are on stable or beta, and that you are on Windows — once when installed, and at "
-      "most once a day after that.");
+      "GoSurvey reports usage so development can be aimed at what people actually run. Every "
+      "report includes a random ID that identifies this installation, the version, whether you "
+      "are on stable or beta, and that you are on Windows — once when installed, and at most "
+      "once a day after that.");
   ImGui::Spacing();
+  if (cmd.authSignedIn) {
+    ImGui::TextWrapped(
+        "Because you are signed in (see Account below), your email is included too. Sign out "
+        "and reports go back to fully anonymous.");
+  } else {
+    ImGui::TextWrapped(
+        "It never sends your name, company, computer name, file names, drawings, survey data, "
+        "or location. Your email is included only when you are signed in — you are currently "
+        "signed out, so reports stay fully anonymous.");
+  }
+}
+
+/// REQ-091: sign-in entry point. Lives beside Usage Data for the same reason that box
+/// sits beside Updates — this is the other thing that leaves the machine, and a user reading one
+/// disclosure is reading about the other. Unlike the telemetry ping, this one has a name attached
+/// once the user opts in, and the box makes that plain: what identity provider, what's shown, and
+/// that nothing in the app is gated by it yet (REQ-091 is identity only, not enforcement).
+static void DrawAccountsSignIn(AppCommandState& cmd) {
+  if (cmd.authSignedIn) {
+    ImGui::TextWrapped("Signed in as %s",
+                       cmd.authEmail.empty() ? "(no email on file)" : cmd.authEmail.c_str());
+    ImGui::Spacing();
+    ImGui::BeginDisabled(cmd.authBusy);
+    if (ImGui::Button("Sign Out", ImVec2(-FLT_MIN, 0.f))) {
+      cmd.authSignOutRequested = true;
+    }
+    ImGui::EndDisabled();
+    return;
+  }
+
   ImGui::TextWrapped(
-      "It never sends your name, email, company, computer name, file names, drawings, survey "
-      "data, or location. The random ID is not derived from anything about you or your machine "
-      "and cannot be traced back to either.");
+      "Sign in with Google, Microsoft, or an email and password to identify this account. "
+      "Nothing in GoSurvey is currently gated on signing in.");
+  ImGui::Spacing();
+  ImGui::BeginDisabled(cmd.authBusy);
+  if (ImGui::Button(cmd.authInteractiveBusy ? "Waiting for browser..." : "Sign In",
+                    ImVec2(-FLT_MIN, 0.f))) {
+    cmd.authSignInRequested = true;
+  }
+  ImGui::EndDisabled();
+  if (!cmd.authError.empty()) {
+    ImGui::Spacing();
+    ImGui::TextColored(ImVec4(0.9f, 0.4f, 0.4f, 1.f), "%s", cmd.authError.c_str());
+  }
 }
 
 static void DrawSettingsSystemTab(AppCommandState& cmd) {
@@ -384,7 +428,8 @@ static void DrawSettingsSystemTab(AppCommandState& cmd) {
     BoxBegin("General Options", 140.f); DrawSystemGeneralOptions(cmd); BoxEnd();
     BoxBegin("Help", 70.f); ImGui::Checkbox("Access online content when available", &cmd.systemAccessOnlineContent); BoxEnd();
     BoxBegin("Updates", 110.f); DrawSystemUpdates(cmd); BoxEnd();
-    BoxBegin("Anonymous Usage Data", 175.f); DrawSystemUsageData(cmd); BoxEnd();
+    BoxBegin("Usage Data", 175.f); DrawSystemUsageData(cmd); BoxEnd();
+    BoxBegin("Account", 150.f); DrawAccountsSignIn(cmd); BoxEnd();
     BoxBegin("InfoCenter", 70.f);
     ImGui::BeginDisabled(); ImGui::Button("Balloon Notifications", ImVec2(-FLT_MIN, 0.f)); ImGui::EndDisabled();
     BoxEnd();

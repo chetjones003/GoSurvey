@@ -1210,6 +1210,18 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       cmd.showSettingsWindow = true;
     ImGui::EndMenu();
   }
+
+  // REQ-091: sign-in status at the far right of the menu bar — the same placement familiar CAD
+  // tools (e.g. Civil 3D) use for the signed-in account. Nothing shown while signed out, which
+  // (with the launch gate in place) only happens via its no-internet exception, so there is no
+  // "Sign In" prompt to squeeze in here — Settings → System → Account already has one.
+  if (cmd.authSignedIn && !cmd.authEmail.empty()) {
+    const float textW = ImGui::CalcTextSize(cmd.authEmail.c_str()).x;
+    const float pad   = 14.f;
+    ImGui::SameLine(std::max(0.f, ImGui::GetWindowWidth() - textW - pad));
+    ImGui::TextUnformatted(cmd.authEmail.c_str());
+  }
+
   ImGui::PopStyleVar();
 }
 

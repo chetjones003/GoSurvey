@@ -125,9 +125,9 @@ console.log('\naccepts a valid ping');
 
   const { sql, params } = r.db.calls[0];
   check('insert is OR IGNORE', /INSERT OR IGNORE/.test(sql));
-  check('binds 8 columns', params.length === 8, `${params.length}`);
+  check('binds 9 columns', params.length === 9, `${params.length}`);
 
-  const [ts, day, installId, event, version, channel, os, country] = params;
+  const [ts, day, installId, event, version, channel, os, country, email] = params;
   check('ts is ISO-8601 Z', /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(ts), ts);
   check('day is the date part of ts', day === ts.slice(0, 10), `${day} vs ${ts}`);
   check('day is YYYY-MM-DD', /^\d{4}-\d{2}-\d{2}$/.test(day), day);
@@ -137,6 +137,29 @@ console.log('\naccepts a valid ping');
   check('channel passed through', channel === VALID.channel);
   check('os passed through', os === VALID.os);
   check('country is null without a cf object', country === null, String(country));
+  check('email is null when the client sent none (VALID has no email field)', email === null,
+        String(email));
+}
+
+console.log('\nemail (D-2026-08-23-e: the one deliberate exception to "no PII")');
+{
+  const r = await call(post({ ...VALID, email: 'surveyor@example.com' }));
+  const [, , , , , , , , email] = r.db.calls[0].params;
+  check('a signed-in email is stored', email === 'surveyor@example.com', String(email));
+}
+{
+  const r = await call(post({ ...VALID, email: '' }));
+  const [, , , , , , , , email] = r.db.calls[0].params;
+  check('an empty email (signed out) is stored as null, not an empty string', email === null,
+        String(email));
+}
+{
+  const r = await call(post({ ...VALID, email: 'not-an-email' }));
+  check('status 200 — a malformed email does not fail the whole ping', r.status === 200,
+        `got ${r.status}`);
+  const [, , , , , , , , email] = r.db.calls[0].params;
+  check('a malformed email is dropped (stored as null), not stored as garbage', email === null,
+        String(email));
 }
 
 console.log('\nprivacy');
@@ -144,7 +167,7 @@ console.log('\nprivacy');
   const r = await call(post(VALID));
   const bound = JSON.stringify(r.db.calls[0].params);
   check('no ip address is bound', !/\d+\.\d+\.\d+\.\d+/.test(bound), bound);
-  check('nothing bound beyond the 8 schema columns', r.db.calls[0].params.length === 8);
+  check('nothing bound beyond the 9 schema columns', r.db.calls[0].params.length === 9);
 }
 
 console.log('\nduplicates and outages');
