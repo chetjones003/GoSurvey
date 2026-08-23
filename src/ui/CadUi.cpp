@@ -694,6 +694,48 @@ static void DrawSurfaceRolloverReadout(const AppCommandState& cmd) {
   ImGui::EndTooltip();
 }
 
+/// Draw the survey-point rollover readout beside the cursor (REQ-090), for the point at
+/// `cmd.surveyPoints[ix]`.
+///
+/// **Nothing here is latched, unlike \ref DrawSurfaceRolloverReadout.** The pick that supplies `ix`
+/// (`PickSurveyPointAtCursor`) already runs every frame for the existing hover highlight, so there is
+/// no expensive query to defer — the five rows are formatted fresh on every call. See TASK-089 §2 for
+/// why this does not reuse REQ-089's one-shot latch: latching an index across frames would be
+/// architecture §11.9's blocking finding, since `surveyPoints` compacts on erase.
+///
+/// Called only when a survey point is what precedence chose (REQ-090: "a survey point takes
+/// precedence over a surface") — never in the same frame as \ref DrawSurfaceRolloverReadout, so this
+/// is still the one `BeginTooltip` the surface readout's comment calls for.
+static void DrawSurveyPointRolloverReadout(const AppCommandState& cmd, int ix) {
+  if (ix < 0 || static_cast<size_t>(ix) >= cmd.surveyPoints.size())
+    return;
+  const SurveyPoint& p = cmd.surveyPoints[static_cast<size_t>(ix)];
+
+  if (!ImGui::BeginTooltip())
+    return;
+
+  const float valueX = ImGui::CalcTextSize("Elevation").x + ImGui::GetStyle().ItemSpacing.x * 2.f;
+  const auto field = [valueX](const char* label, const std::string& value) {
+    ImGui::TextDisabled("%s", label);
+    ImGui::SameLine(valueX);
+    ImGui::TextUnformatted(value.c_str());
+  };
+
+  ImGui::TextUnformatted("Survey Point");
+  ImGui::Spacing();
+  const int sprec = cmd.surveyPointDisplayPrecision;
+  // Northing/easting resolve through the same WorldXFromLocal/WorldYFromLocal conversion, at the same
+  // precision, the Properties panel applies to the same point (CadUi.cpp ~4483-4499) — REQ-090's
+  // acceptance condition that the two must agree. Elevation is absolute (not rebased): the
+  // local-storage rebase is X/Y-only (architecture §11 / CadCoordinateFrame).
+  field("Number", std::to_string(p.id));
+  field("Layer", p.layer);
+  field("Northing", FormatLinear(static_cast<double>(CadCoord::WorldYFromLocal(cmd, p.northing)), sprec));
+  field("Easting", FormatLinear(static_cast<double>(CadCoord::WorldXFromLocal(cmd, p.easting)), sprec));
+  field("Elevation", FormatLinear(static_cast<double>(p.elevation), sprec));
+  ImGui::EndTooltip();
+}
+
 /// A raised plate catches the light along its top edge. Call with the plate's
 /// own rect; draws a 1px line just inside the top.
 ///
@@ -9129,6 +9171,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // condition rather than a note for the same reason.
   {
     const double nowSec = ImGui::GetTime();
+    // REQ-090: a survey point under the cursor takes precedence over a surface, and reuses this same
+    // dwell — resting on a point is what `viewportHoverSurveyPointIndex` already reports every frame
+    // (computed above, §2 of TASK-089), so `tick.settled` (level, not `elapsed`'s one-shot edge) is
+    // enough to show it; there is no query here to defer.
+    //
+    // **Precedence is decided only at draw time, never at query time.** `viewportHoverSurveyPointIndex`
+    // is re-picked every frame off the live cursor, using its own aperture — a different radius than
+    // this dwell's `kSurfaceRolloverMoveTolPx` move tolerance. A cursor can sit just inside the point's
+    // pick aperture on the exact frame `elapsed` fires, then drift a sub-tolerance jitter that leaves
+    // the aperture without ever moving far enough to reset the dwell (`tick.moved` stays false). If
+    // that drift had skipped `BuildSurfaceHoverRows` at the elapsed frame, nothing would be left to
+    // fall back to for the remainder of the rest — `elapsed` cannot come again without a real move. So
+    // the query always runs on `elapsed`, unconditionally; only which readout is drawn reads `onPoint`,
+    // decided fresh every single frame from the current pick.
     if (surfaceReadoutAllowed) {
       const HoverDwellTick tick = UpdateHoverDwell(&cmd.surfaceHoverDwell, mx, my, nowSec,
                                                    kSurfaceRolloverMoveTolPx, kSurfaceRolloverDwellSec);
@@ -9136,6 +9192,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.surfaceHoverRows.clear();  // the latched text is about a place the cursor has left
       else if (tick.elapsed)
         BuildSurfaceHoverRows(cmd, rawX, rawY, &cmd.surfaceHoverRows);
+      const bool onPoint = cmd.viewportHoverSurveyPointIndex >= 0;
+      if (onPoint && tick.settled)
+        DrawSurveyPointRolloverReadout(cmd, cmd.viewportHoverSurveyPointIndex);
+      else
+        DrawSurfaceRolloverReadout(cmd);
     } else {
       // Suppressed — a command started, a gesture began, or the pointer left the viewport. Re-base
       // the timer rather than merely leaving it, so coming back costs a fresh dwell instead of
@@ -9143,7 +9204,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       cmd.surfaceHoverRows.clear();
       ResetHoverDwell(&cmd.surfaceHoverDwell, mx, my, nowSec);
     }
-    DrawSurfaceRolloverReadout(cmd);
   }
 
   // MTEXT box grips: first click arms; snapped cursor updates box live; second LMB commits (like dim / entity grips).

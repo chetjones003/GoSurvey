@@ -41,6 +41,11 @@ struct HoverDwellTick {
   /// The dwell threshold was crossed **this frame**. True on exactly one frame per rest: this is
   /// the signal to run the expensive query, and it will not come again until the cursor moves.
   bool elapsed = false;
+  /// True on EVERY frame the cursor has rested at least \c dwellSeconds — a level signal, unlike
+  /// \ref elapsed's edge. For a caller with nothing to latch (REQ-090: the survey-point pick already
+  /// runs every frame regardless), reading this each frame is enough; it does not consume `armed`,
+  /// so it does not interfere with \ref elapsed still firing exactly once per rest.
+  bool settled = false;
 };
 
 /// Begin (or restart) a rest at (\p x, \p y) as of \p now, armed to fire after a full dwell.
@@ -87,7 +92,8 @@ inline HoverDwellTick UpdateHoverDwell(HoverDwell* d, float x, float y, double n
     return tick;
   }
 
-  if (d->armed && now - d->stillSince >= dwellSeconds) {
+  tick.settled = now - d->stillSince >= dwellSeconds;
+  if (d->armed && tick.settled) {
     d->armed = false;
     tick.elapsed = true;
   }

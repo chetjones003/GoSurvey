@@ -125,6 +125,52 @@ TEST_CASE("Suppressing the readout costs a fresh dwell on return", "[hover][req0
   REQUIRE(UpdateHoverDwell(&d, 7.f, 7.f, 5.5, kMoveTolPx, kDwell).elapsed);
 }
 
+TEST_CASE("settled is level where elapsed is an edge", "[hover][req090]") {
+  // REQ-090's survey-point readout has nothing to latch — the pick already runs every frame — so it
+  // reads `settled` instead of `elapsed`. This pins the difference: `elapsed` fires once, `settled`
+  // stays true for as long as the rest lasts.
+  HoverDwell d;
+  ResetHoverDwell(&d, 40.f, 40.f, 0.0);
+
+  REQUIRE_FALSE(UpdateHoverDwell(&d, 40.f, 40.f, 0.3, kMoveTolPx, kDwell).settled);
+
+  int settledCount = 0;
+  int elapsedCount = 0;
+  for (int frame = 1; frame <= 120; ++frame) {
+    const double now = frame / 60.0;  // 60 frames at 1/60 s = 1.0 s, well past the 0.5 s dwell
+    const HoverDwellTick tick = UpdateHoverDwell(&d, 40.f, 40.f, now, kMoveTolPx, kDwell);
+    if (tick.settled)
+      ++settledCount;
+    if (tick.elapsed)
+      ++elapsedCount;
+  }
+  REQUIRE(elapsedCount == 1);
+  REQUIRE(settledCount > 1);  // level, not edge
+}
+
+TEST_CASE("settled is false before the threshold and immediately after a move", "[hover][req090]") {
+  HoverDwell d;
+  ResetHoverDwell(&d, 0.f, 0.f, 0.0);
+  REQUIRE_FALSE(UpdateHoverDwell(&d, 0.f, 0.f, 0.4, kMoveTolPx, kDwell).settled);
+  REQUIRE(UpdateHoverDwell(&d, 0.f, 0.f, 0.5, kMoveTolPx, kDwell).settled);
+
+  const HoverDwellTick moved = UpdateHoverDwell(&d, 60.f, 0.f, 0.6, kMoveTolPx, kDwell);
+  REQUIRE(moved.moved);
+  REQUIRE_FALSE(moved.settled);
+}
+
+TEST_CASE("settled and elapsed agree on the frame elapsed fires", "[hover][req090]") {
+  // Adding the level signal must not turn the one-shot into a per-frame query: the frame `elapsed`
+  // is true is exactly the first frame `settled` is true, never earlier.
+  HoverDwell d;
+  ResetHoverDwell(&d, 5.f, 5.f, 0.0);
+
+  REQUIRE_FALSE(UpdateHoverDwell(&d, 5.f, 5.f, 0.49, kMoveTolPx, kDwell).settled);
+  const HoverDwellTick tick = UpdateHoverDwell(&d, 5.f, 5.f, 0.50, kMoveTolPx, kDwell);
+  REQUIRE(tick.elapsed);
+  REQUIRE(tick.settled);
+}
+
 TEST_CASE("The dwell functions tolerate a null timer", "[hover][req089]") {
   ResetHoverDwell(nullptr, 0.f, 0.f, 0.0);
   const HoverDwellTick tick = UpdateHoverDwell(nullptr, 0.f, 0.f, 1.0, kMoveTolPx, kDwell);
