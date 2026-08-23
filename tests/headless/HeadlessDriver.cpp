@@ -30,6 +30,8 @@
 #include <cstring>
 #include <filesystem>
 #include <algorithm>
+#include <array>
+#include <tuple>
 #include <fstream>
 #include <sstream>
 #include <utility>
@@ -230,6 +232,59 @@ size_t SurfaceCacheSegs(const AppCommandState& st,
     if (e.surfaceId == id)
       return (e.*member).size() / 6;
   return 0;
+}
+
+/// Do the drawing's polylines carry EXACTLY the segments the surface display cache is showing as
+/// contours? (REQ-071's first acceptance condition, ADR-036 (f).)
+///
+/// This is the assertion the whole extraction rests on: "extraction produces polylines at exactly the
+/// displayed contour elevations". It is checked by comparing the two things the requirement says must
+/// be equal — the cache's own contour buffers and the polylines EXTRACT created — rather than by
+/// re-deriving an expectation, which would only prove the test agrees with itself.
+///
+/// Both sides are reduced to a sorted multiset of segments, so traversal order and which contour a
+/// segment came from are deliberately not part of the comparison; only the geometry is. Equality is
+/// EXACT, not toleranced: both sides are float copies of the same doubles out of one pure function,
+/// so anything other than bit equality means they did not come from the same generation.
+///
+/// **Assumes every polyline in the drawing came from EXTRACT** — true in the transcript that uses it,
+/// which starts from a drawing with none.
+bool ExtractedContoursMatchDisplay(const AppCommandState& st) {
+  using Seg = std::array<float, 6>;
+  const auto canon = [](float ax, float ay, float az, float bx, float by, float bz) {
+    // Endpoint order is not meaningful — one side may walk a contour the other way — so each segment
+    // is stored with its lexicographically smaller end first.
+    const bool swap = std::tie(bx, by, bz) < std::tie(ax, ay, az);
+    return swap ? Seg{bx, by, bz, ax, ay, az} : Seg{ax, ay, az, bx, by, bz};
+  };
+
+  std::vector<Seg> shown;
+  for (const auto& e : st.surfaceDisplayCache) {
+    for (const std::vector<float>* buf : {&e.minorContours, &e.majorContours}) {
+      for (size_t i = 0; i + 5 < buf->size(); i += 6)
+        shown.push_back(canon((*buf)[i], (*buf)[i + 1], (*buf)[i + 2], (*buf)[i + 3], (*buf)[i + 4],
+                              (*buf)[i + 5]));
+    }
+  }
+
+  std::vector<Seg> baked;
+  const size_t plCount = PolylineCountOf(st);
+  for (size_t p = 0; p < plCount; ++p) {
+    const int b = st.userPolylineOffsets[p];
+    const int e = st.userPolylineOffsets[p + 1];
+    const auto vx = [&](int v, int c) { return st.userPolylineVerts[static_cast<size_t>(v) * 3 + c]; };
+    for (int v = b; v + 1 < e; ++v)
+      baked.push_back(canon(vx(v, 0), vx(v, 1), vx(v, 2), vx(v + 1, 0), vx(v + 1, 1), vx(v + 1, 2)));
+    // A closed polyline's closing segment is implied, exactly as the display buffer's is.
+    if (e - b > 2 && p < st.userPolylineClosed.size() && st.userPolylineClosed[p])
+      baked.push_back(canon(vx(e - 1, 0), vx(e - 1, 1), vx(e - 1, 2), vx(b, 0), vx(b, 1), vx(b, 2)));
+  }
+
+  if (shown.empty() || shown.size() != baked.size())
+    return false;
+  std::sort(shown.begin(), shown.end());
+  std::sort(baked.begin(), baked.end());
+  return shown == baked;
 }
 
 /// True when a point file's first row is a header (`P,N,E,Z,D`) rather than data.
@@ -725,11 +780,18 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // satisfied by anything except the triangulation genuinely not being rebuilt.
       else if (what == "SURFACETINGEN")
         got = static_cast<long>(run.surfaceTinGeneration);
+      // 1 when the drawing's polylines carry exactly the segments the display cache is showing as
+      // contours (REQ-071). This is the acceptance condition that cannot be expressed as a count: a
+      // wrong-but-plausible extraction — one interval out, or the previous style's contours — has the
+      // same polyline count as a right one.
+      else if (what == "EXTRACTMATCHESDISPLAY")
+        got = ExtractedContoursMatchDisplay(run.st) ? 1 : 0;
       else {
         Fail(run, "parse",
              "EXPECT: unknown quantity " + what +
                  " (LINES CIRCLES POLYLINES ARCS ELLIPSES ANNOTATIONS SURVEYPOINTS SELECTED"
                  " SURFACES SELECTEDSURFACES SURFACEBORDERSEGS SURFACETRISEGS SURFACEMINORSEGS"
+                 " EXTRACTMATCHESDISPLAY"
                  " SURFACEMAJORSEGS SURFACEBATCHES SURFACETINGEN)",
              sourceLine);
         return false;

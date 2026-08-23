@@ -1,7 +1,9 @@
 # TASK-086 — Surface analysis: elevation banding, slope banding, slope arrows, and the legend
 
 - Type:    feature
-- Status:  plan  (blocked on TASK-085 — the style table is where the range table lives)
+- Status:  in progress — step 1 complete (`util/surfaceanalysis` + `SurfaceAnalysisTests`, green).
+           **Unblocked 2026-08-22**: TASK-085's style table and display-geometry cache landed in
+           449c158, so the range table has somewhere to live and the batches have somewhere to go.
 - Opened:  2026-08-21
 - Owner:   Workshop
 
@@ -153,8 +155,9 @@ ranges equal the table's, and change with it" cannot drift. One source, two read
 
 ### Steps
 
-- [ ] 1. `util/surfaceanalysis` + `SurfaceAnalysisTests` — green before anything draws.
-- [ ] 2. The range table on the style + `.gs` round-trip.
+- [x] 1. `util/surfaceanalysis` + `SurfaceAnalysisTests` — green before anything draws.
+- [~] 2. The range table on the style + `.gs` round-trip. Struct, equality and both I/O paths done;
+        the round-trip ASSERTION waits on step 4 — see the log.
 - [ ] 3. Band triangle batches + arrows in the cache; renderer draws them.
 - [ ] 4. The Analysis tab.
 - [ ] 5. The legend overlay, reading the table directly.
@@ -170,6 +173,93 @@ ranges equal the table's, and change with it" cannot drift. One source, two read
 ## 8. Implementation log
 
 - 2026-08-21 opened; ADR-036 (g) + D-2026-08-21-a recorded before planning. Status blocked on TASK-085.
+
+
+- 2026-08-22 **step 1 done — `util/surfaceanalysis` + `SurfaceAnalysisTests`, 12 cases green.**
+  Four functions, pure and `<vector>`-only, registered in all three CMake places `contourgen` occupies.
+  Full suite 491 cases / 214,350 assertions; ctest 519/519.
+
+  Two decisions inside the boundary, both written at the function rather than left to emerge:
+
+  * **Q2's `[lo, hi)` rule is the search, not a chain of comparisons.** `AssignBand` is a
+    `std::upper_bound`, which returns the first bound strictly greater than the value — which IS the
+    half-open rule, so a value on a breakpoint lands in the band above without the rule being
+    re-stated anywhere. The topmost band is closed at its top as a single explicit special case, for
+    the reason REQ-072 needs it: a range table is built to SPAN the surface, so the highest point sits
+    exactly on the last bound and would otherwise be the one unpainted triangle on every surface.
+    A value above the table returns -1 rather than clamping into the top band — clamping would hand
+    the caller a colour that misreads against the legend, which is the one thing REQ-072 forbids.
+  * **The flat threshold's boundary is defined AT the value.** A grade exactly equal to
+    `flatGradePct` is flat (no arrow), because the constant names the grade a drawing stops meaning
+    to show a direction for. Written as `!(gradePct > flatGradePct)` so a NaN grade is refused too —
+    spelled `<=` it would have been admitted.
+
+  **The downhill division is by the SIGNED nz, and that is load-bearing.** Reversing a triangle's
+  winding negates the whole normal, so dividing by the signed component cancels the two sign flips
+  and the fall direction comes out the same. Taking `abs` there instead reverses every arrow on
+  whichever half of the triangulation is wound the other way — and a surface where half the arrows
+  point uphill still looks plausible at a glance.
+
+  **The two rules above were mutation-checked, not merely asserted.** Swapping `upper_bound` for
+  `lower_bound` fails the breakpoint cases (`0 == 1`, `1 == 2`); dividing by `abs(nz)` fails the
+  winding case (`1.0 == Approx(-1.0)`). Both were restored and the suite re-run green. A boundary
+  test that passes because a division rounded its way is not a boundary test, so the numbers in the
+  exact-equality assertions are binary-exact fractions (run 2, rise 1 → exactly 50%) on purpose.
+
+  ASSUMPTION-2 is now expressed in code as `kFlatGradePctDefault = 0.1` (%), a grade rather than a
+  vector magnitude, as the assumption required. ASSUMPTION-1 is still open — it says to show the user
+  the banded display on real data before treating it as settled, which cannot happen until step 3.
+
+- 2026-08-22 **step 2 — the range table is on the style; the round-trip assertion is not yet possible.**
+  `SurfaceBand` + `SurfaceAnalysisMode` in `CadEntities.hpp`, four fields on `SurfaceStyle`
+  (`analysisMode`, `bands`, `slopeArrowsOn`, `arrowBands`), and both `.gs` paths in `GsIo.cpp`.
+
+  * **Only the TOP of each band is stored.** Storing both ends would admit a table whose bands
+    overlap or leave a gap — a value with two colours, or none — and `AssignBand` reads exactly this
+    list. The lowest band having no bottom is the rule, not an omission.
+  * **One `bands` table whose meaning `analysisMode` sets**, not one table per mode. A triangle has
+    one colour (ASSUMPTION-1), so a second table could only ever be the one NOT on screen, and the
+    legend would have to guess which it was describing. `arrowBands` is separate because arrows are
+    always graded by SLOPE while `bands` may be showing elevation — same `SurfaceBand` type, same
+    `AssignBand` rule, so an arrow's colour is decided exactly as a band's is.
+  * **Off is the state a style STARTS in.** That is how REQ-072's "turning banding off restores the
+    style's plain display unchanged" is satisfied without a legacy branch in the reader: a `.gs`
+    written before REQ-072 carries none of these keys, and each style is seeded from
+    `StandardSurfaceStyle()` before the keys are read.
+  * **The analysis keys are written only when the style carries some**, so a pre-REQ-072 drawing —
+    and any style that never opens the Analysis tab — still resaves byte for byte. The section-level
+    rule TASK-085 used against BUG-015/BUG-019, applied per style.
+  * **A file's bands are sorted on read.** Each band carries its own colour, so ordering them repairs
+    a hand-edited or corrupt table without repainting anything, and `AssignBand`'s strictly-ascending
+    precondition then holds for any file. An unrecognised `analysisMode` degrades to None rather than
+    to an enum value no switch handles.
+  * The four fields joined `operator==`, which is the display cache's staleness key (ADR-036 (e)).
+    Tested on both halves of a band — recolouring one and moving its edge are the two edits a user
+    makes, and **neither changes the band count**, so a count-only comparison would miss both.
+
+  **Gap, stated rather than glossed: the `.gs` round-trip is not asserted yet.** `GsIo.cpp` cannot be
+  linked by `GoSurveyTests` (it pulls in the whole command layer — the reason `MeshGsRoundTripTests`
+  exercises the serializer directly), and REQ-072's values cannot be set from a transcript until the
+  Analysis tab or a `SURFSTYLE` subcommand exists. So what is proven today is the DEFAULTS half —
+  a style starts with analysis off, and equality notices every new field — and not the file half.
+  **Removal condition: at step 4, extend `req070-surface-styles-contours.txt` (or a sibling) to set
+  bands, save, reload and compare, plus a resave-idempotence step.** Step 2 stays `[~]` until then.
+
+  Full Catch2 suite green: **492 cases / 214,362 assertions**. `ctest` deliberately NOT re-run this
+  round — another session is driving `gosurvey_headless` in this same tree, and the transcript tests
+  share `build/headless-out`. It must be run before step 2 is closed.
+  **Verified again on a clean base 2026-08-22.** The suite run above shared a working tree with
+  TASK-087's then-uncommitted changes, which proves the two coexist but not that step 2 stands alone.
+  So the commit was cherry-picked onto `upstream/beta` in a separate worktree (`84e3843` on `16385ea`,
+  after step 1 merged as PR #75), built from scratch and re-run: **492 cases / 214,362 assertions**,
+  byte-identical to the shared-tree figure.
+
+  **`ctest` run and green, 2026-08-22 — the last outstanding item above is now closed.** The reason it
+  was deferred was that another session was driving `gosurvey_headless` in this tree and the transcript
+  tests share `build/headless-out`; that session's work (TASK-087 / REQ-071) merged as PR #76, so the
+  tree is no longer shared. Re-run on this branch — step 2 cherry-picked onto `upstream/beta` at
+  `6bf6b71`, which already carries step 1 (#75) and REQ-071 (#76) — **521/521 ctest**, with the Catch2
+  figure unchanged at 492 cases / 214,362 assertions.
 
 ## 9. Self-verification
 - [ ] build-project

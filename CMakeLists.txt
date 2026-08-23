@@ -211,6 +211,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/util/stlimport.cpp
   src/util/tinbuild.cpp
   src/util/contourgen.cpp
+  src/util/surfaceanalysis.cpp
   src/util/benchscene.cpp
 
   # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
@@ -513,6 +514,10 @@ if(GOSURVEY_BUILD_TESTS)
     # shared-edge chaining are both invisible on simple data and wrong on exactly the shapes a real
     # surface produces — a saddle, a level grazing a vertex, a contour running off the border.
     tests/ContourGenTests.cpp
+    # REQ-072 surface analysis (ADR-036 (g)). Pure band assignment and downhill vectors: the
+    # breakpoint rule and the flat-triangle refusal are both invisible on ordinary data and wrong
+    # exactly at a band boundary and on level ground, which is most of a real site.
+    tests/SurfaceAnalysisTests.cpp
     # REQ-070 surface style table (ADR-036 (d)). Header-only and pure, so it needs no source entry
     # below. Three of REQ-070's five acceptance conditions — the deleted-style fallback, the legacy
     # empty-name fallback, and the rejection of a major interval that is not a whole multiple of the
@@ -575,6 +580,9 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-070 contour generation. Pure by ADR-036 (f) — no GL, no document — so a half-open contour
     # is caught against a hand-computed expectation rather than by looking at a viewport.
     src/util/contourgen.cpp
+    # REQ-072 surface analysis. Pure by ADR-036 (g) — no GL, no document — so a reversed arrow is
+    # caught against a hand-computed fall line rather than by squinting at a viewport full of them.
+    src/util/surfaceanalysis.cpp
     # REQ-077/078 version ordering + manifest parse. Pure by ADR-029 (g) — no network, no window.
     # Wrong version ordering has NO symptom (the user is simply never offered an update), which is
     # exactly why it must be pinned by a test rather than noticed in use.
