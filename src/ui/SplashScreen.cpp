@@ -20,8 +20,14 @@
 void GlfwApplySplashStageWindowHints() {
   glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
   glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
-  // Per-pixel alpha so area outside the splash card can show the desktop (where the OS supports it).
-  glfwWindowHint(GLFW_TRANSPARENT_FRAMEBUFFER, GLFW_TRUE);
+  // REQ-093 (amended): no GLFW_TRANSPARENT_FRAMEBUFFER — per-pixel window transparency isn't
+  // reliably honored by every compositor/driver, and where it silently isn't, clearing alpha 0
+  // paints solid black instead of the desktop showing through. The window is sized to the card
+  // itself (main.cpp), so nothing outside it ever needs to be transparent.
+  // Stay hidden until centered (main.cpp positions it right after creation, before showing) — an
+  // AutoCAD-style splash is a small window, not the full screen behind a dimmed overlay, so there
+  // must be no frame where it is visible at its default, unpositioned spot.
+  glfwWindowHint(GLFW_VISIBLE, GLFW_FALSE);
 }
 
 void GlfwApplyMainStageWindowChrome(GLFWwindow* window) {
@@ -219,8 +225,12 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
   AppLogoGpu splashTex{};
   const bool haveLogo = !logoPath.empty() && LoadAppTextureFromPngFile(logoPath, &splashTex, true);
 
-  const bool outerTransparent = glfwGetWindowAttrib(window, GLFW_TRANSPARENT_FRAMEBUFFER) == GLFW_TRUE;
-
+  // REQ-093 (amended): per-pixel window transparency is not reliable across compositors/drivers —
+  // where it isn't actually honored, clearing alpha 0 paints solid black instead of showing the
+  // desktop, which is worse than not attempting it. The splash window (main.cpp) is now sized to
+  // the card itself, so there is no surrounding area that needs to be transparent or dimmed: the
+  // card simply fills the window edge to edge, opaque, and the real desktop is whatever is outside
+  // the (small) window bounds — genuinely, not via a transparency trick.
   const double t0 = glfwGetTime();
   while (!glfwWindowShouldClose(window)) {
     const double now = glfwGetTime();
@@ -245,34 +255,22 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
     const ImVec4 themeMenuBg = stSnap.Colors[ImGuiCol_MenuBarBg];
     const ImVec4 themeDockBg = stSnap.Colors[ImGuiCol_DockingEmptyBg];
     const ImVec4 themeBorder = stSnap.Colors[ImGuiCol_Border];
-    const ImVec4 themeAccent = stSnap.Colors[ImGuiCol_CheckMark];
 
-    // Root viewport fill must be transparent so the framebuffer alpha stays 0 outside the card.
+    // No-op today (the "##Splash" window below sets NoBackground and nothing else docks during the
+    // splash), kept for symmetry with its PopStyleColor(2) below.
     ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.f, 0.f, 0.f, 0.f));
     ImGui::PushStyleColor(ImGuiCol_DockingEmptyBg, ImVec4(0.f, 0.f, 0.f, 0.f));
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     ImDrawList* bg = ImGui::GetBackgroundDrawList();
-    const ImVec2 vp0 = vp->Pos;
-    const ImVec2 vp1 = vp->Pos + vp->Size;
     const ImVec2 workPos = vp->WorkPos;
     const ImVec2 work = vp->WorkSize;
 
-    ImVec2 panel(work.x * (1.f / 2.f), work.y * (1.f / 2.f));
-    panel.x = fmaxf(panel.x, 360.f);
-    panel.y = fmaxf(panel.y, 280.f);
-    panel.x = fminf(panel.x, work.x * 0.92f);
-    panel.y = fminf(panel.y, work.y * 0.92f);
-    const ImVec2 card0(workPos.x + (work.x - panel.x) * 0.5f, workPos.y + (work.y - panel.y) * 0.5f);
-    const ImVec2 card1(card0.x + panel.x, card0.y + panel.y);
-
-    if (!outerTransparent) {
-      ImVec4 dim = themeDockBg;
-      dim.x *= 0.92f;
-      dim.y *= 0.92f;
-      dim.z *= 0.96f;
-      bg->AddRectFilled(vp0, vp1, ImGui::ColorConvertFloat4ToU32(dim));
-    }
+    // The window IS the card (main.cpp creates/sizes it for exactly this) — no margin to dim, no
+    // backdrop rect, nothing surrounding it to fake-transparent. A 1px inset keeps the 2px-wide
+    // border stroke below fully inside the window instead of getting clipped at its exact edge.
+    const ImVec2 card0(workPos.x + 1.f, workPos.y + 1.f);
+    const ImVec2 card1(workPos.x + work.x - 1.f, workPos.y + work.y - 1.f);
 
     const ImVec4 topL = themeWinBg;
     const ImVec4 topR = ImVec4(themeMenuBg.x * 0.65f + themeWinBg.x * 0.35f, themeMenuBg.y * 0.65f + themeWinBg.y * 0.35f,
@@ -288,7 +286,7 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
     bg->AddRect(card0, card1, rim, 8.f, ImDrawFlags_RoundCornersAll, 2.f);
 
     ImGui::SetNextWindowPos(card0);
-    ImGui::SetNextWindowSize(panel);
+    ImGui::SetNextWindowSize(card1 - card0);
     ImGui::SetNextWindowViewport(vp->ID);
     const ImGuiWindowFlags wf = ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
                                 ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoDocking |
@@ -298,10 +296,27 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
 
     const ImVec2 ws = ImGui::GetWindowSize();
     const float intro = static_cast<float>(std::min(1.0, elapsed / 0.35));
-    ImGui::Dummy(ImVec2(1, ws.y * 0.06f));
+
+    // Small corner mark, drawn at its NATIVE pixel size — the bundled app.png is only 32x32, and
+    // stretching a source that small to fill a fraction of the card (the previous design) is what
+    // made it look pixelated. Un-scaled in a corner reads as a mark, not a hero image, and stays
+    // crisp at any card size. "GoSurvey" is the dominant visual now instead (below).
+    if (haveLogo && splashTex.texture) {
+      const ImVec2 savedCursor = ImGui::GetCursorPos();
+      const float pad = 14.f;
+      const float logoFade = std::min(1.f, static_cast<float>(elapsed / 0.12));
+      ImGui::SetCursorPos(ImVec2(pad, pad));
+      const ImTextureRef logoRef((ImTextureID)(intptr_t)(uintptr_t)splashTex.texture);
+      ImGui::ImageWithBg(logoRef, ImVec2(static_cast<float>(splashTex.width), static_cast<float>(splashTex.height)),
+                         ImVec2(0.f, 1.f), ImVec2(1.f, 0.f), ImVec4(0.f, 0.f, 0.f, 0.f),
+                         ImVec4(logoFade, logoFade, logoFade, 1.f));
+      ImGui::SetCursorPos(savedCursor);
+    }
+
+    ImGui::Dummy(ImVec2(1, ws.y * 0.30f));
 
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.92f * intro, 0.93f * intro, 0.96f * intro, intro));
-    ImGui::SetWindowFontScale(1.55f);
+    ImGui::SetWindowFontScale(2.6f);
     const char* title = "GoSurvey";
     float tw = ImGui::CalcTextSize(title).x;
     ImGui::SetCursorPosX((ws.x - tw) * 0.5f);
@@ -317,35 +332,16 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
     ImGui::TextUnformatted(subtitle);
     ImGui::PopStyleColor();
 
-    ImGui::Dummy(ImVec2(1, ws.y * 0.03f));
+    ImGui::Dummy(ImVec2(1, ws.y * 0.10f));
 
-    if (haveLogo && splashTex.texture) {
-      // Logo fits inside the splash card; fraction of the shorter card edge (was 0.42).
-      const float maxSide = std::min(ws.x, ws.y) * 0.62f;
-      float lw = static_cast<float>(splashTex.width);
-      float lh = static_cast<float>(splashTex.height);
-      const float scale = maxSide / std::max(lw, lh);
-      lw *= scale;
-      lh *= scale;
-      // Fade logo in quickly; solid tint (no pulsing).
-      const float logoFade = std::min(1.f, static_cast<float>(elapsed / 0.12));
-      ImGui::SetCursorPosX((ws.x - lw) * 0.5f);
-      const ImTextureRef logoRef((ImTextureID)(intptr_t)(uintptr_t)splashTex.texture);
-      ImGui::ImageWithBg(logoRef, ImVec2(lw, lh), ImVec2(0.f, 1.f), ImVec2(1.f, 0.f), ImVec4(0.f, 0.f, 0.f, 0.f),
-                         ImVec4(logoFade, logoFade, logoFade, 1.f));
-
-      const ImVec2 imgMin = ImGui::GetItemRectMin();
-      const ImVec2 imgMax = ImGui::GetItemRectMax();
-      const ImVec4 accent = themeAccent;
-      ImVec4 frameCol(accent.x, accent.y, accent.z, 0.28f);
-      ImGui::GetForegroundDrawList()->AddRect(imgMin - ImVec2(5, 5), imgMax + ImVec2(5, 5),
-                                             ImGui::ColorConvertFloat4ToU32(frameCol), 8.f, 0, 1.75f);
-    }
-
-    ImGui::Dummy(ImVec2(1, ws.y * 0.04f));
-
-    const char* phases[] = {"Bootstrapping interface…", "Preparing drawing engine…", "Almost ready…"};
-    const int phaseIdx = std::min(2, static_cast<int>(raw * 3.f));
+    // REQ-093: cosmetic only — text cycles purely on elapsed-time fraction, not on any real load
+    // step finishing. Linetypes have no data table to load and text styles are already resident in
+    // memory the instant AppCommandState is constructed, so neither has real work to gate on; the
+    // labels below name them anyway for the loading feel the splash is meant to give (D-2026-08-23-g).
+    const char* phases[] = {"Loading user settings…",  "Loading linetypes…", "Loading text styles…",
+                             "Preparing workspace…",    "Loading blocks…",    "Almost ready…"};
+    constexpr int kPhaseCount = static_cast<int>(sizeof(phases) / sizeof(phases[0]));
+    const int phaseIdx = std::min(kPhaseCount - 1, static_cast<int>(raw * static_cast<float>(kPhaseCount)));
     ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.48f, 0.55f, 0.64f, 0.92f * intro));
     tw = ImGui::CalcTextSize(phases[phaseIdx]).x;
     ImGui::SetCursorPosX((ws.x - tw) * 0.5f);
@@ -370,9 +366,11 @@ void RunStartupSplash(GLFWwindow* window, double durationSec) {
     int dh = 0;
     glfwGetFramebufferSize(window, &dw, &dh);
     glViewport(0, 0, dw, dh);
-    if (outerTransparent)
-      glClearColor(0.f, 0.f, 0.f, 0.f);
-    else {
+    // Opaque: the window is exactly the card, so there is no surrounding area whose transparency
+    // would matter, and relying on true per-pixel transparency instead — where the compositor
+    // doesn't actually honor it — paints solid black rather than the desktop (see the comment
+    // above this function).
+    {
       const ImVec4& c = ImGui::GetStyle().Colors[ImGuiCol_WindowBg];
       glClearColor(c.x, c.y, c.z, 1.f);
     }

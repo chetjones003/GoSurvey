@@ -205,14 +205,28 @@ int main()
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
   GlfwApplySplashStageWindowHints();
 
-  GLFWwindow *window = glfwCreateWindow(1600, 900, "GoSurvey", nullptr, nullptr);
+  // REQ-093: the splash stage window is small and centered (AutoCAD-style), not the eventual
+  // maximized shell — it used to be created at the full 1600x900 shell size and immediately
+  // maximized right here, which is why the splash card previously appeared to float over a giant
+  // dimmed rectangle instead of the real desktop: the "rectangle" WAS the (opaque, since per-pixel
+  // transparency isn't guaranteed by every compositor) maximized window. GlfwApplyMainStageWindowChrome
+  // (called after RunStartupSplash below) is the only maximize call now, so the window makes one
+  // clean size/decoration transition instead of two.
+  constexpr int kSplashWinW = 440;
+  constexpr int kSplashWinH = 320;
+  GLFWwindow *window = glfwCreateWindow(kSplashWinW, kSplashWinH, "GoSurvey", nullptr, nullptr);
   if (!window)
   {
     glfwTerminate();
     return 1;
   }
+  if (GLFWmonitor *primary = glfwGetPrimaryMonitor())
+  {
+    int mx = 0, my = 0, mw = 0, mh = 0;
+    glfwGetMonitorWorkarea(primary, &mx, &my, &mw, &mh);
+    glfwSetWindowPos(window, mx + (mw - kSplashWinW) / 2, my + (mh - kSplashWinH) / 2);
+  }
   glfwDefaultWindowHints();
-  glfwMaximizeWindow(window);
 
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
@@ -254,11 +268,31 @@ int main()
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
 
-  // RunStartupSplash(window, 1.0);
-  GlfwApplyMainStageWindowChrome(window);
-
+  // AppCommandState + the ini-path configuration MUST happen before the splash's first
+  // ImGui::NewFrame(), not after it. Dear ImGui auto-loads io.IniFilename's saved dock/window
+  // layout exactly once per process, on the very first NewFrame() call ever made — a one-shot
+  // latch that does not retry. ImGuiLayout_ConfigureIniPath is what points io.IniFilename at the
+  // real, per-layout .ini path (it starts out null); until this line ran here, the splash's own
+  // frame loop was the first thing calling NewFrame(), with IniFilename still null, so ImGui's
+  // auto-load fired once, found nothing, and never looked again — the saved dock layout was
+  // silently discarded every launch, which is what "my layout isn't respected" actually was.
   AppCommandState cmd;
   LoadUserStartupPrefs(cmd);
+  const bool haveSavedDockIni = ImGuiLayout_ConfigureIniPath(cmd);
+
+  // Shown only now (GlfwApplySplashStageWindowHints set GLFW_VISIBLE false) so it never flashes
+  // at an unpositioned spot before glfwSetWindowPos above took effect.
+  glfwShowWindow(window);
+
+  // REQ-093: hardcoded 5 s regardless of how fast the real preload below finishes — the app is
+  // still low-resource enough that the actual load is imperceptible, so the splash's duration is
+  // deliberately decoupled from it rather than trying to track real progress.
+  RunStartupSplash(window, 5.0);
+  GlfwApplyMainStageWindowChrome(window);
+  // glfwMaximizeWindow (inside the call above) posts an async resize on Windows; pump events so
+  // the window's real (maximized) size has landed before the first docked-layout frame reads it.
+  glfwPollEvents();
+  glfwPollEvents();
 
   // REQ-077: the update check. Only the persisted settings live in AppCommandState; the worker
   // state is owned here, so no drawing state is ever touched from a background thread.
@@ -293,7 +327,6 @@ int main()
   bool                            authLastAttemptInteractive = false;
   authTask                                                   = auth::BeginSilentRefresh();
   cmd.authBusy                                                = true;
-  const bool haveSavedDockIni = ImGuiLayout_ConfigureIniPath(cmd);
   std::vector<std::string> cmdLog;
   cmdLog.push_back("GoSurvey CAD shell ready.");
   cmdLog.push_back("Regenerating model.");
