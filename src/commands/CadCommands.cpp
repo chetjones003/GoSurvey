@@ -6705,31 +6705,58 @@ static void CommitSurveyInverseSecondPoint(AppCommandState& st, float x2, float 
   st.surveyInversePhase = SIP::WaitFrom;
 }
 
-// --- REQ-074 spot elevation and grade ----------------------------------------------------------
+// --- REQ-074 spot elevation and grade, REQ-089 rollover readout ---------------------------------
 
-/// Interpolated elevation of every surface covering (\p x, \p y), paired with its name.
+/// One visible surface covering a plan position, and its interpolated elevation there.
+///
+/// The index is consumed by the caller **within the same call** and never stored, so architecture
+/// §11.9 is satisfied: it is a cursor into this walk's result, not a reference held across time.
+struct SurfaceCoverage {
+  size_t surfaceIndex = 0;
+  double z = 0.0;
+};
+
+/// Every **visible** surface covering (\p x, \p y), with its interpolated elevation.
 ///
 /// **Every** covering surface, not one of them (TASK-055 Q1): overlapping surfaces are the existing
-/// vs proposed case, which is the grading question this command exists to answer, and a bare number
-/// from an unnamed surface would be worse than no number at all.
+/// vs proposed case, which is the grading question SURFELEV exists to answer, and a bare number from
+/// an unnamed surface would be worse than no number at all. REQ-089's readout inherits the rule —
+/// two overlapping surfaces get one block each.
 ///
-/// Invisible surfaces are skipped, via the shared \ref SurfaceVisible — the readout should describe
-/// the surfaces the user can see, and REQ-068 already established that rule. Routing through the
-/// shared predicate also fixed a real gap here: this walk checked layer on/frozen but not
-/// `hiddenEntityIds`, so SURFELEV reported an elevation from a surface REQ-084 (d) had isolated out.
-static std::vector<std::pair<std::string, double>> SurfaceElevationsAt(const AppCommandState& st, double x,
-                                                                       double y) {
-  std::vector<std::pair<std::string, double>> out;
+/// Invisible surfaces are skipped, via the shared \ref SurfaceVisible — a readout should describe the
+/// surfaces the user can see, and REQ-068 already established that rule. Routing through the shared
+/// predicate also fixed a real gap here: this walk checked layer on/frozen but not `hiddenEntityIds`,
+/// so SURFELEV reported an elevation from a surface REQ-084 (d) had isolated out.
+///
+/// **One walk, two readers** (SURFELEV and the REQ-089 rollover), for the reason the paragraph above
+/// records: the last time this question was asked in two places, the two answers drifted and a hidden
+/// surface kept reporting elevations. A second copy of this loop would be the same defect waiting to
+/// happen, so the rollover was given the index it needs rather than a walk of its own.
+static std::vector<SurfaceCoverage> SurfacesCovering(const AppCommandState& st, double x, double y) {
+  std::vector<SurfaceCoverage> out;
   for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
     if (!SurfaceVisible(st, si))
       continue;
     const CadSurface& s = st.cadSurfaces[si];
     double z = 0.0;
     if (TinElevationAt(s.tin->vertsXyz, s.tin->indices, x, y, &z))
-      out.emplace_back(s.name, z);
+      out.push_back({si, z});
   }
   return out;
 }
+
+/// The same coverage, named rather than indexed — what REQ-074's two commands consume.
+static std::vector<std::pair<std::string, double>> SurfaceElevationsAt(const AppCommandState& st, double x,
+                                                                       double y) {
+  std::vector<std::pair<std::string, double>> out;
+  for (const SurfaceCoverage& c : SurfacesCovering(st, x, y))
+    out.emplace_back(st.cadSurfaces[c.surfaceIndex].name, c.z);
+  return out;
+}
+
+// REQ-089's readout is built from this same walk, but it is a public entry point (the UI calls it),
+// so its definition cannot live inside this anonymous namespace — see `BuildSurfaceHoverRows` beside
+// `CommitClipboardPasteAt` after the namespace closes.
 
 /// First pick: report the elevation on each covering surface, and remember them for the grade.
 static void ReportSurfaceElevationAt(AppCommandState& st, double x, double y, std::vector<std::string>& log) {
@@ -7957,6 +7984,46 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
 }
 
 } // namespace
+
+// Public surface rollover entry point (REQ-089): the readout for the plan position under the cursor,
+// one row per visible surface covering it. Calls the file-local SurfacesCovering — the same walk
+// SURFELEV uses — which is visible here via the anonymous namespace's using-directive, exactly as
+// CommitClipboardPasteAt below reaches CommitPasteFromClipboard.
+//
+// Called ONCE per cursor rest, never per frame; the reason and the mechanism are in
+// `util/hoverdwell.hpp`, and REQ-089 makes it an acceptance condition.
+void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
+                           std::vector<SurfaceHoverRow>* out) {
+  if (!out)
+    return;
+  out->clear();
+  for (const SurfaceCoverage& c : SurfacesCovering(st, x, y)) {
+    const CadSurface& s = st.cadSurfaces[c.surfaceIndex];
+    SurfaceHoverRow row;
+    row.name = s.name;
+
+    // The EFFECTIVE style, resolved on read (REQ-070 / ADR-036 (d)) — so a surface whose style was
+    // deleted, and one saved before the field existed, both read "Standard" here rather than blank.
+    // The empty-table case is the only one that has no name to give.
+    const SurfaceStyle* style = SurfaceStyles::Resolve(st.surfaceStyles, s.styleName);
+    row.style = style ? style->name : std::string("\xE2\x80\x94");
+
+    // `cadSurfaceAttrs` is length-locked to `cadSurfaces`; a short array means defaults, exactly as
+    // SurfaceVisible reads it, and the default layer is "0".
+    row.layer = (c.surfaceIndex < st.cadSurfaceAttrs.size() &&
+                 !st.cadSurfaceAttrs[c.surfaceIndex].layer.empty())
+                    ? st.cadSurfaceAttrs[c.surfaceIndex].layer
+                    : std::string("0");
+
+    // Defensive, and expected never to fire: a row exists only where a triangle covered the point,
+    // so an elevation exists (TASK-088 ASSUMPTION-2). It survives for the degenerate case
+    // TinElevationAt guards — a collinear triangle whose plane has no solution — because printing
+    // "nan" as an elevation would be a statement about the ground that happens to be false.
+    row.elevation = std::isfinite(c.z) ? FormatLinear(c.z, st.displayLinearPrecision)
+                                       : std::string("\xE2\x80\x94");
+    out->push_back(std::move(row));
+  }
+}
 
 // Public paste entry point (REQ-038): place the clipboard at point (x,y) in the ACTIVE space's coordinates
 // (world for model, paper inches for a paper layout). Used by the model pick path and the paper overlay click.

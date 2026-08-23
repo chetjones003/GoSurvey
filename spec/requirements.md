@@ -2575,6 +2575,60 @@ requirements is a planning failure, not a sign of rigor.
                path. ACCEPTED. The panel's own rendering has no automated coverage and cannot
                while the driver has no window; that is mitigated by the routing, not solved.
 
+### REQ-089 — Surface rollover readout
+- Purpose:     the constant "what is this, and how high is it here" while working over a topo,
+               answered without a click and without running a command
+- Priority:    should
+- Type:        functional
+- Statement:   When the model-space cursor rests over a TIN surface — the plan position under the
+               cursor lies **inside one of its triangles** — and has not moved for a **dwell
+               period**, a readout appears beside the cursor naming the surface, its **effective
+               style** (REQ-070 resolution), its **layer**, and the **interpolated elevation** at
+               that plan position, using REQ-074's interpolation and REQ-101's tolerance. The
+               readout covers **every visible surface** over that position — the overlapping
+               existing-vs-proposed case REQ-074 already reports on — and is a **readout only**: it
+               accepts no input and changes no state. It disappears on cursor movement, and never
+               appears while a command is active, while a gesture is in progress, or in paper space.
+
+               **The plan position is the one every other pick consumes** (the REQ-058 input seam),
+               so under an orbited camera it is the cursor ray's intersection with the work plane
+               rather than with the triangle under the pixel. That is deliberate: SURFELEV reads the
+               same seam, so the two always agree about where "here" is. A ray-cast against the
+               triangulation would be more faithful under a tilted camera and is a separate
+               requirement, not an implementation detail of this one.
+- Acceptance:
+  - resting the cursor inside a surface for the dwell period shows the readout; moving the cursor
+    hides it immediately and re-arms the dwell;
+  - the elevation shown equals the planar interpolation at that position within REQ-101 — the same
+    condition REQ-074 states, and the same query;
+  - a position covered by no triangle — outside the border, in a concave notch, or inside a REQ-069
+    hide-boundary void — shows **no readout**, and no elevation is extrapolated;
+  - a surface whose style name is empty or no longer in the table reads its REQ-070 fallback style
+    name, never blank;
+  - a surface on an off or frozen layer, or isolated out under REQ-084 (d), produces no readout;
+  - two overlapping visible surfaces produce one block each, both named;
+  - **the per-frame cost of moving the cursor over a surface is unchanged**: the covering-surface
+    query runs **once, when the dwell elapses**, and its result is latched — never re-run per frame.
+    This is an acceptance condition rather than a note because `TinElevationAt` is a linear scan over
+    every triangle and REQ-100 profile (c) is the one profile near budget and CPU-bound; a per-frame
+    query would roughly double its dominant cost.
+- Owner-layer: UI (dwell, gating, draw), Commands (the query)
+- Status:      accepted
+- Revisions:   2026-08-23 — initial. Requires no ADR: the state is UI-transient on
+               `AppCommandState` beside the existing hover fields, the payload latches formatted
+               text rather than a surface index (architecture §11.9), the dwell helper is a concrete
+               free function in a pure header, and nothing is persisted.
+               2026-08-23 — TASK-088 implemented it. The last acceptance condition (the query runs
+               once per rest, never per frame) is **pinned by a test** — `HoverDwellTests`, 600
+               frames of a held cursor, one query. The elevation, containment and style-fallback
+               conditions are met by the calls the readout reuses, each already pinned by
+               `TinQueryTests` / `SurfaceStyleTests`. The conditions about what appears **on screen**
+               — the readout showing on dwell, hiding on movement, and being suppressed during a
+               command — are implemented and reviewed but **not observed**: see TASK-088 FINDING-1,
+               where synthetic input could not produce a hovered frame (a ribbon button used as a
+               control did not highlight either). Status stays `accepted` rather than advancing to
+               `implemented` until someone has watched it work.
+
 ---
 
 ## Performance requirements

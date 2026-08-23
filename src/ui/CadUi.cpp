@@ -619,10 +619,80 @@ void ApplyCadLightTheme() {
 }
 
 // ---------------------------------------------------------------------------
+// Surface rollover readout (REQ-089)
+// ---------------------------------------------------------------------------
+/// How long the cursor must rest before the readout appears.
+///
+/// Fixed rather than a setting, by decision D-2026-08-23-a (2): a persisted value would be a
+/// data-format change for a number nobody tunes. Half a second is long enough that dragging the
+/// cursor across a drawing never raises it and short enough that deliberately pointing at a surface
+/// does not feel like waiting.
+constexpr double kSurfaceRolloverDwellSec = 0.5;
+
+/// How far the cursor may drift and still count as resting.
+///
+/// **Not zero.** A mouse physically at rest still reports sub-pixel jitter on a high-resolution
+/// device, and a zero tolerance would restart the dwell every frame and the readout would never
+/// appear at all. Pinned by `HoverDwellTests`.
+constexpr float kSurfaceRolloverMoveTolPx = 2.f;
+
+// ---------------------------------------------------------------------------
 // Elevation cues (REQ-081)
 // ---------------------------------------------------------------------------
 // How far a cast shadow reaches before it has faded out.
 constexpr float kPlateShadowPx = 9.f;
+
+/// Draw the latched rollover readout beside the cursor (REQ-089), or nothing if there is nothing to
+/// say.
+///
+/// **An ImGui tooltip rather than a hand-painted plate**, which is the whole reason this function is
+/// short. A tooltip window already takes its background and border from the active theme and already
+/// clamps itself to the monitor when the cursor is near an edge — so no `UiChrome` field is added,
+/// and REQ-081's standing hazard (a theme that forgets to fill a chrome field leaves stale colours
+/// behind) is avoided by not creating another field to forget.
+///
+/// Purely presentational: every string was formatted by `BuildSurfaceHoverRows` when the cursor came
+/// to rest, so this reads `cmd` and computes nothing.
+static void DrawSurfaceRolloverReadout(const AppCommandState& cmd) {
+  if (cmd.surfaceHoverRows.empty())
+    return;
+
+  // Guarded, not assumed: BeginTooltip returns false when ImGui declines to open the window, and
+  // EndTooltip must not be called then. The unguarded form appears elsewhere in this file; the
+  // guarded one is the form the rest of the tooltips here use, and it is the correct one.
+  if (!ImGui::BeginTooltip())
+    return;
+
+  // The value column is aligned by measuring the widest label once rather than by a table. A table
+  // inside an auto-resizing window has sizing rules of its own, and four rows of two strings do not
+  // need them; `SameLine` at a measured offset stays aligned in any font, which is the only thing
+  // the table was buying.
+  const float valueX = ImGui::CalcTextSize("Elevation").x + ImGui::GetStyle().ItemSpacing.x * 2.f;
+
+  for (size_t i = 0; i < cmd.surfaceHoverRows.size(); ++i) {
+    // One block per covering surface — REQ-089's "two overlapping visible surfaces produce one block
+    // each, both named", which is the existing-vs-proposed case REQ-074 already reports on.
+    if (i > 0)
+      ImGui::Separator();
+
+    const SurfaceHoverRow& row = cmd.surfaceHoverRows[i];
+    ImGui::TextUnformatted("Tin Surface");
+    ImGui::Spacing();
+
+    const auto field = [valueX](const char* label, const std::string& value) {
+      // The label is the quiet half — it is the same four words every time, and the value beside it
+      // is what the user came here to read.
+      ImGui::TextDisabled("%s", label);
+      ImGui::SameLine(valueX);
+      ImGui::TextUnformatted(value.c_str());
+    };
+    field("Name", row.name);
+    field("Style", row.style);
+    field("Layer", row.layer);
+    field("Elevation", row.elevation);
+  }
+  ImGui::EndTooltip();
+}
 
 /// A raised plate catches the light along its top edge. Call with the plate's
 /// own rect; draws a 1px line just inside the top.
@@ -8823,6 +8893,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   bool cursorValid = !InFloatingModelSpace(cmd) && hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y;
   double rawX = 0.0, rawY = 0.0;
   double rawZ = 0.0;
+  /// May the surface rollover readout (REQ-089) run this frame? Set from inside the idle-hover block
+  /// below, so it is decided by the SAME `blockEntityHover` condition the hover highlight uses rather
+  /// than by a second copy of it — the readout must never appear anywhere a hover highlight would not.
+  /// It stays false when the cursor is not valid at all, which is what hides the readout the moment
+  /// the pointer leaves the viewport.
+  bool surfaceReadoutAllowed = false;
   if (cursorValid) {
     const bool orbited = modelSpace && !CadViewIsPlan(cmd);
     if (orbited) {
@@ -8914,6 +8990,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                                                              cmd.trimPhase == TPh::SelectTrimTargets);
       const bool blockEntityHover = (cmd.active != AK::None && !trimEntityPick) || cmd.dimGripMoveActive ||
                                     cmd.entityGripMoveActive || cmd.mtextGripMoveActive || cmd.selBoxWaitingSecond;
+      // REQ-089: the rollover readout rides on this exact condition. Model space only — a sheet has
+      // no surfaces on it (ADR-025 (g)) — and, unlike the hover highlight, it is also suppressed
+      // during a TRIM entity pick: TRIM wants to show what a click will take, and a four-row panel
+      // over the cursor would cover the very geometry that pick is choosing between.
+      surfaceReadoutAllowed = !blockEntityHover && modelSpace && cmd.active == AK::None;
       if (!blockEntityHover) {
         // Text annotations are picked by bounding box and take priority over geometry, mirroring
         // click-to-select (the annotation pick runs before the entity pick on a click). Hovering text
@@ -9034,6 +9115,35 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       }
     }
+  }
+
+  // Surface rollover readout (REQ-089): advance the dwell, and on the one frame it elapses, ask what
+  // is under the cursor — once.
+  //
+  // **The query is deliberately NOT run per frame.** `BuildSurfaceHoverRows` walks every triangle of
+  // every visible surface (`TinElevationAt` is a linear scan), and REQ-100's surface profile is the
+  // one profile near the frame budget and is CPU-bound — `PickClosestCadEntity` above already walks
+  // the same triangles every frame for the hover highlight. Running this beside it would roughly
+  // double that cost for a panel the user is not looking at yet. `HoverDwellTick::elapsed` is true on
+  // exactly one frame per rest, which is what holds that line; REQ-089 states it as an acceptance
+  // condition rather than a note for the same reason.
+  {
+    const double nowSec = ImGui::GetTime();
+    if (surfaceReadoutAllowed) {
+      const HoverDwellTick tick = UpdateHoverDwell(&cmd.surfaceHoverDwell, mx, my, nowSec,
+                                                   kSurfaceRolloverMoveTolPx, kSurfaceRolloverDwellSec);
+      if (tick.moved)
+        cmd.surfaceHoverRows.clear();  // the latched text is about a place the cursor has left
+      else if (tick.elapsed)
+        BuildSurfaceHoverRows(cmd, rawX, rawY, &cmd.surfaceHoverRows);
+    } else {
+      // Suppressed — a command started, a gesture began, or the pointer left the viewport. Re-base
+      // the timer rather than merely leaving it, so coming back costs a fresh dwell instead of
+      // firing instantly on a timer that kept running while the readout was hidden.
+      cmd.surfaceHoverRows.clear();
+      ResetHoverDwell(&cmd.surfaceHoverDwell, mx, my, nowSec);
+    }
+    DrawSurfaceRolloverReadout(cmd);
   }
 
   // MTEXT box grips: first click arms; snapped cursor updates box live; second LMB commits (like dim / entity grips).

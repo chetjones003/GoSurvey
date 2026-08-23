@@ -523,6 +523,11 @@ if(GOSURVEY_BUILD_TESTS)
     # empty-name fallback, and the rejection of a major interval that is not a whole multiple of the
     # minor — are decided entirely here, before any geometry exists to look at.
     tests/SurfaceStyleTests.cpp
+    # REQ-089 surface rollover dwell. Header-only and pure, like the style table above. It is the
+    # feature's ONLY new logic — the readout's numbers come from TinQueryTests' and
+    # SurfaceStyleTests' already-pinned calls — and the one-shot it asserts is what keeps the
+    # per-rest surface query off the per-frame path REQ-100 profile (c) measures.
+    tests/HoverDwellTests.cpp
     tests/UpdateCheckTests.cpp
     tests/TelemetryPingTests.cpp
     tests/GsMigrateTests.cpp

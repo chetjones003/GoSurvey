@@ -17,6 +17,10 @@
 #include "traverse/TraverseLeastSquares.hpp"
 #include "update/UpdateCheck.hpp"  // update::UpdatePrefs only — pure, no network, no <thread>
 #include "util/tinbuild.hpp"       // TinBuildResult, for AppCommandState::SurfaceRebuildAsync (REQ-069)
+// HoverDwell, for AppCommandState's surface rollover timer (REQ-089). Pure and dependency-free
+// (<cmath>), and deliberately in util/ rather than beside the UI that drives it: the state lives on
+// AppCommandState, and Commands may not include a UI header (architecture §11.1).
+#include "util/hoverdwell.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -53,6 +57,21 @@ struct SelectedEntity {
 
 // PaperEntityRef (selected paper-space entity) is defined in PaperSpace.hpp so header-only selection
 // helpers can name it; CadCommands.hpp gets it via the include above (REQ-039).
+
+
+/// One surface's block in the rollover readout (REQ-089) — what the panel beside the cursor says.
+///
+/// **Formatted text, not values, and no surface reference of any kind.** The row is latched when the
+/// cursor comes to rest and read on later frames, and `cadSurfaces` compacts on erase, so carrying an
+/// index would be architecture §11.9's blocking finding and carrying a pointer would be worse. Every
+/// field is already the string the panel draws, which also keeps `displayLinearPrecision` and the
+/// REQ-070 style fallback applied once at the query rather than re-derived per frame.
+struct SurfaceHoverRow {
+  std::string name;
+  std::string style;      ///< the EFFECTIVE style name (REQ-070 resolution), never the stored one
+  std::string layer;
+  std::string elevation;  ///< already to `displayLinearPrecision`; "—" if there is no elevation
+};
 
 
 /// Named layer row for the layer manager (visibility / freeze / lock are stored for future viewport filtering).
@@ -686,6 +705,20 @@ struct AppCommandState {
   /// Paper layout: native paper-space entity under the cursor when idle, for hover highlight parity (REQ-039).
   bool paperHoverValid = false;
   PaperEntityRef paperHover{};
+
+  /// Drawing viewport: the surface rollover readout (REQ-089) — how long the cursor has rested, and
+  /// what to say about the surfaces under it.
+  ///
+  /// **The rows hold formatted text, not a surface index.** `cadSurfaces` compacts on erase, so an
+  /// index latched on one frame and read on the next would designate a different surface
+  /// (architecture §11.9); latching the text means there is nothing to dangle. It also means the
+  /// readout survives a rebuild that replaces the triangulation underneath it, showing the numbers
+  /// that were true when the cursor came to rest rather than a mixture of two moments.
+  ///
+  /// **Filled once per rest, never per frame** — REQ-089's last acceptance condition. \ref
+  /// HoverDwell::armed is what enforces that; see `util/hoverdwell.hpp`.
+  HoverDwell surfaceHoverDwell{};
+  std::vector<SurfaceHoverRow> surfaceHoverRows;
   /// When true, viewport picks should use the snapped point (OSNAP) instead of the sticky-blended cursor.
   bool viewportSnapPickValid = false;
   /// **LOCAL** coordinates, not world — `world = local + worldDocumentOrigin`. These were named
@@ -2101,6 +2134,20 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st);
 /// predicate is that "invisible" and "unclickable" cannot disagree — which is exactly what REQ-084
 /// (d) requires of every entity kind.
 [[nodiscard]] bool SurfaceVisible(const AppCommandState& st, size_t surfaceIndex);
+
+/// The rollover readout for plan position (\p x, \p y) — one row per **visible surface covering it**
+/// (REQ-089). \p out is cleared first; an empty result means "no surface here", which is the signal
+/// to show nothing at all.
+///
+/// Covering is decided per triangle by \ref TinElevationAt, which is what makes REQ-089's "outside
+/// the border, in a concave notch, or inside a hide-boundary void shows no readout" true by
+/// construction rather than by three separate tests: there is simply no triangle in any of those
+/// places, so the surface produces no row.
+///
+/// **Not cheap** — the query walks every triangle of every visible surface. REQ-089 makes calling it
+/// once per cursor rest an acceptance condition for exactly that reason; see `util/hoverdwell.hpp`.
+void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
+                           std::vector<SurfaceHoverRow>* out);
 
 /// Index of the surface named \p name (case-insensitive), or -1 (REQ-068).
 ///
