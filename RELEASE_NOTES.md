@@ -16,6 +16,94 @@ short fallback message instead — which is a missed opportunity, not a failure.
 
 ---
 
+## 0.5.4
+
+**Contours you can keep — new**
+- **EXTRACT** turns a surface's contours into ordinary polylines. Type `EXTRACT <surface>`, or
+  `EXTRACT <surface>, <layer>` to put them on a layer of your choosing — the layer is created if it
+  does not exist yet.
+- You get exactly the contours you can see: the minor and major intervals set in the surface's
+  style. If one of the two is switched off it is not extracted, and GoSurvey says which one it
+  skipped rather than leaving you to count.
+- The result is **ordinary drawing geometry, not linked to the surface**. Rebuilding the surface,
+  restyling it, or erasing it altogether leaves the polylines exactly as they are — so you can edit
+  them, label them, and send them out.
+- It reports how many contours it made, at which interval, and on which layer. One undo removes the
+  whole lot.
+- A surface that has never been built, or whose style is showing no contours, creates nothing and
+  tells you why instead of quietly doing nothing.
+
+---
+
+**Also new since you last looked**
+
+These arrived in 0.5.3, but its notes never described them.
+
+**Surfaces**
+- **Surfaces** on the Survey ribbon opens the surface list: every surface in the drawing with its
+  point count, triangle count and elevation range, and whether it is out of date or rebuilding right
+  now. Create, rename, delete, rebuild and restyle from the same place.
+- **Breaklines.** Designate an existing line or polyline as a breakline (`DBL`) and no triangle will
+  cross it — ridges, toes and swales hold their shape instead of being triangulated through.
+- **Boundaries.** Designate a closed polyline as an **outer** boundary to clip the surface to it, a
+  **hide** boundary to punch a void, or a **show** boundary to bring surface back inside a void
+  (`DBD`). They apply in the order you add them.
+- **Surfaces keep themselves up to date.** Move or delete a point the surface is built from, or edit
+  a breakline, and it retriangulates on its own — there is nothing to press. The work happens in the
+  background, so your edit finishes straight away and the surface is marked out of date until the
+  new one lands.
+- **Surface styles** (`SURFSTYLE`, or `SS`) — a named, reusable style controlling minor and major
+  contour interval, each with its own colour, linetype and lineweight, plus triangles, border and
+  points. Editing a style changes every surface using it, and changing how a surface looks never
+  re-triangulates it.
+- **Build a surface straight from a point file.** Link a `.csv` or `.txt` into a surface and its
+  points feed the triangulation **without becoming drawing points** — so a large point delivery does
+  not have to land in your drawing first. Edit the file and the surface follows it. You can import
+  it into the drawing later, which creates the points and a point group and breaks the link. A file
+  that has gone missing is named, and the surface keeps its last good shape rather than quietly
+  shrinking.
+
+**Grading**
+- **Feature lines — a new kind of object.** Named 3D linework carrying an elevation at every point.
+  Draw one with `FEATURELINE` (`FL`): click for position, then type the elevation for each point. It
+  selects, moves, copies, rotates, scales and erases like any other object, and it can be added to a
+  surface as a breakline, after which the surface follows it.
+- **Feature line elevations** (`FLELEVEDIT`) — a table showing, for every point, its station,
+  elevation, length to the next point, grade back and grade ahead. Type an elevation and the
+  neighbouring grades update; type a grade ahead and the next point's elevation moves instead. Raise
+  or lower the whole line by an amount. **Elevation points** let you set a grade break without
+  adding a bend in plan.
+- Feature lines are still new: TRIM, OFFSET, JOIN and copy-to-clipboard turn them down for now, and
+  say so rather than doing something surprising.
+- **3DPOLY** draws a polyline whose vertices **each carry their own elevation**, typed or taken from
+  a snap, instead of every vertex landing flat on the current ELEV plane. This is what a breakline
+  drawn by hand should be drawn with — an ordinary POLYLINE drawn free-hand put the whole line at
+  elevation 0 and tore the surface down along its length.
+
+**Fixes worth knowing about**
+- **Deleting a circle no longer damages every other circle in the drawing.** It used to shift them
+  all, so each one took the previous circle's radius as its centre — three circles became one, in
+  the wrong place — with no warning, and saving wrote the damage to the file.
+- **Polylines survive DXF.** A polyline sent out to DXF came back as a heap of unrelated lines, and
+  so did every polyline in a DXF from Civil 3D — parcel boundaries, breaklines and alignments
+  arrived already broken apart. They now arrive as polylines.
+- A DXF now records the drawing extents in the same coordinates as the objects, so the file no
+  longer changes depending on where the drawing origin sits, and a state-plane DXF that GoSurvey
+  wrote re-opens in the right place.
+- **Ctrl+S saves.** The File menu had advertised the shortcut all along, but nothing was listening
+  for it.
+- A drawing opened by double-clicking a `.gs` now knows its own file, so the first save no longer
+  asks where to put a drawing you just opened.
+- **Survey point labels stay clear of their points.** A long description used to grow the label
+  westward across the point marker it was labelling; the label now grows east, away from it.
+- A point label no longer wraps its last word onto a second line at some zoom levels and back again
+  at others, without the text having changed.
+- A label given its own typeface is now measured in that typeface, so the text stays inside its box
+  and clicking the text actually selects it.
+- A drawing containing a feature line and nothing else now draws it.
+
+---
+
 ## 0.5.3
 
 **Right-click now does what you tell it to**
