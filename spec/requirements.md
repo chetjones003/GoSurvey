@@ -1792,14 +1792,31 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted (2026-08-12)
 - Revisions: 2026-08-12 — initial.
 
-### REQ-073 — Surface-to-surface volumes
-- Purpose: earthwork — the number a grading design is judged by
+### REQ-073 — Surface-to-surface volumes, and a live Volume Dashboard
+- Purpose: earthwork — the number a grading design is judged by, kept current as either surface
+  changes rather than re-run by hand
 - Priority: must
 - Type: functional
 - Statement: Given two surfaces, GoSurvey reports **cut**, **fill** and **net** volume over the area
   the two have **in common**, together with that common area, and offers a cut/fill colour map over
   the same region. The comparison region is stated explicitly in the result, because a volume quoted
   without the area it covers is not a result.
+
+  A **Volume Dashboard** panel (2026-08-23 amendment) picks two surfaces from the drawing and holds
+  the report on screen: cut, fill, net, the common area, and the cut/fill map toggle, all in one
+  place rather than a one-shot command result that scrolls away. The dashboard is **live**: when
+  either selected surface's triangulation is replaced — REQ-069's dynamic rebuild, or a fresh
+  triangulation from any source — the dashboard recomputes with **no user action**, the same
+  dynamic-recompute pattern REQ-069 established for a surface's own triangulation, reusing
+  architecture §8's one-shot-worker contract (generation staleness + cooperative cancellation) rather
+  than a new mechanism. The panel is visibly marked stale until the new result lands, and a result
+  computed against a selection that is no longer current — because the panel's surface pick changed,
+  or an undo landed, while the compute was in flight — is **discarded, not applied**, mirroring
+  REQ-069's own rule for exactly the same failure shape. Recompute is **coalesced to at most one per
+  relevant change**: a rebuild that itself coalesced many edits into one (REQ-069) triggers one
+  dashboard recompute, not one per edit it absorbed. The panel is UI/session state — which two
+  surfaces are picked, and whether the panel is open — and is **not persisted to `.gs`**, the same
+  choice REQ-075's Surface Manager makes for its own selection state.
 - Acceptance:
   - two planar surfaces offset by a known constant over a known common area report cut, fill and net
     within a stated tolerance of the hand-computed value;
@@ -1807,10 +1824,22 @@ requirements is a planning failure, not a sign of rigor.
     derived from no common area;
   - partial overlap reports volumes over the overlap only, and states the common area used;
   - the cut/fill map colours cut and fill distinctly and shows nothing outside the common area;
-  - comparing a surface with itself reports zero net within tolerance.
-- Owner-layer: Domain (compute), UI (report + map)
+  - comparing a surface with itself reports zero net within tolerance;
+  - rebuilding either dashboard-selected surface (REQ-069) updates the reported volume with no user
+    action, and the dashboard shows a stale/computing state until the new result lands;
+  - a single rebuild that coalesces N edits into one (REQ-069) triggers exactly one dashboard
+    recompute, not N;
+  - undo, or changing the panel's surface pick, while a recompute is in flight leaves the dashboard
+    showing a result consistent with the CURRENT selection — the in-flight result is discarded;
+  - picking a surface that is itself out of date (mid-rebuild) is reflected as such rather than
+    computing a volume against a stale triangulation;
+  - closing and reopening the panel, or saving and reloading the drawing, does not change which
+    surfaces are selectable or force a recompute that current data already answered.
+- Owner-layer: Domain (compute + the async worker), UI (dashboard panel + map)
 - Status: accepted (2026-08-12)
-- Revisions: 2026-08-12 — initial.
+- Revisions: 2026-08-12 — initial. 2026-08-23 — amended (D-2026-08-23-k) to add the Volume Dashboard
+  panel and make it live: recompute-on-rebuild, staleness marking, and discard-of-stale-results,
+  mirroring REQ-069's own pattern rather than inventing a second one.
 
 ### REQ-074 — Spot elevation and grade readout
 - Purpose: the constant, small question while grading — how high is it here, and what is the grade

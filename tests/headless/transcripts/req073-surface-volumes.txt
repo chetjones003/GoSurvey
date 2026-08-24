@@ -1,0 +1,121 @@
+# REQ-073 — surface-to-surface volumes: the VOLUMES command (TASK-095 step 1/2).
+#
+# `SurfaceVolumeTests` (Catch2) proves the MATH — hand-built planar rectangles at a known offset,
+# self-comparison, partial overlap, the bbox-disjoint early-out, the spatial index agreeing with a
+# full linear scan everywhere. What it cannot reach is the COMMAND layer this file is for: resolving
+# two surfaces by NAME, reading their live `.tin` (not a copy fed straight to the algorithm by a
+# test), refusing a missing name or a bad argument count with a specific message, and the exact log
+# format a user actually reads.
+#
+# **On VOLUMES rather than a panel.** The Volume Dashboard is an ImGui window this driver cannot
+# reach — the same limitation `req070-surface-styles-contours` and `req072-surface-analysis` work
+# around — so `VOLUMES <base>, <comparison>` calls the same `ComputeSurfaceVolume` the eventual
+# dashboard will, against the SAME live surfaces (not synthetic fixtures fed straight to the
+# algorithm the way the Catch2 suite's hand-built rectangles are).
+#
+# **The numbers are properties of the FIXTURE**, read out of the running program with `--print-log`,
+# the same convention `req070`/`req072` use: `samples/surface-demo.gs` triangulates to 982 triangles
+# over 229,208.2107 ft^2. Two surfaces built from the SAME point group ("Existing Ground") are
+# independently-triangulated but topologically IDENTICAL (Delaunay is deterministic for the same
+# point set), so comparing them nets exactly zero — a stronger end-to-end version of "compare a
+# surface with itself" than passing one `CadTin` to itself, since these are two distinct `CadSurface`
+# objects reached by two distinct names.
+
+OPEN samples/surface-demo.gs
+CMD SURFACECREATE Base, Existing Ground
+CMD SURFACECREATE Twin, Existing Ground
+EXPECT SURFACES 2
+
+# --- two independently-built surfaces from the same source data volume to exactly zero --------------
+CMD VOLUMES Base, Twin
+EXPECT LOG "cut 0.0000 ft3, fill 0.0000 ft3, net 0.0000 ft3, common area 229208.2107 ft2"
+CHECK ALL
+
+# --- literally comparing a surface with itself (REQ-073's own wording) ------------------------------
+CMD VOLUMES Base, Base
+EXPECT LOG ""Base" (base) vs "Base" (comparison): cut 0.0000 ft3, fill 0.0000 ft3, net 0.0000 ft3"
+CHECK ALL
+
+# --- linking a lower pad locally shows up as CUT ONLY over the same common area ---------------------
+# `samples/pad-points.csv` (REQ-086's own fixture) adds 7 points to a copy of the same ground; the
+# pad sits below the surrounding terrain, so Base is at or above the modified surface everywhere
+# sampled — cut only, no fill — and the common area is unchanged because the pad's footprint is
+# already inside "Existing Ground"'s own extent.
+CMD SURFACECREATE Pad, Existing Ground
+CMD SURFACEADDFILE Pad, samples/pad-points.csv
+CMD SURFACEREBUILD Pad
+CMD VOLUMES Base, Pad
+EXPECT LOG "cut 1154.1080 ft3, fill 0.0000 ft3, net -1154.1080 ft3, common area 229208.2107 ft2"
+CHECK ALL
+
+# --- failure modes: a missing surface, a bad argument count -----------------------------------------
+CMD VOLUMES NoSuchSurface, Base
+EXPECT LOG "no surface named "NoSuchSurface""
+CMD VOLUMES Base, AlsoMissing
+EXPECT LOG "no surface named "AlsoMissing""
+CMD VOLUMES Base
+EXPECT LOG "usage: VOLUMES"
+CMD VOLUMES
+EXPECT LOG "usage: VOLUMES"
+CHECK ALL
+
+# ======================================================================================================
+# VOLDASH — the Volume Dashboard panel's command form (TASK-095 §6 step 3/4).
+#
+# The panel itself is an ImGui window this driver cannot reach. What follows proves the panel's OWN
+# state machine — open/close, the surface pickers, the map toggle, and RECOMPUTE's readiness gate and
+# its refusal messages — deterministically.
+#
+# **What this file does NOT prove: the live/automatic half of the amendment.** The real path
+# (`TickVolumeDashboard`, driven by `main.cpp`'s frame loop on a real background thread) recomputes
+# with no user action whenever a picked surface rebuilds. This driver has no frame loop — the exact
+# limitation `req069-surface-definition-commands.txt`'s own header names for REQ-069's dynamic
+# rebuild — so that half is MANUAL verification, the same status REQ-069's own live rebuild has, not
+# a gap unique to this task.
+#
+# A second, narrower headless-testing limit surfaced while writing this: `RunSurfaceRebuild` and
+# `CreateSurfaceFromPointGroups` both bump `cadGpuRevision` as their LAST step (after setting
+# `builtAtRevision` to the pre-bump value), which is exactly right for the real app — the very next
+# frame's `TickSurfaceRebuilds` sees the one-revision gap and silently closes it. With no frame loop,
+# that gap never closes headlessly, so `VOLDASH RECOMPUTE`'s "ready" (non-waiting) path cannot be
+# reached by ANY sequence of existing commands once two or more surfaces exist — not a defect in
+# `VolumeDashboardReady` (TASK-095 §8), which is the identical gate every surface's own staleness
+# already uses system-wide. The REFUSAL path this produces is itself real and asserted below; the
+# map-triangle-emission correctness that the "ready" path would also have exercised is instead proven
+# directly in `SurfaceVolumeTests.cpp` ("The cut/fill map emits triangles only on its own side...").
+
+CMD VOLDASH
+EXPECT LOG "Volume Dashboard opened"
+
+# --- RECOMPUTE with nothing picked yet ---------------------------------------------------------------
+CMD VOLDASH RECOMPUTE
+EXPECT LOG "pick a base and a comparison surface first"
+
+# --- picking: valid and invalid surface names --------------------------------------------------------
+CMD VOLDASH PICK Base, Twin
+EXPECT LOG "base "Base", comparison "Twin""
+CMD VOLDASH PICK NoSuchSurface, Base
+EXPECT LOG "no surface named "NoSuchSurface""
+CMD VOLDASH PICK Base, AlsoMissing
+EXPECT LOG "no surface named "AlsoMissing""
+
+# --- the map toggle: valid and invalid arguments -------------------------------------------------------
+CMD VOLDASH MAP on
+EXPECT LOG "cut/fill map on"
+CMD VOLDASH MAP off
+EXPECT LOG "cut/fill map off"
+CMD VOLDASH MAP sideways
+EXPECT LOG "map must be on or off"
+
+# --- RECOMPUTE's readiness gate: two real surfaces, both picked, still refused ------------------------
+# See the file header above for why this is the reachable half of the gate headlessly: creating "Twin"
+# after "Base" (and any SURFACEREBUILD after that) always leaves at least one of the pair one
+# `cadGpuRevision` behind, which is REQ-069's own "something changed since this surface was last
+# built" rule — correctly firing, not a false refusal.
+CMD VOLDASH PICK Base, Twin
+CMD VOLDASH RECOMPUTE
+EXPECT LOG "not ready: waiting for a surface to finish rebuilding"
+
+CMD VOLDASH CLOSE
+EXPECT LOG "Volume Dashboard closed"
+CHECK ALL

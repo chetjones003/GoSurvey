@@ -82,7 +82,13 @@ public:
                    // changes, already filtered for layer visibility and isolation (REQ-068,
                    // REQ-084 (d)), and with every component's colour and lineweight already resolved
                    // — so the renderer draws what it is given and decides nothing.
-                   const CadSurfaceDisplayGeometry* surfaceGeometry = nullptr);
+                   const CadSurfaceDisplayGeometry* surfaceGeometry = nullptr,
+                   // REQ-073 amendment's Volume Dashboard cut/fill map (TASK-095 §6 step 5) — a
+                   // separate struct from surfaceGeometry above, see VolumeMapDisplayGeometry's own
+                   // comment for why. Drawn over the band fills, under the wireframe, same reasoning
+                   // as the bands: an opaque comparison overlay reads better under the linework than
+                   // over it.
+                   const VolumeMapDisplayGeometry* volumeMap = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 

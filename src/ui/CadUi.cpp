@@ -24,6 +24,7 @@
 #include "ImGuiLayout.hpp"
 #include "WinFileDialogs.hpp"
 #include "SurveyPoints.hpp"
+#include "SurfaceStyle.hpp"  // REQ-072 analysis legend (TASK-086 §6 (4))
 #include "StringUtil.hpp"
 #include "imgui.h"
 
@@ -692,6 +693,125 @@ static void DrawSurfaceRolloverReadout(const AppCommandState& cmd) {
     field("Elevation", row.elevation);
   }
   ImGui::EndTooltip();
+}
+
+// ---------------------------------------------------------------------------
+// REQ-072 analysis legend (TASK-086 §6 (4))
+// ---------------------------------------------------------------------------
+
+/// A double trimmed of trailing zeros, for a legend row — deliberately NOT `SurfaceStyles::FormatFt`
+/// (`commands/SurfaceStyle.hpp`), which is a feet-specific name and would read wrong beside a
+/// percent-grade band.
+static std::string FormatLegendNumber(double v) {
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "%.4f", v);
+  std::string s(buf);
+  while (!s.empty() && s.back() == '0')
+    s.pop_back();
+  if (!s.empty() && s.back() == '.')
+    s.pop_back();
+  return s;
+}
+
+/// The resolved RGBA for one REQ-072 band colour string, folding the ByLayer chain exactly as
+/// `ResolveSurfaceStoredColorRgba` does in `CadCommands.cpp` — duplicated rather than shared because
+/// that copy lives in that file's anonymous namespace and this legend is the first UI-side reader of
+/// a raw \ref SurfaceBand::color; both are three calls to the same public resolvers
+/// (`FindDrawingLayerRowCi` / `ResolveEntityRgbaForViewport` / `ResolveStoredColorForViewport`), so a
+/// third copy would be the point to share instead.
+static void ResolveSurfaceBandLegendRgba(const AppCommandState& cmd, const EntityAttributes& surfAttr,
+                                         const std::string& colorStorage, float* outRgba) {
+  const CadLayerRow* layer = FindDrawingLayerRowCi(cmd, surfAttr.layer);
+  float surfaceRgba[4] = {1.f, 1.f, 1.f, 1.f};
+  ResolveEntityRgbaForViewport(surfAttr, layer, 0.42f, 0.62f, 0.78f, surfaceRgba);
+  ResolveStoredColorForViewport(colorStorage, surfAttr.transparency < 0.f ? 0.f : surfAttr.transparency,
+                                surfaceRgba[0], surfaceRgba[1], surfaceRgba[2], outRgba);
+  outRgba[3] = surfaceRgba[3];
+}
+
+/// Draw REQ-072's on-screen legend for every visible surface whose style has banding on
+/// (`analysisMode != None`), stacked upward from the viewport's bottom-left corner.
+///
+/// **Reads the style's range table directly — never a copy of it.** This function and
+/// \ref BuildSurfaceAnalysisGeometry (`CadCommands.cpp`) are "one source, two readers" of the same
+/// `SurfaceStyle::bands`, which is what makes REQ-072's "the legend's displayed ranges equal the
+/// table's, and change with it" true by construction rather than by two things that can drift apart.
+static void DrawSurfaceAnalysisLegend(const AppCommandState& cmd, ImVec2 imgPos, ImVec2 avail) {
+  if (cmd.activeSpaceIndex != kModelSpaceIndex)
+    return;  // a sheet has no surfaces of its own to show a legend for (REQ-025 (g))
+
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  constexpr float kPad = 8.f;
+  constexpr float kSwatch = 14.f;
+  constexpr float kRowH = 18.f;
+  constexpr float kBoxW = 200.f;
+  constexpr float kGap = 8.f;
+
+  float bottom = imgPos.y + avail.y - 10.f;  // stacks upward; each surface's box sits above the last
+
+  for (size_t si = 0; si < cmd.cadSurfaces.size(); ++si) {
+    if (!SurfaceVisible(cmd, si))
+      continue;
+    const CadSurface& surf = cmd.cadSurfaces[si];
+    const SurfaceStyle* style = SurfaceStyles::Resolve(cmd.surfaceStyles, surf.styleName);
+    const SurfaceStyle resolved = style ? *style : SurfaceStyles::StandardSurfaceStyle();
+    if (resolved.analysisMode == SurfaceAnalysisMode::None)
+      continue;
+    if (si >= cmd.cadSurfaceAttrs.size())
+      continue;
+    const EntityAttributes& surfAttr = cmd.cadSurfaceAttrs[si];
+
+    const bool byElevation = resolved.analysisMode == SurfaceAnalysisMode::Elevation;
+    const char* unit = byElevation ? "ft" : "%";
+    // Title row + one row per band + one overflow row (only when there is a table to overflow).
+    const size_t dataRows = resolved.bands.size() + (resolved.bands.empty() ? 0 : 1);
+    const float boxH = (1.f + static_cast<float>(dataRows)) * kRowH + kPad * 2.f;
+    const ImVec2 boxMin(imgPos.x + 10.f, bottom - boxH);
+    const ImVec2 boxMax(imgPos.x + 10.f + kBoxW, bottom);
+    bottom = boxMin.y - kGap;
+
+    dl->AddRectFilled(boxMin, boxMax, IM_COL32(24, 24, 24, 205), 4.f);
+    dl->AddRect(boxMin, boxMax, IM_COL32(95, 95, 95, 255), 4.f, 0, 1.f);
+
+    float ty = boxMin.y + kPad;
+    const std::string title = surf.name + " - " + (byElevation ? "Elevation" : "Slope");
+    dl->AddText(ImVec2(boxMin.x + kPad, ty), IM_COL32(230, 230, 230, 255), title.c_str());
+    ty += kRowH;
+
+    const auto row = [&](const std::string& label, const float rgba[4]) {
+      const ImU32 fill = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
+                                  static_cast<int>(rgba[2] * 255.f), 255);
+      const ImVec2 sMin(boxMin.x + kPad, ty + 2.f);
+      const ImVec2 sMax(sMin.x + kSwatch, sMin.y + kSwatch);
+      dl->AddRectFilled(sMin, sMax, fill);
+      dl->AddRect(sMin, sMax, IM_COL32(20, 20, 20, 255));
+      dl->AddText(ImVec2(sMax.x + 6.f, ty), IM_COL32(220, 220, 220, 255), label.c_str());
+      ty += kRowH;
+    };
+
+    // The lowest band is open at the bottom (AssignBand, util/surfaceanalysis.hpp) — labelled "<",
+    // matching that rule rather than implying a lower edge the table does not have.
+    double prevBound = 0.0;
+    bool havePrev = false;
+    for (const SurfaceBand& b : resolved.bands) {
+      float rgba[4];
+      ResolveSurfaceBandLegendRgba(cmd, surfAttr, b.color, rgba);
+      const std::string label = (havePrev ? FormatLegendNumber(prevBound) + " - " + FormatLegendNumber(b.upperBound)
+                                          : "< " + FormatLegendNumber(b.upperBound)) +
+                                " " + unit;
+      row(label, rgba);
+      prevBound = b.upperBound;
+      havePrev = true;
+    }
+    if (havePrev) {
+      // The overflow bucket BuildSurfaceAnalysisGeometry draws in the plain Triangles colour — the
+      // legend shows the same colour so a triangle beyond the table's top is still explained, not a
+      // colour the legend never accounted for.
+      float rgba[4];
+      ResolveSurfaceBandLegendRgba(cmd, surfAttr, resolved.triangles.color, rgba);
+      row("> " + FormatLegendNumber(prevBound) + " " + unit, rgba);
+    }
+  }
 }
 
 /// Draw the survey-point rollover readout beside the cursor (REQ-090), for the point at
@@ -2459,6 +2579,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     RibbonItemHelp(
         "Surfaces — build a TIN surface by triangulating the points in one or more point groups, "
         "then rebuild it as the survey changes.");
+    // REQ-073 amendment (TASK-095). Sits with Surfaces because a volume comparison is always between
+    // two of them.
+    if (smallBtn("##RibbonVolumes", RibbonIconKind::SurveyPoint, "Volumes", cwB))
+      cmd.volumeDashboard.open = true;
+    RibbonItemHelp(
+        "Volume Dashboard — pick a Base and a Comparison surface for a live cut/fill/net report that "
+        "updates automatically as either surface is rebuilt.");
     // REQ-088. Sits with Surfaces because that is what a feature line's elevations are FOR — the
     // line is design linework a surface consumes as a breakline.
     if (smallBtn("##RibbonFlElev", RibbonIconKind::SurveyPoint, "Grades", cwB))
@@ -12058,6 +12185,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     wdl->AddLine(ImVec2(l, b), ImVec2(l, t), kCad, hair);
     wdl->PopClipRect();
   }
+
+  // ---- REQ-072 analysis legend (TASK-086 §6 (4)) ------------------------------------------------
+  DrawSurfaceAnalysisLegend(cmd, imgPos, avail);
 
   // ---- ViewCube (REQ-059) ----------------------------------------------------------------------
   // Model space only: a paper sheet is 2D (ADR-025 (g)) and has no orientation to show.

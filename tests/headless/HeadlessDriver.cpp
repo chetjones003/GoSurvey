@@ -234,6 +234,45 @@ size_t SurfaceCacheSegs(const AppCommandState& st,
   return 0;
 }
 
+/// Total REQ-072 band-fill triangles across every bucket of surface 0's cache entry (its per-band
+/// buffers plus the "unbanded" overflow bucket — `bandTriangleBuffers`, `CadCommands.hpp`). One count
+/// across all buckets, because EXPECT is asking "how much banded geometry exists", not which band it
+/// landed in — the per-band split is what the Analysis tab's colours are for, not this driver.
+size_t SurfaceCacheBandTriCount(const AppCommandState& st) {
+  if (st.cadSurfaces.empty() || st.cadSurfaceAttrs.empty())
+    return 0;
+  const std::uint64_t id = st.cadSurfaceAttrs[0].id;
+  if (id == 0)
+    return 0;
+  for (const auto& e : st.surfaceDisplayCache)
+    if (e.surfaceId == id) {
+      size_t floats = 0;
+      for (const auto& buf : e.bandTriangleBuffers)
+        floats += buf.size();
+      return floats / 9;
+    }
+  return 0;
+}
+
+/// Total REQ-072 slope-arrow line segments across every bucket of surface 0's cache entry
+/// (`arrowLineBuffers`) — shaft plus both head barbs count as three segments per arrow
+/// (`BuildSurfaceAnalysisGeometry`, `CadCommands.cpp`).
+size_t SurfaceCacheArrowSegCount(const AppCommandState& st) {
+  if (st.cadSurfaces.empty() || st.cadSurfaceAttrs.empty())
+    return 0;
+  const std::uint64_t id = st.cadSurfaceAttrs[0].id;
+  if (id == 0)
+    return 0;
+  for (const auto& e : st.surfaceDisplayCache)
+    if (e.surfaceId == id) {
+      size_t floats = 0;
+      for (const auto& buf : e.arrowLineBuffers)
+        floats += buf.size();
+      return floats / 6;
+    }
+  return 0;
+}
+
 /// Do the drawing's polylines carry EXACTLY the segments the surface display cache is showing as
 /// contours? (REQ-071's first acceptance condition, ADR-036 (f).)
 ///
@@ -528,7 +567,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     // them out of the running program is how they get into a transcript as a stated fact rather than
     // as a number someone tuned until the test went green.
     if (what == "SURFACES") {
-      run.log.push_back("[dump] surface | style | tris | border | minor | major (segments)");
+      run.log.push_back(
+          "[dump] surface | style | tris | border | minor | major (segments) | bandtris | arrowsegs (REQ-072)");
       for (size_t si = 0; si < run.st.cadSurfaces.size(); ++si) {
         const CadSurface& s = run.st.cadSurfaces[si];
         const std::uint64_t id = si < run.st.cadSurfaceAttrs.size() ? run.st.cadSurfaceAttrs[si].id : 0;
@@ -540,15 +580,22 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
           std::snprintf(buf, sizeof buf, "[dump] %s | %s | (no cache entry)", s.name.c_str(),
                         s.styleName.empty() ? "(default)" : s.styleName.c_str());
         } else {
-          std::snprintf(buf, sizeof buf, "[dump] %s | %s | %zu | %zu | %zu | %zu", s.name.c_str(),
+          size_t bandTris = 0;
+          for (const auto& b : it->bandTriangleBuffers)
+            bandTris += b.size() / 9;
+          size_t arrowSegs = 0;
+          for (const auto& b : it->arrowLineBuffers)
+            arrowSegs += b.size() / 6;
+          std::snprintf(buf, sizeof buf, "[dump] %s | %s | %zu | %zu | %zu | %zu | %zu | %zu", s.name.c_str(),
                         it->style.name.c_str(), it->triangleEdges.size() / 6,
                         it->borderEdges.size() / 6, it->minorContours.size() / 6,
-                        it->majorContours.size() / 6);
+                        it->majorContours.size() / 6, bandTris, arrowSegs);
         }
         run.log.push_back(buf);
       }
       run.log.push_back("[dump] batches handed to the renderer: " +
                         std::to_string(run.st.surfaceDisplayGeometry.lines.size()) +
+                        ", band batches: " + std::to_string(run.st.surfaceDisplayGeometry.bandTriangles.size()) +
                         ", tin generations: " + std::to_string(run.surfaceTinGeneration));
       TickFrame(run);
       if (run.checkEveryStep)
@@ -773,6 +820,16 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // style with everything switched off" are told apart from a cache that simply never filled.
       else if (what == "SURFACEBATCHES")
         got = static_cast<long>(run.st.surfaceDisplayGeometry.lines.size());
+      // REQ-072 band-fill and slope-arrow geometry, surface 0's cache entry only — see
+      // SurfaceCacheBandTriCount / SurfaceCacheArrowSegCount above for what "one" counts as.
+      else if (what == "SURFACEBANDTRIS")
+        got = static_cast<long>(SurfaceCacheBandTriCount(run.st));
+      else if (what == "SURFACEARROWSEGS")
+        got = static_cast<long>(SurfaceCacheArrowSegCount(run.st));
+      // How many REQ-072 band batches the renderer would be handed, across every visible surface —
+      // the band-fill twin of SURFACEBATCHES.
+      else if (what == "SURFACEBANDBATCHES")
+        got = static_cast<long>(run.st.surfaceDisplayGeometry.bandTriangles.size());
       // How many DISTINCT triangulations surface 0 has had since the transcript began. This is the
       // only direct way to assert REQ-070's central condition — "changing the contour interval
       // updates the display **without rebuilding the triangulation**". Segment counts cannot say it:
@@ -792,7 +849,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
                  " (LINES CIRCLES POLYLINES ARCS ELLIPSES ANNOTATIONS SURVEYPOINTS SELECTED"
                  " SURFACES SELECTEDSURFACES SURFACEBORDERSEGS SURFACETRISEGS SURFACEMINORSEGS"
                  " EXTRACTMATCHESDISPLAY"
-                 " SURFACEMAJORSEGS SURFACEBATCHES SURFACETINGEN)",
+                 " SURFACEMAJORSEGS SURFACEBATCHES SURFACETINGEN SURFACEBANDTRIS SURFACEARROWSEGS"
+                 " SURFACEBANDBATCHES)",
              sourceLine);
         return false;
       }

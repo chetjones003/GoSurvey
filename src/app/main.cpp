@@ -687,6 +687,10 @@ int main()
     // thread — see TickSurfaceRebuilds' own comment for the full contract.
     TickSurfaceRebuilds(cmd, cmdLog);
 
+    // Volume Dashboard live recompute (REQ-073 amendment, TASK-095). After TickSurfaceRebuilds, so a
+    // dashboard-selected surface that finished rebuilding this frame is already current below.
+    TickVolumeDashboard(cmd);
+
     // Generated surface display geometry (ADR-036 (e)). After TickSurfaceRebuilds, so a
     // triangulation that landed this frame is drawn from this frame rather than the next — and
     // after EnsureEntityIds for the same reason it is: the cache is keyed on the stable id.
@@ -855,6 +859,7 @@ int main()
     DrawPointGroupManagerWindow(cmd, &cmdLog);
     DrawSurfaceManagerWindow(cmd, &cmdLog);
     DrawSurfaceStyleWindow(cmd, &cmdLog);
+    DrawVolumeDashboardWindow(cmd, &cmdLog);  // REQ-073 amendment (TASK-095)
     DrawFeatureLineElevationWindow(cmd, &cmdLog);  // REQ-088
     DrawViewPointsPanel(cmd, cmdLog);
     DrawImportPointsPanel(cmd, cmdLog);
@@ -1066,6 +1071,28 @@ int main()
     // highlight, preview, rubber, snap glyph, selection rect, survey markers, PDFs) are suppressed here so
     // leftover DXF geometry isn't hover-highlighted behind the sheet.
     const bool paperSpace = cmd.activeSpaceIndex != kModelSpaceIndex;
+
+    // REQ-073 amendment: the Volume Dashboard's cut/fill map (TASK-095 §6 step 5), model space only
+    // like every other GL surface entity. Built fresh each frame from the dashboard's own landed
+    // buffers — cheap (pointers + colours, never vertices) and safe to redo every frame the same way
+    // RefreshSurfaceDisplayGeometry's own assembly pass is, since visibility (here: is the map even
+    // wanted) can change with no new geometry landing.
+    VolumeMapDisplayGeometry volumeMapGeom;
+    if (cmd.volumeDashboard.open && cmd.volumeDashboard.showMap && cmd.volumeDashboard.resultHasMap) {
+      if (!cmd.volumeDashboard.mapCutTrianglesXyz.empty()) {
+        volumeMapGeom.cut.verts = &cmd.volumeDashboard.mapCutTrianglesXyz;
+        // Distinct from REQ-072's band palette on purpose — a cut/fill comparison and an elevation/
+        // slope band are different questions, and sharing a palette invites reading one as the other.
+        volumeMapGeom.cut.rgba[0] = 0.85f; volumeMapGeom.cut.rgba[1] = 0.35f;
+        volumeMapGeom.cut.rgba[2] = 0.15f; volumeMapGeom.cut.rgba[3] = 0.85f;  // cut: orange-red
+      }
+      if (!cmd.volumeDashboard.mapFillTrianglesXyz.empty()) {
+        volumeMapGeom.fill.verts = &cmd.volumeDashboard.mapFillTrianglesXyz;
+        volumeMapGeom.fill.rgba[0] = 0.15f; volumeMapGeom.fill.rgba[1] = 0.45f;
+        volumeMapGeom.fill.rgba[2] = 0.90f; volumeMapGeom.fill.rgba[3] = 0.85f;  // fill: blue
+      }
+    }
+
     static const std::vector<float> kEmptyVerts;
     const std::vector<float> &sceneLines = paperSpace ? kEmptyVerts : cmd.userLinesFlat;
     const std::vector<float> &sceneCircles = paperSpace ? kEmptyVerts : cmd.userCirclesCxCyZR;
@@ -1098,7 +1125,8 @@ int main()
                                // regenerates them.
                                (paperSpace || cmd.surfaceDisplayGeometry.empty())
                                    ? nullptr
-                                   : &cmd.surfaceDisplayGeometry);
+                                   : &cmd.surfaceDisplayGeometry,
+                               (paperSpace || volumeMapGeom.empty()) ? nullptr : &volumeMapGeom);
 
     // Must be the last UI call of the frame: it walks the submitted windows and
     // appends to their draw lists, so anything begun after it would be missed.

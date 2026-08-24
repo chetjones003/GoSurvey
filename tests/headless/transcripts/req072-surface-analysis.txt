@@ -1,0 +1,181 @@
+# REQ-072 — elevation banding, slope banding, and slope arrows (ADR-036 (g), TASK-086).
+#
+# `SurfaceAnalysisTests` (Catch2) proves the pure math — `AssignBand`'s half-open rule,
+# `TriangleDownhillDirection`'s flat-triangle refusal, the signed-normal downhill sign. What it
+# cannot reach is the command-and-cache layer this file exists for: that turning banding on
+# GENERATES geometry (and off releases it) without touching the triangulation, that a range table
+# which does not span the surface's full value range does not silently drop the part above it, and
+# that the whole thing survives `.gs`.
+#
+# **On SURFSTYLE rather than the Analysis tab.** The Surface Style editor is an ImGui window this
+# driver cannot reach — the same limitation req070-surface-styles-contours works around — so
+# ANALYSIS/BAND/ARROWS/CLEARBANDS/ARROWBAND/CLEARARROWBANDS call the exact fields the tab edits.
+#
+# **The numbers are properties of the FIXTURE**, read out of the running program with
+# `DUMP SURFACES --print-log` the same way req070's are: `samples/surface-demo.gs` triangulates to
+# 982 triangles spanning 103.52 to 136.70 ft of elevation (req071-contour-extract.txt). If the
+# sample's points ever change, these change with it.
+
+OPEN samples/surface-demo.gs
+CMD SURFACECREATE Test EG, Existing Ground
+EXPECT SURFACES 1
+
+# --- a legacy style — one that never visited the Analysis tab — draws exactly as before -----------
+# REQ-072: "turning banding off restores the style's plain display unchanged", and the state a style
+# STARTS in is off, so a drawing opened before REQ-072 existed shows no band geometry at all.
+EXPECT SURFACEBANDTRIS 0
+EXPECT SURFACEBANDBATCHES 0
+EXPECT SURFACEARROWSEGS 0
+CHECK ALL
+
+# --- elevation banding: a table that spans the whole surface bands every triangle ------------------
+CMD SURFSTYLE ANALYSIS Standard, elevation
+EXPECT LOG "analysis: elevation"
+CMD SURFSTYLE BAND Standard, 1000000, Red
+EXPECT LOG "added: <= 1000000 -> Red"
+EXPECT SURFACEBANDTRIS 982
+EXPECT SURFACEBANDBATCHES 1
+# ...and the triangulation was not touched: a style edit is never a rebuild (ADR-036 (e)).
+EXPECT SURFACETINGEN 1
+CHECK ALL
+
+# --- a table that does NOT span the range does not blank the part above it -------------------------
+# The fixture's minimum elevation is 103.52 ft, so a table topping out below that puts EVERY
+# triangle in `AssignBand`'s -1 case. The total is still 982: the "unbanded" bucket
+# (`BuildSurfaceAnalysisGeometry`, `CadCommands.cpp`) draws them in the plain Triangles colour
+# rather than dropping them (REQ-201 — reported by being visibly still there, not absorbed).
+CMD SURFSTYLE CLEARBANDS Standard
+CMD SURFSTYLE BAND Standard, -1000000, Red
+EXPECT SURFACEBANDTRIS 982
+EXPECT SURFACEBANDBATCHES 1
+CHECK ALL
+
+# --- a real two-band split: BOTH buckets populated, not one bucket doing all the work ---------------
+# 120 ft sits inside the fixture's 103.52-136.70 ft range, so this is not the wide-open-interval case
+# above: two batches proves triangles landed on both sides of the boundary, not that the second band
+# happened to be empty.
+CMD SURFSTYLE CLEARBANDS Standard
+CMD SURFSTYLE BAND Standard, 120, Red
+CMD SURFSTYLE BAND Standard, 1000000, Blue
+EXPECT SURFACEBANDTRIS 982
+EXPECT SURFACEBANDBATCHES 2
+EXPECT SURFACETINGEN 1
+CHECK ALL
+
+# --- turning banding off releases the geometry, not merely hides it --------------------------------
+# Mirrors req070's toggle-matrix assertion for triangles/contours: "off" is a property of what
+# EXISTS, asserted from both directions so a buffer that filled once and never emptied cannot pass.
+CMD SURFSTYLE ANALYSIS Standard, none
+EXPECT SURFACEBANDTRIS 0
+EXPECT SURFACEBANDBATCHES 0
+CHECK ALL
+CMD SURFSTYLE ANALYSIS Standard, elevation
+EXPECT SURFACEBANDTRIS 982
+EXPECT SURFACEBANDBATCHES 2
+CMD SURFSTYLE CLEARBANDS Standard
+CMD SURFSTYLE ANALYSIS Standard, none
+
+# --- slope banding uses the same AssignBand rule, over grade percent instead of elevation -----------
+CMD SURFSTYLE ANALYSIS Standard, slope
+CMD SURFSTYLE BAND Standard, 1000000, Red
+EXPECT SURFACEBANDTRIS 982
+EXPECT SURFACEBANDBATCHES 1
+CMD SURFSTYLE CLEARBANDS Standard
+CMD SURFSTYLE BAND Standard, 20, Red
+CMD SURFSTYLE BAND Standard, 1000000, Blue
+EXPECT SURFACEBANDTRIS 982
+EXPECT SURFACEBANDBATCHES 2
+EXPECT SURFACETINGEN 1
+CHECK ALL
+CMD SURFSTYLE CLEARBANDS Standard
+CMD SURFSTYLE ANALYSIS Standard, none
+
+# --- slope arrows: independent of analysisMode, exactly as REQ-072 states --------------------------
+# Analysis mode is "none" here — arrows are their own toggle. Each non-flat triangle contributes
+# THREE segments (shaft + two head barbs, `BuildSurfaceAnalysisGeometry`), and this real terrain has
+# no triangle at or below the 0.1% flat threshold, so 982 triangles -> 2,946 segments exactly.
+CMD SURFSTYLE ARROWS Standard, on
+EXPECT LOG "slope arrows on"
+EXPECT SURFACEARROWSEGS 2946
+EXPECT SURFACEBANDTRIS 0
+EXPECT SURFACEBANDBATCHES 0
+# Border + minor + major + one arrow batch = 4, exactly req070's baseline plus the arrows.
+EXPECT SURFACEBATCHES 4
+EXPECT SURFACETINGEN 1
+CHECK ALL
+
+CMD SURFSTYLE ARROWS Standard, off
+EXPECT LOG "slope arrows off"
+EXPECT SURFACEARROWSEGS 0
+EXPECT SURFACEBATCHES 3
+CHECK ALL
+
+# --- arrows have their OWN colour ramp (arrowBands), separate from `bands` ---------------------------
+# REQ-072: "arrows are always graded by SLOPE, while `bands` may be showing elevation" — a second
+# batch appearing here (5, not 4) proves arrows are bucketed by `arrowBands` independently, not just
+# painted as one flat colour.
+CMD SURFSTYLE ARROWS Standard, on
+CMD SURFSTYLE ARROWBAND Standard, 5, Red
+CMD SURFSTYLE ARROWBAND Standard, 1000000, Blue
+EXPECT SURFACEARROWSEGS 2946
+EXPECT SURFACEBATCHES 5
+CMD SURFSTYLE CLEARARROWBANDS Standard
+EXPECT LOG "cleararrowbands"
+EXPECT SURFACEBATCHES 4
+CMD SURFSTYLE ARROWS Standard, off
+EXPECT SURFACEBATCHES 3
+CHECK ALL
+
+# --- a style edit is one undo step, and undoing it brings the display back --------------------------
+# The range table rides in the geometry snapshot with the rest of SurfaceStyle (ADR-036 (d)), so this
+# is undoable by construction — asserted rather than assumed, the same way req070's UNDO step is.
+CMD SURFSTYLE ARROWS Standard, on
+EXPECT SURFACEARROWSEGS 2946
+UNDO
+EXPECT SURFACEARROWSEGS 0
+EXPECT SURFACETINGEN 1
+CHECK ALL
+
+# --- failure modes: a bad analysis type or a bad arrows flag is refused with a specific message ------
+CMD SURFSTYLE ANALYSIS Standard, upsidedown
+EXPECT LOG "must be none, elevation or slope"
+CMD SURFSTYLE ARROWS Standard, maybe
+EXPECT LOG "must be on or off"
+# ...and neither refusal changed anything.
+EXPECT SURFACEBANDTRIS 0
+EXPECT SURFACEARROWSEGS 0
+CHECK ALL
+
+# --- a range table with zero bands renders without crashing (TASK-086 §6, test approach) -------------
+# `analysisMode` on with an EMPTY table: `AssignBand` returns -1 for every triangle (its own
+# documented behaviour for an empty table), and `BuildSurfaceAnalysisGeometry` always allocates the
+# one "unbanded" overflow bucket (`bandBounds.size() + 1`), empty table or not — so every triangle
+# lands there, in the plain Triangles colour, rather than the request crashing or being ignored.
+CMD SURFSTYLE ANALYSIS Standard, elevation
+EXPECT SURFACEBANDTRIS 982
+EXPECT SURFACEBANDBATCHES 1
+CHECK ALL
+
+# --- styles round-trip .gs with analysis settings intact ---------------------------------------------
+# REQ-072's own acceptance conditions say nothing about persistence directly, but REQ-070's "styles
+# round-trip .gs" covers the table these fields live on, and TASK-086 §8 recorded the round-trip
+# assertion as owed here once a way to set these fields from a transcript existed.
+CMD SURFSTYLE BAND Standard, 120, Red
+CMD SURFSTYLE BAND Standard, 1000000, Blue
+CMD SURFSTYLE ARROWS Standard, on
+EXPECT SURFACEBANDTRIS 982
+EXPECT SURFACEBANDBATCHES 2
+EXPECT SURFACEARROWSEGS 2946
+
+SAVEAS %OUT%/analysis-a.gs
+OPEN %OUT%/analysis-a.gs
+EXPECT SURFACES 1
+EXPECT SURFACEBANDTRIS 982
+EXPECT SURFACEBANDBATCHES 2
+EXPECT SURFACEARROWSEGS 2946
+CHECK ALL
+
+# ...and the file is byte-identical on resave (REQ-079, ADR-020 (d)) — the same idempotence check
+# req070's own round-trip step ends on.
+SAVEAS %OUT%/analysis-b.gs
+EXPECT SAMEFILE %OUT%/analysis-a.gs %OUT%/analysis-b.gs

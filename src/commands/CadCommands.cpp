@@ -10,6 +10,8 @@
 #include "util/meshgeom.hpp"
 #include "util/tinbuild.hpp"
 #include "util/contourgen.hpp"  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
+#include "util/surfaceanalysis.hpp"  // REQ-072 banding + slope arrows (ADR-036 (g)) — pure, like contourgen
+#include "util/surfacevolume.hpp"  // REQ-073 surface-to-surface volumes (TASK-095) — pure, like surfaceanalysis
 #include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
 #include "util/gltfimport.hpp"
 #include "util/stlimport.hpp"
@@ -1262,6 +1264,21 @@ bool SurfaceVisible(const AppCommandState& st, size_t surfaceIndex) {
   return !(it != st.drawingLayerTable.end() && (!it->on || it->frozen));
 }
 
+SurfaceState SurfaceRebuildStateOf(const AppCommandState& st, size_t surfaceIndex) {
+  if (surfaceIndex >= st.cadSurfaces.size())
+    return SurfaceState::Current;
+  const CadSurface& s = st.cadSurfaces[surfaceIndex];
+  // By stable id, matching how the job itself is keyed (ADR-036 (a)). Keying this on the name showed
+  // "Rebuilding" against the wrong surface the moment one was renamed mid-rebuild.
+  const std::uint64_t id =
+      surfaceIndex < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[surfaceIndex].id : 0;
+  if (id != 0)
+    for (const auto& job : st.surfaceRebuildAsync)
+      if (job && job->surfaceId == id)
+        return SurfaceState::Rebuilding;
+  return s.builtAtRevision == st.cadGpuRevision ? SurfaceState::Current : SurfaceState::Stale;
+}
+
 namespace {
 
 /// Ceiling on how many contour levels one surface may generate at (REQ-070).
@@ -1322,6 +1339,107 @@ void AppendTriangleEdges(const CadTin& t, std::vector<float>* out) {
     emit(t.indices[i], t.indices[i + 1]);
     emit(t.indices[i + 1], t.indices[i + 2]);
     emit(t.indices[i + 2], t.indices[i]);
+  }
+}
+
+/// The shaft length of a REQ-072 slope arrow, as a fraction of its triangle's own characteristic
+/// length (`sqrt(planArea)`) rather than a fixed world length — so an arrow on a fine TIN and one on
+/// a coarse TIN both read as "this triangle's" arrow instead of one swallowing its neighbours or
+/// vanishing inside them.
+constexpr double kArrowShaftFraction = 0.5;
+/// The head barbs' length, as a fraction of the shaft they sit on.
+constexpr double kArrowHeadFraction = 0.35;
+/// The half-angle each head barb sweeps back from the shaft.
+constexpr double kArrowHeadAngleRad = 0.4363;  // 25 degrees
+
+/// Builds REQ-072 band-fill and slope-arrow geometry for one triangulation under one style.
+///
+/// Both outputs are bucketed exactly as \ref AppCommandState::SurfaceDisplayCacheEntry documents:
+/// one buffer per range-table entry, plus one extra "unbanded" buffer at the end for a triangle (or
+/// arrow) `AssignBand` placed in no band. Both outputs are cleared unconditionally, and left with
+/// zero buckets — not one empty bucket — when the corresponding toggle (`analysisMode` / `slopeArrowsOn`)
+/// is off, so a plain-style surface pays nothing here and the assembly pass has nothing to iterate.
+void BuildSurfaceAnalysisGeometry(const CadTin& tin, const SurfaceStyle& style,
+                                  std::vector<std::vector<float>>* bandBuffers,
+                                  std::vector<std::vector<float>>* arrowBuffers) {
+  bandBuffers->clear();
+  arrowBuffers->clear();
+  const bool wantBands = style.analysisMode != SurfaceAnalysisMode::None;
+  const bool wantArrows = style.slopeArrowsOn;
+  if (!wantBands && !wantArrows)
+    return;
+
+  std::vector<double> bandBounds;
+  bandBounds.reserve(style.bands.size());
+  for (const SurfaceBand& sb : style.bands)
+    bandBounds.push_back(sb.upperBound);
+  std::vector<double> arrowBounds;
+  arrowBounds.reserve(style.arrowBands.size());
+  for (const SurfaceBand& sb : style.arrowBands)
+    arrowBounds.push_back(sb.upperBound);
+
+  if (wantBands)
+    bandBuffers->resize(bandBounds.size() + 1);
+  if (wantArrows)
+    arrowBuffers->resize(arrowBounds.size() + 1);
+
+  const double headCos = std::cos(kArrowHeadAngleRad);
+  const double headSin = std::sin(kArrowHeadAngleRad);
+
+  const auto emitSeg = [](std::vector<float>& buf, double ax, double ay, double az, double bx, double by,
+                          double bz) {
+    buf.push_back(static_cast<float>(ax));
+    buf.push_back(static_cast<float>(ay));
+    buf.push_back(static_cast<float>(az));
+    buf.push_back(static_cast<float>(bx));
+    buf.push_back(static_cast<float>(by));
+    buf.push_back(static_cast<float>(bz));
+  };
+
+  for (size_t i = 0; i + 2 < tin.indices.size(); i += 3) {
+    const std::uint32_t ia = tin.indices[i], ib = tin.indices[i + 1], ic = tin.indices[i + 2];
+    AnalysisTriangle t;
+    t.x0 = tin.vertsXyz[ia * 3 + 0]; t.y0 = tin.vertsXyz[ia * 3 + 1]; t.z0 = tin.vertsXyz[ia * 3 + 2];
+    t.x1 = tin.vertsXyz[ib * 3 + 0]; t.y1 = tin.vertsXyz[ib * 3 + 1]; t.z1 = tin.vertsXyz[ib * 3 + 2];
+    t.x2 = tin.vertsXyz[ic * 3 + 0]; t.y2 = tin.vertsXyz[ic * 3 + 1]; t.z2 = tin.vertsXyz[ic * 3 + 2];
+
+    if (wantBands) {
+      const double value = style.analysisMode == SurfaceAnalysisMode::Elevation ? TriangleCentroidZ(t)
+                                                                                 : TrianglePlaneSlopePct(t);
+      const int idx = AssignBand(value, bandBounds);
+      std::vector<float>& buf = (*bandBuffers)[idx >= 0 ? static_cast<size_t>(idx) : bandBounds.size()];
+      buf.push_back(static_cast<float>(t.x0)); buf.push_back(static_cast<float>(t.y0)); buf.push_back(static_cast<float>(t.z0));
+      buf.push_back(static_cast<float>(t.x1)); buf.push_back(static_cast<float>(t.y1)); buf.push_back(static_cast<float>(t.z1));
+      buf.push_back(static_cast<float>(t.x2)); buf.push_back(static_cast<float>(t.y2)); buf.push_back(static_cast<float>(t.z2));
+    }
+
+    if (wantArrows) {
+      double dx = 0.0, dy = 0.0;
+      if (!TriangleDownhillDirection(t, kFlatGradePctDefault, &dx, &dy))
+        continue;  // flat: REQ-072's "a perfectly flat triangle produces no arrow direction"
+
+      const double cx = (t.x0 + t.x1 + t.x2) / 3.0;
+      const double cy = (t.y0 + t.y1 + t.y2) / 3.0;
+      const double cz = (t.z0 + t.z1 + t.z2) / 3.0;
+      const double area2 = std::fabs((t.x1 - t.x0) * (t.y2 - t.y0) - (t.x2 - t.x0) * (t.y1 - t.y0));
+      const double charLen = std::sqrt(std::max(area2, 0.0) * 0.5);
+      const double shaftLen = charLen * kArrowShaftFraction;
+      const double tipX = cx + dx * shaftLen, tipY = cy + dy * shaftLen;
+
+      const double grade = TrianglePlaneSlopePct(t);
+      const int idx = AssignBand(grade, arrowBounds);
+      std::vector<float>& buf = (*arrowBuffers)[idx >= 0 ? static_cast<size_t>(idx) : arrowBounds.size()];
+      emitSeg(buf, cx, cy, cz, tipX, tipY, cz);
+
+      // Two head barbs swept back from the tip, built from the shaft's own unit vector so the head
+      // turns with the arrow rather than pointing a fixed compass direction.
+      const double backX = -dx, backY = -dy;
+      const double b1x = backX * headCos - backY * headSin, b1y = backX * headSin + backY * headCos;
+      const double b2x = backX * headCos + backY * headSin, b2y = -backX * headSin + backY * headCos;
+      const double headLen = shaftLen * kArrowHeadFraction;
+      emitSeg(buf, tipX, tipY, cz, tipX + b1x * headLen, tipY + b1y * headLen, cz);
+      emitSeg(buf, tipX, tipY, cz, tipX + b2x * headLen, tipY + b2y * headLen, cz);
+    }
   }
 }
 
@@ -1429,28 +1547,34 @@ SurfaceContourLevels ResolveSurfaceContourLevels(const CadTin& tin, const Surfac
   return out;
 }
 
-/// The resolved RGBA and lineweight for one component of a surface, folding the ByLayer chain the
-/// same way an entity's own attributes do.
+/// The resolved RGBA for one "ByLayer"-capable colour string on a surface, folding the ByLayer chain
+/// the same way an entity's own attributes do: "ByLayer" means the surface's own effective colour,
+/// which in turn may itself be ByLayer and resolve to the layer's.
 ///
-/// A component's "ByLayer" means the surface's own colour, which in turn may itself be ByLayer and
-/// resolve to the layer's. Doing it through the shared resolvers rather than by hand is what keeps a
-/// contour's ByLayer and a line's ByLayer meaning the same thing.
+/// Shared by \ref ResolveComponentBatch and REQ-072's band/arrow colours (TASK-086 §6) — a band's
+/// `SurfaceBand::color` uses \ref EntityAttributes::color's same encoding for the same reason a
+/// component's does, so both go through the one resolver rather than two hand-rolled copies of the
+/// ByLayer chain.
+void ResolveSurfaceStoredColorRgba(const AppCommandState& st, const EntityAttributes& surfAttr,
+                                   const std::string& colorStorage, float* outRgba) {
+  const CadLayerRow* layer = FindDrawingLayerRowCi(st, surfAttr.layer);
+  float surfaceRgba[4] = {1.f, 1.f, 1.f, 1.f};
+  ResolveEntityRgbaForViewport(surfAttr, layer, 0.42f, 0.62f, 0.78f, surfaceRgba);
+  ResolveStoredColorForViewport(colorStorage, surfAttr.transparency < 0.f ? 0.f : surfAttr.transparency,
+                                surfaceRgba[0], surfaceRgba[1], surfaceRgba[2], outRgba);
+  outRgba[3] = surfaceRgba[3];
+}
+
+/// The resolved RGBA and lineweight for one component of a surface — see
+/// \ref ResolveSurfaceStoredColorRgba for the colour half.
 SurfaceDisplayBatch ResolveComponentBatch(const AppCommandState& st, const EntityAttributes& surfAttr,
                                           const SurfaceComponentStyle& comp,
                                           const std::vector<float>* verts) {
   SurfaceDisplayBatch b;
   b.verts = verts;
-
-  const CadLayerRow* layer = FindDrawingLayerRowCi(st, surfAttr.layer);
-  // The surface's own effective colour first — that is what a component's ByLayer defers to.
-  float surfaceRgba[4] = {1.f, 1.f, 1.f, 1.f};
-  ResolveEntityRgbaForViewport(surfAttr, layer, 0.42f, 0.62f, 0.78f, surfaceRgba);
-  ResolveStoredColorForViewport(comp.color, surfAttr.transparency < 0.f ? 0.f : surfAttr.transparency,
-                                surfaceRgba[0], surfaceRgba[1], surfaceRgba[2], b.rgba);
-  b.rgba[3] = surfaceRgba[3];
-
+  ResolveSurfaceStoredColorRgba(st, surfAttr, comp.color, b.rgba);
   b.lineweightMm = comp.lineweightMm >= 0.f ? comp.lineweightMm
-                                            : EffectiveEntityLineweightMm(surfAttr, layer);
+                                            : EffectiveEntityLineweightMm(surfAttr, FindDrawingLayerRowCi(st, surfAttr.layer));
   return b;
 }
 
@@ -1548,12 +1672,17 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
         }
       }
     }
+
+    // REQ-072: unconditional — the builder itself clears both outputs to zero buckets when neither
+    // `analysisMode` nor `slopeArrowsOn` is on, which is what turns them off (§6 (2)/(3)).
+    BuildSurfaceAnalysisGeometry(*tin, resolved, &it->bandTriangleBuffers, &it->arrowLineBuffers);
   }
 
   // Assemble what the renderer is handed. Cheap by construction: the batches BORROW the buffers
   // above (see SurfaceDisplayBatch), so this pass copies pointers and colours, never vertices, and
   // is therefore safe to redo every frame — which it must be, because layer visibility and isolation
   // can change without any surface's geometry changing at all.
+  st.surfaceDisplayGeometry.bandTriangles.clear();
   st.surfaceDisplayGeometry.lines.clear();
   for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
     if (!SurfaceVisible(st, si))
@@ -1567,8 +1696,23 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
       continue;
     const EntityAttributes& attr = st.cadSurfaceAttrs[si];
 
-    // Draw order: triangles, then contours, then the border last so an outline stays readable over
-    // its own triangulation.
+    // REQ-072 band fills, FIRST — see CadSurfaceDisplayGeometry::bandTriangles. Bucket
+    // `it->style.bands.size()` is the "unbanded" overflow (TASK-086 §6 (2)); it takes the plain
+    // triangle style's colour rather than being dropped, so a table that does not span the surface's
+    // full range does not silently blank the part above it.
+    for (size_t bi = 0; bi < it->bandTriangleBuffers.size(); ++bi) {
+      const std::vector<float>& buf = it->bandTriangleBuffers[bi];
+      if (buf.empty())
+        continue;
+      const std::string& colorStr = bi < it->style.bands.size() ? it->style.bands[bi].color : it->style.triangles.color;
+      SurfaceTriangleBatch tb;
+      tb.verts = &buf;
+      ResolveSurfaceStoredColorRgba(st, attr, colorStr, tb.rgba);
+      st.surfaceDisplayGeometry.bandTriangles.push_back(tb);
+    }
+
+    // Draw order: triangles, then contours, then the border, so an outline stays readable over its
+    // own triangulation.
     const auto add = [&](const SurfaceComponentStyle& comp, const std::vector<float>* verts) {
       if (verts->empty())
         return;
@@ -1578,6 +1722,21 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
     add(it->style.minorContour, &it->minorContours);
     add(it->style.majorContour, &it->majorContours);
     add(it->style.border, &it->borderEdges);
+
+    // REQ-072 slope arrows, LAST — on top of the border, because an arrow that reads as buried under
+    // the outline it crosses is not a readable arrow. Bucket `arrowBands.size()` is the "unbanded"
+    // overflow, drawn in the surface's own colour ("ByLayer") rather than dropped.
+    for (size_t ai = 0; ai < it->arrowLineBuffers.size(); ++ai) {
+      const std::vector<float>& buf = it->arrowLineBuffers[ai];
+      if (buf.empty())
+        continue;
+      const std::string colorStr = ai < it->style.arrowBands.size() ? it->style.arrowBands[ai].color : std::string("ByLayer");
+      SurfaceDisplayBatch b;
+      b.verts = &buf;
+      ResolveSurfaceStoredColorRgba(st, attr, colorStr, b.rgba);
+      b.lineweightMm = -1.f;
+      st.surfaceDisplayGeometry.lines.push_back(b);
+    }
   }
 }
 
@@ -2089,6 +2248,107 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
   }
 }
 
+/// Whether a Base/Comparison pair is ready to compare: both ids resolve, both are current (REQ-069's
+/// own dirty check), and both have a triangulation. Shared by \ref TickVolumeDashboard's real
+/// dispatch gate and `VOLDASH RECOMPUTE`'s synchronous test surrogate (TASK-095 §8) — REQ-073's
+/// "picking a surface that is itself out of date is reflected as such" cannot drift between the live
+/// path and the headless-testable one if both ask this single function.
+bool VolumeDashboardReady(const AppCommandState& st, std::uint64_t baseId, std::uint64_t compId,
+                          std::string* whyNot) {
+  const int baseIx = FindSurfaceIndexById(st, baseId);
+  const int compIx = FindSurfaceIndexById(st, compId);
+  if (baseIx < 0 || compIx < 0) {
+    if (whyNot)
+      *whyNot = "a picked surface no longer exists";
+    return false;
+  }
+  const CadSurface& baseSurf = st.cadSurfaces[static_cast<size_t>(baseIx)];
+  const CadSurface& compSurf = st.cadSurfaces[static_cast<size_t>(compIx)];
+  if (baseSurf.builtAtRevision != st.cadGpuRevision || compSurf.builtAtRevision != st.cadGpuRevision) {
+    if (whyNot)
+      *whyNot = "waiting for a surface to finish rebuilding";
+    return false;
+  }
+  if (!baseSurf.tin || !compSurf.tin) {
+    if (whyNot)
+      *whyNot = "a surface has no triangulation yet";
+    return false;
+  }
+  return true;
+}
+
+void TickVolumeDashboard(AppCommandState& st) {
+  using DashJob = AppCommandState::VolumeDashboardAsync;
+  AppCommandState::VolumeDashboardState& dash = st.volumeDashboard;
+
+  // Reap a finished job first, so a selection change made while it ran can redispatch this same
+  // frame rather than waiting one extra frame — the same ordering TickSurfaceRebuilds itself uses.
+  if (dash.job && dash.job->done.load(std::memory_order_acquire)) {
+    dash.job->thread.join();
+    // Applied only if NOTHING has changed since dispatch: the drawing revision matches, AND the
+    // panel's pick is still the pair this job was computed for (architecture §8 rule 4 / REQ-073's
+    // own "the panel's surface pick changed... discarded"). Either failing means discard — the panel
+    // simply looks stale again and redispatches below on this same tick.
+    if (st.cadGpuRevision == dash.job->generation && dash.baseSurfaceId == dash.job->baseSurfaceId &&
+        dash.comparisonSurfaceId == dash.job->comparisonSurfaceId) {
+      dash.lastResult = dash.job->result;
+      dash.hasResult = true;
+      dash.resultForRevision = dash.job->generation;
+      dash.resultForBaseSurfaceId = dash.job->baseSurfaceId;
+      dash.resultForComparisonSurfaceId = dash.job->comparisonSurfaceId;
+      dash.resultHasMap = dash.job->wantMap;
+      dash.mapCutTrianglesXyz = std::move(dash.job->cutTrianglesXyz);
+      dash.mapFillTrianglesXyz = std::move(dash.job->fillTrianglesXyz);
+    }
+    dash.job.reset();
+  }
+
+  // Nothing to do while the panel is closed (ASSUMPTION-5, TASK-095: no benefit to recomputing what
+  // nobody is looking at), nothing picked, or a job is already in flight.
+  if (!dash.open || dash.baseSurfaceId == 0 || dash.comparisonSurfaceId == 0 || dash.job)
+    return;
+
+  if (!VolumeDashboardReady(st, dash.baseSurfaceId, dash.comparisonSurfaceId, nullptr))
+    return;  // not resolvable, or a picked surface is itself out of date — REQ-073's own gate
+
+  const CadSurface& baseSurf = st.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.baseSurfaceId))];
+  const CadSurface& compSurf =
+      st.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.comparisonSurfaceId))];
+
+  // Already current for this exact pick, revision AND map want — nothing to recompute. The map-want
+  // half is what makes turning the map ON after a mapless result redispatch: `resultHasMap` was
+  // false, `dash.showMap` is now true, so the comparison below fails and a fresh job (this time
+  // WITH the map) is dispatched, rather than the panel silently showing stale (absent) map geometry.
+  if (dash.hasResult && dash.resultForRevision == st.cadGpuRevision &&
+      dash.resultForBaseSurfaceId == dash.baseSurfaceId &&
+      dash.resultForComparisonSurfaceId == dash.comparisonSurfaceId &&
+      (dash.resultHasMap || !dash.showMap))
+    return;
+
+  auto job = std::make_unique<DashJob>();
+  job->baseSurfaceId = dash.baseSurfaceId;
+  job->comparisonSurfaceId = dash.comparisonSurfaceId;
+  job->tinBase = baseSurf.tin;              // strong refs: architecture §11.5, see the struct's note
+  job->tinComparison = compSurf.tin;
+  job->wantMap = dash.showMap;
+  job->generation = st.cadGpuRevision;
+  DashJob* jobPtr = job.get();
+  jobPtr->thread = std::thread([jobPtr]() {
+    if (jobPtr->cancel.load(std::memory_order_acquire)) {
+      jobPtr->done.store(true, std::memory_order_release);
+      return;
+    }
+    // Pure, and touches no AppCommandState (architecture §8 rule 1) — everything it needs was
+    // resolved on the UI thread above and captured by value/shared_ptr on the job itself.
+    jobPtr->result = ComputeSurfaceVolume(
+        jobPtr->tinBase->vertsXyz, jobPtr->tinBase->indices, jobPtr->tinComparison->vertsXyz,
+        jobPtr->tinComparison->indices, jobPtr->wantMap ? &jobPtr->cutTrianglesXyz : nullptr,
+        jobPtr->wantMap ? &jobPtr->fillTrianglesXyz : nullptr);
+    jobPtr->done.store(true, std::memory_order_release);
+  });
+  dash.job = std::move(job);
+}
+
 namespace {
 
 /// Splits `a, b, c` into trimmed fields.
@@ -2454,7 +2714,10 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
   const auto usage = [&]() {
     log.push_back("SURFSTYLE — usage: SURFSTYLE (opens the editor) | NEW <style> | DELETE <style> | "
                   "INTERVAL <style>, <minor>, <major> | SHOW|HIDE <style>, "
-                  "<triangles|border|major|minor|points> | ASSIGN <surface>, <style>");
+                  "<triangles|border|major|minor|points> | ASSIGN <surface>, <style> | "
+                  "ANALYSIS <style>, none|elevation|slope | BAND <style>, <upper bound>, <color> | "
+                  "CLEARBANDS <style> | ARROWS <style>, on|off | "
+                  "ARROWBAND <style>, <upper bound>, <color> | CLEARARROWBANDS <style>");
   };
 
   if (verb == "new") {
@@ -2597,9 +2860,266 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
     return;
   }
 
+  // --- REQ-072: the command form of the Analysis tab (TASK-086 §9) -----------------------------
+  // The Analysis tab is an ImGui window this headless driver cannot reach — the same limitation
+  // INTERVAL/SHOW/HIDE already work around — so these verbs call the exact same fields the tab
+  // edits, and what a transcript proves is the real edit path rather than a test-only shortcut.
+
+  if (verb == "analysis") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+      usage();
+      return;
+    }
+    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    if (!s) {
+      log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
+      return;
+    }
+    const std::string mode = StringUtil::toLowerAsciiCopy(f[1]);
+    SurfaceAnalysisMode m;
+    if (mode == "none") m = SurfaceAnalysisMode::None;
+    else if (mode == "elevation") m = SurfaceAnalysisMode::Elevation;
+    else if (mode == "slope") m = SurfaceAnalysisMode::Slope;
+    else {
+      log.push_back("SURFSTYLE — analysis type must be none, elevation or slope, not \"" + f[1] + "\".");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface style");
+    s->analysisMode = m;
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — \"" + s->name + "\" analysis: " + mode + ".");
+    return;
+  }
+
+  if (verb == "band" || verb == "arrowband") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 3 || f[0].empty() || f[2].empty()) {
+      usage();
+      return;
+    }
+    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    if (!s) {
+      log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
+      return;
+    }
+    double bound = 0.0;
+    if (!ParseIntervalField(f[1], "band bound", &bound, log))
+      return;
+    PushUndoSnapshot(st, "Surface style");
+    std::vector<SurfaceBand>& bands = (verb == "band") ? s->bands : s->arrowBands;
+    bands.push_back({bound, StringUtil::trimCopy(f[2])});
+    // Kept strictly ascending exactly as the Analysis tab's `BandTableEditor` re-sorts on every edit
+    // (`ui/CadUi_SurfaceStyles.cpp`) — `AssignBand`'s precondition (`util/surfaceanalysis.hpp`), so a
+    // command-built table is never in a different state than a hand-built one.
+    std::sort(bands.begin(), bands.end(),
+             [](const SurfaceBand& a, const SurfaceBand& b) { return a.upperBound < b.upperBound; });
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — \"" + s->name + "\" " + verb + " added: <= " + f[1] + " -> " + f[2] + ".");
+    return;
+  }
+
+  if (verb == "clearbands" || verb == "cleararrowbands") {
+    const std::string name = StringUtil::trimCopy(rest);
+    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, name);
+    if (!s) {
+      log.push_back("SURFSTYLE — no style named \"" + name + "\".");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface style");
+    (verb == "clearbands" ? s->bands : s->arrowBands).clear();
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — \"" + s->name + "\" " + verb + ".");
+    return;
+  }
+
+  if (verb == "arrows") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+      usage();
+      return;
+    }
+    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    if (!s) {
+      log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
+      return;
+    }
+    const std::string onOff = StringUtil::toLowerAsciiCopy(f[1]);
+    if (onOff != "on" && onOff != "off") {
+      log.push_back("SURFSTYLE — arrows must be on or off, not \"" + f[1] + "\".");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface style");
+    s->slopeArrowsOn = (onOff == "on");
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — \"" + s->name + "\" slope arrows " + onOff + ".");
+    return;
+  }
+
   usage();
 }
 
+/// `VOLUMES <base surface>, <comparison surface>` — REQ-073's cut/fill/net report (TASK-095 §6
+/// step 1/2), the synchronous command form of the eventual Volume Dashboard: it exists so the
+/// requirement's ORIGINAL (2026-08-12) acceptance is reachable and testable from a headless
+/// transcript before any panel or async wiring exists, exactly the role SURFELEV played for REQ-074
+/// before REQ-075's manager panel.
+///
+/// **Self-comparison is ANSWERED, not refused** — REQ-073's own acceptance requires "comparing a
+/// surface with itself reports zero net within tolerance", so `VOLUMES Foo, Foo` must compute rather
+/// than being rejected as a no-op the way some other entity-vs-itself commands elsewhere are.
+void ExecuteVolumesCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+    log.push_back("VOLUMES — usage: VOLUMES <base surface>, <comparison surface>.");
+    return;
+  }
+  const int baseIx = FindSurfaceIndex(st, f[0]);
+  if (baseIx < 0) {
+    log.push_back("VOLUMES — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  const int compIx = FindSurfaceIndex(st, f[1]);
+  if (compIx < 0) {
+    log.push_back("VOLUMES — no surface named \"" + f[1] + "\".");
+    return;
+  }
+  const std::shared_ptr<const CadTin>& baseTin = st.cadSurfaces[static_cast<size_t>(baseIx)].tin;
+  const std::shared_ptr<const CadTin>& compTin = st.cadSurfaces[static_cast<size_t>(compIx)].tin;
+  if (!baseTin || !compTin) {
+    log.push_back("VOLUMES — \"" + f[0] + "\" and \"" + f[1] + "\" must both have a triangulation "
+                  "before a volume can be reported.");
+    return;
+  }
+
+  const SurfaceVolumeResult r =
+      ComputeSurfaceVolume(baseTin->vertsXyz, baseTin->indices, compTin->vertsXyz, compTin->indices);
+  const int p = st.displayLinearPrecision;
+  if (!r.overlapped) {
+    // REQ-073: "report zero volume and say so, rather than reporting a number derived from no
+    // common area" — the zeros below are the true computed result, not a placeholder for a refusal.
+    log.push_back("VOLUMES — \"" + f[0] + "\" and \"" + f[1] + "\" have no common area. Cut 0, fill "
+                  "0, net 0.");
+    return;
+  }
+  char buf[384];
+  std::snprintf(buf, sizeof(buf),
+                "VOLUMES — \"%s\" (base) vs \"%s\" (comparison): cut %s ft3, fill %s ft3, net %s "
+                "ft3, common area %s ft2.",
+                f[0].c_str(), f[1].c_str(), FormatLinear(r.cutFt3, p).c_str(),
+                FormatLinear(r.fillFt3, p).c_str(), FormatLinear(r.netFt3, p).c_str(),
+                FormatLinear(r.commonAreaFt2, p).c_str());
+  log.push_back(buf);
+}
+
+/// `VOLDASH [<verb> …]` — the command form of the Volume Dashboard panel (REQ-073 amendment,
+/// TASK-095 §8), the same role `SURFSTYLE`'s verbs play for the Analysis tab: the panel is an ImGui
+/// window this headless driver cannot reach, so PICK/MAP/CLOSE call the exact fields the panel edits.
+///
+/// **`RECOMPUTE` is the synchronous test surrogate for the real async live-recompute
+/// (`TickVolumeDashboard`)** — the same relationship `SURFACEREBUILD` has to `TickSurfaceRebuilds`
+/// (REQ-069's own precedent, `req069-surface-definition-commands.txt`'s header): a headless driver
+/// with no frame loop cannot race a real background thread deterministically, so the TRUE live
+/// behaviour (automatic recompute with no user action, driven by `main.cpp`'s frame loop) is verified
+/// manually, exactly as REQ-069's dynamic rebuild itself is. `RECOMPUTE` shares
+/// `VolumeDashboardReady` — the identical readiness gate the real async path uses — so what IS
+/// testable here (the panel's own state transitions: which pick, which stale/waiting reason, the map
+/// toggle) cannot silently disagree with the live path about when a comparison is ready.
+void ExecuteVolDashCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  AppCommandState::VolumeDashboardState& dash = st.volumeDashboard;
+
+  std::string rest;
+  const std::string verb = StringUtil::toLowerAsciiCopy(
+      StringUtil::trimCopy(args.substr(0, args.find_first_of(" \t,"))));
+  {
+    const size_t sp = args.find_first_of(" \t");
+    rest = sp == std::string::npos ? std::string() : StringUtil::trimCopy(args.substr(sp + 1));
+  }
+
+  if (verb.empty()) {
+    dash.open = true;
+    log.push_back("VOLDASH — Volume Dashboard opened.");
+    return;
+  }
+
+  const auto usage = [&]() {
+    log.push_back("VOLDASH — usage: VOLDASH (opens the panel) | CLOSE | "
+                  "PICK <base surface>, <comparison surface> | MAP on|off | RECOMPUTE");
+  };
+
+  if (verb == "close") {
+    dash.open = false;
+    log.push_back("VOLDASH — Volume Dashboard closed.");
+    return;
+  }
+
+  if (verb == "pick") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+      usage();
+      return;
+    }
+    const int baseIx = FindSurfaceIndex(st, f[0]);
+    if (baseIx < 0) {
+      log.push_back("VOLDASH — no surface named \"" + f[0] + "\".");
+      return;
+    }
+    const int compIx = FindSurfaceIndex(st, f[1]);
+    if (compIx < 0) {
+      log.push_back("VOLDASH — no surface named \"" + f[1] + "\".");
+      return;
+    }
+    dash.baseSurfaceId = st.cadSurfaceAttrs[static_cast<size_t>(baseIx)].id;
+    dash.comparisonSurfaceId = st.cadSurfaceAttrs[static_cast<size_t>(compIx)].id;
+    log.push_back("VOLDASH — base \"" + f[0] + "\", comparison \"" + f[1] + "\".");
+    return;
+  }
+
+  if (verb == "map") {
+    const std::string onOff = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(rest));
+    if (onOff != "on" && onOff != "off") {
+      log.push_back("VOLDASH — map must be on or off, not \"" + rest + "\".");
+      return;
+    }
+    dash.showMap = (onOff == "on");
+    log.push_back(std::string("VOLDASH — cut/fill map ") + onOff + ".");
+    return;
+  }
+
+  if (verb == "recompute") {
+    if (dash.baseSurfaceId == 0 || dash.comparisonSurfaceId == 0) {
+      log.push_back("VOLDASH — pick a base and a comparison surface first.");
+      return;
+    }
+    std::string whyNot;
+    if (!VolumeDashboardReady(st, dash.baseSurfaceId, dash.comparisonSurfaceId, &whyNot)) {
+      log.push_back("VOLDASH — not ready: " + whyNot + ".");
+      return;
+    }
+    const CadSurface& baseSurf =
+        st.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.baseSurfaceId))];
+    const CadSurface& compSurf =
+        st.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.comparisonSurfaceId))];
+    dash.mapCutTrianglesXyz.clear();
+    dash.mapFillTrianglesXyz.clear();
+    dash.lastResult = ComputeSurfaceVolume(
+        baseSurf.tin->vertsXyz, baseSurf.tin->indices, compSurf.tin->vertsXyz, compSurf.tin->indices,
+        dash.showMap ? &dash.mapCutTrianglesXyz : nullptr, dash.showMap ? &dash.mapFillTrianglesXyz : nullptr);
+    dash.hasResult = true;
+    dash.resultForRevision = st.cadGpuRevision;
+    dash.resultForBaseSurfaceId = dash.baseSurfaceId;
+    dash.resultForComparisonSurfaceId = dash.comparisonSurfaceId;
+    dash.resultHasMap = dash.showMap;
+    const int p = st.displayLinearPrecision;
+    log.push_back("VOLDASH — cut " + FormatLinear(dash.lastResult.cutFt3, p) + " ft3, fill " +
+                  FormatLinear(dash.lastResult.fillFt3, p) + " ft3, net " +
+                  FormatLinear(dash.lastResult.netFt3, p) + " ft3, common area " +
+                  FormatLinear(dash.lastResult.commonAreaFt2, p) + " ft2.");
+    return;
+  }
+
+  usage();
+}
 
 /// `UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY|POINTFILE>, <n>` — removes one item from a surface's
 /// definition (REQ-069's "remove", the counterpart to DESIGNATEBREAKLINE/DESIGNATEBOUNDARY). \p n is
@@ -3604,6 +4124,8 @@ const CmdEntry kRegistry[] = {
     {"style", "st, ddstyle", "Text style manager: create / edit named text styles"},
     {"surfstyle", "ss", "Surface style editor: contours, triangles, border (REQ-070)"},
     {"extract", "", "Bake a surface's displayed contours into polylines: EXTRACT <surface>[, <layer>]"},
+    {"volumes", "vol", "Cut/fill/net volume between two surfaces: VOLUMES <base>, <comparison> (REQ-073)"},
+    {"voldash", "", "Volume Dashboard: live cut/fill/net panel between two surfaces (REQ-073)"},
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"pdfattach", "pa", "Attach a PDF underlay"},
     {"overkill",     "ok", "Remove duplicate geometry"},
@@ -4741,6 +5263,32 @@ void RotateAroundBase(float bx, float by, float rad, float* x, float* y) {
   *y = by + s * dx + c * dy;
 }
 
+/// REQ-103 MIRROR. Reflects (*x,*y) across the line through (x0,y0)-(x1,y1). A degenerate
+/// (near-zero-length) mirror line leaves the point unchanged rather than dividing by ~0 — callers
+/// require two distinct points before a mirror commits (see \c HandleMirrorText), so this is a
+/// safety net, not a user-facing path.
+void ReflectPtAcrossLine(float x0, float y0, float x1, float y1, float* x, float* y) {
+  const float dx = x1 - x0;
+  const float dy = y1 - y0;
+  const float len2 = dx * dx + dy * dy;
+  if (len2 < 1e-12f)
+    return;
+  const float t = ((*x - x0) * dx + (*y - y0) * dy) / len2;
+  const float projX = x0 + t * dx;
+  const float projY = y0 + t * dy;
+  *x = 2.f * projX - *x;
+  *y = 2.f * projY - *y;
+}
+
+/// Reflects a direction/angle across the mirror line's own direction angle phi = atan2(dy,dx):
+/// angle' = 2*phi - angle. Used to re-derive an arc's swept range after reflection (see
+/// \c DuplicateCadSelectionReflected) — reflecting a center point alone does not tell you which
+/// way the arc now sweeps, because a reflection reverses handedness (CCW becomes CW).
+static float ReflectAngleAcrossLine(float x0, float y0, float x1, float y1, float angle) {
+  const float phi = std::atan2(y1 - y0, x1 - x0);
+  return 2.f * phi - angle;
+}
+
 /// Rotates \c DimLinear extension points and offset; keeps \p ann.dimLinearVertical; refreshes \p ann.rotationRad.
 
 static void RotateCadDimLinearAroundBase(float bx, float by, float rad, CadAnnotation* ann) {
@@ -4758,6 +5306,36 @@ static void RotateCadDimLinearAroundBase(float bx, float by, float rad, CadAnnot
   RotateAroundBase(bx, by, rad, &ann->dimExt1X, &ann->dimExt1Y);
   RotateAroundBase(bx, by, rad, &ann->dimExt2X, &ann->dimExt2Y);
   RotateAroundBase(bx, by, rad, &dmx, &dmy);
+  const float ncmx = 0.5f * (ann->dimExt1X + ann->dimExt2X);
+  const float ncmy = 0.5f * (ann->dimExt1Y + ann->dimExt2Y);
+  if (!ann->dimLinearVertical)
+    ann->dimSignedOffset = dmy - ncmy;
+  else
+    ann->dimSignedOffset = dmx - ncmx;
+  float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+  if (CadDimLinearGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+    ann->rotationRad = std::atan2(ty, tx);
+}
+
+/// REQ-103 MIRROR. Same shape as \c RotateCadDimLinearAroundBase, reflecting instead of rotating.
+/// \c ann->rotationRad here is the dimension LINE's geometric angle (text runs parallel to what was
+/// measured), not a glyph-flip concern — it is re-derived from the reflected geometry the same way
+/// ROTATE already does, independent of the MIRROR text-stays-upright decision for plain Text/Mtext.
+static void ReflectCadDimLinearAcrossLine(float x0, float y0, float x1, float y1, CadAnnotation* ann) {
+  if (!ann || ann->kind != CadAnnotation::Kind::DimLinear)
+    return;
+  const float ex1 = ann->dimExt1X, ey1 = ann->dimExt1Y, ex2 = ann->dimExt2X, ey2 = ann->dimExt2Y;
+  const float cmx = 0.5f * (ex1 + ex2);
+  const float cmy = 0.5f * (ey1 + ey2);
+  float dmx = cmx;
+  float dmy = cmy;
+  if (!ann->dimLinearVertical)
+    dmy = cmy + ann->dimSignedOffset;
+  else
+    dmx = cmx + ann->dimSignedOffset;
+  ReflectPtAcrossLine(x0, y0, x1, y1, &ann->dimExt1X, &ann->dimExt1Y);
+  ReflectPtAcrossLine(x0, y0, x1, y1, &ann->dimExt2X, &ann->dimExt2Y);
+  ReflectPtAcrossLine(x0, y0, x1, y1, &dmx, &dmy);
   const float ncmx = 0.5f * (ann->dimExt1X + ann->dimExt2X);
   const float ncmy = 0.5f * (ann->dimExt1Y + ann->dimExt2Y);
   if (!ann->dimLinearVertical)
@@ -5522,6 +6100,248 @@ void DropSurfacesFromSelectionForTransform(AppCommandState& st, const char* comm
   log.push_back(std::string(commandName) + " — " + std::to_string(dropped) + " surface(s) excluded: a surface's" +
                 " shape comes from its definition, so moving it would be undone by the next rebuild." +
                 " Edit its definition in the Surfaces panel instead.");
+}
+
+/// REQ-103 MIRROR. Drops the three entity kinds a mirror cannot represent, and says why (REQ-201)
+/// rather than silently doing nothing to them: `FilledRegion` (hatches) — already out of scope for
+/// rotate/scale/mirror, requirements.md's REQ-042 fills note; `Mesh` — never edited by any existing
+/// transform (REQ-063, reference-only geometry); `PdfUnderlay` — its stored orientation is a scalar
+/// rotation-degrees/scale pair with no way to represent a reflection (a "flip" field would be new
+/// scope, not this task's). Surfaces are handled separately by the existing
+/// \ref DropSurfacesFromSelectionForTransform, reused as-is.
+static void DropMirrorUnsupportedFromSelection(AppCommandState& st, std::vector<std::string>& log) {
+  size_t filled = 0, mesh = 0, pdf = 0;
+  st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
+                                    [&](const SelectedEntity& e) {
+                                      if (e.type == SelectedEntity::Type::FilledRegion) { ++filled; return true; }
+                                      if (e.type == SelectedEntity::Type::Mesh) { ++mesh; return true; }
+                                      if (e.type == SelectedEntity::Type::PdfUnderlay) { ++pdf; return true; }
+                                      return false;
+                                    }),
+                     st.selection.end());
+  if (filled)
+    log.push_back("MIRROR — " + std::to_string(filled) + " hatch fill(s) excluded: mirroring solid" +
+                  " fills is not supported yet.");
+  if (mesh)
+    log.push_back("MIRROR — " + std::to_string(mesh) + " imported model(s) excluded: imported meshes" +
+                  " are reference-only geometry and are never edited.");
+  if (pdf)
+    log.push_back("MIRROR — " + std::to_string(pdf) + " PDF underlay(s) excluded: an underlay's stored" +
+                  " orientation cannot represent a reflection yet.");
+}
+
+/// REQ-103 MIRROR. Same shape as \c DuplicateCadSelectionRotated — builds new entities reflected
+/// across the line through (x0,y0)-(x1,y1) and appends them, never mutating the source selection in
+/// place. MIRROR's default behavior always duplicates (erase-source, if requested, runs separately
+/// afterward against the original selection — see \c FinishMirrorCommand), unlike ROTATE/SCALE
+/// where duplication is the opt-in "copy" mode.
+static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float y0, float x1, float y1,
+                                           std::vector<std::string>& log) {
+  DropSurfacesFromSelectionForTransform(st, "MIRROR", log);
+  DropMirrorUnsupportedFromSelection(st, log);
+
+  const size_t polyVertsBefore = st.userPolylineVerts.size();
+  const size_t featureVertsBefore = st.featureLineVerts.size();
+  std::vector<float> newLines;
+  std::vector<float> newCircles;
+  std::vector<EntityAttributes> newLineAttrs;
+  std::vector<EntityAttributes> newCircleAttrs;
+  std::vector<CadAnnotation> newAnn;
+  std::vector<EntityAttributes> newAnnAttrs;
+  std::vector<CadArc> newArcs;
+  std::vector<EntityAttributes> newArcAttrs;
+  std::vector<CadEllipse> newEll;
+  std::vector<EntityAttributes> newEllAttrs;
+
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::LineSeg) {
+      size_t k = static_cast<size_t>(e.index) * 6;
+      if (k + 5 < st.userLinesFlat.size()) {
+        float lx0 = st.userLinesFlat[k];
+        float ly0 = st.userLinesFlat[k + 1];
+        float lz0 = st.userLinesFlat[k + 2];
+        float lx1 = st.userLinesFlat[k + 3];
+        float ly1 = st.userLinesFlat[k + 4];
+        float lz1 = st.userLinesFlat[k + 5];
+        ReflectPtAcrossLine(x0, y0, x1, y1, &lx0, &ly0);
+        ReflectPtAcrossLine(x0, y0, x1, y1, &lx1, &ly1);
+        newLines.push_back(lx0);
+        newLines.push_back(ly0);
+        newLines.push_back(lz0);
+        newLines.push_back(lx1);
+        newLines.push_back(ly1);
+        newLines.push_back(lz1);
+        EntityAttributes a{};
+        if (e.index >= 0 && static_cast<size_t>(e.index) < st.userLineAttrs.size())
+          a = st.userLineAttrs[static_cast<size_t>(e.index)];
+        newLineAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
+    } else if (e.type == SelectedEntity::Type::Circle) {
+      size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 < st.userCirclesCxCyZR.size()) {
+        float cx = st.userCirclesCxCyZR[k];
+        float cy = st.userCirclesCxCyZR[k + 1];
+        float r = st.userCirclesCxCyZR[k + 3];
+        ReflectPtAcrossLine(x0, y0, x1, y1, &cx, &cy);
+        newCircles.push_back(cx);
+        newCircles.push_back(cy);
+        newCircles.push_back(st.userCirclesCxCyZR[k + 2]);  // z — reflection is about a vertical plane
+        newCircles.push_back(r);                            // radius is preserved (isometry)
+        EntityAttributes a{};
+        if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
+          a = st.userCircleAttrs[static_cast<size_t>(e.index)];
+        newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
+    } else if (e.type == SelectedEntity::Type::Annotation) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.cadAnnotations.size()) {
+        CadAnnotation c = st.cadAnnotations[k];
+        c.surveyPointLabelForId = -1;
+        if (c.kind == CadAnnotation::Kind::Text || c.kind == CadAnnotation::Kind::Mtext) {
+          // MIRRTEXT-off (design decision, D-2026-08-23-j): insertion point reflects, glyphs stay
+          // upright — rotationRad is deliberately left untouched.
+          ReflectPtAcrossLine(x0, y0, x1, y1, &c.insX, &c.insY);
+          if (c.kind == CadAnnotation::Kind::Mtext) {
+            float xs[4] = {c.boxMinX, c.boxMaxX, c.boxMaxX, c.boxMinX};
+            float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
+            float mnX = xs[0], mxX = xs[0], mnY = ys[0], mxY = ys[0];
+            for (int i = 0; i < 4; ++i) {
+              ReflectPtAcrossLine(x0, y0, x1, y1, &xs[i], &ys[i]);
+              mnX = std::min(mnX, xs[i]);
+              mxX = std::max(mxX, xs[i]);
+              mnY = std::min(mnY, ys[i]);
+              mxY = std::max(mxY, ys[i]);
+            }
+            c.boxMinX = mnX;
+            c.boxMaxX = mxX;
+            c.boxMinY = mnY;
+            c.boxMaxY = mxY;
+            c.insX = mnX;
+            c.insY = mnY;
+          }
+        } else if (c.kind == CadAnnotation::Kind::DimLinear) {
+          ReflectCadDimLinearAcrossLine(x0, y0, x1, y1, &c);
+        } else if (c.kind == CadAnnotation::Kind::DimAligned) {
+          ReflectPtAcrossLine(x0, y0, x1, y1, &c.insX, &c.insY);
+          ReflectPtAcrossLine(x0, y0, x1, y1, &c.dimExt1X, &c.dimExt1Y);
+          ReflectPtAcrossLine(x0, y0, x1, y1, &c.dimExt2X, &c.dimExt2Y);
+          float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+          if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+            c.rotationRad = std::atan2(ty, tx);
+        } else {
+          // Generic fallback (DimAngular and anything else): reflect insertion point + AABB
+          // corners and re-fit — the same weaker path ROTATE takes for these kinds.
+          ReflectPtAcrossLine(x0, y0, x1, y1, &c.insX, &c.insY);
+          float xs[4] = {c.boxMinX, c.boxMaxX, c.boxMaxX, c.boxMinX};
+          float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
+          float mnX = xs[0], mxX = xs[0], mnY = ys[0], mxY = ys[0];
+          for (int i = 0; i < 4; ++i) {
+            ReflectPtAcrossLine(x0, y0, x1, y1, &xs[i], &ys[i]);
+            mnX = std::min(mnX, xs[i]);
+            mxX = std::max(mxX, xs[i]);
+            mnY = std::min(mnY, ys[i]);
+            mxY = std::max(mxY, ys[i]);
+          }
+          c.boxMinX = mnX;
+          c.boxMaxX = mxX;
+          c.boxMinY = mnY;
+          c.boxMaxY = mxY;
+          c.insX = mnX;
+          c.insY = mnY;
+        }
+        newAnn.push_back(std::move(c));
+        EntityAttributes a{};
+        if (k < st.cadAnnotationAttrs.size())
+          a = st.cadAnnotationAttrs[k];
+        newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
+    } else if (e.type == SelectedEntity::Type::Arc) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.userArcs.size()) {
+        CadArc a = st.userArcs[k];
+        // A reflection reverses handedness (CCW becomes CW): reflecting the center alone does not
+        // say which way the arc now sweeps. Reflect the OLD END angle into the NEW START angle and
+        // keep sweepRad's magnitude — this is the CCW-from-start arc that covers the identical
+        // reflected point set (verified by hand for axis-aligned and symmetric cases; see TASK-094).
+        const float newStart = ReflectAngleAcrossLine(x0, y0, x1, y1, a.startRad + a.sweepRad);
+        ReflectPtAcrossLine(x0, y0, x1, y1, &a.cx, &a.cy);
+        a.startRad = newStart;
+        newArcs.push_back(a);
+        EntityAttributes at{};
+        if (k < st.userArcAttrs.size())
+          at = st.userArcAttrs[k];
+        newArcAttrs.push_back(DuplicatedEntityAttrs(at));
+      }
+    } else if (e.type == SelectedEntity::Type::Ellipse) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.userEllipses.size()) {
+        CadEllipse el = st.userEllipses[k];
+        float mx = el.cx + el.majVx;
+        float my = el.cy + el.majVy;
+        ReflectPtAcrossLine(x0, y0, x1, y1, &el.cx, &el.cy);
+        ReflectPtAcrossLine(x0, y0, x1, y1, &mx, &my);
+        el.majVx = mx - el.cx;
+        el.majVy = my - el.cy;
+        newEll.push_back(el);
+        EntityAttributes at{};
+        if (k < st.userEllAttrs.size())
+          at = st.userEllAttrs[k];
+        newEllAttrs.push_back(DuplicatedEntityAttrs(at));
+      }
+    } else if (e.type == SelectedEntity::Type::Polyline) {
+      const int pi = e.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+        continue;
+      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int nv = v1 - v0;
+      if (nv < 2)
+        continue;
+      if (st.userPolylineOffsets.empty())
+        st.userPolylineOffsets.push_back(0);
+      const int baseVert = st.userPolylineOffsets.back();
+      for (int vi = v0; vi < v1; ++vi) {
+        float px = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 0)];
+        float py = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
+        float pz = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)];
+        ReflectPtAcrossLine(x0, y0, x1, y1, &px, &py);
+        st.userPolylineVerts.push_back(px);
+        st.userPolylineVerts.push_back(py);
+        st.userPolylineVerts.push_back(pz);
+      }
+      st.userPolylineOffsets.push_back(baseVert + nv);
+      uint8_t cl = 0;
+      if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
+        cl = st.userPolylineClosed[static_cast<size_t>(pi)];
+      st.userPolylineClosed.push_back(cl);
+      EntityAttributes at{};
+      if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
+        at = st.userPolylineAttrs[static_cast<size_t>(pi)];
+      st.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
+    }
+  }
+  st.userLinesFlat.insert(st.userLinesFlat.end(), newLines.begin(), newLines.end());
+  st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
+  st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
+  st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
+  st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
+  st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
+  st.userArcs.insert(st.userArcs.end(), newArcs.begin(), newArcs.end());
+  st.userArcAttrs.insert(st.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
+  st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
+  st.userEllAttrs.insert(st.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
+
+  // Feature lines (REQ-087) — same append as the rotated/translated paths, differing only in the
+  // point function, which is exactly why all three go through AppendFeatureLineCopy.
+  ForEachSelectedFeatureLine(st, [&](int fi, int v0, int v1) {
+    AppendFeatureLineCopy(st, fi, v0, v1,
+                          [&](float* x, float* y) { ReflectPtAcrossLine(x0, y0, x1, y1, x, y); });
+  });
+
+  if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
+      st.userPolylineVerts.size() != polyVertsBefore ||
+      st.featureLineVerts.size() != featureVertsBefore)
+    BumpCadGpuCache(st);
 }
 
 void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad, std::vector<std::string>& log) {
@@ -14797,16 +15617,23 @@ void ApplyCopySurveyDuplicateModalResult(AppCommandState& st, bool applySurveyDu
     return;
   st.copySurveyDupModalOpen = false;
   st.copySurveyDupModalOpenRequested = false;
+  const bool wasMirrorDup = st.pendingSurveyDupIsMirror;
   const bool wasRotateDup = st.pendingSurveyDupIsRotate;
+  st.pendingSurveyDupIsMirror = false;
   st.pendingSurveyDupIsRotate = false;
   if (applySurveyDup) {
-    if (wasRotateDup)
+    if (wasMirrorDup)
+      DuplicateSelectedSurveyPointsReflected(st, st.pendingMirrorX0, st.pendingMirrorY0, st.pendingMirrorX1,
+                                             st.pendingMirrorY1, st.copySurveyDuplicatePolicy, log);
+    else if (wasRotateDup)
       DuplicateSelectedSurveyPointsRotated(st, st.pendingRotateCopyBx, st.pendingRotateCopyBy, st.pendingRotateCopyRad,
                                            st.copySurveyDuplicatePolicy, log);
     else
       DuplicateSelectedSurveyPointsTranslated(st, st.pendingCopyDx, st.pendingCopyDy, st.copySurveyDuplicatePolicy,
                                               log);
-  } else if (wasRotateDup)
+  } else if (wasMirrorDup)
+    log.push_back("MIRROR COPY survey — skipped (CAD copy kept).");
+  else if (wasRotateDup)
     log.push_back("ROTATE COPY survey — skipped (CAD copy kept).");
   else
     log.push_back("COPY survey — skipped (CAD copy kept).");
@@ -15403,6 +16230,22 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       std::string rest;
       std::getline(issIdle, rest);
       ExecuteSurfStyleCommand(st, StringUtil::trimCopy(rest), log);
+      return;
+    }
+    // REQ-073. `VOLUMES <base surface>, <comparison surface>` — the synchronous command form of
+    // the cut/fill/net report, reachable from a headless transcript the way SURFELEV/SURFSTYLE are.
+    if (plotTok == "volumes" || plotTok == "vol") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ExecuteVolumesCommand(st, StringUtil::trimCopy(rest), log);
+      return;
+    }
+    // REQ-073 amendment. `VOLDASH [<verb> …]` — bare opens the panel; the verbs are what a headless
+    // transcript drives, because the panel itself is an ImGui window this driver cannot reach.
+    if (plotTok == "voldash") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ExecuteVolDashCommand(st, StringUtil::trimCopy(rest), log);
       return;
     }
     // REQ-087. `FEATURELINE [<name>]` — the whole remainder is the name, so it may contain spaces.

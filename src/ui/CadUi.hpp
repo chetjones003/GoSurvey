@@ -96,6 +96,8 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log 
 /// Surfaces panel (REQ-068): create a TIN surface from point groups, rebuild, rename, delete.
 void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
+void DrawVolumeDashboardWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+
 /// Feature line elevation editor (REQ-088). Every edit routes through the FLELEV command line, so
 /// the panel and the REQ-203 driver exercise the same code.
 void DrawFeatureLineElevationWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);

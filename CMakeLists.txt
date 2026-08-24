@@ -212,6 +212,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/util/tinbuild.cpp
   src/util/contourgen.cpp
   src/util/surfaceanalysis.cpp
+  src/util/surfacevolume.cpp
   src/util/benchscene.cpp
 
   # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
@@ -243,6 +244,7 @@ add_executable(GoSurvey
   src/ui/CadUi_PointGroups.cpp
   src/ui/CadUi_Surfaces.cpp
   src/ui/CadUi_SurfaceStyles.cpp
+  src/ui/CadUi_VolumeDashboard.cpp
   src/ui/CadUi_FeatureLineElev.cpp
   src/ui/CadUi_UpdateDialog.cpp
   src/ui/CadUi_SignInGate.cpp
@@ -528,6 +530,11 @@ if(GOSURVEY_BUILD_TESTS)
     # breakpoint rule and the flat-triangle refusal are both invisible on ordinary data and wrong
     # exactly at a band boundary and on level ground, which is most of a real site.
     tests/SurfaceAnalysisTests.cpp
+    # REQ-073 surface-to-surface volumes (TASK-095). Pure spatial index + grid-sample integrator: the
+    # cut/fill sign convention and the bbox-disjoint early-out are both invisible on a single hand
+    # example and wrong on exactly the cases a real grading comparison needs (no overlap, self vs
+    # self, partial overlap).
+    tests/SurfaceVolumeTests.cpp
     # REQ-070 surface style table (ADR-036 (d)). Header-only and pure, so it needs no source entry
     # below. Three of REQ-070's five acceptance conditions — the deleted-style fallback, the legacy
     # empty-name fallback, and the rejection of a major interval that is not a whole multiple of the
@@ -599,6 +606,9 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-072 surface analysis. Pure by ADR-036 (g) — no GL, no document — so a reversed arrow is
     # caught against a hand-computed fall line rather than by squinting at a viewport full of them.
     src/util/surfaceanalysis.cpp
+    # REQ-073 surface-to-surface volumes + the spatial index they run on. Pure — no GL, no document —
+    # so a wrong sign on cut vs. fill is caught against a hand-computed planar case, TASK-095.
+    src/util/surfacevolume.cpp
     # REQ-077/078 version ordering + manifest parse. Pure by ADR-029 (g) — no network, no window.
     # Wrong version ordering has NO symptom (the user is simply never offered an update), which is
     # exactly why it must be pinned by a test rather than noticed in use.

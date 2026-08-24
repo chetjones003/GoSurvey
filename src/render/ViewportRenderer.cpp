@@ -845,7 +845,8 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const std::vector<EntityAttributes>* filledRegionAttrs,
                                    const std::vector<std::shared_ptr<const CadMesh>>* meshes,
                                    const std::vector<EntityAttributes>* meshAttrs,
-                                   const CadSurfaceDisplayGeometry* surfaceGeometry) {
+                                   const CadSurfaceDisplayGeometry* surfaceGeometry,
+                                   const VolumeMapDisplayGeometry* volumeMap) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -1791,12 +1792,53 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     }
   }
 
-  // --- Generated surface display geometry (REQ-068 / REQ-070) ---
+  // --- REQ-072 band fills (ADR-036 (g)) ---
+  // Drawn FIRST, before any surface linework, so the wireframe/contours/border/arrows below all read
+  // on top of the opaque interior. One draw call per band, on the same unlit `lineProgram_` used
+  // everywhere else in this pass: a two-sided-lit shaded program would stop a triangle from
+  // displaying the colour its band prescribes, making the on-screen legend a lie (ADR-036 (g) amends
+  // ADR-028 (h) on exactly this ground).
+  if (surfaceGeometry && !surfaceGeometry->bandTriangles.empty()) {
+    std::vector<float> bandRel;
+    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+    glUseProgram(lineProgram_);
+    for (const SurfaceTriangleBatch& tb : surfaceGeometry->bandTriangles) {
+      if (!tb.verts || tb.verts->empty() || tb.verts->size() % 9 != 0)
+        continue;
+      ConvertLineVertsWorldToView(*tb.verts, viewAnchorX, viewAnchorY, &bandRel);
+      glUniform4f(locCol, tb.rgba[0], tb.rgba[1], tb.rgba[2], tb.rgba[3]);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(bandRel.size() * sizeof(float)), bandRel.data(),
+                   GL_STREAM_DRAW);
+      glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(bandRel.size() / 3));
+    }
+  }
+
+  // --- REQ-073 amendment: Volume Dashboard cut/fill map (TASK-095 §6 step 5) ---
+  // Drawn over the band fills (if any — a surface can be both banded AND part of a volume
+  // comparison) and under the surface linework below, on the same unlit program and for the same
+  // reason ADR-036 (g) gives: an opaque comparison colour has to read as the colour it is, not as
+  // whatever a lit shader's angle-dependent shading turned it into.
+  if (volumeMap && !volumeMap->empty()) {
+    std::vector<float> mapRel;
+    glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+    glUseProgram(lineProgram_);
+    for (const SurfaceTriangleBatch* tb : {&volumeMap->cut, &volumeMap->fill}) {
+      if (!tb->verts || tb->verts->empty() || tb->verts->size() % 9 != 0)
+        continue;
+      ConvertLineVertsWorldToView(*tb->verts, viewAnchorX, viewAnchorY, &mapRel);
+      glUniform4f(locCol, tb->rgba[0], tb->rgba[1], tb->rgba[2], tb->rgba[3]);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(mapRel.size() * sizeof(float)), mapRel.data(),
+                   GL_STREAM_DRAW);
+      glDrawArrays(GL_TRIANGLES, 0, static_cast<GLsizei>(mapRel.size() / 3));
+    }
+  }
+
+  // --- Generated surface display geometry (REQ-068 / REQ-070 / REQ-072 arrows) ---
   // Drawn before the survey markers so a point's X stays readable on top of its own surface, and in
-  // the order the caller assembled: triangles, contours, then the border on top.
+  // the order the caller assembled: triangles, contours, border, then REQ-072's slope arrows on top.
   //
   // One draw call per batch. A batch is a whole component of a whole surface, so a drawing with two
-  // surfaces costs at most eight — nowhere near enough to be worth interleaving into the vertex-
+  // surfaces costs at most a handful — nowhere near enough to be worth interleaving into the vertex-
   // coloured path, and this way the colour a style names is the colour that is set.
   if (surfaceGeometry) {
     std::vector<float> surfRel;

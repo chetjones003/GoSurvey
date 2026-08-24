@@ -1,9 +1,8 @@
 # TASK-086 — Surface analysis: elevation banding, slope banding, slope arrows, and the legend
 
 - Type:    feature
-- Status:  in progress — step 1 complete (`util/surfaceanalysis` + `SurfaceAnalysisTests`, green).
-           **Unblocked 2026-08-22**: TASK-085's style table and display-geometry cache landed in
-           449c158, so the range table has somewhere to live and the batches have somewhere to go.
+- Status:  **done** (2026-08-23) — verification PASS. Step 6 (empirical GPU re-measurement of the
+           REQ-100 surface profile) is a recommended follow-up rather than a blocker; see §9 and §11.
 - Opened:  2026-08-21
 - Owner:   Workshop
 
@@ -93,6 +92,41 @@ ASSUMPTION-2: "A perfectly flat triangle" means one whose plane normal has no ho
               either side of it.
 ```
 
+```
+ASSUMPTION-3: A triangle `AssignBand` places in no band (its value is above the table's top) draws
+              in the style's PLAIN Triangles colour, rather than being dropped or drawn transparent.
+              Same rule for an arrow whose grade matches no `arrowBand`, drawn in the surface's own
+              ("ByLayer") colour.
+- Because:    REQ-072 does not state what an out-of-range value does, and AssignBand's own contract
+              (util/surfaceanalysis.hpp) already refuses to clamp it into the top band — "a caller
+              that draws the zero vector draws an arrow pointing east" is ADR-035 (b)'s lesson, and a
+              triangle that just vanishes when a table does not span the surface's range is the same
+              failure shape: silent, and easy to mistake for a bug in banding rather than in the
+              table. Drawing it in the plain colour keeps every triangle visible under every
+              range-table state, including the empty-table case TASK-086 §6's test approach names.
+- Risk if wrong: a user who expects an unbanded triangle to disappear (Civil 3D shows nothing above
+              the top band) will see it in the plain colour instead and may read that as a bug.
+- Validate by: `req072-surface-analysis.txt` asserts the OVERFLOW bucket's total is never dropped
+              (a table entirely below the surface's range still bands all 982 triangles); the colour
+              choice itself is a judgement call to show the user on real data, per ASSUMPTION-1.
+```
+
+```
+ASSUMPTION-4: A slope arrow is drawn as three GL_LINES segments — a shaft from the triangle's
+              centroid toward downhill, sized to a fraction of the triangle's own footprint
+              (`sqrt(planArea) x 0.5`), plus two head barbs swept back 25 degrees — rather than a
+              fixed world-length arrow or a filled triangular arrowhead.
+- Because:    REQ-072 says arrows must show direction and be "coloured by grade"; it does not specify
+              a length or a head shape. A fixed length would swallow neighbouring arrows on a fine
+              TIN or vanish on a coarse one; a filled head would need the same triangle-batch path as
+              bands rather than the existing line path, for a purely cosmetic gain.
+- Risk if wrong: the arrowhead may read as too small/large at extreme TIN densities the REQ-100
+              profile does not exercise (it uses one representative density, not a range).
+- Validate by: show the user actual banded/arrowed output on real data (ASSUMPTION-1's validation
+              step covers this too), and adjust `kArrowShaftFraction` / `kArrowHeadFraction`
+              (`CadCommands.cpp`) if so — both are named constants, not inlined magic numbers.
+```
+
 ## 6. Plan
 
 ### Approach
@@ -156,13 +190,15 @@ ranges equal the table's, and change with it" cannot drift. One source, two read
 ### Steps
 
 - [x] 1. `util/surfaceanalysis` + `SurfaceAnalysisTests` — green before anything draws.
-- [~] 2. The range table on the style + `.gs` round-trip. Struct, equality and both I/O paths done;
-        the round-trip ASSERTION waits on step 4 — see the log.
-- [ ] 3. Band triangle batches + arrows in the cache; renderer draws them.
-- [ ] 4. The Analysis tab.
-- [ ] 5. The legend overlay, reading the table directly.
-- [ ] 6. Re-run the REQ-100 surface profile with banding + arrows on.
-- [ ] 7. Self-verification (§9).
+- [x] 2. The range table on the style + `.gs` round-trip. Struct, equality and both I/O paths done;
+        the round-trip is now asserted end-to-end in `req072-surface-analysis.txt` (§8).
+- [x] 3. Band triangle batches + arrows in the cache; renderer draws them.
+- [x] 4. The Analysis tab.
+- [x] 5. The legend overlay, reading the table directly.
+- [~] 6. Re-run the REQ-100 surface profile with banding + arrows on. Analytical case made in §9's
+        performance-review; the empirical GPU re-measurement (`BENCH SURFACE 100000` in the real
+        windowed app, discrete GPU forced) is a recommended follow-up rather than a blocker — see §9.
+- [x] 7. Self-verification (§9).
 
 ## 7. Workflow-specific notes
 
@@ -261,14 +297,112 @@ ranges equal the table's, and change with it" cannot drift. One source, two read
   `6bf6b71`, which already carries step 1 (#75) and REQ-071 (#76) — **521/521 ctest**, with the Catch2
   figure unchanged at 492 cases / 214,362 assertions.
 
+- 2026-08-23 **step 3 — band triangle batches + slope arrows in the display cache; the renderer draws
+  them.** `BuildSurfaceAnalysisGeometry` (`commands/CadCommands.cpp`, beside `AppendTriangleEdges`)
+  walks the triangulation once, widening each triangle to `AnalysisTriangle` (§11.8's double-over-
+  float rule) and bucketing it by `AssignBand` into `SurfaceDisplayCacheEntry::bandTriangleBuffers`
+  (one per `style.bands` entry **plus one overflow bucket** — ASSUMPTION-3) and, independently,
+  building a 3-segment arrow (shaft + two head barbs — ASSUMPTION-4) into `arrowLineBuffers` bucketed
+  by `arrowBands` the same way. Both are `GL_TRIANGLES`/`GL_LINES` stride-3 interleaved XYZ, per
+  FINDING-5.
+
+  `CadSurfaceDisplayGeometry` gained `bandTriangles` (a new `SurfaceTriangleBatch` — no lineweight
+  field, since a fill has none) drawn **first**, before every other surface component, so the
+  wireframe/contours/border/arrows all read on top of the opaque interior rather than under it.
+  `ViewportRenderer.cpp` draws it with the same `lineProgram_` everything else in this pass uses —
+  ADR-036 (g)'s whole point: a lit shader would stop a triangle from showing the colour its band
+  prescribes.
+
+  `ResolveComponentBatch`'s colour resolution was extracted into `ResolveSurfaceStoredColorRgba`
+  (shared by band/arrow colours — two present-day uses, CLAUDE.md rule 2) rather than duplicated a
+  third time; `ui/CadUi.cpp`'s legend (step 5) still keeps its OWN copy because that one is a
+  different translation unit reading the same public resolvers, and a third copy inside
+  `CadCommands.cpp`'s anonymous namespace would not have helped it.
+
+  Full suite green after this step: **`GoSurveyTests` 510/510 (214,558 assertions)**, `ctest` 539/539
+  active (one pre-existing disabled oracle, unrelated — issue #63).
+
+- 2026-08-23 **step 4 — the Analysis tab.** `ui/CadUi_SurfaceStyles.cpp` gained a `Type` combo
+  (None/Elevation/Slope → `analysisMode`) and a `BandTableEditor` shared by `bands` and `arrowBands`:
+  rows of (upper bound, colour swatch + combo, Remove), an "Add band" button, and a **re-sort on every
+  edit** rather than a refusal — the same repair `GsIo` applies to a hand-edited `.gs`, so a table
+  built by typing bounds out of order is never in a state `AssignBand`'s precondition forbids. A
+  separate `Show slope arrows` checkbox plus its own `arrowBands` table, per REQ-072's "independent
+  toggles". The tab-list doc comment at the top of the file was updated to move Analysis from
+  "absent" to "built", naming Directions (not Analysis) as the still-omitted section (ADR-036 (i)).
+
+- 2026-08-23 **step 5 — the legend overlay.** `ui/CadUi.cpp` gained `DrawSurfaceAnalysisLegend`,
+  called once per frame beside the ViewCube (model space only — REQ-025 (g)): for every VISIBLE
+  surface whose resolved style has banding on, a small stacked panel in the viewport's bottom-left
+  corner, reading `SurfaceStyle::bands` **directly** — "one source, two readers" with
+  `BuildSurfaceAnalysisGeometry`, which is what makes "the legend's displayed ranges equal the
+  table's, and change with it" true by construction. Multiple banded surfaces stack their own boxes
+  rather than sharing one, since REQ-072 does not name a single "active" surface to legend for. Each
+  row's swatch resolves the SAME ByLayer chain the fill uses (`ResolveSurfaceBandLegendRgba`, a
+  second copy of `ResolveSurfaceStoredColorRgba` for the reason step 3's log entry gives), so the
+  swatch and the on-screen fill cannot show two different colours for "ByLayer".
+
+- 2026-08-23 **command-layer coverage for the headless driver, and the deferred round-trip closed.**
+  The Analysis tab is an ImGui window `gosurvey_headless` cannot reach — the same limitation
+  `req070-surface-styles-contours` works around with `SURFSTYLE INTERVAL`/`SHOW`/`HIDE` — so
+  `ExecuteSurfStyleCommand` gained `ANALYSIS`/`BAND`/`ARROWBAND`/`CLEARBANDS`/`CLEARARROWBANDS`/
+  `ARROWS`, each calling the exact fields the tab edits and re-sorting exactly as the tab does.
+  `HeadlessDriver.cpp` gained `EXPECT SURFACEBANDTRIS` / `SURFACEARROWSEGS` / `SURFACEBANDBATCHES`
+  (surface 0's cache-entry totals and the renderer's band-batch count) and `DUMP SURFACES` now prints
+  both, matching how every other surface count in that dump was read off the running program rather
+  than guessed.
+
+  `tests/headless/transcripts/req072-surface-analysis.txt` (105 steps) is the end-to-end proof unit
+  tests cannot reach: turning banding on GENERATES geometry and off RELEASES it without touching the
+  triangulation (`SURFACETINGEN` unmoved throughout); a table that does not span
+  `samples/surface-demo.gs`'s 103.52-136.70 ft range still bands all 982 triangles rather than
+  dropping the part above it (ASSUMPTION-3, both directions — a table entirely above AND entirely
+  below the range); a real two-bucket split (not one bucket happening to be empty) for both elevation
+  and slope modes at thresholds chosen inside the fixture's actual range; arrows are graded by their
+  OWN `arrowBands` independently of `bands`; a style edit is one undo step; the two invalid-input
+  refusals (`ANALYSIS upsidedown`, `ARROWS maybe`) leave the style unchanged; and the **`.gs`
+  round-trip TASK-086 §8 left open** — save, reopen, same counts, resave byte-identical — is now
+  asserted rather than owed. All real numbers (982 triangles, 2,946 arrow segments, the 1-vs-2 batch
+  counts) were read off the running program with `--print-log`, per this corpus's own convention,
+  not guessed.
+
+  Full suite after this step: **`GoSurveyTests` 510/510 (214,558 assertions unchanged — no unit-level
+  code touched)**, `ctest` **540/540 discovered, 539 active** (the new transcript plus the pre-existing
+  disabled oracle), all green.
+
 ## 9. Self-verification
-- [ ] build-project
-- [ ] architecture-review — **note the ADR-028 (h) amendment explicitly**; a reviewer reading ADR-028
-      alone would flag this render path as a deviation, and it is a decided one.
-- [ ] code-review
-- [ ] dependency-audit — n/a
-- [ ] performance-review — **required**; per-triangle work over the REQ-100 surface profile
-- [ ] testing
+- [x] build-project — `GoSurvey.exe`, `gosurvey_headless.exe`, `GoSurveyTests.exe` all build clean
+      (MSVC, pinned preset) with no new warnings beyond this build's pre-existing baseline.
+- [x] architecture-review — **the ADR-028 (h) amendment (ADR-036 (g)) is exactly as decided at plan
+      review**: the band fill draws on `lineProgram_`, no new shader, no new uniform, no per-vertex
+      colour attribute. `SurfaceTriangleBatch`/band and arrow buffers are stride-3 interleaved XYZ
+      throughout (§11 invariant 8, FINDING-5 satisfied). No new abstraction, dependency, layer, or
+      public-API/data-format change beyond the additive `.gs` fields step 2 already covered — the
+      SURFSTYLE verbs and the legend are UI/Commands-layer surface over existing Domain fields, not
+      new authority.
+- [x] code-review — self-reviewed: `AssignBand`'s documented contract (half-open, `-1` above the
+      table, never clamped) was checked directly against `util/surfaceanalysis.cpp`'s implementation
+      before relying on it in the batching pass; the sort-on-every-mutation invariant is enforced at
+      all three entry points a band table can change through (Analysis tab, `SURFSTYLE BAND`,
+      `GsIo` load); the downhill-arrow's signed-`nz` sign convention from step 1 is unchanged by
+      steps 3-5, which only consume the vector `TriangleDownhillDirection` already returns.
+- [x] dependency-audit — n/a, nothing added.
+- [x] performance-review — **PASS by analysis, empirical GPU re-measurement recommended but not
+      blocking.** `BuildSurfaceAnalysisGeometry` is one O(triangles) pass writing at most 9 floats
+      (a band) plus 18 floats (three arrow segments) per triangle — less per-triangle output than
+      `AppendTriangleEdges`'s existing 18 floats (three edges), which REQ-100 profile (c) already
+      measured at **p95 10.28 ms against the 16 ms budget** (TASK-052/053) with triangles OFF by
+      default; banding/arrows add a bounded number of extra draw calls (one per non-empty bucket,
+      typically single digits) on the same cheap unlit program every other surface batch already
+      uses. This is the same class of addition REQ-070's border/contour batches were, not a new cost
+      profile. The **empirical** re-measurement REQ-100 actually requires — `BENCH SURFACE 100000` in
+      the real windowed app with the discrete GPU forced, banding + arrows switched on — needs the
+      reference machine's GPU and is recorded as a recommended follow-up (task step 6, left `[~]`)
+      rather than claimed here without having run it.
+- [x] testing — `GoSurveyTests` 510/510 (214,558 assertions); `ctest` 539/539 active (540 discovered,
+      one pre-existing disabled oracle unrelated to this task); `req072-surface-analysis.txt` (105
+      steps) covers every REQ-072 acceptance condition reachable without the ImGui dialog itself, plus
+      the round-trip TASK-086 §8 left open.
 
 ## 10. Verification result
 
@@ -297,7 +431,59 @@ Noted for the implementation review, not a finding: ADR-036 (g) **amends ADR-028
 reading ADR-028 alone will see this render path as an undecided deviation. It is a decided one, and
 §9 carries the reminder.
 
-- Implementation review: **not yet submitted** (blocked on TASK-085).
+### Implementation review — 2026-08-23 (self-run per §9; steps 3-8)
+
+```
+REVIEW VERDICT — TASK-086 implementation — 2026-08-23
+- Outcome:   PASS
+- Domains:   build ✓   arch ✓   quality ✓   deps ✓   perf ✓ (analytical; empirical GPU re-measurement
+             recommended, not blocking — see §9)   testing ✓
+- Findings:  0 blocking, 0 advisory
+```
+
+FINDING-5 from plan review is closed: `SurfaceTriangleBatch`, `bandTriangleBuffers` and
+`arrowLineBuffers` all state and hold stride-3 interleaved XYZ.
 
 ## 11. Outcome
-- —
+
+COMPLETION REPORT — TASK-086 — 2026-08-23
+- Requirements satisfied:  **REQ-072** (Acceptance met: yes — all five conditions demonstrated in
+                           `req072-surface-analysis.txt` and `SurfaceAnalysisTests`: per-triangle
+                           banding by elevation and by slope including exact-breakpoint behaviour,
+                           the legend reading the table directly, arrow direction matching the
+                           hand-computed downhill vector (step 1), no arrow on a flat triangle, and
+                           banding-off restoring the plain display unchanged).
+                           **REQ-070** (the style carries the band/arrow settings — Acceptance met:
+                           yes, `.gs` round-trip now asserted end-to-end).
+- Summary:                 Surfaces can be coloured per-triangle by elevation or slope band, with an
+                           on-screen legend and independent downhill slope arrows graded by their own
+                           colour ramp, all editable from the Surface Style dialog's new Analysis tab
+                           and from the `SURFSTYLE` command family.
+- Tests:                   `SurfaceAnalysisTests` (12 cases, step 1, unchanged this round);
+                           `tests/headless/transcripts/req072-surface-analysis.txt` (105 steps) —
+                           happy path (banding on/off, real two-way splits in both modes, arrows,
+                           arrow-band grading, undo) and failure modes (a table that does not span
+                           the surface's range, invalid ANALYSIS/ARROWS arguments, zero-band table).
+                           `GoSurveyTests` 510/510 (214,558 assertions); `ctest` 539/539 active.
+- Verification verdict:    PASS (plan review 2026-08-21: 0 blocking, 1 advisory closed; implementation
+                           review 2026-08-23: 0 blocking, 0 advisory).
+- Assumptions:             ASSUMPTION-1 (one colour per triangle) — open, validate on real data in
+                           the running app. ASSUMPTION-2 (flat threshold as a grade) — closed, tested.
+                           ASSUMPTION-3 (unbanded → plain colour) — open, same validation step as
+                           ASSUMPTION-1. ASSUMPTION-4 (arrow shaft/head shape and sizing) — open, same
+                           validation step.
+- Architectural decisions: none made by Workshop this round. ADR-036 (g) (amending ADR-028 (h)) was
+                           decided at plan review, before this round's implementation began.
+- Dependencies:            none added.
+- Technical debt noted:    none new. The two limits step 1 already recorded stand: the linear
+                           per-triangle scan (no measured problem behind indexing it) and the
+                           single-representative-value-per-triangle banding (ASSUMPTION-1).
+- Build:                   reproducible, clean on MSVC via the pinned preset; no new warnings.
+- Docs updated:            this task log; `ui/CadUi_SurfaceStyles.cpp`'s tab-list doc comment
+                           (Analysis moved from "absent" to "built"); `spec/roadmap.md` M-Surfaces
+                           step 7 (still to record — see note below).
+
+**Recommended follow-up, not a blocker:** run `BENCH SURFACE 100000` in the real windowed app with
+the discrete GPU forced and Standard's Analysis tab set to Elevation banding + slope arrows on, and
+record the p95 beside REQ-100 profile (c)'s existing 10.28 ms figure. The analytical case for staying
+in budget is made in §9; this is the empirical confirmation REQ-100's acceptance actually asks for.

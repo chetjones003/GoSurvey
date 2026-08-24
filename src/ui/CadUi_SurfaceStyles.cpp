@@ -5,11 +5,12 @@
 // the triangulation are separate halves of the display cache's staleness key (ADR-036 (e)).
 //
 // **Which tabs exist, and why the missing ones are missing** (ADR-036 (i), decision D-2026-08-21-a).
-// Built: Information, Borders, Contours, Points, Triangles, Display, Summary. Absent, each for a
-// stated reason rather than an oversight:
+// Built: Information, Borders, Contours, Points, Triangles, Analysis, Display, Summary. Absent, each
+// for a stated reason rather than an oversight:
 //   * **Grid** and **Watersheds** — no requirement behind either, and Watersheds is a drainage-basin
 //     *algorithm* rather than a display option, so it would be a SPEC GAP.
-//   * **Analysis** — REQ-072, and TASK-086 owns it. An empty tab now would be a promise.
+//   * **Directions** (REQ-072's own Analysis tab, TASK-086 §2) — no requirement covers aspect/
+//     direction analysis, so the section is omitted rather than stubbed (ADR-036 (i)).
 //   * **Contour smoothing** — ADR-028 left it undesigned, so the Civil 3D slider is not built.
 //   * **Per-component Layer and Plot Style columns** — a surface has exactly one layer (its own
 //     `EntityAttributes`) and GoSurvey has no plot-style table. A column that cannot be honoured is
@@ -158,6 +159,95 @@ bool ComponentRow(const char* label, const char* help, SurfaceComponentStyle* c)
   }
 
   ImGui::PopID();
+  return changed;
+}
+
+/// One row of a REQ-072 range table: the band's upper bound and colour, plus a Remove button. On
+/// Remove it writes \p removeIdx rather than erasing directly — the caller owns the vector and must
+/// stop iterating it this frame once an erase happens.
+bool BandRow(int idx, SurfaceBand* b, int* removeIdx) {
+  bool changed = false;
+  ImGui::PushID(idx);
+  ImGui::TableNextRow();
+
+  ImGui::TableNextColumn();
+  ImGui::SetNextItemWidth(-1);
+  double v = b->upperBound;
+  if (ImGui::InputDouble("##bound", &v, 0.0, 0.0, "%.4g")) {
+    b->upperBound = v;
+    changed = true;
+  }
+
+  ImGui::TableNextColumn();
+  {
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float h = ImGui::GetFrameHeight();
+    dl->AddRectFilled(ImVec2(p.x, p.y + 3.f), ImVec2(p.x + h - 6.f, p.y + h - 3.f), ComponentSwatch(b->color), 2.f);
+    dl->AddRect(ImVec2(p.x, p.y + 3.f), ImVec2(p.x + h - 6.f, p.y + h - 3.f), IM_COL32(90, 90, 90, 255), 2.f, 0, 1.f);
+    ImGui::Dummy(ImVec2(h - 4.f, h));
+    ImGui::SameLine();
+    const char* preview = b->color.c_str();
+    for (const auto& np : kNamedColors)
+      if (b->color == np.storage)
+        preview = np.label;
+    ImGui::SetNextItemWidth(-1);
+    if (ImGui::BeginCombo("##col", preview)) {
+      for (const auto& np : kNamedColors) {
+        const bool sel = (b->color == np.storage);
+        if (ImGui::Selectable(np.label, sel)) {
+          b->color = np.storage;
+          changed = true;
+        }
+        if (sel)
+          ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+  }
+
+  ImGui::TableNextColumn();
+  if (ImGui::SmallButton("Remove"))
+    *removeIdx = idx;
+
+  ImGui::PopID();
+  return changed;
+}
+
+/// A REQ-072 range table editor: rows of (upper bound, colour). Sorted back into strictly-ascending
+/// order after every edit — the same repair `GsIo` applies to a hand-edited or corrupt `.gs` on load
+/// (TASK-086 §8) — so `AssignBand`'s precondition (`util/surfaceanalysis.hpp`) holds no matter what
+/// order the user typed bounds in, without the table ever refusing an in-progress edit.
+///
+/// \p boundLabel names the bound column's header: which quantity is being bounded, and its unit, is
+/// the caller's to know (elevation in feet, or grade in percent) — this editor is the same widget
+/// either way, on \ref SurfaceStyle::bands or \ref SurfaceStyle::arrowBands.
+bool BandTableEditor(const char* tableId, const char* boundLabel, std::vector<SurfaceBand>* bands) {
+  bool changed = false;
+  if (ImGui::BeginTable(tableId, 3,
+                        ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_BordersInnerV | ImGuiTableFlags_RowBg)) {
+    ImGui::TableSetupColumn(boundLabel, ImGuiTableColumnFlags_WidthStretch, 1.4f);
+    ImGui::TableSetupColumn("Color", ImGuiTableColumnFlags_WidthStretch, 1.4f);
+    ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 70.f);
+    ImGui::TableHeadersRow();
+    int removeIdx = -1;
+    for (size_t i = 0; i < bands->size(); ++i)
+      changed |= BandRow(static_cast<int>(i), &(*bands)[i], &removeIdx);
+    ImGui::EndTable();
+    if (removeIdx >= 0) {
+      bands->erase(bands->begin() + removeIdx);
+      changed = true;
+    }
+  }
+  if (ImGui::SmallButton("Add band")) {
+    SurfaceBand nb;
+    nb.upperBound = bands->empty() ? 0.0 : bands->back().upperBound + 1.0;
+    bands->push_back(nb);
+    changed = true;
+  }
+  if (changed)
+    std::sort(bands->begin(), bands->end(),
+             [](const SurfaceBand& a, const SurfaceBand& b) { return a.upperBound < b.upperBound; });
   return changed;
 }
 
@@ -376,6 +466,47 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
                                 "The surface's triangulation vertices. Off by default: the source "
                                 "points are already drawn as survey points.", &s.points);
         ImGui::EndTable();
+      }
+      ImGui::EndTabItem();
+    }
+
+    if (ImGui::BeginTabItem("Analysis")) {
+      ImGui::Spacing();
+      ImGui::SeparatorText("Banding");
+      static const char* kModeLabels[] = {"None", "Elevation", "Slope"};
+      int modeIdx = static_cast<int>(s.analysisMode);
+      ImGui::SetNextItemWidth(180.f);
+      if (ImGui::Combo("Type", &modeIdx, kModeLabels, 3)) {
+        s.analysisMode = static_cast<SurfaceAnalysisMode>(modeIdx);
+        changed = true;
+      }
+      ItemHelpTooltip("Colours every triangle by its elevation or its slope, driven by the range "
+                      "table below. A triangle takes ONE colour — its centroid elevation, or its "
+                      "plane's grade — never a gradient across it.");
+      if (s.analysisMode != SurfaceAnalysisMode::None) {
+        ImGui::Spacing();
+        const char* boundLabel =
+            s.analysisMode == SurfaceAnalysisMode::Elevation ? "Upper bound (ft)" : "Upper bound (%)";
+        changed |= BandTableEditor("##bandtable", boundLabel, &s.bands);
+        ImGui::Spacing();
+        if (s.bands.empty())
+          ImGui::TextDisabled("No bands: every triangle draws in the plain Triangles colour.");
+        else
+          ImGui::TextDisabled(
+              "A value above the last bound draws in the plain Triangles colour, not the top band.");
+      }
+
+      ImGui::Spacing();
+      ImGui::SeparatorText("Slope Arrows");
+      changed |= ImGui::Checkbox("Show slope arrows", &s.slopeArrowsOn);
+      ItemHelpTooltip("One arrow per triangle, pointing downhill, coloured by grade below. A "
+                      "triangle flatter than a 0.1% grade draws no arrow.");
+      if (s.slopeArrowsOn) {
+        ImGui::Spacing();
+        changed |= BandTableEditor("##arrowtable", "Upper bound (%)", &s.arrowBands);
+        ImGui::Spacing();
+        if (s.arrowBands.empty())
+          ImGui::TextDisabled("No bands: every arrow draws in the surface's own colour.");
       }
       ImGui::EndTabItem();
     }

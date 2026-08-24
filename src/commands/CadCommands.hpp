@@ -17,6 +17,7 @@
 #include "traverse/TraverseLeastSquares.hpp"
 #include "update/UpdateCheck.hpp"  // update::UpdatePrefs only — pure, no network, no <thread>
 #include "util/tinbuild.hpp"       // TinBuildResult, for AppCommandState::SurfaceRebuildAsync (REQ-069)
+#include "util/surfacevolume.hpp"  // SurfaceVolumeResult, for AppCommandState::VolumeDashboardState (REQ-073)
 // HoverDwell, for AppCommandState's surface rollover timer (REQ-089). Pure and dependency-free
 // (<cmath>), and deliberately in util/ rather than beside the UI that drives it: the state lives on
 // AppCommandState, and Commands may not include a UI header (architecture §11.1).
@@ -552,6 +553,10 @@ struct AppCommandState {
     Copy,
     Rotate,
     Scale,
+    /// MIRROR: reflect the selection across a two-point mirror line (REQ-103 step 1). Default
+    /// behavior duplicates-then-reflects (source kept); an "Erase source objects?" prompt lets the
+    /// user opt into replacing the source instead, mirroring AutoCAD's own default.
+    Mirror,
     Delete,
     Zoom,
     Join,
@@ -610,6 +615,7 @@ struct AppCommandState {
     case Kind::Copy:          return "COPY";
     case Kind::Rotate:        return "ROTATE";
     case Kind::Scale:         return "SCALE";
+    case Kind::Mirror:        return "MIRROR";
     case Kind::Delete:        return "DELETE";
     case Kind::Zoom:          return "ZOOM";
     case Kind::Join:          return "JOIN";
@@ -1264,6 +1270,72 @@ struct AppCommandState {
   };
   std::vector<std::unique_ptr<SurfaceRebuildAsync>> surfaceRebuildAsync;
 
+  /// One in-flight Volume Dashboard recompute (REQ-073's 2026-08-23 amendment, TASK-095 §6 step 3) —
+  /// architecture §8's one-shot-worker contract again, in the same shape \ref SurfaceRebuildAsync
+  /// already has, rather than a second staleness mechanism for the same problem (D-2026-08-23-k).
+  /// At most one exists at a time: there is one dashboard, not one per surface.
+  struct VolumeDashboardAsync {
+    std::uint64_t baseSurfaceId = 0;
+    std::uint64_t comparisonSurfaceId = 0;
+    /// Strong references to the exact triangulations this job computes against — captured on the UI
+    /// thread at dispatch, read only on the worker thread. Safe with no locking because a `CadTin` is
+    /// immutable once built and only ever REPLACED, never written through (architecture §11.5): the
+    /// worker's copy of the pointer cannot be invalidated by whatever the UI thread does to the
+    /// surface's OWN pointer while this runs.
+    std::shared_ptr<const CadTin> tinBase;
+    std::shared_ptr<const CadTin> tinComparison;
+    /// Whether the cut/fill map was wanted AT DISPATCH — captured so toggling the map on after a
+    /// mapless result already landed is detected as staleness (the landed result has no map to show).
+    bool wantMap = false;
+    std::thread thread;
+    std::atomic<bool> done{false};
+    std::atomic<bool> cancel{false};
+    std::uint32_t generation = 0;  ///< cadGpuRevision at dispatch — a mismatch on completion means discard
+    SurfaceVolumeResult result;
+    /// REQ-073's cut/fill map — `GL_TRIANGLES` layout, populated only when \c wantMap is true (empty,
+    /// not "no map": REQ-073's "shows nothing outside the common area" already covers a genuinely
+    /// empty cut or fill side of a self-comparison).
+    std::vector<float> cutTrianglesXyz;
+    std::vector<float> fillTrianglesXyz;
+
+    ~VolumeDashboardAsync() {
+      cancel.store(true, std::memory_order_release);
+      if (thread.joinable())
+        thread.join();
+    }
+  };
+
+  /// The Volume Dashboard's own state (REQ-073 amendment). **UI/session-only** — never in
+  /// \ref DrawingGeometrySnapshot, never in \ref DrawingDocument, never in `.gs` — the amendment's
+  /// own rule, matching REQ-075's Surface Manager for the same reason: this is a VIEW onto document
+  /// state (which two surfaces, and their last computed comparison), not document state itself.
+  struct VolumeDashboardState {
+    bool open = false;
+    bool showMap = false;
+
+    /// 0 = none picked. By stable entity id (REQ-076), never by index or name — the same reason
+    /// \ref SurfaceRebuildAsync keys on id rather than a name that a rename could orphan.
+    std::uint64_t baseSurfaceId = 0;
+    std::uint64_t comparisonSurfaceId = 0;
+
+    /// The last landed result, and what it was computed FOR — a revision plus the two ids, so a
+    /// change to EITHER a surface's triangulation OR the panel's own pick is detected as staleness by
+    /// the same comparison (`workflow.md`/REQ-073: "the panel's surface pick changed... the in-flight
+    /// result is discarded").
+    bool hasResult = false;
+    SurfaceVolumeResult lastResult;
+    std::uint32_t resultForRevision = 0xFFFFFFFFu;
+    std::uint64_t resultForBaseSurfaceId = 0;
+    std::uint64_t resultForComparisonSurfaceId = 0;
+    bool resultHasMap = false;  ///< was `showMap` on when `lastResult` was computed?
+    /// REQ-073's cut/fill map for `lastResult`, `GL_TRIANGLES` layout — empty unless `resultHasMap`.
+    std::vector<float> mapCutTrianglesXyz;
+    std::vector<float> mapFillTrianglesXyz;
+
+    std::unique_ptr<VolumeDashboardAsync> job;  ///< null when nothing is in flight
+  };
+  VolumeDashboardState volumeDashboard;
+
   /// Generated display geometry for one surface — ADR-036 (e).
   ///
   /// **Not a member of \ref CadSurface, deliberately.** `cadSurfaces` is assigned wholesale into
@@ -1315,6 +1387,21 @@ struct AppCommandState {
     bool contoursSuppressed = false;
     /// How many levels were asked for, for that message. 0 when nothing was suppressed.
     int suppressedLevelCount = 0;
+
+    /// REQ-072 band fills, `GL_TRIANGLES` layout, one buffer per `style.bands` entry **plus one
+    /// extra buffer at index `bands.size()`** for a triangle `AssignBand` placed in no band (its
+    /// value fell above the table's top). That extra bucket is drawn in the surface's plain
+    /// `triangles` colour rather than dropped, so a range table that does not span the surface's
+    /// full elevation/slope range does not silently blank the part above it (REQ-201: reported by
+    /// being visibly still there, not absorbed into nothing). Empty when `analysisMode` is `None`.
+    std::vector<std::vector<float>> bandTriangleBuffers;
+
+    /// REQ-072 slope arrows, `GL_LINES` layout (shaft + two head barbs per arrow), bucketed by
+    /// `style.arrowBands` the same way \ref bandTriangleBuffers is bucketed by `style.bands` — index
+    /// `arrowBands.size()` holds arrows with no matching band (the table is empty, or the arrow's
+    /// grade fell above its top), drawn in the surface's own colour. Empty when `slopeArrowsOn` is
+    /// false, or every triangle is flat.
+    std::vector<std::vector<float>> arrowLineBuffers;
   };
 
   /// The display-geometry cache. Live-only: never in \ref DrawingGeometrySnapshot, never in
@@ -1489,6 +1576,21 @@ struct AppCommandState {
   /// COPY modal: when true, duplicate survey selection by pending rotation instead of translation.
   bool pendingSurveyDupIsRotate = false;
   float pendingRotateCopyBx = 0.f, pendingRotateCopyBy = 0.f, pendingRotateCopyRad = 0.f;
+
+  // --- MIRROR (REQ-103 step 1) ---
+  enum class MirrorPhase {
+    PickSelection,
+    NeedP1,          ///< first point of the mirror line
+    NeedP2,          ///< second point of the mirror line
+    NeedEraseAnswer, ///< "Erase source objects? [Yes/No] <N>", default No
+  } mirrorPhase = MirrorPhase::PickSelection;
+
+  float mirrorP1X = 0.f, mirrorP1Y = 0.f;
+  float mirrorP2X = 0.f, mirrorP2Y = 0.f;
+  /// COPY modal: when true, duplicate survey selection by pending reflection instead of
+  /// translation/rotation. Checked ahead of \ref pendingSurveyDupIsRotate.
+  bool pendingSurveyDupIsMirror = false;
+  float pendingMirrorX0 = 0.f, pendingMirrorY0 = 0.f, pendingMirrorX1 = 0.f, pendingMirrorY1 = 0.f;
 
   // --- Survey / COGO points (in-memory database; optional JSON file) ---
   std::vector<SurveyPoint> surveyPoints;
@@ -2151,6 +2253,17 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st);
 /// (d) requires of every entity kind.
 [[nodiscard]] bool SurfaceVisible(const AppCommandState& st, size_t surfaceIndex);
 
+/// REQ-075: "a surface that is out of date or rebuilding is shown as such, and the state clears when
+/// the rebuild lands." Shared by the Surface Manager and the Volume Dashboard (TASK-095) — both need
+/// the identical current/stale/rebuilding classification for a surface, and it has no ImGui
+/// dependency, so it lives here rather than in either panel.
+enum class SurfaceState { Current, Stale, Rebuilding };
+
+/// \p surfaceIndex's current/stale/rebuilding state. Both non-`Current` states are already knowable
+/// without any new bookkeeping: a rebuild in flight is an entry in \c surfaceRebuildAsync, and
+/// out-of-date is REQ-069's own dirty check (\c builtAtRevision vs \c cadGpuRevision).
+[[nodiscard]] SurfaceState SurfaceRebuildStateOf(const AppCommandState& st, size_t surfaceIndex);
+
 /// The rollover readout for plan position (\p x, \p y) — one row per **visible surface covering it**
 /// (REQ-089). \p out is cleared first; an empty result means "no surface here", which is the signal
 /// to show nothing at all.
@@ -2204,6 +2317,11 @@ void EraseSurfaceAtIndex(AppCommandState& st, size_t index);
 /// is what makes a single command that touches N points, or N surfaces, coalesce to at most one
 /// rebuild per surface rather than N.
 void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log);
+
+/// Advances the Volume Dashboard's own live recompute (REQ-073 amendment, TASK-095). Call every
+/// frame, after \ref TickSurfaceRebuilds so a surface that finished rebuilding this frame is already
+/// current when this checks it.
+void TickVolumeDashboard(AppCommandState& st);
 
 void EnsureEntityIds(AppCommandState& st);
 
