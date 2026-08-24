@@ -1,0 +1,110 @@
+# REQ-103 step 3 (TASK-096) — EXTEND: Arc target (hand-computed boundary hit), refusal paths.
+#
+# Arc: 3-point semicircle, center (300,0) r=10, sweeping 180 degrees CW from (290,0) through
+# (300,10) to (310,0) (identical construction to lengthen-arc-and-refusals.txt's arc, shifted +300 in
+# x). Boundary VB3 is a vertical line at x=300 spanning y=-20..20, crossing the arc's full circle at
+# (300,10) and (300,-10). Extending from the END (310,0, angle 0) continues the arc's own CW sense
+# (decreasing angle) toward (300,-10) at angle -90 degrees — the nearer of the two crossings (90
+# degrees away) vs. (300,10) at angle +90 degrees, which requires going 270 degrees around the CW
+# sense to reach. So the arc's sweep grows from 180 to 270 degrees, landing its end exactly on
+# (300,-10) — on the boundary.
+#
+# Also exercises the refusal paths (REQ-201): no-boundary-reached (a line pointed away from every
+# boundary), plus Circle and closed-Polyline as EXTEND targets (both ineligible, same message set
+# LENGTHEN already established, reused verbatim with cmdName="EXTEND") — geometry unchanged in every
+# refusal case, never silently ignored.
+
+NEW
+
+CMD LINE
+CMD 300,-20
+CMD 300,20
+ESC
+
+CMD ARC
+PICK 290 0
+PICK 300 10
+PICK 310 0
+ESC
+
+CHECK ALL
+EXPECT LINES 1
+EXPECT ARCS 1
+SAVEAS %OUT%/extend-arc-a.gs
+
+CMD EXTEND
+PICK 300 0
+CMD
+PICK 310 0
+
+EXPECT LOG "EXTEND — extended to the boundary."
+EXPECT ARCS 1
+CHECK ALL
+
+SAVEAS %OUT%/extend-arc-b.gs
+EXPECT DIFFERENTFILE %OUT%/extend-arc-a.gs %OUT%/extend-arc-b.gs
+
+UNDO
+EXPECT ARCS 1
+CHECK ALL
+
+SAVEAS %OUT%/extend-arc-c.gs
+EXPECT SAMEFILE %OUT%/extend-arc-a.gs %OUT%/extend-arc-c.gs
+
+REDO
+EXPECT ARCS 1
+CHECK ALL
+
+SAVEAS %OUT%/extend-arc-d.gs
+EXPECT SAMEFILE %OUT%/extend-arc-b.gs %OUT%/extend-arc-d.gs
+
+ESC
+
+# --- Refusal path: no boundary reached, plus Circle and closed Polyline are ineligible targets
+# (REQ-201: stated reason, never silently ignored).
+
+CMD LINE
+CMD 600,0
+CMD 650,0
+ESC
+
+CMD CIRCLE
+CMD 700,0
+CMD 5
+ESC
+
+CMD POLYLINE
+CMD 750,0
+CMD 760,0
+CMD 760,10
+CMD 750,10
+CMD CLOSE
+
+CHECK ALL
+EXPECT LINES 2
+EXPECT CIRCLES 1
+EXPECT POLYLINES 1
+SAVEAS %OUT%/extend-refusal-a.gs
+
+CMD EXTEND
+PICK 300 0
+CMD
+PICK 650 0
+
+EXPECT LOG "does not reach a boundary edge"
+EXPECT LINES 2
+
+PICK 705 0
+
+EXPECT LOG "ignored"
+EXPECT CIRCLES 1
+
+PICK 760 5
+
+EXPECT LOG "ignored"
+EXPECT POLYLINES 1
+ESC
+
+CHECK ALL
+SAVEAS %OUT%/extend-refusal-b.gs
+EXPECT SAMEFILE %OUT%/extend-refusal-a.gs %OUT%/extend-refusal-b.gs

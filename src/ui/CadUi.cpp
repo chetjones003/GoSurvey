@@ -1468,6 +1468,8 @@ enum class RibbonIconKind : std::uint8_t {
   ZoomWindow,
   Scale,
   Mirror,
+  Lengthen,
+  Extend,
   SurveyPoint,
   SurveyInverse,
   Layers,
@@ -1868,6 +1870,28 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     dl->AddLine(ImVec2(xR, c.y), ImVec2(xm, yB), acc, t);
     break;
   }
+  case RibbonIconKind::Lengthen: {
+    // Horizontal segment with outward-pointing arrowheads at both ends (REQ-103 step 2) —
+    // stretching/shrinking a line's own length.
+    const float y = c.y;
+    const ImVec2 pL(mn.x + w * 0.16f, y), pR(mx.x - w * 0.16f, y);
+    dl->AddLine(pL, pR, col, t * 1.1f);
+    RibbonStrokeArrow(dl, pL, ImVec2(-1.f, 0.f), std::min(w, h) * 0.22f, acc, t);
+    RibbonStrokeArrow(dl, pR, ImVec2(1.f, 0.f), std::min(w, h) * 0.22f, acc, t);
+    break;
+  }
+  case RibbonIconKind::Extend: {
+    // A segment (primary) stretching rightward to meet a boundary edge (accent, vertical) — EXTEND
+    // is TRIM's inverse, so this deliberately mirrors TRIM's icon shape with the gap closed instead
+    // of opened.
+    const float y = c.y;
+    const ImVec2 p0(mn.x + w * 0.14f, y), p1(mx.x - w * 0.3f, y);
+    dl->AddLine(p0, p1, col, t * 1.1f);
+    RibbonStrokeArrow(dl, p1, ImVec2(1.f, 0.f), std::min(w, h) * 0.2f, col, t);
+    const float boundaryX = mx.x - w * 0.16f;
+    dl->AddLine(ImVec2(boundaryX, mn.y + h * 0.18f), ImVec2(boundaryX, mx.y - h * 0.18f), acc, t * 1.1f);
+    break;
+  }
   case RibbonIconKind::SurveyPoint: {
     dl->AddLine(ImVec2(c.x, mn.y + h * 0.15f), ImVec2(c.x, mx.y - h * 0.15f), col, t * 0.75f);
     dl->AddLine(ImVec2(mn.x + w * 0.15f, c.y), ImVec2(mx.x - w * 0.15f, c.y), col, t * 0.75f);
@@ -2090,6 +2114,8 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::ZoomWindow:     return "zoomwindow";
   case RibbonIconKind::Scale:          return "scale";
   case RibbonIconKind::Mirror:         return "mirror";
+  case RibbonIconKind::Lengthen:       return "lengthen";
+  case RibbonIconKind::Extend:         return "extend";
   case RibbonIconKind::SurveyPoint:    return "surveypoint";
   case RibbonIconKind::SurveyInverse:  return "surveyinverse";
   case RibbonIconKind::Layers:         return "layers";
@@ -2134,6 +2160,9 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
     {"MTEXT", RibbonIconKind::Mtext}, {"DIMALIGNED", RibbonIconKind::Dim}, {"DIMLINEAR", RibbonIconKind::DimLinear},
     {"ID", RibbonIconKind::Id}, {"INVERSE", RibbonIconKind::SurveyInverse}, {"MOVE", RibbonIconKind::Move},
     {"COPY", RibbonIconKind::Copy}, {"ROTATE", RibbonIconKind::Rotate}, {"SCALE", RibbonIconKind::Scale},
+    {"MIRROR", RibbonIconKind::Mirror},
+    {"LENGTHEN", RibbonIconKind::Lengthen},
+    {"EXTEND", RibbonIconKind::Extend},
     {"DELETE", RibbonIconKind::Erase}, {"JOIN", RibbonIconKind::Join}, {"TRIM", RibbonIconKind::Trim},
     {"OFFSET", RibbonIconKind::Offset}, {"ZOOMEXTENTS", RibbonIconKind::ZoomExtents},
     {"ZOOMWINDOW", RibbonIconKind::ZoomWindow}, {"CREATEPOINTS", RibbonIconKind::SurveyPoint},
@@ -2299,7 +2328,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   const float wEdit = 8.f + largeW + 4.f + colW({"Copy", "Undo", "Redo"});
   const float wDraw = 8.f + gridCell * 4.f + 4.f * 3.f;
   const float wMod  = 8.f + largeW + 4.f + colW({"Copy", "Rotate", "Scale"}) + 4.f +
-                      colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror"});
+                      colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror", "Lengthen"});
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
   const float wAnn  = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
   // Two columns: the panel is three small buttons tall, so a fourth in one column is clipped.
@@ -2440,16 +2469,22 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ImGui::EndGroup();
 
     ImGui::SameLine(0, 4);
-    const float c3 = colW({"Join", "Mirror"});
+    const float c3 = colW({"Join", "Mirror", "Lengthen", "Extend"});
     ImGui::BeginGroup();
     if (smallBtn("##RibbonJoin", RibbonIconKind::Join, "Join", c3))
       StartJoinCommand(cmd, log);
     RibbonItemHelp("Join — merge colinear line segments.\nCommand bar: JOIN or J");
-    ImGui::BeginDisabled();
-    smallBtn("##RibbonMirror", RibbonIconKind::Mirror, "Mirror", c3);
-    RibbonItemHelp("Mirror — flip selection across a mirror line (not implemented yet).\nCommand bar: (none yet)",
-                   ImGuiHoveredFlags_AllowWhenDisabled);
-    ImGui::EndDisabled();
+    if (smallBtn("##RibbonMirror", RibbonIconKind::Mirror, "Mirror", c3))
+      StartMirrorCommand(cmd, log);
+    RibbonItemHelp("Mirror — flip selection across a mirror line.\nCommand bar: MIRROR or MI");
+    if (smallBtn("##RibbonLengthen", RibbonIconKind::Lengthen, "Lengthen", c3))
+      StartLengthenCommand(cmd, log);
+    RibbonItemHelp("Lengthen — change a line/open polyline/arc's length at the end nearest your "
+                   "pick (DElta/Percent/Total/DYnamic).\nCommand bar: LENGTHEN or LEN");
+    if (smallBtn("##RibbonExtend", RibbonIconKind::Extend, "Extend", c3))
+      StartExtendCommand(cmd, log);
+    RibbonItemHelp("Extend — pick boundary edges, then stretch a line/open polyline/arc's end "
+                   "nearest your pick out to the nearest one.\nCommand bar: EXTEND or EX");
     ImGui::EndGroup();
   }
   RibbonSectionEnd();
@@ -5791,6 +5826,43 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
       return "Angle point X,Y (C toggles copy):";
     }
   }
+  if (cmd.active == AppCommandState::Kind::Mirror) {
+    using MirP = AppCommandState::MirrorPhase;
+    switch (cmd.mirrorPhase) {
+    case MirP::PickSelection:
+      return "MIRROR — window opposite corner or cancel:";
+    case MirP::NeedP1:
+      return "MIRROR — first point of mirror line X,Y:";
+    case MirP::NeedP2:
+      return "MIRROR — second point of mirror line X,Y:";
+    case MirP::NeedEraseAnswer:
+      return "Erase source objects? [Yes/No] <N>:";
+    }
+  }
+  if (cmd.active == AppCommandState::Kind::Lengthen) {
+    using LP = AppCommandState::LengthenPhase;
+    switch (cmd.lengthenPhase) {
+    case LP::WaitSelectOrMode:
+      return "LENGTHEN — select object, or [DElta/Percent/Total/DYnamic]:";
+    case LP::WaitDeltaValue:
+      return "LENGTHEN DElta — length to add (+) or subtract (-):";
+    case LP::WaitPercentValue:
+      return "LENGTHEN Percent — new length as % of current:";
+    case LP::WaitTotalValue:
+      return "LENGTHEN Total — new total length:";
+    case LP::WaitDynamicTarget:
+      return "LENGTHEN DYnamic — drag to the new length, or type it:";
+    }
+  }
+  if (cmd.active == AppCommandState::Kind::Extend) {
+    using EP = AppCommandState::ExtendPhase;
+    switch (cmd.extendPhase) {
+    case EP::SelectBoundaries:
+      return "EXTEND — pick boundary edges, Enter when done:";
+    case EP::SelectTargets:
+      return "EXTEND — click objects to extend (near the end to stretch), Enter when done:";
+    }
+  }
   if (cmd.active == AppCommandState::Kind::Delete)
     return "DELETE — window opposite corner or ESC:";
   if (cmd.active == AppCommandState::Kind::Join)
@@ -5913,6 +5985,11 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
     using TP = AppCommandState::TrimPhase;
     return cmd.trimPhase == TP::CuttingLine_WaitP1 || cmd.trimPhase == TP::CuttingLine_WaitP2;
   }
+  case K::Mirror: {
+    using MirP = AppCommandState::MirrorPhase;
+    return cmd.mirrorPhase == MirP::NeedP1 || cmd.mirrorPhase == MirP::NeedP2;
+    // NeedEraseAnswer is a Yes/No text prompt, not a point (HandleMirrorText).
+  }
   default:
     return false;
   }
@@ -6007,6 +6084,9 @@ static std::string CadPointPromptLabel(const AppCommandState& cmd) {
     return cmd.modifyPhase == AppCommandState::ModifyPhase::NeedBase ? "Specify base point:" : "Specify point:";
   case K::Rotate:
     return cmd.rotatePhase == AppCommandState::RotatePhase::NeedBase ? "Specify base point:" : "Specify point:";
+  case K::Mirror:
+    return cmd.mirrorPhase == AppCommandState::MirrorPhase::NeedP1 ? "Specify first point of mirror line:"
+                                                                   : "Specify second point of mirror line:";
   default:
     return "Specify point:";
   }
@@ -8536,9 +8616,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
     float curX = 0.f, curY = 0.f;
     screenToPaperIn(&curX, &curY);
-    // Snap MOVE/COPY/ROTATE pick points to paper geometry (REQ-037); entity-selection clicks stay on the raw
-    // cursor so picking small objects is not deflected.
-    if (paperSnapActive && (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0)) {
+    // Snap MOVE/COPY/ROTATE/MIRROR pick points to paper geometry (REQ-037); entity-selection clicks
+    // stay on the raw cursor so picking small objects is not deflected.
+    if (paperSnapActive && (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0 || cmd.paperMirrorPhase != 0)) {
       curX = paperSnapXIn;
       curY = paperSnapYIn;
     }
@@ -8584,15 +8664,37 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     }
 
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-      if (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0 || cmd.paperGripCorner != -2 ||
+      if (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0 || cmd.paperMirrorPhase != 0 ||
+          cmd.paperLengthenPhase != 0 || cmd.paperExtendPhase != 0 || cmd.paperGripCorner != -2 ||
           cmd.paperSelBoxActive) {
         cmd.paperMovePhase = 0;
         cmd.paperRotatePhase = 0;
+        cmd.paperMirrorPhase = 0;
+        cmd.paperLengthenPhase = 0;
+        cmd.paperExtendPhase = 0;
+        cmd.paperExtendBoundaries.clear();
         cmd.paperGripCorner = -2;
         cmd.paperSelBoxActive = false;
       } else if (!cmd.selectedViewports.empty() || !cmd.selectedPaperEntities.empty()) {
         ClearViewportSelection(cmd);
         ClearPaperEntitySelection(cmd);
+      }
+    }
+    // EXTEND: Enter advances boundary collection -> target picking (needs >=1 boundary), or
+    // finishes target picking — the same "done picking edges" signal model-space TRIM/EXTEND get
+    // from a real Enter, which the rest of this per-frame paper-click block has no other route to.
+    if (cmd.paperExtendPhase != 0 && ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+      if (cmd.paperExtendPhase == 1) {
+        if (cmd.paperExtendBoundaries.empty())
+          log.push_back("EXTEND — pick at least one boundary edge before pressing Enter.");
+        else {
+          cmd.paperExtendPhase = 2;
+          log.push_back("EXTEND — click objects to extend. Enter when done.");
+        }
+      } else {
+        cmd.paperExtendPhase = 0;
+        cmd.paperExtendBoundaries.clear();
+        log.push_back("EXTEND — finished.");
       }
     }
 
@@ -8607,6 +8709,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // cursor (mirrors the model viewportHoverEntity). Cleared otherwise so the highlight does not linger.
     cmd.paperHoverValid = false;
     if (hovered && !cmd.paperSelBoxActive && cmd.paperMovePhase == 0 && cmd.paperRotatePhase == 0 &&
+        cmd.paperMirrorPhase == 0 && cmd.paperLengthenPhase == 0 && cmd.paperExtendPhase == 0 &&
         cmd.paperGripCorner == -2 && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
       PaperEntityRef hr;
       if (PickPaperEntityAt(L, curX, curY, entityPickTolIn, &hr)) {
@@ -8676,6 +8779,49 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const float ang = std::atan2(curY - cmd.paperRotateBaseYIn, curX - cmd.paperRotateBaseXIn);
       RotateSelectedPaperEntities(cmd, cmd.paperRotateBaseXIn, cmd.paperRotateBaseYIn, ang, log);
       cmd.paperRotatePhase = 0;
+    } else if (clickL && cmd.paperMirrorPhase == 1) {  // MIRROR: first mirror-line point (REQ-103)
+      cmd.paperMirrorP1XIn = curX;
+      cmd.paperMirrorP1YIn = curY;
+      cmd.paperMirrorPhase = 2;
+      log.push_back("Click the second point of the mirror line.");
+    } else if (clickL && cmd.paperMirrorPhase == 2) {  // MIRROR: second point, commits (REQ-103)
+      if (std::hypot(curX - cmd.paperMirrorP1XIn, curY - cmd.paperMirrorP1YIn) < 1e-6f)
+        log.push_back("MIRROR — mirror line needs two distinct points; click again.");
+      else
+        MirrorSelectedPaperEntities(cmd, cmd.paperMirrorP1XIn, cmd.paperMirrorP1YIn, curX, curY, log);
+      cmd.paperMirrorPhase = 0;
+    } else if (clickL && cmd.paperLengthenPhase == 1) {  // LENGTHEN: pick + apply (REQ-103)
+      PaperEntityRef pr;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        log.push_back("LENGTHEN — nothing under cursor; try again.");
+      else
+        ApplyLengthenToPaperEntity(cmd, pr, curX, curY, log);
+      // Stays in phase 1 — loop back for the next object, same shape as the model-space command.
+    } else if (clickL && cmd.paperExtendPhase == 1) {  // EXTEND: collect boundary edges (REQ-103)
+      PaperEntityRef pr;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        log.push_back("EXTEND — no object at pick.");
+      else if (pr.type == PaperEntityRef::Type::Text)
+        log.push_back("EXTEND — use a line, circle, arc, ellipse, or polyline as a boundary edge.");
+      else {
+        bool dup = false;
+        for (const auto& b : cmd.paperExtendBoundaries)
+          if (b.type == pr.type && b.index == pr.index) { dup = true; break; }
+        if (dup)
+          log.push_back("EXTEND — already a boundary edge.");
+        else {
+          cmd.paperExtendBoundaries.push_back(pr);
+          log.push_back("EXTEND — boundary edge added.");
+        }
+      }
+      // Stays in phase 1 — Enter (handled above) advances to target-picking.
+    } else if (clickL && cmd.paperExtendPhase == 2) {  // EXTEND: pick + extend a target (REQ-103)
+      PaperEntityRef pr;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        log.push_back("EXTEND — nothing under cursor; try again.");
+      else
+        ApplyExtendToPaperEntity(cmd, pr, curX, curY, log);
+      // Stays in phase 2 — loop back for the next object, same shape as the model-space command.
     } else if (clickL && cmd.paperGripCorner != -2) {  // commit an in-progress grip edit
       cmd.paperGripCorner = -2;
       log.push_back("Viewport edited.");
@@ -9167,9 +9313,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // idle selection — you can see what a click will take before you take it (REQ-056). Every other
       // command still suppresses hover, since their clicks mean coordinates rather than objects.
       using TPh = AppCommandState::TrimPhase;
+      using EPh = AppCommandState::ExtendPhase;
       const bool trimEntityPick = cmd.active == AK::Trim && (cmd.trimPhase == TPh::SelectCuttingEdges ||
                                                              cmd.trimPhase == TPh::SelectTrimTargets);
-      const bool blockEntityHover = (cmd.active != AK::None && !trimEntityPick) || cmd.dimGripMoveActive ||
+      const bool extendEntityPick = cmd.active == AK::Extend && (cmd.extendPhase == EPh::SelectBoundaries ||
+                                                                  cmd.extendPhase == EPh::SelectTargets);
+      const bool blockEntityHover = (cmd.active != AK::None && !trimEntityPick && !extendEntityPick) ||
+                                    cmd.dimGripMoveActive ||
                                     cmd.entityGripMoveActive || cmd.mtextGripMoveActive || cmd.selBoxWaitingSecond;
       // REQ-089: the rollover readout rides on this exact condition. Model space only — a sheet has
       // no surfaces on it (ADR-025 (g)) — and, unlike the hover highlight, it is also suppressed
@@ -10799,16 +10949,29 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         sdl->AddText(pf, hPx, ImVec2(p.x, p.y - hPx), ghost, a.text.c_str());
       }
     }
-    // Paper-entity MOVE/COPY ghost + ROTATE preview (REQ-037): selected geometry transformed by the cursor.
-    if (!cmd.selectedPaperEntities.empty() && hovered && (cmd.paperMovePhase == 2 || cmd.paperRotatePhase == 2)) {
+    // Paper-entity MOVE/COPY ghost + ROTATE + MIRROR preview (REQ-037/REQ-103): selected geometry
+    // transformed by the cursor.
+    if (!cmd.selectedPaperEntities.empty() && hovered &&
+        (cmd.paperMovePhase == 2 || cmd.paperRotatePhase == 2 || cmd.paperMirrorPhase == 2)) {
       const ImU32 ghostCol = (cmd.paperMovePhase == 2 && cmd.paperMoveIsCopy) ? IM_COL32(120, 220, 120, 220)
                                                                               : IM_COL32(245, 200, 70, 220);
       const bool rotating = cmd.paperRotatePhase == 2;
+      const bool mirroring = cmd.paperMirrorPhase == 2;
       const float ang = rotating ? std::atan2(curPY - cmd.paperRotateBaseYIn, curPX - cmd.paperRotateBaseXIn) : 0.f;
       const float ca = std::cos(ang), sa = std::sin(ang);
       const float bX = cmd.paperRotateBaseXIn, bY = cmd.paperRotateBaseYIn;
       const float dX = curPX - cmd.paperMoveBaseXIn, dY = curPY - cmd.paperMoveBaseYIn;
+      const float mX0 = cmd.paperMirrorP1XIn, mY0 = cmd.paperMirrorP1YIn;
+      const float mdx = curPX - mX0, mdy = curPY - mY0;
+      const float mlen2 = mdx * mdx + mdy * mdy;
       auto xf = [&](float x, float y) -> ImVec2 {
+        if (mirroring) {
+          if (mlen2 < 1e-12f)
+            return w2s(x, y);
+          const float t = ((x - mX0) * mdx + (y - mY0) * mdy) / mlen2;
+          const float px = mX0 + t * mdx, py = mY0 + t * mdy;
+          return w2s(2.f * px - x, 2.f * py - y);
+        }
         if (rotating)
           return w2s(bX + (x - bX) * ca - (y - bY) * sa, bY + (x - bX) * sa + (y - bY) * ca);
         return w2s(x + dX, y + dY);
@@ -12297,10 +12460,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (ImGui::MenuItem("Copy Selection")) { StartCopyCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Rotate"))         { StartRotateCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Scale"))          { StartScaleCommand(cmd, log);  ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Mirror"))         { StartMirrorCommand(cmd, log); ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Lengthen"))       { StartLengthenCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Erase"))          { StartDeleteCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         ImGui::Separator();
         if (ImGui::MenuItem("Offset"))         { StartOffsetCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Trim"))           { StartTrimCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Extend"))         { StartExtendCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Join"))           { StartJoinCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
         ImGui::EndMenu();
       }

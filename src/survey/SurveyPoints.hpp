@@ -134,6 +134,12 @@ void DuplicateSelectedSurveyPointsTranslated(AppCommandState& st, float dx, floa
 void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float by, float rad,
                                           SurveyDuplicatePolicy policy, std::vector<std::string>& log);
 
+/// Same ID policy as translated copy; positions are reflected across the line through
+/// (\p x0,\p y0)-(\p x1,\p y1) (REQ-103 MIRROR). Elevation is untouched, matching the CAD-side
+/// reflection funnel (a mirror is a plan-view operation).
+void DuplicateSelectedSurveyPointsReflected(AppCommandState& st, float x0, float y0, float x1, float y1,
+                                            SurveyDuplicatePolicy policy, std::vector<std::string>& log);
+
 void RemoveSurveyPointAt(AppCommandState& st, size_t index);
 
 /// \p worldOriginX/Y are added to the point's local easting/northing so {north}/{east} render world

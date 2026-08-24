@@ -2829,6 +2829,207 @@ requirements is a planning failure, not a sign of rigor.
 
 ---
 
+## Backlog — catalogued from Known Limitations (proposed, not accepted)
+
+> REQ-102–REQ-117 were catalogued 2026-08-23 from `docs/WikiDocumentation.md`'s
+> "Known Limitations" page (0.5.3) — see D-2026-08-23-i in `spec/project.md`.
+> Each is a rough problem statement, not a scoped acceptance contract: scope,
+> priority and exact acceptance conditions are settled when a user picks one
+> to accept. None of these authorize a `workshop/tasks/` file yet.
+
+### REQ-102 — Layer state enforcement
+- Purpose: Layer On/Freeze/Lock are stored and round-tripped but never enforced — every layer always draws, is always selectable, and is always editable
+- Priority: should
+- Type: functional
+- Statement: Toggling a layer Off or Frozen hides its entities from the viewport and any plot; Frozen also excludes it from selection, snapping, and drawing extents; Locked entities stay visible and snappable but reject move/erase/grip/property edits.
+- Acceptance (sketch): Off/Frozen layers don't render on screen or in a plot; Frozen layers are excluded from selection, snap and extents; Locked entities are visible/snappable but reject edits; unlocking/thawing restores prior behavior with no data loss; composes correctly with the existing per-viewport layer freeze (REQ-028).
+- Owner-layer: Domain/Renderer/Commands/UI
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-103 — Modify-command completeness
+- Purpose: MIRROR, STRETCH, EXTEND, BREAK, FILLET, CHAMFER, ARRAY, EXPLODE, and LENGTHEN are all absent from the Modify toolset
+- Priority: should
+- Type: functional
+- Statement: Add the nine commands above, each operating on the entity types they apply to today, undoable in one step, consistent with the existing MOVE/COPY/ROTATE/SCALE/TRIM/OFFSET pattern. Delivered incrementally, one command per task, in the sequence below — each independently shippable and independently verifiable, the same incremental-epic pattern as REQ-066…075/M-Surfaces.
+- Sequence:
+  1. **MIRROR** — closest existing precedent (ROTATE/SCALE's transform-funnel shape); no new entity kind; ships first.
+  2. **LENGTHEN** — extends/shortens a line/arc/polyline along its own direction; its edge-parameter math is reused by EXTEND and FILLET below.
+  3. **EXTEND** — TRIM's direct inverse; reuses TRIM's cutting-edge selection/hover infrastructure (REQ-056) almost entirely.
+  4. **BREAK** — splits an entity at one or two picked points; contained, no new entity kind.
+  5. **STRETCH** — crossing-window selection that only moves vertices inside the window; the one sub-item likely to need its own short design pass (crossing-vs-window selection doesn't exist yet).
+  6. **FILLET / CHAMFER** — corner generation (arc or chamfer line) between two entities, trimming/extending them to meet it; follows EXTEND/TRIM naturally.
+  7. **ARRAY** — rectangular + polar; N-copy repetition of the same duplication machinery MIRROR/COPY establish.
+  8. **EXPLODE** — decomposes a closed polyline (including rectangles, which are 4-vertex polylines per REQ-053) into line segments; reports what it can't decompose (arcs, ellipses, mesh, surface, fills) rather than doing nothing silently (REQ-201).
+- Acceptance — MIRROR (step 1, this increment):
+  - a mirror line is specified by two points; text/mtext insertion points reflect across it, but glyphs stay upright and readable — no mirror-image flip (AutoCAD's MIRRTEXT=0 default; no MIRRTEXT-equivalent setting is added, this is fixed behavior for now);
+  - after the mirror line, an "Erase source objects? [Yes/No] <N>" prompt appears, defaulting to **No** (source kept, mirrored copy added) — matching AutoCAD's own default;
+  - erase=No: the mirrored result is a duplicate with newly assigned stable ids (REQ-076/ADR-027 — never a copied source id), the original selection is untouched; a duplicated survey point with an id conflict is resolved through the existing new-vs-offset modal (the same one COPY/rotate-copy already use), not silently;
+  - erase=Yes: the duplicate commits, then the pre-mirror selection is removed — net result is only the reflected geometry;
+  - `FilledRegion` (hatches), `Mesh`, `PdfUnderlay`, and `Surface` in the selection are excluded from the mirror with a logged reason (REQ-201) rather than silently dropped or mishandled — `FilledRegion`/`Surface` per the existing rotate/scale exclusion precedent (this file, REQ-042 fills note; `DropSurfacesFromSelectionForTransform`), `Mesh` because it is never edited (REQ-063), `PdfUnderlay` because its scalar rotation/scale fields cannot represent a reflection;
+  - one undo step restores the exact pre-mirror state;
+  - reachable from the Modify ribbon (button already exists, disabled, at `CadUi.cpp:2322`), by typed `MIRROR`, and by right-click repeat;
+  - works with a selection made in model space, in a paper-space layout, and through a floating model-space viewport (parity with ROTATE/SCALE's existing paper-space routing).
+- Acceptance — LENGTHEN (step 2):
+  - eligible entities are Line, open Polyline, and a non-full-circle Arc; Circle, Ellipse, closed Polyline, a full-circle Arc, and every non-length-bearing entity kind (Annotation, FeatureLine, Surface, Mesh, FilledRegion, PdfUnderlay) are refused with a stated reason (REQ-201), never silently ignored;
+  - four sub-modes — DElta (add/subtract a typed length), Percent (scale total length by a typed percentage), Total (set total length directly), DYnamic (interactive drag with a live preview) — each resolve to one target length, then apply it to the end of the picked entity nearest the pick point, holding the other end fixed, within REQ-101 tolerance of the hand-computed target;
+  - a target length that would collapse an entity to ~0 length, or push an Arc's sweep past a full circle, is rejected with a message rather than silently clamped or wrongly applied;
+  - the active sub-mode persists across repeated picks within one invocation (typing a mode letter again mid-loop switches it and re-prompts for its value); the command loops back to "select object" after each successful apply until Enter/Esc; each individual apply is its own undo step, matching TRIM/OFFSET's per-target granularity, not one step per invocation;
+  - reachable from the Modify ribbon, typed `LENGTHEN`/`LEN`, and right-click repeat; works on model-space and native paper-space Line/Arc/open-Polyline entities alike.
+- Acceptance — EXTEND (step 3):
+  - eligible boundary edges: any entity a user can select except Annotation, FeatureLine, Surface (refused with a stated reason, matching TRIM's existing boundary-edge refusal set); eligible targets: Line, open Polyline, non-full-circle Arc — the same set LENGTHEN established, refused with the same reasons for Circle, Ellipse, closed Polyline, full-circle Arc, and every non-length-bearing kind;
+  - boundary intersection is analytic (`curveisect`, REQ-062's already-accepted library), never tessellated — a chord-approximated boundary does not meet REQ-101, the same reasoning that made REQ-062 analytic in the first place;
+  - the end of the target nearest the pick extends, along the direction it already points (a Line/open-Polyline's own direction; an Arc's own circle, radius held fixed), to the nearest point where it meets a boundary edge, within REQ-101 tolerance of the hand-computed intersection; the other end stays exactly fixed;
+  - a target that does not reach any boundary edge in the extending direction is refused with a stated reason, geometry unchanged — never silently ignored or extended the wrong way;
+  - boundary-edge selection is a two-phase pick (edges, Enter, then targets — TRIM's own cutting-edge flow, copy-adapted, not shared code) with boundaries visually read as a selection while being picked, matching TRIM's precedent; the command loops back to "select object" after each successful extend until Enter/Esc; each individual extend is its own undo step, not one per invocation;
+  - reachable from the Modify ribbon, typed `EXTEND`/`EX`, and right-click repeat; works in model space, floating model space, AND native paper space (two-phase click flow, no typed value needed so paper space is not simplified away the way MIRROR/LENGTHEN's paper paths are).
+  - Acceptance for BREAK/STRETCH/FILLET/CHAMFER/ARRAY/EXPLODE (steps 4–8) is written when each is accepted for implementation, not spec'd in advance of that command's own design pass.
+- Owner-layer: Commands/Domain/UI
+- Status: accepted
+- Revisions: 2026-08-23 — catalogued, proposed (D-2026-08-23-i). 2026-08-23 — accepted; sequenced into 8 increments starting with MIRROR; MIRROR's acceptance conditions written; MIRRTEXT-off and erase-default-No confirmed with the user (D-2026-08-23-j, TASK-094). 2026-08-24 — LENGTHEN's (step 2) acceptance conditions written (D-2026-08-24-a, TASK-095). 2026-08-24 — EXTEND's (step 3) acceptance conditions written; analytic-over-tessellated boundary intersection and paper-space-included both confirmed with the user (D-2026-08-24-b, TASK-096).
+
+### REQ-104 — Draw-command completeness
+- Purpose: SPLINE, XLINE, RAY, DONUT, SOLID, REVCLOUD, WIPEOUT, and MLINE have no command at all
+- Priority: could
+- Type: functional
+- Statement: Add the commands above, each stored, selectable, snappable, undoable, and round-tripping through `.gs` and DXF like existing entities.
+- Acceptance (sketch): live preview, commit on the snapped point per the project's preview-vs-commit invariant; each new entity kind is added at every integration site (selection, extents, layer, undo, `.gs`, DXF, render, snap, grips, properties); a spline's chord deviation is within REQ-101 wherever REQ-101 applies.
+- Owner-layer: Commands/Domain/IO/UI
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-105 — Inquiry commands
+- Purpose: AREA, DIST, LIST, and MASSPROP are missing outside the Properties panel (which only reports a circle's area)
+- Priority: should
+- Type: functional
+- Statement: Add the commands above, reusing existing geometry/snap infrastructure; read-only, no undo entry.
+- Acceptance (sketch): AREA reports area/perimeter for polylines, rectangles and circles within REQ-101; DIST reports distance and delta X/Y/(Z) between two snapped points; LIST prints an entity's stored properties; MASSPROP reports at least area/perimeter/centroid for a closed region.
+- Owner-layer: Commands/UI
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-106 — View-management commands
+- Purpose: no view-stack undo, no named views, no isometric presets beyond the ViewCube's standard faces
+- Priority: could
+- Type: functional
+- Statement: Add ZOOM PREVIOUS (pan/zoom/orbit history), named views (save/restore a camera state by name), a VIEW command/dialog to manage them, and one-click NE/NW/SE/SW isometric presets.
+- Acceptance (sketch): ZOOM PREVIOUS steps back through recent view changes; a named view restores camera position/target/UCS exactly; isometric presets set the standard 3D-isometric angle in one action. DVIEW and multiple simultaneous model-space viewports are noted as open scope questions, not committed here, given their size.
+- Owner-layer: UI/Renderer
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-107 — Block support (foundational)
+- Purpose: GoSurvey has no block/insert mechanism, which blocks title-block reuse, standard symbols, and any future TABLE/annotation work; DWG export always explodes geometry for exactly this reason
+- Priority: should
+- Type: functional
+- Statement: Add BLOCK (define from selection), INSERT (place with position/scale/rotation), WBLOCK (write to its own file), and ATTDEF/block attributes. Dynamic blocks and a block-library browser are explicitly out of scope — see roadmap Someday.
+- Acceptance (sketch): a block definition stores its entities once; each INSERT is a lightweight reference, not a geometry copy; editing a definition updates every insert; DWG/DXF export writes real INSERT/BLOCK records; erasing a definition with live inserts is handled per REQ-201, never silently.
+- Owner-layer: Domain/Commands/IO/UI — likely architectural (new entity kind + indirection); expect a SPEC GAP/ADR before implementation, the way REQ-069's breaklines forced REQ-076 first
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-108 — Polar and tracking input aids
+- Purpose: the POLAR status-bar toggle lights up with no behavior behind it, there is no object-snap tracking, and there's no typed polar-coordinate entry
+- Priority: should
+- Type: functional
+- Statement: (a) POLAR shows angle guide lines from the last point at a configured increment and snaps the typed/dragged distance to that angle; (b) object-snap tracking lets a hovered snap point become a temporary tracking reference to move along; (c) `@distance<angle` is accepted anywhere a relative point can be typed, alongside the existing bearing-lock (`A <angle>` then distance) workflow.
+- Acceptance (sketch): polar guides snap the cursor within a small pixel tolerance at the configured increment; tracking references clear when a command ends; `@100<45` and the equivalent bearing-lock sequence commit the identical point within REQ-101.
+- Owner-layer: UI/Commands
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-109 — Lit shading for TIN surfaces
+- Purpose: `SHADED` and `HIDDEN` render a TIN surface as wireframe only, pixel-identical to `2D` — verified by capture — while imported meshes and hatches already shade correctly under REQ-064
+- Priority: should
+- Type: functional
+- Statement: Extend REQ-064's visual-style/lighting pipeline (triangle shader, depth buffer, camera-following light) to TIN surfaces.
+- Acceptance (sketch): a TIN surface captured at `2D`/`Hidden`/`Shaded` is no longer pixel-identical across styles; `Hidden` occludes correctly; `Shaded` lighting follows the camera per REQ-064's existing rule; REQ-100's surface frame-budget profile still holds with shading on.
+- Owner-layer: Renderer
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-110 — Annotative rescale of existing text
+- Purpose: changing plot/viewport scale repositions survey-point labels but never resizes already-placed TEXT/MTEXT, unlike AutoCAD's annotative objects
+- Priority: could
+- Type: functional
+- Statement: Existing text/MTEXT can optionally be marked annotative so a plot-scale or viewport-scale change resizes it to hold a constant plotted height, matching what REQ-050 already does for MTEXT drawn live through a viewport.
+- Acceptance (sketch): a non-annotative object's height is unchanged by a scale change (today's behavior, preserved); an annotative object's on-screen size changes to hold plotted height constant; the flag persists in DXF/`.gs`; REQ-101 fidelity on stored coordinates is untouched.
+- Owner-layer: Domain/UI/Renderer
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-111 — Associative DIMENSION entity
+- Purpose: GoSurvey has no dimension object; an "aligned dimension" exports as exploded lines plus text, which is not associative and doesn't round-trip as a dimension
+- Priority: could
+- Type: functional
+- Statement: Add a DIMENSION entity (at minimum linear/aligned) that stores its definition points, updates its displayed measurement when the dimensioned geometry moves, and round-trips as a real DXF `DIMENSION`.
+- Acceptance (sketch): dragging dimensioned geometry updates the displayed value and leader within REQ-101; DXF round-trip preserves it as a `DIMENSION`, not exploded geometry; erasing the dimensioned geometry is handled per REQ-201, not silently.
+- Owner-layer: Domain/Commands/IO/Renderer
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-112 — Binary DXF import
+- Purpose: only ASCII DXF is read; a binary DXF must be round-tripped through AutoCAD's Save As first
+- Priority: could
+- Type: functional
+- Statement: `DxfIo` detects and reads binary-encoded DXF (the `AutoCAD Binary DXF` sentinel header) alongside the existing ASCII parser.
+- Acceptance (sketch): a binary DXF and its ASCII Save-As of the same drawing import to identical GoSurvey state; a malformed/truncated binary DXF is rejected per REQ-001, not partially absorbed.
+- Owner-layer: IO
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-113 — DXF paper-space import
+- Purpose: since REQ-037 gave GoSurvey native paper-space geometry, an imported DXF's paper-space entities and title block have somewhere real to go, but import still discards them and only logs a count
+- Priority: could
+- Type: functional
+- Statement: DXF import reconstructs each paper-space layout's entities into GoSurvey's native `PaperLayout` store (REQ-037/ADR-009), the same way model-space entities and REQ-023 survey points already reconstruct.
+- Acceptance (sketch): importing a DXF with a title block and paper-space annotations recreates them as editable native paper-space entities on the matching layout tab; entity types with no paper-space import branch yet are named in the log, not silently dropped (REQ-201).
+- Owner-layer: IO
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-114 — Autosave, backup, and crash recovery
+- Purpose: there is no safety net between manual `Ctrl+S` saves; a crash or accidental close loses unsaved work
+- Priority: should
+- Type: functional
+- Statement: Periodically autosave the working drawing to a recovery location at a configurable interval, keep the previous save as a `.bak`, and on next launch after an unclean shutdown offer to recover the autosaved state.
+- Acceptance (sketch): autosave fires at the configured interval with no modal/perceptible hitch; a normal `Ctrl+S` still writes the real file and rotates the `.bak`; killing the process mid-session and relaunching offers recovery of the newer state; declining recovery leaves the last manual save untouched.
+- Owner-layer: IO/UI/Platform
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-115 — Recent files list
+- Purpose: File → Open is the only way back into a recently used drawing
+- Priority: could
+- Type: functional
+- Statement: The File menu lists the N most recently opened/saved `.gs`/DXF/DWG paths, persisted in user preferences.
+- Acceptance (sketch): opening or saving a file adds/moves it to the top of the list; the list persists across restarts; a since-moved/deleted path fails gracefully per REQ-201 rather than crashing; clearing empties it.
+- Owner-layer: UI/Platform
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-116 — Customizable keyboard shortcuts and command aliases
+- Purpose: keyboard shortcuts and command aliases are fixed; only the right-click shortcut menu is user-customizable today (REQ-084)
+- Priority: could
+- Type: functional
+- Statement: Extend REQ-084's customization precedent to keyboard accelerators and typed-command aliases, persisted in user preferences.
+- Acceptance (sketch): a user can rebind a shortcut and define/edit a typed alias; a conflicting rebind is flagged, not silently overwritten (REQ-201); a reset action restores defaults; unrebound shortcuts keep working.
+- Owner-layer: UI/Platform
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-117 — Real snap-to-grid
+- Purpose: the grid is a visual reference only; the cursor never snaps to it
+- Priority: could
+- Type: functional
+- Statement: When grid snap is enabled (mirroring AutoCAD's SNAP/GRID pairing), point entry and dragging snap to the nearest grid intersection at the current spacing, composable with object snaps the way ORTHO already composes with them.
+- Acceptance (sketch): with grid snap on and no nearby object-snap candidate, a click lands exactly on the nearest grid intersection; an active object snap still takes priority; toggling grid snap off restores today's free-cursor behavior; the setting persists like other display preferences (REQ-020-style).
+- Owner-layer: UI/Commands
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+---
+
 ## Performance requirements
 
 > Performance is a requirement, not an afterthought — but always paired with a
@@ -3258,6 +3459,22 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-092 | Platform/backend | `accounts-worker/test.mjs` **green 2026-08-23** (offline, real RSA keypair generated in-process: missing/malformed/tampered/expired/wrong-issuer/wrong-audience/alg-none/missing-subject tokens all rejected 401 before any D1 query; valid token for a new user returns the default tier and issues exactly one insert; valid token for an existing user returns their stored tier with no insert; D1 outage is 503; missing `AUTH0_DOMAIN` binding is 500, not misreported as unauthorized; email upsert/preserve-tier/malformed-dropped cases added when email wiring landed) + **live, 2026-08-23**: deployed Worker confirmed live (401/404 as expected), a real sign-in's `users` row confirmed via direct D1 query (`auth0_sub`, `tier: 'free'`, and — after the email wiring landed — a populated `email`) | accepted |
 | REQ-080 (amended) | Telemetry/Auth/UI/Platform | `TelemetryPingTests` **green 2026-08-23** (email-empty/email-present JSON cases; `DecideEventToSend` simplified to install-vs-always-active, throttle tests removed with the throttle) + `telemetry-worker/test.mjs` **green 2026-08-23** (valid/empty/malformed email stored-or-dropped-to-null; column-count assertions 8→9) + **live, 2026-08-23**: deployed Worker smoke-tested with a real POST carrying `email`, confirmed via direct D1 read-back; live migrations applied to the pre-existing deployed table (`ALTER TABLE pings ADD COLUMN email TEXT`, `DROP INDEX ux_pings_active_daily`) | accepted |
 | REQ-093 (amended) | UI/Platform | **manual, verified live against the real app across three build-and-look rounds, 2026-08-23 (D-2026-08-23-h):** the splash is its own small window (~440x320), centered on the primary monitor, filled edge-to-edge by the card — the real desktop, not a dimmed backdrop, is visible everywhere outside that small window; a native-resolution 32x32 corner logo (no upscaling — the source art is only that large) plus a large centered "GoSurvey" wordmark; the progress bar visibly animates across a hardcoded 5.0 s regardless of how fast real preload finishes; the main CAD shell is not shown/interactive until the 5 s elapses; user settings/prefs, the startup workspace template, the app font and the app logo are all loaded before the main shell is usable — this was already true pre-splash and REQ-093 does not change *what* loads, only that a splash now covers it; the splash's rotating phase text is cosmetic labeling only, since linetypes have no data table to load and text styles are already resident in memory the instant `AppCommandState` is constructed; closing the window during the 5 s exits cleanly with no hang; **the user's saved dock layout is restored correctly on launch** — this became an explicit acceptance condition only after a regression destroyed it once (D-2026-08-23-h) | accepted |
+| REQ-102 | Domain/Renderer/Commands/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-103 | Commands/Domain/UI | planned — sequenced into 8 increments (D-2026-08-23-j); TASK-094 (MIRROR, step 1), TASK-095 (LENGTHEN, step 2), and TASK-096 (EXTEND, step 3, model+paper space) all self-verified 2026-08-24, transcripts green (557/557 regression); manual GUI pass pending the user for all shipped steps; steps 4-8 not started | accepted |
+| REQ-104 | Commands/Domain/IO/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-105 | Commands/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-106 | UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-107 | Domain/Commands/IO/UI | proposed — not yet scoped, likely architectural; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-108 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-109 | Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-110 | Domain/UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-111 | Domain/Commands/IO/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-112 | IO | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-113 | IO | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-114 | IO/UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-115 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-116 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-117 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 
 ---
 

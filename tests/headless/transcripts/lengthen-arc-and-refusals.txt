@@ -1,0 +1,88 @@
+# REQ-103 step 2 (TASK-095) — LENGTHEN Total mode on an Arc, plus the refusal path.
+#
+# The arc is a 3-point semicircle chosen so its parameters are hand-computable: PICK 0,0 / 10,10 /
+# 20,0 circumscribes to center (10,0), r=10, sweeping 180 degrees (CW) from the point at 0,0
+# through 10,10 to 20,0 — length = r*pi ~= 31.4159265. This is the arc case LENGTHEN's Total mode
+# had no existing precedent for in this codebase (see D-2026-08-24-a): holding the radius fixed
+# and changing only startRad/sweepRad, unlike the existing Arc grip-drag which re-fits radius.
+#
+# Also exercises the refusal path (REQ-201): a Circle and a closed Polyline are both ineligible
+# and must be refused with a stated reason, geometry unchanged — never silently ignored.
+
+NEW
+
+CMD ARC
+PICK 0 0
+PICK 10 10
+PICK 20 0
+ESC
+
+CHECK ALL
+EXPECT ARCS 1
+SAVEAS %OUT%/lengthen-arc-a.gs
+
+CMD LENGTHEN
+CMD T
+CMD 35
+PICK 20 0
+
+EXPECT LOG "LENGTHEN — length 31.4"
+EXPECT ARCS 1
+CHECK ALL
+
+SAVEAS %OUT%/lengthen-arc-b.gs
+EXPECT DIFFERENTFILE %OUT%/lengthen-arc-a.gs %OUT%/lengthen-arc-b.gs
+
+UNDO
+EXPECT ARCS 1
+CHECK ALL
+
+SAVEAS %OUT%/lengthen-arc-c.gs
+EXPECT SAMEFILE %OUT%/lengthen-arc-a.gs %OUT%/lengthen-arc-c.gs
+
+REDO
+EXPECT ARCS 1
+CHECK ALL
+
+SAVEAS %OUT%/lengthen-arc-d.gs
+EXPECT SAMEFILE %OUT%/lengthen-arc-b.gs %OUT%/lengthen-arc-d.gs
+
+ESC
+
+# --- Refusal path: Circle and closed Polyline are both ineligible (REQ-201: stated reason, never
+# silently ignored). The arc from above is still selectable too, but this only exercises refusal.
+
+CMD CIRCLE
+CMD 60,0
+CMD 5
+ESC
+
+CMD POLYLINE
+CMD 0,50
+CMD 10,50
+CMD 10,60
+CMD 0,60
+CMD CLOSE
+
+CHECK ALL
+EXPECT CIRCLES 1
+EXPECT POLYLINES 1
+SAVEAS %OUT%/lengthen-refusal-a.gs
+
+CMD LENGTHEN
+CMD DE
+CMD 5
+PICK 65 0
+
+EXPECT LOG "ignored"
+EXPECT CIRCLES 1
+
+PICK 10 55
+
+EXPECT LOG "ignored"
+EXPECT POLYLINES 1
+ESC
+
+CHECK ALL
+SAVEAS %OUT%/lengthen-refusal-b.gs
+EXPECT SAMEFILE %OUT%/lengthen-refusal-a.gs %OUT%/lengthen-refusal-b.gs

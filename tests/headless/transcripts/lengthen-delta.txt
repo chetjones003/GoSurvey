@@ -1,0 +1,61 @@
+# REQ-103 step 2 (TASK-095) — LENGTHEN, DElta mode on a Line.
+#
+# Extends a line by +50 (click near its far end so that end is the one that moves), then shortens
+# it by -20, checking the resulting length at each step via the byte-level SAMEFILE/DIFFERENTFILE
+# oracle this corpus already uses (mirror-basic.txt) rather than a coordinate EXPECT verb, which
+# this grammar doesn't have. LENGTHEN edits in place and allocates no new entity id per apply
+# (unlike MIRROR's duplicate), so a plain pre-vs-post-undo SAMEFILE is valid here — confirmed by
+# running it, not assumed.
+
+NEW
+
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+
+CHECK ALL
+EXPECT LINES 1
+SAVEAS %OUT%/lengthen-delta-a.gs
+
+CMD LENGTHEN
+CMD DE
+CMD 50
+PICK 100 0
+
+EXPECT LOG "LENGTHEN — length 100"
+EXPECT LINES 1
+CHECK ALL
+
+SAVEAS %OUT%/lengthen-delta-b.gs
+EXPECT DIFFERENTFILE %OUT%/lengthen-delta-a.gs %OUT%/lengthen-delta-b.gs
+
+UNDO
+EXPECT LINES 1
+CHECK ALL
+
+SAVEAS %OUT%/lengthen-delta-c.gs
+EXPECT SAMEFILE %OUT%/lengthen-delta-a.gs %OUT%/lengthen-delta-c.gs
+
+REDO
+EXPECT LINES 1
+CHECK ALL
+
+SAVEAS %OUT%/lengthen-delta-d.gs
+EXPECT SAMEFILE %OUT%/lengthen-delta-b.gs %OUT%/lengthen-delta-d.gs
+
+# Shorten by -20 (150 -> 130), still picking near the far end. DoUndo/DoRedo both cancel the
+# active command deliberately (st.active = Kind::None — pre-existing behavior, not LENGTHEN-
+# specific: an in-progress command could otherwise hold stale entity references across a geometry
+# change), so LENGTHEN must be started again; its mode+value fields are NOT part of the undo
+# snapshot and persist regardless, matching REQ-103's "mode persists across repeated picks"
+# acceptance condition — only the value needs to be retyped here, not re-selecting DE itself.
+CMD LENGTHEN
+CMD DE
+CMD -20
+PICK 150 0
+ESC
+
+EXPECT LOG "LENGTHEN — length 150"
+EXPECT LINES 1
+CHECK ALL

@@ -408,6 +408,22 @@ void RotateSurveyCoords(float bx, float by, float rad, float* x, float* y) {
   *y = by + s * dx + c * dy;
 }
 
+/// Reflects (*x,*y) across the line through (x0,y0)-(x1,y1). A degenerate (near-zero-length)
+/// mirror line leaves the point unchanged rather than dividing by ~0 — callers require two
+/// distinct points before a mirror commits, so this is a safety net, not a user-facing path.
+void ReflectSurveyCoords(float x0, float y0, float x1, float y1, float* x, float* y) {
+  const float dx = x1 - x0;
+  const float dy = y1 - y0;
+  const float len2 = dx * dx + dy * dy;
+  if (len2 < 1e-12f)
+    return;
+  const float t = ((*x - x0) * dx + (*y - y0) * dy) / len2;
+  const float projX = x0 + t * dx;
+  const float projY = y0 + t * dy;
+  *x = 2.f * projX - *x;
+  *y = 2.f * projY - *y;
+}
+
 } // namespace
 
 void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float by, float rad,
@@ -515,6 +531,133 @@ void DuplicateSelectedSurveyPointsRotated(AppCommandState& st, float bx, float b
 
   if (added || skipped || merged || overwrote) {
     std::string msg = "ROTATE COPY survey — ";
+    if (added)
+      msg += std::to_string(added) + " added";
+    if (merged) {
+      if (added)
+        msg += ", ";
+      msg += std::to_string(merged) + " merged";
+    }
+    if (overwrote) {
+      if (added || merged)
+        msg += ", ";
+      msg += std::to_string(overwrote) + " overwritten";
+    }
+    if (skipped) {
+      if (added || merged || overwrote)
+        msg += ", ";
+      msg += std::to_string(skipped) + " skipped (duplicate ID)";
+    }
+    msg += ".";
+    log.push_back(msg);
+  }
+}
+
+void DuplicateSelectedSurveyPointsReflected(AppCommandState& st, float x0, float y0, float x1, float y1,
+                                            SurveyDuplicatePolicy policy, std::vector<std::string>& log) {
+  auto& pts = st.surveyPoints;
+  auto& buffers = st.surveyPointIdBuffers;
+  std::vector<int> ix = st.selectedSurveyPointIndices;
+  std::sort(ix.begin(), ix.end());
+  ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
+
+  const int step = st.createPointsOpts.pointNumberOffset != 0 ? st.createPointsOpts.pointNumberOffset : 1;
+  int added = 0;
+  int skipped = 0;
+  int merged = 0;
+  int overwrote = 0;
+
+  for (int i : ix) {
+    if (i < 0 || static_cast<size_t>(i) >= pts.size())
+      continue;
+
+    SurveyPoint copy = pts[static_cast<size_t>(i)];
+    ReflectSurveyCoords(x0, y0, x1, y1, &copy.easting, &copy.northing);
+    const int srcId = copy.id;
+
+    auto findOtherWithId = [&](int id) -> int {
+      for (size_t j = 0; j < pts.size(); ++j)
+        if (static_cast<int>(j) != i && pts[j].id == id)
+          return static_cast<int>(j);
+      return -1;
+    };
+
+    switch (policy) {
+    case SurveyDuplicatePolicy::Notify: {
+      if (findOtherWithId(srcId) >= 0) {
+        ++skipped;
+        continue;
+      }
+      const int nid = NextFreeId(pts, srcId, step);
+      copy.id = nid;
+      copy.labelMtextAnnId = 0;   // a copied point is a new point: it owns no label yet (REQ-076)
+      pts.push_back(std::move(copy));
+      buffers.push_back(std::to_string(nid));
+      ++added;
+      EnsureSurveyPointLabelMtext(st, pts.size() - 1, &log);
+      break;
+    }
+    case SurveyDuplicatePolicy::Renumber: {
+      const int nid = NextFreeId(pts, srcId, step);
+      copy.id = nid;
+      copy.labelMtextAnnId = 0;   // a copied point is a new point: it owns no label yet (REQ-076)
+      pts.push_back(std::move(copy));
+      buffers.push_back(std::to_string(nid));
+      ++added;
+      EnsureSurveyPointLabelMtext(st, pts.size() - 1, &log);
+      break;
+    }
+    case SurveyDuplicatePolicy::Merge: {
+      const int other = findOtherWithId(srcId);
+      if (other >= 0) {
+        SurveyPoint& tgt = pts[static_cast<size_t>(other)];
+        tgt.easting = copy.easting;
+        tgt.northing = copy.northing;
+        tgt.elevation = copy.elevation;
+        if (!copy.description.empty()) {
+          if (!tgt.description.empty())
+            tgt.description += "; ";
+          tgt.description += copy.description;
+        }
+        if (!copy.layer.empty())
+          tgt.layer = copy.layer;
+        ++merged;
+        EnsureSurveyPointLabelMtext(st, static_cast<size_t>(other), &log);
+      } else {
+        const int nid = NextFreeId(pts, srcId, step);
+        copy.id = nid;
+        copy.labelMtextAnnId = 0;   // a copied point is a new point: it owns no label yet (REQ-076)
+        pts.push_back(std::move(copy));
+        buffers.push_back(std::to_string(nid));
+        ++added;
+        EnsureSurveyPointLabelMtext(st, pts.size() - 1, &log);
+      }
+      break;
+    }
+    case SurveyDuplicatePolicy::Overwrite: {
+      const int other = findOtherWithId(srcId);
+      if (other >= 0) {
+        pts[static_cast<size_t>(other)] = copy;
+        if (static_cast<size_t>(other) < buffers.size())
+          buffers[static_cast<size_t>(other)] = std::to_string(copy.id);
+        ++overwrote;
+        EnsureSurveyPointLabelMtext(st, static_cast<size_t>(other), &log);
+      } else {
+        const int nid = NextFreeId(pts, srcId, step);
+        copy.id = nid;
+        copy.labelMtextAnnId = 0;   // a copied point is a new point: it owns no label yet (REQ-076)
+        pts.push_back(std::move(copy));
+        buffers.push_back(std::to_string(nid));
+        ++added;
+        EnsureSurveyPointLabelMtext(st, pts.size() - 1, &log);
+      }
+      break;
+    }
+    }
+  }
+
+  if (added || skipped || merged || overwrote) {
+    std::string msg = "MIRROR COPY survey — ";
     if (added)
       msg += std::to_string(added) + " added";
     if (merged) {

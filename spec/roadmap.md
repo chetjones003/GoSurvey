@@ -292,11 +292,34 @@ A lightweight board that complements the milestones. Keep each column honest.
 ### Later (real but deferred)
 - `<Second file format>` — deferred until a user actually needs it.
 - `<Undo/redo system>` — design only once edit operations stabilize.
+- **Backlog from Known Limitations (REQ-102–REQ-117)** — catalogued
+  2026-08-23 from `docs/WikiDocumentation.md`'s Known Limitations page
+  (D-2026-08-23-i, `spec/project.md`). All 16 are `proposed`, none accepted;
+  see `spec/requirements.md` for each. Two related rows from the same page
+  didn't get a new number and are tracked against the requirement that
+  already covers them instead: MTEXT Insert Field / Background Mask /
+  paragraph-column-bullet formatting is **REQ-051**'s own recorded deferred
+  follow-up (2026-07-29/30 decision-log entries); the `Ctrl+X`-only-inside-
+  the-MTEXT-editor gap is small enough to file against **REQ-038**
+  (clipboard) rather than its own requirement.
 
 ### Someday / maybe (explicitly speculative — do NOT design for these yet)
 - `<Pluggable rendering backend (Vulkan)>` — single backend until a second is a
   genuine requirement; revisit then.
 - `<Plugin/scripting API>`
+- **Coordinate system / projection library** — real projected coordinate
+  systems (state-plane zones, datums, transformations), vs. today's
+  unprojected numbers + `ALIGN`-to-control workaround. From Known
+  Limitations, 2026-08-23; no REQ minted, no user has asked for this yet.
+- **Parametric constraints** — geometric/dimensional constraint solving.
+  Low priority for a survey-focused CAD tool. From Known Limitations,
+  2026-08-23.
+- **Dynamic blocks and a block-library browser** — deliberately excluded from
+  REQ-107 (block support, foundational only). From Known Limitations,
+  2026-08-23.
+- **`XREF` / external references** — From Known Limitations, 2026-08-23.
+- **`TABLE` command** — depends on block/annotation work landing first
+  (REQ-107). From Known Limitations, 2026-08-23.
 
 ---
 

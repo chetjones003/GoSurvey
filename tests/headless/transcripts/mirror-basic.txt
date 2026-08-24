@@ -1,0 +1,57 @@
+# REQ-103 step 1 (TASK-094) — MIRROR, erase-source = No (the default).
+#
+# Selects a line, mirrors it across a horizontal line, answers the "Erase source objects?"
+# prompt with a bare Enter (asserting the documented default: No). Expects the original line to
+# survive and a reflected duplicate to be added — never an in-place transform, since MIRROR's
+# default behavior is duplicate-then-keep, the reverse of ROTATE/SCALE's in-place-then-optional-
+# copy (see D-2026-08-23-j).
+#
+# ## Why this compares forward-vs-forward, not pre-mirror-vs-post-undo
+#
+# MIRROR creates a new entity id for its duplicate, and `AppCommandState::nextEntityId` is a
+# monotonic per-drawing counter that undo deliberately never rewinds (REQ-076 — an id must never
+# be reused, even across undo, or a still-redoable future reference could collide with a freshly
+# created entity). So a save taken BEFORE the mirror and a save taken AFTER mirror+undo are
+# expected to differ in that one counter even though the undo is completely correct — comparing
+# them with SAMEFILE would fail for a reason that has nothing to do with a bug. The valid oracle
+# is the one `undo-redo-identity.txt` Scenario 1 already establishes: save the FORWARD state,
+# undo (prove it moved via DIFFERENTFILE), redo, save FORWARD again, and expect that pair to be
+# byte-identical — both sides of that comparison sit on the same side of the id-counter timeline.
+
+NEW
+
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+
+CHECK ALL
+EXPECT LINES 1
+
+BOX -10 -10 110 10
+EXPECT SELECTED 1
+
+CMD MIRROR
+CMD 0,50
+CMD 100,50
+CMD
+
+EXPECT LOG "MIRROR complete."
+EXPECT LINES 2
+CHECK ALL
+
+SAVEAS %OUT%/mirror-basic-fwd-a.gs
+
+UNDO
+EXPECT LINES 1
+CHECK ALL
+
+SAVEAS %OUT%/mirror-basic-undo.gs
+EXPECT DIFFERENTFILE %OUT%/mirror-basic-fwd-a.gs %OUT%/mirror-basic-undo.gs
+
+REDO
+EXPECT LINES 2
+CHECK ALL
+
+SAVEAS %OUT%/mirror-basic-fwd-b.gs
+EXPECT SAMEFILE %OUT%/mirror-basic-fwd-a.gs %OUT%/mirror-basic-fwd-b.gs

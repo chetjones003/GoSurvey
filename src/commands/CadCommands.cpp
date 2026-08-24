@@ -12,6 +12,7 @@
 #include "util/contourgen.hpp"  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
 #include "util/surfaceanalysis.hpp"  // REQ-072 banding + slope arrows (ADR-036 (g)) — pure, like contourgen
 #include "util/surfacevolume.hpp"  // REQ-073 surface-to-surface volumes (TASK-095) — pure, like surfaceanalysis
+#include "util/curveintersect.hpp"  // REQ-062 analytic intersections; EXTEND (TASK-096) reuses this over TRIM's tessellation
 #include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
 #include "util/gltfimport.hpp"
 #include "util/stlimport.hpp"
@@ -849,6 +850,134 @@ void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, 
   }
   BumpCadGpuCache(st);
   log.push_back("ROTATE — rotated paper object(s).");
+}
+
+/// REQ-103 MIRROR, pure-paper-space path. Deliberately simpler than the model-space command: it
+/// always duplicates and keeps the source (no interactive "Erase source objects?" prompt), because
+/// the pure-paper-space click flow (CadUi.cpp's \c paperMirrorPhase state machine) has no text-entry
+/// surface to ask a Y/N question through — the same reason paper ROTATE has no copy mode at all.
+/// Recorded as a scoped simplification in TASK-094, not a silent gap: extending paper space with an
+/// erase-source toggle is separate future scope if a user asks for it.
+void MirrorSelectedPaperEntities(AppCommandState& st, float x0In, float y0In, float x1In, float y1In,
+                                 std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L || st.selectedPaperEntities.empty())
+    return;
+  // Self-contained reflect math (not the free \c ReflectPtAcrossLine/ReflectAngleAcrossLine — those
+  // are defined later in this translation unit; \c RotateSelectedPaperEntities above has the same
+  // shape for the same reason, a local \c rot lambda rather than calling \c RotateAroundBase).
+  const float mdx = x1In - x0In, mdy = y1In - y0In;
+  const float mlen2 = mdx * mdx + mdy * mdy;
+  auto refl = [&](float& x, float& y) {
+    if (mlen2 < 1e-12f)
+      return;
+    const float t = ((x - x0In) * mdx + (y - y0In) * mdy) / mlen2;
+    const float px = x0In + t * mdx, py = y0In + t * mdy;
+    x = 2.f * px - x;
+    y = 2.f * py - y;
+  };
+  const float mphi = std::atan2(mdy, mdx);
+  auto reflAngle = [&](float ang) { return 2.f * mphi - ang; };
+  PushUndoSnapshot(st, "Mirror paper geometry");
+  std::vector<PaperRef> newSel;
+  auto attrAt = [](const std::vector<EntityAttributes>& v, int i) {
+    return (i >= 0 && static_cast<size_t>(i) < v.size()) ? v[static_cast<size_t>(i)] : EntityAttributes{};
+  };
+  for (const PaperRef& r : st.selectedPaperEntities) {
+    switch (r.type) {
+    case PaperRef::Type::Line: {
+      const size_t i = static_cast<size_t>(r.index) * 6;
+      if (i + 5 >= L->paperLines.size())
+        break;
+      for (int k = 0; k < 6; ++k)
+        L->paperLines.push_back(L->paperLines[i + static_cast<size_t>(k)]);
+      const size_t j = L->paperLines.size() - 6;
+      refl(L->paperLines[j], L->paperLines[j + 1]);
+      refl(L->paperLines[j + 3], L->paperLines[j + 4]);
+      L->paperLineAttrs.push_back(attrAt(L->paperLineAttrs, r.index));
+      newSel.push_back({PaperRef::Type::Line, static_cast<int>(L->paperLines.size() / 6) - 1});
+      break;
+    }
+    case PaperRef::Type::Circle: {
+      const size_t i = static_cast<size_t>(r.index) * 3;
+      if (i + 2 >= L->paperCircles.size())
+        break;
+      float cx = L->paperCircles[i], cy = L->paperCircles[i + 1];
+      refl(cx, cy);
+      L->paperCircles.push_back(cx);
+      L->paperCircles.push_back(cy);
+      L->paperCircles.push_back(L->paperCircles[i + 2]);  // radius — reflection is an isometry
+      L->paperCircleAttrs.push_back(attrAt(L->paperCircleAttrs, r.index));
+      newSel.push_back({PaperRef::Type::Circle, static_cast<int>(L->paperCircles.size() / 3) - 1});
+      break;
+    }
+    case PaperRef::Type::Arc: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperArcs.size())
+        break;
+      CadArc a = L->paperArcs[static_cast<size_t>(r.index)];
+      // Same reflect-the-old-end-angle-into-the-new-start rule as the model-space path — a
+      // reflection reverses handedness, so the center alone does not say which way it now sweeps.
+      const float newStart = reflAngle(a.startRad + a.sweepRad);
+      refl(a.cx, a.cy);
+      a.startRad = newStart;
+      L->paperArcs.push_back(a);
+      L->paperArcAttrs.push_back(attrAt(L->paperArcAttrs, r.index));
+      newSel.push_back({PaperRef::Type::Arc, static_cast<int>(L->paperArcs.size()) - 1});
+      break;
+    }
+    case PaperRef::Type::Ellipse: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperEllipses.size())
+        break;
+      CadEllipse e = L->paperEllipses[static_cast<size_t>(r.index)];
+      float mx = e.cx + e.majVx, my = e.cy + e.majVy;
+      refl(e.cx, e.cy);
+      refl(mx, my);
+      e.majVx = mx - e.cx;
+      e.majVy = my - e.cy;
+      L->paperEllipses.push_back(e);
+      L->paperEllAttrs.push_back(attrAt(L->paperEllAttrs, r.index));
+      newSel.push_back({PaperRef::Type::Ellipse, static_cast<int>(L->paperEllipses.size()) - 1});
+      break;
+    }
+    case PaperRef::Type::Polyline: {
+      const int pi = r.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size())
+        break;
+      const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+      const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+      const int baseVert = L->paperPolyOffsets.empty() ? 0 : L->paperPolyOffsets.back();
+      for (int vi = v0; vi < v1; ++vi) {
+        float px = L->paperPolyVerts[static_cast<size_t>(vi * 3)];
+        float py = L->paperPolyVerts[static_cast<size_t>(vi * 3 + 1)];
+        refl(px, py);
+        L->paperPolyVerts.push_back(px);
+        L->paperPolyVerts.push_back(py);
+        L->paperPolyVerts.push_back(L->paperPolyVerts[static_cast<size_t>(vi * 3 + 2)]);
+      }
+      L->paperPolyOffsets.push_back(baseVert + (v1 - v0));
+      L->paperPolyClosed.push_back(static_cast<size_t>(pi) < L->paperPolyClosed.size() ? L->paperPolyClosed[static_cast<size_t>(pi)] : 0u);
+      L->paperPolyAttrs.push_back(attrAt(L->paperPolyAttrs, pi));
+      newSel.push_back({PaperRef::Type::Polyline, static_cast<int>(L->paperPolyOffsets.size()) - 2});
+      break;
+    }
+    case PaperRef::Type::Text: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperTexts.size())
+        break;
+      CadAnnotation a = L->paperTexts[static_cast<size_t>(r.index)];
+      // MIRRTEXT-off (D-2026-08-23-j): insertion point reflects, rotationRad (glyph orientation)
+      // is left untouched — same rule as the model-space Text/Mtext path.
+      refl(a.insX, a.insY);
+      L->paperTexts.push_back(std::move(a));
+      L->paperTextAttrs.push_back(attrAt(L->paperTextAttrs, r.index));
+      newSel.push_back({PaperRef::Type::Text, static_cast<int>(L->paperTexts.size()) - 1});
+      break;
+    }
+    }
+  }
+  if (!newSel.empty())
+    st.selectedPaperEntities = newSel;
+  BumpCadGpuCache(st);
+  log.push_back("MIRROR — mirrored paper object(s) (source kept).");
 }
 
 bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float tolWorld) {
@@ -3957,6 +4086,10 @@ static void ResetModifyRotateDraft(AppCommandState& st) {
   st.rotateRefX1 = st.rotateRefY1 = st.rotateRefX2 = st.rotateRefY2 = 0.f;
   st.rotateAnglePt1X = st.rotateAnglePt1Y = 0.f;
   st.rotateCopyMode = false;
+  st.mirrorPhase = AppCommandState::MirrorPhase::PickSelection;
+  st.mirrorP1X = st.mirrorP1Y = st.mirrorP2X = st.mirrorP2Y = 0.f;
+  st.lengthenPhase = AppCommandState::LengthenPhase::WaitSelectOrMode;
+  st.extendPhase = AppCommandState::ExtendPhase::SelectBoundaries;
 }
 
 static void ClearPendingViewportZoom(AppCommandState& st) {
@@ -4100,6 +4233,9 @@ const CmdEntry kRegistry[] = {
     {"copy", "cp", "Copy objects"},
     {"rotate", "ro", "Rotate objects"},
     {"scale", "sc", "Scale objects"},
+    {"mirror", "mi", "Mirror objects across a line"},
+    {"lengthen", "len", "Change an object's length (DElta/Percent/Total/DYnamic)"},
+    {"extend", "ex", "Extend objects to a boundary edge"},
     {"delete", "del", "Erase objects"},
     {"join", "j", "Join collinear objects"},
     {"trim", "tr", "Trim objects to an edge"},
@@ -4553,6 +4689,18 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "scale") {
     StartScaleCommand(st, log);
+    return true;
+  }
+  if (primary == "mirror") {
+    StartMirrorCommand(st, log);
+    return true;
+  }
+  if (primary == "lengthen") {
+    StartLengthenCommand(st, log);
+    return true;
+  }
+  if (primary == "extend") {
+    StartExtendCommand(st, log);
     return true;
   }
   if (primary == "delete") {
@@ -8248,6 +8396,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   using MP = AppCommandState::ModifyPhase;
   using RP = AppCommandState::RotatePhase;
   using SP = AppCommandState::ScalePhase;
+  using MirP = AppCommandState::MirrorPhase;
 
   // Box-selection projects to screen space only when the view is actually orbited; in plan view a
   // null camera keeps the historical world-rect test byte-for-byte (REQ-058).
@@ -8258,7 +8407,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   auto finishBox = [&]() {
     const bool inclSurvey = (st.active == AppCommandState::Kind::None || st.active == K::Move ||
                              st.active == K::Copy || st.active == K::Rotate || st.active == K::Scale ||
-                             st.active == K::Align);
+                             st.active == K::Mirror || st.active == K::Align);
     ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, wx, wy, windowSelectionSubtract,
                              fenceLeftToRightWindowMode, inclSurvey, boxSelCam, st.uiViewportWidthPx,
                              st.uiViewportHeightPx);
@@ -8799,6 +8948,51 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
+  if (st.active == K::Mirror) {
+    if (st.mirrorPhase == MirP::PickSelection) {
+      if (st.selBoxWaitingSecond) {
+        finishBox();
+        if (st.selection.empty() && st.selectedSurveyPointIndices.empty())
+          log.push_back("Nothing selected — pick two corners again.");
+        else {
+          st.mirrorPhase = MirP::NeedP1;
+          log.push_back("MIRROR — specify first point of mirror line:");
+        }
+      }
+      return;
+    }
+    if (st.mirrorPhase == MirP::NeedP1) {
+      st.mirrorP1X = wx;
+      st.mirrorP1Y = wy;
+      st.mirrorPhase = MirP::NeedP2;
+      log.push_back("MIRROR — specify second point of mirror line:");
+      return;
+    }
+    if (st.mirrorPhase == MirP::NeedP2) {
+      if (std::hypot(wx - st.mirrorP1X, wy - st.mirrorP1Y) < 1e-8f) {
+        log.push_back("MIRROR — mirror line needs two distinct points; try again.");
+        return;
+      }
+      st.mirrorP2X = wx;
+      st.mirrorP2Y = wy;
+      st.mirrorPhase = MirP::NeedEraseAnswer;
+      log.push_back("Erase source objects? [Yes/No] <N>:");
+    }
+    // NeedEraseAnswer has no viewport-pick meaning — it is answered on the command line
+    // (HandleMirrorText), matching TRIM's cutting-edge prompt convention.
+    return;
+  }
+
+  if (st.active == K::Lengthen) {
+    HandleLengthenViewportPick(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::Extend) {
+    HandleExtendViewportPick(st, wx, wy, log);
+    return;
+  }
+
   if (st.active == K::None && st.selBoxWaitingSecond)
     finishBox();
 }
@@ -9183,6 +9377,1049 @@ void StartOffsetCommand(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back("OFFSET — select line, circle, arc, ellipse, or polyline. ESC cancels.");
 }
 
+// ============================================================================================
+// LENGTHEN (REQ-103 step 2). Written for reuse by EXTEND/FILLET (steps 3/6) per REQ-103's own
+// stated sequencing — the length/endpoint math below is free functions, not folded into the
+// command handler. Shaped like OFFSET above (single entity per pick, loop back to "select
+// object" until Enter/Esc) rather than like MIRROR/ROTATE/SCALE (selection-then-transform).
+// ============================================================================================
+
+/// Arc length along its sweep. Nothing in this codebase computed this before LENGTHEN — confirmed
+/// by search, not assumed — not even for display in the Properties panel.
+static float ArcLengthOf(float r, float sweepRad) { return std::fabs(r * sweepRad); }
+
+/// Sum of chord lengths across polyline `pi`'s segments. LENGTHEN never calls this on a closed
+/// polyline (refused before this runs), so this always walks an open path — same shape as
+/// QSELECT's ad hoc length filter (CadUi.cpp), written here as a reusable function instead.
+static float PolylineOpenLengthOf(const AppCommandState& st, int pi) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+    return 0.f;
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  float total = 0.f;
+  for (int vi = v0; vi + 1 < v1; ++vi) {
+    const size_t a = static_cast<size_t>(vi) * 3;
+    const size_t b = static_cast<size_t>(vi + 1) * 3;
+    if (b + 1 >= st.userPolylineVerts.size())
+      break;
+    total += std::hypot(st.userPolylineVerts[b] - st.userPolylineVerts[a],
+                        st.userPolylineVerts[b + 1] - st.userPolylineVerts[a + 1]);
+  }
+  return total;
+}
+
+/// True when (px,py) is nearer (x0,y0) than (x1,y1) — the same squared-distance tie-break TRIM
+/// uses to decide which end of a Line a pick is closest to (TrimSegmentIntersectPickSide's
+/// `dA <= dB`), generalized: every two-endpoint entity LENGTHEN touches uses this one comparison,
+/// with its two points computed inline per type (this codebase has no shared "get the endpoints of
+/// this entity" helper — confirmed by research — so this follows the established idiom rather than
+/// inventing one).
+static bool NearerToFirstPoint(float px, float py, float x0, float y0, float x1, float y1) {
+  const float d0 = (px - x0) * (px - x0) + (py - y0) * (py - y0);
+  const float d1 = (px - x1) * (px - x1) + (py - y1) * (py - y1);
+  return d0 <= d1;
+}
+
+/// Applies `newLength` to a Line, moving the end nearest the original pick (`nearFirst` selects
+/// (x0,y0) vs (x1,y1)) and holding the other end fixed. Rejects — does not clamp — a result that
+/// would collapse the line or an already-degenerate source (REQ-201: LENGTHEN must say why it did
+/// nothing, the same convention TRIM's degenerate-length delete and OFFSET's refusals follow).
+static bool ApplyLengthenToLine(AppCommandState& st, int index, bool nearFirst, float newLength,
+                                std::vector<std::string>& log) {
+  const size_t k = static_cast<size_t>(index) * 6;
+  if (k + 5 >= st.userLinesFlat.size())
+    return false;
+  const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
+  const float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
+  const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
+  const float movingX = nearFirst ? x0 : x1, movingY = nearFirst ? y0 : y1;
+  const float dx = movingX - fixedX, dy = movingY - fixedY;
+  const float curLen = std::hypot(dx, dy);
+  if (curLen < 1e-9f) {
+    log.push_back("LENGTHEN — the line is degenerate; there is no direction to extend along.");
+    return false;
+  }
+  if (!(newLength > 1e-6f) || !std::isfinite(newLength)) {
+    log.push_back("LENGTHEN — that change would collapse the line to zero length; refused.");
+    return false;
+  }
+  const float ux = dx / curLen, uy = dy / curLen;
+  const float newX = fixedX + ux * newLength, newY = fixedY + uy * newLength;
+  PushUndoSnapshot(st, "Lengthen");
+  if (nearFirst) {
+    st.userLinesFlat[k] = newX;
+    st.userLinesFlat[k + 1] = newY;
+  } else {
+    st.userLinesFlat[k + 3] = newX;
+    st.userLinesFlat[k + 4] = newY;
+  }
+  return true;
+}
+
+/// Applies `newLength` to an Arc, holding its RADIUS fixed and changing only `startRad`/
+/// `sweepRad` — deliberately NOT the model the existing Arc grip-drag (`ApplyEntityGripPoint`)
+/// uses, which re-fits the radius on every drag; that is right for a free grip drag and wrong
+/// here, where only the length along the arc may change. `nearFirst` selects the start endpoint
+/// (true) or the end endpoint (false) as the one that moves; the other stays exactly fixed.
+static bool ApplyLengthenToArc(AppCommandState& st, int index, bool nearFirst, float newLength,
+                               std::vector<std::string>& log) {
+  if (index < 0 || static_cast<size_t>(index) >= st.userArcs.size())
+    return false;
+  CadArc& a = st.userArcs[static_cast<size_t>(index)];
+  if (a.r < 1e-6f) {
+    log.push_back("LENGTHEN — the arc's radius is degenerate; there is no length to change.");
+    return false;
+  }
+  if (!(newLength > 1e-6f) || !std::isfinite(newLength)) {
+    log.push_back("LENGTHEN — that change would collapse the arc to zero length; refused.");
+    return false;
+  }
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  const float newAbsSweep = newLength / a.r;
+  if (newAbsSweep >= kTwoPi - 1e-4f) {
+    log.push_back("LENGTHEN — that length would take the arc past a full circle; refused.");
+    return false;
+  }
+  // Grows/shrinks in the sweep's OWN rotational sense (CW arcs have a negative sweepRad), so the
+  // sign of the change always matches the sign of the existing sweep rather than assuming CCW.
+  const float deltaTheta = std::copysign(newAbsSweep - std::fabs(a.sweepRad), a.sweepRad);
+  PushUndoSnapshot(st, "Lengthen");
+  if (nearFirst) {
+    // Extending from the start: the END (start+sweep) must stay put, so the start absorbs the
+    // whole angular change in the opposite sign while sweep grows by the same amount.
+    a.startRad -= deltaTheta;
+    a.sweepRad += deltaTheta;
+  } else {
+    // Extending from the end: the start stays put; the sweep alone grows toward the new end.
+    a.sweepRad += deltaTheta;
+  }
+  return true;
+}
+
+/// Applies `newLength` (the polyline's new TOTAL length) by moving only the vertex adjacent to the
+/// picked end along that terminal segment's own direction — the rest of the polyline is untouched.
+/// This is AutoCAD's actual LENGTHEN behavior on a polyline (it never uniformly rescales the whole
+/// thing), and it is also the only definition that keeps every OTHER vertex's position meaningful.
+static bool ApplyLengthenToPolylineEnd(AppCommandState& st, int pi, bool nearFirst, float newLength,
+                                       std::vector<std::string>& log) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+    return false;
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  if (v1 - v0 < 2)
+    return false;
+  if (!(newLength > 1e-6f) || !std::isfinite(newLength)) {
+    log.push_back("LENGTHEN — that change would collapse the polyline to zero length; refused.");
+    return false;
+  }
+  const float curTotal = PolylineOpenLengthOf(st, pi);
+  const float deltaLen = newLength - curTotal;
+  const int movingVi = nearFirst ? v0 : (v1 - 1);
+  const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
+  const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
+  if (mIdx + 1 >= st.userPolylineVerts.size() || fIdx + 1 >= st.userPolylineVerts.size())
+    return false;
+  const float fx = st.userPolylineVerts[fIdx], fy = st.userPolylineVerts[fIdx + 1];
+  const float mx = st.userPolylineVerts[mIdx], my = st.userPolylineVerts[mIdx + 1];
+  const float segLen = std::hypot(mx - fx, my - fy);
+  if (segLen < 1e-9f) {
+    log.push_back("LENGTHEN — the polyline's end segment is degenerate; there is no direction to extend along.");
+    return false;
+  }
+  const float newSegLen = segLen + deltaLen;
+  if (!(newSegLen > 1e-6f)) {
+    log.push_back("LENGTHEN — that change would collapse the polyline's end segment; refused.");
+    return false;
+  }
+  const float ux = (mx - fx) / segLen, uy = (my - fy) / segLen;
+  PushUndoSnapshot(st, "Lengthen");
+  st.userPolylineVerts[mIdx] = fx + ux * newSegLen;
+  st.userPolylineVerts[mIdx + 1] = fy + uy * newSegLen;
+  return true;
+}
+
+/// Single choke point: dispatches by entity type, refusing anything not Line/Arc/open-Polyline
+/// with a stated reason (REQ-201) — mirrors `CommitOffsetSigned`'s `switch(e.type)` shape.
+static bool ApplyLengthenToEntity(AppCommandState& st, const SelectedEntity& e, bool nearFirst,
+                                  float newLength, std::vector<std::string>& log) {
+  switch (e.type) {
+  case SelectedEntity::Type::LineSeg:
+    return ApplyLengthenToLine(st, e.index, nearFirst, newLength, log);
+  case SelectedEntity::Type::Arc:
+    return ApplyLengthenToArc(st, e.index, nearFirst, newLength, log);
+  case SelectedEntity::Type::Polyline:
+    return ApplyLengthenToPolylineEnd(st, e.index, nearFirst, newLength, log);
+  default:
+    return false;
+  }
+}
+
+/// Checks whether `e` is a LENGTHEN-eligible entity and, if so, its current length and which end
+/// (`outNearFirst`) is nearest (pickX,pickY). Refuses — with a stated reason, never silently — a
+/// Circle, Ellipse, closed Polyline, full-circle Arc, or any non-length-bearing entity kind.
+/// Shared by LENGTHEN and EXTEND (TASK-096) — both need "is this a length-bearing entity, and
+/// which end is nearest the pick" for the identical eligible set (Line, open Polyline,
+/// non-full-circle Arc). \p cmdName names the caller in every refusal message (REQ-201) so EXTEND
+/// doesn't log a misleading "LENGTHEN —" reason while it's the active command.
+static bool LengthenEligibility(const AppCommandState& st, const SelectedEntity& e, float pickX, float pickY,
+                                bool* outNearFirst, float* outCurLen, const char* cmdName,
+                                std::vector<std::string>& log) {
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  switch (e.type) {
+  case SelectedEntity::Type::LineSeg: {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return false;
+    const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
+    const float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
+    *outNearFirst = NearerToFirstPoint(pickX, pickY, x0, y0, x1, y1);
+    *outCurLen = std::hypot(x1 - x0, y1 - y0);
+    return true;
+  }
+  case SelectedEntity::Type::Arc: {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      return false;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    if (std::fabs(std::fabs(a.sweepRad) - kTwoPi) < 1e-4f) {
+      log.push_back(std::string(cmdName) + " — 1 full-circle arc ignored: a full circle has no end to lengthen from.");
+      return false;
+    }
+    const float sx = a.cx + a.r * std::cos(a.startRad);
+    const float sy = a.cy + a.r * std::sin(a.startRad);
+    const float ex = a.cx + a.r * std::cos(a.startRad + a.sweepRad);
+    const float ey = a.cy + a.r * std::sin(a.startRad + a.sweepRad);
+    *outNearFirst = NearerToFirstPoint(pickX, pickY, sx, sy, ex, ey);
+    *outCurLen = ArcLengthOf(a.r, a.sweepRad);
+    return true;
+  }
+  case SelectedEntity::Type::Polyline: {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+      return false;
+    if (static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)]) {
+      log.push_back(std::string(cmdName) + " — 1 closed polyline ignored: a closed polyline has no end to lengthen from.");
+      return false;
+    }
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    if (v1 - v0 < 2)
+      return false;
+    const size_t a0 = static_cast<size_t>(v0) * 3, a1 = static_cast<size_t>(v1 - 1) * 3;
+    if (a1 + 1 >= st.userPolylineVerts.size())
+      return false;
+    *outNearFirst = NearerToFirstPoint(pickX, pickY, st.userPolylineVerts[a0], st.userPolylineVerts[a0 + 1],
+                                       st.userPolylineVerts[a1], st.userPolylineVerts[a1 + 1]);
+    *outCurLen = PolylineOpenLengthOf(st, pi);
+    return true;
+  }
+  case SelectedEntity::Type::Circle:
+    log.push_back(std::string(cmdName) + " — 1 circle ignored: a circle has no end to lengthen from. Pick a line, "
+                  "open polyline, or arc.");
+    return false;
+  case SelectedEntity::Type::Ellipse:
+    log.push_back(std::string(cmdName) + " — 1 ellipse ignored: every ellipse in this drawing is a full closed "
+                  "curve with no end. Pick a line, open polyline, or arc.");
+    return false;
+  default:
+    log.push_back(std::string(cmdName) + " — 1 object ignored: only a line, open polyline, or arc can be "
+                  "lengthened.");
+    return false;
+  }
+}
+
+// ============================================================================================
+// EXTEND (REQ-103 step 3). Boundary intersection is analytic (curveisect, REQ-062's already-
+// shipped library), not tessellated like TRIM's own cutting-edge math — REQ-062's own acceptance
+// text already settled that "a tessellated approximation does not satisfy REQ-101 and is not
+// acceptable" (D-2026-08-24-b). The actual geometry mutation is 100% reused from
+// ApplyLengthenToLine/ToArc/ToPolylineEnd — EXTEND's only new code is finding the nearest valid
+// boundary hit ahead of the current endpoint and converting it into the same `newLength` currency
+// those functions already consume.
+// ============================================================================================
+
+/// Appends `e`'s geometry (from the MODEL-space stores) as curveisect boundary shapes. One `Seg`
+/// per Line/Polyline edge, one `Conic` for Circle/Arc/Ellipse. No existing helper produces
+/// curveisect types from a SelectedEntity — TRIM's own `CollectCutSegments` produces raw
+/// tessellated floats, not analytic shapes — so this is new, and (like LENGTHEN's length/endpoint
+/// functions) written for reuse by BREAK/FILLET (steps 4/6).
+static void AppendModelBoundaryShapes(const AppCommandState& st, const SelectedEntity& e,
+                                      std::vector<curveisect::Seg>* segs, std::vector<curveisect::Conic>* conics) {
+  using T = SelectedEntity::Type;
+  if (e.type == T::LineSeg) {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return;
+    segs->push_back({{st.userLinesFlat[k], st.userLinesFlat[k + 1]},
+                     {st.userLinesFlat[k + 3], st.userLinesFlat[k + 4]}});
+  } else if (e.type == T::Circle) {
+    const size_t k = static_cast<size_t>(e.index) * 4;
+    if (k + 3 >= st.userCirclesCxCyZR.size())
+      return;
+    conics->push_back(curveisect::MakeCircle(st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1],
+                                             st.userCirclesCxCyZR[k + 3]));
+  } else if (e.type == T::Arc) {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      return;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    conics->push_back(curveisect::MakeArc(a.cx, a.cy, a.r, a.startRad, a.sweepRad));
+  } else if (e.type == T::Ellipse) {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userEllipses.size())
+      return;
+    const CadEllipse& el = st.userEllipses[static_cast<size_t>(e.index)];
+    conics->push_back(curveisect::MakeEllipse(el.cx, el.cy, el.majVx, el.majVy, el.ratio));
+  } else if (e.type == T::Polyline) {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+      return;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    for (int vi = v0; vi + 1 < v1; ++vi) {
+      const size_t a = static_cast<size_t>(vi) * 3, b = static_cast<size_t>(vi + 1) * 3;
+      if (b + 1 >= st.userPolylineVerts.size())
+        break;
+      segs->push_back({{st.userPolylineVerts[a], st.userPolylineVerts[a + 1]},
+                       {st.userPolylineVerts[b], st.userPolylineVerts[b + 1]}});
+    }
+    if (static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)] &&
+        v1 - v0 >= 2) {
+      const size_t a = static_cast<size_t>(v1 - 1) * 3, b = static_cast<size_t>(v0) * 3;
+      segs->push_back({{st.userPolylineVerts[a], st.userPolylineVerts[a + 1]},
+                       {st.userPolylineVerts[b], st.userPolylineVerts[b + 1]}});
+    }
+  }
+  // Annotation/FeatureLine/Surface/Mesh/PdfUnderlay/FilledRegion are refused before this is
+  // called (REQ-201) — matches TRIM's own boundary-edge refusal set.
+}
+
+/// Storage-agnostic: finds the nearest point along the ray from (fixedX,fixedY) through
+/// (movingX,movingY) — and beyond — that crosses one of the given boundary shapes, strictly beyond
+/// the current moving point. `curveisect` has no infinite-ray primitive (confirmed by research —
+/// every function clamps to [0,1]/sweep-containment), so the "ray" is a deliberately long finite
+/// query Seg fed into the existing IntersectSegSeg/IntersectSegConic unchanged, rather than adding
+/// a new ray family to a shared library for this one caller. Returns the new total distance from
+/// the fixed point via \p outNewLength — the same currency ApplyLengthenToLine/ToPolylineEnd
+/// already consume, so the caller just calls them with it.
+static bool FindExtendLineTarget(const std::vector<curveisect::Seg>& segs, const std::vector<curveisect::Conic>& conics,
+                                 float fixedX, float fixedY, float movingX, float movingY, float* outNewLength) {
+  const float dx = movingX - fixedX, dy = movingY - fixedY;
+  const float curLen = std::hypot(dx, dy);
+  if (curLen < 1e-9f)
+    return false;
+  const float ux = dx / curLen, uy = dy / curLen;
+  constexpr float kExtendLen = 1.0e6f;  // generous relative to any real drawing's coordinate range
+  const curveisect::Seg query{{fixedX, fixedY}, {fixedX + ux * kExtendLen, fixedY + uy * kExtendLen}};
+  const float curT = curLen / kExtendLen;
+  constexpr float kEpsT = 1e-7f;
+  bool found = false;
+  float bestT = 0.f;
+  std::vector<curveisect::Hit2> hits;
+  for (const auto& s : segs) {
+    hits.clear();
+    curveisect::IntersectSegSeg(query, s, &hits);
+    for (const auto& h : hits) {
+      const float t = static_cast<float>(h.tA);
+      if (t > curT + kEpsT && (!found || t < bestT)) {
+        found = true;
+        bestT = t;
+      }
+    }
+  }
+  for (const auto& c : conics) {
+    hits.clear();
+    curveisect::IntersectSegConic(query, c, &hits);
+    for (const auto& h : hits) {
+      const float t = static_cast<float>(h.tA);
+      if (t > curT + kEpsT && (!found || t < bestT)) {
+        found = true;
+        bestT = t;
+      }
+    }
+  }
+  if (!found)
+    return false;
+  *outNewLength = bestT * kExtendLen;
+  return true;
+}
+
+/// Storage-agnostic Arc equivalent. Queries the target's FULL circle (`MakeCircle`, not `MakeArc`
+/// — a hit beyond the current sweep must not be filtered out) against the boundaries, then keeps
+/// only hits that extend the sweep in its own existing rotational direction past the current
+/// endpoint (CW arcs have negative `sweepRad`; extending the START moves it opposite the sweep's
+/// own sense, extending the END moves it the same sense — the exact rule
+/// `ApplyLengthenToArc` already applies). Returns the equivalent `newLength` for that function to
+/// consume directly, so the `startRad`/`sweepRad` update itself is never re-derived here.
+static bool FindExtendArcTarget(const std::vector<curveisect::Seg>& segs, const std::vector<curveisect::Conic>& conics,
+                                float cx, float cy, float r, float startRad, float sweepRad, bool nearFirst,
+                                float* outNewLength) {
+  if (r < 1e-6f)
+    return false;
+  const curveisect::Conic full = curveisect::MakeCircle(cx, cy, r);
+  const float reference = nearFirst ? startRad : (startRad + sweepRad);
+  const bool ccwExtend = nearFirst ? (sweepRad <= 0.f) : (sweepRad > 0.f);
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  constexpr float kEpsAngle = 1e-6f;
+  bool found = false;
+  float bestD = 0.f;
+  std::vector<curveisect::Hit2> hits;
+  auto consider = [&](double thetaD) {
+    const float theta = static_cast<float>(thetaD);
+    float d;
+    if (ccwExtend) {
+      d = std::fmod(theta - reference, kTwoPi);
+      if (d <= 0.f)
+        d += kTwoPi;
+    } else {
+      d = std::fmod(reference - theta, kTwoPi);
+      if (d <= 0.f)
+        d += kTwoPi;
+    }
+    if (d > kEpsAngle && (!found || d < bestD)) {
+      found = true;
+      bestD = d;
+    }
+  };
+  for (const auto& s : segs) {
+    hits.clear();
+    curveisect::IntersectSegConic(s, full, &hits);
+    for (const auto& h : hits)
+      consider(h.tB);
+  }
+  for (const auto& c : conics) {
+    hits.clear();
+    curveisect::IntersectConicConic(c, full, &hits);
+    for (const auto& h : hits)
+      consider(h.tB);
+  }
+  if (!found)
+    return false;
+  *outNewLength = r * (std::fabs(sweepRad) + bestD);
+  return true;
+}
+
+/// Resolves the current mode+value into one target length. Percent/Total need the entity's
+/// current length (`curLen`); DElta only needs its own typed value.
+static float LengthenResolveTargetLength(const AppCommandState& st, float curLen) {
+  switch (st.lengthenMode) {
+  case AppCommandState::LengthenMode::Delta:   return curLen + st.lengthenDeltaValue;
+  case AppCommandState::LengthenMode::Percent: return curLen * (st.lengthenPercentValue / 100.f);
+  case AppCommandState::LengthenMode::Total:   return st.lengthenTotalValue;
+  case AppCommandState::LengthenMode::Dynamic: return curLen;  // unused — Dynamic resolves live, see HandleLengthenViewportPick
+  }
+  return curLen;
+}
+
+static const char* LengthenModeName(AppCommandState::LengthenMode m) {
+  using LM = AppCommandState::LengthenMode;
+  switch (m) {
+  case LM::Delta:   return "DElta";
+  case LM::Percent: return "Percent";
+  case LM::Total:   return "Total";
+  case LM::Dynamic: return "DYnamic";
+  }
+  return "DElta";
+}
+
+void StartLengthenCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // REQ-037-style paper routing
+    st.active = K::None;
+    st.paperLengthenPhase = 1;
+    log.push_back(std::string("LENGTHEN — click an object (mode: ") + LengthenModeName(st.lengthenMode) +
+                  (st.lengthenModeValueSet ? "). Esc cancels." :
+                   "; no value set yet — type DE/P/T on the command line first). Esc cancels."));
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = K::Lengthen;
+  st.lastCommand = K::Lengthen;
+  st.lengthenPhase = AppCommandState::LengthenPhase::WaitSelectOrMode;
+  st.selBoxWaitingSecond = false;
+  log.push_back(std::string("LENGTHEN — select object, or [DElta/Percent/Total/DYnamic] <") +
+                LengthenModeName(st.lengthenMode) + ">. ESC cancels.");
+}
+
+static bool TryLengthenModeToggle(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+  using LM = AppCommandState::LengthenMode;
+  using LP = AppCommandState::LengthenPhase;
+  const std::string low = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(lineIn));
+  if (low == "de" || low == "delta") {
+    st.lengthenMode = LM::Delta;
+    st.lengthenPhase = LP::WaitDeltaValue;
+    log.push_back("LENGTHEN DElta — length to add (+) or subtract (-):");
+    return true;
+  }
+  if (low == "p" || low == "percent") {
+    st.lengthenMode = LM::Percent;
+    st.lengthenPhase = LP::WaitPercentValue;
+    log.push_back("LENGTHEN Percent — new length as a percentage of current (100 = unchanged):");
+    return true;
+  }
+  if (low == "t" || low == "total") {
+    st.lengthenMode = LM::Total;
+    st.lengthenPhase = LP::WaitTotalValue;
+    log.push_back("LENGTHEN Total — new total length:");
+    return true;
+  }
+  if (low == "dy" || low == "dynamic") {
+    st.lengthenMode = LM::Dynamic;
+    st.lengthenModeValueSet = true;  // Dynamic needs no typed value — it resolves from the drag
+    st.lengthenPhase = LP::WaitSelectOrMode;
+    log.push_back("LENGTHEN DYnamic — select object, then drag to the new length. ESC cancels.");
+    return true;
+  }
+  return false;
+}
+
+bool HandleLengthenText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+  std::string line = StringUtil::trimCopy(lineIn);
+  using LP = AppCommandState::LengthenPhase;
+  if (st.lengthenPhase == LP::WaitSelectOrMode) {
+    if (TryLengthenModeToggle(st, line, log))
+      return true;
+    // Anything else at this phase is not a point LENGTHEN accepts by typed coordinate — picking is
+    // viewport-only (there is no "type X,Y to select an object" convention anywhere in this
+    // codebase). An unrecognized line here is simply an unknown mode letter.
+    log.push_back("LENGTHEN — type DE, P, T, or DY to set the mode, or pick an object in the viewport.");
+    return false;
+  }
+  if (st.lengthenPhase == LP::WaitDeltaValue) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !std::isfinite(v)) {
+      log.push_back("LENGTHEN DElta — must be a finite number (may be negative).");
+      return false;
+    }
+    st.lengthenDeltaValue = v;
+    st.lengthenModeValueSet = true;
+    st.lengthenPhase = LP::WaitSelectOrMode;
+    log.push_back(std::string("LENGTHEN — select object, or [DElta/Percent/Total/DYnamic] <DElta ") +
+                  std::to_string(v) + ">. ESC cancels.");
+    return true;
+  }
+  if (st.lengthenPhase == LP::WaitPercentValue) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !(v > 0.f) || !std::isfinite(v)) {
+      log.push_back("LENGTHEN Percent — must be a positive finite number.");
+      return false;
+    }
+    st.lengthenPercentValue = v;
+    st.lengthenModeValueSet = true;
+    st.lengthenPhase = LP::WaitSelectOrMode;
+    log.push_back(std::string("LENGTHEN — select object, or [DElta/Percent/Total/DYnamic] <Percent ") +
+                  std::to_string(v) + ">. ESC cancels.");
+    return true;
+  }
+  if (st.lengthenPhase == LP::WaitTotalValue) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !(v > 0.f) || !std::isfinite(v)) {
+      log.push_back("LENGTHEN Total — must be a positive finite number.");
+      return false;
+    }
+    st.lengthenTotalValue = v;
+    st.lengthenModeValueSet = true;
+    st.lengthenPhase = LP::WaitSelectOrMode;
+    log.push_back(std::string("LENGTHEN — select object, or [DElta/Percent/Total/DYnamic] <Total ") +
+                  std::to_string(v) + ">. ESC cancels.");
+    return true;
+  }
+  if (st.lengthenPhase == LP::WaitDynamicTarget) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !(v > 0.f) || !std::isfinite(v)) {
+      log.push_back("LENGTHEN DYnamic — must be a positive finite new length, or click in the viewport.");
+      return false;
+    }
+    if (ApplyLengthenToEntity(st, st.lengthenPendingEntity, st.lengthenPendingNearFirst, v, log)) {
+      log.push_back("LENGTHEN — object updated.");
+      BumpCadGpuCache(st);
+    }
+    st.lengthenPhase = LP::WaitSelectOrMode;
+    return true;
+  }
+  return false;
+}
+
+/// DYnamic mode: resolves a live length from a cursor pick, projected onto the pending entity's
+/// own fixed extension direction — same non-mutating cursor-driven idiom as
+/// `CadOffsetAppendLivePreview`/`CadScalePreviewFactor`. Used by both the drag-commit below and
+/// (mirrored) by the live preview drawn in `TransformPreview.cpp` while the cursor moves.
+static bool LengthenDynamicTargetLength(const AppCommandState& st, float wx, float wy, float* outLen) {
+  const SelectedEntity& e = st.lengthenPendingEntity;
+  const bool nearFirst = st.lengthenPendingNearFirst;
+  switch (e.type) {
+  case SelectedEntity::Type::LineSeg: {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return false;
+    const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
+    const float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
+    const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
+    const float movingX = nearFirst ? x0 : x1, movingY = nearFirst ? y0 : y1;
+    const float dx = movingX - fixedX, dy = movingY - fixedY;
+    const float curLen = std::hypot(dx, dy);
+    if (curLen < 1e-9f)
+      return false;
+    const float ux = dx / curLen, uy = dy / curLen;
+    *outLen = std::max((wx - fixedX) * ux + (wy - fixedY) * uy, 1e-6f);
+    return true;
+  }
+  case SelectedEntity::Type::Polyline: {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+      return false;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    if (v1 - v0 < 2)
+      return false;
+    const int movingVi = nearFirst ? v0 : (v1 - 1);
+    const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
+    const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
+    if (mIdx + 1 >= st.userPolylineVerts.size() || fIdx + 1 >= st.userPolylineVerts.size())
+      return false;
+    const float fx = st.userPolylineVerts[fIdx], fy = st.userPolylineVerts[fIdx + 1];
+    const float mx = st.userPolylineVerts[mIdx], my = st.userPolylineVerts[mIdx + 1];
+    const float segLen = std::hypot(mx - fx, my - fy);
+    if (segLen < 1e-9f)
+      return false;
+    const float ux = (mx - fx) / segLen, uy = (my - fy) / segLen;
+    const float proj = (wx - fx) * ux + (wy - fy) * uy;
+    const float curTotal = PolylineOpenLengthOf(st, pi);
+    *outLen = std::max(curTotal - segLen + proj, 1e-6f);
+    return true;
+  }
+  case SelectedEntity::Type::Arc: {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      return false;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    if (a.r < 1e-6f)
+      return false;
+    const float pickAngle = std::atan2(wy - a.cy, wx - a.cx);
+    const float fixedAngle = nearFirst ? (a.startRad + a.sweepRad) : a.startRad;
+    // Bounded to a half-circle of drag range either way (NormalizeAngleRadMinusPiToPi) — a
+    // deliberately simple, directionally-honest live-preview approximation; a change larger than
+    // that is what Total mode's typed value is for.
+    const float delta = NormalizeAngleRadMinusPiToPi(pickAngle - fixedAngle);
+    *outLen = std::max(a.r * std::fabs(delta), 1e-6f);
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+
+/// Model-space + floating-model-space viewport-pick handler for LENGTHEN — called from
+/// SubmitViewportPickImpl, the exact site RECT's history warns a new command must not go missing
+/// from.
+void HandleLengthenViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  using LP = AppCommandState::LengthenPhase;
+  if (st.lengthenPhase == LP::WaitDynamicTarget) {
+    // The picked point IS the new position for the moving end — resolve it to a length along the
+    // entity's own fixed direction, then apply through the same choke point DElta/Percent/Total use.
+    float newLen = 0.f;
+    if (!LengthenDynamicTargetLength(st, wx, wy, &newLen)) {
+      log.push_back("LENGTHEN DYnamic — could not resolve a length from that pick; try again.");
+      return;
+    }
+    if (ApplyLengthenToEntity(st, st.lengthenPendingEntity, st.lengthenPendingNearFirst, newLen, log)) {
+      log.push_back("LENGTHEN — object updated.");
+      BumpCadGpuCache(st);
+    }
+    st.lengthenPhase = LP::WaitSelectOrMode;
+    return;
+  }
+  if (st.lengthenPhase != LP::WaitSelectOrMode)
+    return;
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+    log.push_back("LENGTHEN — nothing under cursor; try again.");
+    return;
+  }
+  bool nearFirst = false;
+  float curLen = 0.f;
+  if (!LengthenEligibility(st, hit, wx, wy, &nearFirst, &curLen, "LENGTHEN", log))
+    return;
+  if (st.lengthenMode == AppCommandState::LengthenMode::Dynamic) {
+    st.lengthenPendingEntity = hit;
+    st.lengthenPendingNearFirst = nearFirst;
+    st.lengthenPendingCurrentLength = curLen;
+    st.lengthenPhase = LP::WaitDynamicTarget;
+    log.push_back("LENGTHEN DYnamic — drag to the new length, or type it:");
+    return;
+  }
+  if (!st.lengthenModeValueSet) {
+    log.push_back(std::string("LENGTHEN — no ") + LengthenModeName(st.lengthenMode) +
+                  " value set yet; type DE/P/T first.");
+    return;
+  }
+  const float newLen = LengthenResolveTargetLength(st, curLen);
+  if (ApplyLengthenToEntity(st, hit, nearFirst, newLen, log)) {
+    log.push_back("LENGTHEN — length " + std::to_string(curLen) + " -> " + std::to_string(newLen) + ".");
+    BumpCadGpuCache(st);
+  }
+  // Stays in WaitSelectOrMode — loop back for the next object, same shape as TRIM/OFFSET targets.
+}
+
+/// Model-space + floating-model-space viewport-pick handler for EXTEND — called from
+/// SubmitViewportPickImpl, the exact site RECT's history warns a new command must not go missing
+/// from. Boundary collection (SelectBoundaries) is TRIM's own cutting-edge flow, copy-adapted with
+/// EXTEND's own refusal wording; target extension (SelectTargets) reuses `LengthenEligibility` for
+/// eligibility/near-end/current-length, then `FindExtendLineTarget`/`FindExtendArcTarget` for the
+/// boundary hit, then `ApplyLengthenToEntity` — the exact TASK-095 mutation, unmodified — for the
+/// actual edit.
+void HandleExtendViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  using EP = AppCommandState::ExtendPhase;
+  if (st.extendPhase == EP::SelectBoundaries) {
+    SelectedEntity hit{};
+    float d2 = 0.f;
+    if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+      log.push_back("EXTEND — no object at pick.");
+      return;
+    }
+    if (hit.type == SelectedEntity::Type::Annotation) {
+      log.push_back("EXTEND — use a line, circle, arc, ellipse, or polyline as a boundary edge.");
+      return;
+    }
+    if (hit.type == SelectedEntity::Type::FeatureLine) {
+      log.push_back("EXTEND — 1 feature line ignored: a feature line cannot be a boundary edge. Use "
+                    "a line, circle, arc, ellipse, or polyline.");
+      return;
+    }
+    if (hit.type == SelectedEntity::Type::Surface) {
+      log.push_back("EXTEND — 1 surface ignored: a surface cannot be a boundary edge. Use a line, "
+                    "circle, arc, ellipse, or polyline.");
+      return;
+    }
+    for (const auto& c : st.extendBoundaries) {
+      if (c.type == hit.type && c.index == hit.index) {
+        log.push_back("EXTEND — already a boundary edge.");
+        return;
+      }
+    }
+    st.extendBoundaries.push_back(hit);
+    log.push_back("EXTEND — boundary edge added.");
+    return;
+  }
+
+  // SelectTargets.
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+    log.push_back("EXTEND — nothing under cursor; try again.");
+    return;
+  }
+  bool nearFirst = false;
+  float curLen = 0.f;
+  if (!LengthenEligibility(st, hit, wx, wy, &nearFirst, &curLen, "EXTEND", log))
+    return;
+
+  std::vector<curveisect::Seg> segs;
+  std::vector<curveisect::Conic> conics;
+  for (const auto& b : st.extendBoundaries)
+    AppendModelBoundaryShapes(st, b, &segs, &conics);
+
+  float newLen = 0.f;
+  bool found = false;
+  if (hit.type == SelectedEntity::Type::Arc) {
+    const CadArc& a = st.userArcs[static_cast<size_t>(hit.index)];
+    found = FindExtendArcTarget(segs, conics, a.cx, a.cy, a.r, a.startRad, a.sweepRad, nearFirst, &newLen);
+  } else if (hit.type == SelectedEntity::Type::LineSeg) {
+    const size_t k = static_cast<size_t>(hit.index) * 6;
+    const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
+    const float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
+    const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
+    const float movingX = nearFirst ? x0 : x1, movingY = nearFirst ? y0 : y1;
+    found = FindExtendLineTarget(segs, conics, fixedX, fixedY, movingX, movingY, &newLen);
+  } else {  // Polyline — ray-cast along the LOCAL last-segment's own direction (the two vertices
+            // ApplyLengthenToPolylineEnd itself extends between), not the whole polyline's global
+            // first-to-last chord: for a bent (3+ vertex) polyline those directions differ, and the
+            // chord would find a boundary hit that the actual per-segment mutation then misses.
+    const int pi = hit.index;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const int movingVi = nearFirst ? v0 : (v1 - 1);
+    const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
+    const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
+    const float fixedX = st.userPolylineVerts[fIdx], fixedY = st.userPolylineVerts[fIdx + 1];
+    const float movingX = st.userPolylineVerts[mIdx], movingY = st.userPolylineVerts[mIdx + 1];
+    const float segLen = std::hypot(movingX - fixedX, movingY - fixedY);
+    float newSegLen = 0.f;
+    found = FindExtendLineTarget(segs, conics, fixedX, fixedY, movingX, movingY, &newSegLen);
+    if (found)
+      newLen = curLen - segLen + newSegLen;  // curLen is the polyline's current TOTAL length
+                                              // (LengthenEligibility/PolylineOpenLengthOf) — the
+                                              // currency ApplyLengthenToPolylineEnd expects.
+  }
+  if (!found) {
+    log.push_back("EXTEND — 1 object does not reach a boundary edge in that direction.");
+    return;
+  }
+  if (ApplyLengthenToEntity(st, hit, nearFirst, newLen, log)) {
+    log.push_back("EXTEND — extended to the boundary.");
+    BumpCadGpuCache(st);
+  }
+  // Stays in SelectTargets — loop back for the next object, same shape as TRIM/OFFSET targets.
+}
+
+/// REQ-103 LENGTHEN, pure-paper-space path. Single-pick-apply, matching the paper click handler's
+/// own shape (CadUi.cpp) — same simplification MIRROR's paper path already documents: no mode/
+/// value prompt here, so this reuses whatever lengthenMode/lengthenDeltaValue/etc. the model-space
+/// command last configured, refusing rather than applying a stray default if none was ever set, or
+/// if the configured mode is Dynamic (which needs a two-step drag the paper click flow can't ask
+/// for a target through, the same text-entry gap MIRROR's paper path hits for its erase prompt).
+/// Shared by paper-space LENGTHEN and EXTEND (TASK-096) — both need "is this a length-bearing
+/// paper entity, and which end is nearest the pick", mirroring the model-space
+/// `LengthenEligibility` this same pair shares there. \p cmdName names the caller in refusal
+/// messages (REQ-201).
+static bool PaperLengthenEligibility(const PaperLayout& L, const PaperEntityRef& ref, float pickXIn, float pickYIn,
+                                     bool* outNearFirst, float* outCurLen, const char* cmdName,
+                                     std::vector<std::string>& log) {
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  switch (ref.type) {
+  case PaperEntityRef::Type::Line: {
+    const size_t k = static_cast<size_t>(ref.index) * 6;
+    if (k + 5 >= L.paperLines.size())
+      return false;
+    const float x0 = L.paperLines[k], y0 = L.paperLines[k + 1];
+    const float x1 = L.paperLines[k + 3], y1 = L.paperLines[k + 4];
+    *outNearFirst = NearerToFirstPoint(pickXIn, pickYIn, x0, y0, x1, y1);
+    *outCurLen = std::hypot(x1 - x0, y1 - y0);
+    return true;
+  }
+  case PaperEntityRef::Type::Arc: {
+    if (ref.index < 0 || static_cast<size_t>(ref.index) >= L.paperArcs.size())
+      return false;
+    const CadArc& a = L.paperArcs[static_cast<size_t>(ref.index)];
+    if (std::fabs(std::fabs(a.sweepRad) - kTwoPi) < 1e-4f) {
+      log.push_back(std::string(cmdName) + " — 1 full-circle arc ignored: a full circle has no end to lengthen from.");
+      return false;
+    }
+    const float sx = a.cx + a.r * std::cos(a.startRad), sy = a.cy + a.r * std::sin(a.startRad);
+    const float ex = a.cx + a.r * std::cos(a.startRad + a.sweepRad);
+    const float ey = a.cy + a.r * std::sin(a.startRad + a.sweepRad);
+    *outNearFirst = NearerToFirstPoint(pickXIn, pickYIn, sx, sy, ex, ey);
+    *outCurLen = ArcLengthOf(a.r, a.sweepRad);
+    return true;
+  }
+  case PaperEntityRef::Type::Polyline: {
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L.paperPolyOffsets.size())
+      return false;
+    if (static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)]) {
+      log.push_back(std::string(cmdName) + " — 1 closed polyline ignored: a closed polyline has no end to lengthen from.");
+      return false;
+    }
+    const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    if (v1 - v0 < 2)
+      return false;
+    const size_t a0 = static_cast<size_t>(v0) * 3, a1 = static_cast<size_t>(v1 - 1) * 3;
+    if (a1 + 1 >= L.paperPolyVerts.size())
+      return false;
+    *outNearFirst = NearerToFirstPoint(pickXIn, pickYIn, L.paperPolyVerts[a0], L.paperPolyVerts[a0 + 1],
+                                       L.paperPolyVerts[a1], L.paperPolyVerts[a1 + 1]);
+    float total = 0.f;
+    for (int vi = v0; vi + 1 < v1; ++vi) {
+      const size_t a = static_cast<size_t>(vi) * 3, b = static_cast<size_t>(vi + 1) * 3;
+      total += std::hypot(L.paperPolyVerts[b] - L.paperPolyVerts[a], L.paperPolyVerts[b + 1] - L.paperPolyVerts[a + 1]);
+    }
+    *outCurLen = total;
+    return true;
+  }
+  default:
+    log.push_back(std::string(cmdName) + " — only a line, open polyline, or arc can be lengthened.");
+    return false;
+  }
+}
+
+/// Shared mutation: moves the near end of paper entity `ref` so its length becomes `newLen`,
+/// holding the other end fixed — the paper-store equivalent of `ApplyLengthenToLine`/`ToArc`/
+/// `ToPolylineEnd`, used by both paper LENGTHEN and paper EXTEND so the Line/Arc/Polyline math
+/// exists exactly once for the paper store (as it already does for the model store).
+static void ApplyLengthToPaperEntityMutation(PaperLayout* L, const PaperEntityRef& ref, bool nearFirst, float curLen,
+                                             float newLen) {
+  switch (ref.type) {
+  case PaperEntityRef::Type::Line: {
+    const size_t k = static_cast<size_t>(ref.index) * 6;
+    const float x0 = L->paperLines[k], y0 = L->paperLines[k + 1];
+    const float x1 = L->paperLines[k + 3], y1 = L->paperLines[k + 4];
+    const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
+    const float movingX = nearFirst ? x0 : x1, movingY = nearFirst ? y0 : y1;
+    const float dx = movingX - fixedX, dy = movingY - fixedY;
+    const float ux = dx / curLen, uy = dy / curLen;
+    const float nx = fixedX + ux * newLen, ny = fixedY + uy * newLen;
+    if (nearFirst) { L->paperLines[k] = nx; L->paperLines[k + 1] = ny; }
+    else { L->paperLines[k + 3] = nx; L->paperLines[k + 4] = ny; }
+    break;
+  }
+  case PaperEntityRef::Type::Arc: {
+    CadArc& a = L->paperArcs[static_cast<size_t>(ref.index)];
+    const float newAbsSweep = newLen / a.r;
+    const float deltaTheta = std::copysign(newAbsSweep - std::fabs(a.sweepRad), a.sweepRad);
+    if (nearFirst) { a.startRad -= deltaTheta; a.sweepRad += deltaTheta; }
+    else { a.sweepRad += deltaTheta; }
+    break;
+  }
+  case PaperEntityRef::Type::Polyline: {
+    const int pi = ref.index;
+    const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const int movingVi = nearFirst ? v0 : (v1 - 1);
+    const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
+    const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
+    const float fx = L->paperPolyVerts[fIdx], fy = L->paperPolyVerts[fIdx + 1];
+    const float mx = L->paperPolyVerts[mIdx], my = L->paperPolyVerts[mIdx + 1];
+    const float segLen = std::hypot(mx - fx, my - fy);
+    const float newSegLen = std::max(segLen + (newLen - curLen), 1e-6f);
+    const float ux = (mx - fx) / std::max(segLen, 1e-9f), uy = (my - fy) / std::max(segLen, 1e-9f);
+    L->paperPolyVerts[mIdx] = fx + ux * newSegLen;
+    L->paperPolyVerts[mIdx + 1] = fy + uy * newSegLen;
+    break;
+  }
+  default:
+    break;
+  }
+}
+
+bool ApplyLengthenToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, float pickXIn, float pickYIn,
+                                std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L)
+    return false;
+  if (st.lengthenMode == AppCommandState::LengthenMode::Dynamic) {
+    log.push_back("LENGTHEN — DYnamic mode needs a live drag, which paper space does not offer a "
+                  "prompt for; switch to DElta/Percent/Total in model space first.");
+    return false;
+  }
+  if (!st.lengthenModeValueSet) {
+    log.push_back(std::string("LENGTHEN — no ") + LengthenModeName(st.lengthenMode) +
+                  " value set yet; type DE/P/T on the model-space command line first.");
+    return false;
+  }
+  bool nearFirst = false;
+  float curLen = 0.f;
+  if (!PaperLengthenEligibility(*L, ref, pickXIn, pickYIn, &nearFirst, &curLen, "LENGTHEN", log))
+    return false;
+
+  const float newLen = LengthenResolveTargetLength(st, curLen);
+  if (!(newLen > 1e-6f) || !std::isfinite(newLen)) {
+    log.push_back("LENGTHEN — that change would collapse the object to zero length; refused.");
+    return false;
+  }
+
+  PushUndoSnapshot(st, "Lengthen paper geometry");
+  ApplyLengthToPaperEntityMutation(L, ref, nearFirst, curLen, newLen);
+  BumpCadGpuCache(st);
+  log.push_back("LENGTHEN — paper object updated (" + std::to_string(curLen) + " -> " +
+                std::to_string(newLen) + ").");
+  return true;
+}
+
+/// Storage-agnostic geometry, mirroring `AppendModelBoundaryShapes` but reading `PaperLayout`'s
+/// stores instead of `AppCommandState`'s — unavoidable duplication given this codebase's two-store
+/// convention with no shared entity representation (the same duplication MIRROR's paper functions
+/// already accepted), feeding the SAME shared `FindExtendLineTarget`/`FindExtendArcTarget`.
+static void AppendPaperBoundaryShapes(const PaperLayout& L, const PaperEntityRef& ref,
+                                      std::vector<curveisect::Seg>* segs, std::vector<curveisect::Conic>* conics) {
+  using T = PaperEntityRef::Type;
+  if (ref.type == T::Line) {
+    const size_t k = static_cast<size_t>(ref.index) * 6;
+    if (k + 5 >= L.paperLines.size())
+      return;
+    segs->push_back({{L.paperLines[k], L.paperLines[k + 1]}, {L.paperLines[k + 3], L.paperLines[k + 4]}});
+  } else if (ref.type == T::Circle) {
+    const size_t k = static_cast<size_t>(ref.index) * 3;
+    if (k + 2 >= L.paperCircles.size())
+      return;
+    conics->push_back(curveisect::MakeCircle(L.paperCircles[k], L.paperCircles[k + 1], L.paperCircles[k + 2]));
+  } else if (ref.type == T::Arc) {
+    if (ref.index < 0 || static_cast<size_t>(ref.index) >= L.paperArcs.size())
+      return;
+    const CadArc& a = L.paperArcs[static_cast<size_t>(ref.index)];
+    conics->push_back(curveisect::MakeArc(a.cx, a.cy, a.r, a.startRad, a.sweepRad));
+  } else if (ref.type == T::Ellipse) {
+    if (ref.index < 0 || static_cast<size_t>(ref.index) >= L.paperEllipses.size())
+      return;
+    const CadEllipse& el = L.paperEllipses[static_cast<size_t>(ref.index)];
+    conics->push_back(curveisect::MakeEllipse(el.cx, el.cy, el.majVx, el.majVy, el.ratio));
+  } else if (ref.type == T::Polyline) {
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L.paperPolyOffsets.size())
+      return;
+    const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    for (int vi = v0; vi + 1 < v1; ++vi) {
+      const size_t a = static_cast<size_t>(vi) * 3, b = static_cast<size_t>(vi + 1) * 3;
+      if (b + 1 >= L.paperPolyVerts.size())
+        break;
+      segs->push_back({{L.paperPolyVerts[a], L.paperPolyVerts[a + 1]}, {L.paperPolyVerts[b], L.paperPolyVerts[b + 1]}});
+    }
+    if (static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)] && v1 - v0 >= 2) {
+      const size_t a = static_cast<size_t>(v1 - 1) * 3, b = static_cast<size_t>(v0) * 3;
+      segs->push_back({{L.paperPolyVerts[a], L.paperPolyVerts[a + 1]}, {L.paperPolyVerts[b], L.paperPolyVerts[b + 1]}});
+    }
+  }
+  // Text is refused before this is called (REQ-201) — paper's analogue of Annotation.
+}
+
+/// REQ-103 EXTEND, pure-paper-space path. Unlike LENGTHEN's paper path, EXTEND needs no typed
+/// value at all, so it is NOT simplified away — this mirrors the model-space
+/// `HandleExtendViewportPick`'s target-half exactly, against the paper store.
+bool ApplyExtendToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, float pickXIn, float pickYIn,
+                              std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L)
+    return false;
+  bool nearFirst = false;
+  float curLen = 0.f;
+  if (!PaperLengthenEligibility(*L, ref, pickXIn, pickYIn, &nearFirst, &curLen, "EXTEND", log))
+    return false;
+
+  std::vector<curveisect::Seg> segs;
+  std::vector<curveisect::Conic> conics;
+  for (const auto& b : st.paperExtendBoundaries)
+    AppendPaperBoundaryShapes(*L, b, &segs, &conics);
+
+  float newLen = 0.f;
+  bool found = false;
+  if (ref.type == PaperEntityRef::Type::Arc) {
+    const CadArc& a = L->paperArcs[static_cast<size_t>(ref.index)];
+    found = FindExtendArcTarget(segs, conics, a.cx, a.cy, a.r, a.startRad, a.sweepRad, nearFirst, &newLen);
+  } else if (ref.type == PaperEntityRef::Type::Line) {
+    const size_t k = static_cast<size_t>(ref.index) * 6;
+    const float x0 = L->paperLines[k], y0 = L->paperLines[k + 1];
+    const float x1 = L->paperLines[k + 3], y1 = L->paperLines[k + 4];
+    const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
+    const float movingX = nearFirst ? x0 : x1, movingY = nearFirst ? y0 : y1;
+    found = FindExtendLineTarget(segs, conics, fixedX, fixedY, movingX, movingY, &newLen);
+  } else {  // Polyline — LOCAL last-segment direction, matching model-space's own fix above and
+            // ApplyLengthToPaperEntityMutation's own fixedVi/movingVi (not the whole polyline's
+            // global first-to-last chord, which diverges from it once the polyline bends).
+    const int pi = ref.index;
+    const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const int movingVi = nearFirst ? v0 : (v1 - 1);
+    const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
+    const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
+    const float fixedX = L->paperPolyVerts[fIdx], fixedY = L->paperPolyVerts[fIdx + 1];
+    const float movingX = L->paperPolyVerts[mIdx], movingY = L->paperPolyVerts[mIdx + 1];
+    const float segLen = std::hypot(movingX - fixedX, movingY - fixedY);
+    float newSegLen = 0.f;
+    found = FindExtendLineTarget(segs, conics, fixedX, fixedY, movingX, movingY, &newSegLen);
+    if (found)
+      newLen = curLen - segLen + newSegLen;
+  }
+  if (!found) {
+    log.push_back("EXTEND — 1 object does not reach a boundary edge in that direction.");
+    return false;
+  }
+
+  PushUndoSnapshot(st, "Extend paper geometry");
+  ApplyLengthToPaperEntityMutation(L, ref, nearFirst, curLen, newLen);
+  BumpCadGpuCache(st);
+  log.push_back("EXTEND — paper object extended to the boundary.");
+  return true;
+}
+
 float MathAngleRadFromBearingCwNorthDeg(float bearingDegClockwiseFromNorth) {
   constexpr float kDegToRad = 0.01745329251994329577f;
   const float br = bearingDegClockwiseFromNorth * kDegToRad;
@@ -9355,6 +10592,57 @@ static void CadAnnotationPreviewScaled(const CadAnnotation& src, float bx, float
   }
 }
 
+/// REQ-103 MIRROR preview. Same shape as \c CadAnnotationPreviewRotated, reflecting instead of
+/// rotating — MIRRTEXT-off (D-2026-08-23-j): Text/Mtext insertion reflects, \c rotationRad is left
+/// untouched so the preview shows the same "stays upright" result the committed duplicate will have.
+static void CadAnnotationPreviewReflected(const CadAnnotation& src, float x0, float y0, float x1, float y1,
+                                          CadAnnotation* out) {
+  if (!out)
+    return;
+  *out = src;
+  CadAnnotation& a = *out;
+  if (a.kind == CadAnnotation::Kind::Text || a.kind == CadAnnotation::Kind::Mtext) {
+    ReflectPtAcrossLine(x0, y0, x1, y1, &a.insX, &a.insY);
+    if (a.kind == CadAnnotation::Kind::Mtext) {
+      float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
+      float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
+      float mnX = xs[0], mxX = xs[0], mnY = ys[0], mxY = ys[0];
+      for (int i = 0; i < 4; ++i) {
+        ReflectPtAcrossLine(x0, y0, x1, y1, &xs[i], &ys[i]);
+        mnX = std::min(mnX, xs[i]);
+        mxX = std::max(mxX, xs[i]);
+        mnY = std::min(mnY, ys[i]);
+        mxY = std::max(mxY, ys[i]);
+      }
+      a.boxMinX = mnX; a.boxMaxX = mxX; a.boxMinY = mnY; a.boxMaxY = mxY;
+      a.insX = mnX; a.insY = mnY;
+    }
+  } else if (a.kind == CadAnnotation::Kind::DimLinear) {
+    ReflectCadDimLinearAcrossLine(x0, y0, x1, y1, &a);
+  } else if (a.kind == CadAnnotation::Kind::DimAligned) {
+    ReflectPtAcrossLine(x0, y0, x1, y1, &a.insX, &a.insY);
+    ReflectPtAcrossLine(x0, y0, x1, y1, &a.dimExt1X, &a.dimExt1Y);
+    ReflectPtAcrossLine(x0, y0, x1, y1, &a.dimExt2X, &a.dimExt2Y);
+    float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+    if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+      a.rotationRad = std::atan2(ty, tx);
+  } else {
+    ReflectPtAcrossLine(x0, y0, x1, y1, &a.insX, &a.insY);
+    float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
+    float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
+    float mnX = xs[0], mxX = xs[0], mnY = ys[0], mxY = ys[0];
+    for (int i = 0; i < 4; ++i) {
+      ReflectPtAcrossLine(x0, y0, x1, y1, &xs[i], &ys[i]);
+      mnX = std::min(mnX, xs[i]);
+      mxX = std::max(mxX, xs[i]);
+      mnY = std::min(mnY, ys[i]);
+      mxY = std::max(mxY, ys[i]);
+    }
+    a.boxMinX = mnX; a.boxMaxX = mxX; a.boxMinY = mnY; a.boxMaxY = mxY;
+    a.insX = mnX; a.insY = mnY;
+  }
+}
+
 void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float curX, float curY,
                                            std::vector<CadAnnotation>* out) {
   if (!out)
@@ -9362,6 +10650,7 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
   out->clear();
   using K = AppCommandState::Kind;
   using MP = AppCommandState::ModifyPhase;
+  using MirP = AppCommandState::MirrorPhase;
   if ((cmd.active == K::Move || cmd.active == K::Copy) && cmd.modifyPhase == MP::NeedDestination) {
     const float dx = curX - cmd.modifyBaseX;
     const float dy = curY - cmd.modifyBaseY;
@@ -9405,6 +10694,24 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
     }
     return;
   }
+  if (cmd.active == K::Mirror && (cmd.mirrorPhase == MirP::NeedP2 || cmd.mirrorPhase == MirP::NeedEraseAnswer)) {
+    const float mx0 = cmd.mirrorP1X, my0 = cmd.mirrorP1Y;
+    const float mx1 = (cmd.mirrorPhase == MirP::NeedP2) ? curX : cmd.mirrorP2X;
+    const float my1 = (cmd.mirrorPhase == MirP::NeedP2) ? curY : cmd.mirrorP2Y;
+    for (const auto& e : cmd.selection) {
+      if (e.type != SelectedEntity::Type::Annotation)
+        continue;
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= cmd.cadAnnotations.size())
+        continue;
+      CadAnnotation p{};
+      CadAnnotationPreviewReflected(cmd.cadAnnotations[k], mx0, my0, mx1, my1, &p);
+      out->push_back(p);
+    }
+    return;
+  }
+  if (cmd.active != K::Rotate)
+    return;
   float theta = 0.f;
   if (!CadRotatePreviewTheta(cmd, curX, curY, &theta))
     return;
@@ -11879,6 +13186,7 @@ void ResetCadToolStateToIdle(AppCommandState& st) {
   ResetSegmentAngleLock(st);
   st.trimPhase = AppCommandState::TrimPhase::SelectCuttingEdges;
   st.trimCutters.clear();
+  st.extendBoundaries.clear();
   ResetAllCadDraftTools(st);
   ResetModifyRotateDraft(st);
   st.selBoxWaitingSecond = false;
@@ -12276,6 +13584,191 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     BumpCadGpuCache(st);
     log.push_back("Deleted " + std::to_string(nDel) + " object(s).");
   }
+}
+
+/// REQ-103 MIRROR erase-source step. The same per-store erase \c ExecuteDeleteSelection performs,
+/// minus its own \c PushUndoSnapshot — \c FinishMirrorCommand already pushed one snapshot for the
+/// whole mirror(+erase) operation, satisfying REQ-103's "one undo step" condition — and minus the
+/// FilledRegion/Mesh/Surface/PdfUnderlay blocks, which cannot appear here: by the time this runs,
+/// \c st.selection is what survived \c DuplicateCadSelectionReflected's exclusion filtering (those
+/// four kinds already stripped, with a logged reason).
+static void EraseMirroredSourceNoUndo(AppCommandState& st) {
+  std::set<int> lineIx, circIx, annIx, arcIx, ellIx, polyIx, flIx;
+  const size_t nLines = st.userLinesFlat.size() / 6;
+  const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
+  const size_t nAnn = st.cadAnnotations.size();
+  const size_t nArc = st.userArcs.size();
+  const size_t nEll = st.userEllipses.size();
+  const size_t nPoly = st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0;
+  const size_t nFl = st.featureLineOffsets.size() > 0 ? st.featureLineOffsets.size() - 1 : 0;
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 && static_cast<size_t>(e.index) < nLines)
+      lineIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::Circle && e.index >= 0 && static_cast<size_t>(e.index) < nCirc)
+      circIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::Annotation && e.index >= 0 && static_cast<size_t>(e.index) < nAnn)
+      annIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::Arc && e.index >= 0 && static_cast<size_t>(e.index) < nArc)
+      arcIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::Ellipse && e.index >= 0 && static_cast<size_t>(e.index) < nEll)
+      ellIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::Polyline && e.index >= 0 && static_cast<size_t>(e.index) < nPoly)
+      polyIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::FeatureLine && e.index >= 0 && static_cast<size_t>(e.index) < nFl)
+      flIx.insert(e.index);
+  }
+
+  std::vector<int> pv(polyIx.begin(), polyIx.end());
+  std::sort(pv.begin(), pv.end(), std::greater<int>());
+  for (int idx : pv)
+    ErasePolylineByIndex(st, idx);
+
+  std::vector<int> flv(flIx.begin(), flIx.end());
+  std::sort(flv.begin(), flv.end(), std::greater<int>());
+  for (int idx : flv)
+    EraseFeatureLineByIndex(st, idx);
+
+  std::vector<int> lv(lineIx.begin(), lineIx.end());
+  std::sort(lv.begin(), lv.end(), std::greater<int>());
+  for (int idx : lv) {
+    const size_t k = static_cast<size_t>(idx) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      continue;
+    st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(k),
+                           st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(k + 6));
+    if (static_cast<size_t>(idx) < st.userLineAttrs.size())
+      st.userLineAttrs.erase(st.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  std::vector<int> cv(circIx.begin(), circIx.end());
+  std::sort(cv.begin(), cv.end(), std::greater<int>());
+  for (int idx : cv) {
+    const size_t k = static_cast<size_t>(idx) * 4;
+    if (k + 3 >= st.userCirclesCxCyZR.size())
+      continue;
+    st.userCirclesCxCyZR.erase(st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k),
+                               st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k + 4));
+    if (static_cast<size_t>(idx) < st.userCircleAttrs.size())
+      st.userCircleAttrs.erase(st.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  std::vector<int> av(annIx.begin(), annIx.end());
+  std::sort(av.begin(), av.end(), std::greater<int>());
+  for (int idx : av)
+    EraseCadAnnotationAtIndex(st, static_cast<size_t>(idx));
+
+  std::vector<int> arv(arcIx.begin(), arcIx.end());
+  std::sort(arv.begin(), arv.end(), std::greater<int>());
+  for (int idx : arv) {
+    const size_t k = static_cast<size_t>(idx);
+    if (k >= st.userArcs.size())
+      continue;
+    st.userArcs.erase(st.userArcs.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (k < st.userArcAttrs.size())
+      st.userArcAttrs.erase(st.userArcAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  std::vector<int> ev(ellIx.begin(), ellIx.end());
+  std::sort(ev.begin(), ev.end(), std::greater<int>());
+  for (int idx : ev) {
+    const size_t k = static_cast<size_t>(idx);
+    if (k >= st.userEllipses.size())
+      continue;
+    st.userEllipses.erase(st.userEllipses.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (k < st.userEllAttrs.size())
+      st.userEllAttrs.erase(st.userEllAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  st.selection.clear();
+  AbortMtextGripInteraction(st);
+  ClearDimGripInteraction(st);
+  BumpCadGpuCache(st);
+}
+
+/// REQ-103 MIRROR erase-source step, survey-point half. Same loop \c DeleteSelectedSurveyPoints
+/// performs, minus its own \c PushUndoSnapshot (see \ref EraseMirroredSourceNoUndo).
+static void EraseSelectedSurveyPointsNoUndo(AppCommandState& st) {
+  std::vector<int> ix = st.selectedSurveyPointIndices;
+  std::sort(ix.begin(), ix.end(), std::greater<int>());
+  ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
+  for (int i : ix)
+    if (i >= 0 && static_cast<size_t>(i) < st.surveyPoints.size())
+      RemoveSurveyPointAt(st, static_cast<size_t>(i));
+  st.selectedSurveyPointIndices.clear();
+}
+
+/// REQ-103 MIRROR. \c eraseSource decides what happens to the PRE-mirror selection after the
+/// duplicate commits — MIRROR always duplicates first (ASSUMPTION-2, TASK-094 — the reverse of
+/// ROTATE/SCALE, where duplication is the opt-in "copy" mode and in-place is the default).
+static void FinishMirrorCommand(AppCommandState& st, float x0, float y0, float x1, float y1, bool eraseSource,
+                                std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  PushUndoSnapshot(st, eraseSource ? "Mirror-erase" : "Mirror");
+  const bool hadSurveySelection = !st.selectedSurveyPointIndices.empty();
+  DuplicateCadSelectionReflected(st, x0, y0, x1, y1, log);
+  // st.selection now holds exactly what was mirrored (exclusions already logged) — erase THAT, not
+  // the original selection, so an excluded Surface/hatch/underlay/mesh is left untouched either way.
+  if (eraseSource && !st.selection.empty())
+    EraseMirroredSourceNoUndo(st);
+  st.active = K::None;
+  ResetModifyRotateDraft(st);
+  if (hadSurveySelection) {
+    st.pendingSurveyDupIsMirror = true;
+    st.pendingMirrorX0 = x0;
+    st.pendingMirrorY0 = y0;
+    st.pendingMirrorX1 = x1;
+    st.pendingMirrorY1 = y1;
+    st.mirrorEraseSourcePending = eraseSource;
+    st.copySurveyDupModalOpen = true;
+    st.copySurveyDupModalOpenRequested = true;
+    log.push_back("MIRROR — CAD duplicated; choose survey ID policy.");
+  } else {
+    log.push_back(eraseSource ? "MIRROR complete (source erased)." : "MIRROR complete.");
+  }
+}
+
+bool HandleMirrorText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+  std::string line = StringUtil::trimCopy(lineIn);
+  using MP = AppCommandState::MirrorPhase;
+  if (st.mirrorPhase == MP::NeedP1) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
+      return false;
+    st.mirrorP1X = px;
+    st.mirrorP1Y = py;
+    st.mirrorPhase = MP::NeedP2;
+    log.push_back("MIRROR — specify second point of mirror line:");
+    return true;
+  }
+  if (st.mirrorPhase == MP::NeedP2) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
+      return false;
+    if (std::hypot(px - st.mirrorP1X, py - st.mirrorP1Y) < 1e-8f) {
+      log.push_back("MIRROR — mirror line needs two distinct points; try again.");
+      return false;
+    }
+    st.mirrorP2X = px;
+    st.mirrorP2Y = py;
+    st.mirrorPhase = MP::NeedEraseAnswer;
+    log.push_back("Erase source objects? [Yes/No] <N>:");
+    return true;
+  }
+  if (st.mirrorPhase == MP::NeedEraseAnswer) {
+    const std::string low = StringUtil::toLowerAsciiCopy(line);
+    bool eraseSource = false;
+    if (low.empty() || low == "n" || low == "no")
+      eraseSource = false;
+    else if (low == "y" || low == "yes")
+      eraseSource = true;
+    else {
+      log.push_back("MIRROR — answer Yes or No (Enter defaults to No).");
+      return false;
+    }
+    FinishMirrorCommand(st, st.mirrorP1X, st.mirrorP1Y, st.mirrorP2X, st.mirrorP2Y, eraseSource, log);
+    return true;
+  }
+  return false;
 }
 
 static bool SegSegIntersectParam(float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy,
@@ -14621,6 +16114,26 @@ void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
 }
 
+void StartExtendCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // paper routing (REQ-103 step 3)
+    st.active = K::None;
+    st.paperExtendPhase = 1;
+    st.paperExtendBoundaries.clear();
+    log.push_back("EXTEND — click a boundary edge (Enter when done picking edges). Esc cancels.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = K::Extend;
+  st.lastCommand = K::Extend;
+  st.extendPhase = AppCommandState::ExtendPhase::SelectBoundaries;
+  st.extendBoundaries.clear();
+  st.selBoxWaitingSecond = false;
+  log.push_back("EXTEND — pick boundary edges, Enter, then click objects to extend (near the end to "
+                "stretch). ESC cancels.");
+}
+
 void StartTrimStateCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
@@ -15514,6 +17027,32 @@ void StartScaleCommand(AppCommandState& st, std::vector<std::string>& log) {
         "two-point reference length then new length (type or two picks). ESC cancels.");
 }
 
+void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // REQ-037: mirror paper geometry
+    if (st.selectedPaperEntities.empty()) {
+      log.push_back("MIRROR — select paper object(s) first.");
+      return;
+    }
+    st.active = AppCommandState::Kind::None;  // paper-space edit ops are not a model command
+    st.paperMirrorPhase = 1;
+    log.push_back("MIRROR — click the first point of the mirror line (Esc to cancel).");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::Mirror;
+  st.lastCommand = AppCommandState::Kind::Mirror;
+  st.mirrorPhase = AppCommandState::MirrorPhase::PickSelection;
+  st.mirrorP1X = st.mirrorP1Y = st.mirrorP2X = st.mirrorP2Y = 0.f;
+  st.pendingSurveyDupIsMirror = false;
+  st.selBoxWaitingSecond = false;
+  if (!st.selection.empty() || !st.selectedSurveyPointIndices.empty()) {
+    st.mirrorPhase = AppCommandState::MirrorPhase::NeedP1;
+    log.push_back("MIRROR — specify first point of mirror line (click or type X,Y). ESC to cancel.");
+  } else
+    log.push_back("MIRROR — window-select (two clicks), then first and second point of the mirror line. ESC.");
+}
+
 void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.active == AppCommandState::Kind::None)
     return;
@@ -15555,6 +17094,12 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("ROTATE canceled.");
   else if (st.active == AppCommandState::Kind::Scale)
     log.push_back("SCALE canceled.");
+  else if (st.active == AppCommandState::Kind::Mirror)
+    log.push_back("MIRROR canceled.");
+  else if (st.active == AppCommandState::Kind::Lengthen)
+    log.push_back("LENGTHEN canceled.");
+  else if (st.active == AppCommandState::Kind::Extend)
+    log.push_back("EXTEND canceled.");
   else if (st.active == AppCommandState::Kind::Delete)
     log.push_back("DELETE canceled.");
   else if (st.active == AppCommandState::Kind::Join)
@@ -15601,6 +17146,7 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetSegmentAngleLock(st);
   st.trimPhase = AppCommandState::TrimPhase::SelectCuttingEdges;
   st.trimCutters.clear();
+  st.extendBoundaries.clear();
   ResetAllCadDraftTools(st);
   ResetModifyRotateDraft(st);
   st.selBoxWaitingSecond = false;
@@ -15619,13 +17165,22 @@ void ApplyCopySurveyDuplicateModalResult(AppCommandState& st, bool applySurveyDu
   st.copySurveyDupModalOpenRequested = false;
   const bool wasMirrorDup = st.pendingSurveyDupIsMirror;
   const bool wasRotateDup = st.pendingSurveyDupIsRotate;
+  const bool mirrorEraseSource = st.mirrorEraseSourcePending;
   st.pendingSurveyDupIsMirror = false;
   st.pendingSurveyDupIsRotate = false;
+  st.mirrorEraseSourcePending = false;
   if (applySurveyDup) {
-    if (wasMirrorDup)
+    if (wasMirrorDup) {
+      // The CAD-side erase already ran synchronously in FinishMirrorCommand; the survey-point half
+      // waits for this modal because the duplicate's id policy is a user choice. Erasing the
+      // ORIGINAL points only when the duplicate is actually applied (not on skip) — declining the
+      // duplicate is treated as declining the whole mirror-for-survey-points step, not "erase with
+      // nothing to replace it".
       DuplicateSelectedSurveyPointsReflected(st, st.pendingMirrorX0, st.pendingMirrorY0, st.pendingMirrorX1,
                                              st.pendingMirrorY1, st.copySurveyDuplicatePolicy, log);
-    else if (wasRotateDup)
+      if (mirrorEraseSource)
+        EraseSelectedSurveyPointsNoUndo(st);
+    } else if (wasRotateDup)
       DuplicateSelectedSurveyPointsRotated(st, st.pendingRotateCopyBx, st.pendingRotateCopyBy, st.pendingRotateCopyRad,
                                            st.copySurveyDuplicatePolicy, log);
     else
@@ -16018,6 +17573,21 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         st.trimCutters.clear();
         log.push_back("TRIM — finished.");
       }
+    } else if (st.active == K::Extend) {
+      using EP = AppCommandState::ExtendPhase;
+      if (st.extendPhase == EP::SelectBoundaries) {
+        if (st.extendBoundaries.empty())
+          log.push_back("EXTEND — pick at least one boundary edge before pressing Enter.");
+        else {
+          st.extendPhase = EP::SelectTargets;
+          log.push_back("EXTEND — click objects to extend (near the end to stretch). Enter when done.");
+        }
+      } else {
+        st.active = K::None;
+        st.extendPhase = EP::SelectBoundaries;
+        st.extendBoundaries.clear();
+        log.push_back("EXTEND — finished.");
+      }
     } else if (st.active == K::Offset) {
       using OP = AppCommandState::OffsetPhase;
       if (st.offsetPhase == OP::WaitDistanceOrThrough)
@@ -16043,6 +17613,23 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
                         "Pick SOURCE survey point 1 in drawing (snap to it).");
       } else {
         ExecuteAlignCommand(st, log);
+      }
+    } else if (st.active == K::Mirror) {
+      // A blank Enter is exactly how MIRROR's "Erase source objects? [Yes/No] <N>" prompt is meant
+      // to be answered (the documented default, D-2026-08-23-j) — but this whole block always
+      // `return`s below, so without this case the empty line would be swallowed here and never
+      // reach HandleMirrorText's own (identical) empty-string-defaults-to-No handling further down.
+      HandleMirrorText(st, "", log);
+    } else if (st.active == K::Lengthen) {
+      using LP = AppCommandState::LengthenPhase;
+      if (st.lengthenPhase == LP::WaitSelectOrMode) {
+        // Blank Enter at "select object" ends LENGTHEN — same convention TRIM's target-picking
+        // loop uses ("Enter when done"). Mode/value settings persist for the next invocation.
+        st.active = K::None;
+        ResetModifyRotateDraft(st);
+        log.push_back("LENGTHEN — finished.");
+      } else {
+        HandleLengthenText(st, "", log);
       }
     }
     return;
@@ -16708,6 +18295,22 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     log.push_back("Could not parse ROTATE input — see command hints.");
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Mirror) {
+    if (HandleMirrorText(st, line, log)) {
+      return;
+    }
+    log.push_back("Could not parse MIRROR input — see command hints.");
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Lengthen) {
+    if (HandleLengthenText(st, line, log)) {
+      return;
+    }
+    log.push_back("Could not parse LENGTHEN input — see command hints.");
     return;
   }
 
@@ -18338,6 +19941,9 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
     case K::Copy:       StartCopyCommand(st, log);       break;
     case K::Rotate:     StartRotateCommand(st, log);     break;
     case K::Scale:      StartScaleCommand(st, log);      break;
+    case K::Mirror:     StartMirrorCommand(st, log);     break;
+    case K::Lengthen:   StartLengthenCommand(st, log);   break;
+    case K::Extend:     StartExtendCommand(st, log);     break;
     case K::Delete:     StartDeleteCommand(st, log);     break;
     case K::Join:       StartJoinCommand(st, log);       break;
     case K::Trim:       StartTrimCommand(st, log);       break;

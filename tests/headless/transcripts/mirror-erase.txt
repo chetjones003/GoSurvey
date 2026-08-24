@@ -1,0 +1,56 @@
+# REQ-103 step 1 (TASK-094) — MIRROR, erase-source = Yes.
+#
+# Same setup as mirror-basic.txt, but answers the erase prompt Yes: the net result is only the
+# reflected geometry, the pre-mirror original is gone. LINES stays 1 before and after (a
+# duplicate was created, then the original erased), which is exactly why EXPECT LINES alone
+# cannot prove anything at the undo/redo checkpoints below — the count never moves. The
+# DIFFERENTFILE / SAMEFILE pair is the real oracle, comparing actual bytes (position, id),
+# not a count that stays flat throughout.
+#
+# See mirror-basic.txt for why this compares the FORWARD state (post-mirror) before undo against
+# the forward state again after undo+redo, rather than the pre-mirror state against a post-undo
+# state — the latter pair legitimately differs by `nextEntityId` alone (undo never rewinds it,
+# REQ-076), which would make SAMEFILE fail for a reason unrelated to correctness.
+#
+# Also exercises the FilledRegion/Mesh/PdfUnderlay/Surface exclusion path staying silent-safe when
+# none of those are in the selection — i.e. this transcript's selection is line-only on purpose,
+# so REQ-201's excluded-and-logged behavior is exercised by mirror-basic's plain case rather than
+# conflated here with the erase assertion.
+
+NEW
+
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+
+CHECK ALL
+EXPECT LINES 1
+
+BOX -10 -10 110 10
+EXPECT SELECTED 1
+
+CMD MIRROR
+CMD 0,50
+CMD 100,50
+CMD Y
+
+EXPECT LOG "MIRROR complete (source erased)."
+EXPECT LINES 1
+CHECK ALL
+
+SAVEAS %OUT%/mirror-erase-fwd-a.gs
+
+UNDO
+EXPECT LINES 1
+CHECK ALL
+
+SAVEAS %OUT%/mirror-erase-undo.gs
+EXPECT DIFFERENTFILE %OUT%/mirror-erase-fwd-a.gs %OUT%/mirror-erase-undo.gs
+
+REDO
+EXPECT LINES 1
+CHECK ALL
+
+SAVEAS %OUT%/mirror-erase-fwd-b.gs
+EXPECT SAMEFILE %OUT%/mirror-erase-fwd-a.gs %OUT%/mirror-erase-fwd-b.gs

@@ -518,6 +518,18 @@ void TranslateSelectedPaperEntities(AppCommandState& st, float dxIn, float dyIn,
                                     std::vector<std::string>& log);
 void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, float angRad,
                                  std::vector<std::string>& log);
+/// REQ-103 MIRROR, pure-paper-space path. Always duplicates and keeps the source (see the
+/// definition's comment for why there is no erase-source toggle here).
+void MirrorSelectedPaperEntities(AppCommandState& st, float x0In, float y0In, float x1In, float y1In,
+                                 std::vector<std::string>& log);
+/// REQ-103 LENGTHEN, pure-paper-space path. Single pick, single apply (no erase/duplicate step) —
+/// see the definition's comment for the mode/value simplification.
+bool ApplyLengthenToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, float pickXIn, float pickYIn,
+                                std::vector<std::string>& log);
+/// REQ-103 EXTEND, pure-paper-space path — unlike LENGTHEN's, needs no typed value, so it is built
+/// (not simplified away) as a real two-phase pick flow; see `paperExtendPhase`'s comment.
+bool ApplyExtendToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, float pickXIn, float pickYIn,
+                              std::vector<std::string>& log);
 /// Enter floating model space for viewport \p vpIdx of layout \p layoutIdx (edit the model through it).
 void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std::vector<std::string>& log);
 /// Save the floating view back to the viewport and return to paper space.
@@ -557,6 +569,14 @@ struct AppCommandState {
     /// behavior duplicates-then-reflects (source kept); an "Erase source objects?" prompt lets the
     /// user opt into replacing the source instead, mirroring AutoCAD's own default.
     Mirror,
+    /// LENGTHEN: change a Line/open-Polyline/non-full-circle-Arc's length at the end nearest each
+    /// pick, by DElta / Percent / Total / DYnamic (REQ-103 step 2). One entity per pick, loops back
+    /// to "select object" until Enter/Esc — TRIM/OFFSET's target-picking shape, not a selection.
+    Lengthen,
+    /// EXTEND: select boundary edges, then stretch a Line/open-Polyline/non-full-circle-Arc's end
+    /// nearest each pick out to the nearest boundary (REQ-103 step 3) — TRIM's direct inverse,
+    /// copy-adapting its boundary-edge-selection shape (own state, not shared code).
+    Extend,
     Delete,
     Zoom,
     Join,
@@ -616,6 +636,8 @@ struct AppCommandState {
     case Kind::Rotate:        return "ROTATE";
     case Kind::Scale:         return "SCALE";
     case Kind::Mirror:        return "MIRROR";
+    case Kind::Lengthen:      return "LENGTHEN";
+    case Kind::Extend:        return "EXTEND";
     case Kind::Delete:        return "DELETE";
     case Kind::Zoom:          return "ZOOM";
     case Kind::Join:          return "JOIN";
@@ -1591,6 +1613,46 @@ struct AppCommandState {
   /// translation/rotation. Checked ahead of \ref pendingSurveyDupIsRotate.
   bool pendingSurveyDupIsMirror = false;
   float pendingMirrorX0 = 0.f, pendingMirrorY0 = 0.f, pendingMirrorX1 = 0.f, pendingMirrorY1 = 0.f;
+  /// MIRROR erase-source, survey half: the CAD-side erase already ran (or didn't) synchronously in
+  /// \c FinishMirrorCommand; this says whether the ORIGINAL survey points selected must also be
+  /// removed once the duplicate-policy modal resolves (the duplicate itself is necessarily deferred
+  /// — the modal decides its id policy — but "erase the source" is not, so it is applied here rather
+  /// than left racing the modal).
+  bool mirrorEraseSourcePending = false;
+
+  // --- LENGTHEN (REQ-103 step 2) ---
+  enum class LengthenMode { Delta, Percent, Total, Dynamic } lengthenMode = LengthenMode::Delta;
+  enum class LengthenPhase {
+    WaitSelectOrMode,  ///< pick an object (applies current mode+value), or type DE/P/T/DY to (re)set the mode
+    WaitDeltaValue,    ///< typed signed length to add/subtract
+    WaitPercentValue,  ///< typed percentage of current length (100 = unchanged)
+    WaitTotalValue,    ///< typed total length
+    WaitDynamicTarget, ///< object picked in Dynamic mode; waiting for the new-length pick/type
+  } lengthenPhase = LengthenPhase::WaitSelectOrMode;
+  float lengthenDeltaValue = 0.f;
+  float lengthenPercentValue = 100.f;
+  float lengthenTotalValue = 0.f;
+  /// Whether a value has ever been set for the CURRENT \ref lengthenMode this session — a bare pick
+  /// at \c WaitSelectOrMode before any mode value exists is refused with a prompt to type one first,
+  /// rather than silently applying a stray default (REQ-201).
+  bool lengthenModeValueSet = false;
+  /// Dynamic mode: the object picked at \ref LengthenPhase::WaitDynamicTarget, and which of its two
+  /// stored endpoints is nearest that pick — true selects the FIRST endpoint in storage order
+  /// (a Line's (x0,y0); an Arc's start angle; a Polyline's first vertex in its range), false the
+  /// second. One bool covers all three entity kinds because each already orders its two ends the
+  /// same "first/second in storage" way.
+  SelectedEntity lengthenPendingEntity{};
+  bool lengthenPendingNearFirst = false;
+  float lengthenPendingCurrentLength = 0.f;
+
+  // --- EXTEND (REQ-103 step 3) ---
+  enum class ExtendPhase {
+    SelectBoundaries, ///< picking boundary edges; Enter (needs >=1) advances to SelectTargets
+    SelectTargets,    ///< picking objects to extend, one per click, loops until Enter/Esc
+  } extendPhase = ExtendPhase::SelectBoundaries;
+  /// Boundary edges picked so far — read as a selection while being picked (TRIM's own precedent
+  /// for `trimCutters`, copy-adapted rather than shared).
+  std::vector<SelectedEntity> extendBoundaries;
 
   // --- Survey / COGO points (in-memory database; optional JSON file) ---
   std::vector<SurveyPoint> surveyPoints;
@@ -1995,6 +2057,25 @@ struct AppCommandState {
   int   paperRotatePhase = 0;
   float paperRotateBaseXIn = 0.f;
   float paperRotateBaseYIn = 0.f;
+  // Paper-space MIRROR of selected paper entities (REQ-103): 0 idle, 1 need first mirror-line point,
+  // 2 need second point (commits immediately — no erase-source prompt in paper space; see
+  // MirrorSelectedPaperEntities's comment).
+  int   paperMirrorPhase = 0;
+  float paperMirrorP1XIn = 0.f;
+  float paperMirrorP1YIn = 0.f;
+  // Paper-space LENGTHEN of native paper entities (REQ-103): 0 idle, 1 waiting to pick the next
+  // object. No mode/value prompt here — the pure-paper click flow has no text-entry surface (same
+  // limitation MIRROR's paper path documents), so paper-space LENGTHEN reuses whatever
+  // lengthenMode/lengthenDeltaValue/etc. was last configured through the model-space command; a
+  // pick before any value has ever been set is refused with a message rather than applying 0.
+  int   paperLengthenPhase = 0;
+  // Paper-space EXTEND of native paper entities (REQ-103 step 3, TASK-096): 0 idle, 1 collecting
+  // boundary edges, 2 picking targets. Unlike MIRROR/LENGTHEN's paper paths, EXTEND needs no typed
+  // value at all — only two rounds of clicking — so it is NOT simplified away; the Enter key
+  // (checked alongside the existing Escape handling in the same paper-click block) advances phase
+  // 1->2, the same "done picking edges" signal model-space TRIM/EXTEND get from a real Enter.
+  int   paperExtendPhase = 0;
+  std::vector<PaperEntityRef> paperExtendBoundaries;
   // Floating model space (REQ-036): edit the model IN PLACE through a viewport. The active space stays
   // the paper layout (sheet + viewports stay visible); model edit/snap/draw is routed through the viewport.
   int    floatingViewportLayout = -1;   ///< paper layout of the floating viewport, or -1 if not floating.
@@ -2711,6 +2792,17 @@ void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartScaleCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartLengthenCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Model-space + floating-model-space viewport-pick handler for LENGTHEN. Non-static (unlike most
+/// of its cluster) purely so SubmitViewportPickImpl — inside an anonymous namespace that spans
+/// this function's definition — can see it via this header; not intended for cross-TU use.
+void HandleLengthenViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+void StartExtendCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Model-space + floating-model-space viewport-pick handler for EXTEND. Non-static (unlike most of
+/// its cluster) for the same anonymous-namespace/global-scope reason `HandleLengthenViewportPick`
+/// is — `SubmitViewportPickImpl` needs to see it via this header.
+void HandleExtendViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartQuickSelectCommand(AppCommandState& st, std::vector<std::string>& log);

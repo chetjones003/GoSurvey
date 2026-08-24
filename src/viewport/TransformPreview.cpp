@@ -23,6 +23,30 @@ void scalePreviewPt(float baseX, float baseY, float scale, float* inOutX, float*
   *inOutY = baseY + scale * (*inOutY - baseY);
 }
 
+/// REQ-103 MIRROR. Reflects (*inOutX,*inOutY) across the line through (x0,y0)-(x1,y1). Kept local
+/// to this translation unit rather than shared with CadCommands.cpp's identical
+/// \c ReflectPtAcrossLine — the same reason \c rotatePreviewPt above duplicates
+/// \c RotateAroundBase instead of linking it: this file previews, it does not commit, and the two
+/// must never accidentally share mutable state across a TU boundary.
+void mirrorPreviewPt(float x0, float y0, float x1, float y1, float* inOutX, float* inOutY) {
+  const float dx = x1 - x0;
+  const float dy = y1 - y0;
+  const float len2 = dx * dx + dy * dy;
+  if (len2 < 1e-12f)
+    return;
+  const float t = ((*inOutX - x0) * dx + (*inOutY - y0) * dy) / len2;
+  const float px = x0 + t * dx;
+  const float py = y0 + t * dy;
+  *inOutX = 2.f * px - *inOutX;
+  *inOutY = 2.f * py - *inOutY;
+}
+
+/// See \c ReflectAngleAcrossLine in CadCommands.cpp — same formula, same reason for the duplicate.
+float mirrorPreviewAngle(float x0, float y0, float x1, float y1, float angle) {
+  const float phi = std::atan2(y1 - y0, x1 - x0);
+  return 2.f * phi - angle;
+}
+
 // Preview curves must be tessellated the way the renderer tessellates the committed ones, or the preview
 // is a visibly different size from the object it previews. These mirror ViewportRenderer's segment counts
 // (and its 8 / 16 floors); when the view is unknown they fall back to the old fixed counts.
@@ -134,6 +158,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
   using K = AppCommandState::Kind;
   using MP = AppCommandState::ModifyPhase;
   using OP = AppCommandState::OffsetPhase;
+  using MirP = AppCommandState::MirrorPhase;
 
   if (cmd.active == K::Offset && cmd.offsetEntityValid &&
       (cmd.offsetPhase == OP::WaitDistanceOrThrough || cmd.offsetPhase == OP::WaitSidePick)) {
@@ -389,6 +414,194 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     return;
   }
 
+  if (cmd.active == K::Mirror) {
+    if (cmd.mirrorPhase != MirP::NeedP2 && cmd.mirrorPhase != MirP::NeedEraseAnswer)
+      return;
+    const float x0 = cmd.mirrorP1X, y0 = cmd.mirrorP1Y;
+    const float x1 = (cmd.mirrorPhase == MirP::NeedP2) ? curX : cmd.mirrorP2X;
+    const float y1 = (cmd.mirrorPhase == MirP::NeedP2) ? curY : cmd.mirrorP2Y;
+    // The mirror line itself, so the user sees what they are reflecting across — same rubber-line
+    // convention SCALE uses for its reference/new-length segments above.
+    prevLines->push_back(x0);
+    prevLines->push_back(y0);
+    prevLines->push_back(CadCommitElevation(cmd));
+    prevLines->push_back(x1);
+    prevLines->push_back(y1);
+    prevLines->push_back(CadCommitElevation(cmd));
+
+    for (const auto& e : cmd.selection) {
+      if (e.type == SelectedEntity::Type::LineSeg) {
+        const size_t k = static_cast<size_t>(e.index) * 6;
+        if (k + 5 >= cmd.userLinesFlat.size())
+          continue;
+        for (int i = 0; i < 2; ++i) {
+          float x = cmd.userLinesFlat[k + i * 3];
+          float y = cmd.userLinesFlat[k + i * 3 + 1];
+          mirrorPreviewPt(x0, y0, x1, y1, &x, &y);
+          prevLines->push_back(x);
+          prevLines->push_back(y);
+          prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
+        }
+      } else if (e.type == SelectedEntity::Type::Circle) {
+        const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
+        if (k + 3 >= cmd.userCirclesCxCyZR.size())
+          continue;
+        float x = cmd.userCirclesCxCyZR[k];
+        float y = cmd.userCirclesCxCyZR[k + 1];
+        mirrorPreviewPt(x0, y0, x1, y1, &x, &y);
+        prevCircles->push_back(x);
+        prevCircles->push_back(y);
+        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);
+        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);  // radius preserved (isometry)
+      } else if (e.type == SelectedEntity::Type::Arc) {
+        const size_t k = static_cast<size_t>(e.index);
+        if (k >= cmd.userArcs.size())
+          continue;
+        CadArc a = cmd.userArcs[k];
+        // Same reflect-the-old-end-angle-into-the-new-start rule as the committed path
+        // (CadCommands.cpp's DuplicateCadSelectionReflected) — a reflection reverses handedness.
+        const float newStart = mirrorPreviewAngle(x0, y0, x1, y1, a.startRad + a.sweepRad);
+        mirrorPreviewPt(x0, y0, x1, y1, &a.cx, &a.cy);
+        a.startRad = newStart;
+        appendArcPolylineStrip(prevLines, a.z, a, 48);
+      } else if (e.type == SelectedEntity::Type::Ellipse) {
+        const size_t k = static_cast<size_t>(e.index);
+        if (k >= cmd.userEllipses.size())
+          continue;
+        CadEllipse el = cmd.userEllipses[k];
+        float mx = el.cx + el.majVx;
+        float my = el.cy + el.majVy;
+        mirrorPreviewPt(x0, y0, x1, y1, &el.cx, &el.cy);
+        mirrorPreviewPt(x0, y0, x1, y1, &mx, &my);
+        el.majVx = mx - el.cx;
+        el.majVy = my - el.cy;
+        appendEllipsePolylineStrip(prevLines, el.z, el, 56);
+      } else if (e.type == SelectedEntity::Type::Polyline) {
+        const int pi = e.index;
+        if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+          continue;
+        const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
+        const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+        const bool closed =
+            static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+        for (int vi = v0; vi + 1 < v1; ++vi) {
+          float px0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3)];
+          float py0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
+          float px1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
+          float py1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
+          mirrorPreviewPt(x0, y0, x1, y1, &px0, &py0);
+          mirrorPreviewPt(x0, y0, x1, y1, &px1, &py1);
+          prevLines->push_back(px0);
+          prevLines->push_back(py0);
+          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
+          prevLines->push_back(px1);
+          prevLines->push_back(py1);
+          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
+        }
+        if (closed && v1 - v0 >= 2) {
+          float px0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
+          float py0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)];
+          float px1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3)];
+          float py1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)];
+          mirrorPreviewPt(x0, y0, x1, y1, &px0, &py0);
+          mirrorPreviewPt(x0, y0, x1, y1, &px1, &py1);
+          prevLines->push_back(px0);
+          prevLines->push_back(py0);
+          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
+          prevLines->push_back(px1);
+          prevLines->push_back(py1);
+          prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]);
+        }
+      }
+    }
+    appendSelectedFeatureLinePreview(  // REQ-087
+        prevLines, cmd, [&](float* x, float* y) { mirrorPreviewPt(x0, y0, x1, y1, x, y); });
+    return;
+  }
+
+  if (cmd.active == K::Lengthen) {
+    using LenP = AppCommandState::LengthenPhase;
+    if (cmd.lengthenPhase != LenP::WaitDynamicTarget)
+      return;
+    const SelectedEntity& e = cmd.lengthenPendingEntity;
+    const bool nearFirst = cmd.lengthenPendingNearFirst;
+    if (e.type == SelectedEntity::Type::LineSeg) {
+      const size_t k = static_cast<size_t>(e.index) * 6;
+      if (k + 5 >= cmd.userLinesFlat.size())
+        return;
+      const float x0 = cmd.userLinesFlat[k], y0 = cmd.userLinesFlat[k + 1], z0 = cmd.userLinesFlat[k + 2];
+      const float x1 = cmd.userLinesFlat[k + 3], y1 = cmd.userLinesFlat[k + 4], z1 = cmd.userLinesFlat[k + 5];
+      const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0, fixedZ = nearFirst ? z1 : z0;
+      const float movingZ = nearFirst ? z0 : z1;
+      const float dx = (nearFirst ? x0 : x1) - fixedX, dy = (nearFirst ? y0 : y1) - fixedY;
+      const float curLen = std::hypot(dx, dy);
+      if (curLen < 1e-9f)
+        return;
+      const float ux = dx / curLen, uy = dy / curLen;
+      const float proj = std::max((curX - fixedX) * ux + (curY - fixedY) * uy, 1e-6f);
+      prevLines->push_back(fixedX);
+      prevLines->push_back(fixedY);
+      prevLines->push_back(fixedZ);
+      prevLines->push_back(fixedX + ux * proj);
+      prevLines->push_back(fixedY + uy * proj);
+      prevLines->push_back(movingZ);
+      return;
+    }
+    if (e.type == SelectedEntity::Type::Polyline) {
+      const int pi = e.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+        return;
+      const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      if (v1 - v0 < 2)
+        return;
+      const int movingVi = nearFirst ? v0 : (v1 - 1);
+      const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
+      const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
+      if (mIdx + 2 >= cmd.userPolylineVerts.size() || fIdx + 2 >= cmd.userPolylineVerts.size())
+        return;
+      const float fx = cmd.userPolylineVerts[fIdx], fy = cmd.userPolylineVerts[fIdx + 1];
+      const float mz = cmd.userPolylineVerts[mIdx + 2];
+      const float mx = cmd.userPolylineVerts[mIdx], my = cmd.userPolylineVerts[mIdx + 1];
+      const float segLen = std::hypot(mx - fx, my - fy);
+      if (segLen < 1e-9f)
+        return;
+      const float ux = (mx - fx) / segLen, uy = (my - fy) / segLen;
+      const float proj = std::max((curX - fx) * ux + (curY - fy) * uy, 1e-6f);
+      prevLines->push_back(fx);
+      prevLines->push_back(fy);
+      prevLines->push_back(cmd.userPolylineVerts[fIdx + 2]);
+      prevLines->push_back(fx + ux * proj);
+      prevLines->push_back(fy + uy * proj);
+      prevLines->push_back(mz);
+      return;
+    }
+    if (e.type == SelectedEntity::Type::Arc) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size())
+        return;
+      CadArc a = cmd.userArcs[static_cast<size_t>(e.index)];
+      if (a.r < 1e-6f)
+        return;
+      const float pickAngle = std::atan2(curY - a.cy, curX - a.cx);
+      const float fixedAngle = nearFirst ? (a.startRad + a.sweepRad) : a.startRad;
+      float delta = pickAngle - fixedAngle;
+      constexpr float kPi = 3.14159265358979323846f;
+      while (delta > kPi) delta -= 2.f * kPi;
+      while (delta < -kPi) delta += 2.f * kPi;
+      const float newAbsSweep = std::fabs(delta);
+      const float deltaTheta = std::copysign(newAbsSweep - std::fabs(a.sweepRad), a.sweepRad);
+      if (nearFirst) {
+        a.startRad -= deltaTheta;
+        a.sweepRad += deltaTheta;
+      } else {
+        a.sweepRad += deltaTheta;
+      }
+      appendArcPolylineStrip(prevLines, a.z, a, 48);
+      return;
+    }
+    return;
+  }
+
   if (cmd.active != K::Rotate)
     return;
 
@@ -582,6 +795,12 @@ void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<float>* hlL
     for (const auto& c : cmd.trimCutters)
       AppendEntityHighlight(cmd, c, hlLines, hlCircles);
   }
+  // EXTEND boundary edges get the same selection-highlight treatment as TRIM cutting edges
+  // (REQ-056) — they are picked the way a selection is picked.
+  if (cmd.active == AppCommandState::Kind::Extend) {
+    for (const auto& c : cmd.extendBoundaries)
+      AppendEntityHighlight(cmd, c, hlLines, hlCircles);
+  }
 }
 
 void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLines,
@@ -599,6 +818,12 @@ void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLi
   }
   if (cmd.active == AppCommandState::Kind::Trim) {
     for (const auto& c : cmd.trimCutters) {
+      if (c.type == e.type && c.index == e.index)
+        return;
+    }
+  }
+  if (cmd.active == AppCommandState::Kind::Extend) {
+    for (const auto& c : cmd.extendBoundaries) {
       if (c.type == e.type && c.index == e.index)
         return;
     }
