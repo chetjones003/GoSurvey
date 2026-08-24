@@ -162,6 +162,12 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Object snapping (pure geometry; no GL despite living under viewport/)
   src/viewport/CadSnap.cpp
 
+  # Preview geometry (pure geometry; no GL, same as CadSnap.cpp above — it builds vertex lists, it
+  # does not draw them). Moved into the shared list by TASK-101 so the headless driver can assert
+  # what a preview PROMISES: BREAK's preview says which half of an object is about to disappear,
+  # and on a closed entity that answer depends on click order, so it can be confidently wrong.
+  src/viewport/TransformPreview.cpp
+
   # Text measurement + font registry. In the domain set because label geometry depends on metrics
   # (ADR-031 (c′)) — these need ImGui core, never a backend.
   src/ui/MtextRichFormat.cpp
@@ -225,9 +231,8 @@ add_executable(GoSurvey
   # Application entry
   src/app/main.cpp
 
-  # Viewport system
+  # Viewport system (TransformPreview.cpp is in GOSURVEY_DOMAIN_SOURCES — no GL, headless-testable)
   src/viewport/CadRubberPreview.cpp
-  src/viewport/TransformPreview.cpp
 
   # Renderer
   src/render/ViewportRenderer.cpp
@@ -558,10 +563,17 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-069: the background rebuild worker's lifetime. Header-only against CadCommands.hpp (the
     # struct and its destructor), so it needs no extra domain source on the link line.
     tests/SurfaceRebuildLifetimeTests.cpp
+    # REQ-103 STRETCH (TASK-098). Header-only against CadCommands.hpp — RecomputeArcFromEndpoints
+    # is inline and pure (<cmath> + CadArc only), the same reasoning as the gate test above.
+    tests/StretchGeomTests.cpp
     # REQ-087: the gate that decides the viewport has geometry to draw. Header-only against
     # CadCommands.hpp — the predicate is pure, which is the whole reason it is testable at all
     # while the rendering around it is not.
     tests/ExtendedGeometryGateTests.cpp
+    # TASK-099: the viewport's click-routing policy. Header-only against CadCommands.hpp, like the
+    # gate above, and for the same reason — the decision is pure, the UI around it is not, and the
+    # decision is where three separate "the command ignores every click" bugs actually lived.
+    tests/ViewportPickPolicyTests.cpp
     # REQ-204 generator + minimizer. Both are pure — the generator takes its command list as a
     # parameter, the minimizer takes a predicate — so reproducibility, termination and the attempt
     # cap are testable here with no process launch and no GL.
@@ -637,6 +649,9 @@ if(GOSURVEY_BUILD_TESTS)
     # still links no command, UI or GL translation unit, which is the property ADR-002 protects.
     # AppCommandState is plain data, so constructing one costs nothing but these include paths.
     ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
+    # TASK-099 (ViewportPickPolicyTests): ViewportPickPolicy.hpp. A header, like the ones above —
+    # the test target still links no viewport translation unit and needs no GL.
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/viewport
     ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
     ${CMAKE_CURRENT_SOURCE_DIR}/src/render
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf

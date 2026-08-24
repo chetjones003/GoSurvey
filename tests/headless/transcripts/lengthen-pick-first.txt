@@ -1,0 +1,121 @@
+# REQ-103 step 2 (TASK-100) — LENGTHEN's pick-first entry, with Total as the default sub-mode.
+#
+# lengthen-delta.txt drives the command the way it was originally built: type DE, type a value,
+# THEN pick. That order was the only one that worked, and it made the Modify ribbon button a dead
+# end — the opening prompt invites a pick ("select object, or [DElta/Percent/Total/DYnamic]"), but
+# a pick with no value set yet was refused outright with "type DE/P/T first", and a user with no
+# command line open had nowhere to go.
+#
+# The pick now latches the object, reports what it currently measures, and asks for the value; the
+# value applies to that object immediately. With Total as the default sub-mode (D-2026-08-24-f)
+# that makes the out-of-the-box interaction the one part 1 below pins exactly:
+#
+#     pick a 50-long line  ->  "current length 50.000. Total — new total length:"  ->  100
+#     ->  the line is now 100 long.
+#
+# Parts 2 and 3 cover a mode change made mid-prompt (which must not lose the picked object) and the
+# failure mode (a refused length must clear the latch, or the next number typed would silently
+# apply to a stale object).
+
+NEW
+
+# --- 1. The default flow: pick, read the length, type the new one. ---
+#
+# L = (0,0)-(50,0), length 50. No mode and no value have ever been set, so this is exactly what a
+# user gets from the Modify ribbon on a fresh session.
+CMD LINE
+CMD 0,0
+CMD 50,0
+ESC
+
+CHECK ALL
+EXPECT LINES 1
+
+CMD LENGTHEN
+EXPECT LOG "select object, or [DElta/Percent/Total/DYnamic] <Total>"
+CLICK 49 0
+EXPECT LOG "current length 50.000. Total — new total length:"
+
+CMD 100
+EXPECT LOG "LENGTHEN — length 50.000000 -> 100.000000."
+CHECK ALL
+EXPECT LINES 1
+SAVEAS %OUT%/lengthen-pick-first-a.gs
+
+# The mode now carries a value, and it persists across invocations — so a later pick applies it
+# straight away instead of re-prompting, which is the looping behaviour REQ-103 requires ("the
+# active sub-mode persists across repeated picks"). Proven on a SECOND 50-long line: no prompt, no
+# typing, straight to 100.
+#
+# (LENGTHEN has to be ended first — while it is active, a typed line goes to LENGTHEN, not to the
+# command parser, so `CMD LINE` mid-command would be read as a mode letter.)
+ESC
+CMD LINE
+CMD 0,100
+CMD 50,100
+ESC
+CHECK ALL
+EXPECT LINES 2
+
+CMD LENGTHEN
+CLICK 49 100
+EXPECT LOG "LENGTHEN — length 50.000000 -> 100.000000."
+CHECK ALL
+SAVEAS %OUT%/lengthen-pick-first-b.gs
+EXPECT DIFFERENTFILE %OUT%/lengthen-pick-first-a.gs %OUT%/lengthen-pick-first-b.gs
+
+UNDO
+CHECK ALL
+REDO
+CHECK ALL
+
+# --- 2. Change mode at the value prompt without losing the picked object. ---
+#
+# A fresh document, so no value is set and the pick opens the Total prompt again. Typing P there
+# must switch to Percent and keep the latch, so the number that follows scales THIS line rather
+# than merely arming the mode for later. 100 long at 250% = 250.
+NEW
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+CHECK ALL
+
+CMD LENGTHEN
+CLICK 99 0
+EXPECT LOG "current length 100.000. Total — new total length:"
+CMD P
+EXPECT LOG "LENGTHEN Percent — new length as a percentage of current"
+CMD 250
+EXPECT LOG "LENGTHEN — length 100.000000 -> 250.000000."
+CHECK ALL
+EXPECT LINES 1
+
+# --- 3. Failure mode: a refused length must clear the latch. ---
+#
+# Fresh document again, so Total is unset once more. A total of 0 is rejected by the parser as
+# non-positive; a total that collapses the line is rejected by the apply itself. Use the second:
+# Percent is still the active mode from part 2, so type DE and a delta of -1000 on a 100-long line,
+# which ApplyLengthenToEntity refuses outright.
+#
+# The latch must be dropped with the refusal: the `CMD 25` that follows is then read as a mode
+# letter it is not, rather than silently lengthening the object picked earlier.
+NEW
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+CHECK ALL
+
+CMD LENGTHEN
+CLICK 99 0
+CMD DE
+CMD -1000
+EXPECT LOG "would collapse the line to zero length; refused"
+EXPECT LINES 1
+CHECK ALL
+
+CMD 25
+EXPECT LOG "type DE, P, T, or DY to set the mode"
+EXPECT LINES 1
+CHECK ALL

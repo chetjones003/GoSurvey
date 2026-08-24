@@ -1471,6 +1471,7 @@ enum class RibbonIconKind : std::uint8_t {
   Lengthen,
   Extend,
   Break,
+  Stretch,
   SurveyPoint,
   SurveyInverse,
   Layers,
@@ -1905,6 +1906,29 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     dl->AddLine(ImVec2(c.x + gapHalf, y - tickH), ImVec2(c.x + gapHalf, y + tickH), acc, t);
     break;
   }
+  case RibbonIconKind::Stretch: {
+    // A dashed crossing-window box with one vertex (filled dot) pulled out by an arrow — the
+    // crossing-select-then-drag shape STRETCH is named for.
+    const float bx0 = mn.x + w * 0.18f, by0 = mn.y + h * 0.22f;
+    const float bx1 = mx.x - w * 0.4f, by1 = mx.y - h * 0.22f;
+    auto dash = [&](ImVec2 a, ImVec2 b) {
+      constexpr int n = 5;
+      for (int i = 0; i < n; i += 2) {
+        const float t0 = static_cast<float>(i) / n, t1 = static_cast<float>(i + 1) / n;
+        dl->AddLine(ImVec2(a.x + (b.x - a.x) * t0, a.y + (b.y - a.y) * t0),
+                   ImVec2(a.x + (b.x - a.x) * t1, a.y + (b.y - a.y) * t1), acc, t);
+      }
+    };
+    dash(ImVec2(bx0, by0), ImVec2(bx1, by0));
+    dash(ImVec2(bx1, by0), ImVec2(bx1, by1));
+    dash(ImVec2(bx1, by1), ImVec2(bx0, by1));
+    dash(ImVec2(bx0, by1), ImVec2(bx0, by0));
+    const ImVec2 vert(bx1, c.y);
+    dl->AddLine(vert, ImVec2(mx.x - w * 0.18f, c.y), col, t * 1.1f);
+    RibbonStrokeArrow(dl, ImVec2(mx.x - w * 0.18f, c.y), ImVec2(1.f, 0.f), std::min(w, h) * 0.2f, col, t);
+    dl->AddCircleFilled(vert, std::min(w, h) * 0.08f, col, 12);
+    break;
+  }
   case RibbonIconKind::SurveyPoint: {
     dl->AddLine(ImVec2(c.x, mn.y + h * 0.15f), ImVec2(c.x, mx.y - h * 0.15f), col, t * 0.75f);
     dl->AddLine(ImVec2(mn.x + w * 0.15f, c.y), ImVec2(mx.x - w * 0.15f, c.y), col, t * 0.75f);
@@ -2130,6 +2154,7 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::Lengthen:       return "lengthen";
   case RibbonIconKind::Extend:         return "extend";
   case RibbonIconKind::Break:          return "break";
+  case RibbonIconKind::Stretch:        return "stretch";
   case RibbonIconKind::SurveyPoint:    return "surveypoint";
   case RibbonIconKind::SurveyInverse:  return "surveyinverse";
   case RibbonIconKind::Layers:         return "layers";
@@ -2178,6 +2203,7 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
     {"LENGTHEN", RibbonIconKind::Lengthen},
     {"EXTEND", RibbonIconKind::Extend},
     {"BREAK", RibbonIconKind::Break},
+    {"STRETCH", RibbonIconKind::Stretch},
     {"DELETE", RibbonIconKind::Erase}, {"JOIN", RibbonIconKind::Join}, {"TRIM", RibbonIconKind::Trim},
     {"OFFSET", RibbonIconKind::Offset}, {"ZOOMEXTENTS", RibbonIconKind::ZoomExtents},
     {"ZOOMWINDOW", RibbonIconKind::ZoomWindow}, {"CREATEPOINTS", RibbonIconKind::SurveyPoint},
@@ -2345,10 +2371,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // Four columns: a small-button column is 3 tall (colH), so a 4th item in one BeginGroup is
   // clipped by the child window's own bounds — the same "fourth needs its own column" rule
   // Inquiry/Survey below already follow. Join/Mirror/Lengthen exactly fills one column;
-  // Extend/Break get a second (2 items, well under 3).
+  // Extend/Break/Stretch exactly fills a second.
   const float wMod  = 8.f + largeW + 4.f + colW({"Copy", "Rotate", "Scale"}) + 4.f +
                       colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror", "Lengthen"}) + 4.f +
-                      colW({"Extend", "Break"});
+                      colW({"Extend", "Break", "Stretch"});
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
   const float wAnn  = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
   // Two columns: the panel is three small buttons tall, so a fourth in one column is clipped.
@@ -2509,7 +2535,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     // was, in fact, a real bug: EXTEND shipped as a 4th item in the group above and was invisible/
     // unclickable — found and fixed while adding BREAK here).
     ImGui::SameLine(0, 4);
-    const float c4 = colW({"Extend", "Break"});
+    // Three items exactly fills this column's 3-row limit (colH) — a 4th here would repeat the
+    // clipping bug the comment above already documents; STRETCH needs its own column if a 4th
+    // command is ever added to this group.
+    const float c4 = colW({"Extend", "Break", "Stretch"});
     ImGui::BeginGroup();
     if (smallBtn("##RibbonExtend", RibbonIconKind::Extend, "Extend", c4))
       StartExtendCommand(cmd, log);
@@ -2519,6 +2548,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       StartBreakCommand(cmd, log);
     RibbonItemHelp("Break — pick an object (the pick is break point 1), then a second point; the "
                    "material between them is removed.\nCommand bar: BREAK or BR");
+    if (smallBtn("##RibbonStretch", RibbonIconKind::Stretch, "Stretch", c4))
+      StartStretchCommand(cmd, log);
+    RibbonItemHelp("Stretch — crossing/window-select, then base point and destination; only the "
+                   "vertices inside the box move.\nCommand bar: STRETCH or S");
     ImGui::EndGroup();
   }
   RibbonSectionEnd();
@@ -5906,6 +5939,14 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
       return "BREAK — specify second break point:";
     }
   }
+  if (cmd.active == AppCommandState::Kind::Stretch) {
+    using MP = AppCommandState::ModifyPhase;
+    if (cmd.modifyPhase == MP::PickSelection)
+      return "STRETCH — crossing/window box (right-to-left = crossing) or cancel:";
+    if (cmd.modifyPhase == MP::NeedBase)
+      return "Base point X,Y:";
+    return "Destination @dx,dy or X,Y:";
+  }
   if (cmd.active == AppCommandState::Kind::Delete)
     return "DELETE — window opposite corner or ESC:";
   if (cmd.active == AppCommandState::Kind::Join)
@@ -6033,6 +6074,13 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
     return cmd.mirrorPhase == MirP::NeedP1 || cmd.mirrorPhase == MirP::NeedP2;
     // NeedEraseAnswer is a Yes/No text prompt, not a point (HandleMirrorText).
   }
+  case K::Stretch: {
+    // REQ-103 step 5. Base and destination are both real points (typed or picked), so STRETCH
+    // gets the same dynamic-input prompt MOVE/COPY do — it was omitted here, the second of the
+    // two lists a point-picking command has to appear in (TASK-099 F2).
+    using MP = AppCommandState::ModifyPhase;
+    return cmd.modifyPhase == MP::NeedBase || cmd.modifyPhase == MP::NeedDestination;
+  }
   default:
     return false;
   }
@@ -6130,6 +6178,9 @@ static std::string CadPointPromptLabel(const AppCommandState& cmd) {
   case K::Mirror:
     return cmd.mirrorPhase == AppCommandState::MirrorPhase::NeedP1 ? "Specify first point of mirror line:"
                                                                    : "Specify second point of mirror line:";
+  case K::Stretch:
+    return cmd.modifyPhase == AppCommandState::ModifyPhase::NeedBase ? "Specify base point:"
+                                                                     : "Specify second point:";
   default:
     return "Specify point:";
   }
@@ -8709,6 +8760,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
       if (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0 || cmd.paperMirrorPhase != 0 ||
           cmd.paperLengthenPhase != 0 || cmd.paperExtendPhase != 0 || cmd.paperBreakPhase != 0 ||
+          cmd.paperStretchPhase != 0 ||
           cmd.paperGripCorner != -2 || cmd.paperSelBoxActive) {
         cmd.paperMovePhase = 0;
         cmd.paperRotatePhase = 0;
@@ -8717,6 +8769,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.paperExtendPhase = 0;
         cmd.paperExtendBoundaries.clear();
         cmd.paperBreakPhase = 0;
+        cmd.paperStretchPhase = 0;
         cmd.paperGripCorner = -2;
         cmd.paperSelBoxActive = false;
       } else if (!cmd.selectedViewports.empty() || !cmd.selectedPaperEntities.empty()) {
@@ -8754,7 +8807,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     cmd.paperHoverValid = false;
     if (hovered && !cmd.paperSelBoxActive && cmd.paperMovePhase == 0 && cmd.paperRotatePhase == 0 &&
         cmd.paperMirrorPhase == 0 && cmd.paperLengthenPhase == 0 && cmd.paperExtendPhase == 0 &&
-        cmd.paperBreakPhase == 0 &&
+        cmd.paperBreakPhase == 0 && cmd.paperStretchPhase == 0 &&
         cmd.paperGripCorner == -2 && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
       PaperEntityRef hr;
       if (PickPaperEntityAt(L, curX, curY, entityPickTolIn, &hr)) {
@@ -8799,6 +8852,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // Native paper geometry in the same box (REQ-039): one shared, unit-tested helper for every type.
       cmd.selectedPaperEntities.clear();
       SelectPaperEntitiesInBox(L, bx0, by0, bx1, by1, windowMode, cmd.selectedPaperEntities);
+      // REQ-103 STRETCH: remember this box regardless of which command (if any) is active — paper
+      // box-select is ambient (this whole lambda runs on any plain click-drag, not gated by
+      // cmd.active), and STRETCH is invoked AFTER a selection already exists, the same "pre-select,
+      // then invoke" convention paper ROTATE/SCALE use. Invalidated by ClearPaperEntitySelection/
+      // TogglePaperEntitySelection so a later plain click-select doesn't leave a stale box behind.
+      cmd.paperSelBoxLastValid = true;
+      cmd.paperSelBoxLastMnXIn = bx0;
+      cmd.paperSelBoxLastMxXIn = bx1;
+      cmd.paperSelBoxLastMnYIn = by0;
+      cmd.paperSelBoxLastMxYIn = by1;
       cmd.paperSelBoxActive = false;
       BumpCadGpuCache(cmd);
     };
@@ -8893,6 +8956,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       ApplyBreakToPaperEntity(cmd, cmd.paperBreakEntity, cmd.paperBreakP1, curX, curY, log);
       cmd.paperBreakPhase = 1;
       // Stays in the loop — back to phase 1 for the next object, same shape as model-space BREAK.
+    } else if (clickL && cmd.paperStretchPhase == 1) {  // STRETCH: base point (REQ-103 step 5)
+      cmd.paperStretchBaseXIn = curX;
+      cmd.paperStretchBaseYIn = curY;
+      cmd.paperStretchPhase = 2;
+      log.push_back("STRETCH — specify destination point:");
+    } else if (clickL && cmd.paperStretchPhase == 2) {  // STRETCH: destination, applies (REQ-103 step 5)
+      const float ddx = curX - cmd.paperStretchBaseXIn, ddy = curY - cmd.paperStretchBaseYIn;
+      ApplyStretchToPaperSelection(cmd, ddx, ddy, log);
+      // Stays active — same selection+box at new position, ready for another base+destination
+      // (MOVE's own looping shape for repeated displacement rounds on one selection).
+      cmd.paperStretchPhase = 1;
+      log.push_back("STRETCH complete — base point (ESC to exit):");
     } else if (clickL && cmd.paperGripCorner != -2) {  // commit an in-progress grip edit
       cmd.paperGripCorner = -2;
       log.push_back("Viewport edited.");
@@ -9386,6 +9461,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       using TPh = AppCommandState::TrimPhase;
       using EPh = AppCommandState::ExtendPhase;
       using BPh = AppCommandState::BreakPhase;
+      using LPh = AppCommandState::LengthenPhase;
       const bool trimEntityPick = cmd.active == AK::Trim && (cmd.trimPhase == TPh::SelectCuttingEdges ||
                                                              cmd.trimPhase == TPh::SelectTrimTargets);
       const bool extendEntityPick = cmd.active == AK::Extend && (cmd.extendPhase == EPh::SelectBoundaries ||
@@ -9394,7 +9470,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // SelectSecondPoint is a point pick on the entity already chosen, so hover stays suppressed
       // there the same as any other coordinate-entry command.
       const bool breakEntityPick = cmd.active == AK::Break && cmd.breakPhase == BPh::SelectFirstPoint;
-      const bool blockEntityHover = (cmd.active != AK::None && !trimEntityPick && !extendEntityPick && !breakEntityPick) ||
+      // LENGTHEN: WaitSelectOrMode is an entity search exactly like EXTEND's, so it earns the same
+      // hover feedback (REQ-056). WaitDynamicTarget is a coordinate pick on an object already
+      // chosen, so hover stays suppressed there — the same split BREAK's two phases make.
+      const bool lengthenEntityPick = cmd.active == AK::Lengthen && cmd.lengthenPhase == LPh::WaitSelectOrMode;
+      const bool blockEntityHover = (cmd.active != AK::None && !trimEntityPick && !extendEntityPick &&
+                                     !breakEntityPick && !lengthenEntityPick) ||
                                     cmd.dimGripMoveActive ||
                                     cmd.entityGripMoveActive || cmd.mtextGripMoveActive || cmd.selBoxWaitingSecond;
       // REQ-089: the rollover readout rides on this exact condition. Model space only — a sheet has
@@ -9793,8 +9874,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       BumpCadGpuCache(cmd);
     } else {
     using K = AppCommandState::Kind;
-    using MP = AppCommandState::ModifyPhase;
-    using RP = AppCommandState::RotatePhase;
+    // ModifyPhase/RotatePhase aliases used to live here for the inline click whitelist; the phase
+    // tests moved into ViewportClickRouteFor with it (TASK-099).
 
     const bool haveSnapPick = outCursorX && outCursorY && cmd.viewportSnapPickValid;
     const float commitX = haveSnapPick ? cmd.viewportSnapPickLocalX : *outCursorX;
@@ -9849,28 +9930,26 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else {
         TryPlaceSurveyPoint(cmd, commitX, commitY, cmd.createPointsOpts.defaultElevation, log);
       }
-    } else if (cmd.active == K::Offset || cmd.active == K::DesignateBreakline ||
-             cmd.active == K::DesignateBoundary)
-      // Entity-pick commands (REQ-069, like OFFSET's own WaitSelectEntity): the raw, unsnapped
-      // cursor position is what PickClosestCadEntity hit-tests against, not an OSNAP-adjusted commit
-      // point — a command missing from this list silently ignores every viewport click and appears
-      // to hang on its first prompt (see the comment on the point-picking list below).
+    } else {
+    // TASK-099. One authority decides what a click means here: ViewportClickRouteFor
+    // (viewport/ViewportPickPolicy.hpp). This was an if/else-if whitelist on cmd.active, and a
+    // command left out of it silently discarded every viewport click and appeared to hang on its
+    // first prompt — it happened to RECT, then to FEATURELINE (TASK-082 BUG-1), then to all five
+    // of REQ-103's MIRROR/LENGTHEN/EXTEND/BREAK/STRETCH at once. The policy function is an
+    // exhaustive switch with no default, so the compiler objects when a Kind is added without a
+    // routing decision, and ViewportPickPolicyTests plus the headless CLICK verb can both reach
+    // it — neither of which was possible while the decision lived inline here.
+    switch (ViewportClickRouteFor(cmd)) {
+    case ViewportClickRoute::RawEntityPick:
+      // Entity-pick commands (OFFSET, REQ-069's designators, REQ-103's LENGTHEN/EXTEND/BREAK):
+      // the raw, unsnapped cursor position is what PickClosestCadEntity hit-tests against, not an
+      // OSNAP-adjusted commit point.
       SubmitViewportPick(cmd, rawPickX, rawPickY, log);
-    else if (cmd.active == K::PdfAttach &&
-             cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint)
+      break;
+    case ViewportClickRoute::PdfAttachInsertPoint:
       SubmitPdfAttachInsertPoint(cmd, commitX, commitY, log);
-    else if (cmd.active == K::Align) {
-      using AP = AppCommandState::AlignPhase;
-      if (cmd.alignPhase == AP::PickSelection) {
-        if (!cmd.selBoxWaitingSecond)
-          BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
-        else
-          SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
-      } else {
-        SubmitViewportPick(cmd, commitX, commitY, log);
-      }
-    }
-    else if (cmd.active == K::Hatch) {
+      break;
+    case ViewportClickRoute::HatchPick: {
       // HATCH (REQ-043): trace the region under the click and fill it; the command stays active on a miss
       // so the user can click another spot (REQ-201 — nothing placed when no closed boundary is found).
       std::vector<float> loop;
@@ -9881,46 +9960,22 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else {
         log.push_back("HATCH — no closed boundary found there; click inside a closed area (Esc to cancel).");
       }
+      break;
     }
-    // Point-picking draw commands: the click is a coordinate, handed straight to the command state
-    // machine. A command missing from this list silently ignores every viewport click and appears to
-    // hang on its first prompt — which is exactly what RECT did before it was added here.
-    else if (cmd.active == K::Line || cmd.active == K::Circle || cmd.active == K::Polyline ||
-             cmd.active == K::FeatureLine ||  // REQ-087 / TASK-082 BUG-1 — omitted until 2026-08-20
-             cmd.active == K::Rect ||
-             cmd.active == K::Arc || cmd.active == K::Ellipse || cmd.active == K::Text ||
-             cmd.active == K::Mtext || cmd.active == K::DimAligned || cmd.active == K::DimLinear ||
-             cmd.active == K::DimAngular ||
-             cmd.active == K::IdPoint || cmd.active == K::SurveyInverse || cmd.active == K::Paste ||
-             cmd.active == K::SurfaceElevGrade)
+    case ViewportClickRoute::SnappedPointPick:
+      // Point-picking commands (draw commands, and every modify command past its selection
+      // phase): the click is a coordinate, handed straight to the command state machine at the
+      // OSNAP-adjusted commit point.
       SubmitViewportPick(cmd, commitX, commitY, log);
-    else if (cmd.active == K::Move || cmd.active == K::Copy || cmd.active == K::Scale) {
-      if (cmd.modifyPhase == MP::PickSelection) {
-        if (!cmd.selBoxWaitingSecond)
-          BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
-        else
-          SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
-      } else
-        SubmitViewportPick(cmd, commitX, commitY, log);
-    } else if (cmd.active == K::Rotate) {
-      if (cmd.rotatePhase == RP::PickSelection) {
-        if (!cmd.selBoxWaitingSecond)
-          BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
-        else
-          SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
-      } else
-        SubmitViewportPick(cmd, commitX, commitY, log);
-    } else if (cmd.active == K::Delete) {
+      break;
+    case ViewportClickRoute::SelectionBox:
+      // Fence: arm the first corner, or close the box on the second click.
       if (!cmd.selBoxWaitingSecond)
         BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
       else
         SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
-    } else if (cmd.active == K::Join) {
-      if (!cmd.selBoxWaitingSecond)
-        BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
-      else
-        SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
-    } else if (cmd.active == K::Trim) {
+      break;
+    case ViewportClickRoute::TrimPick: {
       const float trimTol = CadSnap::WorldToleranceFromPixels(avail.y, halfH, cmd.objectSnapAperturePx);
       using TP = AppCommandState::TrimPhase;
       const bool trimCutLinePt =
@@ -9928,12 +9983,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const float tx = trimCutLinePt ? commitX : rawPickX;
       const float ty = trimCutLinePt ? commitY : rawPickY;
       SubmitTrimViewportPick(cmd, tx, ty, trimTol, log);
-    } else if (cmd.active == K::Zoom) {
-      if (!cmd.selBoxWaitingSecond)
-        BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
-      else
-        SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
-    } else if (cmd.active == K::None) {
+      break;
+    }
+    case ViewportClickRoute::Ignore:
+      // PAN/ORBIT (drag-driven), TRIMSTATE/ELEV (text prompts), VPFREEZE/VPTHAW (floating
+      // viewports only), PaperRectViewport (paper space only), PDFATTACH outside its
+      // insertion-point phase. Each is a decision, not an omission — see ViewportClickRouteFor.
+      break;
+    case ViewportClickRoute::IdleSelection: {
       bool handled = false;
       if (cmd.selBoxWaitingSecond) {
         SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
@@ -10332,7 +10389,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
         }
       }
+      break;
     }
+    }  // switch (ViewportClickRouteFor(cmd))
+    }  // else of "create-points window owns the click"
     }
   }
 
@@ -12544,6 +12604,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (ImGui::MenuItem("Trim"))           { StartTrimCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Extend"))         { StartExtendCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Break"))          { StartBreakCommand(cmd, log);  ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Stretch"))        { StartStretchCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Join"))           { StartJoinCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
         ImGui::EndMenu();
       }

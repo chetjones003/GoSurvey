@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <iterator>
 #include <memory>
@@ -185,6 +186,75 @@ void CadDimAlignedApplyInsFromLocalOffset(CadAnnotation* ann, float alongN, floa
 void CadDimRefreshMeasurementText(CadAnnotation* ann, int linearPrecision, const AngleDisplaySettings& angle);
 
 // CadArc and CadEllipse are defined in CadEntities.hpp (shared with PaperSpace.hpp, ADR-013).
+
+/// REQ-103 STRETCH. Recomputes \p arc's center/radius/startRad so it passes through
+/// (newStartX,newStartY) and (newEndX,newEndY) while preserving the arc's original signed sweep
+/// (included angle + rotational sense) — true AutoCAD-parity arc stretch. Degenerates to a pure
+/// translation when both new endpoints are offset from the originals by the same amount. Returns
+/// false (arc left unchanged, optional \p log gets a stated reason) if the new chord cannot
+/// support the preserved sweep without the radius collapsing toward zero. Not for full-circle-sweep
+/// arcs — callers route those through \ref StretchOneArc's center-only rule instead.
+///
+/// Inline and header-only (pure — only <cmath> and CadArc, both dependency-free, ADR-013) so this,
+/// the one genuinely new piece of geometry in TASK-098, is unit-testable (tests/StretchGeomTests.cpp)
+/// without linking CadCommands.cpp's whole command layer — the same reasoning `KindName` above and
+/// architecture's other pure-math extractions (EntityId.cpp, curveintersect.cpp) already follow.
+///
+/// Hand-derived: given original endpoints P_start = C + r(cos a, sin a), P_end = C + r(cos(a+s),
+/// sin(a+s)) (a=startRad, s=sweepRad), and new (possibly moved) endpoints P_start', P_end', with
+/// V' = P_end' - P_start', M' = midpoint(P_start', P_end'), Rot90CW(x,y) = (y,-x):
+///   C' = M' - (1/2)*cot(s/2)*Rot90CW(V')
+/// preserves s exactly (verified against a worked numeric example before being trusted — see
+/// spec/project.md D-2026-08-24-d and tests/StretchGeomTests.cpp's own pinned cases).
+inline bool RecomputeArcFromEndpoints(CadArc& arc, float newStartX, float newStartY, float newEndX,
+                                      float newEndY, std::vector<std::string>* log) {
+  const float s = arc.sweepRad;
+  const float halfS = 0.5f * s;
+  const float sinHalf = std::sin(halfS);
+  if (std::fabs(sinHalf) < 1e-6f) {
+    if (log)
+      log->push_back("STRETCH — arc endpoint stretch skipped (degenerate sweep); object unchanged.");
+    return false;
+  }
+  const float vx = newEndX - newStartX, vy = newEndY - newStartY;
+  const float chordLen = std::hypot(vx, vy);
+  if (chordLen < 1e-4f) {
+    if (log)
+      log->push_back("STRETCH — arc endpoints would coincide; object left unchanged.");
+    return false;
+  }
+  const float mx = 0.5f * (newStartX + newEndX);
+  const float my = 0.5f * (newStartY + newEndY);
+  const float rvx = vy, rvy = -vx;  // Rot90CW(V')
+  const float cotHalf = std::cos(halfS) / sinHalf;
+  const float cx = mx - 0.5f * cotHalf * rvx;
+  const float cy = my - 0.5f * cotHalf * rvy;
+  const float r = std::hypot(newStartX - cx, newStartY - cy);
+  if (r < 1e-4f) {
+    if (log)
+      log->push_back("STRETCH — arc stretch would collapse its radius; object left unchanged.");
+    return false;
+  }
+  arc.cx = cx;
+  arc.cy = cy;
+  arc.r = r;
+  arc.startRad = std::atan2(newStartY - cy, newStartX - cx);
+  // arc.sweepRad is unchanged by design — the included angle is preserved exactly.
+  return true;
+}
+/// REQ-103 STRETCH, one arc (model or paper — same \c CadArc struct either way). Tests both
+/// endpoints against [mnX,mxX]x[mnY,mxY] independently: 0/2 in-box -> no-op / whole-arc translate
+/// (falls out of \ref RecomputeArcFromEndpoints automatically); exactly 1 in-box -> true partial
+/// stretch. A full-circle-sweep arc is exempt (its two endpoints coincide) and instead moves as a
+/// whole only when its CENTER is in-box, matching the Circle rule. Shared by the model apply, the
+/// paper apply, and the live drag preview — three concrete callers.
+void StretchOneArc(CadArc& arc, float mnX, float mxX, float mnY, float mxY, float dx, float dy,
+                   std::vector<std::string>& log);
+/// REQ-103 STRETCH, model-space apply — see the definition's comment (CadCommands.cpp) for the
+/// full per-type rule. Declared here (not just in the .cpp) because the viewport-pick and typed-text
+/// dispatch sites that call it appear earlier in CadCommands.cpp than its own definition.
+void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX, float mxX, float mnY,
+                             float mxY, std::vector<std::string>& log);
 
 /// Optional batched polylines / arcs / ellipses for the viewport (nullptr = none).
 struct CadExtendedGeometryInput {
@@ -550,6 +620,20 @@ bool ApplyExtendToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, fl
 /// (from the entity-selecting pick); this call resolves the second point at (pickXIn,pickYIn) itself.
 bool ApplyBreakToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, const BreakPoint& p1,
                              float pickXIn, float pickYIn, std::vector<std::string>& log);
+/// REQ-103 STRETCH, pure-paper-space path. Translates every entity in \c st.selectedPaperEntities
+/// by (dxIn,dyIn); if \c st.paperSelBoxLastValid, only each entity's definition points that fall
+/// inside the last-captured box move (true partial stretch for Line/Polyline/Arc — Arc via
+/// \c RecomputeArcFromEndpoints, shared with the model-space path), otherwise every entity
+/// translates as a whole (degraded MOVE-equivalent, matching a non-crossing pickfirst set).
+void ApplyStretchToPaperSelection(AppCommandState& st, float dxIn, float dyIn,
+                                  std::vector<std::string>& log);
+/// Projects (px,py) onto model-space entity \p e, filling \p out — "the closest point ON this
+/// entity", which \c PickClosestCadEntity does not answer (it names the entity and a distance).
+/// BREAK's second pick commits this point, and BREAK's live preview must resolve the cursor
+/// through the very same call or it previews a span other than the one about to be removed
+/// (TASK-101). Declared here for the same reason \c ClosestPointOnPaperEntity below is.
+bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, float px, float py,
+                          BreakPoint* out);
 /// Paper-space equivalent of \c ClosestPointOnEntity (CadCommands.cpp) — projects (px,py) onto
 /// paper entity \p ref, filling \p out. Declared here (not just in the .cpp) so CadUi.cpp's paper
 /// click block can resolve BREAK's first point the same way it already calls \c PickPaperEntityAt.
@@ -607,6 +691,11 @@ struct AppCommandState {
     /// closed Polyline. Two picks identical in position opens a closed entity at that point with
     /// nothing removed ("break at point").
     Break,
+    /// STRETCH: crossing/window box-select, then base+destination; only the definition points
+    /// (endpoints/vertices/center) that fell inside the box move (REQ-103 step 5). Arc endpoints
+    /// stretch with true AutoCAD parity (center/radius recomputed, included angle preserved).
+    /// Single-shot, one undo step for the whole apply — MOVE/ROTATE/SCALE's shape, not a loop.
+    Stretch,
     Delete,
     Zoom,
     Join,
@@ -669,6 +758,7 @@ struct AppCommandState {
     case Kind::Lengthen:      return "LENGTHEN";
     case Kind::Extend:        return "EXTEND";
     case Kind::Break:         return "BREAK";
+    case Kind::Stretch:       return "STRETCH";
     case Kind::Delete:        return "DELETE";
     case Kind::Zoom:          return "ZOOM";
     case Kind::Join:          return "JOIN";
@@ -1652,7 +1742,12 @@ struct AppCommandState {
   bool mirrorEraseSourcePending = false;
 
   // --- LENGTHEN (REQ-103 step 2) ---
-  enum class LengthenMode { Delta, Percent, Total, Dynamic } lengthenMode = LengthenMode::Delta;
+  /// Default sub-mode is **Total**, not AutoCAD's DElta (D-2026-08-24-f). Paired with the
+  /// pick-first entry, that makes the out-of-the-box interaction the one people actually reach
+  /// for: pick a line, read what it measures, type what you want it to measure. DElta's "add 50
+  /// to whatever this is" needs the current length as context anyway, which a bare prompt before
+  /// the pick cannot give.
+  enum class LengthenMode { Delta, Percent, Total, Dynamic } lengthenMode = LengthenMode::Total;
   enum class LengthenPhase {
     WaitSelectOrMode,  ///< pick an object (applies current mode+value), or type DE/P/T/DY to (re)set the mode
     WaitDeltaValue,    ///< typed signed length to add/subtract
@@ -1675,6 +1770,12 @@ struct AppCommandState {
   SelectedEntity lengthenPendingEntity{};
   bool lengthenPendingNearFirst = false;
   float lengthenPendingCurrentLength = 0.f;
+  /// REQ-103 LENGTHEN, pick-first entry (TASK-100). Set when a pick arrived before the active
+  /// sub-mode had a value: the entity is latched here and the mode's value prompt is opened, so
+  /// the value that follows applies to THAT object immediately rather than only arming the mode.
+  /// Without it, a pick with no value set was refused outright and the ribbon button was a dead
+  /// end — the command could only be reached by typing DE/P/T *and* a number first.
+  bool lengthenPendingApplyOnValue = false;
 
   // --- EXTEND (REQ-103 step 3) ---
   enum class ExtendPhase {
@@ -1692,6 +1793,14 @@ struct AppCommandState {
   } breakPhase = BreakPhase::SelectFirstPoint;
   SelectedEntity breakEntity{};
   BreakPoint breakP1{};
+
+  // --- STRETCH (REQ-103 step 5) ---
+  /// Crossing/window box captured when the box-select that started this STRETCH invocation closed
+  /// (world XY, plain — not camera-projected; see REQ-103's STRETCH acceptance simplification
+  /// note). Read at apply time to decide which of each selected entity's definition points move.
+  /// STRETCH always runs its own fresh box-select (never consumes a pre-existing \ref selection),
+  /// so this is always populated together with the selection it describes.
+  float stretchRectMnX = 0.f, stretchRectMxX = 0.f, stretchRectMnY = 0.f, stretchRectMxY = 0.f;
 
   // --- Survey / COGO points (in-memory database; optional JSON file) ---
   std::vector<SurveyPoint> surveyPoints;
@@ -2121,6 +2230,25 @@ struct AppCommandState {
   int   paperBreakPhase = 0;
   PaperEntityRef paperBreakEntity{};
   BreakPoint paperBreakP1{};
+  // Paper-space STRETCH of native paper entities (REQ-103 step 5, TASK-098): 0 idle, 1 need base
+  // point, 2 need destination. Unlike MIRROR/LENGTHEN/EXTEND/BREAK, STRETCH does NOT drive its own
+  // box-select — paper box-select is ambient (any plain click starts one, `CadUi.cpp`'s
+  // `closePaperSelBox`, regardless of active command) and ROTATE/SCALE already consume whatever is
+  // pre-selected, so STRETCH follows that same "pre-select, then invoke" convention: it requires
+  // \ref selectedPaperEntities non-empty at start, same as paper ROTATE/SCALE.
+  int   paperStretchPhase = 0;
+  float paperStretchBaseXIn = 0.f;
+  float paperStretchBaseYIn = 0.f;
+  /// True iff \ref selectedPaperEntities was populated by a box-select (not a plain click) and the
+  /// rect below is that box, in paper inches. Set at the end of `closePaperSelBox` regardless of
+  /// which command (if any) is active; cleared by `ClearPaperEntitySelection`/
+  /// `TogglePaperEntitySelection` (the shared funnel every non-box selection change goes through),
+  /// so a plain click-select never leaves a stale rect behind. When false, paper STRETCH degrades to
+  /// a whole-entity translate of the current selection — matching AutoCAD's own degradation for a
+  /// non-crossing pickfirst set.
+  bool  paperSelBoxLastValid = false;
+  float paperSelBoxLastMnXIn = 0.f, paperSelBoxLastMxXIn = 0.f;
+  float paperSelBoxLastMnYIn = 0.f, paperSelBoxLastMxYIn = 0.f;
   // Floating model space (REQ-036): edit the model IN PLACE through a viewport. The active space stays
   // the paper layout (sheet + viewports stay visible); model edit/snap/draw is routed through the viewport.
   int    floatingViewportLayout = -1;   ///< paper layout of the floating viewport, or -1 if not floating.
@@ -2853,6 +2981,12 @@ void StartBreakCommand(AppCommandState& st, std::vector<std::string>& log);
 /// anonymous-namespace/global-scope reason `HandleLengthenViewportPick`/`HandleExtendViewportPick`
 /// are — `SubmitViewportPickImpl` needs to see it via this header.
 void HandleBreakViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+/// REQ-103 step 5. Model-space branch always forces a fresh box-select (\c ModifyPhase::PickSelection),
+/// even if \c st.selection is already non-empty, since STRETCH's box rectangle must be captured
+/// together with the selection (unlike MOVE/COPY/ROTATE/SCALE, which happily reuse a pre-existing
+/// selection). Paper-space branch instead requires \c st.selectedPaperEntities already non-empty —
+/// see \c paperStretchPhase's comment for why paper space follows the opposite convention.
+void StartStretchCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartQuickSelectCommand(AppCommandState& st, std::vector<std::string>& log);

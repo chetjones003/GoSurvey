@@ -488,7 +488,14 @@ PaperLayout* ActivePaperGeometryTarget(AppCommandState& st) {
 
 using PaperRef = PaperEntityRef;
 
-void ClearPaperEntitySelection(AppCommandState& st) { st.selectedPaperEntities.clear(); }
+// A plain click-select carries no crossing/window box (REQ-103 STRETCH), unlike closePaperSelBox's
+// own selection, which sets paperSelBoxLastValid true right after populating selectedPaperEntities
+// (CadUi.cpp). Invalidating here — the shared funnel every non-box selection change goes through —
+// means STRETCH never mistakes a click-selected entity's stale prior box for a real one.
+void ClearPaperEntitySelection(AppCommandState& st) {
+  st.selectedPaperEntities.clear();
+  st.paperSelBoxLastValid = false;
+}
 
 static float PaperPointSegDist2(float px, float py, float ax, float ay, float bx, float by) {
   const float vx = bx - ax, vy = by - ay;
@@ -573,6 +580,9 @@ bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, Pape
 }
 
 void TogglePaperEntitySelection(AppCommandState& st, PaperRef ref, bool additive) {
+  // Same invalidation as ClearPaperEntitySelection, same reason (REQ-103 STRETCH): a click-built
+  // selection carries no box.
+  st.paperSelBoxLastValid = false;
   if (!additive) {
     st.selectedPaperEntities.assign(1, ref);
     return;
@@ -4090,6 +4100,15 @@ static void ResetModifyRotateDraft(AppCommandState& st) {
   st.mirrorP1X = st.mirrorP1Y = st.mirrorP2X = st.mirrorP2Y = 0.f;
   st.lengthenPhase = AppCommandState::LengthenPhase::WaitSelectOrMode;
   st.extendPhase = AppCommandState::ExtendPhase::SelectBoundaries;
+  // TASK-099 F4. The phase enums above were reset without the collections and latched entities
+  // that go with them, so this left EXTEND's boundary list and BREAK's pending entity behind.
+  // CancelActiveCommand happened to reset those itself immediately after calling this, which hid
+  // it; every other caller (FinishMirrorCommand, LENGTHEN's Enter finish) did not.
+  st.extendBoundaries.clear();
+  st.breakPhase = AppCommandState::BreakPhase::SelectFirstPoint;
+  st.breakEntity = SelectedEntity{};
+  st.lengthenPendingEntity = SelectedEntity{};
+  st.lengthenPendingApplyOnValue = false;
 }
 
 static void ClearPendingViewportZoom(AppCommandState& st) {
@@ -4237,6 +4256,7 @@ const CmdEntry kRegistry[] = {
     {"lengthen", "len", "Change an object's length (DElta/Percent/Total/DYnamic)"},
     {"extend", "ex", "Extend objects to a boundary edge"},
     {"break", "br", "Split an object at one or two picked points"},
+    {"stretch", "s", "Crossing/window-select, then move only the vertices inside the box"},
     {"delete", "del", "Erase objects"},
     {"join", "j", "Join collinear objects"},
     {"trim", "tr", "Trim objects to an edge"},
@@ -4706,6 +4726,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "break") {
     StartBreakCommand(st, log);
+    return true;
+  }
+  if (primary == "stretch") {
+    StartStretchCommand(st, log);
     return true;
   }
   if (primary == "delete") {
@@ -7209,6 +7233,38 @@ bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineI
   return false;
 }
 
+/// REQ-103 STRETCH typed-entry path — mirrors \c HandleModifyText's NeedBase/NeedDestination shape,
+/// but calls \c ApplyStretchToSelection with the box captured by this invocation's own box-select
+/// instead of \c ApplyTranslationToSelection.
+static bool HandleStretchText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+  std::string line = StringUtil::trimCopy(lineIn);
+  using MP = AppCommandState::ModifyPhase;
+  if (st.modifyPhase == MP::NeedBase) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
+      return false;
+    st.modifyBaseX = px;
+    st.modifyBaseY = py;
+    st.modifyPhase = MP::NeedDestination;
+    log.push_back("STRETCH — specify second point (destination).");
+    return true;
+  }
+  if (st.modifyPhase == MP::NeedDestination) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, true, st.modifyBaseX, st.modifyBaseY))
+      return false;
+    const float dx = px - st.modifyBaseX;
+    const float dy = py - st.modifyBaseY;
+    PushUndoSnapshot(st, "Stretch");
+    ApplyStretchToSelection(st, dx, dy, st.stretchRectMnX, st.stretchRectMxX, st.stretchRectMnY,
+                            st.stretchRectMxY, log);
+    st.modifyPhase = MP::NeedBase;
+    log.push_back("STRETCH complete — base point (ESC to exit):");
+    return true;
+  }
+  return false;
+}
+
 static void FinishScaleCommand(AppCommandState& st, float scaleFactor, std::vector<std::string>& log) {
   PushUndoSnapshot(st, "Scale");
   const float s = std::max(scaleFactor, 1e-6f);
@@ -8412,10 +8468,18 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   auto finishBox = [&]() {
     const bool inclSurvey = (st.active == AppCommandState::Kind::None || st.active == K::Move ||
                              st.active == K::Copy || st.active == K::Rotate || st.active == K::Scale ||
-                             st.active == K::Mirror || st.active == K::Align);
+                             st.active == K::Mirror || st.active == K::Align || st.active == K::Stretch);
     ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, wx, wy, windowSelectionSubtract,
                              fenceLeftToRightWindowMode, inclSurvey, boxSelCam, st.uiViewportWidthPx,
                              st.uiViewportHeightPx);
+    if (st.active == K::Stretch) {
+      // Captured in plain world XY, not camera-projected — REQ-103 STRETCH's stated simplification;
+      // entity CANDIDACY above still goes through ComputeSelectionFromRect's own camera-aware test.
+      st.stretchRectMnX = std::min(st.selBoxAnchorX, wx);
+      st.stretchRectMxX = std::max(st.selBoxAnchorX, wx);
+      st.stretchRectMnY = std::min(st.selBoxAnchorY, wy);
+      st.stretchRectMxY = std::max(st.selBoxAnchorY, wy);
+    }
     st.selBoxWaitingSecond = false;
     log.push_back("Fence — CAD " + std::to_string(st.selection.size()) + ", survey " +
                   std::to_string(st.selectedSurveyPointIndices.size()) +
@@ -8809,6 +8873,40 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
         st.modifyPhase = MP::NeedBase;
         log.push_back("MOVE complete — base point (ESC to exit):");
       }
+    }
+    return;
+  }
+
+  if (st.active == K::Stretch) {
+    if (st.modifyPhase == MP::PickSelection) {
+      if (st.selBoxWaitingSecond) {
+        finishBox();
+        if (st.selection.empty() && st.selectedSurveyPointIndices.empty())
+          log.push_back("Nothing selected — pick two corners again.");
+        else {
+          st.modifyPhase = MP::NeedBase;
+          log.push_back("STRETCH — base point:");
+        }
+      }
+      return;
+    }
+    if (st.modifyPhase == MP::NeedBase) {
+      st.modifyBaseX = wx;
+      st.modifyBaseY = wy;
+      st.modifyPhase = MP::NeedDestination;
+      log.push_back("STRETCH — destination:");
+      return;
+    }
+    if (st.modifyPhase == MP::NeedDestination) {
+      const float dx = wx - st.modifyBaseX;
+      const float dy = wy - st.modifyBaseY;
+      PushUndoSnapshot(st, "Stretch");
+      ApplyStretchToSelection(st, dx, dy, st.stretchRectMnX, st.stretchRectMxX, st.stretchRectMnY,
+                              st.stretchRectMxY, log);
+      // Stay in STRETCH — same selection+box at new position, ready for another base+destination
+      // (MOVE's own looping shape for repeated displacement rounds on one selection).
+      st.modifyPhase = MP::NeedBase;
+      log.push_back("STRETCH complete — base point (ESC to exit):");
     }
     return;
   }
@@ -9881,6 +9979,59 @@ static bool TryLengthenModeToggle(AppCommandState& st, const std::string& lineIn
   return false;
 }
 
+/// REQ-103 LENGTHEN, pick-first entry (TASK-100). The user picked an object while the active
+/// sub-mode had no value yet. Latch the object, report what it currently measures, and open that
+/// mode's value prompt — `HandleLengthenText` applies the answer to this object rather than merely
+/// arming the mode. DYnamic never gets here (it needs no typed value and is handled before this).
+static void LengthenBeginValuePromptForPick(AppCommandState& st, const SelectedEntity& hit, bool nearFirst,
+                                            float curLen, std::vector<std::string>& log) {
+  using LM = AppCommandState::LengthenMode;
+  using LP = AppCommandState::LengthenPhase;
+  st.lengthenPendingEntity = hit;
+  st.lengthenPendingNearFirst = nearFirst;
+  st.lengthenPendingCurrentLength = curLen;
+  st.lengthenPendingApplyOnValue = true;
+  const char* prompt = "length to add (+) or subtract (-):";
+  switch (st.lengthenMode) {
+  case LM::Percent:
+    st.lengthenPhase = LP::WaitPercentValue;
+    prompt = "new length as a percentage of current (100 = unchanged):";
+    break;
+  case LM::Total:
+    st.lengthenPhase = LP::WaitTotalValue;
+    prompt = "new total length:";
+    break;
+  case LM::Delta:
+  case LM::Dynamic:  // unreachable — DYnamic resolves from the drag and returns before this call
+    st.lengthenPhase = LP::WaitDeltaValue;
+    break;
+  }
+  char buf[224];
+  std::snprintf(buf, sizeof(buf), "LENGTHEN — current length %.3f. %s — %s",
+                static_cast<double>(curLen), LengthenModeName(st.lengthenMode), prompt);
+  log.push_back(buf);
+}
+
+/// The other half of `LengthenBeginValuePromptForPick`: a value has just been parsed, so if a pick
+/// is waiting on it, apply it to that object now and clear the latch. Returns true when it applied
+/// (so the caller can log the "select object" prompt only when it did not).
+static bool LengthenApplyPendingPick(AppCommandState& st, std::vector<std::string>& log) {
+  if (!st.lengthenPendingApplyOnValue)
+    return false;
+  const float curLen = st.lengthenPendingCurrentLength;
+  const float newLen = LengthenResolveTargetLength(st, curLen);
+  if (ApplyLengthenToEntity(st, st.lengthenPendingEntity, st.lengthenPendingNearFirst, newLen, log)) {
+    log.push_back("LENGTHEN — length " + std::to_string(curLen) + " -> " + std::to_string(newLen) + ".");
+    BumpCadGpuCache(st);
+  }
+  // Cleared whether or not the apply succeeded: a refused length (collapse-to-zero, arc past a
+  // full circle) has already been explained by ApplyLengthenToEntity, and leaving the latch armed
+  // would silently re-apply to a stale object on the next value typed.
+  st.lengthenPendingApplyOnValue = false;
+  st.lengthenPendingEntity = SelectedEntity{};
+  return true;
+}
+
 bool HandleLengthenText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
   std::string line = StringUtil::trimCopy(lineIn);
   using LP = AppCommandState::LengthenPhase;
@@ -9893,6 +10044,24 @@ bool HandleLengthenText(AppCommandState& st, const std::string& lineIn, std::vec
     log.push_back("LENGTHEN — type DE, P, T, or DY to set the mode, or pick an object in the viewport.");
     return false;
   }
+  // TASK-100. A mode letter is legal at a value prompt too, and it must not lose an object the
+  // user has already picked — otherwise "pick, then realise you wanted Percent" dead-ends on
+  // "must be a finite number", which is the same trap the pick-first entry was added to remove.
+  if (st.lengthenPendingApplyOnValue &&
+      (st.lengthenPhase == LP::WaitDeltaValue || st.lengthenPhase == LP::WaitPercentValue ||
+       st.lengthenPhase == LP::WaitTotalValue)) {
+    if (TryLengthenModeToggle(st, line, log)) {
+      // The toggle has already set the new mode's value phase and logged its prompt, and the latch
+      // survives untouched — so the next number still applies to the object already picked.
+      if (st.lengthenMode == AppCommandState::LengthenMode::Dynamic) {
+        // DYnamic is the exception: it needs no typed value, so hand the object to the drag.
+        st.lengthenPendingApplyOnValue = false;
+        st.lengthenPhase = LP::WaitDynamicTarget;
+        log.push_back("LENGTHEN DYnamic — drag to the new length, or type it:");
+      }
+      return true;
+    }
+  }
   if (st.lengthenPhase == LP::WaitDeltaValue) {
     float v = 0.f;
     if (!ParseOneFloat(line, &v) || !std::isfinite(v)) {
@@ -9902,6 +10071,7 @@ bool HandleLengthenText(AppCommandState& st, const std::string& lineIn, std::vec
     st.lengthenDeltaValue = v;
     st.lengthenModeValueSet = true;
     st.lengthenPhase = LP::WaitSelectOrMode;
+    LengthenApplyPendingPick(st, log);  // TASK-100: a pick may be waiting on this value
     log.push_back(std::string("LENGTHEN — select object, or [DElta/Percent/Total/DYnamic] <DElta ") +
                   std::to_string(v) + ">. ESC cancels.");
     return true;
@@ -9915,6 +10085,7 @@ bool HandleLengthenText(AppCommandState& st, const std::string& lineIn, std::vec
     st.lengthenPercentValue = v;
     st.lengthenModeValueSet = true;
     st.lengthenPhase = LP::WaitSelectOrMode;
+    LengthenApplyPendingPick(st, log);  // TASK-100: a pick may be waiting on this value
     log.push_back(std::string("LENGTHEN — select object, or [DElta/Percent/Total/DYnamic] <Percent ") +
                   std::to_string(v) + ">. ESC cancels.");
     return true;
@@ -9928,6 +10099,7 @@ bool HandleLengthenText(AppCommandState& st, const std::string& lineIn, std::vec
     st.lengthenTotalValue = v;
     st.lengthenModeValueSet = true;
     st.lengthenPhase = LP::WaitSelectOrMode;
+    LengthenApplyPendingPick(st, log);  // TASK-100: a pick may be waiting on this value
     log.push_back(std::string("LENGTHEN — select object, or [DElta/Percent/Total/DYnamic] <Total ") +
                   std::to_string(v) + ">. ESC cancels.");
     return true;
@@ -10057,8 +10229,11 @@ void HandleLengthenViewportPick(AppCommandState& st, float wx, float wy, std::ve
     return;
   }
   if (!st.lengthenModeValueSet) {
-    log.push_back(std::string("LENGTHEN — no ") + LengthenModeName(st.lengthenMode) +
-                  " value set yet; type DE/P/T first.");
+    // TASK-100. This used to refuse the pick ("type DE/P/T first"), which made the ribbon button a
+    // dead end: the prompt invited a pick, the pick was rejected, and the only way forward was to
+    // know that a mode letter AND a number had to be typed before picking anything. Latch the
+    // object instead and ask for the value now — the answer applies to this object straight away.
+    LengthenBeginValuePromptForPick(st, hit, nearFirst, curLen, log);
     return;
   }
   const float newLen = LengthenResolveTargetLength(st, curLen);
@@ -10300,15 +10475,23 @@ bool ApplyLengthenToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, 
                   "prompt for; switch to DElta/Percent/Total in model space first.");
     return false;
   }
-  if (!st.lengthenModeValueSet) {
-    log.push_back(std::string("LENGTHEN — no ") + LengthenModeName(st.lengthenMode) +
-                  " value set yet; type DE/P/T on the model-space command line first.");
-    return false;
-  }
   bool nearFirst = false;
   float curLen = 0.f;
   if (!PaperLengthenEligibility(*L, ref, pickXIn, pickYIn, &nearFirst, &curLen, "LENGTHEN", log))
     return false;
+  if (!st.lengthenModeValueSet) {
+    // TASK-100. Model space latches the pick and prompts for the value; paper space has no command
+    // state to hold that prompt (it runs with `active == None` — see paperLengthenPhase), so the
+    // pick cannot be completed here. It can still be worth something: eligibility now runs FIRST,
+    // so the pick at least reports what the object measures instead of being a bare refusal.
+    char buf[224];
+    std::snprintf(buf, sizeof(buf),
+                  "LENGTHEN — current length %.3f in. No %s value set yet; type DE/P/T on the "
+                  "model-space command line first, then pick here again.",
+                  static_cast<double>(curLen), LengthenModeName(st.lengthenMode));
+    log.push_back(buf);
+    return false;
+  }
 
   const float newLen = LengthenResolveTargetLength(st, curLen);
   if (!(newLen > 1e-6f) || !std::isfinite(newLen)) {
@@ -10478,8 +10661,14 @@ static void CircleBreakStartSweep(float theta1, float theta2, float* outStart, f
 
 /// Projects (px,py) onto entity \p e (model-space stores), filling \p out. No existing helper
 /// resolves "the closest point ON this entity" — `PickClosestCadEntity` answers "which entity",
-/// with a distance only. Written narrowly for BREAK's own need (CLAUDE.md rule 2 — one caller).
-static bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, float px, float py,
+/// with a distance only.
+///
+/// TASK-101: no longer static. BREAK's live preview has to resolve the cursor to the SAME point the
+/// second pick will commit, or it draws a span that is not the one that gets removed — the exact
+/// class of mistake `project_3d_preview_commit_point` records ("previews read the cursor, picks
+/// commit the snapped point"). One function, two callers, no second implementation. Declared in the
+/// header for the same reason its paper-space sibling `ClosestPointOnPaperEntity` already is.
+bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, float px, float py,
                                  BreakPoint* out) {
   switch (e.type) {
   case SelectedEntity::Type::LineSeg: {
@@ -10628,6 +10817,12 @@ static void ApplyBreakToCircle(AppCommandState& st, int index, const BreakPoint&
   a.sweepRad = sweepRad;
   st.userArcs.push_back(a);
   st.userArcAttrs.push_back(DuplicatedEntityAttrs(srcAttrs));
+  // TASK-099 F5. The erase above is the only COMPACTING erase in BREAK: every circle after `index`
+  // just moved down one slot, so any SelectedEntity still holding a higher circle index now names a
+  // different circle. ExecuteDeleteSelection clears the selection after exactly this compaction for
+  // exactly this reason; BREAK does not clear the selection when it starts, so it must clear it
+  // here. (The other BREAK paths mutate in place or append, and leave indices alone.)
+  ClearCadSelection(st);
   BumpCadGpuCache(st);
   log.push_back(samePoint ? "BREAK — circle opened into an arc at the pick point."
                          : "BREAK — circle converted to an arc.");
@@ -11312,6 +11507,315 @@ bool ApplyBreakToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, con
   if (applied)
     BumpCadGpuCache(st);
   return applied;
+}
+
+// ============================================================================
+// STRETCH (REQ-103 step 5, TASK-098)
+// ============================================================================
+
+// RecomputeArcFromEndpoints now lives inline in CadCommands.hpp (unit-testable without linking
+// this whole TU — see its doc comment there).
+
+void StretchOneArc(CadArc& arc, float mnX, float mxX, float mnY, float mxY, float dx, float dy,
+                   std::vector<std::string>& log) {
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  if (std::fabs(std::fabs(arc.sweepRad) - kTwoPi) < 1e-4f) {
+    // Full-circle sweep: endpoints coincide, so endpoint math is undefined — follow the Circle
+    // rule instead, same tolerance BREAK's own full-circle guard uses.
+    if (PointInsideClosedRect(arc.cx, arc.cy, mnX, mxX, mnY, mxY)) {
+      arc.cx += dx;
+      arc.cy += dy;
+    }
+    return;
+  }
+  const float sx = arc.cx + arc.r * std::cos(arc.startRad);
+  const float sy = arc.cy + arc.r * std::sin(arc.startRad);
+  const float endAng = arc.startRad + arc.sweepRad;
+  const float ex = arc.cx + arc.r * std::cos(endAng);
+  const float ey = arc.cy + arc.r * std::sin(endAng);
+  const bool startIn = PointInsideClosedRect(sx, sy, mnX, mxX, mnY, mxY);
+  const bool endIn = PointInsideClosedRect(ex, ey, mnX, mxX, mnY, mxY);
+  if (!startIn && !endIn)
+    return;  // selected but nothing to move — a legitimate no-op, matching AutoCAD.
+  const float nsx = startIn ? sx + dx : sx;
+  const float nsy = startIn ? sy + dy : sy;
+  const float nex = endIn ? ex + dx : ex;
+  const float ney = endIn ? ey + dy : ey;
+  RecomputeArcFromEndpoints(arc, nsx, nsy, nex, ney, &log);
+}
+
+/// REQ-103 STRETCH, model-space apply. Mirrors \c ApplyTranslationToSelection's per-type loop shape,
+/// but each entity's definition point(s) are tested against [mnX,mxX]x[mnY,mxY] individually — only
+/// in-box points move by (dx,dy). Line/Polyline/FeatureLine vertices are independent (the genuine
+/// stretch effect); Arc goes through \ref StretchOneArc; every other type has one definition point
+/// and moves as a whole only if that point is in-box (matching AutoCAD's own behavior for them).
+void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX, float mxX, float mnY,
+                             float mxY, std::vector<std::string>& log) {
+  DropSurfacesFromSelectionForTransform(st, "STRETCH", log);
+  auto inBox = [&](float x, float y) { return PointInsideClosedRect(x, y, mnX, mxX, mnY, mxY); };
+
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::LineSeg)
+      continue;
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      continue;
+    if (inBox(st.userLinesFlat[k], st.userLinesFlat[k + 1])) {
+      st.userLinesFlat[k] += dx;
+      st.userLinesFlat[k + 1] += dy;
+    }
+    if (inBox(st.userLinesFlat[k + 3], st.userLinesFlat[k + 4])) {
+      st.userLinesFlat[k + 3] += dx;
+      st.userLinesFlat[k + 4] += dy;
+    }
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Circle)
+      continue;
+    const size_t k = static_cast<size_t>(e.index) * 4;
+    if (k + 3 >= st.userCirclesCxCyZR.size())
+      continue;
+    if (inBox(st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1])) {
+      st.userCirclesCxCyZR[k] += dx;
+      st.userCirclesCxCyZR[k + 1] += dy;
+    }
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Arc)
+      continue;
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.userArcs.size())
+      continue;
+    StretchOneArc(st.userArcs[k], mnX, mxX, mnY, mxY, dx, dy, log);
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Ellipse)
+      continue;
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.userEllipses.size())
+      continue;
+    if (inBox(st.userEllipses[k].cx, st.userEllipses[k].cy)) {
+      st.userEllipses[k].cx += dx;
+      st.userEllipses[k].cy += dy;
+    }
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Polyline)
+      continue;
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+      continue;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    for (int vi = v0; vi < v1; ++vi) {
+      const size_t b = static_cast<size_t>(vi) * 3;
+      if (inBox(st.userPolylineVerts[b], st.userPolylineVerts[b + 1])) {
+        st.userPolylineVerts[b] += dx;
+        st.userPolylineVerts[b + 1] += dy;
+      }
+    }
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Annotation)
+      continue;
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.cadAnnotations.size())
+      continue;
+    CadAnnotation& a = st.cadAnnotations[k];
+    if (!inBox(a.insX, a.insY))
+      continue;
+    a.insX += dx;
+    a.insY += dy;
+    if (a.kind == CadAnnotation::Kind::Mtext) {
+      a.boxMinX += dx;
+      a.boxMinY += dy;
+      a.boxMaxX += dx;
+      a.boxMaxY += dy;
+    } else if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
+      a.dimExt1X += dx;
+      a.dimExt1Y += dy;
+      a.dimExt2X += dx;
+      a.dimExt2Y += dy;
+    }
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::PdfUnderlay)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.pdfAttachments.size())
+      continue;
+    PdfAttachment& att = st.pdfAttachments[static_cast<size_t>(e.index)];
+    if (inBox(att.insertX, att.insertY)) {
+      att.insertX += dx;
+      att.insertY += dy;
+    }
+  }
+  // Filled regions (REQ-042): whole-region translate, gated on the first boundary vertex — no
+  // per-vertex boundary stretch (spec-recorded simplification, REQ-103 STRETCH acceptance).
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::FilledRegion)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadFilledRegions.size())
+      continue;
+    CadFilledRegion& fr = st.cadFilledRegions[static_cast<size_t>(e.index)];
+    if (fr.vertsXyz.size() >= 2 && inBox(fr.vertsXyz[0], fr.vertsXyz[1]))
+      hatchgeom::Translate(fr, dx, dy);
+  }
+  // Feature lines (REQ-087): per-vertex, elevation untouched — same restriction
+  // TransformSelectedFeatureLinesInPlace's own comment documents for MOVE/ROTATE/SCALE.
+  TransformSelectedFeatureLinesInPlace(st, [&](float* x, float* y) {
+    if (inBox(*x, *y)) {
+      *x += dx;
+      *y += dy;
+    }
+  });
+  {
+    std::vector<int> ix = st.selectedSurveyPointIndices;
+    std::sort(ix.begin(), ix.end());
+    ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
+    for (int i : ix) {
+      if (i < 0 || static_cast<size_t>(i) >= st.surveyPoints.size())
+        continue;
+      SurveyPoint& sp = st.surveyPoints[static_cast<size_t>(i)];
+      if (inBox(sp.easting, sp.northing)) {
+        sp.easting += dx;
+        sp.northing += dy;
+      }
+    }
+    for (int i : ix) {
+      if (i >= 0 && static_cast<size_t>(i) < st.surveyPoints.size())
+        RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(i));
+    }
+  }
+  BumpCadGpuCache(st);
+}
+
+/// REQ-103 STRETCH, pure-paper-space path. Mirrors \c TranslateSelectedPaperEntities's one-loop-
+/// switch shape. If \c st.paperSelBoxLastValid, only each entity's definition point(s) that fall
+/// inside the last-captured box move (true partial stretch for Line/Polyline/Arc — Arc via the
+/// same \ref StretchOneArc the model path uses, since \c paperArcs is the same \c CadArc struct);
+/// otherwise every selected entity translates as a whole (a plain click-select carries no box to
+/// test against — degraded MOVE-equivalent, matching AutoCAD's own degradation for a non-crossing
+/// pickfirst set).
+void ApplyStretchToPaperSelection(AppCommandState& st, float dxIn, float dyIn, std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L || st.selectedPaperEntities.empty())
+    return;
+  const bool haveBox = st.paperSelBoxLastValid;
+  const float mnX = st.paperSelBoxLastMnXIn, mxX = st.paperSelBoxLastMxXIn;
+  const float mnY = st.paperSelBoxLastMnYIn, mxY = st.paperSelBoxLastMxYIn;
+  auto inBox = [&](float x, float y) { return !haveBox || PointInsideClosedRect(x, y, mnX, mxX, mnY, mxY); };
+  PushUndoSnapshot(st, "Stretch paper geometry");
+  for (const PaperRef& r : st.selectedPaperEntities) {
+    switch (r.type) {
+    case PaperRef::Type::Line: {
+      const size_t i = static_cast<size_t>(r.index) * 6;
+      if (i + 5 >= L->paperLines.size())
+        break;
+      if (inBox(L->paperLines[i], L->paperLines[i + 1])) {
+        L->paperLines[i] += dxIn;
+        L->paperLines[i + 1] += dyIn;
+      }
+      if (inBox(L->paperLines[i + 3], L->paperLines[i + 4])) {
+        L->paperLines[i + 3] += dxIn;
+        L->paperLines[i + 4] += dyIn;
+      }
+      break;
+    }
+    case PaperRef::Type::Circle: {
+      const size_t i = static_cast<size_t>(r.index) * 3;
+      if (i + 2 >= L->paperCircles.size())
+        break;
+      if (inBox(L->paperCircles[i], L->paperCircles[i + 1])) {
+        L->paperCircles[i] += dxIn;
+        L->paperCircles[i + 1] += dyIn;
+      }
+      break;
+    }
+    case PaperRef::Type::Arc: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperArcs.size())
+        break;
+      CadArc& a = L->paperArcs[static_cast<size_t>(r.index)];
+      if (haveBox)
+        StretchOneArc(a, mnX, mxX, mnY, mxY, dxIn, dyIn, log);
+      else {
+        a.cx += dxIn;
+        a.cy += dyIn;
+      }
+      break;
+    }
+    case PaperRef::Type::Ellipse: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperEllipses.size())
+        break;
+      CadEllipse& e = L->paperEllipses[static_cast<size_t>(r.index)];
+      if (inBox(e.cx, e.cy)) {
+        e.cx += dxIn;
+        e.cy += dyIn;
+      }
+      break;
+    }
+    case PaperRef::Type::Polyline: {
+      const int pi = r.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size())
+        break;
+      const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+      const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+      for (int vi = v0; vi < v1; ++vi) {
+        const size_t b = static_cast<size_t>(vi) * 3;
+        if (inBox(L->paperPolyVerts[b], L->paperPolyVerts[b + 1])) {
+          L->paperPolyVerts[b] += dxIn;
+          L->paperPolyVerts[b + 1] += dyIn;
+        }
+      }
+      break;
+    }
+    case PaperRef::Type::Text: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperTexts.size())
+        break;
+      CadAnnotation& a = L->paperTexts[static_cast<size_t>(r.index)];
+      if (inBox(a.insX, a.insY)) {
+        a.insX += dxIn;
+        a.insY += dyIn;
+      }
+      break;
+    }
+    }
+  }
+  BumpCadGpuCache(st);
+  log.push_back(haveBox ? "STRETCH — paper object(s) stretched."
+                        : "STRETCH — paper object(s) moved (no crossing/window box on the current "
+                          "selection).");
+}
+
+void StartStretchCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  using MP = AppCommandState::ModifyPhase;
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
+    if (st.selectedPaperEntities.empty()) {
+      log.push_back("STRETCH — select paper object(s) first (a crossing/window box gives true "
+                    "partial stretch; a plain click-select moves them as a whole).");
+      return;
+    }
+    st.active = K::None;  // paper-space edit ops are not a model command (ROTATE/SCALE precedent)
+    st.paperStretchPhase = 1;
+    log.push_back("STRETCH — specify base point (click or type X,Y). ESC to cancel.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = K::Stretch;
+  st.lastCommand = K::Stretch;
+  // Always a fresh, CLEAN box-select — unlike MOVE/COPY/ROTATE/SCALE, STRETCH's whole effect
+  // depends on capturing the box together with the selection, and ComputeSelectionFromRect only
+  // ADDS hits to st.selection (never clears stale entries first, by design — a real selection
+  // tool needs to accumulate across several drags). Without this clear, a leftover selection from
+  // whatever ran before STRETCH would be re-evaluated against THIS invocation's box/displacement
+  // too — found while writing this task's own headless transcripts (task log).
+  ClearSelection(st);
+  st.modifyPhase = MP::PickSelection;
+  st.selBoxWaitingSecond = false;
+  log.push_back(
+      "STRETCH — click two corners to crossing/window-select objects (right-to-left = crossing), "
+      "then base point and destination. ESC cancels.");
 }
 
 float MathAngleRadFromBearingCwNorthDeg(float bearingDegClockwiseFromNorth) {
@@ -14080,9 +14584,8 @@ void ResetCadToolStateToIdle(AppCommandState& st) {
   ResetSegmentAngleLock(st);
   st.trimPhase = AppCommandState::TrimPhase::SelectCuttingEdges;
   st.trimCutters.clear();
-  st.extendBoundaries.clear();
-  st.breakPhase = AppCommandState::BreakPhase::SelectFirstPoint;
-  st.breakEntity = SelectedEntity{};
+  // EXTEND's boundary list and BREAK's pending entity are reset by ResetModifyRotateDraft below,
+  // which now owns every modify command's draft state (TASK-099 F4) — duplicated here previously.
   ResetAllCadDraftTools(st);
   ResetModifyRotateDraft(st);
   st.selBoxWaitingSecond = false;
@@ -17998,6 +18501,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("EXTEND canceled.");
   else if (st.active == AppCommandState::Kind::Break)
     log.push_back("BREAK canceled.");
+  else if (st.active == AppCommandState::Kind::Stretch)
+    log.push_back("STRETCH canceled.");
   else if (st.active == AppCommandState::Kind::Delete)
     log.push_back("DELETE canceled.");
   else if (st.active == AppCommandState::Kind::Join)
@@ -18044,9 +18549,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetSegmentAngleLock(st);
   st.trimPhase = AppCommandState::TrimPhase::SelectCuttingEdges;
   st.trimCutters.clear();
-  st.extendBoundaries.clear();
-  st.breakPhase = AppCommandState::BreakPhase::SelectFirstPoint;
-  st.breakEntity = SelectedEntity{};
+  // EXTEND's boundary list and BREAK's pending entity are reset by ResetModifyRotateDraft below,
+  // which now owns every modify command's draft state (TASK-099 F4) — duplicated here previously.
   ResetAllCadDraftTools(st);
   ResetModifyRotateDraft(st);
   st.selBoxWaitingSecond = false;
@@ -19188,6 +19692,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     log.push_back("Could not parse MOVE/COPY input — use X,Y or @dx,dy from base.");
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Stretch) {
+    if (HandleStretchText(st, line, log)) {
+      return;
+    }
+    log.push_back("Could not parse STRETCH input — use X,Y or @dx,dy from base.");
     return;
   }
 
@@ -20854,6 +21366,7 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
     case K::Lengthen:   StartLengthenCommand(st, log);   break;
     case K::Extend:     StartExtendCommand(st, log);     break;
     case K::Break:      StartBreakCommand(st, log);      break;
+    case K::Stretch:    StartStretchCommand(st, log);    break;
     case K::Delete:     StartDeleteCommand(st, log);     break;
     case K::Join:       StartJoinCommand(st, log);       break;
     case K::Trim:       StartTrimCommand(st, log);       break;

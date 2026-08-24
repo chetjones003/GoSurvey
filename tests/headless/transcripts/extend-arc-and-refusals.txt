@@ -13,6 +13,11 @@
 # boundary), plus Circle and closed-Polyline as EXTEND targets (both ineligible, same message set
 # LENGTHEN already established, reused verbatim with cmdName="EXTEND") — geometry unchanged in every
 # refusal case, never silently ignored.
+# TASK-099: drives clicks with CLICK, not PICK. PICK calls SubmitViewportPick directly and
+# skips the UI routing layer, which is exactly where this command was missing — the command
+# ignored every real viewport click while this transcript passed green. CLICK goes through
+# ViewportClickRouteFor, so an unrouted command fails here instead.
+#
 
 NEW
 
@@ -22,9 +27,9 @@ CMD 300,20
 ESC
 
 CMD ARC
-PICK 290 0
-PICK 300 10
-PICK 310 0
+CLICK 290 0
+CLICK 300 10
+CLICK 310 0
 ESC
 
 CHECK ALL
@@ -33,9 +38,9 @@ EXPECT ARCS 1
 SAVEAS %OUT%/extend-arc-a.gs
 
 CMD EXTEND
-PICK 300 0
+CLICK 300 0
 CMD
-PICK 310 0
+CLICK 310 0
 
 EXPECT LOG "EXTEND — extended to the boundary."
 EXPECT ARCS 1
@@ -87,19 +92,19 @@ EXPECT POLYLINES 1
 SAVEAS %OUT%/extend-refusal-a.gs
 
 CMD EXTEND
-PICK 300 0
+CLICK 300 0
 CMD
-PICK 650 0
+CLICK 650 0
 
 EXPECT LOG "does not reach a boundary edge"
 EXPECT LINES 2
 
-PICK 705 0
+CLICK 705 0
 
 EXPECT LOG "ignored"
 EXPECT CIRCLES 1
 
-PICK 760 5
+CLICK 760 5
 
 EXPECT LOG "ignored"
 EXPECT POLYLINES 1

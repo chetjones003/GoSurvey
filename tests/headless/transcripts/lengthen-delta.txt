@@ -6,6 +6,11 @@
 # this grammar doesn't have. LENGTHEN edits in place and allocates no new entity id per apply
 # (unlike MIRROR's duplicate), so a plain pre-vs-post-undo SAMEFILE is valid here — confirmed by
 # running it, not assumed.
+# TASK-099: drives clicks with CLICK, not PICK. PICK calls SubmitViewportPick directly and
+# skips the UI routing layer, which is exactly where this command was missing — the command
+# ignored every real viewport click while this transcript passed green. CLICK goes through
+# ViewportClickRouteFor, so an unrouted command fails here instead.
+#
 
 NEW
 
@@ -21,7 +26,7 @@ SAVEAS %OUT%/lengthen-delta-a.gs
 CMD LENGTHEN
 CMD DE
 CMD 50
-PICK 100 0
+CLICK 100 0
 
 EXPECT LOG "LENGTHEN — length 100"
 EXPECT LINES 1
@@ -53,7 +58,7 @@ EXPECT SAMEFILE %OUT%/lengthen-delta-b.gs %OUT%/lengthen-delta-d.gs
 CMD LENGTHEN
 CMD DE
 CMD -20
-PICK 150 0
+CLICK 150 0
 ESC
 
 EXPECT LOG "LENGTHEN — length 150"

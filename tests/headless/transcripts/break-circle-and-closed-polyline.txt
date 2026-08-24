@@ -28,6 +28,11 @@
 # angle math 100% with T6's Circle case (both call the same CircleBreakStartSweep), verified above;
 # only the erase-vs-mutate-in-place difference is untested by transcript, reviewed by hand instead
 # (task log).
+# TASK-099: drives clicks with CLICK, not PICK. PICK calls SubmitViewportPick directly and
+# skips the UI routing layer, which is exactly where this command was missing — the command
+# ignored every real viewport click while this transcript passed green. CLICK goes through
+# ViewportClickRouteFor, so an unrouted command fails here instead.
+#
 
 NEW
 
@@ -57,21 +62,21 @@ EXPECT POLYLINES 2
 SAVEAS %OUT%/break-circle-poly-a.gs
 
 CMD BREAK
-PICK 610 0
-PICK 600 10
+CLICK 610 0
+CLICK 600 10
 
 EXPECT LOG "BREAK — circle converted to an arc."
 EXPECT CIRCLES 0
 EXPECT ARCS 1
 
-PICK 710 5
-PICK 700 5
+CLICK 710 5
+CLICK 700 5
 
 EXPECT LOG "BREAK — closed polyline broken open."
 EXPECT POLYLINES 2
 
-PICK 755 0
-PICK 755 0
+CLICK 755 0
+CLICK 755 0
 
 EXPECT LOG "BREAK — closed polyline opened at the pick point."
 EXPECT POLYLINES 2

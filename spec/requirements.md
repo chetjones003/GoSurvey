@@ -2872,10 +2872,11 @@ requirements is a planning failure, not a sign of rigor.
   - works with a selection made in model space, in a paper-space layout, and through a floating model-space viewport (parity with ROTATE/SCALE's existing paper-space routing).
 - Acceptance — LENGTHEN (step 2):
   - eligible entities are Line, open Polyline, and a non-full-circle Arc; Circle, Ellipse, closed Polyline, a full-circle Arc, and every non-length-bearing entity kind (Annotation, FeatureLine, Surface, Mesh, FilledRegion, PdfUnderlay) are refused with a stated reason (REQ-201), never silently ignored;
-  - four sub-modes — DElta (add/subtract a typed length), Percent (scale total length by a typed percentage), Total (set total length directly), DYnamic (interactive drag with a live preview) — each resolve to one target length, then apply it to the end of the picked entity nearest the pick point, holding the other end fixed, within REQ-101 tolerance of the hand-computed target;
+  - four sub-modes — DElta (add/subtract a typed length), Percent (scale total length by a typed percentage), Total (set total length directly), DYnamic (interactive drag with a live preview) — each resolve to one target length, then apply it to the end of the picked entity nearest the pick point, holding the other end fixed, within REQ-101 tolerance of the hand-computed target. **The default sub-mode is Total** (amended 2026-08-24, D-2026-08-24-f — AutoCAD defaults to DElta; this deliberately does not), so that with the pick-first entry below the out-of-the-box interaction is: pick a line, read the length it reports, type the length it should be;
   - a target length that would collapse an entity to ~0 length, or push an Arc's sweep past a full circle, is rejected with a message rather than silently clamped or wrongly applied;
   - the active sub-mode persists across repeated picks within one invocation (typing a mode letter again mid-loop switches it and re-prompts for its value); the command loops back to "select object" after each successful apply until Enter/Esc; each individual apply is its own undo step, matching TRIM/OFFSET's per-target granularity, not one step per invocation;
-  - reachable from the Modify ribbon, typed `LENGTHEN`/`LEN`, and right-click repeat; works on model-space and native paper-space Line/Arc/open-Polyline entities alike.
+  - **a pick made before the active sub-mode has a value is accepted, not refused** (amended 2026-08-24, D-2026-08-24-e): the picked object is latched, its current length is reported, and that sub-mode's value prompt opens; the value typed next applies to that object immediately rather than only arming the mode. Typing a mode letter at that prompt switches sub-mode and keeps the latched object (DYnamic hands it straight to the drag). A refused length (collapse-to-zero, arc past a full circle) clears the latch, so a later value can never silently apply to a stale object. Without this the Modify ribbon button was a dead end — the opening prompt invited a pick and the pick was rejected — and the command was reachable only by typing a mode letter *and* a number before picking;
+  - reachable from the Modify ribbon, typed `LENGTHEN`/`LEN`, and right-click repeat; works on model-space and native paper-space Line/Arc/open-Polyline entities alike. In paper space the value prompt is unavailable (the paper path runs with no active model command to hold it — the same documented simplification MIRROR's paper path makes), so a valueless pick there reports the object's current length and says where to set the value, rather than refusing bare.
 - Acceptance — EXTEND (step 3):
   - eligible boundary edges: any entity a user can select except Annotation, FeatureLine, Surface (refused with a stated reason, matching TRIM's existing boundary-edge refusal set); eligible targets: Line, open Polyline, non-full-circle Arc — the same set LENGTHEN established, refused with the same reasons for Circle, Ellipse, closed Polyline, full-circle Arc, and every non-length-bearing kind;
   - boundary intersection is analytic (`curveisect`, REQ-062's already-accepted library), never tessellated — a chord-approximated boundary does not meet REQ-101, the same reasoning that made REQ-062 analytic in the first place;
@@ -2916,14 +2917,69 @@ requirements is a planning failure, not a sign of rigor.
     - each individual break is its own undo step; the command loops back to "select object" after
       each completed break until Enter/Esc, matching TRIM/LENGTHEN/EXTEND's per-target granularity
       and looping shape;
+    - **between the two picks a live preview shows the material that will be removed** (amended
+      2026-08-24, D-2026-08-24-e): the span from break point 1 to the cursor — projected onto the
+      picked entity by the same `ClosestPointOnEntity` the second pick commits, never the raw
+      cursor — is drawn in the preview style, with a marker at each break point. The previewed span
+      follows the same ordering rule its commit does: position-ordered on an open entity (click
+      order irrelevant), and on a closed entity the complement of the span the commit keeps, so
+      reversing the click order visibly previews the other side. A repeated pick ("break at point")
+      previews a zero-length span with both markers still shown. It is drawn opaque, in a warning
+      colour, at highlight line width, on its own render channel — NOT in the translucent
+      transform-preview batch, which is built for a ghost of geometry somewhere it is not yet and
+      washes out to nothing when painted over the full-opacity object a removal preview sits on
+      top of. **Model space only**: the GL pass that draws it is skipped whenever the active space
+      is not model space, so neither paper space nor floating model space shows it — the same
+      limit every other GL preview already has, stated rather than implied;
     - reachable from the Modify ribbon, typed `BREAK`/`BR`, and right-click repeat; works in model
       space, floating model space, and native paper space (pure two-click flow, no typed value
       needed, so paper space is not simplified away — same reasoning as EXTEND's step 3).
-  - Acceptance for STRETCH/FILLET/CHAMFER/ARRAY/EXPLODE (steps 5–8) is written when each is
-    accepted for implementation, not spec'd in advance of that command's own design pass.
+  - Acceptance — STRETCH (step 5):
+    - a crossing/window selection box is picked first (left-to-right = window/fully-inside,
+      right-to-left = crossing/overlap — the same rule REQ-039's paper-space parity already
+      established), then a base point, then a destination point (or a typed relative
+      displacement) — one displacement applies to the whole selection in a single apply, not a
+      per-target loop (matching MOVE/ROTATE/SCALE's granularity, not TRIM/LENGTHEN/EXTEND/BREAK's);
+    - for every entity in the box-selected set, each of its "definition points" is tested
+      independently against the box and only the in-box ones move by the displacement — this is
+      the genuine stretch effect for entities straddling the box boundary:
+      - Line, Polyline (open or closed), and FeatureLine: every endpoint/vertex is independent (a
+        FeatureLine's elevation is never altered by the move, matching MOVE/ROTATE/SCALE's own
+        existing plan-only transform of it — REQ-087);
+      - Arc: both endpoints are tested. Zero or both in-box → no-op or whole-arc translate,
+        unchanged radius/angles. Exactly one in-box → the arc is genuinely reshaped: its center
+        and radius are recomputed so it passes through the moved and fixed endpoints while
+        preserving the original included angle (the "bulge"), matching AutoCAD; a full-circle-
+        sweep Arc is exempt from this and instead follows the Circle rule below (its two
+        endpoints coincide, so per-endpoint math is undefined); a stretch that would collapse
+        the new chord to ~0 length is refused with a stated reason (REQ-201), the arc left
+        unchanged, rather than corrupting it to a zero radius;
+      - Circle, Ellipse (center only), Annotation/Text/Mtext/Dim (insertion point; dimension
+        extension points are not independently tested), PdfUnderlay (insertion point),
+        FilledRegion (one reference point, whole-region translate, no per-vertex boundary
+        stretch), SurveyPoint (its own point): each has exactly one definition point and moves
+        as a whole only if that point is in-box — matching AutoCAD's own behavior for these
+        types (they are not "stretched," only moved-if-selected-and-in-window);
+      - `Surface` and `Mesh` are excluded from the selection, consistent with the existing
+        transform restrictions (`DropSurfacesFromSelectionForTransform`; Mesh is never edited);
+    - a box-selected entity none of whose definition points land in the box is a legitimate
+      no-op (still selected, simply unmoved) — not a refusal, matching AutoCAD;
+    - one undo step restores the exact pre-stretch state for the whole apply;
+    - works in model space, floating model space, and native paper space with true per-point
+      partial stretch in both spaces (not simplified to whole-entity-only in paper space); a
+      paper-space selection built by a plain click (not a box) degrades to a whole-entity
+      translate for every selected entity, since no crossing/window box exists to test points
+      against — matching AutoCAD's own degradation for a non-crossing pickfirst set;
+    - the box/point-membership test itself operates in plain world-XY (model) or paper-inch XY
+      (paper) coordinates, not projected through an orbited 3D camera the way the box-select's
+      own entity-candidacy test optionally is — a stated, accepted simplification, recorded as
+      technical debt rather than a silent gap;
+    - reachable from the Modify ribbon, typed `STRETCH`, and right-click repeat.
+  - Acceptance for FILLET/CHAMFER/ARRAY/EXPLODE (steps 6–8) is written when each is accepted for
+    implementation, not spec'd in advance of that command's own design pass.
 - Owner-layer: Commands/Domain/UI
 - Status: accepted
-- Revisions: 2026-08-23 — catalogued, proposed (D-2026-08-23-i). 2026-08-23 — accepted; sequenced into 8 increments starting with MIRROR; MIRROR's acceptance conditions written; MIRRTEXT-off and erase-default-No confirmed with the user (D-2026-08-23-j, TASK-094). 2026-08-24 — LENGTHEN's (step 2) acceptance conditions written (D-2026-08-24-a, TASK-095). 2026-08-24 — EXTEND's (step 3) acceptance conditions written; analytic-over-tessellated boundary intersection and paper-space-included both confirmed with the user (D-2026-08-24-b, TASK-096). 2026-08-24 — BREAK's (step 4) acceptance conditions written; Circle/full-circle-Arc target eligibility (converts to Arc) and closed-Polyline target eligibility (splits open) both confirmed with the user (D-2026-08-24-c, TASK-097).
+- Revisions: 2026-08-23 — catalogued, proposed (D-2026-08-23-i). 2026-08-23 — accepted; sequenced into 8 increments starting with MIRROR; MIRROR's acceptance conditions written; MIRRTEXT-off and erase-default-No confirmed with the user (D-2026-08-23-j, TASK-094). 2026-08-24 — LENGTHEN's (step 2) acceptance conditions written (D-2026-08-24-a, TASK-095). 2026-08-24 — EXTEND's (step 3) acceptance conditions written; analytic-over-tessellated boundary intersection and paper-space-included both confirmed with the user (D-2026-08-24-b, TASK-096). 2026-08-24 — BREAK's (step 4) acceptance conditions written; Circle/full-circle-Arc target eligibility (converts to Arc) and closed-Polyline target eligibility (splits open) both confirmed with the user (D-2026-08-24-c, TASK-097). 2026-08-24 — STRETCH's (step 5) acceptance conditions written; full AutoCAD-parity arc partial-stretch (center/radius recompute preserving included angle) and full paper-space vertex-level parity both confirmed with the user (D-2026-08-24-d, TASK-098). 2026-08-24 — after the first hand-driven GUI pass: LENGTHEN's valueless first pick amended from a refusal to a latch-and-prompt (the ribbon button was a dead end), and a live removed-span preview added to BREAK's acceptance (D-2026-08-24-e, TASK-100, TASK-101). 2026-08-24 — LENGTHEN's default sub-mode changed from DElta to Total, so pick-then-type-the-new-length is the out-of-the-box flow (D-2026-08-24-f, TASK-100).
 
 ### REQ-104 — Draw-command completeness
 - Purpose: SPLINE, XLINE, RAY, DONUT, SOLID, REVCLOUD, WIPEOUT, and MLINE have no command at all
@@ -3497,7 +3553,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-080 (amended) | Telemetry/Auth/UI/Platform | `TelemetryPingTests` **green 2026-08-23** (email-empty/email-present JSON cases; `DecideEventToSend` simplified to install-vs-always-active, throttle tests removed with the throttle) + `telemetry-worker/test.mjs` **green 2026-08-23** (valid/empty/malformed email stored-or-dropped-to-null; column-count assertions 8→9) + **live, 2026-08-23**: deployed Worker smoke-tested with a real POST carrying `email`, confirmed via direct D1 read-back; live migrations applied to the pre-existing deployed table (`ALTER TABLE pings ADD COLUMN email TEXT`, `DROP INDEX ux_pings_active_daily`) | accepted |
 | REQ-093 (amended) | UI/Platform | **manual, verified live against the real app across three build-and-look rounds, 2026-08-23 (D-2026-08-23-h):** the splash is its own small window (~440x320), centered on the primary monitor, filled edge-to-edge by the card — the real desktop, not a dimmed backdrop, is visible everywhere outside that small window; a native-resolution 32x32 corner logo (no upscaling — the source art is only that large) plus a large centered "GoSurvey" wordmark; the progress bar visibly animates across a hardcoded 5.0 s regardless of how fast real preload finishes; the main CAD shell is not shown/interactive until the 5 s elapses; user settings/prefs, the startup workspace template, the app font and the app logo are all loaded before the main shell is usable — this was already true pre-splash and REQ-093 does not change *what* loads, only that a splash now covers it; the splash's rotating phase text is cosmetic labeling only, since linetypes have no data table to load and text styles are already resident in memory the instant `AppCommandState` is constructed; closing the window during the 5 s exits cleanly with no hang; **the user's saved dock layout is restored correctly on launch** — this became an explicit acceptance condition only after a regression destroyed it once (D-2026-08-23-h) | accepted |
 | REQ-102 | Domain/Renderer/Commands/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
-| REQ-103 | Commands/Domain/UI | planned — sequenced into 8 increments (D-2026-08-23-j); TASK-094 (MIRROR, step 1), TASK-095 (LENGTHEN, step 2), TASK-096 (EXTEND, step 3, model+paper space), and TASK-097 (BREAK, step 4, model+paper space) all self-verified 2026-08-24, transcripts green (559/559 regression); manual GUI pass pending the user for all shipped steps; steps 5-8 not started | accepted |
+| REQ-103 | Commands/Domain/UI | planned — sequenced into 8 increments (D-2026-08-23-j); TASK-094 (MIRROR, step 1), TASK-095 (LENGTHEN, step 2), TASK-096 (EXTEND, step 3, model+paper space), TASK-097 (BREAK, step 4, model+paper space), and TASK-098 (STRETCH, step 5, model+paper space, full arc-parity geometry) all self-verified 2026-08-24, transcripts green (565/565 regression, plus 4 new unit tests pinning the arc-stretch formula). **All five then failed in model space**: none was routed in CadUi.cpp's model-space viewport click dispatch, so every click was silently discarded and each command hung on its first prompt (working in floating model space and pure paper space, which route separately). Fixed by TASK-099, which moved the routing decision into the pure `ViewportClickRouteFor` (viewport/ViewportPickPolicy.hpp) as an exhaustive switch with no `default:`, added the headless `CLICK` verb so a transcript exercises the routing the `PICK` verb bypasses, and converted the five REQ-103 transcripts onto it (red before the fix, green after; 571/571 regression). Manual GUI pass still pending the user for all shipped steps (paper-space interaction remains untestable by the headless harness — CadUi.cpp's ImGui click-block); steps 6-8 not started | accepted |
 | REQ-104 | Commands/Domain/IO/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-105 | Commands/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-106 | UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |

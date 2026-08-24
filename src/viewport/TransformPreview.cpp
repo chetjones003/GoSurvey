@@ -148,6 +148,176 @@ void appendSelectedFeatureLinePreview(std::vector<float>* out, const AppCommandS
 
 } // namespace
 
+/// A small X drawn at a break point, sized from the current view so it stays the same apparent size
+/// at any zoom. Falls back to a fixed world size when the view is unknown (headless, first frame).
+void appendBreakPointMarker(std::vector<float>* out, float x, float y, float z, float orthoHalfH) {
+  const float h = (orthoHalfH > 0.f) ? orthoHalfH * 0.012f : 1.f;
+  out->push_back(x - h); out->push_back(y - h); out->push_back(z);
+  out->push_back(x + h); out->push_back(y + h); out->push_back(z);
+  out->push_back(x - h); out->push_back(y + h); out->push_back(z);
+  out->push_back(x + h); out->push_back(y - h); out->push_back(z);
+}
+
+void appendPreviewSegment(std::vector<float>* out, float x0, float y0, float x1, float y1, float z) {
+  out->push_back(x0); out->push_back(y0); out->push_back(z);
+  out->push_back(x1); out->push_back(y1); out->push_back(z);
+}
+
+/// REQ-103 BREAK, live preview (TASK-101). Appends the material a break at (p1,p2) would REMOVE.
+///
+/// Every branch mirrors the ordering decision its committing counterpart in CadCommands.cpp makes,
+/// because a preview that picks the other side of the entity is worse than no preview at all — it
+/// tells the user confidently that the wrong half is about to disappear:
+///   - open entities (Line, non-full Arc, open Polyline): the two break points are ordered by
+///     position along the entity and the material BETWEEN them goes (ApplyBreakToLine/Arc/
+///     OpenPolyline), so click order does not matter here either;
+///   - closed entities (Circle, full-sweep Arc, closed Polyline): click order DOES matter. The
+///     commit keeps the span running forward from point 2 to point 1 (CircleBreakStartSweep's
+///     counterclockwise convention; stored vertex order for a closed polyline), so what is removed
+///     is the complementary span running forward from point 1 to point 2.
+void appendBreakRemovedSpan(std::vector<float>* out, const AppCommandState& cmd, const SelectedEntity& e,
+                            const BreakPoint& p1, const BreakPoint& p2) {
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  switch (e.type) {
+  case SelectedEntity::Type::LineSeg: {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= cmd.userLinesFlat.size())
+      return;
+    // Both points already lie on the segment, so the removed material is simply the span between
+    // them — no ordering needed.
+    appendPreviewSegment(out, p1.x, p1.y, p2.x, p2.y, cmd.userLinesFlat[k + 2]);
+    return;
+  }
+  case SelectedEntity::Type::Circle: {
+    const size_t k = static_cast<size_t>(e.index) * 4;
+    if (k + 3 >= cmd.userCirclesCxCyZR.size())
+      return;
+    CadArc removed{};
+    removed.cx = cmd.userCirclesCxCyZR[k];
+    removed.cy = cmd.userCirclesCxCyZR[k + 1];
+    removed.z = cmd.userCirclesCxCyZR[k + 2];
+    removed.r = cmd.userCirclesCxCyZR[k + 3];
+    removed.startRad = p1.theta;
+    float sweep = std::fmod(p2.theta - p1.theta, kTwoPi);
+    if (sweep < 0.f)
+      sweep += kTwoPi;  // a repeated pick leaves sweep 0 — "break at point" removes nothing
+    removed.sweepRad = sweep;
+    appendArcPolylineStrip(out, removed.z, removed, 64);
+    return;
+  }
+  case SelectedEntity::Type::Arc: {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size())
+      return;
+    const CadArc& src = cmd.userArcs[static_cast<size_t>(e.index)];
+    CadArc removed = src;
+    if (std::fabs(std::fabs(src.sweepRad) - kTwoPi) < 1e-4f) {
+      // A full sweep is a closed loop: it follows the Circle rule, not the arc-parameter one.
+      removed.startRad = p1.theta;
+      float sweep = std::fmod(p2.theta - p1.theta, kTwoPi);
+      if (sweep < 0.f)
+        sweep += kTwoPi;
+      removed.sweepRad = sweep;
+    } else {
+      const float sgn = src.sweepRad >= 0.f ? 1.f : -1.f;
+      const float nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
+      const float r = std::max(src.r, 1e-9f);
+      removed.startRad = src.startRad + sgn * (nearP / r);
+      removed.sweepRad = sgn * ((farP - nearP) / r);
+    }
+    appendArcPolylineStrip(out, removed.z, removed, 64);
+    return;
+  }
+  case SelectedEntity::Type::Polyline: {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+      return;
+    const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const int n = v1 - v0;
+    if (n < 2 || static_cast<size_t>(v1 - 1) * 3 + 1 >= cmd.userPolylineVerts.size())
+      return;
+    auto vx = [&](int i) { return cmd.userPolylineVerts[static_cast<size_t>(v0 + i) * 3]; };
+    auto vy = [&](int i) { return cmd.userPolylineVerts[static_cast<size_t>(v0 + i) * 3 + 1]; };
+    const bool closed = static_cast<size_t>(pi) < cmd.userPolylineClosed.size() &&
+                        cmd.userPolylineClosed[static_cast<size_t>(pi)] != 0u;
+    constexpr float kZ = 0.f;  // ReplacePolylineVerts writes z 0; the preview matches it
+
+    std::vector<std::pair<float, float>> span;
+    if (!closed) {
+      const bool p1First = p1.param <= p2.param;
+      const BreakPoint& nearBp = p1First ? p1 : p2;
+      const BreakPoint& farBp = p1First ? p2 : p1;
+      span.push_back({nearBp.x, nearBp.y});
+      for (int i = nearBp.segIndex + 1; i <= farBp.segIndex && i < n; ++i)
+        span.push_back({vx(i), vy(i)});
+      span.push_back({farBp.x, farBp.y});
+    } else {
+      // Ring parameters, exactly as ApplyBreakToClosedPolyline builds them.
+      std::vector<float> vparam(static_cast<size_t>(n));
+      float ringLen = 0.f;
+      for (int i = 0; i < n; ++i) {
+        vparam[static_cast<size_t>(i)] = ringLen;
+        const int j = (i + 1) % n;
+        ringLen += std::hypot(vx(j) - vx(i), vy(j) - vy(i));
+      }
+      if (ringLen < 1e-9f)
+        return;
+      // Forward FROM p1 — the complement of the span the commit keeps.
+      auto rot = [&](float param) {
+        float d = std::fmod(param - p1.param, ringLen);
+        if (d < 0.f)
+          d += ringLen;
+        return d;
+      };
+      const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
+      const float p2Rot = samePoint ? 0.f : rot(p2.param);
+      span.push_back({p1.x, p1.y});
+      for (int i = 0; i < n; ++i) {
+        const float r = rot(vparam[static_cast<size_t>(i)]);
+        if (r > 1e-6f && r < p2Rot - 1e-6f)
+          span.push_back({vx(i), vy(i)});
+      }
+      span.push_back({p2.x, p2.y});
+    }
+    for (size_t i = 0; i + 1 < span.size(); ++i)
+      appendPreviewSegment(out, span[i].first, span[i].second, span[i + 1].first, span[i + 1].second, kZ);
+    return;
+  }
+  default:
+    return;  // every other kind is refused by BREAK itself, with a stated reason
+  }
+}
+
+void BuildBreakRemovalPreview(const AppCommandState& cmd, float curX, float curY, float orthoHalfHeightWorld,
+                              std::vector<float>* outSpan, std::vector<float>* outMarkers) {
+  if (outSpan)
+    outSpan->clear();
+  if (outMarkers)
+    outMarkers->clear();
+  if (cmd.active != AppCommandState::Kind::Break ||
+      cmd.breakPhase != AppCommandState::BreakPhase::SelectSecondPoint)
+    return;
+  BreakPoint p2{};
+  if (!ClosestPointOnEntity(cmd, cmd.breakEntity, curX, curY, &p2))
+    return;
+  // Arc spans tessellate against the view, exactly as the renderer tessellates committed arcs
+  // (REQ-058) — set here rather than inherited from a previous BuildTransformPreview call, since
+  // this function is now reached on its own.
+  g_previewOrthoHalfH = orthoHalfHeightWorld;
+  g_previewSmoothnessCap = std::clamp(cmd.displayArcCircleSmoothness, 8, 20000);
+  std::vector<float> localSpan;
+  std::vector<float>* span = outSpan ? outSpan : &localSpan;
+  appendBreakRemovedSpan(span, cmd, cmd.breakEntity, cmd.breakP1, p2);
+  if (outMarkers) {
+    // Markers carry the span's own Z so they sit on the object, not on the datum — the same rule
+    // AppendEntityHighlight follows, and for the same reason: at a tilted view a fixed Z draws the
+    // marker somewhere the object is not.
+    const float mz = span->size() >= 3 ? (*span)[2] : 0.f;
+    appendBreakPointMarker(outMarkers, cmd.breakP1.x, cmd.breakP1.y, mz, orthoHalfHeightWorld);
+    appendBreakPointMarker(outMarkers, p2.x, p2.y, mz, orthoHalfHeightWorld);
+  }
+}
+
 void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, std::vector<float>* prevLines,
                            std::vector<float>* prevCircles, float orthoHalfHeightWorld, int framebufferHeightPx) {
   prevLines->clear();
@@ -165,6 +335,10 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     CadOffsetAppendLivePreview(cmd, curX, curY, prevLines, prevCircles);
     return;
   }
+
+  // REQ-103 BREAK's removal preview is deliberately NOT in this batch — see
+  // BuildBreakRemovalPreview. This one is drawn translucent at ordinary line width, which is right
+  // for a ghost of geometry somewhere it is not yet, and useless for material highlighted in place.
 
   if (cmd.active == K::Move || cmd.active == K::Copy) {
     if (cmd.modifyPhase != MP::NeedDestination)
@@ -234,6 +408,90 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {  // REQ-087
       *x += dx;
       *y += dy;
+    });
+    return;
+  }
+
+  if (cmd.active == K::Stretch && cmd.modifyPhase == MP::NeedDestination) {
+    // Mirrors the Move/Copy block above, but each definition point is gated against the captured
+    // box before moving — the live preview of the genuine stretch effect (REQ-103 step 5).
+    const float dx = curX - cmd.modifyBaseX;
+    const float dy = curY - cmd.modifyBaseY;
+    const float mnX = cmd.stretchRectMnX, mxX = cmd.stretchRectMxX;
+    const float mnY = cmd.stretchRectMnY, mxY = cmd.stretchRectMxY;
+    auto inBox = [&](float x, float y) { return PointInsideClosedRect(x, y, mnX, mxX, mnY, mxY); };
+    for (const auto& e : cmd.selection) {
+      if (e.type == SelectedEntity::Type::LineSeg) {
+        const size_t k = static_cast<size_t>(e.index) * 6;
+        if (k + 5 >= cmd.userLinesFlat.size())
+          continue;
+        for (int i = 0; i < 2; ++i) {
+          float x = cmd.userLinesFlat[k + i * 3], y = cmd.userLinesFlat[k + i * 3 + 1];
+          if (inBox(x, y)) { x += dx; y += dy; }
+          prevLines->push_back(x);
+          prevLines->push_back(y);
+          prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
+        }
+      } else if (e.type == SelectedEntity::Type::Circle) {
+        const size_t k = static_cast<size_t>(e.index) * 4;  // cx,cy,z,r
+        if (k + 3 >= cmd.userCirclesCxCyZR.size())
+          continue;
+        float cx = cmd.userCirclesCxCyZR[k], cy = cmd.userCirclesCxCyZR[k + 1];
+        if (inBox(cx, cy)) { cx += dx; cy += dy; }
+        prevCircles->push_back(cx);
+        prevCircles->push_back(cy);
+        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);
+        prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
+      } else if (e.type == SelectedEntity::Type::Arc) {
+        const size_t k = static_cast<size_t>(e.index);
+        if (k >= cmd.userArcs.size())
+          continue;
+        CadArc a = cmd.userArcs[k];
+        std::vector<std::string> scratch;  // preview never surfaces refusal reasons to the log
+        StretchOneArc(a, mnX, mxX, mnY, mxY, dx, dy, scratch);
+        appendArcPolylineStrip(prevLines, a.z, a, 48);
+      } else if (e.type == SelectedEntity::Type::Ellipse) {
+        const size_t k = static_cast<size_t>(e.index);
+        if (k >= cmd.userEllipses.size())
+          continue;
+        CadEllipse el = cmd.userEllipses[k];
+        if (inBox(el.cx, el.cy)) { el.cx += dx; el.cy += dy; }
+        appendEllipsePolylineStrip(prevLines, el.z, el, 56);
+      } else if (e.type == SelectedEntity::Type::Polyline) {
+        const int pi = e.index;
+        if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+          continue;
+        const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
+        const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+        const bool closed =
+            static_cast<size_t>(pi) < cmd.userPolylineClosed.size() && cmd.userPolylineClosed[static_cast<size_t>(pi)];
+        auto vert = [&](int vi, float* ox, float* oy, float* oz) {
+          *ox = cmd.userPolylineVerts[static_cast<size_t>(vi * 3)];
+          *oy = cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
+          *oz = cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)];
+          if (inBox(*ox, *oy)) { *ox += dx; *oy += dy; }
+        };
+        for (int vi = v0; vi + 1 < v1; ++vi) {
+          float x, y, z;
+          vert(vi, &x, &y, &z);
+          prevLines->push_back(x); prevLines->push_back(y); prevLines->push_back(z);
+          vert(vi + 1, &x, &y, &z);
+          prevLines->push_back(x); prevLines->push_back(y); prevLines->push_back(z);
+        }
+        if (closed && v1 - v0 >= 2) {
+          float x, y, z;
+          vert(v1 - 1, &x, &y, &z);
+          prevLines->push_back(x); prevLines->push_back(y); prevLines->push_back(z);
+          vert(v0, &x, &y, &z);
+          prevLines->push_back(x); prevLines->push_back(y); prevLines->push_back(z);
+        }
+      }
+    }
+    appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {  // REQ-087
+      if (inBox(*x, *y)) {
+        *x += dx;
+        *y += dy;
+      }
     });
     return;
   }
@@ -806,6 +1064,12 @@ void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<float>* hlL
   if (cmd.active == AppCommandState::Kind::Break &&
       cmd.breakPhase == AppCommandState::BreakPhase::SelectSecondPoint)
     AppendEntityHighlight(cmd, cmd.breakEntity, hlLines, hlCircles);
+  // LENGTHEN DYnamic latches its target between the object pick and the new-length pick, exactly
+  // as BREAK latches breakEntity — so it reads as a selection for the same REQ-056 reason. It was
+  // the one entity-latching REQ-103 command left out of this list (TASK-099 F3).
+  if (cmd.active == AppCommandState::Kind::Lengthen &&
+      cmd.lengthenPhase == AppCommandState::LengthenPhase::WaitDynamicTarget)
+    AppendEntityHighlight(cmd, cmd.lengthenPendingEntity, hlLines, hlCircles);
 }
 
 void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLines,
@@ -836,6 +1100,10 @@ void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLi
   if (cmd.active == AppCommandState::Kind::Break &&
       cmd.breakPhase == AppCommandState::BreakPhase::SelectSecondPoint &&
       cmd.breakEntity.type == e.type && cmd.breakEntity.index == e.index)
+    return;
+  if (cmd.active == AppCommandState::Kind::Lengthen &&
+      cmd.lengthenPhase == AppCommandState::LengthenPhase::WaitDynamicTarget &&
+      cmd.lengthenPendingEntity.type == e.type && cmd.lengthenPendingEntity.index == e.index)
     return;
   AppendEntityHighlight(cmd, e, hoverLines, hoverCircles);
 }

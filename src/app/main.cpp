@@ -925,6 +925,15 @@ int main()
         cmd.active == AppCommandState::Kind::Offset ? static_cast<float>(curRawY) : static_cast<float>(commitCurY);
     BuildTransformPreview(cmd, previewCx, previewCy, &previewLines, &previewCircles, orthoHalfH, fbH);
 
+    // REQ-103 BREAK (TASK-101): the material the pending break would remove, kept out of the
+    // translucent transform batch above on purpose — this one is drawn ON TOP of the object it
+    // describes, so it needs an opaque, heavier stroke to be legible at all. See
+    // BuildBreakRemovalPreview.
+    std::vector<float> removalLines;
+    std::vector<float> removalMarkers;
+    BuildBreakRemovalPreview(cmd, static_cast<float>(commitCurX), static_cast<float>(commitCurY), orthoHalfH,
+                             &removalLines, &removalMarkers);
+
     if (cmd.active == AppCommandState::Kind::Trim &&
         cmd.trimPhase == AppCommandState::TrimPhase::CuttingLine_WaitP2)
     {
@@ -1126,7 +1135,9 @@ int main()
                                (paperSpace || cmd.surfaceDisplayGeometry.empty())
                                    ? nullptr
                                    : &cmd.surfaceDisplayGeometry,
-                               (paperSpace || volumeMapGeom.empty()) ? nullptr : &volumeMapGeom);
+                               (paperSpace || volumeMapGeom.empty()) ? nullptr : &volumeMapGeom,
+                               (paperSpace || removalLines.empty()) ? nullptr : &removalLines,
+                               (paperSpace || removalMarkers.empty()) ? nullptr : &removalMarkers);
 
     // Must be the last UI call of the frame: it walks the submitted windows and
     // appends to their draw lists, so anything begun after it would be missed.

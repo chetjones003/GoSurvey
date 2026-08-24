@@ -846,7 +846,9 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
                                    const std::vector<std::shared_ptr<const CadMesh>>* meshes,
                                    const std::vector<EntityAttributes>* meshAttrs,
                                    const CadSurfaceDisplayGeometry* surfaceGeometry,
-                                   const VolumeMapDisplayGeometry* volumeMap) {
+                                   const VolumeMapDisplayGeometry* volumeMap,
+                                   const std::vector<float>* removalLines,
+                                   const std::vector<float>* removalMarkers) {
   if (!EnsureFramebuffer(fbWidth, fbHeight))
     return;
 
@@ -1771,6 +1773,31 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
     glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(previewLineRel.size() / 3));
     glDisable(GL_BLEND);
   }
+
+  // --- Material a pending edit will REMOVE (REQ-103 BREAK) ---
+  //
+  // Opaque, heavier than the geometry, and in a warning colour, because unlike every other preview
+  // above this one is drawn directly over the object it describes. Painted after the transform
+  // batch so it wins where the two overlap.
+  {
+    const auto drawRemoval = [&](const std::vector<float>* v, GLfloat width) {
+      if (!v || v->empty() || v->size() % 6 != 0)
+        return;
+      std::vector<float> rel;
+      ConvertLineVertsWorldToView(*v, viewAnchorX, viewAnchorY, &rel);
+      glUniformMatrix4fv(locMvp, 1, GL_FALSE, mvp);
+      glUniform4f(locCol, 0.95f, 0.27f, 0.22f, 1.f);
+      glLineWidth(width);
+      glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(rel.size() * sizeof(float)), rel.data(),
+                   GL_STREAM_DRAW);
+      glDrawArrays(GL_LINES, 0, static_cast<GLsizei>(rel.size() / 3));
+    };
+    drawRemoval(removalLines, kLwHiLine);
+    drawRemoval(removalMarkers, kLwHiLine);
+    if ((removalLines && !removalLines->empty()) || (removalMarkers && !removalMarkers->empty()))
+      glLineWidth(kLwMain);
+  }
+
   if (previewCircles && !previewCircles->empty() && previewCircles->size() % 4 == 0) {
     std::vector<float> circleGeom;
     for (size_t i = 0; i + 3 < previewCircles->size(); i += 4) {
