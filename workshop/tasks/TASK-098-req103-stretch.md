@@ -1,7 +1,7 @@
 # TASK-098 — STRETCH modify command (REQ-103 step 5)
 
 - Type:    feature
-- Status:  done (headless); manual GUI pass pending
+- Status:  done
 - Opened:  2026-08-24
 - Owner:   Claude (agent)
 
@@ -223,7 +223,7 @@ looping per-target command like BREAK/EXTEND/LENGTHEN.
 
 ## 10. Verification result
 - Submitted:  2026-08-24
-- Verdict:    PASS (headless + unit tests; manual GUI pass pending the user, same as every prior
+- Verdict:    **PASS** — closed 2026-08-24: the user confirmed the manual GUI pass covering REQ-103 steps 1-5.
   step in this epic)
 - Findings:   2 findings, both fixed during self-verification, neither open — (1) FeatureLine
   missing from the Acceptance text, caught before any implementation existed; (2) `StartStretchCommand`
@@ -251,4 +251,4 @@ looping per-target command like BREAK/EXTEND/LENGTHEN.
   stated, accepted simplification recorded in REQ-103's own acceptance text, not hidden.
 - Docs updated:           `spec/requirements.md` (REQ-103 STRETCH acceptance + FeatureLine
   correction + revision line + traceability row), `spec/project.md` (D-2026-08-24-d)
-- Done:                   2026-08-24 (headless); manual GUI pass pending the user
+- Done:                   2026-08-24

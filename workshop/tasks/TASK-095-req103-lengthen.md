@@ -1,7 +1,7 @@
 # TASK-095 — LENGTHEN command (REQ-103 step 2 of 8)
 
 - Type:    feature
-- Status:  self-verify
+- Status:  done
 - Opened:  2026-08-24
 - Owner:   Workshop
 
@@ -223,7 +223,7 @@ ASSUMPTION-2: DYnamic mode's live preview is a straight-line/arc-angle projectio
 
 ## 10. Verification result
 - Submitted:  2026-08-24
-- Verdict:    PASS (self-verified; manual GUI confirmation still pending — see §11)
+- Verdict:    **PASS** — closed 2026-08-24: the user confirmed the manual GUI pass covering REQ-103 steps 1-5.
 - Findings:   3 found and fixed during self-verification before submission (§8: an undo-ordering
               bug, a namespace-linkage build error, and a test-transcript design error) — none open.
 
@@ -240,5 +240,5 @@ ASSUMPTION-2: DYnamic mode's live preview is a straight-line/arc-angle projectio
   condition: a user asks for it; then the paper click flow needs either a pre-chosen mode/value set
   before `paperLengthenPhase` starts, or a small on-canvas text-entry affordance neither MIRROR nor
   LENGTHEN currently has.
-- Done:                   implementation done 2026-08-24; task closes on the user's manual GUI
+- Done:                   2026-08-24
   confirmation

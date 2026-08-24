@@ -1,7 +1,7 @@
 # TASK-094 — MIRROR command (REQ-103 step 1 of 8)
 
 - Type:    feature
-- Status:  self-verify
+- Status:  done
 - Opened:  2026-08-23
 - Owner:   Workshop
 
@@ -270,7 +270,7 @@ ASSUMPTION-2: MIRROR's default (keep source, add a reflected duplicate) is
 
 ## 10. Verification result
 - Submitted:  2026-08-24
-- Verdict:    PASS (self-verified; manual GUI confirmation still pending —
+- Verdict:    **PASS** — closed 2026-08-24: the user confirmed the manual GUI pass covering REQ-103 steps 1-5.
               see §11)
 - Findings:   2 found and fixed during self-verification before submission
               (§8, both headless-transcript catches) — none open.
@@ -292,5 +292,5 @@ ASSUMPTION-2: MIRROR's default (keep source, add a reflected duplicate) is
   asks for it; then the paper click state machine needs a pre-chosen
   erase-source flag (set before `paperMirrorPhase` starts, since it can't
   be asked mid-flow) or a small on-canvas Yes/No affordance.
-- Done:                   implementation done 2026-08-24; task closes on
+- Done:                   2026-08-24
   the user's manual GUI confirmation

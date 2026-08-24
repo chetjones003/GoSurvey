@@ -1,7 +1,7 @@
 # TASK-100 — LENGTHEN: accept a pick before the sub-mode has a value
 
 - Type:    bug
-- Status:  self-verify
+- Status:  done
 - Opened:  2026-08-24
 - Owner:   Claude (agent)
 
@@ -111,7 +111,8 @@ discarding it.
 
 ## 10. Verification result
 - Submitted:  2026-08-24
-- Verdict:    pending (self-verification complete)
+- Verdict:    **PASS** — self-verification green (§9), and the user confirmed the manual model-space
+              GUI pass on 2026-08-24, including the Total-default flow added by §12.
 - Findings:   none open
 
 ## 11. Outcome
@@ -124,7 +125,35 @@ discarding it.
                           path runs with `active == None`. Removal condition: paper-space commands
                           gaining their own text-prompt surface (the same gap MIRROR's paper path
                           documents). Its pick now at least reports the current length.
-- Done:                   2026-08-24 (pending Verification and the user's GUI pass)
+- Done:                   2026-08-24
+
+```
+COMPLETION REPORT — TASK-100 — 2026-08-24
+- Requirements satisfied:  REQ-103 step 2, as amended by D-2026-08-24-e and D-2026-08-24-f
+                           (Acceptance met: yes, model space; paper space per the stated
+                           simplification recorded as debt below)
+- Summary:                 A LENGTHEN pick made before the sub-mode had a value was refused, making
+                           the Modify ribbon button a dead end. The pick now latches the object,
+                           reports its length and prompts; the default sub-mode is Total, so the
+                           out-of-the-box flow is pick, read the length, type the new one.
+- Tests:                   lengthen-pick-first.txt — happy path, mid-prompt mode switch, and the
+                           refusal-clears-the-latch failure mode. Run green.
+- Verification verdict:    PASS  (findings resolved: none open)
+- Assumptions:             ASSUMPTION-1 (§5) — validated by the user's GUI pass
+- Architectural decisions: none made by Workshop (escalated: the flow change and the Total default
+                           were both escalated to spec and recorded as D-2026-08-24-e / -f before
+                           any code was written)
+- Dependencies:            none added
+- Technical debt noted:    paper-space LENGTHEN still cannot prompt for a value (the paper path runs
+                           with `active == None`). Removal condition: paper-space commands gaining
+                           a text-prompt surface — the same gap MIRROR's paper path documents. Its
+                           pick now reports the current length rather than refusing bare.
+                           Also open for the user's call (§12): the armed Total value is reused on a
+                           later pick without re-prompting, per REQ-103's "sub-mode persists"
+                           condition — visible in lengthen-pick-first.txt part 1.
+- Build:                   reproducible, clean on target platform (MSVC/Ninja Release)
+- Docs updated:            spec/project.md (D-2026-08-24-e, D-2026-08-24-f), spec/requirements.md
+```
 
 ## 12. Follow-up — default sub-mode changed to Total (2026-08-24, D-2026-08-24-f)
 

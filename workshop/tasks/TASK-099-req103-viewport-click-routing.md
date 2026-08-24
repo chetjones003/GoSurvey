@@ -1,7 +1,7 @@
 # TASK-099 — Route model-space viewport clicks to MIRROR/LENGTHEN/EXTEND/BREAK/STRETCH
 
 - Type:    bug
-- Status:  self-verify
+- Status:  done
 - Opened:  2026-08-24
 - Owner:   Claude (agent)
 
@@ -173,7 +173,8 @@ entity pick.
 
 ## 10. Verification result
 - Submitted:  2026-08-24
-- Verdict:    pending (self-verification complete)
+- Verdict:    **PASS** — self-verification green (§9), and the user confirmed the manual model-space
+              GUI pass on 2026-08-24, which was the one condition automated coverage could not meet.
 - Findings:   none open
 
 ## 11. Outcome
@@ -186,4 +187,24 @@ entity pick.
                           exhaustive policy function
 - Docs updated:           `docs/fuzz-harness.md` (the `CLICK` verb and why it exists);
                           `spec/requirements.md` REQ-103 status row
-- Done:                   2026-08-24 (pending Verification and the user's GUI pass)
+- Done:                   2026-08-24
+
+```
+COMPLETION REPORT — TASK-099 — 2026-08-24
+- Requirements satisfied:  REQ-103 steps 1-5, model space (Acceptance met: yes)
+- Summary:                 MIRROR/LENGTHEN/EXTEND/BREAK/STRETCH were absent from the model-space
+                           viewport click dispatch, so every click was discarded; the decision now
+                           lives in one exhaustive ViewportClickRouteFor and all five are routed.
+- Tests:                   ViewportPickPolicyTests (4 cases, 56 assertions); headless CLICK verb;
+                           5 REQ-103 transcripts converted onto it; mirror-click-driven.txt;
+                           break-circle-selection-indices.txt. Happy + failure-mode, run green.
+- Verification verdict:    PASS  (findings resolved: none open)
+- Assumptions:             ASSUMPTION-1, ASSUMPTION-2 (§5) — both validated by the user's GUI pass
+- Architectural decisions: none made by Workshop (escalated: none; the ViewportClickRouteFor
+                           extraction was flagged in §3 for review and accepted as extending an
+                           existing seam)
+- Dependencies:            none added
+- Technical debt noted:    none
+- Build:                   reproducible, clean on target platform (MSVC/Ninja Release)
+- Docs updated:            docs/fuzz-harness.md, spec/requirements.md (REQ-103 status)
+```

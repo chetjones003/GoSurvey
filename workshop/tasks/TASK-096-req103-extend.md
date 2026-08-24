@@ -1,7 +1,7 @@
 # TASK-096 — EXTEND command (REQ-103 step 3 of 8)
 
 - Type:    feature
-- Status:  done (headless); manual GUI pass pending
+- Status:  done
 - Opened:  2026-08-24
 - Owner:   Workshop
 
@@ -219,12 +219,12 @@ ASSUMPTION-2: EXTEND targets the same three entity kinds LENGTHEN established (L
 
 ## 10. Verification result
 - Submitted:  2026-08-24 (self-run; solo task, no separate verification agent in this session)
-- Verdict:    PASS (headless); manual GUI pass pending user confirmation
+- Verdict:    **PASS** — closed 2026-08-24: the user confirmed the manual GUI pass covering REQ-103 steps 1-5.
 - Findings:   1 real bug found and fixed pre-test (bent-Polyline boundary-ray direction, §8) — not an
   open finding, already resolved and covered by a regression transcript.
 
 ## 11. Outcome
-- Requirements satisfied: REQ-103 step 3/8 (Acceptance met: yes, pending the user's manual GUI pass)
+- Requirements satisfied: REQ-103 step 3/8 (Acceptance met: yes; manual GUI pass confirmed by the user 2026-08-24)
 - Tests added:            `tests/headless/transcripts/extend-line-and-polyline.txt`,
   `tests/headless/transcripts/extend-arc-and-refusals.txt`
 - Refactors:              `LengthenEligibility` gains a `cmdName` parameter (backward-compatible;
@@ -233,4 +233,4 @@ ASSUMPTION-2: EXTEND targets the same three entity kinds LENGTHEN established (L
   can't offer a typed-value prompt, so EXTEND's paper path — like MIRROR/LENGTHEN's — is click-only;
   unchanged scope, no regression.)
 - Docs updated:           spec/requirements.md (REQ-103), spec/project.md (D-2026-08-24-b), this task
-- Done:                   yes (headless); manual GUI pass remains open with the user
+- Done:                   2026-08-24

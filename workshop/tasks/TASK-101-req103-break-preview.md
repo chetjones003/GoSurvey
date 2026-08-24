@@ -1,7 +1,7 @@
 # TASK-101 — BREAK: live preview of the material the break will remove
 
 - Type:    feature
-- Status:  self-verify
+- Status:  done
 - Opened:  2026-08-24
 - Owner:   Claude (agent)
 
@@ -133,7 +133,10 @@ points on the two existing endpoints — "would remove the entire entity").
 
 ## 10. Verification result
 - Submitted:  2026-08-24
-- Verdict:    pending (self-verification complete)
+- Verdict:    **PASS** — self-verification green (§9), and the user confirmed the manual model-space
+              GUI pass on 2026-08-24. That pass is what closes this task in particular: appearance
+              is the one thing no test here can assert, and the first attempt was geometrically
+              correct and still invisible (§12).
 - Findings:   none open
 
 ## 11. Outcome
@@ -147,7 +150,38 @@ points on the two existing endpoints — "would remove the entire entity").
 - Technical debt noted:   the two break-point markers are the one part of the preview no transcript
                           asserts — the dump deliberately returns the span alone, since the markers
                           are view-scaled decoration. Visual check only.
-- Done:                   2026-08-24 (pending Verification and the user's GUI pass)
+- Done:                   2026-08-24
+
+```
+COMPLETION REPORT — TASK-101 — 2026-08-24
+- Requirements satisfied:  REQ-103 step 4, as amended by D-2026-08-24-e (Acceptance met: yes)
+- Summary:                 BREAK now previews the material the break would remove, plus a marker at
+                           each break point, resolved through the same ClosestPointOnEntity the
+                           second pick commits, on its own opaque render channel.
+- Tests:                   break-preview-removed-span.txt — six hand-computed spans across Line,
+                           Circle (both click orders), closed Polyline and the break-at-point case;
+                           DUMP BREAKSPAN driver verb. Run green, and shown red by inverting the
+                           circle's removal direction.
+- Verification verdict:    PASS  (findings resolved: none open)
+- Assumptions:             ASSUMPTION-1 (§5) — the span is previewed even when the break would be
+                           refused; validated by the user's GUI pass
+- Architectural decisions: none made by Workshop (escalated: none; §3 (a) ClosestPointOnEntity's
+                           visibility and (b) TransformPreview.cpp moving into the domain sources
+                           were both flagged for review and accepted as following existing
+                           precedent)
+- Dependencies:            none added
+- Technical debt noted:    the two break-point markers are the one part of the preview no transcript
+                           asserts — they are view-scaled decoration, visual check only. And
+                           appearance itself is untestable here, which is why the first attempt
+                           shipped correct-but-invisible (§12).
+                           Not fixed, raised for the user's call: TRIM's own removed-material
+                           preview (CadTrimAppendCutLineRemovedPreview) still appends into the
+                           translucent transform batch and has exactly this weakness — a one-line
+                           redirect into the new channel, deliberately left outside this scope.
+- Build:                   reproducible, clean on target platform (MSVC/Ninja Release)
+- Docs updated:            spec/project.md (D-2026-08-24-e), spec/requirements.md,
+                           docs/fuzz-harness.md
+```
 
 ## 12. Follow-up — the preview was correct and still invisible (2026-08-24)
 

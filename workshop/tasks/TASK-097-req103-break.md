@@ -1,7 +1,7 @@
 # TASK-097 — BREAK command (REQ-103 step 4 of 8)
 
 - Type:    feature
-- Status:  done (headless); manual GUI pass pending
+- Status:  done
 - Opened:  2026-08-24
 - Owner:   Workshop
 
@@ -246,14 +246,14 @@ ASSUMPTION-2: For a closed entity, "point 1" is the FIRST pick (the one that als
 
 ## 10. Verification result
 - Submitted:  2026-08-24 (self-run; solo task, no separate verification agent in this session)
-- Verdict:    PASS (headless); manual GUI pass pending user confirmation
+- Verdict:    **PASS** — closed 2026-08-24: the user confirmed the manual GUI pass covering REQ-103 steps 1-5.
 - Findings:   2 real bugs found and fixed pre/during-test (paper undo-on-refusal, §8; EXTEND's
   ribbon-clipping regression from TASK-096, §8) — neither an open finding, both resolved and
   covered by this task's own regression run (EXTEND's headless transcripts don't exercise ribbon
   rendering at all, so that bug could only be caught by code-reading, which is how it was found).
 
 ## 11. Outcome
-- Requirements satisfied: REQ-103 step 4/8 (Acceptance met: yes, pending the user's manual GUI pass)
+- Requirements satisfied: REQ-103 step 4/8 (Acceptance met: yes; manual GUI pass confirmed by the user 2026-08-24)
 - Tests added:            `tests/headless/transcripts/break-line-and-polyline.txt`,
   `tests/headless/transcripts/break-circle-and-closed-polyline.txt`
 - Refactors:              none to existing shipped code beyond the two bug fixes noted in §8 (the
@@ -265,4 +265,4 @@ ASSUMPTION-2: For a closed entity, "point 1" is the FIRST pick (the one that als
   value prompt, so BREAK's paper path — like MIRROR/LENGTHEN/EXTEND's — is click-only; unchanged
   scope, no regression (BREAK needs no typed value at all, so this doesn't limit it further).
 - Docs updated:           spec/requirements.md (REQ-103), spec/project.md (D-2026-08-24-c), this task
-- Done:                   yes (headless); manual GUI pass remains open with the user
+- Done:                   2026-08-24
