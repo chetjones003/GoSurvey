@@ -801,6 +801,11 @@ void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<float>* hlL
     for (const auto& c : cmd.extendBoundaries)
       AppendEntityHighlight(cmd, c, hlLines, hlCircles);
   }
+  // BREAK's pending entity (between the first and second point picks) reads as a selection too —
+  // same REQ-056 precedent as TRIM/EXTEND.
+  if (cmd.active == AppCommandState::Kind::Break &&
+      cmd.breakPhase == AppCommandState::BreakPhase::SelectSecondPoint)
+    AppendEntityHighlight(cmd, cmd.breakEntity, hlLines, hlCircles);
 }
 
 void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLines,
@@ -828,5 +833,9 @@ void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLi
         return;
     }
   }
+  if (cmd.active == AppCommandState::Kind::Break &&
+      cmd.breakPhase == AppCommandState::BreakPhase::SelectSecondPoint &&
+      cmd.breakEntity.type == e.type && cmd.breakEntity.index == e.index)
+    return;
   AppendEntityHighlight(cmd, e, hoverLines, hoverCircles);
 }

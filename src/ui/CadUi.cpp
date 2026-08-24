@@ -1470,6 +1470,7 @@ enum class RibbonIconKind : std::uint8_t {
   Mirror,
   Lengthen,
   Extend,
+  Break,
   SurveyPoint,
   SurveyInverse,
   Layers,
@@ -1892,6 +1893,18 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     dl->AddLine(ImVec2(boundaryX, mn.y + h * 0.18f), ImVec2(boundaryX, mx.y - h * 0.18f), acc, t * 1.1f);
     break;
   }
+  case RibbonIconKind::Break: {
+    // A horizontal segment with a gap in the middle, plus two short accent tick marks bracketing
+    // the gap — AutoCAD's own BREAK icon shape (a line broken at two points).
+    const float y = c.y;
+    const float gapHalf = w * 0.09f;
+    dl->AddLine(ImVec2(mn.x + w * 0.16f, y), ImVec2(c.x - gapHalf, y), col, t * 1.1f);
+    dl->AddLine(ImVec2(c.x + gapHalf, y), ImVec2(mx.x - w * 0.16f, y), col, t * 1.1f);
+    const float tickH = h * 0.16f;
+    dl->AddLine(ImVec2(c.x - gapHalf, y - tickH), ImVec2(c.x - gapHalf, y + tickH), acc, t);
+    dl->AddLine(ImVec2(c.x + gapHalf, y - tickH), ImVec2(c.x + gapHalf, y + tickH), acc, t);
+    break;
+  }
   case RibbonIconKind::SurveyPoint: {
     dl->AddLine(ImVec2(c.x, mn.y + h * 0.15f), ImVec2(c.x, mx.y - h * 0.15f), col, t * 0.75f);
     dl->AddLine(ImVec2(mn.x + w * 0.15f, c.y), ImVec2(mx.x - w * 0.15f, c.y), col, t * 0.75f);
@@ -2116,6 +2129,7 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::Mirror:         return "mirror";
   case RibbonIconKind::Lengthen:       return "lengthen";
   case RibbonIconKind::Extend:         return "extend";
+  case RibbonIconKind::Break:          return "break";
   case RibbonIconKind::SurveyPoint:    return "surveypoint";
   case RibbonIconKind::SurveyInverse:  return "surveyinverse";
   case RibbonIconKind::Layers:         return "layers";
@@ -2163,6 +2177,7 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
     {"MIRROR", RibbonIconKind::Mirror},
     {"LENGTHEN", RibbonIconKind::Lengthen},
     {"EXTEND", RibbonIconKind::Extend},
+    {"BREAK", RibbonIconKind::Break},
     {"DELETE", RibbonIconKind::Erase}, {"JOIN", RibbonIconKind::Join}, {"TRIM", RibbonIconKind::Trim},
     {"OFFSET", RibbonIconKind::Offset}, {"ZOOMEXTENTS", RibbonIconKind::ZoomExtents},
     {"ZOOMWINDOW", RibbonIconKind::ZoomWindow}, {"CREATEPOINTS", RibbonIconKind::SurveyPoint},
@@ -2327,8 +2342,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
   const float wEdit = 8.f + largeW + 4.f + colW({"Copy", "Undo", "Redo"});
   const float wDraw = 8.f + gridCell * 4.f + 4.f * 3.f;
+  // Four columns: a small-button column is 3 tall (colH), so a 4th item in one BeginGroup is
+  // clipped by the child window's own bounds — the same "fourth needs its own column" rule
+  // Inquiry/Survey below already follow. Join/Mirror/Lengthen exactly fills one column;
+  // Extend/Break get a second (2 items, well under 3).
   const float wMod  = 8.f + largeW + 4.f + colW({"Copy", "Rotate", "Scale"}) + 4.f +
-                      colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror", "Lengthen"});
+                      colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror", "Lengthen"}) + 4.f +
+                      colW({"Extend", "Break"});
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
   const float wAnn  = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
   // Two columns: the panel is three small buttons tall, so a fourth in one column is clipped.
@@ -2469,7 +2489,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ImGui::EndGroup();
 
     ImGui::SameLine(0, 4);
-    const float c3 = colW({"Join", "Mirror", "Lengthen", "Extend"});
+    const float c3 = colW({"Join", "Mirror", "Lengthen"});
     ImGui::BeginGroup();
     if (smallBtn("##RibbonJoin", RibbonIconKind::Join, "Join", c3))
       StartJoinCommand(cmd, log);
@@ -2481,10 +2501,24 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       StartLengthenCommand(cmd, log);
     RibbonItemHelp("Lengthen — change a line/open polyline/arc's length at the end nearest your "
                    "pick (DElta/Percent/Total/DYnamic).\nCommand bar: LENGTHEN or LEN");
-    if (smallBtn("##RibbonExtend", RibbonIconKind::Extend, "Extend", c3))
+    ImGui::EndGroup();
+
+    // Second column: a small-button column is 3 tall (colH) — Join/Mirror/Lengthen above already
+    // fills it, so Extend (and now Break) need their own column, not a 4th/5th slot stacked into
+    // the same BeginGroup, which the child window's own clip rect would cut off entirely (this
+    // was, in fact, a real bug: EXTEND shipped as a 4th item in the group above and was invisible/
+    // unclickable — found and fixed while adding BREAK here).
+    ImGui::SameLine(0, 4);
+    const float c4 = colW({"Extend", "Break"});
+    ImGui::BeginGroup();
+    if (smallBtn("##RibbonExtend", RibbonIconKind::Extend, "Extend", c4))
       StartExtendCommand(cmd, log);
     RibbonItemHelp("Extend — pick boundary edges, then stretch a line/open polyline/arc's end "
                    "nearest your pick out to the nearest one.\nCommand bar: EXTEND or EX");
+    if (smallBtn("##RibbonBreak", RibbonIconKind::Break, "Break", c4))
+      StartBreakCommand(cmd, log);
+    RibbonItemHelp("Break — pick an object (the pick is break point 1), then a second point; the "
+                   "material between them is removed.\nCommand bar: BREAK or BR");
     ImGui::EndGroup();
   }
   RibbonSectionEnd();
@@ -5863,6 +5897,15 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
       return "EXTEND — click objects to extend (near the end to stretch), Enter when done:";
     }
   }
+  if (cmd.active == AppCommandState::Kind::Break) {
+    using BP = AppCommandState::BreakPhase;
+    switch (cmd.breakPhase) {
+    case BP::SelectFirstPoint:
+      return "BREAK — select object (the pick is break point 1):";
+    case BP::SelectSecondPoint:
+      return "BREAK — specify second break point:";
+    }
+  }
   if (cmd.active == AppCommandState::Kind::Delete)
     return "DELETE — window opposite corner or ESC:";
   if (cmd.active == AppCommandState::Kind::Join)
@@ -8665,14 +8708,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
       if (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0 || cmd.paperMirrorPhase != 0 ||
-          cmd.paperLengthenPhase != 0 || cmd.paperExtendPhase != 0 || cmd.paperGripCorner != -2 ||
-          cmd.paperSelBoxActive) {
+          cmd.paperLengthenPhase != 0 || cmd.paperExtendPhase != 0 || cmd.paperBreakPhase != 0 ||
+          cmd.paperGripCorner != -2 || cmd.paperSelBoxActive) {
         cmd.paperMovePhase = 0;
         cmd.paperRotatePhase = 0;
         cmd.paperMirrorPhase = 0;
         cmd.paperLengthenPhase = 0;
         cmd.paperExtendPhase = 0;
         cmd.paperExtendBoundaries.clear();
+        cmd.paperBreakPhase = 0;
         cmd.paperGripCorner = -2;
         cmd.paperSelBoxActive = false;
       } else if (!cmd.selectedViewports.empty() || !cmd.selectedPaperEntities.empty()) {
@@ -8710,6 +8754,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     cmd.paperHoverValid = false;
     if (hovered && !cmd.paperSelBoxActive && cmd.paperMovePhase == 0 && cmd.paperRotatePhase == 0 &&
         cmd.paperMirrorPhase == 0 && cmd.paperLengthenPhase == 0 && cmd.paperExtendPhase == 0 &&
+        cmd.paperBreakPhase == 0 &&
         cmd.paperGripCorner == -2 && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
       PaperEntityRef hr;
       if (PickPaperEntityAt(L, curX, curY, entityPickTolIn, &hr)) {
@@ -8822,6 +8867,32 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       else
         ApplyExtendToPaperEntity(cmd, pr, curX, curY, log);
       // Stays in phase 2 — loop back for the next object, same shape as the model-space command.
+    } else if (clickL && cmd.paperBreakPhase == 1) {  // BREAK: select entity + break point 1 (REQ-103)
+      PaperEntityRef pr;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        log.push_back("BREAK — no object at pick.");
+      else if (pr.type == PaperEntityRef::Type::Text)
+        log.push_back("BREAK — 1 text object ignored: text cannot be broken. Pick a line, circle, "
+                      "arc, or polyline.");
+      else if (pr.type == PaperEntityRef::Type::Ellipse)
+        log.push_back("BREAK — 1 ellipse ignored: every ellipse in this drawing is a full closed "
+                      "curve, and GoSurvey has no elliptical-arc entity kind to hold a broken-open "
+                      "ellipse. Pick a line, circle, arc, or polyline.");
+      else {
+        BreakPoint p1{};
+        if (!ClosestPointOnPaperEntity(L, pr, curX, curY, &p1))
+          log.push_back("BREAK — could not resolve a point on that object; try again.");
+        else {
+          cmd.paperBreakEntity = pr;
+          cmd.paperBreakP1 = p1;
+          cmd.paperBreakPhase = 2;
+          log.push_back("BREAK — specify second break point:");
+        }
+      }
+    } else if (clickL && cmd.paperBreakPhase == 2) {  // BREAK: second point, applies (REQ-103)
+      ApplyBreakToPaperEntity(cmd, cmd.paperBreakEntity, cmd.paperBreakP1, curX, curY, log);
+      cmd.paperBreakPhase = 1;
+      // Stays in the loop — back to phase 1 for the next object, same shape as model-space BREAK.
     } else if (clickL && cmd.paperGripCorner != -2) {  // commit an in-progress grip edit
       cmd.paperGripCorner = -2;
       log.push_back("Viewport edited.");
@@ -9314,11 +9385,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // command still suppresses hover, since their clicks mean coordinates rather than objects.
       using TPh = AppCommandState::TrimPhase;
       using EPh = AppCommandState::ExtendPhase;
+      using BPh = AppCommandState::BreakPhase;
       const bool trimEntityPick = cmd.active == AK::Trim && (cmd.trimPhase == TPh::SelectCuttingEdges ||
                                                              cmd.trimPhase == TPh::SelectTrimTargets);
       const bool extendEntityPick = cmd.active == AK::Extend && (cmd.extendPhase == EPh::SelectBoundaries ||
                                                                   cmd.extendPhase == EPh::SelectTargets);
-      const bool blockEntityHover = (cmd.active != AK::None && !trimEntityPick && !extendEntityPick) ||
+      // BREAK: only SelectFirstPoint is an entity SEARCH (the pick also selects the object);
+      // SelectSecondPoint is a point pick on the entity already chosen, so hover stays suppressed
+      // there the same as any other coordinate-entry command.
+      const bool breakEntityPick = cmd.active == AK::Break && cmd.breakPhase == BPh::SelectFirstPoint;
+      const bool blockEntityHover = (cmd.active != AK::None && !trimEntityPick && !extendEntityPick && !breakEntityPick) ||
                                     cmd.dimGripMoveActive ||
                                     cmd.entityGripMoveActive || cmd.mtextGripMoveActive || cmd.selBoxWaitingSecond;
       // REQ-089: the rollover readout rides on this exact condition. Model space only — a sheet has
@@ -12467,6 +12543,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (ImGui::MenuItem("Offset"))         { StartOffsetCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Trim"))           { StartTrimCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Extend"))         { StartExtendCommand(cmd, log); ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Break"))          { StartBreakCommand(cmd, log);  ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Join"))           { StartJoinCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
         ImGui::EndMenu();
       }

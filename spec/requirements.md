@@ -2883,10 +2883,47 @@ requirements is a planning failure, not a sign of rigor.
   - a target that does not reach any boundary edge in the extending direction is refused with a stated reason, geometry unchanged — never silently ignored or extended the wrong way;
   - boundary-edge selection is a two-phase pick (edges, Enter, then targets — TRIM's own cutting-edge flow, copy-adapted, not shared code) with boundaries visually read as a selection while being picked, matching TRIM's precedent; the command loops back to "select object" after each successful extend until Enter/Esc; each individual extend is its own undo step, not one per invocation;
   - reachable from the Modify ribbon, typed `EXTEND`/`EX`, and right-click repeat; works in model space, floating model space, AND native paper space (two-phase click flow, no typed value needed so paper space is not simplified away the way MIRROR/LENGTHEN's paper paths are).
-  - Acceptance for BREAK/STRETCH/FILLET/CHAMFER/ARRAY/EXPLODE (steps 4–8) is written when each is accepted for implementation, not spec'd in advance of that command's own design pass.
+  - Acceptance — BREAK (step 4):
+    - eligible entities: Line, Arc (any sweep, including a full-circle sweep), Circle, open
+      Polyline, and closed Polyline; refused with a stated reason (REQ-201): Ellipse (no
+      elliptical-arc entity kind exists in GoSurvey to hold a broken-open ellipse — adding one
+      would be a genuinely new entity kind, which this step's own "no new entity kind" framing
+      rules out), Annotation, FeatureLine, Surface, Mesh, FilledRegion, PdfUnderlay, Text, Mtext,
+      and SurveyPoint;
+    - the pick that selects the entity also supplies break point 1 — the closest point ON that
+      entity to the pick, not the raw cursor position; a second pick supplies break point 2,
+      likewise projected onto the already-selected entity; a break point coinciding with an
+      entity's own endpoint (within REQ-101 tolerance) is treated as that endpoint exactly;
+    - on an OPEN entity (Line, non-full Arc, open Polyline): the two break points are ordered by
+      position along the entity (independent of click order), and the material between them is
+      removed. Both points strictly interior → the original entity is shortened in place down to
+      start→nearer-point, and a NEW duplicate entity (fresh id, REQ-076/ADR-027) is created for
+      farther-point→end. One point coinciding with an existing endpoint → the entity is shortened
+      in place from the other point only, no duplicate created. Both points coinciding with the
+      two existing endpoints → refused ("would remove the entire entity"), geometry unchanged —
+      never silently deleted;
+    - on a CLOSED entity (Circle, full-circle-sweep Arc, closed Polyline): click order matters —
+      the material swept from break point 1 to break point 2, travelling in the direction of
+      increasing parameter (counterclockwise for Circle/full Arc; stored vertex order for closed
+      Polyline), is removed, leaving one open result starting at point 2, ending at point 1 —
+      matching AutoCAD's own circle-break convention. A Circle converts into a new Arc entity
+      (fresh id — Circle and Arc are separate stores; this is a conversion between two entity
+      kinds that already exist, not a new kind). A full-circle-sweep Arc is mutated in place (same
+      id, no duplicate, no store change). A closed Polyline is mutated in place (same id, `Closed`
+      flag cleared, vertex list rewritten to run point2→…→point1). The two break points landing at
+      the identical position (a repeated pick) removes nothing and simply opens the closed entity
+      at that point — a legitimate "break at point" case, not a no-op refusal;
+    - each individual break is its own undo step; the command loops back to "select object" after
+      each completed break until Enter/Esc, matching TRIM/LENGTHEN/EXTEND's per-target granularity
+      and looping shape;
+    - reachable from the Modify ribbon, typed `BREAK`/`BR`, and right-click repeat; works in model
+      space, floating model space, and native paper space (pure two-click flow, no typed value
+      needed, so paper space is not simplified away — same reasoning as EXTEND's step 3).
+  - Acceptance for STRETCH/FILLET/CHAMFER/ARRAY/EXPLODE (steps 5–8) is written when each is
+    accepted for implementation, not spec'd in advance of that command's own design pass.
 - Owner-layer: Commands/Domain/UI
 - Status: accepted
-- Revisions: 2026-08-23 — catalogued, proposed (D-2026-08-23-i). 2026-08-23 — accepted; sequenced into 8 increments starting with MIRROR; MIRROR's acceptance conditions written; MIRRTEXT-off and erase-default-No confirmed with the user (D-2026-08-23-j, TASK-094). 2026-08-24 — LENGTHEN's (step 2) acceptance conditions written (D-2026-08-24-a, TASK-095). 2026-08-24 — EXTEND's (step 3) acceptance conditions written; analytic-over-tessellated boundary intersection and paper-space-included both confirmed with the user (D-2026-08-24-b, TASK-096).
+- Revisions: 2026-08-23 — catalogued, proposed (D-2026-08-23-i). 2026-08-23 — accepted; sequenced into 8 increments starting with MIRROR; MIRROR's acceptance conditions written; MIRRTEXT-off and erase-default-No confirmed with the user (D-2026-08-23-j, TASK-094). 2026-08-24 — LENGTHEN's (step 2) acceptance conditions written (D-2026-08-24-a, TASK-095). 2026-08-24 — EXTEND's (step 3) acceptance conditions written; analytic-over-tessellated boundary intersection and paper-space-included both confirmed with the user (D-2026-08-24-b, TASK-096). 2026-08-24 — BREAK's (step 4) acceptance conditions written; Circle/full-circle-Arc target eligibility (converts to Arc) and closed-Polyline target eligibility (splits open) both confirmed with the user (D-2026-08-24-c, TASK-097).
 
 ### REQ-104 — Draw-command completeness
 - Purpose: SPLINE, XLINE, RAY, DONUT, SOLID, REVCLOUD, WIPEOUT, and MLINE have no command at all
@@ -3460,7 +3497,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-080 (amended) | Telemetry/Auth/UI/Platform | `TelemetryPingTests` **green 2026-08-23** (email-empty/email-present JSON cases; `DecideEventToSend` simplified to install-vs-always-active, throttle tests removed with the throttle) + `telemetry-worker/test.mjs` **green 2026-08-23** (valid/empty/malformed email stored-or-dropped-to-null; column-count assertions 8→9) + **live, 2026-08-23**: deployed Worker smoke-tested with a real POST carrying `email`, confirmed via direct D1 read-back; live migrations applied to the pre-existing deployed table (`ALTER TABLE pings ADD COLUMN email TEXT`, `DROP INDEX ux_pings_active_daily`) | accepted |
 | REQ-093 (amended) | UI/Platform | **manual, verified live against the real app across three build-and-look rounds, 2026-08-23 (D-2026-08-23-h):** the splash is its own small window (~440x320), centered on the primary monitor, filled edge-to-edge by the card — the real desktop, not a dimmed backdrop, is visible everywhere outside that small window; a native-resolution 32x32 corner logo (no upscaling — the source art is only that large) plus a large centered "GoSurvey" wordmark; the progress bar visibly animates across a hardcoded 5.0 s regardless of how fast real preload finishes; the main CAD shell is not shown/interactive until the 5 s elapses; user settings/prefs, the startup workspace template, the app font and the app logo are all loaded before the main shell is usable — this was already true pre-splash and REQ-093 does not change *what* loads, only that a splash now covers it; the splash's rotating phase text is cosmetic labeling only, since linetypes have no data table to load and text styles are already resident in memory the instant `AppCommandState` is constructed; closing the window during the 5 s exits cleanly with no hang; **the user's saved dock layout is restored correctly on launch** — this became an explicit acceptance condition only after a regression destroyed it once (D-2026-08-23-h) | accepted |
 | REQ-102 | Domain/Renderer/Commands/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
-| REQ-103 | Commands/Domain/UI | planned — sequenced into 8 increments (D-2026-08-23-j); TASK-094 (MIRROR, step 1), TASK-095 (LENGTHEN, step 2), and TASK-096 (EXTEND, step 3, model+paper space) all self-verified 2026-08-24, transcripts green (557/557 regression); manual GUI pass pending the user for all shipped steps; steps 4-8 not started | accepted |
+| REQ-103 | Commands/Domain/UI | planned — sequenced into 8 increments (D-2026-08-23-j); TASK-094 (MIRROR, step 1), TASK-095 (LENGTHEN, step 2), TASK-096 (EXTEND, step 3, model+paper space), and TASK-097 (BREAK, step 4, model+paper space) all self-verified 2026-08-24, transcripts green (559/559 regression); manual GUI pass pending the user for all shipped steps; steps 5-8 not started | accepted |
 | REQ-104 | Commands/Domain/IO/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-105 | Commands/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-106 | UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |

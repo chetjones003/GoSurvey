@@ -56,6 +56,21 @@ struct SelectedEntity {
   int index = 0; ///< Entity index in the parallel container for \p type
 };
 
+/// REQ-103 BREAK (step 4): a break point resolved onto a specific entity — the exact coordinate
+/// (projected, never the raw pick), plus enough positional context to order it against a second
+/// such point on the SAME entity. File-scope (not nested in AppCommandState) so the paper-space
+/// free functions below, declared ahead of AppCommandState's own definition, can name it.
+/// `param`: Line/open-Polyline/non-full-Arc — distance from the entity's own start, in world
+/// units, in its own forward/sweep direction; meaningless for Circle/full-circle Arc, which use
+/// `theta` (the raw pick angle) instead for their click-order removal math. `segIndex`: Polyline
+/// only — which edge (0-based) the point lands on.
+struct BreakPoint {
+  float x = 0.f, y = 0.f;
+  float param = 0.f;
+  float theta = 0.f;
+  int segIndex = -1;
+};
+
 // PaperEntityRef (selected paper-space entity) is defined in PaperSpace.hpp so header-only selection
 // helpers can name it; CadCommands.hpp gets it via the include above (REQ-039).
 
@@ -530,6 +545,16 @@ bool ApplyLengthenToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, 
 /// (not simplified away) as a real two-phase pick flow; see `paperExtendPhase`'s comment.
 bool ApplyExtendToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, float pickXIn, float pickYIn,
                               std::vector<std::string>& log);
+/// REQ-103 BREAK, pure-paper-space path — a pure two-phase click flow like paper EXTEND, needing no
+/// typed value; see `paperBreakPhase`'s comment. `p1` is the already-resolved first break point
+/// (from the entity-selecting pick); this call resolves the second point at (pickXIn,pickYIn) itself.
+bool ApplyBreakToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, const BreakPoint& p1,
+                             float pickXIn, float pickYIn, std::vector<std::string>& log);
+/// Paper-space equivalent of \c ClosestPointOnEntity (CadCommands.cpp) — projects (px,py) onto
+/// paper entity \p ref, filling \p out. Declared here (not just in the .cpp) so CadUi.cpp's paper
+/// click block can resolve BREAK's first point the same way it already calls \c PickPaperEntityAt.
+bool ClosestPointOnPaperEntity(const PaperLayout& L, const PaperEntityRef& ref, float px, float py,
+                               BreakPoint* out);
 /// Enter floating model space for viewport \p vpIdx of layout \p layoutIdx (edit the model through it).
 void EnterFloatingModelSpace(AppCommandState& cmd, int layoutIdx, int vpIdx, std::vector<std::string>& log);
 /// Save the floating view back to the viewport and return to paper space.
@@ -577,6 +602,11 @@ struct AppCommandState {
     /// nearest each pick out to the nearest boundary (REQ-103 step 3) — TRIM's direct inverse,
     /// copy-adapting its boundary-edge-selection shape (own state, not shared code).
     Extend,
+    /// BREAK: pick an entity (the pick doubles as break point 1), then a second point; the material
+    /// between them is removed (REQ-103 step 4). Eligible: Line, Circle, Arc (any sweep), open and
+    /// closed Polyline. Two picks identical in position opens a closed entity at that point with
+    /// nothing removed ("break at point").
+    Break,
     Delete,
     Zoom,
     Join,
@@ -638,6 +668,7 @@ struct AppCommandState {
     case Kind::Mirror:        return "MIRROR";
     case Kind::Lengthen:      return "LENGTHEN";
     case Kind::Extend:        return "EXTEND";
+    case Kind::Break:         return "BREAK";
     case Kind::Delete:        return "DELETE";
     case Kind::Zoom:          return "ZOOM";
     case Kind::Join:          return "JOIN";
@@ -1654,6 +1685,14 @@ struct AppCommandState {
   /// for `trimCutters`, copy-adapted rather than shared).
   std::vector<SelectedEntity> extendBoundaries;
 
+  // --- BREAK (REQ-103 step 4) --- (BreakPoint is file-scope; see its definition above)
+  enum class BreakPhase {
+    SelectFirstPoint,  ///< pick selects the entity AND supplies break point 1
+    SelectSecondPoint, ///< pick supplies break point 2, projected onto the same entity; applies, loops
+  } breakPhase = BreakPhase::SelectFirstPoint;
+  SelectedEntity breakEntity{};
+  BreakPoint breakP1{};
+
   // --- Survey / COGO points (in-memory database; optional JSON file) ---
   std::vector<SurveyPoint> surveyPoints;
   /// Named point groups (REQ-067) — drawing-owned rules, resolved on demand, never cached.
@@ -2076,6 +2115,12 @@ struct AppCommandState {
   // 1->2, the same "done picking edges" signal model-space TRIM/EXTEND get from a real Enter.
   int   paperExtendPhase = 0;
   std::vector<PaperEntityRef> paperExtendBoundaries;
+  // Paper-space BREAK of native paper entities (REQ-103 step 4): 0 idle, 1 waiting for the
+  // entity+first-point pick, 2 waiting for the second point (applies, loops back to 1). Pure click
+  // flow like paper EXTEND — no typed value, so not simplified away.
+  int   paperBreakPhase = 0;
+  PaperEntityRef paperBreakEntity{};
+  BreakPoint paperBreakP1{};
   // Floating model space (REQ-036): edit the model IN PLACE through a viewport. The active space stays
   // the paper layout (sheet + viewports stay visible); model edit/snap/draw is routed through the viewport.
   int    floatingViewportLayout = -1;   ///< paper layout of the floating viewport, or -1 if not floating.
@@ -2803,6 +2848,11 @@ void StartExtendCommand(AppCommandState& st, std::vector<std::string>& log);
 /// its cluster) for the same anonymous-namespace/global-scope reason `HandleLengthenViewportPick`
 /// is — `SubmitViewportPickImpl` needs to see it via this header.
 void HandleExtendViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
+void StartBreakCommand(AppCommandState& st, std::vector<std::string>& log);
+/// Model-space + floating-model-space viewport-pick handler for BREAK. Non-static for the same
+/// anonymous-namespace/global-scope reason `HandleLengthenViewportPick`/`HandleExtendViewportPick`
+/// are — `SubmitViewportPickImpl` needs to see it via this header.
+void HandleBreakViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log);
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartQuickSelectCommand(AppCommandState& st, std::vector<std::string>& log);

@@ -4236,6 +4236,7 @@ const CmdEntry kRegistry[] = {
     {"mirror", "mi", "Mirror objects across a line"},
     {"lengthen", "len", "Change an object's length (DElta/Percent/Total/DYnamic)"},
     {"extend", "ex", "Extend objects to a boundary edge"},
+    {"break", "br", "Split an object at one or two picked points"},
     {"delete", "del", "Erase objects"},
     {"join", "j", "Join collinear objects"},
     {"trim", "tr", "Trim objects to an edge"},
@@ -4701,6 +4702,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "extend") {
     StartExtendCommand(st, log);
+    return true;
+  }
+  if (primary == "break") {
+    StartBreakCommand(st, log);
     return true;
   }
   if (primary == "delete") {
@@ -8993,6 +8998,11 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
+  if (st.active == K::Break) {
+    HandleBreakViewportPick(st, wx, wy, log);
+    return;
+  }
+
   if (st.active == K::None && st.selBoxWaitingSecond)
     finishBox();
 }
@@ -10418,6 +10428,890 @@ bool ApplyExtendToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, fl
   BumpCadGpuCache(st);
   log.push_back("EXTEND — paper object extended to the boundary.");
   return true;
+}
+
+// BREAK reuses OFFSET's point-on-segment projection rather than re-deriving it (it is `static`
+// inside `namespace OffsetCmd`, so a using-declaration is the least-code way to name it here).
+using OffsetCmd::ClosestPointOnSegment;
+
+// ============================================================================================
+// BREAK (REQ-103 step 4, D-2026-08-24-c). Splits a single entity at one or two picked points.
+// Eligible: Line, Circle, Arc (any sweep), open and closed Polyline. Ellipse is refused — GoSurvey
+// has no elliptical-arc entity kind to hold a broken-open ellipse, and adding one is a new entity
+// kind this step's own spec note rules out. On an OPEN entity the two break points are ordered by
+// position along the entity (independent of click order) and the material between them is
+// removed. On a CLOSED entity (Circle, full-circle-sweep Arc, closed Polyline) click order is
+// load-bearing: the material swept from point 1 to point 2, in the direction of increasing
+// parameter, is removed, leaving one open result starting at point 2, ending at point 1 —
+// AutoCAD's own circle-break convention, generalized to all three closed cases.
+// ============================================================================================
+
+/// How far around an Arc's OWN sweep direction (from `startRad`, growing the way `sweepRad`'s sign
+/// already does) you'd travel to reach `theta` — radians, in [0, 2*pi). Same direction-of-travel
+/// rule `FindExtendArcTarget`'s `consider` lambda already applies (CW arcs have negative sweepRad).
+static float ArcSweepParam(float startRad, float sweepRad, float theta) {
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  float d;
+  if (sweepRad >= 0.f) {
+    d = std::fmod(theta - startRad, kTwoPi);
+    if (d < 0.f) d += kTwoPi;
+  } else {
+    d = std::fmod(startRad - theta, kTwoPi);
+    if (d < 0.f) d += kTwoPi;
+  }
+  return d;
+}
+
+/// Shared by Circle and full-circle-sweep Arc: the material from `theta1` to `theta2`, travelling
+/// COUNTERCLOCKWISE (AutoCAD's own circle-break convention — a full sweep's own stored direction
+/// carries no meaning once it is a closed loop, so both cases use this same fixed sense), is
+/// removed; the result starts at `theta2` and sweeps CCW to `theta1`. `theta1==theta2` (a repeated
+/// pick) yields a full `2*pi` sweep — the "break at point" case, not a degenerate zero-length one.
+static void CircleBreakStartSweep(float theta1, float theta2, float* outStart, float* outSweep) {
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  float sweep = std::fmod(theta1 - theta2, kTwoPi);
+  if (sweep <= 1e-7f)
+    sweep += kTwoPi;
+  *outStart = theta2;
+  *outSweep = sweep;
+}
+
+/// Projects (px,py) onto entity \p e (model-space stores), filling \p out. No existing helper
+/// resolves "the closest point ON this entity" — `PickClosestCadEntity` answers "which entity",
+/// with a distance only. Written narrowly for BREAK's own need (CLAUDE.md rule 2 — one caller).
+static bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, float px, float py,
+                                 BreakPoint* out) {
+  switch (e.type) {
+  case SelectedEntity::Type::LineSeg: {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return false;
+    const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
+    ClosestPointOnSegment(x0, y0, st.userLinesFlat[k + 3], st.userLinesFlat[k + 4], px, py, &out->x, &out->y);
+    out->param = std::hypot(out->x - x0, out->y - y0);
+    return true;
+  }
+  case SelectedEntity::Type::Circle: {
+    const size_t k = static_cast<size_t>(e.index) * 4;
+    if (k + 3 >= st.userCirclesCxCyZR.size())
+      return false;
+    const float cx = st.userCirclesCxCyZR[k], cy = st.userCirclesCxCyZR[k + 1], r = st.userCirclesCxCyZR[k + 3];
+    out->theta = std::atan2(py - cy, px - cx);
+    out->x = cx + r * std::cos(out->theta);
+    out->y = cy + r * std::sin(out->theta);
+    return true;
+  }
+  case SelectedEntity::Type::Arc: {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      return false;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    out->theta = std::atan2(py - a.cy, px - a.cx);
+    out->x = a.cx + a.r * std::cos(out->theta);
+    out->y = a.cy + a.r * std::sin(out->theta);
+    out->param = a.r * ArcSweepParam(a.startRad, a.sweepRad, out->theta);
+    return true;
+  }
+  case SelectedEntity::Type::Polyline: {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+      return false;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const bool closed =
+        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+    bool any = false;
+    float bestD2 = std::numeric_limits<float>::max();
+    float cum = 0.f;
+    for (int vi = v0; vi + 1 < v1; ++vi) {
+      const size_t A = static_cast<size_t>(vi) * 3, B = static_cast<size_t>(vi + 1) * 3;
+      const float ax = st.userPolylineVerts[A], ay = st.userPolylineVerts[A + 1];
+      const float bx = st.userPolylineVerts[B], by = st.userPolylineVerts[B + 1];
+      float qx = 0.f, qy = 0.f;
+      ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
+      const float d2 = (qx - px) * (qx - px) + (qy - py) * (qy - py);
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        any = true;
+        out->x = qx;
+        out->y = qy;
+        out->param = cum + std::hypot(qx - ax, qy - ay);
+        out->segIndex = vi - v0;
+      }
+      cum += std::hypot(bx - ax, by - ay);
+    }
+    if (closed && v1 - v0 >= 2) {
+      const size_t A = static_cast<size_t>(v1 - 1) * 3, B = static_cast<size_t>(v0) * 3;
+      const float ax = st.userPolylineVerts[A], ay = st.userPolylineVerts[A + 1];
+      const float bx = st.userPolylineVerts[B], by = st.userPolylineVerts[B + 1];
+      float qx = 0.f, qy = 0.f;
+      ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
+      const float d2 = (qx - px) * (qx - px) + (qy - py) * (qy - py);
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        any = true;
+        out->x = qx;
+        out->y = qy;
+        out->param = cum + std::hypot(qx - ax, qy - ay);
+        out->segIndex = (v1 - v0) - 1;
+      }
+    }
+    return any;
+  }
+  default:
+    return false;
+  }
+}
+
+static void ApplyBreakToLine(AppCommandState& st, int index, const BreakPoint& p1, const BreakPoint& p2,
+                             std::vector<std::string>& log) {
+  const size_t k = static_cast<size_t>(index) * 6;
+  if (k + 5 >= st.userLinesFlat.size())
+    return;
+  const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1], z0 = st.userLinesFlat[k + 2];
+  const float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4], z1 = st.userLinesFlat[k + 5];
+  const float totalLen = std::hypot(x1 - x0, y1 - y0);
+  constexpr float kTol = 0.01f;  // REQ-101 endpoint-coincidence tolerance
+  const float nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
+  const bool nearIsStart = nearP <= kTol;
+  const bool farIsEnd = farP >= totalLen - kTol;
+  if (nearIsStart && farIsEnd) {
+    log.push_back("BREAK — that would remove the entire line; refused.");
+    return;
+  }
+  const float ux = (x1 - x0) / std::max(totalLen, 1e-9f), uy = (y1 - y0) / std::max(totalLen, 1e-9f);
+  PushUndoSnapshot(st, "Break");
+  if (nearIsStart) {
+    st.userLinesFlat[k] = x0 + ux * farP;
+    st.userLinesFlat[k + 1] = y0 + uy * farP;
+  } else if (farIsEnd) {
+    st.userLinesFlat[k + 3] = x0 + ux * nearP;
+    st.userLinesFlat[k + 4] = y0 + uy * nearP;
+  } else {
+    const EntityAttributes srcAttrs =
+        (static_cast<size_t>(index) < st.userLineAttrs.size()) ? st.userLineAttrs[static_cast<size_t>(index)]
+                                                                : EntityAttributes{};
+    const float nx = x0 + ux * nearP, ny = y0 + uy * nearP;
+    const float fx = x0 + ux * farP, fy = y0 + uy * farP;
+    st.userLinesFlat[k + 3] = nx;
+    st.userLinesFlat[k + 4] = ny;
+    st.userLinesFlat.insert(st.userLinesFlat.end(), {fx, fy, z0, x1, y1, z1});
+    st.userLineAttrs.push_back(DuplicatedEntityAttrs(srcAttrs));
+  }
+  BumpCadGpuCache(st);
+  log.push_back("BREAK — line broken.");
+}
+
+static void ApplyBreakToCircle(AppCommandState& st, int index, const BreakPoint& p1, const BreakPoint& p2,
+                               std::vector<std::string>& log) {
+  const size_t k = static_cast<size_t>(index) * 4;
+  if (k + 3 >= st.userCirclesCxCyZR.size())
+    return;
+  const float cx = st.userCirclesCxCyZR[k], cy = st.userCirclesCxCyZR[k + 1];
+  const float z = st.userCirclesCxCyZR[k + 2], r = st.userCirclesCxCyZR[k + 3];
+  float startRad = 0.f, sweepRad = 0.f;
+  CircleBreakStartSweep(p1.theta, p2.theta, &startRad, &sweepRad);
+  const EntityAttributes srcAttrs =
+      (static_cast<size_t>(index) < st.userCircleAttrs.size()) ? st.userCircleAttrs[static_cast<size_t>(index)]
+                                                                : EntityAttributes{};
+  const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
+  PushUndoSnapshot(st, "Break");
+  st.userCirclesCxCyZR.erase(st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k),
+                             st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k + 4));
+  if (static_cast<size_t>(index) < st.userCircleAttrs.size())
+    st.userCircleAttrs.erase(st.userCircleAttrs.begin() + index);
+  CadArc a{};
+  a.cx = cx;
+  a.cy = cy;
+  a.r = r;
+  a.z = z;
+  a.startRad = startRad;
+  a.sweepRad = sweepRad;
+  st.userArcs.push_back(a);
+  st.userArcAttrs.push_back(DuplicatedEntityAttrs(srcAttrs));
+  BumpCadGpuCache(st);
+  log.push_back(samePoint ? "BREAK — circle opened into an arc at the pick point."
+                         : "BREAK — circle converted to an arc.");
+}
+
+static void ApplyBreakToArc(AppCommandState& st, int index, const BreakPoint& p1, const BreakPoint& p2,
+                            std::vector<std::string>& log) {
+  if (index < 0 || static_cast<size_t>(index) >= st.userArcs.size())
+    return;
+  const CadArc src = st.userArcs[static_cast<size_t>(index)];  // a copy — the push_back below may
+                                                                // reallocate the vector
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  const bool full = std::fabs(std::fabs(src.sweepRad) - kTwoPi) < 1e-4f;
+  if (full) {
+    float startRad = 0.f, sweepRad = 0.f;
+    CircleBreakStartSweep(p1.theta, p2.theta, &startRad, &sweepRad);
+    const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
+    PushUndoSnapshot(st, "Break");
+    st.userArcs[static_cast<size_t>(index)].startRad = startRad;
+    st.userArcs[static_cast<size_t>(index)].sweepRad = sweepRad;
+    BumpCadGpuCache(st);
+    log.push_back(samePoint ? "BREAK — full-circle arc re-opened at the pick point."
+                           : "BREAK — full-circle arc broken.");
+    return;
+  }
+  const float totalLen = src.r * std::fabs(src.sweepRad);
+  constexpr float kTol = 0.01f;
+  const float nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
+  const bool nearIsStart = nearP <= kTol;
+  const bool farIsEnd = farP >= totalLen - kTol;
+  if (nearIsStart && farIsEnd) {
+    log.push_back("BREAK — that would remove the entire arc; refused.");
+    return;
+  }
+  const float sgn = src.sweepRad >= 0.f ? 1.f : -1.f;
+  const float nearTheta = src.startRad + sgn * (nearP / std::max(src.r, 1e-9f));
+  const float farTheta = src.startRad + sgn * (farP / std::max(src.r, 1e-9f));
+  const float endRad0 = src.startRad + src.sweepRad;
+  PushUndoSnapshot(st, "Break");
+  if (nearIsStart) {
+    st.userArcs[static_cast<size_t>(index)].startRad = farTheta;
+    st.userArcs[static_cast<size_t>(index)].sweepRad = endRad0 - farTheta;
+  } else if (farIsEnd) {
+    st.userArcs[static_cast<size_t>(index)].sweepRad = nearTheta - src.startRad;
+  } else {
+    const EntityAttributes srcAttrs =
+        (static_cast<size_t>(index) < st.userArcAttrs.size()) ? st.userArcAttrs[static_cast<size_t>(index)]
+                                                              : EntityAttributes{};
+    CadArc newA = src;
+    newA.startRad = farTheta;
+    newA.sweepRad = endRad0 - farTheta;
+    st.userArcs.push_back(newA);  // may reallocate — index-based access only below
+    st.userArcAttrs.push_back(DuplicatedEntityAttrs(srcAttrs));
+    st.userArcs[static_cast<size_t>(index)].sweepRad = nearTheta - src.startRad;
+  }
+  BumpCadGpuCache(st);
+  log.push_back("BREAK — arc broken.");
+}
+
+/// Rewrites polyline `pi`'s vertex range to `newXY` (z always written 0 — matching LENGTHEN/
+/// EXTEND's existing 2D-only treatment of Line/Polyline endpoints, which never interpolate z
+/// either), shifting every later polyline's CSR offsets by the length delta. Same technique
+/// OVERKILL's cleanup pass already uses for the identical "this polyline's vertex count changed"
+/// problem (this file, the LWPOLYLINE-cleanup block).
+static void ReplacePolylineVerts(AppCommandState& st, int pi, const std::vector<std::pair<float, float>>& newXY) {
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const int nNew = static_cast<int>(newXY.size());
+  const int delta = nNew - (v1 - v0);
+  st.userPolylineVerts.erase(st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+                             st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+  std::vector<float> flat;
+  flat.reserve(static_cast<size_t>(nNew) * 3);
+  for (const auto& p : newXY) {
+    flat.push_back(p.first);
+    flat.push_back(p.second);
+    flat.push_back(0.f);
+  }
+  st.userPolylineVerts.insert(st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3, flat.begin(),
+                              flat.end());
+  for (size_t oi = static_cast<size_t>(pi + 1); oi < st.userPolylineOffsets.size(); ++oi)
+    st.userPolylineOffsets[oi] += delta;
+}
+
+/// Appends a brand-new polyline to the end of the CSR arrays. Precondition: at least one polyline
+/// already exists (BREAK only ever calls this while splitting an already-selected polyline), so
+/// `userPolylineOffsets` is never empty here.
+static void AppendNewPolyline(AppCommandState& st, const std::vector<std::pair<float, float>>& xy, bool closed,
+                              EntityAttributes attrs) {
+  const int base = st.userPolylineOffsets.back();
+  for (const auto& p : xy) {
+    st.userPolylineVerts.push_back(p.first);
+    st.userPolylineVerts.push_back(p.second);
+    st.userPolylineVerts.push_back(0.f);
+  }
+  st.userPolylineOffsets.push_back(base + static_cast<int>(xy.size()));
+  st.userPolylineClosed.push_back(closed ? 1u : 0u);
+  st.userPolylineAttrs.push_back(std::move(attrs));
+}
+
+static void ApplyBreakToOpenPolyline(AppCommandState& st, int pi, const BreakPoint& p1, const BreakPoint& p2,
+                                     std::vector<std::string>& log) {
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const float totalLen = PolylineOpenLengthOf(st, pi);
+  constexpr float kTol = 0.01f;
+  const bool p1First = p1.param <= p2.param;
+  const BreakPoint& nearBp = p1First ? p1 : p2;
+  const BreakPoint& farBp = p1First ? p2 : p1;
+  const bool nearIsStart = nearBp.param <= kTol;
+  const bool farIsEnd = farBp.param >= totalLen - kTol;
+  if (nearIsStart && farIsEnd) {
+    log.push_back("BREAK — that would remove the entire polyline; refused.");
+    return;
+  }
+  std::vector<std::pair<float, float>> orig;
+  orig.reserve(static_cast<size_t>(v1 - v0));
+  for (int vi = v0; vi < v1; ++vi)
+    orig.push_back({st.userPolylineVerts[static_cast<size_t>(vi) * 3], st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 1]});
+
+  auto buildPiece = [&](bool fromStart) {
+    std::vector<std::pair<float, float>> out;
+    if (fromStart) {
+      for (int i = 0; i <= nearBp.segIndex; ++i)
+        out.push_back(orig[static_cast<size_t>(i)]);
+      const auto& last = out.back();
+      if (std::hypot(last.first - nearBp.x, last.second - nearBp.y) > 1e-6f)
+        out.push_back({nearBp.x, nearBp.y});
+    } else {
+      out.push_back({farBp.x, farBp.y});
+      for (int i = farBp.segIndex + 1; i < static_cast<int>(orig.size()); ++i)
+        out.push_back(orig[static_cast<size_t>(i)]);
+      if (out.size() >= 2 &&
+          std::hypot(out[0].first - out[1].first, out[0].second - out[1].second) < 1e-6f)
+        out.erase(out.begin());
+    }
+    return out;
+  };
+
+  const EntityAttributes srcAttrs =
+      (static_cast<size_t>(pi) < st.userPolylineAttrs.size()) ? st.userPolylineAttrs[static_cast<size_t>(pi)]
+                                                               : EntityAttributes{};
+  PushUndoSnapshot(st, "Break");
+  if (nearIsStart) {
+    ReplacePolylineVerts(st, pi, buildPiece(false));
+  } else if (farIsEnd) {
+    ReplacePolylineVerts(st, pi, buildPiece(true));
+  } else {
+    std::vector<std::pair<float, float>> nearPiece = buildPiece(true);
+    std::vector<std::pair<float, float>> farPiece = buildPiece(false);
+    ReplacePolylineVerts(st, pi, nearPiece);
+    AppendNewPolyline(st, farPiece, false, DuplicatedEntityAttrs(srcAttrs));
+  }
+  BumpCadGpuCache(st);
+  log.push_back("BREAK — polyline broken.");
+}
+
+static void ApplyBreakToClosedPolyline(AppCommandState& st, int pi, const BreakPoint& p1, const BreakPoint& p2,
+                                       std::vector<std::string>& log) {
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const int n = v1 - v0;  // vertex count == edge count for a closed ring
+  std::vector<float> vparam(static_cast<size_t>(n));
+  float ringLen = 0.f;
+  for (int i = 0; i < n; ++i) {
+    vparam[static_cast<size_t>(i)] = ringLen;
+    const int a = v0 + i, b = v0 + (i + 1) % n;
+    ringLen += std::hypot(st.userPolylineVerts[static_cast<size_t>(b) * 3] - st.userPolylineVerts[static_cast<size_t>(a) * 3],
+                          st.userPolylineVerts[static_cast<size_t>(b) * 3 + 1] -
+                              st.userPolylineVerts[static_cast<size_t>(a) * 3 + 1]);
+  }
+  if (ringLen < 1e-9f)
+    return;
+  // Rotate every position so point2's param becomes 0, then collect everything from point2
+  // (inclusive) through point1 (inclusive) in ascending rotated order — "walk forward from point2
+  // to point1, wrapping through the closing edge" expressed as a sort instead of segment-index
+  // bookkeeping, so a same-edge-reversed pick needs no special case.
+  auto rot = [&](float param) {
+    float d = std::fmod(param - p2.param, ringLen);
+    if (d < 0.f) d += ringLen;
+    return d;
+  };
+  const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
+  const float p1Rot = samePoint ? ringLen : rot(p1.param);
+  std::vector<std::pair<float, float>> outVerts;
+  outVerts.push_back({p2.x, p2.y});
+  for (int i = 0; i < n; ++i) {
+    const float r = rot(vparam[static_cast<size_t>(i)]);
+    if (r > 1e-6f && r < p1Rot - 1e-6f)
+      outVerts.push_back({st.userPolylineVerts[static_cast<size_t>(v0 + i) * 3],
+                          st.userPolylineVerts[static_cast<size_t>(v0 + i) * 3 + 1]});
+  }
+  outVerts.push_back({p1.x, p1.y});
+  if (outVerts.size() >= 2 &&
+      std::hypot(outVerts[0].first - outVerts[1].first, outVerts[0].second - outVerts[1].second) < 1e-6f)
+    outVerts.erase(outVerts.begin() + 1);
+  if (outVerts.size() >= 2 &&
+      std::hypot(outVerts.back().first - outVerts[outVerts.size() - 2].first,
+                outVerts.back().second - outVerts[outVerts.size() - 2].second) < 1e-6f)
+    outVerts.pop_back();
+  PushUndoSnapshot(st, "Break");
+  ReplacePolylineVerts(st, pi, outVerts);
+  if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
+    st.userPolylineClosed[static_cast<size_t>(pi)] = 0u;
+  BumpCadGpuCache(st);
+  log.push_back(samePoint ? "BREAK — closed polyline opened at the pick point."
+                         : "BREAK — closed polyline broken open.");
+}
+
+static void ApplyBreakToPolyline(AppCommandState& st, int pi, const BreakPoint& p1, const BreakPoint& p2,
+                                 std::vector<std::string>& log) {
+  const bool closed =
+      static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+  if (closed)
+    ApplyBreakToClosedPolyline(st, pi, p1, p2, log);
+  else
+    ApplyBreakToOpenPolyline(st, pi, p1, p2, log);
+}
+
+/// Single choke point, dispatching by entity type — mirrors `ApplyLengthenToEntity`'s shape.
+static void ApplyBreakToEntity(AppCommandState& st, const SelectedEntity& e, const BreakPoint& p1,
+                               const BreakPoint& p2, std::vector<std::string>& log) {
+  switch (e.type) {
+  case SelectedEntity::Type::LineSeg: ApplyBreakToLine(st, e.index, p1, p2, log); break;
+  case SelectedEntity::Type::Circle:  ApplyBreakToCircle(st, e.index, p1, p2, log); break;
+  case SelectedEntity::Type::Arc:     ApplyBreakToArc(st, e.index, p1, p2, log); break;
+  case SelectedEntity::Type::Polyline: ApplyBreakToPolyline(st, e.index, p1, p2, log); break;
+  default: break;
+  }
+}
+
+void StartBreakCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // paper routing (REQ-103 step 4)
+    st.active = K::None;
+    st.paperBreakPhase = 1;
+    log.push_back("BREAK — click an object (the pick is break point 1). Esc cancels.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = K::Break;
+  st.lastCommand = K::Break;
+  st.breakPhase = AppCommandState::BreakPhase::SelectFirstPoint;
+  st.breakEntity = SelectedEntity{};
+  st.selBoxWaitingSecond = false;
+  log.push_back("BREAK — select object (the pick is break point 1). ESC cancels.");
+}
+
+/// Model-space + floating-model-space viewport-pick handler for BREAK — called from
+/// SubmitViewportPickImpl, the exact site RECT's history warns a new command must not go missing
+/// from. Phase 1's pick both selects the entity (`PickClosestCadEntity`) and supplies break point
+/// 1 (`ClosestPointOnEntity`, not the raw pick); phase 2 resolves break point 2 on the SAME entity
+/// and applies, looping back to phase 1.
+void HandleBreakViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  using BP = AppCommandState::BreakPhase;
+  if (st.breakPhase == BP::SelectFirstPoint) {
+    SelectedEntity hit{};
+    float d2 = 0.f;
+    if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+      log.push_back("BREAK — no object at pick.");
+      return;
+    }
+    if (hit.type == SelectedEntity::Type::Ellipse) {
+      log.push_back("BREAK — 1 ellipse ignored: every ellipse in this drawing is a full closed curve, "
+                    "and GoSurvey has no elliptical-arc entity kind to hold a broken-open ellipse. "
+                    "Pick a line, circle, arc, or polyline.");
+      return;
+    }
+    if (hit.type == SelectedEntity::Type::FeatureLine) {
+      log.push_back("BREAK — 1 feature line ignored: a feature line cannot be broken. Pick a line, "
+                    "circle, arc, or polyline.");
+      return;
+    }
+    if (hit.type == SelectedEntity::Type::Surface) {
+      log.push_back("BREAK — 1 surface ignored: a surface cannot be broken. Pick a line, circle, arc, "
+                    "or polyline.");
+      return;
+    }
+    BreakPoint p1{};
+    if (!ClosestPointOnEntity(st, hit, wx, wy, &p1)) {
+      log.push_back("BREAK — could not resolve a point on that object; try again.");
+      return;
+    }
+    st.breakEntity = hit;
+    st.breakP1 = p1;
+    st.breakPhase = BP::SelectSecondPoint;
+    log.push_back("BREAK — specify second break point:");
+    return;
+  }
+
+  // SelectSecondPoint.
+  BreakPoint p2{};
+  if (!ClosestPointOnEntity(st, st.breakEntity, wx, wy, &p2)) {
+    log.push_back("BREAK — could not resolve a second point on that object; try again.");
+    return;
+  }
+  ApplyBreakToEntity(st, st.breakEntity, st.breakP1, p2, log);
+  st.breakPhase = BP::SelectFirstPoint;
+  st.breakEntity = SelectedEntity{};
+}
+
+/// Paper-space equivalent of `ClosestPointOnEntity`, against `PaperLayout`'s stores. Paper circles
+/// are stride 3 (cx,cy,r — paper z is always 0, ADR-025 (g)), unlike the model store's stride 4.
+bool ClosestPointOnPaperEntity(const PaperLayout& L, const PaperEntityRef& ref, float px, float py,
+                               BreakPoint* out) {
+  using T = PaperEntityRef::Type;
+  switch (ref.type) {
+  case T::Line: {
+    const size_t k = static_cast<size_t>(ref.index) * 6;
+    if (k + 5 >= L.paperLines.size())
+      return false;
+    const float x0 = L.paperLines[k], y0 = L.paperLines[k + 1];
+    ClosestPointOnSegment(x0, y0, L.paperLines[k + 3], L.paperLines[k + 4], px, py, &out->x, &out->y);
+    out->param = std::hypot(out->x - x0, out->y - y0);
+    return true;
+  }
+  case T::Circle: {
+    const size_t k = static_cast<size_t>(ref.index) * 3;
+    if (k + 2 >= L.paperCircles.size())
+      return false;
+    const float cx = L.paperCircles[k], cy = L.paperCircles[k + 1], r = L.paperCircles[k + 2];
+    out->theta = std::atan2(py - cy, px - cx);
+    out->x = cx + r * std::cos(out->theta);
+    out->y = cy + r * std::sin(out->theta);
+    return true;
+  }
+  case T::Arc: {
+    if (ref.index < 0 || static_cast<size_t>(ref.index) >= L.paperArcs.size())
+      return false;
+    const CadArc& a = L.paperArcs[static_cast<size_t>(ref.index)];
+    out->theta = std::atan2(py - a.cy, px - a.cx);
+    out->x = a.cx + a.r * std::cos(out->theta);
+    out->y = a.cy + a.r * std::sin(out->theta);
+    out->param = a.r * ArcSweepParam(a.startRad, a.sweepRad, out->theta);
+    return true;
+  }
+  case T::Polyline: {
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L.paperPolyOffsets.size())
+      return false;
+    const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const bool closed =
+        static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)];
+    bool any = false;
+    float bestD2 = std::numeric_limits<float>::max();
+    float cum = 0.f;
+    for (int vi = v0; vi + 1 < v1; ++vi) {
+      const size_t A = static_cast<size_t>(vi) * 3, B = static_cast<size_t>(vi + 1) * 3;
+      const float ax = L.paperPolyVerts[A], ay = L.paperPolyVerts[A + 1];
+      const float bx = L.paperPolyVerts[B], by = L.paperPolyVerts[B + 1];
+      float qx = 0.f, qy = 0.f;
+      ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
+      const float d2 = (qx - px) * (qx - px) + (qy - py) * (qy - py);
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        any = true;
+        out->x = qx;
+        out->y = qy;
+        out->param = cum + std::hypot(qx - ax, qy - ay);
+        out->segIndex = vi - v0;
+      }
+      cum += std::hypot(bx - ax, by - ay);
+    }
+    if (closed && v1 - v0 >= 2) {
+      const size_t A = static_cast<size_t>(v1 - 1) * 3, B = static_cast<size_t>(v0) * 3;
+      const float ax = L.paperPolyVerts[A], ay = L.paperPolyVerts[A + 1];
+      const float bx = L.paperPolyVerts[B], by = L.paperPolyVerts[B + 1];
+      float qx = 0.f, qy = 0.f;
+      ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
+      const float d2 = (qx - px) * (qx - px) + (qy - py) * (qy - py);
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        any = true;
+        out->x = qx;
+        out->y = qy;
+        out->param = cum + std::hypot(qx - ax, qy - ay);
+        out->segIndex = (v1 - v0) - 1;
+      }
+    }
+    return any;
+  }
+  default:
+    return false;
+  }
+}
+
+static bool ApplyBreakToPaperLine(AppCommandState& st, PaperLayout* L, int index, const BreakPoint& p1,
+                                  const BreakPoint& p2, std::vector<std::string>& log) {
+  const size_t k = static_cast<size_t>(index) * 6;
+  if (k + 5 >= L->paperLines.size())
+    return false;
+  const float x0 = L->paperLines[k], y0 = L->paperLines[k + 1];
+  const float x1 = L->paperLines[k + 3], y1 = L->paperLines[k + 4];
+  const float totalLen = std::hypot(x1 - x0, y1 - y0);
+  constexpr float kTol = 0.01f;
+  const float nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
+  const bool nearIsStart = nearP <= kTol;
+  const bool farIsEnd = farP >= totalLen - kTol;
+  if (nearIsStart && farIsEnd) {
+    log.push_back("BREAK — that would remove the entire line; refused.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Break paper geometry");
+  const float ux = (x1 - x0) / std::max(totalLen, 1e-9f), uy = (y1 - y0) / std::max(totalLen, 1e-9f);
+  if (nearIsStart) {
+    L->paperLines[k] = x0 + ux * farP;
+    L->paperLines[k + 1] = y0 + uy * farP;
+  } else if (farIsEnd) {
+    L->paperLines[k + 3] = x0 + ux * nearP;
+    L->paperLines[k + 4] = y0 + uy * nearP;
+  } else {
+    const EntityAttributes srcAttrs =
+        (static_cast<size_t>(index) < L->paperLineAttrs.size()) ? L->paperLineAttrs[static_cast<size_t>(index)]
+                                                                 : EntityAttributes{};
+    const float nx = x0 + ux * nearP, ny = y0 + uy * nearP;
+    const float fx = x0 + ux * farP, fy = y0 + uy * farP;
+    L->paperLines[k + 3] = nx;
+    L->paperLines[k + 4] = ny;
+    L->paperLines.insert(L->paperLines.end(), {fx, fy, 0.f, x1, y1, 0.f});
+    L->paperLineAttrs.push_back(srcAttrs);  // paper: id copied verbatim (existing precedent, not a
+                                            // new policy — paper entities are outside REQ-076's sweep)
+  }
+  log.push_back("BREAK — paper line broken.");
+  return true;
+}
+
+static bool ApplyBreakToPaperCircle(AppCommandState& st, PaperLayout* L, int index, const BreakPoint& p1,
+                                    const BreakPoint& p2, std::vector<std::string>& log) {
+  const size_t k = static_cast<size_t>(index) * 3;
+  if (k + 2 >= L->paperCircles.size())
+    return false;
+  const float cx = L->paperCircles[k], cy = L->paperCircles[k + 1], r = L->paperCircles[k + 2];
+  float startRad = 0.f, sweepRad = 0.f;
+  CircleBreakStartSweep(p1.theta, p2.theta, &startRad, &sweepRad);
+  const EntityAttributes srcAttrs =
+      (static_cast<size_t>(index) < L->paperCircleAttrs.size()) ? L->paperCircleAttrs[static_cast<size_t>(index)]
+                                                                 : EntityAttributes{};
+  const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
+  PushUndoSnapshot(st, "Break paper geometry");
+  L->paperCircles.erase(L->paperCircles.begin() + static_cast<std::ptrdiff_t>(k),
+                        L->paperCircles.begin() + static_cast<std::ptrdiff_t>(k + 3));
+  if (static_cast<size_t>(index) < L->paperCircleAttrs.size())
+    L->paperCircleAttrs.erase(L->paperCircleAttrs.begin() + index);
+  CadArc a{};
+  a.cx = cx;
+  a.cy = cy;
+  a.r = r;
+  a.startRad = startRad;
+  a.sweepRad = sweepRad;
+  L->paperArcs.push_back(a);
+  L->paperArcAttrs.push_back(srcAttrs);
+  log.push_back(samePoint ? "BREAK — paper circle opened into an arc at the pick point."
+                         : "BREAK — paper circle converted to an arc.");
+  return true;
+}
+
+static bool ApplyBreakToPaperArc(AppCommandState& st, PaperLayout* L, int index, const BreakPoint& p1,
+                                 const BreakPoint& p2, std::vector<std::string>& log) {
+  if (index < 0 || static_cast<size_t>(index) >= L->paperArcs.size())
+    return false;
+  const CadArc src = L->paperArcs[static_cast<size_t>(index)];
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  const bool full = std::fabs(std::fabs(src.sweepRad) - kTwoPi) < 1e-4f;
+  if (full) {
+    float startRad = 0.f, sweepRad = 0.f;
+    CircleBreakStartSweep(p1.theta, p2.theta, &startRad, &sweepRad);
+    const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
+    PushUndoSnapshot(st, "Break paper geometry");
+    L->paperArcs[static_cast<size_t>(index)].startRad = startRad;
+    L->paperArcs[static_cast<size_t>(index)].sweepRad = sweepRad;
+    log.push_back(samePoint ? "BREAK — paper full-circle arc re-opened at the pick point."
+                           : "BREAK — paper full-circle arc broken.");
+    return true;
+  }
+  const float totalLen = src.r * std::fabs(src.sweepRad);
+  constexpr float kTol = 0.01f;
+  const float nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
+  const bool nearIsStart = nearP <= kTol;
+  const bool farIsEnd = farP >= totalLen - kTol;
+  if (nearIsStart && farIsEnd) {
+    log.push_back("BREAK — that would remove the entire arc; refused.");
+    return false;
+  }
+  const float sgn = src.sweepRad >= 0.f ? 1.f : -1.f;
+  const float nearTheta = src.startRad + sgn * (nearP / std::max(src.r, 1e-9f));
+  const float farTheta = src.startRad + sgn * (farP / std::max(src.r, 1e-9f));
+  const float endRad0 = src.startRad + src.sweepRad;
+  PushUndoSnapshot(st, "Break paper geometry");
+  if (nearIsStart) {
+    L->paperArcs[static_cast<size_t>(index)].startRad = farTheta;
+    L->paperArcs[static_cast<size_t>(index)].sweepRad = endRad0 - farTheta;
+  } else if (farIsEnd) {
+    L->paperArcs[static_cast<size_t>(index)].sweepRad = nearTheta - src.startRad;
+  } else {
+    const EntityAttributes srcAttrs =
+        (static_cast<size_t>(index) < L->paperArcAttrs.size()) ? L->paperArcAttrs[static_cast<size_t>(index)]
+                                                                : EntityAttributes{};
+    CadArc newA = src;
+    newA.startRad = farTheta;
+    newA.sweepRad = endRad0 - farTheta;
+    L->paperArcs.push_back(newA);
+    L->paperArcAttrs.push_back(srcAttrs);
+    L->paperArcs[static_cast<size_t>(index)].sweepRad = nearTheta - src.startRad;
+  }
+  log.push_back("BREAK — paper arc broken.");
+  return true;
+}
+
+/// Paper equivalent of `ReplacePolylineVerts`.
+static void ReplacePaperPolylineVerts(PaperLayout* L, int pi, const std::vector<std::pair<float, float>>& newXY) {
+  const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+  const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+  const int nNew = static_cast<int>(newXY.size());
+  const int delta = nNew - (v1 - v0);
+  L->paperPolyVerts.erase(L->paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+                          L->paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+  std::vector<float> flat;
+  flat.reserve(static_cast<size_t>(nNew) * 3);
+  for (const auto& p : newXY) {
+    flat.push_back(p.first);
+    flat.push_back(p.second);
+    flat.push_back(0.f);
+  }
+  L->paperPolyVerts.insert(L->paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3, flat.begin(), flat.end());
+  for (size_t oi = static_cast<size_t>(pi + 1); oi < L->paperPolyOffsets.size(); ++oi)
+    L->paperPolyOffsets[oi] += delta;
+}
+
+/// Paper equivalent of `AppendNewPolyline`. Same precondition (at least one paper polyline already
+/// exists — BREAK only calls this while splitting one).
+static void AppendNewPaperPolyline(PaperLayout* L, const std::vector<std::pair<float, float>>& xy, bool closed,
+                                   EntityAttributes attrs) {
+  const int base = L->paperPolyOffsets.back();
+  for (const auto& p : xy) {
+    L->paperPolyVerts.push_back(p.first);
+    L->paperPolyVerts.push_back(p.second);
+    L->paperPolyVerts.push_back(0.f);
+  }
+  L->paperPolyOffsets.push_back(base + static_cast<int>(xy.size()));
+  L->paperPolyClosed.push_back(closed ? 1u : 0u);
+  L->paperPolyAttrs.push_back(std::move(attrs));
+}
+
+static bool ApplyBreakToPaperOpenPolyline(AppCommandState& st, PaperLayout* L, int pi, const BreakPoint& p1,
+                                          const BreakPoint& p2, std::vector<std::string>& log) {
+  const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+  const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+  float totalLen = 0.f;
+  for (int vi = v0; vi + 1 < v1; ++vi) {
+    const size_t A = static_cast<size_t>(vi) * 3, B = static_cast<size_t>(vi + 1) * 3;
+    totalLen += std::hypot(L->paperPolyVerts[B] - L->paperPolyVerts[A], L->paperPolyVerts[B + 1] - L->paperPolyVerts[A + 1]);
+  }
+  constexpr float kTol = 0.01f;
+  const bool p1First = p1.param <= p2.param;
+  const BreakPoint& nearBp = p1First ? p1 : p2;
+  const BreakPoint& farBp = p1First ? p2 : p1;
+  const bool nearIsStart = nearBp.param <= kTol;
+  const bool farIsEnd = farBp.param >= totalLen - kTol;
+  if (nearIsStart && farIsEnd) {
+    log.push_back("BREAK — that would remove the entire polyline; refused.");
+    return false;
+  }
+  std::vector<std::pair<float, float>> orig;
+  orig.reserve(static_cast<size_t>(v1 - v0));
+  for (int vi = v0; vi < v1; ++vi)
+    orig.push_back({L->paperPolyVerts[static_cast<size_t>(vi) * 3], L->paperPolyVerts[static_cast<size_t>(vi) * 3 + 1]});
+
+  auto buildPiece = [&](bool fromStart) {
+    std::vector<std::pair<float, float>> out;
+    if (fromStart) {
+      for (int i = 0; i <= nearBp.segIndex; ++i)
+        out.push_back(orig[static_cast<size_t>(i)]);
+      const auto& last = out.back();
+      if (std::hypot(last.first - nearBp.x, last.second - nearBp.y) > 1e-6f)
+        out.push_back({nearBp.x, nearBp.y});
+    } else {
+      out.push_back({farBp.x, farBp.y});
+      for (int i = farBp.segIndex + 1; i < static_cast<int>(orig.size()); ++i)
+        out.push_back(orig[static_cast<size_t>(i)]);
+      if (out.size() >= 2 &&
+          std::hypot(out[0].first - out[1].first, out[0].second - out[1].second) < 1e-6f)
+        out.erase(out.begin());
+    }
+    return out;
+  };
+
+  const EntityAttributes srcAttrs =
+      (static_cast<size_t>(pi) < L->paperPolyAttrs.size()) ? L->paperPolyAttrs[static_cast<size_t>(pi)]
+                                                            : EntityAttributes{};
+  PushUndoSnapshot(st, "Break paper geometry");
+  if (nearIsStart) {
+    ReplacePaperPolylineVerts(L, pi, buildPiece(false));
+  } else if (farIsEnd) {
+    ReplacePaperPolylineVerts(L, pi, buildPiece(true));
+  } else {
+    std::vector<std::pair<float, float>> nearPiece = buildPiece(true);
+    std::vector<std::pair<float, float>> farPiece = buildPiece(false);
+    ReplacePaperPolylineVerts(L, pi, nearPiece);
+    AppendNewPaperPolyline(L, farPiece, false, srcAttrs);
+  }
+  log.push_back("BREAK — paper polyline broken.");
+  return true;
+}
+
+static bool ApplyBreakToPaperClosedPolyline(AppCommandState& st, PaperLayout* L, int pi, const BreakPoint& p1,
+                                            const BreakPoint& p2, std::vector<std::string>& log) {
+  const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+  const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+  const int n = v1 - v0;
+  std::vector<float> vparam(static_cast<size_t>(n));
+  float ringLen = 0.f;
+  for (int i = 0; i < n; ++i) {
+    vparam[static_cast<size_t>(i)] = ringLen;
+    const int a = v0 + i, b = v0 + (i + 1) % n;
+    ringLen += std::hypot(L->paperPolyVerts[static_cast<size_t>(b) * 3] - L->paperPolyVerts[static_cast<size_t>(a) * 3],
+                          L->paperPolyVerts[static_cast<size_t>(b) * 3 + 1] -
+                              L->paperPolyVerts[static_cast<size_t>(a) * 3 + 1]);
+  }
+  if (ringLen < 1e-9f)
+    return false;
+  auto rot = [&](float param) {
+    float d = std::fmod(param - p2.param, ringLen);
+    if (d < 0.f) d += ringLen;
+    return d;
+  };
+  const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
+  const float p1Rot = samePoint ? ringLen : rot(p1.param);
+  std::vector<std::pair<float, float>> outVerts;
+  outVerts.push_back({p2.x, p2.y});
+  for (int i = 0; i < n; ++i) {
+    const float r = rot(vparam[static_cast<size_t>(i)]);
+    if (r > 1e-6f && r < p1Rot - 1e-6f)
+      outVerts.push_back({L->paperPolyVerts[static_cast<size_t>(v0 + i) * 3],
+                          L->paperPolyVerts[static_cast<size_t>(v0 + i) * 3 + 1]});
+  }
+  outVerts.push_back({p1.x, p1.y});
+  if (outVerts.size() >= 2 &&
+      std::hypot(outVerts[0].first - outVerts[1].first, outVerts[0].second - outVerts[1].second) < 1e-6f)
+    outVerts.erase(outVerts.begin() + 1);
+  if (outVerts.size() >= 2 &&
+      std::hypot(outVerts.back().first - outVerts[outVerts.size() - 2].first,
+                outVerts.back().second - outVerts[outVerts.size() - 2].second) < 1e-6f)
+    outVerts.pop_back();
+  PushUndoSnapshot(st, "Break paper geometry");
+  ReplacePaperPolylineVerts(L, pi, outVerts);
+  if (static_cast<size_t>(pi) < L->paperPolyClosed.size())
+    L->paperPolyClosed[static_cast<size_t>(pi)] = 0u;
+  log.push_back(samePoint ? "BREAK — closed paper polyline opened at the pick point."
+                         : "BREAK — closed paper polyline broken open.");
+  return true;
+}
+
+bool ApplyBreakToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, const BreakPoint& p1, float pickXIn,
+                             float pickYIn, std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L)
+    return false;
+  BreakPoint p2{};
+  if (!ClosestPointOnPaperEntity(*L, ref, pickXIn, pickYIn, &p2)) {
+    log.push_back("BREAK — could not resolve a second point on that object; try again.");
+    return false;
+  }
+  // Each ApplyBreakToPaper* function pushes its OWN undo snapshot, and only once it knows the break
+  // will not be refused (mirrors the model-space functions' shape) — a blanket push here would
+  // leave a spurious undo step behind on a "would remove the entire X" refusal.
+  bool applied = false;
+  switch (ref.type) {
+  case PaperEntityRef::Type::Line:     applied = ApplyBreakToPaperLine(st, L, ref.index, p1, p2, log); break;
+  case PaperEntityRef::Type::Circle:   applied = ApplyBreakToPaperCircle(st, L, ref.index, p1, p2, log); break;
+  case PaperEntityRef::Type::Arc:      applied = ApplyBreakToPaperArc(st, L, ref.index, p1, p2, log); break;
+  case PaperEntityRef::Type::Polyline: {
+    const bool closed = static_cast<size_t>(ref.index) < L->paperPolyClosed.size() &&
+                        L->paperPolyClosed[static_cast<size_t>(ref.index)];
+    applied = closed ? ApplyBreakToPaperClosedPolyline(st, L, ref.index, p1, p2, log)
+                     : ApplyBreakToPaperOpenPolyline(st, L, ref.index, p1, p2, log);
+    break;
+  }
+  default: break;
+  }
+  if (applied)
+    BumpCadGpuCache(st);
+  return applied;
 }
 
 float MathAngleRadFromBearingCwNorthDeg(float bearingDegClockwiseFromNorth) {
@@ -13187,6 +14081,8 @@ void ResetCadToolStateToIdle(AppCommandState& st) {
   st.trimPhase = AppCommandState::TrimPhase::SelectCuttingEdges;
   st.trimCutters.clear();
   st.extendBoundaries.clear();
+  st.breakPhase = AppCommandState::BreakPhase::SelectFirstPoint;
+  st.breakEntity = SelectedEntity{};
   ResetAllCadDraftTools(st);
   ResetModifyRotateDraft(st);
   st.selBoxWaitingSecond = false;
@@ -17100,6 +17996,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("LENGTHEN canceled.");
   else if (st.active == AppCommandState::Kind::Extend)
     log.push_back("EXTEND canceled.");
+  else if (st.active == AppCommandState::Kind::Break)
+    log.push_back("BREAK canceled.");
   else if (st.active == AppCommandState::Kind::Delete)
     log.push_back("DELETE canceled.");
   else if (st.active == AppCommandState::Kind::Join)
@@ -17147,6 +18045,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.trimPhase = AppCommandState::TrimPhase::SelectCuttingEdges;
   st.trimCutters.clear();
   st.extendBoundaries.clear();
+  st.breakPhase = AppCommandState::BreakPhase::SelectFirstPoint;
+  st.breakEntity = SelectedEntity{};
   ResetAllCadDraftTools(st);
   ResetModifyRotateDraft(st);
   st.selBoxWaitingSecond = false;
@@ -17630,6 +18530,15 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         log.push_back("LENGTHEN — finished.");
       } else {
         HandleLengthenText(st, "", log);
+      }
+    } else if (st.active == K::Break) {
+      using BP = AppCommandState::BreakPhase;
+      if (st.breakPhase == BP::SelectFirstPoint) {
+        // Blank Enter at "select object" ends BREAK — same convention LENGTHEN's loop uses.
+        st.active = K::None;
+        log.push_back("BREAK — finished.");
+      } else {
+        log.push_back("BREAK — specify second break point in the viewport.");
       }
     }
     return;
@@ -19944,6 +20853,7 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
     case K::Mirror:     StartMirrorCommand(st, log);     break;
     case K::Lengthen:   StartLengthenCommand(st, log);   break;
     case K::Extend:     StartExtendCommand(st, log);     break;
+    case K::Break:      StartBreakCommand(st, log);      break;
     case K::Delete:     StartDeleteCommand(st, log);     break;
     case K::Join:       StartJoinCommand(st, log);       break;
     case K::Trim:       StartTrimCommand(st, log);       break;
