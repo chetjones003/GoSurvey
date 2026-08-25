@@ -21,6 +21,8 @@
 #include "HeadlessFileDialogs.hpp"
 #include "SurveyCsv.hpp"
 #include "SurveyPoints.hpp"
+#include "TransformPreview.hpp"
+#include "ViewportPickPolicy.hpp"
 #include "docinvariants.hpp"
 
 #include <imgui.h>
@@ -234,6 +236,45 @@ size_t SurfaceCacheSegs(const AppCommandState& st,
   return 0;
 }
 
+/// Total REQ-072 band-fill triangles across every bucket of surface 0's cache entry (its per-band
+/// buffers plus the "unbanded" overflow bucket — `bandTriangleBuffers`, `CadCommands.hpp`). One count
+/// across all buckets, because EXPECT is asking "how much banded geometry exists", not which band it
+/// landed in — the per-band split is what the Analysis tab's colours are for, not this driver.
+size_t SurfaceCacheBandTriCount(const AppCommandState& st) {
+  if (st.cadSurfaces.empty() || st.cadSurfaceAttrs.empty())
+    return 0;
+  const std::uint64_t id = st.cadSurfaceAttrs[0].id;
+  if (id == 0)
+    return 0;
+  for (const auto& e : st.surfaceDisplayCache)
+    if (e.surfaceId == id) {
+      size_t floats = 0;
+      for (const auto& buf : e.bandTriangleBuffers)
+        floats += buf.size();
+      return floats / 9;
+    }
+  return 0;
+}
+
+/// Total REQ-072 slope-arrow line segments across every bucket of surface 0's cache entry
+/// (`arrowLineBuffers`) — shaft plus both head barbs count as three segments per arrow
+/// (`BuildSurfaceAnalysisGeometry`, `CadCommands.cpp`).
+size_t SurfaceCacheArrowSegCount(const AppCommandState& st) {
+  if (st.cadSurfaces.empty() || st.cadSurfaceAttrs.empty())
+    return 0;
+  const std::uint64_t id = st.cadSurfaceAttrs[0].id;
+  if (id == 0)
+    return 0;
+  for (const auto& e : st.surfaceDisplayCache)
+    if (e.surfaceId == id) {
+      size_t floats = 0;
+      for (const auto& buf : e.arrowLineBuffers)
+        floats += buf.size();
+      return floats / 6;
+    }
+  return 0;
+}
+
 /// Do the drawing's polylines carry EXACTLY the segments the surface display cache is showing as
 /// contours? (REQ-071's first acceptance condition, ADR-036 (f).)
 ///
@@ -429,6 +470,82 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       }
     }
     SubmitViewportPick(run.st, x, y, run.log, windowSelectionSubtract, fenceLeftToRightWindowMode);
+  } else if (verb == "CLICK") {
+    // CLICK <x> <y> [SUBTRACT] [CROSSING] — a viewport click routed the way the GUI routes it.
+    //
+    // TASK-099. PICK above hands its coordinates straight to SubmitViewportPick, which skips the
+    // one layer that decides whether a click reaches the command at all. That layer used to be an
+    // inline whitelist in src/ui/CadUi.cpp, and a command missing from it silently discarded every
+    // click — RECT, then FEATURELINE, then all five of REQ-103's MIRROR/LENGTHEN/EXTEND/BREAK/
+    // STRETCH shipped that way, with green PICK-based transcripts the whole time.
+    //
+    // CLICK asks ViewportClickRouteFor the same question DrawDrawingViewport asks, then acts on the
+    // answer. A command the UI does not route now fails its transcript instead of quietly passing.
+    std::istringstream is(rest);
+    float x = 0.f;
+    float y = 0.f;
+    if (!(is >> x >> y)) {
+      Fail(run, "parse", "CLICK expects two world coordinates, got: " + rest, sourceLine);
+      return false;
+    }
+    std::string mod;
+    bool windowSelectionSubtract = false;
+    bool fenceLeftToRightWindowMode = false;
+    while (is >> mod) {
+      const std::string m = UpperAscii(mod);
+      if (m == "SUBTRACT")
+        windowSelectionSubtract = true;
+      else if (m == "CROSSING")
+        fenceLeftToRightWindowMode = true;
+      else {
+        Fail(run, "parse", "CLICK: unknown modifier " + mod + " (expected SUBTRACT or CROSSING)",
+             sourceLine);
+        return false;
+      }
+    }
+    switch (ViewportClickRouteFor(run.st)) {
+    case ViewportClickRoute::RawEntityPick:
+    case ViewportClickRoute::SnappedPointPick:
+      // The GUI's raw-vs-snapped distinction is an OSNAP adjustment, and a transcript has no
+      // OSNAP — both land on the coordinates the transcript named. What CLICK is testing here is
+      // that the command is routed AT ALL.
+      SubmitViewportPick(run.st, x, y, run.log);
+      break;
+    case ViewportClickRoute::SelectionBox:
+    case ViewportClickRoute::IdleSelection:
+      // Arm the first corner or close the box, exactly as the viewport does. The anchor fields are
+      // written directly for the same reason BOX writes them: BeginSelectionBoxCorner also takes
+      // screen coordinates, and a transcript has no screen.
+      if (!run.st.selBoxWaitingSecond) {
+        run.st.selBoxWaitingSecond = true;
+        run.st.selBoxAnchorX = x;
+        run.st.selBoxAnchorY = y;
+      } else {
+        SubmitViewportPick(run.st, x, y, run.log, windowSelectionSubtract, fenceLeftToRightWindowMode);
+      }
+      break;
+    case ViewportClickRoute::TrimPick:
+      // Same fixed world tolerance TRIMPICK uses, and for the same reason (no viewport height to
+      // derive one from). CLICK subsumes TRIMPICK; TRIMPICK stays for the transcripts using it.
+      SubmitTrimViewportPick(run.st, x, y, 1.f, run.log);
+      break;
+    case ViewportClickRoute::HatchPick:
+    case ViewportClickRoute::PdfAttachInsertPoint:
+      Fail(run, "state",
+           "CLICK cannot drive this command yet (HATCH boundary tracing / PDFATTACH insertion are "
+           "not wired into the driver); add the route here when a transcript needs it",
+           sourceLine);
+      return false;
+    case ViewportClickRoute::Ignore:
+      // The whole point of this verb: a command the UI does not route is a failure, not a no-op.
+      Fail(run, "state",
+           std::string("CLICK: the active command (") +
+               AppCommandState::KindName(run.st.active) +
+               ") takes no model-space viewport click in its current phase — the click would be "
+               "discarded, which is the bug this verb exists to catch",
+           sourceLine);
+      return false;
+    }
   } else if (verb == "BOX") {
     // BOX <x0> <y0> <x1> <y1> [WINDOW] [SUBTRACT] — a box selection from two world corners.
     //
@@ -515,9 +632,53 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     // prints the two numbers that decide whether the placement rule holds — the box's offset from
     // its point, and the box's size — so that a rule like "the anchor does not move when the text
     // gets longer" can be read straight off the log.
-    const std::string what = UpperAscii(Trim(rest));
+    std::string what = UpperAscii(Trim(rest));
+    // DUMP BREAKSPAN <x> <y> — what BREAK's live preview says it would remove, with the cursor at
+    // (x,y). REQ-103 step 4 / TASK-101.
+    //
+    // Unlike the two below, this one IS meant to be asserted on: the summary line carries the span's
+    // endpoints and total length, all hand-computable, and `EXPECT LOG` can match them. The preview
+    // answers "which half of this object is about to disappear", and on a closed entity that answer
+    // flips with click order — so it is exactly the kind of thing that can be confidently wrong and
+    // look completely plausible on screen.
+    if (what.rfind("BREAKSPAN", 0) == 0) {
+      std::istringstream is(Trim(rest).substr(std::string("BREAKSPAN").size()));
+      float x = 0.f;
+      float y = 0.f;
+      if (!(is >> x >> y)) {
+        Fail(run, "parse", "DUMP BREAKSPAN expects two world coordinates, got: " + rest, sourceLine);
+        return false;
+      }
+      // Both halves of what main.cpp hands the renderer: the span and its two markers. Reported
+      // separately so the span's length can be asserted against a hand-computed figure without the
+      // markers' decoration in the total.
+      std::vector<float> span;
+      std::vector<float> markers;
+      BuildBreakRemovalPreview(run.st, x, y, -1.f, &span, &markers);
+      const size_t nSeg = span.size() / 6;
+      double total = 0.0;
+      for (size_t s = 0; s < nSeg; ++s) {
+        const float* v = &span[s * 6];
+        total += std::hypot(static_cast<double>(v[3] - v[0]), static_cast<double>(v[4] - v[1]));
+      }
+      char buf[256];
+      if (nSeg == 0) {
+        std::snprintf(buf, sizeof(buf), "[dump] breakspan: 0 segments (nothing removed)");
+      } else {
+        std::snprintf(buf, sizeof(buf),
+                      "[dump] breakspan: %zu segments, from %.3f,%.3f to %.3f,%.3f, length %.3f", nSeg,
+                      static_cast<double>(span[0]), static_cast<double>(span[1]),
+                      static_cast<double>(span[(nSeg - 1) * 6 + 3]),
+                      static_cast<double>(span[(nSeg - 1) * 6 + 4]), total);
+      }
+      run.log.push_back(buf);
+      char buf2[192];
+      std::snprintf(buf2, sizeof(buf2), "[dump] breakmarkers: %zu segments", markers.size() / 6);
+      run.log.push_back(buf2);
+      return true;
+    }
     if (what != "LABELS" && what != "SURFACES") {
-      Fail(run, "parse", "DUMP expects LABELS or SURFACES, got: " + rest, sourceLine);
+      Fail(run, "parse", "DUMP expects LABELS, SURFACES, or BREAKSPAN <x> <y>, got: " + rest, sourceLine);
       return false;
     }
     // DUMP SURFACES — every surface's style, its generated component sizes, and how many batches
@@ -528,7 +689,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     // them out of the running program is how they get into a transcript as a stated fact rather than
     // as a number someone tuned until the test went green.
     if (what == "SURFACES") {
-      run.log.push_back("[dump] surface | style | tris | border | minor | major (segments)");
+      run.log.push_back(
+          "[dump] surface | style | tris | border | minor | major (segments) | bandtris | arrowsegs (REQ-072)");
       for (size_t si = 0; si < run.st.cadSurfaces.size(); ++si) {
         const CadSurface& s = run.st.cadSurfaces[si];
         const std::uint64_t id = si < run.st.cadSurfaceAttrs.size() ? run.st.cadSurfaceAttrs[si].id : 0;
@@ -540,15 +702,22 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
           std::snprintf(buf, sizeof buf, "[dump] %s | %s | (no cache entry)", s.name.c_str(),
                         s.styleName.empty() ? "(default)" : s.styleName.c_str());
         } else {
-          std::snprintf(buf, sizeof buf, "[dump] %s | %s | %zu | %zu | %zu | %zu", s.name.c_str(),
+          size_t bandTris = 0;
+          for (const auto& b : it->bandTriangleBuffers)
+            bandTris += b.size() / 9;
+          size_t arrowSegs = 0;
+          for (const auto& b : it->arrowLineBuffers)
+            arrowSegs += b.size() / 6;
+          std::snprintf(buf, sizeof buf, "[dump] %s | %s | %zu | %zu | %zu | %zu | %zu | %zu", s.name.c_str(),
                         it->style.name.c_str(), it->triangleEdges.size() / 6,
                         it->borderEdges.size() / 6, it->minorContours.size() / 6,
-                        it->majorContours.size() / 6);
+                        it->majorContours.size() / 6, bandTris, arrowSegs);
         }
         run.log.push_back(buf);
       }
       run.log.push_back("[dump] batches handed to the renderer: " +
                         std::to_string(run.st.surfaceDisplayGeometry.lines.size()) +
+                        ", band batches: " + std::to_string(run.st.surfaceDisplayGeometry.bandTriangles.size()) +
                         ", tin generations: " + std::to_string(run.surfaceTinGeneration));
       TickFrame(run);
       if (run.checkEveryStep)
@@ -773,6 +942,16 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // style with everything switched off" are told apart from a cache that simply never filled.
       else if (what == "SURFACEBATCHES")
         got = static_cast<long>(run.st.surfaceDisplayGeometry.lines.size());
+      // REQ-072 band-fill and slope-arrow geometry, surface 0's cache entry only — see
+      // SurfaceCacheBandTriCount / SurfaceCacheArrowSegCount above for what "one" counts as.
+      else if (what == "SURFACEBANDTRIS")
+        got = static_cast<long>(SurfaceCacheBandTriCount(run.st));
+      else if (what == "SURFACEARROWSEGS")
+        got = static_cast<long>(SurfaceCacheArrowSegCount(run.st));
+      // How many REQ-072 band batches the renderer would be handed, across every visible surface —
+      // the band-fill twin of SURFACEBATCHES.
+      else if (what == "SURFACEBANDBATCHES")
+        got = static_cast<long>(run.st.surfaceDisplayGeometry.bandTriangles.size());
       // How many DISTINCT triangulations surface 0 has had since the transcript began. This is the
       // only direct way to assert REQ-070's central condition — "changing the contour interval
       // updates the display **without rebuilding the triangulation**". Segment counts cannot say it:
@@ -792,7 +971,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
                  " (LINES CIRCLES POLYLINES ARCS ELLIPSES ANNOTATIONS SURVEYPOINTS SELECTED"
                  " SURFACES SELECTEDSURFACES SURFACEBORDERSEGS SURFACETRISEGS SURFACEMINORSEGS"
                  " EXTRACTMATCHESDISPLAY"
-                 " SURFACEMAJORSEGS SURFACEBATCHES SURFACETINGEN)",
+                 " SURFACEMAJORSEGS SURFACEBATCHES SURFACETINGEN SURFACEBANDTRIS SURFACEARROWSEGS"
+                 " SURFACEBANDBATCHES)",
              sourceLine);
         return false;
       }

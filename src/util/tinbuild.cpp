@@ -774,44 +774,54 @@ TinBuildResult BuildTin(const std::vector<TinInputPoint>& points, const std::vec
   return r;
 }
 
+/// One triangle's half of `TinElevationAt`: is (\p x, \p y) inside triangle (\p ia, \p ib, \p ic), and
+/// if so, what is the plane's elevation there. Extracted so a second caller — REQ-073's
+/// spatial-indexed volume query (`util/surfacevolume.cpp`) — tests the SAME containment/plane-eval
+/// rule a full linear scan does, rather than a second copy that could drift from it (CLAUDE.md rule
+/// 2: two present-day uses justify sharing).
+bool TinTriangleElevationAt(const std::vector<float>& vertsXyz, std::uint32_t ia, std::uint32_t ib,
+                            std::uint32_t ic, double x, double y, double* outZ) {
+  const std::uint32_t vertexCount = static_cast<std::uint32_t>(vertsXyz.size() / 3);
+  // A corrupt index would read past the vertex array; a surface loaded from a file is not
+  // necessarily one we built (GsIo rejects these at load, and this is the second line of defence).
+  if (ia >= vertexCount || ib >= vertexCount || ic >= vertexCount)
+    return false;
+
+  const double ax = vertsXyz[ia * 3], ay = vertsXyz[ia * 3 + 1], az = vertsXyz[ia * 3 + 2];
+  const double bx = vertsXyz[ib * 3], by = vertsXyz[ib * 3 + 1], bz = vertsXyz[ib * 3 + 2];
+  const double cx = vertsXyz[ic * 3], cy = vertsXyz[ic * 3 + 1], cz = vertsXyz[ic * 3 + 2];
+
+  // Barycentric containment via the same orientation predicate the triangulation is built on, so
+  // "inside a triangle" means here exactly what it meant when the triangle was made. BuildTin
+  // emits counter-clockwise triangles, so all three are >= 0 for a point inside or on an edge —
+  // but both signs are accepted, because a surface read from a file was not necessarily written
+  // by us and a clockwise triangle should read its elevation, not report a hole.
+  const double wA = TinOrient2D(bx, by, cx, cy, x, y);
+  const double wB = TinOrient2D(cx, cy, ax, ay, x, y);
+  const double wC = TinOrient2D(ax, ay, bx, by, x, y);
+  const bool inside = (wA >= 0.0 && wB >= 0.0 && wC >= 0.0) || (wA <= 0.0 && wB <= 0.0 && wC <= 0.0);
+  if (!inside)
+    return false;
+
+  // Twice the signed area. Zero means a degenerate (collinear) triangle: it covers no area, so
+  // there is no plane to evaluate and dividing by it would produce an infinity that looks like an
+  // elevation. Skip it and let a real triangle answer.
+  const double area2 = wA + wB + wC;
+  if (area2 == 0.0)
+    return false;
+
+  *outZ = (wA * az + wB * bz + wC * cz) / area2;
+  return true;
+}
+
 bool TinElevationAt(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices, double x,
                     double y, double* outZ) {
   if (!outZ || indices.size() < 3 || vertsXyz.size() < 9)
     return false;
-  const std::uint32_t vertexCount = static_cast<std::uint32_t>(vertsXyz.size() / 3);
 
   for (size_t t = 0; t + 2 < indices.size(); t += 3) {
-    const std::uint32_t ia = indices[t], ib = indices[t + 1], ic = indices[t + 2];
-    // A corrupt index would read past the vertex array; a surface loaded from a file is not
-    // necessarily one we built (GsIo rejects these at load, and this is the second line of defence).
-    if (ia >= vertexCount || ib >= vertexCount || ic >= vertexCount)
-      continue;
-
-    const double ax = vertsXyz[ia * 3], ay = vertsXyz[ia * 3 + 1], az = vertsXyz[ia * 3 + 2];
-    const double bx = vertsXyz[ib * 3], by = vertsXyz[ib * 3 + 1], bz = vertsXyz[ib * 3 + 2];
-    const double cx = vertsXyz[ic * 3], cy = vertsXyz[ic * 3 + 1], cz = vertsXyz[ic * 3 + 2];
-
-    // Barycentric containment via the same orientation predicate the triangulation is built on, so
-    // "inside a triangle" means here exactly what it meant when the triangle was made. BuildTin
-    // emits counter-clockwise triangles, so all three are >= 0 for a point inside or on an edge —
-    // but both signs are accepted, because a surface read from a file was not necessarily written
-    // by us and a clockwise triangle should read its elevation, not report a hole.
-    const double wA = TinOrient2D(bx, by, cx, cy, x, y);
-    const double wB = TinOrient2D(cx, cy, ax, ay, x, y);
-    const double wC = TinOrient2D(ax, ay, bx, by, x, y);
-    const bool inside = (wA >= 0.0 && wB >= 0.0 && wC >= 0.0) || (wA <= 0.0 && wB <= 0.0 && wC <= 0.0);
-    if (!inside)
-      continue;
-
-    // Twice the signed area. Zero means a degenerate (collinear) triangle: it covers no area, so
-    // there is no plane to evaluate and dividing by it would produce an infinity that looks like an
-    // elevation. Skip it and let a real triangle answer.
-    const double area2 = wA + wB + wC;
-    if (area2 == 0.0)
-      continue;
-
-    *outZ = (wA * az + wB * bz + wC * cz) / area2;
-    return true;
+    if (TinTriangleElevationAt(vertsXyz, indices[t], indices[t + 1], indices[t + 2], x, y, outZ))
+      return true;
   }
   return false;
 }

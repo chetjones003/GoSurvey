@@ -1,0 +1,108 @@
+# REQ-103 step 6a (TASK-102) — FILLET, Line-Line corners.
+#
+# Part A: perpendicular corner, radius 3, driven entirely with CLICK (not PICK) — this session's
+# own instruction was to verify mouse clicks reach FILLET through the real viewport-click routing
+# layer (ViewportClickRouteFor), the exact mechanism TASK-099 built after five REQ-103 commands
+# were silently unroutable while their PICK-only transcripts stayed green. Line1 = (-10,0)-(0,0),
+# Line2 = (0,0)-(0,-10); picks near (-5,0) and (0,-5) select the corner opening into the
+# (x<0,y<0) quadrant — hand-verified in tests/FilletGeomTests.cpp ("perpendicular lines, radius 3")
+# to land the tangent arc's center at exactly (-3,-3), tangent points (-3,0) and (0,-3). Geometry
+# is verified there numerically; this transcript checks the command flow, entity counts, and the
+# undo/redo round-trip via the byte-level SAMEFILE/DIFFERENTFILE oracle this corpus already uses
+# (no coordinate EXPECT verb exists in this grammar).
+#
+# Part B: radius 0 on the same corner — a real, documented special case (no Arc created, both
+# lines trimmed to their exact intersection), not a refusal.
+#
+# Part C: the Trim/No-trim toggle — No-trim adds the fillet arc without altering either line;
+# proven by DIFFERENTFILE against Part A's Trim-mode result (same radius/picks, only the toggle
+# differs, so a byte difference must come from the lines being left untouched).
+#
+# DoUndo/DoRedo cancel the active command deliberately (pre-existing behavior, confirmed by
+# tests/headless/transcripts/lengthen-delta.txt's own comment) — FILLET is simply re-started after
+# each UNDO/REDO checkpoint rather than resumed.
+
+NEW
+
+CMD LINE
+CMD -10,0
+CMD 0,0
+ESC
+
+CMD LINE
+CMD 0,0
+CMD 0,-10
+ESC
+
+CHECK ALL
+EXPECT LINES 2
+EXPECT ARCS 0
+SAVEAS %OUT%/fillet-lines-a.gs
+
+CMD FILLET
+CMD R
+CMD 3
+CLICK -5 0
+CLICK 0 -5
+
+EXPECT LOG "FILLET — corner filleted."
+EXPECT LINES 2
+EXPECT ARCS 1
+CHECK ALL
+
+SAVEAS %OUT%/fillet-lines-b.gs
+EXPECT DIFFERENTFILE %OUT%/fillet-lines-a.gs %OUT%/fillet-lines-b.gs
+
+UNDO
+EXPECT LINES 2
+EXPECT ARCS 0
+CHECK ALL
+SAVEAS %OUT%/fillet-lines-c.gs
+# Not SAMEFILE against "a": the fillet arc minted a fresh entity id (REQ-076), and undo does not
+# roll the next-entity-id counter itself back — same reasoning break-circle-and-closed-polyline.txt
+# already documents for BREAK's Circle->Arc conversion. Geometry/counts are already verified above;
+# redo below restores the exact forward snapshot, which IS byte-identical.
+
+REDO
+EXPECT LINES 2
+EXPECT ARCS 1
+CHECK ALL
+SAVEAS %OUT%/fillet-lines-d.gs
+EXPECT SAMEFILE %OUT%/fillet-lines-b.gs %OUT%/fillet-lines-d.gs
+
+UNDO
+
+# Part B: radius 0 on the same corner — sharp trim, no arc.
+CMD FILLET
+CMD R
+CMD 0
+PICK -5 0
+PICK 0 -5
+
+EXPECT LOG "FILLET — corner trimmed to a point (radius 0)."
+EXPECT LINES 2
+EXPECT ARCS 0
+CHECK ALL
+SAVEAS %OUT%/fillet-lines-e.gs
+EXPECT DIFFERENTFILE %OUT%/fillet-lines-a.gs %OUT%/fillet-lines-e.gs
+
+UNDO
+
+# Part C: No-trim — arc added at the same radius/picks as Part A, but the lines are left untouched,
+# so this must differ from Part A's Trim-mode result even though both have 2 lines + 1 arc.
+CMD FILLET
+CMD R
+CMD 3
+CMD T
+CMD N
+PICK -5 0
+PICK 0 -5
+
+EXPECT LOG "FILLET — corner filleted."
+EXPECT LINES 2
+EXPECT ARCS 1
+CHECK ALL
+SAVEAS %OUT%/fillet-lines-f.gs
+EXPECT DIFFERENTFILE %OUT%/fillet-lines-b.gs %OUT%/fillet-lines-f.gs
+
+UNDO

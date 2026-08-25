@@ -1792,14 +1792,31 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted (2026-08-12)
 - Revisions: 2026-08-12 — initial.
 
-### REQ-073 — Surface-to-surface volumes
-- Purpose: earthwork — the number a grading design is judged by
+### REQ-073 — Surface-to-surface volumes, and a live Volume Dashboard
+- Purpose: earthwork — the number a grading design is judged by, kept current as either surface
+  changes rather than re-run by hand
 - Priority: must
 - Type: functional
 - Statement: Given two surfaces, GoSurvey reports **cut**, **fill** and **net** volume over the area
   the two have **in common**, together with that common area, and offers a cut/fill colour map over
   the same region. The comparison region is stated explicitly in the result, because a volume quoted
   without the area it covers is not a result.
+
+  A **Volume Dashboard** panel (2026-08-23 amendment) picks two surfaces from the drawing and holds
+  the report on screen: cut, fill, net, the common area, and the cut/fill map toggle, all in one
+  place rather than a one-shot command result that scrolls away. The dashboard is **live**: when
+  either selected surface's triangulation is replaced — REQ-069's dynamic rebuild, or a fresh
+  triangulation from any source — the dashboard recomputes with **no user action**, the same
+  dynamic-recompute pattern REQ-069 established for a surface's own triangulation, reusing
+  architecture §8's one-shot-worker contract (generation staleness + cooperative cancellation) rather
+  than a new mechanism. The panel is visibly marked stale until the new result lands, and a result
+  computed against a selection that is no longer current — because the panel's surface pick changed,
+  or an undo landed, while the compute was in flight — is **discarded, not applied**, mirroring
+  REQ-069's own rule for exactly the same failure shape. Recompute is **coalesced to at most one per
+  relevant change**: a rebuild that itself coalesced many edits into one (REQ-069) triggers one
+  dashboard recompute, not one per edit it absorbed. The panel is UI/session state — which two
+  surfaces are picked, and whether the panel is open — and is **not persisted to `.gs`**, the same
+  choice REQ-075's Surface Manager makes for its own selection state.
 - Acceptance:
   - two planar surfaces offset by a known constant over a known common area report cut, fill and net
     within a stated tolerance of the hand-computed value;
@@ -1807,10 +1824,22 @@ requirements is a planning failure, not a sign of rigor.
     derived from no common area;
   - partial overlap reports volumes over the overlap only, and states the common area used;
   - the cut/fill map colours cut and fill distinctly and shows nothing outside the common area;
-  - comparing a surface with itself reports zero net within tolerance.
-- Owner-layer: Domain (compute), UI (report + map)
+  - comparing a surface with itself reports zero net within tolerance;
+  - rebuilding either dashboard-selected surface (REQ-069) updates the reported volume with no user
+    action, and the dashboard shows a stale/computing state until the new result lands;
+  - a single rebuild that coalesces N edits into one (REQ-069) triggers exactly one dashboard
+    recompute, not N;
+  - undo, or changing the panel's surface pick, while a recompute is in flight leaves the dashboard
+    showing a result consistent with the CURRENT selection — the in-flight result is discarded;
+  - picking a surface that is itself out of date (mid-rebuild) is reflected as such rather than
+    computing a volume against a stale triangulation;
+  - closing and reopening the panel, or saving and reloading the drawing, does not change which
+    surfaces are selectable or force a recompute that current data already answered.
+- Owner-layer: Domain (compute + the async worker), UI (dashboard panel + map)
 - Status: accepted (2026-08-12)
-- Revisions: 2026-08-12 — initial.
+- Revisions: 2026-08-12 — initial. 2026-08-23 — amended (D-2026-08-23-k) to add the Volume Dashboard
+  panel and make it live: recompute-on-rebuild, staleness marking, and discard-of-stale-results,
+  mirroring REQ-069's own pattern rather than inventing a second one.
 
 ### REQ-074 — Spot elevation and grade readout
 - Purpose: the constant, small question while grading — how high is it here, and what is the grade
@@ -2066,42 +2095,80 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: The application generates a random 128-bit anonymous install ID on first run and
   persists it in the user preferences file. It sends two fire-and-forget telemetry events:
   - `install` — exactly once, when the install ID is generated
-  - `active` — at most once per rolling 24-hour period, reporting current usage
+  - `active` — **(amended 2026-08-23, D-2026-08-23-f) on every launch**, reporting current usage.
+    This used to be throttled to at most once per rolling 24-hour period; that throttle is gone
+    by explicit user decision. No `lastActivePingDate` is tracked or persisted any more — there
+    is nothing left to throttle against. The server enforces no per-day dedup either
+    (`ux_pings_active_daily` was dropped from `tools/telemetry-worker/schema.sql`), so this table
+    now measures **launches**, not daily-active-identities; every analytics query in `queries.sql`
+    already used `COUNT(DISTINCT install_id)` rather than `COUNT(*)`, so "how many active users"
+    numbers are unaffected — only a query counting rows would be.
 
   The events are sent via HTTPS POST to a configurable endpoint (the `TelemetryEndpoint`
-  constant) as a minimal JSON payload: `installId`, `event`, `version`, `channel`, `os`.
-  **No personally identifiable information is included.** No username, hostname, email, or
-  hardware fingerprint is sent; the install ID is the only identifier.
+  constant) as a JSON payload: `installId`, `event`, `version`, `channel`, `os`, and
+  `email`.
 
-  The telemetry fires in a detached one-shot worker thread at startup, independent of any
-  other background tasks. It must never block the UI, gate a session, or fail the application
-  if the network is unavailable. Any network error (timeout, DNS failure, unreachable host) is
-  dropped silently. This is the same sanctioned silent-failure exception as REQ-077's update
-  check, for the same reason: a background reporting call has no actionable user recourse for
-  its own failure.
+  **Amended 2026-08-23 (D-2026-08-23-e): this requirement no longer guarantees no PII.**
+  The original "no personally identifiable information" promise is reversed by explicit,
+  informed user decision — not discovered as a defect, not a Workshop judgment call. When
+  the user is signed in (REQ-091) at the moment a ping fires, `email` carries their signed-in
+  email address; when signed out, `email` is empty and the ping is exactly as anonymous as
+  before. **A ping's firing, throttling, and the `install`/`active` decision remain entirely
+  independent of sign-in state** — REQ-091's identity system is not a dependency of REQ-080's
+  telemetry, only an optional enrichment of it when both happen to be true at once. No
+  username, hostname, path, or hardware fingerprint is ever sent; `email` is the one addition,
+  and only when known.
+
+  The telemetry fires in a detached one-shot worker thread once per launch, independent of
+  any other background task's own success/failure — but its own firing point is no longer
+  "immediately at process start": it fires once REQ-091's launch gate resolves (signed in, or
+  the offline exception), so that whatever sign-in state is true at that moment is known
+  before the payload is built. This costs no perceptible delay in practice, since the gate
+  already blocks all other interaction until it resolves. It must never block the UI, gate a
+  session on its OWN account, or fail the application if the network is unavailable. Any
+  network error (timeout, DNS failure, unreachable host) is dropped silently. This is the same
+  sanctioned silent-failure exception as REQ-077's update check, for the same reason: a
+  background reporting call has no actionable user recourse for its own failure.
 
   Distinction: a ping measures first *run*, not raw downloads. GitHub Releases download counts
   (available freely on the asset page) complement this and measure downloads; this requirement
   measures installs that have executed once.
 - Acceptance:
   - on first run, an `install` event is sent exactly once; subsequent runs do not resend it;
-  - on any run, an `active` event is sent at most once per rolling 24-hour period, even if the
-    application is restarted multiple times in the same window;
-  - the payload JSON is well-formed and contains exactly the five fields (installId, event,
-    version, channel, os);
-  - no PII is included in any payload (absence of username, hostname, path, email, hardware ID);
+  - **(amended 2026-08-23)** on every run after the first, an `active` event is sent exactly once
+    per launch, with no throttle — opening the application 5 times in a day produces 5 rows, not
+    1; this REPLACES the original "at most once per rolling 24-hour period" condition;
+  - the payload JSON is well-formed and contains exactly six fields (installId, event, version,
+    channel, os, email);
+  - **(amended 2026-08-23)** `email` equals the signed-in email when REQ-091's sign-in state is
+    true at the moment the ping fires, and is empty otherwise — a ping never blocks on, waits
+    for, or is skipped because of sign-in state;
+  - **(amended 2026-08-23)** no username, hostname, file path, or hardware fingerprint is ever
+    included — `email` is the only field this requirement adds beyond the original five;
   - network failures (timeout, DNS, unreachable host, TLS error) do not raise an exception, log
     a message, or otherwise fail the application;
   - killing network access does not hang or freeze the startup;
-  - a privacy disclosure is present in the UNITS dialog or settings panel explaining what is sent;
+  - a privacy disclosure is present in the settings panel accurately describing current
+    behavior — including that a signed-in user's email is sent — not the pre-amendment promise;
   - the current build sends pings to the configured endpoint and an inspector tool confirms the
     payload shape and timing.
-- Owner-layer: Platform (PostJson), Telemetry (ping logic + rate limiting), IO (persistence)
+- Owner-layer: Platform (PostJson), Telemetry (ping logic + rate limiting), Auth (signed-in
+  email, read not owned), IO (persistence)
 - Status: accepted (2026-08-16)
 - Revisions: 2026-08-16 — initial. Resolved as a SPEC GAP (no prior requirement existed for
   telemetry). User answered three key questions: (1) tracking only, no license-key enforcement
   for now (licensing is deferred); (2) self-hosted endpoint (not third-party analytics vendor);
   (3) no opt-out toggle, always-on anonymous pings (PII-free by design). See ADR-032.
+  2026-08-23 — added `email` (D-2026-08-23-e), reversing the original no-PII acceptance
+  condition by explicit user decision, made after REQ-091 shipped and the user asked for it
+  directly. Scope decided in the same conversation: email only when signed in at ping time;
+  the ping's firing/throttling stays fully independent of sign-in state.
+  2026-08-23 — removed the 24h throttle (D-2026-08-23-f), reversing the original "at most once
+  per rolling 24-hour period" acceptance condition by explicit user decision. An `active` event
+  now fires every launch; `lastActivePingDate` is no longer tracked client-side and the server's
+  per-day unique index was dropped. This is the third REQ-080 acceptance-condition reversal in
+  one day (see D-2026-08-23-e above) — each recorded separately because each was its own
+  explicit ask, not one bundled decision.
 
 ### REQ-081 — The Dark theme reads as a coherent, separated UI
 - Purpose: the shell's panels must be tellable apart at a glance; a uniformly flat
@@ -2575,6 +2642,607 @@ requirements is a planning failure, not a sign of rigor.
                path. ACCEPTED. The panel's own rendering has no automated coverage and cannot
                while the driver has no window; that is mitigated by the routing, not solved.
 
+### REQ-089 — Surface rollover readout
+- Purpose:     the constant "what is this, and how high is it here" while working over a topo,
+               answered without a click and without running a command
+- Priority:    should
+- Type:        functional
+- Statement:   When the model-space cursor rests over a TIN surface — the plan position under the
+               cursor lies **inside one of its triangles** — and has not moved for a **dwell
+               period**, a readout appears beside the cursor naming the surface, its **effective
+               style** (REQ-070 resolution), its **layer**, and the **interpolated elevation** at
+               that plan position, using REQ-074's interpolation and REQ-101's tolerance. The
+               readout covers **every visible surface** over that position — the overlapping
+               existing-vs-proposed case REQ-074 already reports on — and is a **readout only**: it
+               accepts no input and changes no state. It disappears on cursor movement, and never
+               appears while a command is active, while a gesture is in progress, or in paper space.
+
+               **The plan position is the one every other pick consumes** (the REQ-058 input seam),
+               so under an orbited camera it is the cursor ray's intersection with the work plane
+               rather than with the triangle under the pixel. That is deliberate: SURFELEV reads the
+               same seam, so the two always agree about where "here" is. A ray-cast against the
+               triangulation would be more faithful under a tilted camera and is a separate
+               requirement, not an implementation detail of this one.
+- Acceptance:
+  - resting the cursor inside a surface for the dwell period shows the readout; moving the cursor
+    hides it immediately and re-arms the dwell;
+  - the elevation shown equals the planar interpolation at that position within REQ-101 — the same
+    condition REQ-074 states, and the same query;
+  - a position covered by no triangle — outside the border, in a concave notch, or inside a REQ-069
+    hide-boundary void — shows **no readout**, and no elevation is extrapolated;
+  - a surface whose style name is empty or no longer in the table reads its REQ-070 fallback style
+    name, never blank;
+  - a surface on an off or frozen layer, or isolated out under REQ-084 (d), produces no readout;
+  - two overlapping visible surfaces produce one block each, both named;
+  - **the per-frame cost of moving the cursor over a surface is unchanged**: the covering-surface
+    query runs **once, when the dwell elapses**, and its result is latched — never re-run per frame.
+    This is an acceptance condition rather than a note because `TinElevationAt` is a linear scan over
+    every triangle and REQ-100 profile (c) is the one profile near budget and CPU-bound; a per-frame
+    query would roughly double its dominant cost.
+- Owner-layer: UI (dwell, gating, draw), Commands (the query)
+- Status:      accepted
+- Revisions:   2026-08-23 — initial. Requires no ADR: the state is UI-transient on
+               `AppCommandState` beside the existing hover fields, the payload latches formatted
+               text rather than a surface index (architecture §11.9), the dwell helper is a concrete
+               free function in a pure header, and nothing is persisted.
+               2026-08-23 — TASK-088 implemented it. The last acceptance condition (the query runs
+               once per rest, never per frame) is **pinned by a test** — `HoverDwellTests`, 600
+               frames of a held cursor, one query. The elevation, containment and style-fallback
+               conditions are met by the calls the readout reuses, each already pinned by
+               `TinQueryTests` / `SurfaceStyleTests`. The conditions about what appears **on screen**
+               — the readout showing on dwell, hiding on movement, and being suppressed during a
+               command — are implemented and reviewed but **not observed**: see TASK-088 FINDING-1,
+               where synthetic input could not produce a hovered frame (a ribbon button used as a
+               control did not highlight either). Status stays `accepted` rather than advancing to
+               `implemented` until someone has watched it work.
+
+### REQ-090 — Survey point rollover readout
+- Purpose:     read a point's number and coordinates without clicking it or opening the point list —
+               the same question REQ-089 answers for a surface, asked far more often
+- Priority:    should
+- Type:        functional
+- Statement:   When the model-space cursor rests over a survey point's marker and has not moved for
+               the REQ-089 dwell period, a readout appears beside the cursor giving the point
+               **number**, its **layer**, and its **northing, easting and elevation**.
+
+               **Northing and easting are reported in WORLD coordinates.** Survey points are stored
+               local (`world = local + worldDocumentOrigin`, architecture §11 / `CadCoordinateFrame`),
+               so the readout resolves through `CadCoord::WorldXFromLocal` / `WorldYFromLocal` at
+               `surveyPointDisplayPrecision` — the same conversion and the same precision the
+               Properties panel already applies to the same point. Elevation is absolute and is NOT
+               rebased, because the local-storage rebase is X/Y-only.
+
+               **A survey point takes precedence over a surface.** Where the cursor rests on a point
+               that also lies inside a surface, the point's readout is shown and REQ-089's is not —
+               the same priority the pick funnel already applies, and the alternative (stacking both
+               blocks) would put a four-row panel between the user and the marker they are pointing
+               at. It reuses REQ-089's dwell, suppression rules and panel; there is one readout
+               beside the cursor, never two.
+- Acceptance:
+  - resting on a point marker for the dwell period shows the readout; moving the cursor hides it
+    immediately and re-arms the dwell;
+  - **northing and easting equal what the Properties panel shows for the same point, in a drawing
+    whose `worldDocumentOrigin` is NON-ZERO** — a local/world mix-up is invisible on a test drawing
+    near the origin and wrong by hundreds of thousands of feet on a real state-plane one, so the
+    condition names the case that can actually fail;
+  - elevation equals the point's stored elevation at `surveyPointDisplayPrecision`;
+  - the number shown is `SurveyPoint::id`;
+  - resting on a point that also lies inside a surface shows the point's readout and only that;
+  - no readout appears while a command is active, while a gesture is in progress, or in paper space.
+- Owner-layer: UI
+- Status:      accepted
+- Revisions:   2026-08-23 — initial. Widens the readout REQ-089 introduced, which
+               D-2026-08-23-a (4) scoped to surfaces with "a later requirement can widen it if the
+               readout proves useful". Requires no ADR for the same reasons REQ-089 did not, and one
+               fewer: the hit test already exists and already runs every frame
+               (`viewportHoverSurveyPointIndex`), so this adds no query at all.
+
+---
+
+### REQ-091 — User accounts and sign-in (Auth0)
+- Purpose: identify a user for license/paid-tier enforcement, which anonymous REQ-080
+  telemetry is deliberately unable to do
+- Priority: should
+- Type: functional
+- Statement: The application supports signing in via **Google**, **Microsoft**
+  (Outlook/Live), or a self-registered **email + username + password** account, backed
+  by Auth0 (a managed identity provider) rather than an in-house auth backend. Sign-in
+  uses Auth0's hosted Universal Login page reached via the system browser — the
+  application never renders its own password form or OAuth-provider buttons and never
+  receives a raw password. The native app authenticates using the system-browser +
+  loopback-redirect + PKCE flow (RFC 8252): no embedded webview. The resulting refresh
+  token is stored via Windows Credential Manager, never in `gosurvey-user.json` or any
+  other plaintext file; access/ID tokens are kept in memory only and are never
+  persisted. On subsequent launches the application renews the session silently from
+  the stored refresh token, without reopening the browser, unless that token has expired
+  or been revoked, in which case interactive sign-in runs again. A signed-in user's
+  identity is verified against Auth0's issued token; the application does not trust an
+  unverified claim of identity from anywhere else.
+
+  This requirement covers identity and the session-level sign-in gate. It does not gate
+  any individual feature or command: the license/tier lookup (below) is a hook other
+  requirements will consume once what is gated and under what terms is decided —
+  inventing that scope here would be the spec guessing at business decisions it has no
+  authority over. The gate below governs SESSION ACCESS, which is a different thing.
+
+  **Launch gate (added 2026-08-23, D-2026-08-23-d, reverses this requirement's original
+  "no application feature is gated" condition):** every launch, until the user is signed
+  in, a modal window blocks the rest of the application — no drawing can be opened or
+  started. It offers only Sign In; there is no dismiss, skip, or close. The one
+  exception: when there is no internet connectivity at all, the gate is skipped entirely
+  and the application opens normally, signed out — the same offline exception REQ-077's
+  update-check gate uses, and for the same reason (a surveyor with no signal must not be
+  locked out of a program that has nothing to reach). The gate is resolved once per
+  launch and is not re-imposed if the user signs out later in the same session.
+- Acceptance:
+  - clicking "Sign In" opens the system browser to Auth0 Universal Login showing all
+    three configured options: Google, Microsoft, and email/username/password;
+  - completing sign-in by any of the three methods returns control to the application
+    (the loopback redirect is caught) and the settings panel shows "Signed in as
+    `<email>`";
+  - closing and reopening the application does not require interactive sign-in again
+    while the stored refresh token remains valid;
+  - an expired or revoked refresh token causes the next launch to require interactive
+    sign-in;
+  - the refresh token never appears in `gosurvey-user.json` or any other plaintext file
+    — verified by inspecting Windows Credential Manager rather than the prefs file;
+  - no individual command or feature is separately gated or blocked by sign-in state or
+    tier beyond the launch gate itself (mechanism only, per the scope note above);
+  - REQ-080's anonymous telemetry ping is unchanged by this requirement;
+  - **(added 2026-08-23)** on launch, with network reachable and no valid stored
+    session, a modal blocks all other interaction until Sign In succeeds — no close
+    button, no click-away dismissal;
+  - **(added 2026-08-23)** on launch, with `HasInternetConnectivity()` reporting no
+    route to the internet, the modal does not appear at all and the application opens
+    normally;
+  - **(added 2026-08-23)** signing out from the Settings panel later in the same
+    session does not reopen the launch gate.
+- Owner-layer: Platform (loopback listener, Credential Manager, connectivity check), Auth
+  (pure logic, mirrors Telemetry's split), UI (sign-in entry point/status, launch gate)
+- Status:      accepted
+- Revisions:   2026-08-23 — initial (D-2026-08-23-c). See ADR-037 for the Auth0/PKCE/
+               Credential-Manager technical shape and the REQ-300 dependency decision.
+               2026-08-23 — added the blocking launch gate with an offline exception
+               (D-2026-08-23-d), reversing the original "no application feature is
+               gated" condition for session access specifically (not for individual
+               features/tiers, which remain ungated).
+
+### REQ-092 — License-tier lookup endpoint
+- Purpose: give the application a place to learn a signed-in user's entitlement, ahead
+  of any requirement naming what that entitlement controls
+- Priority: should
+- Type: functional
+- Statement: A backend endpoint, separate from the REQ-080 telemetry Worker, verifies
+  the caller's Auth0-issued JWT and returns that user's license tier. New sign-ups
+  default to a single tier (e.g. `"free"`); nothing yet writes any other value — billing,
+  an admin tool, or a manual grant are explicitly future work, not part of this
+  requirement.
+- Acceptance:
+  - a request with no JWT, an invalid JWT, or an expired JWT is rejected (401/403) and
+    never reaches the tier lookup;
+  - a request with a valid JWT for a newly signed-up user returns the default tier;
+  - the endpoint's data store is separate from the telemetry Worker's, so a defect in
+    one cannot read or corrupt the other's data.
+- Owner-layer: Platform/backend (new Cloudflare Worker + D1 database, outside `src/`)
+- Status:      accepted
+- Revisions:   2026-08-23 — initial (D-2026-08-23-c). See ADR-037.
+
+---
+
+## Backlog — catalogued from Known Limitations (proposed, not accepted)
+
+> REQ-102–REQ-117 were catalogued 2026-08-23 from `docs/WikiDocumentation.md`'s
+> "Known Limitations" page (0.5.3) — see D-2026-08-23-i in `spec/project.md`.
+> Each is a rough problem statement, not a scoped acceptance contract: scope,
+> priority and exact acceptance conditions are settled when a user picks one
+> to accept. None of these authorize a `workshop/tasks/` file yet.
+
+### REQ-102 — Layer state enforcement
+- Purpose: Layer On/Freeze/Lock are stored and round-tripped but never enforced — every layer always draws, is always selectable, and is always editable
+- Priority: should
+- Type: functional
+- Statement: Toggling a layer Off or Frozen hides its entities from the viewport and any plot; Frozen also excludes it from selection, snapping, and drawing extents; Locked entities stay visible and snappable but reject move/erase/grip/property edits.
+- Acceptance (sketch): Off/Frozen layers don't render on screen or in a plot; Frozen layers are excluded from selection, snap and extents; Locked entities are visible/snappable but reject edits; unlocking/thawing restores prior behavior with no data loss; composes correctly with the existing per-viewport layer freeze (REQ-028).
+- Owner-layer: Domain/Renderer/Commands/UI
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-103 — Modify-command completeness
+- Purpose: MIRROR, STRETCH, EXTEND, BREAK, FILLET, CHAMFER, ARRAY, EXPLODE, and LENGTHEN are all absent from the Modify toolset
+- Priority: should
+- Type: functional
+- Statement: Add the nine commands above, each operating on the entity types they apply to today, undoable in one step, consistent with the existing MOVE/COPY/ROTATE/SCALE/TRIM/OFFSET pattern. Delivered incrementally, one command per task, in the sequence below — each independently shippable and independently verifiable, the same incremental-epic pattern as REQ-066…075/M-Surfaces.
+- Sequence:
+  1. **MIRROR** — closest existing precedent (ROTATE/SCALE's transform-funnel shape); no new entity kind; ships first.
+  2. **LENGTHEN** — extends/shortens a line/arc/polyline along its own direction; its edge-parameter math is reused by EXTEND and FILLET below.
+  3. **EXTEND** — TRIM's direct inverse; reuses TRIM's cutting-edge selection/hover infrastructure (REQ-056) almost entirely.
+  4. **BREAK** — splits an entity at one or two picked points; contained, no new entity kind.
+  5. **STRETCH** — crossing-window selection that only moves vertices inside the window; the one sub-item likely to need its own short design pass (crossing-vs-window selection doesn't exist yet).
+  6. **FILLET / CHAMFER** — corner generation (arc or chamfer line) between two entities, trimming/extending them to meet it; follows EXTEND/TRIM naturally.
+  7. **ARRAY** — rectangular + polar; N-copy repetition of the same duplication machinery MIRROR/COPY establish.
+  8. **EXPLODE** — decomposes a closed polyline (including rectangles, which are 4-vertex polylines per REQ-053) into line segments; reports what it can't decompose (arcs, ellipses, mesh, surface, fills) rather than doing nothing silently (REQ-201).
+- Acceptance — MIRROR (step 1, this increment):
+  - a mirror line is specified by two points; text/mtext insertion points reflect across it, but glyphs stay upright and readable — no mirror-image flip (AutoCAD's MIRRTEXT=0 default; no MIRRTEXT-equivalent setting is added, this is fixed behavior for now);
+  - after the mirror line, an "Erase source objects? [Yes/No] <N>" prompt appears, defaulting to **No** (source kept, mirrored copy added) — matching AutoCAD's own default;
+  - erase=No: the mirrored result is a duplicate with newly assigned stable ids (REQ-076/ADR-027 — never a copied source id), the original selection is untouched; a duplicated survey point with an id conflict is resolved through the existing new-vs-offset modal (the same one COPY/rotate-copy already use), not silently;
+  - erase=Yes: the duplicate commits, then the pre-mirror selection is removed — net result is only the reflected geometry;
+  - `FilledRegion` (hatches), `Mesh`, `PdfUnderlay`, and `Surface` in the selection are excluded from the mirror with a logged reason (REQ-201) rather than silently dropped or mishandled — `FilledRegion`/`Surface` per the existing rotate/scale exclusion precedent (this file, REQ-042 fills note; `DropSurfacesFromSelectionForTransform`), `Mesh` because it is never edited (REQ-063), `PdfUnderlay` because its scalar rotation/scale fields cannot represent a reflection;
+  - one undo step restores the exact pre-mirror state;
+  - reachable from the Modify ribbon (button already exists, disabled, at `CadUi.cpp:2322`), by typed `MIRROR`, and by right-click repeat;
+  - works with a selection made in model space, in a paper-space layout, and through a floating model-space viewport (parity with ROTATE/SCALE's existing paper-space routing).
+- Acceptance — LENGTHEN (step 2):
+  - eligible entities are Line, open Polyline, and a non-full-circle Arc; Circle, Ellipse, closed Polyline, a full-circle Arc, and every non-length-bearing entity kind (Annotation, FeatureLine, Surface, Mesh, FilledRegion, PdfUnderlay) are refused with a stated reason (REQ-201), never silently ignored;
+  - four sub-modes — DElta (add/subtract a typed length), Percent (scale total length by a typed percentage), Total (set total length directly), DYnamic (interactive drag with a live preview) — each resolve to one target length, then apply it to the end of the picked entity nearest the pick point, holding the other end fixed, within REQ-101 tolerance of the hand-computed target. **The default sub-mode is Total** (amended 2026-08-24, D-2026-08-24-f — AutoCAD defaults to DElta; this deliberately does not), so that with the pick-first entry below the out-of-the-box interaction is: pick a line, read the length it reports, type the length it should be;
+  - a target length that would collapse an entity to ~0 length, or push an Arc's sweep past a full circle, is rejected with a message rather than silently clamped or wrongly applied;
+  - the active sub-mode persists across repeated picks within one invocation (typing a mode letter again mid-loop switches it and re-prompts for its value); the command loops back to "select object" after each successful apply until Enter/Esc; each individual apply is its own undo step, matching TRIM/OFFSET's per-target granularity, not one step per invocation;
+  - **a pick made before the active sub-mode has a value is accepted, not refused** (amended 2026-08-24, D-2026-08-24-e): the picked object is latched, its current length is reported, and that sub-mode's value prompt opens; the value typed next applies to that object immediately rather than only arming the mode. Typing a mode letter at that prompt switches sub-mode and keeps the latched object (DYnamic hands it straight to the drag). A refused length (collapse-to-zero, arc past a full circle) clears the latch, so a later value can never silently apply to a stale object. Without this the Modify ribbon button was a dead end — the opening prompt invited a pick and the pick was rejected — and the command was reachable only by typing a mode letter *and* a number before picking;
+  - reachable from the Modify ribbon, typed `LENGTHEN`/`LEN`, and right-click repeat; works on model-space and native paper-space Line/Arc/open-Polyline entities alike. In paper space the value prompt is unavailable (the paper path runs with no active model command to hold it — the same documented simplification MIRROR's paper path makes), so a valueless pick there reports the object's current length and says where to set the value, rather than refusing bare.
+- Acceptance — EXTEND (step 3):
+  - eligible boundary edges: any entity a user can select except Annotation, FeatureLine, Surface (refused with a stated reason, matching TRIM's existing boundary-edge refusal set); eligible targets: Line, open Polyline, non-full-circle Arc — the same set LENGTHEN established, refused with the same reasons for Circle, Ellipse, closed Polyline, full-circle Arc, and every non-length-bearing kind;
+  - boundary intersection is analytic (`curveisect`, REQ-062's already-accepted library), never tessellated — a chord-approximated boundary does not meet REQ-101, the same reasoning that made REQ-062 analytic in the first place;
+  - the end of the target nearest the pick extends, along the direction it already points (a Line/open-Polyline's own direction; an Arc's own circle, radius held fixed), to the nearest point where it meets a boundary edge, within REQ-101 tolerance of the hand-computed intersection; the other end stays exactly fixed;
+  - a target that does not reach any boundary edge in the extending direction is refused with a stated reason, geometry unchanged — never silently ignored or extended the wrong way;
+  - boundary-edge selection is a two-phase pick (edges, Enter, then targets — TRIM's own cutting-edge flow, copy-adapted, not shared code) with boundaries visually read as a selection while being picked, matching TRIM's precedent; the command loops back to "select object" after each successful extend until Enter/Esc; each individual extend is its own undo step, not one per invocation;
+  - reachable from the Modify ribbon, typed `EXTEND`/`EX`, and right-click repeat; works in model space, floating model space, AND native paper space (two-phase click flow, no typed value needed so paper space is not simplified away the way MIRROR/LENGTHEN's paper paths are).
+  - Acceptance — BREAK (step 4):
+    - eligible entities: Line, Arc (any sweep, including a full-circle sweep), Circle, open
+      Polyline, and closed Polyline; refused with a stated reason (REQ-201): Ellipse (no
+      elliptical-arc entity kind exists in GoSurvey to hold a broken-open ellipse — adding one
+      would be a genuinely new entity kind, which this step's own "no new entity kind" framing
+      rules out), Annotation, FeatureLine, Surface, Mesh, FilledRegion, PdfUnderlay, Text, Mtext,
+      and SurveyPoint;
+    - the pick that selects the entity also supplies break point 1 — the closest point ON that
+      entity to the pick, not the raw cursor position; a second pick supplies break point 2,
+      likewise projected onto the already-selected entity; a break point coinciding with an
+      entity's own endpoint (within REQ-101 tolerance) is treated as that endpoint exactly;
+    - on an OPEN entity (Line, non-full Arc, open Polyline): the two break points are ordered by
+      position along the entity (independent of click order), and the material between them is
+      removed. Both points strictly interior → the original entity is shortened in place down to
+      start→nearer-point, and a NEW duplicate entity (fresh id, REQ-076/ADR-027) is created for
+      farther-point→end. One point coinciding with an existing endpoint → the entity is shortened
+      in place from the other point only, no duplicate created. Both points coinciding with the
+      two existing endpoints → refused ("would remove the entire entity"), geometry unchanged —
+      never silently deleted;
+    - on a CLOSED entity (Circle, full-circle-sweep Arc, closed Polyline): click order matters —
+      the material swept from break point 1 to break point 2, travelling in the direction of
+      increasing parameter (counterclockwise for Circle/full Arc; stored vertex order for closed
+      Polyline), is removed, leaving one open result starting at point 2, ending at point 1 —
+      matching AutoCAD's own circle-break convention. A Circle converts into a new Arc entity
+      (fresh id — Circle and Arc are separate stores; this is a conversion between two entity
+      kinds that already exist, not a new kind). A full-circle-sweep Arc is mutated in place (same
+      id, no duplicate, no store change). A closed Polyline is mutated in place (same id, `Closed`
+      flag cleared, vertex list rewritten to run point2→…→point1). The two break points landing at
+      the identical position (a repeated pick) removes nothing and simply opens the closed entity
+      at that point — a legitimate "break at point" case, not a no-op refusal;
+    - each individual break is its own undo step; the command loops back to "select object" after
+      each completed break until Enter/Esc, matching TRIM/LENGTHEN/EXTEND's per-target granularity
+      and looping shape;
+    - **between the two picks a live preview shows the material that will be removed** (amended
+      2026-08-24, D-2026-08-24-e): the span from break point 1 to the cursor — projected onto the
+      picked entity by the same `ClosestPointOnEntity` the second pick commits, never the raw
+      cursor — is drawn in the preview style, with a marker at each break point. The previewed span
+      follows the same ordering rule its commit does: position-ordered on an open entity (click
+      order irrelevant), and on a closed entity the complement of the span the commit keeps, so
+      reversing the click order visibly previews the other side. A repeated pick ("break at point")
+      previews a zero-length span with both markers still shown. It is drawn opaque, in a warning
+      colour, at highlight line width, on its own render channel — NOT in the translucent
+      transform-preview batch, which is built for a ghost of geometry somewhere it is not yet and
+      washes out to nothing when painted over the full-opacity object a removal preview sits on
+      top of. **Model space only**: the GL pass that draws it is skipped whenever the active space
+      is not model space, so neither paper space nor floating model space shows it — the same
+      limit every other GL preview already has, stated rather than implied;
+    - reachable from the Modify ribbon, typed `BREAK`/`BR`, and right-click repeat; works in model
+      space, floating model space, and native paper space (pure two-click flow, no typed value
+      needed, so paper space is not simplified away — same reasoning as EXTEND's step 3).
+  - Acceptance — STRETCH (step 5):
+    - a crossing/window selection box is picked first (left-to-right = window/fully-inside,
+      right-to-left = crossing/overlap — the same rule REQ-039's paper-space parity already
+      established), then a base point, then a destination point (or a typed relative
+      displacement) — one displacement applies to the whole selection in a single apply, not a
+      per-target loop (matching MOVE/ROTATE/SCALE's granularity, not TRIM/LENGTHEN/EXTEND/BREAK's);
+    - for every entity in the box-selected set, each of its "definition points" is tested
+      independently against the box and only the in-box ones move by the displacement — this is
+      the genuine stretch effect for entities straddling the box boundary:
+      - Line, Polyline (open or closed), and FeatureLine: every endpoint/vertex is independent (a
+        FeatureLine's elevation is never altered by the move, matching MOVE/ROTATE/SCALE's own
+        existing plan-only transform of it — REQ-087);
+      - Arc: both endpoints are tested. Zero or both in-box → no-op or whole-arc translate,
+        unchanged radius/angles. Exactly one in-box → the arc is genuinely reshaped: its center
+        and radius are recomputed so it passes through the moved and fixed endpoints while
+        preserving the original included angle (the "bulge"), matching AutoCAD; a full-circle-
+        sweep Arc is exempt from this and instead follows the Circle rule below (its two
+        endpoints coincide, so per-endpoint math is undefined); a stretch that would collapse
+        the new chord to ~0 length is refused with a stated reason (REQ-201), the arc left
+        unchanged, rather than corrupting it to a zero radius;
+      - Circle, Ellipse (center only), Annotation/Text/Mtext/Dim (insertion point; dimension
+        extension points are not independently tested), PdfUnderlay (insertion point),
+        FilledRegion (one reference point, whole-region translate, no per-vertex boundary
+        stretch), SurveyPoint (its own point): each has exactly one definition point and moves
+        as a whole only if that point is in-box — matching AutoCAD's own behavior for these
+        types (they are not "stretched," only moved-if-selected-and-in-window);
+      - `Surface` and `Mesh` are excluded from the selection, consistent with the existing
+        transform restrictions (`DropSurfacesFromSelectionForTransform`; Mesh is never edited);
+    - a box-selected entity none of whose definition points land in the box is a legitimate
+      no-op (still selected, simply unmoved) — not a refusal, matching AutoCAD;
+    - one undo step restores the exact pre-stretch state for the whole apply;
+    - works in model space, floating model space, and native paper space with true per-point
+      partial stretch in both spaces (not simplified to whole-entity-only in paper space); a
+      paper-space selection built by a plain click (not a box) degrades to a whole-entity
+      translate for every selected entity, since no crossing/window box exists to test points
+      against — matching AutoCAD's own degradation for a non-crossing pickfirst set;
+    - the box/point-membership test itself operates in plain world-XY (model) or paper-inch XY
+      (paper) coordinates, not projected through an orbited 3D camera the way the box-select's
+      own entity-candidacy test optionally is — a stated, accepted simplification, recorded as
+      technical debt rather than a silent gap;
+    - reachable from the Modify ribbon, typed `STRETCH`, and right-click repeat.
+  - Acceptance — FILLET (step 6a):
+    - eligible curves: Line, non-full-circle Arc (full-circle-sweep Arc and Circle refused — no
+      single tangent-side construction distinguishes them from a fillet's corner geometry, matching
+      Circle's own exclusion from LENGTHEN/EXTEND for a related reason), and a segment of an open
+      OR closed Polyline. A picked Polyline segment is one of two cases, resolved by which second
+      pick follows: **(A) the other pick lands on the segment immediately ADJACENT (sharing exactly
+      one vertex) on the SAME polyline** — the classic "round this corner" case, well-defined on
+      open or closed polylines alike, since the shared vertex needs no near/far disambiguation; **(B)
+      the other pick is a different entity (or a non-adjacent segment of a different polyline)** —
+      only the polyline's own first or last segment (adjacent to a free/open end) is eligible this
+      way, since moving any other segment's endpoint would silently disturb an uninvolved neighboring
+      segment sharing that vertex; a closed polyline has no free end, so it is never eligible for
+      case (B). An interior segment of an open polyline, picked against a different entity (not its
+      own polyline neighbor), and any non-adjacent pair of segments on the same polyline, are refused
+      with a stated reason (REQ-201) rather than silently misapplied. Picking the identical segment
+      twice is refused ("select two different objects/segments");
+    - **radius** is a persisted setting (`filletRadius`, default 0.5, like `TRIMSTATE`'s own
+      app-level persistence via `gosurvey-user.json` — not per-drawing) set by typing `R` before a
+      pick ("Specify fillet radius <current>:"), applying to this and future invocations until
+      changed again;
+    - **trim mode** is a persisted setting (`cornerTrimMode`, default Trim) set by typing `T` before
+      a pick ("Enter Trim mode option [Trim/No trim] <Trim>:"), **shared with CHAMFER** (matching
+      AutoCAD's own shared `TRIMMODE` variable — one toggle governs both commands). Trim mode moves
+      each curve's near end (nearest its own pick) to its tangent point, exactly as described below;
+      No-trim mode adds the fillet arc at the same computed tangent points but leaves both original
+      curves completely unchanged (a real AutoCAD behavior, not a simplification);
+    - flow: `FILLET` prompts "Select first object or [Radius/Trim]:"; a pick latches the first curve
+      and its pick point; a second pick on an eligible partner computes and applies the fillet
+      immediately (no separate confirm step); the command then loops back to "select first object"
+      until Enter/Esc — REQ-103's own established per-target looping shape (TRIM/LENGTHEN/EXTEND/
+      BREAK), deliberately without AutoCAD's opt-in "Multiple" option, since looping is already this
+      epic's default and an opt-out would be the inconsistent choice; each individual fillet is its
+      own undo step;
+    - **geometry (radius > 0, non-parallel case):** each curve's supporting shape (a Line's infinite
+      extension; a non-full Arc's own full circle, `curveisect::MakeCircle` not `MakeArc` — an
+      Extend-precedent choice, so a tangent point beyond the current sweep is still found and the
+      arc extended to reach it) is offset by exactly the fillet radius on both sides (Line: parallel
+      line translated ± radius along its own perpendicular; Arc/Circle-equivalent: concentric circle
+      of radius ± the fillet radius); every combination of the two curves' offset shapes is
+      intersected (analytically, via the existing `curveisect::IntersectSegSeg`/`IntersectSegConic`/
+      `IntersectConicConic` — REQ-062/REQ-101, never tessellated) to produce every candidate fillet
+      center; the candidate chosen is the one minimizing the summed squared distance to the two pick
+      points — a deterministic, testable tie-break consistent with every other REQ-103 step's
+      "nearest to the pick" convention (LENGTHEN/EXTEND/BREAK/TRIM all resolve ambiguity this way);
+    - the tangent point on a Line is the foot of the perpendicular from the chosen center onto the
+      line's own infinite extension; the tangent point on an Arc is the point on the arc's own
+      original circle along the ray from the arc's center through the chosen fillet center (this
+      point is guaranteed to already lie exactly on that circle by construction of the offset
+      intersection); the fillet arc itself runs from one tangent point to the other around the
+      chosen center, taking the smaller of the two possible sweeps (< π always, since a corner-round
+      is always the minor arc) — a fresh Arc entity (REQ-076/ADR-027, id 0 until swept), never a
+      mutation of either input;
+    - **radius = 0** is a valid, well-defined degenerate case, not a refusal: the offset-by-0
+      construction reduces to intersecting the two original curves directly (same analytic
+      functions, unchanged), no Arc entity is created, and both curves are trimmed/extended (Trim
+      mode) directly to that intersection point — matching AutoCAD's own R=0 "sharp corner" behavior;
+    - **two parallel, non-collinear Lines** are a special case independent of the current radius
+      setting (a real, documented AutoCAD behavior, not a simplification): a semicircular Arc is
+      created connecting the two lines' nearest-facing endpoints, with a radius of exactly half the
+      perpendicular distance between them; the current `filletRadius` setting is ignored for this
+      one case, exactly as AutoCAD ignores it too. Collinear/overlapping Lines, and any radius/
+      geometry combination with no real tangent solution (radius too large for the available
+      geometry, arcs too far apart, etc.), are refused with a stated reason (REQ-201), geometry
+      unchanged — never silently clamped or wrongly applied;
+    - in the Case (A) same-polyline-adjacent-vertex flow, the shared vertex is replaced by the two
+      tangent points (vertex list grows by one; CSR offsets for every later polyline shift, the same
+      bookkeeping BREAK's `ReplacePolylineVerts` already established) and the new Arc entity is
+      inserted for the corner — or, at radius 0, the shared vertex simply moves to the single
+      intersection point (vertex count unchanged, no Arc). In the Case (B) flow, the standalone
+      curve is trimmed/extended to its tangent point via the exact same reused mutation the standard
+      curve case uses below;
+    - each Line/Arc/open-polyline-end-segment curve's trim/extend to its own tangent point reuses
+      LENGTHEN's own mutation functions unchanged — `ApplyLengthenToLine`/`ApplyLengthenToArc`/
+      `ApplyLengthenToPolylineEnd` — by converting the known tangent point into the `newLength` those
+      functions already accept (a Line's new length is the distance from its fixed end to the
+      tangent point; an Arc's follows the identical angle-to-length conversion EXTEND's own
+      `FindExtendArcTarget` already established), exactly the reuse chain REQ-103's own sequencing
+      note promised ("LENGTHEN's edge-parameter math is reused by EXTEND and FILLET"); the near end
+      (the one that moves) is whichever end lies closer to that curve's own pick point, the same
+      `NearerToFirstPoint` convention LENGTHEN/EXTEND already use;
+    - reachable from the Modify ribbon (new column, no pre-staged stub exists), typed `FILLET`/`F`,
+      and right-click repeat; works in model space, floating model space, and native paper space
+      (full parity, matching EXTEND/BREAK/STRETCH's precedent, not TRIM's own paper-space gap).
+  - Acceptance — CHAMFER (step 6b):
+    - eligible curves: Line and a segment of an open or closed Polyline only — Arc is refused with a
+      stated reason (REQ-201): a chamfer is a straight connecting line measured by distance/angle
+      along each curve from their intersection, which has no standard meaning against a curved Arc
+      (matching AutoCAD's own restriction — CHAMFER has never operated on arcs); the same Case (A)
+      same-polyline-adjacent-vertex / Case (B) end-segment-only-against-a-different-entity split, and
+      the same non-adjacent/interior-segment/identical-segment-twice refusals, apply exactly as
+      FILLET's Polyline rules above;
+    - **distances/angle** are persisted settings (`chamferDist1`/`chamferDist2`, default 0.5 each,
+      for Distance/Distance mode; `chamferAngle`, default 45°, reusing `chamferDist1` as the single
+      Distance/Angle-mode distance) — `gosurvey-user.json`-persisted exactly like `filletRadius`;
+      **mode** (`chamferMode`: Distance/Distance default, or Distance/Angle) is set by typing `D` or
+      `A` before a pick, each prompting for its own value(s); **trim mode is the same persisted
+      `cornerTrimMode` setting FILLET uses** (AutoCAD's own shared `TRIMMODE`, not a second toggle);
+    - flow mirrors FILLET's exactly: `CHAMFER` prompts "Select first line or [Distance/Angle/Trim]:",
+      first pick latches the curve, second pick on an eligible partner computes and applies
+      immediately, loops back until Enter/Esc, one undo step per chamfer;
+    - **geometry:** `P` = the intersection of the two curves' infinite extensions (`curveisect::
+      IntersectSegSeg`, unchanged; parallel/non-intersecting Lines are refused — REQ-201 — since,
+      unlike FILLET, CHAMFER has no AutoCAD analogue to FILLET's parallel-lines semicircle special
+      case, a real asymmetry between the two commands, not an oversight). Distance/Distance mode:
+      Point1 = P + `chamferDist1` along curve 1's own direction, away from P, toward the side the
+      curve1 pick landed on; Point2 = the same construction on curve 2 with `chamferDist2`.
+      Distance/Angle mode: Point1 = P + `chamferDist1` along curve 1 the same way; the chamfer line's
+      direction is curve 1's own direction rotated by `chamferAngle` toward curve 2's side from
+      Point1, and Point2 is that ray's intersection with curve 2's infinite extension (refused,
+      REQ-201, if parallel to curve 2 — no intersection exists);
+    - **both distances (or the single Distance/Angle-mode distance) equal to 0** is a valid,
+      well-defined degenerate case mirroring FILLET's radius-0 case: no chamfer Line entity is
+      created, and (Trim mode) both curves are trimmed/extended directly to `P`;
+    - Trim mode moves each curve's near end (nearest its own pick) to its own computed point (Point1/
+      Point2 respectively), reusing `ApplyLengthenToLine`/`ApplyLengthenToPolylineEnd` the identical
+      way FILLET's Line/Polyline cases do (CHAMFER never touches `ApplyLengthenToArc` — Arc is not
+      an eligible curve); the new chamfer Line entity (fresh id, REQ-076/ADR-027) connects Point1 to
+      Point2 regardless of trim mode; No-trim mode adds that Line without altering either curve, the
+      same behavior FILLET's No-trim mode has;
+    - reachable from the Modify ribbon (same new column as FILLET), typed `CHAMFER`/`CHA`, and
+      right-click repeat; works in model space, floating model space, and native paper space (full
+      parity, matching FILLET's own paper-space scope above).
+  - Acceptance for ARRAY/EXPLODE (steps 7–8) is written when each is accepted for implementation,
+    not spec'd in advance of that command's own design pass.
+- Owner-layer: Commands/Domain/UI
+- Status: accepted
+- Revisions: 2026-08-23 — catalogued, proposed (D-2026-08-23-i). 2026-08-23 — accepted; sequenced into 8 increments starting with MIRROR; MIRROR's acceptance conditions written; MIRRTEXT-off and erase-default-No confirmed with the user (D-2026-08-23-j, TASK-094). 2026-08-24 — LENGTHEN's (step 2) acceptance conditions written (D-2026-08-24-a, TASK-095). 2026-08-24 — EXTEND's (step 3) acceptance conditions written; analytic-over-tessellated boundary intersection and paper-space-included both confirmed with the user (D-2026-08-24-b, TASK-096). 2026-08-24 — BREAK's (step 4) acceptance conditions written; Circle/full-circle-Arc target eligibility (converts to Arc) and closed-Polyline target eligibility (splits open) both confirmed with the user (D-2026-08-24-c, TASK-097). 2026-08-24 — STRETCH's (step 5) acceptance conditions written; full AutoCAD-parity arc partial-stretch (center/radius recompute preserving included angle) and full paper-space vertex-level parity both confirmed with the user (D-2026-08-24-d, TASK-098). 2026-08-24 — after the first hand-driven GUI pass: LENGTHEN's valueless first pick amended from a refusal to a latch-and-prompt (the ribbon button was a dead end), and a live removed-span preview added to BREAK's acceptance (D-2026-08-24-e, TASK-100, TASK-101). 2026-08-24 — LENGTHEN's default sub-mode changed from DElta to Total, so pick-then-type-the-new-length is the out-of-the-box flow (D-2026-08-24-f, TASK-100). 2026-08-24 — FILLET's and CHAMFER's (step 6a/6b) acceptance conditions written; full AutoCAD-parity scope (Line/Arc/Polyline-segment eligibility, a Trim/No-trim toggle shared between the two commands, full paper-space parity, and both Distance/Distance and Distance/Angle chamfer input) confirmed with the user (D-2026-08-24-g, TASK-102/TASK-103).
+
+### REQ-104 — Draw-command completeness
+- Purpose: SPLINE, XLINE, RAY, DONUT, SOLID, REVCLOUD, WIPEOUT, and MLINE have no command at all
+- Priority: could
+- Type: functional
+- Statement: Add the commands above, each stored, selectable, snappable, undoable, and round-tripping through `.gs` and DXF like existing entities.
+- Acceptance (sketch): live preview, commit on the snapped point per the project's preview-vs-commit invariant; each new entity kind is added at every integration site (selection, extents, layer, undo, `.gs`, DXF, render, snap, grips, properties); a spline's chord deviation is within REQ-101 wherever REQ-101 applies.
+- Owner-layer: Commands/Domain/IO/UI
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-105 — Inquiry commands
+- Purpose: AREA, DIST, LIST, and MASSPROP are missing outside the Properties panel (which only reports a circle's area)
+- Priority: should
+- Type: functional
+- Statement: Add the commands above, reusing existing geometry/snap infrastructure; read-only, no undo entry.
+- Acceptance (sketch): AREA reports area/perimeter for polylines, rectangles and circles within REQ-101; DIST reports distance and delta X/Y/(Z) between two snapped points; LIST prints an entity's stored properties; MASSPROP reports at least area/perimeter/centroid for a closed region.
+- Owner-layer: Commands/UI
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-106 — View-management commands
+- Purpose: no view-stack undo, no named views, no isometric presets beyond the ViewCube's standard faces
+- Priority: could
+- Type: functional
+- Statement: Add ZOOM PREVIOUS (pan/zoom/orbit history), named views (save/restore a camera state by name), a VIEW command/dialog to manage them, and one-click NE/NW/SE/SW isometric presets.
+- Acceptance (sketch): ZOOM PREVIOUS steps back through recent view changes; a named view restores camera position/target/UCS exactly; isometric presets set the standard 3D-isometric angle in one action. DVIEW and multiple simultaneous model-space viewports are noted as open scope questions, not committed here, given their size.
+- Owner-layer: UI/Renderer
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-107 — Block support (foundational)
+- Purpose: GoSurvey has no block/insert mechanism, which blocks title-block reuse, standard symbols, and any future TABLE/annotation work; DWG export always explodes geometry for exactly this reason
+- Priority: should
+- Type: functional
+- Statement: Add BLOCK (define from selection), INSERT (place with position/scale/rotation), WBLOCK (write to its own file), and ATTDEF/block attributes. Dynamic blocks and a block-library browser are explicitly out of scope — see roadmap Someday.
+- Acceptance (sketch): a block definition stores its entities once; each INSERT is a lightweight reference, not a geometry copy; editing a definition updates every insert; DWG/DXF export writes real INSERT/BLOCK records; erasing a definition with live inserts is handled per REQ-201, never silently.
+- Owner-layer: Domain/Commands/IO/UI — likely architectural (new entity kind + indirection); expect a SPEC GAP/ADR before implementation, the way REQ-069's breaklines forced REQ-076 first
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-108 — Polar and tracking input aids
+- Purpose: the POLAR status-bar toggle lights up with no behavior behind it, there is no object-snap tracking, and there's no typed polar-coordinate entry
+- Priority: should
+- Type: functional
+- Statement: (a) POLAR shows angle guide lines from the last point at a configured increment and snaps the typed/dragged distance to that angle; (b) object-snap tracking lets a hovered snap point become a temporary tracking reference to move along; (c) `@distance<angle` is accepted anywhere a relative point can be typed, alongside the existing bearing-lock (`A <angle>` then distance) workflow.
+- Acceptance (sketch): polar guides snap the cursor within a small pixel tolerance at the configured increment; tracking references clear when a command ends; `@100<45` and the equivalent bearing-lock sequence commit the identical point within REQ-101.
+- Owner-layer: UI/Commands
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-109 — Lit shading for TIN surfaces
+- Purpose: `SHADED` and `HIDDEN` render a TIN surface as wireframe only, pixel-identical to `2D` — verified by capture — while imported meshes and hatches already shade correctly under REQ-064
+- Priority: should
+- Type: functional
+- Statement: Extend REQ-064's visual-style/lighting pipeline (triangle shader, depth buffer, camera-following light) to TIN surfaces.
+- Acceptance (sketch): a TIN surface captured at `2D`/`Hidden`/`Shaded` is no longer pixel-identical across styles; `Hidden` occludes correctly; `Shaded` lighting follows the camera per REQ-064's existing rule; REQ-100's surface frame-budget profile still holds with shading on.
+- Owner-layer: Renderer
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-110 — Annotative rescale of existing text
+- Purpose: changing plot/viewport scale repositions survey-point labels but never resizes already-placed TEXT/MTEXT, unlike AutoCAD's annotative objects
+- Priority: could
+- Type: functional
+- Statement: Existing text/MTEXT can optionally be marked annotative so a plot-scale or viewport-scale change resizes it to hold a constant plotted height, matching what REQ-050 already does for MTEXT drawn live through a viewport.
+- Acceptance (sketch): a non-annotative object's height is unchanged by a scale change (today's behavior, preserved); an annotative object's on-screen size changes to hold plotted height constant; the flag persists in DXF/`.gs`; REQ-101 fidelity on stored coordinates is untouched.
+- Owner-layer: Domain/UI/Renderer
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-111 — Associative DIMENSION entity
+- Purpose: GoSurvey has no dimension object; an "aligned dimension" exports as exploded lines plus text, which is not associative and doesn't round-trip as a dimension
+- Priority: could
+- Type: functional
+- Statement: Add a DIMENSION entity (at minimum linear/aligned) that stores its definition points, updates its displayed measurement when the dimensioned geometry moves, and round-trips as a real DXF `DIMENSION`.
+- Acceptance (sketch): dragging dimensioned geometry updates the displayed value and leader within REQ-101; DXF round-trip preserves it as a `DIMENSION`, not exploded geometry; erasing the dimensioned geometry is handled per REQ-201, not silently.
+- Owner-layer: Domain/Commands/IO/Renderer
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-112 — Binary DXF import
+- Purpose: only ASCII DXF is read; a binary DXF must be round-tripped through AutoCAD's Save As first
+- Priority: could
+- Type: functional
+- Statement: `DxfIo` detects and reads binary-encoded DXF (the `AutoCAD Binary DXF` sentinel header) alongside the existing ASCII parser.
+- Acceptance (sketch): a binary DXF and its ASCII Save-As of the same drawing import to identical GoSurvey state; a malformed/truncated binary DXF is rejected per REQ-001, not partially absorbed.
+- Owner-layer: IO
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-113 — DXF paper-space import
+- Purpose: since REQ-037 gave GoSurvey native paper-space geometry, an imported DXF's paper-space entities and title block have somewhere real to go, but import still discards them and only logs a count
+- Priority: could
+- Type: functional
+- Statement: DXF import reconstructs each paper-space layout's entities into GoSurvey's native `PaperLayout` store (REQ-037/ADR-009), the same way model-space entities and REQ-023 survey points already reconstruct.
+- Acceptance (sketch): importing a DXF with a title block and paper-space annotations recreates them as editable native paper-space entities on the matching layout tab; entity types with no paper-space import branch yet are named in the log, not silently dropped (REQ-201).
+- Owner-layer: IO
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-114 — Autosave, backup, and crash recovery
+- Purpose: there is no safety net between manual `Ctrl+S` saves; a crash or accidental close loses unsaved work
+- Priority: should
+- Type: functional
+- Statement: Periodically autosave the working drawing to a recovery location at a configurable interval, keep the previous save as a `.bak`, and on next launch after an unclean shutdown offer to recover the autosaved state.
+- Acceptance (sketch): autosave fires at the configured interval with no modal/perceptible hitch; a normal `Ctrl+S` still writes the real file and rotates the `.bak`; killing the process mid-session and relaunching offers recovery of the newer state; declining recovery leaves the last manual save untouched.
+- Owner-layer: IO/UI/Platform
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-115 — Recent files list
+- Purpose: File → Open is the only way back into a recently used drawing
+- Priority: could
+- Type: functional
+- Statement: The File menu lists the N most recently opened/saved `.gs`/DXF/DWG paths, persisted in user preferences.
+- Acceptance (sketch): opening or saving a file adds/moves it to the top of the list; the list persists across restarts; a since-moved/deleted path fails gracefully per REQ-201 rather than crashing; clearing empties it.
+- Owner-layer: UI/Platform
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-116 — Customizable keyboard shortcuts and command aliases
+- Purpose: keyboard shortcuts and command aliases are fixed; only the right-click shortcut menu is user-customizable today (REQ-084)
+- Priority: could
+- Type: functional
+- Statement: Extend REQ-084's customization precedent to keyboard accelerators and typed-command aliases, persisted in user preferences.
+- Acceptance (sketch): a user can rebind a shortcut and define/edit a typed alias; a conflicting rebind is flagged, not silently overwritten (REQ-201); a reset action restores defaults; unrebound shortcuts keep working.
+- Owner-layer: UI/Platform
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-117 — Real snap-to-grid
+- Purpose: the grid is a visual reference only; the cursor never snaps to it
+- Priority: could
+- Type: functional
+- Statement: When grid snap is enabled (mirroring AutoCAD's SNAP/GRID pairing), point entry and dragging snap to the nearest grid intersection at the current spacing, composable with object snaps the way ORTHO already composes with them.
+- Acceptance (sketch): with grid snap on and no nearby object-snap candidate, a click lands exactly on the nearest grid intersection; an active object snap still takes priority; toggling grid snap off restores today's free-cursor behavior; the setting persists like other display preferences (REQ-020-style).
+- Owner-layer: UI/Commands
+- Status: proposed
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
 ---
 
 ## Performance requirements
@@ -3002,6 +3670,26 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-081 | UI | planned — manual, side-by-side against the Hazel reference shots (adjacent docked panels separated by a visible border; panel surface lighter than the dockspace ground; recessed fields; Dark shows no `#464646`/steel-blue chrome; Dark→Light→Dark leaves no colour behind; Light pixel-unchanged; viewport contents unchanged; X/Y/Z badges present, Radius has none) | accepted |
 | REQ-083 | Platform/UI | `PointFileExtTests` **green 2026-08-17** (5 cases / 26 assertions: a name ending `.csv`/`.txt` in any case gets nothing appended; a bare name gets the chosen filter's extension; a name ending in something else — `points.dat`, `job.2026` — still gets one; empty name; a trailing dot) + manual (Import chooser lists `.txt` under the default filter; the same bytes as `.csv` and as `.txt` import identically and validate identically; a locked `.txt` shows the REQ-041 message with Import disabled; a space-delimited `.txt` reports column errors and adds no point; Export typed as `points.txt` writes `points.txt`) — **the manual half was run and confirmed by the user in the application 2026-08-18**: the Win32 chooser and the REQ-041 file-state path cannot be linked by the test target, and `IMPORTPOINTS` only opens the window (the import is a panel button) so the REQ-203 driver cannot reach it either. Fixtures for the pass: `samples/points-req083.{csv,txt}` (byte-identical) and `samples/points-req083-spaced.txt` | accepted |
 | REQ-204 | Build/Platform/Commands/util | planned — `--seed N` twice is identical; **one deliberately-broken fixture per invariant proving each check fires**; a failing run's minimized transcript reproduces standalone under the REQ-203 driver; minimization terminates within its bound and reports its ratio; a clean seed range prints only a summary; `GoSurvey.exe`'s link line contains no generator symbol | accepted |
+| REQ-091 | Platform/Auth/UI | `AuthPingTests` **green 2026-08-23** (10 cases / 124 assertions: PKCE verifier charset/length/uniqueness, base64url encode+decode incl. round-trip and RFC 4648 vectors, authorize-URL parameter/percent-encoding correctness including `audience`, silent-refresh-vs-interactive decision) + **live end-to-end, real Auth0 tenant, 2026-08-23**: Google sign-in completed, loopback redirect caught, settings panel showed "Signed in as `<email>`", menu-bar email display confirmed; one real defect found and fixed live (Auth0 rejects a wildcard loopback port — ADR-037 (b) amended to a fixed candidate-port list, D-2026-08-23 amendment); silent-refresh-keeps-user-signed-in path requires "Allow Offline Access" enabled on the Auth0 API (user found this off, turned it on) — re-verification of the full 30-day-persistence path is the user's next manual step | accepted |
+| REQ-092 | Platform/backend | `accounts-worker/test.mjs` **green 2026-08-23** (offline, real RSA keypair generated in-process: missing/malformed/tampered/expired/wrong-issuer/wrong-audience/alg-none/missing-subject tokens all rejected 401 before any D1 query; valid token for a new user returns the default tier and issues exactly one insert; valid token for an existing user returns their stored tier with no insert; D1 outage is 503; missing `AUTH0_DOMAIN` binding is 500, not misreported as unauthorized; email upsert/preserve-tier/malformed-dropped cases added when email wiring landed) + **live, 2026-08-23**: deployed Worker confirmed live (401/404 as expected), a real sign-in's `users` row confirmed via direct D1 query (`auth0_sub`, `tier: 'free'`, and — after the email wiring landed — a populated `email`) | accepted |
+| REQ-080 (amended) | Telemetry/Auth/UI/Platform | `TelemetryPingTests` **green 2026-08-23** (email-empty/email-present JSON cases; `DecideEventToSend` simplified to install-vs-always-active, throttle tests removed with the throttle) + `telemetry-worker/test.mjs` **green 2026-08-23** (valid/empty/malformed email stored-or-dropped-to-null; column-count assertions 8→9) + **live, 2026-08-23**: deployed Worker smoke-tested with a real POST carrying `email`, confirmed via direct D1 read-back; live migrations applied to the pre-existing deployed table (`ALTER TABLE pings ADD COLUMN email TEXT`, `DROP INDEX ux_pings_active_daily`) | accepted |
+| REQ-093 (amended) | UI/Platform | **manual, verified live against the real app across three build-and-look rounds, 2026-08-23 (D-2026-08-23-h):** the splash is its own small window (~440x320), centered on the primary monitor, filled edge-to-edge by the card — the real desktop, not a dimmed backdrop, is visible everywhere outside that small window; a native-resolution 32x32 corner logo (no upscaling — the source art is only that large) plus a large centered "GoSurvey" wordmark; the progress bar visibly animates across a hardcoded 5.0 s regardless of how fast real preload finishes; the main CAD shell is not shown/interactive until the 5 s elapses; user settings/prefs, the startup workspace template, the app font and the app logo are all loaded before the main shell is usable — this was already true pre-splash and REQ-093 does not change *what* loads, only that a splash now covers it; the splash's rotating phase text is cosmetic labeling only, since linetypes have no data table to load and text styles are already resident in memory the instant `AppCommandState` is constructed; closing the window during the 5 s exits cleanly with no hang; **the user's saved dock layout is restored correctly on launch** — this became an explicit acceptance condition only after a regression destroyed it once (D-2026-08-23-h) | accepted |
+| REQ-102 | Domain/Renderer/Commands/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-103 | Commands/Domain/UI | planned — sequenced into 8 increments (D-2026-08-23-j); TASK-094 (MIRROR, step 1), TASK-095 (LENGTHEN, step 2), TASK-096 (EXTEND, step 3, model+paper space), TASK-097 (BREAK, step 4, model+paper space), and TASK-098 (STRETCH, step 5, model+paper space, full arc-parity geometry) all self-verified 2026-08-24, transcripts green (565/565 regression, plus 4 new unit tests pinning the arc-stretch formula). **All five then failed in model space**: none was routed in CadUi.cpp's model-space viewport click dispatch, so every click was silently discarded and each command hung on its first prompt (working in floating model space and pure paper space, which route separately). Fixed by TASK-099, which moved the routing decision into the pure `ViewportClickRouteFor` (viewport/ViewportPickPolicy.hpp) as an exhaustive switch with no `default:`, added the headless `CLICK` verb so a transcript exercises the routing the `PICK` verb bypasses, and converted the five REQ-103 transcripts onto it (red before the fix, green after; 571/571 regression). Two further GUI-only defects then surfaced and were fixed: LENGTHEN refused any pick made before its sub-mode had a value, making the ribbon button a dead end (TASK-100 — the pick now latches the object, reports its length and prompts, with Total as the new default sub-mode), and BREAK gained a live preview of the material a break removes, on its own opaque render channel because the shared translucent preview batch is invisible when painted over the object it describes (TASK-101). Both amendments recorded as D-2026-08-24-e / D-2026-08-24-f. **Steps 1-5 are complete**: 573/573 regression green, and the user confirmed the manual GUI pass on 2026-08-24, closing TASK-094..101. **Step 6 (FILLET/CHAMFER) is complete**: TASK-102 (FILLET, step 6a) and TASK-103 (CHAMFER, step 6b) both self-verified 2026-08-24 — full model+paper-space parity for both, tangent-arc/corner-point geometry unit-tested (8 + 3 cases), four headless transcripts (two CLICK-driven), two real bugs found and fixed during TASK-102's self-verification (triple undo-snapshot per apply; pick-based rather than computed-point-based near/far endpoint selection) — both fixes live in shared code, so CHAMFER's own transcripts passed on the first run rather than repeating either mistake. 588/588 regression green; manual GUI pass pending for both (this project's own no-UI-automation constraint). Steps 7-8 (ARRAY/EXPLODE) not started | accepted |
+| REQ-104 | Commands/Domain/IO/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-105 | Commands/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-106 | UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-107 | Domain/Commands/IO/UI | proposed — not yet scoped, likely architectural; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-108 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-109 | Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-110 | Domain/UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-111 | Domain/Commands/IO/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-112 | IO | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-113 | IO | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-114 | IO/UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-115 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-116 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-117 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 
 ---
 

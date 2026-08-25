@@ -10,7 +10,8 @@ namespace telemetry {
 
 void TelemetryWorker(TelemetryTask*       task,
                      const std::string&   version,
-                     const std::string&   channel) {
+                     const std::string&   channel,
+                     const std::string&   signedInEmail) {
   if (!task)
     return;
 
@@ -19,13 +20,11 @@ void TelemetryWorker(TelemetryTask*       task,
   // Decide BEFORE minting an id. DecideEventToSend tells "install" from "active" by whether an id
   // already exists, so generating one first makes every first run look like a returning one: the
   // "install" event becomes unreachable and every launch reports as a brand-new machine.
-  std::string event = DecideEventToSend(ids.installId, ids.lastActivePingDate);
-  if (event.empty()) {
-    // No event to send (24h throttle still active for the active event)
-    task->ok = true;
-    task->done.store(true, std::memory_order_release);
-    return;
-  }
+  //
+  // REQ-080 (amended, D-2026-08-23-f): always returns a real event now — there is no longer a
+  // 24h-throttle empty-string case to handle, by explicit user decision (a ping fires every
+  // launch).
+  std::string event = DecideEventToSend(ids.installId);
 
   if (ids.installId.empty()) {
     ids.installId = GenerateInstallId();
@@ -38,6 +37,7 @@ void TelemetryWorker(TelemetryTask*       task,
   payload.version = version;
   payload.channel = channel;
   payload.os = "windows";
+  payload.email = signedInEmail;
 
   std::string json = BuildTelemetryJson(payload);
   std::string errorOut;
@@ -60,16 +60,15 @@ void TelemetryWorker(TelemetryTask*       task,
   }
 
   if (ok) {
-    // Persist the id together with the date, and only once the ping is acknowledged. Writing the
-    // id here rather than before the POST is what makes it stable: an id was previously stored
-    // only on the "install" path, so an "active" ping left nothing behind and the next launch
-    // minted a fresh identity — every run would have counted as a new machine.
+    // Persist the id, and only once the ping is acknowledged. Writing it here rather than before
+    // the POST is what makes it stable: an id was previously stored only on the "install" path,
+    // so an "active" ping left nothing behind and the next launch minted a fresh identity — every
+    // run would have counted as a new machine.
     //
     // Storing on success (not on attempt) also lets a first ping that never landed be retried as
     // "install" next launch instead of being silently downgraded to "active" forever. The cost is
     // a duplicate install row in the narrow case where the row is written but the reply is lost.
-    std::string today = GetTodayDateString();
-    UpdateTelemetryIds(ids.installId, today);
+    UpdateTelemetryIds(ids.installId);
     task->ok = true;
   } else {
     // Log the error but don't fail — this is a background call with no user recourse.
@@ -84,12 +83,13 @@ void TelemetryWorker(TelemetryTask*       task,
 }
 
 std::unique_ptr<TelemetryTask> BeginTelemetryPing(const std::string& version,
-                                                   const std::string& channel) {
+                                                   const std::string& channel,
+                                                   const std::string& signedInEmail) {
   auto task = std::make_unique<TelemetryTask>();
   TelemetryTask* taskPtr = task.get();
 
-  task->worker = std::thread([taskPtr, version, channel]() {
-    TelemetryWorker(taskPtr, version, channel);
+  task->worker = std::thread([taskPtr, version, channel, signedInEmail]() {
+    TelemetryWorker(taskPtr, version, channel, signedInEmail);
   });
 
   return task;

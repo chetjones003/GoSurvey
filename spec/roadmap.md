@@ -141,7 +141,10 @@ A lightweight board that complements the milestones. Keep each column honest.
 - **Done when:** a real topo's points build a contoured surface with breaklines honoured, slope
   arrows show where water goes, cut/fill against a proposed surface reports a hand-verifiable
   volume, and REQ-100 holds in the surface profile.
-- **Status:** **steps 1–5 done.**
+- **Status:** **steps 1–5 done; steps 7–8 done.** (Step 6's own task files — TASK-084 REQ-068 selection,
+  TASK-085 REQ-070 styles — are still marked in-progress/plan in `workshop/tasks/`, even though
+  TASK-086's log below depends on and exercises both landing; that bookkeeping gap is theirs to
+  close, not recorded as done here without their own verification.)
   - Step 1 — REQ-076 / ADR-027 (TASK-044), **2026-08-12**: every entity carries a stable,
     never-reused id, cross-object references are by id, and the `labelMtextAnnIndex` fix-up sprawl
     is deleted. Legacy `.gs` label migration verified against a real legacy file.
@@ -176,6 +179,31 @@ A lightweight board that complements the milestones. Keep each column honest.
     this task's to own). Constraint-insertion performance was not measured against REQ-100's
     100k-point surface budget — recorded as a limit, not assumed fine, since the rebuild runs off
     the UI thread regardless.
+  - Step 7 — REQ-072 (TASK-086), **2026-08-23**: per-triangle elevation and slope banding, an
+    on-screen legend reading the style's range table directly, and independent slope arrows graded
+    by their own colour ramp — the Analysis tab of the Surface Style dialog, plus a `SURFSTYLE`
+    command family for the same fields. Band fills draw on the existing unlit line program rather
+    than the shaded triangle shader (ADR-036 (g), amending ADR-028 (h)): a two-sided-lit shader would
+    stop a triangle from showing the colour its band prescribes. Verified end to end against
+    `samples/surface-demo.gs` in `tests/headless/transcripts/req072-surface-analysis.txt` (105 steps:
+    real two-way splits in both modes, a table that does not span the surface's range still bands
+    every triangle rather than dropping the excess, arrows graded independently of banding, undo,
+    invalid-input refusals, and the `.gs` round-trip TASK-086 §8 had left open); full suite green,
+    510/510 Catch2 cases and 539/539 active ctest. REQ-100's empirical GPU re-measurement (`BENCH
+    SURFACE 100000` with banding + arrows on) is recorded as a recommended follow-up rather than
+    claimed — the analytical case (less per-triangle output than the already-budgeted wireframe
+    path, at REQ-100 profile (c)'s measured 10.28 ms of 16 ms) is made in TASK-086 §9.
+  - Step 8 — REQ-073 (TASK-095), **2026-08-23**: cut/fill/net volume and common area between two
+    surfaces by regular-grid sampling (each surface queried through its own spatial index, not a
+    full triangle scan per sample — REQ-100-density self-comparison measured at 0.572 s), reachable
+    synchronously via `VOLUMES`; and — REQ-073 amended same day, D-2026-08-23-k — a standing Volume
+    Dashboard panel that recomputes automatically off the UI thread whenever either picked surface
+    rebuilds, reusing REQ-069's own dynamic-rebuild/one-shot-worker pattern rather than a second
+    staleness mechanism, plus an optional cut/fill map overlay. Verified end to end against real
+    fixture data (`req073-surface-volumes.txt`, 47 steps) for everything a headless driver with no
+    frame loop can reach; the true live/automatic recompute is manual verification, the same status
+    REQ-069's own dynamic rebuild has always carried. Full suite green, 520/520 Catch2 cases and
+    551/551 active ctest.
 - **Deliberately out of scope:** grading design objects, contour smoothing (linear contours only),
   proximity / wall / non-destructive breaklines, surface import from Civil 3D, and DEM /
   point-cloud sources. See ADR-028.
@@ -264,11 +292,34 @@ A lightweight board that complements the milestones. Keep each column honest.
 ### Later (real but deferred)
 - `<Second file format>` — deferred until a user actually needs it.
 - `<Undo/redo system>` — design only once edit operations stabilize.
+- **Backlog from Known Limitations (REQ-102–REQ-117)** — catalogued
+  2026-08-23 from `docs/WikiDocumentation.md`'s Known Limitations page
+  (D-2026-08-23-i, `spec/project.md`). All 16 are `proposed`, none accepted;
+  see `spec/requirements.md` for each. Two related rows from the same page
+  didn't get a new number and are tracked against the requirement that
+  already covers them instead: MTEXT Insert Field / Background Mask /
+  paragraph-column-bullet formatting is **REQ-051**'s own recorded deferred
+  follow-up (2026-07-29/30 decision-log entries); the `Ctrl+X`-only-inside-
+  the-MTEXT-editor gap is small enough to file against **REQ-038**
+  (clipboard) rather than its own requirement.
 
 ### Someday / maybe (explicitly speculative — do NOT design for these yet)
 - `<Pluggable rendering backend (Vulkan)>` — single backend until a second is a
   genuine requirement; revisit then.
 - `<Plugin/scripting API>`
+- **Coordinate system / projection library** — real projected coordinate
+  systems (state-plane zones, datums, transformations), vs. today's
+  unprojected numbers + `ALIGN`-to-control workaround. From Known
+  Limitations, 2026-08-23; no REQ minted, no user has asked for this yet.
+- **Parametric constraints** — geometric/dimensional constraint solving.
+  Low priority for a survey-focused CAD tool. From Known Limitations,
+  2026-08-23.
+- **Dynamic blocks and a block-library browser** — deliberately excluded from
+  REQ-107 (block support, foundational only). From Known Limitations,
+  2026-08-23.
+- **`XREF` / external references** — From Known Limitations, 2026-08-23.
+- **`TABLE` command** — depends on block/annotation work landing first
+  (REQ-107). From Known Limitations, 2026-08-23.
 
 ---
 

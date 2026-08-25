@@ -1,0 +1,68 @@
+# REQ-103 step 1 (TASK-099) — MIRROR driven entirely by viewport clicks.
+#
+# mirror-basic.txt and mirror-erase.txt both type their coordinates (`CMD 0,50`), so neither ever
+# touched MIRROR's click path — and MIRROR shipped with that path unrouted, ignoring every viewport
+# click in model space while both transcripts stayed green. `CadCommands.cpp` had already written
+# the reason down for FEATURELINE: "a transcript could not catch it because a transcript types
+# coordinates and never clicks."
+#
+# This one clicks. Every step below is a CLICK, so it goes through ViewportClickRouteFor exactly as
+# DrawDrawingViewport does:
+#   - the two selection clicks take the SelectionBox route (arm the corner, then close the fence),
+#   - the two mirror-line clicks take the SnappedPointPick route.
+# The only typed line is the "Erase source objects?" answer, which is a Yes/No text prompt by
+# design (HandleMirrorText) and has no viewport meaning.
+#
+# Geometry matches mirror-basic.txt so the two can be read side by side: line (0,0)-(100,0),
+# mirrored across the horizontal line y=50, erase-source defaulted to No by a bare Enter. The
+# result is the original plus a reflected duplicate at y=100.
+#
+# The oracle is mirror-basic.txt's, for mirror-basic.txt's reason: MIRROR mints a new entity id and
+# `nextEntityId` is never rewound by undo (REQ-076), so a pre-mirror save and a post-undo save
+# differ in that counter alone. Compare FORWARD against FORWARD instead.
+
+NEW
+
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+
+CHECK ALL
+EXPECT LINES 1
+
+# MIRROR with nothing selected opens in MirrorPhase::PickSelection, so these two clicks are the
+# fence. Left-to-right would be a window; the default here is crossing, which the line straddles.
+CMD MIRROR
+CLICK -10 -10
+CLICK 110 10
+EXPECT SELECTED 1
+EXPECT LOG "specify first point of mirror line"
+
+# Both points of the mirror line, picked rather than typed.
+CLICK 0 50
+CLICK 100 50
+EXPECT LOG "Erase source objects?"
+
+# The one legitimately typed step: a Yes/No prompt, bare Enter = No (the documented default).
+CMD
+
+EXPECT LOG "MIRROR complete."
+EXPECT LINES 2
+CHECK ALL
+
+SAVEAS %OUT%/mirror-click-fwd-a.gs
+
+UNDO
+EXPECT LINES 1
+CHECK ALL
+
+SAVEAS %OUT%/mirror-click-undo.gs
+EXPECT DIFFERENTFILE %OUT%/mirror-click-fwd-a.gs %OUT%/mirror-click-undo.gs
+
+REDO
+EXPECT LINES 2
+CHECK ALL
+
+SAVEAS %OUT%/mirror-click-fwd-b.gs
+EXPECT SAMEFILE %OUT%/mirror-click-fwd-a.gs %OUT%/mirror-click-fwd-b.gs

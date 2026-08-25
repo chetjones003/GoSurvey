@@ -96,6 +96,8 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log 
 /// Surfaces panel (REQ-068): create a TIN surface from point groups, rebuild, rename, delete.
 void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
+void DrawVolumeDashboardWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+
 /// Feature line elevation editor (REQ-088). Every edit routes through the FLELEV command line, so
 /// the panel and the REQ-203 driver exercise the same code.
 void DrawFeatureLineElevationWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
@@ -132,6 +134,11 @@ namespace update { struct UpdateState; }
 /// REQ-078: presents an available update and waits for an explicit choice. Draws nothing while
 /// the background check is running — the check itself is never shown to the user.
 void DrawUpdateDialog(AppCommandState& cmd, update::UpdateState& upd);
+
+/// REQ-091 (amended): blocks the session every launch until \c cmd.authGateResolved — signed in,
+/// or no internet connectivity at all (REQ-077's same offline exception). Draws nothing once
+/// resolved; never re-opens later in the same session (e.g. after a manual sign-out).
+void DrawSignInGate(AppCommandState& cmd);
 
 /// Confirms a DWG export before anything is written, stating what the Phase 1 converter route
 /// drops (REQ-052). Writes to \c cmd.dwgPendingExportPath only when the user accepts.

@@ -19,8 +19,10 @@ GROUP BY day
 ORDER BY day;
 
 
--- Active users in the last 7 and 30 days. DISTINCT is belt-and-braces: the unique index already
--- guarantees one active row per identity per day.
+-- Active users in the last 7 and 30 days. DISTINCT is load-bearing, not belt-and-braces (amended
+-- 2026-08-23, D-2026-08-23-f): a ping now fires every launch with no per-day dedup, so a single
+-- identity can have many rows in this window, and DISTINCT is what keeps this "users", not
+-- "launches".
 SELECT
   COUNT(DISTINCT CASE WHEN day >= date('now', '-7 days')  THEN install_id END) AS active_7d,
   COUNT(DISTINCT CASE WHEN day >= date('now', '-30 days') THEN install_id END) AS active_30d

@@ -1,0 +1,152 @@
+# REQ-103 step 5 (TASK-098) — STRETCH: Circle center-captured vs center-not-captured, Ellipse
+# center-captured, and Arc true partial stretch (one endpoint in-box).
+#
+# Circle/Ellipse only ever have ONE definition point (their center) — REQ-103's STRETCH acceptance
+# says they move as a whole only if that point is in-box, never partially. Verified here the same
+# rigorous way as the line/polyline file: SAVEAS + SAMEFILE against a document built by drawing the
+# same circle/ellipse directly at their hand-computed post-stretch centers.
+#
+# T1 (Circle, center captured, box straddles the curve): C1 center (600,0) r=10. A crossing box's
+# CANDIDACY test for a circle is curve-precise (CircleIntersectsAABB — the box must actually touch
+# the circumference, not just lie inside the disk; a box entirely inside a large circle does NOT
+# select it, confirmed while writing this transcript). Box (592,-8)-(608,8): its farthest corner is
+# sqrt(8^2+8^2)=11.3 from center (past r=10, so the box reaches outside the circle) while the
+# center itself is inside the box (distance 0) -- a genuine curve-straddling box. Displacement
+# (0,0)->(3,4), dx=3 dy=4. Expected: C1 center -> (603,4), r unchanged.
+#
+# T2 (Circle, center NOT captured, still candidate-selected via curve touch): C2 center (750,0)
+# r=10 [far from C1, its own separate STRETCH invocation]. Box (735,-2)-(747,2): its closest point
+# to center is (747,0), distance 3 < r=10 (inside the disk); its farthest corner (735,-2) is
+# distance sqrt(15^2+2^2)=15.1 > r=10 (outside) -- the box genuinely straddles the curve, so C2 IS
+# crossing-selected, but its center (750,0) is outside the box's x-range [735,747] -> no-op,
+# matching AutoCAD's own circle-stretch rule exactly.
+#
+# T3 (Ellipse, center captured): E1 center (700,0), major axis vector (20,0) [endpoint pick
+# (720,0)], ratio 0.5. Ellipse candidacy is a plain bounding-box overlap test (looser than Circle's
+# curve test), so a box entirely inside its rough bounds still selects it. Box (695,-5)-(705,5)
+# contains the center. Displacement (0,0)->(10,-10), dx=10 dy=-10. Expected: E1 center ->
+# (710,-10); major axis vector and ratio unchanged (ellipses have no partial-stretch concept, same
+# as Circle).
+#
+# T4 (Arc, TRUE partial stretch — one endpoint in-box): A1 is a quarter-circle arc, center (900,0)
+# r=10, start angle 0 (point (910,0)), sweep +90deg (point (900,10)), built via 3-point entry
+# (910,0) -> (907.0710678,7.0710678) [45deg, on the arc] -> (900,10). Arc candidacy (like Ellipse's)
+# is a bounding-box overlap test, not curve-precise. Box (905,-5)-(915,5) contains ONLY the start
+# point (910,0); the end point (900,10) is outside (y=10 > 5). Displacement (0,0)->(5,0), dx=5 dy=0
+# -- the SAME numbers as tests/StretchGeomTests.cpp's own "quarter circle, one endpoint moved" case,
+# just offset by this arc's (900,0) center (the closed form is translation-invariant, so the
+# expected new center/radius here is that unit test's own (2.5,-2.5)/sqrt(162.5), offset by
+# (900,0): (902.5,-2.5), r=sqrt(162.5)~=12.748). The formula itself is already pinned exactly by
+# that unit test; this transcript only proves STRETCH calls it with the right box-gated endpoints
+# and writes the result back without crashing or changing the entity count (mutated in place, same
+# id — ARCS stays 1, no new CIRCLES appear).
+#
+# Note: ARC's 3 points must be entered via PICK, not CMD x,y — unlike LINE/CIRCLE/POLYLINE, ARC has
+# no typed-coordinate handler in ProcessCommandLineSubmit (only the viewport-pick path reaches
+# CommitArcThreePoints); a CMD-entered point during ARC is silently unparseable. Pre-existing ARC
+# gap, out of scope for this task; discovered while writing this transcript.
+#
+# A full-circle-sweep Arc's STRETCH path (the Circle-style center-only rule) is NOT independently
+# transcript-tested here for the same reason BREAK's own full-circle-Arc gap wasn't: constructing
+# one via the 3-point ARC command within the 1e-4 rad "is this exactly full" tolerance is
+# impractical by hand-picked points. It shares 100% of its logic with T1/T2's Circle case (both
+# ultimately just test-and-translate a single center point), verified above.
+# TASK-099: drives clicks with CLICK, not PICK. PICK calls SubmitViewportPick directly and
+# skips the UI routing layer, which is exactly where this command was missing — the command
+# ignored every real viewport click while this transcript passed green. CLICK goes through
+# ViewportClickRouteFor, so an unrouted command fails here instead.
+#
+
+NEW
+
+CMD CIRCLE
+CMD 600,0
+CMD 10
+ESC
+
+CMD CIRCLE
+CMD 750,0
+CMD 10
+ESC
+
+CMD ELLIPSE
+CLICK 700 0
+CLICK 720 0
+CMD 0.5
+
+CMD ARC
+CLICK 910 0
+CLICK 907.0710678 7.0710678
+CLICK 900 10
+
+CHECK ALL
+EXPECT CIRCLES 2
+EXPECT ELLIPSES 1
+EXPECT ARCS 1
+
+# --- T1: circle, center captured (curve-straddling box) ---
+CMD STRETCH
+BOX 592 -8 608 8
+CLICK 0 0
+CLICK 3 4
+ESC
+
+# --- T2: circle, candidate-selected via curve touch, center not captured -> no-op ---
+CMD STRETCH
+BOX 735 -2 747 2
+CLICK 0 0
+CLICK 1 1
+ESC
+
+# --- T3: ellipse, center captured ---
+CMD STRETCH
+BOX 695 -5 705 5
+CLICK 0 0
+CLICK 10 -10
+ESC
+
+CHECK ALL
+EXPECT CIRCLES 2
+EXPECT ELLIPSES 1
+SAVEAS %OUT%/stretch-cea-actual.gs
+
+NEW
+
+CMD CIRCLE
+CMD 603,4
+CMD 10
+ESC
+
+CMD CIRCLE
+CMD 750,0
+CMD 10
+ESC
+
+CMD ELLIPSE
+CLICK 710 -10
+CLICK 730 -10
+CMD 0.5
+
+# The arc is untouched by T1-T3's stretches (its own box comes later, in T4) -- redrawn here at its
+# ORIGINAL points so "expected" matches "actual" exactly (both have all 4 entities at this point).
+CMD ARC
+CLICK 910 0
+CLICK 907.0710678 7.0710678
+CLICK 900 10
+
+CHECK ALL
+SAVEAS %OUT%/stretch-cea-expected.gs
+EXPECT SAMEFILE %OUT%/stretch-cea-actual.gs %OUT%/stretch-cea-expected.gs
+
+# --- T4: arc true partial stretch (count/no-crash only; formula pinned by StretchGeomTests.cpp) ---
+CMD STRETCH
+BOX 905 -5 915 5
+CLICK 0 0
+CLICK 5 0
+ESC
+
+CHECK ALL
+EXPECT ARCS 1
+EXPECT CIRCLES 2
+SAVEAS %OUT%/stretch-cea-arc.gs
+EXPECT DIFFERENTFILE %OUT%/stretch-cea-actual.gs %OUT%/stretch-cea-arc.gs

@@ -88,6 +88,7 @@ CMD @50,0                    # relative point, exactly as a user would type it
 CMD                          # bare Enter (ends LINE) — an empty CMD is meaningful
 PICK 305.2 118.9             # -> SubmitViewportPick(x, y)
 PICK 305.2 118.9 SHIFT       # modifier flags map to the existing bool parameters
+CLICK 305.2 118.9            # like PICK, but routed through ViewportClickRouteFor first
 ESC                          # cancel the active command
 UNDO / REDO                  # explicit, so the oracle can bracket them
 
@@ -118,6 +119,15 @@ Design notes that matter:
   drawing whose origin has been established at easting 2e6, `PICK 10 10` means local `(10,10)`, i.e.
   world `(2000010, 500010)`, not a point near the world origin. Pinned by
   `transcripts/regression-pick-local-coordinates.txt`.
+- **`CLICK` tests the routing; `PICK` skips it.** `PICK` calls `SubmitViewportPick` directly, so it
+  never touches the layer that decides whether a click reaches the command at all. That layer used
+  to be an inline whitelist in `src/ui/CadUi.cpp`, and a command missing from it silently discarded
+  every viewport click and appeared to hang on its first prompt — it happened to RECT, then to
+  FEATURELINE, then to all five of REQ-103's MIRROR/LENGTHEN/EXTEND/BREAK/STRETCH, each time with
+  green `PICK` transcripts throughout. `CLICK` asks `ViewportClickRouteFor` (viewport/
+  ViewportPickPolicy.hpp) the same question the viewport asks and acts on the answer, so an
+  unrouted command **fails** its transcript. Prefer `CLICK` for any pick-driven command; `PICK`
+  remains correct for exercising the state machine on its own. Added 2026-08-24 (TASK-099).
 - **`%OUT%` expands to a per-run temp directory.** Transcripts must never write into the
   source tree (REQ-200, CON-07), and a fuzz run writes a lot of files.
 - **`EXPECT DIFFERENTFILE` exists because differential oracles pass when nothing happened.**

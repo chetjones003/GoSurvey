@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GoSurvey VERSION 0.5.4 LANGUAGES CXX C RC)
+project(GoSurvey VERSION 0.5.5 LANGUAGES CXX C RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -162,6 +162,12 @@ set(GOSURVEY_DOMAIN_SOURCES
   # Object snapping (pure geometry; no GL despite living under viewport/)
   src/viewport/CadSnap.cpp
 
+  # Preview geometry (pure geometry; no GL, same as CadSnap.cpp above — it builds vertex lists, it
+  # does not draw them). Moved into the shared list by TASK-101 so the headless driver can assert
+  # what a preview PROMISES: BREAK's preview says which half of an object is about to disappear,
+  # and on a closed entity that answer depends on click order, so it can be confidently wrong.
+  src/viewport/TransformPreview.cpp
+
   # Text measurement + font registry. In the domain set because label geometry depends on metrics
   # (ADR-031 (c′)) — these need ImGui core, never a backend.
   src/ui/MtextRichFormat.cpp
@@ -212,6 +218,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/util/tinbuild.cpp
   src/util/contourgen.cpp
   src/util/surfaceanalysis.cpp
+  src/util/surfacevolume.cpp
   src/util/benchscene.cpp
 
   # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
@@ -224,9 +231,8 @@ add_executable(GoSurvey
   # Application entry
   src/app/main.cpp
 
-  # Viewport system
+  # Viewport system (TransformPreview.cpp is in GOSURVEY_DOMAIN_SOURCES — no GL, headless-testable)
   src/viewport/CadRubberPreview.cpp
-  src/viewport/TransformPreview.cpp
 
   # Renderer
   src/render/ViewportRenderer.cpp
@@ -243,8 +249,10 @@ add_executable(GoSurvey
   src/ui/CadUi_PointGroups.cpp
   src/ui/CadUi_Surfaces.cpp
   src/ui/CadUi_SurfaceStyles.cpp
+  src/ui/CadUi_VolumeDashboard.cpp
   src/ui/CadUi_FeatureLineElev.cpp
   src/ui/CadUi_UpdateDialog.cpp
+  src/ui/CadUi_SignInGate.cpp
   src/ui/SplashScreen.cpp
   src/ui/ImGuiLayout.cpp
   src/ui/RichTextEdit.cpp
@@ -262,10 +270,16 @@ add_executable(GoSurvey
   src/platform/WinFileDialogs.cpp
   src/platform/GpuPreference.cpp
   src/platform/HttpFetch.cpp
+  src/platform/OAuthListener.cpp
+  src/platform/CredentialStore.cpp
 
   # Telemetry (REQ-080, ADR-032)
   src/telemetry/TelemetryPing.cpp
   src/telemetry/TelemetryService.cpp
+
+  # Accounts sign-in (REQ-091, ADR-037)
+  src/auth/AuthPing.cpp
+  src/auth/AuthService.cpp
 
   # Update check (REQ-077/078, ADR-029)
   src/update/UpdateService.cpp
@@ -285,6 +299,7 @@ target_include_directories(GoSurvey PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
   ${CMAKE_CURRENT_SOURCE_DIR}/src/font
   ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/auth
   ${CMAKE_CURRENT_SOURCE_DIR}/src/update
   ${CMAKE_CURRENT_SOURCE_DIR}/third_party
   ${NLOHMANN_JSON_INCLUDE}
@@ -301,7 +316,9 @@ if(WIN32)
   # winhttp + bcrypt: the REQ-077/078 update check's HTTPS fetch and SHA-256 (ADR-029 (e)).
   # Both ship with Windows, which is why this adds no third-party dependency under REQ-300.
   # ole32 is for the Network List Manager connectivity query in HttpFetch.cpp (REQ-077).
-  target_link_libraries(GoSurvey PRIVATE comdlg32 winhttp bcrypt ole32)
+  # ws2_32 is the REQ-091 loopback OAuth listener's raw Winsock socket calls (ADR-037 (b));
+  # advapi32 is Windows Credential Manager (ADR-037 (c)). Both ship with Windows.
+  target_link_libraries(GoSurvey PRIVATE comdlg32 winhttp bcrypt ole32 ws2_32 advapi32)
   target_sources(GoSurvey PRIVATE src/platform/WinFrameControls.cpp)
 
   # Embed the application icon so Windows shows it in Explorer, the taskbar,
@@ -518,13 +535,24 @@ if(GOSURVEY_BUILD_TESTS)
     # breakpoint rule and the flat-triangle refusal are both invisible on ordinary data and wrong
     # exactly at a band boundary and on level ground, which is most of a real site.
     tests/SurfaceAnalysisTests.cpp
+    # REQ-073 surface-to-surface volumes (TASK-095). Pure spatial index + grid-sample integrator: the
+    # cut/fill sign convention and the bbox-disjoint early-out are both invisible on a single hand
+    # example and wrong on exactly the cases a real grading comparison needs (no overlap, self vs
+    # self, partial overlap).
+    tests/SurfaceVolumeTests.cpp
     # REQ-070 surface style table (ADR-036 (d)). Header-only and pure, so it needs no source entry
     # below. Three of REQ-070's five acceptance conditions — the deleted-style fallback, the legacy
     # empty-name fallback, and the rejection of a major interval that is not a whole multiple of the
     # minor — are decided entirely here, before any geometry exists to look at.
     tests/SurfaceStyleTests.cpp
+    # REQ-089 surface rollover dwell. Header-only and pure, like the style table above. It is the
+    # feature's ONLY new logic — the readout's numbers come from TinQueryTests' and
+    # SurfaceStyleTests' already-pinned calls — and the one-shot it asserts is what keeps the
+    # per-rest surface query off the per-frame path REQ-100 profile (c) measures.
+    tests/HoverDwellTests.cpp
     tests/UpdateCheckTests.cpp
     tests/TelemetryPingTests.cpp
+    tests/AuthPingTests.cpp
     tests/GsMigrateTests.cpp
     tests/GpuPreferenceTests.cpp
     # REQ-204: one deliberately-broken fixture per document invariant. This is the second present-day
@@ -535,10 +563,24 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-069: the background rebuild worker's lifetime. Header-only against CadCommands.hpp (the
     # struct and its destructor), so it needs no extra domain source on the link line.
     tests/SurfaceRebuildLifetimeTests.cpp
+    # REQ-103 STRETCH (TASK-098). Header-only against CadCommands.hpp — RecomputeArcFromEndpoints
+    # is inline and pure (<cmath> + CadArc only), the same reasoning as the gate test above.
+    tests/StretchGeomTests.cpp
+    # REQ-103 FILLET (TASK-102). Header-only against CadCommands.hpp — the tangent-arc solve
+    # (SolveFilletCenter and friends) is inline and pure (<cmath>/<vector> + curveintersect.hpp,
+    # both dependency-free), the same reasoning as the STRETCH geometry test above.
+    tests/FilletGeomTests.cpp
+    # REQ-103 CHAMFER (TASK-103). Header-only against CadCommands.hpp, same reasoning as FILLET's
+    # own geometry test above — ChamferPointAtDistance/ChamferRayIntersect are inline and pure.
+    tests/ChamferGeomTests.cpp
     # REQ-087: the gate that decides the viewport has geometry to draw. Header-only against
     # CadCommands.hpp — the predicate is pure, which is the whole reason it is testable at all
     # while the rendering around it is not.
     tests/ExtendedGeometryGateTests.cpp
+    # TASK-099: the viewport's click-routing policy. Header-only against CadCommands.hpp, like the
+    # gate above, and for the same reason — the decision is pure, the UI around it is not, and the
+    # decision is where three separate "the command ignores every click" bugs actually lived.
+    tests/ViewportPickPolicyTests.cpp
     # REQ-204 generator + minimizer. Both are pure — the generator takes its command list as a
     # parameter, the minimizer takes a predicate — so reproducibility, termination and the attempt
     # cap are testable here with no process launch and no GL.
@@ -583,6 +625,9 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-072 surface analysis. Pure by ADR-036 (g) — no GL, no document — so a reversed arrow is
     # caught against a hand-computed fall line rather than by squinting at a viewport full of them.
     src/util/surfaceanalysis.cpp
+    # REQ-073 surface-to-surface volumes + the spatial index they run on. Pure — no GL, no document —
+    # so a wrong sign on cut vs. fill is caught against a hand-computed planar case, TASK-095.
+    src/util/surfacevolume.cpp
     # REQ-077/078 version ordering + manifest parse. Pure by ADR-029 (g) — no network, no window.
     # Wrong version ordering has NO symptom (the user is simply never offered an update), which is
     # exactly why it must be pinned by a test rather than noticed in use.
@@ -593,6 +638,11 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-080 telemetry. Pure by ADR-032 (b) — payload building, event decision, rate limiting —
     # no network, so the timing logic is testable without HttpFetch or WinHTTP.
     src/telemetry/TelemetryPing.cpp
+    # REQ-091 accounts sign-in. Pure by ADR-037 (d) — PKCE construction, base64url, the authorize
+    # URL, and the silent-refresh-vs-interactive decision — no network/window, same split as
+    # TelemetryPing above. The BCrypt SHA-256 call PKCE needs is in HttpFetch and is exercised by
+    # AuthService, not by this pure module or its tests.
+    src/auth/AuthPing.cpp
   )
   target_include_directories(GoSurveyTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
@@ -606,10 +656,14 @@ if(GOSURVEY_BUILD_TESTS)
     # still links no command, UI or GL translation unit, which is the property ADR-002 protects.
     # AppCommandState is plain data, so constructing one costs nothing but these include paths.
     ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
+    # TASK-099 (ViewportPickPolicyTests): ViewportPickPolicy.hpp. A header, like the ones above —
+    # the test target still links no viewport translation unit and needs no GL.
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/viewport
     ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
     ${CMAKE_CURRENT_SOURCE_DIR}/src/render
     ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
     ${CMAKE_CURRENT_SOURCE_DIR}/src/telemetry
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/auth
     ${CMAKE_CURRENT_SOURCE_DIR}/src/update
     ${CMAKE_CURRENT_SOURCE_DIR}/src/util
     # For FuzzHarnessTests, which includes headless/FuzzGenerator.hpp and headless/Minimizer.hpp.

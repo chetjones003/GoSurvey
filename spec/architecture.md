@@ -1530,3 +1530,91 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   cache holds**, not merely that one regeneration is fast. Deliberately left undesigned: contour
   smoothing, contour labelling, watershed analysis, grid display, surface legends in paper space, and
   REQ-071's EXTRACT (deferred to its own task by the user, 2026-08-21).
+
+### ADR-037 — Accounts: Auth0 identity, native-app PKCE + loopback redirect, Credential Manager storage, a separate authenticated Worker   (2026-08-23, accepted)
+- Context: REQ-091/REQ-092 require signing in via Google, Microsoft, or email/username/password, for
+  eventual license-tier enforcement. REQ-080's anonymous telemetry deliberately has no identity to
+  reuse, and nothing in the codebase does password hashing, OAuth, or credential storage today — this
+  is new authority, not an extension of an existing subsystem.
+- Decision:
+  (a) **Auth0 is the identity provider, answered against the REQ-300 three-question policy.** (1) Can
+  it be done simply in-tree? No — password hashing, OAuth client-secret handling, email verification
+  and password-reset delivery are all security-critical and each is a way to leak credentials if
+  gotten subtly wrong; rolling them in-house is not "simple." (2) Is it maintained and worth the cost?
+  Yes — Auth0 is an established, actively-maintained identity platform, and its free tier (25,000 MAU,
+  unlimited social + database connections, verified live at auth0.com/pricing 2026-08-23) costs
+  nothing at GoSurvey's scale. (3) Does it solve a problem we have today? Yes — REQ-091/092 exist
+  because license enforcement needs real identity now. All three clear; the dependency is accepted.
+  One Auth0 tenant is configured with three connections: **Google** (social), **Microsoft** (social —
+  covers personal Outlook/Live accounts), and a **Database connection** (email + username + password,
+  Auth0-hosted hashing/verification/reset). The application never builds its own provider buttons or
+  password form — it sends the user to Auth0's hosted Universal Login, which shows all three
+  configured options already. Landing this dependency (vendoring/config, once implemented) gets its
+  own decision-log entry, the same split ImOGuizmo's did (2026-08-11 entries).
+  (b) **Native-app auth is system browser + loopback redirect + PKCE (RFC 8252), never an embedded
+  webview.** Google and Microsoft do not permit collecting credentials in an app's own embedded UI for
+  their OAuth flows, so this is not a style choice. The app opens the system browser to Auth0's
+  `/authorize` endpoint with a `redirect_uri` of `http://127.0.0.1:<port>/callback`, listens on that
+  port for the single redirect carrying the authorization code, and exchanges it for tokens
+  server-side (POST to `/oauth/token`, reusing the existing `HttpPostJson` shape in
+  `src/platform/HttpFetch.cpp`). This is a new, small platform surface
+  (`src/platform/OAuthListener.hpp/.cpp` — accept one connection, parse the query string, respond,
+  close) built on raw Winsock, the same tier as the existing WinHTTP usage; it adds no dependency.
+  **Amended 2026-08-23 (discovered configuring the real tenant, TASK-090/091):** RFC 8252
+  recommends an OS-assigned ephemeral port, and that is what was originally built and specified
+  here. It does not work with Auth0 — the Allowed Callback URLs field's own documented placeholder
+  support is "subdomain or domain name only," never the port, so a wildcard port cannot be
+  pre-registered there at all; Auth0 rejected it outright (`"callbacks" must be a valid uri`) when
+  the user tried to configure it. `OAuthListener::Start` now binds a **caller-supplied fixed
+  port**, and `AuthService::BeginInteractiveSignIn` tries a short list of candidates
+  (`kOAuthCallbackPorts` in `AuthConfig.hpp`, currently `{53682, 53683, 53684}`) in order, using
+  the first one it can bind — a single port already in use by something else on the user's
+  machine does not block sign-in outright. Every candidate must be registered as its own exact
+  entry in Auth0's Allowed Callback URLs (`docs/auth0-setup.md`); the two lists are kept in sync
+  by hand, which is the residual cost of this amendment.
+  (c) **The refresh token is stored via Windows Credential Manager**
+  (`src/platform/CredentialStore.hpp/.cpp`, new — `CredWriteW`/`CredReadW`/`CredDeleteW`), never in
+  `gosurvey-user.json`. This is a deliberate departure from the plaintext-JSON pattern REQ-080's
+  `installId`/`lastActivePingDate` use: those are anonymous and low-value if read; a refresh token is
+  a live credential and gets the OS-native protected store instead. Access and ID tokens are kept in
+  memory only and are never written to disk. Later launches renew silently from the stored refresh
+  token; an expired or revoked one falls back to interactive sign-in (b).
+  (d) **The auth logic is a pure `src/auth/` module (`AuthPing.hpp/.cpp`) plus an orchestration
+  service (`AuthService.hpp/.cpp`), mirroring the `TelemetryPing`/`TelemetryService` split** (ADR-032
+  (b)): PKCE pair generation, the `/authorize` URL, and the silent-refresh-vs-interactive decision are
+  pure and unit-tested (Catch2, no network/window, same style as `TelemetryPingTests`); the listener,
+  browser launch, and token exchange are orchestration on a one-shot worker thread (architecture §8),
+  independent of `UpdateService` and `TelemetryService`. Sign-in state is fields on
+  `AppCommandState`, not a new global (§11.3). PKCE's SHA-256 needs a byte-buffer overload beside the
+  existing file-hashing `ComputeFileSha256` in `HttpFetch.cpp` (same BCrypt call, different input),
+  plus a small base64url-encode helper — neither exists today.
+  (e) **A new, separate Cloudflare Worker (`tools/accounts-worker/`) serves REQ-092's license lookup**,
+  not the existing `telemetry-worker`. The two have opposite trust models: the ping endpoint is
+  public and unauthenticated by design (regex-whitelisted anonymous fields); this one requires a
+  verified Auth0 JWT (checked against Auth0's JWKS — signature, `exp`, `aud`/`iss`) on every request.
+  Keeping them as separate Workers, with **separate D1 databases** (`gosurvey-accounts` alongside the
+  existing `gosurvey-telemetry`), means a defect in one cannot read or corrupt the other's data —
+  "one visible owner per resource" (§11.5) applied to backend state, not just in-process types. The
+  `users` table is minimal: `auth0_sub` (PK), `email`, `tier` (defaulted, e.g. `'free'`), `created_at`.
+  `GET /v1/license` returns the caller's tier; nothing yet sets it to anything but the default —
+  billing, an admin path, or a manual grant are explicitly future work (REQ-092).
+  (f) **No feature is gated by tier yet.** REQ-091/092 deliver the mechanism only — which commands or
+  capabilities require which tier is undecided product scope, and naming them here would be the spec
+  inventing business authority it doesn't have.
+- Alternatives: **(1) Hand-rolled auth backend on the existing telemetry Worker** — no new third-party
+  dependency, but the team would own password hashing, OAuth client-secret handling, email delivery,
+  and reset/verification flows, all security-critical; declined per (a)'s three-question answer.
+  **(2) Embedded webview for login** — rejected outright: Google and Microsoft both block or disallow
+  this for OAuth on native apps, so it is not a viable alternative, only a non-compliant one. **(3)
+  Store the refresh token in `gosurvey-user.json`** like the telemetry ids — rejected because a
+  refresh token is a live, reusable credential, unlike an anonymous install id; the plaintext-JSON
+  pattern is right for the latter and wrong for the former. **(4) One shared Worker/D1 for telemetry
+  and accounts** — saves a small amount of provisioning, costs the trust-model separation (d)/(e)
+  depend on; declined.
+- Consequences: three new small modules (`src/auth/`, `src/platform/OAuthListener.*`,
+  `src/platform/CredentialStore.*`), one new backend service and database, one new third-party
+  dependency (Auth0, recorded per REQ-300), a new sign-in entry point beside the existing "Anonymous
+  Usage Data" box in `src/ui/CadUiSettings.cpp` (~line 387), and two Catch2 unit-test additions
+  (`AuthPingTests`) plus a Worker-side test file (`accounts-worker/test.mjs`) mirroring
+  `telemetry-worker/test.mjs`. Deliberately left undesigned: billing/Stripe, trial periods, which
+  features are gated, team/org accounts, and any change to REQ-080's ping (unaffected).

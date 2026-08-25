@@ -232,20 +232,54 @@ struct SurfaceDisplayBatch {
   float lineweightMm = -1.f;
 };
 
+/// One filled-triangle run of REQ-072 band geometry: a solid interior colour, no line width.
+///
+/// A sibling of \ref SurfaceDisplayBatch rather than a reuse of it: \c lineweightMm has no meaning
+/// for a filled interior, and giving this struct its own shape keeps a caller from ever passing a
+/// band buffer to the `GL_LINES` path or vice versa (TASK-086 §6 (3)).
+struct SurfaceTriangleBatch {
+  /// World-space x,y,z, nine floats per triangle — `GL_TRIANGLES` layout. Never null in a batch that
+  /// reaches the renderer. **Borrowed**, exactly as \ref SurfaceDisplayBatch::verts is — see that
+  /// struct's ownership note; the same rule and the same lifetime apply here.
+  const std::vector<float>* verts = nullptr;
+  float rgba[4] = {1.f, 1.f, 1.f, 1.f};
+};
+
 /// Everything drawn for the drawing's surfaces this frame (REQ-070 / ADR-036 (h)).
 ///
 /// Replaces — rather than joins — the former flat `surfaceEdges` parameter on \c RenderScene. A
 /// signature already 24 parameters long does not get four more for components that are always built
 /// together and always consumed together.
-///
-/// Triangle-mesh batches for REQ-072's elevation and slope banding will join this struct; they are
-/// deliberately absent until TASK-086 defines what a band is.
 struct CadSurfaceDisplayGeometry {
-  /// In draw order: triangles first, then contours, then the border on top, so a border stays
-  /// readable over its own triangulation.
+  /// REQ-072 band fills — drawn FIRST, before everything below, so the wireframe, contours, border
+  /// and slope arrows all stay legible on top of the opaque interior rather than under it.
+  std::vector<SurfaceTriangleBatch> bandTriangles;
+
+  /// In draw order: triangles first, then contours, then the border, then REQ-072's slope arrows
+  /// last — on top of the border, because an arrow that reads as buried under the outline it crosses
+  /// is not a readable arrow.
   std::vector<SurfaceDisplayBatch> lines;
 
-  [[nodiscard]] bool empty() const { return lines.empty(); }
+  [[nodiscard]] bool empty() const { return bandTriangles.empty() && lines.empty(); }
+};
+
+/// The Volume Dashboard's cut/fill map (REQ-073 amendment, TASK-095 §6 step 5) — a SEPARATE struct
+/// from \ref CadSurfaceDisplayGeometry rather than a field added to it, because this is not a
+/// per-surface style artefact: it is one dashboard's comparison between exactly two surfaces, and
+/// bundling it into the per-surface cache would conflate two different staleness keys (a surface's
+/// own style vs. a dashboard's own picked pair).
+///
+/// Two batches, both `GL_TRIANGLES`, both borrowed from `AppCommandState::VolumeDashboardState`
+/// exactly as \ref SurfaceTriangleBatch borrows from the surface display cache — never held across a
+/// frame boundary.
+struct VolumeMapDisplayGeometry {
+  SurfaceTriangleBatch cut;   ///< Empty `verts` when there is nothing to show (REQ-073's "nothing
+                              ///< outside the common area" — the same rule, applied to "no cut here").
+  SurfaceTriangleBatch fill;
+
+  [[nodiscard]] bool empty() const {
+    return (!cut.verts || cut.verts->empty()) && (!fill.verts || fill.verts->empty());
+  }
 };
 
 /// Single-line TEXT, MTEXT box, or aligned linear dimension drawn over the viewport (world coordinates;

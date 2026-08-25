@@ -16,6 +16,21 @@ short fallback message instead — which is a missed opportunity, not a failure.
 
 ---
 
+## 0.5.5
+
+**FILLET and CHAMFER — new**
+- **FILLET** rounds a corner between two lines, arcs, or polyline segments with a tangent arc,
+  trimming or extending each one to meet it. Pick two objects; type `R` first to set the radius,
+  `T` to toggle Trim/No trim.
+- **CHAMFER** connects two lines or polyline segments with a straight bevel instead of a curve.
+  Type `D` to set two distances, or `A` for a distance and an angle.
+- A radius or distance the picked objects can't actually support is refused with a clear message,
+  instead of drawing something wrong.
+- Both remember your last-used radius, distances, and Trim/No-trim setting the next time you use
+  them, and work the same way in paper space as in model space.
+
+---
+
 ## 0.5.4
 
 **Contours you can keep — new**

@@ -1,0 +1,132 @@
+# REQ-103 step 4 (TASK-097) — BREAK: Line (two-piece split, endpoint-coincident shorten, whole-
+# entity refusal), open Polyline (two-piece split across a bend), and an Ellipse refusal.
+#
+# T1 (two-piece split): L1 is (0,0)-(100,0). BREAK picks (30,0) then (70,0) — both interior
+# (param 30 and 70 of a 100-long line, tolerance 0.01) — so the material between them is removed:
+# L1 shrinks in place to (0,0)-(30,0), and a NEW line (fresh id) is created for (70,0)-(100,0).
+# LINES goes 1 -> 2.
+#
+# T2 (endpoint-coincident shorten, no duplicate): L3 is (200,0)-(250,0). BREAK picks (200,0) —
+# exactly the start (param 0) — then (220,0) (param 20 of 50). Since one point IS the start, the
+# line is simply shortened from the other point (220,0) to the end, mutated IN PLACE — no new
+# entity. LINES count is unchanged by this step.
+#
+# T3 (whole-entity refusal): L4 is (300,0)-(350,0). BREAK picks (300,0) then (350,0) — the two
+# EXISTING endpoints — so the whole line would be removed; refused, geometry unchanged, and
+# (critically) NO undo snapshot pushed for a refused break (checked below via UNDO/REDO count).
+#
+# T4 (open Polyline split across a bend): P1 is (400,0)->(400,30)->(430,30)->(430,60) (3 segments,
+# each 30 long, total 90). BREAK picks (400,15) — midpoint of segment 0, param 15 — then (430,45)
+# — midpoint of segment 2, param 60(seg0+seg1)+15=75. Both interior (15 and 75, of 90) -> two-piece
+# split: the original polyline shrinks in place to [(400,0),(400,15)] (start through the near cut);
+# a NEW polyline [(430,45),(430,60)] (far cut through the end) is created. POLYLINES goes 1 -> 2.
+#
+# T5 (Ellipse refusal): an ellipse at (500,0) r=20 (ratio 0.5) is refused outright — GoSurvey has no
+# elliptical-arc entity kind to hold a broken-open ellipse (D-2026-08-24-c). ELLIPSES stays 1.
+#
+# Undo accounting: only T1, T2, and T4 push an undo snapshot (3 individual breaks); T3 and T5 are
+# refusals and must push none — this is the regression check for the exact undo-on-refusal bug this
+# task's own paper-space code had to be fixed for during self-verification (see task log).
+
+NEW
+
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+
+CMD LINE
+CMD 200,0
+CMD 250,0
+ESC
+
+CMD LINE
+CMD 300,0
+CMD 350,0
+ESC
+
+CMD POLYLINE
+CMD 400,0
+CMD 400,30
+CMD 430,30
+CMD 430,60
+CMD END
+
+CMD ELLIPSE
+PICK 500 0
+PICK 520 0
+CMD 0.5
+
+CHECK ALL
+EXPECT LINES 3
+EXPECT POLYLINES 1
+EXPECT ELLIPSES 1
+SAVEAS %OUT%/break-line-poly-a.gs
+
+# BREAK is typed once; each pick pair loops back to "select object" automatically (whether the
+# break succeeds or is refused), matching TRIM/LENGTHEN/EXTEND's own looping shape — the same
+# reason their transcripts type the command name once, not before every target.
+CMD BREAK
+PICK 30 0
+PICK 70 0
+
+EXPECT LOG "BREAK — line broken."
+EXPECT LINES 4
+
+PICK 200 0
+PICK 220 0
+
+EXPECT LOG "BREAK — line broken."
+EXPECT LINES 4
+
+PICK 300 0
+PICK 350 0
+
+EXPECT LOG "would remove the entire line"
+EXPECT LINES 4
+
+PICK 400 15
+PICK 430 45
+
+EXPECT LOG "BREAK — polyline broken."
+EXPECT POLYLINES 2
+
+PICK 520 0
+
+EXPECT LOG "elliptical-arc entity kind"
+EXPECT ELLIPSES 1
+
+ESC
+
+CHECK ALL
+EXPECT LINES 4
+EXPECT POLYLINES 2
+EXPECT ELLIPSES 1
+SAVEAS %OUT%/break-line-poly-b.gs
+EXPECT DIFFERENTFILE %OUT%/break-line-poly-a.gs %OUT%/break-line-poly-b.gs
+
+UNDO
+UNDO
+UNDO
+EXPECT LINES 3
+EXPECT POLYLINES 1
+EXPECT ELLIPSES 1
+CHECK ALL
+
+SAVEAS %OUT%/break-line-poly-c.gs
+# Not SAMEFILE against "a": T1 and T4 each minted a fresh entity id (REQ-076), and undo does not —
+# and must not — roll the nextEntityId counter itself back ("ids never reused... even after undo/
+# redo"), so the counter value is permanently higher than it was at "a" even though every entity's
+# geometry and id assignments are otherwise restored (checked above via the LINES/POLYLINES counts
+# and CHECK ALL). Redo below restores the exact forward snapshot instead, which IS byte-identical.
+
+REDO
+REDO
+REDO
+EXPECT LINES 4
+EXPECT POLYLINES 2
+EXPECT ELLIPSES 1
+CHECK ALL
+
+SAVEAS %OUT%/break-line-poly-d.gs
+EXPECT SAMEFILE %OUT%/break-line-poly-b.gs %OUT%/break-line-poly-d.gs

@@ -28,6 +28,7 @@
 #include "ImGuiLayout.hpp"
 #include "UpdateService.hpp"
 #include "TelemetryService.hpp"
+#include "AuthService.hpp"
 #include "Version.hpp"
 
 #include <ctime>
@@ -204,14 +205,28 @@ int main()
   glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
   GlfwApplySplashStageWindowHints();
 
-  GLFWwindow *window = glfwCreateWindow(1600, 900, "GoSurvey", nullptr, nullptr);
+  // REQ-093: the splash stage window is small and centered (AutoCAD-style), not the eventual
+  // maximized shell — it used to be created at the full 1600x900 shell size and immediately
+  // maximized right here, which is why the splash card previously appeared to float over a giant
+  // dimmed rectangle instead of the real desktop: the "rectangle" WAS the (opaque, since per-pixel
+  // transparency isn't guaranteed by every compositor) maximized window. GlfwApplyMainStageWindowChrome
+  // (called after RunStartupSplash below) is the only maximize call now, so the window makes one
+  // clean size/decoration transition instead of two.
+  constexpr int kSplashWinW = 440;
+  constexpr int kSplashWinH = 320;
+  GLFWwindow *window = glfwCreateWindow(kSplashWinW, kSplashWinH, "GoSurvey", nullptr, nullptr);
   if (!window)
   {
     glfwTerminate();
     return 1;
   }
+  if (GLFWmonitor *primary = glfwGetPrimaryMonitor())
+  {
+    int mx = 0, my = 0, mw = 0, mh = 0;
+    glfwGetMonitorWorkarea(primary, &mx, &my, &mw, &mh);
+    glfwSetWindowPos(window, mx + (mw - kSplashWinW) / 2, my + (mh - kSplashWinH) / 2);
+  }
   glfwDefaultWindowHints();
-  glfwMaximizeWindow(window);
 
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1);
@@ -253,11 +268,31 @@ int main()
   ImGui_ImplGlfw_InitForOpenGL(window, true);
   ImGui_ImplOpenGL3_Init("#version 330");
 
-  // RunStartupSplash(window, 1.0);
-  GlfwApplyMainStageWindowChrome(window);
-
+  // AppCommandState + the ini-path configuration MUST happen before the splash's first
+  // ImGui::NewFrame(), not after it. Dear ImGui auto-loads io.IniFilename's saved dock/window
+  // layout exactly once per process, on the very first NewFrame() call ever made — a one-shot
+  // latch that does not retry. ImGuiLayout_ConfigureIniPath is what points io.IniFilename at the
+  // real, per-layout .ini path (it starts out null); until this line ran here, the splash's own
+  // frame loop was the first thing calling NewFrame(), with IniFilename still null, so ImGui's
+  // auto-load fired once, found nothing, and never looked again — the saved dock layout was
+  // silently discarded every launch, which is what "my layout isn't respected" actually was.
   AppCommandState cmd;
   LoadUserStartupPrefs(cmd);
+  const bool haveSavedDockIni = ImGuiLayout_ConfigureIniPath(cmd);
+
+  // Shown only now (GlfwApplySplashStageWindowHints set GLFW_VISIBLE false) so it never flashes
+  // at an unpositioned spot before glfwSetWindowPos above took effect.
+  glfwShowWindow(window);
+
+  // REQ-093: hardcoded 5 s regardless of how fast the real preload below finishes — the app is
+  // still low-resource enough that the actual load is imperceptible, so the splash's duration is
+  // deliberately decoupled from it rather than trying to track real progress.
+  RunStartupSplash(window, 5.0);
+  GlfwApplyMainStageWindowChrome(window);
+  // glfwMaximizeWindow (inside the call above) posts an async resize on Windows; pump events so
+  // the window's real (maximized) size has landed before the first docked-layout frame reads it.
+  glfwPollEvents();
+  glfwPollEvents();
 
   // REQ-077: the update check. Only the persisted settings live in AppCommandState; the worker
   // state is owned here, so no drawing state is ever touched from a background thread.
@@ -272,10 +307,26 @@ int main()
 
   // REQ-080: anonymous telemetry. Fire-and-forget: does not gate the session, no UI, logs and
   // swallows network errors. Runs independent of the update check in its own worker.
-  std::unique_ptr<telemetry::TelemetryTask> telemetryTask =
-      telemetry::BeginTelemetryPing(GOSURVEY_VERSION_FULL,
-                                    cmd.updatePrefs.useBetaChannel ? "beta" : "stable");
-  const bool haveSavedDockIni = ImGuiLayout_ConfigureIniPath(cmd);
+  //
+  // (Amended 2026-08-23, D-2026-08-23-e): no longer fired here, at raw process start. The
+  // payload now carries the REQ-091 signed-in email when known, and sign-in state is not yet
+  // resolved at this exact instant — silent refresh below hasn't run yet. So firing is deferred
+  // to the point the auth gate first resolves (see the poll loop), which costs no perceptible
+  // delay since the gate already blocks all other interaction until then. `telemetryFired`
+  // ensures this happens exactly once per launch, same as before.
+  std::unique_ptr<telemetry::TelemetryTask> telemetryTask;
+  bool                                      telemetryFired   = false;
+  const std::string telemetryChannel = cmd.updatePrefs.useBetaChannel ? "beta" : "stable";
+
+  // REQ-091: accounts sign-in. The heavier async state (the task, holding a thread) stays local
+  // here, same split as updateState/telemetryTask; only display flags live on AppCommandState.
+  // `authLastAttemptInteractive` distinguishes "the automatic startup silent-refresh found no
+  // stored session" (ordinary logged-out state, no error shown) from "the user clicked Sign In
+  // and it failed" (REQ-201: shown, not swallowed) — both complete through the same poll below.
+  std::unique_ptr<auth::AuthTask> authTask;
+  bool                            authLastAttemptInteractive = false;
+  authTask                                                   = auth::BeginSilentRefresh();
+  cmd.authBusy                                                = true;
   std::vector<std::string> cmdLog;
   cmdLog.push_back("GoSurvey CAD shell ready.");
   cmdLog.push_back("Regenerating model.");
@@ -421,6 +472,57 @@ int main()
     // the dirty check is the point — one code path decides whether work is at risk.
     update::PollUpdateTask(updateState);
     telemetry::PollTelemetryTask(telemetryTask);
+
+    // REQ-091: sign-in requests from the Settings panel. Ignored while a task is already in
+    // flight rather than queued — a second click while one attempt is running is a double-click,
+    // not two sign-ins.
+    if (cmd.authSignOutRequested)
+    {
+      cmd.authSignOutRequested = false;
+      auth::SignOut();
+      cmd.authSignedIn = false;
+      cmd.authEmail.clear();
+      cmd.authError.clear();
+    }
+    if (cmd.authSignInRequested)
+    {
+      cmd.authSignInRequested = false;
+      if (!authTask)
+      {
+        authTask                     = auth::BeginInteractiveSignIn();
+        authLastAttemptInteractive   = true;
+        cmd.authBusy                 = true;
+        cmd.authInteractiveBusy      = true;
+        cmd.authError.clear();
+      }
+    }
+    if (authTask && authTask->done.load(std::memory_order_acquire))
+    {
+      cmd.authBusy            = false;
+      cmd.authInteractiveBusy = false;
+      cmd.authSignedIn        = authTask->ok;
+      cmd.authEmail    = authTask->email;
+      // The silent startup refresh finding no stored session is the ordinary logged-out state,
+      // not a reported error (REQ-091 acceptance: an expired/revoked token just falls back to
+      // interactive sign-in). Only a user-initiated attempt's failure is shown.
+      cmd.authError    = (!authTask->ok && authLastAttemptInteractive) ? authTask->error : "";
+      // REQ-091 (amended): the launch gate closes on a successful sign-in, OR when there was no
+      // internet at all to attempt one with — never on an ordinary "no stored session" failure
+      // while online, which is what leaves the gate open to show the blocking prompt.
+      if (authTask->ok || authTask->skippedNoNetwork)
+        cmd.authGateResolved = true;
+      authTask.reset();
+    }
+    // REQ-080 (amended, D-2026-08-23-e): fires exactly once per launch, right after the auth
+    // gate first resolves — the earliest point sign-in state is actually known. `cmd.authEmail`
+    // is empty for a signed-out user (offline-skip case included), so this is a no-op change in
+    // payload shape for anyone not signed in.
+    if (cmd.authGateResolved && !telemetryFired)
+    {
+      telemetryFired = true;
+      telemetryTask   = telemetry::BeginTelemetryPing(
+          GOSURVEY_VERSION_FULL, telemetryChannel, cmd.authSignedIn ? cmd.authEmail : std::string());
+    }
     if (updateState.awaitingUnsavedCheck)
     {
       updateState.awaitingUnsavedCheck = false;
@@ -584,6 +686,10 @@ int main()
     // it does real work only for surfaces that are actually behind, dispatched to a background
     // thread — see TickSurfaceRebuilds' own comment for the full contract.
     TickSurfaceRebuilds(cmd, cmdLog);
+
+    // Volume Dashboard live recompute (REQ-073 amendment, TASK-095). After TickSurfaceRebuilds, so a
+    // dashboard-selected surface that finished rebuilding this frame is already current below.
+    TickVolumeDashboard(cmd);
 
     // Generated surface display geometry (ADR-036 (e)). After TickSurfaceRebuilds, so a
     // triangulation that landed this frame is drawn from this frame rather than the next — and
@@ -753,6 +859,7 @@ int main()
     DrawPointGroupManagerWindow(cmd, &cmdLog);
     DrawSurfaceManagerWindow(cmd, &cmdLog);
     DrawSurfaceStyleWindow(cmd, &cmdLog);
+    DrawVolumeDashboardWindow(cmd, &cmdLog);  // REQ-073 amendment (TASK-095)
     DrawFeatureLineElevationWindow(cmd, &cmdLog);  // REQ-088
     DrawViewPointsPanel(cmd, cmdLog);
     DrawImportPointsPanel(cmd, cmdLog);
@@ -778,6 +885,10 @@ int main()
     DrawAlignResultsWindow(cmd, cmdLog);
     DrawCloseConfirmModal(cmd, cmdLog);
     DrawUpdateDialog(cmd, updateState);
+    // REQ-091 (amended): blocks every launch until authGateResolved — signed in, or no internet
+    // at all to sign in with. Stacks beneath the update dialog's modal (both gate the session;
+    // ImGui's modal stack lets whichever opened first take input priority).
+    DrawSignInGate(cmd);
     // The dialog writes skip state into cmd.updatePrefs; the throttle anchor is written by the
     // check itself. Sync the rest back so SaveUserStartupPrefs persists both.
     cmd.updatePrefs.enabled        = updateState.prefs.enabled;
@@ -813,6 +924,15 @@ int main()
     const float previewCy =
         cmd.active == AppCommandState::Kind::Offset ? static_cast<float>(curRawY) : static_cast<float>(commitCurY);
     BuildTransformPreview(cmd, previewCx, previewCy, &previewLines, &previewCircles, orthoHalfH, fbH);
+
+    // REQ-103 BREAK (TASK-101): the material the pending break would remove, kept out of the
+    // translucent transform batch above on purpose — this one is drawn ON TOP of the object it
+    // describes, so it needs an opaque, heavier stroke to be legible at all. See
+    // BuildBreakRemovalPreview.
+    std::vector<float> removalLines;
+    std::vector<float> removalMarkers;
+    BuildBreakRemovalPreview(cmd, static_cast<float>(commitCurX), static_cast<float>(commitCurY), orthoHalfH,
+                             &removalLines, &removalMarkers);
 
     if (cmd.active == AppCommandState::Kind::Trim &&
         cmd.trimPhase == AppCommandState::TrimPhase::CuttingLine_WaitP2)
@@ -960,6 +1080,28 @@ int main()
     // highlight, preview, rubber, snap glyph, selection rect, survey markers, PDFs) are suppressed here so
     // leftover DXF geometry isn't hover-highlighted behind the sheet.
     const bool paperSpace = cmd.activeSpaceIndex != kModelSpaceIndex;
+
+    // REQ-073 amendment: the Volume Dashboard's cut/fill map (TASK-095 §6 step 5), model space only
+    // like every other GL surface entity. Built fresh each frame from the dashboard's own landed
+    // buffers — cheap (pointers + colours, never vertices) and safe to redo every frame the same way
+    // RefreshSurfaceDisplayGeometry's own assembly pass is, since visibility (here: is the map even
+    // wanted) can change with no new geometry landing.
+    VolumeMapDisplayGeometry volumeMapGeom;
+    if (cmd.volumeDashboard.open && cmd.volumeDashboard.showMap && cmd.volumeDashboard.resultHasMap) {
+      if (!cmd.volumeDashboard.mapCutTrianglesXyz.empty()) {
+        volumeMapGeom.cut.verts = &cmd.volumeDashboard.mapCutTrianglesXyz;
+        // Distinct from REQ-072's band palette on purpose — a cut/fill comparison and an elevation/
+        // slope band are different questions, and sharing a palette invites reading one as the other.
+        volumeMapGeom.cut.rgba[0] = 0.85f; volumeMapGeom.cut.rgba[1] = 0.35f;
+        volumeMapGeom.cut.rgba[2] = 0.15f; volumeMapGeom.cut.rgba[3] = 0.85f;  // cut: orange-red
+      }
+      if (!cmd.volumeDashboard.mapFillTrianglesXyz.empty()) {
+        volumeMapGeom.fill.verts = &cmd.volumeDashboard.mapFillTrianglesXyz;
+        volumeMapGeom.fill.rgba[0] = 0.15f; volumeMapGeom.fill.rgba[1] = 0.45f;
+        volumeMapGeom.fill.rgba[2] = 0.90f; volumeMapGeom.fill.rgba[3] = 0.85f;  // fill: blue
+      }
+    }
+
     static const std::vector<float> kEmptyVerts;
     const std::vector<float> &sceneLines = paperSpace ? kEmptyVerts : cmd.userLinesFlat;
     const std::vector<float> &sceneCircles = paperSpace ? kEmptyVerts : cmd.userCirclesCxCyZR;
@@ -992,7 +1134,10 @@ int main()
                                // regenerates them.
                                (paperSpace || cmd.surfaceDisplayGeometry.empty())
                                    ? nullptr
-                                   : &cmd.surfaceDisplayGeometry);
+                                   : &cmd.surfaceDisplayGeometry,
+                               (paperSpace || volumeMapGeom.empty()) ? nullptr : &volumeMapGeom,
+                               (paperSpace || removalLines.empty()) ? nullptr : &removalLines,
+                               (paperSpace || removalMarkers.empty()) ? nullptr : &removalMarkers);
 
     // Must be the last UI call of the frame: it walks the submitted windows and
     // appends to their draw lists, so anything begun after it would be missed.

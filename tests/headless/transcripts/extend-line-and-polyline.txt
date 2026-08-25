@@ -1,0 +1,86 @@
+# REQ-103 step 3 (TASK-096) — EXTEND, Line and open-Polyline targets against Line boundaries.
+#
+# Two Line targets prove direction-agnostic extension against ONE shared boundary (VB1, a vertical
+# line at x=100): T1 extends rightward from (0,0)-(80,0) by clicking its right end, T2 extends
+# leftward from (150,0)-(120,0) by clicking its left end — both land exactly on x=100 (hand-computed:
+# ray from the fixed end through the moving end, extended until it crosses x=100).
+#
+# P1 is a bent (3-vertex) open polyline — (400,0)->(400,30)->(430,30) — extended at its last vertex
+# against a second boundary (VB2, vertical at x=500). This specifically exercises a real bug found
+# and fixed during this task's self-verification: the boundary ray must be cast along the LOCAL last
+# segment's own direction ((400,30)->(430,30), horizontal), not the whole polyline's global
+# first-to-last chord ((400,0)->(430,30), a ~45-degree diagonal) — the two directions differ for any
+# bent polyline, and casting along the chord would have found a hit past the true boundary crossing
+# (hand-computed: the chord ray would land at x~511.4, overshooting the x=500 boundary). Local-
+# direction math: last segment length 30 extends to a new local length of 100 (500-400), so the
+# polyline's total length goes 60 -> 130, landing the moved vertex exactly at (500,30).
+
+NEW
+
+CMD LINE
+CMD 100,-20
+CMD 100,20
+ESC
+
+CMD LINE
+CMD 500,0
+CMD 500,60
+ESC
+
+CMD LINE
+CMD 0,0
+CMD 80,0
+ESC
+
+CMD LINE
+CMD 150,0
+CMD 120,0
+ESC
+
+CMD POLYLINE
+CMD 400,0
+CMD 400,30
+CMD 430,30
+CMD END
+
+CHECK ALL
+EXPECT LINES 4
+EXPECT POLYLINES 1
+SAVEAS %OUT%/extend-line-poly-a.gs
+
+CMD EXTEND
+PICK 100 0
+PICK 500 30
+CMD
+PICK 80 0
+PICK 120 0
+PICK 430 30
+CMD
+
+EXPECT LOG "EXTEND — extended to the boundary."
+EXPECT LINES 4
+EXPECT POLYLINES 1
+CHECK ALL
+
+SAVEAS %OUT%/extend-line-poly-b.gs
+EXPECT DIFFERENTFILE %OUT%/extend-line-poly-a.gs %OUT%/extend-line-poly-b.gs
+
+UNDO
+UNDO
+UNDO
+EXPECT LINES 4
+EXPECT POLYLINES 1
+CHECK ALL
+
+SAVEAS %OUT%/extend-line-poly-c.gs
+EXPECT SAMEFILE %OUT%/extend-line-poly-a.gs %OUT%/extend-line-poly-c.gs
+
+REDO
+REDO
+REDO
+EXPECT LINES 4
+EXPECT POLYLINES 1
+CHECK ALL
+
+SAVEAS %OUT%/extend-line-poly-d.gs
+EXPECT SAMEFILE %OUT%/extend-line-poly-b.gs %OUT%/extend-line-poly-d.gs

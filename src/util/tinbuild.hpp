@@ -166,6 +166,17 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
 [[nodiscard]] bool TinElevationAt(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
                                   double x, double y, double* outZ);
 
+/// One triangle's containment/plane-eval test — the inner loop \ref TinElevationAt runs once per
+/// triangle in a full scan. Exposed so a caller with its OWN way of narrowing which triangles are
+/// worth testing (REQ-073's per-TIN spatial index, `util/surfacevolume.hpp`) reuses exactly this
+/// rule rather than a second copy of it.
+///
+/// \returns true and writes \p outZ when (\p x, \p y) is inside triangle (\p ia, \p ib, \p ic);
+///          false, \p outZ untouched, for outside, a degenerate triangle, or an out-of-range index.
+[[nodiscard]] bool TinTriangleElevationAt(const std::vector<float>& vertsXyz, std::uint32_t ia,
+                                          std::uint32_t ib, std::uint32_t ic, double x, double y,
+                                          double* outZ);
+
 /// The triangulation's **border**: every edge belonging to exactly one triangle (REQ-068, REQ-070's
 /// "surface border" style component).
 ///

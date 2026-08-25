@@ -60,7 +60,8 @@ struct WinHttpSession {
 
 /// Opens \p url and sends the request, leaving \p s.request ready to read from.
 /// Returns false with a reason on any failure, including a non-200 status.
-bool OpenRequest(const std::string& url, int timeoutMs, WinHttpSession& s, std::string& errorOut)
+bool OpenRequest(const std::string& url, int timeoutMs, WinHttpSession& s, std::string& errorOut,
+                 const std::wstring& extraHeaders = std::wstring())
 {
   const std::wstring wideUrl = Widen(url);
   if (wideUrl.empty())
@@ -124,8 +125,11 @@ bool OpenRequest(const std::string& url, int timeoutMs, WinHttpSession& s, std::
   ::WinHttpSetOption(s.request, WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy,
                      sizeof(redirectPolicy));
 
-  if (!::WinHttpSendRequest(s.request, WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA,
-                            0, 0, 0))
+  if (!::WinHttpSendRequest(s.request,
+                            extraHeaders.empty() ? WINHTTP_NO_ADDITIONAL_HEADERS
+                                                  : extraHeaders.c_str(),
+                            extraHeaders.empty() ? 0 : static_cast<DWORD>(-1),
+                            WINHTTP_NO_REQUEST_DATA, 0, 0, 0))
   {
     errorOut = LastErrorText("WinHttpSendRequest");
     return false;
@@ -205,13 +209,17 @@ bool HasInternetConnectivity()
   return connected;
 }
 
-bool HttpGetString(const std::string& url, int timeoutMs, std::string& out, std::string& errorOut)
+bool HttpGetString(const std::string& url, int timeoutMs, std::string& out, std::string& errorOut,
+                   const std::string& bearerToken)
 {
   out.clear();
   errorOut.clear();
 
+  const std::wstring extraHeaders =
+      bearerToken.empty() ? std::wstring() : L"Authorization: Bearer " + Widen(bearerToken) + L"\r\n";
+
   WinHttpSession s;
-  if (!OpenRequest(url, timeoutMs, s, errorOut))
+  if (!OpenRequest(url, timeoutMs, s, errorOut, extraHeaders))
     return false;
 
   // A manifest is a few hundred bytes. The cap stops a wrong or hostile URL from being read
@@ -565,4 +573,72 @@ bool HttpPostJson(const std::string& url,
 
   errorOut = "HTTP " + std::to_string(status);
   return false;
+}
+
+bool ComputeSha256Bytes(const std::vector<unsigned char>& data,
+                        std::vector<unsigned char>&       digestOut,
+                        std::string&                      errorOut)
+{
+  digestOut.clear();
+  errorOut.clear();
+
+  BCRYPT_ALG_HANDLE  alg  = nullptr;
+  BCRYPT_HASH_HANDLE hash = nullptr;
+  std::vector<UCHAR> hashObject;
+  bool               ok = false;
+
+  auto cleanup = [&]() {
+    if (hash) ::BCryptDestroyHash(hash);
+    if (alg)  ::BCryptCloseAlgorithmProvider(alg, 0);
+  };
+
+  if (::BCryptOpenAlgorithmProvider(&alg, BCRYPT_SHA256_ALGORITHM, nullptr, 0) < 0)
+  {
+    errorOut = "BCryptOpenAlgorithmProvider failed";
+    cleanup();
+    return false;
+  }
+
+  DWORD objectSize = 0, digestSize = 0, copied = 0;
+  if (::BCryptGetProperty(alg, BCRYPT_OBJECT_LENGTH, reinterpret_cast<PUCHAR>(&objectSize),
+                          sizeof(objectSize), &copied, 0) < 0 ||
+      ::BCryptGetProperty(alg, BCRYPT_HASH_LENGTH, reinterpret_cast<PUCHAR>(&digestSize),
+                          sizeof(digestSize), &copied, 0) < 0)
+  {
+    errorOut = "BCryptGetProperty failed";
+    cleanup();
+    return false;
+  }
+
+  hashObject.resize(objectSize);
+  digestOut.resize(digestSize);
+
+  if (::BCryptCreateHash(alg, &hash, hashObject.data(), objectSize, nullptr, 0, 0) < 0)
+  {
+    errorOut = "BCryptCreateHash failed";
+    cleanup();
+    return false;
+  }
+
+  // An empty input is valid (SHA-256 of zero bytes is well-defined); BCryptHashData with a
+  // zero-length buffer is a no-op, not an error, so no special-casing is needed here.
+  if (!data.empty() &&
+      ::BCryptHashData(hash, const_cast<PUCHAR>(data.data()), static_cast<ULONG>(data.size()),
+                       0) < 0)
+  {
+    errorOut = "BCryptHashData failed";
+    cleanup();
+    return false;
+  }
+
+  if (::BCryptFinishHash(hash, digestOut.data(), digestSize, 0) < 0)
+  {
+    errorOut = "BCryptFinishHash failed";
+    cleanup();
+    return false;
+  }
+
+  ok = true;
+  cleanup();
+  return ok;
 }

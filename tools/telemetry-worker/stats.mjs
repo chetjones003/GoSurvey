@@ -43,7 +43,8 @@ SELECT
   version,
   channel,
   os,
-  country
+  country,
+  email
 FROM pings
 ORDER BY id DESC
 LIMIT 50
@@ -83,6 +84,7 @@ function printTable(pings) {
     { key: 'channel',   label: 'Channel',    width: 10 },
     { key: 'os',        label: 'OS',         width: 14 },
     { key: 'country',   label: 'Country',    width: 10 },
+    { key: 'email',     label: 'Email',      width: 26 },
   ];
 
   const separator = columns

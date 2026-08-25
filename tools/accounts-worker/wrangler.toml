@@ -1,0 +1,26 @@
+name = "gosurvey-accounts"
+main = "src/index.js"
+
+# Pin the runtime date, same reasoning as telemetry-worker: behaviour changes by compatibility
+# date, not by deploy date.
+compatibility_date = "2025-09-01"
+
+# `database_id` is filled in by `wrangler d1 create gosurvey-accounts` — paste the id it prints.
+# Not a secret (useless without account credentials), so committing it is fine.
+[[d1_databases]]
+binding = "DB"
+database_name = "gosurvey-accounts"
+database_id = "eb8a7a88-08bf-4c25-a92e-ed78d8088929"
+
+# Auth0 tenant this Worker verifies tokens against. Not secret — the domain and audience are
+# public (they appear in the client's own /authorize request); nothing here is a credential.
+[vars]
+AUTH0_DOMAIN = "dev-hqk2tndprbftps0k.us.auth0.com"
+AUTH0_AUDIENCE = "https://gosurvey-accounts/"
+
+# Deliberately absent, same reasoning as telemetry-worker:
+#
+#   [observability] — request logs would include client IPs; this endpoint is authenticated,
+#                      not anonymous, but there is still no reason to retain IPs it doesn't need.
+#
+#   routes / custom domain — workers.dev is sufficient and costs nothing.

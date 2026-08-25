@@ -24,6 +24,7 @@
 #include "ImGuiLayout.hpp"
 #include "WinFileDialogs.hpp"
 #include "SurveyPoints.hpp"
+#include "SurfaceStyle.hpp"  // REQ-072 analysis legend (TASK-086 §6 (4))
 #include "StringUtil.hpp"
 #include "imgui.h"
 
@@ -619,10 +620,241 @@ void ApplyCadLightTheme() {
 }
 
 // ---------------------------------------------------------------------------
+// Surface rollover readout (REQ-089)
+// ---------------------------------------------------------------------------
+/// How long the cursor must rest before the readout appears.
+///
+/// Fixed rather than a setting, by decision D-2026-08-23-a (2): a persisted value would be a
+/// data-format change for a number nobody tunes. Half a second is long enough that dragging the
+/// cursor across a drawing never raises it and short enough that deliberately pointing at a surface
+/// does not feel like waiting.
+constexpr double kSurfaceRolloverDwellSec = 0.5;
+
+/// How far the cursor may drift and still count as resting.
+///
+/// **Not zero.** A mouse physically at rest still reports sub-pixel jitter on a high-resolution
+/// device, and a zero tolerance would restart the dwell every frame and the readout would never
+/// appear at all. Pinned by `HoverDwellTests`.
+constexpr float kSurfaceRolloverMoveTolPx = 2.f;
+
+// ---------------------------------------------------------------------------
 // Elevation cues (REQ-081)
 // ---------------------------------------------------------------------------
 // How far a cast shadow reaches before it has faded out.
 constexpr float kPlateShadowPx = 9.f;
+
+/// Draw the latched rollover readout beside the cursor (REQ-089), or nothing if there is nothing to
+/// say.
+///
+/// **An ImGui tooltip rather than a hand-painted plate**, which is the whole reason this function is
+/// short. A tooltip window already takes its background and border from the active theme and already
+/// clamps itself to the monitor when the cursor is near an edge — so no `UiChrome` field is added,
+/// and REQ-081's standing hazard (a theme that forgets to fill a chrome field leaves stale colours
+/// behind) is avoided by not creating another field to forget.
+///
+/// Purely presentational: every string was formatted by `BuildSurfaceHoverRows` when the cursor came
+/// to rest, so this reads `cmd` and computes nothing.
+static void DrawSurfaceRolloverReadout(const AppCommandState& cmd) {
+  if (cmd.surfaceHoverRows.empty())
+    return;
+
+  // Guarded, not assumed: BeginTooltip returns false when ImGui declines to open the window, and
+  // EndTooltip must not be called then. The unguarded form appears elsewhere in this file; the
+  // guarded one is the form the rest of the tooltips here use, and it is the correct one.
+  if (!ImGui::BeginTooltip())
+    return;
+
+  // The value column is aligned by measuring the widest label once rather than by a table. A table
+  // inside an auto-resizing window has sizing rules of its own, and four rows of two strings do not
+  // need them; `SameLine` at a measured offset stays aligned in any font, which is the only thing
+  // the table was buying.
+  const float valueX = ImGui::CalcTextSize("Elevation").x + ImGui::GetStyle().ItemSpacing.x * 2.f;
+
+  for (size_t i = 0; i < cmd.surfaceHoverRows.size(); ++i) {
+    // One block per covering surface — REQ-089's "two overlapping visible surfaces produce one block
+    // each, both named", which is the existing-vs-proposed case REQ-074 already reports on.
+    if (i > 0)
+      ImGui::Separator();
+
+    const SurfaceHoverRow& row = cmd.surfaceHoverRows[i];
+    ImGui::TextUnformatted("Tin Surface");
+    ImGui::Spacing();
+
+    const auto field = [valueX](const char* label, const std::string& value) {
+      // The label is the quiet half — it is the same four words every time, and the value beside it
+      // is what the user came here to read.
+      ImGui::TextDisabled("%s", label);
+      ImGui::SameLine(valueX);
+      ImGui::TextUnformatted(value.c_str());
+    };
+    field("Name", row.name);
+    field("Style", row.style);
+    field("Layer", row.layer);
+    field("Elevation", row.elevation);
+  }
+  ImGui::EndTooltip();
+}
+
+// ---------------------------------------------------------------------------
+// REQ-072 analysis legend (TASK-086 §6 (4))
+// ---------------------------------------------------------------------------
+
+/// A double trimmed of trailing zeros, for a legend row — deliberately NOT `SurfaceStyles::FormatFt`
+/// (`commands/SurfaceStyle.hpp`), which is a feet-specific name and would read wrong beside a
+/// percent-grade band.
+static std::string FormatLegendNumber(double v) {
+  char buf[64];
+  std::snprintf(buf, sizeof(buf), "%.4f", v);
+  std::string s(buf);
+  while (!s.empty() && s.back() == '0')
+    s.pop_back();
+  if (!s.empty() && s.back() == '.')
+    s.pop_back();
+  return s;
+}
+
+/// The resolved RGBA for one REQ-072 band colour string, folding the ByLayer chain exactly as
+/// `ResolveSurfaceStoredColorRgba` does in `CadCommands.cpp` — duplicated rather than shared because
+/// that copy lives in that file's anonymous namespace and this legend is the first UI-side reader of
+/// a raw \ref SurfaceBand::color; both are three calls to the same public resolvers
+/// (`FindDrawingLayerRowCi` / `ResolveEntityRgbaForViewport` / `ResolveStoredColorForViewport`), so a
+/// third copy would be the point to share instead.
+static void ResolveSurfaceBandLegendRgba(const AppCommandState& cmd, const EntityAttributes& surfAttr,
+                                         const std::string& colorStorage, float* outRgba) {
+  const CadLayerRow* layer = FindDrawingLayerRowCi(cmd, surfAttr.layer);
+  float surfaceRgba[4] = {1.f, 1.f, 1.f, 1.f};
+  ResolveEntityRgbaForViewport(surfAttr, layer, 0.42f, 0.62f, 0.78f, surfaceRgba);
+  ResolveStoredColorForViewport(colorStorage, surfAttr.transparency < 0.f ? 0.f : surfAttr.transparency,
+                                surfaceRgba[0], surfaceRgba[1], surfaceRgba[2], outRgba);
+  outRgba[3] = surfaceRgba[3];
+}
+
+/// Draw REQ-072's on-screen legend for every visible surface whose style has banding on
+/// (`analysisMode != None`), stacked upward from the viewport's bottom-left corner.
+///
+/// **Reads the style's range table directly — never a copy of it.** This function and
+/// \ref BuildSurfaceAnalysisGeometry (`CadCommands.cpp`) are "one source, two readers" of the same
+/// `SurfaceStyle::bands`, which is what makes REQ-072's "the legend's displayed ranges equal the
+/// table's, and change with it" true by construction rather than by two things that can drift apart.
+static void DrawSurfaceAnalysisLegend(const AppCommandState& cmd, ImVec2 imgPos, ImVec2 avail) {
+  if (cmd.activeSpaceIndex != kModelSpaceIndex)
+    return;  // a sheet has no surfaces of its own to show a legend for (REQ-025 (g))
+
+  ImDrawList* dl = ImGui::GetWindowDrawList();
+  constexpr float kPad = 8.f;
+  constexpr float kSwatch = 14.f;
+  constexpr float kRowH = 18.f;
+  constexpr float kBoxW = 200.f;
+  constexpr float kGap = 8.f;
+
+  float bottom = imgPos.y + avail.y - 10.f;  // stacks upward; each surface's box sits above the last
+
+  for (size_t si = 0; si < cmd.cadSurfaces.size(); ++si) {
+    if (!SurfaceVisible(cmd, si))
+      continue;
+    const CadSurface& surf = cmd.cadSurfaces[si];
+    const SurfaceStyle* style = SurfaceStyles::Resolve(cmd.surfaceStyles, surf.styleName);
+    const SurfaceStyle resolved = style ? *style : SurfaceStyles::StandardSurfaceStyle();
+    if (resolved.analysisMode == SurfaceAnalysisMode::None)
+      continue;
+    if (si >= cmd.cadSurfaceAttrs.size())
+      continue;
+    const EntityAttributes& surfAttr = cmd.cadSurfaceAttrs[si];
+
+    const bool byElevation = resolved.analysisMode == SurfaceAnalysisMode::Elevation;
+    const char* unit = byElevation ? "ft" : "%";
+    // Title row + one row per band + one overflow row (only when there is a table to overflow).
+    const size_t dataRows = resolved.bands.size() + (resolved.bands.empty() ? 0 : 1);
+    const float boxH = (1.f + static_cast<float>(dataRows)) * kRowH + kPad * 2.f;
+    const ImVec2 boxMin(imgPos.x + 10.f, bottom - boxH);
+    const ImVec2 boxMax(imgPos.x + 10.f + kBoxW, bottom);
+    bottom = boxMin.y - kGap;
+
+    dl->AddRectFilled(boxMin, boxMax, IM_COL32(24, 24, 24, 205), 4.f);
+    dl->AddRect(boxMin, boxMax, IM_COL32(95, 95, 95, 255), 4.f, 0, 1.f);
+
+    float ty = boxMin.y + kPad;
+    const std::string title = surf.name + " - " + (byElevation ? "Elevation" : "Slope");
+    dl->AddText(ImVec2(boxMin.x + kPad, ty), IM_COL32(230, 230, 230, 255), title.c_str());
+    ty += kRowH;
+
+    const auto row = [&](const std::string& label, const float rgba[4]) {
+      const ImU32 fill = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
+                                  static_cast<int>(rgba[2] * 255.f), 255);
+      const ImVec2 sMin(boxMin.x + kPad, ty + 2.f);
+      const ImVec2 sMax(sMin.x + kSwatch, sMin.y + kSwatch);
+      dl->AddRectFilled(sMin, sMax, fill);
+      dl->AddRect(sMin, sMax, IM_COL32(20, 20, 20, 255));
+      dl->AddText(ImVec2(sMax.x + 6.f, ty), IM_COL32(220, 220, 220, 255), label.c_str());
+      ty += kRowH;
+    };
+
+    // The lowest band is open at the bottom (AssignBand, util/surfaceanalysis.hpp) — labelled "<",
+    // matching that rule rather than implying a lower edge the table does not have.
+    double prevBound = 0.0;
+    bool havePrev = false;
+    for (const SurfaceBand& b : resolved.bands) {
+      float rgba[4];
+      ResolveSurfaceBandLegendRgba(cmd, surfAttr, b.color, rgba);
+      const std::string label = (havePrev ? FormatLegendNumber(prevBound) + " - " + FormatLegendNumber(b.upperBound)
+                                          : "< " + FormatLegendNumber(b.upperBound)) +
+                                " " + unit;
+      row(label, rgba);
+      prevBound = b.upperBound;
+      havePrev = true;
+    }
+    if (havePrev) {
+      // The overflow bucket BuildSurfaceAnalysisGeometry draws in the plain Triangles colour — the
+      // legend shows the same colour so a triangle beyond the table's top is still explained, not a
+      // colour the legend never accounted for.
+      float rgba[4];
+      ResolveSurfaceBandLegendRgba(cmd, surfAttr, resolved.triangles.color, rgba);
+      row("> " + FormatLegendNumber(prevBound) + " " + unit, rgba);
+    }
+  }
+}
+
+/// Draw the survey-point rollover readout beside the cursor (REQ-090), for the point at
+/// `cmd.surveyPoints[ix]`.
+///
+/// **Nothing here is latched, unlike \ref DrawSurfaceRolloverReadout.** The pick that supplies `ix`
+/// (`PickSurveyPointAtCursor`) already runs every frame for the existing hover highlight, so there is
+/// no expensive query to defer — the five rows are formatted fresh on every call. See TASK-089 §2 for
+/// why this does not reuse REQ-089's one-shot latch: latching an index across frames would be
+/// architecture §11.9's blocking finding, since `surveyPoints` compacts on erase.
+///
+/// Called only when a survey point is what precedence chose (REQ-090: "a survey point takes
+/// precedence over a surface") — never in the same frame as \ref DrawSurfaceRolloverReadout, so this
+/// is still the one `BeginTooltip` the surface readout's comment calls for.
+static void DrawSurveyPointRolloverReadout(const AppCommandState& cmd, int ix) {
+  if (ix < 0 || static_cast<size_t>(ix) >= cmd.surveyPoints.size())
+    return;
+  const SurveyPoint& p = cmd.surveyPoints[static_cast<size_t>(ix)];
+
+  if (!ImGui::BeginTooltip())
+    return;
+
+  const float valueX = ImGui::CalcTextSize("Elevation").x + ImGui::GetStyle().ItemSpacing.x * 2.f;
+  const auto field = [valueX](const char* label, const std::string& value) {
+    ImGui::TextDisabled("%s", label);
+    ImGui::SameLine(valueX);
+    ImGui::TextUnformatted(value.c_str());
+  };
+
+  ImGui::TextUnformatted("Survey Point");
+  ImGui::Spacing();
+  const int sprec = cmd.surveyPointDisplayPrecision;
+  // Northing/easting resolve through the same WorldXFromLocal/WorldYFromLocal conversion, at the same
+  // precision, the Properties panel applies to the same point (CadUi.cpp ~4483-4499) — REQ-090's
+  // acceptance condition that the two must agree. Elevation is absolute (not rebased): the
+  // local-storage rebase is X/Y-only (architecture §11 / CadCoordinateFrame).
+  field("Number", std::to_string(p.id));
+  field("Layer", p.layer);
+  field("Northing", FormatLinear(static_cast<double>(CadCoord::WorldYFromLocal(cmd, p.northing)), sprec));
+  field("Easting", FormatLinear(static_cast<double>(CadCoord::WorldXFromLocal(cmd, p.easting)), sprec));
+  field("Elevation", FormatLinear(static_cast<double>(p.elevation), sprec));
+  ImGui::EndTooltip();
+}
 
 /// A raised plate catches the light along its top edge. Call with the plate's
 /// own rect; draws a 1px line just inside the top.
@@ -1098,6 +1330,18 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
       cmd.showSettingsWindow = true;
     ImGui::EndMenu();
   }
+
+  // REQ-091: sign-in status at the far right of the menu bar — the same placement familiar CAD
+  // tools (e.g. Civil 3D) use for the signed-in account. Nothing shown while signed out, which
+  // (with the launch gate in place) only happens via its no-internet exception, so there is no
+  // "Sign In" prompt to squeeze in here — Settings → System → Account already has one.
+  if (cmd.authSignedIn && !cmd.authEmail.empty()) {
+    const float textW = ImGui::CalcTextSize(cmd.authEmail.c_str()).x;
+    const float pad   = 14.f;
+    ImGui::SameLine(std::max(0.f, ImGui::GetWindowWidth() - textW - pad));
+    ImGui::TextUnformatted(cmd.authEmail.c_str());
+  }
+
   ImGui::PopStyleVar();
 }
 
@@ -1224,6 +1468,12 @@ enum class RibbonIconKind : std::uint8_t {
   ZoomWindow,
   Scale,
   Mirror,
+  Lengthen,
+  Extend,
+  Break,
+  Stretch,
+  Fillet,
+  Chamfer,
   SurveyPoint,
   SurveyInverse,
   Layers,
@@ -1624,6 +1874,93 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     dl->AddLine(ImVec2(xR, c.y), ImVec2(xm, yB), acc, t);
     break;
   }
+  case RibbonIconKind::Lengthen: {
+    // Horizontal segment with outward-pointing arrowheads at both ends (REQ-103 step 2) —
+    // stretching/shrinking a line's own length.
+    const float y = c.y;
+    const ImVec2 pL(mn.x + w * 0.16f, y), pR(mx.x - w * 0.16f, y);
+    dl->AddLine(pL, pR, col, t * 1.1f);
+    RibbonStrokeArrow(dl, pL, ImVec2(-1.f, 0.f), std::min(w, h) * 0.22f, acc, t);
+    RibbonStrokeArrow(dl, pR, ImVec2(1.f, 0.f), std::min(w, h) * 0.22f, acc, t);
+    break;
+  }
+  case RibbonIconKind::Extend: {
+    // A segment (primary) stretching rightward to meet a boundary edge (accent, vertical) — EXTEND
+    // is TRIM's inverse, so this deliberately mirrors TRIM's icon shape with the gap closed instead
+    // of opened.
+    const float y = c.y;
+    const ImVec2 p0(mn.x + w * 0.14f, y), p1(mx.x - w * 0.3f, y);
+    dl->AddLine(p0, p1, col, t * 1.1f);
+    RibbonStrokeArrow(dl, p1, ImVec2(1.f, 0.f), std::min(w, h) * 0.2f, col, t);
+    const float boundaryX = mx.x - w * 0.16f;
+    dl->AddLine(ImVec2(boundaryX, mn.y + h * 0.18f), ImVec2(boundaryX, mx.y - h * 0.18f), acc, t * 1.1f);
+    break;
+  }
+  case RibbonIconKind::Break: {
+    // A horizontal segment with a gap in the middle, plus two short accent tick marks bracketing
+    // the gap — AutoCAD's own BREAK icon shape (a line broken at two points).
+    const float y = c.y;
+    const float gapHalf = w * 0.09f;
+    dl->AddLine(ImVec2(mn.x + w * 0.16f, y), ImVec2(c.x - gapHalf, y), col, t * 1.1f);
+    dl->AddLine(ImVec2(c.x + gapHalf, y), ImVec2(mx.x - w * 0.16f, y), col, t * 1.1f);
+    const float tickH = h * 0.16f;
+    dl->AddLine(ImVec2(c.x - gapHalf, y - tickH), ImVec2(c.x - gapHalf, y + tickH), acc, t);
+    dl->AddLine(ImVec2(c.x + gapHalf, y - tickH), ImVec2(c.x + gapHalf, y + tickH), acc, t);
+    break;
+  }
+  case RibbonIconKind::Stretch: {
+    // A dashed crossing-window box with one vertex (filled dot) pulled out by an arrow — the
+    // crossing-select-then-drag shape STRETCH is named for.
+    const float bx0 = mn.x + w * 0.18f, by0 = mn.y + h * 0.22f;
+    const float bx1 = mx.x - w * 0.4f, by1 = mx.y - h * 0.22f;
+    auto dash = [&](ImVec2 a, ImVec2 b) {
+      constexpr int n = 5;
+      for (int i = 0; i < n; i += 2) {
+        const float t0 = static_cast<float>(i) / n, t1 = static_cast<float>(i + 1) / n;
+        dl->AddLine(ImVec2(a.x + (b.x - a.x) * t0, a.y + (b.y - a.y) * t0),
+                   ImVec2(a.x + (b.x - a.x) * t1, a.y + (b.y - a.y) * t1), acc, t);
+      }
+    };
+    dash(ImVec2(bx0, by0), ImVec2(bx1, by0));
+    dash(ImVec2(bx1, by0), ImVec2(bx1, by1));
+    dash(ImVec2(bx1, by1), ImVec2(bx0, by1));
+    dash(ImVec2(bx0, by1), ImVec2(bx0, by0));
+    const ImVec2 vert(bx1, c.y);
+    dl->AddLine(vert, ImVec2(mx.x - w * 0.18f, c.y), col, t * 1.1f);
+    RibbonStrokeArrow(dl, ImVec2(mx.x - w * 0.18f, c.y), ImVec2(1.f, 0.f), std::min(w, h) * 0.2f, col, t);
+    dl->AddCircleFilled(vert, std::min(w, h) * 0.08f, col, 12);
+    break;
+  }
+  case RibbonIconKind::Fillet: {
+    // Two perpendicular legs joined by a small rounded corner — AutoCAD's own FILLET icon shape.
+    const float rx = mn.x + w * 0.30f, ry = mn.y + h * 0.30f;  // rounded-corner center
+    const float rad = std::min(w, h) * 0.20f;
+    dl->AddLine(ImVec2(mn.x + w * 0.16f, ry), ImVec2(rx - rad, ry), col, t * 1.1f);
+    dl->AddLine(ImVec2(rx, ry - rad), ImVec2(rx, mn.y + h * 0.16f), col, t * 1.1f);
+    dl->PathArcTo(ImVec2(rx, ry), rad, 3.14159265f, 3.14159265f * 1.5f, 10);
+    dl->PathStroke(col, 0, t * 1.1f);
+    // Second leg pair (mirrored) reads as "two curves meeting" rather than one bent line.
+    const float rx2 = mx.x - w * 0.30f, ry2 = mx.y - h * 0.30f;
+    dl->AddLine(ImVec2(mx.x - w * 0.16f, ry2), ImVec2(rx2 + rad, ry2), acc, t);
+    dl->AddLine(ImVec2(rx2, ry2 + rad), ImVec2(rx2, mx.y - h * 0.16f), acc, t);
+    dl->PathArcTo(ImVec2(rx2, ry2), rad, 3.14159265f * 1.5f, 3.14159265f * 2.0f, 10);
+    dl->PathStroke(acc, 0, t);
+    break;
+  }
+  case RibbonIconKind::Chamfer: {
+    // Two perpendicular legs joined by a straight bevel — AutoCAD's own CHAMFER icon shape,
+    // visually distinct from FILLET's rounded corner above.
+    const float bx = mn.x + w * 0.30f, by = mn.y + h * 0.30f;
+    const float cut = std::min(w, h) * 0.20f;
+    dl->AddLine(ImVec2(mn.x + w * 0.16f, by), ImVec2(bx - cut, by), col, t * 1.1f);
+    dl->AddLine(ImVec2(bx, by - cut), ImVec2(bx, mn.y + h * 0.16f), col, t * 1.1f);
+    dl->AddLine(ImVec2(bx - cut, by), ImVec2(bx, by - cut), col, t * 1.1f);
+    const float bx2 = mx.x - w * 0.30f, by2 = mx.y - h * 0.30f;
+    dl->AddLine(ImVec2(mx.x - w * 0.16f, by2), ImVec2(bx2 + cut, by2), acc, t);
+    dl->AddLine(ImVec2(bx2, by2 + cut), ImVec2(bx2, mx.y - h * 0.16f), acc, t);
+    dl->AddLine(ImVec2(bx2 + cut, by2), ImVec2(bx2, by2 + cut), acc, t);
+    break;
+  }
   case RibbonIconKind::SurveyPoint: {
     dl->AddLine(ImVec2(c.x, mn.y + h * 0.15f), ImVec2(c.x, mx.y - h * 0.15f), col, t * 0.75f);
     dl->AddLine(ImVec2(mn.x + w * 0.15f, c.y), ImVec2(mx.x - w * 0.15f, c.y), col, t * 0.75f);
@@ -1846,6 +2183,12 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::ZoomWindow:     return "zoomwindow";
   case RibbonIconKind::Scale:          return "scale";
   case RibbonIconKind::Mirror:         return "mirror";
+  case RibbonIconKind::Lengthen:       return "lengthen";
+  case RibbonIconKind::Extend:         return "extend";
+  case RibbonIconKind::Break:          return "break";
+  case RibbonIconKind::Stretch:        return "stretch";
+  case RibbonIconKind::Fillet:         return "fillet";
+  case RibbonIconKind::Chamfer:        return "chamfer";
   case RibbonIconKind::SurveyPoint:    return "surveypoint";
   case RibbonIconKind::SurveyInverse:  return "surveyinverse";
   case RibbonIconKind::Layers:         return "layers";
@@ -1890,6 +2233,13 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
     {"MTEXT", RibbonIconKind::Mtext}, {"DIMALIGNED", RibbonIconKind::Dim}, {"DIMLINEAR", RibbonIconKind::DimLinear},
     {"ID", RibbonIconKind::Id}, {"INVERSE", RibbonIconKind::SurveyInverse}, {"MOVE", RibbonIconKind::Move},
     {"COPY", RibbonIconKind::Copy}, {"ROTATE", RibbonIconKind::Rotate}, {"SCALE", RibbonIconKind::Scale},
+    {"MIRROR", RibbonIconKind::Mirror},
+    {"LENGTHEN", RibbonIconKind::Lengthen},
+    {"EXTEND", RibbonIconKind::Extend},
+    {"BREAK", RibbonIconKind::Break},
+    {"STRETCH", RibbonIconKind::Stretch},
+    {"FILLET", RibbonIconKind::Fillet},
+    {"CHAMFER", RibbonIconKind::Chamfer},
     {"DELETE", RibbonIconKind::Erase}, {"JOIN", RibbonIconKind::Join}, {"TRIM", RibbonIconKind::Trim},
     {"OFFSET", RibbonIconKind::Offset}, {"ZOOMEXTENTS", RibbonIconKind::ZoomExtents},
     {"ZOOMWINDOW", RibbonIconKind::ZoomWindow}, {"CREATEPOINTS", RibbonIconKind::SurveyPoint},
@@ -2054,8 +2404,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
   const float wEdit = 8.f + largeW + 4.f + colW({"Copy", "Undo", "Redo"});
   const float wDraw = 8.f + gridCell * 4.f + 4.f * 3.f;
+  // Four columns: a small-button column is 3 tall (colH), so a 4th item in one BeginGroup is
+  // clipped by the child window's own bounds — the same "fourth needs its own column" rule
+  // Inquiry/Survey below already follow. Join/Mirror/Lengthen exactly fills one column;
+  // Extend/Break/Stretch exactly fills a second.
   const float wMod  = 8.f + largeW + 4.f + colW({"Copy", "Rotate", "Scale"}) + 4.f +
-                      colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror"});
+                      colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror", "Lengthen"}) + 4.f +
+                      colW({"Extend", "Break", "Stretch"}) + 4.f + colW({"Fillet", "Chamfer"});
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
   const float wAnn  = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
   // Two columns: the panel is three small buttons tall, so a fourth in one column is clipped.
@@ -2196,16 +2551,63 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ImGui::EndGroup();
 
     ImGui::SameLine(0, 4);
-    const float c3 = colW({"Join", "Mirror"});
+    const float c3 = colW({"Join", "Mirror", "Lengthen"});
     ImGui::BeginGroup();
     if (smallBtn("##RibbonJoin", RibbonIconKind::Join, "Join", c3))
       StartJoinCommand(cmd, log);
     RibbonItemHelp("Join — merge colinear line segments.\nCommand bar: JOIN or J");
-    ImGui::BeginDisabled();
-    smallBtn("##RibbonMirror", RibbonIconKind::Mirror, "Mirror", c3);
-    RibbonItemHelp("Mirror — flip selection across a mirror line (not implemented yet).\nCommand bar: (none yet)",
-                   ImGuiHoveredFlags_AllowWhenDisabled);
-    ImGui::EndDisabled();
+    if (smallBtn("##RibbonMirror", RibbonIconKind::Mirror, "Mirror", c3))
+      StartMirrorCommand(cmd, log);
+    RibbonItemHelp("Mirror — flip selection across a mirror line.\nCommand bar: MIRROR or MI");
+    if (smallBtn("##RibbonLengthen", RibbonIconKind::Lengthen, "Lengthen", c3))
+      StartLengthenCommand(cmd, log);
+    RibbonItemHelp("Lengthen — change a line/open polyline/arc's length at the end nearest your "
+                   "pick (DElta/Percent/Total/DYnamic).\nCommand bar: LENGTHEN or LEN");
+    ImGui::EndGroup();
+
+    // Second column: a small-button column is 3 tall (colH) — Join/Mirror/Lengthen above already
+    // fills it, so Extend (and now Break) need their own column, not a 4th/5th slot stacked into
+    // the same BeginGroup, which the child window's own clip rect would cut off entirely (this
+    // was, in fact, a real bug: EXTEND shipped as a 4th item in the group above and was invisible/
+    // unclickable — found and fixed while adding BREAK here).
+    ImGui::SameLine(0, 4);
+    // Three items exactly fills this column's 3-row limit (colH) — a 4th here would repeat the
+    // clipping bug the comment above already documents; STRETCH needs its own column if a 4th
+    // command is ever added to this group.
+    const float c4 = colW({"Extend", "Break", "Stretch"});
+    ImGui::BeginGroup();
+    if (smallBtn("##RibbonExtend", RibbonIconKind::Extend, "Extend", c4))
+      StartExtendCommand(cmd, log);
+    RibbonItemHelp("Extend — pick boundary edges, then stretch a line/open polyline/arc's end "
+                   "nearest your pick out to the nearest one.\nCommand bar: EXTEND or EX");
+    if (smallBtn("##RibbonBreak", RibbonIconKind::Break, "Break", c4))
+      StartBreakCommand(cmd, log);
+    RibbonItemHelp("Break — pick an object (the pick is break point 1), then a second point; the "
+                   "material between them is removed.\nCommand bar: BREAK or BR");
+    if (smallBtn("##RibbonStretch", RibbonIconKind::Stretch, "Stretch", c4))
+      StartStretchCommand(cmd, log);
+    RibbonItemHelp("Stretch — crossing/window-select, then base point and destination; only the "
+                   "vertices inside the box move.\nCommand bar: STRETCH or S");
+    ImGui::EndGroup();
+
+    // Fifth column: the fourth column above (Extend/Break/Stretch) already fills its 3-row limit —
+    // FILLET/CHAMFER need their own column, not a 4th slot stacked into that BeginGroup (the exact
+    // clipping bug the comment above documents for EXTEND's own first landing). Two items here
+    // stays within the 3-row limit.
+    ImGui::SameLine(0, 4);
+    const float c5 = colW({"Fillet", "Chamfer"});
+    ImGui::BeginGroup();
+    if (smallBtn("##RibbonFillet", RibbonIconKind::Fillet, "Fillet", c5))
+      StartFilletCommand(cmd, log);
+    RibbonItemHelp("Fillet — pick two curves (line/arc/polyline segment); joins them with a tangent "
+                   "arc at the current radius, trimming/extending each to meet it. Type R to set "
+                   "radius, T for Trim/No-trim.\nCommand bar: FILLET or F");
+    if (smallBtn("##RibbonChamfer", RibbonIconKind::Chamfer, "Chamfer", c5))
+      StartChamferCommand(cmd, log);
+    RibbonItemHelp("Chamfer — pick two curves (line/polyline segment); connects them with a "
+                   "straight bevel at Distance/Distance or Distance/Angle from their intersection. "
+                   "Type D for distances, A for distance+angle, T for Trim/No-trim.\nCommand bar: "
+                   "CHAMFER or CHA");
     ImGui::EndGroup();
   }
   RibbonSectionEnd();
@@ -2335,6 +2737,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     RibbonItemHelp(
         "Surfaces — build a TIN surface by triangulating the points in one or more point groups, "
         "then rebuild it as the survey changes.");
+    // REQ-073 amendment (TASK-095). Sits with Surfaces because a volume comparison is always between
+    // two of them.
+    if (smallBtn("##RibbonVolumes", RibbonIconKind::SurveyPoint, "Volumes", cwB))
+      cmd.volumeDashboard.open = true;
+    RibbonItemHelp(
+        "Volume Dashboard — pick a Base and a Comparison surface for a live cut/fill/net report that "
+        "updates automatically as either surface is rebuilt.");
     // REQ-088. Sits with Surfaces because that is what a feature line's elevations are FOR — the
     // line is design linework a surface consumes as a breakline.
     if (smallBtn("##RibbonFlElev", RibbonIconKind::SurveyPoint, "Grades", cwB))
@@ -5540,6 +5949,60 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
       return "Angle point X,Y (C toggles copy):";
     }
   }
+  if (cmd.active == AppCommandState::Kind::Mirror) {
+    using MirP = AppCommandState::MirrorPhase;
+    switch (cmd.mirrorPhase) {
+    case MirP::PickSelection:
+      return "MIRROR — window opposite corner or cancel:";
+    case MirP::NeedP1:
+      return "MIRROR — first point of mirror line X,Y:";
+    case MirP::NeedP2:
+      return "MIRROR — second point of mirror line X,Y:";
+    case MirP::NeedEraseAnswer:
+      return "Erase source objects? [Yes/No] <N>:";
+    }
+  }
+  if (cmd.active == AppCommandState::Kind::Lengthen) {
+    using LP = AppCommandState::LengthenPhase;
+    switch (cmd.lengthenPhase) {
+    case LP::WaitSelectOrMode:
+      return "LENGTHEN — select object, or [DElta/Percent/Total/DYnamic]:";
+    case LP::WaitDeltaValue:
+      return "LENGTHEN DElta — length to add (+) or subtract (-):";
+    case LP::WaitPercentValue:
+      return "LENGTHEN Percent — new length as % of current:";
+    case LP::WaitTotalValue:
+      return "LENGTHEN Total — new total length:";
+    case LP::WaitDynamicTarget:
+      return "LENGTHEN DYnamic — drag to the new length, or type it:";
+    }
+  }
+  if (cmd.active == AppCommandState::Kind::Extend) {
+    using EP = AppCommandState::ExtendPhase;
+    switch (cmd.extendPhase) {
+    case EP::SelectBoundaries:
+      return "EXTEND — pick boundary edges, Enter when done:";
+    case EP::SelectTargets:
+      return "EXTEND — click objects to extend (near the end to stretch), Enter when done:";
+    }
+  }
+  if (cmd.active == AppCommandState::Kind::Break) {
+    using BP = AppCommandState::BreakPhase;
+    switch (cmd.breakPhase) {
+    case BP::SelectFirstPoint:
+      return "BREAK — select object (the pick is break point 1):";
+    case BP::SelectSecondPoint:
+      return "BREAK — specify second break point:";
+    }
+  }
+  if (cmd.active == AppCommandState::Kind::Stretch) {
+    using MP = AppCommandState::ModifyPhase;
+    if (cmd.modifyPhase == MP::PickSelection)
+      return "STRETCH — crossing/window box (right-to-left = crossing) or cancel:";
+    if (cmd.modifyPhase == MP::NeedBase)
+      return "Base point X,Y:";
+    return "Destination @dx,dy or X,Y:";
+  }
   if (cmd.active == AppCommandState::Kind::Delete)
     return "DELETE — window opposite corner or ESC:";
   if (cmd.active == AppCommandState::Kind::Join)
@@ -5662,6 +6125,18 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
     using TP = AppCommandState::TrimPhase;
     return cmd.trimPhase == TP::CuttingLine_WaitP1 || cmd.trimPhase == TP::CuttingLine_WaitP2;
   }
+  case K::Mirror: {
+    using MirP = AppCommandState::MirrorPhase;
+    return cmd.mirrorPhase == MirP::NeedP1 || cmd.mirrorPhase == MirP::NeedP2;
+    // NeedEraseAnswer is a Yes/No text prompt, not a point (HandleMirrorText).
+  }
+  case K::Stretch: {
+    // REQ-103 step 5. Base and destination are both real points (typed or picked), so STRETCH
+    // gets the same dynamic-input prompt MOVE/COPY do — it was omitted here, the second of the
+    // two lists a point-picking command has to appear in (TASK-099 F2).
+    using MP = AppCommandState::ModifyPhase;
+    return cmd.modifyPhase == MP::NeedBase || cmd.modifyPhase == MP::NeedDestination;
+  }
   default:
     return false;
   }
@@ -5756,6 +6231,12 @@ static std::string CadPointPromptLabel(const AppCommandState& cmd) {
     return cmd.modifyPhase == AppCommandState::ModifyPhase::NeedBase ? "Specify base point:" : "Specify point:";
   case K::Rotate:
     return cmd.rotatePhase == AppCommandState::RotatePhase::NeedBase ? "Specify base point:" : "Specify point:";
+  case K::Mirror:
+    return cmd.mirrorPhase == AppCommandState::MirrorPhase::NeedP1 ? "Specify first point of mirror line:"
+                                                                   : "Specify second point of mirror line:";
+  case K::Stretch:
+    return cmd.modifyPhase == AppCommandState::ModifyPhase::NeedBase ? "Specify base point:"
+                                                                     : "Specify second point:";
   default:
     return "Specify point:";
   }
@@ -6496,10 +6977,19 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     // Mouse is over last frame's popup rect — a row is being hovered/clicked.
     const bool overCmdSugPopup = s_cmdSugPopupOpen &&
         ImGui::IsMouseHoveringRect(s_cmdSugPopupMin, s_cmdSugPopupMax, false);
-    if (inputActive && !query.empty() && singleToken && !s_cmdDismissed) {
+    // Suggestions (and the Enter-time cmdBuf rewrite below) are for IDLE top-level command entry
+    // only. While a command is active and prompting for a typed sub-answer (FILLET's R/T, CHAMFER's
+    // D/A/T, LENGTHEN's DE/P/T/DY, a numeric value, ...), the typed text must reach that command's
+    // own handler verbatim — a real bug, found from a user report: typing "r" for FILLET's Radius
+    // sub-command fuzzy-matched some unrelated top-level command (e.g. "rect"/"redo") and the Enter
+    // frame silently substituted THAT name into cmdBuf before submission, so FILLET's own handler
+    // never saw "r" at all and refused with "could not be parsed" — reproducible for any short
+    // sub-answer that happens to fuzzy-match a registry entry, not specific to FILLET's own code.
+    const bool cmdIdle = cmd.active == AppCommandState::Kind::None;
+    if (cmdIdle && inputActive && !query.empty() && singleToken && !s_cmdDismissed) {
       cmdSug = FuzzyCommandSuggestions(query, 20);
       s_cmdSugCache = cmdSug;
-    } else if (overCmdSugPopup && !s_cmdDismissed && !s_cmdSugCache.empty()) {
+    } else if (cmdIdle && overCmdSugPopup && !s_cmdDismissed && !s_cmdSugCache.empty()) {
       // Input lost focus to a click on the popup; keep the cached list alive this frame so the
       // row's InvisibleButton (which fires on mouse release) can run the command.
       cmdSug = s_cmdSugCache;
@@ -8285,9 +8775,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
     float curX = 0.f, curY = 0.f;
     screenToPaperIn(&curX, &curY);
-    // Snap MOVE/COPY/ROTATE pick points to paper geometry (REQ-037); entity-selection clicks stay on the raw
-    // cursor so picking small objects is not deflected.
-    if (paperSnapActive && (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0)) {
+    // Snap MOVE/COPY/ROTATE/MIRROR pick points to paper geometry (REQ-037); entity-selection clicks
+    // stay on the raw cursor so picking small objects is not deflected.
+    if (paperSnapActive && (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0 || cmd.paperMirrorPhase != 0)) {
       curX = paperSnapXIn;
       curY = paperSnapYIn;
     }
@@ -8333,15 +8823,46 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     }
 
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-      if (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0 || cmd.paperGripCorner != -2 ||
-          cmd.paperSelBoxActive) {
+      if (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0 || cmd.paperMirrorPhase != 0 ||
+          cmd.paperLengthenPhase != 0 || cmd.paperExtendPhase != 0 || cmd.paperBreakPhase != 0 ||
+          cmd.paperStretchPhase != 0 || cmd.paperFilletPhase != 0 || cmd.paperChamferPhase != 0 ||
+          cmd.paperGripCorner != -2 || cmd.paperSelBoxActive) {
         cmd.paperMovePhase = 0;
         cmd.paperRotatePhase = 0;
+        cmd.paperMirrorPhase = 0;
+        cmd.paperLengthenPhase = 0;
+        cmd.paperExtendPhase = 0;
+        cmd.paperExtendBoundaries.clear();
+        cmd.paperBreakPhase = 0;
+        cmd.paperStretchPhase = 0;
+        cmd.paperFilletPhase = 0;
+        cmd.paperFilletFirstEntity = PaperEntityRef{};
+        cmd.paperFilletFirstPolySeg = -1;
+        cmd.paperChamferPhase = 0;
+        cmd.paperChamferFirstEntity = PaperEntityRef{};
+        cmd.paperChamferFirstPolySeg = -1;
         cmd.paperGripCorner = -2;
         cmd.paperSelBoxActive = false;
       } else if (!cmd.selectedViewports.empty() || !cmd.selectedPaperEntities.empty()) {
         ClearViewportSelection(cmd);
         ClearPaperEntitySelection(cmd);
+      }
+    }
+    // EXTEND: Enter advances boundary collection -> target picking (needs >=1 boundary), or
+    // finishes target picking — the same "done picking edges" signal model-space TRIM/EXTEND get
+    // from a real Enter, which the rest of this per-frame paper-click block has no other route to.
+    if (cmd.paperExtendPhase != 0 && ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+      if (cmd.paperExtendPhase == 1) {
+        if (cmd.paperExtendBoundaries.empty())
+          log.push_back("EXTEND — pick at least one boundary edge before pressing Enter.");
+        else {
+          cmd.paperExtendPhase = 2;
+          log.push_back("EXTEND — click objects to extend. Enter when done.");
+        }
+      } else {
+        cmd.paperExtendPhase = 0;
+        cmd.paperExtendBoundaries.clear();
+        log.push_back("EXTEND — finished.");
       }
     }
 
@@ -8356,6 +8877,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // cursor (mirrors the model viewportHoverEntity). Cleared otherwise so the highlight does not linger.
     cmd.paperHoverValid = false;
     if (hovered && !cmd.paperSelBoxActive && cmd.paperMovePhase == 0 && cmd.paperRotatePhase == 0 &&
+        cmd.paperMirrorPhase == 0 && cmd.paperLengthenPhase == 0 && cmd.paperExtendPhase == 0 &&
+        cmd.paperBreakPhase == 0 && cmd.paperStretchPhase == 0 && cmd.paperFilletPhase == 0 &&
+        cmd.paperChamferPhase == 0 &&
         cmd.paperGripCorner == -2 && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
       PaperEntityRef hr;
       if (PickPaperEntityAt(L, curX, curY, entityPickTolIn, &hr)) {
@@ -8400,6 +8924,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // Native paper geometry in the same box (REQ-039): one shared, unit-tested helper for every type.
       cmd.selectedPaperEntities.clear();
       SelectPaperEntitiesInBox(L, bx0, by0, bx1, by1, windowMode, cmd.selectedPaperEntities);
+      // REQ-103 STRETCH: remember this box regardless of which command (if any) is active — paper
+      // box-select is ambient (this whole lambda runs on any plain click-drag, not gated by
+      // cmd.active), and STRETCH is invoked AFTER a selection already exists, the same "pre-select,
+      // then invoke" convention paper ROTATE/SCALE use. Invalidated by ClearPaperEntitySelection/
+      // TogglePaperEntitySelection so a later plain click-select doesn't leave a stale box behind.
+      cmd.paperSelBoxLastValid = true;
+      cmd.paperSelBoxLastMnXIn = bx0;
+      cmd.paperSelBoxLastMxXIn = bx1;
+      cmd.paperSelBoxLastMnYIn = by0;
+      cmd.paperSelBoxLastMxYIn = by1;
       cmd.paperSelBoxActive = false;
       BumpCadGpuCache(cmd);
     };
@@ -8425,6 +8959,142 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const float ang = std::atan2(curY - cmd.paperRotateBaseYIn, curX - cmd.paperRotateBaseXIn);
       RotateSelectedPaperEntities(cmd, cmd.paperRotateBaseXIn, cmd.paperRotateBaseYIn, ang, log);
       cmd.paperRotatePhase = 0;
+    } else if (clickL && cmd.paperMirrorPhase == 1) {  // MIRROR: first mirror-line point (REQ-103)
+      cmd.paperMirrorP1XIn = curX;
+      cmd.paperMirrorP1YIn = curY;
+      cmd.paperMirrorPhase = 2;
+      log.push_back("Click the second point of the mirror line.");
+    } else if (clickL && cmd.paperMirrorPhase == 2) {  // MIRROR: second point, commits (REQ-103)
+      if (std::hypot(curX - cmd.paperMirrorP1XIn, curY - cmd.paperMirrorP1YIn) < 1e-6f)
+        log.push_back("MIRROR — mirror line needs two distinct points; click again.");
+      else
+        MirrorSelectedPaperEntities(cmd, cmd.paperMirrorP1XIn, cmd.paperMirrorP1YIn, curX, curY, log);
+      cmd.paperMirrorPhase = 0;
+    } else if (clickL && cmd.paperLengthenPhase == 1) {  // LENGTHEN: pick + apply (REQ-103)
+      PaperEntityRef pr;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        log.push_back("LENGTHEN — nothing under cursor; try again.");
+      else
+        ApplyLengthenToPaperEntity(cmd, pr, curX, curY, log);
+      // Stays in phase 1 — loop back for the next object, same shape as the model-space command.
+    } else if (clickL && cmd.paperExtendPhase == 1) {  // EXTEND: collect boundary edges (REQ-103)
+      PaperEntityRef pr;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        log.push_back("EXTEND — no object at pick.");
+      else if (pr.type == PaperEntityRef::Type::Text)
+        log.push_back("EXTEND — use a line, circle, arc, ellipse, or polyline as a boundary edge.");
+      else {
+        bool dup = false;
+        for (const auto& b : cmd.paperExtendBoundaries)
+          if (b.type == pr.type && b.index == pr.index) { dup = true; break; }
+        if (dup)
+          log.push_back("EXTEND — already a boundary edge.");
+        else {
+          cmd.paperExtendBoundaries.push_back(pr);
+          log.push_back("EXTEND — boundary edge added.");
+        }
+      }
+      // Stays in phase 1 — Enter (handled above) advances to target-picking.
+    } else if (clickL && cmd.paperExtendPhase == 2) {  // EXTEND: pick + extend a target (REQ-103)
+      PaperEntityRef pr;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        log.push_back("EXTEND — nothing under cursor; try again.");
+      else
+        ApplyExtendToPaperEntity(cmd, pr, curX, curY, log);
+      // Stays in phase 2 — loop back for the next object, same shape as the model-space command.
+    } else if (clickL && cmd.paperBreakPhase == 1) {  // BREAK: select entity + break point 1 (REQ-103)
+      PaperEntityRef pr;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        log.push_back("BREAK — no object at pick.");
+      else if (pr.type == PaperEntityRef::Type::Text)
+        log.push_back("BREAK — 1 text object ignored: text cannot be broken. Pick a line, circle, "
+                      "arc, or polyline.");
+      else if (pr.type == PaperEntityRef::Type::Ellipse)
+        log.push_back("BREAK — 1 ellipse ignored: every ellipse in this drawing is a full closed "
+                      "curve, and GoSurvey has no elliptical-arc entity kind to hold a broken-open "
+                      "ellipse. Pick a line, circle, arc, or polyline.");
+      else {
+        BreakPoint p1{};
+        if (!ClosestPointOnPaperEntity(L, pr, curX, curY, &p1))
+          log.push_back("BREAK — could not resolve a point on that object; try again.");
+        else {
+          cmd.paperBreakEntity = pr;
+          cmd.paperBreakP1 = p1;
+          cmd.paperBreakPhase = 2;
+          log.push_back("BREAK — specify second break point:");
+        }
+      }
+    } else if (clickL && cmd.paperBreakPhase == 2) {  // BREAK: second point, applies (REQ-103)
+      ApplyBreakToPaperEntity(cmd, cmd.paperBreakEntity, cmd.paperBreakP1, curX, curY, log);
+      cmd.paperBreakPhase = 1;
+      // Stays in the loop — back to phase 1 for the next object, same shape as model-space BREAK.
+    } else if (clickL && cmd.paperFilletPhase == 1) {  // FILLET: pick first curve (REQ-103 step 6a)
+      PaperEntityRef pr;
+      int polySeg = -1;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        log.push_back("FILLET — no object at pick.");
+      else if (PaperFilletEligibility(L, pr, curX, curY, &polySeg, log)) {
+        cmd.paperFilletFirstEntity = pr;
+        cmd.paperFilletFirstPolySeg = polySeg;
+        cmd.paperFilletFirstPickX = curX;
+        cmd.paperFilletFirstPickY = curY;
+        cmd.paperFilletPhase = 2;
+        log.push_back("FILLET — select second object:");
+      }
+      // Ineligible picks stay in phase 1 — PaperFilletEligibility already logged why.
+    } else if (clickL && cmd.paperFilletPhase == 2) {  // FILLET: pick second curve, applies (REQ-103 step 6a)
+      PaperEntityRef pr;
+      int polySeg = -1;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        log.push_back("FILLET — no object at pick.");
+      else if (PaperFilletEligibility(L, pr, curX, curY, &polySeg, log)) {
+        ApplyFilletToPaperEntities(cmd, cmd.paperFilletFirstEntity, cmd.paperFilletFirstPolySeg,
+                                   cmd.paperFilletFirstPickX, cmd.paperFilletFirstPickY, pr, polySeg, curX, curY,
+                                   log);
+      }
+      cmd.paperFilletPhase = 1;
+      cmd.paperFilletFirstEntity = PaperEntityRef{};
+      cmd.paperFilletFirstPolySeg = -1;
+      // Stays in the loop — back to phase 1 for the next corner, same shape as model-space FILLET.
+    } else if (clickL && cmd.paperChamferPhase == 1) {  // CHAMFER: pick first curve (REQ-103 step 6b)
+      PaperEntityRef pr;
+      int polySeg = -1;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        log.push_back("CHAMFER — no object at pick.");
+      else if (PaperChamferEligibility(L, pr, curX, curY, &polySeg, log)) {
+        cmd.paperChamferFirstEntity = pr;
+        cmd.paperChamferFirstPolySeg = polySeg;
+        cmd.paperChamferFirstPickX = curX;
+        cmd.paperChamferFirstPickY = curY;
+        cmd.paperChamferPhase = 2;
+        log.push_back("CHAMFER — select second object:");
+      }
+    } else if (clickL && cmd.paperChamferPhase == 2) {  // CHAMFER: pick second curve, applies (REQ-103 step 6b)
+      PaperEntityRef pr;
+      int polySeg = -1;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        log.push_back("CHAMFER — no object at pick.");
+      else if (PaperChamferEligibility(L, pr, curX, curY, &polySeg, log)) {
+        ApplyChamferToPaperEntities(cmd, cmd.paperChamferFirstEntity, cmd.paperChamferFirstPolySeg,
+                                    cmd.paperChamferFirstPickX, cmd.paperChamferFirstPickY, pr, polySeg, curX,
+                                    curY, log);
+      }
+      cmd.paperChamferPhase = 1;
+      cmd.paperChamferFirstEntity = PaperEntityRef{};
+      cmd.paperChamferFirstPolySeg = -1;
+      // Stays in the loop — back to phase 1 for the next corner, same shape as model-space CHAMFER.
+    } else if (clickL && cmd.paperStretchPhase == 1) {  // STRETCH: base point (REQ-103 step 5)
+      cmd.paperStretchBaseXIn = curX;
+      cmd.paperStretchBaseYIn = curY;
+      cmd.paperStretchPhase = 2;
+      log.push_back("STRETCH — specify destination point:");
+    } else if (clickL && cmd.paperStretchPhase == 2) {  // STRETCH: destination, applies (REQ-103 step 5)
+      const float ddx = curX - cmd.paperStretchBaseXIn, ddy = curY - cmd.paperStretchBaseYIn;
+      ApplyStretchToPaperSelection(cmd, ddx, ddy, log);
+      // Stays active — same selection+box at new position, ready for another base+destination
+      // (MOVE's own looping shape for repeated displacement rounds on one selection).
+      cmd.paperStretchPhase = 1;
+      log.push_back("STRETCH complete — base point (ESC to exit):");
     } else if (clickL && cmd.paperGripCorner != -2) {  // commit an in-progress grip edit
       cmd.paperGripCorner = -2;
       log.push_back("Viewport edited.");
@@ -8823,6 +9493,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   bool cursorValid = !InFloatingModelSpace(cmd) && hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y;
   double rawX = 0.0, rawY = 0.0;
   double rawZ = 0.0;
+  /// May the surface rollover readout (REQ-089) run this frame? Set from inside the idle-hover block
+  /// below, so it is decided by the SAME `blockEntityHover` condition the hover highlight uses rather
+  /// than by a second copy of it — the readout must never appear anywhere a hover highlight would not.
+  /// It stays false when the cursor is not valid at all, which is what hides the readout the moment
+  /// the pointer leaves the viewport.
+  bool surfaceReadoutAllowed = false;
   if (cursorValid) {
     const bool orbited = modelSpace && !CadViewIsPlan(cmd);
     if (orbited) {
@@ -8910,10 +9586,30 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // idle selection — you can see what a click will take before you take it (REQ-056). Every other
       // command still suppresses hover, since their clicks mean coordinates rather than objects.
       using TPh = AppCommandState::TrimPhase;
+      using EPh = AppCommandState::ExtendPhase;
+      using BPh = AppCommandState::BreakPhase;
+      using LPh = AppCommandState::LengthenPhase;
       const bool trimEntityPick = cmd.active == AK::Trim && (cmd.trimPhase == TPh::SelectCuttingEdges ||
                                                              cmd.trimPhase == TPh::SelectTrimTargets);
-      const bool blockEntityHover = (cmd.active != AK::None && !trimEntityPick) || cmd.dimGripMoveActive ||
+      const bool extendEntityPick = cmd.active == AK::Extend && (cmd.extendPhase == EPh::SelectBoundaries ||
+                                                                  cmd.extendPhase == EPh::SelectTargets);
+      // BREAK: only SelectFirstPoint is an entity SEARCH (the pick also selects the object);
+      // SelectSecondPoint is a point pick on the entity already chosen, so hover stays suppressed
+      // there the same as any other coordinate-entry command.
+      const bool breakEntityPick = cmd.active == AK::Break && cmd.breakPhase == BPh::SelectFirstPoint;
+      // LENGTHEN: WaitSelectOrMode is an entity search exactly like EXTEND's, so it earns the same
+      // hover feedback (REQ-056). WaitDynamicTarget is a coordinate pick on an object already
+      // chosen, so hover stays suppressed there — the same split BREAK's two phases make.
+      const bool lengthenEntityPick = cmd.active == AK::Lengthen && cmd.lengthenPhase == LPh::WaitSelectOrMode;
+      const bool blockEntityHover = (cmd.active != AK::None && !trimEntityPick && !extendEntityPick &&
+                                     !breakEntityPick && !lengthenEntityPick) ||
+                                    cmd.dimGripMoveActive ||
                                     cmd.entityGripMoveActive || cmd.mtextGripMoveActive || cmd.selBoxWaitingSecond;
+      // REQ-089: the rollover readout rides on this exact condition. Model space only — a sheet has
+      // no surfaces on it (ADR-025 (g)) — and, unlike the hover highlight, it is also suppressed
+      // during a TRIM entity pick: TRIM wants to show what a click will take, and a four-row panel
+      // over the cursor would cover the very geometry that pick is choosing between.
+      surfaceReadoutAllowed = !blockEntityHover && modelSpace && cmd.active == AK::None;
       if (!blockEntityHover) {
         // Text annotations are picked by bounding box and take priority over geometry, mirroring
         // click-to-select (the annotation pick runs before the entity pick on a click). Hovering text
@@ -9033,6 +9729,53 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           // Intentionally do NOT set viewportSnapPickValid or out_snap — grip snap is silent.
         }
       }
+    }
+  }
+
+  // Surface rollover readout (REQ-089): advance the dwell, and on the one frame it elapses, ask what
+  // is under the cursor — once.
+  //
+  // **The query is deliberately NOT run per frame.** `BuildSurfaceHoverRows` walks every triangle of
+  // every visible surface (`TinElevationAt` is a linear scan), and REQ-100's surface profile is the
+  // one profile near the frame budget and is CPU-bound — `PickClosestCadEntity` above already walks
+  // the same triangles every frame for the hover highlight. Running this beside it would roughly
+  // double that cost for a panel the user is not looking at yet. `HoverDwellTick::elapsed` is true on
+  // exactly one frame per rest, which is what holds that line; REQ-089 states it as an acceptance
+  // condition rather than a note for the same reason.
+  {
+    const double nowSec = ImGui::GetTime();
+    // REQ-090: a survey point under the cursor takes precedence over a surface, and reuses this same
+    // dwell — resting on a point is what `viewportHoverSurveyPointIndex` already reports every frame
+    // (computed above, §2 of TASK-089), so `tick.settled` (level, not `elapsed`'s one-shot edge) is
+    // enough to show it; there is no query here to defer.
+    //
+    // **Precedence is decided only at draw time, never at query time.** `viewportHoverSurveyPointIndex`
+    // is re-picked every frame off the live cursor, using its own aperture — a different radius than
+    // this dwell's `kSurfaceRolloverMoveTolPx` move tolerance. A cursor can sit just inside the point's
+    // pick aperture on the exact frame `elapsed` fires, then drift a sub-tolerance jitter that leaves
+    // the aperture without ever moving far enough to reset the dwell (`tick.moved` stays false). If
+    // that drift had skipped `BuildSurfaceHoverRows` at the elapsed frame, nothing would be left to
+    // fall back to for the remainder of the rest — `elapsed` cannot come again without a real move. So
+    // the query always runs on `elapsed`, unconditionally; only which readout is drawn reads `onPoint`,
+    // decided fresh every single frame from the current pick.
+    if (surfaceReadoutAllowed) {
+      const HoverDwellTick tick = UpdateHoverDwell(&cmd.surfaceHoverDwell, mx, my, nowSec,
+                                                   kSurfaceRolloverMoveTolPx, kSurfaceRolloverDwellSec);
+      if (tick.moved)
+        cmd.surfaceHoverRows.clear();  // the latched text is about a place the cursor has left
+      else if (tick.elapsed)
+        BuildSurfaceHoverRows(cmd, rawX, rawY, &cmd.surfaceHoverRows);
+      const bool onPoint = cmd.viewportHoverSurveyPointIndex >= 0;
+      if (onPoint && tick.settled)
+        DrawSurveyPointRolloverReadout(cmd, cmd.viewportHoverSurveyPointIndex);
+      else
+        DrawSurfaceRolloverReadout(cmd);
+    } else {
+      // Suppressed — a command started, a gesture began, or the pointer left the viewport. Re-base
+      // the timer rather than merely leaving it, so coming back costs a fresh dwell instead of
+      // firing instantly on a timer that kept running while the readout was hidden.
+      cmd.surfaceHoverRows.clear();
+      ResetHoverDwell(&cmd.surfaceHoverDwell, mx, my, nowSec);
     }
   }
 
@@ -9258,8 +10001,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       BumpCadGpuCache(cmd);
     } else {
     using K = AppCommandState::Kind;
-    using MP = AppCommandState::ModifyPhase;
-    using RP = AppCommandState::RotatePhase;
+    // ModifyPhase/RotatePhase aliases used to live here for the inline click whitelist; the phase
+    // tests moved into ViewportClickRouteFor with it (TASK-099).
 
     const bool haveSnapPick = outCursorX && outCursorY && cmd.viewportSnapPickValid;
     const float commitX = haveSnapPick ? cmd.viewportSnapPickLocalX : *outCursorX;
@@ -9314,28 +10057,26 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else {
         TryPlaceSurveyPoint(cmd, commitX, commitY, cmd.createPointsOpts.defaultElevation, log);
       }
-    } else if (cmd.active == K::Offset || cmd.active == K::DesignateBreakline ||
-             cmd.active == K::DesignateBoundary)
-      // Entity-pick commands (REQ-069, like OFFSET's own WaitSelectEntity): the raw, unsnapped
-      // cursor position is what PickClosestCadEntity hit-tests against, not an OSNAP-adjusted commit
-      // point — a command missing from this list silently ignores every viewport click and appears
-      // to hang on its first prompt (see the comment on the point-picking list below).
+    } else {
+    // TASK-099. One authority decides what a click means here: ViewportClickRouteFor
+    // (viewport/ViewportPickPolicy.hpp). This was an if/else-if whitelist on cmd.active, and a
+    // command left out of it silently discarded every viewport click and appeared to hang on its
+    // first prompt — it happened to RECT, then to FEATURELINE (TASK-082 BUG-1), then to all five
+    // of REQ-103's MIRROR/LENGTHEN/EXTEND/BREAK/STRETCH at once. The policy function is an
+    // exhaustive switch with no default, so the compiler objects when a Kind is added without a
+    // routing decision, and ViewportPickPolicyTests plus the headless CLICK verb can both reach
+    // it — neither of which was possible while the decision lived inline here.
+    switch (ViewportClickRouteFor(cmd)) {
+    case ViewportClickRoute::RawEntityPick:
+      // Entity-pick commands (OFFSET, REQ-069's designators, REQ-103's LENGTHEN/EXTEND/BREAK):
+      // the raw, unsnapped cursor position is what PickClosestCadEntity hit-tests against, not an
+      // OSNAP-adjusted commit point.
       SubmitViewportPick(cmd, rawPickX, rawPickY, log);
-    else if (cmd.active == K::PdfAttach &&
-             cmd.pdfAttachPhase == AppCommandState::PdfAttachPhase::WaitInsertPoint)
+      break;
+    case ViewportClickRoute::PdfAttachInsertPoint:
       SubmitPdfAttachInsertPoint(cmd, commitX, commitY, log);
-    else if (cmd.active == K::Align) {
-      using AP = AppCommandState::AlignPhase;
-      if (cmd.alignPhase == AP::PickSelection) {
-        if (!cmd.selBoxWaitingSecond)
-          BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
-        else
-          SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
-      } else {
-        SubmitViewportPick(cmd, commitX, commitY, log);
-      }
-    }
-    else if (cmd.active == K::Hatch) {
+      break;
+    case ViewportClickRoute::HatchPick: {
       // HATCH (REQ-043): trace the region under the click and fill it; the command stays active on a miss
       // so the user can click another spot (REQ-201 — nothing placed when no closed boundary is found).
       std::vector<float> loop;
@@ -9346,46 +10087,22 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       } else {
         log.push_back("HATCH — no closed boundary found there; click inside a closed area (Esc to cancel).");
       }
+      break;
     }
-    // Point-picking draw commands: the click is a coordinate, handed straight to the command state
-    // machine. A command missing from this list silently ignores every viewport click and appears to
-    // hang on its first prompt — which is exactly what RECT did before it was added here.
-    else if (cmd.active == K::Line || cmd.active == K::Circle || cmd.active == K::Polyline ||
-             cmd.active == K::FeatureLine ||  // REQ-087 / TASK-082 BUG-1 — omitted until 2026-08-20
-             cmd.active == K::Rect ||
-             cmd.active == K::Arc || cmd.active == K::Ellipse || cmd.active == K::Text ||
-             cmd.active == K::Mtext || cmd.active == K::DimAligned || cmd.active == K::DimLinear ||
-             cmd.active == K::DimAngular ||
-             cmd.active == K::IdPoint || cmd.active == K::SurveyInverse || cmd.active == K::Paste ||
-             cmd.active == K::SurfaceElevGrade)
+    case ViewportClickRoute::SnappedPointPick:
+      // Point-picking commands (draw commands, and every modify command past its selection
+      // phase): the click is a coordinate, handed straight to the command state machine at the
+      // OSNAP-adjusted commit point.
       SubmitViewportPick(cmd, commitX, commitY, log);
-    else if (cmd.active == K::Move || cmd.active == K::Copy || cmd.active == K::Scale) {
-      if (cmd.modifyPhase == MP::PickSelection) {
-        if (!cmd.selBoxWaitingSecond)
-          BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
-        else
-          SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
-      } else
-        SubmitViewportPick(cmd, commitX, commitY, log);
-    } else if (cmd.active == K::Rotate) {
-      if (cmd.rotatePhase == RP::PickSelection) {
-        if (!cmd.selBoxWaitingSecond)
-          BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
-        else
-          SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
-      } else
-        SubmitViewportPick(cmd, commitX, commitY, log);
-    } else if (cmd.active == K::Delete) {
+      break;
+    case ViewportClickRoute::SelectionBox:
+      // Fence: arm the first corner, or close the box on the second click.
       if (!cmd.selBoxWaitingSecond)
         BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
       else
         SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
-    } else if (cmd.active == K::Join) {
-      if (!cmd.selBoxWaitingSecond)
-        BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
-      else
-        SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
-    } else if (cmd.active == K::Trim) {
+      break;
+    case ViewportClickRoute::TrimPick: {
       const float trimTol = CadSnap::WorldToleranceFromPixels(avail.y, halfH, cmd.objectSnapAperturePx);
       using TP = AppCommandState::TrimPhase;
       const bool trimCutLinePt =
@@ -9393,12 +10110,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       const float tx = trimCutLinePt ? commitX : rawPickX;
       const float ty = trimCutLinePt ? commitY : rawPickY;
       SubmitTrimViewportPick(cmd, tx, ty, trimTol, log);
-    } else if (cmd.active == K::Zoom) {
-      if (!cmd.selBoxWaitingSecond)
-        BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
-      else
-        SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
-    } else if (cmd.active == K::None) {
+      break;
+    }
+    case ViewportClickRoute::Ignore:
+      // PAN/ORBIT (drag-driven), TRIMSTATE/ELEV (text prompts), VPFREEZE/VPTHAW (floating
+      // viewports only), PaperRectViewport (paper space only), PDFATTACH outside its
+      // insertion-point phase. Each is a decision, not an omission — see ViewportClickRouteFor.
+      break;
+    case ViewportClickRoute::IdleSelection: {
       bool handled = false;
       if (cmd.selBoxWaitingSecond) {
         SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
@@ -9797,7 +10516,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
         }
       }
+      break;
     }
+    }  // switch (ViewportClickRouteFor(cmd))
+    }  // else of "create-points window owns the click"
     }
   }
 
@@ -10490,16 +11212,29 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         sdl->AddText(pf, hPx, ImVec2(p.x, p.y - hPx), ghost, a.text.c_str());
       }
     }
-    // Paper-entity MOVE/COPY ghost + ROTATE preview (REQ-037): selected geometry transformed by the cursor.
-    if (!cmd.selectedPaperEntities.empty() && hovered && (cmd.paperMovePhase == 2 || cmd.paperRotatePhase == 2)) {
+    // Paper-entity MOVE/COPY ghost + ROTATE + MIRROR preview (REQ-037/REQ-103): selected geometry
+    // transformed by the cursor.
+    if (!cmd.selectedPaperEntities.empty() && hovered &&
+        (cmd.paperMovePhase == 2 || cmd.paperRotatePhase == 2 || cmd.paperMirrorPhase == 2)) {
       const ImU32 ghostCol = (cmd.paperMovePhase == 2 && cmd.paperMoveIsCopy) ? IM_COL32(120, 220, 120, 220)
                                                                               : IM_COL32(245, 200, 70, 220);
       const bool rotating = cmd.paperRotatePhase == 2;
+      const bool mirroring = cmd.paperMirrorPhase == 2;
       const float ang = rotating ? std::atan2(curPY - cmd.paperRotateBaseYIn, curPX - cmd.paperRotateBaseXIn) : 0.f;
       const float ca = std::cos(ang), sa = std::sin(ang);
       const float bX = cmd.paperRotateBaseXIn, bY = cmd.paperRotateBaseYIn;
       const float dX = curPX - cmd.paperMoveBaseXIn, dY = curPY - cmd.paperMoveBaseYIn;
+      const float mX0 = cmd.paperMirrorP1XIn, mY0 = cmd.paperMirrorP1YIn;
+      const float mdx = curPX - mX0, mdy = curPY - mY0;
+      const float mlen2 = mdx * mdx + mdy * mdy;
       auto xf = [&](float x, float y) -> ImVec2 {
+        if (mirroring) {
+          if (mlen2 < 1e-12f)
+            return w2s(x, y);
+          const float t = ((x - mX0) * mdx + (y - mY0) * mdy) / mlen2;
+          const float px = mX0 + t * mdx, py = mY0 + t * mdy;
+          return w2s(2.f * px - x, 2.f * py - y);
+        }
         if (rotating)
           return w2s(bX + (x - bX) * ca - (y - bY) * sa, bY + (x - bX) * sa + (y - bY) * ca);
         return w2s(x + dX, y + dY);
@@ -11877,6 +12612,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     wdl->PopClipRect();
   }
 
+  // ---- REQ-072 analysis legend (TASK-086 §6 (4)) ------------------------------------------------
+  DrawSurfaceAnalysisLegend(cmd, imgPos, avail);
+
   // ---- ViewCube (REQ-059) ----------------------------------------------------------------------
   // Model space only: a paper sheet is 2D (ADR-025 (g)) and has no orientation to show.
   if (modelSpace && avail.x > 40.f && avail.y > 40.f) {
@@ -11985,10 +12723,17 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (ImGui::MenuItem("Copy Selection")) { StartCopyCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Rotate"))         { StartRotateCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Scale"))          { StartScaleCommand(cmd, log);  ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Mirror"))         { StartMirrorCommand(cmd, log); ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Lengthen"))       { StartLengthenCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Erase"))          { StartDeleteCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         ImGui::Separator();
         if (ImGui::MenuItem("Offset"))         { StartOffsetCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Trim"))           { StartTrimCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Extend"))         { StartExtendCommand(cmd, log); ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Break"))          { StartBreakCommand(cmd, log);  ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Stretch"))        { StartStretchCommand(cmd, log); ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Fillet"))         { StartFilletCommand(cmd, log); ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Chamfer"))        { StartChamferCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Join"))           { StartJoinCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
         ImGui::EndMenu();
       }

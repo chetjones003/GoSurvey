@@ -1,0 +1,144 @@
+# REQ-103 step 5 (TASK-098) — STRETCH: Line partial stretch / whole-translate / crossing-selected-
+# no-op, open Polyline multi-vertex partial stretch, and the WINDOW-vs-CROSSING candidacy contrast.
+#
+# Verification strategy: since STRETCH never creates or destroys an entity (only mutates existing
+# coordinates), EXPECT LINES/POLYLINES counts alone cannot prove the geometry moved correctly. The
+# primary check here is SAVEAS + SAMEFILE against a SEPARATE document built by drawing the same
+# entities, in the same order, directly at their hand-computed post-stretch coordinates — a
+# byte-identical match proves the stretch produced exactly that geometry (ids included, since
+# STRETCH mints no new ids and both documents create the same 5 entities in the same order).
+#
+# Part A (Line): L1=(0,0)-(50,0), L2=(35,-5)-(45,5), L3=(20,0)-(80,0). Box (30,-10)-(70,10)
+# [crossing, default]. L1's right endpoint (50,0) is in-box -> moves; left (0,0) is not -> stays:
+# a genuine partial stretch. L2's both endpoints are in-box -> whole translate. L3's segment
+# crosses the box (candidate-selected) but NEITHER endpoint (20,0)/(80,0) is in-box -> a true
+# no-op, still selected, simply unmoved. Displacement (0,0)->(20,5), dx=20 dy=5.
+# Expected: L1=(0,0)-(70,5); L2=(55,0)-(65,10); L3 unchanged.
+#
+# Part B (open Polyline): P1 = (200,0)->(200,30)->(230,30)->(230,60). Box (190,20)-(240,40)
+# captures only the two middle vertices (200,30) and (230,30); the two end vertices are outside
+# (y=0 and y=60 are both outside [20,40]). Displacement (0,0)->(5,-5), dx=5 dy=-5.
+# Expected: P1 = (200,0),(205,25),(235,25),(230,60).
+#
+# Part C (WINDOW vs CROSSING candidacy): L4=(480,0)-(600,0), a long line whose segment passes
+# through the same box coordinates used below but whose OWN endpoints are both outside any box that
+# only spans x=[490,520]. C1: a WINDOW box (fully-inside required) over that x-range selects NOTHING
+# (neither endpoint is inside) -- the Fence log's selection count is 0, and the command re-prompts
+# rather than proceeding, so it is canceled. C2: the SAME box coordinates in CROSSING mode (default)
+# DOES select L4 (the segment overlaps the box) -- Fence count is 1 -- but since neither endpoint is
+# in-box, applying any displacement is still a no-op: this is the direct proof that WINDOW's stricter
+# candidacy and CROSSING's looser candidacy converge on the same geometric outcome here, differing
+# only in whether the entity is counted as "selected" at all (log-verified below).
+# TASK-099: drives clicks with CLICK, not PICK. PICK calls SubmitViewportPick directly and
+# skips the UI routing layer, which is exactly where this command was missing — the command
+# ignored every real viewport click while this transcript passed green. CLICK goes through
+# ViewportClickRouteFor, so an unrouted command fails here instead.
+#
+
+NEW
+
+CMD LINE
+CMD 0,0
+CMD 50,0
+ESC
+
+CMD LINE
+CMD 35,-5
+CMD 45,5
+ESC
+
+CMD LINE
+CMD 20,0
+CMD 80,0
+ESC
+
+CMD POLYLINE
+CMD 200,0
+CMD 200,30
+CMD 230,30
+CMD 230,60
+CMD END
+
+CMD LINE
+CMD 480,0
+CMD 600,0
+ESC
+
+CHECK ALL
+EXPECT LINES 4
+EXPECT POLYLINES 1
+
+# --- Part A ---
+CMD STRETCH
+BOX 30 -10 70 10
+CLICK 0 0
+CLICK 20 5
+ESC
+
+CHECK ALL
+EXPECT LINES 4
+EXPECT POLYLINES 1
+
+# --- Part B ---
+CMD STRETCH
+BOX 190 20 240 40
+CLICK 0 0
+CLICK 5 -5
+ESC
+
+CHECK ALL
+EXPECT LINES 4
+EXPECT POLYLINES 1
+
+# --- Part C1: WINDOW selects nothing ---
+CMD STRETCH
+BOX 490 -10 520 10 WINDOW
+EXPECT LOG "CAD 0, survey 0 (window)"
+EXPECT LOG "Nothing selected"
+ESC
+
+# --- Part C2: CROSSING selects L4, but neither endpoint is in-box -> no-op ---
+CMD STRETCH
+BOX 490 -10 520 10
+EXPECT LOG "CAD 1, survey 0 (crossing)"
+CLICK 0 0
+CLICK 1000 1000
+ESC
+
+CHECK ALL
+EXPECT LINES 4
+EXPECT POLYLINES 1
+SAVEAS %OUT%/stretch-lines-actual.gs
+
+NEW
+
+CMD LINE
+CMD 0,0
+CMD 70,5
+ESC
+
+CMD LINE
+CMD 55,0
+CMD 65,10
+ESC
+
+CMD LINE
+CMD 20,0
+CMD 80,0
+ESC
+
+CMD POLYLINE
+CMD 200,0
+CMD 205,25
+CMD 235,25
+CMD 230,60
+CMD END
+
+CMD LINE
+CMD 480,0
+CMD 600,0
+ESC
+
+CHECK ALL
+SAVEAS %OUT%/stretch-lines-expected.gs
+EXPECT SAMEFILE %OUT%/stretch-lines-actual.gs %OUT%/stretch-lines-expected.gs

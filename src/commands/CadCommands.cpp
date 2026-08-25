@@ -10,6 +10,9 @@
 #include "util/meshgeom.hpp"
 #include "util/tinbuild.hpp"
 #include "util/contourgen.hpp"  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
+#include "util/surfaceanalysis.hpp"  // REQ-072 banding + slope arrows (ADR-036 (g)) — pure, like contourgen
+#include "util/surfacevolume.hpp"  // REQ-073 surface-to-surface volumes (TASK-095) — pure, like surfaceanalysis
+#include "util/curveintersect.hpp"  // REQ-062 analytic intersections; EXTEND (TASK-096) reuses this over TRIM's tessellation
 #include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
 #include "util/gltfimport.hpp"
 #include "util/stlimport.hpp"
@@ -485,7 +488,14 @@ PaperLayout* ActivePaperGeometryTarget(AppCommandState& st) {
 
 using PaperRef = PaperEntityRef;
 
-void ClearPaperEntitySelection(AppCommandState& st) { st.selectedPaperEntities.clear(); }
+// A plain click-select carries no crossing/window box (REQ-103 STRETCH), unlike closePaperSelBox's
+// own selection, which sets paperSelBoxLastValid true right after populating selectedPaperEntities
+// (CadUi.cpp). Invalidating here — the shared funnel every non-box selection change goes through —
+// means STRETCH never mistakes a click-selected entity's stale prior box for a real one.
+void ClearPaperEntitySelection(AppCommandState& st) {
+  st.selectedPaperEntities.clear();
+  st.paperSelBoxLastValid = false;
+}
 
 static float PaperPointSegDist2(float px, float py, float ax, float ay, float bx, float by) {
   const float vx = bx - ax, vy = by - ay;
@@ -570,6 +580,9 @@ bool PickPaperEntityAt(const PaperLayout& L, float x, float y, float tolIn, Pape
 }
 
 void TogglePaperEntitySelection(AppCommandState& st, PaperRef ref, bool additive) {
+  // Same invalidation as ClearPaperEntitySelection, same reason (REQ-103 STRETCH): a click-built
+  // selection carries no box.
+  st.paperSelBoxLastValid = false;
   if (!additive) {
     st.selectedPaperEntities.assign(1, ref);
     return;
@@ -847,6 +860,134 @@ void RotateSelectedPaperEntities(AppCommandState& st, float baseX, float baseY, 
   }
   BumpCadGpuCache(st);
   log.push_back("ROTATE — rotated paper object(s).");
+}
+
+/// REQ-103 MIRROR, pure-paper-space path. Deliberately simpler than the model-space command: it
+/// always duplicates and keeps the source (no interactive "Erase source objects?" prompt), because
+/// the pure-paper-space click flow (CadUi.cpp's \c paperMirrorPhase state machine) has no text-entry
+/// surface to ask a Y/N question through — the same reason paper ROTATE has no copy mode at all.
+/// Recorded as a scoped simplification in TASK-094, not a silent gap: extending paper space with an
+/// erase-source toggle is separate future scope if a user asks for it.
+void MirrorSelectedPaperEntities(AppCommandState& st, float x0In, float y0In, float x1In, float y1In,
+                                 std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L || st.selectedPaperEntities.empty())
+    return;
+  // Self-contained reflect math (not the free \c ReflectPtAcrossLine/ReflectAngleAcrossLine — those
+  // are defined later in this translation unit; \c RotateSelectedPaperEntities above has the same
+  // shape for the same reason, a local \c rot lambda rather than calling \c RotateAroundBase).
+  const float mdx = x1In - x0In, mdy = y1In - y0In;
+  const float mlen2 = mdx * mdx + mdy * mdy;
+  auto refl = [&](float& x, float& y) {
+    if (mlen2 < 1e-12f)
+      return;
+    const float t = ((x - x0In) * mdx + (y - y0In) * mdy) / mlen2;
+    const float px = x0In + t * mdx, py = y0In + t * mdy;
+    x = 2.f * px - x;
+    y = 2.f * py - y;
+  };
+  const float mphi = std::atan2(mdy, mdx);
+  auto reflAngle = [&](float ang) { return 2.f * mphi - ang; };
+  PushUndoSnapshot(st, "Mirror paper geometry");
+  std::vector<PaperRef> newSel;
+  auto attrAt = [](const std::vector<EntityAttributes>& v, int i) {
+    return (i >= 0 && static_cast<size_t>(i) < v.size()) ? v[static_cast<size_t>(i)] : EntityAttributes{};
+  };
+  for (const PaperRef& r : st.selectedPaperEntities) {
+    switch (r.type) {
+    case PaperRef::Type::Line: {
+      const size_t i = static_cast<size_t>(r.index) * 6;
+      if (i + 5 >= L->paperLines.size())
+        break;
+      for (int k = 0; k < 6; ++k)
+        L->paperLines.push_back(L->paperLines[i + static_cast<size_t>(k)]);
+      const size_t j = L->paperLines.size() - 6;
+      refl(L->paperLines[j], L->paperLines[j + 1]);
+      refl(L->paperLines[j + 3], L->paperLines[j + 4]);
+      L->paperLineAttrs.push_back(attrAt(L->paperLineAttrs, r.index));
+      newSel.push_back({PaperRef::Type::Line, static_cast<int>(L->paperLines.size() / 6) - 1});
+      break;
+    }
+    case PaperRef::Type::Circle: {
+      const size_t i = static_cast<size_t>(r.index) * 3;
+      if (i + 2 >= L->paperCircles.size())
+        break;
+      float cx = L->paperCircles[i], cy = L->paperCircles[i + 1];
+      refl(cx, cy);
+      L->paperCircles.push_back(cx);
+      L->paperCircles.push_back(cy);
+      L->paperCircles.push_back(L->paperCircles[i + 2]);  // radius — reflection is an isometry
+      L->paperCircleAttrs.push_back(attrAt(L->paperCircleAttrs, r.index));
+      newSel.push_back({PaperRef::Type::Circle, static_cast<int>(L->paperCircles.size() / 3) - 1});
+      break;
+    }
+    case PaperRef::Type::Arc: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperArcs.size())
+        break;
+      CadArc a = L->paperArcs[static_cast<size_t>(r.index)];
+      // Same reflect-the-old-end-angle-into-the-new-start rule as the model-space path — a
+      // reflection reverses handedness, so the center alone does not say which way it now sweeps.
+      const float newStart = reflAngle(a.startRad + a.sweepRad);
+      refl(a.cx, a.cy);
+      a.startRad = newStart;
+      L->paperArcs.push_back(a);
+      L->paperArcAttrs.push_back(attrAt(L->paperArcAttrs, r.index));
+      newSel.push_back({PaperRef::Type::Arc, static_cast<int>(L->paperArcs.size()) - 1});
+      break;
+    }
+    case PaperRef::Type::Ellipse: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperEllipses.size())
+        break;
+      CadEllipse e = L->paperEllipses[static_cast<size_t>(r.index)];
+      float mx = e.cx + e.majVx, my = e.cy + e.majVy;
+      refl(e.cx, e.cy);
+      refl(mx, my);
+      e.majVx = mx - e.cx;
+      e.majVy = my - e.cy;
+      L->paperEllipses.push_back(e);
+      L->paperEllAttrs.push_back(attrAt(L->paperEllAttrs, r.index));
+      newSel.push_back({PaperRef::Type::Ellipse, static_cast<int>(L->paperEllipses.size()) - 1});
+      break;
+    }
+    case PaperRef::Type::Polyline: {
+      const int pi = r.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size())
+        break;
+      const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+      const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+      const int baseVert = L->paperPolyOffsets.empty() ? 0 : L->paperPolyOffsets.back();
+      for (int vi = v0; vi < v1; ++vi) {
+        float px = L->paperPolyVerts[static_cast<size_t>(vi * 3)];
+        float py = L->paperPolyVerts[static_cast<size_t>(vi * 3 + 1)];
+        refl(px, py);
+        L->paperPolyVerts.push_back(px);
+        L->paperPolyVerts.push_back(py);
+        L->paperPolyVerts.push_back(L->paperPolyVerts[static_cast<size_t>(vi * 3 + 2)]);
+      }
+      L->paperPolyOffsets.push_back(baseVert + (v1 - v0));
+      L->paperPolyClosed.push_back(static_cast<size_t>(pi) < L->paperPolyClosed.size() ? L->paperPolyClosed[static_cast<size_t>(pi)] : 0u);
+      L->paperPolyAttrs.push_back(attrAt(L->paperPolyAttrs, pi));
+      newSel.push_back({PaperRef::Type::Polyline, static_cast<int>(L->paperPolyOffsets.size()) - 2});
+      break;
+    }
+    case PaperRef::Type::Text: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperTexts.size())
+        break;
+      CadAnnotation a = L->paperTexts[static_cast<size_t>(r.index)];
+      // MIRRTEXT-off (D-2026-08-23-j): insertion point reflects, rotationRad (glyph orientation)
+      // is left untouched — same rule as the model-space Text/Mtext path.
+      refl(a.insX, a.insY);
+      L->paperTexts.push_back(std::move(a));
+      L->paperTextAttrs.push_back(attrAt(L->paperTextAttrs, r.index));
+      newSel.push_back({PaperRef::Type::Text, static_cast<int>(L->paperTexts.size()) - 1});
+      break;
+    }
+    }
+  }
+  if (!newSel.empty())
+    st.selectedPaperEntities = newSel;
+  BumpCadGpuCache(st);
+  log.push_back("MIRROR — mirrored paper object(s) (source kept).");
 }
 
 bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float tolWorld) {
@@ -1262,6 +1403,21 @@ bool SurfaceVisible(const AppCommandState& st, size_t surfaceIndex) {
   return !(it != st.drawingLayerTable.end() && (!it->on || it->frozen));
 }
 
+SurfaceState SurfaceRebuildStateOf(const AppCommandState& st, size_t surfaceIndex) {
+  if (surfaceIndex >= st.cadSurfaces.size())
+    return SurfaceState::Current;
+  const CadSurface& s = st.cadSurfaces[surfaceIndex];
+  // By stable id, matching how the job itself is keyed (ADR-036 (a)). Keying this on the name showed
+  // "Rebuilding" against the wrong surface the moment one was renamed mid-rebuild.
+  const std::uint64_t id =
+      surfaceIndex < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[surfaceIndex].id : 0;
+  if (id != 0)
+    for (const auto& job : st.surfaceRebuildAsync)
+      if (job && job->surfaceId == id)
+        return SurfaceState::Rebuilding;
+  return s.builtAtRevision == st.cadGpuRevision ? SurfaceState::Current : SurfaceState::Stale;
+}
+
 namespace {
 
 /// Ceiling on how many contour levels one surface may generate at (REQ-070).
@@ -1322,6 +1478,107 @@ void AppendTriangleEdges(const CadTin& t, std::vector<float>* out) {
     emit(t.indices[i], t.indices[i + 1]);
     emit(t.indices[i + 1], t.indices[i + 2]);
     emit(t.indices[i + 2], t.indices[i]);
+  }
+}
+
+/// The shaft length of a REQ-072 slope arrow, as a fraction of its triangle's own characteristic
+/// length (`sqrt(planArea)`) rather than a fixed world length — so an arrow on a fine TIN and one on
+/// a coarse TIN both read as "this triangle's" arrow instead of one swallowing its neighbours or
+/// vanishing inside them.
+constexpr double kArrowShaftFraction = 0.5;
+/// The head barbs' length, as a fraction of the shaft they sit on.
+constexpr double kArrowHeadFraction = 0.35;
+/// The half-angle each head barb sweeps back from the shaft.
+constexpr double kArrowHeadAngleRad = 0.4363;  // 25 degrees
+
+/// Builds REQ-072 band-fill and slope-arrow geometry for one triangulation under one style.
+///
+/// Both outputs are bucketed exactly as \ref AppCommandState::SurfaceDisplayCacheEntry documents:
+/// one buffer per range-table entry, plus one extra "unbanded" buffer at the end for a triangle (or
+/// arrow) `AssignBand` placed in no band. Both outputs are cleared unconditionally, and left with
+/// zero buckets — not one empty bucket — when the corresponding toggle (`analysisMode` / `slopeArrowsOn`)
+/// is off, so a plain-style surface pays nothing here and the assembly pass has nothing to iterate.
+void BuildSurfaceAnalysisGeometry(const CadTin& tin, const SurfaceStyle& style,
+                                  std::vector<std::vector<float>>* bandBuffers,
+                                  std::vector<std::vector<float>>* arrowBuffers) {
+  bandBuffers->clear();
+  arrowBuffers->clear();
+  const bool wantBands = style.analysisMode != SurfaceAnalysisMode::None;
+  const bool wantArrows = style.slopeArrowsOn;
+  if (!wantBands && !wantArrows)
+    return;
+
+  std::vector<double> bandBounds;
+  bandBounds.reserve(style.bands.size());
+  for (const SurfaceBand& sb : style.bands)
+    bandBounds.push_back(sb.upperBound);
+  std::vector<double> arrowBounds;
+  arrowBounds.reserve(style.arrowBands.size());
+  for (const SurfaceBand& sb : style.arrowBands)
+    arrowBounds.push_back(sb.upperBound);
+
+  if (wantBands)
+    bandBuffers->resize(bandBounds.size() + 1);
+  if (wantArrows)
+    arrowBuffers->resize(arrowBounds.size() + 1);
+
+  const double headCos = std::cos(kArrowHeadAngleRad);
+  const double headSin = std::sin(kArrowHeadAngleRad);
+
+  const auto emitSeg = [](std::vector<float>& buf, double ax, double ay, double az, double bx, double by,
+                          double bz) {
+    buf.push_back(static_cast<float>(ax));
+    buf.push_back(static_cast<float>(ay));
+    buf.push_back(static_cast<float>(az));
+    buf.push_back(static_cast<float>(bx));
+    buf.push_back(static_cast<float>(by));
+    buf.push_back(static_cast<float>(bz));
+  };
+
+  for (size_t i = 0; i + 2 < tin.indices.size(); i += 3) {
+    const std::uint32_t ia = tin.indices[i], ib = tin.indices[i + 1], ic = tin.indices[i + 2];
+    AnalysisTriangle t;
+    t.x0 = tin.vertsXyz[ia * 3 + 0]; t.y0 = tin.vertsXyz[ia * 3 + 1]; t.z0 = tin.vertsXyz[ia * 3 + 2];
+    t.x1 = tin.vertsXyz[ib * 3 + 0]; t.y1 = tin.vertsXyz[ib * 3 + 1]; t.z1 = tin.vertsXyz[ib * 3 + 2];
+    t.x2 = tin.vertsXyz[ic * 3 + 0]; t.y2 = tin.vertsXyz[ic * 3 + 1]; t.z2 = tin.vertsXyz[ic * 3 + 2];
+
+    if (wantBands) {
+      const double value = style.analysisMode == SurfaceAnalysisMode::Elevation ? TriangleCentroidZ(t)
+                                                                                 : TrianglePlaneSlopePct(t);
+      const int idx = AssignBand(value, bandBounds);
+      std::vector<float>& buf = (*bandBuffers)[idx >= 0 ? static_cast<size_t>(idx) : bandBounds.size()];
+      buf.push_back(static_cast<float>(t.x0)); buf.push_back(static_cast<float>(t.y0)); buf.push_back(static_cast<float>(t.z0));
+      buf.push_back(static_cast<float>(t.x1)); buf.push_back(static_cast<float>(t.y1)); buf.push_back(static_cast<float>(t.z1));
+      buf.push_back(static_cast<float>(t.x2)); buf.push_back(static_cast<float>(t.y2)); buf.push_back(static_cast<float>(t.z2));
+    }
+
+    if (wantArrows) {
+      double dx = 0.0, dy = 0.0;
+      if (!TriangleDownhillDirection(t, kFlatGradePctDefault, &dx, &dy))
+        continue;  // flat: REQ-072's "a perfectly flat triangle produces no arrow direction"
+
+      const double cx = (t.x0 + t.x1 + t.x2) / 3.0;
+      const double cy = (t.y0 + t.y1 + t.y2) / 3.0;
+      const double cz = (t.z0 + t.z1 + t.z2) / 3.0;
+      const double area2 = std::fabs((t.x1 - t.x0) * (t.y2 - t.y0) - (t.x2 - t.x0) * (t.y1 - t.y0));
+      const double charLen = std::sqrt(std::max(area2, 0.0) * 0.5);
+      const double shaftLen = charLen * kArrowShaftFraction;
+      const double tipX = cx + dx * shaftLen, tipY = cy + dy * shaftLen;
+
+      const double grade = TrianglePlaneSlopePct(t);
+      const int idx = AssignBand(grade, arrowBounds);
+      std::vector<float>& buf = (*arrowBuffers)[idx >= 0 ? static_cast<size_t>(idx) : arrowBounds.size()];
+      emitSeg(buf, cx, cy, cz, tipX, tipY, cz);
+
+      // Two head barbs swept back from the tip, built from the shaft's own unit vector so the head
+      // turns with the arrow rather than pointing a fixed compass direction.
+      const double backX = -dx, backY = -dy;
+      const double b1x = backX * headCos - backY * headSin, b1y = backX * headSin + backY * headCos;
+      const double b2x = backX * headCos + backY * headSin, b2y = -backX * headSin + backY * headCos;
+      const double headLen = shaftLen * kArrowHeadFraction;
+      emitSeg(buf, tipX, tipY, cz, tipX + b1x * headLen, tipY + b1y * headLen, cz);
+      emitSeg(buf, tipX, tipY, cz, tipX + b2x * headLen, tipY + b2y * headLen, cz);
+    }
   }
 }
 
@@ -1429,28 +1686,34 @@ SurfaceContourLevels ResolveSurfaceContourLevels(const CadTin& tin, const Surfac
   return out;
 }
 
-/// The resolved RGBA and lineweight for one component of a surface, folding the ByLayer chain the
-/// same way an entity's own attributes do.
+/// The resolved RGBA for one "ByLayer"-capable colour string on a surface, folding the ByLayer chain
+/// the same way an entity's own attributes do: "ByLayer" means the surface's own effective colour,
+/// which in turn may itself be ByLayer and resolve to the layer's.
 ///
-/// A component's "ByLayer" means the surface's own colour, which in turn may itself be ByLayer and
-/// resolve to the layer's. Doing it through the shared resolvers rather than by hand is what keeps a
-/// contour's ByLayer and a line's ByLayer meaning the same thing.
+/// Shared by \ref ResolveComponentBatch and REQ-072's band/arrow colours (TASK-086 §6) — a band's
+/// `SurfaceBand::color` uses \ref EntityAttributes::color's same encoding for the same reason a
+/// component's does, so both go through the one resolver rather than two hand-rolled copies of the
+/// ByLayer chain.
+void ResolveSurfaceStoredColorRgba(const AppCommandState& st, const EntityAttributes& surfAttr,
+                                   const std::string& colorStorage, float* outRgba) {
+  const CadLayerRow* layer = FindDrawingLayerRowCi(st, surfAttr.layer);
+  float surfaceRgba[4] = {1.f, 1.f, 1.f, 1.f};
+  ResolveEntityRgbaForViewport(surfAttr, layer, 0.42f, 0.62f, 0.78f, surfaceRgba);
+  ResolveStoredColorForViewport(colorStorage, surfAttr.transparency < 0.f ? 0.f : surfAttr.transparency,
+                                surfaceRgba[0], surfaceRgba[1], surfaceRgba[2], outRgba);
+  outRgba[3] = surfaceRgba[3];
+}
+
+/// The resolved RGBA and lineweight for one component of a surface — see
+/// \ref ResolveSurfaceStoredColorRgba for the colour half.
 SurfaceDisplayBatch ResolveComponentBatch(const AppCommandState& st, const EntityAttributes& surfAttr,
                                           const SurfaceComponentStyle& comp,
                                           const std::vector<float>* verts) {
   SurfaceDisplayBatch b;
   b.verts = verts;
-
-  const CadLayerRow* layer = FindDrawingLayerRowCi(st, surfAttr.layer);
-  // The surface's own effective colour first — that is what a component's ByLayer defers to.
-  float surfaceRgba[4] = {1.f, 1.f, 1.f, 1.f};
-  ResolveEntityRgbaForViewport(surfAttr, layer, 0.42f, 0.62f, 0.78f, surfaceRgba);
-  ResolveStoredColorForViewport(comp.color, surfAttr.transparency < 0.f ? 0.f : surfAttr.transparency,
-                                surfaceRgba[0], surfaceRgba[1], surfaceRgba[2], b.rgba);
-  b.rgba[3] = surfaceRgba[3];
-
+  ResolveSurfaceStoredColorRgba(st, surfAttr, comp.color, b.rgba);
   b.lineweightMm = comp.lineweightMm >= 0.f ? comp.lineweightMm
-                                            : EffectiveEntityLineweightMm(surfAttr, layer);
+                                            : EffectiveEntityLineweightMm(surfAttr, FindDrawingLayerRowCi(st, surfAttr.layer));
   return b;
 }
 
@@ -1548,12 +1811,17 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
         }
       }
     }
+
+    // REQ-072: unconditional — the builder itself clears both outputs to zero buckets when neither
+    // `analysisMode` nor `slopeArrowsOn` is on, which is what turns them off (§6 (2)/(3)).
+    BuildSurfaceAnalysisGeometry(*tin, resolved, &it->bandTriangleBuffers, &it->arrowLineBuffers);
   }
 
   // Assemble what the renderer is handed. Cheap by construction: the batches BORROW the buffers
   // above (see SurfaceDisplayBatch), so this pass copies pointers and colours, never vertices, and
   // is therefore safe to redo every frame — which it must be, because layer visibility and isolation
   // can change without any surface's geometry changing at all.
+  st.surfaceDisplayGeometry.bandTriangles.clear();
   st.surfaceDisplayGeometry.lines.clear();
   for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
     if (!SurfaceVisible(st, si))
@@ -1567,8 +1835,23 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
       continue;
     const EntityAttributes& attr = st.cadSurfaceAttrs[si];
 
-    // Draw order: triangles, then contours, then the border last so an outline stays readable over
-    // its own triangulation.
+    // REQ-072 band fills, FIRST — see CadSurfaceDisplayGeometry::bandTriangles. Bucket
+    // `it->style.bands.size()` is the "unbanded" overflow (TASK-086 §6 (2)); it takes the plain
+    // triangle style's colour rather than being dropped, so a table that does not span the surface's
+    // full range does not silently blank the part above it.
+    for (size_t bi = 0; bi < it->bandTriangleBuffers.size(); ++bi) {
+      const std::vector<float>& buf = it->bandTriangleBuffers[bi];
+      if (buf.empty())
+        continue;
+      const std::string& colorStr = bi < it->style.bands.size() ? it->style.bands[bi].color : it->style.triangles.color;
+      SurfaceTriangleBatch tb;
+      tb.verts = &buf;
+      ResolveSurfaceStoredColorRgba(st, attr, colorStr, tb.rgba);
+      st.surfaceDisplayGeometry.bandTriangles.push_back(tb);
+    }
+
+    // Draw order: triangles, then contours, then the border, so an outline stays readable over its
+    // own triangulation.
     const auto add = [&](const SurfaceComponentStyle& comp, const std::vector<float>* verts) {
       if (verts->empty())
         return;
@@ -1578,6 +1861,21 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
     add(it->style.minorContour, &it->minorContours);
     add(it->style.majorContour, &it->majorContours);
     add(it->style.border, &it->borderEdges);
+
+    // REQ-072 slope arrows, LAST — on top of the border, because an arrow that reads as buried under
+    // the outline it crosses is not a readable arrow. Bucket `arrowBands.size()` is the "unbanded"
+    // overflow, drawn in the surface's own colour ("ByLayer") rather than dropped.
+    for (size_t ai = 0; ai < it->arrowLineBuffers.size(); ++ai) {
+      const std::vector<float>& buf = it->arrowLineBuffers[ai];
+      if (buf.empty())
+        continue;
+      const std::string colorStr = ai < it->style.arrowBands.size() ? it->style.arrowBands[ai].color : std::string("ByLayer");
+      SurfaceDisplayBatch b;
+      b.verts = &buf;
+      ResolveSurfaceStoredColorRgba(st, attr, colorStr, b.rgba);
+      b.lineweightMm = -1.f;
+      st.surfaceDisplayGeometry.lines.push_back(b);
+    }
   }
 }
 
@@ -2089,6 +2387,107 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
   }
 }
 
+/// Whether a Base/Comparison pair is ready to compare: both ids resolve, both are current (REQ-069's
+/// own dirty check), and both have a triangulation. Shared by \ref TickVolumeDashboard's real
+/// dispatch gate and `VOLDASH RECOMPUTE`'s synchronous test surrogate (TASK-095 §8) — REQ-073's
+/// "picking a surface that is itself out of date is reflected as such" cannot drift between the live
+/// path and the headless-testable one if both ask this single function.
+bool VolumeDashboardReady(const AppCommandState& st, std::uint64_t baseId, std::uint64_t compId,
+                          std::string* whyNot) {
+  const int baseIx = FindSurfaceIndexById(st, baseId);
+  const int compIx = FindSurfaceIndexById(st, compId);
+  if (baseIx < 0 || compIx < 0) {
+    if (whyNot)
+      *whyNot = "a picked surface no longer exists";
+    return false;
+  }
+  const CadSurface& baseSurf = st.cadSurfaces[static_cast<size_t>(baseIx)];
+  const CadSurface& compSurf = st.cadSurfaces[static_cast<size_t>(compIx)];
+  if (baseSurf.builtAtRevision != st.cadGpuRevision || compSurf.builtAtRevision != st.cadGpuRevision) {
+    if (whyNot)
+      *whyNot = "waiting for a surface to finish rebuilding";
+    return false;
+  }
+  if (!baseSurf.tin || !compSurf.tin) {
+    if (whyNot)
+      *whyNot = "a surface has no triangulation yet";
+    return false;
+  }
+  return true;
+}
+
+void TickVolumeDashboard(AppCommandState& st) {
+  using DashJob = AppCommandState::VolumeDashboardAsync;
+  AppCommandState::VolumeDashboardState& dash = st.volumeDashboard;
+
+  // Reap a finished job first, so a selection change made while it ran can redispatch this same
+  // frame rather than waiting one extra frame — the same ordering TickSurfaceRebuilds itself uses.
+  if (dash.job && dash.job->done.load(std::memory_order_acquire)) {
+    dash.job->thread.join();
+    // Applied only if NOTHING has changed since dispatch: the drawing revision matches, AND the
+    // panel's pick is still the pair this job was computed for (architecture §8 rule 4 / REQ-073's
+    // own "the panel's surface pick changed... discarded"). Either failing means discard — the panel
+    // simply looks stale again and redispatches below on this same tick.
+    if (st.cadGpuRevision == dash.job->generation && dash.baseSurfaceId == dash.job->baseSurfaceId &&
+        dash.comparisonSurfaceId == dash.job->comparisonSurfaceId) {
+      dash.lastResult = dash.job->result;
+      dash.hasResult = true;
+      dash.resultForRevision = dash.job->generation;
+      dash.resultForBaseSurfaceId = dash.job->baseSurfaceId;
+      dash.resultForComparisonSurfaceId = dash.job->comparisonSurfaceId;
+      dash.resultHasMap = dash.job->wantMap;
+      dash.mapCutTrianglesXyz = std::move(dash.job->cutTrianglesXyz);
+      dash.mapFillTrianglesXyz = std::move(dash.job->fillTrianglesXyz);
+    }
+    dash.job.reset();
+  }
+
+  // Nothing to do while the panel is closed (ASSUMPTION-5, TASK-095: no benefit to recomputing what
+  // nobody is looking at), nothing picked, or a job is already in flight.
+  if (!dash.open || dash.baseSurfaceId == 0 || dash.comparisonSurfaceId == 0 || dash.job)
+    return;
+
+  if (!VolumeDashboardReady(st, dash.baseSurfaceId, dash.comparisonSurfaceId, nullptr))
+    return;  // not resolvable, or a picked surface is itself out of date — REQ-073's own gate
+
+  const CadSurface& baseSurf = st.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.baseSurfaceId))];
+  const CadSurface& compSurf =
+      st.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.comparisonSurfaceId))];
+
+  // Already current for this exact pick, revision AND map want — nothing to recompute. The map-want
+  // half is what makes turning the map ON after a mapless result redispatch: `resultHasMap` was
+  // false, `dash.showMap` is now true, so the comparison below fails and a fresh job (this time
+  // WITH the map) is dispatched, rather than the panel silently showing stale (absent) map geometry.
+  if (dash.hasResult && dash.resultForRevision == st.cadGpuRevision &&
+      dash.resultForBaseSurfaceId == dash.baseSurfaceId &&
+      dash.resultForComparisonSurfaceId == dash.comparisonSurfaceId &&
+      (dash.resultHasMap || !dash.showMap))
+    return;
+
+  auto job = std::make_unique<DashJob>();
+  job->baseSurfaceId = dash.baseSurfaceId;
+  job->comparisonSurfaceId = dash.comparisonSurfaceId;
+  job->tinBase = baseSurf.tin;              // strong refs: architecture §11.5, see the struct's note
+  job->tinComparison = compSurf.tin;
+  job->wantMap = dash.showMap;
+  job->generation = st.cadGpuRevision;
+  DashJob* jobPtr = job.get();
+  jobPtr->thread = std::thread([jobPtr]() {
+    if (jobPtr->cancel.load(std::memory_order_acquire)) {
+      jobPtr->done.store(true, std::memory_order_release);
+      return;
+    }
+    // Pure, and touches no AppCommandState (architecture §8 rule 1) — everything it needs was
+    // resolved on the UI thread above and captured by value/shared_ptr on the job itself.
+    jobPtr->result = ComputeSurfaceVolume(
+        jobPtr->tinBase->vertsXyz, jobPtr->tinBase->indices, jobPtr->tinComparison->vertsXyz,
+        jobPtr->tinComparison->indices, jobPtr->wantMap ? &jobPtr->cutTrianglesXyz : nullptr,
+        jobPtr->wantMap ? &jobPtr->fillTrianglesXyz : nullptr);
+    jobPtr->done.store(true, std::memory_order_release);
+  });
+  dash.job = std::move(job);
+}
+
 namespace {
 
 /// Splits `a, b, c` into trimmed fields.
@@ -2454,7 +2853,10 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
   const auto usage = [&]() {
     log.push_back("SURFSTYLE — usage: SURFSTYLE (opens the editor) | NEW <style> | DELETE <style> | "
                   "INTERVAL <style>, <minor>, <major> | SHOW|HIDE <style>, "
-                  "<triangles|border|major|minor|points> | ASSIGN <surface>, <style>");
+                  "<triangles|border|major|minor|points> | ASSIGN <surface>, <style> | "
+                  "ANALYSIS <style>, none|elevation|slope | BAND <style>, <upper bound>, <color> | "
+                  "CLEARBANDS <style> | ARROWS <style>, on|off | "
+                  "ARROWBAND <style>, <upper bound>, <color> | CLEARARROWBANDS <style>");
   };
 
   if (verb == "new") {
@@ -2597,9 +2999,266 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
     return;
   }
 
+  // --- REQ-072: the command form of the Analysis tab (TASK-086 §9) -----------------------------
+  // The Analysis tab is an ImGui window this headless driver cannot reach — the same limitation
+  // INTERVAL/SHOW/HIDE already work around — so these verbs call the exact same fields the tab
+  // edits, and what a transcript proves is the real edit path rather than a test-only shortcut.
+
+  if (verb == "analysis") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+      usage();
+      return;
+    }
+    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    if (!s) {
+      log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
+      return;
+    }
+    const std::string mode = StringUtil::toLowerAsciiCopy(f[1]);
+    SurfaceAnalysisMode m;
+    if (mode == "none") m = SurfaceAnalysisMode::None;
+    else if (mode == "elevation") m = SurfaceAnalysisMode::Elevation;
+    else if (mode == "slope") m = SurfaceAnalysisMode::Slope;
+    else {
+      log.push_back("SURFSTYLE — analysis type must be none, elevation or slope, not \"" + f[1] + "\".");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface style");
+    s->analysisMode = m;
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — \"" + s->name + "\" analysis: " + mode + ".");
+    return;
+  }
+
+  if (verb == "band" || verb == "arrowband") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 3 || f[0].empty() || f[2].empty()) {
+      usage();
+      return;
+    }
+    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    if (!s) {
+      log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
+      return;
+    }
+    double bound = 0.0;
+    if (!ParseIntervalField(f[1], "band bound", &bound, log))
+      return;
+    PushUndoSnapshot(st, "Surface style");
+    std::vector<SurfaceBand>& bands = (verb == "band") ? s->bands : s->arrowBands;
+    bands.push_back({bound, StringUtil::trimCopy(f[2])});
+    // Kept strictly ascending exactly as the Analysis tab's `BandTableEditor` re-sorts on every edit
+    // (`ui/CadUi_SurfaceStyles.cpp`) — `AssignBand`'s precondition (`util/surfaceanalysis.hpp`), so a
+    // command-built table is never in a different state than a hand-built one.
+    std::sort(bands.begin(), bands.end(),
+             [](const SurfaceBand& a, const SurfaceBand& b) { return a.upperBound < b.upperBound; });
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — \"" + s->name + "\" " + verb + " added: <= " + f[1] + " -> " + f[2] + ".");
+    return;
+  }
+
+  if (verb == "clearbands" || verb == "cleararrowbands") {
+    const std::string name = StringUtil::trimCopy(rest);
+    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, name);
+    if (!s) {
+      log.push_back("SURFSTYLE — no style named \"" + name + "\".");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface style");
+    (verb == "clearbands" ? s->bands : s->arrowBands).clear();
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — \"" + s->name + "\" " + verb + ".");
+    return;
+  }
+
+  if (verb == "arrows") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+      usage();
+      return;
+    }
+    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    if (!s) {
+      log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
+      return;
+    }
+    const std::string onOff = StringUtil::toLowerAsciiCopy(f[1]);
+    if (onOff != "on" && onOff != "off") {
+      log.push_back("SURFSTYLE — arrows must be on or off, not \"" + f[1] + "\".");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface style");
+    s->slopeArrowsOn = (onOff == "on");
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — \"" + s->name + "\" slope arrows " + onOff + ".");
+    return;
+  }
+
   usage();
 }
 
+/// `VOLUMES <base surface>, <comparison surface>` — REQ-073's cut/fill/net report (TASK-095 §6
+/// step 1/2), the synchronous command form of the eventual Volume Dashboard: it exists so the
+/// requirement's ORIGINAL (2026-08-12) acceptance is reachable and testable from a headless
+/// transcript before any panel or async wiring exists, exactly the role SURFELEV played for REQ-074
+/// before REQ-075's manager panel.
+///
+/// **Self-comparison is ANSWERED, not refused** — REQ-073's own acceptance requires "comparing a
+/// surface with itself reports zero net within tolerance", so `VOLUMES Foo, Foo` must compute rather
+/// than being rejected as a no-op the way some other entity-vs-itself commands elsewhere are.
+void ExecuteVolumesCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+    log.push_back("VOLUMES — usage: VOLUMES <base surface>, <comparison surface>.");
+    return;
+  }
+  const int baseIx = FindSurfaceIndex(st, f[0]);
+  if (baseIx < 0) {
+    log.push_back("VOLUMES — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  const int compIx = FindSurfaceIndex(st, f[1]);
+  if (compIx < 0) {
+    log.push_back("VOLUMES — no surface named \"" + f[1] + "\".");
+    return;
+  }
+  const std::shared_ptr<const CadTin>& baseTin = st.cadSurfaces[static_cast<size_t>(baseIx)].tin;
+  const std::shared_ptr<const CadTin>& compTin = st.cadSurfaces[static_cast<size_t>(compIx)].tin;
+  if (!baseTin || !compTin) {
+    log.push_back("VOLUMES — \"" + f[0] + "\" and \"" + f[1] + "\" must both have a triangulation "
+                  "before a volume can be reported.");
+    return;
+  }
+
+  const SurfaceVolumeResult r =
+      ComputeSurfaceVolume(baseTin->vertsXyz, baseTin->indices, compTin->vertsXyz, compTin->indices);
+  const int p = st.displayLinearPrecision;
+  if (!r.overlapped) {
+    // REQ-073: "report zero volume and say so, rather than reporting a number derived from no
+    // common area" — the zeros below are the true computed result, not a placeholder for a refusal.
+    log.push_back("VOLUMES — \"" + f[0] + "\" and \"" + f[1] + "\" have no common area. Cut 0, fill "
+                  "0, net 0.");
+    return;
+  }
+  char buf[384];
+  std::snprintf(buf, sizeof(buf),
+                "VOLUMES — \"%s\" (base) vs \"%s\" (comparison): cut %s ft3, fill %s ft3, net %s "
+                "ft3, common area %s ft2.",
+                f[0].c_str(), f[1].c_str(), FormatLinear(r.cutFt3, p).c_str(),
+                FormatLinear(r.fillFt3, p).c_str(), FormatLinear(r.netFt3, p).c_str(),
+                FormatLinear(r.commonAreaFt2, p).c_str());
+  log.push_back(buf);
+}
+
+/// `VOLDASH [<verb> …]` — the command form of the Volume Dashboard panel (REQ-073 amendment,
+/// TASK-095 §8), the same role `SURFSTYLE`'s verbs play for the Analysis tab: the panel is an ImGui
+/// window this headless driver cannot reach, so PICK/MAP/CLOSE call the exact fields the panel edits.
+///
+/// **`RECOMPUTE` is the synchronous test surrogate for the real async live-recompute
+/// (`TickVolumeDashboard`)** — the same relationship `SURFACEREBUILD` has to `TickSurfaceRebuilds`
+/// (REQ-069's own precedent, `req069-surface-definition-commands.txt`'s header): a headless driver
+/// with no frame loop cannot race a real background thread deterministically, so the TRUE live
+/// behaviour (automatic recompute with no user action, driven by `main.cpp`'s frame loop) is verified
+/// manually, exactly as REQ-069's dynamic rebuild itself is. `RECOMPUTE` shares
+/// `VolumeDashboardReady` — the identical readiness gate the real async path uses — so what IS
+/// testable here (the panel's own state transitions: which pick, which stale/waiting reason, the map
+/// toggle) cannot silently disagree with the live path about when a comparison is ready.
+void ExecuteVolDashCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  AppCommandState::VolumeDashboardState& dash = st.volumeDashboard;
+
+  std::string rest;
+  const std::string verb = StringUtil::toLowerAsciiCopy(
+      StringUtil::trimCopy(args.substr(0, args.find_first_of(" \t,"))));
+  {
+    const size_t sp = args.find_first_of(" \t");
+    rest = sp == std::string::npos ? std::string() : StringUtil::trimCopy(args.substr(sp + 1));
+  }
+
+  if (verb.empty()) {
+    dash.open = true;
+    log.push_back("VOLDASH — Volume Dashboard opened.");
+    return;
+  }
+
+  const auto usage = [&]() {
+    log.push_back("VOLDASH — usage: VOLDASH (opens the panel) | CLOSE | "
+                  "PICK <base surface>, <comparison surface> | MAP on|off | RECOMPUTE");
+  };
+
+  if (verb == "close") {
+    dash.open = false;
+    log.push_back("VOLDASH — Volume Dashboard closed.");
+    return;
+  }
+
+  if (verb == "pick") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 2 || f[0].empty() || f[1].empty()) {
+      usage();
+      return;
+    }
+    const int baseIx = FindSurfaceIndex(st, f[0]);
+    if (baseIx < 0) {
+      log.push_back("VOLDASH — no surface named \"" + f[0] + "\".");
+      return;
+    }
+    const int compIx = FindSurfaceIndex(st, f[1]);
+    if (compIx < 0) {
+      log.push_back("VOLDASH — no surface named \"" + f[1] + "\".");
+      return;
+    }
+    dash.baseSurfaceId = st.cadSurfaceAttrs[static_cast<size_t>(baseIx)].id;
+    dash.comparisonSurfaceId = st.cadSurfaceAttrs[static_cast<size_t>(compIx)].id;
+    log.push_back("VOLDASH — base \"" + f[0] + "\", comparison \"" + f[1] + "\".");
+    return;
+  }
+
+  if (verb == "map") {
+    const std::string onOff = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(rest));
+    if (onOff != "on" && onOff != "off") {
+      log.push_back("VOLDASH — map must be on or off, not \"" + rest + "\".");
+      return;
+    }
+    dash.showMap = (onOff == "on");
+    log.push_back(std::string("VOLDASH — cut/fill map ") + onOff + ".");
+    return;
+  }
+
+  if (verb == "recompute") {
+    if (dash.baseSurfaceId == 0 || dash.comparisonSurfaceId == 0) {
+      log.push_back("VOLDASH — pick a base and a comparison surface first.");
+      return;
+    }
+    std::string whyNot;
+    if (!VolumeDashboardReady(st, dash.baseSurfaceId, dash.comparisonSurfaceId, &whyNot)) {
+      log.push_back("VOLDASH — not ready: " + whyNot + ".");
+      return;
+    }
+    const CadSurface& baseSurf =
+        st.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.baseSurfaceId))];
+    const CadSurface& compSurf =
+        st.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.comparisonSurfaceId))];
+    dash.mapCutTrianglesXyz.clear();
+    dash.mapFillTrianglesXyz.clear();
+    dash.lastResult = ComputeSurfaceVolume(
+        baseSurf.tin->vertsXyz, baseSurf.tin->indices, compSurf.tin->vertsXyz, compSurf.tin->indices,
+        dash.showMap ? &dash.mapCutTrianglesXyz : nullptr, dash.showMap ? &dash.mapFillTrianglesXyz : nullptr);
+    dash.hasResult = true;
+    dash.resultForRevision = st.cadGpuRevision;
+    dash.resultForBaseSurfaceId = dash.baseSurfaceId;
+    dash.resultForComparisonSurfaceId = dash.comparisonSurfaceId;
+    dash.resultHasMap = dash.showMap;
+    const int p = st.displayLinearPrecision;
+    log.push_back("VOLDASH — cut " + FormatLinear(dash.lastResult.cutFt3, p) + " ft3, fill " +
+                  FormatLinear(dash.lastResult.fillFt3, p) + " ft3, net " +
+                  FormatLinear(dash.lastResult.netFt3, p) + " ft3, common area " +
+                  FormatLinear(dash.lastResult.commonAreaFt2, p) + " ft2.");
+    return;
+  }
+
+  usage();
+}
 
 /// `UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY|POINTFILE>, <n>` — removes one item from a surface's
 /// definition (REQ-069's "remove", the counterpart to DESIGNATEBREAKLINE/DESIGNATEBOUNDARY). \p n is
@@ -3437,6 +4096,19 @@ static void ResetModifyRotateDraft(AppCommandState& st) {
   st.rotateRefX1 = st.rotateRefY1 = st.rotateRefX2 = st.rotateRefY2 = 0.f;
   st.rotateAnglePt1X = st.rotateAnglePt1Y = 0.f;
   st.rotateCopyMode = false;
+  st.mirrorPhase = AppCommandState::MirrorPhase::PickSelection;
+  st.mirrorP1X = st.mirrorP1Y = st.mirrorP2X = st.mirrorP2Y = 0.f;
+  st.lengthenPhase = AppCommandState::LengthenPhase::WaitSelectOrMode;
+  st.extendPhase = AppCommandState::ExtendPhase::SelectBoundaries;
+  // TASK-099 F4. The phase enums above were reset without the collections and latched entities
+  // that go with them, so this left EXTEND's boundary list and BREAK's pending entity behind.
+  // CancelActiveCommand happened to reset those itself immediately after calling this, which hid
+  // it; every other caller (FinishMirrorCommand, LENGTHEN's Enter finish) did not.
+  st.extendBoundaries.clear();
+  st.breakPhase = AppCommandState::BreakPhase::SelectFirstPoint;
+  st.breakEntity = SelectedEntity{};
+  st.lengthenPendingEntity = SelectedEntity{};
+  st.lengthenPendingApplyOnValue = false;
 }
 
 static void ClearPendingViewportZoom(AppCommandState& st) {
@@ -3580,6 +4252,13 @@ const CmdEntry kRegistry[] = {
     {"copy", "cp", "Copy objects"},
     {"rotate", "ro", "Rotate objects"},
     {"scale", "sc", "Scale objects"},
+    {"mirror", "mi", "Mirror objects across a line"},
+    {"lengthen", "len", "Change an object's length (DElta/Percent/Total/DYnamic)"},
+    {"extend", "ex", "Extend objects to a boundary edge"},
+    {"break", "br", "Split an object at one or two picked points"},
+    {"stretch", "s", "Crossing/window-select, then move only the vertices inside the box"},
+    {"fillet", "f", "Round a corner between two curves with a tangent arc (Radius/Trim)"},
+    {"chamfer", "cha", "Connect two curves with a straight bevel (Distance/Angle/Trim)"},
     {"delete", "del", "Erase objects"},
     {"join", "j", "Join collinear objects"},
     {"trim", "tr", "Trim objects to an edge"},
@@ -3604,6 +4283,8 @@ const CmdEntry kRegistry[] = {
     {"style", "st, ddstyle", "Text style manager: create / edit named text styles"},
     {"surfstyle", "ss", "Surface style editor: contours, triangles, border (REQ-070)"},
     {"extract", "", "Bake a surface's displayed contours into polylines: EXTRACT <surface>[, <layer>]"},
+    {"volumes", "vol", "Cut/fill/net volume between two surfaces: VOLUMES <base>, <comparison> (REQ-073)"},
+    {"voldash", "", "Volume Dashboard: live cut/fill/net panel between two surfaces (REQ-073)"},
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"pdfattach", "pa", "Attach a PDF underlay"},
     {"overkill",     "ok", "Remove duplicate geometry"},
@@ -4031,6 +4712,34 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "scale") {
     StartScaleCommand(st, log);
+    return true;
+  }
+  if (primary == "mirror") {
+    StartMirrorCommand(st, log);
+    return true;
+  }
+  if (primary == "lengthen") {
+    StartLengthenCommand(st, log);
+    return true;
+  }
+  if (primary == "extend") {
+    StartExtendCommand(st, log);
+    return true;
+  }
+  if (primary == "break") {
+    StartBreakCommand(st, log);
+    return true;
+  }
+  if (primary == "stretch") {
+    StartStretchCommand(st, log);
+    return true;
+  }
+  if (primary == "fillet") {
+    StartFilletCommand(st, log);
+    return true;
+  }
+  if (primary == "chamfer") {
+    StartChamferCommand(st, log);
     return true;
   }
   if (primary == "delete") {
@@ -4741,6 +5450,32 @@ void RotateAroundBase(float bx, float by, float rad, float* x, float* y) {
   *y = by + s * dx + c * dy;
 }
 
+/// REQ-103 MIRROR. Reflects (*x,*y) across the line through (x0,y0)-(x1,y1). A degenerate
+/// (near-zero-length) mirror line leaves the point unchanged rather than dividing by ~0 — callers
+/// require two distinct points before a mirror commits (see \c HandleMirrorText), so this is a
+/// safety net, not a user-facing path.
+void ReflectPtAcrossLine(float x0, float y0, float x1, float y1, float* x, float* y) {
+  const float dx = x1 - x0;
+  const float dy = y1 - y0;
+  const float len2 = dx * dx + dy * dy;
+  if (len2 < 1e-12f)
+    return;
+  const float t = ((*x - x0) * dx + (*y - y0) * dy) / len2;
+  const float projX = x0 + t * dx;
+  const float projY = y0 + t * dy;
+  *x = 2.f * projX - *x;
+  *y = 2.f * projY - *y;
+}
+
+/// Reflects a direction/angle across the mirror line's own direction angle phi = atan2(dy,dx):
+/// angle' = 2*phi - angle. Used to re-derive an arc's swept range after reflection (see
+/// \c DuplicateCadSelectionReflected) — reflecting a center point alone does not tell you which
+/// way the arc now sweeps, because a reflection reverses handedness (CCW becomes CW).
+static float ReflectAngleAcrossLine(float x0, float y0, float x1, float y1, float angle) {
+  const float phi = std::atan2(y1 - y0, x1 - x0);
+  return 2.f * phi - angle;
+}
+
 /// Rotates \c DimLinear extension points and offset; keeps \p ann.dimLinearVertical; refreshes \p ann.rotationRad.
 
 static void RotateCadDimLinearAroundBase(float bx, float by, float rad, CadAnnotation* ann) {
@@ -4758,6 +5493,36 @@ static void RotateCadDimLinearAroundBase(float bx, float by, float rad, CadAnnot
   RotateAroundBase(bx, by, rad, &ann->dimExt1X, &ann->dimExt1Y);
   RotateAroundBase(bx, by, rad, &ann->dimExt2X, &ann->dimExt2Y);
   RotateAroundBase(bx, by, rad, &dmx, &dmy);
+  const float ncmx = 0.5f * (ann->dimExt1X + ann->dimExt2X);
+  const float ncmy = 0.5f * (ann->dimExt1Y + ann->dimExt2Y);
+  if (!ann->dimLinearVertical)
+    ann->dimSignedOffset = dmy - ncmy;
+  else
+    ann->dimSignedOffset = dmx - ncmx;
+  float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+  if (CadDimLinearGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+    ann->rotationRad = std::atan2(ty, tx);
+}
+
+/// REQ-103 MIRROR. Same shape as \c RotateCadDimLinearAroundBase, reflecting instead of rotating.
+/// \c ann->rotationRad here is the dimension LINE's geometric angle (text runs parallel to what was
+/// measured), not a glyph-flip concern — it is re-derived from the reflected geometry the same way
+/// ROTATE already does, independent of the MIRROR text-stays-upright decision for plain Text/Mtext.
+static void ReflectCadDimLinearAcrossLine(float x0, float y0, float x1, float y1, CadAnnotation* ann) {
+  if (!ann || ann->kind != CadAnnotation::Kind::DimLinear)
+    return;
+  const float ex1 = ann->dimExt1X, ey1 = ann->dimExt1Y, ex2 = ann->dimExt2X, ey2 = ann->dimExt2Y;
+  const float cmx = 0.5f * (ex1 + ex2);
+  const float cmy = 0.5f * (ey1 + ey2);
+  float dmx = cmx;
+  float dmy = cmy;
+  if (!ann->dimLinearVertical)
+    dmy = cmy + ann->dimSignedOffset;
+  else
+    dmx = cmx + ann->dimSignedOffset;
+  ReflectPtAcrossLine(x0, y0, x1, y1, &ann->dimExt1X, &ann->dimExt1Y);
+  ReflectPtAcrossLine(x0, y0, x1, y1, &ann->dimExt2X, &ann->dimExt2Y);
+  ReflectPtAcrossLine(x0, y0, x1, y1, &dmx, &dmy);
   const float ncmx = 0.5f * (ann->dimExt1X + ann->dimExt2X);
   const float ncmy = 0.5f * (ann->dimExt1Y + ann->dimExt2Y);
   if (!ann->dimLinearVertical)
@@ -5524,6 +6289,248 @@ void DropSurfacesFromSelectionForTransform(AppCommandState& st, const char* comm
                 " Edit its definition in the Surfaces panel instead.");
 }
 
+/// REQ-103 MIRROR. Drops the three entity kinds a mirror cannot represent, and says why (REQ-201)
+/// rather than silently doing nothing to them: `FilledRegion` (hatches) — already out of scope for
+/// rotate/scale/mirror, requirements.md's REQ-042 fills note; `Mesh` — never edited by any existing
+/// transform (REQ-063, reference-only geometry); `PdfUnderlay` — its stored orientation is a scalar
+/// rotation-degrees/scale pair with no way to represent a reflection (a "flip" field would be new
+/// scope, not this task's). Surfaces are handled separately by the existing
+/// \ref DropSurfacesFromSelectionForTransform, reused as-is.
+static void DropMirrorUnsupportedFromSelection(AppCommandState& st, std::vector<std::string>& log) {
+  size_t filled = 0, mesh = 0, pdf = 0;
+  st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
+                                    [&](const SelectedEntity& e) {
+                                      if (e.type == SelectedEntity::Type::FilledRegion) { ++filled; return true; }
+                                      if (e.type == SelectedEntity::Type::Mesh) { ++mesh; return true; }
+                                      if (e.type == SelectedEntity::Type::PdfUnderlay) { ++pdf; return true; }
+                                      return false;
+                                    }),
+                     st.selection.end());
+  if (filled)
+    log.push_back("MIRROR — " + std::to_string(filled) + " hatch fill(s) excluded: mirroring solid" +
+                  " fills is not supported yet.");
+  if (mesh)
+    log.push_back("MIRROR — " + std::to_string(mesh) + " imported model(s) excluded: imported meshes" +
+                  " are reference-only geometry and are never edited.");
+  if (pdf)
+    log.push_back("MIRROR — " + std::to_string(pdf) + " PDF underlay(s) excluded: an underlay's stored" +
+                  " orientation cannot represent a reflection yet.");
+}
+
+/// REQ-103 MIRROR. Same shape as \c DuplicateCadSelectionRotated — builds new entities reflected
+/// across the line through (x0,y0)-(x1,y1) and appends them, never mutating the source selection in
+/// place. MIRROR's default behavior always duplicates (erase-source, if requested, runs separately
+/// afterward against the original selection — see \c FinishMirrorCommand), unlike ROTATE/SCALE
+/// where duplication is the opt-in "copy" mode.
+static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float y0, float x1, float y1,
+                                           std::vector<std::string>& log) {
+  DropSurfacesFromSelectionForTransform(st, "MIRROR", log);
+  DropMirrorUnsupportedFromSelection(st, log);
+
+  const size_t polyVertsBefore = st.userPolylineVerts.size();
+  const size_t featureVertsBefore = st.featureLineVerts.size();
+  std::vector<float> newLines;
+  std::vector<float> newCircles;
+  std::vector<EntityAttributes> newLineAttrs;
+  std::vector<EntityAttributes> newCircleAttrs;
+  std::vector<CadAnnotation> newAnn;
+  std::vector<EntityAttributes> newAnnAttrs;
+  std::vector<CadArc> newArcs;
+  std::vector<EntityAttributes> newArcAttrs;
+  std::vector<CadEllipse> newEll;
+  std::vector<EntityAttributes> newEllAttrs;
+
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::LineSeg) {
+      size_t k = static_cast<size_t>(e.index) * 6;
+      if (k + 5 < st.userLinesFlat.size()) {
+        float lx0 = st.userLinesFlat[k];
+        float ly0 = st.userLinesFlat[k + 1];
+        float lz0 = st.userLinesFlat[k + 2];
+        float lx1 = st.userLinesFlat[k + 3];
+        float ly1 = st.userLinesFlat[k + 4];
+        float lz1 = st.userLinesFlat[k + 5];
+        ReflectPtAcrossLine(x0, y0, x1, y1, &lx0, &ly0);
+        ReflectPtAcrossLine(x0, y0, x1, y1, &lx1, &ly1);
+        newLines.push_back(lx0);
+        newLines.push_back(ly0);
+        newLines.push_back(lz0);
+        newLines.push_back(lx1);
+        newLines.push_back(ly1);
+        newLines.push_back(lz1);
+        EntityAttributes a{};
+        if (e.index >= 0 && static_cast<size_t>(e.index) < st.userLineAttrs.size())
+          a = st.userLineAttrs[static_cast<size_t>(e.index)];
+        newLineAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
+    } else if (e.type == SelectedEntity::Type::Circle) {
+      size_t k = static_cast<size_t>(e.index) * 4;
+      if (k + 3 < st.userCirclesCxCyZR.size()) {
+        float cx = st.userCirclesCxCyZR[k];
+        float cy = st.userCirclesCxCyZR[k + 1];
+        float r = st.userCirclesCxCyZR[k + 3];
+        ReflectPtAcrossLine(x0, y0, x1, y1, &cx, &cy);
+        newCircles.push_back(cx);
+        newCircles.push_back(cy);
+        newCircles.push_back(st.userCirclesCxCyZR[k + 2]);  // z — reflection is about a vertical plane
+        newCircles.push_back(r);                            // radius is preserved (isometry)
+        EntityAttributes a{};
+        if (e.index >= 0 && static_cast<size_t>(e.index) < st.userCircleAttrs.size())
+          a = st.userCircleAttrs[static_cast<size_t>(e.index)];
+        newCircleAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
+    } else if (e.type == SelectedEntity::Type::Annotation) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.cadAnnotations.size()) {
+        CadAnnotation c = st.cadAnnotations[k];
+        c.surveyPointLabelForId = -1;
+        if (c.kind == CadAnnotation::Kind::Text || c.kind == CadAnnotation::Kind::Mtext) {
+          // MIRRTEXT-off (design decision, D-2026-08-23-j): insertion point reflects, glyphs stay
+          // upright — rotationRad is deliberately left untouched.
+          ReflectPtAcrossLine(x0, y0, x1, y1, &c.insX, &c.insY);
+          if (c.kind == CadAnnotation::Kind::Mtext) {
+            float xs[4] = {c.boxMinX, c.boxMaxX, c.boxMaxX, c.boxMinX};
+            float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
+            float mnX = xs[0], mxX = xs[0], mnY = ys[0], mxY = ys[0];
+            for (int i = 0; i < 4; ++i) {
+              ReflectPtAcrossLine(x0, y0, x1, y1, &xs[i], &ys[i]);
+              mnX = std::min(mnX, xs[i]);
+              mxX = std::max(mxX, xs[i]);
+              mnY = std::min(mnY, ys[i]);
+              mxY = std::max(mxY, ys[i]);
+            }
+            c.boxMinX = mnX;
+            c.boxMaxX = mxX;
+            c.boxMinY = mnY;
+            c.boxMaxY = mxY;
+            c.insX = mnX;
+            c.insY = mnY;
+          }
+        } else if (c.kind == CadAnnotation::Kind::DimLinear) {
+          ReflectCadDimLinearAcrossLine(x0, y0, x1, y1, &c);
+        } else if (c.kind == CadAnnotation::Kind::DimAligned) {
+          ReflectPtAcrossLine(x0, y0, x1, y1, &c.insX, &c.insY);
+          ReflectPtAcrossLine(x0, y0, x1, y1, &c.dimExt1X, &c.dimExt1Y);
+          ReflectPtAcrossLine(x0, y0, x1, y1, &c.dimExt2X, &c.dimExt2Y);
+          float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+          if (CadDimAlignedGeometry(c, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+            c.rotationRad = std::atan2(ty, tx);
+        } else {
+          // Generic fallback (DimAngular and anything else): reflect insertion point + AABB
+          // corners and re-fit — the same weaker path ROTATE takes for these kinds.
+          ReflectPtAcrossLine(x0, y0, x1, y1, &c.insX, &c.insY);
+          float xs[4] = {c.boxMinX, c.boxMaxX, c.boxMaxX, c.boxMinX};
+          float ys[4] = {c.boxMinY, c.boxMinY, c.boxMaxY, c.boxMaxY};
+          float mnX = xs[0], mxX = xs[0], mnY = ys[0], mxY = ys[0];
+          for (int i = 0; i < 4; ++i) {
+            ReflectPtAcrossLine(x0, y0, x1, y1, &xs[i], &ys[i]);
+            mnX = std::min(mnX, xs[i]);
+            mxX = std::max(mxX, xs[i]);
+            mnY = std::min(mnY, ys[i]);
+            mxY = std::max(mxY, ys[i]);
+          }
+          c.boxMinX = mnX;
+          c.boxMaxX = mxX;
+          c.boxMinY = mnY;
+          c.boxMaxY = mxY;
+          c.insX = mnX;
+          c.insY = mnY;
+        }
+        newAnn.push_back(std::move(c));
+        EntityAttributes a{};
+        if (k < st.cadAnnotationAttrs.size())
+          a = st.cadAnnotationAttrs[k];
+        newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
+    } else if (e.type == SelectedEntity::Type::Arc) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.userArcs.size()) {
+        CadArc a = st.userArcs[k];
+        // A reflection reverses handedness (CCW becomes CW): reflecting the center alone does not
+        // say which way the arc now sweeps. Reflect the OLD END angle into the NEW START angle and
+        // keep sweepRad's magnitude — this is the CCW-from-start arc that covers the identical
+        // reflected point set (verified by hand for axis-aligned and symmetric cases; see TASK-094).
+        const float newStart = ReflectAngleAcrossLine(x0, y0, x1, y1, a.startRad + a.sweepRad);
+        ReflectPtAcrossLine(x0, y0, x1, y1, &a.cx, &a.cy);
+        a.startRad = newStart;
+        newArcs.push_back(a);
+        EntityAttributes at{};
+        if (k < st.userArcAttrs.size())
+          at = st.userArcAttrs[k];
+        newArcAttrs.push_back(DuplicatedEntityAttrs(at));
+      }
+    } else if (e.type == SelectedEntity::Type::Ellipse) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.userEllipses.size()) {
+        CadEllipse el = st.userEllipses[k];
+        float mx = el.cx + el.majVx;
+        float my = el.cy + el.majVy;
+        ReflectPtAcrossLine(x0, y0, x1, y1, &el.cx, &el.cy);
+        ReflectPtAcrossLine(x0, y0, x1, y1, &mx, &my);
+        el.majVx = mx - el.cx;
+        el.majVy = my - el.cy;
+        newEll.push_back(el);
+        EntityAttributes at{};
+        if (k < st.userEllAttrs.size())
+          at = st.userEllAttrs[k];
+        newEllAttrs.push_back(DuplicatedEntityAttrs(at));
+      }
+    } else if (e.type == SelectedEntity::Type::Polyline) {
+      const int pi = e.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+        continue;
+      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const int nv = v1 - v0;
+      if (nv < 2)
+        continue;
+      if (st.userPolylineOffsets.empty())
+        st.userPolylineOffsets.push_back(0);
+      const int baseVert = st.userPolylineOffsets.back();
+      for (int vi = v0; vi < v1; ++vi) {
+        float px = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 0)];
+        float py = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
+        float pz = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)];
+        ReflectPtAcrossLine(x0, y0, x1, y1, &px, &py);
+        st.userPolylineVerts.push_back(px);
+        st.userPolylineVerts.push_back(py);
+        st.userPolylineVerts.push_back(pz);
+      }
+      st.userPolylineOffsets.push_back(baseVert + nv);
+      uint8_t cl = 0;
+      if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
+        cl = st.userPolylineClosed[static_cast<size_t>(pi)];
+      st.userPolylineClosed.push_back(cl);
+      EntityAttributes at{};
+      if (static_cast<size_t>(pi) < st.userPolylineAttrs.size())
+        at = st.userPolylineAttrs[static_cast<size_t>(pi)];
+      st.userPolylineAttrs.push_back(DuplicatedEntityAttrs(at));
+    }
+  }
+  st.userLinesFlat.insert(st.userLinesFlat.end(), newLines.begin(), newLines.end());
+  st.userCirclesCxCyZR.insert(st.userCirclesCxCyZR.end(), newCircles.begin(), newCircles.end());
+  st.userLineAttrs.insert(st.userLineAttrs.end(), newLineAttrs.begin(), newLineAttrs.end());
+  st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
+  st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
+  st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
+  st.userArcs.insert(st.userArcs.end(), newArcs.begin(), newArcs.end());
+  st.userArcAttrs.insert(st.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
+  st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
+  st.userEllAttrs.insert(st.userEllAttrs.end(), newEllAttrs.begin(), newEllAttrs.end());
+
+  // Feature lines (REQ-087) — same append as the rotated/translated paths, differing only in the
+  // point function, which is exactly why all three go through AppendFeatureLineCopy.
+  ForEachSelectedFeatureLine(st, [&](int fi, int v0, int v1) {
+    AppendFeatureLineCopy(st, fi, v0, v1,
+                          [&](float* x, float* y) { ReflectPtAcrossLine(x0, y0, x1, y1, x, y); });
+  });
+
+  if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
+      st.userPolylineVerts.size() != polyVertsBefore ||
+      st.featureLineVerts.size() != featureVertsBefore)
+    BumpCadGpuCache(st);
+}
+
 void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad, std::vector<std::string>& log) {
   DropSurfacesFromSelectionForTransform(st, "ROTATE", log);
   std::vector<bool> lineMark(std::max<size_t>(1, st.userLinesFlat.size() / 6), false);
@@ -6236,6 +7243,38 @@ bool HandleModifyText(AppCommandState& st, bool isCopy, const std::string& lineI
   return false;
 }
 
+/// REQ-103 STRETCH typed-entry path — mirrors \c HandleModifyText's NeedBase/NeedDestination shape,
+/// but calls \c ApplyStretchToSelection with the box captured by this invocation's own box-select
+/// instead of \c ApplyTranslationToSelection.
+static bool HandleStretchText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+  std::string line = StringUtil::trimCopy(lineIn);
+  using MP = AppCommandState::ModifyPhase;
+  if (st.modifyPhase == MP::NeedBase) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
+      return false;
+    st.modifyBaseX = px;
+    st.modifyBaseY = py;
+    st.modifyPhase = MP::NeedDestination;
+    log.push_back("STRETCH — specify second point (destination).");
+    return true;
+  }
+  if (st.modifyPhase == MP::NeedDestination) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, true, st.modifyBaseX, st.modifyBaseY))
+      return false;
+    const float dx = px - st.modifyBaseX;
+    const float dy = py - st.modifyBaseY;
+    PushUndoSnapshot(st, "Stretch");
+    ApplyStretchToSelection(st, dx, dy, st.stretchRectMnX, st.stretchRectMxX, st.stretchRectMnY,
+                            st.stretchRectMxY, log);
+    st.modifyPhase = MP::NeedBase;
+    log.push_back("STRETCH complete — base point (ESC to exit):");
+    return true;
+  }
+  return false;
+}
+
 static void FinishScaleCommand(AppCommandState& st, float scaleFactor, std::vector<std::string>& log) {
   PushUndoSnapshot(st, "Scale");
   const float s = std::max(scaleFactor, 1e-6f);
@@ -6705,31 +7744,58 @@ static void CommitSurveyInverseSecondPoint(AppCommandState& st, float x2, float 
   st.surveyInversePhase = SIP::WaitFrom;
 }
 
-// --- REQ-074 spot elevation and grade ----------------------------------------------------------
+// --- REQ-074 spot elevation and grade, REQ-089 rollover readout ---------------------------------
 
-/// Interpolated elevation of every surface covering (\p x, \p y), paired with its name.
+/// One visible surface covering a plan position, and its interpolated elevation there.
+///
+/// The index is consumed by the caller **within the same call** and never stored, so architecture
+/// §11.9 is satisfied: it is a cursor into this walk's result, not a reference held across time.
+struct SurfaceCoverage {
+  size_t surfaceIndex = 0;
+  double z = 0.0;
+};
+
+/// Every **visible** surface covering (\p x, \p y), with its interpolated elevation.
 ///
 /// **Every** covering surface, not one of them (TASK-055 Q1): overlapping surfaces are the existing
-/// vs proposed case, which is the grading question this command exists to answer, and a bare number
-/// from an unnamed surface would be worse than no number at all.
+/// vs proposed case, which is the grading question SURFELEV exists to answer, and a bare number from
+/// an unnamed surface would be worse than no number at all. REQ-089's readout inherits the rule —
+/// two overlapping surfaces get one block each.
 ///
-/// Invisible surfaces are skipped, via the shared \ref SurfaceVisible — the readout should describe
-/// the surfaces the user can see, and REQ-068 already established that rule. Routing through the
-/// shared predicate also fixed a real gap here: this walk checked layer on/frozen but not
-/// `hiddenEntityIds`, so SURFELEV reported an elevation from a surface REQ-084 (d) had isolated out.
-static std::vector<std::pair<std::string, double>> SurfaceElevationsAt(const AppCommandState& st, double x,
-                                                                       double y) {
-  std::vector<std::pair<std::string, double>> out;
+/// Invisible surfaces are skipped, via the shared \ref SurfaceVisible — a readout should describe the
+/// surfaces the user can see, and REQ-068 already established that rule. Routing through the shared
+/// predicate also fixed a real gap here: this walk checked layer on/frozen but not `hiddenEntityIds`,
+/// so SURFELEV reported an elevation from a surface REQ-084 (d) had isolated out.
+///
+/// **One walk, two readers** (SURFELEV and the REQ-089 rollover), for the reason the paragraph above
+/// records: the last time this question was asked in two places, the two answers drifted and a hidden
+/// surface kept reporting elevations. A second copy of this loop would be the same defect waiting to
+/// happen, so the rollover was given the index it needs rather than a walk of its own.
+static std::vector<SurfaceCoverage> SurfacesCovering(const AppCommandState& st, double x, double y) {
+  std::vector<SurfaceCoverage> out;
   for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
     if (!SurfaceVisible(st, si))
       continue;
     const CadSurface& s = st.cadSurfaces[si];
     double z = 0.0;
     if (TinElevationAt(s.tin->vertsXyz, s.tin->indices, x, y, &z))
-      out.emplace_back(s.name, z);
+      out.push_back({si, z});
   }
   return out;
 }
+
+/// The same coverage, named rather than indexed — what REQ-074's two commands consume.
+static std::vector<std::pair<std::string, double>> SurfaceElevationsAt(const AppCommandState& st, double x,
+                                                                       double y) {
+  std::vector<std::pair<std::string, double>> out;
+  for (const SurfaceCoverage& c : SurfacesCovering(st, x, y))
+    out.emplace_back(st.cadSurfaces[c.surfaceIndex].name, c.z);
+  return out;
+}
+
+// REQ-089's readout is built from this same walk, but it is a public entry point (the UI calls it),
+// so its definition cannot live inside this anonymous namespace — see `BuildSurfaceHoverRows` beside
+// `CommitClipboardPasteAt` after the namespace closes.
 
 /// First pick: report the elevation on each covering surface, and remember them for the grade.
 static void ReportSurfaceElevationAt(AppCommandState& st, double x, double y, std::vector<std::string>& log) {
@@ -7401,6 +8467,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   using MP = AppCommandState::ModifyPhase;
   using RP = AppCommandState::RotatePhase;
   using SP = AppCommandState::ScalePhase;
+  using MirP = AppCommandState::MirrorPhase;
 
   // Box-selection projects to screen space only when the view is actually orbited; in plan view a
   // null camera keeps the historical world-rect test byte-for-byte (REQ-058).
@@ -7411,10 +8478,18 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   auto finishBox = [&]() {
     const bool inclSurvey = (st.active == AppCommandState::Kind::None || st.active == K::Move ||
                              st.active == K::Copy || st.active == K::Rotate || st.active == K::Scale ||
-                             st.active == K::Align);
+                             st.active == K::Mirror || st.active == K::Align || st.active == K::Stretch);
     ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, wx, wy, windowSelectionSubtract,
                              fenceLeftToRightWindowMode, inclSurvey, boxSelCam, st.uiViewportWidthPx,
                              st.uiViewportHeightPx);
+    if (st.active == K::Stretch) {
+      // Captured in plain world XY, not camera-projected — REQ-103 STRETCH's stated simplification;
+      // entity CANDIDACY above still goes through ComputeSelectionFromRect's own camera-aware test.
+      st.stretchRectMnX = std::min(st.selBoxAnchorX, wx);
+      st.stretchRectMxX = std::max(st.selBoxAnchorX, wx);
+      st.stretchRectMnY = std::min(st.selBoxAnchorY, wy);
+      st.stretchRectMxY = std::max(st.selBoxAnchorY, wy);
+    }
     st.selBoxWaitingSecond = false;
     log.push_back("Fence — CAD " + std::to_string(st.selection.size()) + ", survey " +
                   std::to_string(st.selectedSurveyPointIndices.size()) +
@@ -7812,6 +8887,40 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
+  if (st.active == K::Stretch) {
+    if (st.modifyPhase == MP::PickSelection) {
+      if (st.selBoxWaitingSecond) {
+        finishBox();
+        if (st.selection.empty() && st.selectedSurveyPointIndices.empty())
+          log.push_back("Nothing selected — pick two corners again.");
+        else {
+          st.modifyPhase = MP::NeedBase;
+          log.push_back("STRETCH — base point:");
+        }
+      }
+      return;
+    }
+    if (st.modifyPhase == MP::NeedBase) {
+      st.modifyBaseX = wx;
+      st.modifyBaseY = wy;
+      st.modifyPhase = MP::NeedDestination;
+      log.push_back("STRETCH — destination:");
+      return;
+    }
+    if (st.modifyPhase == MP::NeedDestination) {
+      const float dx = wx - st.modifyBaseX;
+      const float dy = wy - st.modifyBaseY;
+      PushUndoSnapshot(st, "Stretch");
+      ApplyStretchToSelection(st, dx, dy, st.stretchRectMnX, st.stretchRectMxX, st.stretchRectMnY,
+                              st.stretchRectMxY, log);
+      // Stay in STRETCH — same selection+box at new position, ready for another base+destination
+      // (MOVE's own looping shape for repeated displacement rounds on one selection).
+      st.modifyPhase = MP::NeedBase;
+      log.push_back("STRETCH complete — base point (ESC to exit):");
+    }
+    return;
+  }
+
   if (st.active == K::Paste && st.modifyPhase == MP::NeedDestination) {
     CommitClipboardPasteAt(st, wx, wy, log);  // routes by active space; builds the new selection
     return;
@@ -7952,11 +9061,111 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
+  if (st.active == K::Mirror) {
+    if (st.mirrorPhase == MirP::PickSelection) {
+      if (st.selBoxWaitingSecond) {
+        finishBox();
+        if (st.selection.empty() && st.selectedSurveyPointIndices.empty())
+          log.push_back("Nothing selected — pick two corners again.");
+        else {
+          st.mirrorPhase = MirP::NeedP1;
+          log.push_back("MIRROR — specify first point of mirror line:");
+        }
+      }
+      return;
+    }
+    if (st.mirrorPhase == MirP::NeedP1) {
+      st.mirrorP1X = wx;
+      st.mirrorP1Y = wy;
+      st.mirrorPhase = MirP::NeedP2;
+      log.push_back("MIRROR — specify second point of mirror line:");
+      return;
+    }
+    if (st.mirrorPhase == MirP::NeedP2) {
+      if (std::hypot(wx - st.mirrorP1X, wy - st.mirrorP1Y) < 1e-8f) {
+        log.push_back("MIRROR — mirror line needs two distinct points; try again.");
+        return;
+      }
+      st.mirrorP2X = wx;
+      st.mirrorP2Y = wy;
+      st.mirrorPhase = MirP::NeedEraseAnswer;
+      log.push_back("Erase source objects? [Yes/No] <N>:");
+    }
+    // NeedEraseAnswer has no viewport-pick meaning — it is answered on the command line
+    // (HandleMirrorText), matching TRIM's cutting-edge prompt convention.
+    return;
+  }
+
+  if (st.active == K::Lengthen) {
+    HandleLengthenViewportPick(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::Extend) {
+    HandleExtendViewportPick(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::Break) {
+    HandleBreakViewportPick(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::Fillet) {
+    HandleFilletViewportPick(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::Chamfer) {
+    HandleChamferViewportPick(st, wx, wy, log);
+    return;
+  }
+
   if (st.active == K::None && st.selBoxWaitingSecond)
     finishBox();
 }
 
 } // namespace
+
+// Public surface rollover entry point (REQ-089): the readout for the plan position under the cursor,
+// one row per visible surface covering it. Calls the file-local SurfacesCovering — the same walk
+// SURFELEV uses — which is visible here via the anonymous namespace's using-directive, exactly as
+// CommitClipboardPasteAt below reaches CommitPasteFromClipboard.
+//
+// Called ONCE per cursor rest, never per frame; the reason and the mechanism are in
+// `util/hoverdwell.hpp`, and REQ-089 makes it an acceptance condition.
+void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
+                           std::vector<SurfaceHoverRow>* out) {
+  if (!out)
+    return;
+  out->clear();
+  for (const SurfaceCoverage& c : SurfacesCovering(st, x, y)) {
+    const CadSurface& s = st.cadSurfaces[c.surfaceIndex];
+    SurfaceHoverRow row;
+    row.name = s.name;
+
+    // The EFFECTIVE style, resolved on read (REQ-070 / ADR-036 (d)) — so a surface whose style was
+    // deleted, and one saved before the field existed, both read "Standard" here rather than blank.
+    // The empty-table case is the only one that has no name to give.
+    const SurfaceStyle* style = SurfaceStyles::Resolve(st.surfaceStyles, s.styleName);
+    row.style = style ? style->name : std::string("\xE2\x80\x94");
+
+    // `cadSurfaceAttrs` is length-locked to `cadSurfaces`; a short array means defaults, exactly as
+    // SurfaceVisible reads it, and the default layer is "0".
+    row.layer = (c.surfaceIndex < st.cadSurfaceAttrs.size() &&
+                 !st.cadSurfaceAttrs[c.surfaceIndex].layer.empty())
+                    ? st.cadSurfaceAttrs[c.surfaceIndex].layer
+                    : std::string("0");
+
+    // Defensive, and expected never to fire: a row exists only where a triangle covered the point,
+    // so an elevation exists (TASK-088 ASSUMPTION-2). It survives for the degenerate case
+    // TinElevationAt guards — a collinear triangle whose plane has no solution — because printing
+    // "nan" as an elevation would be a statement about the ground that happens to be false.
+    row.elevation = std::isfinite(c.z) ? FormatLinear(c.z, st.displayLinearPrecision)
+                                       : std::string("\xE2\x80\x94");
+    out->push_back(std::move(row));
+  }
+}
 
 // Public paste entry point (REQ-038): place the clipboard at point (x,y) in the ACTIVE space's coordinates
 // (world for model, paper inches for a paper layout). Used by the model pick path and the paper overlay click.
@@ -8296,6 +9505,4114 @@ void StartOffsetCommand(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back("OFFSET — select line, circle, arc, ellipse, or polyline. ESC cancels.");
 }
 
+// ============================================================================================
+// LENGTHEN (REQ-103 step 2). Written for reuse by EXTEND/FILLET (steps 3/6) per REQ-103's own
+// stated sequencing — the length/endpoint math below is free functions, not folded into the
+// command handler. Shaped like OFFSET above (single entity per pick, loop back to "select
+// object" until Enter/Esc) rather than like MIRROR/ROTATE/SCALE (selection-then-transform).
+// ============================================================================================
+
+/// Arc length along its sweep. Nothing in this codebase computed this before LENGTHEN — confirmed
+/// by search, not assumed — not even for display in the Properties panel.
+static float ArcLengthOf(float r, float sweepRad) { return std::fabs(r * sweepRad); }
+
+/// Sum of chord lengths across polyline `pi`'s segments. LENGTHEN never calls this on a closed
+/// polyline (refused before this runs), so this always walks an open path — same shape as
+/// QSELECT's ad hoc length filter (CadUi.cpp), written here as a reusable function instead.
+static float PolylineOpenLengthOf(const AppCommandState& st, int pi) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+    return 0.f;
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  float total = 0.f;
+  for (int vi = v0; vi + 1 < v1; ++vi) {
+    const size_t a = static_cast<size_t>(vi) * 3;
+    const size_t b = static_cast<size_t>(vi + 1) * 3;
+    if (b + 1 >= st.userPolylineVerts.size())
+      break;
+    total += std::hypot(st.userPolylineVerts[b] - st.userPolylineVerts[a],
+                        st.userPolylineVerts[b + 1] - st.userPolylineVerts[a + 1]);
+  }
+  return total;
+}
+
+/// True when (px,py) is nearer (x0,y0) than (x1,y1) — the same squared-distance tie-break TRIM
+/// uses to decide which end of a Line a pick is closest to (TrimSegmentIntersectPickSide's
+/// `dA <= dB`), generalized: every two-endpoint entity LENGTHEN touches uses this one comparison,
+/// with its two points computed inline per type (this codebase has no shared "get the endpoints of
+/// this entity" helper — confirmed by research — so this follows the established idiom rather than
+/// inventing one).
+static bool NearerToFirstPoint(float px, float py, float x0, float y0, float x1, float y1) {
+  const float d0 = (px - x0) * (px - x0) + (py - y0) * (py - y0);
+  const float d1 = (px - x1) * (px - x1) + (py - y1) * (py - y1);
+  return d0 <= d1;
+}
+
+/// Applies `newLength` to a Line, moving the end nearest the original pick (`nearFirst` selects
+/// (x0,y0) vs (x1,y1)) and holding the other end fixed. Rejects — does not clamp — a result that
+/// would collapse the line or an already-degenerate source (REQ-201: LENGTHEN must say why it did
+/// nothing, the same convention TRIM's degenerate-length delete and OFFSET's refusals follow).
+static bool ApplyLengthenToLine(AppCommandState& st, int index, bool nearFirst, float newLength,
+                                std::vector<std::string>& log, bool pushUndo = true) {
+  const size_t k = static_cast<size_t>(index) * 6;
+  if (k + 5 >= st.userLinesFlat.size())
+    return false;
+  const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
+  const float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
+  const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
+  const float movingX = nearFirst ? x0 : x1, movingY = nearFirst ? y0 : y1;
+  const float dx = movingX - fixedX, dy = movingY - fixedY;
+  const float curLen = std::hypot(dx, dy);
+  if (curLen < 1e-9f) {
+    log.push_back("LENGTHEN — the line is degenerate; there is no direction to extend along.");
+    return false;
+  }
+  if (!(newLength > 1e-6f) || !std::isfinite(newLength)) {
+    log.push_back("LENGTHEN — that change would collapse the line to zero length; refused.");
+    return false;
+  }
+  const float ux = dx / curLen, uy = dy / curLen;
+  const float newX = fixedX + ux * newLength, newY = fixedY + uy * newLength;
+  // FILLET (REQ-103 step 6a) reuses this function twice (plus an Arc creation) as ONE atomic
+  // fillet, and pushes its own single "Fillet" snapshot up front — pushUndo=false there suppresses
+  // this function's own push so a fillet is one undo step, not three (the bug this parameter fixes,
+  // caught by fillet-lines-basic.txt's own UNDO/REDO round-trip, TASK-102 task log).
+  if (pushUndo)
+    PushUndoSnapshot(st, "Lengthen");
+  if (nearFirst) {
+    st.userLinesFlat[k] = newX;
+    st.userLinesFlat[k + 1] = newY;
+  } else {
+    st.userLinesFlat[k + 3] = newX;
+    st.userLinesFlat[k + 4] = newY;
+  }
+  return true;
+}
+
+/// Applies `newLength` to an Arc, holding its RADIUS fixed and changing only `startRad`/
+/// `sweepRad` — deliberately NOT the model the existing Arc grip-drag (`ApplyEntityGripPoint`)
+/// uses, which re-fits the radius on every drag; that is right for a free grip drag and wrong
+/// here, where only the length along the arc may change. `nearFirst` selects the start endpoint
+/// (true) or the end endpoint (false) as the one that moves; the other stays exactly fixed.
+static bool ApplyLengthenToArc(AppCommandState& st, int index, bool nearFirst, float newLength,
+                               std::vector<std::string>& log, bool pushUndo = true) {
+  if (index < 0 || static_cast<size_t>(index) >= st.userArcs.size())
+    return false;
+  CadArc& a = st.userArcs[static_cast<size_t>(index)];
+  if (a.r < 1e-6f) {
+    log.push_back("LENGTHEN — the arc's radius is degenerate; there is no length to change.");
+    return false;
+  }
+  if (!(newLength > 1e-6f) || !std::isfinite(newLength)) {
+    log.push_back("LENGTHEN — that change would collapse the arc to zero length; refused.");
+    return false;
+  }
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  const float newAbsSweep = newLength / a.r;
+  if (newAbsSweep >= kTwoPi - 1e-4f) {
+    log.push_back("LENGTHEN — that length would take the arc past a full circle; refused.");
+    return false;
+  }
+  // Grows/shrinks in the sweep's OWN rotational sense (CW arcs have a negative sweepRad), so the
+  // sign of the change always matches the sign of the existing sweep rather than assuming CCW.
+  const float deltaTheta = std::copysign(newAbsSweep - std::fabs(a.sweepRad), a.sweepRad);
+  if (pushUndo)  // see ApplyLengthenToLine's own comment on this parameter (FILLET, REQ-103 step 6a)
+    PushUndoSnapshot(st, "Lengthen");
+  if (nearFirst) {
+    // Extending from the start: the END (start+sweep) must stay put, so the start absorbs the
+    // whole angular change in the opposite sign while sweep grows by the same amount.
+    a.startRad -= deltaTheta;
+    a.sweepRad += deltaTheta;
+  } else {
+    // Extending from the end: the start stays put; the sweep alone grows toward the new end.
+    a.sweepRad += deltaTheta;
+  }
+  return true;
+}
+
+/// Applies `newLength` (the polyline's new TOTAL length) by moving only the vertex adjacent to the
+/// picked end along that terminal segment's own direction — the rest of the polyline is untouched.
+/// This is AutoCAD's actual LENGTHEN behavior on a polyline (it never uniformly rescales the whole
+/// thing), and it is also the only definition that keeps every OTHER vertex's position meaningful.
+static bool ApplyLengthenToPolylineEnd(AppCommandState& st, int pi, bool nearFirst, float newLength,
+                                       std::vector<std::string>& log, bool pushUndo = true) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+    return false;
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  if (v1 - v0 < 2)
+    return false;
+  if (!(newLength > 1e-6f) || !std::isfinite(newLength)) {
+    log.push_back("LENGTHEN — that change would collapse the polyline to zero length; refused.");
+    return false;
+  }
+  const float curTotal = PolylineOpenLengthOf(st, pi);
+  const float deltaLen = newLength - curTotal;
+  const int movingVi = nearFirst ? v0 : (v1 - 1);
+  const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
+  const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
+  if (mIdx + 1 >= st.userPolylineVerts.size() || fIdx + 1 >= st.userPolylineVerts.size())
+    return false;
+  const float fx = st.userPolylineVerts[fIdx], fy = st.userPolylineVerts[fIdx + 1];
+  const float mx = st.userPolylineVerts[mIdx], my = st.userPolylineVerts[mIdx + 1];
+  const float segLen = std::hypot(mx - fx, my - fy);
+  if (segLen < 1e-9f) {
+    log.push_back("LENGTHEN — the polyline's end segment is degenerate; there is no direction to extend along.");
+    return false;
+  }
+  const float newSegLen = segLen + deltaLen;
+  if (!(newSegLen > 1e-6f)) {
+    log.push_back("LENGTHEN — that change would collapse the polyline's end segment; refused.");
+    return false;
+  }
+  const float ux = (mx - fx) / segLen, uy = (my - fy) / segLen;
+  if (pushUndo)  // see ApplyLengthenToLine's own comment on this parameter (FILLET, REQ-103 step 6a)
+    PushUndoSnapshot(st, "Lengthen");
+  st.userPolylineVerts[mIdx] = fx + ux * newSegLen;
+  st.userPolylineVerts[mIdx + 1] = fy + uy * newSegLen;
+  return true;
+}
+
+/// Single choke point: dispatches by entity type, refusing anything not Line/Arc/open-Polyline
+/// with a stated reason (REQ-201) — mirrors `CommitOffsetSigned`'s `switch(e.type)` shape.
+static bool ApplyLengthenToEntity(AppCommandState& st, const SelectedEntity& e, bool nearFirst,
+                                  float newLength, std::vector<std::string>& log) {
+  switch (e.type) {
+  case SelectedEntity::Type::LineSeg:
+    return ApplyLengthenToLine(st, e.index, nearFirst, newLength, log);
+  case SelectedEntity::Type::Arc:
+    return ApplyLengthenToArc(st, e.index, nearFirst, newLength, log);
+  case SelectedEntity::Type::Polyline:
+    return ApplyLengthenToPolylineEnd(st, e.index, nearFirst, newLength, log);
+  default:
+    return false;
+  }
+}
+
+/// Checks whether `e` is a LENGTHEN-eligible entity and, if so, its current length and which end
+/// (`outNearFirst`) is nearest (pickX,pickY). Refuses — with a stated reason, never silently — a
+/// Circle, Ellipse, closed Polyline, full-circle Arc, or any non-length-bearing entity kind.
+/// Shared by LENGTHEN and EXTEND (TASK-096) — both need "is this a length-bearing entity, and
+/// which end is nearest the pick" for the identical eligible set (Line, open Polyline,
+/// non-full-circle Arc). \p cmdName names the caller in every refusal message (REQ-201) so EXTEND
+/// doesn't log a misleading "LENGTHEN —" reason while it's the active command.
+static bool LengthenEligibility(const AppCommandState& st, const SelectedEntity& e, float pickX, float pickY,
+                                bool* outNearFirst, float* outCurLen, const char* cmdName,
+                                std::vector<std::string>& log) {
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  switch (e.type) {
+  case SelectedEntity::Type::LineSeg: {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return false;
+    const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
+    const float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
+    *outNearFirst = NearerToFirstPoint(pickX, pickY, x0, y0, x1, y1);
+    *outCurLen = std::hypot(x1 - x0, y1 - y0);
+    return true;
+  }
+  case SelectedEntity::Type::Arc: {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      return false;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    if (std::fabs(std::fabs(a.sweepRad) - kTwoPi) < 1e-4f) {
+      log.push_back(std::string(cmdName) + " — 1 full-circle arc ignored: a full circle has no end to lengthen from.");
+      return false;
+    }
+    const float sx = a.cx + a.r * std::cos(a.startRad);
+    const float sy = a.cy + a.r * std::sin(a.startRad);
+    const float ex = a.cx + a.r * std::cos(a.startRad + a.sweepRad);
+    const float ey = a.cy + a.r * std::sin(a.startRad + a.sweepRad);
+    *outNearFirst = NearerToFirstPoint(pickX, pickY, sx, sy, ex, ey);
+    *outCurLen = ArcLengthOf(a.r, a.sweepRad);
+    return true;
+  }
+  case SelectedEntity::Type::Polyline: {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+      return false;
+    if (static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)]) {
+      log.push_back(std::string(cmdName) + " — 1 closed polyline ignored: a closed polyline has no end to lengthen from.");
+      return false;
+    }
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    if (v1 - v0 < 2)
+      return false;
+    const size_t a0 = static_cast<size_t>(v0) * 3, a1 = static_cast<size_t>(v1 - 1) * 3;
+    if (a1 + 1 >= st.userPolylineVerts.size())
+      return false;
+    *outNearFirst = NearerToFirstPoint(pickX, pickY, st.userPolylineVerts[a0], st.userPolylineVerts[a0 + 1],
+                                       st.userPolylineVerts[a1], st.userPolylineVerts[a1 + 1]);
+    *outCurLen = PolylineOpenLengthOf(st, pi);
+    return true;
+  }
+  case SelectedEntity::Type::Circle:
+    log.push_back(std::string(cmdName) + " — 1 circle ignored: a circle has no end to lengthen from. Pick a line, "
+                  "open polyline, or arc.");
+    return false;
+  case SelectedEntity::Type::Ellipse:
+    log.push_back(std::string(cmdName) + " — 1 ellipse ignored: every ellipse in this drawing is a full closed "
+                  "curve with no end. Pick a line, open polyline, or arc.");
+    return false;
+  default:
+    log.push_back(std::string(cmdName) + " — 1 object ignored: only a line, open polyline, or arc can be "
+                  "lengthened.");
+    return false;
+  }
+}
+
+// ============================================================================================
+// EXTEND (REQ-103 step 3). Boundary intersection is analytic (curveisect, REQ-062's already-
+// shipped library), not tessellated like TRIM's own cutting-edge math — REQ-062's own acceptance
+// text already settled that "a tessellated approximation does not satisfy REQ-101 and is not
+// acceptable" (D-2026-08-24-b). The actual geometry mutation is 100% reused from
+// ApplyLengthenToLine/ToArc/ToPolylineEnd — EXTEND's only new code is finding the nearest valid
+// boundary hit ahead of the current endpoint and converting it into the same `newLength` currency
+// those functions already consume.
+// ============================================================================================
+
+/// Appends `e`'s geometry (from the MODEL-space stores) as curveisect boundary shapes. One `Seg`
+/// per Line/Polyline edge, one `Conic` for Circle/Arc/Ellipse. No existing helper produces
+/// curveisect types from a SelectedEntity — TRIM's own `CollectCutSegments` produces raw
+/// tessellated floats, not analytic shapes — so this is new, and (like LENGTHEN's length/endpoint
+/// functions) written for reuse by BREAK/FILLET (steps 4/6).
+static void AppendModelBoundaryShapes(const AppCommandState& st, const SelectedEntity& e,
+                                      std::vector<curveisect::Seg>* segs, std::vector<curveisect::Conic>* conics) {
+  using T = SelectedEntity::Type;
+  if (e.type == T::LineSeg) {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return;
+    segs->push_back({{st.userLinesFlat[k], st.userLinesFlat[k + 1]},
+                     {st.userLinesFlat[k + 3], st.userLinesFlat[k + 4]}});
+  } else if (e.type == T::Circle) {
+    const size_t k = static_cast<size_t>(e.index) * 4;
+    if (k + 3 >= st.userCirclesCxCyZR.size())
+      return;
+    conics->push_back(curveisect::MakeCircle(st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1],
+                                             st.userCirclesCxCyZR[k + 3]));
+  } else if (e.type == T::Arc) {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      return;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    conics->push_back(curveisect::MakeArc(a.cx, a.cy, a.r, a.startRad, a.sweepRad));
+  } else if (e.type == T::Ellipse) {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userEllipses.size())
+      return;
+    const CadEllipse& el = st.userEllipses[static_cast<size_t>(e.index)];
+    conics->push_back(curveisect::MakeEllipse(el.cx, el.cy, el.majVx, el.majVy, el.ratio));
+  } else if (e.type == T::Polyline) {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+      return;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    for (int vi = v0; vi + 1 < v1; ++vi) {
+      const size_t a = static_cast<size_t>(vi) * 3, b = static_cast<size_t>(vi + 1) * 3;
+      if (b + 1 >= st.userPolylineVerts.size())
+        break;
+      segs->push_back({{st.userPolylineVerts[a], st.userPolylineVerts[a + 1]},
+                       {st.userPolylineVerts[b], st.userPolylineVerts[b + 1]}});
+    }
+    if (static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)] &&
+        v1 - v0 >= 2) {
+      const size_t a = static_cast<size_t>(v1 - 1) * 3, b = static_cast<size_t>(v0) * 3;
+      segs->push_back({{st.userPolylineVerts[a], st.userPolylineVerts[a + 1]},
+                       {st.userPolylineVerts[b], st.userPolylineVerts[b + 1]}});
+    }
+  }
+  // Annotation/FeatureLine/Surface/Mesh/PdfUnderlay/FilledRegion are refused before this is
+  // called (REQ-201) — matches TRIM's own boundary-edge refusal set.
+}
+
+/// Storage-agnostic: finds the nearest point along the ray from (fixedX,fixedY) through
+/// (movingX,movingY) — and beyond — that crosses one of the given boundary shapes, strictly beyond
+/// the current moving point. `curveisect` has no infinite-ray primitive (confirmed by research —
+/// every function clamps to [0,1]/sweep-containment), so the "ray" is a deliberately long finite
+/// query Seg fed into the existing IntersectSegSeg/IntersectSegConic unchanged, rather than adding
+/// a new ray family to a shared library for this one caller. Returns the new total distance from
+/// the fixed point via \p outNewLength — the same currency ApplyLengthenToLine/ToPolylineEnd
+/// already consume, so the caller just calls them with it.
+static bool FindExtendLineTarget(const std::vector<curveisect::Seg>& segs, const std::vector<curveisect::Conic>& conics,
+                                 float fixedX, float fixedY, float movingX, float movingY, float* outNewLength) {
+  const float dx = movingX - fixedX, dy = movingY - fixedY;
+  const float curLen = std::hypot(dx, dy);
+  if (curLen < 1e-9f)
+    return false;
+  const float ux = dx / curLen, uy = dy / curLen;
+  constexpr float kExtendLen = 1.0e6f;  // generous relative to any real drawing's coordinate range
+  const curveisect::Seg query{{fixedX, fixedY}, {fixedX + ux * kExtendLen, fixedY + uy * kExtendLen}};
+  const float curT = curLen / kExtendLen;
+  constexpr float kEpsT = 1e-7f;
+  bool found = false;
+  float bestT = 0.f;
+  std::vector<curveisect::Hit2> hits;
+  for (const auto& s : segs) {
+    hits.clear();
+    curveisect::IntersectSegSeg(query, s, &hits);
+    for (const auto& h : hits) {
+      const float t = static_cast<float>(h.tA);
+      if (t > curT + kEpsT && (!found || t < bestT)) {
+        found = true;
+        bestT = t;
+      }
+    }
+  }
+  for (const auto& c : conics) {
+    hits.clear();
+    curveisect::IntersectSegConic(query, c, &hits);
+    for (const auto& h : hits) {
+      const float t = static_cast<float>(h.tA);
+      if (t > curT + kEpsT && (!found || t < bestT)) {
+        found = true;
+        bestT = t;
+      }
+    }
+  }
+  if (!found)
+    return false;
+  *outNewLength = bestT * kExtendLen;
+  return true;
+}
+
+/// Storage-agnostic Arc equivalent. Queries the target's FULL circle (`MakeCircle`, not `MakeArc`
+/// — a hit beyond the current sweep must not be filtered out) against the boundaries, then keeps
+/// only hits that extend the sweep in its own existing rotational direction past the current
+/// endpoint (CW arcs have negative `sweepRad`; extending the START moves it opposite the sweep's
+/// own sense, extending the END moves it the same sense — the exact rule
+/// `ApplyLengthenToArc` already applies). Returns the equivalent `newLength` for that function to
+/// consume directly, so the `startRad`/`sweepRad` update itself is never re-derived here.
+static bool FindExtendArcTarget(const std::vector<curveisect::Seg>& segs, const std::vector<curveisect::Conic>& conics,
+                                float cx, float cy, float r, float startRad, float sweepRad, bool nearFirst,
+                                float* outNewLength) {
+  if (r < 1e-6f)
+    return false;
+  const curveisect::Conic full = curveisect::MakeCircle(cx, cy, r);
+  const float reference = nearFirst ? startRad : (startRad + sweepRad);
+  const bool ccwExtend = nearFirst ? (sweepRad <= 0.f) : (sweepRad > 0.f);
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  constexpr float kEpsAngle = 1e-6f;
+  bool found = false;
+  float bestD = 0.f;
+  std::vector<curveisect::Hit2> hits;
+  auto consider = [&](double thetaD) {
+    const float theta = static_cast<float>(thetaD);
+    float d;
+    if (ccwExtend) {
+      d = std::fmod(theta - reference, kTwoPi);
+      if (d <= 0.f)
+        d += kTwoPi;
+    } else {
+      d = std::fmod(reference - theta, kTwoPi);
+      if (d <= 0.f)
+        d += kTwoPi;
+    }
+    if (d > kEpsAngle && (!found || d < bestD)) {
+      found = true;
+      bestD = d;
+    }
+  };
+  for (const auto& s : segs) {
+    hits.clear();
+    curveisect::IntersectSegConic(s, full, &hits);
+    for (const auto& h : hits)
+      consider(h.tB);
+  }
+  for (const auto& c : conics) {
+    hits.clear();
+    curveisect::IntersectConicConic(c, full, &hits);
+    for (const auto& h : hits)
+      consider(h.tB);
+  }
+  if (!found)
+    return false;
+  *outNewLength = r * (std::fabs(sweepRad) + bestD);
+  return true;
+}
+
+/// Resolves the current mode+value into one target length. Percent/Total need the entity's
+/// current length (`curLen`); DElta only needs its own typed value.
+static float LengthenResolveTargetLength(const AppCommandState& st, float curLen) {
+  switch (st.lengthenMode) {
+  case AppCommandState::LengthenMode::Delta:   return curLen + st.lengthenDeltaValue;
+  case AppCommandState::LengthenMode::Percent: return curLen * (st.lengthenPercentValue / 100.f);
+  case AppCommandState::LengthenMode::Total:   return st.lengthenTotalValue;
+  case AppCommandState::LengthenMode::Dynamic: return curLen;  // unused — Dynamic resolves live, see HandleLengthenViewportPick
+  }
+  return curLen;
+}
+
+static const char* LengthenModeName(AppCommandState::LengthenMode m) {
+  using LM = AppCommandState::LengthenMode;
+  switch (m) {
+  case LM::Delta:   return "DElta";
+  case LM::Percent: return "Percent";
+  case LM::Total:   return "Total";
+  case LM::Dynamic: return "DYnamic";
+  }
+  return "DElta";
+}
+
+void StartLengthenCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // REQ-037-style paper routing
+    st.active = K::None;
+    st.paperLengthenPhase = 1;
+    log.push_back(std::string("LENGTHEN — click an object (mode: ") + LengthenModeName(st.lengthenMode) +
+                  (st.lengthenModeValueSet ? "). Esc cancels." :
+                   "; no value set yet — type DE/P/T on the command line first). Esc cancels."));
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = K::Lengthen;
+  st.lastCommand = K::Lengthen;
+  st.lengthenPhase = AppCommandState::LengthenPhase::WaitSelectOrMode;
+  st.selBoxWaitingSecond = false;
+  log.push_back(std::string("LENGTHEN — select object, or [DElta/Percent/Total/DYnamic] <") +
+                LengthenModeName(st.lengthenMode) + ">. ESC cancels.");
+}
+
+static bool TryLengthenModeToggle(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+  using LM = AppCommandState::LengthenMode;
+  using LP = AppCommandState::LengthenPhase;
+  const std::string low = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(lineIn));
+  if (low == "de" || low == "delta") {
+    st.lengthenMode = LM::Delta;
+    st.lengthenPhase = LP::WaitDeltaValue;
+    log.push_back("LENGTHEN DElta — length to add (+) or subtract (-):");
+    return true;
+  }
+  if (low == "p" || low == "percent") {
+    st.lengthenMode = LM::Percent;
+    st.lengthenPhase = LP::WaitPercentValue;
+    log.push_back("LENGTHEN Percent — new length as a percentage of current (100 = unchanged):");
+    return true;
+  }
+  if (low == "t" || low == "total") {
+    st.lengthenMode = LM::Total;
+    st.lengthenPhase = LP::WaitTotalValue;
+    log.push_back("LENGTHEN Total — new total length:");
+    return true;
+  }
+  if (low == "dy" || low == "dynamic") {
+    st.lengthenMode = LM::Dynamic;
+    st.lengthenModeValueSet = true;  // Dynamic needs no typed value — it resolves from the drag
+    st.lengthenPhase = LP::WaitSelectOrMode;
+    log.push_back("LENGTHEN DYnamic — select object, then drag to the new length. ESC cancels.");
+    return true;
+  }
+  return false;
+}
+
+/// REQ-103 LENGTHEN, pick-first entry (TASK-100). The user picked an object while the active
+/// sub-mode had no value yet. Latch the object, report what it currently measures, and open that
+/// mode's value prompt — `HandleLengthenText` applies the answer to this object rather than merely
+/// arming the mode. DYnamic never gets here (it needs no typed value and is handled before this).
+static void LengthenBeginValuePromptForPick(AppCommandState& st, const SelectedEntity& hit, bool nearFirst,
+                                            float curLen, std::vector<std::string>& log) {
+  using LM = AppCommandState::LengthenMode;
+  using LP = AppCommandState::LengthenPhase;
+  st.lengthenPendingEntity = hit;
+  st.lengthenPendingNearFirst = nearFirst;
+  st.lengthenPendingCurrentLength = curLen;
+  st.lengthenPendingApplyOnValue = true;
+  const char* prompt = "length to add (+) or subtract (-):";
+  switch (st.lengthenMode) {
+  case LM::Percent:
+    st.lengthenPhase = LP::WaitPercentValue;
+    prompt = "new length as a percentage of current (100 = unchanged):";
+    break;
+  case LM::Total:
+    st.lengthenPhase = LP::WaitTotalValue;
+    prompt = "new total length:";
+    break;
+  case LM::Delta:
+  case LM::Dynamic:  // unreachable — DYnamic resolves from the drag and returns before this call
+    st.lengthenPhase = LP::WaitDeltaValue;
+    break;
+  }
+  char buf[224];
+  std::snprintf(buf, sizeof(buf), "LENGTHEN — current length %.3f. %s — %s",
+                static_cast<double>(curLen), LengthenModeName(st.lengthenMode), prompt);
+  log.push_back(buf);
+}
+
+/// The other half of `LengthenBeginValuePromptForPick`: a value has just been parsed, so if a pick
+/// is waiting on it, apply it to that object now and clear the latch. Returns true when it applied
+/// (so the caller can log the "select object" prompt only when it did not).
+static bool LengthenApplyPendingPick(AppCommandState& st, std::vector<std::string>& log) {
+  if (!st.lengthenPendingApplyOnValue)
+    return false;
+  const float curLen = st.lengthenPendingCurrentLength;
+  const float newLen = LengthenResolveTargetLength(st, curLen);
+  if (ApplyLengthenToEntity(st, st.lengthenPendingEntity, st.lengthenPendingNearFirst, newLen, log)) {
+    log.push_back("LENGTHEN — length " + std::to_string(curLen) + " -> " + std::to_string(newLen) + ".");
+    BumpCadGpuCache(st);
+  }
+  // Cleared whether or not the apply succeeded: a refused length (collapse-to-zero, arc past a
+  // full circle) has already been explained by ApplyLengthenToEntity, and leaving the latch armed
+  // would silently re-apply to a stale object on the next value typed.
+  st.lengthenPendingApplyOnValue = false;
+  st.lengthenPendingEntity = SelectedEntity{};
+  return true;
+}
+
+bool HandleLengthenText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+  std::string line = StringUtil::trimCopy(lineIn);
+  using LP = AppCommandState::LengthenPhase;
+  if (st.lengthenPhase == LP::WaitSelectOrMode) {
+    if (TryLengthenModeToggle(st, line, log))
+      return true;
+    // Anything else at this phase is not a point LENGTHEN accepts by typed coordinate — picking is
+    // viewport-only (there is no "type X,Y to select an object" convention anywhere in this
+    // codebase). An unrecognized line here is simply an unknown mode letter.
+    log.push_back("LENGTHEN — type DE, P, T, or DY to set the mode, or pick an object in the viewport.");
+    return false;
+  }
+  // TASK-100. A mode letter is legal at a value prompt too, and it must not lose an object the
+  // user has already picked — otherwise "pick, then realise you wanted Percent" dead-ends on
+  // "must be a finite number", which is the same trap the pick-first entry was added to remove.
+  if (st.lengthenPendingApplyOnValue &&
+      (st.lengthenPhase == LP::WaitDeltaValue || st.lengthenPhase == LP::WaitPercentValue ||
+       st.lengthenPhase == LP::WaitTotalValue)) {
+    if (TryLengthenModeToggle(st, line, log)) {
+      // The toggle has already set the new mode's value phase and logged its prompt, and the latch
+      // survives untouched — so the next number still applies to the object already picked.
+      if (st.lengthenMode == AppCommandState::LengthenMode::Dynamic) {
+        // DYnamic is the exception: it needs no typed value, so hand the object to the drag.
+        st.lengthenPendingApplyOnValue = false;
+        st.lengthenPhase = LP::WaitDynamicTarget;
+        log.push_back("LENGTHEN DYnamic — drag to the new length, or type it:");
+      }
+      return true;
+    }
+  }
+  if (st.lengthenPhase == LP::WaitDeltaValue) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !std::isfinite(v)) {
+      log.push_back("LENGTHEN DElta — must be a finite number (may be negative).");
+      return false;
+    }
+    st.lengthenDeltaValue = v;
+    st.lengthenModeValueSet = true;
+    st.lengthenPhase = LP::WaitSelectOrMode;
+    LengthenApplyPendingPick(st, log);  // TASK-100: a pick may be waiting on this value
+    log.push_back(std::string("LENGTHEN — select object, or [DElta/Percent/Total/DYnamic] <DElta ") +
+                  std::to_string(v) + ">. ESC cancels.");
+    return true;
+  }
+  if (st.lengthenPhase == LP::WaitPercentValue) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !(v > 0.f) || !std::isfinite(v)) {
+      log.push_back("LENGTHEN Percent — must be a positive finite number.");
+      return false;
+    }
+    st.lengthenPercentValue = v;
+    st.lengthenModeValueSet = true;
+    st.lengthenPhase = LP::WaitSelectOrMode;
+    LengthenApplyPendingPick(st, log);  // TASK-100: a pick may be waiting on this value
+    log.push_back(std::string("LENGTHEN — select object, or [DElta/Percent/Total/DYnamic] <Percent ") +
+                  std::to_string(v) + ">. ESC cancels.");
+    return true;
+  }
+  if (st.lengthenPhase == LP::WaitTotalValue) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !(v > 0.f) || !std::isfinite(v)) {
+      log.push_back("LENGTHEN Total — must be a positive finite number.");
+      return false;
+    }
+    st.lengthenTotalValue = v;
+    st.lengthenModeValueSet = true;
+    st.lengthenPhase = LP::WaitSelectOrMode;
+    LengthenApplyPendingPick(st, log);  // TASK-100: a pick may be waiting on this value
+    log.push_back(std::string("LENGTHEN — select object, or [DElta/Percent/Total/DYnamic] <Total ") +
+                  std::to_string(v) + ">. ESC cancels.");
+    return true;
+  }
+  if (st.lengthenPhase == LP::WaitDynamicTarget) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !(v > 0.f) || !std::isfinite(v)) {
+      log.push_back("LENGTHEN DYnamic — must be a positive finite new length, or click in the viewport.");
+      return false;
+    }
+    if (ApplyLengthenToEntity(st, st.lengthenPendingEntity, st.lengthenPendingNearFirst, v, log)) {
+      log.push_back("LENGTHEN — object updated.");
+      BumpCadGpuCache(st);
+    }
+    st.lengthenPhase = LP::WaitSelectOrMode;
+    return true;
+  }
+  return false;
+}
+
+/// DYnamic mode: resolves a live length from a cursor pick, projected onto the pending entity's
+/// own fixed extension direction — same non-mutating cursor-driven idiom as
+/// `CadOffsetAppendLivePreview`/`CadScalePreviewFactor`. Used by both the drag-commit below and
+/// (mirrored) by the live preview drawn in `TransformPreview.cpp` while the cursor moves.
+static bool LengthenDynamicTargetLength(const AppCommandState& st, float wx, float wy, float* outLen) {
+  const SelectedEntity& e = st.lengthenPendingEntity;
+  const bool nearFirst = st.lengthenPendingNearFirst;
+  switch (e.type) {
+  case SelectedEntity::Type::LineSeg: {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return false;
+    const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
+    const float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
+    const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
+    const float movingX = nearFirst ? x0 : x1, movingY = nearFirst ? y0 : y1;
+    const float dx = movingX - fixedX, dy = movingY - fixedY;
+    const float curLen = std::hypot(dx, dy);
+    if (curLen < 1e-9f)
+      return false;
+    const float ux = dx / curLen, uy = dy / curLen;
+    *outLen = std::max((wx - fixedX) * ux + (wy - fixedY) * uy, 1e-6f);
+    return true;
+  }
+  case SelectedEntity::Type::Polyline: {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+      return false;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    if (v1 - v0 < 2)
+      return false;
+    const int movingVi = nearFirst ? v0 : (v1 - 1);
+    const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
+    const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
+    if (mIdx + 1 >= st.userPolylineVerts.size() || fIdx + 1 >= st.userPolylineVerts.size())
+      return false;
+    const float fx = st.userPolylineVerts[fIdx], fy = st.userPolylineVerts[fIdx + 1];
+    const float mx = st.userPolylineVerts[mIdx], my = st.userPolylineVerts[mIdx + 1];
+    const float segLen = std::hypot(mx - fx, my - fy);
+    if (segLen < 1e-9f)
+      return false;
+    const float ux = (mx - fx) / segLen, uy = (my - fy) / segLen;
+    const float proj = (wx - fx) * ux + (wy - fy) * uy;
+    const float curTotal = PolylineOpenLengthOf(st, pi);
+    *outLen = std::max(curTotal - segLen + proj, 1e-6f);
+    return true;
+  }
+  case SelectedEntity::Type::Arc: {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      return false;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    if (a.r < 1e-6f)
+      return false;
+    const float pickAngle = std::atan2(wy - a.cy, wx - a.cx);
+    const float fixedAngle = nearFirst ? (a.startRad + a.sweepRad) : a.startRad;
+    // Bounded to a half-circle of drag range either way (NormalizeAngleRadMinusPiToPi) — a
+    // deliberately simple, directionally-honest live-preview approximation; a change larger than
+    // that is what Total mode's typed value is for.
+    const float delta = NormalizeAngleRadMinusPiToPi(pickAngle - fixedAngle);
+    *outLen = std::max(a.r * std::fabs(delta), 1e-6f);
+    return true;
+  }
+  default:
+    return false;
+  }
+}
+
+/// Model-space + floating-model-space viewport-pick handler for LENGTHEN — called from
+/// SubmitViewportPickImpl, the exact site RECT's history warns a new command must not go missing
+/// from.
+void HandleLengthenViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  using LP = AppCommandState::LengthenPhase;
+  if (st.lengthenPhase == LP::WaitDynamicTarget) {
+    // The picked point IS the new position for the moving end — resolve it to a length along the
+    // entity's own fixed direction, then apply through the same choke point DElta/Percent/Total use.
+    float newLen = 0.f;
+    if (!LengthenDynamicTargetLength(st, wx, wy, &newLen)) {
+      log.push_back("LENGTHEN DYnamic — could not resolve a length from that pick; try again.");
+      return;
+    }
+    if (ApplyLengthenToEntity(st, st.lengthenPendingEntity, st.lengthenPendingNearFirst, newLen, log)) {
+      log.push_back("LENGTHEN — object updated.");
+      BumpCadGpuCache(st);
+    }
+    st.lengthenPhase = LP::WaitSelectOrMode;
+    return;
+  }
+  if (st.lengthenPhase != LP::WaitSelectOrMode)
+    return;
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+    log.push_back("LENGTHEN — nothing under cursor; try again.");
+    return;
+  }
+  bool nearFirst = false;
+  float curLen = 0.f;
+  if (!LengthenEligibility(st, hit, wx, wy, &nearFirst, &curLen, "LENGTHEN", log))
+    return;
+  if (st.lengthenMode == AppCommandState::LengthenMode::Dynamic) {
+    st.lengthenPendingEntity = hit;
+    st.lengthenPendingNearFirst = nearFirst;
+    st.lengthenPendingCurrentLength = curLen;
+    st.lengthenPhase = LP::WaitDynamicTarget;
+    log.push_back("LENGTHEN DYnamic — drag to the new length, or type it:");
+    return;
+  }
+  if (!st.lengthenModeValueSet) {
+    // TASK-100. This used to refuse the pick ("type DE/P/T first"), which made the ribbon button a
+    // dead end: the prompt invited a pick, the pick was rejected, and the only way forward was to
+    // know that a mode letter AND a number had to be typed before picking anything. Latch the
+    // object instead and ask for the value now — the answer applies to this object straight away.
+    LengthenBeginValuePromptForPick(st, hit, nearFirst, curLen, log);
+    return;
+  }
+  const float newLen = LengthenResolveTargetLength(st, curLen);
+  if (ApplyLengthenToEntity(st, hit, nearFirst, newLen, log)) {
+    log.push_back("LENGTHEN — length " + std::to_string(curLen) + " -> " + std::to_string(newLen) + ".");
+    BumpCadGpuCache(st);
+  }
+  // Stays in WaitSelectOrMode — loop back for the next object, same shape as TRIM/OFFSET targets.
+}
+
+/// Model-space + floating-model-space viewport-pick handler for EXTEND — called from
+/// SubmitViewportPickImpl, the exact site RECT's history warns a new command must not go missing
+/// from. Boundary collection (SelectBoundaries) is TRIM's own cutting-edge flow, copy-adapted with
+/// EXTEND's own refusal wording; target extension (SelectTargets) reuses `LengthenEligibility` for
+/// eligibility/near-end/current-length, then `FindExtendLineTarget`/`FindExtendArcTarget` for the
+/// boundary hit, then `ApplyLengthenToEntity` — the exact TASK-095 mutation, unmodified — for the
+/// actual edit.
+void HandleExtendViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  using EP = AppCommandState::ExtendPhase;
+  if (st.extendPhase == EP::SelectBoundaries) {
+    SelectedEntity hit{};
+    float d2 = 0.f;
+    if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+      log.push_back("EXTEND — no object at pick.");
+      return;
+    }
+    if (hit.type == SelectedEntity::Type::Annotation) {
+      log.push_back("EXTEND — use a line, circle, arc, ellipse, or polyline as a boundary edge.");
+      return;
+    }
+    if (hit.type == SelectedEntity::Type::FeatureLine) {
+      log.push_back("EXTEND — 1 feature line ignored: a feature line cannot be a boundary edge. Use "
+                    "a line, circle, arc, ellipse, or polyline.");
+      return;
+    }
+    if (hit.type == SelectedEntity::Type::Surface) {
+      log.push_back("EXTEND — 1 surface ignored: a surface cannot be a boundary edge. Use a line, "
+                    "circle, arc, ellipse, or polyline.");
+      return;
+    }
+    for (const auto& c : st.extendBoundaries) {
+      if (c.type == hit.type && c.index == hit.index) {
+        log.push_back("EXTEND — already a boundary edge.");
+        return;
+      }
+    }
+    st.extendBoundaries.push_back(hit);
+    log.push_back("EXTEND — boundary edge added.");
+    return;
+  }
+
+  // SelectTargets.
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+    log.push_back("EXTEND — nothing under cursor; try again.");
+    return;
+  }
+  bool nearFirst = false;
+  float curLen = 0.f;
+  if (!LengthenEligibility(st, hit, wx, wy, &nearFirst, &curLen, "EXTEND", log))
+    return;
+
+  std::vector<curveisect::Seg> segs;
+  std::vector<curveisect::Conic> conics;
+  for (const auto& b : st.extendBoundaries)
+    AppendModelBoundaryShapes(st, b, &segs, &conics);
+
+  float newLen = 0.f;
+  bool found = false;
+  if (hit.type == SelectedEntity::Type::Arc) {
+    const CadArc& a = st.userArcs[static_cast<size_t>(hit.index)];
+    found = FindExtendArcTarget(segs, conics, a.cx, a.cy, a.r, a.startRad, a.sweepRad, nearFirst, &newLen);
+  } else if (hit.type == SelectedEntity::Type::LineSeg) {
+    const size_t k = static_cast<size_t>(hit.index) * 6;
+    const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
+    const float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
+    const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
+    const float movingX = nearFirst ? x0 : x1, movingY = nearFirst ? y0 : y1;
+    found = FindExtendLineTarget(segs, conics, fixedX, fixedY, movingX, movingY, &newLen);
+  } else {  // Polyline — ray-cast along the LOCAL last-segment's own direction (the two vertices
+            // ApplyLengthenToPolylineEnd itself extends between), not the whole polyline's global
+            // first-to-last chord: for a bent (3+ vertex) polyline those directions differ, and the
+            // chord would find a boundary hit that the actual per-segment mutation then misses.
+    const int pi = hit.index;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const int movingVi = nearFirst ? v0 : (v1 - 1);
+    const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
+    const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
+    const float fixedX = st.userPolylineVerts[fIdx], fixedY = st.userPolylineVerts[fIdx + 1];
+    const float movingX = st.userPolylineVerts[mIdx], movingY = st.userPolylineVerts[mIdx + 1];
+    const float segLen = std::hypot(movingX - fixedX, movingY - fixedY);
+    float newSegLen = 0.f;
+    found = FindExtendLineTarget(segs, conics, fixedX, fixedY, movingX, movingY, &newSegLen);
+    if (found)
+      newLen = curLen - segLen + newSegLen;  // curLen is the polyline's current TOTAL length
+                                              // (LengthenEligibility/PolylineOpenLengthOf) — the
+                                              // currency ApplyLengthenToPolylineEnd expects.
+  }
+  if (!found) {
+    log.push_back("EXTEND — 1 object does not reach a boundary edge in that direction.");
+    return;
+  }
+  if (ApplyLengthenToEntity(st, hit, nearFirst, newLen, log)) {
+    log.push_back("EXTEND — extended to the boundary.");
+    BumpCadGpuCache(st);
+  }
+  // Stays in SelectTargets — loop back for the next object, same shape as TRIM/OFFSET targets.
+}
+
+/// REQ-103 LENGTHEN, pure-paper-space path. Single-pick-apply, matching the paper click handler's
+/// own shape (CadUi.cpp) — same simplification MIRROR's paper path already documents: no mode/
+/// value prompt here, so this reuses whatever lengthenMode/lengthenDeltaValue/etc. the model-space
+/// command last configured, refusing rather than applying a stray default if none was ever set, or
+/// if the configured mode is Dynamic (which needs a two-step drag the paper click flow can't ask
+/// for a target through, the same text-entry gap MIRROR's paper path hits for its erase prompt).
+/// Shared by paper-space LENGTHEN and EXTEND (TASK-096) — both need "is this a length-bearing
+/// paper entity, and which end is nearest the pick", mirroring the model-space
+/// `LengthenEligibility` this same pair shares there. \p cmdName names the caller in refusal
+/// messages (REQ-201).
+static bool PaperLengthenEligibility(const PaperLayout& L, const PaperEntityRef& ref, float pickXIn, float pickYIn,
+                                     bool* outNearFirst, float* outCurLen, const char* cmdName,
+                                     std::vector<std::string>& log) {
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  switch (ref.type) {
+  case PaperEntityRef::Type::Line: {
+    const size_t k = static_cast<size_t>(ref.index) * 6;
+    if (k + 5 >= L.paperLines.size())
+      return false;
+    const float x0 = L.paperLines[k], y0 = L.paperLines[k + 1];
+    const float x1 = L.paperLines[k + 3], y1 = L.paperLines[k + 4];
+    *outNearFirst = NearerToFirstPoint(pickXIn, pickYIn, x0, y0, x1, y1);
+    *outCurLen = std::hypot(x1 - x0, y1 - y0);
+    return true;
+  }
+  case PaperEntityRef::Type::Arc: {
+    if (ref.index < 0 || static_cast<size_t>(ref.index) >= L.paperArcs.size())
+      return false;
+    const CadArc& a = L.paperArcs[static_cast<size_t>(ref.index)];
+    if (std::fabs(std::fabs(a.sweepRad) - kTwoPi) < 1e-4f) {
+      log.push_back(std::string(cmdName) + " — 1 full-circle arc ignored: a full circle has no end to lengthen from.");
+      return false;
+    }
+    const float sx = a.cx + a.r * std::cos(a.startRad), sy = a.cy + a.r * std::sin(a.startRad);
+    const float ex = a.cx + a.r * std::cos(a.startRad + a.sweepRad);
+    const float ey = a.cy + a.r * std::sin(a.startRad + a.sweepRad);
+    *outNearFirst = NearerToFirstPoint(pickXIn, pickYIn, sx, sy, ex, ey);
+    *outCurLen = ArcLengthOf(a.r, a.sweepRad);
+    return true;
+  }
+  case PaperEntityRef::Type::Polyline: {
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L.paperPolyOffsets.size())
+      return false;
+    if (static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)]) {
+      log.push_back(std::string(cmdName) + " — 1 closed polyline ignored: a closed polyline has no end to lengthen from.");
+      return false;
+    }
+    const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    if (v1 - v0 < 2)
+      return false;
+    const size_t a0 = static_cast<size_t>(v0) * 3, a1 = static_cast<size_t>(v1 - 1) * 3;
+    if (a1 + 1 >= L.paperPolyVerts.size())
+      return false;
+    *outNearFirst = NearerToFirstPoint(pickXIn, pickYIn, L.paperPolyVerts[a0], L.paperPolyVerts[a0 + 1],
+                                       L.paperPolyVerts[a1], L.paperPolyVerts[a1 + 1]);
+    float total = 0.f;
+    for (int vi = v0; vi + 1 < v1; ++vi) {
+      const size_t a = static_cast<size_t>(vi) * 3, b = static_cast<size_t>(vi + 1) * 3;
+      total += std::hypot(L.paperPolyVerts[b] - L.paperPolyVerts[a], L.paperPolyVerts[b + 1] - L.paperPolyVerts[a + 1]);
+    }
+    *outCurLen = total;
+    return true;
+  }
+  default:
+    log.push_back(std::string(cmdName) + " — only a line, open polyline, or arc can be lengthened.");
+    return false;
+  }
+}
+
+/// Shared mutation: moves the near end of paper entity `ref` so its length becomes `newLen`,
+/// holding the other end fixed — the paper-store equivalent of `ApplyLengthenToLine`/`ToArc`/
+/// `ToPolylineEnd`, used by both paper LENGTHEN and paper EXTEND so the Line/Arc/Polyline math
+/// exists exactly once for the paper store (as it already does for the model store).
+static void ApplyLengthToPaperEntityMutation(PaperLayout* L, const PaperEntityRef& ref, bool nearFirst, float curLen,
+                                             float newLen) {
+  switch (ref.type) {
+  case PaperEntityRef::Type::Line: {
+    const size_t k = static_cast<size_t>(ref.index) * 6;
+    const float x0 = L->paperLines[k], y0 = L->paperLines[k + 1];
+    const float x1 = L->paperLines[k + 3], y1 = L->paperLines[k + 4];
+    const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
+    const float movingX = nearFirst ? x0 : x1, movingY = nearFirst ? y0 : y1;
+    const float dx = movingX - fixedX, dy = movingY - fixedY;
+    const float ux = dx / curLen, uy = dy / curLen;
+    const float nx = fixedX + ux * newLen, ny = fixedY + uy * newLen;
+    if (nearFirst) { L->paperLines[k] = nx; L->paperLines[k + 1] = ny; }
+    else { L->paperLines[k + 3] = nx; L->paperLines[k + 4] = ny; }
+    break;
+  }
+  case PaperEntityRef::Type::Arc: {
+    CadArc& a = L->paperArcs[static_cast<size_t>(ref.index)];
+    const float newAbsSweep = newLen / a.r;
+    const float deltaTheta = std::copysign(newAbsSweep - std::fabs(a.sweepRad), a.sweepRad);
+    if (nearFirst) { a.startRad -= deltaTheta; a.sweepRad += deltaTheta; }
+    else { a.sweepRad += deltaTheta; }
+    break;
+  }
+  case PaperEntityRef::Type::Polyline: {
+    const int pi = ref.index;
+    const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const int movingVi = nearFirst ? v0 : (v1 - 1);
+    const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
+    const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
+    const float fx = L->paperPolyVerts[fIdx], fy = L->paperPolyVerts[fIdx + 1];
+    const float mx = L->paperPolyVerts[mIdx], my = L->paperPolyVerts[mIdx + 1];
+    const float segLen = std::hypot(mx - fx, my - fy);
+    const float newSegLen = std::max(segLen + (newLen - curLen), 1e-6f);
+    const float ux = (mx - fx) / std::max(segLen, 1e-9f), uy = (my - fy) / std::max(segLen, 1e-9f);
+    L->paperPolyVerts[mIdx] = fx + ux * newSegLen;
+    L->paperPolyVerts[mIdx + 1] = fy + uy * newSegLen;
+    break;
+  }
+  default:
+    break;
+  }
+}
+
+bool ApplyLengthenToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, float pickXIn, float pickYIn,
+                                std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L)
+    return false;
+  if (st.lengthenMode == AppCommandState::LengthenMode::Dynamic) {
+    log.push_back("LENGTHEN — DYnamic mode needs a live drag, which paper space does not offer a "
+                  "prompt for; switch to DElta/Percent/Total in model space first.");
+    return false;
+  }
+  bool nearFirst = false;
+  float curLen = 0.f;
+  if (!PaperLengthenEligibility(*L, ref, pickXIn, pickYIn, &nearFirst, &curLen, "LENGTHEN", log))
+    return false;
+  if (!st.lengthenModeValueSet) {
+    // TASK-100. Model space latches the pick and prompts for the value; paper space has no command
+    // state to hold that prompt (it runs with `active == None` — see paperLengthenPhase), so the
+    // pick cannot be completed here. It can still be worth something: eligibility now runs FIRST,
+    // so the pick at least reports what the object measures instead of being a bare refusal.
+    char buf[224];
+    std::snprintf(buf, sizeof(buf),
+                  "LENGTHEN — current length %.3f in. No %s value set yet; type DE/P/T on the "
+                  "model-space command line first, then pick here again.",
+                  static_cast<double>(curLen), LengthenModeName(st.lengthenMode));
+    log.push_back(buf);
+    return false;
+  }
+
+  const float newLen = LengthenResolveTargetLength(st, curLen);
+  if (!(newLen > 1e-6f) || !std::isfinite(newLen)) {
+    log.push_back("LENGTHEN — that change would collapse the object to zero length; refused.");
+    return false;
+  }
+
+  PushUndoSnapshot(st, "Lengthen paper geometry");
+  ApplyLengthToPaperEntityMutation(L, ref, nearFirst, curLen, newLen);
+  BumpCadGpuCache(st);
+  log.push_back("LENGTHEN — paper object updated (" + std::to_string(curLen) + " -> " +
+                std::to_string(newLen) + ").");
+  return true;
+}
+
+/// Storage-agnostic geometry, mirroring `AppendModelBoundaryShapes` but reading `PaperLayout`'s
+/// stores instead of `AppCommandState`'s — unavoidable duplication given this codebase's two-store
+/// convention with no shared entity representation (the same duplication MIRROR's paper functions
+/// already accepted), feeding the SAME shared `FindExtendLineTarget`/`FindExtendArcTarget`.
+static void AppendPaperBoundaryShapes(const PaperLayout& L, const PaperEntityRef& ref,
+                                      std::vector<curveisect::Seg>* segs, std::vector<curveisect::Conic>* conics) {
+  using T = PaperEntityRef::Type;
+  if (ref.type == T::Line) {
+    const size_t k = static_cast<size_t>(ref.index) * 6;
+    if (k + 5 >= L.paperLines.size())
+      return;
+    segs->push_back({{L.paperLines[k], L.paperLines[k + 1]}, {L.paperLines[k + 3], L.paperLines[k + 4]}});
+  } else if (ref.type == T::Circle) {
+    const size_t k = static_cast<size_t>(ref.index) * 3;
+    if (k + 2 >= L.paperCircles.size())
+      return;
+    conics->push_back(curveisect::MakeCircle(L.paperCircles[k], L.paperCircles[k + 1], L.paperCircles[k + 2]));
+  } else if (ref.type == T::Arc) {
+    if (ref.index < 0 || static_cast<size_t>(ref.index) >= L.paperArcs.size())
+      return;
+    const CadArc& a = L.paperArcs[static_cast<size_t>(ref.index)];
+    conics->push_back(curveisect::MakeArc(a.cx, a.cy, a.r, a.startRad, a.sweepRad));
+  } else if (ref.type == T::Ellipse) {
+    if (ref.index < 0 || static_cast<size_t>(ref.index) >= L.paperEllipses.size())
+      return;
+    const CadEllipse& el = L.paperEllipses[static_cast<size_t>(ref.index)];
+    conics->push_back(curveisect::MakeEllipse(el.cx, el.cy, el.majVx, el.majVy, el.ratio));
+  } else if (ref.type == T::Polyline) {
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L.paperPolyOffsets.size())
+      return;
+    const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    for (int vi = v0; vi + 1 < v1; ++vi) {
+      const size_t a = static_cast<size_t>(vi) * 3, b = static_cast<size_t>(vi + 1) * 3;
+      if (b + 1 >= L.paperPolyVerts.size())
+        break;
+      segs->push_back({{L.paperPolyVerts[a], L.paperPolyVerts[a + 1]}, {L.paperPolyVerts[b], L.paperPolyVerts[b + 1]}});
+    }
+    if (static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)] && v1 - v0 >= 2) {
+      const size_t a = static_cast<size_t>(v1 - 1) * 3, b = static_cast<size_t>(v0) * 3;
+      segs->push_back({{L.paperPolyVerts[a], L.paperPolyVerts[a + 1]}, {L.paperPolyVerts[b], L.paperPolyVerts[b + 1]}});
+    }
+  }
+  // Text is refused before this is called (REQ-201) — paper's analogue of Annotation.
+}
+
+/// REQ-103 EXTEND, pure-paper-space path. Unlike LENGTHEN's paper path, EXTEND needs no typed
+/// value at all, so it is NOT simplified away — this mirrors the model-space
+/// `HandleExtendViewportPick`'s target-half exactly, against the paper store.
+bool ApplyExtendToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, float pickXIn, float pickYIn,
+                              std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L)
+    return false;
+  bool nearFirst = false;
+  float curLen = 0.f;
+  if (!PaperLengthenEligibility(*L, ref, pickXIn, pickYIn, &nearFirst, &curLen, "EXTEND", log))
+    return false;
+
+  std::vector<curveisect::Seg> segs;
+  std::vector<curveisect::Conic> conics;
+  for (const auto& b : st.paperExtendBoundaries)
+    AppendPaperBoundaryShapes(*L, b, &segs, &conics);
+
+  float newLen = 0.f;
+  bool found = false;
+  if (ref.type == PaperEntityRef::Type::Arc) {
+    const CadArc& a = L->paperArcs[static_cast<size_t>(ref.index)];
+    found = FindExtendArcTarget(segs, conics, a.cx, a.cy, a.r, a.startRad, a.sweepRad, nearFirst, &newLen);
+  } else if (ref.type == PaperEntityRef::Type::Line) {
+    const size_t k = static_cast<size_t>(ref.index) * 6;
+    const float x0 = L->paperLines[k], y0 = L->paperLines[k + 1];
+    const float x1 = L->paperLines[k + 3], y1 = L->paperLines[k + 4];
+    const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
+    const float movingX = nearFirst ? x0 : x1, movingY = nearFirst ? y0 : y1;
+    found = FindExtendLineTarget(segs, conics, fixedX, fixedY, movingX, movingY, &newLen);
+  } else {  // Polyline — LOCAL last-segment direction, matching model-space's own fix above and
+            // ApplyLengthToPaperEntityMutation's own fixedVi/movingVi (not the whole polyline's
+            // global first-to-last chord, which diverges from it once the polyline bends).
+    const int pi = ref.index;
+    const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const int movingVi = nearFirst ? v0 : (v1 - 1);
+    const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
+    const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
+    const float fixedX = L->paperPolyVerts[fIdx], fixedY = L->paperPolyVerts[fIdx + 1];
+    const float movingX = L->paperPolyVerts[mIdx], movingY = L->paperPolyVerts[mIdx + 1];
+    const float segLen = std::hypot(movingX - fixedX, movingY - fixedY);
+    float newSegLen = 0.f;
+    found = FindExtendLineTarget(segs, conics, fixedX, fixedY, movingX, movingY, &newSegLen);
+    if (found)
+      newLen = curLen - segLen + newSegLen;
+  }
+  if (!found) {
+    log.push_back("EXTEND — 1 object does not reach a boundary edge in that direction.");
+    return false;
+  }
+
+  PushUndoSnapshot(st, "Extend paper geometry");
+  ApplyLengthToPaperEntityMutation(L, ref, nearFirst, curLen, newLen);
+  BumpCadGpuCache(st);
+  log.push_back("EXTEND — paper object extended to the boundary.");
+  return true;
+}
+
+// BREAK reuses OFFSET's point-on-segment projection rather than re-deriving it (it is `static`
+// inside `namespace OffsetCmd`, so a using-declaration is the least-code way to name it here).
+using OffsetCmd::ClosestPointOnSegment;
+
+// ============================================================================================
+// BREAK (REQ-103 step 4, D-2026-08-24-c). Splits a single entity at one or two picked points.
+// Eligible: Line, Circle, Arc (any sweep), open and closed Polyline. Ellipse is refused — GoSurvey
+// has no elliptical-arc entity kind to hold a broken-open ellipse, and adding one is a new entity
+// kind this step's own spec note rules out. On an OPEN entity the two break points are ordered by
+// position along the entity (independent of click order) and the material between them is
+// removed. On a CLOSED entity (Circle, full-circle-sweep Arc, closed Polyline) click order is
+// load-bearing: the material swept from point 1 to point 2, in the direction of increasing
+// parameter, is removed, leaving one open result starting at point 2, ending at point 1 —
+// AutoCAD's own circle-break convention, generalized to all three closed cases.
+// ============================================================================================
+
+/// How far around an Arc's OWN sweep direction (from `startRad`, growing the way `sweepRad`'s sign
+/// already does) you'd travel to reach `theta` — radians, in [0, 2*pi). Same direction-of-travel
+/// rule `FindExtendArcTarget`'s `consider` lambda already applies (CW arcs have negative sweepRad).
+static float ArcSweepParam(float startRad, float sweepRad, float theta) {
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  float d;
+  if (sweepRad >= 0.f) {
+    d = std::fmod(theta - startRad, kTwoPi);
+    if (d < 0.f) d += kTwoPi;
+  } else {
+    d = std::fmod(startRad - theta, kTwoPi);
+    if (d < 0.f) d += kTwoPi;
+  }
+  return d;
+}
+
+/// Shared by Circle and full-circle-sweep Arc: the material from `theta1` to `theta2`, travelling
+/// COUNTERCLOCKWISE (AutoCAD's own circle-break convention — a full sweep's own stored direction
+/// carries no meaning once it is a closed loop, so both cases use this same fixed sense), is
+/// removed; the result starts at `theta2` and sweeps CCW to `theta1`. `theta1==theta2` (a repeated
+/// pick) yields a full `2*pi` sweep — the "break at point" case, not a degenerate zero-length one.
+static void CircleBreakStartSweep(float theta1, float theta2, float* outStart, float* outSweep) {
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  float sweep = std::fmod(theta1 - theta2, kTwoPi);
+  if (sweep <= 1e-7f)
+    sweep += kTwoPi;
+  *outStart = theta2;
+  *outSweep = sweep;
+}
+
+/// Projects (px,py) onto entity \p e (model-space stores), filling \p out. No existing helper
+/// resolves "the closest point ON this entity" — `PickClosestCadEntity` answers "which entity",
+/// with a distance only.
+///
+/// TASK-101: no longer static. BREAK's live preview has to resolve the cursor to the SAME point the
+/// second pick will commit, or it draws a span that is not the one that gets removed — the exact
+/// class of mistake `project_3d_preview_commit_point` records ("previews read the cursor, picks
+/// commit the snapped point"). One function, two callers, no second implementation. Declared in the
+/// header for the same reason its paper-space sibling `ClosestPointOnPaperEntity` already is.
+bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, float px, float py,
+                                 BreakPoint* out) {
+  switch (e.type) {
+  case SelectedEntity::Type::LineSeg: {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return false;
+    const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
+    ClosestPointOnSegment(x0, y0, st.userLinesFlat[k + 3], st.userLinesFlat[k + 4], px, py, &out->x, &out->y);
+    out->param = std::hypot(out->x - x0, out->y - y0);
+    return true;
+  }
+  case SelectedEntity::Type::Circle: {
+    const size_t k = static_cast<size_t>(e.index) * 4;
+    if (k + 3 >= st.userCirclesCxCyZR.size())
+      return false;
+    const float cx = st.userCirclesCxCyZR[k], cy = st.userCirclesCxCyZR[k + 1], r = st.userCirclesCxCyZR[k + 3];
+    out->theta = std::atan2(py - cy, px - cx);
+    out->x = cx + r * std::cos(out->theta);
+    out->y = cy + r * std::sin(out->theta);
+    return true;
+  }
+  case SelectedEntity::Type::Arc: {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      return false;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    out->theta = std::atan2(py - a.cy, px - a.cx);
+    out->x = a.cx + a.r * std::cos(out->theta);
+    out->y = a.cy + a.r * std::sin(out->theta);
+    out->param = a.r * ArcSweepParam(a.startRad, a.sweepRad, out->theta);
+    return true;
+  }
+  case SelectedEntity::Type::Polyline: {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+      return false;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const bool closed =
+        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+    bool any = false;
+    float bestD2 = std::numeric_limits<float>::max();
+    float cum = 0.f;
+    for (int vi = v0; vi + 1 < v1; ++vi) {
+      const size_t A = static_cast<size_t>(vi) * 3, B = static_cast<size_t>(vi + 1) * 3;
+      const float ax = st.userPolylineVerts[A], ay = st.userPolylineVerts[A + 1];
+      const float bx = st.userPolylineVerts[B], by = st.userPolylineVerts[B + 1];
+      float qx = 0.f, qy = 0.f;
+      ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
+      const float d2 = (qx - px) * (qx - px) + (qy - py) * (qy - py);
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        any = true;
+        out->x = qx;
+        out->y = qy;
+        out->param = cum + std::hypot(qx - ax, qy - ay);
+        out->segIndex = vi - v0;
+      }
+      cum += std::hypot(bx - ax, by - ay);
+    }
+    if (closed && v1 - v0 >= 2) {
+      const size_t A = static_cast<size_t>(v1 - 1) * 3, B = static_cast<size_t>(v0) * 3;
+      const float ax = st.userPolylineVerts[A], ay = st.userPolylineVerts[A + 1];
+      const float bx = st.userPolylineVerts[B], by = st.userPolylineVerts[B + 1];
+      float qx = 0.f, qy = 0.f;
+      ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
+      const float d2 = (qx - px) * (qx - px) + (qy - py) * (qy - py);
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        any = true;
+        out->x = qx;
+        out->y = qy;
+        out->param = cum + std::hypot(qx - ax, qy - ay);
+        out->segIndex = (v1 - v0) - 1;
+      }
+    }
+    return any;
+  }
+  default:
+    return false;
+  }
+}
+
+static void ApplyBreakToLine(AppCommandState& st, int index, const BreakPoint& p1, const BreakPoint& p2,
+                             std::vector<std::string>& log) {
+  const size_t k = static_cast<size_t>(index) * 6;
+  if (k + 5 >= st.userLinesFlat.size())
+    return;
+  const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1], z0 = st.userLinesFlat[k + 2];
+  const float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4], z1 = st.userLinesFlat[k + 5];
+  const float totalLen = std::hypot(x1 - x0, y1 - y0);
+  constexpr float kTol = 0.01f;  // REQ-101 endpoint-coincidence tolerance
+  const float nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
+  const bool nearIsStart = nearP <= kTol;
+  const bool farIsEnd = farP >= totalLen - kTol;
+  if (nearIsStart && farIsEnd) {
+    log.push_back("BREAK — that would remove the entire line; refused.");
+    return;
+  }
+  const float ux = (x1 - x0) / std::max(totalLen, 1e-9f), uy = (y1 - y0) / std::max(totalLen, 1e-9f);
+  PushUndoSnapshot(st, "Break");
+  if (nearIsStart) {
+    st.userLinesFlat[k] = x0 + ux * farP;
+    st.userLinesFlat[k + 1] = y0 + uy * farP;
+  } else if (farIsEnd) {
+    st.userLinesFlat[k + 3] = x0 + ux * nearP;
+    st.userLinesFlat[k + 4] = y0 + uy * nearP;
+  } else {
+    const EntityAttributes srcAttrs =
+        (static_cast<size_t>(index) < st.userLineAttrs.size()) ? st.userLineAttrs[static_cast<size_t>(index)]
+                                                                : EntityAttributes{};
+    const float nx = x0 + ux * nearP, ny = y0 + uy * nearP;
+    const float fx = x0 + ux * farP, fy = y0 + uy * farP;
+    st.userLinesFlat[k + 3] = nx;
+    st.userLinesFlat[k + 4] = ny;
+    st.userLinesFlat.insert(st.userLinesFlat.end(), {fx, fy, z0, x1, y1, z1});
+    st.userLineAttrs.push_back(DuplicatedEntityAttrs(srcAttrs));
+  }
+  BumpCadGpuCache(st);
+  log.push_back("BREAK — line broken.");
+}
+
+static void ApplyBreakToCircle(AppCommandState& st, int index, const BreakPoint& p1, const BreakPoint& p2,
+                               std::vector<std::string>& log) {
+  const size_t k = static_cast<size_t>(index) * 4;
+  if (k + 3 >= st.userCirclesCxCyZR.size())
+    return;
+  const float cx = st.userCirclesCxCyZR[k], cy = st.userCirclesCxCyZR[k + 1];
+  const float z = st.userCirclesCxCyZR[k + 2], r = st.userCirclesCxCyZR[k + 3];
+  float startRad = 0.f, sweepRad = 0.f;
+  CircleBreakStartSweep(p1.theta, p2.theta, &startRad, &sweepRad);
+  const EntityAttributes srcAttrs =
+      (static_cast<size_t>(index) < st.userCircleAttrs.size()) ? st.userCircleAttrs[static_cast<size_t>(index)]
+                                                                : EntityAttributes{};
+  const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
+  PushUndoSnapshot(st, "Break");
+  st.userCirclesCxCyZR.erase(st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k),
+                             st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k + 4));
+  if (static_cast<size_t>(index) < st.userCircleAttrs.size())
+    st.userCircleAttrs.erase(st.userCircleAttrs.begin() + index);
+  CadArc a{};
+  a.cx = cx;
+  a.cy = cy;
+  a.r = r;
+  a.z = z;
+  a.startRad = startRad;
+  a.sweepRad = sweepRad;
+  st.userArcs.push_back(a);
+  st.userArcAttrs.push_back(DuplicatedEntityAttrs(srcAttrs));
+  // TASK-099 F5. The erase above is the only COMPACTING erase in BREAK: every circle after `index`
+  // just moved down one slot, so any SelectedEntity still holding a higher circle index now names a
+  // different circle. ExecuteDeleteSelection clears the selection after exactly this compaction for
+  // exactly this reason; BREAK does not clear the selection when it starts, so it must clear it
+  // here. (The other BREAK paths mutate in place or append, and leave indices alone.)
+  ClearCadSelection(st);
+  BumpCadGpuCache(st);
+  log.push_back(samePoint ? "BREAK — circle opened into an arc at the pick point."
+                         : "BREAK — circle converted to an arc.");
+}
+
+static void ApplyBreakToArc(AppCommandState& st, int index, const BreakPoint& p1, const BreakPoint& p2,
+                            std::vector<std::string>& log) {
+  if (index < 0 || static_cast<size_t>(index) >= st.userArcs.size())
+    return;
+  const CadArc src = st.userArcs[static_cast<size_t>(index)];  // a copy — the push_back below may
+                                                                // reallocate the vector
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  const bool full = std::fabs(std::fabs(src.sweepRad) - kTwoPi) < 1e-4f;
+  if (full) {
+    float startRad = 0.f, sweepRad = 0.f;
+    CircleBreakStartSweep(p1.theta, p2.theta, &startRad, &sweepRad);
+    const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
+    PushUndoSnapshot(st, "Break");
+    st.userArcs[static_cast<size_t>(index)].startRad = startRad;
+    st.userArcs[static_cast<size_t>(index)].sweepRad = sweepRad;
+    BumpCadGpuCache(st);
+    log.push_back(samePoint ? "BREAK — full-circle arc re-opened at the pick point."
+                           : "BREAK — full-circle arc broken.");
+    return;
+  }
+  const float totalLen = src.r * std::fabs(src.sweepRad);
+  constexpr float kTol = 0.01f;
+  const float nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
+  const bool nearIsStart = nearP <= kTol;
+  const bool farIsEnd = farP >= totalLen - kTol;
+  if (nearIsStart && farIsEnd) {
+    log.push_back("BREAK — that would remove the entire arc; refused.");
+    return;
+  }
+  const float sgn = src.sweepRad >= 0.f ? 1.f : -1.f;
+  const float nearTheta = src.startRad + sgn * (nearP / std::max(src.r, 1e-9f));
+  const float farTheta = src.startRad + sgn * (farP / std::max(src.r, 1e-9f));
+  const float endRad0 = src.startRad + src.sweepRad;
+  PushUndoSnapshot(st, "Break");
+  if (nearIsStart) {
+    st.userArcs[static_cast<size_t>(index)].startRad = farTheta;
+    st.userArcs[static_cast<size_t>(index)].sweepRad = endRad0 - farTheta;
+  } else if (farIsEnd) {
+    st.userArcs[static_cast<size_t>(index)].sweepRad = nearTheta - src.startRad;
+  } else {
+    const EntityAttributes srcAttrs =
+        (static_cast<size_t>(index) < st.userArcAttrs.size()) ? st.userArcAttrs[static_cast<size_t>(index)]
+                                                              : EntityAttributes{};
+    CadArc newA = src;
+    newA.startRad = farTheta;
+    newA.sweepRad = endRad0 - farTheta;
+    st.userArcs.push_back(newA);  // may reallocate — index-based access only below
+    st.userArcAttrs.push_back(DuplicatedEntityAttrs(srcAttrs));
+    st.userArcs[static_cast<size_t>(index)].sweepRad = nearTheta - src.startRad;
+  }
+  BumpCadGpuCache(st);
+  log.push_back("BREAK — arc broken.");
+}
+
+/// Rewrites polyline `pi`'s vertex range to `newXY` (z always written 0 — matching LENGTHEN/
+/// EXTEND's existing 2D-only treatment of Line/Polyline endpoints, which never interpolate z
+/// either), shifting every later polyline's CSR offsets by the length delta. Same technique
+/// OVERKILL's cleanup pass already uses for the identical "this polyline's vertex count changed"
+/// problem (this file, the LWPOLYLINE-cleanup block).
+static void ReplacePolylineVerts(AppCommandState& st, int pi, const std::vector<std::pair<float, float>>& newXY) {
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const int nNew = static_cast<int>(newXY.size());
+  const int delta = nNew - (v1 - v0);
+  st.userPolylineVerts.erase(st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+                             st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+  std::vector<float> flat;
+  flat.reserve(static_cast<size_t>(nNew) * 3);
+  for (const auto& p : newXY) {
+    flat.push_back(p.first);
+    flat.push_back(p.second);
+    flat.push_back(0.f);
+  }
+  st.userPolylineVerts.insert(st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3, flat.begin(),
+                              flat.end());
+  for (size_t oi = static_cast<size_t>(pi + 1); oi < st.userPolylineOffsets.size(); ++oi)
+    st.userPolylineOffsets[oi] += delta;
+}
+
+/// Appends a brand-new polyline to the end of the CSR arrays. Precondition: at least one polyline
+/// already exists (BREAK only ever calls this while splitting an already-selected polyline), so
+/// `userPolylineOffsets` is never empty here.
+static void AppendNewPolyline(AppCommandState& st, const std::vector<std::pair<float, float>>& xy, bool closed,
+                              EntityAttributes attrs) {
+  const int base = st.userPolylineOffsets.back();
+  for (const auto& p : xy) {
+    st.userPolylineVerts.push_back(p.first);
+    st.userPolylineVerts.push_back(p.second);
+    st.userPolylineVerts.push_back(0.f);
+  }
+  st.userPolylineOffsets.push_back(base + static_cast<int>(xy.size()));
+  st.userPolylineClosed.push_back(closed ? 1u : 0u);
+  st.userPolylineAttrs.push_back(std::move(attrs));
+}
+
+static void ApplyBreakToOpenPolyline(AppCommandState& st, int pi, const BreakPoint& p1, const BreakPoint& p2,
+                                     std::vector<std::string>& log) {
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const float totalLen = PolylineOpenLengthOf(st, pi);
+  constexpr float kTol = 0.01f;
+  const bool p1First = p1.param <= p2.param;
+  const BreakPoint& nearBp = p1First ? p1 : p2;
+  const BreakPoint& farBp = p1First ? p2 : p1;
+  const bool nearIsStart = nearBp.param <= kTol;
+  const bool farIsEnd = farBp.param >= totalLen - kTol;
+  if (nearIsStart && farIsEnd) {
+    log.push_back("BREAK — that would remove the entire polyline; refused.");
+    return;
+  }
+  std::vector<std::pair<float, float>> orig;
+  orig.reserve(static_cast<size_t>(v1 - v0));
+  for (int vi = v0; vi < v1; ++vi)
+    orig.push_back({st.userPolylineVerts[static_cast<size_t>(vi) * 3], st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 1]});
+
+  auto buildPiece = [&](bool fromStart) {
+    std::vector<std::pair<float, float>> out;
+    if (fromStart) {
+      for (int i = 0; i <= nearBp.segIndex; ++i)
+        out.push_back(orig[static_cast<size_t>(i)]);
+      const auto& last = out.back();
+      if (std::hypot(last.first - nearBp.x, last.second - nearBp.y) > 1e-6f)
+        out.push_back({nearBp.x, nearBp.y});
+    } else {
+      out.push_back({farBp.x, farBp.y});
+      for (int i = farBp.segIndex + 1; i < static_cast<int>(orig.size()); ++i)
+        out.push_back(orig[static_cast<size_t>(i)]);
+      if (out.size() >= 2 &&
+          std::hypot(out[0].first - out[1].first, out[0].second - out[1].second) < 1e-6f)
+        out.erase(out.begin());
+    }
+    return out;
+  };
+
+  const EntityAttributes srcAttrs =
+      (static_cast<size_t>(pi) < st.userPolylineAttrs.size()) ? st.userPolylineAttrs[static_cast<size_t>(pi)]
+                                                               : EntityAttributes{};
+  PushUndoSnapshot(st, "Break");
+  if (nearIsStart) {
+    ReplacePolylineVerts(st, pi, buildPiece(false));
+  } else if (farIsEnd) {
+    ReplacePolylineVerts(st, pi, buildPiece(true));
+  } else {
+    std::vector<std::pair<float, float>> nearPiece = buildPiece(true);
+    std::vector<std::pair<float, float>> farPiece = buildPiece(false);
+    ReplacePolylineVerts(st, pi, nearPiece);
+    AppendNewPolyline(st, farPiece, false, DuplicatedEntityAttrs(srcAttrs));
+  }
+  BumpCadGpuCache(st);
+  log.push_back("BREAK — polyline broken.");
+}
+
+static void ApplyBreakToClosedPolyline(AppCommandState& st, int pi, const BreakPoint& p1, const BreakPoint& p2,
+                                       std::vector<std::string>& log) {
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const int n = v1 - v0;  // vertex count == edge count for a closed ring
+  std::vector<float> vparam(static_cast<size_t>(n));
+  float ringLen = 0.f;
+  for (int i = 0; i < n; ++i) {
+    vparam[static_cast<size_t>(i)] = ringLen;
+    const int a = v0 + i, b = v0 + (i + 1) % n;
+    ringLen += std::hypot(st.userPolylineVerts[static_cast<size_t>(b) * 3] - st.userPolylineVerts[static_cast<size_t>(a) * 3],
+                          st.userPolylineVerts[static_cast<size_t>(b) * 3 + 1] -
+                              st.userPolylineVerts[static_cast<size_t>(a) * 3 + 1]);
+  }
+  if (ringLen < 1e-9f)
+    return;
+  // Rotate every position so point2's param becomes 0, then collect everything from point2
+  // (inclusive) through point1 (inclusive) in ascending rotated order — "walk forward from point2
+  // to point1, wrapping through the closing edge" expressed as a sort instead of segment-index
+  // bookkeeping, so a same-edge-reversed pick needs no special case.
+  auto rot = [&](float param) {
+    float d = std::fmod(param - p2.param, ringLen);
+    if (d < 0.f) d += ringLen;
+    return d;
+  };
+  const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
+  const float p1Rot = samePoint ? ringLen : rot(p1.param);
+  std::vector<std::pair<float, float>> outVerts;
+  outVerts.push_back({p2.x, p2.y});
+  for (int i = 0; i < n; ++i) {
+    const float r = rot(vparam[static_cast<size_t>(i)]);
+    if (r > 1e-6f && r < p1Rot - 1e-6f)
+      outVerts.push_back({st.userPolylineVerts[static_cast<size_t>(v0 + i) * 3],
+                          st.userPolylineVerts[static_cast<size_t>(v0 + i) * 3 + 1]});
+  }
+  outVerts.push_back({p1.x, p1.y});
+  if (outVerts.size() >= 2 &&
+      std::hypot(outVerts[0].first - outVerts[1].first, outVerts[0].second - outVerts[1].second) < 1e-6f)
+    outVerts.erase(outVerts.begin() + 1);
+  if (outVerts.size() >= 2 &&
+      std::hypot(outVerts.back().first - outVerts[outVerts.size() - 2].first,
+                outVerts.back().second - outVerts[outVerts.size() - 2].second) < 1e-6f)
+    outVerts.pop_back();
+  PushUndoSnapshot(st, "Break");
+  ReplacePolylineVerts(st, pi, outVerts);
+  if (static_cast<size_t>(pi) < st.userPolylineClosed.size())
+    st.userPolylineClosed[static_cast<size_t>(pi)] = 0u;
+  BumpCadGpuCache(st);
+  log.push_back(samePoint ? "BREAK — closed polyline opened at the pick point."
+                         : "BREAK — closed polyline broken open.");
+}
+
+static void ApplyBreakToPolyline(AppCommandState& st, int pi, const BreakPoint& p1, const BreakPoint& p2,
+                                 std::vector<std::string>& log) {
+  const bool closed =
+      static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+  if (closed)
+    ApplyBreakToClosedPolyline(st, pi, p1, p2, log);
+  else
+    ApplyBreakToOpenPolyline(st, pi, p1, p2, log);
+}
+
+/// Single choke point, dispatching by entity type — mirrors `ApplyLengthenToEntity`'s shape.
+static void ApplyBreakToEntity(AppCommandState& st, const SelectedEntity& e, const BreakPoint& p1,
+                               const BreakPoint& p2, std::vector<std::string>& log) {
+  switch (e.type) {
+  case SelectedEntity::Type::LineSeg: ApplyBreakToLine(st, e.index, p1, p2, log); break;
+  case SelectedEntity::Type::Circle:  ApplyBreakToCircle(st, e.index, p1, p2, log); break;
+  case SelectedEntity::Type::Arc:     ApplyBreakToArc(st, e.index, p1, p2, log); break;
+  case SelectedEntity::Type::Polyline: ApplyBreakToPolyline(st, e.index, p1, p2, log); break;
+  default: break;
+  }
+}
+
+void StartBreakCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // paper routing (REQ-103 step 4)
+    st.active = K::None;
+    st.paperBreakPhase = 1;
+    log.push_back("BREAK — click an object (the pick is break point 1). Esc cancels.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = K::Break;
+  st.lastCommand = K::Break;
+  st.breakPhase = AppCommandState::BreakPhase::SelectFirstPoint;
+  st.breakEntity = SelectedEntity{};
+  st.selBoxWaitingSecond = false;
+  log.push_back("BREAK — select object (the pick is break point 1). ESC cancels.");
+}
+
+/// Model-space + floating-model-space viewport-pick handler for BREAK — called from
+/// SubmitViewportPickImpl, the exact site RECT's history warns a new command must not go missing
+/// from. Phase 1's pick both selects the entity (`PickClosestCadEntity`) and supplies break point
+/// 1 (`ClosestPointOnEntity`, not the raw pick); phase 2 resolves break point 2 on the SAME entity
+/// and applies, looping back to phase 1.
+void HandleBreakViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  using BP = AppCommandState::BreakPhase;
+  if (st.breakPhase == BP::SelectFirstPoint) {
+    SelectedEntity hit{};
+    float d2 = 0.f;
+    if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+      log.push_back("BREAK — no object at pick.");
+      return;
+    }
+    if (hit.type == SelectedEntity::Type::Ellipse) {
+      log.push_back("BREAK — 1 ellipse ignored: every ellipse in this drawing is a full closed curve, "
+                    "and GoSurvey has no elliptical-arc entity kind to hold a broken-open ellipse. "
+                    "Pick a line, circle, arc, or polyline.");
+      return;
+    }
+    if (hit.type == SelectedEntity::Type::FeatureLine) {
+      log.push_back("BREAK — 1 feature line ignored: a feature line cannot be broken. Pick a line, "
+                    "circle, arc, or polyline.");
+      return;
+    }
+    if (hit.type == SelectedEntity::Type::Surface) {
+      log.push_back("BREAK — 1 surface ignored: a surface cannot be broken. Pick a line, circle, arc, "
+                    "or polyline.");
+      return;
+    }
+    BreakPoint p1{};
+    if (!ClosestPointOnEntity(st, hit, wx, wy, &p1)) {
+      log.push_back("BREAK — could not resolve a point on that object; try again.");
+      return;
+    }
+    st.breakEntity = hit;
+    st.breakP1 = p1;
+    st.breakPhase = BP::SelectSecondPoint;
+    log.push_back("BREAK — specify second break point:");
+    return;
+  }
+
+  // SelectSecondPoint.
+  BreakPoint p2{};
+  if (!ClosestPointOnEntity(st, st.breakEntity, wx, wy, &p2)) {
+    log.push_back("BREAK — could not resolve a second point on that object; try again.");
+    return;
+  }
+  ApplyBreakToEntity(st, st.breakEntity, st.breakP1, p2, log);
+  st.breakPhase = BP::SelectFirstPoint;
+  st.breakEntity = SelectedEntity{};
+}
+
+/// Paper-space equivalent of `ClosestPointOnEntity`, against `PaperLayout`'s stores. Paper circles
+/// are stride 3 (cx,cy,r — paper z is always 0, ADR-025 (g)), unlike the model store's stride 4.
+bool ClosestPointOnPaperEntity(const PaperLayout& L, const PaperEntityRef& ref, float px, float py,
+                               BreakPoint* out) {
+  using T = PaperEntityRef::Type;
+  switch (ref.type) {
+  case T::Line: {
+    const size_t k = static_cast<size_t>(ref.index) * 6;
+    if (k + 5 >= L.paperLines.size())
+      return false;
+    const float x0 = L.paperLines[k], y0 = L.paperLines[k + 1];
+    ClosestPointOnSegment(x0, y0, L.paperLines[k + 3], L.paperLines[k + 4], px, py, &out->x, &out->y);
+    out->param = std::hypot(out->x - x0, out->y - y0);
+    return true;
+  }
+  case T::Circle: {
+    const size_t k = static_cast<size_t>(ref.index) * 3;
+    if (k + 2 >= L.paperCircles.size())
+      return false;
+    const float cx = L.paperCircles[k], cy = L.paperCircles[k + 1], r = L.paperCircles[k + 2];
+    out->theta = std::atan2(py - cy, px - cx);
+    out->x = cx + r * std::cos(out->theta);
+    out->y = cy + r * std::sin(out->theta);
+    return true;
+  }
+  case T::Arc: {
+    if (ref.index < 0 || static_cast<size_t>(ref.index) >= L.paperArcs.size())
+      return false;
+    const CadArc& a = L.paperArcs[static_cast<size_t>(ref.index)];
+    out->theta = std::atan2(py - a.cy, px - a.cx);
+    out->x = a.cx + a.r * std::cos(out->theta);
+    out->y = a.cy + a.r * std::sin(out->theta);
+    out->param = a.r * ArcSweepParam(a.startRad, a.sweepRad, out->theta);
+    return true;
+  }
+  case T::Polyline: {
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L.paperPolyOffsets.size())
+      return false;
+    const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const bool closed =
+        static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)];
+    bool any = false;
+    float bestD2 = std::numeric_limits<float>::max();
+    float cum = 0.f;
+    for (int vi = v0; vi + 1 < v1; ++vi) {
+      const size_t A = static_cast<size_t>(vi) * 3, B = static_cast<size_t>(vi + 1) * 3;
+      const float ax = L.paperPolyVerts[A], ay = L.paperPolyVerts[A + 1];
+      const float bx = L.paperPolyVerts[B], by = L.paperPolyVerts[B + 1];
+      float qx = 0.f, qy = 0.f;
+      ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
+      const float d2 = (qx - px) * (qx - px) + (qy - py) * (qy - py);
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        any = true;
+        out->x = qx;
+        out->y = qy;
+        out->param = cum + std::hypot(qx - ax, qy - ay);
+        out->segIndex = vi - v0;
+      }
+      cum += std::hypot(bx - ax, by - ay);
+    }
+    if (closed && v1 - v0 >= 2) {
+      const size_t A = static_cast<size_t>(v1 - 1) * 3, B = static_cast<size_t>(v0) * 3;
+      const float ax = L.paperPolyVerts[A], ay = L.paperPolyVerts[A + 1];
+      const float bx = L.paperPolyVerts[B], by = L.paperPolyVerts[B + 1];
+      float qx = 0.f, qy = 0.f;
+      ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
+      const float d2 = (qx - px) * (qx - px) + (qy - py) * (qy - py);
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        any = true;
+        out->x = qx;
+        out->y = qy;
+        out->param = cum + std::hypot(qx - ax, qy - ay);
+        out->segIndex = (v1 - v0) - 1;
+      }
+    }
+    return any;
+  }
+  default:
+    return false;
+  }
+}
+
+static bool ApplyBreakToPaperLine(AppCommandState& st, PaperLayout* L, int index, const BreakPoint& p1,
+                                  const BreakPoint& p2, std::vector<std::string>& log) {
+  const size_t k = static_cast<size_t>(index) * 6;
+  if (k + 5 >= L->paperLines.size())
+    return false;
+  const float x0 = L->paperLines[k], y0 = L->paperLines[k + 1];
+  const float x1 = L->paperLines[k + 3], y1 = L->paperLines[k + 4];
+  const float totalLen = std::hypot(x1 - x0, y1 - y0);
+  constexpr float kTol = 0.01f;
+  const float nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
+  const bool nearIsStart = nearP <= kTol;
+  const bool farIsEnd = farP >= totalLen - kTol;
+  if (nearIsStart && farIsEnd) {
+    log.push_back("BREAK — that would remove the entire line; refused.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Break paper geometry");
+  const float ux = (x1 - x0) / std::max(totalLen, 1e-9f), uy = (y1 - y0) / std::max(totalLen, 1e-9f);
+  if (nearIsStart) {
+    L->paperLines[k] = x0 + ux * farP;
+    L->paperLines[k + 1] = y0 + uy * farP;
+  } else if (farIsEnd) {
+    L->paperLines[k + 3] = x0 + ux * nearP;
+    L->paperLines[k + 4] = y0 + uy * nearP;
+  } else {
+    const EntityAttributes srcAttrs =
+        (static_cast<size_t>(index) < L->paperLineAttrs.size()) ? L->paperLineAttrs[static_cast<size_t>(index)]
+                                                                 : EntityAttributes{};
+    const float nx = x0 + ux * nearP, ny = y0 + uy * nearP;
+    const float fx = x0 + ux * farP, fy = y0 + uy * farP;
+    L->paperLines[k + 3] = nx;
+    L->paperLines[k + 4] = ny;
+    L->paperLines.insert(L->paperLines.end(), {fx, fy, 0.f, x1, y1, 0.f});
+    L->paperLineAttrs.push_back(srcAttrs);  // paper: id copied verbatim (existing precedent, not a
+                                            // new policy — paper entities are outside REQ-076's sweep)
+  }
+  log.push_back("BREAK — paper line broken.");
+  return true;
+}
+
+static bool ApplyBreakToPaperCircle(AppCommandState& st, PaperLayout* L, int index, const BreakPoint& p1,
+                                    const BreakPoint& p2, std::vector<std::string>& log) {
+  const size_t k = static_cast<size_t>(index) * 3;
+  if (k + 2 >= L->paperCircles.size())
+    return false;
+  const float cx = L->paperCircles[k], cy = L->paperCircles[k + 1], r = L->paperCircles[k + 2];
+  float startRad = 0.f, sweepRad = 0.f;
+  CircleBreakStartSweep(p1.theta, p2.theta, &startRad, &sweepRad);
+  const EntityAttributes srcAttrs =
+      (static_cast<size_t>(index) < L->paperCircleAttrs.size()) ? L->paperCircleAttrs[static_cast<size_t>(index)]
+                                                                 : EntityAttributes{};
+  const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
+  PushUndoSnapshot(st, "Break paper geometry");
+  L->paperCircles.erase(L->paperCircles.begin() + static_cast<std::ptrdiff_t>(k),
+                        L->paperCircles.begin() + static_cast<std::ptrdiff_t>(k + 3));
+  if (static_cast<size_t>(index) < L->paperCircleAttrs.size())
+    L->paperCircleAttrs.erase(L->paperCircleAttrs.begin() + index);
+  CadArc a{};
+  a.cx = cx;
+  a.cy = cy;
+  a.r = r;
+  a.startRad = startRad;
+  a.sweepRad = sweepRad;
+  L->paperArcs.push_back(a);
+  L->paperArcAttrs.push_back(srcAttrs);
+  log.push_back(samePoint ? "BREAK — paper circle opened into an arc at the pick point."
+                         : "BREAK — paper circle converted to an arc.");
+  return true;
+}
+
+static bool ApplyBreakToPaperArc(AppCommandState& st, PaperLayout* L, int index, const BreakPoint& p1,
+                                 const BreakPoint& p2, std::vector<std::string>& log) {
+  if (index < 0 || static_cast<size_t>(index) >= L->paperArcs.size())
+    return false;
+  const CadArc src = L->paperArcs[static_cast<size_t>(index)];
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  const bool full = std::fabs(std::fabs(src.sweepRad) - kTwoPi) < 1e-4f;
+  if (full) {
+    float startRad = 0.f, sweepRad = 0.f;
+    CircleBreakStartSweep(p1.theta, p2.theta, &startRad, &sweepRad);
+    const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
+    PushUndoSnapshot(st, "Break paper geometry");
+    L->paperArcs[static_cast<size_t>(index)].startRad = startRad;
+    L->paperArcs[static_cast<size_t>(index)].sweepRad = sweepRad;
+    log.push_back(samePoint ? "BREAK — paper full-circle arc re-opened at the pick point."
+                           : "BREAK — paper full-circle arc broken.");
+    return true;
+  }
+  const float totalLen = src.r * std::fabs(src.sweepRad);
+  constexpr float kTol = 0.01f;
+  const float nearP = std::min(p1.param, p2.param), farP = std::max(p1.param, p2.param);
+  const bool nearIsStart = nearP <= kTol;
+  const bool farIsEnd = farP >= totalLen - kTol;
+  if (nearIsStart && farIsEnd) {
+    log.push_back("BREAK — that would remove the entire arc; refused.");
+    return false;
+  }
+  const float sgn = src.sweepRad >= 0.f ? 1.f : -1.f;
+  const float nearTheta = src.startRad + sgn * (nearP / std::max(src.r, 1e-9f));
+  const float farTheta = src.startRad + sgn * (farP / std::max(src.r, 1e-9f));
+  const float endRad0 = src.startRad + src.sweepRad;
+  PushUndoSnapshot(st, "Break paper geometry");
+  if (nearIsStart) {
+    L->paperArcs[static_cast<size_t>(index)].startRad = farTheta;
+    L->paperArcs[static_cast<size_t>(index)].sweepRad = endRad0 - farTheta;
+  } else if (farIsEnd) {
+    L->paperArcs[static_cast<size_t>(index)].sweepRad = nearTheta - src.startRad;
+  } else {
+    const EntityAttributes srcAttrs =
+        (static_cast<size_t>(index) < L->paperArcAttrs.size()) ? L->paperArcAttrs[static_cast<size_t>(index)]
+                                                                : EntityAttributes{};
+    CadArc newA = src;
+    newA.startRad = farTheta;
+    newA.sweepRad = endRad0 - farTheta;
+    L->paperArcs.push_back(newA);
+    L->paperArcAttrs.push_back(srcAttrs);
+    L->paperArcs[static_cast<size_t>(index)].sweepRad = nearTheta - src.startRad;
+  }
+  log.push_back("BREAK — paper arc broken.");
+  return true;
+}
+
+/// Paper equivalent of `ReplacePolylineVerts`.
+static void ReplacePaperPolylineVerts(PaperLayout* L, int pi, const std::vector<std::pair<float, float>>& newXY) {
+  const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+  const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+  const int nNew = static_cast<int>(newXY.size());
+  const int delta = nNew - (v1 - v0);
+  L->paperPolyVerts.erase(L->paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+                          L->paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+  std::vector<float> flat;
+  flat.reserve(static_cast<size_t>(nNew) * 3);
+  for (const auto& p : newXY) {
+    flat.push_back(p.first);
+    flat.push_back(p.second);
+    flat.push_back(0.f);
+  }
+  L->paperPolyVerts.insert(L->paperPolyVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3, flat.begin(), flat.end());
+  for (size_t oi = static_cast<size_t>(pi + 1); oi < L->paperPolyOffsets.size(); ++oi)
+    L->paperPolyOffsets[oi] += delta;
+}
+
+/// Paper equivalent of `AppendNewPolyline`. Same precondition (at least one paper polyline already
+/// exists — BREAK only calls this while splitting one).
+static void AppendNewPaperPolyline(PaperLayout* L, const std::vector<std::pair<float, float>>& xy, bool closed,
+                                   EntityAttributes attrs) {
+  const int base = L->paperPolyOffsets.back();
+  for (const auto& p : xy) {
+    L->paperPolyVerts.push_back(p.first);
+    L->paperPolyVerts.push_back(p.second);
+    L->paperPolyVerts.push_back(0.f);
+  }
+  L->paperPolyOffsets.push_back(base + static_cast<int>(xy.size()));
+  L->paperPolyClosed.push_back(closed ? 1u : 0u);
+  L->paperPolyAttrs.push_back(std::move(attrs));
+}
+
+static bool ApplyBreakToPaperOpenPolyline(AppCommandState& st, PaperLayout* L, int pi, const BreakPoint& p1,
+                                          const BreakPoint& p2, std::vector<std::string>& log) {
+  const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+  const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+  float totalLen = 0.f;
+  for (int vi = v0; vi + 1 < v1; ++vi) {
+    const size_t A = static_cast<size_t>(vi) * 3, B = static_cast<size_t>(vi + 1) * 3;
+    totalLen += std::hypot(L->paperPolyVerts[B] - L->paperPolyVerts[A], L->paperPolyVerts[B + 1] - L->paperPolyVerts[A + 1]);
+  }
+  constexpr float kTol = 0.01f;
+  const bool p1First = p1.param <= p2.param;
+  const BreakPoint& nearBp = p1First ? p1 : p2;
+  const BreakPoint& farBp = p1First ? p2 : p1;
+  const bool nearIsStart = nearBp.param <= kTol;
+  const bool farIsEnd = farBp.param >= totalLen - kTol;
+  if (nearIsStart && farIsEnd) {
+    log.push_back("BREAK — that would remove the entire polyline; refused.");
+    return false;
+  }
+  std::vector<std::pair<float, float>> orig;
+  orig.reserve(static_cast<size_t>(v1 - v0));
+  for (int vi = v0; vi < v1; ++vi)
+    orig.push_back({L->paperPolyVerts[static_cast<size_t>(vi) * 3], L->paperPolyVerts[static_cast<size_t>(vi) * 3 + 1]});
+
+  auto buildPiece = [&](bool fromStart) {
+    std::vector<std::pair<float, float>> out;
+    if (fromStart) {
+      for (int i = 0; i <= nearBp.segIndex; ++i)
+        out.push_back(orig[static_cast<size_t>(i)]);
+      const auto& last = out.back();
+      if (std::hypot(last.first - nearBp.x, last.second - nearBp.y) > 1e-6f)
+        out.push_back({nearBp.x, nearBp.y});
+    } else {
+      out.push_back({farBp.x, farBp.y});
+      for (int i = farBp.segIndex + 1; i < static_cast<int>(orig.size()); ++i)
+        out.push_back(orig[static_cast<size_t>(i)]);
+      if (out.size() >= 2 &&
+          std::hypot(out[0].first - out[1].first, out[0].second - out[1].second) < 1e-6f)
+        out.erase(out.begin());
+    }
+    return out;
+  };
+
+  const EntityAttributes srcAttrs =
+      (static_cast<size_t>(pi) < L->paperPolyAttrs.size()) ? L->paperPolyAttrs[static_cast<size_t>(pi)]
+                                                            : EntityAttributes{};
+  PushUndoSnapshot(st, "Break paper geometry");
+  if (nearIsStart) {
+    ReplacePaperPolylineVerts(L, pi, buildPiece(false));
+  } else if (farIsEnd) {
+    ReplacePaperPolylineVerts(L, pi, buildPiece(true));
+  } else {
+    std::vector<std::pair<float, float>> nearPiece = buildPiece(true);
+    std::vector<std::pair<float, float>> farPiece = buildPiece(false);
+    ReplacePaperPolylineVerts(L, pi, nearPiece);
+    AppendNewPaperPolyline(L, farPiece, false, srcAttrs);
+  }
+  log.push_back("BREAK — paper polyline broken.");
+  return true;
+}
+
+static bool ApplyBreakToPaperClosedPolyline(AppCommandState& st, PaperLayout* L, int pi, const BreakPoint& p1,
+                                            const BreakPoint& p2, std::vector<std::string>& log) {
+  const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+  const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+  const int n = v1 - v0;
+  std::vector<float> vparam(static_cast<size_t>(n));
+  float ringLen = 0.f;
+  for (int i = 0; i < n; ++i) {
+    vparam[static_cast<size_t>(i)] = ringLen;
+    const int a = v0 + i, b = v0 + (i + 1) % n;
+    ringLen += std::hypot(L->paperPolyVerts[static_cast<size_t>(b) * 3] - L->paperPolyVerts[static_cast<size_t>(a) * 3],
+                          L->paperPolyVerts[static_cast<size_t>(b) * 3 + 1] -
+                              L->paperPolyVerts[static_cast<size_t>(a) * 3 + 1]);
+  }
+  if (ringLen < 1e-9f)
+    return false;
+  auto rot = [&](float param) {
+    float d = std::fmod(param - p2.param, ringLen);
+    if (d < 0.f) d += ringLen;
+    return d;
+  };
+  const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
+  const float p1Rot = samePoint ? ringLen : rot(p1.param);
+  std::vector<std::pair<float, float>> outVerts;
+  outVerts.push_back({p2.x, p2.y});
+  for (int i = 0; i < n; ++i) {
+    const float r = rot(vparam[static_cast<size_t>(i)]);
+    if (r > 1e-6f && r < p1Rot - 1e-6f)
+      outVerts.push_back({L->paperPolyVerts[static_cast<size_t>(v0 + i) * 3],
+                          L->paperPolyVerts[static_cast<size_t>(v0 + i) * 3 + 1]});
+  }
+  outVerts.push_back({p1.x, p1.y});
+  if (outVerts.size() >= 2 &&
+      std::hypot(outVerts[0].first - outVerts[1].first, outVerts[0].second - outVerts[1].second) < 1e-6f)
+    outVerts.erase(outVerts.begin() + 1);
+  if (outVerts.size() >= 2 &&
+      std::hypot(outVerts.back().first - outVerts[outVerts.size() - 2].first,
+                outVerts.back().second - outVerts[outVerts.size() - 2].second) < 1e-6f)
+    outVerts.pop_back();
+  PushUndoSnapshot(st, "Break paper geometry");
+  ReplacePaperPolylineVerts(L, pi, outVerts);
+  if (static_cast<size_t>(pi) < L->paperPolyClosed.size())
+    L->paperPolyClosed[static_cast<size_t>(pi)] = 0u;
+  log.push_back(samePoint ? "BREAK — closed paper polyline opened at the pick point."
+                         : "BREAK — closed paper polyline broken open.");
+  return true;
+}
+
+bool ApplyBreakToPaperEntity(AppCommandState& st, const PaperEntityRef& ref, const BreakPoint& p1, float pickXIn,
+                             float pickYIn, std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L)
+    return false;
+  BreakPoint p2{};
+  if (!ClosestPointOnPaperEntity(*L, ref, pickXIn, pickYIn, &p2)) {
+    log.push_back("BREAK — could not resolve a second point on that object; try again.");
+    return false;
+  }
+  // Each ApplyBreakToPaper* function pushes its OWN undo snapshot, and only once it knows the break
+  // will not be refused (mirrors the model-space functions' shape) — a blanket push here would
+  // leave a spurious undo step behind on a "would remove the entire X" refusal.
+  bool applied = false;
+  switch (ref.type) {
+  case PaperEntityRef::Type::Line:     applied = ApplyBreakToPaperLine(st, L, ref.index, p1, p2, log); break;
+  case PaperEntityRef::Type::Circle:   applied = ApplyBreakToPaperCircle(st, L, ref.index, p1, p2, log); break;
+  case PaperEntityRef::Type::Arc:      applied = ApplyBreakToPaperArc(st, L, ref.index, p1, p2, log); break;
+  case PaperEntityRef::Type::Polyline: {
+    const bool closed = static_cast<size_t>(ref.index) < L->paperPolyClosed.size() &&
+                        L->paperPolyClosed[static_cast<size_t>(ref.index)];
+    applied = closed ? ApplyBreakToPaperClosedPolyline(st, L, ref.index, p1, p2, log)
+                     : ApplyBreakToPaperOpenPolyline(st, L, ref.index, p1, p2, log);
+    break;
+  }
+  default: break;
+  }
+  if (applied)
+    BumpCadGpuCache(st);
+  return applied;
+}
+
+// ============================================================================
+// STRETCH (REQ-103 step 5, TASK-098)
+// ============================================================================
+
+// RecomputeArcFromEndpoints now lives inline in CadCommands.hpp (unit-testable without linking
+// this whole TU — see its doc comment there).
+
+void StretchOneArc(CadArc& arc, float mnX, float mxX, float mnY, float mxY, float dx, float dy,
+                   std::vector<std::string>& log) {
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  if (std::fabs(std::fabs(arc.sweepRad) - kTwoPi) < 1e-4f) {
+    // Full-circle sweep: endpoints coincide, so endpoint math is undefined — follow the Circle
+    // rule instead, same tolerance BREAK's own full-circle guard uses.
+    if (PointInsideClosedRect(arc.cx, arc.cy, mnX, mxX, mnY, mxY)) {
+      arc.cx += dx;
+      arc.cy += dy;
+    }
+    return;
+  }
+  const float sx = arc.cx + arc.r * std::cos(arc.startRad);
+  const float sy = arc.cy + arc.r * std::sin(arc.startRad);
+  const float endAng = arc.startRad + arc.sweepRad;
+  const float ex = arc.cx + arc.r * std::cos(endAng);
+  const float ey = arc.cy + arc.r * std::sin(endAng);
+  const bool startIn = PointInsideClosedRect(sx, sy, mnX, mxX, mnY, mxY);
+  const bool endIn = PointInsideClosedRect(ex, ey, mnX, mxX, mnY, mxY);
+  if (!startIn && !endIn)
+    return;  // selected but nothing to move — a legitimate no-op, matching AutoCAD.
+  const float nsx = startIn ? sx + dx : sx;
+  const float nsy = startIn ? sy + dy : sy;
+  const float nex = endIn ? ex + dx : ex;
+  const float ney = endIn ? ey + dy : ey;
+  RecomputeArcFromEndpoints(arc, nsx, nsy, nex, ney, &log);
+}
+
+/// REQ-103 STRETCH, model-space apply. Mirrors \c ApplyTranslationToSelection's per-type loop shape,
+/// but each entity's definition point(s) are tested against [mnX,mxX]x[mnY,mxY] individually — only
+/// in-box points move by (dx,dy). Line/Polyline/FeatureLine vertices are independent (the genuine
+/// stretch effect); Arc goes through \ref StretchOneArc; every other type has one definition point
+/// and moves as a whole only if that point is in-box (matching AutoCAD's own behavior for them).
+void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX, float mxX, float mnY,
+                             float mxY, std::vector<std::string>& log) {
+  DropSurfacesFromSelectionForTransform(st, "STRETCH", log);
+  auto inBox = [&](float x, float y) { return PointInsideClosedRect(x, y, mnX, mxX, mnY, mxY); };
+
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::LineSeg)
+      continue;
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      continue;
+    if (inBox(st.userLinesFlat[k], st.userLinesFlat[k + 1])) {
+      st.userLinesFlat[k] += dx;
+      st.userLinesFlat[k + 1] += dy;
+    }
+    if (inBox(st.userLinesFlat[k + 3], st.userLinesFlat[k + 4])) {
+      st.userLinesFlat[k + 3] += dx;
+      st.userLinesFlat[k + 4] += dy;
+    }
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Circle)
+      continue;
+    const size_t k = static_cast<size_t>(e.index) * 4;
+    if (k + 3 >= st.userCirclesCxCyZR.size())
+      continue;
+    if (inBox(st.userCirclesCxCyZR[k], st.userCirclesCxCyZR[k + 1])) {
+      st.userCirclesCxCyZR[k] += dx;
+      st.userCirclesCxCyZR[k + 1] += dy;
+    }
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Arc)
+      continue;
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.userArcs.size())
+      continue;
+    StretchOneArc(st.userArcs[k], mnX, mxX, mnY, mxY, dx, dy, log);
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Ellipse)
+      continue;
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.userEllipses.size())
+      continue;
+    if (inBox(st.userEllipses[k].cx, st.userEllipses[k].cy)) {
+      st.userEllipses[k].cx += dx;
+      st.userEllipses[k].cy += dy;
+    }
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Polyline)
+      continue;
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+      continue;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    for (int vi = v0; vi < v1; ++vi) {
+      const size_t b = static_cast<size_t>(vi) * 3;
+      if (inBox(st.userPolylineVerts[b], st.userPolylineVerts[b + 1])) {
+        st.userPolylineVerts[b] += dx;
+        st.userPolylineVerts[b + 1] += dy;
+      }
+    }
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Annotation)
+      continue;
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= st.cadAnnotations.size())
+      continue;
+    CadAnnotation& a = st.cadAnnotations[k];
+    if (!inBox(a.insX, a.insY))
+      continue;
+    a.insX += dx;
+    a.insY += dy;
+    if (a.kind == CadAnnotation::Kind::Mtext) {
+      a.boxMinX += dx;
+      a.boxMinY += dy;
+      a.boxMaxX += dx;
+      a.boxMaxY += dy;
+    } else if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
+      a.dimExt1X += dx;
+      a.dimExt1Y += dy;
+      a.dimExt2X += dx;
+      a.dimExt2Y += dy;
+    }
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::PdfUnderlay)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.pdfAttachments.size())
+      continue;
+    PdfAttachment& att = st.pdfAttachments[static_cast<size_t>(e.index)];
+    if (inBox(att.insertX, att.insertY)) {
+      att.insertX += dx;
+      att.insertY += dy;
+    }
+  }
+  // Filled regions (REQ-042): whole-region translate, gated on the first boundary vertex — no
+  // per-vertex boundary stretch (spec-recorded simplification, REQ-103 STRETCH acceptance).
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::FilledRegion)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadFilledRegions.size())
+      continue;
+    CadFilledRegion& fr = st.cadFilledRegions[static_cast<size_t>(e.index)];
+    if (fr.vertsXyz.size() >= 2 && inBox(fr.vertsXyz[0], fr.vertsXyz[1]))
+      hatchgeom::Translate(fr, dx, dy);
+  }
+  // Feature lines (REQ-087): per-vertex, elevation untouched — same restriction
+  // TransformSelectedFeatureLinesInPlace's own comment documents for MOVE/ROTATE/SCALE.
+  TransformSelectedFeatureLinesInPlace(st, [&](float* x, float* y) {
+    if (inBox(*x, *y)) {
+      *x += dx;
+      *y += dy;
+    }
+  });
+  {
+    std::vector<int> ix = st.selectedSurveyPointIndices;
+    std::sort(ix.begin(), ix.end());
+    ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
+    for (int i : ix) {
+      if (i < 0 || static_cast<size_t>(i) >= st.surveyPoints.size())
+        continue;
+      SurveyPoint& sp = st.surveyPoints[static_cast<size_t>(i)];
+      if (inBox(sp.easting, sp.northing)) {
+        sp.easting += dx;
+        sp.northing += dy;
+      }
+    }
+    for (int i : ix) {
+      if (i >= 0 && static_cast<size_t>(i) < st.surveyPoints.size())
+        RepositionSurveyLabelMtextForPoint(st, static_cast<size_t>(i));
+    }
+  }
+  BumpCadGpuCache(st);
+}
+
+/// REQ-103 STRETCH, pure-paper-space path. Mirrors \c TranslateSelectedPaperEntities's one-loop-
+/// switch shape. If \c st.paperSelBoxLastValid, only each entity's definition point(s) that fall
+/// inside the last-captured box move (true partial stretch for Line/Polyline/Arc — Arc via the
+/// same \ref StretchOneArc the model path uses, since \c paperArcs is the same \c CadArc struct);
+/// otherwise every selected entity translates as a whole (a plain click-select carries no box to
+/// test against — degraded MOVE-equivalent, matching AutoCAD's own degradation for a non-crossing
+/// pickfirst set).
+void ApplyStretchToPaperSelection(AppCommandState& st, float dxIn, float dyIn, std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L || st.selectedPaperEntities.empty())
+    return;
+  const bool haveBox = st.paperSelBoxLastValid;
+  const float mnX = st.paperSelBoxLastMnXIn, mxX = st.paperSelBoxLastMxXIn;
+  const float mnY = st.paperSelBoxLastMnYIn, mxY = st.paperSelBoxLastMxYIn;
+  auto inBox = [&](float x, float y) { return !haveBox || PointInsideClosedRect(x, y, mnX, mxX, mnY, mxY); };
+  PushUndoSnapshot(st, "Stretch paper geometry");
+  for (const PaperRef& r : st.selectedPaperEntities) {
+    switch (r.type) {
+    case PaperRef::Type::Line: {
+      const size_t i = static_cast<size_t>(r.index) * 6;
+      if (i + 5 >= L->paperLines.size())
+        break;
+      if (inBox(L->paperLines[i], L->paperLines[i + 1])) {
+        L->paperLines[i] += dxIn;
+        L->paperLines[i + 1] += dyIn;
+      }
+      if (inBox(L->paperLines[i + 3], L->paperLines[i + 4])) {
+        L->paperLines[i + 3] += dxIn;
+        L->paperLines[i + 4] += dyIn;
+      }
+      break;
+    }
+    case PaperRef::Type::Circle: {
+      const size_t i = static_cast<size_t>(r.index) * 3;
+      if (i + 2 >= L->paperCircles.size())
+        break;
+      if (inBox(L->paperCircles[i], L->paperCircles[i + 1])) {
+        L->paperCircles[i] += dxIn;
+        L->paperCircles[i + 1] += dyIn;
+      }
+      break;
+    }
+    case PaperRef::Type::Arc: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperArcs.size())
+        break;
+      CadArc& a = L->paperArcs[static_cast<size_t>(r.index)];
+      if (haveBox)
+        StretchOneArc(a, mnX, mxX, mnY, mxY, dxIn, dyIn, log);
+      else {
+        a.cx += dxIn;
+        a.cy += dyIn;
+      }
+      break;
+    }
+    case PaperRef::Type::Ellipse: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperEllipses.size())
+        break;
+      CadEllipse& e = L->paperEllipses[static_cast<size_t>(r.index)];
+      if (inBox(e.cx, e.cy)) {
+        e.cx += dxIn;
+        e.cy += dyIn;
+      }
+      break;
+    }
+    case PaperRef::Type::Polyline: {
+      const int pi = r.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size())
+        break;
+      const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+      const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+      for (int vi = v0; vi < v1; ++vi) {
+        const size_t b = static_cast<size_t>(vi) * 3;
+        if (inBox(L->paperPolyVerts[b], L->paperPolyVerts[b + 1])) {
+          L->paperPolyVerts[b] += dxIn;
+          L->paperPolyVerts[b + 1] += dyIn;
+        }
+      }
+      break;
+    }
+    case PaperRef::Type::Text: {
+      if (r.index < 0 || static_cast<size_t>(r.index) >= L->paperTexts.size())
+        break;
+      CadAnnotation& a = L->paperTexts[static_cast<size_t>(r.index)];
+      if (inBox(a.insX, a.insY)) {
+        a.insX += dxIn;
+        a.insY += dyIn;
+      }
+      break;
+    }
+    }
+  }
+  BumpCadGpuCache(st);
+  log.push_back(haveBox ? "STRETCH — paper object(s) stretched."
+                        : "STRETCH — paper object(s) moved (no crossing/window box on the current "
+                          "selection).");
+}
+
+void StartStretchCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  using MP = AppCommandState::ModifyPhase;
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
+    if (st.selectedPaperEntities.empty()) {
+      log.push_back("STRETCH — select paper object(s) first (a crossing/window box gives true "
+                    "partial stretch; a plain click-select moves them as a whole).");
+      return;
+    }
+    st.active = K::None;  // paper-space edit ops are not a model command (ROTATE/SCALE precedent)
+    st.paperStretchPhase = 1;
+    log.push_back("STRETCH — specify base point (click or type X,Y). ESC to cancel.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = K::Stretch;
+  st.lastCommand = K::Stretch;
+  // Always a fresh, CLEAN box-select — unlike MOVE/COPY/ROTATE/SCALE, STRETCH's whole effect
+  // depends on capturing the box together with the selection, and ComputeSelectionFromRect only
+  // ADDS hits to st.selection (never clears stale entries first, by design — a real selection
+  // tool needs to accumulate across several drags). Without this clear, a leftover selection from
+  // whatever ran before STRETCH would be re-evaluated against THIS invocation's box/displacement
+  // too — found while writing this task's own headless transcripts (task log).
+  ClearSelection(st);
+  st.modifyPhase = MP::PickSelection;
+  st.selBoxWaitingSecond = false;
+  log.push_back(
+      "STRETCH — click two corners to crossing/window-select objects (right-to-left = crossing), "
+      "then base point and destination. ESC cancels.");
+}
+
+// ================================================================================================
+// FILLET (REQ-103 step 6a, TASK-102). Two picked curves (Line, non-full-circle Arc, or a Polyline
+// segment) get a tangent arc between them (SolveFilletCenter et al., CadCommands.hpp — inline/pure
+// so it's unit-tested independently of this command layer, tests/FilletGeomTests.cpp), then each
+// curve is trimmed/extended to its own tangent point. Two different curves (Case B) reuses
+// LENGTHEN's ApplyLengthenToLine/ToArc/ToPolylineEnd UNCHANGED, converting the known tangent point
+// into the `newLength` those functions already accept — REQ-103's own stated reuse chain. Two
+// adjacent segments of the SAME polyline (Case A) is new: it splices the shared vertex into the two
+// tangent points (or one, at radius 0) via ReplacePolylineVerts — BREAK's own CSR-shift technique —
+// and inserts a fresh Arc entity for the corner.
+// ================================================================================================
+
+/// Is `e` (picked at pickX,pickY) an eligible FILLET curve, and if it's a Polyline, which edge
+/// (0-based) did the pick land nearest? Eligible: Line, non-full-circle Arc, any Polyline segment
+/// (open or closed). Circle and full-circle-sweep Arc are refused — no single tangent-side
+/// construction distinguishes a closed loop's "which side did you mean" (D-2026-08-24-g), the same
+/// reasoning LENGTHEN/EXTEND already exclude Circle for. Every other kind refused with a stated
+/// reason (REQ-201).
+static bool FilletEligibility(const AppCommandState& st, const SelectedEntity& e, float pickX, float pickY,
+                              int* outPolySeg, std::vector<std::string>& log) {
+  using T = SelectedEntity::Type;
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  *outPolySeg = -1;
+  switch (e.type) {
+  case T::LineSeg:
+    return true;
+  case T::Arc: {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      return false;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    if (std::fabs(std::fabs(a.sweepRad) - kTwoPi) < 1e-4f) {
+      log.push_back("FILLET — 1 full-circle arc ignored: fillet needs a curve with a definite tangent "
+                    "side. Pick a line, non-full arc, or polyline segment.");
+      return false;
+    }
+    return true;
+  }
+  case T::Polyline: {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+      return false;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    if (numVerts < 2)
+      return false;
+    const bool closed =
+        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+    const int numEdges = closed ? numVerts : (numVerts - 1);
+    int bestSeg = 0;
+    float bestD = -1.f;
+    for (int e2 = 0; e2 < numEdges; ++e2) {
+      const int viA = v0 + e2, viB = v0 + ((e2 + 1) % numVerts);
+      const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
+      float qx = 0.f, qy = 0.f;
+      ClosestPointOnSegment(st.userPolylineVerts[a3], st.userPolylineVerts[a3 + 1], st.userPolylineVerts[b3],
+                            st.userPolylineVerts[b3 + 1], pickX, pickY, &qx, &qy);
+      const float d = (qx - pickX) * (qx - pickX) + (qy - pickY) * (qy - pickY);
+      if (bestD < 0.f || d < bestD) {
+        bestD = d;
+        bestSeg = e2;
+      }
+    }
+    *outPolySeg = bestSeg;
+    return true;
+  }
+  case T::Circle:
+    log.push_back("FILLET — 1 circle ignored: fillet needs a curve with a definite tangent side. Pick a "
+                  "line, non-full arc, or polyline segment.");
+    return false;
+  default:
+    log.push_back("FILLET — 1 object ignored: only a line, arc, or polyline segment can be filleted.");
+    return false;
+  }
+}
+
+/// Builds the pure geometry \ref FilletCurve for a picked Line/Arc/Polyline-segment (\p polySeg
+/// ignored for Line/Arc).
+static bool BuildFilletCurveFromEntity(const AppCommandState& st, const SelectedEntity& e, int polySeg,
+                                       FilletCurve* out) {
+  using T = SelectedEntity::Type;
+  if (e.type == T::LineSeg) {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return false;
+    out->isLine = true;
+    out->ax = st.userLinesFlat[k];
+    out->ay = st.userLinesFlat[k + 1];
+    out->bx = st.userLinesFlat[k + 3];
+    out->by = st.userLinesFlat[k + 4];
+    return true;
+  }
+  if (e.type == T::Arc) {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      return false;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    out->isLine = false;
+    out->cx = a.cx;
+    out->cy = a.cy;
+    out->r = a.r;
+    return true;
+  }
+  if (e.type == T::Polyline) {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size() || polySeg < 0)
+      return false;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    const int viA = v0 + polySeg, viB = v0 + ((polySeg + 1) % numVerts);
+    const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
+    if (b3 + 1 >= st.userPolylineVerts.size())
+      return false;
+    out->isLine = true;
+    out->ax = st.userPolylineVerts[a3];
+    out->ay = st.userPolylineVerts[a3 + 1];
+    out->bx = st.userPolylineVerts[b3];
+    out->by = st.userPolylineVerts[b3 + 1];
+    return true;
+  }
+  return false;
+}
+
+/// "Radius is too large" detection (D-2026-08-25-b, a real user-reported bug). Pick-INDEPENDENT by
+/// design — an earlier version of this check compared the tangent-point-based near/far endpoint
+/// against the PICK-based one, which sounded plausible but was a false-positive machine: any pick
+/// past a line's own midpoint (completely ordinary FILLET usage — you often click nearer the far,
+/// kept end) disagreed with a perfectly valid small-radius tangent point, which naturally sits near
+/// the corner. The correct, pick-independent signature: `e`'s two ORIGINAL endpoints are compared
+/// against `p0` (the plain radius-0 intersection of the two curves — the true corner), and whichever
+/// is FARTHER from `p0` is that curve's own "far" end. A valid fillet always moves the NEAR end
+/// (the one already close to the corner) to the tangent point; when the requested radius is too
+/// large for the curve's own length, the tangent point ends up closer to the FAR end instead, so
+/// FILLET would silently move the wrong end (or, for a short segment, barely touch the far end
+/// while leaving the actually-picked corner completely untrimmed) — exactly what a real report
+/// described ("radius 20... drew to the bottom endpoints instead of just not drawing"). Arc uses
+/// its own start/end points the same way LENGTHEN/EXTEND already do. Polyline is not checked here —
+/// Case B already restricts it to a segment's own free end (no meaningful "swap" to detect the same
+/// way), and Case A's shared-vertex splice has no near/far selection to swap in the first place.
+static bool FilletRadiusFitsCurve(const AppCommandState& st, const SelectedEntity& e, float p0x, float p0y,
+                                  float tangentX, float tangentY) {
+  using T = SelectedEntity::Type;
+  if (e.type == T::LineSeg) {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return true;  // let the mutation itself refuse for real on a bad index
+    const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
+    const float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
+    const bool nearIsFirst = NearerToFirstPoint(p0x, p0y, x0, y0, x1, y1);
+    const float nearX = nearIsFirst ? x0 : x1, nearY = nearIsFirst ? y0 : y1;
+    const float farX = nearIsFirst ? x1 : x0, farY = nearIsFirst ? y1 : y0;
+    return FilletPointWithinSpan(nearX, nearY, farX, farY, tangentX, tangentY);
+  }
+  // Arc: not checked (returns true unconditionally) — the reported bug and its fix are both
+  // Line-specific; an angular equivalent of FilletPointWithinSpan is a real gap, not silently
+  // assumed safe (see TASK-102's own follow-up log for why it was deferred rather than rushed).
+  return true;
+}
+
+/// Case B: the two picked curves are different entities (or a Polyline's own end segment against a
+/// different entity). Trims/extends `e` (at `polySeg` if Polyline) to `tangentX,tangentY` by
+/// converting it into LENGTHEN's own `newLength` currency and calling ApplyLengthenToLine/ToArc/
+/// ToPolylineEnd UNCHANGED — REQ-103's own stated reuse chain, never re-derived.
+static bool ApplyFilletTrimSingle(AppCommandState& st, const SelectedEntity& e, int polySeg, float tangentX,
+                                  float tangentY, std::vector<std::string>& log) {
+  using T = SelectedEntity::Type;
+  if (e.type == T::LineSeg) {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return false;
+    const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
+    const float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
+    // Which end moves is decided by nearness to the TANGENT POINT, not the pick — unlike LENGTHEN,
+    // where the pick directly names the end to change, FILLET's pick only disambiguates which
+    // corner/candidate solution to build (SolveFilletCenter); a pick anywhere along the KEPT
+    // portion of the line (which for a typical corner is most of it) must still move the
+    // corner-adjacent end, not whichever end the pick happens to be nearer to — a real bug this
+    // fixed (a pick at a line's own midpoint tied under the pick-based rule and moved the wrong,
+    // far end, refusing the trim outright; fillet-lines-basic.txt's Part B caught it).
+    const bool nearFirst = NearerToFirstPoint(tangentX, tangentY, x0, y0, x1, y1);
+    const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
+    const float newLength = std::hypot(tangentX - fixedX, tangentY - fixedY);
+    // pushUndo=false: HandleFilletViewportPick already pushed ONE "Fillet" snapshot covering both
+    // curves' trims plus the arc — REQ-103's "one undo step per fillet" (a real bug this fixed,
+    // caught by fillet-lines-basic.txt's UNDO/REDO round-trip: 3 pushes made 1 UNDO only partially
+    // revert, TASK-102 task log).
+    return ApplyLengthenToLine(st, e.index, nearFirst, newLength, log, false);
+  }
+  if (e.type == T::Arc) {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      return false;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    const float sx = a.cx + a.r * std::cos(a.startRad);
+    const float sy = a.cy + a.r * std::sin(a.startRad);
+    const float ex = a.cx + a.r * std::cos(a.startRad + a.sweepRad);
+    const float ey = a.cy + a.r * std::sin(a.startRad + a.sweepRad);
+    const bool nearFirst = NearerToFirstPoint(tangentX, tangentY, sx, sy, ex, ey);  // see the Line branch's comment
+    const float newLength =
+        FilletArcTangentPointToNewLength(a.cx, a.cy, a.r, a.startRad, a.sweepRad, nearFirst, tangentX, tangentY);
+    return ApplyLengthenToArc(st, e.index, nearFirst, newLength, log, false);
+  }
+  if (e.type == T::Polyline) {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size() || polySeg < 0)
+      return false;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    const int numEdges = numVerts - 1;  // Case B never reaches a closed polyline — no free end
+    const bool nearFirst = (polySeg == 0);
+    if (!nearFirst && polySeg != numEdges - 1)
+      return false;  // not an end segment — caller already refuses this before reaching here
+    const int movingVi = nearFirst ? v0 : (v1 - 1);
+    const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
+    const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
+    if (mIdx + 1 >= st.userPolylineVerts.size() || fIdx + 1 >= st.userPolylineVerts.size())
+      return false;
+    const float fx = st.userPolylineVerts[fIdx], fy = st.userPolylineVerts[fIdx + 1];
+    const float mx = st.userPolylineVerts[mIdx], my = st.userPolylineVerts[mIdx + 1];
+    const float oldSegLen = std::hypot(mx - fx, my - fy);
+    const float newSegLen = std::hypot(tangentX - fx, tangentY - fy);
+    const float curTotal = PolylineOpenLengthOf(st, pi);
+    const float newLength = curTotal - oldSegLen + newSegLen;
+    return ApplyLengthenToPolylineEnd(st, pi, nearFirst, newLength, log, false);  // see the Line branch's comment
+  }
+  return false;
+}
+
+/// Case A: the two picked curves are adjacent segments (sharing exactly one vertex) of the SAME
+/// polyline — the classic "round this corner" case. Splices the shared vertex into the two tangent
+/// points (radius > ~0) or moves it to the single intersection point (radius ~0, vertex count
+/// unchanged), via \ref ReplacePolylineVerts, and inserts a fresh Arc entity for the corner
+/// (radius > ~0 only).
+static bool ApplyFilletPolylineCorner(AppCommandState& st, int pi, int edgeA, int edgeB, float radius,
+                                      float pick1X, float pick1Y, float pick2X, float pick2Y,
+                                      std::vector<std::string>& log) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+    return false;
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const int numVerts = v1 - v0;
+  if (numVerts < 2)
+    return false;
+  const bool closed =
+      static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+  const int numEdges = closed ? numVerts : (numVerts - 1);
+  if (edgeA < 0 || edgeA >= numEdges || edgeB < 0 || edgeB >= numEdges || edgeA == edgeB)
+    return false;
+
+  auto edgeVerts = [&](int e, int* viA, int* viB) {
+    *viA = v0 + e;
+    *viB = v0 + ((e + 1) % numVerts);
+  };
+  int aVi0 = 0, aVi1 = 0, bVi0 = 0, bVi1 = 0;
+  edgeVerts(edgeA, &aVi0, &aVi1);
+  edgeVerts(edgeB, &bVi0, &bVi1);
+  int sharedVi = -1, otherAVi = -1;
+  if (aVi0 == bVi0 || aVi0 == bVi1) {
+    sharedVi = aVi0;
+    otherAVi = aVi1;
+  } else if (aVi1 == bVi0 || aVi1 == bVi1) {
+    sharedVi = aVi1;
+    otherAVi = aVi0;
+  }
+  if (sharedVi < 0) {
+    log.push_back("FILLET — those two polyline segments are not adjacent; refused.");
+    return false;
+  }
+  const int otherBVi = (bVi0 == sharedVi) ? bVi1 : bVi0;
+
+  auto readVert = [&](int vi, float* x, float* y) {
+    *x = st.userPolylineVerts[static_cast<size_t>(vi) * 3];
+    *y = st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 1];
+  };
+  float sharedX = 0.f, sharedY = 0.f, otherAX = 0.f, otherAY = 0.f, otherBX = 0.f, otherBY = 0.f;
+  readVert(sharedVi, &sharedX, &sharedY);
+  readVert(otherAVi, &otherAX, &otherAY);
+  readVert(otherBVi, &otherBX, &otherBY);
+
+  FilletCurve curveA{};
+  curveA.isLine = true;
+  curveA.ax = otherAX;
+  curveA.ay = otherAY;
+  curveA.bx = sharedX;
+  curveA.by = sharedY;
+  FilletCurve curveB{};
+  curveB.isLine = true;
+  curveB.ax = sharedX;
+  curveB.ay = sharedY;
+  curveB.bx = otherBX;
+  curveB.by = otherBY;
+
+  float cx = 0.f, cy = 0.f;
+  if (!SolveFilletCenter(curveA, curveB, radius, pick1X, pick1Y, pick2X, pick2Y, &cx, &cy)) {
+    log.push_back("FILLET — no valid tangent arc exists for that radius at that corner; refused.");
+    return false;
+  }
+  float tAx = 0.f, tAy = 0.f, tBx = 0.f, tBy = 0.f;
+  FilletTangentPointOnLine(curveA, cx, cy, &tAx, &tAy);
+  FilletTangentPointOnLine(curveB, cx, cy, &tBx, &tBy);
+
+  const int sharedLocal = sharedVi - v0;
+  const int otherALocal = otherAVi - v0;
+  const bool aIsIncoming = (otherALocal == (sharedLocal - 1 + numVerts) % numVerts);
+  const float inTx = aIsIncoming ? tAx : tBx, inTy = aIsIncoming ? tAy : tBy;
+  const float outTx = aIsIncoming ? tBx : tAx, outTy = aIsIncoming ? tBy : tAy;
+  const bool radiusIsZero = radius < 1e-4f;
+
+  std::vector<std::pair<float, float>> newXY;
+  newXY.reserve(static_cast<size_t>(numVerts) + 1);
+  for (int vi = v0; vi < v1; ++vi) {
+    if (vi - v0 == sharedLocal) {
+      if (radiusIsZero) {
+        newXY.push_back({cx, cy});
+      } else {
+        newXY.push_back({inTx, inTy});
+        newXY.push_back({outTx, outTy});
+      }
+    } else {
+      float x = 0.f, y = 0.f;
+      readVert(vi, &x, &y);
+      newXY.push_back({x, y});
+    }
+  }
+
+  PushUndoSnapshot(st, "Fillet");
+  ReplacePolylineVerts(st, pi, newXY);
+  if (!radiusIsZero) {
+    constexpr float kPi = 3.14159265358979323846f;
+    constexpr float kTwoPi = 6.28318530717958647692f;
+    const float thetaIn = std::atan2(inTy - cy, inTx - cx);
+    const float thetaOut = std::atan2(outTy - cy, outTx - cx);
+    float sweep = FilletCcwAngleDelta(thetaIn, thetaOut);
+    if (sweep > kPi)
+      sweep -= kTwoPi;
+    CadArc arc{};
+    arc.cx = cx;
+    arc.cy = cy;
+    arc.r = radius;
+    arc.startRad = thetaIn;
+    arc.sweepRad = sweep;
+    st.userArcs.push_back(arc);
+    st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+  }
+  BumpCadGpuCache(st);
+  log.push_back(radiusIsZero ? "FILLET — polyline corner trimmed to a point (radius 0)."
+                            : "FILLET — polyline corner filleted.");
+  return true;
+}
+
+static std::string FilletPromptSuffix(const AppCommandState& st) {
+  char buf[96];
+  std::snprintf(buf, sizeof(buf), "<R=%.3f, %s>", static_cast<double>(st.filletRadius),
+               st.cornerTrimMode ? "Trim" : "No trim");
+  return buf;
+}
+
+void StartFilletCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  using FP = AppCommandState::FilletPhase;
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
+    st.active = K::None;  // pure paper-space click flow, like EXTEND/BREAK's own paper paths
+    st.paperFilletPhase = 1;
+    st.paperFilletFirstEntity = PaperEntityRef{};
+    st.paperFilletFirstPolySeg = -1;
+    log.push_back("FILLET — select first object " + FilletPromptSuffix(st) + ". ESC cancels.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = K::Fillet;
+  st.lastCommand = K::Fillet;
+  st.filletPhase = FP::WaitFirstEntity;
+  st.filletFirstEntity = SelectedEntity{};
+  st.filletFirstPolySeg = -1;
+  st.filletTextAwaitingRadius = false;
+  st.filletTextAwaitingTrim = false;
+  log.push_back("FILLET — select first object or [Radius/Trim] " + FilletPromptSuffix(st) + ". ESC cancels.");
+}
+
+/// Model-space + floating-model-space viewport-pick handler for FILLET — called from
+/// SubmitViewportPickImpl. First pick latches a curve; second pick resolves whether the two curves
+/// are the SAME polyline's adjacent segments (Case A, \ref ApplyFilletPolylineCorner) or two
+/// different curves (Case B), computes the tangent arc (or the parallel-lines semicircle special
+/// case), applies the trim/extend (Trim mode only), and loops back to "select first object".
+void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  using FP = AppCommandState::FilletPhase;
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+    log.push_back("FILLET — no object at pick.");
+    return;
+  }
+  int polySeg = -1;
+  if (!FilletEligibility(st, hit, wx, wy, &polySeg, log))
+    return;
+
+  if (st.filletPhase == FP::WaitFirstEntity) {
+    st.filletFirstEntity = hit;
+    st.filletFirstPolySeg = polySeg;
+    st.filletFirstPickX = wx;
+    st.filletFirstPickY = wy;
+    st.filletPhase = FP::WaitSecondEntity;
+    log.push_back("FILLET — select second object:");
+    return;
+  }
+
+  const bool sameEntity = (hit.type == st.filletFirstEntity.type && hit.index == st.filletFirstEntity.index);
+  if (sameEntity && hit.type != SelectedEntity::Type::Polyline) {
+    log.push_back("FILLET — select two different objects.");
+    return;
+  }
+  if (sameEntity && polySeg == st.filletFirstPolySeg) {
+    log.push_back("FILLET — select two different segments.");
+    return;
+  }
+
+  if (sameEntity) {
+    // Case A: same polyline, two segments — ApplyFilletPolylineCorner refuses if not adjacent.
+    ApplyFilletPolylineCorner(st, hit.index, st.filletFirstPolySeg, polySeg, st.filletRadius,
+                              st.filletFirstPickX, st.filletFirstPickY, wx, wy, log);
+  } else {
+    // Case B: two different entities. A Polyline is only eligible here through its own end segment
+    // (adjacent to a free/open end) — an interior segment, or any segment of a CLOSED polyline, has
+    // no single endpoint that can move without silently disturbing an uninvolved neighboring
+    // segment sharing that vertex (REQ-201).
+    auto polylineIsEndSegmentOnly = [&](const SelectedEntity& e, int seg) -> bool {
+      if (e.type != SelectedEntity::Type::Polyline)
+        return true;
+      const int pi = e.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+        return false;
+      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const bool closed =
+          static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+      if (closed) {
+        log.push_back("FILLET — a closed polyline has no free end; only an adjacent segment of the SAME "
+                      "polyline can be filleted against it.");
+        return false;
+      }
+      const int numEdges = (v1 - v0) - 1;
+      if (seg != 0 && seg != numEdges - 1) {
+        log.push_back("FILLET — only a polyline's own first or last segment can be filleted against a "
+                      "different object; an interior segment shares its vertex with a neighbor that "
+                      "would be silently disturbed.");
+        return false;
+      }
+      return true;
+    };
+    if (!polylineIsEndSegmentOnly(st.filletFirstEntity, st.filletFirstPolySeg) ||
+        !polylineIsEndSegmentOnly(hit, polySeg)) {
+      return;
+    }
+
+    FilletCurve c1{}, c2{};
+    if (!BuildFilletCurveFromEntity(st, st.filletFirstEntity, st.filletFirstPolySeg, &c1) ||
+        !BuildFilletCurveFromEntity(st, hit, polySeg, &c2)) {
+      log.push_back("FILLET — could not resolve the picked geometry; refused.");
+      return;
+    }
+
+    if (c1.isLine && c2.isLine &&
+        FilletLinesAreParallel(c1.ax, c1.ay, c1.bx, c1.by, c2.ax, c2.ay, c2.bx, c2.by)) {
+      // Documented AutoCAD special case: two parallel, non-collinear lines get a semicircle
+      // regardless of the current radius setting. Curve 1's picked endpoint is the anchor and is
+      // never moved (it is already exactly where the semicircle meets it, by construction); only
+      // curve 2 is trimmed/extended to the perpendicular projection.
+      float anchorX = 0.f, anchorY = 0.f, projX = 0.f, projY = 0.f;
+      FilletParallelSemicircle(c1.ax, c1.ay, c1.bx, c1.by, c2.ax, c2.ay, c2.bx, c2.by, st.filletFirstPickX,
+                               st.filletFirstPickY, &anchorX, &anchorY, &projX, &projY);
+      const float semiR = 0.5f * std::hypot(projX - anchorX, projY - anchorY);
+      if (semiR < 1e-4f) {
+        log.push_back("FILLET — the two lines coincide; refused.");
+      } else {
+        PushUndoSnapshot(st, "Fillet");
+        const bool ok = !st.cornerTrimMode || ApplyFilletTrimSingle(st, hit, polySeg, projX, projY, log);
+        if (ok) {
+          const float cx = 0.5f * (anchorX + projX), cy = 0.5f * (anchorY + projY);
+          CadArc arc{};
+          arc.cx = cx;
+          arc.cy = cy;
+          arc.r = semiR;
+          arc.startRad = std::atan2(anchorY - cy, anchorX - cx);
+          arc.sweepRad = 3.14159265358979323846f;  // exact semicircle
+          st.userArcs.push_back(arc);
+          st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+          BumpCadGpuCache(st);
+          log.push_back("FILLET — parallel lines connected by a semicircle (radius set by the gap "
+                        "between them, not the current FILLET radius).");
+        }
+      }
+    } else {
+      float cx = 0.f, cy = 0.f;
+      if (!SolveFilletCenter(c1, c2, st.filletRadius, st.filletFirstPickX, st.filletFirstPickY, wx, wy, &cx,
+                             &cy)) {
+        log.push_back("FILLET — no valid tangent arc exists for that radius; refused.");
+      } else {
+        float t1x = 0.f, t1y = 0.f, t2x = 0.f, t2y = 0.f;
+        if (c1.isLine)
+          FilletTangentPointOnLine(c1, cx, cy, &t1x, &t1y);
+        else
+          FilletTangentPointOnCircle(c1, cx, cy, &t1x, &t1y);
+        if (c2.isLine)
+          FilletTangentPointOnLine(c2, cx, cy, &t2x, &t2y);
+        else
+          FilletTangentPointOnCircle(c2, cx, cy, &t2x, &t2y);
+
+        // "Radius too large" check needs the TRUE corner (radius-0 intersection), not the offset
+        // candidate `cx,cy` above — reuses the same radius-0 solve the sharp-corner case already
+        // proves correct (tests/FilletGeomTests.cpp). If it fails for an unrelated reason (e.g. a
+        // Line-Circle/Circle-Circle pairing with no radius-0 analogue), skip this validation rather
+        // than blocking on it.
+        float p0x = 0.f, p0y = 0.f;
+        const bool haveP0 = SolveFilletCenter(c1, c2, 0.f, st.filletFirstPickX, st.filletFirstPickY, wx, wy, &p0x,
+                                              &p0y);
+        if (haveP0 &&
+            (!FilletRadiusFitsCurve(st, st.filletFirstEntity, p0x, p0y, t1x, t1y) ||
+             !FilletRadiusFitsCurve(st, hit, p0x, p0y, t2x, t2y))) {
+          log.push_back("FILLET — radius " + std::to_string(st.filletRadius) +
+                        " is too large for the selected objects; refused.");
+        } else {
+          PushUndoSnapshot(st, "Fillet");
+          bool ok1 = true, ok2 = true;
+          if (st.cornerTrimMode) {
+            ok1 = ApplyFilletTrimSingle(st, st.filletFirstEntity, st.filletFirstPolySeg, t1x, t1y, log);
+            ok2 = ApplyFilletTrimSingle(st, hit, polySeg, t2x, t2y, log);
+          }
+          if (ok1 && ok2) {
+            const bool radiusIsZero = st.filletRadius < 1e-4f;
+            if (!radiusIsZero) {
+              constexpr float kPi = 3.14159265358979323846f;
+              constexpr float kTwoPi = 6.28318530717958647692f;
+              const float thetaA = std::atan2(t1y - cy, t1x - cx);
+              const float thetaB = std::atan2(t2y - cy, t2x - cx);
+              float sweep = FilletCcwAngleDelta(thetaA, thetaB);
+              if (sweep > kPi)
+                sweep -= kTwoPi;
+              CadArc arc{};
+              arc.cx = cx;
+              arc.cy = cy;
+              arc.r = st.filletRadius;
+              arc.startRad = thetaA;
+              arc.sweepRad = sweep;
+              st.userArcs.push_back(arc);
+              st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+            }
+            BumpCadGpuCache(st);
+            log.push_back(radiusIsZero ? "FILLET — corner trimmed to a point (radius 0)."
+                                       : "FILLET — corner filleted.");
+          }
+        }
+      }
+    }
+  }
+
+  st.filletPhase = FP::WaitFirstEntity;
+  st.filletFirstEntity = SelectedEntity{};
+  st.filletFirstPolySeg = -1;
+  log.push_back("FILLET — select first object or [Radius/Trim] " + FilletPromptSuffix(st) + ". ESC cancels.");
+}
+
+/// Typed command-line handling for FILLET's R(adius)/T(rim) sub-commands, only meaningful at
+/// WaitFirstEntity — mirrors LENGTHEN's mode-letter shape (`TryLengthenModeToggle`), simplified:
+/// FILLET has no pending-pick-awaiting-a-value latch, since R/T only ever change a persisted
+/// setting, never apply to an already-picked object.
+bool HandleFilletText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+  using FP = AppCommandState::FilletPhase;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  const std::string low = StringUtil::toLowerAsciiCopy(line);
+  if (st.filletPhase != FP::WaitFirstEntity) {
+    log.push_back("FILLET — pick the second object in the viewport, or ESC to cancel.");
+    return false;
+  }
+  if (st.filletTextAwaitingRadius) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !(v >= 0.f) || !std::isfinite(v)) {
+      log.push_back("FILLET — radius must be a non-negative finite number.");
+      return false;
+    }
+    st.filletRadius = v;
+    st.filletTextAwaitingRadius = false;
+    log.push_back("FILLET — radius set to " + std::to_string(v) + ". Select first object or [Radius/Trim]:");
+    return true;
+  }
+  if (st.filletTextAwaitingTrim) {
+    if (low == "t" || low == "trim") {
+      st.cornerTrimMode = 1;
+    } else if (low == "n" || low == "notrim" || low == "no trim") {
+      st.cornerTrimMode = 0;
+    } else {
+      log.push_back("FILLET — type T (Trim) or N (No trim).");
+      return false;
+    }
+    st.filletTextAwaitingTrim = false;
+    log.push_back(std::string("FILLET — trim mode set to ") + (st.cornerTrimMode ? "Trim" : "No trim") +
+                  ". Select first object or [Radius/Trim]:");
+    return true;
+  }
+  if (low == "r" || low == "radius") {
+    st.filletTextAwaitingRadius = true;
+    log.push_back("FILLET — specify fillet radius <" + std::to_string(st.filletRadius) + ">:");
+    return true;
+  }
+  if (low == "t" || low == "trim") {
+    st.filletTextAwaitingTrim = true;
+    log.push_back(std::string("FILLET — Enter Trim mode option [Trim/No trim] <") +
+                  (st.cornerTrimMode ? "Trim" : "No trim") + ">:");
+    return true;
+  }
+  log.push_back("FILLET — type R (Radius) or T (Trim), or pick an object in the viewport.");
+  return false;
+}
+
+// ------------------------------------------------------------------------------------------------
+// FILLET, pure-paper-space path (step 6a) — full parity with model space (Q3, D-2026-08-24-g).
+// Mirrors the model-space functions above one-for-one against PaperLayout's stores instead of
+// AppCommandState's — the same unavoidable duplication MIRROR/EXTEND/BREAK's own paper paths
+// already accept (this codebase's two-store convention, no shared entity representation).
+// ------------------------------------------------------------------------------------------------
+
+bool PaperFilletEligibility(const PaperLayout& L, const PaperEntityRef& ref, float pickX, float pickY,
+                            int* outPolySeg, std::vector<std::string>& log) {
+  using T = PaperEntityRef::Type;
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  *outPolySeg = -1;
+  switch (ref.type) {
+  case T::Line:
+    return true;
+  case T::Arc: {
+    if (ref.index < 0 || static_cast<size_t>(ref.index) >= L.paperArcs.size())
+      return false;
+    const CadArc& a = L.paperArcs[static_cast<size_t>(ref.index)];
+    if (std::fabs(std::fabs(a.sweepRad) - kTwoPi) < 1e-4f) {
+      log.push_back("FILLET — 1 full-circle arc ignored: fillet needs a curve with a definite tangent "
+                    "side. Pick a line, non-full arc, or polyline segment.");
+      return false;
+    }
+    return true;
+  }
+  case T::Polyline: {
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L.paperPolyOffsets.size())
+      return false;
+    const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    if (numVerts < 2)
+      return false;
+    const bool closed =
+        static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)];
+    const int numEdges = closed ? numVerts : (numVerts - 1);
+    int bestSeg = 0;
+    float bestD = -1.f;
+    for (int e2 = 0; e2 < numEdges; ++e2) {
+      const int viA = v0 + e2, viB = v0 + ((e2 + 1) % numVerts);
+      const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
+      float qx = 0.f, qy = 0.f;
+      ClosestPointOnSegment(L.paperPolyVerts[a3], L.paperPolyVerts[a3 + 1], L.paperPolyVerts[b3],
+                            L.paperPolyVerts[b3 + 1], pickX, pickY, &qx, &qy);
+      const float d = (qx - pickX) * (qx - pickX) + (qy - pickY) * (qy - pickY);
+      if (bestD < 0.f || d < bestD) {
+        bestD = d;
+        bestSeg = e2;
+      }
+    }
+    *outPolySeg = bestSeg;
+    return true;
+  }
+  case T::Circle:
+    log.push_back("FILLET — 1 circle ignored: fillet needs a curve with a definite tangent side. Pick a "
+                  "line, non-full arc, or polyline segment.");
+    return false;
+  default:
+    log.push_back("FILLET — 1 object ignored: only a line, arc, or polyline segment can be filleted.");
+    return false;
+  }
+}
+
+static bool BuildFilletCurveFromPaperEntity(const PaperLayout& L, const PaperEntityRef& ref, int polySeg,
+                                            FilletCurve* out) {
+  using T = PaperEntityRef::Type;
+  if (ref.type == T::Line) {
+    const size_t k = static_cast<size_t>(ref.index) * 6;
+    if (k + 5 >= L.paperLines.size())
+      return false;
+    out->isLine = true;
+    out->ax = L.paperLines[k];
+    out->ay = L.paperLines[k + 1];
+    out->bx = L.paperLines[k + 3];
+    out->by = L.paperLines[k + 4];
+    return true;
+  }
+  if (ref.type == T::Arc) {
+    if (ref.index < 0 || static_cast<size_t>(ref.index) >= L.paperArcs.size())
+      return false;
+    const CadArc& a = L.paperArcs[static_cast<size_t>(ref.index)];
+    out->isLine = false;
+    out->cx = a.cx;
+    out->cy = a.cy;
+    out->r = a.r;
+    return true;
+  }
+  if (ref.type == T::Polyline) {
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L.paperPolyOffsets.size() || polySeg < 0)
+      return false;
+    const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    const int viA = v0 + polySeg, viB = v0 + ((polySeg + 1) % numVerts);
+    const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
+    if (b3 + 1 >= L.paperPolyVerts.size())
+      return false;
+    out->isLine = true;
+    out->ax = L.paperPolyVerts[a3];
+    out->ay = L.paperPolyVerts[a3 + 1];
+    out->bx = L.paperPolyVerts[b3];
+    out->by = L.paperPolyVerts[b3 + 1];
+    return true;
+  }
+  return false;
+}
+
+/// Paper-space equivalent of the model-space `FilletRadiusFitsCurve` — see its own comment
+/// (D-2026-08-25-b) for the full "radius is too large" reasoning.
+static bool PaperFilletRadiusFitsCurve(const PaperLayout& L, const PaperEntityRef& ref, float p0x, float p0y,
+                                       float tangentX, float tangentY) {
+  using T = PaperEntityRef::Type;
+  if (ref.type == T::Line) {
+    const size_t k = static_cast<size_t>(ref.index) * 6;
+    if (k + 5 >= L.paperLines.size())
+      return true;
+    const float x0 = L.paperLines[k], y0 = L.paperLines[k + 1];
+    const float x1 = L.paperLines[k + 3], y1 = L.paperLines[k + 4];
+    const bool nearIsFirst = NearerToFirstPoint(p0x, p0y, x0, y0, x1, y1);
+    const float nearX = nearIsFirst ? x0 : x1, nearY = nearIsFirst ? y0 : y1;
+    const float farX = nearIsFirst ? x1 : x0, farY = nearIsFirst ? y1 : y0;
+    return FilletPointWithinSpan(nearX, nearY, farX, farY, tangentX, tangentY);
+  }
+  // Arc: see the model-space FilletRadiusFitsCurve's own comment — not checked here either.
+  return true;
+}
+
+/// Case B, paper store: reuses `ApplyLengthToPaperEntityMutation` — the shared paper mutation
+/// LENGTHEN/EXTEND already established — by converting the known tangent point into its `newLen`
+/// currency. That function pushes no undo snapshot itself (unlike its model-space counterparts), so
+/// there is no double-push to guard against here, unlike the model-space `ApplyFilletTrimSingle`.
+static bool ApplyFilletTrimSingleToPaperEntity(PaperLayout* L, const PaperEntityRef& ref, int polySeg,
+                                               float tangentX, float tangentY) {
+  using T = PaperEntityRef::Type;
+  if (ref.type == T::Line) {
+    const size_t k = static_cast<size_t>(ref.index) * 6;
+    if (k + 5 >= L->paperLines.size())
+      return false;
+    const float x0 = L->paperLines[k], y0 = L->paperLines[k + 1];
+    const float x1 = L->paperLines[k + 3], y1 = L->paperLines[k + 4];
+    const bool nearFirst = NearerToFirstPoint(tangentX, tangentY, x0, y0, x1, y1);  // nearest-to-TANGENT, not pick
+    const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
+    const float newLen = std::hypot(tangentX - fixedX, tangentY - fixedY);
+    ApplyLengthToPaperEntityMutation(L, ref, nearFirst, 0.f, newLen);
+    return true;
+  }
+  if (ref.type == T::Arc) {
+    if (ref.index < 0 || static_cast<size_t>(ref.index) >= L->paperArcs.size())
+      return false;
+    const CadArc& a = L->paperArcs[static_cast<size_t>(ref.index)];
+    const float sx = a.cx + a.r * std::cos(a.startRad), sy = a.cy + a.r * std::sin(a.startRad);
+    const float ex = a.cx + a.r * std::cos(a.startRad + a.sweepRad);
+    const float ey = a.cy + a.r * std::sin(a.startRad + a.sweepRad);
+    const bool nearFirst = NearerToFirstPoint(tangentX, tangentY, sx, sy, ex, ey);
+    const float newLen =
+        FilletArcTangentPointToNewLength(a.cx, a.cy, a.r, a.startRad, a.sweepRad, nearFirst, tangentX, tangentY);
+    ApplyLengthToPaperEntityMutation(L, ref, nearFirst, 0.f, newLen);
+    return true;
+  }
+  if (ref.type == T::Polyline) {
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size() || polySeg < 0)
+      return false;
+    const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    const int numEdges = numVerts - 1;  // Case B never reaches a closed polyline — no free end
+    const bool nearFirst = (polySeg == 0);
+    if (!nearFirst && polySeg != numEdges - 1)
+      return false;
+    const int movingVi = nearFirst ? v0 : (v1 - 1);
+    const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
+    const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
+    if (mIdx + 1 >= L->paperPolyVerts.size() || fIdx + 1 >= L->paperPolyVerts.size())
+      return false;
+    const float fx = L->paperPolyVerts[fIdx], fy = L->paperPolyVerts[fIdx + 1];
+    const float mx = L->paperPolyVerts[mIdx], my = L->paperPolyVerts[mIdx + 1];
+    const float oldSegLen = std::hypot(mx - fx, my - fy);
+    const float newSegLen = std::hypot(tangentX - fx, tangentY - fy);
+    float curTotal = 0.f;
+    for (int vi = v0; vi + 1 < v1; ++vi) {
+      const size_t a = static_cast<size_t>(vi) * 3, b = static_cast<size_t>(vi + 1) * 3;
+      curTotal += std::hypot(L->paperPolyVerts[b] - L->paperPolyVerts[a], L->paperPolyVerts[b + 1] - L->paperPolyVerts[a + 1]);
+    }
+    const float newLen = curTotal - oldSegLen + newSegLen;
+    ApplyLengthToPaperEntityMutation(L, ref, nearFirst, curTotal, newLen);
+    return true;
+  }
+  return false;
+}
+
+/// Case A, paper store: same-polyline adjacent segments — the paper equivalent of
+/// `ApplyFilletPolylineCorner`, using `ReplacePaperPolylineVerts` (BREAK's own paper CSR-shift
+/// helper) in place of the model store's `ReplacePolylineVerts`.
+static bool ApplyFilletPolylineCornerPaper(AppCommandState& st, PaperLayout* L, int pi, int edgeA, int edgeB,
+                                           float radius, float pick1X, float pick1Y, float pick2X, float pick2Y,
+                                           std::vector<std::string>& log) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size())
+    return false;
+  const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+  const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+  const int numVerts = v1 - v0;
+  if (numVerts < 2)
+    return false;
+  const bool closed =
+      static_cast<size_t>(pi) < L->paperPolyClosed.size() && L->paperPolyClosed[static_cast<size_t>(pi)];
+  const int numEdges = closed ? numVerts : (numVerts - 1);
+  if (edgeA < 0 || edgeA >= numEdges || edgeB < 0 || edgeB >= numEdges || edgeA == edgeB)
+    return false;
+
+  auto edgeVerts = [&](int e, int* viA, int* viB) {
+    *viA = v0 + e;
+    *viB = v0 + ((e + 1) % numVerts);
+  };
+  int aVi0 = 0, aVi1 = 0, bVi0 = 0, bVi1 = 0;
+  edgeVerts(edgeA, &aVi0, &aVi1);
+  edgeVerts(edgeB, &bVi0, &bVi1);
+  int sharedVi = -1, otherAVi = -1;
+  if (aVi0 == bVi0 || aVi0 == bVi1) {
+    sharedVi = aVi0;
+    otherAVi = aVi1;
+  } else if (aVi1 == bVi0 || aVi1 == bVi1) {
+    sharedVi = aVi1;
+    otherAVi = aVi0;
+  }
+  if (sharedVi < 0) {
+    log.push_back("FILLET — those two polyline segments are not adjacent; refused.");
+    return false;
+  }
+  const int otherBVi = (bVi0 == sharedVi) ? bVi1 : bVi0;
+
+  auto readVert = [&](int vi, float* x, float* y) {
+    *x = L->paperPolyVerts[static_cast<size_t>(vi) * 3];
+    *y = L->paperPolyVerts[static_cast<size_t>(vi) * 3 + 1];
+  };
+  float sharedX = 0.f, sharedY = 0.f, otherAX = 0.f, otherAY = 0.f, otherBX = 0.f, otherBY = 0.f;
+  readVert(sharedVi, &sharedX, &sharedY);
+  readVert(otherAVi, &otherAX, &otherAY);
+  readVert(otherBVi, &otherBX, &otherBY);
+
+  FilletCurve curveA{};
+  curveA.isLine = true;
+  curveA.ax = otherAX;
+  curveA.ay = otherAY;
+  curveA.bx = sharedX;
+  curveA.by = sharedY;
+  FilletCurve curveB{};
+  curveB.isLine = true;
+  curveB.ax = sharedX;
+  curveB.ay = sharedY;
+  curveB.bx = otherBX;
+  curveB.by = otherBY;
+
+  float cx = 0.f, cy = 0.f;
+  if (!SolveFilletCenter(curveA, curveB, radius, pick1X, pick1Y, pick2X, pick2Y, &cx, &cy)) {
+    log.push_back("FILLET — no valid tangent arc exists for that radius at that corner; refused.");
+    return false;
+  }
+  float tAx = 0.f, tAy = 0.f, tBx = 0.f, tBy = 0.f;
+  FilletTangentPointOnLine(curveA, cx, cy, &tAx, &tAy);
+  FilletTangentPointOnLine(curveB, cx, cy, &tBx, &tBy);
+
+  const int sharedLocal = sharedVi - v0;
+  const int otherALocal = otherAVi - v0;
+  const bool aIsIncoming = (otherALocal == (sharedLocal - 1 + numVerts) % numVerts);
+  const float inTx = aIsIncoming ? tAx : tBx, inTy = aIsIncoming ? tAy : tBy;
+  const float outTx = aIsIncoming ? tBx : tAx, outTy = aIsIncoming ? tBy : tAy;
+  const bool radiusIsZero = radius < 1e-4f;
+
+  std::vector<std::pair<float, float>> newXY;
+  newXY.reserve(static_cast<size_t>(numVerts) + 1);
+  for (int vi = v0; vi < v1; ++vi) {
+    if (vi - v0 == sharedLocal) {
+      if (radiusIsZero) {
+        newXY.push_back({cx, cy});
+      } else {
+        newXY.push_back({inTx, inTy});
+        newXY.push_back({outTx, outTy});
+      }
+    } else {
+      float x = 0.f, y = 0.f;
+      readVert(vi, &x, &y);
+      newXY.push_back({x, y});
+    }
+  }
+
+  PushUndoSnapshot(st, "Fillet paper geometry");
+  ReplacePaperPolylineVerts(L, pi, newXY);
+  if (!radiusIsZero) {
+    constexpr float kPi = 3.14159265358979323846f;
+    constexpr float kTwoPi = 6.28318530717958647692f;
+    const float thetaIn = std::atan2(inTy - cy, inTx - cx);
+    const float thetaOut = std::atan2(outTy - cy, outTx - cx);
+    float sweep = FilletCcwAngleDelta(thetaIn, thetaOut);
+    if (sweep > kPi)
+      sweep -= kTwoPi;
+    CadArc arc{};
+    arc.cx = cx;
+    arc.cy = cy;
+    arc.r = radius;
+    arc.startRad = thetaIn;
+    arc.sweepRad = sweep;
+    L->paperArcs.push_back(arc);
+    L->paperArcAttrs.push_back(MakeNewEntityAttrs(st));
+  }
+  BumpCadGpuCache(st);
+  log.push_back(radiusIsZero ? "FILLET — polyline corner trimmed to a point (radius 0)."
+                            : "FILLET — polyline corner filleted.");
+  return true;
+}
+
+bool ApplyFilletToPaperEntities(AppCommandState& st, const PaperEntityRef& first, int firstPolySeg,
+                                float firstPickX, float firstPickY, const PaperEntityRef& second,
+                                int secondPolySeg, float pickX, float pickY, std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L)
+    return false;
+
+  const bool sameEntity = (second.type == first.type && second.index == first.index);
+  if (sameEntity && second.type != PaperEntityRef::Type::Polyline) {
+    log.push_back("FILLET — select two different objects.");
+    return false;
+  }
+  if (sameEntity && secondPolySeg == firstPolySeg) {
+    log.push_back("FILLET — select two different segments.");
+    return false;
+  }
+
+  if (sameEntity)
+    return ApplyFilletPolylineCornerPaper(st, L, second.index, firstPolySeg, secondPolySeg, st.filletRadius,
+                                          firstPickX, firstPickY, pickX, pickY, log);
+
+  auto polylineIsEndSegmentOnly = [&](const PaperEntityRef& ref, int seg) -> bool {
+    if (ref.type != PaperEntityRef::Type::Polyline)
+      return true;
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size())
+      return false;
+    const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const bool closed =
+        static_cast<size_t>(pi) < L->paperPolyClosed.size() && L->paperPolyClosed[static_cast<size_t>(pi)];
+    if (closed) {
+      log.push_back("FILLET — a closed polyline has no free end; only an adjacent segment of the SAME "
+                    "polyline can be filleted against it.");
+      return false;
+    }
+    const int numEdges = (v1 - v0) - 1;
+    if (seg != 0 && seg != numEdges - 1) {
+      log.push_back("FILLET — only a polyline's own first or last segment can be filleted against a "
+                    "different object; an interior segment shares its vertex with a neighbor that would "
+                    "be silently disturbed.");
+      return false;
+    }
+    return true;
+  };
+  if (!polylineIsEndSegmentOnly(first, firstPolySeg) || !polylineIsEndSegmentOnly(second, secondPolySeg))
+    return false;
+
+  FilletCurve c1{}, c2{};
+  if (!BuildFilletCurveFromPaperEntity(*L, first, firstPolySeg, &c1) ||
+      !BuildFilletCurveFromPaperEntity(*L, second, secondPolySeg, &c2)) {
+    log.push_back("FILLET — could not resolve the picked geometry; refused.");
+    return false;
+  }
+
+  if (c1.isLine && c2.isLine && FilletLinesAreParallel(c1.ax, c1.ay, c1.bx, c1.by, c2.ax, c2.ay, c2.bx, c2.by)) {
+    float anchorX = 0.f, anchorY = 0.f, projX = 0.f, projY = 0.f;
+    FilletParallelSemicircle(c1.ax, c1.ay, c1.bx, c1.by, c2.ax, c2.ay, c2.bx, c2.by, firstPickX, firstPickY,
+                             &anchorX, &anchorY, &projX, &projY);
+    const float semiR = 0.5f * std::hypot(projX - anchorX, projY - anchorY);
+    if (semiR < 1e-4f) {
+      log.push_back("FILLET — the two lines coincide; refused.");
+      return false;
+    }
+    PushUndoSnapshot(st, "Fillet paper geometry");
+    if (st.cornerTrimMode)
+      ApplyFilletTrimSingleToPaperEntity(L, second, secondPolySeg, projX, projY);
+    const float cx = 0.5f * (anchorX + projX), cy = 0.5f * (anchorY + projY);
+    CadArc arc{};
+    arc.cx = cx;
+    arc.cy = cy;
+    arc.r = semiR;
+    arc.startRad = std::atan2(anchorY - cy, anchorX - cx);
+    arc.sweepRad = 3.14159265358979323846f;
+    L->paperArcs.push_back(arc);
+    L->paperArcAttrs.push_back(MakeNewEntityAttrs(st));
+    BumpCadGpuCache(st);
+    log.push_back("FILLET — parallel lines connected by a semicircle (radius set by the gap between "
+                  "them, not the current FILLET radius).");
+    return true;
+  }
+
+  float cx = 0.f, cy = 0.f;
+  if (!SolveFilletCenter(c1, c2, st.filletRadius, firstPickX, firstPickY, pickX, pickY, &cx, &cy)) {
+    log.push_back("FILLET — no valid tangent arc exists for that radius; refused.");
+    return false;
+  }
+  float t1x = 0.f, t1y = 0.f, t2x = 0.f, t2y = 0.f;
+  if (c1.isLine)
+    FilletTangentPointOnLine(c1, cx, cy, &t1x, &t1y);
+  else
+    FilletTangentPointOnCircle(c1, cx, cy, &t1x, &t1y);
+  if (c2.isLine)
+    FilletTangentPointOnLine(c2, cx, cy, &t2x, &t2y);
+  else
+    FilletTangentPointOnCircle(c2, cx, cy, &t2x, &t2y);
+
+  // See the model-space call site's own comment for why this needs a fresh radius-0 solve rather
+  // than the offset candidate `cx,cy` above.
+  float p0x = 0.f, p0y = 0.f;
+  const bool haveP0 = SolveFilletCenter(c1, c2, 0.f, firstPickX, firstPickY, pickX, pickY, &p0x, &p0y);
+  if (haveP0 && (!PaperFilletRadiusFitsCurve(*L, first, p0x, p0y, t1x, t1y) ||
+                !PaperFilletRadiusFitsCurve(*L, second, p0x, p0y, t2x, t2y))) {
+    log.push_back("FILLET — radius " + std::to_string(st.filletRadius) +
+                  " is too large for the selected objects; refused.");
+    return false;
+  }
+
+  PushUndoSnapshot(st, "Fillet paper geometry");
+  if (st.cornerTrimMode) {
+    ApplyFilletTrimSingleToPaperEntity(L, first, firstPolySeg, t1x, t1y);
+    ApplyFilletTrimSingleToPaperEntity(L, second, secondPolySeg, t2x, t2y);
+  }
+  const bool radiusIsZero = st.filletRadius < 1e-4f;
+  if (!radiusIsZero) {
+    constexpr float kPi = 3.14159265358979323846f;
+    constexpr float kTwoPi = 6.28318530717958647692f;
+    const float thetaA = std::atan2(t1y - cy, t1x - cx);
+    const float thetaB = std::atan2(t2y - cy, t2x - cx);
+    float sweep = FilletCcwAngleDelta(thetaA, thetaB);
+    if (sweep > kPi)
+      sweep -= kTwoPi;
+    CadArc arc{};
+    arc.cx = cx;
+    arc.cy = cy;
+    arc.r = st.filletRadius;
+    arc.startRad = thetaA;
+    arc.sweepRad = sweep;
+    L->paperArcs.push_back(arc);
+    L->paperArcAttrs.push_back(MakeNewEntityAttrs(st));
+  }
+  BumpCadGpuCache(st);
+  log.push_back(radiusIsZero ? "FILLET — corner trimmed to a point (radius 0)." : "FILLET — corner filleted.");
+  return true;
+}
+
+// ================================================================================================
+// CHAMFER (REQ-103 step 6b, TASK-103). Reuses almost everything FILLET (step 6a, above) already
+// built: `BuildFilletCurveFromEntity`/`ApplyFilletTrimSingle` unchanged (both dispatch by entity
+// type and simply never see an Arc, since CHAMFER refuses it upstream), the same Case A/B split,
+// the same `cornerTrimMode` toggle, `SolveFilletCenter(c1,c2,0.f,...)` for the two curves'
+// intersection point (FILLET's own radius-0 path). Only the corner-point construction is new
+// (`ChamferPointAtDistance`/`ChamferRayIntersect`, CadCommands.hpp) and the connector is an
+// ordinary Line, not an Arc.
+// ================================================================================================
+
+constexpr float kChamferDegToRad = 0.01745329251994329577f;
+
+/// Is `e` (picked at pickX,pickY) an eligible CHAMFER curve, and if it's a Polyline, which edge?
+/// Eligible: Line, any Polyline segment (open or closed). Arc/Circle refused — chamfer connects two
+/// straight curves only, measured by distance/angle from their intersection; no standard
+/// chamfer-to-arc geometry exists (matching AutoCAD's own restriction). Every other kind refused
+/// with a stated reason (REQ-201).
+static bool ChamferEligibility(const AppCommandState& st, const SelectedEntity& e, float pickX, float pickY,
+                               int* outPolySeg, std::vector<std::string>& log) {
+  using T = SelectedEntity::Type;
+  *outPolySeg = -1;
+  switch (e.type) {
+  case T::LineSeg:
+    return true;
+  case T::Polyline: {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+      return false;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    if (numVerts < 2)
+      return false;
+    const bool closed =
+        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+    const int numEdges = closed ? numVerts : (numVerts - 1);
+    int bestSeg = 0;
+    float bestD = -1.f;
+    for (int e2 = 0; e2 < numEdges; ++e2) {
+      const int viA = v0 + e2, viB = v0 + ((e2 + 1) % numVerts);
+      const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
+      float qx = 0.f, qy = 0.f;
+      ClosestPointOnSegment(st.userPolylineVerts[a3], st.userPolylineVerts[a3 + 1], st.userPolylineVerts[b3],
+                            st.userPolylineVerts[b3 + 1], pickX, pickY, &qx, &qy);
+      const float d = (qx - pickX) * (qx - pickX) + (qy - pickY) * (qy - pickY);
+      if (bestD < 0.f || d < bestD) {
+        bestD = d;
+        bestSeg = e2;
+      }
+    }
+    *outPolySeg = bestSeg;
+    return true;
+  }
+  case T::Arc:
+    log.push_back("CHAMFER — 1 arc ignored: chamfer connects two straight curves only, measured by "
+                  "distance/angle from their intersection — no standard chamfer-to-arc geometry "
+                  "exists. Pick a line or polyline segment.");
+    return false;
+  case T::Circle:
+    log.push_back("CHAMFER — 1 circle ignored: chamfer connects two straight curves only. Pick a "
+                  "line or polyline segment.");
+    return false;
+  default:
+    log.push_back("CHAMFER — 1 object ignored: only a line or polyline segment can be chamfered.");
+    return false;
+  }
+}
+
+/// Resolves the current mode+values into the two chamfer points for curves `c1`/`c2`, whose
+/// intersection is `(px,py)`. Distance/Distance: each point is its own curve's persisted distance
+/// from the intersection. Distance/Angle: curve 1's point is `chamferDist1` from the intersection;
+/// curve 2's point is where curve 1's kept direction, rotated by `chamferAngle`, meets curve 2.
+/// False (REQ-201, caller states the reason) only in Distance/Angle mode when neither rotation
+/// sense reaches curve 2 at all.
+static bool ChamferResolvePoints(const AppCommandState& st, const FilletCurve& c1, const FilletCurve& c2, float px,
+                                 float py, float pick1X, float pick1Y, float pick2X, float pick2Y, float* out1X,
+                                 float* out1Y, float* out2X, float* out2Y) {
+  ChamferPointAtDistance(c1, px, py, st.chamferDist1, pick1X, pick1Y, out1X, out1Y);
+  if (st.chamferMode == 0) {
+    ChamferPointAtDistance(c2, px, py, st.chamferDist2, pick2X, pick2Y, out2X, out2Y);
+    return true;
+  }
+  return ChamferRayIntersect(c1, *out1X, *out1Y, pick1X, pick1Y, st.chamferAngle * kChamferDegToRad, c2, pick2X,
+                             pick2Y, out2X, out2Y);
+}
+
+/// Case A: adjacent segments of the SAME polyline — the CHAMFER equivalent of
+/// `ApplyFilletPolylineCorner`. Splices the shared vertex into the two chamfer points (or one, if
+/// both distances/the single Distance/Angle distance are ~0) and inserts a fresh Line connector
+/// (radius-0-equivalent case: none).
+static bool ApplyChamferPolylineCorner(AppCommandState& st, int pi, int edgeA, int edgeB, float pick1X,
+                                       float pick1Y, float pick2X, float pick2Y, std::vector<std::string>& log) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+    return false;
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const int numVerts = v1 - v0;
+  if (numVerts < 2)
+    return false;
+  const bool closed =
+      static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+  const int numEdges = closed ? numVerts : (numVerts - 1);
+  if (edgeA < 0 || edgeA >= numEdges || edgeB < 0 || edgeB >= numEdges || edgeA == edgeB)
+    return false;
+
+  auto edgeVerts = [&](int e, int* viA, int* viB) {
+    *viA = v0 + e;
+    *viB = v0 + ((e + 1) % numVerts);
+  };
+  int aVi0 = 0, aVi1 = 0, bVi0 = 0, bVi1 = 0;
+  edgeVerts(edgeA, &aVi0, &aVi1);
+  edgeVerts(edgeB, &bVi0, &bVi1);
+  int sharedVi = -1, otherAVi = -1;
+  if (aVi0 == bVi0 || aVi0 == bVi1) {
+    sharedVi = aVi0;
+    otherAVi = aVi1;
+  } else if (aVi1 == bVi0 || aVi1 == bVi1) {
+    sharedVi = aVi1;
+    otherAVi = aVi0;
+  }
+  if (sharedVi < 0) {
+    log.push_back("CHAMFER — those two polyline segments are not adjacent; refused.");
+    return false;
+  }
+  const int otherBVi = (bVi0 == sharedVi) ? bVi1 : bVi0;
+
+  auto readVert = [&](int vi, float* x, float* y) {
+    *x = st.userPolylineVerts[static_cast<size_t>(vi) * 3];
+    *y = st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 1];
+  };
+  float sharedX = 0.f, sharedY = 0.f, otherAX = 0.f, otherAY = 0.f, otherBX = 0.f, otherBY = 0.f;
+  readVert(sharedVi, &sharedX, &sharedY);
+  readVert(otherAVi, &otherAX, &otherAY);
+  readVert(otherBVi, &otherBX, &otherBY);
+
+  FilletCurve curveA{};
+  curveA.isLine = true;
+  curveA.ax = otherAX;
+  curveA.ay = otherAY;
+  curveA.bx = sharedX;
+  curveA.by = sharedY;
+  FilletCurve curveB{};
+  curveB.isLine = true;
+  curveB.ax = sharedX;
+  curveB.ay = sharedY;
+  curveB.bx = otherBX;
+  curveB.by = otherBY;
+
+  float px = 0.f, py = 0.f;
+  if (!SolveFilletCenter(curveA, curveB, 0.f, pick1X, pick1Y, pick2X, pick2Y, &px, &py)) {
+    log.push_back("CHAMFER — those two segments are parallel; no corner exists; refused.");
+    return false;
+  }
+  float dAx = 0.f, dAy = 0.f, dBx = 0.f, dBy = 0.f;
+  if (!ChamferResolvePoints(st, curveA, curveB, px, py, pick1X, pick1Y, pick2X, pick2Y, &dAx, &dAy, &dBx, &dBy)) {
+    log.push_back("CHAMFER — that angle does not reach the second segment; refused.");
+    return false;
+  }
+
+  const int sharedLocal = sharedVi - v0;
+  const int otherALocal = otherAVi - v0;
+  const bool aIsIncoming = (otherALocal == (sharedLocal - 1 + numVerts) % numVerts);
+  const float inX = aIsIncoming ? dAx : dBx, inY = aIsIncoming ? dAy : dBy;
+  const float outX = aIsIncoming ? dBx : dAx, outY = aIsIncoming ? dBy : dAy;
+  const bool bothZero = (st.chamferMode == 0) ? (st.chamferDist1 < 1e-4f && st.chamferDist2 < 1e-4f)
+                                              : (st.chamferDist1 < 1e-4f);
+
+  std::vector<std::pair<float, float>> newXY;
+  newXY.reserve(static_cast<size_t>(numVerts) + 1);
+  for (int vi = v0; vi < v1; ++vi) {
+    if (vi - v0 == sharedLocal) {
+      if (bothZero) {
+        newXY.push_back({px, py});
+      } else {
+        newXY.push_back({inX, inY});
+        newXY.push_back({outX, outY});
+      }
+    } else {
+      float x = 0.f, y = 0.f;
+      readVert(vi, &x, &y);
+      newXY.push_back({x, y});
+    }
+  }
+
+  PushUndoSnapshot(st, "Chamfer");
+  ReplacePolylineVerts(st, pi, newXY);
+  if (!bothZero) {
+    const size_t li = st.userLinesFlat.size() / 6;
+    st.userLinesFlat.push_back(inX);
+    st.userLinesFlat.push_back(inY);
+    st.userLinesFlat.push_back(0.f);
+    st.userLinesFlat.push_back(outX);
+    st.userLinesFlat.push_back(outY);
+    st.userLinesFlat.push_back(0.f);
+    st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+    (void)li;
+  }
+  BumpCadGpuCache(st);
+  log.push_back(bothZero ? "CHAMFER — polyline corner trimmed to a point (distance 0)."
+                        : "CHAMFER — polyline corner chamfered.");
+  return true;
+}
+
+static std::string ChamferPromptSuffix(const AppCommandState& st) {
+  char buf[128];
+  if (st.chamferMode == 0)
+    std::snprintf(buf, sizeof(buf), "<D1=%.3f, D2=%.3f, %s>", static_cast<double>(st.chamferDist1),
+                 static_cast<double>(st.chamferDist2), st.cornerTrimMode ? "Trim" : "No trim");
+  else
+    std::snprintf(buf, sizeof(buf), "<D=%.3f, A=%.1f, %s>", static_cast<double>(st.chamferDist1),
+                 static_cast<double>(st.chamferAngle), st.cornerTrimMode ? "Trim" : "No trim");
+  return buf;
+}
+
+void StartChamferCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  using CP = AppCommandState::ChamferPhase;
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
+    st.active = K::None;
+    st.paperChamferPhase = 1;
+    st.paperChamferFirstEntity = PaperEntityRef{};
+    st.paperChamferFirstPolySeg = -1;
+    log.push_back("CHAMFER — select first object " + ChamferPromptSuffix(st) + ". ESC cancels.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = K::Chamfer;
+  st.lastCommand = K::Chamfer;
+  st.chamferPhase = CP::WaitFirstEntity;
+  st.chamferFirstEntity = SelectedEntity{};
+  st.chamferFirstPolySeg = -1;
+  st.chamferTextAwaitingFirstValue = false;
+  st.chamferTextAwaitingSecondDist = false;
+  st.chamferTextAwaitingAngle = false;
+  st.chamferTextAwaitingTrim = false;
+  log.push_back("CHAMFER — select first object or [Distance/Angle/Trim] " + ChamferPromptSuffix(st) +
+               ". ESC cancels.");
+}
+
+/// Model-space + floating-model-space viewport-pick handler for CHAMFER — mirrors
+/// `HandleFilletViewportPick`'s Case A/B split exactly, minus the Arc/parallel-semicircle branches
+/// (CHAMFER has neither: Arc is refused upstream by `ChamferEligibility`, and parallel lines are a
+/// real, stated refusal here — REQ-103's own acceptance text names this asymmetry explicitly).
+void HandleChamferViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  using CP = AppCommandState::ChamferPhase;
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+    log.push_back("CHAMFER — no object at pick.");
+    return;
+  }
+  int polySeg = -1;
+  if (!ChamferEligibility(st, hit, wx, wy, &polySeg, log))
+    return;
+
+  if (st.chamferPhase == CP::WaitFirstEntity) {
+    st.chamferFirstEntity = hit;
+    st.chamferFirstPolySeg = polySeg;
+    st.chamferFirstPickX = wx;
+    st.chamferFirstPickY = wy;
+    st.chamferPhase = CP::WaitSecondEntity;
+    log.push_back("CHAMFER — select second object:");
+    return;
+  }
+
+  const bool sameEntity = (hit.type == st.chamferFirstEntity.type && hit.index == st.chamferFirstEntity.index);
+  if (sameEntity && hit.type != SelectedEntity::Type::Polyline) {
+    log.push_back("CHAMFER — select two different objects.");
+    return;
+  }
+  if (sameEntity && polySeg == st.chamferFirstPolySeg) {
+    log.push_back("CHAMFER — select two different segments.");
+    return;
+  }
+
+  if (sameEntity) {
+    ApplyChamferPolylineCorner(st, hit.index, st.chamferFirstPolySeg, polySeg, st.chamferFirstPickX,
+                               st.chamferFirstPickY, wx, wy, log);
+  } else {
+    auto polylineIsEndSegmentOnly = [&](const SelectedEntity& e, int seg) -> bool {
+      if (e.type != SelectedEntity::Type::Polyline)
+        return true;
+      const int pi = e.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+        return false;
+      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const bool closed =
+          static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+      if (closed) {
+        log.push_back("CHAMFER — a closed polyline has no free end; only an adjacent segment of the "
+                      "SAME polyline can be chamfered against it.");
+        return false;
+      }
+      const int numEdges = (v1 - v0) - 1;
+      if (seg != 0 && seg != numEdges - 1) {
+        log.push_back("CHAMFER — only a polyline's own first or last segment can be chamfered against "
+                      "a different object; an interior segment shares its vertex with a neighbor that "
+                      "would be silently disturbed.");
+        return false;
+      }
+      return true;
+    };
+    if (!polylineIsEndSegmentOnly(st.chamferFirstEntity, st.chamferFirstPolySeg) ||
+        !polylineIsEndSegmentOnly(hit, polySeg)) {
+      return;
+    }
+
+    FilletCurve c1{}, c2{};
+    if (!BuildFilletCurveFromEntity(st, st.chamferFirstEntity, st.chamferFirstPolySeg, &c1) ||
+        !BuildFilletCurveFromEntity(st, hit, polySeg, &c2)) {
+      log.push_back("CHAMFER — could not resolve the picked geometry; refused.");
+      return;
+    }
+
+    float px = 0.f, py = 0.f;
+    if (!SolveFilletCenter(c1, c2, 0.f, st.chamferFirstPickX, st.chamferFirstPickY, wx, wy, &px, &py)) {
+      // No AutoCAD analogue to FILLET's parallel-lines semicircle here — a real, stated asymmetry
+      // (REQ-103's own CHAMFER acceptance text).
+      log.push_back("CHAMFER — those two curves are parallel; no corner exists; refused.");
+    } else {
+      float d1x = 0.f, d1y = 0.f, d2x = 0.f, d2y = 0.f;
+      if (!ChamferResolvePoints(st, c1, c2, px, py, st.chamferFirstPickX, st.chamferFirstPickY, wx, wy, &d1x, &d1y,
+                                &d2x, &d2y)) {
+        log.push_back("CHAMFER — that angle does not reach the second curve; refused.");
+      } else {
+        PushUndoSnapshot(st, "Chamfer");
+        bool ok1 = true, ok2 = true;
+        if (st.cornerTrimMode) {
+          ok1 = ApplyFilletTrimSingle(st, st.chamferFirstEntity, st.chamferFirstPolySeg, d1x, d1y, log);
+          ok2 = ApplyFilletTrimSingle(st, hit, polySeg, d2x, d2y, log);
+        }
+        if (ok1 && ok2) {
+          const bool bothZero = (st.chamferMode == 0) ? (st.chamferDist1 < 1e-4f && st.chamferDist2 < 1e-4f)
+                                                       : (st.chamferDist1 < 1e-4f);
+          if (!bothZero) {
+            st.userLinesFlat.push_back(d1x);
+            st.userLinesFlat.push_back(d1y);
+            st.userLinesFlat.push_back(0.f);
+            st.userLinesFlat.push_back(d2x);
+            st.userLinesFlat.push_back(d2y);
+            st.userLinesFlat.push_back(0.f);
+            st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+          }
+          BumpCadGpuCache(st);
+          log.push_back(bothZero ? "CHAMFER — corner trimmed to a point (distance 0)."
+                                 : "CHAMFER — corner chamfered.");
+        }
+      }
+    }
+  }
+
+  st.chamferPhase = CP::WaitFirstEntity;
+  st.chamferFirstEntity = SelectedEntity{};
+  st.chamferFirstPolySeg = -1;
+  log.push_back("CHAMFER — select first object or [Distance/Angle/Trim] " + ChamferPromptSuffix(st) +
+               ". ESC cancels.");
+}
+
+/// Typed command-line handling for CHAMFER's D(istance)/A(ngle)/T(rim) sub-commands, only
+/// meaningful at WaitFirstEntity — mirrors `HandleFilletText`'s shape.
+bool HandleChamferText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+  using CP = AppCommandState::ChamferPhase;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  const std::string low = StringUtil::toLowerAsciiCopy(line);
+  if (st.chamferPhase != CP::WaitFirstEntity) {
+    log.push_back("CHAMFER — pick the second object in the viewport, or ESC to cancel.");
+    return false;
+  }
+  if (st.chamferTextAwaitingFirstValue) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !(v >= 0.f) || !std::isfinite(v)) {
+      log.push_back("CHAMFER — must be a non-negative finite number.");
+      return false;
+    }
+    st.chamferDist1 = v;
+    st.chamferTextAwaitingFirstValue = false;
+    if (st.chamferMode == 0) {
+      st.chamferTextAwaitingSecondDist = true;
+      log.push_back("CHAMFER — specify second distance <" + std::to_string(st.chamferDist2) + ">:");
+    } else {
+      st.chamferTextAwaitingAngle = true;
+      log.push_back("CHAMFER — specify angle in degrees <" + std::to_string(st.chamferAngle) + ">:");
+    }
+    return true;
+  }
+  if (st.chamferTextAwaitingSecondDist) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !(v >= 0.f) || !std::isfinite(v)) {
+      log.push_back("CHAMFER — must be a non-negative finite number.");
+      return false;
+    }
+    st.chamferDist2 = v;
+    st.chamferTextAwaitingSecondDist = false;
+    log.push_back("CHAMFER — distances set. Select first object or [Distance/Angle/Trim]:");
+    return true;
+  }
+  if (st.chamferTextAwaitingAngle) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !std::isfinite(v) || v <= 0.f || v >= 180.f) {
+      log.push_back("CHAMFER — angle must be a finite number strictly between 0 and 180 degrees.");
+      return false;
+    }
+    st.chamferAngle = v;
+    st.chamferTextAwaitingAngle = false;
+    log.push_back("CHAMFER — distance/angle set. Select first object or [Distance/Angle/Trim]:");
+    return true;
+  }
+  if (st.chamferTextAwaitingTrim) {
+    if (low == "t" || low == "trim") {
+      st.cornerTrimMode = 1;
+    } else if (low == "n" || low == "notrim" || low == "no trim") {
+      st.cornerTrimMode = 0;
+    } else {
+      log.push_back("CHAMFER — type T (Trim) or N (No trim).");
+      return false;
+    }
+    st.chamferTextAwaitingTrim = false;
+    log.push_back(std::string("CHAMFER — trim mode set to ") + (st.cornerTrimMode ? "Trim" : "No trim") +
+                 ". Select first object or [Distance/Angle/Trim]:");
+    return true;
+  }
+  if (low == "d" || low == "distance") {
+    st.chamferMode = 0;
+    st.chamferTextAwaitingFirstValue = true;
+    log.push_back("CHAMFER Distance — specify first distance <" + std::to_string(st.chamferDist1) + ">:");
+    return true;
+  }
+  if (low == "a" || low == "angle") {
+    st.chamferMode = 1;
+    st.chamferTextAwaitingFirstValue = true;
+    log.push_back("CHAMFER Angle — specify distance <" + std::to_string(st.chamferDist1) + ">:");
+    return true;
+  }
+  if (low == "t" || low == "trim") {
+    st.chamferTextAwaitingTrim = true;
+    log.push_back(std::string("CHAMFER — Enter Trim mode option [Trim/No trim] <") +
+                 (st.cornerTrimMode ? "Trim" : "No trim") + ">:");
+    return true;
+  }
+  log.push_back("CHAMFER — type D (Distance), A (Angle), or T (Trim), or pick an object in the viewport.");
+  return false;
+}
+
+// ------------------------------------------------------------------------------------------------
+// CHAMFER, pure-paper-space path (step 6b) — full parity with model space. Mirrors paper FILLET's
+// own shape exactly, minus the Arc branch (CHAMFER refuses it) and the parallel-lines special case
+// (CHAMFER has none — a real, stated asymmetry, not an oversight).
+// ------------------------------------------------------------------------------------------------
+
+bool PaperChamferEligibility(const PaperLayout& L, const PaperEntityRef& ref, float pickX, float pickY,
+                             int* outPolySeg, std::vector<std::string>& log) {
+  using T = PaperEntityRef::Type;
+  *outPolySeg = -1;
+  switch (ref.type) {
+  case T::Line:
+    return true;
+  case T::Polyline: {
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L.paperPolyOffsets.size())
+      return false;
+    const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    if (numVerts < 2)
+      return false;
+    const bool closed =
+        static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)];
+    const int numEdges = closed ? numVerts : (numVerts - 1);
+    int bestSeg = 0;
+    float bestD = -1.f;
+    for (int e2 = 0; e2 < numEdges; ++e2) {
+      const int viA = v0 + e2, viB = v0 + ((e2 + 1) % numVerts);
+      const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
+      float qx = 0.f, qy = 0.f;
+      ClosestPointOnSegment(L.paperPolyVerts[a3], L.paperPolyVerts[a3 + 1], L.paperPolyVerts[b3],
+                            L.paperPolyVerts[b3 + 1], pickX, pickY, &qx, &qy);
+      const float d = (qx - pickX) * (qx - pickX) + (qy - pickY) * (qy - pickY);
+      if (bestD < 0.f || d < bestD) {
+        bestD = d;
+        bestSeg = e2;
+      }
+    }
+    *outPolySeg = bestSeg;
+    return true;
+  }
+  case T::Arc:
+    log.push_back("CHAMFER — 1 arc ignored: chamfer connects two straight curves only. Pick a line "
+                  "or polyline segment.");
+    return false;
+  case T::Circle:
+    log.push_back("CHAMFER — 1 circle ignored: chamfer connects two straight curves only. Pick a "
+                  "line or polyline segment.");
+    return false;
+  default:
+    log.push_back("CHAMFER — 1 object ignored: only a line or polyline segment can be chamfered.");
+    return false;
+  }
+}
+
+/// Case A, paper store: same-polyline adjacent segments — the paper equivalent of
+/// `ApplyChamferPolylineCorner`.
+static bool ApplyChamferPolylineCornerPaper(AppCommandState& st, PaperLayout* L, int pi, int edgeA, int edgeB,
+                                            float pick1X, float pick1Y, float pick2X, float pick2Y,
+                                            std::vector<std::string>& log) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size())
+    return false;
+  const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+  const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+  const int numVerts = v1 - v0;
+  if (numVerts < 2)
+    return false;
+  const bool closed =
+      static_cast<size_t>(pi) < L->paperPolyClosed.size() && L->paperPolyClosed[static_cast<size_t>(pi)];
+  const int numEdges = closed ? numVerts : (numVerts - 1);
+  if (edgeA < 0 || edgeA >= numEdges || edgeB < 0 || edgeB >= numEdges || edgeA == edgeB)
+    return false;
+
+  auto edgeVerts = [&](int e, int* viA, int* viB) {
+    *viA = v0 + e;
+    *viB = v0 + ((e + 1) % numVerts);
+  };
+  int aVi0 = 0, aVi1 = 0, bVi0 = 0, bVi1 = 0;
+  edgeVerts(edgeA, &aVi0, &aVi1);
+  edgeVerts(edgeB, &bVi0, &bVi1);
+  int sharedVi = -1, otherAVi = -1;
+  if (aVi0 == bVi0 || aVi0 == bVi1) {
+    sharedVi = aVi0;
+    otherAVi = aVi1;
+  } else if (aVi1 == bVi0 || aVi1 == bVi1) {
+    sharedVi = aVi1;
+    otherAVi = aVi0;
+  }
+  if (sharedVi < 0) {
+    log.push_back("CHAMFER — those two polyline segments are not adjacent; refused.");
+    return false;
+  }
+  const int otherBVi = (bVi0 == sharedVi) ? bVi1 : bVi0;
+
+  auto readVert = [&](int vi, float* x, float* y) {
+    *x = L->paperPolyVerts[static_cast<size_t>(vi) * 3];
+    *y = L->paperPolyVerts[static_cast<size_t>(vi) * 3 + 1];
+  };
+  float sharedX = 0.f, sharedY = 0.f, otherAX = 0.f, otherAY = 0.f, otherBX = 0.f, otherBY = 0.f;
+  readVert(sharedVi, &sharedX, &sharedY);
+  readVert(otherAVi, &otherAX, &otherAY);
+  readVert(otherBVi, &otherBX, &otherBY);
+
+  FilletCurve curveA{};
+  curveA.isLine = true;
+  curveA.ax = otherAX;
+  curveA.ay = otherAY;
+  curveA.bx = sharedX;
+  curveA.by = sharedY;
+  FilletCurve curveB{};
+  curveB.isLine = true;
+  curveB.ax = sharedX;
+  curveB.ay = sharedY;
+  curveB.bx = otherBX;
+  curveB.by = otherBY;
+
+  float px = 0.f, py = 0.f;
+  if (!SolveFilletCenter(curveA, curveB, 0.f, pick1X, pick1Y, pick2X, pick2Y, &px, &py)) {
+    log.push_back("CHAMFER — those two segments are parallel; no corner exists; refused.");
+    return false;
+  }
+  float dAx = 0.f, dAy = 0.f, dBx = 0.f, dBy = 0.f;
+  if (!ChamferResolvePoints(st, curveA, curveB, px, py, pick1X, pick1Y, pick2X, pick2Y, &dAx, &dAy, &dBx, &dBy)) {
+    log.push_back("CHAMFER — that angle does not reach the second segment; refused.");
+    return false;
+  }
+
+  const int sharedLocal = sharedVi - v0;
+  const int otherALocal = otherAVi - v0;
+  const bool aIsIncoming = (otherALocal == (sharedLocal - 1 + numVerts) % numVerts);
+  const float inX = aIsIncoming ? dAx : dBx, inY = aIsIncoming ? dAy : dBy;
+  const float outX = aIsIncoming ? dBx : dAx, outY = aIsIncoming ? dBy : dAy;
+  const bool bothZero = (st.chamferMode == 0) ? (st.chamferDist1 < 1e-4f && st.chamferDist2 < 1e-4f)
+                                              : (st.chamferDist1 < 1e-4f);
+
+  std::vector<std::pair<float, float>> newXY;
+  newXY.reserve(static_cast<size_t>(numVerts) + 1);
+  for (int vi = v0; vi < v1; ++vi) {
+    if (vi - v0 == sharedLocal) {
+      if (bothZero) {
+        newXY.push_back({px, py});
+      } else {
+        newXY.push_back({inX, inY});
+        newXY.push_back({outX, outY});
+      }
+    } else {
+      float x = 0.f, y = 0.f;
+      readVert(vi, &x, &y);
+      newXY.push_back({x, y});
+    }
+  }
+
+  PushUndoSnapshot(st, "Chamfer paper geometry");
+  ReplacePaperPolylineVerts(L, pi, newXY);
+  if (!bothZero) {
+    const size_t k = L->paperLines.size();
+    L->paperLines.push_back(inX);
+    L->paperLines.push_back(inY);
+    L->paperLines.push_back(0.f);
+    L->paperLines.push_back(outX);
+    L->paperLines.push_back(outY);
+    L->paperLines.push_back(0.f);
+    L->paperLineAttrs.push_back(MakeNewEntityAttrs(st));
+    (void)k;
+  }
+  BumpCadGpuCache(st);
+  log.push_back(bothZero ? "CHAMFER — polyline corner trimmed to a point (distance 0)."
+                        : "CHAMFER — polyline corner chamfered.");
+  return true;
+}
+
+bool ApplyChamferToPaperEntities(AppCommandState& st, const PaperEntityRef& first, int firstPolySeg,
+                                 float firstPickX, float firstPickY, const PaperEntityRef& second,
+                                 int secondPolySeg, float pickX, float pickY, std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L)
+    return false;
+
+  const bool sameEntity = (second.type == first.type && second.index == first.index);
+  if (sameEntity && second.type != PaperEntityRef::Type::Polyline) {
+    log.push_back("CHAMFER — select two different objects.");
+    return false;
+  }
+  if (sameEntity && secondPolySeg == firstPolySeg) {
+    log.push_back("CHAMFER — select two different segments.");
+    return false;
+  }
+
+  if (sameEntity)
+    return ApplyChamferPolylineCornerPaper(st, L, second.index, firstPolySeg, secondPolySeg, firstPickX,
+                                           firstPickY, pickX, pickY, log);
+
+  auto polylineIsEndSegmentOnly = [&](const PaperEntityRef& ref, int seg) -> bool {
+    if (ref.type != PaperEntityRef::Type::Polyline)
+      return true;
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size())
+      return false;
+    const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const bool closed =
+        static_cast<size_t>(pi) < L->paperPolyClosed.size() && L->paperPolyClosed[static_cast<size_t>(pi)];
+    if (closed) {
+      log.push_back("CHAMFER — a closed polyline has no free end; only an adjacent segment of the SAME "
+                    "polyline can be chamfered against it.");
+      return false;
+    }
+    const int numEdges = (v1 - v0) - 1;
+    if (seg != 0 && seg != numEdges - 1) {
+      log.push_back("CHAMFER — only a polyline's own first or last segment can be chamfered against a "
+                    "different object; an interior segment shares its vertex with a neighbor that would "
+                    "be silently disturbed.");
+      return false;
+    }
+    return true;
+  };
+  if (!polylineIsEndSegmentOnly(first, firstPolySeg) || !polylineIsEndSegmentOnly(second, secondPolySeg))
+    return false;
+
+  FilletCurve c1{}, c2{};
+  if (!BuildFilletCurveFromPaperEntity(*L, first, firstPolySeg, &c1) ||
+      !BuildFilletCurveFromPaperEntity(*L, second, secondPolySeg, &c2)) {
+    log.push_back("CHAMFER — could not resolve the picked geometry; refused.");
+    return false;
+  }
+
+  float px = 0.f, py = 0.f;
+  if (!SolveFilletCenter(c1, c2, 0.f, firstPickX, firstPickY, pickX, pickY, &px, &py)) {
+    log.push_back("CHAMFER — those two curves are parallel; no corner exists; refused.");
+    return false;
+  }
+  float d1x = 0.f, d1y = 0.f, d2x = 0.f, d2y = 0.f;
+  if (!ChamferResolvePoints(st, c1, c2, px, py, firstPickX, firstPickY, pickX, pickY, &d1x, &d1y, &d2x, &d2y)) {
+    log.push_back("CHAMFER — that angle does not reach the second curve; refused.");
+    return false;
+  }
+
+  PushUndoSnapshot(st, "Chamfer paper geometry");
+  if (st.cornerTrimMode) {
+    ApplyFilletTrimSingleToPaperEntity(L, first, firstPolySeg, d1x, d1y);
+    ApplyFilletTrimSingleToPaperEntity(L, second, secondPolySeg, d2x, d2y);
+  }
+  const bool bothZero =
+      (st.chamferMode == 0) ? (st.chamferDist1 < 1e-4f && st.chamferDist2 < 1e-4f) : (st.chamferDist1 < 1e-4f);
+  if (!bothZero) {
+    L->paperLines.push_back(d1x);
+    L->paperLines.push_back(d1y);
+    L->paperLines.push_back(0.f);
+    L->paperLines.push_back(d2x);
+    L->paperLines.push_back(d2y);
+    L->paperLines.push_back(0.f);
+    L->paperLineAttrs.push_back(MakeNewEntityAttrs(st));
+  }
+  BumpCadGpuCache(st);
+  log.push_back(bothZero ? "CHAMFER — corner trimmed to a point (distance 0)." : "CHAMFER — corner chamfered.");
+  return true;
+}
+
 float MathAngleRadFromBearingCwNorthDeg(float bearingDegClockwiseFromNorth) {
   constexpr float kDegToRad = 0.01745329251994329577f;
   const float br = bearingDegClockwiseFromNorth * kDegToRad;
@@ -8468,6 +13785,57 @@ static void CadAnnotationPreviewScaled(const CadAnnotation& src, float bx, float
   }
 }
 
+/// REQ-103 MIRROR preview. Same shape as \c CadAnnotationPreviewRotated, reflecting instead of
+/// rotating — MIRRTEXT-off (D-2026-08-23-j): Text/Mtext insertion reflects, \c rotationRad is left
+/// untouched so the preview shows the same "stays upright" result the committed duplicate will have.
+static void CadAnnotationPreviewReflected(const CadAnnotation& src, float x0, float y0, float x1, float y1,
+                                          CadAnnotation* out) {
+  if (!out)
+    return;
+  *out = src;
+  CadAnnotation& a = *out;
+  if (a.kind == CadAnnotation::Kind::Text || a.kind == CadAnnotation::Kind::Mtext) {
+    ReflectPtAcrossLine(x0, y0, x1, y1, &a.insX, &a.insY);
+    if (a.kind == CadAnnotation::Kind::Mtext) {
+      float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
+      float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
+      float mnX = xs[0], mxX = xs[0], mnY = ys[0], mxY = ys[0];
+      for (int i = 0; i < 4; ++i) {
+        ReflectPtAcrossLine(x0, y0, x1, y1, &xs[i], &ys[i]);
+        mnX = std::min(mnX, xs[i]);
+        mxX = std::max(mxX, xs[i]);
+        mnY = std::min(mnY, ys[i]);
+        mxY = std::max(mxY, ys[i]);
+      }
+      a.boxMinX = mnX; a.boxMaxX = mxX; a.boxMinY = mnY; a.boxMaxY = mxY;
+      a.insX = mnX; a.insY = mnY;
+    }
+  } else if (a.kind == CadAnnotation::Kind::DimLinear) {
+    ReflectCadDimLinearAcrossLine(x0, y0, x1, y1, &a);
+  } else if (a.kind == CadAnnotation::Kind::DimAligned) {
+    ReflectPtAcrossLine(x0, y0, x1, y1, &a.insX, &a.insY);
+    ReflectPtAcrossLine(x0, y0, x1, y1, &a.dimExt1X, &a.dimExt1Y);
+    ReflectPtAcrossLine(x0, y0, x1, y1, &a.dimExt2X, &a.dimExt2Y);
+    float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
+    if (CadDimAlignedGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+      a.rotationRad = std::atan2(ty, tx);
+  } else {
+    ReflectPtAcrossLine(x0, y0, x1, y1, &a.insX, &a.insY);
+    float xs[4] = {a.boxMinX, a.boxMaxX, a.boxMaxX, a.boxMinX};
+    float ys[4] = {a.boxMinY, a.boxMinY, a.boxMaxY, a.boxMaxY};
+    float mnX = xs[0], mxX = xs[0], mnY = ys[0], mxY = ys[0];
+    for (int i = 0; i < 4; ++i) {
+      ReflectPtAcrossLine(x0, y0, x1, y1, &xs[i], &ys[i]);
+      mnX = std::min(mnX, xs[i]);
+      mxX = std::max(mxX, xs[i]);
+      mnY = std::min(mnY, ys[i]);
+      mxY = std::max(mxY, ys[i]);
+    }
+    a.boxMinX = mnX; a.boxMaxX = mxX; a.boxMinY = mnY; a.boxMaxY = mxY;
+    a.insX = mnX; a.insY = mnY;
+  }
+}
+
 void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float curX, float curY,
                                            std::vector<CadAnnotation>* out) {
   if (!out)
@@ -8475,6 +13843,7 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
   out->clear();
   using K = AppCommandState::Kind;
   using MP = AppCommandState::ModifyPhase;
+  using MirP = AppCommandState::MirrorPhase;
   if ((cmd.active == K::Move || cmd.active == K::Copy) && cmd.modifyPhase == MP::NeedDestination) {
     const float dx = curX - cmd.modifyBaseX;
     const float dy = curY - cmd.modifyBaseY;
@@ -8518,6 +13887,24 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
     }
     return;
   }
+  if (cmd.active == K::Mirror && (cmd.mirrorPhase == MirP::NeedP2 || cmd.mirrorPhase == MirP::NeedEraseAnswer)) {
+    const float mx0 = cmd.mirrorP1X, my0 = cmd.mirrorP1Y;
+    const float mx1 = (cmd.mirrorPhase == MirP::NeedP2) ? curX : cmd.mirrorP2X;
+    const float my1 = (cmd.mirrorPhase == MirP::NeedP2) ? curY : cmd.mirrorP2Y;
+    for (const auto& e : cmd.selection) {
+      if (e.type != SelectedEntity::Type::Annotation)
+        continue;
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= cmd.cadAnnotations.size())
+        continue;
+      CadAnnotation p{};
+      CadAnnotationPreviewReflected(cmd.cadAnnotations[k], mx0, my0, mx1, my1, &p);
+      out->push_back(p);
+    }
+    return;
+  }
+  if (cmd.active != K::Rotate)
+    return;
   float theta = 0.f;
   if (!CadRotatePreviewTheta(cmd, curX, curY, &theta))
     return;
@@ -10992,6 +16379,8 @@ void ResetCadToolStateToIdle(AppCommandState& st) {
   ResetSegmentAngleLock(st);
   st.trimPhase = AppCommandState::TrimPhase::SelectCuttingEdges;
   st.trimCutters.clear();
+  // EXTEND's boundary list and BREAK's pending entity are reset by ResetModifyRotateDraft below,
+  // which now owns every modify command's draft state (TASK-099 F4) — duplicated here previously.
   ResetAllCadDraftTools(st);
   ResetModifyRotateDraft(st);
   st.selBoxWaitingSecond = false;
@@ -11389,6 +16778,191 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     BumpCadGpuCache(st);
     log.push_back("Deleted " + std::to_string(nDel) + " object(s).");
   }
+}
+
+/// REQ-103 MIRROR erase-source step. The same per-store erase \c ExecuteDeleteSelection performs,
+/// minus its own \c PushUndoSnapshot — \c FinishMirrorCommand already pushed one snapshot for the
+/// whole mirror(+erase) operation, satisfying REQ-103's "one undo step" condition — and minus the
+/// FilledRegion/Mesh/Surface/PdfUnderlay blocks, which cannot appear here: by the time this runs,
+/// \c st.selection is what survived \c DuplicateCadSelectionReflected's exclusion filtering (those
+/// four kinds already stripped, with a logged reason).
+static void EraseMirroredSourceNoUndo(AppCommandState& st) {
+  std::set<int> lineIx, circIx, annIx, arcIx, ellIx, polyIx, flIx;
+  const size_t nLines = st.userLinesFlat.size() / 6;
+  const size_t nCirc = st.userCirclesCxCyZR.size() / 4;
+  const size_t nAnn = st.cadAnnotations.size();
+  const size_t nArc = st.userArcs.size();
+  const size_t nEll = st.userEllipses.size();
+  const size_t nPoly = st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0;
+  const size_t nFl = st.featureLineOffsets.size() > 0 ? st.featureLineOffsets.size() - 1 : 0;
+  for (const auto& e : st.selection) {
+    if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 && static_cast<size_t>(e.index) < nLines)
+      lineIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::Circle && e.index >= 0 && static_cast<size_t>(e.index) < nCirc)
+      circIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::Annotation && e.index >= 0 && static_cast<size_t>(e.index) < nAnn)
+      annIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::Arc && e.index >= 0 && static_cast<size_t>(e.index) < nArc)
+      arcIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::Ellipse && e.index >= 0 && static_cast<size_t>(e.index) < nEll)
+      ellIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::Polyline && e.index >= 0 && static_cast<size_t>(e.index) < nPoly)
+      polyIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::FeatureLine && e.index >= 0 && static_cast<size_t>(e.index) < nFl)
+      flIx.insert(e.index);
+  }
+
+  std::vector<int> pv(polyIx.begin(), polyIx.end());
+  std::sort(pv.begin(), pv.end(), std::greater<int>());
+  for (int idx : pv)
+    ErasePolylineByIndex(st, idx);
+
+  std::vector<int> flv(flIx.begin(), flIx.end());
+  std::sort(flv.begin(), flv.end(), std::greater<int>());
+  for (int idx : flv)
+    EraseFeatureLineByIndex(st, idx);
+
+  std::vector<int> lv(lineIx.begin(), lineIx.end());
+  std::sort(lv.begin(), lv.end(), std::greater<int>());
+  for (int idx : lv) {
+    const size_t k = static_cast<size_t>(idx) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      continue;
+    st.userLinesFlat.erase(st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(k),
+                           st.userLinesFlat.begin() + static_cast<std::ptrdiff_t>(k + 6));
+    if (static_cast<size_t>(idx) < st.userLineAttrs.size())
+      st.userLineAttrs.erase(st.userLineAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  std::vector<int> cv(circIx.begin(), circIx.end());
+  std::sort(cv.begin(), cv.end(), std::greater<int>());
+  for (int idx : cv) {
+    const size_t k = static_cast<size_t>(idx) * 4;
+    if (k + 3 >= st.userCirclesCxCyZR.size())
+      continue;
+    st.userCirclesCxCyZR.erase(st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k),
+                               st.userCirclesCxCyZR.begin() + static_cast<std::ptrdiff_t>(k + 4));
+    if (static_cast<size_t>(idx) < st.userCircleAttrs.size())
+      st.userCircleAttrs.erase(st.userCircleAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  std::vector<int> av(annIx.begin(), annIx.end());
+  std::sort(av.begin(), av.end(), std::greater<int>());
+  for (int idx : av)
+    EraseCadAnnotationAtIndex(st, static_cast<size_t>(idx));
+
+  std::vector<int> arv(arcIx.begin(), arcIx.end());
+  std::sort(arv.begin(), arv.end(), std::greater<int>());
+  for (int idx : arv) {
+    const size_t k = static_cast<size_t>(idx);
+    if (k >= st.userArcs.size())
+      continue;
+    st.userArcs.erase(st.userArcs.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (k < st.userArcAttrs.size())
+      st.userArcAttrs.erase(st.userArcAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  std::vector<int> ev(ellIx.begin(), ellIx.end());
+  std::sort(ev.begin(), ev.end(), std::greater<int>());
+  for (int idx : ev) {
+    const size_t k = static_cast<size_t>(idx);
+    if (k >= st.userEllipses.size())
+      continue;
+    st.userEllipses.erase(st.userEllipses.begin() + static_cast<std::ptrdiff_t>(idx));
+    if (k < st.userEllAttrs.size())
+      st.userEllAttrs.erase(st.userEllAttrs.begin() + static_cast<std::ptrdiff_t>(idx));
+  }
+
+  st.selection.clear();
+  AbortMtextGripInteraction(st);
+  ClearDimGripInteraction(st);
+  BumpCadGpuCache(st);
+}
+
+/// REQ-103 MIRROR erase-source step, survey-point half. Same loop \c DeleteSelectedSurveyPoints
+/// performs, minus its own \c PushUndoSnapshot (see \ref EraseMirroredSourceNoUndo).
+static void EraseSelectedSurveyPointsNoUndo(AppCommandState& st) {
+  std::vector<int> ix = st.selectedSurveyPointIndices;
+  std::sort(ix.begin(), ix.end(), std::greater<int>());
+  ix.erase(std::unique(ix.begin(), ix.end()), ix.end());
+  for (int i : ix)
+    if (i >= 0 && static_cast<size_t>(i) < st.surveyPoints.size())
+      RemoveSurveyPointAt(st, static_cast<size_t>(i));
+  st.selectedSurveyPointIndices.clear();
+}
+
+/// REQ-103 MIRROR. \c eraseSource decides what happens to the PRE-mirror selection after the
+/// duplicate commits — MIRROR always duplicates first (ASSUMPTION-2, TASK-094 — the reverse of
+/// ROTATE/SCALE, where duplication is the opt-in "copy" mode and in-place is the default).
+static void FinishMirrorCommand(AppCommandState& st, float x0, float y0, float x1, float y1, bool eraseSource,
+                                std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  PushUndoSnapshot(st, eraseSource ? "Mirror-erase" : "Mirror");
+  const bool hadSurveySelection = !st.selectedSurveyPointIndices.empty();
+  DuplicateCadSelectionReflected(st, x0, y0, x1, y1, log);
+  // st.selection now holds exactly what was mirrored (exclusions already logged) — erase THAT, not
+  // the original selection, so an excluded Surface/hatch/underlay/mesh is left untouched either way.
+  if (eraseSource && !st.selection.empty())
+    EraseMirroredSourceNoUndo(st);
+  st.active = K::None;
+  ResetModifyRotateDraft(st);
+  if (hadSurveySelection) {
+    st.pendingSurveyDupIsMirror = true;
+    st.pendingMirrorX0 = x0;
+    st.pendingMirrorY0 = y0;
+    st.pendingMirrorX1 = x1;
+    st.pendingMirrorY1 = y1;
+    st.mirrorEraseSourcePending = eraseSource;
+    st.copySurveyDupModalOpen = true;
+    st.copySurveyDupModalOpenRequested = true;
+    log.push_back("MIRROR — CAD duplicated; choose survey ID policy.");
+  } else {
+    log.push_back(eraseSource ? "MIRROR complete (source erased)." : "MIRROR complete.");
+  }
+}
+
+bool HandleMirrorText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+  std::string line = StringUtil::trimCopy(lineIn);
+  using MP = AppCommandState::MirrorPhase;
+  if (st.mirrorPhase == MP::NeedP1) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
+      return false;
+    st.mirrorP1X = px;
+    st.mirrorP1Y = py;
+    st.mirrorPhase = MP::NeedP2;
+    log.push_back("MIRROR — specify second point of mirror line:");
+    return true;
+  }
+  if (st.mirrorPhase == MP::NeedP2) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
+      return false;
+    if (std::hypot(px - st.mirrorP1X, py - st.mirrorP1Y) < 1e-8f) {
+      log.push_back("MIRROR — mirror line needs two distinct points; try again.");
+      return false;
+    }
+    st.mirrorP2X = px;
+    st.mirrorP2Y = py;
+    st.mirrorPhase = MP::NeedEraseAnswer;
+    log.push_back("Erase source objects? [Yes/No] <N>:");
+    return true;
+  }
+  if (st.mirrorPhase == MP::NeedEraseAnswer) {
+    const std::string low = StringUtil::toLowerAsciiCopy(line);
+    bool eraseSource = false;
+    if (low.empty() || low == "n" || low == "no")
+      eraseSource = false;
+    else if (low == "y" || low == "yes")
+      eraseSource = true;
+    else {
+      log.push_back("MIRROR — answer Yes or No (Enter defaults to No).");
+      return false;
+    }
+    FinishMirrorCommand(st, st.mirrorP1X, st.mirrorP1Y, st.mirrorP2X, st.mirrorP2Y, eraseSource, log);
+    return true;
+  }
+  return false;
 }
 
 static bool SegSegIntersectParam(float ax, float ay, float bx, float by, float cx, float cy, float dx, float dy,
@@ -13734,6 +19308,26 @@ void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
 }
 
+void StartExtendCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // paper routing (REQ-103 step 3)
+    st.active = K::None;
+    st.paperExtendPhase = 1;
+    st.paperExtendBoundaries.clear();
+    log.push_back("EXTEND — click a boundary edge (Enter when done picking edges). Esc cancels.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = K::Extend;
+  st.lastCommand = K::Extend;
+  st.extendPhase = AppCommandState::ExtendPhase::SelectBoundaries;
+  st.extendBoundaries.clear();
+  st.selBoxWaitingSecond = false;
+  log.push_back("EXTEND — pick boundary edges, Enter, then click objects to extend (near the end to "
+                "stretch). ESC cancels.");
+}
+
 void StartTrimStateCommand(AppCommandState& st, std::vector<std::string>& log) {
   ClearPendingViewportZoom(st);
   ResetAllCadDraftTools(st);
@@ -14627,6 +20221,32 @@ void StartScaleCommand(AppCommandState& st, std::vector<std::string>& log) {
         "two-point reference length then new length (type or two picks). ESC cancels.");
 }
 
+void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // REQ-037: mirror paper geometry
+    if (st.selectedPaperEntities.empty()) {
+      log.push_back("MIRROR — select paper object(s) first.");
+      return;
+    }
+    st.active = AppCommandState::Kind::None;  // paper-space edit ops are not a model command
+    st.paperMirrorPhase = 1;
+    log.push_back("MIRROR — click the first point of the mirror line (Esc to cancel).");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::Mirror;
+  st.lastCommand = AppCommandState::Kind::Mirror;
+  st.mirrorPhase = AppCommandState::MirrorPhase::PickSelection;
+  st.mirrorP1X = st.mirrorP1Y = st.mirrorP2X = st.mirrorP2Y = 0.f;
+  st.pendingSurveyDupIsMirror = false;
+  st.selBoxWaitingSecond = false;
+  if (!st.selection.empty() || !st.selectedSurveyPointIndices.empty()) {
+    st.mirrorPhase = AppCommandState::MirrorPhase::NeedP1;
+    log.push_back("MIRROR — specify first point of mirror line (click or type X,Y). ESC to cancel.");
+  } else
+    log.push_back("MIRROR — window-select (two clicks), then first and second point of the mirror line. ESC.");
+}
+
 void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.active == AppCommandState::Kind::None)
     return;
@@ -14668,6 +20288,16 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("ROTATE canceled.");
   else if (st.active == AppCommandState::Kind::Scale)
     log.push_back("SCALE canceled.");
+  else if (st.active == AppCommandState::Kind::Mirror)
+    log.push_back("MIRROR canceled.");
+  else if (st.active == AppCommandState::Kind::Lengthen)
+    log.push_back("LENGTHEN canceled.");
+  else if (st.active == AppCommandState::Kind::Extend)
+    log.push_back("EXTEND canceled.");
+  else if (st.active == AppCommandState::Kind::Break)
+    log.push_back("BREAK canceled.");
+  else if (st.active == AppCommandState::Kind::Stretch)
+    log.push_back("STRETCH canceled.");
   else if (st.active == AppCommandState::Kind::Delete)
     log.push_back("DELETE canceled.");
   else if (st.active == AppCommandState::Kind::Join)
@@ -14714,6 +20344,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
   ResetSegmentAngleLock(st);
   st.trimPhase = AppCommandState::TrimPhase::SelectCuttingEdges;
   st.trimCutters.clear();
+  // EXTEND's boundary list and BREAK's pending entity are reset by ResetModifyRotateDraft below,
+  // which now owns every modify command's draft state (TASK-099 F4) — duplicated here previously.
   ResetAllCadDraftTools(st);
   ResetModifyRotateDraft(st);
   st.selBoxWaitingSecond = false;
@@ -14730,16 +20362,32 @@ void ApplyCopySurveyDuplicateModalResult(AppCommandState& st, bool applySurveyDu
     return;
   st.copySurveyDupModalOpen = false;
   st.copySurveyDupModalOpenRequested = false;
+  const bool wasMirrorDup = st.pendingSurveyDupIsMirror;
   const bool wasRotateDup = st.pendingSurveyDupIsRotate;
+  const bool mirrorEraseSource = st.mirrorEraseSourcePending;
+  st.pendingSurveyDupIsMirror = false;
   st.pendingSurveyDupIsRotate = false;
+  st.mirrorEraseSourcePending = false;
   if (applySurveyDup) {
-    if (wasRotateDup)
+    if (wasMirrorDup) {
+      // The CAD-side erase already ran synchronously in FinishMirrorCommand; the survey-point half
+      // waits for this modal because the duplicate's id policy is a user choice. Erasing the
+      // ORIGINAL points only when the duplicate is actually applied (not on skip) — declining the
+      // duplicate is treated as declining the whole mirror-for-survey-points step, not "erase with
+      // nothing to replace it".
+      DuplicateSelectedSurveyPointsReflected(st, st.pendingMirrorX0, st.pendingMirrorY0, st.pendingMirrorX1,
+                                             st.pendingMirrorY1, st.copySurveyDuplicatePolicy, log);
+      if (mirrorEraseSource)
+        EraseSelectedSurveyPointsNoUndo(st);
+    } else if (wasRotateDup)
       DuplicateSelectedSurveyPointsRotated(st, st.pendingRotateCopyBx, st.pendingRotateCopyBy, st.pendingRotateCopyRad,
                                            st.copySurveyDuplicatePolicy, log);
     else
       DuplicateSelectedSurveyPointsTranslated(st, st.pendingCopyDx, st.pendingCopyDy, st.copySurveyDuplicatePolicy,
                                               log);
-  } else if (wasRotateDup)
+  } else if (wasMirrorDup)
+    log.push_back("MIRROR COPY survey — skipped (CAD copy kept).");
+  else if (wasRotateDup)
     log.push_back("ROTATE COPY survey — skipped (CAD copy kept).");
   else
     log.push_back("COPY survey — skipped (CAD copy kept).");
@@ -15124,6 +20772,21 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         st.trimCutters.clear();
         log.push_back("TRIM — finished.");
       }
+    } else if (st.active == K::Extend) {
+      using EP = AppCommandState::ExtendPhase;
+      if (st.extendPhase == EP::SelectBoundaries) {
+        if (st.extendBoundaries.empty())
+          log.push_back("EXTEND — pick at least one boundary edge before pressing Enter.");
+        else {
+          st.extendPhase = EP::SelectTargets;
+          log.push_back("EXTEND — click objects to extend (near the end to stretch). Enter when done.");
+        }
+      } else {
+        st.active = K::None;
+        st.extendPhase = EP::SelectBoundaries;
+        st.extendBoundaries.clear();
+        log.push_back("EXTEND — finished.");
+      }
     } else if (st.active == K::Offset) {
       using OP = AppCommandState::OffsetPhase;
       if (st.offsetPhase == OP::WaitDistanceOrThrough)
@@ -15149,6 +20812,58 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
                         "Pick SOURCE survey point 1 in drawing (snap to it).");
       } else {
         ExecuteAlignCommand(st, log);
+      }
+    } else if (st.active == K::Mirror) {
+      // A blank Enter is exactly how MIRROR's "Erase source objects? [Yes/No] <N>" prompt is meant
+      // to be answered (the documented default, D-2026-08-23-j) — but this whole block always
+      // `return`s below, so without this case the empty line would be swallowed here and never
+      // reach HandleMirrorText's own (identical) empty-string-defaults-to-No handling further down.
+      HandleMirrorText(st, "", log);
+    } else if (st.active == K::Lengthen) {
+      using LP = AppCommandState::LengthenPhase;
+      if (st.lengthenPhase == LP::WaitSelectOrMode) {
+        // Blank Enter at "select object" ends LENGTHEN — same convention TRIM's target-picking
+        // loop uses ("Enter when done"). Mode/value settings persist for the next invocation.
+        st.active = K::None;
+        ResetModifyRotateDraft(st);
+        log.push_back("LENGTHEN — finished.");
+      } else {
+        HandleLengthenText(st, "", log);
+      }
+    } else if (st.active == K::Break) {
+      using BP = AppCommandState::BreakPhase;
+      if (st.breakPhase == BP::SelectFirstPoint) {
+        // Blank Enter at "select object" ends BREAK — same convention LENGTHEN's loop uses.
+        st.active = K::None;
+        log.push_back("BREAK — finished.");
+      } else {
+        log.push_back("BREAK — specify second break point in the viewport.");
+      }
+    } else if (st.active == K::Fillet) {
+      using FP = AppCommandState::FilletPhase;
+      if (st.filletPhase == FP::WaitFirstEntity && !st.filletTextAwaitingRadius && !st.filletTextAwaitingTrim) {
+        // Blank Enter at "select first object" ends FILLET — same convention LENGTHEN/BREAK's loop
+        // uses. (Mid-prompt for R/T it falls through to HandleFilletText's own "must be a number"/
+        // "type T or N" refusal instead, which is the more useful message there.)
+        st.active = K::None;
+        log.push_back("FILLET — finished.");
+      } else if (st.filletTextAwaitingRadius || st.filletTextAwaitingTrim) {
+        HandleFilletText(st, "", log);
+      } else {
+        log.push_back("FILLET — specify second object in the viewport.");
+      }
+    } else if (st.active == K::Chamfer) {
+      using CP = AppCommandState::ChamferPhase;
+      const bool awaitingValue = st.chamferTextAwaitingFirstValue || st.chamferTextAwaitingSecondDist ||
+                                 st.chamferTextAwaitingAngle || st.chamferTextAwaitingTrim;
+      if (st.chamferPhase == CP::WaitFirstEntity && !awaitingValue) {
+        // Blank Enter at "select first object" ends CHAMFER — same convention FILLET's loop uses.
+        st.active = K::None;
+        log.push_back("CHAMFER — finished.");
+      } else if (awaitingValue) {
+        HandleChamferText(st, "", log);
+      } else {
+        log.push_back("CHAMFER — specify second object in the viewport.");
       }
     }
     return;
@@ -15336,6 +21051,22 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       std::string rest;
       std::getline(issIdle, rest);
       ExecuteSurfStyleCommand(st, StringUtil::trimCopy(rest), log);
+      return;
+    }
+    // REQ-073. `VOLUMES <base surface>, <comparison surface>` — the synchronous command form of
+    // the cut/fill/net report, reachable from a headless transcript the way SURFELEV/SURFSTYLE are.
+    if (plotTok == "volumes" || plotTok == "vol") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ExecuteVolumesCommand(st, StringUtil::trimCopy(rest), log);
+      return;
+    }
+    // REQ-073 amendment. `VOLDASH [<verb> …]` — bare opens the panel; the verbs are what a headless
+    // transcript drives, because the panel itself is an ImGui window this driver cannot reach.
+    if (plotTok == "voldash") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ExecuteVolDashCommand(st, StringUtil::trimCopy(rest), log);
       return;
     }
     // REQ-087. `FEATURELINE [<name>]` — the whole remainder is the name, so it may contain spaces.
@@ -15785,6 +21516,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     return;
   }
 
+  if (st.active == AppCommandState::Kind::Stretch) {
+    if (HandleStretchText(st, line, log)) {
+      return;
+    }
+    log.push_back("Could not parse STRETCH input — use X,Y or @dx,dy from base.");
+    return;
+  }
+
   if (st.active == AppCommandState::Kind::Scale) {
     if (HandleScaleText(st, line, log)) {
       return;
@@ -15798,6 +21537,38 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     log.push_back("Could not parse ROTATE input — see command hints.");
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Mirror) {
+    if (HandleMirrorText(st, line, log)) {
+      return;
+    }
+    log.push_back("Could not parse MIRROR input — see command hints.");
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Lengthen) {
+    if (HandleLengthenText(st, line, log)) {
+      return;
+    }
+    log.push_back("Could not parse LENGTHEN input — see command hints.");
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Fillet) {
+    if (HandleFilletText(st, line, log)) {
+      return;
+    }
+    log.push_back("Could not parse FILLET input — see command hints.");
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Chamfer) {
+    if (HandleChamferText(st, line, log)) {
+      return;
+    }
+    log.push_back("Could not parse CHAMFER input — see command hints.");
     return;
   }
 
@@ -17428,6 +23199,13 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
     case K::Copy:       StartCopyCommand(st, log);       break;
     case K::Rotate:     StartRotateCommand(st, log);     break;
     case K::Scale:      StartScaleCommand(st, log);      break;
+    case K::Mirror:     StartMirrorCommand(st, log);     break;
+    case K::Lengthen:   StartLengthenCommand(st, log);   break;
+    case K::Extend:     StartExtendCommand(st, log);     break;
+    case K::Break:      StartBreakCommand(st, log);      break;
+    case K::Stretch:    StartStretchCommand(st, log);    break;
+    case K::Fillet:     StartFilletCommand(st, log);     break;
+    case K::Chamfer:    StartChamferCommand(st, log);    break;
     case K::Delete:     StartDeleteCommand(st, log);     break;
     case K::Join:       StartJoinCommand(st, log);       break;
     case K::Trim:       StartTrimCommand(st, log);       break;

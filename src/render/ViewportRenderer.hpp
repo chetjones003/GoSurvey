@@ -82,7 +82,22 @@ public:
                    // changes, already filtered for layer visibility and isolation (REQ-068,
                    // REQ-084 (d)), and with every component's colour and lineweight already resolved
                    // — so the renderer draws what it is given and decides nothing.
-                   const CadSurfaceDisplayGeometry* surfaceGeometry = nullptr);
+                   const CadSurfaceDisplayGeometry* surfaceGeometry = nullptr,
+                   // REQ-073 amendment's Volume Dashboard cut/fill map (TASK-095 §6 step 5) — a
+                   // separate struct from surfaceGeometry above, see VolumeMapDisplayGeometry's own
+                   // comment for why. Drawn over the band fills, under the wireframe, same reasoning
+                   // as the bands: an opaque comparison overlay reads better under the linework than
+                   // over it.
+                   const VolumeMapDisplayGeometry* volumeMap = nullptr,
+                   // REQ-103 BREAK (TASK-101) — material a pending edit is about to REMOVE, and the
+                   // markers bounding it. Its own channel rather than part of \p previewLines
+                   // because it is the one preview drawn ON TOP of the object it describes: the
+                   // transform batch is translucent at ordinary line width, which reads correctly
+                   // for a ghost of geometry somewhere it is not yet and reads as nearly nothing
+                   // when washed over a full-opacity line underneath. Drawn opaque, in a warning
+                   // colour, at highlight width — "this is what disappears" has to be unmistakable.
+                   const std::vector<float>* removalLines = nullptr,
+                   const std::vector<float>* removalMarkers = nullptr);
 
   [[nodiscard]] unsigned int ColorTexture() const { return colorTex_; }
 

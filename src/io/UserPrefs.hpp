@@ -19,15 +19,16 @@ bool SaveUserStartupPrefs(const AppCommandState& st);
 void CopyUtf8PathCapped(char* dest, size_t cap, const char* utf8);
 
 /// Retrieves telemetry tracking data from gosurvey-user.json.
-/// If the file does not exist or does not contain these fields, returns empty strings and generates a new ID.
+/// If the file does not exist or does not contain this field, returns an empty string.
+///
+/// REQ-080 (amended 2026-08-23, D-2026-08-23-f): previously also tracked `lastActivePingDate` to
+/// throttle "active" pings to once per rolling 24 hours. That throttle is gone by explicit user
+/// decision — a ping fires every launch — so there is nothing left to persist but the identity.
 struct TelemetryIds {
   std::string installId;
-  std::string lastActivePingDate;  // Format: YYYY-MM-DD, empty if no active ping sent yet
 };
 TelemetryIds GetTelemetryIds();
 
-/// Updates the telemetry data in gosurvey-user.json.
-/// If installId is non-empty, it is written (typically on first run).
-/// If lastActivePingDate is non-empty, it is written (typically after an active ping fires).
-/// Returns true on success, false if the file could not be written.
-bool UpdateTelemetryIds(const std::string& installId, const std::string& lastActivePingDate);
+/// Persists the install ID in gosurvey-user.json (typically on first run). Returns true on
+/// success, false if the file could not be written.
+bool UpdateTelemetryIds(const std::string& installId);
