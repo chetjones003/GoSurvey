@@ -4557,12 +4557,21 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<
     return;
   }
   PushUndoSnapshot(st, "Circle");
-  st.userCirclesCxCyZR.push_back(cx);
-  st.userCirclesCxCyZR.push_back(cy);
-  // A new circle lands on the active work plane (REQ-058) — the ELEV command moves it.
-  st.userCirclesCxCyZR.push_back(CadCommitElevation(st));
-  st.userCirclesCxCyZR.push_back(r);
-  st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
+  if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
+    // Paper-space CIRCLE (REQ-039): centre + radius are paper inches; commit to the layout's
+    // paper store, matching the shape CommitPolylineDraft uses for POLYLINE (issue #84/#86).
+    L->paperCircles.push_back(cx);
+    L->paperCircles.push_back(cy);
+    L->paperCircles.push_back(r);
+    L->paperCircleAttrs.push_back(MakeNewEntityAttrs(st));
+  } else {
+    st.userCirclesCxCyZR.push_back(cx);
+    st.userCirclesCxCyZR.push_back(cy);
+    // A new circle lands on the active work plane (REQ-058) — the ELEV command moves it.
+    st.userCirclesCxCyZR.push_back(CadCommitElevation(st));
+    st.userCirclesCxCyZR.push_back(r);
+    st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
+  }
   BumpCadGpuCache(st);
   ResetCircleDraft(st);
   log.push_back("Circle complete.");
@@ -7590,10 +7599,18 @@ static void CommitArcThreePoints(AppCommandState& st, float ax, float ay, float 
   arc.r = r;
   arc.startRad = static_cast<float>(sr);
   arc.sweepRad = static_cast<float>(sw);
-  arc.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
   PushUndoSnapshot(st, "Arc");
-  st.userArcs.push_back(arc);
-  st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+  if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
+    // Paper-space ARC (REQ-039): the three points are paper inches; commit to the layout's paper
+    // store. arc.z stays 0 (ADR-025 (g): always 0 in paper space), matching the shape
+    // CommitPolylineDraft uses for POLYLINE (issue #84/#86).
+    L->paperArcs.push_back(arc);
+    L->paperArcAttrs.push_back(MakeNewEntityAttrs(st));
+  } else {
+    arc.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
+    st.userArcs.push_back(arc);
+    st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+  }
   BumpCadGpuCache(st);
   st.active = AppCommandState::Kind::None;
   ResetArcDraft(st);
@@ -20433,10 +20450,18 @@ static void FinishEllipseFromRatio(AppCommandState& st, float ratio, std::vector
   ell.majVx = vx0;
   ell.majVy = vy0;
   ell.ratio = ratio;
-  ell.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
   PushUndoSnapshot(st, "Ellipse");
-  st.userEllipses.push_back(ell);
-  st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
+  if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
+    // Paper-space ELLIPSE (REQ-039): centre/axis are paper inches; commit to the layout's paper
+    // store. ell.z stays 0 (ADR-025 (g): always 0 in paper space), matching the shape
+    // CommitPolylineDraft uses for POLYLINE (issue #84/#86).
+    L->paperEllipses.push_back(ell);
+    L->paperEllAttrs.push_back(MakeNewEntityAttrs(st));
+  } else {
+    ell.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
+    st.userEllipses.push_back(ell);
+    st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
+  }
   BumpCadGpuCache(st);
   st.active = K::None;
   ResetEllipseDraft(st);

@@ -1131,6 +1131,21 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         for (const PaperLayout& L : run.st.paperLayouts)
           got += static_cast<long>(L.paperLines.size() / 6);
       }
+      // Sum of every layout's paper-space circles/arcs/ellipses (REQ-039 / issue #86), the same
+      // model-vs-paper split PAPERPOLYLINES established for issue #84.
+      else if (what == "PAPERCIRCLES") {
+        got = 0;
+        for (const PaperLayout& L : run.st.paperLayouts)
+          got += static_cast<long>(L.paperCircles.size() / 3);
+      } else if (what == "PAPERARCS") {
+        got = 0;
+        for (const PaperLayout& L : run.st.paperLayouts)
+          got += static_cast<long>(L.paperArcs.size());
+      } else if (what == "PAPERELLIPSES") {
+        got = 0;
+        for (const PaperLayout& L : run.st.paperLayouts)
+          got += static_cast<long>(L.paperEllipses.size());
+      }
       else if (what == "ARCS")
         got = static_cast<long>(run.st.userArcs.size());
       else if (what == "ELLIPSES")
