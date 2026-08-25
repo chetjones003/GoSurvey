@@ -3422,6 +3422,10 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
 
 bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std::string>& log);
 
+// REQ-303: SubmitViewportPickImpl (below) needs to call this on a click-to-close, ahead of its
+// definition further down the file.
+static void CommitPolylineDraft(AppCommandState& st, bool closed, std::vector<std::string>& log);
+
 namespace {
 
 constexpr float kPiAngF = 3.14159265358979323846f;
@@ -8507,6 +8511,18 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   if (st.active == K::Polyline) {
     using PP = AppCommandState::PolylinePhase;
     const bool nextPt = st.polylinePhase == PP::NeedNextPoint;
+    // REQ-303 (issue #80): a click that landed exactly on the polyline's own start point closes it,
+    // mirroring the typed CLOSE keyword below rather than adding a duplicate vertex there. Exact
+    // equality is safe, not fragile: wx/wy arrive here as CadSnap::FindBest's Hit verbatim (CadUi.cpp's
+    // commitX/commitY = viewportSnapPickLocalX/Y = snap.x/y, copied through with no arithmetic), and
+    // FindBest only offers this candidate by reading these same two stored floats.
+    if (nextPt && !st.polylineDraftVerts.empty() && wx == st.polyFirstX && wy == st.polyFirstY) {
+      if (st.polyDraftSegments == 0)
+        log.push_back("POLYLINE CLOSE — need at least one segment after the start point.");
+      else
+        CommitPolylineDraft(st, /*closed=*/true, log);
+      return;
+    }
     if (!ApplySegmentAnglePickToViewportPick(st, wx, wy, nextPt, log))
       SubmitPolylineVertex(st, wx, wy, log);
     return;
@@ -20765,6 +20781,17 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       st.linePhase = AppCommandState::LinePhase::NeedFirstPoint;
       st.lineDraftSegments = 0;
       log.push_back("LINE — specify first point (click or type X,Y / X Y). ESC to cancel.");
+      return;
+    }
+    if (st.active == K::Polyline && st.polylinePhase == PP::NeedNextPoint) {
+      // REQ-303 (issue #80): blank Enter finishes POLYLINE/3DPOLY OPEN, mirroring the typed END
+      // keyword below exactly (same minimum-segment gate, same commit call). Unlike LINE's blank
+      // Enter above, this EXITS the command instead of restarting a new chain — the issue's explicit
+      // ask, and CommitPolylineDraft already does the exiting (st.active = Kind::None).
+      if (st.polyDraftSegments == 0)
+        log.push_back("POLYLINE END — need at least one segment after the start point.");
+      else
+        CommitPolylineDraft(st, /*closed=*/false, log);
       return;
     }
     if (st.active == K::Trim) {

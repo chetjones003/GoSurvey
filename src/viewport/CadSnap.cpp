@@ -693,6 +693,19 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     }
   }
 
+  // REQ-303 (issue #80): while POLYLINE/3DPOLY is actively drawing (they share one state machine —
+  // polylineDraft3d only changes the label and Z handling), its own start point is offered as an
+  // ordinary Endpoint snap, so the "click to close" cue is the same glyph/priority/tolerance as any
+  // other endpoint rather than a separate mechanism. SubmitViewportPickImpl reads this back by exact
+  // equality against polyFirstX/Y, which is safe because Consider() below copies px/py through with
+  // no arithmetic.
+  if (commandActive && cmd.objectSnapEndpoint && cmd.active == AppCommandState::Kind::Polyline &&
+      cmd.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint &&
+      cmd.polylineDraftVerts.size() >= 3) {
+    Consider(&acc, wx, wy, cmd.polyFirstX, cmd.polyFirstY, Kind::Endpoint, tolWorld,
+             cmd.polylineDraftVerts[2]);
+  }
+
   constexpr int kArcSnapSeg = 24;
   for (size_t arcIdx = 0; arcIdx < cmd.userArcs.size(); ++arcIdx) {
     if (exclude.valid && exclude.type == SelectedEntity::Type::Arc &&

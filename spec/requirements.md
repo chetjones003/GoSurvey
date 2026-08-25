@@ -1475,6 +1475,48 @@ requirements is a planning failure, not a sign of rigor.
   2026-08-25 (D-2026-08-25-i) — increment 3 done, user confirmed with no findings; REQ-302 fully
   delivered, all 3 increments complete, issue #83 closed.
 
+### REQ-303 — POLYLINE finishes without typing CLOSE or END (GitHub issue #80)
+- Purpose: POLYLINE currently requires the user to type `CLOSE`/`CL` or `END` to finish, which is
+  not how the rest of the application's drawing commands read — LINE already finishes segments with
+  a bare Enter, and every CAD application the user is used to closes a polygon by clicking back on
+  its own start point. The typed keywords stay (nothing here removes them); this adds the two
+  interactions a CAD-native user reaches for first.
+- Priority: should
+- Type: functional
+- Statement: while POLYLINE (or 3DPOLY, which shares the same state machine — `polylineDraft3d` only
+  changes the vertex label and Z handling) is actively drawing (`polylinePhase == NeedNextPoint`):
+  (a) the draft's own start vertex is offered as an ordinary Endpoint object snap — same glyph,
+  priority, and OSNAP-Endpoint toggle as any other endpoint, not a new snap kind — and a viewport
+  click that lands on it closes the polyline exactly as typed `CLOSE` does, including `CLOSE`'s own
+  minimum-vertex refusal when attempted too early; (b) a blank Enter (an empty command-line submit)
+  finishes the polyline OPEN exactly as typed `END` does, including `END`'s own minimum-segment
+  refusal when attempted too early, and — unlike LINE's own blank-Enter, which restarts a new
+  chain — exits the command, matching what `END` already does. Both interactions call the same
+  `CommitPolylineDraft` the typed keywords call, so the paper-space parity TASK-107 (REQ-039) gave
+  that function applies to both with no separate implementation.
+- Acceptance:
+  1. with at least two segments drawn (≥3 vertices, `CLOSE`'s existing minimum), clicking the
+     viewport at the polyline's own start point closes it — same log line typed `CLOSE` produces
+     ("POLYLINE closed."), and the command exits;
+  2. clicking the start point with fewer than two segments refuses without closing or adding a
+     vertex there, using the same messages `CLOSE` already gives at that vertex count, and the
+     command stays active;
+  3. with at least one segment drawn (≥2 vertices, `END`'s existing minimum), a blank Enter finishes
+     the polyline open — same log line typed `END` produces ("POLYLINE complete."), and the command
+     exits;
+  4. a blank Enter with zero segments (only the start point placed) refuses without finishing, using
+     the same message typed `END` already gives at that vertex count, and the command stays active;
+  5. typed `CLOSE`/`CL` and `END` continue to work exactly as before — neither removed nor changed;
+  6. a paper layout drawn onto with either interaction commits to that layout's `paperPoly*` stores,
+     not the model store (REQ-039 parity, inherited from TASK-107, not reimplemented here);
+  7. the start-point snap only appears while POLYLINE/3DPOLY is drawing, obeys the OSNAP-Endpoint
+     toggle like every other endpoint, and disappears once the command ends.
+- Owner-layer: Commands / Viewport (the snap candidate)
+- Status: accepted
+- Revisions: 2026-08-25 — initial (GitHub issue #80, D-2026-08-25-j). Reusing the existing Endpoint
+  snap kind (no new glyph) and treating an early click on the start point as a refusal rather than a
+  silently-added vertex were both confirmed with the user ahead of implementation.
+
 ---
 
 ## 3D model space requirements
@@ -3853,6 +3895,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-116 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-117 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
+| REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim — no new minimum-vertex rule, no new snap kind. Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 
 ---
 
