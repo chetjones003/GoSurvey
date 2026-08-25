@@ -624,6 +624,21 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     DoUndo(run.st, run.log);
   } else if (verb == "REDO") {
     DoRedo(run.st, run.log);
+  } else if (verb == "LAYOUT") {
+    // LAYOUT NEW | LAYOUT MODEL — switch the active space (REQ-037/ADR-009). Like CLIPCOPY above,
+    // this is a REQ-203 gap: AddPaperLayout/SetActiveSpace are bound to the layout tab bar in
+    // CadUi.cpp and reachable no other way, so a transcript could not otherwise put a paper layout
+    // in play to exercise the paper-space commit path (issue #84).
+    const std::string arg = UpperAscii(Trim(rest));
+    if (arg == "MODEL") {
+      SetActiveSpace(run.st, kModelSpaceIndex);
+    } else if (arg == "NEW" || arg.empty()) {
+      const int idx = AddPaperLayout(run.st);
+      SetActiveSpace(run.st, idx);
+    } else {
+      Fail(run, "parse", "LAYOUT expects NEW or MODEL, got: " + rest, sourceLine);
+      return false;
+    }
   } else if (verb == "DUMP") {
     // DUMP LABELS — every survey point's label box, in world units, beside the point it labels.
     //
@@ -896,6 +911,14 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         got = static_cast<long>(run.st.userCirclesCxCyZR.size() / 4);
       else if (what == "POLYLINES")
         got = static_cast<long>(PolylineCountOf(run.st));
+      // Sum of every layout's paper-space polylines (REQ-039 / issue #84). Distinct from POLYLINES
+      // above on purpose: that one reads the MODEL store only, and the two must be checkable
+      // independently to catch geometry landing in the wrong one.
+      else if (what == "PAPERPOLYLINES") {
+        got = 0;
+        for (const PaperLayout& L : run.st.paperLayouts)
+          got += static_cast<long>(L.paperPolyOffsets.empty() ? 0 : L.paperPolyOffsets.size() - 1);
+      }
       else if (what == "ARCS")
         got = static_cast<long>(run.st.userArcs.size());
       else if (what == "ELLIPSES")
