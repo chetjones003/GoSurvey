@@ -1475,6 +1475,152 @@ requirements is a planning failure, not a sign of rigor.
   2026-08-25 (D-2026-08-25-i) — increment 3 done, user confirmed with no findings; REQ-302 fully
   delivered, all 3 increments complete, issue #83 closed.
 
+### REQ-303 — POLYLINE finishes without typing CLOSE or END (GitHub issue #80)
+- **Duplication note (found merging `master` into `beta` for REQ-304/issue #82, D-2026-08-25-l):**
+  `origin/beta` independently implemented this exact same GitHub issue (#80) as **REQ-118** (below,
+  `spec/requirements.md`), in a separate, parallel session — same feature, same acceptance intent,
+  different task number (TASK-109 on beta vs. TASK-108 here) and a real, small implementation
+  difference: beta's blank-Enter handler explicitly clears an active bearing lock
+  (`CancelSegmentAnglePick`/`ResetSegmentAngleLock`) before committing, which this requirement's own
+  implementation did not. The merge kept **this** requirement's structure and specific refusal
+  message (matching this requirement's own tested Acceptance text below) and folded in beta's extra
+  state-cleanup call as a correctness improvement — see D-2026-08-25-l for the full reconciliation.
+  Both REQ-118 and REQ-303 are left `accepted` as an honest historical record of the duplicate work;
+  neither describes the merged implementation's exact code in full, cosmetic (message-text/
+  comment) detail any more, only in substance.
+- Purpose: POLYLINE currently requires the user to type `CLOSE`/`CL` or `END` to finish, which is
+  not how the rest of the application's drawing commands read — LINE already finishes segments with
+  a bare Enter, and every CAD application the user is used to closes a polygon by clicking back on
+  its own start point. The typed keywords stay (nothing here removes them); this adds the two
+  interactions a CAD-native user reaches for first.
+- Priority: should
+- Type: functional
+- Statement: while POLYLINE (or 3DPOLY, which shares the same state machine — `polylineDraft3d` only
+  changes the vertex label and Z handling) is actively drawing (`polylinePhase == NeedNextPoint`):
+  (a) the draft's own start vertex is offered as an ordinary Endpoint object snap — same glyph,
+  priority, and OSNAP-Endpoint toggle as any other endpoint, not a new snap kind — and a viewport
+  click that lands on it closes the polyline exactly as typed `CLOSE` does, including `CLOSE`'s own
+  minimum-vertex refusal when attempted too early; (b) a blank Enter (an empty command-line submit)
+  finishes the polyline OPEN exactly as typed `END` does, including `END`'s own minimum-segment
+  refusal when attempted too early, and — unlike LINE's own blank-Enter, which restarts a new
+  chain — exits the command, matching what `END` already does. Both interactions call the same
+  `CommitPolylineDraft` the typed keywords call, so the paper-space parity TASK-107 (REQ-039) gave
+  that function applies to both with no separate implementation.
+- Acceptance:
+  1. with at least two segments drawn (≥3 vertices, `CLOSE`'s existing minimum), clicking the
+     viewport at the polyline's own start point closes it — same log line typed `CLOSE` produces
+     ("POLYLINE closed."), and the command exits;
+  2. clicking the start point with fewer than two segments refuses without closing or adding a
+     vertex there, using the same messages `CLOSE` already gives at that vertex count, and the
+     command stays active;
+  3. with at least one segment drawn (≥2 vertices, `END`'s existing minimum), a blank Enter finishes
+     the polyline open — same log line typed `END` produces ("POLYLINE complete."), and the command
+     exits;
+  4. a blank Enter with zero segments (only the start point placed) refuses without finishing, using
+     the same message typed `END` already gives at that vertex count, and the command stays active;
+  5. typed `CLOSE`/`CL` and `END` continue to work exactly as before — neither removed nor changed;
+  6. a paper layout drawn onto with either interaction commits to that layout's `paperPoly*` stores,
+     not the model store (REQ-039 parity, inherited from TASK-107, not reimplemented here);
+  7. the start-point snap only appears while POLYLINE/3DPOLY is drawing, obeys the OSNAP-Endpoint
+     toggle like every other endpoint, and disappears once the command ends.
+- Owner-layer: Commands / Viewport (the snap candidate)
+- Status: accepted
+- Revisions: 2026-08-25 — initial (GitHub issue #80, D-2026-08-25-j). Reusing the existing Endpoint
+  snap kind (no new glyph) and treating an early click on the start point as a refusal rather than a
+  silently-added vertex were both confirmed with the user ahead of implementation.
+
+### REQ-304 — Dynamic cursor text matches the command line for every command state (GitHub issue #82)
+- Purpose: LINE already shows a state-specific prompt ("Specify first point:") right next to the
+  cursor, but several other commands showed nothing there — the cursor gave no indication of what
+  the active command was waiting for, even though the command line (bottom bar) had a real, correct
+  prompt. The issue asks for a single source of truth: whatever a command is currently expecting
+  should drive both the command line and the cursor prompt identically, and the two must never
+  disagree or go stale.
+- Priority: should
+- Type: functional
+- Statement: **The architecture already had a single source of truth before this requirement**:
+  `CommandInputHint` (`CadUi.cpp:6111`) and its per-command "FooterHint" delegates
+  (`CadCommands.cpp`, declared in `CadCommands.hpp:3721-3732`) are queried fresh every frame, and
+  the same return value feeds both `DrawCommandLinePanel`'s live hint line
+  (`RenderClickableCommandHint(CommandInputHint(cmd), ...)`, `CadUi.cpp:7251`) and the at-cursor
+  dynamic-input palette (`CadUi.cpp:12681-12693`, which shows `CadPointPromptLabel` for point
+  entry and falls back to the identical `CommandInputHint` text otherwise). Recomputing from live
+  state every frame — nothing is cached across states — is also what already guarantees no staleness
+  and no command-line/cursor disagreement (Acceptance items 3-6 and 14-16 below were already true
+  for every command that had a branch in this function at all).
+  A full audit of every `AppCommandState::Kind` against that if-chain (cross-referencing the enum in
+  `CadCommands.hpp:1122` against every branch in `CommandInputHint` and its delegates) found **ten
+  Kind values with no branch at all**, which fell through to the generic `"Command:"` placeholder on
+  both surfaces: `FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `Pan`, `VpFreeze`,
+  `VpThaw`, `Elev`, `Orbit`.
+  - `Pan` and `Orbit` are **not** gaps: both are continuous camera-drag modes with a dedicated
+    hand cursor and the point-entry palette deliberately suppressed for `Pan`
+    (`CadUi.cpp:12878-12884`, REQ-045/REQ-084 (c)) — a changed cursor icon is the correct, existing
+    contextual feedback for a drag gesture with no typed value, and adding a redundant text prompt
+    on top of it would contradict that existing design. These two are explicitly out of scope.
+  - The remaining eight (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`,
+    `VpThaw`, `Elev`) are real gaps: `FILLET`/`CHAMFER` had informative text but only as one-time
+    `log.push_back` scrollback lines at each state transition (`CadCommands.cpp`, `StartFilletCommand`
+    / `HandleFilletViewportPick` / `HandleFilletText` and the CHAMFER equivalents) — never a
+    queryable "what is the state right now" function — so the scrollback looked reasonable while the
+    live command-line hint and the cursor both still showed `"Command:"`. `FeatureLine`, `PdfAttach`,
+    `Hatch`, `VpFreeze`, `VpThaw`, and `Elev` had no per-state hint mechanism of any kind.
+  - Fix: new branches added to the existing `DrawingExtrasFooterHint` (`CadCommands.cpp`) — the
+    function whose own doc comment already states new commands should extend it rather than invent a
+    separate mechanism (`CadUi.cpp:6376-6377`) — covering every reachable state of all eight commands
+    (FILLET/CHAMFER: `WaitFirstEntity`/`WaitSecondEntity` plus each `*TextAwaiting*` sub-prompt for
+    radius/trim/distance/angle; FEATURELINE: first point, next point, and the pending-elevation
+    prompt; PDFATTACH: `WaitInsertPoint` plus the two never-reached phases `WaitScaleRef`/
+    `WaitRotationPt`, kept for completeness since the enum already declares them; HATCH/ELEV/
+    VPFREEZE/VPTHAW: their one real state each). No new abstraction, dependency, or query mechanism
+    — the fix is closing gaps in the one that already existed.
+- Acceptance (from GitHub issue #82's checklist):
+  1. every command has been audited for dynamic cursor prompts — done via the `Kind`-enum
+     cross-reference above;
+  2. every command input state has an appropriate dynamic cursor prompt where applicable — done for
+     all `Kind` values except `Pan`/`Orbit`, which use cursor-icon feedback by design (see above);
+  3. dynamic cursor text reflects the current command state — true by construction (fresh function
+     call every frame, no cached string);
+  4. dynamic cursor text updates immediately on every state transition — same reasoning;
+  5. dynamic cursor text does not become stale — same reasoning;
+  6. commands that already had dynamic cursor text continue to work correctly — no existing branch
+     was modified, only new branches added; full regression suite (593/593 Catch2 + headless
+     transcripts) green, unchanged from before this task;
+  7. commands missing dynamic cursor text are updated — `FeatureLine`, `Fillet`, `Chamfer`,
+     `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`;
+  8-12. point / coordinate / numeric / angle-azimuth-bearing / entity-selection input all provide
+     contextual cursor feedback — already true pre-existing for the commands that had it (LINE,
+     ROTATE, DIMANGULAR, TRIM, OFFSET, MOVE/COPY, etc.); newly true for FILLET/CHAMFER's numeric
+     radius/distance/angle sub-prompts, ELEV's numeric elevation, and the eight commands' entity-pick
+     states;
+  13. command variants update the dynamic cursor when selected — already true (SCALE/ROTATE
+     reference-mode variants); newly true for FILLET's Radius/Trim and CHAMFER's
+     Distance/Angle/Trim variants, whose hint text changes the instant the corresponding
+     `*TextAwaiting*` flag flips;
+  14. command cancellation removes the dynamic cursor prompt — unchanged, generic to `cmd.active`
+     resetting to `Kind::None` (not touched by this task) for every command, including the eight
+     fixed here;
+  15. command completion removes the dynamic cursor prompt — same reasoning;
+  16. the command line and dynamic cursor remain semantically consistent — guaranteed by construction
+     (one function, two call sites, `CadUi.cpp:7251` and `CadUi.cpp:12681-12693`);
+  17. new commands can provide dynamic cursor prompts without a separate UI system — already true
+     (the extension point already existed and is exactly what this task used, not something built
+     for it);
+  build is clean; the full regression suite (593 Catch2 cases + headless transcripts) stays green,
+  unchanged pass count from before this task. Verification for this requirement is necessarily
+  manual for the visual/wording quality of the eight new hint strings (same as REQ-024's own
+  "manual" verification method) — this session cannot simulate mouse hover to screenshot the cursor
+  bubble (`project_gui_hover_not_automatable` precedent); the user's own GUI pass is the outstanding
+  step.
+- Owner-layer: Commands (`CadCommands.cpp` — `DrawingExtrasFooterHint`) / UI (consumes it unchanged,
+  `CadUi.cpp`)
+- Status: accepted
+- Revisions: 2026-08-25 — initial (GitHub issue #82, D-2026-08-25-k). Full `Kind`-enum audit found
+  ten gaps; two (`Pan`/`Orbit`) are by-design exclusions (cursor-icon feedback), eight fixed by
+  extending the existing `DrawingExtrasFooterHint` delegate. No architectural decision — the
+  single-source-of-truth mechanism the issue asked for already existed; this closes coverage gaps
+  in it.
+
 ---
 
 ## 3D model space requirements
@@ -3441,7 +3587,9 @@ requirements is a planning failure, not a sign of rigor.
   - all of the above hold in **paper space** as well as model space (REQ-039 (5)/(6)).
 - Owner-layer: Commands (the state machine), Viewport (the snap candidate)
 - Status: accepted (2026-08-25)
-- Revisions: 2026-08-25 — accepted (D-2026-08-25-j); issue #80
+- Revisions: 2026-08-25 — accepted (relabeled D-2026-08-25-l during the master→beta merge for
+  REQ-304/issue #82 — `D-2026-08-25-j` collided with master's independent REQ-303, see REQ-303's
+  duplication note above); issue #80
 
 ---
 
@@ -3890,8 +4038,10 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-115 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-116 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-117 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
-| REQ-118 | Commands/Viewport | planned — `headless.regression-118-polyline-close-enter` (click the start vertex closes; Enter ends open with no closing segment; two vertices refuse to close; CLOSE/END still work; Esc leaves nothing; model, 3DPOLY and paper space each asserted) | accepted |
+| REQ-118 | Commands/Viewport | planned — `headless.regression-118-polyline-close-enter` (click the start vertex closes; Enter ends open with no closing segment; two vertices refuse to close; CLOSE/END still work; Esc leaves nothing; model, 3DPOLY and paper space each asserted). Same feature/issue (#80) as REQ-303 below, built independently on `beta` — see REQ-303's duplication note, D-2026-08-25-l | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
+| REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
+| REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |
 
 ---
 

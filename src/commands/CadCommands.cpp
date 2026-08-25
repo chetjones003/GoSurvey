@@ -3422,6 +3422,10 @@ bool SubmitLineVertex(AppCommandState& st, float x, float y, std::vector<std::st
 
 bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std::string>& log);
 
+// REQ-303: SubmitViewportPickImpl (below) needs to call this on a click-to-close, ahead of its
+// definition further down the file.
+static void CommitPolylineDraft(AppCommandState& st, bool closed, std::vector<std::string>& log);
+
 namespace {
 
 constexpr float kPiAngF = 3.14159265358979323846f;
@@ -8507,6 +8511,18 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   if (st.active == K::Polyline) {
     using PP = AppCommandState::PolylinePhase;
     const bool nextPt = st.polylinePhase == PP::NeedNextPoint;
+    // REQ-303 (issue #80): a click that landed exactly on the polyline's own start point closes it,
+    // mirroring the typed CLOSE keyword below rather than adding a duplicate vertex there. Exact
+    // equality is safe, not fragile: wx/wy arrive here as CadSnap::FindBest's Hit verbatim (CadUi.cpp's
+    // commitX/commitY = viewportSnapPickLocalX/Y = snap.x/y, copied through with no arithmetic), and
+    // FindBest only offers this candidate by reading these same two stored floats.
+    if (nextPt && !st.polylineDraftVerts.empty() && wx == st.polyFirstX && wy == st.polyFirstY) {
+      if (st.polyDraftSegments == 0)
+        log.push_back("POLYLINE CLOSE — need at least one segment after the start point.");
+      else
+        CommitPolylineDraft(st, /*closed=*/true, log);
+      return;
+    }
     if (!ApplySegmentAnglePickToViewportPick(st, wx, wy, nextPt, log))
       SubmitPolylineVertex(st, wx, wy, log);
     return;
@@ -20795,19 +20811,22 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       log.push_back("LINE — specify first point (click or type X,Y / X Y). ESC to cancel.");
       return;
     }
-    if (st.active == K::Polyline && st.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint) {
-      // REQ-118: blank Enter finishes the polyline OPEN — no closing segment — and ENDS the command.
-      //
-      // Deliberately unlike LINE directly above, whose blank Enter restarts the command for the next
-      // chain. A polyline is one object, so finishing it finishes the command; LINE's chain is a run
-      // of independent segments, so there is always a next one to start. The asymmetry was put to the
-      // user and chosen, not inherited by accident (D-2026-08-25-j).
-      //
-      // CommitPolylineDraft enforces the two-vertex minimum and reports it (REQ-201), so a bare Enter
-      // on a single-vertex draft says why rather than silently doing nothing.
+    if (st.active == K::Polyline && st.polylinePhase == PP::NeedNextPoint) {
+      // REQ-303 (issue #80) / REQ-118: blank Enter finishes POLYLINE/3DPOLY OPEN, mirroring the
+      // typed END keyword below (same minimum-segment gate, same commit call). Unlike LINE's blank
+      // Enter above, this EXITS the command instead of restarting a new chain — the issue's explicit
+      // ask, and CommitPolylineDraft already does the exiting (st.active = Kind::None). The asymmetry
+      // with LINE was put to the user and chosen, not inherited by accident (D-2026-08-25-j).
+      // CancelSegmentAnglePick/ResetSegmentAngleLock clear any in-progress bearing pick/lock first
+      // (merge reconciliation, D-2026-08-25-l): CommitPolylineDraft's own draft reset
+      // (ResetPolylineDraft) does not touch that state, so without this a lock left active when the
+      // user pressed blank Enter would still read as active for whatever command starts next.
       CancelSegmentAnglePick(st, nullptr);
       ResetSegmentAngleLock(st);
-      CommitPolylineDraft(st, false, log);
+      if (st.polyDraftSegments == 0)
+        log.push_back("POLYLINE END — need at least one segment after the start point.");
+      else
+        CommitPolylineDraft(st, /*closed=*/false, log);
       return;
     }
     if (st.active == K::Trim) {
@@ -22381,6 +22400,118 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
     return "DESIGNATEBREAKLINE: Pick a line or polyline | ESC cancel";
   if (st.active == K::DesignateBoundary)
     return "DESIGNATEBOUNDARY: Pick a CLOSED polyline | ESC cancel";
+
+  // REQ-304 (GitHub issue #82). HATCH/ELEV/VPFREEZE/VPTHAW/PDFATTACH/FEATURELINE/FILLET/CHAMFER
+  // previously had no branch here, so both the command line's live hint and the dynamic cursor
+  // (which reads this same function — CadUi.cpp's CommandInputHint fallback) fell through to the
+  // generic "Command:" placeholder for every one of their states.
+  if (st.active == K::Hatch)
+    return "HATCH: Pick an internal point inside a closed area | ESC cancel";
+
+  if (st.active == K::Elev) {
+    static char buf[128];
+    std::snprintf(buf, sizeof(buf), "ELEV: New default elevation <%.4f> — W = world Z 0 | ESC cancel",
+                  static_cast<double>(CadWorkPlaneElevation(st)));
+    return buf;
+  }
+
+  if (st.active == K::VpFreeze)
+    return "VPFREEZE: Pick objects to freeze their layer in this viewport | Enter/ESC to finish";
+  if (st.active == K::VpThaw)
+    return "VPTHAW: Pick objects to thaw their layer in this viewport | Enter/ESC to finish";
+
+  if (st.active == K::PdfAttach) {
+    using PAP = AppCommandState::PdfAttachPhase;
+    if (st.pdfAttachPhase == PAP::WaitInsertPoint)
+      return "PDFATTACH: Insertion point — click or X,Y | ESC cancel";
+    if (st.pdfAttachPhase == PAP::WaitScaleRef)
+      return "PDFATTACH: Second point for scale | ESC cancel";
+    if (st.pdfAttachPhase == PAP::WaitRotationPt)
+      return "PDFATTACH: Rotation reference point | ESC cancel";
+    return "PDFATTACH: Configure in the dialog";
+  }
+
+  if (st.active == K::FeatureLine) {
+    if (st.featureLinePendingPoint) {
+      static char buf[192];
+      std::snprintf(buf, sizeof(buf), "FEATURELINE: Elevation for %s %zu <%.3f> | ESC cancel",
+                    st.featureLineNextIsElevPoint ? "elevation point" : "point",
+                    st.featureLineDraftElevPt.size() + 1,
+                    static_cast<double>(st.featureLinePendingDefaultZ));
+      return buf;
+    }
+    if (st.featureLineDraftVerts.empty())
+      return "FEATURELINE: First point — click or X,Y/X,Y,Z | E = elevation point | CLOSE/END | ESC cancel";
+    return "FEATURELINE: Next point — click or X,Y/X,Y,Z | E = elevation point | CLOSE/END | ESC cancel";
+  }
+
+  if (st.active == K::Fillet) {
+    using FP = AppCommandState::FilletPhase;
+    if (st.filletTextAwaitingRadius) {
+      static char buf[96];
+      std::snprintf(buf, sizeof(buf), "FILLET: New radius <%.3f> | ESC cancel",
+                    static_cast<double>(st.filletRadius));
+      return buf;
+    }
+    if (st.filletTextAwaitingTrim) {
+      static char buf[96];
+      std::snprintf(buf, sizeof(buf), "FILLET: Trim mode [Trim/No trim] <%s> | ESC cancel",
+                    st.cornerTrimMode ? "Trim" : "No trim");
+      return buf;
+    }
+    if (st.filletPhase == FP::WaitSecondEntity)
+      return "FILLET: Select second object | ESC cancel";
+    static char buf[128];
+    std::snprintf(buf, sizeof(buf), "FILLET: Select first object or [Radius/Trim] <R=%.3f, %s> | ESC cancel",
+                  static_cast<double>(st.filletRadius), st.cornerTrimMode ? "Trim" : "No trim");
+    return buf;
+  }
+
+  if (st.active == K::Chamfer) {
+    using CP = AppCommandState::ChamferPhase;
+    if (st.chamferTextAwaitingFirstValue) {
+      static char buf[96];
+      if (st.chamferMode == 0)
+        std::snprintf(buf, sizeof(buf), "CHAMFER Distance: First distance <%.3f> | ESC cancel",
+                      static_cast<double>(st.chamferDist1));
+      else
+        std::snprintf(buf, sizeof(buf), "CHAMFER Angle: Distance <%.3f> | ESC cancel",
+                      static_cast<double>(st.chamferDist1));
+      return buf;
+    }
+    if (st.chamferTextAwaitingSecondDist) {
+      static char buf[96];
+      std::snprintf(buf, sizeof(buf), "CHAMFER: Second distance <%.3f> | ESC cancel",
+                    static_cast<double>(st.chamferDist2));
+      return buf;
+    }
+    if (st.chamferTextAwaitingAngle) {
+      static char buf[96];
+      std::snprintf(buf, sizeof(buf), "CHAMFER: Angle in degrees <%.1f> | ESC cancel",
+                    static_cast<double>(st.chamferAngle));
+      return buf;
+    }
+    if (st.chamferTextAwaitingTrim) {
+      static char buf[96];
+      std::snprintf(buf, sizeof(buf), "CHAMFER: Trim mode [Trim/No trim] <%s> | ESC cancel",
+                    st.cornerTrimMode ? "Trim" : "No trim");
+      return buf;
+    }
+    if (st.chamferPhase == CP::WaitSecondEntity)
+      return "CHAMFER: Select second object | ESC cancel";
+    static char buf[128];
+    if (st.chamferMode == 0)
+      std::snprintf(buf, sizeof(buf),
+                    "CHAMFER: Select first object or [Distance/Angle/Trim] <D1=%.3f, D2=%.3f, %s> | ESC cancel",
+                    static_cast<double>(st.chamferDist1), static_cast<double>(st.chamferDist2),
+                    st.cornerTrimMode ? "Trim" : "No trim");
+    else
+      std::snprintf(buf, sizeof(buf),
+                    "CHAMFER: Select first object or [Distance/Angle/Trim] <D=%.3f, A=%.1f, %s> | ESC cancel",
+                    static_cast<double>(st.chamferDist1), static_cast<double>(st.chamferAngle),
+                    st.cornerTrimMode ? "Trim" : "No trim");
+    return buf;
+  }
 
   if (st.active == K::Polyline) {
     using SAP = AppCommandState::SegmentAnglePickPhase;

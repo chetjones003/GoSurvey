@@ -8,7 +8,7 @@
 Upstream issue: chetjones003/GoSurvey#80.
 
 ## 1. Authority
-- Requirements: **REQ-118** — accepted 2026-08-25 by **D-2026-08-25-j**.
+- Requirements: **REQ-118** — accepted 2026-08-25, relabeled **D-2026-08-25-l** during the master→beta merge for REQ-304/issue #82 (the original **D-2026-08-25-j** collided with master's independent REQ-303).
 - Also honoured: REQ-085 (3DPOLY per-vertex elevation), REQ-039 (5)/(6) (paper space),
   REQ-201 (a refusal states its reason).
 - Acceptance: REQ-118's eight conditions, restated in §6's test map.
@@ -68,7 +68,7 @@ ASSUMPTION-1: A snapped point compares EQUAL to the stored first vertex, so clos
   transcript was written and shown to fail before the implementation existed.
 
 ## 8. Implementation log
-- 2026-08-25 opened against REQ-118, accepted the same day (D-2026-08-25-j). Blocked-on-first:
+- 2026-08-25 opened against REQ-118, accepted the same day (relabeled D-2026-08-25-l during the master→beta merge; originally D-2026-08-25-j, which collided with master's independent REQ-303). Blocked-on-first:
   TASK-108 (#84), because paper-space polylines committed to the model store until that landed.
 - 2026-08-25 `CadSnap::FindBest` — the draft's first vertex is offered as an `Endpoint` candidate
   when a POLYLINE/3DPOLY draft holds **three or more** vertices. The minimum is expressed by
@@ -76,7 +76,7 @@ ASSUMPTION-1: A snapped point compares EQUAL to the stored first vertex, so clos
   cannot be mis-clicked, which is #80's "invalid attempts handled gracefully" with no message to
   read. Header doc comment updated — this is the one candidate not from committed geometry.
 - 2026-08-25 `SubmitPolylineVertex` — a vertex coinciding with `polyFirstX/Y` commits closed
-  instead of appending. Coordinate-based, **not** snap-gated (D-2026-08-25-j): the driver's `PICK`
+  instead of appending. Coordinate-based, **not** snap-gated (D-2026-08-25-l, originally D-2026-08-25-j): the driver's `PICK`
   never calls `FindBest`, so a snap-gated rule would have been manual-test-only forever — the trap
   REQ-039's paper conditions fell into (#84) — and a coordinate rule also closes on a typed
   coordinate, which a snap-gated one would refuse whenever OSNAP is off. Tolerance is deliberately

@@ -651,6 +651,21 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     DoUndo(run.st, run.log);
   } else if (verb == "REDO") {
     DoRedo(run.st, run.log);
+  } else if (verb == "LAYOUT") {
+    // LAYOUT NEW | LAYOUT MODEL — switch the active space (REQ-037/ADR-009). Like CLIPCOPY above,
+    // this is a REQ-203 gap: AddPaperLayout/SetActiveSpace are bound to the layout tab bar in
+    // CadUi.cpp and reachable no other way, so a transcript could not otherwise put a paper layout
+    // in play to exercise the paper-space commit path (issue #84).
+    const std::string arg = UpperAscii(Trim(rest));
+    if (arg == "MODEL") {
+      SetActiveSpace(run.st, kModelSpaceIndex);
+    } else if (arg == "NEW" || arg.empty()) {
+      const int idx = AddPaperLayout(run.st);
+      SetActiveSpace(run.st, idx);
+    } else {
+      Fail(run, "parse", "LAYOUT expects NEW or MODEL, got: " + rest, sourceLine);
+      return false;
+    }
   } else if (verb == "DUMP") {
     // DUMP LABELS — every survey point's label box, in world units, beside the point it labels.
     //
@@ -1104,16 +1119,18 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // how much of it exists. A draw command that writes to the wrong store leaves the model count
       // right and the paper count zero, which is invisible to every model-side count above — that is
       // issue #84 exactly, and REQ-039 (6) ("none of these paper edits change model geometry") has
-      // no other way to be stated as something a transcript can fail.
-      else if (what == "PAPERPOLYLINES")
-        got = static_cast<long>(run.st.paperLayouts.empty() ||
-                                        run.st.paperLayouts[0].paperPolyOffsets.empty()
-                                    ? 0
-                                    : run.st.paperLayouts[0].paperPolyOffsets.size() - 1);
-      else if (what == "PAPERLINES")
-        got = static_cast<long>(run.st.paperLayouts.empty()
-                                    ? 0
-                                    : run.st.paperLayouts[0].paperLines.size() / 6);
+      // no other way to be stated as something a transcript can fail. Both verbs sum across every
+      // layout (merge reconciliation, D-2026-08-25-l) rather than reading layout 0 only, so a
+      // multi-layout drawing is checkable the same way a single-layout one already was.
+      else if (what == "PAPERPOLYLINES") {
+        got = 0;
+        for (const PaperLayout& L : run.st.paperLayouts)
+          got += static_cast<long>(L.paperPolyOffsets.empty() ? 0 : L.paperPolyOffsets.size() - 1);
+      } else if (what == "PAPERLINES") {
+        got = 0;
+        for (const PaperLayout& L : run.st.paperLayouts)
+          got += static_cast<long>(L.paperLines.size() / 6);
+      }
       else if (what == "ARCS")
         got = static_cast<long>(run.st.userArcs.size());
       else if (what == "ELLIPSES")
