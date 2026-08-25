@@ -566,6 +566,13 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-103 STRETCH (TASK-098). Header-only against CadCommands.hpp — RecomputeArcFromEndpoints
     # is inline and pure (<cmath> + CadArc only), the same reasoning as the gate test above.
     tests/StretchGeomTests.cpp
+    # REQ-103 FILLET (TASK-102). Header-only against CadCommands.hpp — the tangent-arc solve
+    # (SolveFilletCenter and friends) is inline and pure (<cmath>/<vector> + curveintersect.hpp,
+    # both dependency-free), the same reasoning as the STRETCH geometry test above.
+    tests/FilletGeomTests.cpp
+    # REQ-103 CHAMFER (TASK-103). Header-only against CadCommands.hpp, same reasoning as FILLET's
+    # own geometry test above — ChamferPointAtDistance/ChamferRayIntersect are inline and pure.
+    tests/ChamferGeomTests.cpp
     # REQ-087: the gate that decides the viewport has geometry to draw. Header-only against
     # CadCommands.hpp — the predicate is pure, which is the whole reason it is testable at all
     # while the rendering around it is not.

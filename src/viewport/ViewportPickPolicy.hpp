@@ -136,6 +136,11 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     // by ClosestPointOnEntity either way, so it snaps (ASSUMPTION-1 in TASK-099).
     return cmd.breakPhase == AppCommandState::BreakPhase::SelectFirstPoint ? R::RawEntityPick
                                                                           : R::SnappedPointPick;
+  case K::Fillet:
+  case K::Chamfer:
+    // Both phases (first curve, then second curve) are entity searches — EXTEND's shape, never a
+    // bare coordinate.
+    return R::RawEntityPick;
 
   // --- Commands owning their own click handling. ---
   case K::Trim:

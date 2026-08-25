@@ -1,0 +1,52 @@
+# REQ-103 step 6a (TASK-102 follow-up, D-2026-08-25-b) — FILLET refuses cleanly when the requested
+# radius is too large for the picked segments, instead of silently connecting to the wrong
+# endpoints (a real user bug report, 2026-08-25, with a screenshot showing the arc drawn off to one
+# side instead of rounding the actual corner). Peak at (0,50), two short legs (length ~31) down to
+# (+-8,20) -- radius 20 needs a ~75-unit tangent length, far more than either leg provides, and must
+# be refused. Radius 5 on the SAME geometry is comfortably valid and must still work, proving this
+# is a real "too large for THIS geometry" check, not an accidental blanket refusal.
+
+NEW
+
+CMD LINE
+CMD 0,50
+CMD -8,20
+ESC
+
+CMD LINE
+CMD 0,50
+CMD 8,20
+ESC
+
+CHECK ALL
+EXPECT LINES 2
+SAVEAS %OUT%/fillet-toolarge-a.gs
+
+CMD FILLET
+CMD R
+CMD 20
+CLICK -4 35
+CLICK 4 35
+
+EXPECT LOG "FILLET — radius 20.000000 is too large for the selected objects; refused."
+EXPECT LINES 2
+EXPECT ARCS 0
+CHECK ALL
+SAVEAS %OUT%/fillet-toolarge-b.gs
+EXPECT SAMEFILE %OUT%/fillet-toolarge-a.gs %OUT%/fillet-toolarge-b.gs
+
+CMD
+
+CMD FILLET
+CMD R
+CMD 5
+CLICK -4 35
+CLICK 4 35
+
+EXPECT LOG "FILLET — corner filleted."
+EXPECT LINES 2
+EXPECT ARCS 1
+CHECK ALL
+
+CMD
+UNDO

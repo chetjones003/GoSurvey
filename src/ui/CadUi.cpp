@@ -1472,6 +1472,8 @@ enum class RibbonIconKind : std::uint8_t {
   Extend,
   Break,
   Stretch,
+  Fillet,
+  Chamfer,
   SurveyPoint,
   SurveyInverse,
   Layers,
@@ -1929,6 +1931,36 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     dl->AddCircleFilled(vert, std::min(w, h) * 0.08f, col, 12);
     break;
   }
+  case RibbonIconKind::Fillet: {
+    // Two perpendicular legs joined by a small rounded corner — AutoCAD's own FILLET icon shape.
+    const float rx = mn.x + w * 0.30f, ry = mn.y + h * 0.30f;  // rounded-corner center
+    const float rad = std::min(w, h) * 0.20f;
+    dl->AddLine(ImVec2(mn.x + w * 0.16f, ry), ImVec2(rx - rad, ry), col, t * 1.1f);
+    dl->AddLine(ImVec2(rx, ry - rad), ImVec2(rx, mn.y + h * 0.16f), col, t * 1.1f);
+    dl->PathArcTo(ImVec2(rx, ry), rad, 3.14159265f, 3.14159265f * 1.5f, 10);
+    dl->PathStroke(col, 0, t * 1.1f);
+    // Second leg pair (mirrored) reads as "two curves meeting" rather than one bent line.
+    const float rx2 = mx.x - w * 0.30f, ry2 = mx.y - h * 0.30f;
+    dl->AddLine(ImVec2(mx.x - w * 0.16f, ry2), ImVec2(rx2 + rad, ry2), acc, t);
+    dl->AddLine(ImVec2(rx2, ry2 + rad), ImVec2(rx2, mx.y - h * 0.16f), acc, t);
+    dl->PathArcTo(ImVec2(rx2, ry2), rad, 3.14159265f * 1.5f, 3.14159265f * 2.0f, 10);
+    dl->PathStroke(acc, 0, t);
+    break;
+  }
+  case RibbonIconKind::Chamfer: {
+    // Two perpendicular legs joined by a straight bevel — AutoCAD's own CHAMFER icon shape,
+    // visually distinct from FILLET's rounded corner above.
+    const float bx = mn.x + w * 0.30f, by = mn.y + h * 0.30f;
+    const float cut = std::min(w, h) * 0.20f;
+    dl->AddLine(ImVec2(mn.x + w * 0.16f, by), ImVec2(bx - cut, by), col, t * 1.1f);
+    dl->AddLine(ImVec2(bx, by - cut), ImVec2(bx, mn.y + h * 0.16f), col, t * 1.1f);
+    dl->AddLine(ImVec2(bx - cut, by), ImVec2(bx, by - cut), col, t * 1.1f);
+    const float bx2 = mx.x - w * 0.30f, by2 = mx.y - h * 0.30f;
+    dl->AddLine(ImVec2(mx.x - w * 0.16f, by2), ImVec2(bx2 + cut, by2), acc, t);
+    dl->AddLine(ImVec2(bx2, by2 + cut), ImVec2(bx2, mx.y - h * 0.16f), acc, t);
+    dl->AddLine(ImVec2(bx2 + cut, by2), ImVec2(bx2, by2 + cut), acc, t);
+    break;
+  }
   case RibbonIconKind::SurveyPoint: {
     dl->AddLine(ImVec2(c.x, mn.y + h * 0.15f), ImVec2(c.x, mx.y - h * 0.15f), col, t * 0.75f);
     dl->AddLine(ImVec2(mn.x + w * 0.15f, c.y), ImVec2(mx.x - w * 0.15f, c.y), col, t * 0.75f);
@@ -2155,6 +2187,8 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::Extend:         return "extend";
   case RibbonIconKind::Break:          return "break";
   case RibbonIconKind::Stretch:        return "stretch";
+  case RibbonIconKind::Fillet:         return "fillet";
+  case RibbonIconKind::Chamfer:        return "chamfer";
   case RibbonIconKind::SurveyPoint:    return "surveypoint";
   case RibbonIconKind::SurveyInverse:  return "surveyinverse";
   case RibbonIconKind::Layers:         return "layers";
@@ -2204,6 +2238,8 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
     {"EXTEND", RibbonIconKind::Extend},
     {"BREAK", RibbonIconKind::Break},
     {"STRETCH", RibbonIconKind::Stretch},
+    {"FILLET", RibbonIconKind::Fillet},
+    {"CHAMFER", RibbonIconKind::Chamfer},
     {"DELETE", RibbonIconKind::Erase}, {"JOIN", RibbonIconKind::Join}, {"TRIM", RibbonIconKind::Trim},
     {"OFFSET", RibbonIconKind::Offset}, {"ZOOMEXTENTS", RibbonIconKind::ZoomExtents},
     {"ZOOMWINDOW", RibbonIconKind::ZoomWindow}, {"CREATEPOINTS", RibbonIconKind::SurveyPoint},
@@ -2374,7 +2410,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // Extend/Break/Stretch exactly fills a second.
   const float wMod  = 8.f + largeW + 4.f + colW({"Copy", "Rotate", "Scale"}) + 4.f +
                       colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror", "Lengthen"}) + 4.f +
-                      colW({"Extend", "Break", "Stretch"});
+                      colW({"Extend", "Break", "Stretch"}) + 4.f + colW({"Fillet", "Chamfer"});
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
   const float wAnn  = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
   // Two columns: the panel is three small buttons tall, so a fourth in one column is clipped.
@@ -2552,6 +2588,26 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       StartStretchCommand(cmd, log);
     RibbonItemHelp("Stretch — crossing/window-select, then base point and destination; only the "
                    "vertices inside the box move.\nCommand bar: STRETCH or S");
+    ImGui::EndGroup();
+
+    // Fifth column: the fourth column above (Extend/Break/Stretch) already fills its 3-row limit —
+    // FILLET/CHAMFER need their own column, not a 4th slot stacked into that BeginGroup (the exact
+    // clipping bug the comment above documents for EXTEND's own first landing). Two items here
+    // stays within the 3-row limit.
+    ImGui::SameLine(0, 4);
+    const float c5 = colW({"Fillet", "Chamfer"});
+    ImGui::BeginGroup();
+    if (smallBtn("##RibbonFillet", RibbonIconKind::Fillet, "Fillet", c5))
+      StartFilletCommand(cmd, log);
+    RibbonItemHelp("Fillet — pick two curves (line/arc/polyline segment); joins them with a tangent "
+                   "arc at the current radius, trimming/extending each to meet it. Type R to set "
+                   "radius, T for Trim/No-trim.\nCommand bar: FILLET or F");
+    if (smallBtn("##RibbonChamfer", RibbonIconKind::Chamfer, "Chamfer", c5))
+      StartChamferCommand(cmd, log);
+    RibbonItemHelp("Chamfer — pick two curves (line/polyline segment); connects them with a "
+                   "straight bevel at Distance/Distance or Distance/Angle from their intersection. "
+                   "Type D for distances, A for distance+angle, T for Trim/No-trim.\nCommand bar: "
+                   "CHAMFER or CHA");
     ImGui::EndGroup();
   }
   RibbonSectionEnd();
@@ -6921,10 +6977,19 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     // Mouse is over last frame's popup rect — a row is being hovered/clicked.
     const bool overCmdSugPopup = s_cmdSugPopupOpen &&
         ImGui::IsMouseHoveringRect(s_cmdSugPopupMin, s_cmdSugPopupMax, false);
-    if (inputActive && !query.empty() && singleToken && !s_cmdDismissed) {
+    // Suggestions (and the Enter-time cmdBuf rewrite below) are for IDLE top-level command entry
+    // only. While a command is active and prompting for a typed sub-answer (FILLET's R/T, CHAMFER's
+    // D/A/T, LENGTHEN's DE/P/T/DY, a numeric value, ...), the typed text must reach that command's
+    // own handler verbatim — a real bug, found from a user report: typing "r" for FILLET's Radius
+    // sub-command fuzzy-matched some unrelated top-level command (e.g. "rect"/"redo") and the Enter
+    // frame silently substituted THAT name into cmdBuf before submission, so FILLET's own handler
+    // never saw "r" at all and refused with "could not be parsed" — reproducible for any short
+    // sub-answer that happens to fuzzy-match a registry entry, not specific to FILLET's own code.
+    const bool cmdIdle = cmd.active == AppCommandState::Kind::None;
+    if (cmdIdle && inputActive && !query.empty() && singleToken && !s_cmdDismissed) {
       cmdSug = FuzzyCommandSuggestions(query, 20);
       s_cmdSugCache = cmdSug;
-    } else if (overCmdSugPopup && !s_cmdDismissed && !s_cmdSugCache.empty()) {
+    } else if (cmdIdle && overCmdSugPopup && !s_cmdDismissed && !s_cmdSugCache.empty()) {
       // Input lost focus to a click on the popup; keep the cached list alive this frame so the
       // row's InvisibleButton (which fires on mouse release) can run the command.
       cmdSug = s_cmdSugCache;
@@ -8760,7 +8825,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
       if (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0 || cmd.paperMirrorPhase != 0 ||
           cmd.paperLengthenPhase != 0 || cmd.paperExtendPhase != 0 || cmd.paperBreakPhase != 0 ||
-          cmd.paperStretchPhase != 0 ||
+          cmd.paperStretchPhase != 0 || cmd.paperFilletPhase != 0 || cmd.paperChamferPhase != 0 ||
           cmd.paperGripCorner != -2 || cmd.paperSelBoxActive) {
         cmd.paperMovePhase = 0;
         cmd.paperRotatePhase = 0;
@@ -8770,6 +8835,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.paperExtendBoundaries.clear();
         cmd.paperBreakPhase = 0;
         cmd.paperStretchPhase = 0;
+        cmd.paperFilletPhase = 0;
+        cmd.paperFilletFirstEntity = PaperEntityRef{};
+        cmd.paperFilletFirstPolySeg = -1;
+        cmd.paperChamferPhase = 0;
+        cmd.paperChamferFirstEntity = PaperEntityRef{};
+        cmd.paperChamferFirstPolySeg = -1;
         cmd.paperGripCorner = -2;
         cmd.paperSelBoxActive = false;
       } else if (!cmd.selectedViewports.empty() || !cmd.selectedPaperEntities.empty()) {
@@ -8807,7 +8878,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     cmd.paperHoverValid = false;
     if (hovered && !cmd.paperSelBoxActive && cmd.paperMovePhase == 0 && cmd.paperRotatePhase == 0 &&
         cmd.paperMirrorPhase == 0 && cmd.paperLengthenPhase == 0 && cmd.paperExtendPhase == 0 &&
-        cmd.paperBreakPhase == 0 && cmd.paperStretchPhase == 0 &&
+        cmd.paperBreakPhase == 0 && cmd.paperStretchPhase == 0 && cmd.paperFilletPhase == 0 &&
+        cmd.paperChamferPhase == 0 &&
         cmd.paperGripCorner == -2 && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
       PaperEntityRef hr;
       if (PickPaperEntityAt(L, curX, curY, entityPickTolIn, &hr)) {
@@ -8956,6 +9028,61 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       ApplyBreakToPaperEntity(cmd, cmd.paperBreakEntity, cmd.paperBreakP1, curX, curY, log);
       cmd.paperBreakPhase = 1;
       // Stays in the loop — back to phase 1 for the next object, same shape as model-space BREAK.
+    } else if (clickL && cmd.paperFilletPhase == 1) {  // FILLET: pick first curve (REQ-103 step 6a)
+      PaperEntityRef pr;
+      int polySeg = -1;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        log.push_back("FILLET — no object at pick.");
+      else if (PaperFilletEligibility(L, pr, curX, curY, &polySeg, log)) {
+        cmd.paperFilletFirstEntity = pr;
+        cmd.paperFilletFirstPolySeg = polySeg;
+        cmd.paperFilletFirstPickX = curX;
+        cmd.paperFilletFirstPickY = curY;
+        cmd.paperFilletPhase = 2;
+        log.push_back("FILLET — select second object:");
+      }
+      // Ineligible picks stay in phase 1 — PaperFilletEligibility already logged why.
+    } else if (clickL && cmd.paperFilletPhase == 2) {  // FILLET: pick second curve, applies (REQ-103 step 6a)
+      PaperEntityRef pr;
+      int polySeg = -1;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        log.push_back("FILLET — no object at pick.");
+      else if (PaperFilletEligibility(L, pr, curX, curY, &polySeg, log)) {
+        ApplyFilletToPaperEntities(cmd, cmd.paperFilletFirstEntity, cmd.paperFilletFirstPolySeg,
+                                   cmd.paperFilletFirstPickX, cmd.paperFilletFirstPickY, pr, polySeg, curX, curY,
+                                   log);
+      }
+      cmd.paperFilletPhase = 1;
+      cmd.paperFilletFirstEntity = PaperEntityRef{};
+      cmd.paperFilletFirstPolySeg = -1;
+      // Stays in the loop — back to phase 1 for the next corner, same shape as model-space FILLET.
+    } else if (clickL && cmd.paperChamferPhase == 1) {  // CHAMFER: pick first curve (REQ-103 step 6b)
+      PaperEntityRef pr;
+      int polySeg = -1;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        log.push_back("CHAMFER — no object at pick.");
+      else if (PaperChamferEligibility(L, pr, curX, curY, &polySeg, log)) {
+        cmd.paperChamferFirstEntity = pr;
+        cmd.paperChamferFirstPolySeg = polySeg;
+        cmd.paperChamferFirstPickX = curX;
+        cmd.paperChamferFirstPickY = curY;
+        cmd.paperChamferPhase = 2;
+        log.push_back("CHAMFER — select second object:");
+      }
+    } else if (clickL && cmd.paperChamferPhase == 2) {  // CHAMFER: pick second curve, applies (REQ-103 step 6b)
+      PaperEntityRef pr;
+      int polySeg = -1;
+      if (!PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr))
+        log.push_back("CHAMFER — no object at pick.");
+      else if (PaperChamferEligibility(L, pr, curX, curY, &polySeg, log)) {
+        ApplyChamferToPaperEntities(cmd, cmd.paperChamferFirstEntity, cmd.paperChamferFirstPolySeg,
+                                    cmd.paperChamferFirstPickX, cmd.paperChamferFirstPickY, pr, polySeg, curX,
+                                    curY, log);
+      }
+      cmd.paperChamferPhase = 1;
+      cmd.paperChamferFirstEntity = PaperEntityRef{};
+      cmd.paperChamferFirstPolySeg = -1;
+      // Stays in the loop — back to phase 1 for the next corner, same shape as model-space CHAMFER.
     } else if (clickL && cmd.paperStretchPhase == 1) {  // STRETCH: base point (REQ-103 step 5)
       cmd.paperStretchBaseXIn = curX;
       cmd.paperStretchBaseYIn = curY;
@@ -12605,6 +12732,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         if (ImGui::MenuItem("Extend"))         { StartExtendCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Break"))          { StartBreakCommand(cmd, log);  ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Stretch"))        { StartStretchCommand(cmd, log); ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Fillet"))         { StartFilletCommand(cmd, log); ImGui::CloseCurrentPopup(); }
+        if (ImGui::MenuItem("Chamfer"))        { StartChamferCommand(cmd, log); ImGui::CloseCurrentPopup(); }
         if (ImGui::MenuItem("Join"))           { StartJoinCommand(cmd, log);   ImGui::CloseCurrentPopup(); }
         ImGui::EndMenu();
       }

@@ -1,0 +1,80 @@
+# REQ-103 step 6b (TASK-103) — CHAMFER, Case A: two adjacent segments of the SAME polyline. Same
+# corner tests/FilletGeomTests.cpp and fillet-polyline-corner.txt use, built as one polyline
+# (-10,0)->(0,0)->(0,-10) instead of two lines. CHAMFER splices the shared vertex at the origin
+# into the two chamfer points and inserts a new Line connector — the polyline's own entity count
+# stays 1 (mutated in place, ReplacePolylineVerts), only its vertex count grows.
+#
+# Driven with CLICK — same reason as chamfer-lines-basic.txt.
+
+NEW
+
+CMD POLYLINE
+CMD -10,0
+CMD 0,0
+CMD 0,-10
+CMD END
+
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT LINES 0
+SAVEAS %OUT%/chamfer-poly-a.gs
+
+CMD CHAMFER
+CMD D
+CMD 3
+CMD 3
+CLICK -5 0
+CLICK 0 -5
+
+EXPECT LOG "CHAMFER — polyline corner chamfered."
+EXPECT POLYLINES 1
+EXPECT LINES 1
+CHECK ALL
+
+SAVEAS %OUT%/chamfer-poly-b.gs
+EXPECT DIFFERENTFILE %OUT%/chamfer-poly-a.gs %OUT%/chamfer-poly-b.gs
+
+UNDO
+EXPECT POLYLINES 1
+EXPECT LINES 0
+CHECK ALL
+SAVEAS %OUT%/chamfer-poly-c.gs
+# Not SAMEFILE against "a": the connector Line minted a fresh entity id (REQ-076) — same reasoning
+# fillet-polyline-corner.txt documents.
+
+REDO
+EXPECT POLYLINES 1
+EXPECT LINES 1
+CHECK ALL
+SAVEAS %OUT%/chamfer-poly-d.gs
+EXPECT SAMEFILE %OUT%/chamfer-poly-b.gs %OUT%/chamfer-poly-d.gs
+
+UNDO
+
+# Both distances 0: shared vertex moves to the intersection (already its own position here), no
+# connector Line, polyline vertex count unchanged.
+CMD CHAMFER
+CMD D
+CMD 0
+CMD 0
+PICK -5 0
+PICK 0 -5
+
+EXPECT LOG "CHAMFER — polyline corner trimmed to a point (distance 0)."
+EXPECT POLYLINES 1
+EXPECT LINES 0
+CHECK ALL
+
+UNDO
+
+# Identical segment picked twice must refuse, not silently misapply.
+CMD CHAMFER
+PICK -5 0
+PICK -8 0
+
+EXPECT LOG "CHAMFER — select two different segments."
+EXPECT POLYLINES 1
+EXPECT LINES 0
+CHECK ALL
+
+CMD

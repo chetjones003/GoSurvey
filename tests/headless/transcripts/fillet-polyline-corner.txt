@@ -1,0 +1,87 @@
+# REQ-103 step 6a (TASK-102) — FILLET, Case A: two adjacent segments of the SAME polyline (the
+# classic "round this corner" case), distinct from fillet-lines-basic.txt's two-different-entities
+# Case B. Polyline (-10,0)->(0,0)->(0,-10) — the identical perpendicular corner
+# tests/FilletGeomTests.cpp hand-verifies for radius 3 (center (-3,-3), tangent points (-3,0) and
+# (0,-3)), built as ONE polyline instead of two lines: seg0=(-10,0)-(0,0), seg1=(0,0)-(0,-10),
+# sharing the vertex at the origin. FILLET must splice that shared vertex into the two tangent
+# points and insert a new Arc entity for the corner — the polyline's own entity count stays 1
+# (mutated in place, ReplacePolylineVerts — BREAK's own CSR-shift technique), only its vertex count
+# grows. Radius 0 instead moves the shared vertex to the exact intersection with no new vertex and
+# no Arc — verified the same way Part B of fillet-lines-basic.txt verifies it for two Lines.
+#
+# Driven with CLICK (not PICK) — same reason as fillet-lines-basic.txt Part A.
+
+NEW
+
+CMD POLYLINE
+CMD -10,0
+CMD 0,0
+CMD 0,-10
+CMD END
+
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT ARCS 0
+SAVEAS %OUT%/fillet-poly-a.gs
+
+CMD FILLET
+CMD R
+CMD 3
+CLICK -5 0
+CLICK 0 -5
+
+EXPECT LOG "FILLET — polyline corner filleted."
+EXPECT POLYLINES 1
+EXPECT ARCS 1
+CHECK ALL
+
+SAVEAS %OUT%/fillet-poly-b.gs
+EXPECT DIFFERENTFILE %OUT%/fillet-poly-a.gs %OUT%/fillet-poly-b.gs
+
+UNDO
+EXPECT POLYLINES 1
+EXPECT ARCS 0
+CHECK ALL
+SAVEAS %OUT%/fillet-poly-c.gs
+# Not SAMEFILE against "a": the fillet arc minted a fresh entity id (REQ-076), and undo does not
+# roll the next-entity-id counter itself back — same reasoning fillet-lines-basic.txt and
+# break-circle-and-closed-polyline.txt already document. Geometry/counts are already verified
+# above; redo below restores the exact forward snapshot, which IS byte-identical.
+
+REDO
+EXPECT POLYLINES 1
+EXPECT ARCS 1
+CHECK ALL
+SAVEAS %OUT%/fillet-poly-d.gs
+EXPECT SAMEFILE %OUT%/fillet-poly-b.gs %OUT%/fillet-poly-d.gs
+
+UNDO
+
+# Radius 0: shared vertex moves to the exact intersection (the origin, already its own position
+# here), no Arc created, polyline vertex count unchanged.
+CMD FILLET
+CMD R
+CMD 0
+PICK -5 0
+PICK 0 -5
+
+EXPECT LOG "FILLET — polyline corner trimmed to a point (radius 0)."
+EXPECT POLYLINES 1
+EXPECT ARCS 0
+CHECK ALL
+
+UNDO
+
+# Picking two NON-adjacent segments (or the same segment twice) must refuse, not silently misapply.
+# A third vertex makes seg0/seg1 adjacent (shared at the origin) but there is no seg2 to be
+# non-adjacent to, so this instead proves the identical-segment-twice refusal (REQ-201).
+CMD FILLET
+PICK -5 0
+PICK -8 0
+
+EXPECT LOG "FILLET — select two different segments."
+EXPECT POLYLINES 1
+EXPECT ARCS 0
+CHECK ALL
+
+CMD

@@ -2975,11 +2975,133 @@ requirements is a planning failure, not a sign of rigor.
       own entity-candidacy test optionally is — a stated, accepted simplification, recorded as
       technical debt rather than a silent gap;
     - reachable from the Modify ribbon, typed `STRETCH`, and right-click repeat.
-  - Acceptance for FILLET/CHAMFER/ARRAY/EXPLODE (steps 6–8) is written when each is accepted for
-    implementation, not spec'd in advance of that command's own design pass.
+  - Acceptance — FILLET (step 6a):
+    - eligible curves: Line, non-full-circle Arc (full-circle-sweep Arc and Circle refused — no
+      single tangent-side construction distinguishes them from a fillet's corner geometry, matching
+      Circle's own exclusion from LENGTHEN/EXTEND for a related reason), and a segment of an open
+      OR closed Polyline. A picked Polyline segment is one of two cases, resolved by which second
+      pick follows: **(A) the other pick lands on the segment immediately ADJACENT (sharing exactly
+      one vertex) on the SAME polyline** — the classic "round this corner" case, well-defined on
+      open or closed polylines alike, since the shared vertex needs no near/far disambiguation; **(B)
+      the other pick is a different entity (or a non-adjacent segment of a different polyline)** —
+      only the polyline's own first or last segment (adjacent to a free/open end) is eligible this
+      way, since moving any other segment's endpoint would silently disturb an uninvolved neighboring
+      segment sharing that vertex; a closed polyline has no free end, so it is never eligible for
+      case (B). An interior segment of an open polyline, picked against a different entity (not its
+      own polyline neighbor), and any non-adjacent pair of segments on the same polyline, are refused
+      with a stated reason (REQ-201) rather than silently misapplied. Picking the identical segment
+      twice is refused ("select two different objects/segments");
+    - **radius** is a persisted setting (`filletRadius`, default 0.5, like `TRIMSTATE`'s own
+      app-level persistence via `gosurvey-user.json` — not per-drawing) set by typing `R` before a
+      pick ("Specify fillet radius <current>:"), applying to this and future invocations until
+      changed again;
+    - **trim mode** is a persisted setting (`cornerTrimMode`, default Trim) set by typing `T` before
+      a pick ("Enter Trim mode option [Trim/No trim] <Trim>:"), **shared with CHAMFER** (matching
+      AutoCAD's own shared `TRIMMODE` variable — one toggle governs both commands). Trim mode moves
+      each curve's near end (nearest its own pick) to its tangent point, exactly as described below;
+      No-trim mode adds the fillet arc at the same computed tangent points but leaves both original
+      curves completely unchanged (a real AutoCAD behavior, not a simplification);
+    - flow: `FILLET` prompts "Select first object or [Radius/Trim]:"; a pick latches the first curve
+      and its pick point; a second pick on an eligible partner computes and applies the fillet
+      immediately (no separate confirm step); the command then loops back to "select first object"
+      until Enter/Esc — REQ-103's own established per-target looping shape (TRIM/LENGTHEN/EXTEND/
+      BREAK), deliberately without AutoCAD's opt-in "Multiple" option, since looping is already this
+      epic's default and an opt-out would be the inconsistent choice; each individual fillet is its
+      own undo step;
+    - **geometry (radius > 0, non-parallel case):** each curve's supporting shape (a Line's infinite
+      extension; a non-full Arc's own full circle, `curveisect::MakeCircle` not `MakeArc` — an
+      Extend-precedent choice, so a tangent point beyond the current sweep is still found and the
+      arc extended to reach it) is offset by exactly the fillet radius on both sides (Line: parallel
+      line translated ± radius along its own perpendicular; Arc/Circle-equivalent: concentric circle
+      of radius ± the fillet radius); every combination of the two curves' offset shapes is
+      intersected (analytically, via the existing `curveisect::IntersectSegSeg`/`IntersectSegConic`/
+      `IntersectConicConic` — REQ-062/REQ-101, never tessellated) to produce every candidate fillet
+      center; the candidate chosen is the one minimizing the summed squared distance to the two pick
+      points — a deterministic, testable tie-break consistent with every other REQ-103 step's
+      "nearest to the pick" convention (LENGTHEN/EXTEND/BREAK/TRIM all resolve ambiguity this way);
+    - the tangent point on a Line is the foot of the perpendicular from the chosen center onto the
+      line's own infinite extension; the tangent point on an Arc is the point on the arc's own
+      original circle along the ray from the arc's center through the chosen fillet center (this
+      point is guaranteed to already lie exactly on that circle by construction of the offset
+      intersection); the fillet arc itself runs from one tangent point to the other around the
+      chosen center, taking the smaller of the two possible sweeps (< π always, since a corner-round
+      is always the minor arc) — a fresh Arc entity (REQ-076/ADR-027, id 0 until swept), never a
+      mutation of either input;
+    - **radius = 0** is a valid, well-defined degenerate case, not a refusal: the offset-by-0
+      construction reduces to intersecting the two original curves directly (same analytic
+      functions, unchanged), no Arc entity is created, and both curves are trimmed/extended (Trim
+      mode) directly to that intersection point — matching AutoCAD's own R=0 "sharp corner" behavior;
+    - **two parallel, non-collinear Lines** are a special case independent of the current radius
+      setting (a real, documented AutoCAD behavior, not a simplification): a semicircular Arc is
+      created connecting the two lines' nearest-facing endpoints, with a radius of exactly half the
+      perpendicular distance between them; the current `filletRadius` setting is ignored for this
+      one case, exactly as AutoCAD ignores it too. Collinear/overlapping Lines, and any radius/
+      geometry combination with no real tangent solution (radius too large for the available
+      geometry, arcs too far apart, etc.), are refused with a stated reason (REQ-201), geometry
+      unchanged — never silently clamped or wrongly applied;
+    - in the Case (A) same-polyline-adjacent-vertex flow, the shared vertex is replaced by the two
+      tangent points (vertex list grows by one; CSR offsets for every later polyline shift, the same
+      bookkeeping BREAK's `ReplacePolylineVerts` already established) and the new Arc entity is
+      inserted for the corner — or, at radius 0, the shared vertex simply moves to the single
+      intersection point (vertex count unchanged, no Arc). In the Case (B) flow, the standalone
+      curve is trimmed/extended to its tangent point via the exact same reused mutation the standard
+      curve case uses below;
+    - each Line/Arc/open-polyline-end-segment curve's trim/extend to its own tangent point reuses
+      LENGTHEN's own mutation functions unchanged — `ApplyLengthenToLine`/`ApplyLengthenToArc`/
+      `ApplyLengthenToPolylineEnd` — by converting the known tangent point into the `newLength` those
+      functions already accept (a Line's new length is the distance from its fixed end to the
+      tangent point; an Arc's follows the identical angle-to-length conversion EXTEND's own
+      `FindExtendArcTarget` already established), exactly the reuse chain REQ-103's own sequencing
+      note promised ("LENGTHEN's edge-parameter math is reused by EXTEND and FILLET"); the near end
+      (the one that moves) is whichever end lies closer to that curve's own pick point, the same
+      `NearerToFirstPoint` convention LENGTHEN/EXTEND already use;
+    - reachable from the Modify ribbon (new column, no pre-staged stub exists), typed `FILLET`/`F`,
+      and right-click repeat; works in model space, floating model space, and native paper space
+      (full parity, matching EXTEND/BREAK/STRETCH's precedent, not TRIM's own paper-space gap).
+  - Acceptance — CHAMFER (step 6b):
+    - eligible curves: Line and a segment of an open or closed Polyline only — Arc is refused with a
+      stated reason (REQ-201): a chamfer is a straight connecting line measured by distance/angle
+      along each curve from their intersection, which has no standard meaning against a curved Arc
+      (matching AutoCAD's own restriction — CHAMFER has never operated on arcs); the same Case (A)
+      same-polyline-adjacent-vertex / Case (B) end-segment-only-against-a-different-entity split, and
+      the same non-adjacent/interior-segment/identical-segment-twice refusals, apply exactly as
+      FILLET's Polyline rules above;
+    - **distances/angle** are persisted settings (`chamferDist1`/`chamferDist2`, default 0.5 each,
+      for Distance/Distance mode; `chamferAngle`, default 45°, reusing `chamferDist1` as the single
+      Distance/Angle-mode distance) — `gosurvey-user.json`-persisted exactly like `filletRadius`;
+      **mode** (`chamferMode`: Distance/Distance default, or Distance/Angle) is set by typing `D` or
+      `A` before a pick, each prompting for its own value(s); **trim mode is the same persisted
+      `cornerTrimMode` setting FILLET uses** (AutoCAD's own shared `TRIMMODE`, not a second toggle);
+    - flow mirrors FILLET's exactly: `CHAMFER` prompts "Select first line or [Distance/Angle/Trim]:",
+      first pick latches the curve, second pick on an eligible partner computes and applies
+      immediately, loops back until Enter/Esc, one undo step per chamfer;
+    - **geometry:** `P` = the intersection of the two curves' infinite extensions (`curveisect::
+      IntersectSegSeg`, unchanged; parallel/non-intersecting Lines are refused — REQ-201 — since,
+      unlike FILLET, CHAMFER has no AutoCAD analogue to FILLET's parallel-lines semicircle special
+      case, a real asymmetry between the two commands, not an oversight). Distance/Distance mode:
+      Point1 = P + `chamferDist1` along curve 1's own direction, away from P, toward the side the
+      curve1 pick landed on; Point2 = the same construction on curve 2 with `chamferDist2`.
+      Distance/Angle mode: Point1 = P + `chamferDist1` along curve 1 the same way; the chamfer line's
+      direction is curve 1's own direction rotated by `chamferAngle` toward curve 2's side from
+      Point1, and Point2 is that ray's intersection with curve 2's infinite extension (refused,
+      REQ-201, if parallel to curve 2 — no intersection exists);
+    - **both distances (or the single Distance/Angle-mode distance) equal to 0** is a valid,
+      well-defined degenerate case mirroring FILLET's radius-0 case: no chamfer Line entity is
+      created, and (Trim mode) both curves are trimmed/extended directly to `P`;
+    - Trim mode moves each curve's near end (nearest its own pick) to its own computed point (Point1/
+      Point2 respectively), reusing `ApplyLengthenToLine`/`ApplyLengthenToPolylineEnd` the identical
+      way FILLET's Line/Polyline cases do (CHAMFER never touches `ApplyLengthenToArc` — Arc is not
+      an eligible curve); the new chamfer Line entity (fresh id, REQ-076/ADR-027) connects Point1 to
+      Point2 regardless of trim mode; No-trim mode adds that Line without altering either curve, the
+      same behavior FILLET's No-trim mode has;
+    - reachable from the Modify ribbon (same new column as FILLET), typed `CHAMFER`/`CHA`, and
+      right-click repeat; works in model space, floating model space, and native paper space (full
+      parity, matching FILLET's own paper-space scope above).
+  - Acceptance for ARRAY/EXPLODE (steps 7–8) is written when each is accepted for implementation,
+    not spec'd in advance of that command's own design pass.
 - Owner-layer: Commands/Domain/UI
 - Status: accepted
-- Revisions: 2026-08-23 — catalogued, proposed (D-2026-08-23-i). 2026-08-23 — accepted; sequenced into 8 increments starting with MIRROR; MIRROR's acceptance conditions written; MIRRTEXT-off and erase-default-No confirmed with the user (D-2026-08-23-j, TASK-094). 2026-08-24 — LENGTHEN's (step 2) acceptance conditions written (D-2026-08-24-a, TASK-095). 2026-08-24 — EXTEND's (step 3) acceptance conditions written; analytic-over-tessellated boundary intersection and paper-space-included both confirmed with the user (D-2026-08-24-b, TASK-096). 2026-08-24 — BREAK's (step 4) acceptance conditions written; Circle/full-circle-Arc target eligibility (converts to Arc) and closed-Polyline target eligibility (splits open) both confirmed with the user (D-2026-08-24-c, TASK-097). 2026-08-24 — STRETCH's (step 5) acceptance conditions written; full AutoCAD-parity arc partial-stretch (center/radius recompute preserving included angle) and full paper-space vertex-level parity both confirmed with the user (D-2026-08-24-d, TASK-098). 2026-08-24 — after the first hand-driven GUI pass: LENGTHEN's valueless first pick amended from a refusal to a latch-and-prompt (the ribbon button was a dead end), and a live removed-span preview added to BREAK's acceptance (D-2026-08-24-e, TASK-100, TASK-101). 2026-08-24 — LENGTHEN's default sub-mode changed from DElta to Total, so pick-then-type-the-new-length is the out-of-the-box flow (D-2026-08-24-f, TASK-100).
+- Revisions: 2026-08-23 — catalogued, proposed (D-2026-08-23-i). 2026-08-23 — accepted; sequenced into 8 increments starting with MIRROR; MIRROR's acceptance conditions written; MIRRTEXT-off and erase-default-No confirmed with the user (D-2026-08-23-j, TASK-094). 2026-08-24 — LENGTHEN's (step 2) acceptance conditions written (D-2026-08-24-a, TASK-095). 2026-08-24 — EXTEND's (step 3) acceptance conditions written; analytic-over-tessellated boundary intersection and paper-space-included both confirmed with the user (D-2026-08-24-b, TASK-096). 2026-08-24 — BREAK's (step 4) acceptance conditions written; Circle/full-circle-Arc target eligibility (converts to Arc) and closed-Polyline target eligibility (splits open) both confirmed with the user (D-2026-08-24-c, TASK-097). 2026-08-24 — STRETCH's (step 5) acceptance conditions written; full AutoCAD-parity arc partial-stretch (center/radius recompute preserving included angle) and full paper-space vertex-level parity both confirmed with the user (D-2026-08-24-d, TASK-098). 2026-08-24 — after the first hand-driven GUI pass: LENGTHEN's valueless first pick amended from a refusal to a latch-and-prompt (the ribbon button was a dead end), and a live removed-span preview added to BREAK's acceptance (D-2026-08-24-e, TASK-100, TASK-101). 2026-08-24 — LENGTHEN's default sub-mode changed from DElta to Total, so pick-then-type-the-new-length is the out-of-the-box flow (D-2026-08-24-f, TASK-100). 2026-08-24 — FILLET's and CHAMFER's (step 6a/6b) acceptance conditions written; full AutoCAD-parity scope (Line/Arc/Polyline-segment eligibility, a Trim/No-trim toggle shared between the two commands, full paper-space parity, and both Distance/Distance and Distance/Angle chamfer input) confirmed with the user (D-2026-08-24-g, TASK-102/TASK-103).
 
 ### REQ-104 — Draw-command completeness
 - Purpose: SPLINE, XLINE, RAY, DONUT, SOLID, REVCLOUD, WIPEOUT, and MLINE have no command at all
@@ -3553,7 +3675,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-080 (amended) | Telemetry/Auth/UI/Platform | `TelemetryPingTests` **green 2026-08-23** (email-empty/email-present JSON cases; `DecideEventToSend` simplified to install-vs-always-active, throttle tests removed with the throttle) + `telemetry-worker/test.mjs` **green 2026-08-23** (valid/empty/malformed email stored-or-dropped-to-null; column-count assertions 8→9) + **live, 2026-08-23**: deployed Worker smoke-tested with a real POST carrying `email`, confirmed via direct D1 read-back; live migrations applied to the pre-existing deployed table (`ALTER TABLE pings ADD COLUMN email TEXT`, `DROP INDEX ux_pings_active_daily`) | accepted |
 | REQ-093 (amended) | UI/Platform | **manual, verified live against the real app across three build-and-look rounds, 2026-08-23 (D-2026-08-23-h):** the splash is its own small window (~440x320), centered on the primary monitor, filled edge-to-edge by the card — the real desktop, not a dimmed backdrop, is visible everywhere outside that small window; a native-resolution 32x32 corner logo (no upscaling — the source art is only that large) plus a large centered "GoSurvey" wordmark; the progress bar visibly animates across a hardcoded 5.0 s regardless of how fast real preload finishes; the main CAD shell is not shown/interactive until the 5 s elapses; user settings/prefs, the startup workspace template, the app font and the app logo are all loaded before the main shell is usable — this was already true pre-splash and REQ-093 does not change *what* loads, only that a splash now covers it; the splash's rotating phase text is cosmetic labeling only, since linetypes have no data table to load and text styles are already resident in memory the instant `AppCommandState` is constructed; closing the window during the 5 s exits cleanly with no hang; **the user's saved dock layout is restored correctly on launch** — this became an explicit acceptance condition only after a regression destroyed it once (D-2026-08-23-h) | accepted |
 | REQ-102 | Domain/Renderer/Commands/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
-| REQ-103 | Commands/Domain/UI | planned — sequenced into 8 increments (D-2026-08-23-j); TASK-094 (MIRROR, step 1), TASK-095 (LENGTHEN, step 2), TASK-096 (EXTEND, step 3, model+paper space), TASK-097 (BREAK, step 4, model+paper space), and TASK-098 (STRETCH, step 5, model+paper space, full arc-parity geometry) all self-verified 2026-08-24, transcripts green (565/565 regression, plus 4 new unit tests pinning the arc-stretch formula). **All five then failed in model space**: none was routed in CadUi.cpp's model-space viewport click dispatch, so every click was silently discarded and each command hung on its first prompt (working in floating model space and pure paper space, which route separately). Fixed by TASK-099, which moved the routing decision into the pure `ViewportClickRouteFor` (viewport/ViewportPickPolicy.hpp) as an exhaustive switch with no `default:`, added the headless `CLICK` verb so a transcript exercises the routing the `PICK` verb bypasses, and converted the five REQ-103 transcripts onto it (red before the fix, green after; 571/571 regression). Two further GUI-only defects then surfaced and were fixed: LENGTHEN refused any pick made before its sub-mode had a value, making the ribbon button a dead end (TASK-100 — the pick now latches the object, reports its length and prompts, with Total as the new default sub-mode), and BREAK gained a live preview of the material a break removes, on its own opaque render channel because the shared translucent preview batch is invisible when painted over the object it describes (TASK-101). Both amendments recorded as D-2026-08-24-e / D-2026-08-24-f. **Steps 1-5 are complete**: 573/573 regression green, and the user confirmed the manual GUI pass on 2026-08-24, closing TASK-094..101. Steps 6-8 (FILLET/CHAMFER/ARRAY/EXPLODE) not started | accepted |
+| REQ-103 | Commands/Domain/UI | planned — sequenced into 8 increments (D-2026-08-23-j); TASK-094 (MIRROR, step 1), TASK-095 (LENGTHEN, step 2), TASK-096 (EXTEND, step 3, model+paper space), TASK-097 (BREAK, step 4, model+paper space), and TASK-098 (STRETCH, step 5, model+paper space, full arc-parity geometry) all self-verified 2026-08-24, transcripts green (565/565 regression, plus 4 new unit tests pinning the arc-stretch formula). **All five then failed in model space**: none was routed in CadUi.cpp's model-space viewport click dispatch, so every click was silently discarded and each command hung on its first prompt (working in floating model space and pure paper space, which route separately). Fixed by TASK-099, which moved the routing decision into the pure `ViewportClickRouteFor` (viewport/ViewportPickPolicy.hpp) as an exhaustive switch with no `default:`, added the headless `CLICK` verb so a transcript exercises the routing the `PICK` verb bypasses, and converted the five REQ-103 transcripts onto it (red before the fix, green after; 571/571 regression). Two further GUI-only defects then surfaced and were fixed: LENGTHEN refused any pick made before its sub-mode had a value, making the ribbon button a dead end (TASK-100 — the pick now latches the object, reports its length and prompts, with Total as the new default sub-mode), and BREAK gained a live preview of the material a break removes, on its own opaque render channel because the shared translucent preview batch is invisible when painted over the object it describes (TASK-101). Both amendments recorded as D-2026-08-24-e / D-2026-08-24-f. **Steps 1-5 are complete**: 573/573 regression green, and the user confirmed the manual GUI pass on 2026-08-24, closing TASK-094..101. **Step 6 (FILLET/CHAMFER) is complete**: TASK-102 (FILLET, step 6a) and TASK-103 (CHAMFER, step 6b) both self-verified 2026-08-24 — full model+paper-space parity for both, tangent-arc/corner-point geometry unit-tested (8 + 3 cases), four headless transcripts (two CLICK-driven), two real bugs found and fixed during TASK-102's self-verification (triple undo-snapshot per apply; pick-based rather than computed-point-based near/far endpoint selection) — both fixes live in shared code, so CHAMFER's own transcripts passed on the first run rather than repeating either mistake. 588/588 regression green; manual GUI pass pending for both (this project's own no-UI-automation constraint). Steps 7-8 (ARRAY/EXPLODE) not started | accepted |
 | REQ-104 | Commands/Domain/IO/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-105 | Commands/UI | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-106 | UI/Renderer | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |

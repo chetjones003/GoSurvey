@@ -4257,6 +4257,8 @@ const CmdEntry kRegistry[] = {
     {"extend", "ex", "Extend objects to a boundary edge"},
     {"break", "br", "Split an object at one or two picked points"},
     {"stretch", "s", "Crossing/window-select, then move only the vertices inside the box"},
+    {"fillet", "f", "Round a corner between two curves with a tangent arc (Radius/Trim)"},
+    {"chamfer", "cha", "Connect two curves with a straight bevel (Distance/Angle/Trim)"},
     {"delete", "del", "Erase objects"},
     {"join", "j", "Join collinear objects"},
     {"trim", "tr", "Trim objects to an edge"},
@@ -4730,6 +4732,14 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "stretch") {
     StartStretchCommand(st, log);
+    return true;
+  }
+  if (primary == "fillet") {
+    StartFilletCommand(st, log);
+    return true;
+  }
+  if (primary == "chamfer") {
+    StartChamferCommand(st, log);
     return true;
   }
   if (primary == "delete") {
@@ -9101,6 +9111,16 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
+  if (st.active == K::Fillet) {
+    HandleFilletViewportPick(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::Chamfer) {
+    HandleChamferViewportPick(st, wx, wy, log);
+    return;
+  }
+
   if (st.active == K::None && st.selBoxWaitingSecond)
     finishBox();
 }
@@ -9533,7 +9553,7 @@ static bool NearerToFirstPoint(float px, float py, float x0, float y0, float x1,
 /// would collapse the line or an already-degenerate source (REQ-201: LENGTHEN must say why it did
 /// nothing, the same convention TRIM's degenerate-length delete and OFFSET's refusals follow).
 static bool ApplyLengthenToLine(AppCommandState& st, int index, bool nearFirst, float newLength,
-                                std::vector<std::string>& log) {
+                                std::vector<std::string>& log, bool pushUndo = true) {
   const size_t k = static_cast<size_t>(index) * 6;
   if (k + 5 >= st.userLinesFlat.size())
     return false;
@@ -9553,7 +9573,12 @@ static bool ApplyLengthenToLine(AppCommandState& st, int index, bool nearFirst, 
   }
   const float ux = dx / curLen, uy = dy / curLen;
   const float newX = fixedX + ux * newLength, newY = fixedY + uy * newLength;
-  PushUndoSnapshot(st, "Lengthen");
+  // FILLET (REQ-103 step 6a) reuses this function twice (plus an Arc creation) as ONE atomic
+  // fillet, and pushes its own single "Fillet" snapshot up front — pushUndo=false there suppresses
+  // this function's own push so a fillet is one undo step, not three (the bug this parameter fixes,
+  // caught by fillet-lines-basic.txt's own UNDO/REDO round-trip, TASK-102 task log).
+  if (pushUndo)
+    PushUndoSnapshot(st, "Lengthen");
   if (nearFirst) {
     st.userLinesFlat[k] = newX;
     st.userLinesFlat[k + 1] = newY;
@@ -9570,7 +9595,7 @@ static bool ApplyLengthenToLine(AppCommandState& st, int index, bool nearFirst, 
 /// here, where only the length along the arc may change. `nearFirst` selects the start endpoint
 /// (true) or the end endpoint (false) as the one that moves; the other stays exactly fixed.
 static bool ApplyLengthenToArc(AppCommandState& st, int index, bool nearFirst, float newLength,
-                               std::vector<std::string>& log) {
+                               std::vector<std::string>& log, bool pushUndo = true) {
   if (index < 0 || static_cast<size_t>(index) >= st.userArcs.size())
     return false;
   CadArc& a = st.userArcs[static_cast<size_t>(index)];
@@ -9591,7 +9616,8 @@ static bool ApplyLengthenToArc(AppCommandState& st, int index, bool nearFirst, f
   // Grows/shrinks in the sweep's OWN rotational sense (CW arcs have a negative sweepRad), so the
   // sign of the change always matches the sign of the existing sweep rather than assuming CCW.
   const float deltaTheta = std::copysign(newAbsSweep - std::fabs(a.sweepRad), a.sweepRad);
-  PushUndoSnapshot(st, "Lengthen");
+  if (pushUndo)  // see ApplyLengthenToLine's own comment on this parameter (FILLET, REQ-103 step 6a)
+    PushUndoSnapshot(st, "Lengthen");
   if (nearFirst) {
     // Extending from the start: the END (start+sweep) must stay put, so the start absorbs the
     // whole angular change in the opposite sign while sweep grows by the same amount.
@@ -9609,7 +9635,7 @@ static bool ApplyLengthenToArc(AppCommandState& st, int index, bool nearFirst, f
 /// This is AutoCAD's actual LENGTHEN behavior on a polyline (it never uniformly rescales the whole
 /// thing), and it is also the only definition that keeps every OTHER vertex's position meaningful.
 static bool ApplyLengthenToPolylineEnd(AppCommandState& st, int pi, bool nearFirst, float newLength,
-                                       std::vector<std::string>& log) {
+                                       std::vector<std::string>& log, bool pushUndo = true) {
   if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
     return false;
   const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
@@ -9640,7 +9666,8 @@ static bool ApplyLengthenToPolylineEnd(AppCommandState& st, int pi, bool nearFir
     return false;
   }
   const float ux = (mx - fx) / segLen, uy = (my - fy) / segLen;
-  PushUndoSnapshot(st, "Lengthen");
+  if (pushUndo)  // see ApplyLengthenToLine's own comment on this parameter (FILLET, REQ-103 step 6a)
+    PushUndoSnapshot(st, "Lengthen");
   st.userPolylineVerts[mIdx] = fx + ux * newSegLen;
   st.userPolylineVerts[mIdx + 1] = fy + uy * newSegLen;
   return true;
@@ -11816,6 +11843,1774 @@ void StartStretchCommand(AppCommandState& st, std::vector<std::string>& log) {
   log.push_back(
       "STRETCH — click two corners to crossing/window-select objects (right-to-left = crossing), "
       "then base point and destination. ESC cancels.");
+}
+
+// ================================================================================================
+// FILLET (REQ-103 step 6a, TASK-102). Two picked curves (Line, non-full-circle Arc, or a Polyline
+// segment) get a tangent arc between them (SolveFilletCenter et al., CadCommands.hpp — inline/pure
+// so it's unit-tested independently of this command layer, tests/FilletGeomTests.cpp), then each
+// curve is trimmed/extended to its own tangent point. Two different curves (Case B) reuses
+// LENGTHEN's ApplyLengthenToLine/ToArc/ToPolylineEnd UNCHANGED, converting the known tangent point
+// into the `newLength` those functions already accept — REQ-103's own stated reuse chain. Two
+// adjacent segments of the SAME polyline (Case A) is new: it splices the shared vertex into the two
+// tangent points (or one, at radius 0) via ReplacePolylineVerts — BREAK's own CSR-shift technique —
+// and inserts a fresh Arc entity for the corner.
+// ================================================================================================
+
+/// Is `e` (picked at pickX,pickY) an eligible FILLET curve, and if it's a Polyline, which edge
+/// (0-based) did the pick land nearest? Eligible: Line, non-full-circle Arc, any Polyline segment
+/// (open or closed). Circle and full-circle-sweep Arc are refused — no single tangent-side
+/// construction distinguishes a closed loop's "which side did you mean" (D-2026-08-24-g), the same
+/// reasoning LENGTHEN/EXTEND already exclude Circle for. Every other kind refused with a stated
+/// reason (REQ-201).
+static bool FilletEligibility(const AppCommandState& st, const SelectedEntity& e, float pickX, float pickY,
+                              int* outPolySeg, std::vector<std::string>& log) {
+  using T = SelectedEntity::Type;
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  *outPolySeg = -1;
+  switch (e.type) {
+  case T::LineSeg:
+    return true;
+  case T::Arc: {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      return false;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    if (std::fabs(std::fabs(a.sweepRad) - kTwoPi) < 1e-4f) {
+      log.push_back("FILLET — 1 full-circle arc ignored: fillet needs a curve with a definite tangent "
+                    "side. Pick a line, non-full arc, or polyline segment.");
+      return false;
+    }
+    return true;
+  }
+  case T::Polyline: {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+      return false;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    if (numVerts < 2)
+      return false;
+    const bool closed =
+        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+    const int numEdges = closed ? numVerts : (numVerts - 1);
+    int bestSeg = 0;
+    float bestD = -1.f;
+    for (int e2 = 0; e2 < numEdges; ++e2) {
+      const int viA = v0 + e2, viB = v0 + ((e2 + 1) % numVerts);
+      const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
+      float qx = 0.f, qy = 0.f;
+      ClosestPointOnSegment(st.userPolylineVerts[a3], st.userPolylineVerts[a3 + 1], st.userPolylineVerts[b3],
+                            st.userPolylineVerts[b3 + 1], pickX, pickY, &qx, &qy);
+      const float d = (qx - pickX) * (qx - pickX) + (qy - pickY) * (qy - pickY);
+      if (bestD < 0.f || d < bestD) {
+        bestD = d;
+        bestSeg = e2;
+      }
+    }
+    *outPolySeg = bestSeg;
+    return true;
+  }
+  case T::Circle:
+    log.push_back("FILLET — 1 circle ignored: fillet needs a curve with a definite tangent side. Pick a "
+                  "line, non-full arc, or polyline segment.");
+    return false;
+  default:
+    log.push_back("FILLET — 1 object ignored: only a line, arc, or polyline segment can be filleted.");
+    return false;
+  }
+}
+
+/// Builds the pure geometry \ref FilletCurve for a picked Line/Arc/Polyline-segment (\p polySeg
+/// ignored for Line/Arc).
+static bool BuildFilletCurveFromEntity(const AppCommandState& st, const SelectedEntity& e, int polySeg,
+                                       FilletCurve* out) {
+  using T = SelectedEntity::Type;
+  if (e.type == T::LineSeg) {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return false;
+    out->isLine = true;
+    out->ax = st.userLinesFlat[k];
+    out->ay = st.userLinesFlat[k + 1];
+    out->bx = st.userLinesFlat[k + 3];
+    out->by = st.userLinesFlat[k + 4];
+    return true;
+  }
+  if (e.type == T::Arc) {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      return false;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    out->isLine = false;
+    out->cx = a.cx;
+    out->cy = a.cy;
+    out->r = a.r;
+    return true;
+  }
+  if (e.type == T::Polyline) {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size() || polySeg < 0)
+      return false;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    const int viA = v0 + polySeg, viB = v0 + ((polySeg + 1) % numVerts);
+    const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
+    if (b3 + 1 >= st.userPolylineVerts.size())
+      return false;
+    out->isLine = true;
+    out->ax = st.userPolylineVerts[a3];
+    out->ay = st.userPolylineVerts[a3 + 1];
+    out->bx = st.userPolylineVerts[b3];
+    out->by = st.userPolylineVerts[b3 + 1];
+    return true;
+  }
+  return false;
+}
+
+/// "Radius is too large" detection (D-2026-08-25-b, a real user-reported bug). Pick-INDEPENDENT by
+/// design — an earlier version of this check compared the tangent-point-based near/far endpoint
+/// against the PICK-based one, which sounded plausible but was a false-positive machine: any pick
+/// past a line's own midpoint (completely ordinary FILLET usage — you often click nearer the far,
+/// kept end) disagreed with a perfectly valid small-radius tangent point, which naturally sits near
+/// the corner. The correct, pick-independent signature: `e`'s two ORIGINAL endpoints are compared
+/// against `p0` (the plain radius-0 intersection of the two curves — the true corner), and whichever
+/// is FARTHER from `p0` is that curve's own "far" end. A valid fillet always moves the NEAR end
+/// (the one already close to the corner) to the tangent point; when the requested radius is too
+/// large for the curve's own length, the tangent point ends up closer to the FAR end instead, so
+/// FILLET would silently move the wrong end (or, for a short segment, barely touch the far end
+/// while leaving the actually-picked corner completely untrimmed) — exactly what a real report
+/// described ("radius 20... drew to the bottom endpoints instead of just not drawing"). Arc uses
+/// its own start/end points the same way LENGTHEN/EXTEND already do. Polyline is not checked here —
+/// Case B already restricts it to a segment's own free end (no meaningful "swap" to detect the same
+/// way), and Case A's shared-vertex splice has no near/far selection to swap in the first place.
+static bool FilletRadiusFitsCurve(const AppCommandState& st, const SelectedEntity& e, float p0x, float p0y,
+                                  float tangentX, float tangentY) {
+  using T = SelectedEntity::Type;
+  if (e.type == T::LineSeg) {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return true;  // let the mutation itself refuse for real on a bad index
+    const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
+    const float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
+    const bool nearIsFirst = NearerToFirstPoint(p0x, p0y, x0, y0, x1, y1);
+    const float nearX = nearIsFirst ? x0 : x1, nearY = nearIsFirst ? y0 : y1;
+    const float farX = nearIsFirst ? x1 : x0, farY = nearIsFirst ? y1 : y0;
+    return FilletPointWithinSpan(nearX, nearY, farX, farY, tangentX, tangentY);
+  }
+  // Arc: not checked (returns true unconditionally) — the reported bug and its fix are both
+  // Line-specific; an angular equivalent of FilletPointWithinSpan is a real gap, not silently
+  // assumed safe (see TASK-102's own follow-up log for why it was deferred rather than rushed).
+  return true;
+}
+
+/// Case B: the two picked curves are different entities (or a Polyline's own end segment against a
+/// different entity). Trims/extends `e` (at `polySeg` if Polyline) to `tangentX,tangentY` by
+/// converting it into LENGTHEN's own `newLength` currency and calling ApplyLengthenToLine/ToArc/
+/// ToPolylineEnd UNCHANGED — REQ-103's own stated reuse chain, never re-derived.
+static bool ApplyFilletTrimSingle(AppCommandState& st, const SelectedEntity& e, int polySeg, float tangentX,
+                                  float tangentY, std::vector<std::string>& log) {
+  using T = SelectedEntity::Type;
+  if (e.type == T::LineSeg) {
+    const size_t k = static_cast<size_t>(e.index) * 6;
+    if (k + 5 >= st.userLinesFlat.size())
+      return false;
+    const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
+    const float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
+    // Which end moves is decided by nearness to the TANGENT POINT, not the pick — unlike LENGTHEN,
+    // where the pick directly names the end to change, FILLET's pick only disambiguates which
+    // corner/candidate solution to build (SolveFilletCenter); a pick anywhere along the KEPT
+    // portion of the line (which for a typical corner is most of it) must still move the
+    // corner-adjacent end, not whichever end the pick happens to be nearer to — a real bug this
+    // fixed (a pick at a line's own midpoint tied under the pick-based rule and moved the wrong,
+    // far end, refusing the trim outright; fillet-lines-basic.txt's Part B caught it).
+    const bool nearFirst = NearerToFirstPoint(tangentX, tangentY, x0, y0, x1, y1);
+    const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
+    const float newLength = std::hypot(tangentX - fixedX, tangentY - fixedY);
+    // pushUndo=false: HandleFilletViewportPick already pushed ONE "Fillet" snapshot covering both
+    // curves' trims plus the arc — REQ-103's "one undo step per fillet" (a real bug this fixed,
+    // caught by fillet-lines-basic.txt's UNDO/REDO round-trip: 3 pushes made 1 UNDO only partially
+    // revert, TASK-102 task log).
+    return ApplyLengthenToLine(st, e.index, nearFirst, newLength, log, false);
+  }
+  if (e.type == T::Arc) {
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+      return false;
+    const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+    const float sx = a.cx + a.r * std::cos(a.startRad);
+    const float sy = a.cy + a.r * std::sin(a.startRad);
+    const float ex = a.cx + a.r * std::cos(a.startRad + a.sweepRad);
+    const float ey = a.cy + a.r * std::sin(a.startRad + a.sweepRad);
+    const bool nearFirst = NearerToFirstPoint(tangentX, tangentY, sx, sy, ex, ey);  // see the Line branch's comment
+    const float newLength =
+        FilletArcTangentPointToNewLength(a.cx, a.cy, a.r, a.startRad, a.sweepRad, nearFirst, tangentX, tangentY);
+    return ApplyLengthenToArc(st, e.index, nearFirst, newLength, log, false);
+  }
+  if (e.type == T::Polyline) {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size() || polySeg < 0)
+      return false;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    const int numEdges = numVerts - 1;  // Case B never reaches a closed polyline — no free end
+    const bool nearFirst = (polySeg == 0);
+    if (!nearFirst && polySeg != numEdges - 1)
+      return false;  // not an end segment — caller already refuses this before reaching here
+    const int movingVi = nearFirst ? v0 : (v1 - 1);
+    const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
+    const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
+    if (mIdx + 1 >= st.userPolylineVerts.size() || fIdx + 1 >= st.userPolylineVerts.size())
+      return false;
+    const float fx = st.userPolylineVerts[fIdx], fy = st.userPolylineVerts[fIdx + 1];
+    const float mx = st.userPolylineVerts[mIdx], my = st.userPolylineVerts[mIdx + 1];
+    const float oldSegLen = std::hypot(mx - fx, my - fy);
+    const float newSegLen = std::hypot(tangentX - fx, tangentY - fy);
+    const float curTotal = PolylineOpenLengthOf(st, pi);
+    const float newLength = curTotal - oldSegLen + newSegLen;
+    return ApplyLengthenToPolylineEnd(st, pi, nearFirst, newLength, log, false);  // see the Line branch's comment
+  }
+  return false;
+}
+
+/// Case A: the two picked curves are adjacent segments (sharing exactly one vertex) of the SAME
+/// polyline — the classic "round this corner" case. Splices the shared vertex into the two tangent
+/// points (radius > ~0) or moves it to the single intersection point (radius ~0, vertex count
+/// unchanged), via \ref ReplacePolylineVerts, and inserts a fresh Arc entity for the corner
+/// (radius > ~0 only).
+static bool ApplyFilletPolylineCorner(AppCommandState& st, int pi, int edgeA, int edgeB, float radius,
+                                      float pick1X, float pick1Y, float pick2X, float pick2Y,
+                                      std::vector<std::string>& log) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+    return false;
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const int numVerts = v1 - v0;
+  if (numVerts < 2)
+    return false;
+  const bool closed =
+      static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+  const int numEdges = closed ? numVerts : (numVerts - 1);
+  if (edgeA < 0 || edgeA >= numEdges || edgeB < 0 || edgeB >= numEdges || edgeA == edgeB)
+    return false;
+
+  auto edgeVerts = [&](int e, int* viA, int* viB) {
+    *viA = v0 + e;
+    *viB = v0 + ((e + 1) % numVerts);
+  };
+  int aVi0 = 0, aVi1 = 0, bVi0 = 0, bVi1 = 0;
+  edgeVerts(edgeA, &aVi0, &aVi1);
+  edgeVerts(edgeB, &bVi0, &bVi1);
+  int sharedVi = -1, otherAVi = -1;
+  if (aVi0 == bVi0 || aVi0 == bVi1) {
+    sharedVi = aVi0;
+    otherAVi = aVi1;
+  } else if (aVi1 == bVi0 || aVi1 == bVi1) {
+    sharedVi = aVi1;
+    otherAVi = aVi0;
+  }
+  if (sharedVi < 0) {
+    log.push_back("FILLET — those two polyline segments are not adjacent; refused.");
+    return false;
+  }
+  const int otherBVi = (bVi0 == sharedVi) ? bVi1 : bVi0;
+
+  auto readVert = [&](int vi, float* x, float* y) {
+    *x = st.userPolylineVerts[static_cast<size_t>(vi) * 3];
+    *y = st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 1];
+  };
+  float sharedX = 0.f, sharedY = 0.f, otherAX = 0.f, otherAY = 0.f, otherBX = 0.f, otherBY = 0.f;
+  readVert(sharedVi, &sharedX, &sharedY);
+  readVert(otherAVi, &otherAX, &otherAY);
+  readVert(otherBVi, &otherBX, &otherBY);
+
+  FilletCurve curveA{};
+  curveA.isLine = true;
+  curveA.ax = otherAX;
+  curveA.ay = otherAY;
+  curveA.bx = sharedX;
+  curveA.by = sharedY;
+  FilletCurve curveB{};
+  curveB.isLine = true;
+  curveB.ax = sharedX;
+  curveB.ay = sharedY;
+  curveB.bx = otherBX;
+  curveB.by = otherBY;
+
+  float cx = 0.f, cy = 0.f;
+  if (!SolveFilletCenter(curveA, curveB, radius, pick1X, pick1Y, pick2X, pick2Y, &cx, &cy)) {
+    log.push_back("FILLET — no valid tangent arc exists for that radius at that corner; refused.");
+    return false;
+  }
+  float tAx = 0.f, tAy = 0.f, tBx = 0.f, tBy = 0.f;
+  FilletTangentPointOnLine(curveA, cx, cy, &tAx, &tAy);
+  FilletTangentPointOnLine(curveB, cx, cy, &tBx, &tBy);
+
+  const int sharedLocal = sharedVi - v0;
+  const int otherALocal = otherAVi - v0;
+  const bool aIsIncoming = (otherALocal == (sharedLocal - 1 + numVerts) % numVerts);
+  const float inTx = aIsIncoming ? tAx : tBx, inTy = aIsIncoming ? tAy : tBy;
+  const float outTx = aIsIncoming ? tBx : tAx, outTy = aIsIncoming ? tBy : tAy;
+  const bool radiusIsZero = radius < 1e-4f;
+
+  std::vector<std::pair<float, float>> newXY;
+  newXY.reserve(static_cast<size_t>(numVerts) + 1);
+  for (int vi = v0; vi < v1; ++vi) {
+    if (vi - v0 == sharedLocal) {
+      if (radiusIsZero) {
+        newXY.push_back({cx, cy});
+      } else {
+        newXY.push_back({inTx, inTy});
+        newXY.push_back({outTx, outTy});
+      }
+    } else {
+      float x = 0.f, y = 0.f;
+      readVert(vi, &x, &y);
+      newXY.push_back({x, y});
+    }
+  }
+
+  PushUndoSnapshot(st, "Fillet");
+  ReplacePolylineVerts(st, pi, newXY);
+  if (!radiusIsZero) {
+    constexpr float kPi = 3.14159265358979323846f;
+    constexpr float kTwoPi = 6.28318530717958647692f;
+    const float thetaIn = std::atan2(inTy - cy, inTx - cx);
+    const float thetaOut = std::atan2(outTy - cy, outTx - cx);
+    float sweep = FilletCcwAngleDelta(thetaIn, thetaOut);
+    if (sweep > kPi)
+      sweep -= kTwoPi;
+    CadArc arc{};
+    arc.cx = cx;
+    arc.cy = cy;
+    arc.r = radius;
+    arc.startRad = thetaIn;
+    arc.sweepRad = sweep;
+    st.userArcs.push_back(arc);
+    st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+  }
+  BumpCadGpuCache(st);
+  log.push_back(radiusIsZero ? "FILLET — polyline corner trimmed to a point (radius 0)."
+                            : "FILLET — polyline corner filleted.");
+  return true;
+}
+
+static std::string FilletPromptSuffix(const AppCommandState& st) {
+  char buf[96];
+  std::snprintf(buf, sizeof(buf), "<R=%.3f, %s>", static_cast<double>(st.filletRadius),
+               st.cornerTrimMode ? "Trim" : "No trim");
+  return buf;
+}
+
+void StartFilletCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  using FP = AppCommandState::FilletPhase;
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
+    st.active = K::None;  // pure paper-space click flow, like EXTEND/BREAK's own paper paths
+    st.paperFilletPhase = 1;
+    st.paperFilletFirstEntity = PaperEntityRef{};
+    st.paperFilletFirstPolySeg = -1;
+    log.push_back("FILLET — select first object " + FilletPromptSuffix(st) + ". ESC cancels.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = K::Fillet;
+  st.lastCommand = K::Fillet;
+  st.filletPhase = FP::WaitFirstEntity;
+  st.filletFirstEntity = SelectedEntity{};
+  st.filletFirstPolySeg = -1;
+  st.filletTextAwaitingRadius = false;
+  st.filletTextAwaitingTrim = false;
+  log.push_back("FILLET — select first object or [Radius/Trim] " + FilletPromptSuffix(st) + ". ESC cancels.");
+}
+
+/// Model-space + floating-model-space viewport-pick handler for FILLET — called from
+/// SubmitViewportPickImpl. First pick latches a curve; second pick resolves whether the two curves
+/// are the SAME polyline's adjacent segments (Case A, \ref ApplyFilletPolylineCorner) or two
+/// different curves (Case B), computes the tangent arc (or the parallel-lines semicircle special
+/// case), applies the trim/extend (Trim mode only), and loops back to "select first object".
+void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  using FP = AppCommandState::FilletPhase;
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+    log.push_back("FILLET — no object at pick.");
+    return;
+  }
+  int polySeg = -1;
+  if (!FilletEligibility(st, hit, wx, wy, &polySeg, log))
+    return;
+
+  if (st.filletPhase == FP::WaitFirstEntity) {
+    st.filletFirstEntity = hit;
+    st.filletFirstPolySeg = polySeg;
+    st.filletFirstPickX = wx;
+    st.filletFirstPickY = wy;
+    st.filletPhase = FP::WaitSecondEntity;
+    log.push_back("FILLET — select second object:");
+    return;
+  }
+
+  const bool sameEntity = (hit.type == st.filletFirstEntity.type && hit.index == st.filletFirstEntity.index);
+  if (sameEntity && hit.type != SelectedEntity::Type::Polyline) {
+    log.push_back("FILLET — select two different objects.");
+    return;
+  }
+  if (sameEntity && polySeg == st.filletFirstPolySeg) {
+    log.push_back("FILLET — select two different segments.");
+    return;
+  }
+
+  if (sameEntity) {
+    // Case A: same polyline, two segments — ApplyFilletPolylineCorner refuses if not adjacent.
+    ApplyFilletPolylineCorner(st, hit.index, st.filletFirstPolySeg, polySeg, st.filletRadius,
+                              st.filletFirstPickX, st.filletFirstPickY, wx, wy, log);
+  } else {
+    // Case B: two different entities. A Polyline is only eligible here through its own end segment
+    // (adjacent to a free/open end) — an interior segment, or any segment of a CLOSED polyline, has
+    // no single endpoint that can move without silently disturbing an uninvolved neighboring
+    // segment sharing that vertex (REQ-201).
+    auto polylineIsEndSegmentOnly = [&](const SelectedEntity& e, int seg) -> bool {
+      if (e.type != SelectedEntity::Type::Polyline)
+        return true;
+      const int pi = e.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+        return false;
+      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const bool closed =
+          static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+      if (closed) {
+        log.push_back("FILLET — a closed polyline has no free end; only an adjacent segment of the SAME "
+                      "polyline can be filleted against it.");
+        return false;
+      }
+      const int numEdges = (v1 - v0) - 1;
+      if (seg != 0 && seg != numEdges - 1) {
+        log.push_back("FILLET — only a polyline's own first or last segment can be filleted against a "
+                      "different object; an interior segment shares its vertex with a neighbor that "
+                      "would be silently disturbed.");
+        return false;
+      }
+      return true;
+    };
+    if (!polylineIsEndSegmentOnly(st.filletFirstEntity, st.filletFirstPolySeg) ||
+        !polylineIsEndSegmentOnly(hit, polySeg)) {
+      return;
+    }
+
+    FilletCurve c1{}, c2{};
+    if (!BuildFilletCurveFromEntity(st, st.filletFirstEntity, st.filletFirstPolySeg, &c1) ||
+        !BuildFilletCurveFromEntity(st, hit, polySeg, &c2)) {
+      log.push_back("FILLET — could not resolve the picked geometry; refused.");
+      return;
+    }
+
+    if (c1.isLine && c2.isLine &&
+        FilletLinesAreParallel(c1.ax, c1.ay, c1.bx, c1.by, c2.ax, c2.ay, c2.bx, c2.by)) {
+      // Documented AutoCAD special case: two parallel, non-collinear lines get a semicircle
+      // regardless of the current radius setting. Curve 1's picked endpoint is the anchor and is
+      // never moved (it is already exactly where the semicircle meets it, by construction); only
+      // curve 2 is trimmed/extended to the perpendicular projection.
+      float anchorX = 0.f, anchorY = 0.f, projX = 0.f, projY = 0.f;
+      FilletParallelSemicircle(c1.ax, c1.ay, c1.bx, c1.by, c2.ax, c2.ay, c2.bx, c2.by, st.filletFirstPickX,
+                               st.filletFirstPickY, &anchorX, &anchorY, &projX, &projY);
+      const float semiR = 0.5f * std::hypot(projX - anchorX, projY - anchorY);
+      if (semiR < 1e-4f) {
+        log.push_back("FILLET — the two lines coincide; refused.");
+      } else {
+        PushUndoSnapshot(st, "Fillet");
+        const bool ok = !st.cornerTrimMode || ApplyFilletTrimSingle(st, hit, polySeg, projX, projY, log);
+        if (ok) {
+          const float cx = 0.5f * (anchorX + projX), cy = 0.5f * (anchorY + projY);
+          CadArc arc{};
+          arc.cx = cx;
+          arc.cy = cy;
+          arc.r = semiR;
+          arc.startRad = std::atan2(anchorY - cy, anchorX - cx);
+          arc.sweepRad = 3.14159265358979323846f;  // exact semicircle
+          st.userArcs.push_back(arc);
+          st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+          BumpCadGpuCache(st);
+          log.push_back("FILLET — parallel lines connected by a semicircle (radius set by the gap "
+                        "between them, not the current FILLET radius).");
+        }
+      }
+    } else {
+      float cx = 0.f, cy = 0.f;
+      if (!SolveFilletCenter(c1, c2, st.filletRadius, st.filletFirstPickX, st.filletFirstPickY, wx, wy, &cx,
+                             &cy)) {
+        log.push_back("FILLET — no valid tangent arc exists for that radius; refused.");
+      } else {
+        float t1x = 0.f, t1y = 0.f, t2x = 0.f, t2y = 0.f;
+        if (c1.isLine)
+          FilletTangentPointOnLine(c1, cx, cy, &t1x, &t1y);
+        else
+          FilletTangentPointOnCircle(c1, cx, cy, &t1x, &t1y);
+        if (c2.isLine)
+          FilletTangentPointOnLine(c2, cx, cy, &t2x, &t2y);
+        else
+          FilletTangentPointOnCircle(c2, cx, cy, &t2x, &t2y);
+
+        // "Radius too large" check needs the TRUE corner (radius-0 intersection), not the offset
+        // candidate `cx,cy` above — reuses the same radius-0 solve the sharp-corner case already
+        // proves correct (tests/FilletGeomTests.cpp). If it fails for an unrelated reason (e.g. a
+        // Line-Circle/Circle-Circle pairing with no radius-0 analogue), skip this validation rather
+        // than blocking on it.
+        float p0x = 0.f, p0y = 0.f;
+        const bool haveP0 = SolveFilletCenter(c1, c2, 0.f, st.filletFirstPickX, st.filletFirstPickY, wx, wy, &p0x,
+                                              &p0y);
+        if (haveP0 &&
+            (!FilletRadiusFitsCurve(st, st.filletFirstEntity, p0x, p0y, t1x, t1y) ||
+             !FilletRadiusFitsCurve(st, hit, p0x, p0y, t2x, t2y))) {
+          log.push_back("FILLET — radius " + std::to_string(st.filletRadius) +
+                        " is too large for the selected objects; refused.");
+        } else {
+          PushUndoSnapshot(st, "Fillet");
+          bool ok1 = true, ok2 = true;
+          if (st.cornerTrimMode) {
+            ok1 = ApplyFilletTrimSingle(st, st.filletFirstEntity, st.filletFirstPolySeg, t1x, t1y, log);
+            ok2 = ApplyFilletTrimSingle(st, hit, polySeg, t2x, t2y, log);
+          }
+          if (ok1 && ok2) {
+            const bool radiusIsZero = st.filletRadius < 1e-4f;
+            if (!radiusIsZero) {
+              constexpr float kPi = 3.14159265358979323846f;
+              constexpr float kTwoPi = 6.28318530717958647692f;
+              const float thetaA = std::atan2(t1y - cy, t1x - cx);
+              const float thetaB = std::atan2(t2y - cy, t2x - cx);
+              float sweep = FilletCcwAngleDelta(thetaA, thetaB);
+              if (sweep > kPi)
+                sweep -= kTwoPi;
+              CadArc arc{};
+              arc.cx = cx;
+              arc.cy = cy;
+              arc.r = st.filletRadius;
+              arc.startRad = thetaA;
+              arc.sweepRad = sweep;
+              st.userArcs.push_back(arc);
+              st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+            }
+            BumpCadGpuCache(st);
+            log.push_back(radiusIsZero ? "FILLET — corner trimmed to a point (radius 0)."
+                                       : "FILLET — corner filleted.");
+          }
+        }
+      }
+    }
+  }
+
+  st.filletPhase = FP::WaitFirstEntity;
+  st.filletFirstEntity = SelectedEntity{};
+  st.filletFirstPolySeg = -1;
+  log.push_back("FILLET — select first object or [Radius/Trim] " + FilletPromptSuffix(st) + ". ESC cancels.");
+}
+
+/// Typed command-line handling for FILLET's R(adius)/T(rim) sub-commands, only meaningful at
+/// WaitFirstEntity — mirrors LENGTHEN's mode-letter shape (`TryLengthenModeToggle`), simplified:
+/// FILLET has no pending-pick-awaiting-a-value latch, since R/T only ever change a persisted
+/// setting, never apply to an already-picked object.
+bool HandleFilletText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+  using FP = AppCommandState::FilletPhase;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  const std::string low = StringUtil::toLowerAsciiCopy(line);
+  if (st.filletPhase != FP::WaitFirstEntity) {
+    log.push_back("FILLET — pick the second object in the viewport, or ESC to cancel.");
+    return false;
+  }
+  if (st.filletTextAwaitingRadius) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !(v >= 0.f) || !std::isfinite(v)) {
+      log.push_back("FILLET — radius must be a non-negative finite number.");
+      return false;
+    }
+    st.filletRadius = v;
+    st.filletTextAwaitingRadius = false;
+    log.push_back("FILLET — radius set to " + std::to_string(v) + ". Select first object or [Radius/Trim]:");
+    return true;
+  }
+  if (st.filletTextAwaitingTrim) {
+    if (low == "t" || low == "trim") {
+      st.cornerTrimMode = 1;
+    } else if (low == "n" || low == "notrim" || low == "no trim") {
+      st.cornerTrimMode = 0;
+    } else {
+      log.push_back("FILLET — type T (Trim) or N (No trim).");
+      return false;
+    }
+    st.filletTextAwaitingTrim = false;
+    log.push_back(std::string("FILLET — trim mode set to ") + (st.cornerTrimMode ? "Trim" : "No trim") +
+                  ". Select first object or [Radius/Trim]:");
+    return true;
+  }
+  if (low == "r" || low == "radius") {
+    st.filletTextAwaitingRadius = true;
+    log.push_back("FILLET — specify fillet radius <" + std::to_string(st.filletRadius) + ">:");
+    return true;
+  }
+  if (low == "t" || low == "trim") {
+    st.filletTextAwaitingTrim = true;
+    log.push_back(std::string("FILLET — Enter Trim mode option [Trim/No trim] <") +
+                  (st.cornerTrimMode ? "Trim" : "No trim") + ">:");
+    return true;
+  }
+  log.push_back("FILLET — type R (Radius) or T (Trim), or pick an object in the viewport.");
+  return false;
+}
+
+// ------------------------------------------------------------------------------------------------
+// FILLET, pure-paper-space path (step 6a) — full parity with model space (Q3, D-2026-08-24-g).
+// Mirrors the model-space functions above one-for-one against PaperLayout's stores instead of
+// AppCommandState's — the same unavoidable duplication MIRROR/EXTEND/BREAK's own paper paths
+// already accept (this codebase's two-store convention, no shared entity representation).
+// ------------------------------------------------------------------------------------------------
+
+bool PaperFilletEligibility(const PaperLayout& L, const PaperEntityRef& ref, float pickX, float pickY,
+                            int* outPolySeg, std::vector<std::string>& log) {
+  using T = PaperEntityRef::Type;
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  *outPolySeg = -1;
+  switch (ref.type) {
+  case T::Line:
+    return true;
+  case T::Arc: {
+    if (ref.index < 0 || static_cast<size_t>(ref.index) >= L.paperArcs.size())
+      return false;
+    const CadArc& a = L.paperArcs[static_cast<size_t>(ref.index)];
+    if (std::fabs(std::fabs(a.sweepRad) - kTwoPi) < 1e-4f) {
+      log.push_back("FILLET — 1 full-circle arc ignored: fillet needs a curve with a definite tangent "
+                    "side. Pick a line, non-full arc, or polyline segment.");
+      return false;
+    }
+    return true;
+  }
+  case T::Polyline: {
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L.paperPolyOffsets.size())
+      return false;
+    const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    if (numVerts < 2)
+      return false;
+    const bool closed =
+        static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)];
+    const int numEdges = closed ? numVerts : (numVerts - 1);
+    int bestSeg = 0;
+    float bestD = -1.f;
+    for (int e2 = 0; e2 < numEdges; ++e2) {
+      const int viA = v0 + e2, viB = v0 + ((e2 + 1) % numVerts);
+      const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
+      float qx = 0.f, qy = 0.f;
+      ClosestPointOnSegment(L.paperPolyVerts[a3], L.paperPolyVerts[a3 + 1], L.paperPolyVerts[b3],
+                            L.paperPolyVerts[b3 + 1], pickX, pickY, &qx, &qy);
+      const float d = (qx - pickX) * (qx - pickX) + (qy - pickY) * (qy - pickY);
+      if (bestD < 0.f || d < bestD) {
+        bestD = d;
+        bestSeg = e2;
+      }
+    }
+    *outPolySeg = bestSeg;
+    return true;
+  }
+  case T::Circle:
+    log.push_back("FILLET — 1 circle ignored: fillet needs a curve with a definite tangent side. Pick a "
+                  "line, non-full arc, or polyline segment.");
+    return false;
+  default:
+    log.push_back("FILLET — 1 object ignored: only a line, arc, or polyline segment can be filleted.");
+    return false;
+  }
+}
+
+static bool BuildFilletCurveFromPaperEntity(const PaperLayout& L, const PaperEntityRef& ref, int polySeg,
+                                            FilletCurve* out) {
+  using T = PaperEntityRef::Type;
+  if (ref.type == T::Line) {
+    const size_t k = static_cast<size_t>(ref.index) * 6;
+    if (k + 5 >= L.paperLines.size())
+      return false;
+    out->isLine = true;
+    out->ax = L.paperLines[k];
+    out->ay = L.paperLines[k + 1];
+    out->bx = L.paperLines[k + 3];
+    out->by = L.paperLines[k + 4];
+    return true;
+  }
+  if (ref.type == T::Arc) {
+    if (ref.index < 0 || static_cast<size_t>(ref.index) >= L.paperArcs.size())
+      return false;
+    const CadArc& a = L.paperArcs[static_cast<size_t>(ref.index)];
+    out->isLine = false;
+    out->cx = a.cx;
+    out->cy = a.cy;
+    out->r = a.r;
+    return true;
+  }
+  if (ref.type == T::Polyline) {
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L.paperPolyOffsets.size() || polySeg < 0)
+      return false;
+    const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    const int viA = v0 + polySeg, viB = v0 + ((polySeg + 1) % numVerts);
+    const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
+    if (b3 + 1 >= L.paperPolyVerts.size())
+      return false;
+    out->isLine = true;
+    out->ax = L.paperPolyVerts[a3];
+    out->ay = L.paperPolyVerts[a3 + 1];
+    out->bx = L.paperPolyVerts[b3];
+    out->by = L.paperPolyVerts[b3 + 1];
+    return true;
+  }
+  return false;
+}
+
+/// Paper-space equivalent of the model-space `FilletRadiusFitsCurve` — see its own comment
+/// (D-2026-08-25-b) for the full "radius is too large" reasoning.
+static bool PaperFilletRadiusFitsCurve(const PaperLayout& L, const PaperEntityRef& ref, float p0x, float p0y,
+                                       float tangentX, float tangentY) {
+  using T = PaperEntityRef::Type;
+  if (ref.type == T::Line) {
+    const size_t k = static_cast<size_t>(ref.index) * 6;
+    if (k + 5 >= L.paperLines.size())
+      return true;
+    const float x0 = L.paperLines[k], y0 = L.paperLines[k + 1];
+    const float x1 = L.paperLines[k + 3], y1 = L.paperLines[k + 4];
+    const bool nearIsFirst = NearerToFirstPoint(p0x, p0y, x0, y0, x1, y1);
+    const float nearX = nearIsFirst ? x0 : x1, nearY = nearIsFirst ? y0 : y1;
+    const float farX = nearIsFirst ? x1 : x0, farY = nearIsFirst ? y1 : y0;
+    return FilletPointWithinSpan(nearX, nearY, farX, farY, tangentX, tangentY);
+  }
+  // Arc: see the model-space FilletRadiusFitsCurve's own comment — not checked here either.
+  return true;
+}
+
+/// Case B, paper store: reuses `ApplyLengthToPaperEntityMutation` — the shared paper mutation
+/// LENGTHEN/EXTEND already established — by converting the known tangent point into its `newLen`
+/// currency. That function pushes no undo snapshot itself (unlike its model-space counterparts), so
+/// there is no double-push to guard against here, unlike the model-space `ApplyFilletTrimSingle`.
+static bool ApplyFilletTrimSingleToPaperEntity(PaperLayout* L, const PaperEntityRef& ref, int polySeg,
+                                               float tangentX, float tangentY) {
+  using T = PaperEntityRef::Type;
+  if (ref.type == T::Line) {
+    const size_t k = static_cast<size_t>(ref.index) * 6;
+    if (k + 5 >= L->paperLines.size())
+      return false;
+    const float x0 = L->paperLines[k], y0 = L->paperLines[k + 1];
+    const float x1 = L->paperLines[k + 3], y1 = L->paperLines[k + 4];
+    const bool nearFirst = NearerToFirstPoint(tangentX, tangentY, x0, y0, x1, y1);  // nearest-to-TANGENT, not pick
+    const float fixedX = nearFirst ? x1 : x0, fixedY = nearFirst ? y1 : y0;
+    const float newLen = std::hypot(tangentX - fixedX, tangentY - fixedY);
+    ApplyLengthToPaperEntityMutation(L, ref, nearFirst, 0.f, newLen);
+    return true;
+  }
+  if (ref.type == T::Arc) {
+    if (ref.index < 0 || static_cast<size_t>(ref.index) >= L->paperArcs.size())
+      return false;
+    const CadArc& a = L->paperArcs[static_cast<size_t>(ref.index)];
+    const float sx = a.cx + a.r * std::cos(a.startRad), sy = a.cy + a.r * std::sin(a.startRad);
+    const float ex = a.cx + a.r * std::cos(a.startRad + a.sweepRad);
+    const float ey = a.cy + a.r * std::sin(a.startRad + a.sweepRad);
+    const bool nearFirst = NearerToFirstPoint(tangentX, tangentY, sx, sy, ex, ey);
+    const float newLen =
+        FilletArcTangentPointToNewLength(a.cx, a.cy, a.r, a.startRad, a.sweepRad, nearFirst, tangentX, tangentY);
+    ApplyLengthToPaperEntityMutation(L, ref, nearFirst, 0.f, newLen);
+    return true;
+  }
+  if (ref.type == T::Polyline) {
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size() || polySeg < 0)
+      return false;
+    const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    const int numEdges = numVerts - 1;  // Case B never reaches a closed polyline — no free end
+    const bool nearFirst = (polySeg == 0);
+    if (!nearFirst && polySeg != numEdges - 1)
+      return false;
+    const int movingVi = nearFirst ? v0 : (v1 - 1);
+    const int fixedVi = nearFirst ? (v0 + 1) : (v1 - 2);
+    const size_t mIdx = static_cast<size_t>(movingVi) * 3, fIdx = static_cast<size_t>(fixedVi) * 3;
+    if (mIdx + 1 >= L->paperPolyVerts.size() || fIdx + 1 >= L->paperPolyVerts.size())
+      return false;
+    const float fx = L->paperPolyVerts[fIdx], fy = L->paperPolyVerts[fIdx + 1];
+    const float mx = L->paperPolyVerts[mIdx], my = L->paperPolyVerts[mIdx + 1];
+    const float oldSegLen = std::hypot(mx - fx, my - fy);
+    const float newSegLen = std::hypot(tangentX - fx, tangentY - fy);
+    float curTotal = 0.f;
+    for (int vi = v0; vi + 1 < v1; ++vi) {
+      const size_t a = static_cast<size_t>(vi) * 3, b = static_cast<size_t>(vi + 1) * 3;
+      curTotal += std::hypot(L->paperPolyVerts[b] - L->paperPolyVerts[a], L->paperPolyVerts[b + 1] - L->paperPolyVerts[a + 1]);
+    }
+    const float newLen = curTotal - oldSegLen + newSegLen;
+    ApplyLengthToPaperEntityMutation(L, ref, nearFirst, curTotal, newLen);
+    return true;
+  }
+  return false;
+}
+
+/// Case A, paper store: same-polyline adjacent segments — the paper equivalent of
+/// `ApplyFilletPolylineCorner`, using `ReplacePaperPolylineVerts` (BREAK's own paper CSR-shift
+/// helper) in place of the model store's `ReplacePolylineVerts`.
+static bool ApplyFilletPolylineCornerPaper(AppCommandState& st, PaperLayout* L, int pi, int edgeA, int edgeB,
+                                           float radius, float pick1X, float pick1Y, float pick2X, float pick2Y,
+                                           std::vector<std::string>& log) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size())
+    return false;
+  const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+  const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+  const int numVerts = v1 - v0;
+  if (numVerts < 2)
+    return false;
+  const bool closed =
+      static_cast<size_t>(pi) < L->paperPolyClosed.size() && L->paperPolyClosed[static_cast<size_t>(pi)];
+  const int numEdges = closed ? numVerts : (numVerts - 1);
+  if (edgeA < 0 || edgeA >= numEdges || edgeB < 0 || edgeB >= numEdges || edgeA == edgeB)
+    return false;
+
+  auto edgeVerts = [&](int e, int* viA, int* viB) {
+    *viA = v0 + e;
+    *viB = v0 + ((e + 1) % numVerts);
+  };
+  int aVi0 = 0, aVi1 = 0, bVi0 = 0, bVi1 = 0;
+  edgeVerts(edgeA, &aVi0, &aVi1);
+  edgeVerts(edgeB, &bVi0, &bVi1);
+  int sharedVi = -1, otherAVi = -1;
+  if (aVi0 == bVi0 || aVi0 == bVi1) {
+    sharedVi = aVi0;
+    otherAVi = aVi1;
+  } else if (aVi1 == bVi0 || aVi1 == bVi1) {
+    sharedVi = aVi1;
+    otherAVi = aVi0;
+  }
+  if (sharedVi < 0) {
+    log.push_back("FILLET — those two polyline segments are not adjacent; refused.");
+    return false;
+  }
+  const int otherBVi = (bVi0 == sharedVi) ? bVi1 : bVi0;
+
+  auto readVert = [&](int vi, float* x, float* y) {
+    *x = L->paperPolyVerts[static_cast<size_t>(vi) * 3];
+    *y = L->paperPolyVerts[static_cast<size_t>(vi) * 3 + 1];
+  };
+  float sharedX = 0.f, sharedY = 0.f, otherAX = 0.f, otherAY = 0.f, otherBX = 0.f, otherBY = 0.f;
+  readVert(sharedVi, &sharedX, &sharedY);
+  readVert(otherAVi, &otherAX, &otherAY);
+  readVert(otherBVi, &otherBX, &otherBY);
+
+  FilletCurve curveA{};
+  curveA.isLine = true;
+  curveA.ax = otherAX;
+  curveA.ay = otherAY;
+  curveA.bx = sharedX;
+  curveA.by = sharedY;
+  FilletCurve curveB{};
+  curveB.isLine = true;
+  curveB.ax = sharedX;
+  curveB.ay = sharedY;
+  curveB.bx = otherBX;
+  curveB.by = otherBY;
+
+  float cx = 0.f, cy = 0.f;
+  if (!SolveFilletCenter(curveA, curveB, radius, pick1X, pick1Y, pick2X, pick2Y, &cx, &cy)) {
+    log.push_back("FILLET — no valid tangent arc exists for that radius at that corner; refused.");
+    return false;
+  }
+  float tAx = 0.f, tAy = 0.f, tBx = 0.f, tBy = 0.f;
+  FilletTangentPointOnLine(curveA, cx, cy, &tAx, &tAy);
+  FilletTangentPointOnLine(curveB, cx, cy, &tBx, &tBy);
+
+  const int sharedLocal = sharedVi - v0;
+  const int otherALocal = otherAVi - v0;
+  const bool aIsIncoming = (otherALocal == (sharedLocal - 1 + numVerts) % numVerts);
+  const float inTx = aIsIncoming ? tAx : tBx, inTy = aIsIncoming ? tAy : tBy;
+  const float outTx = aIsIncoming ? tBx : tAx, outTy = aIsIncoming ? tBy : tAy;
+  const bool radiusIsZero = radius < 1e-4f;
+
+  std::vector<std::pair<float, float>> newXY;
+  newXY.reserve(static_cast<size_t>(numVerts) + 1);
+  for (int vi = v0; vi < v1; ++vi) {
+    if (vi - v0 == sharedLocal) {
+      if (radiusIsZero) {
+        newXY.push_back({cx, cy});
+      } else {
+        newXY.push_back({inTx, inTy});
+        newXY.push_back({outTx, outTy});
+      }
+    } else {
+      float x = 0.f, y = 0.f;
+      readVert(vi, &x, &y);
+      newXY.push_back({x, y});
+    }
+  }
+
+  PushUndoSnapshot(st, "Fillet paper geometry");
+  ReplacePaperPolylineVerts(L, pi, newXY);
+  if (!radiusIsZero) {
+    constexpr float kPi = 3.14159265358979323846f;
+    constexpr float kTwoPi = 6.28318530717958647692f;
+    const float thetaIn = std::atan2(inTy - cy, inTx - cx);
+    const float thetaOut = std::atan2(outTy - cy, outTx - cx);
+    float sweep = FilletCcwAngleDelta(thetaIn, thetaOut);
+    if (sweep > kPi)
+      sweep -= kTwoPi;
+    CadArc arc{};
+    arc.cx = cx;
+    arc.cy = cy;
+    arc.r = radius;
+    arc.startRad = thetaIn;
+    arc.sweepRad = sweep;
+    L->paperArcs.push_back(arc);
+    L->paperArcAttrs.push_back(MakeNewEntityAttrs(st));
+  }
+  BumpCadGpuCache(st);
+  log.push_back(radiusIsZero ? "FILLET — polyline corner trimmed to a point (radius 0)."
+                            : "FILLET — polyline corner filleted.");
+  return true;
+}
+
+bool ApplyFilletToPaperEntities(AppCommandState& st, const PaperEntityRef& first, int firstPolySeg,
+                                float firstPickX, float firstPickY, const PaperEntityRef& second,
+                                int secondPolySeg, float pickX, float pickY, std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L)
+    return false;
+
+  const bool sameEntity = (second.type == first.type && second.index == first.index);
+  if (sameEntity && second.type != PaperEntityRef::Type::Polyline) {
+    log.push_back("FILLET — select two different objects.");
+    return false;
+  }
+  if (sameEntity && secondPolySeg == firstPolySeg) {
+    log.push_back("FILLET — select two different segments.");
+    return false;
+  }
+
+  if (sameEntity)
+    return ApplyFilletPolylineCornerPaper(st, L, second.index, firstPolySeg, secondPolySeg, st.filletRadius,
+                                          firstPickX, firstPickY, pickX, pickY, log);
+
+  auto polylineIsEndSegmentOnly = [&](const PaperEntityRef& ref, int seg) -> bool {
+    if (ref.type != PaperEntityRef::Type::Polyline)
+      return true;
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size())
+      return false;
+    const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const bool closed =
+        static_cast<size_t>(pi) < L->paperPolyClosed.size() && L->paperPolyClosed[static_cast<size_t>(pi)];
+    if (closed) {
+      log.push_back("FILLET — a closed polyline has no free end; only an adjacent segment of the SAME "
+                    "polyline can be filleted against it.");
+      return false;
+    }
+    const int numEdges = (v1 - v0) - 1;
+    if (seg != 0 && seg != numEdges - 1) {
+      log.push_back("FILLET — only a polyline's own first or last segment can be filleted against a "
+                    "different object; an interior segment shares its vertex with a neighbor that would "
+                    "be silently disturbed.");
+      return false;
+    }
+    return true;
+  };
+  if (!polylineIsEndSegmentOnly(first, firstPolySeg) || !polylineIsEndSegmentOnly(second, secondPolySeg))
+    return false;
+
+  FilletCurve c1{}, c2{};
+  if (!BuildFilletCurveFromPaperEntity(*L, first, firstPolySeg, &c1) ||
+      !BuildFilletCurveFromPaperEntity(*L, second, secondPolySeg, &c2)) {
+    log.push_back("FILLET — could not resolve the picked geometry; refused.");
+    return false;
+  }
+
+  if (c1.isLine && c2.isLine && FilletLinesAreParallel(c1.ax, c1.ay, c1.bx, c1.by, c2.ax, c2.ay, c2.bx, c2.by)) {
+    float anchorX = 0.f, anchorY = 0.f, projX = 0.f, projY = 0.f;
+    FilletParallelSemicircle(c1.ax, c1.ay, c1.bx, c1.by, c2.ax, c2.ay, c2.bx, c2.by, firstPickX, firstPickY,
+                             &anchorX, &anchorY, &projX, &projY);
+    const float semiR = 0.5f * std::hypot(projX - anchorX, projY - anchorY);
+    if (semiR < 1e-4f) {
+      log.push_back("FILLET — the two lines coincide; refused.");
+      return false;
+    }
+    PushUndoSnapshot(st, "Fillet paper geometry");
+    if (st.cornerTrimMode)
+      ApplyFilletTrimSingleToPaperEntity(L, second, secondPolySeg, projX, projY);
+    const float cx = 0.5f * (anchorX + projX), cy = 0.5f * (anchorY + projY);
+    CadArc arc{};
+    arc.cx = cx;
+    arc.cy = cy;
+    arc.r = semiR;
+    arc.startRad = std::atan2(anchorY - cy, anchorX - cx);
+    arc.sweepRad = 3.14159265358979323846f;
+    L->paperArcs.push_back(arc);
+    L->paperArcAttrs.push_back(MakeNewEntityAttrs(st));
+    BumpCadGpuCache(st);
+    log.push_back("FILLET — parallel lines connected by a semicircle (radius set by the gap between "
+                  "them, not the current FILLET radius).");
+    return true;
+  }
+
+  float cx = 0.f, cy = 0.f;
+  if (!SolveFilletCenter(c1, c2, st.filletRadius, firstPickX, firstPickY, pickX, pickY, &cx, &cy)) {
+    log.push_back("FILLET — no valid tangent arc exists for that radius; refused.");
+    return false;
+  }
+  float t1x = 0.f, t1y = 0.f, t2x = 0.f, t2y = 0.f;
+  if (c1.isLine)
+    FilletTangentPointOnLine(c1, cx, cy, &t1x, &t1y);
+  else
+    FilletTangentPointOnCircle(c1, cx, cy, &t1x, &t1y);
+  if (c2.isLine)
+    FilletTangentPointOnLine(c2, cx, cy, &t2x, &t2y);
+  else
+    FilletTangentPointOnCircle(c2, cx, cy, &t2x, &t2y);
+
+  // See the model-space call site's own comment for why this needs a fresh radius-0 solve rather
+  // than the offset candidate `cx,cy` above.
+  float p0x = 0.f, p0y = 0.f;
+  const bool haveP0 = SolveFilletCenter(c1, c2, 0.f, firstPickX, firstPickY, pickX, pickY, &p0x, &p0y);
+  if (haveP0 && (!PaperFilletRadiusFitsCurve(*L, first, p0x, p0y, t1x, t1y) ||
+                !PaperFilletRadiusFitsCurve(*L, second, p0x, p0y, t2x, t2y))) {
+    log.push_back("FILLET — radius " + std::to_string(st.filletRadius) +
+                  " is too large for the selected objects; refused.");
+    return false;
+  }
+
+  PushUndoSnapshot(st, "Fillet paper geometry");
+  if (st.cornerTrimMode) {
+    ApplyFilletTrimSingleToPaperEntity(L, first, firstPolySeg, t1x, t1y);
+    ApplyFilletTrimSingleToPaperEntity(L, second, secondPolySeg, t2x, t2y);
+  }
+  const bool radiusIsZero = st.filletRadius < 1e-4f;
+  if (!radiusIsZero) {
+    constexpr float kPi = 3.14159265358979323846f;
+    constexpr float kTwoPi = 6.28318530717958647692f;
+    const float thetaA = std::atan2(t1y - cy, t1x - cx);
+    const float thetaB = std::atan2(t2y - cy, t2x - cx);
+    float sweep = FilletCcwAngleDelta(thetaA, thetaB);
+    if (sweep > kPi)
+      sweep -= kTwoPi;
+    CadArc arc{};
+    arc.cx = cx;
+    arc.cy = cy;
+    arc.r = st.filletRadius;
+    arc.startRad = thetaA;
+    arc.sweepRad = sweep;
+    L->paperArcs.push_back(arc);
+    L->paperArcAttrs.push_back(MakeNewEntityAttrs(st));
+  }
+  BumpCadGpuCache(st);
+  log.push_back(radiusIsZero ? "FILLET — corner trimmed to a point (radius 0)." : "FILLET — corner filleted.");
+  return true;
+}
+
+// ================================================================================================
+// CHAMFER (REQ-103 step 6b, TASK-103). Reuses almost everything FILLET (step 6a, above) already
+// built: `BuildFilletCurveFromEntity`/`ApplyFilletTrimSingle` unchanged (both dispatch by entity
+// type and simply never see an Arc, since CHAMFER refuses it upstream), the same Case A/B split,
+// the same `cornerTrimMode` toggle, `SolveFilletCenter(c1,c2,0.f,...)` for the two curves'
+// intersection point (FILLET's own radius-0 path). Only the corner-point construction is new
+// (`ChamferPointAtDistance`/`ChamferRayIntersect`, CadCommands.hpp) and the connector is an
+// ordinary Line, not an Arc.
+// ================================================================================================
+
+constexpr float kChamferDegToRad = 0.01745329251994329577f;
+
+/// Is `e` (picked at pickX,pickY) an eligible CHAMFER curve, and if it's a Polyline, which edge?
+/// Eligible: Line, any Polyline segment (open or closed). Arc/Circle refused — chamfer connects two
+/// straight curves only, measured by distance/angle from their intersection; no standard
+/// chamfer-to-arc geometry exists (matching AutoCAD's own restriction). Every other kind refused
+/// with a stated reason (REQ-201).
+static bool ChamferEligibility(const AppCommandState& st, const SelectedEntity& e, float pickX, float pickY,
+                               int* outPolySeg, std::vector<std::string>& log) {
+  using T = SelectedEntity::Type;
+  *outPolySeg = -1;
+  switch (e.type) {
+  case T::LineSeg:
+    return true;
+  case T::Polyline: {
+    const int pi = e.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+      return false;
+    const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+    const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    if (numVerts < 2)
+      return false;
+    const bool closed =
+        static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+    const int numEdges = closed ? numVerts : (numVerts - 1);
+    int bestSeg = 0;
+    float bestD = -1.f;
+    for (int e2 = 0; e2 < numEdges; ++e2) {
+      const int viA = v0 + e2, viB = v0 + ((e2 + 1) % numVerts);
+      const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
+      float qx = 0.f, qy = 0.f;
+      ClosestPointOnSegment(st.userPolylineVerts[a3], st.userPolylineVerts[a3 + 1], st.userPolylineVerts[b3],
+                            st.userPolylineVerts[b3 + 1], pickX, pickY, &qx, &qy);
+      const float d = (qx - pickX) * (qx - pickX) + (qy - pickY) * (qy - pickY);
+      if (bestD < 0.f || d < bestD) {
+        bestD = d;
+        bestSeg = e2;
+      }
+    }
+    *outPolySeg = bestSeg;
+    return true;
+  }
+  case T::Arc:
+    log.push_back("CHAMFER — 1 arc ignored: chamfer connects two straight curves only, measured by "
+                  "distance/angle from their intersection — no standard chamfer-to-arc geometry "
+                  "exists. Pick a line or polyline segment.");
+    return false;
+  case T::Circle:
+    log.push_back("CHAMFER — 1 circle ignored: chamfer connects two straight curves only. Pick a "
+                  "line or polyline segment.");
+    return false;
+  default:
+    log.push_back("CHAMFER — 1 object ignored: only a line or polyline segment can be chamfered.");
+    return false;
+  }
+}
+
+/// Resolves the current mode+values into the two chamfer points for curves `c1`/`c2`, whose
+/// intersection is `(px,py)`. Distance/Distance: each point is its own curve's persisted distance
+/// from the intersection. Distance/Angle: curve 1's point is `chamferDist1` from the intersection;
+/// curve 2's point is where curve 1's kept direction, rotated by `chamferAngle`, meets curve 2.
+/// False (REQ-201, caller states the reason) only in Distance/Angle mode when neither rotation
+/// sense reaches curve 2 at all.
+static bool ChamferResolvePoints(const AppCommandState& st, const FilletCurve& c1, const FilletCurve& c2, float px,
+                                 float py, float pick1X, float pick1Y, float pick2X, float pick2Y, float* out1X,
+                                 float* out1Y, float* out2X, float* out2Y) {
+  ChamferPointAtDistance(c1, px, py, st.chamferDist1, pick1X, pick1Y, out1X, out1Y);
+  if (st.chamferMode == 0) {
+    ChamferPointAtDistance(c2, px, py, st.chamferDist2, pick2X, pick2Y, out2X, out2Y);
+    return true;
+  }
+  return ChamferRayIntersect(c1, *out1X, *out1Y, pick1X, pick1Y, st.chamferAngle * kChamferDegToRad, c2, pick2X,
+                             pick2Y, out2X, out2Y);
+}
+
+/// Case A: adjacent segments of the SAME polyline — the CHAMFER equivalent of
+/// `ApplyFilletPolylineCorner`. Splices the shared vertex into the two chamfer points (or one, if
+/// both distances/the single Distance/Angle distance are ~0) and inserts a fresh Line connector
+/// (radius-0-equivalent case: none).
+static bool ApplyChamferPolylineCorner(AppCommandState& st, int pi, int edgeA, int edgeB, float pick1X,
+                                       float pick1Y, float pick2X, float pick2Y, std::vector<std::string>& log) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+    return false;
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  const int numVerts = v1 - v0;
+  if (numVerts < 2)
+    return false;
+  const bool closed =
+      static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+  const int numEdges = closed ? numVerts : (numVerts - 1);
+  if (edgeA < 0 || edgeA >= numEdges || edgeB < 0 || edgeB >= numEdges || edgeA == edgeB)
+    return false;
+
+  auto edgeVerts = [&](int e, int* viA, int* viB) {
+    *viA = v0 + e;
+    *viB = v0 + ((e + 1) % numVerts);
+  };
+  int aVi0 = 0, aVi1 = 0, bVi0 = 0, bVi1 = 0;
+  edgeVerts(edgeA, &aVi0, &aVi1);
+  edgeVerts(edgeB, &bVi0, &bVi1);
+  int sharedVi = -1, otherAVi = -1;
+  if (aVi0 == bVi0 || aVi0 == bVi1) {
+    sharedVi = aVi0;
+    otherAVi = aVi1;
+  } else if (aVi1 == bVi0 || aVi1 == bVi1) {
+    sharedVi = aVi1;
+    otherAVi = aVi0;
+  }
+  if (sharedVi < 0) {
+    log.push_back("CHAMFER — those two polyline segments are not adjacent; refused.");
+    return false;
+  }
+  const int otherBVi = (bVi0 == sharedVi) ? bVi1 : bVi0;
+
+  auto readVert = [&](int vi, float* x, float* y) {
+    *x = st.userPolylineVerts[static_cast<size_t>(vi) * 3];
+    *y = st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 1];
+  };
+  float sharedX = 0.f, sharedY = 0.f, otherAX = 0.f, otherAY = 0.f, otherBX = 0.f, otherBY = 0.f;
+  readVert(sharedVi, &sharedX, &sharedY);
+  readVert(otherAVi, &otherAX, &otherAY);
+  readVert(otherBVi, &otherBX, &otherBY);
+
+  FilletCurve curveA{};
+  curveA.isLine = true;
+  curveA.ax = otherAX;
+  curveA.ay = otherAY;
+  curveA.bx = sharedX;
+  curveA.by = sharedY;
+  FilletCurve curveB{};
+  curveB.isLine = true;
+  curveB.ax = sharedX;
+  curveB.ay = sharedY;
+  curveB.bx = otherBX;
+  curveB.by = otherBY;
+
+  float px = 0.f, py = 0.f;
+  if (!SolveFilletCenter(curveA, curveB, 0.f, pick1X, pick1Y, pick2X, pick2Y, &px, &py)) {
+    log.push_back("CHAMFER — those two segments are parallel; no corner exists; refused.");
+    return false;
+  }
+  float dAx = 0.f, dAy = 0.f, dBx = 0.f, dBy = 0.f;
+  if (!ChamferResolvePoints(st, curveA, curveB, px, py, pick1X, pick1Y, pick2X, pick2Y, &dAx, &dAy, &dBx, &dBy)) {
+    log.push_back("CHAMFER — that angle does not reach the second segment; refused.");
+    return false;
+  }
+
+  const int sharedLocal = sharedVi - v0;
+  const int otherALocal = otherAVi - v0;
+  const bool aIsIncoming = (otherALocal == (sharedLocal - 1 + numVerts) % numVerts);
+  const float inX = aIsIncoming ? dAx : dBx, inY = aIsIncoming ? dAy : dBy;
+  const float outX = aIsIncoming ? dBx : dAx, outY = aIsIncoming ? dBy : dAy;
+  const bool bothZero = (st.chamferMode == 0) ? (st.chamferDist1 < 1e-4f && st.chamferDist2 < 1e-4f)
+                                              : (st.chamferDist1 < 1e-4f);
+
+  std::vector<std::pair<float, float>> newXY;
+  newXY.reserve(static_cast<size_t>(numVerts) + 1);
+  for (int vi = v0; vi < v1; ++vi) {
+    if (vi - v0 == sharedLocal) {
+      if (bothZero) {
+        newXY.push_back({px, py});
+      } else {
+        newXY.push_back({inX, inY});
+        newXY.push_back({outX, outY});
+      }
+    } else {
+      float x = 0.f, y = 0.f;
+      readVert(vi, &x, &y);
+      newXY.push_back({x, y});
+    }
+  }
+
+  PushUndoSnapshot(st, "Chamfer");
+  ReplacePolylineVerts(st, pi, newXY);
+  if (!bothZero) {
+    const size_t li = st.userLinesFlat.size() / 6;
+    st.userLinesFlat.push_back(inX);
+    st.userLinesFlat.push_back(inY);
+    st.userLinesFlat.push_back(0.f);
+    st.userLinesFlat.push_back(outX);
+    st.userLinesFlat.push_back(outY);
+    st.userLinesFlat.push_back(0.f);
+    st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+    (void)li;
+  }
+  BumpCadGpuCache(st);
+  log.push_back(bothZero ? "CHAMFER — polyline corner trimmed to a point (distance 0)."
+                        : "CHAMFER — polyline corner chamfered.");
+  return true;
+}
+
+static std::string ChamferPromptSuffix(const AppCommandState& st) {
+  char buf[128];
+  if (st.chamferMode == 0)
+    std::snprintf(buf, sizeof(buf), "<D1=%.3f, D2=%.3f, %s>", static_cast<double>(st.chamferDist1),
+                 static_cast<double>(st.chamferDist2), st.cornerTrimMode ? "Trim" : "No trim");
+  else
+    std::snprintf(buf, sizeof(buf), "<D=%.3f, A=%.1f, %s>", static_cast<double>(st.chamferDist1),
+                 static_cast<double>(st.chamferAngle), st.cornerTrimMode ? "Trim" : "No trim");
+  return buf;
+}
+
+void StartChamferCommand(AppCommandState& st, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  using CP = AppCommandState::ChamferPhase;
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
+    st.active = K::None;
+    st.paperChamferPhase = 1;
+    st.paperChamferFirstEntity = PaperEntityRef{};
+    st.paperChamferFirstPolySeg = -1;
+    log.push_back("CHAMFER — select first object " + ChamferPromptSuffix(st) + ". ESC cancels.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = K::Chamfer;
+  st.lastCommand = K::Chamfer;
+  st.chamferPhase = CP::WaitFirstEntity;
+  st.chamferFirstEntity = SelectedEntity{};
+  st.chamferFirstPolySeg = -1;
+  st.chamferTextAwaitingFirstValue = false;
+  st.chamferTextAwaitingSecondDist = false;
+  st.chamferTextAwaitingAngle = false;
+  st.chamferTextAwaitingTrim = false;
+  log.push_back("CHAMFER — select first object or [Distance/Angle/Trim] " + ChamferPromptSuffix(st) +
+               ". ESC cancels.");
+}
+
+/// Model-space + floating-model-space viewport-pick handler for CHAMFER — mirrors
+/// `HandleFilletViewportPick`'s Case A/B split exactly, minus the Arc/parallel-semicircle branches
+/// (CHAMFER has neither: Arc is refused upstream by `ChamferEligibility`, and parallel lines are a
+/// real, stated refusal here — REQ-103's own acceptance text names this asymmetry explicitly).
+void HandleChamferViewportPick(AppCommandState& st, float wx, float wy, std::vector<std::string>& log) {
+  using CP = AppCommandState::ChamferPhase;
+  SelectedEntity hit{};
+  float d2 = 0.f;
+  if (!PickClosestCadEntity(st, wx, wy, CadOffsetEntityPickTolWorld(st), &hit, &d2)) {
+    log.push_back("CHAMFER — no object at pick.");
+    return;
+  }
+  int polySeg = -1;
+  if (!ChamferEligibility(st, hit, wx, wy, &polySeg, log))
+    return;
+
+  if (st.chamferPhase == CP::WaitFirstEntity) {
+    st.chamferFirstEntity = hit;
+    st.chamferFirstPolySeg = polySeg;
+    st.chamferFirstPickX = wx;
+    st.chamferFirstPickY = wy;
+    st.chamferPhase = CP::WaitSecondEntity;
+    log.push_back("CHAMFER — select second object:");
+    return;
+  }
+
+  const bool sameEntity = (hit.type == st.chamferFirstEntity.type && hit.index == st.chamferFirstEntity.index);
+  if (sameEntity && hit.type != SelectedEntity::Type::Polyline) {
+    log.push_back("CHAMFER — select two different objects.");
+    return;
+  }
+  if (sameEntity && polySeg == st.chamferFirstPolySeg) {
+    log.push_back("CHAMFER — select two different segments.");
+    return;
+  }
+
+  if (sameEntity) {
+    ApplyChamferPolylineCorner(st, hit.index, st.chamferFirstPolySeg, polySeg, st.chamferFirstPickX,
+                               st.chamferFirstPickY, wx, wy, log);
+  } else {
+    auto polylineIsEndSegmentOnly = [&](const SelectedEntity& e, int seg) -> bool {
+      if (e.type != SelectedEntity::Type::Polyline)
+        return true;
+      const int pi = e.index;
+      if (pi < 0 || static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
+        return false;
+      const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+      const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+      const bool closed =
+          static_cast<size_t>(pi) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(pi)];
+      if (closed) {
+        log.push_back("CHAMFER — a closed polyline has no free end; only an adjacent segment of the "
+                      "SAME polyline can be chamfered against it.");
+        return false;
+      }
+      const int numEdges = (v1 - v0) - 1;
+      if (seg != 0 && seg != numEdges - 1) {
+        log.push_back("CHAMFER — only a polyline's own first or last segment can be chamfered against "
+                      "a different object; an interior segment shares its vertex with a neighbor that "
+                      "would be silently disturbed.");
+        return false;
+      }
+      return true;
+    };
+    if (!polylineIsEndSegmentOnly(st.chamferFirstEntity, st.chamferFirstPolySeg) ||
+        !polylineIsEndSegmentOnly(hit, polySeg)) {
+      return;
+    }
+
+    FilletCurve c1{}, c2{};
+    if (!BuildFilletCurveFromEntity(st, st.chamferFirstEntity, st.chamferFirstPolySeg, &c1) ||
+        !BuildFilletCurveFromEntity(st, hit, polySeg, &c2)) {
+      log.push_back("CHAMFER — could not resolve the picked geometry; refused.");
+      return;
+    }
+
+    float px = 0.f, py = 0.f;
+    if (!SolveFilletCenter(c1, c2, 0.f, st.chamferFirstPickX, st.chamferFirstPickY, wx, wy, &px, &py)) {
+      // No AutoCAD analogue to FILLET's parallel-lines semicircle here — a real, stated asymmetry
+      // (REQ-103's own CHAMFER acceptance text).
+      log.push_back("CHAMFER — those two curves are parallel; no corner exists; refused.");
+    } else {
+      float d1x = 0.f, d1y = 0.f, d2x = 0.f, d2y = 0.f;
+      if (!ChamferResolvePoints(st, c1, c2, px, py, st.chamferFirstPickX, st.chamferFirstPickY, wx, wy, &d1x, &d1y,
+                                &d2x, &d2y)) {
+        log.push_back("CHAMFER — that angle does not reach the second curve; refused.");
+      } else {
+        PushUndoSnapshot(st, "Chamfer");
+        bool ok1 = true, ok2 = true;
+        if (st.cornerTrimMode) {
+          ok1 = ApplyFilletTrimSingle(st, st.chamferFirstEntity, st.chamferFirstPolySeg, d1x, d1y, log);
+          ok2 = ApplyFilletTrimSingle(st, hit, polySeg, d2x, d2y, log);
+        }
+        if (ok1 && ok2) {
+          const bool bothZero = (st.chamferMode == 0) ? (st.chamferDist1 < 1e-4f && st.chamferDist2 < 1e-4f)
+                                                       : (st.chamferDist1 < 1e-4f);
+          if (!bothZero) {
+            st.userLinesFlat.push_back(d1x);
+            st.userLinesFlat.push_back(d1y);
+            st.userLinesFlat.push_back(0.f);
+            st.userLinesFlat.push_back(d2x);
+            st.userLinesFlat.push_back(d2y);
+            st.userLinesFlat.push_back(0.f);
+            st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
+          }
+          BumpCadGpuCache(st);
+          log.push_back(bothZero ? "CHAMFER — corner trimmed to a point (distance 0)."
+                                 : "CHAMFER — corner chamfered.");
+        }
+      }
+    }
+  }
+
+  st.chamferPhase = CP::WaitFirstEntity;
+  st.chamferFirstEntity = SelectedEntity{};
+  st.chamferFirstPolySeg = -1;
+  log.push_back("CHAMFER — select first object or [Distance/Angle/Trim] " + ChamferPromptSuffix(st) +
+               ". ESC cancels.");
+}
+
+/// Typed command-line handling for CHAMFER's D(istance)/A(ngle)/T(rim) sub-commands, only
+/// meaningful at WaitFirstEntity — mirrors `HandleFilletText`'s shape.
+bool HandleChamferText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+  using CP = AppCommandState::ChamferPhase;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  const std::string low = StringUtil::toLowerAsciiCopy(line);
+  if (st.chamferPhase != CP::WaitFirstEntity) {
+    log.push_back("CHAMFER — pick the second object in the viewport, or ESC to cancel.");
+    return false;
+  }
+  if (st.chamferTextAwaitingFirstValue) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !(v >= 0.f) || !std::isfinite(v)) {
+      log.push_back("CHAMFER — must be a non-negative finite number.");
+      return false;
+    }
+    st.chamferDist1 = v;
+    st.chamferTextAwaitingFirstValue = false;
+    if (st.chamferMode == 0) {
+      st.chamferTextAwaitingSecondDist = true;
+      log.push_back("CHAMFER — specify second distance <" + std::to_string(st.chamferDist2) + ">:");
+    } else {
+      st.chamferTextAwaitingAngle = true;
+      log.push_back("CHAMFER — specify angle in degrees <" + std::to_string(st.chamferAngle) + ">:");
+    }
+    return true;
+  }
+  if (st.chamferTextAwaitingSecondDist) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !(v >= 0.f) || !std::isfinite(v)) {
+      log.push_back("CHAMFER — must be a non-negative finite number.");
+      return false;
+    }
+    st.chamferDist2 = v;
+    st.chamferTextAwaitingSecondDist = false;
+    log.push_back("CHAMFER — distances set. Select first object or [Distance/Angle/Trim]:");
+    return true;
+  }
+  if (st.chamferTextAwaitingAngle) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !std::isfinite(v) || v <= 0.f || v >= 180.f) {
+      log.push_back("CHAMFER — angle must be a finite number strictly between 0 and 180 degrees.");
+      return false;
+    }
+    st.chamferAngle = v;
+    st.chamferTextAwaitingAngle = false;
+    log.push_back("CHAMFER — distance/angle set. Select first object or [Distance/Angle/Trim]:");
+    return true;
+  }
+  if (st.chamferTextAwaitingTrim) {
+    if (low == "t" || low == "trim") {
+      st.cornerTrimMode = 1;
+    } else if (low == "n" || low == "notrim" || low == "no trim") {
+      st.cornerTrimMode = 0;
+    } else {
+      log.push_back("CHAMFER — type T (Trim) or N (No trim).");
+      return false;
+    }
+    st.chamferTextAwaitingTrim = false;
+    log.push_back(std::string("CHAMFER — trim mode set to ") + (st.cornerTrimMode ? "Trim" : "No trim") +
+                 ". Select first object or [Distance/Angle/Trim]:");
+    return true;
+  }
+  if (low == "d" || low == "distance") {
+    st.chamferMode = 0;
+    st.chamferTextAwaitingFirstValue = true;
+    log.push_back("CHAMFER Distance — specify first distance <" + std::to_string(st.chamferDist1) + ">:");
+    return true;
+  }
+  if (low == "a" || low == "angle") {
+    st.chamferMode = 1;
+    st.chamferTextAwaitingFirstValue = true;
+    log.push_back("CHAMFER Angle — specify distance <" + std::to_string(st.chamferDist1) + ">:");
+    return true;
+  }
+  if (low == "t" || low == "trim") {
+    st.chamferTextAwaitingTrim = true;
+    log.push_back(std::string("CHAMFER — Enter Trim mode option [Trim/No trim] <") +
+                 (st.cornerTrimMode ? "Trim" : "No trim") + ">:");
+    return true;
+  }
+  log.push_back("CHAMFER — type D (Distance), A (Angle), or T (Trim), or pick an object in the viewport.");
+  return false;
+}
+
+// ------------------------------------------------------------------------------------------------
+// CHAMFER, pure-paper-space path (step 6b) — full parity with model space. Mirrors paper FILLET's
+// own shape exactly, minus the Arc branch (CHAMFER refuses it) and the parallel-lines special case
+// (CHAMFER has none — a real, stated asymmetry, not an oversight).
+// ------------------------------------------------------------------------------------------------
+
+bool PaperChamferEligibility(const PaperLayout& L, const PaperEntityRef& ref, float pickX, float pickY,
+                             int* outPolySeg, std::vector<std::string>& log) {
+  using T = PaperEntityRef::Type;
+  *outPolySeg = -1;
+  switch (ref.type) {
+  case T::Line:
+    return true;
+  case T::Polyline: {
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L.paperPolyOffsets.size())
+      return false;
+    const int v0 = L.paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L.paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const int numVerts = v1 - v0;
+    if (numVerts < 2)
+      return false;
+    const bool closed =
+        static_cast<size_t>(pi) < L.paperPolyClosed.size() && L.paperPolyClosed[static_cast<size_t>(pi)];
+    const int numEdges = closed ? numVerts : (numVerts - 1);
+    int bestSeg = 0;
+    float bestD = -1.f;
+    for (int e2 = 0; e2 < numEdges; ++e2) {
+      const int viA = v0 + e2, viB = v0 + ((e2 + 1) % numVerts);
+      const size_t a3 = static_cast<size_t>(viA) * 3, b3 = static_cast<size_t>(viB) * 3;
+      float qx = 0.f, qy = 0.f;
+      ClosestPointOnSegment(L.paperPolyVerts[a3], L.paperPolyVerts[a3 + 1], L.paperPolyVerts[b3],
+                            L.paperPolyVerts[b3 + 1], pickX, pickY, &qx, &qy);
+      const float d = (qx - pickX) * (qx - pickX) + (qy - pickY) * (qy - pickY);
+      if (bestD < 0.f || d < bestD) {
+        bestD = d;
+        bestSeg = e2;
+      }
+    }
+    *outPolySeg = bestSeg;
+    return true;
+  }
+  case T::Arc:
+    log.push_back("CHAMFER — 1 arc ignored: chamfer connects two straight curves only. Pick a line "
+                  "or polyline segment.");
+    return false;
+  case T::Circle:
+    log.push_back("CHAMFER — 1 circle ignored: chamfer connects two straight curves only. Pick a "
+                  "line or polyline segment.");
+    return false;
+  default:
+    log.push_back("CHAMFER — 1 object ignored: only a line or polyline segment can be chamfered.");
+    return false;
+  }
+}
+
+/// Case A, paper store: same-polyline adjacent segments — the paper equivalent of
+/// `ApplyChamferPolylineCorner`.
+static bool ApplyChamferPolylineCornerPaper(AppCommandState& st, PaperLayout* L, int pi, int edgeA, int edgeB,
+                                            float pick1X, float pick1Y, float pick2X, float pick2Y,
+                                            std::vector<std::string>& log) {
+  if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size())
+    return false;
+  const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+  const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+  const int numVerts = v1 - v0;
+  if (numVerts < 2)
+    return false;
+  const bool closed =
+      static_cast<size_t>(pi) < L->paperPolyClosed.size() && L->paperPolyClosed[static_cast<size_t>(pi)];
+  const int numEdges = closed ? numVerts : (numVerts - 1);
+  if (edgeA < 0 || edgeA >= numEdges || edgeB < 0 || edgeB >= numEdges || edgeA == edgeB)
+    return false;
+
+  auto edgeVerts = [&](int e, int* viA, int* viB) {
+    *viA = v0 + e;
+    *viB = v0 + ((e + 1) % numVerts);
+  };
+  int aVi0 = 0, aVi1 = 0, bVi0 = 0, bVi1 = 0;
+  edgeVerts(edgeA, &aVi0, &aVi1);
+  edgeVerts(edgeB, &bVi0, &bVi1);
+  int sharedVi = -1, otherAVi = -1;
+  if (aVi0 == bVi0 || aVi0 == bVi1) {
+    sharedVi = aVi0;
+    otherAVi = aVi1;
+  } else if (aVi1 == bVi0 || aVi1 == bVi1) {
+    sharedVi = aVi1;
+    otherAVi = aVi0;
+  }
+  if (sharedVi < 0) {
+    log.push_back("CHAMFER — those two polyline segments are not adjacent; refused.");
+    return false;
+  }
+  const int otherBVi = (bVi0 == sharedVi) ? bVi1 : bVi0;
+
+  auto readVert = [&](int vi, float* x, float* y) {
+    *x = L->paperPolyVerts[static_cast<size_t>(vi) * 3];
+    *y = L->paperPolyVerts[static_cast<size_t>(vi) * 3 + 1];
+  };
+  float sharedX = 0.f, sharedY = 0.f, otherAX = 0.f, otherAY = 0.f, otherBX = 0.f, otherBY = 0.f;
+  readVert(sharedVi, &sharedX, &sharedY);
+  readVert(otherAVi, &otherAX, &otherAY);
+  readVert(otherBVi, &otherBX, &otherBY);
+
+  FilletCurve curveA{};
+  curveA.isLine = true;
+  curveA.ax = otherAX;
+  curveA.ay = otherAY;
+  curveA.bx = sharedX;
+  curveA.by = sharedY;
+  FilletCurve curveB{};
+  curveB.isLine = true;
+  curveB.ax = sharedX;
+  curveB.ay = sharedY;
+  curveB.bx = otherBX;
+  curveB.by = otherBY;
+
+  float px = 0.f, py = 0.f;
+  if (!SolveFilletCenter(curveA, curveB, 0.f, pick1X, pick1Y, pick2X, pick2Y, &px, &py)) {
+    log.push_back("CHAMFER — those two segments are parallel; no corner exists; refused.");
+    return false;
+  }
+  float dAx = 0.f, dAy = 0.f, dBx = 0.f, dBy = 0.f;
+  if (!ChamferResolvePoints(st, curveA, curveB, px, py, pick1X, pick1Y, pick2X, pick2Y, &dAx, &dAy, &dBx, &dBy)) {
+    log.push_back("CHAMFER — that angle does not reach the second segment; refused.");
+    return false;
+  }
+
+  const int sharedLocal = sharedVi - v0;
+  const int otherALocal = otherAVi - v0;
+  const bool aIsIncoming = (otherALocal == (sharedLocal - 1 + numVerts) % numVerts);
+  const float inX = aIsIncoming ? dAx : dBx, inY = aIsIncoming ? dAy : dBy;
+  const float outX = aIsIncoming ? dBx : dAx, outY = aIsIncoming ? dBy : dAy;
+  const bool bothZero = (st.chamferMode == 0) ? (st.chamferDist1 < 1e-4f && st.chamferDist2 < 1e-4f)
+                                              : (st.chamferDist1 < 1e-4f);
+
+  std::vector<std::pair<float, float>> newXY;
+  newXY.reserve(static_cast<size_t>(numVerts) + 1);
+  for (int vi = v0; vi < v1; ++vi) {
+    if (vi - v0 == sharedLocal) {
+      if (bothZero) {
+        newXY.push_back({px, py});
+      } else {
+        newXY.push_back({inX, inY});
+        newXY.push_back({outX, outY});
+      }
+    } else {
+      float x = 0.f, y = 0.f;
+      readVert(vi, &x, &y);
+      newXY.push_back({x, y});
+    }
+  }
+
+  PushUndoSnapshot(st, "Chamfer paper geometry");
+  ReplacePaperPolylineVerts(L, pi, newXY);
+  if (!bothZero) {
+    const size_t k = L->paperLines.size();
+    L->paperLines.push_back(inX);
+    L->paperLines.push_back(inY);
+    L->paperLines.push_back(0.f);
+    L->paperLines.push_back(outX);
+    L->paperLines.push_back(outY);
+    L->paperLines.push_back(0.f);
+    L->paperLineAttrs.push_back(MakeNewEntityAttrs(st));
+    (void)k;
+  }
+  BumpCadGpuCache(st);
+  log.push_back(bothZero ? "CHAMFER — polyline corner trimmed to a point (distance 0)."
+                        : "CHAMFER — polyline corner chamfered.");
+  return true;
+}
+
+bool ApplyChamferToPaperEntities(AppCommandState& st, const PaperEntityRef& first, int firstPolySeg,
+                                 float firstPickX, float firstPickY, const PaperEntityRef& second,
+                                 int secondPolySeg, float pickX, float pickY, std::vector<std::string>& log) {
+  PaperLayout* L = ActivePaperGeometryTarget(st);
+  if (!L)
+    return false;
+
+  const bool sameEntity = (second.type == first.type && second.index == first.index);
+  if (sameEntity && second.type != PaperEntityRef::Type::Polyline) {
+    log.push_back("CHAMFER — select two different objects.");
+    return false;
+  }
+  if (sameEntity && secondPolySeg == firstPolySeg) {
+    log.push_back("CHAMFER — select two different segments.");
+    return false;
+  }
+
+  if (sameEntity)
+    return ApplyChamferPolylineCornerPaper(st, L, second.index, firstPolySeg, secondPolySeg, firstPickX,
+                                           firstPickY, pickX, pickY, log);
+
+  auto polylineIsEndSegmentOnly = [&](const PaperEntityRef& ref, int seg) -> bool {
+    if (ref.type != PaperEntityRef::Type::Polyline)
+      return true;
+    const int pi = ref.index;
+    if (pi < 0 || static_cast<size_t>(pi + 1) >= L->paperPolyOffsets.size())
+      return false;
+    const int v0 = L->paperPolyOffsets[static_cast<size_t>(pi)];
+    const int v1 = L->paperPolyOffsets[static_cast<size_t>(pi + 1)];
+    const bool closed =
+        static_cast<size_t>(pi) < L->paperPolyClosed.size() && L->paperPolyClosed[static_cast<size_t>(pi)];
+    if (closed) {
+      log.push_back("CHAMFER — a closed polyline has no free end; only an adjacent segment of the SAME "
+                    "polyline can be chamfered against it.");
+      return false;
+    }
+    const int numEdges = (v1 - v0) - 1;
+    if (seg != 0 && seg != numEdges - 1) {
+      log.push_back("CHAMFER — only a polyline's own first or last segment can be chamfered against a "
+                    "different object; an interior segment shares its vertex with a neighbor that would "
+                    "be silently disturbed.");
+      return false;
+    }
+    return true;
+  };
+  if (!polylineIsEndSegmentOnly(first, firstPolySeg) || !polylineIsEndSegmentOnly(second, secondPolySeg))
+    return false;
+
+  FilletCurve c1{}, c2{};
+  if (!BuildFilletCurveFromPaperEntity(*L, first, firstPolySeg, &c1) ||
+      !BuildFilletCurveFromPaperEntity(*L, second, secondPolySeg, &c2)) {
+    log.push_back("CHAMFER — could not resolve the picked geometry; refused.");
+    return false;
+  }
+
+  float px = 0.f, py = 0.f;
+  if (!SolveFilletCenter(c1, c2, 0.f, firstPickX, firstPickY, pickX, pickY, &px, &py)) {
+    log.push_back("CHAMFER — those two curves are parallel; no corner exists; refused.");
+    return false;
+  }
+  float d1x = 0.f, d1y = 0.f, d2x = 0.f, d2y = 0.f;
+  if (!ChamferResolvePoints(st, c1, c2, px, py, firstPickX, firstPickY, pickX, pickY, &d1x, &d1y, &d2x, &d2y)) {
+    log.push_back("CHAMFER — that angle does not reach the second curve; refused.");
+    return false;
+  }
+
+  PushUndoSnapshot(st, "Chamfer paper geometry");
+  if (st.cornerTrimMode) {
+    ApplyFilletTrimSingleToPaperEntity(L, first, firstPolySeg, d1x, d1y);
+    ApplyFilletTrimSingleToPaperEntity(L, second, secondPolySeg, d2x, d2y);
+  }
+  const bool bothZero =
+      (st.chamferMode == 0) ? (st.chamferDist1 < 1e-4f && st.chamferDist2 < 1e-4f) : (st.chamferDist1 < 1e-4f);
+  if (!bothZero) {
+    L->paperLines.push_back(d1x);
+    L->paperLines.push_back(d1y);
+    L->paperLines.push_back(0.f);
+    L->paperLines.push_back(d2x);
+    L->paperLines.push_back(d2y);
+    L->paperLines.push_back(0.f);
+    L->paperLineAttrs.push_back(MakeNewEntityAttrs(st));
+  }
+  BumpCadGpuCache(st);
+  log.push_back(bothZero ? "CHAMFER — corner trimmed to a point (distance 0)." : "CHAMFER — corner chamfered.");
+  return true;
 }
 
 float MathAngleRadFromBearingCwNorthDeg(float bearingDegClockwiseFromNorth) {
@@ -19044,6 +20839,32 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       } else {
         log.push_back("BREAK — specify second break point in the viewport.");
       }
+    } else if (st.active == K::Fillet) {
+      using FP = AppCommandState::FilletPhase;
+      if (st.filletPhase == FP::WaitFirstEntity && !st.filletTextAwaitingRadius && !st.filletTextAwaitingTrim) {
+        // Blank Enter at "select first object" ends FILLET — same convention LENGTHEN/BREAK's loop
+        // uses. (Mid-prompt for R/T it falls through to HandleFilletText's own "must be a number"/
+        // "type T or N" refusal instead, which is the more useful message there.)
+        st.active = K::None;
+        log.push_back("FILLET — finished.");
+      } else if (st.filletTextAwaitingRadius || st.filletTextAwaitingTrim) {
+        HandleFilletText(st, "", log);
+      } else {
+        log.push_back("FILLET — specify second object in the viewport.");
+      }
+    } else if (st.active == K::Chamfer) {
+      using CP = AppCommandState::ChamferPhase;
+      const bool awaitingValue = st.chamferTextAwaitingFirstValue || st.chamferTextAwaitingSecondDist ||
+                                 st.chamferTextAwaitingAngle || st.chamferTextAwaitingTrim;
+      if (st.chamferPhase == CP::WaitFirstEntity && !awaitingValue) {
+        // Blank Enter at "select first object" ends CHAMFER — same convention FILLET's loop uses.
+        st.active = K::None;
+        log.push_back("CHAMFER — finished.");
+      } else if (awaitingValue) {
+        HandleChamferText(st, "", log);
+      } else {
+        log.push_back("CHAMFER — specify second object in the viewport.");
+      }
     }
     return;
   }
@@ -19732,6 +21553,22 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     log.push_back("Could not parse LENGTHEN input — see command hints.");
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Fillet) {
+    if (HandleFilletText(st, line, log)) {
+      return;
+    }
+    log.push_back("Could not parse FILLET input — see command hints.");
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Chamfer) {
+    if (HandleChamferText(st, line, log)) {
+      return;
+    }
+    log.push_back("Could not parse CHAMFER input — see command hints.");
     return;
   }
 
@@ -21367,6 +23204,8 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
     case K::Extend:     StartExtendCommand(st, log);     break;
     case K::Break:      StartBreakCommand(st, log);      break;
     case K::Stretch:    StartStretchCommand(st, log);    break;
+    case K::Fillet:     StartFilletCommand(st, log);     break;
+    case K::Chamfer:    StartChamferCommand(st, log);    break;
     case K::Delete:     StartDeleteCommand(st, log);     break;
     case K::Join:       StartJoinCommand(st, log);       break;
     case K::Trim:       StartTrimCommand(st, log);       break;

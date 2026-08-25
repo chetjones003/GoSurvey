@@ -1070,6 +1070,15 @@ void BuildSelectionHighlight(const AppCommandState& cmd, std::vector<float>* hlL
   if (cmd.active == AppCommandState::Kind::Lengthen &&
       cmd.lengthenPhase == AppCommandState::LengthenPhase::WaitDynamicTarget)
     AppendEntityHighlight(cmd, cmd.lengthenPendingEntity, hlLines, hlCircles);
+  // FILLET's first curve is latched between the two picks, exactly as BREAK latches breakEntity —
+  // same REQ-056 reason (REQ-103 step 6a).
+  if (cmd.active == AppCommandState::Kind::Fillet &&
+      cmd.filletPhase == AppCommandState::FilletPhase::WaitSecondEntity)
+    AppendEntityHighlight(cmd, cmd.filletFirstEntity, hlLines, hlCircles);
+  // CHAMFER's first curve, same shape as FILLET's above (REQ-103 step 6b).
+  if (cmd.active == AppCommandState::Kind::Chamfer &&
+      cmd.chamferPhase == AppCommandState::ChamferPhase::WaitSecondEntity)
+    AppendEntityHighlight(cmd, cmd.chamferFirstEntity, hlLines, hlCircles);
 }
 
 void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLines,
@@ -1104,6 +1113,14 @@ void BuildHoverHighlight(const AppCommandState& cmd, std::vector<float>* hoverLi
   if (cmd.active == AppCommandState::Kind::Lengthen &&
       cmd.lengthenPhase == AppCommandState::LengthenPhase::WaitDynamicTarget &&
       cmd.lengthenPendingEntity.type == e.type && cmd.lengthenPendingEntity.index == e.index)
+    return;
+  if (cmd.active == AppCommandState::Kind::Fillet &&
+      cmd.filletPhase == AppCommandState::FilletPhase::WaitSecondEntity &&
+      cmd.filletFirstEntity.type == e.type && cmd.filletFirstEntity.index == e.index)
+    return;
+  if (cmd.active == AppCommandState::Kind::Chamfer &&
+      cmd.chamferPhase == AppCommandState::ChamferPhase::WaitSecondEntity &&
+      cmd.chamferFirstEntity.type == e.type && cmd.chamferFirstEntity.index == e.index)
     return;
   AppendEntityHighlight(cmd, e, hoverLines, hoverCircles);
 }

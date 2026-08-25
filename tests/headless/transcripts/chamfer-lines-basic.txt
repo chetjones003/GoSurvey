@@ -1,0 +1,123 @@
+# REQ-103 step 6b (TASK-103) — CHAMFER, Line-Line corners.
+#
+# Part A: Distance/Distance corner, distances 3/3, driven entirely with CLICK (not PICK) — this
+# session's own instruction to verify mouse clicks reach the command through the real
+# viewport-click routing layer (ViewportClickRouteFor). Line1 = (-10,0)-(0,0), Line2 =
+# (0,0)-(0,-10) — the identical perpendicular corner tests/FilletGeomTests.cpp and
+# fillet-lines-basic.txt use, so the two curves already meet exactly at the origin (intersection
+# point (0,0), no offset needed to find it). Hand-derived (ChamferPointAtDistance): pick near
+# (-5,0) on line1 (kept direction -X) -> chamfer point (-3,0); pick near (0,-5) on line2 (kept
+# direction -Y) -> chamfer point (0,-3). A straight Line connector is added between them (LINES
+# 2 -> 3), unlike FILLET's Arc.
+#
+# Part B: both distances 0 — trims to the intersection point directly, no connector Line (LINES
+# stays 2, not 3) — the real, documented degenerate case, not a refusal.
+#
+# Part C: parallel lines are REFUSED outright — CHAMFER has no analogue to FILLET's
+# parallel-lines-semicircle special case (a real, stated asymmetry in REQ-103's own acceptance
+# text), proven here rather than assumed.
+#
+# Part D: Distance/Angle mode — distance 3 on line1, 135 degree angle. Hand-derived: line1's kept
+# direction from the (-5,0) pick is -X (180deg); rotating by +135deg gives direction
+# (cos315,sin315)=(0.7071,-0.7071), which from d1=(-3,0) crosses line2's infinite extension (x=0)
+# at t=4.24, y=-3 -- landing on (0,-3), the SAME point Part A's Distance/Distance mode computes for
+# this corner (a useful cross-check: the two input modes agree when the angle matches the actual
+# corner geometry). The other rotation (-135deg) would land on (0,3), off line2's own drawn extent
+# but still a valid infinite-extension hit farther from the (0,-5) pick, so it is correctly NOT the
+# one chosen (ChamferRayIntersect keeps whichever is nearer the second curve's own pick).
+
+NEW
+
+CMD LINE
+CMD -10,0
+CMD 0,0
+ESC
+
+CMD LINE
+CMD 0,0
+CMD 0,-10
+ESC
+
+CHECK ALL
+EXPECT LINES 2
+SAVEAS %OUT%/chamfer-lines-a.gs
+
+CMD CHAMFER
+CMD D
+CMD 3
+CMD 3
+CLICK -5 0
+CLICK 0 -5
+
+EXPECT LOG "CHAMFER — corner chamfered."
+EXPECT LINES 3
+CHECK ALL
+
+SAVEAS %OUT%/chamfer-lines-b.gs
+EXPECT DIFFERENTFILE %OUT%/chamfer-lines-a.gs %OUT%/chamfer-lines-b.gs
+
+UNDO
+EXPECT LINES 2
+CHECK ALL
+SAVEAS %OUT%/chamfer-lines-c.gs
+# Not SAMEFILE against "a": the chamfer connector minted a fresh entity id (REQ-076), and undo does
+# not roll the next-entity-id counter itself back — same reasoning fillet-lines-basic.txt documents.
+
+REDO
+EXPECT LINES 3
+CHECK ALL
+SAVEAS %OUT%/chamfer-lines-d.gs
+EXPECT SAMEFILE %OUT%/chamfer-lines-b.gs %OUT%/chamfer-lines-d.gs
+
+UNDO
+
+# Part B: both distances 0 -> sharp trim to the intersection, no connector line.
+CMD CHAMFER
+CMD D
+CMD 0
+CMD 0
+PICK -5 0
+PICK 0 -5
+
+EXPECT LOG "CHAMFER — corner trimmed to a point (distance 0)."
+EXPECT LINES 2
+CHECK ALL
+SAVEAS %OUT%/chamfer-lines-e.gs
+EXPECT DIFFERENTFILE %OUT%/chamfer-lines-a.gs %OUT%/chamfer-lines-e.gs
+
+UNDO
+
+# Part C: parallel lines are refused outright (no semicircle special case, unlike FILLET).
+CMD LINE
+CMD -10,10
+CMD 0,10
+ESC
+
+CMD CHAMFER
+CMD D
+CMD 2
+CMD 2
+PICK -5 0
+PICK -5 10
+
+EXPECT LOG "CHAMFER — those two curves are parallel; no corner exists; refused."
+EXPECT LINES 3
+CHECK ALL
+
+CMD
+UNDO
+
+# Part D: Distance/Angle mode, 90 degrees off line1's own kept direction from a 3-unit-in point.
+CMD CHAMFER
+CMD A
+CMD 3
+CMD 135
+CLICK -5 0
+CLICK 0 -5
+
+EXPECT LOG "CHAMFER — corner chamfered."
+EXPECT LINES 3
+CHECK ALL
+
+CMD
+UNDO

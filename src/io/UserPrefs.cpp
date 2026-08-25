@@ -166,6 +166,21 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   if (s.contains("trimState") && s["trimState"].is_number_integer())
     st.trimState = std::clamp(s["trimState"].get<int>(), 0, 1);
 
+  // --- FILLET/CHAMFER (REQ-103 step 6): app-level, not per-drawing — same shape as trimState above
+  // (D-2026-08-24-g: a generalized "registry" was considered and explicitly declined) ---
+  if (s.contains("filletRadius") && s["filletRadius"].is_number())
+    st.filletRadius = std::max(0.f, s["filletRadius"].get<float>());
+  if (s.contains("cornerTrimMode") && s["cornerTrimMode"].is_number_integer())
+    st.cornerTrimMode = std::clamp(s["cornerTrimMode"].get<int>(), 0, 1);
+  if (s.contains("chamferDist1") && s["chamferDist1"].is_number())
+    st.chamferDist1 = std::max(0.f, s["chamferDist1"].get<float>());
+  if (s.contains("chamferDist2") && s["chamferDist2"].is_number())
+    st.chamferDist2 = std::max(0.f, s["chamferDist2"].get<float>());
+  if (s.contains("chamferAngle") && s["chamferAngle"].is_number())
+    st.chamferAngle = std::clamp(s["chamferAngle"].get<float>(), 0.01f, 179.99f);
+  if (s.contains("chamferMode") && s["chamferMode"].is_number_integer())
+    st.chamferMode = std::clamp(s["chamferMode"].get<int>(), 0, 1);
+
   // --- Update check (REQ-077) ---
   if (s.contains("updateCheckEnabled") && s["updateCheckEnabled"].is_boolean())
     st.updatePrefs.enabled = s["updateCheckEnabled"].get<bool>();
@@ -370,6 +385,12 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["prefsSchemaVersion"] = 1;
 
   s["trimState"] = st.trimState;
+  s["filletRadius"] = st.filletRadius;
+  s["cornerTrimMode"] = st.cornerTrimMode;
+  s["chamferDist1"] = st.chamferDist1;
+  s["chamferDist2"] = st.chamferDist2;
+  s["chamferAngle"] = st.chamferAngle;
+  s["chamferMode"] = st.chamferMode;
 
   // Update check (REQ-077)
   s["updateCheckEnabled"]   = st.updatePrefs.enabled;
