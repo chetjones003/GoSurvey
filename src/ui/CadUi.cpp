@@ -6869,49 +6869,96 @@ static bool   s_cmdSugPopupOpen = false;
 static ImVec2 s_cmdSugPopupMin = ImVec2(0.f, 0.f);
 static ImVec2 s_cmdSugPopupMax = ImVec2(0.f, 0.f);
 
-// REQ-040: render a command hint inline, turning [TOKEN] markers into clickable links
-// that submit the lowercased token (e.g. [A] → "a", [2P] → "2p"). This is the standard
-// for command prompts that offer keyword options; plain text uses the dim color. Items are
-// chained with SameLine(0,0); the caller positions the first segment.
-static void RenderClickableCommandHint(const char* hint, AppCommandState& cmd, std::vector<std::string>& log,
-                                       const ImVec4& dimCol) {
-  if (!hint || !hint[0])
-    return;
-  auto submit = [&](std::string tok) {
+// REQ-040/REQ-119: lay out one command prompt — plain text plus clickable variant links —
+// and return the height it occupies. `cmdbar::ParsePromptSegments` decides what is a link;
+// this function only places the pieces, so the rule stays testable without a UI harness.
+//
+// Clicking a link calls ProcessCommandLineSubmit with the variant's shortcut — the identical
+// entry point Enter uses on typed text. That is what makes mouse and keyboard the same path
+// rather than two implementations that can drift (GitHub #81).
+//
+// `draw == false` measures without emitting any item, which is how DrawCommandLinePanel
+// reserves footer height: the reservation and the drawn content run the SAME layout, so they
+// cannot disagree about where lines break. They must not — a hint that reserves one line and
+// draws two shoves the links out from under the mouse (the REQ-040 note above the footer).
+//
+// `wrapW <= 0` disables wrapping, which is what the floating bar wants: it is one line by
+// design (REQ-040), so its prompt must never reflow.
+static float LayoutCommandHint(const char* hint, AppCommandState& cmd, std::vector<std::string>& log,
+                               const ImVec4& dimCol, float wrapW, bool draw) {
+  const std::vector<cmdbar::PromptSegment> segs = cmdbar::ParsePromptSegments(hint);
+  if (segs.empty())
+    return 0.f;
+
+  const bool wrap = wrapW > 0.f;
+  auto submit = [&](const std::string& shortcut) {
+    std::string tok = shortcut;
     for (char& c : tok) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    char tmp[24];
+    char tmp[32];
     std::snprintf(tmp, sizeof(tmp), "%s", tok.c_str());
     ProcessCommandLineSubmit(tmp, static_cast<int>(sizeof(tmp)), cmd, log);
   };
-  bool first = true;
-  std::string plain;
-  auto flushPlain = [&]() {
-    if (plain.empty())
-      return;
-    if (!first) ImGui::SameLine(0, 0);
-    ImGui::PushStyleColor(ImGuiCol_Text, dimCol);
-    ImGui::TextUnformatted(plain.c_str());
-    ImGui::PopStyleColor();
-    first = false;
-    plain.clear();
-  };
-  for (const char* p = hint; *p;) {
-    if (*p == '[') {
-      if (const char* close = std::strchr(p, ']')) {
-        flushPlain();
-        const std::string tok(p + 1, close);  // token without brackets
-        const std::string label = "[" + tok + "]";
-        if (!first) ImGui::SameLine(0, 0);
-        if (ImGui::TextLink(label.c_str())) submit(tok);
-        first = false;
-        p = close + 1;
-        continue;
+
+  int lines = 1;
+  float lineW = 0.f;
+  bool firstOnLine = true;  // true => emit with no SameLine, so ImGui starts a fresh line
+
+  auto place = [&](const std::string& text, bool isLink, const std::string& shortcut) {
+    const float w = ImGui::CalcTextSize(text.c_str()).x;
+    if (wrap && !firstOnLine && lineW + w > wrapW) {
+      ++lines;
+      lineW = 0.f;
+      firstOnLine = true;
+    }
+    if (draw) {
+      if (!firstOnLine)
+        ImGui::SameLine(0.f, 0.f);
+      if (isLink) {
+        if (ImGui::TextLink(text.c_str()))
+          submit(shortcut);
+      } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, dimCol);
+        ImGui::TextUnformatted(text.c_str());
+        ImGui::PopStyleColor();
       }
     }
-    plain.push_back(*p);
-    ++p;
+    lineW += w;
+    firstOnLine = false;
+  };
+
+  for (const cmdbar::PromptSegment& s : segs) {
+    if (s.isLink) {
+      place(s.text, true, s.shortcut);  // a link never splits — it is one click target
+      continue;
+    }
+    // Plain text is emitted whole whenever it fits, so spacing renders exactly as written.
+    // Splitting into words is only done when the run must wrap, which is the one case where
+    // exact spacing cannot survive anyway — and is what keeps a long docked prompt on-screen.
+    const float w = ImGui::CalcTextSize(s.text.c_str()).x;
+    if (!wrap || lineW + w <= wrapW) {
+      place(s.text, false, std::string());
+      continue;
+    }
+    for (std::size_t i = 0; i < s.text.size();) {
+      std::size_t e = i;
+      while (e < s.text.size() && s.text[e] != ' ')
+        ++e;
+      while (e < s.text.size() && s.text[e] == ' ')
+        ++e;  // carry the following spaces with the word
+      std::string word = s.text.substr(i, e - i);
+      if (firstOnLine) {
+        const std::size_t nb = word.find_first_not_of(' ');
+        word = (nb == std::string::npos) ? std::string() : word.substr(nb);  // no leading space
+      }
+      if (!word.empty())
+        place(word, false, std::string());
+      i = e;
+    }
   }
-  flushPlain();
+
+  const float lineH = ImGui::GetTextLineHeight();
+  return static_cast<float>(lines) * lineH +
+         static_cast<float>(lines - 1) * ImGui::GetStyle().ItemSpacing.y;
 }
 
 void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBufSize, AppCommandState& cmd) {
@@ -7016,6 +7063,11 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   auto wrappedBlockH = [&](const char* s) -> float {
     if (!footerNonEmpty(s))
       return 0.f;
+    // A hint carrying variant markup is laid out piece-by-piece, not word-wrapped as one
+    // string, so it must be MEASURED the same way (REQ-119) — CalcTextSize would count the
+    // brackets ImGui never draws as one run and could disagree about the line count.
+    if (std::strchr(s, '['))
+      return LayoutCommandHint(s, cmd, log, ImVec4(), wrapW, /*draw=*/false) + st.ItemSpacing.y;
     return ImGui::CalcTextSize(s, nullptr, false, wrapW).y + st.ItemSpacing.y;
   };
 
@@ -7248,7 +7300,9 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       // links (REQ-040), replacing the plain placeholder. Idle shows "Type a command".
       if (activeHint) {
         ImGui::AlignTextToFramePadding();
-        RenderClickableCommandHint(CommandInputHint(cmd), cmd, log, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        // wrapW 0 = never wrap: the floating bar is a single line by design (REQ-040).
+        LayoutCommandHint(CommandInputHint(cmd), cmd, log, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
+                          0.f, /*draw=*/true);
         ImGui::SameLine(0, 6);
       }
       inputW = std::max(80.f, ImGui::GetContentRegionAvail().x - barIconH - 19.f);  // reserve chevron + width grip
@@ -7386,51 +7440,26 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   // Floating bar: the prompt lives in the input field's placeholder (CommandInputHint),
   // so the separate footer-hint lines are suppressed — the bar stays a clean single line.
   // Classic dock keeps the wrapped hint lines below the input.
+  //
+  // REQ-119: a hint carrying variant markup goes through the SHARED renderer — the same one
+  // the floating bar uses — so no command needs click handling of its own. LINE used to have
+  // a hand-rolled copy of this here, with [A]/[2P] and their tokens spelled out literally;
+  // it was deleted because it was exactly the per-command duplication #81 asks us to avoid,
+  // and because it could only ever cover the one prompt someone remembered to hardcode.
   auto renderHint = [&](const char* s) {
     if (floating || !s || !s[0]) return;
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    const ImVec4 dim = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    if (std::strchr(s, '[')) {
+      LayoutCommandHint(s, cmd, log, dim, wrapW, /*draw=*/true);
+      return;
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, dim);
     ImGui::TextWrapped("%s", s);
     ImGui::PopStyleColor();
   };
 
   renderHint(circFooter);
-
-  // LINE basic next-point hint: render [A]/[2P] as clickable links that start the
-  // azimuth-entry / two-pick-bearing sub-modes (same as typing "a" / "2p"). Other
-  // LINE states (and all other commands) use the plain renderHint path.
-  {
-    using LP = AppCommandState::LinePhase;
-    using SAPx = AppCommandState::SegmentAnglePickPhase;
-    const bool lineNextClickable =
-        !floating && cmd.active == AppCommandState::Kind::Line && cmd.linePhase == LP::NeedNextPoint &&
-        !cmd.segmentAngleKeyboardAwaitBearing && !cmd.segmentAngleLockActive &&
-        cmd.segmentAnglePickPhase == SAPx::Idle;
-    if (lineNextClickable) {
-      auto submitToken = [&](const char* tok) {
-        char tmp[16];
-        std::snprintf(tmp, sizeof(tmp), "%s", tok);
-        ProcessCommandLineSubmit(tmp, static_cast<int>(sizeof(tmp)), cmd, log);
-      };
-      const ImVec4 dim = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
-      auto dimText = [&](const char* t) {
-        ImGui::PushStyleColor(ImGuiCol_Text, dim);
-        ImGui::TextUnformatted(t);
-        ImGui::PopStyleColor();
-      };
-      dimText("Next: click; X, Y; @dx,dy; ");
-      ImGui::SameLine(0.f, 0.f);
-      if (ImGui::TextLink("[A]")) submitToken("a");
-      ImGui::SameLine(0.f, 0.f);
-      dimText("zimuth, ");
-      ImGui::SameLine(0.f, 0.f);
-      if (ImGui::TextLink("[2P]")) submitToken("2p");
-      ImGui::SameLine(0.f, 0.f);
-      dimText(";");
-    } else {
-      renderHint(lineFooter);
-    }
-  }
-
+  renderHint(lineFooter);
   renderHint(modFooter);
   renderHint(scaleFooter);
   renderHint(rotFooter);

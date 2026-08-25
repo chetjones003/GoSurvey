@@ -1,7 +1,7 @@
 # TASK-111 — Clickable command variants: the mechanism (REQ-119 increment 1)
 
 - Type:    feature
-- Status:  plan
+- Status:  self-verify (manual GUI pass outstanding)
 - Opened:  2026-08-25
 - Owner:   Nathan Johnson
 
@@ -14,9 +14,9 @@ Upstream issue: chetjones003/GoSurvey#81.
   `[A]`/`[2P]` hints keep working, so this task must not regress it), REQ-024 (the at-crosshair
   dynamic input shares `CommandInputHint`'s text), REQ-201 (a refusal states its reason).
 - Acceptance: REQ-119's **Increment 1** conditions, restated in §6's test map.
-- Owning subsystem: `UI` (`src/ui/` — the renderer and `CommandInputHint`). The `*FooterHint`
-  prompt strings in `src/commands/` are touched only for the two defective prompts named in
-  Acceptance; no command's *behaviour* is touched by this task.
+- Owning subsystem: `UI` (`src/ui/` — the renderer and the parse rule). **As built, `src/commands/`
+  was not touched at all** — the plan expected two prompt-string edits there and in
+  `CommandInputHint`; neither turned out to be necessary (§8). No command's behaviour changes.
 
 ## 2. Scope
 - In scope:
@@ -25,7 +25,8 @@ Upstream issue: chetjones003/GoSurvey#81.
   - wrap-aware segment layout in the shared renderer;
   - the classic docked panel routed through the shared renderer;
   - deletion of the hand-rolled LINE-only link block (`CadUi.cpp:7404-7429`);
-  - correcting the two prompts that currently produce an unsubmittable token.
+  - fixing the two prompts that currently produce an unsubmittable token — **as built, by the
+    parser reading them correctly, with no edit to either prompt string** (§8).
 - Out of scope:
   - **the coverage audit** — the ~190 remaining prompt strings stay as they are (REQ-119
     increment 2). This task makes the mechanism correct; it does not spread it;
@@ -33,7 +34,8 @@ Upstream issue: chetjones003/GoSurvey#81.
   - any change to what a command *accepts* — every token this task emits must already be
     accepted by the handler today, verified below.
 - Smallest change: one pure parsing function + its tests, one wrap-aware renderer, one call-site
-  substitution in the dock, one deletion, two prompt-string edits.
+  substitution in the dock, one deletion. *(As built it was smaller still — the two prompt-string
+  edits proved unnecessary.)*
 
 ## 3. Architectural boundary check
 - New abstraction / layer / dependency / ownership change / global state / public API / data
@@ -93,19 +95,21 @@ ASSUMPTION-2: No caller depends on the hint strings laying out on a single line.
     segments, each `{text, isLink, shortcut}`. Pure, no ImGui.
   - `tests/CommandLineTests.cpp` — cases for the new function.
   - `src/ui/CadUi.cpp`
-    - `RenderClickableCommandHint` (6876) — consume the parsed segments; wrap between segments
-      on `GetContentRegionAvail()`.
+    - the renderer (6876), renamed `LayoutCommandHint` — consume the parsed segments, wrap, and
+      **return the height**, so the footer reservation can run the same layout.
     - the LINE-only block (7404-7429) — **delete**; `renderHint` routes through the shared
       renderer instead.
-    - `CommandInputHint` (6308) — `[Yes/No]` → `[Y]es/[N]o`.
-    - the footer-height calc — must follow the renderer's wrap decision (ASSUMPTION-2).
-  - `src/commands/CadCommands.cpp` — the MIRROR prompt logged at 16950 carries the same
-    `[Yes/No]` text and is corrected with it, so the log and the prompt cannot disagree.
+    - ~~`CommandInputHint` (6308) — `[Yes/No]` → `[Y]es/[N]o`.~~ **Not needed** (§8).
+    - the footer-height calc — follows the renderer's wrap decision (ASSUMPTION-2), by calling
+      the same function with `draw=false`.
+  - ~~`src/commands/CadCommands.cpp` — the logged MIRROR prompt.~~ **Not touched** (§8).
 
 - Test approach:
   - **happy path** — `CommandLineTests`: `[A]zimuth, [2P]` → two links, shortcuts `A`/`2P`, the
     surrounding text preserved verbatim; `[DElta/Percent/Total/DYnamic]` → four links with
-    shortcuts `DE`/`P`/`T`/`DY`; `[Y]es/[N]o` → two links, `Y`/`N`, with `es`/`o` as plain text.
+    shortcuts `DE`/`P`/`T`/`DY`; `[Yes/No]` → two links, `Y`/`N`, with the brackets and `/`
+    rendered as plain text. Every case also round-trips the segments back to the original
+    string, so parsing can neither lose nor duplicate what the user reads.
   - **failure mode** — an unclosed `[` is emitted as literal text and produces no link (today's
     parser already does this; the test pins it); an empty group `[]` and a `[/]` produce no link
     and do not lose surrounding characters; a prompt with no brackets round-trips unchanged.
@@ -124,14 +128,14 @@ ASSUMPTION-2: No caller depends on the hint strings laying out on a single line.
     wrapping dock prompt keeps its links on the correct line with no horizontal overflow.
 
 - Steps:
-  - [ ] 1. Write `cmdbar::ParsePromptSegments` + its `CommandLineTests` cases; red before green.
-  - [ ] 2. Re-express `RenderClickableCommandHint` over it — no behaviour change yet; the
-        floating bar's existing `[A]`/`[2P]` prompt must render identically.
-  - [ ] 3. Add wrap-aware placement; reconcile the footer-height calc (ASSUMPTION-2).
-  - [ ] 4. Route the dock's `renderHint` through the shared renderer; delete the LINE block.
-  - [ ] 5. Correct the MIRROR and LENGTHEN prompts (both the hint and the logged copy).
-  - [ ] 6. Add the headless equivalence transcript.
-  - [ ] 7. Self-verify (§9); manual GUI pass at a narrow and a wide dock width.
+  - [x] 1. Write `cmdbar::ParsePromptSegments` + its `CommandLineTests` cases; red before green.
+  - [x] 2. Re-express the renderer over it (now `LayoutCommandHint`) — the floating bar's
+        existing `[A]`/`[2P]` prompt renders identically (`wrapW = 0`, so it cannot reflow).
+  - [x] 3. Add wrap-aware placement; reconcile the footer-height calc (ASSUMPTION-2).
+  - [x] 4. Route the dock's `renderHint` through the shared renderer; delete the LINE block.
+  - [x] ~~5. Correct the MIRROR and LENGTHEN prompts.~~ **Dropped — not needed.** See §8.
+  - [x] 6. Add the headless token-validity transcript.
+  - [ ] 7. Self-verify (§9) — done except the **manual GUI pass**, which is outstanding (§9).
 
 ## 7. Workflow-specific notes
 - Feature: pre-flight answered (Q1-Q3, D-2026-08-25-m). **Tests-first** for step 1 — the parsing
@@ -158,14 +162,114 @@ ASSUMPTION-2: No caller depends on the hint strings laying out on a single line.
   written into §6's baseline so the committed test does not rediscover them.
 - 2026-08-25 Status stays `plan` — cleared to implement, no code written yet.
 
+### Implementation — 2026-08-25
+
+- **Step 5 dropped: no prompt string was edited.** The plan assumed the two defective prompts
+  had to be rewritten into the inline form (`[Y]es/[N]o`). Implementing the grouped form showed
+  that assumption was wrong — the parser reads AutoCAD's existing `[Yes/No]` and
+  `[DElta/Percent/Total/DYnamic]` **directly**, so the defect is fixed entirely in the parser
+  with **zero prompt churn**. Three consequences, all improvements:
+  - `FILLET`/`CHAMFER`'s existing `[Radius/Trim]`, `[Trim/No trim]`, `[Distance/Angle/Trim]`
+    become correct for free the moment increment 2 gives them a live prompt entry — no markup
+    pass needed for them at all;
+  - the click target is the whole option word (`DElta`, not `[DE]`), which is #81's own UX
+    requirement — "easy to click without accidentally selecting adjacent command text";
+  - nothing that reads these strings elsewhere (the REQ-024 dynamic-cursor label, the logged
+    copies at `CadCommands.cpp:9092`/`16950`) changes, so there is no second copy to keep in
+    step with a rewritten prompt.
+
+  **Deviation from REQ-119's letter, recorded rather than glossed:** the increment-1 Acceptance
+  names `Erase source objects? [Y]es/[N]o <N>:` as the prompt that must render two links. The
+  shipped prompt keeps `[Yes/No]` and renders two links from it. The *observable* condition —
+  two links, `[Y]` erases the source, `[N]` does not — is met exactly, and is asserted in
+  `regression-119-variant-token-accepted`; only the illustrative prompt text differs, and the
+  REQ Statement already lists the grouped form as recognized. Flagged for the user in case the
+  literal text was wanted.
+
+- **Steps 1-4 as planned.** `cmdbar::ParsePromptSegments`/`VariantShortcut` in `CommandBar.hpp`
+  (pure, ImGui-free, beside the existing `HistoryAlpha`/`LogTailStart` helpers);
+  `LayoutCommandHint` in `CadUi.cpp` is the single renderer for both surfaces, returning the
+  height it occupies so ASSUMPTION-2 is discharged **structurally**: `wrappedBlockH` calls the
+  same function with `draw=false`, so the reserved height and the drawn content run one layout
+  and cannot disagree about line breaks. The hand-rolled LINE block (25 lines) is deleted; its
+  guard condition was redundant — `LineCommandFooterHint` only returns the bracketed string in
+  that state, so the string itself is the condition.
+
+- **Wrapping is word-level for plain runs, atomic for links.** REQ-119's Statement says "breaks
+  between segments", but that alone cannot satisfy its own Acceptance ("no horizontal overflow")
+  when a single plain run is wider than the panel — which TRIM's and POLYLINE's prompts already
+  are. Plain text is still emitted **whole whenever it fits**, so today's exact spacing is
+  preserved in every existing case; splitting happens only on the wrap path.
+
+- **Rebased onto `beta` after implementation (2026-08-25).** This work was developed against
+  `fix/issue84-paper-polyline-routing`, which turned out to be 11 commits behind `beta` — the
+  local `upstream` remote-tracking refs were stale, which also produced a false "beta is missing
+  PR #85's merge" reading earlier in this task. PR #85 had in fact merged cleanly (`f7dd1f4`).
+  Rebasing required renumbering (TASK-110→**111**, `D-…-k`/`-l`→**`-m`/`-n`** — the earlier
+  numbers belong to REQ-303/REQ-304 work) and re-resolving the `CadCommands.cpp` citations, which
+  shifted by +33/+44 (`CadUi.cpp` did not move at all).
+
+  **The rebase strengthened this increment rather than disturbing it.** REQ-304 moved five
+  grouped-variant prompts onto the live clickable path — `FILLET` `[Radius/Trim]` and
+  `[Trim/No trim]`, `CHAMFER` `[Distance/Angle/Trim]` (two variants) and `[Trim/No trim]` — every
+  one of which the old first-`]` reader turns into a single link submitting a token its own
+  handler rejects. `beta` therefore ships **seven** dead links, not two, and all seven are
+  repaired here with **no markup change at all** — exactly the "for free" consequence noted above,
+  written before REQ-304 was known about. The `[req119]` unit cases already assert FILLET's and
+  CHAMFER's extractions, so the coverage predated the rebase that made them live.
+
+- **Red before green.** The `[req119]` cases fail against a first-`]` parser by construction:
+  it yields one link `[Yes/No]` → `yes/no`, where the test requires `Yes`→`Y` and `No`→`N`.
+  That old behaviour was captured directly from the shipped loop during the plan review, and
+  the transcript keeps its rejection as a live assertion so a revert re-fails rather than
+  silently shipping a dead link.
+
 ## 9. Self-verification
-- [ ] build-project        —
-- [ ] architecture-review  —
-- [ ] code-review          —
-- [ ] dependency-audit     — n-a (no dependency change)
-- [ ] performance-review   — n-a (a per-frame parse of one short prompt string; if it ever shows,
-      cache per prompt pointer — noted, deliberately not pre-optimized)
-- [ ] testing              —
+- [x] build-project        — **PASS.** Clean; no new warnings (the C4244s in `CadUi.cpp` are
+      pre-existing and in untouched code).
+- [x] architecture-review  — **PASS.** No §11 invariant touched. The parse rule sits in `ui/`
+      beside the helpers it joins, and the UI→Commands call direction is unchanged (the click
+      path already went through `ProcessCommandLineSubmit`). No new type crosses the boundary:
+      `PromptSegment` is local to the renderer and never reaches Commands. No global state, no
+      dependency, no data-format change. Invariant 4: `ParsePromptSegments` has two present-day
+      call sites (the floating bar and the dock) plus the measure path — it is not speculative.
+- [x] code-review          — **PASS.** Failure paths are explicit and tested: an unclosed `[`
+      and a group with nothing submittable stay literal rather than becoming a link that submits
+      an empty token — a dead link that *looks* actionable is worse than plain text. The
+      word-split loop cannot spin (`e > i` always holds while `i < size`, checked both ways).
+      The submit buffer is `snprintf`-bounded.
+- [x] dependency-audit     — n-a (no dependency change; `<string>`/`<vector>`/`<cctype>` added
+      to a header that is already C++ standard-library only).
+- [x] performance-review   — n-a. One short prompt string parsed per frame while a command is
+      active, allocating a handful of small strings. Not a spec-marked hot path (REQ-100 is the
+      viewport). If it ever shows, cache per prompt pointer — noted, deliberately not
+      pre-optimized (§3.4: no optimization without a profile).
+- [x] testing              — **PASS**, with one honest gap named below.
+      - `CommandLineTests [req119]` — 4 cases, 53 assertions: the shortcut rule (incl.
+        `No trim`→`N`), inline parsing byte-for-byte against LINE's prompt, grouped parsing for
+        MIRROR/LENGTHEN/FILLET/CHAMFER, and the malformed cases. Every case also round-trips the
+        segments back to the original string, so parsing can neither lose nor duplicate text.
+      - `headless.regression-119-variant-token-accepted` — 55 steps: each extracted token is
+        accepted by the command showing that prompt, with MIRROR's two answers told apart by
+        entity count rather than log text, plus the old parser's token kept as a live rejection.
+      - Suites: **545/545** Catch2, **600/600** ctest (1 known-disabled, #63).
+
+- [ ] **manual GUI pass — OUTSTANDING, and it is the real gap.** `LayoutCommandHint` is ImGui
+      code and the headless driver never constructs an ImGui context, so **the layout and
+      rendering half of this change has no automated coverage** — only the pure rule beneath it
+      and the tokens above it do. A smoke launch confirmed the app starts and runs clean for
+      12 s, but that proves startup only: the function is not called until a command with a
+      bracketed prompt is active, so the smoke test did not execute a single line of it. What
+      still needs a human, per REQ-119's own Acceptance:
+      1. LINE's `[A]`/`[2P]` render and hover as links in the **floating bar**, and clicking
+         each does what typing `a` / `2p` does;
+      2. the same in the **classic docked panel** (`cmdLineClassicDock`) — the surface that
+         never had links before;
+      3. MIRROR's `[Yes/No]` and LENGTHEN's `[DElta/Percent/Total/DYnamic]` render as **two**
+         and **four** separate links;
+      4. a **narrow** dock width, to exercise the wrap path: links land on the correct line,
+         no horizontal overflow, and the footer reserves the right height (the links must not
+         shift out from under the cursor).
 
 ## 10. Verification result
 
@@ -209,11 +313,14 @@ ASSUMPTION-2: No caller depends on the hint strings laying out on a single line.
 - Findings:
 
 ## 11. Outcome
-- Requirements satisfied:
-- Tests added:
-- Refactors:
-- Docs updated:
-- Done:
+- Requirements satisfied: REQ-119 **increment 1** (Acceptance met: yes for every automatable
+  condition; the four manual GUI conditions are outstanding — §9). Increment 2 not started.
+- Tests added:            `CommandLineTests [req119]` (4 cases / 53 assertions);
+                          `headless.regression-119-variant-token-accepted` (55 steps).
+- Refactors:              the hand-rolled LINE link block deleted (25 lines); one renderer now
+                          serves both the floating bar and the docked panel.
+- Docs updated:           none needed (REQ-119 and this log carry the convention).
+- Status:                 **self-verify complete except the manual GUI pass** — not `done`.
 
 ## 12. Technical debt
 
