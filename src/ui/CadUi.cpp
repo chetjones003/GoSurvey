@@ -38,6 +38,7 @@
 #include <cstdlib>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <cfloat>
 #include <cstdint>
 #include <string>
@@ -2366,6 +2367,104 @@ static void RibbonItemHelp(const char* text, ImGuiHoveredFlags extraFlags = 0) {
   }
 }
 
+// REQ-302 increment 2 (ADR-038): measure-then-decide responsive breakpoints for the ribbon's own
+// per-tab sections, plus a shared overflow popup for whatever doesn't fit at Narrow.
+enum class RibbonBreakpoint { Wide, Medium, Narrow };
+
+// One ribbon section's precomputed Wide/Medium total widths and its deferred render body. `render`
+// must be invoked with `curCompact` (DrawRibbonBar's local) already set to whatever this call site
+// decided — DecideRibbonFit/RenderRibbonFit below do that; nothing else should call `render`
+// directly.
+struct RibbonSectionSpec {
+  float wideW = 0.f;
+  float mediumW = 0.f;
+  std::function<void()> render;
+};
+
+struct RibbonFitResult {
+  RibbonBreakpoint breakpoint = RibbonBreakpoint::Wide;
+  std::vector<size_t> inlineIdx;    // section indices rendered in the ribbon row, in order
+  std::vector<size_t> overflowIdx;  // section indices rendered inside the "More" popup, in order
+  float width = 0.f;                // total width actually consumed (inline sections + gaps [+ More])
+};
+
+// Decides which of `specs` (in order) fit inline at `availW` and which overflow into a popup
+// (ADR-038 (a)/(b)). Pure arithmetic, no ImGui calls, so it can run before RibbonToolsLeft's
+// BeginChild needs a size — the section closures themselves don't execute until RenderRibbonFit.
+static RibbonFitResult DecideRibbonFit(const std::vector<RibbonSectionSpec>& specs, float availW, float gap) {
+  RibbonFitResult r;
+  if (specs.empty())
+    return r;
+  float totalWide = 0.f, totalMed = 0.f;
+  for (size_t i = 0; i < specs.size(); ++i) {
+    totalWide += specs[i].wideW + (i ? gap : 0.f);
+    totalMed += specs[i].mediumW + (i ? gap : 0.f);
+  }
+  if (availW >= totalWide) {
+    r.breakpoint = RibbonBreakpoint::Wide;
+    for (size_t i = 0; i < specs.size(); ++i)
+      r.inlineIdx.push_back(i);
+    r.width = totalWide;
+    return r;
+  }
+  if (availW >= totalMed) {
+    r.breakpoint = RibbonBreakpoint::Medium;
+    for (size_t i = 0; i < specs.size(); ++i)
+      r.inlineIdx.push_back(i);
+    r.width = totalMed;
+    return r;
+  }
+  r.breakpoint = RibbonBreakpoint::Narrow;
+  float used = 0.f;
+  for (size_t i = 0; i < specs.size(); ++i) {
+    const float need = specs[i].mediumW + (r.inlineIdx.empty() ? 0.f : gap);
+    // The first section always renders inline even if it alone would overflow `availW`
+    // (TASK-105 ASSUMPTION-2) — an empty-looking tab with only a "More" button reads as broken.
+    if (r.inlineIdx.empty() || used + need <= availW) {
+      r.inlineIdx.push_back(i);
+      used += need;
+    } else {
+      r.overflowIdx.push_back(i);
+    }
+  }
+  constexpr float kMoreW = 46.f;
+  if (!r.overflowIdx.empty())
+    used += kMoreW + gap;
+  r.width = used;
+  return r;
+}
+
+// Renders a tab's sections per `fit` — inline sections at Medium metrics when the breakpoint isn't
+// Wide, overflow sections inside a "More" popup at full Wide metrics (ADR-038 (b)/(c)). Must run
+// inside the child window `fit.width` was used to size. Leaves `curCompact` false on return.
+static void RenderRibbonFit(const std::vector<RibbonSectionSpec>& specs, const RibbonFitResult& fit,
+                             float gap, float colH, bool& curCompact, const char* morePopupId) {
+  if (specs.empty())
+    return;
+  curCompact = (fit.breakpoint != RibbonBreakpoint::Wide);
+  for (size_t k = 0; k < fit.inlineIdx.size(); ++k) {
+    if (k)
+      ImGui::SameLine(0, gap);
+    specs[fit.inlineIdx[k]].render();
+  }
+  if (!fit.overflowIdx.empty()) {
+    ImGui::SameLine(0, gap);
+    if (ImGui::Button("More", ImVec2(46.f, colH)))
+      ImGui::OpenPopup(morePopupId);
+    RibbonItemHelp("More — additional tools that don't fit at the current window width.");
+    if (ImGui::BeginPopup(morePopupId)) {
+      curCompact = false;
+      for (size_t k = 0; k < fit.overflowIdx.size(); ++k) {
+        if (k)
+          ImGui::SameLine(0, gap);
+        specs[fit.overflowIdx[k]].render();
+      }
+      ImGui::EndPopup();
+    }
+  }
+  curCompact = false;
+}
+
 // Forward-declared here (defined below, ~line 5650): reopening the same anonymous namespace so the
 // REQ-302 tab strip in DrawRibbonBar below can reuse the Model/Layout tab toggle styling instead of
 // inventing a second one.
@@ -2430,515 +2529,647 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   const float gridCell = std::floor((colH - 2.f) / 2.f);
   constexpr float largeW = 60.f;
 
+  // REQ-302 increment 2 (ADR-038 (a)): `curCompact` is read by colW()/smallBtn() below — Medium
+  // metrics are simply "the same button code, with this flag true." largeBtn/gridBtn are unaffected
+  // (grid cells are already icon-only; a large button's label-below layout doesn't shrink further).
+  bool curCompact = false;
   auto largeBtn = [&](const char* id, RibbonIconKind ic, const char* label) {
     return RibbonButtonEx(id, ic, label, ImVec2(largeW, colH), RibbonLabel::Below);
   };
   auto smallBtn = [&](const char* id, RibbonIconKind ic, const char* label, float w) {
-    return RibbonButtonEx(id, ic, label, ImVec2(w, rowH), RibbonLabel::Right);
+    const RibbonLabel mode = curCompact ? RibbonLabel::None : RibbonLabel::Right;
+    return RibbonButtonEx(id, ic, curCompact ? nullptr : label, ImVec2(curCompact ? rowH : w, rowH), mode);
   };
   auto gridBtn = [&](const char* id, RibbonIconKind ic) {
     return RibbonButtonEx(id, ic, nullptr, ImVec2(gridCell, gridCell), RibbonLabel::None);
   };
-  // Column width = small icon + gap + the widest label in the column.
+  // Column width = small icon + gap + the widest label in the column — or, compact, just the icon
+  // (REQ-302 increment 2 Medium/Narrow: "switch button labels to icons," issue #83 strategy 3).
   auto colW = [&](std::initializer_list<const char*> labels) {
+    if (curCompact)
+      return rowH;
     float m = 0.f;
     for (const char* l : labels)
       m = std::max(m, ImGui::CalcTextSize(l).x);
     return rowH + 8.f + m;
   };
 
-  const float wEdit = 8.f + largeW + 4.f + colW({"Copy", "Undo", "Redo"});
-  const float wDraw = 8.f + gridCell * 4.f + 4.f * 3.f;
-  // Four columns: a small-button column is 3 tall (colH), so a 4th item in one BeginGroup is
-  // clipped by the child window's own bounds — the same "fourth needs its own column" rule
-  // Inquiry/Survey below already follow. Join/Mirror/Lengthen exactly fills one column;
-  // Extend/Break/Stretch exactly fills a second.
-  const float wMod  = 8.f + largeW + 4.f + colW({"Copy", "Rotate", "Scale"}) + 4.f +
-                      colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror", "Lengthen"}) + 4.f +
-                      colW({"Extend", "Break", "Stretch"}) + 4.f + colW({"Fillet", "Chamfer"});
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
-  const float wAnnText = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
-  // REQ-302 follow-up: Aligned/Linear moved here from Survey's Inquiry section (user GUI-pass
-  // feedback, 2026-08-25) — a Dimensions group belongs under Annotate, not Survey.
-  const float wAnnDim  = 8.f + colW({"Aligned", "Linear"});
-  // Two columns: the panel is three small buttons tall, so a fourth in one column is clipped.
-  // Aligned/Linear moved to Annotate's new Dimensions section above (2026-08-25 follow-up) — ID
-  // Point/Elev-Grade are the two that remain genuinely survey-scoped inquiry tools.
-  const float wInq  = 8.f + colW({"ID Point"}) + 4.f + colW({"Elev/Grade"});
-  // Three columns after Points: the panel is three small buttons tall, so Surfaces/Volumes/
-  // Grades/Groups (four items) needs its own two-column split, same as Modify's Extend/Break/
-  // Stretch + Fillet/Chamfer split above (fixed 2026-08-25 — see the Survey section body).
-  const float wSrv  = 8.f + largeW + 4.f + colW({"Inverse", "Traverse"}) + 4.f +
-                      colW({"Surfaces", "Volumes"}) + 4.f + colW({"Grades", "Groups"});
   // Visual-style combo width measured from its longest option text, not a guessed constant — a
   // hardcoded 132px clipped "2D Wireframe" (user GUI-pass feedback, 2026-08-25).
   const float visualStyleComboW = ImGui::CalcTextSize("2D Wireframe").x + 40.f;
-  const float wView = 8.f + colW({"Extents", "Window"}) + 8.f + visualStyleComboW;  // REQ-064
   // REQ-032 contextual ribbon: Layout tools in paper space, but the normal model ribbon while editing a
   // viewport in place (floating model space, REQ-036) so the draw/modify tools are available.
-  const bool  ribbonPaperSpace = cmd.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(cmd);
-  const float wLayout = 8.f + largeW + 4.f + colW({"Poly VP"}) + 8.f + largeW + 4.f + colW({"Batch"});
+  const bool ribbonPaperSpace = cmd.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(cmd);
 
-  // REQ-302 follow-up: size RibbonToolsLeft to the ACTIVE tab's own content instead of a blanket
-  // "window width minus the layer strip" cap — that cap is what let a wide tab's content overflow
-  // into a horizontal scrollbar (user GUI-pass feedback, 2026-08-25: "no where in the ribbon should
-  // scroll bars be allowed"). Each tab shows far less at once than the old flat 8-section row did,
-  // so its own precomputed width is what "grow wider to accommodate all of the buttons" means here.
-  float ribbonToolsW;
-  switch (cmd.activeRibbonTab) {
-    case kRibbonTabHome:
-      ribbonToolsW = ribbonPaperSpace ? (wEdit + 8.f + wLayout) : (wEdit + 8.f + wDraw + 8.f + wMod);
-      break;
-    case kRibbonTabAnnotate:
-      ribbonToolsW = ribbonPaperSpace ? largeW : (wAnnText + 8.f + wAnnDim);
-      break;
-    case kRibbonTabSurvey:
-      ribbonToolsW = ribbonPaperSpace ? largeW : (wInq + 8.f + wSrv);
-      break;
-    case kRibbonTabView:
-      ribbonToolsW = wView;
-      break;
-    default:
-      ribbonToolsW = largeW;  // Insert/Manage/Output: empty until REQ-302 increment 3
-      break;
-  }
+  // REQ-302 increment 2 (ADR-038 (a)): each tab's own section widths, computed once at Wide
+  // metrics (`W`) and once at Medium (`M`) — same formulas as increment 1 shipped, since colW()
+  // above already resolves compact vs. not; nothing here duplicates a button-sizing decision.
+  struct RibbonTabWidths {
+    float wEdit, wDraw, wMod, wAnnText, wAnnDim, wInq, wSrv, wView, wLayout;
+    float wInsert, wViewSettings, wOutExport, wOutPlot;  // REQ-302 increment 3
+  };
+  auto computeTabWidths = [&](bool compact) {
+    curCompact = compact;
+    RibbonTabWidths w{};
+    w.wEdit = 8.f + largeW + 4.f + colW({"Copy", "Undo", "Redo"});
+    w.wDraw = 8.f + gridCell * 4.f + 4.f * 3.f;  // grid buttons are already icon-only — no Medium delta
+    // Four columns: a small-button column is 3 tall (colH), so a 4th item in one BeginGroup is
+    // clipped by the child window's own bounds — the same "fourth needs its own column" rule
+    // Inquiry/Survey below already follow. Join/Mirror/Lengthen exactly fills one column;
+    // Extend/Break/Stretch exactly fills a second.
+    w.wMod  = 8.f + largeW + 4.f + colW({"Copy", "Rotate", "Scale"}) + 4.f +
+              colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror", "Lengthen"}) + 4.f +
+              colW({"Extend", "Break", "Stretch"}) + 4.f + colW({"Fillet", "Chamfer"});
+    w.wAnnText = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
+    // REQ-302 follow-up: Aligned/Linear moved here from Survey's Inquiry section (user GUI-pass
+    // feedback, 2026-08-25) — a Dimensions group belongs under Annotate, not Survey.
+    w.wAnnDim  = 8.f + colW({"Aligned", "Linear"});
+    // Two columns: the panel is three small buttons tall, so a fourth in one column is clipped.
+    // Aligned/Linear moved to Annotate's new Dimensions section above (2026-08-25 follow-up) — ID
+    // Point/Elev-Grade are the two that remain genuinely survey-scoped inquiry tools.
+    w.wInq  = 8.f + colW({"ID Point"}) + 4.f + colW({"Elev/Grade"});
+    // Three columns after Points: the panel is three small buttons tall, so Surfaces/Volumes/
+    // Grades/Groups (four items) needs its own two-column split, same as Modify's Extend/Break/
+    // Stretch + Fillet/Chamfer split above (fixed 2026-08-25 — see the Survey section body).
+    w.wSrv  = 8.f + largeW + 4.f + colW({"Inverse", "Traverse"}) + 4.f +
+              colW({"Surfaces", "Volumes"}) + 4.f + colW({"Grades", "Groups"});
+    w.wView = 8.f + colW({"Extents", "Window"}) + 8.f + visualStyleComboW;  // REQ-064
+    // REQ-302 increment 3: Plot/Batch Plot moved out to Output's "Plot" section — Layout keeps
+    // only the viewport-authoring tools (Rect VP is a largeBtn placed outside colW; Poly VP is
+    // the one column here).
+    w.wLayout = 8.f + largeW + 4.f + colW({"Poly VP"});
+    // REQ-302 increment 3 (content audit): Insert/View/Output real content.
+    w.wInsert = 8.f + colW({"Import DXF", "Import DWG"});
+    w.wViewSettings = 8.f + colW({"Settings"});
+    w.wOutExport = 8.f + colW({"Export DXF", "Export DWG"});
+    w.wOutPlot = 8.f + largeW + 4.f + colW({"Batch"});  // same shape Layout's Plot/Batch used to be
+    return w;
+  };
+  const RibbonTabWidths W = computeTabWidths(false);
+  const RibbonTabWidths M = computeTabWidths(true);
+  curCompact = false;  // reset — RenderRibbonFit sets this per-section at actual render time
+
+  // REQ-302 increment 2 (ADR-038): build the active tab's sections as deferred render closures,
+  // decide Wide/Medium/Narrow from available width (pure arithmetic, no ImGui calls — safe to run
+  // before RibbonToolsLeft's BeginChild needs a size), then size RibbonToolsLeft to exactly what
+  // will be placed (inline sections, plus a "More" button in Narrow) — never wider than available,
+  // so nothing can clip. No section's own body changes below; only what wraps it.
+  const float secGap = 8.f;
+  std::vector<RibbonSectionSpec> ribbonSpecs;
+
+  // REQ-302: Edit/Draw/Modify/Layout are the Home tab's content — no change to any of their own
+  // conditions or bodies below, only the tab gate wrapped around them.
+  if (cmd.activeRibbonTab == kRibbonTabHome) {
+    ribbonSpecs.push_back({W.wEdit, M.wEdit, [&]() {
+      RibbonSectionBegin("RibbonSecUndo", "Edit", curCompact ? M.wEdit : W.wEdit, panelH);
+      {
+        const bool canUndo = CanUndo(cmd);
+        const bool canRedo = CanRedo(cmd);
+        const bool hasSelection = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
+        const bool hasClipboard = !cmd.clipboard.empty();
+        const float cw = colW({"Copy", "Undo", "Redo"});
+
+        if (!hasClipboard)
+          ImGui::BeginDisabled();
+        if (largeBtn("##RibbonClipPaste", RibbonIconKind::ClipboardPaste, "Paste"))
+          StartPasteCommand(cmd, log);
+        if (!hasClipboard)
+          ImGui::EndDisabled();
+        RibbonItemHelp("Paste (Ctrl+V) — place clipboard objects at cursor position.\nRight-click Edit menu for Paste at Original Coordinates.",
+                       hasClipboard ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (!hasSelection)
+          ImGui::BeginDisabled();
+        if (smallBtn("##RibbonClipCopy", RibbonIconKind::ClipboardCopy, "Copy", cw))
+          CopySelectionToClipboard(cmd, log);
+        if (!hasSelection)
+          ImGui::EndDisabled();
+        RibbonItemHelp("Copy (Ctrl+C) — copy selected objects to clipboard.\nPaste later with Ctrl+V or the Paste button.",
+                       hasSelection ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+        if (!canUndo)
+          ImGui::BeginDisabled();
+        if (smallBtn("##RibbonUndo", RibbonIconKind::Undo, "Undo", cw))
+          DoUndo(cmd, log);
+        if (!canUndo)
+          ImGui::EndDisabled();
+        RibbonItemHelp("Undo (Ctrl+Z) — restore previous state.", canUndo ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+        if (!canRedo)
+          ImGui::BeginDisabled();
+        if (smallBtn("##RibbonRedo", RibbonIconKind::Redo, "Redo", cw))
+          DoRedo(cmd, log);
+        if (!canRedo)
+          ImGui::EndDisabled();
+        RibbonItemHelp("Redo (Ctrl+Shift+Z) — restore next state.", canRedo ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+        ImGui::EndGroup();
+      }
+      RibbonSectionEnd();
+    }});
+
+    if (!ribbonPaperSpace) {
+      ribbonSpecs.push_back({W.wDraw, M.wDraw, [&]() {
+        RibbonSectionBegin("RibbonSecDraw", "Draw", curCompact ? M.wDraw : W.wDraw, panelH);
+        {
+          if (gridBtn("##RibbonLine", RibbonIconKind::Line))
+            StartLineCommand(cmd, log);
+          RibbonItemHelp("Line — draw straight segments between points.\nCommand bar: LINE or L");
+          ImGui::SameLine(0, 4);
+          if (gridBtn("##RibbonCircle", RibbonIconKind::Circle))
+            StartCircleCommand(cmd, log);
+          RibbonItemHelp("Circle — center point and radius.\nCommand bar: CIRCLE or C");
+          ImGui::SameLine(0, 4);
+          if (gridBtn("##RibbonPLine", RibbonIconKind::Polyline))
+            StartPolylineCommand(cmd, log);
+          RibbonItemHelp("Polyline — chain of segments; optional close.\nCommand bar: POLYLINE or PL");
+          ImGui::SameLine(0, 4);
+          if (gridBtn("##RibbonRect", RibbonIconKind::Rect))
+            StartRectCommand(cmd, log);
+          RibbonItemHelp("Rectangle — two opposite corners; stored as a closed polyline.\nCommand bar: RECT, RECTANG or RECTANGLE");
+          ImGui::SameLine(0, 4);
+          if (gridBtn("##RibbonArc", RibbonIconKind::Arc))
+            StartArcCommand(cmd, log);
+          RibbonItemHelp("Arc — three-point arc (start, mid, end).\nCommand bar: ARC");
+          if (gridBtn("##RibbonEllipse", RibbonIconKind::Ellipse))  // wraps to the second row
+            StartEllipseCommand(cmd, log);
+          RibbonItemHelp("Ellipse — center, axis endpoint, then ratio on command line.\nCommand bar: ELLIPSE or EL");
+          ImGui::SameLine(0, 4);
+          if (gridBtn("##RibbonHatch", RibbonIconKind::Hatch))
+            StartHatchCommand(cmd, log);
+          RibbonItemHelp("Hatch — pick an internal point to fill a closed area.\nCommand bar: HATCH or H");
+          ImGui::SameLine(0, 4);
+          if (gridBtn("##RibbonPdfAttach", RibbonIconKind::PdfAttach))
+            StartPdfAttachCommand(cmd, log);
+          RibbonItemHelp("PDF Attach — attach a PDF page as a raster underlay with snap recognition.\nCommand bar: PDFATTACH");
+        }
+        RibbonSectionEnd();
+      }});
+
+      ribbonSpecs.push_back({W.wMod, M.wMod, [&]() {
+        RibbonSectionBegin("RibbonSecModify", "Modify", curCompact ? M.wMod : W.wMod, panelH);
+        {
+          if (largeBtn("##RibbonMove", RibbonIconKind::Move, "Move"))
+            StartMoveCommand(cmd, log);
+          RibbonItemHelp("Move — relocate selected entities by base point and offset.\nCommand bar: MOVE or M");
+
+          ImGui::SameLine(0, 4);
+          const float c1 = colW({"Copy", "Rotate", "Scale"});
+          ImGui::BeginGroup();
+          if (smallBtn("##RibbonCopy", RibbonIconKind::Copy, "Copy", c1))
+            StartCopyCommand(cmd, log);
+          RibbonItemHelp("Copy — duplicate selection with base point and offset.\nCommand bar: COPY or CP");
+          if (smallBtn("##RibbonRotate", RibbonIconKind::Rotate, "Rotate", c1))
+            StartRotateCommand(cmd, log);
+          RibbonItemHelp("Rotate — turn selection around a base point by angle.\nCommand bar: ROTATE or RO");
+          if (smallBtn("##RibbonScale", RibbonIconKind::Scale, "Scale", c1))
+            StartScaleCommand(cmd, log);
+          RibbonItemHelp("Scale — uniform scale about a base point (window-select like Move).\nAfter base: pick scale, "
+                           "type factor (>0), or R / REFERENCE for two-point reference length then new length (type or two "
+                           "picks).\nCommand bar: SCALE or SC");
+          ImGui::EndGroup();
+
+          ImGui::SameLine(0, 4);
+          const float c2 = colW({"Erase", "Trim", "Offset"});
+          ImGui::BeginGroup();
+          if (smallBtn("##RibbonErase", RibbonIconKind::Erase, "Erase", c2))
+            StartDeleteCommand(cmd, log);
+          RibbonItemHelp("Erase — remove entities (window or crossing selection).\nCommand bar: DELETE or DEL");
+          if (smallBtn("##RibbonTrim", RibbonIconKind::Trim, "Trim", c2))
+            StartTrimCommand(cmd, log);
+          RibbonItemHelp("Trim — shorten segments to cutting edges or drawn trim line.\nCommand bar: TRIM or TR");
+          if (smallBtn("##RibbonOffset", RibbonIconKind::Offset, "Offset", c2))
+            StartOffsetCommand(cmd, log);
+          RibbonItemHelp(
+              "Offset — parallel lines, concentric circles/arcs, offset polylines and ellipses.\nCommand bar: OFFSET or O");
+          ImGui::EndGroup();
+
+          ImGui::SameLine(0, 4);
+          const float c3 = colW({"Join", "Mirror", "Lengthen"});
+          ImGui::BeginGroup();
+          if (smallBtn("##RibbonJoin", RibbonIconKind::Join, "Join", c3))
+            StartJoinCommand(cmd, log);
+          RibbonItemHelp("Join — merge colinear line segments.\nCommand bar: JOIN or J");
+          if (smallBtn("##RibbonMirror", RibbonIconKind::Mirror, "Mirror", c3))
+            StartMirrorCommand(cmd, log);
+          RibbonItemHelp("Mirror — flip selection across a mirror line.\nCommand bar: MIRROR or MI");
+          if (smallBtn("##RibbonLengthen", RibbonIconKind::Lengthen, "Lengthen", c3))
+            StartLengthenCommand(cmd, log);
+          RibbonItemHelp("Lengthen — change a line/open polyline/arc's length at the end nearest your "
+                         "pick (DElta/Percent/Total/DYnamic).\nCommand bar: LENGTHEN or LEN");
+          ImGui::EndGroup();
+
+          // Second column: a small-button column is 3 tall (colH) — Join/Mirror/Lengthen above already
+          // fills it, so Extend (and now Break) need their own column, not a 4th/5th slot stacked into
+          // the same BeginGroup, which the child window's own clip rect would cut off entirely (this
+          // was, in fact, a real bug: EXTEND shipped as a 4th item in the group above and was invisible/
+          // unclickable — found and fixed while adding BREAK here).
+          ImGui::SameLine(0, 4);
+          // Three items exactly fills this column's 3-row limit (colH) — a 4th here would repeat the
+          // clipping bug the comment above already documents; STRETCH needs its own column if a 4th
+          // command is ever added to this group.
+          const float c4 = colW({"Extend", "Break", "Stretch"});
+          ImGui::BeginGroup();
+          if (smallBtn("##RibbonExtend", RibbonIconKind::Extend, "Extend", c4))
+            StartExtendCommand(cmd, log);
+          RibbonItemHelp("Extend — pick boundary edges, then stretch a line/open polyline/arc's end "
+                         "nearest your pick out to the nearest one.\nCommand bar: EXTEND or EX");
+          if (smallBtn("##RibbonBreak", RibbonIconKind::Break, "Break", c4))
+            StartBreakCommand(cmd, log);
+          RibbonItemHelp("Break — pick an object (the pick is break point 1), then a second point; the "
+                         "material between them is removed.\nCommand bar: BREAK or BR");
+          if (smallBtn("##RibbonStretch", RibbonIconKind::Stretch, "Stretch", c4))
+            StartStretchCommand(cmd, log);
+          RibbonItemHelp("Stretch — crossing/window-select, then base point and destination; only the "
+                         "vertices inside the box move.\nCommand bar: STRETCH or S");
+          ImGui::EndGroup();
+
+          // Fifth column: the fourth column above (Extend/Break/Stretch) already fills its 3-row limit —
+          // FILLET/CHAMFER need their own column, not a 4th slot stacked into that BeginGroup (the exact
+          // clipping bug the comment above documents for EXTEND's own first landing). Two items here
+          // stays within the 3-row limit.
+          ImGui::SameLine(0, 4);
+          const float c5 = colW({"Fillet", "Chamfer"});
+          ImGui::BeginGroup();
+          if (smallBtn("##RibbonFillet", RibbonIconKind::Fillet, "Fillet", c5))
+            StartFilletCommand(cmd, log);
+          RibbonItemHelp("Fillet — pick two curves (line/arc/polyline segment); joins them with a tangent "
+                         "arc at the current radius, trimming/extending each to meet it. Type R to set "
+                         "radius, T for Trim/No-trim.\nCommand bar: FILLET or F");
+          if (smallBtn("##RibbonChamfer", RibbonIconKind::Chamfer, "Chamfer", c5))
+            StartChamferCommand(cmd, log);
+          RibbonItemHelp("Chamfer — pick two curves (line/polyline segment); connects them with a "
+                         "straight bevel at Distance/Distance or Distance/Angle from their intersection. "
+                         "Type D for distances, A for distance+angle, T for Trim/No-trim.\nCommand bar: "
+                         "CHAMFER or CHA");
+          ImGui::EndGroup();
+        }
+        RibbonSectionEnd();
+      }});
+    } else {
+      // Layout contextual ribbon (REQ-032): paper-space viewport-authoring tools. Plot/Batch Plot
+      // moved to the Output tab's "Plot" section (REQ-302 increment 3, D-2026-08-25-h) — this
+      // section no longer duplicates them.
+      ribbonSpecs.push_back({W.wLayout, M.wLayout, [&]() {
+        RibbonSectionBegin("RibbonSecLayout", "Layout", curCompact ? M.wLayout : W.wLayout, panelH);
+        {
+          if (largeBtn("##RibbonRectVp", RibbonIconKind::ZoomWindow, "Rect VP"))
+            StartPaperRectViewportCommand(cmd, log);
+          RibbonItemHelp("Rectangular viewport — two clicks define a viewport on the sheet.\nCommand bar: MVIEW / RECTVP");
+          ImGui::SameLine(0, 4);
+          ImGui::BeginGroup();
+          const float cwL = colW({"Poly VP"});
+          ImGui::BeginDisabled();
+          smallBtn("##RibbonPolyVp", RibbonIconKind::Polyline, "Poly VP", cwL);
+          ImGui::EndDisabled();
+          RibbonItemHelp("Polygonal viewport — coming in a later increment (REQ-034).",
+                         ImGuiHoveredFlags_AllowWhenDisabled);
+          ImGui::EndGroup();
+        }
+        RibbonSectionEnd();
+      }});
+    } // if (!ribbonPaperSpace) — Draw/Modify vs Layout
+  } // if (activeRibbonTab == kRibbonTabHome)
+
+  // REQ-302: Annotate tab. Unchanged condition (model space only, same as before this task).
+  if (cmd.activeRibbonTab == kRibbonTabAnnotate && !ribbonPaperSpace) {
+    ribbonSpecs.push_back({W.wAnnText, M.wAnnText, [&]() {
+      RibbonSectionBegin("RibbonSecAnnotate", "Text", curCompact ? M.wAnnText : W.wAnnText, panelH);
+      {
+        const float cw = colW({"Text", "Mtext"});
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonText", RibbonIconKind::Text, "Text", cw))
+          StartTextCommand(cmd, log);
+        RibbonItemHelp("Text — single-line annotation at insertion.\nCommand bar: TEXT");
+        if (smallBtn("##RibbonMtext", RibbonIconKind::Mtext, "Mtext", cw))
+          StartMtextCommand(cmd, log);
+        RibbonItemHelp("Mtext — multiline in a frame; after box, edit in the on-drawing editor (Ctrl+Enter reformats; Save to place). Double-click MTEXT to edit.\nCommand bar: MTEXT or MT");
+        ImGui::EndGroup();
+        // Active text style for new TEXT/MTEXT (REQ-044): an AutoCAD-style flyout of thumbnail previews.
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Text style");
+        {
+          TextStyles::EnsureStandard(cmd.textStyles);
+          const TextStyle* active = ActiveTextStyle(cmd);
+          const std::string preview = active ? active->name : std::string("Standard");
+          if (ImGui::Button((preview + "##RibbonTextStyle").c_str(), ImVec2(annStyleW, 0.f)))
+            ImGui::OpenPopup("##textstyleflyout");
+          RibbonItemHelp("Active text style for new TEXT/MTEXT (REQ-044). Click for thumbnail previews.");
+          if (ImGui::BeginPopup("##textstyleflyout")) {
+            const float cardW = 132.f, thumbH = 50.f, cardGap = 8.f;
+            const int perRow = 3;
+            const float labelH = ImGui::GetTextLineHeight() + 4.f;
+            ImDrawList* dl = ImGui::GetWindowDrawList();
+            for (size_t i = 0; i < cmd.textStyles.size(); ++i) {
+              const TextStyle& s = cmd.textStyles[i];
+              ImGui::PushID(static_cast<int>(i));
+              if (i % static_cast<size_t>(perRow) != 0)
+                ImGui::SameLine(0, cardGap);
+              const ImVec2 p0 = ImGui::GetCursorScreenPos();
+              const bool sel = (s.name == cmd.activeTextStyleName);
+              if (ImGui::InvisibleButton("##card", ImVec2(cardW, thumbH + labelH))) {
+                SetActiveTextStyle(cmd, s.name);
+                ImGui::CloseCurrentPopup();
+              }
+              const bool hovered = ImGui::IsItemHovered();
+              const ImVec2 thBR(p0.x + cardW, p0.y + thumbH);
+              dl->AddRectFilled(p0, thBR, IM_COL32(245, 245, 245, 255), 3.f);
+              dl->AddRect(p0, thBR,
+                          sel ? IM_COL32(90, 160, 230, 255)
+                              : (hovered ? IM_COL32(150, 150, 150, 255) : IM_COL32(90, 90, 90, 255)),
+                          3.f, 0, sel ? 2.f : 1.f);
+              dl->PushClipRect(p0, thBR, true);
+              DrawTextStyleSample(dl, p0, ImVec2(cardW, thumbH), s, "AaBb123", IM_COL32(20, 20, 20, 255));
+              dl->PopClipRect();
+              dl->AddText(ImVec2(p0.x + 2.f, p0.y + thumbH + 2.f), IM_COL32(232, 232, 232, 255), s.name.c_str());
+              ImGui::PopID();
+            }
+            ImGui::Separator();
+            if (ImGui::Selectable("Manage Text Styles…")) {
+              TextStyles::EnsureStandard(cmd.textStyles);
+              cmd.showTextStyleManagerWindow = true;
+              ImGui::CloseCurrentPopup();
+            }
+            ImGui::EndPopup();
+          }
+        }
+        ImGui::EndGroup();
+      }
+      RibbonSectionEnd();
+    }});
+
+    // REQ-302 follow-up (user GUI-pass feedback, 2026-08-25): Aligned/Linear moved here from
+    // Survey's Inquiry section — a Dimensions group belongs under Annotate.
+    ribbonSpecs.push_back({W.wAnnDim, M.wAnnDim, [&]() {
+      RibbonSectionBegin("RibbonSecAnnDim", "Dimensions", curCompact ? M.wAnnDim : W.wAnnDim, panelH);
+      {
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonDim", RibbonIconKind::Dim, "Aligned", colW({"Aligned", "Linear"})))
+          StartDimAlignedCommand(cmd, log);
+        RibbonItemHelp("Aligned dimension — extension lines and text.\nCommand bar: DIMALIGNED or DAL");
+        if (smallBtn("##RibbonDimLin", RibbonIconKind::DimLinear, "Linear", colW({"Aligned", "Linear"})))
+          StartDimLinearCommand(cmd, log);
+        RibbonItemHelp(
+            "Linear dimension — horizontal or vertical distance in X or Y; third pick sets line position (cursor or H/V).\nCommand bar: DIMLINEAR or DLI");
+        ImGui::EndGroup();
+      }
+      RibbonSectionEnd();
+    }});
+  } // if (activeRibbonTab == kRibbonTabAnnotate)
+
+  // REQ-302: Survey tab (Inquiry + Survey sections). Unchanged condition (model space only, same
+  // as before this task).
+  if (cmd.activeRibbonTab == kRibbonTabSurvey && !ribbonPaperSpace) {
+    ribbonSpecs.push_back({W.wInq, M.wInq, [&]() {
+      RibbonSectionBegin("RibbonSecInquiry", "Inquiry", curCompact ? M.wInq : W.wInq, panelH);
+      {
+        // Aligned/Linear moved to Annotate's Dimensions section (2026-08-25 follow-up) — ID Point is
+        // the one inquiry tool that stays here.
+        const float cw = colW({"ID Point"});
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonId", RibbonIconKind::Id, "ID Point", cw))
+          StartIdPointCommand(cmd, log);
+        RibbonItemHelp("ID — list UCS (World) X,Y,Z at a point (click or type coordinates).\nCommand bar: ID");
+        ImGui::EndGroup();
+
+        // Second column: the panel is three small buttons tall, so this cannot go under ID Point.
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonSurfElev", RibbonIconKind::Id, "Elev/Grade", colW({"Elev/Grade"})))
+          StartSurfaceElevGradeCommand(cmd, log);
+        RibbonItemHelp(
+            "Surface elevation and grade (REQ-074) — pick a point for its interpolated elevation on every "
+            "surface covering it; pick a second for the grade, slope and distances between them.\n"
+            "A pick off the surface says so rather than extrapolating.\nCommand bar: SURFELEV or SE");
+        ImGui::EndGroup();
+      }
+      RibbonSectionEnd();
+    }});
+
+    ribbonSpecs.push_back({W.wSrv, M.wSrv, [&]() {
+      RibbonSectionBegin("RibbonSecSurvey", "Survey", curCompact ? M.wSrv : W.wSrv, panelH);
+      {
+        if (largeBtn("##RibbonPoint", RibbonIconKind::SurveyPoint, "Points"))
+          StartCreatePointsCommand(cmd, log);
+        RibbonItemHelp(
+            "Create points — open the create-points panel and click in the drawing to place survey points.\n"
+            "Command bar: CREATEPOINTS or CRTPTS");
+
+        ImGui::SameLine(0, 4);
+        const float cwA = colW({"Inverse", "Traverse"});
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonInverse", RibbonIconKind::SurveyInverse, "Inverse", cwA))
+          StartSurveyInverseCommand(cmd, log);
+        RibbonItemHelp(
+            "Inverse — two-point survey leg: horizontal distance and bearing (clockwise from north) in the command log "
+            "(World X=Easting, Y=Northing).\nCommand bar: INVERSE or INV");
+        if (smallBtn("##RibbonTraverse", RibbonIconKind::Traverse, "Traverse", cwA))
+          cmd.showTraverseEditorWindow = true;
+        RibbonItemHelp("Traverse Editor — enter traverse leg observations (horizontal angles, distances, vertical angles)\nto compute coordinates and closure. Face 1/Face 2 support included.");
+        ImGui::EndGroup();
+
+        // Surfaces/Volumes/Grades/Groups is FOUR items — the panel is three small buttons tall (colH),
+        // so a single column here clipped "Groups" at the bottom (latent since before REQ-302; only
+        // visible now that a scrollbar can no longer mask it — user GUI-pass feedback, 2026-08-25).
+        // Split 2+2, the same "fourth needs its own column" fix already used in Modify above.
+        ImGui::SameLine(0, 4);
+        const float cwB = colW({"Surfaces", "Volumes"});
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonSurfaces", RibbonIconKind::SurveyPoint, "Surfaces", cwB))
+          cmd.showSurfaceManagerWindow = true;
+        RibbonItemHelp(
+            "Surfaces — build a TIN surface by triangulating the points in one or more point groups, "
+            "then rebuild it as the survey changes.");
+        // REQ-073 amendment (TASK-095). Sits with Surfaces because a volume comparison is always between
+        // two of them.
+        if (smallBtn("##RibbonVolumes", RibbonIconKind::SurveyPoint, "Volumes", cwB))
+          cmd.volumeDashboard.open = true;
+        RibbonItemHelp(
+            "Volume Dashboard — pick a Base and a Comparison surface for a live cut/fill/net report that "
+            "updates automatically as either surface is rebuilt.");
+        ImGui::EndGroup();
+
+        ImGui::SameLine(0, 4);
+        const float cwC = colW({"Grades", "Groups"});
+        ImGui::BeginGroup();
+        // REQ-088. Sits with Surfaces because that is what a feature line's elevations are FOR — the
+        // line is design linework a surface consumes as a breakline.
+        if (smallBtn("##RibbonFlElev", RibbonIconKind::SurveyPoint, "Grades", cwC))
+          cmd.showFeatureLineElevWindow = true;
+        RibbonItemHelp(
+            "Feature Line Elevations — station, elevation, length, grade back and grade ahead for each "
+            "point of a feature line. Edit an elevation or a grade, raise or lower the whole line, and "
+            "add elevation points that change grade without changing the plan shape.");
+        if (smallBtn("##RibbonPointGroups", RibbonIconKind::SurveyPoint, "Groups", cwC))
+          cmd.showPointGroupManagerWindow = true;
+        RibbonItemHelp(
+            "Point Groups — name a set of points by rule: number ranges, description, raw description, or "
+            "picks.\nMembership is re-evaluated from the current points, so a later import joins the group "
+            "automatically.");
+        ImGui::EndGroup();
+      }
+      RibbonSectionEnd();
+    }});
+  } // if (activeRibbonTab == kRibbonTabSurvey)
+
+  // REQ-302: View tab.
+  if (cmd.activeRibbonTab == kRibbonTabView) {
+    ribbonSpecs.push_back({W.wView, M.wView, [&]() {
+      RibbonSectionBegin("RibbonSecView", "View", curCompact ? M.wView : W.wView, panelH);
+      {
+        const float cw = colW({"Extents", "Window"});
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonZExtents", RibbonIconKind::ZoomExtents, "Extents", cw))
+          StartZoomExtentsCommand(cmd, log);
+        RibbonItemHelp("Zoom extents — fit all drawing content in the view.\nCommand bar: ZOOMEXTENTS or ZE");
+        if (smallBtn("##RibbonZWindow", RibbonIconKind::ZoomWindow, "Window", cw))
+          StartZoomWindowCommand(cmd, log);
+        RibbonItemHelp("Zoom window — zoom to a rectangle you pick with two clicks.\nCommand bar: ZOOMWINDOW or ZW");
+        ImGui::EndGroup();
+        // Visual style (REQ-064). Sits in View because it is a property of how this viewport draws,
+        // not of the drawing — the same reasoning that put it on RenderTuning rather than on an entity.
+        ImGui::SameLine(0, 8);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Visual style");
+        ImGui::SetNextItemWidth(visualStyleComboW);
+        int vsIdx = static_cast<int>(cmd.viewportVisualStyle);
+        const char* kVsItems[] = {"2D Wireframe", "Hidden", "Shaded"};
+        if (ImGui::Combo("##RibbonVisualStyle", &vsIdx, kVsItems, IM_ARRAYSIZE(kVsItems)))
+          cmd.viewportVisualStyle = static_cast<VisualStyle>(vsIdx);
+        RibbonItemHelp("How the viewport draws.\n"
+                       "2D Wireframe — every edge visible, no depth testing (the classic view).\n"
+                       "Hidden — near geometry hides far geometry.\n"
+                       "Shaded — filled surfaces lit from the camera.\n"
+                       "Command bar: VISUALSTYLE (VS) 2D | HIDDEN | SHADED");
+        ImGui::EndGroup();
+      }
+      RibbonSectionEnd();
+    }});
+
+    // REQ-302 increment 3 (content audit, D-2026-08-25-h): Settings placed on View per the user's
+    // explicit decision — same window the View menu's "Settings..." item already opens.
+    ribbonSpecs.push_back({W.wViewSettings, M.wViewSettings, [&]() {
+      RibbonSectionBegin("RibbonSecViewSettings", "Settings", curCompact ? M.wViewSettings : W.wViewSettings, panelH);
+      {
+        if (smallBtn("##RibbonSettings", RibbonIconKind::Layers, "Settings", colW({"Settings"})))
+          cmd.showSettingsWindow = true;
+        RibbonItemHelp("Open application settings (same as View menu → Settings...).");
+      }
+      RibbonSectionEnd();
+    }});
+  } // if (activeRibbonTab == kRibbonTabView)
+
+  // REQ-302 increment 3 (content audit, D-2026-08-25-h): Insert tab — Import DXF/DWG, relocated
+  // from the File menu (which keeps its own copy — second entry point, not a move).
+  if (cmd.activeRibbonTab == kRibbonTabInsert) {
+    ribbonSpecs.push_back({W.wInsert, M.wInsert, [&]() {
+      RibbonSectionBegin("RibbonSecInsert", "Import", curCompact ? M.wInsert : W.wInsert, panelH);
+      {
+        static char ribbonDxfPath[4096]{};
+        static char ribbonDwgPath[4096]{};
+        const float cw = colW({"Import DXF", "Import DWG"});
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonImportDxf", RibbonIconKind::PdfAttach, "Import DXF", cw)) {
+          if (BrowseOpenFileDxfUtf8(ribbonDxfPath, sizeof(ribbonDxfPath)))
+            ImportDxfFile(cmd, ribbonDxfPath, log);
+        }
+        RibbonItemHelp("Import a DXF drawing into the current session.\nSame as File menu → Import DXF...");
+        {
+          const DwgConverter& conv = FindDwgConverter();
+          if (!conv.available())
+            ImGui::BeginDisabled();
+          if (smallBtn("##RibbonImportDwg", RibbonIconKind::PdfAttach, "Import DWG", cw)) {
+            if (BrowseOpenFileDwgUtf8(ribbonDwgPath, sizeof(ribbonDwgPath)))
+              ImportDwgFile(cmd, ribbonDwgPath, log);
+          }
+          if (!conv.available())
+            ImGui::EndDisabled();
+          if (!conv.available() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip(
+                "DWG needs a converter: install the free ODA File Converter, or set\n"
+                "GOSURVEY_DWG_CONVERTER to ODAFileConverter.exe or accoreconsole.exe.");
+          else if (conv.available() && ImGui::IsItemHovered())
+            ImGui::SetTooltip("Using %s", conv.displayName.c_str());
+        }
+        ImGui::EndGroup();
+      }
+      RibbonSectionEnd();
+    }});
+  } // if (activeRibbonTab == kRibbonTabInsert)
+
+  // REQ-302 increment 3 (content audit, D-2026-08-25-h): Output tab — Export DXF/DWG (relocated
+  // from the File menu) and Plot/Batch Plot (moved from Home's Layout section, not duplicated).
+  if (cmd.activeRibbonTab == kRibbonTabOutput) {
+    ribbonSpecs.push_back({W.wOutExport, M.wOutExport, [&]() {
+      RibbonSectionBegin("RibbonSecOutExport", "Export", curCompact ? M.wOutExport : W.wOutExport, panelH);
+      {
+        static char ribbonExpDxfPath[4096]{};
+        static char ribbonExpDwgPath[4096]{};
+        const float cw = colW({"Export DXF", "Export DWG"});
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonExportDxf", RibbonIconKind::PdfAttach, "Export DXF", cw)) {
+          if (BrowseSaveFileDxfUtf8(ribbonExpDxfPath, sizeof(ribbonExpDxfPath), "drawing.dxf"))
+            ExportDxfFile(cmd, ribbonExpDxfPath, log);
+        }
+        RibbonItemHelp("Export the current drawing to DXF.\nSame as File menu → Export DXF...");
+        {
+          const DwgConverter& conv = FindDwgConverter();
+          if (!conv.available())
+            ImGui::BeginDisabled();
+          if (smallBtn("##RibbonExportDwg", RibbonIconKind::PdfAttach, "Export DWG", cw)) {
+            if (BrowseSaveFileDwgUtf8(ribbonExpDwgPath, sizeof(ribbonExpDwgPath), "drawing.dwg")) {
+              cmd.dwgPendingExportPath = ribbonExpDwgPath;
+              cmd.dwgLossyExportModal  = true;
+            }
+          }
+          if (!conv.available())
+            ImGui::EndDisabled();
+          if (!conv.available() && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip(
+                "DWG needs a converter: install the free ODA File Converter, or set\n"
+                "GOSURVEY_DWG_CONVERTER to ODAFileConverter.exe or accoreconsole.exe.");
+          else if (conv.available() && ImGui::IsItemHovered())
+            ImGui::SetTooltip("Using %s", conv.displayName.c_str());
+        }
+        ImGui::EndGroup();
+      }
+      RibbonSectionEnd();
+    }});
+
+    ribbonSpecs.push_back({W.wOutPlot, M.wOutPlot, [&]() {
+      RibbonSectionBegin("RibbonSecOutPlot", "Plot", curCompact ? M.wOutPlot : W.wOutPlot, panelH);
+      {
+        if (largeBtn("##RibbonPlot", RibbonIconKind::PdfAttach, "Plot"))
+          PlotActiveLayout(cmd, log);
+        RibbonItemHelp("Plot the current layout to a vector PDF.\nCommand bar: PLOT");
+        ImGui::SameLine(0, 4);
+        if (smallBtn("##RibbonBatchPlot", RibbonIconKind::PdfAttach, "Batch", colW({"Batch"}))) {
+          cmd.batchPlotSelected.clear();
+          if (cmd.activeSpaceIndex >= 0)
+            cmd.batchPlotSelected.push_back(cmd.activeSpaceIndex);
+          cmd.showBatchPlotDialog = true;
+        }
+        RibbonItemHelp("Batch plot — pick layouts to plot into one multi-page PDF.");
+      }
+      RibbonSectionEnd();
+    }});
+  } // if (activeRibbonTab == kRibbonTabOutput)
+
+  // REQ-302 increment 2 (ADR-038 (a)): decide breakpoint from the width RibbonToolsLeft and
+  // RibbonLayerStrip already compete for today (RibbonLayerStrip is the fixed-width sibling placed
+  // right after RibbonToolsLeft's own EndChild via SameLine — see below) — measured here, before
+  // RibbonToolsLeft's BeginChild needs a size.
+  const float availForTools = std::max(largeW, ImGui::GetContentRegionAvail().x - st.ItemSpacing.x - kLayerPanelW);
+  const RibbonFitResult ribbonFit = DecideRibbonFit(ribbonSpecs, availForTools, secGap);
+  const float ribbonToolsW = ribbonSpecs.empty() ? largeW : ribbonFit.width;
 
   ImGui::PushStyleColor(ImGuiCol_ChildBg, g_chrome.bandFace);
   ImGui::BeginChild("RibbonToolsLeft", ImVec2(ribbonToolsW, panelH), false,
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   ImGui::PopStyleColor();
 
-  // REQ-302: Edit/Draw/Modify/Layout are the Home tab's content — no change to any of their own
-  // conditions or bodies below, only the tab gate wrapped around them.
-  if (cmd.activeRibbonTab == kRibbonTabHome) {
-  RibbonSectionBegin("RibbonSecUndo", "Edit", wEdit, panelH);
-  {
-    const bool canUndo = CanUndo(cmd);
-    const bool canRedo = CanRedo(cmd);
-    const bool hasSelection = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
-    const bool hasClipboard = !cmd.clipboard.empty();
-    const float cw = colW({"Copy", "Undo", "Redo"});
-
-    if (!hasClipboard)
-      ImGui::BeginDisabled();
-    if (largeBtn("##RibbonClipPaste", RibbonIconKind::ClipboardPaste, "Paste"))
-      StartPasteCommand(cmd, log);
-    if (!hasClipboard)
-      ImGui::EndDisabled();
-    RibbonItemHelp("Paste (Ctrl+V) — place clipboard objects at cursor position.\nRight-click Edit menu for Paste at Original Coordinates.",
-                   hasClipboard ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
-
-    ImGui::SameLine(0, 4);
-    ImGui::BeginGroup();
-    if (!hasSelection)
-      ImGui::BeginDisabled();
-    if (smallBtn("##RibbonClipCopy", RibbonIconKind::ClipboardCopy, "Copy", cw))
-      CopySelectionToClipboard(cmd, log);
-    if (!hasSelection)
-      ImGui::EndDisabled();
-    RibbonItemHelp("Copy (Ctrl+C) — copy selected objects to clipboard.\nPaste later with Ctrl+V or the Paste button.",
-                   hasSelection ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
-    if (!canUndo)
-      ImGui::BeginDisabled();
-    if (smallBtn("##RibbonUndo", RibbonIconKind::Undo, "Undo", cw))
-      DoUndo(cmd, log);
-    if (!canUndo)
-      ImGui::EndDisabled();
-    RibbonItemHelp("Undo (Ctrl+Z) — restore previous state.", canUndo ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
-    if (!canRedo)
-      ImGui::BeginDisabled();
-    if (smallBtn("##RibbonRedo", RibbonIconKind::Redo, "Redo", cw))
-      DoRedo(cmd, log);
-    if (!canRedo)
-      ImGui::EndDisabled();
-    RibbonItemHelp("Redo (Ctrl+Shift+Z) — restore next state.", canRedo ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
-    ImGui::EndGroup();
-  }
-  RibbonSectionEnd();
-  ImGui::SameLine(0, 8);
-
-  if (!ribbonPaperSpace) {
-  RibbonSectionBegin("RibbonSecDraw", "Draw", wDraw, panelH);
-  {
-    if (gridBtn("##RibbonLine", RibbonIconKind::Line))
-      StartLineCommand(cmd, log);
-    RibbonItemHelp("Line — draw straight segments between points.\nCommand bar: LINE or L");
-    ImGui::SameLine(0, 4);
-    if (gridBtn("##RibbonCircle", RibbonIconKind::Circle))
-      StartCircleCommand(cmd, log);
-    RibbonItemHelp("Circle — center point and radius.\nCommand bar: CIRCLE or C");
-    ImGui::SameLine(0, 4);
-    if (gridBtn("##RibbonPLine", RibbonIconKind::Polyline))
-      StartPolylineCommand(cmd, log);
-    RibbonItemHelp("Polyline — chain of segments; optional close.\nCommand bar: POLYLINE or PL");
-    ImGui::SameLine(0, 4);
-    if (gridBtn("##RibbonRect", RibbonIconKind::Rect))
-      StartRectCommand(cmd, log);
-    RibbonItemHelp("Rectangle — two opposite corners; stored as a closed polyline.\nCommand bar: RECT, RECTANG or RECTANGLE");
-    ImGui::SameLine(0, 4);
-    if (gridBtn("##RibbonArc", RibbonIconKind::Arc))
-      StartArcCommand(cmd, log);
-    RibbonItemHelp("Arc — three-point arc (start, mid, end).\nCommand bar: ARC");
-    if (gridBtn("##RibbonEllipse", RibbonIconKind::Ellipse))  // wraps to the second row
-      StartEllipseCommand(cmd, log);
-    RibbonItemHelp("Ellipse — center, axis endpoint, then ratio on command line.\nCommand bar: ELLIPSE or EL");
-    ImGui::SameLine(0, 4);
-    if (gridBtn("##RibbonHatch", RibbonIconKind::Hatch))
-      StartHatchCommand(cmd, log);
-    RibbonItemHelp("Hatch — pick an internal point to fill a closed area.\nCommand bar: HATCH or H");
-    ImGui::SameLine(0, 4);
-    if (gridBtn("##RibbonPdfAttach", RibbonIconKind::PdfAttach))
-      StartPdfAttachCommand(cmd, log);
-    RibbonItemHelp("PDF Attach — attach a PDF page as a raster underlay with snap recognition.\nCommand bar: PDFATTACH");
-  }
-  RibbonSectionEnd();
-  ImGui::SameLine(0, 8);
-
-  RibbonSectionBegin("RibbonSecModify", "Modify", wMod, panelH);
-  {
-    if (largeBtn("##RibbonMove", RibbonIconKind::Move, "Move"))
-      StartMoveCommand(cmd, log);
-    RibbonItemHelp("Move — relocate selected entities by base point and offset.\nCommand bar: MOVE or M");
-
-    ImGui::SameLine(0, 4);
-    const float c1 = colW({"Copy", "Rotate", "Scale"});
-    ImGui::BeginGroup();
-    if (smallBtn("##RibbonCopy", RibbonIconKind::Copy, "Copy", c1))
-      StartCopyCommand(cmd, log);
-    RibbonItemHelp("Copy — duplicate selection with base point and offset.\nCommand bar: COPY or CP");
-    if (smallBtn("##RibbonRotate", RibbonIconKind::Rotate, "Rotate", c1))
-      StartRotateCommand(cmd, log);
-    RibbonItemHelp("Rotate — turn selection around a base point by angle.\nCommand bar: ROTATE or RO");
-    if (smallBtn("##RibbonScale", RibbonIconKind::Scale, "Scale", c1))
-      StartScaleCommand(cmd, log);
-    RibbonItemHelp("Scale — uniform scale about a base point (window-select like Move).\nAfter base: pick scale, "
-                     "type factor (>0), or R / REFERENCE for two-point reference length then new length (type or two "
-                     "picks).\nCommand bar: SCALE or SC");
-    ImGui::EndGroup();
-
-    ImGui::SameLine(0, 4);
-    const float c2 = colW({"Erase", "Trim", "Offset"});
-    ImGui::BeginGroup();
-    if (smallBtn("##RibbonErase", RibbonIconKind::Erase, "Erase", c2))
-      StartDeleteCommand(cmd, log);
-    RibbonItemHelp("Erase — remove entities (window or crossing selection).\nCommand bar: DELETE or DEL");
-    if (smallBtn("##RibbonTrim", RibbonIconKind::Trim, "Trim", c2))
-      StartTrimCommand(cmd, log);
-    RibbonItemHelp("Trim — shorten segments to cutting edges or drawn trim line.\nCommand bar: TRIM or TR");
-    if (smallBtn("##RibbonOffset", RibbonIconKind::Offset, "Offset", c2))
-      StartOffsetCommand(cmd, log);
-    RibbonItemHelp(
-        "Offset — parallel lines, concentric circles/arcs, offset polylines and ellipses.\nCommand bar: OFFSET or O");
-    ImGui::EndGroup();
-
-    ImGui::SameLine(0, 4);
-    const float c3 = colW({"Join", "Mirror", "Lengthen"});
-    ImGui::BeginGroup();
-    if (smallBtn("##RibbonJoin", RibbonIconKind::Join, "Join", c3))
-      StartJoinCommand(cmd, log);
-    RibbonItemHelp("Join — merge colinear line segments.\nCommand bar: JOIN or J");
-    if (smallBtn("##RibbonMirror", RibbonIconKind::Mirror, "Mirror", c3))
-      StartMirrorCommand(cmd, log);
-    RibbonItemHelp("Mirror — flip selection across a mirror line.\nCommand bar: MIRROR or MI");
-    if (smallBtn("##RibbonLengthen", RibbonIconKind::Lengthen, "Lengthen", c3))
-      StartLengthenCommand(cmd, log);
-    RibbonItemHelp("Lengthen — change a line/open polyline/arc's length at the end nearest your "
-                   "pick (DElta/Percent/Total/DYnamic).\nCommand bar: LENGTHEN or LEN");
-    ImGui::EndGroup();
-
-    // Second column: a small-button column is 3 tall (colH) — Join/Mirror/Lengthen above already
-    // fills it, so Extend (and now Break) need their own column, not a 4th/5th slot stacked into
-    // the same BeginGroup, which the child window's own clip rect would cut off entirely (this
-    // was, in fact, a real bug: EXTEND shipped as a 4th item in the group above and was invisible/
-    // unclickable — found and fixed while adding BREAK here).
-    ImGui::SameLine(0, 4);
-    // Three items exactly fills this column's 3-row limit (colH) — a 4th here would repeat the
-    // clipping bug the comment above already documents; STRETCH needs its own column if a 4th
-    // command is ever added to this group.
-    const float c4 = colW({"Extend", "Break", "Stretch"});
-    ImGui::BeginGroup();
-    if (smallBtn("##RibbonExtend", RibbonIconKind::Extend, "Extend", c4))
-      StartExtendCommand(cmd, log);
-    RibbonItemHelp("Extend — pick boundary edges, then stretch a line/open polyline/arc's end "
-                   "nearest your pick out to the nearest one.\nCommand bar: EXTEND or EX");
-    if (smallBtn("##RibbonBreak", RibbonIconKind::Break, "Break", c4))
-      StartBreakCommand(cmd, log);
-    RibbonItemHelp("Break — pick an object (the pick is break point 1), then a second point; the "
-                   "material between them is removed.\nCommand bar: BREAK or BR");
-    if (smallBtn("##RibbonStretch", RibbonIconKind::Stretch, "Stretch", c4))
-      StartStretchCommand(cmd, log);
-    RibbonItemHelp("Stretch — crossing/window-select, then base point and destination; only the "
-                   "vertices inside the box move.\nCommand bar: STRETCH or S");
-    ImGui::EndGroup();
-
-    // Fifth column: the fourth column above (Extend/Break/Stretch) already fills its 3-row limit —
-    // FILLET/CHAMFER need their own column, not a 4th slot stacked into that BeginGroup (the exact
-    // clipping bug the comment above documents for EXTEND's own first landing). Two items here
-    // stays within the 3-row limit.
-    ImGui::SameLine(0, 4);
-    const float c5 = colW({"Fillet", "Chamfer"});
-    ImGui::BeginGroup();
-    if (smallBtn("##RibbonFillet", RibbonIconKind::Fillet, "Fillet", c5))
-      StartFilletCommand(cmd, log);
-    RibbonItemHelp("Fillet — pick two curves (line/arc/polyline segment); joins them with a tangent "
-                   "arc at the current radius, trimming/extending each to meet it. Type R to set "
-                   "radius, T for Trim/No-trim.\nCommand bar: FILLET or F");
-    if (smallBtn("##RibbonChamfer", RibbonIconKind::Chamfer, "Chamfer", c5))
-      StartChamferCommand(cmd, log);
-    RibbonItemHelp("Chamfer — pick two curves (line/polyline segment); connects them with a "
-                   "straight bevel at Distance/Distance or Distance/Angle from their intersection. "
-                   "Type D for distances, A for distance+angle, T for Trim/No-trim.\nCommand bar: "
-                   "CHAMFER or CHA");
-    ImGui::EndGroup();
-  }
-  RibbonSectionEnd();
-  } // if (!ribbonPaperSpace) — Draw/Modify
-  } // if (activeRibbonTab == kRibbonTabHome)
-
-  // REQ-302: Annotate tab. Unchanged condition (model space only, same as before this task).
-  if (cmd.activeRibbonTab == kRibbonTabAnnotate && !ribbonPaperSpace) {
-  RibbonSectionBegin("RibbonSecAnnotate", "Text", wAnnText, panelH);
-  {
-    const float cw = colW({"Text", "Mtext"});
-    ImGui::BeginGroup();
-    if (smallBtn("##RibbonText", RibbonIconKind::Text, "Text", cw))
-      StartTextCommand(cmd, log);
-    RibbonItemHelp("Text — single-line annotation at insertion.\nCommand bar: TEXT");
-    if (smallBtn("##RibbonMtext", RibbonIconKind::Mtext, "Mtext", cw))
-      StartMtextCommand(cmd, log);
-    RibbonItemHelp("Mtext — multiline in a frame; after box, edit in the on-drawing editor (Ctrl+Enter reformats; Save to place). Double-click MTEXT to edit.\nCommand bar: MTEXT or MT");
-    ImGui::EndGroup();
-    // Active text style for new TEXT/MTEXT (REQ-044): an AutoCAD-style flyout of thumbnail previews.
-    ImGui::SameLine(0, 4);
-    ImGui::BeginGroup();
-    ImGui::TextUnformatted("Text style");
-    {
-      TextStyles::EnsureStandard(cmd.textStyles);
-      const TextStyle* active = ActiveTextStyle(cmd);
-      const std::string preview = active ? active->name : std::string("Standard");
-      if (ImGui::Button((preview + "##RibbonTextStyle").c_str(), ImVec2(annStyleW, 0.f)))
-        ImGui::OpenPopup("##textstyleflyout");
-      RibbonItemHelp("Active text style for new TEXT/MTEXT (REQ-044). Click for thumbnail previews.");
-      if (ImGui::BeginPopup("##textstyleflyout")) {
-        const float cardW = 132.f, thumbH = 50.f, gap = 8.f;
-        const int perRow = 3;
-        const float labelH = ImGui::GetTextLineHeight() + 4.f;
-        ImDrawList* dl = ImGui::GetWindowDrawList();
-        for (size_t i = 0; i < cmd.textStyles.size(); ++i) {
-          const TextStyle& s = cmd.textStyles[i];
-          ImGui::PushID(static_cast<int>(i));
-          if (i % static_cast<size_t>(perRow) != 0)
-            ImGui::SameLine(0, gap);
-          const ImVec2 p0 = ImGui::GetCursorScreenPos();
-          const bool sel = (s.name == cmd.activeTextStyleName);
-          if (ImGui::InvisibleButton("##card", ImVec2(cardW, thumbH + labelH))) {
-            SetActiveTextStyle(cmd, s.name);
-            ImGui::CloseCurrentPopup();
-          }
-          const bool hovered = ImGui::IsItemHovered();
-          const ImVec2 thBR(p0.x + cardW, p0.y + thumbH);
-          dl->AddRectFilled(p0, thBR, IM_COL32(245, 245, 245, 255), 3.f);
-          dl->AddRect(p0, thBR,
-                      sel ? IM_COL32(90, 160, 230, 255)
-                          : (hovered ? IM_COL32(150, 150, 150, 255) : IM_COL32(90, 90, 90, 255)),
-                      3.f, 0, sel ? 2.f : 1.f);
-          dl->PushClipRect(p0, thBR, true);
-          DrawTextStyleSample(dl, p0, ImVec2(cardW, thumbH), s, "AaBb123", IM_COL32(20, 20, 20, 255));
-          dl->PopClipRect();
-          dl->AddText(ImVec2(p0.x + 2.f, p0.y + thumbH + 2.f), IM_COL32(232, 232, 232, 255), s.name.c_str());
-          ImGui::PopID();
-        }
-        ImGui::Separator();
-        if (ImGui::Selectable("Manage Text Styles…")) {
-          TextStyles::EnsureStandard(cmd.textStyles);
-          cmd.showTextStyleManagerWindow = true;
-          ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-      }
-    }
-    ImGui::EndGroup();
-  }
-  RibbonSectionEnd();
-  ImGui::SameLine(0, 8);
-
-  // REQ-302 follow-up (user GUI-pass feedback, 2026-08-25): Aligned/Linear moved here from
-  // Survey's Inquiry section — a Dimensions group belongs under Annotate.
-  RibbonSectionBegin("RibbonSecAnnDim", "Dimensions", wAnnDim, panelH);
-  {
-    ImGui::BeginGroup();
-    if (smallBtn("##RibbonDim", RibbonIconKind::Dim, "Aligned", colW({"Aligned", "Linear"})))
-      StartDimAlignedCommand(cmd, log);
-    RibbonItemHelp("Aligned dimension — extension lines and text.\nCommand bar: DIMALIGNED or DAL");
-    if (smallBtn("##RibbonDimLin", RibbonIconKind::DimLinear, "Linear", colW({"Aligned", "Linear"})))
-      StartDimLinearCommand(cmd, log);
-    RibbonItemHelp(
-        "Linear dimension — horizontal or vertical distance in X or Y; third pick sets line position (cursor or H/V).\nCommand bar: DIMLINEAR or DLI");
-    ImGui::EndGroup();
-  }
-  RibbonSectionEnd();
-  } // if (activeRibbonTab == kRibbonTabAnnotate)
-
-  // REQ-302: Survey tab (Inquiry + Survey sections). Unchanged condition (model space only, same
-  // as before this task).
-  if (cmd.activeRibbonTab == kRibbonTabSurvey && !ribbonPaperSpace) {
-  RibbonSectionBegin("RibbonSecInquiry", "Inquiry", wInq, panelH);
-  {
-    // Aligned/Linear moved to Annotate's Dimensions section (2026-08-25 follow-up) — ID Point is
-    // the one inquiry tool that stays here.
-    const float cw = colW({"ID Point"});
-    ImGui::BeginGroup();
-    if (smallBtn("##RibbonId", RibbonIconKind::Id, "ID Point", cw))
-      StartIdPointCommand(cmd, log);
-    RibbonItemHelp("ID — list UCS (World) X,Y,Z at a point (click or type coordinates).\nCommand bar: ID");
-    ImGui::EndGroup();
-
-    // Second column: the panel is three small buttons tall, so this cannot go under ID Point.
-    ImGui::SameLine(0, 4);
-    ImGui::BeginGroup();
-    if (smallBtn("##RibbonSurfElev", RibbonIconKind::Id, "Elev/Grade", colW({"Elev/Grade"})))
-      StartSurfaceElevGradeCommand(cmd, log);
-    RibbonItemHelp(
-        "Surface elevation and grade (REQ-074) — pick a point for its interpolated elevation on every "
-        "surface covering it; pick a second for the grade, slope and distances between them.\n"
-        "A pick off the surface says so rather than extrapolating.\nCommand bar: SURFELEV or SE");
-    ImGui::EndGroup();
-  }
-  RibbonSectionEnd();
-  ImGui::SameLine(0, 8);
-
-  RibbonSectionBegin("RibbonSecSurvey", "Survey", wSrv, panelH);
-  {
-    if (largeBtn("##RibbonPoint", RibbonIconKind::SurveyPoint, "Points"))
-      StartCreatePointsCommand(cmd, log);
-    RibbonItemHelp(
-        "Create points — open the create-points panel and click in the drawing to place survey points.\n"
-        "Command bar: CREATEPOINTS or CRTPTS");
-
-    ImGui::SameLine(0, 4);
-    const float cwA = colW({"Inverse", "Traverse"});
-    ImGui::BeginGroup();
-    if (smallBtn("##RibbonInverse", RibbonIconKind::SurveyInverse, "Inverse", cwA))
-      StartSurveyInverseCommand(cmd, log);
-    RibbonItemHelp(
-        "Inverse — two-point survey leg: horizontal distance and bearing (clockwise from north) in the command log "
-        "(World X=Easting, Y=Northing).\nCommand bar: INVERSE or INV");
-    if (smallBtn("##RibbonTraverse", RibbonIconKind::Traverse, "Traverse", cwA))
-      cmd.showTraverseEditorWindow = true;
-    RibbonItemHelp("Traverse Editor — enter traverse leg observations (horizontal angles, distances, vertical angles)\nto compute coordinates and closure. Face 1/Face 2 support included.");
-    ImGui::EndGroup();
-
-    // Surfaces/Volumes/Grades/Groups is FOUR items — the panel is three small buttons tall (colH),
-    // so a single column here clipped "Groups" at the bottom (latent since before REQ-302; only
-    // visible now that a scrollbar can no longer mask it — user GUI-pass feedback, 2026-08-25).
-    // Split 2+2, the same "fourth needs its own column" fix already used in Modify above.
-    ImGui::SameLine(0, 4);
-    const float cwB = colW({"Surfaces", "Volumes"});
-    ImGui::BeginGroup();
-    if (smallBtn("##RibbonSurfaces", RibbonIconKind::SurveyPoint, "Surfaces", cwB))
-      cmd.showSurfaceManagerWindow = true;
-    RibbonItemHelp(
-        "Surfaces — build a TIN surface by triangulating the points in one or more point groups, "
-        "then rebuild it as the survey changes.");
-    // REQ-073 amendment (TASK-095). Sits with Surfaces because a volume comparison is always between
-    // two of them.
-    if (smallBtn("##RibbonVolumes", RibbonIconKind::SurveyPoint, "Volumes", cwB))
-      cmd.volumeDashboard.open = true;
-    RibbonItemHelp(
-        "Volume Dashboard — pick a Base and a Comparison surface for a live cut/fill/net report that "
-        "updates automatically as either surface is rebuilt.");
-    ImGui::EndGroup();
-
-    ImGui::SameLine(0, 4);
-    const float cwC = colW({"Grades", "Groups"});
-    ImGui::BeginGroup();
-    // REQ-088. Sits with Surfaces because that is what a feature line's elevations are FOR — the
-    // line is design linework a surface consumes as a breakline.
-    if (smallBtn("##RibbonFlElev", RibbonIconKind::SurveyPoint, "Grades", cwC))
-      cmd.showFeatureLineElevWindow = true;
-    RibbonItemHelp(
-        "Feature Line Elevations — station, elevation, length, grade back and grade ahead for each "
-        "point of a feature line. Edit an elevation or a grade, raise or lower the whole line, and "
-        "add elevation points that change grade without changing the plan shape.");
-    if (smallBtn("##RibbonPointGroups", RibbonIconKind::SurveyPoint, "Groups", cwC))
-      cmd.showPointGroupManagerWindow = true;
-    RibbonItemHelp(
-        "Point Groups — name a set of points by rule: number ranges, description, raw description, or "
-        "picks.\nMembership is re-evaluated from the current points, so a later import joins the group "
-        "automatically.");
-    ImGui::EndGroup();
-  }
-  RibbonSectionEnd();
-  } // if (activeRibbonTab == kRibbonTabSurvey)
-
-  // REQ-302: Layout is Home tab's paper-space content (REQ-032's existing ribbonPaperSpace gate,
-  // now combined with the Home-tab gate rather than paired with the Draw/Modify `if` as an `else` —
-  // Annotate/Inquiry/Survey used to sit between them and now live in their own tab blocks above).
-  if (cmd.activeRibbonTab == kRibbonTabHome && ribbonPaperSpace) {
-    // Layout contextual ribbon (REQ-032): paper-space commands.
-    RibbonSectionBegin("RibbonSecLayout", "Layout", wLayout, panelH);
-    {
-      if (largeBtn("##RibbonRectVp", RibbonIconKind::ZoomWindow, "Rect VP"))
-        StartPaperRectViewportCommand(cmd, log);
-      RibbonItemHelp("Rectangular viewport — two clicks define a viewport on the sheet.\nCommand bar: MVIEW / RECTVP");
-      ImGui::SameLine(0, 4);
-      ImGui::BeginGroup();
-      const float cwL = colW({"Poly VP"});
-      ImGui::BeginDisabled();
-      smallBtn("##RibbonPolyVp", RibbonIconKind::Polyline, "Poly VP", cwL);
-      ImGui::EndDisabled();
-      RibbonItemHelp("Polygonal viewport — coming in a later increment (REQ-034).",
-                     ImGuiHoveredFlags_AllowWhenDisabled);
-      ImGui::EndGroup();
-
-      ImGui::SameLine(0, 8);
-      if (largeBtn("##RibbonPlot", RibbonIconKind::PdfAttach, "Plot"))
-        PlotActiveLayout(cmd, log);
-      RibbonItemHelp("Plot the current layout to a vector PDF.\nCommand bar: PLOT");
-      ImGui::SameLine(0, 4);
-      if (smallBtn("##RibbonBatchPlot", RibbonIconKind::PdfAttach, "Batch", colW({"Batch"}))) {
-        cmd.batchPlotSelected.clear();
-        if (cmd.activeSpaceIndex >= 0)
-          cmd.batchPlotSelected.push_back(cmd.activeSpaceIndex);
-        cmd.showBatchPlotDialog = true;
-      }
-      RibbonItemHelp("Batch plot — pick layouts to plot into one multi-page PDF.");
-    }
-    RibbonSectionEnd();
-  } // if (activeRibbonTab == kRibbonTabHome && ribbonPaperSpace)
-
-  // REQ-302: View tab.
-  if (cmd.activeRibbonTab == kRibbonTabView) {
-  RibbonSectionBegin("RibbonSecView", "View", wView, panelH);
-  {
-    const float cw = colW({"Extents", "Window"});
-    ImGui::BeginGroup();
-    if (smallBtn("##RibbonZExtents", RibbonIconKind::ZoomExtents, "Extents", cw))
-      StartZoomExtentsCommand(cmd, log);
-    RibbonItemHelp("Zoom extents — fit all drawing content in the view.\nCommand bar: ZOOMEXTENTS or ZE");
-    if (smallBtn("##RibbonZWindow", RibbonIconKind::ZoomWindow, "Window", cw))
-      StartZoomWindowCommand(cmd, log);
-    RibbonItemHelp("Zoom window — zoom to a rectangle you pick with two clicks.\nCommand bar: ZOOMWINDOW or ZW");
-    ImGui::EndGroup();
-    // Visual style (REQ-064). Sits in View because it is a property of how this viewport draws,
-    // not of the drawing — the same reasoning that put it on RenderTuning rather than on an entity.
-    ImGui::SameLine(0, 8);
-    ImGui::BeginGroup();
-    ImGui::TextUnformatted("Visual style");
-    ImGui::SetNextItemWidth(visualStyleComboW);
-    int vsIdx = static_cast<int>(cmd.viewportVisualStyle);
-    const char* kVsItems[] = {"2D Wireframe", "Hidden", "Shaded"};
-    if (ImGui::Combo("##RibbonVisualStyle", &vsIdx, kVsItems, IM_ARRAYSIZE(kVsItems)))
-      cmd.viewportVisualStyle = static_cast<VisualStyle>(vsIdx);
-    RibbonItemHelp("How the viewport draws.\n"
-                   "2D Wireframe — every edge visible, no depth testing (the classic view).\n"
-                   "Hidden — near geometry hides far geometry.\n"
-                   "Shaded — filled surfaces lit from the camera.\n"
-                   "Command bar: VISUALSTYLE (VS) 2D | HIDDEN | SHADED");
-    ImGui::EndGroup();
-  }
-  RibbonSectionEnd();
-  } // if (activeRibbonTab == kRibbonTabView)
+  RenderRibbonFit(ribbonSpecs, ribbonFit, secGap, colH, curCompact, "RibbonMorePopup");
 
   // Contextual "PDF Underlay" section — shown when a PDF attachment is selected (REQ-302: renders
   // on every tab, unchanged — see REQ-302 acceptance, "contextual sections... render on every tab")
