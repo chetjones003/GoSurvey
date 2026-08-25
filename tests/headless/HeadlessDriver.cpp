@@ -29,12 +29,14 @@
 
 #include <cstdio>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <algorithm>
 #include <array>
 #include <tuple>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <utility>
 #include <string>
@@ -789,6 +791,183 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              "DIFFERENTFILE: files are identical (" + std::to_string(sa.size()) +
                  " bytes) — the step between them changed nothing, so any check that follows is "
                  "vacuous",
+             sourceLine);
+        return false;
+      }
+    } else if (what == "LAYERSDEFINED") {
+      // EXPECT LAYERSDEFINED <dxf> — every layer an ENTITIES-section group 8 names has an
+      // AcDbLayerTableRecord in the same file.
+      //
+      // Issue #72: `ExportDxfFile_Impl`'s layer-name sweep collected names from lines, circles,
+      // annotations, survey points and the drawing's own layer table — but not from
+      // `userPolylineAttrs` or `cadFilledRegionAttrs`. A polyline or a hatch was therefore the one
+      // entity that could write a layer reference the LAYER table did not define. An entity naming
+      // an undefined layer is an invalid file, and it was written silently.
+      //
+      // This reads the WRITTEN FILE rather than the document, which is the point: the defect is
+      // entirely in what the exporter emits, and a document-side assertion cannot see it. It is
+      // also why the existing `dxf-export-stable` round trip misses it — that oracle compares two
+      // exports, and both name the same undefined layer.
+      const std::string path = ExpandVars(run, Trim(arg));
+      std::ifstream df(path, std::ios::binary);
+      if (!df) {
+        Fail(run, "io", "EXPECT LAYERSDEFINED: cannot open " + path, sourceLine);
+        return false;
+      }
+      // A DXF is a flat stream of (group code, value) line pairs. Section is tracked so a group 8
+      // inside TABLES/BLOCKS is not mistaken for an entity's layer reference, and so the LAYER
+      // records read are the real table rather than anything else carrying a group 2.
+      std::set<std::string> defined;
+      std::set<std::string> referenced;
+      std::string section;
+      std::string tableName;
+      bool inLayerRecord = false;
+      std::string codeLine;
+      std::string valueLine;
+      while (std::getline(df, codeLine) && std::getline(df, valueLine)) {
+        const std::string code = Trim(codeLine);
+        const std::string value = Trim(valueLine);
+        if (code == "0") {
+          if (value == "SECTION") {
+            section.clear();  // the following group 2 names it
+          } else if (value == "ENDSEC") {
+            section.clear();
+            tableName.clear();
+          } else if (value == "TABLE") {
+            tableName.clear();  // likewise
+          }
+          inLayerRecord = (section == "TABLES" && tableName == "LAYER" && value == "LAYER");
+          continue;
+        }
+        if (code == "2") {
+          if (section.empty())
+            section = value;            // SECTION's name: HEADER / TABLES / BLOCKS / ENTITIES
+          else if (section == "TABLES" && tableName.empty())
+            tableName = value;          // TABLE's name: VPORT / LTYPE / LAYER / ...
+          else if (inLayerRecord)
+            defined.insert(value);      // an AcDbLayerTableRecord's own name
+          continue;
+        }
+        if (code == "8" && section == "ENTITIES")
+          referenced.insert(value.empty() ? std::string("0") : value);
+      }
+      std::vector<std::string> undefined;
+      for (const std::string& r : referenced) {
+        if (defined.find(r) == defined.end())
+          undefined.push_back(r);
+      }
+      if (!undefined.empty()) {
+        std::string names;
+        for (size_t i = 0; i < undefined.size(); ++i)
+          names += (i ? ", " : "") + undefined[i];
+        Fail(run, "expect",
+             "LAYERSDEFINED: " + std::to_string(undefined.size()) +
+                 " layer(s) referenced by an entity but absent from the LAYER table: " + names +
+                 " (" + std::to_string(defined.size()) + " defined, " +
+                 std::to_string(referenced.size()) + " referenced)",
+             sourceLine);
+        return false;
+      }
+      if (referenced.empty()) {
+        // Vacuity guard, in the spirit of EXPECT DIFFERENTFILE: a file with no entity at all
+        // satisfies "every referenced layer is defined" perfectly while proving nothing. If the
+        // export dropped everything (see #63), this check must say so rather than pass.
+        Fail(run, "expect",
+             "LAYERSDEFINED: no entity in the file names a layer at all — nothing was checked",
+             sourceLine);
+        return false;
+      }
+    } else if (what == "HANDLESUNIQUE") {
+      // EXPECT HANDLESUNIQUE <dxf> — no two records in the file share a group-5 handle, and
+      // $HANDSEED exceeds every handle the file uses.
+      //
+      // Issue #71: `ExportDxfFile_Impl` reserves a block of entity handles by COUNTING the entities
+      // it is about to write, and that count omitted polylines and filled regions. Every OBJECTS
+      // handle derives from the sum, so the running `entHandle++` walks straight through the OBJECTS
+      // block and both own the same handles. A handle is the identity a DXF uses for every internal
+      // reference — group 330 ownership, dictionary entries, XDATA links — so duplicating them is
+      // not cosmetic, and a $HANDSEED below the highest handle in use means the next handle a
+      // consumer allocates collides again.
+      //
+      // Why this reads the written file rather than comparing two exports: the collision is
+      // DETERMINISTIC. `dxf-export-stable` exports twice and compares, and both passes collide
+      // identically, so a differential oracle reports success on a file AutoCAD would reject. That
+      // is the whole reason this verb exists rather than a round-trip step.
+      const std::string path = ExpandVars(run, Trim(arg));
+      std::ifstream df(path, std::ios::binary);
+      if (!df) {
+        Fail(run, "io", "EXPECT HANDLESUNIQUE: cannot open " + path, sourceLine);
+        return false;
+      }
+      // $HANDSEED is a HEADER variable that happens to be carried on group 5. It is the declared
+      // ceiling, not a handle anything owns, so it is pulled out here rather than counted as one.
+      std::set<std::string> seen;
+      std::set<std::string> dupes;
+      std::string seedHex;
+      std::string section;
+      std::string lastVar;
+      unsigned long long maxHandle = 0;
+      size_t handleCount = 0;
+      std::string codeLine;
+      std::string valueLine;
+      while (std::getline(df, codeLine) && std::getline(df, valueLine)) {
+        const std::string code = Trim(codeLine);
+        const std::string value = Trim(valueLine);
+        if (code == "0") {
+          if (value == "SECTION" || value == "ENDSEC")
+            section.clear();  // the following group 2 names the next one
+          continue;
+        }
+        if (code == "2" && section.empty()) {
+          section = value;
+          continue;
+        }
+        if (code == "9") {
+          lastVar = value;
+          continue;
+        }
+        if (code != "5")
+          continue;
+        if (section == "HEADER" && lastVar == "$HANDSEED") {
+          seedHex = value;
+          continue;
+        }
+        if (!seen.insert(value).second)
+          dupes.insert(value);
+        ++handleCount;
+        const unsigned long long h = std::strtoull(value.c_str(), nullptr, 16);
+        if (h > maxHandle)
+          maxHandle = h;
+      }
+      if (handleCount == 0) {
+        // Vacuity guard, in the spirit of EXPECT DIFFERENTFILE: a file holding no handle at all
+        // satisfies "all handles are unique" perfectly while proving nothing.
+        Fail(run, "expect", "HANDLESUNIQUE: the file carries no group-5 handle — nothing was checked",
+             sourceLine);
+        return false;
+      }
+      if (!dupes.empty()) {
+        std::string names;
+        size_t i = 0;
+        for (const std::string& d : dupes)
+          names += (i++ ? ", " : "") + d;
+        Fail(run, "expect",
+             "HANDLESUNIQUE: " + std::to_string(dupes.size()) + " handle(s) used more than once: " +
+                 names + " (" + std::to_string(handleCount) + " handles, " +
+                 std::to_string(seen.size()) + " distinct)",
+             sourceLine);
+        return false;
+      }
+      if (seedHex.empty()) {
+        Fail(run, "expect", "HANDLESUNIQUE: the file declares no $HANDSEED", sourceLine);
+        return false;
+      }
+      const unsigned long long seed = std::strtoull(seedHex.c_str(), nullptr, 16);
+      if (seed <= maxHandle) {
+        Fail(run, "expect",
+             "HANDLESUNIQUE: $HANDSEED is " + seedHex + " but handle " +
+                 std::to_string(maxHandle) + " (decimal) is in use — the seed must exceed every "
+                 "handle in the file, or the next handle a consumer allocates collides",
              sourceLine);
         return false;
       }

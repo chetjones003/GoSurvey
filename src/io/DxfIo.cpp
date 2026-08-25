@@ -2102,6 +2102,15 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     addLayerName(st.userCircleAttrs[i].layer);
   for (size_t i = 0; i < st.cadAnnotationAttrs.size(); ++i)
     addLayerName(st.cadAnnotationAttrs[i].layer.empty() ? std::string("0") : st.cadAnnotationAttrs[i].layer);
+  // Polylines (#72) and filled regions (the same omission, unreported) — the two entity branches
+  // added to the writer without being added here. Every layer this sweep misses is a layer some
+  // entity's group 8 can name with no LAYER table row behind it: an invalid file, written silently.
+  // `drawingLayerTable` below masks it for layers created in this session, which is why it survived
+  // this long, but not for one that arrived on an imported entity.
+  for (size_t i = 0; i < st.userPolylineAttrs.size(); ++i)
+    addLayerName(st.userPolylineAttrs[i].layer);
+  for (size_t i = 0; i < st.cadFilledRegionAttrs.size(); ++i)
+    addLayerName(st.cadFilledRegionAttrs[i].layer);
   for (const SurveyPoint& p : st.surveyPoints)
     addLayerName(p.layer);
   for (const CadLayerRow& lr : st.drawingLayerTable) {
@@ -2136,8 +2145,22 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   const uint64_t symGoSurveyAppid = symAfterLayers + 15;
   const uint64_t lastSymHandle = symGoSurveyAppid;
 
+  // Every store the writer below emits an entity from must be counted here, or its entities are
+  // handed handles the OBJECTS block also owns (#71). Polylines and filled regions were missing:
+  // the LWPOLYLINE branch arrived with REQ-053 and the HATCH branch earlier, each updating the
+  // writer and neither updating this sum. Counting the STORES rather than the entities the writer
+  // will keep is deliberate — the writer skips degenerate polylines (< 2 vertices) and degenerate
+  // regions (< 3 vertices), so this can over-count, which leaves an unused gap ahead of OBJECTS.
+  // DXF permits a gap in the handle sequence; it does not permit a duplicate.
+  //
+  // `userArcs` and `userEllipses` are absent on purpose: they have no export branch at all (#63),
+  // so they consume no handles today. Adding that branch means adding them here in the same change.
+  const size_t nPoly =
+      st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0;
   uint64_t entityHandleCount = static_cast<uint64_t>(nSeg) + static_cast<uint64_t>(nCirc) +
-                               static_cast<uint64_t>(st.surveyPoints.size());
+                               static_cast<uint64_t>(st.surveyPoints.size()) +
+                               static_cast<uint64_t>(nPoly) +
+                               static_cast<uint64_t>(st.cadFilledRegions.size());
   for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
     const CadAnnotation& an = st.cadAnnotations[ai];
     if (an.kind == CadAnnotation::Kind::Text)
