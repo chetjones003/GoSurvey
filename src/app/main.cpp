@@ -401,8 +401,10 @@ int main()
 
   bool dockLayoutDone = haveSavedDockIni;
   // 130 of tools + the 9px gutter DrawRibbonBar leaves under the panel titles,
-  // so the buttons keep the size they had before the gutter was added.
-  const float ribbonH = 139.f;
+  // so the buttons keep the size they had before the gutter was added, plus the REQ-302 tab
+  // strip's own height and its gap row (kRibbonTabStripH + kRibbonTabStripGapY in CadUi.cpp) so
+  // panel content height is unaffected.
+  const float ribbonH = 139.f + 28.f + 4.f;
   bool orthoEnabled = false;  // REQ-047: ORTHO is off by default (AutoCAD convention) — free-angle drawing
   bool gridVisible = false;
   // prevDrawingIdx lives in cmd — no local needed.

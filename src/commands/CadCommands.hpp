@@ -1106,6 +1106,18 @@ PageSetup PageSetupFromLayout(const PaperLayout& layout, const std::string& name
 /// Reorder/copy a layout to before \p beforeIdx (== size → move to end); copy clones it. Move-or-Copy.
 void MoveOrCopyLayout(AppCommandState& cmd, int layoutIdx, int beforeIdx, bool makeCopy, std::vector<std::string>& log);
 
+/// REQ-302: top-level ribbon tabs, in display order. UI-layer concept, but the active index is
+/// persisted app state (AppCommandState::activeRibbonTab) so it lives alongside kModelSpaceIndex-
+/// style constants rather than in the UI layer, which Commands must not depend on.
+constexpr int kRibbonTabHome     = 0;
+constexpr int kRibbonTabInsert   = 1;
+constexpr int kRibbonTabAnnotate = 2;
+constexpr int kRibbonTabView     = 3;
+constexpr int kRibbonTabManage   = 4;
+constexpr int kRibbonTabOutput   = 5;
+constexpr int kRibbonTabSurvey   = 6;
+constexpr int kRibbonTabCount    = 7;
+
 struct AppCommandState {
   enum class Kind {
     None,
@@ -1781,6 +1793,10 @@ struct AppCommandState {
   } trimPhase = TrimPhase::SelectCuttingEdges;
   /// \c TRIMSTATE: 0 = smart line trim (default), 1 = pick cutting edges first. Persisted in user prefs.
   int trimState = 0;
+  /// REQ-302: which top-level ribbon tab is showing. Persisted in user prefs, same shape as
+  /// \c trimState. Values match \c kRibbonTabHome.. \c kRibbonTabSurvey below; an out-of-range value
+  /// loaded from a hand-edited prefs file is clamped back into range rather than left invalid.
+  int activeRibbonTab = 0;
   /// REQ-077: update-check settings (enabled, channel, skipped version, throttle anchor).
   /// Only the persisted settings live here — the in-flight worker state is `update::UpdateState`,
   /// owned by the application loop, so `AppCommandState` gains no thread and stays copyable.

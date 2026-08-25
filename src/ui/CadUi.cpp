@@ -1397,7 +1397,13 @@ static void RibbonSectionBegin(const char* childId, const char* title, float wid
   // strip; the panel title is pinned at the bottom by RibbonSectionEnd.
   ImGui::PushStyleColor(ImGuiCol_ChildBg, g_chrome.bandFace);
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f, 2.f));
-  ImGui::BeginChild(childId, ImVec2(width, height), false, ImGuiWindowFlags_NoScrollbar);
+  // NoScrollbar alone only hides the bar — a panel whose content is a hair wider than `width`
+  // (rounding in colW(), an extra pixel of text) was still wheel-scrollable with no visible bar,
+  // which is exactly what let the Survey panel keep scrolling after RibbonToolsLeft's own fix
+  // (user GUI-pass feedback, 2026-08-25, follow-up to D-2026-08-25-d). NoScrollWithMouse closes it
+  // for every ribbon panel, not just Survey's.
+  ImGui::BeginChild(childId, ImVec2(width, height), false,
+                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   ImGui::PopStyleVar();
   s_ribbonPanelTitle = title;
 }
@@ -2360,6 +2366,14 @@ static void RibbonItemHelp(const char* text, ImGuiHoveredFlags extraFlags = 0) {
   }
 }
 
+// Forward-declared here (defined below, ~line 5650): reopening the same anonymous namespace so the
+// REQ-302 tab strip in DrawRibbonBar below can reuse the Model/Layout tab toggle styling instead of
+// inventing a second one.
+namespace {
+void PushModeToggleButtonColors(bool on, int themeIdx);
+void PopModeToggleButtonColors(bool on);
+}  // namespace
+
 void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>& log) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 3));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5, 4));
@@ -2369,12 +2383,43 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   ImGui::PopStyleColor();
 
+  // REQ-302 tab strip: Home/Insert/Annotate/View/Manage/Output/Survey. Reuses the Model/Layout
+  // tab toggle styling (PushModeToggleButtonColors, ~CadUi.cpp:6308, REQ-025/026 precedent) so the
+  // active tab reads the same way the active space tab already does, rather than a second style.
+  // Extra vertical FramePadding (user GUI-pass feedback, 2026-08-25: tab text sat flush against
+  // the button's bottom edge) plus a gap row below the strip so it doesn't crowd the panels.
+  constexpr float kRibbonTabFramePadY = 5.f;
+  constexpr float kRibbonTabStripH    = 18.f + kRibbonTabFramePadY * 2.f;
+  constexpr float kRibbonTabStripGapY = 4.f;
+  {
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.f, kRibbonTabFramePadY));
+    auto ribbonTab = [&](const char* label, int tabIdx) {
+      const bool active = cmd.activeRibbonTab == tabIdx;
+      PushModeToggleButtonColors(active, cmd.displayColorThemeIdx);
+      const bool clicked = ImGui::Button(label, ImVec2(0.f, kRibbonTabStripH));
+      PopModeToggleButtonColors(active);
+      if (clicked)
+        cmd.activeRibbonTab = tabIdx;
+      ImGui::SameLine(0, 2);
+    };
+    ribbonTab("Home",     kRibbonTabHome);
+    ribbonTab("Insert",   kRibbonTabInsert);
+    ribbonTab("Annotate", kRibbonTabAnnotate);
+    ribbonTab("View",     kRibbonTabView);
+    ribbonTab("Manage",   kRibbonTabManage);
+    ribbonTab("Output",   kRibbonTabOutput);
+    ribbonTab("Survey",   kRibbonTabSurvey);
+    ImGui::PopStyleVar();
+    ImGui::Dummy(ImVec2(1.f, kRibbonTabStripGapY));  // gap between the tab strip and the panels below
+  }
+
   const ImGuiStyle& st = ImGui::GetStyle();
   // Gutter below the sections so the panel titles ("Draw", "Modify", …) are not
   // flush against the ribbon's bottom edge. WindowPadding cannot express this —
   // it is symmetric, and adding it at the top too would waste the band's height.
   constexpr float kRibbonBottomGutter = 9.f;
-  const float panelH = height - st.WindowPadding.y * 2.f - kRibbonBottomGutter;
+  const float panelH = height - kRibbonTabStripH - kRibbonTabStripGapY - st.WindowPadding.y * 2.f -
+                        kRibbonBottomGutter;
   constexpr float kLayerPanelW = 500.f;
 
   // Civil 3D-style panel metrics: a button column fills the height above the
@@ -2412,24 +2457,60 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                       colW({"Erase", "Trim", "Offset"}) + 4.f + colW({"Join", "Mirror", "Lengthen"}) + 4.f +
                       colW({"Extend", "Break", "Stretch"}) + 4.f + colW({"Fillet", "Chamfer"});
   const float annStyleW = 150.f;  // text-style dropdown width in the Annotate section (REQ-044)
-  const float wAnn  = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
+  const float wAnnText = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
+  // REQ-302 follow-up: Aligned/Linear moved here from Survey's Inquiry section (user GUI-pass
+  // feedback, 2026-08-25) — a Dimensions group belongs under Annotate, not Survey.
+  const float wAnnDim  = 8.f + colW({"Aligned", "Linear"});
   // Two columns: the panel is three small buttons tall, so a fourth in one column is clipped.
-  const float wInq  = 8.f + colW({"Aligned", "Linear", "ID Point"}) + 4.f + colW({"Elev/Grade"});
-  // Two columns, as in Inquiry: the panel is three small buttons tall, so the
-  // fourth in a single column was drawn outside the section and never appeared.
+  // Aligned/Linear moved to Annotate's new Dimensions section above (2026-08-25 follow-up) — ID
+  // Point/Elev-Grade are the two that remain genuinely survey-scoped inquiry tools.
+  const float wInq  = 8.f + colW({"ID Point"}) + 4.f + colW({"Elev/Grade"});
+  // Three columns after Points: the panel is three small buttons tall, so Surfaces/Volumes/
+  // Grades/Groups (four items) needs its own two-column split, same as Modify's Extend/Break/
+  // Stretch + Fillet/Chamfer split above (fixed 2026-08-25 — see the Survey section body).
   const float wSrv  = 8.f + largeW + 4.f + colW({"Inverse", "Traverse"}) + 4.f +
-                      colW({"Surfaces", "Groups"});
-  const float wView = 8.f + colW({"Extents", "Window"}) + 8.f + 132.f;  // + the visual-style combo (REQ-064)
+                      colW({"Surfaces", "Volumes"}) + 4.f + colW({"Grades", "Groups"});
+  // Visual-style combo width measured from its longest option text, not a guessed constant — a
+  // hardcoded 132px clipped "2D Wireframe" (user GUI-pass feedback, 2026-08-25).
+  const float visualStyleComboW = ImGui::CalcTextSize("2D Wireframe").x + 40.f;
+  const float wView = 8.f + colW({"Extents", "Window"}) + 8.f + visualStyleComboW;  // REQ-064
   // REQ-032 contextual ribbon: Layout tools in paper space, but the normal model ribbon while editing a
   // viewport in place (floating model space, REQ-036) so the draw/modify tools are available.
   const bool  ribbonPaperSpace = cmd.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(cmd);
   const float wLayout = 8.f + largeW + 4.f + colW({"Poly VP"}) + 8.f + largeW + 4.f + colW({"Batch"});
 
+  // REQ-302 follow-up: size RibbonToolsLeft to the ACTIVE tab's own content instead of a blanket
+  // "window width minus the layer strip" cap — that cap is what let a wide tab's content overflow
+  // into a horizontal scrollbar (user GUI-pass feedback, 2026-08-25: "no where in the ribbon should
+  // scroll bars be allowed"). Each tab shows far less at once than the old flat 8-section row did,
+  // so its own precomputed width is what "grow wider to accommodate all of the buttons" means here.
+  float ribbonToolsW;
+  switch (cmd.activeRibbonTab) {
+    case kRibbonTabHome:
+      ribbonToolsW = ribbonPaperSpace ? (wEdit + 8.f + wLayout) : (wEdit + 8.f + wDraw + 8.f + wMod);
+      break;
+    case kRibbonTabAnnotate:
+      ribbonToolsW = ribbonPaperSpace ? largeW : (wAnnText + 8.f + wAnnDim);
+      break;
+    case kRibbonTabSurvey:
+      ribbonToolsW = ribbonPaperSpace ? largeW : (wInq + 8.f + wSrv);
+      break;
+    case kRibbonTabView:
+      ribbonToolsW = wView;
+      break;
+    default:
+      ribbonToolsW = largeW;  // Insert/Manage/Output: empty until REQ-302 increment 3
+      break;
+  }
+
   ImGui::PushStyleColor(ImGuiCol_ChildBg, g_chrome.bandFace);
-  ImGui::BeginChild("RibbonToolsLeft", ImVec2(-kLayerPanelW - st.ItemSpacing.x, panelH), false,
-                    ImGuiWindowFlags_HorizontalScrollbar);
+  ImGui::BeginChild("RibbonToolsLeft", ImVec2(ribbonToolsW, panelH), false,
+                    ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   ImGui::PopStyleColor();
 
+  // REQ-302: Edit/Draw/Modify/Layout are the Home tab's content — no change to any of their own
+  // conditions or bodies below, only the tab gate wrapped around them.
+  if (cmd.activeRibbonTab == kRibbonTabHome) {
   RibbonSectionBegin("RibbonSecUndo", "Edit", wEdit, panelH);
   {
     const bool canUndo = CanUndo(cmd);
@@ -2611,9 +2692,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ImGui::EndGroup();
   }
   RibbonSectionEnd();
-  ImGui::SameLine(0, 8);
+  } // if (!ribbonPaperSpace) — Draw/Modify
+  } // if (activeRibbonTab == kRibbonTabHome)
 
-  RibbonSectionBegin("RibbonSecAnnotate", "Annotate", wAnn, panelH);
+  // REQ-302: Annotate tab. Unchanged condition (model space only, same as before this task).
+  if (cmd.activeRibbonTab == kRibbonTabAnnotate && !ribbonPaperSpace) {
+  RibbonSectionBegin("RibbonSecAnnotate", "Text", wAnnText, panelH);
   {
     const float cw = colW({"Text", "Mtext"});
     ImGui::BeginGroup();
@@ -2678,17 +2762,32 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   RibbonSectionEnd();
   ImGui::SameLine(0, 8);
 
-  RibbonSectionBegin("RibbonSecInquiry", "Inquiry", wInq, panelH);
+  // REQ-302 follow-up (user GUI-pass feedback, 2026-08-25): Aligned/Linear moved here from
+  // Survey's Inquiry section — a Dimensions group belongs under Annotate.
+  RibbonSectionBegin("RibbonSecAnnDim", "Dimensions", wAnnDim, panelH);
   {
-    const float cw = colW({"Aligned", "Linear", "ID Point"});
     ImGui::BeginGroup();
-    if (smallBtn("##RibbonDim", RibbonIconKind::Dim, "Aligned", cw))
+    if (smallBtn("##RibbonDim", RibbonIconKind::Dim, "Aligned", colW({"Aligned", "Linear"})))
       StartDimAlignedCommand(cmd, log);
     RibbonItemHelp("Aligned dimension — extension lines and text.\nCommand bar: DIMALIGNED or DAL");
-    if (smallBtn("##RibbonDimLin", RibbonIconKind::DimLinear, "Linear", cw))
+    if (smallBtn("##RibbonDimLin", RibbonIconKind::DimLinear, "Linear", colW({"Aligned", "Linear"})))
       StartDimLinearCommand(cmd, log);
     RibbonItemHelp(
         "Linear dimension — horizontal or vertical distance in X or Y; third pick sets line position (cursor or H/V).\nCommand bar: DIMLINEAR or DLI");
+    ImGui::EndGroup();
+  }
+  RibbonSectionEnd();
+  } // if (activeRibbonTab == kRibbonTabAnnotate)
+
+  // REQ-302: Survey tab (Inquiry + Survey sections). Unchanged condition (model space only, same
+  // as before this task).
+  if (cmd.activeRibbonTab == kRibbonTabSurvey && !ribbonPaperSpace) {
+  RibbonSectionBegin("RibbonSecInquiry", "Inquiry", wInq, panelH);
+  {
+    // Aligned/Linear moved to Annotate's Dimensions section (2026-08-25 follow-up) — ID Point is
+    // the one inquiry tool that stays here.
+    const float cw = colW({"ID Point"});
+    ImGui::BeginGroup();
     if (smallBtn("##RibbonId", RibbonIconKind::Id, "ID Point", cw))
       StartIdPointCommand(cmd, log);
     RibbonItemHelp("ID — list UCS (World) X,Y,Z at a point (click or type coordinates).\nCommand bar: ID");
@@ -2729,8 +2828,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     RibbonItemHelp("Traverse Editor — enter traverse leg observations (horizontal angles, distances, vertical angles)\nto compute coordinates and closure. Face 1/Face 2 support included.");
     ImGui::EndGroup();
 
+    // Surfaces/Volumes/Grades/Groups is FOUR items — the panel is three small buttons tall (colH),
+    // so a single column here clipped "Groups" at the bottom (latent since before REQ-302; only
+    // visible now that a scrollbar can no longer mask it — user GUI-pass feedback, 2026-08-25).
+    // Split 2+2, the same "fourth needs its own column" fix already used in Modify above.
     ImGui::SameLine(0, 4);
-    const float cwB = colW({"Surfaces", "Groups"});
+    const float cwB = colW({"Surfaces", "Volumes"});
     ImGui::BeginGroup();
     if (smallBtn("##RibbonSurfaces", RibbonIconKind::SurveyPoint, "Surfaces", cwB))
       cmd.showSurfaceManagerWindow = true;
@@ -2744,15 +2847,20 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     RibbonItemHelp(
         "Volume Dashboard — pick a Base and a Comparison surface for a live cut/fill/net report that "
         "updates automatically as either surface is rebuilt.");
+    ImGui::EndGroup();
+
+    ImGui::SameLine(0, 4);
+    const float cwC = colW({"Grades", "Groups"});
+    ImGui::BeginGroup();
     // REQ-088. Sits with Surfaces because that is what a feature line's elevations are FOR — the
     // line is design linework a surface consumes as a breakline.
-    if (smallBtn("##RibbonFlElev", RibbonIconKind::SurveyPoint, "Grades", cwB))
+    if (smallBtn("##RibbonFlElev", RibbonIconKind::SurveyPoint, "Grades", cwC))
       cmd.showFeatureLineElevWindow = true;
     RibbonItemHelp(
         "Feature Line Elevations — station, elevation, length, grade back and grade ahead for each "
         "point of a feature line. Edit an elevation or a grade, raise or lower the whole line, and "
         "add elevation points that change grade without changing the plan shape.");
-    if (smallBtn("##RibbonPointGroups", RibbonIconKind::SurveyPoint, "Groups", cwB))
+    if (smallBtn("##RibbonPointGroups", RibbonIconKind::SurveyPoint, "Groups", cwC))
       cmd.showPointGroupManagerWindow = true;
     RibbonItemHelp(
         "Point Groups — name a set of points by rule: number ranges, description, raw description, or "
@@ -2761,8 +2869,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ImGui::EndGroup();
   }
   RibbonSectionEnd();
-  ImGui::SameLine(0, 8);
-  } else {
+  } // if (activeRibbonTab == kRibbonTabSurvey)
+
+  // REQ-302: Layout is Home tab's paper-space content (REQ-032's existing ribbonPaperSpace gate,
+  // now combined with the Home-tab gate rather than paired with the Draw/Modify `if` as an `else` —
+  // Annotate/Inquiry/Survey used to sit between them and now live in their own tab blocks above).
+  if (cmd.activeRibbonTab == kRibbonTabHome && ribbonPaperSpace) {
     // Layout contextual ribbon (REQ-032): paper-space commands.
     RibbonSectionBegin("RibbonSecLayout", "Layout", wLayout, panelH);
     {
@@ -2793,9 +2905,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       RibbonItemHelp("Batch plot — pick layouts to plot into one multi-page PDF.");
     }
     RibbonSectionEnd();
-    ImGui::SameLine(0, 8);
-  }
+  } // if (activeRibbonTab == kRibbonTabHome && ribbonPaperSpace)
 
+  // REQ-302: View tab.
+  if (cmd.activeRibbonTab == kRibbonTabView) {
   RibbonSectionBegin("RibbonSecView", "View", wView, panelH);
   {
     const float cw = colW({"Extents", "Window"});
@@ -2812,7 +2925,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ImGui::SameLine(0, 8);
     ImGui::BeginGroup();
     ImGui::TextUnformatted("Visual style");
-    ImGui::SetNextItemWidth(132.f);
+    ImGui::SetNextItemWidth(visualStyleComboW);
     int vsIdx = static_cast<int>(cmd.viewportVisualStyle);
     const char* kVsItems[] = {"2D Wireframe", "Hidden", "Shaded"};
     if (ImGui::Combo("##RibbonVisualStyle", &vsIdx, kVsItems, IM_ARRAYSIZE(kVsItems)))
@@ -2825,8 +2938,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ImGui::EndGroup();
   }
   RibbonSectionEnd();
+  } // if (activeRibbonTab == kRibbonTabView)
 
-  // Contextual "PDF Underlay" section — shown when a PDF attachment is selected
+  // Contextual "PDF Underlay" section — shown when a PDF attachment is selected (REQ-302: renders
+  // on every tab, unchanged — see REQ-302 acceptance, "contextual sections... render on every tab")
   {
     int selPdfCtxIdx = -1;
     for (const auto& e : cmd.selection)
