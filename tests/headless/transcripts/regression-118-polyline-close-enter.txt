@@ -5,7 +5,7 @@
 # command syntax.
 #
 # Close detection is COINCIDENCE WITH THE STORED FIRST VERTEX, not "the snap system said so"
-# (D-2026-08-25-e). That is what makes this testable here at all: the driver's PICK passes exact
+# (D-2026-08-25-j). That is what makes this testable here at all: the driver's PICK passes exact
 # world coordinates and never calls CadSnap::FindBest, so a snap-gated rule would have been
 # manual-test-only forever — the trap REQ-039's paper-space conditions had already fallen into
 # (#84). The snap candidate CadSnap offers is what makes the point easy to HIT in the GUI; it is
@@ -113,7 +113,7 @@ EXPECT POLYLINES 5
 
 # ---------------------------------------------------------------------------
 # PART 6 — PAPER SPACE. Same two gestures, and the result belongs to the sheet.
-# This is what TASK-106 (#84) unblocked: before that fix these would have landed in the model.
+# This is what TASK-108 (#84) unblocked: before that fix these would have landed in the model.
 # ---------------------------------------------------------------------------
 SPACE PAPER
 CHECK ALL

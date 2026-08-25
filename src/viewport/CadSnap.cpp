@@ -628,7 +628,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   // no message. Below that, the start point is still an ordinary place to put a vertex.
   //
   // This does NOT decide the close. SubmitPolylineVertex compares the committed point against the
-  // stored first vertex; the snap only makes that point reachable (D-2026-08-25-e).
+  // stored first vertex; the snap only makes that point reachable (D-2026-08-25-j).
   if (cmd.active == AppCommandState::Kind::Polyline && cmd.objectSnapEndpoint &&
       cmd.polylineDraftVerts.size() >= 9) {
     Consider(&acc, wx, wy, cmd.polylineDraftVerts[0], cmd.polylineDraftVerts[1], Kind::Endpoint,

@@ -20560,7 +20560,7 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
   // The test is coincidence with the stored first vertex, NOT "the snap system said so". CadSnap
   // returns the stored coordinate verbatim, so a snapped point compares equal here; a typed
   // coordinate or an exact click closes it too, which is what a user means by clicking the start
-  // and is what a snap-gated rule would refuse whenever OSNAP is off (D-2026-08-25-e).
+  // and is what a snap-gated rule would refuse whenever OSNAP is off (D-2026-08-25-j).
   //
   // The tolerance is deliberately tight — "the same point", not "near it". A near-miss click stays
   // an ordinary vertex, because without landing on the start the user has not indicated it; the
@@ -20801,7 +20801,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       // Deliberately unlike LINE directly above, whose blank Enter restarts the command for the next
       // chain. A polyline is one object, so finishing it finishes the command; LINE's chain is a run
       // of independent segments, so there is always a next one to start. The asymmetry was put to the
-      // user and chosen, not inherited by accident (D-2026-08-25-e).
+      // user and chosen, not inherited by accident (D-2026-08-25-j).
       //
       // CommitPolylineDraft enforces the two-vertex minimum and reports it (REQ-201), so a bare Enter
       // on a single-vertex draft says why rather than silently doing nothing.

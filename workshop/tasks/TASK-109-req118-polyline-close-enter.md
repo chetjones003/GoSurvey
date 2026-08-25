@@ -1,4 +1,4 @@
-# TASK-107 — A polyline closes by clicking its start, and ends on Enter
+# TASK-109 — A polyline closes by clicking its start, and ends on Enter
 
 - Type:    feature
 - Status:  done (2026-08-25)
@@ -8,7 +8,7 @@
 Upstream issue: chetjones003/GoSurvey#80.
 
 ## 1. Authority
-- Requirements: **REQ-118** — accepted 2026-08-25 by **D-2026-08-25-e**.
+- Requirements: **REQ-118** — accepted 2026-08-25 by **D-2026-08-25-j**.
 - Also honoured: REQ-085 (3DPOLY per-vertex elevation), REQ-039 (5)/(6) (paper space),
   REQ-201 (a refusal states its reason).
 - Acceptance: REQ-118's eight conditions, restated in §6's test map.
@@ -18,7 +18,7 @@ Upstream issue: chetjones003/GoSurvey#80.
 - In scope: the start vertex as an Endpoint snap candidate; click-the-start closes;
   bare Enter ends open; prompts updated; model, 3DPOLY and paper space.
 - Out of scope: removing `CLOSE`/`END` (REQ-118 keeps them); a dedicated close glyph
-  (the user chose to reuse `Endpoint`); the paper-view placement quirk noted in TASK-106.
+  (the user chose to reuse `Endpoint`); the paper-view placement quirk noted in TASK-108.
 - Smallest change: one snap candidate, one early-return in the vertex path, one
   blank-Enter branch, three prompt strings.
 
@@ -68,15 +68,15 @@ ASSUMPTION-1: A snapped point compares EQUAL to the stored first vertex, so clos
   transcript was written and shown to fail before the implementation existed.
 
 ## 8. Implementation log
-- 2026-08-25 opened against REQ-118, accepted the same day (D-2026-08-25-e). Blocked-on-first:
-  TASK-106 (#84), because paper-space polylines committed to the model store until that landed.
+- 2026-08-25 opened against REQ-118, accepted the same day (D-2026-08-25-j). Blocked-on-first:
+  TASK-108 (#84), because paper-space polylines committed to the model store until that landed.
 - 2026-08-25 `CadSnap::FindBest` — the draft's first vertex is offered as an `Endpoint` candidate
   when a POLYLINE/3DPOLY draft holds **three or more** vertices. The minimum is expressed by
   withholding the affordance rather than refusing the close afterwards: a snap never offered
   cannot be mis-clicked, which is #80's "invalid attempts handled gracefully" with no message to
   read. Header doc comment updated — this is the one candidate not from committed geometry.
 - 2026-08-25 `SubmitPolylineVertex` — a vertex coinciding with `polyFirstX/Y` commits closed
-  instead of appending. Coordinate-based, **not** snap-gated (D-2026-08-25-e): the driver's `PICK`
+  instead of appending. Coordinate-based, **not** snap-gated (D-2026-08-25-j): the driver's `PICK`
   never calls `FindBest`, so a snap-gated rule would have been manual-test-only forever — the trap
   REQ-039's paper conditions fell into (#84) — and a coordinate rule also closes on a typed
   coordinate, which a snap-gated one would refuse whenever OSNAP is off. Tolerance is deliberately
@@ -114,6 +114,6 @@ ASSUMPTION-1: A snapped point compares EQUAL to the stored first vertex, so clos
   the snap-marker condition by the GUI run in §8)
 - Tests added:            `headless.regression-118-polyline-close-enter`
 - Docs updated:           three in-app prompts; `CadSnap.hpp`'s `FindBest` doc comment
-- Technical debt noted:   none new. TASK-106's DEBT-1 (CIRCLE/ARC/ELLIPSE paper routing) is
+- Technical debt noted:   none new. TASK-108's DEBT-1 (CIRCLE/ARC/ELLIPSE paper routing) is
                           untouched and unrelated.
 - Done:                   2026-08-25

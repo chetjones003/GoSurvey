@@ -1,4 +1,4 @@
-# TASK-106 — A polyline drawn in paper space belongs to the sheet
+# TASK-108 — A polyline drawn in paper space belongs to the sheet
 
 - Type:    bug
 - Status:  done (2026-08-25)
@@ -93,7 +93,7 @@ ASSUMPTION-1: The draft's vertices are already in the correct space when they re
   (#63, untouched).
 - 2026-08-25 GUI re-verified on the fixed build: the polyline renders as paper geometry and Model
   is empty. Same sequence that failed before.
-- 2026-08-25 renamed `TASK-102-issue071-072-…` → **TASK-105**. Upstream `cb3cc1f` had taken
+- 2026-08-25 renamed `TASK-102-issue071-072-…` → **TASK-107**. Upstream `cb3cc1f` had taken
   TASK-102/103 for FILLET/CHAMFER while that task was in flight, so two `TASK-102-*.md` files
   existed after PR #79 merged. Renumbering the DXF one is the smaller correction — the FILLET and
   CHAMFER files are cited from REQ-103's own revision history.

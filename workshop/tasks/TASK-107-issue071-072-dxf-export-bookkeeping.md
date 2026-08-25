@@ -1,4 +1,4 @@
-# TASK-105 — Count and declare every entity the DXF exporter writes
+# TASK-107 — Count and declare every entity the DXF exporter writes
 
 - Type:    bug
 - Status:  **done (2026-08-25)** — #72 and #71 both fixed, tested, shipped

@@ -1396,8 +1396,66 @@ requirements is a planning failure, not a sign of rigor.
   - build is clean; the full regression suite stays green; a manual GUI pass confirms tab switching,
     persistence across restart, and that every command reachable today (by ribbon) is still
     reachable today, now under its mapped tab.
-- Acceptance — Increment 2 (Responsive layout engine): to be written when this increment opens.
-- Acceptance — Increment 3 (Content audit): to be written when this increment opens.
+- Acceptance — Increment 2, Responsive layout engine (opened 2026-08-25, D-2026-08-25-e, ADR-038):
+  - a `RibbonBreakpoint` (Wide/Medium/Narrow) is computed per active tab, per frame, from available
+    width vs. that tab's own `wideW`/`mediumW` (ADR-038 (a)) — no persisted state, no user-facing
+    setting;
+  - Wide renders byte-for-byte as increment 1 does today — no regression to any existing section's
+    button size, spacing, or label;
+  - Medium renders every section from the active tab with compact metrics (smaller button width,
+    icon-only small buttons, tighter spacing) — same sections, same commands, no section dropped;
+  - Narrow renders sections left-to-right at Medium metrics until the next section would not fit,
+    then collapses everything remaining for that tab into one "More ▼" button whose popup renders
+    the overflowed sections' full Wide-metric content unchanged (ADR-038 (b)) — every command
+    reachable today stays reachable at every width, none hidden or removed;
+  - `RibbonToolsLeft` is sized to `min(fittedW, available)` — never wider than the actual available
+    width, so no ribbon control is ever clipped, at any tested window width;
+  - no horizontal or vertical scrollbar anywhere in the ribbon at any tested window width (this is
+    the full guarantee increment 1 explicitly left partial);
+  - switching breakpoints (by resizing the window) never touches `cmd.active`, selection, undo
+    stack, or drawing geometry — same invariant increment 1's tab switching already holds;
+  - build is clean; the full regression suite stays green; a manual GUI pass at multiple window
+    widths (including at least 2 narrower than any width increment 1 was tested at) confirms Wide/
+    Medium/Narrow read correctly on screen, the "More" popup opens and every command in it works,
+    and no scrollbar or clipping appears at any tested width.
+- Acceptance — Increment 3, Content audit (opened 2026-08-25, D-2026-08-25-h):
+  - **Correction to this requirement's own Statement, found while opening this increment:** the
+    "relocating existing menu-bar-only commands (import, plot/export/publish, settings/standards)"
+    language above was written before the codebase was checked against it. `DrawMainMenuBar`
+    (`CadUi.cpp:1181-1347`) is File/Edit/View only — 168 lines total. There is no Blocks/INSERT
+    mechanism (REQ-107, status `proposed`, not built), no Xref, no image attach, no point-cloud
+    import, and no Publish/Standards/Purge/Audit/Units command anywhere in the codebase (confirmed
+    by grep across `src/`). The only genuine relocation candidates that exist today are: Import
+    DXF, Import DWG (File menu), Export DXF, Export DWG (File menu), and Settings (View menu) —
+    Plot and Batch Plot already have a ribbon home (Home tab, paper space, from increment 1).
+    Increment 3 relocates exactly these; it does not invent Blocks/Xref/point-cloud/Publish/
+    Standards content, since none of that exists to relocate — building any of it is out of scope
+    (REQ-107 or a future requirement, not this one).
+  - Insert tab gets one "Import" section: Import DXF, Import DWG (DWG gated on
+    `FindDwgConverter().available()`, identical tooltip/disabled behavior to the existing File-menu
+    item) — same underlying `ImportDxfFile`/`ImportDwgFile` calls, no new import logic;
+  - View tab gets a new "Settings" section (user's explicit placement decision, 2026-08-25 —
+    overrides this requirement's original Manage-tab assumption): one button opens the same
+    Settings window `cmd.showSettingsWindow = true` already opens from the View menu;
+  - Output tab gets two sections: "Export" (Export DXF, Export DWG, same DWG gating/behavior as the
+    File menu) and "Plot" (Plot, Batch Plot) — Plot/Batch Plot **move** from Home tab's paper-space
+    Layout section to Output (user's explicit decision, 2026-08-25) rather than appearing in both
+    places, per issue #83's "avoid duplicate or unclear placement of commands"; Home tab's Layout
+    section keeps only Rect VP / Poly VP (viewport-authoring tools, not output);
+  - Manage tab is **not** populated in this increment — the only candidate found (Settings) was
+    placed on View instead per the user's decision above, and nothing else exists to relocate
+    there today; it stays an empty panel row, same as it's been since increment 1, until a future
+    requirement gives it real content;
+  - File/Edit/View menu items are unchanged — Import/Export/Settings remain reachable from the menu
+    bar too; this is a second entry point, not a move, matching increment 1's own precedent (Edit
+    menu's Copy/Paste/Undo/Redo already duplicate the Home tab's Edit section);
+  - no command's underlying behavior changes — only where each is reachable from the ribbon;
+  - switching to Insert/View/Output tabs never touches `cmd.active`, selection, undo stack, or
+    drawing geometry, same invariant every earlier increment holds;
+  - build is clean; the full regression suite stays green; a manual GUI pass confirms Import DXF/
+    DWG, Settings, Export DXF/DWG, and Plot/Batch Plot all work correctly from their new ribbon
+    locations, Home's paper-space Layout section still renders correctly with only Rect VP/Poly VP,
+    and no scrollbar/clipping is introduced at any width already covered by increment 2.
 - Owner-layer: UI (`src/ui/CadUi.cpp`, `src/ui/CadUiSettings.cpp`) / IO (`src/io/UserPrefs.cpp`,
   preference persistence)
 - Status: accepted
@@ -1407,6 +1465,15 @@ requirements is a planning failure, not a sign of rigor.
   View tab's visual-style combo width, the section-to-tab mapping (Dimensions/Text split under
   Annotate), and the scrollbar-removal mechanism (content-sized `RibbonToolsLeft`, partial —
   see Acceptance above).
+  2026-08-25 (D-2026-08-25-e) — increment 2 opened: Acceptance written above, ADR-038 recorded
+  (measure-then-decide breakpoints + shared overflow popup); increment 3 remains deferred.
+  2026-08-25 (D-2026-08-25-g) — increment 2 done: user confirmed the manual GUI pass, no findings.
+  2026-08-25 (D-2026-08-25-h) — increment 3 opened: this requirement's own Statement corrected
+  (no blocks/xrefs/point clouds/standards exist to relocate — see Acceptance above); Acceptance
+  written from what actually exists plus the user's explicit placement decisions (Settings → View,
+  not Manage; Plot/Batch Plot → Output, moved off Home, not duplicated).
+  2026-08-25 (D-2026-08-25-i) — increment 3 done, user confirmed with no findings; REQ-302 fully
+  delivered, all 3 increments complete, issue #83 closed.
 
 ---
 
@@ -3374,7 +3441,7 @@ requirements is a planning failure, not a sign of rigor.
   - all of the above hold in **paper space** as well as model space (REQ-039 (5)/(6)).
 - Owner-layer: Commands (the state machine), Viewport (the snap candidate)
 - Status: accepted (2026-08-25)
-- Revisions: 2026-08-25 — accepted (D-2026-08-25-e); issue #80
+- Revisions: 2026-08-25 — accepted (D-2026-08-25-j); issue #80
 
 ---
 
@@ -3824,7 +3891,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-116 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-117 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-118 | Commands/Viewport | planned — `headless.regression-118-polyline-close-enter` (click the start vertex closes; Enter ends open with no closing segment; two vertices refuse to close; CLOSE/END still work; Esc leaves nothing; model, 3DPOLY and paper space each asserted) | accepted |
-| REQ-302 | UI/IO | planned — sequenced into 3 increments (D-2026-08-25-c, GitHub issue #83); increment 1 (tab infrastructure) implemented and self-verified, TASK-104; amended once from the user's own GUI-pass feedback (D-2026-08-25-d: tab padding, visual-style combo width, Dimensions/Text split under Annotate, content-sized no-scrollbar `RibbonToolsLeft`); 541/541 Catch2 test cases and 591/591 headless transcripts green; manual GUI re-pass pending; increments 2-3 (responsive layout engine, content audit) deferred until reached | accepted |
+| REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 
 ---
 
