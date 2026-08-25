@@ -2102,6 +2102,15 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     addLayerName(st.userCircleAttrs[i].layer);
   for (size_t i = 0; i < st.cadAnnotationAttrs.size(); ++i)
     addLayerName(st.cadAnnotationAttrs[i].layer.empty() ? std::string("0") : st.cadAnnotationAttrs[i].layer);
+  // Polylines (#72) and filled regions (the same omission, unreported) — the two entity branches
+  // added to the writer without being added here. Every layer this sweep misses is a layer some
+  // entity's group 8 can name with no LAYER table row behind it: an invalid file, written silently.
+  // `drawingLayerTable` below masks it for layers created in this session, which is why it survived
+  // this long, but not for one that arrived on an imported entity.
+  for (size_t i = 0; i < st.userPolylineAttrs.size(); ++i)
+    addLayerName(st.userPolylineAttrs[i].layer);
+  for (size_t i = 0; i < st.cadFilledRegionAttrs.size(); ++i)
+    addLayerName(st.cadFilledRegionAttrs[i].layer);
   for (const SurveyPoint& p : st.surveyPoints)
     addLayerName(p.layer);
   for (const CadLayerRow& lr : st.drawingLayerTable) {

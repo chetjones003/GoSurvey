@@ -1,9 +1,14 @@
 # TASK-102 — Count and declare every entity the DXF exporter writes
 
 - Type:    bug
-- Status:  blocked (SPEC GAP — see §3 and §12)
+- Status:  **#72 done (2026-08-25)** · **#71 blocked (SPEC GAP — see §3 and §12)**
 - Opened:  2026-08-25
 - Owner:   Nathan Johnson
+
+> The two defects share a root cause and a function but not a fate. #72's oracle is
+> expressible with today's harness, so it is fixed, tested and shipped. #71's is not —
+> it needs the REQ-204 invariant proposed in §12 — so it waits for a recorded decision
+> rather than shipping untested. Splitting them was the user's call (Q4).
 
 Upstream issues: chetjones003/GoSurvey#71 (duplicate handles, `sev:corrupt`),
 chetjones003/GoSurvey#72 (undefined LAYER reference). Both filed by TASK-083 as
@@ -62,6 +67,7 @@ OBS-1 / OBS-2 and deliberately left unfixed there.
 | Q1 | #71 cannot be tested without a new REQ-204 invariant. File the SPEC GAP and pause, file it and proceed anyway, or fix #71 untested as recorded debt? | 2026-08-25 | **File the SPEC GAP, then pause** for sign-off before any code. |
 | Q2 | Delivery route, given READ permission on the upstream repo? | 2026-08-25 | Branch on `nrjohnson2604/GoSurvey`, then PR to `chetjones003:beta`. |
 | Q3 | Should the handle count be corrected in place, or should OBJECTS handles be allocated *after* the entity section is written, making the count structurally impossible to get wrong? | 2026-08-25 | **OPEN** — see ASSUMPTION-1. Recommend in place; the alternative reorders emitted records. |
+| Q4 | Ship #72 alone, given it needs no spec change, or hold both until #71 is unblocked? | 2026-08-25 | **Ship #72 now.** #71 continues under this task. |
 
 ## 5. Assumptions  (workflow.md §8)
 ```
@@ -130,14 +136,14 @@ ASSUMPTION-2: Over-counting is safe; under-counting corrupts.
   - #71's oracle is blocked on §12.
 
 - Steps:
+  - [x] write the `GHOST` regression transcript for #72 — confirmed it fails first
+  - [x] fix the `addLayerName` sweep (polylines + filled regions)
+  - [x] confirm it passes, and the full suite stays green — **574/574, 2026-08-25**
+  - [x] self-verify (§9) — #72 half
   - [ ] **BLOCKED** — obtain the recorded decision on the REQ-204 invariant (§12)
   - [ ] write the handle-uniqueness check + a fixture that proves it fires (REQ-204
         acceptance requires the fixture, not merely the check)
-  - [ ] write the `GHOST` regression transcript for #72 — confirm it fails first
   - [ ] fix `entityHandleCount` (polylines + filled regions)
-  - [ ] fix the `addLayerName` sweep (polylines + filled regions)
-  - [ ] confirm both fail-before tests pass, and the full suite stays green
-  - [ ] self-verify (§9), then submit
 
 ## 7. Workflow-specific notes
 - **Bug — root cause (one mechanism, two symptoms):** `ExportDxfFile_Impl` maintains
@@ -159,24 +165,78 @@ ASSUMPTION-2: Over-counting is safe; under-counting corrupts.
   from both sweeps as well. Neither issue mentions them. Scope widened to match the
   root cause rather than the issue text.
 - 2026-08-25 Status → **blocked (SPEC GAP)**. Q1 answered: file and pause.
+- 2026-08-25 Q4 answered — ship #72 alone. Resumed on the #72 half only.
+- 2026-08-25 `EXPECT LAYERSDEFINED <dxf>` added to the transcript driver. It parses the
+  WRITTEN FILE's group-code pairs and asserts every ENTITIES-section group 8 has an
+  `AcDbLayerTableRecord`. A document-side assertion cannot see this defect; the whole of
+  it is in what the exporter emits. Carries a vacuity guard (a file with no entity
+  referencing a layer fails rather than passes) in the spirit of `EXPECT DIFFERENTFILE`.
+- 2026-08-25 `samples/ghost-layer-entities.dxf` added: an LWPOLYLINE on `GHOST` and a
+  solid HATCH on `GHOST2`, in a file with **no TABLES section**. The fixture is an
+  imported file on purpose — `drawingLayerTable` masks the defect for any layer created
+  in-session, so a drawing built with `CMD` would exercise the masked path and pass
+  either way.
+- 2026-08-25 **fails-before confirmed** on the unfixed exporter:
+  `LAYERSDEFINED: 2 layer(s) referenced by an entity but absent from the LAYER table:
+  GHOST, GHOST2 (1 defined, 2 referenced)`. Note it caught **GHOST2** — the hatch — which
+  no issue reports. The new finding is now evidenced, not merely read.
+- 2026-08-25 #72 fixed: two loops added to the `addLayerName` sweep. Test passes; full
+  suite **574/574 green** (was 573 + this one), `dxf-export-stable` still the only
+  DISABLED case (#63, untouched).
+- 2026-08-25 #71 **measured on the fixed tree** to confirm the #72 fix does not perturb it.
+  Adding LAYER rows moves `symAfterLayers`, and `entityHandleStart` derives from it — but
+  it stays pinned at `0x1000` by the `std::max(0x1000ull, lastSymHandle + 1ull)` floor, so
+  handle values are unchanged. Six RECTs still emit the exact sequence issue #71 recorded
+  at `9983f76`:
+  `1004 3 4 5 6 7 8 9 A B C 2 10 … 1F 1000 1001 1002 1003 1004 1005 1000 1001 1003 1002`
+  — 38 handles, 33 unique, duplicates `1000-1004`, `$HANDSEED` = `1004` while `1005` is
+  in use. Independently reproduced; the issue's measurement holds.
+- 2026-08-25 #71's **filled-region half evidenced**, and it is worse than the polyline
+  half. A document holding only the imported polyline + hatch has
+  `entityHandleCount == 0` (no lines, circles, survey points or annotations), so
+  `objDictRoot` lands on `0x1000` and **every entity in the file collides**:
+  handles `1000 1001` are each written twice. The six-RECT case at least keeps some
+  entities clear of the OBJECTS block; this one keeps none.
 
 ## 9. Self-verification  (run BEFORE submitting — verification/skills/)
-- [ ] build-project        — not run (blocked)
-- [ ] architecture-review  — not run (blocked)
-- [ ] code-review          — not run (blocked)
-- [ ] dependency-audit     — n-a (no dependency change)
-- [ ] performance-review   — n-a (export path, not a frame-budget path)
-- [ ] testing              — not run (blocked)
+**#72 half:**
+- [x] build-project        — PASS, clean, MSVC Release via `build.bat`
+- [x] architecture-review  — PASS. Two loops beside five identical existing ones in the
+                             subsystem that owns the format. No new abstraction, no
+                             dependency, no ownership change, no data-format change —
+                             the LAYER table gaining a row it should always have had is
+                             the requirement being met, not the format changing.
+- [x] code-review          — PASS. The added loops match the four above them line for
+                             line, including the `.layer` empty→"0" handling inside
+                             `addLayerName`.
+- [x] dependency-audit     — n-a (no dependency change; `<set>` is stdlib, test-only)
+- [x] performance-review   — n-a (export path, not a frame-budget path; two loops over
+                             stores already iterated moments later by the writer)
+- [x] testing              — PASS. Fails-before verified, passes-after, suite 574/574.
+
+**#71 half:** not run — blocked before implementation.
 
 ## 10. Verification result
-- Submitted:  —
-- Verdict:    — (blocked before implementation)
-- Findings:   —
+- Submitted:  2026-08-25 (#72 half)
+- Verdict:    PASS (#72) · blocked (#71)
+- Findings:   none outstanding on the #72 half
 
-## 11. Outcome
-- Requirements satisfied: pending
-- Tests added:            pending
-- Done:                   —
+## 11. Outcome  (#72 half)
+- Requirements satisfied: REQ-053, REQ-204's export-stability row (Acceptance met: yes,
+  for the layer-definition half — the handle half is #71 and remains open)
+- Tests added:            `headless.regression-72-dxf-export-layer-defined`
+                          (+ `EXPECT LAYERSDEFINED` driver verb,
+                             + `samples/ghost-layer-entities.dxf` fixture)
+- Refactors:              none
+- Docs updated:           none (no user-visible behaviour change — an invalid file
+                          became a valid one)
+- Technical debt noted:   **DEBT-1** — the three-lists problem in §7 is fixed twice by
+                          hand, not structurally. `entityHandleCount` (#71) and
+                          `addLayerName` (#72) still restate what the writer emits, so
+                          the next entity kind added can reintroduce both. Removal
+                          condition: Q3 resolved in favour of deriving both from the
+                          writer's own iteration. Follow-up rides with #71.
+- Done:                   2026-08-25 (#72 half only)
 
 ## 12. SPEC GAP — proposed REQ-204 invariant
 > Filed per CLAUDE.md "Escalation: the SPEC GAP". Status: **awaiting a recorded

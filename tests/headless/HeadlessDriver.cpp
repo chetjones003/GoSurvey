@@ -35,6 +35,7 @@
 #include <array>
 #include <tuple>
 #include <fstream>
+#include <set>
 #include <sstream>
 #include <utility>
 #include <string>
@@ -789,6 +790,89 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
              "DIFFERENTFILE: files are identical (" + std::to_string(sa.size()) +
                  " bytes) — the step between them changed nothing, so any check that follows is "
                  "vacuous",
+             sourceLine);
+        return false;
+      }
+    } else if (what == "LAYERSDEFINED") {
+      // EXPECT LAYERSDEFINED <dxf> — every layer an ENTITIES-section group 8 names has an
+      // AcDbLayerTableRecord in the same file.
+      //
+      // Issue #72: `ExportDxfFile_Impl`'s layer-name sweep collected names from lines, circles,
+      // annotations, survey points and the drawing's own layer table — but not from
+      // `userPolylineAttrs` or `cadFilledRegionAttrs`. A polyline or a hatch was therefore the one
+      // entity that could write a layer reference the LAYER table did not define. An entity naming
+      // an undefined layer is an invalid file, and it was written silently.
+      //
+      // This reads the WRITTEN FILE rather than the document, which is the point: the defect is
+      // entirely in what the exporter emits, and a document-side assertion cannot see it. It is
+      // also why the existing `dxf-export-stable` round trip misses it — that oracle compares two
+      // exports, and both name the same undefined layer.
+      const std::string path = ExpandVars(run, Trim(arg));
+      std::ifstream df(path, std::ios::binary);
+      if (!df) {
+        Fail(run, "io", "EXPECT LAYERSDEFINED: cannot open " + path, sourceLine);
+        return false;
+      }
+      // A DXF is a flat stream of (group code, value) line pairs. Section is tracked so a group 8
+      // inside TABLES/BLOCKS is not mistaken for an entity's layer reference, and so the LAYER
+      // records read are the real table rather than anything else carrying a group 2.
+      std::set<std::string> defined;
+      std::set<std::string> referenced;
+      std::string section;
+      std::string tableName;
+      bool inLayerRecord = false;
+      std::string codeLine;
+      std::string valueLine;
+      while (std::getline(df, codeLine) && std::getline(df, valueLine)) {
+        const std::string code = Trim(codeLine);
+        const std::string value = Trim(valueLine);
+        if (code == "0") {
+          if (value == "SECTION") {
+            section.clear();  // the following group 2 names it
+          } else if (value == "ENDSEC") {
+            section.clear();
+            tableName.clear();
+          } else if (value == "TABLE") {
+            tableName.clear();  // likewise
+          }
+          inLayerRecord = (section == "TABLES" && tableName == "LAYER" && value == "LAYER");
+          continue;
+        }
+        if (code == "2") {
+          if (section.empty())
+            section = value;            // SECTION's name: HEADER / TABLES / BLOCKS / ENTITIES
+          else if (section == "TABLES" && tableName.empty())
+            tableName = value;          // TABLE's name: VPORT / LTYPE / LAYER / ...
+          else if (inLayerRecord)
+            defined.insert(value);      // an AcDbLayerTableRecord's own name
+          continue;
+        }
+        if (code == "8" && section == "ENTITIES")
+          referenced.insert(value.empty() ? std::string("0") : value);
+      }
+      std::vector<std::string> undefined;
+      for (const std::string& r : referenced) {
+        if (defined.find(r) == defined.end())
+          undefined.push_back(r);
+      }
+      if (!undefined.empty()) {
+        std::string names;
+        for (size_t i = 0; i < undefined.size(); ++i)
+          names += (i ? ", " : "") + undefined[i];
+        Fail(run, "expect",
+             "LAYERSDEFINED: " + std::to_string(undefined.size()) +
+                 " layer(s) referenced by an entity but absent from the LAYER table: " + names +
+                 " (" + std::to_string(defined.size()) + " defined, " +
+                 std::to_string(referenced.size()) + " referenced)",
+             sourceLine);
+        return false;
+      }
+      if (referenced.empty()) {
+        // Vacuity guard, in the spirit of EXPECT DIFFERENTFILE: a file with no entity at all
+        // satisfies "every referenced layer is defined" perfectly while proving nothing. If the
+        // export dropped everything (see #63), this check must say so rather than pass.
+        Fail(run, "expect",
+             "LAYERSDEFINED: no entity in the file names a layer at all — nothing was checked",
              sourceLine);
         return false;
       }
