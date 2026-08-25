@@ -29,6 +29,7 @@
 
 #include <cstdio>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <algorithm>
@@ -873,6 +874,100 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         // export dropped everything (see #63), this check must say so rather than pass.
         Fail(run, "expect",
              "LAYERSDEFINED: no entity in the file names a layer at all — nothing was checked",
+             sourceLine);
+        return false;
+      }
+    } else if (what == "HANDLESUNIQUE") {
+      // EXPECT HANDLESUNIQUE <dxf> — no two records in the file share a group-5 handle, and
+      // $HANDSEED exceeds every handle the file uses.
+      //
+      // Issue #71: `ExportDxfFile_Impl` reserves a block of entity handles by COUNTING the entities
+      // it is about to write, and that count omitted polylines and filled regions. Every OBJECTS
+      // handle derives from the sum, so the running `entHandle++` walks straight through the OBJECTS
+      // block and both own the same handles. A handle is the identity a DXF uses for every internal
+      // reference — group 330 ownership, dictionary entries, XDATA links — so duplicating them is
+      // not cosmetic, and a $HANDSEED below the highest handle in use means the next handle a
+      // consumer allocates collides again.
+      //
+      // Why this reads the written file rather than comparing two exports: the collision is
+      // DETERMINISTIC. `dxf-export-stable` exports twice and compares, and both passes collide
+      // identically, so a differential oracle reports success on a file AutoCAD would reject. That
+      // is the whole reason this verb exists rather than a round-trip step.
+      const std::string path = ExpandVars(run, Trim(arg));
+      std::ifstream df(path, std::ios::binary);
+      if (!df) {
+        Fail(run, "io", "EXPECT HANDLESUNIQUE: cannot open " + path, sourceLine);
+        return false;
+      }
+      // $HANDSEED is a HEADER variable that happens to be carried on group 5. It is the declared
+      // ceiling, not a handle anything owns, so it is pulled out here rather than counted as one.
+      std::set<std::string> seen;
+      std::set<std::string> dupes;
+      std::string seedHex;
+      std::string section;
+      std::string lastVar;
+      unsigned long long maxHandle = 0;
+      size_t handleCount = 0;
+      std::string codeLine;
+      std::string valueLine;
+      while (std::getline(df, codeLine) && std::getline(df, valueLine)) {
+        const std::string code = Trim(codeLine);
+        const std::string value = Trim(valueLine);
+        if (code == "0") {
+          if (value == "SECTION" || value == "ENDSEC")
+            section.clear();  // the following group 2 names the next one
+          continue;
+        }
+        if (code == "2" && section.empty()) {
+          section = value;
+          continue;
+        }
+        if (code == "9") {
+          lastVar = value;
+          continue;
+        }
+        if (code != "5")
+          continue;
+        if (section == "HEADER" && lastVar == "$HANDSEED") {
+          seedHex = value;
+          continue;
+        }
+        if (!seen.insert(value).second)
+          dupes.insert(value);
+        ++handleCount;
+        const unsigned long long h = std::strtoull(value.c_str(), nullptr, 16);
+        if (h > maxHandle)
+          maxHandle = h;
+      }
+      if (handleCount == 0) {
+        // Vacuity guard, in the spirit of EXPECT DIFFERENTFILE: a file holding no handle at all
+        // satisfies "all handles are unique" perfectly while proving nothing.
+        Fail(run, "expect", "HANDLESUNIQUE: the file carries no group-5 handle — nothing was checked",
+             sourceLine);
+        return false;
+      }
+      if (!dupes.empty()) {
+        std::string names;
+        size_t i = 0;
+        for (const std::string& d : dupes)
+          names += (i++ ? ", " : "") + d;
+        Fail(run, "expect",
+             "HANDLESUNIQUE: " + std::to_string(dupes.size()) + " handle(s) used more than once: " +
+                 names + " (" + std::to_string(handleCount) + " handles, " +
+                 std::to_string(seen.size()) + " distinct)",
+             sourceLine);
+        return false;
+      }
+      if (seedHex.empty()) {
+        Fail(run, "expect", "HANDLESUNIQUE: the file declares no $HANDSEED", sourceLine);
+        return false;
+      }
+      const unsigned long long seed = std::strtoull(seedHex.c_str(), nullptr, 16);
+      if (seed <= maxHandle) {
+        Fail(run, "expect",
+             "HANDLESUNIQUE: $HANDSEED is " + seedHex + " but handle " +
+                 std::to_string(maxHandle) + " (decimal) is in use — the seed must exceed every "
+                 "handle in the file, or the next handle a consumer allocates collides",
              sourceLine);
         return false;
       }
