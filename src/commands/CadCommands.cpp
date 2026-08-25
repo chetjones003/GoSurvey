@@ -22366,6 +22366,118 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
   if (st.active == K::DesignateBoundary)
     return "DESIGNATEBOUNDARY: Pick a CLOSED polyline | ESC cancel";
 
+  // REQ-304 (GitHub issue #82). HATCH/ELEV/VPFREEZE/VPTHAW/PDFATTACH/FEATURELINE/FILLET/CHAMFER
+  // previously had no branch here, so both the command line's live hint and the dynamic cursor
+  // (which reads this same function — CadUi.cpp's CommandInputHint fallback) fell through to the
+  // generic "Command:" placeholder for every one of their states.
+  if (st.active == K::Hatch)
+    return "HATCH: Pick an internal point inside a closed area | ESC cancel";
+
+  if (st.active == K::Elev) {
+    static char buf[128];
+    std::snprintf(buf, sizeof(buf), "ELEV: New default elevation <%.4f> — W = world Z 0 | ESC cancel",
+                  static_cast<double>(CadWorkPlaneElevation(st)));
+    return buf;
+  }
+
+  if (st.active == K::VpFreeze)
+    return "VPFREEZE: Pick objects to freeze their layer in this viewport | Enter/ESC to finish";
+  if (st.active == K::VpThaw)
+    return "VPTHAW: Pick objects to thaw their layer in this viewport | Enter/ESC to finish";
+
+  if (st.active == K::PdfAttach) {
+    using PAP = AppCommandState::PdfAttachPhase;
+    if (st.pdfAttachPhase == PAP::WaitInsertPoint)
+      return "PDFATTACH: Insertion point — click or X,Y | ESC cancel";
+    if (st.pdfAttachPhase == PAP::WaitScaleRef)
+      return "PDFATTACH: Second point for scale | ESC cancel";
+    if (st.pdfAttachPhase == PAP::WaitRotationPt)
+      return "PDFATTACH: Rotation reference point | ESC cancel";
+    return "PDFATTACH: Configure in the dialog";
+  }
+
+  if (st.active == K::FeatureLine) {
+    if (st.featureLinePendingPoint) {
+      static char buf[192];
+      std::snprintf(buf, sizeof(buf), "FEATURELINE: Elevation for %s %zu <%.3f> | ESC cancel",
+                    st.featureLineNextIsElevPoint ? "elevation point" : "point",
+                    st.featureLineDraftElevPt.size() + 1,
+                    static_cast<double>(st.featureLinePendingDefaultZ));
+      return buf;
+    }
+    if (st.featureLineDraftVerts.empty())
+      return "FEATURELINE: First point — click or X,Y/X,Y,Z | E = elevation point | CLOSE/END | ESC cancel";
+    return "FEATURELINE: Next point — click or X,Y/X,Y,Z | E = elevation point | CLOSE/END | ESC cancel";
+  }
+
+  if (st.active == K::Fillet) {
+    using FP = AppCommandState::FilletPhase;
+    if (st.filletTextAwaitingRadius) {
+      static char buf[96];
+      std::snprintf(buf, sizeof(buf), "FILLET: New radius <%.3f> | ESC cancel",
+                    static_cast<double>(st.filletRadius));
+      return buf;
+    }
+    if (st.filletTextAwaitingTrim) {
+      static char buf[96];
+      std::snprintf(buf, sizeof(buf), "FILLET: Trim mode [Trim/No trim] <%s> | ESC cancel",
+                    st.cornerTrimMode ? "Trim" : "No trim");
+      return buf;
+    }
+    if (st.filletPhase == FP::WaitSecondEntity)
+      return "FILLET: Select second object | ESC cancel";
+    static char buf[128];
+    std::snprintf(buf, sizeof(buf), "FILLET: Select first object or [Radius/Trim] <R=%.3f, %s> | ESC cancel",
+                  static_cast<double>(st.filletRadius), st.cornerTrimMode ? "Trim" : "No trim");
+    return buf;
+  }
+
+  if (st.active == K::Chamfer) {
+    using CP = AppCommandState::ChamferPhase;
+    if (st.chamferTextAwaitingFirstValue) {
+      static char buf[96];
+      if (st.chamferMode == 0)
+        std::snprintf(buf, sizeof(buf), "CHAMFER Distance: First distance <%.3f> | ESC cancel",
+                      static_cast<double>(st.chamferDist1));
+      else
+        std::snprintf(buf, sizeof(buf), "CHAMFER Angle: Distance <%.3f> | ESC cancel",
+                      static_cast<double>(st.chamferDist1));
+      return buf;
+    }
+    if (st.chamferTextAwaitingSecondDist) {
+      static char buf[96];
+      std::snprintf(buf, sizeof(buf), "CHAMFER: Second distance <%.3f> | ESC cancel",
+                    static_cast<double>(st.chamferDist2));
+      return buf;
+    }
+    if (st.chamferTextAwaitingAngle) {
+      static char buf[96];
+      std::snprintf(buf, sizeof(buf), "CHAMFER: Angle in degrees <%.1f> | ESC cancel",
+                    static_cast<double>(st.chamferAngle));
+      return buf;
+    }
+    if (st.chamferTextAwaitingTrim) {
+      static char buf[96];
+      std::snprintf(buf, sizeof(buf), "CHAMFER: Trim mode [Trim/No trim] <%s> | ESC cancel",
+                    st.cornerTrimMode ? "Trim" : "No trim");
+      return buf;
+    }
+    if (st.chamferPhase == CP::WaitSecondEntity)
+      return "CHAMFER: Select second object | ESC cancel";
+    static char buf[128];
+    if (st.chamferMode == 0)
+      std::snprintf(buf, sizeof(buf),
+                    "CHAMFER: Select first object or [Distance/Angle/Trim] <D1=%.3f, D2=%.3f, %s> | ESC cancel",
+                    static_cast<double>(st.chamferDist1), static_cast<double>(st.chamferDist2),
+                    st.cornerTrimMode ? "Trim" : "No trim");
+    else
+      std::snprintf(buf, sizeof(buf),
+                    "CHAMFER: Select first object or [Distance/Angle/Trim] <D=%.3f, A=%.1f, %s> | ESC cancel",
+                    static_cast<double>(st.chamferDist1), static_cast<double>(st.chamferAngle),
+                    st.cornerTrimMode ? "Trim" : "No trim");
+    return buf;
+  }
+
   if (st.active == K::Polyline) {
     using SAP = AppCommandState::SegmentAnglePickPhase;
     if (st.polylinePhase == PP::NeedFirstPoint)
