@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GoSurvey VERSION 0.5.4 LANGUAGES CXX C RC)
+project(GoSurvey VERSION 0.5.5 LANGUAGES CXX C RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
