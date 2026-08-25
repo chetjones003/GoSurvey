@@ -618,6 +618,23 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   float refPy = 0.f;
   const bool havePerpRef = commandActive && cmd.objectSnapPerpendicular && PerpendicularReference(cmd, &refPx, &refPy);
 
+  // REQ-118: while a POLYLINE/3DPOLY draft is open, its STARTING vertex is an Endpoint candidate,
+  // so the cursor can land on it exactly and the ordinary snap marker shows it. This is the only
+  // candidate here that comes from uncommitted geometry — the draft is in no store yet.
+  //
+  // Offered only from three vertices on. REQ-118 keeps the existing minimum (three to close) and
+  // expresses it by WITHHOLDING the affordance rather than refusing the close afterwards: a snap
+  // the user is never offered cannot be mis-clicked, so "invalid attempts handled gracefully" needs
+  // no message. Below that, the start point is still an ordinary place to put a vertex.
+  //
+  // This does NOT decide the close. SubmitPolylineVertex compares the committed point against the
+  // stored first vertex; the snap only makes that point reachable (D-2026-08-25-j).
+  if (cmd.active == AppCommandState::Kind::Polyline && cmd.objectSnapEndpoint &&
+      cmd.polylineDraftVerts.size() >= 9) {
+    Consider(&acc, wx, wy, cmd.polylineDraftVerts[0], cmd.polylineDraftVerts[1], Kind::Endpoint,
+             tolWorld, cmd.polylineDraftVerts[2]);
+  }
+
   const auto& L = cmd.userLinesFlat;
   if (L.size() % 6 == 0) {
     for (size_t i = 0; i + 5 < L.size(); i += 6) {

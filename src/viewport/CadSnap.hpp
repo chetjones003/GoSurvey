@@ -41,7 +41,9 @@ struct SnapCandidateEntry {
 [[nodiscard]] float WorldToleranceFromPixels(float viewportHeightPx, float orthoHalfHeightWorld,
                                              float pixels);
 
-/// Object snaps from committed geometry. Perpendicular snaps use a command-defined reference
+/// Object snaps from committed geometry — plus, while a POLYLINE draft is open, its own starting
+/// vertex as an Endpoint candidate (REQ-118), which is the one candidate not yet in any store.
+/// Perpendicular snaps use a command-defined reference
 /// (LINE previous point, circle center while sizing radius, prior 3P picks, etc.) so the snap
 /// lies at the foot from that reference onto each segment—not under the cursor along the line.
 /// \p commandActive retained for callers; perpendicular logic ignores it when no reference applies.
