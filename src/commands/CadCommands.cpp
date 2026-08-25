@@ -14683,7 +14683,8 @@ void StartPolylineCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.selBoxWaitingSecond = false;
   st.active = AppCommandState::Kind::Polyline;
   st.polylinePhase = AppCommandState::PolylinePhase::NeedFirstPoint;
-  log.push_back("POLYLINE — like LINE (A / 2P bearing lock); CLOSE/CL; ortho; ESC cancels.");
+  log.push_back("POLYLINE — click points; click the FIRST point to close, Enter to finish open. "
+                "(CLOSE/CL, END still work.) A / 2P bearing lock; ortho; ESC cancels.");
 }
 
 void StartFeatureLineCommand(AppCommandState& st, const std::string& name, std::vector<std::string>& log) {
@@ -15164,7 +15165,8 @@ void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log) 
   log.pop_back();  // replace POLYLINE's prompt rather than printing both
   st.polylineDraft3d = true;
   log.push_back("3DPOLY — vertices carry their own elevation: type X,Y,Z (or @dx,dy,dz), or snap. "
-                "X,Y alone uses the snapped point's elevation, else ELEV. CLOSE/CL, END, ESC cancels.");
+                "X,Y alone uses the snapped point's elevation, else ELEV. Click the FIRST point to "
+                "close, Enter to finish open. (CLOSE/CL, END still work.) ESC cancels.");
 }
 
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -20548,7 +20550,28 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
       log.push_back(buf);
     }
     log.push_back(std::string(who) +
-                  " — next vertex (A + bearing then distance like LINE), CLOSE / END, or ESC.");
+                  " — next vertex; click the FIRST point to close, Enter to finish open "
+                  "(CLOSE / END still work), or ESC.");
+    return true;
+  }
+
+  // REQ-118: a vertex that lands on the STARTING vertex closes the polyline instead of being added.
+  //
+  // The test is coincidence with the stored first vertex, NOT "the snap system said so". CadSnap
+  // returns the stored coordinate verbatim, so a snapped point compares equal here; a typed
+  // coordinate or an exact click closes it too, which is what a user means by clicking the start
+  // and is what a snap-gated rule would refuse whenever OSNAP is off (D-2026-08-25-e).
+  //
+  // The tolerance is deliberately tight — "the same point", not "near it". A near-miss click stays
+  // an ordinary vertex, because without landing on the start the user has not indicated it; the
+  // snap candidate (CadSnap, offered from three vertices on) is what makes landing on it easy.
+  //
+  // Guarded at three vertices, matching CommitPolylineDraft's own CLOSE minimum, so the second
+  // vertex of a two-point draft is an ordinary vertex even if it sits on the first.
+  constexpr float kCloseEps = 1e-4f;
+  if (st.polylineDraftVerts.size() >= 9 && std::fabs(x - st.polyFirstX) <= kCloseEps &&
+      std::fabs(y - st.polyFirstY) <= kCloseEps) {
+    CommitPolylineDraft(st, true, log);
     return true;
   }
 
@@ -20770,6 +20793,21 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       st.linePhase = AppCommandState::LinePhase::NeedFirstPoint;
       st.lineDraftSegments = 0;
       log.push_back("LINE — specify first point (click or type X,Y / X Y). ESC to cancel.");
+      return;
+    }
+    if (st.active == K::Polyline && st.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint) {
+      // REQ-118: blank Enter finishes the polyline OPEN — no closing segment — and ENDS the command.
+      //
+      // Deliberately unlike LINE directly above, whose blank Enter restarts the command for the next
+      // chain. A polyline is one object, so finishing it finishes the command; LINE's chain is a run
+      // of independent segments, so there is always a next one to start. The asymmetry was put to the
+      // user and chosen, not inherited by accident (D-2026-08-25-e).
+      //
+      // CommitPolylineDraft enforces the two-vertex minimum and reports it (REQ-201), so a bare Enter
+      // on a single-vertex draft says why rather than silently doing nothing.
+      CancelSegmentAnglePick(st, nullptr);
+      ResetSegmentAngleLock(st);
+      CommitPolylineDraft(st, false, log);
       return;
     }
     if (st.active == K::Trim) {

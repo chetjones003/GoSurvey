@@ -3338,6 +3338,44 @@ requirements is a planning failure, not a sign of rigor.
 - Status: proposed
 - Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
 
+### REQ-118 — A polyline closes by clicking its start, and ends on Enter
+- Purpose: finishing a polyline requires typing `CLOSE` or `END`. No established CAD requires
+  either, so the most common drawing operation in the program is the one that makes the user stop
+  and recall command syntax
+- Priority: should
+- Type: functional
+- Statement: While a `POLYLINE` (or `3DPOLY`) draft is active, its **starting vertex is an Endpoint
+  object-snap candidate**, so the cursor lands on it exactly and the existing snap marker shows it.
+  Committing a point that coincides with that starting vertex **closes** the polyline, writes the
+  closing segment, and ends the command — with no `CLOSE` keyword. A bare **Enter** finishes the
+  draft as an **open** polyline, adds no closing segment, and ends the command.
+
+  `CLOSE`/`CL` and `END` remain accepted; they are no longer *required*. The minimum-vertex rules
+  are unchanged (three to close, two to end open), and below three vertices the starting vertex is
+  **not offered as a snap candidate** — so the invalid close cannot be attempted, rather than being
+  refused after the fact.
+
+  Close detection is by **coincidence with the stored first vertex**, not by asking the snap system
+  what the user meant. The snap makes the point reachable; it does not decide the command. Anything
+  that lands on the first vertex — snap, typed coordinate, or an exact click — closes the polyline.
+
+  Enter **ends the command** rather than restarting it. This differs deliberately from `LINE`, whose
+  blank Enter starts a fresh chain: a polyline is one object and finishing it is finishing the
+  command, where LINE's chain is a run of independent segments.
+- Acceptance:
+  - four picks, the fourth on the starting vertex, produce **one closed** polyline and the command ends;
+  - three picks then Enter produce **one open** polyline, with no closing segment, and the command ends;
+  - with only two vertices a pick on the starting vertex does **not** close — it is an ordinary
+    vertex, and the starting vertex offers no snap candidate at that point;
+  - `CLOSE` and `END` still work and still report through REQ-201;
+  - snapping to all other geometry is unaffected while a draft is active;
+  - Esc mid-draft leaves the polyline count unchanged in both spaces;
+  - `3DPOLY` behaves identically, each vertex keeping its own elevation (REQ-085);
+  - all of the above hold in **paper space** as well as model space (REQ-039 (5)/(6)).
+- Owner-layer: Commands (the state machine), Viewport (the snap candidate)
+- Status: accepted (2026-08-25)
+- Revisions: 2026-08-25 — accepted (D-2026-08-25-e); issue #80
+
 ---
 
 ## Performance requirements
@@ -3785,6 +3823,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-115 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-116 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-117 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-118 | Commands/Viewport | planned — `headless.regression-118-polyline-close-enter` (click the start vertex closes; Enter ends open with no closing segment; two vertices refuse to close; CLOSE/END still work; Esc leaves nothing; model, 3DPOLY and paper space each asserted) | accepted |
 | REQ-302 | UI/IO | planned — sequenced into 3 increments (D-2026-08-25-c, GitHub issue #83); increment 1 (tab infrastructure) implemented and self-verified, TASK-104; amended once from the user's own GUI-pass feedback (D-2026-08-25-d: tab padding, visual-style combo width, Dimensions/Text split under Annotate, content-sized no-scrollbar `RibbonToolsLeft`); 541/541 Catch2 test cases and 591/591 headless transcripts green; manual GUI re-pass pending; increments 2-3 (responsive layout engine, content audit) deferred until reached | accepted |
 
 ---

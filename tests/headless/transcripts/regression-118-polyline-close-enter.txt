@@ -1,0 +1,164 @@
+# REQ-118 (issue #80) — a polyline closes by clicking its start vertex, and ends on Enter.
+#
+# Finishing a polyline used to require typing CLOSE or END. No established CAD requires either, so
+# the most common drawing operation in the program was the one that made the user stop and recall
+# command syntax.
+#
+# Close detection is COINCIDENCE WITH THE STORED FIRST VERTEX, not "the snap system said so"
+# (D-2026-08-25-e). That is what makes this testable here at all: the driver's PICK passes exact
+# world coordinates and never calls CadSnap::FindBest, so a snap-gated rule would have been
+# manual-test-only forever — the trap REQ-039's paper-space conditions had already fallen into
+# (#84). The snap candidate CadSnap offers is what makes the point easy to HIT in the GUI; it is
+# not what decides the command, and this transcript exercises the deciding half.
+#
+# Fails before the change:
+#   part 1  EXPECT POLYLINES 1  -> got 0   (the start-point pick was added as a 4th vertex and the
+#                                           command was still waiting, so nothing was committed)
+#   part 2  EXPECT POLYLINES 2  -> got 1   (bare Enter did nothing for POLYLINE at all)
+
+NEW
+CHECK ALL
+EXPECT POLYLINES 0
+
+# ---------------------------------------------------------------------------
+# PART 1 — clicking the FIRST point closes the polyline and ends the command.
+# ---------------------------------------------------------------------------
+CMD POLYLINE
+CMD 0,0
+CMD 40,0
+CMD 40,30
+CMD 0,0
+
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT LOG "POLYLINE closed."
+
+# The command ENDED — it is not still waiting for vertices. If it were, this LINE would be swallowed
+# as polyline input and no line segment would exist.
+CMD LINE
+CMD 100,100
+CMD 200,100
+ESC
+CHECK ALL
+EXPECT LINES 1
+
+# ---------------------------------------------------------------------------
+# PART 2 — bare Enter finishes the polyline OPEN and ends the command.
+# ---------------------------------------------------------------------------
+CMD POLYLINE
+CMD 0,100
+CMD 50,100
+CMD 50,140
+CMD
+
+CHECK ALL
+EXPECT POLYLINES 2
+EXPECT LOG "POLYLINE complete."
+
+# Ended, same proof as above.
+CMD CIRCLE
+CMD 300,300
+CMD 10
+ESC
+CHECK ALL
+EXPECT CIRCLES 1
+
+# ---------------------------------------------------------------------------
+# PART 3 — with only TWO vertices the start point is an ordinary vertex, not a close.
+# REQ-118 keeps the three-vertex minimum, and expresses it by withholding the affordance.
+# ---------------------------------------------------------------------------
+CMD POLYLINE
+CMD 500,0
+CMD 540,0
+CMD 500,0
+
+# Still drafting: three polylines would mean it closed a 2-vertex polyline.
+CHECK ALL
+EXPECT POLYLINES 2
+
+# It became a real vertex, so ENDing now yields an open 3-vertex polyline.
+CMD
+CHECK ALL
+EXPECT POLYLINES 3
+
+# ---------------------------------------------------------------------------
+# PART 4 — CLOSE and END still work. REQ-118 makes them unnecessary, not gone.
+# ---------------------------------------------------------------------------
+CMD POLYLINE
+CMD 600,0
+CMD 640,0
+CMD 640,30
+CMD CLOSE
+CHECK ALL
+EXPECT POLYLINES 4
+EXPECT LOG "POLYLINE closed."
+
+CMD POLYLINE
+CMD 700,0
+CMD 740,0
+CMD END
+CHECK ALL
+EXPECT POLYLINES 5
+
+# ---------------------------------------------------------------------------
+# PART 5 — Esc mid-draft leaves nothing behind (REQ-118 acceptance).
+# ---------------------------------------------------------------------------
+CMD POLYLINE
+CMD 800,0
+CMD 840,0
+CMD 840,30
+ESC
+CHECK ALL
+EXPECT POLYLINES 5
+
+# ---------------------------------------------------------------------------
+# PART 6 — PAPER SPACE. Same two gestures, and the result belongs to the sheet.
+# This is what TASK-106 (#84) unblocked: before that fix these would have landed in the model.
+# ---------------------------------------------------------------------------
+SPACE PAPER
+CHECK ALL
+EXPECT PAPERPOLYLINES 0
+
+CMD POLYLINE
+CMD 1,1
+CMD 5,1
+CMD 5,4
+CMD 1,1
+CHECK ALL
+EXPECT PAPERPOLYLINES 1
+EXPECT LOG "POLYLINE closed."
+
+CMD POLYLINE
+CMD 20,1
+CMD 24,1
+CMD 24,4
+CMD
+CHECK ALL
+EXPECT PAPERPOLYLINES 2
+
+# And the model is untouched by either (REQ-039 (6)).
+EXPECT POLYLINES 5
+
+# ---------------------------------------------------------------------------
+# PART 7 — 3DPOLY behaves identically, each vertex keeping its own elevation (REQ-085).
+# ---------------------------------------------------------------------------
+SPACE MODEL
+CMD 3DPOLY
+CMD 900,0,10
+CMD 940,0,20
+CMD 940,30,30
+CMD 900,0,10
+CHECK ALL
+EXPECT POLYLINES 6
+EXPECT LOG "POLYLINE closed."
+
+# Round-trip: both spaces survive save/load, closed flags and all.
+SAVEAS %OUT%/r118.gs
+NEW
+CHECK ALL
+EXPECT POLYLINES 0
+EXPECT PAPERPOLYLINES 0
+OPEN %OUT%/r118.gs
+CHECK ALL
+EXPECT POLYLINES 6
+EXPECT PAPERPOLYLINES 2
