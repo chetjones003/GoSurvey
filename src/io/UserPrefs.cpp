@@ -166,6 +166,10 @@ void ApplyUserPrefsSettings(AppCommandState& st, const nlohmann::json& s) {
   if (s.contains("trimState") && s["trimState"].is_number_integer())
     st.trimState = std::clamp(s["trimState"].get<int>(), 0, 1);
 
+  // --- Active ribbon tab (REQ-302): same shape as trimState above ---
+  if (s.contains("activeRibbonTab") && s["activeRibbonTab"].is_number_integer())
+    st.activeRibbonTab = std::clamp(s["activeRibbonTab"].get<int>(), 0, kRibbonTabCount - 1);
+
   // --- FILLET/CHAMFER (REQ-103 step 6): app-level, not per-drawing — same shape as trimState above
   // (D-2026-08-24-g: a generalized "registry" was considered and explicitly declined) ---
   if (s.contains("filletRadius") && s["filletRadius"].is_number())
@@ -385,6 +389,7 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["prefsSchemaVersion"] = 1;
 
   s["trimState"] = st.trimState;
+  s["activeRibbonTab"] = st.activeRibbonTab;
   s["filletRadius"] = st.filletRadius;
   s["cornerTrimMode"] = st.cornerTrimMode;
   s["chamferDist1"] = st.chamferDist1;

@@ -1315,6 +1315,101 @@ requirements is a planning failure, not a sign of rigor.
 
 ---
 
+### REQ-302 — Tabbed, responsive application ribbon (GitHub issue #83)
+- Purpose: `DrawRibbonBar` (`CadUi.cpp:2363`) lays every section — Edit, Draw, Modify, Annotate,
+  Inquiry, Survey, View, plus the contextual Layout/PDF Underlay/Hatch sections — out in a single
+  horizontal row inside a child window opened with `ImGuiWindowFlags_HorizontalScrollbar`
+  (`CadUi.cpp:2429-2430`). At anything narrower than a wide desktop window this scrolls, hiding
+  tools behind a scrollbar the user must know to operate. The ribbon should instead read as a
+  native CAD ribbon (tabbed, like AutoCAD/Civil 3D/nanoCAD) and never require scrolling.
+- Priority: should
+- Type: functional
+- Statement: The ribbon gains a top-level tab strip (Home, Insert, Annotate, View, Manage, Output,
+  Survey — only the active tab's sections render) and a responsive layout that adapts to available
+  window width without ever falling back to a scrollbar. Delivered incrementally — each increment
+  independently shippable and independently verifiable, the same pattern REQ-103/REQ-070 used:
+  1. **Tab infrastructure** — the tab strip, persisted active tab, and re-homing of every *existing*
+     ribbon section under the tab that owns it. No command's behavior, availability, or contextual
+     trigger changes — only where it is found. This closes the "no tab structure" and "organization"
+     acceptance groups of issue #83 for the sections that exist today; it does **not** yet remove the
+     scrollbar at narrow widths (that is increment 2) and does not yet give Insert/Manage/Output real
+     content (that is increment 3, since no ribbon commands for those categories exist yet — see
+     Acceptance below).
+  2. **Responsive layout engine** — wide/medium/narrow breakpoints per tab (reduced spacing/padding,
+     compact icon-only buttons, row reflow, an overflow menu for a group that still doesn't fit).
+     Removes `ImGuiWindowFlags_HorizontalScrollbar` entirely. Likely warrants its own ADR before
+     implementation, since it is a genuinely new, reusable UI abstraction (one responsive-layout
+     mechanism used by all 7 tabs) — to be scoped when this increment opens.
+  3. **Content audit** — Insert/Manage/Output get real command sets by relocating existing
+     menu-bar-only commands (import, plot/export/publish, settings/standards) into their tabs;
+     full audit of every ribbon command against its assigned tab/group, no duplicate or unclear
+     placement.
+- Acceptance — Increment 1, Tab infrastructure (this increment):
+  - a tab strip renders at the top of the ribbon band, above the existing panel/section row, with
+    exactly 7 tabs in this order: Home, Insert, Annotate, View, Manage, Output, Survey;
+  - the tab strip reuses the existing Model/Layout tab toggle styling
+    (`PushModeToggleButtonColors`/`PopModeToggleButtonColors`, `CadUi.cpp:6308-6313`, REQ-025/026
+    precedent) rather than inventing a new tab-button style — the active tab is visually distinct
+    the same way the active space tab already is;
+  - clicking a tab sets `cmd.activeRibbonTab` and only that tab's re-homed sections render below it;
+    a tab with no sections assigned yet (Insert, Manage, Output — see mapping below) shows an empty
+    panel row, not an error or placeholder text;
+  - the active tab persists across restart: `activeRibbonTab` is a plain `AppCommandState` field,
+    loaded/saved in `UserPrefs.cpp` with the same one-line shape as `trimState`
+    (`UserPrefs.cpp:166-167,387`) — app-level, not per-drawing (D-2026-08-24-g precedent). A fresh
+    profile defaults to Home;
+  - switching tabs never touches `cmd.active` (an in-progress command), the current selection, the
+    undo stack, or drawing geometry — starting a command or making a selection, switching tabs, then
+    switching back leaves the command still active and the selection still intact;
+  - **section-to-tab mapping** (amended 2026-08-25, D-2026-08-25-d, from the user's own GUI-pass
+    feedback — every section otherwise keeps its existing content, condition, and command wiring
+    unchanged, this increment only changes which tab shows it):
+    - Home: Edit (Undo/Redo/Copy/Paste), then Draw+Modify (model space) or Layout (paper space,
+      `ribbonPaperSpace` — unchanged trigger)
+    - Annotate: **Text** section (Text/Mtext + style dropdown — the section formerly labeled
+      "Annotate", renamed) and **Dimensions** section (Aligned/Linear, moved here from Survey's
+      Inquiry section) — model space only, matching today (both sections are nested inside the same
+      `if (!ribbonPaperSpace)` block Draw/Modify already used and stay that way)
+    - View: View (Extents/Window + visual-style combo)
+    - Survey: Inquiry (ID Point + Elev/Grade only — Aligned/Linear moved to Annotate's Dimensions
+      section above), Survey — model space only, same existing nesting as Annotate
+    - Insert, Manage, Output: no section maps here yet (empty tab) — populated in increment 3
+  - **the right-hand current-layer strip (`RibbonLayerStrip`) and every contextual section keep
+    today's trigger conditions and render on every tab, unchanged** — Layers (always), Layout
+    (paper space, gated on `ribbonPaperSpace`, itself folded into the Home-tab condition above since
+    it already lived in that same `if`/`else`), PDF Underlay (a `PdfUnderlay` selected), Hatch (hatch
+    command active or a `FilledRegion` selected). Scoping Layers/PDF/Hatch to a single tab would
+    hide them whenever a different tab happens to be active while the user is mid-edit on that
+    object, a real usability regression this increment deliberately avoids; revisiting whether they
+    should instead force-select their owning tab is left to increment 3;
+  - the ribbon's total height grows by exactly the tab strip's height plus its gap row (the existing
+    `139.f` constant in `main.cpp:405` becomes `139.f + kRibbonTabStripH + kRibbonTabStripGapY`) —
+    panel content height inside each section is unchanged, so no existing section's button sizing
+    regresses;
+  - **no ribbon scrollbar at the window sizes exercised in the user's GUI pass** (amended
+    2026-08-25, D-2026-08-25-d): `RibbonToolsLeft` is sized to the ACTIVE tab's own precomputed
+    content width, not a blanket "window width minus the 500px layer strip" cap, with
+    `ImGuiWindowFlags_HorizontalScrollbar` replaced by `NoScrollbar`/`NoScrollWithMouse`. This is a
+    **partial, disclosed** answer to "no scrollbars anywhere" — a tab whose content is wider than the
+    actual app window still clips rather than scrolling; the full guarantee across all window widths
+    (compact buttons, row-wrap/overflow) is increment 2's job, not this one's;
+  - build is clean; the full regression suite stays green; a manual GUI pass confirms tab switching,
+    persistence across restart, and that every command reachable today (by ribbon) is still
+    reachable today, now under its mapped tab.
+- Acceptance — Increment 2 (Responsive layout engine): to be written when this increment opens.
+- Acceptance — Increment 3 (Content audit): to be written when this increment opens.
+- Owner-layer: UI (`src/ui/CadUi.cpp`, `src/ui/CadUiSettings.cpp`) / IO (`src/io/UserPrefs.cpp`,
+  preference persistence)
+- Status: accepted
+- Revisions: 2026-08-25 — initial (GitHub issue #83, D-2026-08-25-c). Sequenced into 3 increments;
+  increment 1's acceptance fully specified, increments 2-3 deferred until reached (REQ-103 precedent).
+  2026-08-25 (D-2026-08-25-d) — amended from the user's own manual GUI pass: tab-strip padding, the
+  View tab's visual-style combo width, the section-to-tab mapping (Dimensions/Text split under
+  Annotate), and the scrollbar-removal mechanism (content-sized `RibbonToolsLeft`, partial —
+  see Acceptance above).
+
+---
+
 ## 3D model space requirements
 
 > These cover the move from a plan-view 2D drawing surface to a true 3D model space
@@ -3690,6 +3785,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-115 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-116 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-117 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-302 | UI/IO | planned — sequenced into 3 increments (D-2026-08-25-c, GitHub issue #83); increment 1 (tab infrastructure) implemented and self-verified, TASK-104; amended once from the user's own GUI-pass feedback (D-2026-08-25-d: tab padding, visual-style combo width, Dimensions/Text split under Annotate, content-sized no-scrollbar `RibbonToolsLeft`); 541/541 Catch2 test cases and 591/591 headless transcripts green; manual GUI re-pass pending; increments 2-3 (responsive layout engine, content audit) deferred until reached | accepted |
 
 ---
 
