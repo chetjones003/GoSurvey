@@ -20437,13 +20437,30 @@ static void CommitPolylineDraft(AppCommandState& st, bool closed, std::vector<st
     return;
   }
   PushUndoSnapshot(st, closed ? "Polyline (closed)" : "Polyline");
-  if (st.userPolylineOffsets.empty())
-    st.userPolylineOffsets.push_back(0);
-  const int baseVert = st.userPolylineOffsets.back();
-  st.userPolylineVerts.insert(st.userPolylineVerts.end(), st.polylineDraftVerts.begin(), st.polylineDraftVerts.end());
-  st.userPolylineOffsets.push_back(baseVert + static_cast<int>(nvert));
-  st.userPolylineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
-  st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
+  if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
+    // Paper-space POLYLINE (REQ-037 / REQ-039 (5)): the draft's vertices are paper inches; commit
+    // to the active layout's paper store. Without this the polyline landed in the MODEL store while
+    // the user was drawing on a sheet (#84), which also broke REQ-039 (6) — "none of these paper
+    // edits change model geometry". Same routing `CommitRectangle` and `SubmitLineVertex` already do.
+    const int baseVert = L->paperPolyOffsets.empty() ? 0 : L->paperPolyOffsets.back();
+    L->paperPolyVerts.insert(L->paperPolyVerts.end(), st.polylineDraftVerts.begin(),
+                             st.polylineDraftVerts.end());
+    if (L->paperPolyOffsets.empty())
+      L->paperPolyOffsets.push_back(baseVert);
+    L->paperPolyOffsets.push_back(baseVert + static_cast<int>(nvert));
+    // `closed` is carried through rather than hardcoded: paper RECT can write 1u because a rectangle
+    // is always closed, but POLYLINE's CLOSE/END (and #80's click-the-start/Enter) both reach here.
+    L->paperPolyClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
+    L->paperPolyAttrs.push_back(MakeNewEntityAttrs(st));
+  } else {
+    if (st.userPolylineOffsets.empty())
+      st.userPolylineOffsets.push_back(0);
+    const int baseVert = st.userPolylineOffsets.back();
+    st.userPolylineVerts.insert(st.userPolylineVerts.end(), st.polylineDraftVerts.begin(), st.polylineDraftVerts.end());
+    st.userPolylineOffsets.push_back(baseVert + static_cast<int>(nvert));
+    st.userPolylineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
+    st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
+  }
   BumpCadGpuCache(st);
   st.active = AppCommandState::Kind::None;
   ResetPolylineDraft(st);

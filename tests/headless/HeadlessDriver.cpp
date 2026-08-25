@@ -360,6 +360,31 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
   if (verb == "NEW") {
     run.st = AppCommandState{};
     run.log.push_back("[driver] NEW");
+  } else if (verb == "SPACE") {
+    // SPACE PAPER | SPACE MODEL — switch the active space, so a transcript can exercise the
+    // paper-space half of a command (REQ-037 / REQ-039).
+    //
+    // This is the ONE thing a transcript could not previously reach. Switching layouts is UI-only
+    // in the shipped app — the layout tab (`CadUi.cpp`) and the MODEL/PAPER status button are its
+    // only callers, and there is no command-line verb for it — so every paper-space acceptance
+    // condition was manual-test-only. `SetActiveSpace` is the same entry point those buttons call,
+    // so this reaches paper space the way the GUI does rather than by setting the field directly.
+    //
+    // PAPER creates a layout on first use, mirroring ToggleModelPaperSpace's own "create one on
+    // first switch so PAPER has somewhere to go".
+    const std::string which = UpperAscii(Trim(rest));
+    if (which == "PAPER") {
+      if (run.st.paperLayouts.empty())
+        AddPaperLayout(run.st);
+      SetActiveSpace(run.st, 0);
+      run.log.push_back("[driver] SPACE PAPER");
+    } else if (which == "MODEL") {
+      SetActiveSpace(run.st, kModelSpaceIndex);
+      run.log.push_back("[driver] SPACE MODEL");
+    } else {
+      Fail(run, "parse", "SPACE expects PAPER or MODEL, got: " + rest, sourceLine);
+      return false;
+    }
   } else if (verb == "OPEN") {
     const std::string path = ExpandVars(run, rest);
     if (!LoadGoSurveyFile(run.st, path.c_str(), run.log)) {
@@ -1075,6 +1100,20 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         got = static_cast<long>(run.st.userCirclesCxCyZR.size() / 4);
       else if (what == "POLYLINES")
         got = static_cast<long>(PolylineCountOf(run.st));
+      // Paper-space counts, so a transcript can say WHICH SPACE geometry landed in rather than only
+      // how much of it exists. A draw command that writes to the wrong store leaves the model count
+      // right and the paper count zero, which is invisible to every model-side count above — that is
+      // issue #84 exactly, and REQ-039 (6) ("none of these paper edits change model geometry") has
+      // no other way to be stated as something a transcript can fail.
+      else if (what == "PAPERPOLYLINES")
+        got = static_cast<long>(run.st.paperLayouts.empty() ||
+                                        run.st.paperLayouts[0].paperPolyOffsets.empty()
+                                    ? 0
+                                    : run.st.paperLayouts[0].paperPolyOffsets.size() - 1);
+      else if (what == "PAPERLINES")
+        got = static_cast<long>(run.st.paperLayouts.empty()
+                                    ? 0
+                                    : run.st.paperLayouts[0].paperLines.size() / 6);
       else if (what == "ARCS")
         got = static_cast<long>(run.st.userArcs.size());
       else if (what == "ELLIPSES")

@@ -1,0 +1,81 @@
+# Issue #84 — a polyline drawn in paper space belongs to the SHEET, not the model.
+#
+# `CommitPolylineDraft` wrote the model stores unconditionally. It had no
+# `ActivePaperGeometryTarget` branch anywhere in its body, while its siblings `CommitRectangle` and
+# `SubmitLineVertex` both route on it. `SubmitPolylineVertex` has no paper branch either — it only
+# accumulates into `polylineDraftVerts` — and `StartPolylineCommand` has no paper guard, so the
+# command starts happily on a sheet and then commits somewhere else entirely.
+#
+# This breaks two ACCEPTED acceptance conditions of REQ-039:
+#   (5) "CIRCLE, ARC, ELLIPSE, POLYLINE, and MTEXT draw onto the sheet"  — it did not;
+#   (6) "none of these paper edits change model geometry"                — it did.
+#
+# Confirmed in the GUI on v0.5.5 before this transcript was written: drawing 1,1 / 5,1 / 5,4 on
+# Layout1 and switching to Model showed the polyline sitting in model space. A RECT drawn in the
+# same session did NOT appear in model, which is the control — same layout, same input, different
+# commit path.
+#
+# Fails before the fix, twice:
+#   EXPECT PAPERPOLYLINES 1  -> expected 1, got 0   (nothing reached the sheet)
+#   EXPECT POLYLINES 0       -> expected 0, got 1   (it went to the model instead)
+
+NEW
+
+# The model must be empty first, so "0 model polylines" at the end means the paper draw stayed out
+# of it rather than the drawing simply never having had any.
+CHECK ALL
+EXPECT POLYLINES 0
+EXPECT PAPERPOLYLINES 0
+
+SPACE PAPER
+
+# An OPEN polyline on the sheet. Coordinates are paper inches (REQ-037).
+CMD POLYLINE
+CMD 1,1
+CMD 5,1
+CMD 5,4
+CMD END
+
+CHECK ALL
+
+# The whole issue, in two lines: it must be ON the sheet, and it must NOT be in the model.
+EXPECT PAPERPOLYLINES 1
+EXPECT POLYLINES 0
+
+# A CLOSED polyline too — `closed` is a parameter of the commit, so the paper branch has to carry
+# it through rather than hardcoding a flag the way paper RECT legitimately can.
+CMD POLYLINE
+CMD 20,1
+CMD 24,1
+CMD 24,4
+CMD CLOSE
+
+CHECK ALL
+EXPECT PAPERPOLYLINES 2
+EXPECT POLYLINES 0
+
+# And model space still works — the fix must route by space, not simply redirect every polyline to
+# the sheet. This is the half a "just change the store" fix would break.
+SPACE MODEL
+
+CMD POLYLINE
+CMD 100,100
+CMD 200,100
+CMD 200,150
+CMD END
+
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT PAPERPOLYLINES 2
+
+# Round-trip: both spaces survive a save/load, so the paper polylines are really in the layout's
+# store and not an artifact of the live session (REQ-039 (7)).
+SAVEAS %OUT%/r84.gs
+NEW
+CHECK ALL
+EXPECT POLYLINES 0
+EXPECT PAPERPOLYLINES 0
+OPEN %OUT%/r84.gs
+CHECK ALL
+EXPECT POLYLINES 1
+EXPECT PAPERPOLYLINES 2
