@@ -1618,3 +1618,65 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   (`AuthPingTests`) plus a Worker-side test file (`accounts-worker/test.mjs`) mirroring
   `telemetry-worker/test.mjs`. Deliberately left undesigned: billing/Stripe, trial periods, which
   features are gated, team/org accounts, and any change to REQ-080's ping (unaffected).
+
+### ADR-038 — Ribbon responsive layout: measure-then-decide breakpoints + a shared overflow popup   (2026-08-25, accepted)
+- Context: REQ-302 increment 1 (TASK-104) re-homed the ribbon's existing sections under 7 tabs but
+  left the underlying layout untouched — each tab's `DrawRibbonBar` body (`CadUi.cpp:2377`) still
+  computes one fixed pixel width per section from hardcoded button/column metrics (`largeW`, `rowH`,
+  `gridCell`, `colW(...)`) and lays sections left-to-right inside `RibbonToolsLeft`, sized to
+  `min(wideW, available)` since D-2026-08-25-d. That closes clipping into a scrollbar but not into
+  anything else — a tab whose content is wider than the actual window still clips, and there is no
+  mechanism anywhere in the codebase for a control to change appearance based on available width.
+  REQ-302 itself flags this increment as likely needing its own ADR, since one responsive-layout
+  mechanism reused by all 7 tabs is new, reusable UI abstraction, unlike increment 1's tab strip
+  (which reused the existing Model/Layout toggle style and added no new abstraction).
+- Decision: **Measure-then-decide breakpoints, computed at render time, with a shared overflow
+  popup for whatever doesn't fit** — no persisted state, no new dependency, no rewrite of section
+  bodies.
+  (a) `enum class RibbonBreakpoint { Wide, Medium, Narrow }`. Per tab, two candidate total widths are
+  computed the same way `ribbonToolsW` already is today: `wideW` (today's existing formula,
+  untouched) and a new `mediumW` computed with compact metrics — smaller button width, small buttons'
+  `RibbonLabel::Right` becomes `RibbonLabel::None` (icon only, matching the grid buttons' existing
+  label mode), and tighter `colW`/inter-section gap constants. Available width is
+  `ImGui::GetContentRegionAvail().x` at the point `RibbonToolsLeft` would otherwise be sized (window
+  width minus the existing 500px `kLayerPanelW` strip and paddings, same value already computed
+  today). `available >= wideW` → Wide; `mediumW <= available < wideW` → Medium; `available < mediumW`
+  → Narrow.
+  (b) In Narrow, sections render left-to-right at Medium metrics, accumulating width, until the next
+  section would not fit; every remaining section for that tab is not rendered inline — instead a
+  single trailing "More ▼" button opens an `ImGui::BeginPopup` that renders those same overflowed
+  sections' bodies unchanged (Wide metrics, full labels) inside the popup. This reuses each section's
+  existing lambda-bodied render code verbatim, invoked once inline (fits) or once inside a popup
+  (doesn't fit) — no section's internal logic is duplicated or branches on breakpoint.
+  (c) `RibbonToolsLeft`'s width becomes `min(fittedW, available)` where `fittedW` is whatever the
+  chosen breakpoint actually consumed (Wide/Medium: the full tab; Narrow: the fitted prefix plus the
+  "More" button) — always `<= available`, so no clip can occur at any width; `NoScrollbar`/
+  `NoScrollWithMouse` (already in place since D-2026-08-25-d) stop being a fallback and become simply
+  correct, since content can no longer exceed the child window's bounds.
+  (d) Narrow's "prioritize frequently used commands" (issue #83) falls out of the existing
+  left-to-right section order for free — Edit/Draw/Modify before Layout on Home, Text before
+  Dimensions on Annotate, etc. — no separate priority ranking is introduced.
+  (e) No change to increment 1's tab strip, persistence, or command wiring; no change to any command's
+  availability or behavior — this increment only changes how a tab's own sections are laid out and,
+  in Narrow, how the overflow subset is reached (popup instead of always-inline).
+- Alternatives: **(1) A generic reusable `ResponsiveContainer` widget** usable by any future toolbar
+  or panel, not just the ribbon — rejected per CLAUDE.md's "no abstraction without 2+ present-day
+  concrete uses": nothing else in the codebase needs this today, and the ribbon-specific version in
+  (a)-(c) is smaller and doesn't speculate about future callers. **(2) Compact metrics only, no
+  popup** — a Narrow tab would simply stop rendering sections that don't fit, with no way to reach
+  them; rejected outright since it violates "preserve access to all commands" (issue #83 Narrow
+  Layout requirement) and REQ-302's own explicit list of acceptable strategies (overflow menu,
+  compact group). **(3) True reflow (wrap sections onto a second row within the ribbon band)** —
+  the closest to issue #83's item 7 ("reflowing buttons into additional rows"), but the ribbon's
+  total height is currently a caller-supplied constant (`139.f + kRibbonTabStripH + ...`,
+  `main.cpp:405`) that increment 1 explicitly kept unchanged from the pre-increment-1 baseline
+  (REQ-302 Acceptance — Increment 1, "existing section button sizing unchanged"); growing it
+  per-tab, per-breakpoint is a larger, independently-scoped change and is left to a future increment
+  if the popup approach proves insufficient in practice — recorded here as deliberately deferred, not
+  silently dropped.
+- Consequences: `DrawRibbonBar` (`CadUi.cpp`) gains the breakpoint enum, the `mediumW` computation
+  parallel to each tab's existing `wideW` computation, the fit-until-overflow loop, and one popup
+  block per tab; no new file, no new dependency, no new persisted field. Every section's own
+  lambda-bodied content is unchanged. Manual GUI pass required at multiple window widths (this
+  project's own no-UI-automation constraint, ADR-031) to confirm Medium/Narrow read correctly on
+  screen, the same pattern increment 1's own GUI pass followed.
