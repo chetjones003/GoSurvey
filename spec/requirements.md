@@ -3691,8 +3691,15 @@ requirements is a planning failure, not a sign of rigor.
 - Type: functional
 - Statement: An **object-selection step** is any command phase whose question is *which objects*
   rather than *which point*: the `PickSelection` phase of MOVE, COPY, SCALE, ROTATE, MIRROR, ALIGN,
-  ARRAY and STRETCH, and the entity-picking loops of DELETE, JOIN, ZOOM, TRIM, EXTEND, LENGTHEN,
-  BREAK, FILLET and CHAMFER.
+  ARRAY and STRETCH, and the entity-picking loops of DELETE, JOIN, TRIM, EXTEND, LENGTHEN, BREAK,
+  FILLET and CHAMFER.
+
+  **ZOOM is excluded, and #91 lists it.** Saying so explicitly because dropping it silently would
+  look like an oversight: ZOOM WINDOW's box picks a **region of the view** to fit, not objects.
+  Nothing is selected by it, so "select objects" would be a prompt that lies, and a pickbox cursor
+  would say *click a thing* while the user drags a rectangle. Its corners already come from
+  unsnapped coordinates, so rule (1) would change nothing there either. The test is what the click
+  is *for*, not whether it happens to drag a box.
 
   **Idle selection — no command running — is deliberately NOT one**, and is untouched by this
   requirement: it keeps today's crosshair and today's OSNAP behaviour. The reason is that the three
@@ -3735,11 +3742,25 @@ requirements is a planning failure, not a sign of rigor.
   crosshair for the duration of the step and reverting when it ends. This is AutoCAD's `PICKBOX`
   convention and the visual signal that rules (1) and (3) are in force.
 
-  **(3) One prompt, everywhere.** Every object-selection step shows the **same** phrase, in both
-  the command line and the dynamic cursor text (REQ-304's surfaces, and REQ-304's rule that the two
-  agree). The wording is settled once, in one shared string, rather than per command — today they
-  range from "click two corners to window-select objects" to "window-select entities, then press
-  Enter" to no Enter hint at all.
+  **(3) One prompt — for the steps that are nothing but a selection.** The wording is
+  **"Select objects, ENTER to continue"**, settled once in one shared string and shown in both the
+  command line and the dynamic cursor text (REQ-304's surfaces, and REQ-304's rule that the two
+  agree). Today those prompts range from "click two corners to window-select objects" to
+  "window-select entities, then press Enter" to no Enter hint at all.
+
+  It applies to the steps whose whole content is *pick objects*: **MOVE, COPY, SCALE, ROTATE,
+  MIRROR, ALIGN, ARRAY, DELETE, JOIN**.
+
+  **It does NOT replace a prompt that carries a keyword or a type list**, and that limit is
+  load-bearing rather than a concession. TRIM's selection prompt offers `type L — draw the trim
+  line`; OFFSET's names what is pickable; STRETCH's says `right-to-left = crossing`, which is
+  operative because its box direction is data (REQ-103 step 5). Overwriting those with a generic
+  phrase would delete the only place each option is discoverable — and REQ-119 exists precisely to
+  make such keywords *more* reachable, so this requirement must not quietly undo it. Those steps
+  still get rules (1) and (2); only their prompt text is their own.
+
+  Unifying wording is the goal; erasing information is not. Where a step has nothing to say beyond
+  "pick objects", it says exactly the same thing as every other such step.
 - Acceptance:
   - no snap marker is drawn, and the cursor does not jump to a snap candidate, at any point during
     any object-selection step listed above;
@@ -3747,8 +3768,12 @@ requirements is a planning failure, not a sign of rigor.
     including ALIGN, whose box corners are snapped today;
   - the cursor renders as a pickbox square for the step's duration and reverts to the crosshair
     when the phase advances or the command is cancelled;
-  - every listed command shows the identical selection prompt in the command line **and** in the
-    dynamic cursor text, sourced from one shared string;
+  - MOVE, COPY, SCALE, ROTATE, MIRROR, ALIGN, ARRAY, DELETE and JOIN each show the **identical**
+    selection prompt in the command line **and** in the dynamic cursor text, sourced from one shared
+    string — byte-for-byte the same, not merely equivalent wording;
+  - TRIM, OFFSET and STRETCH keep their own prompts, and every keyword they name (`L`, the pickable
+    type list, `right-to-left = crossing`) is still present afterwards — a prompt that lost an option
+    to this requirement is a **failure** of it, not a tidy-up;
   - a command left out of the treatment is a **build-time or test-time** failure, not something a
     user finds — the single predicate is exhaustive over the phases, on the precedent of
     `ViewportClickRouteFor`'s `default:`-less switch (REQ-103/TASK-099);
