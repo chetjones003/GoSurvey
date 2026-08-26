@@ -3681,6 +3681,58 @@ requirements is a planning failure, not a sign of rigor.
   REQ-304/issue #82 — `D-2026-08-25-j` collided with master's independent REQ-303, see REQ-303's
   duplication note above); issue #80
 
+
+### REQ-120 — Double-tapping the middle mouse button zooms to extents
+- Purpose: framing the whole drawing is the most-repeated view action there is, and today it costs
+  a typed `ZOOMEXTENTS`/`ZE`. Every CAD user already has the muscle memory for AutoCAD's
+  wheel double-click; GoSurvey binds that gesture to nothing
+- Priority: should
+- Type: functional
+- Statement: **Double-clicking the middle mouse button over the drawing viewport zooms to
+  extents**, matching AutoCAD's binding for the same gesture. It reuses the existing zoom-extents
+  path — `ZOOMEXTENTS`/`ZE` are unchanged and remain the typed route to the same result.
+
+  **The gesture is transparent.** Unlike the typed command, which refuses while a command is
+  running ("finish or cancel the active command first"), the double-click works **mid-command**:
+  a user halfway through a `LINE` can reframe and carry on picking points. This is deliberate and
+  matches AutoCAD, where view operations are transparent. It changes the *view* only — the active
+  command's phase, its picked points and its draft geometry are untouched, because zooming writes
+  the camera and nothing else.
+
+  **Space-aware.** What gets framed depends on where the user is, mirroring where middle-drag pan
+  already works (REQ-045):
+
+  | Space | Frames |
+  |---|---|
+  | Model | the model's entity extents (the existing computation) |
+  | Floating model space (inside an activated viewport) | the model's entity extents, same as model |
+  | Paper | the **sheet** — `(0,0)` to `sheetWidthIn() × sheetHeightIn()` |
+
+  Paper space frames the sheet rather than the paper entities on it: the page is the meaningful
+  extent of a layout, and a layout with no geometry yet must still frame to something. Paper
+  geometry drawn **outside** the sheet is therefore not framed by this gesture — a stated
+  limitation, not an oversight.
+
+  **Middle-drag pan is untouched.** REQ-045 guarantees it, and a double-click is not a drag; the
+  two gestures do not overlap.
+- Acceptance:
+  - a middle double-click over the model viewport frames the drawing, identically to `ZOOMEXTENTS`;
+  - it works **while a command is active**, and the command's state survives it — a `LINE` with one
+    point placed still has that point and still expects the next;
+  - the typed route still does **not** zoom mid-command, and its behaviour is unchanged: while a
+    command is active, typed text is consumed by that command, so `ZOOMEXTENTS` is read as point
+    input and refused by it (`"Could not parse point…"`). `StartZoomExtentsCommand`'s own
+    "finish or cancel the active command first" guard is not even reached on that path — it
+    applies when the text does reach the dispatcher. Either way the transparency is a property of
+    the **gesture** alone, and nothing about the typed command is relaxed;
+  - in paper space the gesture frames the sheet;
+  - in floating model space it frames the model;
+  - middle-drag pan still pans, in every space, unchanged;
+  - a double-click with nothing to frame reports it and changes no view (REQ-201).
+- Owner-layer: UI (the gesture) — the extents computation and the camera write are existing Commands code
+- Status: accepted (2026-08-25)
+- Revisions: 2026-08-25 — accepted (D-2026-08-25-o); asked for directly by the user, from AutoCAD's
+  wheel double-click.
 ---
 
 ## Performance requirements
@@ -4129,6 +4181,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-116 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-117 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-118 | Commands/Viewport | planned — `headless.regression-118-polyline-close-enter` (click the start vertex closes; Enter ends open with no closing segment; two vertices refuse to close; CLOSE/END still work; Esc leaves nothing; model, 3DPOLY and paper space each asserted). Same feature/issue (#80) as REQ-303 below, built independently on `beta` — see REQ-303's duplication note, D-2026-08-25-l | accepted |
+| REQ-120 | UI | **manual GUI only, and that is a real limitation, not a shortcut.** The headless driver models no framebuffer and never calls `ProcessPendingViewportZoom` (which early-returns on `fbW <= 0`), so it cannot reach any zoom behaviour — there is no existing zoom transcript in the corpus for the same reason. Covering this by transcript would mean giving the harness a synthetic viewport, which is harness work this requirement did not take on (recorded as TASK-113 DEBT-1). Verified instead by driving the real window: middle double-click frames the drawing in model space; it works MID-COMMAND with the active LINE's placed point surviving; the typed route still does not zoom mid-command (its text is consumed by the active command as point input — unchanged); paper space frames the sheet; middle-DRAG still pans | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |

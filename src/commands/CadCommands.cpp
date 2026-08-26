@@ -20388,7 +20388,30 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
     double mnY = 0.;
     double mxY = 0.;
     int skipped = 0;
-    if (!ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped)) {
+    // REQ-120: what "extents" means depends on the space, mirroring where middle-drag pan already
+    // works (REQ-045). The space test is ActivePaperGeometryTarget's own rule — a paper layout AND
+    // not floating — so a sheet frames the sheet, while an activated viewport frames the model,
+    // which is what the user is actually editing through it.
+    const PaperLayout* sheet = nullptr;
+    if (st.activeSpaceIndex >= 0 && !InFloatingModelSpace(st) &&
+        static_cast<size_t>(st.activeSpaceIndex) < st.paperLayouts.size())
+      sheet = &st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+
+    if (sheet) {
+      // The PAGE is the meaningful extent of a layout, and a layout with no geometry on it yet must
+      // still frame to something. Paper geometry drawn OUTSIDE the sheet is deliberately not framed
+      // (REQ-120, stated limitation) — framing it would need a second extents sweep over the seven
+      // paper stores, which this requirement declined to add.
+      mnX = 0.;
+      mnY = 0.;
+      mxX = static_cast<double>(sheet->sheetWidthIn());
+      mxY = static_cast<double>(sheet->sheetHeightIn());
+      if (!(mxX > mnX) || !(mxY > mnY)) {
+        st.pendingZoomExtents = false;
+        log.push_back("ZOOM EXTENTS — nothing to frame.");
+        return;
+      }
+    } else if (!ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped)) {
       st.pendingZoomExtents = false;
       log.push_back("ZOOM EXTENTS — nothing to frame.");
       return;
