@@ -707,12 +707,26 @@ if(GOSURVEY_BUILD_TESTS)
     # moment the failure turns into a DIFFERENT failure, which is the one outcome nobody wants to
     # miss. Each file's header says what it found; re-enable when that is fixed.
     #
-    #   dxf-export-stable              — #63: the exporter has no ARC or ELLIPSE branch (silent data
-    #                                    loss). It also covered #64 (a LWPOLYLINE came back from a
-    #                                    round trip as loose LINEs), which was fixed on 2026-08-21
-    #                                    by TASK-083 — the regression for that half now lives in
-    #                                    `regression-64-dxf-polyline-identity.txt` and RUNS, so one
-    #                                    open defect does not keep the other's oracle off the suite.
+    #   dxf-export-stable              — held for its STABILITY half alone. Both survival defects it
+    #                                    found are now closed: #64 (a LWPOLYLINE came back as loose
+    #                                    LINEs) on 2026-08-21 by TASK-083, and #63 (ARC and ELLIPSE
+    #                                    dropped entirely) on 2026-08-26 by TASK-114. Each left a
+    #                                    regression behind that RUNS —
+    #                                    `regression-64-dxf-polyline-identity.txt` and
+    #                                    `regression-63-dxf-arc-ellipse-identity.txt` — so a closed
+    #                                    defect does not wait on an open one.
+    #                                    What still fails is `EXPECT SAMEFILE`, and it is a THIRD,
+    #                                    unrelated defect found by TASK-114: $EXTMIN/$EXTMAX are
+    #                                    written at six decimals, the importer takes the document
+    #                                    origin from those ROUNDED values, and then
+    #                                    RebaseDrawingToLocalOrigin re-derives it from the UNROUNDED
+    #                                    geometry. The ~5e-7 disagreement clears the 1e-9 no-op guard
+    #                                    in ApplyDocumentOriginRebase, so every stored float is
+    #                                    shifted and re-rounded and the second export lands ~1e-6 off
+    #                                    in every coordinate. Reproduced on the UNMODIFIED writer by
+    #                                    two LINEs alone, with no arc or ellipse anywhere, so it is
+    #                                    neither caused by nor fixable within #63. Re-enable when it
+    #                                    is closed; see TASK-114 §12.
     foreach(_disabled dxf-export-stable)
       if(TEST headless.${_disabled})
         set_tests_properties(headless.${_disabled} PROPERTIES DISABLED TRUE)
