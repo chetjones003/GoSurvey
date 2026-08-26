@@ -9778,8 +9778,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       using AK = AppCommandState::Kind;
       const bool blockSnapPickMenu = cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond || cmd.dimGripMoveActive ||
                                      cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
-      const bool allowSnapCycle =
-          cmd.active != AK::None && cmd.objectSnapEnabled && !blockSnapPickMenu;
+      // REQ-121 rule (1), second seam (GitHub #91 review, D-2026-08-26-d, re-derived post-#103 as
+      // D-2026-08-26-e). The snap OVERRIDE menu is a way of forcing a snap, so offering it during an
+      // object-selection step offers the user the exact behaviour the rule removes. Picking a
+      // candidate arms `objectSnapKindOverrideValid` as a persistent per-kind lock (issue #103); that
+      // lock's consumption is already behind `snapViewportActive`'s own selection-step gate, so this
+      // menu-level gate is what stops the lock from being armed off a selection-step pixel at all —
+      // otherwise it would silently apply to the next NON-selection snap instead, a smaller but real
+      // surprise (the override outliving the click that seemed to have no effect).
+      const bool allowSnapCycle = cmd.active != AK::None && cmd.objectSnapEnabled &&
+                                  !blockSnapPickMenu && !ViewportIsObjectSelectionStep(cmd);
       using DM = AppCommandState::RightClickDefaultMode;
       using EM = AppCommandState::RightClickEditMode;
       using CM = AppCommandState::RightClickCommandMode;
@@ -10072,6 +10080,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
     }
 
+    // GitHub #91 review, D-2026-08-26-d, re-derived post-#103 (D-2026-08-26-e). The override menu
+    // (Shift+Right-Click "Snap once") is gated against ViewportIsObjectSelectionStep above, at
+    // `allowSnapCycle`, so it cannot be opened during a selection step. Its consumption — reading
+    // `objectSnapKindOverrideValid` as the `onlyKind` filter below — already lives inside
+    // `snapViewportActive`'s own `!ViewportIsObjectSelectionStep(cmd)` gate (a few lines down), the
+    // same gate the plain automatic snap uses. There is no separate one-shot consumption site left
+    // to gate here post-#103: `pendingOneShotSnapValid`'s one-shot-value mechanism was replaced by a
+    // persistent per-kind lock, consumed every frame at the one place FindBest is called, which is
+    // already behind the selection-step check. A second gate here would be redundant, not defensive.
     {
       cmd.viewportSnapPickValid = false;
       const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||

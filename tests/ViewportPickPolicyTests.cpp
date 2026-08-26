@@ -168,6 +168,34 @@ TEST_CASE("MOVE/COPY/SCALE/ROTATE/ALIGN/ARRAY accumulate clicks and boxes; STRET
   REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::SelectionBox);
 }
 
+TEST_CASE("REQ-121: DELETE and JOIN accumulate too, leaving ZOOM and STRETCH on the box route",
+          "[viewport][pick][req121]") {
+  // GitHub #91 review, D-2026-08-26-d. PR #102 gave every object-selection step the shared prompt
+  // "Select objects, ENTER to continue". For these two it was FALSE: both were fixed two-click-box
+  // commands whose box executed on close, and whose Enter handler explicitly refused ("finish
+  // window-select in the viewport (two clicks)"). The behaviour was corrected to match the prompt
+  // rather than the prompt weakened to match the behaviour, so rule (3) stays a rule.
+  //
+  // Routing is the half that is testable here; that Enter now ACTS on the accumulated selection is
+  // `headless.req121-delete-join-accumulate`, which drives this same function through the CLICK
+  // verb.
+  REQUIRE(ViewportClickRouteFor(AtFirstPrompt(K::Delete)) == ViewportClickRoute::SelectionAccumulate);
+  REQUIRE(ViewportClickRouteFor(AtFirstPrompt(K::Join)) == ViewportClickRoute::SelectionAccumulate);
+
+  // Both remain selection steps for the cursor/OSNAP/prompt rules — the route changed, the answer
+  // to "is this a selection step?" did not.
+  REQUIRE(ViewportIsObjectSelectionStep(AtFirstPrompt(K::Delete)));
+  REQUIRE(ViewportIsObjectSelectionStep(AtFirstPrompt(K::Join)));
+
+  // What is left on `SelectionBox` afterwards, asserted so the route does not quietly empty out:
+  // STRETCH (a selection step whose box is load-bearing geometry) and ZOOM (not a selection step
+  // at all). Those two are the whole reason the enumerator still exists.
+  AppCommandState str = AtFirstPrompt(K::Stretch);
+  str.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+  REQUIRE(ViewportClickRouteFor(str) == ViewportClickRoute::SelectionBox);
+  REQUIRE(ViewportClickRouteFor(AtFirstPrompt(K::Zoom)) == ViewportClickRoute::SelectionBox);
+}
+
 TEST_CASE("Ignore is a decision, not an omission", "[viewport][pick][task099]") {
   // These deliberately take no model-space click. Pinned so that "routes to Ignore" stays a
   // statement someone made on purpose, and the test above stays meaningful.
@@ -271,8 +299,9 @@ TEST_CASE("REQ-121: a point pick, idle, and ZOOM are NOT selection steps", "[vie
 
   // ZOOM. #91 lists it, and it is excluded anyway: its box picks a REGION of the view to fit, not
   // objects. "Select objects" would be a prompt that lies, and a pickbox would say "click a thing"
-  // while the user drags a rectangle. It shares `SelectionBox` with DELETE/JOIN, so this is the
-  // assertion that pins the one exception the route alone cannot express.
+  // while the user drags a rectangle. It shares `SelectionBox` with STRETCH — which IS a selection
+  // step — so this is the assertion that pins the one exception the route alone cannot express.
+  // (DELETE and JOIN shared that route until D-2026-08-26-d moved them to SelectionAccumulate.)
   REQUIRE_FALSE(ViewportIsObjectSelectionStep(AtFirstPrompt(K::Zoom)));
 
   // A pure point command, for contrast.

@@ -163,10 +163,22 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     return R::Ignore;
   }
 
-  // --- Pure fence commands. ---
+  // --- DELETE / JOIN: select objects, ENTER to act on them. ---
   case K::Delete:
   case K::Join:
+    // REQ-121 (GitHub #91 review): these two were the last object-selection steps still on the
+    // two-click-box-only shape, so the shared "Select objects, ENTER to continue" prompt was
+    // FACTUALLY WRONG for them — `ProcessCommandLineSubmit` told the user Enter does nothing here.
+    // D-2026-08-25-l gave click-or-box-accumulate to the seven transform commands and excluded only
+    // STRETCH, for a stated reason; DELETE and JOIN were simply never included, the same omission
+    // class as ALIGN's snapped box corners. Fixing the behaviour rather than the sentence is what
+    // keeps rule (3) "one prompt, everywhere" a rule (D-2026-08-26-d).
+    return R::SelectionAccumulate;
+
+  // --- Pure fence commands. ---
   case K::Zoom:
+    // The only remaining SelectionBox user besides STRETCH, and the one that picks a REGION OF THE
+    // VIEW rather than objects — see ViewportIsObjectSelectionStep's named exception below.
     return R::SelectionBox;
 
   // --- REQ-103 loop-style commands: one entity per click, no selection set. ---
@@ -246,10 +258,14 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
 
   // ZOOM is the one command the route cannot answer for, and it is excluded (REQ-121).
   //
-  // `SelectionBox` conflates two different meanings: DELETE/JOIN/STRETCH drag a box to choose
-  // OBJECTS, ZOOM drags one to choose a REGION OF THE VIEW to fit. Nothing is selected by the
-  // latter, so a pickbox would say "click a thing" while the user drags a rectangle, and the
-  // standardized prompt would be a sentence that is simply untrue.
+  // `SelectionBox` conflates two different meanings: STRETCH drags a box to choose OBJECTS (and
+  // to define which vertices move), ZOOM drags one to choose a REGION OF THE VIEW to fit. Nothing
+  // is selected by the latter, so a pickbox would say "click a thing" while the user drags a
+  // rectangle, and the standardized prompt would be a sentence that is simply untrue.
+  //
+  // DELETE and JOIN used to share this route and this ambiguity; they now accumulate until Enter
+  // like every other object-selection step (D-2026-08-26-d), which leaves STRETCH as the only
+  // object-selecting user of `SelectionBox`.
   //
   // Splitting `SelectionBox` into two enumerators would say this in the type system, and was
   // considered and declined: the route is consumed by a switch in the click handler, so a new

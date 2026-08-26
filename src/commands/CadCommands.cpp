@@ -8726,8 +8726,6 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   // null camera keeps the historical world-rect test byte-for-byte (REQ-058).
   const Camera boxSelCamValue = CadViewCamera(st);
   const Camera* const boxSelCam = CadViewIsPlan(st) ? nullptr : &boxSelCamValue;
-  const Camera* const boxSelCam2 = boxSelCam;
-  const Camera* const boxSelCam3 = boxSelCam;
   auto finishBox = [&]() {
     const bool inclSurvey = (st.active == AppCommandState::Kind::None || st.active == K::Move ||
                              st.active == K::Copy || st.active == K::Rotate || st.active == K::Scale ||
@@ -9084,37 +9082,18 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
-  if (st.active == K::Join) {
-    if (st.selBoxWaitingSecond) {
-      ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, wx, wy, windowSelectionSubtract,
-                               fenceLeftToRightWindowMode, false, boxSelCam2, st.uiViewportWidthPx,
-                               st.uiViewportHeightPx);
-      st.selBoxWaitingSecond = false;
-      if (st.selection.empty())
-        log.push_back("Nothing selected — pick two corners again.");
-      else {
-        ExecuteJoinSelection(st, log);
-        st.active = K::None;
-        ResetModifyRotateDraft(st);
-      }
-    }
-    return;
-  }
-
-  if (st.active == K::Delete) {
-    if (st.selBoxWaitingSecond) {
-      ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, wx, wy, windowSelectionSubtract,
-                               fenceLeftToRightWindowMode, false, boxSelCam3, st.uiViewportWidthPx,
-                               st.uiViewportHeightPx);
-      st.selBoxWaitingSecond = false;
-      if (st.selection.empty())
-        log.push_back("Nothing selected — pick two corners again.");
-      else {
-        ExecuteDeleteSelection(st, log);
-        st.active = K::None;
-        ResetModifyRotateDraft(st);
-      }
-    }
+  if (st.active == K::Join || st.active == K::Delete) {
+    // REQ-121 (GitHub #91 review, D-2026-08-26-d): a finished box now MERGES into the accumulating
+    // selection and the command stays put, exactly as MOVE/COPY's PickSelection does below. It no
+    // longer executes here — `ProcessCommandLineSubmit`'s Enter branch is what acts on the
+    // selection, which is what makes the shared "Select objects, ENTER to continue" prompt true for
+    // these two. Clicks that land on an entity never reach here at all; they are accumulated by
+    // `ViewportClickRoute::SelectionAccumulate` in CadUi.
+    //
+    // `finishBox` computes `inclSurvey` false for both, which is the survey-point behaviour the
+    // two-corner box already had — deliberately unchanged here.
+    if (st.selBoxWaitingSecond)
+      finishBox();
     return;
   }
 
@@ -19635,7 +19614,8 @@ void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   st.active = AppCommandState::Kind::Join;
   st.selBoxWaitingSecond = false;
-  log.push_back("JOIN — window-select lines/polylines that meet at endpoints. ESC cancels.");
+  log.push_back("JOIN — click objects or drag a selection window (Enter when done) to join lines/"
+                "polylines that meet at endpoints. ESC cancels.");
 }
 
 void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -20174,7 +20154,10 @@ void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   st.active = AppCommandState::Kind::Delete;
   st.selBoxWaitingSecond = false;
-  log.push_back("DELETE — click two corners to window-select objects to erase. ESC cancels.");
+  // Wording matches the siblings above (D-2026-08-26-d): DELETE accumulates and Enter is what
+  // erases, so a message describing a two-click box would now be as wrong as the old prompt was.
+  log.push_back("DELETE — click objects or drag a selection window (Enter when done) to erase them. "
+                "ESC cancels.");
 }
 
 void StartZoomExtentsCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -21353,6 +21336,36 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           log.push_back(st.active == K::Copy ? "COPY — base point:" : "MOVE — base point:");
         }
       }
+    } else if (st.active == K::Delete) {
+      // REQ-121 (GitHub #91 review, D-2026-08-26-d). DELETE used to answer Enter with "finish
+      // window-select in the viewport (two clicks)" — a refusal that directly contradicted the
+      // shared "Select objects, ENTER to continue" prompt PR #102 gave it. Enter now acts, the
+      // same shape MOVE/COPY use directly above.
+      //
+      // Survey points first and CAD second, mirroring StartDeleteCommand's own order and for its
+      // stated reason: deleting a point also removes its linked label, and running the CAD erase
+      // first would strand that label in the selection.
+      if (st.selection.empty() && st.selectedSurveyPointIndices.empty()) {
+        log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
+      } else {
+        if (!st.selectedSurveyPointIndices.empty())
+          DeleteSelectedSurveyPoints(st, log);
+        if (!st.selection.empty())
+          ExecuteDeleteSelection(st, log);
+        st.active = K::None;
+        ResetModifyRotateDraft(st);
+      }
+    } else if (st.active == K::Join) {
+      // Survey points are not joinable and are deliberately not consulted here, so an Enter with
+      // survey points alone is still "nothing selected" — the honest answer (REQ-201) rather than
+      // a silent no-op. JOIN's own report says what it merged.
+      if (st.selection.empty()) {
+        log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
+      } else {
+        ExecuteJoinSelection(st, log);
+        st.active = K::None;
+        ResetModifyRotateDraft(st);
+      }
     } else if (st.active == K::Scale) {
       using MP = AppCommandState::ModifyPhase;
       if (st.modifyPhase == MP::PickSelection) {
@@ -21913,13 +21926,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
   }
 
-  if (st.active == AppCommandState::Kind::Delete) {
-    log.push_back("DELETE — finish window-select in the viewport (two clicks), or ESC to cancel.");
-    return;
-  }
-
-  if (st.active == AppCommandState::Kind::Join) {
-    log.push_back("JOIN — finish window-select in the viewport (two clicks), or ESC to cancel.");
+  // Typed TEXT during DELETE / JOIN. A bare Enter never reaches here — the `line.empty()` block
+  // above consumes it, which is where these two now act on their selection (D-2026-08-26-d). This
+  // is only the "you typed something that is not a command" case, and its wording had to change
+  // with the behaviour: it used to say "finish window-select in the viewport (two clicks)", which
+  // is no longer how either command ends.
+  if (st.active == AppCommandState::Kind::Delete || st.active == AppCommandState::Kind::Join) {
+    log.push_back(std::string(st.active == AppCommandState::Kind::Delete ? "DELETE" : "JOIN") +
+                  " — click objects or drag a selection window, then press Enter. ESC cancels.");
     return;
   }
 

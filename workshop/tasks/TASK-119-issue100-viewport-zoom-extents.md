@@ -105,6 +105,17 @@ ASSUMPTION-1: A viewport's aspect for framing is its paper rectangle, not its pi
 - 2026-08-26 `EXPECT VPFRAME` compares with a relative tolerance rather than asserting the log line.
   Asserting the log would assert a `%.6g` rendering of three floats, which turns a rounding at the
   sixth significant digit into a red test about nothing.
+- 2026-08-26 **D-2026-08-26-f, found by chetjones003 manually testing this PR against a real DXF
+  import.** The transcript's fixture is a freshly-created drawing, so `worldDocumentOriginX/Y` is
+  `(0,0)` throughout and LOCAL == WORLD — the exact condition that hid this defect from every
+  automated check. `ComputeRobustWorldExtents` returns LOCAL coordinates (the same convention every
+  raw entity store uses); `vp->modelCenterX/Y` is WORLD (`local + worldDocumentOrigin`), per
+  `AddViewportRect`'s own default and the screen<->model conversions in `CadUi.cpp`/`PdfPlot.cpp`
+  that add/subtract the origin around that same field. `FrameWorldRectInViewport`'s output was
+  written straight into `vp->modelCenterX/Y` with no origin added, so after any import that rebases
+  the drawing (a nonzero origin), the viewport camera landed exactly `worldDocumentOriginX/Y` away
+  from the actual geometry — the model appeared to vanish. Fixed by adding
+  `st.worldDocumentOriginX/Y` to `vp->modelCenterX/Y` after the framing call.
 
 ## 9. Self-verification
 - [x] build-project        — PASS (clean; /W4 /permissive-, no new warnings)
