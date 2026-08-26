@@ -66,7 +66,7 @@ TEST_CASE("FindBest picks the circle center when it is closer than a nearby line
   CHECK(hit.y == Catch::Approx(0.f));
 }
 
-TEST_CASE("FindBest respects the snap tolerance — nothing outside it is ever returned", "[CadSnap]") {
+TEST_CASE("FindBest respects the snap tolerance: nothing outside it is ever returned", "[CadSnap]") {
   AppCommandState st;
   st.objectSnapEndpoint = true;
   st.userLinesFlat = {50.f, 50.f, 0.f, 60.f, 60.f, 0.f}; // far outside a small tolerance

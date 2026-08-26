@@ -146,6 +146,18 @@ running the same test directly against the built exe (`GoSurveySnapTests.exe "Fi
 the snap tolerance*"`, wildcard sidesteps the em-dash) on **both** this rebased tree and unmodified
 `beta` — passes on both, identically. **634/634 real.**
 
+**Follow-up, same day:** GitHub Actions CI on this PR (#108, the fresh PR opened after #107's own
+branch turned out to live in a fork with no write access) reported the identical failure — and so
+does `beta`'s own latest CI run at `425afa7`, confirming this is not a local-machine quirk but a
+real CI break inherited from issue #103, present on `beta` before this task touched anything. Since
+it blocks the `build` check on every branch cut from `beta` until someone fixes it, renamed the
+`CadSnapTests` case from `"FindBest respects the snap tolerance — nothing outside it is ever
+returned"` to `"FindBest respects the snap tolerance: nothing outside it is ever returned"` (colon
+for em-dash, otherwise identical) rather than continuing to route around it. It is the only
+`TEST_CASE` name in the entire suite containing an em-dash (`grep -rl` confirmed), so this is
+closing an isolated anomaly, not a style pass. Trivial rename, no architectural decision, no
+behavior change to the test itself.
+
 ## 9. Self-verification
 - [x] build-project        — PASS (clean; no new warnings under /W4 /permissive-)
 - [x] architecture-review  — PASS (§3; no new type, field, or signature)
