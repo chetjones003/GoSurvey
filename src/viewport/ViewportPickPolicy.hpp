@@ -296,3 +296,19 @@ inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
   }
   return false;  // unreachable; see ViewportClickRouteFor's tail note
 }
+
+/// Paper-space counterpart of \ref ViewportIsObjectSelectionStep (REQ-307, GitHub #106).
+///
+/// Paper-space MOVE/COPY/DELETE are NOT routed through `ViewportClickRouteFor` at all — that
+/// function is model-space (and floating model space) only; pure paper space has its own ambient
+/// click block in `CadUi.cpp` and never sets `cmd.active` for these three commands. They stay
+/// pick-first by default (act on whatever is already selected in idle mode), so unlike model space
+/// there is usually no selection STEP to ask about. This predicate answers true only during the one
+/// case that changed: `StartPaperMoveCopyViewports`/`StartDeleteCommand`'s paper branch opened a
+/// real selection step because nothing was selected yet when the command started (the paper-space
+/// analog of REQ-121's model-space treatment — same pickbox cursor, same OSNAP suppression, same
+/// shared prompt, reached from `PaperIsObjectSelectionStep(cmd) || ViewportIsObjectSelectionStep(cmd)`
+/// at each of REQ-121's three call sites).
+inline bool PaperIsObjectSelectionStep(const AppCommandState& cmd) {
+  return cmd.paperMoveWaitingSelection || cmd.paperDeleteWaitingSelection;
+}

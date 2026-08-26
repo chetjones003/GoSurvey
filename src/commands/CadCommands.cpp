@@ -458,13 +458,54 @@ void TranslateSelectedViewports(AppCommandState& cmd, float dxIn, float dyIn, bo
 void StartPaperMoveCopyViewports(AppCommandState& cmd, bool copy, std::vector<std::string>& log) {
   // Operates on whatever is selected in paper space: viewports (REQ-035) and/or native geometry (REQ-037).
   if (cmd.selectedViewports.empty() && cmd.selectedPaperEntities.empty()) {
-    log.push_back(std::string(copy ? "COPY" : "MOVE") + " — select object(s) first.");
+    // REQ-307 (GitHub #106): nothing pre-selected — open a real selection step (click-or-box,
+    // accumulate until Enter, REQ-121-style pickbox/OSNAP/prompt treatment) rather than refusing.
+    // Pick-first stays the fast path when a selection already exists, above.
+    cmd.paperMoveWaitingSelection = true;
+    cmd.paperMoveIsCopy = copy;
+    log.push_back(std::string(copy ? "COPY" : "MOVE") +
+                  " — click objects or drag a selection window (Enter when done), then base point "
+                  "and destination. ESC cancels.");
     return;
   }
   cmd.active = AppCommandState::Kind::None;  // paper-space edit ops are not a model command
   cmd.paperMovePhase = 1;
   cmd.paperMoveIsCopy = copy;
   log.push_back(std::string(copy ? "COPY" : "MOVE") + " — click the base point (Esc to cancel).");
+}
+
+// REQ-307 (GitHub #106): Enter acting on the paper-space MOVE/COPY/DELETE selection step. A free
+// function rather than logic inlined at each caller so both the raw viewport Enter check (CadUi.cpp,
+// matching EXTEND's own precedent for a paper-space phase ProcessCommandLineSubmit's Kind-keyed
+// dispatch cannot reach, since these three never set cmd.active) and ProcessCommandLineSubmit's own
+// blank-Enter branch below call the identical logic — the latter is what gives this a headless
+// transcript path the raw-only EXTEND precedent does not have.
+void ProcessPaperMoveWaitingSelectionEnter(AppCommandState& st, std::vector<std::string>& log) {
+  if (!st.paperMoveWaitingSelection)
+    return;
+  if (st.selectedPaperEntities.empty() && st.selectedViewports.empty()) {
+    log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
+    return;
+  }
+  st.paperMoveWaitingSelection = false;
+  st.paperMovePhase = 1;
+  log.push_back(std::string(st.paperMoveIsCopy ? "COPY" : "MOVE") + " — click the base point (Esc to cancel).");
+}
+
+void ProcessPaperDeleteWaitingSelectionEnter(AppCommandState& st, std::vector<std::string>& log) {
+  if (!st.paperDeleteWaitingSelection)
+    return;
+  if (st.selectedPaperEntities.empty() && st.selectedViewports.empty()) {
+    log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
+    return;
+  }
+  const bool hadEntities = !st.selectedPaperEntities.empty();
+  const bool hadViewports = !st.selectedViewports.empty();
+  if (hadEntities)
+    DeleteSelectedPaperEntities(st, log);  // REQ-037
+  if (hadViewports)
+    DeleteSelectedViewports(st, log);      // REQ-035
+  st.paperDeleteWaitingSelection = false;
 }
 
 // --- Floating model space (REQ-036) ---
@@ -20132,8 +20173,13 @@ void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
       DeleteSelectedPaperEntities(st, log);  // REQ-037
     if (hadViewports)
       DeleteSelectedViewports(st, log);  // REQ-035
-    if (!hadEntities && !hadViewports)
-      log.push_back("DELETE — select paper object(s) or viewport(s) first.");
+    if (!hadEntities && !hadViewports) {
+      // REQ-307 (GitHub #106): nothing pre-selected — open a real selection step instead of
+      // refusing, mirroring model-space DELETE's own accumulate-until-Enter shape (REQ-121).
+      st.paperDeleteWaitingSelection = true;
+      log.push_back("DELETE — click objects or drag a selection window (Enter when done) to erase them. "
+                    "ESC cancels.");
+    }
     return;
   }
   ClearPendingViewportZoom(st);
@@ -21231,6 +21277,17 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   }
 
   if (line.empty()) {
+    // REQ-307 (GitHub #106): paper-space MOVE/COPY/DELETE's selection step never sets st.active, so
+    // it cannot be reached by any Kind-keyed branch below — checked first, ahead of all of them, the
+    // same way the raw viewport Enter check in CadUi.cpp calls the identical shared logic.
+    if (st.paperMoveWaitingSelection) {
+      ProcessPaperMoveWaitingSelectionEnter(st, log);
+      return;
+    }
+    if (st.paperDeleteWaitingSelection) {
+      ProcessPaperDeleteWaitingSelectionEnter(st, log);
+      return;
+    }
     // TASK-082. FEATURELINE with a point awaiting its elevation: Enter accepts the default shown in
     // the prompt. This has to be handled HERE, not in the FEATURELINE block further down, because a
     // blank line never reaches that block — it is consumed by this one.

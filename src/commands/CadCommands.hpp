@@ -997,6 +997,10 @@ void TranslateSelectedViewports(AppCommandState& cmd, float dxIn, float dyIn, bo
                                 std::vector<std::string>& log);
 /// Begin a two-click MOVE/COPY of the selected viewports (paper-inch base → destination).
 void StartPaperMoveCopyViewports(AppCommandState& cmd, bool copy, std::vector<std::string>& log);
+// REQ-307 (GitHub #106): Enter acting on the paper-space MOVE/COPY/DELETE selection step. See the
+// definitions in CadCommands.cpp for why these are free functions rather than inline logic.
+void ProcessPaperMoveWaitingSelectionEnter(AppCommandState& st, std::vector<std::string>& log);
+void ProcessPaperDeleteWaitingSelectionEnter(AppCommandState& st, std::vector<std::string>& log);
 
 // --- Per-viewport layer freeze (REQ-028) ---
 /// Toggle the frozen state of a layer in a viewport.
@@ -2763,6 +2767,14 @@ struct AppCommandState {
   bool  paperMoveIsCopy = false;
   float paperMoveBaseXIn = 0.f;
   float paperMoveBaseYIn = 0.f;
+  // REQ-307 (GitHub #106): paper-space MOVE/COPY/DELETE are pick-first by default (act on whatever
+  // is already selected), but starting one with NOTHING selected now opens a real selection step
+  // instead of refusing — the paper-space counterpart of REQ-121's model-space treatment. Separate
+  // bools rather than folding into \c paperMovePhase: that field's 1/2 values (base/destination) are
+  // consulted by several `!= 0` checks meaning "a MOVE/COPY gesture is in progress", and a selecting
+  // step is not that gesture yet (raw cursor, no snapped base point).
+  bool  paperMoveWaitingSelection = false;
+  bool  paperDeleteWaitingSelection = false;
   // Paper-space window selection box (REQ-035).
   bool  paperSelBoxActive = false;
   float paperSelBoxX0In = 0.f;

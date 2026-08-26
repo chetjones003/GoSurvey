@@ -309,3 +309,28 @@ TEST_CASE("REQ-121: a point pick, idle, and ZOOM are NOT selection steps", "[vie
   // HATCH clicks a point INSIDE a region to trace a boundary — a location, not an object.
   REQUIRE_FALSE(ViewportIsObjectSelectionStep(AtFirstPrompt(K::Hatch)));
 }
+
+// ---------------------------------------------------------------------------------------------
+// REQ-307 (GitHub #106) — the paper-space counterpart of REQ-121's predicate.
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("REQ-307: PaperIsObjectSelectionStep is true only in the two new paper selection flags",
+          "[viewport][pick][req307]") {
+  // Neither flag set — the ordinary pick-first state (idle, or mid-command with a real selection
+  // already made) — is not a selection step. This is the default REQ-307 must not disturb: a paper
+  // MOVE/COPY/DELETE that already had something selected never touches these flags at all.
+  AppCommandState idle;
+  REQUIRE_FALSE(PaperIsObjectSelectionStep(idle));
+
+  AppCommandState moving;
+  moving.paperMovePhase = 1;  // base-point phase — a MOVE gesture IS in progress, but not selecting
+  REQUIRE_FALSE(PaperIsObjectSelectionStep(moving));
+
+  AppCommandState moveSelecting;
+  moveSelecting.paperMoveWaitingSelection = true;
+  REQUIRE(PaperIsObjectSelectionStep(moveSelecting));
+
+  AppCommandState deleteSelecting;
+  deleteSelecting.paperDeleteWaitingSelection = true;
+  REQUIRE(PaperIsObjectSelectionStep(deleteSelecting));
+}

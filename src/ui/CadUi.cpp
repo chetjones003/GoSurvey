@@ -6112,6 +6112,11 @@ static void DrawPlotScaleCombo(AppCommandState& cmd) {
 } // namespace
 
 static const char* CommandInputHint(const AppCommandState& cmd) {
+  // REQ-307 (GitHub #106): paper-space MOVE/COPY/DELETE's selection step never sets cmd.active (it
+  // stays pick-first, K::None, throughout), so it cannot be reached by any of the Kind-based branches
+  // below — checked first, ahead of all of them.
+  if (PaperIsObjectSelectionStep(cmd))
+    return kSelectObjectsPrompt;
   if (cmd.active == AppCommandState::Kind::PaperRectViewport)
     return cmd.paperVpPhase == 0 ? "Rectangular viewport — first corner (click on the sheet):"
                                  : "Rectangular viewport — opposite corner:";
@@ -9251,7 +9256,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0 || cmd.paperMirrorPhase != 0 ||
           cmd.paperLengthenPhase != 0 || cmd.paperExtendPhase != 0 || cmd.paperBreakPhase != 0 ||
           cmd.paperStretchPhase != 0 || cmd.paperFilletPhase != 0 || cmd.paperChamferPhase != 0 ||
-          cmd.paperGripCorner != -2 || cmd.paperSelBoxActive) {
+          cmd.paperGripCorner != -2 || cmd.paperSelBoxActive ||
+          cmd.paperMoveWaitingSelection || cmd.paperDeleteWaitingSelection) {  // REQ-307
         cmd.paperMovePhase = 0;
         cmd.paperRotatePhase = 0;
         cmd.paperMirrorPhase = 0;
@@ -9268,6 +9274,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.paperChamferFirstPolySeg = -1;
         cmd.paperGripCorner = -2;
         cmd.paperSelBoxActive = false;
+        cmd.paperMoveWaitingSelection = false;
+        cmd.paperDeleteWaitingSelection = false;
       } else if (!cmd.selectedViewports.empty() || !cmd.selectedPaperEntities.empty()) {
         ClearViewportSelection(cmd);
         ClearPaperEntitySelection(cmd);
@@ -9289,6 +9297,22 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.paperExtendBoundaries.clear();
         log.push_back("EXTEND — finished.");
       }
+    }
+    // REQ-307 (GitHub #106): Enter is what acts on the paper-space selection step, the same shape
+    // model-space MOVE/COPY/DELETE use (ProcessCommandLineSubmit's PickSelection branches) — but
+    // these never set cmd.active, so that dispatcher never sees them via its Kind-keyed switch; the
+    // shared logic lives in CadCommands.cpp (ProcessPaperMoveWaitingSelectionEnter/
+    // ProcessPaperDeleteWaitingSelectionEnter) so ProcessCommandLineSubmit's own blank-Enter branch
+    // can call it too — this raw check is only for Enter pressed while the mouse/focus never touched
+    // the command line, the same reason EXTEND's paper phase above needs one.
+    //
+    // GetActiveID() == 0 is the guard that keeps the two callers from double-firing on one keypress:
+    // when the command-line InputText holds keyboard focus, its own Enter submit already reaches
+    // ProcessCommandLineSubmit, whose blank-line branch calls the identical function — this raw poll
+    // must stay silent then, or a focused blank Enter would advance/delete twice in one frame.
+    if (ImGui::GetActiveID() == 0 && ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+      ProcessPaperMoveWaitingSelectionEnter(cmd, log);
+      ProcessPaperDeleteWaitingSelectionEnter(cmd, log);
     }
 
     auto primaryVp = [&]() -> Viewport* {
@@ -9363,7 +9387,79 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       BumpCadGpuCache(cmd);
     };
 
-    if (clickL && cmd.paperMovePhase == 1) {  // MOVE/COPY: base point
+    // REQ-307 (GitHub #106): the paper-space selection step's box MERGES into the accumulating
+    // selection rather than replacing it — the paper-space analog of model-space
+    // ViewportClickRoute::SelectionAccumulate (D-2026-08-25-l). Same box math as closePaperSelBox
+    // above; the only difference is union instead of clear-then-assign.
+    auto closePaperSelBoxMerge = [&](float closeX, float closeY) {
+      const bool windowMode = closeX >= cmd.paperSelBoxX0In;
+      const float bx0 = std::min(cmd.paperSelBoxX0In, closeX), bx1 = std::max(cmd.paperSelBoxX0In, closeX);
+      const float by0 = std::min(cmd.paperSelBoxY0In, closeY), by1 = std::max(cmd.paperSelBoxY0In, closeY);
+      for (int vi = 0; vi < static_cast<int>(L.viewports.size()); ++vi) {
+        const Viewport& v = L.viewports[static_cast<size_t>(vi)];
+        const float vx0 = v.paperXIn, vy0 = v.paperYIn, vx1 = v.paperXIn + v.paperWIn, vy1 = v.paperYIn + v.paperHIn;
+        const bool overlap = vx0 <= bx1 && vx1 >= bx0 && vy0 <= by1 && vy1 >= by0;
+        const bool boxInsideInterior = bx0 > vx0 && bx1 < vx1 && by0 > vy0 && by1 < vy1;
+        const bool sel = windowMode ? (vx0 >= bx0 && vx1 <= bx1 && vy0 >= by0 && vy1 <= by1)
+                                    : (overlap && !boxInsideInterior);
+        if (sel && std::find(cmd.selectedViewports.begin(), cmd.selectedViewports.end(), vi) ==
+                       cmd.selectedViewports.end())
+          cmd.selectedViewports.push_back(vi);
+      }
+      cmd.selectedViewportIndex = cmd.selectedViewports.empty() ? -1 : cmd.selectedViewports.back();
+      cmd.selectedViewportLayout = cmd.selectedViewports.empty() ? -1 : cmd.activeSpaceIndex;
+      std::vector<PaperEntityRef> boxEntities;
+      SelectPaperEntitiesInBox(L, bx0, by0, bx1, by1, windowMode, boxEntities);
+      for (const auto& e : boxEntities) {
+        bool present = false;
+        for (const auto& s : cmd.selectedPaperEntities)
+          if (s.type == e.type && s.index == e.index) { present = true; break; }
+        if (!present)
+          cmd.selectedPaperEntities.push_back(e);
+      }
+      cmd.paperSelBoxLastValid = true;
+      cmd.paperSelBoxLastMnXIn = bx0;
+      cmd.paperSelBoxLastMxXIn = bx1;
+      cmd.paperSelBoxLastMnYIn = by0;
+      cmd.paperSelBoxLastMxYIn = by1;
+      cmd.paperSelBoxActive = false;
+      BumpCadGpuCache(cmd);
+    };
+
+    if (clickL && (cmd.paperMoveWaitingSelection || cmd.paperDeleteWaitingSelection)) {
+      // REQ-307: additive click-or-box accumulation for the paper-space selection step, mirroring
+      // model-space SelectionAccumulate (D-2026-08-25-l) — a click toggles one object into the set
+      // with no Shift required (SelectViewport/TogglePaperEntitySelection's own `additive=true`
+      // already implements exactly this toggle), and a box MERGES rather than replaces.
+      if (cmd.paperSelBoxActive) {
+        closePaperSelBoxMerge(curX, curY);
+      } else {
+        PaperEntityRef pr;
+        if (PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr)) {
+          TogglePaperEntitySelection(cmd, pr, /*additive=*/true);
+        } else {
+          // Viewport BORDER hit test, same band/interior rule as the idle fallback below (clicking
+          // the interior is the model view, so it does not select).
+          const float bt = std::max(gripTolIn, 5.f / std::max(1.e-6f, pxPerWorld));
+          int hit = -1;
+          for (int vi = static_cast<int>(L.viewports.size()) - 1; vi >= 0; --vi) {
+            const Viewport& v = L.viewports[static_cast<size_t>(vi)];
+            const float x0 = v.paperXIn, y0 = v.paperYIn, x1 = v.paperXIn + v.paperWIn, y1 = v.paperYIn + v.paperHIn;
+            const float btv = std::min(bt, 0.25f * std::min(v.paperWIn, v.paperHIn));
+            const bool inOuter = curX >= x0 - btv && curX <= x1 + btv && curY >= y0 - btv && curY <= y1 + btv;
+            const bool inInner = curX >= x0 + btv && curX <= x1 - btv && curY >= y0 + btv && curY <= y1 - btv;
+            if (inOuter && !inInner) { hit = vi; break; }
+          }
+          if (hit >= 0) {
+            SelectViewport(cmd, hit, /*additive=*/true);
+          } else {
+            cmd.paperSelBoxActive = true;
+            cmd.paperSelBoxX0In = curX;
+            cmd.paperSelBoxY0In = curY;
+          }
+        }
+      }
+    } else if (clickL && cmd.paperMovePhase == 1) {  // MOVE/COPY: base point
       cmd.paperMoveBaseXIn = curX;
       cmd.paperMoveBaseYIn = curY;
       cmd.paperMovePhase = 2;
@@ -9583,8 +9679,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // plain click, leaving the box open for the click-click flow above.
     if (cmd.paperSelBoxActive && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
       const ImVec2 dd = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
-      if (std::sqrt(dd.x * dd.x + dd.y * dd.y) > 4.f)
-        closePaperSelBox(curX, curY);
+      if (std::sqrt(dd.x * dd.x + dd.y * dd.y) > 4.f) {
+        // REQ-307: a dragged box during the selection step merges, same as the click-click path above.
+        if (cmd.paperMoveWaitingSelection || cmd.paperDeleteWaitingSelection)
+          closePaperSelBoxMerge(curX, curY);
+        else
+          closePaperSelBox(curX, curY);
+      }
     }
 
     // Live grip edit: the grabbed viewport follows the cursor until the commit click.
@@ -11673,8 +11774,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       sdl->AddRect(ImVec2(std::min(ra.x, rb.x), std::min(ra.y, rb.y)),
                    ImVec2(std::max(ra.x, rb.x), std::max(ra.y, rb.y)), IM_COL32(59, 130, 246, 230), 0.f, 0, 1.5f);
     }
-    // Object-snap glyph (REQ-037): green square at the snapped paper point.
-    if (paperSnapActive && hovered) {
+    // Object-snap glyph (REQ-037): green square at the snapped paper point. REQ-307 (GitHub #106):
+    // suppressed during the paper-space selection step, the same rule REQ-121 gives model space
+    // (rule 1) — the step is picking OBJECTS, and a marker that jumps to nearby geometry is
+    // misleading when the click hit-tests the raw cursor instead (see the entity/box pick below,
+    // which never reads paperSnapXIn/YIn during this step).
+    if (paperSnapActive && hovered && !PaperIsObjectSelectionStep(cmd)) {
       const ImVec2 g = w2s(paperSnapXIn, paperSnapYIn);
       sdl->AddRect(ImVec2(g.x - 5.f, g.y - 5.f), ImVec2(g.x + 5.f, g.y + 5.f), IM_COL32(120, 220, 120, 255), 0.f,
                    0, 1.5f);
@@ -12813,7 +12918,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   using VK = AppCommandState::Kind;
   const bool inImage = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y;
 
-  if (cmd.active == VK::None) {
+  // REQ-307 (GitHub #106): the paper-space selection step keeps cmd.active == None throughout (it
+  // is not a model-space command), so the engagement gate below — keyed on cmd.active — would never
+  // let the palette engage for it without this. Extending the gate rather than cmd.active itself
+  // avoids touching the huge existing Kind-keyed switches this whole file consults elsewhere.
+  const bool paperSelStep = PaperIsObjectSelectionStep(cmd);
+
+  if (cmd.active == VK::None && !paperSelStep) {
     cmd.viewportCmdPaletteEngaged = false;
     cmd.viewportDrawingHovered = false;
   } else {
@@ -12828,8 +12939,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   }
 
   const bool showViewportCmdPalette =
-      cmd.active != VK::None && cmd.active != VK::Pan && cmd.viewportCmdPaletteEngaged && cmdBuf &&
-      cmdBufSize > 0 && !cmd.mtextRichEditorOpen;
+      (cmd.active != VK::None || paperSelStep) && cmd.active != VK::Pan && cmd.viewportCmdPaletteEngaged &&
+      cmdBuf && cmdBufSize > 0 && !cmd.mtextRichEditorOpen;
   cmd.viewportDrawingHovered = showViewportCmdPalette;
 
   // Detect the palette's open edge so the two-field coordinate input resets its
@@ -13138,7 +13249,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // crosshair's centre box tracks the SNAP APERTURE instead. So the pickbox gets the field named
     // for it rather than a new tunable (CLAUDE.md rule 2), and the crosshair keeps the aperture-
     // sized box it has always drawn, unchanged.
-    const bool pickboxCursor = ViewportIsObjectSelectionStep(cmd);
+    const bool pickboxCursor = ViewportIsObjectSelectionStep(cmd) || PaperIsObjectSelectionStep(cmd);  // REQ-307
     const float ap = std::clamp(cmd.objectSnapAperturePx, 4.f, 64.f);
     const float phx = pickboxCursor ? std::clamp(cmd.viewportCrosshairPickHalfPxX, 2.f, 32.f) : ap * 0.5f;
     const float phy = pickboxCursor ? std::clamp(cmd.viewportCrosshairPickHalfPxY, 2.f, 32.f) : ap * 0.5f;
