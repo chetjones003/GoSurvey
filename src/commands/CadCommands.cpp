@@ -22236,7 +22236,7 @@ const char* CircleCommandFooterHint(const AppCommandState& st) {
     return "";
   switch (st.circlePhase) {
   case AppCommandState::CirclePhase::WaitCenterOrMode:
-    return "CIRCLE: Click or type center | Type 3P for three-point circle | ESC cancel";
+    return "CIRCLE: Click or type center | Type [3P] for three-point circle | ESC cancel";
   case AppCommandState::CirclePhase::WaitRadius:
     return "CIRCLE: Click edge for radius | Type radius | D <value> or D<value> for diameter | ESC cancel";
   case AppCommandState::CirclePhase::ThreeP_WaitP1:
@@ -22276,17 +22276,17 @@ const char* RotateCommandFooterHint(const AppCommandState& st) {
   case RP::NeedBase:
     return "ROTATE: Base point — click or X,Y | ESC cancel";
   case RP::NeedAngleOrReference:
-    return "ROTATE: ° clockwise / DMS | R ref | C copy | ESC (north=0° CW)";
+    return "ROTATE: ° clockwise / DMS | [R]eference | [C]opy | ESC (north=0° CW)";
   case RP::Ref_WaitP1:
-    return "ROTATE ref: First point | C toggles copy | ESC cancel";
+    return "ROTATE ref: First point | [C] toggles copy | ESC cancel";
   case RP::Ref_WaitP2:
-    return "ROTATE ref: Second point | C toggles copy | ESC cancel";
+    return "ROTATE ref: Second point | [C] toggles copy | ESC cancel";
   case RP::AfterReference_WaitAngleOrP:
-    return "ROTATE ref: New bearing ° from north (like props) | P two pts | C copy | ESC";
+    return "ROTATE ref: New bearing ° from north (like props) | [P] two pts | [C]opy | ESC";
   case RP::AnglePoints_WaitP1:
-    return "ROTATE angle pts: First point | C copy | ESC cancel";
+    return "ROTATE angle pts: First point | [C]opy | ESC cancel";
   case RP::AnglePoints_WaitP2:
-    return "ROTATE angle pts: Second point | C copy | ESC cancel";
+    return "ROTATE angle pts: Second point | [C]opy | ESC cancel";
   }
   return "";
 }
@@ -22304,7 +22304,7 @@ const char* ScaleCommandFooterHint(const AppCommandState& st) {
   if (st.modifyPhase == MP::NeedDestination) {
     switch (st.scalePhase) {
     case SP::FactorPick:
-      return "SCALE: Second point or type factor (>0) — dist/base-ref | R = two-point ref length | ESC";
+      return "SCALE: Second point or type factor (>0) — dist/base-ref | [R]eference = two-point ref length | ESC";
     case SP::Ref_WaitP1:
       return "SCALE ref: First point of reference length | ESC cancel";
     case SP::Ref_WaitP2:
@@ -22339,9 +22339,9 @@ const char* TrimCommandFooterHint(const AppCommandState& st) {
     return "";
   switch (st.trimPhase) {
   case TP::SelectCuttingEdges:
-    return "TRIM: Pick cutting edges (hover highlights) | Enter | type L — draw the trim line | ESC cancel";
+    return "TRIM: Pick cutting edges (hover highlights) | Enter | [L] — draw the trim line | ESC cancel";
   case TP::CuttingLine_WaitP1:
-    return "TRIM: First point of the trim line | type T — pick cutting edges instead | ESC cancel";
+    return "TRIM: First point of the trim line | [T] — pick cutting edges instead | ESC cancel";
   case TP::CuttingLine_WaitP2:
     return "TRIM: Second point — dashed = removed part (midpoint picks side) | Ortho | ESC";
   case TP::SelectTrimTargets:
@@ -22388,7 +22388,7 @@ const char* LineCommandFooterHint(const AppCommandState& st) {
   if (st.linePhase == LP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitAdjustOrCommit)
     return "LINE bearing pick: Enter locks | +90/-45 adjust+lock | ESC cancels pick";
   if (st.linePhase == LP::NeedNextPoint && st.segmentAngleLockActive)
-    return "LINE (bearing lock): distance ± along ray | click on line | X,Y | @dx,dy | A clears";
+    return "LINE (bearing lock): distance ± along ray | click on line | X,Y | @dx,dy | [A] clears";
   // Basic next-point (ortho or not). Bracketed [A]/[2P] are rendered as clickable
   // links in the command-line footer (DrawCommandLinePanel); the same text feeds the
   // dynamic-cursor label and the height calc, so keep it identical.
@@ -22435,7 +22435,7 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
 
   if (st.active == K::Elev) {
     static char buf[128];
-    std::snprintf(buf, sizeof(buf), "ELEV: New default elevation <%.4f> — W = world Z 0 | ESC cancel",
+    std::snprintf(buf, sizeof(buf), "ELEV: New default elevation <%.4f> — [W]orld = Z 0 | ESC cancel",
                   static_cast<double>(CadWorkPlaneElevation(st)));
     return buf;
   }
@@ -22466,8 +22466,8 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
       return buf;
     }
     if (st.featureLineDraftVerts.empty())
-      return "FEATURELINE: First point — click or X,Y/X,Y,Z | E = elevation point | CLOSE/END | ESC cancel";
-    return "FEATURELINE: Next point — click or X,Y/X,Y,Z | E = elevation point | CLOSE/END | ESC cancel";
+      return "FEATURELINE: First point — click or X,Y/X,Y,Z | [E] = elevation point | [CLOSE]/[END] | ESC cancel";
+    return "FEATURELINE: Next point — click or X,Y/X,Y,Z | [E] = elevation point | [CLOSE]/[END] | ESC cancel";
   }
 
   if (st.active == K::Fillet) {
@@ -22541,7 +22541,7 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
   if (st.active == K::Polyline) {
     using SAP = AppCommandState::SegmentAnglePickPhase;
     if (st.polylinePhase == PP::NeedFirstPoint)
-      return "POLYLINE: First point — click or X,Y | CLOSE closes | ESC cancel";
+      return "POLYLINE: First point — click or X,Y | [CLOSE] closes | ESC cancel";
     if (st.polylinePhase == PP::NeedNextPoint && st.segmentAngleKeyboardAwaitBearing)
       return "POLYLINE: Type bearing ° CW from N | blank Enter cancels | ESC cancel";
     if (st.polylinePhase == PP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitP1)
@@ -22551,8 +22551,8 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
     if (st.polylinePhase == PP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitAdjustOrCommit)
       return "POLYLINE bearing pick: Enter locks | +90/-45 adjust+lock | ESC cancels pick";
     if (st.polylinePhase == PP::NeedNextPoint && st.segmentAngleLockActive)
-      return "POLYLINE (bearing lock): distance ± | click on ray | X,Y | A clears | CLOSE / END";
-    return "POLYLINE: Next — click | X,Y | @dx,dy | A/2P | CLOSE / END | ESC";
+      return "POLYLINE (bearing lock): distance ± | click on ray | X,Y | [A] clears | [CLOSE] / [END]";
+    return "POLYLINE: Next — click | X,Y | @dx,dy | [A]/[2P] | [CLOSE] / [END] | ESC";
   }
   if (st.active == K::Arc) {
     switch (st.arcPhase) {
@@ -22604,7 +22604,7 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
       return st.active == K::DimLinear ? "DIMLINEAR: Extension 2 | ESC cancel" : "DIMALIGNED: Extension 2 | ESC cancel";
     case DP::WaitDimLinePt:
       return st.active == K::DimLinear
-                 ? "DIMLINEAR: Line — dominant X vs Y from chord mid; H / V keys; X,Y | @ from chord mid | ESC"
+                 ? "DIMLINEAR: Line — dominant X vs Y from chord mid; [H] / [V] keys; X,Y | @ from chord mid | ESC"
                  : "DIMALIGNED: Offset — click | X,Y | @ from chord mid | ESC";
     }
   }

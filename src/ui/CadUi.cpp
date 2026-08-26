@@ -6126,7 +6126,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
         cmd.segmentAnglePickPhase == SAP::WaitAdjustOrCommit)
       return "Bearing pick — Enter or +90/-45:";
     if (cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint && cmd.segmentAngleLockActive)
-      return "LINE distance ± / click ray / X,Y / A clears:";
+      return "LINE distance ± / click ray / X,Y / [A] clears:";
     return "Next: click; X, Y; @dx,dy; [A]zimuth, [2P];";
   }
   if (cmd.active == AppCommandState::Kind::Polyline) {
@@ -6143,10 +6143,10 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
         cmd.segmentAnglePickPhase == SAP::WaitAdjustOrCommit)
       return "POLYLINE bearing — Enter or +90/-45:";
     if (cmd.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint && cmd.segmentAngleLockActive)
-      return "POLYLINE distance ± / ray click / A clears / CLOSE:";
+      return "POLYLINE distance ± / ray click / [A] clears / [CLOSE]:";
     if (cmd.orthoMode)
-      return "POLYLINE next — ortho / X,Y / A / AP / CLOSE:";
-    return "POLYLINE next — X,Y / A / AP / CLOSE:";
+      return "POLYLINE next — ortho / X,Y / [A] / [AP] / [CLOSE]:";
+    return "POLYLINE next — X,Y / [A] / [AP] / [CLOSE]:";
   }
   if (cmd.active == AppCommandState::Kind::Rect) {
     return cmd.rectPhase == AppCommandState::RectPhase::WaitFirstCorner
@@ -6204,7 +6204,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     case AppCommandState::DimPhase::WaitExt2:
       return cmd.active == AppCommandState::Kind::DimLinear ? "DIMLINEAR ext 2:" : "DIM ext 2:";
     case AppCommandState::DimPhase::WaitDimLinePt:
-      return cmd.active == AppCommandState::Kind::DimLinear ? "DIMLINEAR line (cursor/H/V) or X,Y:"
+      return cmd.active == AppCommandState::Kind::DimLinear ? "DIMLINEAR line (cursor/[H]/[V]) or X,Y:"
                                                            : "DIM line pt:";
     }
   }
@@ -6232,7 +6232,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     using CP = AppCommandState::CirclePhase;
     switch (cmd.circlePhase) {
     case CP::WaitCenterOrMode:
-      return "Center or type 3P:";
+      return "Center or type [3P]:";
     case CP::WaitRadius:
       return "Radius, D+diameter, or click:";
     case CP::ThreeP_WaitP1:
@@ -6261,7 +6261,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     if (cmd.modifyPhase == MP::NeedDestination) {
       switch (cmd.scalePhase) {
       case SP::FactorPick:
-        return "SCALE — scale factor, second point from base, or R (reference):";
+        return "SCALE — scale factor, second point from base, or [R]eference:";
       case SP::Ref_WaitP1:
         return "SCALE ref — first point X,Y:";
       case SP::Ref_WaitP2:
@@ -6284,15 +6284,15 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     case RP::NeedBase:
       return "Base point X,Y:";
     case RP::NeedAngleOrReference:
-      return "° CW from north / DMS / R / C (copy):";
+      return "° CW from north / DMS / [R]eference / [C]opy:";
     case RP::Ref_WaitP1:
     case RP::Ref_WaitP2:
-      return "Reference point X,Y (C toggles copy):";
+      return "Reference point X,Y ([C] toggles copy):";
     case RP::AfterReference_WaitAngleOrP:
-      return "Bearing ° from north / DMS / P / C (copy):";
+      return "Bearing ° from north / DMS / [P] / [C]opy:";
     case RP::AnglePoints_WaitP1:
     case RP::AnglePoints_WaitP2:
-      return "Angle point X,Y (C toggles copy):";
+      return "Angle point X,Y ([C] toggles copy):";
     }
   }
   if (cmd.active == AppCommandState::Kind::Mirror) {
@@ -6356,7 +6356,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   if (cmd.active == AppCommandState::Kind::Trim) {
     using TP = AppCommandState::TrimPhase;
     if (cmd.trimPhase == TP::SelectCuttingEdges)
-      return "TRIM — cutting edges, Enter (or L = draw on segment, two clicks):";
+      return "TRIM — cutting edges, Enter (or [L] = draw on segment, two clicks):";
     if (cmd.trimPhase == TP::CuttingLine_WaitP1)
       return "TRIM line-trim — first point:";
     if (cmd.trimPhase == TP::CuttingLine_WaitP2)
