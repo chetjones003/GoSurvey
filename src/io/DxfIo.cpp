@@ -1977,7 +1977,21 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
       const double spanX = gotMin && gotMax ? std::fabs(maxX - minX) : 0.0;
       const double spanY = gotMin && gotMax ? std::fabs(maxY - minY) : 0.0;
       const bool headerSane = std::max(spanX, spanY) < 1e6;
-      if (headerSane) {
+      // Only rebase when the coordinates are actually large enough to need it (#94).
+      //
+      // `.gs` load has always been gated this way — `MaybeRebaseLargeCoordinates` fires only above
+      // `kLargeCoordinateRebaseThreshold`. DXF import was not, and rebased on EVERY import, so a
+      // drawing spanning 150 units had its origin moved to the extents centre and every stored
+      // float re-rounded — buying no precision whatsoever, since local storage only helps when the
+      // world coordinates are large. That re-rounding is what walked the drawing ~2e-6 further on
+      // every export/import cycle, monotonically, with no convergence (#94).
+      //
+      // The magnitude test reads the HEADER extents rather than the geometry, because at this point
+      // no geometry has been parsed — the origin has to be established before `appendSegXF` casts
+      // anything to float, which is the entire reason this block runs first.
+      const double headerMag =
+          std::max({std::fabs(minX), std::fabs(maxX), std::fabs(minY), std::fabs(maxY)});
+      if (headerSane && headerMag >= CadCoord::kLargeCoordinateRebaseThreshold) {
         // ApplyDocumentOriginRebase (rather than a blind assignment) so any survey points kept from the
         // session are shifted into the new origin's local frame instead of being left in the old one.
         if (gotMin && gotMax && (spanX > 0.0 || spanY > 0.0)) {
@@ -2095,7 +2109,14 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
     }
   }
 
-  CadCoord::RebaseDrawingToLocalOrigin(st, &log);
+  // #94: was an UNCONDITIONAL RebaseDrawingToLocalOrigin. `MaybeRebaseLargeCoordinates`
+  // is the same call behind `.gs` load's two guards — it no-ops when the origin is already set (the
+  // large-coordinate case, where the header block above just established it) and no-ops below
+  // `kLargeCoordinateRebaseThreshold` (the small-drawing case, which is #94). So the composition is:
+  //   small drawing            -> header skipped, this skips  -> origin stays (0,0), nothing re-rounds
+  //   large, sane header       -> header fires, this no-ops   -> exactly one rebase
+  //   large, missing/bad header-> header skipped, this fires  -> exactly one rebase
+  CadCoord::MaybeRebaseLargeCoordinates(st, &log);
   {
     double rawMnX = 0., rawMxX = 0., rawMnY = 0., rawMxY = 0.;
     if (ComputeWorldExtents(st, &rawMnX, &rawMxX, &rawMnY, &rawMxY)) {
