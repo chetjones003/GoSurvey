@@ -25,6 +25,10 @@
 // (<cmath>), and deliberately in util/ rather than beside the UI that drives it: the state lives on
 // AppCommandState, and Commands may not include a UI header (architecture §11.1).
 #include "util/hoverdwell.hpp"
+// zoomframing::FrameWorldRect, the one camera-framing implementation behind ZOOMEXTENTS, the REQ-120
+// gesture, ZOOM WINDOW and the post-import fit (REQ-122). Pure and dependency-free, like the headers
+// above it.
+#include "ZoomFraming.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -3770,8 +3774,8 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
 /// entities discarded; 0 means the answer equals \ref ComputeWorldExtents.
 bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY,
                                double* outMxY, int* outSkipped);
-void ApplyViewportZoomToWorldRect(double mnX, double mxX, double mnY, double mxY, double* panX, double* panY,
-                                  float* zoom, int fbW, int fbH, float viewportAspect);
+// The camera side of zoom-extents is `zoomframing::FrameWorldRect` (ZoomFraming.hpp) — pure, shared
+// by every fit path, and tested there (REQ-122).
 
 bool ComputeCircumcircle(float ax, float ay, float bx, float by, float cx, float cy, float* ox, float* oy,
                          float* r);

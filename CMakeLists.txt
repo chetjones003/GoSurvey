@@ -501,6 +501,11 @@ if(GOSURVEY_BUILD_TESTS)
     tests/ZStoreTests.cpp
     tests/Ray3dTests.cpp
     tests/CameraTests.cpp
+    # REQ-122 zoom framing (GitHub issue #88, TASK-117). Header-only and pure, like OrthoConstrain
+    # above it: the ZOOMEXTENTS acceptance list (margin, aspect, no edge clipping, degenerate extents,
+    # never a NaN camera) is decided entirely in this arithmetic, and the deferred consumer that calls
+    # it cannot be reached from any test target (TASK-113 DEBT-1).
+    tests/ZoomFramingTests.cpp
     tests/TextStyleTests.cpp
     tests/OrthoConstrainTests.cpp
     tests/ColorContrastTests.cpp

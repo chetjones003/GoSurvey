@@ -14654,39 +14654,6 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
   return true;
 }
 
-void ApplyViewportZoomToWorldRect(double mnX, double mxX, double mnY, double mxY, double* panX, double* panY,
-                                  float* zoom, int fbW, int fbH, float viewportAspect) {
-  (void)fbW;
-  (void)fbH;
-  const float aspect = std::max(viewportAspect, 1e-6f);
-  constexpr float kMargin = 0.08f;
-  constexpr double kMinSpan = 1e-5;
-  double dmnX = mnX;
-  double dmxX = mxX;
-  double dmnY = mnY;
-  double dmxY = mxY;
-  double rw = dmxX - dmnX;
-  double rh = dmxY - dmnY;
-  if (rw < kMinSpan) {
-    dmnX -= kMinSpan;
-    dmxX += kMinSpan;
-    rw = dmxX - dmnX;
-  }
-  if (rh < kMinSpan) {
-    dmnY -= kMinSpan;
-    dmxY += kMinSpan;
-    rh = dmxY - dmnY;
-  }
-  const double cx = 0.5 * (dmnX + dmxX);
-  const double cy = 0.5 * (dmnY + dmxY);
-  const double denom = 2.0 * (1.0 - static_cast<double>(kMargin));
-  const double needHalfH = std::max(rh / denom, rw / (static_cast<double>(aspect) * denom));
-  constexpr float kOrthoHalfHRef = 50.f;
-  *panX = cx;
-  *panY = cy;
-  *zoom = std::clamp(kOrthoHalfHRef / static_cast<float>(std::max(needHalfH, 1e-8)), 1.e-9f, 1.e9f);
-}
-
 bool ParseAngleDegrees(const std::string& raw, float* degreesOut) {
   return ParseAngleDegreesInternal(raw, degreesOut);
 }
@@ -20416,8 +20383,14 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
       log.push_back("ZOOM EXTENTS — nothing to frame.");
       return;
     }
-    ApplyViewportZoomToWorldRect(mnX, mxX, mnY, mxY, &st.viewportPanX, &st.viewportPanY, &st.viewportZoom, fbW, fbH,
-                                 viewportAspect);
+    // REQ-122: framing REFUSES a rect that is not finite rather than writing a NaN camera, and a
+    // refusal states its reason (REQ-201). The current view is left exactly as it was.
+    if (!zoomframing::FrameWorldRect(mnX, mxX, mnY, mxY, viewportAspect, &st.viewportPanX, &st.viewportPanY,
+                                     &st.viewportZoom)) {
+      st.pendingZoomExtents = false;
+      log.push_back("ZOOM EXTENTS — the drawing extents are not a finite rectangle; view unchanged.");
+      return;
+    }
     BumpCadGpuCache(st);
     if (panX)
       *panX = st.viewportPanX;
@@ -20437,9 +20410,12 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
   }
   if (st.pendingZoomWindow) {
     st.pendingZoomWindow = false;
-    ApplyViewportZoomToWorldRect(static_cast<double>(st.pendingZoomMnX), static_cast<double>(st.pendingZoomMxX),
-                                 static_cast<double>(st.pendingZoomMnY), static_cast<double>(st.pendingZoomMxY),
-                                 &st.viewportPanX, &st.viewportPanY, &st.viewportZoom, fbW, fbH, viewportAspect);
+    if (!zoomframing::FrameWorldRect(static_cast<double>(st.pendingZoomMnX), static_cast<double>(st.pendingZoomMxX),
+                                     static_cast<double>(st.pendingZoomMnY), static_cast<double>(st.pendingZoomMxY),
+                                     viewportAspect, &st.viewportPanX, &st.viewportPanY, &st.viewportZoom)) {
+      log.push_back("ZOOM WINDOW — that window is not a finite rectangle; view unchanged.");
+      return;
+    }
     if (panX)
       *panX = st.viewportPanX;
     if (panY)

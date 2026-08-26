@@ -3862,11 +3862,11 @@ requirements is a planning failure, not a sign of rigor.
   - middle-drag pan still pans, in every space, unchanged;
   - a double-click with nothing to frame reports it and changes no view (REQ-201).
 - Owner-layer: UI (the gesture) — the extents computation and the camera write are existing Commands code
-- Status: accepted (2026-08-25); leaves GitHub issue #88 open — this REQ covers only #88's
-  "Middle Mouse"/"Architecture" acceptance sections, not its "ZOOMEXTENTS" section (margin,
-  aspect-ratio, degenerate/empty extents, NaN safety), which exercises the pre-existing
-  `ComputeRobustWorldExtents`/`ApplyViewportZoomToWorldRect` path unmodified and untested by
-  this REQ (D-2026-08-26-b)
+- Status: accepted (2026-08-25). This REQ covers only #88's "Middle Mouse"/"Architecture"
+  acceptance sections; #88's "ZOOMEXTENTS" section (margin, aspect-ratio, degenerate/empty extents,
+  NaN safety) exercised the pre-existing framing path unmodified and untested here (D-2026-08-26-b)
+  and is now **REQ-122**, which closes the issue alongside this one. The camera write named here as
+  `ApplyViewportZoomToWorldRect` is `zoomframing::FrameWorldRect` since REQ-122
 - Revisions: 2026-08-25 — accepted (D-2026-08-25-o, relabeled D-2026-08-26-a while merging PR #93
   into `beta` — that letter was already taken by REQ-119 above); asked for directly by the user,
   from AutoCAD's wheel double-click.
@@ -3942,6 +3942,75 @@ requirements is a planning failure, not a sign of rigor.
   prompt string and the selection-step predicate); Viewport (the existing raw-vs-snapped pick paths)
 - Status: accepted (2026-08-26)
 - Revisions: 2026-08-26 — accepted (D-2026-08-26-a); issue #91.
+
+### REQ-122 — ZOOMEXTENTS frames the drawing safely: margin, aspect, degenerate extents, no invalid camera (GitHub issue #88)
+- Purpose: REQ-120 gave the middle double-click its gesture and reused the existing framing path
+  untouched, which left the larger half of issue #88 — everything the framing itself promises —
+  asserted but never checked (D-2026-08-26-b). Checking it found one guarantee that does not hold:
+  a drawing with no extent (a single point, coincident objects, a hair-length line) frames at a
+  zoom around 4.6e6, a view a fifth of a thousandth of a unit tall, which is not a view of anything
+- Priority: should
+- Type: functional
+- Statement: **Framing a world rectangle onto the camera is one shared operation with four
+  guarantees.** It is the same operation for `ZOOMEXTENTS`/`ZE`, for REQ-120's middle double-click,
+  for `ZOOMWINDOW`/`ZW` and for the post-import fit — issue #88's Architecture section requires that
+  the command and the gesture cannot disagree, so there is one implementation and no second copy of
+  the arithmetic.
+
+  **(1) It fits, centred, with a margin.** The camera centres on the rectangle's midpoint, and the
+  binding axis leaves `8%` of the viewport free — half of it on each of that axis's two sides — so
+  geometry never touches an edge. Which axis binds is decided by the **viewport's aspect ratio**,
+  which is what keeps the other axis un-clipped rather than assuming a square viewport.
+
+  **(2) A degenerate rectangle still frames to something a user can work in.** Below a **minimum
+  framed span of one world unit** on either axis, the rectangle is expanded about its own centre to
+  that minimum. One unit is 1% of the view the application opens with (`zoom == 1` shows 100 units),
+  so a point, a pair of coincident objects, or a drawing measured in thousandths frames near — but
+  still tighter than — the default view, instead of at a magnification where the camera's own float
+  precision is the largest thing on screen.
+
+  The floor is **shared by `ZOOMWINDOW`**, deliberately and not as a side effect: the same "never
+  zoom to an unusable scale" guarantee applies to a window the user drags to nothing, and splitting
+  the rule per caller would be the second copy of the arithmetic this requirement exists to prevent.
+  Its cost is stated rather than hidden — no view can be framed tighter than one world unit tall.
+
+  **(3) A rectangle that is not finite frames nothing.** A NaN or infinite bound, or a bound pair
+  whose difference overflows, is **refused**: the camera is not written at all, so the previous view
+  survives intact and no NaN can reach it. The refusal states its reason (REQ-201). This is the only
+  way "invalid camera values are never produced" can be guaranteed — a clamp still writes a wrong
+  number.
+
+  **(4) Nothing to frame is not a failure.** An empty drawing produces no extents, and the caller
+  says so and changes no view — the behaviour REQ-120 already relies on, now stated.
+
+  **What counts as the drawing's extents is unchanged.** `ComputeRobustWorldExtents` and its
+  far-outlier rejection keep deciding that, in model and floating model space; paper space frames
+  the sheet (REQ-120). This requirement governs the **camera**, never the entity sweep.
+- Acceptance:
+  - the camera centres on the extents rectangle, and the whole rectangle is inside the visible
+    rectangle at any viewport aspect — wide, square or tall;
+  - the binding axis leaves exactly 8% of the viewport free and the other axis at least that much,
+    so no geometry touches an edge;
+  - a single point, coincident objects, a zero-height row and a hair-length line each produce a view
+    at least the minimum framed span across, centred on the content — not a magnification at float
+    precision;
+  - a drawing larger than the minimum span is framed exactly as before: the floor is invisible above
+    it;
+  - a non-finite bound, or a span that overflows to infinity, writes **no** camera value and leaves
+    the current view untouched, with a stated reason;
+  - every accepted rectangle produces finite `pan`/`zoom` values, across spans from `1e-9` to `1e12`
+    and aspects from `0.05` to `20`;
+  - a rectangle given with its corners in either order frames identically (`ZOOMWINDOW`'s corners
+    arrive in drag order);
+  - typed `ZOOMEXTENTS` and REQ-120's middle double-click produce the **same** camera, because they
+    call the same function;
+  - middle-drag pan is unchanged (REQ-045), and two middle drags in succession are two pans, not a
+    double-click.
+- Owner-layer: Commands (the framing arithmetic and the callers that consume it). No UI change —
+  REQ-120 already owns the gesture
+- Status: accepted (2026-08-26); closes the remainder of GitHub issue #88 alongside REQ-120
+- Revisions: 2026-08-26 — accepted (D-2026-08-26-c); raised by chetjones003 on issue #88 after PR #93
+  merged, asking for #88's ZOOMEXTENTS acceptance list to be verified rather than assumed.
 
 ---
 
@@ -4393,6 +4462,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-118 | Commands/Viewport | planned — `headless.regression-118-polyline-close-enter` (click the start vertex closes; Enter ends open with no closing segment; two vertices refuse to close; CLOSE/END still work; Esc leaves nothing; model, 3DPOLY and paper space each asserted). Same feature/issue (#80) as REQ-303 below, built independently on `beta` — see REQ-303's duplication note, D-2026-08-25-l | accepted |
 | REQ-119 | UI/Commands | **increment 1 done** (TASK-111) + **increment 2 done** (TASK-112) — `CommandLineTests [req119]` (the prompt→variants rule as a pure function: inline, grouped, mixed-case shortcut extraction incl. `No trim`→`N`, unclosed bracket, empty group, and a round-trip so parsing loses no text) + `headless.regression-119-variant-token-accepted` (the mechanism's three prompts) + `headless.regression-119-variant-coverage` (one assertion per marked-up token across CIRCLE/ROTATE/SCALE/TRIM/POLYLINE/FEATURELINE/ELEV, **plus a live refusal assertion for CIRCLE's bare `d`** — a value prefix, not a token, deliberately left unmarked so markup cannot manufacture a dead link) + manual GUI (links render, hover and click in BOTH the floating bar and the classic dock; a wrapping dock prompt keeps its links on the correct line with no horizontal overflow; **no log line is clickable**) | accepted |
 | REQ-120 | UI | **manual GUI only, and that is a real limitation, not a shortcut.** The headless driver models no framebuffer and never calls `ProcessPendingViewportZoom` (which early-returns on `fbW <= 0`), so it cannot reach any zoom behaviour — there is no existing zoom transcript in the corpus for the same reason. Covering this by transcript would mean giving the harness a synthetic viewport, which is harness work this requirement did not take on (recorded as TASK-113 DEBT-1). Verified instead by driving the real window: middle double-click frames the drawing in model space; it works MID-COMMAND with the active LINE's placed point surviving; the typed route still does not zoom mid-command (its text is consumed by the active command as point input — unchanged); paper space frames the sheet; middle-DRAG still pans. Leaves GitHub issue #88 open — covers only #88's Middle Mouse/Architecture sections, not its ZOOMEXTENTS acceptance list | accepted |
+| REQ-122 | Commands | done (GitHub issue #88, D-2026-08-26-c, TASK-117) — **automated**, which REQ-120 could not be. The framing arithmetic was hoisted into `src/commands/ZoomFraming.hpp` (pure + header-only, the `OrthoConstrain.hpp`/`ViewportPickPolicy.hpp` precedent) so `tests/ZoomFramingTests.cpp` can reach it without a framebuffer: 11 Catch2 cases / 231 assertions covering centring, fit-at-any-aspect, the 8% margin, aspect binding, the one-unit floor on degenerate extents, invariance above the floor, refusal on non-finite input, finiteness across spans 1e-9..1e12, corner order, and null out-params. 3 of the 11 proven red against the old constants before the fix. TASK-113's DEBT-1 is unchanged and still open — `ProcessPendingViewportZoom` itself remains unreachable from the harness — but every guarantee #88 asks for now lives in tested code. The state-dependent halves (empty drawing, live parity with the gesture, middle-drag pan) verified in the GUI, measured off the status-bar readout rather than eyeballed: typed ZOOMEXTENTS and the middle double-click produce identical world coordinates to 4 dp at two screen points. 622/622 ctest green | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |
