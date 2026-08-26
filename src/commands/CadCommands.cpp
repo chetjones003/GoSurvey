@@ -4257,6 +4257,7 @@ const CmdEntry kRegistry[] = {
     {"rotate", "ro", "Rotate objects"},
     {"scale", "sc", "Scale objects"},
     {"mirror", "mi", "Mirror objects across a line"},
+    {"array", "ar", "Rectangular or polar array of copies"},
     {"lengthen", "len", "Change an object's length (DElta/Percent/Total/DYnamic)"},
     {"extend", "ex", "Extend objects to a boundary edge"},
     {"break", "br", "Split an object at one or two picked points"},
@@ -4720,6 +4721,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "mirror") {
     StartMirrorCommand(st, log);
+    return true;
+  }
+  if (primary == "array") {
+    StartArrayCommand(st, log);
     return true;
   }
   if (primary == "lengthen") {
@@ -6321,6 +6326,39 @@ static void DropMirrorUnsupportedFromSelection(AppCommandState& st, std::vector<
                   " orientation cannot represent a reflection yet.");
 }
 
+/// REQ-304 ARRAY. Unlike MIRROR, ARRAY's duplication path (\c DuplicateCadSelectionTranslated /
+/// \c DuplicateCadSelectionRotated) already handles \c FilledRegion, so that type is NOT dropped
+/// here. Drops \c Mesh / \c PdfUnderlay for the same reasons \c DropMirrorUnsupportedFromSelection
+/// does (reference-only / no representable duplicate), calls the existing
+/// \c DropSurfacesFromSelectionForTransform for \c Surface, and — the D-2026-08-25-k decision —
+/// drops survey points: duplicating them needs an ID-conflict policy (the existing COPY/ROTATE-copy
+/// modal), and that modal resolves a single offset/rotation, not N array instances at once, so
+/// survey points are excluded rather than silently mis-duplicated or given a policy they were never
+/// built for.
+static void DropArrayUnsupportedFromSelection(AppCommandState& st, std::vector<std::string>& log) {
+  DropSurfacesFromSelectionForTransform(st, "ARRAY", log);
+  size_t mesh = 0, pdf = 0;
+  st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
+                                    [&](const SelectedEntity& e) {
+                                      if (e.type == SelectedEntity::Type::Mesh) { ++mesh; return true; }
+                                      if (e.type == SelectedEntity::Type::PdfUnderlay) { ++pdf; return true; }
+                                      return false;
+                                    }),
+                     st.selection.end());
+  if (mesh)
+    log.push_back("ARRAY — " + std::to_string(mesh) + " imported model(s) excluded: imported meshes" +
+                  " are reference-only geometry and are never edited.");
+  if (pdf)
+    log.push_back("ARRAY — " + std::to_string(pdf) + " PDF underlay(s) excluded: an underlay cannot" +
+                  " be duplicated yet.");
+  if (!st.selectedSurveyPointIndices.empty()) {
+    log.push_back("ARRAY — " + std::to_string(st.selectedSurveyPointIndices.size()) +
+                  " survey point(s) excluded: arraying survey points needs an ID-conflict policy" +
+                  " for many instances at once, which is not supported yet. Use COPY for survey points.");
+    st.selectedSurveyPointIndices.clear();
+  }
+}
+
 /// REQ-103 MIRROR. Same shape as \c DuplicateCadSelectionRotated — builds new entities reflected
 /// across the line through (x0,y0)-(x1,y1) and appends them, never mutating the source selection in
 /// place. MIRROR's default behavior always duplicates (erase-source, if requested, runs separately
@@ -7550,6 +7588,200 @@ bool HandleRotateText(AppCommandState& st, const std::string& lineIn, std::vecto
   return false;
 }
 
+// REQ-304 ARRAY -------------------------------------------------------------------------------
+
+static void ResetArrayDraft(AppCommandState& st) {
+  using AP = AppCommandState::ArrayPhase;
+  st.arrayPhase = AP::PickSelection;
+  st.arrayType = AppCommandState::ArrayType::Rectangular;
+  st.arrayCols = st.arrayRows = 0;
+  st.arrayColSpacing = st.arrayRowSpacing = 0.f;
+  st.arrayAnchorX = st.arrayAnchorY = 0.f;
+  st.arrayCenterX = st.arrayCenterY = 0.f;
+  st.arrayItemCount = 0;
+  st.arrayFillAngleDeg = 360.f;
+  st.arrayRotateItems = true;
+}
+
+static void FinishArrayCommand(AppCommandState& st, std::vector<std::string>& log, int instanceCount,
+                               const char* shapeDesc) {
+  using K = AppCommandState::Kind;
+  st.active = K::None;
+  ResetArrayDraft(st);
+  log.push_back("ARRAY — " + std::to_string(instanceCount) + " total instance(s)" +
+                (shapeDesc[0] ? std::string(" (") + shapeDesc + ")." : std::string(".")));
+}
+
+/// Rectangular commit: the original selection occupies cell (0,0); every other cell is produced by
+/// looping the EXISTING \c DuplicateCadSelectionTranslated (already used by COPY) — no new
+/// per-type duplication code. One \c PushUndoSnapshot for the whole grid (REQ-304 acceptance 8).
+static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>& log) {
+  const int cols = std::max(st.arrayCols, 1);
+  const int rows = std::max(st.arrayRows, 1);
+  PushUndoSnapshot(st, "Array-Rectangular");
+  for (int r = 0; r < rows; ++r) {
+    for (int c = 0; c < cols; ++c) {
+      if (r == 0 && c == 0)
+        continue;  // the original selection IS cell (0,0) — REQ-304 acceptance 3
+      DuplicateCadSelectionTranslated(st, static_cast<float>(c) * st.arrayColSpacing,
+                                      static_cast<float>(r) * st.arrayRowSpacing);
+    }
+  }
+  FinishArrayCommand(st, log, cols * rows,
+                     (std::to_string(cols) + " x " + std::to_string(rows)).c_str());
+}
+
+/// Polar commit: \p arrayRotateItems == true loops the EXISTING \c DuplicateCadSelectionRotated
+/// (already used by ROTATE's copy mode) — each instance is a genuine rotated duplicate, orientation
+/// included. \p arrayRotateItems == false needs every copy to KEEP the source orientation while
+/// still landing on the circle: reusing the existing selection-centroid helper
+/// (\c ComputeSelectionCentroidWorld, already used by ROTATE's reference path) as a single rigid-
+/// body anchor, rotating THAT ONE POINT about the center, and translating the whole selection by the
+/// resulting delta — so this reuses \c DuplicateCadSelectionTranslated too, with zero new per-type
+/// rotation-suppression logic (TASK-109 ASSUMPTION-2).
+static void CommitArrayPolar(AppCommandState& st, std::vector<std::string>& log) {
+  constexpr float kTwoPi = 6.28318530717958647692f;
+  const int n = std::max(st.arrayItemCount, 1);
+  // Full-turn fill angles divide by N (no duplicate instance at 0==360, REQ-304 acceptance 4);
+  // a partial arc divides by N-1 so the first and last instances land exactly at the two ends.
+  const bool fullTurn = std::fabs(std::fmod(st.arrayFillAngleDeg, 360.f)) < 1e-3f && n > 0;
+  const float fillRad = st.arrayFillAngleDeg * (kTwoPi / 360.f);
+  const float step = (n <= 1) ? 0.f : (fullTurn ? fillRad / static_cast<float>(n)
+                                                : fillRad / static_cast<float>(n - 1));
+  const float anchorX = st.arrayAnchorX, anchorY = st.arrayAnchorY;
+  PushUndoSnapshot(st, "Array-Polar");
+  for (int i = 1; i < n; ++i) {
+    const float ang = step * static_cast<float>(i);
+    if (st.arrayRotateItems) {
+      DuplicateCadSelectionRotated(st, st.arrayCenterX, st.arrayCenterY, ang);
+    } else {
+      float ax = anchorX, ay = anchorY;
+      RotateAroundBase(st.arrayCenterX, st.arrayCenterY, ang, &ax, &ay);
+      DuplicateCadSelectionTranslated(st, ax - anchorX, ay - anchorY);
+    }
+  }
+  FinishArrayCommand(st, log, n, "polar");
+}
+
+/// Typed command-line entry for ARRAY, mirroring \c HandleModifyText/\c HandleRotateText's shape —
+/// one phase-gated block per \ref AppCommandState::ArrayPhase. Interactive (click-driven) entry for
+/// the spatial phases (column/row spacing, polar center, fill angle) is handled by the viewport
+/// click path, not here — matching how CIRCLE/OFFSET/ROTATE split typed vs. clicked entry.
+bool HandleArrayText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log) {
+  using AP = AppCommandState::ArrayPhase;
+  using AT = AppCommandState::ArrayType;
+  const std::string line = StringUtil::trimCopy(lineIn);
+  const std::string low = StringUtil::toLowerAsciiCopy(line);
+
+  if (st.arrayPhase == AP::WaitType) {
+    if (low == "r" || low == "rectangular") {
+      st.arrayType = AT::Rectangular;
+      st.arrayPhase = AP::Rect_WaitColumns;
+      log.push_back("ARRAY Rectangular — number of columns:");
+      return true;
+    }
+    if (low == "p" || low == "polar") {
+      st.arrayType = AT::Polar;
+      st.arrayPhase = AP::Polar_WaitCenter;
+      log.push_back("ARRAY Polar — specify center point:");
+      return true;
+    }
+    return false;
+  }
+
+  if (st.arrayPhase == AP::Rect_WaitColumns) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !(v >= 1.f) || !std::isfinite(v)) {
+      log.push_back("ARRAY Rectangular — number of columns must be a positive whole number.");
+      return false;
+    }
+    st.arrayCols = static_cast<int>(v + 0.5f);
+    st.arrayPhase = AP::Rect_WaitColumnSpacing;
+    log.push_back("ARRAY Rectangular — column spacing (type a distance, or click):");
+    return true;
+  }
+  if (st.arrayPhase == AP::Rect_WaitColumnSpacing) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !std::isfinite(v)) {
+      log.push_back("ARRAY Rectangular — column spacing must be a finite number (may be negative).");
+      return false;
+    }
+    st.arrayColSpacing = v;
+    st.arrayPhase = AP::Rect_WaitRows;
+    log.push_back("ARRAY Rectangular — number of rows:");
+    return true;
+  }
+  if (st.arrayPhase == AP::Rect_WaitRows) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !(v >= 1.f) || !std::isfinite(v)) {
+      log.push_back("ARRAY Rectangular — number of rows must be a positive whole number.");
+      return false;
+    }
+    st.arrayRows = static_cast<int>(v + 0.5f);
+    st.arrayPhase = AP::Rect_WaitRowSpacing;
+    log.push_back("ARRAY Rectangular — row spacing (type a distance, or click):");
+    return true;
+  }
+  if (st.arrayPhase == AP::Rect_WaitRowSpacing) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !std::isfinite(v)) {
+      log.push_back("ARRAY Rectangular — row spacing must be a finite number (may be negative).");
+      return false;
+    }
+    st.arrayRowSpacing = v;
+    CommitArrayRectangular(st, log);
+    return true;
+  }
+
+  if (st.arrayPhase == AP::Polar_WaitCenter) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f))
+      return false;
+    st.arrayCenterX = px;
+    st.arrayCenterY = py;
+    st.arrayPhase = AP::Polar_WaitItemCount;
+    log.push_back("ARRAY Polar — number of items (total, including the original):");
+    return true;
+  }
+  if (st.arrayPhase == AP::Polar_WaitItemCount) {
+    float v = 0.f;
+    if (!ParseOneFloat(line, &v) || !(v >= 1.f) || !std::isfinite(v)) {
+      log.push_back("ARRAY Polar — number of items must be a positive whole number.");
+      return false;
+    }
+    st.arrayItemCount = static_cast<int>(v + 0.5f);
+    st.arrayPhase = AP::Polar_WaitAngle;
+    log.push_back("ARRAY Polar — angle to fill in degrees (type, or click) <360>:");
+    return true;
+  }
+  if (st.arrayPhase == AP::Polar_WaitAngle) {
+    float deg = 0.f;
+    if (!ParseAngleDegreesInternal(line, &deg) || !std::isfinite(deg)) {
+      log.push_back("ARRAY Polar — angle to fill must be a finite number of degrees.");
+      return false;
+    }
+    st.arrayFillAngleDeg = deg;
+    st.arrayPhase = AP::Polar_WaitRotateAnswer;
+    log.push_back("ARRAY Polar — rotate items? [Y]es / [N]o:");
+    return true;
+  }
+  if (st.arrayPhase == AP::Polar_WaitRotateAnswer) {
+    if (low == "y" || low == "yes") {
+      st.arrayRotateItems = true;
+      CommitArrayPolar(st, log);
+      return true;
+    }
+    if (low == "n" || low == "no") {
+      st.arrayRotateItems = false;
+      CommitArrayPolar(st, log);
+      return true;
+    }
+    return false;
+  }
+
+  return false;
+}
+
 static void ComputeArcSweepRad(double ox, double oy, double ax, double ay, double bx, double by, double cx,
                                double cy, double* startRad, double* sweepRad) {
   constexpr double twopi = 6.28318530717958647692;
@@ -8482,7 +8714,10 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   auto finishBox = [&]() {
     const bool inclSurvey = (st.active == AppCommandState::Kind::None || st.active == K::Move ||
                              st.active == K::Copy || st.active == K::Rotate || st.active == K::Scale ||
-                             st.active == K::Mirror || st.active == K::Align || st.active == K::Stretch);
+                             st.active == K::Mirror || st.active == K::Align || st.active == K::Stretch ||
+                             // REQ-304: included so DropArrayUnsupportedFromSelection can log the
+                             // exclusion by name (REQ-201) rather than silently never selecting them.
+                             st.active == K::Array);
     ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, wx, wy, windowSelectionSubtract,
                              fenceLeftToRightWindowMode, inclSurvey, boxSelCam, st.uiViewportWidthPx,
                              st.uiViewportHeightPx);
@@ -8868,15 +9103,12 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
 
   if (st.active == K::Move || st.active == K::Copy) {
     if (st.modifyPhase == MP::PickSelection) {
-      if (st.selBoxWaitingSecond) {
+      // This fix: a finished box merges into the accumulating selection and the phase stays put —
+      // it no longer advances here. Advancing (to NeedBase) happens only on Enter, in
+      // ProcessCommandLineSubmit's matching PickSelection branch, which is also where an entity
+      // click (ViewportClickRoute::SelectionAccumulate, CadUi.cpp) lands without a box at all.
+      if (st.selBoxWaitingSecond)
         finishBox();
-        if (st.selection.empty() && st.selectedSurveyPointIndices.empty())
-          log.push_back("Nothing selected — pick two corners again.");
-        else {
-          st.modifyPhase = MP::NeedBase;
-          log.push_back(st.active == K::Copy ? "COPY — base point:" : "MOVE — base point:");
-        }
-      }
       return;
     }
     if (st.modifyPhase == MP::NeedBase) {
@@ -8899,6 +9131,53 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
         st.modifyPhase = MP::NeedBase;
         log.push_back("MOVE complete — base point (ESC to exit):");
       }
+    }
+    return;
+  }
+
+  // REQ-304 ARRAY. PickSelection is the click-or-window-select shape MOVE/COPY share (this fix); the
+  // interactive spatial phases (column/row spacing, polar center, fill angle) read the click the
+  // same way OFFSET's distance-or-click and ROTATE's angle-by-point do. Typed-only phases (WaitType,
+  // the two counts, rotate Yes/No) have no branch here — \c ViewportClickRouteFor routes them to
+  // \c Ignore.
+  if (st.active == K::Array) {
+    using AP = AppCommandState::ArrayPhase;
+    if (st.arrayPhase == AP::PickSelection) {
+      // A finished box merges into the selection and the phase stays put; DropArrayUnsupportedFrom-
+      // Selection and the WaitType advance now happen only on Enter (ProcessCommandLineSubmit).
+      if (st.selBoxWaitingSecond)
+        finishBox();
+      return;
+    }
+    if (st.arrayPhase == AP::Rect_WaitColumnSpacing) {
+      st.arrayColSpacing = wx - st.arrayAnchorX;
+      st.arrayPhase = AP::Rect_WaitRows;
+      log.push_back("ARRAY Rectangular — number of rows:");
+      return;
+    }
+    if (st.arrayPhase == AP::Rect_WaitRowSpacing) {
+      st.arrayRowSpacing = wy - st.arrayAnchorY;
+      CommitArrayRectangular(st, log);
+      return;
+    }
+    if (st.arrayPhase == AP::Polar_WaitCenter) {
+      st.arrayCenterX = wx;
+      st.arrayCenterY = wy;
+      st.arrayPhase = AP::Polar_WaitItemCount;
+      log.push_back("ARRAY Polar — number of items (total, including the original):");
+      return;
+    }
+    if (st.arrayPhase == AP::Polar_WaitAngle) {
+      // Interactive fill-angle entry: the absolute angle (standard math convention, CCW from +X)
+      // from center to the click, taken directly as the sweep magnitude. Typed entry
+      // (HandleArrayText) sets the same field from a plain number of degrees.
+      float deg = std::atan2(wy - st.arrayCenterY, wx - st.arrayCenterX) * (180.f / 3.14159265358979323846f);
+      if (deg < 0.f)
+        deg += 360.f;
+      st.arrayFillAngleDeg = deg;
+      st.arrayPhase = AP::Polar_WaitRotateAnswer;
+      log.push_back("ARRAY Polar — rotate items? [Y]es / [N]o:");
+      return;
     }
     return;
   }
@@ -8944,15 +9223,10 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
 
   if (st.active == K::Scale) {
     if (st.modifyPhase == MP::PickSelection) {
-      if (st.selBoxWaitingSecond) {
+      // This fix: stays in PickSelection after a box finishes; Enter (ProcessCommandLineSubmit)
+      // advances to NeedBase.
+      if (st.selBoxWaitingSecond)
         finishBox();
-        if (st.selection.empty() && st.selectedSurveyPointIndices.empty())
-          log.push_back("Nothing selected — pick two corners again.");
-        else {
-          st.modifyPhase = MP::NeedBase;
-          log.push_back("SCALE — base point:");
-        }
-      }
       return;
     }
     if (st.modifyPhase == MP::NeedBase) {
@@ -9013,15 +9287,10 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
 
   if (st.active == K::Rotate) {
     if (st.rotatePhase == RP::PickSelection) {
-      if (st.selBoxWaitingSecond) {
+      // This fix: stays in PickSelection after a box finishes; Enter (ProcessCommandLineSubmit)
+      // advances to NeedBase.
+      if (st.selBoxWaitingSecond)
         finishBox();
-        if (st.selection.empty() && st.selectedSurveyPointIndices.empty())
-          log.push_back("Nothing selected — pick two corners again.");
-        else {
-          st.rotatePhase = RP::NeedBase;
-          log.push_back("ROTATE — base point:");
-        }
-      }
       return;
     }
     if (st.rotatePhase == RP::NeedBase) {
@@ -9079,15 +9348,10 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
 
   if (st.active == K::Mirror) {
     if (st.mirrorPhase == MirP::PickSelection) {
-      if (st.selBoxWaitingSecond) {
+      // This fix: stays in PickSelection after a box finishes; Enter (ProcessCommandLineSubmit)
+      // advances to NeedP1.
+      if (st.selBoxWaitingSecond)
         finishBox();
-        if (st.selection.empty() && st.selectedSurveyPointIndices.empty())
-          log.push_back("Nothing selected — pick two corners again.");
-        else {
-          st.mirrorPhase = MirP::NeedP1;
-          log.push_back("MIRROR — specify first point of mirror line:");
-        }
-      }
       return;
     }
     if (st.mirrorPhase == MirP::NeedP1) {
@@ -16399,6 +16663,7 @@ void ResetCadToolStateToIdle(AppCommandState& st) {
   // which now owns every modify command's draft state (TASK-099 F4) — duplicated here previously.
   ResetAllCadDraftTools(st);
   ResetModifyRotateDraft(st);
+  ResetArrayDraft(st);
   st.selBoxWaitingSecond = false;
   st.copySurveyDupModalOpen = false;
   st.copySurveyDupModalOpenRequested = false;
@@ -20171,7 +20436,8 @@ void StartMoveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("MOVE — specify base point (click or type X,Y). ESC to cancel.");
   } else
     log.push_back(
-        "MOVE — click two corners to window-select objects, then base point and destination. ESC cancels.");
+        "MOVE — click objects or drag a selection window (Enter when done), then base point and destination. "
+        "ESC cancels.");
 }
 
 void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -20190,7 +20456,8 @@ void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("COPY — specify base point (click or type X,Y). ESC to cancel.");
   } else
     log.push_back(
-        "COPY — click two corners to window-select objects, then base point and destination. ESC cancels.");
+        "COPY — click objects or drag a selection window (Enter when done), then base point and destination. "
+        "ESC cancels.");
 }
 
 void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -20217,7 +20484,8 @@ void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("ROTATE — specify base point (click or type X,Y). ESC to cancel.");
   } else
     log.push_back(
-        "ROTATE — window-select (two clicks), base point, then ° clockwise from north / DMS, or R reference. ESC.");
+        "ROTATE — click objects or drag a selection window (Enter when done), then base point, then ° clockwise "
+        "from north / DMS, or R reference. ESC.");
 }
 
 void StartScaleCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -20233,8 +20501,9 @@ void StartScaleCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("SCALE — specify base point (click or type X,Y). ESC to cancel.");
   } else
     log.push_back(
-        "SCALE — window-select (two clicks), base point, then scale: second point or factor (>0), or R for "
-        "two-point reference length then new length (type or two picks). ESC cancels.");
+        "SCALE — click objects or drag a selection window (Enter when done), then base point, then scale: "
+        "second point or factor (>0), or R for two-point reference length then new length (type or two picks). "
+        "ESC cancels.");
 }
 
 void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -20260,7 +20529,35 @@ void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.mirrorPhase = AppCommandState::MirrorPhase::NeedP1;
     log.push_back("MIRROR — specify first point of mirror line (click or type X,Y). ESC to cancel.");
   } else
-    log.push_back("MIRROR — window-select (two clicks), then first and second point of the mirror line. ESC.");
+    log.push_back(
+        "MIRROR — click objects or drag a selection window (Enter when done), then first and second point of "
+        "the mirror line. ESC.");
+}
+
+/// REQ-304. Model-space only (paper-space arraying is out of scope, like path arrays) — mirrors
+/// MOVE/COPY/ROTATE's own Start* shape: a pre-existing selection skips straight to choosing the
+/// array type, otherwise the command opens with the same click-or-window-select every sibling
+/// modify command uses (this fix, D-2026-08-25-l).
+void StartArrayCommand(AppCommandState& st, std::vector<std::string>& log) {
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
+    log.push_back("ARRAY — not available in paper space; switch to model space or a floating viewport.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.active = AppCommandState::Kind::Array;
+  st.lastCommand = AppCommandState::Kind::Array;
+  ResetArrayDraft(st);
+  st.selBoxWaitingSecond = false;
+  DropArrayUnsupportedFromSelection(st, log);
+  if (!st.selection.empty()) {
+    st.arrayPhase = AppCommandState::ArrayPhase::WaitType;
+    ComputeSelectionCentroidWorld(st, &st.arrayAnchorX, &st.arrayAnchorY);
+    log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
+  } else
+    log.push_back(
+        "ARRAY — click objects or drag a selection window (Enter when done), then choose [R]ectangular / "
+        "[P]olar. ESC cancels.");
 }
 
 void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -20304,6 +20601,8 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
     log.push_back("ROTATE canceled.");
   else if (st.active == AppCommandState::Kind::Scale)
     log.push_back("SCALE canceled.");
+  else if (st.active == AppCommandState::Kind::Array)
+    log.push_back("ARRAY canceled.");
   else if (st.active == AppCommandState::Kind::Mirror)
     log.push_back("MIRROR canceled.");
   else if (st.active == AppCommandState::Kind::Lengthen)
@@ -20364,6 +20663,7 @@ void CancelActiveCommand(AppCommandState& st, std::vector<std::string>& log) {
   // which now owns every modify command's draft state (TASK-099 F4) — duplicated here previously.
   ResetAllCadDraftTools(st);
   ResetModifyRotateDraft(st);
+  ResetArrayDraft(st);
   st.selBoxWaitingSecond = false;
   st.copySurveyDupModalOpen = false;
   st.copySurveyDupModalOpenRequested = false;
@@ -20834,6 +21134,53 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         log.push_back("OFFSET — pick which side to offset.");
       else
         log.push_back("OFFSET — select an entity in the viewport.");
+    } else if (st.active == K::Move || st.active == K::Copy) {
+      // This fix: PickSelection no longer auto-advances when a box finishes (SubmitViewportPickImpl
+      // above), so Enter is what confirms the accumulated selection and moves on — same shape ALIGN
+      // already used for its own selection step.
+      using MP = AppCommandState::ModifyPhase;
+      if (st.modifyPhase == MP::PickSelection) {
+        if (st.selection.empty() && st.selectedSurveyPointIndices.empty())
+          log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
+        else {
+          st.modifyPhase = MP::NeedBase;
+          log.push_back(st.active == K::Copy ? "COPY — base point:" : "MOVE — base point:");
+        }
+      }
+    } else if (st.active == K::Scale) {
+      using MP = AppCommandState::ModifyPhase;
+      if (st.modifyPhase == MP::PickSelection) {
+        if (st.selection.empty() && st.selectedSurveyPointIndices.empty())
+          log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
+        else {
+          st.modifyPhase = MP::NeedBase;
+          log.push_back("SCALE — base point:");
+        }
+      }
+    } else if (st.active == K::Rotate) {
+      using RP = AppCommandState::RotatePhase;
+      if (st.rotatePhase == RP::PickSelection) {
+        if (st.selection.empty() && st.selectedSurveyPointIndices.empty())
+          log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
+        else {
+          st.rotatePhase = RP::NeedBase;
+          log.push_back("ROTATE — base point:");
+        }
+      }
+    } else if (st.active == K::Array) {
+      using AP = AppCommandState::ArrayPhase;
+      if (st.arrayPhase == AP::PickSelection) {
+        // Matches the old box-finish sequence exactly (finishBox(); DropArrayUnsupportedFrom-
+        // Selection(); check st.selection.empty()), just triggered by Enter instead.
+        DropArrayUnsupportedFromSelection(st, log);
+        if (st.selection.empty())
+          log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
+        else {
+          st.arrayPhase = AP::WaitType;
+          ComputeSelectionCentroidWorld(st, &st.arrayAnchorX, &st.arrayAnchorY);
+          log.push_back("ARRAY — select array type: [R]ectangular / [P]olar:");
+        }
+      }
     } else if (st.active == K::Align) {
       using AP = AppCommandState::AlignPhase;
       if (st.alignPhase == AP::PickSelection) {
@@ -20853,11 +21200,24 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         ExecuteAlignCommand(st, log);
       }
     } else if (st.active == K::Mirror) {
-      // A blank Enter is exactly how MIRROR's "Erase source objects? [Yes/No] <N>" prompt is meant
-      // to be answered (the documented default, D-2026-08-23-j) — but this whole block always
-      // `return`s below, so without this case the empty line would be swallowed here and never
-      // reach HandleMirrorText's own (identical) empty-string-defaults-to-No handling further down.
-      HandleMirrorText(st, "", log);
+      using MirP = AppCommandState::MirrorPhase;
+      if (st.mirrorPhase == MirP::PickSelection) {
+        // This fix: same shape as MOVE/COPY/SCALE/ROTATE/ARRAY above — Enter confirms the
+        // accumulated selection instead of the box auto-advancing.
+        if (st.selection.empty() && st.selectedSurveyPointIndices.empty())
+          log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
+        else {
+          st.mirrorPhase = MirP::NeedP1;
+          log.push_back("MIRROR — specify first point of mirror line:");
+        }
+      } else {
+        // A blank Enter past selection is exactly how MIRROR's "Erase source objects? [Yes/No] <N>"
+        // prompt is meant to be answered (the documented default, D-2026-08-23-j) — but this whole
+        // block always `return`s below, so without this case the empty line would be swallowed here
+        // and never reach HandleMirrorText's own (identical) empty-string-defaults-to-No handling
+        // further down.
+        HandleMirrorText(st, "", log);
+      }
     } else if (st.active == K::Lengthen) {
       using LP = AppCommandState::LengthenPhase;
       if (st.lengthenPhase == LP::WaitSelectOrMode) {
@@ -21516,7 +21876,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     using AP = AppCommandState::AlignPhase;
     // Empty Enter is handled above; PickSelection accepts no typed coordinates.
     if (st.alignPhase == AP::PickSelection) {
-      log.push_back("ALIGN — window-select entities in the drawing, then press Enter.");
+      log.push_back("ALIGN — click objects or drag a selection window in the drawing, then press Enter.");
       return;
     }
     if (line.empty()) {
@@ -21584,6 +21944,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     log.push_back("Could not parse MIRROR input — see command hints.");
+    return;
+  }
+
+  if (st.active == AppCommandState::Kind::Array) {
+    if (HandleArrayText(st, line, log)) {
+      return;
+    }
+    log.push_back("Could not parse ARRAY input — see command hints.");
     return;
   }
 
@@ -22197,7 +22565,7 @@ const char* ModifyCommandFooterHint(const AppCommandState& st) {
   if (st.active != K::Move && st.active != K::Copy)
     return "";
   if (st.modifyPhase == MP::PickSelection)
-    return "MOVE/COPY: Click opposite corners of selection window | ESC cancel";
+    return "MOVE/COPY: Click objects or drag a window, Enter when done | ESC cancel";
   if (st.modifyPhase == MP::NeedBase)
     return "MOVE/COPY: Base point — click or X,Y | ESC cancel";
   if (st.modifyPhase == MP::NeedDestination)
@@ -22212,7 +22580,7 @@ const char* RotateCommandFooterHint(const AppCommandState& st) {
     return "";
   switch (st.rotatePhase) {
   case RP::PickSelection:
-    return "ROTATE: Window-select — click two corners | ESC cancel";
+    return "ROTATE: Click objects or drag a window, Enter when done | ESC cancel";
   case RP::NeedBase:
     return "ROTATE: Base point — click or X,Y | ESC cancel";
   case RP::NeedAngleOrReference:
@@ -22238,7 +22606,7 @@ const char* ScaleCommandFooterHint(const AppCommandState& st) {
   if (st.active != K::Scale)
     return "";
   if (st.modifyPhase == MP::PickSelection)
-    return "SCALE: Window-select — click two corners | ESC cancel";
+    return "SCALE: Click objects or drag a window, Enter when done | ESC cancel";
   if (st.modifyPhase == MP::NeedBase)
     return "SCALE: Base point — click or X,Y | ESC cancel";
   if (st.modifyPhase == MP::NeedDestination) {
@@ -23018,7 +23386,7 @@ void StartAlignCommand(AppCommandState& st, std::vector<std::string>& log) {
     st.alignHasSelection = false;
     st.alignPhase        = AppCommandState::AlignPhase::PickSelection;
     st.selBoxWaitingSecond = false;
-    log.push_back("ALIGN — window-select entities to transform, then press Enter. ESC cancels.");
+    log.push_back("ALIGN — click objects or drag a selection window to transform, then press Enter. ESC cancels.");
   }
 }
 
@@ -23190,7 +23558,7 @@ const char* AlignCommandFooterHint(const AppCommandState& st) {
     return "";
   using AP = AppCommandState::AlignPhase;
   if (st.alignPhase == AP::PickSelection)
-    return "ALIGN: window-select entities to transform, then press Enter";
+    return "ALIGN: click objects or window, then press Enter";
   if (st.alignPhase == AP::PickSrc)
     return "ALIGN: pick SOURCE survey point in drawing (snap to it) — Enter to solve";
   return "ALIGN: pick/type DESTINATION real-world X,Y for this source point";

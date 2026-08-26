@@ -1519,6 +1519,93 @@ requirements is a planning failure, not a sign of rigor.
 
 ---
 
+### REQ-304 — ARRAY command: rectangular and polar (GitHub issue #87)
+- Purpose: users need to place regular grids and circular patterns of existing drawing objects
+  (survey monument symbols, culvert/utility grids, radial layouts) without manually repeating
+  COPY. ARRAY generates the pattern interactively with a live preview, as a single undoable step.
+- Priority: should
+- Type: functional
+- Statement: a new `ARRAY` command follows the shape of the existing MOVE/COPY/ROTATE/SCALE/MIRROR
+  modify commands (`AppCommandState::Kind`, `ModifyPhase`-style sub-state, `TransformPreview`'s
+  ghost-preview batch, `CommandInputHint`'s per-phase cursor/command-line prompt, one
+  `PushUndoSnapshot` for the whole command). Flow: (1) select objects — reusing the existing
+  modify-command selection shape (a pre-existing selection is used as-is; otherwise clicking
+  individual entities and/or dragging a window/crossing box, both accumulating additively into one
+  growing selection — Shift-click or a subtracting crossing box removes — confirmed by pressing
+  Enter, "ESC cancels" at any point before that); (2) choose array type via the existing clickable-command-variant mechanism
+  (`[R]ectangular` / `[P]olar` tokens, keyboard letter or click, both routed through the same command
+  text handler); (3a) **Rectangular** — columns, column spacing, rows, row spacing, each enterable by
+  typed number or by an interactive cursor-driven distance, with the grid preview updating live as
+  each value changes; the original selection occupies grid cell (0,0); (3b) **Polar** — center point
+  (via the normal point-input path: click, typed X,Y, object snap), number of items (**total**
+  instances including the original — "8" produces 8 total, not 8 additional), angle to fill (360°
+  = full circle, a partial angle = an evenly spaced arc over that sweep, following the existing
+  CW-from-north angle convention), and a Rotate-items Yes/No toggle (Yes: each copy's orientation
+  turns with its position, reusing `DuplicateCadSelectionRotated`'s rotation; No: each copy keeps the
+  source orientation and only its reference point moves to the computed position) — defaulting to
+  the same default ROTATE's own copy-mode implies (rotate = Yes), with the polar preview updating
+  live as center/count/angle/rotate change. (4) Confirm commits every instance in one
+  `PushUndoSnapshot`; ESC at any point before confirmation cancels with no geometry created and the
+  original selection untouched. Array instances are independent duplicated entities (not a
+  persistent associative array object) — reusing the existing `DuplicateCadSelection{Translated,
+  Rotated}`-style per-type duplication, extended to loop per instance instead of producing one
+  copy — consistent with REQ-103 MIRROR/ROTATE-copy's existing "duplicate, never mutate the
+  source" shape. Path arrays and post-creation associative editing are out of scope (issue #87).
+  Survey points are **excluded** from the array selection, filtered the same way `Surface` is
+  already dropped from MOVE/ROTATE/SCALE (`DropSurfacesFromSelectionForTransform`'s pattern) — an
+  array-sized batch of survey points cannot go through the existing single-offset ID-conflict modal
+  (COPY/ROTATE-copy), and building N-way ID resolution is new scope this issue does not require
+  (D-2026-08-25, confirmed with the user). Entity types the modify commands already exclude
+  (Surface, Mesh, PdfUnderlay) are excluded from ARRAY for the same stated reasons.
+- Acceptance:
+  1. `ARRAY` is launchable by typed command and offers `[R]ectangular`/`[P]olar` as both a typed
+     letter and a clickable command-line token, both invoking the same start-array-type function;
+  2. object selection accepts a pre-existing selection, individual entity/annotation/fill/survey-
+     point clicks, and/or a window/crossing box — any mix accumulates into one selection until
+     Enter confirms it, matching MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN's own selection step
+     (D-2026-08-25-l); Surface/Mesh/PdfUnderlay/survey points are dropped from the array selection
+     with a log line naming the count and reason, matching the existing MIRROR/MOVE exclusion
+     wording style;
+  3. Rectangular: columns, column spacing, rows, row spacing are each settable by typed number or
+     interactive cursor distance; confirming produces `columns × rows` total instances positioned
+     on a regular grid, cell (0,0) at the original selection's position, with correct spacing along
+     both axes for both positive and negative spacing (grows the opposite direction);
+  4. Polar: center point accepts click, typed X,Y, and object snap; item count N produces exactly N
+     total instances (the original plus N-1 new copies) evenly spaced across the fill angle;
+     360° places the last instance at 360°/N before wrapping (no duplicate instance at 0°==360°);
+     a partial angle (e.g. 180°) spaces N instances evenly across that arc; Rotate-items = Yes turns
+     each copy's orientation with its position, Rotate-items = No keeps every copy at the source
+     orientation;
+  5. the preview (ghost lines/circles via `TransformPreview`, matching MOVE/COPY's existing preview
+     coverage — LineSeg/Circle/Arc/Ellipse/Polyline/FeatureLine) updates immediately as any
+     parameter changes and commits no geometry until confirmed;
+  6. `CommandInputHint` returns an ARRAY-specific prompt for every phase (select objects, array
+     type, columns, column spacing, rows, row spacing, center point, item count, angle to fill,
+     rotate behavior), matching the existing per-phase-hint pattern;
+  7. ESC at any phase before confirmation cancels with a log line (matching `CancelActiveCommand`'s
+     existing per-command messages), discards the preview, and leaves the original geometry and
+     selection unchanged — no partial array remains;
+  8. confirming an array pushes exactly one undo snapshot for the whole operation; Ctrl+Z after a
+     completed array removes every generated instance and leaves the source objects exactly as
+     before the command; the source objects are never deleted or modified by ARRAY;
+  9. every entity type MOVE/COPY can duplicate (LineSeg, Circle, Arc, Ellipse, Polyline, Annotation,
+     FilledRegion, FeatureLine) is duplicated correctly by ARRAY, including types not covered by
+     the live preview (Annotation, FilledRegion — consistent with MOVE/COPY's own preview gap).
+- Owner-layer: Commands (`CadCommands.cpp`/`.hpp`), Viewport (`TransformPreview.cpp`, cursor hint)
+- Status: accepted
+- Revisions: 2026-08-25 — initial (GitHub issue #87, D-2026-08-25-k). Survey-point exclusion from
+  the array selection was confirmed with the user ahead of implementation (see Statement).
+  2026-08-25 — Acceptance 2 amended (D-2026-08-25-l): the user reported ARRAY's opening
+  "select objects" step only accepted a two-corner window/crossing box, with no way to click an
+  individual object and no way to keep selecting after one box — a real gap against how every other
+  CAD selection step in this app already behaves, not a spec-compliant report. Rather than fix ARRAY
+  alone (which was accurately matching MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN's own identical
+  limitation at the time), the user chose to fix the shared selection shape across all of them in
+  one pass. See REQ-103's own revision note for the shared mechanism; STRETCH is deliberately
+  excluded (REQ-103 step 5 — its crossing box is load-bearing geometry, not just an object filter).
+
+---
+
 ## 3D model space requirements
 
 > These cover the move from a plan-view 2D drawing surface to a true 3D model space
@@ -3305,7 +3392,7 @@ requirements is a planning failure, not a sign of rigor.
     not spec'd in advance of that command's own design pass.
 - Owner-layer: Commands/Domain/UI
 - Status: accepted
-- Revisions: 2026-08-23 — catalogued, proposed (D-2026-08-23-i). 2026-08-23 — accepted; sequenced into 8 increments starting with MIRROR; MIRROR's acceptance conditions written; MIRRTEXT-off and erase-default-No confirmed with the user (D-2026-08-23-j, TASK-094). 2026-08-24 — LENGTHEN's (step 2) acceptance conditions written (D-2026-08-24-a, TASK-095). 2026-08-24 — EXTEND's (step 3) acceptance conditions written; analytic-over-tessellated boundary intersection and paper-space-included both confirmed with the user (D-2026-08-24-b, TASK-096). 2026-08-24 — BREAK's (step 4) acceptance conditions written; Circle/full-circle-Arc target eligibility (converts to Arc) and closed-Polyline target eligibility (splits open) both confirmed with the user (D-2026-08-24-c, TASK-097). 2026-08-24 — STRETCH's (step 5) acceptance conditions written; full AutoCAD-parity arc partial-stretch (center/radius recompute preserving included angle) and full paper-space vertex-level parity both confirmed with the user (D-2026-08-24-d, TASK-098). 2026-08-24 — after the first hand-driven GUI pass: LENGTHEN's valueless first pick amended from a refusal to a latch-and-prompt (the ribbon button was a dead end), and a live removed-span preview added to BREAK's acceptance (D-2026-08-24-e, TASK-100, TASK-101). 2026-08-24 — LENGTHEN's default sub-mode changed from DElta to Total, so pick-then-type-the-new-length is the out-of-the-box flow (D-2026-08-24-f, TASK-100). 2026-08-24 — FILLET's and CHAMFER's (step 6a/6b) acceptance conditions written; full AutoCAD-parity scope (Line/Arc/Polyline-segment eligibility, a Trim/No-trim toggle shared between the two commands, full paper-space parity, and both Distance/Distance and Distance/Angle chamfer input) confirmed with the user (D-2026-08-24-g, TASK-102/TASK-103).
+- Revisions: 2026-08-23 — catalogued, proposed (D-2026-08-23-i). 2026-08-23 — accepted; sequenced into 8 increments starting with MIRROR; MIRROR's acceptance conditions written; MIRRTEXT-off and erase-default-No confirmed with the user (D-2026-08-23-j, TASK-094). 2026-08-24 — LENGTHEN's (step 2) acceptance conditions written (D-2026-08-24-a, TASK-095). 2026-08-24 — EXTEND's (step 3) acceptance conditions written; analytic-over-tessellated boundary intersection and paper-space-included both confirmed with the user (D-2026-08-24-b, TASK-096). 2026-08-24 — BREAK's (step 4) acceptance conditions written; Circle/full-circle-Arc target eligibility (converts to Arc) and closed-Polyline target eligibility (splits open) both confirmed with the user (D-2026-08-24-c, TASK-097). 2026-08-24 — STRETCH's (step 5) acceptance conditions written; full AutoCAD-parity arc partial-stretch (center/radius recompute preserving included angle) and full paper-space vertex-level parity both confirmed with the user (D-2026-08-24-d, TASK-098). 2026-08-24 — after the first hand-driven GUI pass: LENGTHEN's valueless first pick amended from a refusal to a latch-and-prompt (the ribbon button was a dead end), and a live removed-span preview added to BREAK's acceptance (D-2026-08-24-e, TASK-100, TASK-101). 2026-08-24 — LENGTHEN's default sub-mode changed from DElta to Total, so pick-then-type-the-new-length is the out-of-the-box flow (D-2026-08-24-f, TASK-100). 2026-08-24 — FILLET's and CHAMFER's (step 6a/6b) acceptance conditions written; full AutoCAD-parity scope (Line/Arc/Polyline-segment eligibility, a Trim/No-trim toggle shared between the two commands, full paper-space parity, and both Distance/Distance and Distance/Angle chamfer input) confirmed with the user (D-2026-08-24-g, TASK-102/TASK-103). 2026-08-25 — the "select objects" shape MOVE/COPY/ROTATE/SCALE/MIRROR established and this REQ's later steps (STRETCH, ARRAY, ALIGN — REQ-039) all reused was two-corner window/crossing box only: no individual-entity click, no accumulating across more than one box, no confirm-on-Enter. A user report against ARRAY (REQ-304) found this the same real gap in every one of them, not ARRAY alone; the shared shape is now click-and/or-box, additive, accumulating until Enter confirms it (D-2026-08-25-l) — applied to MOVE, COPY, SCALE, ROTATE, MIRROR, and ALIGN. STRETCH (step 5) is deliberately excluded: its crossing box is load-bearing geometry (which vertices move), not just an object filter, so it keeps the original box-only shape.
 
 ### REQ-104 — Draw-command completeness
 - Purpose: SPLINE, XLINE, RAY, DONUT, SOLID, REVCLOUD, WIPEOUT, and MLINE have no command at all

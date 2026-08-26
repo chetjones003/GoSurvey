@@ -19,7 +19,9 @@ inline bool ViewportUseRawWorldForSelectionRectPick(const AppCommandState& cmd) 
          // fence corners must come from the same unsnapped drag coordinates (TASK-099 F1).
          (cmd.active == K::Mirror && cmd.mirrorPhase == MirP::PickSelection) ||
          (cmd.active == K::Stretch && cmd.modifyPhase == MP::PickSelection) ||
-         (cmd.active == K::Rotate && cmd.rotatePhase == RP::PickSelection);
+         (cmd.active == K::Rotate && cmd.rotatePhase == RP::PickSelection) ||
+         // REQ-304: ARRAY opens with the same window-select MOVE/COPY/SCALE do.
+         (cmd.active == K::Array && cmd.arrayPhase == AppCommandState::ArrayPhase::PickSelection);
 }
 
 /// What a left-click in the **model-space** viewport means for the currently active command.
@@ -47,6 +49,17 @@ enum class ViewportClickRoute : std::uint8_t {
   IdleSelection,
   /// Fence: arm the first corner if none is armed, otherwise close the box.
   SelectionBox,
+  /// MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN/ARRAY's "select objects" step (this fix, GitHub issue
+  /// report "fix the array command"): a click toggles one entity/annotation/fill/survey point into
+  /// the accumulating selection (additive; Shift removes), same as idle click-select but without
+  /// idle's grip/double-click-edit side effects; a click on empty space arms or closes the
+  /// window/crossing fence, which merges into the same accumulating selection instead of closing
+  /// out the phase — the phase advances only on Enter (`ProcessCommandLineSubmit`'s per-command
+  /// PickSelection branch). STRETCH is deliberately NOT part of this: its crossing box is
+  /// load-bearing geometry (REQ-103 step 5 tests each entity's definition points against the box
+  /// to decide what moves), not just an object filter, so it keeps the plain two-corner-only
+  /// \c SelectionBox shape.
+  SelectionAccumulate,
   /// Entity pick — hit-tested against the **raw, unsnapped** cursor, the way
   /// `PickClosestCadEntity` expects. An OSNAP-adjusted point would hit-test somewhere the user
   /// is not pointing.
@@ -101,19 +114,47 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::Move:
   case K::Copy:
   case K::Scale:
+    return cmd.modifyPhase == MP::PickSelection ? R::SelectionAccumulate : R::SnappedPointPick;
   case K::Stretch:
+    // REQ-103 step 5: the crossing/window box IS the operation's data (which vertices move), not
+    // just an object filter, so STRETCH keeps the plain two-corner \c SelectionBox shape rather
+    // than gaining click-select-and-accumulate the way its siblings just did.
     return cmd.modifyPhase == MP::PickSelection ? R::SelectionBox : R::SnappedPointPick;
   case K::Rotate:
-    return cmd.rotatePhase == AppCommandState::RotatePhase::PickSelection ? R::SelectionBox
+    return cmd.rotatePhase == AppCommandState::RotatePhase::PickSelection ? R::SelectionAccumulate
                                                                           : R::SnappedPointPick;
   case K::Align:
-    return cmd.alignPhase == AppCommandState::AlignPhase::PickSelection ? R::SelectionBox
+    return cmd.alignPhase == AppCommandState::AlignPhase::PickSelection ? R::SelectionAccumulate
                                                                        : R::SnappedPointPick;
   case K::Mirror:
     // REQ-103 step 1. NeedEraseAnswer is a Yes/No text prompt, but routing its click to the state
     // machine is harmless (SubmitViewportPickImpl ignores it) and keeps this branch phase-simple.
-    return cmd.mirrorPhase == AppCommandState::MirrorPhase::PickSelection ? R::SelectionBox
+    return cmd.mirrorPhase == AppCommandState::MirrorPhase::PickSelection ? R::SelectionAccumulate
                                                                          : R::SnappedPointPick;
+  case K::Array: {
+    // REQ-304. PickSelection is the click-or-window-select MOVE/COPY/ROTATE share. The three
+    // spatial phases (column/row spacing, polar center, fill angle) commit from a click, same
+    // shape as OFFSET's distance-or-click. The typed-only phases (type choice, the two item
+    // counts, rotate Yes/No) take no viewport click — SubmitViewportPickImpl has no branch for
+    // them either, so routing anything but Ignore there would be a click that goes nowhere.
+    using APh = AppCommandState::ArrayPhase;
+    switch (cmd.arrayPhase) {
+    case APh::PickSelection:
+      return R::SelectionAccumulate;
+    case APh::Rect_WaitColumnSpacing:
+    case APh::Rect_WaitRowSpacing:
+    case APh::Polar_WaitCenter:
+    case APh::Polar_WaitAngle:
+      return R::SnappedPointPick;
+    case APh::WaitType:
+    case APh::Rect_WaitColumns:
+    case APh::Rect_WaitRows:
+    case APh::Polar_WaitItemCount:
+    case APh::Polar_WaitRotateAnswer:
+      return R::Ignore;
+    }
+    return R::Ignore;
+  }
 
   // --- Pure fence commands. ---
   case K::Delete:

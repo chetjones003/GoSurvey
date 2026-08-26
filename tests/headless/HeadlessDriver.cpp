@@ -513,9 +513,17 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       break;
     case ViewportClickRoute::SelectionBox:
     case ViewportClickRoute::IdleSelection:
+    case ViewportClickRoute::SelectionAccumulate:
       // Arm the first corner or close the box, exactly as the viewport does. The anchor fields are
       // written directly for the same reason BOX writes them: BeginSelectionBoxCorner also takes
       // screen coordinates, and a transcript has no screen.
+      //
+      // SelectionAccumulate's OTHER behavior — a click that lands on an entity toggles just that
+      // one entity instead of arming a box corner — is screen-space picking (PickClosestCadEntity
+      // et al., driven by pixel coordinates CadUi.cpp derives from the real viewport) with no
+      // headless equivalent, the same reason idle click-select has none either (see
+      // ViewportClickRoute::IdleSelection above). CLICK here always behaves like a fence corner;
+      // covering entity click-select needs a manual GUI pass.
       if (!run.st.selBoxWaitingSecond) {
         run.st.selBoxWaitingSecond = true;
         run.st.selBoxAnchorX = x;
