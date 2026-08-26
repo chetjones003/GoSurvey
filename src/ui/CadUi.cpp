@@ -11241,9 +11241,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const ImVec2 a(std::min(p0.x, p1.x), std::min(p0.y, p1.y));
     const ImVec2 b(std::max(p0.x, p1.x), std::max(p0.y, p1.y));
     ImDrawList* sdl = ImGui::GetWindowDrawList();
+    // Clipped to the drawing Image rect so the white paper does not bleed into surrounding UI (issue #101).
+    const ImVec2 __canvasMin = imgPos;
+    const ImVec2 __canvasMax = ImVec2(imgPos.x + avail.x, imgPos.y + avail.y);
+    sdl->PushClipRect(__canvasMin, __canvasMax, true);
     sdl->AddRectFilled(ImVec2(a.x + 5.f, a.y + 5.f), ImVec2(b.x + 5.f, b.y + 5.f), IM_COL32(0, 0, 0, 90));  // shadow
     sdl->AddRectFilled(a, b, IM_COL32(244, 244, 244, 255));                                                 // sheet
     sdl->AddRect(a, b, IM_COL32(40, 40, 40, 255), 0.f, 0, 1.5f);                                            // border
+    sdl->PopClipRect();
 
     // Viewports (REQ-027): each shows model space clipped + scaled inside its rect. Drawn via the
     // overlay this increment; the GL-batch pass is tracked tech debt (TASK-002 §7).
@@ -11374,6 +11379,33 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           prev = s;
         }
       }
+      // Ellipses (REQ-028: skip frozen layers).
+      for (size_t ei = 0; ei < cmd.userEllipses.size(); ++ei) {
+        const CadEllipse& el = cmd.userEllipses[ei];
+        const EntityAttributes& attr = EllipseAttr(cmd, static_cast<int>(ei));
+        if (IsLayerFrozenInViewport(vp, attr.layer))
+          continue;
+        const float ma = std::hypot(el.majVx, el.majVy);
+        if (ma < 1e-8f)
+          continue;
+        const int segs = 64;
+        ImU32 ec; float ew;
+        entStyle(SelectedEntity::Type::Ellipse, static_cast<int>(ei), vpBaseCol(attr.layer, attr.color), ec, ew);
+        const float px = -el.majVy * el.ratio;
+        const float py = el.majVx * el.ratio;
+        constexpr double kTwoPi = 6.283185307179586;
+        ImVec2 prev{};
+        for (int k = 0; k <= segs; ++k) {
+          const double u = kTwoPi * static_cast<double>(k) / static_cast<double>(segs);
+          const double c0 = std::cos(u);
+          const double s0 = std::sin(u);
+          const double wx = static_cast<double>(el.cx) + static_cast<double>(el.majVx) * c0 + static_cast<double>(px) * s0;
+          const double wy = static_cast<double>(el.cy) + static_cast<double>(el.majVy) * c0 + static_cast<double>(py) * s0;
+          const ImVec2 s = m2s(wx + oX, wy + oY);
+          if (k > 0) sdl->AddLine(prev, s, ec, ew);
+          prev = s;
+        }
+      }
       // Survey-point crosses (REQ-028: skip frozen layers).
       const float crossPx = 4.f;
       for (const SurveyPoint& sp : cmd.surveyPoints) {
@@ -11454,7 +11486,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       }
       sdl->PopClipRect();
-      // Viewport border; selected ones accented. The active floating viewport (REQ-036) is green.
+      // Viewport border; clipped to sheet and drawing area so greyed viewport outline does not bleed out of bounds (issue #101).
+      {
+        const ImVec2 __vpCanvasMin = imgPos;
+        const ImVec2 __vpCanvasMax = ImVec2(imgPos.x + avail.x, imgPos.y + avail.y);
+        const ImVec2 __vpClipMin(std::max(a.x, __vpCanvasMin.x), std::max(a.y, __vpCanvasMin.y));
+        const ImVec2 __vpClipMax(std::min(b.x, __vpCanvasMax.x), std::min(b.y, __vpCanvasMax.y));
+        const bool __vpClipValid = __vpClipMin.x < __vpClipMax.x && __vpClipMin.y < __vpClipMax.y;
+        if (__vpClipValid) sdl->PushClipRect(__vpClipMin, __vpClipMax, true);
+        // Viewport border; selected ones accented. The active floating viewport (REQ-036) is green.
       const bool selVp = IsViewportSelected(cmd, vi);
       const bool floatVp = InFloatingModelSpace(cmd) && cmd.floatingViewportLayout == cmd.activeSpaceIndex &&
                            vi == cmd.floatingViewportIndex;
@@ -11471,10 +11511,23 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         sdl->AddRectFilled(ImVec2(ctr.x - 4.f, ctr.y - 4.f), ImVec2(ctr.x + 4.f, ctr.y + 4.f),
                            IM_COL32(245, 200, 70, 255));
       }
+        if (__vpClipValid) sdl->PopClipRect();
+      }
     }
     // Native paper-space geometry (REQ-037): committed sheet lines + text, drawn on top of the viewports
     // (in paper inches via w2s — a title block / annotations sit above viewport content).
+    // Clipped to the sheet AND to the viewport canvas so paper geometry cannot bleed outside
+    // the sheet or outside the drawing area into surrounding UI (issue #101).
     {
+      // Sheet rect (a,b) + viewport canvas (imgPos, avail) intersection
+      const ImVec2 __sheetMin = a;
+      const ImVec2 __sheetMax = b;
+      const ImVec2 __canvasMin = imgPos;
+      const ImVec2 __canvasMax = ImVec2(imgPos.x + avail.x, imgPos.y + avail.y);
+      const ImVec2 __clipMin(std::max(__sheetMin.x, __canvasMin.x), std::max(__sheetMin.y, __canvasMin.y));
+      const ImVec2 __clipMax(std::min(__sheetMax.x, __canvasMax.x), std::min(__sheetMax.y, __canvasMax.y));
+      const bool __clipValid = __clipMin.x < __clipMax.x && __clipMin.y < __clipMax.y;
+      if (__clipValid) sdl->PushClipRect(__clipMin, __clipMax, true);
       constexpr ImU32 kPaperSelCol = IM_COL32(59, 130, 246, 255);
       constexpr ImU32 kPaperHoverCol = IM_COL32(130, 180, 240, 255);  // hover pre-highlight (lighter blue), REQ-039
       const float pxPerPaperIn = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
@@ -11640,6 +11693,54 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // from the .shx file, TrueType via FontReg (faux bold/italic), MTEXT via the rich wrapper. Height scales
       // with zoom (plotted inches × px/inch), clamped [1, max] so it tracks the sheet instead of a fixed floor.
       auto drawPaperText = [&](const CadAnnotation& a, bool sel, bool hover, ImU32 baseCol) {
+        // Paper-space dims are paper-inch entities (like text) but were falling through to the TEXT path and drawing as glyphs.
+        // Render them as true dimensions so they are clipped to the sheet and scale with paper, not model.
+        if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
+          float sx1=0.f, sy1=0.f, sx2=0.f, sy2=0.f, tx=0.f, ty=0.f, nx=0.f, ny=0.f, meas=0.f;
+          if (!CadDimAnyGeometry(a, &sx1,&sy1,&sx2,&sy2,&tx,&ty,&nx,&ny,&meas)) return;
+          const ImU32 lineCol = sel ? kPaperSelCol : (hover ? kPaperHoverCol : baseCol);
+          constexpr ImU32 kDimTextCol = IM_COL32(248,250,252,255);
+          // Paper dims live in paper inches, so w2s is the projection (no Camera). Helpers mirror model dim path but via w2s.
+          auto ws = [&](float wx, float wy, ImVec2* o){ *o = w2s(wx,wy); };
+          // Dimension line width in screen px - already clipped to sheet via outer __clipValid.
+          const float hPx = std::clamp(a.plottedHeightInches * pxPerPaperIn, 1.f, 8192.f);
+          const float fontPx = std::clamp(hPx, 6.f, 72.f); // paper dims: legible paper size, not world-scaled
+          const float extPx = 1.2f, dimLnPx = 1.2f;
+          const float gap = std::clamp(0.02f * meas, 0.001f, 0.08f);
+          const float over = std::clamp(0.02f * meas, 0.001f, 0.06f);
+          const float leg1 = std::hypot(sx1 - a.dimExt1X, sy1 - a.dimExt1Y);
+          const float u1 = leg1 > 1.e-8f ? gap / leg1 : 0.f;
+          const float ex1 = a.dimExt1X + (sx1 - a.dimExt1X) * u1;
+          const float ey1 = a.dimExt1Y + (sy1 - a.dimExt1Y) * u1;
+          const float leg2 = std::hypot(sx2 - a.dimExt2X, sy2 - a.dimExt2Y);
+          const float u2 = leg2 > 1.e-8f ? gap / leg2 : 0.f;
+          const float ex2 = a.dimExt2X + (sx2 - a.dimExt2X) * u2;
+          const float ey2 = a.dimExt2Y + (sy2 - a.dimExt2Y) * u2;
+          ImVec2 A{}, B{};
+          ws(ex1, ey1, &A); ws(sx1 + nx * over, sy1 + ny * over, &B); sdl->AddLine(A,B,lineCol,extPx);
+          ws(ex2, ey2, &A); ws(sx2 + nx * over, sy2 + ny * over, &B); sdl->AddLine(A,B,lineCol,extPx);
+          const float alenW = 0.08f; // paper-inch arrow approx
+          const float dlen = std::hypot(sx2 - sx1, sy2 - sy1);
+          if (dlen > 1.e-6f) {
+            const float ux = (sx2 - sx1)/dlen, uy = (sy2 - sy1)/dlen;
+            const float tipInset = std::clamp(0.02f, 0.001f, 0.22f*dlen);
+            const float tip1x = sx1 + ux*tipInset, tip1y = sy1 + uy*tipInset;
+            const float tip2x = sx2 - ux*tipInset, tip2y = sy2 - uy*tipInset;
+            ws(tip1x+ux*alenW, tip1y+uy*alenW, &A); ws(tip2x-ux*alenW, tip2y-uy*alenW, &B); sdl->AddLine(A,B,lineCol,dimLnPx);
+            const float hw = alenW*0.48f, ox = -uy*hw, oy = ux*hw;
+            ImVec2 t0{},t1{},t2{}; ws(tip1x,tip1y,&t0); ws(tip1x+ux*alenW+ox, tip1y+uy*alenW+oy,&t1); ws(tip1x+ux*alenW-ox, tip1y+uy*alenW-oy,&t2); sdl->AddTriangleFilled(t0,t1,t2,lineCol);
+            ws(tip2x,tip2y,&t0); ws(tip2x-ux*alenW+ox, tip2y-uy*alenW+oy,&t1); ws(tip2x-ux*alenW-ox, tip2y-uy*alenW-oy,&t2); sdl->AddTriangleFilled(t0,t1,t2,lineCol);
+          }
+          ImVec2 sp{}; ws(a.insX,a.insY,&sp);
+          ImVec2 spDir{}; ws(a.insX + std::cos(a.rotationRad)*0.05f, a.insY + std::sin(a.rotationRad)*0.05f, &spDir);
+          const float screenAng = std::atan2(spDir.y-sp.y, spDir.x-sp.x);
+          AddAlignedDimText(sdl, paperFont, fontPx, sp, screenAng, kDimTextCol, a.text.c_str());
+          if (sel) { // selection rect in paper inches via w2s
+            ImVec2 sa = w2s(a.boxMinX, a.boxMinY), sb = w2s(a.boxMaxX, a.boxMaxY);
+            sdl->AddRect(ImVec2(std::min(sa.x,sb.x),std::min(sa.y,sb.y)), ImVec2(std::max(sa.x,sb.x),std::max(sa.y,sb.y)), kPaperSelCol, 0.f, 0, 1.f);
+          }
+          return;
+        }
         if (a.text.empty())
           return;
         const ImU32 col = sel ? kPaperSelCol : (hover ? kPaperHoverCol : baseCol);  // REQ-048 true color
@@ -11748,6 +11849,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         drawPaperText(L.paperTexts[ti], isPaperSel(PaperEntityRef::Type::Text, static_cast<int>(ti)),
                       isPaperHover(PaperEntityRef::Type::Text, static_cast<int>(ti)),
                       paperTrueCol(PaperEntityRef::Type::Text, static_cast<int>(ti)));
+      if (__clipValid) sdl->PopClipRect();
     }
     const float curPX = static_cast<float>(worldLeft + (mx / std::max(avail.x, 1.f)) * (worldRight - worldLeft));
     const float curPY = static_cast<float>(worldTop - (my / std::max(avail.y, 1.f)) * (worldTop - worldBottom));
@@ -12164,6 +12266,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (modelAnnotationsVisible &&
       (!cmd.cadAnnotations.empty() || !transformAnnPreviews.empty() || showMtextCmdDraft || showDimCmdDraft)) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    // Clip model annotations to the drawing viewport so they cannot bleed into surrounding UI (issue #101).
+    dl->PushClipRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), true);
     // Annotations are drawn by ImGui, not GL, so they do NOT inherit the renderer's MVP: without
     // routing through the camera they would stay in plan positions while an orbit tilts the
     // linework around them (REQ-058). In plan view `Camera::WorldToScreen` reduces exactly to the
@@ -12587,6 +12691,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                       0.f, 0, 1.f);
         }
       }
+      dl->PopClipRect();
     }
 
     // Screen rect that hugs a rendered annotation glyph. For single-line TEXT we mirror the renderer's
