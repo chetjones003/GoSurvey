@@ -20466,11 +20466,20 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
       log.push_back("ZOOM EXTENTS — nothing to frame in this viewport.");
       return;
     }
+    // ComputeRobustWorldExtents (despite the name) returns LOCAL coordinates — the same convention
+    // every raw entity store uses. vp->modelCenterX/Y is WORLD (local + worldDocumentOrigin): see
+    // AddViewportRect's default (`= cmd.worldDocumentOriginX`) and the screen<->model conversions in
+    // CadUi.cpp/PdfPlot.cpp, which both add/subtract the origin around this same field. Framing in
+    // LOCAL and writing straight into a WORLD field left the viewport pointed at the wrong place by
+    // exactly worldDocumentOriginX/Y whenever it's nonzero (i.e. after any import that rebases the
+    // drawing) — invisible with a fresh drawing at origin (0,0), reproducible after a DXF import.
     if (!zoomframing::FrameWorldRectInViewport(mnX, mxX, mnY, mxY, vp->paperWIn, vp->paperHIn, &vp->modelCenterX,
                                                &vp->modelCenterY, &vp->scaleModelPerPaperIn)) {
       log.push_back("ZOOM EXTENTS — the drawing extents are not a finite rectangle; view unchanged.");
       return;
     }
+    vp->modelCenterX += st.worldDocumentOriginX;
+    vp->modelCenterY += st.worldDocumentOriginY;
     BumpCadGpuCache(st);
     char vbuf[256];
     std::snprintf(vbuf, sizeof(vbuf),
