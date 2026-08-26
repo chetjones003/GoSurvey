@@ -1,7 +1,7 @@
 # TASK-111 — Clickable command variants: the mechanism (REQ-119 increment 1)
 
 - Type:    feature
-- Status:  done (2026-08-25)
+- Status:  review (awaiting chetjones003 final testing)
 - Opened:  2026-08-25
 - Owner:   Nathan Johnson
 
@@ -337,8 +337,9 @@ ASSUMPTION-2: No caller depends on the hint strings laying out on a single line.
 - Refactors:              the hand-rolled LINE link block deleted (25 lines); one renderer now
                           serves both the floating bar and the docked panel.
 - Docs updated:           none needed (REQ-119 and this log carry the convention).
-- Done:                   2026-08-25. All increment-1 Acceptance conditions met, the four manual
-                          GUI conditions included (§9). Increment 2 remains unopened.
+- Submitted for review:   2026-08-25. All increment-1 Acceptance conditions met, the four manual
+                          GUI conditions included (§9). NOT done — chetjones003 does the final
+                          testing, and moves it to done. Increment 2 is TASK-112.
 
 ## 12. Technical debt
 
