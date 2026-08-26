@@ -1,7 +1,7 @@
 # TASK-111 — Clickable command variants: the mechanism (REQ-119 increment 1)
 
 - Type:    feature
-- Status:  self-verify (manual GUI pass outstanding)
+- Status:  done (2026-08-25)
 - Opened:  2026-08-25
 - Owner:   Nathan Johnson
 
@@ -254,22 +254,39 @@ ASSUMPTION-2: No caller depends on the hint strings laying out on a single line.
         entity count rather than log text, plus the old parser's token kept as a live rejection.
       - Suites: **545/545** Catch2, **600/600** ctest (1 known-disabled, #63).
 
-- [ ] **manual GUI pass — OUTSTANDING, and it is the real gap.** `LayoutCommandHint` is ImGui
-      code and the headless driver never constructs an ImGui context, so **the layout and
-      rendering half of this change has no automated coverage** — only the pure rule beneath it
-      and the tokens above it do. A smoke launch confirmed the app starts and runs clean for
-      12 s, but that proves startup only: the function is not called until a command with a
-      bracketed prompt is active, so the smoke test did not execute a single line of it. What
-      still needs a human, per REQ-119's own Acceptance:
-      1. LINE's `[A]`/`[2P]` render and hover as links in the **floating bar**, and clicking
-         each does what typing `a` / `2p` does;
-      2. the same in the **classic docked panel** (`cmdLineClassicDock`) — the surface that
-         never had links before;
-      3. MIRROR's `[Yes/No]` and LENGTHEN's `[DElta/Percent/Total/DYnamic]` render as **two**
-         and **four** separate links;
-      4. a **narrow** dock width, to exercise the wrap path: links land on the correct line,
-         no horizontal overflow, and the footer reserves the right height (the links must not
-         shift out from under the cursor).
+- [x] **manual GUI pass — DONE (2026-08-25), all four conditions verified in the running app.**
+      `LayoutCommandHint` is ImGui code and the headless driver builds no ImGui context, so this
+      pass is the *only* coverage the layout/rendering half has. It was driven against the real
+      window with a Win32 driver (`SetCursorPos`/`mouse_event` clicks, `SendKeys`, screen
+      capture), and every result below was read off a screenshot, not inferred.
+
+      1. **Floating bar — PASS.** LINE's prompt renders `[A]` and `[2P]` as blue underlined
+         `TextLink`s against dim plain text. Clicking `[A]` logged *"Bearing ° clockwise from
+         north (decimal/DMS); blank Enter cancels."* and clicking `[2P]` logged *"Bearing pick —
+         first reference point (viewport click). ESC cancels pick."* — byte-identical to what
+         typing `a` / `2p` produces in `regression-119-variant-token-accepted`.
+      2. **Classic docked panel — PASS.** Same prompt, same two links, and clicking `[A]` there
+         drove the same transition. More importantly `FILLET: Select first object or
+         [Radius/Trim] …` renders links **in the dock** — a non-LINE prompt, which the deleted
+         hand-rolled block could never have covered.
+      3. **Grouped variants — PASS.** FILLET's `[Radius/Trim]` renders as **two separate** links
+         with `[`, `/`, `]` as plain text, and clicking `Radius` logged *"FILLET — specify fillet
+         radius <0.500000>:"*. This is the case that was a **single dead link** before this
+         change (REQ-304 put it on the clickable path), so it is the sharpest evidence the fix
+         works end to end.
+      4. **Narrow width / wrap — PASS.** Narrowing the dock wrapped the FILLET hint to
+         `FILLET: Select first object or [Radius/Trim]` / `<R=0.500, Trim> | ESC cancel`. The
+         break fell **between segments**, neither link was split, and nothing overflowed
+         horizontally. Clicking `Radius` **after** the wrap had moved it still worked — which is
+         the real discharge of ASSUMPTION-2: the drawn position and the hit-test region agree
+         even when the layout reflows.
+
+      **Pre-existing issue observed, NOT introduced here and deliberately not fixed:** at a
+      narrow dock width the adjacent status line *"Command input follows the cursor on the
+      drawing (viewport)."* runs off the panel edge. It is a plain `ImGui::TextDisabled` with no
+      wrap, untouched by this task, and it is not a prompt — it carries no variants. Recorded as
+      DEBT-2 rather than folded in, because fixing an unrelated line would put a change in this
+      diff that no REQ-119 condition asks for.
 
 ## 10. Verification result
 
@@ -313,14 +330,15 @@ ASSUMPTION-2: No caller depends on the hint strings laying out on a single line.
 - Findings:
 
 ## 11. Outcome
-- Requirements satisfied: REQ-119 **increment 1** (Acceptance met: yes for every automatable
-  condition; the four manual GUI conditions are outstanding — §9). Increment 2 not started.
+- Requirements satisfied: REQ-119 **increment 1** (Acceptance met: **yes**, all conditions —
+  automated and the four manual GUI ones, §9). Increment 2 not started.
 - Tests added:            `CommandLineTests [req119]` (4 cases / 53 assertions);
                           `headless.regression-119-variant-token-accepted` (55 steps).
 - Refactors:              the hand-rolled LINE link block deleted (25 lines); one renderer now
                           serves both the floating bar and the docked panel.
 - Docs updated:           none needed (REQ-119 and this log carry the convention).
-- Status:                 **self-verify complete except the manual GUI pass** — not `done`.
+- Done:                   2026-08-25. All increment-1 Acceptance conditions met, the four manual
+                          GUI conditions included (§9). Increment 2 remains unopened.
 
 ## 12. Technical debt
 
@@ -339,4 +357,22 @@ DEBT-1: Two parallel prompt vocabularies.
              increment 2 is the moment the cost is actually incurred, so that is the moment the
              decision is worth making.
 - Follow-up: file as its own issue against the spec; referenced from REQ-119 increment 2.
+```
+
+```
+DEBT-2: The docked panel's "follows the cursor" status line does not wrap.
+- What:      at a narrow dock width, `"Command input follows the cursor on the drawing
+             (viewport)."` runs off the panel's right edge. Found during the REQ-119 manual GUI
+             pass (§9), in the same screenshot that shows the FILLET hint wrapping correctly
+             right below it.
+- Forced by: nothing — it is simply out of scope. The line is a plain `ImGui::TextDisabled`
+             with no wrap, pre-dates this task, and is NOT a prompt: it carries no variants, so
+             no REQ-119 condition covers it. Fixing it here would put an unrelated change in a
+             diff whose whole claim is that it only touches the variant mechanism.
+- Cost:      cosmetic only, and only at dock widths narrower than the default. No input is
+             lost and nothing is unreachable — the text is a hint about where to type, and the
+             place to type is the viewport it names.
+- Remove by: give it the same wrap treatment as the hints beside it (one `TextWrapped`), either
+             in REQ-119 increment 2 when that file is open anyway, or as a standalone UI fix.
+- Follow-up: none filed yet; recorded here so the observation is not lost with the screenshot.
 ```
