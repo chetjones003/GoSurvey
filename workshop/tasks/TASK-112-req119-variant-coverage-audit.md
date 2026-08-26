@@ -1,7 +1,7 @@
 # TASK-112 — Clickable command variants: the coverage audit (REQ-119 increment 2)
 
 - Type:    feature
-- Status:  done (2026-08-25)
+- Status:  review (awaiting chetjones003 final testing)
 - Opened:  2026-08-25
 - Owner:   Nathan Johnson
 
@@ -161,7 +161,8 @@ are not keyword options at all and are left alone.
 - Tests added:            `headless.regression-119-variant-coverage` (74 steps) — one assertion
                           per marked-up token, plus the CIRCLE `D` refusal as a live guard.
 - Docs updated:           none needed.
-- Done:                   2026-08-25.
+- Submitted for review:   2026-08-25. NOT done — chetjones003 does the final testing and moves
+                          it to done.
 
 ### Coverage statement (REQ-119 increment 2 requires this to be explicit)
 Every `AppCommandState::Kind` is either marked up or recorded as carrying no variants. The
