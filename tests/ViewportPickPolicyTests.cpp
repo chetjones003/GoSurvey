@@ -46,7 +46,7 @@ TEST_CASE("Every pick-driven command is routed by the model-space viewport", "[v
       // Inquiry / placement.
       K::IdPoint, K::SurveyInverse, K::SurfaceElevGrade, K::Paste,
       // Modify commands.
-      K::Move, K::Copy, K::Rotate, K::Scale, K::Delete, K::Join, K::Trim, K::Offset, K::Align,
+      K::Move, K::Copy, K::Rotate, K::Scale, K::Array, K::Delete, K::Join, K::Trim, K::Offset, K::Align,
       // REQ-103 — the five this test was written for.
       K::Mirror, K::Lengthen, K::Extend, K::Break, K::Stretch,
       // Entity designators and view tools that take a click.
@@ -64,7 +64,7 @@ TEST_CASE("REQ-103's modify commands route the way their picks need", "[viewport
   SECTION("MIRROR window-selects first, then takes mirror-line points") {
     AppCommandState st = AtFirstPrompt(K::Mirror);
     st.mirrorPhase = AppCommandState::MirrorPhase::PickSelection;
-    REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::SelectionBox);
+    REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::SelectionAccumulate);
     st.mirrorPhase = AppCommandState::MirrorPhase::NeedP1;
     REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::SnappedPointPick);
     st.mirrorPhase = AppCommandState::MirrorPhase::NeedP2;
@@ -95,6 +95,31 @@ TEST_CASE("REQ-103's modify commands route the way their picks need", "[viewport
     REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::SnappedPointPick);
   }
 
+  SECTION("ARRAY click-or-box-selects first, then routes its spatial phases and ignores its typed-only ones") {
+    using AP = AppCommandState::ArrayPhase;
+    AppCommandState st = AtFirstPrompt(K::Array);
+    st.arrayPhase = AP::PickSelection;
+    REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::SelectionAccumulate);
+    st.arrayPhase = AP::WaitType;
+    REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::Ignore);
+    st.arrayPhase = AP::Rect_WaitColumns;
+    REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::Ignore);
+    st.arrayPhase = AP::Rect_WaitColumnSpacing;
+    REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::SnappedPointPick);
+    st.arrayPhase = AP::Rect_WaitRows;
+    REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::Ignore);
+    st.arrayPhase = AP::Rect_WaitRowSpacing;
+    REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::SnappedPointPick);
+    st.arrayPhase = AP::Polar_WaitCenter;
+    REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::SnappedPointPick);
+    st.arrayPhase = AP::Polar_WaitItemCount;
+    REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::Ignore);
+    st.arrayPhase = AP::Polar_WaitAngle;
+    REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::SnappedPointPick);
+    st.arrayPhase = AP::Polar_WaitRotateAnswer;
+    REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::Ignore);
+  }
+
   SECTION("STRETCH box-selects first, then takes base and destination") {
     AppCommandState st = AtFirstPrompt(K::Stretch);
     st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
@@ -104,6 +129,40 @@ TEST_CASE("REQ-103's modify commands route the way their picks need", "[viewport
     st.modifyPhase = AppCommandState::ModifyPhase::NeedDestination;
     REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::SnappedPointPick);
   }
+}
+
+TEST_CASE("MOVE/COPY/SCALE/ROTATE/ALIGN/ARRAY accumulate clicks and boxes; STRETCH stays box-only",
+          "[viewport][pick][req305]") {
+  // This fix (user report "fix the array command"): the modify commands' selection step used to
+  // accept ONLY a two-corner window/crossing box (ViewportClickRoute::SelectionBox), with no way to
+  // click individual objects and no way to keep adding after one box. D-2026-08-25-n extended the
+  // click-or-box, accumulate-until-Enter shape ARRAY needed to its five siblings that share the
+  // same PickSelection phase concept, EXCEPT STRETCH — its crossing box IS load-bearing geometry
+  // (REQ-103 step 5: which vertices move), not just an object filter, so it deliberately keeps the
+  // old SelectionBox-only shape.
+  AppCommandState mv = AtFirstPrompt(K::Move);
+  mv.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+  REQUIRE(ViewportClickRouteFor(mv) == ViewportClickRoute::SelectionAccumulate);
+
+  AppCommandState cp = AtFirstPrompt(K::Copy);
+  cp.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+  REQUIRE(ViewportClickRouteFor(cp) == ViewportClickRoute::SelectionAccumulate);
+
+  AppCommandState sc = AtFirstPrompt(K::Scale);
+  sc.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+  REQUIRE(ViewportClickRouteFor(sc) == ViewportClickRoute::SelectionAccumulate);
+
+  AppCommandState rt = AtFirstPrompt(K::Rotate);
+  rt.rotatePhase = AppCommandState::RotatePhase::PickSelection;
+  REQUIRE(ViewportClickRouteFor(rt) == ViewportClickRoute::SelectionAccumulate);
+
+  AppCommandState al = AtFirstPrompt(K::Align);
+  al.alignPhase = AppCommandState::AlignPhase::PickSelection;
+  REQUIRE(ViewportClickRouteFor(al) == ViewportClickRoute::SelectionAccumulate);
+
+  AppCommandState st = AtFirstPrompt(K::Stretch);
+  st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+  REQUIRE(ViewportClickRouteFor(st) == ViewportClickRoute::SelectionBox);
 }
 
 TEST_CASE("Ignore is a decision, not an omission", "[viewport][pick][task099]") {

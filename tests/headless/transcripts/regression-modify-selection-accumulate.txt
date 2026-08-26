@@ -1,0 +1,83 @@
+# D-2026-08-25-n — MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN/ARRAY's "select objects" step: click-or-box,
+# accumulating across more than one action, confirmed only by Enter.
+#
+# User bug report (originally against ARRAY): "the first step asking for a box select should be a
+# select objects. the user can click an object or box select. selection should build until the user
+# hits ENTER." Investigation found the box was fixed at exactly ONE two-corner drag per invocation —
+# SubmitViewportPickImpl's PickSelection branches advanced the phase the instant that one box
+# finished, so a bare Enter during selection did nothing (six of the seven commands) and a SECOND
+# box was read as the next phase's own point(s) instead of adding to the selection.
+#
+# This transcript can only drive the BOX half of the fix — the click-one-entity half is screen-space
+# picking (PickCadAnnotationAt/PickClosestCadEntity/etc., driven by real viewport pixels) with no
+# headless equivalent, same as idle click-select already has (see HeadlessDriver.cpp's CLICK verb).
+# That half needs the user's own manual GUI pass.
+#
+# Every assertion below FAILS against the pre-fix code: two separate BOX drags before this fix
+# either left EXPECT SELECTED 2 short (the phase had already silently advanced to NeedBase after the
+# first box, so BOX's second corner was consumed as a base point instead) or the Enter-driven
+# "Nothing selected" message never appeared at all (PickSelection had no Enter branch, so a blank
+# CMD was silently swallowed).
+
+# --- MOVE: blank Enter with nothing selected, then two boxes accumulate, then Enter confirms ------
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD LINE
+CMD 0,20
+CMD 10,20
+ESC
+CHECK ALL
+EXPECT LINES 2
+
+CMD MOVE
+CMD
+EXPECT LOG "Nothing selected — click objects or drag a selection window, then press Enter."
+
+BOX -1 -1 11 1
+EXPECT SELECTED 1
+
+BOX -1 19 11 21
+EXPECT SELECTED 2
+
+CMD
+EXPECT LOG "MOVE — base point:"
+CMD 0,0
+CMD 0,100
+CHECK ALL
+EXPECT LINES 2
+
+# --- ARRAY: the exact command the user reported, same click-or-box-accumulate-then-Enter shape ----
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+CMD LINE
+CMD 0,20
+CMD 10,20
+ESC
+CHECK ALL
+
+CMD ARRAY
+CMD
+EXPECT LOG "Nothing selected — click objects or drag a selection window, then press Enter."
+
+BOX -1 -1 11 1
+EXPECT SELECTED 1
+
+BOX -1 19 11 21
+EXPECT SELECTED 2
+
+CMD
+EXPECT LOG "ARRAY — select array type: [R]ectangular / [P]olar:"
+CMD r
+CMD 2
+CMD 20
+CMD 1
+CMD 0
+EXPECT LOG "2 total instance(s) (2 x 1)"
+EXPECT LINES 4
+CHECK ALL

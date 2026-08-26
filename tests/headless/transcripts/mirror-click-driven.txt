@@ -8,10 +8,12 @@
 #
 # This one clicks. Every step below is a CLICK, so it goes through ViewportClickRouteFor exactly as
 # DrawDrawingViewport does:
-#   - the two selection clicks take the SelectionBox route (arm the corner, then close the fence),
+#   - the two selection clicks take the SelectionAccumulate route (arm the corner, then close the
+#     fence) — D-2026-08-25-n: the fence no longer ends the selection step by itself, so a blank
+#     Enter is what confirms it and moves on, same as MOVE/COPY/SCALE/ROTATE/ALIGN/ARRAY,
 #   - the two mirror-line clicks take the SnappedPointPick route.
-# The only typed line is the "Erase source objects?" answer, which is a Yes/No text prompt by
-# design (HandleMirrorText) and has no viewport meaning.
+# The only typed lines are that confirming blank Enter and the "Erase source objects?" answer
+# (a Yes/No text prompt by design, HandleMirrorText, no viewport meaning).
 #
 # Geometry matches mirror-basic.txt so the two can be read side by side: line (0,0)-(100,0),
 # mirrored across the horizontal line y=50, erase-source defaulted to No by a bare Enter. The
@@ -37,6 +39,10 @@ CMD MIRROR
 CLICK -10 -10
 CLICK 110 10
 EXPECT SELECTED 1
+
+# D-2026-08-25-n: the fence merges into the selection but stays in PickSelection — a blank Enter is
+# what confirms it now, matching MOVE/COPY/SCALE/ROTATE/ALIGN/ARRAY's identical selection step.
+CMD
 EXPECT LOG "specify first point of mirror line"
 
 # Both points of the mirror line, picked rather than typed.

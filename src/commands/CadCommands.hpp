@@ -1138,6 +1138,8 @@ struct AppCommandState {
     Copy,
     Rotate,
     Scale,
+    /// ARRAY: rectangular or polar patterns of duplicated copies of the selection (REQ-305, issue #87).
+    Array,
     /// MIRROR: reflect the selection across a two-point mirror line (REQ-103 step 1). Default
     /// behavior duplicates-then-reflects (source kept); an "Erase source objects?" prompt lets the
     /// user opt into replacing the source instead, mirroring AutoCAD's own default.
@@ -1230,6 +1232,7 @@ struct AppCommandState {
     case Kind::Copy:          return "COPY";
     case Kind::Rotate:        return "ROTATE";
     case Kind::Scale:         return "SCALE";
+    case Kind::Array:         return "ARRAY";
     case Kind::Mirror:        return "MIRROR";
     case Kind::Lengthen:      return "LENGTHEN";
     case Kind::Extend:        return "EXTEND";
@@ -2222,6 +2225,35 @@ struct AppCommandState {
   /// — the modal decides its id policy — but "erase the source" is not, so it is applied here rather
   /// than left racing the modal).
   bool mirrorEraseSourcePending = false;
+
+  // --- ARRAY (REQ-305) ---
+  enum class ArrayType { Rectangular, Polar } arrayType = ArrayType::Rectangular;
+  enum class ArrayPhase {
+    PickSelection,
+    WaitType,               ///< "[R]ectangular / [P]olar"
+    Rect_WaitColumns,       ///< typed integer only — not spatial
+    Rect_WaitColumnSpacing, ///< typed number, or click (horizontal distance from the anchor)
+    Rect_WaitRows,          ///< typed integer only
+    Rect_WaitRowSpacing,    ///< typed number, or click (vertical distance from the anchor); commits on completion
+    Polar_WaitCenter,       ///< click / typed X,Y / object snap — the normal point-input path
+    Polar_WaitItemCount,    ///< typed integer only — TOTAL instances including the original
+    Polar_WaitAngle,        ///< typed degrees, or click (angle from center to cursor)
+    Polar_WaitRotateAnswer, ///< "[Y]es / [N]o"; commits on completion
+  } arrayPhase = ArrayPhase::PickSelection;
+
+  int arrayCols = 0;
+  int arrayRows = 0;
+  float arrayColSpacing = 0.f;
+  float arrayRowSpacing = 0.f;
+  /// Anchor for interactive column/row-spacing entry (Rect_WaitColumnSpacing/RowSpacing read the
+  /// cursor's distance from this point) — the same point \ref FirstSelectionAnchorPoint computes,
+  /// cached once at WaitType so it does not shift while spacing is being dragged.
+  float arrayAnchorX = 0.f, arrayAnchorY = 0.f;
+
+  float arrayCenterX = 0.f, arrayCenterY = 0.f;
+  int arrayItemCount = 0;
+  float arrayFillAngleDeg = 360.f;
+  bool arrayRotateItems = true;
 
   // --- LENGTHEN (REQ-103 step 2) ---
   /// Default sub-mode is **Total**, not AutoCAD's DElta (D-2026-08-24-f). Paired with the
@@ -3514,6 +3546,7 @@ void StartCopyCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartRotateCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartScaleCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartArrayCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartLengthenCommand(AppCommandState& st, std::vector<std::string>& log);
 /// Model-space + floating-model-space viewport-pick handler for LENGTHEN. Non-static (unlike most
 /// of its cluster) purely so SubmitViewportPickImpl — inside an anonymous namespace that spans

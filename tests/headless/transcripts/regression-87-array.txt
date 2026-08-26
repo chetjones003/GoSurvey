@@ -1,0 +1,138 @@
+# Issue #87 / REQ-305 (TASK-111) — ARRAY: rectangular and polar.
+# (Relabeled from REQ-304/TASK-109 while merging master into beta — that number/id were already
+# taken on beta by REQ-304/issue #82, a real ID collision from two independent sessions.)
+#
+# Covers REQ-305's acceptance list: rectangular grid count/spacing (including a negative spacing
+# growing the opposite direction), polar 360 deg (no duplicate instance at 0==360), polar partial
+# angle with Rotate=No (orientation unchanged, positions still on the arc), ESC leaving no partial
+# array behind, and undo removing every generated instance as one step.
+#
+# Each scenario below opens with NEW and stays self-contained. BOX selection in this codebase is
+# ADDITIVE (ComputeSelectionFromRect merges hits into st.selection rather than replacing it — the
+# ESC verb's CancelActiveCommand is a no-op while idle and does not clear it either), so reusing one
+# drawing across scenarios that each re-select would silently accumulate stale selections from an
+# earlier scenario. UNDO/REDO do clear st.selection, which is why the undo/redo checks inside a
+# single scenario are safe.
+
+# --- Rectangular: 3 columns x 2 rows, one line selected -----------------------------------------
+NEW
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+
+CHECK ALL
+EXPECT LINES 1
+
+BOX -1 -1 11 1
+EXPECT SELECTED 1
+
+CMD ARRAY
+CMD r
+CMD 3
+CMD 20
+CMD 2
+CMD 15
+EXPECT LOG "6 total instance(s) (3 x 2)"
+EXPECT LINES 6
+CHECK ALL
+
+SAVEAS %OUT%/array-rect-fwd.gs
+
+UNDO
+EXPECT LINES 1
+CHECK ALL
+SAVEAS %OUT%/array-rect-undo.gs
+EXPECT DIFFERENTFILE %OUT%/array-rect-fwd.gs %OUT%/array-rect-undo.gs
+
+REDO
+EXPECT LINES 6
+CHECK ALL
+
+# --- Rectangular: negative spacing grows the opposite direction ---------------------------------
+# REDO clears st.selection, so this re-selects — still the same one original line (the other 5
+# copies sit at +20/+40 columns and +15 rows, well outside this box), which is why re-BOXing the
+# same region here is safe (the "has" check in ComputeSelectionFromRect keeps it at 1, not 6).
+BOX -1 -1 11 1
+EXPECT SELECTED 1
+
+CMD ARRAY
+CMD rectangular
+CMD 2
+CMD -5
+CMD 1
+CMD 0
+EXPECT LOG "2 total instance(s) (2 x 1)"
+EXPECT LINES 7
+CHECK ALL
+
+# --- Rectangular: ESC cancels cleanly: no partial array, original geometry/selection untouched --
+CMD ARRAY
+CMD r
+CMD 5
+ESC
+EXPECT LOG "ARRAY canceled."
+EXPECT LINES 7
+CHECK ALL
+
+# --- Polar: 360 degrees, 4 items, rotate = yes ---------------------------------------------------
+# The circle sits off the array center (100,100) so the four instances land at four distinct
+# points on a radius-10 circle, actually exercising "distributed around the center" rather than
+# four coincident copies.
+NEW
+CMD CIRCLE
+CMD 110,100
+CMD 2
+ESC
+
+BOX 105 95 115 105
+EXPECT SELECTED 1
+
+CMD ARRAY
+CMD p
+CMD 100,100
+CMD 4
+CMD 360
+CMD y
+EXPECT LOG "4 total instance(s) (polar)"
+EXPECT CIRCLES 4
+CHECK ALL
+
+SAVEAS %OUT%/array-polar-fwd.gs
+UNDO
+EXPECT CIRCLES 1
+CHECK ALL
+SAVEAS %OUT%/array-polar-undo.gs
+EXPECT DIFFERENTFILE %OUT%/array-polar-fwd.gs %OUT%/array-polar-undo.gs
+REDO
+EXPECT CIRCLES 4
+CHECK ALL
+
+# --- Polar: partial angle (180 deg), rotate = no --------------------------------------------------
+NEW
+CMD CIRCLE
+CMD 110,100
+CMD 2
+ESC
+
+BOX 105 95 115 105
+EXPECT SELECTED 1
+
+CMD ARRAY
+CMD polar
+CMD 100,100
+CMD 3
+CMD 180
+CMD n
+EXPECT LOG "3 total instance(s) (polar)"
+EXPECT CIRCLES 3
+CHECK ALL
+
+# --- Polar: ESC cancels cleanly: no partial array, original geometry/selection untouched ---------
+CMD ARRAY
+CMD p
+CMD 100,100
+ESC
+EXPECT LOG "ARRAY canceled."
+EXPECT CIRCLES 3
+CHECK ALL

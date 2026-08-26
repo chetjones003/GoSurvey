@@ -2241,6 +2241,9 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
     {"ID", RibbonIconKind::Id}, {"INVERSE", RibbonIconKind::SurveyInverse}, {"MOVE", RibbonIconKind::Move},
     {"COPY", RibbonIconKind::Copy}, {"ROTATE", RibbonIconKind::Rotate}, {"SCALE", RibbonIconKind::Scale},
     {"MIRROR", RibbonIconKind::Mirror},
+    // REQ-305: no dedicated ARRAY icon yet — reuses Copy's, the same "no icon art yet" precedent
+    // Import/Export/Settings set (D-2026-08-25-h) rather than growing the bounded PNG-load loop.
+    {"ARRAY", RibbonIconKind::Copy},
     {"LENGTHEN", RibbonIconKind::Lengthen},
     {"EXTEND", RibbonIconKind::Extend},
     {"BREAK", RibbonIconKind::Break},
@@ -6246,16 +6249,42 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   if (cmd.active == AppCommandState::Kind::Move || cmd.active == AppCommandState::Kind::Copy) {
     using MP = AppCommandState::ModifyPhase;
     if (cmd.modifyPhase == MP::PickSelection)
-      return "Window opposite corner or cancel:";
+      return "Click objects or window, Enter when done:";
     if (cmd.modifyPhase == MP::NeedBase)
       return "Base point X,Y:";
     return "Destination @dx,dy or X,Y:";
+  }
+  if (cmd.active == AppCommandState::Kind::Array) {
+    using AP = AppCommandState::ArrayPhase;
+    switch (cmd.arrayPhase) {
+    case AP::PickSelection:
+      return "ARRAY — click objects or window, Enter when done:";
+    case AP::WaitType:
+      return "ARRAY — array type: [R]ectangular / [P]olar:";
+    case AP::Rect_WaitColumns:
+      return "ARRAY Rectangular — number of columns:";
+    case AP::Rect_WaitColumnSpacing:
+      return "ARRAY Rectangular — column spacing (type a distance, or click):";
+    case AP::Rect_WaitRows:
+      return "ARRAY Rectangular — number of rows:";
+    case AP::Rect_WaitRowSpacing:
+      return "ARRAY Rectangular — row spacing (type a distance, or click):";
+    case AP::Polar_WaitCenter:
+      return "ARRAY Polar — specify center point:";
+    case AP::Polar_WaitItemCount:
+      return "ARRAY Polar — number of items (total, including the original):";
+    case AP::Polar_WaitAngle:
+      return "ARRAY Polar — angle to fill in degrees (type, or click):";
+    case AP::Polar_WaitRotateAnswer:
+      return "ARRAY Polar — rotate items? [Y]es / [N]o:";
+    }
+    return "ARRAY:";
   }
   if (cmd.active == AppCommandState::Kind::Scale) {
     using MP = AppCommandState::ModifyPhase;
     using SP = AppCommandState::ScalePhase;
     if (cmd.modifyPhase == MP::PickSelection)
-      return "SCALE — window opposite corner or cancel:";
+      return "SCALE — click objects or window, Enter when done:";
     if (cmd.modifyPhase == MP::NeedBase)
       return "SCALE — base point X,Y:";
     if (cmd.modifyPhase == MP::NeedDestination) {
@@ -6280,7 +6309,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     using RP = AppCommandState::RotatePhase;
     switch (cmd.rotatePhase) {
     case RP::PickSelection:
-      return "Window opposite corner:";
+      return "Click objects or window, Enter when done:";
     case RP::NeedBase:
       return "Base point X,Y:";
     case RP::NeedAngleOrReference:
@@ -6299,7 +6328,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     using MirP = AppCommandState::MirrorPhase;
     switch (cmd.mirrorPhase) {
     case MirP::PickSelection:
-      return "MIRROR — window opposite corner or cancel:";
+      return "MIRROR — click objects or window, Enter when done:";
     case MirP::NeedP1:
       return "MIRROR — first point of mirror line X,Y:";
     case MirP::NeedP2:
@@ -10448,6 +10477,97 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       else
         SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
       break;
+    case ViewportClickRoute::SelectionAccumulate: {
+      // MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN/ARRAY's "select objects" step (this fix). A click on an
+      // entity/annotation/fill/survey point toggles it into the selection additively (plain click
+      // adds if absent, Shift removes if present) — the same accumulation ComputeSelectionFromRect
+      // already does for a box, just one entity at a time, so mixing clicks and boxes in one
+      // invocation merges into a single growing selection. A click on empty space arms or closes
+      // the fence exactly like SelectionBox above; unlike SelectionBox, finishing a fence here does
+      // NOT end the phase — SubmitViewportPickImpl's PickSelection branches no longer auto-advance,
+      // and ProcessCommandLineSubmit's matching PickSelection branches are what advance on Enter.
+      //
+      // Deliberately narrower than IdleSelection: no grips, no double-click text edit, no
+      // exclusive/clear-on-pick semantics for annotations or survey points — those are idle-only
+      // behaviors this accumulating multi-type selection has no use for.
+      if (cmd.selBoxWaitingSecond) {
+        SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
+        break;
+      }
+      bool handled = false;
+
+      const int annIx = PickCadAnnotationAt(rawPickX, rawPickY, cmd, halfH, avail.y);
+      if (annIx >= 0) {
+        SelectedEntity se{};
+        se.type = SelectedEntity::Type::Annotation;
+        se.index = annIx;
+        auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
+          return x.type == SelectedEntity::Type::Annotation && x.index == annIx;
+        });
+        if (keyShift) {
+          if (it != cmd.selection.end())
+            cmd.selection.erase(it);
+        } else if (it == cmd.selection.end()) {
+          cmd.selection.push_back(se);
+        }
+        EnsureAttrCounts(cmd);
+        handled = true;
+      }
+
+      if (!handled) {
+        SelectedEntity clickHit{};
+        float clickD2 = 0.f;
+        const float clickTol = CadOffsetEntityPickTolWorld(cmd);
+        if (PickClosestCadEntity(cmd, rawPickX, rawPickY, clickTol, &clickHit, &clickD2, pickRayPtr)) {
+          auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
+            return x.type == clickHit.type && x.index == clickHit.index;
+          });
+          if (keyShift) {
+            if (it != cmd.selection.end())
+              cmd.selection.erase(it);
+          } else if (it == cmd.selection.end()) {
+            cmd.selection.push_back(clickHit);
+          }
+          EnsureAttrCounts(cmd);
+          handled = true;
+        }
+      }
+
+      if (!handled) {
+        const int frIx = PickFilledRegionAt(cmd, rawPickX, rawPickY);
+        if (frIx >= 0) {
+          SelectedEntity fe{};
+          fe.type = SelectedEntity::Type::FilledRegion;
+          fe.index = frIx;
+          auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
+            return x.type == SelectedEntity::Type::FilledRegion && x.index == frIx;
+          });
+          if (keyShift) {
+            if (it != cmd.selection.end())
+              cmd.selection.erase(it);
+          } else if (it == cmd.selection.end()) {
+            cmd.selection.push_back(fe);
+          }
+          EnsureAttrCounts(cmd);
+          handled = true;
+        }
+      }
+
+      if (!handled && !cmd.surveyPoints.empty()) {
+        const int hitIx =
+            PickSurveyPointAtCursor(cmd, rawPickX, rawPickY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my);
+        if (hitIx >= 0) {
+          // Additive, same as the box (ComputeSelectionFromRect's inclSurvey merge) — NOT idle's
+          // ClearCadSelection-first exclusivity, which would drop this command's CAD picks.
+          ApplySurveyPointClickSelection(cmd, hitIx, keyShift, &log);
+          handled = true;
+        }
+      }
+
+      if (!handled)
+        BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
+      break;
+    }
     case ViewportClickRoute::TrimPick: {
       const float trimTol = CadSnap::WorldToleranceFromPixels(avail.y, halfH, cmd.objectSnapAperturePx);
       using TP = AppCommandState::TrimPhase;

@@ -412,6 +412,220 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     return;
   }
 
+  // REQ-305 ARRAY. Two local, per-instance append lambdas (translate / rotate-about-a-point) reuse
+  // the exact per-type walks the Move/Copy block above and the Rotate block below already do —
+  // looped once per grid cell / polar item instead of once, so this is the same coverage
+  // (LineSeg/Circle/Arc/Ellipse/Polyline/FeatureLine) as every other command's own preview, not a
+  // new abstraction.
+  if (cmd.active == K::Array) {
+    using APh = AppCommandState::ArrayPhase;
+
+    auto appendTranslatedInstance = [&](float dx, float dy) {
+      for (const auto& e : cmd.selection) {
+        if (e.type == SelectedEntity::Type::LineSeg) {
+          const size_t k = static_cast<size_t>(e.index) * 6;
+          if (k + 5 >= cmd.userLinesFlat.size())
+            continue;
+          for (int i = 0; i < 2; ++i) {
+            prevLines->push_back(cmd.userLinesFlat[k + i * 3] + dx);
+            prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 1] + dy);
+            prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
+          }
+        } else if (e.type == SelectedEntity::Type::Circle) {
+          const size_t k = static_cast<size_t>(e.index) * 4;
+          if (k + 3 >= cmd.userCirclesCxCyZR.size())
+            continue;
+          prevCircles->push_back(cmd.userCirclesCxCyZR[k] + dx);
+          prevCircles->push_back(cmd.userCirclesCxCyZR[k + 1] + dy);
+          prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);
+          prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
+        } else if (e.type == SelectedEntity::Type::Arc) {
+          const size_t k = static_cast<size_t>(e.index);
+          if (k >= cmd.userArcs.size())
+            continue;
+          CadArc a = cmd.userArcs[k];
+          a.cx += dx;
+          a.cy += dy;
+          appendArcPolylineStrip(prevLines, a.z, a, 48);
+        } else if (e.type == SelectedEntity::Type::Ellipse) {
+          const size_t k = static_cast<size_t>(e.index);
+          if (k >= cmd.userEllipses.size())
+            continue;
+          CadEllipse el = cmd.userEllipses[k];
+          el.cx += dx;
+          el.cy += dy;
+          appendEllipsePolylineStrip(prevLines, el.z, el, 56);
+        } else if (e.type == SelectedEntity::Type::Polyline) {
+          const int pi = e.index;
+          if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+            continue;
+          const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
+          const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+          const bool closed = static_cast<size_t>(pi) < cmd.userPolylineClosed.size() &&
+                              cmd.userPolylineClosed[static_cast<size_t>(pi)];
+          for (int vi = v0; vi + 1 < v1; ++vi) {
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3)] + dx);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)] + dy);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)] + dx);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)] + dy);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
+          }
+          if (closed && v1 - v0 >= 2) {
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)] + dx);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)] + dy);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3)] + dx);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)] + dy);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]);
+          }
+        }
+      }
+      appendSelectedFeatureLinePreview(prevLines, cmd, [&](float* x, float* y) {
+        *x += dx;
+        *y += dy;
+      });
+    };
+
+    auto appendRotatedInstance = [&](float bx, float by, float theta) {
+      for (const auto& e : cmd.selection) {
+        if (e.type == SelectedEntity::Type::LineSeg) {
+          const size_t k = static_cast<size_t>(e.index) * 6;
+          if (k + 5 >= cmd.userLinesFlat.size())
+            continue;
+          for (int i = 0; i < 2; ++i) {
+            float x = cmd.userLinesFlat[k + i * 3];
+            float y = cmd.userLinesFlat[k + i * 3 + 1];
+            rotatePreviewPt(bx, by, theta, &x, &y);
+            prevLines->push_back(x);
+            prevLines->push_back(y);
+            prevLines->push_back(cmd.userLinesFlat[k + i * 3 + 2]);
+          }
+        } else if (e.type == SelectedEntity::Type::Circle) {
+          const size_t k = static_cast<size_t>(e.index) * 4;
+          if (k + 3 >= cmd.userCirclesCxCyZR.size())
+            continue;
+          float x = cmd.userCirclesCxCyZR[k];
+          float y = cmd.userCirclesCxCyZR[k + 1];
+          rotatePreviewPt(bx, by, theta, &x, &y);
+          prevCircles->push_back(x);
+          prevCircles->push_back(y);
+          prevCircles->push_back(cmd.userCirclesCxCyZR[k + 2]);
+          prevCircles->push_back(cmd.userCirclesCxCyZR[k + 3]);
+        } else if (e.type == SelectedEntity::Type::Arc) {
+          const size_t k = static_cast<size_t>(e.index);
+          if (k >= cmd.userArcs.size())
+            continue;
+          CadArc a = cmd.userArcs[k];
+          rotatePreviewPt(bx, by, theta, &a.cx, &a.cy);
+          a.startRad += theta;
+          appendArcPolylineStrip(prevLines, a.z, a, 48);
+        } else if (e.type == SelectedEntity::Type::Ellipse) {
+          const size_t k = static_cast<size_t>(e.index);
+          if (k >= cmd.userEllipses.size())
+            continue;
+          CadEllipse el = cmd.userEllipses[k];
+          float mx = el.cx + el.majVx;
+          float my = el.cy + el.majVy;
+          rotatePreviewPt(bx, by, theta, &el.cx, &el.cy);
+          rotatePreviewPt(bx, by, theta, &mx, &my);
+          el.majVx = mx - el.cx;
+          el.majVy = my - el.cy;
+          appendEllipsePolylineStrip(prevLines, el.z, el, 56);
+        } else if (e.type == SelectedEntity::Type::Polyline) {
+          const int pi = e.index;
+          if (pi < 0 || static_cast<size_t>(pi + 1) >= cmd.userPolylineOffsets.size())
+            continue;
+          const int v0 = cmd.userPolylineOffsets[static_cast<size_t>(pi)];
+          const int v1 = cmd.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+          const bool closed = static_cast<size_t>(pi) < cmd.userPolylineClosed.size() &&
+                              cmd.userPolylineClosed[static_cast<size_t>(pi)];
+          for (int vi = v0; vi + 1 < v1; ++vi) {
+            float x0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3)];
+            float y0 = cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
+            float x1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
+            float y1 = cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
+            rotatePreviewPt(bx, by, theta, &x0, &y0);
+            rotatePreviewPt(bx, by, theta, &x1, &y1);
+            prevLines->push_back(x0);
+            prevLines->push_back(y0);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)]);
+            prevLines->push_back(x1);
+            prevLines->push_back(y1);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)]);
+          }
+          if (closed && v1 - v0 >= 2) {
+            float x0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
+            float y0 = cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)];
+            float x1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3)];
+            float y1 = cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)];
+            rotatePreviewPt(bx, by, theta, &x0, &y0);
+            rotatePreviewPt(bx, by, theta, &x1, &y1);
+            prevLines->push_back(x0);
+            prevLines->push_back(y0);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)]);
+            prevLines->push_back(x1);
+            prevLines->push_back(y1);
+            prevLines->push_back(cmd.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)]);
+          }
+        }
+      }
+      appendSelectedFeatureLinePreview(prevLines, cmd,
+                                       [&](float* x, float* y) { rotatePreviewPt(bx, by, theta, x, y); });
+    };
+
+    if (cmd.arrayType == AppCommandState::ArrayType::Rectangular) {
+      int cols = std::max(cmd.arrayCols, 1);
+      float colSpacing = cmd.arrayColSpacing;
+      int rows = 1;
+      float rowSpacing = 0.f;
+      if (cmd.arrayPhase == APh::Rect_WaitColumnSpacing) {
+        colSpacing = curX - cmd.arrayAnchorX;
+      } else if (cmd.arrayPhase == APh::Rect_WaitRows) {
+        // cols/colSpacing already fixed; rows not chosen yet — preview the single fixed row.
+      } else if (cmd.arrayPhase == APh::Rect_WaitRowSpacing) {
+        rows = std::max(cmd.arrayRows, 1);
+        rowSpacing = curY - cmd.arrayAnchorY;
+      } else {
+        return;  // PickSelection / WaitType / Rect_WaitColumns — not enough entered yet to preview
+      }
+      for (int r = 0; r < rows; ++r)
+        for (int c = 0; c < cols; ++c) {
+          if (r == 0 && c == 0)
+            continue;
+          appendTranslatedInstance(static_cast<float>(c) * colSpacing, static_cast<float>(r) * rowSpacing);
+        }
+      return;
+    }
+
+    // Polar.
+    if (cmd.arrayPhase != APh::Polar_WaitAngle && cmd.arrayPhase != APh::Polar_WaitRotateAnswer)
+      return;
+    constexpr float kPi = 3.14159265358979323846f;
+    const int n = std::max(cmd.arrayItemCount, 1);
+    float fillDeg = cmd.arrayFillAngleDeg;
+    if (cmd.arrayPhase == APh::Polar_WaitAngle) {
+      fillDeg = std::atan2(curY - cmd.arrayCenterY, curX - cmd.arrayCenterX) * (180.f / kPi);
+      if (fillDeg < 0.f)
+        fillDeg += 360.f;
+    }
+    const bool fullTurn = std::fabs(std::fmod(fillDeg, 360.f)) < 1e-3f;
+    const float fillRad = fillDeg * (kPi / 180.f);
+    const float step =
+        (n <= 1) ? 0.f : (fullTurn ? fillRad / static_cast<float>(n) : fillRad / static_cast<float>(n - 1));
+    for (int i = 1; i < n; ++i) {
+      const float ang = step * static_cast<float>(i);
+      if (cmd.arrayRotateItems) {
+        appendRotatedInstance(cmd.arrayCenterX, cmd.arrayCenterY, ang);
+      } else {
+        float ax = cmd.arrayAnchorX, ay = cmd.arrayAnchorY;
+        rotatePreviewPt(cmd.arrayCenterX, cmd.arrayCenterY, ang, &ax, &ay);
+        appendTranslatedInstance(ax - cmd.arrayAnchorX, ay - cmd.arrayAnchorY);
+      }
+    }
+    return;
+  }
+
   if (cmd.active == K::Stretch && cmd.modifyPhase == MP::NeedDestination) {
     // Mirrors the Move/Copy block above, but each definition point is gated against the captured
     // box before moving — the live preview of the genuine stretch effect (REQ-103 step 5).
