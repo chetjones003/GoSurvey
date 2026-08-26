@@ -3692,7 +3692,15 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: An **object-selection step** is any command phase whose question is *which objects*
   rather than *which point*: the `PickSelection` phase of MOVE, COPY, SCALE, ROTATE, MIRROR, ALIGN,
   ARRAY and STRETCH, and the entity-picking loops of DELETE, JOIN, ZOOM, TRIM, EXTEND, LENGTHEN,
-  BREAK, FILLET and CHAMFER. Idle selection — no command running — is an object-selection step too.
+  BREAK, FILLET and CHAMFER.
+
+  **Idle selection — no command running — is deliberately NOT one**, and is untouched by this
+  requirement: it keeps today's crosshair and today's OSNAP behaviour. The reason is that the three
+  rules below are a *mode signal*, and a mode signal is only meaningful against a default. Idle is
+  that default — it is what the user is looking at most of the time — so making it look like a
+  selection step would leave the pickbox meaning nothing, and would change the appearance of normal
+  use to fix a problem that only exists inside commands. The distinction being drawn is "a command
+  is asking me which objects" versus "nothing is running", which is exactly the line this excludes.
 
   Three rules hold for the whole duration of such a step, and stop holding the moment the phase
   advances.
@@ -3747,7 +3755,10 @@ requirements is a planning failure, not a sign of rigor.
   - the accumulate-until-Enter behaviour of REQ-305 is unchanged — this requirement governs the
     step's *appearance and input treatment*, never which objects it collects;
   - STRETCH keeps its crossing box as load-bearing geometry (REQ-103 step 5): it gets the cursor,
-    snap and prompt treatment, and its box semantics are untouched.
+    snap and prompt treatment, and its box semantics are untouched;
+  - **with no command running, nothing changes at all** — the crosshair is the crosshair, OSNAP
+    behaves exactly as it does today, and snap markers still draw. A user who never starts a command
+    cannot tell this requirement was implemented, and that is the intended outcome, not a gap.
 - Owner-layer: UI (cursor rendering, marker suppression, prompt surfaces); Commands (the shared
   prompt string and the selection-step predicate); Viewport (the existing raw-vs-snapped pick paths)
 - Status: accepted (2026-08-26)

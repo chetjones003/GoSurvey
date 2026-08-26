@@ -71,13 +71,13 @@ work: **the hit-test half is already right; the visual half does not exist.**
 | # | Question | Asked | Answer |
 |---|----------|-------|--------|
 | Q1 | Exact prompt wording. REQ-121 fixes that there is **one** string; it does not fix what it says. #91 suggests "Select objects, ENTER to continue". | — | — |
-| Q2 | Does idle selection (no command running) get the pickbox too? REQ-121 calls idle an object-selection step, so by the letter yes — but the idle crosshair is what the user sees most of the time, so this is the most visible change in the task and worth confirming rather than inferring. | — | — |
+| Q2 | Does idle selection (no command running) get the pickbox too? REQ-121's first draft called idle an object-selection step, so by the letter yes — but the idle crosshair is what the user sees most of the time, so this is the most visible change in the task and worth confirming rather than inferring. | 2026-08-26 | **No — idle is excluded.** REQ-121 and D-2026-08-26-a were both amended: idle keeps today's crosshair, OSNAP and snap markers. The treatment is a mode signal, and it only signifies against a default; idle is that default. Acceptance now states it positively — a user who never starts a command cannot tell this shipped. |
 | Q3 | Do the entity-picking loops of TRIM/EXTEND/FILLET/CHAMFER/BREAK/LENGTHEN get the pickbox as well, or only the `PickSelection` phases? They pick objects, so REQ-121 lists them — but TRIM owns its own pick entry point (`SubmitTrimViewportPick`) and may need its own handling. | — | — |
 
 ## 5. Assumptions
 ```
-(none recorded yet — Q1-Q3 must be answered rather than assumed. Q2 in particular changes what the
-user sees during normal idle use, which is not a detail to settle by guessing.)
+(none recorded yet. Q2 is answered — idle excluded — which was the one that could have changed what
+the user sees during normal idle use. Q1 and Q3 remain, and must be answered rather than assumed.)
 ```
 
 ## 6. Plan  (write BEFORE any code)
