@@ -699,36 +699,28 @@ if(GOSURVEY_BUILD_TESTS)
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endforeach()
 
-    # Oracles that currently FAIL, held DISABLED rather than deleted or WILL_FAIL'ed.
+    # Oracles held DISABLED rather than deleted or WILL_FAIL'ed.
     #
-    # Same call TASK-056 made for `headless.gs-roundtrip.compare` while #56 and #57 were open, and
-    # for the same reason: an oracle that has found a real defect is EVIDENCE, and deleting it to
-    # get a green suite throws the evidence away. WILL_FAIL is worse than either — it goes green the
-    # moment the failure turns into a DIFFERENT failure, which is the one outcome nobody wants to
-    # miss. Each file's header says what it found; re-enable when that is fixed.
+    # ***** THE LIST IS EMPTY. *****  Keep the mechanism and this note: it is the record of what the
+    # convention is for, and the next oracle to find a real defect goes here rather than being
+    # deleted to get a green suite. TASK-056 made this call for `headless.gs-roundtrip.compare`
+    # while #56/#57 were open, and it is why those defects stayed visible. WILL_FAIL is worse than
+    # either option — it goes green the moment the failure turns into a DIFFERENT failure, which is
+    # the one outcome nobody wants to miss.
     #
-    #   dxf-export-stable              — held for its STABILITY half alone. Both survival defects it
-    #                                    found are now closed: #64 (a LWPOLYLINE came back as loose
-    #                                    LINEs) on 2026-08-21 by TASK-083, and #63 (ARC and ELLIPSE
-    #                                    dropped entirely) on 2026-08-26 by TASK-114. Each left a
-    #                                    regression behind that RUNS —
-    #                                    `regression-64-dxf-polyline-identity.txt` and
-    #                                    `regression-63-dxf-arc-ellipse-identity.txt` — so a closed
-    #                                    defect does not wait on an open one.
-    #                                    What still fails is `EXPECT SAMEFILE`, and it is a THIRD,
-    #                                    unrelated defect found by TASK-114 and filed as #94:
-    #                                    $EXTMIN/$EXTMAX are written at six decimals, the importer
-    #                                    takes the document
-    #                                    origin from those ROUNDED values, and then
-    #                                    RebaseDrawingToLocalOrigin re-derives it from the UNROUNDED
-    #                                    geometry. The ~5e-7 disagreement clears the 1e-9 no-op guard
-    #                                    in ApplyDocumentOriginRebase, so every stored float is
-    #                                    shifted and re-rounded and the second export lands ~1e-6 off
-    #                                    in every coordinate. Reproduced on the UNMODIFIED writer by
-    #                                    two LINEs alone, with no arc or ellipse anywhere, so it is
-    #                                    neither caused by nor fixable within #63. Re-enable when it
-    #                                    is closed (#94); see TASK-114 §12.
-    foreach(_disabled dxf-export-stable)
+    # `dxf-export-stable` lived here from 2026-08-18 to 2026-08-26 and is now RE-ENABLED. It found
+    # three defects, and needed all three closed before it could come back:
+    #
+    #   #64  LWPOLYLINE came back from a round trip as loose LINEs   — TASK-083, 2026-08-21
+    #   #63  ARC and ELLIPSE dropped entirely by the writer          — TASK-114, 2026-08-26
+    #   #94  the round trip walked the drawing ~2e-6 every cycle     — TASK-116, 2026-08-26
+    #
+    # Each left a regression of its own behind, so a closed defect never waited on an open one:
+    # `regression-64-dxf-polyline-identity.txt`, `regression-63-dxf-arc-ellipse-identity.txt`,
+    # `regression-94-dxf-origin-no-drift.txt` and `regression-94a-dxf-origin-large-coord.txt`.
+    # Those stay whether or not this oracle is enabled — the oracle proves the invariant, and each
+    # regression pins the specific defect that broke it.
+    foreach(_disabled )
       if(TEST headless.${_disabled})
         set_tests_properties(headless.${_disabled} PROPERTIES DISABLED TRUE)
       endif()
