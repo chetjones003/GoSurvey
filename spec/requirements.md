@@ -3681,7 +3681,6 @@ requirements is a planning failure, not a sign of rigor.
   REQ-304/issue #82 — `D-2026-08-25-j` collided with master's independent REQ-303, see REQ-303's
   duplication note above); issue #80
 
-
 ### REQ-119 — Command variants are clickable wherever they are prompted (GitHub issue #81)
 - Purpose: the command line tells the user which keyword options a command accepts, but only one
   prompt in the entire program renders them as anything the mouse can reach. A user who does not
@@ -3871,6 +3870,79 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-08-25 — accepted (D-2026-08-25-o, relabeled D-2026-08-26-a while merging PR #93
   into `beta` — that letter was already taken by REQ-119 above); asked for directly by the user,
   from AutoCAD's wheel double-click.
+
+### REQ-121 — Object selection is a visibly distinct mode: no OSNAP, a pickbox cursor, one prompt (GitHub issue #91)
+- Purpose: "pick a point" and "pick an object" are different acts, and today they look and behave
+  identically. A user in a selection step sees the same crosshair, sees snap markers that mean
+  nothing there, and reads a differently-worded prompt in every command. The snapping is not merely
+  useless during selection — it is actively misleading, because the cursor visibly jumps to a snap
+  point while the hit-test uses somewhere else
+- Priority: should
+- Type: functional
+- Statement: An **object-selection step** is any command phase whose question is *which objects*
+  rather than *which point*: the `PickSelection` phase of MOVE, COPY, SCALE, ROTATE, MIRROR, ALIGN,
+  ARRAY and STRETCH, and the entity-picking loops of DELETE, JOIN, ZOOM, TRIM, EXTEND, LENGTHEN,
+  BREAK, FILLET and CHAMFER. Idle selection — no command running — is an object-selection step too.
+
+  Three rules hold for the whole duration of such a step, and stop holding the moment the phase
+  advances.
+
+  **(1) OSNAP has no effect.** The distinction that matters here is that the *hit-test* is already
+  mostly correct and the *cursor* is not:
+
+  | | today | required |
+  |---|---|---|
+  | what the pick hit-tests against | raw unsnapped cursor, for most steps | raw unsnapped cursor, for **every** step |
+  | where the cursor is drawn | snapped — it jumps to snap points | raw — it tracks the mouse |
+  | snap markers / tooltips | drawn | not drawn |
+
+  So this is only half a behaviour change. `ViewportUseRawWorldForSelectionRectPick` and the
+  `RawEntityPick` route already establish "hit-test raw" for selection rectangles and entity picks
+  respectively — the `RawEntityPick` comment already gives this requirement's own reasoning, that
+  *"an OSNAP-adjusted point would hit-test somewhere the user is not pointing."* What does not
+  exist is any suppression of the snap **cursor adjustment or marker display**, so the user watches
+  the crosshair leap to an endpoint while the pick correctly ignores it. Making the rule explicit
+  is what stops it from being a per-command accident.
+
+  **The rule also closes a live inconsistency it exposes.** `ALIGN` routes its `PickSelection`
+  phase to `SelectionAccumulate` alongside its six siblings, but is **absent** from
+  `ViewportUseRawWorldForSelectionRectPick` — so ALIGN's selection-box corners come from *snapped*
+  coordinates while MOVE/COPY/SCALE/ROTATE/MIRROR/ARRAY's come from raw. That is a defect, found
+  while writing this requirement, and it is precisely the "per-command accident" a stated rule
+  prevents. A single predicate answering *"is a selection step active?"* is what all three rules
+  below consult, so a command cannot be half-included again.
+
+  **(2) The cursor is a pickbox.** A square of the size the crosshair configuration already carries
+  (`pickbox half-size in px`, an existing setting — this is not a new tunable), replacing the
+  crosshair for the duration of the step and reverting when it ends. This is AutoCAD's `PICKBOX`
+  convention and the visual signal that rules (1) and (3) are in force.
+
+  **(3) One prompt, everywhere.** Every object-selection step shows the **same** phrase, in both
+  the command line and the dynamic cursor text (REQ-304's surfaces, and REQ-304's rule that the two
+  agree). The wording is settled once, in one shared string, rather than per command — today they
+  range from "click two corners to window-select objects" to "window-select entities, then press
+  Enter" to no Enter hint at all.
+- Acceptance:
+  - no snap marker is drawn, and the cursor does not jump to a snap candidate, at any point during
+    any object-selection step listed above;
+  - the pick that results is hit-tested against the raw cursor for **every** listed step —
+    including ALIGN, whose box corners are snapped today;
+  - the cursor renders as a pickbox square for the step's duration and reverts to the crosshair
+    when the phase advances or the command is cancelled;
+  - every listed command shows the identical selection prompt in the command line **and** in the
+    dynamic cursor text, sourced from one shared string;
+  - a command left out of the treatment is a **build-time or test-time** failure, not something a
+    user finds — the single predicate is exhaustive over the phases, on the precedent of
+    `ViewportClickRouteFor`'s `default:`-less switch (REQ-103/TASK-099);
+  - the accumulate-until-Enter behaviour of REQ-305 is unchanged — this requirement governs the
+    step's *appearance and input treatment*, never which objects it collects;
+  - STRETCH keeps its crossing box as load-bearing geometry (REQ-103 step 5): it gets the cursor,
+    snap and prompt treatment, and its box semantics are untouched.
+- Owner-layer: UI (cursor rendering, marker suppression, prompt surfaces); Commands (the shared
+  prompt string and the selection-step predicate); Viewport (the existing raw-vs-snapped pick paths)
+- Status: accepted (2026-08-26)
+- Revisions: 2026-08-26 — accepted (D-2026-08-26-a); issue #91.
+
 ---
 
 ## Performance requirements
