@@ -1489,12 +1489,13 @@ struct AppCommandState {
   float objectSnapGlyphHalfPx = 15.f;
   /// Half-size in screen pixels for grip squares drawn on selected entities.
   float gripSizePx = 4.f;
-  /// Shift+RMB snap menu: next viewport pick uses this world point (then cleared on submit / cancel).
-  bool pendingOneShotSnapValid = false;
-  float pendingOneShotSnapX = 0.f;
-  float pendingOneShotSnapY = 0.f;
+  /// Shift+RMB snap-override menu (issue #103): once a kind is chosen, FindBest is restricted to
+  /// candidates of ONLY this kind — ignoring the persistent per-type OSNAP toggles, since the whole
+  /// point of the override is to reach a kind the user does not keep enabled generally — for the
+  /// next viewport hover/pick, then cleared on submit / cancel (ClearPendingOneShotObjectSnap).
+  bool objectSnapKindOverrideValid = false;
   /// \c static_cast<\ref CadSnap::Kind>.
-  int pendingOneShotSnapKind = 0;
+  int objectSnapKindOverrideKind = 0;
 
   /// World coordinate of local (0,0). Geometry is stored in local space for float precision.
   double worldDocumentOriginX = 0.0;

@@ -687,6 +687,51 @@ if(GOSURVEY_BUILD_TESTS)
   include(Catch)
   catch_discover_tests(GoSurveyTests)
 
+  # ---------------------------------------------------------------------------
+  # GoSurveySnapTests (issue #103): CadSnap::FindBest needs AppCommandState AND the rest of
+  # ${GOSURVEY_DOMAIN_SOURCES} it transitively calls into (SurveyPoints.cpp reaches into
+  # CadCommands.cpp for EraseCadAnnotationAtIndex/FindEntityById etc.), which is exactly what
+  # GoSurveyTests above is built to avoid linking. It is otherwise identical to gosurvey_headless's
+  # link set — domain sources + imgui_core, no GLFW/OpenGL/window — just with a Catch2 main instead
+  # of the transcript driver.
+  # ---------------------------------------------------------------------------
+  add_executable(GoSurveySnapTests
+    ${GOSURVEY_DOMAIN_SOURCES}
+    src/platform/HeadlessFileDialogs.cpp
+    src/platform/HeadlessPdfAttach.cpp
+    tests/CadSnapTests.cpp
+  )
+  target_include_directories(GoSurveySnapTests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/viewport
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/util
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/io
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/render
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/font
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/update
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+    ${NLOHMANN_JSON_INCLUDE}
+    ${CMAKE_BINARY_DIR}/generated
+  )
+  target_link_libraries(GoSurveySnapTests PRIVATE imgui_core Catch2::Catch2WithMain)
+  target_compile_definitions(GoSurveySnapTests PRIVATE
+    GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples")
+  if(WIN32)
+    target_link_libraries(GoSurveySnapTests PRIVATE comdlg32 ole32 shell32)
+  endif()
+  if(MSVC)
+    target_compile_options(GoSurveySnapTests PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(GoSurveySnapTests PRIVATE -Wall -Wextra)
+  endif()
+  catch_discover_tests(GoSurveySnapTests)
+
   # REQ-203: the transcript corpus runs on every push and a non-zero exit fails the build (REQ-202).
   # Registered here, inside GOSURVEY_BUILD_TESTS, because enable_testing() lives in this block —
   # each transcript becomes its own ctest case so a failure names the transcript that failed.

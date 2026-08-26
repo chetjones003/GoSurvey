@@ -54,8 +54,12 @@ struct SnapExclude {
   int index = -1;
 };
 
+/// \p onlyKind, when non-null (issue #103's Shift+Right-Click "Snap once" override), restricts
+/// every candidate to that one kind and ignores the persistent per-type OSNAP toggles entirely —
+/// the override's whole purpose is to reach a kind the user does not keep enabled generally.
 [[nodiscard]] Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActive,
-                           float tolWorld, SnapExclude exclude = {}, const ray3d::Ray* pickRay = nullptr);
+                           float tolWorld, SnapExclude exclude = {}, const ray3d::Ray* pickRay = nullptr,
+                           const Kind* onlyKind = nullptr);
 
 /// Grip-only snap: checks grip points of all selected entities (CAD, MTEXT, survey points).
 /// Returns Kind::Grip. No glyph is drawn for this kind. Works regardless of OSNAP toggle.
@@ -66,7 +70,11 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
                           bool commandActive, std::vector<SnapCandidateEntry>& out);
 
 /// True when perpendicular snap has a command reference (same rules as object snap).
-[[nodiscard]] bool CommandHasPerpendicularSnapReference(const AppCommandState& cmd, bool commandActive);
+/// \p ignoreToggle skips the persistent objectSnapPerpendicular preference check — used by the
+/// Shift+right-click one-shot override menu (issue #103), whose whole purpose is to reach a snap
+/// type independent of what is enabled as a running OSNAP.
+[[nodiscard]] bool CommandHasPerpendicularSnapReference(const AppCommandState& cmd, bool commandActive,
+                                                        bool ignoreToggle = false);
 
 [[nodiscard]] inline int Priority(Kind k) {
   switch (k) {

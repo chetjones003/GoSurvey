@@ -8694,12 +8694,6 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
   ImGui::PopStyleColor();
 }
 
-static std::vector<CadSnap::SnapCandidateEntry> g_snapPickMenuScratch;
-static int g_snapMenuStep = 0; ///< 0 = choose snap type, 1 = choose instance
-static float g_snapMenuSortX = 0.f;
-static float g_snapMenuSortY = 0.f;
-static CadSnap::Kind g_snapMenuSelectedKind = CadSnap::Kind::Endpoint;
-
 static const char* SnapKindLabelForUi(CadSnap::Kind k) {
   switch (k) {
   case CadSnap::Kind::Endpoint:
@@ -8722,25 +8716,6 @@ static const char* SnapKindLabelForUi(CadSnap::Kind k) {
     return "Grip";
   }
   return "Snap";
-}
-
-static void FormatSnapPickLine(char* line, size_t cap, const AppCommandState& cmd, const CadSnap::Hit& h) {
-  if (cap < 8)
-    return;
-  if (h.kind == CadSnap::Kind::SurveyCenter) {
-    for (size_t i = 0; i < cmd.surveyPoints.size(); ++i) {
-      const auto& p = cmd.surveyPoints[i];
-      if (std::fabs(p.easting - h.x) < 1e-4f && std::fabs(p.northing - h.y) < 1e-4f) {
-        std::snprintf(line, cap, "%s — ID %d — %s, %s", SnapKindLabelForUi(h.kind), p.id,
-                      FormatLinear(static_cast<double>(h.x), cmd.displayLinearPrecision).c_str(),
-                      FormatLinear(static_cast<double>(h.y), cmd.displayLinearPrecision).c_str());
-        return;
-      }
-    }
-  }
-  std::snprintf(line, cap, "%s — %s, %s", SnapKindLabelForUi(h.kind),
-                FormatLinear(static_cast<double>(h.x), cmd.displayLinearPrecision).c_str(),
-                FormatLinear(static_cast<double>(h.y), cmd.displayLinearPrecision).c_str());
 }
 
 /// When a single annotation with viewport grips is selected, pull the cursor to the nearest grip inside the OSNAP
@@ -9780,10 +9755,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   {
     ImGuiIO& ioVpRmb = ImGui::GetIO();
     if (modelSpace && hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
-      const float uR = mx / std::max(avail.x, 1.f);
-      const float vR = my / std::max(avail.y, 1.f);
-      const double rmbWx = worldLeft + static_cast<double>(uR) * (worldRight - worldLeft);
-      const double rmbWy = worldTop - static_cast<double>(vR) * (worldTop - worldBottom);
       using AK = AppCommandState::Kind;
       const bool blockSnapPickMenu = cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond || cmd.dimGripMoveActive ||
                                      cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
@@ -9845,10 +9816,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
       if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         if (ioVpRmb.KeyShift && allowSnapCycle) {
-          g_snapMenuSortX = static_cast<float>(rmbWx);
-          g_snapMenuSortY = static_cast<float>(rmbWy);
-          g_snapMenuStep = 0;
-          g_snapPickMenuScratch.clear();
           ImGui::OpenPopup("##gos_snap_pick");
           cmd.rightClickPressPending = false;
         } else if (!blockSnapPickMenu) {
@@ -10085,19 +10052,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
     }
 
-    if (cmd.pendingOneShotSnapValid && outCursorX && outCursorY) {
-      *outCursorX = cmd.pendingOneShotSnapX;
-      *outCursorY = cmd.pendingOneShotSnapY;
-      cmd.viewportSnapPickValid = true;
-      cmd.viewportSnapPickLocalX = cmd.pendingOneShotSnapX;
-      cmd.viewportSnapPickLocalY = cmd.pendingOneShotSnapY;
-      if (out_snap) {
-        out_snap->valid = true;
-        out_snap->kind = static_cast<CadSnap::Kind>(cmd.pendingOneShotSnapKind);
-        out_snap->x = cmd.pendingOneShotSnapX;
-        out_snap->y = cmd.pendingOneShotSnapY;
-      }
-    } else {
+    {
       cmd.viewportSnapPickValid = false;
       const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
                           cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
@@ -10120,7 +10075,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           exclude.type  = cmd.entityGripType;
           exclude.index = cmd.entityGripEntityIndex;
         }
-        snap = CadSnap::FindBest(rawX, rawY, cmd, midCmd, tol, exclude, cursorRayPtr);  // 3D when orbited (REQ-058)
+        // issue #103: the Shift+Right-Click "Snap once" override restricts FindBest to just the
+        // chosen kind for this hover/pick, ignoring the persistent per-type toggles — that is the
+        // whole point of an override menu.
+        const CadSnap::Kind overrideKind = static_cast<CadSnap::Kind>(cmd.objectSnapKindOverrideKind);
+        const CadSnap::Kind* onlyKind = cmd.objectSnapKindOverrideValid ? &overrideKind : nullptr;
+        snap = CadSnap::FindBest(rawX, rawY, cmd, midCmd, tol, exclude, cursorRayPtr, onlyKind);  // 3D when orbited (REQ-058)
         if (snap.valid) {
           cmd.viewportSnapPickValid = true;
           cmd.viewportSnapPickLocalX = snap.x;
@@ -10159,7 +10119,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         *outCursorY = rawY;
       }
     }
-    if (!cmd.pendingOneShotSnapValid && outCursorX && outCursorY &&
+    if (!cmd.objectSnapKindOverrideValid && outCursorX && outCursorY &&
         !cmd.dimGripMoveActive && !cmd.entityGripMoveActive && !cmd.mtextGripMoveActive) {
       ApplyGripMagnetToGrips(cmd, rawX, rawY, halfH, avail.y, outCursorX, outCursorY, out_snap);
       // Silent grip snap for all selected entities — no glyph, works regardless of OSNAP toggle.
@@ -13348,68 +13308,39 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   }
   ImGui::SetNextWindowPos(ImGui::GetMousePos(), ImGuiCond_Appearing);
   if (ImGui::BeginPopup("##gos_snap_pick", ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGuiIO& ioSnapPick = ImGui::GetIO();
-    const auto goSnapKind = [&](CadSnap::Kind k) {
-      g_snapPickMenuScratch.clear();
-      CadSnap::GatherAllSnapsOfKind(k, g_snapMenuSortX, g_snapMenuSortY, cmd, true, g_snapPickMenuScratch);
-      g_snapMenuSelectedKind = k;
-      g_snapMenuStep = 1;
+    // Issue #103: choosing a kind here arms a LIVE override — every hover/pick until the next
+    // viewport commit (ClearPendingOneShotObjectSnap) is restricted to just that kind, exactly like
+    // the persistent per-type toggles normally gate FindBest, except this ignores those toggles
+    // entirely. That is the whole point of a temporary override: reaching a kind the user does not
+    // keep enabled generally. Perpendicular is the one exception offered conditionally — it needs a
+    // command-defined reference point to measure a foot from (CommandHasPerpendicularSnapReference),
+    // which is a structural precondition, not a preference.
+    const auto armOverride = [&](CadSnap::Kind k) {
+      cmd.objectSnapKindOverrideValid = true;
+      cmd.objectSnapKindOverrideKind = static_cast<int>(k);
+      log.push_back(std::string(SnapKindLabelForUi(k)) + " snap locked for the next pick.");
+      ImGui::CloseCurrentPopup();
     };
 
-    if (g_snapMenuStep == 0) {
-      ImGui::TextUnformatted("Snap once — choose type");
-      ImGui::Separator();
-      if (cmd.objectSnapEndpoint && ImGui::Selectable("Endpoint"))
-        goSnapKind(CadSnap::Kind::Endpoint);
-      if (cmd.objectSnapMidpoint && ImGui::Selectable("Midpoint"))
-        goSnapKind(CadSnap::Kind::Midpoint);
-      if (cmd.objectSnapCenter && ImGui::Selectable("Center"))
-        goSnapKind(CadSnap::Kind::Center);
-      if (cmd.objectSnapPerpendicular && CadSnap::CommandHasPerpendicularSnapReference(cmd, true) &&
-          ImGui::Selectable("Perpendicular"))
-        goSnapKind(CadSnap::Kind::Perpendicular);
-      if (cmd.objectSnapSurveyPoint && ImGui::Selectable("Survey"))
-        goSnapKind(CadSnap::Kind::SurveyCenter);
-      if (cmd.objectSnapGeometricCenter && ImGui::Selectable("Geometric center"))
-        goSnapKind(CadSnap::Kind::GeometricCenter);
-      if (cmd.objectSnapIntersection && ImGui::Selectable("Intersection"))
-        goSnapKind(CadSnap::Kind::Intersection);
-      if (cmd.objectSnapApparentIntersection && ImGui::Selectable("Apparent intersection"))
-        goSnapKind(CadSnap::Kind::ApparentIntersection);
-    } else {
-      char title[96];
-      std::snprintf(title, sizeof(title), "%s — all in model (sorted by distance from click)",
-                    SnapKindLabelForUi(g_snapMenuSelectedKind));
-      ImGui::TextWrapped("%s", title);
-      if (ImGui::Button("Back")) {
-        g_snapMenuStep = 0;
-        g_snapPickMenuScratch.clear();
-      }
-      ImGui::Separator();
-      const float lineH = ImGui::GetTextLineHeightWithSpacing();
-      const float maxListH = std::clamp(22.f * lineH, 180.f, 420.f * ioSnapPick.FontGlobalScale);
-      ImGui::BeginChild("##gos_snap_pick_list", ImVec2(360.f * ioSnapPick.FontGlobalScale, maxListH), true,
-                        ImGuiWindowFlags_AlwaysVerticalScrollbar);
-      if (g_snapPickMenuScratch.empty()) {
-        ImGui::TextUnformatted("No matching snaps in the current geometry.");
-      } else {
-        for (size_t i = 0; i < g_snapPickMenuScratch.size(); ++i) {
-          const CadSnap::Hit& h = g_snapPickMenuScratch[i].hit;
-          char line[192];
-          FormatSnapPickLine(line, sizeof(line), cmd, h);
-          ImGui::PushID(static_cast<int>(i));
-          if (ImGui::Selectable(line)) {
-            cmd.pendingOneShotSnapValid = true;
-            cmd.pendingOneShotSnapX = h.x;
-            cmd.pendingOneShotSnapY = h.y;
-            cmd.pendingOneShotSnapKind = static_cast<int>(h.kind);
-            ImGui::CloseCurrentPopup();
-          }
-          ImGui::PopID();
-        }
-      }
-      ImGui::EndChild();
-    }
+    ImGui::TextUnformatted("Snap once — choose type");
+    ImGui::Separator();
+    if (ImGui::Selectable("Endpoint"))
+      armOverride(CadSnap::Kind::Endpoint);
+    if (ImGui::Selectable("Midpoint"))
+      armOverride(CadSnap::Kind::Midpoint);
+    if (ImGui::Selectable("Center"))
+      armOverride(CadSnap::Kind::Center);
+    if (CadSnap::CommandHasPerpendicularSnapReference(cmd, true, /*ignoreToggle=*/true) &&
+        ImGui::Selectable("Perpendicular"))
+      armOverride(CadSnap::Kind::Perpendicular);
+    if (ImGui::Selectable("Survey"))
+      armOverride(CadSnap::Kind::SurveyCenter);
+    if (ImGui::Selectable("Geometric center"))
+      armOverride(CadSnap::Kind::GeometricCenter);
+    if (ImGui::Selectable("Intersection"))
+      armOverride(CadSnap::Kind::Intersection);
+    if (ImGui::Selectable("Apparent intersection"))
+      armOverride(CadSnap::Kind::ApparentIntersection);
     ImGui::EndPopup();
   }
 

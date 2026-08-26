@@ -218,28 +218,38 @@ struct SnapPickAccum {
   /// which is why snapping appeared to stop working entirely once the view was orbited.
   const ray3d::Ray* ray = nullptr;
   Hit best{};
-  float bestPickDistSq = 0.f;
+  /// True cursor-to-candidate-point distance (issue #103): the metric every kind is ranked by, so
+  /// a candidate whose ACCEPTANCE test is a heuristic (e.g. a circle's distance-to-rim, so hovering
+  /// anywhere on a large circle still offers its center) never wins purely because that heuristic
+  /// reads small — only because its actual point is genuinely the nearest valid candidate.
+  float bestRankDistSq = 0.f;
   int bestPri = -1;
-  float bestTieDistSq = 0.f;
 };
 
 /// \param snapZ elevation of the candidate point. Only consulted when \c acc->ray is set; the
 ///        plan-view path ignores Z exactly as it always has.
+/// \param pickDistSq the ACCEPTANCE metric (tolerance test) — may be a heuristic distance (e.g. a
+///        circle's distance-to-rim) that differs from the true distance to the returned point.
+///        Ranking against other candidates always uses the true point distance, never this value,
+///        so a kind with a generous heuristic acceptance radius cannot out-rank a kind that is
+///        genuinely closer to the cursor (issue #103).
 void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float snapY, Kind kind, float pickDistSq,
                   float tolWorld, float snapZ = 0.f) {
   const float tol2 = tolWorld * tolWorld;
+  float rankDistSq = (snapX - wx) * (snapX - wx) + (snapY - wy) * (snapY - wy);
   // Orbited: re-measure the candidate against the cursor ray in 3D. Doing it here — at the one
   // place every candidate funnels through — means each generator keeps its own 2D construction
-  // logic and only the comparison changes.
+  // logic and only the comparison changes. The ray distance to the actual point serves as both the
+  // acceptance and ranking metric here — there is no separate heuristic once measured against the ray.
   if (acc->ray) {
     const double d = ray3d::RayPointDistance(
         *acc->ray, ray3d::Vec3{static_cast<double>(snapX), static_cast<double>(snapY), static_cast<double>(snapZ)});
     pickDistSq = static_cast<float>(d * d);
+    rankDistSq = pickDistSq;
   }
   if (!(pickDistSq <= tol2) || pickDistSq > 1.e28f)
     return;
   const int pri = Priority(kind);
-  const float tie = (snapX - wx) * (snapX - wx) + (snapY - wy) * (snapY - wy);
   const float eps = 1.e-9f * std::max(tol2, 1.f);
   if (!acc->best.valid) {
     acc->best.valid = true;
@@ -247,30 +257,28 @@ void ConsiderSnap(SnapPickAccum* acc, float wx, float wy, float snapX, float sna
     acc->best.x = snapX;
     acc->best.y = snapY;
     acc->best.z = snapZ;
-    acc->bestPickDistSq = pickDistSq;
+    acc->bestRankDistSq = rankDistSq;
     acc->bestPri = pri;
-    acc->bestTieDistSq = tie;
     return;
   }
-  if (pickDistSq < acc->bestPickDistSq - eps) {
+  if (rankDistSq < acc->bestRankDistSq - eps) {
     acc->best.kind = kind;
     acc->best.x = snapX;
     acc->best.y = snapY;
     acc->best.z = snapZ;
-    acc->bestPickDistSq = pickDistSq;
+    acc->bestRankDistSq = rankDistSq;
     acc->bestPri = pri;
-    acc->bestTieDistSq = tie;
     return;
   }
-  if (std::fabs(pickDistSq - acc->bestPickDistSq) > eps)
+  if (rankDistSq > acc->bestRankDistSq + eps)
     return;
-  if (pri > acc->bestPri || (pri == acc->bestPri && tie < acc->bestTieDistSq - 1.e-12f)) {
+  // True distance tie: fall back to the kind priority table.
+  if (pri > acc->bestPri) {
     acc->best.kind = kind;
     acc->best.x = snapX;
     acc->best.y = snapY;
     acc->best.z = snapZ;
     acc->bestPri = pri;
-    acc->bestTieDistSq = tie;
   }
 }
 
@@ -609,14 +617,27 @@ void ComputeApparentIntersections(const Camera& cam, const std::vector<IsectSeg>
 } // namespace
 
 Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActive, float tolWorld,
-             SnapExclude exclude, const ray3d::Ray* pickRay) {
+             SnapExclude exclude, const ray3d::Ray* pickRay, const Kind* onlyKind) {
   SnapPickAccum acc{};
   // Null (plan view, paper space) leaves every candidate measured exactly as before.
   acc.ray = (pickRay && pickRay->valid()) ? pickRay : nullptr;
 
+  // issue #103: with an override active, a kind is wanted purely because it IS the override — the
+  // persistent per-type toggle is irrelevant (that toggle is exactly what the override exists to
+  // bypass). With no override, behavior is unchanged: wanted iff the toggle says so.
+  const auto want = [&](Kind k, bool toggle) { return onlyKind ? (*onlyKind == k) : toggle; };
+  const bool wantEndpoint = want(Kind::Endpoint, cmd.objectSnapEndpoint);
+  const bool wantMidpoint = want(Kind::Midpoint, cmd.objectSnapMidpoint);
+  const bool wantCenter = want(Kind::Center, cmd.objectSnapCenter);
+  const bool wantGeometricCenter = want(Kind::GeometricCenter, cmd.objectSnapGeometricCenter);
+  const bool wantIntersection = want(Kind::Intersection, cmd.objectSnapIntersection);
+  const bool wantApparentIntersection = want(Kind::ApparentIntersection, cmd.objectSnapApparentIntersection);
+  const bool wantSurveyPoint = want(Kind::SurveyCenter, cmd.objectSnapSurveyPoint);
+  const bool wantPerpendicular = want(Kind::Perpendicular, cmd.objectSnapPerpendicular);
+
   float refPx = 0.f;
   float refPy = 0.f;
-  const bool havePerpRef = commandActive && cmd.objectSnapPerpendicular && PerpendicularReference(cmd, &refPx, &refPy);
+  const bool havePerpRef = commandActive && wantPerpendicular && PerpendicularReference(cmd, &refPx, &refPy);
 
   // REQ-118: while a POLYLINE/3DPOLY draft is open, its STARTING vertex is an Endpoint candidate,
   // so the cursor can land on it exactly and the ordinary snap marker shows it. This is the only
@@ -629,7 +650,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   //
   // This does NOT decide the close. SubmitPolylineVertex compares the committed point against the
   // stored first vertex; the snap only makes that point reachable (D-2026-08-25-j).
-  if (cmd.active == AppCommandState::Kind::Polyline && cmd.objectSnapEndpoint &&
+  if (cmd.active == AppCommandState::Kind::Polyline && wantEndpoint &&
       cmd.polylineDraftVerts.size() >= 9) {
     Consider(&acc, wx, wy, cmd.polylineDraftVerts[0], cmd.polylineDraftVerts[1], Kind::Endpoint,
              tolWorld, cmd.polylineDraftVerts[2]);
@@ -646,11 +667,11 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       const float y1 = L[i + 4];
       const float z0 = L[i + 2];
       const float z1 = L[i + 5];
-      if (cmd.objectSnapEndpoint) {
+      if (wantEndpoint) {
         Consider(&acc, wx, wy, x0, y0, Kind::Endpoint, tolWorld, z0);
         Consider(&acc, wx, wy, x1, y1, Kind::Endpoint, tolWorld, z1);
       }
-      if (cmd.objectSnapMidpoint)
+      if (wantMidpoint)
         Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld, 0.5f * (z0 + z1));
       if (havePerpRef)
         AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc, z0, z1);
@@ -658,7 +679,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   }
 
   const auto& C = cmd.userCirclesCxCyZR;
-  if (C.size() % 4 == 0 && cmd.objectSnapCenter) {  // cx,cy,z,r
+  if (C.size() % 4 == 0 && wantCenter) {  // cx,cy,z,r
     for (size_t i = 0; i + 3 < C.size(); i += 4) {
       if (exclude.valid && exclude.type == SelectedEntity::Type::Circle &&
           exclude.index == static_cast<int>(i / 4)) continue;
@@ -685,11 +706,11 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       const float by = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 1)];
       const float az = cmd.userPolylineVerts[static_cast<size_t>(ia * 3 + 2)];
       const float bz = cmd.userPolylineVerts[static_cast<size_t>(ib * 3 + 2)];
-      if (cmd.objectSnapEndpoint) {
+      if (wantEndpoint) {
         Consider(&acc, wx, wy, ax, ay, Kind::Endpoint, tolWorld, az);
         Consider(&acc, wx, wy, bx, by, Kind::Endpoint, tolWorld, bz);
       }
-      if (cmd.objectSnapMidpoint)
+      if (wantMidpoint)
         Consider(&acc, wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld, 0.5f * (az + bz));
       if (havePerpRef)
         AppendPerpendicularFromRef(refPx, refPy, wx, wy, ax, ay, bx, by, tolWorld, &acc, az, bz);
@@ -699,7 +720,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     if (closed && v1 - v0 >= 2)
       considerEdge(v1 - 1, v0);
 
-    if (cmd.objectSnapGeometricCenter && PolylineBoundsArea(cmd, pi, v0, v1)) {
+    if (wantGeometricCenter && PolylineBoundsArea(cmd, pi, v0, v1)) {
       float gcx = 0.f;
       float gcy = 0.f;
       if (ClosedPolylineCentroid(cmd.userPolylineVerts, v0, v1, &gcx, &gcy)) {
@@ -716,7 +737,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   // other endpoint rather than a separate mechanism. SubmitViewportPickImpl reads this back by exact
   // equality against polyFirstX/Y, which is safe because Consider() below copies px/py through with
   // no arithmetic.
-  if (commandActive && cmd.objectSnapEndpoint && cmd.active == AppCommandState::Kind::Polyline &&
+  if (commandActive && wantEndpoint && cmd.active == AppCommandState::Kind::Polyline &&
       cmd.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint &&
       cmd.polylineDraftVerts.size() >= 3) {
     Consider(&acc, wx, wy, cmd.polyFirstX, cmd.polyFirstY, Kind::Endpoint, tolWorld,
@@ -734,7 +755,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     const double dcy = static_cast<double>(a.cy);
     const double dr = static_cast<double>(a.r);
     const double tEnd = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad);
-    if (cmd.objectSnapEndpoint) {
+    if (wantEndpoint) {
       double ex = 0.;
       double ey = 0.;
       CirclePointWorld(dcx, dcy, dr, static_cast<double>(a.startRad), &ex, &ey);
@@ -753,7 +774,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       double y1 = 0.;
       CirclePointWorld(dcx, dcy, dr, t0, &x0, &y0);
       CirclePointWorld(dcx, dcy, dr, t1, &x1, &y1);
-      if (cmd.objectSnapMidpoint)
+      if (wantMidpoint)
         Consider(&acc, wx, wy, static_cast<float>(0.5 * (x0 + x1)), static_cast<float>(0.5 * (y0 + y1)), Kind::Midpoint,
                  tolWorld, a.z);  // the arc's plane, same as its endpoint candidates above
       if (havePerpRef)
@@ -771,7 +792,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     const float ma = std::hypot(el.majVx, el.majVy);
     if (ma < 1e-8f || kEllSnapSeg < 3)
       continue;
-    if (cmd.objectSnapCenter) {
+    if (wantCenter) {
       const float p2 = EllipseCenterPickDistSq(wx, wy, el, tolWorld);
       ConsiderSnap(&acc, wx, wy, el.cx, el.cy, Kind::Center, p2, tolWorld, el.z);
     }
@@ -791,7 +812,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       const float y0 = el.cy + uy * (ma * c0) + py * (mb * s0);
       const float x1 = el.cx + ux * (ma * c1) + px * (mb * s1);
       const float y1 = el.cy + uy * (ma * c1) + py * (mb * s1);
-      if (cmd.objectSnapMidpoint)
+      if (wantMidpoint)
         Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld,
                  el.z);  // the ellipse's plane, same as its centre candidate above
       if (havePerpRef)
@@ -801,19 +822,19 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
 
   // Intersection / apparent intersection (REQ-062). Gathered once and shared: both walk the same
   // near-cursor object list, and the cull is the only thing that keeps a pairwise snap affordable.
-  if (cmd.objectSnapIntersection || cmd.objectSnapApparentIntersection) {
+  if (wantIntersection || wantApparentIntersection) {
     std::vector<IsectSeg> isectSegs;
     std::vector<IsectConic> isectConics;
     GatherNearCursor(cmd, wx, wy, static_cast<double>(tolWorld), acc.ray, &isectSegs, &isectConics);
     if (isectSegs.size() + isectConics.size() >= 2) {
       std::vector<IsectCandidate> cand;
-      if (cmd.objectSnapIntersection) {
+      if (wantIntersection) {
         ComputeTrueIntersections(isectSegs, isectConics, &cand);
         for (const IsectCandidate& c : cand)
           Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(c.x),
                    static_cast<float>(c.y), Kind::Intersection, tolWorld, static_cast<float>(c.z));
       }
-      if (cmd.objectSnapApparentIntersection) {
+      if (wantApparentIntersection) {
         cand.clear();
         ComputeApparentIntersections(CadViewCamera(cmd), isectSegs, isectConics, &cand);
         for (const IsectCandidate& c : cand)
@@ -823,7 +844,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     }
   }
 
-  if (cmd.objectSnapSurveyPoint) {
+  if (wantSurveyPoint) {
     const float arm =
         SurveyPointCrossHalfWorldFromPaper(cmd.surveyPointCrossSpanPlottedInches, cmd.modelUnitsPerPlottedInch);
     for (const SurveyPoint& sp : cmd.surveyPoints) {
@@ -855,7 +876,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       const float pdfTol    = (sc > 1e-9f) ? tolWorld / sc : 0.f;
 
       // ---- Endpoint snap via spatial grid (O(cells-near-cursor)) ----------
-      if (att.snapLines && cmd.objectSnapEndpoint) {
+      if (att.snapLines && wantEndpoint) {
         // Visibility-mask check: returns true if pdfX,pdfY is inside or
         // adjacent to a cell marked as having visible foreground content.
         // This filters out snap endpoints that land in visually blank areas
@@ -917,7 +938,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       }
 
       // ---- Midpoint snap (snapLinesFlat with PDF-space bbox pre-filter) ----
-      if (att.snapLines && cmd.objectSnapMidpoint) {
+      if (att.snapLines && wantMidpoint) {
         const auto& SL = att.snapLinesFlat;
         for (size_t i = 0; i + 3 < SL.size(); i += 4) {
           // Cheap PDF-space bbox reject — avoids pdfToLocal for distant lines.
@@ -955,7 +976,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       }
 
       // ---- Circle center snap ---------------------------------------------
-      if (att.snapCircles && cmd.objectSnapCenter) {
+      if (att.snapCircles && wantCenter) {
         const auto& SC = att.snapCirclesCxCyR;
         for (size_t i = 0; i + 2 < SC.size(); i += 3) {
           float lcx = 0.f, lcy = 0.f;
@@ -979,8 +1000,8 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   return acc.best;
 }
 
-bool CommandHasPerpendicularSnapReference(const AppCommandState& cmd, bool commandActive) {
-  if (!commandActive || !cmd.objectSnapPerpendicular)
+bool CommandHasPerpendicularSnapReference(const AppCommandState& cmd, bool commandActive, bool ignoreToggle) {
+  if (!commandActive || (!ignoreToggle && !cmd.objectSnapPerpendicular))
     return false;
   float rx = 0.f;
   float ry = 0.f;

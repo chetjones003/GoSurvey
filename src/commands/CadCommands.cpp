@@ -16635,7 +16635,7 @@ void ClearCadGeometry(AppCommandState& st) {
 }
 
 void ClearPendingOneShotObjectSnap(AppCommandState& st) {
-  st.pendingOneShotSnapValid = false;
+  st.objectSnapKindOverrideValid = false;
 }
 
 void ResetCadToolStateToIdle(AppCommandState& st) {
