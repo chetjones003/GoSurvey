@@ -3970,6 +3970,13 @@ requirements is a planning failure, not a sign of rigor.
   prevents. A single predicate answering *"is a selection step active?"* is what all three rules
   below consult, so a command cannot be half-included again.
 
+  **"No effect" includes the one-shot OVERRIDE.** Shift+Right-click opens a "snap once — choose
+  type" menu, and picking from it forces a snap on the next pick. That is a way of *asking* for the
+  behaviour this rule removes, so the menu does not open during a selection step, and an override
+  armed just before one began is not spent inside it either (added 2026-08-26, D-2026-08-26-d: the
+  first implementation gated only the automatic snap, leaving the rule true for every snap except a
+  deliberately forced one).
+
   **(2) The cursor is a pickbox.** A square of the size the crosshair configuration already carries
   (`pickbox half-size in px`, an existing setting — this is not a new tunable), replacing the
   crosshair for the duration of the step and reverting when it ends. This is AutoCAD's `PICKBOX`
@@ -3983,6 +3990,16 @@ requirements is a planning failure, not a sign of rigor.
 
   It applies to the steps whose whole content is *pick objects*: **MOVE, COPY, SCALE, ROTATE,
   MIRROR, ALIGN, ARRAY, DELETE, JOIN**.
+
+  **DELETE and JOIN had to earn that prompt, and the behaviour moved rather than the words**
+  (2026-08-26, D-2026-08-26-d). Both were fixed two-click-box commands: the box acted the moment it
+  closed, and Enter was answered with *"finish window-select in the viewport (two clicks)"*. The
+  shared prompt told the user to press a key the command explicitly refused, which made rule (3) a
+  sentence rather than a rule. They now take the click-or-box, accumulate-until-Enter shape
+  D-2026-08-25-l gave the seven transform commands — that decision excluded only STRETCH, for a
+  stated reason, and simply never included these two. Adding a second, box-only prompt was the
+  alternative and was declined: it would have made "one prompt, everywhere" mean "one of two
+  prompts", to preserve behaviour nobody had chosen.
 
   **It does NOT replace a prompt that carries a keyword or a type list**, and that limit is
   load-bearing rather than a concession. TRIM's selection prompt offers `type L — draw the trim
@@ -4016,11 +4033,30 @@ requirements is a planning failure, not a sign of rigor.
     snap and prompt treatment, and its box semantics are untouched;
   - **with no command running, nothing changes at all** — the crosshair is the crosshair, OSNAP
     behaves exactly as it does today, and snap markers still draw. A user who never starts a command
-    cannot tell this requirement was implemented, and that is the intended outcome, not a gap.
+    cannot tell this requirement was implemented, and that is the intended outcome, not a gap;
+  - the Shift+Right-click snap-override menu does not open during an object-selection step, and an
+    override armed before the step began is not consumed inside it — verifiable as an A/B against a
+    control, since the same gesture at the same pixel must still open the menu under a point step;
+  - DELETE and JOIN accumulate objects by click **or** box until Enter, and Enter is what acts on
+    the selection — a closing box no longer erases or joins, and Enter with nothing selected is a
+    stated refusal that leaves the command running (REQ-201).
+- Scope boundary — **model space and floating model space only** (stated 2026-08-26,
+  D-2026-08-26-d). In PAPER space the modify commands are pick-first: `StartDeleteCommand` and its
+  siblings act on an existing paper selection or answer *"select paper object(s) or viewport(s)
+  first"* without ever setting `st.active`, so there is no object-selection **step** for the three
+  rules to apply to — the selection itself is made idle, which this requirement excludes by decision.
+  Paper space therefore keeps the crosshair and the ordinary OSNAP behaviour throughout. That is a
+  consequence of two deliberate choices meeting, not an oversight in either; giving paper space the
+  treatment means giving its modify commands a real selection phase, which is a behaviour change
+  outside this requirement. Filed separately as GitHub issue #106 rather than absorbed here.
 - Owner-layer: UI (cursor rendering, marker suppression, prompt surfaces); Commands (the shared
-  prompt string and the selection-step predicate); Viewport (the existing raw-vs-snapped pick paths)
+  prompt string, the selection-step predicate, and DELETE/JOIN's accumulate-until-Enter step);
+  Viewport (the existing raw-vs-snapped pick paths, and the DELETE/JOIN click route)
 - Status: accepted (2026-08-26)
-- Revisions: 2026-08-26 — accepted (D-2026-08-26-a); issue #91.
+- Revisions: 2026-08-26 — accepted (D-2026-08-26-a); issue #91. Amended 2026-08-26
+  (D-2026-08-26-d, TASK-118) after chetjones003's review of PR #102: the one-shot snap-override
+  seam added to rule (1), DELETE/JOIN's behaviour corrected so rule (3) is true for them, and the
+  paper-space scope boundary stated rather than left to be discovered.
 
 ### REQ-122 — ZOOMEXTENTS frames the drawing safely: margin, aspect, degenerate extents, no invalid camera (GitHub issue #88)
 - Purpose: REQ-120 gave the middle double-click its gesture and reused the existing framing path
@@ -4541,6 +4577,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-118 | Commands/Viewport | planned — `headless.regression-118-polyline-close-enter` (click the start vertex closes; Enter ends open with no closing segment; two vertices refuse to close; CLOSE/END still work; Esc leaves nothing; model, 3DPOLY and paper space each asserted). Same feature/issue (#80) as REQ-303 below, built independently on `beta` — see REQ-303's duplication note, D-2026-08-25-l | accepted |
 | REQ-119 | UI/Commands | **increment 1 done** (TASK-111) + **increment 2 done** (TASK-112) — `CommandLineTests [req119]` (the prompt→variants rule as a pure function: inline, grouped, mixed-case shortcut extraction incl. `No trim`→`N`, unclosed bracket, empty group, and a round-trip so parsing loses no text) + `headless.regression-119-variant-token-accepted` (the mechanism's three prompts) + `headless.regression-119-variant-coverage` (one assertion per marked-up token across CIRCLE/ROTATE/SCALE/TRIM/POLYLINE/FEATURELINE/ELEV, **plus a live refusal assertion for CIRCLE's bare `d`** — a value prefix, not a token, deliberately left unmarked so markup cannot manufacture a dead link) + manual GUI (links render, hover and click in BOTH the floating bar and the classic dock; a wrapping dock prompt keeps its links on the correct line with no horizontal overflow; **no log line is clickable**) | accepted |
 | REQ-120 | UI | **manual GUI only, and that is a real limitation, not a shortcut.** The headless driver models no framebuffer and never calls `ProcessPendingViewportZoom` (which early-returns on `fbW <= 0`), so it cannot reach any zoom behaviour — there is no existing zoom transcript in the corpus for the same reason. Covering this by transcript would mean giving the harness a synthetic viewport, which is harness work this requirement did not take on (recorded as TASK-113 DEBT-1). Verified instead by driving the real window: middle double-click frames the drawing in model space; it works MID-COMMAND with the active LINE's placed point surviving; the typed route still does not zoom mid-command (its text is consumed by the active command as point input — unchanged); paper space frames the sheet; middle-DRAG still pans. Leaves GitHub issue #88 open — covers only #88's Middle Mouse/Architecture sections, not its ZOOMEXTENTS acceptance list | accepted |
+| REQ-121 | UI/Commands/Viewport | done (GitHub issue #91, D-2026-08-26-a + D-2026-08-26-d, TASK-115 + TASK-118). Mechanism: `ViewportIsObjectSelectionStep`, derived from `ViewportClickRouteFor`'s `default:`-less switch, so a command cannot be added and silently omitted — `ViewportPickPolicyTests [req121]` (4 cases: ALIGN's unsnapped corners — red before the fix; every selection step recognised; each exclusion asserted; DELETE/JOIN's route, with ZOOM and STRETCH left on the box route). Review follow-ups closed by TASK-118, re-derived while rebasing onto `beta` after issue #103 landed underneath it: rule (3)'s shared prompt was factually wrong for DELETE/JOIN — fixed by giving them D-2026-08-25-l's accumulate-until-Enter shape, covered by `headless.req121-delete-join-accumulate` (proven red on `beta`: the closing box erased, LINES 3 -> 2). Rule (1)'s reported second seam (the snap-OVERRIDE menu bypassing the gate) had its underlying mechanism replaced by #103 between the original review and this rebase — the "cursor jumps mid-selection" symptom no longer reproduces, because the override's consumption already sits behind the same `!ViewportIsObjectSelectionStep` gate the automatic snap uses; what remained was narrower (the menu could still be *opened*, arming a persistent lock off a selection-step pixel that then silently affected the next ordinary snap), and that is what TASK-118's rebase actually gates. The cursor/OSNAP/prompt rules themselves stay GUI-only — there is no headless equivalent for screen-space picking or for a drawn cursor — and both rounds were verified A/B against a control rather than by absence. Paper space is a STATED scope boundary, not coverage: its modify commands are pick-first, so no selection step exists there (GitHub issue #106, open). 634/634 ctest green post-rebase (one test, `FindBest respects the snap tolerance`, reports as failed under `ctest -R`/discovery due to a pre-existing Windows console em-dash encoding mismatch in the Catch2 test name, unrelated to this task; runs and passes when invoked directly against the built exe — confirmed on both this branch and unmodified `beta`) | accepted |
 | REQ-122 | Commands | done (GitHub issue #88, D-2026-08-26-c, TASK-117) — **automated**, which REQ-120 could not be. The framing arithmetic was hoisted into `src/commands/ZoomFraming.hpp` (pure + header-only, the `OrthoConstrain.hpp`/`ViewportPickPolicy.hpp` precedent) so `tests/ZoomFramingTests.cpp` can reach it without a framebuffer: 11 Catch2 cases / 231 assertions covering centring, fit-at-any-aspect, the 8% margin, aspect binding, the one-unit floor on degenerate extents, invariance above the floor, refusal on non-finite input, finiteness across spans 1e-9..1e12, corner order, and null out-params. 3 of the 11 proven red against the old constants before the fix. TASK-113's DEBT-1 is unchanged and still open — `ProcessPendingViewportZoom` itself remains unreachable from the harness — but every guarantee #88 asks for now lives in tested code. The state-dependent halves (empty drawing, live parity with the gesture, middle-drag pan) verified in the GUI, measured off the status-bar readout rather than eyeballed: typed ZOOMEXTENTS and the middle double-click produce identical world coordinates to 4 dp at two screen points. 622/622 ctest green | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |

@@ -1,0 +1,136 @@
+# REQ-121 / GitHub #91 review — DELETE and JOIN accumulate until Enter (D-2026-08-26-d).
+#
+# ## What this is fixing
+#
+# PR #102 gave every object-selection step one shared prompt, "Select objects, ENTER to continue".
+# For DELETE and JOIN that sentence was FALSE: both were fixed two-click-box commands, the box
+# executed the command the moment it closed, and `ProcessCommandLineSubmit` answered Enter with
+# "finish window-select in the viewport (two clicks), or ESC to cancel." The prompt told the user to
+# press a key the command explicitly refused.
+#
+# D-2026-08-25-l had already given click-or-box-accumulate-until-Enter to MOVE / COPY / SCALE /
+# ROTATE / MIRROR / ALIGN / ARRAY, and excluded STRETCH for a stated reason (its crossing box is
+# load-bearing geometry). DELETE and JOIN were simply never included — the same omission class as
+# ALIGN's snapped box corners, which this issue already fixed. So the behaviour was corrected to
+# match the prompt rather than the sentence weakened to match the behaviour.
+#
+# ## What is asserted here, and why each line is load-bearing
+#
+# The single most important assertion is `EXPECT LINES 3` immediately after the first box closes.
+# Before the fix that box ERASED, so the count was 2 and the command had already ended. Everything
+# after it — accumulating a second box onto the first, Enter being what acts — is only reachable
+# because the box no longer ends the command.
+#
+# `CLICK` rather than `PICK` throughout: CLICK asks `ViewportClickRouteFor` the same question
+# `DrawDrawingViewport` asks, so this transcript also pins the ROUTE change (DELETE/JOIN moved from
+# `SelectionBox` to `SelectionAccumulate`). A PICK-based transcript would pass even if the routing
+# were reverted, which is exactly the failure mode the CLICK verb was added for (TASK-099).
+#
+# What is NOT covered here, and cannot be: a click that lands ON an entity toggles just that entity
+# into the selection. That is screen-space picking with no headless equivalent (the driver's own
+# note on `SelectionAccumulate` says so), so CLICK always behaves as a fence corner. The click-on-
+# entity half is in the manual GUI pass, TASK-118 §13.
+
+NEW
+
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+
+CMD LINE
+CMD 0,50
+CMD 100,50
+ESC
+
+CMD LINE
+CMD 0,100
+CMD 100,100
+ESC
+
+EXPECT LINES 3
+
+# ---------------------------------------------------------------------------
+# DELETE with nothing selected enters the command rather than acting immediately, and its opening
+# message describes the behaviour it now has.
+# ---------------------------------------------------------------------------
+CMD DELETE
+EXPECT LOG DELETE — click objects or drag a selection window (Enter when done) to erase them.
+
+# Enter with nothing selected is a stated refusal (REQ-201), and it does NOT end the command — the
+# user is being told to carry on selecting. Asserted BEFORE anything is selected so the message
+# cannot be confused with a later one.
+CMD
+EXPECT LOG Nothing selected — click objects or drag a selection window, then press Enter.
+EXPECT LINES 3
+
+# First box: the bottom line only. It MERGES into the selection and the command stays put.
+CLICK -10 -10
+CLICK 110 10
+
+# The assertion this whole change turns on. Before the fix: 2, with the command already ended.
+EXPECT LINES 3
+EXPECT SELECTED 1
+
+# Second box: the middle line. A box that closes while a selection already exists ADDS to it —
+# only meaningful because the first box did not end the command.
+CLICK -10 40
+CLICK 110 60
+
+EXPECT LINES 3
+EXPECT SELECTED 2
+
+# Enter is what erases. Two lines selected, so two go and the third survives.
+CMD
+EXPECT LINES 1
+CHECK ALL
+
+# The survivor is the TOP line — a fix that erased the wrong two would leave the right count and
+# the wrong geometry. The second box must hit nothing, so the count stays 1 rather than growing.
+BOX -10 90 110 110
+EXPECT SELECTED 1
+BOX -10 -10 110 60
+EXPECT SELECTED 1
+
+# ---------------------------------------------------------------------------
+# JOIN takes the same shape. Fresh drawing, because the boxes above left a selection and a
+# pick-first DELETE/JOIN acts on it immediately (StartDeleteCommand / StartJoinCommand) — which is
+# existing behaviour this change does not touch.
+# ---------------------------------------------------------------------------
+NEW
+
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+
+CMD LINE
+CMD 100,0
+CMD 100,100
+ESC
+
+EXPECT LINES 2
+
+CMD JOIN
+# The horizontal leg only: x stops short of 100 so the vertical leg's start point is outside the
+# box. A crossing box that reached x=100 would take both legs at once and prove nothing about
+# accumulation.
+CLICK -10 -10
+CLICK 90 10
+
+# Same assertion as DELETE's: before the fix this box would have joined and ended the command.
+EXPECT LINES 2
+EXPECT SELECTED 1
+
+# The vertical leg. Its y range clears the horizontal leg entirely, so this box adds exactly one.
+CLICK 90 50
+CLICK 110 110
+EXPECT LINES 2
+EXPECT SELECTED 2
+
+# Enter joins the two legs into one polyline.
+CMD
+EXPECT LOG JOIN — created 1 polyline(s).
+EXPECT LINES 0
+EXPECT POLYLINES 1
+CHECK ALL
