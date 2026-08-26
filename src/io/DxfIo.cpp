@@ -683,11 +683,40 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
   };
 
   auto appendEllipseXF = [&](double cx, double cy, double majx, double majy, double ratio, double t0, double t1,
-                             const EntityAttributes& at) {
+                             const EntityAttributes& at, double cz = 0.0) {
     const double a = std::hypot(majx, majy);
     if (a < 1e-12)
       return;
     const double b = ratio * a;
+    // #63: this function READ like a sink and was not one — it tessellated every ellipse, so
+    // ellipses lost identity on import as well as being dropped on export. A FULL ellipse now takes
+    // the real store, on the same identity-vs-tessellate split `appendCircleXF` established.
+    //
+    // A TRIMMED ellipse still tessellates, and that is forced rather than chosen: `CadEllipse` has
+    // no start/end parameter, so the range cannot be stored, and adding one is a `.gs` data-format
+    // change — a SPEC GAP, not bug-fix work (TASK-114 DEBT-1). The full-turn test below reads a
+    // zero-length span as "no range given" = a full turn, matching the tessellating path's own rule.
+    double spanFull = t1 - t0;
+    while (spanFull < 0.0)
+      spanFull += 2.0 * kPi;
+    const bool isFullTurn = (spanFull < 1e-9) || (std::fabs(spanFull - 2.0 * kPi) < 1e-6);
+    if (isFullTurn && xf.isIdentity()) {
+      double ocx = 0, ocy = 0;
+      xf.apply(cx, cy, &ocx, &ocy);
+      UpdateCoordMag(coordMagMax, ocx, ocy);
+      UpdateCoordMag(coordMagMax, ocx + a, ocy + a);
+      CadEllipse el{};
+      el.cx = static_cast<float>(ocx - st.worldDocumentOriginX);
+      el.cy = static_cast<float>(ocy - st.worldDocumentOriginY);
+      // Groups 11/21 are a VECTOR from the centre, not a point, so they take no origin shift.
+      el.majVx = static_cast<float>(majx);
+      el.majVy = static_cast<float>(majy);
+      el.ratio = static_cast<float>(ratio);
+      el.z = static_cast<float>(cz);  // group 30 (REQ-057), unrebased
+      st.userEllipses.push_back(el);
+      st.userEllAttrs.push_back(at);
+      return;
+    }
     const double ux = majx / a;
     const double uy = majy / a;
     const double vx = -uy;
@@ -740,6 +769,47 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       const double lx1 = cx + rad * std::cos(u1);
       const double ly1 = cy + rad * std::sin(u1);
       appendSegXF(lx0, ly0, lx1, ly1, at, cz, cz);  // the tessellated ring stays on its own plane
+    }
+  };
+
+  // Arcs (#63). Before TASK-114 there was no sink at all: the ARC branch parsed groups 50/51
+  // correctly and then threw the identity away into 48 line segments, so an arc from Civil 3D
+  // arrived as loose segments that could not be selected, trimmed or offset as the object it is.
+  //
+  // The identity-vs-tessellate split is `appendCircleXF`'s, deliberately reused rather than
+  // reinvented: `CadArc` stores ONE radius, so a non-uniform or skewed INSERT scale produces a
+  // curve it cannot represent, and degrading to segments is the honest outcome there.
+  //
+  // `a0` / `sweep` arrive already normalized by the caller to a CCW span in (0, 360], which is what
+  // DXF guarantees. That canonicalizes direction: a clockwise arc drawn here, exported and
+  // re-imported comes back as the same geometry described CCW. The shape is identical and the
+  // re-export is byte-identical — only the internal sign convention settles to one form.
+  auto appendArcXF = [&](double cx, double cy, double rad, double a0, double sweep,
+                         const EntityAttributes& at, double cz = 0.0) {
+    if (rad <= 1e-9)
+      return;
+    if (xf.isIdentity()) {
+      double ocx = 0, ocy = 0;
+      xf.apply(cx, cy, &ocx, &ocy);
+      UpdateCoordMag(coordMagMax, ocx, ocy);
+      UpdateCoordMag(coordMagMax, ocx + rad, ocy);
+      CadArc arc{};
+      arc.cx = static_cast<float>(ocx - st.worldDocumentOriginX);
+      arc.cy = static_cast<float>(ocy - st.worldDocumentOriginY);
+      arc.r = static_cast<float>(rad);
+      arc.startRad = static_cast<float>(a0);
+      arc.sweepRad = static_cast<float>(sweep);
+      arc.z = static_cast<float>(cz);  // group 30 (REQ-057), unrebased
+      st.userArcs.push_back(arc);
+      st.userArcAttrs.push_back(at);
+      return;
+    }
+    constexpr int nseg = 48;
+    for (int s = 0; s < nseg; ++s) {
+      const double u0 = a0 + sweep * (static_cast<double>(s) / static_cast<double>(nseg));
+      const double u1 = a0 + sweep * (static_cast<double>(s + 1) / static_cast<double>(nseg));
+      appendSegXF(cx + rad * std::cos(u0), cy + rad * std::sin(u0), cx + rad * std::cos(u1),
+                  cy + rad * std::sin(u1), at, cz, cz);  // the arc stays on its group-30 plane
     }
   };
 
@@ -1177,16 +1247,7 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
           sweep = 360.0;
         const double a0 = a0deg * kDegToRad;
         const double sw = sweep * kDegToRad;
-        constexpr int nseg = 48;
-        for (int s = 0; s < nseg; ++s) {
-          const double u0 = a0 + sw * (static_cast<double>(s) / static_cast<double>(nseg));
-          const double u1 = a0 + sw * (static_cast<double>(s + 1) / static_cast<double>(nseg));
-          const double lx0 = cx + rad * std::cos(u0);
-          const double ly0 = cy + rad * std::sin(u0);
-          const double lx1 = cx + rad * std::cos(u1);
-          const double ly1 = cy + rad * std::sin(u1);
-          appendSegXF(lx0, ly0, lx1, ly1, at, cz, cz);  // the arc stays on its group-30 plane
-        }
+        appendArcXF(cx, cy, rad, a0, sw, at, cz);  // group 30 (REQ-057)
       }
       i = j;
       continue;
@@ -1209,9 +1270,9 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         else if (c == 41) ParseDouble(v, &t0);
         else if (c == 42) ParseDouble(v, &t1);
       }
-      (void)cz; (void)mz;
+      (void)mz;
       if (ratio <= 1e-12) ratio = 1e-12;
-      appendEllipseXF(cx, cy, mx, my, ratio, t0, t1, base.makeAttr(layerRgb));
+      appendEllipseXF(cx, cy, mx, my, ratio, t0, t1, base.makeAttr(layerRgb), cz);  // group 30 (REQ-057)
       i = j;
       continue;
     }
@@ -1971,8 +2032,13 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   // Polylines count as geometry. Before they had a sink of their own, a file holding nothing but
   // polylines still filled userLinesFlat; now it does not, and without this a polyline-only DXF
   // would be judged empty and read a SECOND time out of the *MODEL_SPACE block — duplicating it.
-  const bool noGeom =
-      st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userPolylineOffsets.empty();
+  // Arcs and ellipses count as geometry too, and must be listed here for the same reason polylines
+  // were: until #63 they always landed in `userLinesFlat` as tessellation, so this test could not
+  // see them and did not need to. Now that they have stores of their own, a DXF holding nothing but
+  // arcs would otherwise be judged empty and read a SECOND time from the *MODEL_SPACE block —
+  // duplicating every entity in it.
+  const bool noGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() &&
+                      st.userPolylineOffsets.empty() && st.userArcs.empty() && st.userEllipses.empty();
   if ((!hasEntitiesSec || noGeom) && hasModelSpace) {
     if (!hasEntitiesSec)
       log.push_back("DXF import — ENTITIES section missing; reading geometry from *MODEL_SPACE block.");
@@ -2111,6 +2177,12 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     addLayerName(st.userPolylineAttrs[i].layer);
   for (size_t i = 0; i < st.cadFilledRegionAttrs.size(); ++i)
     addLayerName(st.cadFilledRegionAttrs[i].layer);
+  // Arcs and ellipses (#63) — the third instance of the same omission. They reached this sweep only
+  // now because until this change they had no export branch to name a layer from at all.
+  for (size_t i = 0; i < st.userArcAttrs.size(); ++i)
+    addLayerName(st.userArcAttrs[i].layer);
+  for (size_t i = 0; i < st.userEllAttrs.size(); ++i)
+    addLayerName(st.userEllAttrs[i].layer);
   for (const SurveyPoint& p : st.surveyPoints)
     addLayerName(p.layer);
   for (const CadLayerRow& lr : st.drawingLayerTable) {
@@ -2153,14 +2225,17 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   // regions (< 3 vertices), so this can over-count, which leaves an unused gap ahead of OBJECTS.
   // DXF permits a gap in the handle sequence; it does not permit a duplicate.
   //
-  // `userArcs` and `userEllipses` are absent on purpose: they have no export branch at all (#63),
-  // so they consume no handles today. Adding that branch means adding them here in the same change.
+  // `userArcs` and `userEllipses` are counted here as of TASK-114 (#63), which gave them the export
+  // branch they had never had. Before that they consumed no handles because nothing emitted them —
+  // this sum and the writer must move together, which is what the note left here by TASK-107 asked.
   const size_t nPoly =
       st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0;
   uint64_t entityHandleCount = static_cast<uint64_t>(nSeg) + static_cast<uint64_t>(nCirc) +
                                static_cast<uint64_t>(st.surveyPoints.size()) +
                                static_cast<uint64_t>(nPoly) +
-                               static_cast<uint64_t>(st.cadFilledRegions.size());
+                               static_cast<uint64_t>(st.cadFilledRegions.size()) +
+                               static_cast<uint64_t>(st.userArcs.size()) +
+                               static_cast<uint64_t>(st.userEllipses.size());
   for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
     const CadAnnotation& an = st.cadAnnotations[ai];
     if (an.kind == CadAnnotation::Kind::Text)
@@ -2269,6 +2344,59 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
              static_cast<double>(st.userPolylineVerts[vi * 3 + 1]));
       accExtZ(static_cast<double>(st.userPolylineVerts[vi * 3 + 2]));
     }
+  }
+  // Arcs and ellipses (#63), for the same reason and with the same consequence: an entity type the
+  // sweep does not know about is one the document origin is not derived from, so a drawing whose
+  // arcs lie outside its linework re-imports centred on the wrong point and never settles.
+  //
+  // THE SAMPLING BELOW MUST MATCH `ComputeWorldExtents` IN CadCommands.cpp EXACTLY — same segment
+  // counts, same angles, same order of operations. That is not a stylistic preference, and a
+  // "tighter" or "more conservative" box here is not a free choice:
+  //
+  //   DXF import ends by calling `RebaseDrawingToLocalOrigin`, which re-centres the document origin
+  //   on `ComputeWorldExtents`. If this sweep disagrees with that one, the origin the header asked
+  //   for is not the origin the import settles on, so `ShiftAllStorageBy` moves every stored
+  //   coordinate — through FLOAT — and the re-export lands ~1e-6 off in every Y. Export → import →
+  //   export then never settles, which is precisely REQ-204's stability invariant.
+  //
+  //   Agreement makes the rebase delta zero, so it takes its own `< 1e-9` early-out and no lossy
+  //   shift happens at all. That, not the accuracy of the box, is what the round trip needs. A
+  //   whole-circle box for arcs was tried first and failed exactly this way.
+  for (const CadArc& a : st.userArcs) {
+    const double dcx = static_cast<double>(a.cx);
+    const double dcy = static_cast<double>(a.cy);
+    const double dr = std::fabs(static_cast<double>(a.r));
+    if (dr <= 1e-12)
+      continue;
+    const int n =
+        std::max(8, static_cast<int>(std::fabs(static_cast<double>(a.sweepRad)) / (3.14159265 / 16.0)) + 1);
+    for (int i = 0; i <= n; ++i) {
+      const double u = static_cast<double>(i) / static_cast<double>(n);
+      const double t = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u;
+      accExt(dcx + dr * std::cos(t), dcy + dr * std::sin(t));
+    }
+    accExtZ(static_cast<double>(a.z));
+  }
+  for (const CadEllipse& el : st.userEllipses) {
+    const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    if (ma < 1e-12)
+      continue;
+    constexpr int n = 48;
+    constexpr double kTwoPi = 6.283185307179586;
+    const double ux = static_cast<double>(el.majVx) / ma;
+    const double uy = static_cast<double>(el.majVy) / ma;
+    const double px = -uy;
+    const double py = ux;
+    const double mb = ma * static_cast<double>(el.ratio);
+    const double ecx = static_cast<double>(el.cx);
+    const double ecy = static_cast<double>(el.cy);
+    for (int i = 0; i < n; ++i) {
+      const double ang = kTwoPi * static_cast<double>(i) / static_cast<double>(n);
+      const double c = std::cos(ang);
+      const double s = std::sin(ang);
+      accExt(ecx + ux * (ma * c) + px * (mb * s), ecy + uy * (ma * c) + py * (mb * s));
+    }
+    accExtZ(static_cast<double>(el.z));
   }
   if (!extAny) {
     extMnX = extMxX = extMnY = extMxY = 0.;
@@ -3031,6 +3159,89 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     emitPair(210, "0.0");
     emitPair(220, "0.0");
     emitPair(230, "1.0");
+  }
+
+  // Arcs (#63). The exporter named `userArcs` nowhere, so every arc GoSurvey ever wrote to a DXF was
+  // silently absent from the file — REQ-204's "an entity type silently dropped by an exporter with
+  // no branch for it", found by the oracle written to find it.
+  //
+  // DIRECTION IS THE TRAP HERE. A DXF ARC always runs COUNTER-CLOCKWISE from group 50 to group 51,
+  // while `CadArc::sweepRad` is SIGNED. Writing 50 = startRad and 51 = startRad + sweepRad for a
+  // clockwise arc describes the COMPLEMENT of the intended arc — a file that opens fine and shows
+  // the wrong geometry. A negative sweep therefore swaps the ends rather than negating anything.
+  for (size_t ai = 0; ai < st.userArcs.size(); ++ai) {
+    char hb[24];
+    std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+    const CadArc& arc = st.userArcs[ai];
+    EntityAttributes at{};
+    if (ai < st.userArcAttrs.size())
+      at = st.userArcAttrs[ai];
+    const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+    const int entAci = DxfNearestAciFromRgbPacked(rgb);
+
+    const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
+    const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
+
+    const double sweep = static_cast<double>(arc.sweepRad);
+    const double ccwStart = (sweep >= 0.0) ? static_cast<double>(arc.startRad)
+                                           : static_cast<double>(arc.startRad) + sweep;
+    const double ccwEnd = ccwStart + std::fabs(sweep);
+    auto normDeg = [](double rad) {
+      double d = rad * (180.0 / kPi);
+      d = std::fmod(d, 360.0);
+      if (d < 0.0)
+        d += 360.0;
+      return d;
+    };
+
+    emitPair(0, "ARC");
+    emitEntityHeader(hb, layer8, at, entAci, lyr);
+    emitPair(100, "AcDbCircle");
+    emitPair(10, std::to_string(worldX(arc.cx)));
+    emitPair(20, std::to_string(worldY(arc.cy)));
+    emitPair(30, std::to_string(static_cast<double>(arc.z)));  // elevation (REQ-057), absolute
+    emitPair(40, std::to_string(static_cast<double>(arc.r)));
+    emitPair(210, "0.0");
+    emitPair(220, "0.0");
+    emitPair(230, "1.0");
+    emitPair(100, "AcDbArc");
+    emitPair(50, std::to_string(normDeg(ccwStart)));
+    emitPair(51, std::to_string(normDeg(ccwEnd)));
+  }
+
+  // Ellipses (#63), dropped the same way and by the same omission. Group 11/21/31 is the major-axis
+  // ENDPOINT RELATIVE TO THE CENTRE — a vector, not a point — so it takes no document-origin shift,
+  // unlike the centre above. `CadEllipse` holds no parameter range, so every ellipse it can describe
+  // is a full one: 41/42 span exactly one turn. A trimmed ELLIPSE read from another program is
+  // tessellated on import and never reaches this store (TASK-114 DEBT-1).
+  for (size_t ei = 0; ei < st.userEllipses.size(); ++ei) {
+    char hb[24];
+    std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+    const CadEllipse& el = st.userEllipses[ei];
+    EntityAttributes at{};
+    if (ei < st.userEllAttrs.size())
+      at = st.userEllAttrs[ei];
+    const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+    const int entAci = DxfNearestAciFromRgbPacked(rgb);
+
+    const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
+    const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
+
+    emitPair(0, "ELLIPSE");
+    emitEntityHeader(hb, layer8, at, entAci, lyr);
+    emitPair(100, "AcDbEllipse");
+    emitPair(10, std::to_string(worldX(el.cx)));
+    emitPair(20, std::to_string(worldY(el.cy)));
+    emitPair(30, std::to_string(static_cast<double>(el.z)));  // elevation (REQ-057), absolute
+    emitPair(11, std::to_string(static_cast<double>(el.majVx)));
+    emitPair(21, std::to_string(static_cast<double>(el.majVy)));
+    emitPair(31, "0.0");
+    emitPair(210, "0.0");
+    emitPair(220, "0.0");
+    emitPair(230, "1.0");
+    emitPair(40, std::to_string(static_cast<double>(el.ratio)));
+    emitPair(41, "0.0");
+    emitPair(42, std::to_string(2.0 * kPi));
   }
 
   // Polylines — including every RECT, which is stored as a 4-vertex closed polyline (REQ-053). Before this
