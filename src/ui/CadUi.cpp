@@ -8936,6 +8936,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       *zoom = static_cast<float>(z1);
     }
 
+    // ZOOM EXTENTS by middle double-click (REQ-120) — AutoCAD's binding for the same gesture.
+    // Deliberately NOT routed through StartZoomExtentsCommand: that refuses while a command is
+    // running, and this gesture is TRANSPARENT, because wanting to reframe mid-command is exactly
+    // when a user reaches for it. Setting the flag directly is the same thing DXF import already
+    // does to frame a freshly-imported drawing, and it is safe mid-command because the deferred
+    // consumer writes only the camera — the active command's phase, picked points and draft
+    // geometry are untouched. The typed ZOOMEXTENTS keeps its guard and its refusal message.
+    //
+    // A double-click is not a drag, so middle-drag pan below is unaffected (REQ-045 requires it).
+    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Middle)) {
+      cmd.pendingZoomWindow = false;  // a pending ZOOM WINDOW would otherwise win the same frame
+      cmd.pendingZoomExtents = true;
+    }
+
     // ORBIT (REQ-058): Shift + middle-drag tumbles the camera about the pan point, matching
     // AutoCAD's 3DORBIT binding. Plain middle-drag still pans, so nothing existing changes.
     // Model space only — a paper sheet is 2D (ADR-025 (g)) and must never tilt.
