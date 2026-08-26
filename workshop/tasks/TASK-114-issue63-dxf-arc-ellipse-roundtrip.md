@@ -229,11 +229,8 @@ DEBT-1: DXF export -> import -> export is still not byte-stable, for a reason un
              precision the file was written at". That is an import-semantics decision
              affecting every DXF, not bug-fix work, so it wants its own task and probably a
              recorded decision.
-- Follow-up: filed against chetjones003/GoSurvey on 2026-08-26 with the user's go-ahead,
-             carrying the reproducer above verbatim. **Issue number not yet recorded here** —
-             fill it in, and in the `CMakeLists.txt` note beside `dxf-export-stable`, once
-             GitHub has assigned one. Deliberately left blank rather than guessed: an
-             invented cross-reference is worse than an absent one.
+- Follow-up: filed 2026-08-26 as **chetjones003/GoSurvey#94**, carrying the reproducer above
+             verbatim. Re-enable `dxf-export-stable` when #94 closes.
 
 DEBT-2: A trimmed ellipse still round-trips as line segments.
 - What:      CadEllipse has no start/end parameter, so an ELLIPSE carrying groups 41/42 short

@@ -716,8 +716,9 @@ if(GOSURVEY_BUILD_TESTS)
     #                                    `regression-63-dxf-arc-ellipse-identity.txt` — so a closed
     #                                    defect does not wait on an open one.
     #                                    What still fails is `EXPECT SAMEFILE`, and it is a THIRD,
-    #                                    unrelated defect found by TASK-114: $EXTMIN/$EXTMAX are
-    #                                    written at six decimals, the importer takes the document
+    #                                    unrelated defect found by TASK-114 and filed as #94:
+    #                                    $EXTMIN/$EXTMAX are written at six decimals, the importer
+    #                                    takes the document
     #                                    origin from those ROUNDED values, and then
     #                                    RebaseDrawingToLocalOrigin re-derives it from the UNROUNDED
     #                                    geometry. The ~5e-7 disagreement clears the 1e-9 no-op guard
@@ -726,7 +727,7 @@ if(GOSURVEY_BUILD_TESTS)
     #                                    in every coordinate. Reproduced on the UNMODIFIED writer by
     #                                    two LINEs alone, with no arc or ellipse anywhere, so it is
     #                                    neither caused by nor fixable within #63. Re-enable when it
-    #                                    is closed; see TASK-114 §12.
+    #                                    is closed (#94); see TASK-114 §12.
     foreach(_disabled dxf-export-stable)
       if(TEST headless.${_disabled})
         set_tests_properties(headless.${_disabled} PROPERTIES DISABLED TRUE)
