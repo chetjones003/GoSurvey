@@ -1,7 +1,7 @@
 # TASK-113 — Middle double-click zooms to extents (REQ-120)
 
 - Type:    feature
-- Status:  review (awaiting chetjones003 final testing)
+- Status:  done
 - Opened:  2026-08-25
 - Owner:   Nathan Johnson
 
@@ -82,14 +82,24 @@ ASSUMPTION-1: Zooming mid-command cannot corrupt the active command.
 - [x] testing              — GUI only; see DEBT-1 for why nothing else is possible
 
 ## 10. Verification result
-- Submitted:
-- Verdict:
-- Findings:
+- Submitted:  2026-08-26
+- Verdict:    PASS
+- Findings:   none outstanding
 
 ## 11. Outcome
-- Requirements satisfied:
-- Tests added:
-- Done:
+- Requirements satisfied: REQ-120 (all seven acceptance conditions — met; the seventh was corrected
+                          during the pass rather than merely checked, see §13); REQ-045 (middle-drag
+                          pan unchanged — met); REQ-061 (floating model space frames the model — met)
+- Tests added:            none, and none are reachable — no zoom behaviour can be covered by the
+                          headless harness (DEBT-1). Full suite green on the implementation commit
+                          `98edace`: **601/601 ctest**, 1 pre-existing disabled
+                          (`headless.dxf-export-stable`, unrelated — GitHub #63). Behaviour verified
+                          by the manual GUI pass recorded in §13, and re-tested by the user on
+                          2026-08-26 with no findings.
+- Refactors:              none
+- Docs updated:           `spec/requirements.md` (REQ-120 added; its acceptance text corrected by
+                          what the GUI pass found — §13), `spec/project.md` (D-2026-08-25-o)
+- Done:                   2026-08-26
 
 ## 12. Technical debt
 ```
