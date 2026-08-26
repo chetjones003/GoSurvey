@@ -858,6 +858,7 @@ int main()
     ImGuiLayout_DrawLayoutPopups(cmd, cmdLog);
     DrawLayerManagerWindow(cmd, &cmdLog);
     DrawTextStyleManagerWindow(cmd, &cmdLog);
+    DrawDimStyleWindow(cmd, &cmdLog);
     DrawPointGroupManagerWindow(cmd, &cmdLog);
     DrawSurfaceManagerWindow(cmd, &cmdLog);
     DrawSurfaceStyleWindow(cmd, &cmdLog);

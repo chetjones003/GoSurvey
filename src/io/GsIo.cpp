@@ -3,6 +3,7 @@
 #include "CadCommands.hpp"
 #include "GsMigrate.hpp"
 #include "TextStyle.hpp"
+#include "DimensionStyle.hpp"
 #include "CadCoordinateFrame.hpp"
 #include "SurveyPoints.hpp"
 #include "util/meshgeom.hpp"
@@ -379,6 +380,30 @@ json BuildRoot(const AppCommandState& st) {
         styles.push_back(std::move(o));
       }
       doc["surfaceStyles"] = std::move(styles);
+    }
+  }
+  // Dimension style (issue #99). Single active style, additive, no version bump.
+  {
+    const DimensionStyle& ds = st.activeDimensionStyle;
+    const DimensionStyle def = DimensionStyles::Default();
+    const bool isDefault = (ds == def);
+    if (!isDefault) {
+      json o;
+      o["textSizeInches"] = ds.textSizeInches;
+      if (!ds.textFont.empty()) o["textFont"] = ds.textFont;
+      o["textColor"] = ds.textColor;
+      o["textAlign"] = static_cast<int>(ds.textAlign);
+      o["dimLineColor"] = ds.dimLineColor;
+      o["dimLineType"] = ds.dimLineType;
+      o["extLineColor"] = ds.extLineColor;
+      o["extLineType"] = ds.extLineType;
+      o["arrowSizeInches"] = ds.arrowSizeInches;
+      o["arrowType"] = static_cast<int>(ds.arrowType);
+      o["arrowColor"] = ds.arrowColor;
+      o["unitFormat"] = static_cast<int>(ds.unitFormat);
+      o["unitPrecision"] = ds.unitPrecision;
+      o["unitScale"] = ds.unitScale;
+      doc["dimensionStyle"] = std::move(o);
     }
   }
   // Paper space layouts (REQ-031). Viewports/frozen layers persist in a later increment.
@@ -1410,6 +1435,30 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
     }
   }
   SurfaceStyles::EnsureStandard(st.surfaceStyles);
+
+  // Dimension style (issue #99). Missing section -> default.
+  {
+    DimensionStyle ds = DimensionStyles::Default();
+    if (doc.contains("dimensionStyle") && doc["dimensionStyle"].is_object()) {
+      const auto& o = doc["dimensionStyle"];
+      ds.textSizeInches = o.value("textSizeInches", ds.textSizeInches);
+      ds.textFont = o.value("textFont", ds.textFont);
+      ds.textColor = o.value("textColor", ds.textColor);
+      ds.textAlign = static_cast<DimTextAlign>(o.value("textAlign", static_cast<int>(ds.textAlign)));
+      ds.dimLineColor = o.value("dimLineColor", ds.dimLineColor);
+      ds.dimLineType = o.value("dimLineType", ds.dimLineType);
+      ds.extLineColor = o.value("extLineColor", ds.extLineColor);
+      ds.extLineType = o.value("extLineType", ds.extLineType);
+      ds.arrowSizeInches = o.value("arrowSizeInches", ds.arrowSizeInches);
+      ds.arrowType = static_cast<DimArrowType>(o.value("arrowType", static_cast<int>(ds.arrowType)));
+      ds.arrowColor = o.value("arrowColor", ds.arrowColor);
+      ds.unitFormat = static_cast<DimUnitFormat>(o.value("unitFormat", static_cast<int>(ds.unitFormat)));
+      ds.unitPrecision = o.value("unitPrecision", ds.unitPrecision);
+      ds.unitScale = o.value("unitScale", ds.unitScale);
+    }
+    st.activeDimensionStyle = ds;
+    st.dimStyleDraft = ds;
+  }
 
   st.userLinesFlat.clear();
   for (const auto& v : doc["lineVerts"])

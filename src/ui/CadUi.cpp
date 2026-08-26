@@ -24,7 +24,8 @@
 #include "ImGuiLayout.hpp"
 #include "WinFileDialogs.hpp"
 #include "SurveyPoints.hpp"
-#include "SurfaceStyle.hpp"  // REQ-072 analysis legend (TASK-086 §6 (4))
+#include "SurfaceStyle.hpp"
+#include "DimensionStyle.hpp"  // REQ-072 analysis legend (TASK-086 §6 (4))
 #include "StringUtil.hpp"
 #include "imgui.h"
 
@@ -1461,6 +1462,7 @@ enum class RibbonIconKind : std::uint8_t {
   Ellipse,
   Dim,
   DimLinear,
+  DimAngular,
   Id,
   Text,
   Mtext,
@@ -1643,6 +1645,36 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     const float head = std::clamp(std::min(w, h) * 0.1f, 2.5f, 5.5f);
     RibbonStrokeArrow(dl, ImVec2(xL, yDim), ImVec2(-1.f, 0.f), head, accentBlue, t);
     RibbonStrokeArrow(dl, ImVec2(xR, yDim), ImVec2(1.f, 0.f), head, accentBlue, t);
+    break;
+  }
+  case RibbonIconKind::DimAngular: {
+    const ImVec2 v(c.x - w * 0.15f, c.y + h * 0.18f);
+    const float r = std::min(w, h) * 0.32f;
+    const ImVec2 p1(v.x + r * 0.95f, v.y - r * 0.22f);
+    const ImVec2 p2(v.x + r * 0.55f, v.y - r * 0.82f);
+    dl->AddLine(v, p1, col, t);
+    dl->AddLine(v, p2, col, t);
+    const ImU32 accentBlue2 = IM_COL32(46, 91, 174, 255);
+    const int segs = 10;
+    float a1 = std::atan2(p1.y - v.y, p1.x - v.x);
+    float a2 = std::atan2(p2.y - v.y, p2.x - v.x);
+    float sweep = a2 - a1;
+    while (sweep > 3.14159f) sweep -= 6.28318f;
+    while (sweep < -3.14159f) sweep += 6.28318f;
+    for (int i = 0; i < segs; ++i) {
+      float aa = a1 + sweep * (float)i / segs;
+      float ab = a1 + sweep * (float)(i+1) / segs;
+      dl->AddLine(ImVec2(v.x + std::cos(aa)*r*0.62f, v.y + std::sin(aa)*r*0.62f),
+                  ImVec2(v.x + std::cos(ab)*r*0.62f, v.y + std::sin(ab)*r*0.62f), accentBlue2, t*1.05f);
+    }
+    const float head2 = std::clamp(std::min(w, h) * 0.09f, 2.5f, 5.5f);
+    ImVec2 dir1(-std::sin(a1), std::cos(a1));
+    if (sweep < 0) dir1 = ImVec2(std::sin(a1), -std::cos(a1));
+    ImVec2 dir2(-std::sin(a2), std::cos(a2));
+    if (sweep < 0) dir2 = ImVec2(std::sin(a2), -std::cos(a2));
+    dir2 = ImVec2(-dir2.x, -dir2.y);
+    RibbonStrokeArrow(dl, ImVec2(v.x + std::cos(a1)*r*0.62f, v.y + std::sin(a1)*r*0.62f), dir1, head2, accentBlue2, t);
+    RibbonStrokeArrow(dl, ImVec2(v.x + std::cos(a2)*r*0.62f, v.y + std::sin(a2)*r*0.62f), dir2, head2, accentBlue2, t);
     break;
   }
   case RibbonIconKind::Id: {
@@ -2176,6 +2208,7 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::Hatch:          return "hatch";
   case RibbonIconKind::Dim:            return "dim";
   case RibbonIconKind::DimLinear:      return "dimlinear";
+  case RibbonIconKind::DimAngular:     return "dimangular";
   case RibbonIconKind::Id:             return "id";
   case RibbonIconKind::Text:           return "text";
   case RibbonIconKind::Mtext:          return "mtext";
@@ -2237,7 +2270,7 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
     {"RECT", RibbonIconKind::Rect},
     {"ARC", RibbonIconKind::Arc}, {"ELLIPSE", RibbonIconKind::Ellipse}, {"HATCH", RibbonIconKind::Hatch},
     {"TEXT", RibbonIconKind::Text},
-    {"MTEXT", RibbonIconKind::Mtext}, {"DIMALIGNED", RibbonIconKind::Dim}, {"DIMLINEAR", RibbonIconKind::DimLinear},
+    {"MTEXT", RibbonIconKind::Mtext}, {"DIMALIGNED", RibbonIconKind::Dim}, {"DIMLINEAR", RibbonIconKind::DimLinear}, {"DIMANGULAR", RibbonIconKind::DimAngular}, {"DIMSTY", RibbonIconKind::DimAngular},
     {"ID", RibbonIconKind::Id}, {"INVERSE", RibbonIconKind::SurveyInverse}, {"MOVE", RibbonIconKind::Move},
     {"COPY", RibbonIconKind::Copy}, {"ROTATE", RibbonIconKind::Rotate}, {"SCALE", RibbonIconKind::Scale},
     {"MIRROR", RibbonIconKind::Mirror},
@@ -2587,7 +2620,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     w.wAnnText = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
     // REQ-302 follow-up: Aligned/Linear moved here from Survey's Inquiry section (user GUI-pass
     // feedback, 2026-08-25) — a Dimensions group belongs under Annotate, not Survey.
-    w.wAnnDim  = 8.f + colW({"Aligned", "Linear"});
+    w.wAnnDim  = 8.f + colW({"Aligned", "Linear", "Angular"});
     // Two columns: the panel is three small buttons tall, so a fourth in one column is clipped.
     // Aligned/Linear moved to Annotate's new Dimensions section above (2026-08-25 follow-up) — ID
     // Point/Elev-Grade are the two that remain genuinely survey-scoped inquiry tools.
@@ -2911,10 +2944,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         if (smallBtn("##RibbonDim", RibbonIconKind::Dim, "Aligned", colW({"Aligned", "Linear"})))
           StartDimAlignedCommand(cmd, log);
         RibbonItemHelp("Aligned dimension — extension lines and text.\nCommand bar: DIMALIGNED or DAL");
-        if (smallBtn("##RibbonDimLin", RibbonIconKind::DimLinear, "Linear", colW({"Aligned", "Linear"})))
+        if (smallBtn("##RibbonDimLin", RibbonIconKind::DimLinear, "Linear", colW({"Aligned", "Linear", "Angular"})))
           StartDimLinearCommand(cmd, log);
         RibbonItemHelp(
             "Linear dimension — horizontal or vertical distance in X or Y; third pick sets line position (cursor or H/V).\nCommand bar: DIMLINEAR or DLI");
+        if (smallBtn("##RibbonDimAng", RibbonIconKind::DimAngular, "Angular", colW({"Aligned", "Linear", "Angular"})))
+          StartDimAngularCommand(cmd, log);
+        RibbonItemHelp("Angular dimension — vertex, two ray points, then arc position.\nCommand bar: DIMANGULAR or DAN");
         ImGui::EndGroup();
       }
       RibbonSectionEnd();
@@ -12178,7 +12214,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const bool showMtextCmdDraft =
       cmd.active == AK::Mtext && cmd.mtextPhase == AMP::WaitString && !cmd.mtextRichEditorOpen;
   const bool showDimCmdDraft =
-      (cmd.active == AK::DimAligned || cmd.active == AK::DimLinear) && cmd.dimPhase == ADP::WaitDimLinePt &&
+      ((cmd.active == AK::DimAligned || cmd.active == AK::DimLinear) && cmd.dimPhase == ADP::WaitDimLinePt ||
+       (cmd.active == AK::DimAngular && cmd.dimAngularPhase == AppCommandState::DimAngularPhase::WaitArc)) &&
       outCursorX && outCursorY;
 
   // Model annotations live in MODEL coordinates; draw them only when the model is the active canvas (model
@@ -12363,18 +12400,25 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
         if (!CadDimAnyGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
           return;
-        float rgba[4];
-        if (attrPtr)
-          ResolveEntityColorForViewport(*attrPtr, 225 / 255.f, 177 / 255.f, 44 / 255.f, rgba);
-        else {
-          rgba[0] = 0.9f;
-          rgba[1] = 0.72f;
-          rgba[2] = 0.25f;
-          rgba[3] = 1.f;
-        }
-        const ImU32 lineCol = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
-                                       static_cast<int>(rgba[2] * 255.f), static_cast<int>(rgba[3] * 255.f));
-        constexpr ImU32 kDimTextCol = IM_COL32(248, 250, 252, 255);
+        // Resolve colors from DimensionStyle, falling back to ByLayer/entity
+        auto resolveDimColor = [&](const std::string& styCol, float defR, float defG, float defB) -> ImU32 {
+          if (styCol == "ByLayer" || styCol.empty()) {
+            float rgba[4];
+            if (attrPtr) ResolveEntityColorForViewport(*attrPtr, defR, defG, defB, rgba);
+            else { rgba[0]=defR; rgba[1]=defG; rgba[2]=defB; rgba[3]=1.f; }
+            return IM_COL32(int(rgba[0]*255), int(rgba[1]*255), int(rgba[2]*255), int(rgba[3]*255));
+          } else {
+            float rgba[4];
+            ResolveStoredColorForViewport(styCol, 0.f, defR, defG, defB, rgba);
+            return IM_COL32(int(rgba[0]*255), int(rgba[1]*255), int(rgba[2]*255), int(rgba[3]*255));
+          }
+        };
+        const ImU32 lineCol = resolveDimColor(cmd.activeDimensionStyle.dimLineColor, 225/255.f, 177/255.f, 44/255.f);
+        const ImU32 extCol = resolveDimColor(cmd.activeDimensionStyle.extLineColor, 225/255.f, 177/255.f, 44/255.f);
+        const ImU32 textCol = resolveDimColor(cmd.activeDimensionStyle.textColor, 248/255.f, 250/255.f, 252/255.f);
+        // Resolve font for dimension text (use per-annotation fontFamily, which is baked from style at creation and updated on DIMSTY Apply)
+        ImFont* dimFont = a.fontFamily.empty() ? font : FontReg::Resolve(a.fontFamily, false, false, nullptr, nullptr);
+        if (!dimFont) dimFont = font;
         // Dimension geometry is overlay-drawn, so it projects through the camera like everything
         // else (REQ-058); it sits on the dimension's own plane. Identical to the previous mapping
         // in plan view.
@@ -12404,13 +12448,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImVec2 A{}, B{};
         ws(ex1, ey1, &A);
         ws(sx1 + nx * over, sy1 + ny * over, &B);
-        dl->AddLine(A, B, lineCol, extPx);
+        dl->AddLine(A, B, extCol, extPx);
         ws(ex2, ey2, &A);
         ws(sx2 + nx * over, sy2 + ny * over, &B);
-        dl->AddLine(A, B, lineCol, extPx);
-        // Arrow length in world units tracks annotation height (drawing scale); tiny floor from meas for readability.
+        dl->AddLine(A, B, extCol, extPx);
+        // Arrow length in world units from DimensionStyle arrowSize (plotted inches) with viewport scale; tiny floor from meas for readability.
+        const float styleArrowWorld = cmd.activeDimensionStyle.arrowSizeInches * cmd.modelUnitsPerPlottedInch;
         const float alenW =
-            std::max(cmd.viewportDimArrowScale * 0.32f * hWorld, cmd.viewportDimArrowScale * 0.012f * meas);
+            std::max(styleArrowWorld * cmd.viewportDimArrowScale * 0.10f, cmd.viewportDimArrowScale * 0.012f * meas);
         const float dlen = std::hypot(sx2 - sx1, sy2 - sy1);
         if (dlen > 1.e-6f) {
           const float ux = (sx2 - sx1) / dlen;
@@ -12440,22 +12485,179 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           ws(tip1x, tip1y, &t0);
           ws(base1x + ox, base1y + oy, &t1);
           ws(base1x - ox, base1y - oy, &t2);
-          dl->AddTriangleFilled(t0, t1, t2, lineCol);
+          const ImU32 arrowCol = resolveDimColor(cmd.activeDimensionStyle.arrowColor, 225/255.f, 177/255.f, 44/255.f);
+          dl->AddTriangleFilled(t0, t1, t2, arrowCol);
           ws(tip2x, tip2y, &t0);
           ws(base2x + ox, base2y + oy, &t1);
           ws(base2x - ox, base2y - oy, &t2);
-          dl->AddTriangleFilled(t0, t1, t2, lineCol);
+          dl->AddTriangleFilled(t0, t1, t2, arrowCol);
         }
         ImVec2 sp{};
         ws(a.insX, a.insY, &sp);
-        // On-screen text angle by projecting a short step ALONG the text direction, rather than
-        // scaling the world angle by the view extents. Same result in plan view, and correct under
-        // an orbited camera where the two axes no longer scale independently (REQ-058).
         ImVec2 spDir{};
         const float dirStep = std::max(1.e-4f, hWorld);
         ws(a.insX + std::cos(a.rotationRad) * dirStep, a.insY + std::sin(a.rotationRad) * dirStep, &spDir);
         const float screenAng = std::atan2(spDir.y - sp.y, spDir.x - sp.x);
-        AddAlignedDimText(dl, font, fontPx, sp, screenAng, kDimTextCol, a.text.c_str());
+        // Handle SHX fonts for dimensions like Text does - SHX uses stroke rendering, not ImFont
+        // For SHX fonts, check if text contains degree symbol - SHX stroke fonts often lack the degree glyph at U+00B0
+        // If it does, fall back to TrueType for the whole dimension text so the degree renders correctly
+        bool useShxDim = false;
+        Shx::Font* sfDimCheck = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+        if (sfDimCheck && sfDimCheck->valid() && a.text.find("\xc2\xb0") == std::string::npos) {
+          useShxDim = true;
+        }
+        if (useShxDim) {
+          Shx::Font* sfDim = sfDimCheck;
+          const float thickDim = std::max(1.f, fontPx * 0.05f);
+          const float wDim = Shx::MeasureWidthPx(*sfDim, a.text, fontPx);
+          const float hDim = fontPx;
+          ImVec2 pivot = ImVec2(sp.x - wDim*0.5f, sp.y - hDim*0.5f);
+          float ca = std::cos(screenAng), sa = std::sin(screenAng);
+          float dx = pivot.x - sp.x, dy = pivot.y - sp.y;
+          ImVec2 rotPivot{sp.x + dx*ca - dy*sa, sp.y + dx*sa + dy*ca};
+          Shx::DrawText(dl, *sfDim, ImVec2(rotPivot.x, rotPivot.y + fontPx), fontPx, -a.rotationRad, textCol, a.text, thickDim);
+        } else {
+          // Use TrueType (dimFont) for dimensions - ensures degree symbol renders, and also handles SHX fallback correctly
+          // For SHX degree case, dimFont is already fallback to default font (since FontReg::Resolve returns null for SHX)
+          AddAlignedDimText(dl, dimFont, fontPx, sp, screenAng, textCol, a.text.c_str());
+        }
+      } else if (a.kind == CadAnnotation::Kind::DimAngular) {
+        float a1=0.f,a2=0.f,sweep=0.f,theta=0.f,bisx=0.f,bisy=0.f;
+        if (!CadDimAngularComputeFrame(a, &a1,&a2,&sweep,&bisx,&bisy,&theta)) return;
+        const float R = std::max(a.dimSignedOffset, 1.e-6f);
+        const float vx = a.dimAngVertexX, vy = a.dimAngVertexY;
+        auto resolveDimColor2 = [&](const std::string& styCol, float defR, float defG, float defB) -> ImU32 {
+          if (styCol == "ByLayer" || styCol.empty()) {
+            float rgba[4];
+            if (attrPtr) ResolveEntityColorForViewport(*attrPtr, defR, defG, defB, rgba);
+            else { rgba[0]=defR; rgba[1]=defG; rgba[2]=defB; rgba[3]=1.f; }
+            return IM_COL32(int(rgba[0]*255), int(rgba[1]*255), int(rgba[2]*255), int(rgba[3]*255));
+          } else {
+            float rgba[4];
+            ResolveStoredColorForViewport(styCol, 0.f, defR, defG, defB, rgba);
+            return IM_COL32(int(rgba[0]*255), int(rgba[1]*255), int(rgba[2]*255), int(rgba[3]*255));
+          }
+        };
+        const ImU32 lineCol2 = resolveDimColor2(cmd.activeDimensionStyle.dimLineColor, 225/255.f, 177/255.f, 44/255.f);
+        const ImU32 extCol2 = resolveDimColor2(cmd.activeDimensionStyle.extLineColor, 225/255.f, 177/255.f, 44/255.f);
+        const ImU32 textCol2 = resolveDimColor2(cmd.activeDimensionStyle.textColor, 248/255.f, 250/255.f, 252/255.f);
+        const ImU32 arrowCol2 = resolveDimColor2(cmd.activeDimensionStyle.arrowColor, 225/255.f, 177/255.f, 44/255.f);
+        ImFont* dimFont2 = a.fontFamily.empty() ? font : FontReg::Resolve(a.fontFamily, false, false, nullptr, nullptr);
+        if (!dimFont2) dimFont2 = font;
+        const Camera dimCam2 = CadViewCamera(cmd);
+        const float dimZ2 = a.insZ;
+        auto ws2 = [&](float wx, float wy, ImVec2* o) {
+          float sx=0.f,sy=0.f;
+          dimCam2.WorldToScreen((double)wx,(double)wy,(double)dimZ2, avail.x, avail.y, &sx, &sy);
+          o->x = imgPos.x + sx; o->y = imgPos.y + sy;
+        };
+        const float fontPx2 = std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), cmd.viewportDimTextMinPx, cmd.viewportDimTextMaxPx);
+        const float extPx2 = std::clamp(cmd.viewportDimExtLinePx, 0.25f, 16.f);
+        const float dimLnPx2 = std::clamp(cmd.viewportDimDimLinePx, 0.25f, 16.f);
+        const float gapWorld = std::max(0.12f * hWorld, 0.015f * R);
+        const float overWorld = std::max(0.08f * hWorld, 0.01f * R);
+        const float ex1x0 = vx + std::cos(a1) * gapWorld;
+        const float ex1y0 = vy + std::sin(a1) * gapWorld;
+        const float ex1x1 = vx + std::cos(a1) * (R + overWorld);
+        const float ex1y1 = vy + std::sin(a1) * (R + overWorld);
+        const float ex2x0 = vx + std::cos(a2) * gapWorld;
+        const float ex2y0 = vy + std::sin(a2) * gapWorld;
+        const float ex2x1 = vx + std::cos(a2) * (R + overWorld);
+        const float ex2y1 = vy + std::sin(a2) * (R + overWorld);
+        ImVec2 A2{},B2{};
+        ws2(ex1x0, ex1y0, &A2); ws2(ex1x1, ex1y1, &B2); dl->AddLine(A2,B2,extCol2,extPx2);
+        ws2(ex2x0, ex2y0, &A2); ws2(ex2x1, ex2y1, &B2); dl->AddLine(A2,B2,extCol2,extPx2);
+        const int segs = 32;
+        const float styleArrowWorld2 = cmd.activeDimensionStyle.arrowSizeInches * cmd.modelUnitsPerPlottedInch;
+        const float arcLen = R * std::fabs(sweep);
+        const float arrowWorld = std::max(styleArrowWorld2 * cmd.viewportDimArrowScale * 0.10f, cmd.viewportDimArrowScale * 0.012f * arcLen);
+        for (int i=0;i<segs;++i) {
+          float aa = a1 + sweep * (float)i/segs;
+          float ab = a1 + sweep * (float)(i+1)/segs;
+          float mid = a1 + sweep*0.5f;
+          float gapAng = (hWorld * 1.8f) / std::max(R, 1.e-6f);
+          if (std::fabs(aa - mid) < gapAng*0.5f || std::fabs(ab - mid) < gapAng*0.5f) continue;
+          if ((aa < mid && ab > mid) || (aa > mid && ab < mid)) continue;
+          ImVec2 p0{},p1{};
+          ws2(vx + std::cos(aa)*R, vy + std::sin(aa)*R, &p0);
+          ws2(vx + std::cos(ab)*R, vy + std::sin(ab)*R, &p1);
+          dl->AddLine(p0,p1,lineCol2,dimLnPx2);
+        }
+        // Arrows: match DIMLINEAR exactly - same world size, same screen conversion, both point inward toward arc center
+        const float arrowLenWorld = arrowWorld; // already max(styleArrowWorld*0.10*scale, 0.012*arcLen*scale)
+        const float maxArrowForArc = 0.47f * std::max(0.f, R * std::fabs(sweep) - 0.15f * arrowLenWorld);
+        const float arrowLenUse = std::max(1.e-6f, std::min(arrowLenWorld, maxArrowForArc));
+        auto drawArrowAng = [&](float ang, bool isStart) {
+          // Outward arrows (pointing away from arc center, like AutoCAD outward)
+          float baseAng = ang + (isStart ? (sweep>0 ? 0.14f : -0.14f) : (sweep>0 ? -0.14f : 0.14f));
+          ImVec2 tip{}, base{};
+          ws2(vx + std::cos(ang)*R, vy + std::sin(ang)*R, &tip);
+          ws2(vx + std::cos(baseAng)*R, vy + std::sin(baseAng)*R, &base);
+          float dx = tip.x - base.x, dy = tip.y - base.y;
+          float len = std::hypot(dx,dy);
+          if (len < 1.e-3f) return;
+          dx/=len; dy/=len;
+          float hwWorld = arrowLenUse * 0.48f;
+          float oxW = -dy*hwWorld, oyW = dx*hwWorld;
+          ImVec2 t1W{base.x + oxW, base.y + oyW}, t2W{base.x - oxW, base.y - oyW};
+          ImVec2 t1{}, t2{};
+          ws2(t1W.x, t1W.y, &t1); ws2(t2W.x, t2W.y, &t2);
+          // Convert tip/base already in screen, but t1/t2 now also in screen via ws2, need to handle correctly
+          // Instead compute screen directly like DIMLINEAR does: convert tip and base to screen, then compute hw in screen
+          // For matching DIMLINEAR, use world hw then convert
+        };
+        // Actually match DIMLINEAR exactly: use world alenW/alenUse logic
+        auto drawArrowCorrect = [&](float ang, bool isStart) {
+          ImVec2 tipS{}, baseS{};
+          ws2(vx + std::cos(ang)*R, vy + std::sin(ang)*R, &tipS);
+          float baseAng2 = ang + (isStart ? (sweep>0 ? 0.12f : -0.12f) : (sweep>0 ? -0.12f : 0.12f));
+          ws2(vx + std::cos(baseAng2)*R, vy + std::sin(baseAng2)*R, &baseS);
+          float dxS = tipS.x - baseS.x, dyS = tipS.y - baseS.y;
+          float lenS = std::hypot(dxS,dyS);
+          if (lenS < 1.e-3f) return;
+          dxS/=lenS; dyS/=lenS;
+          float hwS = (arrowLenUse / std::max(worldPerPxY, 1.e-6f)) * 0.42f * 0.48f / 0.42f; // keep same as linear's 0.48*arrowLen
+          // Simpler: use same as linear's hw = alenUse*0.48 but in screen: hwScreen = (alenUse/worldPerPxY)*0.48
+          float hwScreen = (arrowLenUse / std::max(worldPerPxY, 1.e-6f)) * 0.48f;
+          float oxS = -dyS*hwScreen, oyS = dxS*hwScreen;
+          ImVec2 tt1{baseS.x + oxS, baseS.y + oyS}, tt2{baseS.x - oxS, baseS.y - oyS};
+          if (cmd.activeDimensionStyle.arrowType == DimArrowType::Tick) {
+            float tickLenS = (arrowLenUse / std::max(worldPerPxY, 1.e-6f)) * 1.1f;
+            dl->AddLine(ImVec2(tipS.x - dyS*tickLenS*0.5f, tipS.y + dxS*tickLenS*0.5f), ImVec2(tipS.x + dyS*tickLenS*0.5f, tipS.y - dxS*tickLenS*0.5f), arrowCol2, dimLnPx2);
+          } else if (cmd.activeDimensionStyle.arrowType == DimArrowType::Dot) {
+            dl->AddCircleFilled(tipS, hwScreen*0.9f, arrowCol2, 12);
+          } else if (cmd.activeDimensionStyle.arrowType == DimArrowType::None) {
+          } else {
+            bool filled = (cmd.activeDimensionStyle.arrowType == DimArrowType::ClosedFilled);
+            if (filled) dl->AddTriangleFilled(tipS, tt1, tt2, arrowCol2);
+            else dl->AddTriangle(tipS, tt1, tt2, arrowCol2, dimLnPx2);
+          }
+        };
+        drawArrowCorrect(a1, true);
+        drawArrowCorrect(a2, false);
+        ImVec2 sp2{}; ws2(a.insX, a.insY, &sp2);
+        ImVec2 spDir2{}; float dirStep2 = std::max(1.e-4f, hWorld);
+        ws2(a.insX + std::cos(a.rotationRad)*dirStep2, a.insY + std::sin(a.rotationRad)*dirStep2, &spDir2);
+        float screenAng2 = std::atan2(spDir2.y - sp2.y, spDir2.x - sp2.x);
+        std::string txt2 = a.text;
+        bool useShx2 = false;
+        Shx::Font* sfDim2Check = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+        if (sfDim2Check && sfDim2Check->valid() && txt2.find("\xc2\xb0") == std::string::npos) {
+          useShx2 = true;
+        }
+        if (useShx2) {
+          Shx::Font* sfDim2 = sfDim2Check;
+          const float thick2 = std::max(1.f, fontPx2 * 0.05f);
+          float w2 = Shx::MeasureWidthPx(*sfDim2, txt2, fontPx2);
+          ImVec2 pivot2{sp2.x - w2*0.5f, sp2.y - fontPx2*0.5f};
+          float ca2 = std::cos(screenAng2), sa2 = std::sin(screenAng2);
+          float dx2 = pivot2.x - sp2.x, dy2 = pivot2.y - sp2.y;
+          ImVec2 rotPivot2{sp2.x + dx2*ca2 - dy2*sa2, sp2.y + dx2*sa2 + dy2*ca2};
+          Shx::DrawText(dl, *sfDim2, ImVec2(rotPivot2.x, rotPivot2.y + fontPx2), fontPx2, -a.rotationRad, textCol2, txt2, thick2);
+        } else {
+          // For degree, use TrueType fallback so degree renders
+          AddAlignedDimText(dl, dimFont2, fontPx2, sp2, screenAng2, textCol2, txt2.c_str());
+        }
       } else {
         ImVec2 sa{}, sb{};
         worldToScreen(a.boxMinX, a.boxMinY, &sa, a.insZ);
@@ -12647,11 +12849,28 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     if (showDimCmdDraft) {
       CadAnnotation d{};
-      const bool ok = cmd.active == AK::DimLinear
-                          ? CadDimLinearBuildDraft(cmd, *outCursorX, *outCursorY, &d)
-                          : CadDimAlignedBuildDraft(cmd, *outCursorX, *outCursorY, &d);
-      if (ok)
+      bool ok = false;
+      if (cmd.active == AK::DimLinear) ok = CadDimLinearBuildDraft(cmd, *outCursorX, *outCursorY, &d);
+      else if (cmd.active == AK::DimAngular) ok = CadDimAngularBuildDraft(cmd, *outCursorX, *outCursorY, &d);
+      else ok = CadDimAlignedBuildDraft(cmd, *outCursorX, *outCursorY, &d);
+      if (ok) {
         drawAnnotationVisual(d, nullptr, kAnnTfPrevCol);
+      }
+    }
+    // DimAngular early-phase preview - always show ray preview following mouse, even when not in WaitArc
+    if (cmd.active == AK::DimAngular && outCursorX && outCursorY) {
+      const float vx = cmd.dimAngVx, vy = cmd.dimAngVy;
+      ImVec2 vScreen{}, cScreen{};
+      worldToScreen(vx, vy, &vScreen, cmd.anchorZ);
+      worldToScreen(*outCursorX, *outCursorY, &cScreen, cmd.anchorZ);
+      if (cmd.dimAngularPhase == AppCommandState::DimAngularPhase::WaitRay1) {
+        dl->AddLine(vScreen, cScreen, kAnnTfPrevCol, 1.2f);
+      } else if (cmd.dimAngularPhase == AppCommandState::DimAngularPhase::WaitRay2) {
+        ImVec2 r1Screen{};
+        worldToScreen(cmd.dimE1x, cmd.dimE1y, &r1Screen, cmd.anchorZ);
+        dl->AddLine(vScreen, r1Screen, kAnnTfPrevCol, 1.2f);
+        dl->AddLine(vScreen, cScreen, kAnnTfPrevCol, 1.2f);
+      }
     }
 
     const float gripHalf = cmd.gripSizePx;
@@ -14541,6 +14760,196 @@ void DrawTextStyleManagerWindow(AppCommandState& cmd, std::vector<std::string>* 
     log->push_back("Text style deleted: " + nm);
   }
 
+  ImGui::End();
+}
+
+void DrawDimStyleWindow(AppCommandState& cmd, std::vector<std::string>* log) {
+  std::vector<std::string> discard;
+  if (!log) log = &discard;
+  if (!cmd.showDimStyleDialog) return;
+  ImGui::SetNextWindowSize(ImVec2(640, 560), ImGuiCond_FirstUseEver);
+  bool open = cmd.showDimStyleDialog;
+  if (!ImGui::Begin("Dimension Style", &open)) {
+    cmd.showDimStyleDialog = open;
+    ImGui::End();
+    return;
+  }
+  cmd.showDimStyleDialog = open;
+  DimensionStyle& d = cmd.dimStyleDraft;
+  // ---- Text ----
+  ImGui::SeparatorText("Text");
+  ImGui::DragFloat("Size (in)", &d.textSizeInches, 0.005f, 0.02f, 1.0f, "%.3f");
+  if (d.textSizeInches < 0.01f) d.textSizeInches = 0.01f;
+  // Font: simple combo of known fonts
+  {
+    const char* fonts[] = {"(default)", "Arial", "Times New Roman", "Courier New", "romans.shx", "simplex.shx"};
+    std::string cur = d.textFont.empty() ? "(default)" : d.textFont;
+    if (ImGui::BeginCombo("Font", cur.c_str())) {
+      for (auto f : fonts) {
+        std::string val = (std::string(f) == "(default)") ? "" : f;
+        bool sel = (d.textFont == val);
+        if (ImGui::Selectable(f, sel)) d.textFont = val;
+      }
+      ImGui::EndCombo();
+    }
+  }
+  {
+    const char* cols[] = {"ByLayer", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White", "#e1b12c"};
+    if (ImGui::BeginCombo("Text Color", d.textColor.c_str())) {
+      for (auto c : cols) if (ImGui::Selectable(c, d.textColor==c)) d.textColor = c;
+      ImGui::EndCombo();
+    }
+  }
+  {
+    const char* aligns[] = {"Center", "Above", "Beside"};
+    int cur = (int)d.textAlign;
+    if (ImGui::BeginCombo("Alignment", aligns[cur])) {
+      for (int i=0;i<3;++i) if (ImGui::Selectable(aligns[i], i==cur)) d.textAlign = (DimTextAlign)i;
+      ImGui::EndCombo();
+    }
+  }
+  // ---- Dimension Lines ----
+  ImGui::SeparatorText("Dimension Lines");
+  {
+    const char* cols[] = {"ByLayer", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White"};
+    if (ImGui::BeginCombo("Dim Line Color", d.dimLineColor.c_str())) {
+      for (auto c : cols) if (ImGui::Selectable(c, d.dimLineColor==c)) d.dimLineColor = c;
+      ImGui::EndCombo();
+    }
+  }
+  {
+    const char* lts[] = {"Continuous", "Dashed", "Dotted", "Center", "Phantom"};
+    if (ImGui::BeginCombo("Dim Line Type", d.dimLineType.c_str())) {
+      for (auto lt : lts) if (ImGui::Selectable(lt, d.dimLineType==lt)) d.dimLineType = lt;
+      ImGui::EndCombo();
+    }
+  }
+  // ---- Extension Lines ----
+  ImGui::SeparatorText("Extension Lines");
+  {
+    const char* cols[] = {"ByLayer", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White"};
+    if (ImGui::BeginCombo("Ext Line Color", d.extLineColor.c_str())) {
+      for (auto c : cols) if (ImGui::Selectable(c, d.extLineColor==c)) d.extLineColor = c;
+      ImGui::EndCombo();
+    }
+  }
+  {
+    const char* lts[] = {"Continuous", "Dashed", "Dotted", "Center", "Phantom"};
+    if (ImGui::BeginCombo("Ext Line Type", d.extLineType.c_str())) {
+      for (auto lt : lts) if (ImGui::Selectable(lt, d.extLineType==lt)) d.extLineType = lt;
+      ImGui::EndCombo();
+    }
+  }
+  // ---- Arrows ----
+  ImGui::SeparatorText("Arrows");
+  ImGui::DragFloat("Arrow Size (in)", &d.arrowSizeInches, 0.005f, 0.01f, 1.0f, "%.3f");
+  if (d.arrowSizeInches < 0.01f) d.arrowSizeInches = 0.01f;
+  {
+    const char* types[] = {"Closed Filled", "Closed Blank", "Tick", "Dot", "Open", "None"};
+    int cur = (int)d.arrowType;
+    if (ImGui::BeginCombo("Arrow Type", types[cur])) {
+      for (int i=0;i<6;++i) if (ImGui::Selectable(types[i], i==cur)) d.arrowType = (DimArrowType)i;
+      ImGui::EndCombo();
+    }
+  }
+  {
+    const char* cols[] = {"ByLayer", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White"};
+    if (ImGui::BeginCombo("Arrow Color", d.arrowColor.c_str())) {
+      for (auto c : cols) if (ImGui::Selectable(c, d.arrowColor==c)) d.arrowColor = c;
+      ImGui::EndCombo();
+    }
+  }
+  // ---- Units ----
+  ImGui::SeparatorText("Units");
+  {
+    const char* fmts[] = {"Decimal", "Architectural", "Engineering", "Fractional"};
+    int cur = (int)d.unitFormat;
+    if (ImGui::BeginCombo("Unit Format", fmts[cur])) {
+      for (int i=0;i<4;++i) if (ImGui::Selectable(fmts[i], i==cur)) d.unitFormat = (DimUnitFormat)i;
+      ImGui::EndCombo();
+    }
+  }
+  {
+    const char* precs[] = {"0", "0.0", "0.00", "0.000", "0.0000"};
+    int cur = d.unitPrecision;
+    if (cur < 0) cur = 0; if (cur > 4) cur = 4;
+    if (ImGui::BeginCombo("Precision", precs[cur])) {
+      for (int i=0;i<5;++i) if (ImGui::Selectable(precs[i], i==cur)) d.unitPrecision = i;
+      ImGui::EndCombo();
+    }
+  }
+  {
+    float tmpScale = (float)d.unitScale;
+    if (ImGui::DragFloat("Unit Scale", &tmpScale, 0.01f, 0.001f, 1000.f, "%.3f")) d.unitScale = (double)tmpScale;
+    if (d.unitScale < 0.001) d.unitScale = 0.001;
+  }
+  // ---- Preview ----
+  ImGui::SeparatorText("Preview");
+  {
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImVec2 p1(p0.x + avail.x, p0.y + 40.f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p0, p1, IM_COL32(35,35,45,255), 4.f);
+    dl->AddRect(p0, p1, IM_COL32(90,90,90,255), 4.f, 0, 1.f);
+    float midY = (p0.y + p1.y)*0.5f;
+    float xL = p0.x + 40.f, xR = p1.x - 40.f;
+    dl->AddLine(ImVec2(xL, midY+10), ImVec2(xL, midY-10), IM_COL32(200,200,200,255), 1.f);
+    dl->AddLine(ImVec2(xR, midY+10), ImVec2(xR, midY-10), IM_COL32(200,200,200,255), 1.f);
+    dl->AddLine(ImVec2(xL, midY), ImVec2(xR, midY), IM_COL32(46,91,174,255), 1.5f);
+    // arrows
+    float ah = 6.f;
+    dl->AddTriangleFilled(ImVec2(xL, midY), ImVec2(xL+ah, midY-ah*0.5f), ImVec2(xL+ah, midY+ah*0.5f), IM_COL32(46,91,174,255));
+    dl->AddTriangleFilled(ImVec2(xR, midY), ImVec2(xR-ah, midY-ah*0.5f), ImVec2(xR-ah, midY+ah*0.5f), IM_COL32(46,91,174,255));
+    std::string txt = DimensionStyles::FormatLinearDim(12.5, d);
+    dl->AddText(ImVec2((xL+xR)*0.5f - 18.f, midY - 18.f), IM_COL32(248,250,252,255), txt.c_str());
+    ImGui::Dummy(ImVec2(avail.x, 44.f));
+  }
+  ImGui::Separator();
+  float bw = 90.f;
+  if (ImGui::Button("OK", ImVec2(bw, 0))) {
+    PushUndoSnapshot(cmd, "DIMSTY");
+    cmd.activeDimensionStyle = d;
+    // Refresh existing dimensions to new style (all Dim* kinds, including DimAngular)
+    for (auto& a : cmd.cadAnnotations) {
+      if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
+        float sx1,sy1,sx2,sy2,tx,ty,nx,ny,ml;
+        if (CadDimAnyGeometry(a,&sx1,&sy1,&sx2,&sy2,&tx,&ty,&nx,&ny,&ml)) a.text = DimensionStyles::FormatLinearDim((double)ml, cmd.activeDimensionStyle);
+      } else if (a.kind == CadAnnotation::Kind::DimAngular) {
+        float a1=0.f,a2=0.f,sweep=0.f,theta=0.f,bisx=0.f,bisy=0.f;
+        if (CadDimAngularComputeFrame(a,&a1,&a2,&sweep,&bisx,&bisy,&theta))
+          a.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(cmd));
+      } else continue;
+      a.plottedHeightInches = std::max(cmd.activeDimensionStyle.textSizeInches, 1.e-6f);
+      a.fontFamily = cmd.activeDimensionStyle.textFont;
+    }
+    BumpCadGpuCache(cmd);
+    cmd.showDimStyleDialog = false;
+    log->push_back("DIMSTY — style applied.");
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Apply", ImVec2(bw, 0))) {
+    PushUndoSnapshot(cmd, "DIMSTY");
+    cmd.activeDimensionStyle = d;
+    for (auto& a : cmd.cadAnnotations) {
+      if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
+        float sx1,sy1,sx2,sy2,tx,ty,nx,ny,ml;
+        if (CadDimAnyGeometry(a,&sx1,&sy1,&sx2,&sy2,&tx,&ty,&nx,&ny,&ml)) a.text = DimensionStyles::FormatLinearDim((double)ml, cmd.activeDimensionStyle);
+      } else if (a.kind == CadAnnotation::Kind::DimAngular) {
+        float a1=0.f,a2=0.f,sweep=0.f,theta=0.f,bisx=0.f,bisy=0.f;
+        if (CadDimAngularComputeFrame(a,&a1,&a2,&sweep,&bisx,&bisy,&theta))
+          a.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(cmd));
+      } else continue;
+      a.plottedHeightInches = std::max(cmd.activeDimensionStyle.textSizeInches, 1.e-6f);
+      a.fontFamily = cmd.activeDimensionStyle.textFont;
+    }
+    BumpCadGpuCache(cmd);
+    log->push_back("DIMSTY — style applied.");
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", ImVec2(bw, 0))) {
+    cmd.showDimStyleDialog = false;
+  }
   ImGui::End();
 }
 

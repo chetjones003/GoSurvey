@@ -8,6 +8,7 @@
 // SurfaceStyles::DefaultSurfaceStyles, for the surfaceStyles member's initializer — same reason,
 // same shape, and pure for the same reason (REQ-070 / ADR-036 (d)).
 #include "SurfaceStyle.hpp"
+#include "DimensionStyle.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
 #include "PdfAttach.hpp"
 #include "PaperSpace.hpp"
@@ -184,6 +185,7 @@ std::string CadFormatAngleDegMinSecFromRad(float angleRad);
 /// \c D°M'S" with decimal seconds; normalized to \c [0,360).
 std::string CadFormatBearingCwNorthDegMinSec(float bearingDegClockwiseFromNorth);
 /// Live DIMANGULAR preview (\p st.active == DimAngular, \p dimAngularPhase == WaitArc).
+bool CadDimAngularComputeFrame(const CadAnnotation& a, float* a1Out, float* a2Out, float* sweepOut, float* bisx, float* bisy, float* thetaInterior);
 bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out);
 /// After vertex / ray / radius edits, re-place label along the angle bisector.
 void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float modelUnitsPerPlottedInch);
@@ -881,6 +883,7 @@ struct DrawingGeometrySnapshot {
   /// in `AppCommandState::surfaceDisplayCache`, which no snapshot touches (ADR-036 (e)). That split is
   /// what lets a style edit be undoable without a single contour entering the undo stack.
   std::vector<SurfaceStyle>     surfaceStyles;
+  DimensionStyle              dimensionStyle = DimensionStyles::Default();
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<PaperLayout>      paperLayouts;  ///< Paper layouts incl. native paper geometry (REQ-037/038) — undoable.
   double worldDocumentOriginX = 0.0;
@@ -937,6 +940,7 @@ struct DrawingDocument {
   std::vector<CadLayerRow>      drawingLayerTable;
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
+  DimensionStyle              dimensionStyle = DimensionStyles::Default();
   std::string                   activeTextStyleName = "Standard";  ///< Style for new TEXT/MTEXT.
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<SelectedEntity>   selection;
@@ -2475,6 +2479,12 @@ struct AppCommandState {
   std::vector<SurfaceStyle> surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
   /// Active text style for new TEXT/MTEXT (the STYLE dropdown). Empty resolves to "Standard".
   std::string activeTextStyleName = "Standard";
+  /// Centralized dimension style (issue #99) — single active style used by DIMALIGNED/DIMLINEAR/DIMANGULAR.
+  /// Pure value type, undoable via snapshot (like textStyles/surfaceStyles).  New dimensions bake this
+  /// style's effective values; existing dimensions read the active style at draw/measure time (phase 1).
+  DimensionStyle activeDimensionStyle = DimensionStyles::Default();
+  DimensionStyle dimStyleDraft = DimensionStyles::Default();
+  bool showDimStyleDialog = false;
   /// Viewport CAD crosshair (Drawing1): RGB 0–1, arm length as fraction of viewport width/height, pickbox half-size in px.
   float viewportCrosshairR = 1.f;
   float viewportCrosshairG = 0.8392157f;
@@ -3540,6 +3550,7 @@ void CancelMtextRichEditor(AppCommandState& st, std::vector<std::string>* log);
 void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartDimLinearCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartDimAngularCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartDimStyleCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log);
 
 /// REQ-074: pick a point for its interpolated surface elevation; pick a second for the grade

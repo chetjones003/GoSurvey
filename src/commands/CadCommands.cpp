@@ -97,6 +97,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.drawingLayerTable      = cmd.drawingLayerTable;
   doc.textStyles             = cmd.textStyles;
   doc.surfaceStyles          = cmd.surfaceStyles;
+  doc.dimensionStyle         = cmd.activeDimensionStyle;
   doc.activeTextStyleName    = cmd.activeTextStyleName;
   doc.pdfAttachments         = cmd.pdfAttachments;
   doc.selection              = cmd.selection;
@@ -158,6 +159,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.drawingLayerTable          = doc.drawingLayerTable;
   cmd.textStyles                 = doc.textStyles;
   cmd.surfaceStyles              = doc.surfaceStyles;
+  cmd.activeDimensionStyle       = doc.dimensionStyle;
   cmd.activeTextStyleName        = doc.activeTextStyleName;
   cmd.pdfAttachments             = doc.pdfAttachments;
   cmd.selection                  = doc.selection;
@@ -1337,6 +1339,7 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
   snap.drawingLayerTable    = st.drawingLayerTable;
   snap.textStyles           = st.textStyles;  // style edits are undoable (REQ-044)
   snap.surfaceStyles        = st.surfaceStyles;  // and surface-style edits (REQ-070)
+  snap.dimensionStyle       = st.activeDimensionStyle;  // dimension-style edits are undoable (issue #99)
   snap.pdfAttachments       = st.pdfAttachments;
   snap.paperLayouts         = st.paperLayouts;  // native paper geometry is undoable (REQ-037/038)
   // Zero GL texture IDs: restored snapshots must not reference freed GPU resources.
@@ -1380,6 +1383,7 @@ static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySn
   st.drawingLayerTable    = snap.drawingLayerTable;
   st.textStyles           = snap.textStyles;
   st.surfaceStyles        = snap.surfaceStyles;
+  st.activeDimensionStyle = snap.dimensionStyle;
   st.pdfAttachments       = snap.pdfAttachments;
   st.paperLayouts         = snap.paperLayouts;
   st.selectedPaperEntities.clear();  // restored layouts invalidate paper-entity indices
@@ -3479,7 +3483,9 @@ static float CadAngNormalizeMinusPiToPi(float a) {
   return a;
 }
 
-static bool CadDimAngularComputeFrame(const CadAnnotation& a, float* a1Out, float* a2Out, float* sweepOut, float* bisx,
+} // namespace
+
+bool CadDimAngularComputeFrame(const CadAnnotation& a, float* a1Out, float* a2Out, float* sweepOut, float* bisx,
                                       float* bisy, float* thetaInterior) {
   if (a.kind != CadAnnotation::Kind::DimAngular)
     return false;
@@ -3523,6 +3529,8 @@ static bool CadDimAngularComputeFrame(const CadAnnotation& a, float* a1Out, floa
   *thetaInterior = theta;
   return theta > 1.e-7f;
 }
+
+namespace {
 
 static float CadDimAngularPickRadius(float vx, float vy, float bisx, float bisy, float pickx, float picky, float rMin,
                                      float rMax) {
@@ -3733,8 +3741,9 @@ bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cu
   d.dimExt2X = x2;
   d.dimExt2Y = y2;
   d.dimSignedOffset = dOff;
-  d.plottedHeightInches = std::max(st.defaultPlottedTextHeightInches * 0.85f, 1.e-6f);
-  d.text = FormatLinear(static_cast<double>(len), st.displayLinearPrecision);
+  d.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
+  d.fontFamily = st.activeDimensionStyle.textFont;
+  d.text = DimensionStyles::FormatLinearDim(static_cast<double>(len), st.activeDimensionStyle);
   d.rotationRad = std::atan2(vy, vx);
   const float hWorld = CadAnnotationHeightWorld(d, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &d.insX, &d.insY);
@@ -3821,8 +3830,9 @@ bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy,
   d.dimExt2Y = y2;
   d.dimSignedOffset = dOff;
   d.dimLinearVertical = vert;
-  d.plottedHeightInches = std::max(st.defaultPlottedTextHeightInches * 0.85f, 1.e-6f);
-  d.text = FormatLinear(static_cast<double>(meas), st.displayLinearPrecision);
+  d.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
+  d.fontFamily = st.activeDimensionStyle.textFont;
+  d.text = DimensionStyles::FormatLinearDim(static_cast<double>(meas), st.activeDimensionStyle);
   float tx = 0.f, ty = 0.f;
   if (!vert) {
     tx = (x2 >= x1) ? 1.f : -1.f;
@@ -3905,7 +3915,11 @@ void CadDimRefreshMeasurementText(CadAnnotation* ann, int linearPrecision, const
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (!CadDimAnyGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
       return;
-    ann->text = FormatLinear(static_cast<double>(ml), linearPrecision);
+    {
+      DimensionStyle tmp = DimensionStyles::Default();
+      tmp.unitPrecision = linearPrecision;
+      ann->text = DimensionStyles::FormatLinearDim(static_cast<double>(ml), tmp);
+    }
   } else if (ann->kind == CadAnnotation::Kind::DimAngular) {
     float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
     if (!CadDimAngularComputeFrame(*ann, &a1, &a2, &sweep, &bisx, &bisy, &theta))
@@ -3954,7 +3968,8 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const float rMin = std::max(1.e-4f, 0.02f * leg);
   const float R = CadDimAngularPickRadius(vx, vy, bisx, bisy, cursorWx, cursorWy, rMin, rMax);
   d.dimSignedOffset = R;
-  d.plottedHeightInches = std::max(st.defaultPlottedTextHeightInches * 0.85f, 1.e-6f);
+  d.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
+  d.fontFamily = st.activeDimensionStyle.textFont;
   d.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(st));
   CadDimAngularSyncTextPlacement(&d, st.modelUnitsPerPlottedInch);
   *out = std::move(d);
@@ -4277,6 +4292,7 @@ const CmdEntry kRegistry[] = {
     {"dimaligned", "dal", "Aligned dimension"},
     {"dimlinear", "dli", "Linear dimension"},
     {"dimangular", "dan", "Angular dimension"},
+    {"dimsty", "dimstyle, dsty", "Dimension style editor"},
     {"id", "", "Identify point coordinates"},
     {"inverse", "inv", "Inverse between two points"},
     {"surfelev", "se", "Surface elevation at a point; grade between two"},
@@ -4567,7 +4583,8 @@ static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vec
   const float rMin = std::max(1.e-4f, 0.02f * leg);
   const float R = CadDimAngularPickRadius(vx, vy, bisx, bisy, wx, wy, rMin, rMax);
   d.dimSignedOffset = R;
-  d.plottedHeightInches = st.defaultPlottedTextHeightInches * 0.85f;
+  d.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
+  d.fontFamily = st.activeDimensionStyle.textFont;
   d.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(st));
   CadDimAngularSyncTextPlacement(&d, st.modelUnitsPerPlottedInch);
   EntityAttributes at = MakeNewEntityAttrs(st);
@@ -4704,6 +4721,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "dimangular") {
     StartDimAngularCommand(st, log);
+    return true;
+  }
+  if (primary == "dimsty" || primary == "dimstyle" || primary == "dsty") {
+    StartDimStyleCommand(st, log);
     return true;
   }
   if (primary == "id") {
@@ -7915,8 +7936,6 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   const float dmx = 0.5f * (sx1 + sx2);
   const float dmy = 0.5f * (sy1 + sy2);
   const float dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
-  char buf[96];
-  std::snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(len));
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimAligned;
   ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
@@ -7925,9 +7944,10 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   ann.dimExt2X = x2;
   ann.dimExt2Y = y2;
   ann.dimSignedOffset = dOff;
-  ann.plottedHeightInches = st.defaultPlottedTextHeightInches * 0.85f;
+  ann.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
+  ann.fontFamily = st.activeDimensionStyle.textFont;
   ann.rotationRad = std::atan2(vy, vx);
-  ann.text = buf;
+  ann.text = DimensionStyles::FormatLinearDim(static_cast<double>(len), st.activeDimensionStyle);
   const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
   EntityAttributes at = MakeNewEntityAttrs(st);
@@ -7968,8 +7988,6 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
     n0x = 1.f;
     n0y = 0.f;
   }
-  char buf[96];
-  std::snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(meas));
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimLinear;
   ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
@@ -7979,7 +7997,8 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   ann.dimExt2Y = y2;
   ann.dimSignedOffset = dOff;
   ann.dimLinearVertical = vert;
-  ann.plottedHeightInches = st.defaultPlottedTextHeightInches * 0.85f;
+  ann.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
+  ann.fontFamily = st.activeDimensionStyle.textFont;
   float tx = 0.f, ty = 0.f;
   if (!vert) {
     tx = (x2 >= x1) ? 1.f : -1.f;
@@ -7989,7 +8008,7 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
     ty = (y2 >= y1) ? 1.f : -1.f;
   }
   ann.rotationRad = std::atan2(ty, tx);
-  ann.text = buf;
+  ann.text = DimensionStyles::FormatLinearDim(static_cast<double>(meas), st.activeDimensionStyle);
   const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
   EntityAttributes at = MakeNewEntityAttrs(st);
@@ -15814,6 +15833,12 @@ void StartDimAngularCommand(AppCommandState& st, std::vector<std::string>& log) 
   st.dimAngularPhase = AppCommandState::DimAngularPhase::WaitVertex;
   log.push_back("DIMANGULAR — vertex, two ray points, then arc position (radius). Text is degrees/minutes/seconds. ESC "
                 "cancels.");
+}
+
+void StartDimStyleCommand(AppCommandState& st, std::vector<std::string>& log) {
+  st.dimStyleDraft = st.activeDimensionStyle;
+  st.showDimStyleDialog = true;
+  log.push_back("DIMSTY — dimension style editor opened.");
 }
 
 void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log) {
