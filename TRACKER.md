@@ -51,6 +51,43 @@
       state a zero-length arc at all — pre-existing, measured against both writers, and not fixable
       in a writer.
 
+### A DXF round trip is a fixed point on the FIRST cycle, and REQ-204 was not amended to make it one — 2026-08-26
+
+    - GitHub issue #98, filed by chetjones003 out of TASK-116's DEBT-1 and re-found independently
+      while reviewing PR #97. REQ-204 + TASK-121. Decision **D-2026-08-26-h**.
+    - **The symptom was one number.** Export a drawing whose coordinates are not exact at six
+      decimals, import it, export again: two 7154-byte files, identical except `$VPORT` group 40 —
+      `124.603335` against `124.603334`. The third export matched the second, so it converged.
+    - **Why it happened.** Every number in a GoSurvey DXF is written by `std::to_string`, which
+      rounds to six decimals, so a re-imported coordinate is that text read back. Below about 16 the
+      `float` spacing is *finer* than 1e-6, so the written text does not identify the float it came
+      from and the re-imported value is genuinely a different float — `0.0000015` goes out as
+      `0.000002` and comes back as `0.000002`. The entity text was stable under that, and so were
+      `$EXTMIN`/`$EXTMAX`. The header **view** was not, because it is derived from the extents and
+      the derivation amplifies: `max(width, height) * 1.1 + 1.0` turns a difference too small to
+      change `$EXTMIN` into a different sixth decimal in the view height.
+    - **The interesting part is what was NOT done.** The issue offered the REQ-079 precedent —
+      amend the invariant to compare the second and third exports, as D-2026-08-17-a did for `.gs`
+      after issue #61 — and it was declined. The two cases look alike and are not. `.gs`
+      normalization is a deliberate transformation of the user's stored geometry that the precision
+      design requires and the format cannot promise away; that requirement was genuinely wrong and
+      had to be amended (and was made *stronger* in the process, with idempotence). Nothing is
+      normalized here. One function derived a value from more precision than it then wrote down.
+      Amending REQ-204 for that would have been the Workshop editing the Specification to excuse
+      code — the move the SPEC GAP rule exists to prevent.
+    - **The fix is six assignments.** The extents are snapped to the precision they are written at
+      before anything is derived from them, so the view a file states is exactly the view a reader
+      derives from the extents that same file states. No requirement text changed, no format change,
+      no version bump. DXF export → import → export is now a fixed point on the **first** cycle,
+      which is strictly stronger than what REQ-079 promises `.gs`. Pinned by
+      `regression-98-dxf-view-precision.txt`, red before the change at the byte the issue names.
+    - **A second residual of the same family was found while stress-testing the fix, and filed
+      rather than folded in** (TASK-121 §12 DEBT-1): a 3-point arc still moves its group 50/51 start
+      and end angles once, `358.147533` → `358.147526`. An arc angle is stored as `float` radians
+      and written as degrees, and six decimals of a degree is finer than `float` spacing at ~6.25
+      rad, so the import's narrowing lands on a neighbouring float. That is **stored geometry**, not
+      a derived view value, and fixing it means changing how an angle is stored or written. Measured
+      on `beta` with this change stashed out, so it is pre-existing and not a regression. Filed as **#111**.
 
 ### A polyline survives a DXF round trip as a polyline — 2026-08-21
     - GitHub issue #64, found by the REQ-204 `dxf-export-stable` oracle (fuzz signature
