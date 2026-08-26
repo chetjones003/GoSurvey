@@ -2451,6 +2451,29 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     }
   }
 
+  // Every number in this file is written by `std::to_string`, which rounds to six decimals. Snap
+  // the extents to that grid HERE, before anything is derived from them, so the variables below
+  // hold exactly what the file will state.
+  //
+  // The header view (VPORT groups 12/22/40/41) is derived from the extents, and `* 1.1 + 1.0`
+  // AMPLIFIES: two runs whose raw extents differ by less than half of the last written decimal —
+  // which is all a DXF round trip can leave behind, since a re-imported coordinate is the
+  // six-decimal text read back — round to the SAME $EXTMIN/$EXTMAX and still land on different
+  // sixth decimals in the view height. That is issue #98: a first export and a second differed on
+  // group 40 alone, by 1e-6, with every other byte identical. Deriving from the snapped extents
+  // removes the amplifier — the view this file states is exactly the view a reader derives from
+  // the extents the same file states — so the FIRST export is already a fixed point (REQ-204
+  // stability invariant), with no idempotence carve-out of the kind REQ-079 needed for `.gs`.
+  const auto snapToWritePrecision = [](double v) {
+    return std::isfinite(v) ? std::stod(std::to_string(v)) : v;
+  };
+  extMnX = snapToWritePrecision(extMnX);
+  extMxX = snapToWritePrecision(extMxX);
+  extMnY = snapToWritePrecision(extMnY);
+  extMxY = snapToWritePrecision(extMxY);
+  extMnZ = snapToWritePrecision(extMnZ);
+  extMxZ = snapToWritePrecision(extMxZ);
+
   const double vCx = (extMnX + extMxX) * 0.5;
   const double vCy = (extMnY + extMxY) * 0.5;
   const double vW = extMxX - extMnX;
