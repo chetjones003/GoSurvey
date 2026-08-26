@@ -21,7 +21,14 @@ inline bool ViewportUseRawWorldForSelectionRectPick(const AppCommandState& cmd) 
          (cmd.active == K::Stretch && cmd.modifyPhase == MP::PickSelection) ||
          (cmd.active == K::Rotate && cmd.rotatePhase == RP::PickSelection) ||
          // REQ-305: ARRAY opens with the same window-select MOVE/COPY/SCALE do.
-         (cmd.active == K::Array && cmd.arrayPhase == AppCommandState::ArrayPhase::PickSelection);
+         (cmd.active == K::Array && cmd.arrayPhase == AppCommandState::ArrayPhase::PickSelection) ||
+         // REQ-121: ALIGN was MISSING here. It routes its PickSelection phase to
+         // `SelectionAccumulate` alongside its six siblings (see `ViewportClickRouteFor` below), so
+         // its fence corners must come from the same unsnapped drag coordinates they do — but this
+         // list was never extended when ALIGN joined them, so ALIGN alone built its box from SNAPPED
+         // coordinates. Nobody decided that; it is the per-command accident an unstated rule
+         // produces, and closing it is part of REQ-121 rather than a separate fix.
+         (cmd.active == K::Align && cmd.alignPhase == AppCommandState::AlignPhase::PickSelection);
 }
 
 /// What a left-click in the **model-space** viewport means for the currently active command.
@@ -210,4 +217,66 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   // Unreachable for any handled Kind. Kept (rather than left to fall off the end) so a Kind added
   // without a case is a compiler warning and a failing ViewportPickPolicyTests case, not UB.
   return R::Ignore;
+}
+
+/// Is the active command asking **which objects** rather than **which point**? (REQ-121)
+///
+/// This is the single predicate REQ-121 requires all three of its rules to consult — OSNAP
+/// suppression, the pickbox cursor, and the standardized prompt. Having one answer, derived here,
+/// is the point: the alternative is each rule maintaining its own list of commands, which is how
+/// ALIGN ended up missing from `ViewportUseRawWorldForSelectionRectPick` above.
+///
+/// It is derived from the ROUTE rather than from `cmd.active`, so it inherits
+/// `ViewportClickRouteFor`'s exhaustiveness for free: a new command Kind must first be given a
+/// route (or the `default:`-less switch above fails to compile), and that route already answers
+/// this question. A command therefore cannot be added to the program and silently omitted from the
+/// selection treatment — the failure is at build time, which is REQ-121's own acceptance condition.
+///
+/// The `switch` below is likewise `default:`-less, so adding a ROUTE forces a decision here too.
+///
+/// **Idle is deliberately false** (REQ-121, settled 2026-08-26). The treatment is a mode signal,
+/// and a mode signal only means something against a default — idle is that default. Note the
+/// existing snap gate already reaches the same conclusion by a different road: snapping is keyed on
+/// `midCmd`, so with no command running nothing snaps anyway.
+///
+/// `HatchPick` is false and is worth saying why: HATCH clicks a point INSIDE a region to trace a
+/// boundary from it. That is a location, not an object — REQ-121's list does not include HATCH.
+inline bool ViewportIsObjectSelectionStep(const AppCommandState& cmd) {
+  using R = ViewportClickRoute;
+
+  // ZOOM is the one command the route cannot answer for, and it is excluded (REQ-121).
+  //
+  // `SelectionBox` conflates two different meanings: DELETE/JOIN/STRETCH drag a box to choose
+  // OBJECTS, ZOOM drags one to choose a REGION OF THE VIEW to fit. Nothing is selected by the
+  // latter, so a pickbox would say "click a thing" while the user drags a rectangle, and the
+  // standardized prompt would be a sentence that is simply untrue.
+  //
+  // Splitting `SelectionBox` into two enumerators would say this in the type system, and was
+  // considered and declined: the route is consumed by a switch in the click handler, so a new
+  // enumerator changes click routing to fix a cursor question. One named exception with a reason is
+  // the smaller change (CLAUDE.md rule 1). If a second region-picking command ever appears, split it
+  // then — that is the point at which the abstraction earns its keep.
+  if (cmd.active == AppCommandState::Kind::Zoom)
+    return false;
+
+  switch (ViewportClickRouteFor(cmd)) {
+  // "Which objects?" — the fence commands, the accumulating select-objects step, the one-entity-
+  // per-click loops (EXTEND / FILLET / CHAMFER / LENGTHEN / BREAK's first phase / OFFSET), and TRIM.
+  // TRIM owning a separate click entry point (`SubmitTrimViewportPick`) does not matter here: this
+  // asks what the PHASE means, not which function consumes the click.
+  case R::SelectionBox:
+  case R::SelectionAccumulate:
+  case R::RawEntityPick:
+  case R::TrimPick:
+    return true;
+
+  // "Which point?", or nothing at all.
+  case R::IdleSelection:
+  case R::SnappedPointPick:
+  case R::HatchPick:
+  case R::PdfAttachInsertPoint:
+  case R::Ignore:
+    return false;
+  }
+  return false;  // unreachable; see ViewportClickRouteFor's tail note
 }

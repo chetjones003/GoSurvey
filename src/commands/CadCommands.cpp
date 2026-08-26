@@ -22645,10 +22645,20 @@ const char* ModifyCommandFooterHint(const AppCommandState& st) {
   using MP = AppCommandState::ModifyPhase;
   if (st.active == K::Paste && st.modifyPhase == MP::NeedDestination)
     return "PASTE: Click destination point | ESC cancel";
+  // REQ-121: MIRROR and ARRAY had NO footer hint at all, so their selection step showed nothing in
+  // the dynamic cursor text while showing a prompt on the command line — REQ-304's rule is that the
+  // two agree, and this pair was missed by that audit. Handled here rather than in two new
+  // delegates, on REQ-304's own precedent (it closed its eight gaps by extending
+  // `DrawingExtrasFooterHint` rather than adding functions). They are modify commands; this is the
+  // modify hint.
+  if (st.active == K::Mirror)
+    return st.mirrorPhase == AppCommandState::MirrorPhase::PickSelection ? kSelectObjectsPrompt : "";
+  if (st.active == K::Array)
+    return st.arrayPhase == AppCommandState::ArrayPhase::PickSelection ? kSelectObjectsPrompt : "";
   if (st.active != K::Move && st.active != K::Copy)
     return "";
   if (st.modifyPhase == MP::PickSelection)
-    return "MOVE/COPY: Click objects or drag a window, Enter when done | ESC cancel";
+    return kSelectObjectsPrompt;  // REQ-121
   if (st.modifyPhase == MP::NeedBase)
     return "MOVE/COPY: Base point — click or X,Y | ESC cancel";
   if (st.modifyPhase == MP::NeedDestination)
@@ -22663,7 +22673,7 @@ const char* RotateCommandFooterHint(const AppCommandState& st) {
     return "";
   switch (st.rotatePhase) {
   case RP::PickSelection:
-    return "ROTATE: Click objects or drag a window, Enter when done | ESC cancel";
+    return kSelectObjectsPrompt;  // REQ-121
   case RP::NeedBase:
     return "ROTATE: Base point — click or X,Y | ESC cancel";
   case RP::NeedAngleOrReference:
@@ -22689,7 +22699,7 @@ const char* ScaleCommandFooterHint(const AppCommandState& st) {
   if (st.active != K::Scale)
     return "";
   if (st.modifyPhase == MP::PickSelection)
-    return "SCALE: Click objects or drag a window, Enter when done | ESC cancel";
+    return kSelectObjectsPrompt;  // REQ-121
   if (st.modifyPhase == MP::NeedBase)
     return "SCALE: Base point — click or X,Y | ESC cancel";
   if (st.modifyPhase == MP::NeedDestination) {
@@ -22714,13 +22724,13 @@ const char* ScaleCommandFooterHint(const AppCommandState& st) {
 const char* DeleteCommandFooterHint(const AppCommandState& st) {
   if (st.active != AppCommandState::Kind::Delete)
     return "";
-  return "DELETE: Window-select — click two corners | ESC cancel";
+  return kSelectObjectsPrompt;  // REQ-121
 }
 
 const char* JoinCommandFooterHint(const AppCommandState& st) {
   if (st.active != AppCommandState::Kind::Join)
     return "";
-  return "JOIN: Window-select — click two corners | ESC cancel";
+  return kSelectObjectsPrompt;  // REQ-121
 }
 
 const char* TrimCommandFooterHint(const AppCommandState& st) {
@@ -23753,7 +23763,7 @@ const char* AlignCommandFooterHint(const AppCommandState& st) {
     return "";
   using AP = AppCommandState::AlignPhase;
   if (st.alignPhase == AP::PickSelection)
-    return "ALIGN: click objects or window, then press Enter";
+    return kSelectObjectsPrompt;  // REQ-121
   if (st.alignPhase == AP::PickSrc)
     return "ALIGN: pick SOURCE survey point in drawing (snap to it) — Enter to solve";
   return "ALIGN: pick/type DESTINATION real-world X,Y for this source point";

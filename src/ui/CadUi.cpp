@@ -6249,7 +6249,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   if (cmd.active == AppCommandState::Kind::Move || cmd.active == AppCommandState::Kind::Copy) {
     using MP = AppCommandState::ModifyPhase;
     if (cmd.modifyPhase == MP::PickSelection)
-      return "Click objects or window, Enter when done:";
+      return kSelectObjectsPrompt;  // REQ-121
     if (cmd.modifyPhase == MP::NeedBase)
       return "Base point X,Y:";
     return "Destination @dx,dy or X,Y:";
@@ -6258,7 +6258,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     using AP = AppCommandState::ArrayPhase;
     switch (cmd.arrayPhase) {
     case AP::PickSelection:
-      return "ARRAY — click objects or window, Enter when done:";
+      return kSelectObjectsPrompt;  // REQ-121
     case AP::WaitType:
       return "ARRAY — array type: [R]ectangular / [P]olar:";
     case AP::Rect_WaitColumns:
@@ -6284,7 +6284,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     using MP = AppCommandState::ModifyPhase;
     using SP = AppCommandState::ScalePhase;
     if (cmd.modifyPhase == MP::PickSelection)
-      return "SCALE — click objects or window, Enter when done:";
+      return kSelectObjectsPrompt;  // REQ-121
     if (cmd.modifyPhase == MP::NeedBase)
       return "SCALE — base point X,Y:";
     if (cmd.modifyPhase == MP::NeedDestination) {
@@ -6309,7 +6309,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     using RP = AppCommandState::RotatePhase;
     switch (cmd.rotatePhase) {
     case RP::PickSelection:
-      return "Click objects or window, Enter when done:";
+      return kSelectObjectsPrompt;  // REQ-121
     case RP::NeedBase:
       return "Base point X,Y:";
     case RP::NeedAngleOrReference:
@@ -6328,7 +6328,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     using MirP = AppCommandState::MirrorPhase;
     switch (cmd.mirrorPhase) {
     case MirP::PickSelection:
-      return "MIRROR — click objects or window, Enter when done:";
+      return kSelectObjectsPrompt;  // REQ-121
     case MirP::NeedP1:
       return "MIRROR — first point of mirror line X,Y:";
     case MirP::NeedP2:
@@ -6379,9 +6379,9 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     return "Destination @dx,dy or X,Y:";
   }
   if (cmd.active == AppCommandState::Kind::Delete)
-    return "DELETE — window opposite corner or ESC:";
+    return kSelectObjectsPrompt;  // REQ-121
   if (cmd.active == AppCommandState::Kind::Join)
-    return "JOIN — window opposite corner or ESC:";
+    return kSelectObjectsPrompt;  // REQ-121
   if (cmd.active == AppCommandState::Kind::Trim) {
     using TP = AppCommandState::TrimPhase;
     if (cmd.trimPhase == TP::SelectCuttingEdges)
@@ -9636,7 +9636,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.viewportSnapPickValid = false;
         const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
                             cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
-        if (cmd.objectSnapEnabled && midCmd) {
+        // REQ-121 rule (1), floating model space (REQ-036). The same suppression as the model-space
+        // seam below: a selection step is a selection step whichever window it happens inside, and
+        // leaving this one snapping would make the rule true in model space and false through a
+        // viewport — exactly the per-command-accident shape REQ-121 exists to remove.
+        if (cmd.objectSnapEnabled && midCmd && !ViewportIsObjectSelectionStep(cmd)) {
           const float tol = std::max(1.e-6f, cmd.objectSnapAperturePx * worldPerPx);
           CadSnap::SnapExclude exclude{};
           if (cmd.entityGripMoveActive && cmd.entityGripEntityIndex >= 0) {
@@ -10085,7 +10089,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       cmd.viewportSnapPickValid = false;
       const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
                           cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
-      const bool snapViewportActive = cmd.objectSnapEnabled && midCmd;
+      // REQ-121 rule (1). During an object-selection step OSNAP has no effect: no marker is drawn
+      // and the cursor does not jump, because there is no coordinate being placed. The pick itself
+      // was already hit-tested against the raw cursor (`RawEntityPick`'s own comment says why), so
+      // before this the cursor visibly leapt to an endpoint while the pick correctly ignored it —
+      // the two halves disagreeing on screen, which is worse than either being wrong alone.
+      //
+      // Suppressing it HERE, at the one place the snap is computed, is what makes the marker vanish
+      // too: everything downstream reads `snap.valid`.
+      const bool snapViewportActive =
+          cmd.objectSnapEnabled && midCmd && !ViewportIsObjectSelectionStep(cmd);
       CadSnap::Hit snap{};
       if (snapViewportActive) {
         const float tol = CadSnap::WorldToleranceFromPixels(avail.y, halfH, cmd.objectSnapAperturePx);
@@ -13087,9 +13100,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // is preserved once we freeze on the next typed character.
       s_lastCrosshairScreen = ImVec2(cx, cy);
     }
+    // REQ-121 rule (2): during an object-selection step the cursor is a PICKBOX — the centre square
+    // alone, with the four crosshair arms suppressed. That is AutoCAD's convention and the visible
+    // signal that rules (1) and (3) are in force: crosshair means "place a point", box means "pick
+    // a thing".
+    //
+    // The square is sized from `viewportCrosshairPickHalfPx*`, a setting that already existed, is
+    // already persisted in `.gs` and user prefs, and was until now never read by the renderer — the
+    // crosshair's centre box tracks the SNAP APERTURE instead. So the pickbox gets the field named
+    // for it rather than a new tunable (CLAUDE.md rule 2), and the crosshair keeps the aperture-
+    // sized box it has always drawn, unchanged.
+    const bool pickboxCursor = ViewportIsObjectSelectionStep(cmd);
     const float ap = std::clamp(cmd.objectSnapAperturePx, 4.f, 64.f);
-    const float phx = ap * 0.5f;
-    const float phy = ap * 0.5f;
+    const float phx = pickboxCursor ? std::clamp(cmd.viewportCrosshairPickHalfPxX, 2.f, 32.f) : ap * 0.5f;
+    const float phy = pickboxCursor ? std::clamp(cmd.viewportCrosshairPickHalfPxY, 2.f, 32.f) : ap * 0.5f;
     const float hair = std::clamp(cmd.viewportCrosshairHairPx, 0.5f, 4.f);
     const float frx = std::clamp(cmd.viewportCrosshairArmFracX, 0.001f, 0.5f);
     const float fry = std::clamp(cmd.viewportCrosshairArmFracY, 0.001f, 0.5f);
@@ -13106,10 +13130,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const float xr = std::min(imgMax.x, cx + phx + armX);
     const float yt = std::max(imgMin.y, cy - phy - armY);
     const float yb = std::min(imgMax.y, cy + phy + armY);
-    wdl->AddLine(ImVec2(xl, cy), ImVec2(cx - phx, cy), kCad, hair);
-    wdl->AddLine(ImVec2(cx + phx, cy), ImVec2(xr, cy), kCad, hair);
-    wdl->AddLine(ImVec2(cx, yt), ImVec2(cx, cy - phy), kCad, hair);
-    wdl->AddLine(ImVec2(cx, cy + phy), ImVec2(cx, yb), kCad, hair);
+    // The arms are what make it a crosshair; a pickbox is the box on its own (REQ-121 rule 2).
+    if (!pickboxCursor) {
+      wdl->AddLine(ImVec2(xl, cy), ImVec2(cx - phx, cy), kCad, hair);
+      wdl->AddLine(ImVec2(cx + phx, cy), ImVec2(xr, cy), kCad, hair);
+      wdl->AddLine(ImVec2(cx, yt), ImVec2(cx, cy - phy), kCad, hair);
+      wdl->AddLine(ImVec2(cx, cy + phy), ImVec2(cx, yb), kCad, hair);
+    }
     const float l = cx - phx;
     const float r = cx + phx;
     const float t = cy - phy;
