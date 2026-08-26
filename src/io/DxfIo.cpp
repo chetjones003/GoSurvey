@@ -30,6 +30,86 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kDegToRad = kPi / 180.0;
 
+/// Degrees as a DXF ARC states them → the `float` radians a `CadArc` holds.
+///
+/// The ONE definition of that conversion. The reader uses it to build an arc; the writer uses it to
+/// know what the reader will build (issue #111). Two copies of this would be two answers to "what
+/// arc does this file describe", which is the whole defect.
+void DxfArcAnglesFromDegrees(double a0deg, double a1deg, float* startRad, float* sweepRad) {
+  double sweep = a1deg - a0deg;
+  // DXF has no way to state a zero-length arc: a full circle written as an ARC has group 51 equal to
+  // group 50, so an end that does not differ from the start means one full turn, by convention.
+  if (std::fabs(sweep) < 1e-9)
+    sweep = 360.0;
+  while (sweep < 0)
+    sweep += 360.0;
+  while (sweep > 360.0)
+    sweep -= 360.0;
+  if (sweep < 1e-9)
+    sweep = 360.0;
+  *startRad = static_cast<float>(a0deg * kDegToRad);
+  *sweepRad = static_cast<float>(sweep * kDegToRad);
+}
+
+/// The arc a DXF file can actually state, for an arc GoSurvey holds in memory.
+///
+/// `CadArc` holds a start and a sweep as `float` RADIANS. A DXF ARC states a start and an END in
+/// DEGREES, rounded to six decimals like every other number this writer emits. Both conversions lose
+/// information, so the arc that comes back from a round trip is not always the arc that went out —
+/// and every part of the writer has to agree about WHICH of the two it is describing, or the header
+/// and the entity records describe different drawings and the file never settles (issue #111; the
+/// same failure shape TASK-083 fixed for polylines, one entity type over).
+///
+/// This is the one answer. `startDeg`/`endDeg` are the exact text of groups 50 and 51;
+/// `startRad`/`sweepRad` are what the reader reconstructs from that text, and so are what the header
+/// extents must be swept from.
+struct DxfArcAsWritten {
+  std::string startDeg;
+  std::string endDeg;
+  float startRad = 0.f;
+  float sweepRad = 0.f;
+};
+
+DxfArcAsWritten DxfArcToWrite(const CadArc& arc) {
+  auto normDeg = [](double rad) {
+    double d = rad * (180.0 / kPi);
+    d = std::fmod(d, 360.0);
+    if (d < 0.0)
+      d += 360.0;
+    return d;
+  };
+
+  // DIRECTION IS THE TRAP HERE. A DXF ARC always runs COUNTER-CLOCKWISE from group 50 to group 51,
+  // while `CadArc::sweepRad` is SIGNED. Writing 50 = startRad and 51 = startRad + sweepRad for a
+  // clockwise arc describes the COMPLEMENT of the intended arc — a file that opens fine and shows
+  // the wrong geometry. A negative sweep therefore swaps the ends rather than negating anything.
+  const double sweep = static_cast<double>(arc.sweepRad);
+  const double ccwStart = (sweep >= 0.0) ? static_cast<double>(arc.startRad)
+                                         : static_cast<double>(arc.startRad) + sweep;
+
+  DxfArcAsWritten w;
+
+  // (1) `ccwStart` is a DOUBLE sum of two floats whenever the sweep is negative — a value no
+  //     `CadArc` can hold. Emitting it means the reader stores a neighbouring float and the very
+  //     next export states a different angle. Narrow it first, so the file states an angle that
+  //     survives the trip.
+  const float startHeld = static_cast<float>(normDeg(ccwStart) * kDegToRad);
+  w.startDeg = std::to_string(normDeg(static_cast<double>(startHeld)));
+
+  // (2) The reader derives the sweep as `group 51 - group 50`, a difference of two INDEPENDENTLY
+  //     rounded angles, so it lands up to 1e-6 deg from the sweep we hold — and above ~8.4 deg that
+  //     is wider than the `float` spacing, so it lands on a different float. State the end as the
+  //     WRITTEN start plus the sweep, and that subtraction gives our sweep back exactly.
+  double endDeg = std::stod(w.startDeg) + std::fabs(sweep) * (180.0 / kPi);
+  endDeg = std::fmod(endDeg, 360.0);
+  if (endDeg < 0.0)
+    endDeg += 360.0;
+  w.endDeg = std::to_string(endDeg);
+
+  DxfArcAnglesFromDegrees(std::stod(w.startDeg), std::stod(w.endDeg), &w.startRad, &w.sweepRad);
+  return w;
+}
+
 std::string Trim(const std::string& s) {
   size_t a = 0;
   while (a < s.size() && std::isspace(static_cast<unsigned char>(s[a])))
@@ -1236,18 +1316,10 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       }
       const auto at = base.makeAttr(layerRgb);
       if (rad > 1e-9) {
-        double sweep = a1deg - a0deg;
-        if (std::fabs(sweep) < 1e-9)
-          sweep = 360.0;
-        while (sweep < 0)
-          sweep += 360.0;
-        while (sweep > 360.0)
-          sweep -= 360.0;
-        if (sweep < 1e-9)
-          sweep = 360.0;
-        const double a0 = a0deg * kDegToRad;
-        const double sw = sweep * kDegToRad;
-        appendArcXF(cx, cy, rad, a0, sw, at, cz);  // group 30 (REQ-057)
+        float startRadF = 0.f, sweepRadF = 0.f;
+        DxfArcAnglesFromDegrees(a0deg, a1deg, &startRadF, &sweepRadF);
+        appendArcXF(cx, cy, rad, static_cast<double>(startRadF), static_cast<double>(sweepRadF), at,
+                    cz);  // group 30 (REQ-057)
       }
       i = j;
       continue;
@@ -2383,17 +2455,25 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   //   Agreement makes the rebase delta zero, so it takes its own `< 1e-9` early-out and no lossy
   //   shift happens at all. That, not the accuracy of the box, is what the round trip needs. A
   //   whole-circle box for arcs was tried first and failed exactly this way.
+  //
+  // Swept from the arc THIS FILE STATES, not the one in memory — `DxfArcToWrite` is the single
+  // answer to which that is (issue #111). The two differ whenever a stored angle survives the trip
+  // to six-decimal degrees and back as a neighbouring float, and a header swept from the in-memory
+  // arc then describes a drawing the entity records below do not contain. It also STRENGTHENS the
+  // agreement the note above demands: the document a reader builds holds exactly these angles, so
+  // its `ComputeWorldExtents` matches this sweep rather than merely coming close.
   for (const CadArc& a : st.userArcs) {
+    const DxfArcAsWritten aw = DxfArcToWrite(a);
     const double dcx = static_cast<double>(a.cx);
     const double dcy = static_cast<double>(a.cy);
     const double dr = std::fabs(static_cast<double>(a.r));
     if (dr <= 1e-12)
       continue;
     const int n =
-        std::max(8, static_cast<int>(std::fabs(static_cast<double>(a.sweepRad)) / (3.14159265 / 16.0)) + 1);
+        std::max(8, static_cast<int>(std::fabs(static_cast<double>(aw.sweepRad)) / (3.14159265 / 16.0)) + 1);
     for (int i = 0; i <= n; ++i) {
       const double u = static_cast<double>(i) / static_cast<double>(n);
-      const double t = static_cast<double>(a.startRad) + static_cast<double>(a.sweepRad) * u;
+      const double t = static_cast<double>(aw.startRad) + static_cast<double>(aw.sweepRad) * u;
       accExt(dcx + dr * std::cos(t), dcy + dr * std::sin(t));
     }
     accExtZ(static_cast<double>(a.z));
@@ -3186,10 +3266,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   // silently absent from the file — REQ-204's "an entity type silently dropped by an exporter with
   // no branch for it", found by the oracle written to find it.
   //
-  // DIRECTION IS THE TRAP HERE. A DXF ARC always runs COUNTER-CLOCKWISE from group 50 to group 51,
-  // while `CadArc::sweepRad` is SIGNED. Writing 50 = startRad and 51 = startRad + sweepRad for a
-  // clockwise arc describes the COMPLEMENT of the intended arc — a file that opens fine and shows
-  // the wrong geometry. A negative sweep therefore swaps the ends rather than negating anything.
+  // The angles themselves come from `DxfArcToWrite` — including the counter-clockwise direction
+  // trap, which lives next to the code that handles it (issue #111).
   for (size_t ai = 0; ai < st.userArcs.size(); ++ai) {
     char hb[24];
     std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
@@ -3203,17 +3281,9 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
     const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
 
-    const double sweep = static_cast<double>(arc.sweepRad);
-    const double ccwStart = (sweep >= 0.0) ? static_cast<double>(arc.startRad)
-                                           : static_cast<double>(arc.startRad) + sweep;
-    const double ccwEnd = ccwStart + std::fabs(sweep);
-    auto normDeg = [](double rad) {
-      double d = rad * (180.0 / kPi);
-      d = std::fmod(d, 360.0);
-      if (d < 0.0)
-        d += 360.0;
-      return d;
-    };
+    // The one answer to what arc this file states — the same one the header extents above were
+    // swept from (issue #111).
+    const DxfArcAsWritten aw = DxfArcToWrite(arc);
 
     emitPair(0, "ARC");
     emitEntityHeader(hb, layer8, at, entAci, lyr);
@@ -3226,8 +3296,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     emitPair(220, "0.0");
     emitPair(230, "1.0");
     emitPair(100, "AcDbArc");
-    emitPair(50, std::to_string(normDeg(ccwStart)));
-    emitPair(51, std::to_string(normDeg(ccwEnd)));
+    emitPair(50, aw.startDeg);
+    emitPair(51, aw.endDeg);
   }
 
   // Ellipses (#63), dropped the same way and by the same omission. Group 11/21/31 is the major-axis
