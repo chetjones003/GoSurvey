@@ -18,6 +18,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include <string>
+#include <utility>
+
 #include "CadCommands.hpp"
 #include "ViewportPickPolicy.hpp"
 
@@ -194,4 +197,86 @@ TEST_CASE("No active command means idle selection, not nothing", "[viewport][pic
   // Grips, click-select and box-select all hang off this route; routing it to Ignore would make
   // the drawing unselectable.
   REQUIRE(ViewportClickRouteFor(AtFirstPrompt(K::None)) == ViewportClickRoute::IdleSelection);
+}
+
+// ---------------------------------------------------------------------------------------------
+// REQ-121 — object selection is a visibly distinct mode.
+// ---------------------------------------------------------------------------------------------
+
+TEST_CASE("REQ-121: ALIGN's selection box uses UNSNAPPED corners like its six siblings",
+          "[viewport][pick][req121]") {
+  // THE RED-BEFORE CASE. ALIGN routes its PickSelection phase to SelectionAccumulate alongside
+  // MOVE/COPY/SCALE/ROTATE/MIRROR/ARRAY, but was missing from
+  // `ViewportUseRawWorldForSelectionRectPick` — so ALIGN alone built its fence from SNAPPED
+  // coordinates while every sibling used raw. Nobody decided that; it is the per-command accident
+  // an unstated rule produces, and it is the concrete defect REQ-121 was argued from.
+  //
+  // Asserted against the siblings rather than alone, because "ALIGN is raw" is only meaningful as
+  // "ALIGN is raw *like the others*".
+  const std::pair<K, AppCommandState::AlignPhase> kAlignSel{K::Align,
+                                                            AppCommandState::AlignPhase::PickSelection};
+  AppCommandState al = AtFirstPrompt(kAlignSel.first);
+  al.alignPhase = kAlignSel.second;
+  REQUIRE(ViewportUseRawWorldForSelectionRectPick(al));
+
+  AppCommandState mv = AtFirstPrompt(K::Move);
+  mv.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+  REQUIRE(ViewportUseRawWorldForSelectionRectPick(mv));
+
+  AppCommandState ar = AtFirstPrompt(K::Array);
+  ar.arrayPhase = AppCommandState::ArrayPhase::PickSelection;
+  REQUIRE(ViewportUseRawWorldForSelectionRectPick(ar));
+}
+
+TEST_CASE("REQ-121: every object-selection step is recognised as one", "[viewport][pick][req121]") {
+  // The predicate all three of REQ-121's rules consult. A command missing from it keeps the
+  // crosshair, keeps OSNAP jumping the cursor, and keeps its own prompt wording — which is the
+  // whole defect, one command at a time.
+  AppCommandState mv = AtFirstPrompt(K::Move);
+  mv.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+  REQUIRE(ViewportIsObjectSelectionStep(mv));
+
+  AppCommandState mi = AtFirstPrompt(K::Mirror);
+  mi.mirrorPhase = AppCommandState::MirrorPhase::PickSelection;
+  REQUIRE(ViewportIsObjectSelectionStep(mi));
+
+  AppCommandState st = AtFirstPrompt(K::Stretch);
+  st.modifyPhase = AppCommandState::ModifyPhase::PickSelection;
+  REQUIRE(ViewportIsObjectSelectionStep(st));
+
+  // The one-entity-per-click loops. These pick objects too, and TRIM owning its own click entry
+  // point (`SubmitTrimViewportPick`) does not change what its phase MEANS.
+  REQUIRE(ViewportIsObjectSelectionStep(AtFirstPrompt(K::Delete)));
+  REQUIRE(ViewportIsObjectSelectionStep(AtFirstPrompt(K::Join)));
+  REQUIRE(ViewportIsObjectSelectionStep(AtFirstPrompt(K::Trim)));
+  REQUIRE(ViewportIsObjectSelectionStep(AtFirstPrompt(K::Extend)));
+  REQUIRE(ViewportIsObjectSelectionStep(AtFirstPrompt(K::Fillet)));
+  REQUIRE(ViewportIsObjectSelectionStep(AtFirstPrompt(K::Chamfer)));
+  REQUIRE(ViewportIsObjectSelectionStep(AtFirstPrompt(K::Offset)));
+}
+
+TEST_CASE("REQ-121: a point pick, idle, and ZOOM are NOT selection steps", "[viewport][pick][req121]") {
+  // Each of these is a deliberate exclusion with its own reason, and each would be a visible defect
+  // if it flipped — so they are asserted rather than left to the absence of a test.
+
+  // A coordinate phase of a command whose FIRST phase is a selection step. The predicate must track
+  // the phase, not the command: MOVE stops being a selection step the moment it has its objects.
+  AppCommandState mvBase = AtFirstPrompt(K::Move);
+  mvBase.modifyPhase = AppCommandState::ModifyPhase::NeedBase;
+  REQUIRE_FALSE(ViewportIsObjectSelectionStep(mvBase));
+
+  // Idle. Excluded 2026-08-26: the treatment is a mode signal, and idle is the default it signals
+  // against. A user who never starts a command must not be able to tell REQ-121 shipped.
+  REQUIRE_FALSE(ViewportIsObjectSelectionStep(AtFirstPrompt(K::None)));
+
+  // ZOOM. #91 lists it, and it is excluded anyway: its box picks a REGION of the view to fit, not
+  // objects. "Select objects" would be a prompt that lies, and a pickbox would say "click a thing"
+  // while the user drags a rectangle. It shares `SelectionBox` with DELETE/JOIN, so this is the
+  // assertion that pins the one exception the route alone cannot express.
+  REQUIRE_FALSE(ViewportIsObjectSelectionStep(AtFirstPrompt(K::Zoom)));
+
+  // A pure point command, for contrast.
+  REQUIRE_FALSE(ViewportIsObjectSelectionStep(AtFirstPrompt(K::Line)));
+  // HATCH clicks a point INSIDE a region to trace a boundary — a location, not an object.
+  REQUIRE_FALSE(ViewportIsObjectSelectionStep(AtFirstPrompt(K::Hatch)));
 }

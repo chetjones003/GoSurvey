@@ -3755,6 +3755,18 @@ struct CommandSuggestion {
 /// Ranked fuzzy matches with descriptions, for the nanoCAD-style command picker.
 std::vector<CommandSuggestion> FuzzyCommandSuggestions(const std::string& query, int maxResults);
 
+/// REQ-121 rule (3): THE prompt every object-selection step shows, in the command line and in the
+/// dynamic cursor text alike. One string, reused verbatim — not a per-command sentence that happens
+/// to mean the same thing, which is what produced "click two corners to window-select objects" in
+/// one command, "window-select entities, then press Enter" in another, and no Enter hint at all in
+/// a third.
+///
+/// It carries **no command name**, deliberately. AutoCAD prompts "Select objects:" whatever is
+/// running, and #91 asks for that convention explicitly; a `MOVE/COPY:` prefix would also make the
+/// string non-identical across commands, which is the one thing this constant exists to prevent.
+/// Which command is active is already visible in the command line's own history.
+inline constexpr const char* kSelectObjectsPrompt = "Select objects, ENTER to continue | ESC cancel";
+
 const char* CircleCommandFooterHint(const AppCommandState& st);
 const char* ModifyCommandFooterHint(const AppCommandState& st);
 const char* RotateCommandFooterHint(const AppCommandState& st);

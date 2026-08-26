@@ -1711,6 +1711,49 @@ requirements is a planning failure, not a sign of rigor.
   one pass. See REQ-103's own revision note for the shared mechanism; STRETCH is deliberately
   excluded (REQ-103 step 5 — its crossing box is load-bearing geometry, not just an object filter).
 
+### REQ-306 — Dynamic cursor input is content-driven, not a fixed footprint (GitHub issue #104)
+- Purpose: the at-cursor dynamic input (REQ-024/REQ-304 — `##ViewportCommandInput` and the grip
+  drag's `##ViewportGripInput`, both `CadUi.cpp`) is a small window that already reads its prompt
+  and field content fresh every frame, but its input field used a **fixed-width clamp**
+  (`std::clamp(240.f * scale, 160.f, 360.f)` for point entry, `360.f`/`200.f` for the single
+  non-point field, `200.f`/`140.f`/`320.f` for the grip-stretch field) — a footprint sized for the
+  longest string the field could ever hold, shown even when the live content is short (e.g. a
+  short bearing or a two-digit distance). The issue asks for the box to size to what it is
+  currently showing.
+- Priority: should
+- Type: functional
+- Statement: the width of the dynamic-cursor input field — and the window that contains it — is
+  computed from the field's **current text** (`ImGui::CalcTextSize`, plus fixed chrome for caret
+  and frame padding) every frame, clamped only to a minimum (so an empty/one-character field stays
+  clickable) and a viewport-fraction maximum (so a long paste cannot take over the screen), never
+  to a constant tuned for the longest possible value. The non-point field additionally sizes to
+  fit its placeholder hint ("Type value or Enter") while empty, since the hint must stay readable.
+  The window itself keeps `ImGuiWindowFlags_AlwaysAutoResize` (pre-existing, REQ-024) and its
+  padding is tightened from 10x8px to 8x6px (rule: remove padding that isn't earning its space).
+  Positioning (offset from the cursor, clamped to the work area near screen edges) is unchanged in
+  mechanism but now estimates the pre-layout window size from the same content-driven width instead
+  of a constant, so the edge clamp matches the box actually drawn.
+- Acceptance:
+  1. the field's on-screen width tracks its own text: a one-character value (e.g. typing `5`) draws
+     a visibly narrower box than a long typed expression (e.g. `1234567.891,1234567.891`), in the
+     same frame the text changes;
+  2. the window carries no content beyond the prompt label and its one field — no fixed-size empty
+     space is reserved beneath or beside them (`ImGuiWindowFlags_AlwaysAutoResize`, unchanged from
+     REQ-024, plus the now-content-driven field width);
+  3. this applies identically to all three fields: the point-entry coordinate field, the single
+     non-point field (bearing/angle/distance/option/command-name), and the grip-stretch field;
+  4. the field never shrinks below a minimum that keeps it clickable and never exceeds roughly half
+     the work-area width, so a pathological value cannot obscure the drawing;
+  5. REQ-024's existing behavior is unchanged: live tracking until typed, type-to-start seeding,
+     select-all-on-refresh for the grip field, Enter/viewport-click commit, and per-state prompt
+     text from `CommandInputHint`/`CadPointPromptLabel` (REQ-304) all continue to work exactly as
+     before — this requirement touches sizing only, not input behavior;
+  6. the box stays fully within the application window near every edge, using the same clamp
+     mechanism as before (REQ-024), now driven by the actual (smaller, typically) content width.
+- Owner-layer: UI (`CadUi.cpp`)
+- Status: accepted
+- Revisions: 2026-08-26 — initial (GitHub issue #104, D-2026-08-26-c).
+
 ---
 
 ## 3D model space requirements
@@ -3881,8 +3924,23 @@ requirements is a planning failure, not a sign of rigor.
 - Type: functional
 - Statement: An **object-selection step** is any command phase whose question is *which objects*
   rather than *which point*: the `PickSelection` phase of MOVE, COPY, SCALE, ROTATE, MIRROR, ALIGN,
-  ARRAY and STRETCH, and the entity-picking loops of DELETE, JOIN, ZOOM, TRIM, EXTEND, LENGTHEN,
-  BREAK, FILLET and CHAMFER. Idle selection — no command running — is an object-selection step too.
+  ARRAY and STRETCH, and the entity-picking loops of DELETE, JOIN, TRIM, EXTEND, LENGTHEN, BREAK,
+  FILLET and CHAMFER.
+
+  **ZOOM is excluded, and #91 lists it.** Saying so explicitly because dropping it silently would
+  look like an oversight: ZOOM WINDOW's box picks a **region of the view** to fit, not objects.
+  Nothing is selected by it, so "select objects" would be a prompt that lies, and a pickbox cursor
+  would say *click a thing* while the user drags a rectangle. Its corners already come from
+  unsnapped coordinates, so rule (1) would change nothing there either. The test is what the click
+  is *for*, not whether it happens to drag a box.
+
+  **Idle selection — no command running — is deliberately NOT one**, and is untouched by this
+  requirement: it keeps today's crosshair and today's OSNAP behaviour. The reason is that the three
+  rules below are a *mode signal*, and a mode signal is only meaningful against a default. Idle is
+  that default — it is what the user is looking at most of the time — so making it look like a
+  selection step would leave the pickbox meaning nothing, and would change the appearance of normal
+  use to fix a problem that only exists inside commands. The distinction being drawn is "a command
+  is asking me which objects" versus "nothing is running", which is exactly the line this excludes.
 
   Three rules hold for the whole duration of such a step, and stop holding the moment the phase
   advances.
@@ -3917,11 +3975,25 @@ requirements is a planning failure, not a sign of rigor.
   crosshair for the duration of the step and reverting when it ends. This is AutoCAD's `PICKBOX`
   convention and the visual signal that rules (1) and (3) are in force.
 
-  **(3) One prompt, everywhere.** Every object-selection step shows the **same** phrase, in both
-  the command line and the dynamic cursor text (REQ-304's surfaces, and REQ-304's rule that the two
-  agree). The wording is settled once, in one shared string, rather than per command — today they
-  range from "click two corners to window-select objects" to "window-select entities, then press
-  Enter" to no Enter hint at all.
+  **(3) One prompt — for the steps that are nothing but a selection.** The wording is
+  **"Select objects, ENTER to continue"**, settled once in one shared string and shown in both the
+  command line and the dynamic cursor text (REQ-304's surfaces, and REQ-304's rule that the two
+  agree). Today those prompts range from "click two corners to window-select objects" to
+  "window-select entities, then press Enter" to no Enter hint at all.
+
+  It applies to the steps whose whole content is *pick objects*: **MOVE, COPY, SCALE, ROTATE,
+  MIRROR, ALIGN, ARRAY, DELETE, JOIN**.
+
+  **It does NOT replace a prompt that carries a keyword or a type list**, and that limit is
+  load-bearing rather than a concession. TRIM's selection prompt offers `type L — draw the trim
+  line`; OFFSET's names what is pickable; STRETCH's says `right-to-left = crossing`, which is
+  operative because its box direction is data (REQ-103 step 5). Overwriting those with a generic
+  phrase would delete the only place each option is discoverable — and REQ-119 exists precisely to
+  make such keywords *more* reachable, so this requirement must not quietly undo it. Those steps
+  still get rules (1) and (2); only their prompt text is their own.
+
+  Unifying wording is the goal; erasing information is not. Where a step has nothing to say beyond
+  "pick objects", it says exactly the same thing as every other such step.
 - Acceptance:
   - no snap marker is drawn, and the cursor does not jump to a snap candidate, at any point during
     any object-selection step listed above;
@@ -3929,15 +4001,22 @@ requirements is a planning failure, not a sign of rigor.
     including ALIGN, whose box corners are snapped today;
   - the cursor renders as a pickbox square for the step's duration and reverts to the crosshair
     when the phase advances or the command is cancelled;
-  - every listed command shows the identical selection prompt in the command line **and** in the
-    dynamic cursor text, sourced from one shared string;
+  - MOVE, COPY, SCALE, ROTATE, MIRROR, ALIGN, ARRAY, DELETE and JOIN each show the **identical**
+    selection prompt in the command line **and** in the dynamic cursor text, sourced from one shared
+    string — byte-for-byte the same, not merely equivalent wording;
+  - TRIM, OFFSET and STRETCH keep their own prompts, and every keyword they name (`L`, the pickable
+    type list, `right-to-left = crossing`) is still present afterwards — a prompt that lost an option
+    to this requirement is a **failure** of it, not a tidy-up;
   - a command left out of the treatment is a **build-time or test-time** failure, not something a
     user finds — the single predicate is exhaustive over the phases, on the precedent of
     `ViewportClickRouteFor`'s `default:`-less switch (REQ-103/TASK-099);
   - the accumulate-until-Enter behaviour of REQ-305 is unchanged — this requirement governs the
     step's *appearance and input treatment*, never which objects it collects;
   - STRETCH keeps its crossing box as load-bearing geometry (REQ-103 step 5): it gets the cursor,
-    snap and prompt treatment, and its box semantics are untouched.
+    snap and prompt treatment, and its box semantics are untouched;
+  - **with no command running, nothing changes at all** — the crosshair is the crosshair, OSNAP
+    behaves exactly as it does today, and snap markers still draw. A user who never starts a command
+    cannot tell this requirement was implemented, and that is the intended outcome, not a gap.
 - Owner-layer: UI (cursor rendering, marker suppression, prompt surfaces); Commands (the shared
   prompt string and the selection-step predicate); Viewport (the existing raw-vs-snapped pick paths)
 - Status: accepted (2026-08-26)
