@@ -1711,6 +1711,49 @@ requirements is a planning failure, not a sign of rigor.
   one pass. See REQ-103's own revision note for the shared mechanism; STRETCH is deliberately
   excluded (REQ-103 step 5 — its crossing box is load-bearing geometry, not just an object filter).
 
+### REQ-306 — Dynamic cursor input is content-driven, not a fixed footprint (GitHub issue #104)
+- Purpose: the at-cursor dynamic input (REQ-024/REQ-304 — `##ViewportCommandInput` and the grip
+  drag's `##ViewportGripInput`, both `CadUi.cpp`) is a small window that already reads its prompt
+  and field content fresh every frame, but its input field used a **fixed-width clamp**
+  (`std::clamp(240.f * scale, 160.f, 360.f)` for point entry, `360.f`/`200.f` for the single
+  non-point field, `200.f`/`140.f`/`320.f` for the grip-stretch field) — a footprint sized for the
+  longest string the field could ever hold, shown even when the live content is short (e.g. a
+  short bearing or a two-digit distance). The issue asks for the box to size to what it is
+  currently showing.
+- Priority: should
+- Type: functional
+- Statement: the width of the dynamic-cursor input field — and the window that contains it — is
+  computed from the field's **current text** (`ImGui::CalcTextSize`, plus fixed chrome for caret
+  and frame padding) every frame, clamped only to a minimum (so an empty/one-character field stays
+  clickable) and a viewport-fraction maximum (so a long paste cannot take over the screen), never
+  to a constant tuned for the longest possible value. The non-point field additionally sizes to
+  fit its placeholder hint ("Type value or Enter") while empty, since the hint must stay readable.
+  The window itself keeps `ImGuiWindowFlags_AlwaysAutoResize` (pre-existing, REQ-024) and its
+  padding is tightened from 10x8px to 8x6px (rule: remove padding that isn't earning its space).
+  Positioning (offset from the cursor, clamped to the work area near screen edges) is unchanged in
+  mechanism but now estimates the pre-layout window size from the same content-driven width instead
+  of a constant, so the edge clamp matches the box actually drawn.
+- Acceptance:
+  1. the field's on-screen width tracks its own text: a one-character value (e.g. typing `5`) draws
+     a visibly narrower box than a long typed expression (e.g. `1234567.891,1234567.891`), in the
+     same frame the text changes;
+  2. the window carries no content beyond the prompt label and its one field — no fixed-size empty
+     space is reserved beneath or beside them (`ImGuiWindowFlags_AlwaysAutoResize`, unchanged from
+     REQ-024, plus the now-content-driven field width);
+  3. this applies identically to all three fields: the point-entry coordinate field, the single
+     non-point field (bearing/angle/distance/option/command-name), and the grip-stretch field;
+  4. the field never shrinks below a minimum that keeps it clickable and never exceeds roughly half
+     the work-area width, so a pathological value cannot obscure the drawing;
+  5. REQ-024's existing behavior is unchanged: live tracking until typed, type-to-start seeding,
+     select-all-on-refresh for the grip field, Enter/viewport-click commit, and per-state prompt
+     text from `CommandInputHint`/`CadPointPromptLabel` (REQ-304) all continue to work exactly as
+     before — this requirement touches sizing only, not input behavior;
+  6. the box stays fully within the application window near every edge, using the same clamp
+     mechanism as before (REQ-024), now driven by the actual (smaller, typically) content width.
+- Owner-layer: UI (`CadUi.cpp`)
+- Status: accepted
+- Revisions: 2026-08-26 — initial (GitHub issue #104, D-2026-08-26-c).
+
 ---
 
 ## 3D model space requirements

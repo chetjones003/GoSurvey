@@ -6421,6 +6421,18 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   return "Command:";
 }
 
+// Content-driven width for the dynamic-cursor input field (REQ-306): sized to fit
+// the widest of the strings actually shown (current field text plus, when given,
+// a placeholder/hint that must also fit), rather than a fixed footprint. `minPx`
+// keeps the field usable for its first keystroke; `maxPx` bounds a pathological
+// paste from taking over the viewport.
+static float DynamicCursorFieldWidth(const char* text, const char* alsoFits, float minPx, float maxPx) {
+  float w = ImGui::CalcTextSize(text ? text : "").x;
+  if (alsoFits) w = std::max(w, ImGui::CalcTextSize(alsoFits).x);
+  const float chrome = ImGui::GetStyle().FramePadding.x * 2.f + ImGui::GetFontSize();
+  return std::clamp(w + chrome, minPx, maxPx);
+}
+
 // True when the active prompt expects a coordinate POINT, so the cursor dynamic
 // input shows AutoCAD-style live X/Y fields (REQ-024). Mirrors the point phases
 // of CommandInputHint; non-point prompts (bearing/angle/distance/factor/option/
@@ -12832,22 +12844,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (showViewportCmdPalette) {
     ImGuiIO& io = ImGui::GetIO();
     const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-    const float pad = 14.f;
-    ImVec2 wp(mouse.x + pad, mouse.y + pad);
-    const float estW = std::min(520.f, std::max(260.f, avail.x * 0.5f));
-    const float estH = 78.f;
-    wp.x = std::clamp(wp.x, mainViewport->WorkPos.x + 4.f,
-                      mainViewport->WorkPos.x + mainViewport->WorkSize.x - estW - 8.f);
-    wp.y = std::clamp(wp.y, mainViewport->WorkPos.y + 4.f,
-                      mainViewport->WorkPos.y + mainViewport->WorkSize.y - estH - 8.f);
-
-    ImGui::SetNextWindowPos(wp, ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.94f);
-    ImGuiWindowFlags wf = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
-                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.f, 8.f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.f);
-    ImGui::Begin("##ViewportCommandInput", nullptr, wf);
 
     const bool pointEntry = CommandExpectsPointEntry(cmd);
 
@@ -12858,18 +12854,60 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     static const char* s_lastDynHint = nullptr;
     const bool promptChanged = (curHint != s_lastDynHint) || vpPalJustOpened;
     s_lastDynHint = curHint;
+    const std::string promptLabel = pointEntry ? CadPointPromptLabel(cmd) : std::string(curHint);
+
+    // Resolve the field's live text BEFORE layout, so the box sizes to its actual
+    // content (REQ-306) instead of a fixed footprint. Point entry always has a
+    // definite string (the live/typed coordinate); the non-point field may be
+    // empty, so its placeholder hint is also weighed for width.
+    static char dynBuf[160] = {0};
+    static bool dynLocked = false;
+    if (promptChanged) dynLocked = false;
+    if (pointEntry) {
+      double liveWx = 0.0, liveWy = 0.0;
+      if (outCursorX && outCursorY)
+        CadCoord::WorldFromLocal(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &liveWx,
+                                 &liveWy);
+      const int prec = cmd.displayLinearPrecision;
+      if (!dynLocked)
+        std::snprintf(dynBuf, sizeof(dynBuf), "%s,%s", FormatLinear(liveWx, prec).c_str(),
+                      FormatLinear(liveWy, prec).c_str());
+    }
+    const char* fieldHint = "Type value or Enter";
+    const float minFieldPx = 56.f * io.FontGlobalScale;
+    const float maxFieldPx = mainViewport->WorkSize.x * 0.48f;
+    const float fieldW = pointEntry
+        ? DynamicCursorFieldWidth(dynBuf, nullptr, minFieldPx, maxFieldPx)
+        : DynamicCursorFieldWidth(cmdBuf, fieldHint, minFieldPx, maxFieldPx);
+
+    const float pad = 14.f;
+    const ImVec2 winPad(8.f, 6.f);
+    const float estW = std::max(fieldW, ImGui::CalcTextSize(promptLabel.c_str()).x) + winPad.x * 2.f;
+    const float estH = 60.f;
+    ImVec2 wp(mouse.x + pad, mouse.y + pad);
+    wp.x = std::clamp(wp.x, mainViewport->WorkPos.x + 4.f,
+                      mainViewport->WorkPos.x + mainViewport->WorkSize.x - estW - 8.f);
+    wp.y = std::clamp(wp.y, mainViewport->WorkPos.y + 4.f,
+                      mainViewport->WorkPos.y + mainViewport->WorkSize.y - estH - 8.f);
+
+    ImGui::SetNextWindowPos(wp, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.94f);
+    ImGuiWindowFlags wf = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
+                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, winPad);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.f);
+    ImGui::Begin("##ViewportCommandInput", nullptr, wf);
 
     // Prompt label: a muted/secondary tone with a little gap below it, so it reads
-    // as a label separated from the input boxes. Point prompts get an AutoCAD-style
+    // as a label separated from the input box. Point prompts get an AutoCAD-style
     // "Specify … :" label; other prompts keep the full guidance hint.
     const ImVec4 hintCol = (cmd.displayColorThemeIdx == 0)
         ? ImVec4(0.90f, 0.93f, 0.98f, 1.f)
         : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
     ImGui::PushStyleColor(ImGuiCol_Text, hintCol);
-    const std::string promptLabel = pointEntry ? CadPointPromptLabel(cmd) : std::string(curHint);
     ImGui::TextUnformatted(promptLabel.c_str());
     ImGui::PopStyleColor();
-    ImGui::Dummy(ImVec2(0.f, 4.f));
+    ImGui::Dummy(ImVec2(0.f, 2.f));
 
     if (pointEntry) {
       // Single live coordinate field: tracks the crosshair's world X,Y at the
@@ -12877,20 +12915,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // absolute "x,y", relative "@dx,dy", bearings, distances, or any other input
       // ProcessCommandLineSubmit understands. Enter — or a viewport click —
       // commits. REQ-024.
-      double liveWx = 0.0, liveWy = 0.0;
-      if (outCursorX && outCursorY)
-        CadCoord::WorldFromLocal(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &liveWx,
-                                 &liveWy);
-
-      static char dynBuf[160] = {0};
-      static bool dynLocked = false;
-      if (promptChanged) dynLocked = false;
-
-      const int prec = cmd.displayLinearPrecision;
-      if (!dynLocked)
-        std::snprintf(dynBuf, sizeof(dynBuf), "%s,%s", FormatLinear(liveWx, prec).c_str(),
-                      FormatLinear(liveWy, prec).c_str());
-
       const ImGuiID idDyn = ImGui::GetID("##dynPt");
       const ImGuiID activeId = ImGui::GetActiveID();
 
@@ -12905,7 +12929,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImGui::SetKeyboardFocusHere();
       }
 
-      const float fieldW = std::clamp(240.f * io.FontGlobalScale, 160.f, 360.f);
       // CallbackAlways + CommandLineInputCallback collapses the select-all ImGui
       // applies when SetKeyboardFocusHere takes the field — otherwise the seeded
       // first character stays highlighted and the next keystroke replaces it.
@@ -12925,9 +12948,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImGui::SetKeyboardFocusHere(0);
       }
       const ImGuiInputTextFlags itf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
-      ImGui::SetNextItemWidth(std::clamp(360.f * io.FontGlobalScale, 200.f, mainViewport->WorkSize.x * 0.48f));
+      ImGui::SetNextItemWidth(fieldW);
       const bool exec =
-          ImGui::InputTextWithHint("##vp_cmd_buf", "Type value or Enter", cmdBuf, static_cast<size_t>(cmdBufSize),
+          ImGui::InputTextWithHint("##vp_cmd_buf", fieldHint, cmdBuf, static_cast<size_t>(cmdBufSize),
                                    itf, CommandLineInputCallback, nullptr);
       if (exec)
         ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
@@ -12957,31 +12980,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (showGripDynInput) {
     ImGuiIO& ioGrip = ImGui::GetIO();
     const ImGuiViewport* gripViewport = ImGui::GetMainViewport();
-    const float gripPad = 14.f;
-    const float gripEstW = 260.f;
-    const float gripEstH = 78.f;
-    ImVec2 gp(mouse.x + gripPad, mouse.y + gripPad);
-    gp.x = std::clamp(gp.x, gripViewport->WorkPos.x + 4.f,
-                      gripViewport->WorkPos.x + gripViewport->WorkSize.x - gripEstW - 8.f);
-    gp.y = std::clamp(gp.y, gripViewport->WorkPos.y + 4.f,
-                      gripViewport->WorkPos.y + gripViewport->WorkSize.y - gripEstH - 8.f);
-
-    ImGui::SetNextWindowPos(gp, ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.94f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.f, 8.f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.f);
-    ImGui::Begin("##ViewportGripInput", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                     ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_NoDocking);
-
-    const ImVec4 gripHintCol = (cmd.displayColorThemeIdx == 0)
-        ? ImVec4(0.90f, 0.93f, 0.98f, 1.f)
-        : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
-    ImGui::PushStyleColor(ImGuiCol_Text, gripHintCol);
-    ImGui::TextUnformatted(cmd.orthoMode ? "Specify stretch distance (ortho):" : "Specify stretch distance:");
-    ImGui::PopStyleColor();
-    ImGui::Dummy(ImVec2(0.f, 4.f));
+    const char* gripPrompt = cmd.orthoMode ? "Specify stretch distance (ortho):" : "Specify stretch distance:";
 
     // The live value the field mirrors until the user types over it.
     const std::string liveText =
@@ -12993,6 +12992,38 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       s_gripLocked = false;
     }
     s_gripShownPrev = true;
+
+    // Content-driven width (REQ-306): the shown value (locked typed text, or the
+    // still-live readout) rather than a fixed footprint.
+    const char* gripFieldText = s_gripLocked ? s_gripBuf : liveText.c_str();
+    const float gripFieldW = DynamicCursorFieldWidth(gripFieldText, nullptr, 56.f * ioGrip.FontGlobalScale,
+                                                      gripViewport->WorkSize.x * 0.48f);
+    const ImVec2 gripWinPad(8.f, 6.f);
+    const float gripPad = 14.f;
+    const float gripEstW = std::max(gripFieldW, ImGui::CalcTextSize(gripPrompt).x) + gripWinPad.x * 2.f;
+    const float gripEstH = 60.f;
+    ImVec2 gp(mouse.x + gripPad, mouse.y + gripPad);
+    gp.x = std::clamp(gp.x, gripViewport->WorkPos.x + 4.f,
+                      gripViewport->WorkPos.x + gripViewport->WorkSize.x - gripEstW - 8.f);
+    gp.y = std::clamp(gp.y, gripViewport->WorkPos.y + 4.f,
+                      gripViewport->WorkPos.y + gripViewport->WorkSize.y - gripEstH - 8.f);
+
+    ImGui::SetNextWindowPos(gp, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.94f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, gripWinPad);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.f);
+    ImGui::Begin("##ViewportGripInput", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoDocking);
+
+    const ImVec4 gripHintCol = (cmd.displayColorThemeIdx == 0)
+        ? ImVec4(0.90f, 0.93f, 0.98f, 1.f)
+        : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    ImGui::PushStyleColor(ImGuiCol_Text, gripHintCol);
+    ImGui::TextUnformatted(gripPrompt);
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0.f, 2.f));
 
     struct GripDynState { const char* live; bool* locked; char* pushed; size_t pushedSize; };
     GripDynState gds{liveText.c_str(), &s_gripLocked, s_gripPushed, sizeof(s_gripPushed)};
@@ -13021,7 +13052,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     if (!s_gripLocked && ImGui::GetActiveID() != ImGui::GetID("##gripDist"))
       ImGui::SetKeyboardFocusHere();
 
-    ImGui::SetNextItemWidth(std::clamp(200.f * ioGrip.FontGlobalScale, 140.f, 320.f));
+    ImGui::SetNextItemWidth(gripFieldW);
     const bool gripEnter =
         ImGui::InputText("##gripDist", s_gripBuf, sizeof(s_gripBuf),
                          ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways,
