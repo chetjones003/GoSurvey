@@ -1,0 +1,122 @@
+# REQ-119 (GitHub issue #81) — every token a prompt's variant markup yields is ACCEPTED by the
+# command showing that prompt, in that state.
+#
+# ## What this test is for, and what it deliberately is NOT
+#
+# It does NOT try to prove "clicking equals typing". That is true by CONSTRUCTION and no test can
+# add to it: LayoutCommandHint's click handler calls ProcessCommandLineSubmit, which is the same
+# function Enter routes typed text through. A transcript submitting text and comparing it against
+# ... submitting text would be comparing a function to itself.
+#
+# What it pins is the one thing the REQ-119 markup convention can actually get wrong. The shortcut
+# is IMPLIED by the prompt text (its leading uppercase run) rather than declared beside the
+# handler, so a prompt can name a token its command rejects — which is precisely the defect
+# REQ-119 exists to fix. `CommandLineTests [req119]` fixes the prompt -> token half; this fixes
+# the token -> command half. Together they close the loop the convention leaves open.
+#
+# The tokens below are exactly what cmdbar::ParsePromptSegments yields for each prompt, and those
+# extractions are asserted in CommandLineTests — so if either side drifts, one of the two fails.
+#
+#   "Next: click; X, Y; @dx,dy; [A]zimuth, [2P];"                  -> a, 2p
+#   "Erase source objects? [Yes/No] <N>:"                          -> y, n
+#   "LENGTHEN — select object, or [DElta/Percent/Total/DYnamic]:"  -> de, p, t, dy
+#
+# ## Two traps this transcript is written around (both cost a probe during the plan review)
+#
+# 1. MIRROR with erase=yes logs "MIRROR complete (source erased).", NOT "MIRROR complete." —
+#    so the two answers are told apart by ENTITY COUNT, which is the actual behaviour, rather
+#    than by a log string that happens to differ.
+# 2. LENGTHEN's mode letters are only accepted at WaitSelectOrMode (or at a value prompt with an
+#    object already latched). Chaining de -> p -> t -> dy in one session fails on the second
+#    letter, because "p" is then read as the delta VALUE. Each letter therefore gets a fresh
+#    LENGTHEN, which is also the only state whose prompt actually offers them.
+
+NEW
+
+# ---------------------------------------------------------------------------------------------
+# LINE — [A]zimuth and [2P], the reference prompt REQ-040 Acceptance (7) promises keeps working.
+# ---------------------------------------------------------------------------------------------
+
+CMD LINE
+CMD 0,0
+
+# "a" opens azimuth entry. A blank Enter cancels that sub-mode without ending the command.
+CMD a
+EXPECT LOG "Bearing ° clockwise from north (decimal/DMS); blank Enter cancels."
+CMD
+CMD 100,0
+ESC
+EXPECT LINES 1
+CHECK ALL
+
+# "2p" starts the two-point bearing pick from the same prompt.
+CMD LINE
+CMD 0,100
+CMD 2p
+EXPECT LOG "Bearing pick — first reference point (viewport click). ESC cancels pick."
+ESC
+ESC
+
+# ---------------------------------------------------------------------------------------------
+# MIRROR — [Yes/No]. Before REQ-119 this rendered ONE link submitting "yes/no", which the
+# command rejects outright; the two options are separate links now, so both tokens must work.
+# ---------------------------------------------------------------------------------------------
+
+BOX -10 -10 110 10
+EXPECT SELECTED 1
+
+# "y" (from [Yes]) erases the source: one line in, one line out.
+CMD MIRROR
+CMD 0,50
+CMD 100,50
+CMD y
+EXPECT LOG "MIRROR complete (source erased)."
+EXPECT LINES 1
+CHECK ALL
+
+# "n" (from [No]) keeps it: one line in, two lines out.
+BOX -10 -10 110 110
+CMD MIRROR
+CMD 0,-50
+CMD 100,-50
+CMD n
+EXPECT LOG "MIRROR complete."
+EXPECT LINES 2
+CHECK ALL
+
+# ---------------------------------------------------------------------------------------------
+# LENGTHEN — [DElta/Percent/Total/DYnamic]. Before REQ-119 this rendered ONE link submitting
+# "delta/percent/total/dynamic", which TryLengthenModeToggle rejects. Four tokens now, and the
+# uppercase-run rule has to yield DE / P / T / DY — not D, and not the whole word.
+# ---------------------------------------------------------------------------------------------
+
+CMD LENGTHEN
+CMD de
+EXPECT LOG "LENGTHEN DElta — length to add (+) or subtract (-):"
+ESC
+
+CMD LENGTHEN
+CMD p
+EXPECT LOG "LENGTHEN Percent — new length as a percentage of current (100 = unchanged):"
+ESC
+
+CMD LENGTHEN
+CMD t
+EXPECT LOG "LENGTHEN Total — new total length:"
+ESC
+
+CMD LENGTHEN
+CMD dy
+EXPECT LOG "LENGTHEN DYnamic — select object, then drag to the new length. ESC cancels."
+ESC
+
+# Failure mode — the defect itself, kept as a live assertion rather than a comment. The token
+# the OLD parser produced must still be refused, so that if someone reverts to reading to the
+# first ']' the refusal reappears here instead of shipping as a dead link.
+CMD LENGTHEN
+CMD delta/percent/total/dynamic
+EXPECT LOG "LENGTHEN — type DE, P, T, or DY to set the mode, or pick an object in the viewport."
+ESC
+
+CHECK ALL
+EXPECT LINES 2
