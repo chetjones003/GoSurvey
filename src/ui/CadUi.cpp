@@ -9775,8 +9775,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       using AK = AppCommandState::Kind;
       const bool blockSnapPickMenu = cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond || cmd.dimGripMoveActive ||
                                      cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
-      const bool allowSnapCycle =
-          cmd.active != AK::None && cmd.objectSnapEnabled && !blockSnapPickMenu;
+      // REQ-121 rule (1), second seam (GitHub #91 review, D-2026-08-26-d). The one-shot snap
+      // OVERRIDE menu is a way of forcing a snap, so offering it during an object-selection step
+      // offers the user the exact behaviour the rule removes: picking a candidate sets
+      // `pendingOneShotSnapValid`, the crosshair jumps to the forced point and a marker draws.
+      // Gating the menu here is what stops that state from ever arising during selection.
+      const bool allowSnapCycle = cmd.active != AK::None && cmd.objectSnapEnabled &&
+                                  !blockSnapPickMenu && !ViewportIsObjectSelectionStep(cmd);
       using DM = AppCommandState::RightClickDefaultMode;
       using EM = AppCommandState::RightClickEditMode;
       using CM = AppCommandState::RightClickCommandMode;
@@ -10073,7 +10078,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
     }
 
-    if (cmd.pendingOneShotSnapValid && outCursorX && outCursorY) {
+    // A one-shot snap armed just BEFORE a selection step began would otherwise be consumed here,
+    // ahead of the REQ-121 gate in the `else` below — so the rule would hold for every snap except a
+    // forced one. Both seams are gated (GitHub #91 review, D-2026-08-26-d): the menu cannot be
+    // opened during selection, and a leftover override cannot be spent there either.
+    if (cmd.pendingOneShotSnapValid && outCursorX && outCursorY && !ViewportIsObjectSelectionStep(cmd)) {
       *outCursorX = cmd.pendingOneShotSnapX;
       *outCursorY = cmd.pendingOneShotSnapY;
       cmd.viewportSnapPickValid = true;
