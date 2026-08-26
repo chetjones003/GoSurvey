@@ -3880,7 +3880,7 @@ requirements is a planning failure, not a sign of rigor.
   | Space | Frames |
   |---|---|
   | Model | the model's entity extents (the existing computation) |
-  | Floating model space (inside an activated viewport) | the model's entity extents, same as model |
+  | Floating model space (inside an activated viewport) | the model's entity extents, framed into the VIEWPORT's own rectangle — **REQ-123** |
   | Paper | the **sheet** — `(0,0)` to `sheetWidthIn() × sheetHeightIn()` |
 
   Paper space frames the sheet rather than the paper entities on it: the page is the meaningful
@@ -3910,6 +3910,11 @@ requirements is a planning failure, not a sign of rigor.
   NaN safety) exercised the pre-existing framing path unmodified and untested here (D-2026-08-26-b)
   and is now **REQ-122**, which closes the issue alongside this one. The camera write named here as
   `ApplyViewportZoomToWorldRect` is `zoomframing::FrameWorldRect` since REQ-122
+- Corrected 2026-08-26 (D-2026-08-26-e, REQ-123): the floating-model-space claim above was never
+  true. The gesture was raised inside a block guarded by `!routeZoomToViewport`, which is skipped
+  whenever a floating viewport owns pan/zoom — so a middle double-click through an activated viewport
+  did nothing at all, and the typed command wrote the SHEET camera (GitHub issue #100). REQ-123 owns
+  that case now; this requirement keeps the gesture and the model/paper branches.
 - Revisions: 2026-08-25 — accepted (D-2026-08-25-o, relabeled D-2026-08-26-a while merging PR #93
   into `beta` — that letter was already taken by REQ-119 above); asked for directly by the user,
   from AutoCAD's wheel double-click.
@@ -4090,6 +4095,68 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted (2026-08-26); closes the remainder of GitHub issue #88 alongside REQ-120
 - Revisions: 2026-08-26 — accepted (D-2026-08-26-c); raised by chetjones003 on issue #88 after PR #93
   merged, asking for #88's ZOOMEXTENTS acceptance list to be verified rather than assumed.
+
+### REQ-123 — ZOOM EXTENTS through an activated viewport frames the model into that viewport (GitHub issue #100)
+- Purpose: a floating viewport is the model-space window the user is actually working in, and
+  zoom-extents was the one navigation operation that did not know it. It wrote the sheet camera and
+  left the viewport's framing untouched, so the layout zoomed around a viewport that never moved
+- Priority: should
+- Type: functional
+- Statement: **While a paper-space viewport is activated (floating model space) and the viewport zoom
+  lock is OFF, `ZOOMEXTENTS` — typed, or by REQ-120's middle double-click — frames the model into
+  that viewport.** It writes the viewport's own `modelCenterX/Y` and `scaleModelPerPaperIn`, and
+  writes **no** screen camera: the viewport keeps its size and position on the sheet, and the sheet's
+  own pan/zoom is untouched.
+
+  **The viewport's aspect is its rectangle on the sheet**, `paperWIn : paperHIn` — not the
+  application window's. That single substitution is the defect: the same drawing framed with the
+  window's aspect over-fills one axis of the viewport and leaves the other empty.
+
+  **It is the same framing operation as everywhere else.** REQ-122's `FrameWorldRect` decides the
+  centre, the margin, which axis binds, the minimum span and the refusal on a non-finite rectangle;
+  this converts that answer into the viewport's units (model units per paper inch). Issue #88's
+  Architecture section requires one framing implementation, and this does not add a second.
+
+  **The extents are the model seen THROUGH that viewport.** An entity whose layer is frozen in the
+  viewport (REQ-028 / REQ-046) is not part of what the user is looking at, so it does not drag the
+  framing out to reach it — the same test the viewport renderer and the plotter already apply. The
+  filter is on **visibility**, not on entity kind: the viewport renderer currently draws only lines,
+  polylines, circles, arcs and survey points, and that is a renderer limitation, not a statement
+  about what a drawing contains. Encoding it here would freeze a gap into the extents math.
+
+  **The zoom lock decides which view is being navigated.** `viewportZoomLocked` already means
+  "pan/zoom targets the sheet"; zoom-extents is a zoom, so with the lock **ON** a floating viewport
+  frames the **sheet**, exactly as paper space does. Only the lock-OFF case — the default, and the
+  one where the wheel and middle-drag already target the viewport — frames into the viewport.
+
+  **REQ-120's floating-model-space claim is corrected here.** It stated that the middle double-click
+  frames the model in floating model space. It did not: the gesture was raised inside a block guarded
+  by `!routeZoomToViewport`, which is skipped whenever a floating viewport owns pan/zoom, so it never
+  fired there at all. The flag is now raised in every space, and this requirement decides what
+  "extents" means for each.
+- Acceptance:
+  - with a viewport activated and the lock off, `ZOOMEXTENTS` centres that viewport on the model
+    extents and sets its scale so they fit its rectangle, with REQ-122's margin;
+  - the viewport's position and size on the sheet are unchanged, and the sheet's own pan/zoom is
+    unchanged — the operation writes nothing outside the viewport;
+  - the framing is computed from the viewport's own aspect, so the **same drawing in two viewports of
+    different shapes gets two different scales**;
+  - the sheet, the viewport border and paper-space geometry are not in the calculation;
+  - an entity on a layer frozen in that viewport does not affect the result, and the same entity in a
+    viewport where its layer is thawed does;
+  - REQ-120's middle double-click produces the same result as the typed command, in a viewport as in
+    model space;
+  - middle-drag pan continues to move the model within the viewport and nothing else (REQ-045);
+  - with **no** viewport activated, paper space frames the sheet exactly as REQ-120 specifies;
+  - with the zoom lock ON, a floating viewport frames the sheet;
+  - it is covered by a **transcript**, not only by a manual pass — see Owner-layer.
+- Owner-layer: Commands (the framing and the extents filter); UI (raising REQ-120's gesture in every
+  space). Notably **not** blocked by TASK-113's DEBT-1: the viewport case needs no framebuffer,
+  because its aspect comes from paper inches and its framing is stored on the viewport, so it is
+  handled ahead of `ProcessPendingViewportZoom`'s `fbW <= 0` guard and is the first zoom behaviour a
+  headless transcript can drive end to end
+- Status: accepted (2026-08-26); closes GitHub issue #100
+- Revisions: 2026-08-26 — accepted (D-2026-08-26-e); reported by chetjones003 as issue #100.
 
 ---
 
@@ -4542,6 +4609,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-119 | UI/Commands | **increment 1 done** (TASK-111) + **increment 2 done** (TASK-112) — `CommandLineTests [req119]` (the prompt→variants rule as a pure function: inline, grouped, mixed-case shortcut extraction incl. `No trim`→`N`, unclosed bracket, empty group, and a round-trip so parsing loses no text) + `headless.regression-119-variant-token-accepted` (the mechanism's three prompts) + `headless.regression-119-variant-coverage` (one assertion per marked-up token across CIRCLE/ROTATE/SCALE/TRIM/POLYLINE/FEATURELINE/ELEV, **plus a live refusal assertion for CIRCLE's bare `d`** — a value prefix, not a token, deliberately left unmarked so markup cannot manufacture a dead link) + manual GUI (links render, hover and click in BOTH the floating bar and the classic dock; a wrapping dock prompt keeps its links on the correct line with no horizontal overflow; **no log line is clickable**) | accepted |
 | REQ-120 | UI | **manual GUI only, and that is a real limitation, not a shortcut.** The headless driver models no framebuffer and never calls `ProcessPendingViewportZoom` (which early-returns on `fbW <= 0`), so it cannot reach any zoom behaviour — there is no existing zoom transcript in the corpus for the same reason. Covering this by transcript would mean giving the harness a synthetic viewport, which is harness work this requirement did not take on (recorded as TASK-113 DEBT-1). Verified instead by driving the real window: middle double-click frames the drawing in model space; it works MID-COMMAND with the active LINE's placed point surviving; the typed route still does not zoom mid-command (its text is consumed by the active command as point input — unchanged); paper space frames the sheet; middle-DRAG still pans. Leaves GitHub issue #88 open — covers only #88's Middle Mouse/Architecture sections, not its ZOOMEXTENTS acceptance list | accepted |
 | REQ-122 | Commands | done (GitHub issue #88, D-2026-08-26-c, TASK-117) — **automated**, which REQ-120 could not be. The framing arithmetic was hoisted into `src/commands/ZoomFraming.hpp` (pure + header-only, the `OrthoConstrain.hpp`/`ViewportPickPolicy.hpp` precedent) so `tests/ZoomFramingTests.cpp` can reach it without a framebuffer: 11 Catch2 cases / 231 assertions covering centring, fit-at-any-aspect, the 8% margin, aspect binding, the one-unit floor on degenerate extents, invariance above the floor, refusal on non-finite input, finiteness across spans 1e-9..1e12, corner order, and null out-params. 3 of the 11 proven red against the old constants before the fix. TASK-113's DEBT-1 is unchanged and still open — `ProcessPendingViewportZoom` itself remains unreachable from the harness — but every guarantee #88 asks for now lives in tested code. The state-dependent halves (empty drawing, live parity with the gesture, middle-drag pan) verified in the GUI, measured off the status-bar readout rather than eyeballed: typed ZOOMEXTENTS and the middle double-click produce identical world coordinates to 4 dp at two screen points. 622/622 ctest green | accepted |
+| REQ-123 | Commands/UI | done (GitHub issue #100, D-2026-08-26-e, TASK-119) — **`headless.req123-viewport-zoom-extents`, the first zoom behaviour ever covered by a transcript.** TASK-113's DEBT-1 blocks the others on `ProcessPendingViewportZoom`'s `fbW <= 0` guard; this case needs no framebuffer (its aspect is the viewport's rect in paper inches) so it is handled ahead of that guard. 43 steps: the framing after ZE with hand-computed scales (13.5870 for an 8x4in viewport, 27.1739 for 4x4in — same drawing, different rect, different answer), each viewport independent of the other's zoom, and a layer frozen in the viewport excluded from the extents then restored when thawed. Proven red on `beta`: `expected centre 50, 10 scale 13.587; got 0, 0 scale 50` — the viewport's framing untouched at its creation defaults. Four new driver verbs (VIEWPORT / VPSELECT / CLAYER / VPFREEZE) and `EXPECT VPFRAME`, all REQ-203 gaps of the LAYOUT/CLIPCOPY shape. GUI pass confirmed the numbers against the live status bar (`VP 1" = 40.4'` vs 40.36 computed), the sheet unmoved, REQ-120's gesture working in a viewport for the first time, and middle-drag pan still confined to it. 632/633 ctest (the one failure is `beta`'s own — an em dash in a `CadSnapTests` TEST_CASE name breaks ctest's name round-trip; unrelated and pre-existing) | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |

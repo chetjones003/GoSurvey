@@ -470,6 +470,16 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
     }
     std::memcpy(buf, text.c_str(), text.size() + 1);
     ProcessCommandLineSubmit(buf, static_cast<int>(sizeof buf), run.st, run.log);
+    // A command may raise `pendingZoomExtents`, which the app consumes on its NEXT FRAME. The
+    // driver has no frames, so consume it here — otherwise a transcript would assert against a flag
+    // that never got acted on, which looks like a pass and proves nothing.
+    //
+    // Zero framebuffer size is honest, not a fudge: `ProcessPendingViewportZoom` early-returns on it
+    // for every case whose camera is the WINDOW's (TASK-113 DEBT-1, still open). The REQ-123
+    // floating-viewport case runs above that guard because its aspect is the viewport's rect on the
+    // sheet, so it needs no framebuffer — which is exactly why it is the one zoom behaviour a
+    // transcript can drive end to end.
+    ProcessPendingViewportZoom(run.st, nullptr, nullptr, nullptr, 0, 0, 1.f, run.log);
   } else if (verb == "PICK") {
     std::istringstream is(rest);
     float x = 0.f;
@@ -674,6 +684,88 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       Fail(run, "parse", "LAYOUT expects NEW or MODEL, got: " + rest, sourceLine);
       return false;
     }
+  } else if (verb == "VIEWPORT") {
+    // VIEWPORT <x0In> <y0In> <x1In> <y1In> — create a paper-space viewport on the active layout.
+    //
+    // A REQ-203 gap of the same shape as LAYOUT and CLIPCOPY above: RECTVP is driven by two clicks
+    // in the PAPER click block, which `ViewportClickRouteFor` deliberately routes to `Ignore` (it is
+    // model-space routing), so CLICK cannot reach it. `AddViewportRect` is the same entry point the
+    // UI's second click calls.
+    if (run.st.activeSpaceIndex < 0 ||
+        static_cast<size_t>(run.st.activeSpaceIndex) >= run.st.paperLayouts.size()) {
+      Fail(run, "state", "VIEWPORT needs a paper layout active — use SPACE PAPER or LAYOUT NEW first",
+           sourceLine);
+      return false;
+    }
+    std::istringstream is(rest);
+    float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
+    if (!(is >> x0 >> y0 >> x1 >> y1)) {
+      Fail(run, "parse", "VIEWPORT expects four paper-inch coordinates, got: " + rest, sourceLine);
+      return false;
+    }
+    const int vpIx = AddViewportRect(run.st, run.st.activeSpaceIndex, x0, y0, x1, y1);
+    if (vpIx < 0) {
+      Fail(run, "state", "VIEWPORT: the rectangle was rejected (degenerate?)", sourceLine);
+      return false;
+    }
+    run.st.selectedViewportIndex = vpIx;  // MSPACE acts on the SELECTED viewport
+    run.log.push_back("[driver] VIEWPORT " + std::to_string(vpIx));
+  } else if (verb == "CLAYER") {
+    // CLAYER <name> — set the current layer, creating it if new. The Layer manager is a DIALOG
+    // (`LAYER` opens it), so there is no typed route to this and a transcript could not otherwise put
+    // geometry on a named layer — which REQ-123's per-viewport freeze test needs.
+    const std::string name = Trim(rest);
+    if (name.empty()) {
+      Fail(run, "parse", "CLAYER expects a layer name", sourceLine);
+      return false;
+    }
+    run.st.currentLayer = name;
+    // Registers the name in the drawing's layer table, exactly as the Layer manager's OK does.
+    SyncDrawingLayerTableWithGeometry(run.st);
+  } else if (verb == "VPFREEZE") {
+    // VPFREEZE <layer> — freeze a layer in the SELECTED viewport (REQ-028 / REQ-046).
+    //
+    // The VPFREEZE command picks ENTITIES inside a floating viewport and freezes their layers, and
+    // `ViewportClickRouteFor` routes it to `Ignore` in model space by design, so CLICK cannot reach
+    // it. This calls the same pure `FreezeLayerInViewport` the command ends up calling.
+    if (run.st.activeSpaceIndex < 0 ||
+        static_cast<size_t>(run.st.activeSpaceIndex) >= run.st.paperLayouts.size()) {
+      Fail(run, "state", "VPFREEZE needs a paper layout active", sourceLine);
+      return false;
+    }
+    const std::string name = Trim(rest);
+    if (name.empty()) {
+      Fail(run, "parse", "VPFREEZE expects a layer name", sourceLine);
+      return false;
+    }
+    PaperLayout& FL = run.st.paperLayouts[static_cast<size_t>(run.st.activeSpaceIndex)];
+    if (run.st.selectedViewportIndex < 0 ||
+        static_cast<size_t>(run.st.selectedViewportIndex) >= FL.viewports.size()) {
+      Fail(run, "state", "VPFREEZE: no viewport selected — use VIEWPORT or VPSELECT first", sourceLine);
+      return false;
+    }
+    FreezeLayerInViewport(FL.viewports[static_cast<size_t>(run.st.selectedViewportIndex)], name);
+  } else if (verb == "VPSELECT") {
+    // VPSELECT <n> — choose which viewport MSPACE will enter. Selection is a click on the viewport
+    // border in the UI, which has no headless equivalent; this is the field that click writes.
+    // Needed for issue #100's "consistent when multiple viewports exist" condition.
+    if (run.st.activeSpaceIndex < 0 ||
+        static_cast<size_t>(run.st.activeSpaceIndex) >= run.st.paperLayouts.size()) {
+      Fail(run, "state", "VPSELECT needs a paper layout active", sourceLine);
+      return false;
+    }
+    std::istringstream is(rest);
+    int n = -1;
+    if (!(is >> n)) {
+      Fail(run, "parse", "VPSELECT expects a viewport index, got: " + rest, sourceLine);
+      return false;
+    }
+    const PaperLayout& L = run.st.paperLayouts[static_cast<size_t>(run.st.activeSpaceIndex)];
+    if (n < 0 || static_cast<size_t>(n) >= L.viewports.size()) {
+      Fail(run, "state", "VPSELECT: no viewport " + std::to_string(n) + " on this layout", sourceLine);
+      return false;
+    }
+    run.st.selectedViewportIndex = n;
   } else if (verb == "DUMP") {
     // DUMP LABELS — every survey point's label box, in world units, beside the point it labels.
     //
@@ -796,7 +888,45 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
   } else if (verb == "EXPECT") {
     std::string arg;
     const std::string what = UpperAscii(FirstWord(rest, &arg));
-    if (what == "SAMEFILE" || what == "DIFFERENTFILE") {
+    if (what == "VPFRAME") {
+      // EXPECT VPFRAME <centreX> <centreY> <scaleModelPerPaperIn> — the FLOATING viewport's framing
+      // (REQ-123 / GitHub #100).
+      //
+      // A viewport's view is three numbers, and asserting the LOG line instead would assert a
+      // `%.6g` rendering of them — which turns a float rounding at the sixth significant digit into
+      // a red test about nothing. Compared with a relative tolerance for the same reason.
+      std::istringstream vs(arg);
+      double wantCx = 0., wantCy = 0., wantScale = 0.;
+      if (!(vs >> wantCx >> wantCy >> wantScale)) {
+        Fail(run, "parse", "EXPECT VPFRAME needs centreX centreY scale, got: " + arg, sourceLine);
+        return false;
+      }
+      if (!InFloatingModelSpace(run.st) || run.st.floatingViewportLayout < 0 ||
+          static_cast<size_t>(run.st.floatingViewportLayout) >= run.st.paperLayouts.size()) {
+        Fail(run, "state", "EXPECT VPFRAME: not in floating model space — use CMD MSPACE first", sourceLine);
+        return false;
+      }
+      const PaperLayout& FL = run.st.paperLayouts[static_cast<size_t>(run.st.floatingViewportLayout)];
+      if (run.st.floatingViewportIndex < 0 ||
+          static_cast<size_t>(run.st.floatingViewportIndex) >= FL.viewports.size()) {
+        Fail(run, "state", "EXPECT VPFRAME: the floating viewport index is out of range", sourceLine);
+        return false;
+      }
+      const Viewport& FV = FL.viewports[static_cast<size_t>(run.st.floatingViewportIndex)];
+      const double gotCx = FV.modelCenterX;
+      const double gotCy = FV.modelCenterY;
+      const double gotScale = static_cast<double>(FV.scaleModelPerPaperIn);
+      auto near = [](double got, double want) {
+        return std::fabs(got - want) <= 1e-4 * std::max(1.0, std::fabs(want));
+      };
+      if (!near(gotCx, wantCx) || !near(gotCy, wantCy) || !near(gotScale, wantScale)) {
+        char vb[256];
+        std::snprintf(vb, sizeof(vb), "VPFRAME: expected centre %.6g, %.6g scale %.6g; got %.6g, %.6g scale %.6g",
+                      wantCx, wantCy, wantScale, gotCx, gotCy, gotScale);
+        Fail(run, "expect", vb, sourceLine);
+        return false;
+      }
+    } else if (what == "SAMEFILE" || what == "DIFFERENTFILE") {
       const bool wantSame = (what == "SAMEFILE");
       // EXPECT SAMEFILE <a> <b> — byte comparison. This is what makes the `gs-roundtrip` oracle
       // expressible in a transcript rather than needing a separate build-system step, which in turn

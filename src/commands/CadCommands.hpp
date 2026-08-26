@@ -3781,12 +3781,21 @@ const char* ZoomCommandFooterHint(const AppCommandState& st);
 const char* LineCommandFooterHint(const AppCommandState& st);
 const char* DrawingExtrasFooterHint(const AppCommandState& st);
 
-bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY, double* outMxY);
+/// Model-space extents of everything drawable.
+///
+/// \p vpFilter (REQ-123, GitHub #100) restricts the sweep to what is VISIBLE THROUGH one paper-space
+/// viewport: entities whose layer is frozen in it are skipped, the same test the viewport renderer
+/// and the plotter already apply. **Defaults to nullptr — no filter, and every pre-existing caller
+/// keeps exactly the behaviour it had.** It is deliberately a filter on VISIBILITY, not on entity
+/// kind: the viewport renderer currently draws only lines / polylines / circles / arcs / survey
+/// points, and encoding that gap here would freeze a renderer limitation into the extents math.
+bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY, double* outMxY,
+                         const Viewport* vpFilter = nullptr);
 /// Robust extents that drop far-outlier entities (DXFs often contain stray geometry at world (0,0) such as
 /// defpoints, block-insert origins, or leftover construction). On success, \p outSkipped is the number of
 /// entities discarded; 0 means the answer equals \ref ComputeWorldExtents.
 bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY,
-                               double* outMxY, int* outSkipped);
+                               double* outMxY, int* outSkipped, const Viewport* vpFilter = nullptr);
 // The camera side of zoom-extents is `zoomframing::FrameWorldRect` (ZoomFraming.hpp) — pure, shared
 // by every fit path, and tested there (REQ-122).
 
