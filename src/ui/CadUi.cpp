@@ -8903,6 +8903,28 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // framing instead of the sheet (handled below, after paper coords are available).
   const bool routeZoomToViewport = InFloatingModelSpace(cmd) && !cmd.viewportZoomLocked;
 
+  // ZOOM EXTENTS by middle double-click (REQ-120) — AutoCAD's binding for the same gesture.
+  //
+  // Raised HERE rather than inside the wheel/pan block below, because that block is guarded by
+  // `!routeZoomToViewport`: with a floating viewport owning pan/zoom (the default, lock OFF) it is
+  // skipped entirely, so the gesture silently did nothing in exactly the place issue #100 is about.
+  // REQ-120 claimed floating model space frames the model; it never even fired there. Corrected as
+  // part of REQ-123 — the flag is raised in every space and `ProcessPendingViewportZoom` decides
+  // what "extents" means for each.
+  //
+  // Deliberately NOT routed through StartZoomExtentsCommand: that refuses while a command is
+  // running, and this gesture is TRANSPARENT, because wanting to reframe mid-command is exactly
+  // when a user reaches for it. Setting the flag directly is the same thing DXF import already does
+  // to frame a freshly-imported drawing, and it is safe mid-command because the deferred consumer
+  // writes only a camera — the active command's phase, picked points and draft geometry are
+  // untouched. The typed ZOOMEXTENTS keeps its guard and its refusal message.
+  //
+  // A double-click is not a drag, so middle-drag pan is unaffected (REQ-045 requires it).
+  if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Middle)) {
+    cmd.pendingZoomWindow = false;  // a pending ZOOM WINDOW would otherwise win the same frame
+    cmd.pendingZoomExtents = true;
+  }
+
   if (hovered && !routeZoomToViewport) {
     const float wheel = ImGui::GetIO().MouseWheel;
     if (wheel != 0.f && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
@@ -8932,10 +8954,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // geometry are untouched. The typed ZOOMEXTENTS keeps its guard and its refusal message.
     //
     // A double-click is not a drag, so middle-drag pan below is unaffected (REQ-045 requires it).
-    if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Middle)) {
-      cmd.pendingZoomWindow = false;  // a pending ZOOM WINDOW would otherwise win the same frame
-      cmd.pendingZoomExtents = true;
-    }
+    // (The gesture itself is raised OUTSIDE this block — see below — because this block is skipped
+    // entirely while a floating viewport owns pan/zoom, and the gesture must work there too.)
 
     // ORBIT (REQ-058): Shift + middle-drag tumbles the camera about the pan point, matching
     // AutoCAD's 3DORBIT binding. Plain middle-drag still pans, so nothing existing changes.

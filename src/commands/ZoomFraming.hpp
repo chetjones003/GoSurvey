@@ -95,4 +95,53 @@ inline bool FrameWorldRect(double mnX, double mxX, double mnY, double mxY, float
   return true;
 }
 
+/// Frame the world rect into a PAPER-SPACE VIEWPORT rather than onto the screen camera (REQ-123).
+///
+/// A floating viewport is not framed by FrameWorldRect's output: its view is `modelCenterX/Y`
+/// plus `scaleModelPerPaperIn` (model units per paper inch), and its aspect is the aspect of its
+/// own RECTANGLE ON THE SHEET — not of the application window. That is the whole of GitHub issue
+/// #100: the screen camera and the viewport's framing are different quantities, and zoom-extents
+/// was writing the first while the user was looking through the second.
+///
+/// This is a conversion, not a second implementation. FrameWorldRect decides everything — the
+/// centre, the margin, which axis binds, the minimum span, the refusal on a non-finite rect — and
+/// the arithmetic below only restates its answer in the viewport's own units. Issue #88's
+/// Architecture section requires exactly that: one framing implementation, no duplicate.
+///
+/// \p paperWIn / \p paperHIn are the viewport rect's size in paper inches. On success writes the
+/// model point to show at the viewport's centre and the scale that fits the rect; returns false and
+/// writes nothing on a degenerate rectangle or a non-finite input, so the viewport's current framing
+/// survives.
+inline bool FrameWorldRectInViewport(double mnX, double mxX, double mnY, double mxY, float paperWIn,
+                                     float paperHIn, double* modelCenterX, double* modelCenterY,
+                                     float* scaleModelPerPaperIn) {
+  if (!modelCenterX || !modelCenterY || !scaleModelPerPaperIn)
+    return false;
+  if (!std::isfinite(paperWIn) || !std::isfinite(paperHIn) || paperWIn <= 0.f || paperHIn <= 0.f)
+    return false;
+
+  double panX = 0.;
+  double panY = 0.;
+  float zoom = 1.f;
+  // The viewport's own aspect — its rect on the sheet. Passing the window's aspect here is the bug
+  // issue #100 reports, in one argument.
+  if (!FrameWorldRect(mnX, mxX, mnY, mxY, paperWIn / paperHIn, &panX, &panY, &zoom))
+    return false;
+
+  // FrameWorldRect speaks in the camera's units: it shows a half-height of kOrthoHalfHRef / zoom
+  // model units. A viewport shows paperHIn inches at `scale` model units per inch, so the same
+  // visible height is (paperHIn * scale). Equate them and solve for the scale.
+  const double halfH = static_cast<double>(kOrthoHalfHRef) / static_cast<double>(zoom);
+  const double scale = (2.0 * halfH) / static_cast<double>(paperHIn);
+  if (!std::isfinite(scale) || scale <= 0.)
+    return false;
+
+  *modelCenterX = panX;
+  *modelCenterY = panY;
+  // The same clamp `Viewport::safeScale` applies, so a framing this function accepts is one the
+  // viewport can actually hold.
+  *scaleModelPerPaperIn = std::clamp(static_cast<float>(scale), 1.e-6f, 1.e9f);
+  return true;
+}
+
 }  // namespace zoomframing

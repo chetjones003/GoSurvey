@@ -14198,7 +14198,32 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
   }
 }
 
-bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY, double* outMxY) {
+namespace {
+
+// REQ-123 (GitHub #100). "Visible through this viewport" means the same thing here as it does to
+// the viewport renderer and to the plotter: an entity whose layer is frozen in the viewport is not
+// there. Both of those read a MISSING attribute entry as the default — layer "0" — rather than as
+// "no layer", so this does too; otherwise freezing layer "0" would hide geometry on screen and
+// still drag the extents out to it.
+//
+// A null p vp means no filter at all, which is every caller but the floating-viewport one.
+[[nodiscard]] bool EntityHiddenInViewport(const Viewport* vp, const std::vector<EntityAttributes>& attrs,
+                                          size_t idx) {
+  if (!vp)
+    return false;
+  static const EntityAttributes kDef{};
+  const EntityAttributes& a = idx < attrs.size() ? attrs[idx] : kDef;
+  return IsLayerFrozenInViewport(*vp, a.layer);
+}
+
+[[nodiscard]] bool LayerHiddenInViewport(const Viewport* vp, const std::string& layer) {
+  return vp && IsLayerFrozenInViewport(*vp, layer);
+}
+
+}  // namespace
+
+bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY, double* outMxY,
+                         const Viewport* vpFilter) {
   bool any = false;
   double mnX = 0.;
   double mxX = 0.;
@@ -14209,6 +14234,8 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   const auto& L = st.userLinesFlat;
   if (L.size() % 6 == 0) {
     for (size_t i = 0; i + 5 < L.size(); i += 6) {
+      if (EntityHiddenInViewport(vpFilter, st.userLineAttrs, i / 6))
+        continue;
       consider(static_cast<double>(L[i]), static_cast<double>(L[i + 1]));
       consider(static_cast<double>(L[i + 3]), static_cast<double>(L[i + 4]));
     }
@@ -14216,6 +14243,8 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   const auto& C = st.userCirclesCxCyZR;
   if (C.size() % 4 == 0) {
     for (size_t ci = 0; ci + 3 < C.size(); ci += 4) {
+      if (EntityHiddenInViewport(vpFilter, st.userCircleAttrs, ci / 4))
+        continue;
       const double cx = static_cast<double>(C[ci]);
       const double cy = static_cast<double>(C[ci + 1]);
       const double r = std::fabs(static_cast<double>(C[ci + 3]));
@@ -14227,10 +14256,16 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
       consider(cx + r, cy + r);
     }
   }
-  for (const SurveyPoint& p : st.surveyPoints)
+  for (const SurveyPoint& p : st.surveyPoints) {
+    if (LayerHiddenInViewport(vpFilter, p.layer))
+      continue;
     consider(static_cast<double>(p.easting), static_cast<double>(p.northing));
+  }
 
-  for (const CadAnnotation& a : st.cadAnnotations) {
+  for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
+    if (EntityHiddenInViewport(vpFilter, st.cadAnnotationAttrs, ai))
+      continue;
+    const CadAnnotation& a = st.cadAnnotations[ai];
     float amnX = 0.f;
     float amnY = 0.f;
     float amxX = 0.f;
@@ -14240,7 +14275,10 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     consider(static_cast<double>(amxX), static_cast<double>(amxY));
   }
 
-  for (const CadArc& a : st.userArcs) {
+  for (size_t arcIx = 0; arcIx < st.userArcs.size(); ++arcIx) {
+    if (EntityHiddenInViewport(vpFilter, st.userArcAttrs, arcIx))
+      continue;
+    const CadArc& a = st.userArcs[arcIx];
     const double dcx = static_cast<double>(a.cx);
     const double dcy = static_cast<double>(a.cy);
     const double dr = std::fabs(static_cast<double>(a.r));
@@ -14257,7 +14295,10 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     }
   }
 
-  for (const CadEllipse& el : st.userEllipses) {
+  for (size_t elIx = 0; elIx < st.userEllipses.size(); ++elIx) {
+    if (EntityHiddenInViewport(vpFilter, st.userEllAttrs, elIx))
+      continue;
+    const CadEllipse& el = st.userEllipses[elIx];
     const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
     if (ma < 1e-12)
       continue;
@@ -14282,6 +14323,8 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   const auto& PO = st.userPolylineOffsets;
   if (PO.size() >= 2) {
     for (size_t pi = 0; pi + 1 < PO.size(); ++pi) {
+      if (EntityHiddenInViewport(vpFilter, st.userPolylineAttrs, pi))
+        continue;
       const int v0 = PO[pi];
       const int v1 = PO[pi + 1];
       for (int vi = v0; vi < v1; ++vi) {
@@ -14298,6 +14341,8 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     const auto& FV = st.featureLineVerts;
     const auto& FO = st.featureLineOffsets;
     for (size_t fi = 0; fi + 1 < FO.size(); ++fi) {
+      if (EntityHiddenInViewport(vpFilter, st.featureLineAttrs, fi))
+        continue;
       const int v0 = FO[fi];
       const int v1 = FO[fi + 1];
       for (int vi = v0; vi < v1; ++vi) {
@@ -14309,13 +14354,20 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     }
   }
 
-  for (const CadFilledRegion& fr : st.cadFilledRegions)
+  for (size_t fri = 0; fri < st.cadFilledRegions.size(); ++fri) {
+    if (EntityHiddenInViewport(vpFilter, st.cadFilledRegionAttrs, fri))
+      continue;
+    const CadFilledRegion& fr = st.cadFilledRegions[fri];
     for (size_t i = 0; i + 2 < fr.vertsXyz.size(); i += 3)
       consider(static_cast<double>(fr.vertsXyz[i]), static_cast<double>(fr.vertsXyz[i + 1]));
+  }
 
   // Meshes (REQ-063). Their precomputed bounds, not their vertices: this path runs for small
   // drawings, and "small" counts entities — one mesh can still hold two million triangles.
-  for (const auto& mp : st.cadMeshes) {
+  for (size_t mi = 0; mi < st.cadMeshes.size(); ++mi) {
+    if (EntityHiddenInViewport(vpFilter, st.cadMeshAttrs, mi))
+      continue;
+    const auto& mp = st.cadMeshes[mi];
     if (!mp)
       continue;
     const meshgeom::Bounds mb = meshgeom::ComputeBounds(mp->vertsXyz);
@@ -14328,7 +14380,10 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   // TIN surfaces (REQ-068: "surfaces are included in zoom-extents and in the drawing's bounding
   // box"). Their bounds, not their vertices, for the same reason meshes use theirs above — a single
   // surface can hold 200k triangles.
-  for (const CadSurface& s : st.cadSurfaces) {
+  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+    if (EntityHiddenInViewport(vpFilter, st.cadSurfaceAttrs, si))
+      continue;
+    const CadSurface& s = st.cadSurfaces[si];
     if (!s.tin)
       continue;
     const meshgeom::Bounds sb = meshgeom::ComputeBounds(s.tin->vertsXyz);
@@ -14368,10 +14423,14 @@ struct EntityBox {
   return v[k];
 }
 
-void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) {
+// \p vpFilter as on ComputeWorldExtents (REQ-123): both sweeps must agree, or the robust path and
+// the small-drawing path would answer differently for the same viewport.
+void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, const Viewport* vpFilter) {
   const auto& L = st.userLinesFlat;
   if (L.size() % 6 == 0) {
     for (size_t i = 0; i + 5 < L.size(); i += 6) {
+      if (EntityHiddenInViewport(vpFilter, st.userLineAttrs, i / 6))
+        continue;
       EntityBox b{};
       b.mnX = std::min(static_cast<double>(L[i]), static_cast<double>(L[i + 3]));
       b.mxX = std::max(static_cast<double>(L[i]), static_cast<double>(L[i + 3]));
@@ -14385,6 +14444,8 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
   const auto& C = st.userCirclesCxCyZR;
   if (C.size() % 4 == 0) {
     for (size_t ci = 0; ci + 3 < C.size(); ci += 4) {
+      if (EntityHiddenInViewport(vpFilter, st.userCircleAttrs, ci / 4))
+        continue;
       const double cx = static_cast<double>(C[ci]);
       const double cy = static_cast<double>(C[ci + 1]);
       const double r = std::fabs(static_cast<double>(C[ci + 3]));
@@ -14401,12 +14462,17 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
     }
   }
   for (const SurveyPoint& p : st.surveyPoints) {
+    if (LayerHiddenInViewport(vpFilter, p.layer))
+      continue;
     EntityBox b{};
     b.mnX = b.mxX = b.cx = static_cast<double>(p.easting);
     b.mnY = b.mxY = b.cy = static_cast<double>(p.northing);
     out.push_back(b);
   }
-  for (const CadAnnotation& a : st.cadAnnotations) {
+  for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
+    if (EntityHiddenInViewport(vpFilter, st.cadAnnotationAttrs, ai))
+      continue;
+    const CadAnnotation& a = st.cadAnnotations[ai];
     float amnX = 0.f;
     float amnY = 0.f;
     float amxX = 0.f;
@@ -14421,7 +14487,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
   }
-  for (const CadArc& a : st.userArcs) {
+  for (size_t arcIx = 0; arcIx < st.userArcs.size(); ++arcIx) {
+    if (EntityHiddenInViewport(vpFilter, st.userArcAttrs, arcIx))
+      continue;
+    const CadArc& a = st.userArcs[arcIx];
     const double dr = std::fabs(static_cast<double>(a.r));
     if (dr <= 1e-12)
       continue;
@@ -14434,7 +14503,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
     b.cy = static_cast<double>(a.cy);
     out.push_back(b);
   }
-  for (const CadEllipse& el : st.userEllipses) {
+  for (size_t elIx = 0; elIx < st.userEllipses.size(); ++elIx) {
+    if (EntityHiddenInViewport(vpFilter, st.userEllAttrs, elIx))
+      continue;
+    const CadEllipse& el = st.userEllipses[elIx];
     const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
     if (ma < 1e-12)
       continue;
@@ -14453,6 +14525,8 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
   const auto& PO = st.userPolylineOffsets;
   if (PO.size() >= 2) {
     for (size_t pi = 0; pi + 1 < PO.size(); ++pi) {
+      if (EntityHiddenInViewport(vpFilter, st.userPolylineAttrs, pi))
+        continue;
       const int v0 = PO[pi];
       const int v1 = PO[pi + 1];
       if (v1 <= v0)
@@ -14487,6 +14561,8 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
   const auto& FV = st.featureLineVerts;
   if (FO.size() >= 2) {
     for (size_t fi = 0; fi + 1 < FO.size(); ++fi) {
+      if (EntityHiddenInViewport(vpFilter, st.featureLineAttrs, fi))
+        continue;
       const int v0 = FO[fi];
       const int v1 = FO[fi + 1];
       if (v1 <= v0)
@@ -14521,7 +14597,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
   // box"). One box per mesh rather than per triangle — the extents pass is an outlier-trimmed
   // statistic over ENTITIES, and feeding it two million triangles would both swamp that statistic
   // and make ZE cost a full mesh walk per invocation.
-  for (const auto& mp : st.cadMeshes) {
+  for (size_t mi = 0; mi < st.cadMeshes.size(); ++mi) {
+    if (EntityHiddenInViewport(vpFilter, st.cadMeshAttrs, mi))
+      continue;
+    const auto& mp = st.cadMeshes[mi];
     if (!mp)
       continue;
     const meshgeom::Bounds mb = meshgeom::ComputeBounds(mp->vertsXyz);
@@ -14538,7 +14617,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
   }
 
   // TIN surfaces (REQ-068), one box per surface — same reasoning as the meshes above.
-  for (const CadSurface& s : st.cadSurfaces) {
+  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+    if (EntityHiddenInViewport(vpFilter, st.cadSurfaceAttrs, si))
+      continue;
+    const CadSurface& s = st.cadSurfaces[si];
     if (!s.tin)
       continue;
     const meshgeom::Bounds sb = meshgeom::ComputeBounds(s.tin->vertsXyz);
@@ -14558,17 +14640,17 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
 } // namespace
 
 bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY,
-                               double* outMxY, int* outSkipped) {
+                               double* outMxY, int* outSkipped, const Viewport* vpFilter) {
   if (outSkipped)
     *outSkipped = 0;
   std::vector<EntityBox> ents;
   ents.reserve(st.userLinesFlat.size() / 6 + st.userCirclesCxCyZR.size() / 4 + st.userArcs.size() +
                st.userEllipses.size() + st.cadAnnotations.size() + st.surveyPoints.size() +
                (st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1));
-  CollectEntityBoxes(st, ents);
+  CollectEntityBoxes(st, ents, vpFilter);
 
   if (ents.size() < 16)
-    return ComputeWorldExtents(st, outMnX, outMxX, outMnY, outMxY);
+    return ComputeWorldExtents(st, outMnX, outMxX, outMnY, outMxY, vpFilter);
 
   std::vector<double> xs;
   std::vector<double> ys;
@@ -14622,7 +14704,7 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
   }
 
   if (!any)
-    return ComputeWorldExtents(st, outMnX, outMxX, outMnY, outMxY);
+    return ComputeWorldExtents(st, outMnX, outMxX, outMnY, outMxY, vpFilter);
 
   *outMnX = mnX;
   *outMxX = mxX;
@@ -20330,6 +20412,68 @@ void StartVpThawCommand(AppCommandState& st, std::vector<std::string>& log) { St
 
 void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY, float* zoom, int fbW, int fbH,
                                 float viewportAspect, std::vector<std::string>& log) {
+  // REQ-123 (GitHub #100): ZOOM EXTENTS through an ACTIVATED VIEWPORT frames the model into that
+  // viewport's own rectangle, not onto the screen camera.
+  //
+  // Handled FIRST, and deliberately above the framebuffer guard below, because this case needs no
+  // framebuffer: the viewport's aspect is its rect on the SHEET (`paperWIn / paperHIn`), and its
+  // framing is `modelCenter` + `scaleModelPerPaperIn`. Nothing here reads a pixel. That is not a
+  // micro-optimisation — it is what makes this the one zoom behaviour a transcript can drive
+  // end to end (TASK-113 DEBT-1 blocks the others precisely on `fbW <= 0`).
+  //
+  // The zoom LOCK is honoured, and honouring it is what keeps the feature coherent: the lock's
+  // stated meaning is "pan/zoom always targets the sheet", and zoom-extents is a zoom. With the
+  // lock ON this falls through and frames the sheet, exactly as paper space does.
+  if (st.pendingZoomExtents && InFloatingModelSpace(st) && !st.viewportZoomLocked) {
+    st.pendingZoomExtents = false;
+    Viewport* vp = nullptr;
+    if (st.floatingViewportLayout >= 0 &&
+        static_cast<size_t>(st.floatingViewportLayout) < st.paperLayouts.size()) {
+      PaperLayout& L = st.paperLayouts[static_cast<size_t>(st.floatingViewportLayout)];
+      if (st.floatingViewportIndex >= 0 && static_cast<size_t>(st.floatingViewportIndex) < L.viewports.size())
+        vp = &L.viewports[static_cast<size_t>(st.floatingViewportIndex)];
+    }
+    if (!vp) {
+      log.push_back("ZOOM EXTENTS — no active viewport to frame into.");
+      return;
+    }
+    double mnX = 0.;
+    double mxX = 0.;
+    double mnY = 0.;
+    double mxY = 0.;
+    int skipped = 0;
+    // The extents are the model's, seen THROUGH this viewport: layers frozen in it are not part of
+    // what the user is looking at, so they must not drag the framing out to reach them. Same test
+    // the viewport renderer and the plotter apply (D-2026-08-26-e).
+    if (!ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped, vp)) {
+      log.push_back("ZOOM EXTENTS — nothing to frame in this viewport.");
+      return;
+    }
+    // ComputeRobustWorldExtents (despite the name) returns LOCAL coordinates — the same convention
+    // every raw entity store uses. vp->modelCenterX/Y is WORLD (local + worldDocumentOrigin): see
+    // AddViewportRect's default (`= cmd.worldDocumentOriginX`) and the screen<->model conversions in
+    // CadUi.cpp/PdfPlot.cpp, which both add/subtract the origin around this same field. Framing in
+    // LOCAL and writing straight into a WORLD field left the viewport pointed at the wrong place by
+    // exactly worldDocumentOriginX/Y whenever it's nonzero (i.e. after any import that rebases the
+    // drawing) — invisible with a fresh drawing at origin (0,0), reproducible after a DXF import.
+    if (!zoomframing::FrameWorldRectInViewport(mnX, mxX, mnY, mxY, vp->paperWIn, vp->paperHIn, &vp->modelCenterX,
+                                               &vp->modelCenterY, &vp->scaleModelPerPaperIn)) {
+      log.push_back("ZOOM EXTENTS — the drawing extents are not a finite rectangle; view unchanged.");
+      return;
+    }
+    vp->modelCenterX += st.worldDocumentOriginX;
+    vp->modelCenterY += st.worldDocumentOriginY;
+    BumpCadGpuCache(st);
+    char vbuf[256];
+    std::snprintf(vbuf, sizeof(vbuf),
+                  "Zoom extents applied in viewport — span %.6g x %.6g, scale %.6g model units/in, "
+                  "centre %.6g, %.6g skipped=%d.",
+                  mxX - mnX, mxY - mnY, static_cast<double>(vp->scaleModelPerPaperIn), vp->modelCenterX,
+                  vp->modelCenterY, skipped);
+    log.push_back(vbuf);
+    return;
+  }
+
   if (fbW <= 0 || fbH <= 0)
     return;
   if (st.pendingZoomExtents) {
@@ -20339,12 +20483,15 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
     double mxY = 0.;
     int skipped = 0;
     // REQ-120: what "extents" means depends on the space, mirroring where middle-drag pan already
-    // works (REQ-045). The space test is ActivePaperGeometryTarget's own rule — a paper layout AND
-    // not floating — so a sheet frames the sheet, while an activated viewport frames the model,
-    // which is what the user is actually editing through it.
+    // works (REQ-045). Reaching here means the view being navigated is the SHEET's — either paper
+    // space proper, or a floating viewport with the zoom lock ON, which says pan/zoom targets the
+    // sheet. The floating-and-unlocked case returned above (REQ-123); it is the only one whose
+    // camera is the viewport's rather than the window's.
+    //
+    // REQ-120 originally excluded floating model space from this branch and framed the MODEL extents
+    // into the SHEET camera instead — which is the defect issue #100 reports. Corrected here.
     const PaperLayout* sheet = nullptr;
-    if (st.activeSpaceIndex >= 0 && !InFloatingModelSpace(st) &&
-        static_cast<size_t>(st.activeSpaceIndex) < st.paperLayouts.size())
+    if (st.activeSpaceIndex >= 0 && static_cast<size_t>(st.activeSpaceIndex) < st.paperLayouts.size())
       sheet = &st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
 
     if (sheet) {
