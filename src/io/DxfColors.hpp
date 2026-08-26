@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstddef>
 
 /// AutoCAD 2020 model-space ACI palette (ezdxf DXF_DEFAULT_COLORS); index 1–255.
 uint32_t DxfRgbPackedFromAci(int aci);

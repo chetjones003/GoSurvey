@@ -97,6 +97,7 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.drawingLayerTable      = cmd.drawingLayerTable;
   doc.textStyles             = cmd.textStyles;
   doc.surfaceStyles          = cmd.surfaceStyles;
+  doc.dimensionStyle         = cmd.activeDimensionStyle;
   doc.activeTextStyleName    = cmd.activeTextStyleName;
   doc.pdfAttachments         = cmd.pdfAttachments;
   doc.selection              = cmd.selection;
@@ -158,6 +159,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.drawingLayerTable          = doc.drawingLayerTable;
   cmd.textStyles                 = doc.textStyles;
   cmd.surfaceStyles              = doc.surfaceStyles;
+  cmd.activeDimensionStyle       = doc.dimensionStyle;
   cmd.activeTextStyleName        = doc.activeTextStyleName;
   cmd.pdfAttachments             = doc.pdfAttachments;
   cmd.selection                  = doc.selection;
@@ -458,13 +460,54 @@ void TranslateSelectedViewports(AppCommandState& cmd, float dxIn, float dyIn, bo
 void StartPaperMoveCopyViewports(AppCommandState& cmd, bool copy, std::vector<std::string>& log) {
   // Operates on whatever is selected in paper space: viewports (REQ-035) and/or native geometry (REQ-037).
   if (cmd.selectedViewports.empty() && cmd.selectedPaperEntities.empty()) {
-    log.push_back(std::string(copy ? "COPY" : "MOVE") + " — select object(s) first.");
+    // REQ-307 (GitHub #106): nothing pre-selected — open a real selection step (click-or-box,
+    // accumulate until Enter, REQ-121-style pickbox/OSNAP/prompt treatment) rather than refusing.
+    // Pick-first stays the fast path when a selection already exists, above.
+    cmd.paperMoveWaitingSelection = true;
+    cmd.paperMoveIsCopy = copy;
+    log.push_back(std::string(copy ? "COPY" : "MOVE") +
+                  " — click objects or drag a selection window (Enter when done), then base point "
+                  "and destination. ESC cancels.");
     return;
   }
   cmd.active = AppCommandState::Kind::None;  // paper-space edit ops are not a model command
   cmd.paperMovePhase = 1;
   cmd.paperMoveIsCopy = copy;
   log.push_back(std::string(copy ? "COPY" : "MOVE") + " — click the base point (Esc to cancel).");
+}
+
+// REQ-307 (GitHub #106): Enter acting on the paper-space MOVE/COPY/DELETE selection step. A free
+// function rather than logic inlined at each caller so both the raw viewport Enter check (CadUi.cpp,
+// matching EXTEND's own precedent for a paper-space phase ProcessCommandLineSubmit's Kind-keyed
+// dispatch cannot reach, since these three never set cmd.active) and ProcessCommandLineSubmit's own
+// blank-Enter branch below call the identical logic — the latter is what gives this a headless
+// transcript path the raw-only EXTEND precedent does not have.
+void ProcessPaperMoveWaitingSelectionEnter(AppCommandState& st, std::vector<std::string>& log) {
+  if (!st.paperMoveWaitingSelection)
+    return;
+  if (st.selectedPaperEntities.empty() && st.selectedViewports.empty()) {
+    log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
+    return;
+  }
+  st.paperMoveWaitingSelection = false;
+  st.paperMovePhase = 1;
+  log.push_back(std::string(st.paperMoveIsCopy ? "COPY" : "MOVE") + " — click the base point (Esc to cancel).");
+}
+
+void ProcessPaperDeleteWaitingSelectionEnter(AppCommandState& st, std::vector<std::string>& log) {
+  if (!st.paperDeleteWaitingSelection)
+    return;
+  if (st.selectedPaperEntities.empty() && st.selectedViewports.empty()) {
+    log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
+    return;
+  }
+  const bool hadEntities = !st.selectedPaperEntities.empty();
+  const bool hadViewports = !st.selectedViewports.empty();
+  if (hadEntities)
+    DeleteSelectedPaperEntities(st, log);  // REQ-037
+  if (hadViewports)
+    DeleteSelectedViewports(st, log);      // REQ-035
+  st.paperDeleteWaitingSelection = false;
 }
 
 // --- Floating model space (REQ-036) ---
@@ -1296,6 +1339,7 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
   snap.drawingLayerTable    = st.drawingLayerTable;
   snap.textStyles           = st.textStyles;  // style edits are undoable (REQ-044)
   snap.surfaceStyles        = st.surfaceStyles;  // and surface-style edits (REQ-070)
+  snap.dimensionStyle       = st.activeDimensionStyle;  // dimension-style edits are undoable (issue #99)
   snap.pdfAttachments       = st.pdfAttachments;
   snap.paperLayouts         = st.paperLayouts;  // native paper geometry is undoable (REQ-037/038)
   // Zero GL texture IDs: restored snapshots must not reference freed GPU resources.
@@ -1339,6 +1383,7 @@ static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySn
   st.drawingLayerTable    = snap.drawingLayerTable;
   st.textStyles           = snap.textStyles;
   st.surfaceStyles        = snap.surfaceStyles;
+  st.activeDimensionStyle = snap.dimensionStyle;
   st.pdfAttachments       = snap.pdfAttachments;
   st.paperLayouts         = snap.paperLayouts;
   st.selectedPaperEntities.clear();  // restored layouts invalidate paper-entity indices
@@ -3438,7 +3483,9 @@ static float CadAngNormalizeMinusPiToPi(float a) {
   return a;
 }
 
-static bool CadDimAngularComputeFrame(const CadAnnotation& a, float* a1Out, float* a2Out, float* sweepOut, float* bisx,
+} // namespace
+
+bool CadDimAngularComputeFrame(const CadAnnotation& a, float* a1Out, float* a2Out, float* sweepOut, float* bisx,
                                       float* bisy, float* thetaInterior) {
   if (a.kind != CadAnnotation::Kind::DimAngular)
     return false;
@@ -3482,6 +3529,8 @@ static bool CadDimAngularComputeFrame(const CadAnnotation& a, float* a1Out, floa
   *thetaInterior = theta;
   return theta > 1.e-7f;
 }
+
+namespace {
 
 static float CadDimAngularPickRadius(float vx, float vy, float bisx, float bisy, float pickx, float picky, float rMin,
                                      float rMax) {
@@ -3692,8 +3741,9 @@ bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cu
   d.dimExt2X = x2;
   d.dimExt2Y = y2;
   d.dimSignedOffset = dOff;
-  d.plottedHeightInches = std::max(st.defaultPlottedTextHeightInches * 0.85f, 1.e-6f);
-  d.text = FormatLinear(static_cast<double>(len), st.displayLinearPrecision);
+  d.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
+  d.fontFamily = st.activeDimensionStyle.textFont;
+  d.text = DimensionStyles::FormatLinearDim(static_cast<double>(len), st.activeDimensionStyle);
   d.rotationRad = std::atan2(vy, vx);
   const float hWorld = CadAnnotationHeightWorld(d, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &d.insX, &d.insY);
@@ -3780,8 +3830,9 @@ bool CadDimLinearBuildDraft(AppCommandState& st, float cursorWx, float cursorWy,
   d.dimExt2Y = y2;
   d.dimSignedOffset = dOff;
   d.dimLinearVertical = vert;
-  d.plottedHeightInches = std::max(st.defaultPlottedTextHeightInches * 0.85f, 1.e-6f);
-  d.text = FormatLinear(static_cast<double>(meas), st.displayLinearPrecision);
+  d.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
+  d.fontFamily = st.activeDimensionStyle.textFont;
+  d.text = DimensionStyles::FormatLinearDim(static_cast<double>(meas), st.activeDimensionStyle);
   float tx = 0.f, ty = 0.f;
   if (!vert) {
     tx = (x2 >= x1) ? 1.f : -1.f;
@@ -3864,7 +3915,11 @@ void CadDimRefreshMeasurementText(CadAnnotation* ann, int linearPrecision, const
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (!CadDimAnyGeometry(*ann, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
       return;
-    ann->text = FormatLinear(static_cast<double>(ml), linearPrecision);
+    {
+      DimensionStyle tmp = DimensionStyles::Default();
+      tmp.unitPrecision = linearPrecision;
+      ann->text = DimensionStyles::FormatLinearDim(static_cast<double>(ml), tmp);
+    }
   } else if (ann->kind == CadAnnotation::Kind::DimAngular) {
     float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
     if (!CadDimAngularComputeFrame(*ann, &a1, &a2, &sweep, &bisx, &bisy, &theta))
@@ -3913,7 +3968,8 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
   const float rMin = std::max(1.e-4f, 0.02f * leg);
   const float R = CadDimAngularPickRadius(vx, vy, bisx, bisy, cursorWx, cursorWy, rMin, rMax);
   d.dimSignedOffset = R;
-  d.plottedHeightInches = std::max(st.defaultPlottedTextHeightInches * 0.85f, 1.e-6f);
+  d.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
+  d.fontFamily = st.activeDimensionStyle.textFont;
   d.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(st));
   CadDimAngularSyncTextPlacement(&d, st.modelUnitsPerPlottedInch);
   *out = std::move(d);
@@ -4236,6 +4292,7 @@ const CmdEntry kRegistry[] = {
     {"dimaligned", "dal", "Aligned dimension"},
     {"dimlinear", "dli", "Linear dimension"},
     {"dimangular", "dan", "Angular dimension"},
+    {"dimsty", "dimstyle, dsty", "Dimension style editor"},
     {"id", "", "Identify point coordinates"},
     {"inverse", "inv", "Inverse between two points"},
     {"surfelev", "se", "Surface elevation at a point; grade between two"},
@@ -4526,7 +4583,8 @@ static void CommitDimAngularAt(AppCommandState& st, float wx, float wy, std::vec
   const float rMin = std::max(1.e-4f, 0.02f * leg);
   const float R = CadDimAngularPickRadius(vx, vy, bisx, bisy, wx, wy, rMin, rMax);
   d.dimSignedOffset = R;
-  d.plottedHeightInches = st.defaultPlottedTextHeightInches * 0.85f;
+  d.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
+  d.fontFamily = st.activeDimensionStyle.textFont;
   d.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(st));
   CadDimAngularSyncTextPlacement(&d, st.modelUnitsPerPlottedInch);
   EntityAttributes at = MakeNewEntityAttrs(st);
@@ -4558,12 +4616,21 @@ void CommitCircle(AppCommandState& st, float cx, float cy, float r, std::vector<
     return;
   }
   PushUndoSnapshot(st, "Circle");
-  st.userCirclesCxCyZR.push_back(cx);
-  st.userCirclesCxCyZR.push_back(cy);
-  // A new circle lands on the active work plane (REQ-058) — the ELEV command moves it.
-  st.userCirclesCxCyZR.push_back(CadCommitElevation(st));
-  st.userCirclesCxCyZR.push_back(r);
-  st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
+  if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
+    // Paper-space CIRCLE (REQ-039): centre + radius are paper inches; commit to the layout's
+    // paper store, matching the shape CommitPolylineDraft uses for POLYLINE (issue #84/#86).
+    L->paperCircles.push_back(cx);
+    L->paperCircles.push_back(cy);
+    L->paperCircles.push_back(r);
+    L->paperCircleAttrs.push_back(MakeNewEntityAttrs(st));
+  } else {
+    st.userCirclesCxCyZR.push_back(cx);
+    st.userCirclesCxCyZR.push_back(cy);
+    // A new circle lands on the active work plane (REQ-058) — the ELEV command moves it.
+    st.userCirclesCxCyZR.push_back(CadCommitElevation(st));
+    st.userCirclesCxCyZR.push_back(r);
+    st.userCircleAttrs.push_back(MakeNewEntityAttrs(st));
+  }
   BumpCadGpuCache(st);
   ResetCircleDraft(st);
   log.push_back("Circle complete.");
@@ -4654,6 +4721,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "dimangular") {
     StartDimAngularCommand(st, log);
+    return true;
+  }
+  if (primary == "dimsty" || primary == "dimstyle" || primary == "dsty") {
+    StartDimStyleCommand(st, log);
     return true;
   }
   if (primary == "id") {
@@ -6326,11 +6397,11 @@ static void DropMirrorUnsupportedFromSelection(AppCommandState& st, std::vector<
                   " orientation cannot represent a reflection yet.");
 }
 
-/// REQ-304 ARRAY. Unlike MIRROR, ARRAY's duplication path (\c DuplicateCadSelectionTranslated /
+/// REQ-305 ARRAY. Unlike MIRROR, ARRAY's duplication path (\c DuplicateCadSelectionTranslated /
 /// \c DuplicateCadSelectionRotated) already handles \c FilledRegion, so that type is NOT dropped
 /// here. Drops \c Mesh / \c PdfUnderlay for the same reasons \c DropMirrorUnsupportedFromSelection
 /// does (reference-only / no representable duplicate), calls the existing
-/// \c DropSurfacesFromSelectionForTransform for \c Surface, and — the D-2026-08-25-k decision —
+/// \c DropSurfacesFromSelectionForTransform for \c Surface, and — the D-2026-08-25-m decision —
 /// drops survey points: duplicating them needs an ID-conflict policy (the existing COPY/ROTATE-copy
 /// modal), and that modal resolves a single offset/rotation, not N array instances at once, so
 /// survey points are excluded rather than silently mis-duplicated or given a policy they were never
@@ -7588,7 +7659,7 @@ bool HandleRotateText(AppCommandState& st, const std::string& lineIn, std::vecto
   return false;
 }
 
-// REQ-304 ARRAY -------------------------------------------------------------------------------
+// REQ-305 ARRAY -------------------------------------------------------------------------------
 
 static void ResetArrayDraft(AppCommandState& st) {
   using AP = AppCommandState::ArrayPhase;
@@ -7614,7 +7685,7 @@ static void FinishArrayCommand(AppCommandState& st, std::vector<std::string>& lo
 
 /// Rectangular commit: the original selection occupies cell (0,0); every other cell is produced by
 /// looping the EXISTING \c DuplicateCadSelectionTranslated (already used by COPY) — no new
-/// per-type duplication code. One \c PushUndoSnapshot for the whole grid (REQ-304 acceptance 8).
+/// per-type duplication code. One \c PushUndoSnapshot for the whole grid (REQ-305 acceptance 8).
 static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>& log) {
   const int cols = std::max(st.arrayCols, 1);
   const int rows = std::max(st.arrayRows, 1);
@@ -7622,7 +7693,7 @@ static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>
   for (int r = 0; r < rows; ++r) {
     for (int c = 0; c < cols; ++c) {
       if (r == 0 && c == 0)
-        continue;  // the original selection IS cell (0,0) — REQ-304 acceptance 3
+        continue;  // the original selection IS cell (0,0) — REQ-305 acceptance 3
       DuplicateCadSelectionTranslated(st, static_cast<float>(c) * st.arrayColSpacing,
                                       static_cast<float>(r) * st.arrayRowSpacing);
     }
@@ -7638,11 +7709,11 @@ static void CommitArrayRectangular(AppCommandState& st, std::vector<std::string>
 /// (\c ComputeSelectionCentroidWorld, already used by ROTATE's reference path) as a single rigid-
 /// body anchor, rotating THAT ONE POINT about the center, and translating the whole selection by the
 /// resulting delta — so this reuses \c DuplicateCadSelectionTranslated too, with zero new per-type
-/// rotation-suppression logic (TASK-109 ASSUMPTION-2).
+/// rotation-suppression logic (TASK-111 ASSUMPTION-2).
 static void CommitArrayPolar(AppCommandState& st, std::vector<std::string>& log) {
   constexpr float kTwoPi = 6.28318530717958647692f;
   const int n = std::max(st.arrayItemCount, 1);
-  // Full-turn fill angles divide by N (no duplicate instance at 0==360, REQ-304 acceptance 4);
+  // Full-turn fill angles divide by N (no duplicate instance at 0==360, REQ-305 acceptance 4);
   // a partial arc divides by N-1 so the first and last instances land exactly at the two ends.
   const bool fullTurn = std::fabs(std::fmod(st.arrayFillAngleDeg, 360.f)) < 1e-3f && n > 0;
   const float fillRad = st.arrayFillAngleDeg * (kTwoPi / 360.f);
@@ -7822,10 +7893,18 @@ static void CommitArcThreePoints(AppCommandState& st, float ax, float ay, float 
   arc.r = r;
   arc.startRad = static_cast<float>(sr);
   arc.sweepRad = static_cast<float>(sw);
-  arc.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
   PushUndoSnapshot(st, "Arc");
-  st.userArcs.push_back(arc);
-  st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+  if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
+    // Paper-space ARC (REQ-039): the three points are paper inches; commit to the layout's paper
+    // store. arc.z stays 0 (ADR-025 (g): always 0 in paper space), matching the shape
+    // CommitPolylineDraft uses for POLYLINE (issue #84/#86).
+    L->paperArcs.push_back(arc);
+    L->paperArcAttrs.push_back(MakeNewEntityAttrs(st));
+  } else {
+    arc.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
+    st.userArcs.push_back(arc);
+    st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
+  }
   BumpCadGpuCache(st);
   st.active = AppCommandState::Kind::None;
   ResetArcDraft(st);
@@ -7857,8 +7936,6 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   const float dmx = 0.5f * (sx1 + sx2);
   const float dmy = 0.5f * (sy1 + sy2);
   const float dOff = (dmx - cmx) * n0x + (dmy - cmy) * n0y;
-  char buf[96];
-  std::snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(len));
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimAligned;
   ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
@@ -7867,9 +7944,10 @@ static void CommitDimAlignedAt(AppCommandState& st, float lx, float ly, std::vec
   ann.dimExt2X = x2;
   ann.dimExt2Y = y2;
   ann.dimSignedOffset = dOff;
-  ann.plottedHeightInches = st.defaultPlottedTextHeightInches * 0.85f;
+  ann.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
+  ann.fontFamily = st.activeDimensionStyle.textFont;
   ann.rotationRad = std::atan2(vy, vx);
-  ann.text = buf;
+  ann.text = DimensionStyles::FormatLinearDim(static_cast<double>(len), st.activeDimensionStyle);
   const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
   EntityAttributes at = MakeNewEntityAttrs(st);
@@ -7910,8 +7988,6 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
     n0x = 1.f;
     n0y = 0.f;
   }
-  char buf[96];
-  std::snprintf(buf, sizeof(buf), "%.4f", static_cast<double>(meas));
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::DimLinear;
   ann.insZ = CadCommitElevation(st);  // lands on the active work plane (REQ-058), as TEXT does
@@ -7921,7 +7997,8 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
   ann.dimExt2Y = y2;
   ann.dimSignedOffset = dOff;
   ann.dimLinearVertical = vert;
-  ann.plottedHeightInches = st.defaultPlottedTextHeightInches * 0.85f;
+  ann.plottedHeightInches = std::max(st.activeDimensionStyle.textSizeInches, 1.e-6f);
+  ann.fontFamily = st.activeDimensionStyle.textFont;
   float tx = 0.f, ty = 0.f;
   if (!vert) {
     tx = (x2 >= x1) ? 1.f : -1.f;
@@ -7931,7 +8008,7 @@ static void CommitDimLinearAt(AppCommandState& st, float lx, float ly, std::vect
     ty = (y2 >= y1) ? 1.f : -1.f;
   }
   ann.rotationRad = std::atan2(ty, tx);
-  ann.text = buf;
+  ann.text = DimensionStyles::FormatLinearDim(static_cast<double>(meas), st.activeDimensionStyle);
   const float hWorld = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
   CadDimAlignedPlaceTextBeyondDimLine(cmx, cmy, dmx, dmy, n0x, n0y, hWorld, &ann.insX, &ann.insY);
   EntityAttributes at = MakeNewEntityAttrs(st);
@@ -8709,13 +8786,11 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
   // null camera keeps the historical world-rect test byte-for-byte (REQ-058).
   const Camera boxSelCamValue = CadViewCamera(st);
   const Camera* const boxSelCam = CadViewIsPlan(st) ? nullptr : &boxSelCamValue;
-  const Camera* const boxSelCam2 = boxSelCam;
-  const Camera* const boxSelCam3 = boxSelCam;
   auto finishBox = [&]() {
     const bool inclSurvey = (st.active == AppCommandState::Kind::None || st.active == K::Move ||
                              st.active == K::Copy || st.active == K::Rotate || st.active == K::Scale ||
                              st.active == K::Mirror || st.active == K::Align || st.active == K::Stretch ||
-                             // REQ-304: included so DropArrayUnsupportedFromSelection can log the
+                             // REQ-305: included so DropArrayUnsupportedFromSelection can log the
                              // exclusion by name (REQ-201) rather than silently never selecting them.
                              st.active == K::Array);
     ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, wx, wy, windowSelectionSubtract,
@@ -9067,37 +9142,18 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
-  if (st.active == K::Join) {
-    if (st.selBoxWaitingSecond) {
-      ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, wx, wy, windowSelectionSubtract,
-                               fenceLeftToRightWindowMode, false, boxSelCam2, st.uiViewportWidthPx,
-                               st.uiViewportHeightPx);
-      st.selBoxWaitingSecond = false;
-      if (st.selection.empty())
-        log.push_back("Nothing selected — pick two corners again.");
-      else {
-        ExecuteJoinSelection(st, log);
-        st.active = K::None;
-        ResetModifyRotateDraft(st);
-      }
-    }
-    return;
-  }
-
-  if (st.active == K::Delete) {
-    if (st.selBoxWaitingSecond) {
-      ComputeSelectionFromRect(st, st.selBoxAnchorX, st.selBoxAnchorY, wx, wy, windowSelectionSubtract,
-                               fenceLeftToRightWindowMode, false, boxSelCam3, st.uiViewportWidthPx,
-                               st.uiViewportHeightPx);
-      st.selBoxWaitingSecond = false;
-      if (st.selection.empty())
-        log.push_back("Nothing selected — pick two corners again.");
-      else {
-        ExecuteDeleteSelection(st, log);
-        st.active = K::None;
-        ResetModifyRotateDraft(st);
-      }
-    }
+  if (st.active == K::Join || st.active == K::Delete) {
+    // REQ-121 (GitHub #91 review, D-2026-08-26-d): a finished box now MERGES into the accumulating
+    // selection and the command stays put, exactly as MOVE/COPY's PickSelection does below. It no
+    // longer executes here — `ProcessCommandLineSubmit`'s Enter branch is what acts on the
+    // selection, which is what makes the shared "Select objects, ENTER to continue" prompt true for
+    // these two. Clicks that land on an entity never reach here at all; they are accumulated by
+    // `ViewportClickRoute::SelectionAccumulate` in CadUi.
+    //
+    // `finishBox` computes `inclSurvey` false for both, which is the survey-point behaviour the
+    // two-corner box already had — deliberately unchanged here.
+    if (st.selBoxWaitingSecond)
+      finishBox();
     return;
   }
 
@@ -9135,7 +9191,7 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     return;
   }
 
-  // REQ-304 ARRAY. PickSelection is the click-or-window-select shape MOVE/COPY share (this fix); the
+  // REQ-305 ARRAY. PickSelection is the click-or-window-select shape MOVE/COPY share (this fix); the
   // interactive spatial phases (column/row spacing, polar center, fill angle) read the click the
   // same way OFFSET's distance-or-click and ROTATE's angle-by-point do. Typed-only phases (WaitType,
   // the two counts, rotate Yes/No) have no branch here — \c ViewportClickRouteFor routes them to
@@ -14202,7 +14258,32 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
   }
 }
 
-bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY, double* outMxY) {
+namespace {
+
+// REQ-123 (GitHub #100). "Visible through this viewport" means the same thing here as it does to
+// the viewport renderer and to the plotter: an entity whose layer is frozen in the viewport is not
+// there. Both of those read a MISSING attribute entry as the default — layer "0" — rather than as
+// "no layer", so this does too; otherwise freezing layer "0" would hide geometry on screen and
+// still drag the extents out to it.
+//
+// A null p vp means no filter at all, which is every caller but the floating-viewport one.
+[[nodiscard]] bool EntityHiddenInViewport(const Viewport* vp, const std::vector<EntityAttributes>& attrs,
+                                          size_t idx) {
+  if (!vp)
+    return false;
+  static const EntityAttributes kDef{};
+  const EntityAttributes& a = idx < attrs.size() ? attrs[idx] : kDef;
+  return IsLayerFrozenInViewport(*vp, a.layer);
+}
+
+[[nodiscard]] bool LayerHiddenInViewport(const Viewport* vp, const std::string& layer) {
+  return vp && IsLayerFrozenInViewport(*vp, layer);
+}
+
+}  // namespace
+
+bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY, double* outMxY,
+                         const Viewport* vpFilter) {
   bool any = false;
   double mnX = 0.;
   double mxX = 0.;
@@ -14213,6 +14294,8 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   const auto& L = st.userLinesFlat;
   if (L.size() % 6 == 0) {
     for (size_t i = 0; i + 5 < L.size(); i += 6) {
+      if (EntityHiddenInViewport(vpFilter, st.userLineAttrs, i / 6))
+        continue;
       consider(static_cast<double>(L[i]), static_cast<double>(L[i + 1]));
       consider(static_cast<double>(L[i + 3]), static_cast<double>(L[i + 4]));
     }
@@ -14220,6 +14303,8 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   const auto& C = st.userCirclesCxCyZR;
   if (C.size() % 4 == 0) {
     for (size_t ci = 0; ci + 3 < C.size(); ci += 4) {
+      if (EntityHiddenInViewport(vpFilter, st.userCircleAttrs, ci / 4))
+        continue;
       const double cx = static_cast<double>(C[ci]);
       const double cy = static_cast<double>(C[ci + 1]);
       const double r = std::fabs(static_cast<double>(C[ci + 3]));
@@ -14231,10 +14316,16 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
       consider(cx + r, cy + r);
     }
   }
-  for (const SurveyPoint& p : st.surveyPoints)
+  for (const SurveyPoint& p : st.surveyPoints) {
+    if (LayerHiddenInViewport(vpFilter, p.layer))
+      continue;
     consider(static_cast<double>(p.easting), static_cast<double>(p.northing));
+  }
 
-  for (const CadAnnotation& a : st.cadAnnotations) {
+  for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
+    if (EntityHiddenInViewport(vpFilter, st.cadAnnotationAttrs, ai))
+      continue;
+    const CadAnnotation& a = st.cadAnnotations[ai];
     float amnX = 0.f;
     float amnY = 0.f;
     float amxX = 0.f;
@@ -14244,7 +14335,10 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     consider(static_cast<double>(amxX), static_cast<double>(amxY));
   }
 
-  for (const CadArc& a : st.userArcs) {
+  for (size_t arcIx = 0; arcIx < st.userArcs.size(); ++arcIx) {
+    if (EntityHiddenInViewport(vpFilter, st.userArcAttrs, arcIx))
+      continue;
+    const CadArc& a = st.userArcs[arcIx];
     const double dcx = static_cast<double>(a.cx);
     const double dcy = static_cast<double>(a.cy);
     const double dr = std::fabs(static_cast<double>(a.r));
@@ -14261,7 +14355,10 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     }
   }
 
-  for (const CadEllipse& el : st.userEllipses) {
+  for (size_t elIx = 0; elIx < st.userEllipses.size(); ++elIx) {
+    if (EntityHiddenInViewport(vpFilter, st.userEllAttrs, elIx))
+      continue;
+    const CadEllipse& el = st.userEllipses[elIx];
     const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
     if (ma < 1e-12)
       continue;
@@ -14286,6 +14383,8 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   const auto& PO = st.userPolylineOffsets;
   if (PO.size() >= 2) {
     for (size_t pi = 0; pi + 1 < PO.size(); ++pi) {
+      if (EntityHiddenInViewport(vpFilter, st.userPolylineAttrs, pi))
+        continue;
       const int v0 = PO[pi];
       const int v1 = PO[pi + 1];
       for (int vi = v0; vi < v1; ++vi) {
@@ -14302,6 +14401,8 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     const auto& FV = st.featureLineVerts;
     const auto& FO = st.featureLineOffsets;
     for (size_t fi = 0; fi + 1 < FO.size(); ++fi) {
+      if (EntityHiddenInViewport(vpFilter, st.featureLineAttrs, fi))
+        continue;
       const int v0 = FO[fi];
       const int v1 = FO[fi + 1];
       for (int vi = v0; vi < v1; ++vi) {
@@ -14313,13 +14414,20 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     }
   }
 
-  for (const CadFilledRegion& fr : st.cadFilledRegions)
+  for (size_t fri = 0; fri < st.cadFilledRegions.size(); ++fri) {
+    if (EntityHiddenInViewport(vpFilter, st.cadFilledRegionAttrs, fri))
+      continue;
+    const CadFilledRegion& fr = st.cadFilledRegions[fri];
     for (size_t i = 0; i + 2 < fr.vertsXyz.size(); i += 3)
       consider(static_cast<double>(fr.vertsXyz[i]), static_cast<double>(fr.vertsXyz[i + 1]));
+  }
 
   // Meshes (REQ-063). Their precomputed bounds, not their vertices: this path runs for small
   // drawings, and "small" counts entities — one mesh can still hold two million triangles.
-  for (const auto& mp : st.cadMeshes) {
+  for (size_t mi = 0; mi < st.cadMeshes.size(); ++mi) {
+    if (EntityHiddenInViewport(vpFilter, st.cadMeshAttrs, mi))
+      continue;
+    const auto& mp = st.cadMeshes[mi];
     if (!mp)
       continue;
     const meshgeom::Bounds mb = meshgeom::ComputeBounds(mp->vertsXyz);
@@ -14332,7 +14440,10 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
   // TIN surfaces (REQ-068: "surfaces are included in zoom-extents and in the drawing's bounding
   // box"). Their bounds, not their vertices, for the same reason meshes use theirs above — a single
   // surface can hold 200k triangles.
-  for (const CadSurface& s : st.cadSurfaces) {
+  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+    if (EntityHiddenInViewport(vpFilter, st.cadSurfaceAttrs, si))
+      continue;
+    const CadSurface& s = st.cadSurfaces[si];
     if (!s.tin)
       continue;
     const meshgeom::Bounds sb = meshgeom::ComputeBounds(s.tin->vertsXyz);
@@ -14372,10 +14483,14 @@ struct EntityBox {
   return v[k];
 }
 
-void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) {
+// \p vpFilter as on ComputeWorldExtents (REQ-123): both sweeps must agree, or the robust path and
+// the small-drawing path would answer differently for the same viewport.
+void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, const Viewport* vpFilter) {
   const auto& L = st.userLinesFlat;
   if (L.size() % 6 == 0) {
     for (size_t i = 0; i + 5 < L.size(); i += 6) {
+      if (EntityHiddenInViewport(vpFilter, st.userLineAttrs, i / 6))
+        continue;
       EntityBox b{};
       b.mnX = std::min(static_cast<double>(L[i]), static_cast<double>(L[i + 3]));
       b.mxX = std::max(static_cast<double>(L[i]), static_cast<double>(L[i + 3]));
@@ -14389,6 +14504,8 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
   const auto& C = st.userCirclesCxCyZR;
   if (C.size() % 4 == 0) {
     for (size_t ci = 0; ci + 3 < C.size(); ci += 4) {
+      if (EntityHiddenInViewport(vpFilter, st.userCircleAttrs, ci / 4))
+        continue;
       const double cx = static_cast<double>(C[ci]);
       const double cy = static_cast<double>(C[ci + 1]);
       const double r = std::fabs(static_cast<double>(C[ci + 3]));
@@ -14405,12 +14522,17 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
     }
   }
   for (const SurveyPoint& p : st.surveyPoints) {
+    if (LayerHiddenInViewport(vpFilter, p.layer))
+      continue;
     EntityBox b{};
     b.mnX = b.mxX = b.cx = static_cast<double>(p.easting);
     b.mnY = b.mxY = b.cy = static_cast<double>(p.northing);
     out.push_back(b);
   }
-  for (const CadAnnotation& a : st.cadAnnotations) {
+  for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
+    if (EntityHiddenInViewport(vpFilter, st.cadAnnotationAttrs, ai))
+      continue;
+    const CadAnnotation& a = st.cadAnnotations[ai];
     float amnX = 0.f;
     float amnY = 0.f;
     float amxX = 0.f;
@@ -14425,7 +14547,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
   }
-  for (const CadArc& a : st.userArcs) {
+  for (size_t arcIx = 0; arcIx < st.userArcs.size(); ++arcIx) {
+    if (EntityHiddenInViewport(vpFilter, st.userArcAttrs, arcIx))
+      continue;
+    const CadArc& a = st.userArcs[arcIx];
     const double dr = std::fabs(static_cast<double>(a.r));
     if (dr <= 1e-12)
       continue;
@@ -14438,7 +14563,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
     b.cy = static_cast<double>(a.cy);
     out.push_back(b);
   }
-  for (const CadEllipse& el : st.userEllipses) {
+  for (size_t elIx = 0; elIx < st.userEllipses.size(); ++elIx) {
+    if (EntityHiddenInViewport(vpFilter, st.userEllAttrs, elIx))
+      continue;
+    const CadEllipse& el = st.userEllipses[elIx];
     const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
     if (ma < 1e-12)
       continue;
@@ -14457,6 +14585,8 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
   const auto& PO = st.userPolylineOffsets;
   if (PO.size() >= 2) {
     for (size_t pi = 0; pi + 1 < PO.size(); ++pi) {
+      if (EntityHiddenInViewport(vpFilter, st.userPolylineAttrs, pi))
+        continue;
       const int v0 = PO[pi];
       const int v1 = PO[pi + 1];
       if (v1 <= v0)
@@ -14491,6 +14621,8 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
   const auto& FV = st.featureLineVerts;
   if (FO.size() >= 2) {
     for (size_t fi = 0; fi + 1 < FO.size(); ++fi) {
+      if (EntityHiddenInViewport(vpFilter, st.featureLineAttrs, fi))
+        continue;
       const int v0 = FO[fi];
       const int v1 = FO[fi + 1];
       if (v1 <= v0)
@@ -14525,7 +14657,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
   // box"). One box per mesh rather than per triangle — the extents pass is an outlier-trimmed
   // statistic over ENTITIES, and feeding it two million triangles would both swamp that statistic
   // and make ZE cost a full mesh walk per invocation.
-  for (const auto& mp : st.cadMeshes) {
+  for (size_t mi = 0; mi < st.cadMeshes.size(); ++mi) {
+    if (EntityHiddenInViewport(vpFilter, st.cadMeshAttrs, mi))
+      continue;
+    const auto& mp = st.cadMeshes[mi];
     if (!mp)
       continue;
     const meshgeom::Bounds mb = meshgeom::ComputeBounds(mp->vertsXyz);
@@ -14542,7 +14677,10 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
   }
 
   // TIN surfaces (REQ-068), one box per surface — same reasoning as the meshes above.
-  for (const CadSurface& s : st.cadSurfaces) {
+  for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+    if (EntityHiddenInViewport(vpFilter, st.cadSurfaceAttrs, si))
+      continue;
+    const CadSurface& s = st.cadSurfaces[si];
     if (!s.tin)
       continue;
     const meshgeom::Bounds sb = meshgeom::ComputeBounds(s.tin->vertsXyz);
@@ -14562,17 +14700,17 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out) 
 } // namespace
 
 bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY,
-                               double* outMxY, int* outSkipped) {
+                               double* outMxY, int* outSkipped, const Viewport* vpFilter) {
   if (outSkipped)
     *outSkipped = 0;
   std::vector<EntityBox> ents;
   ents.reserve(st.userLinesFlat.size() / 6 + st.userCirclesCxCyZR.size() / 4 + st.userArcs.size() +
                st.userEllipses.size() + st.cadAnnotations.size() + st.surveyPoints.size() +
                (st.userPolylineOffsets.empty() ? 0 : st.userPolylineOffsets.size() - 1));
-  CollectEntityBoxes(st, ents);
+  CollectEntityBoxes(st, ents, vpFilter);
 
   if (ents.size() < 16)
-    return ComputeWorldExtents(st, outMnX, outMxX, outMnY, outMxY);
+    return ComputeWorldExtents(st, outMnX, outMxX, outMnY, outMxY, vpFilter);
 
   std::vector<double> xs;
   std::vector<double> ys;
@@ -14626,7 +14764,7 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
   }
 
   if (!any)
-    return ComputeWorldExtents(st, outMnX, outMxX, outMnY, outMxY);
+    return ComputeWorldExtents(st, outMnX, outMxX, outMnY, outMxY, vpFilter);
 
   *outMnX = mnX;
   *outMxX = mxX;
@@ -14635,39 +14773,6 @@ bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double
   if (outSkipped)
     *outSkipped = skipped;
   return true;
-}
-
-void ApplyViewportZoomToWorldRect(double mnX, double mxX, double mnY, double mxY, double* panX, double* panY,
-                                  float* zoom, int fbW, int fbH, float viewportAspect) {
-  (void)fbW;
-  (void)fbH;
-  const float aspect = std::max(viewportAspect, 1e-6f);
-  constexpr float kMargin = 0.08f;
-  constexpr double kMinSpan = 1e-5;
-  double dmnX = mnX;
-  double dmxX = mxX;
-  double dmnY = mnY;
-  double dmxY = mxY;
-  double rw = dmxX - dmnX;
-  double rh = dmxY - dmnY;
-  if (rw < kMinSpan) {
-    dmnX -= kMinSpan;
-    dmxX += kMinSpan;
-    rw = dmxX - dmnX;
-  }
-  if (rh < kMinSpan) {
-    dmnY -= kMinSpan;
-    dmxY += kMinSpan;
-    rh = dmxY - dmnY;
-  }
-  const double cx = 0.5 * (dmnX + dmxX);
-  const double cy = 0.5 * (dmnY + dmxY);
-  const double denom = 2.0 * (1.0 - static_cast<double>(kMargin));
-  const double needHalfH = std::max(rh / denom, rw / (static_cast<double>(aspect) * denom));
-  constexpr float kOrthoHalfHRef = 50.f;
-  *panX = cx;
-  *panY = cy;
-  *zoom = std::clamp(kOrthoHalfHRef / static_cast<float>(std::max(needHalfH, 1e-8)), 1.e-9f, 1.e9f);
 }
 
 bool ParseAngleDegrees(const std::string& raw, float* degreesOut) {
@@ -14963,7 +15068,8 @@ void StartPolylineCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.selBoxWaitingSecond = false;
   st.active = AppCommandState::Kind::Polyline;
   st.polylinePhase = AppCommandState::PolylinePhase::NeedFirstPoint;
-  log.push_back("POLYLINE — like LINE (A / 2P bearing lock); CLOSE/CL; ortho; ESC cancels.");
+  log.push_back("POLYLINE — click points; click the FIRST point to close, Enter to finish open. "
+                "(CLOSE/CL, END still work.) A / 2P bearing lock; ortho; ESC cancels.");
 }
 
 void StartFeatureLineCommand(AppCommandState& st, const std::string& name, std::vector<std::string>& log) {
@@ -15444,7 +15550,8 @@ void StartPolyline3dCommand(AppCommandState& st, std::vector<std::string>& log) 
   log.pop_back();  // replace POLYLINE's prompt rather than printing both
   st.polylineDraft3d = true;
   log.push_back("3DPOLY — vertices carry their own elevation: type X,Y,Z (or @dx,dy,dz), or snap. "
-                "X,Y alone uses the snapped point's elevation, else ELEV. CLOSE/CL, END, ESC cancels.");
+                "X,Y alone uses the snapped point's elevation, else ELEV. Click the FIRST point to "
+                "close, Enter to finish open. (CLOSE/CL, END still work.) ESC cancels.");
 }
 
 void StartArcCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -15726,6 +15833,12 @@ void StartDimAngularCommand(AppCommandState& st, std::vector<std::string>& log) 
   st.dimAngularPhase = AppCommandState::DimAngularPhase::WaitVertex;
   log.push_back("DIMANGULAR — vertex, two ray points, then arc position (radius). Text is degrees/minutes/seconds. ESC "
                 "cancels.");
+}
+
+void StartDimStyleCommand(AppCommandState& st, std::vector<std::string>& log) {
+  st.dimStyleDraft = st.activeDimensionStyle;
+  st.showDimStyleDialog = true;
+  log.push_back("DIMSTY — dimension style editor opened.");
 }
 
 void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -16649,7 +16762,7 @@ void ClearCadGeometry(AppCommandState& st) {
 }
 
 void ClearPendingOneShotObjectSnap(AppCommandState& st) {
-  st.pendingOneShotSnapValid = false;
+  st.objectSnapKindOverrideValid = false;
 }
 
 void ResetCadToolStateToIdle(AppCommandState& st) {
@@ -19567,7 +19680,8 @@ void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   st.active = AppCommandState::Kind::Join;
   st.selBoxWaitingSecond = false;
-  log.push_back("JOIN — window-select lines/polylines that meet at endpoints. ESC cancels.");
+  log.push_back("JOIN — click objects or drag a selection window (Enter when done) to join lines/"
+                "polylines that meet at endpoints. ESC cancels.");
 }
 
 void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -20084,8 +20198,13 @@ void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
       DeleteSelectedPaperEntities(st, log);  // REQ-037
     if (hadViewports)
       DeleteSelectedViewports(st, log);  // REQ-035
-    if (!hadEntities && !hadViewports)
-      log.push_back("DELETE — select paper object(s) or viewport(s) first.");
+    if (!hadEntities && !hadViewports) {
+      // REQ-307 (GitHub #106): nothing pre-selected — open a real selection step instead of
+      // refusing, mirroring model-space DELETE's own accumulate-until-Enter shape (REQ-121).
+      st.paperDeleteWaitingSelection = true;
+      log.push_back("DELETE — click objects or drag a selection window (Enter when done) to erase them. "
+                    "ESC cancels.");
+    }
     return;
   }
   ClearPendingViewportZoom(st);
@@ -20106,7 +20225,10 @@ void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
   st.active = AppCommandState::Kind::Delete;
   st.selBoxWaitingSecond = false;
-  log.push_back("DELETE — click two corners to window-select objects to erase. ESC cancels.");
+  // Wording matches the siblings above (D-2026-08-26-d): DELETE accumulates and Enter is what
+  // erases, so a message describing a two-click box would now be as wrong as the old prompt was.
+  log.push_back("DELETE — click objects or drag a selection window (Enter when done) to erase them. "
+                "ESC cancels.");
 }
 
 void StartZoomExtentsCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -20361,6 +20483,68 @@ void StartVpThawCommand(AppCommandState& st, std::vector<std::string>& log) { St
 
 void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY, float* zoom, int fbW, int fbH,
                                 float viewportAspect, std::vector<std::string>& log) {
+  // REQ-123 (GitHub #100): ZOOM EXTENTS through an ACTIVATED VIEWPORT frames the model into that
+  // viewport's own rectangle, not onto the screen camera.
+  //
+  // Handled FIRST, and deliberately above the framebuffer guard below, because this case needs no
+  // framebuffer: the viewport's aspect is its rect on the SHEET (`paperWIn / paperHIn`), and its
+  // framing is `modelCenter` + `scaleModelPerPaperIn`. Nothing here reads a pixel. That is not a
+  // micro-optimisation — it is what makes this the one zoom behaviour a transcript can drive
+  // end to end (TASK-113 DEBT-1 blocks the others precisely on `fbW <= 0`).
+  //
+  // The zoom LOCK is honoured, and honouring it is what keeps the feature coherent: the lock's
+  // stated meaning is "pan/zoom always targets the sheet", and zoom-extents is a zoom. With the
+  // lock ON this falls through and frames the sheet, exactly as paper space does.
+  if (st.pendingZoomExtents && InFloatingModelSpace(st) && !st.viewportZoomLocked) {
+    st.pendingZoomExtents = false;
+    Viewport* vp = nullptr;
+    if (st.floatingViewportLayout >= 0 &&
+        static_cast<size_t>(st.floatingViewportLayout) < st.paperLayouts.size()) {
+      PaperLayout& L = st.paperLayouts[static_cast<size_t>(st.floatingViewportLayout)];
+      if (st.floatingViewportIndex >= 0 && static_cast<size_t>(st.floatingViewportIndex) < L.viewports.size())
+        vp = &L.viewports[static_cast<size_t>(st.floatingViewportIndex)];
+    }
+    if (!vp) {
+      log.push_back("ZOOM EXTENTS — no active viewport to frame into.");
+      return;
+    }
+    double mnX = 0.;
+    double mxX = 0.;
+    double mnY = 0.;
+    double mxY = 0.;
+    int skipped = 0;
+    // The extents are the model's, seen THROUGH this viewport: layers frozen in it are not part of
+    // what the user is looking at, so they must not drag the framing out to reach them. Same test
+    // the viewport renderer and the plotter apply (D-2026-08-26-e).
+    if (!ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped, vp)) {
+      log.push_back("ZOOM EXTENTS — nothing to frame in this viewport.");
+      return;
+    }
+    // ComputeRobustWorldExtents (despite the name) returns LOCAL coordinates — the same convention
+    // every raw entity store uses. vp->modelCenterX/Y is WORLD (local + worldDocumentOrigin): see
+    // AddViewportRect's default (`= cmd.worldDocumentOriginX`) and the screen<->model conversions in
+    // CadUi.cpp/PdfPlot.cpp, which both add/subtract the origin around this same field. Framing in
+    // LOCAL and writing straight into a WORLD field left the viewport pointed at the wrong place by
+    // exactly worldDocumentOriginX/Y whenever it's nonzero (i.e. after any import that rebases the
+    // drawing) — invisible with a fresh drawing at origin (0,0), reproducible after a DXF import.
+    if (!zoomframing::FrameWorldRectInViewport(mnX, mxX, mnY, mxY, vp->paperWIn, vp->paperHIn, &vp->modelCenterX,
+                                               &vp->modelCenterY, &vp->scaleModelPerPaperIn)) {
+      log.push_back("ZOOM EXTENTS — the drawing extents are not a finite rectangle; view unchanged.");
+      return;
+    }
+    vp->modelCenterX += st.worldDocumentOriginX;
+    vp->modelCenterY += st.worldDocumentOriginY;
+    BumpCadGpuCache(st);
+    char vbuf[256];
+    std::snprintf(vbuf, sizeof(vbuf),
+                  "Zoom extents applied in viewport — span %.6g x %.6g, scale %.6g model units/in, "
+                  "centre %.6g, %.6g skipped=%d.",
+                  mxX - mnX, mxY - mnY, static_cast<double>(vp->scaleModelPerPaperIn), vp->modelCenterX,
+                  vp->modelCenterY, skipped);
+    log.push_back(vbuf);
+    return;
+  }
+
   if (fbW <= 0 || fbH <= 0)
     return;
   if (st.pendingZoomExtents) {
@@ -20369,13 +20553,45 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
     double mnY = 0.;
     double mxY = 0.;
     int skipped = 0;
-    if (!ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped)) {
+    // REQ-120: what "extents" means depends on the space, mirroring where middle-drag pan already
+    // works (REQ-045). Reaching here means the view being navigated is the SHEET's — either paper
+    // space proper, or a floating viewport with the zoom lock ON, which says pan/zoom targets the
+    // sheet. The floating-and-unlocked case returned above (REQ-123); it is the only one whose
+    // camera is the viewport's rather than the window's.
+    //
+    // REQ-120 originally excluded floating model space from this branch and framed the MODEL extents
+    // into the SHEET camera instead — which is the defect issue #100 reports. Corrected here.
+    const PaperLayout* sheet = nullptr;
+    if (st.activeSpaceIndex >= 0 && static_cast<size_t>(st.activeSpaceIndex) < st.paperLayouts.size())
+      sheet = &st.paperLayouts[static_cast<size_t>(st.activeSpaceIndex)];
+
+    if (sheet) {
+      // The PAGE is the meaningful extent of a layout, and a layout with no geometry on it yet must
+      // still frame to something. Paper geometry drawn OUTSIDE the sheet is deliberately not framed
+      // (REQ-120, stated limitation) — framing it would need a second extents sweep over the seven
+      // paper stores, which this requirement declined to add.
+      mnX = 0.;
+      mnY = 0.;
+      mxX = static_cast<double>(sheet->sheetWidthIn());
+      mxY = static_cast<double>(sheet->sheetHeightIn());
+      if (!(mxX > mnX) || !(mxY > mnY)) {
+        st.pendingZoomExtents = false;
+        log.push_back("ZOOM EXTENTS — nothing to frame.");
+        return;
+      }
+    } else if (!ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped)) {
       st.pendingZoomExtents = false;
       log.push_back("ZOOM EXTENTS — nothing to frame.");
       return;
     }
-    ApplyViewportZoomToWorldRect(mnX, mxX, mnY, mxY, &st.viewportPanX, &st.viewportPanY, &st.viewportZoom, fbW, fbH,
-                                 viewportAspect);
+    // REQ-122: framing REFUSES a rect that is not finite rather than writing a NaN camera, and a
+    // refusal states its reason (REQ-201). The current view is left exactly as it was.
+    if (!zoomframing::FrameWorldRect(mnX, mxX, mnY, mxY, viewportAspect, &st.viewportPanX, &st.viewportPanY,
+                                     &st.viewportZoom)) {
+      st.pendingZoomExtents = false;
+      log.push_back("ZOOM EXTENTS — the drawing extents are not a finite rectangle; view unchanged.");
+      return;
+    }
     BumpCadGpuCache(st);
     if (panX)
       *panX = st.viewportPanX;
@@ -20395,9 +20611,12 @@ void ProcessPendingViewportZoom(AppCommandState& st, double* panX, double* panY,
   }
   if (st.pendingZoomWindow) {
     st.pendingZoomWindow = false;
-    ApplyViewportZoomToWorldRect(static_cast<double>(st.pendingZoomMnX), static_cast<double>(st.pendingZoomMxX),
-                                 static_cast<double>(st.pendingZoomMnY), static_cast<double>(st.pendingZoomMxY),
-                                 &st.viewportPanX, &st.viewportPanY, &st.viewportZoom, fbW, fbH, viewportAspect);
+    if (!zoomframing::FrameWorldRect(static_cast<double>(st.pendingZoomMnX), static_cast<double>(st.pendingZoomMxX),
+                                     static_cast<double>(st.pendingZoomMnY), static_cast<double>(st.pendingZoomMxY),
+                                     viewportAspect, &st.viewportPanX, &st.viewportPanY, &st.viewportZoom)) {
+      log.push_back("ZOOM WINDOW — that window is not a finite rectangle; view unchanged.");
+      return;
+    }
     if (panX)
       *panX = st.viewportPanX;
     if (panY)
@@ -20534,10 +20753,10 @@ void StartMirrorCommand(AppCommandState& st, std::vector<std::string>& log) {
         "the mirror line. ESC.");
 }
 
-/// REQ-304. Model-space only (paper-space arraying is out of scope, like path arrays) — mirrors
+/// REQ-305. Model-space only (paper-space arraying is out of scope, like path arrays) — mirrors
 /// MOVE/COPY/ROTATE's own Start* shape: a pre-existing selection skips straight to choosing the
 /// array type, otherwise the command opens with the same click-or-window-select every sibling
-/// modify command uses (this fix, D-2026-08-25-l).
+/// modify command uses (this fix, D-2026-08-25-n).
 void StartArrayCommand(AppCommandState& st, std::vector<std::string>& log) {
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
     log.push_back("ARRAY — not available in paper space; switch to model space or a floating viewport.");
@@ -20731,10 +20950,18 @@ static void FinishEllipseFromRatio(AppCommandState& st, float ratio, std::vector
   ell.majVx = vx0;
   ell.majVy = vy0;
   ell.ratio = ratio;
-  ell.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
   PushUndoSnapshot(st, "Ellipse");
-  st.userEllipses.push_back(ell);
-  st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
+  if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
+    // Paper-space ELLIPSE (REQ-039): centre/axis are paper inches; commit to the layout's paper
+    // store. ell.z stays 0 (ADR-025 (g): always 0 in paper space), matching the shape
+    // CommitPolylineDraft uses for POLYLINE (issue #84/#86).
+    L->paperEllipses.push_back(ell);
+    L->paperEllAttrs.push_back(MakeNewEntityAttrs(st));
+  } else {
+    ell.z = CadCommitElevation(st);  // lands on the active work plane (REQ-058)
+    st.userEllipses.push_back(ell);
+    st.userEllAttrs.push_back(MakeNewEntityAttrs(st));
+  }
   BumpCadGpuCache(st);
   st.active = K::None;
   ResetEllipseDraft(st);
@@ -20754,13 +20981,18 @@ static void CommitPolylineDraft(AppCommandState& st, bool closed, std::vector<st
   }
   PushUndoSnapshot(st, closed ? "Polyline (closed)" : "Polyline");
   if (PaperLayout* L = ActivePaperGeometryTarget(st)) {
-    // Paper-space POLYLINE (REQ-037/REQ-039): the draft vertices are paper inches; commit to the
-    // layout's paper store, matching the shape CommitRectangle already uses at :15220.
+    // Paper-space POLYLINE (REQ-037 / REQ-039 (5)): the draft's vertices are paper inches; commit
+    // to the active layout's paper store. Without this the polyline landed in the MODEL store while
+    // the user was drawing on a sheet (#84), which also broke REQ-039 (6) — "none of these paper
+    // edits change model geometry". Same routing `CommitRectangle` and `SubmitLineVertex` already do.
     const int baseVert = L->paperPolyOffsets.empty() ? 0 : L->paperPolyOffsets.back();
-    L->paperPolyVerts.insert(L->paperPolyVerts.end(), st.polylineDraftVerts.begin(), st.polylineDraftVerts.end());
+    L->paperPolyVerts.insert(L->paperPolyVerts.end(), st.polylineDraftVerts.begin(),
+                             st.polylineDraftVerts.end());
     if (L->paperPolyOffsets.empty())
       L->paperPolyOffsets.push_back(baseVert);
     L->paperPolyOffsets.push_back(baseVert + static_cast<int>(nvert));
+    // `closed` is carried through rather than hardcoded: paper RECT can write 1u because a rectangle
+    // is always closed, but POLYLINE's CLOSE/END (and #80's click-the-start/Enter) both reach here.
     L->paperPolyClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
     L->paperPolyAttrs.push_back(MakeNewEntityAttrs(st));
   } else {
@@ -20859,7 +21091,28 @@ bool SubmitPolylineVertex(AppCommandState& st, float x, float y, std::vector<std
       log.push_back(buf);
     }
     log.push_back(std::string(who) +
-                  " — next vertex (A + bearing then distance like LINE), CLOSE / END, or ESC.");
+                  " — next vertex; click the FIRST point to close, Enter to finish open "
+                  "(CLOSE / END still work), or ESC.");
+    return true;
+  }
+
+  // REQ-118: a vertex that lands on the STARTING vertex closes the polyline instead of being added.
+  //
+  // The test is coincidence with the stored first vertex, NOT "the snap system said so". CadSnap
+  // returns the stored coordinate verbatim, so a snapped point compares equal here; a typed
+  // coordinate or an exact click closes it too, which is what a user means by clicking the start
+  // and is what a snap-gated rule would refuse whenever OSNAP is off (D-2026-08-25-j).
+  //
+  // The tolerance is deliberately tight — "the same point", not "near it". A near-miss click stays
+  // an ordinary vertex, because without landing on the start the user has not indicated it; the
+  // snap candidate (CadSnap, offered from three vertices on) is what makes landing on it easy.
+  //
+  // Guarded at three vertices, matching CommitPolylineDraft's own CLOSE minimum, so the second
+  // vertex of a two-point draft is an ordinary vertex even if it sits on the first.
+  constexpr float kCloseEps = 1e-4f;
+  if (st.polylineDraftVerts.size() >= 9 && std::fabs(x - st.polyFirstX) <= kCloseEps &&
+      std::fabs(y - st.polyFirstY) <= kCloseEps) {
+    CommitPolylineDraft(st, true, log);
     return true;
   }
 
@@ -21049,6 +21302,17 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
   }
 
   if (line.empty()) {
+    // REQ-307 (GitHub #106): paper-space MOVE/COPY/DELETE's selection step never sets st.active, so
+    // it cannot be reached by any Kind-keyed branch below — checked first, ahead of all of them, the
+    // same way the raw viewport Enter check in CadUi.cpp calls the identical shared logic.
+    if (st.paperMoveWaitingSelection) {
+      ProcessPaperMoveWaitingSelectionEnter(st, log);
+      return;
+    }
+    if (st.paperDeleteWaitingSelection) {
+      ProcessPaperDeleteWaitingSelectionEnter(st, log);
+      return;
+    }
     // TASK-082. FEATURELINE with a point awaiting its elevation: Enter accepts the default shown in
     // the prompt. This has to be handled HERE, not in the FEATURELINE block further down, because a
     // blank line never reaches that block — it is consumed by this one.
@@ -21084,10 +21348,17 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     if (st.active == K::Polyline && st.polylinePhase == PP::NeedNextPoint) {
-      // REQ-303 (issue #80): blank Enter finishes POLYLINE/3DPOLY OPEN, mirroring the typed END
-      // keyword below exactly (same minimum-segment gate, same commit call). Unlike LINE's blank
+      // REQ-303 (issue #80) / REQ-118: blank Enter finishes POLYLINE/3DPOLY OPEN, mirroring the
+      // typed END keyword below (same minimum-segment gate, same commit call). Unlike LINE's blank
       // Enter above, this EXITS the command instead of restarting a new chain — the issue's explicit
-      // ask, and CommitPolylineDraft already does the exiting (st.active = Kind::None).
+      // ask, and CommitPolylineDraft already does the exiting (st.active = Kind::None). The asymmetry
+      // with LINE was put to the user and chosen, not inherited by accident (D-2026-08-25-j).
+      // CancelSegmentAnglePick/ResetSegmentAngleLock clear any in-progress bearing pick/lock first
+      // (merge reconciliation, D-2026-08-25-l): CommitPolylineDraft's own draft reset
+      // (ResetPolylineDraft) does not touch that state, so without this a lock left active when the
+      // user pressed blank Enter would still read as active for whatever command starts next.
+      CancelSegmentAnglePick(st, nullptr);
+      ResetSegmentAngleLock(st);
       if (st.polyDraftSegments == 0)
         log.push_back("POLYLINE END — need at least one segment after the start point.");
       else
@@ -21146,6 +21417,36 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           st.modifyPhase = MP::NeedBase;
           log.push_back(st.active == K::Copy ? "COPY — base point:" : "MOVE — base point:");
         }
+      }
+    } else if (st.active == K::Delete) {
+      // REQ-121 (GitHub #91 review, D-2026-08-26-d). DELETE used to answer Enter with "finish
+      // window-select in the viewport (two clicks)" — a refusal that directly contradicted the
+      // shared "Select objects, ENTER to continue" prompt PR #102 gave it. Enter now acts, the
+      // same shape MOVE/COPY use directly above.
+      //
+      // Survey points first and CAD second, mirroring StartDeleteCommand's own order and for its
+      // stated reason: deleting a point also removes its linked label, and running the CAD erase
+      // first would strand that label in the selection.
+      if (st.selection.empty() && st.selectedSurveyPointIndices.empty()) {
+        log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
+      } else {
+        if (!st.selectedSurveyPointIndices.empty())
+          DeleteSelectedSurveyPoints(st, log);
+        if (!st.selection.empty())
+          ExecuteDeleteSelection(st, log);
+        st.active = K::None;
+        ResetModifyRotateDraft(st);
+      }
+    } else if (st.active == K::Join) {
+      // Survey points are not joinable and are deliberately not consulted here, so an Enter with
+      // survey points alone is still "nothing selected" — the honest answer (REQ-201) rather than
+      // a silent no-op. JOIN's own report says what it merged.
+      if (st.selection.empty()) {
+        log.push_back("Nothing selected — click objects or drag a selection window, then press Enter.");
+      } else {
+        ExecuteJoinSelection(st, log);
+        st.active = K::None;
+        ResetModifyRotateDraft(st);
       }
     } else if (st.active == K::Scale) {
       using MP = AppCommandState::ModifyPhase;
@@ -21707,13 +22008,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
   }
 
-  if (st.active == AppCommandState::Kind::Delete) {
-    log.push_back("DELETE — finish window-select in the viewport (two clicks), or ESC to cancel.");
-    return;
-  }
-
-  if (st.active == AppCommandState::Kind::Join) {
-    log.push_back("JOIN — finish window-select in the viewport (two clicks), or ESC to cancel.");
+  // Typed TEXT during DELETE / JOIN. A bare Enter never reaches here — the `line.empty()` block
+  // above consumes it, which is where these two now act on their selection (D-2026-08-26-d). This
+  // is only the "you typed something that is not a command" case, and its wording had to change
+  // with the behaviour: it used to say "finish window-select in the viewport (two clicks)", which
+  // is no longer how either command ends.
+  if (st.active == AppCommandState::Kind::Delete || st.active == AppCommandState::Kind::Join) {
+    log.push_back(std::string(st.active == AppCommandState::Kind::Delete ? "DELETE" : "JOIN") +
+                  " — click objects or drag a selection window, then press Enter. ESC cancels.");
     return;
   }
 
@@ -22544,7 +22846,7 @@ const char* CircleCommandFooterHint(const AppCommandState& st) {
     return "";
   switch (st.circlePhase) {
   case AppCommandState::CirclePhase::WaitCenterOrMode:
-    return "CIRCLE: Click or type center | Type 3P for three-point circle | ESC cancel";
+    return "CIRCLE: Click or type center | Type [3P] for three-point circle | ESC cancel";
   case AppCommandState::CirclePhase::WaitRadius:
     return "CIRCLE: Click edge for radius | Type radius | D <value> or D<value> for diameter | ESC cancel";
   case AppCommandState::CirclePhase::ThreeP_WaitP1:
@@ -22562,10 +22864,20 @@ const char* ModifyCommandFooterHint(const AppCommandState& st) {
   using MP = AppCommandState::ModifyPhase;
   if (st.active == K::Paste && st.modifyPhase == MP::NeedDestination)
     return "PASTE: Click destination point | ESC cancel";
+  // REQ-121: MIRROR and ARRAY had NO footer hint at all, so their selection step showed nothing in
+  // the dynamic cursor text while showing a prompt on the command line — REQ-304's rule is that the
+  // two agree, and this pair was missed by that audit. Handled here rather than in two new
+  // delegates, on REQ-304's own precedent (it closed its eight gaps by extending
+  // `DrawingExtrasFooterHint` rather than adding functions). They are modify commands; this is the
+  // modify hint.
+  if (st.active == K::Mirror)
+    return st.mirrorPhase == AppCommandState::MirrorPhase::PickSelection ? kSelectObjectsPrompt : "";
+  if (st.active == K::Array)
+    return st.arrayPhase == AppCommandState::ArrayPhase::PickSelection ? kSelectObjectsPrompt : "";
   if (st.active != K::Move && st.active != K::Copy)
     return "";
   if (st.modifyPhase == MP::PickSelection)
-    return "MOVE/COPY: Click objects or drag a window, Enter when done | ESC cancel";
+    return kSelectObjectsPrompt;  // REQ-121
   if (st.modifyPhase == MP::NeedBase)
     return "MOVE/COPY: Base point — click or X,Y | ESC cancel";
   if (st.modifyPhase == MP::NeedDestination)
@@ -22580,21 +22892,21 @@ const char* RotateCommandFooterHint(const AppCommandState& st) {
     return "";
   switch (st.rotatePhase) {
   case RP::PickSelection:
-    return "ROTATE: Click objects or drag a window, Enter when done | ESC cancel";
+    return kSelectObjectsPrompt;  // REQ-121
   case RP::NeedBase:
     return "ROTATE: Base point — click or X,Y | ESC cancel";
   case RP::NeedAngleOrReference:
-    return "ROTATE: ° clockwise / DMS | R ref | C copy | ESC (north=0° CW)";
+    return "ROTATE: ° clockwise / DMS | [R]eference | [C]opy | ESC (north=0° CW)";
   case RP::Ref_WaitP1:
-    return "ROTATE ref: First point | C toggles copy | ESC cancel";
+    return "ROTATE ref: First point | [C] toggles copy | ESC cancel";
   case RP::Ref_WaitP2:
-    return "ROTATE ref: Second point | C toggles copy | ESC cancel";
+    return "ROTATE ref: Second point | [C] toggles copy | ESC cancel";
   case RP::AfterReference_WaitAngleOrP:
-    return "ROTATE ref: New bearing ° from north (like props) | P two pts | C copy | ESC";
+    return "ROTATE ref: New bearing ° from north (like props) | [P] two pts | [C]opy | ESC";
   case RP::AnglePoints_WaitP1:
-    return "ROTATE angle pts: First point | C copy | ESC cancel";
+    return "ROTATE angle pts: First point | [C]opy | ESC cancel";
   case RP::AnglePoints_WaitP2:
-    return "ROTATE angle pts: Second point | C copy | ESC cancel";
+    return "ROTATE angle pts: Second point | [C]opy | ESC cancel";
   }
   return "";
 }
@@ -22606,13 +22918,13 @@ const char* ScaleCommandFooterHint(const AppCommandState& st) {
   if (st.active != K::Scale)
     return "";
   if (st.modifyPhase == MP::PickSelection)
-    return "SCALE: Click objects or drag a window, Enter when done | ESC cancel";
+    return kSelectObjectsPrompt;  // REQ-121
   if (st.modifyPhase == MP::NeedBase)
     return "SCALE: Base point — click or X,Y | ESC cancel";
   if (st.modifyPhase == MP::NeedDestination) {
     switch (st.scalePhase) {
     case SP::FactorPick:
-      return "SCALE: Second point or type factor (>0) — dist/base-ref | R = two-point ref length | ESC";
+      return "SCALE: Second point or type factor (>0) — dist/base-ref | [R]eference = two-point ref length | ESC";
     case SP::Ref_WaitP1:
       return "SCALE ref: First point of reference length | ESC cancel";
     case SP::Ref_WaitP2:
@@ -22631,13 +22943,13 @@ const char* ScaleCommandFooterHint(const AppCommandState& st) {
 const char* DeleteCommandFooterHint(const AppCommandState& st) {
   if (st.active != AppCommandState::Kind::Delete)
     return "";
-  return "DELETE: Window-select — click two corners | ESC cancel";
+  return kSelectObjectsPrompt;  // REQ-121
 }
 
 const char* JoinCommandFooterHint(const AppCommandState& st) {
   if (st.active != AppCommandState::Kind::Join)
     return "";
-  return "JOIN: Window-select — click two corners | ESC cancel";
+  return kSelectObjectsPrompt;  // REQ-121
 }
 
 const char* TrimCommandFooterHint(const AppCommandState& st) {
@@ -22647,9 +22959,9 @@ const char* TrimCommandFooterHint(const AppCommandState& st) {
     return "";
   switch (st.trimPhase) {
   case TP::SelectCuttingEdges:
-    return "TRIM: Pick cutting edges (hover highlights) | Enter | type L — draw the trim line | ESC cancel";
+    return "TRIM: Pick cutting edges (hover highlights) | Enter | [L] — draw the trim line | ESC cancel";
   case TP::CuttingLine_WaitP1:
-    return "TRIM: First point of the trim line | type T — pick cutting edges instead | ESC cancel";
+    return "TRIM: First point of the trim line | [T] — pick cutting edges instead | ESC cancel";
   case TP::CuttingLine_WaitP2:
     return "TRIM: Second point — dashed = removed part (midpoint picks side) | Ortho | ESC";
   case TP::SelectTrimTargets:
@@ -22696,7 +23008,7 @@ const char* LineCommandFooterHint(const AppCommandState& st) {
   if (st.linePhase == LP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitAdjustOrCommit)
     return "LINE bearing pick: Enter locks | +90/-45 adjust+lock | ESC cancels pick";
   if (st.linePhase == LP::NeedNextPoint && st.segmentAngleLockActive)
-    return "LINE (bearing lock): distance ± along ray | click on line | X,Y | @dx,dy | A clears";
+    return "LINE (bearing lock): distance ± along ray | click on line | X,Y | @dx,dy | [A] clears";
   // Basic next-point (ortho or not). Bracketed [A]/[2P] are rendered as clickable
   // links in the command-line footer (DrawCommandLinePanel); the same text feeds the
   // dynamic-cursor label and the height calc, so keep it identical.
@@ -22734,10 +23046,122 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
   if (st.active == K::DesignateBoundary)
     return "DESIGNATEBOUNDARY: Pick a CLOSED polyline | ESC cancel";
 
+  // REQ-304 (GitHub issue #82). HATCH/ELEV/VPFREEZE/VPTHAW/PDFATTACH/FEATURELINE/FILLET/CHAMFER
+  // previously had no branch here, so both the command line's live hint and the dynamic cursor
+  // (which reads this same function — CadUi.cpp's CommandInputHint fallback) fell through to the
+  // generic "Command:" placeholder for every one of their states.
+  if (st.active == K::Hatch)
+    return "HATCH: Pick an internal point inside a closed area | ESC cancel";
+
+  if (st.active == K::Elev) {
+    static char buf[128];
+    std::snprintf(buf, sizeof(buf), "ELEV: New default elevation <%.4f> — [W]orld = Z 0 | ESC cancel",
+                  static_cast<double>(CadWorkPlaneElevation(st)));
+    return buf;
+  }
+
+  if (st.active == K::VpFreeze)
+    return "VPFREEZE: Pick objects to freeze their layer in this viewport | Enter/ESC to finish";
+  if (st.active == K::VpThaw)
+    return "VPTHAW: Pick objects to thaw their layer in this viewport | Enter/ESC to finish";
+
+  if (st.active == K::PdfAttach) {
+    using PAP = AppCommandState::PdfAttachPhase;
+    if (st.pdfAttachPhase == PAP::WaitInsertPoint)
+      return "PDFATTACH: Insertion point — click or X,Y | ESC cancel";
+    if (st.pdfAttachPhase == PAP::WaitScaleRef)
+      return "PDFATTACH: Second point for scale | ESC cancel";
+    if (st.pdfAttachPhase == PAP::WaitRotationPt)
+      return "PDFATTACH: Rotation reference point | ESC cancel";
+    return "PDFATTACH: Configure in the dialog";
+  }
+
+  if (st.active == K::FeatureLine) {
+    if (st.featureLinePendingPoint) {
+      static char buf[192];
+      std::snprintf(buf, sizeof(buf), "FEATURELINE: Elevation for %s %zu <%.3f> | ESC cancel",
+                    st.featureLineNextIsElevPoint ? "elevation point" : "point",
+                    st.featureLineDraftElevPt.size() + 1,
+                    static_cast<double>(st.featureLinePendingDefaultZ));
+      return buf;
+    }
+    if (st.featureLineDraftVerts.empty())
+      return "FEATURELINE: First point — click or X,Y/X,Y,Z | [E] = elevation point | [CLOSE]/[END] | ESC cancel";
+    return "FEATURELINE: Next point — click or X,Y/X,Y,Z | [E] = elevation point | [CLOSE]/[END] | ESC cancel";
+  }
+
+  if (st.active == K::Fillet) {
+    using FP = AppCommandState::FilletPhase;
+    if (st.filletTextAwaitingRadius) {
+      static char buf[96];
+      std::snprintf(buf, sizeof(buf), "FILLET: New radius <%.3f> | ESC cancel",
+                    static_cast<double>(st.filletRadius));
+      return buf;
+    }
+    if (st.filletTextAwaitingTrim) {
+      static char buf[96];
+      std::snprintf(buf, sizeof(buf), "FILLET: Trim mode [Trim/No trim] <%s> | ESC cancel",
+                    st.cornerTrimMode ? "Trim" : "No trim");
+      return buf;
+    }
+    if (st.filletPhase == FP::WaitSecondEntity)
+      return "FILLET: Select second object | ESC cancel";
+    static char buf[128];
+    std::snprintf(buf, sizeof(buf), "FILLET: Select first object or [Radius/Trim] <R=%.3f, %s> | ESC cancel",
+                  static_cast<double>(st.filletRadius), st.cornerTrimMode ? "Trim" : "No trim");
+    return buf;
+  }
+
+  if (st.active == K::Chamfer) {
+    using CP = AppCommandState::ChamferPhase;
+    if (st.chamferTextAwaitingFirstValue) {
+      static char buf[96];
+      if (st.chamferMode == 0)
+        std::snprintf(buf, sizeof(buf), "CHAMFER Distance: First distance <%.3f> | ESC cancel",
+                      static_cast<double>(st.chamferDist1));
+      else
+        std::snprintf(buf, sizeof(buf), "CHAMFER Angle: Distance <%.3f> | ESC cancel",
+                      static_cast<double>(st.chamferDist1));
+      return buf;
+    }
+    if (st.chamferTextAwaitingSecondDist) {
+      static char buf[96];
+      std::snprintf(buf, sizeof(buf), "CHAMFER: Second distance <%.3f> | ESC cancel",
+                    static_cast<double>(st.chamferDist2));
+      return buf;
+    }
+    if (st.chamferTextAwaitingAngle) {
+      static char buf[96];
+      std::snprintf(buf, sizeof(buf), "CHAMFER: Angle in degrees <%.1f> | ESC cancel",
+                    static_cast<double>(st.chamferAngle));
+      return buf;
+    }
+    if (st.chamferTextAwaitingTrim) {
+      static char buf[96];
+      std::snprintf(buf, sizeof(buf), "CHAMFER: Trim mode [Trim/No trim] <%s> | ESC cancel",
+                    st.cornerTrimMode ? "Trim" : "No trim");
+      return buf;
+    }
+    if (st.chamferPhase == CP::WaitSecondEntity)
+      return "CHAMFER: Select second object | ESC cancel";
+    static char buf[128];
+    if (st.chamferMode == 0)
+      std::snprintf(buf, sizeof(buf),
+                    "CHAMFER: Select first object or [Distance/Angle/Trim] <D1=%.3f, D2=%.3f, %s> | ESC cancel",
+                    static_cast<double>(st.chamferDist1), static_cast<double>(st.chamferDist2),
+                    st.cornerTrimMode ? "Trim" : "No trim");
+    else
+      std::snprintf(buf, sizeof(buf),
+                    "CHAMFER: Select first object or [Distance/Angle/Trim] <D=%.3f, A=%.1f, %s> | ESC cancel",
+                    static_cast<double>(st.chamferDist1), static_cast<double>(st.chamferAngle),
+                    st.cornerTrimMode ? "Trim" : "No trim");
+    return buf;
+  }
+
   if (st.active == K::Polyline) {
     using SAP = AppCommandState::SegmentAnglePickPhase;
     if (st.polylinePhase == PP::NeedFirstPoint)
-      return "POLYLINE: First point — click or X,Y | CLOSE closes | ESC cancel";
+      return "POLYLINE: First point — click or X,Y | [CLOSE] closes | ESC cancel";
     if (st.polylinePhase == PP::NeedNextPoint && st.segmentAngleKeyboardAwaitBearing)
       return "POLYLINE: Type bearing ° CW from N | blank Enter cancels | ESC cancel";
     if (st.polylinePhase == PP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitP1)
@@ -22747,8 +23171,8 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
     if (st.polylinePhase == PP::NeedNextPoint && st.segmentAnglePickPhase == SAP::WaitAdjustOrCommit)
       return "POLYLINE bearing pick: Enter locks | +90/-45 adjust+lock | ESC cancels pick";
     if (st.polylinePhase == PP::NeedNextPoint && st.segmentAngleLockActive)
-      return "POLYLINE (bearing lock): distance ± | click on ray | X,Y | A clears | CLOSE / END";
-    return "POLYLINE: Next — click | X,Y | @dx,dy | A/2P | CLOSE / END | ESC";
+      return "POLYLINE (bearing lock): distance ± | click on ray | X,Y | [A] clears | [CLOSE] / [END]";
+    return "POLYLINE: Next — click | X,Y | @dx,dy | [A]/[2P] | [CLOSE] / [END] | ESC";
   }
   if (st.active == K::Arc) {
     switch (st.arcPhase) {
@@ -22800,7 +23224,7 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
       return st.active == K::DimLinear ? "DIMLINEAR: Extension 2 | ESC cancel" : "DIMALIGNED: Extension 2 | ESC cancel";
     case DP::WaitDimLinePt:
       return st.active == K::DimLinear
-                 ? "DIMLINEAR: Line — dominant X vs Y from chord mid; H / V keys; X,Y | @ from chord mid | ESC"
+                 ? "DIMLINEAR: Line — dominant X vs Y from chord mid; [H] / [V] keys; X,Y | @ from chord mid | ESC"
                  : "DIMALIGNED: Offset — click | X,Y | @ from chord mid | ESC";
     }
   }
@@ -23558,7 +23982,7 @@ const char* AlignCommandFooterHint(const AppCommandState& st) {
     return "";
   using AP = AppCommandState::AlignPhase;
   if (st.alignPhase == AP::PickSelection)
-    return "ALIGN: click objects or window, then press Enter";
+    return kSelectObjectsPrompt;  // REQ-121
   if (st.alignPhase == AP::PickSrc)
     return "ALIGN: pick SOURCE survey point in drawing (snap to it) — Enter to solve";
   return "ALIGN: pick/type DESTINATION real-world X,Y for this source point";

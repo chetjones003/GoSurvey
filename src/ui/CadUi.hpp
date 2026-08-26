@@ -93,6 +93,7 @@ void DrawPointGroupManagerWindow(AppCommandState& cmd, std::vector<std::string>*
 /// DRAWN — contours, border, triangles, points. Editing a style changes every surface using it, and
 /// touches no surface definition, so nothing here can re-triangulate anything.
 void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+void DrawDimStyleWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 /// Surfaces panel (REQ-068): create a TIN surface from point groups, rebuild, rename, delete.
 void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 

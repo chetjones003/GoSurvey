@@ -1,4 +1,4 @@
-# D-2026-08-25-l — MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN/ARRAY's "select objects" step: click-or-box,
+# D-2026-08-25-n — MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN/ARRAY's "select objects" step: click-or-box,
 # accumulating across more than one action, confirmed only by Enter.
 #
 # User bug report (originally against ARRAY): "the first step asking for a box select should be a

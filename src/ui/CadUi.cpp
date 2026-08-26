@@ -24,7 +24,8 @@
 #include "ImGuiLayout.hpp"
 #include "WinFileDialogs.hpp"
 #include "SurveyPoints.hpp"
-#include "SurfaceStyle.hpp"  // REQ-072 analysis legend (TASK-086 §6 (4))
+#include "SurfaceStyle.hpp"
+#include "DimensionStyle.hpp"  // REQ-072 analysis legend (TASK-086 §6 (4))
 #include "StringUtil.hpp"
 #include "imgui.h"
 
@@ -1461,6 +1462,7 @@ enum class RibbonIconKind : std::uint8_t {
   Ellipse,
   Dim,
   DimLinear,
+  DimAngular,
   Id,
   Text,
   Mtext,
@@ -1643,6 +1645,36 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     const float head = std::clamp(std::min(w, h) * 0.1f, 2.5f, 5.5f);
     RibbonStrokeArrow(dl, ImVec2(xL, yDim), ImVec2(-1.f, 0.f), head, accentBlue, t);
     RibbonStrokeArrow(dl, ImVec2(xR, yDim), ImVec2(1.f, 0.f), head, accentBlue, t);
+    break;
+  }
+  case RibbonIconKind::DimAngular: {
+    const ImVec2 v(c.x - w * 0.15f, c.y + h * 0.18f);
+    const float r = std::min(w, h) * 0.32f;
+    const ImVec2 p1(v.x + r * 0.95f, v.y - r * 0.22f);
+    const ImVec2 p2(v.x + r * 0.55f, v.y - r * 0.82f);
+    dl->AddLine(v, p1, col, t);
+    dl->AddLine(v, p2, col, t);
+    const ImU32 accentBlue2 = IM_COL32(46, 91, 174, 255);
+    const int segs = 10;
+    float a1 = std::atan2(p1.y - v.y, p1.x - v.x);
+    float a2 = std::atan2(p2.y - v.y, p2.x - v.x);
+    float sweep = a2 - a1;
+    while (sweep > 3.14159f) sweep -= 6.28318f;
+    while (sweep < -3.14159f) sweep += 6.28318f;
+    for (int i = 0; i < segs; ++i) {
+      float aa = a1 + sweep * (float)i / segs;
+      float ab = a1 + sweep * (float)(i+1) / segs;
+      dl->AddLine(ImVec2(v.x + std::cos(aa)*r*0.62f, v.y + std::sin(aa)*r*0.62f),
+                  ImVec2(v.x + std::cos(ab)*r*0.62f, v.y + std::sin(ab)*r*0.62f), accentBlue2, t*1.05f);
+    }
+    const float head2 = std::clamp(std::min(w, h) * 0.09f, 2.5f, 5.5f);
+    ImVec2 dir1(-std::sin(a1), std::cos(a1));
+    if (sweep < 0) dir1 = ImVec2(std::sin(a1), -std::cos(a1));
+    ImVec2 dir2(-std::sin(a2), std::cos(a2));
+    if (sweep < 0) dir2 = ImVec2(std::sin(a2), -std::cos(a2));
+    dir2 = ImVec2(-dir2.x, -dir2.y);
+    RibbonStrokeArrow(dl, ImVec2(v.x + std::cos(a1)*r*0.62f, v.y + std::sin(a1)*r*0.62f), dir1, head2, accentBlue2, t);
+    RibbonStrokeArrow(dl, ImVec2(v.x + std::cos(a2)*r*0.62f, v.y + std::sin(a2)*r*0.62f), dir2, head2, accentBlue2, t);
     break;
   }
   case RibbonIconKind::Id: {
@@ -2176,6 +2208,7 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::Hatch:          return "hatch";
   case RibbonIconKind::Dim:            return "dim";
   case RibbonIconKind::DimLinear:      return "dimlinear";
+  case RibbonIconKind::DimAngular:     return "dimangular";
   case RibbonIconKind::Id:             return "id";
   case RibbonIconKind::Text:           return "text";
   case RibbonIconKind::Mtext:          return "mtext";
@@ -2237,11 +2270,11 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
     {"RECT", RibbonIconKind::Rect},
     {"ARC", RibbonIconKind::Arc}, {"ELLIPSE", RibbonIconKind::Ellipse}, {"HATCH", RibbonIconKind::Hatch},
     {"TEXT", RibbonIconKind::Text},
-    {"MTEXT", RibbonIconKind::Mtext}, {"DIMALIGNED", RibbonIconKind::Dim}, {"DIMLINEAR", RibbonIconKind::DimLinear},
+    {"MTEXT", RibbonIconKind::Mtext}, {"DIMALIGNED", RibbonIconKind::Dim}, {"DIMLINEAR", RibbonIconKind::DimLinear}, {"DIMANGULAR", RibbonIconKind::DimAngular}, {"DIMSTY", RibbonIconKind::DimAngular},
     {"ID", RibbonIconKind::Id}, {"INVERSE", RibbonIconKind::SurveyInverse}, {"MOVE", RibbonIconKind::Move},
     {"COPY", RibbonIconKind::Copy}, {"ROTATE", RibbonIconKind::Rotate}, {"SCALE", RibbonIconKind::Scale},
     {"MIRROR", RibbonIconKind::Mirror},
-    // REQ-304: no dedicated ARRAY icon yet — reuses Copy's, the same "no icon art yet" precedent
+    // REQ-305: no dedicated ARRAY icon yet — reuses Copy's, the same "no icon art yet" precedent
     // Import/Export/Settings set (D-2026-08-25-h) rather than growing the bounded PNG-load loop.
     {"ARRAY", RibbonIconKind::Copy},
     {"LENGTHEN", RibbonIconKind::Lengthen},
@@ -2587,7 +2620,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     w.wAnnText = 8.f + colW({"Text", "Mtext"}) + 4.f + annStyleW;
     // REQ-302 follow-up: Aligned/Linear moved here from Survey's Inquiry section (user GUI-pass
     // feedback, 2026-08-25) — a Dimensions group belongs under Annotate, not Survey.
-    w.wAnnDim  = 8.f + colW({"Aligned", "Linear"});
+    w.wAnnDim  = 8.f + colW({"Aligned", "Linear", "Angular"});
     // Two columns: the panel is three small buttons tall, so a fourth in one column is clipped.
     // Aligned/Linear moved to Annotate's new Dimensions section above (2026-08-25 follow-up) — ID
     // Point/Elev-Grade are the two that remain genuinely survey-scoped inquiry tools.
@@ -2911,10 +2944,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         if (smallBtn("##RibbonDim", RibbonIconKind::Dim, "Aligned", colW({"Aligned", "Linear"})))
           StartDimAlignedCommand(cmd, log);
         RibbonItemHelp("Aligned dimension — extension lines and text.\nCommand bar: DIMALIGNED or DAL");
-        if (smallBtn("##RibbonDimLin", RibbonIconKind::DimLinear, "Linear", colW({"Aligned", "Linear"})))
+        if (smallBtn("##RibbonDimLin", RibbonIconKind::DimLinear, "Linear", colW({"Aligned", "Linear", "Angular"})))
           StartDimLinearCommand(cmd, log);
         RibbonItemHelp(
             "Linear dimension — horizontal or vertical distance in X or Y; third pick sets line position (cursor or H/V).\nCommand bar: DIMLINEAR or DLI");
+        if (smallBtn("##RibbonDimAng", RibbonIconKind::DimAngular, "Angular", colW({"Aligned", "Linear", "Angular"})))
+          StartDimAngularCommand(cmd, log);
+        RibbonItemHelp("Angular dimension — vertex, two ray points, then arc position.\nCommand bar: DIMANGULAR or DAN");
         ImGui::EndGroup();
       }
       RibbonSectionEnd();
@@ -6112,6 +6148,11 @@ static void DrawPlotScaleCombo(AppCommandState& cmd) {
 } // namespace
 
 static const char* CommandInputHint(const AppCommandState& cmd) {
+  // REQ-307 (GitHub #106): paper-space MOVE/COPY/DELETE's selection step never sets cmd.active (it
+  // stays pick-first, K::None, throughout), so it cannot be reached by any of the Kind-based branches
+  // below — checked first, ahead of all of them.
+  if (PaperIsObjectSelectionStep(cmd))
+    return kSelectObjectsPrompt;
   if (cmd.active == AppCommandState::Kind::PaperRectViewport)
     return cmd.paperVpPhase == 0 ? "Rectangular viewport — first corner (click on the sheet):"
                                  : "Rectangular viewport — opposite corner:";
@@ -6129,7 +6170,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
         cmd.segmentAnglePickPhase == SAP::WaitAdjustOrCommit)
       return "Bearing pick — Enter or +90/-45:";
     if (cmd.linePhase == AppCommandState::LinePhase::NeedNextPoint && cmd.segmentAngleLockActive)
-      return "LINE distance ± / click ray / X,Y / A clears:";
+      return "LINE distance ± / click ray / X,Y / [A] clears:";
     return "Next: click; X, Y; @dx,dy; [A]zimuth, [2P];";
   }
   if (cmd.active == AppCommandState::Kind::Polyline) {
@@ -6146,10 +6187,10 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
         cmd.segmentAnglePickPhase == SAP::WaitAdjustOrCommit)
       return "POLYLINE bearing — Enter or +90/-45:";
     if (cmd.polylinePhase == AppCommandState::PolylinePhase::NeedNextPoint && cmd.segmentAngleLockActive)
-      return "POLYLINE distance ± / ray click / A clears / CLOSE:";
+      return "POLYLINE distance ± / ray click / [A] clears / [CLOSE]:";
     if (cmd.orthoMode)
-      return "POLYLINE next — ortho / X,Y / A / AP / CLOSE:";
-    return "POLYLINE next — X,Y / A / AP / CLOSE:";
+      return "POLYLINE next — ortho / X,Y / [A] / [AP] / [CLOSE]:";
+    return "POLYLINE next — X,Y / [A] / [AP] / [CLOSE]:";
   }
   if (cmd.active == AppCommandState::Kind::Rect) {
     return cmd.rectPhase == AppCommandState::RectPhase::WaitFirstCorner
@@ -6207,7 +6248,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     case AppCommandState::DimPhase::WaitExt2:
       return cmd.active == AppCommandState::Kind::DimLinear ? "DIMLINEAR ext 2:" : "DIM ext 2:";
     case AppCommandState::DimPhase::WaitDimLinePt:
-      return cmd.active == AppCommandState::Kind::DimLinear ? "DIMLINEAR line (cursor/H/V) or X,Y:"
+      return cmd.active == AppCommandState::Kind::DimLinear ? "DIMLINEAR line (cursor/[H]/[V]) or X,Y:"
                                                            : "DIM line pt:";
     }
   }
@@ -6235,7 +6276,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     using CP = AppCommandState::CirclePhase;
     switch (cmd.circlePhase) {
     case CP::WaitCenterOrMode:
-      return "Center or type 3P:";
+      return "Center or type [3P]:";
     case CP::WaitRadius:
       return "Radius, D+diameter, or click:";
     case CP::ThreeP_WaitP1:
@@ -6249,7 +6290,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
   if (cmd.active == AppCommandState::Kind::Move || cmd.active == AppCommandState::Kind::Copy) {
     using MP = AppCommandState::ModifyPhase;
     if (cmd.modifyPhase == MP::PickSelection)
-      return "Click objects or window, Enter when done:";
+      return kSelectObjectsPrompt;  // REQ-121
     if (cmd.modifyPhase == MP::NeedBase)
       return "Base point X,Y:";
     return "Destination @dx,dy or X,Y:";
@@ -6258,7 +6299,7 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     using AP = AppCommandState::ArrayPhase;
     switch (cmd.arrayPhase) {
     case AP::PickSelection:
-      return "ARRAY — click objects or window, Enter when done:";
+      return kSelectObjectsPrompt;  // REQ-121
     case AP::WaitType:
       return "ARRAY — array type: [R]ectangular / [P]olar:";
     case AP::Rect_WaitColumns:
@@ -6284,13 +6325,13 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     using MP = AppCommandState::ModifyPhase;
     using SP = AppCommandState::ScalePhase;
     if (cmd.modifyPhase == MP::PickSelection)
-      return "SCALE — click objects or window, Enter when done:";
+      return kSelectObjectsPrompt;  // REQ-121
     if (cmd.modifyPhase == MP::NeedBase)
       return "SCALE — base point X,Y:";
     if (cmd.modifyPhase == MP::NeedDestination) {
       switch (cmd.scalePhase) {
       case SP::FactorPick:
-        return "SCALE — scale factor, second point from base, or R (reference):";
+        return "SCALE — scale factor, second point from base, or [R]eference:";
       case SP::Ref_WaitP1:
         return "SCALE ref — first point X,Y:";
       case SP::Ref_WaitP2:
@@ -6309,26 +6350,26 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     using RP = AppCommandState::RotatePhase;
     switch (cmd.rotatePhase) {
     case RP::PickSelection:
-      return "Click objects or window, Enter when done:";
+      return kSelectObjectsPrompt;  // REQ-121
     case RP::NeedBase:
       return "Base point X,Y:";
     case RP::NeedAngleOrReference:
-      return "° CW from north / DMS / R / C (copy):";
+      return "° CW from north / DMS / [R]eference / [C]opy:";
     case RP::Ref_WaitP1:
     case RP::Ref_WaitP2:
-      return "Reference point X,Y (C toggles copy):";
+      return "Reference point X,Y ([C] toggles copy):";
     case RP::AfterReference_WaitAngleOrP:
-      return "Bearing ° from north / DMS / P / C (copy):";
+      return "Bearing ° from north / DMS / [P] / [C]opy:";
     case RP::AnglePoints_WaitP1:
     case RP::AnglePoints_WaitP2:
-      return "Angle point X,Y (C toggles copy):";
+      return "Angle point X,Y ([C] toggles copy):";
     }
   }
   if (cmd.active == AppCommandState::Kind::Mirror) {
     using MirP = AppCommandState::MirrorPhase;
     switch (cmd.mirrorPhase) {
     case MirP::PickSelection:
-      return "MIRROR — click objects or window, Enter when done:";
+      return kSelectObjectsPrompt;  // REQ-121
     case MirP::NeedP1:
       return "MIRROR — first point of mirror line X,Y:";
     case MirP::NeedP2:
@@ -6379,13 +6420,13 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     return "Destination @dx,dy or X,Y:";
   }
   if (cmd.active == AppCommandState::Kind::Delete)
-    return "DELETE — window opposite corner or ESC:";
+    return kSelectObjectsPrompt;  // REQ-121
   if (cmd.active == AppCommandState::Kind::Join)
-    return "JOIN — window opposite corner or ESC:";
+    return kSelectObjectsPrompt;  // REQ-121
   if (cmd.active == AppCommandState::Kind::Trim) {
     using TP = AppCommandState::TrimPhase;
     if (cmd.trimPhase == TP::SelectCuttingEdges)
-      return "TRIM — cutting edges, Enter (or L = draw on segment, two clicks):";
+      return "TRIM — cutting edges, Enter (or [L] = draw on segment, two clicks):";
     if (cmd.trimPhase == TP::CuttingLine_WaitP1)
       return "TRIM line-trim — first point:";
     if (cmd.trimPhase == TP::CuttingLine_WaitP2)
@@ -6419,6 +6460,18 @@ static const char* CommandInputHint(const AppCommandState& cmd) {
     h = ZoomCommandFooterHint(cmd);     if (h && h[0]) return h;
   }
   return "Command:";
+}
+
+// Content-driven width for the dynamic-cursor input field (REQ-306): sized to fit
+// the widest of the strings actually shown (current field text plus, when given,
+// a placeholder/hint that must also fit), rather than a fixed footprint. `minPx`
+// keeps the field usable for its first keystroke; `maxPx` bounds a pathological
+// paste from taking over the viewport.
+static float DynamicCursorFieldWidth(const char* text, const char* alsoFits, float minPx, float maxPx) {
+  float w = ImGui::CalcTextSize(text ? text : "").x;
+  if (alsoFits) w = std::max(w, ImGui::CalcTextSize(alsoFits).x);
+  const float chrome = ImGui::GetStyle().FramePadding.x * 2.f + ImGui::GetFontSize();
+  return std::clamp(w + chrome, minPx, maxPx);
 }
 
 // True when the active prompt expects a coordinate POINT, so the cursor dynamic
@@ -6898,49 +6951,96 @@ static bool   s_cmdSugPopupOpen = false;
 static ImVec2 s_cmdSugPopupMin = ImVec2(0.f, 0.f);
 static ImVec2 s_cmdSugPopupMax = ImVec2(0.f, 0.f);
 
-// REQ-040: render a command hint inline, turning [TOKEN] markers into clickable links
-// that submit the lowercased token (e.g. [A] → "a", [2P] → "2p"). This is the standard
-// for command prompts that offer keyword options; plain text uses the dim color. Items are
-// chained with SameLine(0,0); the caller positions the first segment.
-static void RenderClickableCommandHint(const char* hint, AppCommandState& cmd, std::vector<std::string>& log,
-                                       const ImVec4& dimCol) {
-  if (!hint || !hint[0])
-    return;
-  auto submit = [&](std::string tok) {
+// REQ-040/REQ-119: lay out one command prompt — plain text plus clickable variant links —
+// and return the height it occupies. `cmdbar::ParsePromptSegments` decides what is a link;
+// this function only places the pieces, so the rule stays testable without a UI harness.
+//
+// Clicking a link calls ProcessCommandLineSubmit with the variant's shortcut — the identical
+// entry point Enter uses on typed text. That is what makes mouse and keyboard the same path
+// rather than two implementations that can drift (GitHub #81).
+//
+// `draw == false` measures without emitting any item, which is how DrawCommandLinePanel
+// reserves footer height: the reservation and the drawn content run the SAME layout, so they
+// cannot disagree about where lines break. They must not — a hint that reserves one line and
+// draws two shoves the links out from under the mouse (the REQ-040 note above the footer).
+//
+// `wrapW <= 0` disables wrapping, which is what the floating bar wants: it is one line by
+// design (REQ-040), so its prompt must never reflow.
+static float LayoutCommandHint(const char* hint, AppCommandState& cmd, std::vector<std::string>& log,
+                               const ImVec4& dimCol, float wrapW, bool draw) {
+  const std::vector<cmdbar::PromptSegment> segs = cmdbar::ParsePromptSegments(hint);
+  if (segs.empty())
+    return 0.f;
+
+  const bool wrap = wrapW > 0.f;
+  auto submit = [&](const std::string& shortcut) {
+    std::string tok = shortcut;
     for (char& c : tok) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    char tmp[24];
+    char tmp[32];
     std::snprintf(tmp, sizeof(tmp), "%s", tok.c_str());
     ProcessCommandLineSubmit(tmp, static_cast<int>(sizeof(tmp)), cmd, log);
   };
-  bool first = true;
-  std::string plain;
-  auto flushPlain = [&]() {
-    if (plain.empty())
-      return;
-    if (!first) ImGui::SameLine(0, 0);
-    ImGui::PushStyleColor(ImGuiCol_Text, dimCol);
-    ImGui::TextUnformatted(plain.c_str());
-    ImGui::PopStyleColor();
-    first = false;
-    plain.clear();
-  };
-  for (const char* p = hint; *p;) {
-    if (*p == '[') {
-      if (const char* close = std::strchr(p, ']')) {
-        flushPlain();
-        const std::string tok(p + 1, close);  // token without brackets
-        const std::string label = "[" + tok + "]";
-        if (!first) ImGui::SameLine(0, 0);
-        if (ImGui::TextLink(label.c_str())) submit(tok);
-        first = false;
-        p = close + 1;
-        continue;
+
+  int lines = 1;
+  float lineW = 0.f;
+  bool firstOnLine = true;  // true => emit with no SameLine, so ImGui starts a fresh line
+
+  auto place = [&](const std::string& text, bool isLink, const std::string& shortcut) {
+    const float w = ImGui::CalcTextSize(text.c_str()).x;
+    if (wrap && !firstOnLine && lineW + w > wrapW) {
+      ++lines;
+      lineW = 0.f;
+      firstOnLine = true;
+    }
+    if (draw) {
+      if (!firstOnLine)
+        ImGui::SameLine(0.f, 0.f);
+      if (isLink) {
+        if (ImGui::TextLink(text.c_str()))
+          submit(shortcut);
+      } else {
+        ImGui::PushStyleColor(ImGuiCol_Text, dimCol);
+        ImGui::TextUnformatted(text.c_str());
+        ImGui::PopStyleColor();
       }
     }
-    plain.push_back(*p);
-    ++p;
+    lineW += w;
+    firstOnLine = false;
+  };
+
+  for (const cmdbar::PromptSegment& s : segs) {
+    if (s.isLink) {
+      place(s.text, true, s.shortcut);  // a link never splits — it is one click target
+      continue;
+    }
+    // Plain text is emitted whole whenever it fits, so spacing renders exactly as written.
+    // Splitting into words is only done when the run must wrap, which is the one case where
+    // exact spacing cannot survive anyway — and is what keeps a long docked prompt on-screen.
+    const float w = ImGui::CalcTextSize(s.text.c_str()).x;
+    if (!wrap || lineW + w <= wrapW) {
+      place(s.text, false, std::string());
+      continue;
+    }
+    for (std::size_t i = 0; i < s.text.size();) {
+      std::size_t e = i;
+      while (e < s.text.size() && s.text[e] != ' ')
+        ++e;
+      while (e < s.text.size() && s.text[e] == ' ')
+        ++e;  // carry the following spaces with the word
+      std::string word = s.text.substr(i, e - i);
+      if (firstOnLine) {
+        const std::size_t nb = word.find_first_not_of(' ');
+        word = (nb == std::string::npos) ? std::string() : word.substr(nb);  // no leading space
+      }
+      if (!word.empty())
+        place(word, false, std::string());
+      i = e;
+    }
   }
-  flushPlain();
+
+  const float lineH = ImGui::GetTextLineHeight();
+  return static_cast<float>(lines) * lineH +
+         static_cast<float>(lines - 1) * ImGui::GetStyle().ItemSpacing.y;
 }
 
 void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBufSize, AppCommandState& cmd) {
@@ -7045,6 +7145,11 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   auto wrappedBlockH = [&](const char* s) -> float {
     if (!footerNonEmpty(s))
       return 0.f;
+    // A hint carrying variant markup is laid out piece-by-piece, not word-wrapped as one
+    // string, so it must be MEASURED the same way (REQ-119) — CalcTextSize would count the
+    // brackets ImGui never draws as one run and could disagree about the line count.
+    if (std::strchr(s, '['))
+      return LayoutCommandHint(s, cmd, log, ImVec4(), wrapW, /*draw=*/false) + st.ItemSpacing.y;
     return ImGui::CalcTextSize(s, nullptr, false, wrapW).y + st.ItemSpacing.y;
   };
 
@@ -7277,7 +7382,9 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       // links (REQ-040), replacing the plain placeholder. Idle shows "Type a command".
       if (activeHint) {
         ImGui::AlignTextToFramePadding();
-        RenderClickableCommandHint(CommandInputHint(cmd), cmd, log, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+        // wrapW 0 = never wrap: the floating bar is a single line by design (REQ-040).
+        LayoutCommandHint(CommandInputHint(cmd), cmd, log, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled),
+                          0.f, /*draw=*/true);
         ImGui::SameLine(0, 6);
       }
       inputW = std::max(80.f, ImGui::GetContentRegionAvail().x - barIconH - 19.f);  // reserve chevron + width grip
@@ -7415,51 +7522,26 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   // Floating bar: the prompt lives in the input field's placeholder (CommandInputHint),
   // so the separate footer-hint lines are suppressed — the bar stays a clean single line.
   // Classic dock keeps the wrapped hint lines below the input.
+  //
+  // REQ-119: a hint carrying variant markup goes through the SHARED renderer — the same one
+  // the floating bar uses — so no command needs click handling of its own. LINE used to have
+  // a hand-rolled copy of this here, with [A]/[2P] and their tokens spelled out literally;
+  // it was deleted because it was exactly the per-command duplication #81 asks us to avoid,
+  // and because it could only ever cover the one prompt someone remembered to hardcode.
   auto renderHint = [&](const char* s) {
     if (floating || !s || !s[0]) return;
-    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    const ImVec4 dim = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    if (std::strchr(s, '[')) {
+      LayoutCommandHint(s, cmd, log, dim, wrapW, /*draw=*/true);
+      return;
+    }
+    ImGui::PushStyleColor(ImGuiCol_Text, dim);
     ImGui::TextWrapped("%s", s);
     ImGui::PopStyleColor();
   };
 
   renderHint(circFooter);
-
-  // LINE basic next-point hint: render [A]/[2P] as clickable links that start the
-  // azimuth-entry / two-pick-bearing sub-modes (same as typing "a" / "2p"). Other
-  // LINE states (and all other commands) use the plain renderHint path.
-  {
-    using LP = AppCommandState::LinePhase;
-    using SAPx = AppCommandState::SegmentAnglePickPhase;
-    const bool lineNextClickable =
-        !floating && cmd.active == AppCommandState::Kind::Line && cmd.linePhase == LP::NeedNextPoint &&
-        !cmd.segmentAngleKeyboardAwaitBearing && !cmd.segmentAngleLockActive &&
-        cmd.segmentAnglePickPhase == SAPx::Idle;
-    if (lineNextClickable) {
-      auto submitToken = [&](const char* tok) {
-        char tmp[16];
-        std::snprintf(tmp, sizeof(tmp), "%s", tok);
-        ProcessCommandLineSubmit(tmp, static_cast<int>(sizeof(tmp)), cmd, log);
-      };
-      const ImVec4 dim = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
-      auto dimText = [&](const char* t) {
-        ImGui::PushStyleColor(ImGuiCol_Text, dim);
-        ImGui::TextUnformatted(t);
-        ImGui::PopStyleColor();
-      };
-      dimText("Next: click; X, Y; @dx,dy; ");
-      ImGui::SameLine(0.f, 0.f);
-      if (ImGui::TextLink("[A]")) submitToken("a");
-      ImGui::SameLine(0.f, 0.f);
-      dimText("zimuth, ");
-      ImGui::SameLine(0.f, 0.f);
-      if (ImGui::TextLink("[2P]")) submitToken("2p");
-      ImGui::SameLine(0.f, 0.f);
-      dimText(";");
-    } else {
-      renderHint(lineFooter);
-    }
-  }
-
+  renderHint(lineFooter);
   renderHint(modFooter);
   renderHint(scaleFooter);
   renderHint(rotFooter);
@@ -8653,12 +8735,6 @@ static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::st
   ImGui::PopStyleColor();
 }
 
-static std::vector<CadSnap::SnapCandidateEntry> g_snapPickMenuScratch;
-static int g_snapMenuStep = 0; ///< 0 = choose snap type, 1 = choose instance
-static float g_snapMenuSortX = 0.f;
-static float g_snapMenuSortY = 0.f;
-static CadSnap::Kind g_snapMenuSelectedKind = CadSnap::Kind::Endpoint;
-
 static const char* SnapKindLabelForUi(CadSnap::Kind k) {
   switch (k) {
   case CadSnap::Kind::Endpoint:
@@ -8681,25 +8757,6 @@ static const char* SnapKindLabelForUi(CadSnap::Kind k) {
     return "Grip";
   }
   return "Snap";
-}
-
-static void FormatSnapPickLine(char* line, size_t cap, const AppCommandState& cmd, const CadSnap::Hit& h) {
-  if (cap < 8)
-    return;
-  if (h.kind == CadSnap::Kind::SurveyCenter) {
-    for (size_t i = 0; i < cmd.surveyPoints.size(); ++i) {
-      const auto& p = cmd.surveyPoints[i];
-      if (std::fabs(p.easting - h.x) < 1e-4f && std::fabs(p.northing - h.y) < 1e-4f) {
-        std::snprintf(line, cap, "%s — ID %d — %s, %s", SnapKindLabelForUi(h.kind), p.id,
-                      FormatLinear(static_cast<double>(h.x), cmd.displayLinearPrecision).c_str(),
-                      FormatLinear(static_cast<double>(h.y), cmd.displayLinearPrecision).c_str());
-        return;
-      }
-    }
-  }
-  std::snprintf(line, cap, "%s — %s, %s", SnapKindLabelForUi(h.kind),
-                FormatLinear(static_cast<double>(h.x), cmd.displayLinearPrecision).c_str(),
-                FormatLinear(static_cast<double>(h.y), cmd.displayLinearPrecision).c_str());
 }
 
 /// When a single annotation with viewport grips is selected, pull the cursor to the nearest grip inside the OSNAP
@@ -8887,6 +8944,28 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // framing instead of the sheet (handled below, after paper coords are available).
   const bool routeZoomToViewport = InFloatingModelSpace(cmd) && !cmd.viewportZoomLocked;
 
+  // ZOOM EXTENTS by middle double-click (REQ-120) — AutoCAD's binding for the same gesture.
+  //
+  // Raised HERE rather than inside the wheel/pan block below, because that block is guarded by
+  // `!routeZoomToViewport`: with a floating viewport owning pan/zoom (the default, lock OFF) it is
+  // skipped entirely, so the gesture silently did nothing in exactly the place issue #100 is about.
+  // REQ-120 claimed floating model space frames the model; it never even fired there. Corrected as
+  // part of REQ-123 — the flag is raised in every space and `ProcessPendingViewportZoom` decides
+  // what "extents" means for each.
+  //
+  // Deliberately NOT routed through StartZoomExtentsCommand: that refuses while a command is
+  // running, and this gesture is TRANSPARENT, because wanting to reframe mid-command is exactly
+  // when a user reaches for it. Setting the flag directly is the same thing DXF import already does
+  // to frame a freshly-imported drawing, and it is safe mid-command because the deferred consumer
+  // writes only a camera — the active command's phase, picked points and draft geometry are
+  // untouched. The typed ZOOMEXTENTS keeps its guard and its refusal message.
+  //
+  // A double-click is not a drag, so middle-drag pan is unaffected (REQ-045 requires it).
+  if (hovered && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Middle)) {
+    cmd.pendingZoomWindow = false;  // a pending ZOOM WINDOW would otherwise win the same frame
+    cmd.pendingZoomExtents = true;
+  }
+
   if (hovered && !routeZoomToViewport) {
     const float wheel = ImGui::GetIO().MouseWheel;
     if (wheel != 0.f && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y) {
@@ -8906,6 +8985,18 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       *panY += dh * (1.0 - 2.0 * v);
       *zoom = static_cast<float>(z1);
     }
+
+    // ZOOM EXTENTS by middle double-click (REQ-120) — AutoCAD's binding for the same gesture.
+    // Deliberately NOT routed through StartZoomExtentsCommand: that refuses while a command is
+    // running, and this gesture is TRANSPARENT, because wanting to reframe mid-command is exactly
+    // when a user reaches for it. Setting the flag directly is the same thing DXF import already
+    // does to frame a freshly-imported drawing, and it is safe mid-command because the deferred
+    // consumer writes only the camera — the active command's phase, picked points and draft
+    // geometry are untouched. The typed ZOOMEXTENTS keeps its guard and its refusal message.
+    //
+    // A double-click is not a drag, so middle-drag pan below is unaffected (REQ-045 requires it).
+    // (The gesture itself is raised OUTSIDE this block — see below — because this block is skipped
+    // entirely while a floating viewport owns pan/zoom, and the gesture must work there too.)
 
     // ORBIT (REQ-058): Shift + middle-drag tumbles the camera about the pan point, matching
     // AutoCAD's 3DORBIT binding. Plain middle-drag still pans, so nothing existing changes.
@@ -9201,7 +9292,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       if (cmd.paperMovePhase != 0 || cmd.paperRotatePhase != 0 || cmd.paperMirrorPhase != 0 ||
           cmd.paperLengthenPhase != 0 || cmd.paperExtendPhase != 0 || cmd.paperBreakPhase != 0 ||
           cmd.paperStretchPhase != 0 || cmd.paperFilletPhase != 0 || cmd.paperChamferPhase != 0 ||
-          cmd.paperGripCorner != -2 || cmd.paperSelBoxActive) {
+          cmd.paperGripCorner != -2 || cmd.paperSelBoxActive ||
+          cmd.paperMoveWaitingSelection || cmd.paperDeleteWaitingSelection) {  // REQ-307
         cmd.paperMovePhase = 0;
         cmd.paperRotatePhase = 0;
         cmd.paperMirrorPhase = 0;
@@ -9218,6 +9310,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.paperChamferFirstPolySeg = -1;
         cmd.paperGripCorner = -2;
         cmd.paperSelBoxActive = false;
+        cmd.paperMoveWaitingSelection = false;
+        cmd.paperDeleteWaitingSelection = false;
       } else if (!cmd.selectedViewports.empty() || !cmd.selectedPaperEntities.empty()) {
         ClearViewportSelection(cmd);
         ClearPaperEntitySelection(cmd);
@@ -9239,6 +9333,22 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.paperExtendBoundaries.clear();
         log.push_back("EXTEND — finished.");
       }
+    }
+    // REQ-307 (GitHub #106): Enter is what acts on the paper-space selection step, the same shape
+    // model-space MOVE/COPY/DELETE use (ProcessCommandLineSubmit's PickSelection branches) — but
+    // these never set cmd.active, so that dispatcher never sees them via its Kind-keyed switch; the
+    // shared logic lives in CadCommands.cpp (ProcessPaperMoveWaitingSelectionEnter/
+    // ProcessPaperDeleteWaitingSelectionEnter) so ProcessCommandLineSubmit's own blank-Enter branch
+    // can call it too — this raw check is only for Enter pressed while the mouse/focus never touched
+    // the command line, the same reason EXTEND's paper phase above needs one.
+    //
+    // GetActiveID() == 0 is the guard that keeps the two callers from double-firing on one keypress:
+    // when the command-line InputText holds keyboard focus, its own Enter submit already reaches
+    // ProcessCommandLineSubmit, whose blank-line branch calls the identical function — this raw poll
+    // must stay silent then, or a focused blank Enter would advance/delete twice in one frame.
+    if (ImGui::GetActiveID() == 0 && ImGui::IsKeyPressed(ImGuiKey_Enter)) {
+      ProcessPaperMoveWaitingSelectionEnter(cmd, log);
+      ProcessPaperDeleteWaitingSelectionEnter(cmd, log);
     }
 
     auto primaryVp = [&]() -> Viewport* {
@@ -9313,7 +9423,79 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       BumpCadGpuCache(cmd);
     };
 
-    if (clickL && cmd.paperMovePhase == 1) {  // MOVE/COPY: base point
+    // REQ-307 (GitHub #106): the paper-space selection step's box MERGES into the accumulating
+    // selection rather than replacing it — the paper-space analog of model-space
+    // ViewportClickRoute::SelectionAccumulate (D-2026-08-25-l). Same box math as closePaperSelBox
+    // above; the only difference is union instead of clear-then-assign.
+    auto closePaperSelBoxMerge = [&](float closeX, float closeY) {
+      const bool windowMode = closeX >= cmd.paperSelBoxX0In;
+      const float bx0 = std::min(cmd.paperSelBoxX0In, closeX), bx1 = std::max(cmd.paperSelBoxX0In, closeX);
+      const float by0 = std::min(cmd.paperSelBoxY0In, closeY), by1 = std::max(cmd.paperSelBoxY0In, closeY);
+      for (int vi = 0; vi < static_cast<int>(L.viewports.size()); ++vi) {
+        const Viewport& v = L.viewports[static_cast<size_t>(vi)];
+        const float vx0 = v.paperXIn, vy0 = v.paperYIn, vx1 = v.paperXIn + v.paperWIn, vy1 = v.paperYIn + v.paperHIn;
+        const bool overlap = vx0 <= bx1 && vx1 >= bx0 && vy0 <= by1 && vy1 >= by0;
+        const bool boxInsideInterior = bx0 > vx0 && bx1 < vx1 && by0 > vy0 && by1 < vy1;
+        const bool sel = windowMode ? (vx0 >= bx0 && vx1 <= bx1 && vy0 >= by0 && vy1 <= by1)
+                                    : (overlap && !boxInsideInterior);
+        if (sel && std::find(cmd.selectedViewports.begin(), cmd.selectedViewports.end(), vi) ==
+                       cmd.selectedViewports.end())
+          cmd.selectedViewports.push_back(vi);
+      }
+      cmd.selectedViewportIndex = cmd.selectedViewports.empty() ? -1 : cmd.selectedViewports.back();
+      cmd.selectedViewportLayout = cmd.selectedViewports.empty() ? -1 : cmd.activeSpaceIndex;
+      std::vector<PaperEntityRef> boxEntities;
+      SelectPaperEntitiesInBox(L, bx0, by0, bx1, by1, windowMode, boxEntities);
+      for (const auto& e : boxEntities) {
+        bool present = false;
+        for (const auto& s : cmd.selectedPaperEntities)
+          if (s.type == e.type && s.index == e.index) { present = true; break; }
+        if (!present)
+          cmd.selectedPaperEntities.push_back(e);
+      }
+      cmd.paperSelBoxLastValid = true;
+      cmd.paperSelBoxLastMnXIn = bx0;
+      cmd.paperSelBoxLastMxXIn = bx1;
+      cmd.paperSelBoxLastMnYIn = by0;
+      cmd.paperSelBoxLastMxYIn = by1;
+      cmd.paperSelBoxActive = false;
+      BumpCadGpuCache(cmd);
+    };
+
+    if (clickL && (cmd.paperMoveWaitingSelection || cmd.paperDeleteWaitingSelection)) {
+      // REQ-307: additive click-or-box accumulation for the paper-space selection step, mirroring
+      // model-space SelectionAccumulate (D-2026-08-25-l) — a click toggles one object into the set
+      // with no Shift required (SelectViewport/TogglePaperEntitySelection's own `additive=true`
+      // already implements exactly this toggle), and a box MERGES rather than replaces.
+      if (cmd.paperSelBoxActive) {
+        closePaperSelBoxMerge(curX, curY);
+      } else {
+        PaperEntityRef pr;
+        if (PickPaperEntityAt(L, curX, curY, entityPickTolIn, &pr)) {
+          TogglePaperEntitySelection(cmd, pr, /*additive=*/true);
+        } else {
+          // Viewport BORDER hit test, same band/interior rule as the idle fallback below (clicking
+          // the interior is the model view, so it does not select).
+          const float bt = std::max(gripTolIn, 5.f / std::max(1.e-6f, pxPerWorld));
+          int hit = -1;
+          for (int vi = static_cast<int>(L.viewports.size()) - 1; vi >= 0; --vi) {
+            const Viewport& v = L.viewports[static_cast<size_t>(vi)];
+            const float x0 = v.paperXIn, y0 = v.paperYIn, x1 = v.paperXIn + v.paperWIn, y1 = v.paperYIn + v.paperHIn;
+            const float btv = std::min(bt, 0.25f * std::min(v.paperWIn, v.paperHIn));
+            const bool inOuter = curX >= x0 - btv && curX <= x1 + btv && curY >= y0 - btv && curY <= y1 + btv;
+            const bool inInner = curX >= x0 + btv && curX <= x1 - btv && curY >= y0 + btv && curY <= y1 - btv;
+            if (inOuter && !inInner) { hit = vi; break; }
+          }
+          if (hit >= 0) {
+            SelectViewport(cmd, hit, /*additive=*/true);
+          } else {
+            cmd.paperSelBoxActive = true;
+            cmd.paperSelBoxX0In = curX;
+            cmd.paperSelBoxY0In = curY;
+          }
+        }
+      }
+    } else if (clickL && cmd.paperMovePhase == 1) {  // MOVE/COPY: base point
       cmd.paperMoveBaseXIn = curX;
       cmd.paperMoveBaseYIn = curY;
       cmd.paperMovePhase = 2;
@@ -9533,8 +9715,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // plain click, leaving the box open for the click-click flow above.
     if (cmd.paperSelBoxActive && ImGui::IsMouseReleased(ImGuiMouseButton_Left)) {
       const ImVec2 dd = ImGui::GetMouseDragDelta(ImGuiMouseButton_Left);
-      if (std::sqrt(dd.x * dd.x + dd.y * dd.y) > 4.f)
-        closePaperSelBox(curX, curY);
+      if (std::sqrt(dd.x * dd.x + dd.y * dd.y) > 4.f) {
+        // REQ-307: a dragged box during the selection step merges, same as the click-click path above.
+        if (cmd.paperMoveWaitingSelection || cmd.paperDeleteWaitingSelection)
+          closePaperSelBoxMerge(curX, curY);
+        else
+          closePaperSelBox(curX, curY);
+      }
     }
 
     // Live grip edit: the grabbed viewport follows the cursor until the commit click.
@@ -9593,7 +9780,11 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         cmd.viewportSnapPickValid = false;
         const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
                             cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
-        if (cmd.objectSnapEnabled && midCmd) {
+        // REQ-121 rule (1), floating model space (REQ-036). The same suppression as the model-space
+        // seam below: a selection step is a selection step whichever window it happens inside, and
+        // leaving this one snapping would make the rule true in model space and false through a
+        // viewport — exactly the per-command-accident shape REQ-121 exists to remove.
+        if (cmd.objectSnapEnabled && midCmd && !ViewportIsObjectSelectionStep(cmd)) {
           const float tol = std::max(1.e-6f, cmd.objectSnapAperturePx * worldPerPx);
           CadSnap::SnapExclude exclude{};
           if (cmd.entityGripMoveActive && cmd.entityGripEntityIndex >= 0) {
@@ -9721,15 +9912,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   {
     ImGuiIO& ioVpRmb = ImGui::GetIO();
     if (modelSpace && hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
-      const float uR = mx / std::max(avail.x, 1.f);
-      const float vR = my / std::max(avail.y, 1.f);
-      const double rmbWx = worldLeft + static_cast<double>(uR) * (worldRight - worldLeft);
-      const double rmbWy = worldTop - static_cast<double>(vR) * (worldTop - worldBottom);
       using AK = AppCommandState::Kind;
       const bool blockSnapPickMenu = cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond || cmd.dimGripMoveActive ||
                                      cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
-      const bool allowSnapCycle =
-          cmd.active != AK::None && cmd.objectSnapEnabled && !blockSnapPickMenu;
+      // REQ-121 rule (1), second seam (GitHub #91 review, D-2026-08-26-d, re-derived post-#103 as
+      // D-2026-08-26-e). The snap OVERRIDE menu is a way of forcing a snap, so offering it during an
+      // object-selection step offers the user the exact behaviour the rule removes. Picking a
+      // candidate arms `objectSnapKindOverrideValid` as a persistent per-kind lock (issue #103); that
+      // lock's consumption is already behind `snapViewportActive`'s own selection-step gate, so this
+      // menu-level gate is what stops the lock from being armed off a selection-step pixel at all —
+      // otherwise it would silently apply to the next NON-selection snap instead, a smaller but real
+      // surprise (the override outliving the click that seemed to have no effect).
+      const bool allowSnapCycle = cmd.active != AK::None && cmd.objectSnapEnabled &&
+                                  !blockSnapPickMenu && !ViewportIsObjectSelectionStep(cmd);
       using DM = AppCommandState::RightClickDefaultMode;
       using EM = AppCommandState::RightClickEditMode;
       using CM = AppCommandState::RightClickCommandMode;
@@ -9786,10 +9981,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
       if (ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
         if (ioVpRmb.KeyShift && allowSnapCycle) {
-          g_snapMenuSortX = static_cast<float>(rmbWx);
-          g_snapMenuSortY = static_cast<float>(rmbWy);
-          g_snapMenuStep = 0;
-          g_snapPickMenuScratch.clear();
           ImGui::OpenPopup("##gos_snap_pick");
           cmd.rightClickPressPending = false;
         } else if (!blockSnapPickMenu) {
@@ -10026,23 +10217,29 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
     }
 
-    if (cmd.pendingOneShotSnapValid && outCursorX && outCursorY) {
-      *outCursorX = cmd.pendingOneShotSnapX;
-      *outCursorY = cmd.pendingOneShotSnapY;
-      cmd.viewportSnapPickValid = true;
-      cmd.viewportSnapPickLocalX = cmd.pendingOneShotSnapX;
-      cmd.viewportSnapPickLocalY = cmd.pendingOneShotSnapY;
-      if (out_snap) {
-        out_snap->valid = true;
-        out_snap->kind = static_cast<CadSnap::Kind>(cmd.pendingOneShotSnapKind);
-        out_snap->x = cmd.pendingOneShotSnapX;
-        out_snap->y = cmd.pendingOneShotSnapY;
-      }
-    } else {
+    // GitHub #91 review, D-2026-08-26-d, re-derived post-#103 (D-2026-08-26-e). The override menu
+    // (Shift+Right-Click "Snap once") is gated against ViewportIsObjectSelectionStep above, at
+    // `allowSnapCycle`, so it cannot be opened during a selection step. Its consumption — reading
+    // `objectSnapKindOverrideValid` as the `onlyKind` filter below — already lives inside
+    // `snapViewportActive`'s own `!ViewportIsObjectSelectionStep(cmd)` gate (a few lines down), the
+    // same gate the plain automatic snap uses. There is no separate one-shot consumption site left
+    // to gate here post-#103: `pendingOneShotSnapValid`'s one-shot-value mechanism was replaced by a
+    // persistent per-kind lock, consumed every frame at the one place FindBest is called, which is
+    // already behind the selection-step check. A second gate here would be redundant, not defensive.
+    {
       cmd.viewportSnapPickValid = false;
       const bool midCmd = cmd.active != AppCommandState::Kind::None || cmd.showCreatePointsWindow ||
                           cmd.dimGripMoveActive || cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
-      const bool snapViewportActive = cmd.objectSnapEnabled && midCmd;
+      // REQ-121 rule (1). During an object-selection step OSNAP has no effect: no marker is drawn
+      // and the cursor does not jump, because there is no coordinate being placed. The pick itself
+      // was already hit-tested against the raw cursor (`RawEntityPick`'s own comment says why), so
+      // before this the cursor visibly leapt to an endpoint while the pick correctly ignored it —
+      // the two halves disagreeing on screen, which is worse than either being wrong alone.
+      //
+      // Suppressing it HERE, at the one place the snap is computed, is what makes the marker vanish
+      // too: everything downstream reads `snap.valid`.
+      const bool snapViewportActive =
+          cmd.objectSnapEnabled && midCmd && !ViewportIsObjectSelectionStep(cmd);
       CadSnap::Hit snap{};
       if (snapViewportActive) {
         const float tol = CadSnap::WorldToleranceFromPixels(avail.y, halfH, cmd.objectSnapAperturePx);
@@ -10052,7 +10249,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           exclude.type  = cmd.entityGripType;
           exclude.index = cmd.entityGripEntityIndex;
         }
-        snap = CadSnap::FindBest(rawX, rawY, cmd, midCmd, tol, exclude, cursorRayPtr);  // 3D when orbited (REQ-058)
+        // issue #103: the Shift+Right-Click "Snap once" override restricts FindBest to just the
+        // chosen kind for this hover/pick, ignoring the persistent per-type toggles — that is the
+        // whole point of an override menu.
+        const CadSnap::Kind overrideKind = static_cast<CadSnap::Kind>(cmd.objectSnapKindOverrideKind);
+        const CadSnap::Kind* onlyKind = cmd.objectSnapKindOverrideValid ? &overrideKind : nullptr;
+        snap = CadSnap::FindBest(rawX, rawY, cmd, midCmd, tol, exclude, cursorRayPtr, onlyKind);  // 3D when orbited (REQ-058)
         if (snap.valid) {
           cmd.viewportSnapPickValid = true;
           cmd.viewportSnapPickLocalX = snap.x;
@@ -10091,7 +10293,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         *outCursorY = rawY;
       }
     }
-    if (!cmd.pendingOneShotSnapValid && outCursorX && outCursorY &&
+    if (!cmd.objectSnapKindOverrideValid && outCursorX && outCursorY &&
         !cmd.dimGripMoveActive && !cmd.entityGripMoveActive && !cmd.mtextGripMoveActive) {
       ApplyGripMagnetToGrips(cmd, rawX, rawY, halfH, avail.y, outCursorX, outCursorY, out_snap);
       // Silent grip snap for all selected entities — no glyph, works regardless of OSNAP toggle.
@@ -11075,9 +11277,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const ImVec2 a(std::min(p0.x, p1.x), std::min(p0.y, p1.y));
     const ImVec2 b(std::max(p0.x, p1.x), std::max(p0.y, p1.y));
     ImDrawList* sdl = ImGui::GetWindowDrawList();
+    // Clipped to the drawing Image rect so the white paper does not bleed into surrounding UI (issue #101).
+    const ImVec2 __canvasMin = imgPos;
+    const ImVec2 __canvasMax = ImVec2(imgPos.x + avail.x, imgPos.y + avail.y);
+    sdl->PushClipRect(__canvasMin, __canvasMax, true);
     sdl->AddRectFilled(ImVec2(a.x + 5.f, a.y + 5.f), ImVec2(b.x + 5.f, b.y + 5.f), IM_COL32(0, 0, 0, 90));  // shadow
     sdl->AddRectFilled(a, b, IM_COL32(244, 244, 244, 255));                                                 // sheet
     sdl->AddRect(a, b, IM_COL32(40, 40, 40, 255), 0.f, 0, 1.5f);                                            // border
+    sdl->PopClipRect();
 
     // Viewports (REQ-027): each shows model space clipped + scaled inside its rect. Drawn via the
     // overlay this increment; the GL-batch pass is tracked tech debt (TASK-002 §7).
@@ -11208,6 +11415,33 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           prev = s;
         }
       }
+      // Ellipses (REQ-028: skip frozen layers).
+      for (size_t ei = 0; ei < cmd.userEllipses.size(); ++ei) {
+        const CadEllipse& el = cmd.userEllipses[ei];
+        const EntityAttributes& attr = EllipseAttr(cmd, static_cast<int>(ei));
+        if (IsLayerFrozenInViewport(vp, attr.layer))
+          continue;
+        const float ma = std::hypot(el.majVx, el.majVy);
+        if (ma < 1e-8f)
+          continue;
+        const int segs = 64;
+        ImU32 ec; float ew;
+        entStyle(SelectedEntity::Type::Ellipse, static_cast<int>(ei), vpBaseCol(attr.layer, attr.color), ec, ew);
+        const float px = -el.majVy * el.ratio;
+        const float py = el.majVx * el.ratio;
+        constexpr double kTwoPi = 6.283185307179586;
+        ImVec2 prev{};
+        for (int k = 0; k <= segs; ++k) {
+          const double u = kTwoPi * static_cast<double>(k) / static_cast<double>(segs);
+          const double c0 = std::cos(u);
+          const double s0 = std::sin(u);
+          const double wx = static_cast<double>(el.cx) + static_cast<double>(el.majVx) * c0 + static_cast<double>(px) * s0;
+          const double wy = static_cast<double>(el.cy) + static_cast<double>(el.majVy) * c0 + static_cast<double>(py) * s0;
+          const ImVec2 s = m2s(wx + oX, wy + oY);
+          if (k > 0) sdl->AddLine(prev, s, ec, ew);
+          prev = s;
+        }
+      }
       // Survey-point crosses (REQ-028: skip frozen layers).
       const float crossPx = 4.f;
       for (const SurveyPoint& sp : cmd.surveyPoints) {
@@ -11288,7 +11522,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
       }
       sdl->PopClipRect();
-      // Viewport border; selected ones accented. The active floating viewport (REQ-036) is green.
+      // Viewport border; clipped to sheet and drawing area so greyed viewport outline does not bleed out of bounds (issue #101).
+      {
+        const ImVec2 __vpCanvasMin = imgPos;
+        const ImVec2 __vpCanvasMax = ImVec2(imgPos.x + avail.x, imgPos.y + avail.y);
+        const ImVec2 __vpClipMin(std::max(a.x, __vpCanvasMin.x), std::max(a.y, __vpCanvasMin.y));
+        const ImVec2 __vpClipMax(std::min(b.x, __vpCanvasMax.x), std::min(b.y, __vpCanvasMax.y));
+        const bool __vpClipValid = __vpClipMin.x < __vpClipMax.x && __vpClipMin.y < __vpClipMax.y;
+        if (__vpClipValid) sdl->PushClipRect(__vpClipMin, __vpClipMax, true);
+        // Viewport border; selected ones accented. The active floating viewport (REQ-036) is green.
       const bool selVp = IsViewportSelected(cmd, vi);
       const bool floatVp = InFloatingModelSpace(cmd) && cmd.floatingViewportLayout == cmd.activeSpaceIndex &&
                            vi == cmd.floatingViewportIndex;
@@ -11305,10 +11547,23 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         sdl->AddRectFilled(ImVec2(ctr.x - 4.f, ctr.y - 4.f), ImVec2(ctr.x + 4.f, ctr.y + 4.f),
                            IM_COL32(245, 200, 70, 255));
       }
+        if (__vpClipValid) sdl->PopClipRect();
+      }
     }
     // Native paper-space geometry (REQ-037): committed sheet lines + text, drawn on top of the viewports
     // (in paper inches via w2s — a title block / annotations sit above viewport content).
+    // Clipped to the sheet AND to the viewport canvas so paper geometry cannot bleed outside
+    // the sheet or outside the drawing area into surrounding UI (issue #101).
     {
+      // Sheet rect (a,b) + viewport canvas (imgPos, avail) intersection
+      const ImVec2 __sheetMin = a;
+      const ImVec2 __sheetMax = b;
+      const ImVec2 __canvasMin = imgPos;
+      const ImVec2 __canvasMax = ImVec2(imgPos.x + avail.x, imgPos.y + avail.y);
+      const ImVec2 __clipMin(std::max(__sheetMin.x, __canvasMin.x), std::max(__sheetMin.y, __canvasMin.y));
+      const ImVec2 __clipMax(std::min(__sheetMax.x, __canvasMax.x), std::min(__sheetMax.y, __canvasMax.y));
+      const bool __clipValid = __clipMin.x < __clipMax.x && __clipMin.y < __clipMax.y;
+      if (__clipValid) sdl->PushClipRect(__clipMin, __clipMax, true);
       constexpr ImU32 kPaperSelCol = IM_COL32(59, 130, 246, 255);
       constexpr ImU32 kPaperHoverCol = IM_COL32(130, 180, 240, 255);  // hover pre-highlight (lighter blue), REQ-039
       const float pxPerPaperIn = avail.x / std::max(1.e-6f, static_cast<float>(worldRight - worldLeft));
@@ -11474,6 +11729,54 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // from the .shx file, TrueType via FontReg (faux bold/italic), MTEXT via the rich wrapper. Height scales
       // with zoom (plotted inches × px/inch), clamped [1, max] so it tracks the sheet instead of a fixed floor.
       auto drawPaperText = [&](const CadAnnotation& a, bool sel, bool hover, ImU32 baseCol) {
+        // Paper-space dims are paper-inch entities (like text) but were falling through to the TEXT path and drawing as glyphs.
+        // Render them as true dimensions so they are clipped to the sheet and scale with paper, not model.
+        if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
+          float sx1=0.f, sy1=0.f, sx2=0.f, sy2=0.f, tx=0.f, ty=0.f, nx=0.f, ny=0.f, meas=0.f;
+          if (!CadDimAnyGeometry(a, &sx1,&sy1,&sx2,&sy2,&tx,&ty,&nx,&ny,&meas)) return;
+          const ImU32 lineCol = sel ? kPaperSelCol : (hover ? kPaperHoverCol : baseCol);
+          constexpr ImU32 kDimTextCol = IM_COL32(248,250,252,255);
+          // Paper dims live in paper inches, so w2s is the projection (no Camera). Helpers mirror model dim path but via w2s.
+          auto ws = [&](float wx, float wy, ImVec2* o){ *o = w2s(wx,wy); };
+          // Dimension line width in screen px - already clipped to sheet via outer __clipValid.
+          const float hPx = std::clamp(a.plottedHeightInches * pxPerPaperIn, 1.f, 8192.f);
+          const float fontPx = std::clamp(hPx, 6.f, 72.f); // paper dims: legible paper size, not world-scaled
+          const float extPx = 1.2f, dimLnPx = 1.2f;
+          const float gap = std::clamp(0.02f * meas, 0.001f, 0.08f);
+          const float over = std::clamp(0.02f * meas, 0.001f, 0.06f);
+          const float leg1 = std::hypot(sx1 - a.dimExt1X, sy1 - a.dimExt1Y);
+          const float u1 = leg1 > 1.e-8f ? gap / leg1 : 0.f;
+          const float ex1 = a.dimExt1X + (sx1 - a.dimExt1X) * u1;
+          const float ey1 = a.dimExt1Y + (sy1 - a.dimExt1Y) * u1;
+          const float leg2 = std::hypot(sx2 - a.dimExt2X, sy2 - a.dimExt2Y);
+          const float u2 = leg2 > 1.e-8f ? gap / leg2 : 0.f;
+          const float ex2 = a.dimExt2X + (sx2 - a.dimExt2X) * u2;
+          const float ey2 = a.dimExt2Y + (sy2 - a.dimExt2Y) * u2;
+          ImVec2 A{}, B{};
+          ws(ex1, ey1, &A); ws(sx1 + nx * over, sy1 + ny * over, &B); sdl->AddLine(A,B,lineCol,extPx);
+          ws(ex2, ey2, &A); ws(sx2 + nx * over, sy2 + ny * over, &B); sdl->AddLine(A,B,lineCol,extPx);
+          const float alenW = 0.08f; // paper-inch arrow approx
+          const float dlen = std::hypot(sx2 - sx1, sy2 - sy1);
+          if (dlen > 1.e-6f) {
+            const float ux = (sx2 - sx1)/dlen, uy = (sy2 - sy1)/dlen;
+            const float tipInset = std::clamp(0.02f, 0.001f, 0.22f*dlen);
+            const float tip1x = sx1 + ux*tipInset, tip1y = sy1 + uy*tipInset;
+            const float tip2x = sx2 - ux*tipInset, tip2y = sy2 - uy*tipInset;
+            ws(tip1x+ux*alenW, tip1y+uy*alenW, &A); ws(tip2x-ux*alenW, tip2y-uy*alenW, &B); sdl->AddLine(A,B,lineCol,dimLnPx);
+            const float hw = alenW*0.48f, ox = -uy*hw, oy = ux*hw;
+            ImVec2 t0{},t1{},t2{}; ws(tip1x,tip1y,&t0); ws(tip1x+ux*alenW+ox, tip1y+uy*alenW+oy,&t1); ws(tip1x+ux*alenW-ox, tip1y+uy*alenW-oy,&t2); sdl->AddTriangleFilled(t0,t1,t2,lineCol);
+            ws(tip2x,tip2y,&t0); ws(tip2x-ux*alenW+ox, tip2y-uy*alenW+oy,&t1); ws(tip2x-ux*alenW-ox, tip2y-uy*alenW-oy,&t2); sdl->AddTriangleFilled(t0,t1,t2,lineCol);
+          }
+          ImVec2 sp{}; ws(a.insX,a.insY,&sp);
+          ImVec2 spDir{}; ws(a.insX + std::cos(a.rotationRad)*0.05f, a.insY + std::sin(a.rotationRad)*0.05f, &spDir);
+          const float screenAng = std::atan2(spDir.y-sp.y, spDir.x-sp.x);
+          AddAlignedDimText(sdl, paperFont, fontPx, sp, screenAng, kDimTextCol, a.text.c_str());
+          if (sel) { // selection rect in paper inches via w2s
+            ImVec2 sa = w2s(a.boxMinX, a.boxMinY), sb = w2s(a.boxMaxX, a.boxMaxY);
+            sdl->AddRect(ImVec2(std::min(sa.x,sb.x),std::min(sa.y,sb.y)), ImVec2(std::max(sa.x,sb.x),std::max(sa.y,sb.y)), kPaperSelCol, 0.f, 0, 1.f);
+          }
+          return;
+        }
         if (a.text.empty())
           return;
         const ImU32 col = sel ? kPaperSelCol : (hover ? kPaperHoverCol : baseCol);  // REQ-048 true color
@@ -11582,6 +11885,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         drawPaperText(L.paperTexts[ti], isPaperSel(PaperEntityRef::Type::Text, static_cast<int>(ti)),
                       isPaperHover(PaperEntityRef::Type::Text, static_cast<int>(ti)),
                       paperTrueCol(PaperEntityRef::Type::Text, static_cast<int>(ti)));
+      if (__clipValid) sdl->PopClipRect();
     }
     const float curPX = static_cast<float>(worldLeft + (mx / std::max(avail.x, 1.f)) * (worldRight - worldLeft));
     const float curPY = static_cast<float>(worldTop - (my / std::max(avail.y, 1.f)) * (worldTop - worldBottom));
@@ -11608,8 +11912,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       sdl->AddRect(ImVec2(std::min(ra.x, rb.x), std::min(ra.y, rb.y)),
                    ImVec2(std::max(ra.x, rb.x), std::max(ra.y, rb.y)), IM_COL32(59, 130, 246, 230), 0.f, 0, 1.5f);
     }
-    // Object-snap glyph (REQ-037): green square at the snapped paper point.
-    if (paperSnapActive && hovered) {
+    // Object-snap glyph (REQ-037): green square at the snapped paper point. REQ-307 (GitHub #106):
+    // suppressed during the paper-space selection step, the same rule REQ-121 gives model space
+    // (rule 1) — the step is picking OBJECTS, and a marker that jumps to nearby geometry is
+    // misleading when the click hit-tests the raw cursor instead (see the entity/box pick below,
+    // which never reads paperSnapXIn/YIn during this step).
+    if (paperSnapActive && hovered && !PaperIsObjectSelectionStep(cmd)) {
       const ImVec2 g = w2s(paperSnapXIn, paperSnapYIn);
       sdl->AddRect(ImVec2(g.x - 5.f, g.y - 5.f), ImVec2(g.x + 5.f, g.y + 5.f), IM_COL32(120, 220, 120, 255), 0.f,
                    0, 1.5f);
@@ -11906,7 +12214,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   const bool showMtextCmdDraft =
       cmd.active == AK::Mtext && cmd.mtextPhase == AMP::WaitString && !cmd.mtextRichEditorOpen;
   const bool showDimCmdDraft =
-      (cmd.active == AK::DimAligned || cmd.active == AK::DimLinear) && cmd.dimPhase == ADP::WaitDimLinePt &&
+      ((cmd.active == AK::DimAligned || cmd.active == AK::DimLinear) && cmd.dimPhase == ADP::WaitDimLinePt ||
+       (cmd.active == AK::DimAngular && cmd.dimAngularPhase == AppCommandState::DimAngularPhase::WaitArc)) &&
       outCursorX && outCursorY;
 
   // Model annotations live in MODEL coordinates; draw them only when the model is the active canvas (model
@@ -11994,6 +12303,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (modelAnnotationsVisible &&
       (!cmd.cadAnnotations.empty() || !transformAnnPreviews.empty() || showMtextCmdDraft || showDimCmdDraft)) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
+    // Clip model annotations to the drawing viewport so they cannot bleed into surrounding UI (issue #101).
+    dl->PushClipRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), true);
     // Annotations are drawn by ImGui, not GL, so they do NOT inherit the renderer's MVP: without
     // routing through the camera they would stay in plan positions while an orbit tilts the
     // linework around them (REQ-058). In plan view `Camera::WorldToScreen` reduces exactly to the
@@ -12089,18 +12400,25 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
         if (!CadDimAnyGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
           return;
-        float rgba[4];
-        if (attrPtr)
-          ResolveEntityColorForViewport(*attrPtr, 225 / 255.f, 177 / 255.f, 44 / 255.f, rgba);
-        else {
-          rgba[0] = 0.9f;
-          rgba[1] = 0.72f;
-          rgba[2] = 0.25f;
-          rgba[3] = 1.f;
-        }
-        const ImU32 lineCol = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
-                                       static_cast<int>(rgba[2] * 255.f), static_cast<int>(rgba[3] * 255.f));
-        constexpr ImU32 kDimTextCol = IM_COL32(248, 250, 252, 255);
+        // Resolve colors from DimensionStyle, falling back to ByLayer/entity
+        auto resolveDimColor = [&](const std::string& styCol, float defR, float defG, float defB) -> ImU32 {
+          if (styCol == "ByLayer" || styCol.empty()) {
+            float rgba[4];
+            if (attrPtr) ResolveEntityColorForViewport(*attrPtr, defR, defG, defB, rgba);
+            else { rgba[0]=defR; rgba[1]=defG; rgba[2]=defB; rgba[3]=1.f; }
+            return IM_COL32(int(rgba[0]*255), int(rgba[1]*255), int(rgba[2]*255), int(rgba[3]*255));
+          } else {
+            float rgba[4];
+            ResolveStoredColorForViewport(styCol, 0.f, defR, defG, defB, rgba);
+            return IM_COL32(int(rgba[0]*255), int(rgba[1]*255), int(rgba[2]*255), int(rgba[3]*255));
+          }
+        };
+        const ImU32 lineCol = resolveDimColor(cmd.activeDimensionStyle.dimLineColor, 225/255.f, 177/255.f, 44/255.f);
+        const ImU32 extCol = resolveDimColor(cmd.activeDimensionStyle.extLineColor, 225/255.f, 177/255.f, 44/255.f);
+        const ImU32 textCol = resolveDimColor(cmd.activeDimensionStyle.textColor, 248/255.f, 250/255.f, 252/255.f);
+        // Resolve font for dimension text (use per-annotation fontFamily, which is baked from style at creation and updated on DIMSTY Apply)
+        ImFont* dimFont = a.fontFamily.empty() ? font : FontReg::Resolve(a.fontFamily, false, false, nullptr, nullptr);
+        if (!dimFont) dimFont = font;
         // Dimension geometry is overlay-drawn, so it projects through the camera like everything
         // else (REQ-058); it sits on the dimension's own plane. Identical to the previous mapping
         // in plan view.
@@ -12130,13 +12448,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImVec2 A{}, B{};
         ws(ex1, ey1, &A);
         ws(sx1 + nx * over, sy1 + ny * over, &B);
-        dl->AddLine(A, B, lineCol, extPx);
+        dl->AddLine(A, B, extCol, extPx);
         ws(ex2, ey2, &A);
         ws(sx2 + nx * over, sy2 + ny * over, &B);
-        dl->AddLine(A, B, lineCol, extPx);
-        // Arrow length in world units tracks annotation height (drawing scale); tiny floor from meas for readability.
+        dl->AddLine(A, B, extCol, extPx);
+        // Arrow length in world units from DimensionStyle arrowSize (plotted inches) with viewport scale; tiny floor from meas for readability.
+        const float styleArrowWorld = cmd.activeDimensionStyle.arrowSizeInches * cmd.modelUnitsPerPlottedInch;
         const float alenW =
-            std::max(cmd.viewportDimArrowScale * 0.32f * hWorld, cmd.viewportDimArrowScale * 0.012f * meas);
+            std::max(styleArrowWorld * cmd.viewportDimArrowScale * 0.10f, cmd.viewportDimArrowScale * 0.012f * meas);
         const float dlen = std::hypot(sx2 - sx1, sy2 - sy1);
         if (dlen > 1.e-6f) {
           const float ux = (sx2 - sx1) / dlen;
@@ -12166,22 +12485,179 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           ws(tip1x, tip1y, &t0);
           ws(base1x + ox, base1y + oy, &t1);
           ws(base1x - ox, base1y - oy, &t2);
-          dl->AddTriangleFilled(t0, t1, t2, lineCol);
+          const ImU32 arrowCol = resolveDimColor(cmd.activeDimensionStyle.arrowColor, 225/255.f, 177/255.f, 44/255.f);
+          dl->AddTriangleFilled(t0, t1, t2, arrowCol);
           ws(tip2x, tip2y, &t0);
           ws(base2x + ox, base2y + oy, &t1);
           ws(base2x - ox, base2y - oy, &t2);
-          dl->AddTriangleFilled(t0, t1, t2, lineCol);
+          dl->AddTriangleFilled(t0, t1, t2, arrowCol);
         }
         ImVec2 sp{};
         ws(a.insX, a.insY, &sp);
-        // On-screen text angle by projecting a short step ALONG the text direction, rather than
-        // scaling the world angle by the view extents. Same result in plan view, and correct under
-        // an orbited camera where the two axes no longer scale independently (REQ-058).
         ImVec2 spDir{};
         const float dirStep = std::max(1.e-4f, hWorld);
         ws(a.insX + std::cos(a.rotationRad) * dirStep, a.insY + std::sin(a.rotationRad) * dirStep, &spDir);
         const float screenAng = std::atan2(spDir.y - sp.y, spDir.x - sp.x);
-        AddAlignedDimText(dl, font, fontPx, sp, screenAng, kDimTextCol, a.text.c_str());
+        // Handle SHX fonts for dimensions like Text does - SHX uses stroke rendering, not ImFont
+        // For SHX fonts, check if text contains degree symbol - SHX stroke fonts often lack the degree glyph at U+00B0
+        // If it does, fall back to TrueType for the whole dimension text so the degree renders correctly
+        bool useShxDim = false;
+        Shx::Font* sfDimCheck = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+        if (sfDimCheck && sfDimCheck->valid() && a.text.find("\xc2\xb0") == std::string::npos) {
+          useShxDim = true;
+        }
+        if (useShxDim) {
+          Shx::Font* sfDim = sfDimCheck;
+          const float thickDim = std::max(1.f, fontPx * 0.05f);
+          const float wDim = Shx::MeasureWidthPx(*sfDim, a.text, fontPx);
+          const float hDim = fontPx;
+          ImVec2 pivot = ImVec2(sp.x - wDim*0.5f, sp.y - hDim*0.5f);
+          float ca = std::cos(screenAng), sa = std::sin(screenAng);
+          float dx = pivot.x - sp.x, dy = pivot.y - sp.y;
+          ImVec2 rotPivot{sp.x + dx*ca - dy*sa, sp.y + dx*sa + dy*ca};
+          Shx::DrawText(dl, *sfDim, ImVec2(rotPivot.x, rotPivot.y + fontPx), fontPx, -a.rotationRad, textCol, a.text, thickDim);
+        } else {
+          // Use TrueType (dimFont) for dimensions - ensures degree symbol renders, and also handles SHX fallback correctly
+          // For SHX degree case, dimFont is already fallback to default font (since FontReg::Resolve returns null for SHX)
+          AddAlignedDimText(dl, dimFont, fontPx, sp, screenAng, textCol, a.text.c_str());
+        }
+      } else if (a.kind == CadAnnotation::Kind::DimAngular) {
+        float a1=0.f,a2=0.f,sweep=0.f,theta=0.f,bisx=0.f,bisy=0.f;
+        if (!CadDimAngularComputeFrame(a, &a1,&a2,&sweep,&bisx,&bisy,&theta)) return;
+        const float R = std::max(a.dimSignedOffset, 1.e-6f);
+        const float vx = a.dimAngVertexX, vy = a.dimAngVertexY;
+        auto resolveDimColor2 = [&](const std::string& styCol, float defR, float defG, float defB) -> ImU32 {
+          if (styCol == "ByLayer" || styCol.empty()) {
+            float rgba[4];
+            if (attrPtr) ResolveEntityColorForViewport(*attrPtr, defR, defG, defB, rgba);
+            else { rgba[0]=defR; rgba[1]=defG; rgba[2]=defB; rgba[3]=1.f; }
+            return IM_COL32(int(rgba[0]*255), int(rgba[1]*255), int(rgba[2]*255), int(rgba[3]*255));
+          } else {
+            float rgba[4];
+            ResolveStoredColorForViewport(styCol, 0.f, defR, defG, defB, rgba);
+            return IM_COL32(int(rgba[0]*255), int(rgba[1]*255), int(rgba[2]*255), int(rgba[3]*255));
+          }
+        };
+        const ImU32 lineCol2 = resolveDimColor2(cmd.activeDimensionStyle.dimLineColor, 225/255.f, 177/255.f, 44/255.f);
+        const ImU32 extCol2 = resolveDimColor2(cmd.activeDimensionStyle.extLineColor, 225/255.f, 177/255.f, 44/255.f);
+        const ImU32 textCol2 = resolveDimColor2(cmd.activeDimensionStyle.textColor, 248/255.f, 250/255.f, 252/255.f);
+        const ImU32 arrowCol2 = resolveDimColor2(cmd.activeDimensionStyle.arrowColor, 225/255.f, 177/255.f, 44/255.f);
+        ImFont* dimFont2 = a.fontFamily.empty() ? font : FontReg::Resolve(a.fontFamily, false, false, nullptr, nullptr);
+        if (!dimFont2) dimFont2 = font;
+        const Camera dimCam2 = CadViewCamera(cmd);
+        const float dimZ2 = a.insZ;
+        auto ws2 = [&](float wx, float wy, ImVec2* o) {
+          float sx=0.f,sy=0.f;
+          dimCam2.WorldToScreen((double)wx,(double)wy,(double)dimZ2, avail.x, avail.y, &sx, &sy);
+          o->x = imgPos.x + sx; o->y = imgPos.y + sy;
+        };
+        const float fontPx2 = std::clamp(hWorld / std::max(worldPerPxY, 1.e-6f), cmd.viewportDimTextMinPx, cmd.viewportDimTextMaxPx);
+        const float extPx2 = std::clamp(cmd.viewportDimExtLinePx, 0.25f, 16.f);
+        const float dimLnPx2 = std::clamp(cmd.viewportDimDimLinePx, 0.25f, 16.f);
+        const float gapWorld = std::max(0.12f * hWorld, 0.015f * R);
+        const float overWorld = std::max(0.08f * hWorld, 0.01f * R);
+        const float ex1x0 = vx + std::cos(a1) * gapWorld;
+        const float ex1y0 = vy + std::sin(a1) * gapWorld;
+        const float ex1x1 = vx + std::cos(a1) * (R + overWorld);
+        const float ex1y1 = vy + std::sin(a1) * (R + overWorld);
+        const float ex2x0 = vx + std::cos(a2) * gapWorld;
+        const float ex2y0 = vy + std::sin(a2) * gapWorld;
+        const float ex2x1 = vx + std::cos(a2) * (R + overWorld);
+        const float ex2y1 = vy + std::sin(a2) * (R + overWorld);
+        ImVec2 A2{},B2{};
+        ws2(ex1x0, ex1y0, &A2); ws2(ex1x1, ex1y1, &B2); dl->AddLine(A2,B2,extCol2,extPx2);
+        ws2(ex2x0, ex2y0, &A2); ws2(ex2x1, ex2y1, &B2); dl->AddLine(A2,B2,extCol2,extPx2);
+        const int segs = 32;
+        const float styleArrowWorld2 = cmd.activeDimensionStyle.arrowSizeInches * cmd.modelUnitsPerPlottedInch;
+        const float arcLen = R * std::fabs(sweep);
+        const float arrowWorld = std::max(styleArrowWorld2 * cmd.viewportDimArrowScale * 0.10f, cmd.viewportDimArrowScale * 0.012f * arcLen);
+        for (int i=0;i<segs;++i) {
+          float aa = a1 + sweep * (float)i/segs;
+          float ab = a1 + sweep * (float)(i+1)/segs;
+          float mid = a1 + sweep*0.5f;
+          float gapAng = (hWorld * 1.8f) / std::max(R, 1.e-6f);
+          if (std::fabs(aa - mid) < gapAng*0.5f || std::fabs(ab - mid) < gapAng*0.5f) continue;
+          if ((aa < mid && ab > mid) || (aa > mid && ab < mid)) continue;
+          ImVec2 p0{},p1{};
+          ws2(vx + std::cos(aa)*R, vy + std::sin(aa)*R, &p0);
+          ws2(vx + std::cos(ab)*R, vy + std::sin(ab)*R, &p1);
+          dl->AddLine(p0,p1,lineCol2,dimLnPx2);
+        }
+        // Arrows: match DIMLINEAR exactly - same world size, same screen conversion, both point inward toward arc center
+        const float arrowLenWorld = arrowWorld; // already max(styleArrowWorld*0.10*scale, 0.012*arcLen*scale)
+        const float maxArrowForArc = 0.47f * std::max(0.f, R * std::fabs(sweep) - 0.15f * arrowLenWorld);
+        const float arrowLenUse = std::max(1.e-6f, std::min(arrowLenWorld, maxArrowForArc));
+        auto drawArrowAng = [&](float ang, bool isStart) {
+          // Outward arrows (pointing away from arc center, like AutoCAD outward)
+          float baseAng = ang + (isStart ? (sweep>0 ? 0.14f : -0.14f) : (sweep>0 ? -0.14f : 0.14f));
+          ImVec2 tip{}, base{};
+          ws2(vx + std::cos(ang)*R, vy + std::sin(ang)*R, &tip);
+          ws2(vx + std::cos(baseAng)*R, vy + std::sin(baseAng)*R, &base);
+          float dx = tip.x - base.x, dy = tip.y - base.y;
+          float len = std::hypot(dx,dy);
+          if (len < 1.e-3f) return;
+          dx/=len; dy/=len;
+          float hwWorld = arrowLenUse * 0.48f;
+          float oxW = -dy*hwWorld, oyW = dx*hwWorld;
+          ImVec2 t1W{base.x + oxW, base.y + oyW}, t2W{base.x - oxW, base.y - oyW};
+          ImVec2 t1{}, t2{};
+          ws2(t1W.x, t1W.y, &t1); ws2(t2W.x, t2W.y, &t2);
+          // Convert tip/base already in screen, but t1/t2 now also in screen via ws2, need to handle correctly
+          // Instead compute screen directly like DIMLINEAR does: convert tip and base to screen, then compute hw in screen
+          // For matching DIMLINEAR, use world hw then convert
+        };
+        // Actually match DIMLINEAR exactly: use world alenW/alenUse logic
+        auto drawArrowCorrect = [&](float ang, bool isStart) {
+          ImVec2 tipS{}, baseS{};
+          ws2(vx + std::cos(ang)*R, vy + std::sin(ang)*R, &tipS);
+          float baseAng2 = ang + (isStart ? (sweep>0 ? 0.12f : -0.12f) : (sweep>0 ? -0.12f : 0.12f));
+          ws2(vx + std::cos(baseAng2)*R, vy + std::sin(baseAng2)*R, &baseS);
+          float dxS = tipS.x - baseS.x, dyS = tipS.y - baseS.y;
+          float lenS = std::hypot(dxS,dyS);
+          if (lenS < 1.e-3f) return;
+          dxS/=lenS; dyS/=lenS;
+          float hwS = (arrowLenUse / std::max(worldPerPxY, 1.e-6f)) * 0.42f * 0.48f / 0.42f; // keep same as linear's 0.48*arrowLen
+          // Simpler: use same as linear's hw = alenUse*0.48 but in screen: hwScreen = (alenUse/worldPerPxY)*0.48
+          float hwScreen = (arrowLenUse / std::max(worldPerPxY, 1.e-6f)) * 0.48f;
+          float oxS = -dyS*hwScreen, oyS = dxS*hwScreen;
+          ImVec2 tt1{baseS.x + oxS, baseS.y + oyS}, tt2{baseS.x - oxS, baseS.y - oyS};
+          if (cmd.activeDimensionStyle.arrowType == DimArrowType::Tick) {
+            float tickLenS = (arrowLenUse / std::max(worldPerPxY, 1.e-6f)) * 1.1f;
+            dl->AddLine(ImVec2(tipS.x - dyS*tickLenS*0.5f, tipS.y + dxS*tickLenS*0.5f), ImVec2(tipS.x + dyS*tickLenS*0.5f, tipS.y - dxS*tickLenS*0.5f), arrowCol2, dimLnPx2);
+          } else if (cmd.activeDimensionStyle.arrowType == DimArrowType::Dot) {
+            dl->AddCircleFilled(tipS, hwScreen*0.9f, arrowCol2, 12);
+          } else if (cmd.activeDimensionStyle.arrowType == DimArrowType::None) {
+          } else {
+            bool filled = (cmd.activeDimensionStyle.arrowType == DimArrowType::ClosedFilled);
+            if (filled) dl->AddTriangleFilled(tipS, tt1, tt2, arrowCol2);
+            else dl->AddTriangle(tipS, tt1, tt2, arrowCol2, dimLnPx2);
+          }
+        };
+        drawArrowCorrect(a1, true);
+        drawArrowCorrect(a2, false);
+        ImVec2 sp2{}; ws2(a.insX, a.insY, &sp2);
+        ImVec2 spDir2{}; float dirStep2 = std::max(1.e-4f, hWorld);
+        ws2(a.insX + std::cos(a.rotationRad)*dirStep2, a.insY + std::sin(a.rotationRad)*dirStep2, &spDir2);
+        float screenAng2 = std::atan2(spDir2.y - sp2.y, spDir2.x - sp2.x);
+        std::string txt2 = a.text;
+        bool useShx2 = false;
+        Shx::Font* sfDim2Check = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+        if (sfDim2Check && sfDim2Check->valid() && txt2.find("\xc2\xb0") == std::string::npos) {
+          useShx2 = true;
+        }
+        if (useShx2) {
+          Shx::Font* sfDim2 = sfDim2Check;
+          const float thick2 = std::max(1.f, fontPx2 * 0.05f);
+          float w2 = Shx::MeasureWidthPx(*sfDim2, txt2, fontPx2);
+          ImVec2 pivot2{sp2.x - w2*0.5f, sp2.y - fontPx2*0.5f};
+          float ca2 = std::cos(screenAng2), sa2 = std::sin(screenAng2);
+          float dx2 = pivot2.x - sp2.x, dy2 = pivot2.y - sp2.y;
+          ImVec2 rotPivot2{sp2.x + dx2*ca2 - dy2*sa2, sp2.y + dx2*sa2 + dy2*ca2};
+          Shx::DrawText(dl, *sfDim2, ImVec2(rotPivot2.x, rotPivot2.y + fontPx2), fontPx2, -a.rotationRad, textCol2, txt2, thick2);
+        } else {
+          // For degree, use TrueType fallback so degree renders
+          AddAlignedDimText(dl, dimFont2, fontPx2, sp2, screenAng2, textCol2, txt2.c_str());
+        }
       } else {
         ImVec2 sa{}, sb{};
         worldToScreen(a.boxMinX, a.boxMinY, &sa, a.insZ);
@@ -12373,11 +12849,28 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     if (showDimCmdDraft) {
       CadAnnotation d{};
-      const bool ok = cmd.active == AK::DimLinear
-                          ? CadDimLinearBuildDraft(cmd, *outCursorX, *outCursorY, &d)
-                          : CadDimAlignedBuildDraft(cmd, *outCursorX, *outCursorY, &d);
-      if (ok)
+      bool ok = false;
+      if (cmd.active == AK::DimLinear) ok = CadDimLinearBuildDraft(cmd, *outCursorX, *outCursorY, &d);
+      else if (cmd.active == AK::DimAngular) ok = CadDimAngularBuildDraft(cmd, *outCursorX, *outCursorY, &d);
+      else ok = CadDimAlignedBuildDraft(cmd, *outCursorX, *outCursorY, &d);
+      if (ok) {
         drawAnnotationVisual(d, nullptr, kAnnTfPrevCol);
+      }
+    }
+    // DimAngular early-phase preview - always show ray preview following mouse, even when not in WaitArc
+    if (cmd.active == AK::DimAngular && outCursorX && outCursorY) {
+      const float vx = cmd.dimAngVx, vy = cmd.dimAngVy;
+      ImVec2 vScreen{}, cScreen{};
+      worldToScreen(vx, vy, &vScreen, cmd.anchorZ);
+      worldToScreen(*outCursorX, *outCursorY, &cScreen, cmd.anchorZ);
+      if (cmd.dimAngularPhase == AppCommandState::DimAngularPhase::WaitRay1) {
+        dl->AddLine(vScreen, cScreen, kAnnTfPrevCol, 1.2f);
+      } else if (cmd.dimAngularPhase == AppCommandState::DimAngularPhase::WaitRay2) {
+        ImVec2 r1Screen{};
+        worldToScreen(cmd.dimE1x, cmd.dimE1y, &r1Screen, cmd.anchorZ);
+        dl->AddLine(vScreen, r1Screen, kAnnTfPrevCol, 1.2f);
+        dl->AddLine(vScreen, cScreen, kAnnTfPrevCol, 1.2f);
+      }
     }
 
     const float gripHalf = cmd.gripSizePx;
@@ -12417,6 +12910,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                       0.f, 0, 1.f);
         }
       }
+      dl->PopClipRect();
     }
 
     // Screen rect that hugs a rendered annotation glyph. For single-line TEXT we mirror the renderer's
@@ -12748,7 +13242,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   using VK = AppCommandState::Kind;
   const bool inImage = hovered && mx >= 0.f && mx < avail.x && my >= 0.f && my < avail.y;
 
-  if (cmd.active == VK::None) {
+  // REQ-307 (GitHub #106): the paper-space selection step keeps cmd.active == None throughout (it
+  // is not a model-space command), so the engagement gate below — keyed on cmd.active — would never
+  // let the palette engage for it without this. Extending the gate rather than cmd.active itself
+  // avoids touching the huge existing Kind-keyed switches this whole file consults elsewhere.
+  const bool paperSelStep = PaperIsObjectSelectionStep(cmd);
+
+  if (cmd.active == VK::None && !paperSelStep) {
     cmd.viewportCmdPaletteEngaged = false;
     cmd.viewportDrawingHovered = false;
   } else {
@@ -12763,8 +13263,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   }
 
   const bool showViewportCmdPalette =
-      cmd.active != VK::None && cmd.active != VK::Pan && cmd.viewportCmdPaletteEngaged && cmdBuf &&
-      cmdBufSize > 0 && !cmd.mtextRichEditorOpen;
+      (cmd.active != VK::None || paperSelStep) && cmd.active != VK::Pan && cmd.viewportCmdPaletteEngaged &&
+      cmdBuf && cmdBufSize > 0 && !cmd.mtextRichEditorOpen;
   cmd.viewportDrawingHovered = showViewportCmdPalette;
 
   // Detect the palette's open edge so the two-field coordinate input resets its
@@ -12776,22 +13276,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (showViewportCmdPalette) {
     ImGuiIO& io = ImGui::GetIO();
     const ImGuiViewport* mainViewport = ImGui::GetMainViewport();
-    const float pad = 14.f;
-    ImVec2 wp(mouse.x + pad, mouse.y + pad);
-    const float estW = std::min(520.f, std::max(260.f, avail.x * 0.5f));
-    const float estH = 78.f;
-    wp.x = std::clamp(wp.x, mainViewport->WorkPos.x + 4.f,
-                      mainViewport->WorkPos.x + mainViewport->WorkSize.x - estW - 8.f);
-    wp.y = std::clamp(wp.y, mainViewport->WorkPos.y + 4.f,
-                      mainViewport->WorkPos.y + mainViewport->WorkSize.y - estH - 8.f);
-
-    ImGui::SetNextWindowPos(wp, ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.94f);
-    ImGuiWindowFlags wf = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
-                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.f, 8.f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.f);
-    ImGui::Begin("##ViewportCommandInput", nullptr, wf);
 
     const bool pointEntry = CommandExpectsPointEntry(cmd);
 
@@ -12802,18 +13286,60 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     static const char* s_lastDynHint = nullptr;
     const bool promptChanged = (curHint != s_lastDynHint) || vpPalJustOpened;
     s_lastDynHint = curHint;
+    const std::string promptLabel = pointEntry ? CadPointPromptLabel(cmd) : std::string(curHint);
+
+    // Resolve the field's live text BEFORE layout, so the box sizes to its actual
+    // content (REQ-306) instead of a fixed footprint. Point entry always has a
+    // definite string (the live/typed coordinate); the non-point field may be
+    // empty, so its placeholder hint is also weighed for width.
+    static char dynBuf[160] = {0};
+    static bool dynLocked = false;
+    if (promptChanged) dynLocked = false;
+    if (pointEntry) {
+      double liveWx = 0.0, liveWy = 0.0;
+      if (outCursorX && outCursorY)
+        CadCoord::WorldFromLocal(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &liveWx,
+                                 &liveWy);
+      const int prec = cmd.displayLinearPrecision;
+      if (!dynLocked)
+        std::snprintf(dynBuf, sizeof(dynBuf), "%s,%s", FormatLinear(liveWx, prec).c_str(),
+                      FormatLinear(liveWy, prec).c_str());
+    }
+    const char* fieldHint = "Type value or Enter";
+    const float minFieldPx = 56.f * io.FontGlobalScale;
+    const float maxFieldPx = mainViewport->WorkSize.x * 0.48f;
+    const float fieldW = pointEntry
+        ? DynamicCursorFieldWidth(dynBuf, nullptr, minFieldPx, maxFieldPx)
+        : DynamicCursorFieldWidth(cmdBuf, fieldHint, minFieldPx, maxFieldPx);
+
+    const float pad = 14.f;
+    const ImVec2 winPad(8.f, 6.f);
+    const float estW = std::max(fieldW, ImGui::CalcTextSize(promptLabel.c_str()).x) + winPad.x * 2.f;
+    const float estH = 60.f;
+    ImVec2 wp(mouse.x + pad, mouse.y + pad);
+    wp.x = std::clamp(wp.x, mainViewport->WorkPos.x + 4.f,
+                      mainViewport->WorkPos.x + mainViewport->WorkSize.x - estW - 8.f);
+    wp.y = std::clamp(wp.y, mainViewport->WorkPos.y + 4.f,
+                      mainViewport->WorkPos.y + mainViewport->WorkSize.y - estH - 8.f);
+
+    ImGui::SetNextWindowPos(wp, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.94f);
+    ImGuiWindowFlags wf = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_AlwaysAutoResize |
+                          ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoDocking;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, winPad);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.f);
+    ImGui::Begin("##ViewportCommandInput", nullptr, wf);
 
     // Prompt label: a muted/secondary tone with a little gap below it, so it reads
-    // as a label separated from the input boxes. Point prompts get an AutoCAD-style
+    // as a label separated from the input box. Point prompts get an AutoCAD-style
     // "Specify … :" label; other prompts keep the full guidance hint.
     const ImVec4 hintCol = (cmd.displayColorThemeIdx == 0)
         ? ImVec4(0.90f, 0.93f, 0.98f, 1.f)
         : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
     ImGui::PushStyleColor(ImGuiCol_Text, hintCol);
-    const std::string promptLabel = pointEntry ? CadPointPromptLabel(cmd) : std::string(curHint);
     ImGui::TextUnformatted(promptLabel.c_str());
     ImGui::PopStyleColor();
-    ImGui::Dummy(ImVec2(0.f, 4.f));
+    ImGui::Dummy(ImVec2(0.f, 2.f));
 
     if (pointEntry) {
       // Single live coordinate field: tracks the crosshair's world X,Y at the
@@ -12821,20 +13347,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // absolute "x,y", relative "@dx,dy", bearings, distances, or any other input
       // ProcessCommandLineSubmit understands. Enter — or a viewport click —
       // commits. REQ-024.
-      double liveWx = 0.0, liveWy = 0.0;
-      if (outCursorX && outCursorY)
-        CadCoord::WorldFromLocal(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &liveWx,
-                                 &liveWy);
-
-      static char dynBuf[160] = {0};
-      static bool dynLocked = false;
-      if (promptChanged) dynLocked = false;
-
-      const int prec = cmd.displayLinearPrecision;
-      if (!dynLocked)
-        std::snprintf(dynBuf, sizeof(dynBuf), "%s,%s", FormatLinear(liveWx, prec).c_str(),
-                      FormatLinear(liveWy, prec).c_str());
-
       const ImGuiID idDyn = ImGui::GetID("##dynPt");
       const ImGuiID activeId = ImGui::GetActiveID();
 
@@ -12849,7 +13361,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImGui::SetKeyboardFocusHere();
       }
 
-      const float fieldW = std::clamp(240.f * io.FontGlobalScale, 160.f, 360.f);
       // CallbackAlways + CommandLineInputCallback collapses the select-all ImGui
       // applies when SetKeyboardFocusHere takes the field — otherwise the seeded
       // first character stays highlighted and the next keystroke replaces it.
@@ -12869,9 +13380,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImGui::SetKeyboardFocusHere(0);
       }
       const ImGuiInputTextFlags itf = ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways;
-      ImGui::SetNextItemWidth(std::clamp(360.f * io.FontGlobalScale, 200.f, mainViewport->WorkSize.x * 0.48f));
+      ImGui::SetNextItemWidth(fieldW);
       const bool exec =
-          ImGui::InputTextWithHint("##vp_cmd_buf", "Type value or Enter", cmdBuf, static_cast<size_t>(cmdBufSize),
+          ImGui::InputTextWithHint("##vp_cmd_buf", fieldHint, cmdBuf, static_cast<size_t>(cmdBufSize),
                                    itf, CommandLineInputCallback, nullptr);
       if (exec)
         ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
@@ -12901,31 +13412,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (showGripDynInput) {
     ImGuiIO& ioGrip = ImGui::GetIO();
     const ImGuiViewport* gripViewport = ImGui::GetMainViewport();
-    const float gripPad = 14.f;
-    const float gripEstW = 260.f;
-    const float gripEstH = 78.f;
-    ImVec2 gp(mouse.x + gripPad, mouse.y + gripPad);
-    gp.x = std::clamp(gp.x, gripViewport->WorkPos.x + 4.f,
-                      gripViewport->WorkPos.x + gripViewport->WorkSize.x - gripEstW - 8.f);
-    gp.y = std::clamp(gp.y, gripViewport->WorkPos.y + 4.f,
-                      gripViewport->WorkPos.y + gripViewport->WorkSize.y - gripEstH - 8.f);
-
-    ImGui::SetNextWindowPos(gp, ImGuiCond_Always);
-    ImGui::SetNextWindowBgAlpha(0.94f);
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.f, 8.f));
-    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.f);
-    ImGui::Begin("##ViewportGripInput", nullptr,
-                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                     ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
-                     ImGuiWindowFlags_NoDocking);
-
-    const ImVec4 gripHintCol = (cmd.displayColorThemeIdx == 0)
-        ? ImVec4(0.90f, 0.93f, 0.98f, 1.f)
-        : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
-    ImGui::PushStyleColor(ImGuiCol_Text, gripHintCol);
-    ImGui::TextUnformatted(cmd.orthoMode ? "Specify stretch distance (ortho):" : "Specify stretch distance:");
-    ImGui::PopStyleColor();
-    ImGui::Dummy(ImVec2(0.f, 4.f));
+    const char* gripPrompt = cmd.orthoMode ? "Specify stretch distance (ortho):" : "Specify stretch distance:";
 
     // The live value the field mirrors until the user types over it.
     const std::string liveText =
@@ -12937,6 +13424,38 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       s_gripLocked = false;
     }
     s_gripShownPrev = true;
+
+    // Content-driven width (REQ-306): the shown value (locked typed text, or the
+    // still-live readout) rather than a fixed footprint.
+    const char* gripFieldText = s_gripLocked ? s_gripBuf : liveText.c_str();
+    const float gripFieldW = DynamicCursorFieldWidth(gripFieldText, nullptr, 56.f * ioGrip.FontGlobalScale,
+                                                      gripViewport->WorkSize.x * 0.48f);
+    const ImVec2 gripWinPad(8.f, 6.f);
+    const float gripPad = 14.f;
+    const float gripEstW = std::max(gripFieldW, ImGui::CalcTextSize(gripPrompt).x) + gripWinPad.x * 2.f;
+    const float gripEstH = 60.f;
+    ImVec2 gp(mouse.x + gripPad, mouse.y + gripPad);
+    gp.x = std::clamp(gp.x, gripViewport->WorkPos.x + 4.f,
+                      gripViewport->WorkPos.x + gripViewport->WorkSize.x - gripEstW - 8.f);
+    gp.y = std::clamp(gp.y, gripViewport->WorkPos.y + 4.f,
+                      gripViewport->WorkPos.y + gripViewport->WorkSize.y - gripEstH - 8.f);
+
+    ImGui::SetNextWindowPos(gp, ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.94f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, gripWinPad);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 4.f);
+    ImGui::Begin("##ViewportGripInput", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                     ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoDocking);
+
+    const ImVec4 gripHintCol = (cmd.displayColorThemeIdx == 0)
+        ? ImVec4(0.90f, 0.93f, 0.98f, 1.f)
+        : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
+    ImGui::PushStyleColor(ImGuiCol_Text, gripHintCol);
+    ImGui::TextUnformatted(gripPrompt);
+    ImGui::PopStyleColor();
+    ImGui::Dummy(ImVec2(0.f, 2.f));
 
     struct GripDynState { const char* live; bool* locked; char* pushed; size_t pushedSize; };
     GripDynState gds{liveText.c_str(), &s_gripLocked, s_gripPushed, sizeof(s_gripPushed)};
@@ -12965,7 +13484,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     if (!s_gripLocked && ImGui::GetActiveID() != ImGui::GetID("##gripDist"))
       ImGui::SetKeyboardFocusHere();
 
-    ImGui::SetNextItemWidth(std::clamp(200.f * ioGrip.FontGlobalScale, 140.f, 320.f));
+    ImGui::SetNextItemWidth(gripFieldW);
     const bool gripEnter =
         ImGui::InputText("##gripDist", s_gripBuf, sizeof(s_gripBuf),
                          ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackAlways,
@@ -13044,9 +13563,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // is preserved once we freeze on the next typed character.
       s_lastCrosshairScreen = ImVec2(cx, cy);
     }
+    // REQ-121 rule (2): during an object-selection step the cursor is a PICKBOX — the centre square
+    // alone, with the four crosshair arms suppressed. That is AutoCAD's convention and the visible
+    // signal that rules (1) and (3) are in force: crosshair means "place a point", box means "pick
+    // a thing".
+    //
+    // The square is sized from `viewportCrosshairPickHalfPx*`, a setting that already existed, is
+    // already persisted in `.gs` and user prefs, and was until now never read by the renderer — the
+    // crosshair's centre box tracks the SNAP APERTURE instead. So the pickbox gets the field named
+    // for it rather than a new tunable (CLAUDE.md rule 2), and the crosshair keeps the aperture-
+    // sized box it has always drawn, unchanged.
+    const bool pickboxCursor = ViewportIsObjectSelectionStep(cmd) || PaperIsObjectSelectionStep(cmd);  // REQ-307
     const float ap = std::clamp(cmd.objectSnapAperturePx, 4.f, 64.f);
-    const float phx = ap * 0.5f;
-    const float phy = ap * 0.5f;
+    const float phx = pickboxCursor ? std::clamp(cmd.viewportCrosshairPickHalfPxX, 2.f, 32.f) : ap * 0.5f;
+    const float phy = pickboxCursor ? std::clamp(cmd.viewportCrosshairPickHalfPxY, 2.f, 32.f) : ap * 0.5f;
     const float hair = std::clamp(cmd.viewportCrosshairHairPx, 0.5f, 4.f);
     const float frx = std::clamp(cmd.viewportCrosshairArmFracX, 0.001f, 0.5f);
     const float fry = std::clamp(cmd.viewportCrosshairArmFracY, 0.001f, 0.5f);
@@ -13063,10 +13593,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const float xr = std::min(imgMax.x, cx + phx + armX);
     const float yt = std::max(imgMin.y, cy - phy - armY);
     const float yb = std::min(imgMax.y, cy + phy + armY);
-    wdl->AddLine(ImVec2(xl, cy), ImVec2(cx - phx, cy), kCad, hair);
-    wdl->AddLine(ImVec2(cx + phx, cy), ImVec2(xr, cy), kCad, hair);
-    wdl->AddLine(ImVec2(cx, yt), ImVec2(cx, cy - phy), kCad, hair);
-    wdl->AddLine(ImVec2(cx, cy + phy), ImVec2(cx, yb), kCad, hair);
+    // The arms are what make it a crosshair; a pickbox is the box on its own (REQ-121 rule 2).
+    if (!pickboxCursor) {
+      wdl->AddLine(ImVec2(xl, cy), ImVec2(cx - phx, cy), kCad, hair);
+      wdl->AddLine(ImVec2(cx + phx, cy), ImVec2(xr, cy), kCad, hair);
+      wdl->AddLine(ImVec2(cx, yt), ImVec2(cx, cy - phy), kCad, hair);
+      wdl->AddLine(ImVec2(cx, cy + phy), ImVec2(cx, yb), kCad, hair);
+    }
     const float l = cx - phx;
     const float r = cx + phx;
     const float t = cy - phy;
@@ -13247,68 +13780,39 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   }
   ImGui::SetNextWindowPos(ImGui::GetMousePos(), ImGuiCond_Appearing);
   if (ImGui::BeginPopup("##gos_snap_pick", ImGuiWindowFlags_AlwaysAutoResize)) {
-    ImGuiIO& ioSnapPick = ImGui::GetIO();
-    const auto goSnapKind = [&](CadSnap::Kind k) {
-      g_snapPickMenuScratch.clear();
-      CadSnap::GatherAllSnapsOfKind(k, g_snapMenuSortX, g_snapMenuSortY, cmd, true, g_snapPickMenuScratch);
-      g_snapMenuSelectedKind = k;
-      g_snapMenuStep = 1;
+    // Issue #103: choosing a kind here arms a LIVE override — every hover/pick until the next
+    // viewport commit (ClearPendingOneShotObjectSnap) is restricted to just that kind, exactly like
+    // the persistent per-type toggles normally gate FindBest, except this ignores those toggles
+    // entirely. That is the whole point of a temporary override: reaching a kind the user does not
+    // keep enabled generally. Perpendicular is the one exception offered conditionally — it needs a
+    // command-defined reference point to measure a foot from (CommandHasPerpendicularSnapReference),
+    // which is a structural precondition, not a preference.
+    const auto armOverride = [&](CadSnap::Kind k) {
+      cmd.objectSnapKindOverrideValid = true;
+      cmd.objectSnapKindOverrideKind = static_cast<int>(k);
+      log.push_back(std::string(SnapKindLabelForUi(k)) + " snap locked for the next pick.");
+      ImGui::CloseCurrentPopup();
     };
 
-    if (g_snapMenuStep == 0) {
-      ImGui::TextUnformatted("Snap once — choose type");
-      ImGui::Separator();
-      if (cmd.objectSnapEndpoint && ImGui::Selectable("Endpoint"))
-        goSnapKind(CadSnap::Kind::Endpoint);
-      if (cmd.objectSnapMidpoint && ImGui::Selectable("Midpoint"))
-        goSnapKind(CadSnap::Kind::Midpoint);
-      if (cmd.objectSnapCenter && ImGui::Selectable("Center"))
-        goSnapKind(CadSnap::Kind::Center);
-      if (cmd.objectSnapPerpendicular && CadSnap::CommandHasPerpendicularSnapReference(cmd, true) &&
-          ImGui::Selectable("Perpendicular"))
-        goSnapKind(CadSnap::Kind::Perpendicular);
-      if (cmd.objectSnapSurveyPoint && ImGui::Selectable("Survey"))
-        goSnapKind(CadSnap::Kind::SurveyCenter);
-      if (cmd.objectSnapGeometricCenter && ImGui::Selectable("Geometric center"))
-        goSnapKind(CadSnap::Kind::GeometricCenter);
-      if (cmd.objectSnapIntersection && ImGui::Selectable("Intersection"))
-        goSnapKind(CadSnap::Kind::Intersection);
-      if (cmd.objectSnapApparentIntersection && ImGui::Selectable("Apparent intersection"))
-        goSnapKind(CadSnap::Kind::ApparentIntersection);
-    } else {
-      char title[96];
-      std::snprintf(title, sizeof(title), "%s — all in model (sorted by distance from click)",
-                    SnapKindLabelForUi(g_snapMenuSelectedKind));
-      ImGui::TextWrapped("%s", title);
-      if (ImGui::Button("Back")) {
-        g_snapMenuStep = 0;
-        g_snapPickMenuScratch.clear();
-      }
-      ImGui::Separator();
-      const float lineH = ImGui::GetTextLineHeightWithSpacing();
-      const float maxListH = std::clamp(22.f * lineH, 180.f, 420.f * ioSnapPick.FontGlobalScale);
-      ImGui::BeginChild("##gos_snap_pick_list", ImVec2(360.f * ioSnapPick.FontGlobalScale, maxListH), true,
-                        ImGuiWindowFlags_AlwaysVerticalScrollbar);
-      if (g_snapPickMenuScratch.empty()) {
-        ImGui::TextUnformatted("No matching snaps in the current geometry.");
-      } else {
-        for (size_t i = 0; i < g_snapPickMenuScratch.size(); ++i) {
-          const CadSnap::Hit& h = g_snapPickMenuScratch[i].hit;
-          char line[192];
-          FormatSnapPickLine(line, sizeof(line), cmd, h);
-          ImGui::PushID(static_cast<int>(i));
-          if (ImGui::Selectable(line)) {
-            cmd.pendingOneShotSnapValid = true;
-            cmd.pendingOneShotSnapX = h.x;
-            cmd.pendingOneShotSnapY = h.y;
-            cmd.pendingOneShotSnapKind = static_cast<int>(h.kind);
-            ImGui::CloseCurrentPopup();
-          }
-          ImGui::PopID();
-        }
-      }
-      ImGui::EndChild();
-    }
+    ImGui::TextUnformatted("Snap once — choose type");
+    ImGui::Separator();
+    if (ImGui::Selectable("Endpoint"))
+      armOverride(CadSnap::Kind::Endpoint);
+    if (ImGui::Selectable("Midpoint"))
+      armOverride(CadSnap::Kind::Midpoint);
+    if (ImGui::Selectable("Center"))
+      armOverride(CadSnap::Kind::Center);
+    if (CadSnap::CommandHasPerpendicularSnapReference(cmd, true, /*ignoreToggle=*/true) &&
+        ImGui::Selectable("Perpendicular"))
+      armOverride(CadSnap::Kind::Perpendicular);
+    if (ImGui::Selectable("Survey"))
+      armOverride(CadSnap::Kind::SurveyCenter);
+    if (ImGui::Selectable("Geometric center"))
+      armOverride(CadSnap::Kind::GeometricCenter);
+    if (ImGui::Selectable("Intersection"))
+      armOverride(CadSnap::Kind::Intersection);
+    if (ImGui::Selectable("Apparent intersection"))
+      armOverride(CadSnap::Kind::ApparentIntersection);
     ImGui::EndPopup();
   }
 
@@ -14256,6 +14760,196 @@ void DrawTextStyleManagerWindow(AppCommandState& cmd, std::vector<std::string>* 
     log->push_back("Text style deleted: " + nm);
   }
 
+  ImGui::End();
+}
+
+void DrawDimStyleWindow(AppCommandState& cmd, std::vector<std::string>* log) {
+  std::vector<std::string> discard;
+  if (!log) log = &discard;
+  if (!cmd.showDimStyleDialog) return;
+  ImGui::SetNextWindowSize(ImVec2(640, 560), ImGuiCond_FirstUseEver);
+  bool open = cmd.showDimStyleDialog;
+  if (!ImGui::Begin("Dimension Style", &open)) {
+    cmd.showDimStyleDialog = open;
+    ImGui::End();
+    return;
+  }
+  cmd.showDimStyleDialog = open;
+  DimensionStyle& d = cmd.dimStyleDraft;
+  // ---- Text ----
+  ImGui::SeparatorText("Text");
+  ImGui::DragFloat("Size (in)", &d.textSizeInches, 0.005f, 0.02f, 1.0f, "%.3f");
+  if (d.textSizeInches < 0.01f) d.textSizeInches = 0.01f;
+  // Font: simple combo of known fonts
+  {
+    const char* fonts[] = {"(default)", "Arial", "Times New Roman", "Courier New", "romans.shx", "simplex.shx"};
+    std::string cur = d.textFont.empty() ? "(default)" : d.textFont;
+    if (ImGui::BeginCombo("Font", cur.c_str())) {
+      for (auto f : fonts) {
+        std::string val = (std::string(f) == "(default)") ? "" : f;
+        bool sel = (d.textFont == val);
+        if (ImGui::Selectable(f, sel)) d.textFont = val;
+      }
+      ImGui::EndCombo();
+    }
+  }
+  {
+    const char* cols[] = {"ByLayer", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White", "#e1b12c"};
+    if (ImGui::BeginCombo("Text Color", d.textColor.c_str())) {
+      for (auto c : cols) if (ImGui::Selectable(c, d.textColor==c)) d.textColor = c;
+      ImGui::EndCombo();
+    }
+  }
+  {
+    const char* aligns[] = {"Center", "Above", "Beside"};
+    int cur = (int)d.textAlign;
+    if (ImGui::BeginCombo("Alignment", aligns[cur])) {
+      for (int i=0;i<3;++i) if (ImGui::Selectable(aligns[i], i==cur)) d.textAlign = (DimTextAlign)i;
+      ImGui::EndCombo();
+    }
+  }
+  // ---- Dimension Lines ----
+  ImGui::SeparatorText("Dimension Lines");
+  {
+    const char* cols[] = {"ByLayer", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White"};
+    if (ImGui::BeginCombo("Dim Line Color", d.dimLineColor.c_str())) {
+      for (auto c : cols) if (ImGui::Selectable(c, d.dimLineColor==c)) d.dimLineColor = c;
+      ImGui::EndCombo();
+    }
+  }
+  {
+    const char* lts[] = {"Continuous", "Dashed", "Dotted", "Center", "Phantom"};
+    if (ImGui::BeginCombo("Dim Line Type", d.dimLineType.c_str())) {
+      for (auto lt : lts) if (ImGui::Selectable(lt, d.dimLineType==lt)) d.dimLineType = lt;
+      ImGui::EndCombo();
+    }
+  }
+  // ---- Extension Lines ----
+  ImGui::SeparatorText("Extension Lines");
+  {
+    const char* cols[] = {"ByLayer", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White"};
+    if (ImGui::BeginCombo("Ext Line Color", d.extLineColor.c_str())) {
+      for (auto c : cols) if (ImGui::Selectable(c, d.extLineColor==c)) d.extLineColor = c;
+      ImGui::EndCombo();
+    }
+  }
+  {
+    const char* lts[] = {"Continuous", "Dashed", "Dotted", "Center", "Phantom"};
+    if (ImGui::BeginCombo("Ext Line Type", d.extLineType.c_str())) {
+      for (auto lt : lts) if (ImGui::Selectable(lt, d.extLineType==lt)) d.extLineType = lt;
+      ImGui::EndCombo();
+    }
+  }
+  // ---- Arrows ----
+  ImGui::SeparatorText("Arrows");
+  ImGui::DragFloat("Arrow Size (in)", &d.arrowSizeInches, 0.005f, 0.01f, 1.0f, "%.3f");
+  if (d.arrowSizeInches < 0.01f) d.arrowSizeInches = 0.01f;
+  {
+    const char* types[] = {"Closed Filled", "Closed Blank", "Tick", "Dot", "Open", "None"};
+    int cur = (int)d.arrowType;
+    if (ImGui::BeginCombo("Arrow Type", types[cur])) {
+      for (int i=0;i<6;++i) if (ImGui::Selectable(types[i], i==cur)) d.arrowType = (DimArrowType)i;
+      ImGui::EndCombo();
+    }
+  }
+  {
+    const char* cols[] = {"ByLayer", "Red", "Yellow", "Green", "Cyan", "Blue", "Magenta", "White"};
+    if (ImGui::BeginCombo("Arrow Color", d.arrowColor.c_str())) {
+      for (auto c : cols) if (ImGui::Selectable(c, d.arrowColor==c)) d.arrowColor = c;
+      ImGui::EndCombo();
+    }
+  }
+  // ---- Units ----
+  ImGui::SeparatorText("Units");
+  {
+    const char* fmts[] = {"Decimal", "Architectural", "Engineering", "Fractional"};
+    int cur = (int)d.unitFormat;
+    if (ImGui::BeginCombo("Unit Format", fmts[cur])) {
+      for (int i=0;i<4;++i) if (ImGui::Selectable(fmts[i], i==cur)) d.unitFormat = (DimUnitFormat)i;
+      ImGui::EndCombo();
+    }
+  }
+  {
+    const char* precs[] = {"0", "0.0", "0.00", "0.000", "0.0000"};
+    int cur = d.unitPrecision;
+    if (cur < 0) cur = 0; if (cur > 4) cur = 4;
+    if (ImGui::BeginCombo("Precision", precs[cur])) {
+      for (int i=0;i<5;++i) if (ImGui::Selectable(precs[i], i==cur)) d.unitPrecision = i;
+      ImGui::EndCombo();
+    }
+  }
+  {
+    float tmpScale = (float)d.unitScale;
+    if (ImGui::DragFloat("Unit Scale", &tmpScale, 0.01f, 0.001f, 1000.f, "%.3f")) d.unitScale = (double)tmpScale;
+    if (d.unitScale < 0.001) d.unitScale = 0.001;
+  }
+  // ---- Preview ----
+  ImGui::SeparatorText("Preview");
+  {
+    ImVec2 avail = ImGui::GetContentRegionAvail();
+    ImVec2 p0 = ImGui::GetCursorScreenPos();
+    ImVec2 p1(p0.x + avail.x, p0.y + 40.f);
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(p0, p1, IM_COL32(35,35,45,255), 4.f);
+    dl->AddRect(p0, p1, IM_COL32(90,90,90,255), 4.f, 0, 1.f);
+    float midY = (p0.y + p1.y)*0.5f;
+    float xL = p0.x + 40.f, xR = p1.x - 40.f;
+    dl->AddLine(ImVec2(xL, midY+10), ImVec2(xL, midY-10), IM_COL32(200,200,200,255), 1.f);
+    dl->AddLine(ImVec2(xR, midY+10), ImVec2(xR, midY-10), IM_COL32(200,200,200,255), 1.f);
+    dl->AddLine(ImVec2(xL, midY), ImVec2(xR, midY), IM_COL32(46,91,174,255), 1.5f);
+    // arrows
+    float ah = 6.f;
+    dl->AddTriangleFilled(ImVec2(xL, midY), ImVec2(xL+ah, midY-ah*0.5f), ImVec2(xL+ah, midY+ah*0.5f), IM_COL32(46,91,174,255));
+    dl->AddTriangleFilled(ImVec2(xR, midY), ImVec2(xR-ah, midY-ah*0.5f), ImVec2(xR-ah, midY+ah*0.5f), IM_COL32(46,91,174,255));
+    std::string txt = DimensionStyles::FormatLinearDim(12.5, d);
+    dl->AddText(ImVec2((xL+xR)*0.5f - 18.f, midY - 18.f), IM_COL32(248,250,252,255), txt.c_str());
+    ImGui::Dummy(ImVec2(avail.x, 44.f));
+  }
+  ImGui::Separator();
+  float bw = 90.f;
+  if (ImGui::Button("OK", ImVec2(bw, 0))) {
+    PushUndoSnapshot(cmd, "DIMSTY");
+    cmd.activeDimensionStyle = d;
+    // Refresh existing dimensions to new style (all Dim* kinds, including DimAngular)
+    for (auto& a : cmd.cadAnnotations) {
+      if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
+        float sx1,sy1,sx2,sy2,tx,ty,nx,ny,ml;
+        if (CadDimAnyGeometry(a,&sx1,&sy1,&sx2,&sy2,&tx,&ty,&nx,&ny,&ml)) a.text = DimensionStyles::FormatLinearDim((double)ml, cmd.activeDimensionStyle);
+      } else if (a.kind == CadAnnotation::Kind::DimAngular) {
+        float a1=0.f,a2=0.f,sweep=0.f,theta=0.f,bisx=0.f,bisy=0.f;
+        if (CadDimAngularComputeFrame(a,&a1,&a2,&sweep,&bisx,&bisy,&theta))
+          a.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(cmd));
+      } else continue;
+      a.plottedHeightInches = std::max(cmd.activeDimensionStyle.textSizeInches, 1.e-6f);
+      a.fontFamily = cmd.activeDimensionStyle.textFont;
+    }
+    BumpCadGpuCache(cmd);
+    cmd.showDimStyleDialog = false;
+    log->push_back("DIMSTY — style applied.");
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Apply", ImVec2(bw, 0))) {
+    PushUndoSnapshot(cmd, "DIMSTY");
+    cmd.activeDimensionStyle = d;
+    for (auto& a : cmd.cadAnnotations) {
+      if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
+        float sx1,sy1,sx2,sy2,tx,ty,nx,ny,ml;
+        if (CadDimAnyGeometry(a,&sx1,&sy1,&sx2,&sy2,&tx,&ty,&nx,&ny,&ml)) a.text = DimensionStyles::FormatLinearDim((double)ml, cmd.activeDimensionStyle);
+      } else if (a.kind == CadAnnotation::Kind::DimAngular) {
+        float a1=0.f,a2=0.f,sweep=0.f,theta=0.f,bisx=0.f,bisy=0.f;
+        if (CadDimAngularComputeFrame(a,&a1,&a2,&sweep,&bisx,&bisy,&theta))
+          a.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(cmd));
+      } else continue;
+      a.plottedHeightInches = std::max(cmd.activeDimensionStyle.textSizeInches, 1.e-6f);
+      a.fontFamily = cmd.activeDimensionStyle.textFont;
+    }
+    BumpCadGpuCache(cmd);
+    log->push_back("DIMSTY — style applied.");
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", ImVec2(bw, 0))) {
+    cmd.showDimStyleDialog = false;
+  }
   ImGui::End();
 }
 

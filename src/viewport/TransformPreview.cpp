@@ -412,7 +412,7 @@ void BuildTransformPreview(const AppCommandState& cmd, float curX, float curY, s
     return;
   }
 
-  // REQ-304 ARRAY. Two local, per-instance append lambdas (translate / rotate-about-a-point) reuse
+  // REQ-305 ARRAY. Two local, per-instance append lambdas (translate / rotate-about-a-point) reuse
   // the exact per-type walks the Move/Copy block above and the Rotate block below already do —
   // looped once per grid cell / polar item instead of once, so this is the same coverage
   // (LineSeg/Circle/Arc/Ellipse/Polyline/FeatureLine) as every other command's own preview, not a

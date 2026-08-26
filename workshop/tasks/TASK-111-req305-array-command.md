@@ -1,4 +1,4 @@
-# TASK-109 — ARRAY command (rectangular + polar)
+# TASK-111 — ARRAY command (rectangular + polar)
 
 - Type:    feature
 - Status:  done
@@ -7,10 +7,10 @@
 
 ## 1. Authority  (fill BEFORE planning — incomplete = not ready)
 - Goal:         GitHub issue #87
-- Requirements: REQ-304   ← accepted
+- Requirements: REQ-305   ← accepted
 - Constraints:  none beyond the standing CON-07 (build artifacts stay out of the source tree,
   unaffected by this task)
-- Acceptance:   (verbatim from REQ-304)
+- Acceptance:   (verbatim from REQ-305)
   1. `ARRAY` is launchable by typed command and offers `[R]ectangular`/`[P]olar` as both a typed
      letter and a clickable command-line token, both invoking the same start-array-type function;
   2. object selection accepts a pre-existing selection or a window/crossing box, matching
@@ -52,7 +52,7 @@
   count/fill angle/rotate toggle), dynamic preview, dynamic cursor/command-line prompts, clickable
   + keyboard command variants, ESC cancellation, one-undo-step commit, filtering of survey points
   and the pre-existing Surface/Mesh/PdfUnderlay exclusions.
-- Out of scope (per issue #87 and D-2026-08-25-k): path arrays, associative/editable arrays,
+- Out of scope (per issue #87 and D-2026-08-25-m): path arrays, associative/editable arrays,
   advanced 3D arrays, post-creation array property editing, survey-point arraying (N-way ID
   resolution is new scope this issue does not require).
 - Smallest change: a new `AppCommandState::Kind::Array` following the exact shape of the five
@@ -83,7 +83,7 @@
 ## 4. Questions  (workflow.md §5 — ask before guessing)
 | # | Question | Asked (date) | Answer |
 |---|----------|--------------|--------|
-| Q1 | GoSurvey has no block/attribute entity type — how should ARRAY treat survey points, the closest analog, given their existing duplication path is a one-off ID-conflict modal that doesn't scale to N array instances? | 2026-08-25 | Exclude survey points from the array selection (filtered like `Surface`, logged, not silently dropped) — recorded as D-2026-08-25-k. Re-confirmed directly with the user in the live conversation (D-2026-08-25-k addendum): exclude for now; GoSurvey will gain a block/attribute entity type in the future, at which point this exclusion should be revisited. |
+| Q1 | GoSurvey has no block/attribute entity type — how should ARRAY treat survey points, the closest analog, given their existing duplication path is a one-off ID-conflict modal that doesn't scale to N array instances? | 2026-08-25 | Exclude survey points from the array selection (filtered like `Surface`, logged, not silently dropped) — recorded as D-2026-08-25-m. Re-confirmed directly with the user in the live conversation (D-2026-08-25-m addendum): exclude for now; GoSurvey will gain a block/attribute entity type in the future, at which point this exclusion should be revisited. |
 
 ## 5. Assumptions  (workflow.md §8)
 ```
@@ -123,7 +123,7 @@ grid's spacing-anchor point and the polar Rotate=No anchor — no new helper was
       else window-select prompt).
     - `DropArrayUnsupportedFromSelection` (mirrors `DropMirrorUnsupportedFromSelection`; calls
       `DropSurfacesFromSelectionForTransform` for Surface, drops Mesh/PdfUnderlay with a log line,
-      and clears/logs `st.selectedSurveyPointIndices` — the D-2026-08-25-k decision).
+      and clears/logs `st.selectedSurveyPointIndices` — the D-2026-08-25-m decision).
     - `FirstSelectionAnchorPoint` (ASSUMPTION-2 helper).
     - `HandleArrayText` (typed command-line entry per `arrayPhase`: type-choice letters, integers
       for columns/rows/item count, numeric distance for spacings, `ParseStoragePoint` for the
@@ -176,16 +176,16 @@ grid's spacing-anchor point and the polar Rotate=No anchor — no new helper was
   - [x] step 6 — `BuildTransformPreview` ARRAY branch
   - [x] step 7 — `CommandInputHint` ARRAY branch
   - [x] step 8 — `ViewportPickPolicyTests.cpp` coverage
-  - [x] step 9 — headless regression transcript(s) for REQ-304's acceptance list
+  - [x] step 9 — headless regression transcript(s) for REQ-305's acceptance list
   - [x] step 10 — build clean, full test suite green, self-verification checklist
 
 ## 7. Workflow-specific notes
-- Feature: pre-flight answered (Q1, D-2026-08-25-k). Tests-first where practical: the
+- Feature: pre-flight answered (Q1, D-2026-08-25-m). Tests-first where practical: the
   `ViewportPickPolicyTests.cpp` additions and headless transcript were written alongside each step
   rather than fully after, per the REQ-303/TASK-108 precedent this task follows.
 
 ## 8. Implementation log  (append as you work)
-- 2026-08-25 — REQ-304 written and accepted; TASK-109 opened; plan above written before any code.
+- 2026-08-25 — REQ-305 written and accepted; TASK-111 opened; plan above written before any code.
 - 2026-08-25 — Steps 1-9 implemented per the plan above. `build/GoSurvey.exe` and `gosurvey_headless`
   built clean; a stale editor/LSP diagnostic ("HandleArrayText is ambiguous") did not reflect the
   actual compiled state — the built binaries post-date the source and ninja reports the build
@@ -207,7 +207,7 @@ grid's spacing-anchor point and the polar Rotate=No anchor — no new helper was
   (594/594) now pass.
 - 2026-08-25 — Q1 (survey-point exclusion) was re-put to the user directly in the live conversation
   (the original exchange happened inside an autonomous pass with no live user turn). Confirmed as
-  answered: exclude for now; addendum recorded in `spec/project.md` (D-2026-08-25-k addendum),
+  answered: exclude for now; addendum recorded in `spec/project.md` (D-2026-08-25-m addendum),
   noting a future block/attribute entity type should prompt revisiting this exclusion.
 
 ## 9. Self-verification  (run BEFORE submitting — verification/skills/)
@@ -220,7 +220,7 @@ grid's spacing-anchor point and the polar Rotate=No anchor — no new helper was
 - [x] performance-review   — n/a (array size is user-typed and small; no hot-path/per-frame code touched
       beyond the existing per-frame preview pattern every sibling command already uses)
 - [x] testing              — PASS (594/594 ctest cases green, including the new
-      `headless.regression-87-array` transcript covering REQ-304 acceptance 1-9: rectangular
+      `headless.regression-87-array` transcript covering REQ-305 acceptance 1-9: rectangular
       count/spacing incl. negative spacing, polar 360° incl. no 0==360 duplicate, polar partial-angle
       with Rotate=No, ESC cancellation for both types, one-undo-step removal verified by `.gs` diff)
 
@@ -231,12 +231,12 @@ grid's spacing-anchor point and the polar Rotate=No anchor — no new helper was
   product code — see Implementation log 2026-08-25 (verification pass) entry.
 
 ## 11. Outcome
-- Requirements satisfied: REQ-304 (Acceptance met: yes — all 9 acceptance points covered by
+- Requirements satisfied: REQ-305 (Acceptance met: yes — all 9 acceptance points covered by
   `headless.regression-87-array.txt` plus code inspection of the preview/hint/cancel paths)
 - Tests added:            `headless.regression-87-array`, `ViewportPickPolicyTests.cpp`
   "ARRAY box-selects first, then routes its spatial phases and ignores its typed-only ones"
 - Refactors:              none
-- Docs updated:           spec/requirements.md (REQ-304), spec/project.md (D-2026-08-25-k + addendum)
+- Docs updated:           spec/requirements.md (REQ-305), spec/project.md (D-2026-08-25-m + addendum)
 - Manual GUI pass:        not done this session (headless/automated verification only — dynamic
   preview rendering, click-to-drag column/row spacing, and clickable `[R]`/`[P]`/`[Y]`/`[N]` command-
   line tokens should get a human visual check per this project's "GUI hover is not automatable" note)

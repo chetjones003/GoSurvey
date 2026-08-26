@@ -1476,6 +1476,18 @@ requirements is a planning failure, not a sign of rigor.
   delivered, all 3 increments complete, issue #83 closed.
 
 ### REQ-303 — POLYLINE finishes without typing CLOSE or END (GitHub issue #80)
+- **Duplication note (found merging `master` into `beta` for REQ-304/issue #82, D-2026-08-25-l):**
+  `origin/beta` independently implemented this exact same GitHub issue (#80) as **REQ-118** (below,
+  `spec/requirements.md`), in a separate, parallel session — same feature, same acceptance intent,
+  different task number (TASK-109 on beta vs. TASK-108 here) and a real, small implementation
+  difference: beta's blank-Enter handler explicitly clears an active bearing lock
+  (`CancelSegmentAnglePick`/`ResetSegmentAngleLock`) before committing, which this requirement's own
+  implementation did not. The merge kept **this** requirement's structure and specific refusal
+  message (matching this requirement's own tested Acceptance text below) and folded in beta's extra
+  state-cleanup call as a correctness improvement — see D-2026-08-25-l for the full reconciliation.
+  Both REQ-118 and REQ-303 are left `accepted` as an honest historical record of the duplicate work;
+  neither describes the merged implementation's exact code in full, cosmetic (message-text/
+  comment) detail any more, only in substance.
 - Purpose: POLYLINE currently requires the user to type `CLOSE`/`CL` or `END` to finish, which is
   not how the rest of the application's drawing commands read — LINE already finishes segments with
   a bare Enter, and every CAD application the user is used to closes a polygon by clicking back on
@@ -1517,9 +1529,104 @@ requirements is a planning failure, not a sign of rigor.
   snap kind (no new glyph) and treating an early click on the start point as a refusal rather than a
   silently-added vertex were both confirmed with the user ahead of implementation.
 
+### REQ-304 — Dynamic cursor text matches the command line for every command state (GitHub issue #82)
+- Purpose: LINE already shows a state-specific prompt ("Specify first point:") right next to the
+  cursor, but several other commands showed nothing there — the cursor gave no indication of what
+  the active command was waiting for, even though the command line (bottom bar) had a real, correct
+  prompt. The issue asks for a single source of truth: whatever a command is currently expecting
+  should drive both the command line and the cursor prompt identically, and the two must never
+  disagree or go stale.
+- Priority: should
+- Type: functional
+- Statement: **The architecture already had a single source of truth before this requirement**:
+  `CommandInputHint` (`CadUi.cpp:6111`) and its per-command "FooterHint" delegates
+  (`CadCommands.cpp`, declared in `CadCommands.hpp:3721-3732`) are queried fresh every frame, and
+  the same return value feeds both `DrawCommandLinePanel`'s live hint line
+  (`RenderClickableCommandHint(CommandInputHint(cmd), ...)`, `CadUi.cpp:7251`) and the at-cursor
+  dynamic-input palette (`CadUi.cpp:12681-12693`, which shows `CadPointPromptLabel` for point
+  entry and falls back to the identical `CommandInputHint` text otherwise). Recomputing from live
+  state every frame — nothing is cached across states — is also what already guarantees no staleness
+  and no command-line/cursor disagreement (Acceptance items 3-6 and 14-16 below were already true
+  for every command that had a branch in this function at all).
+  A full audit of every `AppCommandState::Kind` against that if-chain (cross-referencing the enum in
+  `CadCommands.hpp:1122` against every branch in `CommandInputHint` and its delegates) found **ten
+  Kind values with no branch at all**, which fell through to the generic `"Command:"` placeholder on
+  both surfaces: `FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `Pan`, `VpFreeze`,
+  `VpThaw`, `Elev`, `Orbit`.
+  - `Pan` and `Orbit` are **not** gaps: both are continuous camera-drag modes with a dedicated
+    hand cursor and the point-entry palette deliberately suppressed for `Pan`
+    (`CadUi.cpp:12878-12884`, REQ-045/REQ-084 (c)) — a changed cursor icon is the correct, existing
+    contextual feedback for a drag gesture with no typed value, and adding a redundant text prompt
+    on top of it would contradict that existing design. These two are explicitly out of scope.
+  - The remaining eight (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`,
+    `VpThaw`, `Elev`) are real gaps: `FILLET`/`CHAMFER` had informative text but only as one-time
+    `log.push_back` scrollback lines at each state transition (`CadCommands.cpp`, `StartFilletCommand`
+    / `HandleFilletViewportPick` / `HandleFilletText` and the CHAMFER equivalents) — never a
+    queryable "what is the state right now" function — so the scrollback looked reasonable while the
+    live command-line hint and the cursor both still showed `"Command:"`. `FeatureLine`, `PdfAttach`,
+    `Hatch`, `VpFreeze`, `VpThaw`, and `Elev` had no per-state hint mechanism of any kind.
+  - Fix: new branches added to the existing `DrawingExtrasFooterHint` (`CadCommands.cpp`) — the
+    function whose own doc comment already states new commands should extend it rather than invent a
+    separate mechanism (`CadUi.cpp:6376-6377`) — covering every reachable state of all eight commands
+    (FILLET/CHAMFER: `WaitFirstEntity`/`WaitSecondEntity` plus each `*TextAwaiting*` sub-prompt for
+    radius/trim/distance/angle; FEATURELINE: first point, next point, and the pending-elevation
+    prompt; PDFATTACH: `WaitInsertPoint` plus the two never-reached phases `WaitScaleRef`/
+    `WaitRotationPt`, kept for completeness since the enum already declares them; HATCH/ELEV/
+    VPFREEZE/VPTHAW: their one real state each). No new abstraction, dependency, or query mechanism
+    — the fix is closing gaps in the one that already existed.
+- Acceptance (from GitHub issue #82's checklist):
+  1. every command has been audited for dynamic cursor prompts — done via the `Kind`-enum
+     cross-reference above;
+  2. every command input state has an appropriate dynamic cursor prompt where applicable — done for
+     all `Kind` values except `Pan`/`Orbit`, which use cursor-icon feedback by design (see above);
+  3. dynamic cursor text reflects the current command state — true by construction (fresh function
+     call every frame, no cached string);
+  4. dynamic cursor text updates immediately on every state transition — same reasoning;
+  5. dynamic cursor text does not become stale — same reasoning;
+  6. commands that already had dynamic cursor text continue to work correctly — no existing branch
+     was modified, only new branches added; full regression suite (593/593 Catch2 + headless
+     transcripts) green, unchanged from before this task;
+  7. commands missing dynamic cursor text are updated — `FeatureLine`, `Fillet`, `Chamfer`,
+     `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`;
+  8-12. point / coordinate / numeric / angle-azimuth-bearing / entity-selection input all provide
+     contextual cursor feedback — already true pre-existing for the commands that had it (LINE,
+     ROTATE, DIMANGULAR, TRIM, OFFSET, MOVE/COPY, etc.); newly true for FILLET/CHAMFER's numeric
+     radius/distance/angle sub-prompts, ELEV's numeric elevation, and the eight commands' entity-pick
+     states;
+  13. command variants update the dynamic cursor when selected — already true (SCALE/ROTATE
+     reference-mode variants); newly true for FILLET's Radius/Trim and CHAMFER's
+     Distance/Angle/Trim variants, whose hint text changes the instant the corresponding
+     `*TextAwaiting*` flag flips;
+  14. command cancellation removes the dynamic cursor prompt — unchanged, generic to `cmd.active`
+     resetting to `Kind::None` (not touched by this task) for every command, including the eight
+     fixed here;
+  15. command completion removes the dynamic cursor prompt — same reasoning;
+  16. the command line and dynamic cursor remain semantically consistent — guaranteed by construction
+     (one function, two call sites, `CadUi.cpp:7251` and `CadUi.cpp:12681-12693`);
+  17. new commands can provide dynamic cursor prompts without a separate UI system — already true
+     (the extension point already existed and is exactly what this task used, not something built
+     for it);
+  build is clean; the full regression suite (593 Catch2 cases + headless transcripts) stays green,
+  unchanged pass count from before this task. Verification for this requirement is necessarily
+  manual for the visual/wording quality of the eight new hint strings (same as REQ-024's own
+  "manual" verification method) — this session cannot simulate mouse hover to screenshot the cursor
+  bubble (`project_gui_hover_not_automatable` precedent); the user's own GUI pass is the outstanding
+  step.
+- Owner-layer: Commands (`CadCommands.cpp` — `DrawingExtrasFooterHint`) / UI (consumes it unchanged,
+  `CadUi.cpp`)
+- Status: accepted
+- Revisions: 2026-08-25 — initial (GitHub issue #82, D-2026-08-25-k). Full `Kind`-enum audit found
+  ten gaps; two (`Pan`/`Orbit`) are by-design exclusions (cursor-icon feedback), eight fixed by
+  extending the existing `DrawingExtrasFooterHint` delegate. No architectural decision — the
+  single-source-of-truth mechanism the issue asked for already existed; this closes coverage gaps
+  in it.
+
 ---
 
-### REQ-304 — ARRAY command: rectangular and polar (GitHub issue #87)
+### REQ-305 — ARRAY command: rectangular and polar (GitHub issue #87)
+> Relabeled from `REQ-304` while merging `master` into `beta` — that number was already taken on
+> `beta` by "Dynamic cursor text" (issue #82) above, a real ID collision from two independent
+> sessions working the same day.
 - Purpose: users need to place regular grids and circular patterns of existing drawing objects
   (survey monument symbols, culvert/utility grids, radial layouts) without manually repeating
   COPY. ARRAY generates the pattern interactively with a live preview, as a single undoable step.
@@ -1563,7 +1670,7 @@ requirements is a planning failure, not a sign of rigor.
   2. object selection accepts a pre-existing selection, individual entity/annotation/fill/survey-
      point clicks, and/or a window/crossing box — any mix accumulates into one selection until
      Enter confirms it, matching MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN's own selection step
-     (D-2026-08-25-l); Surface/Mesh/PdfUnderlay/survey points are dropped from the array selection
+     (D-2026-08-25-n); Surface/Mesh/PdfUnderlay/survey points are dropped from the array selection
      with a log line naming the count and reason, matching the existing MIRROR/MOVE exclusion
      wording style;
   3. Rectangular: columns, column spacing, rows, row spacing are each settable by typed number or
@@ -1593,9 +1700,9 @@ requirements is a planning failure, not a sign of rigor.
      the live preview (Annotation, FilledRegion — consistent with MOVE/COPY's own preview gap).
 - Owner-layer: Commands (`CadCommands.cpp`/`.hpp`), Viewport (`TransformPreview.cpp`, cursor hint)
 - Status: accepted
-- Revisions: 2026-08-25 — initial (GitHub issue #87, D-2026-08-25-k). Survey-point exclusion from
+- Revisions: 2026-08-25 — initial (GitHub issue #87, D-2026-08-25-m). Survey-point exclusion from
   the array selection was confirmed with the user ahead of implementation (see Statement).
-  2026-08-25 — Acceptance 2 amended (D-2026-08-25-l): the user reported ARRAY's opening
+  2026-08-25 — Acceptance 2 amended (D-2026-08-25-n): the user reported ARRAY's opening
   "select objects" step only accepted a two-corner window/crossing box, with no way to click an
   individual object and no way to keep selecting after one box — a real gap against how every other
   CAD selection step in this app already behaves, not a spec-compliant report. Rather than fix ARRAY
@@ -1603,6 +1710,49 @@ requirements is a planning failure, not a sign of rigor.
   limitation at the time), the user chose to fix the shared selection shape across all of them in
   one pass. See REQ-103's own revision note for the shared mechanism; STRETCH is deliberately
   excluded (REQ-103 step 5 — its crossing box is load-bearing geometry, not just an object filter).
+
+### REQ-306 — Dynamic cursor input is content-driven, not a fixed footprint (GitHub issue #104)
+- Purpose: the at-cursor dynamic input (REQ-024/REQ-304 — `##ViewportCommandInput` and the grip
+  drag's `##ViewportGripInput`, both `CadUi.cpp`) is a small window that already reads its prompt
+  and field content fresh every frame, but its input field used a **fixed-width clamp**
+  (`std::clamp(240.f * scale, 160.f, 360.f)` for point entry, `360.f`/`200.f` for the single
+  non-point field, `200.f`/`140.f`/`320.f` for the grip-stretch field) — a footprint sized for the
+  longest string the field could ever hold, shown even when the live content is short (e.g. a
+  short bearing or a two-digit distance). The issue asks for the box to size to what it is
+  currently showing.
+- Priority: should
+- Type: functional
+- Statement: the width of the dynamic-cursor input field — and the window that contains it — is
+  computed from the field's **current text** (`ImGui::CalcTextSize`, plus fixed chrome for caret
+  and frame padding) every frame, clamped only to a minimum (so an empty/one-character field stays
+  clickable) and a viewport-fraction maximum (so a long paste cannot take over the screen), never
+  to a constant tuned for the longest possible value. The non-point field additionally sizes to
+  fit its placeholder hint ("Type value or Enter") while empty, since the hint must stay readable.
+  The window itself keeps `ImGuiWindowFlags_AlwaysAutoResize` (pre-existing, REQ-024) and its
+  padding is tightened from 10x8px to 8x6px (rule: remove padding that isn't earning its space).
+  Positioning (offset from the cursor, clamped to the work area near screen edges) is unchanged in
+  mechanism but now estimates the pre-layout window size from the same content-driven width instead
+  of a constant, so the edge clamp matches the box actually drawn.
+- Acceptance:
+  1. the field's on-screen width tracks its own text: a one-character value (e.g. typing `5`) draws
+     a visibly narrower box than a long typed expression (e.g. `1234567.891,1234567.891`), in the
+     same frame the text changes;
+  2. the window carries no content beyond the prompt label and its one field — no fixed-size empty
+     space is reserved beneath or beside them (`ImGuiWindowFlags_AlwaysAutoResize`, unchanged from
+     REQ-024, plus the now-content-driven field width);
+  3. this applies identically to all three fields: the point-entry coordinate field, the single
+     non-point field (bearing/angle/distance/option/command-name), and the grip-stretch field;
+  4. the field never shrinks below a minimum that keeps it clickable and never exceeds roughly half
+     the work-area width, so a pathological value cannot obscure the drawing;
+  5. REQ-024's existing behavior is unchanged: live tracking until typed, type-to-start seeding,
+     select-all-on-refresh for the grip field, Enter/viewport-click commit, and per-state prompt
+     text from `CommandInputHint`/`CadPointPromptLabel` (REQ-304) all continue to work exactly as
+     before — this requirement touches sizing only, not input behavior;
+  6. the box stays fully within the application window near every edge, using the same clamp
+     mechanism as before (REQ-024), now driven by the actual (smaller, typically) content width.
+- Owner-layer: UI (`CadUi.cpp`)
+- Status: accepted
+- Revisions: 2026-08-26 — initial (GitHub issue #104, D-2026-08-26-c).
 
 ---
 
@@ -3392,7 +3542,7 @@ requirements is a planning failure, not a sign of rigor.
     not spec'd in advance of that command's own design pass.
 - Owner-layer: Commands/Domain/UI
 - Status: accepted
-- Revisions: 2026-08-23 — catalogued, proposed (D-2026-08-23-i). 2026-08-23 — accepted; sequenced into 8 increments starting with MIRROR; MIRROR's acceptance conditions written; MIRRTEXT-off and erase-default-No confirmed with the user (D-2026-08-23-j, TASK-094). 2026-08-24 — LENGTHEN's (step 2) acceptance conditions written (D-2026-08-24-a, TASK-095). 2026-08-24 — EXTEND's (step 3) acceptance conditions written; analytic-over-tessellated boundary intersection and paper-space-included both confirmed with the user (D-2026-08-24-b, TASK-096). 2026-08-24 — BREAK's (step 4) acceptance conditions written; Circle/full-circle-Arc target eligibility (converts to Arc) and closed-Polyline target eligibility (splits open) both confirmed with the user (D-2026-08-24-c, TASK-097). 2026-08-24 — STRETCH's (step 5) acceptance conditions written; full AutoCAD-parity arc partial-stretch (center/radius recompute preserving included angle) and full paper-space vertex-level parity both confirmed with the user (D-2026-08-24-d, TASK-098). 2026-08-24 — after the first hand-driven GUI pass: LENGTHEN's valueless first pick amended from a refusal to a latch-and-prompt (the ribbon button was a dead end), and a live removed-span preview added to BREAK's acceptance (D-2026-08-24-e, TASK-100, TASK-101). 2026-08-24 — LENGTHEN's default sub-mode changed from DElta to Total, so pick-then-type-the-new-length is the out-of-the-box flow (D-2026-08-24-f, TASK-100). 2026-08-24 — FILLET's and CHAMFER's (step 6a/6b) acceptance conditions written; full AutoCAD-parity scope (Line/Arc/Polyline-segment eligibility, a Trim/No-trim toggle shared between the two commands, full paper-space parity, and both Distance/Distance and Distance/Angle chamfer input) confirmed with the user (D-2026-08-24-g, TASK-102/TASK-103). 2026-08-25 — the "select objects" shape MOVE/COPY/ROTATE/SCALE/MIRROR established and this REQ's later steps (STRETCH, ARRAY, ALIGN — REQ-039) all reused was two-corner window/crossing box only: no individual-entity click, no accumulating across more than one box, no confirm-on-Enter. A user report against ARRAY (REQ-304) found this the same real gap in every one of them, not ARRAY alone; the shared shape is now click-and/or-box, additive, accumulating until Enter confirms it (D-2026-08-25-l) — applied to MOVE, COPY, SCALE, ROTATE, MIRROR, and ALIGN. STRETCH (step 5) is deliberately excluded: its crossing box is load-bearing geometry (which vertices move), not just an object filter, so it keeps the original box-only shape.
+- Revisions: 2026-08-23 — catalogued, proposed (D-2026-08-23-i). 2026-08-23 — accepted; sequenced into 8 increments starting with MIRROR; MIRROR's acceptance conditions written; MIRRTEXT-off and erase-default-No confirmed with the user (D-2026-08-23-j, TASK-094). 2026-08-24 — LENGTHEN's (step 2) acceptance conditions written (D-2026-08-24-a, TASK-095). 2026-08-24 — EXTEND's (step 3) acceptance conditions written; analytic-over-tessellated boundary intersection and paper-space-included both confirmed with the user (D-2026-08-24-b, TASK-096). 2026-08-24 — BREAK's (step 4) acceptance conditions written; Circle/full-circle-Arc target eligibility (converts to Arc) and closed-Polyline target eligibility (splits open) both confirmed with the user (D-2026-08-24-c, TASK-097). 2026-08-24 — STRETCH's (step 5) acceptance conditions written; full AutoCAD-parity arc partial-stretch (center/radius recompute preserving included angle) and full paper-space vertex-level parity both confirmed with the user (D-2026-08-24-d, TASK-098). 2026-08-24 — after the first hand-driven GUI pass: LENGTHEN's valueless first pick amended from a refusal to a latch-and-prompt (the ribbon button was a dead end), and a live removed-span preview added to BREAK's acceptance (D-2026-08-24-e, TASK-100, TASK-101). 2026-08-24 — LENGTHEN's default sub-mode changed from DElta to Total, so pick-then-type-the-new-length is the out-of-the-box flow (D-2026-08-24-f, TASK-100). 2026-08-24 — FILLET's and CHAMFER's (step 6a/6b) acceptance conditions written; full AutoCAD-parity scope (Line/Arc/Polyline-segment eligibility, a Trim/No-trim toggle shared between the two commands, full paper-space parity, and both Distance/Distance and Distance/Angle chamfer input) confirmed with the user (D-2026-08-24-g, TASK-102/TASK-103). 2026-08-25 — the "select objects" shape MOVE/COPY/ROTATE/SCALE/MIRROR established and this REQ's later steps (STRETCH, ARRAY, ALIGN — REQ-039) all reused was two-corner window/crossing box only: no individual-entity click, no accumulating across more than one box, no confirm-on-Enter. A user report against ARRAY (REQ-305) found this the same real gap in every one of them, not ARRAY alone; the shared shape is now click-and/or-box, additive, accumulating until Enter confirms it (D-2026-08-25-n) — applied to MOVE, COPY, SCALE, ROTATE, MIRROR, and ALIGN. STRETCH (step 5) is deliberately excluded: its crossing box is load-bearing geometry (which vertices move), not just an object filter, so it keeps the original box-only shape.
 
 ### REQ-104 — Draw-command completeness
 - Purpose: SPLINE, XLINE, RAY, DONUT, SOLID, REVCLOUD, WIPEOUT, and MLINE have no command at all
@@ -3533,6 +3683,593 @@ requirements is a planning failure, not a sign of rigor.
 - Owner-layer: UI/Commands
 - Status: proposed
 - Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
+
+### REQ-118 — A polyline closes by clicking its start, and ends on Enter
+- Purpose: finishing a polyline requires typing `CLOSE` or `END`. No established CAD requires
+  either, so the most common drawing operation in the program is the one that makes the user stop
+  and recall command syntax
+- Priority: should
+- Type: functional
+- Statement: While a `POLYLINE` (or `3DPOLY`) draft is active, its **starting vertex is an Endpoint
+  object-snap candidate**, so the cursor lands on it exactly and the existing snap marker shows it.
+  Committing a point that coincides with that starting vertex **closes** the polyline, writes the
+  closing segment, and ends the command — with no `CLOSE` keyword. A bare **Enter** finishes the
+  draft as an **open** polyline, adds no closing segment, and ends the command.
+
+  `CLOSE`/`CL` and `END` remain accepted; they are no longer *required*. The minimum-vertex rules
+  are unchanged (three to close, two to end open), and below three vertices the starting vertex is
+  **not offered as a snap candidate** — so the invalid close cannot be attempted, rather than being
+  refused after the fact.
+
+  Close detection is by **coincidence with the stored first vertex**, not by asking the snap system
+  what the user meant. The snap makes the point reachable; it does not decide the command. Anything
+  that lands on the first vertex — snap, typed coordinate, or an exact click — closes the polyline.
+
+  Enter **ends the command** rather than restarting it. This differs deliberately from `LINE`, whose
+  blank Enter starts a fresh chain: a polyline is one object and finishing it is finishing the
+  command, where LINE's chain is a run of independent segments.
+- Acceptance:
+  - four picks, the fourth on the starting vertex, produce **one closed** polyline and the command ends;
+  - three picks then Enter produce **one open** polyline, with no closing segment, and the command ends;
+  - with only two vertices a pick on the starting vertex does **not** close — it is an ordinary
+    vertex, and the starting vertex offers no snap candidate at that point;
+  - `CLOSE` and `END` still work and still report through REQ-201;
+  - snapping to all other geometry is unaffected while a draft is active;
+  - Esc mid-draft leaves the polyline count unchanged in both spaces;
+  - `3DPOLY` behaves identically, each vertex keeping its own elevation (REQ-085);
+  - all of the above hold in **paper space** as well as model space (REQ-039 (5)/(6)).
+- Owner-layer: Commands (the state machine), Viewport (the snap candidate)
+- Status: accepted (2026-08-25)
+- Revisions: 2026-08-25 — accepted (relabeled D-2026-08-25-l during the master→beta merge for
+  REQ-304/issue #82 — `D-2026-08-25-j` collided with master's independent REQ-303, see REQ-303's
+  duplication note above); issue #80
+
+### REQ-119 — Command variants are clickable wherever they are prompted (GitHub issue #81)
+- Purpose: the command line tells the user which keyword options a command accepts, but only one
+  prompt in the entire program renders them as anything the mouse can reach. A user who does not
+  already know the shortcut has no way to discover it except by reading prose and guessing what to
+  type — which is the opposite of what a prompt is for
+- Priority: should
+- Type: functional
+- Statement: A **command variant** is a keyword option a command accepts at its current prompt
+  (`Azimuth`, `3P`, `Reference`, `Copy`, `Close`, `DElta`). Every variant a prompt names is
+  **both** typeable and **clickable**, and the two paths are the same path: a click submits the
+  variant's shortcut through `ProcessCommandLineSubmit` — the identical entry point Enter uses on
+  typed text — so keyboard and mouse cannot drift apart by construction.
+
+  The mechanism is a **text convention, not a data structure**. A variant is declared by writing
+  it into the prompt string in the form the codebase already uses, and the renderer derives the
+  clickable region and the submitted token from that text. Two forms are recognized:
+
+  - **Inline** — `[A]zimuth`, `[2P]`, `[3P]`: the bracketed run is the shortcut and the link label;
+    any trailing lowercase continues as plain text.
+  - **Grouped** — `[DElta/Percent/Total/DYnamic]`, `[Y]es/[N]o`: each `/`-separated option becomes
+    its **own** link, and each option's shortcut is its **leading run of uppercase letters and
+    digits** (`DElta`→`DE`, `Percent`→`P`, `DYnamic`→`DY`, `Yes`→`Y`). Separators and brackets
+    render as plain text.
+
+  This convention is chosen deliberately over a declared `{display, shortcut, action}` table: the
+  capitalization rule is already how this codebase writes these prompts, so the convention reads
+  the intent that is there rather than adding an abstraction with no second present-day use
+  (CLAUDE.md rule 2). The cost is accepted and named: the shortcut is *implied* by the prompt text
+  rather than declared beside the handler, so a prompt may name a token the command does not
+  accept. Acceptance therefore requires that every marked-up token be **verified against the
+  command's own text handler**, and that verification is part of the work, not a later audit.
+
+  **One renderer serves every surface.** The floating command bar and the classic docked panel
+  render variants through the **same** function; no command implements click handling of its own.
+  The renderer is **wrap-aware** — it breaks between segments when the next one will not fit the
+  content region — because the docked panel's prompts are long and wrap today.
+
+  **A live prompt is clickable; history is not.** There are **three** places a prompt string can
+  come from, and only two of them are prompts:
+
+  | Surface | Role | Rendered |
+  |---|---|---|
+  | `CommandInputHint` (UI) | the live prompt | **clickable** |
+  | `*FooterHint` (Commands) | the live prompt | **clickable** |
+  | `log.push_back` | history | **plain text — never clickable** |
+
+  The command log is a record of what already happened. A prompt that has scrolled into it is no
+  longer live, and making it clickable would let a user submit a token to a command that has since
+  moved on. So a command whose options are announced **only** in the log has no clickable variants
+  by construction — the fix is to give that command a **live prompt entry**, not to make the log
+  interactive.
+
+  **REQ-304 has already closed the gap this rule was written for, and in doing so made the
+  defect worse.** When REQ-119 was first drafted, `FILLET` (`[Radius/Trim]`, `[Trim/No trim]`),
+  `CHAMFER` (`[Distance/Angle/Trim]`, `[Trim/No trim]`) and `ELEV` (`W`orld) announced their
+  options **only** in the log, and eight commands had no live prompt at all. REQ-304 (issue #82)
+  audited the same `Kind` enum, reached the same conclusion about `Pan`/`Orbit`, and gave all
+  eight a live prompt through `DrawingExtrasFooterHint`. Authoring those prompts is therefore
+  **no longer part of this requirement** — it is done.
+
+  The consequence is that five grouped-variant prompts are now on the **live, clickable** path
+  while the renderer still reads only to the first `]`, so each renders as one link submitting a
+  token its own command rejects:
+
+  ```
+  FILLET: Select first object or [Radius/Trim] …          -> "radius/trim"
+  FILLET: Trim mode [Trim/No trim] …                      -> "trim/no trim"
+  CHAMFER: Select first object or [Distance/Angle/Trim] … -> "distance/angle/trim"   (two variants)
+  CHAMFER: Trim mode [Trim/No trim] …                     -> "trim/no trim"
+  ```
+
+  Together with `MIRROR` and `LENGTHEN` that is **seven** dead links, not two — which is why
+  increment 1 is the parser and not the markup: fixing the reader repairs all seven at once, and
+  every one of them is already written in the notation this rule reads.
+
+  The live-vs-history split stands as the governing rule regardless: a command that announces
+  options only in the log still has no clickable variants, and the fix for that is always a live
+  prompt, never an interactive log. A command that genuinely has no variants needs no markup, but
+  it must be **audited and recorded as having none**, not silently skipped.
+
+  Clickable variants are visually distinct from surrounding prompt text, carry a hover state, and
+  do not interfere with coordinate or text entry at the same prompt.
+- Sequencing: **two increments.**
+  - **Increment 1 — the mechanism.** Grouped-form and shortcut-extraction parsing; wrap-aware
+    layout; the docked panel routed through the shared renderer; the hand-rolled LINE-only link
+    block deleted; the parsing rule extracted as a **pure function** and unit-tested. LINE's
+    `[A]`/`[2P]` and the two currently-defective grouped prompts are correct at the end of this
+    increment.
+  - **Increment 2 — the coverage audit.** Command-by-command normalization of the remaining prompt
+    strings across both hint families, each token verified against its handler, with headless
+    transcript coverage per command. Deliberately left unscoped until reached. It is a pure
+    markup pass: REQ-304 already authored the live prompts that were missing, so nothing here
+    writes a prompt that does not exist — it only teaches existing ones to say `[Radius/Trim]`
+    where they currently say `type R (Radius) or T (Trim)`.
+- Acceptance:
+  - **Increment 1:**
+    - clicking `[A]` is indistinguishable from typing `a`, and `[2P]` from typing `2p`, in **both**
+      the floating bar and the docked panel — same resulting command state, same log lines;
+    - `Erase source objects? [Yes/No] <N>:` renders **two** links; clicking `Yes` erases the
+      source objects and clicking `No` does not. Today it renders **one** link that submits
+      `yes/no`, which the command rejects;
+    - `FILLET: Select first object or [Radius/Trim] …` renders **two** links submitting `r` and
+      `t`, and `CHAMFER: Select first object or [Distance/Angle/Trim] …` **three** submitting
+      `d`, `a`, `t` — the tokens `HandleFilletText`/`HandleChamferText` accept. These reached the
+      clickable path with REQ-304 and are dead links until this increment lands;
+    - `LENGTHEN — select object, or [DElta/Percent/Total/DYnamic]:` renders **four** links
+      submitting `de`, `p`, `t`, `dy` — each the token `TryLengthenModeToggle` accepts. Today it
+      renders one link submitting `delta/percent/total/dynamic`, which the command rejects;
+    - a prompt whose text wraps in the docked panel still renders every link on the correct line,
+      with no horizontal overflow;
+    - no command contains click-handling code of its own;
+    - the prompt→variants rule is a pure function covered by `CommandLineTests`, including: inline,
+      grouped, mixed-case shortcut extraction, a bracket with no closing `]`, and an empty group.
+  - **Increment 2:** every variant a **live prompt** names is clickable; every clickable token is
+    accepted by that command's text handler in that state; no variant loses its keyboard path;
+    every `AppCommandState::Kind` is either marked up or recorded as having no variants (none is
+    silently skipped); and **no log line is clickable**.
+- Owner-layer: UI (the renderer and the prompt text); Commands (the `*FooterHint` prompt strings
+  and the token handlers the audit verifies against)
+- Status: accepted (2026-08-25)
+- Revisions: 2026-08-25 — accepted (D-2026-08-25-o, relabeled from this stack's own D-2026-08-25-m
+  while merging into `beta` — that letter was already taken by REQ-305/ARRAY); issue #81.
+  2026-08-25 — amended (D-2026-08-25-p, relabeled from D-2026-08-25-n for the same reason). Two
+  things, one review and one collision. The
+  Verification review of TASK-111's plan found a **third prompt surface** the original text did
+  not account for — the log — and added the live-vs-history rule. Rebasing onto `beta` then found
+  **REQ-304 had already authored** the live prompts for the eight commands that lacked them, so
+  that half of the amendment was dropped as done, and increment 2 shrank back to a pure markup
+  pass. REQ-304 also moved five grouped-variant prompts onto the clickable path, taking the live
+  defect from two dead links to **seven** — recorded here because it is now increment 1's
+  strongest motivation, not a footnote.
+
+
+### REQ-120 — Double-tapping the middle mouse button zooms to extents (GitHub issue #88)
+- Purpose: framing the whole drawing is the most-repeated view action there is, and today it costs
+  a typed `ZOOMEXTENTS`/`ZE`. Every CAD user already has the muscle memory for AutoCAD's
+  wheel double-click; GoSurvey binds that gesture to nothing
+- Priority: should
+- Type: functional
+- Statement: **Double-clicking the middle mouse button over the drawing viewport zooms to
+  extents**, matching AutoCAD's binding for the same gesture. It reuses the existing zoom-extents
+  path — `ZOOMEXTENTS`/`ZE` are unchanged and remain the typed route to the same result.
+
+  **The gesture is transparent.** Unlike the typed command, which refuses while a command is
+  running ("finish or cancel the active command first"), the double-click works **mid-command**:
+  a user halfway through a `LINE` can reframe and carry on picking points. This is deliberate and
+  matches AutoCAD, where view operations are transparent. It changes the *view* only — the active
+  command's phase, its picked points and its draft geometry are untouched, because zooming writes
+  the camera and nothing else.
+
+  **Space-aware.** What gets framed depends on where the user is, mirroring where middle-drag pan
+  already works (REQ-045):
+
+  | Space | Frames |
+  |---|---|
+  | Model | the model's entity extents (the existing computation) |
+  | Floating model space (inside an activated viewport) | the model's entity extents, framed into the VIEWPORT's own rectangle — **REQ-123** |
+  | Paper | the **sheet** — `(0,0)` to `sheetWidthIn() × sheetHeightIn()` |
+
+  Paper space frames the sheet rather than the paper entities on it: the page is the meaningful
+  extent of a layout, and a layout with no geometry yet must still frame to something. Paper
+  geometry drawn **outside** the sheet is therefore not framed by this gesture — a stated
+  limitation, not an oversight.
+
+  **Middle-drag pan is untouched.** REQ-045 guarantees it, and a double-click is not a drag; the
+  two gestures do not overlap.
+- Acceptance:
+  - a middle double-click over the model viewport frames the drawing, identically to `ZOOMEXTENTS`;
+  - it works **while a command is active**, and the command's state survives it — a `LINE` with one
+    point placed still has that point and still expects the next;
+  - the typed route still does **not** zoom mid-command, and its behaviour is unchanged: while a
+    command is active, typed text is consumed by that command, so `ZOOMEXTENTS` is read as point
+    input and refused by it (`"Could not parse point…"`). `StartZoomExtentsCommand`'s own
+    "finish or cancel the active command first" guard is not even reached on that path — it
+    applies when the text does reach the dispatcher. Either way the transparency is a property of
+    the **gesture** alone, and nothing about the typed command is relaxed;
+  - in paper space the gesture frames the sheet;
+  - in floating model space it frames the model;
+  - middle-drag pan still pans, in every space, unchanged;
+  - a double-click with nothing to frame reports it and changes no view (REQ-201).
+- Owner-layer: UI (the gesture) — the extents computation and the camera write are existing Commands code
+- Status: accepted (2026-08-25). This REQ covers only #88's "Middle Mouse"/"Architecture"
+  acceptance sections; #88's "ZOOMEXTENTS" section (margin, aspect-ratio, degenerate/empty extents,
+  NaN safety) exercised the pre-existing framing path unmodified and untested here (D-2026-08-26-b)
+  and is now **REQ-122**, which closes the issue alongside this one. The camera write named here as
+  `ApplyViewportZoomToWorldRect` is `zoomframing::FrameWorldRect` since REQ-122
+- Corrected 2026-08-26 (D-2026-08-26-e, REQ-123): the floating-model-space claim above was never
+  true. The gesture was raised inside a block guarded by `!routeZoomToViewport`, which is skipped
+  whenever a floating viewport owns pan/zoom — so a middle double-click through an activated viewport
+  did nothing at all, and the typed command wrote the SHEET camera (GitHub issue #100). REQ-123 owns
+  that case now; this requirement keeps the gesture and the model/paper branches.
+- Revisions: 2026-08-25 — accepted (D-2026-08-25-o, relabeled D-2026-08-26-a while merging PR #93
+  into `beta` — that letter was already taken by REQ-119 above); asked for directly by the user,
+  from AutoCAD's wheel double-click.
+
+### REQ-121 — Object selection is a visibly distinct mode: no OSNAP, a pickbox cursor, one prompt (GitHub issue #91)
+- Purpose: "pick a point" and "pick an object" are different acts, and today they look and behave
+  identically. A user in a selection step sees the same crosshair, sees snap markers that mean
+  nothing there, and reads a differently-worded prompt in every command. The snapping is not merely
+  useless during selection — it is actively misleading, because the cursor visibly jumps to a snap
+  point while the hit-test uses somewhere else
+- Priority: should
+- Type: functional
+- Statement: An **object-selection step** is any command phase whose question is *which objects*
+  rather than *which point*: the `PickSelection` phase of MOVE, COPY, SCALE, ROTATE, MIRROR, ALIGN,
+  ARRAY and STRETCH, and the entity-picking loops of DELETE, JOIN, TRIM, EXTEND, LENGTHEN, BREAK,
+  FILLET and CHAMFER.
+
+  **ZOOM is excluded, and #91 lists it.** Saying so explicitly because dropping it silently would
+  look like an oversight: ZOOM WINDOW's box picks a **region of the view** to fit, not objects.
+  Nothing is selected by it, so "select objects" would be a prompt that lies, and a pickbox cursor
+  would say *click a thing* while the user drags a rectangle. Its corners already come from
+  unsnapped coordinates, so rule (1) would change nothing there either. The test is what the click
+  is *for*, not whether it happens to drag a box.
+
+  **Idle selection — no command running — is deliberately NOT one**, and is untouched by this
+  requirement: it keeps today's crosshair and today's OSNAP behaviour. The reason is that the three
+  rules below are a *mode signal*, and a mode signal is only meaningful against a default. Idle is
+  that default — it is what the user is looking at most of the time — so making it look like a
+  selection step would leave the pickbox meaning nothing, and would change the appearance of normal
+  use to fix a problem that only exists inside commands. The distinction being drawn is "a command
+  is asking me which objects" versus "nothing is running", which is exactly the line this excludes.
+
+  Three rules hold for the whole duration of such a step, and stop holding the moment the phase
+  advances.
+
+  **(1) OSNAP has no effect.** The distinction that matters here is that the *hit-test* is already
+  mostly correct and the *cursor* is not:
+
+  | | today | required |
+  |---|---|---|
+  | what the pick hit-tests against | raw unsnapped cursor, for most steps | raw unsnapped cursor, for **every** step |
+  | where the cursor is drawn | snapped — it jumps to snap points | raw — it tracks the mouse |
+  | snap markers / tooltips | drawn | not drawn |
+
+  So this is only half a behaviour change. `ViewportUseRawWorldForSelectionRectPick` and the
+  `RawEntityPick` route already establish "hit-test raw" for selection rectangles and entity picks
+  respectively — the `RawEntityPick` comment already gives this requirement's own reasoning, that
+  *"an OSNAP-adjusted point would hit-test somewhere the user is not pointing."* What does not
+  exist is any suppression of the snap **cursor adjustment or marker display**, so the user watches
+  the crosshair leap to an endpoint while the pick correctly ignores it. Making the rule explicit
+  is what stops it from being a per-command accident.
+
+  **The rule also closes a live inconsistency it exposes.** `ALIGN` routes its `PickSelection`
+  phase to `SelectionAccumulate` alongside its six siblings, but is **absent** from
+  `ViewportUseRawWorldForSelectionRectPick` — so ALIGN's selection-box corners come from *snapped*
+  coordinates while MOVE/COPY/SCALE/ROTATE/MIRROR/ARRAY's come from raw. That is a defect, found
+  while writing this requirement, and it is precisely the "per-command accident" a stated rule
+  prevents. A single predicate answering *"is a selection step active?"* is what all three rules
+  below consult, so a command cannot be half-included again.
+
+  **"No effect" includes the one-shot OVERRIDE.** Shift+Right-click opens a "snap once — choose
+  type" menu, and picking from it forces a snap on the next pick. That is a way of *asking* for the
+  behaviour this rule removes, so the menu does not open during a selection step, and an override
+  armed just before one began is not spent inside it either (added 2026-08-26, D-2026-08-26-d: the
+  first implementation gated only the automatic snap, leaving the rule true for every snap except a
+  deliberately forced one).
+
+  **(2) The cursor is a pickbox.** A square of the size the crosshair configuration already carries
+  (`pickbox half-size in px`, an existing setting — this is not a new tunable), replacing the
+  crosshair for the duration of the step and reverting when it ends. This is AutoCAD's `PICKBOX`
+  convention and the visual signal that rules (1) and (3) are in force.
+
+  **(3) One prompt — for the steps that are nothing but a selection.** The wording is
+  **"Select objects, ENTER to continue"**, settled once in one shared string and shown in both the
+  command line and the dynamic cursor text (REQ-304's surfaces, and REQ-304's rule that the two
+  agree). Today those prompts range from "click two corners to window-select objects" to
+  "window-select entities, then press Enter" to no Enter hint at all.
+
+  It applies to the steps whose whole content is *pick objects*: **MOVE, COPY, SCALE, ROTATE,
+  MIRROR, ALIGN, ARRAY, DELETE, JOIN**.
+
+  **DELETE and JOIN had to earn that prompt, and the behaviour moved rather than the words**
+  (2026-08-26, D-2026-08-26-d). Both were fixed two-click-box commands: the box acted the moment it
+  closed, and Enter was answered with *"finish window-select in the viewport (two clicks)"*. The
+  shared prompt told the user to press a key the command explicitly refused, which made rule (3) a
+  sentence rather than a rule. They now take the click-or-box, accumulate-until-Enter shape
+  D-2026-08-25-l gave the seven transform commands — that decision excluded only STRETCH, for a
+  stated reason, and simply never included these two. Adding a second, box-only prompt was the
+  alternative and was declined: it would have made "one prompt, everywhere" mean "one of two
+  prompts", to preserve behaviour nobody had chosen.
+
+  **It does NOT replace a prompt that carries a keyword or a type list**, and that limit is
+  load-bearing rather than a concession. TRIM's selection prompt offers `type L — draw the trim
+  line`; OFFSET's names what is pickable; STRETCH's says `right-to-left = crossing`, which is
+  operative because its box direction is data (REQ-103 step 5). Overwriting those with a generic
+  phrase would delete the only place each option is discoverable — and REQ-119 exists precisely to
+  make such keywords *more* reachable, so this requirement must not quietly undo it. Those steps
+  still get rules (1) and (2); only their prompt text is their own.
+
+  Unifying wording is the goal; erasing information is not. Where a step has nothing to say beyond
+  "pick objects", it says exactly the same thing as every other such step.
+- Acceptance:
+  - no snap marker is drawn, and the cursor does not jump to a snap candidate, at any point during
+    any object-selection step listed above;
+  - the pick that results is hit-tested against the raw cursor for **every** listed step —
+    including ALIGN, whose box corners are snapped today;
+  - the cursor renders as a pickbox square for the step's duration and reverts to the crosshair
+    when the phase advances or the command is cancelled;
+  - MOVE, COPY, SCALE, ROTATE, MIRROR, ALIGN, ARRAY, DELETE and JOIN each show the **identical**
+    selection prompt in the command line **and** in the dynamic cursor text, sourced from one shared
+    string — byte-for-byte the same, not merely equivalent wording;
+  - TRIM, OFFSET and STRETCH keep their own prompts, and every keyword they name (`L`, the pickable
+    type list, `right-to-left = crossing`) is still present afterwards — a prompt that lost an option
+    to this requirement is a **failure** of it, not a tidy-up;
+  - a command left out of the treatment is a **build-time or test-time** failure, not something a
+    user finds — the single predicate is exhaustive over the phases, on the precedent of
+    `ViewportClickRouteFor`'s `default:`-less switch (REQ-103/TASK-099);
+  - the accumulate-until-Enter behaviour of REQ-305 is unchanged — this requirement governs the
+    step's *appearance and input treatment*, never which objects it collects;
+  - STRETCH keeps its crossing box as load-bearing geometry (REQ-103 step 5): it gets the cursor,
+    snap and prompt treatment, and its box semantics are untouched;
+  - **with no command running, nothing changes at all** — the crosshair is the crosshair, OSNAP
+    behaves exactly as it does today, and snap markers still draw. A user who never starts a command
+    cannot tell this requirement was implemented, and that is the intended outcome, not a gap;
+  - the Shift+Right-click snap-override menu does not open during an object-selection step, and an
+    override armed before the step began is not consumed inside it — verifiable as an A/B against a
+    control, since the same gesture at the same pixel must still open the menu under a point step;
+  - DELETE and JOIN accumulate objects by click **or** box until Enter, and Enter is what acts on
+    the selection — a closing box no longer erases or joins, and Enter with nothing selected is a
+    stated refusal that leaves the command running (REQ-201).
+- Scope boundary — **model space and floating model space only** (stated 2026-08-26,
+  D-2026-08-26-d). In PAPER space the modify commands are pick-first: `StartDeleteCommand` and its
+  siblings act on an existing paper selection or answer *"select paper object(s) or viewport(s)
+  first"* without ever setting `st.active`, so there is no object-selection **step** for the three
+  rules to apply to — the selection itself is made idle, which this requirement excludes by decision.
+  Paper space therefore keeps the crosshair and the ordinary OSNAP behaviour throughout. That is a
+  consequence of two deliberate choices meeting, not an oversight in either; giving paper space the
+  treatment means giving its modify commands a real selection phase, which is a behaviour change
+  outside this requirement. Filed separately as GitHub issue #106 rather than absorbed here.
+- Owner-layer: UI (cursor rendering, marker suppression, prompt surfaces); Commands (the shared
+  prompt string, the selection-step predicate, and DELETE/JOIN's accumulate-until-Enter step);
+  Viewport (the existing raw-vs-snapped pick paths, and the DELETE/JOIN click route)
+- Status: accepted (2026-08-26)
+- Revisions: 2026-08-26 — accepted (D-2026-08-26-a); issue #91. Amended 2026-08-26
+  (D-2026-08-26-d, TASK-118) after chetjones003's review of PR #102: the one-shot snap-override
+  seam added to rule (1), DELETE/JOIN's behaviour corrected so rule (3) is true for them, and the
+  paper-space scope boundary stated rather than left to be discovered.
+
+### REQ-307 — Paper-space MOVE/COPY/DELETE gain a real selection step when nothing is pre-selected (GitHub issue #106)
+- Purpose: REQ-121 gave model space a visibly distinct "picking objects" mode — no OSNAP, a pickbox
+  cursor, one shared prompt — for every object-selection step, but stated paper space as an explicit
+  scope boundary rather than an oversight: `StartDeleteCommand`/`StartPaperMoveCopyViewports` are
+  **pick-first** (act on whatever idle click/box-select has already selected, or refuse), so there
+  was no selection *step* in paper space for REQ-121's three rules to attach to. This requirement is
+  what REQ-121's own scope-boundary text names as the fix — "giving paper-space modify commands a
+  real selection phase" — for the one case that actually needed it: starting the command with
+  **nothing** selected.
+- Priority: should
+- Type: functional
+- Statement: Paper-space MOVE, COPY and DELETE keep pick-first as the fast path — starting one with
+  an existing paper-entity or viewport selection acts immediately, exactly as today. Starting one
+  with **nothing** selected no longer answers a flat refusal ("select paper object(s) or viewport(s)
+  first." / "select object(s) first."); it opens a real selection step instead, with the identical
+  input treatment REQ-121 gives its model-space counterpart:
+
+  1. **A click toggles one object (paper entity or viewport) into the accumulating selection, no
+     Shift required, and a window/crossing box merges into it rather than replacing it** — the
+     paper-space analog of REQ-305's model-space accumulate-until-Enter shape (D-2026-08-25-l). The
+     object universe is the same one idle click/box-select already reaches in paper space (REQ-035
+     viewports + REQ-037 native geometry); this adds a second entry point onto it, not a new
+     eligibility rule.
+  2. **Enter is what advances the step** — to MOVE/COPY's base-point phase, or straight to DELETE's
+     erase — and Enter with nothing selected is REQ-201's stated refusal ("Nothing selected — click
+     objects or drag a selection window, then press Enter."), leaving the step open rather than
+     exiting the command.
+  3. **OSNAP has no effect and the cursor is a pickbox for the step's duration**, the same two rules
+     REQ-121 states for model space, reusing the same predicates (`ViewportIsObjectSelectionStep` is
+     model-space-only by its own doc comment, so this adds a paper-space counterpart,
+     `PaperIsObjectSelectionStep`, consulted alongside it everywhere REQ-121's rules are drawn —
+     pickbox cursor, the pre-existing paper snap-glyph suppression, and the shared prompt).
+  4. **The same shared prompt REQ-121 defines** (`kSelectObjectsPrompt`, "Select objects, ENTER to
+     continue | ESC cancel") is shown in both the command line and the dynamic cursor text, exactly
+     as its model-space counterparts show it — reusing the string rather than declaring a
+     paper-space-specific one.
+
+  ESC cancels the step (clearing the new state, leaving any partial selection intact — the same
+  behaviour REQ-121's model-space PickSelection cancellation already has, since `CancelActiveCommand`
+  never clears `st.selection` either).
+- Acceptance:
+  - starting DELETE, MOVE or COPY in paper space with an existing selection is byte-identical to
+    today — this requirement adds a second path, it does not touch the first;
+  - starting DELETE, MOVE or COPY in paper space with nothing selected opens a selection step and
+    logs the same wording model-space's own MOVE/COPY/DELETE use for their PickSelection phase
+    ("... click objects or drag a selection window (Enter when done) ..."), not the old refusal;
+  - a click during the step toggles one object into the selection without Shift, and Shift+click
+    removes it — matching REQ-305's model-space accumulate shape;
+  - a window/crossing box during the step MERGES into the accumulating selection rather than
+    replacing it;
+  - Enter with a non-empty selection advances the step (to base-point for MOVE/COPY, or straight to
+    the erase for DELETE) and Enter with an empty selection is REQ-201's refusal, leaving the step
+    running;
+  - no snap marker is drawn and the cursor does not jump to a snap candidate at any point during the
+    step (the pre-existing paper-space snap glyph, which is not gated on any command today, is
+    suppressed for this step specifically);
+  - the cursor renders as a pickbox square for the step's duration and reverts to the ordinary
+    crosshair when the step ends (advances or is cancelled);
+  - the command-line prompt and the dynamic cursor text agree, both showing REQ-121's own
+    `kSelectObjectsPrompt` string, byte-for-byte;
+  - ESC cancels the step without crashing or leaving stale internal state that a later MOVE/COPY/
+    DELETE in the same session would trip over.
+- Scope boundary — **this requirement covers only DELETE, MOVE and COPY**, the only paper-space
+  commands that were pick-first before it (REQ-035 viewports, REQ-037 native geometry). Paper space
+  has no ROTATE/SCALE/MIRROR/ALIGN/ARRAY equivalent of MOVE/COPY's own pick-first branch to extend —
+  those paper-space commands are invoked only from an existing selection today, unchanged by this
+  requirement. Extending the same treatment to a future paper-space command is a new decision, not
+  an omission of this one.
+- Owner-layer: UI (the ambient paper-space click/box/Enter handling in `CadUi.cpp`, the pickbox
+  cursor and snap-glyph suppression, the dynamic-cursor palette's engagement gate); Commands
+  (`StartPaperMoveCopyViewports`/`StartDeleteCommand`'s new branch, the shared
+  `ProcessPaperMoveWaitingSelectionEnter`/`ProcessPaperDeleteWaitingSelectionEnter` functions,
+  `PaperIsObjectSelectionStep`)
+- Status: accepted (2026-08-26)
+- Revisions: 2026-08-26 — accepted (D-2026-08-26-g), TASK-120; GitHub issue #106, split from #91
+  during REQ-121's own review.
+
+### REQ-122 — ZOOMEXTENTS frames the drawing safely: margin, aspect, degenerate extents, no invalid camera (GitHub issue #88)
+- Purpose: REQ-120 gave the middle double-click its gesture and reused the existing framing path
+  untouched, which left the larger half of issue #88 — everything the framing itself promises —
+  asserted but never checked (D-2026-08-26-b). Checking it found one guarantee that does not hold:
+  a drawing with no extent (a single point, coincident objects, a hair-length line) frames at a
+  zoom around 4.6e6, a view a fifth of a thousandth of a unit tall, which is not a view of anything
+- Priority: should
+- Type: functional
+- Statement: **Framing a world rectangle onto the camera is one shared operation with four
+  guarantees.** It is the same operation for `ZOOMEXTENTS`/`ZE`, for REQ-120's middle double-click,
+  for `ZOOMWINDOW`/`ZW` and for the post-import fit — issue #88's Architecture section requires that
+  the command and the gesture cannot disagree, so there is one implementation and no second copy of
+  the arithmetic.
+
+  **(1) It fits, centred, with a margin.** The camera centres on the rectangle's midpoint, and the
+  binding axis leaves `8%` of the viewport free — half of it on each of that axis's two sides — so
+  geometry never touches an edge. Which axis binds is decided by the **viewport's aspect ratio**,
+  which is what keeps the other axis un-clipped rather than assuming a square viewport.
+
+  **(2) A degenerate rectangle still frames to something a user can work in.** Below a **minimum
+  framed span of one world unit** on either axis, the rectangle is expanded about its own centre to
+  that minimum. One unit is 1% of the view the application opens with (`zoom == 1` shows 100 units),
+  so a point, a pair of coincident objects, or a drawing measured in thousandths frames near — but
+  still tighter than — the default view, instead of at a magnification where the camera's own float
+  precision is the largest thing on screen.
+
+  The floor is **shared by `ZOOMWINDOW`**, deliberately and not as a side effect: the same "never
+  zoom to an unusable scale" guarantee applies to a window the user drags to nothing, and splitting
+  the rule per caller would be the second copy of the arithmetic this requirement exists to prevent.
+  Its cost is stated rather than hidden — no view can be framed tighter than one world unit tall.
+
+  **(3) A rectangle that is not finite frames nothing.** A NaN or infinite bound, or a bound pair
+  whose difference overflows, is **refused**: the camera is not written at all, so the previous view
+  survives intact and no NaN can reach it. The refusal states its reason (REQ-201). This is the only
+  way "invalid camera values are never produced" can be guaranteed — a clamp still writes a wrong
+  number.
+
+  **(4) Nothing to frame is not a failure.** An empty drawing produces no extents, and the caller
+  says so and changes no view — the behaviour REQ-120 already relies on, now stated.
+
+  **What counts as the drawing's extents is unchanged.** `ComputeRobustWorldExtents` and its
+  far-outlier rejection keep deciding that, in model and floating model space; paper space frames
+  the sheet (REQ-120). This requirement governs the **camera**, never the entity sweep.
+- Acceptance:
+  - the camera centres on the extents rectangle, and the whole rectangle is inside the visible
+    rectangle at any viewport aspect — wide, square or tall;
+  - the binding axis leaves exactly 8% of the viewport free and the other axis at least that much,
+    so no geometry touches an edge;
+  - a single point, coincident objects, a zero-height row and a hair-length line each produce a view
+    at least the minimum framed span across, centred on the content — not a magnification at float
+    precision;
+  - a drawing larger than the minimum span is framed exactly as before: the floor is invisible above
+    it;
+  - a non-finite bound, or a span that overflows to infinity, writes **no** camera value and leaves
+    the current view untouched, with a stated reason;
+  - every accepted rectangle produces finite `pan`/`zoom` values, across spans from `1e-9` to `1e12`
+    and aspects from `0.05` to `20`;
+  - a rectangle given with its corners in either order frames identically (`ZOOMWINDOW`'s corners
+    arrive in drag order);
+  - typed `ZOOMEXTENTS` and REQ-120's middle double-click produce the **same** camera, because they
+    call the same function;
+  - middle-drag pan is unchanged (REQ-045), and two middle drags in succession are two pans, not a
+    double-click.
+- Owner-layer: Commands (the framing arithmetic and the callers that consume it). No UI change —
+  REQ-120 already owns the gesture
+- Status: accepted (2026-08-26); closes the remainder of GitHub issue #88 alongside REQ-120
+- Revisions: 2026-08-26 — accepted (D-2026-08-26-c); raised by chetjones003 on issue #88 after PR #93
+  merged, asking for #88's ZOOMEXTENTS acceptance list to be verified rather than assumed.
+
+### REQ-123 — ZOOM EXTENTS through an activated viewport frames the model into that viewport (GitHub issue #100)
+- Purpose: a floating viewport is the model-space window the user is actually working in, and
+  zoom-extents was the one navigation operation that did not know it. It wrote the sheet camera and
+  left the viewport's framing untouched, so the layout zoomed around a viewport that never moved
+- Priority: should
+- Type: functional
+- Statement: **While a paper-space viewport is activated (floating model space) and the viewport zoom
+  lock is OFF, `ZOOMEXTENTS` — typed, or by REQ-120's middle double-click — frames the model into
+  that viewport.** It writes the viewport's own `modelCenterX/Y` and `scaleModelPerPaperIn`, and
+  writes **no** screen camera: the viewport keeps its size and position on the sheet, and the sheet's
+  own pan/zoom is untouched.
+
+  **The viewport's aspect is its rectangle on the sheet**, `paperWIn : paperHIn` — not the
+  application window's. That single substitution is the defect: the same drawing framed with the
+  window's aspect over-fills one axis of the viewport and leaves the other empty.
+
+  **It is the same framing operation as everywhere else.** REQ-122's `FrameWorldRect` decides the
+  centre, the margin, which axis binds, the minimum span and the refusal on a non-finite rectangle;
+  this converts that answer into the viewport's units (model units per paper inch). Issue #88's
+  Architecture section requires one framing implementation, and this does not add a second.
+
+  **The extents are the model seen THROUGH that viewport.** An entity whose layer is frozen in the
+  viewport (REQ-028 / REQ-046) is not part of what the user is looking at, so it does not drag the
+  framing out to reach it — the same test the viewport renderer and the plotter already apply. The
+  filter is on **visibility**, not on entity kind: the viewport renderer currently draws only lines,
+  polylines, circles, arcs and survey points, and that is a renderer limitation, not a statement
+  about what a drawing contains. Encoding it here would freeze a gap into the extents math.
+
+  **The zoom lock decides which view is being navigated.** `viewportZoomLocked` already means
+  "pan/zoom targets the sheet"; zoom-extents is a zoom, so with the lock **ON** a floating viewport
+  frames the **sheet**, exactly as paper space does. Only the lock-OFF case — the default, and the
+  one where the wheel and middle-drag already target the viewport — frames into the viewport.
+
+  **REQ-120's floating-model-space claim is corrected here.** It stated that the middle double-click
+  frames the model in floating model space. It did not: the gesture was raised inside a block guarded
+  by `!routeZoomToViewport`, which is skipped whenever a floating viewport owns pan/zoom, so it never
+  fired there at all. The flag is now raised in every space, and this requirement decides what
+  "extents" means for each.
+- Acceptance:
+  - with a viewport activated and the lock off, `ZOOMEXTENTS` centres that viewport on the model
+    extents and sets its scale so they fit its rectangle, with REQ-122's margin;
+  - the viewport's position and size on the sheet are unchanged, and the sheet's own pan/zoom is
+    unchanged — the operation writes nothing outside the viewport;
+  - the framing is computed from the viewport's own aspect, so the **same drawing in two viewports of
+    different shapes gets two different scales**;
+  - the sheet, the viewport border and paper-space geometry are not in the calculation;
+  - an entity on a layer frozen in that viewport does not affect the result, and the same entity in a
+    viewport where its layer is thawed does;
+  - REQ-120's middle double-click produces the same result as the typed command, in a viewport as in
+    model space;
+  - middle-drag pan continues to move the model within the viewport and nothing else (REQ-045);
+  - with **no** viewport activated, paper space frames the sheet exactly as REQ-120 specifies;
+  - with the zoom lock ON, a floating viewport frames the sheet;
+  - it is covered by a **transcript**, not only by a manual pass — see Owner-layer.
+- Owner-layer: Commands (the framing and the extents filter); UI (raising REQ-120's gesture in every
+  space). Notably **not** blocked by TASK-113's DEBT-1: the viewport case needs no framebuffer,
+  because its aspect comes from paper inches and its framing is stored on the viewport, so it is
+  handled ahead of `ProcessPendingViewportZoom`'s `fbW <= 0` guard and is the first zoom behaviour a
+  headless transcript can drive end to end
+- Status: accepted (2026-08-26); closes GitHub issue #100
+- Revisions: 2026-08-26 — accepted (D-2026-08-26-e); reported by chetjones003 as issue #100.
 
 ---
 
@@ -3981,8 +4718,17 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-115 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-116 | UI/Platform | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
 | REQ-117 | UI/Commands | proposed — not yet scoped; catalogued from Known Limitations 2026-08-23 (D-2026-08-23-i) | proposed |
+| REQ-118 | Commands/Viewport | planned — `headless.regression-118-polyline-close-enter` (click the start vertex closes; Enter ends open with no closing segment; two vertices refuse to close; CLOSE/END still work; Esc leaves nothing; model, 3DPOLY and paper space each asserted). Same feature/issue (#80) as REQ-303 below, built independently on `beta` — see REQ-303's duplication note, D-2026-08-25-l | accepted |
+| REQ-119 | UI/Commands | **increment 1 done** (TASK-111) + **increment 2 done** (TASK-112) — `CommandLineTests [req119]` (the prompt→variants rule as a pure function: inline, grouped, mixed-case shortcut extraction incl. `No trim`→`N`, unclosed bracket, empty group, and a round-trip so parsing loses no text) + `headless.regression-119-variant-token-accepted` (the mechanism's three prompts) + `headless.regression-119-variant-coverage` (one assertion per marked-up token across CIRCLE/ROTATE/SCALE/TRIM/POLYLINE/FEATURELINE/ELEV, **plus a live refusal assertion for CIRCLE's bare `d`** — a value prefix, not a token, deliberately left unmarked so markup cannot manufacture a dead link) + manual GUI (links render, hover and click in BOTH the floating bar and the classic dock; a wrapping dock prompt keeps its links on the correct line with no horizontal overflow; **no log line is clickable**) | accepted |
+| REQ-120 | UI | **manual GUI only, and that is a real limitation, not a shortcut.** The headless driver models no framebuffer and never calls `ProcessPendingViewportZoom` (which early-returns on `fbW <= 0`), so it cannot reach any zoom behaviour — there is no existing zoom transcript in the corpus for the same reason. Covering this by transcript would mean giving the harness a synthetic viewport, which is harness work this requirement did not take on (recorded as TASK-113 DEBT-1). Verified instead by driving the real window: middle double-click frames the drawing in model space; it works MID-COMMAND with the active LINE's placed point surviving; the typed route still does not zoom mid-command (its text is consumed by the active command as point input — unchanged); paper space frames the sheet; middle-DRAG still pans. Leaves GitHub issue #88 open — covers only #88's Middle Mouse/Architecture sections, not its ZOOMEXTENTS acceptance list | accepted |
+| REQ-307 | UI/Commands | done (GitHub issue #106, D-2026-08-26-g, TASK-120). Closes REQ-121's own stated paper-space scope boundary for the one case that needed it: `StartPaperMoveCopyViewports`/`StartDeleteCommand`'s paper branch, on an empty selection, now sets `paperMoveWaitingSelection`/`paperDeleteWaitingSelection` and opens a real selection step instead of refusing — pick-first (act on an existing selection) is unchanged, above. `PaperIsObjectSelectionStep` (`ViewportPickPolicy.hpp`) is the paper-space counterpart of REQ-121's own predicate, consulted alongside it at every one of REQ-121's three call sites: the pickbox cursor (`CadUi.cpp`'s crosshair draw), the pre-existing (previously unconditional) paper snap glyph, and `CommandInputHint`'s prompt — all three now return REQ-121's own `kSelectObjectsPrompt` for this step, reusing the string rather than declaring a second one. Enter is handled by two free functions, `ProcessPaperMoveWaitingSelectionEnter`/`ProcessPaperDeleteWaitingSelectionEnter` (`CadCommands.cpp`), called from BOTH the raw viewport `ImGui::IsKeyPressed(Enter)` check (mouse-only entry, the same shape EXTEND's own paper phase already needed since paper commands never set `cmd.active` and so are unreachable from `ProcessCommandLineSubmit`'s Kind-keyed dispatch) AND a new branch at the top of `ProcessCommandLineSubmit`'s blank-line handler — the second call site is what gives this a headless transcript path EXTEND's raw-only precedent does not have, and the two call sites are guarded against double-firing on one keypress with `ImGui::GetActiveID() == 0` (the raw check only fires when no ImGui widget, e.g. the command-line box, currently holds keyboard focus). Click/box accumulation reuses `SelectViewport`/`TogglePaperEntitySelection`'s own pre-existing `additive=true` parameter verbatim — no new toggle logic — and a new `closePaperSelBoxMerge` lambda (a union variant of the pre-existing `closePaperSelBox`) merges a closed box into the accumulating selection rather than replacing it, mirroring REQ-305's model-space `SelectionAccumulate` (D-2026-08-25-l). Tests: `ViewportPickPolicyTests [req307]` (the predicate, pure and header-only); `headless.req307-paper-selection-step`, driven through the real `CMD DELETE`/`CMD MOVE`/`CMD COPY` and blank-`CMD` command dispatch (not CLICK/BOX — paper space's ambient click block is screen-space/ImGui-hover driven with no headless equivalent, the same limitation REQ-121's own paper DELETE/JOIN branch already had), proving the old flat refusal is gone and REQ-201's "Nothing selected" refusal holds on repeated blank Enter. The click-toggle/box-merge accumulation itself, the pickbox rendering, and the snap-glyph suppression are GUI-only verification, same category REQ-121 itself already established for its own three rules — this session cannot simulate mouse hover or screen-space picking. 637/637 ctest green | accepted |
+| REQ-121 | UI/Commands/Viewport | done (GitHub issue #91, D-2026-08-26-a + D-2026-08-26-d, TASK-115 + TASK-118). Mechanism: `ViewportIsObjectSelectionStep`, derived from `ViewportClickRouteFor`'s `default:`-less switch, so a command cannot be added and silently omitted — `ViewportPickPolicyTests [req121]` (4 cases: ALIGN's unsnapped corners — red before the fix; every selection step recognised; each exclusion asserted; DELETE/JOIN's route, with ZOOM and STRETCH left on the box route). Review follow-ups closed by TASK-118, re-derived while rebasing onto `beta` after issue #103 landed underneath it: rule (3)'s shared prompt was factually wrong for DELETE/JOIN — fixed by giving them D-2026-08-25-l's accumulate-until-Enter shape, covered by `headless.req121-delete-join-accumulate` (proven red on `beta`: the closing box erased, LINES 3 -> 2). Rule (1)'s reported second seam (the snap-OVERRIDE menu bypassing the gate) had its underlying mechanism replaced by #103 between the original review and this rebase — the "cursor jumps mid-selection" symptom no longer reproduces, because the override's consumption already sits behind the same `!ViewportIsObjectSelectionStep` gate the automatic snap uses; what remained was narrower (the menu could still be *opened*, arming a persistent lock off a selection-step pixel that then silently affected the next ordinary snap), and that is what TASK-118's rebase actually gates. The cursor/OSNAP/prompt rules themselves stay GUI-only — there is no headless equivalent for screen-space picking or for a drawn cursor — and both rounds were verified A/B against a control rather than by absence. Paper space is a STATED scope boundary, not coverage: its modify commands are pick-first, so no selection step exists there (GitHub issue #106 — closed by REQ-307, which gives MOVE/COPY/DELETE a real selection step for the one case that needed it, starting with nothing pre-selected). 634/634 ctest green post-rebase. One `CadSnapTests` case (issue #103, unrelated to this task) carried an em-dash in its Catch2 name that CTest's Windows discovery mangles into a filter matching nothing, reporting a false failure in CI on both this branch and unmodified `beta` (`425afa7`'s own CI run) — fixed here by renaming the test to plain ASCII rather than worked around, since it was blocking CI on every branch built from `beta`, not just this one | accepted |
+| REQ-122 | Commands | done (GitHub issue #88, D-2026-08-26-c, TASK-117) — **automated**, which REQ-120 could not be. The framing arithmetic was hoisted into `src/commands/ZoomFraming.hpp` (pure + header-only, the `OrthoConstrain.hpp`/`ViewportPickPolicy.hpp` precedent) so `tests/ZoomFramingTests.cpp` can reach it without a framebuffer: 11 Catch2 cases / 231 assertions covering centring, fit-at-any-aspect, the 8% margin, aspect binding, the one-unit floor on degenerate extents, invariance above the floor, refusal on non-finite input, finiteness across spans 1e-9..1e12, corner order, and null out-params. 3 of the 11 proven red against the old constants before the fix. TASK-113's DEBT-1 is unchanged and still open — `ProcessPendingViewportZoom` itself remains unreachable from the harness — but every guarantee #88 asks for now lives in tested code. The state-dependent halves (empty drawing, live parity with the gesture, middle-drag pan) verified in the GUI, measured off the status-bar readout rather than eyeballed: typed ZOOMEXTENTS and the middle double-click produce identical world coordinates to 4 dp at two screen points. 622/622 ctest green | accepted |
+| REQ-123 | Commands/UI | done (GitHub issue #100, D-2026-08-26-e, TASK-119) — **`headless.req123-viewport-zoom-extents`, the first zoom behaviour ever covered by a transcript.** TASK-113's DEBT-1 blocks the others on `ProcessPendingViewportZoom`'s `fbW <= 0` guard; this case needs no framebuffer (its aspect is the viewport's rect in paper inches) so it is handled ahead of that guard. 43 steps: the framing after ZE with hand-computed scales (13.5870 for an 8x4in viewport, 27.1739 for 4x4in — same drawing, different rect, different answer), each viewport independent of the other's zoom, and a layer frozen in the viewport excluded from the extents then restored when thawed. Proven red on `beta`: `expected centre 50, 10 scale 13.587; got 0, 0 scale 50` — the viewport's framing untouched at its creation defaults. Four new driver verbs (VIEWPORT / VPSELECT / CLAYER / VPFREEZE) and `EXPECT VPFRAME`, all REQ-203 gaps of the LAYOUT/CLIPCOPY shape. GUI pass confirmed the numbers against the live status bar (`VP 1" = 40.4'` vs 40.36 computed), the sheet unmoved, REQ-120's gesture working in a viewport for the first time, and middle-drag pan still confined to it. 632/633 ctest (the one failure is `beta`'s own — an em dash in a `CadSnapTests` TEST_CASE name breaks ctest's name round-trip; unrelated and pre-existing) | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
-| REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim — no new minimum-vertex rule, no new snap kind. Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
+| REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
+| REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |
+| REQ-305 | Commands/Viewport | done (GitHub issue #87, D-2026-08-25-m, TASK-111 — relabeled from REQ-304/TASK-109 while merging `master` into `beta`, see the requirement's own header note). ARRAY (rectangular + polar) follows the MOVE/COPY/ROTATE/SCALE/MIRROR transform-command shape end to end; survey points excluded from the array selection, confirmed with the user (D-2026-08-25-m addendum). Amended once (D-2026-08-25-n, TASK-112): the shared "select objects" step was click-or-box-and-accumulate-until-Enter for MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN/ARRAY (STRETCH excluded — its crossing box is load-bearing geometry, REQ-103 step 5), replacing the box-only shape all seven originally shared. `GoSurveyTests.exe` 542/542, headless transcript corpus green (1 pre-existing disabled, unrelated) | accepted |
 
 ---
 

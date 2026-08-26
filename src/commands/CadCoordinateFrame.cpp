@@ -125,8 +125,11 @@ bool FitViewportToDrawing(AppCommandState& st, float viewportAspect, int fbW, in
   int skipped = 0;
   if (!ComputeRobustWorldExtents(st, &mnX, &mxX, &mnY, &mxY, &skipped))
     return false;
-  ApplyViewportZoomToWorldRect(mnX, mxX, mnY, mxY, &st.viewportPanX, &st.viewportPanY, &st.viewportZoom, fbW, fbH,
-                               viewportAspect);
+  // REQ-122: a rect that is not finite frames nothing and leaves the camera alone, so a bad import
+  // cannot hand the viewport a NaN centre.
+  if (!zoomframing::FrameWorldRect(mnX, mxX, mnY, mxY, viewportAspect, &st.viewportPanX, &st.viewportPanY,
+                                   &st.viewportZoom))
+    return false;
   BumpCadGpuCache(st);
   return true;
 }

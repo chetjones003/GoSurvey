@@ -7,6 +7,88 @@
 
 ## CHANGES
 
+### A DXF file states the arc its own reader can hold — and it was 74% of arcs, not a corner case — 2026-08-26
+
+    - GitHub issue #111, filed by TASK-121 out of its DEBT-1 while fixing #98. REQ-204 + TASK-122.
+      Decision **D-2026-08-26-i**.
+    - **The issue understated it, and the measurement is the finding.** #111 described a single arc
+      whose group 50/51 angles moved by ~7e-6° and converged on the next cycle. A standalone probe
+      replicating the writer's and the reader's arithmetic over **2,000,000 random arcs** — five
+      sweep-magnitude bands, both winding directions — found **1,479,444 unstable on the first
+      export cycle**, and 6,436 still moving after three. Roughly three arcs in four, and not always
+      convergent. That killed the issue's own suggested direction of amending REQ-204 with a
+      `.gs`-style idempotence carve-out: there was no stable second cycle to amend it *to*.
+    - **Two causes, both "the writer emitted an angle its own reader could not reproduce".**
+      `CadArc` holds a start and a sweep as `float` radians; DXF states a start and an END in
+      degrees at six decimals.
+      - A DXF arc runs counter-clockwise from group 50 to group 51, so an arc stored with a
+        **negative sweep** was written from `startRad + sweepRad` — a *double sum of two floats*, a
+        value no `CadArc` can hold. The reader stored the nearest float; the next export stated that
+        float instead.
+      - The reader derives the sweep as `group 51 − group 50`, a **subtraction of two independently
+        rounded angles**. That lands up to 1e-6° from the sweep the writer held — and above ~8.4° of
+        sweep, 1e-6° is *wider* than the `float` spacing of the stored radian value, so it lands on
+        a different float.
+    - **The header was carrying it further, and that half is the polyline lesson again.** With the
+      angles pinned the reproducer still failed on `$EXTMIN` and the `$VPORT` view: the extents were
+      swept from the arc in **memory** while the entity record described the arc the reader would
+      rebuild, so one file described two drawings. Exactly the shape TASK-083 fixed for polylines in
+      #64, one entity type over. Sweeping from the as-written arc closed it — and *strengthened* the
+      agreement with `ComputeWorldExtents` that the sweep's own note demands, from "close" to
+      "exact", because the document a reader builds now holds precisely those angles.
+    - **The fix removes a duplicate answer rather than adding anything.** There is now one definition
+      of degrees→`float` radians in `DxfIo.cpp` and three callers: the reader, the writer, and the
+      extents sweep. Two copies of that conversion giving two answers *was* the defect. `CadArc` is
+      unchanged, so `.gs` is unchanged and no migration is involved. 0 of 2,000,000 arcs unstable
+      after the change; pinned by `regression-111-dxf-arc-angle-roundtrip.txt`, red before at the
+      byte the issue names.
+    - **Three things named rather than folded in** (TASK-122 §12): an **ELLIPSE** still moves the
+      header once — its groups 41/42 are literal constants and cannot drift, which answers what #111
+      left open, but an untidy `ratio` does not survive six decimals and the extents are swept from
+      memory (filed as #113); the **HATCH** boundary reader keeps its own copy of the angle
+      normalization with a different threshold, on a path that never builds a `CadArc`; and an arc
+      whose **sweep is below the six-decimal degree grid** becomes a full circle, because DXF cannot
+      state a zero-length arc at all — pre-existing, measured against both writers, and not fixable
+      in a writer.
+
+### A DXF round trip is a fixed point on the FIRST cycle, and REQ-204 was not amended to make it one — 2026-08-26
+
+    - GitHub issue #98, filed by chetjones003 out of TASK-116's DEBT-1 and re-found independently
+      while reviewing PR #97. REQ-204 + TASK-121. Decision **D-2026-08-26-h**.
+    - **The symptom was one number.** Export a drawing whose coordinates are not exact at six
+      decimals, import it, export again: two 7154-byte files, identical except `$VPORT` group 40 —
+      `124.603335` against `124.603334`. The third export matched the second, so it converged.
+    - **Why it happened.** Every number in a GoSurvey DXF is written by `std::to_string`, which
+      rounds to six decimals, so a re-imported coordinate is that text read back. Below about 16 the
+      `float` spacing is *finer* than 1e-6, so the written text does not identify the float it came
+      from and the re-imported value is genuinely a different float — `0.0000015` goes out as
+      `0.000002` and comes back as `0.000002`. The entity text was stable under that, and so were
+      `$EXTMIN`/`$EXTMAX`. The header **view** was not, because it is derived from the extents and
+      the derivation amplifies: `max(width, height) * 1.1 + 1.0` turns a difference too small to
+      change `$EXTMIN` into a different sixth decimal in the view height.
+    - **The interesting part is what was NOT done.** The issue offered the REQ-079 precedent —
+      amend the invariant to compare the second and third exports, as D-2026-08-17-a did for `.gs`
+      after issue #61 — and it was declined. The two cases look alike and are not. `.gs`
+      normalization is a deliberate transformation of the user's stored geometry that the precision
+      design requires and the format cannot promise away; that requirement was genuinely wrong and
+      had to be amended (and was made *stronger* in the process, with idempotence). Nothing is
+      normalized here. One function derived a value from more precision than it then wrote down.
+      Amending REQ-204 for that would have been the Workshop editing the Specification to excuse
+      code — the move the SPEC GAP rule exists to prevent.
+    - **The fix is six assignments.** The extents are snapped to the precision they are written at
+      before anything is derived from them, so the view a file states is exactly the view a reader
+      derives from the extents that same file states. No requirement text changed, no format change,
+      no version bump. DXF export → import → export is now a fixed point on the **first** cycle,
+      which is strictly stronger than what REQ-079 promises `.gs`. Pinned by
+      `regression-98-dxf-view-precision.txt`, red before the change at the byte the issue names.
+    - **A second residual of the same family was found while stress-testing the fix, and filed
+      rather than folded in** (TASK-121 §12 DEBT-1): a 3-point arc still moves its group 50/51 start
+      and end angles once, `358.147533` → `358.147526`. An arc angle is stored as `float` radians
+      and written as degrees, and six decimals of a degree is finer than `float` spacing at ~6.25
+      rad, so the import's narrowing lands on a neighbouring float. That is **stored geometry**, not
+      a derived view value, and fixing it means changing how an angle is stored or written. Measured
+      on `beta` with this change stashed out, so it is pre-existing and not a regression. Filed as **#111**.
+
 ### A polyline survives a DXF round trip as a polyline — 2026-08-21
     - GitHub issue #64, found by the REQ-204 `dxf-export-stable` oracle (fuzz signature
       `dxflwpolyasym`). REQ-204 + REQ-053 + TASK-083.

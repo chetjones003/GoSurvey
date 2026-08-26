@@ -1,6 +1,8 @@
-# Issue #87 / REQ-304 (TASK-109) — ARRAY: rectangular and polar.
+# Issue #87 / REQ-305 (TASK-111) — ARRAY: rectangular and polar.
+# (Relabeled from REQ-304/TASK-109 while merging master into beta — that number/id were already
+# taken on beta by REQ-304/issue #82, a real ID collision from two independent sessions.)
 #
-# Covers REQ-304's acceptance list: rectangular grid count/spacing (including a negative spacing
+# Covers REQ-305's acceptance list: rectangular grid count/spacing (including a negative spacing
 # growing the opposite direction), polar 360 deg (no duplicate instance at 0==360), polar partial
 # angle with Rotate=No (orientation unchanged, positions still on the arc), ESC leaving no partial
 # array behind, and undo removing every generated instance as one step.

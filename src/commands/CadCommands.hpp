@@ -8,6 +8,7 @@
 // SurfaceStyles::DefaultSurfaceStyles, for the surfaceStyles member's initializer — same reason,
 // same shape, and pure for the same reason (REQ-070 / ADR-036 (d)).
 #include "SurfaceStyle.hpp"
+#include "DimensionStyle.hpp"
 #include "render/Camera.hpp"  // Commands -> Renderer is a downward dependency (architecture §2)
 #include "PdfAttach.hpp"
 #include "PaperSpace.hpp"
@@ -25,6 +26,10 @@
 // (<cmath>), and deliberately in util/ rather than beside the UI that drives it: the state lives on
 // AppCommandState, and Commands may not include a UI header (architecture §11.1).
 #include "util/hoverdwell.hpp"
+// zoomframing::FrameWorldRect, the one camera-framing implementation behind ZOOMEXTENTS, the REQ-120
+// gesture, ZOOM WINDOW and the post-import fit (REQ-122). Pure and dependency-free, like the headers
+// above it.
+#include "ZoomFraming.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -180,6 +185,7 @@ std::string CadFormatAngleDegMinSecFromRad(float angleRad);
 /// \c D°M'S" with decimal seconds; normalized to \c [0,360).
 std::string CadFormatBearingCwNorthDegMinSec(float bearingDegClockwiseFromNorth);
 /// Live DIMANGULAR preview (\p st.active == DimAngular, \p dimAngularPhase == WaitArc).
+bool CadDimAngularComputeFrame(const CadAnnotation& a, float* a1Out, float* a2Out, float* sweepOut, float* bisx, float* bisy, float* thetaInterior);
 bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out);
 /// After vertex / ray / radius edits, re-place label along the angle bisector.
 void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float modelUnitsPerPlottedInch);
@@ -877,6 +883,7 @@ struct DrawingGeometrySnapshot {
   /// in `AppCommandState::surfaceDisplayCache`, which no snapshot touches (ADR-036 (e)). That split is
   /// what lets a style edit be undoable without a single contour entering the undo stack.
   std::vector<SurfaceStyle>     surfaceStyles;
+  DimensionStyle              dimensionStyle = DimensionStyles::Default();
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<PaperLayout>      paperLayouts;  ///< Paper layouts incl. native paper geometry (REQ-037/038) — undoable.
   double worldDocumentOriginX = 0.0;
@@ -933,6 +940,7 @@ struct DrawingDocument {
   std::vector<CadLayerRow>      drawingLayerTable;
   std::vector<TextStyle>        textStyles;             ///< Named text styles (REQ-044).
   std::vector<SurfaceStyle>     surfaceStyles;          ///< Named surface styles (REQ-070).
+  DimensionStyle              dimensionStyle = DimensionStyles::Default();
   std::string                   activeTextStyleName = "Standard";  ///< Style for new TEXT/MTEXT.
   std::vector<PdfAttachment>    pdfAttachments;
   std::vector<SelectedEntity>   selection;
@@ -993,6 +1001,10 @@ void TranslateSelectedViewports(AppCommandState& cmd, float dxIn, float dyIn, bo
                                 std::vector<std::string>& log);
 /// Begin a two-click MOVE/COPY of the selected viewports (paper-inch base → destination).
 void StartPaperMoveCopyViewports(AppCommandState& cmd, bool copy, std::vector<std::string>& log);
+// REQ-307 (GitHub #106): Enter acting on the paper-space MOVE/COPY/DELETE selection step. See the
+// definitions in CadCommands.cpp for why these are free functions rather than inline logic.
+void ProcessPaperMoveWaitingSelectionEnter(AppCommandState& st, std::vector<std::string>& log);
+void ProcessPaperDeleteWaitingSelectionEnter(AppCommandState& st, std::vector<std::string>& log);
 
 // --- Per-viewport layer freeze (REQ-028) ---
 /// Toggle the frozen state of a layer in a viewport.
@@ -1138,7 +1150,7 @@ struct AppCommandState {
     Copy,
     Rotate,
     Scale,
-    /// ARRAY: rectangular or polar patterns of duplicated copies of the selection (REQ-304, issue #87).
+    /// ARRAY: rectangular or polar patterns of duplicated copies of the selection (REQ-305, issue #87).
     Array,
     /// MIRROR: reflect the selection across a two-point mirror line (REQ-103 step 1). Default
     /// behavior duplicates-then-reflects (source kept); an "Erase source objects?" prompt lets the
@@ -1485,12 +1497,13 @@ struct AppCommandState {
   float objectSnapGlyphHalfPx = 15.f;
   /// Half-size in screen pixels for grip squares drawn on selected entities.
   float gripSizePx = 4.f;
-  /// Shift+RMB snap menu: next viewport pick uses this world point (then cleared on submit / cancel).
-  bool pendingOneShotSnapValid = false;
-  float pendingOneShotSnapX = 0.f;
-  float pendingOneShotSnapY = 0.f;
+  /// Shift+RMB snap-override menu (issue #103): once a kind is chosen, FindBest is restricted to
+  /// candidates of ONLY this kind — ignoring the persistent per-type OSNAP toggles, since the whole
+  /// point of the override is to reach a kind the user does not keep enabled generally — for the
+  /// next viewport hover/pick, then cleared on submit / cancel (ClearPendingOneShotObjectSnap).
+  bool objectSnapKindOverrideValid = false;
   /// \c static_cast<\ref CadSnap::Kind>.
-  int pendingOneShotSnapKind = 0;
+  int objectSnapKindOverrideKind = 0;
 
   /// World coordinate of local (0,0). Geometry is stored in local space for float precision.
   double worldDocumentOriginX = 0.0;
@@ -2226,7 +2239,7 @@ struct AppCommandState {
   /// than left racing the modal).
   bool mirrorEraseSourcePending = false;
 
-  // --- ARRAY (REQ-304) ---
+  // --- ARRAY (REQ-305) ---
   enum class ArrayType { Rectangular, Polar } arrayType = ArrayType::Rectangular;
   enum class ArrayPhase {
     PickSelection,
@@ -2466,6 +2479,12 @@ struct AppCommandState {
   std::vector<SurfaceStyle> surfaceStyles = SurfaceStyles::DefaultSurfaceStyles();
   /// Active text style for new TEXT/MTEXT (the STYLE dropdown). Empty resolves to "Standard".
   std::string activeTextStyleName = "Standard";
+  /// Centralized dimension style (issue #99) — single active style used by DIMALIGNED/DIMLINEAR/DIMANGULAR.
+  /// Pure value type, undoable via snapshot (like textStyles/surfaceStyles).  New dimensions bake this
+  /// style's effective values; existing dimensions read the active style at draw/measure time (phase 1).
+  DimensionStyle activeDimensionStyle = DimensionStyles::Default();
+  DimensionStyle dimStyleDraft = DimensionStyles::Default();
+  bool showDimStyleDialog = false;
   /// Viewport CAD crosshair (Drawing1): RGB 0–1, arm length as fraction of viewport width/height, pickbox half-size in px.
   float viewportCrosshairR = 1.f;
   float viewportCrosshairG = 0.8392157f;
@@ -2758,6 +2777,14 @@ struct AppCommandState {
   bool  paperMoveIsCopy = false;
   float paperMoveBaseXIn = 0.f;
   float paperMoveBaseYIn = 0.f;
+  // REQ-307 (GitHub #106): paper-space MOVE/COPY/DELETE are pick-first by default (act on whatever
+  // is already selected), but starting one with NOTHING selected now opens a real selection step
+  // instead of refusing — the paper-space counterpart of REQ-121's model-space treatment. Separate
+  // bools rather than folding into \c paperMovePhase: that field's 1/2 values (base/destination) are
+  // consulted by several `!= 0` checks meaning "a MOVE/COPY gesture is in progress", and a selecting
+  // step is not that gesture yet (raw cursor, no snapped base point).
+  bool  paperMoveWaitingSelection = false;
+  bool  paperDeleteWaitingSelection = false;
   // Paper-space window selection box (REQ-035).
   bool  paperSelBoxActive = false;
   float paperSelBoxX0In = 0.f;
@@ -3523,6 +3550,7 @@ void CancelMtextRichEditor(AppCommandState& st, std::vector<std::string>* log);
 void StartDimAlignedCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartDimLinearCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartDimAngularCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartDimStyleCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log);
 
 /// REQ-074: pick a point for its interpolated surface elevation; pick a second for the grade
@@ -3751,6 +3779,18 @@ struct CommandSuggestion {
 /// Ranked fuzzy matches with descriptions, for the nanoCAD-style command picker.
 std::vector<CommandSuggestion> FuzzyCommandSuggestions(const std::string& query, int maxResults);
 
+/// REQ-121 rule (3): THE prompt every object-selection step shows, in the command line and in the
+/// dynamic cursor text alike. One string, reused verbatim — not a per-command sentence that happens
+/// to mean the same thing, which is what produced "click two corners to window-select objects" in
+/// one command, "window-select entities, then press Enter" in another, and no Enter hint at all in
+/// a third.
+///
+/// It carries **no command name**, deliberately. AutoCAD prompts "Select objects:" whatever is
+/// running, and #91 asks for that convention explicitly; a `MOVE/COPY:` prefix would also make the
+/// string non-identical across commands, which is the one thing this constant exists to prevent.
+/// Which command is active is already visible in the command line's own history.
+inline constexpr const char* kSelectObjectsPrompt = "Select objects, ENTER to continue | ESC cancel";
+
 const char* CircleCommandFooterHint(const AppCommandState& st);
 const char* ModifyCommandFooterHint(const AppCommandState& st);
 const char* RotateCommandFooterHint(const AppCommandState& st);
@@ -3764,14 +3804,23 @@ const char* ZoomCommandFooterHint(const AppCommandState& st);
 const char* LineCommandFooterHint(const AppCommandState& st);
 const char* DrawingExtrasFooterHint(const AppCommandState& st);
 
-bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY, double* outMxY);
+/// Model-space extents of everything drawable.
+///
+/// \p vpFilter (REQ-123, GitHub #100) restricts the sweep to what is VISIBLE THROUGH one paper-space
+/// viewport: entities whose layer is frozen in it are skipped, the same test the viewport renderer
+/// and the plotter already apply. **Defaults to nullptr — no filter, and every pre-existing caller
+/// keeps exactly the behaviour it had.** It is deliberately a filter on VISIBILITY, not on entity
+/// kind: the viewport renderer currently draws only lines / polylines / circles / arcs / survey
+/// points, and encoding that gap here would freeze a renderer limitation into the extents math.
+bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY, double* outMxY,
+                         const Viewport* vpFilter = nullptr);
 /// Robust extents that drop far-outlier entities (DXFs often contain stray geometry at world (0,0) such as
 /// defpoints, block-insert origins, or leftover construction). On success, \p outSkipped is the number of
 /// entities discarded; 0 means the answer equals \ref ComputeWorldExtents.
 bool ComputeRobustWorldExtents(const AppCommandState& st, double* outMnX, double* outMxX, double* outMnY,
-                               double* outMxY, int* outSkipped);
-void ApplyViewportZoomToWorldRect(double mnX, double mxX, double mnY, double mxY, double* panX, double* panY,
-                                  float* zoom, int fbW, int fbH, float viewportAspect);
+                               double* outMxY, int* outSkipped, const Viewport* vpFilter = nullptr);
+// The camera side of zoom-extents is `zoomframing::FrameWorldRect` (ZoomFraming.hpp) — pure, shared
+// by every fit path, and tested there (REQ-122).
 
 bool ComputeCircumcircle(float ax, float ay, float bx, float by, float cx, float cy, float* ox, float* oy,
                          float* r);

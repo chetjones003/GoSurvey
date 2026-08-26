@@ -1,0 +1,47 @@
+# Issue #94, the other half — gating the rebase must not stop it firing where it is NEEDED.
+#
+# `regression-94-dxf-origin-no-drift.txt` pins that a SMALL drawing no longer rebases on DXF import,
+# which is what stops the round trip walking. This pins the converse, and it is the more important
+# of the two: the origin rebase exists for state-plane data, and a gate that silences it there would
+# trade a 1e-6 cosmetic drift for a real loss of precision on every survey GoSurvey is FOR.
+#
+# The threshold is `kLargeCoordinateRebaseThreshold` (100000.0), the same constant `.gs` load has
+# always used via `MaybeRebaseLargeCoordinates`. An easting near 2,000,000 clears it comfortably.
+#
+# This is the test that would fail if someone later "simplified" the gate by removing it, or raised
+# the threshold past state-plane magnitude. Without it the fix for #94 looks free, and it is not.
+
+NEW
+
+# Ordinary state-plane coordinates: easting ~2e6, northing ~5e5.
+CMD LINE
+CMD 2000000.25,500000.125
+CMD 2000100.5,500000.125
+CMD 2000100.5,500050.375
+ESC
+
+CHECK ALL
+EXPECT LINES 2
+
+EXPORT DXF %OUT%/r94a-a.dxf
+
+NEW
+IMPORT DXF %OUT%/r94a-a.dxf
+CHECK ALL
+EXPECT LINES 2
+
+# The rebase must still fire, and must still say so (REQ-201). Asserting the MESSAGE rather than a
+# coordinate is deliberate, on `regression-61a-rebase-threshold-max-y.txt`'s precedent: it does not
+# depend on which local coordinates the rebase happens to produce, so it keeps testing the thing it
+# is named for even if the storage split changes.
+EXPECT LOG "origin shifted for precision"
+
+EXPORT DXF %OUT%/r94a-b.dxf
+
+NEW
+IMPORT DXF %OUT%/r94a-b.dxf
+EXPORT DXF %OUT%/r94a-c.dxf
+
+# Having fired once, it is idempotent — the origin is established, so the second import has nothing
+# left to normalize. This is REQ-079's `.gs` rule holding for DXF's large-coordinate path.
+EXPECT SAMEFILE %OUT%/r94a-b.dxf %OUT%/r94a-c.dxf

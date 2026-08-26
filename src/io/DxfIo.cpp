@@ -30,6 +30,86 @@ namespace {
 constexpr double kPi = 3.14159265358979323846;
 constexpr double kDegToRad = kPi / 180.0;
 
+/// Degrees as a DXF ARC states them → the `float` radians a `CadArc` holds.
+///
+/// The ONE definition of that conversion. The reader uses it to build an arc; the writer uses it to
+/// know what the reader will build (issue #111). Two copies of this would be two answers to "what
+/// arc does this file describe", which is the whole defect.
+void DxfArcAnglesFromDegrees(double a0deg, double a1deg, float* startRad, float* sweepRad) {
+  double sweep = a1deg - a0deg;
+  // DXF has no way to state a zero-length arc: a full circle written as an ARC has group 51 equal to
+  // group 50, so an end that does not differ from the start means one full turn, by convention.
+  if (std::fabs(sweep) < 1e-9)
+    sweep = 360.0;
+  while (sweep < 0)
+    sweep += 360.0;
+  while (sweep > 360.0)
+    sweep -= 360.0;
+  if (sweep < 1e-9)
+    sweep = 360.0;
+  *startRad = static_cast<float>(a0deg * kDegToRad);
+  *sweepRad = static_cast<float>(sweep * kDegToRad);
+}
+
+/// The arc a DXF file can actually state, for an arc GoSurvey holds in memory.
+///
+/// `CadArc` holds a start and a sweep as `float` RADIANS. A DXF ARC states a start and an END in
+/// DEGREES, rounded to six decimals like every other number this writer emits. Both conversions lose
+/// information, so the arc that comes back from a round trip is not always the arc that went out —
+/// and every part of the writer has to agree about WHICH of the two it is describing, or the header
+/// and the entity records describe different drawings and the file never settles (issue #111; the
+/// same failure shape TASK-083 fixed for polylines, one entity type over).
+///
+/// This is the one answer. `startDeg`/`endDeg` are the exact text of groups 50 and 51;
+/// `startRad`/`sweepRad` are what the reader reconstructs from that text, and so are what the header
+/// extents must be swept from.
+struct DxfArcAsWritten {
+  std::string startDeg;
+  std::string endDeg;
+  float startRad = 0.f;
+  float sweepRad = 0.f;
+};
+
+DxfArcAsWritten DxfArcToWrite(const CadArc& arc) {
+  auto normDeg = [](double rad) {
+    double d = rad * (180.0 / kPi);
+    d = std::fmod(d, 360.0);
+    if (d < 0.0)
+      d += 360.0;
+    return d;
+  };
+
+  // DIRECTION IS THE TRAP HERE. A DXF ARC always runs COUNTER-CLOCKWISE from group 50 to group 51,
+  // while `CadArc::sweepRad` is SIGNED. Writing 50 = startRad and 51 = startRad + sweepRad for a
+  // clockwise arc describes the COMPLEMENT of the intended arc — a file that opens fine and shows
+  // the wrong geometry. A negative sweep therefore swaps the ends rather than negating anything.
+  const double sweep = static_cast<double>(arc.sweepRad);
+  const double ccwStart = (sweep >= 0.0) ? static_cast<double>(arc.startRad)
+                                         : static_cast<double>(arc.startRad) + sweep;
+
+  DxfArcAsWritten w;
+
+  // (1) `ccwStart` is a DOUBLE sum of two floats whenever the sweep is negative — a value no
+  //     `CadArc` can hold. Emitting it means the reader stores a neighbouring float and the very
+  //     next export states a different angle. Narrow it first, so the file states an angle that
+  //     survives the trip.
+  const float startHeld = static_cast<float>(normDeg(ccwStart) * kDegToRad);
+  w.startDeg = std::to_string(normDeg(static_cast<double>(startHeld)));
+
+  // (2) The reader derives the sweep as `group 51 - group 50`, a difference of two INDEPENDENTLY
+  //     rounded angles, so it lands up to 1e-6 deg from the sweep we hold — and above ~8.4 deg that
+  //     is wider than the `float` spacing, so it lands on a different float. State the end as the
+  //     WRITTEN start plus the sweep, and that subtraction gives our sweep back exactly.
+  double endDeg = std::stod(w.startDeg) + std::fabs(sweep) * (180.0 / kPi);
+  endDeg = std::fmod(endDeg, 360.0);
+  if (endDeg < 0.0)
+    endDeg += 360.0;
+  w.endDeg = std::to_string(endDeg);
+
+  DxfArcAnglesFromDegrees(std::stod(w.startDeg), std::stod(w.endDeg), &w.startRad, &w.sweepRad);
+  return w;
+}
+
 std::string Trim(const std::string& s) {
   size_t a = 0;
   while (a < s.size() && std::isspace(static_cast<unsigned char>(s[a])))
@@ -683,11 +763,40 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
   };
 
   auto appendEllipseXF = [&](double cx, double cy, double majx, double majy, double ratio, double t0, double t1,
-                             const EntityAttributes& at) {
+                             const EntityAttributes& at, double cz = 0.0) {
     const double a = std::hypot(majx, majy);
     if (a < 1e-12)
       return;
     const double b = ratio * a;
+    // #63: this function READ like a sink and was not one — it tessellated every ellipse, so
+    // ellipses lost identity on import as well as being dropped on export. A FULL ellipse now takes
+    // the real store, on the same identity-vs-tessellate split `appendCircleXF` established.
+    //
+    // A TRIMMED ellipse still tessellates, and that is forced rather than chosen: `CadEllipse` has
+    // no start/end parameter, so the range cannot be stored, and adding one is a `.gs` data-format
+    // change — a SPEC GAP, not bug-fix work (TASK-114 DEBT-1). The full-turn test below reads a
+    // zero-length span as "no range given" = a full turn, matching the tessellating path's own rule.
+    double spanFull = t1 - t0;
+    while (spanFull < 0.0)
+      spanFull += 2.0 * kPi;
+    const bool isFullTurn = (spanFull < 1e-9) || (std::fabs(spanFull - 2.0 * kPi) < 1e-6);
+    if (isFullTurn && xf.isIdentity()) {
+      double ocx = 0, ocy = 0;
+      xf.apply(cx, cy, &ocx, &ocy);
+      UpdateCoordMag(coordMagMax, ocx, ocy);
+      UpdateCoordMag(coordMagMax, ocx + a, ocy + a);
+      CadEllipse el{};
+      el.cx = static_cast<float>(ocx - st.worldDocumentOriginX);
+      el.cy = static_cast<float>(ocy - st.worldDocumentOriginY);
+      // Groups 11/21 are a VECTOR from the centre, not a point, so they take no origin shift.
+      el.majVx = static_cast<float>(majx);
+      el.majVy = static_cast<float>(majy);
+      el.ratio = static_cast<float>(ratio);
+      el.z = static_cast<float>(cz);  // group 30 (REQ-057), unrebased
+      st.userEllipses.push_back(el);
+      st.userEllAttrs.push_back(at);
+      return;
+    }
     const double ux = majx / a;
     const double uy = majy / a;
     const double vx = -uy;
@@ -740,6 +849,47 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       const double lx1 = cx + rad * std::cos(u1);
       const double ly1 = cy + rad * std::sin(u1);
       appendSegXF(lx0, ly0, lx1, ly1, at, cz, cz);  // the tessellated ring stays on its own plane
+    }
+  };
+
+  // Arcs (#63). Before TASK-114 there was no sink at all: the ARC branch parsed groups 50/51
+  // correctly and then threw the identity away into 48 line segments, so an arc from Civil 3D
+  // arrived as loose segments that could not be selected, trimmed or offset as the object it is.
+  //
+  // The identity-vs-tessellate split is `appendCircleXF`'s, deliberately reused rather than
+  // reinvented: `CadArc` stores ONE radius, so a non-uniform or skewed INSERT scale produces a
+  // curve it cannot represent, and degrading to segments is the honest outcome there.
+  //
+  // `a0` / `sweep` arrive already normalized by the caller to a CCW span in (0, 360], which is what
+  // DXF guarantees. That canonicalizes direction: a clockwise arc drawn here, exported and
+  // re-imported comes back as the same geometry described CCW. The shape is identical and the
+  // re-export is byte-identical — only the internal sign convention settles to one form.
+  auto appendArcXF = [&](double cx, double cy, double rad, double a0, double sweep,
+                         const EntityAttributes& at, double cz = 0.0) {
+    if (rad <= 1e-9)
+      return;
+    if (xf.isIdentity()) {
+      double ocx = 0, ocy = 0;
+      xf.apply(cx, cy, &ocx, &ocy);
+      UpdateCoordMag(coordMagMax, ocx, ocy);
+      UpdateCoordMag(coordMagMax, ocx + rad, ocy);
+      CadArc arc{};
+      arc.cx = static_cast<float>(ocx - st.worldDocumentOriginX);
+      arc.cy = static_cast<float>(ocy - st.worldDocumentOriginY);
+      arc.r = static_cast<float>(rad);
+      arc.startRad = static_cast<float>(a0);
+      arc.sweepRad = static_cast<float>(sweep);
+      arc.z = static_cast<float>(cz);  // group 30 (REQ-057), unrebased
+      st.userArcs.push_back(arc);
+      st.userArcAttrs.push_back(at);
+      return;
+    }
+    constexpr int nseg = 48;
+    for (int s = 0; s < nseg; ++s) {
+      const double u0 = a0 + sweep * (static_cast<double>(s) / static_cast<double>(nseg));
+      const double u1 = a0 + sweep * (static_cast<double>(s + 1) / static_cast<double>(nseg));
+      appendSegXF(cx + rad * std::cos(u0), cy + rad * std::sin(u0), cx + rad * std::cos(u1),
+                  cy + rad * std::sin(u1), at, cz, cz);  // the arc stays on its group-30 plane
     }
   };
 
@@ -1166,27 +1316,10 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
       }
       const auto at = base.makeAttr(layerRgb);
       if (rad > 1e-9) {
-        double sweep = a1deg - a0deg;
-        if (std::fabs(sweep) < 1e-9)
-          sweep = 360.0;
-        while (sweep < 0)
-          sweep += 360.0;
-        while (sweep > 360.0)
-          sweep -= 360.0;
-        if (sweep < 1e-9)
-          sweep = 360.0;
-        const double a0 = a0deg * kDegToRad;
-        const double sw = sweep * kDegToRad;
-        constexpr int nseg = 48;
-        for (int s = 0; s < nseg; ++s) {
-          const double u0 = a0 + sw * (static_cast<double>(s) / static_cast<double>(nseg));
-          const double u1 = a0 + sw * (static_cast<double>(s + 1) / static_cast<double>(nseg));
-          const double lx0 = cx + rad * std::cos(u0);
-          const double ly0 = cy + rad * std::sin(u0);
-          const double lx1 = cx + rad * std::cos(u1);
-          const double ly1 = cy + rad * std::sin(u1);
-          appendSegXF(lx0, ly0, lx1, ly1, at, cz, cz);  // the arc stays on its group-30 plane
-        }
+        float startRadF = 0.f, sweepRadF = 0.f;
+        DxfArcAnglesFromDegrees(a0deg, a1deg, &startRadF, &sweepRadF);
+        appendArcXF(cx, cy, rad, static_cast<double>(startRadF), static_cast<double>(sweepRadF), at,
+                    cz);  // group 30 (REQ-057)
       }
       i = j;
       continue;
@@ -1209,9 +1342,9 @@ void ParseEntityRegion(const std::vector<DxfPair>& t, size_t entBegin, size_t en
         else if (c == 41) ParseDouble(v, &t0);
         else if (c == 42) ParseDouble(v, &t1);
       }
-      (void)cz; (void)mz;
+      (void)mz;
       if (ratio <= 1e-12) ratio = 1e-12;
-      appendEllipseXF(cx, cy, mx, my, ratio, t0, t1, base.makeAttr(layerRgb));
+      appendEllipseXF(cx, cy, mx, my, ratio, t0, t1, base.makeAttr(layerRgb), cz);  // group 30 (REQ-057)
       i = j;
       continue;
     }
@@ -1916,7 +2049,21 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
       const double spanX = gotMin && gotMax ? std::fabs(maxX - minX) : 0.0;
       const double spanY = gotMin && gotMax ? std::fabs(maxY - minY) : 0.0;
       const bool headerSane = std::max(spanX, spanY) < 1e6;
-      if (headerSane) {
+      // Only rebase when the coordinates are actually large enough to need it (#94).
+      //
+      // `.gs` load has always been gated this way — `MaybeRebaseLargeCoordinates` fires only above
+      // `kLargeCoordinateRebaseThreshold`. DXF import was not, and rebased on EVERY import, so a
+      // drawing spanning 150 units had its origin moved to the extents centre and every stored
+      // float re-rounded — buying no precision whatsoever, since local storage only helps when the
+      // world coordinates are large. That re-rounding is what walked the drawing ~2e-6 further on
+      // every export/import cycle, monotonically, with no convergence (#94).
+      //
+      // The magnitude test reads the HEADER extents rather than the geometry, because at this point
+      // no geometry has been parsed — the origin has to be established before `appendSegXF` casts
+      // anything to float, which is the entire reason this block runs first.
+      const double headerMag =
+          std::max({std::fabs(minX), std::fabs(maxX), std::fabs(minY), std::fabs(maxY)});
+      if (headerSane && headerMag >= CadCoord::kLargeCoordinateRebaseThreshold) {
         // ApplyDocumentOriginRebase (rather than a blind assignment) so any survey points kept from the
         // session are shifted into the new origin's local frame instead of being left in the old one.
         if (gotMin && gotMax && (spanX > 0.0 || spanY > 0.0)) {
@@ -1971,8 +2118,13 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
   // Polylines count as geometry. Before they had a sink of their own, a file holding nothing but
   // polylines still filled userLinesFlat; now it does not, and without this a polyline-only DXF
   // would be judged empty and read a SECOND time out of the *MODEL_SPACE block — duplicating it.
-  const bool noGeom =
-      st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() && st.userPolylineOffsets.empty();
+  // Arcs and ellipses count as geometry too, and must be listed here for the same reason polylines
+  // were: until #63 they always landed in `userLinesFlat` as tessellation, so this test could not
+  // see them and did not need to. Now that they have stores of their own, a DXF holding nothing but
+  // arcs would otherwise be judged empty and read a SECOND time from the *MODEL_SPACE block —
+  // duplicating every entity in it.
+  const bool noGeom = st.userLinesFlat.empty() && st.userCirclesCxCyZR.empty() &&
+                      st.userPolylineOffsets.empty() && st.userArcs.empty() && st.userEllipses.empty();
   if ((!hasEntitiesSec || noGeom) && hasModelSpace) {
     if (!hasEntitiesSec)
       log.push_back("DXF import — ENTITIES section missing; reading geometry from *MODEL_SPACE block.");
@@ -2029,7 +2181,14 @@ bool ImportDxfFile_Impl(AppCommandState& st, const char* pathUtf8, std::vector<s
     }
   }
 
-  CadCoord::RebaseDrawingToLocalOrigin(st, &log);
+  // #94: was an UNCONDITIONAL RebaseDrawingToLocalOrigin. `MaybeRebaseLargeCoordinates`
+  // is the same call behind `.gs` load's two guards — it no-ops when the origin is already set (the
+  // large-coordinate case, where the header block above just established it) and no-ops below
+  // `kLargeCoordinateRebaseThreshold` (the small-drawing case, which is #94). So the composition is:
+  //   small drawing            -> header skipped, this skips  -> origin stays (0,0), nothing re-rounds
+  //   large, sane header       -> header fires, this no-ops   -> exactly one rebase
+  //   large, missing/bad header-> header skipped, this fires  -> exactly one rebase
+  CadCoord::MaybeRebaseLargeCoordinates(st, &log);
   {
     double rawMnX = 0., rawMxX = 0., rawMnY = 0., rawMxY = 0.;
     if (ComputeWorldExtents(st, &rawMnX, &rawMxX, &rawMnY, &rawMxY)) {
@@ -2102,6 +2261,21 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     addLayerName(st.userCircleAttrs[i].layer);
   for (size_t i = 0; i < st.cadAnnotationAttrs.size(); ++i)
     addLayerName(st.cadAnnotationAttrs[i].layer.empty() ? std::string("0") : st.cadAnnotationAttrs[i].layer);
+  // Polylines (#72) and filled regions (the same omission, unreported) — the two entity branches
+  // added to the writer without being added here. Every layer this sweep misses is a layer some
+  // entity's group 8 can name with no LAYER table row behind it: an invalid file, written silently.
+  // `drawingLayerTable` below masks it for layers created in this session, which is why it survived
+  // this long, but not for one that arrived on an imported entity.
+  for (size_t i = 0; i < st.userPolylineAttrs.size(); ++i)
+    addLayerName(st.userPolylineAttrs[i].layer);
+  for (size_t i = 0; i < st.cadFilledRegionAttrs.size(); ++i)
+    addLayerName(st.cadFilledRegionAttrs[i].layer);
+  // Arcs and ellipses (#63) — the third instance of the same omission. They reached this sweep only
+  // now because until this change they had no export branch to name a layer from at all.
+  for (size_t i = 0; i < st.userArcAttrs.size(); ++i)
+    addLayerName(st.userArcAttrs[i].layer);
+  for (size_t i = 0; i < st.userEllAttrs.size(); ++i)
+    addLayerName(st.userEllAttrs[i].layer);
   for (const SurveyPoint& p : st.surveyPoints)
     addLayerName(p.layer);
   for (const CadLayerRow& lr : st.drawingLayerTable) {
@@ -2136,8 +2310,25 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
   const uint64_t symGoSurveyAppid = symAfterLayers + 15;
   const uint64_t lastSymHandle = symGoSurveyAppid;
 
+  // Every store the writer below emits an entity from must be counted here, or its entities are
+  // handed handles the OBJECTS block also owns (#71). Polylines and filled regions were missing:
+  // the LWPOLYLINE branch arrived with REQ-053 and the HATCH branch earlier, each updating the
+  // writer and neither updating this sum. Counting the STORES rather than the entities the writer
+  // will keep is deliberate — the writer skips degenerate polylines (< 2 vertices) and degenerate
+  // regions (< 3 vertices), so this can over-count, which leaves an unused gap ahead of OBJECTS.
+  // DXF permits a gap in the handle sequence; it does not permit a duplicate.
+  //
+  // `userArcs` and `userEllipses` are counted here as of TASK-114 (#63), which gave them the export
+  // branch they had never had. Before that they consumed no handles because nothing emitted them —
+  // this sum and the writer must move together, which is what the note left here by TASK-107 asked.
+  const size_t nPoly =
+      st.userPolylineOffsets.size() > 0 ? st.userPolylineOffsets.size() - 1 : 0;
   uint64_t entityHandleCount = static_cast<uint64_t>(nSeg) + static_cast<uint64_t>(nCirc) +
-                               static_cast<uint64_t>(st.surveyPoints.size());
+                               static_cast<uint64_t>(st.surveyPoints.size()) +
+                               static_cast<uint64_t>(nPoly) +
+                               static_cast<uint64_t>(st.cadFilledRegions.size()) +
+                               static_cast<uint64_t>(st.userArcs.size()) +
+                               static_cast<uint64_t>(st.userEllipses.size());
   for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
     const CadAnnotation& an = st.cadAnnotations[ai];
     if (an.kind == CadAnnotation::Kind::Text)
@@ -2247,6 +2438,67 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       accExtZ(static_cast<double>(st.userPolylineVerts[vi * 3 + 2]));
     }
   }
+  // Arcs and ellipses (#63), for the same reason and with the same consequence: an entity type the
+  // sweep does not know about is one the document origin is not derived from, so a drawing whose
+  // arcs lie outside its linework re-imports centred on the wrong point and never settles.
+  //
+  // THE SAMPLING BELOW MUST MATCH `ComputeWorldExtents` IN CadCommands.cpp EXACTLY — same segment
+  // counts, same angles, same order of operations. That is not a stylistic preference, and a
+  // "tighter" or "more conservative" box here is not a free choice:
+  //
+  //   DXF import ends by calling `RebaseDrawingToLocalOrigin`, which re-centres the document origin
+  //   on `ComputeWorldExtents`. If this sweep disagrees with that one, the origin the header asked
+  //   for is not the origin the import settles on, so `ShiftAllStorageBy` moves every stored
+  //   coordinate — through FLOAT — and the re-export lands ~1e-6 off in every Y. Export → import →
+  //   export then never settles, which is precisely REQ-204's stability invariant.
+  //
+  //   Agreement makes the rebase delta zero, so it takes its own `< 1e-9` early-out and no lossy
+  //   shift happens at all. That, not the accuracy of the box, is what the round trip needs. A
+  //   whole-circle box for arcs was tried first and failed exactly this way.
+  //
+  // Swept from the arc THIS FILE STATES, not the one in memory — `DxfArcToWrite` is the single
+  // answer to which that is (issue #111). The two differ whenever a stored angle survives the trip
+  // to six-decimal degrees and back as a neighbouring float, and a header swept from the in-memory
+  // arc then describes a drawing the entity records below do not contain. It also STRENGTHENS the
+  // agreement the note above demands: the document a reader builds holds exactly these angles, so
+  // its `ComputeWorldExtents` matches this sweep rather than merely coming close.
+  for (const CadArc& a : st.userArcs) {
+    const DxfArcAsWritten aw = DxfArcToWrite(a);
+    const double dcx = static_cast<double>(a.cx);
+    const double dcy = static_cast<double>(a.cy);
+    const double dr = std::fabs(static_cast<double>(a.r));
+    if (dr <= 1e-12)
+      continue;
+    const int n =
+        std::max(8, static_cast<int>(std::fabs(static_cast<double>(aw.sweepRad)) / (3.14159265 / 16.0)) + 1);
+    for (int i = 0; i <= n; ++i) {
+      const double u = static_cast<double>(i) / static_cast<double>(n);
+      const double t = static_cast<double>(aw.startRad) + static_cast<double>(aw.sweepRad) * u;
+      accExt(dcx + dr * std::cos(t), dcy + dr * std::sin(t));
+    }
+    accExtZ(static_cast<double>(a.z));
+  }
+  for (const CadEllipse& el : st.userEllipses) {
+    const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    if (ma < 1e-12)
+      continue;
+    constexpr int n = 48;
+    constexpr double kTwoPi = 6.283185307179586;
+    const double ux = static_cast<double>(el.majVx) / ma;
+    const double uy = static_cast<double>(el.majVy) / ma;
+    const double px = -uy;
+    const double py = ux;
+    const double mb = ma * static_cast<double>(el.ratio);
+    const double ecx = static_cast<double>(el.cx);
+    const double ecy = static_cast<double>(el.cy);
+    for (int i = 0; i < n; ++i) {
+      const double ang = kTwoPi * static_cast<double>(i) / static_cast<double>(n);
+      const double c = std::cos(ang);
+      const double s = std::sin(ang);
+      accExt(ecx + ux * (ma * c) + px * (mb * s), ecy + uy * (ma * c) + py * (mb * s));
+    }
+    accExtZ(static_cast<double>(el.z));
+  }
   if (!extAny) {
     extMnX = extMxX = extMnY = extMxY = 0.;
   } else {
@@ -2278,6 +2530,29 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       extMxZ += padZ;
     }
   }
+
+  // Every number in this file is written by `std::to_string`, which rounds to six decimals. Snap
+  // the extents to that grid HERE, before anything is derived from them, so the variables below
+  // hold exactly what the file will state.
+  //
+  // The header view (VPORT groups 12/22/40/41) is derived from the extents, and `* 1.1 + 1.0`
+  // AMPLIFIES: two runs whose raw extents differ by less than half of the last written decimal —
+  // which is all a DXF round trip can leave behind, since a re-imported coordinate is the
+  // six-decimal text read back — round to the SAME $EXTMIN/$EXTMAX and still land on different
+  // sixth decimals in the view height. That is issue #98: a first export and a second differed on
+  // group 40 alone, by 1e-6, with every other byte identical. Deriving from the snapped extents
+  // removes the amplifier — the view this file states is exactly the view a reader derives from
+  // the extents the same file states — so the FIRST export is already a fixed point (REQ-204
+  // stability invariant), with no idempotence carve-out of the kind REQ-079 needed for `.gs`.
+  const auto snapToWritePrecision = [](double v) {
+    return std::isfinite(v) ? std::stod(std::to_string(v)) : v;
+  };
+  extMnX = snapToWritePrecision(extMnX);
+  extMxX = snapToWritePrecision(extMxX);
+  extMnY = snapToWritePrecision(extMnY);
+  extMxY = snapToWritePrecision(extMxY);
+  extMnZ = snapToWritePrecision(extMnZ);
+  extMxZ = snapToWritePrecision(extMxZ);
 
   const double vCx = (extMnX + extMxX) * 0.5;
   const double vCy = (extMnY + extMxY) * 0.5;
@@ -3008,6 +3283,79 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     emitPair(210, "0.0");
     emitPair(220, "0.0");
     emitPair(230, "1.0");
+  }
+
+  // Arcs (#63). The exporter named `userArcs` nowhere, so every arc GoSurvey ever wrote to a DXF was
+  // silently absent from the file — REQ-204's "an entity type silently dropped by an exporter with
+  // no branch for it", found by the oracle written to find it.
+  //
+  // The angles themselves come from `DxfArcToWrite` — including the counter-clockwise direction
+  // trap, which lives next to the code that handles it (issue #111).
+  for (size_t ai = 0; ai < st.userArcs.size(); ++ai) {
+    char hb[24];
+    std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+    const CadArc& arc = st.userArcs[ai];
+    EntityAttributes at{};
+    if (ai < st.userArcAttrs.size())
+      at = st.userArcAttrs[ai];
+    const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+    const int entAci = DxfNearestAciFromRgbPacked(rgb);
+
+    const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
+    const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
+
+    // The one answer to what arc this file states — the same one the header extents above were
+    // swept from (issue #111).
+    const DxfArcAsWritten aw = DxfArcToWrite(arc);
+
+    emitPair(0, "ARC");
+    emitEntityHeader(hb, layer8, at, entAci, lyr);
+    emitPair(100, "AcDbCircle");
+    emitPair(10, std::to_string(worldX(arc.cx)));
+    emitPair(20, std::to_string(worldY(arc.cy)));
+    emitPair(30, std::to_string(static_cast<double>(arc.z)));  // elevation (REQ-057), absolute
+    emitPair(40, std::to_string(static_cast<double>(arc.r)));
+    emitPair(210, "0.0");
+    emitPair(220, "0.0");
+    emitPair(230, "1.0");
+    emitPair(100, "AcDbArc");
+    emitPair(50, aw.startDeg);
+    emitPair(51, aw.endDeg);
+  }
+
+  // Ellipses (#63), dropped the same way and by the same omission. Group 11/21/31 is the major-axis
+  // ENDPOINT RELATIVE TO THE CENTRE — a vector, not a point — so it takes no document-origin shift,
+  // unlike the centre above. `CadEllipse` holds no parameter range, so every ellipse it can describe
+  // is a full one: 41/42 span exactly one turn. A trimmed ELLIPSE read from another program is
+  // tessellated on import and never reaches this store (TASK-114 DEBT-1).
+  for (size_t ei = 0; ei < st.userEllipses.size(); ++ei) {
+    char hb[24];
+    std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+    const CadEllipse& el = st.userEllipses[ei];
+    EntityAttributes at{};
+    if (ei < st.userEllAttrs.size())
+      at = st.userEllAttrs[ei];
+    const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+    const int entAci = DxfNearestAciFromRgbPacked(rgb);
+
+    const std::string layer8 = at.layer.empty() ? std::string("0") : at.layer;
+    const CadLayerRow* lyr = FindLayerRowDxfExport(st, layer8);
+
+    emitPair(0, "ELLIPSE");
+    emitEntityHeader(hb, layer8, at, entAci, lyr);
+    emitPair(100, "AcDbEllipse");
+    emitPair(10, std::to_string(worldX(el.cx)));
+    emitPair(20, std::to_string(worldY(el.cy)));
+    emitPair(30, std::to_string(static_cast<double>(el.z)));  // elevation (REQ-057), absolute
+    emitPair(11, std::to_string(static_cast<double>(el.majVx)));
+    emitPair(21, std::to_string(static_cast<double>(el.majVy)));
+    emitPair(31, "0.0");
+    emitPair(210, "0.0");
+    emitPair(220, "0.0");
+    emitPair(230, "1.0");
+    emitPair(40, std::to_string(static_cast<double>(el.ratio)));
+    emitPair(41, "0.0");
+    emitPair(42, std::to_string(2.0 * kPi));
   }
 
   // Polylines — including every RECT, which is stored as a 4-vertex closed polyline (REQ-053). Before this

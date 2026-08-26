@@ -1,4 +1,4 @@
-# TASK-110 — Modify commands' "select objects" step: click-or-box, accumulate until Enter
+# TASK-112 — Modify commands' "select objects" step: click-or-box, accumulate until Enter
 
 - Type:    bug
 - Status:  done
@@ -7,10 +7,10 @@
 
 ## 1. Authority  (fill BEFORE planning — incomplete = not ready)
 - Goal:         GOAL (issue #87 follow-up)
-- Requirements: REQ-304 (ARRAY), REQ-103 (modify-command completeness — MOVE/COPY/SCALE/ROTATE/
+- Requirements: REQ-305 (ARRAY), REQ-103 (modify-command completeness — MOVE/COPY/SCALE/ROTATE/
   MIRROR/ALIGN's shared selection-step precedent)   ← both `accepted`
 - Constraints:  CON-07 (build artifacts stay in build/, not the source tree)
-- Acceptance:   REQ-304 Acceptance 2 (as amended, D-2026-08-25-l): "object selection accepts a
+- Acceptance:   REQ-305 Acceptance 2 (as amended, D-2026-08-25-n): "object selection accepts a
   pre-existing selection, individual entity/annotation/fill/survey-point clicks, and/or a
   window/crossing box — any mix accumulates into one selection until Enter confirms it, matching
   MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN's own selection step."
@@ -76,7 +76,7 @@ ASSUMPTION-1: STRETCH is excluded from this fix even though the user said "all m
   click-one-entity half of the fix is screen-space picking with no headless equivalent (same
   limitation idle click-select already has) — needs the user's own manual GUI pass.
 - Steps:
-  - [x] Investigate: confirm this is a real gap (not REQ-304 already), find the shared PickSelection
+  - [x] Investigate: confirm this is a real gap (not REQ-305 already), find the shared PickSelection
         shape, find ALIGN's existing Enter-confirm precedent, find why STRETCH's box is load-bearing.
   - [x] Ask the user the scoping question (Q1).
   - [x] `ViewportPickPolicy.hpp`: add `SelectionAccumulate`, reroute six commands + ARRAY.
@@ -89,8 +89,8 @@ ASSUMPTION-1: STRETCH is excluded from this fix even though the user said "all m
   - [x] `tests/ViewportPickPolicyTests.cpp`: update MIRROR/ARRAY route assertions; add a dedicated
         test case for all six + STRETCH's deliberate exclusion.
   - [x] New headless regression transcript (`regression-modify-selection-accumulate.txt`).
-  - [x] `spec/requirements.md`: amend REQ-304 Statement/Acceptance 2 + Revisions; REQ-103 Revisions.
-  - [x] `spec/project.md`: record D-2026-08-25-l.
+  - [x] `spec/requirements.md`: amend REQ-305 Statement/Acceptance 2 + Revisions; REQ-103 Revisions.
+  - [x] `spec/project.md`: record D-2026-08-25-n.
   - [x] Build clean; full `GoSurveyTests.exe` + `ctest` headless corpus green.
 
 ## 7. Workflow-specific notes
@@ -104,7 +104,7 @@ ASSUMPTION-1: STRETCH is excluded from this fix even though the user said "all m
   auto-advance-on-one-box assumption and needed updating — direct evidence the change is real).
 
 ## 8. Implementation log
-- 2026-08-25 — Investigated; found REQ-304 already matched the reported "bug" (spec-compliant,
+- 2026-08-25 — Investigated; found REQ-305 already matched the reported "bug" (spec-compliant,
   not broken) — escalated as a scoping question rather than silently fixing. User chose the
   broader (all modify commands) option.
 - 2026-08-25 — Implemented across the five files listed in the Plan. Discovered `stretch-*.txt`/
@@ -138,13 +138,13 @@ ASSUMPTION-1: STRETCH is excluded from this fix even though the user said "all m
 - Findings:   none outstanding
 
 ## 11. Outcome
-- Requirements satisfied: REQ-304 (Acceptance 2, amended: met — yes); REQ-103 (selection-step
+- Requirements satisfied: REQ-305 (Acceptance 2, amended: met — yes); REQ-103 (selection-step
   precedent, amended: met — yes)
 - Tests added:            `tests/headless/transcripts/regression-modify-selection-accumulate.txt`;
                           `tests/ViewportPickPolicyTests.cpp` new TEST_CASE + two updated assertions
 - Refactors:              none (STRETCH's `SelectionBox` shape and MOVE/COPY/SCALE/STRETCH's shared
                           `ViewportPickPolicy.hpp` case were split, not refactored, to keep STRETCH
                           behavior-identical)
-- Docs updated:           `spec/requirements.md` (REQ-304, REQ-103), `spec/project.md`
-                          (D-2026-08-25-l)
+- Docs updated:           `spec/requirements.md` (REQ-305, REQ-103), `spec/project.md`
+                          (D-2026-08-25-n)
 - Done:                   2026-08-25

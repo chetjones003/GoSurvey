@@ -16,6 +16,42 @@ short fallback message instead — which is a missed opportunity, not a failure.
 
 ---
 
+## 0.5.6
+
+**A tabbed ribbon**
+- The toolbar is now organised into tabs — Home, Insert, Annotate, View, Manage, Output, Survey —
+  and rearranges itself to fit the window when you make it narrower.
+- Where a command has options, the option words in the prompt are now clickable instead of
+  needing to be typed.
+- The cursor's input box grows and shrinks to fit what you are typing.
+
+**Drawing**
+- **ARRAY** — copy an object into a rectangular grid or a polar ring.
+- **POLYLINE** now closes when you click its start point, and finishes when you press Enter.
+- Object selection is its own visible mode, so it is clear when the program is waiting for you
+  to pick things.
+
+**Dimensions**
+- A single place to set dimension appearance, edited through the new **DIMSTY** dialog.
+- Angular dimensions (**DIMANGULAR**) place and measure correctly.
+
+**Snapping and zoom**
+- Snapping picks the nearest candidate more reliably, and Shift + right-click locks a snap.
+- Double-tap the middle mouse button to zoom to extents.
+- **ZOOM EXTENTS** no longer misframes; inside an activated viewport it frames that viewport
+  rather than the whole sheet.
+
+**Paper space**
+- MOVE, COPY and DELETE on a sheet now ask you to select objects first.
+- Circles, arcs, ellipses and polylines drawn on a sheet stay on that sheet.
+
+**DXF**
+- Arcs and ellipses survive a save-and-reopen through DXF unchanged.
+- Exported DXF files use unique handles and declare every layer they reference.
+- Arc angles and the saved view no longer drift on export.
+
+---
+
 ## 0.5.5
 
 **FILLET and CHAMFER — new**

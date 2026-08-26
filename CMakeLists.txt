@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(GoSurvey VERSION 0.5.5 LANGUAGES CXX C RC)
+project(GoSurvey VERSION 0.5.6 LANGUAGES CXX C RC)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -501,6 +501,11 @@ if(GOSURVEY_BUILD_TESTS)
     tests/ZStoreTests.cpp
     tests/Ray3dTests.cpp
     tests/CameraTests.cpp
+    # REQ-122 zoom framing (GitHub issue #88, TASK-117). Header-only and pure, like OrthoConstrain
+    # above it: the ZOOMEXTENTS acceptance list (margin, aspect, no edge clipping, degenerate extents,
+    # never a NaN camera) is decided entirely in this arithmetic, and the deferred consumer that calls
+    # it cannot be reached from any test target (TASK-113 DEBT-1).
+    tests/ZoomFramingTests.cpp
     tests/TextStyleTests.cpp
     tests/OrthoConstrainTests.cpp
     tests/ColorContrastTests.cpp
@@ -682,6 +687,51 @@ if(GOSURVEY_BUILD_TESTS)
   include(Catch)
   catch_discover_tests(GoSurveyTests)
 
+  # ---------------------------------------------------------------------------
+  # GoSurveySnapTests (issue #103): CadSnap::FindBest needs AppCommandState AND the rest of
+  # ${GOSURVEY_DOMAIN_SOURCES} it transitively calls into (SurveyPoints.cpp reaches into
+  # CadCommands.cpp for EraseCadAnnotationAtIndex/FindEntityById etc.), which is exactly what
+  # GoSurveyTests above is built to avoid linking. It is otherwise identical to gosurvey_headless's
+  # link set — domain sources + imgui_core, no GLFW/OpenGL/window — just with a Catch2 main instead
+  # of the transcript driver.
+  # ---------------------------------------------------------------------------
+  add_executable(GoSurveySnapTests
+    ${GOSURVEY_DOMAIN_SOURCES}
+    src/platform/HeadlessFileDialogs.cpp
+    src/platform/HeadlessPdfAttach.cpp
+    tests/CadSnapTests.cpp
+  )
+  target_include_directories(GoSurveySnapTests PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/viewport
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/util
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/io
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/render
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/font
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/update
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+    ${NLOHMANN_JSON_INCLUDE}
+    ${CMAKE_BINARY_DIR}/generated
+  )
+  target_link_libraries(GoSurveySnapTests PRIVATE imgui_core Catch2::Catch2WithMain)
+  target_compile_definitions(GoSurveySnapTests PRIVATE
+    GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples")
+  if(WIN32)
+    target_link_libraries(GoSurveySnapTests PRIVATE comdlg32 ole32 shell32)
+  endif()
+  if(MSVC)
+    target_compile_options(GoSurveySnapTests PRIVATE /W4 /permissive-)
+  else()
+    target_compile_options(GoSurveySnapTests PRIVATE -Wall -Wextra)
+  endif()
+  catch_discover_tests(GoSurveySnapTests)
+
   # REQ-203: the transcript corpus runs on every push and a non-zero exit fails the build (REQ-202).
   # Registered here, inside GOSURVEY_BUILD_TESTS, because enable_testing() lives in this block —
   # each transcript becomes its own ctest case so a failure names the transcript that failed.
@@ -699,21 +749,28 @@ if(GOSURVEY_BUILD_TESTS)
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
     endforeach()
 
-    # Oracles that currently FAIL, held DISABLED rather than deleted or WILL_FAIL'ed.
+    # Oracles held DISABLED rather than deleted or WILL_FAIL'ed.
     #
-    # Same call TASK-056 made for `headless.gs-roundtrip.compare` while #56 and #57 were open, and
-    # for the same reason: an oracle that has found a real defect is EVIDENCE, and deleting it to
-    # get a green suite throws the evidence away. WILL_FAIL is worse than either — it goes green the
-    # moment the failure turns into a DIFFERENT failure, which is the one outcome nobody wants to
-    # miss. Each file's header says what it found; re-enable when that is fixed.
+    # ***** THE LIST IS EMPTY. *****  Keep the mechanism and this note: it is the record of what the
+    # convention is for, and the next oracle to find a real defect goes here rather than being
+    # deleted to get a green suite. TASK-056 made this call for `headless.gs-roundtrip.compare`
+    # while #56/#57 were open, and it is why those defects stayed visible. WILL_FAIL is worse than
+    # either option — it goes green the moment the failure turns into a DIFFERENT failure, which is
+    # the one outcome nobody wants to miss.
     #
-    #   dxf-export-stable              — #63: the exporter has no ARC or ELLIPSE branch (silent data
-    #                                    loss). It also covered #64 (a LWPOLYLINE came back from a
-    #                                    round trip as loose LINEs), which was fixed on 2026-08-21
-    #                                    by TASK-083 — the regression for that half now lives in
-    #                                    `regression-64-dxf-polyline-identity.txt` and RUNS, so one
-    #                                    open defect does not keep the other's oracle off the suite.
-    foreach(_disabled dxf-export-stable)
+    # `dxf-export-stable` lived here from 2026-08-18 to 2026-08-26 and is now RE-ENABLED. It found
+    # three defects, and needed all three closed before it could come back:
+    #
+    #   #64  LWPOLYLINE came back from a round trip as loose LINEs   — TASK-083, 2026-08-21
+    #   #63  ARC and ELLIPSE dropped entirely by the writer          — TASK-114, 2026-08-26
+    #   #94  the round trip walked the drawing ~2e-6 every cycle     — TASK-116, 2026-08-26
+    #
+    # Each left a regression of its own behind, so a closed defect never waited on an open one:
+    # `regression-64-dxf-polyline-identity.txt`, `regression-63-dxf-arc-ellipse-identity.txt`,
+    # `regression-94-dxf-origin-no-drift.txt` and `regression-94a-dxf-origin-large-coord.txt`.
+    # Those stay whether or not this oracle is enabled — the oracle proves the invariant, and each
+    # regression pins the specific defect that broke it.
+    foreach(_disabled )
       if(TEST headless.${_disabled})
         set_tests_properties(headless.${_disabled} PROPERTIES DISABLED TRUE)
       endif()
