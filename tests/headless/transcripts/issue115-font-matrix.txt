@@ -65,10 +65,9 @@ EXPECT LINES 2
 CHECK ALL
 SAVEAS %OUT%/font-matrix-model.gs
 
-# --- paper space: native text, and TWO viewports at DIFFERENT scales over the same model -----------
-# The two viewports are deliberately different shapes, so zoom-extents gives each a different
-# scaleModelPerPaperIn. That difference is the whole point: under REQ-050 the model MTEXT seen through
-# them must keep a constant PLOTTED height, which means its model height differs per viewport.
+# --- paper space: native text, and TWO viewports over the same model -------------------------------
+# ZOOMEXTENTS frames each viewport on the model. tools/Make-FontDemoGs.ps1 then sets the scales to
+# 1:25 and 1:100 (constant plotted MTEXT height under REQ-050 is obvious at a 4× scale ratio).
 SPACE PAPER
 
 CMD TEXT

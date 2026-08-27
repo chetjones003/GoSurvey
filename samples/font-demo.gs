@@ -1,9 +1,9 @@
-﻿{
+{
   "document": {
     "activeSpaceIndex": 0,
     "activeTextStyleName": "Standard",
     "annotationAttrs": [
-      { "layer": "0" },
+      { "id": 6, "layer": "0" },
       {
         "color": "#e1b12c",
         "id": 3,
@@ -31,6 +31,7 @@
     ],
     "annotations": [
       {
+        "fontFamily": "Arial",
         "kind": "mtext",
         "insX": 80.0,
         "insY": 80.0,
@@ -178,7 +179,7 @@
       0.0
     ],
     "modelUnitsPerPlottedInch": 50.0,
-    "nextEntityId": 6,
+    "nextEntityId": 7,
     "paperLayouts": [
       {
         "centerPlot": false,
@@ -252,7 +253,7 @@
             "paperWIn": 8.0,
             "paperXIn": 1.0,
             "paperYIn": 1.0,
-            "scaleModelPerPaperIn": 89.19026947021484,
+            "scaleModelPerPaperIn": 25.0,
             "vpColorLayers": [],
             "vpColorValues": []
           },
@@ -265,7 +266,7 @@
             "paperWIn": 4.0,
             "paperXIn": 1.0,
             "paperYIn": 6.0,
-            "scaleModelPerPaperIn": 118.92035675048828,
+            "scaleModelPerPaperIn": 100.0,
             "vpColorLayers": [],
             "vpColorValues": []
           }

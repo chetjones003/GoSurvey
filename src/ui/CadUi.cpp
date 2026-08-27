@@ -11572,7 +11572,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           // here rather than by the GL pass — the model overlay's own annotation loop does exactly this.
           // Without it an isolated-away annotation stayed visible through every layout viewport, which is
           // the one place a hidden object is least likely to be noticed.
-          if (aa && CadEntityIdHidden(&cmd.hiddenEntityIds, aa->id))
+          const ViewportTextOverlayPlan plan =
+              PlanViewportTextOverlay(ann, aa && CadEntityIdHidden(&cmd.hiddenEntityIds, aa->id), vp,
+                                      cmd.modelUnitsPerPlottedInch);
+          if (plan.skipHidden)
             continue;
           const std::string layer = aa ? (aa->layer.empty() ? std::string("0") : aa->layer) : std::string("0");
           if (IsLayerFrozenInViewport(vp, layer))
@@ -11580,7 +11583,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const ImU32 tcol = vpBaseCol(layer, aa ? aa->color : std::string("ByLayer"));
           if (ann.kind == CadAnnotation::Kind::Text) {
             const ImVec2 sp = m2s(static_cast<double>(ann.insX) + oX, static_cast<double>(ann.insY) + oY);
-            const float hWorld = CadAnnotationHeightWorld(ann, cmd.modelUnitsPerPlottedInch);
+            const float hWorld = CadAnnotationHeightWorld(ann, plan.modelUnitsPerPlottedInch);
             const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
             DrawCadSingleLineText(sdl, ann, vpFont, sp, fontPx, tcol);
           } else if (ann.kind == CadAnnotation::Kind::Mtext) {
@@ -11590,14 +11593,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             // drawing's plot scale, so its plotted height stays constant on the sheet whatever that
             // viewport's scale is. Using cmd.modelUnitsPerPlottedInch here made the same object read at
             // different sizes in model space and through a 1:50 vs a 1:100 viewport. The rule (and the
-            // survey-label exclusion) lives in MtextScaleThroughViewport so a test can hold it.
-            const float mtextMup = MtextScaleThroughViewport(ann, vp, cmd.modelUnitsPerPlottedInch);
-            const float hWorld = CadAnnotationHeightWorld(ann, mtextMup);
+            // survey-label exclusion) lives in PlanViewportTextOverlay / MtextScaleThroughViewport.
+            const float hWorld = CadAnnotationHeightWorld(ann, plan.modelUnitsPerPlottedInch);
             const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
             const int acol = (ann.mtextAttach - 1) % 3;
             const int arow = (ann.mtextAttach - 1) / 3;
             float pw = 8.f, ph = fontPx * 1.22f;
-            MtextRichNaturalContentPx(vpFont, fontPx, ann.text, &pw, &ph, ann.fontFamily);
+            MtextRichNaturalContentPx(vpFont, fontPx, ann.text, &pw, &ph, plan.fontFamily);
             float drawX = tl.x + 4.f, drawY = tl.y + 4.f;
             if (acol == 1)
               drawX = tl.x + 0.5f * ((brc.x - tl.x) - pw);
@@ -11610,7 +11612,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             float wrapPx = std::max(8.f, (brc.x - tl.x) - 8.f);
             if (acol != 0)
               wrapPx = std::max(pw, 8.f);
-            Shx::Font* sfm = CadIsShxFontName(ann.fontFamily) ? Shx::Resolve(ann.fontFamily) : nullptr;
+            Shx::Font* sfm = CadIsShxFontName(plan.fontFamily) ? Shx::Resolve(plan.fontFamily) : nullptr;
             if (sfm && sfm->valid()) {
               const std::string plain = MtextRichFlattenToPlain(ann.text);
               const float lineH = fontPx * 1.4f;
@@ -11636,7 +11638,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
               }
               flush(ln);
             } else {
-              MtextRichDrawWrapped(sdl, vpFont, fontPx, ImVec2(drawX, drawY), wrapPx, tcol, ann.text, ann.fontFamily);
+              MtextRichDrawWrapped(sdl, vpFont, fontPx, ImVec2(drawX, drawY), wrapPx, tcol, ann.text,
+                                   plan.fontFamily);
             }
           }
         }
@@ -12798,9 +12801,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         // model space) else the drawing scale — so its plotted height stays constant on the sheet regardless
         // of that viewport's scale. Survey labels keep the global drawing scale (their own layout owns size).
         float mtextMup = cmd.modelUnitsPerPlottedInch;
-        if (a.surveyPointLabelForId < 0)
-          if (const Viewport* mvp = CurrentViewport(cmd))
-            mtextMup = std::max(mvp->scaleModelPerPaperIn, 1.e-6f);
+        if (const Viewport* mvp = CurrentViewport(cmd))
+          mtextMup = MtextScaleThroughViewport(a, *mvp, cmd.modelUnitsPerPlottedInch);
         const float hWorldMtext = CadAnnotationHeightWorld(a, mtextMup);
         // The screen-size cap belongs to survey-point labels only: those are sized for legibility, not to
         // scale. Applying it to plain MTEXT made the text stop growing once zoomed past ~128 px while the

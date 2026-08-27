@@ -1,10 +1,18 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <fstream>
+#include <iterator>
+#include <string>
+#include <vector>
+
+#include <nlohmann/json.hpp>
+
 #include "font/CadFontName.hpp"
 #include "commands/DimensionStyle.hpp"
 #include "commands/CadEntities.hpp"
 #include "commands/PaperSpace.hpp"
+#include "commands/CadCommands.hpp"
 
 TEST_CASE("SHX font names are classified by suffix, case-insensitive", "[cadfont]") {
   REQUIRE(cadfont::IsShxFontName("romans.shx"));
@@ -45,7 +53,8 @@ TEST_CASE("DIMSTY bakes font onto each dimension kind immediately", "[cadfont]")
   REQUIRE(txt.fontFamily == "Courier New");  // TEXT is not a dimension
 }
 
-TEST_CASE("Model TEXT maps through a viewport like dimension labels", "[cadfont]") {
+TEST_CASE("Viewport TEXT overlay plan maps insertion and keeps drawing-scale height plus fontFamily",
+          "[cadfont]") {
   Viewport vp;
   vp.paperXIn = 1.f;
   vp.paperYIn = 1.f;
@@ -60,11 +69,19 @@ TEST_CASE("Model TEXT maps through a viewport like dimension labels", "[cadfont]
   t.insY = 25.f;
   t.fontFamily = "Arial";
   t.text = "Aa";
+  t.plottedHeightInches = 0.25f;
   float px = 0.f, py = 0.f;
   ModelToPaperIn(vp, static_cast<double>(t.insX), static_cast<double>(t.insY), &px, &py);
   REQUIRE(px == Catch::Approx(6.f));
   REQUIRE(py == Catch::Approx(5.f));
-  REQUIRE(t.fontFamily == "Arial");
+
+  const float drawingMup = 100.f;
+  const ViewportTextOverlayPlan plan = PlanViewportTextOverlay(t, false, vp, drawingMup);
+  REQUIRE_FALSE(plan.skipHidden);
+  REQUIRE(plan.fontFamily == "Arial");
+  REQUIRE(plan.fontFamily != std::string());
+  REQUIRE(plan.modelUnitsPerPlottedInch == Catch::Approx(drawingMup));
+  REQUIRE(MtextScaleThroughViewport(t, vp, drawingMup) == Catch::Approx(drawingMup));
 }
 
 // REQ-050. These hold the rule the viewport text overlay applies, via the helper it calls — the
@@ -119,4 +136,72 @@ TEST_CASE("REQ-050: a degenerate viewport scale cannot produce a zero or negativ
   REQUIRE(MtextScaleThroughViewport(m, bad, 100.f) > 0.f);
   bad.scaleModelPerPaperIn = -25.f;
   REQUIRE(MtextScaleThroughViewport(m, bad, 100.f) > 0.f);
+}
+
+TEST_CASE("Viewport overlay plan sizes plain MTEXT by the viewport and passes its fontFamily", "[cadfont]") {
+  Viewport vp;
+  vp.scaleModelPerPaperIn = 25.f;
+  CadAnnotation m;
+  m.kind = CadAnnotation::Kind::Mtext;
+  m.plottedHeightInches = 0.25f;
+  m.fontFamily = "Times New Roman";
+  m.text = "MODEL MTEXT";
+  const float drawingMup = 50.f;
+  const ViewportTextOverlayPlan plan = PlanViewportTextOverlay(m, false, vp, drawingMup);
+  REQUIRE_FALSE(plan.skipHidden);
+  REQUIRE(plan.fontFamily == "Times New Roman");
+  REQUIRE(plan.modelUnitsPerPlottedInch == Catch::Approx(25.f));
+  REQUIRE(cadfont::PreferShxStrokes(plan.fontFamily, m.text) == false);
+
+  CadAnnotation shx = m;
+  shx.fontFamily = "romans.shx";
+  const ViewportTextOverlayPlan shxPlan = PlanViewportTextOverlay(shx, false, vp, drawingMup);
+  REQUIRE(shxPlan.fontFamily == "romans.shx");
+  REQUIRE(cadfont::PreferShxStrokes(shxPlan.fontFamily, shx.text));
+}
+
+TEST_CASE("Viewport overlay plan skips isolated annotations (REQ-084 (d))", "[cadfont]") {
+  Viewport vp;
+  vp.scaleModelPerPaperIn = 50.f;
+  CadAnnotation m;
+  m.kind = CadAnnotation::Kind::Mtext;
+  m.fontFamily = "Arial";
+  EntityAttributes aa;
+  aa.id = 7;
+  const std::vector<std::uint64_t> hidden{7};
+  const bool isHidden = CadEntityIdHidden(&hidden, aa.id);
+  REQUIRE(isHidden);
+  const ViewportTextOverlayPlan skipped = PlanViewportTextOverlay(m, isHidden, vp, 100.f);
+  REQUIRE(skipped.skipHidden);
+  const ViewportTextOverlayPlan shown = PlanViewportTextOverlay(m, CadEntityIdHidden(&hidden, 3), vp, 100.f);
+  REQUIRE_FALSE(shown.skipHidden);
+  REQUIRE_FALSE(CadEntityIdHidden(&hidden, 0));
+}
+
+TEST_CASE("font-demo.gs opens without a BOM and uses explicit 1:25 / 1:100 viewports", "[cadfont]") {
+  const std::string path = std::string(GOSURVEY_TEST_DATA_DIR) + "/font-demo.gs";
+  std::ifstream in(path, std::ios::binary);
+  REQUIRE(in.good());
+  const std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+  REQUIRE_FALSE(raw.empty());
+  REQUIRE(static_cast<unsigned char>(raw[0]) != 0xEFu);
+
+  const nlohmann::json root = nlohmann::json::parse(raw);
+  REQUIRE(root.at("format") == "gosurvey");
+  const nlohmann::json& vps = root.at("document").at("paperLayouts").at(0).at("viewports");
+  REQUIRE(vps.size() >= 2);
+  REQUIRE(vps.at(0).at("scaleModelPerPaperIn").get<float>() == Catch::Approx(25.f));
+  REQUIRE(vps.at(1).at("scaleModelPerPaperIn").get<float>() == Catch::Approx(100.f));
+
+  bool foundMtext = false;
+  for (const nlohmann::json& a : root.at("document").at("annotations")) {
+    if (a.at("kind") != "mtext")
+      continue;
+    foundMtext = true;
+    REQUIRE(a.contains("fontFamily"));
+    REQUIRE_FALSE(a.at("fontFamily").get<std::string>().empty());
+  }
+  REQUIRE(foundMtext);
+
+  REQUIRE(root.at("document").at("annotationAttrs").at(0).at("id").get<std::uint64_t>() != 0);
 }

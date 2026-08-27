@@ -90,9 +90,30 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
 /// failing test rather than a screenshot someone has to notice.
 [[nodiscard]] inline float MtextScaleThroughViewport(const CadAnnotation& a, const Viewport& vp,
                                                      float drawingModelUnitsPerPlottedInch) {
-  if (a.surveyPointLabelForId >= 0)
+  // REQ-050 keeps single-line TEXT (and every non-MTEXT kind) on the drawing plot scale. Gate here
+  // so a later caller cannot size TEXT off the viewport by accident.
+  if (a.kind != CadAnnotation::Kind::Mtext || a.surveyPointLabelForId >= 0)
     return drawingModelUnitsPerPlottedInch;
   return vp.safeScale();
+}
+
+/// Everything the layout-viewport TEXT/MTEXT overlay needs from one annotation: isolation skip,
+/// the scale REQ-050 picks, and the font family the draw call must pass to SHX/TTF resolve.
+/// CadUi uses this struct's fields rather than inlining the drawing scale or ImGui::GetFont().
+struct ViewportTextOverlayPlan {
+  bool skipHidden = false;
+  float modelUnitsPerPlottedInch = 50.f;
+  std::string fontFamily;
+};
+
+[[nodiscard]] inline ViewportTextOverlayPlan PlanViewportTextOverlay(const CadAnnotation& a, bool entityHidden,
+                                                                    const Viewport& vp,
+                                                                    float drawingModelUnitsPerPlottedInch) {
+  ViewportTextOverlayPlan p;
+  p.skipHidden = entityHidden;
+  p.modelUnitsPerPlottedInch = MtextScaleThroughViewport(a, vp, drawingModelUnitsPerPlottedInch);
+  p.fontFamily = a.fontFamily;
+  return p;
 }
 
 // Per-viewport layer freeze (REQ-028): toggle and query frozen layers for a viewport.

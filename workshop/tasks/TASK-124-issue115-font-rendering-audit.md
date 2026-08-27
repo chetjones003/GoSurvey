@@ -122,3 +122,21 @@ COMPLETION REPORT — TASK-124 — 2026-08-27 (round 2)
 - Build: reproducible via `build.bat`. **`dev/build` produced no output and did not rebuild when invoked from Git Bash** (it targets WSL's `win_cmd` bridge); the Windows tool was used directly, per CLAUDE.md's "the Windows tool wins — fix the wrapper".
 - Docs updated: this log
 
+### Round 3 — 2026-08-27 — review of PR #123
+
+The #123 review requested changes before merge:
+
+1. `samples/font-demo.gs` had a UTF-8 BOM (`Set-Content -Encoding utf8`); `LoadGoSurveyFile` cannot parse it. Generator now writes UTF-8 without BOM; the committed sample was rewritten the same way.
+2. Injected MTEXT now has `fontFamily` and a non-zero entity id; viewport scales are explicit **25** and **100** (ZOOMEXTENTS still frames the model).
+3. Tests now go through `PlanViewportTextOverlay` — the struct CadUi's viewport TEXT/MTEXT loop uses for skip, scale, and fontFamily — so ignoring `fontFamily` or sizing TEXT off the viewport fails. Isolation skip is asserted. `font-demo.gs` is parsed in-process (no BOM, MTEXT family, 1:25/1:100).
+4. `MtextScaleThroughViewport` returns the drawing scale for any non-MTEXT kind.
+
+COMPLETION REPORT — TASK-124 — 2026-08-27 (round 3)
+- Requirements satisfied: REQ-050 / REQ-084 (d) as scoped to the #123 follow-up; GitHub #115 still partial (DIMANGULAR persist, glyph capture)
+- Summary: fixture loadable; overlay plan binds scale+font+isolation; TEXT cannot pick up viewport scale through the helper.
+- Tests: `GoSurveyTests.exe "[cadfont]"`
+- Verification verdict: **resubmitted for review**
+- Architectural decisions: none (`ViewportTextOverlayPlan` is a header-only bag of values beside the existing helper)
+- Technical debt noted: DIMANGULAR `.gs` round-trip; PDF plot MTEXT still uses drawing scale (REQ-050 follow-up)
+- Docs updated: this log
+
