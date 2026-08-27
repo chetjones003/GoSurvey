@@ -10,6 +10,42 @@ and this document defines that process and the rules that bind it.
 
 ---
 
+## Environment note for AI agents (read first)
+
+This is a **Windows-native repository**. The application targets Windows and
+builds with MSVC (`cl`) + CMake + the Ninja generator via `build.bat` /
+`CMakePresets.json`. That build system is authoritative and must not be
+replaced with Linux equivalents.
+
+The AI agent may run under **WSL / Linux / Git Bash**. To interact with the
+Windows build, test and GitHub environment from there, use the **`dev/`
+commands** — a thin adapter over the existing tooling (see `dev/README.md`):
+
+| Task | Command |
+|------|---------|
+| Build (canonical release) | `./dev/build` |
+| Clean build artifacts | `./dev/clean` |
+| Build + run the full test suite | `./dev/test` |
+| Repository state | `./dev/status` |
+| GitHub CLI (Windows `gh.exe`) | `./dev/gh …`, `./dev/issue …`, `./dev/pr …` |
+| Arbitrary Windows command | `./dev/win …` |
+| List commands | `./dev/help` |
+
+Rules:
+
+- **Do not replace Windows tooling with Linux tooling merely because the agent
+  is running under WSL.** WSL is the agent environment, not the target platform.
+- Do not add a Bash/CMake path that duplicates `build.bat`; extend the `dev/`
+  wrapper instead.
+- `dev/gh` uses the user's existing Windows `gh.exe` and its authentication — do
+  not install a Linux GitHub CLI.
+- The canonical build/test commands (what CI runs) are
+  `cmake --build build` after `cmake --preset ninja-release`, then
+  `ctest --test-dir build --output-on-failure`. `dev/build` and `dev/test` wrap
+  exactly these.
+
+---
+
 ## The system
 
 Work is organized into three layers with a strict separation of authority.

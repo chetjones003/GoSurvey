@@ -65,6 +65,9 @@ rules.ninja
 # --- Runtime / local config ---
 imgui.ini
 
+# --- dev/ WSL->Windows bridge scratch ---
+/.dev-win.*
+
 # --- OS ---
 .DS_Store
 Thumbs.db

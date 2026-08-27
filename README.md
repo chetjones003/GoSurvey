@@ -514,6 +514,26 @@ cmake --build build
 
 Dependencies (fetched automatically by CMake): GLFW, Dear ImGui, GLEW, PDFium (prebuilt Windows x64 binary), nlohmann/json.
 
+On Windows, `build.bat` wraps the two commands above: it loads the MSVC
+environment (`vcvars64`), configures the `ninja-release` preset on first run,
+then builds into `build/`. Tests are `ctest --test-dir build --output-on-failure`.
+
+### Building from a Linux / WSL AI agent
+
+GoSurvey is a **Windows-native application** — the build stays on MSVC + CMake +
+Ninja. An AI coding agent may run under WSL/Linux, so the repo ships a thin
+`dev/` adapter that drives the existing Windows tooling from a POSIX shell:
+
+```bash
+./dev/help      ./dev/status
+./dev/build     ./dev/clean     ./dev/test
+./dev/gh …      ./dev/issue …   ./dev/pr …      ./dev/win …
+```
+
+`dev/build` / `dev/test` call `build.bat` and `ctest` through `cmd.exe`;
+`dev/gh` forwards to the user's Windows `gh.exe`; `dev/status` uses native
+`git`. Full details and troubleshooting: [`dev/README.md`](dev/README.md).
+
 ---
 
 ## Tips
