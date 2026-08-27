@@ -491,6 +491,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/NumFormatTests.cpp
     tests/AngleFormatTests.cpp
     tests/PaperSpaceTests.cpp
+    tests/DimViewportTests.cpp
     tests/CommandLineTests.cpp
     tests/RightClickTests.cpp
     tests/SurveyCsvValidateTests.cpp

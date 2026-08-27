@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CadEntities.hpp"
+#include "CadDimGeom.hpp"
 #include "EntityId.hpp"
 // TextStyles::DefaultTextStyles, for the textStyles member's initializer (issue #57). Pure and
 // dependency-free (string/vector/CadEntities.hpp), so this adds no cycle and no weight.
@@ -156,18 +157,8 @@ inline void ResolveEntityColorForViewport(const EntityAttributes& attr, float de
 
 
 // EntityAttributes and CadAnnotation are defined in CadEntities.hpp (shared with PaperSpace.hpp).
-
-/// Fills dimension-line feet, unit tangent \p T along measurement, left normal \p N, and chord length. False if degenerate.
-bool CadDimAlignedGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx,
-                            float* ty, float* nx, float* ny, float* measLen);
-
-/// Horizontal linear dimension: world-X span between extension X coordinates; dimension line is horizontal.
-bool CadDimLinearGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx,
-                          float* ty, float* nx, float* ny, float* measLen);
-
-/// \ref CadDimAlignedGeometry or \ref CadDimLinearGeometry based on \p a.kind.
-bool CadDimAnyGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx, float* ty,
-                       float* nx, float* ny, float* measLen);
+// CadDimAlignedGeometry / CadDimLinearGeometry / CadDimAnyGeometry / CadDimAngularComputeFrame
+// live in CadDimGeom.hpp (header-only for issue #110 viewport tests).
 
 /// Live DIMALIGNED preview after extension points are set (\p st.dimPhase == WaitDimLinePt).
 bool CadDimAlignedBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out);
@@ -185,7 +176,6 @@ std::string CadFormatAngleDegMinSecFromRad(float angleRad);
 /// \c D°M'S" with decimal seconds; normalized to \c [0,360).
 std::string CadFormatBearingCwNorthDegMinSec(float bearingDegClockwiseFromNorth);
 /// Live DIMANGULAR preview (\p st.active == DimAngular, \p dimAngularPhase == WaitArc).
-bool CadDimAngularComputeFrame(const CadAnnotation& a, float* a1Out, float* a2Out, float* sweepOut, float* bisx, float* bisy, float* thetaInterior);
 bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cursorWy, CadAnnotation* out);
 /// After vertex / ray / radius edits, re-place label along the angle bisector.
 void CadDimAngularSyncTextPlacement(CadAnnotation* ann, float modelUnitsPerPlottedInch);

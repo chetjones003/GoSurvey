@@ -26,6 +26,7 @@
 #include "SurveyPoints.hpp"
 #include "SurfaceStyle.hpp"
 #include "DimensionStyle.hpp"  // REQ-072 analysis legend (TASK-086 §6 (4))
+#include "CadDimStroke.hpp"
 #include "StringUtil.hpp"
 #include "imgui.h"
 
@@ -7732,6 +7733,42 @@ static void AddAlignedDimText(ImDrawList* dl, ImFont* font, float fontPx, const 
   RotateImDrawListVertsXY(dl, v0, v1, pivotSp, std::cos(screenAngRad), std::sin(screenAngRad));
 }
 
+template <typename WorldToScreen>
+static void DrawCadDimStrokesOnDrawList(ImDrawList* dl, const CadAnnotation& a, const CadDimWorldStrokes& strokes,
+                                        WorldToScreen wts, float fontPx, ImU32 extCol, ImU32 lineCol, ImU32 arrowCol,
+                                        ImU32 textCol, ImFont* font, DimArrowType arrowType) {
+  if (!dl)
+    return;
+  const bool drawFilledArrows = !strokes.arrows.empty();
+  for (const CadDimWorldSeg& seg : strokes.segs) {
+    if (drawFilledArrows && seg.kind == CadDimWorldSeg::Kind::Arrow)
+      continue;
+    const ImVec2 s0 = wts(seg.x0, seg.y0);
+    const ImVec2 s1 = wts(seg.x1, seg.y1);
+    const ImU32 c = (seg.kind == CadDimWorldSeg::Kind::Extension) ? extCol
+                    : (seg.kind == CadDimWorldSeg::Kind::Arrow)     ? arrowCol
+                                                                   : lineCol;
+    dl->AddLine(s0, s1, c, 1.2f);
+  }
+  for (const CadDimWorldTri& tri : strokes.arrows) {
+    const ImVec2 t0 = wts(tri.x0, tri.y0);
+    const ImVec2 t1 = wts(tri.x1, tri.y1);
+    const ImVec2 t2 = wts(tri.x2, tri.y2);
+    if (arrowType == DimArrowType::ClosedBlank || arrowType == DimArrowType::Open)
+      dl->AddTriangle(t0, t1, t2, arrowCol, 1.2f);
+    else
+      dl->AddTriangleFilled(t0, t1, t2, arrowCol);
+  }
+  if (a.text.empty() || !font)
+    return;
+  const ImVec2 sp = wts(strokes.labelX, strokes.labelY);
+  const float dirStep = 0.05f;
+  const ImVec2 spDir = wts(strokes.labelX + std::cos(strokes.labelRotRad) * dirStep,
+                           strokes.labelY + std::sin(strokes.labelRotRad) * dirStep);
+  const float screenAng = std::atan2(spDir.y - sp.y, spDir.x - sp.x);
+  AddAlignedDimText(dl, font, fontPx, sp, screenAng, textCol, a.text.c_str());
+}
+
 static int HitTestDimGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 avail, const Camera& cam,
                           const CadAnnotation& ann, float gripRadiusPx) {
   if (ann.kind != CadAnnotation::Kind::DimAligned && ann.kind != CadAnnotation::Kind::DimLinear)
@@ -11452,6 +11489,71 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         sdl->AddLine(ImVec2(c.x - crossPx, c.y), ImVec2(c.x + crossPx, c.y), spCol, 1.0f);
         sdl->AddLine(ImVec2(c.x, c.y - crossPx), ImVec2(c.x, c.y + crossPx), spCol, 1.0f);
       }
+      // Model dimensions through this viewport (issue #110 / REQ-027): same m2s + clip as linework.
+      {
+        CadDimStrokeParams dsp;
+        dsp.modelUnitsPerPlottedInch = cmd.modelUnitsPerPlottedInch;
+        dsp.arrowSizeInches = cmd.activeDimensionStyle.arrowSizeInches;
+        dsp.arrowScale = cmd.viewportDimArrowScale;
+        dsp.arrowType = cmd.activeDimensionStyle.arrowType;
+        ImFont* vpFont = ImGui::GetFont();
+        auto dimWts = [&](float lx, float ly) {
+          return m2s(static_cast<double>(lx) + oX, static_cast<double>(ly) + oY);
+        };
+        auto dimVpCol = [&](const std::string& styCol, const std::string& layer, const std::string& entityColor,
+                            float defR, float defG, float defB) -> ImU32 {
+          if (styCol == "ByLayer" || styCol.empty())
+            return vpBaseCol(layer, entityColor);
+          float rgba[4] = {defR, defG, defB, 1.f};
+          ResolveStoredColorForViewport(styCol, 0.f, defR, defG, defB, rgba);
+          AdaptWhiteBlackToBackground(&rgba[0], &rgba[1], &rgba[2], true);
+          return IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
+                          static_cast<int>(rgba[2] * 255.f), 255);
+        };
+        for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
+          const CadAnnotation& ann = cmd.cadAnnotations[ai];
+          if (!CadAnnotationIsDimension(ann))
+            continue;
+          const EntityAttributes* aa =
+              (ai < cmd.cadAnnotationAttrs.size()) ? &cmd.cadAnnotationAttrs[ai] : nullptr;
+          const std::string layer = aa ? (aa->layer.empty() ? std::string("0") : aa->layer) : std::string("0");
+          if (IsLayerFrozenInViewport(vp, layer))
+            continue;
+          const std::string entCol = aa ? aa->color : std::string("ByLayer");
+          CadDimWorldStrokes strokes;
+          if (!CadDimBuildWorldStrokes(ann, dsp, &strokes))
+            continue;
+          const ImU32 lineCol = dimVpCol(cmd.activeDimensionStyle.dimLineColor, layer, entCol, 0.1f, 0.1f, 0.12f);
+          const ImU32 extCol = dimVpCol(cmd.activeDimensionStyle.extLineColor, layer, entCol, 0.1f, 0.1f, 0.12f);
+          const ImU32 textCol = dimVpCol(cmd.activeDimensionStyle.textColor, layer, entCol, 0.08f, 0.08f, 0.1f);
+          const ImU32 arrowCol = dimVpCol(cmd.activeDimensionStyle.arrowColor, layer, entCol, 0.1f, 0.1f, 0.12f);
+          const float hWorld = CadAnnotationHeightWorld(ann, cmd.modelUnitsPerPlottedInch);
+          const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
+          DrawCadDimStrokesOnDrawList(sdl, ann, strokes, dimWts, fontPx, extCol, lineCol, arrowCol, textCol, vpFont,
+                                      dsp.arrowType);
+        }
+        if (isFloatVp && outCursorX && outCursorY) {
+          CadAnnotation draft{};
+          bool ok = false;
+          if (cmd.active == AppCommandState::Kind::DimLinear &&
+              cmd.dimPhase == AppCommandState::DimPhase::WaitDimLinePt)
+            ok = CadDimLinearBuildDraft(cmd, *outCursorX, *outCursorY, &draft);
+          else if (cmd.active == AppCommandState::Kind::DimAngular &&
+                   cmd.dimAngularPhase == AppCommandState::DimAngularPhase::WaitArc)
+            ok = CadDimAngularBuildDraft(cmd, *outCursorX, *outCursorY, &draft);
+          else if (cmd.active == AppCommandState::Kind::DimAligned &&
+                   cmd.dimPhase == AppCommandState::DimPhase::WaitDimLinePt)
+            ok = CadDimAlignedBuildDraft(cmd, *outCursorX, *outCursorY, &draft);
+          CadDimWorldStrokes dstrokes;
+          if (ok && CadDimBuildWorldStrokes(draft, dsp, &dstrokes)) {
+            const float hWorld = CadAnnotationHeightWorld(draft, cmd.modelUnitsPerPlottedInch);
+            const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
+            const ImU32 preview = IM_COL32(160, 220, 255, 180);
+            DrawCadDimStrokesOnDrawList(sdl, draft, dstrokes, dimWts, fontPx, preview, preview, preview, preview,
+                                        vpFont, dsp.arrowType);
+          }
+        }
+      }
       // Entity grips (REQ-036): squares at each selected entity's grip points; the grabbed grip is hot.
       if (isFloatVp) {
         const float gh = 4.f;
@@ -11731,49 +11833,26 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       auto drawPaperText = [&](const CadAnnotation& a, bool sel, bool hover, ImU32 baseCol) {
         // Paper-space dims are paper-inch entities (like text) but were falling through to the TEXT path and drawing as glyphs.
         // Render them as true dimensions so they are clipped to the sheet and scale with paper, not model.
-        if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
-          float sx1=0.f, sy1=0.f, sx2=0.f, sy2=0.f, tx=0.f, ty=0.f, nx=0.f, ny=0.f, meas=0.f;
-          if (!CadDimAnyGeometry(a, &sx1,&sy1,&sx2,&sy2,&tx,&ty,&nx,&ny,&meas)) return;
+        if (CadAnnotationIsDimension(a)) {
+          CadDimStrokeParams dsp;
+          dsp.modelUnitsPerPlottedInch = 1.f;
+          dsp.arrowSizeInches = cmd.activeDimensionStyle.arrowSizeInches;
+          dsp.arrowScale = 1.f;
+          dsp.arrowType = cmd.activeDimensionStyle.arrowType;
+          CadDimWorldStrokes strokes;
+          if (!CadDimBuildWorldStrokes(a, dsp, &strokes))
+            return;
           const ImU32 lineCol = sel ? kPaperSelCol : (hover ? kPaperHoverCol : baseCol);
-          constexpr ImU32 kDimTextCol = IM_COL32(248,250,252,255);
-          // Paper dims live in paper inches, so w2s is the projection (no Camera). Helpers mirror model dim path but via w2s.
-          auto ws = [&](float wx, float wy, ImVec2* o){ *o = w2s(wx,wy); };
-          // Dimension line width in screen px - already clipped to sheet via outer __clipValid.
+          constexpr ImU32 kDimTextCol = IM_COL32(248, 250, 252, 255);
           const float hPx = std::clamp(a.plottedHeightInches * pxPerPaperIn, 1.f, 8192.f);
-          const float fontPx = std::clamp(hPx, 6.f, 72.f); // paper dims: legible paper size, not world-scaled
-          const float extPx = 1.2f, dimLnPx = 1.2f;
-          const float gap = std::clamp(0.02f * meas, 0.001f, 0.08f);
-          const float over = std::clamp(0.02f * meas, 0.001f, 0.06f);
-          const float leg1 = std::hypot(sx1 - a.dimExt1X, sy1 - a.dimExt1Y);
-          const float u1 = leg1 > 1.e-8f ? gap / leg1 : 0.f;
-          const float ex1 = a.dimExt1X + (sx1 - a.dimExt1X) * u1;
-          const float ey1 = a.dimExt1Y + (sy1 - a.dimExt1Y) * u1;
-          const float leg2 = std::hypot(sx2 - a.dimExt2X, sy2 - a.dimExt2Y);
-          const float u2 = leg2 > 1.e-8f ? gap / leg2 : 0.f;
-          const float ex2 = a.dimExt2X + (sx2 - a.dimExt2X) * u2;
-          const float ey2 = a.dimExt2Y + (sy2 - a.dimExt2Y) * u2;
-          ImVec2 A{}, B{};
-          ws(ex1, ey1, &A); ws(sx1 + nx * over, sy1 + ny * over, &B); sdl->AddLine(A,B,lineCol,extPx);
-          ws(ex2, ey2, &A); ws(sx2 + nx * over, sy2 + ny * over, &B); sdl->AddLine(A,B,lineCol,extPx);
-          const float alenW = 0.08f; // paper-inch arrow approx
-          const float dlen = std::hypot(sx2 - sx1, sy2 - sy1);
-          if (dlen > 1.e-6f) {
-            const float ux = (sx2 - sx1)/dlen, uy = (sy2 - sy1)/dlen;
-            const float tipInset = std::clamp(0.02f, 0.001f, 0.22f*dlen);
-            const float tip1x = sx1 + ux*tipInset, tip1y = sy1 + uy*tipInset;
-            const float tip2x = sx2 - ux*tipInset, tip2y = sy2 - uy*tipInset;
-            ws(tip1x+ux*alenW, tip1y+uy*alenW, &A); ws(tip2x-ux*alenW, tip2y-uy*alenW, &B); sdl->AddLine(A,B,lineCol,dimLnPx);
-            const float hw = alenW*0.48f, ox = -uy*hw, oy = ux*hw;
-            ImVec2 t0{},t1{},t2{}; ws(tip1x,tip1y,&t0); ws(tip1x+ux*alenW+ox, tip1y+uy*alenW+oy,&t1); ws(tip1x+ux*alenW-ox, tip1y+uy*alenW-oy,&t2); sdl->AddTriangleFilled(t0,t1,t2,lineCol);
-            ws(tip2x,tip2y,&t0); ws(tip2x-ux*alenW+ox, tip2y-uy*alenW+oy,&t1); ws(tip2x-ux*alenW-ox, tip2y-uy*alenW-oy,&t2); sdl->AddTriangleFilled(t0,t1,t2,lineCol);
-          }
-          ImVec2 sp{}; ws(a.insX,a.insY,&sp);
-          ImVec2 spDir{}; ws(a.insX + std::cos(a.rotationRad)*0.05f, a.insY + std::sin(a.rotationRad)*0.05f, &spDir);
-          const float screenAng = std::atan2(spDir.y-sp.y, spDir.x-sp.x);
-          AddAlignedDimText(sdl, paperFont, fontPx, sp, screenAng, kDimTextCol, a.text.c_str());
-          if (sel) { // selection rect in paper inches via w2s
+          const float fontPx = std::clamp(hPx, 6.f, 72.f);
+          auto paperWts = [&](float wx, float wy) { return w2s(wx, wy); };
+          DrawCadDimStrokesOnDrawList(sdl, a, strokes, paperWts, fontPx, lineCol, lineCol, lineCol, kDimTextCol,
+                                      paperFont, dsp.arrowType);
+          if (sel) {
             ImVec2 sa = w2s(a.boxMinX, a.boxMinY), sb = w2s(a.boxMaxX, a.boxMaxY);
-            sdl->AddRect(ImVec2(std::min(sa.x,sb.x),std::min(sa.y,sb.y)), ImVec2(std::max(sa.x,sb.x),std::max(sa.y,sb.y)), kPaperSelCol, 0.f, 0, 1.f);
+            sdl->AddRect(ImVec2(std::min(sa.x, sb.x), std::min(sa.y, sb.y)),
+                         ImVec2(std::max(sa.x, sb.x), std::max(sa.y, sb.y)), kPaperSelCol, 0.f, 0, 1.f);
           }
           return;
         }
@@ -12330,6 +12409,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     auto drawAnnotationVisual = [&](const CadAnnotation& a, const EntityAttributes* attrPtr, ImU32 colFallback) {
       const float hWorld = CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch);
+      if (CadAnnotationIsDimension(a) && cmd.activeSpaceIndex >= 0)
+        return;
       if (a.kind == CadAnnotation::Kind::Text) {
         ImVec2 sp{};
         worldToScreen(a.insX, a.insY, &sp, a.insZ);
