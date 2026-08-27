@@ -14359,16 +14359,26 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     if (EntityHiddenInViewport(vpFilter, st.userEllAttrs, elIx))
       continue;
     const CadEllipse& el = st.userEllipses[elIx];
-    const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    // Quantize through the DXF text grid so this sweep agrees with the header sweep in
+    // DxfIo.cpp (issue #113). Without it a `ratio` like 0.3333333 loses ~3e-7 on write and
+    // moves the extents by ~1e-5; the header then describes a different drawing than the
+    // entity records, and the rebase on import shifts every coordinate by a float spacing.
+    const float qMajVx =
+        static_cast<float>(std::stod(std::to_string(static_cast<double>(el.majVx))));
+    const float qMajVy =
+        static_cast<float>(std::stod(std::to_string(static_cast<double>(el.majVy))));
+    const float qRatio =
+        static_cast<float>(std::stod(std::to_string(static_cast<double>(el.ratio))));
+    const double ma = std::hypot(static_cast<double>(qMajVx), static_cast<double>(qMajVy));
     if (ma < 1e-12)
       continue;
     constexpr int n = 48;
     constexpr double kTwoPi = 6.283185307179586;
-    const double ux = static_cast<double>(el.majVx) / ma;
-    const double uy = static_cast<double>(el.majVy) / ma;
+    const double ux = static_cast<double>(qMajVx) / ma;
+    const double uy = static_cast<double>(qMajVy) / ma;
     const double px = -uy;
     const double py = ux;
-    const double mb = ma * static_cast<double>(el.ratio);
+    const double mb = ma * static_cast<double>(qRatio);
     const double ecx = static_cast<double>(el.cx);
     const double ecy = static_cast<double>(el.cy);
     for (int i = 0; i < n; ++i) {

@@ -1,0 +1,57 @@
+# Issue #113 — a DXF export -> import -> export cycle is a fixed point on the FIRST cycle
+# for a drawing containing an ELLIPSE whose ratio or major-axis vector is not exact at six decimals.
+#
+# ## The defect
+#
+# `CadEllipse` holds `majVx`, `majVy`, and `ratio` as `float`. A DXF ELLIPSE states the
+# major-axis vector (groups 11/21) and the ratio (group 40) at six decimals. The writer
+# was sweeping the header extents (`$EXTMIN`/`$EXTMAX`/`$VPORT` view) from the IN-MEMORY
+# ellipse while the entity records described the ellipse the reader would rebuild from that
+# text. One file, two drawings — `$EXTMIN` y, `$EXTMAX` y and `$VPORT` group 40 moved by
+# ~1e-5 between the first and second export, then converged (B == C) because the stored
+# floats had settled to the quantized values.
+#
+# Groups 41/42 (the parameter range) are innocent: `CadEllipse` holds no range, so every
+# ellipse it can describe is a full one and the writer emits 41/42 as literal constants
+# `0.0` / `6.283185`. This is the same header-vs-body shape #111 fixed for arcs (DxfArcToWrite)
+# and TASK-083 fixed for polylines in #64, reached via a different field.
+#
+# ## What this pins
+#
+# The FIRST-cycle comparison, for an ellipse whose `ratio` and `majVy` do not survive six
+# decimals. `regression-63` does not catch it because its ellipse uses `ratio 0.5` at integer
+# picks — values that survive exactly.
+#
+# Fails before the fix at the first SAMEFILE — a vs b differ at byte 264 (6986 bytes each),
+# where `$EXTMIN` y, `$EXTMAX` y and `$VPORT` 40 each move by ~1e-5. The second-vs-third
+# comparison passes even before the fix, which is why the issue converges.
+
+NEW
+
+CMD ELLIPSE
+PICK 500.3333333 100.7777777
+PICK 540.1234567 100.9999999
+CMD 0.3333333
+
+CHECK ALL
+EXPECT ELLIPSES 1
+
+EXPORT DXF %OUT%/r113-a.dxf
+
+NEW
+IMPORT DXF %OUT%/r113-a.dxf
+CHECK ALL
+EXPECT ELLIPSES 1
+EXPORT DXF %OUT%/r113-b.dxf
+
+# The defect, and the acceptance condition of the issue: the FIRST cycle is already a fixed point.
+EXPECT SAMEFILE %OUT%/r113-a.dxf %OUT%/r113-b.dxf
+
+NEW
+IMPORT DXF %OUT%/r113-b.dxf
+CHECK ALL
+EXPECT ELLIPSES 1
+EXPORT DXF %OUT%/r113-c.dxf
+
+# A third cycle — converges even before the fix, so this is a real second check.
+EXPECT SAMEFILE %OUT%/r113-b.dxf %OUT%/r113-c.dxf
