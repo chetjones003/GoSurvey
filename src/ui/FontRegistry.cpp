@@ -143,6 +143,11 @@ namespace FontReg {
 void SetDefault(ImFont* f) { g_default = f; }
 
 ImFont* Resolve(const std::string& fontNameOrShx, bool bold, bool italic, bool* outRealBold, bool* outRealItalic) {
+  if (fontNameOrShx.empty()) {
+    if (outRealBold) *outRealBold = false;
+    if (outRealItalic) *outRealItalic = false;
+    return g_default;
+  }
   // Normalize: lowercase, drop extension, drop spaces.
   std::string key = Lower(fontNameOrShx);
   if (const auto dot = key.rfind('.'); dot != std::string::npos)
@@ -178,7 +183,9 @@ ImFont* Resolve(const std::string& fontNameOrShx, bool bold, bool italic, bool* 
     ImFontConfig cfg;
     cfg.OversampleH = 2;
     cfg.OversampleV = 1;
-    font = ImGui::GetIO().Fonts->AddFontFromFileTTF(path.c_str(), 0.0f, &cfg);  // 0 = dynamic size (1.92)
+    // Bake at the same pixel size as LoadApplicationFont (16). Size 0 (ImGui 1.92 dynamic fonts)
+    // mixed with AddText scaling made CAD faces look like the UI default on dimension labels.
+    font = ImGui::GetIO().Fonts->AddFontFromFileTTF(path.c_str(), 16.0f, &cfg);
   }
   CachedFont cf;
   cf.font = font;

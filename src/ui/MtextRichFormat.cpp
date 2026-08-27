@@ -1,6 +1,7 @@
 #include "MtextRichFormat.hpp"
 #include "FontRegistry.hpp"
 #include "ShxDraw.hpp"
+#include "CadFontName.hpp"
 
 #include <algorithm>
 #include <cctype>
@@ -10,18 +11,6 @@
 #include <vector>
 
 namespace {
-
-// True when a font name refers to an SHX stroke font. Deliberately a local copy of the same predicate
-// in CadUi.cpp (and PdfPlot.cpp): hoisting it into the Shx module would change that module's public
-// API, which is an architectural decision the Workshop may not take on its own. See the task log.
-bool IsShxFontName(const std::string& s) {
-  if (s.size() < 4)
-    return false;
-  std::string ext = s.substr(s.size() - 4);
-  for (char& c : ext)
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  return ext == ".shx";
-}
 
 struct RichRun {
   std::string text;
@@ -140,7 +129,7 @@ static float RichWrappedLayoutCore(ImDrawList* dl, ImFont* font, float fontPx, I
     // An SHX run draws from the real .shx as strokes, exactly as whole-object SHX text already does.
     // Without this branch a [[font:romans.shx]] run fell through to FontReg, which substitutes a
     // TrueType — so picking an SHX font for a *selection* silently produced Arial/Times/Consolas.
-    Shx::Font* sf = IsShxFontName(fam) ? Shx::Resolve(fam) : nullptr;
+    Shx::Font* sf = cadfont::IsShxFontName(fam) ? Shx::Resolve(fam) : nullptr;
     if (sf && !sf->valid())
       sf = nullptr;
     ImFont* rf = fam.empty() ? font : FontReg::Resolve(fam, r.bold, r.italic, &realBold, &realItalic);

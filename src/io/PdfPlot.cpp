@@ -6,6 +6,7 @@
 #include "MtextRichFormat.hpp"   // MtextRichFlattenToPlain (already used by DxfIo)
 #include "ColorContrast.hpp"     // background-adaptive white/black (REQ-048 refinement)
 #include "PlotFont.hpp"          // pure font-name/encoding helpers for TTF plot text (REQ-049)
+#include "CadFontName.hpp"
 #include "CadDimStroke.hpp"
 
 #include <cctype>
@@ -343,6 +344,32 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
           vpDimLabels.push_back(std::move(lab));
         }
       }
+      for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
+        const CadAnnotation& ann = st.cadAnnotations[ai];
+        if (CadAnnotationIsDimension(ann) || (ann.kind != CadAnnotation::Kind::Text && ann.kind != CadAnnotation::Kind::Mtext) ||
+            ann.text.empty())
+          continue;
+        const EntityAttributes* aa =
+            (ai < st.cadAnnotationAttrs.size()) ? &st.cadAnnotationAttrs[ai] : nullptr;
+        const std::string layer = aa ? (aa->layer.empty() ? std::string("0") : aa->layer) : std::string("0");
+        if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
+          continue;
+        float lpx = 0.f, lpy = 0.f;
+        const float wx = (ann.kind == CadAnnotation::Kind::Mtext) ? 0.5f * (ann.boxMinX + ann.boxMaxX) : ann.insX;
+        const float wy = (ann.kind == CadAnnotation::Kind::Mtext) ? 0.5f * (ann.boxMinY + ann.boxMaxY) : ann.insY;
+        m2p(static_cast<double>(wx) + oX, static_cast<double>(wy) + oY, &lpx, &lpy);
+        if (lpx < vx0 || lpx > vx1 || lpy < vy0 || lpy > vy1)
+          continue;
+        VpDimLabel lab;
+        lab.px = lpx;
+        lab.py = lpy;
+        lab.rot = ann.rotationRad;
+        lab.Hin = (std::max)(0.01f, (ann.plottedHeightInches * st.modelUnitsPerPlottedInch) / vp.safeScale());
+        lab.text = (ann.kind == CadAnnotation::Kind::Mtext) ? MtextRichFlattenToPlain(ann.text) : ann.text;
+        lab.fontFamily = ann.fontFamily;
+        lab.rgb = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");
+        vpDimLabels.push_back(std::move(lab));
+      }
       // Viewport border — only if the viewport's layer is plottable. Always black.
       if (plottable(vp.layer)) {
         curColor = 0x000000u;
@@ -503,12 +530,6 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
       // font module (ADR-022); TrueType families embed as real PDF text objects (or a logged base-14
       // substitute). Paper inches, +y up; single-line insertion = top-left (baseline one cap-height below);
       // MTEXT honors its attachment point (see below).
-      auto isShxName = [](const std::string& f) {
-        if (f.size() < 4) return false;
-        std::string e = f.substr(f.size() - 4);
-        for (char& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return e == ".shx";
-      };
       auto emitShxLine = [&](Shx::Font& font, const std::string& s, float baseX, float baseY, float H, float rot) {
         const float sc = H / font.capHeight();
         const float cr = std::cos(rot), sr = std::sin(rot);
@@ -578,10 +599,9 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
           continue;
         const uint32_t rgb = at ? sheetRgb(at->layer, at->color) : 0x000000u;
         const float H = a.plottedHeightInches < 0.01f ? 0.01f : a.plottedHeightInches;  // avoid win max macro
-        const bool shx = isShxName(a.fontFamily);
-        Shx::Font* sfont = shx ? Shx::Resolve(a.fontFamily) : nullptr;
-        if (shx && (!sfont || !sfont->valid()))
-          continue;
+        const bool wantShx = cadfont::PreferShxStrokes(a.fontFamily, a.text);
+        Shx::Font* sfont = wantShx ? Shx::Resolve(a.fontFamily) : nullptr;
+        const bool shx = wantShx && sfont && sfont->valid();
         FPDF_FONT tfont = shx ? nullptr : plotFont(a.fontFamily);  // embedded TTF (or base-14 substitute)
         if (!shx && !tfont)
           continue;
@@ -638,10 +658,9 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
           continue;
         curColor = lab.rgb;
         const float H = lab.Hin < 0.01f ? 0.01f : lab.Hin;
-        const bool shx = isShxName(lab.fontFamily);
-        Shx::Font* sfont = shx ? Shx::Resolve(lab.fontFamily) : nullptr;
-        if (shx && (!sfont || !sfont->valid()))
-          continue;
+        const bool wantShx = cadfont::PreferShxStrokes(lab.fontFamily, lab.text);
+        Shx::Font* sfont = wantShx ? Shx::Resolve(lab.fontFamily) : nullptr;
+        const bool shx = wantShx && sfont && sfont->valid();
         FPDF_FONT tfont = shx ? nullptr : plotFont(lab.fontFamily);
         if (!shx && !tfont)
           continue;
