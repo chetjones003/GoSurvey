@@ -1,0 +1,95 @@
+# Issue #115 — the font/text matrix, and REQ-050 sizing through viewports.
+#
+# The issue's Testing section asks for a drawing carrying as many text types as possible, inspected in
+# model space, in paper space, and through viewports at different scales. This transcript builds that
+# drawing and asserts the parts a transcript CAN hold; `tools/Make-FontDemoGs.ps1` stamps the font
+# families onto it and writes `samples/font-demo.gs` for the visual half.
+#
+# WHAT A TRANSCRIPT CAN AND CANNOT SEE HERE
+# The driver has no framebuffer and no font atlas (FontRegistry answers with the default font when the
+# atlas is locked), so which glyphs land on screen is not observable from here. What IS observable is
+# the arithmetic that decides how big they are — and that is where the regression this transcript
+# guards actually lived: viewport MTEXT was sized off the drawing's plot scale rather than the
+# viewport's, so the same object read at different sizes in model space and through a 1:50 viewport.
+# The unit tests in tests/CadFontNameTests.cpp hold that rule directly (MtextScaleThroughViewport);
+# this one holds the document those rules run against.
+
+NEW
+
+# --- model geometry the dimensions attach to -------------------------------------------------------
+CMD LINE
+CMD 0,0
+CMD 200,0
+ESC
+
+CMD LINE
+CMD 0,120
+CMD 200,180
+ESC
+
+# --- one of each dimension kind (AC-4: LINEAR, ALIGNED, ANGULAR) -----------------------------------
+CMD DIMLINEAR
+CMD 0,0
+CMD 200,0
+CMD 100,-40
+ESC
+
+CMD DIMALIGNED
+CMD 0,120
+CMD 200,180
+CMD 100,220
+ESC
+
+# DIMANGULAR is deliberately ABSENT, and its absence is the finding rather than an oversight.
+# An angular dimension does not survive being saved: GsIo's AnnotationKindTag has no DimAngular case,
+# so it falls to `default: return "text"`, and the angular geometry (dimAngVertexX/Y) is never
+# serialized at all. Placing one here would put a silently-corrupted TEXT annotation into a sample
+# drawing, which is worse than leaving it out. Reproduced minimally and written up separately; once
+# that is fixed, add a DIMANGULAR back here and #115's AC-4 can be verified in full.
+
+# --- single-line TEXT and MTEXT in model space -----------------------------------------------------
+CMD TEXT
+CMD 0,-80
+CMD 8
+CMD 0
+CMD MODEL TEXT
+ESC
+
+CMD MTEXT
+CMD 0,-140
+CMD 200,-100
+CMD MODEL MTEXT
+ESC
+
+EXPECT LINES 2
+CHECK ALL
+SAVEAS %OUT%/font-matrix-model.gs
+
+# --- paper space: native text, and TWO viewports at DIFFERENT scales over the same model -----------
+# The two viewports are deliberately different shapes, so zoom-extents gives each a different
+# scaleModelPerPaperIn. That difference is the whole point: under REQ-050 the model MTEXT seen through
+# them must keep a constant PLOTTED height, which means its model height differs per viewport.
+SPACE PAPER
+
+CMD TEXT
+CMD 1,10
+CMD 0.25
+CMD 0
+CMD PAPER TEXT
+ESC
+
+VIEWPORT 1 1 9 5
+CMD MSPACE
+CMD ZOOMEXTENTS
+EXPECT LOG Zoom extents applied in viewport
+CHECK ALL
+
+CMD PSPACE
+VIEWPORT 1 6 5 9
+CMD MSPACE
+CMD ZOOMEXTENTS
+CHECK ALL
+CMD PSPACE
+
+CHECK ALL
+SAVEAS %OUT%/font-matrix-full.gs

@@ -66,3 +66,57 @@ TEST_CASE("Model TEXT maps through a viewport like dimension labels", "[cadfont]
   REQUIRE(py == Catch::Approx(5.f));
   REQUIRE(t.fontFamily == "Arial");
 }
+
+// REQ-050. These hold the rule the viewport text overlay applies, via the helper it calls — the
+// previous "through viewport" case only asserted ModelToPaperIn and that a local struct still had the
+// fontFamily it was given, so it passed whether or not the overlay used either one.
+TEST_CASE("REQ-050: plain MTEXT through a viewport is sized by THAT viewport's scale", "[cadfont]") {
+  Viewport vp;
+  vp.scaleModelPerPaperIn = 50.f;  // 1" = 50'
+  CadAnnotation m;
+  m.kind = CadAnnotation::Kind::Mtext;
+  m.plottedHeightInches = 0.25f;
+
+  const float drawingMup = 100.f;  // deliberately NOT the viewport's scale
+  REQUIRE(MtextScaleThroughViewport(m, vp, drawingMup) == Catch::Approx(50.f));
+
+  // The point of the requirement: plotted height on the sheet is constant across viewport scales,
+  // which means the MODEL height must track the viewport scale.
+  Viewport vp100;
+  vp100.scaleModelPerPaperIn = 100.f;
+  const float h50 = m.plottedHeightInches * MtextScaleThroughViewport(m, vp, drawingMup);
+  const float h100 = m.plottedHeightInches * MtextScaleThroughViewport(m, vp100, drawingMup);
+  REQUIRE(h50 == Catch::Approx(12.5f));
+  REQUIRE(h100 == Catch::Approx(25.f));
+  REQUIRE(h100 == Catch::Approx(h50 * 2.f));
+}
+
+TEST_CASE("REQ-050: survey-point label MTEXT keeps the drawing scale through a viewport", "[cadfont]") {
+  Viewport vp;
+  vp.scaleModelPerPaperIn = 50.f;
+  CadAnnotation label;
+  label.kind = CadAnnotation::Kind::Mtext;
+  label.plottedHeightInches = 0.25f;
+  label.surveyPointLabelForId = 446;  // a survey label, not plain MTEXT
+
+  const float drawingMup = 100.f;
+  REQUIRE(MtextScaleThroughViewport(label, vp, drawingMup) == Catch::Approx(drawingMup));
+
+  // And it is genuinely the exclusion doing the work, not a coincidence of the numbers: the same
+  // annotation without the survey link takes the viewport's scale instead.
+  CadAnnotation plain = label;
+  plain.surveyPointLabelForId = -1;
+  REQUIRE(MtextScaleThroughViewport(plain, vp, drawingMup) == Catch::Approx(50.f));
+}
+
+TEST_CASE("REQ-050: a degenerate viewport scale cannot produce a zero or negative text height",
+          "[cadfont]") {
+  CadAnnotation m;
+  m.kind = CadAnnotation::Kind::Mtext;
+  m.plottedHeightInches = 0.25f;
+  Viewport bad;
+  bad.scaleModelPerPaperIn = 0.f;  // a hand-edited .gs can carry this
+  REQUIRE(MtextScaleThroughViewport(m, bad, 100.f) > 0.f);
+  bad.scaleModelPerPaperIn = -25.f;
+  REQUIRE(MtextScaleThroughViewport(m, bad, 100.f) > 0.f);
+}

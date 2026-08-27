@@ -11568,6 +11568,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             continue;
           const EntityAttributes* aa =
               (ai < cmd.cadAnnotationAttrs.size()) ? &cmd.cadAnnotationAttrs[ai] : nullptr;
+          // Object isolation (REQ-084 (d)) has to be gated per-overlay, because annotations are drawn
+          // here rather than by the GL pass — the model overlay's own annotation loop does exactly this.
+          // Without it an isolated-away annotation stayed visible through every layout viewport, which is
+          // the one place a hidden object is least likely to be noticed.
+          if (aa && CadEntityIdHidden(&cmd.hiddenEntityIds, aa->id))
+            continue;
           const std::string layer = aa ? (aa->layer.empty() ? std::string("0") : aa->layer) : std::string("0");
           if (IsLayerFrozenInViewport(vp, layer))
             continue;
@@ -11580,7 +11586,13 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           } else if (ann.kind == CadAnnotation::Kind::Mtext) {
             const ImVec2 tl = m2s(static_cast<double>(ann.boxMinX) + oX, static_cast<double>(ann.boxMaxY) + oY);
             const ImVec2 brc = m2s(static_cast<double>(ann.boxMaxX) + oX, static_cast<double>(ann.boxMinY) + oY);
-            const float hWorld = CadAnnotationHeightWorld(ann, cmd.modelUnitsPerPlottedInch);
+            // REQ-050: plain MTEXT is sized off the scale of the viewport it is drawn THROUGH, not the
+            // drawing's plot scale, so its plotted height stays constant on the sheet whatever that
+            // viewport's scale is. Using cmd.modelUnitsPerPlottedInch here made the same object read at
+            // different sizes in model space and through a 1:50 vs a 1:100 viewport. The rule (and the
+            // survey-label exclusion) lives in MtextScaleThroughViewport so a test can hold it.
+            const float mtextMup = MtextScaleThroughViewport(ann, vp, cmd.modelUnitsPerPlottedInch);
+            const float hWorld = CadAnnotationHeightWorld(ann, mtextMup);
             const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
             const int acol = (ann.mtextAttach - 1) % 3;
             const int arow = (ann.mtextAttach - 1) / 3;
@@ -11656,6 +11668,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             continue;
           const EntityAttributes* aa =
               (ai < cmd.cadAnnotationAttrs.size()) ? &cmd.cadAnnotationAttrs[ai] : nullptr;
+          // Object isolation (REQ-084 (d)) has to be gated per-overlay, because annotations are drawn
+          // here rather than by the GL pass — the model overlay's own annotation loop does exactly this.
+          // Without it an isolated-away annotation stayed visible through every layout viewport, which is
+          // the one place a hidden object is least likely to be noticed.
+          if (aa && CadEntityIdHidden(&cmd.hiddenEntityIds, aa->id))
+            continue;
           const std::string layer = aa ? (aa->layer.empty() ? std::string("0") : aa->layer) : std::string("0");
           if (IsLayerFrozenInViewport(vp, layer))
             continue;
