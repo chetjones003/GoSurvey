@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# dev/help — list the developer commands.
+source "$(dirname "$0")/_common.sh" 2>/dev/null || true
+
+cat <<'EOF'
+GoSurvey Development Commands  (WSL/Linux -> Windows adapter)
+
+GoSurvey is a Windows-native app (MSVC + CMake + Ninja). These wrappers let an
+agent running under WSL/Linux/Git Bash drive the existing Windows build, test
+and GitHub tooling. They do not replace any of it.
+
+Build & test  (bridge into Windows: cmd.exe -> build.bat -> CMake/MSVC/Ninja)
+  ./dev/build [cmake-build args]   Canonical release build (build.bat)
+  ./dev/clean [--all]              Delete build tree(s); build.bat re-configures
+  ./dev/test  [ctest args]         Build test targets, then ctest --output-on-failure
+
+Repository  (native Linux git — no Windows tooling)
+  ./dev/status                     Branch, working tree, last commit, build state
+
+GitHub  (bridge into Windows: the user's existing gh.exe + its auth)
+  ./dev/gh <args>                  Pass-through to Windows gh.exe
+  ./dev/issue [list|view N|...]    Wrapper over `gh issue` (default: list)
+  ./dev/pr    [list|view N|...]    Wrapper over `gh pr` (default: list)
+
+Escape hatch  (bridge into Windows)
+  ./dev/win <cmd ...>              Run an arbitrary Windows command via cmd.exe
+  ./dev/win --ps <cmd ...>         ... via PowerShell instead
+
+  ./dev/help                       Show this help
+
+Canonical commands this layer wraps:
+  build : cmake --preset ninja-release  (first run)  +  cmake --build build
+  test  : ctest --test-dir build --output-on-failure
+  clean : rm -rf build/
+EOF

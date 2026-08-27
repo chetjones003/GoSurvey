@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# dev/issue — convenience wrapper over `gh.exe issue`.
+#
+#   ./dev/issue                 # list open issues (default)
+#   ./dev/issue list [...]      # gh issue list
+#   ./dev/issue view 123 [...]  # gh issue view 123
+#   ./dev/issue <anything>      # forwarded to `gh issue <anything>`
+source "$(dirname "$0")/_common.sh"
+require_gh_exe
+
+if [ "$#" -eq 0 ]; then
+  exec "$GH_EXE" issue list
+fi
+exec "$GH_EXE" issue "$@"

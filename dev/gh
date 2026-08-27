@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# dev/gh — pass-through to the user's existing Windows GitHub CLI (gh.exe).
+#
+# All arguments are forwarded unchanged; stdout, stderr and the exit code are
+# preserved. Authentication and configuration come from the Windows gh.exe
+# (`gh auth status` on Windows). No Linux gh is installed or substituted.
+#
+#   ./dev/gh --version
+#   ./dev/gh issue list
+#   ./dev/gh pr view 123 --json state,title
+source "$(dirname "$0")/_common.sh"
+
+require_gh_exe
+# GH_* env vars (if the caller set any) pass through naturally.
+exec "$GH_EXE" "$@"

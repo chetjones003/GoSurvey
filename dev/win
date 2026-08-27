@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# dev/win — controlled bridge for running a Windows command from WSL/Linux.
+#
+# Runs the given command line through Windows cmd.exe, from the Windows repo
+# root, forwarding the exit code. Use it for one-off Windows tooling that the
+# other dev/ commands do not already cover.
+#
+#   ./dev/win cmake --version
+#   ./dev/win ctest --test-dir build -N          # list tests without running
+#   ./dev/win "build\GoSurvey.exe --version"
+#   ./dev/win --ps  "Get-ChildItem installer\Output"   # run via PowerShell instead
+#
+# Notes:
+#   * The command runs in cmd.exe (or PowerShell with --ps), NOT bash — use
+#     Windows quoting/backslashes.
+#   * CWD is the Windows repo root regardless of where you invoke it.
+#   * This does not load the MSVC environment; use ./dev/build for compiler work.
+source "$(dirname "$0")/_common.sh"
+
+[ "$#" -eq 0 ] && die "usage: ./dev/win <windows command ...>   (or --ps <powershell ...>)"
+
+if [ "$1" = "--ps" ]; then
+  shift
+  PS_EXE="$(find_win_exe powershell.exe \
+      "$WIN_MNT/Windows/System32/WindowsPowerShell/v1.0/powershell.exe")" \
+    || die "Windows PowerShell (powershell.exe) was not found."
+  cd "$REPO_ROOT"   # PowerShell interop inherits this as its location
+  MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL='*' \
+    exec "$PS_EXE" -NoProfile -Command "$*"
+fi
+
+win_cmd "$*"
