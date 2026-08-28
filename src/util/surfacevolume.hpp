@@ -15,6 +15,7 @@
 /// `TinElevationAt`'s O(triangles) scan once per sample point.
 
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 /// A per-TIN spatial index: triangles bucketed by their 2D (plan) bounding box into a uniform grid,
@@ -81,9 +82,14 @@ struct SurfaceVolumeResult {
 /// Both outputs, when requested, contain geometry ONLY for cells covered by BOTH surfaces — "the
 /// cut/fill map... shows nothing outside the common area" (REQ-073) is then a property of what is
 /// generated, not of what the renderer remembers to clip.
+/// \param clipRingXy  when non-null and at least 3 vertices, sample cells whose **centres** fall
+///        outside this closed plan ring contribute neither volume nor common area (REQ-131). Coordinates
+///        must match \p baseVertsXyz / \p compVertsXyz (TIN local XY). Null or a short ring is "no clip"
+///        — today's full-overlap behaviour.
 [[nodiscard]] SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<float>& baseVertsXyz,
                                                        const std::vector<std::uint32_t>& baseIndices,
                                                        const std::vector<float>& compVertsXyz,
                                                        const std::vector<std::uint32_t>& compIndices,
                                                        std::vector<float>* outCutTrianglesXyz = nullptr,
-                                                       std::vector<float>* outFillTrianglesXyz = nullptr);
+                                                       std::vector<float>* outFillTrianglesXyz = nullptr,
+                                                       const std::vector<std::pair<double, double>>* clipRingXy = nullptr);

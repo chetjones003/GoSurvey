@@ -31,6 +31,13 @@ CMD VOLUMES Base, Twin
 EXPECT LOG "cut 0.0000 ft3, fill 0.0000 ft3, net 0.0000 ft3, common area 229208.2107 ft2"
 CHECK ALL
 
+# REQ-131: omitting the clip keeps full overlap; a nonsense id is refused; a missing id is not a volume.
+CMD VOLUMES Base, Twin, nope
+EXPECT LOG "clip entity id must be an integer"
+CMD VOLUMES Base, Twin, 999999
+EXPECT LOG "clip must be a closed polyline"
+CHECK ALL
+
 # --- literally comparing a surface with itself (REQ-073's own wording) ------------------------------
 CMD VOLUMES Base, Base
 EXPECT LOG ""Base" (base) vs "Base" (comparison): cut 0.0000 ft3, fill 0.0000 ft3, net 0.0000 ft3"

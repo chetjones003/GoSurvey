@@ -4958,7 +4958,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-128 | util/Domain/IO | done (TASK-125) — `TinConstraintTests [req128]`; DESIGNATEBOUNDARY CLIP; `.gs` `"clip"` | accepted |
 | REQ-129 | Domain/Commands/IO | done (TASK-125) — `DESIGNATECONTOUR` / `dcon`; `contourSources` in `.gs` | accepted |
 | REQ-130 | util/Renderer/UI/IO | done (TASK-125) — `SurfaceAnalysisTests [req130]`; SURFSTYLE ANALYSIS direction | accepted |
-| REQ-131 | util/Commands | planned — Phase 2; 5 ft × 1 acre = 21,780 ft³ within 1% | accepted |
+| REQ-131 | util/Commands | done (TASK-126) — `SurfaceVolumeTests [req131]`; VOLUMES optional clip id; VOLDASH CLIP | accepted |
 | REQ-132 | util/Commands | planned — Phase 3; synthetic basin fixtures | accepted |
 | REQ-133 | util/Commands | planned — Phase 3; water-drop on plane and pit | accepted |
 | REQ-134 | util/Commands | planned — Phase 3; catchment area of designed basin | accepted |

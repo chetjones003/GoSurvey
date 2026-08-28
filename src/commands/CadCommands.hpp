@@ -1909,6 +1909,7 @@ struct AppCommandState {
   struct VolumeDashboardAsync {
     std::uint64_t baseSurfaceId = 0;
     std::uint64_t comparisonSurfaceId = 0;
+    std::uint64_t clipEntityId = 0;
     /// Strong references to the exact triangulations this job computes against — captured on the UI
     /// thread at dispatch, read only on the worker thread. Safe with no locking because a `CadTin` is
     /// immutable once built and only ever REPLACED, never written through (architecture §11.5): the
@@ -1916,6 +1917,8 @@ struct AppCommandState {
     /// surface's OWN pointer while this runs.
     std::shared_ptr<const CadTin> tinBase;
     std::shared_ptr<const CadTin> tinComparison;
+    /// REQ-131 clip ring in TIN-local XY, captured at dispatch. Empty = no clip.
+    std::vector<std::pair<double, double>> clipRingXy;
     /// Whether the cut/fill map was wanted AT DISPATCH — captured so toggling the map on after a
     /// mapless result already landed is detected as staleness (the landed result has no map to show).
     bool wantMap = false;
@@ -1949,6 +1952,8 @@ struct AppCommandState {
     /// \ref SurfaceRebuildAsync keys on id rather than a name that a rename could orphan.
     std::uint64_t baseSurfaceId = 0;
     std::uint64_t comparisonSurfaceId = 0;
+    /// 0 = no clip (full overlap). Otherwise a closed polyline's entity id (REQ-131).
+    std::uint64_t clipEntityId = 0;
 
     /// The last landed result, and what it was computed FOR — a revision plus the two ids, so a
     /// change to EITHER a surface's triangulation OR the panel's own pick is detected as staleness by
@@ -1959,6 +1964,7 @@ struct AppCommandState {
     std::uint32_t resultForRevision = 0xFFFFFFFFu;
     std::uint64_t resultForBaseSurfaceId = 0;
     std::uint64_t resultForComparisonSurfaceId = 0;
+    std::uint64_t resultForClipEntityId = 0;
     bool resultHasMap = false;  ///< was `showMap` on when `lastResult` was computed?
     /// REQ-073's cut/fill map for `lastResult`, `GL_TRIANGLES` layout — empty unless `resultHasMap`.
     std::vector<float> mapCutTrianglesXyz;

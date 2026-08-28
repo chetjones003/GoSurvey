@@ -31,6 +31,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cstdlib>
 #include <functional>
 #include <array>
 #include <cctype>
@@ -2086,6 +2087,26 @@ bool ResolveDefinitionChain(const AppCommandState& st, std::uint64_t id, bool re
   return false;  // any other entity kind is not a valid breakline/boundary source
 }
 
+/// REQ-131: closed polyline as a volume clip, in TIN-local XY. \p entityId 0 means no clip (success, empty).
+bool VolumeClipRingLocalXy(const AppCommandState& st, std::uint64_t entityId,
+                           std::vector<std::pair<double, double>>* out, std::string* err) {
+  if (!out)
+    return false;
+  out->clear();
+  if (entityId == 0)
+    return true;
+  ResolvedChain chain;
+  if (!ResolveDefinitionChain(st, entityId, /*requireClosed=*/true, chain) || chain.verts.size() < 3) {
+    if (err)
+      *err = "clip must be a closed polyline";
+    return false;
+  }
+  out->reserve(chain.verts.size());
+  for (const auto& v : chain.verts)
+    out->push_back({v[0] - st.worldDocumentOriginX, v[1] - st.worldDocumentOriginY});
+  return true;
+}
+
 /// Appends one \ref TinConstraint per edge of \p chain — consecutive vertex pairs, plus the closing
 /// edge (last→first) when \p forceClosed or the source itself is closed.
 void AppendChainConstraints(const ResolvedChain& chain, bool forceClosed, std::vector<TinConstraint>& out) {
@@ -2527,12 +2548,14 @@ void TickVolumeDashboard(AppCommandState& st) {
     // own "the panel's surface pick changed... discarded"). Either failing means discard — the panel
     // simply looks stale again and redispatches below on this same tick.
     if (st.cadGpuRevision == dash.job->generation && dash.baseSurfaceId == dash.job->baseSurfaceId &&
-        dash.comparisonSurfaceId == dash.job->comparisonSurfaceId) {
+        dash.comparisonSurfaceId == dash.job->comparisonSurfaceId &&
+        dash.clipEntityId == dash.job->clipEntityId) {
       dash.lastResult = dash.job->result;
       dash.hasResult = true;
       dash.resultForRevision = dash.job->generation;
       dash.resultForBaseSurfaceId = dash.job->baseSurfaceId;
       dash.resultForComparisonSurfaceId = dash.job->comparisonSurfaceId;
+      dash.resultForClipEntityId = dash.job->clipEntityId;
       dash.resultHasMap = dash.job->wantMap;
       dash.mapCutTrianglesXyz = std::move(dash.job->cutTrianglesXyz);
       dash.mapFillTrianglesXyz = std::move(dash.job->fillTrianglesXyz);
@@ -2559,14 +2582,22 @@ void TickVolumeDashboard(AppCommandState& st) {
   if (dash.hasResult && dash.resultForRevision == st.cadGpuRevision &&
       dash.resultForBaseSurfaceId == dash.baseSurfaceId &&
       dash.resultForComparisonSurfaceId == dash.comparisonSurfaceId &&
+      dash.resultForClipEntityId == dash.clipEntityId &&
       (dash.resultHasMap || !dash.showMap))
     return;
+
+  std::vector<std::pair<double, double>> clipRing;
+  std::string clipErr;
+  if (!VolumeClipRingLocalXy(st, dash.clipEntityId, &clipRing, &clipErr))
+    return;  // polyline gone; the panel reports it
 
   auto job = std::make_unique<DashJob>();
   job->baseSurfaceId = dash.baseSurfaceId;
   job->comparisonSurfaceId = dash.comparisonSurfaceId;
+  job->clipEntityId = dash.clipEntityId;
   job->tinBase = baseSurf.tin;              // strong refs: architecture §11.5, see the struct's note
   job->tinComparison = compSurf.tin;
+  job->clipRingXy = std::move(clipRing);
   job->wantMap = dash.showMap;
   job->generation = st.cadGpuRevision;
   DashJob* jobPtr = job.get();
@@ -2575,12 +2606,12 @@ void TickVolumeDashboard(AppCommandState& st) {
       jobPtr->done.store(true, std::memory_order_release);
       return;
     }
-    // Pure, and touches no AppCommandState (architecture §8 rule 1) — everything it needs was
-    // resolved on the UI thread above and captured by value/shared_ptr on the job itself.
+    const std::vector<std::pair<double, double>>* clip =
+        jobPtr->clipRingXy.size() >= 3 ? &jobPtr->clipRingXy : nullptr;
     jobPtr->result = ComputeSurfaceVolume(
         jobPtr->tinBase->vertsXyz, jobPtr->tinBase->indices, jobPtr->tinComparison->vertsXyz,
         jobPtr->tinComparison->indices, jobPtr->wantMap ? &jobPtr->cutTrianglesXyz : nullptr,
-        jobPtr->wantMap ? &jobPtr->fillTrianglesXyz : nullptr);
+        jobPtr->wantMap ? &jobPtr->fillTrianglesXyz : nullptr, clip);
     jobPtr->done.store(true, std::memory_order_release);
   });
   dash.job = std::move(job);
@@ -3214,8 +3245,8 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
 /// than being rejected as a no-op the way some other entity-vs-itself commands elsewhere are.
 void ExecuteVolumesCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitCommaFields(args);
-  if (f.size() != 2 || f[0].empty() || f[1].empty()) {
-    log.push_back("VOLUMES — usage: VOLUMES <base surface>, <comparison surface>.");
+  if (f.size() < 2 || f.size() > 3 || f[0].empty() || f[1].empty()) {
+    log.push_back("VOLUMES — usage: VOLUMES <base surface>, <comparison surface>[, <clip entity id>].");
     return;
   }
   const int baseIx = FindSurfaceIndex(st, f[0]);
@@ -3236,14 +3267,36 @@ void ExecuteVolumesCommand(AppCommandState& st, const std::string& args, std::ve
     return;
   }
 
+  std::vector<std::pair<double, double>> clipRing;
+  const std::vector<std::pair<double, double>>* clipPtr = nullptr;
+  if (f.size() == 3) {
+    char* end = nullptr;
+    const unsigned long long raw = std::strtoull(f[2].c_str(), &end, 10);
+    if (f[2].empty() || end == f[2].c_str() || *end != '\0') {
+      log.push_back("VOLUMES — clip entity id must be an integer, not \"" + f[2] + "\".");
+      return;
+    }
+    std::string err;
+    if (!VolumeClipRingLocalXy(st, static_cast<std::uint64_t>(raw), &clipRing, &err)) {
+      log.push_back("VOLUMES — " + err + ".");
+      return;
+    }
+    if (clipRing.size() >= 3)
+      clipPtr = &clipRing;
+  }
+
   const SurfaceVolumeResult r =
-      ComputeSurfaceVolume(baseTin->vertsXyz, baseTin->indices, compTin->vertsXyz, compTin->indices);
+      ComputeSurfaceVolume(baseTin->vertsXyz, baseTin->indices, compTin->vertsXyz, compTin->indices,
+                           nullptr, nullptr, clipPtr);
   const int p = st.displayLinearPrecision;
   if (!r.overlapped) {
-    // REQ-073: "report zero volume and say so, rather than reporting a number derived from no
-    // common area" — the zeros below are the true computed result, not a placeholder for a refusal.
-    log.push_back("VOLUMES — \"" + f[0] + "\" and \"" + f[1] + "\" have no common area. Cut 0, fill "
-                  "0, net 0.");
+    if (clipPtr) {
+      log.push_back("VOLUMES — \"" + f[0] + "\" and \"" + f[1] +
+                    "\" have no overlap inside the clip. Cut 0, fill 0, net 0.");
+    } else {
+      log.push_back("VOLUMES — \"" + f[0] + "\" and \"" + f[1] + "\" have no common area. Cut 0, fill "
+                    "0, net 0.");
+    }
     return;
   }
   char buf[384];
@@ -3288,7 +3341,7 @@ void ExecuteVolDashCommand(AppCommandState& st, const std::string& args, std::ve
 
   const auto usage = [&]() {
     log.push_back("VOLDASH — usage: VOLDASH (opens the panel) | CLOSE | "
-                  "PICK <base surface>, <comparison surface> | MAP on|off | RECOMPUTE");
+                  "PICK <base surface>, <comparison surface> | CLIP <entity id>|none | MAP on|off | RECOMPUTE");
   };
 
   if (verb == "close") {
@@ -3319,6 +3372,30 @@ void ExecuteVolDashCommand(AppCommandState& st, const std::string& args, std::ve
     return;
   }
 
+  if (verb == "clip") {
+    const std::string tok = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(rest));
+    if (tok == "none" || tok.empty()) {
+      dash.clipEntityId = 0;
+      log.push_back("VOLDASH — clip cleared.");
+      return;
+    }
+    char* end = nullptr;
+    const unsigned long long raw = std::strtoull(rest.c_str(), &end, 10);
+    if (rest.empty() || end == rest.c_str() || *end != '\0') {
+      log.push_back("VOLDASH — clip must be an entity id or none, not \"" + rest + "\".");
+      return;
+    }
+    std::vector<std::pair<double, double>> ring;
+    std::string err;
+    if (!VolumeClipRingLocalXy(st, static_cast<std::uint64_t>(raw), &ring, &err)) {
+      log.push_back("VOLDASH — " + err + ".");
+      return;
+    }
+    dash.clipEntityId = static_cast<std::uint64_t>(raw);
+    log.push_back("VOLDASH — clip entity " + rest + ".");
+    return;
+  }
+
   if (verb == "map") {
     const std::string onOff = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(rest));
     if (onOff != "on" && onOff != "off") {
@@ -3346,13 +3423,23 @@ void ExecuteVolDashCommand(AppCommandState& st, const std::string& args, std::ve
         st.cadSurfaces[static_cast<size_t>(FindSurfaceIndexById(st, dash.comparisonSurfaceId))];
     dash.mapCutTrianglesXyz.clear();
     dash.mapFillTrianglesXyz.clear();
+    std::vector<std::pair<double, double>> clipRing;
+    std::string clipErr;
+    if (!VolumeClipRingLocalXy(st, dash.clipEntityId, &clipRing, &clipErr)) {
+      log.push_back("VOLDASH — " + clipErr + ".");
+      return;
+    }
+    const std::vector<std::pair<double, double>>* clipPtr =
+        clipRing.size() >= 3 ? &clipRing : nullptr;
     dash.lastResult = ComputeSurfaceVolume(
         baseSurf.tin->vertsXyz, baseSurf.tin->indices, compSurf.tin->vertsXyz, compSurf.tin->indices,
-        dash.showMap ? &dash.mapCutTrianglesXyz : nullptr, dash.showMap ? &dash.mapFillTrianglesXyz : nullptr);
+        dash.showMap ? &dash.mapCutTrianglesXyz : nullptr, dash.showMap ? &dash.mapFillTrianglesXyz : nullptr,
+        clipPtr);
     dash.hasResult = true;
     dash.resultForRevision = st.cadGpuRevision;
     dash.resultForBaseSurfaceId = dash.baseSurfaceId;
     dash.resultForComparisonSurfaceId = dash.comparisonSurfaceId;
+    dash.resultForClipEntityId = dash.clipEntityId;
     dash.resultHasMap = dash.showMap;
     const int p = st.displayLinearPrecision;
     log.push_back("VOLDASH — cut " + FormatLinear(dash.lastResult.cutFt3, p) + " ft3, fill " +
@@ -4306,7 +4393,7 @@ const CmdEntry kRegistry[] = {
     {"style", "st, ddstyle", "Text style manager: create / edit named text styles"},
     {"surfstyle", "ss", "Surface style editor: contours, triangles, border (REQ-070)"},
     {"extract", "", "Bake a surface's displayed contours into polylines: EXTRACT <surface>[, <layer>]"},
-    {"volumes", "vol", "Cut/fill/net volume between two surfaces: VOLUMES <base>, <comparison> (REQ-073)"},
+    {"volumes", "vol", "Cut/fill/net volume between two surfaces: VOLUMES <base>, <comparison>[, <clip id>]"},
     {"voldash", "", "Volume Dashboard: live cut/fill/net panel between two surfaces (REQ-073)"},
     {"units", "un, ddunits", "Drawing units: display precision & angle format"},
     {"pdfattach", "pa", "Attach a PDF underlay"},

@@ -139,7 +139,8 @@ SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<float>& baseVertsXyz,
                                          const std::vector<float>& compVertsXyz,
                                          const std::vector<std::uint32_t>& compIndices,
                                          std::vector<float>* outCutTrianglesXyz,
-                                         std::vector<float>* outFillTrianglesXyz) {
+                                         std::vector<float>* outFillTrianglesXyz,
+                                         const std::vector<std::pair<double, double>>* clipRingXy) {
   SurfaceVolumeResult out;
   if (baseIndices.size() < 3 || compIndices.size() < 3 || baseVertsXyz.size() < 9 || compVertsXyz.size() < 9)
     return out;  // no triangulation on one side: nothing to compare, reported as no overlap
@@ -151,12 +152,31 @@ SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<float>& baseVertsXyz,
 
   // Fast disjoint check: two surfaces whose extents do not even overlap cost nothing beyond this —
   // no index built, no sample taken (REQ-073: "report zero volume and say so").
-  const double ixMin = std::max(a.minX, b.minX);
-  const double ixMax = std::min(a.maxX, b.maxX);
-  const double iyMin = std::max(a.minY, b.minY);
-  const double iyMax = std::min(a.maxY, b.maxY);
-  if (ixMin >= ixMax || iyMin >= iyMax)
+  const double ixMin0 = std::max(a.minX, b.minX);
+  const double ixMax0 = std::min(a.maxX, b.maxX);
+  const double iyMin0 = std::max(a.minY, b.minY);
+  const double iyMax0 = std::min(a.maxY, b.maxY);
+  if (ixMin0 >= ixMax0 || iyMin0 >= iyMax0)
     return out;  // overlapped stays false
+
+  const bool haveClip = clipRingXy && clipRingXy->size() >= 3;
+  double ixMin = ixMin0, ixMax = ixMax0, iyMin = iyMin0, iyMax = iyMax0;
+  if (haveClip) {
+    double cMinX = (*clipRingXy)[0].first, cMaxX = cMinX;
+    double cMinY = (*clipRingXy)[0].second, cMaxY = cMinY;
+    for (const auto& p : *clipRingXy) {
+      cMinX = std::min(cMinX, p.first);
+      cMaxX = std::max(cMaxX, p.first);
+      cMinY = std::min(cMinY, p.second);
+      cMaxY = std::max(cMaxY, p.second);
+    }
+    ixMin = std::max(ixMin, cMinX);
+    ixMax = std::min(ixMax, cMaxX);
+    iyMin = std::max(iyMin, cMinY);
+    iyMax = std::min(iyMax, cMaxY);
+    if (ixMin >= ixMax || iyMin >= iyMax)
+      return out;  // clip misses the common footprint
+  }
 
   const TinSpatialIndex baseIdx = BuildTinSpatialIndex(baseVertsXyz, baseIndices);
   const TinSpatialIndex compIdx = BuildTinSpatialIndex(compVertsXyz, compIndices);
@@ -191,6 +211,8 @@ SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<float>& baseVertsXyz,
     const double sy = iyMin + (static_cast<double>(j) + 0.5) * cellH;
     for (int i = 0; i < cols; ++i) {
       const double sx = ixMin + (static_cast<double>(i) + 0.5) * cellW;
+      if (haveClip && !TinPointInPolygon(sx, sy, *clipRingXy))
+        continue;
       double zBase = 0.0, zComp = 0.0;
       if (!TinElevationAtIndexed(baseVertsXyz, baseIndices, baseIdx, sx, sy, &zBase))
         continue;
