@@ -1142,6 +1142,8 @@ constexpr int kRibbonTabSurvey   = 6;
 constexpr int kRibbonTabCount    = 7;
 /// REQ-143: contextual TIN Surface tab. Not counted in \c kRibbonTabCount and not written to prefs.
 constexpr int kRibbonTabSurfaceCtx = 7;
+/// REQ-153: contextual SURVEY Point(s) tab. Session-only, not a prefs slot.
+constexpr int kRibbonTabSurveyPointCtx = 8;
 
 struct AppCommandState {
   enum class Kind {
@@ -1850,12 +1852,16 @@ struct AppCommandState {
   /// REQ-302: which top-level ribbon tab is showing. Persisted in user prefs, same shape as
   /// \c trimState. Values match \c kRibbonTabHome.. \c kRibbonTabSurvey below; an out-of-range value
   /// loaded from a hand-edited prefs file is clamped back into range rather than left invalid.
-  /// REQ-143 may set this to \c kRibbonTabSurfaceCtx for the session only.
+  /// REQ-143 / REQ-153 may set this to a contextual tab for the session only.
   int activeRibbonTab = 0;
   /// Permanent tab to restore when the last selected surface is cleared (REQ-143). Session-only.
   int ribbonTabBeforeSurfaceCtx = 0;
   /// True while a surface selection has already switched (or could switch) to the contextual tab.
   bool surfaceContextualRibbonArmed = false;
+  /// Permanent tab to restore when the last selected survey point is cleared (REQ-153). Session-only.
+  int ribbonTabBeforeSurveyPointCtx = 0;
+  /// True while a survey-point selection has armed the SURVEY Point(s) contextual tab.
+  bool surveyPointContextualRibbonArmed = false;
   /// REQ-077: update-check settings (enabled, channel, skipped version, throttle anchor).
   /// Only the persisted settings live here — the in-flight worker state is `update::UpdateState`,
   /// owned by the application loop, so `AppCommandState` gains no thread and stays copyable.

@@ -1542,6 +1542,8 @@ enum class RibbonIconKind : std::uint8_t {
   SvyGeodetic,
   SvySun,
   SvyRenumber,
+  SvyLock,
+  SvyUnlock,
 };
 
 static ImVec2 RibbonLerp(const ImVec2& a, const ImVec2& b, float u, float v) {
@@ -2507,6 +2509,25 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     dl->AddLine(ImVec2(mx.x - w * 0.18f, mn.y + h * 0.22f), ImVec2(mx.x - w * 0.18f, mx.y - h * 0.28f), acc, t);
     break;
   }
+  case RibbonIconKind::SvyLock:
+  case RibbonIconKind::SvyUnlock: {
+    const ImU32 gold = IM_COL32(220, 175, 50, 255);
+    const float bw = w * 0.42f;
+    const float bh = h * 0.36f;
+    const ImVec2 b0(c.x - bw * 0.5f, c.y - h * 0.02f);
+    const ImVec2 b1(c.x + bw * 0.5f, b0.y + bh);
+    dl->AddRectFilled(b0, b1, gold, 2.f);
+    dl->AddRect(b0, b1, col, 2.f, 0, t);
+    const float r = std::min(w, h) * 0.16f;
+    const ImVec2 sh(c.x, b0.y);
+    if (k == RibbonIconKind::SvyLock) {
+      dl->AddCircle(ImVec2(sh.x, sh.y - r * 0.15f), r, col, 16, t);
+    } else {
+      dl->PathArcTo(ImVec2(sh.x + r * 0.35f, sh.y - r * 0.10f), r, 3.4f, 6.0f, 10);
+      dl->PathStroke(col, 0, t);
+    }
+    break;
+  }
   default:
     break;
   }
@@ -2593,17 +2614,19 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::SvyGeodetic:    return "svygeodetic";
   case RibbonIconKind::SvySun:         return "svysun";
   case RibbonIconKind::SvyRenumber:    return "svyrenumber";
+  case RibbonIconKind::SvyLock:        return "svylock";
+  case RibbonIconKind::SvyUnlock:      return "svyunlock";
   }
   return "";
 }
 
-static ImTextureID g_ribbonIconTex[static_cast<int>(RibbonIconKind::SvyRenumber) + 1] = {};
+static ImTextureID g_ribbonIconTex[static_cast<int>(RibbonIconKind::SvyUnlock) + 1] = {};
 static bool g_ribbonIconsLoaded = false;
 
 static void EnsureRibbonIconsLoaded() {
   if (g_ribbonIconsLoaded) return;
   g_ribbonIconsLoaded = true;  // attempt once; missing files fall back to vector art
-  for (int i = 0; i <= static_cast<int>(RibbonIconKind::SvyRenumber); ++i) {
+  for (int i = 0; i <= static_cast<int>(RibbonIconKind::SvyUnlock); ++i) {
     const std::string nm = RibbonIconName(static_cast<RibbonIconKind>(i));
     if (nm.empty()) continue;
     const std::filesystem::path p =
@@ -2940,6 +2963,31 @@ static int FirstSelectedSurfaceIndex(const AppCommandState& cmd) {
   return -1;
 }
 
+static int CountSelectedSurveyPoints(const AppCommandState& cmd) {
+  const size_t n = cmd.surveyPoints.size();
+  assert(n < 10000000u);
+  assert(cmd.selectedSurveyPointIndices.size() < 10000000u);
+  int count = 0;
+  for (const int ix : cmd.selectedSurveyPointIndices) {
+    if (ix < 0 || static_cast<size_t>(ix) >= n)
+      continue;
+    ++count;
+  }
+  return count;
+}
+
+static int FirstSelectedSurveyPointIndex(const AppCommandState& cmd) {
+  const size_t n = cmd.surveyPoints.size();
+  assert(n < 10000000u);
+  assert(cmd.selectedSurveyPointIndices.size() < 10000000u);
+  for (const int ix : cmd.selectedSurveyPointIndices) {
+    if (ix < 0 || static_cast<size_t>(ix) >= n)
+      continue;
+    return ix;
+  }
+  return -1;
+}
+
 // REQ-302 increment 2 (ADR-038): measure-then-decide responsive breakpoints for the ribbon's own
 // per-tab sections, plus a shared overflow popup for whatever doesn't fit at Narrow.
 enum class RibbonBreakpoint { Wide, Medium, Narrow };
@@ -3058,9 +3106,11 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   const bool ribbonPaperSpaceEarly =
       cmd.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(cmd);
   const int selSurfIdx = ribbonPaperSpaceEarly ? -1 : FirstSelectedSurfaceIndex(cmd);
+  const int nSvyPts = ribbonPaperSpaceEarly ? 0 : CountSelectedSurveyPoints(cmd);
+  const bool hasSvyPts = nSvyPts > 0;
   if (selSurfIdx >= 0) {
     if (!cmd.surfaceContextualRibbonArmed) {
-      if (cmd.activeRibbonTab != kRibbonTabSurfaceCtx)
+      if (cmd.activeRibbonTab >= 0 && cmd.activeRibbonTab < kRibbonTabCount)
         cmd.ribbonTabBeforeSurfaceCtx = cmd.activeRibbonTab;
       cmd.activeRibbonTab = kRibbonTabSurfaceCtx;
       cmd.surfaceContextualRibbonArmed = true;
@@ -3070,9 +3120,30 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       int prev = cmd.ribbonTabBeforeSurfaceCtx;
       if (prev < 0 || prev >= kRibbonTabCount)
         prev = kRibbonTabHome;
+      if (hasSvyPts)
+        prev = kRibbonTabSurveyPointCtx;
       cmd.activeRibbonTab = prev;
     }
     cmd.surfaceContextualRibbonArmed = false;
+  }
+  if (hasSvyPts) {
+    if (!cmd.surveyPointContextualRibbonArmed) {
+      if (cmd.activeRibbonTab >= 0 && cmd.activeRibbonTab < kRibbonTabCount)
+        cmd.ribbonTabBeforeSurveyPointCtx = cmd.activeRibbonTab;
+      if (cmd.activeRibbonTab != kRibbonTabSurfaceCtx)
+        cmd.activeRibbonTab = kRibbonTabSurveyPointCtx;
+      cmd.surveyPointContextualRibbonArmed = true;
+    }
+  } else if (cmd.surveyPointContextualRibbonArmed) {
+    if (cmd.activeRibbonTab == kRibbonTabSurveyPointCtx) {
+      int prev = cmd.ribbonTabBeforeSurveyPointCtx;
+      if (prev < 0 || prev >= kRibbonTabCount)
+        prev = kRibbonTabHome;
+      if (selSurfIdx >= 0)
+        prev = kRibbonTabSurfaceCtx;
+      cmd.activeRibbonTab = prev;
+    }
+    cmd.surveyPointContextualRibbonArmed = false;
   }
 
   // REQ-302 tab strip: Home/Insert/Annotate/View/Manage/Output/Survey. Reuses the Model/Layout
@@ -3112,6 +3183,25 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(255, 255, 255, 255));
       if (ImGui::Button(surfTab, ImVec2(0.f, kRibbonTabStripH)))
         cmd.activeRibbonTab = kRibbonTabSurfaceCtx;
+      ImGui::PopStyleColor(4);
+      ImGui::SameLine(0, 2);
+    }
+    if (hasSvyPts) {
+      char ptTab[160];
+      if (nSvyPts == 1) {
+        const int pxi = FirstSelectedSurveyPointIndex(cmd);
+        const int pid = (pxi >= 0) ? cmd.surveyPoints[static_cast<size_t>(pxi)].id : 0;
+        std::snprintf(ptTab, sizeof(ptTab), "SURVEY Point: %d", pid);
+      } else {
+        std::snprintf(ptTab, sizeof(ptTab), "SURVEY Points");
+      }
+      const bool ptOn = cmd.activeRibbonTab == kRibbonTabSurveyPointCtx;
+      ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0, 120, 215, ptOn ? 255 : 180));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(30, 144, 255, 255));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0, 90, 180, 255));
+      ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(255, 255, 255, 255));
+      if (ImGui::Button(ptTab, ImVec2(0.f, kRibbonTabStripH)))
+        cmd.activeRibbonTab = kRibbonTabSurveyPointCtx;
       ImGui::PopStyleColor(4);
       ImGui::SameLine(0, 2);
     }
@@ -3906,6 +3996,164 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     }});
     }
   } // kRibbonTabSurfaceCtx
+
+  // REQ-153: Civil 3D-shaped contextual SURVEY Point(s) tab (selected survey points).
+  if (cmd.activeRibbonTab == kRibbonTabSurveyPointCtx && !ribbonPaperSpace && hasSvyPts) {
+    const bool singlePt = (nSvyPts == 1);
+
+    {
+      const float wAddTables = capW("Add\nTables");
+      const float wEditLbl = capW("Edit Label\nText");
+      const float wLabels = singlePt ? (8.f + wAddTables + 4.f + wEditLbl + 8.f) : (8.f + wAddTables + 8.f);
+      ribbonSpecs.push_back({wLabels, wLabels, [&]() {
+        const float wTbl = capW("Add\nTables");
+        const float wEdit = capW("Edit Label\nText");
+        const bool one = (nSvyPts == 1);
+        RibbonSectionBegin("RibbonSecSpLabels", one ? "Labels & Tables" : "Tables",
+                           one ? (8.f + wTbl + 4.f + wEdit + 8.f) : (8.f + wTbl + 8.f), panelH);
+        RibbonNyiButton("##SpAddTables", RibbonIconKind::SurfLegend, "Add\nTables", ImVec2(wTbl, colH),
+                        RibbonLabel::Below);
+        if (one) {
+          ImGui::SameLine(0, 4);
+          RibbonNyiButton("##SpEditLbl", RibbonIconKind::Text, "Edit Label\nText", ImVec2(wEdit, colH),
+                          RibbonLabel::Below);
+        }
+        RibbonSectionEnd();
+      }});
+    }
+
+    {
+      const float wInq = capW("Inquiry");
+      const float genCell = colW({"Properties", "Isolate Objects"});
+      const float wGen = 8.f + wInq + 4.f + genCell + 8.f;
+      ribbonSpecs.push_back({wGen, wGen, [&]() {
+        const float wInquiry = capW("Inquiry");
+        const float cell = colW({"Properties", "Isolate Objects"});
+        RibbonSectionBegin("RibbonSecSpGen", "General Tools", 8.f + wInquiry + 4.f + cell + 8.f, panelH);
+        if (RibbonButtonEx("##SpInquiry", RibbonIconKind::SurfInquiry, "Inquiry", ImVec2(wInquiry, colH),
+                           RibbonLabel::Below))
+          StartIdPointCommand(cmd, log);
+        RibbonItemHelp("Inquiry — identify a point.\nCommand bar: ID");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (smallBtn("##SpProps", RibbonIconKind::SurfPropsHand, "Properties", cell))
+          cmd.pendingPropertiesFocus = true;
+        RibbonItemHelp("Properties — the side Properties panel for the current selection.");
+        if (smallBtn("##SpIsolate", RibbonIconKind::SurfIsolate, "Isolate Objects", cell))
+          ImGui::OpenPopup("##SpIsolateMenu");
+        RibbonItemHelp("Isolate Objects — isolate, hide, or end isolation (REQ-084).");
+        if (ImGui::BeginPopup("##SpIsolateMenu")) {
+          if (ImGui::MenuItem("Isolate Objects"))
+            IsolateSelectedObjects(cmd, log);
+          if (ImGui::MenuItem("Hide Objects"))
+            HideSelectedObjects(cmd, log);
+          if (ImGui::MenuItem("End Object Isolation", nullptr, false, !cmd.hiddenEntityIds.empty()))
+            EndObjectIsolation(cmd, log);
+          ImGui::EndPopup();
+        }
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
+
+    {
+      const float wEditList = capW("Edit/List\nPoints");
+      const float wPgProps = capW("Point Group\nProperties");
+      const float cRen = colW({"Renumber", "Datum", "Elevations from Surface"});
+      const float cLock = colW({"Lock Points", "Unlock Points"});
+      const float wMod = 8.f + wEditList + 4.f + wPgProps + 4.f + cRen + 4.f + cLock + 8.f;
+      ribbonSpecs.push_back({wMod, wMod, [&]() {
+        const float wList = capW("Edit/List\nPoints");
+        const float wGrp = capW("Point Group\nProperties");
+        const float cA = colW({"Renumber", "Datum", "Elevations from Surface"});
+        const float cB = colW({"Lock Points", "Unlock Points"});
+        RibbonSectionBegin("RibbonSecSpMod", "Modify", 8.f + wList + 4.f + wGrp + 4.f + cA + 4.f + cB + 8.f, panelH);
+        if (RibbonButtonEx("##SpEditList", RibbonIconKind::SurveyPoint, "Edit/List\nPoints", ImVec2(wList, colH),
+                           RibbonLabel::Below))
+          StartViewPointsCommand(cmd, log);
+        RibbonItemHelp("Edit/List Points — the survey point list.\nCommand bar: VIEWPOINTS");
+        ImGui::SameLine(0, 4);
+        if (RibbonButtonEx("##SpPgProps", RibbonIconKind::Copy, "Point Group\nProperties", ImVec2(wGrp, colH),
+                           RibbonLabel::Below))
+          cmd.showPointGroupManagerWindow = true;
+        RibbonItemHelp("Point Group Properties — create and edit point groups.");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        RibbonNyiButton("##SpRenumber", RibbonIconKind::SvyRenumber, "Renumber", ImVec2(cA, rowH),
+                        RibbonLabel::Right);
+        RibbonNyiButton("##SpDatum", RibbonIconKind::Id, "Datum", ImVec2(cA, rowH), RibbonLabel::Right);
+        RibbonNyiButton("##SpElevSurf", RibbonIconKind::SurfAddData, "Elevations from Surface", ImVec2(cA, rowH),
+                        RibbonLabel::Right);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        RibbonNyiButton("##SpLock", RibbonIconKind::SvyLock, "Lock Points", ImVec2(cB, rowH), RibbonLabel::Right);
+        RibbonNyiButton("##SpUnlock", RibbonIconKind::SvyUnlock, "Unlock Points", ImVec2(cB, rowH),
+                        RibbonLabel::Right);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
+
+    {
+      const float wGeo = capW("Geodetic\nCalculator");
+      ribbonSpecs.push_back({8.f + wGeo + 8.f, 8.f + wGeo + 8.f, [&]() {
+        const float w = capW("Geodetic\nCalculator");
+        RibbonSectionBegin("RibbonSecSpAnalyze", "Analyze", 8.f + w + 8.f, panelH);
+        RibbonNyiButton("##SpGeodetic", RibbonIconKind::SvyGeodetic, "Geodetic\nCalculator", ImVec2(w, colH),
+                        RibbonLabel::Below);
+        RibbonSectionEnd();
+      }});
+    }
+
+    {
+      const float toolsCol = colW({"Import Points", "Export Points", "Transfer Points"});
+      const float wTools = 8.f + toolsCol + 8.f;
+      ribbonSpecs.push_back({wTools, wTools, [&]() {
+        const float cell = colW({"Import Points", "Export Points", "Transfer Points"});
+        RibbonSectionBegin("RibbonSecSpTools", "SURVEY Point Tools", 8.f + cell + 8.f, panelH);
+        ImGui::BeginGroup();
+        if (smallBtn("##SpImport", RibbonIconKind::PdfAttach, "Import Points", cell))
+          StartImportPointsCommand(cmd, log);
+        RibbonItemHelp("Import Points — load a point file.\nCommand bar: IMPORTPOINTS");
+        if (smallBtn("##SpExport", RibbonIconKind::ClipboardCopy, "Export Points", cell))
+          StartExportPointsCommand(cmd, log);
+        RibbonItemHelp("Export Points — write selected or all points.\nCommand bar: EXPORTPOINTS");
+        RibbonNyiButton("##SpTransfer", RibbonIconKind::Copy, "Transfer Points", ImVec2(cell, rowH),
+                        RibbonLabel::Right);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
+
+    {
+      const float wCreate = capW("Create\nPoints");
+      const float launchCol = colW({"Create Point Group", "Import Points", "Create Surface"});
+      const float wLaunch = 8.f + wCreate + 4.f + launchCol + 8.f;
+      ribbonSpecs.push_back({wLaunch, wLaunch, [&]() {
+        const float wPts = capW("Create\nPoints");
+        const float cell = colW({"Create Point Group", "Import Points", "Create Surface"});
+        RibbonSectionBegin("RibbonSecSpLaunch", "Launch Pad", 8.f + wPts + 4.f + cell + 8.f, panelH);
+        if (RibbonButtonEx("##SpCreatePts", RibbonIconKind::SurveyPoint, "Create\nPoints", ImVec2(wPts, colH),
+                           RibbonLabel::Below))
+          StartCreatePointsCommand(cmd, log);
+        RibbonItemHelp("Create Points — pick or type survey points.\nCommand bar: CREATEPOINTS");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (smallBtn("##SpCreateGrp", RibbonIconKind::Copy, "Create Point Group", cell))
+          cmd.showPointGroupManagerWindow = true;
+        RibbonItemHelp("Create Point Group — the Point Groups window.");
+        if (smallBtn("##SpImport2", RibbonIconKind::PdfAttach, "Import Points", cell))
+          StartImportPointsCommand(cmd, log);
+        RibbonItemHelp("Import Points — load a point file.\nCommand bar: IMPORTPOINTS");
+        if (smallBtn("##SpCreateSurf", RibbonIconKind::SurfAddData, "Create Surface", cell))
+          cmd.showCreateSurfaceWindow = true;
+        RibbonItemHelp("Create Surface — TIN, grid, corridor, or volume type.");
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
+  } // kRibbonTabSurveyPointCtx
 
   // REQ-302: View tab.
   if (cmd.activeRibbonTab == kRibbonTabView) {

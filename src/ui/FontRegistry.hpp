@@ -19,4 +19,8 @@ ImFont* Resolve(const std::string& fontNameOrShx, bool bold, bool italic, bool* 
 /// Register the application's default/fallback font (used when a name can't be resolved).
 void SetDefault(ImFont* f);
 
+/// Toolspace tree face (Segoe UI, slightly larger). Falls back to the default UI font.
+void SetToolspace(ImFont* f);
+ImFont* Toolspace();
+
 }  // namespace FontReg

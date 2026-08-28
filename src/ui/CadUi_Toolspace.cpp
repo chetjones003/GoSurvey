@@ -1,4 +1,5 @@
 #include "CadUi.hpp"
+#include "FontRegistry.hpp"
 #include "ToolspaceCatalog.hpp"
 #include "WinFileDialogs.hpp"
 
@@ -14,7 +15,7 @@
 
 namespace {
 
-constexpr float kPreviewFrac = 0.22f;
+constexpr float kPreviewFrac = 0.18f;
 
 constexpr ImGuiTreeNodeFlags kLeaf =
     ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_NoTreePushOnOpen |
@@ -24,6 +25,17 @@ constexpr ImGuiTreeNodeFlags kFolder =
 
 constexpr int kTsPopupColors = 7;
 
+// Light paper + ink (tree) vs steel chrome (frame). Text is near-black on paper for WCAG contrast.
+const ImVec4 kTsPaper(0.94f, 0.95f, 0.96f, 1.f);
+const ImVec4 kTsInk(0.08f, 0.09f, 0.11f, 1.f);
+const ImVec4 kTsInkMuted(0.28f, 0.30f, 0.34f, 1.f);
+const ImVec4 kTsLines(0.32f, 0.34f, 0.38f, 1.f);
+const ImVec4 kTsChrome(0.18f, 0.20f, 0.23f, 1.f);
+const ImVec4 kTsChromeHi(0.22f, 0.24f, 0.28f, 1.f);
+const ImVec4 kTsAccent(0.00f, 0.47f, 0.84f, 1.f);
+const ImVec4 kTsSel(0.00f, 0.47f, 0.84f, 0.28f);
+const ImVec4 kTsSelHov(0.00f, 0.47f, 0.84f, 0.42f);
+
 struct TsPending {
   enum class Kind { None, AddPointFile, AddPointGroup };
   Kind kind = Kind::None;
@@ -32,7 +44,7 @@ struct TsPending {
 };
 
 float TabStripWidth() {
-  return ImGui::GetFontSize() + 14.f;
+  return ImGui::GetFontSize() + 16.f;
 }
 
 void DrawTextBottomToTop(ImDrawList* dl, ImVec2 rectMin, ImVec2 rectMax, ImU32 col, const char* text) {
@@ -64,55 +76,14 @@ bool SideTab(const char* id, const char* label, bool selected, float stripW) {
   const bool pressed = ImGui::IsItemClicked();
   const bool hovered = ImGui::IsItemHovered();
   ImDrawList* dl = ImGui::GetWindowDrawList();
-  const ImU32 bg = selected ? IM_COL32(255, 255, 255, 255)
-                            : (hovered ? IM_COL32(72, 80, 92, 255) : IM_COL32(45, 50, 58, 255));
-  const ImU32 fg = selected ? IM_COL32(20, 20, 20, 255) : IM_COL32(255, 255, 255, 255);
+  const ImU32 bg = selected ? IM_COL32(240, 242, 245, 255)
+                            : (hovered ? IM_COL32(62, 70, 82, 255) : IM_COL32(38, 43, 50, 255));
+  const ImU32 fg = selected ? IM_COL32(18, 22, 28, 255) : IM_COL32(236, 238, 242, 255);
   dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), bg);
   if (selected)
     dl->AddRectFilled(ImVec2(pos.x, pos.y), ImVec2(pos.x + 3.f, pos.y + size.y), IM_COL32(0, 120, 215, 255));
   DrawTextBottomToTop(dl, pos, ImVec2(pos.x + size.x, pos.y + size.y), fg, label);
   return pressed;
-}
-
-void DrawToolbarIcon(ImDrawList* dl, ImVec2 p, float s, int kind) {
-  const ImU32 ink = IM_COL32(40, 40, 40, 255);
-  if (kind == 0) {
-    dl->AddRectFilled(ImVec2(p.x + s * 0.25f, p.y + s * 0.35f), ImVec2(p.x + s * 0.85f, p.y + s * 0.85f),
-                      IM_COL32(70, 160, 70, 255));
-    dl->AddRect(ImVec2(p.x + s * 0.25f, p.y + s * 0.35f), ImVec2(p.x + s * 0.85f, p.y + s * 0.85f), ink);
-  } else if (kind == 1) {
-    dl->AddRect(ImVec2(p.x + 2.f, p.y + 3.f), ImVec2(p.x + s - 6.f, p.y + s - 5.f), ink);
-    dl->AddRect(ImVec2(p.x + 6.f, p.y + 6.f), ImVec2(p.x + s - 2.f, p.y + s - 2.f), ink);
-  } else if (kind == 2) {
-    for (int i = 0; i < 3; ++i) {
-      const float y = p.y + 4.f + static_cast<float>(i) * 4.f;
-      dl->AddLine(ImVec2(p.x + 3.f, y), ImVec2(p.x + s - 3.f, y), ink, 1.5f);
-    }
-  } else {
-    dl->AddCircle(ImVec2(p.x + s * 0.5f, p.y + s * 0.5f), s * 0.38f, ink, 12, 1.5f);
-    dl->AddText(ImVec2(p.x + s * 0.32f, p.y + 1.f), ink, "?");
-  }
-}
-
-void DrawToolspaceToolbar() {
-  const float h = ImGui::GetFrameHeight();
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.86f, 0.86f, 0.86f, 1.f));
-  ImGui::BeginChild("##ts_toolbar", ImVec2(0.f, h + 6.f), false);
-  ImDrawList* dl = ImGui::GetWindowDrawList();
-  ImVec2 p = ImGui::GetCursorScreenPos();
-  p.x += 6.f;
-  p.y += 3.f;
-  const float s = h - 2.f;
-  for (int k = 0; k < 4; ++k) {
-    ImGui::SetCursorScreenPos(p);
-    ImGui::InvisibleButton(("##tsico" + std::to_string(k)).c_str(), ImVec2(s, s));
-    DrawToolbarIcon(dl, p, s, k);
-    if (k == 3 && ImGui::IsItemHovered())
-      ImGui::SetTooltip("Drawing explorer — Prospector lists survey objects; Settings lists styles.");
-    p.x += s + 6.f;
-  }
-  ImGui::EndChild();
-  ImGui::PopStyleColor();
 }
 
 void SubmitLine(AppCommandState& cmd, std::vector<std::string>* log, const std::string& line) {
@@ -152,13 +123,13 @@ std::string NextSurfaceName(const AppCommandState& cmd) {
 }
 
 void PushTsPopupColors() {
-  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(1.f, 1.f, 1.f, 0.98f));
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(1.f, 1.f, 1.f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.1f, 0.1f, 0.1f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_TextDisabled, ImVec4(0.55f, 0.55f, 0.55f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(0.26f, 0.59f, 0.98f, 0.4f));
-  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, ImVec4(0.26f, 0.59f, 0.98f, 0.65f));
-  ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.72f, 0.72f, 0.72f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.97f, 0.97f, 0.98f, 0.99f));
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.97f, 0.97f, 0.98f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_Text, kTsInk);
+  ImGui::PushStyleColor(ImGuiCol_TextDisabled, kTsInkMuted);
+  ImGui::PushStyleColor(ImGuiCol_Header, kTsSel);
+  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kTsSelHov);
+  ImGui::PushStyleColor(ImGuiCol_Separator, ImVec4(0.62f, 0.64f, 0.68f, 1.f));
 }
 
 bool BeginTsContext(const char* id) {
@@ -1267,13 +1238,22 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
 
   ImGui::SetNextWindowSize(ImVec2(300.f, 640.f), ImGuiCond_FirstUseEver);
   bool open = cmd.showToolspaceWindow;
-  ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.14f, 0.16f, 0.18f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.16f, 0.18f, 0.22f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.22f, 0.24f, 0.26f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.12f, 0.13f, 0.15f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.10f, 0.11f, 0.13f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_TitleBgCollapsed, ImVec4(0.12f, 0.13f, 0.15f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_WindowBg, kTsChrome);
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.f, 6.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(6.f, 6.f));
+  ImFont* tsFont = FontReg::Toolspace();
+  if (tsFont != nullptr)
+    ImGui::PushFont(tsFont);
   if (!ImGui::Begin("TOOLSPACE", &open, ImGuiWindowFlags_NoCollapse)) {
     cmd.showToolspaceWindow = open;
     ImGui::End();
-    ImGui::PopStyleColor(3);
+    if (tsFont != nullptr)
+      ImGui::PopFont();
+    ImGui::PopStyleVar(2);
+    ImGui::PopStyleColor(4);
     return;
   }
   cmd.showToolspaceWindow = open;
@@ -1283,40 +1263,54 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   const float tabW = TabStripWidth();
   ImGui::BeginChild("##ts_main", ImVec2(-tabW - 4.f, 0.f), false);
 
-  DrawToolspaceToolbar();
-
-  ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(1.f, 1.f, 1.f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.96f, 0.96f, 0.96f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.1f, 0.1f, 0.1f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, kTsPaper);
+  ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, ImVec4(0.90f, 0.92f, 0.94f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_FrameBgActive, ImVec4(0.88f, 0.90f, 0.93f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_Text, kTsInk);
+  ImGui::PushStyleColor(ImGuiCol_PopupBg, ImVec4(0.97f, 0.97f, 0.98f, 0.99f));
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.22f, 0.24f, 0.28f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_Header, kTsSel);
+  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kTsSelHov);
+  ImGui::PushStyleColor(ImGuiCol_HeaderActive, kTsAccent);
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.f, 5.f));
   const char* comboLabel = (cmd.toolspaceTab == AppCommandState::ToolspaceTab::Settings)
                                ? "Active Drawing Settings View"
                                : "Active Drawing View";
   ImGui::SetNextItemWidth(-1.f);
   if (ImGui::BeginCombo("##ts_view", comboLabel)) {
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.9f, 0.9f, 0.9f, 1.f));
     if (ImGui::Selectable("Active Drawing View",
                           cmd.toolspaceTab == AppCommandState::ToolspaceTab::Prospector))
       cmd.toolspaceTab = AppCommandState::ToolspaceTab::Prospector;
     if (ImGui::Selectable("Active Drawing Settings View",
                           cmd.toolspaceTab == AppCommandState::ToolspaceTab::Settings))
       cmd.toolspaceTab = AppCommandState::ToolspaceTab::Settings;
-    ImGui::PopStyleColor();
     ImGui::EndCombo();
   }
-  ImGui::PopStyleColor(3);
+  ImGui::PopStyleVar(2);
+  ImGui::PopStyleColor(9);
 
-  const float previewH = std::max(40.f, ImGui::GetContentRegionAvail().y * kPreviewFrac);
+  const float previewH = std::max(36.f, ImGui::GetContentRegionAvail().y * kPreviewFrac);
   const float treeH = std::max(80.f, ImGui::GetContentRegionAvail().y - previewH - 4.f);
 
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(1.f, 1.f, 1.f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.08f, 0.08f, 0.08f, 1.f));
-  ImGui::PushStyleColor(ImGuiCol_TreeLines, ImVec4(0.62f, 0.62f, 0.62f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, kTsPaper);
+  ImGui::PushStyleColor(ImGuiCol_Text, kTsInk);
+  ImGui::PushStyleColor(ImGuiCol_TextDisabled, kTsInkMuted);
+  ImGui::PushStyleColor(ImGuiCol_TreeLines, kTsLines);
+  ImGui::PushStyleColor(ImGuiCol_Header, kTsSel);
+  ImGui::PushStyleColor(ImGuiCol_HeaderHovered, kTsSelHov);
+  ImGui::PushStyleColor(ImGuiCol_HeaderActive, kTsAccent);
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.22f, 0.24f, 0.28f, 1.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(4.f, 5.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_IndentSpacing, 18.f);
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(4.f, 3.f));
   ImGuiStyle& treeStyle = ImGui::GetStyle();
   const ImGuiTreeNodeFlags prevTreeLines = treeStyle.TreeLinesFlags;
   const float prevTreeLinesSize = treeStyle.TreeLinesSize;
   const float prevTreeLinesRound = treeStyle.TreeLinesRounding;
   treeStyle.TreeLinesFlags = ImGuiTreeNodeFlags_DrawLinesToNodes;
-  treeStyle.TreeLinesSize = 1.f;
+  treeStyle.TreeLinesSize = 1.25f;
   treeStyle.TreeLinesRounding = 0.f;
   ImGui::BeginChild("##ts_tree", ImVec2(0.f, treeH), true);
   if (cmd.toolspaceTab == AppCommandState::ToolspaceTab::Settings)
@@ -1333,15 +1327,21 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   treeStyle.TreeLinesFlags = prevTreeLines;
   treeStyle.TreeLinesSize = prevTreeLinesSize;
   treeStyle.TreeLinesRounding = prevTreeLinesRound;
-  ImGui::PopStyleColor(3);
+  ImGui::PopStyleVar(4);
+  ImGui::PopStyleColor(8);
 
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, kTsChromeHi);
+  ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(0.12f, 0.13f, 0.15f, 1.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_ChildBorderSize, 1.f);
   ImGui::BeginChild("##ts_preview", ImVec2(0.f, 0.f), true);
   ImGui::EndChild();
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor(2);
 
   ImGui::EndChild();
 
   ImGui::SameLine(0.f, 4.f);
-  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.18f, 0.20f, 0.23f, 1.f));
+  ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.14f, 0.16f, 0.18f, 1.f));
   ImGui::BeginChild("##ts_tabs", ImVec2(tabW, 0.f), false, ImGuiWindowFlags_NoScrollbar);
   if (SideTab("##tab_prospector", "Prospector", cmd.toolspaceTab == AppCommandState::ToolspaceTab::Prospector,
               tabW))
@@ -1354,5 +1354,8 @@ void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   DrawToolspaceDefDialogs(cmd, log, pending);
 
   ImGui::End();
-  ImGui::PopStyleColor(3);
+  if (tsFont != nullptr)
+    ImGui::PopFont();
+  ImGui::PopStyleVar(2);
+  ImGui::PopStyleColor(4);
 }

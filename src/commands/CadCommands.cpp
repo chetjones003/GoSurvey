@@ -26761,15 +26761,36 @@ bool LoadApplicationFont() {
   cfg.OversampleH = 2;
   cfg.OversampleV = 1;
   cfg.PixelSnapH  = true;  // crisp small classic text
+  ImFont* loaded = nullptr;
   for (const char* path : candidates) {
     ImFont* f = io.Fonts->AddFontFromFileTTF(path, 16.0f, &cfg);
     if (f) {
       io.FontDefault = f;
       FontReg::SetDefault(f);  // fallback for unresolved CAD fonts
-      return true;
+      loaded = f;
+      break;
     }
   }
-  return false;
+  if (loaded == nullptr)
+    return false;
+
+  ImFontConfig tsCfg;
+  tsCfg.OversampleH = 3;
+  tsCfg.OversampleV = 2;
+  tsCfg.PixelSnapH = true;
+  const char* tsCandidates[] = {
+      "C:/Windows/Fonts/segoeui.ttf",
+      "C:/Windows/Fonts/segoeuisl.ttf",
+      "C:/Windows/Fonts/calibri.ttf",
+  };
+  ImFont* tsFont = nullptr;
+  for (const char* path : tsCandidates) {
+    tsFont = io.Fonts->AddFontFromFileTTF(path, 17.5f, &tsCfg);
+    if (tsFont)
+      break;
+  }
+  FontReg::SetToolspace(tsFont != nullptr ? tsFont : loaded);
+  return true;
 }
 
 void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {

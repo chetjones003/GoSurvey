@@ -4622,9 +4622,10 @@ requirements is a planning failure, not a sign of rigor.
 - Purpose: a drawing explorer whose chrome matches Civil 3D Toolspace, listing only objects GoSurvey implements
 - Priority: must
 - Type: functional
-- Statement: A dockable **TOOLSPACE** window has a dark title, a toolbar, a view combo, a light
+- Statement: A dockable **TOOLSPACE** window has a dark title, a view combo, a light
   tree, a right-edge pair of **readable** vertical tabs (**Prospector**, **Settings**), and an empty
-  preview strip. Prospector is rooted at the active drawing name and lists Points (light context menu:
+  preview strip. There is **no** decorative toolbar (D-2026-08-28-m). Tree labels use Segoe UI when
+  installed (else the app UI font), near-black ink on off-white paper, and darker hierarchy lines. Prospector is rooted at the active drawing name and lists Points (light context menu:
   Create, Import, Export, Edit, Select, Zoom to, Pan to), Point Groups, Surfaces, and Feature Lines.
   Left-click on a **collection** folder does nothing; right-click shows that collection's Civil 3D
   command list, with unimplemented items **disabled**. Named point groups, surfaces, and feature lines
@@ -4648,6 +4649,7 @@ requirements is a planning failure, not a sign of rigor.
 - Owner-layer: UI, Commands
 - Status: accepted (2026-08-28)
 - Revisions: 2026-08-28 — D-2026-08-28-c: collection left-click, Civil 3D menus, definition from tree.
+  2026-08-28 — D-2026-08-28-m: omit dummy toolbar; Segoe UI tree face; stronger text/line contrast.
 
 ### REQ-143 — Contextual TIN Surface ribbon tab
 - Purpose: Civil 3D-shaped tools appear when a surface is selected, without inventing unimplemented objects
@@ -4821,6 +4823,22 @@ requirements is a planning failure, not a sign of rigor.
 - Owner-layer: util, Commands
 - Status: accepted (2026-08-28)
 - Revisions: 2026-08-28 — D-2026-08-28-h.
+
+### REQ-153 — Contextual SURVEY Point(s) ribbon tab
+- Purpose: Civil 3D-shaped tools appear when survey points are selected, without inventing unimplemented COGO objects
+- Priority: must
+- Type: functional
+- Statement: When `selectedSurveyPointIndices` contains at least one valid survey-point index in model space (or floating model space), the ribbon tab strip gains a contextual tab. One valid selected point: title `SURVEY Point: <point id>`. More than one: title `SURVEY Points`. First selection in a stretch switches to that tab **unless** the TIN Surface contextual tab is already active (both tabs stay visible). Deselecting the last point restores the previous permanent tab, or the TIN Surface tab if a surface is still selected. Panels match the screenshots: **Labels & Tables** (single) / **Tables** (multi) with Add Tables; **Edit Label Text** only when one point is selected; **General Tools** (Inquiry, Properties, Isolate Objects — **no Object Viewer**); **Modify**; **Analyze**; **SURVEY Point Tools**; **Launch Pad**. Wired actions: Inquiry (`ID`), Properties, Isolate Objects, Edit/List Points (`VIEWPOINTS`), Point Group Properties (Point Groups window), Import Points, Export Points, Create Points, Create Point Group, Create Surface. Unimplemented Civil 3D leftovers (Add Tables as a point table, Edit Label Text, Renumber, Datum, Elevations from Surface, Lock/Unlock Points, Geodetic Calculator, Transfer Points) are **disabled** and tooltip **not implemented yet**. The tab index is not a persisted prefs slot (`kRibbonTabCount` stays the permanent tabs).
+- Acceptance:
+  - with no survey point selected, the tab strip does not include a `SURVEY Point` tab;
+  - selecting one survey point shows `SURVEY Point:` plus that point's id;
+  - selecting more than one survey point shows `SURVEY Points`;
+  - Object Viewer is not present on the tab;
+  - unimplemented buttons on the tab cannot be activated (disabled);
+  - `CREATEPOINTS`, `VIEWPOINTS`, `IMPORTPOINTS`, `EXPORTPOINTS`, and `ID` remain invokable from the command line.
+- Owner-layer: UI, Commands
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-l.
 
 ---
 
@@ -5305,6 +5323,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-150 | Domain/Commands/util | done (TASK-136) — SURFACEMOVEPOINT / SURFDELLINE; `[req150]` | accepted |
 | REQ-151 | Commands | done (TASK-136) — arc breaklines; DESIGNATEBOUNDARY refuses arcs | accepted |
 | REQ-152 | util/Commands | done (TASK-136) — catchment mean Z; `[req152]` | accepted |
+| REQ-153 | UI/Commands | done (TASK-139) — contextual SURVEY Point(s) ribbon tab | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |
