@@ -21,6 +21,14 @@
         "transparency": -1.0
       },
       {
+        "color": "#e1b12c",
+        "id": 7,
+        "layer": "0",
+        "linetype": "ByLayer",
+        "lineweightMm": -1.0,
+        "transparency": -1.0
+      },
+      {
         "color": "ByLayer",
         "id": 5,
         "layer": "0",
@@ -83,6 +91,27 @@
         "rotationRad": 0.29145678877830505,
         "surveyPointLabelForId": -1,
         "text": "208.81"
+      },
+      {
+        "boxMaxX": 0.0,
+        "boxMaxY": 0.0,
+        "boxMinX": 0.0,
+        "boxMinY": 0.0,
+        "dimAngVertexX": 0.0,
+        "dimAngVertexY": 0.0,
+        "dimExt1X": 50.0,
+        "dimExt1Y": 0.0,
+        "dimExt2X": 0.0,
+        "dimExt2Y": 50.0,
+        "dimSignedOffset": 20.0,
+        "insX": 14.142,
+        "insY": 14.142,
+        "fontFamily": "Times New Roman",
+        "kind": "dimangular",
+        "plottedHeightInches": 0.10000000149011612,
+        "rotationRad": 0.7853981633974483,
+        "surveyPointLabelForId": -1,
+        "text": "90.0000°"
       },
       {
         "boxMaxX": 0.0,
@@ -179,7 +208,7 @@
       0.0
     ],
     "modelUnitsPerPlottedInch": 50.0,
-    "nextEntityId": 7,
+    "nextEntityId": 8,
     "paperLayouts": [
       {
         "centerPlot": false,

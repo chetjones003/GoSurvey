@@ -1,0 +1,28 @@
+# Issue #125 — DIMANGULAR must still be DimAngular after SAVEAS / OPEN.
+#
+# Reproduction of the data-loss hole: AnnotationKindTag had no DimAngular case, so SAVEAS wrote
+# "kind": "text" and dropped dimAngVertexX/Y. After OPEN the object was a TEXT annotation.
+#
+# Vertex at the origin, rays along +X and +Y (90°), arc pick on the bisector.
+
+NEW
+
+CMD DIMANGULAR
+CMD 0,0
+CMD 50,0
+CMD 0,50
+CMD 20,20
+ESC
+
+EXPECT ANNOTATIONS 1
+EXPECT ANNKIND 0 dimangular
+EXPECT LOG DIMANGULAR complete.
+
+SAVEAS %OUT%/dimangular-a.gs
+OPEN %OUT%/dimangular-a.gs
+CHECK ALL
+EXPECT ANNOTATIONS 1
+EXPECT ANNKIND 0 dimangular
+
+SAVEAS %OUT%/dimangular-b.gs
+EXPECT SAMEFILE %OUT%/dimangular-a.gs %OUT%/dimangular-b.gs

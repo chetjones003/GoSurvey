@@ -194,14 +194,21 @@ TEST_CASE("font-demo.gs opens without a BOM and uses explicit 1:25 / 1:100 viewp
   REQUIRE(vps.at(1).at("scaleModelPerPaperIn").get<float>() == Catch::Approx(100.f));
 
   bool foundMtext = false;
+  bool foundDimAngular = false;
   for (const nlohmann::json& a : root.at("document").at("annotations")) {
-    if (a.at("kind") != "mtext")
-      continue;
-    foundMtext = true;
-    REQUIRE(a.contains("fontFamily"));
-    REQUIRE_FALSE(a.at("fontFamily").get<std::string>().empty());
+    if (a.at("kind") == "mtext") {
+      foundMtext = true;
+      REQUIRE(a.contains("fontFamily"));
+      REQUIRE_FALSE(a.at("fontFamily").get<std::string>().empty());
+    }
+    if (a.at("kind") == "dimangular") {
+      foundDimAngular = true;
+      REQUIRE(a.contains("dimAngVertexX"));
+      REQUIRE(a.contains("dimAngVertexY"));
+    }
   }
   REQUIRE(foundMtext);
+  REQUIRE(foundDimAngular);
 
   REQUIRE(root.at("document").at("annotationAttrs").at(0).at("id").get<std::uint64_t>() != 0);
 }
