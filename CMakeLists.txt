@@ -221,6 +221,7 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/util/surfacevolume.cpp
   src/util/surfacestats.cpp
   src/util/watershed.cpp
+  src/util/tinvolume.cpp
   src/util/benchscene.cpp
 
   # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
@@ -552,6 +553,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/SurfaceVolumeTests.cpp
     tests/SurfaceStatsTests.cpp
     tests/WatershedTests.cpp
+    tests/TinVolumeTests.cpp
     # REQ-070 surface style table (ADR-036 (d)). Header-only and pure, so it needs no source entry
     # below. Three of REQ-070's five acceptance conditions — the deleted-style fallback, the legacy
     # empty-name fallback, and the rejection of a major interval that is not a whole multiple of the
@@ -642,6 +644,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/util/surfacevolume.cpp
     src/util/surfacestats.cpp
     src/util/watershed.cpp
+    src/util/tinvolume.cpp
     # REQ-077/078 version ordering + manifest parse. Pure by ADR-029 (g) — no network, no window.
     # Wrong version ordering has NO symptom (the user is simply never offered an update), which is
     # exactly why it must be pinned by a test rather than noticed in use.

@@ -277,9 +277,9 @@ A lightweight board that complements the milestones. Keep each column honest.
   true on exit** — no cert was obtained; the no-op signing step is still a no-op.
 
 ### Next (accepted, sequenced, not started)
-- **M-Surfaces-119 — Issue #119 remainder** (D-2026-08-27-a, ADR-039). Phase 1 REQ-124…130 + REQ-135;
-  Phase 2 REQ-131; Phase 3 REQ-132…134. Grid / corridor / volume-surface entity / contour smoothing
-  and labels / TIN swap remain out of scope.
+- **M-Surfaces-119 — Issue #119 remainder** (D-2026-08-27-a, ADR-039, D-2026-08-27-b). Phases 1–3
+  (REQ-124…135) implemented on the 119 branch. REQ-136 TIN volume surface in progress. Grid /
+  corridor / contour smoothing and labels / TIN swap remain out of scope.
 - **REQ-071 — contour extraction** (EXTRACT bakes displayed contours into unlinked polylines). Moved
   out of "Now" by D-2026-08-21-a so a verification FAIL on styles cannot block it. `util/contourgen`
   (TASK-085) emits the same flat-verts + offsets layout `userPolylineVerts` uses, so the follow-up is

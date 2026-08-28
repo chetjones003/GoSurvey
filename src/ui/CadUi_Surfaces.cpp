@@ -351,6 +351,12 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
     if (ni >= 0)
       selIdx = ni;
   }
+  ImGui::BeginDisabled(cmd.cadSurfaces.size() < 2);
+  if (ImGui::Button("New volume surface...", ImVec2(-1, 0)))
+    ImGui::OpenPopup("##newvolsurface");
+  ImGui::EndDisabled();
+  if (cmd.cadSurfaces.size() < 2 && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    ImGui::SetTooltip("A volume surface needs two existing TIN surfaces.");
   ImGui::BeginDisabled(cmd.pointGroups.empty());
   if (ImGui::Button("New from group...", ImVec2(-1, 0)))
     ImGui::OpenPopup("##newsurface");
@@ -426,6 +432,70 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
     }
     ImGui::EndPopup();
   }
+
+  if (ImGui::BeginPopup("##newvolsurface")) {
+    static std::string volName;
+    static int baseIx = 0;
+    static int compIx = 1;
+    if (volName.empty())
+      volName = NextSurfaceName(cmd);
+    if (baseIx < 0 || static_cast<size_t>(baseIx) >= cmd.cadSurfaces.size())
+      baseIx = 0;
+    if (compIx < 0 || static_cast<size_t>(compIx) >= cmd.cadSurfaces.size())
+      compIx = cmd.cadSurfaces.size() > 1 ? 1 : 0;
+    ImGui::TextUnformatted("Name");
+    ImGui::SetNextItemWidth(240.f);
+    ImGui::InputText("##volname", &volName);
+    ImGui::Spacing();
+    ImGui::TextUnformatted("Base surface");
+    ImGui::SetNextItemWidth(240.f);
+    if (ImGui::BeginCombo("##volbase", cmd.cadSurfaces[static_cast<size_t>(baseIx)].name.c_str())) {
+      for (int i = 0; i < static_cast<int>(cmd.cadSurfaces.size()); ++i) {
+        if (cmd.cadSurfaces[static_cast<size_t>(i)].isVolumeSurface())
+          continue;
+        const bool sel = i == baseIx;
+        if (ImGui::Selectable(cmd.cadSurfaces[static_cast<size_t>(i)].name.c_str(), sel))
+          baseIx = i;
+        if (sel)
+          ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+    ImGui::TextUnformatted("Comparison surface");
+    ImGui::SetNextItemWidth(240.f);
+    if (ImGui::BeginCombo("##volcomp", cmd.cadSurfaces[static_cast<size_t>(compIx)].name.c_str())) {
+      for (int i = 0; i < static_cast<int>(cmd.cadSurfaces.size()); ++i) {
+        if (cmd.cadSurfaces[static_cast<size_t>(i)].isVolumeSurface())
+          continue;
+        const bool sel = i == compIx;
+        if (ImGui::Selectable(cmd.cadSurfaces[static_cast<size_t>(i)].name.c_str(), sel))
+          compIx = i;
+        if (sel)
+          ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    }
+    const bool same = baseIx == compIx;
+    if (same)
+      ImGui::TextColored(ImVec4(0.95f, 0.75f, 0.35f, 1.f), "Base and comparison must differ.");
+    ImGui::BeginDisabled(volName.empty() || same);
+    if (ImGui::Button("Create")) {
+      PushUndoSnapshot(cmd, "Create volume surface");
+      const int ni = CreateSurfaceFromVolumeParents(cmd, volName, cmd.cadSurfaces[static_cast<size_t>(baseIx)].name,
+                                                    cmd.cadSurfaces[static_cast<size_t>(compIx)].name, *log);
+      if (ni >= 0)
+        selIdx = ni;
+      volName.clear();
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) {
+      volName.clear();
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndPopup();
+  }
   ImGui::EndChild();
 
   ImGui::SameLine();
@@ -459,8 +529,16 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
       }
     }
 
-    // Style (REQ-070). By NAME, so two surfaces on the same style move together when it is edited —
-    // which is the point of a style table rather than a per-surface copy (ADR-036 (d)).
+    if (s.isVolumeSurface()) {
+      ImGui::Spacing();
+      ImGui::TextDisabled("TIN volume surface");
+      ImGui::Text("Base: %s", s.volumeBaseName.c_str());
+      ImGui::Text("Comparison: %s", s.volumeComparisonName.c_str());
+    }
+
+    // Style (REQ-070). The combo assigns a named table row. Edit... copies that row for THIS
+    // surface when others still share it, so toggling triangles here does not rewrite every TIN.
+    // SURFSTYLE ASSIGN / editing a style from the style table still share by name (REQ-070).
     ImGui::Spacing();
     ImGui::TextUnformatted("Style");
     SurfaceStyles::EnsureStandard(cmd.surfaceStyles);
@@ -482,8 +560,19 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
       ImGui::EndCombo();
     }
     ImGui::SameLine();
-    if (ImGui::Button("Edit...", ImVec2(-1, 0)))
+    if (ImGui::Button("Edit...", ImVec2(-1, 0))) {
+      const int users =
+          resolved ? SurfaceStyles::CountSurfacesResolvingTo(cmd.cadSurfaces, cmd.surfaceStyles,
+                                                             resolved->name)
+                   : 0;
+      if (users > 1) {
+        PushUndoSnapshot(cmd, "Surface style");
+        DetachSurfaceStyleIfShared(cmd, static_cast<size_t>(selIdx), log);
+      }
+      const SurfaceStyle* now = SurfaceStyles::Resolve(cmd.surfaceStyles, s.styleName);
+      cmd.surfaceStyleEditorFocusName = now ? now->name : std::string();
       cmd.showSurfaceStyleWindow = true;
+    }
     // REQ-201: contours the display path declined to generate are said out loud, not left to look
     // like the generator failing. Reachable only from an interval no dialog offers — a hand-edited
     // `.gs`, or SURFSTYLE INTERVAL with a value in ten-thousandths.

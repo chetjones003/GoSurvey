@@ -552,6 +552,15 @@ struct CadSurface {
   /// to draw", and also what every surface in every `.gs` written before this field existed reads as.
   std::string styleName;
 
+  /// REQ-136: when both names are set this surface is a TIN volume surface (comparison minus
+  /// base). Empty on an ordinary definition-driven TIN. Names, not indices (architecture §11.9).
+  std::string volumeBaseName;
+  std::string volumeComparisonName;
+
+  [[nodiscard]] bool isVolumeSurface() const {
+    return !volumeBaseName.empty() || !volumeComparisonName.empty();
+  }
+
   /// The built triangulation, or null when the surface has never been built.
   std::shared_ptr<const CadTin> tin;
 

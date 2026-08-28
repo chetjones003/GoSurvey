@@ -609,3 +609,56 @@ void AppendPathAsLines(const std::vector<float>& pathXyz, std::vector<float>* ou
     PushSeg(out, pathXyz[a], pathXyz[a + 1], pathXyz[a + 2], pathXyz[b], pathXyz[b + 1], pathXyz[b + 2]);
   }
 }
+
+void AppendPathFlowArrows(const std::vector<float>& pathXyz, std::vector<float>* out) {
+  if (!out || pathXyz.size() < 6)
+    return;
+  const auto push = [&](double x0, double y0, double z0, double x1, double y1, double z1) {
+    out->push_back(static_cast<float>(x0));
+    out->push_back(static_cast<float>(y0));
+    out->push_back(static_cast<float>(z0));
+    out->push_back(static_cast<float>(x1));
+    out->push_back(static_cast<float>(y1));
+    out->push_back(static_cast<float>(z1));
+  };
+  const int n = static_cast<int>(pathXyz.size() / 3);
+  double total = 0.0;
+  for (int i = 0; i + 1 < n && i < kMaxWalk; ++i) {
+    const size_t a = static_cast<size_t>(i) * 3;
+    const size_t b = static_cast<size_t>(i + 1) * 3;
+    total += std::hypot(static_cast<double>(pathXyz[b] - pathXyz[a]),
+                        static_cast<double>(pathXyz[b + 1] - pathXyz[a + 1]));
+  }
+  if (total < 1.0e-6)
+    return;
+  const double spacing = std::max(total / 8.0, std::min(total * 0.5, 8.0));
+  const double head = std::min(std::max(spacing * 0.22, 1.5), 12.0);
+  double acc = 0.0;
+  double nextAt = spacing * 0.45;
+  for (int i = 0; i + 1 < n && i < kMaxWalk; ++i) {
+    const size_t a = static_cast<size_t>(i) * 3;
+    const size_t b = static_cast<size_t>(i + 1) * 3;
+    const double x0 = pathXyz[a], y0 = pathXyz[a + 1], z0 = pathXyz[a + 2];
+    const double x1 = pathXyz[b], y1 = pathXyz[b + 1], z1 = pathXyz[b + 2];
+    const double dx = x1 - x0, dy = y1 - y0;
+    const double seglen = std::hypot(dx, dy);
+    if (seglen < 1.0e-9) {
+      acc += seglen;
+      continue;
+    }
+    const double ux = dx / seglen, uy = dy / seglen;
+    while (acc + seglen + 1.0e-9 >= nextAt && nextAt <= total + 1.0e-9) {
+      const double t = (nextAt - acc) / seglen;
+      const double px = x0 + t * dx;
+      const double py = y0 + t * dy;
+      const double pz = z0 + t * (z1 - z0);
+      const double ang = std::atan2(uy, ux);
+      const double a0 = ang + 2.61799387799;  // ~150 deg
+      const double a1 = ang - 2.61799387799;
+      push(px, py, pz, px + std::cos(a0) * head, py + std::sin(a0) * head, pz);
+      push(px, py, pz, px + std::cos(a1) * head, py + std::sin(a1) * head, pz);
+      nextAt += spacing;
+    }
+    acc += seglen;
+  }
+}

@@ -6520,6 +6520,8 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
   // typed-point entry nor a usable pick — the same pre-existing TASK-055 gap, in the second of the
   // two lists a point-picking command has to appear in.
   case K::SurfaceElevGrade: return true;
+  case K::WaterDrop: return true;
+  case K::Catchment: return true;
   case K::Circle: {
     using CP = AppCommandState::CirclePhase;
     return cmd.circlePhase == CP::WaitCenterOrMode || cmd.circlePhase == CP::ThreeP_WaitP1 ||

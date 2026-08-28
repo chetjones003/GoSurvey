@@ -166,3 +166,11 @@ TEST_CASE("Catchment miss is a named outside", "[surface][req134][watershed]") {
   CHECK(c.outside);
   CHECK(c.area2d == Approx(0.0));
 }
+
+TEST_CASE("Flow arrows are chevrons along the path", "[surface][req133][watershed]") {
+  const std::vector<float> path{0.f, 20.f, 5.f, 0.f, 10.f, 2.5f, 0.f, 0.f, 0.f};
+  std::vector<float> arrows;
+  AppendPathFlowArrows(path, &arrows);
+  REQUIRE(arrows.size() >= 12);
+  CHECK(arrows.size() % 6 == 0);
+}

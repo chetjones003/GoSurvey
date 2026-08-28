@@ -692,6 +692,10 @@ json BuildRoot(const AppCommandState& st) {
         boundaries.push_back(std::move(bo));
       }
       o["boundaries"] = std::move(boundaries);
+      if (!s.volumeBaseName.empty())
+        o["volumeBaseName"] = s.volumeBaseName;
+      if (!s.volumeComparisonName.empty())
+        o["volumeComparisonName"] = s.volumeComparisonName;
       if (s.tin) {
         o["verts"] = s.tin->vertsXyz;
         o["indices"] = s.tin->indices;
@@ -1538,6 +1542,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       // written and falls back at draw time, so re-pointing the surface at a style with that name
       // later restores it instead of finding the reference silently rewritten.
       s.styleName = el.value("styleName", std::string());
+      s.volumeBaseName = el.value("volumeBaseName", std::string());
+      s.volumeComparisonName = el.value("volumeComparisonName", std::string());
       if (el.contains("sourcePointGroups") && el["sourcePointGroups"].is_array())
         for (const auto& g : el["sourcePointGroups"])
           if (g.is_string())

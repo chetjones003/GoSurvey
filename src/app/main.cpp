@@ -1076,6 +1076,11 @@ int main()
       }
     }
 
+    // Viewport picks land during DrawDrawingViewport, which is AFTER the refresh at the top of
+    // the frame. WATERDROP/CATCHMENT write lastWaterDropPathXyz there; a second assemble pass
+    // (cache early-out, cheap) is what puts the preview in this frame's GL batches (REQ-133).
+    RefreshSurfaceDisplayGeometry(cmd);
+
     // Paper space (REQ-025) renders a blank sheet this increment; model geometry shows through
     // viewports in a later increment. The sheet outline itself is drawn as a UI overlay.
     // Paper space (incl. floating-viewport editing) renders a blank model scene; the sheet, viewports,

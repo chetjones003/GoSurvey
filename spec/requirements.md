@@ -2247,7 +2247,8 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: Given two surfaces, GoSurvey reports **cut**, **fill** and **net** volume over the area
   the two have **in common**, together with that common area, and offers a cut/fill colour map over
   the same region. The comparison region is stated explicitly in the result, because a volume quoted
-  without the area it covers is not a result.
+  without the area it covers is not a result. **Cut, fill and net are reported in cubic yards**
+  (computed in cubic feet, displayed as ft³ / 27). Common area remains square feet.
 
   **Bounded volumes** (REQ-131) use the same comparison, limited to a closed clip region.
 
@@ -2288,7 +2289,8 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted (2026-08-12)
 - Revisions: 2026-08-12 — initial. 2026-08-23 — amended (D-2026-08-23-k) to add the Volume Dashboard
   panel and make it live: recompute-on-rebuild, staleness marking, and discard-of-stale-results,
-  mirroring REQ-069's own pattern rather than inventing a second one.
+  mirroring REQ-069's own pattern rather than inventing a second one. 2026-08-27 — cut/fill/net
+  display is cubic yards (ft³/27); compute unchanged.
 
 ### REQ-074 — Spot elevation and grade readout
 - Purpose: the constant, small question while grading — how high is it here, and what is the grade
@@ -4497,6 +4499,31 @@ requirements is a planning failure, not a sign of rigor.
 - Revisions: 2026-08-27 — initial (D-2026-08-27-a). Closes the TASK-085 DEBT-1 / roadmap "Surface
   plotting" gap.
 
+### REQ-136 — TIN volume surface from two TINs
+- Purpose: a surface whose elevations are the difference between two existing TINs, so cut/fill
+  can be contoured, styled, and queried like any other surface
+- Priority: must
+- Type: functional
+- Statement: The user can create a named `CadSurface` whose definition is two other TIN surfaces
+  (base and comparison, by name). Its triangulation is derived: at each unique plan vertex of
+  either parent that both TINs cover, Z is **comparison minus base**. Those points are
+  unconstrained Delaunay (same `BuildTin` as REQ-068). No `ISurface`, no grid/corridor type.
+  Parents that are themselves volume surfaces are refused. Missing names, identical parents, or
+  no overlapping samples are named refusals (REQ-201). The object rebuilds when a parent TIN is
+  replaced (REQ-069 dirty). `.gs` stores the two names plus the derived verts/indices like any
+  other surface. `VOLUMESURFACE <name>, <base>, <comparison>` and Surface Manager "New volume
+  surface…". REQ-073 `VOLUMES` remains the numeric cut/fill report; this requirement does not
+  replace it.
+- Acceptance:
+  - two planar TINs 5 ft apart over the same square produce a volume TIN whose vertex Z values
+    are 5 ft within REQ-101;
+  - two TINs with no plan overlap refuse with a specific message and add no usable triangulation;
+  - a missing parent name is a named refusal;
+  - the created object appears in SURFACELIST as a volume surface naming both parents.
+- Owner-layer: util (tinvolume), Domain, Commands, UI, IO
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-b).
+
 ---
 
 ## Performance requirements
@@ -4963,6 +4990,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-133 | util/Commands | done (TASK-127) — water-drop plane/pit/outside; WATERDROP EXTRACT | accepted |
 | REQ-134 | util/Commands | done (TASK-127) — catchment pour-point and ridge union; CATCHMENT | accepted |
 | REQ-135 | UI/IO | done (TASK-125) — paper overlay + `PdfPlot` stroke of display batches; non-plottable omitted | accepted |
+| REQ-136 | util/Domain/Commands/UI/IO | done (TASK-128) — `TinVolumeTests [req136]`; `VOLUMESURFACE`; Surface Manager volume create; `req136-volume-surface` | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |

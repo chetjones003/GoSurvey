@@ -28,7 +28,7 @@ EXPECT SURFACES 2
 
 # --- two independently-built surfaces from the same source data volume to exactly zero --------------
 CMD VOLUMES Base, Twin
-EXPECT LOG "cut 0.0000 ft3, fill 0.0000 ft3, net 0.0000 ft3, common area 229208.2107 ft2"
+EXPECT LOG "cut 0.0000 yd3, fill 0.0000 yd3, net 0.0000 yd3, common area 229208.2107 ft2"
 CHECK ALL
 
 # REQ-131: omitting the clip keeps full overlap; a nonsense id is refused; a missing id is not a volume.
@@ -40,7 +40,7 @@ CHECK ALL
 
 # --- literally comparing a surface with itself (REQ-073's own wording) ------------------------------
 CMD VOLUMES Base, Base
-EXPECT LOG ""Base" (base) vs "Base" (comparison): cut 0.0000 ft3, fill 0.0000 ft3, net 0.0000 ft3"
+EXPECT LOG ""Base" (base) vs "Base" (comparison): cut 0.0000 yd3, fill 0.0000 yd3, net 0.0000 yd3"
 CHECK ALL
 
 # --- linking a lower pad locally shows up as CUT ONLY over the same common area ---------------------
@@ -52,7 +52,7 @@ CMD SURFACECREATE Pad, Existing Ground
 CMD SURFACEADDFILE Pad, samples/pad-points.csv
 CMD SURFACEREBUILD Pad
 CMD VOLUMES Base, Pad
-EXPECT LOG "cut 1154.1080 ft3, fill 0.0000 ft3, net -1154.1080 ft3, common area 229208.2107 ft2"
+EXPECT LOG "cut 42.7447 yd3, fill 0.0000 yd3, net -42.7447 yd3, common area 229208.2107 ft2"
 CHECK ALL
 
 # --- failure modes: a missing surface, a bad argument count -----------------------------------------

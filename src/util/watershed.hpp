@@ -63,3 +63,6 @@ void AppendCatchmentBoundary(const CatchmentResult& c, const std::vector<float>&
 
 /// Path as `GL_LINES` segments (skip if fewer than two vertices).
 void AppendPathAsLines(const std::vector<float>& pathXyz, std::vector<float>* out);
+
+/// Simple downhill chevrons along \p pathXyz (`GL_LINES`, two segments per arrow).
+void AppendPathFlowArrows(const std::vector<float>& pathXyz, std::vector<float>* out);

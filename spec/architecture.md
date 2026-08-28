@@ -1723,9 +1723,12 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   (h) **Surface OSNAP interpolates the triangle plane** at the cursor's plan position when that
       position is on a visible surface, returning XYZ. Miss = no snap. It reuses the query cache
       (c). It is a new `CadSnap::Kind`, not a hijack of Endpoint.
-  (i) **Bounded volume is a clip on the existing sampler**, not a new entity. A closed polyline
-      (and later a named boundary) limits which sample cells contribute. A volume-*surface* type is
-      **out of this ADR**.
+  (i) **Bounded volume is a clip on the existing sampler.** A closed polyline (and later a named
+      boundary) limits which sample cells contribute. **D-2026-08-27-b** separately accepts a
+      **TIN volume surface** as an ordinary `CadSurface` whose definition is two parent surface
+      names (REQ-136). That is not `ISurface`, not a grid/corridor type, and not a second volume
+      algorithm: Z is comparison minus base at samples covered by both TINs, then unconstrained
+      Delaunay. REQ-073 `VOLUMES` / the dashboard stay the numeric report.
   (j) **Watershed / water-drop / catchment live in `util/watershed`**: GL-free, Catch2-tested,
       synthetic basins as fixtures. Display of watershed polygons is style-generated cache geometry
       (ADR-028 (b)), never entities, never stored in `.gs`. Water-drop bake to a 3D polyline uses
@@ -1735,8 +1738,9 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
       model space already builds. PdfPlot currently draws none; that is a gap, not a decision.
       Filling it does not add a second contour engine.
   (l) **Out of this ADR, recorded so they are not built as side effects:** grid surfaces, corridor
-      surfaces, TIN-volume surfaces, contour smoothing, contour labels, TIN edge swap, proximity /
+      surfaces, contour smoothing, contour labels, TIN edge swap, proximity /
       wall / non-destructive breaklines, Civil 3D surface import, DEM / point-cloud sources.
+      TIN-volume **surfaces** are in (REQ-136); grid/corridor types stay out.
 - Alternatives: **(1) A surface interface so grid can arrive later** — declined; one present-day
   type (ADR-028 (h), REQ-301). **(2) Persist the TIN query index and watershed polygons in `.gs`**
   — declined; they are derived and would go stale against a rebuild. **(3) Put the spatial index on
@@ -1748,3 +1752,4 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   a `mutable` (or equivalently non-document) query cache beside `surfaceDisplayCache`; new commands
   `SURFACESTATS`, `DESIGNATECONTOUR`, `WATERSHED` / `WATERDROP` / `CATCHMENT` as those REQs are built.
   Sequencing: Phase 1 (124–130, 135) before Phase 2 (131) before Phase 3 (132–134).
+  D-2026-08-27-b adds REQ-136 (TIN volume surface) without a new type hierarchy.

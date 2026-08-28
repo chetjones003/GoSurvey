@@ -297,6 +297,15 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
   cmd.showSurfaceStyleWindow = open;
 
   static int selIdx = 0;
+  if (!cmd.surfaceStyleEditorFocusName.empty()) {
+    for (size_t i = 0; i < cmd.surfaceStyles.size(); ++i) {
+      if (cmd.surfaceStyles[i].name == cmd.surfaceStyleEditorFocusName) {
+        selIdx = static_cast<int>(i);
+        break;
+      }
+    }
+    cmd.surfaceStyleEditorFocusName.clear();
+  }
   if (selIdx < 0 || selIdx >= static_cast<int>(cmd.surfaceStyles.size()))
     selIdx = 0;
 
@@ -393,9 +402,11 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
       ImGui::Separator();
       ImGui::Text("%d surface(s) draw with this style.", SurfacesUsing(cmd, s.name));
       ImGui::TextWrapped(
-          "Editing a style changes every surface using it. Contours, the border and the triangle "
-          "network are generated from the triangulation each time the style changes — they are never "
-          "objects in the drawing, are never saved to the file, and never appear in a selection. Use "
+          "Editing a style changes every surface using it. To change one surface only, open this "
+          "editor from that surface's Edit... button in the Surfaces panel (it copies the style "
+          "first when others still share it). Contours, the border and the triangle network are "
+          "generated from the triangulation each time the style changes — they are never objects "
+          "in the drawing, are never saved to the file, and never appear in a selection. Use "
           "EXTRACT to turn the displayed contours into real polylines.");
       ImGui::EndTabItem();
     }

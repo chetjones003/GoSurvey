@@ -337,9 +337,16 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
                                 });
         if (wit != st.surfaceWatershedCache.end()) {
           emitSurf(wit->basinOutlines);
-          emitSurf(wit->catchmentLines);
-          emitSurf(wit->waterDropLines);
         }
+      }
+      {
+        auto emitPreview = [&](const std::vector<float>& verts) {
+          for (size_t i = 0; i + 5 < verts.size(); i += 6)
+            emitModelSeg(static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY,
+                         static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY);
+        };
+        emitPreview(st.catchmentPreviewLines);
+        emitPreview(st.waterDropPreviewLines);
       }
       CadDimStrokeParams dsp;
       dsp.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;

@@ -2078,6 +2078,10 @@ struct AppCommandState {
   std::string catchmentSurfaceName;
   std::vector<float> lastWaterDropPathXyz;
   std::vector<float> lastCatchmentPathXyz;
+  /// GL_LINES preview rebuilt each display pass from the last* paths. Not tied to TIN identity, so
+  /// a REQ-069 rebuild cannot erase a water-drop the user just computed (REQ-133).
+  std::vector<float> waterDropPreviewLines;
+  std::vector<float> catchmentPreviewLines;
 
   /// What the renderer is handed for surfaces this frame — batches borrowing the buffers above,
   /// filtered for layer/isolation visibility and carrying each component's resolved colour and
@@ -2482,6 +2486,8 @@ struct AppCommandState {
   bool showTextStyleManagerWindow = false;
   /// Surface Style editor (REQ-070 / ADR-036 (i)) — opened by SURFSTYLE and by the Surface Manager.
   bool showSurfaceStyleWindow = false;
+  /// When set, the next Surface Style window draw selects this named row (Surface Manager Edit...).
+  std::string surfaceStyleEditorFocusName;
   bool showPointGroupManagerWindow = false;  ///< Point Group manager (REQ-067).
   bool showSurfaceManagerWindow = false;     ///< Surfaces panel (REQ-068).
   bool showFeatureLineElevWindow = false;    ///< Feature line elevation editor (REQ-088).
@@ -3198,6 +3204,15 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
 int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
                                  const std::vector<std::string>& groupNames,
                                  std::vector<std::string>& log);
+
+/// REQ-136: named TIN volume surface (comparison minus base). Returns the new index, or -1.
+int CreateSurfaceFromVolumeParents(AppCommandState& st, const std::string& name, const std::string& baseName,
+                                   const std::string& comparisonName, std::vector<std::string>& log);
+
+/// If more than one surface draws with this surface's resolved style, copy that style to a unique
+/// name and point only this surface at the copy. Named-style sharing (REQ-070) stays available via
+/// SURFSTYLE ASSIGN. Returns true when a copy was made.
+bool DetachSurfaceStyleIfShared(AppCommandState& st, size_t surfaceIndex, std::vector<std::string>* log);
 
 /// Erase a surface by index, keeping its attribute array in step. Callers own the undo snapshot.
 void EraseSurfaceAtIndex(AppCommandState& st, size_t index);

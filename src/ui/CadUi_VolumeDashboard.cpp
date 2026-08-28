@@ -203,9 +203,9 @@ void DrawVolumeDashboardWindow(AppCommandState& cmd, std::vector<std::string>* l
       ImGui::TableNextColumn();
       ImGui::TextUnformatted(value.c_str());
     };
-    row("Cut", FormatLinear(r.cutFt3, p) + " ft3");
-    row("Fill", FormatLinear(r.fillFt3, p) + " ft3");
-    row("Net", FormatLinear(r.netFt3, p) + " ft3");
+    row("Cut", FormatVolumeYd3(r.cutFt3, p));
+    row("Fill", FormatVolumeYd3(r.fillFt3, p));
+    row("Net", FormatVolumeYd3(r.netFt3, p));
     row("Common area", FormatLinear(r.commonAreaFt2, p) + " ft2");
     ImGui::EndTable();
   }

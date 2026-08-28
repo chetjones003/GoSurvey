@@ -14,6 +14,7 @@
 #include "util/surfacevolume.hpp"  // REQ-073 surface-to-surface volumes (TASK-095) — pure, like surfaceanalysis
 #include "util/surfacestats.hpp"   // REQ-125
 #include "util/watershed.hpp"      // REQ-132…134
+#include "util/tinvolume.hpp"      // REQ-136
 #include "util/curveintersect.hpp"  // REQ-062 analytic intersections; EXTEND (TASK-096) reuses this over TRIM's tessellation
 #include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
 #include "util/gltfimport.hpp"
@@ -1886,10 +1887,13 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
     if (!tin || e.builtFrom.lock() != tin) {
       e.analysis = {};
       e.basinOutlines.clear();
-      e.waterDropLines.clear();
-      e.catchmentLines.clear();
+      // Water-drop / catchment previews live on lastWaterDropPathXyz, not here — a TIN pointer
+      // swap (REQ-069) must not blank a path the command just reported (REQ-133).
     }
   }
+
+  st.waterDropPreviewLines.clear();
+  st.catchmentPreviewLines = st.lastCatchmentPathXyz;
 
   // Assemble what the renderer is handed. Cheap by construction: the batches BORROW the buffers
   // above (see SurfaceDisplayBatch), so this pass copies pointers and colours, never vertices, and
@@ -1969,10 +1973,23 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
         st.surfaceDisplayGeometry.lines.push_back(bat);
       };
       addWs(&wit->basinOutlines, 0.15f, 0.75f, 0.95f);
-      addWs(&wit->catchmentLines, 0.95f, 0.35f, 0.75f);
-      addWs(&wit->waterDropLines, 0.95f, 0.85f, 0.20f);
     }
   }
+
+  const auto addOverlay = [&](const std::vector<float>* verts, float r, float g, float bch, float lwMm) {
+    if (!verts || verts->empty() || verts->size() % 6 != 0)
+      return;
+    SurfaceDisplayBatch bat;
+    bat.verts = verts;
+    bat.rgba[0] = r;
+    bat.rgba[1] = g;
+    bat.rgba[2] = bch;
+    bat.rgba[3] = 1.f;
+    bat.lineweightMm = lwMm;
+    st.surfaceDisplayGeometry.lines.push_back(bat);
+  };
+  addOverlay(&st.catchmentPreviewLines, 0.95f, 0.35f, 0.75f, 0.35f);
+  addOverlay(&st.waterDropPreviewLines, 1.f, 0.92f, 0.12f, 0.50f);
 }
 
 bool SurfaceContoursSuppressed(const AppCommandState& st, size_t surfaceIndex, int* levelsAsked) {
@@ -2182,6 +2199,13 @@ struct SurfaceBuildInputs {
   /// own merits, because the inputs here are known-incomplete before the triangulator ever runs.
   bool inputsIncomplete = false;
   std::string incompleteReason;
+  /// REQ-136: copy of parent TINs for a volume surface. When true, \ref RunSurfaceBuild ignores
+  /// \c pts / \c constraints and calls \ref BuildTinVolumeSurface.
+  bool isVolume = false;
+  std::vector<float> volumeBaseVertsXyz;
+  std::vector<std::uint32_t> volumeBaseIndices;
+  std::vector<float> volumeCompVertsXyz;
+  std::vector<std::uint32_t> volumeCompIndices;
 };
 
 /// UI-thread only: resolves a surface's definition against CURRENT drawing state — point groups,
@@ -2337,10 +2361,96 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
 /// Pure: the triangulation + boundary culling, given already-resolved inputs. Touches no
 /// \c AppCommandState, so it is safe to run on a worker thread (architecture §8) or synchronously.
 TinBuildResult RunSurfaceBuild(const SurfaceBuildInputs& in) {
+  if (in.isVolume)
+    return BuildTinVolumeSurface(in.volumeBaseVertsXyz, in.volumeBaseIndices, in.volumeCompVertsXyz,
+                                 in.volumeCompIndices, in.originX, in.originY);
   TinBuildResult r = BuildTin(in.pts, in.constraints);
   if (r.ok())
     TinCullByBoundaries(r.indices, r.vertsXyz, in.cullLoops);
   return r;
+}
+
+bool SurfaceRebuildInFlight(const AppCommandState& st, std::uint64_t surfaceId) {
+  using SurfaceJob = AppCommandState::SurfaceRebuildAsync;
+  return std::any_of(st.surfaceRebuildAsync.begin(), st.surfaceRebuildAsync.end(),
+                     [&](const std::unique_ptr<SurfaceJob>& j) { return j->surfaceId == surfaceId; });
+}
+
+/// Fills a volume-surface job. \p waitForParentsCurrent is the live-tick rule: do not sample a parent
+/// that is still rebuilding this revision.
+bool FillVolumeSurfaceInputs(AppCommandState& st, const CadSurface& surface, bool waitForParentsCurrent,
+                             SurfaceBuildInputs* in, std::string* whyNotReady) {
+  if (!in)
+    return false;
+  *in = {};
+  in->originX = st.worldDocumentOriginX;
+  in->originY = st.worldDocumentOriginY;
+  in->isVolume = true;
+  if (surface.volumeBaseName.empty() || surface.volumeComparisonName.empty()) {
+    if (whyNotReady)
+      *whyNotReady = "volume surface needs a base and a comparison surface";
+    in->inputsIncomplete = true;
+    in->incompleteReason = whyNotReady ? *whyNotReady : std::string();
+    return false;
+  }
+  if (surface.volumeBaseName == surface.volumeComparisonName) {
+    if (whyNotReady)
+      *whyNotReady = "base and comparison must be different surfaces";
+    in->inputsIncomplete = true;
+    in->incompleteReason = whyNotReady ? *whyNotReady : std::string();
+    return false;
+  }
+  const int bi = FindSurfaceIndex(st, surface.volumeBaseName);
+  const int ci = FindSurfaceIndex(st, surface.volumeComparisonName);
+  if (bi < 0 || ci < 0) {
+    if (whyNotReady)
+      *whyNotReady = "a parent surface no longer exists";
+    in->inputsIncomplete = true;
+    in->incompleteReason = whyNotReady ? *whyNotReady : std::string();
+    return false;
+  }
+  const CadSurface& base = st.cadSurfaces[static_cast<size_t>(bi)];
+  const CadSurface& comp = st.cadSurfaces[static_cast<size_t>(ci)];
+  if (base.isVolumeSurface() || comp.isVolumeSurface()) {
+    if (whyNotReady)
+      *whyNotReady = "a volume surface cannot use another volume surface as a parent";
+    in->inputsIncomplete = true;
+    in->incompleteReason = whyNotReady ? *whyNotReady : std::string();
+    return false;
+  }
+  const std::uint64_t baseId =
+      static_cast<size_t>(bi) < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[static_cast<size_t>(bi)].id : 0;
+  const std::uint64_t compId =
+      static_cast<size_t>(ci) < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[static_cast<size_t>(ci)].id : 0;
+  if (waitForParentsCurrent) {
+    if (base.builtAtRevision != st.cadGpuRevision || comp.builtAtRevision != st.cadGpuRevision ||
+        SurfaceRebuildInFlight(st, baseId) || SurfaceRebuildInFlight(st, compId)) {
+      if (whyNotReady)
+        *whyNotReady = "waiting for a parent surface to finish rebuilding";
+      return false;  // not incomplete — retry next frame
+    }
+  }
+  if (!base.tin || !comp.tin || base.tin->indices.empty() || comp.tin->indices.empty()) {
+    if (whyNotReady)
+      *whyNotReady = "a parent surface has no triangulation yet";
+    in->inputsIncomplete = true;
+    in->incompleteReason = whyNotReady ? *whyNotReady : std::string();
+    return false;
+  }
+  in->volumeBaseVertsXyz = base.tin->vertsXyz;
+  in->volumeBaseIndices = base.tin->indices;
+  in->volumeCompVertsXyz = comp.tin->vertsXyz;
+  in->volumeCompIndices = comp.tin->indices;
+  return true;
+}
+
+void MarkVolumeSurfacesDirtyForParent(AppCommandState& st, const std::string& parentName) {
+  for (CadSurface& s : st.cadSurfaces) {
+    if (!s.isVolumeSurface())
+      continue;
+    if (s.volumeBaseName == parentName || s.volumeComparisonName == parentName)
+      s.builtAtRevision = 0xFFFFFFFEu;
+  }
 }
 
 /// Converts a world-space \ref TinBuildResult into a local-frame \ref CadTin (the local-storage
@@ -2367,6 +2477,37 @@ std::shared_ptr<CadTin> ToLocalTin(const TinBuildResult& r, double originX, doub
 bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
   // Synchronous path: explicit user actions (create, the manual Rebuild button) that should show a
   // result immediately rather than waiting a frame for the async path below to pick them up.
+  if (surface.isVolumeSurface()) {
+    SurfaceBuildInputs in;
+    std::string why;
+    if (!FillVolumeSurfaceInputs(st, surface, /*waitForParentsCurrent=*/false, &in, &why)) {
+      surface.builtAtRevision = st.cadGpuRevision;
+      surface.lastBuildIncomplete = true;
+      surface.lastBuildMessage = "Not rebuilt: " + (why.empty() ? in.incompleteReason : why) + ".";
+      log.push_back("Surface \"" + surface.name + "\" not built: " +
+                    (why.empty() ? in.incompleteReason : why) + ".");
+      return false;
+    }
+    const TinBuildResult r = RunSurfaceBuild(in);
+    surface.builtAtRevision = st.cadGpuRevision;
+    surface.lastBuildIncomplete = false;
+    if (!r.ok()) {
+      surface.lastBuildMessage = r.message;
+      log.push_back("Surface \"" + surface.name + "\" not built: " + r.message);
+      return false;
+    }
+    std::shared_ptr<CadTin> tin = ToLocalTin(r, in.originX, in.originY);
+    if (!tin) {
+      surface.lastBuildMessage = r.message.empty() ? "No overlapping volume surface." : r.message;
+      log.push_back("Surface \"" + surface.name + "\" not built: " + surface.lastBuildMessage);
+      return false;
+    }
+    surface.tin = std::move(tin);
+    surface.lastBuildMessage = r.message;
+    log.push_back("Surface \"" + surface.name + "\": volume TIN, " + std::to_string(surface.vertexCount()) +
+                  " points, " + std::to_string(surface.triangleCount()) + " triangles.");
+    return true;
+  }
   const SurfaceBuildInputs in = ResolveSurfaceInputs(st, surface, log);
   if (in.inputsIncomplete) {
     // REQ-086: a source that could not be read leaves the surface exactly as it was — no partial
@@ -2437,6 +2578,57 @@ int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
   return static_cast<int>(st.cadSurfaces.size()) - 1;
 }
 
+int CreateSurfaceFromVolumeParents(AppCommandState& st, const std::string& name, const std::string& baseName,
+                                   const std::string& comparisonName, std::vector<std::string>& log) {
+  if (name.empty()) {
+    log.push_back("Surface name cannot be empty.");
+    return -1;
+  }
+  if (FindSurfaceIndex(st, name) >= 0) {
+    log.push_back("A surface named \"" + name + "\" already exists.");
+    return -1;
+  }
+  BumpCadGpuCache(st);
+  CadSurface s;
+  s.name = name;
+  s.volumeBaseName = baseName;
+  s.volumeComparisonName = comparisonName;
+  const bool built = BuildSurfaceFromSources(st, s, log);
+  if (!built && s.lastBuildMessage.empty())
+    s.lastBuildMessage = "Not built.";
+  st.cadSurfaces.push_back(std::move(s));
+  EnsureAttrCounts(st);
+  return static_cast<int>(st.cadSurfaces.size()) - 1;
+}
+
+bool DetachSurfaceStyleIfShared(AppCommandState& st, size_t surfaceIndex, std::vector<std::string>* log) {
+  if (surfaceIndex >= st.cadSurfaces.size())
+    return false;
+  SurfaceStyles::EnsureStandard(st.surfaceStyles);
+  CadSurface& surf = st.cadSurfaces[surfaceIndex];
+  const SurfaceStyle* resolved = SurfaceStyles::Resolve(st.surfaceStyles, surf.styleName);
+  if (!resolved)
+    return false;
+  const int users =
+      SurfaceStyles::CountSurfacesResolvingTo(st.cadSurfaces, st.surfaceStyles, resolved->name);
+  if (users <= 1) {
+    if (log)
+      log->push_back("SURFSTYLE — \"" + surf.name + "\" already uses its own style \"" + resolved->name +
+                     "\".");
+    return false;
+  }
+  const std::string from = resolved->name;
+  SurfaceStyle copy = *resolved;
+  copy.name = SurfaceStyles::UniqueCopyName(st.surfaceStyles, surf.name);
+  st.surfaceStyles.push_back(copy);
+  surf.styleName = copy.name;
+  BumpCadGpuCache(st);
+  if (log)
+    log->push_back("SURFSTYLE — surface \"" + surf.name + "\" now uses style \"" + copy.name +
+                   "\" (copied from \"" + from + "\").");
+  return true;
+}
+
 void EraseSurfaceAtIndex(AppCommandState& st, size_t index) {
   if (index >= st.cadSurfaces.size())
     return;
@@ -2477,6 +2669,7 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
         if (r.constraintsUnresolved > 0)
           msg += " " + std::to_string(r.constraintsUnresolved) + " constraint edge(s) could not be enforced.";
         log.push_back(msg);
+        MarkVolumeSurfacesDirtyForParent(st, surface.name);
       } else {
         // No partial surface; the previous triangulation (if any) is left alone (REQ-001).
         surface.lastBuildMessage = r.ok() ? "Boundaries left no surface." : r.message;
@@ -2502,19 +2695,31 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
         sIdx < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[sIdx].id : 0;
     if (surfaceId == 0)
       continue;
-    const bool alreadyRunning =
-        std::any_of(st.surfaceRebuildAsync.begin(), st.surfaceRebuildAsync.end(),
-                   [&](const std::unique_ptr<SurfaceJob>& j) { return j->surfaceId == surfaceId; });
+    const bool alreadyRunning = SurfaceRebuildInFlight(st, surfaceId);
     if (alreadyRunning)
       continue;
 
+    std::vector<std::string> resolveLog;
+    SurfaceBuildInputs inputs;
+    if (surface.isVolumeSurface()) {
+      std::string why;
+      if (!FillVolumeSurfaceInputs(st, surface, /*waitForParentsCurrent=*/true, &inputs, &why)) {
+        if (inputs.inputsIncomplete) {
+          surface.builtAtRevision = st.cadGpuRevision;
+          surface.lastBuildIncomplete = true;
+          surface.lastBuildMessage = "Not rebuilt: " + (why.empty() ? inputs.incompleteReason : why) + ".";
+          log.push_back("Surface \"" + surface.name + "\" not rebuilt: " +
+                        (why.empty() ? inputs.incompleteReason : why) + ".");
+        }
+        continue;
+      }
+    } else {
     // Resolution against AppCommandState happens HERE, on the UI thread — the worker below receives
     // only the already-resolved, plain-data result and touches no drawing state (architecture §8
     // rule 1). This is also where dangling breakline/boundary ids actually get dropped from the
     // definition, so that observably happens the very next frame after the referenced entity is
     // deleted, not only once the (possibly slower) background triangulation finishes.
-    std::vector<std::string> resolveLog;
-    SurfaceBuildInputs inputs = ResolveSurfaceInputs(st, surface, resolveLog);
+    inputs = ResolveSurfaceInputs(st, surface, resolveLog);
     for (std::string& m : resolveLog)
       log.push_back(std::move(m));
 
@@ -2528,6 +2733,7 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
       surface.lastBuildIncomplete = true;
       surface.lastBuildMessage = "Not rebuilt: " + inputs.incompleteReason + ".";
       continue;
+    }
     }
 
     auto job = std::make_unique<SurfaceJob>();
@@ -2733,6 +2939,9 @@ void ReportSurfaces(const AppCommandState& st, std::vector<std::string>& log) {
     }
     if (!s.lastBuildMessage.empty())
       log.push_back("  last build: " + s.lastBuildMessage);
+    if (s.isVolumeSurface())
+      log.push_back("  volume surface: \"" + s.volumeBaseName + "\" (base) vs \"" + s.volumeComparisonName +
+                    "\" (comparison)");
   }
 }
 
@@ -2759,6 +2968,25 @@ void RunSurfaceCreate(AppCommandState& st, const std::string& args, std::vector<
   }
   PushUndoSnapshot(st, "Create surface");
   CreateSurfaceFromPointGroups(st, f[0], groups, log);  // reports its own failure (REQ-201)
+}
+
+/// `VOLUMESURFACE <name>, <base>, <comparison>` — REQ-136 TIN volume surface.
+void RunVolumeSurfaceCreate(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() != 3 || f[0].empty() || f[1].empty() || f[2].empty()) {
+    log.push_back("VOLUMESURFACE — usage: VOLUMESURFACE <name>, <base surface>, <comparison surface>.");
+    return;
+  }
+  if (FindSurfaceIndex(st, f[1]) < 0) {
+    log.push_back("VOLUMESURFACE — no surface named \"" + f[1] + "\".");
+    return;
+  }
+  if (FindSurfaceIndex(st, f[2]) < 0) {
+    log.push_back("VOLUMESURFACE — no surface named \"" + f[2] + "\".");
+    return;
+  }
+  PushUndoSnapshot(st, "Create volume surface");
+  CreateSurfaceFromVolumeParents(st, f[0], f[1], f[2], log);
 }
 
 /// `SURFACERENAME <old>, <new>` — same duplicate-name refusal as the panel (REQ-075).
@@ -3031,6 +3259,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
     log.push_back("SURFSTYLE — usage: SURFSTYLE (opens the editor) | NEW <style> | DELETE <style> | "
                   "INTERVAL <style>, <minor>, <major> | SHOW|HIDE <style>, "
                   "<triangles|border|major|minor|points> | ASSIGN <surface>, <style> | "
+                  "DETACH <surface> | "
                   "ANALYSIS <style>, none|elevation|slope | BAND <style>, <upper bound>, <color> | "
                   "CLEARBANDS <style> | ARROWS <style>, on|off | "
                   "ARROWBAND <style>, <upper bound>, <color> | CLEARARROWBANDS <style>");
@@ -3173,6 +3402,31 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
     BumpCadGpuCache(st);
     log.push_back("SURFSTYLE — surface \"" + st.cadSurfaces[static_cast<size_t>(si)].name +
                   "\" now uses style \"" + f[1] + "\".");
+    return;
+  }
+
+  if (verb == "detach") {
+    const std::string name = StringUtil::trimCopy(rest);
+    if (name.empty()) {
+      usage();
+      return;
+    }
+    const int si = FindSurfaceIndex(st, name);
+    if (si < 0) {
+      log.push_back("SURFSTYLE — no surface named \"" + name + "\".");
+      return;
+    }
+    CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
+    const SurfaceStyle* resolved = SurfaceStyles::Resolve(st.surfaceStyles, surf.styleName);
+    const int users = resolved ? SurfaceStyles::CountSurfacesResolvingTo(st.cadSurfaces, st.surfaceStyles,
+                                                                         resolved->name)
+                               : 0;
+    if (users <= 1) {
+      DetachSurfaceStyleIfShared(st, static_cast<size_t>(si), &log);
+      return;
+    }
+    PushUndoSnapshot(st, "Surface style");
+    DetachSurfaceStyleIfShared(st, static_cast<size_t>(si), &log);
     return;
   }
 
@@ -3343,10 +3597,10 @@ void ExecuteVolumesCommand(AppCommandState& st, const std::string& args, std::ve
   }
   char buf[384];
   std::snprintf(buf, sizeof(buf),
-                "VOLUMES — \"%s\" (base) vs \"%s\" (comparison): cut %s ft3, fill %s ft3, net %s "
-                "ft3, common area %s ft2.",
-                f[0].c_str(), f[1].c_str(), FormatLinear(r.cutFt3, p).c_str(),
-                FormatLinear(r.fillFt3, p).c_str(), FormatLinear(r.netFt3, p).c_str(),
+                "VOLUMES — \"%s\" (base) vs \"%s\" (comparison): cut %s, fill %s, net %s, "
+                "common area %s ft2.",
+                f[0].c_str(), f[1].c_str(), FormatVolumeYd3(r.cutFt3, p).c_str(),
+                FormatVolumeYd3(r.fillFt3, p).c_str(), FormatVolumeYd3(r.netFt3, p).c_str(),
                 FormatLinear(r.commonAreaFt2, p).c_str());
   log.push_back(buf);
 }
@@ -3484,9 +3738,9 @@ void ExecuteVolDashCommand(AppCommandState& st, const std::string& args, std::ve
     dash.resultForClipEntityId = dash.clipEntityId;
     dash.resultHasMap = dash.showMap;
     const int p = st.displayLinearPrecision;
-    log.push_back("VOLDASH — cut " + FormatLinear(dash.lastResult.cutFt3, p) + " ft3, fill " +
-                  FormatLinear(dash.lastResult.fillFt3, p) + " ft3, net " +
-                  FormatLinear(dash.lastResult.netFt3, p) + " ft3, common area " +
+    log.push_back("VOLDASH — cut " + FormatVolumeYd3(dash.lastResult.cutFt3, p) + ", fill " +
+                  FormatVolumeYd3(dash.lastResult.fillFt3, p) + ", net " +
+                  FormatVolumeYd3(dash.lastResult.netFt3, p) + ", common area " +
                   FormatLinear(dash.lastResult.commonAreaFt2, p) + " ft2.");
     return;
   }
@@ -3682,30 +3936,58 @@ int AppendXyzPathAsPolyline(AppCommandState& st, const std::vector<float>& xyz, 
   return 1;
 }
 
+EntityAttributes WaterDropEntityAttrs(const AppCommandState& st) {
+  EntityAttributes a;
+  a.layer = st.currentLayer.empty() ? std::string("0") : st.currentLayer;
+  a.color = "Yellow";
+  a.linetype = "ByLayer";
+  a.lineweightMm = 0.35f;
+  a.transparency = -1.f;
+  return a;
+}
+
+void AppendYellowLineSegs(AppCommandState& st, const std::vector<float>& glLines) {
+  const EntityAttributes a = WaterDropEntityAttrs(st);
+  for (size_t i = 0; i + 5 < glLines.size(); i += 6) {
+    st.userLinesFlat.push_back(glLines[i + 0]);
+    st.userLinesFlat.push_back(glLines[i + 1]);
+    st.userLinesFlat.push_back(glLines[i + 2]);
+    st.userLinesFlat.push_back(glLines[i + 3]);
+    st.userLinesFlat.push_back(glLines[i + 4]);
+    st.userLinesFlat.push_back(glLines[i + 5]);
+    st.userLineAttrs.push_back(a);
+  }
+}
+
 void RunWaterDropAt(AppCommandState& st, size_t si, double x, double y, std::vector<std::string>& log) {
   const CadSurface& s = st.cadSurfaces[si];
   if (!s.tin || s.tin->indices.empty()) {
     log.push_back("WATERDROP — \"" + s.name + "\": not built.");
-    st.lastWaterDropPathXyz.clear();
     return;
   }
   const WaterDropResult d = ComputeWaterDrop(s.tin->vertsXyz, s.tin->indices, x, y);
-  AppCommandState::SurfaceWatershedCacheEntry* cache = WatershedCacheOf(st, si);
-  if (cache)
-    cache->waterDropLines.clear();
   if (!d.ok) {
     log.push_back("WATERDROP — \"" + s.name + "\": null TIN.");
-    st.lastWaterDropPathXyz.clear();
     return;
   }
   if (d.outside) {
     log.push_back("WATERDROP — \"" + s.name + "\": outside surface. No path.");
-    st.lastWaterDropPathXyz.clear();
     return;
   }
-  st.lastWaterDropPathXyz = d.pathXyz;
-  if (cache)
-    AppendPathAsLines(d.pathXyz, &cache->waterDropLines);
+  // Do not run WatershedCacheOf here: that fills basin outlines (TIN-looking edges) as a side
+  // effect of a drop. WATERSHED is the command that asks for basins.
+  std::vector<float> lifted = d.pathXyz;
+  for (size_t i = 2; i < lifted.size(); i += 3)
+    lifted[i] += 0.15f;
+  PushUndoSnapshot(st, "WATERDROP");
+  st.lastWaterDropPathXyz = lifted;
+  AppendXyzPathAsPolyline(st, lifted, false);
+  if (!st.userPolylineAttrs.empty())
+    st.userPolylineAttrs.back() = WaterDropEntityAttrs(st);
+  std::vector<float> arrows;
+  AppendPathFlowArrows(lifted, &arrows);
+  AppendYellowLineSegs(st, arrows);
+  BumpCadGpuCache(st);
   const int p = st.displayLinearPrecision;
   const size_t n = d.pathXyz.size();
   const float ex = n >= 3 ? d.pathXyz[n - 3] : 0.f;
@@ -3723,9 +4005,6 @@ void RunCatchmentAt(AppCommandState& st, size_t si, double x, double y, std::vec
     return;
   }
   const CatchmentResult c = ComputeCatchment(s.tin->vertsXyz, s.tin->indices, x, y);
-  AppCommandState::SurfaceWatershedCacheEntry* cache = WatershedCacheOf(st, si);
-  if (cache)
-    cache->catchmentLines.clear();
   if (!c.ok) {
     log.push_back("CATCHMENT — \"" + s.name + "\": null TIN.");
     st.lastCatchmentPathXyz.clear();
@@ -3737,10 +4016,7 @@ void RunCatchmentAt(AppCommandState& st, size_t si, double x, double y, std::vec
     return;
   }
   st.lastCatchmentPathXyz.clear();
-  if (cache) {
-    AppendCatchmentBoundary(c, s.tin->vertsXyz, s.tin->indices, &cache->catchmentLines);
-    st.lastCatchmentPathXyz = cache->catchmentLines;
-  }
+  AppendCatchmentBoundary(c, s.tin->vertsXyz, s.tin->indices, &st.lastCatchmentPathXyz);
   const int p = st.displayLinearPrecision;
   log.push_back("CATCHMENT — \"" + s.name + "\": area " + FormatLinear(c.area2d, p) + " ft2, elev " +
                 FormatLinear(c.minZ, p) + " to " + FormatLinear(c.maxZ, p) + ", " +
@@ -4648,6 +4924,7 @@ const CmdEntry kRegistry[] = {
     {"designatecontour", "dcon", "Add a picked line/polyline as a surface contour source"},
     {"designateboundary", "dbd", "Add a picked closed polyline as a surface boundary (outer/hide/show/clip)"},
     {"surfacecreate", "sfcreate", "Create a surface from point groups: SURFACECREATE <name>, <group>[, <group>…]"},
+    {"volumesurface", "volsurf", "Create a TIN volume surface: VOLUMESURFACE <name>, <base>, <comparison>"},
     {"surfacerename", "sfrename", "Rename a surface: SURFACERENAME <old>, <new>"},
     {"surfacedelete", "sfdelete", "Delete a surface: SURFACEDELETE <name>"},
     {"surfacerebuild", "sfrebuild", "Rebuild a surface now (all surfaces if no name): SURFACEREBUILD [<name>]"},
@@ -22441,7 +22718,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     // DESIGNATEBREAKLINE/DESIGNATEBOUNDARY below they make every surface operation reachable without
     // the Surfaces panel, which is what lets the REQ-203 driver exercise them at all: a surface has
     // no entity id, and panel buttons are unreachable with no window.
-    if (plotTok == "surfacecreate" || plotTok == "sfcreate" || plotTok == "surfacerename" ||
+    if (plotTok == "surfacecreate" || plotTok == "sfcreate" || plotTok == "volumesurface" ||
+        plotTok == "volsurf" || plotTok == "surfacerename" ||
         plotTok == "sfrename" || plotTok == "surfacedelete" || plotTok == "sfdelete" ||
         plotTok == "surfacerebuild" || plotTok == "sfrebuild" || plotTok == "surfacelist" ||
         plotTok == "sflist" || plotTok == "undesignate" || plotTok == "undes" ||
@@ -22454,6 +22732,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       rest = StringUtil::trimCopy(rest);
       if (plotTok == "surfacecreate" || plotTok == "sfcreate")
         RunSurfaceCreate(st, rest, log);
+      else if (plotTok == "volumesurface" || plotTok == "volsurf")
+        RunVolumeSurfaceCreate(st, rest, log);
       else if (plotTok == "surfacerename" || plotTok == "sfrename")
         RunSurfaceRename(st, rest, log);
       else if (plotTok == "surfacedelete" || plotTok == "sfdelete")

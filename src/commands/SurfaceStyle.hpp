@@ -99,6 +99,31 @@ inline const SurfaceStyle* Resolve(const std::vector<SurfaceStyle>& styles, cons
   return styles.empty() ? nullptr : &styles.front();
 }
 
+/// A name that is not already in \p styles, preferring \p preferred (the surface's name).
+inline std::string UniqueCopyName(const std::vector<SurfaceStyle>& styles, const std::string& preferred) {
+  const std::string base = preferred.empty() ? std::string("Surface") : preferred;
+  if (!Find(styles, base))
+    return base;
+  for (int n = 2; n < 10000; ++n) {
+    const std::string cand = base + " (" + std::to_string(n) + ")";
+    if (!Find(styles, cand))
+      return cand;
+  }
+  return base + " copy";
+}
+
+/// How many surfaces resolve to the named table row (including Standard fallback).
+inline int CountSurfacesResolvingTo(const std::vector<CadSurface>& surfaces,
+                                    const std::vector<SurfaceStyle>& styles, const std::string& styleName) {
+  int n = 0;
+  for (const CadSurface& s : surfaces) {
+    const SurfaceStyle* r = Resolve(styles, s.styleName);
+    if (r && r->name == styleName)
+      ++n;
+  }
+  return n;
+}
+
 /// An interval in feet, formatted for a message a person reads (REQ-201): "2" and "0.5", never
 /// "2.000000" or "5e-01".
 ///
