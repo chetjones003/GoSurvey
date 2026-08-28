@@ -138,7 +138,7 @@ CHECK ALL
 
 # --- failure modes: a bad analysis type or a bad arrows flag is refused with a specific message ------
 CMD SURFSTYLE ANALYSIS Standard, upsidedown
-EXPECT LOG "must be none, elevation, slope or direction"
+EXPECT LOG "must be none, elevation, slope, direction or slopeangle"
 CMD SURFSTYLE ARROWS Standard, maybe
 EXPECT LOG "must be on or off"
 # ...and neither refusal changed anything.
