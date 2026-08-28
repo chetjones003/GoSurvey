@@ -975,10 +975,11 @@ namespace {
   return lo;
 }
 
-}  // namespace
-
-bool TinSwapInteriorEdgeNear(const std::vector<float>& vertsXyz, std::vector<std::uint32_t>& indices, double x,
-                             double y) {
+[[nodiscard]] bool FindNearestInteriorEdge(const std::vector<float>& vertsXyz,
+                                           const std::vector<std::uint32_t>& indices, double x, double y,
+                                           int* t0, int* t1, std::uint32_t* lo, std::uint32_t* hi) {
+  if (!t0 || !t1 || !lo || !hi)
+    return false;
   const int nTri = static_cast<int>(indices.size() / 3);
   if (nTri < 2 || vertsXyz.size() < 12)
     return false;
@@ -1020,23 +1021,38 @@ bool TinSwapInteriorEdgeNear(const std::vector<float>& vertsXyz, std::vector<std
     while (j < recs.size() && recs[j].lo == recs[i].lo && recs[j].hi == recs[i].hi)
       ++j;
     if (j == i + 2) {
-      const std::uint32_t lo = recs[i].lo, hi = recs[i].hi;
-      if (lo * 3 + 2 < vertsXyz.size() && hi * 3 + 2 < vertsXyz.size()) {
-        const double ax = vertsXyz[lo * 3], ay = vertsXyz[lo * 3 + 1];
-        const double bx = vertsXyz[hi * 3], by = vertsXyz[hi * 3 + 1];
+      const std::uint32_t elo = recs[i].lo, ehi = recs[i].hi;
+      if (elo * 3 + 2 < vertsXyz.size() && ehi * 3 + 2 < vertsXyz.size()) {
+        const double ax = vertsXyz[elo * 3], ay = vertsXyz[elo * 3 + 1];
+        const double bx = vertsXyz[ehi * 3], by = vertsXyz[ehi * 3 + 1];
         const double d2 = DistPointSeg2(x, y, ax, ay, bx, by);
         if (d2 < bestD2) {
           bestD2 = d2;
           bestT0 = recs[i].tri;
           bestT1 = recs[i + 1].tri;
-          bestLo = lo;
-          bestHi = hi;
+          bestLo = elo;
+          bestHi = ehi;
         }
       }
     }
     i = j;
   }
-  if (bestT0 < 0 || bestD2 > 1.0)  // 1 ft plan: a miss is not "the nearest edge anywhere"
+  if (bestT0 < 0 || bestD2 > 1.0)
+    return false;
+  *t0 = bestT0;
+  *t1 = bestT1;
+  *lo = bestLo;
+  *hi = bestHi;
+  return true;
+}
+
+}  // namespace
+
+bool TinSwapInteriorEdgeNear(const std::vector<float>& vertsXyz, std::vector<std::uint32_t>& indices, double x,
+                             double y) {
+  int bestT0 = -1, bestT1 = -1;
+  std::uint32_t bestLo = 0, bestHi = 0;
+  if (!FindNearestInteriorEdge(vertsXyz, indices, x, y, &bestT0, &bestT1, &bestLo, &bestHi))
     return false;
 
   std::uint32_t* t0 = &indices[static_cast<size_t>(bestT0) * 3];
@@ -1052,5 +1068,24 @@ bool TinSwapInteriorEdgeNear(const std::vector<float>& vertsXyz, std::vector<std
   t1[0] = b;
   t1[1] = bestHi;
   t1[2] = d;
+  return true;
+}
+
+bool TinDeleteInteriorEdgeNear(std::vector<std::uint32_t>& indices, const std::vector<float>& vertsXyz, double x,
+                               double y) {
+  int bestT0 = -1, bestT1 = -1;
+  std::uint32_t bestLo = 0, bestHi = 0;
+  if (!FindNearestInteriorEdge(vertsXyz, indices, x, y, &bestT0, &bestT1, &bestLo, &bestHi))
+    return false;
+  int hi = std::max(bestT0, bestT1);
+  int lo = std::min(bestT0, bestT1);
+  if (hi < 0 || static_cast<size_t>(hi) * 3 + 2 >= indices.size())
+    return false;
+  indices.erase(indices.begin() + static_cast<std::ptrdiff_t>(hi) * 3,
+                indices.begin() + static_cast<std::ptrdiff_t>(hi) * 3 + 3);
+  indices.erase(indices.begin() + static_cast<std::ptrdiff_t>(lo) * 3,
+                indices.begin() + static_cast<std::ptrdiff_t>(lo) * 3 + 3);
+  (void)bestLo;
+  (void)bestHi;
   return true;
 }

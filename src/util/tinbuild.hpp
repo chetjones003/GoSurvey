@@ -203,6 +203,11 @@ void TinBorderEdges(const std::vector<float>& vertsXyz, const std::vector<std::u
 [[nodiscard]] bool TinSwapInteriorEdgeNear(const std::vector<float>& vertsXyz, std::vector<std::uint32_t>& indices,
                                            double x, double y);
 
+/// Remove the two triangles that share the interior edge nearest (\p x, \p y) in plan (REQ-150).
+/// False when the pick is not on an interior edge.
+[[nodiscard]] bool TinDeleteInteriorEdgeNear(std::vector<std::uint32_t>& indices, const std::vector<float>& vertsXyz,
+                                             double x, double y);
+
 // --- Predicates, exposed for testing -----------------------------------------------------------
 // These are the two functions the whole triangulation rests on, and a sign error in either is
 // invisible on most inputs. They are public so they can be pinned directly rather than only through

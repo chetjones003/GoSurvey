@@ -50,6 +50,8 @@ TEST_CASE("Planar surfaces offset by a known constant report the hand-computed v
 
   REQUIRE(r.overlapped);
   CHECK_THAT(r.commonAreaFt2, WithinRel(10000.0, 1e-6));
+  CHECK_THAT(r.cutAreaFt2, WithinRel(10000.0, 1e-6));
+  CHECK_THAT(r.fillAreaFt2, WithinAbs(0.0, 1e-6));
   CHECK_THAT(r.cutFt3, WithinRel(100000.0, 1e-6));
   CHECK_THAT(r.fillFt3, WithinAbs(0.0, 1e-6));
   CHECK_THAT(r.netFt3, WithinRel(-100000.0, 1e-6));
@@ -67,7 +69,9 @@ TEST_CASE("The sign convention is Base-above-Comparison is CUT, the reverse is F
   REQUIRE(r.overlapped);
   const double expectedVol = 10.0 * (50.0 * 50.0);  // 25,000 ft^3
   CHECK_THAT(r.fillFt3, WithinRel(expectedVol, 1e-6));
+  CHECK_THAT(r.fillAreaFt2, WithinRel(2500.0, 1e-6));
   CHECK_THAT(r.cutFt3, WithinAbs(0.0, 1e-6));
+  CHECK_THAT(r.cutAreaFt2, WithinAbs(0.0, 1e-6));
   CHECK_THAT(r.netFt3, WithinRel(expectedVol, 1e-6));
 }
 
@@ -233,6 +237,27 @@ TEST_CASE("A clip that misses both surfaces reports no overlap", "[volume][req13
   CHECK_FALSE(r.overlapped);
   CHECK_THAT(r.cutFt3, WithinAbs(0.0, 1e-12));
   CHECK_THAT(r.fillFt3, WithinAbs(0.0, 1e-12));
+}
+
+TEST_CASE("A plane crossing a flat reports equal cut and fill areas", "[volume][req146][req147]") {
+  // Base Z = X on [0,10]x[0,10], Comparison Z = 5. Cut where X>5, fill where X<5.
+  // Volume each side: 10 * ∫_0^5 u du = 125 ft3. Areas 50 ft2 each.
+  const std::vector<float> baseVerts = {
+      0.f, 0.f, 0.f,  10.f, 0.f, 10.f,  10.f, 10.f, 10.f,  0.f, 10.f, 0.f,
+  };
+  const std::vector<std::uint32_t> baseIdx = {0, 1, 2, 0, 2, 3};
+  const FlatRect comp = MakeFlatRect(0, 0, 10, 10, 5.f);
+
+  const SurfaceVolumeResult r =
+      ComputeSurfaceVolume(baseVerts, baseIdx, comp.vertsXyz, comp.indices);
+
+  REQUIRE(r.overlapped);
+  CHECK_THAT(r.commonAreaFt2, WithinRel(100.0, 0.02));
+  CHECK_THAT(r.cutAreaFt2, WithinRel(50.0, 0.05));
+  CHECK_THAT(r.fillAreaFt2, WithinRel(50.0, 0.05));
+  CHECK_THAT(r.cutFt3, WithinRel(125.0, 0.05));
+  CHECK_THAT(r.fillFt3, WithinRel(125.0, 0.05));
+  CHECK_THAT(r.netFt3, WithinAbs(0.0, 2.0));
 }
 
 TEST_CASE("Omitting the clip preserves full-overlap volume", "[volume][req131]") {

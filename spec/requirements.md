@@ -4602,15 +4602,21 @@ requirements is a planning failure, not a sign of rigor.
 - Purpose: the issue's Analyze tools are reachable from the Survey ribbon; a drop can be a feature line
 - Priority: must
 - Type: functional
-- Statement: The Survey ribbon exposes Surfaces, volume surface create, Add breakline/contour/boundary,
-  Elevations (SURFELEV), Slopes / Directions / Arrows (SURFSTYLE), Watershed, Water Drop, Catchment,
-  Volume Dashboard, Bounded volume (clip), VOLREPORT, Properties (manager), Statistics, Rebuild.
+- Statement: The Survey ribbon tab chrome matches Civil 3D's Survey tab (D-2026-08-28-k):
+  Labels & Tables, General Tools (no Object Viewer), Survey (Toolspace), Modify, Analyze, Launch Pad.
+  Unimplemented Civil 3D tools are disabled with a **not implemented yet** tooltip (REQ-084).
+  Implemented actions: Add Tables (`VOLREPORT` / `VOLREPORT TABLE`), Properties, Isolate Objects,
+  Survey Toolspace (`TOOLSPACE`), Survey Point Properties, Edit Elevations (feature-line elevations),
+  Quick Profile, Create Surface. Surfaces, volume create, breaklines, elevations, slopes, watershed,
+  water drop, catchment, dashboard, VOLREPORT, statistics, and rebuild remain invokable from the
+  command line; the TIN Surface contextual tab (REQ-143) also exposes the surface Analyze/Modify set.
   `WATERDROP EXTRACT FL` bakes the last path as a feature line (unlinked).
 - Acceptance:
   - each named command remains invokable from the command line;
   - EXTRACT FL with a path adds one feature line; with no path is a named refusal.
 - Owner-layer: UI, Commands
 - Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-a. 2026-08-28 — D-2026-08-28-k: Survey tab chrome.
 
 ### REQ-142 — Toolspace (Prospector and Settings)
 - Purpose: a drawing explorer whose chrome matches Civil 3D Toolspace, listing only objects GoSurvey implements
@@ -4696,6 +4702,125 @@ requirements is a planning failure, not a sign of rigor.
 - Owner-layer: util, Commands, UI
 - Status: accepted (2026-08-28)
 - Revisions: 2026-08-28 — D-2026-08-28-g.
+
+### REQ-146 — Cut area and fill area (issue #119 AC-V5)
+- Purpose: volume reports name the plan area of cut separately from fill
+- Priority: must
+- Type: functional
+- Statement: `ComputeSurfaceVolume` accumulates `cutAreaFt2` (Base above Comparison) and
+  `fillAreaFt2` (Comparison above Base) alongside cut/fill/net volumes and common area.
+  `VOLUMES`, the Volume Dashboard, `VOLREPORT`, and `VOLCSV` print both areas.
+- Acceptance:
+  - two planar TINs 10 ft apart over a 100×100 square report cut area 10,000 ft² and fill area 0
+    (or the reverse when the pair is swapped);
+  - a report with no prior volume result still refuses `VOLREPORT` without adding an entity.
+- Owner-layer: util, Commands, UI
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-h.
+
+### REQ-147 — Mixed-sign volume cells split on the zero contour (issue #119 AC-V6)
+- Purpose: cut and fill are not collapsed when two surfaces cross inside a sample cell
+- Priority: must
+- Type: functional
+- Statement: Each volume sample cell queries both TINs at its four corners. A cell whose ΔZ does not
+  change sign integrates as a prism. A mixed-sign cell splits each half-triangle on the ΔZ = 0
+  contour and accumulates cut and fill separately. The 250,000-sample budget remains. Corner misses
+  fall back to a centre sample.
+- Acceptance:
+  - Base Z = X and Comparison Z = 5 over [0,10]×[0,10] report cut volume and fill volume each 125 ft³
+    within 5%, and cut/fill areas each 50 ft² within 5%.
+- Owner-layer: util
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-h.
+
+### REQ-148 — Drawing TABLE for volume summaries
+- Purpose: volume numbers can sit in the drawing as an AutoCAD-style table, not only as MTEXT
+- Priority: must
+- Type: functional
+- Statement: A TABLE is a first-class entity (`CadTable` in `cadTables` / `cadTableAttrs`,
+  `EntityKind::Table` appended after Surface). It stores insertion (top-left of the unrotated table),
+  width, height, rotation, column count, and row-major `cells`. MOVE, COPY, ROTATE, SCALE, MIRROR,
+  STRETCH, ARRAY, and ALIGN apply to the whole table. Double-clicking a cell opens an in-place editor
+  (Enter commits, Esc cancels). `.gs` round-trips a `"tables"` array. Load migrates leftover
+  `CadAnnotation::Kind::Table` into `cadTables`. The viewport and paper overlay stroke the grid and
+  cell text.   `VOLREPORT TABLE` (alias `VOLTABLE`) inserts a 2-column table of the last volume result
+  (and dashboard rows when present). The grid auto-fits cell text (`CadTableFitToContent`):
+  equal columns, height from row count × text height; insert and each committed cell edit
+  refit. `VOLREPORT` with no argument still inserts MTEXT (REQ-140). DXF
+  export emits cell TEXT (no ACAD_TABLE object).
+- Acceptance:
+  - `VOLREPORT TABLE` after `VOLUMES` adds one TABLE entity (not an annotation);
+  - a TABLE with 2 columns and 4 cells lays out four non-empty rectangles inside its box;
+  - `VOLREPORT TABLE` with no volume result is a named refusal;
+  - MOVE of a TABLE changes its insertion; a cell hit-test returns the row-major index of a point
+    inside that cell;
+  - `CadTableFitToContent` makes `width` at least as wide as the longest cell string at the
+    table's plotted height, and `height` at least one text-height per row; a longer cell
+    string after a fit increases `width`.
+- Owner-layer: Domain, Commands, UI, IO
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-h; 2026-08-28 — D-2026-08-28-i (entity store + modify + cell edit);
+  2026-08-28 — D-2026-08-28-j (auto-fit grid to cell text).
+
+### REQ-149 — Multi-row Volume Dashboard and CSV
+- Purpose: several base/comparison/clip analyses share one dashboard and one export
+- Priority: must
+- Type: functional
+- Statement: The Volume Dashboard keeps a list of named analysis rows (`VOLDASH ADD <label>` snapshots
+  the current pick and result). The live pickers remain the working row. `VOLCSV <path>` writes a UTF-8
+  CSV of every row plus the live result: label, base, comparison, cut, fill, net, cut area, fill area,
+  common area. Missing path opens the existing CSV save dialog.
+- Acceptance:
+  - `VOLDASH ADD` with a landed result increases the row count by one;
+  - `VOLCSV` with no volume data is a named refusal;
+  - `VOLCSV tests/tmp-vol.csv` after `VOLUMES` writes a file containing `cut`.
+- Owner-layer: Commands, UI
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-h.
+
+### REQ-150 — Move TIN point and delete TIN line
+- Purpose: the issue's remaining TIN edits are definition operations, like REQ-144
+- Priority: must
+- Type: functional
+- Statement: `SURFACEMOVEPOINT <surface>[, <x1>, <y1>, <x2>, <y2>, <z2>]` records a local from-XY and
+  to-XYZ; rebuild replaces the nearest assembled point. Name-only is two picks (from, then to; to-Z is
+  the work plane). `SURFDELLINE <surface>[, <x>, <y>]` records a pick; rebuild deletes the two
+  triangles of the nearest interior edge (`TinDeleteInteriorEdgeNear`). Live `CadTin` is never mutated
+  except via pointer swap after a copied mesh edit. Grid/corridor/volume kinds refuse.
+- Acceptance:
+  - moving the only extra add-point of a three-point TIN relocates that vertex after rebuild;
+  - deleting an interior edge of a two-triangle quad leaves fewer than six indices;
+  - a miss more than 1 ft from any interior edge is a named refusal.
+- Owner-layer: Domain, Commands, IO, util
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-h.
+
+### REQ-151 — Arcs as surface breaklines
+- Purpose: 3D geometry used as breaklines includes arcs
+- Priority: must
+- Type: functional
+- Statement: `ResolveDefinitionChain` tessellates a `CadArc` into at least 8 chords (≤1 ft or 5°
+  whichever is finer, cap 256) at the arc's Z, and treats that chain as an open breakline. Closed
+  boundaries still require a polyline or feature line.
+- Acceptance:
+  - designating an arc as a breakline rebuilds the TIN with a constraint along the chord chain;
+  - `DESIGNATEBOUNDARY` on an arc is a named refusal.
+- Owner-layer: Commands
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-h.
+
+### REQ-152 — Catchment mean elevation
+- Purpose: catchment elevation statistics include an average, not only min/max
+- Priority: must
+- Type: functional
+- Statement: `CatchmentResult::meanZ` is the area-weighted mean of triangle vertex elevations in the
+  catchment. `CATCHMENT` logs it with min/max.
+- Acceptance:
+  - a planar catchment reports mean Z equal to that plane within REQ-101;
+  - an outside pick still reports outside and does not invent a mean.
+- Owner-layer: util, Commands
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-h.
 
 ---
 
@@ -5173,6 +5298,13 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-143 | UI/Commands | done (TASK-133) — contextual TIN Surface ribbon tab | accepted |
 | REQ-144 | Domain/Commands/IO/UI | done (TASK-134) — `req144-surface-add-del-point`; SURFACEADDPOINT / SURFACEDELPOINT | accepted |
 | REQ-145 | util/Commands/UI | done (TASK-135) — `SurfaceProfileTests [req145]`; `req145-quick-profile` | accepted |
+| REQ-146 | util/Commands | done (TASK-136) — cut/fill areas; `SurfaceVolumeTests [req146]`; VOLUMES/VOLCSV | accepted |
+| REQ-147 | util | done (TASK-136) — mixed-sign cell split `[req147]` | accepted |
+| REQ-148 | Domain/Commands/UI/IO | TASK-137 entity; TASK-138 auto-fit | accepted |
+| REQ-149 | Commands/UI | done (TASK-136) — VOLDASH ADD; VOLCSV; dashboard rows | accepted |
+| REQ-150 | Domain/Commands/util | done (TASK-136) — SURFACEMOVEPOINT / SURFDELLINE; `[req150]` | accepted |
+| REQ-151 | Commands | done (TASK-136) — arc breaklines; DESIGNATEBOUNDARY refuses arcs | accepted |
+| REQ-152 | util/Commands | done (TASK-136) — catchment mean Z; `[req152]` | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |

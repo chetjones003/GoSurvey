@@ -37,7 +37,7 @@ struct CatchmentResult {
   bool ok = false;
   bool outside = false;
   double area2d = 0.0;
-  double minZ = 0.0, maxZ = 0.0;
+  double minZ = 0.0, maxZ = 0.0, meanZ = 0.0;
   std::vector<int> triangleIds;
 };
 

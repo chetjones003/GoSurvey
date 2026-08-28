@@ -1521,7 +1521,8 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   `shared_ptr<const>` and shared with every undo frame (ADR-028 (a)), so a transform would either
   deep-copy it per edit or write through a const pointer, and either way the next rebuild discards the
   result.
-- Consequences: a tenth `EntityKind` and a tenth `SelectedEntity::Type`, both **appended**; a new
+- Consequences: a tenth `EntityKind` and a tenth `SelectedEntity::Type`, both **appended** (TABLE later
+  appends an eleventh under D-2026-08-28-i / REQ-148; still append-only); a new
   document-owned `surfaceStyles` table with an additive `.gs` section and a legacy-load default; a new
   pure `util/contourgen` module and a `util/surfaceanalysis` for band assignment and downhill vectors;
   a live-only display-geometry cache that is deliberately absent from the snapshot, the document and

@@ -147,6 +147,16 @@ TEST_CASE("Catchment at a pour-point matches the basin area", "[surface][req134]
   CHECK(c.area2d == Approx(west).margin(0.01));
 }
 
+TEST_CASE("A planar catchment reports the plane's mean elevation", "[surface][req152][watershed]") {
+  std::vector<float> v;
+  std::vector<std::uint32_t> i;
+  PlaneSouth(&v, &i);
+  const CatchmentResult c = ComputeCatchment(v, i, 5.0, 5.0);
+  REQUIRE(c.ok);
+  CHECK_FALSE(c.outside);
+  CHECK(c.meanZ == Approx(2.5).margin(0.05));
+}
+
 TEST_CASE("Catchment on a ridge unions both sides", "[surface][req134][watershed]") {
   std::vector<float> v;
   std::vector<std::uint32_t> i;
@@ -165,6 +175,7 @@ TEST_CASE("Catchment miss is a named outside", "[surface][req134][watershed]") {
   REQUIRE(c.ok);
   CHECK(c.outside);
   CHECK(c.area2d == Approx(0.0));
+  CHECK(c.meanZ == Approx(0.0));
 }
 
 TEST_CASE("Flow arrows are chevrons along the path", "[surface][req133][watershed]") {

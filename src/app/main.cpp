@@ -400,11 +400,10 @@ int main()
   int fbH = 650;
 
   bool dockLayoutDone = haveSavedDockIni;
-  // 130 of tools + the 9px gutter DrawRibbonBar leaves under the panel titles,
-  // so the buttons keep the size they had before the gutter was added, plus the REQ-302 tab
-  // strip's own height and its gap row (kRibbonTabStripH + kRibbonTabStripGapY in CadUi.cpp) so
-  // panel content height is unaffected.
-  const float ribbonH = 139.f + 28.f + 4.f;
+  // 130 of tools + gutter under panel titles, plus the REQ-302 tab strip and gap
+  // (kRibbonTabStripH + kRibbonTabStripGapY). Extra 10px keeps two-line captions
+  // above the title strip after the Survey-tab label layout.
+  const float ribbonH = 139.f + 28.f + 4.f + 10.f;
   bool orthoEnabled = false;  // REQ-047: ORTHO is off by default (AutoCAD convention) — free-angle drawing
   bool gridVisible = false;
   // prevDrawingIdx lives in cmd — no local needed.
@@ -608,6 +607,11 @@ int main()
       else if (cmd.mtextRichEditorOpen)
       {
         CancelMtextRichEditor(cmd, &cmdLog);
+        cmdBuf[0] = '\0';
+      }
+      else if (cmd.tableCellEditorOpen)
+      {
+        CancelTableCellEditor(cmd);
         cmdBuf[0] = '\0';
       }
       else if (cmd.mtextGripMoveActive)

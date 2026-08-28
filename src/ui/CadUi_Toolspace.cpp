@@ -487,6 +487,10 @@ void DrawDefFolderAddRefresh(const char* popupId, AppCommandState& cmd, CadSurfa
       StartSurfAddPointCommand(cmd, s.name, lg);
     if (ImGui::MenuItem("Delete Point"))
       StartSurfDelPointCommand(cmd, s.name, lg);
+    if (ImGui::MenuItem("Move Point"))
+      StartSurfMovePointCommand(cmd, s.name, lg);
+    if (ImGui::MenuItem("Delete TIN Line"))
+      StartSurfDelLineCommand(cmd, s.name, lg);
     if (ImGui::MenuItem("Swap Edge"))
       StartSurfSwapEdgeCommand(cmd, s.name, lg);
     ImGui::EndMenu();

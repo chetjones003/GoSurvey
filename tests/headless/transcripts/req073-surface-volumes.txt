@@ -28,7 +28,7 @@ EXPECT SURFACES 2
 
 # --- two independently-built surfaces from the same source data volume to exactly zero --------------
 CMD VOLUMES Base, Twin
-EXPECT LOG "cut 0.0000 yd3, fill 0.0000 yd3, net 0.0000 yd3, common area 229208.2107 ft2"
+EXPECT LOG "cut 0.0000 yd3, fill 0.0000 yd3, net 0.0000 yd3, cut area 0.0000 ft2, fill area 0.0000 ft2, common area 229208.2107 ft2"
 CHECK ALL
 
 # REQ-131: omitting the clip keeps full overlap; a nonsense id is refused; a missing id is not a volume.
@@ -43,16 +43,16 @@ CMD VOLUMES Base, Base
 EXPECT LOG ""Base" (base) vs "Base" (comparison): cut 0.0000 yd3, fill 0.0000 yd3, net 0.0000 yd3"
 CHECK ALL
 
-# --- linking a lower pad locally shows up as CUT ONLY over the same common area ---------------------
-# `samples/pad-points.csv` (REQ-086's own fixture) adds 7 points to a copy of the same ground; the
-# pad sits below the surrounding terrain, so Base is at or above the modified surface everywhere
-# sampled — cut only, no fill — and the common area is unchanged because the pad's footprint is
-# already inside "Existing Ground"'s own extent.
+# --- mixed-sign cells: a pad below the ground still has fill area where ΔZ crosses zero (REQ-147) ---
+# `samples/pad-points.csv` (REQ-086's own fixture) adds 7 points to a copy of the same ground.
+# Corner sampling (REQ-147) splits cells that straddle ΔZ=0, so a small fill area appears even though
+# the pad is a cut overall. Common area is the full overlap of the two surfaces.
 CMD SURFACECREATE Pad, Existing Ground
 CMD SURFACEADDFILE Pad, samples/pad-points.csv
 CMD SURFACEREBUILD Pad
 CMD VOLUMES Base, Pad
-EXPECT LOG "cut 42.7447 yd3, fill 0.0000 yd3, net -42.7447 yd3, common area 229208.2107 ft2"
+EXPECT LOG "cut 62.8000 yd3, fill 0.1489 yd3, net -62.6511 yd3"
+EXPECT LOG "common area 229208.2107 ft2"
 CHECK ALL
 
 # --- failure modes: a missing surface, a bad argument count -----------------------------------------

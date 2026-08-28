@@ -61,15 +61,19 @@ struct SurfaceVolumeResult {
   double fillFt3 = 0.0;  ///< Comparison above Base — material that would be ADDED reaching it.
   double netFt3 = 0.0;   ///< `fillFt3 - cutFt3`. Positive: net material must be brought in.
   double commonAreaFt2 = 0.0;
+  double cutAreaFt2 = 0.0;   ///< Plan area where Base sits above Comparison (REQ-146).
+  double fillAreaFt2 = 0.0;  ///< Plan area where Comparison sits above Base (REQ-146).
   /// False when the two surfaces have no common footprint at all — sampling is not attempted, and
   /// every other field is 0, rather than a number derived from no common area (REQ-073).
   bool overlapped = false;
 };
 
 /// Computes \ref SurfaceVolumeResult for a Base/Comparison pair by regular-grid sampling over their
-/// common footprint (ASSUMPTION-1/2, TASK-095): each sample point is queried against BOTH surfaces
-/// through their own \ref TinSpatialIndex, and a point covered by only one, or neither, contributes
-/// to neither the volume nor the reported common area.
+/// common footprint (ASSUMPTION-1/2, TASK-095). Each cell queries BOTH surfaces at its four corners
+/// through \ref TinSpatialIndex. Same-sign cells integrate as a prism; mixed-sign cells split on the
+/// ΔZ = 0 contour so cut and fill are accumulated separately (REQ-147). A cell whose corners are not
+/// all covered falls back to a centre sample. A point covered by only one surface, or neither,
+/// contributes to neither the volume nor the reported common area.
 ///
 /// A fast bounding-box-disjoint check runs first — two surfaces whose 2D extents do not even overlap
 /// cost nothing beyond that check, with no spatial index built and no sample taken.

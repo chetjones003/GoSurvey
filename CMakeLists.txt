@@ -556,6 +556,7 @@ if(GOSURVEY_BUILD_TESTS)
     # example and wrong on exactly the cases a real grading comparison needs (no overlap, self vs
     # self, partial overlap).
     tests/SurfaceVolumeTests.cpp
+    tests/CadTableTests.cpp
     tests/SurfaceStatsTests.cpp
     tests/WatershedTests.cpp
     tests/TinVolumeTests.cpp

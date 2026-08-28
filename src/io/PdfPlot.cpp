@@ -8,6 +8,7 @@
 #include "PlotFont.hpp"          // pure font-name/encoding helpers for TTF plot text (REQ-049)
 #include "CadFontName.hpp"
 #include "CadDimStroke.hpp"
+#include "util/cadtable.hpp"
 
 #include <cctype>
 
@@ -389,14 +390,38 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
       }
       for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
         const CadAnnotation& ann = st.cadAnnotations[ai];
-        if (CadAnnotationIsDimension(ann) || (ann.kind != CadAnnotation::Kind::Text && ann.kind != CadAnnotation::Kind::Mtext) ||
-            ann.text.empty())
+        if (CadAnnotationIsDimension(ann) ||
+            (ann.kind != CadAnnotation::Kind::Text && ann.kind != CadAnnotation::Kind::Mtext &&
+             ann.kind != CadAnnotation::Kind::Table) ||
+            (ann.kind != CadAnnotation::Kind::Table && ann.text.empty()))
           continue;
         const EntityAttributes* aa =
             (ai < st.cadAnnotationAttrs.size()) ? &st.cadAnnotationAttrs[ai] : nullptr;
         const std::string layer = aa ? (aa->layer.empty() ? std::string("0") : aa->layer) : std::string("0");
         if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
           continue;
+        if (ann.kind == CadAnnotation::Kind::Table && ann.tableCols > 0) {
+          std::vector<CadTableCellRect> cells;
+          CadTableLayoutCells(ann.boxMinX, ann.boxMinY, ann.boxMaxX, ann.boxMaxY, ann.tableCols, ann.tableCells,
+                              &cells);
+          for (size_t ci = 0; ci < cells.size() && ci < ann.tableCells.size(); ++ci) {
+            float cpx = 0.f, cpy = 0.f;
+            m2p(static_cast<double>(cells[ci].x0) + oX, static_cast<double>(cells[ci].y0) + oY, &cpx, &cpy);
+            if (cpx < vx0 || cpx > vx1 || cpy < vy0 || cpy > vy1)
+              continue;
+            VpDimLabel tlab;
+            tlab.px = cpx;
+            tlab.py = cpy;
+            tlab.rot = 0.f;
+            tlab.Hin =
+                (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
+            tlab.text = ann.tableCells[ci];
+            tlab.fontFamily = ann.fontFamily;
+            tlab.rgb = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");
+            vpDimLabels.push_back(std::move(tlab));
+          }
+          continue;
+        }
         float lpx = 0.f, lpy = 0.f;
         const float wx = (ann.kind == CadAnnotation::Kind::Mtext) ? 0.5f * (ann.boxMinX + ann.boxMaxX) : ann.insX;
         const float wy = (ann.kind == CadAnnotation::Kind::Mtext) ? 0.5f * (ann.boxMinY + ann.boxMaxY) : ann.insY;
@@ -412,6 +437,31 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         lab.fontFamily = ann.fontFamily;
         lab.rgb = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");
         vpDimLabels.push_back(std::move(lab));
+      }
+      for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
+        const CadTable& tbl = st.cadTables[ti];
+        const EntityAttributes* ta =
+            (ti < st.cadTableAttrs.size()) ? &st.cadTableAttrs[ti] : nullptr;
+        const std::string layer = ta ? (ta->layer.empty() ? std::string("0") : ta->layer) : std::string("0");
+        if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
+          continue;
+        std::vector<CadTableCellRect> cells;
+        CadTableLayoutWorldCells(tbl, &cells);
+        for (size_t ci = 0; ci < cells.size() && ci < tbl.cells.size(); ++ci) {
+          float cpx = 0.f, cpy = 0.f;
+          m2p(static_cast<double>(cells[ci].x0) + oX, static_cast<double>(cells[ci].y1) + oY, &cpx, &cpy);
+          if (cpx < vx0 || cpx > vx1 || cpy < vy0 || cpy > vy1)
+            continue;
+          VpDimLabel tlab;
+          tlab.px = cpx;
+          tlab.py = cpy;
+          tlab.rot = tbl.rotationRad;
+          tlab.Hin = (std::max)(0.01f, tbl.plottedHeightInches);
+          tlab.text = tbl.cells[ci];
+          tlab.fontFamily = tbl.fontFamily;
+          tlab.rgb = (ta) ? resolveRgb(layer, ta->color) : resolveRgb(layer, "ByLayer");
+          vpDimLabels.push_back(std::move(tlab));
+        }
       }
       // Viewport border — only if the viewport's layer is plottable. Always black.
       if (plottable(vp.layer)) {

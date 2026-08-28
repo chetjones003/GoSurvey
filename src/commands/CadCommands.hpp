@@ -29,6 +29,7 @@
 // (<cmath>), and deliberately in util/ rather than beside the UI that drives it: the state lives on
 // AppCommandState, and Commands may not include a UI header (architecture §11.1).
 #include "util/hoverdwell.hpp"
+#include "util/cadtable.hpp"   // CadTable entity (REQ-148 / D-2026-08-28-i)
 // zoomframing::FrameWorldRect, the one camera-framing implementation behind ZOOMEXTENTS, the REQ-120
 // gesture, ZOOM WINDOW and the post-import fit (REQ-122). Pure and dependency-free, like the headers
 // above it.
@@ -62,7 +63,11 @@ struct SelectedEntity {
     /// surface. Component-level selection is forbidden by REQ-070 ("contours ... never appear in
     /// selection") and has nothing to be selected *by*: a contour is regenerated display geometry
     /// with no identity.
-    Surface = 10
+    Surface = 10,
+    /// Drawing TABLE (REQ-148 / D-2026-08-28-i). **Appended** after Surface so existing type values
+    /// and switch order stay stable. Editable: MOVE/COPY/ROTATE/SCALE/MIRROR apply to the whole table;
+    /// cells are edited in place, not as child entities.
+    Table = 11
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -784,6 +789,14 @@ void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlotted
 /// Top-most annotation under point; -1 if none. Uses pixel tolerance from viewport half-height.
 int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
                         float viewportHeightPx);
+int PickCadTableAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
+                   float viewportHeightPx);
+void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, float curY,
+                                      std::vector<CadTable>* out);
+void OpenTableCellEditor(AppCommandState& st, int tableIndex, int cellIndex);
+void CommitTableCellEditor(AppCommandState& st, std::vector<std::string>& log);
+void CancelTableCellEditor(AppCommandState& st);
+void MigrateLegacyAnnotationTables(AppCommandState& st);
 
 /// ROTATE live preview angle (rad) about \ref AppCommandState::rotateBase when cursor drives preview.
 bool CadRotatePreviewTheta(const AppCommandState& cmd, float curX, float curY, float* outThetaRad);
@@ -818,6 +831,8 @@ struct CadClipboard {
   std::vector<EntityAttributes> polyAttrs;
   std::vector<CadAnnotation>    annotations;
   std::vector<EntityAttributes> annotationAttrs;
+  std::vector<CadTable>         tables;
+  std::vector<EntityAttributes> tableAttrs;
   std::vector<CadFilledRegion>  filledRegions;     ///< Solid fills enclosed by the copy selection (REQ-038 addendum).
   std::vector<EntityAttributes> filledRegionAttrs;
   /// Source space of the copy. Text height has different units per space (model: plotted-inches × scale = model
@@ -826,7 +841,7 @@ struct CadClipboard {
 
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
-           (polyOffsets.size() <= 1) && annotations.empty() && filledRegions.empty();
+           (polyOffsets.size() <= 1) && annotations.empty() && tables.empty() && filledRegions.empty();
   }
 };
 
@@ -863,6 +878,8 @@ struct DrawingGeometrySnapshot {
   /// TIN surfaces (REQ-068). Shared payload, not copied — see CadTin and architecture §11.5.
   std::vector<CadSurface>       cadSurfaces;
   std::vector<EntityAttributes> cadSurfaceAttrs;
+  std::vector<CadTable>         cadTables;       ///< Drawing TABLE entities (REQ-148).
+  std::vector<EntityAttributes> cadTableAttrs;
   std::vector<SurveyPoint>      surveyPoints;
   /// Named point groups (REQ-067). Undoable, like textStyles — creating or editing one is a
   /// single-step undo. Rules only; membership is never stored.
@@ -926,6 +943,8 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadMeshAttrs;
   std::vector<CadSurface>       cadSurfaces;       ///< TIN surfaces (REQ-068).
   std::vector<EntityAttributes> cadSurfaceAttrs;
+  std::vector<CadTable>         cadTables;         ///< Drawing TABLE (REQ-148).
+  std::vector<EntityAttributes> cadTableAttrs;
   std::vector<SurveyPoint>      surveyPoints;
   std::vector<PointGroup>       pointGroups;            ///< Named point groups (REQ-067).
   std::vector<int>              selectedSurveyPointIndices;
@@ -1200,6 +1219,10 @@ struct AppCommandState {
     AddTinPoint,
     /// REQ-144: one pick deletes the nearest definition point on a named TIN.
     DelTinPoint,
+    /// REQ-150: two picks move a definition point (from, then to).
+    MoveTinPoint,
+    /// REQ-150: one pick deletes the nearest interior TIN edge.
+    DelTinLine,
     /// REQ-145: two picks sample a named surface into a session Quick Profile graph.
     QuickProfile,
     /// REQ-069: one pick designates a Line/Polyline as a breakline on a named surface.
@@ -1282,6 +1305,8 @@ struct AppCommandState {
     case Kind::SwapTinEdge:        return "SURFSWAPEDGE";
     case Kind::AddTinPoint:        return "SURFACEADDPOINT";
     case Kind::DelTinPoint:        return "SURFACEDELPOINT";
+    case Kind::MoveTinPoint:       return "SURFACEMOVEPOINT";
+    case Kind::DelTinLine:         return "SURFDELLINE";
     case Kind::QuickProfile:       return "QUICKPROFILE";
     case Kind::DesignateBreakline: return "DESIGNATEBREAKLINE";
     case Kind::DesignateBoundary:  return "DESIGNATEBOUNDARY";
@@ -1889,6 +1914,17 @@ struct AppCommandState {
   std::vector<CadSurface> cadSurfaces;
   std::vector<EntityAttributes> cadSurfaceAttrs;
 
+  /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
+  std::vector<CadTable> cadTables;
+  std::vector<EntityAttributes> cadTableAttrs;
+
+  /// In-place TABLE cell editor (viewport overlay). Not a command; Enter commits, Esc cancels.
+  bool tableCellEditorOpen = false;
+  int tableCellEditorIndex = -1;
+  int tableCellEditorCell = -1;
+  std::string tableCellEditorBuf;
+  bool tableCellEditorFocusRequest = false;
+
   /// One in-flight background rebuild per surface currently being retriangulated (REQ-069's dynamic
   /// rebuild — architecture §8's one-shot worker pattern, its second concrete use after
   /// \ref pdfAttachAsync and the first to implement the full contract: rules 4 and 5, generation
@@ -1997,10 +2033,24 @@ struct AppCommandState {
     std::vector<float> mapCutTrianglesXyz;
     std::vector<float> mapFillTrianglesXyz;
 
+    struct AnalysisRow {
+      std::string label;
+      std::uint64_t baseSurfaceId = 0;
+      std::uint64_t comparisonSurfaceId = 0;
+      std::uint64_t clipEntityId = 0;
+      SurfaceVolumeResult result;
+      bool hasResult = false;
+    };
+    std::vector<AnalysisRow> rows;
+
     std::unique_ptr<VolumeDashboardAsync> job;  ///< null when nothing is in flight
   };
   VolumeDashboardState volumeDashboard;
   std::string lastVolumeReportText;  ///< Last successful VOLUMES / dashboard numbers for VOLREPORT.
+  bool hasLastVolumeResult = false;
+  SurfaceVolumeResult lastVolumeResult;
+  std::string lastVolumeBaseName;
+  std::string lastVolumeComparisonName;
 
   /// REQ-145 Quick Profile — session graph only, never `.gs` (same rule as Volume Dashboard).
   struct QuickProfileState {
@@ -2118,6 +2168,11 @@ struct AppCommandState {
   std::string swapEdgeSurfaceName;
   std::string addPointSurfaceName;
   std::string delPointSurfaceName;
+  std::string movePointSurfaceName;
+  std::string delLineSurfaceName;
+  enum class MoveTinPointPhase { WaitFrom, WaitTo } moveTinPointPhase = MoveTinPointPhase::WaitFrom;
+  double moveTinFromX = 0.0;
+  double moveTinFromY = 0.0;
   std::vector<float> lastWaterDropPathXyz;
   std::vector<float> lastCatchmentPathXyz;
   /// GL_LINES preview rebuilt each display pass from the last* paths. Not tied to TIN identity, so
@@ -3133,7 +3188,9 @@ enum class EntityKind : std::uint8_t {
   /// end would renumber every entity in every existing drawing on its next load — and REQ-069's
   /// breakline and boundary references are stored by exactly those ids. Appending is what keeps a
   /// legacy `.gs` loading with the ids it loaded with yesterday.
-  Surface
+  Surface,
+  /// REQ-148 / D-2026-08-28-i. Appended after Surface so the id sweep does not renumber legacy drawings.
+  Table
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -3668,6 +3725,8 @@ void StartCatchmentCommand(AppCommandState& st, const std::string& surfaceName, 
 void StartSurfSwapEdgeCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
 void StartSurfAddPointCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
 void StartSurfDelPointCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartSurfMovePointCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartSurfDelLineCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
 void StartQuickProfileCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
 
 /// REQ-069: designate one picked Line/Polyline as a breakline on the named surface, appended to its

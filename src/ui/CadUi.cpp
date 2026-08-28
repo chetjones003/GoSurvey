@@ -17,6 +17,7 @@
 #include "HatchPattern.hpp"
 #include "CommandBar.hpp"
 #include "NumFormat.hpp"
+#include "util/cadtable.hpp"
 #include "DwgIo.hpp"
 #include "DxfIo.hpp"
 #include "AppIcon.hpp"
@@ -1395,7 +1396,7 @@ static void CollectAllDrawingLayers(const AppCommandState& cmd, std::vector<std:
 // constants in the classic theme's grays and so ignored the Dark theme entirely.
 
 // Height of the bottom title strip inside each ribbon panel (Civil 3D-style).
-constexpr float kRibbonTitleH = 17.f;
+constexpr float kRibbonTitleH = 20.f;
 // Carries the active panel's title from Begin to End (panels never nest).
 static const char* s_ribbonPanelTitle = nullptr;
 
@@ -1530,6 +1531,17 @@ enum class RibbonIconKind : std::uint8_t {
   SurfProfile,
   SurfDataShortcut,
   SurfGrading,
+  // D-2026-08-28-k Civil 3D Survey tab (vector fallback).
+  SvyTripod,
+  SvyQuery,
+  SvyFigure,
+  SvyPda,
+  SvyPin,
+  SvyRefresh,
+  SvyGlobe,
+  SvyGeodetic,
+  SvySun,
+  SvyRenumber,
 };
 
 static ImVec2 RibbonLerp(const ImVec2& a, const ImVec2& b, float u, float v) {
@@ -2245,6 +2257,9 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     dl->AddRectFilled(a, b, IM_COL32(255, 255, 255, 240), 2.f);
     dl->AddTriangleFilled(ImVec2(a.x, c.y), ImVec2(mn.x + w * 0.12f, c.y - h * 0.08f),
                           ImVec2(mn.x + w * 0.12f, c.y + h * 0.08f), IM_COL32(255, 255, 255, 240));
+    const ImVec2 plus(mx.x - w * 0.16f, mx.y - h * 0.16f);
+    dl->AddLine(ImVec2(plus.x - 4.f, plus.y), ImVec2(plus.x + 4.f, plus.y), IM_COL32(255, 255, 255, 255), t);
+    dl->AddLine(ImVec2(plus.x, plus.y - 4.f), ImVec2(plus.x, plus.y + 4.f), IM_COL32(255, 255, 255, 255), t);
     break;
   }
   case RibbonIconKind::SurfLegend: {
@@ -2366,12 +2381,13 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     break;
   }
   case RibbonIconKind::SurfQuickProfile: {
-    dl->AddLine(ImVec2(mn.x + w * 0.28f, mn.y + h * 0.18f), ImVec2(mn.x + w * 0.28f, mx.y - h * 0.18f),
-                IM_COL32(220, 180, 40, 255), t * 1.6f);
-    dl->AddLine(ImVec2(mn.x + w * 0.28f, mn.y + h * 0.18f), ImVec2(mx.x - w * 0.22f, c.y), IM_COL32(220, 180, 40, 255),
-                t * 1.6f);
-    dl->AddLine(ImVec2(mn.x + w * 0.28f, mx.y - h * 0.18f), ImVec2(mx.x - w * 0.22f, c.y), IM_COL32(220, 180, 40, 255),
-                t * 1.6f);
+    const ImU32 profile = IM_COL32(50, 130, 220, 255);
+    dl->AddLine(ImVec2(mn.x + w * 0.12f, mx.y - h * 0.22f), ImVec2(mn.x + w * 0.32f, mn.y + h * 0.42f), profile, t * 1.4f);
+    dl->AddLine(ImVec2(mn.x + w * 0.32f, mn.y + h * 0.42f), ImVec2(mn.x + w * 0.48f, mn.y + h * 0.42f), profile, t * 1.4f);
+    dl->AddLine(ImVec2(mn.x + w * 0.48f, mn.y + h * 0.42f), ImVec2(mn.x + w * 0.62f, mn.y + h * 0.28f), profile, t * 1.4f);
+    dl->AddLine(ImVec2(mn.x + w * 0.62f, mn.y + h * 0.28f), ImVec2(mx.x - w * 0.12f, mx.y - h * 0.18f), profile, t * 1.4f);
+    dl->AddCircleFilled(ImVec2(mn.x + w * 0.22f, mn.y + h * 0.20f), std::min(w, h) * 0.08f, IM_COL32(240, 190, 40, 255),
+                        8);
     break;
   }
   case RibbonIconKind::SurfProfile: {
@@ -2391,6 +2407,104 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     RibbonPaintTinPyramid(dl, mn, mx, col, t, true);
     dl->AddLine(ImVec2(mn.x + w * 0.18f, mn.y + h * 0.22f), ImVec2(mx.x - w * 0.22f, mn.y + h * 0.38f),
                 IM_COL32(220, 180, 40, 255), t);
+    break;
+  }
+  case RibbonIconKind::SvyTripod: {
+    const ImVec2 apex(c.x, mn.y + h * 0.22f);
+    dl->AddLine(apex, ImVec2(mn.x + w * 0.18f, mx.y - h * 0.12f), col, t);
+    dl->AddLine(apex, ImVec2(c.x, mx.y - h * 0.12f), col, t);
+    dl->AddLine(apex, ImVec2(mx.x - w * 0.18f, mx.y - h * 0.12f), col, t);
+    dl->AddCircleFilled(apex, std::min(w, h) * 0.10f, acc, 10);
+    dl->AddRectFilled(ImVec2(c.x - w * 0.10f, mn.y + h * 0.08f), ImVec2(c.x + w * 0.10f, mn.y + h * 0.22f), acc);
+    break;
+  }
+  case RibbonIconKind::SvyQuery: {
+    const ImVec2 apex(mn.x + w * 0.38f, mn.y + h * 0.28f);
+    dl->AddLine(apex, ImVec2(mn.x + w * 0.16f, mx.y - h * 0.12f), col, t);
+    dl->AddLine(apex, ImVec2(mn.x + w * 0.38f, mx.y - h * 0.12f), col, t);
+    dl->AddLine(apex, ImVec2(mn.x + w * 0.58f, mx.y - h * 0.12f), col, t);
+    dl->AddCircleFilled(apex, std::min(w, h) * 0.08f, acc, 8);
+    const ImVec2 glass(mx.x - w * 0.28f, mn.y + h * 0.32f);
+    dl->AddCircle(glass, std::min(w, h) * 0.16f, acc, 16, t * 1.4f);
+    dl->AddLine(ImVec2(glass.x + std::min(w, h) * 0.12f, glass.y + std::min(w, h) * 0.12f),
+                ImVec2(mx.x - w * 0.10f, mx.y - h * 0.18f), acc, t * 1.4f);
+    break;
+  }
+  case RibbonIconKind::SvyFigure: {
+    dl->AddLine(ImVec2(mn.x + w * 0.22f, mx.y - h * 0.22f), ImVec2(mn.x + w * 0.22f, mn.y + h * 0.28f), col, t * 1.4f);
+    dl->AddLine(ImVec2(mn.x + w * 0.22f, mx.y - h * 0.22f), ImVec2(mx.x - w * 0.22f, mx.y - h * 0.22f), col, t * 1.4f);
+    dl->AddCircleFilled(ImVec2(mn.x + w * 0.22f, mn.y + h * 0.28f), 2.5f, acc, 8);
+    dl->AddCircleFilled(ImVec2(mn.x + w * 0.22f, mx.y - h * 0.22f), 2.5f, acc, 8);
+    dl->AddCircleFilled(ImVec2(mx.x - w * 0.22f, mx.y - h * 0.22f), 2.5f, acc, 8);
+    dl->AddLine(ImVec2(mx.x - w * 0.34f, mn.y + h * 0.22f), ImVec2(mx.x - w * 0.18f, mn.y + h * 0.42f),
+                IM_COL32(220, 180, 40, 255), t);
+    break;
+  }
+  case RibbonIconKind::SvyPda: {
+    const ImVec2 a(mn.x + w * 0.28f, mn.y + h * 0.14f);
+    const ImVec2 b(mx.x - w * 0.28f, mx.y - h * 0.14f);
+    dl->AddRectFilled(a, b, IM_COL32(245, 245, 245, 240), 3.f);
+    dl->AddRect(a, b, col, 3.f, 0, t);
+    dl->AddRectFilled(ImVec2(a.x + 3.f, a.y + 4.f), ImVec2(b.x - 3.f, a.y + h * 0.22f), acc, 1.f);
+    break;
+  }
+  case RibbonIconKind::SvyPin: {
+    dl->AddCircleFilled(ImVec2(c.x, mn.y + h * 0.32f), std::min(w, h) * 0.18f, IM_COL32(230, 230, 230, 255), 12);
+    dl->AddCircle(ImVec2(c.x, mn.y + h * 0.32f), std::min(w, h) * 0.18f, col, 12, t);
+    dl->AddTriangleFilled(ImVec2(c.x - w * 0.12f, mn.y + h * 0.42f), ImVec2(c.x + w * 0.12f, mn.y + h * 0.42f),
+                          ImVec2(c.x, mx.y - h * 0.10f), acc);
+    break;
+  }
+  case RibbonIconKind::SvyRefresh: {
+    dl->AddRectFilled(ImVec2(mn.x + w * 0.18f, mn.y + h * 0.18f), ImVec2(mx.x - w * 0.18f, mx.y - h * 0.18f),
+                      IM_COL32(46, 160, 80, 230), 3.f);
+    const float r = std::min(w, h) * 0.18f;
+    dl->AddCircle(c, r, IM_COL32(255, 255, 255, 255), 16, t);
+    RibbonStrokeArrow(dl, ImVec2(c.x + r, c.y), ImVec2(0.f, -1.f), std::min(w, h) * 0.10f, IM_COL32(255, 255, 255, 255),
+                      t);
+    break;
+  }
+  case RibbonIconKind::SvyGlobe: {
+    const float r = std::min(w, h) * 0.36f;
+    dl->AddCircleFilled(c, r, IM_COL32(70, 140, 210, 230), 20);
+    dl->AddCircle(c, r, col, 20, t);
+    dl->AddLine(ImVec2(c.x, c.y - r), ImVec2(c.x, c.y + r), IM_COL32(255, 255, 255, 200), t * 0.8f);
+    dl->AddLine(ImVec2(c.x - r, c.y), ImVec2(c.x + r, c.y), IM_COL32(255, 255, 255, 200), t * 0.8f);
+    dl->AddCircle(c, r * 0.45f, IM_COL32(255, 255, 255, 180), 16, t * 0.7f);
+    dl->AddCircleFilled(ImVec2(c.x + r * 0.35f, c.y - r * 0.20f), std::min(w, h) * 0.08f, IM_COL32(40, 90, 180, 255), 8);
+    break;
+  }
+  case RibbonIconKind::SvyGeodetic: {
+    const float r = std::min(w, h) * 0.32f;
+    const ImVec2 gc(c.x - w * 0.08f, c.y);
+    dl->AddCircleFilled(gc, r, IM_COL32(70, 140, 210, 230), 20);
+    dl->AddCircle(gc, r, col, 20, t);
+    dl->AddLine(ImVec2(gc.x, gc.y - r), ImVec2(gc.x, gc.y + r), IM_COL32(255, 255, 255, 200), t * 0.8f);
+    dl->AddLine(ImVec2(gc.x - r, gc.y), ImVec2(gc.x + r, gc.y), IM_COL32(255, 255, 255, 200), t * 0.8f);
+    const ImVec2 ca(mx.x - w * 0.42f, mx.y - h * 0.48f);
+    const ImVec2 cb(mx.x - w * 0.08f, mx.y - h * 0.10f);
+    dl->AddRectFilled(ca, cb, IM_COL32(230, 235, 240, 255), 2.f);
+    dl->AddRect(ca, cb, col, 2.f, 0, t);
+    dl->AddLine(ImVec2(ca.x + 3.f, ca.y + (cb.y - ca.y) * 0.35f), ImVec2(cb.x - 3.f, ca.y + (cb.y - ca.y) * 0.35f),
+                col, t * 0.7f);
+    break;
+  }
+  case RibbonIconKind::SvySun: {
+    dl->AddCircleFilled(c, std::min(w, h) * 0.18f, IM_COL32(240, 190, 40, 255), 16);
+    for (int i = 0; i < 8; ++i) {
+      const float a = static_cast<float>(i) * 0.78539816f;
+      const ImVec2 p0(c.x + std::cos(a) * std::min(w, h) * 0.24f, c.y + std::sin(a) * std::min(w, h) * 0.24f);
+      const ImVec2 p1(c.x + std::cos(a) * std::min(w, h) * 0.40f, c.y + std::sin(a) * std::min(w, h) * 0.40f);
+      dl->AddLine(p0, p1, IM_COL32(240, 190, 40, 255), t);
+    }
+    break;
+  }
+  case RibbonIconKind::SvyRenumber: {
+    dl->AddRect(ImVec2(mn.x + w * 0.14f, mn.y + h * 0.18f), ImVec2(c.x + w * 0.06f, mx.y - h * 0.18f), col, 0.f, 0, t);
+    dl->AddLine(ImVec2(mn.x + w * 0.14f, c.y), ImVec2(c.x + w * 0.06f, c.y), col, t * 0.8f);
+    dl->AddLine(ImVec2(mn.x + w * 0.38f, mn.y + h * 0.18f), ImVec2(mn.x + w * 0.38f, mx.y - h * 0.18f), col, t * 0.8f);
+    RibbonStrokeArrow(dl, ImVec2(mx.x - w * 0.18f, mx.y - h * 0.22f), ImVec2(0.f, 1.f), std::min(w, h) * 0.12f, acc, t);
+    dl->AddLine(ImVec2(mx.x - w * 0.18f, mn.y + h * 0.22f), ImVec2(mx.x - w * 0.18f, mx.y - h * 0.28f), acc, t);
     break;
   }
   default:
@@ -2469,17 +2583,27 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::SurfProfile:    return "surfprofile";
   case RibbonIconKind::SurfDataShortcut: return "surfdatashortcut";
   case RibbonIconKind::SurfGrading:    return "surfgrading";
+  case RibbonIconKind::SvyTripod:      return "svytripod";
+  case RibbonIconKind::SvyQuery:       return "svyquery";
+  case RibbonIconKind::SvyFigure:      return "svyfigure";
+  case RibbonIconKind::SvyPda:         return "svypda";
+  case RibbonIconKind::SvyPin:         return "svypin";
+  case RibbonIconKind::SvyRefresh:     return "svyrefresh";
+  case RibbonIconKind::SvyGlobe:       return "svyglobe";
+  case RibbonIconKind::SvyGeodetic:    return "svygeodetic";
+  case RibbonIconKind::SvySun:         return "svysun";
+  case RibbonIconKind::SvyRenumber:    return "svyrenumber";
   }
   return "";
 }
 
-static ImTextureID g_ribbonIconTex[static_cast<int>(RibbonIconKind::SurfGrading) + 1] = {};
+static ImTextureID g_ribbonIconTex[static_cast<int>(RibbonIconKind::SvyRenumber) + 1] = {};
 static bool g_ribbonIconsLoaded = false;
 
 static void EnsureRibbonIconsLoaded() {
   if (g_ribbonIconsLoaded) return;
   g_ribbonIconsLoaded = true;  // attempt once; missing files fall back to vector art
-  for (int i = 0; i <= static_cast<int>(RibbonIconKind::SurfGrading); ++i) {
+  for (int i = 0; i <= static_cast<int>(RibbonIconKind::SvyRenumber); ++i) {
     const std::string nm = RibbonIconName(static_cast<RibbonIconKind>(i));
     if (nm.empty()) continue;
     const std::filesystem::path p =
@@ -2556,6 +2680,140 @@ static void DrawRibbonIconArt(ImDrawList* dl, RibbonIconKind icon, const ImVec2&
   }
 }
 
+// Label-below wrapping: ImGui's wrap_width splits mid-word when a token is wider
+// than the button. Civil 3D wraps only at spaces; the button grows to the longest word.
+static float RibbonLongestWordWidth(const char* label) {
+  assert(label != nullptr);
+  assert(label[0] != '\0');
+  float maxW = 0.f;
+  const char* p = label;
+  for (int guard = 0; guard < 64 && *p != '\0'; ++guard) {
+    while (*p == ' ')
+      ++p;
+    if (*p == '\0')
+      break;
+    const char* start = p;
+    while (*p != '\0' && *p != ' ')
+      ++p;
+    maxW = std::max(maxW, ImGui::CalcTextSize(start, p).x);
+  }
+  return maxW;
+}
+
+static std::string RibbonWrapAtSpaces(const char* label, float wrapW) {
+  assert(label != nullptr);
+  assert(wrapW > 0.f);
+  std::string out;
+  const char* p = label;
+  float lineW = 0.f;
+  bool firstOnLine = true;
+  const float spaceW = ImGui::CalcTextSize(" ").x;
+  for (int guard = 0; guard < 64 && *p != '\0'; ++guard) {
+    while (*p == ' ')
+      ++p;
+    if (*p == '\0')
+      break;
+    const char* start = p;
+    while (*p != '\0' && *p != ' ')
+      ++p;
+    const float ww = ImGui::CalcTextSize(start, p).x;
+    if (!firstOnLine && lineW + spaceW + ww > wrapW) {
+      out.push_back('\n');
+      lineW = 0.f;
+      firstOnLine = true;
+    }
+    if (!firstOnLine) {
+      out.push_back(' ');
+      lineW += spaceW;
+    }
+    out.append(start, static_cast<size_t>(p - start));
+    lineW += ww;
+    firstOnLine = false;
+  }
+  return out;
+}
+
+static int RibbonWrappedLineCount(const char* s) {
+  assert(s != nullptr);
+  int n = 1;
+  for (const char* p = s; *p != '\0'; ++p) {
+    if (*p == '\n')
+      ++n;
+  }
+  assert(n >= 1);
+  assert(n < 16);
+  return n;
+}
+
+static float RibbonBelowButtonWidth(const char* label, float minW) {
+  assert(label != nullptr);
+  assert(minW > 0.f);
+  constexpr float kPad = 20.f;
+  const float word = RibbonLongestWordWidth(label);
+  const float full = ImGui::CalcTextSize(label).x + kPad;
+  float w = std::max(minW, word + kPad);
+  for (int i = 0; i < 48; ++i) {
+    const float inner = std::max(word + 2.f, w - 8.f);
+    const std::string wrapped = RibbonWrapAtSpaces(label, inner);
+    const ImVec2 ts = ImGui::CalcTextSize(wrapped.c_str());
+    w = std::max(w, ts.x + kPad);
+    if (RibbonWrappedLineCount(wrapped.c_str()) <= 2)
+      return w;
+    if (w >= full)
+      return full;
+    w += 4.f;
+  }
+  return w;
+}
+
+static float RibbonMaxLineWidth(const char* s) {
+  assert(s != nullptr);
+  assert(s[0] != '\0');
+  float maxW = 0.f;
+  const char* p = s;
+  for (int guard = 0; guard < 8 && *p != '\0'; ++guard) {
+    const char* e = p;
+    while (*e != '\0' && *e != '\n')
+      ++e;
+    maxW = std::max(maxW, ImGui::CalcTextSize(p, e).x);
+    if (*e != '\n')
+      break;
+    p = e + 1;
+  }
+  return maxW;
+}
+
+static float RibbonCaptionLineGap() {
+  return 3.f;
+}
+
+static ImVec2 RibbonCaptionSize(const char* wrapped) {
+  assert(wrapped != nullptr);
+  const ImVec2 base = ImGui::CalcTextSize(wrapped);
+  const int n = RibbonWrappedLineCount(wrapped);
+  assert(n >= 1);
+  if (n <= 1)
+    return base;
+  return ImVec2(base.x, base.y + RibbonCaptionLineGap() * static_cast<float>(n - 1));
+}
+
+static void RibbonAddCaption(ImDrawList* dl, ImVec2 pos, ImU32 col, const char* wrapped) {
+  assert(dl != nullptr);
+  assert(wrapped != nullptr);
+  const float step = ImGui::GetFontSize() + RibbonCaptionLineGap();
+  const char* p = wrapped;
+  for (int guard = 0; guard < 8 && *p != '\0'; ++guard) {
+    const char* e = p;
+    while (*e != '\0' && *e != '\n')
+      ++e;
+    dl->AddText(pos, col, p, e);
+    if (*e != '\n')
+      break;
+    pos.y += step;
+    p = e + 1;
+  }
+}
+
 // Where a button's text label sits relative to its icon.
 enum class RibbonLabel { None, Right, Below };
 
@@ -2564,6 +2822,8 @@ enum class RibbonLabel { None, Right, Below };
 // and icon art with every ribbon button so states stay consistent.
 static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* label,
                            const ImVec2& size, RibbonLabel mode) {
+  assert(str_id != nullptr);
+  assert(size.x > 0.f && size.y > 0.f);
   ImGuiWindow* window = ImGui::GetCurrentWindow();
   if (window->SkipItems)
     return false;
@@ -2591,18 +2851,30 @@ static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* 
 
   const bool hasLabel = (label && label[0] && mode != RibbonLabel::None);
   constexpr float pad = 3.f;
-  const float wrapW = (mode == RibbonLabel::Below && hasLabel) ? std::max(8.f, size.x - pad * 2.f) : 0.f;
-  const ImVec2 ts = hasLabel ? ImGui::CalcTextSize(label, nullptr, false, wrapW) : ImVec2(0.f, 0.f);
+  std::string wrapped;
+  const char* drawLabel = label;
+  if (mode == RibbonLabel::Below && hasLabel) {
+    if (std::strchr(label, '\n') != nullptr) {
+      drawLabel = label;
+    } else {
+      wrapped = RibbonWrapAtSpaces(label, std::max(RibbonLongestWordWidth(label) + 2.f, size.x - 8.f));
+      drawLabel = wrapped.c_str();
+    }
+  }
+  const ImVec2 ts = hasLabel ? (mode == RibbonLabel::Below ? RibbonCaptionSize(drawLabel)
+                                                           : ImGui::CalcTextSize(drawLabel))
+                             : ImVec2(0.f, 0.f);
   const ImU32 textCol = ImGui::GetColorU32(ImGuiCol_Text);
 
   ImVec2 iconMin, iconMax, labelPos;
   if (mode == RibbonLabel::Below && hasLabel) {
-    const float iconArea = size.y - ts.y - pad * 2.f - 1.f;
+    constexpr float botPad = 5.f;
+    const float iconArea = std::max(18.f, size.y - ts.y - pad - botPad - 1.f);
     const float sideMax = std::min(size.x - pad * 2.f, iconArea);
     const ImVec2 ctr(bb.Min.x + size.x * 0.5f + shift, bb.Min.y + pad + iconArea * 0.5f + shift);
     iconMin = ImVec2(ctr.x - sideMax * 0.5f, ctr.y - sideMax * 0.5f);
     iconMax = ImVec2(ctr.x + sideMax * 0.5f, ctr.y + sideMax * 0.5f);
-    labelPos = ImVec2(bb.Min.x + (size.x - std::min(ts.x, wrapW)) * 0.5f + shift, bb.Max.y - ts.y - pad + shift);
+    labelPos = ImVec2(bb.Min.x + (size.x - ts.x) * 0.5f + shift, bb.Max.y - ts.y - botPad + shift);
   } else if (mode == RibbonLabel::Right && hasLabel) {
     const float side = size.y - pad * 2.f;
     iconMin = ImVec2(bb.Min.x + pad + shift, bb.Min.y + pad + shift);
@@ -2617,10 +2889,10 @@ static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* 
 
   DrawRibbonIconArt(dl, icon, iconMin, iconMax);
   if (hasLabel) {
-    if (wrapW > 0.f)
-      dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), labelPos, textCol, label, nullptr, wrapW);
+    if (mode == RibbonLabel::Below)
+      RibbonAddCaption(dl, labelPos, textCol, drawLabel);
     else
-      dl->AddText(labelPos, textCol, label);
+      dl->AddText(labelPos, textCol, drawLabel);
   }
 
   return pressed;
@@ -2642,8 +2914,14 @@ static void RibbonNyiButton(const char* id, RibbonIconKind ic, const char* label
   assert(label != nullptr);
   ImGui::BeginDisabled();
   (void)RibbonButtonEx(id, ic, label, size, mode);
+  char flat[160];
+  size_t o = 0;
+  for (const char* p = label; *p != '\0' && o + 1 < sizeof(flat); ++p) {
+    flat[o++] = (*p == '\n') ? ' ' : *p;
+  }
+  flat[o] = '\0';
   char tip[192];
-  std::snprintf(tip, sizeof(tip), "%s — not implemented yet.", label);
+  std::snprintf(tip, sizeof(tip), "%s — not implemented yet.", flat);
   RibbonItemHelp(tip, ImGuiHoveredFlags_AllowWhenDisabled);
   ImGui::EndDisabled();
 }
@@ -2845,7 +3123,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // Gutter below the sections so the panel titles ("Draw", "Modify", …) are not
   // flush against the ribbon's bottom edge. WindowPadding cannot express this —
   // it is symmetric, and adding it at the top too would waste the band's height.
-  constexpr float kRibbonBottomGutter = 9.f;
+  constexpr float kRibbonBottomGutter = 12.f;
   const float panelH = height - kRibbonTabStripH - kRibbonTabStripGapY - st.WindowPadding.y * 2.f -
                         kRibbonBottomGutter;
   constexpr float kLayerPanelW = 500.f;
@@ -2853,11 +3131,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // Civil 3D-style panel metrics: a button column fills the height above the
   // bottom title; small labeled buttons stack 3 to a column; the icon grid
   // uses 2 rows of square cells.
-  const float colH     = std::max(48.f, RibbonPanelContentH(panelH) - 4.f);
+  const float colH     = std::max(48.f, RibbonPanelContentH(panelH) - 8.f);
   const float rowH     = std::floor((colH - 4.f) / 3.f);
   const float gridCell = std::floor((colH - 2.f) / 2.f);
   constexpr float largeW = 60.f;
-  constexpr float kTsLargeW = 74.f;
+  constexpr float kTsLargeW = 76.f;
+  auto belowW = [&](const char* label) { return RibbonBelowButtonWidth(label, kTsLargeW); };
+  auto capW = [&](const char* caption) { return std::max(kTsLargeW, RibbonMaxLineWidth(caption) + 16.f); };
 
   // REQ-302 increment 2 (ADR-038 (a)): `curCompact` is read by colW()/smallBtn() below — Medium
   // metrics are simply "the same button code, with this flag true." largeBtn/gridBtn are unaffected
@@ -3254,235 +3534,176 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     }});
   } // if (activeRibbonTab == kRibbonTabAnnotate)
 
-  // REQ-302: Survey tab (Inquiry + Survey sections). Unchanged condition (model space only, same
-  // as before this task).
+  // D-2026-08-28-k / REQ-141: Civil 3D Survey tab (screenshot 2). No Object Viewer.
   if (cmd.activeRibbonTab == kRibbonTabSurvey && !ribbonPaperSpace) {
-    ribbonSpecs.push_back({W.wInq, M.wInq, [&]() {
-      RibbonSectionBegin("RibbonSecInquiry", "Inquiry", curCompact ? M.wInq : W.wInq, panelH);
-      {
-        // Aligned/Linear moved to Annotate's Dimensions section (2026-08-25 follow-up) — ID Point is
-        // the one inquiry tool that stays here.
-        const float cw = colW({"ID Point"});
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonId", RibbonIconKind::Id, "ID Point", cw))
-          StartIdPointCommand(cmd, log);
-        RibbonItemHelp("ID — list UCS (World) X,Y,Z at a point (click or type coordinates).\nCommand bar: ID");
-        ImGui::EndGroup();
-
-        // Second column: the panel is three small buttons tall, so this cannot go under ID Point.
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonSurfElev", RibbonIconKind::Id, "Elev/Grade", colW({"Elev/Grade"})))
-          StartSurfaceElevGradeCommand(cmd, log);
-        RibbonItemHelp(
-            "Surface elevation and grade (REQ-074) — pick a point for its interpolated elevation on every "
-            "surface covering it; pick a second for the grade, slope and distances between them.\n"
-            "A pick off the surface says so rather than extrapolating.\nCommand bar: SURFELEV or SE");
-        ImGui::EndGroup();
+    const float wLabelsSec =
+        8.f + capW("Add\nLabels") + 4.f + capW("Add\nTables") + 4.f + capW("Renumber\nTags") + 8.f;
+    ribbonSpecs.push_back({wLabelsSec, wLabelsSec, [&]() {
+      const float wAddLabels = capW("Add\nLabels");
+      const float wAddTables = capW("Add\nTables");
+      const float wRenumber = capW("Renumber\nTags");
+      const float wSec = 8.f + wAddLabels + 4.f + wAddTables + 4.f + wRenumber + 8.f;
+      RibbonSectionBegin("RibbonSecSvyLabels", "Labels & Tables", wSec, panelH);
+      RibbonNyiButton("##SvyAddLabels", RibbonIconKind::SurfLabel, "Add\nLabels", ImVec2(wAddLabels, colH),
+                      RibbonLabel::Below);
+      ImGui::SameLine(0, 4);
+      if (RibbonButtonEx("##SvyAddTables", RibbonIconKind::SurfLegend, "Add\nTables", ImVec2(wAddTables, colH),
+                         RibbonLabel::Below))
+        ImGui::OpenPopup("##SvyAddTablesMenu");
+      RibbonItemHelp("Add Tables — insert a volume TABLE or MTEXT report.\nCommand bar: VOLREPORT TABLE / VOLREPORT");
+      if (ImGui::BeginPopup("##SvyAddTablesMenu")) {
+        if (ImGui::MenuItem("Volume Table"))
+          SubmitRibbonCommand(cmd, log, "VOLREPORT TABLE");
+        if (ImGui::MenuItem("Volume Report (MTEXT)"))
+          SubmitRibbonCommand(cmd, log, "VOLREPORT");
+        ImGui::EndPopup();
       }
+      ImGui::SameLine(0, 4);
+      RibbonNyiButton("##SvyRenumber", RibbonIconKind::SvyRenumber, "Renumber\nTags", ImVec2(wRenumber, colH),
+                      RibbonLabel::Below);
       RibbonSectionEnd();
     }});
 
-    ribbonSpecs.push_back({W.wSrv, M.wSrv, [&]() {
-      RibbonSectionBegin("RibbonSecSurvey", "Survey", curCompact ? M.wSrv : W.wSrv, panelH);
-      {
-        if (largeBtn("##RibbonPoint", RibbonIconKind::SurveyPoint, "Points"))
-          StartCreatePointsCommand(cmd, log);
-        RibbonItemHelp(
-            "Create points — open the create-points panel and click in the drawing to place survey points.\n"
-            "Command bar: CREATEPOINTS or CRTPTS");
-
-        ImGui::SameLine(0, 4);
-        const float cwA = colW({"Inverse", "Traverse"});
+    {
+      const float wGen = 8.f + colW({"Properties", "Isolate Objects"}) + 8.f;
+      ribbonSpecs.push_back({wGen, wGen, [&]() {
+        const float cell = colW({"Properties", "Isolate Objects"});
+        RibbonSectionBegin("RibbonSecSvyGen", "General Tools", 8.f + cell + 8.f, panelH);
         ImGui::BeginGroup();
-        if (smallBtn("##RibbonInverse", RibbonIconKind::SurveyInverse, "Inverse", cwA))
-          StartSurveyInverseCommand(cmd, log);
-        RibbonItemHelp(
-            "Inverse — two-point survey leg: horizontal distance and bearing (clockwise from north) in the command log "
-            "(World X=Easting, Y=Northing).\nCommand bar: INVERSE or INV");
-        if (smallBtn("##RibbonTraverse", RibbonIconKind::Traverse, "Traverse", cwA))
-          cmd.showTraverseEditorWindow = true;
-        RibbonItemHelp("Traverse Editor — enter traverse leg observations (horizontal angles, distances, vertical angles)\nto compute coordinates and closure. Face 1/Face 2 support included.");
-        ImGui::EndGroup();
-
-        // Surfaces/Volumes/Grades/Groups is FOUR items — the panel is three small buttons tall (colH),
-        // so a single column here clipped "Groups" at the bottom (latent since before REQ-302; only
-        // visible now that a scrollbar can no longer mask it — user GUI-pass feedback, 2026-08-25).
-        // Split 2+2, the same "fourth needs its own column" fix already used in Modify above.
-        ImGui::SameLine(0, 4);
-        const float cwB = colW({"Surfaces", "Volumes"});
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonSurfaces", RibbonIconKind::SurveyPoint, "Surfaces", cwB)) {
-          cmd.surfaceStyleUseSurfacesTitle = true;
-          cmd.showSurfaceStyleWindow = true;
+        if (smallBtn("##SvyProps", RibbonIconKind::SurfPropsHand, "Properties", cell))
+          cmd.pendingPropertiesFocus = true;
+        RibbonItemHelp("Properties — the side Properties panel for the current selection.");
+        if (smallBtn("##SvyIsolate", RibbonIconKind::SurfIsolate, "Isolate Objects", cell))
+          ImGui::OpenPopup("##SvyIsolateMenu");
+        RibbonItemHelp("Isolate Objects — isolate, hide, or end isolation (REQ-084).");
+        if (ImGui::BeginPopup("##SvyIsolateMenu")) {
+          if (ImGui::MenuItem("Isolate Objects"))
+            IsolateSelectedObjects(cmd, log);
+          if (ImGui::MenuItem("Hide Objects"))
+            HideSelectedObjects(cmd, log);
+          if (ImGui::MenuItem("End Object Isolation", nullptr, false, !cmd.hiddenEntityIds.empty()))
+            EndObjectIsolation(cmd, log);
+          ImGui::EndPopup();
         }
-        RibbonItemHelp(
-            "Surfaces — edit surface styles and analysis. Create surfaces and edit definitions from "
-            "Toolspace (right-click Surfaces).");
-        if (smallBtn("##RibbonVolumes", RibbonIconKind::SurveyPoint, "Volumes", cwB))
-          cmd.volumeDashboard.open = true;
-        RibbonItemHelp(
-            "Volume Dashboard — pick a Base and a Comparison surface for a live cut/fill/net report that "
-            "updates automatically as either surface is rebuilt.");
         ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
 
+    {
+      const float wSurvey = 8.f + capW("Survey\nToolspace") + 4.f + capW("Network\nProperties") + 4.f +
+                            capW("Figure\nProperties") + 8.f;
+      ribbonSpecs.push_back({wSurvey, wSurvey, [&]() {
+        const float wTs = capW("Survey\nToolspace");
+        const float wNet = capW("Network\nProperties");
+        const float wFig = capW("Figure\nProperties");
+        RibbonSectionBegin("RibbonSecSvyTs", "Survey", 8.f + wTs + 4.f + wNet + 4.f + wFig + 8.f, panelH);
+        if (RibbonButtonEx("##SvyToolspace", RibbonIconKind::SvyTripod, "Survey\nToolspace", ImVec2(wTs, colH),
+                           RibbonLabel::Below))
+          cmd.showToolspaceWindow = true;
+        RibbonItemHelp("Survey Toolspace — drawing explorer (Prospector and Settings).\nCommand bar: TOOLSPACE");
         ImGui::SameLine(0, 4);
-        const float cwAn = colW({"Elev", "Drop"});
+        RibbonNyiButton("##SvyNetProps", RibbonIconKind::SvyPda, "Network\nProperties", ImVec2(wNet, colH),
+                        RibbonLabel::Below);
+        ImGui::SameLine(0, 4);
+        RibbonNyiButton("##SvyFigProps", RibbonIconKind::SvyFigure, "Figure\nProperties", ImVec2(wFig, colH),
+                        RibbonLabel::Below);
+        RibbonSectionEnd();
+      }});
+    }
+
+    {
+      const float wMod = 8.f + capW("Survey\nQuery") + 4.f +
+                         colW({"Survey Figure Properties", "Survey Point Properties", "Browse to Survey Data"}) + 4.f +
+                         colW({"Edit Geometry", "Edit Elevations", "Update Figure"}) + 8.f;
+      ribbonSpecs.push_back({wMod, wMod, [&]() {
+        const float wQuery = capW("Survey\nQuery");
+        const float cFig = colW({"Survey Figure Properties", "Survey Point Properties", "Browse to Survey Data"});
+        const float cEdit = colW({"Edit Geometry", "Edit Elevations", "Update Figure"});
+        RibbonSectionBegin("RibbonSecSvyMod", "Modify", 8.f + wQuery + 4.f + cFig + 4.f + cEdit + 8.f, panelH);
+        RibbonNyiButton("##SvyQuery", RibbonIconKind::SvyQuery, "Survey\nQuery", ImVec2(wQuery, colH),
+                        RibbonLabel::Below);
+        ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
-        if (smallBtn("##RibbonSurfElev", RibbonIconKind::SurveyPoint, "Elev", cwAn))
-          StartSurfaceElevGradeCommand(cmd, log);
-        RibbonItemHelp("Surface elevation, grade, slope angle, and aspect at a pick.\nCommand bar: SURFELEV");
-        if (smallBtn("##RibbonWaterDrop", RibbonIconKind::SurveyPoint, "Drop", cwAn)) {
-          if (!cmd.cadSurfaces.empty())
-            StartWaterDropCommand(cmd, cmd.cadSurfaces[0].name, log);
-          else {
-            char buf[32] = "WATERDROP";
-            ProcessCommandLineSubmit(buf, 32, cmd, log);
-          }
-        }
-        RibbonItemHelp("Water drop path on a surface.\nCommand bar: WATERDROP");
+        RibbonNyiButton("##SvyFigProp2", RibbonIconKind::SvyFigure, "Survey Figure Properties", ImVec2(cFig, rowH),
+                        RibbonLabel::Right);
+        if (smallBtn("##SvyPtProps", RibbonIconKind::SurveyPoint, "Survey Point Properties", cFig))
+          cmd.pendingPropertiesFocus = true;
+        RibbonItemHelp("Survey Point Properties — the Properties panel for selected survey points.");
+        RibbonNyiButton("##SvyBrowse", RibbonIconKind::SvyPin, "Browse to Survey Data", ImVec2(cFig, rowH),
+                        RibbonLabel::Right);
         ImGui::EndGroup();
-
         ImGui::SameLine(0, 4);
-        const float cwAn2 = colW({"Shed", "Report"});
         ImGui::BeginGroup();
-        if (smallBtn("##RibbonWatershed", RibbonIconKind::SurveyPoint, "Shed", cwAn2)) {
-          char buf[32] = "WATERSHED";
-          ProcessCommandLineSubmit(buf, 32, cmd, log);
-        }
-        RibbonItemHelp("Watershed basins.\nCommand bar: WATERSHED");
-        if (smallBtn("##RibbonVolReport", RibbonIconKind::SurveyPoint, "Report", cwAn2)) {
-          char buf[32] = "VOLREPORT";
-          ProcessCommandLineSubmit(buf, 32, cmd, log);
-        }
-        RibbonItemHelp("Insert MTEXT of the last volume result.\nCommand bar: VOLREPORT");
-        ImGui::EndGroup();
-
-        ImGui::SameLine(0, 4);
-        const float cwC = colW({"Grades", "Groups"});
-        ImGui::BeginGroup();
-        // REQ-088. Sits with Surfaces because that is what a feature line's elevations are FOR — the
-        // line is design linework a surface consumes as a breakline.
-        if (smallBtn("##RibbonFlElev", RibbonIconKind::SurveyPoint, "Grades", cwC))
+        RibbonNyiButton("##SvyEditGeom", RibbonIconKind::Rect, "Edit Geometry", ImVec2(cEdit, rowH),
+                        RibbonLabel::Right);
+        if (smallBtn("##SvyEditElev", RibbonIconKind::SurfEdit, "Edit Elevations", cEdit))
           cmd.showFeatureLineElevWindow = true;
         RibbonItemHelp(
-            "Feature Line Elevations — station, elevation, length, grade back and grade ahead for each "
-            "point of a feature line. Edit an elevation or a grade, raise or lower the whole line, and "
-            "add elevation points that change grade without changing the plan shape.");
-        if (smallBtn("##RibbonPointGroups", RibbonIconKind::SurveyPoint, "Groups", cwC))
-          cmd.showPointGroupManagerWindow = true;
-        RibbonItemHelp(
-            "Point Groups — name a set of points by rule: number ranges, description, raw description, or "
-            "picks.\nMembership is re-evaluated from the current points, so a later import joins the group "
-            "automatically.");
+            "Edit Elevations — station, elevation, and grade for feature-line points.\n"
+            "Feature Line Elevations window.");
+        RibbonNyiButton("##SvyUpdateFig", RibbonIconKind::SvyRefresh, "Update Figure", ImVec2(cEdit, rowH),
+                        RibbonLabel::Right);
         ImGui::EndGroup();
-      }
-      RibbonSectionEnd();
-    }});
+        RibbonSectionEnd();
+      }});
+    }
 
-    ribbonSpecs.push_back({W.wAnalyze, M.wAnalyze, [&]() {
-      RibbonSectionBegin("RibbonSecAnalyze", "Analyze", curCompact ? M.wAnalyze : W.wAnalyze, panelH);
-      {
-        const auto styleNameForRibbon = [&]() -> std::string {
-          if (cmd.cadSurfaces.empty())
-            return std::string(SurfaceStyles::kStandardName);
-          const std::string& sn = cmd.cadSurfaces[0].styleName;
-          return sn.empty() ? std::string(SurfaceStyles::kStandardName) : sn;
-        };
-        const auto firstName = [&]() -> std::string {
-          return cmd.cadSurfaces.empty() ? std::string() : cmd.cadSurfaces[0].name;
-        };
-
+    {
+      const float anCol = colW({"Mapcheck", "Geodetic Calculator", "Astronomic Direction"});
+      const float wAn = 8.f + anCol + 8.f;
+      ribbonSpecs.push_back({wAn, wAn, [&]() {
+        const float cell = colW({"Mapcheck", "Geodetic Calculator", "Astronomic Direction"});
+        RibbonSectionBegin("RibbonSecSvyAnalyze", "Analyze", 8.f + cell + 8.f, panelH);
         ImGui::BeginGroup();
-        if (smallBtn("##RibbonSlope", RibbonIconKind::SurveyPoint, "Slope", colW({"Slope", "Dir", "Arrows"}))) {
-          SurfaceStyles::EnsureStandard(cmd.surfaceStyles);
-          SubmitRibbonCommand(cmd, log, "SURFSTYLE ANALYSIS " + styleNameForRibbon() + ", slope");
-        }
-        RibbonItemHelp("Slope banding on the current surface style.\nCommand bar: SURFSTYLE ANALYSIS, <style>, slope");
-        if (smallBtn("##RibbonDir", RibbonIconKind::SurveyPoint, "Dir", colW({"Slope", "Dir", "Arrows"}))) {
-          SurfaceStyles::EnsureStandard(cmd.surfaceStyles);
-          SubmitRibbonCommand(cmd, log, "SURFSTYLE ANALYSIS " + styleNameForRibbon() + ", direction");
-        }
-        RibbonItemHelp("Direction/aspect banding.\nCommand bar: SURFSTYLE ANALYSIS, <style>, direction");
-        if (smallBtn("##RibbonArrows", RibbonIconKind::SurveyPoint, "Arrows", colW({"Slope", "Dir", "Arrows"}))) {
-          SurfaceStyles::EnsureStandard(cmd.surfaceStyles);
-          SubmitRibbonCommand(cmd, log, "SURFSTYLE ARROWS " + styleNameForRibbon() + ", on");
-        }
-        RibbonItemHelp("Turn slope arrows on for the style.\nCommand bar: SURFSTYLE ARROWS, <style>, on");
+        RibbonNyiButton("##SvyMapcheck", RibbonIconKind::SvyGlobe, "Mapcheck", ImVec2(cell, rowH), RibbonLabel::Right);
+        RibbonNyiButton("##SvyGeodetic", RibbonIconKind::SvyGeodetic, "Geodetic Calculator", ImVec2(cell, rowH),
+                        RibbonLabel::Right);
+        RibbonNyiButton("##SvyAstro", RibbonIconKind::SvySun, "Astronomic Direction", ImVec2(cell, rowH),
+                        RibbonLabel::Right);
         ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
 
-        ImGui::SameLine(0, 4);
+    {
+      const float launchCol = colW({"Quick Profile", "Create Surface", "Grading Creation Tools"});
+      const float wLaunch = 8.f + launchCol + 8.f;
+      ribbonSpecs.push_back({wLaunch, wLaunch, [&]() {
+        const float cell = colW({"Quick Profile", "Create Surface", "Grading Creation Tools"});
+        RibbonSectionBegin("RibbonSecSvyLaunch", "Launch Pad", 8.f + cell + 8.f, panelH);
         ImGui::BeginGroup();
-        if (smallBtn("##RibbonCatch", RibbonIconKind::SurveyPoint, "Catch", colW({"Catch", "Stats", "Rebuild"}))) {
+        if (smallBtn("##SvyQProfile", RibbonIconKind::SurfQuickProfile, "Quick Profile", cell)) {
           if (!cmd.cadSurfaces.empty())
-            StartCatchmentCommand(cmd, firstName(), log);
+            StartQuickProfileCommand(cmd, cmd.cadSurfaces[0].name, log);
           else
-            SubmitRibbonCommand(cmd, log, "CATCHMENT");
+            SubmitRibbonCommand(cmd, log, "QUICKPROFILE");
         }
-        RibbonItemHelp("Catchment at an outlet pick.\nCommand bar: CATCHMENT");
-        if (smallBtn("##RibbonStats", RibbonIconKind::SurveyPoint, "Stats", colW({"Catch", "Stats", "Rebuild"})))
-          SubmitRibbonCommand(cmd, log, cmd.cadSurfaces.empty() ? "SURFACESTATS" : ("SURFACESTATS " + firstName()));
-        RibbonItemHelp("Surface statistics in the command log.\nCommand bar: SURFACESTATS");
-        if (smallBtn("##RibbonRebuild", RibbonIconKind::SurveyPoint, "Rebuild", colW({"Catch", "Stats", "Rebuild"})))
-          SubmitRibbonCommand(cmd, log, cmd.cadSurfaces.empty() ? "SURFACEREBUILD" : ("SURFACEREBUILD " + firstName()));
-        RibbonItemHelp("Rebuild the first surface, or all if none named.\nCommand bar: SURFACEREBUILD");
-        ImGui::EndGroup();
-
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonAddBl", RibbonIconKind::SurveyPoint, "Breakln", colW({"Breakln", "Contour", "Boundry"}))) {
-          if (!cmd.cadSurfaces.empty())
-            StartDesignateBreaklineCommand(cmd, firstName(), log);
-          else
-            log.push_back("DESIGNATEBREAKLINE — no surfaces in the drawing.");
-        }
-        RibbonItemHelp("Add a breakline to the first surface.\nCommand bar: DESIGNATEBREAKLINE");
-        if (smallBtn("##RibbonAddCt", RibbonIconKind::SurveyPoint, "Contour", colW({"Breakln", "Contour", "Boundry"}))) {
-          if (!cmd.cadSurfaces.empty())
-            StartDesignateContourCommand(cmd, firstName(), log);
-          else
-            log.push_back("DESIGNATECONTOUR — no surfaces in the drawing.");
-        }
-        RibbonItemHelp("Add contour source geometry.\nCommand bar: DESIGNATECONTOUR");
-        if (smallBtn("##RibbonAddBd", RibbonIconKind::SurveyPoint, "Boundry", colW({"Breakln", "Contour", "Boundry"}))) {
-          if (!cmd.cadSurfaces.empty())
-            StartDesignateBoundaryCommand(cmd, firstName(), CadBoundaryKind::Outer, log);
-          else
-            log.push_back("DESIGNATEBOUNDARY — no surfaces in the drawing.");
-        }
-        RibbonItemHelp("Add an outer boundary.\nCommand bar: DESIGNATEBOUNDARY");
-        ImGui::EndGroup();
-
-        ImGui::SameLine(0, 4);
-        ImGui::BeginGroup();
-        if (smallBtn("##RibbonVolSurf", RibbonIconKind::SurveyPoint, "Vol Surf", colW({"Vol Surf", "Props"})))
+        RibbonItemHelp("Quick Profile — sample a surface along two plan points.\nCommand bar: QUICKPROFILE");
+        if (smallBtn("##SvyCreateSurf", RibbonIconKind::SurfAddData, "Create Surface", cell))
           cmd.showCreateSurfaceWindow = true;
-        RibbonItemHelp("Create Surface — choose TIN, grid, corridor, or volume type.\nToolspace: Create Surface...");
-        if (smallBtn("##RibbonSurfProps", RibbonIconKind::SurveyPoint, "Props", colW({"Vol Surf", "Props"}))) {
-          if (!cmd.cadSurfaces.empty()) {
-            cmd.surfacePropertiesIndex = 0;
-            cmd.showSurfacePropertiesWindow = true;
-          } else
-            log.push_back("SURFACEPROPERTIES — no surfaces in the drawing.");
-        }
-        RibbonItemHelp("Surface Properties for the first surface.\nRight-click a named surface in Toolspace.");
+        RibbonItemHelp("Create Surface — TIN, grid, corridor, or volume type.\nToolspace: Create Surface...");
+        RibbonNyiButton("##SvyGrading", RibbonIconKind::SurfGrading, "Grading Creation Tools", ImVec2(cell, rowH),
+                        RibbonLabel::Right);
         ImGui::EndGroup();
-      }
-      RibbonSectionEnd();
-    }});
+        RibbonSectionEnd();
+      }});
+    }
   } // if (activeRibbonTab == kRibbonTabSurvey)
 
   // REQ-143: Civil 3D-shaped contextual TIN Surface tab (selected surface).
   if (cmd.activeRibbonTab == kRibbonTabSurfaceCtx && !ribbonPaperSpace && selSurfIdx >= 0) {
     const std::string& surfName = cmd.cadSurfaces[static_cast<size_t>(selSurfIdx)].name;
 
-    ribbonSpecs.push_back({8.f + kTsLargeW + 4.f + kTsLargeW, 8.f + kTsLargeW + 4.f + kTsLargeW, [&]() {
-      const float wLabels = 8.f + kTsLargeW + 4.f + kTsLargeW;
-      RibbonSectionBegin("RibbonSecTsLabels", "Labels & Tables", wLabels, panelH);
-      RibbonNyiButton("##TsAddLabels", RibbonIconKind::SurfLabel, "Add Labels", ImVec2(kTsLargeW, colH),
+    const float tsLabelsSec = 8.f + belowW("Add Labels") + 4.f + belowW("Add Legend") + 8.f;
+    ribbonSpecs.push_back({tsLabelsSec, tsLabelsSec, [&]() {
+      const float tsAddLabels = belowW("Add Labels");
+      const float tsAddLegend = belowW("Add Legend");
+      RibbonSectionBegin("RibbonSecTsLabels", "Labels & Tables", 8.f + tsAddLabels + 4.f + tsAddLegend + 8.f, panelH);
+      RibbonNyiButton("##TsAddLabels", RibbonIconKind::SurfLabel, "Add Labels", ImVec2(tsAddLabels, colH),
                       RibbonLabel::Below);
       ImGui::SameLine(0, 4);
-      RibbonNyiButton("##TsAddLegend", RibbonIconKind::SurfLegend, "Add Legend", ImVec2(kTsLargeW, colH),
+      RibbonNyiButton("##TsAddLegend", RibbonIconKind::SurfLegend, "Add Legend", ImVec2(tsAddLegend, colH),
                       RibbonLabel::Below);
       RibbonSectionEnd();
     }});
@@ -3521,17 +3742,20 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     }
 
     {
-      const float wMod = 8.f + kTsLargeW * 3.f + 8.f;
+      const float wMod = 8.f + belowW("Surface Properties") + 4.f + belowW("Add Data") + 4.f + belowW("Edit Surface") + 8.f;
       ribbonSpecs.push_back({wMod, wMod, [&]() {
-      RibbonSectionBegin("RibbonSecTsMod", "Modify", 8.f + kTsLargeW * 3.f + 8.f, panelH);
-      if (RibbonButtonEx("##TsSurfProps", RibbonIconKind::SurfDoc, "Surface Properties", ImVec2(kTsLargeW, colH),
+      const float tsSurfProps = belowW("Surface Properties");
+      const float tsAddData = belowW("Add Data");
+      const float tsEditSurf = belowW("Edit Surface");
+      RibbonSectionBegin("RibbonSecTsMod", "Modify", 8.f + tsSurfProps + 4.f + tsAddData + 4.f + tsEditSurf + 8.f, panelH);
+      if (RibbonButtonEx("##TsSurfProps", RibbonIconKind::SurfDoc, "Surface Properties", ImVec2(tsSurfProps, colH),
                          RibbonLabel::Below)) {
         cmd.surfacePropertiesIndex = selSurfIdx;
         cmd.showSurfacePropertiesWindow = true;
       }
       RibbonItemHelp("Surface Properties — Information, Definition, Analysis, Statistics.");
       ImGui::SameLine(0, 4);
-      if (RibbonButtonEx("##TsAddData", RibbonIconKind::SurfAddData, "Add Data", ImVec2(kTsLargeW, colH),
+      if (RibbonButtonEx("##TsAddData", RibbonIconKind::SurfAddData, "Add Data", ImVec2(tsAddData, colH),
                          RibbonLabel::Below))
         ImGui::OpenPopup("##TsAddDataMenu");
       RibbonItemHelp("Add Data — breaklines, contours, and boundaries on this surface.");
@@ -3552,15 +3776,19 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         ImGui::EndPopup();
       }
       ImGui::SameLine(0, 4);
-      if (RibbonButtonEx("##TsEditSurf", RibbonIconKind::SurfEdit, "Edit Surface", ImVec2(kTsLargeW, colH),
+      if (RibbonButtonEx("##TsEditSurf", RibbonIconKind::SurfEdit, "Edit Surface", ImVec2(tsEditSurf, colH),
                          RibbonLabel::Below))
         ImGui::OpenPopup("##TsEditSurfMenu");
-      RibbonItemHelp("Edit Surface — add/delete points, swap TIN edges, or rebuild.");
+      RibbonItemHelp("Edit Surface — add/delete/move points, delete TIN lines, swap edges, or rebuild.");
       if (ImGui::BeginPopup("##TsEditSurfMenu")) {
         if (ImGui::MenuItem("Add Point"))
           StartSurfAddPointCommand(cmd, surfName, log);
         if (ImGui::MenuItem("Delete Point"))
           StartSurfDelPointCommand(cmd, surfName, log);
+        if (ImGui::MenuItem("Move Point"))
+          StartSurfMovePointCommand(cmd, surfName, log);
+        if (ImGui::MenuItem("Delete TIN Line"))
+          StartSurfDelLineCommand(cmd, surfName, log);
         if (ImGui::MenuItem("Swap Edge"))
           StartSurfSwapEdgeCommand(cmd, surfName, log);
         if (ImGui::MenuItem("Rebuild"))
@@ -3589,12 +3817,13 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     }
 
     {
-      const float anCell = colW({"Crossing BL", "Visibility", "Catchment", "Volumes"});
-      const float wAn = 8.f + kTsLargeW + 4.f + anCell + 4.f + anCell;
+      const float wAn = 8.f + belowW("Water Drop") + 4.f + colW({"Crossing BL", "Visibility", "Catchment", "Volumes"}) +
+                        4.f + colW({"Crossing BL", "Visibility", "Catchment", "Volumes"}) + 8.f;
       ribbonSpecs.push_back({wAn, wAn, [&]() {
+      const float tsWater = belowW("Water Drop");
       const float cell = colW({"Crossing BL", "Visibility", "Catchment", "Volumes"});
-      RibbonSectionBegin("RibbonSecTsAnalyze", "Analyze", 8.f + kTsLargeW + 4.f + cell + 4.f + cell, panelH);
-      if (RibbonButtonEx("##TsWaterDrop", RibbonIconKind::SurfWaterDrop, "Water Drop", ImVec2(kTsLargeW, colH),
+      RibbonSectionBegin("RibbonSecTsAnalyze", "Analyze", 8.f + tsWater + 4.f + cell + 4.f + cell + 8.f, panelH);
+      if (RibbonButtonEx("##TsWaterDrop", RibbonIconKind::SurfWaterDrop, "Water Drop", ImVec2(tsWater, colH),
                          RibbonLabel::Below))
         StartWaterDropCommand(cmd, surfName, log);
       RibbonItemHelp("Water Drop — pick a point on this surface.\nCommand bar: WATERDROP");
@@ -3652,12 +3881,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     }
 
     {
-      const float launchCell = colW({"Create Profile", "Data Shortcut", "Grading Tools"});
-      const float wLaunch = 8.f + kTsLargeW + 4.f + launchCell;
+      const float wLaunch = 8.f + belowW("Quick Profile") + 4.f + colW({"Create Profile", "Data Shortcut", "Grading Tools"}) + 8.f;
       ribbonSpecs.push_back({wLaunch, wLaunch, [&]() {
+      const float tsQP = belowW("Quick Profile");
       const float cell = colW({"Create Profile", "Data Shortcut", "Grading Tools"});
-      RibbonSectionBegin("RibbonSecTsLaunch", "Launch Pad", 8.f + kTsLargeW + 4.f + cell, panelH);
-      if (RibbonButtonEx("##TsQProfile", RibbonIconKind::SurfQuickProfile, "Quick Profile", ImVec2(kTsLargeW, colH),
+      RibbonSectionBegin("RibbonSecTsLaunch", "Launch Pad", 8.f + tsQP + 4.f + cell + 8.f, panelH);
+      if (RibbonButtonEx("##TsQProfile", RibbonIconKind::SurfQuickProfile, "Quick Profile", ImVec2(tsQP, colH),
                          RibbonLabel::Below))
         StartQuickProfileCommand(cmd, surfName, log);
       RibbonItemHelp("Quick Profile — sample this surface along two plan points.\nCommand bar: QUICKPROFILE");
@@ -4233,6 +4462,16 @@ const EntityAttributes& AnnAttr(const AppCommandState& cmd, int idx) {
   return cmd.cadAnnotationAttrs[u];
 }
 
+const EntityAttributes& TableAttr(const AppCommandState& cmd, int idx) {
+  static const EntityAttributes kDef{};
+  if (idx < 0)
+    return kDef;
+  const size_t u = static_cast<size_t>(idx);
+  if (u >= cmd.cadTableAttrs.size())
+    return kDef;
+  return cmd.cadTableAttrs[u];
+}
+
 bool ReadLineEndpoints(const AppCommandState& cmd, int idx, float* x0, float* y0, float* x1, float* y1) {
   const size_t k = static_cast<size_t>(idx) * 6;
   if (k + 5 >= cmd.userLinesFlat.size())
@@ -4306,6 +4545,15 @@ void CollectGeneralAttrs(const AppCommandState& cmd, const std::vector<SelectedE
       if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadAnnotations.size())
         continue;
       const EntityAttributes& a = AnnAttr(cmd, e.index);
+      layers->push_back(a.layer);
+      colors->push_back(a.color);
+      ltypes->push_back(a.linetype);
+      lws->push_back(a.lineweightMm);
+      trans->push_back(a.transparency);
+    } else if (e.type == SelectedEntity::Type::Table) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadTables.size())
+        continue;
+      const EntityAttributes& a = TableAttr(cmd, e.index);
       layers->push_back(a.layer);
       colors->push_back(a.color);
       ltypes->push_back(a.linetype);
@@ -4635,6 +4883,11 @@ void ApplyLayerToSelection(AppCommandState& cmd, const std::string& v) {
           static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
         continue;
       cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].layer = v;
+    } else if (e.type == SelectedEntity::Type::Table) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadTables.size() ||
+          static_cast<size_t>(e.index) >= cmd.cadTableAttrs.size())
+        continue;
+      cmd.cadTableAttrs[static_cast<size_t>(e.index)].layer = v;
     } else if (e.type == SelectedEntity::Type::Arc) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
           static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
@@ -4678,6 +4931,11 @@ void ApplyColorToSelection(AppCommandState& cmd, const std::string& v) {
           static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
         continue;
       cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].color = v;
+    } else if (e.type == SelectedEntity::Type::Table) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadTables.size() ||
+          static_cast<size_t>(e.index) >= cmd.cadTableAttrs.size())
+        continue;
+      cmd.cadTableAttrs[static_cast<size_t>(e.index)].color = v;
     } else if (e.type == SelectedEntity::Type::Arc) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
           static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
@@ -4720,6 +4978,11 @@ void ApplyLinetypeToSelection(AppCommandState& cmd, const std::string& v) {
           static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
         continue;
       cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].linetype = v;
+    } else if (e.type == SelectedEntity::Type::Table) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadTables.size() ||
+          static_cast<size_t>(e.index) >= cmd.cadTableAttrs.size())
+        continue;
+      cmd.cadTableAttrs[static_cast<size_t>(e.index)].linetype = v;
     } else if (e.type == SelectedEntity::Type::Arc) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
           static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
@@ -4761,6 +5024,11 @@ void ApplyLineweightToSelection(AppCommandState& cmd, float mm) {
           static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
         continue;
       cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
+    } else if (e.type == SelectedEntity::Type::Table) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadTables.size() ||
+          static_cast<size_t>(e.index) >= cmd.cadTableAttrs.size())
+        continue;
+      cmd.cadTableAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
     } else if (e.type == SelectedEntity::Type::Arc) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
           static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
@@ -4802,6 +5070,11 @@ void ApplyTransparencyToSelection(AppCommandState& cmd, float a) {
           static_cast<size_t>(e.index) >= cmd.cadAnnotationAttrs.size())
         continue;
       cmd.cadAnnotationAttrs[static_cast<size_t>(e.index)].transparency = stored;
+    } else if (e.type == SelectedEntity::Type::Table) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.cadTables.size() ||
+          static_cast<size_t>(e.index) >= cmd.cadTableAttrs.size())
+        continue;
+      cmd.cadTableAttrs[static_cast<size_t>(e.index)].transparency = stored;
     } else if (e.type == SelectedEntity::Type::Arc) {
       if (e.index < 0 || static_cast<size_t>(e.index) >= cmd.userArcs.size() ||
           static_cast<size_t>(e.index) >= cmd.userArcAttrs.size())
@@ -5411,6 +5684,7 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
   const char* kindLabel =
       ann.kind == CadAnnotation::Kind::Text       ? "TEXT"
       : ann.kind == CadAnnotation::Kind::Mtext   ? "MTEXT"
+      : ann.kind == CadAnnotation::Kind::Table   ? "TABLE"
       : ann.kind == CadAnnotation::Kind::DimAligned   ? "DIMALIGNED"
       : ann.kind == CadAnnotation::Kind::DimLinear    ? "DIMLINEAR"
                                                       : "?";
@@ -5577,6 +5851,43 @@ void DrawSingleAnnotationGeometryEditable(AppCommandState& cmd, int annIdx) {
   }
 }
 
+void DrawSingleTableGeometryEditable(AppCommandState& cmd, int tableIdx) {
+  if (!PropSectionHeader("Geometry"))
+    return;
+  if (tableIdx < 0 || static_cast<size_t>(tableIdx) >= cmd.cadTables.size())
+    return;
+  CadTable& t = cmd.cadTables[static_cast<size_t>(tableIdx)];
+  const std::string cfmt = DisplayFloatFmt(cmd.displayLinearPrecision);
+  if (ImGui::BeginTable("props_geom_tbl_ed", 2, kPropTableFlags)) {
+    ImGui::TableSetupColumn("k", ImGuiTableColumnFlags_WidthStretch, 0.38f);
+    ImGui::TableSetupColumn("v", ImGuiTableColumnFlags_WidthStretch, 0.62f);
+    PropGeomRow(cmd, "Insertion X", "##tblinsx", &t.insX, cfmt.c_str(), "Edit table X");
+    PropGeomRow(cmd, "Insertion Y", "##tblinsy", &t.insY, cfmt.c_str(), "Edit table Y");
+    PropGeomRow(cmd, "Insertion Z", "##tblinsz", &t.insZ, cfmt.c_str(), "Edit table Z");
+    PropGeomRow(cmd, "Width", "##tblw", &t.width, cfmt.c_str(), "Edit table width");
+    if (t.width < 1.e-3f)
+      t.width = 1.e-3f;
+    PropGeomRow(cmd, "Height", "##tblh", &t.height, cfmt.c_str(), "Edit table height");
+    if (t.height < 1.e-3f)
+      t.height = 1.e-3f;
+    float rotDeg = t.rotationRad * 180.f / 3.14159265358979323846f;
+    ImGui::TableNextRow();
+    ImGui::TableNextColumn();
+    ImGui::TextUnformatted("Rotation °");
+    ImGui::TableNextColumn();
+    ImGui::SetNextItemWidth(-1);
+    ImGui::InputFloat("##tblrot", &rotDeg, 0.f, 0.f, "%.2f");
+    if (ImGui::IsItemActivated())
+      PushUndoSnapshot(cmd, "Edit table rotation");
+    if (ImGui::IsItemDeactivatedAfterEdit()) {
+      t.rotationRad = rotDeg * 3.14159265358979323846f / 180.f;
+      BumpCadGpuCache(cmd);
+    }
+    ImGui::EndTable();
+  }
+  ImGui::TextDisabled("%d rows x %d columns", CadTableRowCount(t), std::max(t.cols, 0));
+}
+
 void DrawAnnotationGeometryOnly(const AppCommandState& cmd, const std::vector<SelectedEntity>& annOnly) {
   std::vector<std::string> kinds;
   std::vector<float> phIn, mwHeight, insX, insY, rotDeg;
@@ -5586,6 +5897,7 @@ void DrawAnnotationGeometryOnly(const AppCommandState& cmd, const std::vector<Se
     const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(e.index)];
     kinds.push_back(a.kind == CadAnnotation::Kind::Text       ? "TEXT"
                     : a.kind == CadAnnotation::Kind::Mtext    ? "MTEXT"
+                    : a.kind == CadAnnotation::Kind::Table    ? "TABLE"
                     : a.kind == CadAnnotation::Kind::DimAligned ? "DIMALIGNED"
                     : a.kind == CadAnnotation::Kind::DimLinear  ? "DIMLINEAR"
                                                               : "?");
@@ -6449,6 +6761,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   int nLine = 0;
   int nCirc = 0;
   int nAnn  = 0;
+  int nTable = 0;
   int nPdf  = 0;
   int nSurf = 0;
   int firstSurfIx = -1;
@@ -6456,6 +6769,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     if      (e.type == SelectedEntity::Type::LineSeg)    ++nLine;
     else if (e.type == SelectedEntity::Type::Circle)     ++nCirc;
     else if (e.type == SelectedEntity::Type::Annotation) ++nAnn;
+    else if (e.type == SelectedEntity::Type::Table) ++nTable;
     else if (e.type == SelectedEntity::Type::PdfUnderlay)++nPdf;
     else if (e.type == SelectedEntity::Type::Surface) {
       ++nSurf;
@@ -6465,15 +6779,19 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   }
 
   ImGui::Text("Selected: %d object(s)", static_cast<int>(sel.size()));
-  const int typeKinds = (nLine > 0 ? 1 : 0) + (nCirc > 0 ? 1 : 0) + (nAnn > 0 ? 1 : 0) + (nPdf > 0 ? 1 : 0);
+  const int typeKinds = (nLine > 0 ? 1 : 0) + (nCirc > 0 ? 1 : 0) + (nAnn > 0 ? 1 : 0) + (nTable > 0 ? 1 : 0) +
+                        (nPdf > 0 ? 1 : 0);
   if (typeKinds > 1)
-    ImGui::TextDisabled("(Mixed: Line %d, Circle %d, Ann %d, PDF %d)", nLine, nCirc, nAnn, nPdf);
+    ImGui::TextDisabled("(Mixed: Line %d, Circle %d, Ann %d, Table %d, PDF %d)", nLine, nCirc, nAnn, nTable,
+                        nPdf);
   else if (nLine > 1)
     ImGui::TextDisabled("%d lines", nLine);
   else if (nCirc > 1)
     ImGui::TextDisabled("%d circles", nCirc);
   else if (nAnn > 1)
     ImGui::TextDisabled("%d annotations", nAnn);
+  else if (nTable > 1)
+    ImGui::TextDisabled("%d tables", nTable);
   else if (nPdf > 1)
     ImGui::TextDisabled("%d PDF underlays", nPdf);
   else if (nLine == 1)
@@ -6498,13 +6816,15 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
       const CadAnnotation::Kind k = cmd.cadAnnotations[static_cast<size_t>(ix)].kind;
       const char* lab = k == CadAnnotation::Kind::Text       ? "TEXT"
                         : k == CadAnnotation::Kind::Mtext    ? "MTEXT"
+                        : k == CadAnnotation::Kind::Table    ? "TABLE"
                         : k == CadAnnotation::Kind::DimAligned ? "DIMALIGNED"
                         : k == CadAnnotation::Kind::DimLinear  ? "DIMLINEAR"
                                                               : "Annotation";
       ImGui::TextDisabled("%s", lab);
     } else
       ImGui::TextDisabled("Annotation");
-  }
+  } else if (nTable == 1)
+    ImGui::TextDisabled("TABLE");
 
   ImGui::Separator();
 
@@ -6565,6 +6885,16 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
       DrawSingleAnnotationGeometryEditable(cmd, annOnly.front().index);
     else
       DrawAnnotationGeometryOnly(cmd, annOnly);
+  } else if (nLine == 0 && nCirc == 0 && nAnn == 0 && nTable > 0) {
+    int tblIdx = -1;
+    for (const auto& e : sel) {
+      if (e.type == SelectedEntity::Type::Table) {
+        tblIdx = e.index;
+        break;
+      }
+    }
+    if (nTable == 1 && tblIdx >= 0)
+      DrawSingleTableGeometryEditable(cmd, tblIdx);
   } else if (nCirc == 0 && nAnn == 0 && nLine > 0) {
     std::vector<SelectedEntity> linesOnly;
     linesOnly.reserve(static_cast<size_t>(nLine));
@@ -6587,7 +6917,7 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
       DrawSingleCircleGeometryEditable(cmd, circOnly.front().index);
     else
       DrawCircleGeometryOnly(cmd, circOnly);
-  } else if (nPdf > 0 && nLine == 0 && nCirc == 0 && nAnn == 0) {
+  } else if (nPdf > 0 && nLine == 0 && nCirc == 0 && nAnn == 0 && nTable == 0) {
     // PDF Underlay properties — single or multi
     int pdfIdx = -1;
     for (const auto& e : sel)
@@ -7159,6 +7489,8 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
   case K::SwapTinEdge: return true;
   case K::AddTinPoint: return true;
   case K::DelTinPoint: return true;
+  case K::MoveTinPoint: return true;
+  case K::DelTinLine: return true;
   case K::QuickProfile: return true;
   case K::Circle: {
     using CP = AppCommandState::CirclePhase;
@@ -7776,7 +8108,8 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   const ImGuiStyle& st = ImGui::GetStyle();
   const float wrapW = ImGui::GetContentRegionAvail().x;
   const bool cmdInputOnViewport =
-      cmd.active != AppCommandState::Kind::None && cmd.viewportDrawingHovered && !cmd.mtextRichEditorOpen;
+      cmd.active != AppCommandState::Kind::None && cmd.viewportDrawingHovered && !cmd.mtextRichEditorOpen &&
+      !cmd.tableCellEditorOpen;
 
   auto footerNonEmpty = [](const char* s) { return s && s[0] != '\0'; };
   auto wrappedBlockH = [&](const char* s) -> float {
@@ -8509,7 +8842,7 @@ static int HitTestDimGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 av
 
 static int HitTestMtextGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 avail, const Camera& cam,
                             const CadAnnotation& ann, float gripRadiusPx) {
-  if (ann.kind != CadAnnotation::Kind::Mtext)
+  if (!CadAnnotationHasTextBox(ann.kind))
     return -1;
   const float r2 = gripRadiusPx * gripRadiusPx;
   // Camera-projected — see HitTestDimGrip.
@@ -8766,6 +9099,68 @@ static void MtextTbDrawRuler(ImDrawList* d, ImVec2 tl, float w, float h) {
     const float tickH = t.isMajor ? h * 0.42f : h * 0.24f;
     d->AddLine(ImVec2(x0 + t.offsetPx, midY - tickH), ImVec2(x0 + t.offsetPx, midY + tickH), tick, 1.f);
   }
+}
+
+static void DrawTableCellEditorOverlay(AppCommandState& cmd, std::vector<std::string>& log, float worldLeft,
+                                       float worldRight, float worldBottom, float worldTop, ImVec2 imgPos,
+                                       ImVec2 avail) {
+  if (!cmd.tableCellEditorOpen)
+    return;
+  if (cmd.tableCellEditorIndex < 0 ||
+      static_cast<size_t>(cmd.tableCellEditorIndex) >= cmd.cadTables.size()) {
+    CancelTableCellEditor(cmd);
+    return;
+  }
+  const CadTable& t = cmd.cadTables[static_cast<size_t>(cmd.tableCellEditorIndex)];
+  std::vector<CadTableCellRect> cells;
+  CadTableLayoutWorldCells(t, &cells);
+  if (cmd.tableCellEditorCell < 0 || static_cast<size_t>(cmd.tableCellEditorCell) >= cells.size()) {
+    CancelTableCellEditor(cmd);
+    return;
+  }
+  const CadTableCellRect& cell = cells[static_cast<size_t>(cmd.tableCellEditorCell)];
+  const float denx = worldRight - worldLeft;
+  const float deny = worldTop - worldBottom;
+  if (std::fabs(denx) < 1.e-12f || std::fabs(deny) < 1.e-12f)
+    return;
+  auto ws = [&](float wx, float wy, ImVec2* o) {
+    const float u = (wx - worldLeft) / denx;
+    const float v = (worldTop - wy) / deny;
+    o->x = imgPos.x + u * avail.x;
+    o->y = imgPos.y + v * avail.y;
+  };
+  ImVec2 p00{}, p01{}, p10{}, p11{};
+  ws(cell.x0, cell.y0, &p00);
+  ws(cell.x1, cell.y0, &p01);
+  ws(cell.x0, cell.y1, &p10);
+  ws(cell.x1, cell.y1, &p11);
+  const float sx0 = std::min({p00.x, p01.x, p10.x, p11.x});
+  const float sx1 = std::max({p00.x, p01.x, p10.x, p11.x});
+  const float sy0 = std::min({p00.y, p01.y, p10.y, p11.y});
+  const float sy1 = std::max({p00.y, p01.y, p10.y, p11.y});
+  const ImVec2 imgMin(imgPos.x, imgPos.y);
+  const ImVec2 imgMax(imgPos.x + avail.x, imgPos.y + avail.y);
+  const ImGuiStyle& ist0 = ImGui::GetStyle();
+  const float boxW = std::clamp(sx1 - sx0 + 8.f, 48.f, imgMax.x - imgMin.x - 4.f);
+  const float boxH = std::max(ImGui::GetFrameHeight(), sy1 - sy0);
+  const float ex = std::clamp(sx0 - 2.f, imgMin.x + 2.f, imgMax.x - boxW - 2.f);
+  const float ey = std::clamp(sy0 - ist0.FramePadding.y, imgMin.y + 2.f, imgMax.y - boxH - 2.f);
+  ImGui::SetCursorScreenPos(ImVec2(ex, ey));
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.5f);
+  ImGui::PushStyleColor(ImGuiCol_Border, IM_COL32(86, 156, 214, 255));
+  ImGui::PushStyleColor(ImGuiCol_FrameBg, IM_COL32(30, 45, 66, 235));
+  ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(225, 232, 240, 255));
+  if (cmd.tableCellEditorFocusRequest) {
+    ImGui::SetKeyboardFocusHere(0);
+    cmd.tableCellEditorFocusRequest = false;
+  }
+  ImGui::SetNextItemWidth(boxW);
+  const bool committed =
+      ImGui::InputText("##table_cell_inplace", &cmd.tableCellEditorBuf, ImGuiInputTextFlags_EnterReturnsTrue);
+  ImGui::PopStyleColor(3);
+  ImGui::PopStyleVar();
+  if (committed)
+    CommitTableCellEditor(cmd, log);
 }
 
 static void DrawMtextRichEditorOverlay(AppCommandState& cmd, std::vector<std::string>& log, float worldLeft,
@@ -9516,12 +9911,8 @@ static void ApplyGripMagnetToGrips(AppCommandState& cmd, double rawX, double raw
                                    double* ioX, double* ioY, CadSnap::Hit* out_snap) {
   if (!ioX || !ioY)
     return;
-  if (cmd.selection.size() != 1 || cmd.selection[0].type != SelectedEntity::Type::Annotation)
+  if (cmd.selection.size() != 1)
     return;
-  const int ix = cmd.selection[0].index;
-  if (ix < 0 || static_cast<size_t>(ix) >= cmd.cadAnnotations.size())
-    return;
-  const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(ix)];
   const float tol = CadSnap::WorldToleranceFromPixels(availY, halfH, cmd.objectSnapAperturePx);
   const double tol2 = static_cast<double>(tol) * static_cast<double>(tol);
   auto dist2 = [](double px, double py, float qx, float qy) {
@@ -9541,6 +9932,23 @@ static void ApplyGripMagnetToGrips(AppCommandState& cmd, double rawX, double raw
     }
   };
   offer(static_cast<float>(*ioX), static_cast<float>(*ioY));
+  if (cmd.selection[0].type == SelectedEntity::Type::Table) {
+    const int ix = cmd.selection[0].index;
+    if (ix < 0 || static_cast<size_t>(ix) >= cmd.cadTables.size())
+      return;
+    const CadTable& t = cmd.cadTables[static_cast<size_t>(ix)];
+    for (int c = 0; c < 4; ++c) {
+      float gx = 0.f, gy = 0.f;
+      CadTableWorldCorner(t, c, &gx, &gy);
+      offer(gx, gy);
+    }
+  } else if (cmd.selection[0].type != SelectedEntity::Type::Annotation) {
+    return;
+  } else {
+  const int ix = cmd.selection[0].index;
+  if (ix < 0 || static_cast<size_t>(ix) >= cmd.cadAnnotations.size())
+    return;
+  const CadAnnotation& a = cmd.cadAnnotations[static_cast<size_t>(ix)];
   if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
     float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, ml = 0.f;
     if (CadDimAnyGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml)) {
@@ -9550,7 +9958,7 @@ static void ApplyGripMagnetToGrips(AppCommandState& cmd, double rawX, double raw
       offer(sx2, sy2);
       offer(a.insX, a.insY);
     }
-  } else if (a.kind == CadAnnotation::Kind::Mtext) {
+  } else if (a.kind == CadAnnotation::Kind::Mtext || a.kind == CadAnnotation::Kind::Table) {
     if (a.surveyPointLabelForId >= 0)
       offer(0.5f * (a.boxMinX + a.boxMaxX), 0.5f * (a.boxMinY + a.boxMaxY));
     else {
@@ -9559,6 +9967,7 @@ static void ApplyGripMagnetToGrips(AppCommandState& cmd, double rawX, double raw
       offer(a.boxMaxX, a.boxMaxY);
       offer(a.boxMinX, a.boxMaxY);
     }
+  }
   }
   if (bx != *ioX || by != *ioY) {
     *ioX = bx;
@@ -9987,7 +10396,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   // Paper-space viewport selection + grip edit + MOVE/COPY (REQ-035). Active only while idle of the
   // rectangular-viewport command and in a paper layout.
   if (!modelSpace && !InFloatingModelSpace(cmd) && cmd.active == AppCommandState::Kind::None &&
-      !cmd.mtextRichEditorOpen && cmd.activeSpaceIndex >= 0 &&
+      !cmd.mtextRichEditorOpen && !cmd.tableCellEditorOpen && cmd.activeSpaceIndex >= 0 &&
       cmd.activeSpaceIndex < static_cast<int>(cmd.paperLayouts.size())) {
     PaperLayout& L = cmd.paperLayouts[static_cast<size_t>(cmd.activeSpaceIndex)];
     float curX = 0.f, curY = 0.f;
@@ -10605,6 +11014,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                 case T::Arc:          return at(cmd.userArcAttrs, e.index);
                 case T::Ellipse:      return at(cmd.userEllAttrs, e.index);
                 case T::Annotation:   return at(cmd.cadAnnotationAttrs, e.index);
+                case T::Table:        return at(cmd.cadTableAttrs, e.index);
                 case T::FilledRegion: return at(cmd.cadFilledRegionAttrs, e.index);
                 default:              return std::string();
                 }
@@ -10664,7 +11074,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     ImGuiIO& ioVpRmb = ImGui::GetIO();
     if (modelSpace && hovered && mx >= 0 && mx < avail.x && my >= 0 && my < avail.y) {
       using AK = AppCommandState::Kind;
-      const bool blockSnapPickMenu = cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond || cmd.dimGripMoveActive ||
+      const bool blockSnapPickMenu = cmd.mtextRichEditorOpen || cmd.tableCellEditorOpen || cmd.selBoxWaitingSecond ||
+                                     cmd.dimGripMoveActive ||
                                      cmd.entityGripMoveActive || cmd.mtextGripMoveActive;
       // REQ-121 rule (1), second seam (GitHub #91 review, D-2026-08-26-d, re-derived post-#103 as
       // D-2026-08-26-e). The snap OVERRIDE menu is a way of forcing a snap, so offering it during an
@@ -10892,7 +11303,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     using AK = AppCommandState::Kind;
     const bool blockSurveyHover = cmd.active != AK::None || cmd.dimGripMoveActive || cmd.entityGripMoveActive ||
-                                  cmd.mtextGripMoveActive || cmd.mtextRichEditorOpen || cmd.selBoxWaitingSecond;
+                                  cmd.mtextGripMoveActive || cmd.mtextRichEditorOpen || cmd.tableCellEditorOpen ||
+                                  cmd.selBoxWaitingSecond;
     if (!cmd.surveyPoints.empty() && !blockSurveyHover)
       cmd.viewportHoverSurveyPointIndex =
           PickSurveyPointAtCursor(cmd, rawX, rawY, surveyCrossHalfW, avail.x, avail.y, halfH, mx, my);
@@ -10932,15 +11344,23 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         // click-to-select (the annotation pick runs before the entity pick on a click). Hovering text
         // pre-highlights it in model space, matching the paper-space hover (REQ-039). Dims keep their
         // existing no-hover behavior — only TEXT/MTEXT pre-highlight.
+        int tblHover = modelSpace ? PickCadTableAt(static_cast<float>(rawX), static_cast<float>(rawY), cmd, halfH,
+                                                   avail.y)
+                                  : -1;
         int annHover = modelSpace ? PickCadAnnotationAt(static_cast<float>(rawX), static_cast<float>(rawY),
                                                         cmd, halfH, avail.y)
                                   : -1;
         if (annHover >= 0) {
           const CadAnnotation::Kind hk = cmd.cadAnnotations[static_cast<size_t>(annHover)].kind;
-          if (hk != CadAnnotation::Kind::Text && hk != CadAnnotation::Kind::Mtext)
+          if (hk != CadAnnotation::Kind::Text && hk != CadAnnotation::Kind::Mtext &&
+              hk != CadAnnotation::Kind::Table)
             annHover = -1;
         }
-        if (annHover >= 0) {
+        if (tblHover >= 0) {
+          cmd.viewportHoverEntityValid = true;
+          cmd.viewportHoverEntity.type = SelectedEntity::Type::Table;
+          cmd.viewportHoverEntity.index = tblHover;
+        } else if (annHover >= 0) {
           cmd.viewportHoverEntityValid = true;
           cmd.viewportHoverEntity.type = SelectedEntity::Type::Annotation;
           cmd.viewportHoverEntity.index = annHover;
@@ -11115,7 +11535,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const size_t gi = static_cast<size_t>(cmd.mtextGripAnnotationIndex);
     if (gi < cmd.cadAnnotations.size()) {
       CadAnnotation& ann = cmd.cadAnnotations[gi];
-      if (ann.kind == CadAnnotation::Kind::Mtext) {
+      if (ann.kind == CadAnnotation::Kind::Mtext || ann.kind == CadAnnotation::Kind::Table) {
         if (ann.surveyPointLabelForId >= 0 && cmd.mtextGripCorner == 4) {
           const float dx = curWx - cmd.mtextGripDownWorldX;
           const float dy = curWy - cmd.mtextGripDownWorldY;
@@ -11448,6 +11868,24 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         break;
       }
       bool handled = false;
+
+      const int tblIx = PickCadTableAt(rawPickX, rawPickY, cmd, halfH, avail.y);
+      if (tblIx >= 0) {
+        SelectedEntity se{};
+        se.type = SelectedEntity::Type::Table;
+        se.index = tblIx;
+        auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
+          return x.type == SelectedEntity::Type::Table && x.index == tblIx;
+        });
+        if (keyShift) {
+          if (it != cmd.selection.end())
+            cmd.selection.erase(it);
+        } else if (it == cmd.selection.end()) {
+          cmd.selection.push_back(se);
+        }
+        EnsureAttrCounts(cmd);
+        handled = true;
+      }
 
       const int annIx = PickCadAnnotationAt(rawPickX, rawPickY, cmd, halfH, avail.y);
       if (annIx >= 0) {
@@ -11792,6 +12230,27 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
 
       if (!handled && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
+        const int tIx = PickCadTableAt(rawPickX, rawPickY, cmd, halfH, avail.y);
+        if (tIx >= 0 && static_cast<size_t>(tIx) < cmd.cadTables.size()) {
+          const int cell = CadTableHitCell(cmd.cadTables[static_cast<size_t>(tIx)], rawPickX, rawPickY);
+          if (cell >= 0) {
+            AbortMtextGripInteraction(cmd);
+            ClearDimGripInteraction(cmd);
+            ClearCadSelection(cmd);
+            SelectedEntity se{};
+            se.type = SelectedEntity::Type::Table;
+            se.index = tIx;
+            cmd.selection.push_back(se);
+            EnsureAttrCounts(cmd);
+            cmd.selectedSurveyPointIndices.clear();
+            OpenTableCellEditor(cmd, tIx, cell);
+            cmd.selBoxWaitingSecond = false;
+            handled = true;
+          }
+        }
+      }
+
+      if (!handled && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left)) {
         const int dIx = PickCadAnnotationAt(rawPickX, rawPickY, cmd, halfH, avail.y);
         const CadAnnotation::Kind dKind =
             (dIx >= 0 && static_cast<size_t>(dIx) < cmd.cadAnnotations.size())
@@ -11815,6 +12274,34 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           } else
             cmd.selectedSurveyPointIndices.clear();
           OpenMtextRichEditorForAnnotation(cmd, dIx, &log);
+          cmd.selBoxWaitingSecond = false;
+          handled = true;
+        }
+      }
+
+      if (!handled) {
+        const int tblClick = PickCadTableAt(rawPickX, rawPickY, cmd, halfH, avail.y);
+        if (tblClick >= 0) {
+          AbortMtextGripInteraction(cmd);
+          ClearDimGripInteraction(cmd);
+          CancelTableCellEditor(cmd);
+          SelectedEntity se{};
+          se.type = SelectedEntity::Type::Table;
+          se.index = tblClick;
+          if (keyShift) {
+            auto it = std::find_if(cmd.selection.begin(), cmd.selection.end(), [&](const SelectedEntity& x) {
+              return x.type == SelectedEntity::Type::Table && x.index == tblClick;
+            });
+            if (it != cmd.selection.end())
+              cmd.selection.erase(it);
+            else
+              cmd.selection.push_back(se);
+          } else {
+            ClearCadSelection(cmd);
+            cmd.selectedSurveyPointIndices.clear();
+            cmd.selection.push_back(se);
+          }
+          EnsureAttrCounts(cmd);
           cmd.selBoxWaitingSecond = false;
           handled = true;
         }
@@ -12266,7 +12753,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImFont* vpFont = ImGui::GetFont();
         for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
           const CadAnnotation& ann = cmd.cadAnnotations[ai];
-          if (CadAnnotationIsDimension(ann) || ann.text.empty())
+          if (CadAnnotationIsDimension(ann))
+            continue;
+          if (ann.kind != CadAnnotation::Kind::Table && ann.text.empty())
             continue;
           const EntityAttributes* aa =
               (ai < cmd.cadAnnotationAttrs.size()) ? &cmd.cadAnnotationAttrs[ai] : nullptr;
@@ -12288,6 +12777,35 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             const float hWorld = CadAnnotationHeightWorld(ann, plan.modelUnitsPerPlottedInch);
             const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
             DrawCadSingleLineText(sdl, ann, vpFont, sp, fontPx, tcol);
+          } else if (ann.kind == CadAnnotation::Kind::Table && ann.tableCols > 0) {
+            std::vector<CadTableCellRect> cells;
+            CadTableLayoutCells(ann.boxMinX, ann.boxMinY, ann.boxMaxX, ann.boxMaxY, ann.tableCols, ann.tableCells,
+                                &cells);
+            const ImVec2 tl = m2s(static_cast<double>(ann.boxMinX) + oX, static_cast<double>(ann.boxMaxY) + oY);
+            const ImVec2 brc = m2s(static_cast<double>(ann.boxMaxX) + oX, static_cast<double>(ann.boxMinY) + oY);
+            const float rx0 = std::min(tl.x, brc.x);
+            const float ry0 = std::min(tl.y, brc.y);
+            const float rx1 = std::max(tl.x, brc.x);
+            const float ry1 = std::max(tl.y, brc.y);
+            sdl->AddRect(ImVec2(rx0, ry0), ImVec2(rx1, ry1), tcol, 0.f, 0, 1.f);
+            const int rows = CadTableRowCount(ann.tableCols, ann.tableCells);
+            for (int c = 1; c < ann.tableCols; ++c) {
+              const float t = static_cast<float>(c) / static_cast<float>(ann.tableCols);
+              const float x = rx0 + t * (rx1 - rx0);
+              sdl->AddLine(ImVec2(x, ry0), ImVec2(x, ry1), tcol, 1.f);
+            }
+            for (int r = 1; r < rows; ++r) {
+              const float t = static_cast<float>(r) / static_cast<float>(std::max(rows, 1));
+              const float y = ry0 + t * (ry1 - ry0);
+              sdl->AddLine(ImVec2(rx0, y), ImVec2(rx1, y), tcol, 1.f);
+            }
+            const float hWorld = CadAnnotationHeightWorld(ann, plan.modelUnitsPerPlottedInch);
+            const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
+            for (size_t i = 0; i < cells.size() && i < ann.tableCells.size(); ++i) {
+              const ImVec2 p =
+                  m2s(static_cast<double>(cells[i].x0) + oX, static_cast<double>(cells[i].y1) + oY);
+              sdl->AddText(vpFont, fontPx, ImVec2(p.x + 2.f, p.y + 2.f), tcol, ann.tableCells[i].c_str());
+            }
           } else if (ann.kind == CadAnnotation::Kind::Mtext) {
             const ImVec2 tl = m2s(static_cast<double>(ann.boxMinX) + oX, static_cast<double>(ann.boxMaxY) + oY);
             const ImVec2 brc = m2s(static_cast<double>(ann.boxMaxX) + oX, static_cast<double>(ann.boxMinY) + oY);
@@ -12344,6 +12862,65 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                                    plan.fontFamily);
             }
           }
+        }
+      }
+      // First-class TABLE entities (REQ-148) through this viewport.
+      {
+        ImFont* vpFont = ImGui::GetFont();
+        for (size_t ti = 0; ti < cmd.cadTables.size(); ++ti) {
+        const CadTable& tbl = cmd.cadTables[ti];
+        const EntityAttributes* ta =
+            (ti < cmd.cadTableAttrs.size()) ? &cmd.cadTableAttrs[ti] : nullptr;
+        if (ta && CadEntityIdHidden(&cmd.hiddenEntityIds, ta->id))
+          continue;
+        const std::string layer = ta ? (ta->layer.empty() ? std::string("0") : ta->layer) : std::string("0");
+        if (IsLayerFrozenInViewport(vp, layer))
+          continue;
+        const ImU32 tcol = vpBaseCol(layer, ta ? ta->color : std::string("ByLayer"));
+        ImVec2 c0{}, c1{}, c2{}, c3{};
+        float wx = 0.f, wy = 0.f;
+        CadTableWorldCorner(tbl, 0, &wx, &wy);
+        c0 = m2s(static_cast<double>(wx) + oX, static_cast<double>(wy) + oY);
+        CadTableWorldCorner(tbl, 1, &wx, &wy);
+        c1 = m2s(static_cast<double>(wx) + oX, static_cast<double>(wy) + oY);
+        CadTableWorldCorner(tbl, 2, &wx, &wy);
+        c2 = m2s(static_cast<double>(wx) + oX, static_cast<double>(wy) + oY);
+        CadTableWorldCorner(tbl, 3, &wx, &wy);
+        c3 = m2s(static_cast<double>(wx) + oX, static_cast<double>(wy) + oY);
+        sdl->AddLine(c0, c1, tcol, 1.f);
+        sdl->AddLine(c1, c2, tcol, 1.f);
+        sdl->AddLine(c2, c3, tcol, 1.f);
+        sdl->AddLine(c3, c0, tcol, 1.f);
+        const int rows = CadTableRowCount(tbl);
+        if (tbl.cols > 0 && rows > 0) {
+          const float w = std::max(tbl.width, 1.e-3f);
+          const float h = std::max(tbl.height, 1.e-3f);
+          for (int c = 1; c < tbl.cols; ++c) {
+            const float lx = w * static_cast<float>(c) / static_cast<float>(tbl.cols);
+            float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
+            CadTableLocalToWorld(tbl, lx, 0.f, &ax, &ay);
+            CadTableLocalToWorld(tbl, lx, h, &bx, &by);
+            sdl->AddLine(m2s(static_cast<double>(ax) + oX, static_cast<double>(ay) + oY),
+                         m2s(static_cast<double>(bx) + oX, static_cast<double>(by) + oY), tcol, 1.f);
+          }
+          for (int r = 1; r < rows; ++r) {
+            const float ly = h * static_cast<float>(r) / static_cast<float>(rows);
+            float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
+            CadTableLocalToWorld(tbl, 0.f, ly, &ax, &ay);
+            CadTableLocalToWorld(tbl, w, ly, &bx, &by);
+            sdl->AddLine(m2s(static_cast<double>(ax) + oX, static_cast<double>(ay) + oY),
+                         m2s(static_cast<double>(bx) + oX, static_cast<double>(by) + oY), tcol, 1.f);
+          }
+        }
+        std::vector<CadTableCellRect> cells;
+        CadTableLayoutWorldCells(tbl, &cells);
+        const float hWorld = CadTableHeightWorld(tbl, cmd.modelUnitsPerPlottedInch);
+        const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
+        for (size_t i = 0; i < cells.size() && i < tbl.cells.size(); ++i) {
+          const ImVec2 p =
+              m2s(static_cast<double>(cells[i].x0) + oX, static_cast<double>(cells[i].y1) + oY);
+          sdl->AddText(vpFont, fontPx, ImVec2(p.x + 2.f, p.y + 2.f), tcol, tbl.cells[i].c_str());
+        }
         }
       }
       // Model dimensions through this viewport (issue #110 / REQ-027): same m2s + clip as linework.
@@ -13136,6 +13713,9 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   std::vector<CadAnnotation> transformAnnPreviews;
   if (outCursorX && outCursorY)
     CadAnnotationCollectTransformPreviews(cmd, *outCursorX, *outCursorY, &transformAnnPreviews);
+  std::vector<CadTable> transformTablePreviews;
+  if (outCursorX && outCursorY)
+    CadTableCollectTransformPreviews(cmd, *outCursorX, *outCursorY, &transformTablePreviews);
 
   using AK = AppCommandState::Kind;
   using AMP = AppCommandState::MtextPhase;
@@ -13230,7 +13810,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   }
 
   if (modelAnnotationsVisible &&
-      (!cmd.cadAnnotations.empty() || !transformAnnPreviews.empty() || showMtextCmdDraft || showDimCmdDraft)) {
+      (!cmd.cadAnnotations.empty() || !cmd.cadTables.empty() || !transformAnnPreviews.empty() ||
+       !transformTablePreviews.empty() || showMtextCmdDraft || showDimCmdDraft)) {
     ImDrawList* dl = ImGui::GetWindowDrawList();
     // Clip model annotations to the drawing viewport so they cannot bleed into surrounding UI (issue #101).
     dl->PushClipRect(imgPos, ImVec2(imgPos.x + avail.x, imgPos.y + avail.y), true);
@@ -13498,6 +14079,42 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         float screenAng2 = std::atan2(spDir2.y - sp2.y, spDir2.x - sp2.x);
         DrawDimLabelText(dl, a, font, fontPx2, sp2, screenAng2, textCol2);
       } else {
+        if (a.kind == CadAnnotation::Kind::Table && a.tableCols > 0) {
+          ImVec2 sa{}, sb{};
+          worldToScreen(a.boxMinX, a.boxMinY, &sa, a.insZ);
+          worldToScreen(a.boxMaxX, a.boxMaxY, &sb, a.insZ);
+          const float rx0 = std::min(sa.x, sb.x);
+          const float ry0 = std::min(sa.y, sb.y);
+          const float rx1 = std::max(sa.x, sb.x);
+          const float ry1 = std::max(sa.y, sb.y);
+          std::vector<CadTableCellRect> cells;
+          CadTableLayoutCells(a.boxMinX, a.boxMinY, a.boxMaxX, a.boxMaxY, a.tableCols, a.tableCells, &cells);
+          const ImU32 gridCol = IM_COL32(200, 200, 210, 255);
+          dl->AddRect(ImVec2(rx0, ry0), ImVec2(rx1, ry1), gridCol, 0.f, 0, 1.5f);
+          const int rows = CadTableRowCount(a.tableCols, a.tableCells);
+          for (int c = 1; c < a.tableCols; ++c) {
+            const float t = static_cast<float>(c) / static_cast<float>(a.tableCols);
+            const float x = rx0 + t * (rx1 - rx0);
+            dl->AddLine(ImVec2(x, ry0), ImVec2(x, ry1), gridCol, 1.f);
+          }
+          for (int r = 1; r < rows; ++r) {
+            const float t = static_cast<float>(r) / static_cast<float>(std::max(rows, 1));
+            const float y = ry0 + t * (ry1 - ry0);
+            dl->AddLine(ImVec2(rx0, y), ImVec2(rx1, y), gridCol, 1.f);
+          }
+          const float fontPx = std::clamp(CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch) /
+                                              std::max(worldPerPxY, 1.e-6f),
+                                          1.f, 8192.f);
+          for (size_t i = 0; i < cells.size() && i < a.tableCells.size(); ++i) {
+            ImVec2 tl{}, br{};
+            worldToScreen(cells[i].x0, cells[i].y1, &tl, a.insZ);
+            worldToScreen(cells[i].x1, cells[i].y0, &br, a.insZ);
+            const float cx = std::min(tl.x, br.x) + 3.f;
+            const float cy = std::min(tl.y, br.y) + 2.f;
+            dl->AddText(font, fontPx, ImVec2(cx, cy), colFallback, a.tableCells[i].c_str());
+          }
+          return;
+        }
         ImVec2 sa{}, sb{};
         worldToScreen(a.boxMinX, a.boxMinY, &sa, a.insZ);
         worldToScreen(a.boxMaxX, a.boxMaxY, &sb, a.insZ);
@@ -13657,6 +14274,67 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
       return false;
     };
+    auto isTableSelected = [&](size_t ix) {
+      for (const auto& e : cmd.selection) {
+        if (e.type == SelectedEntity::Type::Table && static_cast<size_t>(e.index) == ix)
+          return true;
+      }
+      return false;
+    };
+    auto drawCadTableVisual = [&](const CadTable& t, const EntityAttributes* attrPtr, ImU32 colFallback) {
+      ImU32 col = colFallback;
+      if (attrPtr) {
+        float rgba[4];
+        ResolveEntityColorForViewport(*attrPtr, 230 / 255.f, 232 / 255.f, 238 / 255.f, rgba);
+        col = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
+                       static_cast<int>(rgba[2] * 255.f), static_cast<int>(rgba[3] * 255.f));
+      }
+      ImVec2 c[4];
+      for (int i = 0; i < 4; ++i) {
+        float wx = 0.f, wy = 0.f;
+        CadTableWorldCorner(t, i, &wx, &wy);
+        worldToScreen(wx, wy, &c[i], t.insZ);
+      }
+      dl->AddLine(c[0], c[1], col, 1.5f);
+      dl->AddLine(c[1], c[2], col, 1.5f);
+      dl->AddLine(c[2], c[3], col, 1.5f);
+      dl->AddLine(c[3], c[0], col, 1.5f);
+      const int rows = CadTableRowCount(t);
+      if (t.cols > 0 && rows > 0) {
+        const float w = std::max(t.width, 1.e-3f);
+        const float h = std::max(t.height, 1.e-3f);
+        for (int ci = 1; ci < t.cols; ++ci) {
+          const float lx = w * static_cast<float>(ci) / static_cast<float>(t.cols);
+          float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
+          CadTableLocalToWorld(t, lx, 0.f, &ax, &ay);
+          CadTableLocalToWorld(t, lx, h, &bx, &by);
+          ImVec2 sa{}, sb{};
+          worldToScreen(ax, ay, &sa, t.insZ);
+          worldToScreen(bx, by, &sb, t.insZ);
+          dl->AddLine(sa, sb, col, 1.f);
+        }
+        for (int r = 1; r < rows; ++r) {
+          const float ly = h * static_cast<float>(r) / static_cast<float>(rows);
+          float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
+          CadTableLocalToWorld(t, 0.f, ly, &ax, &ay);
+          CadTableLocalToWorld(t, w, ly, &bx, &by);
+          ImVec2 sa{}, sb{};
+          worldToScreen(ax, ay, &sa, t.insZ);
+          worldToScreen(bx, by, &sb, t.insZ);
+          dl->AddLine(sa, sb, col, 1.f);
+        }
+      }
+      std::vector<CadTableCellRect> cells;
+      CadTableLayoutWorldCells(t, &cells);
+      const float fontPx =
+          std::clamp(CadTableHeightWorld(t, cmd.modelUnitsPerPlottedInch) / std::max(worldPerPxY, 1.e-6f), 1.f,
+                     8192.f);
+      for (size_t i = 0; i < cells.size() && i < t.cells.size(); ++i) {
+        ImVec2 tl{};
+        worldToScreen(cells[i].x0, cells[i].y1, &tl, t.insZ);
+        dl->AddText(font, fontPx, ImVec2(tl.x + 3.f, tl.y + 2.f), col, t.cells[i].c_str());
+      }
+    };
 
     for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
       const EntityAttributes* ap =
@@ -13670,6 +14348,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     for (const CadAnnotation& ap : transformAnnPreviews)
       drawAnnotationVisual(ap, nullptr, kAnnTfPrevCol);
+
+    for (size_t ti = 0; ti < cmd.cadTables.size(); ++ti) {
+      const EntityAttributes* tp = ti < cmd.cadTableAttrs.size() ? &cmd.cadTableAttrs[ti] : nullptr;
+      if (tp && CadEntityIdHidden(&cmd.hiddenEntityIds, tp->id))
+        continue;
+      drawCadTableVisual(cmd.cadTables[ti], tp, kAnnCol);
+    }
+    for (const CadTable& tp : transformTablePreviews)
+      drawCadTableVisual(tp, nullptr, kAnnTfPrevCol);
 
     if (showMtextCmdDraft) {
       CadAnnotation d{};
@@ -13714,7 +14401,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     const float gripHalf = cmd.gripSizePx;
     for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
       const CadAnnotation& a = cmd.cadAnnotations[ai];
-      if (a.kind != CadAnnotation::Kind::Mtext || !isAnnSelected(ai))
+      if ((a.kind != CadAnnotation::Kind::Mtext && a.kind != CadAnnotation::Kind::Table) ||
+          !isAnnSelected(ai))
         continue;
       // Survey-linked labels: grips only (no selection rectangle).
       if (a.surveyPointLabelForId < 0) {
@@ -13751,12 +14439,31 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       dl->PopClipRect();
     }
 
+    for (size_t ti = 0; ti < cmd.cadTables.size(); ++ti) {
+      if (!isTableSelected(ti))
+        continue;
+      const CadTable& t = cmd.cadTables[ti];
+      ImVec2 c[4];
+      for (int i = 0; i < 4; ++i) {
+        float wx = 0.f, wy = 0.f;
+        CadTableWorldCorner(t, i, &wx, &wy);
+        worldToScreen(wx, wy, &c[i], t.insZ);
+      }
+      dl->AddPolyline(c, 4, kAnnSelCol, ImDrawFlags_Closed, 2.f);
+      for (int i = 0; i < 4; ++i) {
+        dl->AddRectFilled(ImVec2(c[i].x - gripHalf, c[i].y - gripHalf),
+                          ImVec2(c[i].x + gripHalf, c[i].y + gripHalf), kGripFill);
+        dl->AddRect(ImVec2(c[i].x - gripHalf, c[i].y - gripHalf), ImVec2(c[i].x + gripHalf, c[i].y + gripHalf),
+                    kGripBorder, 0.f, 0, 1.f);
+      }
+    }
+
     // Screen rect that hugs a rendered annotation glyph. For single-line TEXT we mirror the renderer's
     // anchor exactly (top-left = worldToScreen(insX,insY), height = the same clamped fontPx, width = the
     // measured glyph width) so the highlight tracks the visible glyph regardless of rough-bounds estimates.
     // For MTEXT the box (boxMin/boxMax) already bounds the wrapped text.
     auto annScreenRect = [&](const CadAnnotation& a, ImVec2* rmin, ImVec2* rmax) {
-      if (a.kind == CadAnnotation::Kind::Mtext) {
+      if (CadAnnotationHasTextBox(a.kind)) {
         ImVec2 sa{}, sb{};
         worldToScreen(a.boxMinX, a.boxMinY, &sa, a.insZ);
         worldToScreen(a.boxMaxX, a.boxMaxY, &sb, a.insZ);
@@ -13843,6 +14550,19 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           dl->AddRect(ImVec2(rmin.x - 2.f, rmin.y - 2.f), ImVec2(rmax.x + 2.f, rmax.y + 2.f),
                       IM_COL32(130, 180, 240, 200), 0.f, 0, 1.4f);
         }
+      }
+    }
+    if (cmd.viewportHoverEntityValid && cmd.viewportHoverEntity.type == SelectedEntity::Type::Table) {
+      const int hi = cmd.viewportHoverEntity.index;
+      if (hi >= 0 && static_cast<size_t>(hi) < cmd.cadTables.size() && !isTableSelected(static_cast<size_t>(hi))) {
+        const CadTable& ht = cmd.cadTables[static_cast<size_t>(hi)];
+        ImVec2 c[4];
+        for (int i = 0; i < 4; ++i) {
+          float wx = 0.f, wy = 0.f;
+          CadTableWorldCorner(ht, i, &wx, &wy);
+          worldToScreen(wx, wy, &c[i], ht.insZ);
+        }
+        dl->AddPolyline(c, 4, IM_COL32(130, 180, 240, 200), ImDrawFlags_Closed, 1.4f);
       }
     }
 
@@ -14073,6 +14793,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const float perpY = el.majVx;
           drawGrip(el.cx + perpX * el.ratio, el.cy + perpY * el.ratio, el.z);
         }
+      } else if (sel.type == SelectedEntity::Type::Table) {
+        if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.cadTables.size()) {
+          const CadTable& t = cmd.cadTables[static_cast<size_t>(sel.index)];
+          for (int i = 0; i < 4; ++i) {
+            float gx = 0.f, gy = 0.f;
+            CadTableWorldCorner(t, i, &gx, &gy);
+            drawGrip(gx, gy, t.insZ);
+          }
+        }
       }
     }
   }
@@ -14102,7 +14831,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   const bool showViewportCmdPalette =
       (cmd.active != VK::None || paperSelStep) && cmd.active != VK::Pan && cmd.viewportCmdPaletteEngaged &&
-      cmdBuf && cmdBufSize > 0 && !cmd.mtextRichEditorOpen;
+      cmdBuf && cmdBufSize > 0 && !cmd.mtextRichEditorOpen && !cmd.tableCellEditorOpen;
   cmd.viewportDrawingHovered = showViewportCmdPalette;
 
   // Detect the palette's open edge so the two-field coordinate input resets its
@@ -14240,7 +14969,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   static bool s_gripLocked = false;
   static bool s_gripShownPrev = false;
   const bool showGripDynInput =
-      cmd.entityGripMoveActive && !cmd.mtextRichEditorOpen && cmd.active == AppCommandState::Kind::None;
+      cmd.entityGripMoveActive && !cmd.mtextRichEditorOpen && !cmd.tableCellEditorOpen &&
+      cmd.active == AppCommandState::Kind::None;
   if (!showGripDynInput) {  // drag ended — next one starts with a fresh, unlocked field
     s_gripShownPrev = false;
     s_gripBuf[0] = '\0';
@@ -14489,7 +15219,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   if (ImGui::BeginPopup("##drawing1_vp_ctx")) {
     using AK = AppCommandState::Kind;
     const bool gripActive = cmd.dimGripMoveActive || cmd.entityGripMoveActive ||
-                            cmd.mtextGripMoveActive || cmd.mtextRichEditorOpen;
+                            cmd.mtextGripMoveActive || cmd.mtextRichEditorOpen || cmd.tableCellEditorOpen;
     const bool hasSel = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
 
     if (cmd.active != AK::None) {
@@ -14681,6 +15411,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   DrawMtextRichEditorOverlay(cmd, log, static_cast<float>(worldLeft), static_cast<float>(worldRight),
                              static_cast<float>(worldBottom), static_cast<float>(worldTop), imgPos, avail);
+  DrawTableCellEditorOverlay(cmd, log, static_cast<float>(worldLeft), static_cast<float>(worldRight),
+                             static_cast<float>(worldBottom), static_cast<float>(worldTop), imgPos, avail);
 
   // REQ-046: the per-viewport layer freeze UI moved from this standalone panel to the Layer Manager's
   // VP Freeze / VP Color columns and the VPFREEZE / VPTHAW commands. (Panel removed.)
@@ -14753,6 +15485,7 @@ static void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& l
     case T::Ellipse:    return (size_t)e.index < cmd.userEllAttrs.size()        ? &cmd.userEllAttrs[(size_t)e.index]        : nullptr;
     case T::Polyline:   return (size_t)e.index < cmd.userPolylineAttrs.size()   ? &cmd.userPolylineAttrs[(size_t)e.index]   : nullptr;
     case T::Annotation: return (size_t)e.index < cmd.cadAnnotationAttrs.size()  ? &cmd.cadAnnotationAttrs[(size_t)e.index]  : nullptr;
+    case T::Table:      return (size_t)e.index < cmd.cadTableAttrs.size()       ? &cmd.cadTableAttrs[(size_t)e.index]       : nullptr;
     default:            return nullptr;
     }
   };
@@ -14780,6 +15513,10 @@ static void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& l
         return false;
       break;
     }
+    case T::Table:
+      if (cmd.qsObjectType != OT::All)
+        return false;
+      break;
     default: return false;
     }
     // Property test
@@ -14841,6 +15578,15 @@ static void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& l
     case QP::Content:
       if (e.type == T::Annotation && (size_t)e.index < cmd.cadAnnotations.size())
         return matchStr(cmd.cadAnnotations[(size_t)e.index].text);
+      if (e.type == T::Table && (size_t)e.index < cmd.cadTables.size()) {
+        std::string joined;
+        for (const std::string& c : cmd.cadTables[(size_t)e.index].cells) {
+          if (!joined.empty())
+            joined += " ";
+          joined += c;
+        }
+        return matchStr(joined);
+      }
       return false;
     default: return cmd.qsOperator == QO::SelectAll;
     }
@@ -14882,6 +15628,7 @@ static void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& l
     const int nPoly = std::max(0, (int)cmd.userPolylineOffsets.size() - 1);
     for (int i = 0; i < nPoly; ++i)   addCad({SelectedEntity::Type::Polyline, i});
     for (int i = 0; i < (int)cmd.cadAnnotations.size(); ++i) addCad({SelectedEntity::Type::Annotation, i});
+    for (int i = 0; i < (int)cmd.cadTables.size(); ++i)      addCad({SelectedEntity::Type::Table, i});
     for (int i = 0; i < (int)cmd.surveyPoints.size(); ++i)   addSurvey(i);
   } else {
     for (const auto& e : cmd.selection)           addCad(e);
@@ -15177,6 +15924,7 @@ static void FormatSelectedEntityLabel(const AppCommandState& cmd, const Selected
       switch (cmd.cadAnnotations[static_cast<size_t>(e.index)].kind) {
       case CadAnnotation::Kind::Text:       kindStr = "Text";             break;
       case CadAnnotation::Kind::Mtext:      kindStr = "MText";            break;
+      case CadAnnotation::Kind::Table:      kindStr = "Table";            break;
       case CadAnnotation::Kind::DimAligned: kindStr = "Dim (Aligned)";    break;
       case CadAnnotation::Kind::DimLinear:  kindStr = "Dim (Linear)";     break;
       case CadAnnotation::Kind::DimAngular: kindStr = "Dim (Angular)";    break;
@@ -15185,6 +15933,9 @@ static void FormatSelectedEntityLabel(const AppCommandState& cmd, const Selected
     std::snprintf(buf, bufSize, "%s %d", kindStr, e.index + 1);
     break;
   }
+  case T::Table:
+    std::snprintf(buf, bufSize, "Table %d", e.index + 1);
+    break;
   case T::PdfUnderlay:
     std::snprintf(buf, bufSize, "PDF Underlay %d", e.index + 1);
     break;

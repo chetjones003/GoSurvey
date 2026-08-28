@@ -564,6 +564,23 @@ json BuildRoot(const AppCommandState& st) {
   }
   doc["annotationAttrs"] = std::move(annAttrs);
 
+  json tables = json::array();
+  for (const auto& t : st.cadTables) {
+    json o;
+    CadTableToJson(t, o);
+    tables.push_back(std::move(o));
+  }
+  if (!tables.empty())
+    doc["tables"] = std::move(tables);
+  json tableAttrs = json::array();
+  for (const auto& a : st.cadTableAttrs) {
+    json o;
+    EntityAttributesToJson(a, o);
+    tableAttrs.push_back(std::move(o));
+  }
+  if (!tableAttrs.empty())
+    doc["tableAttrs"] = std::move(tableAttrs);
+
   // Filled regions (ADR-011): each is {verts:[x,y,…], loops:[startPairIdx,…]} + a parallel attribute object.
   json fills = json::array();
   for (const auto& fr : st.cadFilledRegions) {
@@ -726,6 +743,16 @@ json BuildRoot(const AppCommandState& st) {
         }
         o["swappedEdgePicks"] = std::move(swaps);
       }
+      if (!s.deletedEdgePicks.empty()) {
+        json delsE = json::array();
+        for (const auto& p : s.deletedEdgePicks) {
+          json sp;
+          sp["x"] = p.first;
+          sp["y"] = p.second;
+          delsE.push_back(std::move(sp));
+        }
+        o["deletedEdgePicks"] = std::move(delsE);
+      }
       if (!s.addedPointXyz.empty())
         o["addedPointXyz"] = s.addedPointXyz;
       if (!s.deletedPointPicks.empty()) {
@@ -737,6 +764,19 @@ json BuildRoot(const AppCommandState& st) {
           dels.push_back(std::move(dp));
         }
         o["deletedPointPicks"] = std::move(dels);
+      }
+      if (!s.movedPoints.empty()) {
+        json moves = json::array();
+        for (const auto& m : s.movedPoints) {
+          json mo;
+          mo["fromX"] = m.fromX;
+          mo["fromY"] = m.fromY;
+          mo["toX"] = m.toX;
+          mo["toY"] = m.toY;
+          mo["toZ"] = m.toZ;
+          moves.push_back(std::move(mo));
+        }
+        o["movedPoints"] = std::move(moves);
       }
       json corr = json::array();
       for (const CadSurfaceBreakline& fl : s.corridorFeatureLines) {
@@ -1519,6 +1559,19 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   for (const auto& o : doc["annotationAttrs"])
     st.cadAnnotationAttrs.push_back(EntityAttributesFromJson(o));
 
+  st.cadTables.clear();
+  st.cadTableAttrs.clear();
+  if (doc.contains("tables") && doc["tables"].is_array()) {
+    for (const auto& o : doc["tables"])
+      st.cadTables.push_back(CadTableFromJson(o));
+  }
+  if (doc.contains("tableAttrs") && doc["tableAttrs"].is_array()) {
+    for (const auto& o : doc["tableAttrs"])
+      st.cadTableAttrs.push_back(EntityAttributesFromJson(o));
+  }
+  st.cadTableAttrs.resize(st.cadTables.size());
+  MigrateLegacyAnnotationTables(st);
+
   // Imported meshes (REQ-063). Guarded with contains(), so a pre-REQ-063 drawing simply has none —
   // the "legacy .gs loads unchanged" acceptance condition.
   //
@@ -1626,6 +1679,13 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           s.swappedEdgePicks.emplace_back(sp.value("x", 0.0), sp.value("y", 0.0));
         }
       }
+      if (el.contains("deletedEdgePicks") && el["deletedEdgePicks"].is_array()) {
+        for (const auto& sp : el["deletedEdgePicks"]) {
+          if (!sp.is_object())
+            continue;
+          s.deletedEdgePicks.emplace_back(sp.value("x", 0.0), sp.value("y", 0.0));
+        }
+      }
       if (el.contains("addedPointXyz") && el["addedPointXyz"].is_array())
         s.addedPointXyz = el["addedPointXyz"].get<std::vector<float>>();
       if (el.contains("deletedPointPicks") && el["deletedPointPicks"].is_array()) {
@@ -1633,6 +1693,19 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           if (!dp.is_object())
             continue;
           s.deletedPointPicks.emplace_back(dp.value("x", 0.0), dp.value("y", 0.0));
+        }
+      }
+      if (el.contains("movedPoints") && el["movedPoints"].is_array()) {
+        for (const auto& mo : el["movedPoints"]) {
+          if (!mo.is_object())
+            continue;
+          CadSurface::MovedPoint m;
+          m.fromX = mo.value("fromX", 0.0);
+          m.fromY = mo.value("fromY", 0.0);
+          m.toX = mo.value("toX", 0.f);
+          m.toY = mo.value("toY", 0.f);
+          m.toZ = mo.value("toZ", 0.f);
+          s.movedPoints.push_back(m);
         }
       }
       if (el.contains("corridorFeatureLines") && el["corridorFeatureLines"].is_array()) {

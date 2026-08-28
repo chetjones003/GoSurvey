@@ -517,6 +517,8 @@ CatchmentResult ComputeCatchment(const std::vector<float>& vertsXyz,
   c.ok = true;
   c.minZ = std::numeric_limits<double>::infinity();
   c.maxZ = -std::numeric_limits<double>::infinity();
+  double areaSum = 0.0;
+  double zArea = 0.0;
   for (int t : c.triangleIds) {
     TriGeom g;
     if (!LoadTri(vertsXyz, indices, t, &g))
@@ -524,10 +526,16 @@ CatchmentResult ComputeCatchment(const std::vector<float>& vertsXyz,
     c.area2d += g.area2d;
     c.minZ = std::min({c.minZ, g.plane.z0, g.plane.z1, g.plane.z2});
     c.maxZ = std::max({c.maxZ, g.plane.z0, g.plane.z1, g.plane.z2});
+    const double zm = (g.plane.z0 + g.plane.z1 + g.plane.z2) / 3.0;
+    areaSum += g.area2d;
+    zArea += zm * g.area2d;
   }
+  if (areaSum > 0.0)
+    c.meanZ = zArea / areaSum;
   if (!(c.minZ < std::numeric_limits<double>::infinity())) {
     c.minZ = 0.0;
     c.maxZ = 0.0;
+    c.meanZ = 0.0;
   }
   return c;
 }

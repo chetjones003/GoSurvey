@@ -100,6 +100,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.cadMeshAttrs           = cmd.cadMeshAttrs;
   doc.cadSurfaces            = cmd.cadSurfaces;
   doc.cadSurfaceAttrs        = cmd.cadSurfaceAttrs;
+  doc.cadTables              = cmd.cadTables;
+  doc.cadTableAttrs          = cmd.cadTableAttrs;
   doc.surveyPoints           = cmd.surveyPoints;
   doc.pointGroups            = cmd.pointGroups;
   doc.selectedSurveyPointIndices = cmd.selectedSurveyPointIndices;
@@ -162,6 +164,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.cadMeshAttrs               = doc.cadMeshAttrs;
   cmd.cadSurfaces                = doc.cadSurfaces;
   cmd.cadSurfaceAttrs            = doc.cadSurfaceAttrs;
+  cmd.cadTables                  = doc.cadTables;
+  cmd.cadTableAttrs              = doc.cadTableAttrs;
   cmd.surveyPoints               = doc.surveyPoints;
   cmd.pointGroups                = doc.pointGroups;
   cmd.selectedSurveyPointIndices = doc.selectedSurveyPointIndices;
@@ -190,6 +194,7 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.activeDocSavedRevision     = doc.savedRevision;
   cmd.activeDocFilePath          = doc.filePath;
   cmd.active = AppCommandState::Kind::None;  // cancel any in-progress command on switch
+  MigrateLegacyAnnotationTables(cmd);
 }
 
 // ---------------------------------------------------------------------------
@@ -1321,6 +1326,8 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
   // Surfaces copy as strings + a refcount bump, never as triangles (REQ-068, architecture §11.5).
   snap.cadSurfaces          = st.cadSurfaces;
   snap.cadSurfaceAttrs      = st.cadSurfaceAttrs;
+  snap.cadTables            = st.cadTables;
+  snap.cadTableAttrs        = st.cadTableAttrs;
   snap.userLinesFlat        = st.userLinesFlat;
   snap.userLineAttrs        = st.userLineAttrs;
   snap.userCirclesCxCyZR     = st.userCirclesCxCyZR;
@@ -1387,6 +1394,8 @@ static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySn
   st.cadMeshAttrs         = snap.cadMeshAttrs;
   st.cadSurfaces          = snap.cadSurfaces;
   st.cadSurfaceAttrs      = snap.cadSurfaceAttrs;
+  st.cadTables            = snap.cadTables;
+  st.cadTableAttrs        = snap.cadTableAttrs;
   st.surveyPoints         = snap.surveyPoints;
   st.pointGroups          = snap.pointGroups;
   st.drawingLayerTable    = snap.drawingLayerTable;
@@ -1416,7 +1425,8 @@ const EntityKind kEntityKindsInSweepOrder[] = {
     EntityKind::Line,       EntityKind::Circle,       EntityKind::Arc,  EntityKind::Ellipse,
     EntityKind::Polyline,   EntityKind::Annotation,   EntityKind::FilledRegion, EntityKind::Mesh,
     EntityKind::FeatureLine,
-    EntityKind::Surface};  ///< REQ-068 / ADR-036 (a) — last, so the nine above keep their ids.
+    EntityKind::Surface,
+    EntityKind::Table};  ///< REQ-148 — last, so kinds above keep their ids.
 
 /// The attribute array for a kind. One accessor for both the const and mutable walks, so the
 /// two can never disagree about which arrays are covered.
@@ -1433,6 +1443,7 @@ auto* AttrsForKind(StateT& st, EntityKind k) {
   case EntityKind::Mesh:         return &st.cadMeshAttrs;
   case EntityKind::FeatureLine:  return &st.featureLineAttrs;
   case EntityKind::Surface:      return &st.cadSurfaceAttrs;  // REQ-068 / ADR-036 (a)
+  case EntityKind::Table:        return &st.cadTableAttrs;    // REQ-148
   }
   return &st.userLineAttrs;
 }
@@ -2094,6 +2105,40 @@ int FindSurfaceIndexById(const AppCommandState& st, std::uint64_t id) {
 }
 
 namespace {
+[[nodiscard]] std::string SurfaceNameForId(const AppCommandState& st, std::uint64_t id) {
+  const int ix = FindSurfaceIndexById(st, id);
+  if (ix < 0)
+    return {};
+  return st.cadSurfaces[static_cast<size_t>(ix)].name;
+}
+
+void RememberVolumeResult(AppCommandState& st, const SurfaceVolumeResult& r, const std::string& baseName,
+                          const std::string& comparisonName) {
+  st.hasLastVolumeResult = true;
+  st.lastVolumeResult = r;
+  st.lastVolumeBaseName = baseName;
+  st.lastVolumeComparisonName = comparisonName;
+  const int p = st.displayLinearPrecision;
+  char buf[512];
+  std::snprintf(buf, sizeof(buf),
+                "Volume report: cut %s, fill %s, net %s, cut area %s ft2, fill area %s ft2, common area %s ft2.",
+                FormatVolumeYd3(r.cutFt3, p).c_str(), FormatVolumeYd3(r.fillFt3, p).c_str(),
+                FormatVolumeYd3(r.netFt3, p).c_str(), FormatLinear(r.cutAreaFt2, p).c_str(),
+                FormatLinear(r.fillAreaFt2, p).c_str(), FormatLinear(r.commonAreaFt2, p).c_str());
+  st.lastVolumeReportText = buf;
+}
+
+void AppendVolumeTableItemValue(const SurfaceVolumeResult& r, int p, std::vector<std::string>* cells) {
+  if (!cells)
+    return;
+  cells->insert(cells->end(),
+                {"Cut", FormatVolumeYd3(r.cutFt3, p), "Fill", FormatVolumeYd3(r.fillFt3, p), "Net",
+                 FormatVolumeYd3(r.netFt3, p), "Cut area", FormatLinear(r.cutAreaFt2, p) + " ft2", "Fill area",
+                 FormatLinear(r.fillAreaFt2, p) + " ft2", "Common area", FormatLinear(r.commonAreaFt2, p) + " ft2"});
+}
+} // namespace
+
+namespace {
 
 /// A breakline/boundary source's vertex chain, in WORLD double coordinates (matching the convention
 /// \ref BuildSurfaceFromSources already uses for point-group points — ADR-028 (d)). Z is carried
@@ -2183,6 +2228,33 @@ bool ResolveDefinitionChain(const AppCommandState& st, std::uint64_t id, bool re
     return true;
   }
 
+  if (ref.kind == EntityKind::Arc) {
+    if (requireClosed)
+      return false;
+    const size_t ai = static_cast<size_t>(ref.index);
+    if (ai >= st.userArcs.size())
+      return false;
+    const CadArc& arc = st.userArcs[ai];
+    const double sweep = static_cast<double>(arc.sweepRad);
+    const double r = std::max(static_cast<double>(arc.r), 1.0e-9);
+    const double dangChord = 2.0 * std::acos(std::clamp(1.0 - 1.0 / r, -1.0, 1.0));
+    const double dang5 = 5.0 * 3.14159265358979323846 / 180.0;
+    double step = std::min(dangChord, dang5);
+    if (!(step > 1.0e-6))
+      step = dang5;
+    int n = static_cast<int>(std::ceil(std::fabs(sweep) / step));
+    n = std::clamp(n, 8, 256);
+    const double ds = sweep / static_cast<double>(n);
+    for (int i = 0; i <= n; ++i) {
+      const double ang = static_cast<double>(arc.startRad) + ds * static_cast<double>(i);
+      out.verts.push_back({static_cast<double>(arc.cx) + st.worldDocumentOriginX + r * std::cos(ang),
+                           static_cast<double>(arc.cy) + st.worldDocumentOriginY + r * std::sin(ang),
+                           static_cast<double>(arc.z)});
+    }
+    out.closed = false;
+    return true;
+  }
+
   return false;  // any other entity kind is not a valid breakline/boundary source
 }
 
@@ -2258,6 +2330,29 @@ static void ApplyDefinitionPointEdits(const CadSurface& surface, SurfaceBuildInp
                         static_cast<double>(surface.addedPointXyz[i + 1]) + in.originY,
                         surface.addedPointXyz[i + 2]});
     }
+  }
+  constexpr size_t kMaxMoves = 1000000;
+  const size_t nMove = std::min(surface.movedPoints.size(), kMaxMoves);
+  for (size_t m = 0; m < nMove; ++m) {
+    if (in.pts.empty())
+      break;
+    const CadSurface::MovedPoint& mv = surface.movedPoints[m];
+    const double wx = mv.fromX + in.originX;
+    const double wy = mv.fromY + in.originY;
+    size_t best = 0;
+    double bestD2 = 1.0e300;
+    for (size_t i = 0; i < in.pts.size(); ++i) {
+      const double dx = in.pts[i].x - wx;
+      const double dy = in.pts[i].y - wy;
+      const double d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = i;
+      }
+    }
+    in.pts[best].x = static_cast<double>(mv.toX) + in.originX;
+    in.pts[best].y = static_cast<double>(mv.toY) + in.originY;
+    in.pts[best].z = mv.toZ;
   }
   constexpr size_t kMaxDeletes = 1000000;
   const size_t nDel = std::min(surface.deletedPointPicks.size(), kMaxDeletes);
@@ -2549,11 +2644,15 @@ std::shared_ptr<CadTin> ToLocalTin(const TinBuildResult& r, double originX, doub
 }
 
 void ApplyDefinitionEdgeSwaps(CadSurface& surface) {
-  if (!surface.tin || surface.swappedEdgePicks.empty())
+  if (!surface.tin)
+    return;
+  if (surface.swappedEdgePicks.empty() && surface.deletedEdgePicks.empty())
     return;
   auto mut = std::make_shared<CadTin>(*surface.tin);
   for (const std::pair<double, double>& p : surface.swappedEdgePicks)
     (void)TinSwapInteriorEdgeNear(mut->vertsXyz, mut->indices, p.first, p.second);
+  for (const std::pair<double, double>& p : surface.deletedEdgePicks)
+    (void)TinDeleteInteriorEdgeNear(mut->indices, mut->vertsXyz, p.first, p.second);
   surface.tin = std::move(mut);
 }
 
@@ -3018,6 +3117,8 @@ void TickVolumeDashboard(AppCommandState& st) {
       dash.resultHasMap = dash.job->wantMap;
       dash.mapCutTrianglesXyz = std::move(dash.job->cutTrianglesXyz);
       dash.mapFillTrianglesXyz = std::move(dash.job->fillTrianglesXyz);
+      RememberVolumeResult(st, dash.lastResult, SurfaceNameForId(st, dash.baseSurfaceId),
+                           SurfaceNameForId(st, dash.comparisonSurfaceId));
     }
     dash.job.reset();
   }
@@ -3395,6 +3496,110 @@ static void CommitSurfDelPointLocal(AppCommandState& st, CadSurface& s, double x
   log.push_back("SURFACEDELPOINT — recorded a point-delete edit on \"" + s.name + "\".");
 }
 
+static void CommitSurfMovePointLocal(AppCommandState& st, CadSurface& s, double x1, double y1, double x2, double y2,
+                                     float z2, std::vector<std::string>& log) {
+  if (SurfaceRefusesPointEdits(s, "SURFACEMOVEPOINT", log))
+    return;
+  if (!std::isfinite(x1) || !std::isfinite(y1) || !std::isfinite(x2) || !std::isfinite(y2) || !std::isfinite(z2)) {
+    log.push_back("SURFACEMOVEPOINT — coordinates must be finite numbers.");
+    return;
+  }
+  PushUndoSnapshot(st, "Move surface point");
+  CadSurface::MovedPoint m;
+  m.fromX = x1;
+  m.fromY = y1;
+  m.toX = static_cast<float>(x2);
+  m.toY = static_cast<float>(y2);
+  m.toZ = z2;
+  s.movedPoints.push_back(m);
+  BumpCadGpuCache(st);
+  log.push_back("SURFACEMOVEPOINT — recorded a point-move edit on \"" + s.name + "\".");
+}
+
+static void CommitSurfDelLineLocal(AppCommandState& st, CadSurface& s, double x, double y,
+                                   std::vector<std::string>& log) {
+  if (SurfaceRefusesPointEdits(s, "SURFDELLINE", log))
+    return;
+  if (!s.tin || s.tin->indices.size() < 6) {
+    log.push_back("SURFDELLINE — \"" + s.name + "\" is not a built TIN.");
+    return;
+  }
+  auto probe = s.tin->indices;
+  if (!TinDeleteInteriorEdgeNear(probe, s.tin->vertsXyz, x, y)) {
+    log.push_back("SURFDELLINE — no interior edge within 1 ft of the pick.");
+    return;
+  }
+  PushUndoSnapshot(st, "Delete TIN line");
+  s.deletedEdgePicks.emplace_back(x, y);
+  BumpCadGpuCache(st);
+  log.push_back("SURFDELLINE — recorded an edge-delete edit on \"" + s.name + "\".");
+}
+
+void RunSurfMovePoint(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() == 1 && !f[0].empty()) {
+    StartSurfMovePointCommand(st, f[0], log);
+    return;
+  }
+  if (f.size() != 6 || f[0].empty()) {
+    log.push_back("SURFACEMOVEPOINT — usage: SURFACEMOVEPOINT <surface>[, <x1>, <y1>, <x2>, <y2>, <z2>].");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFACEMOVEPOINT — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  char* e[5] = {};
+  const double w1x = std::strtod(f[1].c_str(), &e[0]);
+  const double w1y = std::strtod(f[2].c_str(), &e[1]);
+  const double w2x = std::strtod(f[3].c_str(), &e[2]);
+  const double w2y = std::strtod(f[4].c_str(), &e[3]);
+  const double w2z = std::strtod(f[5].c_str(), &e[4]);
+  if (!e[0] || *e[0] != '\0' || !e[1] || *e[1] != '\0' || !e[2] || *e[2] != '\0' || !e[3] || *e[3] != '\0' ||
+      !e[4] || *e[4] != '\0' || !std::isfinite(w1x) || !std::isfinite(w1y) || !std::isfinite(w2x) ||
+      !std::isfinite(w2y) || !std::isfinite(w2z)) {
+    log.push_back("SURFACEMOVEPOINT — coordinates must be numbers.");
+    return;
+  }
+  float lx1 = 0.f, ly1 = 0.f, lx2 = 0.f, ly2 = 0.f;
+  CadCoord::LocalFromWorld(st, w1x, w1y, &lx1, &ly1);
+  CadCoord::LocalFromWorld(st, w2x, w2y, &lx2, &ly2);
+  CommitSurfMovePointLocal(st, s, static_cast<double>(lx1), static_cast<double>(ly1), static_cast<double>(lx2),
+                           static_cast<double>(ly2), static_cast<float>(w2z), log);
+}
+
+void RunSurfDelLine(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() == 1 && !f[0].empty()) {
+    StartSurfDelLineCommand(st, f[0], log);
+    return;
+  }
+  if (f.size() != 3 || f[0].empty()) {
+    log.push_back("SURFDELLINE — usage: SURFDELLINE <surface>[, <x>, <y>].");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFDELLINE — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  char* ex = nullptr;
+  char* ey = nullptr;
+  const double wx = std::strtod(f[1].c_str(), &ex);
+  const double wy = std::strtod(f[2].c_str(), &ey);
+  if (!ex || *ex != '\0' || !ey || *ey != '\0' || !std::isfinite(wx) || !std::isfinite(wy)) {
+    log.push_back("SURFDELLINE — x and y must be numbers.");
+    return;
+  }
+  float lx = 0.f;
+  float ly = 0.f;
+  CadCoord::LocalFromWorld(st, wx, wy, &lx, &ly);
+  CommitSurfDelLineLocal(st, s, static_cast<double>(lx), static_cast<double>(ly), log);
+}
+
 void RunSurfAddPoint(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitCommaFields(args);
   if (f.size() == 1 && !f[0].empty()) {
@@ -3548,23 +3753,51 @@ void RunQuickProfile(AppCommandState& st, const std::string& args, std::vector<s
                           static_cast<double>(ly0), static_cast<double>(lx1), static_cast<double>(ly1), log);
 }
 
-void RunVolReport(AppCommandState& st, std::vector<std::string>& log) {
+void RunVolReport(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::string verb = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(args));
+  const bool wantTable = (verb == "table");
   std::string text = st.lastVolumeReportText;
-  if (text.empty() && st.volumeDashboard.hasResult) {
-    const int p = st.displayLinearPrecision;
-    const SurfaceVolumeResult& r = st.volumeDashboard.lastResult;
-    char buf[384];
-    std::snprintf(buf, sizeof(buf),
-                  "Volume report: cut %s, fill %s, net %s, common area %s ft2.",
-                  FormatVolumeYd3(r.cutFt3, p).c_str(), FormatVolumeYd3(r.fillFt3, p).c_str(),
-                  FormatVolumeYd3(r.netFt3, p).c_str(), FormatLinear(r.commonAreaFt2, p).c_str());
-    text = buf;
+  const int p = st.displayLinearPrecision;
+  const SurfaceVolumeResult* numbers = nullptr;
+  if (st.volumeDashboard.hasResult)
+    numbers = &st.volumeDashboard.lastResult;
+  else if (st.hasLastVolumeResult)
+    numbers = &st.lastVolumeResult;
+  if (text.empty() && numbers) {
+    RememberVolumeResult(st, *numbers, st.lastVolumeBaseName, st.lastVolumeComparisonName);
+    text = st.lastVolumeReportText;
   }
-  if (text.empty()) {
-    log.push_back("VOLREPORT — no volume result to insert.");
+  if (!numbers && text.empty() && st.volumeDashboard.rows.empty()) {
+    log.push_back(wantTable ? "VOLREPORT TABLE — no volume result to insert."
+                            : "VOLREPORT — no volume result to insert.");
     return;
   }
-  PushUndoSnapshot(st, "VOLREPORT");
+  PushUndoSnapshot(st, wantTable ? "VOLTABLE" : "VOLREPORT");
+  if (wantTable) {
+    CadTable tbl;
+    tbl.cols = 2;
+    tbl.cells = {"Item", "Value"};
+    if (numbers)
+      AppendVolumeTableItemValue(*numbers, p, &tbl.cells);
+    for (const auto& row : st.volumeDashboard.rows) {
+      if (!row.hasResult)
+        continue;
+      tbl.cells.push_back(row.label.empty() ? std::string("Row") : row.label);
+      tbl.cells.push_back(FormatVolumeYd3(row.result.netFt3, p));
+    }
+    if (const TextStyle* ts = ActiveTextStyle(st))
+      tbl.fontFamily = ts->fontFamily;
+    tbl.plottedHeightInches = st.defaultPlottedTextHeightInches;
+    CadTableFitToContent(&tbl, st.modelUnitsPerPlottedInch);
+    tbl.insX = 0.f;
+    tbl.insY = tbl.height;
+    tbl.insZ = CadCommitElevation(st);
+    st.cadTables.push_back(std::move(tbl));
+    EnsureAttrCounts(st);
+    BumpCadGpuCache(st);
+    log.push_back("VOLREPORT TABLE — TABLE inserted.");
+    return;
+  }
   CadAnnotation ann;
   ann.kind = CadAnnotation::Kind::Mtext;
   ann.boxMinX = 0.f;
@@ -3573,14 +3806,56 @@ void RunVolReport(AppCommandState& st, std::vector<std::string>& log) {
   ann.boxMaxY = 12.f;
   ann.insX = 0.f;
   ann.insY = 0.f;
-  ann.plottedHeightInches = st.defaultPlottedTextHeightInches;
   ann.text = text;
+  ann.plottedHeightInches = st.defaultPlottedTextHeightInches;
   ann.insZ = CadCommitElevation(st);
   StampActiveTextStyleOnNewText(st, ann);
   st.cadAnnotations.push_back(std::move(ann));
   EnsureAttrCounts(st);
   BumpCadGpuCache(st);
   log.push_back("VOLREPORT — MTEXT inserted.");
+}
+
+void RunVolCsv(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  std::string path = StringUtil::trimCopy(args);
+  if (path.empty()) {
+    char buf[1024] = {};
+    if (!BrowseSaveFileCsvUtf8(buf, sizeof(buf), "volumes.csv") || buf[0] == '\0') {
+      log.push_back("VOLCSV — cancelled.");
+      return;
+    }
+    path = buf;
+  }
+  const bool haveLive = st.volumeDashboard.hasResult;
+  if (!haveLive && st.volumeDashboard.rows.empty() && !st.hasLastVolumeResult) {
+    log.push_back("VOLCSV — no volume result to export.");
+    return;
+  }
+  std::ofstream f(path);
+  if (!f) {
+    log.push_back("VOLCSV — could not write \"" + path + "\".");
+    return;
+  }
+  const int p = st.displayLinearPrecision;
+  f << "label,base,comparison,cut_yd3,fill_yd3,net_yd3,cut_area_ft2,fill_area_ft2,common_area_ft2\n";
+  auto emit = [&](const std::string& label, const std::string& base, const std::string& comparison,
+                  const SurfaceVolumeResult& r) {
+    f << '"' << label << '"' << ',' << '"' << base << '"' << ',' << '"' << comparison << '"' << ','
+      << FormatVolumeYd3(r.cutFt3, p) << ',' << FormatVolumeYd3(r.fillFt3, p) << ',' << FormatVolumeYd3(r.netFt3, p)
+      << ',' << FormatLinear(r.cutAreaFt2, p) << ',' << FormatLinear(r.fillAreaFt2, p) << ','
+      << FormatLinear(r.commonAreaFt2, p) << '\n';
+  };
+  for (const auto& row : st.volumeDashboard.rows) {
+    if (row.hasResult)
+      emit(row.label.empty() ? "row" : row.label, SurfaceNameForId(st, row.baseSurfaceId),
+           SurfaceNameForId(st, row.comparisonSurfaceId), row.result);
+  }
+  if (haveLive)
+    emit("live", SurfaceNameForId(st, st.volumeDashboard.baseSurfaceId),
+         SurfaceNameForId(st, st.volumeDashboard.comparisonSurfaceId), st.volumeDashboard.lastResult);
+  else if (st.hasLastVolumeResult)
+    emit("volumes", st.lastVolumeBaseName, st.lastVolumeComparisonName, st.lastVolumeResult);
+  log.push_back("VOLCSV — wrote \"" + path + "\".");
 }
 
 /// `SURFACERENAME <old>, <new>` — same duplicate-name refusal as the panel (REQ-075).
@@ -4261,15 +4536,20 @@ void ExecuteVolumesCommand(AppCommandState& st, const std::string& args, std::ve
     }
     return;
   }
-  char buf[384];
+  char buf[512];
   std::snprintf(buf, sizeof(buf),
                 "VOLUMES — \"%s\" (base) vs \"%s\" (comparison): cut %s, fill %s, net %s, "
-                "common area %s ft2.",
+                "cut area %s ft2, fill area %s ft2, common area %s ft2.",
                 f[0].c_str(), f[1].c_str(), FormatVolumeYd3(r.cutFt3, p).c_str(),
                 FormatVolumeYd3(r.fillFt3, p).c_str(), FormatVolumeYd3(r.netFt3, p).c_str(),
+                FormatLinear(r.cutAreaFt2, p).c_str(), FormatLinear(r.fillAreaFt2, p).c_str(),
                 FormatLinear(r.commonAreaFt2, p).c_str());
   log.push_back(buf);
   st.lastVolumeReportText = buf;
+  st.hasLastVolumeResult = true;
+  st.lastVolumeResult = r;
+  st.lastVolumeBaseName = f[0];
+  st.lastVolumeComparisonName = f[1];
 }
 
 /// `VOLDASH [<verb> …]` — the command form of the Volume Dashboard panel (REQ-073 amendment,
@@ -4332,6 +4612,37 @@ void ExecuteVolDashCommand(AppCommandState& st, const std::string& args, std::ve
     dash.baseSurfaceId = st.cadSurfaceAttrs[static_cast<size_t>(baseIx)].id;
     dash.comparisonSurfaceId = st.cadSurfaceAttrs[static_cast<size_t>(compIx)].id;
     log.push_back("VOLDASH — base \"" + f[0] + "\", comparison \"" + f[1] + "\".");
+    return;
+  }
+
+  if (verb == "add") {
+    SurfaceVolumeResult snap;
+    std::uint64_t baseId = dash.baseSurfaceId;
+    std::uint64_t compId = dash.comparisonSurfaceId;
+    if (dash.hasResult) {
+      snap = dash.lastResult;
+    } else if (st.hasLastVolumeResult) {
+      const std::string b = SurfaceNameForId(st, dash.baseSurfaceId);
+      const std::string c = SurfaceNameForId(st, dash.comparisonSurfaceId);
+      if (!b.empty() && (b != st.lastVolumeBaseName || c != st.lastVolumeComparisonName)) {
+        log.push_back("VOLDASH ADD — no landed volume result to snapshot.");
+        return;
+      }
+      snap = st.lastVolumeResult;
+    } else {
+      log.push_back("VOLDASH ADD — no landed volume result to snapshot.");
+      return;
+    }
+    AppCommandState::VolumeDashboardState::AnalysisRow row;
+    row.label = rest.empty() ? ("A" + std::to_string(dash.rows.size() + 1)) : rest;
+    row.baseSurfaceId = baseId;
+    row.comparisonSurfaceId = compId;
+    row.clipEntityId = dash.clipEntityId;
+    row.result = snap;
+    row.hasResult = true;
+    dash.rows.push_back(std::move(row));
+    log.push_back("VOLDASH ADD — row \"" + dash.rows.back().label + "\" (" +
+                  std::to_string(dash.rows.size()) + " total).");
     return;
   }
 
@@ -4404,10 +4715,14 @@ void ExecuteVolDashCommand(AppCommandState& st, const std::string& args, std::ve
     dash.resultForComparisonSurfaceId = dash.comparisonSurfaceId;
     dash.resultForClipEntityId = dash.clipEntityId;
     dash.resultHasMap = dash.showMap;
+    RememberVolumeResult(st, dash.lastResult, SurfaceNameForId(st, dash.baseSurfaceId),
+                         SurfaceNameForId(st, dash.comparisonSurfaceId));
     const int p = st.displayLinearPrecision;
     log.push_back("VOLDASH — cut " + FormatVolumeYd3(dash.lastResult.cutFt3, p) + ", fill " +
                   FormatVolumeYd3(dash.lastResult.fillFt3, p) + ", net " +
-                  FormatVolumeYd3(dash.lastResult.netFt3, p) + ", common area " +
+                  FormatVolumeYd3(dash.lastResult.netFt3, p) + ", cut area " +
+                  FormatLinear(dash.lastResult.cutAreaFt2, p) + " ft2, fill area " +
+                  FormatLinear(dash.lastResult.fillAreaFt2, p) + " ft2, common area " +
                   FormatLinear(dash.lastResult.commonAreaFt2, p) + " ft2.");
     return;
   }
@@ -4744,8 +5059,8 @@ void RunCatchmentAt(AppCommandState& st, size_t si, double x, double y, std::vec
   AppendCatchmentBoundary(c, s.tin->vertsXyz, s.tin->indices, &st.lastCatchmentPathXyz);
   const int p = st.displayLinearPrecision;
   log.push_back("CATCHMENT — \"" + s.name + "\": area " + FormatLinear(c.area2d, p) + " ft2, elev " +
-                FormatLinear(c.minZ, p) + " to " + FormatLinear(c.maxZ, p) + ", " +
-                std::to_string(c.triangleIds.size()) + " triangle(s).");
+                FormatLinear(c.minZ, p) + " to " + FormatLinear(c.maxZ, p) + " mean " +
+                FormatLinear(c.meanZ, p) + ", " + std::to_string(c.triangleIds.size()) + " triangle(s).");
 }
 
 void RunWaterDropCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
@@ -5358,7 +5673,7 @@ bool CadDimAngularBuildDraft(const AppCommandState& st, float cursorWx, float cu
 void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlottedInch, float* outMnX, float* outMnY,
                               float* outMxX, float* outMxY) {
   const float h = CadAnnotationHeightWorld(a, modelUnitsPerPlottedInch);
-  if (a.kind == CadAnnotation::Kind::Mtext) {
+  if (CadAnnotationHasTextBox(a.kind)) {
     *outMnX = std::min(a.boxMinX, a.boxMaxX);
     *outMxX = std::max(a.boxMinX, a.boxMaxX);
     *outMnY = std::min(a.boxMinY, a.boxMaxY);
@@ -5512,6 +5827,8 @@ int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float or
         return i;
       continue;
     }
+    if (a.kind == CadAnnotation::Kind::Table)
+      continue;
     float mnX = 0.f;
     float mnY = 0.f;
     float mxX = 0.f;
@@ -5521,6 +5838,79 @@ int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float or
       return i;
   }
   return -1;
+}
+
+int PickCadTableAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
+                   float viewportHeightPx) {
+  const float tol =
+      CadSnap::WorldToleranceFromPixels(viewportHeightPx, orthoHalfHeightWorld, cmd.objectSnapAperturePx);
+  for (int i = static_cast<int>(cmd.cadTables.size()) - 1; i >= 0; --i) {
+    if (!cmd.hiddenEntityIds.empty() && static_cast<size_t>(i) < cmd.cadTableAttrs.size() &&
+        CadEntityIdHidden(&cmd.hiddenEntityIds, cmd.cadTableAttrs[static_cast<size_t>(i)].id))
+      continue;
+    if (CadTableContainsLocal(cmd.cadTables[static_cast<size_t>(i)], wx, wy, tol))
+      return i;
+  }
+  return -1;
+}
+
+void CancelTableCellEditor(AppCommandState& st) {
+  st.tableCellEditorOpen = false;
+  st.tableCellEditorIndex = -1;
+  st.tableCellEditorCell = -1;
+  st.tableCellEditorBuf.clear();
+  st.tableCellEditorFocusRequest = false;
+}
+
+void OpenTableCellEditor(AppCommandState& st, int tableIndex, int cellIndex) {
+  if (tableIndex < 0 || static_cast<size_t>(tableIndex) >= st.cadTables.size() || cellIndex < 0)
+    return;
+  CadTable& t = st.cadTables[static_cast<size_t>(tableIndex)];
+  const int n = CadTableRowCount(t) * std::max(t.cols, 1);
+  if (cellIndex >= n)
+    return;
+  while (static_cast<int>(t.cells.size()) <= cellIndex)
+    t.cells.emplace_back();
+  st.tableCellEditorOpen = true;
+  st.tableCellEditorIndex = tableIndex;
+  st.tableCellEditorCell = cellIndex;
+  st.tableCellEditorBuf = t.cells[static_cast<size_t>(cellIndex)];
+  st.tableCellEditorFocusRequest = true;
+}
+
+void CommitTableCellEditor(AppCommandState& st, std::vector<std::string>& log) {
+  if (!st.tableCellEditorOpen)
+    return;
+  const int ti = st.tableCellEditorIndex;
+  const int ci = st.tableCellEditorCell;
+  if (ti >= 0 && static_cast<size_t>(ti) < st.cadTables.size() && ci >= 0) {
+    PushUndoSnapshot(st, "Edit table cell");
+    CadTable& t = st.cadTables[static_cast<size_t>(ti)];
+    while (static_cast<int>(t.cells.size()) <= ci)
+      t.cells.emplace_back();
+    t.cells[static_cast<size_t>(ci)] = st.tableCellEditorBuf;
+    CadTableFitToContent(&t, st.modelUnitsPerPlottedInch);
+    BumpCadGpuCache(st);
+    log.push_back("TABLE — cell updated.");
+  }
+  CancelTableCellEditor(st);
+}
+
+void MigrateLegacyAnnotationTables(AppCommandState& st) {
+  for (int i = static_cast<int>(st.cadAnnotations.size()) - 1; i >= 0; --i) {
+    const CadAnnotation& a = st.cadAnnotations[static_cast<size_t>(i)];
+    if (a.kind != CadAnnotation::Kind::Table)
+      continue;
+    CadTable t = CadTableFromAxisAlignedBox(a.boxMinX, a.boxMinY, a.boxMaxX, a.boxMaxY, a.tableCols, a.tableCells,
+                                            a.insZ, a.plottedHeightInches, a.fontFamily);
+    st.cadTables.push_back(std::move(t));
+    EntityAttributes at{};
+    if (static_cast<size_t>(i) < st.cadAnnotationAttrs.size())
+      at = st.cadAnnotationAttrs[static_cast<size_t>(i)];
+    st.cadTableAttrs.push_back(std::move(at));
+    EraseCadAnnotationAtIndex(st, static_cast<size_t>(i));
+  }
+  EnsureAttrCounts(st);
 }
 
 static void ResetModifyRotateDraft(AppCommandState& st) {
@@ -5684,9 +6074,13 @@ const CmdEntry kRegistry[] = {
     {"surfacecreatevolgrid", "sfvolgrid", "Grid volume surface: SURFACECREATEVOLGRID <name>, <base>, <comparison>"},
     {"surfswapedge", "sfswap", "Swap a TIN interior edge: SURFSWAPEDGE <surface>[, <x>, <y>]"},
     {"surfaceaddpoint", "sfaddpt", "Add a TIN definition point: SURFACEADDPOINT <surface>[, <x>, <y>, <z>]"},
+    {"surfacemovepoint", "sfmovept", "Move a TIN definition point: SURFACEMOVEPOINT <surface>[, <x1>, <y1>, <x2>, <y2>, <z2>]"},
+    {"surfdelline", "sfdelline", "Delete an interior TIN edge: SURFDELLINE <surface>[, <x>, <y>]"},
     {"surfacedelpoint", "sfdelpt", "Delete nearest TIN definition point: SURFACEDELPOINT <surface>[, <x>, <y>]"},
     {"quickprofile", "qprof", "Quick profile along two points: QUICKPROFILE <surface>[, <x1>, <y1>, <x2>, <y2>]"},
-    {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT"},
+    {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT [TABLE]"},
+    {"voltable", "", "Insert a TABLE of the last volume report: VOLTABLE"},
+    {"volcsv", "", "Write CSV of volume results: VOLCSV [<path>]"},
     {"volumesurface", "volsurf", "Create a TIN volume surface: VOLUMESURFACE <name>, <base>, <comparison>"},
     {"surfacerename", "sfrename", "Rename a surface: SURFACERENAME <old>, <new>"},
     {"surfacedelete", "sfdelete", "Delete a surface: SURFACEDELETE <name>"},
@@ -6682,6 +7076,22 @@ void ComputeSelectionFromRect(AppCommandState& st, float xa, float ya, float xb,
       hits.push_back(e);
     }
   }
+  for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
+    float tmnX = 0.f, tmnY = 0.f, tmxX = 0.f, tmxY = 0.f;
+    CadTableWorldAabb(st.cadTables[ti], &tmnX, &tmnY, &tmxX, &tmxY);
+    SPBox(tmnX, tmnY, tmxX, tmxY, &tmnX, &tmnY, &tmxX, &tmxY);
+    bool hit = false;
+    if (windowMode)
+      hit = tmnX >= mnX && tmxX <= mxX && tmnY >= mnY && tmxY <= mxY;
+    else
+      hit = !(tmxX < mnX || tmnX > mxX || tmxY < mnY || tmnY > mxY);
+    if (hit) {
+      SelectedEntity e{};
+      e.type = SelectedEntity::Type::Table;
+      e.index = static_cast<int>(ti);
+      hits.push_back(e);
+    }
+  }
   for (size_t ai = 0; ai < st.userArcs.size(); ++ai) {
     float amnX = 0.f;
     float amxX = 0.f;
@@ -7168,6 +7578,8 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   std::vector<EntityAttributes> newCircleAttrs;
   std::vector<CadAnnotation> newAnn;
   std::vector<EntityAttributes> newAnnAttrs;
+  std::vector<CadTable> newTables;
+  std::vector<EntityAttributes> newTableAttrs;
   std::vector<CadArc> newArcs;
   std::vector<EntityAttributes> newArcAttrs;
   std::vector<CadEllipse> newEll;
@@ -7235,6 +7647,17 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
           a = st.cadAnnotationAttrs[k];
         newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
       }
+    } else if (e.type == SelectedEntity::Type::Table) {
+      const size_t tk = static_cast<size_t>(e.index);
+      if (tk < st.cadTables.size()) {
+        CadTable c = st.cadTables[tk];
+        CadTableTranslate(&c, dx, dy);
+        newTables.push_back(std::move(c));
+        EntityAttributes a{};
+        if (tk < st.cadTableAttrs.size())
+          a = st.cadTableAttrs[tk];
+        newTableAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.userArcs.size()) {
@@ -7293,6 +7716,8 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
   st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
   st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
   st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
+  st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
+  st.cadTableAttrs.insert(st.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
   st.userArcs.insert(st.userArcs.end(), newArcs.begin(), newArcs.end());
   st.userArcAttrs.insert(st.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
   st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
@@ -7310,7 +7735,7 @@ static void DuplicateCadSelectionTranslated(AppCommandState& st, float dx, float
     });
   });
 
-  if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newArcs.empty() || !newEll.empty() ||
+  if (!newLines.empty() || !newCircles.empty() || !newAnn.empty() || !newTables.empty() || !newArcs.empty() || !newEll.empty() ||
       !newFills.empty() || st.userPolylineVerts.size() != polyVertsBefore ||
       st.featureLineVerts.size() != featureVertsBefore)
     BumpCadGpuCache(st);
@@ -7403,6 +7828,15 @@ static void CommitPasteIntoModel(AppCommandState& st, float dx, float dy) {
     st.cadAnnotations.push_back(std::move(a));
     st.cadAnnotationAttrs.push_back(cb.annotationAttrs[i]);
     st.selection.push_back({ST::Annotation, static_cast<int>(st.cadAnnotations.size()) - 1});
+  }
+  for (size_t i = 0; i < cb.tables.size(); ++i) {
+    CadTable t = cb.tables[i];
+    CadTableTranslate(&t, dx, dy);
+    if (cb.fromPaper)
+      t.plottedHeightInches /= std::max(st.modelUnitsPerPlottedInch, 1.e-6f);
+    st.cadTables.push_back(std::move(t));
+    st.cadTableAttrs.push_back(cb.tableAttrs[i]);
+    st.selection.push_back({ST::Table, static_cast<int>(st.cadTables.size()) - 1});
   }
   for (size_t i = 0; i < cb.filledRegions.size(); ++i) {  // solid fills — now selectable (REQ-042)
     CadFilledRegion fr = cb.filledRegions[i];
@@ -7558,6 +7992,8 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
   std::vector<EntityAttributes> newCircleAttrs;
   std::vector<CadAnnotation> newAnn;
   std::vector<EntityAttributes> newAnnAttrs;
+  std::vector<CadTable> newTables;
+  std::vector<EntityAttributes> newTableAttrs;
   std::vector<CadArc> newArcs;
   std::vector<EntityAttributes> newArcAttrs;
   std::vector<CadEllipse> newEll;
@@ -7645,6 +8081,17 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
           a = st.cadAnnotationAttrs[k];
         newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
       }
+    } else if (e.type == SelectedEntity::Type::Table) {
+      const size_t tk = static_cast<size_t>(e.index);
+      if (tk < st.cadTables.size()) {
+        CadTable c = st.cadTables[tk];
+        CadTableRotateAround(&c, bx, by, rad);
+        newTables.push_back(std::move(c));
+        EntityAttributes a{};
+        if (tk < st.cadTableAttrs.size())
+          a = st.cadTableAttrs[tk];
+        newTableAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.userArcs.size()) {
@@ -7711,6 +8158,8 @@ static void DuplicateCadSelectionRotated(AppCommandState& st, float bx, float by
   st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
   st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
   st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
+  st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
+  st.cadTableAttrs.insert(st.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
   st.userArcs.insert(st.userArcs.end(), newArcs.begin(), newArcs.end());
   st.userArcAttrs.insert(st.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
   st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
@@ -7853,6 +8302,8 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
   std::vector<EntityAttributes> newCircleAttrs;
   std::vector<CadAnnotation> newAnn;
   std::vector<EntityAttributes> newAnnAttrs;
+  std::vector<CadTable> newTables;
+  std::vector<EntityAttributes> newTableAttrs;
   std::vector<CadArc> newArcs;
   std::vector<EntityAttributes> newArcAttrs;
   std::vector<CadEllipse> newEll;
@@ -7960,6 +8411,17 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
           a = st.cadAnnotationAttrs[k];
         newAnnAttrs.push_back(DuplicatedEntityAttrs(a));
       }
+    } else if (e.type == SelectedEntity::Type::Table) {
+      const size_t tk = static_cast<size_t>(e.index);
+      if (tk < st.cadTables.size()) {
+        CadTable c = st.cadTables[tk];
+        CadTableReflectAcrossLine(&c, x0, y0, x1, y1);
+        newTables.push_back(std::move(c));
+        EntityAttributes a{};
+        if (tk < st.cadTableAttrs.size())
+          a = st.cadTableAttrs[tk];
+        newTableAttrs.push_back(DuplicatedEntityAttrs(a));
+      }
     } else if (e.type == SelectedEntity::Type::Arc) {
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.userArcs.size()) {
@@ -8031,6 +8493,8 @@ static void DuplicateCadSelectionReflected(AppCommandState& st, float x0, float 
   st.userCircleAttrs.insert(st.userCircleAttrs.end(), newCircleAttrs.begin(), newCircleAttrs.end());
   st.cadAnnotations.insert(st.cadAnnotations.end(), newAnn.begin(), newAnn.end());
   st.cadAnnotationAttrs.insert(st.cadAnnotationAttrs.end(), newAnnAttrs.begin(), newAnnAttrs.end());
+  st.cadTables.insert(st.cadTables.end(), newTables.begin(), newTables.end());
+  st.cadTableAttrs.insert(st.cadTableAttrs.end(), newTableAttrs.begin(), newTableAttrs.end());
   st.userArcs.insert(st.userArcs.end(), newArcs.begin(), newArcs.end());
   st.userArcAttrs.insert(st.userArcAttrs.end(), newArcAttrs.begin(), newArcAttrs.end());
   st.userEllipses.insert(st.userEllipses.end(), newEll.begin(), newEll.end());
@@ -8154,6 +8618,13 @@ void ApplyRotationToSelection(AppCommandState& st, float bx, float by, float rad
       a.insY = mnY;
     }
   }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Table)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadTables.size())
+      continue;
+    CadTableRotateAround(&st.cadTables[static_cast<size_t>(e.index)], bx, by, rad);
+  }
   // PDF underlays: rotate insertion point around base; accumulate rotation angle.
   constexpr float kPdfRadToDeg = 180.f / 3.14159265f;
   for (const auto& e : st.selection) {
@@ -8270,6 +8741,13 @@ void ApplyTranslationToSelection(AppCommandState& st, float dx, float dy, std::v
       continue;
     hatchgeom::Translate(st.cadFilledRegions[static_cast<size_t>(e.index)], dx, dy);
   }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Table)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadTables.size())
+      continue;
+    CadTableTranslate(&st.cadTables[static_cast<size_t>(e.index)], dx, dy);
+  }
   // Feature lines (REQ-087) — see ApplyRotationToSelection.
   TransformSelectedFeatureLinesInPlace(st, [&](float* x, float* y) {
     *x += dx;
@@ -8369,6 +8847,14 @@ static bool ComputeSelectionCentroidWorld(const AppCommandState& st, float* outC
         const CadAnnotation& a = st.cadAnnotations[k];
         accx += static_cast<double>(a.insX);
         accy += static_cast<double>(a.insY);
+        ++n;
+      }
+    } else if (e.type == SelectedEntity::Type::Table) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k < st.cadTables.size()) {
+        const CadTable& t = st.cadTables[k];
+        accx += static_cast<double>(t.insX);
+        accy += static_cast<double>(t.insY);
         ++n;
       }
     } else if (e.type == SelectedEntity::Type::PdfUnderlay) {
@@ -8480,8 +8966,18 @@ static void ComputeMaxSelectionDistanceFromPoint(const AppCommandState& st, floa
         m = std::max(m, std::hypot(a.dimExt1X - bx, a.dimExt1Y - by));
         m = std::max(m, std::hypot(a.dimExt2X - bx, a.dimExt2Y - by));
         m = std::max(m, std::hypot(a.insX - bx, a.insY - by));
-      } else
+      }       else
         m = std::max(m, std::hypot(a.insX - bx, a.insY - by));
+    } else if (e.type == SelectedEntity::Type::Table) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= st.cadTables.size())
+        continue;
+      const CadTable& t = st.cadTables[k];
+      for (int i = 0; i < 4; ++i) {
+        float cx = 0.f, cy = 0.f;
+        CadTableWorldCorner(t, i, &cx, &cy);
+        m = std::max(m, std::hypot(cx - bx, cy - by));
+      }
     } else if (e.type == SelectedEntity::Type::PdfUnderlay) {
       const size_t k = static_cast<size_t>(e.index);
       if (k < st.pdfAttachments.size()) {
@@ -8661,6 +9157,13 @@ void ApplyScaleToSelection(AppCommandState& st, float bx, float by, float sc, st
       CadDimAngularSyncTextPlacement(&a, st.modelUnitsPerPlottedInch);
       CadDimRefreshMeasurementText(&a, st.displayLinearPrecision, CadAngleDisplaySettings(st));
     }
+  }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Table)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadTables.size())
+      continue;
+    CadTableScaleAround(&st.cadTables[static_cast<size_t>(e.index)], bx, by, sc);
   }
   // PDF underlays: scale insertion point around base; multiply uniform scale factor.
   for (const auto& e : st.selection) {
@@ -10552,6 +11055,38 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     st.active = K::None;
     return;
   }
+  if (st.active == K::MoveTinPoint) {
+    const int si = FindSurfaceIndex(st, st.movePointSurfaceName);
+    if (si < 0) {
+      log.push_back("SURFACEMOVEPOINT — no surface named \"" + st.movePointSurfaceName + "\".");
+      st.active = K::None;
+      return;
+    }
+    using MP = AppCommandState::MoveTinPointPhase;
+    if (st.moveTinPointPhase == MP::WaitFrom) {
+      st.moveTinFromX = static_cast<double>(wx);
+      st.moveTinFromY = static_cast<double>(wy);
+      st.moveTinPointPhase = MP::WaitTo;
+      log.push_back("SURFACEMOVEPOINT — pick the new position (Z = work plane).");
+      return;
+    }
+    CommitSurfMovePointLocal(st, st.cadSurfaces[static_cast<size_t>(si)], st.moveTinFromX, st.moveTinFromY,
+                             static_cast<double>(wx), static_cast<double>(wy), CadCommitElevation(st), log);
+    st.active = K::None;
+    return;
+  }
+  if (st.active == K::DelTinLine) {
+    const int si = FindSurfaceIndex(st, st.delLineSurfaceName);
+    if (si < 0) {
+      log.push_back("SURFDELLINE — no surface named \"" + st.delLineSurfaceName + "\".");
+      st.active = K::None;
+      return;
+    }
+    CommitSurfDelLineLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(wx),
+                           static_cast<double>(wy), log);
+    st.active = K::None;
+    return;
+  }
   if (st.active == K::QuickProfile) {
     const int si = FindSurfaceIndex(st, st.quickProfileSurfaceName);
     if (si < 0) {
@@ -11291,6 +11826,13 @@ void CopySelectionToClipboard(AppCommandState& st, std::vector<std::string>& log
       cb.annotationAttrs.push_back(k < st.cadAnnotationAttrs.size()
                                        ? st.cadAnnotationAttrs[k] : EntityAttributes{});
       expandBbox(st.cadAnnotations[k].insX, st.cadAnnotations[k].insY);
+    } else if (e.type == SelectedEntity::Type::Table) {
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= st.cadTables.size())
+        continue;
+      cb.tables.push_back(st.cadTables[k]);
+      cb.tableAttrs.push_back(k < st.cadTableAttrs.size() ? st.cadTableAttrs[k] : EntityAttributes{});
+      expandBbox(st.cadTables[k].insX, st.cadTables[k].insY);
     } else if (e.type == SelectedEntity::Type::FilledRegion) {
       const size_t k = static_cast<size_t>(e.index);
       if (k >= st.cadFilledRegions.size())
@@ -13547,6 +14089,15 @@ void ApplyStretchToSelection(AppCommandState& st, float dx, float dy, float mnX,
       att.insertY += dy;
     }
   }
+  for (const auto& e : st.selection) {
+    if (e.type != SelectedEntity::Type::Table)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= st.cadTables.size())
+      continue;
+    CadTable& t = st.cadTables[static_cast<size_t>(e.index)];
+    if (inBox(t.insX, t.insY))
+      CadTableTranslate(&t, dx, dy);
+  }
   // Filled regions (REQ-042): whole-region translate, gated on the first boundary vertex — no
   // per-vertex boundary stretch (spec-recorded simplification, REQ-103 STRETCH acceptance).
   for (const auto& e : st.selection) {
@@ -15793,6 +16344,82 @@ void CadAnnotationCollectTransformPreviews(const AppCommandState& cmd, float cur
   }
 }
 
+void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, float curY,
+                                      std::vector<CadTable>* out) {
+  if (!out)
+    return;
+  out->clear();
+  using K = AppCommandState::Kind;
+  using MP = AppCommandState::ModifyPhase;
+  using MirP = AppCommandState::MirrorPhase;
+  auto take = [&](const CadTable& src, auto&& xform) {
+    CadTable p = src;
+    xform(&p);
+    out->push_back(std::move(p));
+  };
+  if ((cmd.active == K::Move || cmd.active == K::Copy) && cmd.modifyPhase == MP::NeedDestination) {
+    const float dx = curX - cmd.modifyBaseX;
+    const float dy = curY - cmd.modifyBaseY;
+    for (const auto& e : cmd.selection) {
+      if (e.type != SelectedEntity::Type::Table)
+        continue;
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= cmd.cadTables.size())
+        continue;
+      take(cmd.cadTables[k], [&](CadTable* t) { CadTableTranslate(t, dx, dy); });
+    }
+    return;
+  }
+  if (cmd.active == K::Paste && cmd.modifyPhase == MP::NeedDestination) {
+    const float dx = curX - cmd.modifyBaseX;
+    const float dy = curY - cmd.modifyBaseY;
+    for (const auto& t : cmd.clipboard.tables)
+      take(t, [&](CadTable* p) { CadTableTranslate(p, dx, dy); });
+    return;
+  }
+  float sc = 1.f;
+  if (cmd.active == K::Scale && cmd.modifyPhase == MP::NeedDestination) {
+    if (!CadScalePreviewFactor(cmd, curX, curY, &sc))
+      return;
+    for (const auto& e : cmd.selection) {
+      if (e.type != SelectedEntity::Type::Table)
+        continue;
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= cmd.cadTables.size())
+        continue;
+      take(cmd.cadTables[k], [&](CadTable* t) { CadTableScaleAround(t, cmd.modifyBaseX, cmd.modifyBaseY, sc); });
+    }
+    return;
+  }
+  if (cmd.active == K::Mirror && (cmd.mirrorPhase == MirP::NeedP2 || cmd.mirrorPhase == MirP::NeedEraseAnswer)) {
+    const float mx0 = cmd.mirrorP1X, my0 = cmd.mirrorP1Y;
+    const float mx1 = (cmd.mirrorPhase == MirP::NeedP2) ? curX : cmd.mirrorP2X;
+    const float my1 = (cmd.mirrorPhase == MirP::NeedP2) ? curY : cmd.mirrorP2Y;
+    for (const auto& e : cmd.selection) {
+      if (e.type != SelectedEntity::Type::Table)
+        continue;
+      const size_t k = static_cast<size_t>(e.index);
+      if (k >= cmd.cadTables.size())
+        continue;
+      take(cmd.cadTables[k], [&](CadTable* t) { CadTableReflectAcrossLine(t, mx0, my0, mx1, my1); });
+    }
+    return;
+  }
+  if (cmd.active != K::Rotate)
+    return;
+  float theta = 0.f;
+  if (!CadRotatePreviewTheta(cmd, curX, curY, &theta))
+    return;
+  for (const auto& e : cmd.selection) {
+    if (e.type != SelectedEntity::Type::Table)
+      continue;
+    const size_t k = static_cast<size_t>(e.index);
+    if (k >= cmd.cadTables.size())
+      continue;
+    take(cmd.cadTables[k], [&](CadTable* t) { CadTableRotateAround(t, cmd.rotateBaseX, cmd.rotateBaseY, theta); });
+  }
+}
+
 namespace {
 
 // REQ-123 (GitHub #100). "Visible through this viewport" means the same thing here as it does to
@@ -15868,6 +16495,15 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     CadAnnotationRoughBounds(a, st.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
     consider(static_cast<double>(amnX), static_cast<double>(amnY));
     consider(static_cast<double>(amxX), static_cast<double>(amxY));
+  }
+
+  for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
+    if (EntityHiddenInViewport(vpFilter, st.cadTableAttrs, ti))
+      continue;
+    float tmnX = 0.f, tmnY = 0.f, tmxX = 0.f, tmxY = 0.f;
+    CadTableWorldAabb(st.cadTables[ti], &tmnX, &tmnY, &tmxX, &tmxY);
+    consider(static_cast<double>(tmnX), static_cast<double>(tmnY));
+    consider(static_cast<double>(tmxX), static_cast<double>(tmxY));
   }
 
   for (size_t arcIx = 0; arcIx < st.userArcs.size(); ++arcIx) {
@@ -16088,6 +16724,20 @@ void CollectEntityBoxes(const AppCommandState& st, std::vector<EntityBox>& out, 
     b.mxX = static_cast<double>(amxX);
     b.mnY = static_cast<double>(amnY);
     b.mxY = static_cast<double>(amxY);
+    b.cx = 0.5 * (b.mnX + b.mxX);
+    b.cy = 0.5 * (b.mnY + b.mxY);
+    out.push_back(b);
+  }
+  for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
+    if (EntityHiddenInViewport(vpFilter, st.cadTableAttrs, ti))
+      continue;
+    float tmnX = 0.f, tmnY = 0.f, tmxX = 0.f, tmxY = 0.f;
+    CadTableWorldAabb(st.cadTables[ti], &tmnX, &tmnY, &tmxX, &tmxY);
+    EntityBox b{};
+    b.mnX = static_cast<double>(tmnX);
+    b.mxX = static_cast<double>(tmxX);
+    b.mnY = static_cast<double>(tmnY);
+    b.mxY = static_cast<double>(tmxY);
     b.cx = 0.5 * (b.mnX + b.mxX);
     b.cy = 0.5 * (b.mnY + b.mxY);
     out.push_back(b);
@@ -17536,6 +18186,56 @@ void StartSurfDelPointCommand(AppCommandState& st, const std::string& surfaceNam
   log.push_back("SURFACEDELPOINT — pick the point to remove from \"" + surfaceName + "\". ESC cancels.");
 }
 
+void StartSurfMovePointCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None) {
+    log.push_back("SURFACEMOVEPOINT — finish or cancel the active command first.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, surfaceName);
+  if (si < 0) {
+    log.push_back("SURFACEMOVEPOINT — no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  if (SurfaceRefusesPointEdits(st.cadSurfaces[static_cast<size_t>(si)], "SURFACEMOVEPOINT", log))
+    return;
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.movePointSurfaceName = surfaceName;
+  st.moveTinPointPhase = AppCommandState::MoveTinPointPhase::WaitFrom;
+  st.active = K::MoveTinPoint;
+  st.lastCommand = K::MoveTinPoint;
+  log.push_back("SURFACEMOVEPOINT — pick the point to move on \"" + surfaceName + "\". ESC cancels.");
+}
+
+void StartSurfDelLineCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None) {
+    log.push_back("SURFDELLINE — finish or cancel the active command first.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, surfaceName);
+  if (si < 0) {
+    log.push_back("SURFDELLINE — no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  const CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  if (SurfaceRefusesPointEdits(s, "SURFDELLINE", log))
+    return;
+  if (!s.tin || s.tin->indices.size() < 6) {
+    log.push_back("SURFDELLINE — \"" + s.name + "\" is not a built TIN.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.delLineSurfaceName = surfaceName;
+  st.active = K::DelTinLine;
+  st.lastCommand = K::DelTinLine;
+  log.push_back("SURFDELLINE — pick an interior edge on \"" + surfaceName + "\". ESC cancels.");
+}
+
 void StartQuickProfileCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
   if (st.active != K::None) {
@@ -17573,6 +18273,7 @@ std::uint64_t EntityIdOfLineOrPolylinePick(const AppCommandState& st, const Sele
   case SelectedEntity::Type::LineSeg:     return idOf(st.userLineAttrs, hit.index);
   case SelectedEntity::Type::Polyline:    return idOf(st.userPolylineAttrs, hit.index);
   case SelectedEntity::Type::FeatureLine: return idOf(st.featureLineAttrs, hit.index);  // REQ-087
+  case SelectedEntity::Type::Arc:         return idOf(st.userArcAttrs, hit.index);
   default:                                return 0;
   }
 }
@@ -17667,8 +18368,12 @@ void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary,
   // REQ-087: a feature line is design linework whose whole purpose is to be a breakline, so it is
   // accepted here alongside lines and polylines.
   if (hit.type != SelectedEntity::Type::LineSeg && hit.type != SelectedEntity::Type::Polyline &&
-      hit.type != SelectedEntity::Type::FeatureLine) {
-    log.push_back(cmdName + " — that is not a line, polyline, or feature line; try again, or ESC to cancel.");
+      hit.type != SelectedEntity::Type::FeatureLine && hit.type != SelectedEntity::Type::Arc) {
+    log.push_back(cmdName + " — that is not a line, polyline, feature line, or arc; try again, or ESC to cancel.");
+    return;
+  }
+  if (isBoundary && hit.type == SelectedEntity::Type::Arc) {
+    log.push_back(cmdName + " — a boundary cannot be an arc; try again, or ESC to cancel.");
     return;
   }
   if (isBoundary && hit.type == SelectedEntity::Type::LineSeg) {
@@ -17753,6 +18458,7 @@ void ClearCadSelection(AppCommandState& st) {
   st.selBoxWaitingSecond = false;
   AbortMtextGripInteraction(st);
   ClearDimGripInteraction(st);
+  CancelTableCellEditor(st);
 }
 
 void EnsureAttrCounts(AppCommandState& st) {
@@ -17789,6 +18495,10 @@ void EnsureAttrCounts(AppCommandState& st) {
     st.cadSurfaceAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
+  while (st.cadTableAttrs.size() < st.cadTables.size()) {
+    st.cadTableAttrs.push_back(MakeNewEntityAttrs(st));
+    grew = true;
+  }
   if (grew)
     BumpCadGpuCache(st);
 }
@@ -17810,6 +18520,8 @@ static void CollectLayersUsedInDrawing(const AppCommandState& st, std::set<std::
   for (const auto& a : st.userPolylineAttrs)
     add(a.layer);
   for (const auto& a : st.cadAnnotationAttrs)
+    add(a.layer);
+  for (const auto& a : st.cadTableAttrs)
     add(a.layer);
   for (const auto& p : st.surveyPoints)
     add(p.layer);
@@ -18337,6 +19049,7 @@ EntityAttributes SelectSimilarAttrsOf(const AppCommandState& st, const SelectedE
   case SelectedEntity::Type::Arc:        return pick(st.userArcAttrs, e.index);
   case SelectedEntity::Type::Ellipse:    return pick(st.userEllAttrs, e.index);
   case SelectedEntity::Type::Annotation: return pick(st.cadAnnotationAttrs, e.index);
+  case SelectedEntity::Type::Table:      return pick(st.cadTableAttrs, e.index);
   default:                               return EntityAttributes{};
   }
 }
@@ -18414,6 +19127,11 @@ void SelectSimilarToCurrentSelection(AppCommandState& st, std::vector<std::strin
           consider(SelectedEntity::Type::Surface, static_cast<int>(i));
       break;
     }
+    case SelectedEntity::Type::Table: {
+      for (size_t i = 0; i < st.cadTables.size(); ++i)
+        consider(SelectedEntity::Type::Table, static_cast<int>(i));
+      break;
+    }
     default:
       break;
     }
@@ -18471,6 +19189,8 @@ void ClearCadGeometry(AppCommandState& st) {
   st.cadFilledRegionAttrs.clear();
   st.cadMeshes.clear();
   st.cadMeshAttrs.clear();
+  st.cadTables.clear();
+  st.cadTableAttrs.clear();
   ClearPendingOneShotObjectSnap(st);
   ClearCadSelection(st);
   // Isolation is keyed on entity ids, and the id space restarts above — so a hidden set kept here
@@ -18485,6 +19205,7 @@ void ClearPendingOneShotObjectSnap(AppCommandState& st) {
 }
 
 void ResetCadToolStateToIdle(AppCommandState& st) {
+  CancelTableCellEditor(st);
   ClearPendingOneShotObjectSnap(st);
   st.active = AppCommandState::Kind::None;
   st.linePhase = AppCommandState::LinePhase::NeedFirstPoint;
@@ -18639,6 +19360,28 @@ void EraseCadAnnotationAtIndex(AppCommandState& st, size_t annIndex) {
     st.cadAnnotationAttrs.erase(st.cadAnnotationAttrs.begin() + static_cast<std::ptrdiff_t>(annIndex));
 }
 
+void EraseCadTableAtIndex(AppCommandState& st, size_t tableIndex) {
+  if (tableIndex >= st.cadTables.size())
+    return;
+  if (st.tableCellEditorOpen && st.tableCellEditorIndex == static_cast<int>(tableIndex))
+    CancelTableCellEditor(st);
+  else if (st.tableCellEditorOpen && st.tableCellEditorIndex > static_cast<int>(tableIndex))
+    --st.tableCellEditorIndex;
+  st.selection.erase(std::remove_if(st.selection.begin(), st.selection.end(),
+                                    [&](const SelectedEntity& e) {
+                                      return e.type == SelectedEntity::Type::Table &&
+                                             e.index == static_cast<int>(tableIndex);
+                                    }),
+                     st.selection.end());
+  for (SelectedEntity& e : st.selection) {
+    if (e.type == SelectedEntity::Type::Table && e.index > static_cast<int>(tableIndex))
+      --e.index;
+  }
+  st.cadTables.erase(st.cadTables.begin() + static_cast<std::ptrdiff_t>(tableIndex));
+  if (tableIndex < st.cadTableAttrs.size())
+    st.cadTableAttrs.erase(st.cadTableAttrs.begin() + static_cast<std::ptrdiff_t>(tableIndex));
+}
+
 void DeleteSelectedSurveyPoints(AppCommandState& st, std::vector<std::string>& log) {
   if (st.selectedSurveyPointIndices.empty())
     return;
@@ -18719,6 +19462,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::set<int> lineIx;
   std::set<int> circIx;
   std::set<int> annIx;
+  std::set<int> tableIx;
   std::set<int> arcIx;
   std::set<int> ellIx;
   std::set<int> polyIx;
@@ -18737,6 +19481,9 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
       circIx.insert(e.index);
     else if (e.type == SelectedEntity::Type::Annotation && e.index >= 0 && static_cast<size_t>(e.index) < nAnn)
       annIx.insert(e.index);
+    else if (e.type == SelectedEntity::Type::Table && e.index >= 0 &&
+             static_cast<size_t>(e.index) < st.cadTables.size())
+      tableIx.insert(e.index);
     else if (e.type == SelectedEntity::Type::Arc && e.index >= 0 && static_cast<size_t>(e.index) < nArc)
       arcIx.insert(e.index);
     else if (e.type == SelectedEntity::Type::Ellipse && e.index >= 0 && static_cast<size_t>(e.index) < nEll)
@@ -18792,6 +19539,11 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
   std::sort(av.begin(), av.end(), std::greater<int>());
   for (int idx : av)
     EraseCadAnnotationAtIndex(st, static_cast<size_t>(idx));
+
+  std::vector<int> tv(tableIx.begin(), tableIx.end());
+  std::sort(tv.begin(), tv.end(), std::greater<int>());
+  for (int idx : tv)
+    EraseCadTableAtIndex(st, static_cast<size_t>(idx));
 
   std::vector<int> arv(arcIx.begin(), arcIx.end());
   std::sort(arv.begin(), arv.end(), std::greater<int>());
@@ -18882,7 +19634,7 @@ void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) 
     st.pdfAttachments.erase(st.pdfAttachments.begin() + static_cast<std::ptrdiff_t>(idx));
   }
 
-  const size_t nDel = lineIx.size() + circIx.size() + annIx.size() + arcIx.size() + ellIx.size() +
+  const size_t nDel = lineIx.size() + circIx.size() + annIx.size() + tableIx.size() + arcIx.size() + ellIx.size() +
                       polyIx.size() + pdfIx.size() + fillIx.size() + meshIx.size();
   st.selection.clear();
   AbortMtextGripInteraction(st);
@@ -19877,6 +20629,29 @@ bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float
       bestD2 = std::min(bestD2, d2Segment(V[c], V[c + 1], V[c + 2], V[a], V[a + 1], V[a + 2]));
     }
     consider(e, bestD2);
+  }
+
+  for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
+    const CadTable& t = st.cadTables[ti];
+    SelectedEntity e{};
+    e.type = SelectedEntity::Type::Table;
+    e.index = static_cast<int>(ti);
+    float lx = 0.f, ly = 0.f;
+    CadTableWorldToLocal(t, static_cast<float>(wx), static_cast<float>(wy), &lx, &ly);
+    const float tw = std::max(t.width, 1.e-3f);
+    const float th = std::max(t.height, 1.e-3f);
+    double td2 = 1e300;
+    if (lx >= 0.f && lx <= tw && ly >= 0.f && ly <= th) {
+      td2 = 0.0;
+    } else {
+      for (int i = 0; i < 4; ++i) {
+        float ax = 0.f, ay = 0.f, bx = 0.f, by = 0.f;
+        CadTableWorldCorner(t, i, &ax, &ay);
+        CadTableWorldCorner(t, (i + 1) % 4, &bx, &by);
+        td2 = std::min(td2, d2Segment(ax, ay, t.insZ, bx, by, t.insZ));
+      }
+    }
+    consider(e, td2);
   }
 
   if (!any)
@@ -22038,6 +22813,7 @@ const EntityAttributes* CadEntityAttrsForSelected(const AppCommandState& st, con
   // never assigned. Adding it here is what gives a surface REQ-084 isolation gating and Properties
   // layer/colour, both inherited rather than re-implemented.
   case T::Surface:      return at(st.cadSurfaceAttrs);
+  case T::Table:        return at(st.cadTableAttrs);
   // Survey points and PDF underlays carry no EntityAttributes and are out of REQ-084's scope.
   default:              return nullptr;
   }
@@ -22068,6 +22844,8 @@ void CollectIsolatableIds(const AppCommandState& st, std::vector<std::uint64_t>*
   take(st.cadAnnotationAttrs);
   take(st.cadFilledRegionAttrs);
   take(st.cadMeshAttrs);
+  take(st.cadSurfaceAttrs);
+  take(st.cadTableAttrs);
 }
 
 /// Ids of the current selection that isolation can act on, plus how many picks it had to skip
@@ -23677,9 +24455,11 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "catchment" || plotTok == "catch" || plotTok == "surfacecreategrid" ||
         plotTok == "sfgrid" || plotTok == "surfacecreatecorr" || plotTok == "sfcorr" ||
         plotTok == "surfacecreatevolgrid" || plotTok == "sfvolgrid" || plotTok == "surfswapedge" ||
-        plotTok == "sfswap" || plotTok == "surfaceaddpoint" || plotTok == "sfaddpt" ||
-        plotTok == "surfacedelpoint" || plotTok == "sfdelpt" || plotTok == "quickprofile" || plotTok == "qprof" ||
-        plotTok == "volreport") {
+        plotTok == "sfswap" ||         plotTok == "surfaceaddpoint" || plotTok == "sfaddpt" ||
+        plotTok == "surfacedelpoint" || plotTok == "sfdelpt" || plotTok == "surfacemovepoint" ||
+        plotTok == "sfmovept" || plotTok == "surfdelline" || plotTok == "sfdelline" ||
+        plotTok == "quickprofile" || plotTok == "qprof" ||
+        plotTok == "volreport" || plotTok == "voltable" || plotTok == "volcsv") {
       std::string rest;
       std::getline(issIdle, rest);
       rest = StringUtil::trimCopy(rest);
@@ -23697,10 +24477,18 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunSurfAddPoint(st, rest, log);
       else if (plotTok == "surfacedelpoint" || plotTok == "sfdelpt")
         RunSurfDelPoint(st, rest, log);
+      else if (plotTok == "surfacemovepoint" || plotTok == "sfmovept")
+        RunSurfMovePoint(st, rest, log);
+      else if (plotTok == "surfdelline" || plotTok == "sfdelline")
+        RunSurfDelLine(st, rest, log);
       else if (plotTok == "quickprofile" || plotTok == "qprof")
         RunQuickProfile(st, rest, log);
       else if (plotTok == "volreport")
-        RunVolReport(st, log);
+        RunVolReport(st, rest, log);
+      else if (plotTok == "voltable")
+        RunVolReport(st, "table", log);
+      else if (plotTok == "volcsv")
+        RunVolCsv(st, rest, log);
       else if (plotTok == "volumesurface" || plotTok == "volsurf")
         RunVolumeSurfaceCreate(st, rest, log);
       else if (plotTok == "surfacerename" || plotTok == "sfrename")
@@ -24029,6 +24817,48 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     CommitSurfDelPointLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(px),
                             static_cast<double>(py), log);
+    st.active = AppCommandState::Kind::None;
+    return;
+  }
+  if (st.active == K::MoveTinPoint) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
+      log.push_back("SURFACEMOVEPOINT — type X,Y (World) or pick a point in the drawing.");
+      return;
+    }
+    const int si = FindSurfaceIndex(st, st.movePointSurfaceName);
+    if (si < 0) {
+      log.push_back("SURFACEMOVEPOINT — no surface named \"" + st.movePointSurfaceName + "\".");
+      st.active = AppCommandState::Kind::None;
+      return;
+    }
+    using MP = AppCommandState::MoveTinPointPhase;
+    if (st.moveTinPointPhase == MP::WaitFrom) {
+      st.moveTinFromX = static_cast<double>(px);
+      st.moveTinFromY = static_cast<double>(py);
+      st.moveTinPointPhase = MP::WaitTo;
+      log.push_back("SURFACEMOVEPOINT — pick the new position (Z = work plane).");
+      return;
+    }
+    CommitSurfMovePointLocal(st, st.cadSurfaces[static_cast<size_t>(si)], st.moveTinFromX, st.moveTinFromY,
+                             static_cast<double>(px), static_cast<double>(py), CadCommitElevation(st), log);
+    st.active = AppCommandState::Kind::None;
+    return;
+  }
+  if (st.active == K::DelTinLine) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
+      log.push_back("SURFDELLINE — type X,Y (World) or pick a point in the drawing.");
+      return;
+    }
+    const int si = FindSurfaceIndex(st, st.delLineSurfaceName);
+    if (si < 0) {
+      log.push_back("SURFDELLINE — no surface named \"" + st.delLineSurfaceName + "\".");
+      st.active = AppCommandState::Kind::None;
+      return;
+    }
+    CommitSurfDelLineLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(px),
+                           static_cast<double>(py), log);
     st.active = AppCommandState::Kind::None;
     return;
   }
@@ -24935,6 +25765,14 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
     return "SURFACEADDPOINT: Pick a plan position (Z = work plane) | ESC cancel";
   if (st.active == K::DelTinPoint)
     return "SURFACEDELPOINT: Pick the definition point to remove | ESC cancel";
+  if (st.active == K::MoveTinPoint) {
+    using MP = AppCommandState::MoveTinPointPhase;
+    if (st.moveTinPointPhase == MP::WaitFrom)
+      return "SURFACEMOVEPOINT: Pick the point to move | ESC cancel";
+    return "SURFACEMOVEPOINT: Pick the new position (Z = work plane) | ESC cancel";
+  }
+  if (st.active == K::DelTinLine)
+    return "SURFDELLINE: Pick an interior TIN edge | ESC cancel";
   if (st.active == K::QuickProfile) {
     using QP = AppCommandState::QuickProfilePhase;
     if (st.quickProfilePhase == QP::WaitFirst)
@@ -25555,7 +26393,7 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
   const float sc  = std::sqrt(a * a + b * b);
   const float rad = std::atan2(b, a);
   const bool selective = selEnts != nullptr;
-  std::unordered_set<int> sLines, sCircles, sArcs, sEllipses, sPolylines, sAnns;
+  std::unordered_set<int> sLines, sCircles, sArcs, sEllipses, sPolylines, sAnns, sTables;
   if (selective) {
     for (const auto& se : *selEnts) {
       switch (se.type) {
@@ -25565,6 +26403,7 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
       case SelectedEntity::Type::Ellipse:    sEllipses.insert(se.index); break;
       case SelectedEntity::Type::Polyline:   sPolylines.insert(se.index);break;
       case SelectedEntity::Type::Annotation: sAnns.insert(se.index);     break;
+      case SelectedEntity::Type::Table:      sTables.insert(se.index);   break;
       default: break;
       }
     }
@@ -25641,6 +26480,15 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
       ann.insY = ann.boxMinY;
       ann.plottedHeightInches = std::max(ann.plottedHeightInches * sc, 1e-6f);
       break;
+    case CadAnnotation::Kind::Table:
+      HelmertPt(a, b, tx, ty, &ann.boxMinX, &ann.boxMinY);
+      HelmertPt(a, b, tx, ty, &ann.boxMaxX, &ann.boxMaxY);
+      if (ann.boxMinX > ann.boxMaxX) std::swap(ann.boxMinX, ann.boxMaxX);
+      if (ann.boxMinY > ann.boxMaxY) std::swap(ann.boxMinY, ann.boxMaxY);
+      ann.insX = ann.boxMinX;
+      ann.insY = ann.boxMaxY;
+      ann.plottedHeightInches = std::max(ann.plottedHeightInches * sc, 1e-6f);
+      break;
     case CadAnnotation::Kind::DimAligned:
     case CadAnnotation::Kind::DimLinear: {
       HelmertPt(a, b, tx, ty, &ann.dimExt1X, &ann.dimExt1Y);
@@ -25663,6 +26511,17 @@ static void ApplyHelmertToAllGeometry(AppCommandState& st, float a, float b, flo
       CadDimRefreshMeasurementText(&ann, st.displayLinearPrecision, CadAngleDisplaySettings(st));
       break;
     }
+  }
+
+  for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
+    if (selective && !sTables.count(static_cast<int>(ti)))
+      continue;
+    CadTable& t = st.cadTables[ti];
+    HelmertPt(a, b, tx, ty, &t.insX, &t.insY);
+    t.rotationRad += rad;
+    t.width = std::max(t.width * sc, 1.e-3f);
+    t.height = std::max(t.height * sc, 1.e-3f);
+    t.plottedHeightInches = std::max(t.plottedHeightInches * sc, 1e-6f);
   }
 
   // PDF underlays

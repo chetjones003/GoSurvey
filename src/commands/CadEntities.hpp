@@ -290,7 +290,7 @@ struct VolumeMapDisplayGeometry {
 /// Single-line TEXT, MTEXT box, or aligned linear dimension drawn over the viewport (world coordinates;
 /// for paper-space entities the coordinates are paper inches — see ADR-009).
 struct CadAnnotation {
-  enum class Kind { Text = 0, Mtext = 1, DimAligned = 2, DimLinear = 3, DimAngular = 4 };
+  enum class Kind { Text = 0, Mtext = 1, DimAligned = 2, DimLinear = 3, DimAngular = 4, Table = 5 };
   Kind kind = Kind::Text;
   float insX = 0.f;
   float insY = 0.f;
@@ -346,7 +346,14 @@ struct CadAnnotation {
   bool surveyLabelHasUserOffset = false;
   float surveyLabelUserOffsetEast = 0.f;
   float surveyLabelUserOffsetNorth = 0.f;
+  /// REQ-148: Kind::Table — column count and row-major cell strings.
+  int tableCols = 0;
+  std::vector<std::string> tableCells;
 };
+
+[[nodiscard]] inline bool CadAnnotationHasTextBox(CadAnnotation::Kind k) {
+  return k == CadAnnotation::Kind::Mtext || k == CadAnnotation::Kind::Table;
+}
 
 /// Committed 3-point arc (circumcircle + start/sweep in radians from +X).
 /// Dependency-free so both the model store (CadCommands.hpp) and the paper-space store (PaperSpace.hpp,
@@ -529,10 +536,17 @@ struct CadSurface {
   int gridCols = 0, gridRows = 0;
   std::vector<float> gridZ;
   std::vector<std::pair<double, double>> swappedEdgePicks;
+  std::vector<std::pair<double, double>> deletedEdgePicks;
   /// REQ-144: extra vertices in the local frame (world = local + origin), stored as x,y,z triples.
   std::vector<float> addedPointXyz;
   /// REQ-144: each pick removes the nearest remaining assembled input point at rebuild (local XY).
   std::vector<std::pair<double, double>> deletedPointPicks;
+  /// REQ-150: replace nearest assembled point (from local XY) with to-XYZ (local).
+  struct MovedPoint {
+    double fromX = 0.0, fromY = 0.0;
+    float toX = 0.f, toY = 0.f, toZ = 0.f;
+  };
+  std::vector<MovedPoint> movedPoints;
   std::vector<CadSurfaceBreakline> corridorFeatureLines;
 
   /// Names of the point groups supplying the surface's points (REQ-067).

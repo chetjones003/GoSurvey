@@ -114,6 +114,8 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::SwapTinEdge:
   case K::AddTinPoint:
   case K::DelTinPoint:
+  case K::MoveTinPoint:
+  case K::DelTinLine:
   case K::QuickProfile:
     return R::SnappedPointPick;
 

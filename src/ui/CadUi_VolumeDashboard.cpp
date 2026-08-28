@@ -206,7 +206,35 @@ void DrawVolumeDashboardWindow(AppCommandState& cmd, std::vector<std::string>* l
     row("Cut", FormatVolumeYd3(r.cutFt3, p));
     row("Fill", FormatVolumeYd3(r.fillFt3, p));
     row("Net", FormatVolumeYd3(r.netFt3, p));
+    row("Cut area", FormatLinear(r.cutAreaFt2, p) + " ft2");
+    row("Fill area", FormatLinear(r.fillAreaFt2, p) + " ft2");
     row("Common area", FormatLinear(r.commonAreaFt2, p) + " ft2");
+    ImGui::EndTable();
+  }
+
+  if (ImGui::Button("Add row")) {
+    char buf[32] = "VOLDASH ADD";
+    ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, *log);
+  }
+  ItemHelpTooltip("Snapshot the current comparison into the dashboard list (REQ-149).");
+
+  if (!dash.rows.empty() && ImGui::BeginTable("##vdrows", 4, ImGuiTableFlags_SizingStretchProp | ImGuiTableFlags_RowBg)) {
+    ImGui::TableSetupColumn("Label");
+    ImGui::TableSetupColumn("Cut");
+    ImGui::TableSetupColumn("Fill");
+    ImGui::TableSetupColumn("Net");
+    ImGui::TableHeadersRow();
+    for (const auto& row : dash.rows) {
+      ImGui::TableNextRow();
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(row.label.c_str());
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(row.hasResult ? FormatVolumeYd3(row.result.cutFt3, p).c_str() : "—");
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(row.hasResult ? FormatVolumeYd3(row.result.fillFt3, p).c_str() : "—");
+      ImGui::TableNextColumn();
+      ImGui::TextUnformatted(row.hasResult ? FormatVolumeYd3(row.result.netFt3, p).c_str() : "—");
+    }
     ImGui::EndTable();
   }
 
