@@ -20,6 +20,7 @@
 #include "update/UpdateCheck.hpp"  // update::UpdatePrefs only — pure, no network, no <thread>
 #include "util/tinbuild.hpp"       // TinBuildResult, for AppCommandState::SurfaceRebuildAsync (REQ-069)
 #include "util/surfacevolume.hpp"  // SurfaceVolumeResult, for AppCommandState::VolumeDashboardState (REQ-073)
+#include "util/surfacequery.hpp"   // SurfaceProfileSample, Quick Profile (REQ-145)
 #include "util/watershed.hpp"      // WatershedResult, for AppCommandState::SurfaceWatershedCacheEntry (REQ-132)
 // curveisect::Vec2/Seg/Conic + Intersect*, for FILLET's tangent-arc solve (REQ-103 step 6a) below.
 // Dependency-free by its own design (curveintersect.hpp's own doc comment), so this adds no cycle.
@@ -1199,6 +1200,8 @@ struct AppCommandState {
     AddTinPoint,
     /// REQ-144: one pick deletes the nearest definition point on a named TIN.
     DelTinPoint,
+    /// REQ-145: two picks sample a named surface into a session Quick Profile graph.
+    QuickProfile,
     /// REQ-069: one pick designates a Line/Polyline as a breakline on a named surface.
     DesignateBreakline,
     /// REQ-069: one pick designates a closed Polyline as a boundary ring (outer/hide/show) on a named surface.
@@ -1279,6 +1282,7 @@ struct AppCommandState {
     case Kind::SwapTinEdge:        return "SURFSWAPEDGE";
     case Kind::AddTinPoint:        return "SURFACEADDPOINT";
     case Kind::DelTinPoint:        return "SURFACEDELPOINT";
+    case Kind::QuickProfile:       return "QUICKPROFILE";
     case Kind::DesignateBreakline: return "DESIGNATEBREAKLINE";
     case Kind::DesignateBoundary:  return "DESIGNATEBOUNDARY";
     default:                  return "";
@@ -1998,6 +2002,19 @@ struct AppCommandState {
   VolumeDashboardState volumeDashboard;
   std::string lastVolumeReportText;  ///< Last successful VOLUMES / dashboard numbers for VOLREPORT.
 
+  /// REQ-145 Quick Profile — session graph only, never `.gs` (same rule as Volume Dashboard).
+  struct QuickProfileState {
+    bool open = false;
+    bool hasResult = false;
+    std::string surfaceName;
+    double length = 0.0;
+    int onSurfaceCount = 0;
+    double minZ = 0.0;
+    double maxZ = 0.0;
+    std::vector<SurfaceProfileSample> samples;
+  };
+  QuickProfileState quickProfile;
+
   /// Generated display geometry for one surface — ADR-036 (e).
   ///
   /// **Not a member of \ref CadSurface, deliberately.** `cadSurfaces` is assigned wholesale into
@@ -2457,6 +2474,10 @@ struct AppCommandState {
   /// one surface (existing and proposed) and a grade must be computed within one surface, never
   /// across two (Q1, TASK-055).
   enum class SurfaceElevPhase { WaitFirst, WaitSecond } surfaceElevPhase = SurfaceElevPhase::WaitFirst;
+  enum class QuickProfilePhase { WaitFirst, WaitSecond } quickProfilePhase = QuickProfilePhase::WaitFirst;
+  std::string quickProfileSurfaceName;
+  double quickProfileFromX = 0.0;
+  double quickProfileFromY = 0.0;
   double surfaceElevFromX = 0.0;
   double surfaceElevFromY = 0.0;
   std::vector<std::pair<std::string, double>> surfaceElevFromZ;
@@ -3647,6 +3668,7 @@ void StartCatchmentCommand(AppCommandState& st, const std::string& surfaceName, 
 void StartSurfSwapEdgeCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
 void StartSurfAddPointCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
 void StartSurfDelPointCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartQuickProfileCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
 
 /// REQ-069: designate one picked Line/Polyline as a breakline on the named surface, appended to its
 /// definition by stable entity id. Refuses to start when \p surfaceName does not name an existing

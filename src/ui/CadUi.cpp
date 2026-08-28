@@ -3657,8 +3657,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ribbonSpecs.push_back({wLaunch, wLaunch, [&]() {
       const float cell = colW({"Create Profile", "Data Shortcut", "Grading Tools"});
       RibbonSectionBegin("RibbonSecTsLaunch", "Launch Pad", 8.f + kTsLargeW + 4.f + cell, panelH);
-      RibbonNyiButton("##TsQProfile", RibbonIconKind::SurfQuickProfile, "Quick Profile", ImVec2(kTsLargeW, colH),
-                      RibbonLabel::Below);
+      if (RibbonButtonEx("##TsQProfile", RibbonIconKind::SurfQuickProfile, "Quick Profile", ImVec2(kTsLargeW, colH),
+                         RibbonLabel::Below))
+        StartQuickProfileCommand(cmd, surfName, log);
+      RibbonItemHelp("Quick Profile — sample this surface along two plan points.\nCommand bar: QUICKPROFILE");
       ImGui::SameLine(0, 4);
       ImGui::BeginGroup();
       RibbonNyiButton("##TsCProfile", RibbonIconKind::SurfProfile, "Create Profile",
@@ -7157,6 +7159,7 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
   case K::SwapTinEdge: return true;
   case K::AddTinPoint: return true;
   case K::DelTinPoint: return true;
+  case K::QuickProfile: return true;
   case K::Circle: {
     using CP = AppCommandState::CirclePhase;
     return cmd.circlePhase == CP::WaitCenterOrMode || cmd.circlePhase == CP::ThreeP_WaitP1 ||

@@ -3458,6 +3458,96 @@ void RunSurfDelPoint(AppCommandState& st, const std::string& args, std::vector<s
   CommitSurfDelPointLocal(st, s, static_cast<double>(lx), static_cast<double>(ly), log);
 }
 
+static std::unique_ptr<ISurfaceQuery> MakeSurfaceQuery(const AppCommandState& st, const CadSurface& surf) {
+  if ((surf.kind == SurfaceKind::Grid || surf.kind == SurfaceKind::GridVolume) &&
+      GridIndexValid(surf.gridCols, surf.gridRows, surf.gridZ)) {
+    return std::make_unique<GridSurfaceQuery>(
+        surf.gridOriginX - st.worldDocumentOriginX, surf.gridOriginY - st.worldDocumentOriginY, surf.gridSpacingX,
+        surf.gridSpacingY, surf.gridCols, surf.gridRows, surf.gridZ);
+  }
+  if (surf.tin)
+    return std::make_unique<TinSurfaceQuery>(surf.tin->vertsXyz, surf.tin->indices);
+  return nullptr;
+}
+
+static void CommitQuickProfileLocal(AppCommandState& st, const CadSurface& s, double x0, double y0, double x1,
+                                    double y1, std::vector<std::string>& log) {
+  auto q = MakeSurfaceQuery(st, s);
+  if (!q) {
+    log.push_back("QUICKPROFILE — \"" + s.name + "\" is not a built surface.");
+    return;
+  }
+  std::vector<SurfaceProfileSample> samples;
+  if (!SampleSurfaceProfileLine(*q, x0, y0, x1, y1, kQuickProfileStepFt, kQuickProfileMaxSamples, &samples)) {
+    log.push_back("QUICKPROFILE — the two points must be a finite non-zero length.");
+    return;
+  }
+  int hits = 0;
+  double minZ = 0.0;
+  double maxZ = 0.0;
+  bool anyZ = false;
+  for (const SurfaceProfileSample& p : samples) {
+    if (!p.onSurface)
+      continue;
+    ++hits;
+    if (!anyZ) {
+      minZ = maxZ = p.z;
+      anyZ = true;
+    } else {
+      minZ = std::min(minZ, p.z);
+      maxZ = std::max(maxZ, p.z);
+    }
+  }
+  if (hits == 0) {
+    log.push_back("QUICKPROFILE — no samples on the surface (outside).");
+    return;
+  }
+  st.quickProfile.open = true;
+  st.quickProfile.hasResult = true;
+  st.quickProfile.surfaceName = s.name;
+  st.quickProfile.length = samples.back().station;
+  st.quickProfile.onSurfaceCount = hits;
+  st.quickProfile.minZ = minZ;
+  st.quickProfile.maxZ = maxZ;
+  st.quickProfile.samples = std::move(samples);
+  const int p = st.displayLinearPrecision;
+  log.push_back("QUICKPROFILE — \"" + s.name + "\": length " + FormatLinear(st.quickProfile.length, p) + ", " +
+                std::to_string(st.quickProfile.samples.size()) + " sample(s), " + std::to_string(hits) +
+                " on surface, elev " + FormatLinear(minZ, p) + " to " + FormatLinear(maxZ, p) + ".");
+}
+
+void RunQuickProfile(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() == 1 && !f[0].empty()) {
+    StartQuickProfileCommand(st, f[0], log);
+    return;
+  }
+  if (f.size() != 5 || f[0].empty()) {
+    log.push_back("QUICKPROFILE — usage: QUICKPROFILE <surface>[, <x1>, <y1>, <x2>, <y2>].");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("QUICKPROFILE — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  char* e[4] = {};
+  const double w0x = std::strtod(f[1].c_str(), &e[0]);
+  const double w0y = std::strtod(f[2].c_str(), &e[1]);
+  const double w1x = std::strtod(f[3].c_str(), &e[2]);
+  const double w1y = std::strtod(f[4].c_str(), &e[3]);
+  if (!e[0] || *e[0] != '\0' || !e[1] || *e[1] != '\0' || !e[2] || *e[2] != '\0' || !e[3] || *e[3] != '\0' ||
+      !std::isfinite(w0x) || !std::isfinite(w0y) || !std::isfinite(w1x) || !std::isfinite(w1y)) {
+    log.push_back("QUICKPROFILE — x1, y1, x2, and y2 must be numbers.");
+    return;
+  }
+  float lx0 = 0.f, ly0 = 0.f, lx1 = 0.f, ly1 = 0.f;
+  CadCoord::LocalFromWorld(st, w0x, w0y, &lx0, &ly0);
+  CadCoord::LocalFromWorld(st, w1x, w1y, &lx1, &ly1);
+  CommitQuickProfileLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(lx0),
+                          static_cast<double>(ly0), static_cast<double>(lx1), static_cast<double>(ly1), log);
+}
+
 void RunVolReport(AppCommandState& st, std::vector<std::string>& log) {
   std::string text = st.lastVolumeReportText;
   if (text.empty() && st.volumeDashboard.hasResult) {
@@ -5595,6 +5685,7 @@ const CmdEntry kRegistry[] = {
     {"surfswapedge", "sfswap", "Swap a TIN interior edge: SURFSWAPEDGE <surface>[, <x>, <y>]"},
     {"surfaceaddpoint", "sfaddpt", "Add a TIN definition point: SURFACEADDPOINT <surface>[, <x>, <y>, <z>]"},
     {"surfacedelpoint", "sfdelpt", "Delete nearest TIN definition point: SURFACEDELPOINT <surface>[, <x>, <y>]"},
+    {"quickprofile", "qprof", "Quick profile along two points: QUICKPROFILE <surface>[, <x1>, <y1>, <x2>, <y2>]"},
     {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT"},
     {"volumesurface", "volsurf", "Create a TIN volume surface: VOLUMESURFACE <name>, <base>, <comparison>"},
     {"surfacerename", "sfrename", "Rename a surface: SURFACERENAME <old>, <new>"},
@@ -10458,6 +10549,26 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
     }
     CommitSurfDelPointLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(wx),
                             static_cast<double>(wy), log);
+    st.active = K::None;
+    return;
+  }
+  if (st.active == K::QuickProfile) {
+    const int si = FindSurfaceIndex(st, st.quickProfileSurfaceName);
+    if (si < 0) {
+      log.push_back("QUICKPROFILE — no surface named \"" + st.quickProfileSurfaceName + "\".");
+      st.active = K::None;
+      return;
+    }
+    using QP = AppCommandState::QuickProfilePhase;
+    if (st.quickProfilePhase == QP::WaitFirst) {
+      st.quickProfileFromX = static_cast<double>(wx);
+      st.quickProfileFromY = static_cast<double>(wy);
+      st.quickProfilePhase = QP::WaitSecond;
+      log.push_back("QUICKPROFILE — second point of the sample line.");
+      return;
+    }
+    CommitQuickProfileLocal(st, st.cadSurfaces[static_cast<size_t>(si)], st.quickProfileFromX, st.quickProfileFromY,
+                            static_cast<double>(wx), static_cast<double>(wy), log);
     st.active = K::None;
     return;
   }
@@ -17425,6 +17536,32 @@ void StartSurfDelPointCommand(AppCommandState& st, const std::string& surfaceNam
   log.push_back("SURFACEDELPOINT — pick the point to remove from \"" + surfaceName + "\". ESC cancels.");
 }
 
+void StartQuickProfileCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None) {
+    log.push_back("QUICKPROFILE — finish or cancel the active command first.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, surfaceName);
+  if (si < 0) {
+    log.push_back("QUICKPROFILE — no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  const CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  if (!MakeSurfaceQuery(st, s)) {
+    log.push_back("QUICKPROFILE — \"" + s.name + "\" is not a built surface.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.quickProfileSurfaceName = surfaceName;
+  st.quickProfilePhase = AppCommandState::QuickProfilePhase::WaitFirst;
+  st.active = K::QuickProfile;
+  st.lastCommand = K::QuickProfile;
+  log.push_back("QUICKPROFILE — first point of the sample line on \"" + surfaceName + "\". ESC cancels.");
+}
+
 namespace {
 /// The stable id (REQ-076) of a picked Line or Polyline, or 0 for anything else / an out-of-range
 /// index — 0 is never a real id (\ref EntityAttributes::id), so it doubles as "not applicable" here.
@@ -23541,7 +23678,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "sfgrid" || plotTok == "surfacecreatecorr" || plotTok == "sfcorr" ||
         plotTok == "surfacecreatevolgrid" || plotTok == "sfvolgrid" || plotTok == "surfswapedge" ||
         plotTok == "sfswap" || plotTok == "surfaceaddpoint" || plotTok == "sfaddpt" ||
-        plotTok == "surfacedelpoint" || plotTok == "sfdelpt" || plotTok == "volreport") {
+        plotTok == "surfacedelpoint" || plotTok == "sfdelpt" || plotTok == "quickprofile" || plotTok == "qprof" ||
+        plotTok == "volreport") {
       std::string rest;
       std::getline(issIdle, rest);
       rest = StringUtil::trimCopy(rest);
@@ -23559,6 +23697,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunSurfAddPoint(st, rest, log);
       else if (plotTok == "surfacedelpoint" || plotTok == "sfdelpt")
         RunSurfDelPoint(st, rest, log);
+      else if (plotTok == "quickprofile" || plotTok == "qprof")
+        RunQuickProfile(st, rest, log);
       else if (plotTok == "volreport")
         RunVolReport(st, log);
       else if (plotTok == "volumesurface" || plotTok == "volsurf")
@@ -23889,6 +24029,31 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     CommitSurfDelPointLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(px),
                             static_cast<double>(py), log);
+    st.active = AppCommandState::Kind::None;
+    return;
+  }
+  if (st.active == K::QuickProfile) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
+      log.push_back("QUICKPROFILE — type X,Y (World) or pick a point in the drawing.");
+      return;
+    }
+    const int si = FindSurfaceIndex(st, st.quickProfileSurfaceName);
+    if (si < 0) {
+      log.push_back("QUICKPROFILE — no surface named \"" + st.quickProfileSurfaceName + "\".");
+      st.active = AppCommandState::Kind::None;
+      return;
+    }
+    using QP = AppCommandState::QuickProfilePhase;
+    if (st.quickProfilePhase == QP::WaitFirst) {
+      st.quickProfileFromX = static_cast<double>(px);
+      st.quickProfileFromY = static_cast<double>(py);
+      st.quickProfilePhase = QP::WaitSecond;
+      log.push_back("QUICKPROFILE — second point of the sample line.");
+      return;
+    }
+    CommitQuickProfileLocal(st, st.cadSurfaces[static_cast<size_t>(si)], st.quickProfileFromX, st.quickProfileFromY,
+                            static_cast<double>(px), static_cast<double>(py), log);
     st.active = AppCommandState::Kind::None;
     return;
   }
@@ -24770,6 +24935,12 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
     return "SURFACEADDPOINT: Pick a plan position (Z = work plane) | ESC cancel";
   if (st.active == K::DelTinPoint)
     return "SURFACEDELPOINT: Pick the definition point to remove | ESC cancel";
+  if (st.active == K::QuickProfile) {
+    using QP = AppCommandState::QuickProfilePhase;
+    if (st.quickProfilePhase == QP::WaitFirst)
+      return "QUICKPROFILE: First point of the sample line | ESC cancel";
+    return "QUICKPROFILE: Second point of the sample line | ESC cancel";
+  }
 
   if (st.active == K::DesignateBreakline)
     return "DESIGNATEBREAKLINE: Pick a line or polyline | ESC cancel";

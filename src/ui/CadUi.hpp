@@ -103,6 +103,7 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
 void DrawSurfacePropertiesWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
 void DrawVolumeDashboardWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+void DrawQuickProfileWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
 /// Feature line elevation editor (REQ-088). Every edit routes through the FLELEV command line, so
 /// the panel and the REQ-203 driver exercise the same code.

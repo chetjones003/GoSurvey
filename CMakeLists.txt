@@ -257,6 +257,7 @@ add_executable(GoSurvey
   src/ui/CadUi_Toolspace.cpp
   src/ui/CadUi_SurfaceProperties.cpp
   src/ui/CadUi_VolumeDashboard.cpp
+  src/ui/CadUi_QuickProfile.cpp
   src/ui/CadUi_FeatureLineElev.cpp
   src/ui/CadUi_UpdateDialog.cpp
   src/ui/CadUi_SignInGate.cpp
@@ -559,6 +560,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/WatershedTests.cpp
     tests/TinVolumeTests.cpp
     tests/Issue119SurfaceTests.cpp
+    tests/SurfaceProfileTests.cpp
     # REQ-070 surface style table (ADR-036 (d)). Header-only and pure, so it needs no source entry
     # below. Three of REQ-070's five acceptance conditions — the deleted-style fallback, the legacy
     # empty-name fallback, and the rejection of a major interval that is not a whole multiple of the

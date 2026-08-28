@@ -10,6 +10,17 @@
 #include <cstdint>
 #include <vector>
 
+struct SurfaceProfileSample {
+  double station = 0.0;
+  double x = 0.0;
+  double y = 0.0;
+  double z = 0.0;
+  bool onSurface = false;
+};
+
+constexpr double kQuickProfileStepFt = 1.0;
+constexpr int kQuickProfileMaxSamples = 4096;
+
 class ISurfaceQuery {
 public:
   virtual ~ISurfaceQuery() = default;
@@ -50,3 +61,8 @@ private:
   [[nodiscard]] bool sampleCell(double x, double y, double* z00, double* z10, double* z01, double* z11,
                                 double* fx, double* fy) const;
 };
+
+/// Samples \p q along the plan segment. Always includes both endpoints when the segment has length.
+/// Returns false for a degenerate (zero-length or non-finite) segment and leaves \p out empty.
+bool SampleSurfaceProfileLine(const ISurfaceQuery& q, double x0, double y0, double x1, double y1, double stepFt,
+                              int maxSamples, std::vector<SurfaceProfileSample>* out);

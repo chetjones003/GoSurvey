@@ -5,6 +5,7 @@
 #include "surfacevolume.hpp"
 #include "tinbuild.hpp"
 
+#include <cassert>
 #include <cmath>
 
 namespace {
@@ -170,5 +171,42 @@ bool GridSurfaceQuery::aspectDegAt(double x, double y, double* outDeg) const {
   if (deg < 0.0)
     deg += 360.0;
   *outDeg = deg;
+  return true;
+}
+
+bool SampleSurfaceProfileLine(const ISurfaceQuery& q, double x0, double y0, double x1, double y1, double stepFt,
+                              int maxSamples, std::vector<SurfaceProfileSample>* out) {
+  assert(out != nullptr);
+  assert(maxSamples >= 2);
+  if (out == nullptr)
+    return false;
+  out->clear();
+  if (maxSamples < 2)
+    return false;
+  const double dx = x1 - x0;
+  const double dy = y1 - y0;
+  const double len = std::hypot(dx, dy);
+  if (!std::isfinite(len) || len < 1.0e-9)
+    return false;
+  double step = stepFt;
+  if (!(step > 0.0) || !std::isfinite(step))
+    step = len;
+  int n = static_cast<int>(std::floor(len / step)) + 1;
+  if (n < 2)
+    n = 2;
+  if (n > maxSamples)
+    n = maxSamples;
+  out->reserve(static_cast<size_t>(n));
+  for (int i = 0; i < n; ++i) {
+    const double t = static_cast<double>(i) / static_cast<double>(n - 1);
+    SurfaceProfileSample s;
+    s.station = t * len;
+    s.x = x0 + t * dx;
+    s.y = y0 + t * dy;
+    s.onSurface = q.elevationAt(s.x, s.y, &s.z);
+    if (!s.onSurface)
+      s.z = 0.0;
+    out->push_back(s);
+  }
   return true;
 }

@@ -864,6 +864,7 @@ int main()
     DrawSurfaceManagerWindow(cmd, &cmdLog);
     DrawSurfaceStyleWindow(cmd, &cmdLog);
     DrawVolumeDashboardWindow(cmd, &cmdLog);  // REQ-073 amendment (TASK-095)
+    DrawQuickProfileWindow(cmd, &cmdLog);     // REQ-145
     DrawFeatureLineElevationWindow(cmd, &cmdLog);  // REQ-088
     DrawViewPointsPanel(cmd, cmdLog);
     DrawImportPointsPanel(cmd, cmdLog);
