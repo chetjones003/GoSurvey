@@ -332,7 +332,8 @@ void ApplyCadDarkTheme() {
   style.CellPadding = ImVec2(6, 3);  // the property grid's rows need the air
 
   // -------------------------------------------------------------------------
-  // Palette (REQ-081 revision 3). Derived, not picked — the rules are:
+  // Palette (REQ-081 revision 3, TASK-129: ladder lifted so chrome reads lighter).
+  // Derived, not picked — the rules are:
   //
   //  1. Every neutral is ACHROMATIC (R = G = B). No surface carries a colour
   //     cast, so all chroma in the UI belongs to the accent and to the semantic
@@ -359,31 +360,32 @@ void ApplyCadDarkTheme() {
   // comments are computed, not estimated.
   // -------------------------------------------------------------------------
 
-  // Neutral ladder — achromatic, L* 3.3 / 6.3 / 9.3 / 11.8 / 16.1 / 20.8 / 25.8
-  const ImVec4 seam       = Hex(0x0C0C0C);  // L*  3.3  the gap between panels; darker than any surface
-  const ImVec4 field      = Hex(0x141414);  // L*  6.3  recessed input / property value cell
-  const ImVec4 ground     = Hex(0x1A1A1A);  // L*  9.3  app ground: dockspace, menu bar, status bar
-  const ImVec4 titlebar   = Hex(0x1F1F1F);  // L* 11.8  title bar + tab strip (unselected tabs)
-  const ImVec4 surface    = Hex(0x282828);  // L* 16.1  panel surface — the reference plane
-  const ImVec4 raised     = Hex(0x323232);  // L* 20.8  raised: group header bar, button face
-  const ImVec4 hover      = Hex(0x3D3D3D);  // L* 25.8  hover
+  // Neutral ladder — achromatic, L* 13.2 / 16.1 / 19.4 / 21.7 / 26.2 / 30.6 / 35.7
+  // (revision 3 ladder lifted so chrome is clearly lighter; step sizes held)
+  const ImVec4 seam       = Hex(0x222222);  // L* 13.2  the gap between panels; darker than any surface
+  const ImVec4 field      = Hex(0x282828);  // L* 16.1  recessed input / property value cell
+  const ImVec4 ground     = Hex(0x2F2F2F);  // L* 19.4  app ground: dockspace, menu bar, status bar
+  const ImVec4 titlebar   = Hex(0x343434);  // L* 21.7  title bar + tab strip (unselected tabs)
+  const ImVec4 surface    = Hex(0x3E3E3E);  // L* 26.2  panel surface — the reference plane
+  const ImVec4 raised     = Hex(0x484848);  // L* 30.6  raised: group header bar, button face
+  const ImVec4 hover      = Hex(0x545454);  // L* 35.7  hover
   // Structural distances this buys, in L*:
-  //   panel over ground 6.9 | seam under ground 5.9 | field under panel 9.8
-  //   header over panel 4.7 | panel over tab strip 4.4
-  const ImVec4 fieldHi    = Hex(0x191919);  // field, hovered
-  const ImVec4 fieldOn    = Hex(0x202020);  // field, being edited
-  const ImVec4 rule       = Hex(0x343434);  // table gridline — 5.6 L* over the surface, reads as a rule
+  //   panel over ground 6.8 | seam under ground 6.2 | field under panel 10.1
+  //   header over panel 4.4 | panel over tab strip 4.5
+  const ImVec4 fieldHi    = Hex(0x2B2B2B);  // field, hovered
+  const ImVec4 fieldOn    = Hex(0x333333);  // field, being edited
+  const ImVec4 rule       = Hex(0x4B4B4B);  // table gridline — 5.7 L* over the surface, reads as a rule
   // Boxed / scrolling regions inside a window sit one step BELOW the window, so
   // a scroll box reads as a well cut into the dialog rather than as more dialog.
   // One step down (not two) keeps the recessed fields inside it — which are two
-  // steps down at #141414 — still clearly recessed against it.
-  const ImVec4 inset      = titlebar;       // #1F1F1F, L* 11.8: 4.3 under the surface
+  // steps down at #282828 — still clearly recessed against it.
+  const ImVec4 inset      = titlebar;       // #343434, L* 21.7: 4.5 under the surface
 
-  // Text — measured on the panel surface (#282828)
-  const ImVec4 text       = Hex(0xD7D7D7);  // 10.24:1  AAA
-  const ImVec4 textDim    = Hex(0x9A9A9A);  //  5.24:1  AA. Was #808080 at 3.93:1 — a FAIL, and this
-                                            //  slot carries real secondary content (hints, derived
-                                            //  readouts, command hints), not just disabled items.
+  // Text — measured on the panel surface (#3E3E3E)
+  const ImVec4 text       = Hex(0xD7D7D7);  //  7.43:1  AAA
+  const ImVec4 textDim    = Hex(0xB6B6B6);  //  5.27:1  AA. Lifted with the surface so secondary
+                                            //  content (hints, derived readouts, command hints)
+                                            //  keeps a similar margin above 4.5:1.
 
   // Accent — H 37, one hue at three lightnesses; the only warm family here
   const ImVec4 accentHi   = Hex(0xF0C67C);  //  9.18:1  marks on dark: check marks, tab overline
@@ -421,7 +423,7 @@ void ApplyCadDarkTheme() {
   colors[ImGuiCol_ScrollbarBg]           = ground;
   colors[ImGuiCol_ScrollbarGrab]         = raised;
   colors[ImGuiCol_ScrollbarGrabHovered]  = hover;
-  colors[ImGuiCol_ScrollbarGrabActive]   = Hex(0x4A4A4A);
+  colors[ImGuiCol_ScrollbarGrabActive]   = Hex(0x606060);
   colors[ImGuiCol_CheckMark]             = accentHi;
   colors[ImGuiCol_SliderGrab]            = hover;
   colors[ImGuiCol_SliderGrabActive]      = accent;
@@ -448,7 +450,7 @@ void ApplyCadDarkTheme() {
   colors[ImGuiCol_TextSelectedBg]        = Hex(0xE0AE5E, 0.30f);
   colors[ImGuiCol_NavHighlight]          = accent;
   colors[ImGuiCol_DragDropTarget]        = infoText;
-  colors[ImGuiCol_ModalWindowDimBg]      = Hex(0x0C0C0C, 0.65f);  // the dim is the seam colour, not black
+  colors[ImGuiCol_ModalWindowDimBg]      = Hex(0x222222, 0.65f);  // the dim is the seam colour, not black
   // Tables were never set here, so the property grid drew ImGui's stock blue-gray
   // borders under this theme however dark the rest of the panel got.
   colors[ImGuiCol_TableHeaderBg]         = raised;
@@ -461,28 +463,28 @@ void ApplyCadDarkTheme() {
 
   // Chrome, drawn from the same ladder so the hand-painted parts sit on the
   // same steps as the ImGui-painted parts (that is the whole point of ADR-033).
-  g_chrome.bandFace        = HexU32(0x1F1F1F);  // toolbar band: one step under the panels
-  g_chrome.bandHilite      = HexU32(0x3D3D3D);
-  g_chrome.bandShadow      = HexU32(0x0C0C0C);
-  g_chrome.bandSunken      = HexU32(0x141414);  // pressed reads as a recess, like a field
-  g_chrome.bandRaised      = HexU32(0x323232);  // hover lifts to the group-header step
-  g_chrome.statusBarFace   = HexU32(0x1A1A1A);  // status bar sits on the ground
-  g_chrome.statusStripFace = HexU32(0x1A1A1A);
-  g_chrome.panelFill       = HexU32(0x282828);  // == surface, so empty space is still the panel
-  g_chrome.propValueBg     = HexU32(0x141414);  // == field, so a value cell is a recess
-  g_chrome.headerFaceL     = HexU32(0x323232);  // flat bar: both ends the same
-  g_chrome.headerFaceR     = HexU32(0x323232);
-  g_chrome.headerHoverL    = HexU32(0x3D3D3D);
-  g_chrome.headerHoverR    = HexU32(0x3D3D3D);
+  g_chrome.bandFace        = HexU32(0x343434);  // toolbar band: one step under the panels
+  g_chrome.bandHilite      = HexU32(0x545454);
+  g_chrome.bandShadow      = HexU32(0x222222);
+  g_chrome.bandSunken      = HexU32(0x282828);  // pressed reads as a recess, like a field
+  g_chrome.bandRaised      = HexU32(0x484848);  // hover lifts to the group-header step
+  g_chrome.statusBarFace   = HexU32(0x2F2F2F);  // status bar sits on the ground
+  g_chrome.statusStripFace = HexU32(0x2F2F2F);
+  g_chrome.panelFill       = HexU32(0x3E3E3E);  // == surface, so empty space is still the panel
+  g_chrome.propValueBg     = HexU32(0x282828);  // == field, so a value cell is a recess
+  g_chrome.headerFaceL     = HexU32(0x484848);  // flat bar: both ends the same
+  g_chrome.headerFaceR     = HexU32(0x484848);
+  g_chrome.headerHoverL    = HexU32(0x545454);
+  g_chrome.headerHoverR    = HexU32(0x545454);
   g_chrome.headerText      = HexU32(0xE0E0E0);  // a touch brighter than body text — it is a title
   g_chrome.headerEdgeTop   = HexU32(0x000000, 0);  // no bevel; the bar is flat
-  g_chrome.headerEdgeBot   = HexU32(0x0C0C0C);
+  g_chrome.headerEdgeBot   = HexU32(0x222222);
   g_chrome.headerGlyphBg   = HexU32(0x000000, 0);
   g_chrome.headerGlyphEdge = HexU32(0x000000, 0);
-  g_chrome.headerGlyph     = HexU32(0x9A9A9A);
+  g_chrome.headerGlyph     = HexU32(0xB6B6B6);
   g_chrome.headerBoxGlyph  = false;                // disclosure triangle, at the leading edge
-  g_chrome.popupFace       = HexU32(0x282828);
-  g_chrome.popupBorder     = HexU32(0x0C0C0C);
+  g_chrome.popupFace       = HexU32(0x3E3E3E);
+  g_chrome.popupBorder     = HexU32(0x222222);
   g_chrome.plateHilite     = IM_COL32(255, 255, 255, 20);  // a hint of light, not a visible white line
   g_chrome.plateShadow     = IM_COL32(0, 0, 0, 115);       // fades to 0 over kPlateShadowPx
   g_chrome.windowShadow    = IM_COL32(0, 0, 0, 150);       // innermost ring; fades out over 12px
@@ -8264,7 +8266,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
   const bool isDark = (cmd.displayColorThemeIdx == 0);
   // Console background is slightly distinct from the main workspace in both themes.
   const ImVec4 consoleBg = isDark
-      ? Hex(0x1A1A1A)                         // the ground step — recessed vs the #24282F panel
+      ? Hex(0x2F2F2F)                         // the ground step — recessed vs the panel surface
       : ImVec4(0.235f, 0.235f, 0.235f, 1.f);  // #3C3C3C console panel (recessed vs #464646 band)
   const ImVec4 promptColor = isDark
       ? Hex(0x6CC07A)                         // the palette's success hue, lightened for text: 8.3:1
@@ -8292,7 +8294,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
     return;  // bar hidden; Ctrl+9 (or the View menu) restores it.
 
   const float barRounding = 5.f;
-  const ImVec4 barBg = isDark ? Hex(0x1F1F1F, cmd.cmdBarOpacity)  // the title-bar step
+  const ImVec4 barBg = isDark ? Hex(0x343434, cmd.cmdBarOpacity)  // the title-bar step
                               : ImVec4(0.247f, 0.247f, 0.247f, cmd.cmdBarOpacity);
   ImGuiWindowFlags winFlags = 0;
   if (floating) {
@@ -8461,7 +8463,7 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       ImGui::GetWindowDrawList()->AddLine(ImVec2(gmx - 18.f, gy), ImVec2(gmx + 18.f, gy), gc, 1.4f);
     }
 
-    ImGui::PushStyleColor(ImGuiCol_FrameBg, isDark ? Hex(0x141414, cmd.cmdBarOpacity)  // the field step
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, isDark ? Hex(0x282828, cmd.cmdBarOpacity)  // the field step
                                                    : ImVec4(0.235f, 0.235f, 0.235f, cmd.cmdBarOpacity));
     ImGui::InputTextMultiline("##CmdConsole", cmd.commandLogCacheBytes.data(), cmd.commandLogCacheBytes.size(),
                               ImVec2(-FLT_MIN, consoleH), ImGuiInputTextFlags_ReadOnly);
