@@ -1059,7 +1059,16 @@ bool TinSwapInteriorEdgeNear(const std::vector<float>& vertsXyz, std::vector<std
   std::uint32_t* t1 = &indices[static_cast<size_t>(bestT1) * 3];
   const std::uint32_t b = TriangleOpposite(t0, bestLo, bestHi);
   const std::uint32_t d = TriangleOpposite(t1, bestLo, bestHi);
-  if (b == d || b == bestLo || d == bestHi)
+  if (b == d || b == bestLo || b == bestHi || d == bestLo || d == bestHi)
+    return false;
+  const size_t nVert = vertsXyz.size() / 3;
+  if (b >= nVert || d >= nVert || bestLo >= nVert || bestHi >= nVert)
+    return false;
+  const auto vx = [&](std::uint32_t i) { return static_cast<double>(vertsXyz[static_cast<size_t>(i) * 3]); };
+  const auto vy = [&](std::uint32_t i) { return static_cast<double>(vertsXyz[static_cast<size_t>(i) * 3 + 1]); };
+  const double oLo = TinOrient2D(vx(b), vy(b), vx(d), vy(d), vx(bestLo), vy(bestLo));
+  const double oHi = TinOrient2D(vx(b), vy(b), vx(d), vy(d), vx(bestHi), vy(bestHi));
+  if (oLo * oHi >= 0.0)
     return false;
 
   t0[0] = bestLo;

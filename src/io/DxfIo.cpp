@@ -3560,8 +3560,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
         rec.lineweight370 = dxfEntityLineweight370Str(at);
         rec.hasTransparency = dxfTransparency440Str(EffectiveEntityTransparency01(at, annLyr),
                                                     &rec.transparency440);
-        rec.x = std::to_string(static_cast<double>(cells[ci].x0));
-        rec.y = std::to_string(static_cast<double>(cells[ci].y1) - hWorld);
+        rec.x = std::to_string(worldX(cells[ci].x0));
+        rec.y = std::to_string(worldY(static_cast<float>(static_cast<double>(cells[ci].y1) - hWorld)));
         rec.z = std::to_string(static_cast<double>(an.insZ));
         rec.height = std::to_string(hWorld);
         rec.text = sanitizeDxfText(an.tableCells[ci]);
@@ -3705,8 +3705,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       rec.colorAci = std::to_string(entAci);
       rec.lineweight370 = dxfEntityLineweight370Str(at);
       rec.hasTransparency = dxfTransparency440Str(EffectiveEntityTransparency01(at, tblLyr), &rec.transparency440);
-      rec.x = std::to_string(static_cast<double>(cells[ci].x0));
-      rec.y = std::to_string(static_cast<double>(cells[ci].y1) - hWorld);
+      rec.x = std::to_string(worldX(cells[ci].x0));
+      rec.y = std::to_string(worldY(static_cast<float>(static_cast<double>(cells[ci].y1) - hWorld)));
       rec.z = std::to_string(static_cast<double>(t.insZ));
       rec.height = std::to_string(hWorld);
       rec.text = sanitizeDxfText(t.cells[ci]);

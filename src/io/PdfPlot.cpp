@@ -23,6 +23,7 @@
 #include <fstream>
 #include <filesystem>
 #include <map>
+#include <string>
 #include <unordered_map>
 #include <vector>
 
@@ -68,6 +69,22 @@ bool ClipSeg(float xmin, float ymin, float xmax, float ymax, float& x0, float& y
     return true;
   }
   return false;
+}
+
+void SplitPlainTextLines(const std::string& plain, std::vector<std::string>* lines) {
+  if (!lines)
+    return;
+  lines->clear();
+  std::string ln;
+  for (const char ch : plain) {
+    if (ch == '\n') {
+      lines->push_back(ln);
+      ln.clear();
+    } else {
+      ln += ch;
+    }
+  }
+  lines->push_back(ln);
 }
 
 // Resolve a TrueType family name (REQ-049) to its .ttf file under the Windows Fonts directory, probing the
@@ -422,10 +439,55 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           }
           continue;
         }
+        if (ann.kind == CadAnnotation::Kind::Mtext) {
+          const std::string plain = MtextRichFlattenToPlain(ann.text);
+          std::vector<std::string> lines;
+          SplitPlainTextLines(plain, &lines);
+          const float Hm = CadAnnotationHeightWorld(ann, st.modelUnitsPerPlottedInch);
+          const float lineHm = Hm * 1.4f;
+          int attach = ann.mtextAttach;
+          if (attach < 1 || attach > 9)
+            attach = 1;
+          const int acol = (attach - 1) % 3;
+          const int arow = (attach - 1) / 3;
+          const float boxW = ann.boxMaxX - ann.boxMinX;
+          const float boxH = ann.boxMaxY - ann.boxMinY;
+          const float blockH = static_cast<float>(lines.size()) * lineHm;
+          float blockTopY = ann.boxMaxY;
+          if (arow == 1)
+            blockTopY = ann.boxMinY + 0.5f * (boxH + blockH);
+          else if (arow == 2)
+            blockTopY = ann.boxMinY + blockH;
+          float baseY = blockTopY - Hm;
+          const float Hin =
+              (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
+          const uint32_t rgb = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");
+          for (const std::string& ln : lines) {
+            float x = ann.boxMinX;
+            const float estW = static_cast<float>(ln.size()) * Hm * 0.6f;
+            if (acol == 1)
+              x = ann.boxMinX + 0.5f * (boxW - estW);
+            else if (acol == 2)
+              x = ann.boxMaxX - estW;
+            float lpx = 0.f, lpy = 0.f;
+            m2p(static_cast<double>(x) + oX, static_cast<double>(baseY) + oY, &lpx, &lpy);
+            if (lpx >= vx0 && lpx <= vx1 && lpy >= vy0 && lpy <= vy1 && !ln.empty()) {
+              VpDimLabel lab;
+              lab.px = lpx;
+              lab.py = lpy;
+              lab.rot = ann.rotationRad;
+              lab.Hin = Hin;
+              lab.text = ln;
+              lab.fontFamily = ann.fontFamily;
+              lab.rgb = rgb;
+              vpDimLabels.push_back(std::move(lab));
+            }
+            baseY -= lineHm;
+          }
+          continue;
+        }
         float lpx = 0.f, lpy = 0.f;
-        const float wx = (ann.kind == CadAnnotation::Kind::Mtext) ? 0.5f * (ann.boxMinX + ann.boxMaxX) : ann.insX;
-        const float wy = (ann.kind == CadAnnotation::Kind::Mtext) ? 0.5f * (ann.boxMinY + ann.boxMaxY) : ann.insY;
-        m2p(static_cast<double>(wx) + oX, static_cast<double>(wy) + oY, &lpx, &lpy);
+        m2p(static_cast<double>(ann.insX) + oX, static_cast<double>(ann.insY) + oY, &lpx, &lpy);
         if (lpx < vx0 || lpx > vx1 || lpy < vy0 || lpy > vy1)
           continue;
         VpDimLabel lab;
@@ -433,7 +495,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
         lab.py = lpy;
         lab.rot = ann.rotationRad;
         lab.Hin = (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
-        lab.text = (ann.kind == CadAnnotation::Kind::Mtext) ? MtextRichFlattenToPlain(ann.text) : ann.text;
+        lab.text = ann.text;
         lab.fontFamily = ann.fontFamily;
         lab.rgb = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");
         vpDimLabels.push_back(std::move(lab));
@@ -709,14 +771,7 @@ bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices
           const std::string plain = MtextRichFlattenToPlain(a.text);
           const float lineH = H * 1.4f;
           std::vector<std::string> lines;
-          {
-            std::string ln;
-            for (char ch : plain) {
-              if (ch == '\n') { lines.push_back(ln); ln.clear(); }
-              else ln += ch;
-            }
-            lines.push_back(ln);
-          }
+          SplitPlainTextLines(plain, &lines);
           // Honor MTEXT attachment (group 71) exactly like the on-screen paper overlay: col 0/1/2 =
           // left/center/right, row 0/1/2 = top/middle/bottom. Without this, center/middle title-block values
           // (e.g. "DRY COOLER") plot at the box's top-left and collide with their labels.

@@ -94,6 +94,14 @@ TEST_CASE("Interior edge swap changes two triangles", "[req139][swap]") {
   REQUIRE(miss == a);
 }
 
+TEST_CASE("Interior edge swap is refused when the new diagonal is not inside the quad", "[req139][swap]") {
+  std::vector<float> verts{0.f, 0.f, 0.f, 5.f, 0.f, 0.f, 1.f, 1.f, 0.f, 0.f, 5.f, 0.f};
+  std::vector<std::uint32_t> idx{0, 1, 2, 0, 2, 3};
+  const auto original = idx;
+  REQUIRE_FALSE(TinSwapInteriorEdgeNear(verts, idx, 0.5, 0.5));
+  REQUIRE(idx == original);
+}
+
 TEST_CASE("Deleting an interior edge removes both triangles", "[req150][tin]") {
   std::vector<float> verts{0, 0, 0, 10, 0, 0, 10, 10, 0, 0, 10, 0};
   std::vector<std::uint32_t> idx{0, 1, 2, 0, 2, 3};

@@ -301,14 +301,13 @@ void DrawAnalysisTab(AppCommandState& cmd, int si, CadSurface& s, std::vector<st
     ImGui::SetNextItemWidth(comboW("Slope angle"));
     if (ImGui::Combo("##spatype", &modeIdx, kModes, 5)) {
       DetachSurfaceStyleIfShared(cmd, static_cast<size_t>(si), log);
-      st = SurfaceStyles::Find(cmd.surfaceStyles, cmd.cadSurfaces[static_cast<size_t>(si)].styleName);
-      if (st == nullptr) {
-        ImGui::EndTable();
-        return;
+      SurfaceStyle* found = SurfaceStyles::Find(cmd.surfaceStyles, cmd.cadSurfaces[static_cast<size_t>(si)].styleName);
+      if (found != nullptr) {
+        st = found;
+        PushUndoSnapshot(cmd, "Surface analysis");
+        st->analysisMode = static_cast<SurfaceAnalysisMode>(modeIdx);
+        BumpCadGpuCache(cmd);
       }
-      PushUndoSnapshot(cmd, "Surface analysis");
-      st->analysisMode = static_cast<SurfaceAnalysisMode>(modeIdx);
-      BumpCadGpuCache(cmd);
     }
 
     ImGui::Spacing();
@@ -343,8 +342,9 @@ void DrawAnalysisTab(AppCommandState& cmd, int si, CadSurface& s, std::vector<st
 
     if (ImGui::Button("Run", ImVec2(88.f, 0.f))) {
       DetachSurfaceStyleIfShared(cmd, static_cast<size_t>(si), log);
-      st = SurfaceStyles::Find(cmd.surfaceStyles, cmd.cadSurfaces[static_cast<size_t>(si)].styleName);
-      if (st != nullptr) {
+      SurfaceStyle* found = SurfaceStyles::Find(cmd.surfaceStyles, cmd.cadSurfaces[static_cast<size_t>(si)].styleName);
+      if (found != nullptr) {
+        st = found;
         PushUndoSnapshot(cmd, "Surface analysis ranges");
         FillElevationBands(st, s, rangeCount);
         BumpCadGpuCache(cmd);
@@ -366,7 +366,7 @@ void DrawAnalysisTab(AppCommandState& cmd, int si, CadSurface& s, std::vector<st
 
   ImGui::Spacing();
   ImGui::SeparatorText("Range Details");
-  if (ImGui::BeginTable("##spbands", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
+  if (st != nullptr && ImGui::BeginTable("##spbands", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY,
                         ImVec2(0.f, 160.f))) {
     ImGui::TableSetupColumn("ID", ImGuiTableColumnFlags_WidthFixed, 48.f);
     ImGui::TableSetupColumn("Upper bound", ImGuiTableColumnFlags_WidthStretch);

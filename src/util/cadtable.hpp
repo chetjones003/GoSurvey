@@ -15,9 +15,12 @@ struct CadTableCellRect {
 };
 
 /// Model-space TABLE. Local origin is the unrotated top-left (\ref insX, \ref insY). Local +X is
-/// along the top edge; local +Y-down is toward the bottom edge. World:
+/// along the top edge; local +Y-down is toward the bottom edge. World (when \ref localYFlipped is
+/// false):
 ///   wx = insX + lx * cos(r) + lyDown * sin(r)
 ///   wy = insY + lx * sin(r) - lyDown * cos(r)
+/// When \ref localYFlipped is true the \c lyDown terms are negated so the body lies on the opposite
+/// side of the top edge (needed after an odd number of reflections).
 struct CadTable {
   float insX = 0.f;
   float insY = 0.f;
@@ -25,6 +28,7 @@ struct CadTable {
   float width = 48.f;
   float height = 4.f;
   float rotationRad = 0.f;
+  bool localYFlipped = false;
   int cols = 2;
   std::vector<std::string> cells;
   float plottedHeightInches = 0.125f;
@@ -51,8 +55,9 @@ inline void CadTableLocalToWorld(const CadTable& t, float lx, float lyDown, floa
     return;
   const float c = std::cos(t.rotationRad);
   const float s = std::sin(t.rotationRad);
-  *wx = t.insX + lx * c + lyDown * s;
-  *wy = t.insY + lx * s - lyDown * c;
+  const float ly = t.localYFlipped ? -lyDown : lyDown;
+  *wx = t.insX + lx * c + ly * s;
+  *wy = t.insY + lx * s - ly * c;
 }
 
 inline void CadTableWorldToLocal(const CadTable& t, float wx, float wy, float* lx, float* lyDown) {
@@ -63,7 +68,8 @@ inline void CadTableWorldToLocal(const CadTable& t, float wx, float wy, float* l
   const float c = std::cos(t.rotationRad);
   const float s = std::sin(t.rotationRad);
   *lx = dx * c + dy * s;
-  *lyDown = dx * s - dy * c;
+  const float ly = dx * s - dy * c;
+  *lyDown = t.localYFlipped ? -ly : ly;
 }
 
 /// Corners in world: 0 = top-left, 1 = top-right, 2 = bottom-right, 3 = bottom-left.
@@ -322,4 +328,5 @@ inline void CadTableReflectAcrossLine(CadTable* t, float ax, float ay, float bx,
   t->width = std::max(std::hypot(trx - tlx, try_ - tly), 1.e-3f);
   t->height = std::max(std::hypot(blx - tlx, bly - tly), 1.e-3f);
   t->rotationRad = std::atan2(try_ - tly, trx - tlx);
+  t->localYFlipped = !t->localYFlipped;
 }

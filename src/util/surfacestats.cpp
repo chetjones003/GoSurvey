@@ -15,6 +15,58 @@ constexpr double kPi = 3.14159265358979323846;
     return 90.0;
   return std::atan(pct / 100.0) * 180.0 / kPi;
 }
+
+struct DiffVert {
+  double x = 0.0;
+  double y = 0.0;
+  double z = 0.0;
+};
+
+void AddDifferencePrism(const DiffVert& a, const DiffVert& b, const DiffVert& c, SurfaceStats* s) {
+  if (!s)
+    return;
+  const double ux = b.x - a.x, uy = b.y - a.y;
+  const double vx = c.x - a.x, vy = c.y - a.y;
+  const double area2 = 0.5 * std::abs(ux * vy - uy * vx);
+  if (area2 <= 0.0)
+    return;
+  const double cz = (a.z + b.z + c.z) / 3.0;
+  if (cz < 0.0)
+    s->volumeCutFt3 += -cz * area2;
+  else
+    s->volumeFillFt3 += cz * area2;
+}
+
+DiffVert LerpAtZ0(const DiffVert& a, const DiffVert& b) {
+  const double dz = b.z - a.z;
+  const double t = (std::abs(dz) < 1.0e-18) ? 0.5 : std::clamp(-a.z / dz, 0.0, 1.0);
+  DiffVert p;
+  p.x = a.x + t * (b.x - a.x);
+  p.y = a.y + t * (b.y - a.y);
+  p.z = 0.0;
+  return p;
+}
+
+void AccumulateClippedDifference(const DiffVert p[3], bool wantFill, SurfaceStats* s) {
+  DiffVert out[8];
+  int n = 0;
+  for (int i = 0; i < 3; ++i) {
+    const DiffVert& a = p[i];
+    const DiffVert& b = p[(i + 1) % 3];
+    const bool ain = wantFill ? (a.z >= 0.0) : (a.z <= 0.0);
+    const bool bin = wantFill ? (b.z >= 0.0) : (b.z <= 0.0);
+    if (ain) {
+      out[n] = a;
+      ++n;
+    }
+    if (ain != bin && n < 8) {
+      out[n] = LerpAtZ0(a, b);
+      ++n;
+    }
+  }
+  for (int i = 1; i + 1 < n; ++i)
+    AddDifferencePrism(out[0], out[i], out[i + 1], s);
+}
 }  // namespace
 
 SurfaceStats ComputeSurfaceStats(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
@@ -91,11 +143,13 @@ SurfaceStats ComputeSurfaceStats(const std::vector<float>& vertsXyz, const std::
     s.area3d += 0.5 * std::sqrt(nx * nx + ny * ny + nz * nz);
 
     if (zIsDifference && area2 > 0.0) {
-      const double cz = (tri.z0 + tri.z1 + tri.z2) / 3.0;
-      if (cz < 0.0)
-        s.volumeCutFt3 += -cz * area2;
-      else
-        s.volumeFillFt3 += cz * area2;
+      const DiffVert p[3] = {
+          {tri.x0, tri.y0, tri.z0},
+          {tri.x1, tri.y1, tri.z1},
+          {tri.x2, tri.y2, tri.z2},
+      };
+      AccumulateClippedDifference(p, false, &s);
+      AccumulateClippedDifference(p, true, &s);
     }
 
     const double grade = TrianglePlaneSlopePct(tri);

@@ -506,9 +506,10 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
         s.analysisMode = static_cast<SurfaceAnalysisMode>(modeIdx);
         changed = true;
       }
-      ItemHelpTooltip("Colours every triangle by its elevation or its slope, driven by the range "
-                      "table below. A triangle takes ONE colour — its centroid elevation, or its "
-                      "plane's grade — never a gradient across it.");
+      ItemHelpTooltip("Colours every triangle by None, Elevation (ft), Slope (%), Direction (deg), "
+                      "or Slope angle (deg), driven by the range table below. A triangle takes ONE "
+                      "colour — its centroid elevation, or its plane's grade or aspect — never a "
+                      "gradient across it.");
       if (s.analysisMode != SurfaceAnalysisMode::None) {
         ImGui::Spacing();
         const char* boundLabel =

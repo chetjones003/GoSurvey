@@ -156,6 +156,8 @@ inline void CadTableToJson(const CadTable& t, nlohmann::json& o) {
   o["width"] = t.width;
   o["height"] = t.height;
   o["rotationRad"] = t.rotationRad;
+  if (t.localYFlipped)
+    o["localYFlipped"] = true;
   o["cols"] = t.cols;
   o["cells"] = t.cells;
   o["plottedHeightInches"] = t.plottedHeightInches;
@@ -171,6 +173,7 @@ inline void CadTableToJson(const CadTable& t, nlohmann::json& o) {
   t.width = o.value("width", t.width);
   t.height = o.value("height", t.height);
   t.rotationRad = o.value("rotationRad", t.rotationRad);
+  t.localYFlipped = o.value("localYFlipped", t.localYFlipped);
   t.cols = o.value("cols", t.cols);
   if (o.contains("cells") && o["cells"].is_array())
     t.cells = o["cells"].get<std::vector<std::string>>();

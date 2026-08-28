@@ -24,13 +24,13 @@ struct SurfaceStats {
   double minSlopeDeg = 0.0;
   double maxSlopeDeg = 0.0;
   double meanSlopeDeg = 0.0;
-  double volumeCutFt3 = 0.0;   ///< Positive volume where centroid Z is negative (REQ-140 volume TIN).
-  double volumeFillFt3 = 0.0;  ///< Positive volume where centroid Z is positive.
+  double volumeCutFt3 = 0.0;   ///< Positive cut volume where difference Z is below 0 (REQ-140).
+  double volumeFillFt3 = 0.0;  ///< Positive fill volume where difference Z is above 0.
 };
 
 /// Returns zeros and \c built false when \p indices is empty or \p vertsXyz is too short.
-/// \p breaklineEdgeCount is reported unchanged. When \p zIsDifference, centroid Z × plan area
-/// accumulates cut (negative Z) and fill (positive Z).
+/// \p breaklineEdgeCount is reported unchanged. When \p zIsDifference, each triangle is clipped at
+/// Z = 0 so mixed-sign faces contribute cut and fill separately (same idea as REQ-147 sample volumes).
 [[nodiscard]] SurfaceStats ComputeSurfaceStats(const std::vector<float>& vertsXyz,
                                                const std::vector<std::uint32_t>& indices,
                                                int breaklineEdgeCount = 0, bool zIsDifference = false);

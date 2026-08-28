@@ -44,6 +44,31 @@ TEST_CASE("TABLE entity JSON round-trips cells and insertion", "[req148][table][
   CHECK(b.rotationRad == 0.25f);
 }
 
+TEST_CASE("TABLE JSON round-trips localYFlipped when set", "[req148][table][gs]") {
+  CadTable t;
+  t.localYFlipped = true;
+  nlohmann::json o;
+  CadTableToJson(t, o);
+  REQUIRE(o.contains("localYFlipped"));
+  const CadTable b = CadTableFromJson(o);
+  CHECK(b.localYFlipped);
+}
+
+TEST_CASE("MIRROR of an unrotated TABLE across its top edge keeps the body on the reflected side",
+          "[req148][table]") {
+  CadTable t;
+  t.insX = 0.f;
+  t.insY = 10.f;
+  t.width = 8.f;
+  t.height = 4.f;
+  t.rotationRad = 0.f;
+  CadTableReflectAcrossLine(&t, -1.f, 10.f, 9.f, 10.f);
+  float bx = 0.f, by = 0.f;
+  CadTableLocalToWorld(t, 0.f, 4.f, &bx, &by);
+  CHECK(by > 10.f);
+  CHECK(t.localYFlipped);
+}
+
 TEST_CASE("MOVE of a TABLE changes its insertion", "[req148][table]") {
   CadTable t;
   t.insX = 10.f;

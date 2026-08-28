@@ -47,3 +47,21 @@ TEST_CASE("A 10% grade triangle reports that grade", "[surface][req125][stats]")
   CHECK(s.maxSlopePct == Approx(10.0));
   CHECK(s.meanSlopePct == Approx(10.0));
 }
+
+TEST_CASE("A mixed-sign volume triangle reports both cut and fill", "[surface][req140][stats]") {
+  const std::vector<float> verts{0.f, 0.f, -1.f, 10.f, 0.f, 1.f, 0.f, 10.f, 1.f};
+  const std::vector<std::uint32_t> idx{0, 1, 2};
+  const SurfaceStats s = ComputeSurfaceStats(verts, idx, 0, true);
+  REQUIRE(s.built);
+  CHECK(s.volumeCutFt3 > 0.0);
+  CHECK(s.volumeFillFt3 > 0.0);
+}
+
+TEST_CASE("An all-positive volume triangle is fill only", "[surface][req140][stats]") {
+  const std::vector<float> verts{0.f, 0.f, 1.f, 10.f, 0.f, 1.f, 0.f, 10.f, 1.f};
+  const std::vector<std::uint32_t> idx{0, 1, 2};
+  const SurfaceStats s = ComputeSurfaceStats(verts, idx, 0, true);
+  REQUIRE(s.built);
+  CHECK(s.volumeCutFt3 == Approx(0.0));
+  CHECK(s.volumeFillFt3 == Approx(50.0));
+}
