@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <cmath>
@@ -93,6 +94,15 @@ inline DimensionStyle Default() {
   DimensionStyle s;
   s.name = "Standard";
   return s;
+}
+
+/// Copy the active style's text face and plotted height onto a dimension annotation (DIMSTY Apply).
+inline void BakeTextOntoDimension(CadAnnotation& a, const DimensionStyle& sty) {
+  if (a.kind != CadAnnotation::Kind::DimAligned && a.kind != CadAnnotation::Kind::DimLinear &&
+      a.kind != CadAnnotation::Kind::DimAngular)
+    return;
+  a.fontFamily = sty.textFont;
+  a.plottedHeightInches = std::max(sty.textSizeInches, 1.e-6f);
 }
 
 // Format a linear measurement according to the style's units (scale + precision + format).

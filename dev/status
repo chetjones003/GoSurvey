@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# dev/status — concise repository state for an AI coding agent.
+# Uses native Linux git (no Windows tooling involved).
+source "$(dirname "$0")/_common.sh"
+
+cd "$REPO_ROOT"
+
+echo "repo root      : $REPO_ROOT"
+echo "repo root (win): $REPO_ROOT_WIN"
+echo "shell env      : $DEV_ENV"
+echo "branch         : $(git rev-parse --abbrev-ref HEAD)"
+upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+[ -n "$upstream" ] && echo "upstream       : $upstream ($(git rev-list --left-right --count "$upstream"...HEAD 2>/dev/null | awk '{print $2" ahead, "$1" behind"}'))"
+echo "last commit    : $(git log -1 --pretty='%h %s (%cr)')"
+echo
+
+changed=$(git status --porcelain)
+if [ -z "$changed" ]; then
+  echo "working tree   : clean"
+else
+  echo "working tree   : dirty"
+  echo
+  echo "modified / staged:"
+  git -c color.status=always status --short --branch | sed 's/^/  /'
+fi
+
+echo
+echo "build tree     : $( [ -f "$REPO_ROOT/build/CMakeCache.txt" ] && echo "configured ($REPO_ROOT/build)" || echo "not configured — run ./dev/build" )"

@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# dev/clean — remove CMake build trees.
+#
+# GoSurvey has no dedicated clean script; the canonical clean is deleting the
+# build directory (see .gitignore: /build/, /build-debug/, /build-release/).
+# build.bat re-configures automatically when build/CMakeCache.txt is absent.
+#
+#   ./dev/clean            # remove build/ (release tree, includes build/debug)
+#   ./dev/clean --all      # also remove build-debug/ build-release/ out/
+source "$(dirname "$0")/_common.sh"
+
+targets=("build")
+if [ "${1:-}" = "--all" ]; then
+  targets+=("build-debug" "build-release" "out")
+fi
+
+for t in "${targets[@]}"; do
+  d="$REPO_ROOT/$t"
+  if [ -e "$d" ]; then
+    info "removing $t/"
+    rm -rf "$d"
+  else
+    info "$t/ already absent"
+  fi
+done
+info "clean complete"

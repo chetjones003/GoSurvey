@@ -3473,65 +3473,6 @@ static void CommitPolylineDraft(AppCommandState& st, bool closed, std::vector<st
 
 namespace {
 
-constexpr float kPiAngF = 3.14159265358979323846f;
-
-static float CadAngNormalizeMinusPiToPi(float a) {
-  while (a > kPiAngF)
-    a -= 2.f * kPiAngF;
-  while (a < -kPiAngF)
-    a += 2.f * kPiAngF;
-  return a;
-}
-
-} // namespace
-
-bool CadDimAngularComputeFrame(const CadAnnotation& a, float* a1Out, float* a2Out, float* sweepOut, float* bisx,
-                                      float* bisy, float* thetaInterior) {
-  if (a.kind != CadAnnotation::Kind::DimAngular)
-    return false;
-  const float vx = a.dimAngVertexX, vy = a.dimAngVertexY;
-  const float p1x = a.dimExt1X, p1y = a.dimExt1Y, p2x = a.dimExt2X, p2y = a.dimExt2Y;
-  const float u1x = p1x - vx, u1y = p1y - vy;
-  const float u2x = p2x - vx, u2y = p2y - vy;
-  const float l1 = std::hypot(u1x, u1y);
-  const float l2 = std::hypot(u2x, u2y);
-  if (l1 < 1.e-8f || l2 < 1.e-8f)
-    return false;
-  const float n1x = u1x / l1, n1y = u1y / l1;
-  const float n2x = u2x / l2, n2y = u2y / l2;
-  const float dot = n1x * n2x + n1y * n2y;
-  const float a1 = std::atan2(n1y, n1x);
-  const float a2 = std::atan2(n2y, n2x);
-  const float sweep = CadAngNormalizeMinusPiToPi(a2 - a1);
-  const float theta = std::acos(std::clamp(dot, -1.f, 1.f));
-  float bx = n1x + n2x;
-  float by = n1y + n2y;
-  const float bl = std::hypot(bx, by);
-  if (bl > 1.e-6f) {
-    bx /= bl;
-    by /= bl;
-  } else {
-    bx = -n1y;
-    by = n1x;
-  }
-  const float mid = a1 + 0.5f * sweep;
-  const float mdx = std::cos(mid);
-  const float mdy = std::sin(mid);
-  if (bx * mdx + by * mdy < 0.f) {
-    bx = -bx;
-    by = -by;
-  }
-  *a1Out = a1;
-  *a2Out = a2;
-  *sweepOut = sweep;
-  *bisx = bx;
-  *bisy = by;
-  *thetaInterior = theta;
-  return theta > 1.e-7f;
-}
-
-namespace {
-
 static float CadDimAngularPickRadius(float vx, float vy, float bisx, float bisy, float pickx, float picky, float rMin,
                                      float rMax) {
   const float wx = pickx - vx;
@@ -3579,87 +3520,6 @@ bool ComputeCircumcircle(float ax, float ay, float bx, float by, float cx, float
   *oy = static_cast<float>(uy);
   *r = static_cast<float>(std::sqrt(dx * dx + dy * dy));
   return true;
-}
-
-bool CadDimAlignedGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx,
-                           float* ty, float* nx, float* ny, float* measLen) {
-  if (a.kind != CadAnnotation::Kind::DimAligned)
-    return false;
-  const float x1 = a.dimExt1X, y1 = a.dimExt1Y, x2 = a.dimExt2X, y2 = a.dimExt2Y;
-  float vx = x2 - x1;
-  float vy = y2 - y1;
-  const float len = std::hypot(vx, vy);
-  if (len < 1.e-8f)
-    return false;
-  vx /= len;
-  vy /= len;
-  const float n0x = -vy;
-  const float n0y = vx;
-  const float cmx = 0.5f * (x1 + x2);
-  const float cmy = 0.5f * (y1 + y2);
-  const float dmx = cmx + n0x * a.dimSignedOffset;
-  const float dmy = cmy + n0y * a.dimSignedOffset;
-  // Feet on the dimension line (parallel to chord through dmx,dmy): perpendicular from each extension point.
-  const float t1 = (x1 - dmx) * vx + (y1 - dmy) * vy;
-  const float t2 = (x2 - dmx) * vx + (y2 - dmy) * vy;
-  *sx1 = dmx + vx * t1;
-  *sy1 = dmy + vy * t1;
-  *sx2 = dmx + vx * t2;
-  *sy2 = dmy + vy * t2;
-  *tx = vx;
-  *ty = vy;
-  *nx = n0x;
-  *ny = n0y;
-  *measLen = len;
-  return true;
-}
-
-bool CadDimLinearGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx,
-                          float* ty, float* nx, float* ny, float* measLen) {
-  if (a.kind != CadAnnotation::Kind::DimLinear)
-    return false;
-  const float x1 = a.dimExt1X, y1 = a.dimExt1Y, x2 = a.dimExt2X, y2 = a.dimExt2Y;
-  const float cmx = 0.5f * (x1 + x2);
-  const float cmy = 0.5f * (y1 + y2);
-  if (!a.dimLinearVertical) {
-    const float span = std::fabs(x2 - x1);
-    if (span < 1.e-8f)
-      return false;
-    const float dmy = cmy + a.dimSignedOffset;
-    *sx1 = x1;
-    *sy1 = dmy;
-    *sx2 = x2;
-    *sy2 = dmy;
-    *tx = (x2 >= x1) ? 1.f : -1.f;
-    *ty = 0.f;
-    *nx = 0.f;
-    *ny = 1.f;
-    *measLen = span;
-  } else {
-    const float span = std::fabs(y2 - y1);
-    if (span < 1.e-8f)
-      return false;
-    const float dmx = cmx + a.dimSignedOffset;
-    *sx1 = dmx;
-    *sy1 = y1;
-    *sx2 = dmx;
-    *sy2 = y2;
-    *tx = 0.f;
-    *ty = (y2 >= y1) ? 1.f : -1.f;
-    *nx = 1.f;
-    *ny = 0.f;
-    *measLen = span;
-  }
-  return true;
-}
-
-bool CadDimAnyGeometry(const CadAnnotation& a, float* sx1, float* sy1, float* sx2, float* sy2, float* tx, float* ty,
-                       float* nx, float* ny, float* measLen) {
-  if (a.kind == CadAnnotation::Kind::DimAligned)
-    return CadDimAlignedGeometry(a, sx1, sy1, sx2, sy2, tx, ty, nx, ny, measLen);
-  if (a.kind == CadAnnotation::Kind::DimLinear)
-    return CadDimLinearGeometry(a, sx1, sy1, sx2, sy2, tx, ty, nx, ny, measLen);
-  return false;
 }
 
 /// Place measurement text on the far side of the dimension line from the measured chord (CAD "above" the dim line).
@@ -14359,16 +14219,26 @@ bool ComputeWorldExtents(const AppCommandState& st, double* outMnX, double* outM
     if (EntityHiddenInViewport(vpFilter, st.userEllAttrs, elIx))
       continue;
     const CadEllipse& el = st.userEllipses[elIx];
-    const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    // Quantize through the DXF text grid so this sweep agrees with the header sweep in
+    // DxfIo.cpp (issue #113). Without it a `ratio` like 0.3333333 loses ~3e-7 on write and
+    // moves the extents by ~1e-5; the header then describes a different drawing than the
+    // entity records, and the rebase on import shifts every coordinate by a float spacing.
+    const float qMajVx =
+        static_cast<float>(std::stod(std::to_string(static_cast<double>(el.majVx))));
+    const float qMajVy =
+        static_cast<float>(std::stod(std::to_string(static_cast<double>(el.majVy))));
+    const float qRatio =
+        static_cast<float>(std::stod(std::to_string(static_cast<double>(el.ratio))));
+    const double ma = std::hypot(static_cast<double>(qMajVx), static_cast<double>(qMajVy));
     if (ma < 1e-12)
       continue;
     constexpr int n = 48;
     constexpr double kTwoPi = 6.283185307179586;
-    const double ux = static_cast<double>(el.majVx) / ma;
-    const double uy = static_cast<double>(el.majVy) / ma;
+    const double ux = static_cast<double>(qMajVx) / ma;
+    const double uy = static_cast<double>(qMajVy) / ma;
     const double px = -uy;
     const double py = ux;
-    const double mb = ma * static_cast<double>(el.ratio);
+    const double mb = ma * static_cast<double>(qRatio);
     const double ecx = static_cast<double>(el.cx);
     const double ecy = static_cast<double>(el.cy);
     for (int i = 0; i < n; ++i) {

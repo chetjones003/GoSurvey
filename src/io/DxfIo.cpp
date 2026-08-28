@@ -110,6 +110,33 @@ DxfArcAsWritten DxfArcToWrite(const CadArc& arc) {
   return w;
 }
 
+/// The ellipse a DXF file can actually state, for an ellipse GoSurvey holds in memory.
+///
+/// `CadEllipse` holds `majVx`, `majVy`, and `ratio` as `float`. A DXF ELLIPSE states the
+/// major-axis vector (groups 11/21) and the ratio (group 40) at six decimals. Both lose
+/// information, so the ellipse that comes back from a round trip is not always the one that went
+/// out. Sweeping the header extents from the in-memory ellipse while the entity record describes
+/// the post-round-trip one describes two drawings in one file (issue #113, same shape #111 fixed
+/// for arcs and TASK-083 fixed for polylines). This is the one answer: the quantized values the
+/// file actually states and the reader reconstructs.
+inline float DxfQuantizeFloat(float v) {
+  return static_cast<float>(std::stod(std::to_string(static_cast<double>(v))));
+}
+
+struct DxfEllipseAsWritten {
+  float majVx = 0.f;
+  float majVy = 0.f;
+  float ratio = 0.f;
+};
+
+DxfEllipseAsWritten DxfEllipseToWrite(const CadEllipse& el) {
+  DxfEllipseAsWritten w{};
+  w.majVx = DxfQuantizeFloat(el.majVx);
+  w.majVy = DxfQuantizeFloat(el.majVy);
+  w.ratio = DxfQuantizeFloat(el.ratio);
+  return w;
+}
+
 std::string Trim(const std::string& s) {
   size_t a = 0;
   while (a < s.size() && std::isspace(static_cast<unsigned char>(s[a])))
@@ -2479,16 +2506,20 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     accExtZ(static_cast<double>(a.z));
   }
   for (const CadEllipse& el : st.userEllipses) {
-    const double ma = std::hypot(static_cast<double>(el.majVx), static_cast<double>(el.majVy));
+    // Swept from the ellipse THIS FILE STATES — `DxfEllipseToWrite` is the single answer to
+    // which that is (issue #113). The in-memory `ratio`/`majV` do not survive six decimals,
+    // so a header swept from them describes a drawing the entity records below do not contain.
+    const DxfEllipseAsWritten ew = DxfEllipseToWrite(el);
+    const double ma = std::hypot(static_cast<double>(ew.majVx), static_cast<double>(ew.majVy));
     if (ma < 1e-12)
       continue;
     constexpr int n = 48;
     constexpr double kTwoPi = 6.283185307179586;
-    const double ux = static_cast<double>(el.majVx) / ma;
-    const double uy = static_cast<double>(el.majVy) / ma;
+    const double ux = static_cast<double>(ew.majVx) / ma;
+    const double uy = static_cast<double>(ew.majVy) / ma;
     const double px = -uy;
     const double py = ux;
-    const double mb = ma * static_cast<double>(el.ratio);
+    const double mb = ma * static_cast<double>(ew.ratio);
     const double ecx = static_cast<double>(el.cx);
     const double ecy = static_cast<double>(el.cy);
     for (int i = 0; i < n; ++i) {
@@ -3344,16 +3375,19 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     emitPair(0, "ELLIPSE");
     emitEntityHeader(hb, layer8, at, entAci, lyr);
     emitPair(100, "AcDbEllipse");
+    // The one answer to what ellipse this file states — the same one the header extents
+    // above were swept from (issue #113).
+    const DxfEllipseAsWritten ewEmit = DxfEllipseToWrite(el);
     emitPair(10, std::to_string(worldX(el.cx)));
     emitPair(20, std::to_string(worldY(el.cy)));
     emitPair(30, std::to_string(static_cast<double>(el.z)));  // elevation (REQ-057), absolute
-    emitPair(11, std::to_string(static_cast<double>(el.majVx)));
-    emitPair(21, std::to_string(static_cast<double>(el.majVy)));
+    emitPair(11, std::to_string(static_cast<double>(ewEmit.majVx)));
+    emitPair(21, std::to_string(static_cast<double>(ewEmit.majVy)));
     emitPair(31, "0.0");
     emitPair(210, "0.0");
     emitPair(220, "0.0");
     emitPair(230, "1.0");
-    emitPair(40, std::to_string(static_cast<double>(el.ratio)));
+    emitPair(40, std::to_string(static_cast<double>(ewEmit.ratio)));
     emitPair(41, "0.0");
     emitPair(42, std::to_string(2.0 * kPi));
   }

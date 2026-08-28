@@ -6,6 +6,8 @@
 #include "MtextRichFormat.hpp"   // MtextRichFlattenToPlain (already used by DxfIo)
 #include "ColorContrast.hpp"     // background-adaptive white/black (REQ-048 refinement)
 #include "PlotFont.hpp"          // pure font-name/encoding helpers for TTF plot text (REQ-049)
+#include "CadFontName.hpp"
+#include "CadDimStroke.hpp"
 
 #include <cctype>
 
@@ -171,6 +173,14 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
       segsByColor[curColor].push_back({ax, ay, bx, by});
     };
 
+    struct VpDimLabel {
+      float px = 0.f, py = 0.f, rot = 0.f, Hin = 0.1f;
+      std::string text;
+      std::string fontFamily;
+      uint32_t rgb = 0;
+    };
+    std::vector<VpDimLabel> vpDimLabels;
+
     for (const Viewport& vp : L.viewports) {
       // Per-viewport layer color override → packed 0xRRGGBB (0 = no override → black).
       // REQ-046/048: plot stroke color as packed 0xRRGGBB. A per-viewport VP Color override wins;
@@ -294,6 +304,71 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
         float cx2 = pcx, cy2 = pcy - hc, dx2 = pcx, dy2 = pcy + hc;
         if (ClipSeg(vx0, vy0, vx1, vy1, cx2, cy2, dx2, dy2))
           addSeg(cx2, cy2, dx2, dy2);
+      }
+      CadDimStrokeParams dsp;
+      dsp.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;
+      dsp.arrowSizeInches = st.activeDimensionStyle.arrowSizeInches;
+      dsp.arrowScale = 1.f;
+      dsp.arrowType = st.activeDimensionStyle.arrowType;
+      for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
+        const CadAnnotation& ann = st.cadAnnotations[ai];
+        if (!CadAnnotationIsDimension(ann))
+          continue;
+        const EntityAttributes* aa =
+            (ai < st.cadAnnotationAttrs.size()) ? &st.cadAnnotationAttrs[ai] : nullptr;
+        const std::string layer = aa ? (aa->layer.empty() ? std::string("0") : aa->layer) : std::string("0");
+        if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
+          continue;
+        curColor = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");
+        CadDimWorldStrokes strokes;
+        if (!CadDimBuildWorldStrokes(ann, dsp, &strokes))
+          continue;
+        for (const CadDimWorldSeg& seg : strokes.segs) {
+          float p0x = 0.f, p0y = 0.f, p1x = 0.f, p1y = 0.f;
+          m2p(static_cast<double>(seg.x0) + oX, static_cast<double>(seg.y0) + oY, &p0x, &p0y);
+          m2p(static_cast<double>(seg.x1) + oX, static_cast<double>(seg.y1) + oY, &p1x, &p1y);
+          if (ClipSeg(vx0, vy0, vx1, vy1, p0x, p0y, p1x, p1y))
+            addSeg(p0x, p0y, p1x, p1y);
+        }
+        float lpx = 0.f, lpy = 0.f;
+        m2p(static_cast<double>(strokes.labelX) + oX, static_cast<double>(strokes.labelY) + oY, &lpx, &lpy);
+        if (lpx >= vx0 && lpx <= vx1 && lpy >= vy0 && lpy <= vy1 && !ann.text.empty()) {
+          VpDimLabel lab;
+          lab.px = lpx;
+          lab.py = lpy;
+          lab.rot = strokes.labelRotRad;
+          lab.Hin = (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
+          lab.text = ann.text;
+          lab.fontFamily = ann.fontFamily;
+          lab.rgb = curColor;
+          vpDimLabels.push_back(std::move(lab));
+        }
+      }
+      for (size_t ai = 0; ai < st.cadAnnotations.size(); ++ai) {
+        const CadAnnotation& ann = st.cadAnnotations[ai];
+        if (CadAnnotationIsDimension(ann) || (ann.kind != CadAnnotation::Kind::Text && ann.kind != CadAnnotation::Kind::Mtext) ||
+            ann.text.empty())
+          continue;
+        const EntityAttributes* aa =
+            (ai < st.cadAnnotationAttrs.size()) ? &st.cadAnnotationAttrs[ai] : nullptr;
+        const std::string layer = aa ? (aa->layer.empty() ? std::string("0") : aa->layer) : std::string("0");
+        if (!plottable(layer) || IsLayerFrozenInViewport(vp, layer))
+          continue;
+        float lpx = 0.f, lpy = 0.f;
+        const float wx = (ann.kind == CadAnnotation::Kind::Mtext) ? 0.5f * (ann.boxMinX + ann.boxMaxX) : ann.insX;
+        const float wy = (ann.kind == CadAnnotation::Kind::Mtext) ? 0.5f * (ann.boxMinY + ann.boxMaxY) : ann.insY;
+        m2p(static_cast<double>(wx) + oX, static_cast<double>(wy) + oY, &lpx, &lpy);
+        if (lpx < vx0 || lpx > vx1 || lpy < vy0 || lpy > vy1)
+          continue;
+        VpDimLabel lab;
+        lab.px = lpx;
+        lab.py = lpy;
+        lab.rot = ann.rotationRad;
+        lab.Hin = (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
+        lab.text = (ann.kind == CadAnnotation::Kind::Mtext) ? MtextRichFlattenToPlain(ann.text) : ann.text;
+        lab.fontFamily = ann.fontFamily;
+        lab.rgb = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");
+        vpDimLabels.push_back(std::move(lab));
       }
       // Viewport border — only if the viewport's layer is plottable. Always black.
       if (plottable(vp.layer)) {
@@ -455,12 +530,6 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
       // font module (ADR-022); TrueType families embed as real PDF text objects (or a logged base-14
       // substitute). Paper inches, +y up; single-line insertion = top-left (baseline one cap-height below);
       // MTEXT honors its attachment point (see below).
-      auto isShxName = [](const std::string& f) {
-        if (f.size() < 4) return false;
-        std::string e = f.substr(f.size() - 4);
-        for (char& c : e) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return e == ".shx";
-      };
       auto emitShxLine = [&](Shx::Font& font, const std::string& s, float baseX, float baseY, float H, float rot) {
         const float sc = H / font.capHeight();
         const float cr = std::cos(rot), sr = std::sin(rot);
@@ -530,10 +599,9 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
           continue;
         const uint32_t rgb = at ? sheetRgb(at->layer, at->color) : 0x000000u;
         const float H = a.plottedHeightInches < 0.01f ? 0.01f : a.plottedHeightInches;  // avoid win max macro
-        const bool shx = isShxName(a.fontFamily);
-        Shx::Font* sfont = shx ? Shx::Resolve(a.fontFamily) : nullptr;
-        if (shx && (!sfont || !sfont->valid()))
-          continue;
+        const bool wantShx = cadfont::PreferShxStrokes(a.fontFamily, a.text);
+        Shx::Font* sfont = wantShx ? Shx::Resolve(a.fontFamily) : nullptr;
+        const bool shx = wantShx && sfont && sfont->valid();
         FPDF_FONT tfont = shx ? nullptr : plotFont(a.fontFamily);  // embedded TTF (or base-14 substitute)
         if (!shx && !tfont)
           continue;
@@ -584,6 +652,22 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
         } else {
           emitLine(a.text, a.insX, a.insY - H, a.rotationRad);
         }
+      }
+      for (const VpDimLabel& lab : vpDimLabels) {
+        if (lab.text.empty())
+          continue;
+        curColor = lab.rgb;
+        const float H = lab.Hin < 0.01f ? 0.01f : lab.Hin;
+        const bool wantShx = cadfont::PreferShxStrokes(lab.fontFamily, lab.text);
+        Shx::Font* sfont = wantShx ? Shx::Resolve(lab.fontFamily) : nullptr;
+        const bool shx = wantShx && sfont && sfont->valid();
+        FPDF_FONT tfont = shx ? nullptr : plotFont(lab.fontFamily);
+        if (!shx && !tfont)
+          continue;
+        if (shx)
+          emitShxLine(*sfont, lab.text, lab.px, lab.py - H, H, lab.rot);
+        else
+          emitTtfLine(tfont, lab.text, lab.px, lab.py - H, H, lab.rot, lab.rgb);
       }
     }
 

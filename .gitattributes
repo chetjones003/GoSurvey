@@ -1,0 +1,31 @@
+# Normalize all text files to LF in the repository. Git still checks them out
+# with the platform's convention when core.autocrlf is set (CRLF on Windows),
+# so this is a storage rule, not a working-tree rule — except where eol= is
+# given explicitly below.
+* text=auto
+
+# --- Windows scripts: must stay CRLF in the working tree ---
+*.bat   text eol=crlf
+*.ps1   text eol=crlf
+
+# --- POSIX shell / the dev/ WSL->Windows bridge: must stay LF ---
+# A CRLF shebang breaks these ("/usr/bin/env bash\r: no such file or directory").
+*.sh        text eol=lf
+dev/build       text eol=lf
+dev/clean       text eol=lf
+dev/test        text eol=lf
+dev/status      text eol=lf
+dev/gh          text eol=lf
+dev/issue       text eol=lf
+dev/pr          text eol=lf
+dev/win         text eol=lf
+dev/help        text eol=lf
+dev/_common.sh  text eol=lf
+
+# --- Binary: never touch ---
+*.ico   binary
+*.png   binary
+*.pfb   binary
+*.shx   binary
+*.rsc   binary
+*.rdbg  binary

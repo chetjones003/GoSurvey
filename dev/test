@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# dev/test — build the test targets and run the canonical suite.
+#
+# Canonical flow (mirrors .github/workflows/release.yml):
+#   1. build.bat            -> builds the default `all` target, which includes
+#                              GoSurveyTests, GoSurveySnapTests and gosurvey_headless
+#   2. ctest --test-dir build --output-on-failure
+#      (Catch2 cases + headless transcript regressions, REQ-203/REQ-300)
+#
+# Any arguments are forwarded to ctest, e.g.:
+#   ./dev/test -R headless           # only headless transcript tests
+#   ./dev/test -R NumFormat          # a single Catch2 group
+#   ./dev/test --rerun-failed
+#
+# Exit code is non-zero if the build fails OR any test fails.
+source "$(dirname "$0")/_common.sh"
+
+# --no-tests=error: a filter that matches nothing (e.g. a typo in -R) is a
+# failure, not a silent pass — an AI agent reads the exit code.
+ctest_args="--output-on-failure --no-tests=error"
+[ "$#" -gt 0 ] && ctest_args="$ctest_args $*"
+
+info "building test targets + running ctest ..."
+# `.\` — see note in dev/build (NoDefaultCurrentDirectoryInExePath).
+win_cmd "call .\\build.bat && ctest --test-dir build $ctest_args"

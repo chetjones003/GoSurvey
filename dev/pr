@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+# dev/pr — convenience wrapper over `gh.exe pr`.
+#
+#   ./dev/pr                  # list open PRs (default)
+#   ./dev/pr list [...]       # gh pr list
+#   ./dev/pr view 123 [...]   # gh pr view 123
+#   ./dev/pr checks 123       # gh pr checks 123
+#   ./dev/pr <anything>       # forwarded to `gh pr <anything>`
+source "$(dirname "$0")/_common.sh"
+require_gh_exe
+
+if [ "$#" -eq 0 ]; then
+  exec "$GH_EXE" pr list
+fi
+exec "$GH_EXE" pr "$@"

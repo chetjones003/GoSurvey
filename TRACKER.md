@@ -51,6 +51,30 @@
       state a zero-length arc at all — pre-existing, measured against both writers, and not fixable
       in a writer.
 
+### An ELLIPSE with an untidy ratio no longer moves the header — 2026-08-27
+
+    - GitHub issue #113, filed by TASK-122 DEBT-1 while fixing #111. REQ-204 + `src/io/DxfIo.cpp`.
+      Decision **D-2026-08-27-a**.
+    - **The defect, measured.** A DXF export → import → export cycle differed at byte 264 (6986 bytes each):
+      `$EXTMIN` y `82.535389` → `82.535403`, `$EXTMAX` y `119.020168` → `119.020155`, `$VPORT` group 40
+      `2.454127` → `2.454129`. `b == c`, so it converged. `regression-63` did not catch it because its
+      ellipse uses `ratio 0.5` at integer picks — values exact at six decimals.
+    - **Not the angles.** Groups 41/42 are literal constants `0.0` / `6.283185` (`CadEllipse` holds no
+      parameter range), so they cannot drift — closing the question #111 left open.
+    - **Cause: header vs body.** `CadEllipse` holds `majVx`/`majVy`/`ratio` as `float`; a `ratio` like
+      `0.3333333` is written as `0.333333` and the `float` that comes back is not the one that went out.
+      Same for `majVy` `0.222221`. The extents were swept from the ellipse in memory while the entity
+      record described the post-round-trip ellipse — one file, two drawings, same shape #111 fixed for
+      arcs and TASK-083 fixed for polylines.
+    - **Fix: one owner.** `DxfQuantizeFloat` / `DxfEllipseAsWritten` / `DxfEllipseToWrite` (`DxfIo.cpp`
+      anonymous namespace) — `float → to_string → stod → float`, the exact `std::to_string` round-trip
+      the reader sees. Header sweep and ELLIPSE emit (groups 11/21/40) both use it; 41/42 stay literals.
+      `CadEllipse` unchanged, `.gs` unchanged, no migration. Centre `cx`/`cy` deliberately not quantized
+      (drift <1e-6, below pad significance; arc fix likewise left centres alone, documented in D-2026-08-27-a).
+    - **Pinned by `regression-113-dxf-ellipse-extents.txt`** — first-cycle `a vs b` byte-identical, second
+      check `b vs c` also green; red before at byte 264. `regression-111`, `regression-98`, `regression-94`/`94a`
+      and `regression-63` remain green.
+
 ### A DXF round trip is a fixed point on the FIRST cycle, and REQ-204 was not amended to make it one — 2026-08-26
 
     - GitHub issue #98, filed by chetjones003 out of TASK-116's DEBT-1 and re-found independently

@@ -491,6 +491,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/NumFormatTests.cpp
     tests/AngleFormatTests.cpp
     tests/PaperSpaceTests.cpp
+    tests/DimViewportTests.cpp
     tests/CommandLineTests.cpp
     tests/RightClickTests.cpp
     tests/SurveyCsvValidateTests.cpp
@@ -510,6 +511,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/OrthoConstrainTests.cpp
     tests/ColorContrastTests.cpp
     tests/PlotFontTests.cpp
+    tests/CadFontNameTests.cpp
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
     tests/MtextTextOpsTests.cpp
@@ -521,6 +523,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/VisualStyleTests.cpp
     tests/MeshGeomTests.cpp
     tests/MeshGsRoundTripTests.cpp
+    tests/GsAnnotationJsonTests.cpp
     tests/GltfImportTests.cpp
     tests/StlImportTests.cpp
     tests/EntityIdTests.cpp
@@ -700,6 +703,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/HeadlessFileDialogs.cpp
     src/platform/HeadlessPdfAttach.cpp
     tests/CadSnapTests.cpp
+    tests/GsIoDimAngularTests.cpp
   )
   target_include_directories(GoSurveySnapTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

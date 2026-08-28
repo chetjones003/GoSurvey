@@ -26,6 +26,8 @@
 #include "SurveyPoints.hpp"
 #include "SurfaceStyle.hpp"
 #include "DimensionStyle.hpp"  // REQ-072 analysis legend (TASK-086 §6 (4))
+#include "CadDimStroke.hpp"
+#include "CadFontName.hpp"
 #include "StringUtil.hpp"
 #include "imgui.h"
 
@@ -120,14 +122,7 @@ static void DrawHatchThumbnail(ImDrawList* dl, ImVec2 mn, ImVec2 mx, const hatch
 }
 
 // True when a font name refers to an SHX stroke font (rendered from the real .shx, not a TrueType).
-static bool CadIsShxFontName(const std::string& s) {
-  if (s.size() < 4)
-    return false;
-  std::string ext = s.substr(s.size() - 4);
-  for (char& c : ext)
-    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-  return ext == ".shx";
-}
+static bool CadIsShxFontName(const std::string& s) { return cadfont::IsShxFontName(s); }
 
 static ImTextureID g_menuBarLogoTex{};
 static ImVec2 g_menuBarLogoDims{};
@@ -7717,19 +7712,131 @@ static void RotateImDrawListVertsXY(ImDrawList* dl, int vtxStart, int vtxEnd, co
   }
 }
 
+static ImFont* ResolveCadTtf(const std::string& family, bool bold, bool italic, ImFont* fallback, bool* realBold,
+                             bool* realItalic) {
+  if (family.empty())
+    return fallback;
+  bool rb = false, ri = false;
+  ImFont* tf = FontReg::Resolve(family, bold, italic, &rb, &ri);
+  if (realBold)
+    *realBold = rb;
+  if (realItalic)
+    *realItalic = ri;
+  return tf ? tf : fallback;
+}
+
 static void AddAlignedDimText(ImDrawList* dl, ImFont* font, float fontPx, const ImVec2& pivotSp, float screenAngRad,
                               ImU32 textCol, const char* text) {
   if (!dl || !text || !text[0])
     return;
-  const float fs = ImGui::GetFontSize();
-  const float scale = fontPx / std::max(fs, 1.e-6f);
-  const ImVec2 ts = ImGui::CalcTextSize(text);
-  const float tw = ts.x * scale;
-  const float th = ts.y * scale;
+  if (!font)
+    font = ImGui::GetFont();
+  const ImVec2 ts = font->CalcTextSizeA(fontPx, FLT_MAX, 0.f, text);
   const int v0 = dl->VtxBuffer.Size;
-  dl->AddText(font, fontPx, ImVec2(pivotSp.x - tw * 0.5f, pivotSp.y - th * 0.5f), textCol, text);
+  dl->AddText(font, fontPx, ImVec2(pivotSp.x - ts.x * 0.5f, pivotSp.y - ts.y * 0.5f), textCol, text);
   const int v1 = dl->VtxBuffer.Size;
   RotateImDrawListVertsXY(dl, v0, v1, pivotSp, std::cos(screenAngRad), std::sin(screenAngRad));
+}
+
+/// Dimension label: SHX strokes when the style names a stroke font (unless the string needs °), else TTF.
+static void DrawDimLabelText(ImDrawList* dl, const CadAnnotation& a, ImFont* fallback, float fontPx,
+                             const ImVec2& pivotSp, float screenAngRad, ImU32 textCol) {
+  if (!dl || a.text.empty())
+    return;
+  if (cadfont::PreferShxStrokes(a.fontFamily, a.text)) {
+    Shx::Font* sf = Shx::Resolve(a.fontFamily);
+    if (sf && sf->valid()) {
+      const float thick = std::max(1.f, fontPx * 0.05f);
+      const float w = Shx::MeasureWidthPx(*sf, a.text, fontPx);
+      const ImVec2 tl(pivotSp.x - w * 0.5f, pivotSp.y - fontPx * 0.5f);
+      const int v0 = dl->VtxBuffer.Size;
+      Shx::DrawText(dl, *sf, ImVec2(tl.x, tl.y + fontPx), fontPx, 0.f, textCol, a.text, thick);
+      RotateImDrawListVertsXY(dl, v0, dl->VtxBuffer.Size, pivotSp, std::cos(screenAngRad),
+                              std::sin(screenAngRad));
+      return;
+    }
+  }
+  ImFont* dimFont = ResolveCadTtf(a.fontFamily, false, false, fallback, nullptr, nullptr);
+  AddAlignedDimText(dl, dimFont, fontPx, pivotSp, screenAngRad, textCol, a.text.c_str());
+}
+
+static void DrawCadSingleLineText(ImDrawList* dl, const CadAnnotation& a, ImFont* fallback, ImVec2 topLeft,
+                                  float fontPx, ImU32 col) {
+  if (!dl || a.text.empty())
+    return;
+  const int vtx0 = dl->VtxBuffer.Size;
+  Shx::Font* sf = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
+  if (sf && sf->valid()) {
+    const float thick = std::max(1.f, fontPx * 0.05f);
+    const ImVec2 baselinePt(topLeft.x, topLeft.y + fontPx);
+    Shx::DrawText(dl, *sf, baselinePt, fontPx, 0.f, col, a.text, thick);
+    if (a.underline) {
+      const float w = Shx::MeasureWidthPx(*sf, a.text, fontPx);
+      const float uy = baselinePt.y + std::max(1.5f, fontPx * 0.12f);
+      dl->AddLine(ImVec2(baselinePt.x, uy), ImVec2(baselinePt.x + w, uy), col, thick);
+    }
+  } else {
+    bool realBold = false, realItalic = false;
+    ImFont* tf = ResolveCadTtf(a.fontFamily, a.bold, a.italic, fallback, &realBold, &realItalic);
+    const ImVec2 ext = tf->CalcTextSizeA(fontPx, FLT_MAX, 0.f, a.text.c_str());
+    if (a.bold && !realBold) {
+      dl->AddText(tf, fontPx, ImVec2(topLeft.x + 0.6f, topLeft.y), col, a.text.c_str());
+      dl->AddText(tf, fontPx, ImVec2(topLeft.x - 0.6f, topLeft.y), col, a.text.c_str());
+    }
+    if (a.italic && !realItalic)
+      dl->AddText(tf, fontPx, ImVec2(topLeft.x + 0.4f, topLeft.y), col, a.text.c_str());
+    dl->AddText(tf, fontPx, topLeft, col, a.text.c_str());
+    if (a.underline) {
+      const float uy = topLeft.y + ext.y - std::max(1.f, fontPx * 0.07f);
+      dl->AddLine(ImVec2(topLeft.x, uy), ImVec2(topLeft.x + ext.x, uy), col, std::max(1.f, fontPx * 0.06f));
+    }
+  }
+  if (a.rotationRad != 0.f) {
+    const float ang = -a.rotationRad;
+    const float ca = std::cos(ang), sa = std::sin(ang);
+    for (int vi = vtx0; vi < dl->VtxBuffer.Size; ++vi) {
+      ImVec2& p = dl->VtxBuffer[static_cast<size_t>(vi)].pos;
+      const float dx = p.x - topLeft.x, dy = p.y - topLeft.y;
+      p.x = topLeft.x + dx * ca - dy * sa;
+      p.y = topLeft.y + dx * sa + dy * ca;
+    }
+  }
+}
+
+template <typename WorldToScreen>
+static void DrawCadDimStrokesOnDrawList(ImDrawList* dl, const CadAnnotation& a, const CadDimWorldStrokes& strokes,
+                                        WorldToScreen wts, float fontPx, ImU32 extCol, ImU32 lineCol, ImU32 arrowCol,
+                                        ImU32 textCol, ImFont* font, DimArrowType arrowType) {
+  if (!dl)
+    return;
+  const bool drawFilledArrows = !strokes.arrows.empty();
+  for (const CadDimWorldSeg& seg : strokes.segs) {
+    if (drawFilledArrows && seg.kind == CadDimWorldSeg::Kind::Arrow)
+      continue;
+    const ImVec2 s0 = wts(seg.x0, seg.y0);
+    const ImVec2 s1 = wts(seg.x1, seg.y1);
+    const ImU32 c = (seg.kind == CadDimWorldSeg::Kind::Extension) ? extCol
+                    : (seg.kind == CadDimWorldSeg::Kind::Arrow)     ? arrowCol
+                                                                   : lineCol;
+    dl->AddLine(s0, s1, c, 1.2f);
+  }
+  for (const CadDimWorldTri& tri : strokes.arrows) {
+    const ImVec2 t0 = wts(tri.x0, tri.y0);
+    const ImVec2 t1 = wts(tri.x1, tri.y1);
+    const ImVec2 t2 = wts(tri.x2, tri.y2);
+    if (arrowType == DimArrowType::ClosedBlank || arrowType == DimArrowType::Open)
+      dl->AddTriangle(t0, t1, t2, arrowCol, 1.2f);
+    else
+      dl->AddTriangleFilled(t0, t1, t2, arrowCol);
+  }
+  if (a.text.empty())
+    return;
+  const ImVec2 sp = wts(strokes.labelX, strokes.labelY);
+  const float dirStep = 0.05f;
+  const ImVec2 spDir = wts(strokes.labelX + std::cos(strokes.labelRotRad) * dirStep,
+                           strokes.labelY + std::sin(strokes.labelRotRad) * dirStep);
+  const float screenAng = std::atan2(spDir.y - sp.y, spDir.x - sp.x);
+  DrawDimLabelText(dl, a, font, fontPx, sp, screenAng, textCol);
 }
 
 static int HitTestDimGrip(float mouseSx, float mouseSy, ImVec2 imgPos, ImVec2 avail, const Camera& cam,
@@ -11452,6 +11559,162 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         sdl->AddLine(ImVec2(c.x - crossPx, c.y), ImVec2(c.x + crossPx, c.y), spCol, 1.0f);
         sdl->AddLine(ImVec2(c.x, c.y - crossPx), ImVec2(c.x, c.y + crossPx), spCol, 1.0f);
       }
+      // Model TEXT / MTEXT through this viewport (issue #115): same m2s + clip as linework.
+      {
+        ImFont* vpFont = ImGui::GetFont();
+        for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
+          const CadAnnotation& ann = cmd.cadAnnotations[ai];
+          if (CadAnnotationIsDimension(ann) || ann.text.empty())
+            continue;
+          const EntityAttributes* aa =
+              (ai < cmd.cadAnnotationAttrs.size()) ? &cmd.cadAnnotationAttrs[ai] : nullptr;
+          // Object isolation (REQ-084 (d)) has to be gated per-overlay, because annotations are drawn
+          // here rather than by the GL pass — the model overlay's own annotation loop does exactly this.
+          // Without it an isolated-away annotation stayed visible through every layout viewport, which is
+          // the one place a hidden object is least likely to be noticed.
+          const ViewportTextOverlayPlan plan =
+              PlanViewportTextOverlay(ann, aa && CadEntityIdHidden(&cmd.hiddenEntityIds, aa->id), vp,
+                                      cmd.modelUnitsPerPlottedInch);
+          if (plan.skipHidden)
+            continue;
+          const std::string layer = aa ? (aa->layer.empty() ? std::string("0") : aa->layer) : std::string("0");
+          if (IsLayerFrozenInViewport(vp, layer))
+            continue;
+          const ImU32 tcol = vpBaseCol(layer, aa ? aa->color : std::string("ByLayer"));
+          if (ann.kind == CadAnnotation::Kind::Text) {
+            const ImVec2 sp = m2s(static_cast<double>(ann.insX) + oX, static_cast<double>(ann.insY) + oY);
+            const float hWorld = CadAnnotationHeightWorld(ann, plan.modelUnitsPerPlottedInch);
+            const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
+            DrawCadSingleLineText(sdl, ann, vpFont, sp, fontPx, tcol);
+          } else if (ann.kind == CadAnnotation::Kind::Mtext) {
+            const ImVec2 tl = m2s(static_cast<double>(ann.boxMinX) + oX, static_cast<double>(ann.boxMaxY) + oY);
+            const ImVec2 brc = m2s(static_cast<double>(ann.boxMaxX) + oX, static_cast<double>(ann.boxMinY) + oY);
+            // REQ-050: plain MTEXT is sized off the scale of the viewport it is drawn THROUGH, not the
+            // drawing's plot scale, so its plotted height stays constant on the sheet whatever that
+            // viewport's scale is. Using cmd.modelUnitsPerPlottedInch here made the same object read at
+            // different sizes in model space and through a 1:50 vs a 1:100 viewport. The rule (and the
+            // survey-label exclusion) lives in PlanViewportTextOverlay / MtextScaleThroughViewport.
+            const float hWorld = CadAnnotationHeightWorld(ann, plan.modelUnitsPerPlottedInch);
+            const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
+            const int acol = (ann.mtextAttach - 1) % 3;
+            const int arow = (ann.mtextAttach - 1) / 3;
+            float pw = 8.f, ph = fontPx * 1.22f;
+            MtextRichNaturalContentPx(vpFont, fontPx, ann.text, &pw, &ph, plan.fontFamily);
+            float drawX = tl.x + 4.f, drawY = tl.y + 4.f;
+            if (acol == 1)
+              drawX = tl.x + 0.5f * ((brc.x - tl.x) - pw);
+            else if (acol == 2)
+              drawX = brc.x - pw - 4.f;
+            if (arow == 1)
+              drawY = tl.y + 0.5f * ((brc.y - tl.y) - ph);
+            else if (arow == 2)
+              drawY = brc.y - ph - 4.f;
+            float wrapPx = std::max(8.f, (brc.x - tl.x) - 8.f);
+            if (acol != 0)
+              wrapPx = std::max(pw, 8.f);
+            Shx::Font* sfm = CadIsShxFontName(plan.fontFamily) ? Shx::Resolve(plan.fontFamily) : nullptr;
+            if (sfm && sfm->valid()) {
+              const std::string plain = MtextRichFlattenToPlain(ann.text);
+              const float lineH = fontPx * 1.4f;
+              const float thick = std::max(1.f, fontPx * 0.05f);
+              std::string ln;
+              float ly = drawY;
+              auto flush = [&](const std::string& line) {
+                const float w = Shx::MeasureWidthPx(*sfm, line, fontPx);
+                float lx = drawX;
+                if (acol == 1)
+                  lx = tl.x + 0.5f * ((brc.x - tl.x) - w);
+                else if (acol == 2)
+                  lx = std::max(tl.x + 4.f, brc.x - w - 4.f);
+                Shx::DrawText(sdl, *sfm, ImVec2(lx, ly + fontPx), fontPx, 0.f, tcol, line, thick);
+                ly += lineH;
+              };
+              for (char ch : plain) {
+                if (ch == '\n') {
+                  flush(ln);
+                  ln.clear();
+                } else
+                  ln += ch;
+              }
+              flush(ln);
+            } else {
+              MtextRichDrawWrapped(sdl, vpFont, fontPx, ImVec2(drawX, drawY), wrapPx, tcol, ann.text,
+                                   plan.fontFamily);
+            }
+          }
+        }
+      }
+      // Model dimensions through this viewport (issue #110 / REQ-027): same m2s + clip as linework.
+      {
+        CadDimStrokeParams dsp;
+        dsp.modelUnitsPerPlottedInch = cmd.modelUnitsPerPlottedInch;
+        dsp.arrowSizeInches = cmd.activeDimensionStyle.arrowSizeInches;
+        dsp.arrowScale = cmd.viewportDimArrowScale;
+        dsp.arrowType = cmd.activeDimensionStyle.arrowType;
+        ImFont* vpFont = ImGui::GetFont();
+        auto dimWts = [&](float lx, float ly) {
+          return m2s(static_cast<double>(lx) + oX, static_cast<double>(ly) + oY);
+        };
+        auto dimVpCol = [&](const std::string& styCol, const std::string& layer, const std::string& entityColor,
+                            float defR, float defG, float defB) -> ImU32 {
+          if (styCol == "ByLayer" || styCol.empty())
+            return vpBaseCol(layer, entityColor);
+          float rgba[4] = {defR, defG, defB, 1.f};
+          ResolveStoredColorForViewport(styCol, 0.f, defR, defG, defB, rgba);
+          AdaptWhiteBlackToBackground(&rgba[0], &rgba[1], &rgba[2], true);
+          return IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
+                          static_cast<int>(rgba[2] * 255.f), 255);
+        };
+        for (size_t ai = 0; ai < cmd.cadAnnotations.size(); ++ai) {
+          const CadAnnotation& ann = cmd.cadAnnotations[ai];
+          if (!CadAnnotationIsDimension(ann))
+            continue;
+          const EntityAttributes* aa =
+              (ai < cmd.cadAnnotationAttrs.size()) ? &cmd.cadAnnotationAttrs[ai] : nullptr;
+          // Object isolation (REQ-084 (d)) has to be gated per-overlay, because annotations are drawn
+          // here rather than by the GL pass — the model overlay's own annotation loop does exactly this.
+          // Without it an isolated-away annotation stayed visible through every layout viewport, which is
+          // the one place a hidden object is least likely to be noticed.
+          if (aa && CadEntityIdHidden(&cmd.hiddenEntityIds, aa->id))
+            continue;
+          const std::string layer = aa ? (aa->layer.empty() ? std::string("0") : aa->layer) : std::string("0");
+          if (IsLayerFrozenInViewport(vp, layer))
+            continue;
+          const std::string entCol = aa ? aa->color : std::string("ByLayer");
+          CadDimWorldStrokes strokes;
+          if (!CadDimBuildWorldStrokes(ann, dsp, &strokes))
+            continue;
+          const ImU32 lineCol = dimVpCol(cmd.activeDimensionStyle.dimLineColor, layer, entCol, 0.1f, 0.1f, 0.12f);
+          const ImU32 extCol = dimVpCol(cmd.activeDimensionStyle.extLineColor, layer, entCol, 0.1f, 0.1f, 0.12f);
+          const ImU32 textCol = dimVpCol(cmd.activeDimensionStyle.textColor, layer, entCol, 0.08f, 0.08f, 0.1f);
+          const ImU32 arrowCol = dimVpCol(cmd.activeDimensionStyle.arrowColor, layer, entCol, 0.1f, 0.1f, 0.12f);
+          const float hWorld = CadAnnotationHeightWorld(ann, cmd.modelUnitsPerPlottedInch);
+          const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
+          DrawCadDimStrokesOnDrawList(sdl, ann, strokes, dimWts, fontPx, extCol, lineCol, arrowCol, textCol, vpFont,
+                                      dsp.arrowType);
+        }
+        if (isFloatVp && outCursorX && outCursorY) {
+          CadAnnotation draft{};
+          bool ok = false;
+          if (cmd.active == AppCommandState::Kind::DimLinear &&
+              cmd.dimPhase == AppCommandState::DimPhase::WaitDimLinePt)
+            ok = CadDimLinearBuildDraft(cmd, *outCursorX, *outCursorY, &draft);
+          else if (cmd.active == AppCommandState::Kind::DimAngular &&
+                   cmd.dimAngularPhase == AppCommandState::DimAngularPhase::WaitArc)
+            ok = CadDimAngularBuildDraft(cmd, *outCursorX, *outCursorY, &draft);
+          else if (cmd.active == AppCommandState::Kind::DimAligned &&
+                   cmd.dimPhase == AppCommandState::DimPhase::WaitDimLinePt)
+            ok = CadDimAlignedBuildDraft(cmd, *outCursorX, *outCursorY, &draft);
+          CadDimWorldStrokes dstrokes;
+          if (ok && CadDimBuildWorldStrokes(draft, dsp, &dstrokes)) {
+            const float hWorld = CadAnnotationHeightWorld(draft, cmd.modelUnitsPerPlottedInch);
+            const float fontPx = std::clamp(hWorld * pxPerModel, 1.f, 8192.f);
+            const ImU32 preview = IM_COL32(160, 220, 255, 180);
+            DrawCadDimStrokesOnDrawList(sdl, draft, dstrokes, dimWts, fontPx, preview, preview, preview, preview,
+                                        vpFont, dsp.arrowType);
+          }
+        }
+      }
       // Entity grips (REQ-036): squares at each selected entity's grip points; the grabbed grip is hot.
       if (isFloatVp) {
         const float gh = 4.f;
@@ -11731,49 +11994,26 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       auto drawPaperText = [&](const CadAnnotation& a, bool sel, bool hover, ImU32 baseCol) {
         // Paper-space dims are paper-inch entities (like text) but were falling through to the TEXT path and drawing as glyphs.
         // Render them as true dimensions so they are clipped to the sheet and scale with paper, not model.
-        if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
-          float sx1=0.f, sy1=0.f, sx2=0.f, sy2=0.f, tx=0.f, ty=0.f, nx=0.f, ny=0.f, meas=0.f;
-          if (!CadDimAnyGeometry(a, &sx1,&sy1,&sx2,&sy2,&tx,&ty,&nx,&ny,&meas)) return;
+        if (CadAnnotationIsDimension(a)) {
+          CadDimStrokeParams dsp;
+          dsp.modelUnitsPerPlottedInch = 1.f;
+          dsp.arrowSizeInches = cmd.activeDimensionStyle.arrowSizeInches;
+          dsp.arrowScale = 1.f;
+          dsp.arrowType = cmd.activeDimensionStyle.arrowType;
+          CadDimWorldStrokes strokes;
+          if (!CadDimBuildWorldStrokes(a, dsp, &strokes))
+            return;
           const ImU32 lineCol = sel ? kPaperSelCol : (hover ? kPaperHoverCol : baseCol);
-          constexpr ImU32 kDimTextCol = IM_COL32(248,250,252,255);
-          // Paper dims live in paper inches, so w2s is the projection (no Camera). Helpers mirror model dim path but via w2s.
-          auto ws = [&](float wx, float wy, ImVec2* o){ *o = w2s(wx,wy); };
-          // Dimension line width in screen px - already clipped to sheet via outer __clipValid.
+          constexpr ImU32 kDimTextCol = IM_COL32(248, 250, 252, 255);
           const float hPx = std::clamp(a.plottedHeightInches * pxPerPaperIn, 1.f, 8192.f);
-          const float fontPx = std::clamp(hPx, 6.f, 72.f); // paper dims: legible paper size, not world-scaled
-          const float extPx = 1.2f, dimLnPx = 1.2f;
-          const float gap = std::clamp(0.02f * meas, 0.001f, 0.08f);
-          const float over = std::clamp(0.02f * meas, 0.001f, 0.06f);
-          const float leg1 = std::hypot(sx1 - a.dimExt1X, sy1 - a.dimExt1Y);
-          const float u1 = leg1 > 1.e-8f ? gap / leg1 : 0.f;
-          const float ex1 = a.dimExt1X + (sx1 - a.dimExt1X) * u1;
-          const float ey1 = a.dimExt1Y + (sy1 - a.dimExt1Y) * u1;
-          const float leg2 = std::hypot(sx2 - a.dimExt2X, sy2 - a.dimExt2Y);
-          const float u2 = leg2 > 1.e-8f ? gap / leg2 : 0.f;
-          const float ex2 = a.dimExt2X + (sx2 - a.dimExt2X) * u2;
-          const float ey2 = a.dimExt2Y + (sy2 - a.dimExt2Y) * u2;
-          ImVec2 A{}, B{};
-          ws(ex1, ey1, &A); ws(sx1 + nx * over, sy1 + ny * over, &B); sdl->AddLine(A,B,lineCol,extPx);
-          ws(ex2, ey2, &A); ws(sx2 + nx * over, sy2 + ny * over, &B); sdl->AddLine(A,B,lineCol,extPx);
-          const float alenW = 0.08f; // paper-inch arrow approx
-          const float dlen = std::hypot(sx2 - sx1, sy2 - sy1);
-          if (dlen > 1.e-6f) {
-            const float ux = (sx2 - sx1)/dlen, uy = (sy2 - sy1)/dlen;
-            const float tipInset = std::clamp(0.02f, 0.001f, 0.22f*dlen);
-            const float tip1x = sx1 + ux*tipInset, tip1y = sy1 + uy*tipInset;
-            const float tip2x = sx2 - ux*tipInset, tip2y = sy2 - uy*tipInset;
-            ws(tip1x+ux*alenW, tip1y+uy*alenW, &A); ws(tip2x-ux*alenW, tip2y-uy*alenW, &B); sdl->AddLine(A,B,lineCol,dimLnPx);
-            const float hw = alenW*0.48f, ox = -uy*hw, oy = ux*hw;
-            ImVec2 t0{},t1{},t2{}; ws(tip1x,tip1y,&t0); ws(tip1x+ux*alenW+ox, tip1y+uy*alenW+oy,&t1); ws(tip1x+ux*alenW-ox, tip1y+uy*alenW-oy,&t2); sdl->AddTriangleFilled(t0,t1,t2,lineCol);
-            ws(tip2x,tip2y,&t0); ws(tip2x-ux*alenW+ox, tip2y-uy*alenW+oy,&t1); ws(tip2x-ux*alenW-ox, tip2y-uy*alenW-oy,&t2); sdl->AddTriangleFilled(t0,t1,t2,lineCol);
-          }
-          ImVec2 sp{}; ws(a.insX,a.insY,&sp);
-          ImVec2 spDir{}; ws(a.insX + std::cos(a.rotationRad)*0.05f, a.insY + std::sin(a.rotationRad)*0.05f, &spDir);
-          const float screenAng = std::atan2(spDir.y-sp.y, spDir.x-sp.x);
-          AddAlignedDimText(sdl, paperFont, fontPx, sp, screenAng, kDimTextCol, a.text.c_str());
-          if (sel) { // selection rect in paper inches via w2s
+          const float fontPx = std::clamp(hPx, cmd.viewportDimTextMinPx, cmd.viewportDimTextMaxPx);
+          auto paperWts = [&](float wx, float wy) { return w2s(wx, wy); };
+          DrawCadDimStrokesOnDrawList(sdl, a, strokes, paperWts, fontPx, lineCol, lineCol, lineCol, kDimTextCol,
+                                      paperFont, dsp.arrowType);
+          if (sel) {
             ImVec2 sa = w2s(a.boxMinX, a.boxMinY), sb = w2s(a.boxMaxX, a.boxMaxY);
-            sdl->AddRect(ImVec2(std::min(sa.x,sb.x),std::min(sa.y,sb.y)), ImVec2(std::max(sa.x,sb.x),std::max(sa.y,sb.y)), kPaperSelCol, 0.f, 0, 1.f);
+            sdl->AddRect(ImVec2(std::min(sa.x, sb.x), std::min(sa.y, sb.y)),
+                         ImVec2(std::max(sa.x, sb.x), std::max(sa.y, sb.y)), kPaperSelCol, 0.f, 0, 1.f);
           }
           return;
         }
@@ -11844,42 +12084,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         // Single-line TEXT: the model treats the insertion point as TOP-left (SHX baseline one cap-height down,
         // ImGui AddText from the top-left). Match it so pasted TEXT lands in its row instead of on the rule.
         const float hPx = std::clamp(a.plottedHeightInches * pxPerPaperIn, 1.f, cmd.viewportTextMaxPx);
-        Shx::Font* sf = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
-        if (sf && sf->valid()) {
-          const float thick = std::max(1.f, hPx * 0.05f);
-          const ImVec2 base(p.x, p.y + hPx);  // p = top-left; baseline sits one cap-height below
-          Shx::DrawText(sdl, *sf, base, hPx, -a.rotationRad, col, a.text, thick);
-          if (a.underline) {
-            const float w = Shx::MeasureWidthPx(*sf, a.text, hPx);
-            const float uy = base.y + std::max(1.5f, hPx * 0.12f);
-            sdl->AddLine(ImVec2(base.x, uy), ImVec2(base.x + w, uy), col, thick);
+        DrawCadSingleLineText(sdl, a, paperFont, p, hPx, col);
+        if (sel) {
+          float w = hPx * 0.6f, h = hPx;
+          if (CadIsShxFontName(a.fontFamily)) {
+            if (Shx::Font* sf = Shx::Resolve(a.fontFamily); sf && sf->valid())
+              w = std::max(Shx::MeasureWidthPx(*sf, a.text, hPx), w);
+          } else {
+            ImFont* tf = ResolveCadTtf(a.fontFamily, a.bold, a.italic, paperFont, nullptr, nullptr);
+            const ImVec2 ext = tf->CalcTextSizeA(hPx, FLT_MAX, 0.f, a.text.c_str());
+            w = std::max(ext.x, w);
+            h = std::max(ext.y, h);
           }
-          if (sel) {
-            const float w = Shx::MeasureWidthPx(*sf, a.text, hPx);
-            sdl->AddRect(p, ImVec2(p.x + std::max(w, hPx * 0.6f), p.y + hPx), kPaperSelCol, 0.f, 0, 1.f);
-          }
-          return;
+          sdl->AddRect(p, ImVec2(p.x + w, p.y + h), kPaperSelCol, 0.f, 0, 1.f);
         }
-        bool realBold = false, realItalic = false;
-        ImFont* tf = a.fontFamily.empty() ? paperFont
-                                          : FontReg::Resolve(a.fontFamily, a.bold, a.italic, &realBold, &realItalic);
-        if (!tf)
-          tf = paperFont;
-        const ImVec2 tp = p;  // insertion = top-left (matches model AddText)
-        const ImVec2 ext = tf->CalcTextSizeA(hPx, FLT_MAX, 0.f, a.text.c_str());
-        if (a.bold && !realBold) {
-          sdl->AddText(tf, hPx, ImVec2(tp.x + 0.6f, tp.y), col, a.text.c_str());
-          sdl->AddText(tf, hPx, ImVec2(tp.x - 0.6f, tp.y), col, a.text.c_str());
-        }
-        if (a.italic && !realItalic)
-          sdl->AddText(tf, hPx, ImVec2(tp.x + 0.4f, tp.y), col, a.text.c_str());
-        sdl->AddText(tf, hPx, tp, col, a.text.c_str());
-        if (a.underline) {
-          const float uy = tp.y + ext.y - std::max(1.f, hPx * 0.07f);
-          sdl->AddLine(ImVec2(tp.x, uy), ImVec2(tp.x + ext.x, uy), col, std::max(1.f, hPx * 0.06f));
-        }
-        if (sel)
-          sdl->AddRect(tp, ImVec2(tp.x + std::max(ext.x, hPx * 0.6f), tp.y + ext.y), kPaperSelCol, 0.f, 0, 1.f);
       };
       for (size_t ti = 0; ti < L.paperTexts.size(); ++ti)
         drawPaperText(L.paperTexts[ti], isPaperSel(PaperEntityRef::Type::Text, static_cast<int>(ti)),
@@ -11979,11 +12197,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
       ImFont* pf = ImGui::GetFont();
       for (const CadAnnotation& a : cb.annotations) {
-        if ((a.kind != CadAnnotation::Kind::Text && a.kind != CadAnnotation::Kind::Mtext) || a.text.empty())
+        if (a.text.empty())
           continue;
-        const float hPx = std::clamp(a.plottedHeightInches * pxPerPaperIn2, 1.f, cmd.viewportTextMaxPx);
-        const ImVec2 p = w2s(a.insX + gdx, a.insY + gdy);
-        sdl->AddText(pf, hPx, ImVec2(p.x, p.y - hPx), ghost, a.text.c_str());
+        CadAnnotation g = a;
+        g.insX += gdx;
+        g.insY += gdy;
+        const float hPx = std::clamp(g.plottedHeightInches * pxPerPaperIn2, 1.f, cmd.viewportTextMaxPx);
+        const ImVec2 p = w2s(g.insX, g.insY);
+        if (CadAnnotationIsDimension(g)) {
+          DrawDimLabelText(sdl, g, pf, hPx, p, 0.f, ghost);
+          continue;
+        }
+        if (g.kind == CadAnnotation::Kind::Mtext)
+          g.text = MtextRichFlattenToPlain(a.text);
+        DrawCadSingleLineText(sdl, g, pf, p, hPx, ghost);
       }
     }
     // Paper-entity MOVE/COPY ghost + ROTATE + MIRROR preview (REQ-037/REQ-103): selected geometry
@@ -12330,6 +12557,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
     auto drawAnnotationVisual = [&](const CadAnnotation& a, const EntityAttributes* attrPtr, ImU32 colFallback) {
       const float hWorld = CadAnnotationHeightWorld(a, cmd.modelUnitsPerPlottedInch);
+      if (CadAnnotationIsDimension(a) && cmd.activeSpaceIndex >= 0)
+        return;
       if (a.kind == CadAnnotation::Kind::Text) {
         ImVec2 sp{};
         worldToScreen(a.insX, a.insY, &sp, a.insZ);
@@ -12348,54 +12577,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         }
         const ImU32 col = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
                                    static_cast<int>(rgba[2] * 255.f), static_cast<int>(rgba[3] * 255.f));
-        // An SHX font (romans.shx, …) is rendered from the real .shx file as strokes — an exact match to
-        // AutoCAD. Anything else uses the resolved TrueType (with faux bold/italic for missing variants).
-        // Both are drawn UNROTATED (top-left at sp), then their vertices are rotated about sp below — the
-        // same insertion-point pivot CadAnnotationRoughBounds uses — so the glyph always matches its
-        // hit-box/selection box. Rotation is clockwise-from-north (rotationRad is CCW-from-+X math): a
-        // bearing of 0 → rotationRad π/2 → text runs up; 90 → horizontal left-to-right.
-        const int vtx0 = dl->VtxBuffer.Size;
-        Shx::Font* sf = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
-        if (sf && sf->valid()) {
-          const float thick = std::max(1.f, fontPx * 0.05f);
-          const ImVec2 baselinePt(sp.x, sp.y + fontPx);  // sp = top-left; baseline sits one cap-height down
-          Shx::DrawText(dl, *sf, baselinePt, fontPx, 0.f, col, a.text, thick);
-          if (a.underline) {
-            const float w = Shx::MeasureWidthPx(*sf, a.text, fontPx);
-            const float uy = baselinePt.y + std::max(1.5f, fontPx * 0.12f);
-            dl->AddLine(ImVec2(baselinePt.x, uy), ImVec2(baselinePt.x + w, uy), col, thick);
-          }
-        } else {
-          bool realBold = false, realItalic = false;
-          ImFont* tf = a.fontFamily.empty()
-                           ? font
-                           : FontReg::Resolve(a.fontFamily, a.bold, a.italic, &realBold, &realItalic);
-          if (!tf) tf = font;
-          const ImVec2 ext = tf->CalcTextSizeA(fontPx, FLT_MAX, 0.f, a.text.c_str());
-          if (a.bold && !realBold) {  // faux bold: double-strike
-            dl->AddText(tf, fontPx, ImVec2(sp.x + 0.6f, sp.y), col, a.text.c_str());
-            dl->AddText(tf, fontPx, ImVec2(sp.x - 0.6f, sp.y), col, a.text.c_str());
-          }
-          if (a.italic && !realItalic)  // faux italic: slight horizontal nudge (no true shear in ImGui)
-            dl->AddText(tf, fontPx, ImVec2(sp.x + 0.4f, sp.y), col, a.text.c_str());
-          dl->AddText(tf, fontPx, sp, col, a.text.c_str());
-          if (a.underline) {
-            const float uy = sp.y + ext.y - std::max(1.f, fontPx * 0.07f);
-            dl->AddLine(ImVec2(sp.x, uy), ImVec2(sp.x + ext.x, uy), col, std::max(1.f, fontPx * 0.06f));
-          }
-        }
-        // Rotate the just-emitted glyph vertices about the insertion point (screen y grows down, so the
-        // screen angle is −rotationRad — matching the SHX stroke convention this replaced).
-        if (a.rotationRad != 0.f) {
-          const float ang = -a.rotationRad;
-          const float ca = std::cos(ang), sa = std::sin(ang);
-          for (int vi = vtx0; vi < dl->VtxBuffer.Size; ++vi) {
-            ImVec2& p = dl->VtxBuffer[static_cast<size_t>(vi)].pos;
-            const float dx = p.x - sp.x, dy = p.y - sp.y;
-            p.x = sp.x + dx * ca - dy * sa;
-            p.y = sp.y + dx * sa + dy * ca;
-          }
-        }
+        DrawCadSingleLineText(dl, a, font, sp, fontPx, col);
       } else if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
         float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
         if (!CadDimAnyGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
@@ -12416,9 +12598,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const ImU32 lineCol = resolveDimColor(cmd.activeDimensionStyle.dimLineColor, 225/255.f, 177/255.f, 44/255.f);
         const ImU32 extCol = resolveDimColor(cmd.activeDimensionStyle.extLineColor, 225/255.f, 177/255.f, 44/255.f);
         const ImU32 textCol = resolveDimColor(cmd.activeDimensionStyle.textColor, 248/255.f, 250/255.f, 252/255.f);
-        // Resolve font for dimension text (use per-annotation fontFamily, which is baked from style at creation and updated on DIMSTY Apply)
-        ImFont* dimFont = a.fontFamily.empty() ? font : FontReg::Resolve(a.fontFamily, false, false, nullptr, nullptr);
-        if (!dimFont) dimFont = font;
         // Dimension geometry is overlay-drawn, so it projects through the camera like everything
         // else (REQ-058); it sits on the dimension's own plane. Identical to the previous mapping
         // in plan view.
@@ -12498,29 +12677,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const float dirStep = std::max(1.e-4f, hWorld);
         ws(a.insX + std::cos(a.rotationRad) * dirStep, a.insY + std::sin(a.rotationRad) * dirStep, &spDir);
         const float screenAng = std::atan2(spDir.y - sp.y, spDir.x - sp.x);
-        // Handle SHX fonts for dimensions like Text does - SHX uses stroke rendering, not ImFont
-        // For SHX fonts, check if text contains degree symbol - SHX stroke fonts often lack the degree glyph at U+00B0
-        // If it does, fall back to TrueType for the whole dimension text so the degree renders correctly
-        bool useShxDim = false;
-        Shx::Font* sfDimCheck = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
-        if (sfDimCheck && sfDimCheck->valid() && a.text.find("\xc2\xb0") == std::string::npos) {
-          useShxDim = true;
-        }
-        if (useShxDim) {
-          Shx::Font* sfDim = sfDimCheck;
-          const float thickDim = std::max(1.f, fontPx * 0.05f);
-          const float wDim = Shx::MeasureWidthPx(*sfDim, a.text, fontPx);
-          const float hDim = fontPx;
-          ImVec2 pivot = ImVec2(sp.x - wDim*0.5f, sp.y - hDim*0.5f);
-          float ca = std::cos(screenAng), sa = std::sin(screenAng);
-          float dx = pivot.x - sp.x, dy = pivot.y - sp.y;
-          ImVec2 rotPivot{sp.x + dx*ca - dy*sa, sp.y + dx*sa + dy*ca};
-          Shx::DrawText(dl, *sfDim, ImVec2(rotPivot.x, rotPivot.y + fontPx), fontPx, -a.rotationRad, textCol, a.text, thickDim);
-        } else {
-          // Use TrueType (dimFont) for dimensions - ensures degree symbol renders, and also handles SHX fallback correctly
-          // For SHX degree case, dimFont is already fallback to default font (since FontReg::Resolve returns null for SHX)
-          AddAlignedDimText(dl, dimFont, fontPx, sp, screenAng, textCol, a.text.c_str());
-        }
+        DrawDimLabelText(dl, a, font, fontPx, sp, screenAng, textCol);
       } else if (a.kind == CadAnnotation::Kind::DimAngular) {
         float a1=0.f,a2=0.f,sweep=0.f,theta=0.f,bisx=0.f,bisy=0.f;
         if (!CadDimAngularComputeFrame(a, &a1,&a2,&sweep,&bisx,&bisy,&theta)) return;
@@ -12542,8 +12699,6 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         const ImU32 extCol2 = resolveDimColor2(cmd.activeDimensionStyle.extLineColor, 225/255.f, 177/255.f, 44/255.f);
         const ImU32 textCol2 = resolveDimColor2(cmd.activeDimensionStyle.textColor, 248/255.f, 250/255.f, 252/255.f);
         const ImU32 arrowCol2 = resolveDimColor2(cmd.activeDimensionStyle.arrowColor, 225/255.f, 177/255.f, 44/255.f);
-        ImFont* dimFont2 = a.fontFamily.empty() ? font : FontReg::Resolve(a.fontFamily, false, false, nullptr, nullptr);
-        if (!dimFont2) dimFont2 = font;
         const Camera dimCam2 = CadViewCamera(cmd);
         const float dimZ2 = a.insZ;
         auto ws2 = [&](float wx, float wy, ImVec2* o) {
@@ -12639,25 +12794,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         ImVec2 spDir2{}; float dirStep2 = std::max(1.e-4f, hWorld);
         ws2(a.insX + std::cos(a.rotationRad)*dirStep2, a.insY + std::sin(a.rotationRad)*dirStep2, &spDir2);
         float screenAng2 = std::atan2(spDir2.y - sp2.y, spDir2.x - sp2.x);
-        std::string txt2 = a.text;
-        bool useShx2 = false;
-        Shx::Font* sfDim2Check = CadIsShxFontName(a.fontFamily) ? Shx::Resolve(a.fontFamily) : nullptr;
-        if (sfDim2Check && sfDim2Check->valid() && txt2.find("\xc2\xb0") == std::string::npos) {
-          useShx2 = true;
-        }
-        if (useShx2) {
-          Shx::Font* sfDim2 = sfDim2Check;
-          const float thick2 = std::max(1.f, fontPx2 * 0.05f);
-          float w2 = Shx::MeasureWidthPx(*sfDim2, txt2, fontPx2);
-          ImVec2 pivot2{sp2.x - w2*0.5f, sp2.y - fontPx2*0.5f};
-          float ca2 = std::cos(screenAng2), sa2 = std::sin(screenAng2);
-          float dx2 = pivot2.x - sp2.x, dy2 = pivot2.y - sp2.y;
-          ImVec2 rotPivot2{sp2.x + dx2*ca2 - dy2*sa2, sp2.y + dx2*sa2 + dy2*ca2};
-          Shx::DrawText(dl, *sfDim2, ImVec2(rotPivot2.x, rotPivot2.y + fontPx2), fontPx2, -a.rotationRad, textCol2, txt2, thick2);
-        } else {
-          // For degree, use TrueType fallback so degree renders
-          AddAlignedDimText(dl, dimFont2, fontPx2, sp2, screenAng2, textCol2, txt2.c_str());
-        }
+        DrawDimLabelText(dl, a, font, fontPx2, sp2, screenAng2, textCol2);
       } else {
         ImVec2 sa{}, sb{};
         worldToScreen(a.boxMinX, a.boxMinY, &sa, a.insZ);
@@ -12673,9 +12810,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         // model space) else the drawing scale — so its plotted height stays constant on the sheet regardless
         // of that viewport's scale. Survey labels keep the global drawing scale (their own layout owns size).
         float mtextMup = cmd.modelUnitsPerPlottedInch;
-        if (a.surveyPointLabelForId < 0)
-          if (const Viewport* mvp = CurrentViewport(cmd))
-            mtextMup = std::max(mvp->scaleModelPerPaperIn, 1.e-6f);
+        if (const Viewport* mvp = CurrentViewport(cmd))
+          mtextMup = MtextScaleThroughViewport(a, *mvp, cmd.modelUnitsPerPlottedInch);
         const float hWorldMtext = CadAnnotationHeightWorld(a, mtextMup);
         // The screen-size cap belongs to survey-point labels only: those are sized for legibility, not to
         // scale. Applying it to plain MTEXT made the text stop growing once zoomed past ~128 px while the
@@ -14902,27 +15038,40 @@ void DrawDimStyleWindow(AppCommandState& cmd, std::vector<std::string>* log) {
     dl->AddTriangleFilled(ImVec2(xL, midY), ImVec2(xL+ah, midY-ah*0.5f), ImVec2(xL+ah, midY+ah*0.5f), IM_COL32(46,91,174,255));
     dl->AddTriangleFilled(ImVec2(xR, midY), ImVec2(xR-ah, midY-ah*0.5f), ImVec2(xR-ah, midY+ah*0.5f), IM_COL32(46,91,174,255));
     std::string txt = DimensionStyles::FormatLinearDim(12.5, d);
-    dl->AddText(ImVec2((xL+xR)*0.5f - 18.f, midY - 18.f), IM_COL32(248,250,252,255), txt.c_str());
+    CadAnnotation previewAnn;
+    previewAnn.fontFamily = d.textFont;
+    previewAnn.text = txt;
+    DrawDimLabelText(dl, previewAnn, ImGui::GetFont(), 14.f, ImVec2((xL + xR) * 0.5f, midY - 10.f), 0.f,
+                     IM_COL32(248, 250, 252, 255));
     ImGui::Dummy(ImVec2(avail.x, 44.f));
   }
   ImGui::Separator();
+  auto applyDimStyleToAnns = [&](std::vector<CadAnnotation>& anns) {
+    for (auto& a : anns) {
+      if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
+        float sx1, sy1, sx2, sy2, tx, ty, nx, ny, ml;
+        if (CadDimAnyGeometry(a, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &ml))
+          a.text = DimensionStyles::FormatLinearDim(static_cast<double>(ml), cmd.activeDimensionStyle);
+      } else if (a.kind == CadAnnotation::Kind::DimAngular) {
+        float a1 = 0.f, a2 = 0.f, sweep = 0.f, theta = 0.f, bisx = 0.f, bisy = 0.f;
+        if (CadDimAngularComputeFrame(a, &a1, &a2, &sweep, &bisx, &bisy, &theta))
+          a.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846),
+                                    CadAngleDisplaySettings(cmd));
+      } else
+        continue;
+      DimensionStyles::BakeTextOntoDimension(a, cmd.activeDimensionStyle);
+    }
+  };
+  auto applyDimStyleEverywhere = [&]() {
+    applyDimStyleToAnns(cmd.cadAnnotations);
+    for (PaperLayout& L : cmd.paperLayouts)
+      applyDimStyleToAnns(L.paperTexts);
+  };
   float bw = 90.f;
   if (ImGui::Button("OK", ImVec2(bw, 0))) {
     PushUndoSnapshot(cmd, "DIMSTY");
     cmd.activeDimensionStyle = d;
-    // Refresh existing dimensions to new style (all Dim* kinds, including DimAngular)
-    for (auto& a : cmd.cadAnnotations) {
-      if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
-        float sx1,sy1,sx2,sy2,tx,ty,nx,ny,ml;
-        if (CadDimAnyGeometry(a,&sx1,&sy1,&sx2,&sy2,&tx,&ty,&nx,&ny,&ml)) a.text = DimensionStyles::FormatLinearDim((double)ml, cmd.activeDimensionStyle);
-      } else if (a.kind == CadAnnotation::Kind::DimAngular) {
-        float a1=0.f,a2=0.f,sweep=0.f,theta=0.f,bisx=0.f,bisy=0.f;
-        if (CadDimAngularComputeFrame(a,&a1,&a2,&sweep,&bisx,&bisy,&theta))
-          a.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(cmd));
-      } else continue;
-      a.plottedHeightInches = std::max(cmd.activeDimensionStyle.textSizeInches, 1.e-6f);
-      a.fontFamily = cmd.activeDimensionStyle.textFont;
-    }
+    applyDimStyleEverywhere();
     BumpCadGpuCache(cmd);
     cmd.showDimStyleDialog = false;
     log->push_back("DIMSTY — style applied.");
@@ -14931,18 +15080,7 @@ void DrawDimStyleWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   if (ImGui::Button("Apply", ImVec2(bw, 0))) {
     PushUndoSnapshot(cmd, "DIMSTY");
     cmd.activeDimensionStyle = d;
-    for (auto& a : cmd.cadAnnotations) {
-      if (a.kind == CadAnnotation::Kind::DimAligned || a.kind == CadAnnotation::Kind::DimLinear) {
-        float sx1,sy1,sx2,sy2,tx,ty,nx,ny,ml;
-        if (CadDimAnyGeometry(a,&sx1,&sy1,&sx2,&sy2,&tx,&ty,&nx,&ny,&ml)) a.text = DimensionStyles::FormatLinearDim((double)ml, cmd.activeDimensionStyle);
-      } else if (a.kind == CadAnnotation::Kind::DimAngular) {
-        float a1=0.f,a2=0.f,sweep=0.f,theta=0.f,bisx=0.f,bisy=0.f;
-        if (CadDimAngularComputeFrame(a,&a1,&a2,&sweep,&bisx,&bisy,&theta))
-          a.text = FormatSweptAngle(static_cast<double>(theta) * (180.0 / 3.14159265358979323846), CadAngleDisplaySettings(cmd));
-      } else continue;
-      a.plottedHeightInches = std::max(cmd.activeDimensionStyle.textSizeInches, 1.e-6f);
-      a.fontFamily = cmd.activeDimensionStyle.textFont;
-    }
+    applyDimStyleEverywhere();
     BumpCadGpuCache(cmd);
     log->push_back("DIMSTY — style applied.");
   }
