@@ -17,8 +17,20 @@ struct SurfaceStats {
   double minSlopePct = 0.0;
   double maxSlopePct = 0.0;
   double meanSlopePct = 0.0;  ///< Plan-area-weighted mean of per-triangle grade; 0 if area2d is 0.
+  double minTriArea2d = 0.0;
+  double maxTriArea2d = 0.0;
+  int uniqueEdges = 0;
+  int breaklineEdges = 0;  ///< Caller-supplied count of constrained TIN edges (REQ-140).
+  double minSlopeDeg = 0.0;
+  double maxSlopeDeg = 0.0;
+  double meanSlopeDeg = 0.0;
+  double volumeCutFt3 = 0.0;   ///< Positive volume where centroid Z is negative (REQ-140 volume TIN).
+  double volumeFillFt3 = 0.0;  ///< Positive volume where centroid Z is positive.
 };
 
 /// Returns zeros and \c built false when \p indices is empty or \p vertsXyz is too short.
+/// \p breaklineEdgeCount is reported unchanged. When \p zIsDifference, centroid Z × plan area
+/// accumulates cut (negative Z) and fill (positive Z).
 [[nodiscard]] SurfaceStats ComputeSurfaceStats(const std::vector<float>& vertsXyz,
-                                               const std::vector<std::uint32_t>& indices);
+                                               const std::vector<std::uint32_t>& indices,
+                                               int breaklineEdgeCount = 0, bool zIsDifference = false);

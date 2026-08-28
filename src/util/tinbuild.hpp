@@ -119,6 +119,7 @@ enum class TinBoundaryKind : std::uint8_t {
   Hide,   ///< Removes surface inside this ring, leaving a void.
   Show,   ///< Restores surface inside this ring — meaningful inside a Hide.
   Clip,   ///< REQ-128: same triangle cull as Outer, plus input-point filter before BuildTin.
+  Mask,   ///< REQ-139: same triangle cull as Hide (hide from calculations and display).
 };
 
 /// A boundary ring: an ordered, implicitly-closed polygon in plan (X/Y). Vertex order does not need
@@ -196,6 +197,11 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
 ///            and the highlight buffer both already consume. Cleared first.
 void TinBorderEdges(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
                     std::vector<float>* out);
+
+/// Flip the interior edge nearest (\p x, \p y) in plan. Writes a new index array when successful.
+/// False when the pick is not on an interior edge (REQ-139).
+[[nodiscard]] bool TinSwapInteriorEdgeNear(const std::vector<float>& vertsXyz, std::vector<std::uint32_t>& indices,
+                                           double x, double y);
 
 // --- Predicates, exposed for testing -----------------------------------------------------------
 // These are the two functions the whole triangulation rests on, and a sign error in either is

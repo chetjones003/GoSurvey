@@ -289,12 +289,17 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
 
   ImGui::SetNextWindowSize(ImVec2(760, 520), ImGuiCond_FirstUseEver);
   bool open = cmd.showSurfaceStyleWindow;
-  if (!ImGui::Begin("Surface Style", &open)) {
+  const char* title = cmd.surfaceStyleUseSurfacesTitle ? "Surfaces" : "Surface Style";
+  if (!ImGui::Begin(title, &open)) {
     cmd.showSurfaceStyleWindow = open;
+    if (!open)
+      cmd.surfaceStyleUseSurfacesTitle = false;
     ImGui::End();
     return;
   }
   cmd.showSurfaceStyleWindow = open;
+  if (!open)
+    cmd.surfaceStyleUseSurfacesTitle = false;
 
   static int selIdx = 0;
   if (!cmd.surfaceStyleEditorFocusName.empty()) {
@@ -444,7 +449,17 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
         ImGui::EndTable();
       }
       ImGui::Spacing();
-      ImGui::TextDisabled("Contour smoothing is not offered: GoSurvey draws linear contours only.");
+      ImGui::SetNextItemWidth(80.f);
+      if (ImGui::SliderInt("Smooth passes", &s.contourSmoothPasses, 0, 5))
+        changed = true;
+      ItemHelpTooltip("Chaikin corner-cutting on displayed contours only (0–5). Does not change the TIN.");
+      ImGui::SetNextItemWidth(120.f);
+      if (ImGui::InputDouble("Label spacing (ft)", &s.contourLabelSpacingFt, 0.0, 0.0, "%.2f")) {
+        if (s.contourLabelSpacingFt < 0.0)
+          s.contourLabelSpacingFt = 0.0;
+        changed = true;
+      }
+      ItemHelpTooltip("Spacing along major contours. 0 turns labels off. Labels are overlay text, not entities.");
       ImGui::EndTabItem();
     }
 
@@ -484,10 +499,10 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
     if (ImGui::BeginTabItem("Analysis")) {
       ImGui::Spacing();
       ImGui::SeparatorText("Banding");
-      static const char* kModeLabels[] = {"None", "Elevation", "Slope", "Direction"};
+      static const char* kModeLabels[] = {"None", "Elevation", "Slope", "Direction", "Slope angle"};
       int modeIdx = static_cast<int>(s.analysisMode);
       ImGui::SetNextItemWidth(180.f);
-      if (ImGui::Combo("Type", &modeIdx, kModeLabels, 4)) {
+      if (ImGui::Combo("Type", &modeIdx, kModeLabels, 5)) {
         s.analysisMode = static_cast<SurfaceAnalysisMode>(modeIdx);
         changed = true;
       }
@@ -499,6 +514,7 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
         const char* boundLabel =
             s.analysisMode == SurfaceAnalysisMode::Elevation ? "Upper bound (ft)"
             : s.analysisMode == SurfaceAnalysisMode::Direction ? "Upper bound (deg)"
+            : s.analysisMode == SurfaceAnalysisMode::SlopeAngle ? "Upper bound (deg)"
                                                                : "Upper bound (%)";
         changed |= BandTableEditor("##bandtable", boundLabel, &s.bands);
         ImGui::Spacing();
@@ -614,13 +630,16 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
   if (ImGui::Button("OK", ImVec2(bw, 0.f))) {
     BumpCadGpuCache(cmd);
     cmd.showSurfaceStyleWindow = false;
+    cmd.surfaceStyleUseSurfacesTitle = false;
   }
   ImGui::EndDisabled();
   if (!intervalsOk && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
     ImGui::SetTooltip("%s", intervalWhy.c_str());
   ImGui::SameLine();
-  if (ImGui::Button("Cancel", ImVec2(bw, 0.f)))
+  if (ImGui::Button("Cancel", ImVec2(bw, 0.f))) {
     cmd.showSurfaceStyleWindow = false;
+    cmd.surfaceStyleUseSurfacesTitle = false;
+  }
 
   if (deleteIdx >= 0 && deleteIdx < static_cast<int>(cmd.surfaceStyles.size())) {
     PushUndoSnapshot(cmd, "Delete surface style");

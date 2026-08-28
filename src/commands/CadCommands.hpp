@@ -1980,6 +1980,7 @@ struct AppCommandState {
     std::unique_ptr<VolumeDashboardAsync> job;  ///< null when nothing is in flight
   };
   VolumeDashboardState volumeDashboard;
+  std::string lastVolumeReportText;  ///< Last successful VOLUMES / dashboard numbers for VOLREPORT.
 
   /// Generated display geometry for one surface — ADR-036 (e).
   ///
@@ -2022,6 +2023,11 @@ struct AppCommandState {
     std::vector<float> borderEdges;    ///< The outline: edges belonging to one triangle (\c TinBorderEdges).
     std::vector<float> minorContours;  ///< Minor levels, excluding those that are also major.
     std::vector<float> majorContours;
+    struct ContourLabel {
+      float x = 0.f, y = 0.f, z = 0.f;
+      double level = 0.0;
+    };
+    std::vector<ContourLabel> contourLabels;
 
     /// The style asked for more contour levels than the display path will generate, so the contour
     /// buffers above are empty for a reason that has nothing to do with the style's toggles.
@@ -2488,9 +2494,22 @@ struct AppCommandState {
   bool showSurfaceStyleWindow = false;
   /// When set, the next Surface Style window draw selects this named row (Surface Manager Edit...).
   std::string surfaceStyleEditorFocusName;
+  /// When true, the style/analysis editor uses the title "Surfaces" (Toolspace / Survey ribbon).
+  bool surfaceStyleUseSurfacesTitle = false;
   bool showPointGroupManagerWindow = false;  ///< Point Group manager (REQ-067).
-  bool showSurfaceManagerWindow = false;     ///< Surfaces panel (REQ-068).
+  /// When set, the Point Group manager selects this named group on the next draw.
+  std::string pointGroupManagerFocusName;
+  bool showSurfaceManagerWindow = false;     ///< Surfaces panel (REQ-068). definition edits live in Toolspace.
+  /// Create Surface dialog (Toolspace Surfaces ▸ Create Surface...). Session-only.
+  bool showCreateSurfaceWindow = false;
+  /// Surface Properties (Toolspace named surface ▸ Surface Properties...). Session-only.
+  bool showSurfacePropertiesWindow = false;
+  int surfacePropertiesIndex = -1;
   bool showFeatureLineElevWindow = false;    ///< Feature line elevation editor (REQ-088).
+  /// REQ-142 Toolspace (Prospector / Settings). Session-only; not written to `.gs`.
+  enum class ToolspaceTab : int { Prospector = 0, Settings = 1 };
+  bool showToolspaceWindow = true;
+  ToolspaceTab toolspaceTab = ToolspaceTab::Prospector;
   /// Which feature line the elevation editor is showing, 0-based. Held here rather than as a static
   /// in the panel so that opening the editor from a selected feature line can aim it, and so it
   /// survives the window being closed and reopened.

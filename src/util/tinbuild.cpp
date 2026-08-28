@@ -874,6 +874,7 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
           insideAnyClip[t] = 1;
         break;
       case TinBoundaryKind::Hide:
+      case TinBoundaryKind::Mask:
         if (in)
           shown[t] = 0;
         break;
@@ -944,4 +945,112 @@ void TinBorderEdges(const std::vector<float>& vertsXyz, const std::vector<std::u
     }
     i = j;
   }
+}
+
+namespace {
+
+[[nodiscard]] double DistPointSeg2(double px, double py, double ax, double ay, double bx, double by) {
+  const double vx = bx - ax, vy = by - ay;
+  const double wx = px - ax, wy = py - ay;
+  const double c1 = vx * wx + vy * wy;
+  if (c1 <= 0.0)
+    return wx * wx + wy * wy;
+  const double c2 = vx * vx + vy * vy;
+  if (c2 <= c1) {
+    const double dx = px - bx, dy = py - by;
+    return dx * dx + dy * dy;
+  }
+  const double t = c1 / c2;
+  const double dx = px - (ax + t * vx);
+  const double dy = py - (ay + t * vy);
+  return dx * dx + dy * dy;
+}
+
+[[nodiscard]] std::uint32_t TriangleOpposite(const std::uint32_t* tri, std::uint32_t lo, std::uint32_t hi) {
+  for (int k = 0; k < 3; ++k) {
+    const std::uint32_t v = tri[k];
+    if (v != lo && v != hi)
+      return v;
+  }
+  return lo;
+}
+
+}  // namespace
+
+bool TinSwapInteriorEdgeNear(const std::vector<float>& vertsXyz, std::vector<std::uint32_t>& indices, double x,
+                             double y) {
+  const int nTri = static_cast<int>(indices.size() / 3);
+  if (nTri < 2 || vertsXyz.size() < 12)
+    return false;
+
+  struct Rec {
+    std::uint32_t lo = 0, hi = 0;
+    int tri = 0;
+  };
+  std::vector<Rec> recs;
+  recs.reserve(static_cast<size_t>(nTri) * 3);
+  for (int t = 0; t < nTri; ++t) {
+    const std::uint32_t a = indices[static_cast<size_t>(t) * 3 + 0];
+    const std::uint32_t b = indices[static_cast<size_t>(t) * 3 + 1];
+    const std::uint32_t c = indices[static_cast<size_t>(t) * 3 + 2];
+    const auto add = [&](std::uint32_t u, std::uint32_t v) {
+      Rec r;
+      r.lo = std::min(u, v);
+      r.hi = std::max(u, v);
+      r.tri = t;
+      recs.push_back(r);
+    };
+    add(a, b);
+    add(b, c);
+    add(c, a);
+  }
+  std::sort(recs.begin(), recs.end(), [](const Rec& p, const Rec& q) {
+    if (p.lo != q.lo)
+      return p.lo < q.lo;
+    if (p.hi != q.hi)
+      return p.hi < q.hi;
+    return p.tri < q.tri;
+  });
+
+  int bestT0 = -1, bestT1 = -1;
+  std::uint32_t bestLo = 0, bestHi = 0;
+  double bestD2 = 1.0e300;
+  for (size_t i = 0; i < recs.size();) {
+    size_t j = i + 1;
+    while (j < recs.size() && recs[j].lo == recs[i].lo && recs[j].hi == recs[i].hi)
+      ++j;
+    if (j == i + 2) {
+      const std::uint32_t lo = recs[i].lo, hi = recs[i].hi;
+      if (lo * 3 + 2 < vertsXyz.size() && hi * 3 + 2 < vertsXyz.size()) {
+        const double ax = vertsXyz[lo * 3], ay = vertsXyz[lo * 3 + 1];
+        const double bx = vertsXyz[hi * 3], by = vertsXyz[hi * 3 + 1];
+        const double d2 = DistPointSeg2(x, y, ax, ay, bx, by);
+        if (d2 < bestD2) {
+          bestD2 = d2;
+          bestT0 = recs[i].tri;
+          bestT1 = recs[i + 1].tri;
+          bestLo = lo;
+          bestHi = hi;
+        }
+      }
+    }
+    i = j;
+  }
+  if (bestT0 < 0 || bestD2 > 1.0)  // 1 ft plan: a miss is not "the nearest edge anywhere"
+    return false;
+
+  std::uint32_t* t0 = &indices[static_cast<size_t>(bestT0) * 3];
+  std::uint32_t* t1 = &indices[static_cast<size_t>(bestT1) * 3];
+  const std::uint32_t b = TriangleOpposite(t0, bestLo, bestHi);
+  const std::uint32_t d = TriangleOpposite(t1, bestLo, bestHi);
+  if (b == d || b == bestLo || d == bestHi)
+    return false;
+
+  t0[0] = bestLo;
+  t0[1] = b;
+  t0[2] = d;
+  t1[0] = b;
+  t1[1] = bestHi;
+  t1[2] = d;
+  return true;
 }

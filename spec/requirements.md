@@ -2314,14 +2314,17 @@ requirements is a planning failure, not a sign of rigor.
 - Purpose: one place to see and edit every surface in the drawing
 - Priority: should
 - Type: functional
-- Statement: A panel lists the drawing's surfaces and supports create, rename, delete, **edit the
-  definition** (add, remove and reorder point groups, breaklines, contour sources and boundaries —
-  REQ-069), create a surface **with no sources** (REQ-124), assign a
-  style (REQ-070), and force a rebuild. For each surface it shows point count, triangle count,
-  elevation range, and whether the surface is currently out of date or rebuilding.
+- Statement: Toolspace Prospector is the place to **edit the definition** (add, remove point groups,
+  breaklines, contour sources, boundaries, point-file links — REQ-069). The **Surfaces** window
+  (Survey ribbon / left-click a named surface) edits **style and analysis** (REQ-070 / REQ-072), not
+  the definition tree. A surface can still be created empty from Toolspace (REQ-124). Force rebuild
+  is on the Surfaces collection menu and on each surface. For each surface the old manager still
+  shows point count, triangle count, elevation range, and stale/rebuilding state when that panel is
+  opened.
 - Acceptance:
-  - every REQ-069 definition operation is reachable from the panel;
-  - a rebuild is reflected in the displayed counts and elevation range;
+  - every REQ-069 definition operation is reachable from Toolspace Prospector on the surface's
+    Definition (and Masks) nodes;
+  - a rebuild is reflected in displayed counts where those readouts exist;
   - a surface that is out of date or rebuilding is shown as such, and the state clears when the
     rebuild lands;
   - deleting a surface from the panel is undoable in one step;
@@ -2329,7 +2332,8 @@ requirements is a planning failure, not a sign of rigor.
 - Owner-layer: UI, Commands
 - Status: accepted (2026-08-12)
 - Revisions: 2026-08-12 — initial. 2026-08-27 — D-2026-08-27-a: empty create (REQ-124) and contour
-  sources (REQ-129) are reachable from the panel.
+  sources (REQ-129) are reachable from the panel. 2026-08-28 — D-2026-08-28-c: definition editing
+  moves to Toolspace; the Surfaces window is style/analysis.
 
 ### REQ-076 — Stable entity identity
 - Purpose: let one object reference another and survive an erase
@@ -4507,7 +4511,8 @@ requirements is a planning failure, not a sign of rigor.
 - Statement: The user can create a named `CadSurface` whose definition is two other TIN surfaces
   (base and comparison, by name). Its triangulation is derived: at each unique plan vertex of
   either parent that both TINs cover, Z is **comparison minus base**. Those points are
-  unconstrained Delaunay (same `BuildTin` as REQ-068). No `ISurface`, no grid/corridor type.
+  unconstrained Delaunay (same `BuildTin` as REQ-068). Grid and corridor kinds are REQ-137, not this
+  object's job.
   Parents that are themselves volume surfaces are refused. Missing names, identical parents, or
   no overlapping samples are named refusals (REQ-201). The object rebuilds when a parent TIN is
   replaced (REQ-069 dirty). `.gs` stores the two names plus the derived verts/indices like any
@@ -4522,7 +4527,121 @@ requirements is a planning failure, not a sign of rigor.
   - the created object appears in SURFACELIST as a volume surface naming both parents.
 - Owner-layer: util (tinvolume), Domain, Commands, UI, IO
 - Status: accepted (2026-08-27)
-- Revisions: 2026-08-27 — initial (D-2026-08-27-b).
+- Revisions: 2026-08-27 — initial (D-2026-08-27-b). 2026-08-28 — D-2026-08-28-a: drop the
+  "no ISurface / no grid" sentence; those kinds are REQ-137.
+
+### REQ-137 — Surface kinds and shared query interface (GitHub issue #119)
+- Purpose: TIN, grid, grid-volume, and corridor surfaces share elevation / slope / aspect queries
+- Priority: must
+- Type: functional
+- Statement: `CadSurface` carries a `SurfaceKind` (`Tin`, `Grid`, `TinVolume`, `GridVolume`,
+  `Corridor`). Query and analysis go through `ISurfaceQuery` in `util/` with **two implementations**
+  (TIN triangle interpolation and grid bilinear — REQ-301). Corridor surfaces build a TIN from
+  designated feature-line vertices. Grid surfaces store origin, spacing, column/row counts and Z
+  samples; they also produce a display TIN (two triangles per cell). Grid-volume Z is comparison
+  minus base at shared nodes. `SURFACECREATE` accepts an optional kind; `SURFACECREATEGRID` /
+  `SURFACECREATECORR` name the other kinds. Missing data yields a named empty surface (REQ-124).
+- Acceptance:
+  - a 2×2 grid with known corner Z interpolates the cell centre within REQ-101;
+  - a TIN query and `ISurfaceQuery` on the same TIN agree within REQ-101;
+  - a corridor surface with no feature lines is named and not built;
+  - a grid-volume with no overlapping nodes is a named refusal.
+- Owner-layer: util, Domain, Commands, IO
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-a.
+
+### REQ-138 — Contour extras, slope angle, and XY aspect (issue #119)
+- Purpose: user-defined contour elevations, Chaikin smoothing, contour labels, slope in degrees,
+  query slope/aspect at a plan point
+- Priority: must
+- Type: functional
+- Statement: A style may list extra contour elevations, a Chaikin pass count (0–5) on **display**
+  contours, and a label spacing in feet along major contours (0 = off). Labels are live overlay
+  text, not entities. `SurfaceAnalysisMode::SlopeAngle` bands by `atan(grade/100)` in degrees.
+  `SURFELEV` reports elevation, percent grade, slope angle, and aspect degrees (or "outside").
+- Acceptance:
+  - a user elevation appears in the generated contour level list;
+  - smoothing with passes > 0 increases vertex count of an open contour;
+  - labels are omitted when spacing is 0;
+  - a due-east plane reports aspect 90° and a non-zero slope angle;
+  - a miss reports outside and does not invent a slope.
+- Owner-layer: util, Commands, UI
+- Status: accepted (2026-08-28)
+
+### REQ-139 — Masks and TIN edge swap (issue #119)
+- Purpose: mask rings exclude area from calculations; swapped edges survive rebuild
+- Priority: must
+- Type: functional
+- Statement: `CadBoundaryKind::Mask` is a closed polyline that hides triangles (same cull as Hide)
+  and is listed under Masks in the Surface Manager. `SURFSWAPEDGE <surface>, <x>, <y>` records an
+  interior edge flip in the definition; rebuild reapplies flips to a new `shared_ptr<const CadTin>`.
+  A pick that is not on an interior edge is a named refusal.
+- Acceptance:
+  - a mask removes triangles from area stats versus the unmasked twin;
+  - a successful swap changes two triangle index triples and survives SURFACEREBUILD;
+  - a miss pick does not mutate the TIN.
+- Owner-layer: util, Domain, Commands, UI, IO
+- Status: accepted (2026-08-28)
+
+### REQ-140 — Volume MTEXT report and extended statistics (issue #119)
+- Purpose: put cut/fill on the sheet; TIN and volume-surface stats match the issue
+- Priority: must
+- Type: functional
+- Statement: `VOLREPORT` inserts an MTEXT of the last successful `VOLUMES` / dashboard cut, fill,
+  net (yd³) and common area (ft²). `SURFACESTATS` adds min/max triangle area, unique edge count,
+  breakline-edge count, min/max/mean slope in **degrees**, and for a volume surface the integrated
+  positive/negative Z (cut/fill) over the difference TIN.
+- Acceptance:
+  - VOLREPORT with no prior volume result is a named refusal and adds no entity;
+  - after VOLUMES, VOLREPORT increases the annotation count by one;
+  - stats on a 1-triangle surface report that triangle's area as min and max.
+- Owner-layer: Commands, util, UI
+- Status: accepted (2026-08-28)
+
+### REQ-141 — Analyze ribbon and water-drop feature line (issue #119)
+- Purpose: the issue's Analyze tools are reachable from the Survey ribbon; a drop can be a feature line
+- Priority: must
+- Type: functional
+- Statement: The Survey ribbon exposes Surfaces, volume surface create, Add breakline/contour/boundary,
+  Elevations (SURFELEV), Slopes / Directions / Arrows (SURFSTYLE), Watershed, Water Drop, Catchment,
+  Volume Dashboard, Bounded volume (clip), VOLREPORT, Properties (manager), Statistics, Rebuild.
+  `WATERDROP EXTRACT FL` bakes the last path as a feature line (unlinked).
+- Acceptance:
+  - each named command remains invokable from the command line;
+  - EXTRACT FL with a path adds one feature line; with no path is a named refusal.
+- Owner-layer: UI, Commands
+- Status: accepted (2026-08-28)
+
+### REQ-142 — Toolspace (Prospector and Settings)
+- Purpose: a drawing explorer whose chrome matches Civil 3D Toolspace, listing only objects GoSurvey implements
+- Priority: must
+- Type: functional
+- Statement: A dockable **TOOLSPACE** window has a dark title, a toolbar, a view combo, a light
+  tree, a right-edge pair of **readable** vertical tabs (**Prospector**, **Settings**), and an empty
+  preview strip. Prospector is rooted at the active drawing name and lists Points (light context menu:
+  Create, Import, Export, Edit, Select, Zoom to, Pan to), Point Groups, Surfaces, and Feature Lines.
+  Left-click on a **collection** folder does nothing; right-click shows that collection's Civil 3D
+  command list, with unimplemented items **disabled**. Named point groups, surfaces, and feature lines
+  are children of those folders. Left-click does not open editors; right-click menus do (Style and
+  Analysis on a named surface, Properties on a named group or feature line). Hierarchy uses thin grey
+  tree lines. Definition add/remove is on the expanded surface tree (Masks, Watersheds, Definition: Boundaries,
+  Breaklines, Contours, Point Files, Point Groups, Edits). Folders Civil 3D shows that GoSurvey does
+  not implement (DEM Files, Drawing Objects, Alignments, …) stay **absent**. Settings
+  lists only implemented style tables: General (Text Styles, Layers, Dimension Style) and Surface
+  (Surface Styles). The panel reads existing stores; it does not invent document types. `TOOLSPACE`
+  opens it; `TOOLSPACE SETTINGS` / `PROSPECTOR` switch tabs; `TOOLSPACE LIST` prints the tree;
+  `TOOLSPACE CLOSE` hides it. An unknown verb is a named refusal.
+- Acceptance:
+  - `TOOLSPACE LIST` on an empty drawing names Points, Point Groups, Surfaces, and Feature Lines and
+    does not name Alignments, Pipe Networks, or Parcel;
+  - after creating a named surface and a named point group, `LIST` includes those names plus
+    Definition, Masks, and Watersheds, and does not name DEM Files;
+  - `TOOLSPACE SETTINGS` then `LIST` names Text Styles and Surface Styles and does not name Parcel
+    or Grading;
+  - `TOOLSPACE NOSUCH` is a named refusal and does not change the tab.
+- Owner-layer: UI, Commands
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-c: collection left-click, Civil 3D menus, definition from tree.
 
 ---
 
@@ -4991,6 +5110,12 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-134 | util/Commands | done (TASK-127) — catchment pour-point and ridge union; CATCHMENT | accepted |
 | REQ-135 | UI/IO | done (TASK-125) — paper overlay + `PdfPlot` stroke of display batches; non-plottable omitted | accepted |
 | REQ-136 | util/Domain/Commands/UI/IO | done (TASK-128) — `TinVolumeTests [req136]`; `VOLUMESURFACE`; Surface Manager volume create; `req136-volume-surface` | accepted |
+| REQ-137 | util/Domain/Commands/IO | done (TASK-129) — `Issue119SurfaceTests [req137]`; `SURFACECREATEGRID` / `CORR`; `req137-grid-corridor-volreport` | accepted |
+| REQ-138 | util/Commands/UI | done (TASK-129) — `[req138]` Chaikin, labels, aspect | accepted |
+| REQ-139 | util/Domain/Commands | done (TASK-129) — `[req139]` SURFSWAPEDGE miss/hit | accepted |
+| REQ-140 | Commands/util | done (TASK-129) — `[req140]` stats; `VOLREPORT`; `req140-volreport` | accepted |
+| REQ-141 | UI/Commands | done (TASK-129) — Survey Analyze ribbon; `WATERDROP EXTRACT FL` | accepted |
+| REQ-142 | UI/Commands | done (TASK-130) — Toolspace Prospector + Settings | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |

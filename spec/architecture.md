@@ -1692,10 +1692,10 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   seam. The issue cannot be implemented as written without reversing those decisions; D-2026-08-27-a
   records which parts reverse, which stay refused, and how the accepted parts attach.
 - Decision:
-  (a) **One concrete `CadSurface`.** New capabilities are free functions over `vertsXyz`/`indices`
-      (and a surface's existing definition arrays). No `ISurface`, no virtual analysis, no type
-      hierarchy for grid / corridor / TIN-volume. If those types are ever accepted they get their
-      own stores and their own REQs.
+  (a) **`CadSurface` is still the document row.** Kinds are a discriminator (`SurfaceKind`). Queries
+      go through `ISurfaceQuery` (REQ-137) with TIN-interpolation and grid-bilinear implementations
+      (REQ-301: two present-day uses). Corridor and volume kinds reuse the TIN query path once built.
+      D-2026-08-28-a reverses the "no ISurface" clause of (a) as originally written.
   (b) **A named surface is a definition that may have `tin == nullptr`.** Fewer than three
       non-collinear points still produces **no triangulation** (REQ-069's "no partial TIN" is
       unchanged). The *object* is created anyway (REQ-124), so the user can add sources afterwards.
@@ -1737,19 +1737,20 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   (k) **Surfaces in paper-space viewports and PDF plot** consume the same display-geometry batches
       model space already builds. PdfPlot currently draws none; that is a gap, not a decision.
       Filling it does not add a second contour engine.
-  (l) **Out of this ADR, recorded so they are not built as side effects:** grid surfaces, corridor
-      surfaces, contour smoothing, contour labels, TIN edge swap, proximity /
-      wall / non-destructive breaklines, Civil 3D surface import, DEM / point-cloud sources.
-      TIN-volume **surfaces** are in (REQ-136); grid/corridor types stay out.
-- Alternatives: **(1) A surface interface so grid can arrive later** — declined; one present-day
-  type (ADR-028 (h), REQ-301). **(2) Persist the TIN query index and watershed polygons in `.gs`**
+  (l) **D-2026-08-28-a brings in** grid, corridor, contour smoothing, contour labels, TIN edge swap
+      as definition, masks, slope-angle banding, volume MTEXT, Analyze ribbon, water-drop feature
+      line. Still out: proximity / wall / non-destructive breaklines, Civil 3D surface import,
+      DEM / point-cloud sources.
+- Alternatives: **(1) A surface interface** — accepted 2026-08-28 as `ISurfaceQuery` over TIN and
+  grid, not a polymorphic entity store. **(2) Persist the TIN query index and watershed polygons in `.gs`**
   — declined; they are derived and would go stale against a rebuild. **(3) Put the spatial index on
   `CadTin`** — declined; `CadEntities.hpp` stays free of `tinbuild.hpp`. **(4) Manual TIN edge swap**
-  — declined for this epic; next rebuild would discard a mutated triangulation unless swap became a
-  definition operation, which nobody asked to design today.
-- Consequences: REQ-124…135; additive `.gs` fields (`clip` kind, `contourSources` array) that a
-  legacy file omits; a fourth `CadBoundaryKind` / `TinBoundaryKind`; `SurfaceAnalysisMode::Direction`;
-  a `mutable` (or equivalently non-document) query cache beside `surfaceDisplayCache`; new commands
-  `SURFACESTATS`, `DESIGNATECONTOUR`, `WATERSHED` / `WATERDROP` / `CATCHMENT` as those REQs are built.
-  Sequencing: Phase 1 (124–130, 135) before Phase 2 (131) before Phase 3 (132–134).
-  D-2026-08-27-b adds REQ-136 (TIN volume surface) without a new type hierarchy.
+  — accepted 2026-08-28 as a **definition** list (`SURFSWAPEDGE`) reapplied after each rebuild
+  (D-2026-08-28-a / REQ-139), not as a mutation of the live `shared_ptr<const CadTin>`.
+- Consequences: REQ-124…141; additive `.gs` fields (`clip`/`mask` kinds, `contourSources`, surface
+  `kind`, grid samples, swap picks) that a legacy file omits; `CadBoundaryKind::Mask`;
+  `SurfaceAnalysisMode::SlopeAngle`; `ISurfaceQuery` in util with TIN and grid implementations;
+  a `mutable` query cache beside `surfaceDisplayCache`; commands `SURFACESTATS`, `DESIGNATECONTOUR`,
+  `WATERSHED` / `WATERDROP` / `CATCHMENT`, `VOLUMESURFACE`, `VOLREPORT`, `SURFSWAPEDGE`,
+  `SURFACECREATEGRID` / `SURFACECREATECORR`. Sequencing: Phase 1 (124–130, 135) before Phase 2 (131)
+  before Phase 3 (132–134) before Phase 4 (136–141).

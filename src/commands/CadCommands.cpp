@@ -1,4 +1,5 @@
 #include "CadCommands.hpp"
+#include "ToolspaceCatalog.hpp"
 #include "OrthoConstrain.hpp"
 #include "TextStyle.hpp"
 #include "CadCoordinateFrame.hpp"
@@ -15,6 +16,8 @@
 #include "util/surfacestats.hpp"   // REQ-125
 #include "util/watershed.hpp"      // REQ-132…134
 #include "util/tinvolume.hpp"      // REQ-136
+#include "util/gridsurface.hpp"    // REQ-137
+#include "util/surfacequery.hpp"   // REQ-137
 #include "util/curveintersect.hpp"  // REQ-062 analytic intersections; EXTEND (TASK-096) reuses this over TRIM's tessellation
 #include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
 #include "util/gltfimport.hpp"
@@ -44,6 +47,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <set>
 #include <limits>
 #include <sstream>
@@ -1598,6 +1602,8 @@ void BuildSurfaceAnalysisGeometry(const CadTin& tin, const SurfaceStyle& style,
         value = TriangleCentroidZ(t);
       } else if (style.analysisMode == SurfaceAnalysisMode::Slope) {
         value = TrianglePlaneSlopePct(t);
+      } else if (style.analysisMode == SurfaceAnalysisMode::SlopeAngle) {
+        value = std::atan(TrianglePlaneSlopePct(t) / 100.0) * 180.0 / 3.14159265358979323846;
       } else {
         haveValue = TriangleDownhillAspectDeg(t, kFlatGradePctDefault, &value);
       }
@@ -1739,6 +1745,31 @@ SurfaceContourLevels ResolveSurfaceContourLevels(const CadTin& tin, const Surfac
   }
 
   SplitContourLevels(out.minZ, out.maxZ, style, &out.minor, &out.major);
+  for (double u : style.userContourFt) {
+    if (!std::isfinite(u) || u < out.minZ || u > out.maxZ)
+      continue;
+    out.major.push_back(u);
+  }
+  if (!style.userContourFt.empty()) {
+    std::sort(out.major.begin(), out.major.end());
+    out.major.erase(std::unique(out.major.begin(), out.major.end(),
+                                [](double a, double b) { return std::fabs(a - b) <= 1.0e-9; }),
+                    out.major.end());
+    const double tol = std::max(1.0e-9, style.minorIntervalFt * 1.0e-9);
+    std::vector<double> minorKept;
+    for (double lv : out.minor) {
+      bool hit = false;
+      for (double m : out.major) {
+        if (std::fabs(m - lv) <= tol) {
+          hit = true;
+          break;
+        }
+      }
+      if (!hit)
+        minorKept.push_back(lv);
+    }
+    out.minor = std::move(minorKept);
+  }
   return out;
 }
 
@@ -1843,27 +1874,35 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
 
     release(&it->minorContours);
     release(&it->majorContours);
+    it->contourLabels.clear();
     it->contoursSuppressed = false;
     it->suppressedLevelCount = 0;
     if (resolved.minorContour.visible || resolved.majorContour.visible) {
-      // The SAME decision REQ-071's EXTRACT makes, from the same function — which is what makes
-      // "extraction produces polylines at exactly the displayed contour elevations" structural.
       const SurfaceContourLevels levels = ResolveSurfaceContourLevels(*tin, resolved);
       if (levels.suppressed) {
-        // Recorded, never absorbed (REQ-201). Nothing here can log — this runs once a frame with no
-        // command in flight — so the fact is carried on the entry and the Surface Manager reports
-        // it. Silently drawing no contours would look like a defect in the generator.
         it->contoursSuppressed = true;
         it->suppressedLevelCount = levels.levelsAsked;
       } else {
         ContourResult r;
         if (!levels.minor.empty()) {
           GenerateContours(tin->vertsXyz, tin->indices, levels.minor, &r);
+          SmoothContoursChaikin(&r, resolved.contourSmoothPasses);
           AppendContourLinesFrom(r, &it->minorContours);
         }
         if (!levels.major.empty()) {
           GenerateContours(tin->vertsXyz, tin->indices, levels.major, &r);
+          SmoothContoursChaikin(&r, resolved.contourSmoothPasses);
           AppendContourLinesFrom(r, &it->majorContours);
+          std::vector<ContourLabelPoint> labs;
+          CollectContourLabels(r, resolved.contourLabelSpacingFt, &labs);
+          for (const ContourLabelPoint& lp : labs) {
+            AppCommandState::SurfaceDisplayCacheEntry::ContourLabel cl;
+            cl.x = lp.x;
+            cl.y = lp.y;
+            cl.z = lp.z;
+            cl.level = lp.level;
+            it->contourLabels.push_back(cl);
+          }
         }
       }
     }
@@ -2312,6 +2351,7 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
     loop.kind = b.kind == CadBoundaryKind::Outer ? TinBoundaryKind::Outer
               : b.kind == CadBoundaryKind::Hide  ? TinBoundaryKind::Hide
               : b.kind == CadBoundaryKind::Show  ? TinBoundaryKind::Show
+              : b.kind == CadBoundaryKind::Mask  ? TinBoundaryKind::Mask
                                                  : TinBoundaryKind::Clip;
     for (const auto& v : chain.verts)
       loop.ring.push_back({v[0], v[1]});
@@ -2472,11 +2512,134 @@ std::shared_ptr<CadTin> ToLocalTin(const TinBuildResult& r, double originX, doub
   return tin;
 }
 
+void ApplyDefinitionEdgeSwaps(CadSurface& surface) {
+  if (!surface.tin || surface.swappedEdgePicks.empty())
+    return;
+  auto mut = std::make_shared<CadTin>(*surface.tin);
+  for (const std::pair<double, double>& p : surface.swappedEdgePicks)
+    (void)TinSwapInteriorEdgeNear(mut->vertsXyz, mut->indices, p.first, p.second);
+  surface.tin = std::move(mut);
+}
+
+bool BuildGridKindSurface(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
+  surface.builtAtRevision = st.cadGpuRevision;
+  surface.lastBuildIncomplete = false;
+  if (surface.kind == SurfaceKind::GridVolume) {
+    const int bi = FindSurfaceIndex(st, surface.volumeBaseName);
+    const int ci = FindSurfaceIndex(st, surface.volumeComparisonName);
+    if (bi < 0 || ci < 0) {
+      surface.lastBuildMessage = "Missing grid-volume parent.";
+      log.push_back("Surface \"" + surface.name + "\" not built: missing grid-volume parent.");
+      return false;
+    }
+    const CadSurface& base = st.cadSurfaces[static_cast<size_t>(bi)];
+    const CadSurface& comp = st.cadSurfaces[static_cast<size_t>(ci)];
+    if (base.kind != SurfaceKind::Grid || comp.kind != SurfaceKind::Grid) {
+      surface.lastBuildMessage = "Grid-volume parents must be grid surfaces.";
+      log.push_back("Surface \"" + surface.name + "\" not built: " + surface.lastBuildMessage);
+      return false;
+    }
+    const bool layoutOk = base.gridCols == comp.gridCols && base.gridRows == comp.gridRows &&
+                          std::fabs(base.gridOriginX - comp.gridOriginX) < 1.0e-6 &&
+                          std::fabs(base.gridOriginY - comp.gridOriginY) < 1.0e-6 &&
+                          std::fabs(base.gridSpacingX - comp.gridSpacingX) < 1.0e-6 &&
+                          std::fabs(base.gridSpacingY - comp.gridSpacingY) < 1.0e-6;
+    if (!layoutOk) {
+      surface.lastBuildMessage = "Grid-volume parents must share origin, spacing, and size.";
+      log.push_back("Surface \"" + surface.name + "\" not built: " + surface.lastBuildMessage);
+      return false;
+    }
+    std::string why;
+    if (!GridVolumeSubtract(base.gridOriginX, base.gridOriginY, base.gridSpacingX, base.gridSpacingY,
+                            base.gridCols, base.gridRows, base.gridZ, comp.gridZ, &surface.gridZ, &why)) {
+      surface.tin.reset();
+      surface.lastBuildMessage = why.empty() ? "grid-volume has no overlapping nodes" : why;
+      log.push_back("Surface \"" + surface.name + "\" not built: " + surface.lastBuildMessage + ".");
+      return false;
+    }
+    surface.gridOriginX = base.gridOriginX;
+    surface.gridOriginY = base.gridOriginY;
+    surface.gridSpacingX = base.gridSpacingX;
+    surface.gridSpacingY = base.gridSpacingY;
+    surface.gridCols = base.gridCols;
+    surface.gridRows = base.gridRows;
+  }
+  if (!GridIndexValid(surface.gridCols, surface.gridRows, surface.gridZ)) {
+    surface.tin.reset();
+    surface.lastBuildMessage = "Grid is empty or not 2×2 or larger.";
+    log.push_back("Surface \"" + surface.name + "\" not built: " + surface.lastBuildMessage);
+    return false;
+  }
+  TinBuildResult r;
+  GridBuildDisplayTin(surface.gridOriginX, surface.gridOriginY, surface.gridSpacingX, surface.gridSpacingY,
+                      surface.gridCols, surface.gridRows, surface.gridZ, &r);
+  std::shared_ptr<CadTin> tin = ToLocalTin(r, st.worldDocumentOriginX, st.worldDocumentOriginY);
+  if (!tin) {
+    surface.lastBuildMessage = "Grid display TIN is empty.";
+    log.push_back("Surface \"" + surface.name + "\" not built: " + surface.lastBuildMessage);
+    return false;
+  }
+  surface.tin = std::move(tin);
+  ApplyDefinitionEdgeSwaps(surface);
+  surface.lastBuildMessage = r.message;
+  log.push_back("Surface \"" + surface.name + "\": grid, " + std::to_string(surface.vertexCount()) +
+                " points, " + std::to_string(surface.triangleCount()) + " triangles.");
+  return true;
+}
+
+bool BuildCorridorSurface(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
+  surface.builtAtRevision = st.cadGpuRevision;
+  SurfaceBuildInputs in = ResolveSurfaceInputs(st, surface, log);
+  in.pts.clear();
+  in.constraints.clear();
+  std::vector<CadSurfaceBreakline> kept;
+  for (const CadSurfaceBreakline& fl : surface.corridorFeatureLines) {
+    ResolvedChain chain;
+    if (!ResolveDefinitionChain(st, fl.entityId, /*requireClosed=*/false, chain))
+      continue;
+    kept.push_back(fl);
+    for (const auto& v : chain.verts)
+      in.pts.push_back({v[0], v[1], static_cast<float>(v[2])});
+    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints);
+  }
+  surface.corridorFeatureLines = std::move(kept);
+  if (in.pts.empty()) {
+    surface.tin.reset();
+    surface.lastBuildIncomplete = false;
+    surface.lastBuildMessage = "Corridor surface has no feature lines.";
+    log.push_back("Surface \"" + surface.name + "\": " + surface.lastBuildMessage);
+    return false;
+  }
+  const TinBuildResult r = RunSurfaceBuild(in);
+  surface.lastBuildIncomplete = false;
+  if (!r.ok()) {
+    surface.lastBuildMessage = r.message;
+    log.push_back("Surface \"" + surface.name + "\" not built: " + r.message);
+    return false;
+  }
+  std::shared_ptr<CadTin> tin = ToLocalTin(r, in.originX, in.originY);
+  if (!tin) {
+    surface.lastBuildMessage = "Corridor triangulation is empty.";
+    log.push_back("Surface \"" + surface.name + "\" not built: " + surface.lastBuildMessage);
+    return false;
+  }
+  surface.tin = std::move(tin);
+  ApplyDefinitionEdgeSwaps(surface);
+  surface.lastBuildMessage = r.message;
+  log.push_back("Surface \"" + surface.name + "\": corridor, " + std::to_string(surface.vertexCount()) +
+                " points, " + std::to_string(surface.triangleCount()) + " triangles.");
+  return true;
+}
+
 } // namespace
 
 bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vector<std::string>& log) {
   // Synchronous path: explicit user actions (create, the manual Rebuild button) that should show a
   // result immediately rather than waiting a frame for the async path below to pick them up.
+  if (surface.kind == SurfaceKind::Grid || surface.kind == SurfaceKind::GridVolume)
+    return BuildGridKindSurface(st, surface, log);
+  if (surface.kind == SurfaceKind::Corridor)
+    return BuildCorridorSurface(st, surface, log);
   if (surface.isVolumeSurface()) {
     SurfaceBuildInputs in;
     std::string why;
@@ -2503,6 +2666,7 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
       return false;
     }
     surface.tin = std::move(tin);
+    ApplyDefinitionEdgeSwaps(surface);
     surface.lastBuildMessage = r.message;
     log.push_back("Surface \"" + surface.name + "\": volume TIN, " + std::to_string(surface.vertexCount()) +
                   " points, " + std::to_string(surface.triangleCount()) + " triangles.");
@@ -2536,6 +2700,7 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
 
   // Replace the pointer, never write through it (architecture §11.5).
   surface.tin = std::move(tin);
+  ApplyDefinitionEdgeSwaps(surface);
   surface.lastBuildMessage = r.message;
 
   std::string msg = "Surface \"" + surface.name + "\": " + std::to_string(surface.vertexCount()) +
@@ -2591,6 +2756,7 @@ int CreateSurfaceFromVolumeParents(AppCommandState& st, const std::string& name,
   BumpCadGpuCache(st);
   CadSurface s;
   s.name = name;
+  s.kind = SurfaceKind::TinVolume;
   s.volumeBaseName = baseName;
   s.volumeComparisonName = comparisonName;
   const bool built = BuildSurfaceFromSources(st, s, log);
@@ -2661,6 +2827,7 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
       std::shared_ptr<CadTin> tin = ToLocalTin(r, job.originX, job.originY);
       if (tin) {
         surface.tin = std::move(tin);  // replace the pointer, never write through it (§11.5)
+        ApplyDefinitionEdgeSwaps(surface);
         surface.lastBuildMessage = r.message;
         std::string msg = "Surface \"" + surface.name + "\": " + std::to_string(surface.vertexCount()) +
                           " points, " + std::to_string(surface.triangleCount()) + " triangles.";
@@ -2698,6 +2865,14 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
     const bool alreadyRunning = SurfaceRebuildInFlight(st, surfaceId);
     if (alreadyRunning)
       continue;
+    if (surface.kind == SurfaceKind::Grid || surface.kind == SurfaceKind::GridVolume ||
+        surface.kind == SurfaceKind::Corridor) {
+      std::vector<std::string> buildLog;
+      (void)BuildSurfaceFromSources(st, surface, buildLog);
+      for (std::string& m : buildLog)
+        log.push_back(std::move(m));
+      continue;
+    }
 
     std::vector<std::string> resolveLog;
     SurfaceBuildInputs inputs;
@@ -2900,6 +3075,13 @@ void ReportSurfaces(const AppCommandState& st, std::vector<std::string>& log) {
   }
   for (const CadSurface& s : st.cadSurfaces) {
     std::string line = "Surface \"" + s.name + "\": ";
+    const char* kn = s.kind == SurfaceKind::Grid          ? "grid"
+                     : s.kind == SurfaceKind::TinVolume   ? "tin-volume"
+                     : s.kind == SurfaceKind::GridVolume  ? "grid-volume"
+                     : s.kind == SurfaceKind::Corridor    ? "corridor"
+                                                          : "tin";
+    line += kn;
+    line += ", ";
     line += s.tin ? (std::to_string(s.vertexCount()) + " points, " + std::to_string(s.triangleCount()) +
                      " triangles")
                   : std::string("not built");
@@ -2933,6 +3115,7 @@ void ReportSurfaces(const AppCommandState& st, std::vector<std::string>& log) {
       const char* kindName = b.kind == CadBoundaryKind::Outer ? "outer"
                             : b.kind == CadBoundaryKind::Hide  ? "hide"
                             : b.kind == CadBoundaryKind::Show  ? "show"
+                            : b.kind == CadBoundaryKind::Mask  ? "mask"
                                                                : "clip";
       log.push_back("  boundary " + std::to_string(i + 1) + ": " + kindName + ", entity id " +
                     std::to_string(b.entityId) + (b.name.empty() ? "" : "  \"" + b.name + "\""));
@@ -2987,6 +3170,172 @@ void RunVolumeSurfaceCreate(AppCommandState& st, const std::string& args, std::v
   }
   PushUndoSnapshot(st, "Create volume surface");
   CreateSurfaceFromVolumeParents(st, f[0], f[1], f[2], log);
+}
+
+void RunSurfaceCreateGrid(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() < 7 || f[0].empty()) {
+    log.push_back("SURFACECREATEGRID — usage: SURFACECREATEGRID <name>, <ox>, <oy>, <sx>, <sy>, <cols>, "
+                  "<rows>[, z…].");
+    return;
+  }
+  if (FindSurfaceIndex(st, f[0]) >= 0) {
+    log.push_back("A surface named \"" + f[0] + "\" already exists.");
+    return;
+  }
+  auto parseD = [&](const std::string& s, double* o) {
+    char* end = nullptr;
+    *o = std::strtod(s.c_str(), &end);
+    return end && end != s.c_str() && *end == '\0' && std::isfinite(*o);
+  };
+  double ox = 0, oy = 0, sx = 0, sy = 0;
+  if (!parseD(f[1], &ox) || !parseD(f[2], &oy) || !parseD(f[3], &sx) || !parseD(f[4], &sy) || sx <= 0.0 ||
+      sy <= 0.0) {
+    log.push_back("SURFACECREATEGRID — origin and positive spacing are required.");
+    return;
+  }
+  char* e1 = nullptr;
+  char* e2 = nullptr;
+  const long cols = std::strtol(f[5].c_str(), &e1, 10);
+  const long rows = std::strtol(f[6].c_str(), &e2, 10);
+  if (!e1 || *e1 != '\0' || !e2 || *e2 != '\0' || cols < 2 || rows < 2) {
+    log.push_back("SURFACECREATEGRID — cols and rows must be integers ≥ 2.");
+    return;
+  }
+  CadSurface s;
+  s.name = f[0];
+  s.kind = SurfaceKind::Grid;
+  s.gridOriginX = ox;
+  s.gridOriginY = oy;
+  s.gridSpacingX = sx;
+  s.gridSpacingY = sy;
+  s.gridCols = static_cast<int>(cols);
+  s.gridRows = static_cast<int>(rows);
+  s.gridZ.assign(static_cast<size_t>(s.gridCols) * static_cast<size_t>(s.gridRows), 0.f);
+  const size_t expect = s.gridZ.size();
+  for (size_t i = 0; i < expect && 7 + i < f.size(); ++i) {
+    double z = 0;
+    if (parseD(f[7 + i], &z))
+      s.gridZ[i] = static_cast<float>(z);
+  }
+  PushUndoSnapshot(st, "Create grid surface");
+  BumpCadGpuCache(st);
+  (void)BuildSurfaceFromSources(st, s, log);
+  st.cadSurfaces.push_back(std::move(s));
+  EnsureAttrCounts(st);
+}
+
+void RunSurfaceCreateCorr(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::string name = StringUtil::trimCopy(args);
+  if (name.empty()) {
+    log.push_back("SURFACECREATECORR — usage: SURFACECREATECORR <name>.");
+    return;
+  }
+  if (FindSurfaceIndex(st, name) >= 0) {
+    log.push_back("A surface named \"" + name + "\" already exists.");
+    return;
+  }
+  PushUndoSnapshot(st, "Create corridor surface");
+  BumpCadGpuCache(st);
+  CadSurface s;
+  s.name = name;
+  s.kind = SurfaceKind::Corridor;
+  (void)BuildSurfaceFromSources(st, s, log);
+  st.cadSurfaces.push_back(std::move(s));
+  EnsureAttrCounts(st);
+}
+
+void RunSurfaceCreateVolGrid(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() != 3 || f[0].empty() || f[1].empty() || f[2].empty()) {
+    log.push_back("SURFACECREATEVOLGRID — usage: SURFACECREATEVOLGRID <name>, <base grid>, <comparison grid>.");
+    return;
+  }
+  if (FindSurfaceIndex(st, f[0]) >= 0) {
+    log.push_back("A surface named \"" + f[0] + "\" already exists.");
+    return;
+  }
+  PushUndoSnapshot(st, "Create grid volume surface");
+  BumpCadGpuCache(st);
+  CadSurface s;
+  s.name = f[0];
+  s.kind = SurfaceKind::GridVolume;
+  s.volumeBaseName = f[1];
+  s.volumeComparisonName = f[2];
+  (void)BuildSurfaceFromSources(st, s, log);
+  st.cadSurfaces.push_back(std::move(s));
+  EnsureAttrCounts(st);
+}
+
+void RunSurfSwapEdge(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() != 3 || f[0].empty()) {
+    log.push_back("SURFSWAPEDGE — usage: SURFSWAPEDGE <surface>, <x>, <y>.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFSWAPEDGE — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  if (!s.tin || s.tin->indices.size() < 6) {
+    log.push_back("SURFSWAPEDGE — \"" + s.name + "\" is not a built TIN.");
+    return;
+  }
+  char* ex = nullptr;
+  char* ey = nullptr;
+  const double x = std::strtod(f[1].c_str(), &ex);
+  const double y = std::strtod(f[2].c_str(), &ey);
+  if (!ex || *ex != '\0' || !ey || *ey != '\0') {
+    log.push_back("SURFSWAPEDGE — x and y must be numbers.");
+    return;
+  }
+  auto trial = std::make_shared<CadTin>(*s.tin);
+  if (!TinSwapInteriorEdgeNear(trial->vertsXyz, trial->indices, x, y)) {
+    log.push_back("SURFSWAPEDGE — pick is not on an interior edge.");
+    return;
+  }
+  PushUndoSnapshot(st, "Swap TIN edge");
+  s.swappedEdgePicks.emplace_back(x, y);
+  s.tin = std::move(trial);
+  BumpCadGpuCache(st);
+  log.push_back("SURFSWAPEDGE — swapped an interior edge on \"" + s.name + "\".");
+}
+
+void RunVolReport(AppCommandState& st, std::vector<std::string>& log) {
+  std::string text = st.lastVolumeReportText;
+  if (text.empty() && st.volumeDashboard.hasResult) {
+    const int p = st.displayLinearPrecision;
+    const SurfaceVolumeResult& r = st.volumeDashboard.lastResult;
+    char buf[384];
+    std::snprintf(buf, sizeof(buf),
+                  "Volume report: cut %s, fill %s, net %s, common area %s ft2.",
+                  FormatVolumeYd3(r.cutFt3, p).c_str(), FormatVolumeYd3(r.fillFt3, p).c_str(),
+                  FormatVolumeYd3(r.netFt3, p).c_str(), FormatLinear(r.commonAreaFt2, p).c_str());
+    text = buf;
+  }
+  if (text.empty()) {
+    log.push_back("VOLREPORT — no volume result to insert.");
+    return;
+  }
+  PushUndoSnapshot(st, "VOLREPORT");
+  CadAnnotation ann;
+  ann.kind = CadAnnotation::Kind::Mtext;
+  ann.boxMinX = 0.f;
+  ann.boxMinY = 0.f;
+  ann.boxMaxX = 40.f;
+  ann.boxMaxY = 12.f;
+  ann.insX = 0.f;
+  ann.insY = 0.f;
+  ann.plottedHeightInches = st.defaultPlottedTextHeightInches;
+  ann.text = text;
+  ann.insZ = CadCommitElevation(st);
+  StampActiveTextStyleOnNewText(st, ann);
+  st.cadAnnotations.push_back(std::move(ann));
+  EnsureAttrCounts(st);
+  BumpCadGpuCache(st);
+  log.push_back("VOLREPORT — MTEXT inserted.");
 }
 
 /// `SURFACERENAME <old>, <new>` — same duplicate-name refusal as the panel (REQ-075).
@@ -3251,6 +3600,7 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
 
   if (verb.empty()) {
     st.showSurfaceStyleWindow = true;
+    st.surfaceStyleUseSurfacesTitle = false;
     log.push_back("SURFSTYLE — surface style editor opened.");
     return;
   }
@@ -3452,14 +3802,85 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
     else if (mode == "elevation") m = SurfaceAnalysisMode::Elevation;
     else if (mode == "slope") m = SurfaceAnalysisMode::Slope;
     else if (mode == "direction") m = SurfaceAnalysisMode::Direction;
+    else if (mode == "slopeangle" || mode == "angle") m = SurfaceAnalysisMode::SlopeAngle;
     else {
-      log.push_back("SURFSTYLE — analysis type must be none, elevation, slope or direction, not \"" + f[1] + "\".");
+      log.push_back("SURFSTYLE — analysis type must be none, elevation, slope, direction or slopeangle, not \"" + f[1] + "\".");
       return;
     }
     PushUndoSnapshot(st, "Surface style");
     s->analysisMode = m;
     BumpCadGpuCache(st);
     log.push_back("SURFSTYLE — \"" + s->name + "\" analysis: " + mode + ".");
+    return;
+  }
+
+  if (verb == "usercontour") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 2 || f[0].empty()) {
+      usage();
+      return;
+    }
+    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    if (!s) {
+      log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
+      return;
+    }
+    double elev = 0.0;
+    if (!ParseIntervalField(f[1], "user contour elevation", &elev, log))
+      return;
+    PushUndoSnapshot(st, "Surface style");
+    s->userContourFt.push_back(elev);
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — \"" + s->name + "\" user contour " + FormatLinear(elev, st.displayLinearPrecision) +
+                  ".");
+    return;
+  }
+
+  if (verb == "smooth") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 2 || f[0].empty()) {
+      usage();
+      return;
+    }
+    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    if (!s) {
+      log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
+      return;
+    }
+    char* end = nullptr;
+    const long n = std::strtol(f[1].c_str(), &end, 10);
+    if (!end || *end != '\0' || n < 0 || n > 5) {
+      log.push_back("SURFSTYLE — smooth passes must be 0–5.");
+      return;
+    }
+    PushUndoSnapshot(st, "Surface style");
+    s->contourSmoothPasses = static_cast<int>(n);
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — \"" + s->name + "\" contour smooth " + std::to_string(n) + ".");
+    return;
+  }
+
+  if (verb == "labels") {
+    const std::vector<std::string> f = SplitCommaFields(rest);
+    if (f.size() != 2 || f[0].empty()) {
+      usage();
+      return;
+    }
+    SurfaceStyle* s = SurfaceStyles::Find(st.surfaceStyles, f[0]);
+    if (!s) {
+      log.push_back("SURFSTYLE — no style named \"" + f[0] + "\".");
+      return;
+    }
+    double sp = 0.0;
+    if (!ParseIntervalField(f[1], "label spacing", &sp, log))
+      return;
+    if (sp < 0.0)
+      sp = 0.0;
+    PushUndoSnapshot(st, "Surface style");
+    s->contourLabelSpacingFt = sp;
+    BumpCadGpuCache(st);
+    log.push_back("SURFSTYLE — \"" + s->name + "\" contour labels " + FormatLinear(sp, st.displayLinearPrecision) +
+                  ".");
     return;
   }
 
@@ -3603,6 +4024,7 @@ void ExecuteVolumesCommand(AppCommandState& st, const std::string& args, std::ve
                 FormatVolumeYd3(r.fillFt3, p).c_str(), FormatVolumeYd3(r.netFt3, p).c_str(),
                 FormatLinear(r.commonAreaFt2, p).c_str());
   log.push_back(buf);
+  st.lastVolumeReportText = buf;
 }
 
 /// `VOLDASH [<verb> …]` — the command form of the Volume Dashboard panel (REQ-073 amendment,
@@ -3748,6 +4170,53 @@ void ExecuteVolDashCommand(AppCommandState& st, const std::string& args, std::ve
   usage();
 }
 
+void ExecuteToolspaceCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::string verb = StringUtil::toLowerAsciiCopy(
+      StringUtil::trimCopy(args.substr(0, args.find_first_of(" \t,"))));
+
+  const auto dumpTree = [&]() {
+    const bool settings = (st.toolspaceTab == AppCommandState::ToolspaceTab::Settings);
+    log.push_back(std::string("TOOLSPACE — tab: ") + (settings ? "Settings" : "Prospector"));
+    std::vector<std::string> lines;
+    if (settings)
+      AppendToolspaceSettingsLines(st, &lines);
+    else
+      AppendToolspaceProspectorLines(st, &lines);
+    for (const std::string& line : lines)
+      log.push_back(std::string("TOOLSPACE  ") + line);
+  };
+
+  if (verb.empty()) {
+    st.showToolspaceWindow = true;
+    st.toolspaceTab = AppCommandState::ToolspaceTab::Prospector;
+    log.push_back("TOOLSPACE — opened Prospector.");
+    return;
+  }
+  if (verb == "prospector") {
+    st.showToolspaceWindow = true;
+    st.toolspaceTab = AppCommandState::ToolspaceTab::Prospector;
+    log.push_back("TOOLSPACE — Prospector.");
+    return;
+  }
+  if (verb == "settings") {
+    st.showToolspaceWindow = true;
+    st.toolspaceTab = AppCommandState::ToolspaceTab::Settings;
+    log.push_back("TOOLSPACE — Settings.");
+    return;
+  }
+  if (verb == "list") {
+    dumpTree();
+    return;
+  }
+  if (verb == "close" || verb == "off") {
+    st.showToolspaceWindow = false;
+    log.push_back("TOOLSPACE — closed.");
+    return;
+  }
+  log.push_back("TOOLSPACE — usage: TOOLSPACE [PROSPECTOR|SETTINGS|LIST|CLOSE]. Unknown \"" +
+                StringUtil::trimCopy(args) + "\".");
+}
+
 /// `UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY|POINTFILE>, <n>` — removes one item from a surface's
 /// definition (REQ-069's "remove", the counterpart to DESIGNATEBREAKLINE/DESIGNATEBOUNDARY). \p n is
 /// 1-based and matches the numbering SURFACELIST prints. Deleting the referenced entity also removes
@@ -3808,18 +4277,29 @@ void RunSurfaceStats(AppCommandState& st, const std::string& args, std::vector<s
   const std::string name = StringUtil::trimCopy(args);
   auto reportOne = [&](const CadSurface& s) {
     const SurfaceStats stt =
-        s.tin ? ComputeSurfaceStats(s.tin->vertsXyz, s.tin->indices) : SurfaceStats{};
+        s.tin ? ComputeSurfaceStats(s.tin->vertsXyz, s.tin->indices, static_cast<int>(s.breaklines.size()),
+                                    s.isVolumeSurface())
+              : SurfaceStats{};
     if (!stt.built) {
       log.push_back("SURFACESTATS — \"" + s.name + "\": not built.");
       return;
     }
     const int p = st.displayLinearPrecision;
-    log.push_back("SURFACESTATS — \"" + s.name + "\": " + std::to_string(stt.points) + " points, " +
-                  std::to_string(stt.triangles) + " triangles, 2D area " + FormatLinear(stt.area2d, p) +
-                  ", 3D area " + FormatLinear(stt.area3d, p) + ", elev " + FormatLinear(stt.minZ, p) +
-                  " to " + FormatLinear(stt.maxZ, p) + ", slope " + FormatLinear(stt.minSlopePct, 2) +
-                  "% to " + FormatLinear(stt.maxSlopePct, 2) + "% (mean " +
-                  FormatLinear(stt.meanSlopePct, 2) + "%).");
+    std::string line = "SURFACESTATS — \"" + s.name + "\": " + std::to_string(stt.points) + " points, " +
+                       std::to_string(stt.triangles) + " triangles, 2D area " + FormatLinear(stt.area2d, p) +
+                       ", 3D area " + FormatLinear(stt.area3d, p) + ", tri area " +
+                       FormatLinear(stt.minTriArea2d, p) + " to " + FormatLinear(stt.maxTriArea2d, p) +
+                       ", edges " + std::to_string(stt.uniqueEdges) + " (breaklines " +
+                       std::to_string(stt.breaklineEdges) + "), elev " + FormatLinear(stt.minZ, p) + " to " +
+                       FormatLinear(stt.maxZ, p) + ", slope " + FormatLinear(stt.minSlopePct, 2) + "% to " +
+                       FormatLinear(stt.maxSlopePct, 2) + "% (mean " + FormatLinear(stt.meanSlopePct, 2) +
+                       "%), slope " + FormatLinear(stt.minSlopeDeg, 2) + " to " +
+                       FormatLinear(stt.maxSlopeDeg, 2) + " deg (mean " + FormatLinear(stt.meanSlopeDeg, 2) +
+                       " deg).";
+    if (s.isVolumeSurface())
+      line += " volume cut " + FormatVolumeYd3(stt.volumeCutFt3, p) + ", fill " +
+              FormatVolumeYd3(stt.volumeFillFt3, p) + ".";
+    log.push_back(std::move(line));
   };
   if (name.empty()) {
     if (st.cadSurfaces.empty()) {
@@ -4024,8 +4504,38 @@ void RunCatchmentAt(AppCommandState& st, size_t si, double x, double y, std::vec
 }
 
 void RunWaterDropCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
-  const std::vector<std::string> f = SplitCommaFields(StringUtil::trimCopy(args));
-  if (!f.empty() && StringUtil::toLowerAsciiCopy(f[0]) == "extract") {
+  const std::string raw = StringUtil::trimCopy(args);
+  const std::string rawLower = StringUtil::toLowerAsciiCopy(raw);
+  const std::vector<std::string> f = SplitCommaFields(raw);
+  const bool extractFl = rawLower == "extract fl" ||
+                         (f.size() >= 2 && StringUtil::toLowerAsciiCopy(f[0]) == "extract" &&
+                          StringUtil::toLowerAsciiCopy(f[1]) == "fl");
+  const bool extractPoly = !extractFl && (rawLower == "extract" ||
+                                          (!f.empty() && StringUtil::toLowerAsciiCopy(f[0]) == "extract"));
+  if (extractFl) {
+      if (st.lastWaterDropPathXyz.size() < 6) {
+        log.push_back("WATERDROP EXTRACT FL — nothing to extract.");
+        return;
+      }
+      const size_t nvert = st.lastWaterDropPathXyz.size() / 3;
+      PushUndoSnapshot(st, "WATERDROP EXTRACT FL");
+      if (st.featureLineOffsets.empty())
+        st.featureLineOffsets.push_back(0);
+      const int baseVert = st.featureLineOffsets.back();
+      st.featureLineVerts.insert(st.featureLineVerts.end(), st.lastWaterDropPathXyz.begin(),
+                                 st.lastWaterDropPathXyz.end());
+      st.featureLineElevPt.insert(st.featureLineElevPt.end(), nvert, static_cast<uint8_t>(0));
+      st.featureLineOffsets.push_back(baseVert + static_cast<int>(nvert));
+      st.featureLineClosed.push_back(0);
+      CadFeatureLineInfo info;
+      info.name = "Water drop";
+      st.featureLineInfo.push_back(std::move(info));
+      EnsureAttrCounts(st);
+      BumpCadGpuCache(st);
+      log.push_back("WATERDROP EXTRACT FL — 1 feature line (unlinked).");
+      return;
+  }
+  if (extractPoly) {
     if (st.lastWaterDropPathXyz.size() < 6) {
       log.push_back("WATERDROP EXTRACT — nothing to extract.");
       return;
@@ -4924,6 +5434,11 @@ const CmdEntry kRegistry[] = {
     {"designatecontour", "dcon", "Add a picked line/polyline as a surface contour source"},
     {"designateboundary", "dbd", "Add a picked closed polyline as a surface boundary (outer/hide/show/clip)"},
     {"surfacecreate", "sfcreate", "Create a surface from point groups: SURFACECREATE <name>, <group>[, <group>…]"},
+    {"surfacecreategrid", "sfgrid", "Create a grid surface: SURFACECREATEGRID <name>, ox, oy, sx, sy, cols, rows[, z…]"},
+    {"surfacecreatecorr", "sfcorr", "Create a corridor surface: SURFACECREATECORR <name>"},
+    {"surfacecreatevolgrid", "sfvolgrid", "Grid volume surface: SURFACECREATEVOLGRID <name>, <base>, <comparison>"},
+    {"surfswapedge", "sfswap", "Swap a TIN interior edge: SURFSWAPEDGE <surface>, <x>, <y>"},
+    {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT"},
     {"volumesurface", "volsurf", "Create a TIN volume surface: VOLUMESURFACE <name>, <base>, <comparison>"},
     {"surfacerename", "sfrename", "Rename a surface: SURFACERENAME <old>, <new>"},
     {"surfacedelete", "sfdelete", "Delete a surface: SURFACEDELETE <name>"},
@@ -8790,8 +9305,27 @@ static void ReportSurfaceElevationAt(AppCommandState& st, double x, double y, st
     return;
   }
   const int p = st.displayLinearPrecision;
-  for (const auto& e : st.surfaceElevFromZ)
-    log.push_back("SURFELEV — " + e.first + ": elevation " + FormatLinear(e.second, p));
+  for (const SurfaceCoverage& c : SurfacesCovering(st, x, y)) {
+    const CadSurface& surf = st.cadSurfaces[c.surfaceIndex];
+    std::string line = "SURFELEV — " + surf.name + ": elevation " + FormatLinear(c.z, p);
+    std::unique_ptr<ISurfaceQuery> q;
+    if ((surf.kind == SurfaceKind::Grid || surf.kind == SurfaceKind::GridVolume) &&
+        GridIndexValid(surf.gridCols, surf.gridRows, surf.gridZ)) {
+      q = std::make_unique<GridSurfaceQuery>(
+          surf.gridOriginX - st.worldDocumentOriginX, surf.gridOriginY - st.worldDocumentOriginY,
+          surf.gridSpacingX, surf.gridSpacingY, surf.gridCols, surf.gridRows, surf.gridZ);
+    } else if (surf.tin) {
+      q = std::make_unique<TinSurfaceQuery>(surf.tin->vertsXyz, surf.tin->indices);
+    }
+    if (q) {
+      double pct = 0.0, ang = 0.0, asp = 0.0;
+      if (q->slopePercentAt(x, y, &pct) && q->slopeAngleDegAt(x, y, &ang))
+        line += ", grade " + FormatLinear(pct, 2) + "%, slope " + FormatLinear(ang, 2) + " deg";
+      if (q->aspectDegAt(x, y, &asp))
+        line += ", aspect " + FormatLinear(asp, 2) + " deg";
+    }
+    log.push_back(std::move(line));
+  }
 }
 
 /// Second pick: grade from the first, computed **within each surface**, never across two.
@@ -16699,6 +17233,7 @@ void StartDesignateBoundaryCommand(AppCommandState& st, const std::string& surfa
   const char* kindName = kind == CadBoundaryKind::Outer ? "outer"
                        : kind == CadBoundaryKind::Hide  ? "hide"
                        : kind == CadBoundaryKind::Show  ? "show"
+                       : kind == CadBoundaryKind::Mask  ? "mask"
                                                         : "clip";
   log.push_back(std::string("DESIGNATEBOUNDARY — pick a CLOSED polyline to use as a ") + kindName +
                " boundary on \"" + surfaceName + "\". ESC cancels.");
@@ -22530,6 +23065,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       ExecuteSurfStyleCommand(st, StringUtil::trimCopy(rest), log);
       return;
     }
+    if (plotTok == "toolspace" || plotTok == "ts") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ExecuteToolspaceCommand(st, StringUtil::trimCopy(rest), log);
+      return;
+    }
     // REQ-073. `VOLUMES <base surface>, <comparison surface>` — the synchronous command form of
     // the cut/fill/net report, reachable from a headless transcript the way SURFELEV/SURFSTYLE are.
     if (plotTok == "volumes" || plotTok == "vol") {
@@ -22726,12 +23267,25 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "surfaceaddfile" || plotTok == "sfaddfile" || plotTok == "surfaceimportfile" ||
         plotTok == "sfimportfile" || plotTok == "surfacestats" || plotTok == "sfstats" ||
         plotTok == "watershed" || plotTok == "wshed" || plotTok == "waterdrop" || plotTok == "wdrop" ||
-        plotTok == "catchment" || plotTok == "catch") {
+        plotTok == "catchment" || plotTok == "catch" || plotTok == "surfacecreategrid" ||
+        plotTok == "sfgrid" || plotTok == "surfacecreatecorr" || plotTok == "sfcorr" ||
+        plotTok == "surfacecreatevolgrid" || plotTok == "sfvolgrid" || plotTok == "surfswapedge" ||
+        plotTok == "sfswap" || plotTok == "volreport") {
       std::string rest;
       std::getline(issIdle, rest);
       rest = StringUtil::trimCopy(rest);
       if (plotTok == "surfacecreate" || plotTok == "sfcreate")
         RunSurfaceCreate(st, rest, log);
+      else if (plotTok == "surfacecreategrid" || plotTok == "sfgrid")
+        RunSurfaceCreateGrid(st, rest, log);
+      else if (plotTok == "surfacecreatecorr" || plotTok == "sfcorr")
+        RunSurfaceCreateCorr(st, rest, log);
+      else if (plotTok == "surfacecreatevolgrid" || plotTok == "sfvolgrid")
+        RunSurfaceCreateVolGrid(st, rest, log);
+      else if (plotTok == "surfswapedge" || plotTok == "sfswap")
+        RunSurfSwapEdge(st, rest, log);
+      else if (plotTok == "volreport")
+        RunVolReport(st, log);
       else if (plotTok == "volumesurface" || plotTok == "volsurf")
         RunVolumeSurfaceCreate(st, rest, log);
       else if (plotTok == "surfacerename" || plotTok == "sfrename")
@@ -22796,15 +23350,17 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
           usageError ? std::string() : StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(rest.substr(sp + 1)));
       CadBoundaryKind kind = CadBoundaryKind::Outer;
       const bool kindOk = kindWord == "outer" || kindWord == "hide" || kindWord == "show" ||
-                          kindWord == "clip";
+                          kindWord == "clip" || kindWord == "mask";
       if (kindWord == "hide")
         kind = CadBoundaryKind::Hide;
       else if (kindWord == "show")
         kind = CadBoundaryKind::Show;
       else if (kindWord == "clip")
         kind = CadBoundaryKind::Clip;
+      else if (kindWord == "mask")
+        kind = CadBoundaryKind::Mask;
       if (usageError || name.empty() || !kindOk) {
-        log.push_back("DESIGNATEBOUNDARY — usage: DESIGNATEBOUNDARY <surface name> <OUTER|HIDE|SHOW|CLIP>.");
+        log.push_back("DESIGNATEBOUNDARY — usage: DESIGNATEBOUNDARY <surface name> <OUTER|HIDE|SHOW|CLIP|MASK>.");
         return;
       }
       StartDesignateBoundaryCommand(st, name, kind, log);

@@ -1,0 +1,31 @@
+# REQ-142 — Toolspace lists only implemented collections; unknown verb is refused.
+
+NEW
+CMD TOOLSPACE LIST
+EXPECT LOG "tab: Prospector"
+EXPECT LOG "Points"
+EXPECT LOG "Point Groups"
+EXPECT LOG "Surfaces"
+EXPECT LOG "Feature Lines"
+
+CMD TOOLSPACE SETTINGS
+CMD TOOLSPACE LIST
+EXPECT LOG "tab: Settings"
+EXPECT LOG "Text Styles"
+EXPECT LOG "Surface Styles"
+
+CMD TOOLSPACE NOSUCH
+EXPECT LOG "Unknown"
+CMD TOOLSPACE LIST
+EXPECT LOG "tab: Settings"
+
+OPEN samples/surface-demo.gs
+CMD TOOLSPACE PROSPECTOR
+CMD TOOLSPACE LIST
+EXPECT LOG "Existing Ground"
+CMD SURFACECREATE Test EG, Existing Ground
+CMD TOOLSPACE LIST
+EXPECT LOG "Test EG"
+EXPECT LOG "Definition"
+EXPECT LOG "Masks"
+EXPECT LOG "Watersheds"

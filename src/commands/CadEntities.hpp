@@ -143,7 +143,7 @@ struct SurfaceBand {
 /// \c None is the default and is what REQ-072's "turning banding off restores the style's plain
 /// display unchanged" means: the plain display is the state a style STARTS in, not one it has to be
 /// returned to, so a drawing that never opens the Analysis tab cannot be affected by it.
-enum class SurfaceAnalysisMode { None = 0, Elevation = 1, Slope = 2, Direction = 3 };
+enum class SurfaceAnalysisMode { None = 0, Elevation = 1, Slope = 2, Direction = 3, SlopeAngle = 4 };
 
 /// A named surface style (REQ-070 / ADR-036 (d)): how a surface is *drawn*, never what it is made of.
 ///
@@ -177,6 +177,9 @@ struct SurfaceStyle {
   /// level is a mis-labelled contour. \c SurfaceStyles::IntervalsCompatible is that rule.
   double minorIntervalFt = 2.0;
   double majorIntervalFt = 10.0;
+  std::vector<double> userContourFt;
+  int contourSmoothPasses = 0;       ///< Chaikin 0–5 (REQ-138).
+  double contourLabelSpacingFt = 0.0;  ///< 0 = off.
 
   /// REQ-072 analysis. All four default to "off", so a style that never visits the Analysis tab —
   /// and every style in every drawing written before REQ-072 existed — displays exactly as it did.
@@ -206,6 +209,8 @@ struct SurfaceStyle {
     return name == o.name && triangles == o.triangles && border == o.border &&
            majorContour == o.majorContour && minorContour == o.minorContour && points == o.points &&
            minorIntervalFt == o.minorIntervalFt && majorIntervalFt == o.majorIntervalFt &&
+           userContourFt == o.userContourFt && contourSmoothPasses == o.contourSmoothPasses &&
+           contourLabelSpacingFt == o.contourLabelSpacingFt &&
            analysisMode == o.analysisMode && bands == o.bands &&
            slopeArrowsOn == o.slopeArrowsOn && arrowBands == o.arrowBands;
   }
@@ -439,7 +444,7 @@ struct CadTin {
 /// than an include of it, the same reason \ref CadTin mirrors `TinBuildResult`'s layout instead of
 /// including `tinbuild.hpp`: this header stays dependency-free (§11.4), and the conversion is one
 /// `switch` at the one call site that needs both types (`BuildSurfaceFromSources`).
-enum class CadBoundaryKind : std::uint8_t { Outer, Hide, Show, Clip };
+enum class CadBoundaryKind : std::uint8_t { Outer, Hide, Show, Clip, Mask };
 
 /// A boundary ring referenced by stable entity id (REQ-076) — must resolve to a **closed** polyline.
 struct CadSurfaceBoundary {
@@ -506,6 +511,8 @@ struct CadSurfacePointFile {
   bool skipFirstRow = false;    ///< The file has a header row.
 };
 
+enum class SurfaceKind : std::uint8_t { Tin, Grid, TinVolume, GridVolume, Corridor };
+
 /// A named TIN surface (REQ-068).
 ///
 /// Small and copyable: the heavy triangulation hangs off a shared pointer, so copying a surface —
@@ -516,6 +523,13 @@ struct CadSurfacePointFile {
 /// (ADR-028 (f), REQ-201) — the same treatment \ref CadMesh gets.
 struct CadSurface {
   std::string name;  ///< Unique within the drawing.
+  SurfaceKind kind = SurfaceKind::Tin;
+  std::string description;
+  double gridOriginX = 0.0, gridOriginY = 0.0, gridSpacingX = 1.0, gridSpacingY = 1.0;
+  int gridCols = 0, gridRows = 0;
+  std::vector<float> gridZ;
+  std::vector<std::pair<double, double>> swappedEdgePicks;
+  std::vector<CadSurfaceBreakline> corridorFeatureLines;
 
   /// Names of the point groups supplying the surface's points (REQ-067).
   ///
@@ -558,7 +572,8 @@ struct CadSurface {
   std::string volumeComparisonName;
 
   [[nodiscard]] bool isVolumeSurface() const {
-    return !volumeBaseName.empty() || !volumeComparisonName.empty();
+    return kind == SurfaceKind::TinVolume || kind == SurfaceKind::GridVolume || !volumeBaseName.empty() ||
+           !volumeComparisonName.empty();
   }
 
   /// The built triangulation, or null when the surface has never been built.

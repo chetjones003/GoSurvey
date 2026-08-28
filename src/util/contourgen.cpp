@@ -253,3 +253,138 @@ void ContourLevels(double minZ, double maxZ, double interval, std::vector<double
   for (double step = firstStep; step <= lastStep; step += 1.0)
     out->push_back(step * interval);
 }
+
+namespace {
+
+void ChaikinPassOpen(const std::vector<float>& in, std::vector<float>* out) {
+  out->clear();
+  const int n = static_cast<int>(in.size() / 3);
+  if (n < 2)
+    return;
+  auto push = [&](double x, double y, double z) {
+    out->push_back(static_cast<float>(x));
+    out->push_back(static_cast<float>(y));
+    out->push_back(static_cast<float>(z));
+  };
+  push(in[0], in[1], in[2]);
+  for (int i = 0; i + 1 < n; ++i) {
+    const double ax = in[static_cast<size_t>(i) * 3 + 0];
+    const double ay = in[static_cast<size_t>(i) * 3 + 1];
+    const double az = in[static_cast<size_t>(i) * 3 + 2];
+    const double bx = in[static_cast<size_t>(i + 1) * 3 + 0];
+    const double by = in[static_cast<size_t>(i + 1) * 3 + 1];
+    const double bz = in[static_cast<size_t>(i + 1) * 3 + 2];
+    push(0.75 * ax + 0.25 * bx, 0.75 * ay + 0.25 * by, 0.75 * az + 0.25 * bz);
+    push(0.25 * ax + 0.75 * bx, 0.25 * ay + 0.75 * by, 0.25 * az + 0.75 * bz);
+  }
+  push(in[static_cast<size_t>(n - 1) * 3 + 0], in[static_cast<size_t>(n - 1) * 3 + 1],
+       in[static_cast<size_t>(n - 1) * 3 + 2]);
+}
+
+void ChaikinPassClosed(const std::vector<float>& in, std::vector<float>* out) {
+  out->clear();
+  const int n = static_cast<int>(in.size() / 3);
+  if (n < 3)
+    return;
+  auto at = [&](int i, int c) {
+    const int k = ((i % n) + n) % n;
+    return static_cast<double>(in[static_cast<size_t>(k) * 3 + static_cast<size_t>(c)]);
+  };
+  auto push = [&](double x, double y, double z) {
+    out->push_back(static_cast<float>(x));
+    out->push_back(static_cast<float>(y));
+    out->push_back(static_cast<float>(z));
+  };
+  for (int i = 0; i < n; ++i) {
+    const double ax = at(i, 0), ay = at(i, 1), az = at(i, 2);
+    const double bx = at(i + 1, 0), by = at(i + 1, 1), bz = at(i + 1, 2);
+    push(0.75 * ax + 0.25 * bx, 0.75 * ay + 0.25 * by, 0.75 * az + 0.25 * bz);
+    push(0.25 * ax + 0.75 * bx, 0.25 * ay + 0.75 * by, 0.25 * az + 0.75 * bz);
+  }
+}
+
+}  // namespace
+
+void SmoothContoursChaikin(ContourResult* io, int passes) {
+  if (!io || passes <= 0)
+    return;
+  if (passes > 5)
+    passes = 5;
+  ContourResult next;
+  next.offsets.push_back(0);
+  for (int c = 0; c < io->contourCount(); ++c) {
+    const int begin = io->offsets[static_cast<size_t>(c)];
+    const int end = io->offsets[static_cast<size_t>(c) + 1];
+    std::vector<float> poly;
+    for (int v = begin; v < end; ++v) {
+      poly.push_back(io->vertsXyz[static_cast<size_t>(v) * 3 + 0]);
+      poly.push_back(io->vertsXyz[static_cast<size_t>(v) * 3 + 1]);
+      poly.push_back(io->vertsXyz[static_cast<size_t>(v) * 3 + 2]);
+    }
+    std::vector<float> a = std::move(poly), b;
+    for (int p = 0; p < passes; ++p) {
+      if (c < static_cast<int>(io->closed.size()) && io->closed[static_cast<size_t>(c)] != 0)
+        ChaikinPassClosed(a, &b);
+      else
+        ChaikinPassOpen(a, &b);
+      a.swap(b);
+    }
+    next.vertsXyz.insert(next.vertsXyz.end(), a.begin(), a.end());
+    next.offsets.push_back(static_cast<int>(next.vertsXyz.size() / 3));
+    if (c < static_cast<int>(io->levels.size()))
+      next.levels.push_back(io->levels[static_cast<size_t>(c)]);
+    if (c < static_cast<int>(io->closed.size()))
+      next.closed.push_back(io->closed[static_cast<size_t>(c)]);
+  }
+  *io = std::move(next);
+}
+
+void CollectContourLabels(const ContourResult& major, double spacingFt, std::vector<ContourLabelPoint>* out) {
+  if (!out)
+    return;
+  out->clear();
+  if (!(spacingFt > 0.0))
+    return;
+  for (int c = 0; c < major.contourCount(); ++c) {
+    const int begin = major.offsets[static_cast<size_t>(c)];
+    const int end = major.offsets[static_cast<size_t>(c) + 1];
+    if (end - begin < 2)
+      continue;
+    double accum = 0.0;
+    double nextAt = 0.0;
+    const double level = c < static_cast<int>(major.levels.size()) ? major.levels[static_cast<size_t>(c)] : 0.0;
+    for (int v = begin; v + 1 < end; ++v) {
+      const double x0 = major.vertsXyz[static_cast<size_t>(v) * 3 + 0];
+      const double y0 = major.vertsXyz[static_cast<size_t>(v) * 3 + 1];
+      const double z0 = major.vertsXyz[static_cast<size_t>(v) * 3 + 2];
+      const double x1 = major.vertsXyz[static_cast<size_t>(v + 1) * 3 + 0];
+      const double y1 = major.vertsXyz[static_cast<size_t>(v + 1) * 3 + 1];
+      const double z1 = major.vertsXyz[static_cast<size_t>(v + 1) * 3 + 2];
+      const double seg = std::hypot(x1 - x0, y1 - y0);
+      if (seg <= 0.0)
+        continue;
+      double remain = seg;
+      double used = 0.0;
+      while (accum + remain >= nextAt - 1.0e-9) {
+        const double need = nextAt - accum;
+        if (need < 0.0)
+          break;
+        const double t = (need <= 0.0) ? 0.0 : (need / seg);
+        if (t > 1.0)
+          break;
+        ContourLabelPoint p;
+        p.x = static_cast<float>(x0 + t * (x1 - x0));
+        p.y = static_cast<float>(y0 + t * (y1 - y0));
+        p.z = static_cast<float>(z0 + t * (z1 - z0));
+        p.level = level;
+        out->push_back(p);
+        nextAt += spacingFt;
+        used = need;
+        if (need >= remain)
+          break;
+      }
+      accum += seg;
+      (void)used;
+    }
+  }
+}

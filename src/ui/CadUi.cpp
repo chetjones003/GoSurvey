@@ -1,4 +1,5 @@
 #include "CadUi.hpp"
+// REQ-141 Analyze ribbon + contour label overlay.
 #include "CadCoordinateFrame.hpp"
 #include "ViewCube.hpp"  // in-tree orientation widget (REQ-059)
 #include "ViewportPickPolicy.hpp"
@@ -760,7 +761,8 @@ static void DrawSurfaceAnalysisLegend(const AppCommandState& cmd, ImVec2 imgPos,
 
     const bool byElevation = resolved.analysisMode == SurfaceAnalysisMode::Elevation;
     const bool byDirection = resolved.analysisMode == SurfaceAnalysisMode::Direction;
-    const char* unit = byElevation ? "ft" : (byDirection ? "deg" : "%");
+    const bool bySlopeAngle = resolved.analysisMode == SurfaceAnalysisMode::SlopeAngle;
+    const char* unit = byElevation ? "ft" : (byDirection || bySlopeAngle ? "deg" : "%");
     // Title row + one row per band + one overflow row (only when there is a table to overflow).
     const size_t dataRows = resolved.bands.size() + (resolved.bands.empty() ? 0 : 1);
     const float boxH = (1.f + static_cast<float>(dataRows)) * kRowH + kPad * 2.f;
@@ -772,7 +774,7 @@ static void DrawSurfaceAnalysisLegend(const AppCommandState& cmd, ImVec2 imgPos,
     dl->AddRect(boxMin, boxMax, IM_COL32(95, 95, 95, 255), 4.f, 0, 1.f);
 
     float ty = boxMin.y + kPad;
-    const std::string title = surf.name + " - " + (byElevation ? "Elevation" : (byDirection ? "Direction" : "Slope"));
+    const std::string title = surf.name + " - " + (byElevation ? "Elevation" : (byDirection ? "Direction" : (bySlopeAngle ? "Slope angle" : "Slope")));
     dl->AddText(ImVec2(boxMin.x + kPad, ty), IM_COL32(230, 230, 230, 255), title.c_str());
     ty += kRowH;
 
@@ -1146,7 +1148,8 @@ void SetupMainDockLayout(ImGuiID dockspace_id, const ImVec2& dock_host_size, boo
     ImGui::DockBuilderSplitNode(dock_center, ImGuiDir_Down, 0.30f, &dock_bottom, &dock_center);
 
   ImGui::DockBuilderDockWindow("Reports", dock_left);
-  ImGui::DockBuilderDockWindow("Properties", dock_left);  // docked last → active tab
+  ImGui::DockBuilderDockWindow("Properties", dock_left);
+  ImGui::DockBuilderDockWindow("TOOLSPACE", dock_left);  // last → selected on first layout (REQ-142)
   if (reserveCommandDock)
     ImGui::DockBuilderDockWindow("Command line", dock_bottom);
   ImGui::DockBuilderDockWindow("Viewports", dock_center);
@@ -1324,6 +1327,8 @@ void DrawMainMenuBar(AppCommandState& cmd, std::vector<std::string>& log) {
     if (ImGui::MenuItem("Classic command dock", nullptr, cmd.cmdLineClassicDock))
       cmd.cmdLineClassicDock = !cmd.cmdLineClassicDock;
     ImGui::Separator();
+    if (ImGui::MenuItem("Toolspace", nullptr, cmd.showToolspaceWindow))
+      cmd.showToolspaceWindow = !cmd.showToolspaceWindow;
     if (ImGui::MenuItem("Settings...", nullptr))
       cmd.showSettingsWindow = true;
     ImGui::EndMenu();
@@ -3011,18 +3016,50 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         ImGui::SameLine(0, 4);
         const float cwB = colW({"Surfaces", "Volumes"});
         ImGui::BeginGroup();
-        if (smallBtn("##RibbonSurfaces", RibbonIconKind::SurveyPoint, "Surfaces", cwB))
-          cmd.showSurfaceManagerWindow = true;
+        if (smallBtn("##RibbonSurfaces", RibbonIconKind::SurveyPoint, "Surfaces", cwB)) {
+          cmd.surfaceStyleUseSurfacesTitle = true;
+          cmd.showSurfaceStyleWindow = true;
+        }
         RibbonItemHelp(
-            "Surfaces — build a TIN surface by triangulating the points in one or more point groups, "
-            "then rebuild it as the survey changes.");
-        // REQ-073 amendment (TASK-095). Sits with Surfaces because a volume comparison is always between
-        // two of them.
+            "Surfaces — edit surface styles and analysis. Create surfaces and edit definitions from "
+            "Toolspace (right-click Surfaces).");
         if (smallBtn("##RibbonVolumes", RibbonIconKind::SurveyPoint, "Volumes", cwB))
           cmd.volumeDashboard.open = true;
         RibbonItemHelp(
             "Volume Dashboard — pick a Base and a Comparison surface for a live cut/fill/net report that "
             "updates automatically as either surface is rebuilt.");
+        ImGui::EndGroup();
+
+        ImGui::SameLine(0, 4);
+        const float cwAn = colW({"Elev", "Drop"});
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonSurfElev", RibbonIconKind::SurveyPoint, "Elev", cwAn))
+          StartSurfaceElevGradeCommand(cmd, log);
+        RibbonItemHelp("Surface elevation, grade, slope angle, and aspect at a pick.\nCommand bar: SURFELEV");
+        if (smallBtn("##RibbonWaterDrop", RibbonIconKind::SurveyPoint, "Drop", cwAn)) {
+          if (!cmd.cadSurfaces.empty())
+            StartWaterDropCommand(cmd, cmd.cadSurfaces[0].name, log);
+          else {
+            char buf[32] = "WATERDROP";
+            ProcessCommandLineSubmit(buf, 32, cmd, log);
+          }
+        }
+        RibbonItemHelp("Water drop path on a surface.\nCommand bar: WATERDROP");
+        ImGui::EndGroup();
+
+        ImGui::SameLine(0, 4);
+        const float cwAn2 = colW({"Shed", "Report"});
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonWatershed", RibbonIconKind::SurveyPoint, "Shed", cwAn2)) {
+          char buf[32] = "WATERSHED";
+          ProcessCommandLineSubmit(buf, 32, cmd, log);
+        }
+        RibbonItemHelp("Watershed basins.\nCommand bar: WATERSHED");
+        if (smallBtn("##RibbonVolReport", RibbonIconKind::SurveyPoint, "Report", cwAn2)) {
+          char buf[32] = "VOLREPORT";
+          ProcessCommandLineSubmit(buf, 32, cmd, log);
+        }
+        RibbonItemHelp("Insert MTEXT of the last volume result.\nCommand bar: VOLREPORT");
         ImGui::EndGroup();
 
         ImGui::SameLine(0, 4);
@@ -3090,6 +3127,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         if (smallBtn("##RibbonSettings", RibbonIconKind::Layers, "Settings", colW({"Settings"})))
           cmd.showSettingsWindow = true;
         RibbonItemHelp("Open application settings (same as View menu → Settings...).");
+        ImGui::SameLine(0, 4);
+        if (smallBtn("##RibbonToolspace", RibbonIconKind::Layers, "Toolspace", colW({"Toolspace"})))
+          cmd.showToolspaceWindow = true;
+        RibbonItemHelp("Toolspace — drawing explorer (Prospector and Settings).\nCommand bar: TOOLSPACE");
       }
       RibbonSectionEnd();
     }});
@@ -11613,6 +11654,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           emitSurfLines(it->minorContours, sc, 1.0f);
           emitSurfLines(it->majorContours, sc, 1.5f);
           emitSurfLines(it->borderEdges, sc, 1.5f);
+          for (const auto& lb : it->contourLabels) {
+            const ImVec2 p = m2s(static_cast<double>(lb.x) + oX, static_cast<double>(lb.y) + oY);
+            char t[48];
+            std::snprintf(t, sizeof(t), "%.2f", lb.level);
+            sdl->AddText(p, sc, t);
+          }
           for (const auto& ab : it->arrowLineBuffers)
             emitSurfLines(ab, sc, 1.0f);
         }
@@ -13807,6 +13854,29 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
 
   // ---- REQ-072 analysis legend (TASK-086 §6 (4)) ------------------------------------------------
   DrawSurfaceAnalysisLegend(cmd, imgPos, avail);
+  if (cmd.activeSpaceIndex == kModelSpaceIndex) {
+    ImDrawList* labelDl = ImGui::GetWindowDrawList();
+    const Camera labelCam = CadViewCamera(cmd);
+    const double oX = cmd.worldDocumentOriginX;
+    const double oY = cmd.worldDocumentOriginY;
+    for (size_t si = 0; si < cmd.cadSurfaces.size(); ++si) {
+      if (!SurfaceVisible(cmd, si) || si >= cmd.cadSurfaceAttrs.size())
+        continue;
+      const std::uint64_t id = cmd.cadSurfaceAttrs[si].id;
+      auto it = std::find_if(cmd.surfaceDisplayCache.begin(), cmd.surfaceDisplayCache.end(),
+                             [&](const AppCommandState::SurfaceDisplayCacheEntry& e) { return e.surfaceId == id; });
+      if (it == cmd.surfaceDisplayCache.end())
+        continue;
+      for (const auto& lb : it->contourLabels) {
+        float sx = 0.f, sy = 0.f;
+        labelCam.WorldToScreen(static_cast<double>(lb.x) + oX, static_cast<double>(lb.y) + oY,
+                               static_cast<double>(lb.z), avail.x, avail.y, &sx, &sy);
+        char t[48];
+        std::snprintf(t, sizeof(t), "%.2f", lb.level);
+        labelDl->AddText(ImVec2(imgPos.x + sx, imgPos.y + sy), IM_COL32(240, 220, 80, 255), t);
+      }
+    }
+  }
 
   // ---- ViewCube (REQ-059) ----------------------------------------------------------------------
   // Model space only: a paper sheet is 2D (ADR-025 (g)) and has no orientation to show.

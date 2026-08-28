@@ -68,17 +68,7 @@ when" and the requirements it closes.
 A lightweight board that complements the milestones. Keep each column honest.
 
 ### Now (in flight — keep short)
-- **M-Surfaces steps 6 + 7 — REQ-068 (selection), REQ-070, REQ-072.** Resequenced by
-  **D-2026-08-21-a**: the user asked for surface styles and a selectable surface together, so step 7
-  (REQ-072 banding + arrows) is pulled forward beside step 6 and **REQ-071 (contour EXTRACT) is
-  pushed back** to its own task. Three tasks, in this order — each blocked on the one before it:
-  - **TASK-084 — REQ-068's selection half**, never implemented. It also gives surfaces the stable
-    entity id (`EntityKind::Surface`) that everything below depends on.
-  - **TASK-085 — REQ-070 surface styles**: the style table, `util/contourgen`, the display-geometry
-    cache, the Surface Style dialog.
-  - **TASK-086 — REQ-072 analysis**: elevation/slope banding, slope arrows, the legend.
-  Step 5 (REQ-069) is done (see M-Surfaces status below). ADR-036 records the shape; it **amends
-  ADR-028 (h)** on the band-shading path.
+- *(empty)*
 
 ### M-PaperSpace — Paper space & plotting (incremental)
 - **Goal:** compose the model onto sheets and plot them.

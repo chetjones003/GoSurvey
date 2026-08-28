@@ -39,6 +39,9 @@ void DrawFloatingWindowChrome();
 
 void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
+/// REQ-142 Civil 3D-shaped drawing explorer (Prospector + Settings).
+void DrawToolspaceWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+
 /// Command log, input, and hints. Default plotted text height is under Properties → General.
 void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBufSize, AppCommandState& cmd);
 
@@ -94,8 +97,10 @@ void DrawPointGroupManagerWindow(AppCommandState& cmd, std::vector<std::string>*
 /// touches no surface definition, so nothing here can re-triangulate anything.
 void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 void DrawDimStyleWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
-/// Surfaces panel (REQ-068): create a TIN surface from point groups, rebuild, rename, delete.
+/// Surfaces panel (REQ-075): leftover definition explorer. Style/analysis is DrawSurfaceStyleWindow.
 void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+/// Surface Properties (Information / Definition / Analysis / Statistics) for one named surface.
+void DrawSurfacePropertiesWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
 void DrawVolumeDashboardWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 

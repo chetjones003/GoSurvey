@@ -773,6 +773,7 @@ int main()
     ImGui::PopStyleVar(3);
 
     DrawPropertiesPanel(cmd, &cmdLog);
+    DrawToolspaceWindow(cmd, &cmdLog);
 
     // Keep documents vector in sync with the tab list.
     while (cmd.documents.size() < cmd.drawingTabs.size())

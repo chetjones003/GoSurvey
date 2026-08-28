@@ -104,7 +104,11 @@ const char* LayoutName(int layoutIndex) {
 }
 
 const char* BoundaryKindName(CadBoundaryKind k) {
-  return k == CadBoundaryKind::Outer ? "Outer" : k == CadBoundaryKind::Hide ? "Hide" : "Show";
+  return k == CadBoundaryKind::Outer ? "Outer"
+         : k == CadBoundaryKind::Hide  ? "Hide"
+         : k == CadBoundaryKind::Show  ? "Show"
+         : k == CadBoundaryKind::Mask  ? "Mask"
+                                       : "Clip";
 }
 
 /// Which dialog wants opening after the tree is drawn. ImGui popups must be opened from the same id
@@ -571,6 +575,7 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
       }
       const SurfaceStyle* now = SurfaceStyles::Resolve(cmd.surfaceStyles, s.styleName);
       cmd.surfaceStyleEditorFocusName = now ? now->name : std::string();
+      cmd.surfaceStyleUseSurfacesTitle = true;
       cmd.showSurfaceStyleWindow = true;
     }
     // REQ-201: contours the display path declined to generate are said out loud, not left to look
@@ -692,8 +697,8 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
     ImGui::TextUnformatted("Type:");
     ImGui::SetNextItemWidth(360.f);
     // Outer, Hide, Show, Clip (REQ-128).
-    const char* bdTypes[] = {"Outer", "Hide", "Show", "Clip"};
-    ImGui::Combo("##bdtype", &dlgBoundaryKind, bdTypes, 4);
+    const char* bdTypes[] = {"Outer", "Hide", "Show", "Clip", "Mask"};
+    ImGui::Combo("##bdtype", &dlgBoundaryKind, bdTypes, 5);
     ImGui::Spacing();
     ImGui::TextDisabled("OK, then pick a CLOSED polyline in the drawing.");
     ImGui::Spacing();
@@ -702,6 +707,7 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
         const CadBoundaryKind kind = dlgBoundaryKind == 1   ? CadBoundaryKind::Hide
                                      : dlgBoundaryKind == 2 ? CadBoundaryKind::Show
                                      : dlgBoundaryKind == 3 ? CadBoundaryKind::Clip
+                                     : dlgBoundaryKind == 4 ? CadBoundaryKind::Mask
                                                             : CadBoundaryKind::Outer;
         cmd.designateBoundaryName = dlgText;
         StartDesignateBoundaryCommand(cmd, cmd.cadSurfaces[static_cast<size_t>(dlgSurface)].name, kind, *log);

@@ -260,11 +260,18 @@ json BuildRoot(const AppCommandState& st) {
         // style: a key that appears on every file the moment it is opened is what BUG-015 and
         // BUG-019 were both made of.
         if (s.analysisMode != SurfaceAnalysisMode::None || s.slopeArrowsOn || !s.bands.empty() ||
-            !s.arrowBands.empty()) {
+            !s.arrowBands.empty() || !s.userContourFt.empty() || s.contourSmoothPasses != 0 ||
+            s.contourLabelSpacingFt != 0.0) {
           o["analysisMode"] = static_cast<int>(s.analysisMode);
           o["slopeArrowsOn"] = s.slopeArrowsOn;
           o["bands"] = bandsToJson(s.bands);
           o["arrowBands"] = bandsToJson(s.arrowBands);
+          if (!s.userContourFt.empty())
+            o["userContourFt"] = s.userContourFt;
+          if (s.contourSmoothPasses != 0)
+            o["contourSmoothPasses"] = s.contourSmoothPasses;
+          if (s.contourLabelSpacingFt != 0.0)
+            o["contourLabelSpacingFt"] = s.contourLabelSpacingFt;
         }
         styles.push_back(std::move(o));
       }
@@ -687,11 +694,47 @@ json BuildRoot(const AppCommandState& st) {
         bo["kind"] = b.kind == CadBoundaryKind::Outer ? "outer"
                     : b.kind == CadBoundaryKind::Hide  ? "hide"
                     : b.kind == CadBoundaryKind::Show  ? "show"
+                    : b.kind == CadBoundaryKind::Mask  ? "mask"
                                                        : "clip";
         bo["name"] = b.name;
         boundaries.push_back(std::move(bo));
       }
       o["boundaries"] = std::move(boundaries);
+      if (s.kind != SurfaceKind::Tin)
+        o["kind"] = s.kind == SurfaceKind::Grid         ? "grid"
+                    : s.kind == SurfaceKind::TinVolume  ? "tinVolume"
+                    : s.kind == SurfaceKind::GridVolume ? "gridVolume"
+                                                        : "corridor";
+      if (!s.description.empty())
+        o["description"] = s.description;
+      if (s.kind == SurfaceKind::Grid || s.kind == SurfaceKind::GridVolume) {
+        o["gridOriginX"] = s.gridOriginX;
+        o["gridOriginY"] = s.gridOriginY;
+        o["gridSpacingX"] = s.gridSpacingX;
+        o["gridSpacingY"] = s.gridSpacingY;
+        o["gridCols"] = s.gridCols;
+        o["gridRows"] = s.gridRows;
+        o["gridZ"] = s.gridZ;
+      }
+      if (!s.swappedEdgePicks.empty()) {
+        json swaps = json::array();
+        for (const auto& p : s.swappedEdgePicks) {
+          json sp;
+          sp["x"] = p.first;
+          sp["y"] = p.second;
+          swaps.push_back(std::move(sp));
+        }
+        o["swappedEdgePicks"] = std::move(swaps);
+      }
+      json corr = json::array();
+      for (const CadSurfaceBreakline& fl : s.corridorFeatureLines) {
+        json flo;
+        flo["entityId"] = fl.entityId;
+        flo["description"] = fl.description;
+        corr.push_back(std::move(flo));
+      }
+      if (!corr.empty())
+        o["corridorFeatureLines"] = std::move(corr);
       if (!s.volumeBaseName.empty())
         o["volumeBaseName"] = s.volumeBaseName;
       if (!s.volumeComparisonName.empty())
@@ -1329,9 +1372,14 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         s.analysisMode = mode == 1   ? SurfaceAnalysisMode::Elevation
                          : mode == 2 ? SurfaceAnalysisMode::Slope
                          : mode == 3 ? SurfaceAnalysisMode::Direction
+                         : mode == 4 ? SurfaceAnalysisMode::SlopeAngle
                                      : SurfaceAnalysisMode::None;
       }
       s.slopeArrowsOn = o.value("slopeArrowsOn", s.slopeArrowsOn);
+      if (o.contains("userContourFt") && o["userContourFt"].is_array())
+        s.userContourFt = o["userContourFt"].get<std::vector<double>>();
+      s.contourSmoothPasses = o.value("contourSmoothPasses", s.contourSmoothPasses);
+      s.contourLabelSpacingFt = o.value("contourLabelSpacingFt", s.contourLabelSpacingFt);
       if (o.contains("bands"))
         bandsFromJson(o["bands"], &s.bands);
       if (o.contains("arrowBands"))
@@ -1542,6 +1590,40 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
       // written and falls back at draw time, so re-pointing the surface at a style with that name
       // later restores it instead of finding the reference silently rewritten.
       s.styleName = el.value("styleName", std::string());
+      {
+        const std::string ks = el.value("kind", std::string());
+        s.kind = ks == "grid"          ? SurfaceKind::Grid
+                 : ks == "tinVolume"   ? SurfaceKind::TinVolume
+                 : ks == "gridVolume"  ? SurfaceKind::GridVolume
+                 : ks == "corridor"    ? SurfaceKind::Corridor
+                                       : SurfaceKind::Tin;
+      }
+      s.description = el.value("description", std::string());
+      s.gridOriginX = el.value("gridOriginX", 0.0);
+      s.gridOriginY = el.value("gridOriginY", 0.0);
+      s.gridSpacingX = el.value("gridSpacingX", 1.0);
+      s.gridSpacingY = el.value("gridSpacingY", 1.0);
+      s.gridCols = el.value("gridCols", 0);
+      s.gridRows = el.value("gridRows", 0);
+      if (el.contains("gridZ") && el["gridZ"].is_array())
+        s.gridZ = el["gridZ"].get<std::vector<float>>();
+      if (el.contains("swappedEdgePicks") && el["swappedEdgePicks"].is_array()) {
+        for (const auto& sp : el["swappedEdgePicks"]) {
+          if (!sp.is_object())
+            continue;
+          s.swappedEdgePicks.emplace_back(sp.value("x", 0.0), sp.value("y", 0.0));
+        }
+      }
+      if (el.contains("corridorFeatureLines") && el["corridorFeatureLines"].is_array()) {
+        for (const auto& flo : el["corridorFeatureLines"]) {
+          if (!flo.is_object() || !flo.contains("entityId"))
+            continue;
+          CadSurfaceBreakline fl;
+          fl.entityId = flo["entityId"].get<std::uint64_t>();
+          fl.description = flo.value("description", std::string());
+          s.corridorFeatureLines.push_back(std::move(fl));
+        }
+      }
       s.volumeBaseName = el.value("volumeBaseName", std::string());
       s.volumeComparisonName = el.value("volumeComparisonName", std::string());
       if (el.contains("sourcePointGroups") && el["sourcePointGroups"].is_array())
@@ -1606,6 +1688,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           b.kind = kindStr == "hide" ? CadBoundaryKind::Hide
                  : kindStr == "show" ? CadBoundaryKind::Show
                  : kindStr == "clip" ? CadBoundaryKind::Clip
+                 : kindStr == "mask" ? CadBoundaryKind::Mask
                                      : CadBoundaryKind::Outer;
           b.name = bo.value("name", std::string());  // absent in a pre-REQ-075 file
           s.boundaries.push_back(std::move(b));
