@@ -14,6 +14,7 @@
 /// live recompute over two REQ-100-density surfaces (~200,000 triangles each) cannot afford
 /// `TinElevationAt`'s O(triangles) scan once per sample point.
 
+#include <cstddef>
 #include <cstdint>
 #include <utility>
 #include <vector>
@@ -46,10 +47,12 @@ struct TinSpatialIndex {
 /// about what "inside" or "the elevation there" means.
 ///
 /// \param outZ receives the elevation; untouched when no triangle in the point's cell covers it.
+/// \param outTri when non-null, receives the covering triangle ordinal (`indices[ord*3]`).
 /// \returns true when a triangle covers the point.
 [[nodiscard]] bool TinElevationAtIndexed(const std::vector<float>& vertsXyz,
                                          const std::vector<std::uint32_t>& indices,
-                                         const TinSpatialIndex& index, double x, double y, double* outZ);
+                                         const TinSpatialIndex& index, double x, double y, double* outZ,
+                                         size_t* outTri = nullptr);
 
 /// The result of a REQ-073 volume comparison between a **Base** and a **Comparison** surface
 /// (ASSUMPTION-3, TASK-095: Civil 3D's own terms).

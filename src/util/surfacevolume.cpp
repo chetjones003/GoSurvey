@@ -109,7 +109,7 @@ TinSpatialIndex BuildTinSpatialIndex(const std::vector<float>& vertsXyz,
 }
 
 bool TinElevationAtIndexed(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
-                           const TinSpatialIndex& index, double x, double y, double* outZ) {
+                           const TinSpatialIndex& index, double x, double y, double* outZ, size_t* outTri) {
   if (!outZ || index.empty())
     return false;
   const int c = std::clamp(static_cast<int>((x - index.minX) / index.cellSize), 0, index.cols - 1);
@@ -119,8 +119,11 @@ bool TinElevationAtIndexed(const std::vector<float>& vertsXyz, const std::vector
     const size_t t = static_cast<size_t>(triOrdinal) * 3;
     if (t + 2 >= indices.size())
       continue;
-    if (TinTriangleElevationAt(vertsXyz, indices[t], indices[t + 1], indices[t + 2], x, y, outZ))
+    if (TinTriangleElevationAt(vertsXyz, indices[t], indices[t + 1], indices[t + 2], x, y, outZ)) {
+      if (outTri)
+        *outTri = static_cast<size_t>(triOrdinal);
       return true;
+    }
   }
   return false;
 }

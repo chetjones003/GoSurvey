@@ -3267,10 +3267,32 @@ void RunSurfaceCreateVolGrid(AppCommandState& st, const std::string& args, std::
   EnsureAttrCounts(st);
 }
 
+static void CommitSurfSwapEdgeLocal(AppCommandState& st, CadSurface& s, double x, double y,
+                                    std::vector<std::string>& log) {
+  if (!s.tin || s.tin->indices.size() < 6) {
+    log.push_back("SURFSWAPEDGE — \"" + s.name + "\" is not a built TIN.");
+    return;
+  }
+  auto trial = std::make_shared<CadTin>(*s.tin);
+  if (!TinSwapInteriorEdgeNear(trial->vertsXyz, trial->indices, x, y)) {
+    log.push_back("SURFSWAPEDGE — pick is not on an interior edge.");
+    return;
+  }
+  PushUndoSnapshot(st, "Swap TIN edge");
+  s.swappedEdgePicks.emplace_back(x, y);
+  s.tin = std::move(trial);
+  BumpCadGpuCache(st);
+  log.push_back("SURFSWAPEDGE — swapped an interior edge on \"" + s.name + "\".");
+}
+
 void RunSurfSwapEdge(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() == 1 && !f[0].empty()) {
+    StartSurfSwapEdgeCommand(st, f[0], log);
+    return;
+  }
   if (f.size() != 3 || f[0].empty()) {
-    log.push_back("SURFSWAPEDGE — usage: SURFSWAPEDGE <surface>, <x>, <y>.");
+    log.push_back("SURFSWAPEDGE — usage: SURFSWAPEDGE <surface>[, <x>, <y>].");
     return;
   }
   const int si = FindSurfaceIndex(st, f[0]);
@@ -3279,10 +3301,6 @@ void RunSurfSwapEdge(AppCommandState& st, const std::string& args, std::vector<s
     return;
   }
   CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
-  if (!s.tin || s.tin->indices.size() < 6) {
-    log.push_back("SURFSWAPEDGE — \"" + s.name + "\" is not a built TIN.");
-    return;
-  }
   char* ex = nullptr;
   char* ey = nullptr;
   const double wx = std::strtod(f[1].c_str(), &ex);
@@ -3294,18 +3312,7 @@ void RunSurfSwapEdge(AppCommandState& st, const std::string& args, std::vector<s
   float lx = 0.f;
   float ly = 0.f;
   CadCoord::LocalFromWorld(st, wx, wy, &lx, &ly);
-  const double x = static_cast<double>(lx);
-  const double y = static_cast<double>(ly);
-  auto trial = std::make_shared<CadTin>(*s.tin);
-  if (!TinSwapInteriorEdgeNear(trial->vertsXyz, trial->indices, x, y)) {
-    log.push_back("SURFSWAPEDGE — pick is not on an interior edge.");
-    return;
-  }
-  PushUndoSnapshot(st, "Swap TIN edge");
-  s.swappedEdgePicks.emplace_back(x, y);
-  s.tin = std::move(trial);
-  BumpCadGpuCache(st);
-  log.push_back("SURFSWAPEDGE — swapped an interior edge on \"" + s.name + "\".");
+  CommitSurfSwapEdgeLocal(st, s, static_cast<double>(lx), static_cast<double>(ly), log);
 }
 
 void RunVolReport(AppCommandState& st, std::vector<std::string>& log) {
@@ -5442,7 +5449,7 @@ const CmdEntry kRegistry[] = {
     {"surfacecreategrid", "sfgrid", "Create a grid surface: SURFACECREATEGRID <name>, ox, oy, sx, sy, cols, rows[, z…]"},
     {"surfacecreatecorr", "sfcorr", "Create a corridor surface: SURFACECREATECORR <name>"},
     {"surfacecreatevolgrid", "sfvolgrid", "Grid volume surface: SURFACECREATEVOLGRID <name>, <base>, <comparison>"},
-    {"surfswapedge", "sfswap", "Swap a TIN interior edge: SURFSWAPEDGE <surface>, <x>, <y>"},
+    {"surfswapedge", "sfswap", "Swap a TIN interior edge: SURFSWAPEDGE <surface>[, <x>, <y>]"},
     {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT"},
     {"volumesurface", "volsurf", "Create a TIN volume surface: VOLUMESURFACE <name>, <base>, <comparison>"},
     {"surfacerename", "sfrename", "Rename a surface: SURFACERENAME <old>, <new>"},
@@ -10270,6 +10277,18 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       return;
     }
     RunCatchmentAt(st, static_cast<size_t>(si), wx, wy, log);
+    st.active = K::None;
+    return;
+  }
+  if (st.active == K::SwapTinEdge) {
+    const int si = FindSurfaceIndex(st, st.swapEdgeSurfaceName);
+    if (si < 0) {
+      log.push_back("SURFSWAPEDGE — no surface named \"" + st.swapEdgeSurfaceName + "\".");
+      st.active = K::None;
+      return;
+    }
+    CommitSurfSwapEdgeLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(wx),
+                            static_cast<double>(wy), log);
     st.active = K::None;
     return;
   }
@@ -17160,6 +17179,31 @@ void StartCatchmentCommand(AppCommandState& st, const std::string& surfaceName, 
   log.push_back("CATCHMENT — pick an outlet on \"" + surfaceName + "\". ESC cancels.");
 }
 
+void StartSurfSwapEdgeCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None) {
+    log.push_back("SURFSWAPEDGE — finish or cancel the active command first.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, surfaceName);
+  if (si < 0) {
+    log.push_back("SURFSWAPEDGE — no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  const CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  if (!s.tin || s.tin->indices.size() < 6) {
+    log.push_back("SURFSWAPEDGE — \"" + s.name + "\" is not a built TIN.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.swapEdgeSurfaceName = surfaceName;
+  st.active = K::SwapTinEdge;
+  st.lastCommand = K::SwapTinEdge;
+  log.push_back("SURFSWAPEDGE — pick an interior edge on \"" + surfaceName + "\". ESC cancels.");
+}
+
 namespace {
 /// The stable id (REQ-076) of a picked Line or Polyline, or 0 for anything else / an out-of-range
 /// index — 0 is never a real id (\ref EntityAttributes::id), so it doubles as "not applicable" here.
@@ -23571,6 +23615,23 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     st.active = AppCommandState::Kind::None;
     return;
   }
+  if (st.active == K::SwapTinEdge) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
+      log.push_back("SURFSWAPEDGE — type X,Y (World) or pick a point in the drawing.");
+      return;
+    }
+    const int si = FindSurfaceIndex(st, st.swapEdgeSurfaceName);
+    if (si < 0) {
+      log.push_back("SURFSWAPEDGE — no surface named \"" + st.swapEdgeSurfaceName + "\".");
+      st.active = AppCommandState::Kind::None;
+      return;
+    }
+    CommitSurfSwapEdgeLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(px),
+                            static_cast<double>(py), log);
+    st.active = AppCommandState::Kind::None;
+    return;
+  }
 
   if (st.active == K::Align) {
     using AP = AppCommandState::AlignPhase;
@@ -24443,6 +24504,8 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
     return "WATERDROP: Pick a plan position on the surface | ESC cancel";
   if (st.active == K::Catchment)
     return "CATCHMENT: Pick an outlet on the surface | ESC cancel";
+  if (st.active == K::SwapTinEdge)
+    return "SURFSWAPEDGE: Pick an interior TIN edge | ESC cancel";
 
   if (st.active == K::DesignateBreakline)
     return "DESIGNATEBREAKLINE: Pick a line or polyline | ESC cancel";

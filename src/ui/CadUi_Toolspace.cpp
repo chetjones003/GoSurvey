@@ -464,7 +464,7 @@ void DrawDefFolderAddRefresh(const char* popupId, AppCommandState& cmd, CadSurfa
                              DefFolderAdd addKind) {
   if (!BeginTsContext(popupId))
     return;
-  const bool addEnabled = addKind != DefFolderAdd::Edit;
+  const bool addEnabled = true;
   if (ImGui::MenuItem("Add", nullptr, false, addEnabled)) {
     if (addKind == DefFolderAdd::Boundary)
       StartDesignateBoundaryCommand(cmd, s.name, CadBoundaryKind::Outer, lg);
@@ -472,6 +472,8 @@ void DrawDefFolderAddRefresh(const char* popupId, AppCommandState& cmd, CadSurfa
       StartDesignateBoundaryCommand(cmd, s.name, CadBoundaryKind::Mask, lg);
     else if (addKind == DefFolderAdd::Breakline)
       StartDesignateBreaklineCommand(cmd, s.name, lg);
+    else if (addKind == DefFolderAdd::Edit)
+      StartSurfSwapEdgeCommand(cmd, s.name, lg);
     else if (addKind == DefFolderAdd::Contour)
       StartDesignateContourCommand(cmd, s.name, lg);
     else if (addKind == DefFolderAdd::PointFile) {
@@ -504,8 +506,9 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
   }
 
   ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-  if (ImGui::TreeNodeEx("Masks", kFolder)) {
-    DrawDefFolderAddRefresh("##masksfolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::Mask);
+  const bool masksOpen = ImGui::TreeNodeEx("Masks", kFolder);
+  DrawDefFolderAddRefresh("##masksfolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::Mask);
+  if (masksOpen) {
     for (size_t bi = 0; bi < s.boundaries.size(); ++bi) {
       if (s.boundaries[bi].kind != CadBoundaryKind::Mask)
         continue;
@@ -523,12 +526,13 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
   }
 
   ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-  if (ImGui::TreeNodeEx("Watersheds", kFolder)) {
-    if (BeginTsContext("##shedctx")) {
-      if (ImGui::MenuItem("Analyze..."))
-        SubmitLine(cmd, log, "WATERSHED " + s.name);
-      EndTsContext();
-    }
+  const bool shedsOpen = ImGui::TreeNodeEx("Watersheds", kFolder);
+  if (BeginTsContext("##shedctx")) {
+    if (ImGui::MenuItem("Analyze..."))
+      SubmitLine(cmd, log, "WATERSHED " + s.name);
+    EndTsContext();
+  }
+  if (shedsOpen) {
     std::uint64_t sid = 0;
     if (si < cmd.cadSurfaceAttrs.size())
       sid = cmd.cadSurfaceAttrs[si].id;
@@ -546,14 +550,16 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
   }
 
   ImGui::SetNextItemOpen(true, ImGuiCond_Once);
-  if (ImGui::TreeNodeEx("Definition", kFolder)) {
-    if (BeginTsContext("##deffolder")) {
-      if (ImGui::MenuItem("Refresh"))
-        SubmitLine(cmd, log, "SURFACEREBUILD " + s.name);
-      EndTsContext();
-    }
-    if (ImGui::TreeNodeEx("Boundaries", kFolder)) {
-      DrawDefFolderAddRefresh("##bdfolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::Boundary);
+  const bool defOpen = ImGui::TreeNodeEx("Definition", kFolder);
+  if (BeginTsContext("##deffolder")) {
+    if (ImGui::MenuItem("Refresh"))
+      SubmitLine(cmd, log, "SURFACEREBUILD " + s.name);
+    EndTsContext();
+  }
+  if (defOpen) {
+    const bool bdOpen = ImGui::TreeNodeEx("Boundaries", kFolder);
+    DrawDefFolderAddRefresh("##bdfolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::Boundary);
+    if (bdOpen) {
       for (size_t bi = 0; bi < s.boundaries.size(); ++bi) {
         if (s.boundaries[bi].kind == CadBoundaryKind::Mask)
           continue;
@@ -569,8 +575,9 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
       }
       ImGui::TreePop();
     }
-    if (ImGui::TreeNodeEx("Breaklines", kFolder)) {
-      DrawDefFolderAddRefresh("##blfolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::Breakline);
+    const bool blOpen = ImGui::TreeNodeEx("Breaklines", kFolder);
+    DrawDefFolderAddRefresh("##blfolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::Breakline);
+    if (blOpen) {
       for (size_t i = 0; i < s.breaklines.size(); ++i) {
         ImGui::PushID(static_cast<int>(i));
         const std::string lab =
@@ -585,8 +592,9 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
       }
       ImGui::TreePop();
     }
-    if (ImGui::TreeNodeEx("Contours", kFolder)) {
-      DrawDefFolderAddRefresh("##ctfolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::Contour);
+    const bool ctOpen = ImGui::TreeNodeEx("Contours", kFolder);
+    DrawDefFolderAddRefresh("##ctfolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::Contour);
+    if (ctOpen) {
       for (size_t i = 0; i < s.contourSources.size(); ++i) {
         ImGui::PushID(static_cast<int>(i));
         const std::string lab = s.contourSources[i].description.empty()
@@ -602,8 +610,9 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
       }
       ImGui::TreePop();
     }
-    if (ImGui::TreeNodeEx("Point Files", kFolder)) {
-      DrawDefFolderAddRefresh("##pffolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::PointFile);
+    const bool pfOpen = ImGui::TreeNodeEx("Point Files", kFolder);
+    DrawDefFolderAddRefresh("##pffolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::PointFile);
+    if (pfOpen) {
       for (size_t i = 0; i < s.sourcePointFiles.size(); ++i) {
         ImGui::PushID(static_cast<int>(i));
         ImGui::TreeNodeEx(s.sourcePointFiles[i].path.c_str(), kLeaf | ImGuiTreeNodeFlags_Bullet);
@@ -616,8 +625,9 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
       }
       ImGui::TreePop();
     }
-    if (ImGui::TreeNodeEx("Point Groups", kFolder)) {
-      DrawDefFolderAddRefresh("##pgdefolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::PointGroup);
+    const bool pgOpen = ImGui::TreeNodeEx("Point Groups", kFolder);
+    DrawDefFolderAddRefresh("##pgdefolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::PointGroup);
+    if (pgOpen) {
       for (size_t i = 0; i < s.sourcePointGroups.size(); ++i) {
         ImGui::PushID(static_cast<int>(i));
         ImGui::TreeNodeEx(s.sourcePointGroups[i].c_str(), kLeaf | ImGuiTreeNodeFlags_Bullet);
@@ -630,8 +640,9 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
       }
       ImGui::TreePop();
     }
-    if (ImGui::TreeNodeEx("Edits", kFolder)) {
-      DrawDefFolderAddRefresh("##edfolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::Edit);
+    const bool edOpen = ImGui::TreeNodeEx("Edits", kFolder);
+    DrawDefFolderAddRefresh("##edfolder", cmd, s, static_cast<int>(si), log, lg, pending, DefFolderAdd::Edit);
+    if (edOpen) {
       for (size_t i = 0; i < s.swappedEdgePicks.size(); ++i) {
         ImGui::PushID(static_cast<int>(i));
         ImGui::TreeNodeEx(("Edge swap " + std::to_string(i + 1)).c_str(), kLeaf | ImGuiTreeNodeFlags_Bullet);
@@ -674,8 +685,9 @@ void DrawProspectorTree(AppCommandState& cmd, std::vector<std::string>* log, TsP
   DrawPointsContext(cmd, log);
 
   ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-  if (ImGui::TreeNodeEx("Point Groups", kFolder)) {
-    DrawPointGroupsFolderContext(cmd, log);
+  const bool pgFoldOpen = ImGui::TreeNodeEx("Point Groups", kFolder);
+  DrawPointGroupsFolderContext(cmd, log);
+  if (pgFoldOpen) {
     for (const PointGroup& g : cmd.pointGroups) {
       ImGui::PushID(g.name.c_str());
       ImGui::TreeNodeEx(g.name.c_str(), kLeaf);
@@ -692,16 +704,18 @@ void DrawProspectorTree(AppCommandState& cmd, std::vector<std::string>* log, TsP
   }
 
   ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-  if (ImGui::TreeNodeEx("Surfaces", kFolder)) {
-    DrawSurfacesFolderContext(cmd, log);
+  const bool surfFoldOpen = ImGui::TreeNodeEx("Surfaces", kFolder);
+  DrawSurfacesFolderContext(cmd, log);
+  if (surfFoldOpen) {
     for (size_t i = 0; i < cmd.cadSurfaces.size(); ++i)
       DrawSurfaceNode(cmd, i, log, pending);
     ImGui::TreePop();
   }
 
   ImGui::SetNextItemOpen(false, ImGuiCond_Once);
-  if (ImGui::TreeNodeEx("Feature Lines", kFolder)) {
-    DrawFeatureLinesFolderContext(cmd, log);
+  const bool flFoldOpen = ImGui::TreeNodeEx("Feature Lines", kFolder);
+  DrawFeatureLinesFolderContext(cmd, log);
+  if (flFoldOpen) {
     const size_t nFl = ToolspaceFeatureLineCount(cmd);
     for (size_t i = 0; i < nFl; ++i) {
       const std::string label =

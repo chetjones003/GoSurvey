@@ -2,6 +2,7 @@
 
 #include "gridsurface.hpp"
 #include "surfaceanalysis.hpp"
+#include "surfacevolume.hpp"
 #include "tinbuild.hpp"
 
 #include <cmath>
@@ -19,11 +20,13 @@ constexpr double kPi = 3.14159265358979323846;
 }  // namespace
 
 TinSurfaceQuery::TinSurfaceQuery(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices)
-    : verts_(&vertsXyz), indices_(&indices) {}
+    : verts_(&vertsXyz), indices_(&indices), index_(BuildTinSpatialIndex(vertsXyz, indices)) {}
 
 bool TinSurfaceQuery::triangleAt(double x, double y, double* outZ, size_t* outTri) const {
   if (!verts_ || !indices_ || !outZ)
     return false;
+  if (!index_.empty())
+    return TinElevationAtIndexed(*verts_, *indices_, index_, x, y, outZ, outTri);
   for (size_t t = 0; t + 2 < indices_->size(); t += 3) {
     if (TinTriangleElevationAt(*verts_, (*indices_)[t], (*indices_)[t + 1], (*indices_)[t + 2], x, y, outZ)) {
       if (outTri)

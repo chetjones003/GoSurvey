@@ -1507,6 +1507,30 @@ enum class RibbonIconKind : std::uint8_t {
   ClipboardPaste,
   Traverse,
   Hatch,
+  // REQ-143 contextual TIN Surface tab (vector fallback; no PNGs required).
+  SurfLabel,
+  SurfLegend,
+  SurfPropsHand,
+  SurfInquiry,
+  SurfObjectViewer,
+  SurfIsolate,
+  SurfDoc,
+  SurfAddData,
+  SurfEdit,
+  SurfLodLow,
+  SurfLodHigh,
+  SurfWaterDrop,
+  SurfBandage,
+  SurfEye,
+  SurfCatchment,
+  SurfVolumes,
+  SurfDrape,
+  SurfExtract,
+  SurfMoveTo,
+  SurfQuickProfile,
+  SurfProfile,
+  SurfDataShortcut,
+  SurfGrading,
 };
 
 static ImVec2 RibbonLerp(const ImVec2& a, const ImVec2& b, float u, float v) {
@@ -1531,6 +1555,23 @@ static void RibbonGripSquare(ImDrawList* dl, ImVec2 ctr, float half, ImU32 fillC
   const ImVec2 b(ctr.x + half, ctr.y + half);
   dl->AddRectFilled(a, b, fillCol);
   dl->AddRect(a, b, edgeCol, 0.f, 0, edgeTh);
+}
+
+static void RibbonPaintTinPyramid(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, ImU32 col, float t,
+                                  bool filled) {
+  const float w = std::max(1.f, mx.x - mn.x);
+  const float h = std::max(1.f, mx.y - mn.y);
+  const ImVec2 apex(mn.x + w * 0.50f, mn.y + h * 0.10f);
+  const ImVec2 bl(mn.x + w * 0.10f, mx.y - h * 0.16f);
+  const ImVec2 br(mx.x - w * 0.10f, mx.y - h * 0.16f);
+  dl->AddTriangleFilled(apex, bl, br, IM_COL32(42, 132, 210, filled ? 230 : 80));
+  dl->AddTriangle(apex, bl, br, filled ? IM_COL32(42, 132, 210, 255) : col, t);
+  if (!filled) {
+    const ImVec2 mid(mn.x + w * 0.50f, mx.y - h * 0.34f);
+    dl->AddLine(apex, mid, IM_COL32(255, 255, 255, 200), t);
+    dl->AddLine(bl, mid, col, t * 0.85f);
+    dl->AddLine(br, mid, col, t * 0.85f);
+  }
 }
 
 // Muted 2-tone fallback art: all geometry uses one dark slate "ink"; node and
@@ -2198,6 +2239,167 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
       dl->AddCircleFilled(p, r, col, 10);
     break;
   }
+  case RibbonIconKind::SurfLabel: {
+    const ImVec2 a(mn.x + w * 0.22f, mn.y + h * 0.30f);
+    const ImVec2 b(mx.x - w * 0.18f, mx.y - h * 0.28f);
+    dl->AddCircleFilled(ImVec2(c.x, c.y), std::min(w, h) * 0.38f, IM_COL32(42, 132, 210, 230), 20);
+    dl->AddRectFilled(a, b, IM_COL32(255, 255, 255, 240), 2.f);
+    dl->AddTriangleFilled(ImVec2(a.x, c.y), ImVec2(mn.x + w * 0.12f, c.y - h * 0.08f),
+                          ImVec2(mn.x + w * 0.12f, c.y + h * 0.08f), IM_COL32(255, 255, 255, 240));
+    break;
+  }
+  case RibbonIconKind::SurfLegend: {
+    dl->AddRect(ImVec2(mn.x + w * 0.18f, mn.y + h * 0.16f), ImVec2(mx.x - w * 0.18f, mx.y - h * 0.16f), col, 0.f, 0,
+                t);
+    for (int i = 1; i < 3; ++i) {
+      const float x = mn.x + w * (0.18f + 0.213f * static_cast<float>(i));
+      const float y = mn.y + h * (0.16f + 0.227f * static_cast<float>(i));
+      dl->AddLine(ImVec2(x, mn.y + h * 0.16f), ImVec2(x, mx.y - h * 0.16f), col, t * 0.8f);
+      dl->AddLine(ImVec2(mn.x + w * 0.18f, y), ImVec2(mx.x - w * 0.18f, y), col, t * 0.8f);
+    }
+    break;
+  }
+  case RibbonIconKind::SurfPropsHand: {
+    dl->AddRect(ImVec2(mn.x + w * 0.28f, mn.y + h * 0.18f), ImVec2(mx.x - w * 0.14f, mx.y - h * 0.22f), col, 0.f, 0,
+                t);
+    dl->AddLine(ImVec2(mn.x + w * 0.36f, mn.y + h * 0.38f), ImVec2(mx.x - w * 0.22f, mn.y + h * 0.38f), col, t);
+    dl->AddLine(ImVec2(mn.x + w * 0.36f, mn.y + h * 0.52f), ImVec2(mx.x - w * 0.22f, mn.y + h * 0.52f), col, t);
+    dl->AddCircleFilled(ImVec2(mn.x + w * 0.22f, mx.y - h * 0.22f), std::min(w, h) * 0.08f, acc, 8);
+    break;
+  }
+  case RibbonIconKind::SurfInquiry: {
+    dl->AddCircle(ImVec2(c.x - w * 0.08f, c.y - h * 0.06f), std::min(w, h) * 0.22f, col, 16, t);
+    dl->AddLine(ImVec2(c.x + w * 0.08f, c.y + h * 0.12f), ImVec2(mx.x - w * 0.14f, mx.y - h * 0.14f), col, t * 1.4f);
+    break;
+  }
+  case RibbonIconKind::SurfObjectViewer: {
+    dl->AddCircleFilled(ImVec2(c.x - w * 0.12f, c.y - h * 0.08f), std::min(w, h) * 0.18f, acc, 16);
+    dl->AddRectFilled(ImVec2(c.x, c.y), ImVec2(mx.x - w * 0.16f, mx.y - h * 0.16f), IM_COL32(220, 220, 220, 220));
+    dl->AddRect(ImVec2(c.x, c.y), ImVec2(mx.x - w * 0.16f, mx.y - h * 0.16f), col, 0.f, 0, t);
+    break;
+  }
+  case RibbonIconKind::SurfIsolate: {
+    dl->AddRectFilled(ImVec2(mn.x + w * 0.18f, mn.y + h * 0.22f), ImVec2(c.x + w * 0.06f, mx.y - h * 0.18f), acc);
+    dl->AddRect(ImVec2(c.x - w * 0.06f, mn.y + h * 0.14f), ImVec2(mx.x - w * 0.16f, mx.y - h * 0.26f), col, 0.f, 0, t);
+    break;
+  }
+  case RibbonIconKind::SurfDoc: {
+    const ImVec2 tl2(mn.x + w * 0.22f, mn.y + h * 0.14f);
+    const ImVec2 br2(mx.x - w * 0.22f, mx.y - h * 0.14f);
+    dl->AddRectFilled(tl2, br2, IM_COL32(240, 240, 240, 230));
+    dl->AddRect(tl2, br2, col, 0.f, 0, t);
+    dl->AddCircleFilled(ImVec2(br2.x, tl2.y), std::min(w, h) * 0.10f, acc, 10);
+    break;
+  }
+  case RibbonIconKind::SurfAddData: {
+    RibbonPaintTinPyramid(dl, mn, mx, col, t, false);
+    dl->AddCircleFilled(ImVec2(mx.x - w * 0.22f, mx.y - h * 0.22f), std::min(w, h) * 0.12f, IM_COL32(40, 160, 70, 255),
+                        10);
+    break;
+  }
+  case RibbonIconKind::SurfEdit: {
+    RibbonPaintTinPyramid(dl, mn, mx, col, t, false);
+    dl->AddLine(ImVec2(c.x - w * 0.08f, mx.y - h * 0.22f), ImVec2(mx.x - w * 0.18f, mn.y + h * 0.28f),
+                IM_COL32(200, 170, 40, 255), t * 1.4f);
+    break;
+  }
+  case RibbonIconKind::SurfLodLow: {
+    RibbonPaintTinPyramid(dl, mn, mx, acc, t, true);
+    break;
+  }
+  case RibbonIconKind::SurfLodHigh: {
+    RibbonPaintTinPyramid(dl, mn, mx, col, t, false);
+    break;
+  }
+  case RibbonIconKind::SurfWaterDrop: {
+    const ImVec2 top(c.x, mn.y + h * 0.12f);
+    const ImVec2 left(mn.x + w * 0.22f, c.y + h * 0.02f);
+    const ImVec2 right(mx.x - w * 0.22f, c.y + h * 0.02f);
+    const ImVec2 bot(c.x, mx.y - h * 0.14f);
+    dl->AddTriangleFilled(top, left, bot, IM_COL32(42, 132, 210, 240));
+    dl->AddTriangleFilled(top, right, bot, IM_COL32(42, 132, 210, 240));
+    break;
+  }
+  case RibbonIconKind::SurfBandage: {
+    dl->AddLine(ImVec2(mn.x + w * 0.12f, c.y - h * 0.12f), ImVec2(mx.x - w * 0.12f, c.y - h * 0.12f),
+                IM_COL32(140, 90, 40, 255), t * 2.f);
+    dl->AddLine(ImVec2(mn.x + w * 0.12f, c.y + h * 0.12f), ImVec2(mx.x - w * 0.12f, c.y + h * 0.12f),
+                IM_COL32(140, 90, 40, 255), t * 2.f);
+    dl->AddRectFilled(ImVec2(c.x - w * 0.12f, c.y - h * 0.18f), ImVec2(c.x + w * 0.12f, c.y + h * 0.18f),
+                      IM_COL32(240, 240, 240, 255));
+    break;
+  }
+  case RibbonIconKind::SurfEye: {
+    dl->AddCircle(c, std::min(w, h) * 0.22f, col, 16, t);
+    dl->AddCircleFilled(c, std::min(w, h) * 0.08f, acc, 10);
+    dl->AddCircleFilled(ImVec2(mx.x - w * 0.22f, mn.y + h * 0.22f), std::min(w, h) * 0.09f, IM_COL32(40, 160, 70, 255),
+                        8);
+    break;
+  }
+  case RibbonIconKind::SurfCatchment: {
+    dl->AddRect(ImVec2(mn.x + w * 0.16f, mn.y + h * 0.18f), ImVec2(mx.x - w * 0.16f, mx.y - h * 0.18f), col, 0.f, 0,
+                t * 0.7f);
+    dl->AddLine(ImVec2(mn.x + w * 0.28f, mn.y + h * 0.28f), ImVec2(c.x, mx.y - h * 0.28f), IM_COL32(200, 170, 40, 255), t);
+    RibbonStrokeArrow(dl, ImVec2(c.x, mx.y - h * 0.28f), ImVec2(0.f, 1.f), std::min(w, h) * 0.12f, acc, t);
+    break;
+  }
+  case RibbonIconKind::SurfVolumes: {
+    dl->AddRectFilled(ImVec2(mn.x + w * 0.18f, c.y + h * 0.04f), ImVec2(mn.x + w * 0.34f, mx.y - h * 0.16f),
+                      IM_COL32(180, 50, 50, 230));
+    dl->AddRectFilled(ImVec2(mn.x + w * 0.42f, mn.y + h * 0.22f), ImVec2(mn.x + w * 0.58f, mx.y - h * 0.16f),
+                      IM_COL32(40, 150, 70, 230));
+    dl->AddRectFilled(ImVec2(mn.x + w * 0.66f, c.y - h * 0.06f), ImVec2(mn.x + w * 0.82f, mx.y - h * 0.16f),
+                      IM_COL32(42, 132, 210, 230));
+    dl->AddLine(ImVec2(mn.x + w * 0.12f, mx.y - h * 0.16f), ImVec2(mx.x - w * 0.12f, mx.y - h * 0.16f), col, t);
+    break;
+  }
+  case RibbonIconKind::SurfDrape: {
+    dl->AddLine(ImVec2(mn.x + w * 0.12f, mx.y - h * 0.28f), ImVec2(mx.x - w * 0.12f, mx.y - h * 0.18f), acc, t);
+    dl->AddTriangleFilled(ImVec2(c.x, mn.y + h * 0.18f), ImVec2(c.x - w * 0.18f, c.y), ImVec2(c.x + w * 0.18f, c.y), acc);
+    break;
+  }
+  case RibbonIconKind::SurfExtract: {
+    dl->AddLine(ImVec2(mn.x + w * 0.12f, mx.y - h * 0.22f), ImVec2(mx.x - w * 0.12f, mx.y - h * 0.22f), acc, t);
+    dl->AddRectFilled(ImVec2(c.x - w * 0.12f, mn.y + h * 0.18f), ImVec2(c.x + w * 0.12f, c.y + h * 0.04f),
+                      IM_COL32(240, 240, 240, 230));
+    RibbonStrokeArrow(dl, ImVec2(c.x, mn.y + h * 0.16f), ImVec2(0.f, -1.f), std::min(w, h) * 0.12f, col, t);
+    break;
+  }
+  case RibbonIconKind::SurfMoveTo: {
+    dl->AddLine(ImVec2(mn.x + w * 0.12f, mx.y - h * 0.22f), ImVec2(mx.x - w * 0.12f, mx.y - h * 0.22f), acc, t);
+    dl->AddRectFilled(ImVec2(c.x - w * 0.12f, mn.y + h * 0.16f), ImVec2(c.x + w * 0.12f, c.y),
+                      IM_COL32(240, 240, 240, 230));
+    RibbonStrokeArrow(dl, ImVec2(c.x, mx.y - h * 0.28f), ImVec2(0.f, 1.f), std::min(w, h) * 0.12f, acc, t);
+    break;
+  }
+  case RibbonIconKind::SurfQuickProfile: {
+    dl->AddLine(ImVec2(mn.x + w * 0.28f, mn.y + h * 0.18f), ImVec2(mn.x + w * 0.28f, mx.y - h * 0.18f),
+                IM_COL32(220, 180, 40, 255), t * 1.6f);
+    dl->AddLine(ImVec2(mn.x + w * 0.28f, mn.y + h * 0.18f), ImVec2(mx.x - w * 0.22f, c.y), IM_COL32(220, 180, 40, 255),
+                t * 1.6f);
+    dl->AddLine(ImVec2(mn.x + w * 0.28f, mx.y - h * 0.18f), ImVec2(mx.x - w * 0.22f, c.y), IM_COL32(220, 180, 40, 255),
+                t * 1.6f);
+    break;
+  }
+  case RibbonIconKind::SurfProfile: {
+    dl->AddLine(ImVec2(mn.x + w * 0.16f, mx.y - h * 0.28f), ImVec2(mx.x - w * 0.16f, mx.y - h * 0.28f), col, t);
+    dl->AddTriangleFilled(ImVec2(c.x, mn.y + h * 0.18f), ImVec2(c.x - w * 0.16f, c.y + h * 0.04f),
+                          ImVec2(c.x + w * 0.16f, c.y + h * 0.04f), acc);
+    break;
+  }
+  case RibbonIconKind::SurfDataShortcut: {
+    dl->AddCircle(c, std::min(w, h) * 0.28f, col, 16, t);
+    dl->AddCircle(c, std::min(w, h) * 0.16f, col, 16, t * 0.8f);
+    RibbonStrokeArrow(dl, ImVec2(mx.x - w * 0.16f, mn.y + h * 0.22f), ImVec2(1.f, -1.f), std::min(w, h) * 0.12f, acc,
+                      t);
+    break;
+  }
+  case RibbonIconKind::SurfGrading: {
+    RibbonPaintTinPyramid(dl, mn, mx, col, t, true);
+    dl->AddLine(ImVec2(mn.x + w * 0.18f, mn.y + h * 0.22f), ImVec2(mx.x - w * 0.22f, mn.y + h * 0.38f),
+                IM_COL32(220, 180, 40, 255), t);
+    break;
+  }
   default:
     break;
   }
@@ -2252,17 +2454,40 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::ClipboardCopy:  return "clipboardcopy";
   case RibbonIconKind::ClipboardPaste: return "clipboardpaste";
   case RibbonIconKind::Traverse:       return "traverse";
+  case RibbonIconKind::SurfLabel:      return "surflabel";
+  case RibbonIconKind::SurfLegend:     return "surflegend";
+  case RibbonIconKind::SurfPropsHand:  return "surfpropshand";
+  case RibbonIconKind::SurfInquiry:    return "surfinquiry";
+  case RibbonIconKind::SurfObjectViewer: return "surfobjectviewer";
+  case RibbonIconKind::SurfIsolate:    return "surfisolate";
+  case RibbonIconKind::SurfDoc:        return "surfdoc";
+  case RibbonIconKind::SurfAddData:    return "surfadddata";
+  case RibbonIconKind::SurfEdit:       return "surfedit";
+  case RibbonIconKind::SurfLodLow:     return "surflodlow";
+  case RibbonIconKind::SurfLodHigh:    return "surflodhigh";
+  case RibbonIconKind::SurfWaterDrop:  return "surfwaterdrop";
+  case RibbonIconKind::SurfBandage:    return "surfbandage";
+  case RibbonIconKind::SurfEye:        return "surfeye";
+  case RibbonIconKind::SurfCatchment:  return "surfcatchment";
+  case RibbonIconKind::SurfVolumes:    return "surfvolumes";
+  case RibbonIconKind::SurfDrape:      return "surfdrape";
+  case RibbonIconKind::SurfExtract:    return "surfextract";
+  case RibbonIconKind::SurfMoveTo:     return "surfmoveto";
+  case RibbonIconKind::SurfQuickProfile: return "surfquickprofile";
+  case RibbonIconKind::SurfProfile:    return "surfprofile";
+  case RibbonIconKind::SurfDataShortcut: return "surfdatashortcut";
+  case RibbonIconKind::SurfGrading:    return "surfgrading";
   }
   return "";
 }
 
-static ImTextureID g_ribbonIconTex[static_cast<int>(RibbonIconKind::Traverse) + 1] = {};
+static ImTextureID g_ribbonIconTex[static_cast<int>(RibbonIconKind::SurfGrading) + 1] = {};
 static bool g_ribbonIconsLoaded = false;
 
 static void EnsureRibbonIconsLoaded() {
   if (g_ribbonIconsLoaded) return;
   g_ribbonIconsLoaded = true;  // attempt once; missing files fall back to vector art
-  for (int i = 0; i <= static_cast<int>(RibbonIconKind::Traverse); ++i) {
+  for (int i = 0; i <= static_cast<int>(RibbonIconKind::SurfGrading); ++i) {
     const std::string nm = RibbonIconName(static_cast<RibbonIconKind>(i));
     if (nm.empty()) continue;
     const std::filesystem::path p =
@@ -2373,9 +2598,10 @@ static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* 
   }
 
   const bool hasLabel = (label && label[0] && mode != RibbonLabel::None);
-  const ImVec2 ts = hasLabel ? ImGui::CalcTextSize(label) : ImVec2(0.f, 0.f);
-  const ImU32 textCol = ImGui::GetColorU32(ImGuiCol_Text);
   constexpr float pad = 3.f;
+  const float wrapW = (mode == RibbonLabel::Below && hasLabel) ? std::max(8.f, size.x - pad * 2.f) : 0.f;
+  const ImVec2 ts = hasLabel ? ImGui::CalcTextSize(label, nullptr, false, wrapW) : ImVec2(0.f, 0.f);
+  const ImU32 textCol = ImGui::GetColorU32(ImGuiCol_Text);
 
   ImVec2 iconMin, iconMax, labelPos;
   if (mode == RibbonLabel::Below && hasLabel) {
@@ -2384,7 +2610,7 @@ static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* 
     const ImVec2 ctr(bb.Min.x + size.x * 0.5f + shift, bb.Min.y + pad + iconArea * 0.5f + shift);
     iconMin = ImVec2(ctr.x - sideMax * 0.5f, ctr.y - sideMax * 0.5f);
     iconMax = ImVec2(ctr.x + sideMax * 0.5f, ctr.y + sideMax * 0.5f);
-    labelPos = ImVec2(bb.Min.x + (size.x - ts.x) * 0.5f + shift, bb.Max.y - ts.y - pad + shift);
+    labelPos = ImVec2(bb.Min.x + (size.x - std::min(ts.x, wrapW)) * 0.5f + shift, bb.Max.y - ts.y - pad + shift);
   } else if (mode == RibbonLabel::Right && hasLabel) {
     const float side = size.y - pad * 2.f;
     iconMin = ImVec2(bb.Min.x + pad + shift, bb.Min.y + pad + shift);
@@ -2398,8 +2624,12 @@ static bool RibbonButtonEx(const char* str_id, RibbonIconKind icon, const char* 
   }
 
   DrawRibbonIconArt(dl, icon, iconMin, iconMax);
-  if (hasLabel)
-    dl->AddText(labelPos, textCol, label);
+  if (hasLabel) {
+    if (wrapW > 0.f)
+      dl->AddText(ImGui::GetFont(), ImGui::GetFontSize(), labelPos, textCol, label, nullptr, wrapW);
+    else
+      dl->AddText(labelPos, textCol, label);
+  }
 
   return pressed;
 }
@@ -2412,6 +2642,32 @@ static void RibbonItemHelp(const char* text, ImGuiHoveredFlags extraFlags = 0) {
     ImGui::PopTextWrapPos();
     ImGui::EndTooltip();
   }
+}
+
+static void RibbonNyiButton(const char* id, RibbonIconKind ic, const char* label, const ImVec2& size,
+                            RibbonLabel mode) {
+  assert(id != nullptr);
+  assert(label != nullptr);
+  ImGui::BeginDisabled();
+  (void)RibbonButtonEx(id, ic, label, size, mode);
+  char tip[192];
+  std::snprintf(tip, sizeof(tip), "%s — not implemented yet.", label);
+  RibbonItemHelp(tip, ImGuiHoveredFlags_AllowWhenDisabled);
+  ImGui::EndDisabled();
+}
+
+static int FirstSelectedSurfaceIndex(const AppCommandState& cmd) {
+  const size_t n = cmd.cadSurfaces.size();
+  assert(n < 10000000u);
+  for (const SelectedEntity& e : cmd.selection) {
+    assert(e.index >= -1);
+    if (e.type != SelectedEntity::Type::Surface)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= n)
+      continue;
+    return e.index;
+  }
+  return -1;
 }
 
 // REQ-302 increment 2 (ADR-038): measure-then-decide responsive breakpoints for the ribbon's own
@@ -2529,6 +2785,26 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
                     ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
   ImGui::PopStyleColor();
 
+  const bool ribbonPaperSpaceEarly =
+      cmd.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(cmd);
+  const int selSurfIdx = ribbonPaperSpaceEarly ? -1 : FirstSelectedSurfaceIndex(cmd);
+  if (selSurfIdx >= 0) {
+    if (!cmd.surfaceContextualRibbonArmed) {
+      if (cmd.activeRibbonTab != kRibbonTabSurfaceCtx)
+        cmd.ribbonTabBeforeSurfaceCtx = cmd.activeRibbonTab;
+      cmd.activeRibbonTab = kRibbonTabSurfaceCtx;
+      cmd.surfaceContextualRibbonArmed = true;
+    }
+  } else if (cmd.surfaceContextualRibbonArmed) {
+    if (cmd.activeRibbonTab == kRibbonTabSurfaceCtx) {
+      int prev = cmd.ribbonTabBeforeSurfaceCtx;
+      if (prev < 0 || prev >= kRibbonTabCount)
+        prev = kRibbonTabHome;
+      cmd.activeRibbonTab = prev;
+    }
+    cmd.surfaceContextualRibbonArmed = false;
+  }
+
   // REQ-302 tab strip: Home/Insert/Annotate/View/Manage/Output/Survey. Reuses the Model/Layout
   // tab toggle styling (PushModeToggleButtonColors, ~CadUi.cpp:6308, REQ-025/026 precedent) so the
   // active tab reads the same way the active space tab already does, rather than a second style.
@@ -2555,6 +2831,20 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     ribbonTab("Manage",   kRibbonTabManage);
     ribbonTab("Output",   kRibbonTabOutput);
     ribbonTab("Survey",   kRibbonTabSurvey);
+    if (selSurfIdx >= 0) {
+      char surfTab[160];
+      const std::string& nm = cmd.cadSurfaces[static_cast<size_t>(selSurfIdx)].name;
+      std::snprintf(surfTab, sizeof(surfTab), "Tin Surface: %s", nm.c_str());
+      const bool ctxOn = cmd.activeRibbonTab == kRibbonTabSurfaceCtx;
+      ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0, 120, 215, ctxOn ? 255 : 180));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(30, 144, 255, 255));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0, 90, 180, 255));
+      ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(255, 255, 255, 255));
+      if (ImGui::Button(surfTab, ImVec2(0.f, kRibbonTabStripH)))
+        cmd.activeRibbonTab = kRibbonTabSurfaceCtx;
+      ImGui::PopStyleColor(4);
+      ImGui::SameLine(0, 2);
+    }
     ImGui::PopStyleVar();
     ImGui::Dummy(ImVec2(1.f, kRibbonTabStripGapY));  // gap between the tab strip and the panels below
   }
@@ -2575,6 +2865,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   const float rowH     = std::floor((colH - 4.f) / 3.f);
   const float gridCell = std::floor((colH - 2.f) / 2.f);
   constexpr float largeW = 60.f;
+  constexpr float kTsLargeW = 74.f;
 
   // REQ-302 increment 2 (ADR-038 (a)): `curCompact` is read by colW()/smallBtn() below — Medium
   // metrics are simply "the same button code, with this flag true." largeBtn/gridBtn are unaffected
@@ -3188,6 +3479,209 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       RibbonSectionEnd();
     }});
   } // if (activeRibbonTab == kRibbonTabSurvey)
+
+  // REQ-143: Civil 3D-shaped contextual TIN Surface tab (selected surface).
+  if (cmd.activeRibbonTab == kRibbonTabSurfaceCtx && !ribbonPaperSpace && selSurfIdx >= 0) {
+    const std::string& surfName = cmd.cadSurfaces[static_cast<size_t>(selSurfIdx)].name;
+
+    ribbonSpecs.push_back({8.f + kTsLargeW + 4.f + kTsLargeW, 8.f + kTsLargeW + 4.f + kTsLargeW, [&]() {
+      const float wLabels = 8.f + kTsLargeW + 4.f + kTsLargeW;
+      RibbonSectionBegin("RibbonSecTsLabels", "Labels & Tables", wLabels, panelH);
+      RibbonNyiButton("##TsAddLabels", RibbonIconKind::SurfLabel, "Add Labels", ImVec2(kTsLargeW, colH),
+                      RibbonLabel::Below);
+      ImGui::SameLine(0, 4);
+      RibbonNyiButton("##TsAddLegend", RibbonIconKind::SurfLegend, "Add Legend", ImVec2(kTsLargeW, colH),
+                      RibbonLabel::Below);
+      RibbonSectionEnd();
+    }});
+
+    {
+      const float genCell = colW({"Properties", "Inquiry", "Object Viewer", "Isolate Objects"});
+      const float wGen = 8.f + genCell + 4.f + genCell;
+      ribbonSpecs.push_back({wGen, wGen, [&]() {
+      const float cell = colW({"Properties", "Inquiry", "Object Viewer", "Isolate Objects"});
+      RibbonSectionBegin("RibbonSecTsGen", "General Tools", 8.f + cell + 4.f + cell, panelH);
+      ImGui::BeginGroup();
+      if (smallBtn("##TsProps", RibbonIconKind::SurfPropsHand, "Properties", cell))
+        cmd.pendingPropertiesFocus = true;
+      RibbonItemHelp("Properties — the side Properties panel for the selected surface.");
+      if (smallBtn("##TsInquiry", RibbonIconKind::SurfInquiry, "Inquiry", cell))
+        StartSurfaceElevGradeCommand(cmd, log);
+      RibbonItemHelp("Inquiry — elevation and grade on this surface.\nCommand bar: SURFELEV");
+      ImGui::EndGroup();
+      ImGui::SameLine(0, 4);
+      ImGui::BeginGroup();
+      RibbonNyiButton("##TsObjView", RibbonIconKind::SurfObjectViewer, "Object Viewer",
+                      ImVec2(curCompact ? rowH : cell, rowH),
+                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
+      if (smallBtn("##TsIsolate", RibbonIconKind::SurfIsolate, "Isolate Objects", cell))
+        ImGui::OpenPopup("##TsIsolateMenu");
+      RibbonItemHelp("Isolate Objects — isolate, hide, or end isolation (REQ-084).");
+      if (ImGui::BeginPopup("##TsIsolateMenu")) {
+        if (ImGui::MenuItem("Isolate Objects"))
+          IsolateSelectedObjects(cmd, log);
+        if (ImGui::MenuItem("Hide Objects"))
+          HideSelectedObjects(cmd, log);
+        if (ImGui::MenuItem("End Object Isolation", nullptr, false, !cmd.hiddenEntityIds.empty()))
+          EndObjectIsolation(cmd, log);
+        ImGui::EndPopup();
+      }
+      ImGui::EndGroup();
+      RibbonSectionEnd();
+    }});
+    }
+
+    {
+      const float wMod = 8.f + kTsLargeW * 3.f + 8.f;
+      ribbonSpecs.push_back({wMod, wMod, [&]() {
+      RibbonSectionBegin("RibbonSecTsMod", "Modify", 8.f + kTsLargeW * 3.f + 8.f, panelH);
+      if (RibbonButtonEx("##TsSurfProps", RibbonIconKind::SurfDoc, "Surface Properties", ImVec2(kTsLargeW, colH),
+                         RibbonLabel::Below)) {
+        cmd.surfacePropertiesIndex = selSurfIdx;
+        cmd.showSurfacePropertiesWindow = true;
+      }
+      RibbonItemHelp("Surface Properties — Information, Definition, Analysis, Statistics.");
+      ImGui::SameLine(0, 4);
+      if (RibbonButtonEx("##TsAddData", RibbonIconKind::SurfAddData, "Add Data", ImVec2(kTsLargeW, colH),
+                         RibbonLabel::Below))
+        ImGui::OpenPopup("##TsAddDataMenu");
+      RibbonItemHelp("Add Data — breaklines, contours, and boundaries on this surface.");
+      if (ImGui::BeginPopup("##TsAddDataMenu")) {
+        if (ImGui::MenuItem("Breaklines"))
+          StartDesignateBreaklineCommand(cmd, surfName, log);
+        if (ImGui::MenuItem("Contours"))
+          StartDesignateContourCommand(cmd, surfName, log);
+        if (ImGui::MenuItem("Boundary"))
+          StartDesignateBoundaryCommand(cmd, surfName, CadBoundaryKind::Outer, log);
+        if (ImGui::MenuItem("Point Groups"))
+          cmd.showSurfaceManagerWindow = true;
+        ImGui::BeginDisabled();
+        ImGui::MenuItem("Point Files");
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+          ImGui::SetTooltip("Point Files — not implemented yet.");
+        ImGui::EndDisabled();
+        ImGui::EndPopup();
+      }
+      ImGui::SameLine(0, 4);
+      if (RibbonButtonEx("##TsEditSurf", RibbonIconKind::SurfEdit, "Edit Surface", ImVec2(kTsLargeW, colH),
+                         RibbonLabel::Below))
+        ImGui::OpenPopup("##TsEditSurfMenu");
+      RibbonItemHelp("Edit Surface — swap TIN edges or rebuild.");
+      if (ImGui::BeginPopup("##TsEditSurfMenu")) {
+        if (ImGui::MenuItem("Swap Edge"))
+          StartSurfSwapEdgeCommand(cmd, surfName, log);
+        if (ImGui::MenuItem("Rebuild"))
+          SubmitRibbonCommand(cmd, log, "SURFACEREBUILD " + surfName);
+        ImGui::EndPopup();
+      }
+      RibbonSectionEnd();
+    }});
+    }
+
+    {
+      const float lodW = colW({"Reduced LOD", "High LOD"});
+      ribbonSpecs.push_back({8.f + lodW, 8.f + lodW, [&]() {
+      const float cw = colW({"Reduced LOD", "High LOD"});
+      RibbonSectionBegin("RibbonSecTsLod", "Level of Detail", 8.f + cw, panelH);
+      ImGui::BeginGroup();
+      RibbonNyiButton("##TsLodLow", RibbonIconKind::SurfLodLow, "Reduced LOD",
+                      ImVec2(curCompact ? rowH : cw, rowH),
+                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
+      RibbonNyiButton("##TsLodHigh", RibbonIconKind::SurfLodHigh, "High LOD",
+                      ImVec2(curCompact ? rowH : cw, rowH),
+                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
+      ImGui::EndGroup();
+      RibbonSectionEnd();
+    }});
+    }
+
+    {
+      const float anCell = colW({"Crossing BL", "Visibility", "Catchment", "Volumes"});
+      const float wAn = 8.f + kTsLargeW + 4.f + anCell + 4.f + anCell;
+      ribbonSpecs.push_back({wAn, wAn, [&]() {
+      const float cell = colW({"Crossing BL", "Visibility", "Catchment", "Volumes"});
+      RibbonSectionBegin("RibbonSecTsAnalyze", "Analyze", 8.f + kTsLargeW + 4.f + cell + 4.f + cell, panelH);
+      if (RibbonButtonEx("##TsWaterDrop", RibbonIconKind::SurfWaterDrop, "Water Drop", ImVec2(kTsLargeW, colH),
+                         RibbonLabel::Below))
+        StartWaterDropCommand(cmd, surfName, log);
+      RibbonItemHelp("Water Drop — pick a point on this surface.\nCommand bar: WATERDROP");
+      ImGui::SameLine(0, 4);
+      ImGui::BeginGroup();
+      RibbonNyiButton("##TsXBreak", RibbonIconKind::SurfBandage, "Crossing BL",
+                      ImVec2(curCompact ? rowH : cell, rowH),
+                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
+      RibbonNyiButton("##TsVisCheck", RibbonIconKind::SurfEye, "Visibility",
+                      ImVec2(curCompact ? rowH : cell, rowH),
+                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
+      ImGui::EndGroup();
+      ImGui::SameLine(0, 4);
+      ImGui::BeginGroup();
+      if (smallBtn("##TsCatchment", RibbonIconKind::SurfCatchment, "Catchment", cell))
+        StartCatchmentCommand(cmd, surfName, log);
+      RibbonItemHelp("Catchment Area — pick an outlet on this surface.\nCommand bar: CATCHMENT");
+      if (smallBtn("##TsVolDash", RibbonIconKind::SurfVolumes, "Volumes", cell))
+        cmd.volumeDashboard.open = true;
+      RibbonItemHelp("Volumes Dashboard — base vs comparison cut/fill.");
+      ImGui::EndGroup();
+      RibbonSectionEnd();
+    }});
+    }
+
+    {
+      const float toolW = colW({"Drape Image", "Extract", "Move to Surface"});
+      ribbonSpecs.push_back({8.f + toolW, 8.f + toolW, [&]() {
+      const float cw = colW({"Drape Image", "Extract", "Move to Surface"});
+      RibbonSectionBegin("RibbonSecTsTools", "Surface Tools", 8.f + cw, panelH);
+      ImGui::BeginGroup();
+      RibbonNyiButton("##TsDrape", RibbonIconKind::SurfDrape, "Drape Image",
+                      ImVec2(curCompact ? rowH : cw, rowH),
+                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
+      if (smallBtn("##TsExtract", RibbonIconKind::SurfExtract, "Extract", cw))
+        ImGui::OpenPopup("##TsExtractMenu");
+      RibbonItemHelp("Extract from Surface — contours, water-drop, or catchment.");
+      if (ImGui::BeginPopup("##TsExtractMenu")) {
+        if (ImGui::MenuItem("Contours"))
+          SubmitRibbonCommand(cmd, log, "EXTRACT " + surfName);
+        if (ImGui::MenuItem("Water Drop Path"))
+          SubmitRibbonCommand(cmd, log, "WATERDROP EXTRACT");
+        if (ImGui::MenuItem("Water Drop Feature Line"))
+          SubmitRibbonCommand(cmd, log, "WATERDROP EXTRACT FL");
+        if (ImGui::MenuItem("Catchment"))
+          SubmitRibbonCommand(cmd, log, "CATCHMENT EXTRACT");
+        ImGui::EndPopup();
+      }
+      RibbonNyiButton("##TsMoveTo", RibbonIconKind::SurfMoveTo, "Move to Surface",
+                      ImVec2(curCompact ? rowH : cw, rowH),
+                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
+      ImGui::EndGroup();
+      RibbonSectionEnd();
+    }});
+    }
+
+    {
+      const float launchCell = colW({"Create Profile", "Data Shortcut", "Grading Tools"});
+      const float wLaunch = 8.f + kTsLargeW + 4.f + launchCell;
+      ribbonSpecs.push_back({wLaunch, wLaunch, [&]() {
+      const float cell = colW({"Create Profile", "Data Shortcut", "Grading Tools"});
+      RibbonSectionBegin("RibbonSecTsLaunch", "Launch Pad", 8.f + kTsLargeW + 4.f + cell, panelH);
+      RibbonNyiButton("##TsQProfile", RibbonIconKind::SurfQuickProfile, "Quick Profile", ImVec2(kTsLargeW, colH),
+                      RibbonLabel::Below);
+      ImGui::SameLine(0, 4);
+      ImGui::BeginGroup();
+      RibbonNyiButton("##TsCProfile", RibbonIconKind::SurfProfile, "Create Profile",
+                      ImVec2(curCompact ? rowH : cell, rowH),
+                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
+      RibbonNyiButton("##TsDShort", RibbonIconKind::SurfDataShortcut, "Data Shortcut",
+                      ImVec2(curCompact ? rowH : cell, rowH),
+                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
+      RibbonNyiButton("##TsGrade", RibbonIconKind::SurfGrading, "Grading Tools",
+                      ImVec2(curCompact ? rowH : cell, rowH),
+                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
+      ImGui::EndGroup();
+      RibbonSectionEnd();
+    }});
+    }
+  } // kRibbonTabSurfaceCtx
 
   // REQ-302: View tab.
   if (cmd.activeRibbonTab == kRibbonTabView) {
@@ -6667,6 +7161,7 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
   case K::SurfaceElevGrade: return true;
   case K::WaterDrop: return true;
   case K::Catchment: return true;
+  case K::SwapTinEdge: return true;
   case K::Circle: {
     using CP = AppCommandState::CirclePhase;
     return cmd.circlePhase == CP::WaitCenterOrMode || cmd.circlePhase == CP::ThreeP_WaitP1 ||

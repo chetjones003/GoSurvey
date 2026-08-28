@@ -1120,6 +1120,8 @@ constexpr int kRibbonTabManage   = 4;
 constexpr int kRibbonTabOutput   = 5;
 constexpr int kRibbonTabSurvey   = 6;
 constexpr int kRibbonTabCount    = 7;
+/// REQ-143: contextual TIN Surface tab. Not counted in \c kRibbonTabCount and not written to prefs.
+constexpr int kRibbonTabSurfaceCtx = 7;
 
 struct AppCommandState {
   enum class Kind {
@@ -1191,6 +1193,8 @@ struct AppCommandState {
     WaterDrop,
     /// REQ-134: one pick reports the catchment upstream of an outlet.
     Catchment,
+    /// REQ-139: one pick swaps an interior TIN edge on a named surface.
+    SwapTinEdge,
     /// REQ-069: one pick designates a Line/Polyline as a breakline on a named surface.
     DesignateBreakline,
     /// REQ-069: one pick designates a closed Polyline as a boundary ring (outer/hide/show) on a named surface.
@@ -1268,6 +1272,7 @@ struct AppCommandState {
     case Kind::SurfaceElevGrade:   return "SURFELEV";
     case Kind::WaterDrop:          return "WATERDROP";
     case Kind::Catchment:          return "CATCHMENT";
+    case Kind::SwapTinEdge:        return "SURFSWAPEDGE";
     case Kind::DesignateBreakline: return "DESIGNATEBREAKLINE";
     case Kind::DesignateBoundary:  return "DESIGNATEBOUNDARY";
     default:                  return "";
@@ -1810,7 +1815,12 @@ struct AppCommandState {
   /// REQ-302: which top-level ribbon tab is showing. Persisted in user prefs, same shape as
   /// \c trimState. Values match \c kRibbonTabHome.. \c kRibbonTabSurvey below; an out-of-range value
   /// loaded from a hand-edited prefs file is clamped back into range rather than left invalid.
+  /// REQ-143 may set this to \c kRibbonTabSurfaceCtx for the session only.
   int activeRibbonTab = 0;
+  /// Permanent tab to restore when the last selected surface is cleared (REQ-143). Session-only.
+  int ribbonTabBeforeSurfaceCtx = 0;
+  /// True while a surface selection has already switched (or could switch) to the contextual tab.
+  bool surfaceContextualRibbonArmed = false;
   /// REQ-077: update-check settings (enabled, channel, skipped version, throttle anchor).
   /// Only the persisted settings live here — the in-flight worker state is `update::UpdateState`,
   /// owned by the application loop, so `AppCommandState` gains no thread and stays copyable.
@@ -2082,6 +2092,7 @@ struct AppCommandState {
   std::vector<SurfaceWatershedCacheEntry> surfaceWatershedCache;
   std::string waterDropSurfaceName;
   std::string catchmentSurfaceName;
+  std::string swapEdgeSurfaceName;
   std::vector<float> lastWaterDropPathXyz;
   std::vector<float> lastCatchmentPathXyz;
   /// GL_LINES preview rebuilt each display pass from the last* paths. Not tied to TIN identity, so
@@ -3625,6 +3636,7 @@ void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartWaterDropCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
 void StartCatchmentCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartSurfSwapEdgeCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
 
 /// REQ-069: designate one picked Line/Polyline as a breakline on the named surface, appended to its
 /// definition by stable entity id. Refuses to start when \p surfaceName does not name an existing

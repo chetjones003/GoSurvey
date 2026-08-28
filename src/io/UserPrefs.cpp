@@ -390,7 +390,12 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
   s["prefsSchemaVersion"] = 1;
 
   s["trimState"] = st.trimState;
-  s["activeRibbonTab"] = st.activeRibbonTab;
+  {
+    int tab = st.activeRibbonTab;
+    if (tab == kRibbonTabSurfaceCtx)
+      tab = st.ribbonTabBeforeSurfaceCtx;
+    s["activeRibbonTab"] = std::clamp(tab, 0, kRibbonTabCount - 1);
+  }
   s["filletRadius"] = st.filletRadius;
   s["cornerTrimMode"] = st.cornerTrimMode;
   s["chamferDist1"] = st.chamferDist1;

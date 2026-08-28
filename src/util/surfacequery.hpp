@@ -5,6 +5,8 @@
 /// Pure util: no document types. Callers that have a `CadSurface` construct the matching
 /// implementation. Two concrete classes satisfy REQ-301.
 
+#include "surfacevolume.hpp"
+
 #include <cstdint>
 #include <vector>
 
@@ -28,6 +30,7 @@ public:
 private:
   const std::vector<float>* verts_ = nullptr;
   const std::vector<std::uint32_t>* indices_ = nullptr;
+  TinSpatialIndex index_;
   [[nodiscard]] bool triangleAt(double x, double y, double* outZ, size_t* outTri) const;
 };
 

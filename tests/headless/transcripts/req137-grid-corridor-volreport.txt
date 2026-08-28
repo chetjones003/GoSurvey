@@ -5,6 +5,8 @@ NEW
 OPEN samples/surface-demo.gs
 CMD SURFACECREATECORR EmptyCorr
 EXPECT LOG "no feature lines"
+CMD SURFSWAPEDGE EmptyCorr
+EXPECT LOG "is not a built TIN"
 CMD SURFACELIST
 EXPECT LOG "corridor"
 CMD SURFACECREATEGRID G1, 0, 0, 5, 5, 2, 2, 0, 0, 10, 10
