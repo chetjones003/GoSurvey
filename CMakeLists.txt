@@ -5,6 +5,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# sccache cannot hash MSVC's default /Zi PDB. CI passes CMAKE_CXX_COMPILER_LAUNCHER=sccache;
+# local builds leave the launcher unset and keep the default debug format.
+if(MSVC AND CMAKE_CXX_COMPILER_LAUNCHER)
+  cmake_policy(SET CMP0141 NEW)
+  set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded)
+endif()
+
 # ---------------------------------------------------------------------------
 # Version (ADR-029 (a)) — `project(VERSION)` above is the ONE source.
 #
@@ -139,11 +146,13 @@ target_include_directories(imgui_backend PUBLIC
 target_link_libraries(imgui_backend PUBLIC imgui_core glfw)
 
 # ---------------------------------------------------------------------------
-# Domain sources — shared by GoSurvey and gosurvey_headless (ADR-031 (a), REQ-203).
+# Domain sources — shared by GoSurvey, gosurvey_headless, and GoSurveySnapTests
+# (ADR-031 (a), REQ-203).
 #
 # ONE list, deliberately: a source added to the application must not be silently absent from the
 # headless driver, and the failure mode of forgetting is then a link error rather than a coverage
 # gap nobody notices. Everything here runs with no window and no GPU.
+# Compiled once as gosurvey_domain (below); the three executables link that library.
 #
 # Two members are *absent* on purpose, because each target supplies its own implementation of the
 # same pure header (the link-time platform seams, ADR-031 (b′)):
@@ -230,9 +239,40 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/util/docinvariants.cpp
 )
 
-add_executable(GoSurvey
-  ${GOSURVEY_DOMAIN_SOURCES}
+# One static library so CadCommands.cpp (and the rest of the domain list) is compiled
+# once per configuration rather than once per executable that needs it.
+add_library(gosurvey_domain STATIC ${GOSURVEY_DOMAIN_SOURCES})
+target_include_directories(gosurvey_domain PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}/src
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/app
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/commands
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/viewport
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/ui
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/util
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/io
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/survey
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/render
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/platform
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/pdf
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/font
+  ${CMAKE_CURRENT_SOURCE_DIR}/src/update
+  ${CMAKE_CURRENT_SOURCE_DIR}/third_party
+  ${NLOHMANN_JSON_INCLUDE}
+  ${CMAKE_BINARY_DIR}/generated
+)
+target_link_libraries(gosurvey_domain PUBLIC imgui_core)
+if(WIN32)
+  # comdlg32: file-dialog header link compatibility. ole32/shell32: <filesystem> and
+  # ProcessRun's shell paths. No opengl32, no glfw — the windowed app adds those itself.
+  target_link_libraries(gosurvey_domain PUBLIC comdlg32 ole32 shell32)
+endif()
+if(MSVC)
+  target_compile_options(gosurvey_domain PRIVATE /W4 /permissive-)
+else()
+  target_compile_options(gosurvey_domain PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
+add_executable(GoSurvey
   # Application entry
   src/app/main.cpp
 
@@ -314,6 +354,7 @@ target_include_directories(GoSurvey PRIVATE
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(GoSurvey PRIVATE
+  gosurvey_domain
   imgui_backend
   glfw
   OpenGL::GL
@@ -419,17 +460,16 @@ endif()
 # ---------------------------------------------------------------------------
 # gosurvey_headless (REQ-203 / ADR-031): the Commands layer, drivable with no window.
 #
-# Links ${GOSURVEY_DOMAIN_SOURCES} plus the two headless platform seams, and imgui_core WITHOUT
-# imgui_backend — so there is no GLFW, no GLEW, no OpenGL, and no window, while text still measures
-# through the same font the application uses (ADR-031 (c′), which is what makes REQ-203's
-# "save a .gs and diff against the GUI" condition meaningful rather than unmeetable).
+# Links gosurvey_domain plus the two headless platform seams, and imgui_core (via the domain
+# library) WITHOUT imgui_backend — so there is no GLFW, no GLEW, no OpenGL, and no window, while
+# text still measures through the same font the application uses (ADR-031 (c′), which is what
+# makes REQ-203's "save a .gs and diff against the GUI" condition meaningful rather than unmeetable).
 #
 # TEST-ONLY, like Catch2 (REQ-300): GoSurvey.exe neither links nor ships any of it.
 # ---------------------------------------------------------------------------
 option(GOSURVEY_BUILD_HEADLESS "Build the headless transcript driver (REQ-203)" ON)
 if(GOSURVEY_BUILD_HEADLESS)
   add_executable(gosurvey_headless
-    ${GOSURVEY_DOMAIN_SOURCES}
     src/platform/HeadlessFileDialogs.cpp
     src/platform/HeadlessPdfAttach.cpp
     tests/headless/HeadlessDriver.cpp
@@ -457,19 +497,14 @@ if(GOSURVEY_BUILD_HEADLESS)
     ${CMAKE_BINARY_DIR}/generated
   )
 
-  # imgui_core only. Adding imgui_backend here would drag in glfw and OpenGL and silently undo the
-  # property this target exists to hold.
-  target_link_libraries(gosurvey_headless PRIVATE imgui_core)
+  # gosurvey_domain brings imgui_core. Adding imgui_backend here would drag in glfw and OpenGL
+  # and silently undo the property this target exists to hold.
+  target_link_libraries(gosurvey_headless PRIVATE gosurvey_domain)
 
   # %DATA% in a transcript resolves to this, so a fixture is named relative to the repository
   # rather than to whoever's checkout the transcript was written in.
   target_compile_definitions(gosurvey_headless PRIVATE
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples")
-  if(WIN32)
-    # comdlg32 for the file-dialog header's link compatibility; ole32/shell32 for <filesystem> and
-    # the shell paths ProcessRun uses. No opengl32, no glfw — verified by REQ-203's acceptance.
-    target_link_libraries(gosurvey_headless PRIVATE comdlg32 ole32 shell32)
-  endif()
 
   if(MSVC)
     target_compile_options(gosurvey_headless PRIVATE /W4 /permissive-)
@@ -486,6 +521,10 @@ endif()
 # ---------------------------------------------------------------------------
 option(GOSURVEY_BUILD_TESTS "Build the GoSurvey domain test suite" ON)
 if(GOSURVEY_BUILD_TESTS)
+  set(CATCH_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+  set(CATCH_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+  set(CATCH_BUILD_EXTRA_TESTS OFF CACHE BOOL "" FORCE)
+  set(CATCH_INSTALL_DOCS OFF CACHE BOOL "" FORCE)
   FetchContent_Declare(Catch2
     GIT_REPOSITORY https://github.com/catchorg/Catch2.git
     GIT_TAG v3.5.2
@@ -712,14 +751,13 @@ if(GOSURVEY_BUILD_TESTS)
 
   # ---------------------------------------------------------------------------
   # GoSurveySnapTests (issue #103): CadSnap::FindBest needs AppCommandState AND the rest of
-  # ${GOSURVEY_DOMAIN_SOURCES} it transitively calls into (SurveyPoints.cpp reaches into
-  # CadCommands.cpp for EraseCadAnnotationAtIndex/FindEntityById etc.), which is exactly what
-  # GoSurveyTests above is built to avoid linking. It is otherwise identical to gosurvey_headless's
-  # link set — domain sources + imgui_core, no GLFW/OpenGL/window — just with a Catch2 main instead
-  # of the transcript driver.
+  # gosurvey_domain it transitively calls into (SurveyPoints.cpp reaches into CadCommands.cpp
+  # for EraseCadAnnotationAtIndex/FindEntityById etc.), which is exactly what GoSurveyTests above
+  # is built to avoid linking. It is otherwise identical to gosurvey_headless's link set — domain
+  # library + imgui_core, no GLFW/OpenGL/window — just with a Catch2 main instead of the
+  # transcript driver.
   # ---------------------------------------------------------------------------
   add_executable(GoSurveySnapTests
-    ${GOSURVEY_DOMAIN_SOURCES}
     src/platform/HeadlessFileDialogs.cpp
     src/platform/HeadlessPdfAttach.cpp
     tests/CadSnapTests.cpp
@@ -743,12 +781,9 @@ if(GOSURVEY_BUILD_TESTS)
     ${NLOHMANN_JSON_INCLUDE}
     ${CMAKE_BINARY_DIR}/generated
   )
-  target_link_libraries(GoSurveySnapTests PRIVATE imgui_core Catch2::Catch2WithMain)
+  target_link_libraries(GoSurveySnapTests PRIVATE gosurvey_domain Catch2::Catch2WithMain)
   target_compile_definitions(GoSurveySnapTests PRIVATE
     GOSURVEY_SAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/samples")
-  if(WIN32)
-    target_link_libraries(GoSurveySnapTests PRIVATE comdlg32 ole32 shell32)
-  endif()
   if(MSVC)
     target_compile_options(GoSurveySnapTests PRIVATE /W4 /permissive-)
   else()
