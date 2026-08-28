@@ -523,6 +523,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/VisualStyleTests.cpp
     tests/MeshGeomTests.cpp
     tests/MeshGsRoundTripTests.cpp
+    tests/GsAnnotationJsonTests.cpp
     tests/GltfImportTests.cpp
     tests/StlImportTests.cpp
     tests/EntityIdTests.cpp
@@ -702,6 +703,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/HeadlessFileDialogs.cpp
     src/platform/HeadlessPdfAttach.cpp
     tests/CadSnapTests.cpp
+    tests/GsIoDimAngularTests.cpp
   )
   target_include_directories(GoSurveySnapTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
