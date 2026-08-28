@@ -219,6 +219,11 @@ set(GOSURVEY_DOMAIN_SOURCES
   src/util/contourgen.cpp
   src/util/surfaceanalysis.cpp
   src/util/surfacevolume.cpp
+  src/util/surfacestats.cpp
+  src/util/watershed.cpp
+  src/util/tinvolume.cpp
+  src/util/surfacequery.cpp
+  src/util/gridsurface.cpp
   src/util/benchscene.cpp
 
   # Document invariants (REQ-204) — pure; shared by the Catch2 suite and the headless driver
@@ -249,7 +254,10 @@ add_executable(GoSurvey
   src/ui/CadUi_PointGroups.cpp
   src/ui/CadUi_Surfaces.cpp
   src/ui/CadUi_SurfaceStyles.cpp
+  src/ui/CadUi_Toolspace.cpp
+  src/ui/CadUi_SurfaceProperties.cpp
   src/ui/CadUi_VolumeDashboard.cpp
+  src/ui/CadUi_QuickProfile.cpp
   src/ui/CadUi_FeatureLineElev.cpp
   src/ui/CadUi_UpdateDialog.cpp
   src/ui/CadUi_SignInGate.cpp
@@ -511,6 +519,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/OrthoConstrainTests.cpp
     tests/ColorContrastTests.cpp
     tests/PlotFontTests.cpp
+    tests/CadFontNameTests.cpp
     tests/MtextToolbarTests.cpp
     tests/RichTextLayoutTests.cpp
     tests/MtextTextOpsTests.cpp
@@ -522,6 +531,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/VisualStyleTests.cpp
     tests/MeshGeomTests.cpp
     tests/MeshGsRoundTripTests.cpp
+    tests/GsAnnotationJsonTests.cpp
     tests/GltfImportTests.cpp
     tests/StlImportTests.cpp
     tests/EntityIdTests.cpp
@@ -546,11 +556,18 @@ if(GOSURVEY_BUILD_TESTS)
     # example and wrong on exactly the cases a real grading comparison needs (no overlap, self vs
     # self, partial overlap).
     tests/SurfaceVolumeTests.cpp
+    tests/CadTableTests.cpp
+    tests/SurfaceStatsTests.cpp
+    tests/WatershedTests.cpp
+    tests/TinVolumeTests.cpp
+    tests/Issue119SurfaceTests.cpp
+    tests/SurfaceProfileTests.cpp
     # REQ-070 surface style table (ADR-036 (d)). Header-only and pure, so it needs no source entry
     # below. Three of REQ-070's five acceptance conditions — the deleted-style fallback, the legacy
     # empty-name fallback, and the rejection of a major interval that is not a whole multiple of the
     # minor — are decided entirely here, before any geometry exists to look at.
     tests/SurfaceStyleTests.cpp
+    tests/ToolspaceCatalogTests.cpp
     # REQ-089 surface rollover dwell. Header-only and pure, like the style table above. It is the
     # feature's ONLY new logic — the readout's numbers come from TinQueryTests' and
     # SurfaceStyleTests' already-pinned calls — and the one-shot it asserts is what keeps the
@@ -634,6 +651,11 @@ if(GOSURVEY_BUILD_TESTS)
     # REQ-073 surface-to-surface volumes + the spatial index they run on. Pure — no GL, no document —
     # so a wrong sign on cut vs. fill is caught against a hand-computed planar case, TASK-095.
     src/util/surfacevolume.cpp
+    src/util/surfacestats.cpp
+    src/util/watershed.cpp
+    src/util/tinvolume.cpp
+    src/util/surfacequery.cpp
+    src/util/gridsurface.cpp
     # REQ-077/078 version ordering + manifest parse. Pure by ADR-029 (g) — no network, no window.
     # Wrong version ordering has NO symptom (the user is simply never offered an update), which is
     # exactly why it must be pinned by a test rather than noticed in use.
@@ -701,6 +723,7 @@ if(GOSURVEY_BUILD_TESTS)
     src/platform/HeadlessFileDialogs.cpp
     src/platform/HeadlessPdfAttach.cpp
     tests/CadSnapTests.cpp
+    tests/GsIoDimAngularTests.cpp
   )
   target_include_directories(GoSurveySnapTests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src

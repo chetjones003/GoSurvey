@@ -9,5 +9,5 @@ struct AppCommandState;
 // size, with each viewport's model geometry emitted as vector paths clipped to the viewport rect at the
 // viewport's scale. Geometry/viewports on non-plottable (or off/frozen) layers are excluded.
 // REQ-029 (single) / REQ-030 (batch); ADR-007 (vector PDF via PDFium). Returns true on success.
-bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutIndices, const char* pathUtf8,
+bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices, const char* pathUtf8,
                       std::vector<std::string>& log);

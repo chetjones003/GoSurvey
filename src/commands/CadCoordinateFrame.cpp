@@ -52,6 +52,8 @@ void ShiftAllStorageBy(AppCommandState& st, double dx, double dy) {
       add2(&an.dimExt2X, &an.dimExt2Y);
     }
   }
+  for (CadTable& t : st.cadTables)
+    add2(&t.insX, &t.insY);
   // Stride 3, but only X and Y are rebased — Z is absolute and never carries a document origin
   // (ADR-025 D2). The +2 slot is deliberately skipped.
   for (CadFilledRegion& fr : st.cadFilledRegions)

@@ -18,7 +18,8 @@ enum class Kind {
   /// case a plan view cannot distinguish and an orbited one makes obvious. Where the two candidate
   /// points differ, the one nearer the camera is returned (REQ-062).
   ApparentIntersection,
-  Grip
+  Grip,
+  Surface
 };
 
 struct Hit {
@@ -94,6 +95,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     return 1; ///< A weaker claim than Intersection: the objects may not touch at all (REQ-062)
   case Kind::Perpendicular:
     return 0;
+  case Kind::Surface:
+    return 0;  ///< Weaker than endpoints so vertices still win (REQ-127).
   case Kind::Grip:
     return 4; ///< Beats all geometry snaps; no glyph is drawn for this kind.
   }

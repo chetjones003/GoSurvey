@@ -20,6 +20,8 @@
 #include "update/UpdateCheck.hpp"  // update::UpdatePrefs only — pure, no network, no <thread>
 #include "util/tinbuild.hpp"       // TinBuildResult, for AppCommandState::SurfaceRebuildAsync (REQ-069)
 #include "util/surfacevolume.hpp"  // SurfaceVolumeResult, for AppCommandState::VolumeDashboardState (REQ-073)
+#include "util/surfacequery.hpp"   // SurfaceProfileSample, Quick Profile (REQ-145)
+#include "util/watershed.hpp"      // WatershedResult, for AppCommandState::SurfaceWatershedCacheEntry (REQ-132)
 // curveisect::Vec2/Seg/Conic + Intersect*, for FILLET's tangent-arc solve (REQ-103 step 6a) below.
 // Dependency-free by its own design (curveintersect.hpp's own doc comment), so this adds no cycle.
 #include "util/curveintersect.hpp"
@@ -27,6 +29,7 @@
 // (<cmath>), and deliberately in util/ rather than beside the UI that drives it: the state lives on
 // AppCommandState, and Commands may not include a UI header (architecture §11.1).
 #include "util/hoverdwell.hpp"
+#include "util/cadtable.hpp"   // CadTable entity (REQ-148 / D-2026-08-28-i)
 // zoomframing::FrameWorldRect, the one camera-framing implementation behind ZOOMEXTENTS, the REQ-120
 // gesture, ZOOM WINDOW and the post-import fit (REQ-122). Pure and dependency-free, like the headers
 // above it.
@@ -60,7 +63,11 @@ struct SelectedEntity {
     /// surface. Component-level selection is forbidden by REQ-070 ("contours ... never appear in
     /// selection") and has nothing to be selected *by*: a contour is regenerated display geometry
     /// with no identity.
-    Surface = 10
+    Surface = 10,
+    /// Drawing TABLE (REQ-148 / D-2026-08-28-i). **Appended** after Surface so existing type values
+    /// and switch order stay stable. Editable: MOVE/COPY/ROTATE/SCALE/MIRROR apply to the whole table;
+    /// cells are edited in place, not as child entities.
+    Table = 11
   };
   Type type = Type::LineSeg;
   int index = 0; ///< Entity index in the parallel container for \p type
@@ -782,6 +789,14 @@ void CadAnnotationRoughBounds(const CadAnnotation& a, float modelUnitsPerPlotted
 /// Top-most annotation under point; -1 if none. Uses pixel tolerance from viewport half-height.
 int PickCadAnnotationAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
                         float viewportHeightPx);
+int PickCadTableAt(float wx, float wy, const AppCommandState& cmd, float orthoHalfHeightWorld,
+                   float viewportHeightPx);
+void CadTableCollectTransformPreviews(const AppCommandState& cmd, float curX, float curY,
+                                      std::vector<CadTable>* out);
+void OpenTableCellEditor(AppCommandState& st, int tableIndex, int cellIndex);
+void CommitTableCellEditor(AppCommandState& st, std::vector<std::string>& log);
+void CancelTableCellEditor(AppCommandState& st);
+void MigrateLegacyAnnotationTables(AppCommandState& st);
 
 /// ROTATE live preview angle (rad) about \ref AppCommandState::rotateBase when cursor drives preview.
 bool CadRotatePreviewTheta(const AppCommandState& cmd, float curX, float curY, float* outThetaRad);
@@ -816,6 +831,8 @@ struct CadClipboard {
   std::vector<EntityAttributes> polyAttrs;
   std::vector<CadAnnotation>    annotations;
   std::vector<EntityAttributes> annotationAttrs;
+  std::vector<CadTable>         tables;
+  std::vector<EntityAttributes> tableAttrs;
   std::vector<CadFilledRegion>  filledRegions;     ///< Solid fills enclosed by the copy selection (REQ-038 addendum).
   std::vector<EntityAttributes> filledRegionAttrs;
   /// Source space of the copy. Text height has different units per space (model: plotted-inches × scale = model
@@ -824,7 +841,7 @@ struct CadClipboard {
 
   bool empty() const {
     return lines.empty() && circlesCxCyZR.empty() && arcs.empty() && ellipses.empty() &&
-           (polyOffsets.size() <= 1) && annotations.empty() && filledRegions.empty();
+           (polyOffsets.size() <= 1) && annotations.empty() && tables.empty() && filledRegions.empty();
   }
 };
 
@@ -861,6 +878,8 @@ struct DrawingGeometrySnapshot {
   /// TIN surfaces (REQ-068). Shared payload, not copied — see CadTin and architecture §11.5.
   std::vector<CadSurface>       cadSurfaces;
   std::vector<EntityAttributes> cadSurfaceAttrs;
+  std::vector<CadTable>         cadTables;       ///< Drawing TABLE entities (REQ-148).
+  std::vector<EntityAttributes> cadTableAttrs;
   std::vector<SurveyPoint>      surveyPoints;
   /// Named point groups (REQ-067). Undoable, like textStyles — creating or editing one is a
   /// single-step undo. Rules only; membership is never stored.
@@ -924,6 +943,8 @@ struct DrawingDocument {
   std::vector<EntityAttributes> cadMeshAttrs;
   std::vector<CadSurface>       cadSurfaces;       ///< TIN surfaces (REQ-068).
   std::vector<EntityAttributes> cadSurfaceAttrs;
+  std::vector<CadTable>         cadTables;         ///< Drawing TABLE (REQ-148).
+  std::vector<EntityAttributes> cadTableAttrs;
   std::vector<SurveyPoint>      surveyPoints;
   std::vector<PointGroup>       pointGroups;            ///< Named point groups (REQ-067).
   std::vector<int>              selectedSurveyPointIndices;
@@ -1119,6 +1140,10 @@ constexpr int kRibbonTabManage   = 4;
 constexpr int kRibbonTabOutput   = 5;
 constexpr int kRibbonTabSurvey   = 6;
 constexpr int kRibbonTabCount    = 7;
+/// REQ-143: contextual TIN Surface tab. Not counted in \c kRibbonTabCount and not written to prefs.
+constexpr int kRibbonTabSurfaceCtx = 7;
+/// REQ-153: contextual SURVEY Point(s) tab. Session-only, not a prefs slot.
+constexpr int kRibbonTabSurveyPointCtx = 8;
 
 struct AppCommandState {
   enum class Kind {
@@ -1186,6 +1211,22 @@ struct AppCommandState {
     SurveyInverse,
     /// REQ-074: one pick reports interpolated surface elevation, a second reports grade between them.
     SurfaceElevGrade,
+    /// REQ-133: one pick traces a water-drop path on a named surface.
+    WaterDrop,
+    /// REQ-134: one pick reports the catchment upstream of an outlet.
+    Catchment,
+    /// REQ-139: one pick swaps an interior TIN edge on a named surface.
+    SwapTinEdge,
+    /// REQ-144: one pick adds a definition vertex on a named TIN (Z = work plane).
+    AddTinPoint,
+    /// REQ-144: one pick deletes the nearest definition point on a named TIN.
+    DelTinPoint,
+    /// REQ-150: two picks move a definition point (from, then to).
+    MoveTinPoint,
+    /// REQ-150: one pick deletes the nearest interior TIN edge.
+    DelTinLine,
+    /// REQ-145: two picks sample a named surface into a session Quick Profile graph.
+    QuickProfile,
     /// REQ-069: one pick designates a Line/Polyline as a breakline on a named surface.
     DesignateBreakline,
     /// REQ-069: one pick designates a closed Polyline as a boundary ring (outer/hide/show) on a named surface.
@@ -1261,6 +1302,14 @@ struct AppCommandState {
     case Kind::TrimState:     return "TRIMSTATE";
     case Kind::Orbit:         return "ORBIT";
     case Kind::SurfaceElevGrade:   return "SURFELEV";
+    case Kind::WaterDrop:          return "WATERDROP";
+    case Kind::Catchment:          return "CATCHMENT";
+    case Kind::SwapTinEdge:        return "SURFSWAPEDGE";
+    case Kind::AddTinPoint:        return "SURFACEADDPOINT";
+    case Kind::DelTinPoint:        return "SURFACEDELPOINT";
+    case Kind::MoveTinPoint:       return "SURFACEMOVEPOINT";
+    case Kind::DelTinLine:         return "SURFDELLINE";
+    case Kind::QuickProfile:       return "QUICKPROFILE";
     case Kind::DesignateBreakline: return "DESIGNATEBREAKLINE";
     case Kind::DesignateBoundary:  return "DESIGNATEBOUNDARY";
     default:                  return "";
@@ -1481,6 +1530,7 @@ struct AppCommandState {
   /// Snap where two objects only *appear* to meet in the current view (REQ-062). Off by default,
   /// as in AutoCAD: it fires on objects that do not touch, which is surprising unless asked for.
   bool objectSnapApparentIntersection = false;
+  bool objectSnapSurface = true;
   /// Screen-space aperture (pixels) for object snap tolerance and related viewport picks.
   float objectSnapAperturePx = 14.f;
   /// Half-size in screen pixels for green object-snap glyphs (square / triangle / circle overlay).
@@ -1802,7 +1852,16 @@ struct AppCommandState {
   /// REQ-302: which top-level ribbon tab is showing. Persisted in user prefs, same shape as
   /// \c trimState. Values match \c kRibbonTabHome.. \c kRibbonTabSurvey below; an out-of-range value
   /// loaded from a hand-edited prefs file is clamped back into range rather than left invalid.
+  /// REQ-143 / REQ-153 may set this to a contextual tab for the session only.
   int activeRibbonTab = 0;
+  /// Permanent tab to restore when the last selected surface is cleared (REQ-143). Session-only.
+  int ribbonTabBeforeSurfaceCtx = 0;
+  /// True while a surface selection has already switched (or could switch) to the contextual tab.
+  bool surfaceContextualRibbonArmed = false;
+  /// Permanent tab to restore when the last selected survey point is cleared (REQ-153). Session-only.
+  int ribbonTabBeforeSurveyPointCtx = 0;
+  /// True while a survey-point selection has armed the SURVEY Point(s) contextual tab.
+  bool surveyPointContextualRibbonArmed = false;
   /// REQ-077: update-check settings (enabled, channel, skipped version, throttle anchor).
   /// Only the persisted settings live here — the in-flight worker state is `update::UpdateState`,
   /// owned by the application loop, so `AppCommandState` gains no thread and stays copyable.
@@ -1861,6 +1920,17 @@ struct AppCommandState {
   std::vector<CadSurface> cadSurfaces;
   std::vector<EntityAttributes> cadSurfaceAttrs;
 
+  /// Drawing TABLE entities (REQ-148 / D-2026-08-28-i). Rigid body: insertion, size, rotation, cells.
+  std::vector<CadTable> cadTables;
+  std::vector<EntityAttributes> cadTableAttrs;
+
+  /// In-place TABLE cell editor (viewport overlay). Not a command; Enter commits, Esc cancels.
+  bool tableCellEditorOpen = false;
+  int tableCellEditorIndex = -1;
+  int tableCellEditorCell = -1;
+  std::string tableCellEditorBuf;
+  bool tableCellEditorFocusRequest = false;
+
   /// One in-flight background rebuild per surface currently being retriangulated (REQ-069's dynamic
   /// rebuild — architecture §8's one-shot worker pattern, its second concrete use after
   /// \ref pdfAttachAsync and the first to implement the full contract: rules 4 and 5, generation
@@ -1908,6 +1978,7 @@ struct AppCommandState {
   struct VolumeDashboardAsync {
     std::uint64_t baseSurfaceId = 0;
     std::uint64_t comparisonSurfaceId = 0;
+    std::uint64_t clipEntityId = 0;
     /// Strong references to the exact triangulations this job computes against — captured on the UI
     /// thread at dispatch, read only on the worker thread. Safe with no locking because a `CadTin` is
     /// immutable once built and only ever REPLACED, never written through (architecture §11.5): the
@@ -1915,6 +1986,8 @@ struct AppCommandState {
     /// surface's OWN pointer while this runs.
     std::shared_ptr<const CadTin> tinBase;
     std::shared_ptr<const CadTin> tinComparison;
+    /// REQ-131 clip ring in TIN-local XY, captured at dispatch. Empty = no clip.
+    std::vector<std::pair<double, double>> clipRingXy;
     /// Whether the cut/fill map was wanted AT DISPATCH — captured so toggling the map on after a
     /// mapless result already landed is detected as staleness (the landed result has no map to show).
     bool wantMap = false;
@@ -1948,6 +2021,8 @@ struct AppCommandState {
     /// \ref SurfaceRebuildAsync keys on id rather than a name that a rename could orphan.
     std::uint64_t baseSurfaceId = 0;
     std::uint64_t comparisonSurfaceId = 0;
+    /// 0 = no clip (full overlap). Otherwise a closed polyline's entity id (REQ-131).
+    std::uint64_t clipEntityId = 0;
 
     /// The last landed result, and what it was computed FOR — a revision plus the two ids, so a
     /// change to EITHER a surface's triangulation OR the panel's own pick is detected as staleness by
@@ -1958,14 +2033,43 @@ struct AppCommandState {
     std::uint32_t resultForRevision = 0xFFFFFFFFu;
     std::uint64_t resultForBaseSurfaceId = 0;
     std::uint64_t resultForComparisonSurfaceId = 0;
+    std::uint64_t resultForClipEntityId = 0;
     bool resultHasMap = false;  ///< was `showMap` on when `lastResult` was computed?
     /// REQ-073's cut/fill map for `lastResult`, `GL_TRIANGLES` layout — empty unless `resultHasMap`.
     std::vector<float> mapCutTrianglesXyz;
     std::vector<float> mapFillTrianglesXyz;
 
+    struct AnalysisRow {
+      std::string label;
+      std::uint64_t baseSurfaceId = 0;
+      std::uint64_t comparisonSurfaceId = 0;
+      std::uint64_t clipEntityId = 0;
+      SurfaceVolumeResult result;
+      bool hasResult = false;
+    };
+    std::vector<AnalysisRow> rows;
+
     std::unique_ptr<VolumeDashboardAsync> job;  ///< null when nothing is in flight
   };
   VolumeDashboardState volumeDashboard;
+  std::string lastVolumeReportText;  ///< Last successful VOLUMES / dashboard numbers for VOLREPORT.
+  bool hasLastVolumeResult = false;
+  SurfaceVolumeResult lastVolumeResult;
+  std::string lastVolumeBaseName;
+  std::string lastVolumeComparisonName;
+
+  /// REQ-145 Quick Profile — session graph only, never `.gs` (same rule as Volume Dashboard).
+  struct QuickProfileState {
+    bool open = false;
+    bool hasResult = false;
+    std::string surfaceName;
+    double length = 0.0;
+    int onSurfaceCount = 0;
+    double minZ = 0.0;
+    double maxZ = 0.0;
+    std::vector<SurfaceProfileSample> samples;
+  };
+  QuickProfileState quickProfile;
 
   /// Generated display geometry for one surface — ADR-036 (e).
   ///
@@ -2008,6 +2112,11 @@ struct AppCommandState {
     std::vector<float> borderEdges;    ///< The outline: edges belonging to one triangle (\c TinBorderEdges).
     std::vector<float> minorContours;  ///< Minor levels, excluding those that are also major.
     std::vector<float> majorContours;
+    struct ContourLabel {
+      float x = 0.f, y = 0.f, z = 0.f;
+      double level = 0.0;
+    };
+    std::vector<ContourLabel> contourLabels;
 
     /// The style asked for more contour levels than the display path will generate, so the contour
     /// buffers above are empty for a reason that has nothing to do with the style's toggles.
@@ -2039,6 +2148,43 @@ struct AppCommandState {
   /// \ref DrawingDocument, never in `.gs` — which is what makes REQ-070's "never stored in `.gs`"
   /// and "adds no entity to the drawing" structurally true rather than a rule someone must remember.
   std::vector<SurfaceDisplayCacheEntry> surfaceDisplayCache;
+
+  /// REQ-126 / ADR-039 (c): per-surface spatial index for elevation queries. Live-only, same
+  /// staleness key as the display cache (id + TIN pointer). `mutable` because SURFELEV/hover take a
+  /// const state and the index is derived, not document content.
+  struct SurfaceQueryCacheEntry {
+    std::uint64_t surfaceId = 0;
+    std::weak_ptr<const CadTin> builtFrom;
+    TinSpatialIndex index;
+  };
+  mutable std::vector<SurfaceQueryCacheEntry> surfaceQueryCache;
+
+  /// REQ-132…134 / ADR-039 (j): live-only drain graph and preview lines. Never in `.gs`.
+  struct SurfaceWatershedCacheEntry {
+    std::uint64_t surfaceId = 0;
+    std::weak_ptr<const CadTin> builtFrom;
+    WatershedResult analysis;
+    std::vector<float> basinOutlines;
+    std::vector<float> waterDropLines;
+    std::vector<float> catchmentLines;
+  };
+  std::vector<SurfaceWatershedCacheEntry> surfaceWatershedCache;
+  std::string waterDropSurfaceName;
+  std::string catchmentSurfaceName;
+  std::string swapEdgeSurfaceName;
+  std::string addPointSurfaceName;
+  std::string delPointSurfaceName;
+  std::string movePointSurfaceName;
+  std::string delLineSurfaceName;
+  enum class MoveTinPointPhase { WaitFrom, WaitTo } moveTinPointPhase = MoveTinPointPhase::WaitFrom;
+  double moveTinFromX = 0.0;
+  double moveTinFromY = 0.0;
+  std::vector<float> lastWaterDropPathXyz;
+  std::vector<float> lastCatchmentPathXyz;
+  /// GL_LINES preview rebuilt each display pass from the last* paths. Not tied to TIN identity, so
+  /// a REQ-069 rebuild cannot erase a water-drop the user just computed (REQ-133).
+  std::vector<float> waterDropPreviewLines;
+  std::vector<float> catchmentPreviewLines;
 
   /// What the renderer is handed for surfaces this frame — batches borrowing the buffers above,
   /// filtered for layer/isolation visibility and carrying each component's resolved colour and
@@ -2389,6 +2535,10 @@ struct AppCommandState {
   /// one surface (existing and proposed) and a grade must be computed within one surface, never
   /// across two (Q1, TASK-055).
   enum class SurfaceElevPhase { WaitFirst, WaitSecond } surfaceElevPhase = SurfaceElevPhase::WaitFirst;
+  enum class QuickProfilePhase { WaitFirst, WaitSecond } quickProfilePhase = QuickProfilePhase::WaitFirst;
+  std::string quickProfileSurfaceName;
+  double quickProfileFromX = 0.0;
+  double quickProfileFromY = 0.0;
   double surfaceElevFromX = 0.0;
   double surfaceElevFromY = 0.0;
   std::vector<std::pair<std::string, double>> surfaceElevFromZ;
@@ -2403,6 +2553,7 @@ struct AppCommandState {
   /// than started from the panel, which is the ordinary case for the command line.
   std::string designateBreaklineDescription;
   std::string designateBoundaryName;
+  bool designateContourSource = false;
 
   /// REQ-085: the active polyline draft is a **3D polyline** — vertices may carry a typed elevation.
   ///
@@ -2442,9 +2593,24 @@ struct AppCommandState {
   bool showTextStyleManagerWindow = false;
   /// Surface Style editor (REQ-070 / ADR-036 (i)) — opened by SURFSTYLE and by the Surface Manager.
   bool showSurfaceStyleWindow = false;
+  /// When set, the next Surface Style window draw selects this named row (Surface Manager Edit...).
+  std::string surfaceStyleEditorFocusName;
+  /// When true, the style/analysis editor uses the title "Surfaces" (Toolspace / Survey ribbon).
+  bool surfaceStyleUseSurfacesTitle = false;
   bool showPointGroupManagerWindow = false;  ///< Point Group manager (REQ-067).
-  bool showSurfaceManagerWindow = false;     ///< Surfaces panel (REQ-068).
+  /// When set, the Point Group manager selects this named group on the next draw.
+  std::string pointGroupManagerFocusName;
+  bool showSurfaceManagerWindow = false;     ///< Surfaces panel (REQ-068). definition edits live in Toolspace.
+  /// Create Surface dialog (Toolspace Surfaces ▸ Create Surface...). Session-only.
+  bool showCreateSurfaceWindow = false;
+  /// Surface Properties (Toolspace named surface ▸ Surface Properties...). Session-only.
+  bool showSurfacePropertiesWindow = false;
+  int surfacePropertiesIndex = -1;
   bool showFeatureLineElevWindow = false;    ///< Feature line elevation editor (REQ-088).
+  /// REQ-142 Toolspace (Prospector / Settings). Session-only; not written to `.gs`.
+  enum class ToolspaceTab : int { Prospector = 0, Settings = 1 };
+  bool showToolspaceWindow = true;
+  ToolspaceTab toolspaceTab = ToolspaceTab::Prospector;
   /// Which feature line the elevation editor is showing, 0-based. Held here rather than as a static
   /// in the panel so that opening the editor from a selected feature line can aim it, and so it
   /// survives the window being closed and reopened.
@@ -3028,7 +3194,9 @@ enum class EntityKind : std::uint8_t {
   /// end would renumber every entity in every existing drawing on its next load — and REQ-069's
   /// breakline and boundary references are stored by exactly those ids. Appending is what keeps a
   /// legacy `.gs` loading with the ids it loaded with yesterday.
-  Surface
+  Surface,
+  /// REQ-148 / D-2026-08-28-i. Appended after Surface so the id sweep does not renumber legacy drawings.
+  Table
 };
 
 /// The result of resolving a stable id (REQ-076): which array, and the index *at this moment*.
@@ -3129,6 +3297,9 @@ enum class SurfaceState { Current, Stale, Rebuilding };
 void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
                            std::vector<SurfaceHoverRow>* out);
 
+/// REQ-127: interpolated Z of the last covering visible surface at plan (x,y), or false if none.
+[[nodiscard]] bool SurfaceSnapElevation(const AppCommandState& st, double x, double y, float* outZ);
+
 /// Index of the surface named \p name (case-insensitive), or -1 (REQ-068).
 ///
 /// For a name the **user** typed — a command argument, a panel selection. For a reference held
@@ -3155,6 +3326,15 @@ bool BuildSurfaceFromSources(AppCommandState& st, CadSurface& surface, std::vect
 int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
                                  const std::vector<std::string>& groupNames,
                                  std::vector<std::string>& log);
+
+/// REQ-136: named TIN volume surface (comparison minus base). Returns the new index, or -1.
+int CreateSurfaceFromVolumeParents(AppCommandState& st, const std::string& name, const std::string& baseName,
+                                   const std::string& comparisonName, std::vector<std::string>& log);
+
+/// If more than one surface draws with this surface's resolved style, copy that style to a unique
+/// name and point only this surface at the copy. Named-style sharing (REQ-070) stays available via
+/// SURFSTYLE ASSIGN. Returns true when a copy was made.
+bool DetachSurfaceStyleIfShared(AppCommandState& st, size_t surfaceIndex, std::vector<std::string>* log);
 
 /// Erase a surface by index, keeping its attribute array in step. Callers own the undo snapshot.
 void EraseSurfaceAtIndex(AppCommandState& st, size_t index);
@@ -3546,12 +3726,22 @@ void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log);
 /// REQ-074: pick a point for its interpolated surface elevation; pick a second for the grade
 /// between them. Reports every surface covering the pick, by name.
 void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartWaterDropCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartCatchmentCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartSurfSwapEdgeCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartSurfAddPointCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartSurfDelPointCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartSurfMovePointCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartSurfDelLineCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartQuickProfileCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
 
 /// REQ-069: designate one picked Line/Polyline as a breakline on the named surface, appended to its
 /// definition by stable entity id. Refuses to start when \p surfaceName does not name an existing
 /// surface, reported before the pick rather than after it (REQ-201).
 void StartDesignateBreaklineCommand(AppCommandState& st, const std::string& surfaceName,
                                     std::vector<std::string>& log);
+void StartDesignateContourCommand(AppCommandState& st, const std::string& surfaceName,
+                                  std::vector<std::string>& log);
 
 /// REQ-069: designate one picked CLOSED Polyline as a boundary ring of kind \p kind on the named
 /// surface, applied in the order it was added. Same refuse-before-pick rule as above.

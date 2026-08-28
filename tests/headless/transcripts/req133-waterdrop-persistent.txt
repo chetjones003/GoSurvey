@@ -1,0 +1,17 @@
+# REQ-133 — each WATERDROP bakes a polyline (and keeps earlier ones).
+#
+# The live preview used to replace the previous path. Two drops on the demo TIN must leave two
+# polylines. Direction arrows are ordinary yellow lines along each path.
+
+NEW
+
+OPEN samples/surface-demo.gs
+CMD SURFACECREATE EG, Existing Ground
+EXPECT POLYLINES 0
+CMD WATERDROP EG, 150, 300
+EXPECT LOG "vertices"
+EXPECT POLYLINES 1
+CMD WATERDROP EG, 30, 380
+EXPECT LOG "vertices"
+EXPECT POLYLINES 2
+CHECK ALL

@@ -109,7 +109,7 @@ TinSpatialIndex BuildTinSpatialIndex(const std::vector<float>& vertsXyz,
 }
 
 bool TinElevationAtIndexed(const std::vector<float>& vertsXyz, const std::vector<std::uint32_t>& indices,
-                           const TinSpatialIndex& index, double x, double y, double* outZ) {
+                           const TinSpatialIndex& index, double x, double y, double* outZ, size_t* outTri) {
   if (!outZ || index.empty())
     return false;
   const int c = std::clamp(static_cast<int>((x - index.minX) / index.cellSize), 0, index.cols - 1);
@@ -119,8 +119,11 @@ bool TinElevationAtIndexed(const std::vector<float>& vertsXyz, const std::vector
     const size_t t = static_cast<size_t>(triOrdinal) * 3;
     if (t + 2 >= indices.size())
       continue;
-    if (TinTriangleElevationAt(vertsXyz, indices[t], indices[t + 1], indices[t + 2], x, y, outZ))
+    if (TinTriangleElevationAt(vertsXyz, indices[t], indices[t + 1], indices[t + 2], x, y, outZ)) {
+      if (outTri)
+        *outTri = static_cast<size_t>(triOrdinal);
       return true;
+    }
   }
   return false;
 }
@@ -139,7 +142,8 @@ SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<float>& baseVertsXyz,
                                          const std::vector<float>& compVertsXyz,
                                          const std::vector<std::uint32_t>& compIndices,
                                          std::vector<float>* outCutTrianglesXyz,
-                                         std::vector<float>* outFillTrianglesXyz) {
+                                         std::vector<float>* outFillTrianglesXyz,
+                                         const std::vector<std::pair<double, double>>* clipRingXy) {
   SurfaceVolumeResult out;
   if (baseIndices.size() < 3 || compIndices.size() < 3 || baseVertsXyz.size() < 9 || compVertsXyz.size() < 9)
     return out;  // no triangulation on one side: nothing to compare, reported as no overlap
@@ -151,12 +155,31 @@ SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<float>& baseVertsXyz,
 
   // Fast disjoint check: two surfaces whose extents do not even overlap cost nothing beyond this —
   // no index built, no sample taken (REQ-073: "report zero volume and say so").
-  const double ixMin = std::max(a.minX, b.minX);
-  const double ixMax = std::min(a.maxX, b.maxX);
-  const double iyMin = std::max(a.minY, b.minY);
-  const double iyMax = std::min(a.maxY, b.maxY);
-  if (ixMin >= ixMax || iyMin >= iyMax)
+  const double ixMin0 = std::max(a.minX, b.minX);
+  const double ixMax0 = std::min(a.maxX, b.maxX);
+  const double iyMin0 = std::max(a.minY, b.minY);
+  const double iyMax0 = std::min(a.maxY, b.maxY);
+  if (ixMin0 >= ixMax0 || iyMin0 >= iyMax0)
     return out;  // overlapped stays false
+
+  const bool haveClip = clipRingXy && clipRingXy->size() >= 3;
+  double ixMin = ixMin0, ixMax = ixMax0, iyMin = iyMin0, iyMax = iyMax0;
+  if (haveClip) {
+    double cMinX = (*clipRingXy)[0].first, cMaxX = cMinX;
+    double cMinY = (*clipRingXy)[0].second, cMaxY = cMinY;
+    for (const auto& p : *clipRingXy) {
+      cMinX = std::min(cMinX, p.first);
+      cMaxX = std::max(cMaxX, p.first);
+      cMinY = std::min(cMinY, p.second);
+      cMaxY = std::max(cMaxY, p.second);
+    }
+    ixMin = std::max(ixMin, cMinX);
+    ixMax = std::min(ixMax, cMaxX);
+    iyMin = std::max(iyMin, cMinY);
+    iyMax = std::min(iyMax, cMaxY);
+    if (ixMin >= ixMax || iyMin >= iyMax)
+      return out;  // clip misses the common footprint
+  }
 
   const TinSpatialIndex baseIdx = BuildTinSpatialIndex(baseVertsXyz, baseIndices);
   const TinSpatialIndex compIdx = BuildTinSpatialIndex(compVertsXyz, compIndices);
@@ -175,47 +198,147 @@ SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<float>& baseVertsXyz,
   const double cellH = height / static_cast<double>(rows);
   const double cellArea = cellW * cellH;
 
-  // A cell's map quad, at the BASE surface's own elevation so it reads as draped on the existing
-  // ground rather than floating at an arbitrary datum. Two triangles, sharing the cell's diagonal.
-  const auto emitCellQuad = [](std::vector<float>* out, double x0, double y0, double x1, double y1,
-                               double z) {
-    const float fx0 = static_cast<float>(x0), fy0 = static_cast<float>(y0);
-    const float fx1 = static_cast<float>(x1), fy1 = static_cast<float>(y1);
-    const float fz = static_cast<float>(z);
-    out->insert(out->end(), {fx0, fy0, fz, fx1, fy0, fz, fx1, fy1, fz,
-                             fx0, fy0, fz, fx1, fy1, fz, fx0, fy1, fz});
+  const auto emitTri = [](std::vector<float>* dest, double x0, double y0, double z0, double x1, double y1,
+                          double z1, double x2, double y2, double z2) {
+    if (!dest)
+      return;
+    dest->insert(dest->end(), {static_cast<float>(x0), static_cast<float>(y0), static_cast<float>(z0),
+                               static_cast<float>(x1), static_cast<float>(y1), static_cast<float>(z1),
+                               static_cast<float>(x2), static_cast<float>(y2), static_cast<float>(z2)});
   };
 
-  double cutFt3 = 0.0, fillFt3 = 0.0, commonArea = 0.0;
+  struct Corner {
+    double x = 0.0, y = 0.0, d = 0.0, zb = 0.0;
+  };
+
+  const auto lerpCorner = [](const Corner& a, const Corner& b) {
+    Corner c;
+    const double den = a.d - b.d;
+    const double t = (std::fabs(den) < 1.0e-18) ? 0.5 : (a.d / den);
+    const double u = std::clamp(t, 0.0, 1.0);
+    c.x = a.x + u * (b.x - a.x);
+    c.y = a.y + u * (b.y - a.y);
+    c.zb = a.zb + u * (b.zb - a.zb);
+    c.d = 0.0;
+    return c;
+  };
+
+  const auto addSameSign = [&](const Corner& a, const Corner& b, const Corner& c, bool cut) {
+    const double ux = b.x - a.x, uy = b.y - a.y;
+    const double vx = c.x - a.x, vy = c.y - a.y;
+    const double area = 0.5 * std::abs(ux * vy - uy * vx);
+    if (area < 1.0e-18)
+      return;
+    const double meanD = (a.d + b.d + c.d) / 3.0;
+    if (cut) {
+      out.cutFt3 += meanD * area;
+      out.cutAreaFt2 += area;
+      emitTri(outCutTrianglesXyz, a.x, a.y, a.zb, b.x, b.y, b.zb, c.x, c.y, c.zb);
+    } else {
+      out.fillFt3 += (-meanD) * area;
+      out.fillAreaFt2 += area;
+      emitTri(outFillTrianglesXyz, a.x, a.y, a.zb, b.x, b.y, b.zb, c.x, c.y, c.zb);
+    }
+  };
+
+  const auto addPrismTri = [&](Corner p0, Corner p1, Corner p2) {
+    const int nPos = (p0.d > 0.0 ? 1 : 0) + (p1.d > 0.0 ? 1 : 0) + (p2.d > 0.0 ? 1 : 0);
+    const int nNeg = (p0.d < 0.0 ? 1 : 0) + (p1.d < 0.0 ? 1 : 0) + (p2.d < 0.0 ? 1 : 0);
+    if (nPos == 0 && nNeg == 0)
+      return;
+    if (nNeg == 0) {
+      addSameSign(p0, p1, p2, true);
+      return;
+    }
+    if (nPos == 0) {
+      addSameSign(p0, p1, p2, false);
+      return;
+    }
+    Corner v[3] = {p0, p1, p2};
+    int odd = 0;
+    const bool oddIsCut = nPos == 1;
+    for (int k = 0; k < 3; ++k) {
+      const bool isCut = v[k].d > 0.0;
+      if (oddIsCut == isCut) {
+        odd = k;
+        break;
+      }
+    }
+    const Corner& o = v[odd];
+    const Corner& a = v[(odd + 1) % 3];
+    const Corner& b = v[(odd + 2) % 3];
+    const Corner ca = lerpCorner(o, a);
+    const Corner cb = lerpCorner(o, b);
+    if (oddIsCut) {
+      addSameSign(o, ca, cb, true);
+      addSameSign(ca, a, b, false);
+      addSameSign(ca, b, cb, false);
+    } else {
+      addSameSign(o, ca, cb, false);
+      addSameSign(ca, a, b, true);
+      addSameSign(ca, b, cb, true);
+    }
+  };
+
+  const auto addCentreCell = [&](double x0, double y0, double x1, double y1, double zBase, double zComp) {
+    const double diff = zBase - zComp;
+    out.commonAreaFt2 += cellArea;
+    if (diff > 0.0) {
+      out.cutFt3 += diff * cellArea;
+      out.cutAreaFt2 += cellArea;
+      emitTri(outCutTrianglesXyz, x0, y0, zBase, x1, y0, zBase, x1, y1, zBase);
+      emitTri(outCutTrianglesXyz, x0, y0, zBase, x1, y1, zBase, x0, y1, zBase);
+    } else if (diff < 0.0) {
+      out.fillFt3 += (-diff) * cellArea;
+      out.fillAreaFt2 += cellArea;
+      emitTri(outFillTrianglesXyz, x0, y0, zBase, x1, y0, zBase, x1, y1, zBase);
+      emitTri(outFillTrianglesXyz, x0, y0, zBase, x1, y1, zBase, x0, y1, zBase);
+    }
+  };
+
   for (int j = 0; j < rows; ++j) {
-    const double sy = iyMin + (static_cast<double>(j) + 0.5) * cellH;
+    const double y0 = iyMin + static_cast<double>(j) * cellH;
+    const double y1 = y0 + cellH;
+    const double sy = y0 + 0.5 * cellH;
     for (int i = 0; i < cols; ++i) {
-      const double sx = ixMin + (static_cast<double>(i) + 0.5) * cellW;
+      const double x0 = ixMin + static_cast<double>(i) * cellW;
+      const double x1 = x0 + cellW;
+      const double sx = x0 + 0.5 * cellW;
+      if (haveClip && !TinPointInPolygon(sx, sy, *clipRingXy))
+        continue;
+
+      Corner c[4];
+      const double xs[4] = {x0, x1, x1, x0};
+      const double ys[4] = {y0, y0, y1, y1};
+      bool allOk = true;
+      for (int k = 0; k < 4; ++k) {
+        double zb = 0.0, zc = 0.0;
+        if (!TinElevationAtIndexed(baseVertsXyz, baseIndices, baseIdx, xs[k], ys[k], &zb) ||
+            !TinElevationAtIndexed(compVertsXyz, compIndices, compIdx, xs[k], ys[k], &zc)) {
+          allOk = false;
+          break;
+        }
+        c[k].x = xs[k];
+        c[k].y = ys[k];
+        c[k].zb = zb;
+        c[k].d = zb - zc;
+      }
+      if (allOk) {
+        out.commonAreaFt2 += cellArea;
+        addPrismTri(c[0], c[1], c[2]);
+        addPrismTri(c[0], c[2], c[3]);
+        continue;
+      }
       double zBase = 0.0, zComp = 0.0;
       if (!TinElevationAtIndexed(baseVertsXyz, baseIndices, baseIdx, sx, sy, &zBase))
         continue;
       if (!TinElevationAtIndexed(compVertsXyz, compIndices, compIdx, sx, sy, &zComp))
         continue;
-      commonArea += cellArea;
-      const double diff = zBase - zComp;  // ASSUMPTION-3: Base above Comparison is cut
-      const double x0 = ixMin + static_cast<double>(i) * cellW, x1 = x0 + cellW;
-      const double y0 = iyMin + static_cast<double>(j) * cellH, y1 = y0 + cellH;
-      if (diff > 0.0) {
-        cutFt3 += diff * cellArea;
-        if (outCutTrianglesXyz)
-          emitCellQuad(outCutTrianglesXyz, x0, y0, x1, y1, zBase);
-      } else if (diff < 0.0) {
-        fillFt3 += (-diff) * cellArea;
-        if (outFillTrianglesXyz)
-          emitCellQuad(outFillTrianglesXyz, x0, y0, x1, y1, zBase);
-      }
+      addCentreCell(x0, y0, x1, y1, zBase, zComp);
     }
   }
 
-  out.overlapped = commonArea > 0.0;
-  out.commonAreaFt2 = commonArea;
-  out.cutFt3 = cutFt3;
-  out.fillFt3 = fillFt3;
-  out.netFt3 = fillFt3 - cutFt3;
+  out.overlapped = out.commonAreaFt2 > 0.0;
+  out.netFt3 = out.fillFt3 - out.cutFt3;
   return out;
 }

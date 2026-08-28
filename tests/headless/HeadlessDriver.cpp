@@ -18,6 +18,7 @@
 #include "CadCommands.hpp"
 #include "DxfIo.hpp"
 #include "GsIo.hpp"
+#include "GsAnnotationJson.hpp"
 #include "HeadlessFileDialogs.hpp"
 #include "SurveyCsv.hpp"
 #include "SurveyPoints.hpp"
@@ -888,7 +889,26 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
   } else if (verb == "EXPECT") {
     std::string arg;
     const std::string what = UpperAscii(FirstWord(rest, &arg));
-    if (what == "VPFRAME") {
+    if (what == "ANNKIND") {
+      // EXPECT ANNKIND <index> <tag> — issue #125: DIMANGULAR must still be DimAngular after OPEN.
+      int ix = -1;
+      std::string want;
+      std::istringstream is(arg);
+      if (!(is >> ix >> want) || ix < 0) {
+        Fail(run, "parse", "EXPECT ANNKIND needs index and kind tag, got: " + arg, sourceLine);
+        return false;
+      }
+      if (static_cast<size_t>(ix) >= run.st.cadAnnotations.size()) {
+        Fail(run, "state", "EXPECT ANNKIND: annotation index out of range", sourceLine);
+        return false;
+      }
+      const char* got = AnnotationKindTag(run.st.cadAnnotations[static_cast<size_t>(ix)].kind);
+      if (want != got) {
+        Fail(run, "expect",
+             "ANNKIND: annotation " + std::to_string(ix) + " expected " + want + ", got " + got, sourceLine);
+        return false;
+      }
+    } else if (what == "VPFRAME") {
       // EXPECT VPFRAME <centreX> <centreY> <scaleModelPerPaperIn> — the FLOATING viewport's framing
       // (REQ-123 / GitHub #100).
       //
@@ -1290,6 +1310,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         got = static_cast<long>(run.st.userEllipses.size());
       else if (what == "ANNOTATIONS")
         got = static_cast<long>(run.st.cadAnnotations.size());
+      else if (what == "TABLES")
+        got = static_cast<long>(run.st.cadTables.size());
       else if (what == "SURVEYPOINTS")
         got = static_cast<long>(run.st.surveyPoints.size());
       // Not a geometry count: what the drawing currently considers picked. It is the only way to
@@ -1356,7 +1378,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       else {
         Fail(run, "parse",
              "EXPECT: unknown quantity " + what +
-                 " (LINES CIRCLES POLYLINES ARCS ELLIPSES ANNOTATIONS SURVEYPOINTS SELECTED"
+                 " (LINES CIRCLES POLYLINES ARCS ELLIPSES ANNOTATIONS TABLES SURVEYPOINTS SELECTED"
                  " SURFACES SELECTEDSURFACES SURFACEBORDERSEGS SURFACETRISEGS SURFACEMINORSEGS"
                  " EXTRACTMATCHESDISPLAY"
                  " SURFACEMAJORSEGS SURFACEBATCHES SURFACETINGEN SURFACEBANDTRIS SURFACEARROWSEGS"

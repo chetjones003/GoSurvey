@@ -1,0 +1,19 @@
+# REQ-136 — TIN volume surface from two named TINs.
+
+NEW
+
+OPEN samples/surface-demo.gs
+CMD SURFACECREATE Base, Existing Ground
+CMD SURFACECREATE Comp, Existing Ground
+CMD VOLUMESURFACE CutFill, Base, Comp
+EXPECT SURFACES 3
+EXPECT LOG "volume TIN"
+CMD SURFACELIST
+EXPECT LOG "volume surface"
+CMD VOLUMESURFACE CutFill, Base, Comp
+EXPECT LOG "already exists"
+CMD VOLUMESURFACE Bad, Nope, Comp
+EXPECT LOG "no surface named"
+CMD VOLUMESURFACE
+EXPECT LOG "usage"
+CHECK ALL

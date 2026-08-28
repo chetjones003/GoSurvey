@@ -512,9 +512,10 @@ void BuildSnapOverlayLines(const CadSnap::Hit& snap, const Camera& cam, float ha
     AppendSnapDiagonalCross(out, f, mh);
     break;
   case CadSnap::Kind::ApparentIntersection:
-    // The same X inside a diamond: it reads as "an intersection, qualified" — the objects line up
-    // in this view but need not touch, so the marker should not be mistaken for a real one.
     AppendSnapDiagonalCross(out, f, mh * 0.62f);
+    AppendSnapDiamondOutline(out, f, mh);
+    break;
+  case CadSnap::Kind::Surface:
     AppendSnapDiamondOutline(out, f, mh);
     break;
   case CadSnap::Kind::Grip:

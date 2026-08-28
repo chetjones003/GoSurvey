@@ -63,13 +63,9 @@ std::vector<TinCrossingIssue> TinFindCrossingConflicts(const std::vector<TinCons
   return issues;
 }
 
-namespace {
-
-constexpr std::uint32_t kNone = 0xFFFFFFFFu;
-
-bool PointInPolygon(double px, double py, const std::vector<std::pair<double, double>>& ring) {
-  // Standard ray-casting test: count edges crossing the horizontal ray to the right of (px,py).
-  // Winding-independent, which is why TinBoundaryLoop documents that ring order does not matter.
+bool TinPointInPolygon(double px, double py, const std::vector<std::pair<double, double>>& ring) {
+  if (ring.size() < 3)
+    return false;
   bool inside = false;
   const size_t n = ring.size();
   for (size_t i = 0, j = n - 1; i < n; j = i++) {
@@ -80,6 +76,10 @@ bool PointInPolygon(double px, double py, const std::vector<std::pair<double, do
   }
   return inside;
 }
+
+namespace {
+
+constexpr std::uint32_t kNone = 0xFFFFFFFFu;
 
 /// A triangle plus its edge adjacency.
 ///
@@ -843,6 +843,8 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
   // Both start present, matching BuildTin's own convex-hull-only surface: "no boundary" is "fully
   // present".
   std::vector<char> insideOuter(triCount, 1);
+  std::vector<char> insideAnyClip(triCount, 0);
+  int clipLoopCount = 0;
   std::vector<char> shown(triCount, 1);
 
   // Hide/Show are applied strictly in \p loops order, each mutating the CURRENT void state — never
@@ -852,6 +854,8 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
   for (const TinBoundaryLoop& loop : loops) {
     if (loop.ring.size() < 3)
       continue;  // degenerate ring: not enough vertices to enclose anything, skip rather than guess
+    if (loop.kind == TinBoundaryKind::Clip)
+      ++clipLoopCount;
     for (size_t t = 0; t < triCount; ++t) {
       const std::uint32_t a = indices[t * 3], b = indices[t * 3 + 1], c = indices[t * 3 + 2];
       if (a >= vertexCount || b >= vertexCount || c >= vertexCount)
@@ -859,13 +863,18 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
       const double cx = (static_cast<double>(vertsXyz[a * 3]) + vertsXyz[b * 3] + vertsXyz[c * 3]) / 3.0;
       const double cy =
           (static_cast<double>(vertsXyz[a * 3 + 1]) + vertsXyz[b * 3 + 1] + vertsXyz[c * 3 + 1]) / 3.0;
-      const bool in = PointInPolygon(cx, cy, loop.ring);
+      const bool in = TinPointInPolygon(cx, cy, loop.ring);
       switch (loop.kind) {
       case TinBoundaryKind::Outer:
         if (!in)
           insideOuter[t] = 0;  // only ever clips down; multiple Outer loops intersect
         break;
+      case TinBoundaryKind::Clip:
+        if (in)
+          insideAnyClip[t] = 1;
+        break;
       case TinBoundaryKind::Hide:
+      case TinBoundaryKind::Mask:
         if (in)
           shown[t] = 0;
         break;
@@ -880,7 +889,8 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
   std::vector<std::uint32_t> kept;
   kept.reserve(indices.size());
   for (size_t t = 0; t < triCount; ++t) {
-    if (insideOuter[t] && shown[t]) {
+    const bool clipOk = clipLoopCount == 0 || insideAnyClip[t];
+    if (insideOuter[t] && clipOk && shown[t]) {
       kept.push_back(indices[t * 3]);
       kept.push_back(indices[t * 3 + 1]);
       kept.push_back(indices[t * 3 + 2]);
@@ -935,4 +945,156 @@ void TinBorderEdges(const std::vector<float>& vertsXyz, const std::vector<std::u
     }
     i = j;
   }
+}
+
+namespace {
+
+[[nodiscard]] double DistPointSeg2(double px, double py, double ax, double ay, double bx, double by) {
+  const double vx = bx - ax, vy = by - ay;
+  const double wx = px - ax, wy = py - ay;
+  const double c1 = vx * wx + vy * wy;
+  if (c1 <= 0.0)
+    return wx * wx + wy * wy;
+  const double c2 = vx * vx + vy * vy;
+  if (c2 <= c1) {
+    const double dx = px - bx, dy = py - by;
+    return dx * dx + dy * dy;
+  }
+  const double t = c1 / c2;
+  const double dx = px - (ax + t * vx);
+  const double dy = py - (ay + t * vy);
+  return dx * dx + dy * dy;
+}
+
+[[nodiscard]] std::uint32_t TriangleOpposite(const std::uint32_t* tri, std::uint32_t lo, std::uint32_t hi) {
+  for (int k = 0; k < 3; ++k) {
+    const std::uint32_t v = tri[k];
+    if (v != lo && v != hi)
+      return v;
+  }
+  return lo;
+}
+
+[[nodiscard]] bool FindNearestInteriorEdge(const std::vector<float>& vertsXyz,
+                                           const std::vector<std::uint32_t>& indices, double x, double y,
+                                           int* t0, int* t1, std::uint32_t* lo, std::uint32_t* hi) {
+  if (!t0 || !t1 || !lo || !hi)
+    return false;
+  const int nTri = static_cast<int>(indices.size() / 3);
+  if (nTri < 2 || vertsXyz.size() < 12)
+    return false;
+
+  struct Rec {
+    std::uint32_t lo = 0, hi = 0;
+    int tri = 0;
+  };
+  std::vector<Rec> recs;
+  recs.reserve(static_cast<size_t>(nTri) * 3);
+  for (int t = 0; t < nTri; ++t) {
+    const std::uint32_t a = indices[static_cast<size_t>(t) * 3 + 0];
+    const std::uint32_t b = indices[static_cast<size_t>(t) * 3 + 1];
+    const std::uint32_t c = indices[static_cast<size_t>(t) * 3 + 2];
+    const auto add = [&](std::uint32_t u, std::uint32_t v) {
+      Rec r;
+      r.lo = std::min(u, v);
+      r.hi = std::max(u, v);
+      r.tri = t;
+      recs.push_back(r);
+    };
+    add(a, b);
+    add(b, c);
+    add(c, a);
+  }
+  std::sort(recs.begin(), recs.end(), [](const Rec& p, const Rec& q) {
+    if (p.lo != q.lo)
+      return p.lo < q.lo;
+    if (p.hi != q.hi)
+      return p.hi < q.hi;
+    return p.tri < q.tri;
+  });
+
+  int bestT0 = -1, bestT1 = -1;
+  std::uint32_t bestLo = 0, bestHi = 0;
+  double bestD2 = 1.0e300;
+  for (size_t i = 0; i < recs.size();) {
+    size_t j = i + 1;
+    while (j < recs.size() && recs[j].lo == recs[i].lo && recs[j].hi == recs[i].hi)
+      ++j;
+    if (j == i + 2) {
+      const std::uint32_t elo = recs[i].lo, ehi = recs[i].hi;
+      if (elo * 3 + 2 < vertsXyz.size() && ehi * 3 + 2 < vertsXyz.size()) {
+        const double ax = vertsXyz[elo * 3], ay = vertsXyz[elo * 3 + 1];
+        const double bx = vertsXyz[ehi * 3], by = vertsXyz[ehi * 3 + 1];
+        const double d2 = DistPointSeg2(x, y, ax, ay, bx, by);
+        if (d2 < bestD2) {
+          bestD2 = d2;
+          bestT0 = recs[i].tri;
+          bestT1 = recs[i + 1].tri;
+          bestLo = elo;
+          bestHi = ehi;
+        }
+      }
+    }
+    i = j;
+  }
+  if (bestT0 < 0 || bestD2 > 1.0)
+    return false;
+  *t0 = bestT0;
+  *t1 = bestT1;
+  *lo = bestLo;
+  *hi = bestHi;
+  return true;
+}
+
+}  // namespace
+
+bool TinSwapInteriorEdgeNear(const std::vector<float>& vertsXyz, std::vector<std::uint32_t>& indices, double x,
+                             double y) {
+  int bestT0 = -1, bestT1 = -1;
+  std::uint32_t bestLo = 0, bestHi = 0;
+  if (!FindNearestInteriorEdge(vertsXyz, indices, x, y, &bestT0, &bestT1, &bestLo, &bestHi))
+    return false;
+
+  std::uint32_t* t0 = &indices[static_cast<size_t>(bestT0) * 3];
+  std::uint32_t* t1 = &indices[static_cast<size_t>(bestT1) * 3];
+  const std::uint32_t b = TriangleOpposite(t0, bestLo, bestHi);
+  const std::uint32_t d = TriangleOpposite(t1, bestLo, bestHi);
+  if (b == d || b == bestLo || b == bestHi || d == bestLo || d == bestHi)
+    return false;
+  const size_t nVert = vertsXyz.size() / 3;
+  if (b >= nVert || d >= nVert || bestLo >= nVert || bestHi >= nVert)
+    return false;
+  const auto vx = [&](std::uint32_t i) { return static_cast<double>(vertsXyz[static_cast<size_t>(i) * 3]); };
+  const auto vy = [&](std::uint32_t i) { return static_cast<double>(vertsXyz[static_cast<size_t>(i) * 3 + 1]); };
+  const double oLo = TinOrient2D(vx(b), vy(b), vx(d), vy(d), vx(bestLo), vy(bestLo));
+  const double oHi = TinOrient2D(vx(b), vy(b), vx(d), vy(d), vx(bestHi), vy(bestHi));
+  if (oLo * oHi >= 0.0)
+    return false;
+
+  t0[0] = bestLo;
+  t0[1] = b;
+  t0[2] = d;
+  t1[0] = b;
+  t1[1] = bestHi;
+  t1[2] = d;
+  return true;
+}
+
+bool TinDeleteInteriorEdgeNear(std::vector<std::uint32_t>& indices, const std::vector<float>& vertsXyz, double x,
+                               double y) {
+  int bestT0 = -1, bestT1 = -1;
+  std::uint32_t bestLo = 0, bestHi = 0;
+  if (!FindNearestInteriorEdge(vertsXyz, indices, x, y, &bestT0, &bestT1, &bestLo, &bestHi))
+    return false;
+  int hi = std::max(bestT0, bestT1);
+  int lo = std::min(bestT0, bestT1);
+  if (hi < 0 || static_cast<size_t>(hi) * 3 + 2 >= indices.size())
+    return false;
+  indices.erase(indices.begin() + static_cast<std::ptrdiff_t>(hi) * 3,
+                indices.begin() + static_cast<std::ptrdiff_t>(hi) * 3 + 3);
+  indices.erase(indices.begin() + static_cast<std::ptrdiff_t>(lo) * 3,
+                indices.begin() + static_cast<std::ptrdiff_t>(lo) * 3 + 3);
+  (void)bestLo;
+  (void)bestHi;
+  return true;
 }
