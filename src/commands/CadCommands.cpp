@@ -3285,12 +3285,17 @@ void RunSurfSwapEdge(AppCommandState& st, const std::string& args, std::vector<s
   }
   char* ex = nullptr;
   char* ey = nullptr;
-  const double x = std::strtod(f[1].c_str(), &ex);
-  const double y = std::strtod(f[2].c_str(), &ey);
-  if (!ex || *ex != '\0' || !ey || *ey != '\0') {
+  const double wx = std::strtod(f[1].c_str(), &ex);
+  const double wy = std::strtod(f[2].c_str(), &ey);
+  if (!ex || *ex != '\0' || !ey || *ey != '\0' || !std::isfinite(wx) || !std::isfinite(wy)) {
     log.push_back("SURFSWAPEDGE — x and y must be numbers.");
     return;
   }
+  float lx = 0.f;
+  float ly = 0.f;
+  CadCoord::LocalFromWorld(st, wx, wy, &lx, &ly);
+  const double x = static_cast<double>(lx);
+  const double y = static_cast<double>(ly);
   auto trial = std::make_shared<CadTin>(*s.tin);
   if (!TinSwapInteriorEdgeNear(trial->vertsXyz, trial->indices, x, y)) {
     log.push_back("SURFSWAPEDGE — pick is not on an interior edge.");

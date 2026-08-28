@@ -7,6 +7,7 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <string>
 #include <vector>
@@ -899,6 +900,22 @@ void DrawToolspaceDefDialogs(AppCommandState& cmd, std::vector<std::string>* log
   }
 }
 
+enum class CreateSurfaceKind : int { Tin = 0, Grid, Corridor, TinVolume, GridVolume };
+
+void ApplyCreatedSurfaceFields(AppCommandState& cmd, const std::string& name, const std::string& description,
+                               const std::string& styleName, const std::string& layer) {
+  assert(!name.empty());
+  const int ni = FindSurfaceIndex(cmd, name);
+  assert(ni >= 0);
+  if (ni < 0)
+    return;
+  CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(ni)];
+  s.description = description;
+  s.styleName = styleName;
+  if (static_cast<size_t>(ni) < cmd.cadSurfaceAttrs.size())
+    cmd.cadSurfaceAttrs[static_cast<size_t>(ni)].layer = layer.empty() ? std::string("0") : layer;
+}
+
 void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   static bool wasShown = false;
   static std::string name;
@@ -906,6 +923,11 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
   static std::string layer;
   static std::string styleName;
   static std::string error;
+  static int kindIdx = 0;
+  static double gridOx = 0.0, gridOy = 0.0, gridSx = 10.0, gridSy = 10.0;
+  static int gridCols = 2, gridRows = 2;
+  static std::string volBase;
+  static std::string volComp;
 
   if (cmd.showCreateSurfaceWindow && !wasShown) {
     SurfaceStyles::EnsureStandard(cmd.surfaceStyles);
@@ -914,6 +936,19 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
     layer = cmd.currentLayer.empty() ? std::string("0") : cmd.currentLayer;
     styleName = SurfaceStyles::kStandardName;
     error.clear();
+    kindIdx = 0;
+    gridOx = 0.0;
+    gridOy = 0.0;
+    gridSx = 10.0;
+    gridSy = 10.0;
+    gridCols = 2;
+    gridRows = 2;
+    volBase.clear();
+    volComp.clear();
+    if (cmd.cadSurfaces.size() >= 2) {
+      volBase = cmd.cadSurfaces[0].name;
+      volComp = cmd.cadSurfaces[1].name;
+    }
   }
   wasShown = cmd.showCreateSurfaceWindow;
   if (!cmd.showCreateSurfaceWindow)
@@ -922,7 +957,7 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
   std::vector<std::string> discard;
   std::vector<std::string>& lg = LogRef(log, discard);
 
-  ImGui::SetNextWindowSize(ImVec2(520.f, 380.f), ImGuiCond_FirstUseEver);
+  ImGui::SetNextWindowSize(ImVec2(540.f, 520.f), ImGuiCond_FirstUseEver);
   bool open = cmd.showCreateSurfaceWindow;
   if (!ImGui::Begin("Create Surface", &open, ImGuiWindowFlags_NoCollapse)) {
     cmd.showCreateSurfaceWindow = open;
@@ -938,8 +973,75 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
   ImGui::TextUnformatted("Type");
   ImGui::SameLine(140.f);
   ImGui::SetNextItemWidth(-1.f);
-  if (ImGui::BeginCombo("##cstype", "TIN surface"))
+  const char* kKindNames[] = {"TIN surface", "Grid surface", "Corridor surface", "TIN volume surface",
+                              "Grid volume surface"};
+  if (kindIdx < 0 || kindIdx > 4)
+    kindIdx = 0;
+  if (ImGui::BeginCombo("##cstype", kKindNames[kindIdx])) {
+    for (int i = 0; i < 5; ++i) {
+      const bool sel = (kindIdx == i);
+      if (ImGui::Selectable(kKindNames[i], sel))
+        kindIdx = i;
+      if (sel)
+        ImGui::SetItemDefaultFocus();
+    }
     ImGui::EndCombo();
+  }
+
+  const CreateSurfaceKind kind = static_cast<CreateSurfaceKind>(kindIdx);
+  if (kind == CreateSurfaceKind::Grid) {
+    ImGui::TextUnformatted("Grid origin X");
+    ImGui::SameLine(140.f);
+    ImGui::SetNextItemWidth(-1.f);
+    ImGui::InputDouble("##gox", &gridOx, 0.0, 0.0, "%.4f");
+    ImGui::TextUnformatted("Grid origin Y");
+    ImGui::SameLine(140.f);
+    ImGui::SetNextItemWidth(-1.f);
+    ImGui::InputDouble("##goy", &gridOy, 0.0, 0.0, "%.4f");
+    ImGui::TextUnformatted("Spacing X / Y");
+    ImGui::SameLine(140.f);
+    ImGui::SetNextItemWidth(120.f);
+    ImGui::InputDouble("##gsx", &gridSx, 0.0, 0.0, "%.4f");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(120.f);
+    ImGui::InputDouble("##gsy", &gridSy, 0.0, 0.0, "%.4f");
+    ImGui::TextUnformatted("Columns / rows");
+    ImGui::SameLine(140.f);
+    ImGui::SetNextItemWidth(80.f);
+    ImGui::InputInt("##gcols", &gridCols);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80.f);
+    ImGui::InputInt("##grows", &gridRows);
+    if (gridCols < 2)
+      gridCols = 2;
+    if (gridRows < 2)
+      gridRows = 2;
+  }
+  if (kind == CreateSurfaceKind::TinVolume || kind == CreateSurfaceKind::GridVolume) {
+    auto surfaceCombo = [&](const char* id, std::string* value, bool gridsOnly) {
+      const char* preview = value->empty() ? "(select)" : value->c_str();
+      if (!ImGui::BeginCombo(id, preview))
+        return;
+      for (const CadSurface& s : cmd.cadSurfaces) {
+        if (gridsOnly && s.kind != SurfaceKind::Grid)
+          continue;
+        const bool sel = (*value == s.name);
+        if (ImGui::Selectable(s.name.c_str(), sel))
+          *value = s.name;
+        if (sel)
+          ImGui::SetItemDefaultFocus();
+      }
+      ImGui::EndCombo();
+    };
+    ImGui::TextUnformatted("Base surface");
+    ImGui::SameLine(140.f);
+    ImGui::SetNextItemWidth(-1.f);
+    surfaceCombo("##volbase", &volBase, kind == CreateSurfaceKind::GridVolume);
+    ImGui::TextUnformatted("Comparison");
+    ImGui::SameLine(140.f);
+    ImGui::SetNextItemWidth(-1.f);
+    surfaceCombo("##volcomp", &volComp, kind == CreateSurfaceKind::GridVolume);
+  }
 
   ImGui::TextUnformatted("Surface layer");
   ImGui::SameLine(140.f);
@@ -1028,19 +1130,59 @@ void DrawCreateSurfaceWindow(AppCommandState& cmd, std::vector<std::string>* log
   if (ImGui::Button("OK", ImVec2(bw, 0.f))) {
     if (FindSurfaceIndex(cmd, name) >= 0) {
       error = "A surface named \"" + name + "\" already exists.";
+    } else if (kind == CreateSurfaceKind::TinVolume || kind == CreateSurfaceKind::GridVolume) {
+      if (volBase.empty() || volComp.empty())
+        error = "Pick a base surface and a comparison surface.";
+      else if (volBase == volComp)
+        error = "Base and comparison must be different surfaces.";
+      else {
+        if (kind == CreateSurfaceKind::TinVolume) {
+          PushUndoSnapshot(cmd, "Create volume surface");
+          const int ni = CreateSurfaceFromVolumeParents(cmd, name, volBase, volComp, lg);
+          if (ni >= 0) {
+            ApplyCreatedSurfaceFields(cmd, name, description, styleName, layer);
+            cmd.showCreateSurfaceWindow = false;
+          } else
+            error = lg.empty() ? "Could not create the volume surface." : lg.back();
+        } else {
+          SubmitLine(cmd, &lg, "SURFACECREATEVOLGRID " + name + ", " + volBase + ", " + volComp);
+          if (FindSurfaceIndex(cmd, name) >= 0) {
+            ApplyCreatedSurfaceFields(cmd, name, description, styleName, layer);
+            cmd.showCreateSurfaceWindow = false;
+          } else
+            error = lg.empty() ? "Could not create the grid volume surface." : lg.back();
+        }
+      }
+    } else if (kind == CreateSurfaceKind::Grid) {
+      if (gridSx <= 0.0 || gridSy <= 0.0)
+        error = "Grid spacing must be positive.";
+      else {
+        std::string line = "SURFACECREATEGRID " + name + ", " + std::to_string(gridOx) + ", " +
+                           std::to_string(gridOy) + ", " + std::to_string(gridSx) + ", " +
+                           std::to_string(gridSy) + ", " + std::to_string(gridCols) + ", " +
+                           std::to_string(gridRows);
+        SubmitLine(cmd, &lg, line);
+        if (FindSurfaceIndex(cmd, name) >= 0) {
+          ApplyCreatedSurfaceFields(cmd, name, description, styleName, layer);
+          cmd.showCreateSurfaceWindow = false;
+        } else
+          error = lg.empty() ? "Could not create the grid surface." : lg.back();
+      }
+    } else if (kind == CreateSurfaceKind::Corridor) {
+      SubmitLine(cmd, &lg, "SURFACECREATECORR " + name);
+      if (FindSurfaceIndex(cmd, name) >= 0) {
+        ApplyCreatedSurfaceFields(cmd, name, description, styleName, layer);
+        cmd.showCreateSurfaceWindow = false;
+      } else
+        error = lg.empty() ? "Could not create the corridor surface." : lg.back();
     } else {
       PushUndoSnapshot(cmd, "Create surface");
       const int ni = CreateSurfaceFromPointGroups(cmd, name, {}, lg);
       if (ni >= 0) {
-        CadSurface& s = cmd.cadSurfaces[static_cast<size_t>(ni)];
-        s.description = description;
-        s.styleName = styleName;
-        if (static_cast<size_t>(ni) < cmd.cadSurfaceAttrs.size())
-          cmd.cadSurfaceAttrs[static_cast<size_t>(ni)].layer = layer.empty() ? std::string("0") : layer;
+        ApplyCreatedSurfaceFields(cmd, name, description, styleName, layer);
         cmd.showCreateSurfaceWindow = false;
-      } else if (error.empty()) {
+      } else
         error = lg.empty() ? "Could not create the surface." : lg.back();
-      }
     }
   }
   ImGui::EndDisabled();

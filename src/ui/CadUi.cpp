@@ -46,11 +46,21 @@
 #include <cfloat>
 #include <cstdint>
 #include <string>
+#include <vector>
 #include <fstream>
 #include <sstream>
 #include <filesystem>
+#include <cassert>
 
 #include "HatchPat.hpp"
+
+static void SubmitRibbonCommand(AppCommandState& cmd, std::vector<std::string>& log, const std::string& line) {
+  assert(!line.empty());
+  assert(line.size() < 4096);
+  std::vector<char> buf(line.begin(), line.end());
+  buf.push_back('\0');
+  ProcessCommandLineSubmit(buf.data(), static_cast<int>(buf.size()), cmd, log);
+}
 
 // Render a sample string in a text style's font/bold/italic, fit into box [tl, tl+sz] (REQ-044). Shared by
 // the ribbon style flyout thumbnails and the Text Style dialog preview. Defined near the dialog below.
@@ -2603,7 +2613,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // metrics (`W`) and once at Medium (`M`) — same formulas as increment 1 shipped, since colW()
   // above already resolves compact vs. not; nothing here duplicates a button-sizing decision.
   struct RibbonTabWidths {
-    float wEdit, wDraw, wMod, wAnnText, wAnnDim, wInq, wSrv, wView, wLayout;
+    float wEdit, wDraw, wMod, wAnnText, wAnnDim, wInq, wSrv, wAnalyze, wView, wLayout;
     float wInsert, wViewSettings, wOutExport, wOutPlot;  // REQ-302 increment 3
   };
   auto computeTabWidths = [&](bool compact) {
@@ -2630,7 +2640,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     // Grades/Groups (four items) needs its own two-column split, same as Modify's Extend/Break/
     // Stretch + Fillet/Chamfer split above (fixed 2026-08-25 — see the Survey section body).
     w.wSrv  = 8.f + largeW + 4.f + colW({"Inverse", "Traverse"}) + 4.f +
-              colW({"Surfaces", "Volumes"}) + 4.f + colW({"Grades", "Groups"});
+              colW({"Surfaces", "Volumes"}) + 4.f + colW({"Elev", "Drop"}) + 4.f +
+              colW({"Shed", "Report"}) + 4.f + colW({"Grades", "Groups"});
+    w.wAnalyze = 8.f + colW({"Slope", "Dir", "Arrows"}) + 4.f + colW({"Catch", "Stats", "Rebuild"}) + 4.f +
+                 colW({"Breakln", "Contour", "Boundry"}) + 4.f + colW({"Vol Surf", "Props"});
     w.wView = 8.f + colW({"Extents", "Window"}) + 8.f + visualStyleComboW;  // REQ-064
     // REQ-302 increment 3: Plot/Batch Plot moved out to Output's "Plot" section — Layout keeps
     // only the viewport-authoring tools (Rect VP is a largeBtn placed outside colW; Poly VP is
@@ -3079,6 +3092,97 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
             "Point Groups — name a set of points by rule: number ranges, description, raw description, or "
             "picks.\nMembership is re-evaluated from the current points, so a later import joins the group "
             "automatically.");
+        ImGui::EndGroup();
+      }
+      RibbonSectionEnd();
+    }});
+
+    ribbonSpecs.push_back({W.wAnalyze, M.wAnalyze, [&]() {
+      RibbonSectionBegin("RibbonSecAnalyze", "Analyze", curCompact ? M.wAnalyze : W.wAnalyze, panelH);
+      {
+        const auto styleNameForRibbon = [&]() -> std::string {
+          if (cmd.cadSurfaces.empty())
+            return std::string(SurfaceStyles::kStandardName);
+          const std::string& sn = cmd.cadSurfaces[0].styleName;
+          return sn.empty() ? std::string(SurfaceStyles::kStandardName) : sn;
+        };
+        const auto firstName = [&]() -> std::string {
+          return cmd.cadSurfaces.empty() ? std::string() : cmd.cadSurfaces[0].name;
+        };
+
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonSlope", RibbonIconKind::SurveyPoint, "Slope", colW({"Slope", "Dir", "Arrows"}))) {
+          SurfaceStyles::EnsureStandard(cmd.surfaceStyles);
+          SubmitRibbonCommand(cmd, log, "SURFSTYLE ANALYSIS " + styleNameForRibbon() + ", slope");
+        }
+        RibbonItemHelp("Slope banding on the current surface style.\nCommand bar: SURFSTYLE ANALYSIS, <style>, slope");
+        if (smallBtn("##RibbonDir", RibbonIconKind::SurveyPoint, "Dir", colW({"Slope", "Dir", "Arrows"}))) {
+          SurfaceStyles::EnsureStandard(cmd.surfaceStyles);
+          SubmitRibbonCommand(cmd, log, "SURFSTYLE ANALYSIS " + styleNameForRibbon() + ", direction");
+        }
+        RibbonItemHelp("Direction/aspect banding.\nCommand bar: SURFSTYLE ANALYSIS, <style>, direction");
+        if (smallBtn("##RibbonArrows", RibbonIconKind::SurveyPoint, "Arrows", colW({"Slope", "Dir", "Arrows"}))) {
+          SurfaceStyles::EnsureStandard(cmd.surfaceStyles);
+          SubmitRibbonCommand(cmd, log, "SURFSTYLE ARROWS " + styleNameForRibbon() + ", on");
+        }
+        RibbonItemHelp("Turn slope arrows on for the style.\nCommand bar: SURFSTYLE ARROWS, <style>, on");
+        ImGui::EndGroup();
+
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonCatch", RibbonIconKind::SurveyPoint, "Catch", colW({"Catch", "Stats", "Rebuild"}))) {
+          if (!cmd.cadSurfaces.empty())
+            StartCatchmentCommand(cmd, firstName(), log);
+          else
+            SubmitRibbonCommand(cmd, log, "CATCHMENT");
+        }
+        RibbonItemHelp("Catchment at an outlet pick.\nCommand bar: CATCHMENT");
+        if (smallBtn("##RibbonStats", RibbonIconKind::SurveyPoint, "Stats", colW({"Catch", "Stats", "Rebuild"})))
+          SubmitRibbonCommand(cmd, log, cmd.cadSurfaces.empty() ? "SURFACESTATS" : ("SURFACESTATS " + firstName()));
+        RibbonItemHelp("Surface statistics in the command log.\nCommand bar: SURFACESTATS");
+        if (smallBtn("##RibbonRebuild", RibbonIconKind::SurveyPoint, "Rebuild", colW({"Catch", "Stats", "Rebuild"})))
+          SubmitRibbonCommand(cmd, log, cmd.cadSurfaces.empty() ? "SURFACEREBUILD" : ("SURFACEREBUILD " + firstName()));
+        RibbonItemHelp("Rebuild the first surface, or all if none named.\nCommand bar: SURFACEREBUILD");
+        ImGui::EndGroup();
+
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonAddBl", RibbonIconKind::SurveyPoint, "Breakln", colW({"Breakln", "Contour", "Boundry"}))) {
+          if (!cmd.cadSurfaces.empty())
+            StartDesignateBreaklineCommand(cmd, firstName(), log);
+          else
+            log.push_back("DESIGNATEBREAKLINE — no surfaces in the drawing.");
+        }
+        RibbonItemHelp("Add a breakline to the first surface.\nCommand bar: DESIGNATEBREAKLINE");
+        if (smallBtn("##RibbonAddCt", RibbonIconKind::SurveyPoint, "Contour", colW({"Breakln", "Contour", "Boundry"}))) {
+          if (!cmd.cadSurfaces.empty())
+            StartDesignateContourCommand(cmd, firstName(), log);
+          else
+            log.push_back("DESIGNATECONTOUR — no surfaces in the drawing.");
+        }
+        RibbonItemHelp("Add contour source geometry.\nCommand bar: DESIGNATECONTOUR");
+        if (smallBtn("##RibbonAddBd", RibbonIconKind::SurveyPoint, "Boundry", colW({"Breakln", "Contour", "Boundry"}))) {
+          if (!cmd.cadSurfaces.empty())
+            StartDesignateBoundaryCommand(cmd, firstName(), CadBoundaryKind::Outer, log);
+          else
+            log.push_back("DESIGNATEBOUNDARY — no surfaces in the drawing.");
+        }
+        RibbonItemHelp("Add an outer boundary.\nCommand bar: DESIGNATEBOUNDARY");
+        ImGui::EndGroup();
+
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonVolSurf", RibbonIconKind::SurveyPoint, "Vol Surf", colW({"Vol Surf", "Props"})))
+          cmd.showCreateSurfaceWindow = true;
+        RibbonItemHelp("Create Surface — choose TIN, grid, corridor, or volume type.\nToolspace: Create Surface...");
+        if (smallBtn("##RibbonSurfProps", RibbonIconKind::SurveyPoint, "Props", colW({"Vol Surf", "Props"}))) {
+          if (!cmd.cadSurfaces.empty()) {
+            cmd.surfacePropertiesIndex = 0;
+            cmd.showSurfacePropertiesWindow = true;
+          } else
+            log.push_back("SURFACEPROPERTIES — no surfaces in the drawing.");
+        }
+        RibbonItemHelp("Surface Properties for the first surface.\nRight-click a named surface in Toolspace.");
         ImGui::EndGroup();
       }
       RibbonSectionEnd();
