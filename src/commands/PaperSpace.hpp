@@ -97,6 +97,18 @@ inline void ModelToPaperIn(const Viewport& vp, double mx, double my, float* outP
   return vp.safeScale();
 }
 
+/// Height on the sheet (paper inches) of \p a when it is plotted through \p vp.
+/// Plain MTEXT is \c plottedHeightInches (REQ-050 constant plotted height). TEXT, dimensions, and
+/// survey-label MTEXT convert model height through the viewport scale, matching the on-screen overlay.
+[[nodiscard]] inline float AnnotationPlottedHeightThroughViewport(const CadAnnotation& a, const Viewport& vp,
+                                                                  float drawingModelUnitsPerPlottedInch) {
+  const float mup = MtextScaleThroughViewport(a, vp, drawingModelUnitsPerPlottedInch);
+  const float s = vp.safeScale();
+  if (s <= 0.f)
+    return a.plottedHeightInches;
+  return a.plottedHeightInches * mup / s;
+}
+
 /// Everything the layout-viewport TEXT/MTEXT overlay needs from one annotation: isolation skip,
 /// the scale REQ-050 picks, and the font family the draw call must pass to SHX/TTF resolve.
 /// CadUi uses this struct's fields rather than inlining the drawing scale or ImGui::GetFont().

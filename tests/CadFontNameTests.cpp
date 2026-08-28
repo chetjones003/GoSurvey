@@ -212,3 +212,24 @@ TEST_CASE("font-demo.gs opens without a BOM and uses explicit 1:25 / 1:100 viewp
 
   REQUIRE(root.at("document").at("annotationAttrs").at(0).at("id").get<std::uint64_t>() != 0);
 }
+
+TEST_CASE("PDF/sheet height of viewport MTEXT is plotted inches, not drawing-scale (REQ-050)", "[cadfont]") {
+  Viewport vp;
+  vp.scaleModelPerPaperIn = 25.f;
+  const float drawingMup = 100.f;
+  CadAnnotation m;
+  m.kind = CadAnnotation::Kind::Mtext;
+  m.plottedHeightInches = 0.25f;
+  REQUIRE(AnnotationPlottedHeightThroughViewport(m, vp, drawingMup) == Catch::Approx(0.25f));
+
+  CadAnnotation t;
+  t.kind = CadAnnotation::Kind::Text;
+  t.plottedHeightInches = 0.25f;
+  REQUIRE(AnnotationPlottedHeightThroughViewport(t, vp, drawingMup) == Catch::Approx(1.f));
+
+  CadAnnotation survey;
+  survey.kind = CadAnnotation::Kind::Mtext;
+  survey.plottedHeightInches = 0.25f;
+  survey.surveyPointLabelForId = 3;
+  REQUIRE(AnnotationPlottedHeightThroughViewport(survey, vp, drawingMup) == Catch::Approx(1.f));
+}

@@ -337,7 +337,7 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
           lab.px = lpx;
           lab.py = lpy;
           lab.rot = strokes.labelRotRad;
-          lab.Hin = (std::max)(0.01f, (ann.plottedHeightInches * st.modelUnitsPerPlottedInch) / vp.safeScale());
+          lab.Hin = (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
           lab.text = ann.text;
           lab.fontFamily = ann.fontFamily;
           lab.rgb = curColor;
@@ -364,7 +364,7 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
         lab.px = lpx;
         lab.py = lpy;
         lab.rot = ann.rotationRad;
-        lab.Hin = (std::max)(0.01f, (ann.plottedHeightInches * st.modelUnitsPerPlottedInch) / vp.safeScale());
+        lab.Hin = (std::max)(0.01f, AnnotationPlottedHeightThroughViewport(ann, vp, st.modelUnitsPerPlottedInch));
         lab.text = (ann.kind == CadAnnotation::Kind::Mtext) ? MtextRichFlattenToPlain(ann.text) : ann.text;
         lab.fontFamily = ann.fontFamily;
         lab.rgb = (aa) ? resolveRgb(layer, aa->color) : resolveRgb(layer, "ByLayer");

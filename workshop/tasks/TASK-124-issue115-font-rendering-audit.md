@@ -1,7 +1,7 @@
 # TASK-124 — Font and text-style rendering audit (#115)
 
 - Type:    bug
-- Status:  in review (round 2 — responding to the #115 review on PR #116)
+- Status:  done (round 4 — drawing-text parity; PR #116)
 - Opened:  2026-08-27
 - Owner:   Workshop
 
@@ -138,5 +138,34 @@ COMPLETION REPORT — TASK-124 — 2026-08-27 (round 3)
 - Verification verdict: **resubmitted for review**
 - Architectural decisions: none (`ViewportTextOverlayPlan` is a header-only bag of values beside the existing helper)
 - Technical debt noted: DIMANGULAR `.gs` round-trip; PDF plot MTEXT still uses drawing scale (REQ-050 follow-up)
+- Docs updated: this log
+
+### Round 4 — 2026-08-27 — remaining drawing-text parity (PR #116)
+
+Drawing-path inventory (AC-1 / AC-2):
+
+| Surface | Path | Font |
+| --- | --- | --- |
+| Model TEXT/MTEXT | CadUi overlay | `fontFamily` via SHX/TTF |
+| Model dims (linear/aligned/angular) | `DrawDimLabelText` | `fontFamily`; SHX skipped when text contains `°` |
+| Layout viewport TEXT/MTEXT | `PlanViewportTextOverlay` | REQ-050 scale + `fontFamily` + isolation |
+| Layout viewport dims | `DrawCadDimStrokesOnDrawList` | `fontFamily` + isolation |
+| Native paper TEXT/MTEXT/dims | `drawPaperText` | `fontFamily`; dim px uses `viewportDimTextMin/MaxPx` |
+| Paper PASTE ghost annotations | `DrawCadSingleLineText` / `DrawDimLabelText` | clipboard `fontFamily` |
+| PDF plot through viewports | `AnnotationPlottedHeightThroughViewport` | REQ-050 MTEXT height + `fontFamily` |
+| DIMSTY preview / Apply | `DrawDimLabelText` / bake | `textFont` |
+| Survey point label MTEXT | same MTEXT path | drawing scale (REQ-050) |
+| Survey point ID chips, command line, ribbon, ViewCube, dynamic input | ImGui `GetFont()` | UI chrome (ASSUMPTION-2) |
+| BLOCK / ATTDEF / tables / MLEADER | not in product | N/A |
+
+Fixes this round: paper dim clamp 6–72 → dim min/max prefs; paste ghost no longer `AddText(GetFont())`; plot MTEXT through a viewport uses plotted inches. DIMANGULAR persist is #125.
+
+COMPLETION REPORT — TASK-124 — 2026-08-27 (round 4)
+- Requirements satisfied: REQ-044 / REQ-027 / REQ-049 / REQ-050 / REQ-084 (d); GitHub #115 drawing-object ACs
+- Summary: remaining Model vs Paper drawing-text discrepancies closed (paper dim clamp, paste ghost typeface, plot MTEXT height).
+- Tests: `[cadfont]` includes plot-height helper
+- Verification verdict: PASS for drawing objects; UI chrome stays application font (ASSUMPTION-2)
+- Architectural decisions: none (`AnnotationPlottedHeightThroughViewport` is a composition of the existing scale helper)
+- Technical debt noted: glyph capture still needs a framebuffer harness
 - Docs updated: this log
 

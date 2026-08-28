@@ -12006,7 +12006,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           const ImU32 lineCol = sel ? kPaperSelCol : (hover ? kPaperHoverCol : baseCol);
           constexpr ImU32 kDimTextCol = IM_COL32(248, 250, 252, 255);
           const float hPx = std::clamp(a.plottedHeightInches * pxPerPaperIn, 1.f, 8192.f);
-          const float fontPx = std::clamp(hPx, 6.f, 72.f);
+          const float fontPx = std::clamp(hPx, cmd.viewportDimTextMinPx, cmd.viewportDimTextMaxPx);
           auto paperWts = [&](float wx, float wy) { return w2s(wx, wy); };
           DrawCadDimStrokesOnDrawList(sdl, a, strokes, paperWts, fontPx, lineCol, lineCol, lineCol, kDimTextCol,
                                       paperFont, dsp.arrowType);
@@ -12197,11 +12197,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
       ImFont* pf = ImGui::GetFont();
       for (const CadAnnotation& a : cb.annotations) {
-        if ((a.kind != CadAnnotation::Kind::Text && a.kind != CadAnnotation::Kind::Mtext) || a.text.empty())
+        if (a.text.empty())
           continue;
-        const float hPx = std::clamp(a.plottedHeightInches * pxPerPaperIn2, 1.f, cmd.viewportTextMaxPx);
-        const ImVec2 p = w2s(a.insX + gdx, a.insY + gdy);
-        sdl->AddText(pf, hPx, ImVec2(p.x, p.y - hPx), ghost, a.text.c_str());
+        CadAnnotation g = a;
+        g.insX += gdx;
+        g.insY += gdy;
+        const float hPx = std::clamp(g.plottedHeightInches * pxPerPaperIn2, 1.f, cmd.viewportTextMaxPx);
+        const ImVec2 p = w2s(g.insX, g.insY);
+        if (CadAnnotationIsDimension(g)) {
+          DrawDimLabelText(sdl, g, pf, hPx, p, 0.f, ghost);
+          continue;
+        }
+        if (g.kind == CadAnnotation::Kind::Mtext)
+          g.text = MtextRichFlattenToPlain(a.text);
+        DrawCadSingleLineText(sdl, g, pf, p, hPx, ghost);
       }
     }
     // Paper-entity MOVE/COPY ghost + ROTATE + MIRROR preview (REQ-037/REQ-103): selected geometry
