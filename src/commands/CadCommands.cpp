@@ -13,6 +13,7 @@
 #include "util/surfaceanalysis.hpp"  // REQ-072 banding + slope arrows (ADR-036 (g)) — pure, like contourgen
 #include "util/surfacevolume.hpp"  // REQ-073 surface-to-surface volumes (TASK-095) — pure, like surfaceanalysis
 #include "util/surfacestats.hpp"   // REQ-125
+#include "util/watershed.hpp"      // REQ-132…134
 #include "util/curveintersect.hpp"  // REQ-062 analytic intersections; EXTEND (TASK-096) reuses this over TRIM's tessellation
 #include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
 #include "util/gltfimport.hpp"
@@ -1871,6 +1872,25 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
     BuildSurfaceAnalysisGeometry(*tin, resolved, &it->bandTriangleBuffers, &it->arrowLineBuffers);
   }
 
+  st.surfaceWatershedCache.erase(
+      std::remove_if(st.surfaceWatershedCache.begin(), st.surfaceWatershedCache.end(),
+                     [&](const AppCommandState::SurfaceWatershedCacheEntry& e) {
+                       return FindSurfaceIndexById(st, e.surfaceId) < 0;
+                     }),
+      st.surfaceWatershedCache.end());
+  for (AppCommandState::SurfaceWatershedCacheEntry& e : st.surfaceWatershedCache) {
+    const int six = FindSurfaceIndexById(st, e.surfaceId);
+    if (six < 0)
+      continue;
+    const auto& tin = st.cadSurfaces[static_cast<size_t>(six)].tin;
+    if (!tin || e.builtFrom.lock() != tin) {
+      e.analysis = {};
+      e.basinOutlines.clear();
+      e.waterDropLines.clear();
+      e.catchmentLines.clear();
+    }
+  }
+
   // Assemble what the renderer is handed. Cheap by construction: the batches BORROW the buffers
   // above (see SurfaceDisplayBatch), so this pass copies pointers and colours, never vertices, and
   // is therefore safe to redo every frame — which it must be, because layer visibility and isolation
@@ -1929,6 +1949,28 @@ void RefreshSurfaceDisplayGeometry(AppCommandState& st) {
       ResolveSurfaceStoredColorRgba(st, attr, colorStr, b.rgba);
       b.lineweightMm = -1.f;
       st.surfaceDisplayGeometry.lines.push_back(b);
+    }
+
+    const auto wit = std::find_if(st.surfaceWatershedCache.begin(), st.surfaceWatershedCache.end(),
+                                  [&](const AppCommandState::SurfaceWatershedCacheEntry& e) {
+                                    return e.surfaceId == id;
+                                  });
+    if (wit != st.surfaceWatershedCache.end() && wit->builtFrom.lock() == st.cadSurfaces[si].tin) {
+      const auto addWs = [&](const std::vector<float>* verts, float r, float g, float bch) {
+        if (!verts || verts->empty())
+          return;
+        SurfaceDisplayBatch bat;
+        bat.verts = verts;
+        bat.rgba[0] = r;
+        bat.rgba[1] = g;
+        bat.rgba[2] = bch;
+        bat.rgba[3] = 1.f;
+        bat.lineweightMm = -1.f;
+        st.surfaceDisplayGeometry.lines.push_back(bat);
+      };
+      addWs(&wit->basinOutlines, 0.15f, 0.75f, 0.95f);
+      addWs(&wit->catchmentLines, 0.95f, 0.35f, 0.75f);
+      addWs(&wit->waterDropLines, 0.95f, 0.85f, 0.20f);
     }
   }
 }
@@ -3542,6 +3584,266 @@ void RunSurfaceStats(AppCommandState& st, const std::string& args, std::vector<s
   reportOne(st.cadSurfaces[static_cast<size_t>(si)]);
 }
 
+const char* DrainKindLabel(DrainKind k) {
+  return k == DrainKind::Depression ? "depression" : k == DrainKind::Flat ? "flat" : "boundary";
+}
+
+AppCommandState::SurfaceWatershedCacheEntry* WatershedCacheOf(AppCommandState& st, size_t si) {
+  if (si >= st.cadSurfaces.size() || si >= st.cadSurfaceAttrs.size())
+    return nullptr;
+  const CadSurface& s = st.cadSurfaces[si];
+  if (!s.tin || s.tin->indices.empty())
+    return nullptr;
+  const std::uint64_t id = st.cadSurfaceAttrs[si].id;
+  auto it = std::find_if(st.surfaceWatershedCache.begin(), st.surfaceWatershedCache.end(),
+                         [&](const AppCommandState::SurfaceWatershedCacheEntry& e) { return e.surfaceId == id; });
+  if (it != st.surfaceWatershedCache.end() && it->builtFrom.lock() == s.tin && it->analysis.ok)
+    return &*it;
+  if (it == st.surfaceWatershedCache.end()) {
+    st.surfaceWatershedCache.push_back({});
+    it = st.surfaceWatershedCache.end() - 1;
+    it->surfaceId = id;
+  }
+  it->builtFrom = s.tin;
+  it->analysis = ComputeWatershed(s.tin->vertsXyz, s.tin->indices);
+  it->basinOutlines.clear();
+  it->waterDropLines.clear();
+  it->catchmentLines.clear();
+  if (it->analysis.ok)
+    AppendWatershedBasinOutlines(it->analysis, s.tin->vertsXyz, s.tin->indices, &it->basinOutlines);
+  return &*it;
+}
+
+void ReportWatershedOne(AppCommandState& st, size_t si, std::vector<std::string>& log) {
+  const CadSurface& s = st.cadSurfaces[si];
+  if (!s.tin || s.tin->indices.empty()) {
+    log.push_back("WATERSHED — \"" + s.name + "\": not built.");
+    return;
+  }
+  AppCommandState::SurfaceWatershedCacheEntry* cache = WatershedCacheOf(st, si);
+  if (!cache || !cache->analysis.ok) {
+    log.push_back("WATERSHED — \"" + s.name + "\": null TIN.");
+    return;
+  }
+  int nBound = 0, nDep = 0, nFlat = 0;
+  for (const WatershedBasin& b : cache->analysis.basins) {
+    if (b.drain == DrainKind::Depression)
+      ++nDep;
+    else if (b.drain == DrainKind::Flat)
+      ++nFlat;
+    else
+      ++nBound;
+  }
+  log.push_back("WATERSHED — \"" + s.name + "\": " + std::to_string(cache->analysis.basins.size()) +
+                " basin(s) (" + std::to_string(nBound) + " boundary, " + std::to_string(nDep) +
+                " depression, " + std::to_string(nFlat) + " flat).");
+}
+
+void RunWatershed(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::string name = StringUtil::trimCopy(args);
+  if (name.empty()) {
+    if (st.cadSurfaces.empty()) {
+      log.push_back("WATERSHED — no surfaces in the drawing.");
+      return;
+    }
+    for (size_t si = 0; si < st.cadSurfaces.size(); ++si)
+      ReportWatershedOne(st, si, log);
+    return;
+  }
+  const int si = FindSurfaceIndex(st, name);
+  if (si < 0) {
+    log.push_back("WATERSHED — no surface named \"" + name + "\".");
+    return;
+  }
+  ReportWatershedOne(st, static_cast<size_t>(si), log);
+}
+
+int AppendXyzPathAsPolyline(AppCommandState& st, const std::vector<float>& xyz, bool closed) {
+  const int n = static_cast<int>(xyz.size() / 3);
+  if (n < 2)
+    return 0;
+  if (st.userPolylineOffsets.empty())
+    st.userPolylineOffsets.push_back(0);
+  const int baseVert = st.userPolylineOffsets.back();
+  for (int v = 0; v < n; ++v) {
+    st.userPolylineVerts.push_back(xyz[static_cast<size_t>(v) * 3 + 0]);
+    st.userPolylineVerts.push_back(xyz[static_cast<size_t>(v) * 3 + 1]);
+    st.userPolylineVerts.push_back(xyz[static_cast<size_t>(v) * 3 + 2]);
+  }
+  st.userPolylineOffsets.push_back(baseVert + n);
+  st.userPolylineClosed.push_back(closed ? 1u : 0u);
+  EntityAttributes a;
+  a.layer = st.currentLayer.empty() ? std::string("0") : st.currentLayer;
+  a.color = "ByLayer";
+  a.linetype = "ByLayer";
+  a.lineweightMm = -1.f;
+  a.transparency = -1.f;
+  st.userPolylineAttrs.push_back(a);
+  return 1;
+}
+
+void RunWaterDropAt(AppCommandState& st, size_t si, double x, double y, std::vector<std::string>& log) {
+  const CadSurface& s = st.cadSurfaces[si];
+  if (!s.tin || s.tin->indices.empty()) {
+    log.push_back("WATERDROP — \"" + s.name + "\": not built.");
+    st.lastWaterDropPathXyz.clear();
+    return;
+  }
+  const WaterDropResult d = ComputeWaterDrop(s.tin->vertsXyz, s.tin->indices, x, y);
+  AppCommandState::SurfaceWatershedCacheEntry* cache = WatershedCacheOf(st, si);
+  if (cache)
+    cache->waterDropLines.clear();
+  if (!d.ok) {
+    log.push_back("WATERDROP — \"" + s.name + "\": null TIN.");
+    st.lastWaterDropPathXyz.clear();
+    return;
+  }
+  if (d.outside) {
+    log.push_back("WATERDROP — \"" + s.name + "\": outside surface. No path.");
+    st.lastWaterDropPathXyz.clear();
+    return;
+  }
+  st.lastWaterDropPathXyz = d.pathXyz;
+  if (cache)
+    AppendPathAsLines(d.pathXyz, &cache->waterDropLines);
+  const int p = st.displayLinearPrecision;
+  const size_t n = d.pathXyz.size();
+  const float ex = n >= 3 ? d.pathXyz[n - 3] : 0.f;
+  const float ey = n >= 3 ? d.pathXyz[n - 2] : 0.f;
+  log.push_back("WATERDROP — \"" + s.name + "\": " + DrainKindLabel(d.terminal) + " drain at " +
+                FormatLinear(static_cast<double>(ex), p) + ", " + FormatLinear(static_cast<double>(ey), p) +
+                " (" + std::to_string(static_cast<int>(n / 3)) + " vertices).");
+}
+
+void RunCatchmentAt(AppCommandState& st, size_t si, double x, double y, std::vector<std::string>& log) {
+  const CadSurface& s = st.cadSurfaces[si];
+  if (!s.tin || s.tin->indices.empty()) {
+    log.push_back("CATCHMENT — \"" + s.name + "\": not built.");
+    st.lastCatchmentPathXyz.clear();
+    return;
+  }
+  const CatchmentResult c = ComputeCatchment(s.tin->vertsXyz, s.tin->indices, x, y);
+  AppCommandState::SurfaceWatershedCacheEntry* cache = WatershedCacheOf(st, si);
+  if (cache)
+    cache->catchmentLines.clear();
+  if (!c.ok) {
+    log.push_back("CATCHMENT — \"" + s.name + "\": null TIN.");
+    st.lastCatchmentPathXyz.clear();
+    return;
+  }
+  if (c.outside) {
+    log.push_back("CATCHMENT — \"" + s.name + "\": outside surface.");
+    st.lastCatchmentPathXyz.clear();
+    return;
+  }
+  st.lastCatchmentPathXyz.clear();
+  if (cache) {
+    AppendCatchmentBoundary(c, s.tin->vertsXyz, s.tin->indices, &cache->catchmentLines);
+    st.lastCatchmentPathXyz = cache->catchmentLines;
+  }
+  const int p = st.displayLinearPrecision;
+  log.push_back("CATCHMENT — \"" + s.name + "\": area " + FormatLinear(c.area2d, p) + " ft2, elev " +
+                FormatLinear(c.minZ, p) + " to " + FormatLinear(c.maxZ, p) + ", " +
+                std::to_string(c.triangleIds.size()) + " triangle(s).");
+}
+
+void RunWaterDropCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(StringUtil::trimCopy(args));
+  if (!f.empty() && StringUtil::toLowerAsciiCopy(f[0]) == "extract") {
+    if (st.lastWaterDropPathXyz.size() < 6) {
+      log.push_back("WATERDROP EXTRACT — nothing to extract.");
+      return;
+    }
+    PushUndoSnapshot(st, "WATERDROP EXTRACT");
+    const int n = AppendXyzPathAsPolyline(st, st.lastWaterDropPathXyz, false);
+    BumpCadGpuCache(st);
+    log.push_back("WATERDROP EXTRACT — " + std::to_string(n) +
+                  " polyline (unlinked).");
+    return;
+  }
+  std::string name = f.empty() ? std::string() : f[0];
+  if (name.empty() && st.cadSurfaces.size() == 1)
+    name = st.cadSurfaces[0].name;
+  if (name.empty()) {
+    if (st.cadSurfaces.empty()) {
+      log.push_back("WATERDROP — no surfaces in the drawing.");
+      return;
+    }
+    log.push_back("WATERDROP — usage: WATERDROP <surface>[, <x>, <y>] or WATERDROP EXTRACT.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, name);
+  if (si < 0) {
+    log.push_back("WATERDROP — no surface named \"" + name + "\".");
+    return;
+  }
+  if (f.size() >= 3) {
+    double x = 0.0, y = 0.0;
+    std::istringstream xy(f[1] + " " + f[2]);
+    if (!(xy >> x >> y)) {
+      log.push_back("WATERDROP — usage: WATERDROP <surface>[, <x>, <y>].");
+      return;
+    }
+    RunWaterDropAt(st, static_cast<size_t>(si), x, y, log);
+    return;
+  }
+  StartWaterDropCommand(st, name, log);
+}
+
+void RunCatchmentCommand(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(StringUtil::trimCopy(args));
+  if (!f.empty() && StringUtil::toLowerAsciiCopy(f[0]) == "extract") {
+    if (st.lastCatchmentPathXyz.size() < 6) {
+      log.push_back("CATCHMENT EXTRACT — nothing to extract.");
+      return;
+    }
+    PushUndoSnapshot(st, "CATCHMENT EXTRACT");
+    // Boundary is GL_LINES pairs, not a ring — bake as open segments joined in order of first points.
+    std::vector<float> verts;
+    for (size_t i = 0; i + 5 < st.lastCatchmentPathXyz.size(); i += 6) {
+      if (verts.empty()) {
+        verts.push_back(st.lastCatchmentPathXyz[i]);
+        verts.push_back(st.lastCatchmentPathXyz[i + 1]);
+        verts.push_back(st.lastCatchmentPathXyz[i + 2]);
+      }
+      verts.push_back(st.lastCatchmentPathXyz[i + 3]);
+      verts.push_back(st.lastCatchmentPathXyz[i + 4]);
+      verts.push_back(st.lastCatchmentPathXyz[i + 5]);
+    }
+    const int n = AppendXyzPathAsPolyline(st, verts, false);
+    BumpCadGpuCache(st);
+    log.push_back("CATCHMENT EXTRACT — " + std::to_string(n) + " polyline (unlinked).");
+    return;
+  }
+  std::string name = f.empty() ? std::string() : f[0];
+  if (name.empty() && st.cadSurfaces.size() == 1)
+    name = st.cadSurfaces[0].name;
+  if (name.empty()) {
+    if (st.cadSurfaces.empty()) {
+      log.push_back("CATCHMENT — no surfaces in the drawing.");
+      return;
+    }
+    log.push_back("CATCHMENT — usage: CATCHMENT <surface>[, <x>, <y>] or CATCHMENT EXTRACT.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, name);
+  if (si < 0) {
+    log.push_back("CATCHMENT — no surface named \"" + name + "\".");
+    return;
+  }
+  if (f.size() >= 3) {
+    double x = 0.0, y = 0.0;
+    std::istringstream xy(f[1] + " " + f[2]);
+    if (!(xy >> x >> y)) {
+      log.push_back("CATCHMENT — usage: CATCHMENT <surface>[, <x>, <y>].");
+      return;
+    }
+    RunCatchmentAt(st, static_cast<size_t>(si), x, y, log);
+    return;
+  }
+  StartCatchmentCommand(st, name, log);
+}
+
 } // namespace
 
 void EnsureEntityIds(AppCommandState& st) {
@@ -4351,6 +4653,9 @@ const CmdEntry kRegistry[] = {
     {"surfacerebuild", "sfrebuild", "Rebuild a surface now (all surfaces if no name): SURFACEREBUILD [<name>]"},
     {"surfacelist", "sflist", "List every surface and its full definition"},
     {"surfacestats", "sfstats", "Surface statistics: SURFACESTATS [<name>]"},
+    {"watershed", "wshed", "Watershed basins: WATERSHED [<name>]"},
+    {"waterdrop", "wdrop", "Water-drop path: WATERDROP <name>[, <x>, <y>] | WATERDROP EXTRACT"},
+    {"catchment", "catch", "Catchment at an outlet: CATCHMENT <name>[, <x>, <y>] | CATCHMENT EXTRACT"},
     {"undesignate", "undes", "Remove one definition item: UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY|POINTFILE|CONTOUR>, <n>"},
     {"surfaceaddfile", "sfaddfile", "Link a point file into a surface: SURFACEADDFILE <surface>, <path>[, <layout>[, HEADER]]"},
     {"surfaceimportfile", "sfimportfile", "Import a linked point file into the drawing and break the link"},
@@ -4793,6 +5098,18 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "surfelev") {
     StartSurfaceElevGradeCommand(st, log);
+    return true;
+  }
+  if (primary == "watershed") {
+    RunWatershed(st, std::string(), log);
+    return true;
+  }
+  if (primary == "waterdrop") {
+    RunWaterDropCommand(st, std::string(), log);
+    return true;
+  }
+  if (primary == "catchment") {
+    RunCatchmentCommand(st, std::string(), log);
     return true;
   }
   if (primary == "plotscale") {
@@ -9115,6 +9432,29 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       return;
     }
     ReportSurfaceGradeTo(st, wx, wy, log);
+    return;
+  }
+
+  if (st.active == K::WaterDrop) {
+    const int si = FindSurfaceIndex(st, st.waterDropSurfaceName);
+    if (si < 0) {
+      log.push_back("WATERDROP — no surface named \"" + st.waterDropSurfaceName + "\".");
+      st.active = K::None;
+      return;
+    }
+    RunWaterDropAt(st, static_cast<size_t>(si), wx, wy, log);
+    st.active = K::None;
+    return;
+  }
+  if (st.active == K::Catchment) {
+    const int si = FindSurfaceIndex(st, st.catchmentSurfaceName);
+    if (si < 0) {
+      log.push_back("CATCHMENT — no surface named \"" + st.catchmentSurfaceName + "\".");
+      st.active = K::None;
+      return;
+    }
+    RunCatchmentAt(st, static_cast<size_t>(si), wx, wy, log);
+    st.active = K::None;
     return;
   }
 
@@ -15968,6 +16308,42 @@ void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>&
   log.push_back("SURFELEV — pick a point for its surface elevation; pick a second for grade. ESC cancels.");
 }
 
+void StartWaterDropCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None) {
+    log.push_back("WATERDROP — finish or cancel the active command first.");
+    return;
+  }
+  if (FindSurfaceIndex(st, surfaceName) < 0) {
+    log.push_back("WATERDROP — no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.waterDropSurfaceName = surfaceName;
+  st.active = K::WaterDrop;
+  log.push_back("WATERDROP — pick a plan position on \"" + surfaceName + "\". ESC cancels.");
+}
+
+void StartCatchmentCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None) {
+    log.push_back("CATCHMENT — finish or cancel the active command first.");
+    return;
+  }
+  if (FindSurfaceIndex(st, surfaceName) < 0) {
+    log.push_back("CATCHMENT — no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.catchmentSurfaceName = surfaceName;
+  st.active = K::Catchment;
+  log.push_back("CATCHMENT — pick an outlet on \"" + surfaceName + "\". ESC cancels.");
+}
+
 namespace {
 /// The stable id (REQ-076) of a picked Line or Polyline, or 0 for anything else / an out-of-range
 /// index — 0 is never a real id (\ref EntityAttributes::id), so it doubles as "not applicable" here.
@@ -22070,7 +22446,9 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "surfacerebuild" || plotTok == "sfrebuild" || plotTok == "surfacelist" ||
         plotTok == "sflist" || plotTok == "undesignate" || plotTok == "undes" ||
         plotTok == "surfaceaddfile" || plotTok == "sfaddfile" || plotTok == "surfaceimportfile" ||
-        plotTok == "sfimportfile" || plotTok == "surfacestats" || plotTok == "sfstats") {
+        plotTok == "sfimportfile" || plotTok == "surfacestats" || plotTok == "sfstats" ||
+        plotTok == "watershed" || plotTok == "wshed" || plotTok == "waterdrop" || plotTok == "wdrop" ||
+        plotTok == "catchment" || plotTok == "catch") {
       std::string rest;
       std::getline(issIdle, rest);
       rest = StringUtil::trimCopy(rest);
@@ -22090,6 +22468,12 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunSurfaceImportFile(st, rest, log);
       else if (plotTok == "surfacestats" || plotTok == "sfstats")
         RunSurfaceStats(st, rest, log);
+      else if (plotTok == "watershed" || plotTok == "wshed")
+        RunWatershed(st, rest, log);
+      else if (plotTok == "waterdrop" || plotTok == "wdrop")
+        RunWaterDropCommand(st, rest, log);
+      else if (plotTok == "catchment" || plotTok == "catch")
+        RunCatchmentCommand(st, rest, log);
       else
         RunUndesignate(st, rest, log);
       return;
@@ -22311,6 +22695,39 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     ReportSurfaceGradeTo(st, px, py, log);
+    return;
+  }
+
+  if (st.active == K::WaterDrop) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
+      log.push_back("WATERDROP — type X,Y (World) or pick a point in the drawing.");
+      return;
+    }
+    const int si = FindSurfaceIndex(st, st.waterDropSurfaceName);
+    if (si < 0) {
+      log.push_back("WATERDROP — no surface named \"" + st.waterDropSurfaceName + "\".");
+      st.active = AppCommandState::Kind::None;
+      return;
+    }
+    RunWaterDropAt(st, static_cast<size_t>(si), px, py, log);
+    st.active = AppCommandState::Kind::None;
+    return;
+  }
+  if (st.active == K::Catchment) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
+      log.push_back("CATCHMENT — type X,Y (World) or pick a point in the drawing.");
+      return;
+    }
+    const int si = FindSurfaceIndex(st, st.catchmentSurfaceName);
+    if (si < 0) {
+      log.push_back("CATCHMENT — no surface named \"" + st.catchmentSurfaceName + "\".");
+      st.active = AppCommandState::Kind::None;
+      return;
+    }
+    RunCatchmentAt(st, static_cast<size_t>(si), px, py, log);
+    st.active = AppCommandState::Kind::None;
     return;
   }
 
@@ -23180,6 +23597,11 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
       return "SURFELEV: Pick a point for its surface elevation | ESC cancel";
     return "SURFELEV: Second point for grade | ESC stops after the elevation";
   }
+
+  if (st.active == K::WaterDrop)
+    return "WATERDROP: Pick a plan position on the surface | ESC cancel";
+  if (st.active == K::Catchment)
+    return "CATCHMENT: Pick an outlet on the surface | ESC cancel";
 
   if (st.active == K::DesignateBreakline)
     return "DESIGNATEBREAKLINE: Pick a line or polyline | ESC cancel";

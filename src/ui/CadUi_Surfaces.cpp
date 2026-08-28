@@ -517,6 +517,20 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
       float lo = 0.f, hi = 0.f;
       if (SurfaceElevationRange(s, &lo, &hi))
         ImGui::Text("Elevation %.2f to %.2f (%.2f range).", lo, hi, hi - lo);
+      const std::uint64_t sid = cmd.cadSurfaceAttrs[static_cast<size_t>(selIdx)].id;
+      for (const auto& we : cmd.surfaceWatershedCache) {
+        if (we.surfaceId != sid || !we.analysis.ok)
+          continue;
+        ImGui::Spacing();
+        ImGui::Text("Watershed: %d basin(s).", static_cast<int>(we.analysis.basins.size()));
+        for (const WatershedBasin& b : we.analysis.basins) {
+          const char* dk = b.drain == DrainKind::Depression ? "depression"
+                           : b.drain == DrainKind::Flat     ? "flat"
+                                                            : "boundary";
+          ImGui::Text("  #%d %s  area %.2f", b.id, dk, b.area2d);
+        }
+        break;
+      }
     }
     if (!s.lastBuildMessage.empty())
       ImGui::TextWrapped("%s", s.lastBuildMessage.c_str());

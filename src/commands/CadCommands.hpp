@@ -20,6 +20,7 @@
 #include "update/UpdateCheck.hpp"  // update::UpdatePrefs only — pure, no network, no <thread>
 #include "util/tinbuild.hpp"       // TinBuildResult, for AppCommandState::SurfaceRebuildAsync (REQ-069)
 #include "util/surfacevolume.hpp"  // SurfaceVolumeResult, for AppCommandState::VolumeDashboardState (REQ-073)
+#include "util/watershed.hpp"      // WatershedResult, for AppCommandState::SurfaceWatershedCacheEntry (REQ-132)
 // curveisect::Vec2/Seg/Conic + Intersect*, for FILLET's tangent-arc solve (REQ-103 step 6a) below.
 // Dependency-free by its own design (curveintersect.hpp's own doc comment), so this adds no cycle.
 #include "util/curveintersect.hpp"
@@ -1186,6 +1187,10 @@ struct AppCommandState {
     SurveyInverse,
     /// REQ-074: one pick reports interpolated surface elevation, a second reports grade between them.
     SurfaceElevGrade,
+    /// REQ-133: one pick traces a water-drop path on a named surface.
+    WaterDrop,
+    /// REQ-134: one pick reports the catchment upstream of an outlet.
+    Catchment,
     /// REQ-069: one pick designates a Line/Polyline as a breakline on a named surface.
     DesignateBreakline,
     /// REQ-069: one pick designates a closed Polyline as a boundary ring (outer/hide/show) on a named surface.
@@ -1261,6 +1266,8 @@ struct AppCommandState {
     case Kind::TrimState:     return "TRIMSTATE";
     case Kind::Orbit:         return "ORBIT";
     case Kind::SurfaceElevGrade:   return "SURFELEV";
+    case Kind::WaterDrop:          return "WATERDROP";
+    case Kind::Catchment:          return "CATCHMENT";
     case Kind::DesignateBreakline: return "DESIGNATEBREAKLINE";
     case Kind::DesignateBoundary:  return "DESIGNATEBOUNDARY";
     default:                  return "";
@@ -2056,6 +2063,21 @@ struct AppCommandState {
     TinSpatialIndex index;
   };
   mutable std::vector<SurfaceQueryCacheEntry> surfaceQueryCache;
+
+  /// REQ-132…134 / ADR-039 (j): live-only drain graph and preview lines. Never in `.gs`.
+  struct SurfaceWatershedCacheEntry {
+    std::uint64_t surfaceId = 0;
+    std::weak_ptr<const CadTin> builtFrom;
+    WatershedResult analysis;
+    std::vector<float> basinOutlines;
+    std::vector<float> waterDropLines;
+    std::vector<float> catchmentLines;
+  };
+  std::vector<SurfaceWatershedCacheEntry> surfaceWatershedCache;
+  std::string waterDropSurfaceName;
+  std::string catchmentSurfaceName;
+  std::vector<float> lastWaterDropPathXyz;
+  std::vector<float> lastCatchmentPathXyz;
 
   /// What the renderer is handed for surfaces this frame — batches borrowing the buffers above,
   /// filtered for layer/isolation visibility and carrying each component's resolved colour and
@@ -3567,6 +3589,8 @@ void StartIdPointCommand(AppCommandState& st, std::vector<std::string>& log);
 /// REQ-074: pick a point for its interpolated surface elevation; pick a second for the grade
 /// between them. Reports every surface covering the pick, by name.
 void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>& log);
+void StartWaterDropCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartCatchmentCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
 
 /// REQ-069: designate one picked Line/Polyline as a breakline on the named surface, appended to its
 /// definition by stable entity id. Refuses to start when \p surfaceName does not name an existing
