@@ -218,10 +218,13 @@ jobs:
           fetch-depth: 1
 
       - name: Download binaries
+        # upload-artifact@v4 strips the shared `build/` prefix from the uploaded
+        # paths, so the archive contains GoSurvey.exe at its root. Unpack into
+        # build/ so installer/GoSurvey.iss still finds {#BuildDir}\GoSurvey.exe.
         uses: actions/download-artifact@v4
         with:
           name: gosurvey-bin
-          path: .
+          path: build
 
       # ---------------------------------------------------------------------
       # Package
@@ -229,6 +232,9 @@ jobs:
       - name: Build the installer
         shell: pwsh
         run: |
+          if (-not (Test-Path 'build\GoSurvey.exe')) {
+            throw "Expected build\GoSurvey.exe after artifact download (Inno Source)."
+          }
           $iscc = Get-ChildItem 'C:\Program Files (x86)\Inno Setup*\ISCC.exe','C:\Program Files\Inno Setup*\ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $iscc) {
             Write-Host "Inno Setup not present on the runner image - installing."
