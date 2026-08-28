@@ -1481,6 +1481,7 @@ struct AppCommandState {
   /// Snap where two objects only *appear* to meet in the current view (REQ-062). Off by default,
   /// as in AutoCAD: it fires on objects that do not touch, which is surprising unless asked for.
   bool objectSnapApparentIntersection = false;
+  bool objectSnapSurface = true;
   /// Screen-space aperture (pixels) for object snap tolerance and related viewport picks.
   float objectSnapAperturePx = 14.f;
   /// Half-size in screen pixels for green object-snap glyphs (square / triangle / circle overlay).
@@ -2040,6 +2041,16 @@ struct AppCommandState {
   /// and "adds no entity to the drawing" structurally true rather than a rule someone must remember.
   std::vector<SurfaceDisplayCacheEntry> surfaceDisplayCache;
 
+  /// REQ-126 / ADR-039 (c): per-surface spatial index for elevation queries. Live-only, same
+  /// staleness key as the display cache (id + TIN pointer). `mutable` because SURFELEV/hover take a
+  /// const state and the index is derived, not document content.
+  struct SurfaceQueryCacheEntry {
+    std::uint64_t surfaceId = 0;
+    std::weak_ptr<const CadTin> builtFrom;
+    TinSpatialIndex index;
+  };
+  mutable std::vector<SurfaceQueryCacheEntry> surfaceQueryCache;
+
   /// What the renderer is handed for surfaces this frame — batches borrowing the buffers above,
   /// filtered for layer/isolation visibility and carrying each component's resolved colour and
   /// lineweight. Rebuilt in the same pass as the cache, so a batch never outlives its buffer.
@@ -2403,6 +2414,7 @@ struct AppCommandState {
   /// than started from the panel, which is the ordinary case for the command line.
   std::string designateBreaklineDescription;
   std::string designateBoundaryName;
+  bool designateContourSource = false;
 
   /// REQ-085: the active polyline draft is a **3D polyline** — vertices may carry a typed elevation.
   ///
@@ -3129,6 +3141,9 @@ enum class SurfaceState { Current, Stale, Rebuilding };
 void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
                            std::vector<SurfaceHoverRow>* out);
 
+/// REQ-127: interpolated Z of the last covering visible surface at plan (x,y), or false if none.
+[[nodiscard]] bool SurfaceSnapElevation(const AppCommandState& st, double x, double y, float* outZ);
+
 /// Index of the surface named \p name (case-insensitive), or -1 (REQ-068).
 ///
 /// For a name the **user** typed — a command argument, a panel selection. For a reference held
@@ -3552,6 +3567,8 @@ void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>&
 /// surface, reported before the pick rather than after it (REQ-201).
 void StartDesignateBreaklineCommand(AppCommandState& st, const std::string& surfaceName,
                                     std::vector<std::string>& log);
+void StartDesignateContourCommand(AppCommandState& st, const std::string& surfaceName,
+                                  std::vector<std::string>& log);
 
 /// REQ-069: designate one picked CLOSED Polyline as a boundary ring of kind \p kind on the named
 /// surface, applied in the order it was added. Same refuse-before-pick rule as above.

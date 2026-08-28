@@ -143,7 +143,7 @@ struct SurfaceBand {
 /// \c None is the default and is what REQ-072's "turning banding off restores the style's plain
 /// display unchanged" means: the plain display is the state a style STARTS in, not one it has to be
 /// returned to, so a drawing that never opens the Analysis tab cannot be affected by it.
-enum class SurfaceAnalysisMode { None = 0, Elevation = 1, Slope = 2 };
+enum class SurfaceAnalysisMode { None = 0, Elevation = 1, Slope = 2, Direction = 3 };
 
 /// A named surface style (REQ-070 / ADR-036 (d)): how a surface is *drawn*, never what it is made of.
 ///
@@ -439,7 +439,7 @@ struct CadTin {
 /// than an include of it, the same reason \ref CadTin mirrors `TinBuildResult`'s layout instead of
 /// including `tinbuild.hpp`: this header stays dependency-free (§11.4), and the conversion is one
 /// `switch` at the one call site that needs both types (`BuildSurfaceFromSources`).
-enum class CadBoundaryKind : std::uint8_t { Outer, Hide, Show };
+enum class CadBoundaryKind : std::uint8_t { Outer, Hide, Show, Clip };
 
 /// A boundary ring referenced by stable entity id (REQ-076) — must resolve to a **closed** polyline.
 struct CadSurfaceBoundary {
@@ -535,6 +535,10 @@ struct CadSurface {
   /// (`BuildSurfaceFromSources`) — REQ-069's "deleting a polyline used as a breakline removes it from
   /// the definition."
   std::vector<CadSurfaceBreakline> breaklines;
+
+  /// Contour polylines as data sources (REQ-129) — same id/constraint path as breaklines, listed
+  /// separately so the Surface Manager can show a Contours node.
+  std::vector<CadSurfaceBreakline> contourSources;
 
   /// Boundary rings, applied in this exact order (REQ-069: "boundaries apply in definition order").
   /// Same dangling-id handling as \ref breaklineIds.

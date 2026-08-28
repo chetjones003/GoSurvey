@@ -12,6 +12,7 @@
 #include "util/contourgen.hpp"  // REQ-070 contour generation (ADR-036 (f)) — pure, like tinbuild
 #include "util/surfaceanalysis.hpp"  // REQ-072 banding + slope arrows (ADR-036 (g)) — pure, like contourgen
 #include "util/surfacevolume.hpp"  // REQ-073 surface-to-surface volumes (TASK-095) — pure, like surfaceanalysis
+#include "util/surfacestats.hpp"   // REQ-125
 #include "util/curveintersect.hpp"  // REQ-062 analytic intersections; EXTEND (TASK-096) reuses this over TRIM's tessellation
 #include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
 #include "util/gltfimport.hpp"
@@ -1588,9 +1589,16 @@ void BuildSurfaceAnalysisGeometry(const CadTin& tin, const SurfaceStyle& style,
     t.x2 = tin.vertsXyz[ic * 3 + 0]; t.y2 = tin.vertsXyz[ic * 3 + 1]; t.z2 = tin.vertsXyz[ic * 3 + 2];
 
     if (wantBands) {
-      const double value = style.analysisMode == SurfaceAnalysisMode::Elevation ? TriangleCentroidZ(t)
-                                                                                 : TrianglePlaneSlopePct(t);
-      const int idx = AssignBand(value, bandBounds);
+      double value = 0.0;
+      bool haveValue = true;
+      if (style.analysisMode == SurfaceAnalysisMode::Elevation) {
+        value = TriangleCentroidZ(t);
+      } else if (style.analysisMode == SurfaceAnalysisMode::Slope) {
+        value = TrianglePlaneSlopePct(t);
+      } else {
+        haveValue = TriangleDownhillAspectDeg(t, kFlatGradePctDefault, &value);
+      }
+      const int idx = haveValue ? AssignBand(value, bandBounds) : -1;
       std::vector<float>& buf = (*bandBuffers)[idx >= 0 ? static_cast<size_t>(idx) : bandBounds.size()];
       buf.push_back(static_cast<float>(t.x0)); buf.push_back(static_cast<float>(t.y0)); buf.push_back(static_cast<float>(t.z0));
       buf.push_back(static_cast<float>(t.x1)); buf.push_back(static_cast<float>(t.y1)); buf.push_back(static_cast<float>(t.z1));
@@ -2185,6 +2193,22 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
     log.push_back("Surface \"" + surface.name + "\": " + std::to_string(droppedBreaklines) +
                   " breakline(s) no longer exist and were removed from the definition.");
 
+  std::vector<CadSurfaceBreakline> resolvedContours;
+  int droppedContours = 0;
+  for (const CadSurfaceBreakline& c : surface.contourSources) {
+    ResolvedChain chain;
+    if (!ResolveDefinitionChain(st, c.entityId, /*requireClosed=*/false, chain)) {
+      ++droppedContours;
+      continue;
+    }
+    resolvedContours.push_back(c);
+    AppendChainConstraints(chain, /*forceClosed=*/false, in.constraints);
+  }
+  surface.contourSources = std::move(resolvedContours);
+  if (droppedContours > 0)
+    log.push_back("Surface \"" + surface.name + "\": " + std::to_string(droppedContours) +
+                  " contour source(s) no longer exist and were removed from the definition.");
+
   // Boundaries (REQ-069): same dangling-id handling; each ring's edges become constraints too (Q1),
   // so the triangulation conforms exactly to the boundary and culling is exact, not approximate.
   std::vector<CadSurfaceBoundary> resolvedBoundaries;
@@ -2200,7 +2224,8 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
     TinBoundaryLoop loop;
     loop.kind = b.kind == CadBoundaryKind::Outer ? TinBoundaryKind::Outer
               : b.kind == CadBoundaryKind::Hide  ? TinBoundaryKind::Hide
-                                                  : TinBoundaryKind::Show;
+              : b.kind == CadBoundaryKind::Show  ? TinBoundaryKind::Show
+                                                 : TinBoundaryKind::Clip;
     for (const auto& v : chain.verts)
       loop.ring.push_back({v[0], v[1]});
     in.cullLoops.push_back(std::move(loop));
@@ -2209,6 +2234,31 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
   if (droppedBoundaries > 0)
     log.push_back("Surface \"" + surface.name + "\": " + std::to_string(droppedBoundaries) +
                   " boundary(ies) no longer exist and were removed from the definition.");
+
+  // REQ-128: if any clip ring exists, keep only points inside at least one clip (union).
+  {
+    std::vector<const TinBoundaryLoop*> clips;
+    for (const TinBoundaryLoop& loop : in.cullLoops) {
+      if (loop.kind == TinBoundaryKind::Clip)
+        clips.push_back(&loop);
+    }
+    if (!clips.empty()) {
+      std::vector<TinInputPoint> kept;
+      kept.reserve(in.pts.size());
+      for (const TinInputPoint& p : in.pts) {
+        bool inside = false;
+        for (const TinBoundaryLoop* clip : clips) {
+          if (TinPointInPolygon(p.x, p.y, clip->ring)) {
+            inside = true;
+            break;
+          }
+        }
+        if (inside)
+          kept.push_back(p);
+      }
+      in.pts = std::move(kept);
+    }
+  }
 
   // Crossing breaklines at different elevations (REQ-069): reported by name and location so the
   // conflict can actually be found and fixed, rather than left to be inferred from a stray edge.
@@ -2313,8 +2363,11 @@ int CreateSurfaceFromPointGroups(AppCommandState& st, const std::string& name,
   CadSurface s;
   s.name = name;
   s.sourcePointGroups = groupNames;
-  if (!BuildSurfaceFromSources(st, s, log))
-    return -1;  // nothing built → no surface added, rather than an empty one to puzzle over
+  const bool built = BuildSurfaceFromSources(st, s, log);
+  if (!built && s.lastBuildMessage.empty())
+    s.lastBuildMessage = "Not built.";
+  if (groupNames.empty() && !s.tin)
+    log.push_back("Surface \"" + name + "\" created (empty — add points, breaklines or files, then rebuild).");
 
   st.cadSurfaces.push_back(std::move(s));
   EnsureAttrCounts(st);  // owns attribute-array growth for every entity type, surfaces included
@@ -2572,6 +2625,7 @@ void ReportSurfaces(const AppCommandState& st, std::vector<std::string>& log) {
                      " triangles")
                   : std::string("not built");
     line += ", " + std::to_string(s.breaklines.size()) + " breakline(s), " +
+            std::to_string(s.contourSources.size()) + " contour source(s), " +
             std::to_string(s.boundaries.size()) + " boundary(ies), " +
             std::to_string(s.sourcePointFiles.size()) + " point file(s).";
     log.push_back(line);
@@ -2591,11 +2645,16 @@ void ReportSurfaces(const AppCommandState& st, std::vector<std::string>& log) {
       log.push_back("  breakline " + std::to_string(i + 1) + ": entity id " +
                     std::to_string(s.breaklines[i].entityId) +
                     (s.breaklines[i].description.empty() ? "" : "  \"" + s.breaklines[i].description + "\""));
+    for (size_t i = 0; i < s.contourSources.size(); ++i)
+      log.push_back("  contour " + std::to_string(i + 1) + ": entity id " +
+                    std::to_string(s.contourSources[i].entityId) +
+                    (s.contourSources[i].description.empty() ? "" : "  \"" + s.contourSources[i].description + "\""));
     for (size_t i = 0; i < s.boundaries.size(); ++i) {
       const CadSurfaceBoundary& b = s.boundaries[i];
       const char* kindName = b.kind == CadBoundaryKind::Outer ? "outer"
                             : b.kind == CadBoundaryKind::Hide  ? "hide"
-                                                               : "show";
+                            : b.kind == CadBoundaryKind::Show  ? "show"
+                                                               : "clip";
       log.push_back("  boundary " + std::to_string(i + 1) + ": " + kindName + ", entity id " +
                     std::to_string(b.entityId) + (b.name.empty() ? "" : "  \"" + b.name + "\""));
     }
@@ -2609,8 +2668,8 @@ void ReportSurfaces(const AppCommandState& st, std::vector<std::string>& log) {
 /// would produce a surface built from less than the user asked for, with nothing on screen saying so.
 void RunSurfaceCreate(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitCommaFields(args);
-  if (f.size() < 2 || f[0].empty()) {
-    log.push_back("SURFACECREATE — usage: SURFACECREATE <name>, <point group>[, <point group>…].");
+  if (f.empty() || f[0].empty()) {
+    log.push_back("SURFACECREATE — usage: SURFACECREATE <name>[, <point group>…].");
     return;
   }
   std::vector<std::string> groups;
@@ -3065,8 +3124,9 @@ void ExecuteSurfStyleCommand(AppCommandState& st, const std::string& args,
     if (mode == "none") m = SurfaceAnalysisMode::None;
     else if (mode == "elevation") m = SurfaceAnalysisMode::Elevation;
     else if (mode == "slope") m = SurfaceAnalysisMode::Slope;
+    else if (mode == "direction") m = SurfaceAnalysisMode::Direction;
     else {
-      log.push_back("SURFSTYLE — analysis type must be none, elevation or slope, not \"" + f[1] + "\".");
+      log.push_back("SURFSTYLE — analysis type must be none, elevation, slope or direction, not \"" + f[1] + "\".");
       return;
     }
     PushUndoSnapshot(st, "Surface style");
@@ -3312,7 +3372,7 @@ void ExecuteVolDashCommand(AppCommandState& st, const std::string& args, std::ve
 void RunUndesignate(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
   const std::vector<std::string> f = SplitCommaFields(args);
   if (f.size() != 3 || f[0].empty()) {
-    log.push_back("UNDESIGNATE — usage: UNDESIGNATE <surface name>, <BREAKLINE|BOUNDARY>, <number>.");
+    log.push_back("UNDESIGNATE — usage: UNDESIGNATE <surface name>, <BREAKLINE|BOUNDARY|POINTFILE|CONTOUR>, <number>.");
     return;
   }
   const int si = FindSurfaceIndex(st, f[0]);
@@ -3323,8 +3383,9 @@ void RunUndesignate(AppCommandState& st, const std::string& args, std::vector<st
   const std::string what = StringUtil::toLowerAsciiCopy(f[1]);
   const bool isBoundary = (what == "boundary");
   const bool isPointFile = (what == "pointfile");
-  if (!isBoundary && !isPointFile && what != "breakline") {
-    log.push_back("UNDESIGNATE — second argument must be BREAKLINE, BOUNDARY or POINTFILE.");
+  const bool isContour = (what == "contour");
+  if (!isBoundary && !isPointFile && !isContour && what != "breakline") {
+    log.push_back("UNDESIGNATE — second argument must be BREAKLINE, BOUNDARY, POINTFILE or CONTOUR.");
     return;
   }
   // strtol rather than stoi: a non-numeric argument is a user typo, not an exceptional condition,
@@ -3337,6 +3398,7 @@ void RunUndesignate(AppCommandState& st, const std::string& args, std::vector<st
   CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
   const size_t count = isBoundary     ? s.boundaries.size()
                        : isPointFile  ? s.sourcePointFiles.size()
+                       : isContour    ? s.contourSources.size()
                                       : s.breaklines.size();
   if (n < 1 || static_cast<size_t>(n) > count) {
     log.push_back("UNDESIGNATE — \"" + s.name + "\" has " + std::to_string(count) + " " + what +
@@ -3345,15 +3407,52 @@ void RunUndesignate(AppCommandState& st, const std::string& args, std::vector<st
   }
   PushUndoSnapshot(st, isBoundary    ? "Remove surface boundary"
                        : isPointFile ? "Unlink surface point file"
+                       : isContour   ? "Remove surface contour source"
                                      : "Remove surface breakline");
   if (isBoundary)
     s.boundaries.erase(s.boundaries.begin() + (n - 1));
   else if (isPointFile)
     s.sourcePointFiles.erase(s.sourcePointFiles.begin() + (n - 1));
+  else if (isContour)
+    s.contourSources.erase(s.contourSources.begin() + (n - 1));
   else
     s.breaklines.erase(s.breaklines.begin() + (n - 1));
   log.push_back("UNDESIGNATE — removed " + what + " " + std::to_string(n) + " from \"" + s.name + "\".");
   BumpCadGpuCache(st);  // TickSurfaceRebuilds picks the change up; SURFACEREBUILD forces it now
+}
+
+void RunSurfaceStats(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::string name = StringUtil::trimCopy(args);
+  auto reportOne = [&](const CadSurface& s) {
+    const SurfaceStats stt =
+        s.tin ? ComputeSurfaceStats(s.tin->vertsXyz, s.tin->indices) : SurfaceStats{};
+    if (!stt.built) {
+      log.push_back("SURFACESTATS — \"" + s.name + "\": not built.");
+      return;
+    }
+    const int p = st.displayLinearPrecision;
+    log.push_back("SURFACESTATS — \"" + s.name + "\": " + std::to_string(stt.points) + " points, " +
+                  std::to_string(stt.triangles) + " triangles, 2D area " + FormatLinear(stt.area2d, p) +
+                  ", 3D area " + FormatLinear(stt.area3d, p) + ", elev " + FormatLinear(stt.minZ, p) +
+                  " to " + FormatLinear(stt.maxZ, p) + ", slope " + FormatLinear(stt.minSlopePct, 2) +
+                  "% to " + FormatLinear(stt.maxSlopePct, 2) + "% (mean " +
+                  FormatLinear(stt.meanSlopePct, 2) + "%).");
+  };
+  if (name.empty()) {
+    if (st.cadSurfaces.empty()) {
+      log.push_back("SURFACESTATS — no surfaces in the drawing.");
+      return;
+    }
+    for (const CadSurface& s : st.cadSurfaces)
+      reportOne(s);
+    return;
+  }
+  const int si = FindSurfaceIndex(st, name);
+  if (si < 0) {
+    log.push_back("SURFACESTATS — no surface named \"" + name + "\".");
+    return;
+  }
+  reportOne(st.cadSurfaces[static_cast<size_t>(si)]);
 }
 
 } // namespace
@@ -4157,13 +4256,15 @@ const CmdEntry kRegistry[] = {
     {"inverse", "inv", "Inverse between two points"},
     {"surfelev", "se", "Surface elevation at a point; grade between two"},
     {"designatebreakline", "dbl", "Add a picked line/polyline as a surface breakline"},
-    {"designateboundary", "dbd", "Add a picked closed polyline as a surface boundary (outer/hide/show)"},
+    {"designatecontour", "dcon", "Add a picked line/polyline as a surface contour source"},
+    {"designateboundary", "dbd", "Add a picked closed polyline as a surface boundary (outer/hide/show/clip)"},
     {"surfacecreate", "sfcreate", "Create a surface from point groups: SURFACECREATE <name>, <group>[, <group>…]"},
     {"surfacerename", "sfrename", "Rename a surface: SURFACERENAME <old>, <new>"},
     {"surfacedelete", "sfdelete", "Delete a surface: SURFACEDELETE <name>"},
     {"surfacerebuild", "sfrebuild", "Rebuild a surface now (all surfaces if no name): SURFACEREBUILD [<name>]"},
     {"surfacelist", "sflist", "List every surface and its full definition"},
-    {"undesignate", "undes", "Remove one definition item: UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY|POINTFILE>, <n>"},
+    {"surfacestats", "sfstats", "Surface statistics: SURFACESTATS [<name>]"},
+    {"undesignate", "undes", "Remove one definition item: UNDESIGNATE <surface>, <BREAKLINE|BOUNDARY|POINTFILE|CONTOUR>, <n>"},
     {"surfaceaddfile", "sfaddfile", "Link a point file into a surface: SURFACEADDFILE <surface>, <path>[, <layout>[, HEADER]]"},
     {"surfaceimportfile", "sfimportfile", "Import a linked point file into the drawing and break the link"},
     {"flelev", "", "Feature line elevations: FLELEV <n> [SET|GRADEAHEAD|GRADEBACK|RAISE|INSERT|DELETE …]"},
@@ -7950,8 +8051,30 @@ static std::vector<SurfaceCoverage> SurfacesCovering(const AppCommandState& st, 
     if (!SurfaceVisible(st, si))
       continue;
     const CadSurface& s = st.cadSurfaces[si];
+    if (!s.tin)
+      continue;
     double z = 0.0;
-    if (TinElevationAt(s.tin->vertsXyz, s.tin->indices, x, y, &z))
+    const std::uint64_t id =
+        si < st.cadSurfaceAttrs.size() ? st.cadSurfaceAttrs[si].id : 0;
+    const TinSpatialIndex* index = nullptr;
+    for (AppCommandState::SurfaceQueryCacheEntry& e : st.surfaceQueryCache) {
+      if (e.surfaceId == id && e.builtFrom.lock() == s.tin) {
+        index = &e.index;
+        break;
+      }
+    }
+    if (!index) {
+      AppCommandState::SurfaceQueryCacheEntry e;
+      e.surfaceId = id;
+      e.builtFrom = s.tin;
+      e.index = BuildTinSpatialIndex(s.tin->vertsXyz, s.tin->indices);
+      st.surfaceQueryCache.push_back(std::move(e));
+      index = &st.surfaceQueryCache.back().index;
+    }
+    const bool hit = (index && !index->empty())
+                         ? TinElevationAtIndexed(s.tin->vertsXyz, s.tin->indices, *index, x, y, &z)
+                         : TinElevationAt(s.tin->vertsXyz, s.tin->indices, x, y, &z);
+    if (hit)
       out.push_back({si, z});
   }
   return out;
@@ -9361,6 +9484,16 @@ void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
                                        : std::string("\xE2\x80\x94");
     out->push_back(std::move(row));
   }
+}
+
+bool SurfaceSnapElevation(const AppCommandState& st, double x, double y, float* outZ) {
+  if (!outZ)
+    return false;
+  const std::vector<SurfaceCoverage> cov = SurfacesCovering(st, x, y);
+  if (cov.empty())
+    return false;
+  *outZ = static_cast<float>(cov.back().z);
+  return true;
 }
 
 // Public paste entry point (REQ-038): place the clipboard at point (x,y) in the ACTIVE space's coordinates
@@ -15779,8 +15912,30 @@ void StartDesignateBreaklineCommand(AppCommandState& st, const std::string& surf
   ResetAllCadDraftTools(st);
   st.selBoxWaitingSecond = false;
   st.designateSurfaceName = surfaceName;
+  st.designateContourSource = false;
   st.active = K::DesignateBreakline;
   log.push_back("DESIGNATEBREAKLINE — pick a line or polyline to use as a breakline on \"" + surfaceName +
+               "\". ESC cancels.");
+}
+
+void StartDesignateContourCommand(AppCommandState& st, const std::string& surfaceName,
+                                  std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None) {
+    log.push_back("DESIGNATECONTOUR — finish or cancel the active command first.");
+    return;
+  }
+  if (FindSurfaceIndex(st, surfaceName) < 0) {
+    log.push_back("DESIGNATECONTOUR — no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.designateSurfaceName = surfaceName;
+  st.designateContourSource = true;
+  st.active = K::DesignateBreakline;
+  log.push_back("DESIGNATECONTOUR — pick a line or polyline to use as a contour on \"" + surfaceName +
                "\". ESC cancels.");
 }
 
@@ -15801,7 +15956,10 @@ void StartDesignateBoundaryCommand(AppCommandState& st, const std::string& surfa
   st.designateSurfaceName = surfaceName;
   st.designateBoundaryKind = kind;
   st.active = K::DesignateBoundary;
-  const char* kindName = kind == CadBoundaryKind::Outer ? "outer" : kind == CadBoundaryKind::Hide ? "hide" : "show";
+  const char* kindName = kind == CadBoundaryKind::Outer ? "outer"
+                       : kind == CadBoundaryKind::Hide  ? "hide"
+                       : kind == CadBoundaryKind::Show  ? "show"
+                                                        : "clip";
   log.push_back(std::string("DESIGNATEBOUNDARY — pick a CLOSED polyline to use as a ") + kindName +
                " boundary on \"" + surfaceName + "\". ESC cancels.");
 }
@@ -15863,9 +16021,17 @@ void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary,
     surface.boundaries.push_back(b);
     const char* kindName = b.kind == CadBoundaryKind::Outer ? "outer"
                           : b.kind == CadBoundaryKind::Hide  ? "hide"
-                                                              : "show";
+                          : b.kind == CadBoundaryKind::Show  ? "show"
+                                                             : "clip";
     log.push_back("DESIGNATEBOUNDARY — added a " + std::string(kindName) + " boundary" +
                   (b.name.empty() ? "" : " \"" + b.name + "\"") + " to \"" + surface.name + "\".");
+  } else if (st.designateContourSource) {
+    CadSurfaceBreakline bl;
+    bl.entityId = id;
+    bl.description = st.designateBreaklineDescription;
+    surface.contourSources.push_back(bl);
+    log.push_back("DESIGNATECONTOUR — added a contour source" +
+                  (bl.description.empty() ? "" : " \"" + bl.description + "\"") + " to \"" + surface.name + "\".");
   } else {
     CadSurfaceBreakline bl;
     bl.entityId = id;
@@ -15877,6 +16043,7 @@ void CommitDesignateAt(AppCommandState& st, float wx, float wy, bool isBoundary,
   // Consumed: a later typed DESIGNATE* must not inherit the last dialog's text.
   st.designateBreaklineDescription.clear();
   st.designateBoundaryName.clear();
+  st.designateContourSource = false;
   BumpCadGpuCache(st);  // marks every surface's dirty check; TickSurfaceRebuilds picks this one up next frame
   st.active = K::None;
 }
@@ -21816,7 +21983,7 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "surfacerebuild" || plotTok == "sfrebuild" || plotTok == "surfacelist" ||
         plotTok == "sflist" || plotTok == "undesignate" || plotTok == "undes" ||
         plotTok == "surfaceaddfile" || plotTok == "sfaddfile" || plotTok == "surfaceimportfile" ||
-        plotTok == "sfimportfile") {
+        plotTok == "sfimportfile" || plotTok == "surfacestats" || plotTok == "sfstats") {
       std::string rest;
       std::getline(issIdle, rest);
       rest = StringUtil::trimCopy(rest);
@@ -21834,6 +22001,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunSurfaceAddFile(st, rest, log);
       else if (plotTok == "surfaceimportfile" || plotTok == "sfimportfile")
         RunSurfaceImportFile(st, rest, log);
+      else if (plotTok == "surfacestats" || plotTok == "sfstats")
+        RunSurfaceStats(st, rest, log);
       else
         RunUndesignate(st, rest, log);
       return;
@@ -21852,6 +22021,17 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       StartDesignateBreaklineCommand(st, rest, log);
       return;
     }
+    if (plotTok == "designatecontour" || plotTok == "dcon") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      rest = StringUtil::trimCopy(rest);
+      if (rest.empty()) {
+        log.push_back("DESIGNATECONTOUR — usage: DESIGNATECONTOUR <surface name>.");
+        return;
+      }
+      StartDesignateContourCommand(st, rest, log);
+      return;
+    }
     // `DESIGNATEBOUNDARY <surface name> <OUTER|HIDE|SHOW>` — the kind is always the LAST token, so
     // the surface name is whatever remains before it, spaces and all.
     if (plotTok == "designateboundary" || plotTok == "dbd") {
@@ -21864,13 +22044,16 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       const std::string kindWord =
           usageError ? std::string() : StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(rest.substr(sp + 1)));
       CadBoundaryKind kind = CadBoundaryKind::Outer;
-      const bool kindOk = kindWord == "outer" || kindWord == "hide" || kindWord == "show";
+      const bool kindOk = kindWord == "outer" || kindWord == "hide" || kindWord == "show" ||
+                          kindWord == "clip";
       if (kindWord == "hide")
         kind = CadBoundaryKind::Hide;
       else if (kindWord == "show")
         kind = CadBoundaryKind::Show;
+      else if (kindWord == "clip")
+        kind = CadBoundaryKind::Clip;
       if (usageError || name.empty() || !kindOk) {
-        log.push_back("DESIGNATEBOUNDARY — usage: DESIGNATEBOUNDARY <surface name> <OUTER|HIDE|SHOW>.");
+        log.push_back("DESIGNATEBOUNDARY — usage: DESIGNATEBOUNDARY <surface name> <OUTER|HIDE|SHOW|CLIP>.");
         return;
       }
       StartDesignateBoundaryCommand(st, name, kind, log);

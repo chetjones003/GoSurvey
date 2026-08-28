@@ -215,6 +215,8 @@ src/
                 tinbuild — constrained Delaunay triangulation, double predicates (ADR-028)
                 tincontour — contour extraction and band assignment from a TIN (ADR-028)
                 tinanalysis — slope, downhill direction, surface-to-surface volumes (ADR-028)
+                surfacestats — 2D/3D area, slope extrema, extents from a TIN (ADR-039)
+                watershed — drain graph, basins, water-drop, catchment (ADR-039; Phase 3)
   update/       version ordering + manifest parse — pure, no network (ADR-029)
   platform/     window, files, GL context, WinHTTP fetch + SHA-256 (ADR-029)
 third_party/    vendored dependencies (each recorded in the decision log; REQ-300)
@@ -1680,3 +1682,69 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   lambda-bodied content is unchanged. Manual GUI pass required at multiple window widths (this
   project's own no-UI-automation constraint, ADR-031) to confirm Medium/Narrow read correctly on
   screen, the same pattern increment 1's own GUI pass followed.
+
+### ADR-039 — Surfaces epic #119: stay a definition-driven TIN, query cache not on CadTin, drainage as util modules   (2026-08-27, accepted)
+- Context: GitHub issue #119 asks for a complete Civil 3D-shaped terrain system: empty surfaces,
+  stats, elevation queries, OSNAP, data clip, contour inputs, aspect banding, bounded volumes,
+  watersheds, water-drop, catchments, volume surfaces, grid/corridor types, and a shared surface
+  interface. REQ-068…075 + ADR-028/036 already shipped the TIN core. D-2026-08-21-a refused
+  watersheds and grid *as style tabs*. ADR-028 (h) forbids a surface interface and an analysis-plugin
+  seam. The issue cannot be implemented as written without reversing those decisions; D-2026-08-27-a
+  records which parts reverse, which stay refused, and how the accepted parts attach.
+- Decision:
+  (a) **One concrete `CadSurface`.** New capabilities are free functions over `vertsXyz`/`indices`
+      (and a surface's existing definition arrays). No `ISurface`, no virtual analysis, no type
+      hierarchy for grid / corridor / TIN-volume. If those types are ever accepted they get their
+      own stores and their own REQs.
+  (b) **A named surface is a definition that may have `tin == nullptr`.** Fewer than three
+      non-collinear points still produces **no triangulation** (REQ-069's "no partial TIN" is
+      unchanged). The *object* is created anyway (REQ-124), so the user can add sources afterwards.
+      `SurfacesCovering` / hover / SURFELEV / OSNAP skip a null TIN; they do not crash.
+  (c) **The spatial index is a live-only cache on `AppCommandState`, keyed by stable surface id and
+      `weak_ptr<const CadTin>`**, the ADR-036 (e) display-cache pattern. It is not a member of
+      `CadTin` (that would pull `tinbuild.hpp` into `CadEntities.hpp`, breaking §11.4) and is not
+      written to `.gs`. `TinElevationAt` remains the linear-scan source of truth for tests;
+      `TinElevationAtIndexed` is the hot path. Indexed and scan answers must agree.
+  (d) **Boundaries gain `Clip`.** A clip ring excludes **input points** outside it *before*
+      triangulation (union of clips if several exist). Outer/hide/show still cull triangles after
+      the build. Clip rings are also constrained edges, so the rim is exact. Legacy `.gs` without
+      `"clip"` is unchanged.
+  (e) **Contour *sources* are definition items, not display geometry.** A 3D polyline (or feature
+      line) designated as a contour contributes its vertices and constrained edges at their stored
+      Z — the same path breaklines already use. Display contours remain style-generated (REQ-070).
+      EXTRACT remains the bake of *display* contours (REQ-071).
+  (f) **Direction/aspect banding is a third `SurfaceAnalysisMode`.** Aspect is the downhill azimuth
+      in degrees, 0 = +Y (northing), increasing toward +X (easting), range [0, 360). The existing
+      one-table-per-style rule stands: a triangle has one colour. Slope arrows stay an independent
+      toggle.
+  (g) **Statistics are derived, never stored.** A pure `util/surfacestats` module reads a TIN and
+      reports counts, extents, 2D/3D area, min/max/mean slope. Volume statistics belong to REQ-073 /
+      REQ-131, not to this module.
+  (h) **Surface OSNAP interpolates the triangle plane** at the cursor's plan position when that
+      position is on a visible surface, returning XYZ. Miss = no snap. It reuses the query cache
+      (c). It is a new `CadSnap::Kind`, not a hijack of Endpoint.
+  (i) **Bounded volume is a clip on the existing sampler**, not a new entity. A closed polyline
+      (and later a named boundary) limits which sample cells contribute. A volume-*surface* type is
+      **out of this ADR**.
+  (j) **Watershed / water-drop / catchment live in `util/watershed`**: GL-free, Catch2-tested,
+      synthetic basins as fixtures. Display of watershed polygons is style-generated cache geometry
+      (ADR-028 (b)), never entities, never stored in `.gs`. Water-drop bake to a 3D polyline uses
+      the EXTRACT pattern (unlinked). This **supersedes** D-2026-08-21-a only for *analysis*; there
+      is still no Watersheds *style tab* as a substitute for the algorithm.
+  (k) **Surfaces in paper-space viewports and PDF plot** consume the same display-geometry batches
+      model space already builds. PdfPlot currently draws none; that is a gap, not a decision.
+      Filling it does not add a second contour engine.
+  (l) **Out of this ADR, recorded so they are not built as side effects:** grid surfaces, corridor
+      surfaces, TIN-volume surfaces, contour smoothing, contour labels, TIN edge swap, proximity /
+      wall / non-destructive breaklines, Civil 3D surface import, DEM / point-cloud sources.
+- Alternatives: **(1) A surface interface so grid can arrive later** — declined; one present-day
+  type (ADR-028 (h), REQ-301). **(2) Persist the TIN query index and watershed polygons in `.gs`**
+  — declined; they are derived and would go stale against a rebuild. **(3) Put the spatial index on
+  `CadTin`** — declined; `CadEntities.hpp` stays free of `tinbuild.hpp`. **(4) Manual TIN edge swap**
+  — declined for this epic; next rebuild would discard a mutated triangulation unless swap became a
+  definition operation, which nobody asked to design today.
+- Consequences: REQ-124…135; additive `.gs` fields (`clip` kind, `contourSources` array) that a
+  legacy file omits; a fourth `CadBoundaryKind` / `TinBoundaryKind`; `SurfaceAnalysisMode::Direction`;
+  a `mutable` (or equivalently non-document) query cache beside `surfaceDisplayCache`; new commands
+  `SURFACESTATS`, `DESIGNATECONTOUR`, `WATERSHED` / `WATERDROP` / `CATCHMENT` as those REQs are built.
+  Sequencing: Phase 1 (124–130, 135) before Phase 2 (131) before Phase 3 (132–134).

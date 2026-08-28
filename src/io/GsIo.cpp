@@ -672,13 +672,22 @@ json BuildRoot(const AppCommandState& st) {
         breaklines.push_back(std::move(blo));
       }
       o["breaklines"] = std::move(breaklines);
+      json contours = json::array();
+      for (const CadSurfaceBreakline& c : s.contourSources) {
+        json co;
+        co["entityId"] = c.entityId;
+        co["description"] = c.description;
+        contours.push_back(std::move(co));
+      }
+      o["contourSources"] = std::move(contours);
       json boundaries = json::array();
       for (const CadSurfaceBoundary& b : s.boundaries) {
         json bo;
         bo["entityId"] = b.entityId;
         bo["kind"] = b.kind == CadBoundaryKind::Outer ? "outer"
                     : b.kind == CadBoundaryKind::Hide  ? "hide"
-                                                        : "show";
+                    : b.kind == CadBoundaryKind::Show  ? "show"
+                                                       : "clip";
         bo["name"] = b.name;
         boundaries.push_back(std::move(bo));
       }
@@ -802,6 +811,7 @@ json BuildRoot(const AppCommandState& st) {
   settings["viewportVisualStyle"] = static_cast<int>(st.viewportVisualStyle);
   settings["objectSnapIntersection"] = st.objectSnapIntersection;
   settings["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
+  settings["objectSnapSurface"] = st.objectSnapSurface;
   settings["objectSnapAperturePx"] = st.objectSnapAperturePx;
   settings["objectSnapGlyphHalfPx"] = st.objectSnapGlyphHalfPx;
 
@@ -981,6 +991,7 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
   b(s, "objectSnapGeometricCenter", &st.objectSnapGeometricCenter);
   b(s, "objectSnapIntersection", &st.objectSnapIntersection);
   b(s, "objectSnapApparentIntersection", &st.objectSnapApparentIntersection);
+  b(s, "objectSnapSurface", &st.objectSnapSurface);
   num(s, "objectSnapAperturePx", &st.objectSnapAperturePx);
   num(s, "objectSnapGlyphHalfPx", &st.objectSnapGlyphHalfPx);
   st.objectSnapAperturePx = std::clamp(st.objectSnapAperturePx, 4.f, 64.f);
@@ -1313,6 +1324,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         const int mode = o.value("analysisMode", 0);
         s.analysisMode = mode == 1   ? SurfaceAnalysisMode::Elevation
                          : mode == 2 ? SurfaceAnalysisMode::Slope
+                         : mode == 3 ? SurfaceAnalysisMode::Direction
                                      : SurfaceAnalysisMode::None;
       }
       s.slopeArrowsOn = o.value("slopeArrowsOn", s.slopeArrowsOn);
@@ -1568,6 +1580,16 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
             s.breaklines.push_back(std::move(bl));  // legacy: no description existed to carry
           }
       }
+      if (el.contains("contourSources") && el["contourSources"].is_array()) {
+        for (const auto& co : el["contourSources"]) {
+          if (!co.is_object() || !co.contains("entityId") || !co["entityId"].is_number_unsigned())
+            continue;
+          CadSurfaceBreakline c;
+          c.entityId = co["entityId"].get<std::uint64_t>();
+          c.description = co.value("description", std::string());
+          s.contourSources.push_back(std::move(c));
+        }
+      }
       if (el.contains("boundaries") && el["boundaries"].is_array())
         for (const auto& bo : el["boundaries"]) {
           if (!bo.is_object() || !bo.contains("entityId") || !bo["entityId"].is_number_unsigned())
@@ -1577,6 +1599,7 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           const std::string kindStr = bo.value("kind", std::string("outer"));
           b.kind = kindStr == "hide" ? CadBoundaryKind::Hide
                  : kindStr == "show" ? CadBoundaryKind::Show
+                 : kindStr == "clip" ? CadBoundaryKind::Clip
                                      : CadBoundaryKind::Outer;
           b.name = bo.value("name", std::string());  // absent in a pre-REQ-075 file
           s.boundaries.push_back(std::move(b));

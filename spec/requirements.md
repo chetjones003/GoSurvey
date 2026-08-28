@@ -2123,13 +2123,16 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: must
 - Type: functional
 - Statement: A surface stores an **ordered, editable definition** whose items are **point groups**
-  (REQ-067), **breaklines** (existing 3D lines and polylines designated as such), and **boundaries**
-  (closed polylines typed **outer**, **hide** or **show**). Breaklines and boundaries are referenced
+  (REQ-067), **breaklines** (existing 3D lines and polylines designated as such), **contour
+  polylines** (REQ-129), and **boundaries** (closed polylines typed **outer**, **hide**, **show**, or
+  **clip** — REQ-128). Breaklines, contour sources and boundaries are referenced
   by **stable entity id** (REQ-076), never by array index. Triangulation is **constrained**: no
-  triangle edge crosses a breakline. Boundaries apply in definition order — an outer boundary clips
-  the surface to itself, a hide boundary removes surface inside it, and a show boundary restores
-  surface inside a hide. Standard breaklines only; proximity, wall and non-destructive breaklines are
-  out of scope.
+  triangle edge crosses a breakline or contour source. Boundaries apply in definition order — an
+  outer boundary clips the surface to itself, a hide boundary removes surface inside it, a show
+  boundary restores surface inside a hide, and a **clip** boundary excludes input points outside it
+  before triangulation (REQ-128). Standard breaklines only; proximity, wall and non-destructive
+  breaklines are out of scope. A named surface with too little data to triangulate is still a
+  surface (REQ-124): the definition exists, `tin` is null, and the next source edit rebuilds.
 
   The surface is **dynamic**: when a definition source changes — a consumed point moves or is
   deleted, a breakline or boundary polyline is edited, a group's membership changes — the surface is
@@ -2157,11 +2160,12 @@ requirements is a planning failure, not a sign of rigor.
     without it, with no dangling id;
   - crossing breaklines at different elevations produce a named diagnostic and a stated outcome;
   - a definition of fewer than three non-collinear points fails with a specific message and leaves no
-    partial surface;
+    partial TIN — the named surface object remains (REQ-124);
   - the definition round-trips `.gs`, ids intact.
 - Owner-layer: Domain (definition, rebuild), util (triangulation), Commands (designate/edit)
 - Status: accepted (2026-08-12)
-- Revisions: 2026-08-12 — initial.
+- Revisions: 2026-08-12 — initial. 2026-08-27 — D-2026-08-27-a: contour sources (REQ-129), clip
+  (REQ-128), and empty named surfaces (REQ-124).
 
 ### REQ-070 — Surface styles
 - Purpose: control what a surface looks like without changing what it is
@@ -2215,10 +2219,11 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: must
 - Type: functional
 - Statement: A surface style carries an editable **range table** — band count, breakpoints, and a
-  colour per band — driving per-triangle colouring by **elevation** or by **slope**, with an on-screen
-  **legend** whose ranges are the table's. Separately, **slope arrows** draw per triangle in the
-  downhill direction of that triangle's plane, coloured by grade. Banding, arrows and the plain style
-  display are independent toggles.
+  colour per band — driving per-triangle colouring by **elevation**, by **slope**, or by **direction /
+  aspect** (REQ-130), with an on-screen **legend** whose ranges are the table's. Separately, **slope
+  arrows** draw per triangle in the downhill direction of that triangle's plane, coloured by grade.
+  Banding, arrows and the plain style display are independent toggles. One table, one mode at a time
+  — a triangle has one colour.
 - Acceptance:
   - a triangle of known elevation and of known slope each take the colour their band prescribes,
     including at an exact breakpoint, where the band a value falls into is defined and tested rather
@@ -2231,7 +2236,8 @@ requirements is a planning failure, not a sign of rigor.
   - turning banding off restores the style's plain display unchanged.
 - Owner-layer: Domain (band assignment), Renderer (draw), UI (table + legend)
 - Status: accepted (2026-08-12)
-- Revisions: 2026-08-12 — initial.
+- Revisions: 2026-08-12 — initial. 2026-08-27 — D-2026-08-27-a: direction/aspect is REQ-130's third
+  mode; this requirement's elevation/slope/arrow conditions are unchanged.
 
 ### REQ-073 — Surface-to-surface volumes, and a live Volume Dashboard
 - Purpose: earthwork — the number a grading design is judged by, kept current as either surface
@@ -2242,6 +2248,8 @@ requirements is a planning failure, not a sign of rigor.
   the two have **in common**, together with that common area, and offers a cut/fill colour map over
   the same region. The comparison region is stated explicitly in the result, because a volume quoted
   without the area it covers is not a result.
+
+  **Bounded volumes** (REQ-131) use the same comparison, limited to a closed clip region.
 
   A **Volume Dashboard** panel (2026-08-23 amendment) picks two surfaces from the drawing and holds
   the report on screen: cut, fill, net, the common area, and the cut/fill map toggle, all in one
@@ -2305,7 +2313,8 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: should
 - Type: functional
 - Statement: A panel lists the drawing's surfaces and supports create, rename, delete, **edit the
-  definition** (add, remove and reorder point groups, breaklines and boundaries — REQ-069), assign a
+  definition** (add, remove and reorder point groups, breaklines, contour sources and boundaries —
+  REQ-069), create a surface **with no sources** (REQ-124), assign a
   style (REQ-070), and force a rebuild. For each surface it shows point count, triangle count,
   elevation range, and whether the surface is currently out of date or rebuilding.
 - Acceptance:
@@ -2317,7 +2326,8 @@ requirements is a planning failure, not a sign of rigor.
   - renaming to a name already in use is refused with a specific message.
 - Owner-layer: UI, Commands
 - Status: accepted (2026-08-12)
-- Revisions: 2026-08-12 — initial.
+- Revisions: 2026-08-12 — initial. 2026-08-27 — D-2026-08-27-a: empty create (REQ-124) and contour
+  sources (REQ-129) are reachable from the panel.
 
 ### REQ-076 — Stable entity identity
 - Purpose: let one object reference another and survive an erase
@@ -4271,6 +4281,222 @@ requirements is a planning failure, not a sign of rigor.
 - Status: accepted (2026-08-26); closes GitHub issue #100
 - Revisions: 2026-08-26 — accepted (D-2026-08-26-e); reported by chetjones003 as issue #100.
 
+### REQ-124 — Empty named TIN surface (GitHub issue #119)
+- Purpose: let the user create the surface object first and add data afterwards, matching Civil 3D
+- Priority: must
+- Type: functional
+- Statement: `SURFACECREATE <name>` with no point groups, and the Surface Manager's New Surface
+  action, create a named drawing-owned surface whose triangulation is **null**. Duplicate names are
+  refused (REQ-075). Adding sources later rebuilds as REQ-069. A create that *names* groups which
+  cannot triangulate still **creates the object** and reports why there is no TIN (REQ-201) — it
+  does not leave a bogus triangle set. Hover, SURFELEV, OSNAP and zoom-extents skip a null TIN.
+- Acceptance:
+  - `SURFACECREATE Empty` adds one surface; `SURFACELIST` reports it as not built; triangle count 0;
+  - creating a surface from groups that resolve to fewer than three non-collinear points still adds
+    the named surface, logs a specific message, and leaves `tin` null;
+  - the empty surface round-trips `.gs` (name, empty definition, no verts/indices);
+  - `SURFELEV` on a drawing that contains only an empty surface reports outside / no elevation, and
+    does not crash.
+- Owner-layer: Domain, Commands, UI, IO
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a).
+
+### REQ-125 — Surface statistics
+- Purpose: the numbers a surveyor reads off a surface without running a volume comparison
+- Priority: should
+- Type: functional
+- Statement: A pure `util/surfacestats` module reports, from a triangulation: point count, triangle
+  count, plan extents (min/max easting and northing), elevation min/max, 2D area (sum of triangle
+  plan areas), 3D area (sum of triangle face areas), and slope min / max / mean (percent grade of
+  each triangle's plane, area-weighted for the mean, excluding degenerates). `SURFACESTATS [<name>]`
+  prints them; omit the name to list every surface. An empty / null TIN reports zeros and says it is
+  not built. Statistics are **not persisted**.
+- Acceptance:
+  - a 100×100 square planar pad at z=10 reports 2D area 10,000 and 3D area 10,000 within REQ-101;
+  - a 100×100 pad at 100% grade (rise=run) reports 3D area 100×100×√2 within REQ-101;
+  - a null TIN reports not-built rather than inventing numbers;
+  - `SURFACESTATS` names a missing surface rather than printing another surface's figures.
+- Owner-layer: util, Commands, UI
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a).
+
+### REQ-126 — Indexed surface elevation queries
+- Purpose: SURFELEV, rollover, OSNAP and volumes must not scan every triangle on a REQ-100 surface
+- Priority: must
+- Type: performance / functional
+- Statement: Elevation at XY uses `TinElevationAtIndexed` through a live-only spatial index cached on
+  `AppCommandState` (ADR-039 (c)). The index is rebuilt when the TIN pointer changes. Indexed and
+  full-scan answers agree, including misses, concave notches, and hide-boundary voids. Large
+  coordinates (state-plane magnitude) stay within REQ-101 of the triangle plane.
+- Acceptance:
+  - for a committed fixture, indexed and scan elevations match within REQ-101 at interior samples
+    and both miss the same exterior / notch / void samples;
+  - a query against a null TIN is a miss;
+  - SURFELEV and REQ-089 rollover use the indexed path (one walk, as today).
+- Owner-layer: util (`tinbuild` / `surfacevolume` index), Commands (cache)
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a).
+
+### REQ-127 — Surface elevation object snap
+- Purpose: pick a point *on the ground* while drawing, not only on triangle vertices
+- Priority: should
+- Type: functional
+- Statement: A new object-snap kind interpolates the covering visible surface's triangle plane at the
+  cursor's plan position and returns XYZ. If several surfaces cover the point, the **topmost in the
+  drawing's surface list** wins (last-created if appended) — stated, not guessed. A miss, a null TIN,
+  or an invisible surface produces no snap. Running OSNAP has an independent toggle, default **on**.
+- Acceptance:
+  - on the REQ-074 test plane, a snap at a known interior XY returns that plane's Z within REQ-101;
+  - a cursor outside every surface produces no surface snap;
+  - with the toggle off, no surface snap is offered.
+- Owner-layer: Viewport (CadSnap), Commands, UI
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a).
+
+### REQ-128 — Data-clip surface boundary
+- Purpose: keep shots *outside* a site from pulling the TIN, which outer-cull after the fact cannot
+- Priority: must
+- Type: functional
+- Statement: `CadBoundaryKind::Clip` / `TinBoundaryKind::Clip`. If a surface has one or more clip
+  rings, an input point is used **only if it lies inside at least one clip** (union). Clip rings are
+  constrained edges. After the build, triangles whose centroids fall outside every clip are culled
+  (same centroid rule as Outer). Hide/show still apply in definition order among themselves. No clip
+  present means "do not filter points". `DESIGNATEBOUNDARY` accepts CLIP. Legacy `.gs` without the
+  kind string still loads as outer/hide/show.
+- Acceptance:
+  - points outside a clip do not appear as TIN vertices; a point inside does;
+  - two clips union: a point inside either is used;
+  - a clip round-trips `.gs` as `"clip"`;
+  - an unclosed polyline is refused as a clip (same as other boundary kinds).
+- Owner-layer: util (tinbuild), Domain, Commands, IO
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a).
+
+### REQ-129 — Contour geometry as a surface data source
+- Purpose: build or densify a surface from existing contour polylines without treating them as
+  ordinary breaklines in the Manager tree
+- Priority: should
+- Type: functional
+- Statement: A surface definition may list **contour sources** by stable entity id (line, polyline,
+  3D polyline, feature line). Each vertex and each segment is a triangulation constraint at the
+  entity's stored Z. They rebuild dynamically like breaklines (REQ-069). Display contours remain
+  style-generated (REQ-070); this is input, not EXTRACT. `DESIGNATECONTOUR` / `UNDESIGNATE … CONTOUR`
+  and a Surface Manager Contours node. Additive `.gs` array, omitted when empty.
+- Acceptance:
+  - a closed 3D polyline at z=100 around a pad forces TIN edges along it at z=100;
+  - deleting the polyline drops it from the definition and rebuilds;
+  - a drawing without the array loads unchanged.
+- Owner-layer: Domain, Commands, UI, IO
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a).
+
+### REQ-130 — Direction / aspect banding
+- Purpose: colour triangles by downhill azimuth — drainage aspect, not just grade
+- Priority: should
+- Type: functional
+- Statement: `SurfaceAnalysisMode::Direction` uses the style's existing band table in **degrees**.
+  Aspect is downhill azimuth: 0 = +Y (northing), increasing toward +X (easting), in [0, 360). A
+  flat or degenerate triangle (REQ-072's flat-grade test) is unbanded, not assigned an arbitrary
+  compass. `.gs` stores mode 3. A pre-REQ-130 file with mode 0/1/2 is unchanged.
+- Acceptance:
+  - a plane that falls due east (+X) bands into the range that contains 90°;
+  - a plane that falls due north (+Y) bands into the range that contains 0°;
+  - a flat triangle is unbanded;
+  - switching mode to None restores the plain style display.
+- Owner-layer: util (surfaceanalysis), Renderer, UI, IO
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a).
+
+### REQ-131 — Bounded volumes
+- Purpose: earthwork inside a site boundary, not the whole overlapping hull
+- Priority: must
+- Type: functional
+- Statement: Volume comparison (REQ-073) may be limited to a closed polyline in plan. Sample cells
+  whose centres fall outside the ring contribute neither volume nor common area. `VOLUMES <base>,
+  <comparison>[, <clip entity>]` and a dashboard clip picker. No new surface type. Analytical check:
+  two planar surfaces 5 ft apart over a 1-acre clip report 21,780 ft³ (806.67 yd³) cut or fill
+  according to which is higher, within a stated relative tolerance of 1%.
+- Acceptance:
+  - the 5 ft × 1 acre fixture matches 21,780 ft³ within 1%;
+  - a clip that misses both surfaces reports zero and says there is no overlap inside the clip;
+  - omitting the clip preserves today's full-overlap behaviour.
+- Owner-layer: util (surfacevolume), Commands, UI
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a). **Phase 2 — not in the first implementation
+  increment.**
+
+### REQ-132 — Watershed analysis
+- Purpose: name the drainage basins on a TIN
+- Priority: must
+- Type: functional
+- Statement: A pure `util/watershed` module, given a TIN, produces drain targets (boundary, internal
+  depression, or flat) and a per-triangle basin id, plus each basin's plan area. Display is
+  style-generated cache geometry, not entities, not stored in `.gs`. `WATERSHED <surface>` reports
+  counts; the Surface Manager can inspect a basin. Algorithm and termination rules (flats, pits)
+  are specified in the task that implements this REQ, with synthetic fixtures: single basin, two
+  basins, ridge, saddle, boundary drain, internal depression.
+- Acceptance:
+  - the synthetic single-basin fixture yields one basin draining to the designed target;
+  - the two-basin / ridge fixture yields two basins that do not cross the ridge;
+  - an internal depression is classified as such, not silently merged into a neighbour;
+  - a null TIN is refused with a specific message.
+- Owner-layer: util, Commands, Renderer, UI
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a). **Phase 3.**
+
+### REQ-133 — Water-drop path
+- Purpose: trace where water goes from a picked point
+- Priority: must
+- Type: functional
+- Statement: `WATERDROP` picks a plan position on a surface, finds elevation (REQ-074/126), and
+  traces downhill across triangle planes until a REQ-132 drain target. The path is previewed as 3D
+  geometry and may be baked to an unlinked 3D polyline (EXTRACT pattern). A start outside the
+  surface is refused (no extrapolation).
+- Acceptance:
+  - on a constant-grade plane the path is a straight downhill line to the designed boundary;
+  - a start in a designed pit terminates at that pit;
+  - a start outside the TIN reports outside and draws nothing.
+- Owner-layer: util, Commands, UI
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a). **Phase 3; depends on REQ-132.**
+
+### REQ-134 — Catchment from an outlet
+- Purpose: the contributing area upstream of a structure
+- Priority: should
+- Type: functional
+- Statement: `CATCHMENT` picks an outlet on a surface and reports the upstream triangle set's plan
+  area, elevation min/max, and a display boundary (cache geometry, optional EXTRACT bake). Uses the
+  REQ-132 drain graph in reverse. An outlet outside the TIN is refused.
+- Acceptance:
+  - an outlet at a designed basin pour-point reports that basin's area within REQ-101 of the
+    synthetic fixture;
+  - an outlet on a ridge that drains both ways reports the union of contributing triangles, or a
+    stated split rule documented in the implementing task — not a silent half;
+  - a null TIN / miss is a named refusal.
+- Owner-layer: util, Commands, UI
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a). **Phase 3; depends on REQ-132.**
+
+### REQ-135 — Surfaces in paper-space viewports and PDF plot
+- Purpose: a surface that exists in the model must appear where the user looks at the model
+- Priority: must
+- Type: functional
+- Statement: Display-geometry batches already built for model space (contours, border, triangles,
+  bands, arrows) are drawn through paper-space viewports subject to the same layer / VP-freeze /
+  non-plottable rules as other model entities, and are stroked by `PdfPlot` on plot. No second
+  contour engine. A surface on a non-plottable layer is omitted from the PDF and the omission is
+  not silent if the export log already names excluded kinds — plot skip follows layer plottable
+  the way other entities do (REQ-068).
+- Acceptance:
+  - a floating viewport whose layer freeze does not hide the surface shows its contours (manual
+    GUI; paper overlay path);
+  - PLOT of a layout that sees the surface includes contour/border strokes in the PDF;
+  - a surface on a non-plottable layer does not appear in the PDF.
+- Owner-layer: UI (viewport overlay), IO (PdfPlot), Renderer
+- Status: accepted (2026-08-27)
+- Revisions: 2026-08-27 — initial (D-2026-08-27-a). Closes the TASK-085 DEBT-1 / roadmap "Surface
+  plotting" gap.
+
 ---
 
 ## Performance requirements
@@ -4725,6 +4951,18 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-121 | UI/Commands/Viewport | done (GitHub issue #91, D-2026-08-26-a + D-2026-08-26-d, TASK-115 + TASK-118). Mechanism: `ViewportIsObjectSelectionStep`, derived from `ViewportClickRouteFor`'s `default:`-less switch, so a command cannot be added and silently omitted — `ViewportPickPolicyTests [req121]` (4 cases: ALIGN's unsnapped corners — red before the fix; every selection step recognised; each exclusion asserted; DELETE/JOIN's route, with ZOOM and STRETCH left on the box route). Review follow-ups closed by TASK-118, re-derived while rebasing onto `beta` after issue #103 landed underneath it: rule (3)'s shared prompt was factually wrong for DELETE/JOIN — fixed by giving them D-2026-08-25-l's accumulate-until-Enter shape, covered by `headless.req121-delete-join-accumulate` (proven red on `beta`: the closing box erased, LINES 3 -> 2). Rule (1)'s reported second seam (the snap-OVERRIDE menu bypassing the gate) had its underlying mechanism replaced by #103 between the original review and this rebase — the "cursor jumps mid-selection" symptom no longer reproduces, because the override's consumption already sits behind the same `!ViewportIsObjectSelectionStep` gate the automatic snap uses; what remained was narrower (the menu could still be *opened*, arming a persistent lock off a selection-step pixel that then silently affected the next ordinary snap), and that is what TASK-118's rebase actually gates. The cursor/OSNAP/prompt rules themselves stay GUI-only — there is no headless equivalent for screen-space picking or for a drawn cursor — and both rounds were verified A/B against a control rather than by absence. Paper space is a STATED scope boundary, not coverage: its modify commands are pick-first, so no selection step exists there (GitHub issue #106 — closed by REQ-307, which gives MOVE/COPY/DELETE a real selection step for the one case that needed it, starting with nothing pre-selected). 634/634 ctest green post-rebase. One `CadSnapTests` case (issue #103, unrelated to this task) carried an em-dash in its Catch2 name that CTest's Windows discovery mangles into a filter matching nothing, reporting a false failure in CI on both this branch and unmodified `beta` (`425afa7`'s own CI run) — fixed here by renaming the test to plain ASCII rather than worked around, since it was blocking CI on every branch built from `beta`, not just this one | accepted |
 | REQ-122 | Commands | done (GitHub issue #88, D-2026-08-26-c, TASK-117) — **automated**, which REQ-120 could not be. The framing arithmetic was hoisted into `src/commands/ZoomFraming.hpp` (pure + header-only, the `OrthoConstrain.hpp`/`ViewportPickPolicy.hpp` precedent) so `tests/ZoomFramingTests.cpp` can reach it without a framebuffer: 11 Catch2 cases / 231 assertions covering centring, fit-at-any-aspect, the 8% margin, aspect binding, the one-unit floor on degenerate extents, invariance above the floor, refusal on non-finite input, finiteness across spans 1e-9..1e12, corner order, and null out-params. 3 of the 11 proven red against the old constants before the fix. TASK-113's DEBT-1 is unchanged and still open — `ProcessPendingViewportZoom` itself remains unreachable from the harness — but every guarantee #88 asks for now lives in tested code. The state-dependent halves (empty drawing, live parity with the gesture, middle-drag pan) verified in the GUI, measured off the status-bar readout rather than eyeballed: typed ZOOMEXTENTS and the middle double-click produce identical world coordinates to 4 dp at two screen points. 622/622 ctest green | accepted |
 | REQ-123 | Commands/UI | done (GitHub issue #100, D-2026-08-26-e, TASK-119) — **`headless.req123-viewport-zoom-extents`, the first zoom behaviour ever covered by a transcript.** TASK-113's DEBT-1 blocks the others on `ProcessPendingViewportZoom`'s `fbW <= 0` guard; this case needs no framebuffer (its aspect is the viewport's rect in paper inches) so it is handled ahead of that guard. 43 steps: the framing after ZE with hand-computed scales (13.5870 for an 8x4in viewport, 27.1739 for 4x4in — same drawing, different rect, different answer), each viewport independent of the other's zoom, and a layer frozen in the viewport excluded from the extents then restored when thawed. Proven red on `beta`: `expected centre 50, 10 scale 13.587; got 0, 0 scale 50` — the viewport's framing untouched at its creation defaults. Four new driver verbs (VIEWPORT / VPSELECT / CLAYER / VPFREEZE) and `EXPECT VPFRAME`, all REQ-203 gaps of the LAYOUT/CLIPCOPY shape. GUI pass confirmed the numbers against the live status bar (`VP 1" = 40.4'` vs 40.36 computed), the sheet unmoved, REQ-120's gesture working in a viewport for the first time, and middle-drag pan still confined to it. 632/633 ctest (the one failure is `beta`'s own — an em dash in a `CadSnapTests` TEST_CASE name breaks ctest's name round-trip; unrelated and pre-existing) | accepted |
+| REQ-124 | Domain/Commands/UI/IO | done (TASK-125) — `headless.req124-empty-surface`; SURFACELIST not-built; SURFELEV outside; SURFACESTATS not-built | accepted |
+| REQ-125 | util/Commands | done (TASK-125) — `SurfaceStatsTests`; `SURFACESTATS` / `sfstats` | accepted |
+| REQ-126 | util/Commands | done (TASK-125) — live `surfaceQueryCache` on `AppCommandState`; indexed SURFELEV path | accepted |
+| REQ-127 | Viewport/Commands | done (TASK-125) — `CadSnapTests [req127]`; OSNAP toggle default on | accepted |
+| REQ-128 | util/Domain/IO | done (TASK-125) — `TinConstraintTests [req128]`; DESIGNATEBOUNDARY CLIP; `.gs` `"clip"` | accepted |
+| REQ-129 | Domain/Commands/IO | done (TASK-125) — `DESIGNATECONTOUR` / `dcon`; `contourSources` in `.gs` | accepted |
+| REQ-130 | util/Renderer/UI/IO | done (TASK-125) — `SurfaceAnalysisTests [req130]`; SURFSTYLE ANALYSIS direction | accepted |
+| REQ-131 | util/Commands | planned — Phase 2; 5 ft × 1 acre = 21,780 ft³ within 1% | accepted |
+| REQ-132 | util/Commands | planned — Phase 3; synthetic basin fixtures | accepted |
+| REQ-133 | util/Commands | planned — Phase 3; water-drop on plane and pit | accepted |
+| REQ-134 | util/Commands | planned — Phase 3; catchment area of designed basin | accepted |
+| REQ-135 | UI/IO | done (TASK-125) — paper overlay + `PdfPlot` stroke of display batches; non-plottable omitted | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |

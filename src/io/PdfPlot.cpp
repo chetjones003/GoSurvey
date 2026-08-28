@@ -84,7 +84,7 @@ std::string ResolveTtfPath(const std::string& family) {
 
 }  // namespace
 
-bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutIndices, const char* pathUtf8,
+bool PlotLayoutsToPdf(AppCommandState& st, const std::vector<int>& layoutIndices, const char* pathUtf8,
                       std::vector<std::string>& log) {
   if (!pathUtf8 || !pathUtf8[0]) {
     log.push_back("PLOT — no output path.");
@@ -94,6 +94,8 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
     log.push_back("PLOT — no layouts selected.");
     return false;
   }
+
+  RefreshSurfaceDisplayGeometry(st);
 
   // Layer → plottable lookup (excludes off / frozen / non-plottable layers). Unknown layer → plottable.
   std::unordered_map<std::string, bool> layerPlot;
@@ -304,6 +306,31 @@ bool PlotLayoutsToPdf(const AppCommandState& st, const std::vector<int>& layoutI
         float cx2 = pcx, cy2 = pcy - hc, dx2 = pcx, dy2 = pcy + hc;
         if (ClipSeg(vx0, vy0, vx1, vy1, cx2, cy2, dx2, dy2))
           addSeg(cx2, cy2, dx2, dy2);
+      }
+      // Surfaces (REQ-135): stroke the same display-geometry batches as the viewport.
+      for (size_t si = 0; si < st.cadSurfaces.size(); ++si) {
+        if (!SurfaceVisible(st, si) || si >= st.cadSurfaceAttrs.size())
+          continue;
+        const EntityAttributes& attr = st.cadSurfaceAttrs[si];
+        if (!plottable(attr.layer) || IsLayerFrozenInViewport(vp, attr.layer))
+          continue;
+        const std::uint64_t id = attr.id;
+        auto it = std::find_if(st.surfaceDisplayCache.begin(), st.surfaceDisplayCache.end(),
+                               [&](const AppCommandState::SurfaceDisplayCacheEntry& e) { return e.surfaceId == id; });
+        if (it == st.surfaceDisplayCache.end())
+          continue;
+        curColor = resolveRgb(attr.layer, attr.color);
+        auto emitSurf = [&](const std::vector<float>& verts) {
+          for (size_t i = 0; i + 5 < verts.size(); i += 6)
+            emitModelSeg(static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY,
+                         static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY);
+        };
+        emitSurf(it->triangleEdges);
+        emitSurf(it->minorContours);
+        emitSurf(it->majorContours);
+        emitSurf(it->borderEdges);
+        for (const auto& ab : it->arrowLineBuffers)
+          emitSurf(ab);
       }
       CadDimStrokeParams dsp;
       dsp.modelUnitsPerPlottedInch = st.modelUnitsPerPlottedInch;

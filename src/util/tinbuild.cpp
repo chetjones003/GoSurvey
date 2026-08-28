@@ -63,13 +63,9 @@ std::vector<TinCrossingIssue> TinFindCrossingConflicts(const std::vector<TinCons
   return issues;
 }
 
-namespace {
-
-constexpr std::uint32_t kNone = 0xFFFFFFFFu;
-
-bool PointInPolygon(double px, double py, const std::vector<std::pair<double, double>>& ring) {
-  // Standard ray-casting test: count edges crossing the horizontal ray to the right of (px,py).
-  // Winding-independent, which is why TinBoundaryLoop documents that ring order does not matter.
+bool TinPointInPolygon(double px, double py, const std::vector<std::pair<double, double>>& ring) {
+  if (ring.size() < 3)
+    return false;
   bool inside = false;
   const size_t n = ring.size();
   for (size_t i = 0, j = n - 1; i < n; j = i++) {
@@ -80,6 +76,10 @@ bool PointInPolygon(double px, double py, const std::vector<std::pair<double, do
   }
   return inside;
 }
+
+namespace {
+
+constexpr std::uint32_t kNone = 0xFFFFFFFFu;
 
 /// A triangle plus its edge adjacency.
 ///
@@ -843,6 +843,8 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
   // Both start present, matching BuildTin's own convex-hull-only surface: "no boundary" is "fully
   // present".
   std::vector<char> insideOuter(triCount, 1);
+  std::vector<char> insideAnyClip(triCount, 0);
+  int clipLoopCount = 0;
   std::vector<char> shown(triCount, 1);
 
   // Hide/Show are applied strictly in \p loops order, each mutating the CURRENT void state — never
@@ -852,6 +854,8 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
   for (const TinBoundaryLoop& loop : loops) {
     if (loop.ring.size() < 3)
       continue;  // degenerate ring: not enough vertices to enclose anything, skip rather than guess
+    if (loop.kind == TinBoundaryKind::Clip)
+      ++clipLoopCount;
     for (size_t t = 0; t < triCount; ++t) {
       const std::uint32_t a = indices[t * 3], b = indices[t * 3 + 1], c = indices[t * 3 + 2];
       if (a >= vertexCount || b >= vertexCount || c >= vertexCount)
@@ -859,11 +863,15 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
       const double cx = (static_cast<double>(vertsXyz[a * 3]) + vertsXyz[b * 3] + vertsXyz[c * 3]) / 3.0;
       const double cy =
           (static_cast<double>(vertsXyz[a * 3 + 1]) + vertsXyz[b * 3 + 1] + vertsXyz[c * 3 + 1]) / 3.0;
-      const bool in = PointInPolygon(cx, cy, loop.ring);
+      const bool in = TinPointInPolygon(cx, cy, loop.ring);
       switch (loop.kind) {
       case TinBoundaryKind::Outer:
         if (!in)
           insideOuter[t] = 0;  // only ever clips down; multiple Outer loops intersect
+        break;
+      case TinBoundaryKind::Clip:
+        if (in)
+          insideAnyClip[t] = 1;
         break;
       case TinBoundaryKind::Hide:
         if (in)
@@ -880,7 +888,8 @@ void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<
   std::vector<std::uint32_t> kept;
   kept.reserve(indices.size());
   for (size_t t = 0; t < triCount; ++t) {
-    if (insideOuter[t] && shown[t]) {
+    const bool clipOk = clipLoopCount == 0 || insideAnyClip[t];
+    if (insideOuter[t] && clipOk && shown[t]) {
       kept.push_back(indices[t * 3]);
       kept.push_back(indices[t * 3 + 1]);
       kept.push_back(indices[t * 3 + 2]);

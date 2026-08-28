@@ -473,10 +473,10 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
     if (ImGui::BeginTabItem("Analysis")) {
       ImGui::Spacing();
       ImGui::SeparatorText("Banding");
-      static const char* kModeLabels[] = {"None", "Elevation", "Slope"};
+      static const char* kModeLabels[] = {"None", "Elevation", "Slope", "Direction"};
       int modeIdx = static_cast<int>(s.analysisMode);
       ImGui::SetNextItemWidth(180.f);
-      if (ImGui::Combo("Type", &modeIdx, kModeLabels, 3)) {
+      if (ImGui::Combo("Type", &modeIdx, kModeLabels, 4)) {
         s.analysisMode = static_cast<SurfaceAnalysisMode>(modeIdx);
         changed = true;
       }
@@ -486,7 +486,9 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
       if (s.analysisMode != SurfaceAnalysisMode::None) {
         ImGui::Spacing();
         const char* boundLabel =
-            s.analysisMode == SurfaceAnalysisMode::Elevation ? "Upper bound (ft)" : "Upper bound (%)";
+            s.analysisMode == SurfaceAnalysisMode::Elevation ? "Upper bound (ft)"
+            : s.analysisMode == SurfaceAnalysisMode::Direction ? "Upper bound (deg)"
+                                                               : "Upper bound (%)";
         changed |= BandTableEditor("##bandtable", boundLabel, &s.bands);
         ImGui::Spacing();
         if (s.bands.empty())

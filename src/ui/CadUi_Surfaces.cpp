@@ -345,6 +345,12 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
   }
   ImGui::EndChild();
 
+  if (ImGui::Button("New surface", ImVec2(-1, 0))) {
+    PushUndoSnapshot(cmd, "Create surface");
+    const int ni = CreateSurfaceFromPointGroups(cmd, NextSurfaceName(cmd), {}, *log);
+    if (ni >= 0)
+      selIdx = ni;
+  }
   ImGui::BeginDisabled(cmd.pointGroups.empty());
   if (ImGui::Button("New from group...", ImVec2(-1, 0)))
     ImGui::OpenPopup("##newsurface");
@@ -388,6 +394,17 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
     else
       ImGui::Text("%d point(s) selected.", total);
 
+    ImGui::BeginDisabled(newName.empty());
+    if (ImGui::Button("Create empty")) {
+      PushUndoSnapshot(cmd, "Create surface");
+      const int ni = CreateSurfaceFromPointGroups(cmd, newName, {}, *log);
+      if (ni >= 0)
+        selIdx = ni;
+      picked.clear();
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::EndDisabled();
+    ImGui::SameLine();
     ImGui::BeginDisabled(total < 3 || newName.empty());
     if (ImGui::Button("Create")) {
       std::vector<std::string> groups;
@@ -571,9 +588,9 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
     ImGui::Spacing();
     ImGui::TextUnformatted("Type:");
     ImGui::SetNextItemWidth(360.f);
-    // The three the engine implements. Data Clip is not among them and is not listed.
-    const char* bdTypes[] = {"Outer", "Hide", "Show"};
-    ImGui::Combo("##bdtype", &dlgBoundaryKind, bdTypes, 3);
+    // Outer, Hide, Show, Clip (REQ-128).
+    const char* bdTypes[] = {"Outer", "Hide", "Show", "Clip"};
+    ImGui::Combo("##bdtype", &dlgBoundaryKind, bdTypes, 4);
     ImGui::Spacing();
     ImGui::TextDisabled("OK, then pick a CLOSED polyline in the drawing.");
     ImGui::Spacing();
@@ -581,6 +598,7 @@ void DrawSurfaceManagerWindow(AppCommandState& cmd, std::vector<std::string>* lo
       if (dlgSurfaceValid) {
         const CadBoundaryKind kind = dlgBoundaryKind == 1   ? CadBoundaryKind::Hide
                                      : dlgBoundaryKind == 2 ? CadBoundaryKind::Show
+                                     : dlgBoundaryKind == 3 ? CadBoundaryKind::Clip
                                                             : CadBoundaryKind::Outer;
         cmd.designateBoundaryName = dlgText;
         StartDesignateBoundaryCommand(cmd, cmd.cadSurfaces[static_cast<size_t>(dlgSurface)].name, kind, *log);

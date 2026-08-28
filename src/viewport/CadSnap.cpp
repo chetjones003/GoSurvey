@@ -634,6 +634,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   const bool wantApparentIntersection = want(Kind::ApparentIntersection, cmd.objectSnapApparentIntersection);
   const bool wantSurveyPoint = want(Kind::SurveyCenter, cmd.objectSnapSurveyPoint);
   const bool wantPerpendicular = want(Kind::Perpendicular, cmd.objectSnapPerpendicular);
+  const bool wantSurface = want(Kind::Surface, cmd.objectSnapSurface);
 
   float refPx = 0.f;
   float refPy = 0.f;
@@ -851,6 +852,13 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       const float p2 = MinDistSqToSurveyMarker(wx, wy, sp.easting, sp.northing, arm);
       ConsiderSnap(&acc, wx, wy, sp.easting, sp.northing, Kind::SurveyCenter, p2, tolWorld, sp.elevation);  // elevation IS the point's Z (REQ-057)
     }
+  }
+
+  if (wantSurface) {
+    float z = 0.f;
+    if (SurfaceSnapElevation(cmd, wx, wy, &z))
+      Consider(&acc, static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(wx),
+               static_cast<float>(wy), Kind::Surface, tolWorld, z);
   }
 
   // --- PDF underlay snap points ---
@@ -1326,6 +1334,12 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
   }
   case Kind::Grip:
     break; // grip snap points are per-selection, not gathered globally
+  case Kind::Surface: {
+    float z = 0.f;
+    if (SurfaceSnapElevation(cmd, static_cast<double>(sortWorldX), static_cast<double>(sortWorldY), &z))
+      PushSnapPickerEntry(sortWorldX, sortWorldY, Kind::Surface, sortWorldX, sortWorldY, out, z);
+    break;
+  }
   }
   SortDedupeSnapPicker(out);
 }

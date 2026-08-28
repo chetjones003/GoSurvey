@@ -118,6 +118,7 @@ enum class TinBoundaryKind : std::uint8_t {
   Outer,  ///< Clips the surface to inside this ring.
   Hide,   ///< Removes surface inside this ring, leaving a void.
   Show,   ///< Restores surface inside this ring — meaningful inside a Hide.
+  Clip,   ///< REQ-128: same triangle cull as Outer, plus input-point filter before BuildTin.
 };
 
 /// A boundary ring: an ordered, implicitly-closed polygon in plan (X/Y). Vertex order does not need
@@ -139,6 +140,9 @@ struct TinBoundaryLoop {
 /// unreferenced, exactly as convex-hull exclusion already works in \ref BuildTin).
 void TinCullByBoundaries(std::vector<std::uint32_t>& indices, const std::vector<float>& vertsXyz,
                          const std::vector<TinBoundaryLoop>& loops);
+
+/// Plan containment by ray casting (winding-independent). Empty ring is outside.
+[[nodiscard]] bool TinPointInPolygon(double px, double py, const std::vector<std::pair<double, double>>& ring);
 
 /// Interpolated surface elevation at plan position (\p x, \p y) — REQ-074's spot elevation.
 ///

@@ -759,7 +759,8 @@ static void DrawSurfaceAnalysisLegend(const AppCommandState& cmd, ImVec2 imgPos,
     const EntityAttributes& surfAttr = cmd.cadSurfaceAttrs[si];
 
     const bool byElevation = resolved.analysisMode == SurfaceAnalysisMode::Elevation;
-    const char* unit = byElevation ? "ft" : "%";
+    const bool byDirection = resolved.analysisMode == SurfaceAnalysisMode::Direction;
+    const char* unit = byElevation ? "ft" : (byDirection ? "deg" : "%");
     // Title row + one row per band + one overflow row (only when there is a table to overflow).
     const size_t dataRows = resolved.bands.size() + (resolved.bands.empty() ? 0 : 1);
     const float boxH = (1.f + static_cast<float>(dataRows)) * kRowH + kPad * 2.f;
@@ -771,7 +772,7 @@ static void DrawSurfaceAnalysisLegend(const AppCommandState& cmd, ImVec2 imgPos,
     dl->AddRect(boxMin, boxMax, IM_COL32(95, 95, 95, 255), 4.f, 0, 1.f);
 
     float ty = boxMin.y + kPad;
-    const std::string title = surf.name + " - " + (byElevation ? "Elevation" : "Slope");
+    const std::string title = surf.name + " - " + (byElevation ? "Elevation" : (byDirection ? "Direction" : "Slope"));
     dl->AddText(ImVec2(boxMin.x + kPad, ty), IM_COL32(230, 230, 230, 255), title.c_str());
     ty += kRowH;
 
@@ -6876,6 +6877,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
         ImGui::Checkbox("Geometric center (closed polyline)", &cmd.objectSnapGeometricCenter);
         ImGui::Checkbox("Intersection", &cmd.objectSnapIntersection);
         ImGui::Checkbox("Apparent intersection", &cmd.objectSnapApparentIntersection);
+        ImGui::Checkbox("Surface elevation", &cmd.objectSnapSurface);
         ImGui::EndPopup();
       }
       ImGui::SameLine(0, sp);
@@ -8860,6 +8862,8 @@ static const char* SnapKindLabelForUi(CadSnap::Kind k) {
     return "Intersection";
   case CadSnap::Kind::ApparentIntersection:
     return "Apparent int";
+  case CadSnap::Kind::Surface:
+    return "Surface";
   case CadSnap::Kind::Grip:
     return "Grip";
   }
@@ -11559,6 +11563,58 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
         sdl->AddLine(ImVec2(c.x - crossPx, c.y), ImVec2(c.x + crossPx, c.y), spCol, 1.0f);
         sdl->AddLine(ImVec2(c.x, c.y - crossPx), ImVec2(c.x, c.y + crossPx), spCol, 1.0f);
       }
+      // Surfaces through this viewport (REQ-135): same display batches as model GL, clipped here.
+      {
+        auto emitSurfLines = [&](const std::vector<float>& verts, ImU32 col, float wid) {
+          for (size_t i = 0; i + 5 < verts.size(); i += 6) {
+            const ImVec2 s0 = m2s(static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY);
+            const ImVec2 s1 = m2s(static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY);
+            sdl->AddLine(s0, s1, col, wid);
+          }
+        };
+        auto emitSurfTris = [&](const std::vector<float>& verts, ImU32 col) {
+          for (size_t i = 0; i + 8 < verts.size(); i += 9) {
+            const ImVec2 a = m2s(static_cast<double>(verts[i]) + oX, static_cast<double>(verts[i + 1]) + oY);
+            const ImVec2 b = m2s(static_cast<double>(verts[i + 3]) + oX, static_cast<double>(verts[i + 4]) + oY);
+            const ImVec2 c = m2s(static_cast<double>(verts[i + 6]) + oX, static_cast<double>(verts[i + 7]) + oY);
+            sdl->AddTriangleFilled(a, b, c, col);
+          }
+        };
+        for (size_t si = 0; si < cmd.cadSurfaces.size(); ++si) {
+          if (!SurfaceVisible(cmd, si))
+            continue;
+          if (si >= cmd.cadSurfaceAttrs.size())
+            continue;
+          const EntityAttributes& attr = cmd.cadSurfaceAttrs[si];
+          if (IsLayerFrozenInViewport(vp, attr.layer))
+            continue;
+          const std::uint64_t id = attr.id;
+          auto it = std::find_if(cmd.surfaceDisplayCache.begin(), cmd.surfaceDisplayCache.end(),
+                                 [&](const AppCommandState::SurfaceDisplayCacheEntry& e) { return e.surfaceId == id; });
+          if (it == cmd.surfaceDisplayCache.end())
+            continue;
+          for (size_t bi = 0; bi < it->bandTriangleBuffers.size(); ++bi) {
+            const std::vector<float>& buf = it->bandTriangleBuffers[bi];
+            if (buf.empty())
+              continue;
+            const std::string& colorStr =
+                bi < it->style.bands.size() ? it->style.bands[bi].color : it->style.triangles.color;
+            float rgba[4] = {0.1f, 0.1f, 0.12f, 1.f};
+            ResolveSurfaceBandLegendRgba(cmd, attr, colorStr, rgba);
+            AdaptWhiteBlackToBackground(&rgba[0], &rgba[1], &rgba[2], true);
+            const ImU32 fc = IM_COL32(static_cast<int>(rgba[0] * 255.f), static_cast<int>(rgba[1] * 255.f),
+                                      static_cast<int>(rgba[2] * 255.f), 180);
+            emitSurfTris(buf, fc);
+          }
+          const ImU32 sc = vpBaseCol(attr.layer, attr.color);
+          emitSurfLines(it->triangleEdges, sc, 1.0f);
+          emitSurfLines(it->minorContours, sc, 1.0f);
+          emitSurfLines(it->majorContours, sc, 1.5f);
+          emitSurfLines(it->borderEdges, sc, 1.5f);
+          for (const auto& ab : it->arrowLineBuffers)
+            emitSurfLines(ab, sc, 1.0f);
+        }
+      }
       // Model TEXT / MTEXT through this viewport (issue #115): same m2s + clip as linework.
       {
         ImFont* vpFont = ImGui::GetFont();
@@ -13949,6 +14005,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       armOverride(CadSnap::Kind::Intersection);
     if (ImGui::Selectable("Apparent intersection"))
       armOverride(CadSnap::Kind::ApparentIntersection);
+    if (ImGui::Selectable("Surface"))
+      armOverride(CadSnap::Kind::Surface);
     ImGui::EndPopup();
   }
 
