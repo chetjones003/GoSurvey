@@ -112,6 +112,8 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
   case K::WaterDrop:
   case K::Catchment:
   case K::SwapTinEdge:
+  case K::AddTinPoint:
+  case K::DelTinPoint:
     return R::SnappedPointPick;
 
   // --- Entity-pick commands: raw cursor, hit-tested by PickClosestCadEntity. ---

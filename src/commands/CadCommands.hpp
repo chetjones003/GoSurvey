@@ -1195,6 +1195,10 @@ struct AppCommandState {
     Catchment,
     /// REQ-139: one pick swaps an interior TIN edge on a named surface.
     SwapTinEdge,
+    /// REQ-144: one pick adds a definition vertex on a named TIN (Z = work plane).
+    AddTinPoint,
+    /// REQ-144: one pick deletes the nearest definition point on a named TIN.
+    DelTinPoint,
     /// REQ-069: one pick designates a Line/Polyline as a breakline on a named surface.
     DesignateBreakline,
     /// REQ-069: one pick designates a closed Polyline as a boundary ring (outer/hide/show) on a named surface.
@@ -1273,6 +1277,8 @@ struct AppCommandState {
     case Kind::WaterDrop:          return "WATERDROP";
     case Kind::Catchment:          return "CATCHMENT";
     case Kind::SwapTinEdge:        return "SURFSWAPEDGE";
+    case Kind::AddTinPoint:        return "SURFACEADDPOINT";
+    case Kind::DelTinPoint:        return "SURFACEDELPOINT";
     case Kind::DesignateBreakline: return "DESIGNATEBREAKLINE";
     case Kind::DesignateBoundary:  return "DESIGNATEBOUNDARY";
     default:                  return "";
@@ -2093,6 +2099,8 @@ struct AppCommandState {
   std::string waterDropSurfaceName;
   std::string catchmentSurfaceName;
   std::string swapEdgeSurfaceName;
+  std::string addPointSurfaceName;
+  std::string delPointSurfaceName;
   std::vector<float> lastWaterDropPathXyz;
   std::vector<float> lastCatchmentPathXyz;
   /// GL_LINES preview rebuilt each display pass from the last* paths. Not tied to TIN identity, so
@@ -3637,6 +3645,8 @@ void StartSurfaceElevGradeCommand(AppCommandState& st, std::vector<std::string>&
 void StartWaterDropCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
 void StartCatchmentCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
 void StartSurfSwapEdgeCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartSurfAddPointCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
+void StartSurfDelPointCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log);
 
 /// REQ-069: designate one picked Line/Polyline as a breakline on the named surface, appended to its
 /// definition by stable entity id. Refuses to start when \p surfaceName does not name an existing

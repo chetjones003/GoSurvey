@@ -1512,7 +1512,6 @@ enum class RibbonIconKind : std::uint8_t {
   SurfLegend,
   SurfPropsHand,
   SurfInquiry,
-  SurfObjectViewer,
   SurfIsolate,
   SurfDoc,
   SurfAddData,
@@ -2272,12 +2271,6 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     dl->AddLine(ImVec2(c.x + w * 0.08f, c.y + h * 0.12f), ImVec2(mx.x - w * 0.14f, mx.y - h * 0.14f), col, t * 1.4f);
     break;
   }
-  case RibbonIconKind::SurfObjectViewer: {
-    dl->AddCircleFilled(ImVec2(c.x - w * 0.12f, c.y - h * 0.08f), std::min(w, h) * 0.18f, acc, 16);
-    dl->AddRectFilled(ImVec2(c.x, c.y), ImVec2(mx.x - w * 0.16f, mx.y - h * 0.16f), IM_COL32(220, 220, 220, 220));
-    dl->AddRect(ImVec2(c.x, c.y), ImVec2(mx.x - w * 0.16f, mx.y - h * 0.16f), col, 0.f, 0, t);
-    break;
-  }
   case RibbonIconKind::SurfIsolate: {
     dl->AddRectFilled(ImVec2(mn.x + w * 0.18f, mn.y + h * 0.22f), ImVec2(c.x + w * 0.06f, mx.y - h * 0.18f), acc);
     dl->AddRect(ImVec2(c.x - w * 0.06f, mn.y + h * 0.14f), ImVec2(mx.x - w * 0.16f, mx.y - h * 0.26f), col, 0.f, 0, t);
@@ -2458,7 +2451,6 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::SurfLegend:     return "surflegend";
   case RibbonIconKind::SurfPropsHand:  return "surfpropshand";
   case RibbonIconKind::SurfInquiry:    return "surfinquiry";
-  case RibbonIconKind::SurfObjectViewer: return "surfobjectviewer";
   case RibbonIconKind::SurfIsolate:    return "surfisolate";
   case RibbonIconKind::SurfDoc:        return "surfdoc";
   case RibbonIconKind::SurfAddData:    return "surfadddata";
@@ -3496,10 +3488,10 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     }});
 
     {
-      const float genCell = colW({"Properties", "Inquiry", "Object Viewer", "Isolate Objects"});
+      const float genCell = colW({"Properties", "Inquiry", "Isolate Objects"});
       const float wGen = 8.f + genCell + 4.f + genCell;
       ribbonSpecs.push_back({wGen, wGen, [&]() {
-      const float cell = colW({"Properties", "Inquiry", "Object Viewer", "Isolate Objects"});
+      const float cell = colW({"Properties", "Inquiry", "Isolate Objects"});
       RibbonSectionBegin("RibbonSecTsGen", "General Tools", 8.f + cell + 4.f + cell, panelH);
       ImGui::BeginGroup();
       if (smallBtn("##TsProps", RibbonIconKind::SurfPropsHand, "Properties", cell))
@@ -3511,9 +3503,6 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ImGui::EndGroup();
       ImGui::SameLine(0, 4);
       ImGui::BeginGroup();
-      RibbonNyiButton("##TsObjView", RibbonIconKind::SurfObjectViewer, "Object Viewer",
-                      ImVec2(curCompact ? rowH : cell, rowH),
-                      curCompact ? RibbonLabel::None : RibbonLabel::Right);
       if (smallBtn("##TsIsolate", RibbonIconKind::SurfIsolate, "Isolate Objects", cell))
         ImGui::OpenPopup("##TsIsolateMenu");
       RibbonItemHelp("Isolate Objects — isolate, hide, or end isolation (REQ-084).");
@@ -3566,8 +3555,12 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       if (RibbonButtonEx("##TsEditSurf", RibbonIconKind::SurfEdit, "Edit Surface", ImVec2(kTsLargeW, colH),
                          RibbonLabel::Below))
         ImGui::OpenPopup("##TsEditSurfMenu");
-      RibbonItemHelp("Edit Surface — swap TIN edges or rebuild.");
+      RibbonItemHelp("Edit Surface — add/delete points, swap TIN edges, or rebuild.");
       if (ImGui::BeginPopup("##TsEditSurfMenu")) {
+        if (ImGui::MenuItem("Add Point"))
+          StartSurfAddPointCommand(cmd, surfName, log);
+        if (ImGui::MenuItem("Delete Point"))
+          StartSurfDelPointCommand(cmd, surfName, log);
         if (ImGui::MenuItem("Swap Edge"))
           StartSurfSwapEdgeCommand(cmd, surfName, log);
         if (ImGui::MenuItem("Rebuild"))
@@ -7162,6 +7155,8 @@ static bool CommandExpectsPointEntry(const AppCommandState& cmd) {
   case K::WaterDrop: return true;
   case K::Catchment: return true;
   case K::SwapTinEdge: return true;
+  case K::AddTinPoint: return true;
+  case K::DelTinPoint: return true;
   case K::Circle: {
     using CP = AppCommandState::CirclePhase;
     return cmd.circlePhase == CP::WaitCenterOrMode || cmd.circlePhase == CP::ThreeP_WaitP1 ||

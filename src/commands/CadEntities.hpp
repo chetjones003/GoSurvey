@@ -529,6 +529,10 @@ struct CadSurface {
   int gridCols = 0, gridRows = 0;
   std::vector<float> gridZ;
   std::vector<std::pair<double, double>> swappedEdgePicks;
+  /// REQ-144: extra vertices in the local frame (world = local + origin), stored as x,y,z triples.
+  std::vector<float> addedPointXyz;
+  /// REQ-144: each pick removes the nearest remaining assembled input point at rebuild (local XY).
+  std::vector<std::pair<double, double>> deletedPointPicks;
   std::vector<CadSurfaceBreakline> corridorFeatureLines;
 
   /// Names of the point groups supplying the surface's points (REQ-067).

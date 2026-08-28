@@ -726,6 +726,18 @@ json BuildRoot(const AppCommandState& st) {
         }
         o["swappedEdgePicks"] = std::move(swaps);
       }
+      if (!s.addedPointXyz.empty())
+        o["addedPointXyz"] = s.addedPointXyz;
+      if (!s.deletedPointPicks.empty()) {
+        json dels = json::array();
+        for (const auto& p : s.deletedPointPicks) {
+          json dp;
+          dp["x"] = p.first;
+          dp["y"] = p.second;
+          dels.push_back(std::move(dp));
+        }
+        o["deletedPointPicks"] = std::move(dels);
+      }
       json corr = json::array();
       for (const CadSurfaceBreakline& fl : s.corridorFeatureLines) {
         json flo;
@@ -1612,6 +1624,15 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
           if (!sp.is_object())
             continue;
           s.swappedEdgePicks.emplace_back(sp.value("x", 0.0), sp.value("y", 0.0));
+        }
+      }
+      if (el.contains("addedPointXyz") && el["addedPointXyz"].is_array())
+        s.addedPointXyz = el["addedPointXyz"].get<std::vector<float>>();
+      if (el.contains("deletedPointPicks") && el["deletedPointPicks"].is_array()) {
+        for (const auto& dp : el["deletedPointPicks"]) {
+          if (!dp.is_object())
+            continue;
+          s.deletedPointPicks.emplace_back(dp.value("x", 0.0), dp.value("y", 0.0));
         }
       }
       if (el.contains("corridorFeatureLines") && el["corridorFeatureLines"].is_array()) {

@@ -51,6 +51,18 @@ void MoveSameKind(std::vector<T>* v, size_t i, int delta) {
   std::swap((*v)[i], (*v)[static_cast<size_t>(j)]);
 }
 
+void MoveAddedPointTriple(std::vector<float>* v, size_t i, int delta) {
+  if (v == nullptr || v->size() % 3u != 0u)
+    return;
+  const size_t n = v->size() / 3;
+  const long long j = static_cast<long long>(i) + delta;
+  if (i >= n || j < 0 || j >= static_cast<long long>(n))
+    return;
+  const size_t ju = static_cast<size_t>(j);
+  for (size_t k = 0; k < 3; ++k)
+    std::swap((*v)[i * 3 + k], (*v)[ju * 3 + k]);
+}
+
 void ApplyInfo(AppCommandState& cmd, int si, const std::string& name, const std::string& description,
                const std::string& styleName, std::vector<std::string>& log) {
   if (si < 0 || si >= static_cast<int>(cmd.cadSurfaces.size()))
@@ -125,7 +137,9 @@ void DrawDefinitionTab(AppCommandState& cmd, CadSurface& s) {
     ImGui::TableNextColumn();
     ImGui::TextUnformatted("Edit operations");
     ImGui::TableNextColumn();
-    ImGui::Text("%d edge swap(s)", static_cast<int>(s.swappedEdgePicks.size()));
+    ImGui::Text("%d edge swap(s), %d added point(s), %d deleted point(s)",
+                static_cast<int>(s.swappedEdgePicks.size()), static_cast<int>(s.addedPointXyz.size() / 3),
+                static_cast<int>(s.deletedPointPicks.size()));
     ImGui::EndTable();
   }
   ImGui::PopStyleColor();
@@ -156,6 +170,11 @@ void DrawDefinitionTab(AppCommandState& cmd, CadSurface& s) {
   }
   for (size_t i = 0; i < s.swappedEdgePicks.size(); ++i)
     rows.push_back({"Edit", "Edge swap #" + std::to_string(i + 1), 5, i});
+  const size_t nAddPts = s.addedPointXyz.size() / 3;
+  for (size_t i = 0; i < nAddPts; ++i)
+    rows.push_back({"Edit", "Added point #" + std::to_string(i + 1), 6, i});
+  for (size_t i = 0; i < s.deletedPointPicks.size(); ++i)
+    rows.push_back({"Edit", "Deleted point #" + std::to_string(i + 1), 7, i});
 
   static int selOp = 0;
   if (selOp >= static_cast<int>(rows.size()))
@@ -186,8 +205,12 @@ void DrawDefinitionTab(AppCommandState& cmd, CadSurface& s) {
       MoveSameKind(&s.contourSources, r.index, delta);
     else if (r.kind == 4)
       MoveSameKind(&s.boundaries, r.index, delta);
-    else
+    else if (r.kind == 5)
       MoveSameKind(&s.swappedEdgePicks, r.index, delta);
+    else if (r.kind == 6)
+      MoveAddedPointTriple(&s.addedPointXyz, r.index, delta);
+    else
+      MoveSameKind(&s.deletedPointPicks, r.index, delta);
     BumpCadGpuCache(cmd);
     selOp += delta;
   };

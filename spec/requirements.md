@@ -4647,15 +4647,36 @@ requirements is a planning failure, not a sign of rigor.
 - Purpose: Civil 3D-shaped tools appear when a surface is selected, without inventing unimplemented objects
 - Priority: must
 - Type: functional
-- Statement: When at least one `SelectedEntity::Type::Surface` is selected in model space (or floating model space), the ribbon tab strip gains a contextual tab titled `Tin Surface: <surface name>` (the first selected surface). Selecting a surface the first time in a stretch switches to that tab; deselecting restores the previous permanent tab only if the contextual tab is still active. The tab contains the screenshot panels **Labels & Tables**, **General Tools**, **Modify**, **Level of Detail**, **Analyze**, **Surface Tools**, and **Launch Pad**. Implemented actions target that selected surface: Properties (side Properties panel), Inquiry (`SURFELEV`), Isolate Objects (`ISOLATEOBJECTS` / `HIDEOBJECTS` / `UNISOLATEOBJECTS`), Surface Properties, Add Data (breakline / contour / boundary designate), Edit Surface (`SURFSWAPEDGE`, `SURFACEREBUILD`), Water Drop, Catchment, Volumes Dashboard, Extract (`EXTRACT`, `WATERDROP EXTRACT`, `WATERDROP EXTRACT FL`, `CATCHMENT EXTRACT`). Controls with no GoSurvey command are **disabled** and their tooltip includes **not implemented yet**. REQ-084 still forbids a disabled control from acting. The contextual tab index is not a persisted prefs slot (`kRibbonTabCount` stays the permanent tabs).
+- Statement: When at least one `SelectedEntity::Type::Surface` is selected in model space (or floating model space), the ribbon tab strip gains a contextual tab titled `Tin Surface: <surface name>` (the first selected surface). Selecting a surface the first time in a stretch switches to that tab; deselecting restores the previous permanent tab only if the contextual tab is still active. The tab contains the screenshot panels **Labels & Tables**, **General Tools**, **Modify**, **Level of Detail**, **Analyze**, **Surface Tools**, and **Launch Pad**. Implemented actions target that selected surface: Properties (side Properties panel), Inquiry (`SURFELEV`), Isolate Objects (`ISOLATEOBJECTS` / `HIDEOBJECTS` / `UNISOLATEOBJECTS`), Surface Properties, Add Data (breakline / contour / boundary designate), Edit Surface (`SURFACEADDPOINT`, `SURFACEDELPOINT`, `SURFSWAPEDGE`, `SURFACEREBUILD`), Water Drop, Catchment, Volumes Dashboard, Extract (`EXTRACT`, `WATERDROP EXTRACT`, `WATERDROP EXTRACT FL`, `CATCHMENT EXTRACT`). **Object Viewer is omitted** (D-2026-08-28-f): the 3D viewport is the viewer. Other controls with no GoSurvey command are **disabled** and their tooltip includes **not implemented yet**. REQ-084 still forbids a disabled control from acting. The contextual tab index is not a persisted prefs slot (`kRibbonTabCount` stays the permanent tabs).
 - Acceptance:
   - with no surface selected, the tab strip does not include a `Tin Surface:` tab;
   - selecting a named surface shows a tab whose label contains that surface's name;
   - `SURFELEV`, `WATERDROP`, `CATCHMENT`, `SURFACEREBUILD`, and `EXTRACT` remain invokable from the command line (this tab does not replace them);
-  - unimplemented buttons on the tab cannot be activated (disabled).
+  - unimplemented buttons on the tab cannot be activated (disabled);
+  - Object Viewer is not present on the tab.
 - Owner-layer: UI, Commands
 - Status: accepted (2026-08-28)
-- Revisions: 2026-08-28 — D-2026-08-28-d.
+- Revisions: 2026-08-28 — D-2026-08-28-d. 2026-08-28 — D-2026-08-28-f: omit Object Viewer.
+
+### REQ-144 — Add and delete TIN definition points (issue #119)
+- Purpose: a TIN can gain or lose vertices without mutating the live triangulation pointer
+- Priority: must
+- Type: functional
+- Statement: `CadSurface` stores `addedPointXyz` (local XYZ, stride 3) and `deletedPointPicks`
+  (local XY). `SURFACEADDPOINT <surface>[, <x>, <y>, <z>]` appends an add (name-only starts a pick
+  at the work-plane elevation). `SURFACEDELPOINT <surface>[, <x>, <y>]` appends a delete pick
+  (name-only starts a pick). `ResolveSurfaceInputs` appends added points after groups and files,
+  then for each delete pick removes the nearest remaining input point. Rebuild replaces
+  `shared_ptr<const CadTin>` (architecture §11.5). Non-TIN kinds and a delete on a surface with no
+  assembled points are named refusals (REQ-201). Both lists persist in `.gs`.
+- Acceptance:
+  - four added corners on an empty TIN rebuild to 4 points;
+  - deleting the nearest corner then rebuilding yields 3 points;
+  - `SURFACEADDPOINT` on a grid surface is a named refusal and adds no vertex;
+  - a missing surface name is a named refusal.
+- Owner-layer: Domain, Commands, IO, UI
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-e.
 
 ---
 
@@ -5131,6 +5152,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-141 | UI/Commands | done (TASK-129) — Survey Analyze ribbon; `WATERDROP EXTRACT FL` | accepted |
 | REQ-142 | UI/Commands | done (TASK-130) — Toolspace Prospector + Settings | accepted |
 | REQ-143 | UI/Commands | done (TASK-133) — contextual TIN Surface ribbon tab | accepted |
+| REQ-144 | Domain/Commands/IO/UI | done (TASK-134) — `req144-surface-add-del-point`; SURFACEADDPOINT / SURFACEDELPOINT | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |

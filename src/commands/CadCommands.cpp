@@ -36,6 +36,7 @@
 #include <imgui.h>
 
 #include <algorithm>
+#include <cassert>
 #include <cstdlib>
 #include <functional>
 #include <array>
@@ -2247,6 +2248,39 @@ struct SurfaceBuildInputs {
   std::vector<std::uint32_t> volumeCompIndices;
 };
 
+static void ApplyDefinitionPointEdits(const CadSurface& surface, SurfaceBuildInputs& in) {
+  assert(std::isfinite(in.originX));
+  assert(std::isfinite(in.originY));
+  const size_t nAdd = surface.addedPointXyz.size();
+  if (nAdd % 3u == 0u) {
+    for (size_t i = 0; i + 2 < nAdd; i += 3) {
+      in.pts.push_back({static_cast<double>(surface.addedPointXyz[i]) + in.originX,
+                        static_cast<double>(surface.addedPointXyz[i + 1]) + in.originY,
+                        surface.addedPointXyz[i + 2]});
+    }
+  }
+  constexpr size_t kMaxDeletes = 1000000;
+  const size_t nDel = std::min(surface.deletedPointPicks.size(), kMaxDeletes);
+  for (size_t d = 0; d < nDel; ++d) {
+    if (in.pts.empty())
+      break;
+    const double wx = surface.deletedPointPicks[d].first + in.originX;
+    const double wy = surface.deletedPointPicks[d].second + in.originY;
+    size_t best = 0;
+    double bestD2 = 1.0e300;
+    for (size_t i = 0; i < in.pts.size(); ++i) {
+      const double dx = in.pts[i].x - wx;
+      const double dy = in.pts[i].y - wy;
+      const double d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        best = i;
+      }
+    }
+    in.pts.erase(in.pts.begin() + static_cast<std::ptrdiff_t>(best));
+  }
+}
+
 /// UI-thread only: resolves a surface's definition against CURRENT drawing state — point groups,
 /// breaklines, boundaries — pruning any id that no longer resolves (REQ-069) and logging what was
 /// dropped or found in conflict. This is the only part of a surface build that touches
@@ -2300,6 +2334,8 @@ SurfaceBuildInputs ResolveSurfaceInputs(AppCommandState& st, CadSurface& surface
     for (const SurveyFilePoint& p : filePts)
       in.pts.push_back({p.easting, p.northing, p.elevation});
   }
+
+  ApplyDefinitionPointEdits(surface, in);
 
   // Breaklines (REQ-069): resolve each by stable entity id, dropping — not merely skipping — any
   // that no longer resolve, so the STORED definition never holds a dangling reference (§8 ASSUMPTION-1).
@@ -3313,6 +3349,113 @@ void RunSurfSwapEdge(AppCommandState& st, const std::string& args, std::vector<s
   float ly = 0.f;
   CadCoord::LocalFromWorld(st, wx, wy, &lx, &ly);
   CommitSurfSwapEdgeLocal(st, s, static_cast<double>(lx), static_cast<double>(ly), log);
+}
+
+static bool SurfaceRefusesPointEdits(const CadSurface& s, const char* cmd, std::vector<std::string>& log) {
+  assert(cmd != nullptr);
+  assert(cmd[0] != '\0');
+  if (s.kind == SurfaceKind::Tin && !s.isVolumeSurface())
+    return false;
+  log.push_back(std::string(cmd) + " — \"" + s.name + "\" is not a TIN surface.");
+  return true;
+}
+
+static void CommitSurfAddPointLocal(AppCommandState& st, CadSurface& s, double x, double y, float z,
+                                    std::vector<std::string>& log) {
+  if (SurfaceRefusesPointEdits(s, "SURFACEADDPOINT", log))
+    return;
+  if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) {
+    log.push_back("SURFACEADDPOINT — x, y, and z must be finite numbers.");
+    return;
+  }
+  PushUndoSnapshot(st, "Add surface point");
+  s.addedPointXyz.push_back(static_cast<float>(x));
+  s.addedPointXyz.push_back(static_cast<float>(y));
+  s.addedPointXyz.push_back(z);
+  BumpCadGpuCache(st);
+  log.push_back("SURFACEADDPOINT — added a definition point on \"" + s.name + "\".");
+}
+
+static void CommitSurfDelPointLocal(AppCommandState& st, CadSurface& s, double x, double y,
+                                    std::vector<std::string>& log) {
+  if (SurfaceRefusesPointEdits(s, "SURFACEDELPOINT", log))
+    return;
+  if (!std::isfinite(x) || !std::isfinite(y)) {
+    log.push_back("SURFACEDELPOINT — x and y must be finite numbers.");
+    return;
+  }
+  const bool hasInputs = !s.sourcePointGroups.empty() || !s.sourcePointFiles.empty() || !s.addedPointXyz.empty();
+  if (!hasInputs) {
+    log.push_back("SURFACEDELPOINT — \"" + s.name + "\" has no definition points to delete.");
+    return;
+  }
+  PushUndoSnapshot(st, "Delete surface point");
+  s.deletedPointPicks.emplace_back(x, y);
+  BumpCadGpuCache(st);
+  log.push_back("SURFACEDELPOINT — recorded a point-delete edit on \"" + s.name + "\".");
+}
+
+void RunSurfAddPoint(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() == 1 && !f[0].empty()) {
+    StartSurfAddPointCommand(st, f[0], log);
+    return;
+  }
+  if (f.size() != 4 || f[0].empty()) {
+    log.push_back("SURFACEADDPOINT — usage: SURFACEADDPOINT <surface>[, <x>, <y>, <z>].");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFACEADDPOINT — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  char* ex = nullptr;
+  char* ey = nullptr;
+  char* ez = nullptr;
+  const double wx = std::strtod(f[1].c_str(), &ex);
+  const double wy = std::strtod(f[2].c_str(), &ey);
+  const double wz = std::strtod(f[3].c_str(), &ez);
+  if (!ex || *ex != '\0' || !ey || *ey != '\0' || !ez || *ez != '\0' || !std::isfinite(wx) || !std::isfinite(wy) ||
+      !std::isfinite(wz)) {
+    log.push_back("SURFACEADDPOINT — x, y, and z must be numbers.");
+    return;
+  }
+  float lx = 0.f;
+  float ly = 0.f;
+  CadCoord::LocalFromWorld(st, wx, wy, &lx, &ly);
+  CommitSurfAddPointLocal(st, s, static_cast<double>(lx), static_cast<double>(ly), static_cast<float>(wz), log);
+}
+
+void RunSurfDelPoint(AppCommandState& st, const std::string& args, std::vector<std::string>& log) {
+  const std::vector<std::string> f = SplitCommaFields(args);
+  if (f.size() == 1 && !f[0].empty()) {
+    StartSurfDelPointCommand(st, f[0], log);
+    return;
+  }
+  if (f.size() != 3 || f[0].empty()) {
+    log.push_back("SURFACEDELPOINT — usage: SURFACEDELPOINT <surface>[, <x>, <y>].");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, f[0]);
+  if (si < 0) {
+    log.push_back("SURFACEDELPOINT — no surface named \"" + f[0] + "\".");
+    return;
+  }
+  CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  char* ex = nullptr;
+  char* ey = nullptr;
+  const double wx = std::strtod(f[1].c_str(), &ex);
+  const double wy = std::strtod(f[2].c_str(), &ey);
+  if (!ex || *ex != '\0' || !ey || *ey != '\0' || !std::isfinite(wx) || !std::isfinite(wy)) {
+    log.push_back("SURFACEDELPOINT — x and y must be numbers.");
+    return;
+  }
+  float lx = 0.f;
+  float ly = 0.f;
+  CadCoord::LocalFromWorld(st, wx, wy, &lx, &ly);
+  CommitSurfDelPointLocal(st, s, static_cast<double>(lx), static_cast<double>(ly), log);
 }
 
 void RunVolReport(AppCommandState& st, std::vector<std::string>& log) {
@@ -5450,6 +5593,8 @@ const CmdEntry kRegistry[] = {
     {"surfacecreatecorr", "sfcorr", "Create a corridor surface: SURFACECREATECORR <name>"},
     {"surfacecreatevolgrid", "sfvolgrid", "Grid volume surface: SURFACECREATEVOLGRID <name>, <base>, <comparison>"},
     {"surfswapedge", "sfswap", "Swap a TIN interior edge: SURFSWAPEDGE <surface>[, <x>, <y>]"},
+    {"surfaceaddpoint", "sfaddpt", "Add a TIN definition point: SURFACEADDPOINT <surface>[, <x>, <y>, <z>]"},
+    {"surfacedelpoint", "sfdelpt", "Delete nearest TIN definition point: SURFACEDELPOINT <surface>[, <x>, <y>]"},
     {"volreport", "", "Insert MTEXT of the last volume report: VOLREPORT"},
     {"volumesurface", "volsurf", "Create a TIN volume surface: VOLUMESURFACE <name>, <base>, <comparison>"},
     {"surfacerename", "sfrename", "Rename a surface: SURFACERENAME <old>, <new>"},
@@ -10288,6 +10433,30 @@ void SubmitViewportPickImpl(AppCommandState& st, float wx, float wy, std::vector
       return;
     }
     CommitSurfSwapEdgeLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(wx),
+                            static_cast<double>(wy), log);
+    st.active = K::None;
+    return;
+  }
+  if (st.active == K::AddTinPoint) {
+    const int si = FindSurfaceIndex(st, st.addPointSurfaceName);
+    if (si < 0) {
+      log.push_back("SURFACEADDPOINT — no surface named \"" + st.addPointSurfaceName + "\".");
+      st.active = K::None;
+      return;
+    }
+    CommitSurfAddPointLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(wx),
+                            static_cast<double>(wy), CadCommitElevation(st), log);
+    st.active = K::None;
+    return;
+  }
+  if (st.active == K::DelTinPoint) {
+    const int si = FindSurfaceIndex(st, st.delPointSurfaceName);
+    if (si < 0) {
+      log.push_back("SURFACEDELPOINT — no surface named \"" + st.delPointSurfaceName + "\".");
+      st.active = K::None;
+      return;
+    }
+    CommitSurfDelPointLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(wx),
                             static_cast<double>(wy), log);
     st.active = K::None;
     return;
@@ -17204,6 +17373,58 @@ void StartSurfSwapEdgeCommand(AppCommandState& st, const std::string& surfaceNam
   log.push_back("SURFSWAPEDGE — pick an interior edge on \"" + surfaceName + "\". ESC cancels.");
 }
 
+void StartSurfAddPointCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None) {
+    log.push_back("SURFACEADDPOINT — finish or cancel the active command first.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, surfaceName);
+  if (si < 0) {
+    log.push_back("SURFACEADDPOINT — no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  const CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  if (SurfaceRefusesPointEdits(s, "SURFACEADDPOINT", log))
+    return;
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.addPointSurfaceName = surfaceName;
+  st.active = K::AddTinPoint;
+  st.lastCommand = K::AddTinPoint;
+  log.push_back("SURFACEADDPOINT — pick a plan position on \"" + surfaceName +
+                "\" (elevation = current work plane). ESC cancels.");
+}
+
+void StartSurfDelPointCommand(AppCommandState& st, const std::string& surfaceName, std::vector<std::string>& log) {
+  using K = AppCommandState::Kind;
+  if (st.active != K::None) {
+    log.push_back("SURFACEDELPOINT — finish or cancel the active command first.");
+    return;
+  }
+  const int si = FindSurfaceIndex(st, surfaceName);
+  if (si < 0) {
+    log.push_back("SURFACEDELPOINT — no surface named \"" + surfaceName + "\".");
+    return;
+  }
+  const CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  if (SurfaceRefusesPointEdits(s, "SURFACEDELPOINT", log))
+    return;
+  const bool hasInputs = !s.sourcePointGroups.empty() || !s.sourcePointFiles.empty() || !s.addedPointXyz.empty();
+  if (!hasInputs) {
+    log.push_back("SURFACEDELPOINT — \"" + s.name + "\" has no definition points to delete.");
+    return;
+  }
+  ClearPendingViewportZoom(st);
+  ResetAllCadDraftTools(st);
+  st.selBoxWaitingSecond = false;
+  st.delPointSurfaceName = surfaceName;
+  st.active = K::DelTinPoint;
+  st.lastCommand = K::DelTinPoint;
+  log.push_back("SURFACEDELPOINT — pick the point to remove from \"" + surfaceName + "\". ESC cancels.");
+}
+
 namespace {
 /// The stable id (REQ-076) of a picked Line or Polyline, or 0 for anything else / an out-of-range
 /// index — 0 is never a real id (\ref EntityAttributes::id), so it doubles as "not applicable" here.
@@ -23319,7 +23540,8 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         plotTok == "catchment" || plotTok == "catch" || plotTok == "surfacecreategrid" ||
         plotTok == "sfgrid" || plotTok == "surfacecreatecorr" || plotTok == "sfcorr" ||
         plotTok == "surfacecreatevolgrid" || plotTok == "sfvolgrid" || plotTok == "surfswapedge" ||
-        plotTok == "sfswap" || plotTok == "volreport") {
+        plotTok == "sfswap" || plotTok == "surfaceaddpoint" || plotTok == "sfaddpt" ||
+        plotTok == "surfacedelpoint" || plotTok == "sfdelpt" || plotTok == "volreport") {
       std::string rest;
       std::getline(issIdle, rest);
       rest = StringUtil::trimCopy(rest);
@@ -23333,6 +23555,10 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         RunSurfaceCreateVolGrid(st, rest, log);
       else if (plotTok == "surfswapedge" || plotTok == "sfswap")
         RunSurfSwapEdge(st, rest, log);
+      else if (plotTok == "surfaceaddpoint" || plotTok == "sfaddpt")
+        RunSurfAddPoint(st, rest, log);
+      else if (plotTok == "surfacedelpoint" || plotTok == "sfdelpt")
+        RunSurfDelPoint(st, rest, log);
       else if (plotTok == "volreport")
         RunVolReport(st, log);
       else if (plotTok == "volumesurface" || plotTok == "volsurf")
@@ -23628,6 +23854,40 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       return;
     }
     CommitSurfSwapEdgeLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(px),
+                            static_cast<double>(py), log);
+    st.active = AppCommandState::Kind::None;
+    return;
+  }
+  if (st.active == K::AddTinPoint) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
+      log.push_back("SURFACEADDPOINT — type X,Y (World) or pick a point in the drawing.");
+      return;
+    }
+    const int si = FindSurfaceIndex(st, st.addPointSurfaceName);
+    if (si < 0) {
+      log.push_back("SURFACEADDPOINT — no surface named \"" + st.addPointSurfaceName + "\".");
+      st.active = AppCommandState::Kind::None;
+      return;
+    }
+    CommitSurfAddPointLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(px),
+                            static_cast<double>(py), CadCommitElevation(st), log);
+    st.active = AppCommandState::Kind::None;
+    return;
+  }
+  if (st.active == K::DelTinPoint) {
+    float px = 0.f, py = 0.f;
+    if (!ParseStoragePoint(st, line, &px, &py, false, 0.f, 0.f)) {
+      log.push_back("SURFACEDELPOINT — type X,Y (World) or pick a point in the drawing.");
+      return;
+    }
+    const int si = FindSurfaceIndex(st, st.delPointSurfaceName);
+    if (si < 0) {
+      log.push_back("SURFACEDELPOINT — no surface named \"" + st.delPointSurfaceName + "\".");
+      st.active = AppCommandState::Kind::None;
+      return;
+    }
+    CommitSurfDelPointLocal(st, st.cadSurfaces[static_cast<size_t>(si)], static_cast<double>(px),
                             static_cast<double>(py), log);
     st.active = AppCommandState::Kind::None;
     return;
@@ -24506,6 +24766,10 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
     return "CATCHMENT: Pick an outlet on the surface | ESC cancel";
   if (st.active == K::SwapTinEdge)
     return "SURFSWAPEDGE: Pick an interior TIN edge | ESC cancel";
+  if (st.active == K::AddTinPoint)
+    return "SURFACEADDPOINT: Pick a plan position (Z = work plane) | ESC cancel";
+  if (st.active == K::DelTinPoint)
+    return "SURFACEDELPOINT: Pick the definition point to remove | ESC cancel";
 
   if (st.active == K::DesignateBreakline)
     return "DESIGNATEBREAKLINE: Pick a line or polyline | ESC cancel";

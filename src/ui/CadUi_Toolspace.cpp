@@ -465,15 +465,13 @@ void DrawDefFolderAddRefresh(const char* popupId, AppCommandState& cmd, CadSurfa
   if (!BeginTsContext(popupId))
     return;
   const bool addEnabled = true;
-  if (ImGui::MenuItem("Add", nullptr, false, addEnabled)) {
+  if (ImGui::MenuItem("Add", nullptr, false, addEnabled) && addKind != DefFolderAdd::Edit) {
     if (addKind == DefFolderAdd::Boundary)
       StartDesignateBoundaryCommand(cmd, s.name, CadBoundaryKind::Outer, lg);
     else if (addKind == DefFolderAdd::Mask)
       StartDesignateBoundaryCommand(cmd, s.name, CadBoundaryKind::Mask, lg);
     else if (addKind == DefFolderAdd::Breakline)
       StartDesignateBreaklineCommand(cmd, s.name, lg);
-    else if (addKind == DefFolderAdd::Edit)
-      StartSurfSwapEdgeCommand(cmd, s.name, lg);
     else if (addKind == DefFolderAdd::Contour)
       StartDesignateContourCommand(cmd, s.name, lg);
     else if (addKind == DefFolderAdd::PointFile) {
@@ -483,6 +481,15 @@ void DrawDefFolderAddRefresh(const char* popupId, AppCommandState& cmd, CadSurfa
       pending.kind = TsPending::Kind::AddPointGroup;
       pending.si = si;
     }
+  }
+  if (addKind == DefFolderAdd::Edit && ImGui::BeginMenu("Add")) {
+    if (ImGui::MenuItem("Point"))
+      StartSurfAddPointCommand(cmd, s.name, lg);
+    if (ImGui::MenuItem("Delete Point"))
+      StartSurfDelPointCommand(cmd, s.name, lg);
+    if (ImGui::MenuItem("Swap Edge"))
+      StartSurfSwapEdgeCommand(cmd, s.name, lg);
+    ImGui::EndMenu();
   }
   if (ImGui::MenuItem("Refresh"))
     SubmitLine(cmd, log, "SURFACEREBUILD " + s.name);
@@ -495,6 +502,8 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
   std::vector<std::string>& lg = LogRef(log, discard);
   int removeGroupIdx = -1;
   int removeSwapIdx = -1;
+  int removeAddPtIdx = -1;
+  int removeDelPtIdx = -1;
 
   ImGui::PushID(static_cast<int>(si));
   ImGui::SetNextItemOpen(false, ImGuiCond_Once);
@@ -653,6 +662,27 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
         }
         ImGui::PopID();
       }
+      const size_t nAdd = s.addedPointXyz.size() / 3;
+      for (size_t i = 0; i < nAdd; ++i) {
+        ImGui::PushID(static_cast<int>(1000 + i));
+        ImGui::TreeNodeEx(("Added point " + std::to_string(i + 1)).c_str(), kLeaf | ImGuiTreeNodeFlags_Bullet);
+        if (BeginTsContext("##edaddpt")) {
+          if (ImGui::MenuItem("Remove"))
+            removeAddPtIdx = static_cast<int>(i);
+          EndTsContext();
+        }
+        ImGui::PopID();
+      }
+      for (size_t i = 0; i < s.deletedPointPicks.size(); ++i) {
+        ImGui::PushID(static_cast<int>(2000 + i));
+        ImGui::TreeNodeEx(("Deleted point " + std::to_string(i + 1)).c_str(), kLeaf | ImGuiTreeNodeFlags_Bullet);
+        if (BeginTsContext("##eddelpt")) {
+          if (ImGui::MenuItem("Remove"))
+            removeDelPtIdx = static_cast<int>(i);
+          EndTsContext();
+        }
+        ImGui::PopID();
+      }
       ImGui::TreePop();
     }
     ImGui::TreePop();
@@ -672,6 +702,22 @@ void DrawSurfaceNode(AppCommandState& cmd, size_t si, std::vector<std::string>* 
     s.swappedEdgePicks.erase(s.swappedEdgePicks.begin() + static_cast<std::ptrdiff_t>(removeSwapIdx));
     BumpCadGpuCache(cmd);
     lg.push_back("Surface \"" + s.name + "\": removed an edge-swap edit.");
+  }
+  if (removeAddPtIdx >= 0) {
+    const size_t i = static_cast<size_t>(removeAddPtIdx) * 3;
+    if (i + 2 < s.addedPointXyz.size()) {
+      PushUndoSnapshot(cmd, "Remove added surface point");
+      s.addedPointXyz.erase(s.addedPointXyz.begin() + static_cast<std::ptrdiff_t>(i),
+                            s.addedPointXyz.begin() + static_cast<std::ptrdiff_t>(i + 3));
+      BumpCadGpuCache(cmd);
+      lg.push_back("Surface \"" + s.name + "\": removed an added-point edit.");
+    }
+  }
+  if (removeDelPtIdx >= 0 && static_cast<size_t>(removeDelPtIdx) < s.deletedPointPicks.size()) {
+    PushUndoSnapshot(cmd, "Remove surface point-delete");
+    s.deletedPointPicks.erase(s.deletedPointPicks.begin() + static_cast<std::ptrdiff_t>(removeDelPtIdx));
+    BumpCadGpuCache(cmd);
+    lg.push_back("Surface \"" + s.name + "\": removed a point-delete edit.");
   }
 }
 

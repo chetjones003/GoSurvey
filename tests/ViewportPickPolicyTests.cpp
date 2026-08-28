@@ -47,7 +47,8 @@ TEST_CASE("Every pick-driven command is routed by the model-space viewport", "[v
       K::Line, K::Circle, K::Polyline, K::FeatureLine, K::Rect, K::Arc, K::Ellipse,
       K::Text, K::Mtext, K::DimAligned, K::DimLinear, K::DimAngular,
       // Inquiry / placement.
-      K::IdPoint, K::SurveyInverse, K::SurfaceElevGrade, K::WaterDrop, K::Catchment, K::Paste,
+      K::IdPoint, K::SurveyInverse, K::SurfaceElevGrade, K::WaterDrop, K::Catchment, K::SwapTinEdge,
+      K::AddTinPoint, K::DelTinPoint, K::Paste,
       // Modify commands.
       K::Move, K::Copy, K::Rotate, K::Scale, K::Array, K::Delete, K::Join, K::Trim, K::Offset, K::Align,
       // REQ-103 — the five this test was written for.
