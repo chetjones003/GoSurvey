@@ -2,7 +2,9 @@
 GoSurvey — DWG READ/WRITE PLAN
 ================================================================================
 Status:      DECIDED. Phase 1 SHIPPED (REQ-052 / ADR-024 / TASK-030, 2026-07-30).
-             Phases 2-6 are the outstanding work.
+             Native codec route UPDATED 2026-08-29 (D-2026-08-29-g / ADR-041 / REQ-170):
+             **LibreDWG**, DWG write **R2000/R2004 only** (default R2004). Not Route A.
+             DM-08 / R2018 write / DWG-as-native remain later. See spec/file-format-specs.md.
 Created:     2026-07-30
 Updated:     2026-07-30 (route decided; Phase 1 built and verified; PART 11 added)
 Reference:   Analysis of "C:\Users\chetj\OneDrive\Desktop\26-084 - Master.dwg"
