@@ -83,6 +83,14 @@ struct SelectedEntity {
 /// only — which edge (0-based) the point lands on.
 struct BreakPoint {
   float x = 0.f, y = 0.f;
+  /// Elevation at the cut, interpolated along the segment the cut fell on.
+  ///
+  /// A break, fillet or chamfer creates a vertex that did not exist before, so its Z has to come
+  /// from somewhere. `param` and `segIndex` already say exactly where along which segment the cut
+  /// landed, so the honest answer is the linear interpolation between that segment's endpoints —
+  /// exact on a level segment and correct on a sloped one. Before this field existed the answer was
+  /// `0.f`, which is what flattened polylines to datum (issue 01).
+  float z = 0.f;
   float param = 0.f;
   float theta = 0.f;
   int segIndex = -1;
@@ -3795,6 +3803,9 @@ void HandleChamferViewportPick(AppCommandState& st, float wx, float wy, std::vec
 bool HandleChamferText(AppCommandState& st, const std::string& lineIn, std::vector<std::string>& log);
 void StartDeleteCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log);
+/// QUICKSELECT's filter itself (issue 05). Lives here rather than in the UI layer so it is
+/// reachable from a headless transcript and from a unit test; the panel is a form that calls it.
+void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log);
 void StartQuickSelectCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartTrimCommand(AppCommandState& st, std::vector<std::string>& log);
 void StartOffsetCommand(AppCommandState& st, std::vector<std::string>& log);

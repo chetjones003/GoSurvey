@@ -1,0 +1,136 @@
+# Issue 01 — eight editing commands discarded elevation.
+#
+# Every assertion here is EXPECT ELEVATION or EXPECT VERTEX, because nothing else can see this
+# defect: the drawing stays correctly strided, entirely finite, unchanged in count and id, and
+# passes CHECK. It passed a fully green 640-test suite for exactly that reason.
+#
+# 286.715 is the elevation the original sweep used — a real ground shot, and far enough from 0 that
+# a flatten is unmistakable.
+
+NEW
+CMD ELEV 286.715
+
+# --- OVERKILL must not touch elevation, least of all when it removes NOTHING -------------------
+# The worst of the eight: OVERKILL cleared and rebuilt userLinesFlat unconditionally, so it zeroed
+# every elevation in the drawing while correctly reporting "nothing to clean up".
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+CMD LINE
+CMD 0,50
+CMD 100,50
+ESC
+EXPECT LINES 2
+CMD SELECTALL
+CMD OVERKILL
+EXPECT LINES 2
+EXPECT ELEVATION LINE 0 286.715
+EXPECT ELEVATION LINE 1 286.715
+
+# --- Two lines identical in plan at DIFFERENT elevations are not duplicates --------------------
+# A fence line and the contour beneath it are one object to an XY-only duplicate test. Elevation
+# now counts, so both survive.
+CMD ELEV 100
+CMD LINE
+CMD 200,0
+CMD 300,0
+ESC
+CMD ELEV 200
+CMD LINE
+CMD 200,0
+CMD 300,0
+ESC
+EXPECT LINES 4
+CMD SELECTALL
+CMD OVERKILL
+EXPECT LINES 4
+
+# --- BREAK on a polyline keeps every vertex's elevation, cut points included -------------------
+NEW
+CMD ELEV 286.715
+CMD POLYLINE
+CMD 0,0
+CMD 100,0
+CMD 100,100
+CMD
+EXPECT POLYLINES 1
+EXPECT ELEVATION POLYLINE 0 286.715
+CMD BREAK
+PICK 25 0
+PICK 75 0
+EXPECT ELEVATION POLYLINE 0 286.715
+
+# --- JOIN rebuilds a polyline from the edges it consumed; the height comes with them -----------
+NEW
+CMD ELEV 286.715
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+CMD LINE
+CMD 100,0
+CMD 100,100
+ESC
+EXPECT LINES 2
+CMD JOIN
+# A crossing box over both legs, then Enter to accept - JOIN gathers its own selection.
+CLICK -10 -10
+CLICK 110 110
+CMD
+EXPECT POLYLINES 1
+EXPECT ELEVATION POLYLINE 0 286.715
+
+CHECK ALL
+
+# --- CHAMFER on two lines: the NEW connector must not be born at datum -------------------------
+# The worst-looking of the eight. The two trimmed originals kept their elevation and only the new
+# connector went to 0, so the corner had both ends at grade and its connector 286 ft below. There
+# is no elevation you could assign that drawing to make it right, and it looks perfect in plan —
+# which is exactly where a chamfer is checked.
+NEW
+CMD ELEV 286.715
+CMD LINE
+CMD -10,0
+CMD 0,0
+ESC
+CMD LINE
+CMD 0,0
+CMD 0,-10
+ESC
+EXPECT LINES 2
+CMD CHAMFER
+CMD D
+CMD 3
+CMD 3
+CLICK -5 0
+CLICK 0 -5
+EXPECT LOG "corner chamfered"
+EXPECT LINES 3
+EXPECT ELEVATION LINE 0 286.715
+EXPECT ELEVATION LINE 1 286.715
+EXPECT ELEVATION LINE 2 286.715
+
+# --- FILLET on two lines: the new ARC carries an elevation too ---------------------------------
+# CadArc has a z field (REQ-057 / ADR-025) that the fillet left at its 0.f default. CadArcToJson
+# writes z only when non-zero, so an arc born at datum was indistinguishable in the .gs from a
+# legacy flat one.
+NEW
+CMD ELEV 286.715
+CMD LINE
+CMD -10,0
+CMD 0,0
+ESC
+CMD LINE
+CMD 0,0
+CMD 0,-10
+ESC
+CMD FILLET
+CMD R
+CMD 3
+CLICK -5 0
+CLICK 0 -5
+EXPECT ARCS 1
+EXPECT ELEVATION ARC 0 286.715
+
+CHECK ALL

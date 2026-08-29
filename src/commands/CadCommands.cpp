@@ -6139,6 +6139,11 @@ const CmdEntry kRegistry[] = {
     {"overkill",     "ok", "Remove duplicate geometry"},
     {"align",        "al", "Align objects to others"},
     {"quickselect",  "qs", "Select by object properties"},
+    // SELECTSIMILAR had no registry entry at all (issue 05): the function existed, was declared in
+    // the header and was perfectly reachable, but its only caller in the whole codebase was one
+    // right-click menu item - so nothing could invoke it by name, users included, and it had zero
+    // possible test coverage.
+    {"selectsimilar", "sesim", "Select entities matching the current selection's type, layer and colour"},
     {"paste",        "", "Paste from clipboard"},
     {"pasteorig",    "po", "Paste at original coordinates"},
     {"mview",        "rectviewport, rectvp", "Rectangular paper-space viewport (two clicks)"},
@@ -6736,6 +6741,10 @@ bool DispatchByPrimary(const std::string& primary, AppCommandState& st, std::vec
   }
   if (primary == "quickselect" || primary == "qs") {
     StartQuickSelectCommand(st, log);
+    return true;
+  }
+  if (primary == "selectsimilar" || primary == "sesim") {
+    SelectSimilarToCurrentSelection(st, &log);
     return true;
   }
   if (primary == "paste") {
@@ -13116,8 +13125,17 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
     if (k + 5 >= st.userLinesFlat.size())
       return false;
     const float x0 = st.userLinesFlat[k], y0 = st.userLinesFlat[k + 1];
-    ClosestPointOnSegment(x0, y0, st.userLinesFlat[k + 3], st.userLinesFlat[k + 4], px, py, &out->x, &out->y);
+    const float x1 = st.userLinesFlat[k + 3], y1 = st.userLinesFlat[k + 4];
+    ClosestPointOnSegment(x0, y0, x1, y1, px, py, &out->x, &out->y);
     out->param = std::hypot(out->x - x0, out->y - y0);
+    // The cut's elevation, interpolated along the line (issue 01). ApplyBreakToLine already carried
+    // the two ENDPOINT elevations through; this makes the cut itself right too, which matters as
+    // soon as the line is sloped.
+    {
+      const float len = std::hypot(x1 - x0, y1 - y0);
+      const float t = (len > 1e-9f) ? (out->param / len) : 0.f;
+      out->z = st.userLinesFlat[k + 2] + (st.userLinesFlat[k + 5] - st.userLinesFlat[k + 2]) * t;
+    }
     return true;
   }
   case SelectedEntity::Type::Circle: {
@@ -13125,6 +13143,7 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
     if (k + 3 >= st.userCirclesCxCyZR.size())
       return false;
     const float cx = st.userCirclesCxCyZR[k], cy = st.userCirclesCxCyZR[k + 1], r = st.userCirclesCxCyZR[k + 3];
+    out->z = st.userCirclesCxCyZR[k + 2];  // the circle's plane (REQ-057 / ADR-025)
     out->theta = std::atan2(py - cy, px - cx);
     out->x = cx + r * std::cos(out->theta);
     out->y = cy + r * std::sin(out->theta);
@@ -13135,6 +13154,7 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
       return false;
     const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
     out->theta = std::atan2(py - a.cy, px - a.cx);
+    out->z = a.z;  // the arc's plane (REQ-057 / ADR-025)
     out->x = a.cx + a.r * std::cos(out->theta);
     out->y = a.cy + a.r * std::sin(out->theta);
     out->param = a.r * ArcSweepParam(a.startRad, a.sweepRad, out->theta);
@@ -13155,6 +13175,7 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
       const size_t A = static_cast<size_t>(vi) * 3, B = static_cast<size_t>(vi + 1) * 3;
       const float ax = st.userPolylineVerts[A], ay = st.userPolylineVerts[A + 1];
       const float bx = st.userPolylineVerts[B], by = st.userPolylineVerts[B + 1];
+      const float az = st.userPolylineVerts[A + 2], bz = st.userPolylineVerts[B + 2];
       float qx = 0.f, qy = 0.f;
       ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
       const float d2 = (qx - px) * (qx - px) + (qy - py) * (qy - py);
@@ -13164,6 +13185,11 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
         out->x = qx;
         out->y = qy;
         out->param = cum + std::hypot(qx - ax, qy - ay);
+        {  // the cut's elevation, interpolated along this segment (issue 01)
+          const float segLen = std::hypot(bx - ax, by - ay);
+          const float t = (segLen > 1e-9f) ? (std::hypot(qx - ax, qy - ay) / segLen) : 0.f;
+          out->z = az + (bz - az) * t;
+        }
         out->segIndex = vi - v0;
       }
       cum += std::hypot(bx - ax, by - ay);
@@ -13172,6 +13198,7 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
       const size_t A = static_cast<size_t>(v1 - 1) * 3, B = static_cast<size_t>(v0) * 3;
       const float ax = st.userPolylineVerts[A], ay = st.userPolylineVerts[A + 1];
       const float bx = st.userPolylineVerts[B], by = st.userPolylineVerts[B + 1];
+      const float az = st.userPolylineVerts[A + 2], bz = st.userPolylineVerts[B + 2];
       float qx = 0.f, qy = 0.f;
       ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
       const float d2 = (qx - px) * (qx - px) + (qy - py) * (qy - py);
@@ -13181,6 +13208,11 @@ bool ClosestPointOnEntity(const AppCommandState& st, const SelectedEntity& e, fl
         out->x = qx;
         out->y = qy;
         out->param = cum + std::hypot(qx - ax, qy - ay);
+        {  // the cut's elevation, interpolated along this segment (issue 01)
+          const float segLen = std::hypot(bx - ax, by - ay);
+          const float t = (segLen > 1e-9f) ? (std::hypot(qx - ax, qy - ay) / segLen) : 0.f;
+          out->z = az + (bz - az) * t;
+        }
         out->segIndex = (v1 - v0) - 1;
       }
     }
@@ -13322,24 +13354,39 @@ static void ApplyBreakToArc(AppCommandState& st, int index, const BreakPoint& p1
   log.push_back("BREAK — arc broken.");
 }
 
-/// Rewrites polyline `pi`'s vertex range to `newXY` (z always written 0 — matching LENGTHEN/
-/// EXTEND's existing 2D-only treatment of Line/Polyline endpoints, which never interpolate z
-/// either), shifting every later polyline's CSR offsets by the length delta. Same technique
-/// OVERKILL's cleanup pass already uses for the identical "this polyline's vertex count changed"
-/// problem (this file, the LWPOLYLINE-cleanup block).
-static void ReplacePolylineVerts(AppCommandState& st, int pi, const std::vector<std::pair<float, float>>& newXY) {
+/// One polyline vertex, with its elevation.
+///
+/// Exists because the two rewrite helpers below used to take `std::vector<std::pair<float,float>>`
+/// and write a literal `0.f` into the Z slot: a caller could not pass an elevation because there
+/// was nowhere to put one. That single missing field is why BREAK, FILLET and CHAMFER all flattened
+/// a polyline to datum (issue 01) — four commands, one root cause. Carrying Z here makes every
+/// caller supply it or fail to compile, which is the point.
+struct PolyVert {
+  float x = 0.f, y = 0.f, z = 0.f;
+};
+
+/// Rewrites polyline `pi`'s vertex range to `newVerts`, elevation included, shifting every later
+/// polyline's CSR offsets by the length delta. Same technique OVERKILL's cleanup pass already uses
+/// for the identical "this polyline's vertex count changed" problem (this file, the
+/// LWPOLYLINE-cleanup block).
+///
+/// This used to write `0.f` into every Z. That was documented as matching LENGTHEN/EXTEND's 2D-only
+/// treatment of endpoints — but those two never *rewrite* a vertex list, they move an endpoint in
+/// place and leave its Z untouched, so the analogy did not hold and the effect was that BREAK,
+/// FILLET and CHAMFER silently flattened any polyline they edited (issue 01).
+static void ReplacePolylineVerts(AppCommandState& st, int pi, const std::vector<PolyVert>& newVerts) {
   const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
   const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
-  const int nNew = static_cast<int>(newXY.size());
+  const int nNew = static_cast<int>(newVerts.size());
   const int delta = nNew - (v1 - v0);
   st.userPolylineVerts.erase(st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
                              st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
   std::vector<float> flat;
   flat.reserve(static_cast<size_t>(nNew) * 3);
-  for (const auto& p : newXY) {
-    flat.push_back(p.first);
-    flat.push_back(p.second);
-    flat.push_back(0.f);
+  for (const auto& p : newVerts) {
+    flat.push_back(p.x);
+    flat.push_back(p.y);
+    flat.push_back(p.z);
   }
   st.userPolylineVerts.insert(st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3, flat.begin(),
                               flat.end());
@@ -13347,22 +13394,35 @@ static void ReplacePolylineVerts(AppCommandState& st, int pi, const std::vector<
     st.userPolylineOffsets[oi] += delta;
 }
 
+/// Reads polyline \p pi's vertices back out, elevation included — the collector every caller of
+/// \ref ReplacePolylineVerts needs, so none of them re-derives the `* 3 + c` indexing.
+static std::vector<PolyVert> PolylineVertsOf(const AppCommandState& st, int pi) {
+  std::vector<PolyVert> out;
+  const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
+  const int v1 = st.userPolylineOffsets[static_cast<size_t>(pi + 1)];
+  out.reserve(static_cast<size_t>(v1 - v0));
+  for (int vi = v0; vi < v1; ++vi) {
+    const size_t o = static_cast<size_t>(vi) * 3;
+    out.push_back({st.userPolylineVerts[o], st.userPolylineVerts[o + 1], st.userPolylineVerts[o + 2]});
+  }
+  return out;
+}
+
 /// Appends a brand-new polyline to the end of the CSR arrays. Precondition: at least one polyline
 /// already exists (BREAK only ever calls this while splitting an already-selected polyline), so
 /// `userPolylineOffsets` is never empty here.
-static void AppendNewPolyline(AppCommandState& st, const std::vector<std::pair<float, float>>& xy, bool closed,
+static void AppendNewPolyline(AppCommandState& st, const std::vector<PolyVert>& verts, bool closed,
                               EntityAttributes attrs) {
   const int base = st.userPolylineOffsets.back();
-  for (const auto& p : xy) {
-    st.userPolylineVerts.push_back(p.first);
-    st.userPolylineVerts.push_back(p.second);
-    st.userPolylineVerts.push_back(0.f);
+  for (const auto& p : verts) {
+    st.userPolylineVerts.push_back(p.x);
+    st.userPolylineVerts.push_back(p.y);
+    st.userPolylineVerts.push_back(p.z);
   }
-  st.userPolylineOffsets.push_back(base + static_cast<int>(xy.size()));
+  st.userPolylineOffsets.push_back(base + static_cast<int>(verts.size()));
   st.userPolylineClosed.push_back(closed ? 1u : 0u);
   st.userPolylineAttrs.push_back(std::move(attrs));
 }
-
 static void ApplyBreakToOpenPolyline(AppCommandState& st, int pi, const BreakPoint& p1, const BreakPoint& p2,
                                      std::vector<std::string>& log) {
   const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
@@ -13378,25 +13438,21 @@ static void ApplyBreakToOpenPolyline(AppCommandState& st, int pi, const BreakPoi
     log.push_back("BREAK — that would remove the entire polyline; refused.");
     return;
   }
-  std::vector<std::pair<float, float>> orig;
-  orig.reserve(static_cast<size_t>(v1 - v0));
-  for (int vi = v0; vi < v1; ++vi)
-    orig.push_back({st.userPolylineVerts[static_cast<size_t>(vi) * 3], st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 1]});
+  const std::vector<PolyVert> orig = PolylineVertsOf(st, pi);
 
   auto buildPiece = [&](bool fromStart) {
-    std::vector<std::pair<float, float>> out;
+    std::vector<PolyVert> out;
     if (fromStart) {
       for (int i = 0; i <= nearBp.segIndex; ++i)
         out.push_back(orig[static_cast<size_t>(i)]);
       const auto& last = out.back();
-      if (std::hypot(last.first - nearBp.x, last.second - nearBp.y) > 1e-6f)
-        out.push_back({nearBp.x, nearBp.y});
+      if (std::hypot(last.x - nearBp.x, last.y - nearBp.y) > 1e-6f)
+        out.push_back({nearBp.x, nearBp.y, nearBp.z});
     } else {
-      out.push_back({farBp.x, farBp.y});
+      out.push_back({farBp.x, farBp.y, farBp.z});
       for (int i = farBp.segIndex + 1; i < static_cast<int>(orig.size()); ++i)
         out.push_back(orig[static_cast<size_t>(i)]);
-      if (out.size() >= 2 &&
-          std::hypot(out[0].first - out[1].first, out[0].second - out[1].second) < 1e-6f)
+      if (out.size() >= 2 && std::hypot(out[0].x - out[1].x, out[0].y - out[1].y) < 1e-6f)
         out.erase(out.begin());
     }
     return out;
@@ -13411,8 +13467,8 @@ static void ApplyBreakToOpenPolyline(AppCommandState& st, int pi, const BreakPoi
   } else if (farIsEnd) {
     ReplacePolylineVerts(st, pi, buildPiece(true));
   } else {
-    std::vector<std::pair<float, float>> nearPiece = buildPiece(true);
-    std::vector<std::pair<float, float>> farPiece = buildPiece(false);
+    const std::vector<PolyVert> nearPiece = buildPiece(true);
+    const std::vector<PolyVert> farPiece = buildPiece(false);
     ReplacePolylineVerts(st, pi, nearPiece);
     AppendNewPolyline(st, farPiece, false, DuplicatedEntityAttrs(srcAttrs));
   }
@@ -13447,21 +13503,24 @@ static void ApplyBreakToClosedPolyline(AppCommandState& st, int pi, const BreakP
   };
   const bool samePoint = std::hypot(p1.x - p2.x, p1.y - p2.y) < 1e-4f;
   const float p1Rot = samePoint ? ringLen : rot(p1.param);
-  std::vector<std::pair<float, float>> outVerts;
-  outVerts.push_back({p2.x, p2.y});
+  // Elevation rides along with each kept vertex, and the two cut points bring their own
+  // interpolated Z (issue 01) - this used to rebuild the ring flat at datum.
+  std::vector<PolyVert> outVerts;
+  outVerts.push_back({p2.x, p2.y, p2.z});
   for (int i = 0; i < n; ++i) {
     const float r = rot(vparam[static_cast<size_t>(i)]);
-    if (r > 1e-6f && r < p1Rot - 1e-6f)
-      outVerts.push_back({st.userPolylineVerts[static_cast<size_t>(v0 + i) * 3],
-                          st.userPolylineVerts[static_cast<size_t>(v0 + i) * 3 + 1]});
+    if (r > 1e-6f && r < p1Rot - 1e-6f) {
+      const size_t o = static_cast<size_t>(v0 + i) * 3;
+      outVerts.push_back({st.userPolylineVerts[o], st.userPolylineVerts[o + 1], st.userPolylineVerts[o + 2]});
+    }
   }
-  outVerts.push_back({p1.x, p1.y});
+  outVerts.push_back({p1.x, p1.y, p1.z});
   if (outVerts.size() >= 2 &&
-      std::hypot(outVerts[0].first - outVerts[1].first, outVerts[0].second - outVerts[1].second) < 1e-6f)
+      std::hypot(outVerts[0].x - outVerts[1].x, outVerts[0].y - outVerts[1].y) < 1e-6f)
     outVerts.erase(outVerts.begin() + 1);
   if (outVerts.size() >= 2 &&
-      std::hypot(outVerts.back().first - outVerts[outVerts.size() - 2].first,
-                outVerts.back().second - outVerts[outVerts.size() - 2].second) < 1e-6f)
+      std::hypot(outVerts.back().x - outVerts[outVerts.size() - 2].x,
+                 outVerts.back().y - outVerts[outVerts.size() - 2].y) < 1e-6f)
     outVerts.pop_back();
   PushUndoSnapshot(st, "Break");
   ReplacePolylineVerts(st, pi, outVerts);
@@ -14541,6 +14600,18 @@ static bool ApplyFilletPolylineCorner(AppCommandState& st, int pi, int edgeA, in
     *x = st.userPolylineVerts[static_cast<size_t>(vi) * 3];
     *y = st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 1];
   };
+  auto vertZ = [&](int vi) { return st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 2]; };
+  // A tangent point lies ON one of the two segments meeting at the corner, so its elevation is the
+  // interpolation between that segment's ends (issue 01). Flat polylines - the ordinary case - get
+  // the shared elevation from this either way; a sloped one now gets the right answer instead of 0.
+  auto zOnSegTo = [&](int fromVi, int toVi, float px, float py) {
+    float fx = 0.f, fy = 0.f, tx = 0.f, ty = 0.f;
+    readVert(fromVi, &fx, &fy);
+    readVert(toVi, &tx, &ty);
+    const float len = std::hypot(tx - fx, ty - fy);
+    const float t = (len > 1e-9f) ? (std::hypot(px - fx, py - fy) / len) : 0.f;
+    return vertZ(fromVi) + (vertZ(toVi) - vertZ(fromVi)) * t;
+  };
   float sharedX = 0.f, sharedY = 0.f, otherAX = 0.f, otherAY = 0.f, otherBX = 0.f, otherBY = 0.f;
   readVert(sharedVi, &sharedX, &sharedY);
   readVert(otherAVi, &otherAX, &otherAY);
@@ -14575,20 +14646,24 @@ static bool ApplyFilletPolylineCorner(AppCommandState& st, int pi, int edgeA, in
   const float outTx = aIsIncoming ? tBx : tAx, outTy = aIsIncoming ? tBy : tAy;
   const bool radiusIsZero = radius < 1e-4f;
 
-  std::vector<std::pair<float, float>> newXY;
+  const int inNeighbourVi = aIsIncoming ? otherAVi : otherBVi;
+  const int outNeighbourVi = aIsIncoming ? otherBVi : otherAVi;
+  const float inTz = zOnSegTo(sharedVi, inNeighbourVi, inTx, inTy);
+  const float outTz = zOnSegTo(sharedVi, outNeighbourVi, outTx, outTy);
+  std::vector<PolyVert> newXY;
   newXY.reserve(static_cast<size_t>(numVerts) + 1);
   for (int vi = v0; vi < v1; ++vi) {
     if (vi - v0 == sharedLocal) {
       if (radiusIsZero) {
-        newXY.push_back({cx, cy});
+        newXY.push_back({cx, cy, vertZ(sharedVi)});
       } else {
-        newXY.push_back({inTx, inTy});
-        newXY.push_back({outTx, outTy});
+        newXY.push_back({inTx, inTy, inTz});
+        newXY.push_back({outTx, outTy, outTz});
       }
     } else {
       float x = 0.f, y = 0.f;
       readVert(vi, &x, &y);
-      newXY.push_back({x, y});
+      newXY.push_back({x, y, vertZ(vi)});
     }
   }
 
@@ -14608,6 +14683,11 @@ static bool ApplyFilletPolylineCorner(AppCommandState& st, int pi, int edgeA, in
     arc.r = radius;
     arc.startRad = thetaIn;
     arc.sweepRad = sweep;
+    // CadArc holds ONE elevation - it stays parallel to XY, and a tilted arc would need a plane
+    // normal no accepted requirement asks for (REQ-057 / ADR-025). The two tangent points are equal
+    // on a level polyline, which is the ordinary case and is then exact; where they differ the
+    // midpoint is the closest a single-elevation arc can come. Before this it was 0 regardless.
+    arc.z = 0.5f * (inTz + outTz);
     st.userArcs.push_back(arc);
     st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
   }
@@ -14752,6 +14832,13 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
           arc.r = semiR;
           arc.startRad = std::atan2(anchorY - cy, anchorX - cx);
           arc.sweepRad = 3.14159265358979323846f;  // exact semicircle
+          // Same rule as the ordinary fillet arc (issue 01): the elevation of what it joins.
+          {
+            BreakPoint ba{}, bb{};
+            const float za = ClosestPointOnEntity(st, st.filletFirstEntity, anchorX, anchorY, &ba) ? ba.z : 0.f;
+            const float zb = ClosestPointOnEntity(st, hit, projX, projY, &bb) ? bb.z : 0.f;
+            arc.z = 0.5f * (za + zb);
+          }
           st.userArcs.push_back(arc);
           st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
           BumpCadGpuCache(st);
@@ -14811,6 +14898,16 @@ void HandleFilletViewportPick(AppCommandState& st, float wx, float wy, std::vect
               arc.r = st.filletRadius;
               arc.startRad = thetaA;
               arc.sweepRad = sweep;
+              // The fillet arc takes the elevation of the two curves it joins (issue 01); it used to
+              // be born at datum while both trimmed originals kept theirs. One elevation only -
+              // CadArc stays parallel to XY (REQ-057 / ADR-025) - so the two tangent points' midpoint
+              // is used, which is exact whenever they are level with each other.
+              {
+                BreakPoint bt1{}, bt2{};
+                const float za = ClosestPointOnEntity(st, st.filletFirstEntity, t1x, t1y, &bt1) ? bt1.z : 0.f;
+                const float zb = ClosestPointOnEntity(st, hit, t2x, t2y, &bt2) ? bt2.z : 0.f;
+                arc.z = 0.5f * (za + zb);
+              }
               st.userArcs.push_back(arc);
               st.userArcAttrs.push_back(MakeNewEntityAttrs(st));
             }
@@ -15461,6 +15558,17 @@ static bool ApplyChamferPolylineCorner(AppCommandState& st, int pi, int edgeA, i
     *x = st.userPolylineVerts[static_cast<size_t>(vi) * 3];
     *y = st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 1];
   };
+  auto vertZ = [&](int vi) { return st.userPolylineVerts[static_cast<size_t>(vi) * 3 + 2]; };
+  // Same rule as FILLET's corner (issue 01): a chamfer endpoint sits on one of the two segments
+  // meeting at the corner, so its elevation interpolates along that segment.
+  auto zOnSegTo = [&](int fromVi, int toVi, float qx, float qy) {
+    float fx = 0.f, fy = 0.f, tx = 0.f, ty = 0.f;
+    readVert(fromVi, &fx, &fy);
+    readVert(toVi, &tx, &ty);
+    const float len = std::hypot(tx - fx, ty - fy);
+    const float t = (len > 1e-9f) ? (std::hypot(qx - fx, qy - fy) / len) : 0.f;
+    return vertZ(fromVi) + (vertZ(toVi) - vertZ(fromVi)) * t;
+  };
   float sharedX = 0.f, sharedY = 0.f, otherAX = 0.f, otherAY = 0.f, otherBX = 0.f, otherBY = 0.f;
   readVert(sharedVi, &sharedX, &sharedY);
   readVert(otherAVi, &otherAX, &otherAY);
@@ -15498,20 +15606,24 @@ static bool ApplyChamferPolylineCorner(AppCommandState& st, int pi, int edgeA, i
   const bool bothZero = (st.chamferMode == 0) ? (st.chamferDist1 < 1e-4f && st.chamferDist2 < 1e-4f)
                                               : (st.chamferDist1 < 1e-4f);
 
-  std::vector<std::pair<float, float>> newXY;
+  const int inNeighbourVi = aIsIncoming ? otherAVi : otherBVi;
+  const int outNeighbourVi = aIsIncoming ? otherBVi : otherAVi;
+  const float inZ = zOnSegTo(sharedVi, inNeighbourVi, inX, inY);
+  const float outZ = zOnSegTo(sharedVi, outNeighbourVi, outX, outY);
+  std::vector<PolyVert> newXY;
   newXY.reserve(static_cast<size_t>(numVerts) + 1);
   for (int vi = v0; vi < v1; ++vi) {
     if (vi - v0 == sharedLocal) {
       if (bothZero) {
-        newXY.push_back({px, py});
+        newXY.push_back({px, py, vertZ(sharedVi)});
       } else {
-        newXY.push_back({inX, inY});
-        newXY.push_back({outX, outY});
+        newXY.push_back({inX, inY, inZ});
+        newXY.push_back({outX, outY, outZ});
       }
     } else {
       float x = 0.f, y = 0.f;
       readVert(vi, &x, &y);
-      newXY.push_back({x, y});
+      newXY.push_back({x, y, vertZ(vi)});
     }
   }
 
@@ -15519,12 +15631,15 @@ static bool ApplyChamferPolylineCorner(AppCommandState& st, int pi, int edgeA, i
   ReplacePolylineVerts(st, pi, newXY);
   if (!bothZero) {
     const size_t li = st.userLinesFlat.size() / 6;
+    // The chamfer segment joins two points that have real elevations, so it is built at them.
+    // It used to be born at datum while the polyline it connects kept its height - a corner whose
+    // two ends were at grade and whose connector was hundreds of feet below (issue 01).
     st.userLinesFlat.push_back(inX);
     st.userLinesFlat.push_back(inY);
-    st.userLinesFlat.push_back(0.f);
+    st.userLinesFlat.push_back(inZ);
     st.userLinesFlat.push_back(outX);
     st.userLinesFlat.push_back(outY);
-    st.userLinesFlat.push_back(0.f);
+    st.userLinesFlat.push_back(outZ);
     st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
     (void)li;
   }
@@ -15668,12 +15783,21 @@ void HandleChamferViewportPick(AppCommandState& st, float wx, float wy, std::vec
           const bool bothZero = (st.chamferMode == 0) ? (st.chamferDist1 < 1e-4f && st.chamferDist2 < 1e-4f)
                                                        : (st.chamferDist1 < 1e-4f);
           if (!bothZero) {
+            // The new segment takes the elevation of the two curves it actually joins (issue 01).
+            // It used to be written at datum while the trimmed originals kept their height, which
+            // left a corner with both ends at grade and its connector hundreds of feet below -
+            // geometrically impossible, and invisible in plan, which is where a chamfer is checked.
+            // ClosestPointOnEntity resolves the elevation the same way for a line, an arc or a
+            // polyline, so this needs no per-kind branch.
+            BreakPoint bz1{}, bz2{};
+            const float z1 = ClosestPointOnEntity(st, st.chamferFirstEntity, d1x, d1y, &bz1) ? bz1.z : 0.f;
+            const float z2 = ClosestPointOnEntity(st, hit, d2x, d2y, &bz2) ? bz2.z : 0.f;
             st.userLinesFlat.push_back(d1x);
             st.userLinesFlat.push_back(d1y);
-            st.userLinesFlat.push_back(0.f);
+            st.userLinesFlat.push_back(z1);
             st.userLinesFlat.push_back(d2x);
             st.userLinesFlat.push_back(d2y);
-            st.userLinesFlat.push_back(0.f);
+            st.userLinesFlat.push_back(z2);
             st.userLineAttrs.push_back(MakeNewEntityAttrs(st));
           }
           BumpCadGpuCache(st);
@@ -21444,6 +21568,14 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
 }
 
 void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
+  // Same space guard as OVERKILL (issue 02). JOIN reaches model geometry from a sheet because a
+  // MODEL selection survives the switch to paper space, so "JOIN - created 1 polyline(s)" could
+  // consume two model lines the user could not see. That the selection persists is arguably right;
+  // acting on it from a space that cannot show it is not.
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
+    log.push_back("JOIN — not available in paper space; switch to model space or a floating viewport.");
+    return;
+  }
   PushUndoSnapshot(st, "Join");
   using ST = SelectedEntity::Type;
 
@@ -21461,8 +21593,27 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
                   (featureLinesSkipped == 1 ? "" : "s") +
                   " ignored: joining feature lines has no defined elevation at the shared end.");
 
+  // The same disclosure for surfaces (issue 08). The edge walk below ignores them, and until now it
+  // did so silently: real work would be reported ("JOIN — created 1 polyline(s)") while one selected
+  // object was quietly left out. That is the failure mode ADR-036 (c) and req068-surface-selection's
+  // own header describe - a skip and a success look identical right up until the user notices their
+  // surface did not change and cannot find out why. MOVE already names it; this is the neighbour
+  // that was missed.
+  int surfacesSkipped = 0;
+  for (const auto& se : st.selection)
+    if (se.type == ST::Surface)
+      ++surfacesSkipped;
+  if (surfacesSkipped > 0)
+    log.push_back("JOIN — " + std::to_string(surfacesSkipped) + " surface" +
+                  (surfacesSkipped == 1 ? "" : "s") +
+                  " ignored: a surface is derived from its definition, not linework that can be joined.");
+
+  // z0/z1 carry each edge's endpoint elevations through the join (issue 01). Without them the
+  // rebuilt polyline was written flat at datum, so joining two lines surveyed at 286 ft produced a
+  // polyline at 0 - a silent loss of the one quantity that was actually measured in the field.
   struct Edge {
     float x0, y0, x1, y1;
+    float z0, z1;
     int lineIx;
     int polyIx;
   };
@@ -21475,23 +21626,25 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
   if (ComputeWorldExtents(st, &mnX, &mxX, &mnY, &mxY))
     tol = std::max(1e-5f, static_cast<float>(1e-4 * std::max(mxX - mnX, mxY - mnY)));
 
-  auto readLine = [&](int idx, float* x0, float* y0, float* x1, float* y1) -> bool {
+  auto readLine = [&](int idx, float* x0, float* y0, float* z0, float* x1, float* y1, float* z1) -> bool {
     const size_t k = static_cast<size_t>(idx) * 6;
     if (k + 5 >= st.userLinesFlat.size())
       return false;
     *x0 = st.userLinesFlat[k];
     *y0 = st.userLinesFlat[k + 1];
+    *z0 = st.userLinesFlat[k + 2];
     *x1 = st.userLinesFlat[k + 3];
     *y1 = st.userLinesFlat[k + 4];
+    *z1 = st.userLinesFlat[k + 5];
     return true;
   };
 
   for (const auto& se : st.selection) {
     if (se.type == ST::LineSeg && se.index >= 0) {
-      float x0 = 0.f, y0 = 0.f, x1 = 0.f, y1 = 0.f;
-      if (!readLine(se.index, &x0, &y0, &x1, &y1))
+      float x0 = 0.f, y0 = 0.f, z0 = 0.f, x1 = 0.f, y1 = 0.f, z1 = 0.f;
+      if (!readLine(se.index, &x0, &y0, &z0, &x1, &y1, &z1))
         continue;
-      edges.push_back({x0, y0, x1, y1, se.index, -1});
+      edges.push_back({x0, y0, x1, y1, z0, z1, se.index, -1});
     } else if (se.type == ST::Polyline && se.index >= 0) {
       const int pi = se.index;
       if (static_cast<size_t>(pi + 1) >= st.userPolylineOffsets.size())
@@ -21503,16 +21656,20 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
       for (int vi = v0; vi + 1 < v1; ++vi) {
         const float ax = st.userPolylineVerts[static_cast<size_t>(vi * 3)];
         const float ay = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)];
+        const float az = st.userPolylineVerts[static_cast<size_t>(vi * 3 + 2)];
         const float bx = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3)];
         const float by = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
-        edges.push_back({ax, ay, bx, by, -1, pi});
+        const float bz = st.userPolylineVerts[static_cast<size_t>((vi + 1) * 3 + 2)];
+        edges.push_back({ax, ay, bx, by, az, bz, -1, pi});
       }
       if (closed && v1 - v0 >= 2) {
         const float ax = st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3)];
         const float ay = st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 1)];
+        const float az = st.userPolylineVerts[static_cast<size_t>((v1 - 1) * 3 + 2)];
         const float bx = st.userPolylineVerts[static_cast<size_t>(v0 * 3)];
         const float by = st.userPolylineVerts[static_cast<size_t>(v0 * 3 + 1)];
-        edges.push_back({ax, ay, bx, by, -1, pi});
+        const float bz = st.userPolylineVerts[static_cast<size_t>(v0 * 3 + 2)];
+        edges.push_back({ax, ay, bx, by, az, bz, -1, pi});
       }
     }
   }
@@ -21588,15 +21745,16 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
       }
     }
 
-    std::unordered_map<int, std::pair<float, float>> rep;
+    struct RepPt { float x, y, z; };
+    std::unordered_map<int, RepPt> rep;
     for (int ej : comp) {
       const Edge& E = edges[static_cast<size_t>(ej)];
       const int k0 = clusterOf(2 * ej);
       const int k1 = clusterOf(2 * ej + 1);
       if (!rep.count(k0))
-        rep[k0] = {E.x0, E.y0};
+        rep[k0] = {E.x0, E.y0, E.z0};
       if (!rep.count(k1))
-        rep[k1] = {E.x1, E.y1};
+        rep[k1] = {E.x1, E.y1, E.z1};
     }
 
     std::unordered_map<int, int> deg;
@@ -21678,13 +21836,13 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
       const int cid = clusters[static_cast<size_t>(d)];
       const auto& pt = rep[cid];
       if (!pv.empty()) {
-        const size_t z = pv.size();
-        if (z >= 3 && pv[z - 3] == pt.first && pv[z - 2] == pt.second)
+        const size_t n2 = pv.size();
+        if (n2 >= 3 && pv[n2 - 3] == pt.x && pv[n2 - 2] == pt.y)
           return;
       }
-      pv.push_back(pt.first);
-      pv.push_back(pt.second);
-      pv.push_back(0.f);
+      pv.push_back(pt.x);
+      pv.push_back(pt.y);
+      pv.push_back(pt.z);
     };
     for (const int d : pathVerts)
       appendCluster(d);
@@ -21751,6 +21909,16 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
 // Tolerance is auto-derived from drawing extents (1e-4 × span, min 1e-6).
 // =============================================================================
 void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
+  // OVERKILL is a MODEL-space tool and has no paper branch (issue 02). Run from a layout it used to
+  // ignore the sheet entirely - the only geometry the user can see, and the reason they ran it -
+  // while rewriting every model line, and then report "nothing to clean up", which was accurate
+  // about neither. The drawing commands have routed by space since issue #84; the editing commands
+  // were never given the same treatment. Refusing is the honest half of that fix: acting on a space
+  // the user is not looking at is worse than not acting.
+  if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {
+    log.push_back("OVERKILL — not available in paper space; switch to model space or a floating viewport.");
+    return;
+  }
   PushUndoSnapshot(st, "Overkill");
   // ── tolerance ────────────────────────────────────────────────────────────
   float tol = 1e-3f;
@@ -21766,7 +21934,11 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
   // 1. LINE SEGMENTS
   // =========================================================================
   {
-    struct LSeg { float x0, y0, x1, y1; EntityAttributes attr; };
+    // z0/z1 are load-bearing (issue 01). This working record used to be XY-only, and because the
+    // write-back below CLEARS and rebuilds userLinesFlat, every line was re-emitted at datum whether
+    // or not it was ever a removal candidate - which is how "OVERKILL - nothing to clean up" and
+    // "every elevation in the drawing destroyed" happened in the same run.
+    struct LSeg { float x0, y0, x1, y1; float z0, z1; EntityAttributes attr; };
 
     // Snapshot into a working vector that carries attrs
     const size_t nL = st.userLinesFlat.size() / 6;
@@ -21776,6 +21948,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
       const size_t k = i * 6;
       segs.push_back({ st.userLinesFlat[k],     st.userLinesFlat[k + 1],
                        st.userLinesFlat[k + 3], st.userLinesFlat[k + 4],
+                       st.userLinesFlat[k + 2], st.userLinesFlat[k + 5],
                        i < st.userLineAttrs.size() ? st.userLineAttrs[i] : MakeNewEntityAttrs(st) });
     }
 
@@ -21798,6 +21971,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
       if (dx < 0.f || (std::fabs(dx) < 1e-12f && dy < 0.f)) {
         std::swap(s.x0, s.x1);
         std::swap(s.y0, s.y1);
+        std::swap(s.z0, s.z1);  // the elevations belong to the endpoints, so they swap with them
       }
     }
 
@@ -21818,7 +21992,13 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
           if (dead[j]) continue;
           const float dx0 = segs[j].x0 - segs[i].x0, dy0 = segs[j].y0 - segs[i].y0;
           const float dx1 = segs[j].x1 - segs[i].x1, dy1 = segs[j].y1 - segs[i].y1;
-          if (dx0 * dx0 + dy0 * dy0 < tolSq && dx1 * dx1 + dy1 * dy1 < tolSq) {
+          // Elevation counts (issue 01). Two segments identical in plan but at different heights are
+          // different objects - a fence line and the contour beneath it - and treating them as
+          // duplicates silently deleted one of them. AutoCAD exposes this as an explicit "Ignore Z"
+          // option; that option is not built here, and this is the safe default of the two.
+          const float dz0 = segs[j].z0 - segs[i].z0, dz1 = segs[j].z1 - segs[i].z1;
+          if (dx0 * dx0 + dy0 * dy0 < tolSq && dx1 * dx1 + dy1 * dy1 < tolSq &&
+              std::fabs(dz0) <= tol && std::fabs(dz1) <= tol) {
             dead[j] = true;
             ++nRemoved;
           }
@@ -21874,6 +22054,26 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
             const float vx = segs[j].x0 - segs[i].x0;
             const float vy = segs[j].y0 - segs[i].y0;
             if (std::fabs(vx * uyi - vy * uxi) > tol) continue;
+          }
+
+          // (d) Same elevation profile? Two collinear segments at different heights are different
+          // objects and must not merge into one (issue 01) - the merged output can hold only one
+          // elevation per endpoint, so merging across a height difference would invent geometry.
+          // Each segment defines a linear z along the shared axis; they may merge only where those
+          // agree, which is exact for the level case and correct for two pieces of one slope.
+          {
+            auto zAlong = [&](int s, float t) {
+              const float ta = (segs[s].x0 - segs[i].x0) * uxi + (segs[s].y0 - segs[i].y0) * uyi;
+              const float tb = (segs[s].x1 - segs[i].x0) * uxi + (segs[s].y1 - segs[i].y0) * uyi;
+              const float span = tb - ta;
+              const float f = (std::fabs(span) > 1e-9f) ? ((t - ta) / span) : 0.f;
+              return segs[s].z0 + (segs[s].z1 - segs[s].z0) * f;
+            };
+            const float tj0 = (segs[j].x0 - segs[i].x0) * uxi + (segs[j].y0 - segs[i].y0) * uyi;
+            const float tj1 = (segs[j].x1 - segs[i].x0) * uxi + (segs[j].y1 - segs[i].y0) * uyi;
+            if (std::fabs(zAlong(i, tj0) - segs[j].z0) > tol ||
+                std::fabs(zAlong(i, tj1) - segs[j].z1) > tol)
+              continue;
           }
 
           // (c) Overlap or touch along uxi,uyi?
@@ -21949,6 +22149,20 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
           LSeg nl;
           nl.x0   = ox + ux * m.t0;  nl.y0 = oy + uy * m.t0;
           nl.x1   = ox + ux * m.t1;  nl.y1 = oy + uy * m.t1;
+          // Every member of this group shares one elevation profile along the axis - test (d) above
+          // is what guarantees it - so the representative's profile describes the merged span too.
+          {
+            const LSeg& r = segs[static_cast<size_t>(m.idx)];
+            const float ra = (r.x0 - ox) * ux + (r.y0 - oy) * uy;
+            const float rb = (r.x1 - ox) * ux + (r.y1 - oy) * uy;
+            const float span = rb - ra;
+            auto zAt = [&](float t) {
+              const float f = (std::fabs(span) > 1e-9f) ? ((t - ra) / span) : 0.f;
+              return r.z0 + (r.z1 - r.z0) * f;
+            };
+            nl.z0 = zAt(m.t0);
+            nl.z1 = zAt(m.t1);
+          }
           nl.attr = segs[static_cast<size_t>(m.idx)].attr;
           result.push_back(std::move(nl));
         }
@@ -21963,7 +22177,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
     st.userLinesFlat.reserve(segs.size() * 6);
     st.userLineAttrs.reserve(segs.size());
     for (const auto& s : segs) {
-      st.userLinesFlat.insert(st.userLinesFlat.end(), { s.x0, s.y0, 0.f, s.x1, s.y1, 0.f });
+      st.userLinesFlat.insert(st.userLinesFlat.end(), { s.x0, s.y0, s.z0, s.x1, s.y1, s.z1 });
       st.userLineAttrs.push_back(s.attr);
     }
   }
@@ -22095,21 +22309,17 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
       const bool closed = static_cast<size_t>(pi) < st.userPolylineClosed.size() &&
                           st.userPolylineClosed[static_cast<size_t>(pi)];
 
-      // Collect this polyline's vertices
-      std::vector<std::pair<float, float>> verts;
-      verts.reserve(static_cast<size_t>(v1 - v0));
-      for (int vi = v0; vi < v1; ++vi) {
-        verts.push_back({ st.userPolylineVerts[static_cast<size_t>(vi * 3)],
-                          st.userPolylineVerts[static_cast<size_t>(vi * 3 + 1)] });
-      }
+      // Collect this polyline's vertices, elevation included (issue 01) - the rebuild below used to
+      // write every Z back as 0, flattening any polyline OVERKILL touched.
+      const std::vector<PolyVert> verts = PolylineVertsOf(st, pi);
 
       // Remove consecutive duplicate vertices (zero-length steps)
-      std::vector<std::pair<float, float>> clean;
+      std::vector<PolyVert> clean;
       clean.reserve(verts.size());
       clean.push_back(verts[0]);
       for (size_t k = 1; k < verts.size(); ++k) {
-        const float dx = verts[k].first  - clean.back().first;
-        const float dy = verts[k].second - clean.back().second;
+        const float dx = verts[k].x - clean.back().x;
+        const float dy = verts[k].y - clean.back().y;
         if (dx * dx + dy * dy >= tolSq)
           clean.push_back(verts[k]);
         else
@@ -22118,8 +22328,8 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
       // For closed polylines, also remove zero-length wrap (last vertex ≈ first)
       if (closed) {
         while (clean.size() >= 2) {
-          const float dx = clean.back().first  - clean.front().first;
-          const float dy = clean.back().second - clean.front().second;
+          const float dx = clean.back().x - clean.front().x;
+          const float dy = clean.back().y - clean.front().y;
           if (dx * dx + dy * dy < tolSq) { clean.pop_back(); ++nRemoved; }
           else break;
         }
@@ -22137,7 +22347,7 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
 
       std::vector<float> newV;
       newV.reserve(static_cast<size_t>(nNew * 3));
-      for (const auto& p : clean) { newV.push_back(p.first); newV.push_back(p.second); newV.push_back(0.f); }
+      for (const auto& p : clean) { newV.push_back(p.x); newV.push_back(p.y); newV.push_back(p.z); }
       st.userPolylineVerts.insert(
           st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0 * 3),
           newV.begin(), newV.end());
@@ -22162,6 +22372,14 @@ void ExecuteOverkill(AppCommandState& st, std::vector<std::string>& log) {
   } else {
     log.push_back("OVERKILL — nothing to clean up.");
   }
+  // Say what was NOT considered (issue 08, REQ-201). OVERKILL never reported skipping anything of
+  // any kind, so on a drawing with surfaces "nothing to clean up" could be read as "your surfaces
+  // are clean" when they were never examined. Surfaces are derived from their definitions and are
+  // not duplicate linework, so excluding them is correct - being silent about it was not.
+  if (!st.cadSurfaces.empty())
+    log.push_back("OVERKILL — " + std::to_string(st.cadSurfaces.size()) + " surface" +
+                  (st.cadSurfaces.size() == 1 ? " was" : "s were") +
+                  " not examined: a surface is derived from its definition, not duplicate linework.");
 }
 
 void StartJoinCommand(AppCommandState& st, std::vector<std::string>& log) {
@@ -26827,6 +27045,236 @@ void RepeatLastCommand(AppCommandState& st, std::vector<std::string>& log) {
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// QUICKSELECT (issue 05)
+// ---------------------------------------------------------------------------
+//
+// This lived in `src/ui/CadUi.cpp` as a `static` function — 214 lines of pure selection filtering
+// on the wrong side of the link boundary. architecture.md says what that costs: the UI layer is
+// "what headless does not link", so the whole matrix (2 scopes x 12 object types x 11 properties x
+// 5 operators x include/exclude/append) was unreachable from a transcript, and `static` put it out
+// of reach of a Catch2 test as well. It was the only Execute* function outside the command layer,
+// 1 of 12 — the name followed the convention, the location did not.
+//
+// The move is a relocation, not a redesign: every input it reads already lives in
+// AppCommandState (qsApplyTo / qsObjectType / qsProperty / qsOperator / qsValueBuf / qsIncludeMode
+// / qsAppendToExisting) and it touches no ImGui at all. The panel stays exactly what the driver's
+// own IMPORT POINTS comment praises — a form, not logic — and calls this unchanged.
+void ExecuteQuickSelect(AppCommandState& cmd, std::vector<std::string>& log) {
+  using OT = AppCommandState::QsObjectType;
+  using QP = AppCommandState::QsProperty;
+  using QO = AppCommandState::QsOperator;
+  using QI = AppCommandState::QsInclude;
+  using T  = SelectedEntity::Type;
+
+  float numVal = 0.f;
+  try { numVal = std::stof(cmd.qsValueBuf); } catch (...) {}
+  const std::string strVal = cmd.qsValueBuf;
+
+  auto matchStr = [&](const std::string& prop) -> bool {
+    switch (cmd.qsOperator) {
+    case QO::SelectAll:  return true;
+    case QO::Equals:     return prop == strVal;
+    case QO::NotEquals:  return prop != strVal;
+    default:             return false;
+    }
+  };
+  auto matchNum = [&](float prop) -> bool {
+    switch (cmd.qsOperator) {
+    case QO::SelectAll:     return true;
+    case QO::Equals:        return std::fabs(prop - numVal) < 1e-5f;
+    case QO::NotEquals:     return std::fabs(prop - numVal) >= 1e-5f;
+    case QO::LessThan:      return prop < numVal;
+    case QO::GreaterThan:   return prop > numVal;
+    }
+    return false;
+  };
+  auto typeMatches = [&](OT t) -> bool {
+    return cmd.qsObjectType == OT::All || cmd.qsObjectType == t;
+  };
+  auto getAttrs = [&](const SelectedEntity& e) -> const EntityAttributes* {
+    switch (e.type) {
+    case T::LineSeg:    return (size_t)e.index < cmd.userLineAttrs.size()       ? &cmd.userLineAttrs[(size_t)e.index]       : nullptr;
+    case T::Circle:     return (size_t)e.index < cmd.userCircleAttrs.size()     ? &cmd.userCircleAttrs[(size_t)e.index]     : nullptr;
+    case T::Arc:        return (size_t)e.index < cmd.userArcAttrs.size()        ? &cmd.userArcAttrs[(size_t)e.index]        : nullptr;
+    case T::Ellipse:    return (size_t)e.index < cmd.userEllAttrs.size()        ? &cmd.userEllAttrs[(size_t)e.index]        : nullptr;
+    case T::Polyline:   return (size_t)e.index < cmd.userPolylineAttrs.size()   ? &cmd.userPolylineAttrs[(size_t)e.index]   : nullptr;
+    case T::Annotation: return (size_t)e.index < cmd.cadAnnotationAttrs.size()  ? &cmd.cadAnnotationAttrs[(size_t)e.index]  : nullptr;
+    case T::Table:      return (size_t)e.index < cmd.cadTableAttrs.size()       ? &cmd.cadTableAttrs[(size_t)e.index]       : nullptr;
+    default:            return nullptr;
+    }
+  };
+
+  auto testEntity = [&](const SelectedEntity& e) -> bool {
+    // Type gate
+    switch (e.type) {
+    case T::LineSeg:  if (!typeMatches(OT::Line))    return false; break;
+    case T::Circle:   if (!typeMatches(OT::Circle))  return false; break;
+    case T::Arc:      if (!typeMatches(OT::Arc))     return false; break;
+    case T::Ellipse:  if (!typeMatches(OT::Ellipse)) return false; break;
+    case T::Polyline: if (!typeMatches(OT::Polyline))return false; break;
+    case T::Annotation: {
+      if ((size_t)e.index >= cmd.cadAnnotations.size()) return false;
+      const auto k = cmd.cadAnnotations[(size_t)e.index].kind;
+      using AK = CadAnnotation::Kind;
+      if (cmd.qsObjectType == OT::Text       && k != AK::Text)       return false;
+      if (cmd.qsObjectType == OT::Mtext      && k != AK::Mtext)      return false;
+      if (cmd.qsObjectType == OT::DimAligned && k != AK::DimAligned) return false;
+      if (cmd.qsObjectType == OT::DimLinear  && k != AK::DimLinear)  return false;
+      if (cmd.qsObjectType == OT::DimAngular && k != AK::DimAngular) return false;
+      if (cmd.qsObjectType != OT::All && cmd.qsObjectType != OT::Text &&
+          cmd.qsObjectType != OT::Mtext && cmd.qsObjectType != OT::DimAligned &&
+          cmd.qsObjectType != OT::DimLinear && cmd.qsObjectType != OT::DimAngular)
+        return false;
+      break;
+    }
+    case T::Table:
+      if (cmd.qsObjectType != OT::All)
+        return false;
+      break;
+    default: return false;
+    }
+    // Property test
+    const EntityAttributes* attrs = getAttrs(e);
+    switch (cmd.qsProperty) {
+    case QP::Layer:   return attrs ? matchStr(attrs->layer) : (cmd.qsOperator == QO::SelectAll);
+    case QP::Color: {
+      if (!attrs) return cmd.qsOperator == QO::SelectAll;
+      // Resolve "ByLayer" to the layer's actual color so filtering by "Red" finds
+      // entities that visually appear red even when their stored color is ByLayer.
+      std::string effectiveColor = attrs->color;
+      if (effectiveColor == "ByLayer") {
+        const CadLayerRow* row = FindDrawingLayerRowCi(cmd, attrs->layer);
+        if (row && !row->color.empty())
+          effectiveColor = row->color;
+      }
+      return matchStr(effectiveColor);
+    }
+    case QP::Length: {
+      float len = 0.f;
+      if (e.type == T::LineSeg) {
+        const size_t k = (size_t)e.index * 6;
+        if (k + 4 < cmd.userLinesFlat.size())
+          len = std::hypot(cmd.userLinesFlat[k+3] - cmd.userLinesFlat[k],
+                           cmd.userLinesFlat[k+4] - cmd.userLinesFlat[k+1]);
+      } else if (e.type == T::Polyline) {
+        const int np = (int)cmd.userPolylineOffsets.size();
+        if (e.index >= 0 && e.index + 1 < np) {
+          const int sv = cmd.userPolylineOffsets[(size_t)e.index];
+          const int ev = cmd.userPolylineOffsets[(size_t)e.index + 1];
+          for (int vi = sv; vi + 1 < ev; ++vi) {
+            const size_t xi = (size_t)vi * 3;
+            if (xi + 3 < cmd.userPolylineVerts.size())
+              len += std::hypot(cmd.userPolylineVerts[xi+3] - cmd.userPolylineVerts[xi],
+                                cmd.userPolylineVerts[xi+4] - cmd.userPolylineVerts[xi+1]);
+          }
+        }
+      }
+      return matchNum(len);
+    }
+    case QP::Radius: {
+      float r = 0.f;
+      if (e.type == T::Circle) {
+        const size_t k = (size_t)e.index * 4;
+        if (k + 3 < cmd.userCirclesCxCyZR.size()) r = cmd.userCirclesCxCyZR[k + 3];
+      } else if (e.type == T::Arc && (size_t)e.index < cmd.userArcs.size()) {
+        r = cmd.userArcs[(size_t)e.index].r;
+      }
+      return matchNum(r);
+    }
+    case QP::Closed:
+      if (e.type == T::Polyline && (size_t)e.index < cmd.userPolylineClosed.size()) {
+        const bool closed = cmd.userPolylineClosed[(size_t)e.index] != 0;
+        if (cmd.qsOperator == QO::SelectAll) return true;
+        const bool want = (strVal == "Yes" || strVal == "yes" || strVal == "1" || strVal == "true");
+        return (cmd.qsOperator == QO::Equals) ? (closed == want) : (closed != want);
+      }
+      return false;
+    case QP::Content:
+      if (e.type == T::Annotation && (size_t)e.index < cmd.cadAnnotations.size())
+        return matchStr(cmd.cadAnnotations[(size_t)e.index].text);
+      if (e.type == T::Table && (size_t)e.index < cmd.cadTables.size()) {
+        std::string joined;
+        for (const std::string& c : cmd.cadTables[(size_t)e.index].cells) {
+          if (!joined.empty())
+            joined += " ";
+          joined += c;
+        }
+        return matchStr(joined);
+      }
+      return false;
+    default: return cmd.qsOperator == QO::SelectAll;
+    }
+  };
+
+  auto testSurvey = [&](int spi) -> bool {
+    if (!typeMatches(OT::SurveyPoint)) return false;
+    if ((size_t)spi >= cmd.surveyPoints.size()) return false;
+    const SurveyPoint& sp = cmd.surveyPoints[(size_t)spi];
+    switch (cmd.qsProperty) {
+    case QP::Layer:       return matchStr(sp.layer);
+    case QP::Id:          return matchNum(static_cast<float>(sp.id));
+    case QP::Elevation:   return matchNum(sp.elevation);
+    case QP::Easting:     return matchNum(sp.easting);
+    case QP::Northing:    return matchNum(sp.northing);
+    case QP::Description: return matchStr(sp.description);
+    default:              return cmd.qsOperator == QO::SelectAll;
+    }
+  };
+
+  const bool exclude = (cmd.qsIncludeMode == QI::Exclude);
+  std::vector<SelectedEntity> newCad;
+  std::vector<int> newSurvey;
+
+  auto addCad = [&](const SelectedEntity& e) {
+    if (testEntity(e) != exclude) newCad.push_back(e);
+  };
+  auto addSurvey = [&](int spi) {
+    if (testSurvey(spi) != exclude) newSurvey.push_back(spi);
+  };
+
+  if (cmd.qsApplyTo == AppCommandState::QsApplyTo::EntireDrawing) {
+    const int nLines = (int)(cmd.userLinesFlat.size() / 6);
+    for (int i = 0; i < nLines; ++i)  addCad({SelectedEntity::Type::LineSeg, i});
+    const int nCirc = (int)(cmd.userCirclesCxCyZR.size() / 4);
+    for (int i = 0; i < nCirc; ++i)   addCad({SelectedEntity::Type::Circle, i});
+    for (int i = 0; i < (int)cmd.userArcs.size(); ++i)      addCad({SelectedEntity::Type::Arc, i});
+    for (int i = 0; i < (int)cmd.userEllipses.size(); ++i)  addCad({SelectedEntity::Type::Ellipse, i});
+    const int nPoly = std::max(0, (int)cmd.userPolylineOffsets.size() - 1);
+    for (int i = 0; i < nPoly; ++i)   addCad({SelectedEntity::Type::Polyline, i});
+    for (int i = 0; i < (int)cmd.cadAnnotations.size(); ++i) addCad({SelectedEntity::Type::Annotation, i});
+    for (int i = 0; i < (int)cmd.cadTables.size(); ++i)      addCad({SelectedEntity::Type::Table, i});
+    for (int i = 0; i < (int)cmd.surveyPoints.size(); ++i)   addSurvey(i);
+  } else {
+    for (const auto& e : cmd.selection)           addCad(e);
+    for (int spi : cmd.selectedSurveyPointIndices) addSurvey(spi);
+  }
+
+  if (cmd.qsAppendToExisting) {
+    for (const auto& e : newCad) {
+      if (!std::any_of(cmd.selection.begin(), cmd.selection.end(),
+            [&](const SelectedEntity& s){ return s.type == e.type && s.index == e.index; }))
+        cmd.selection.push_back(e);
+    }
+    for (int spi : newSurvey) {
+      if (std::find(cmd.selectedSurveyPointIndices.begin(), cmd.selectedSurveyPointIndices.end(), spi)
+          == cmd.selectedSurveyPointIndices.end())
+        cmd.selectedSurveyPointIndices.push_back(spi);
+    }
+  } else {
+    cmd.selection = std::move(newCad);
+    cmd.selectedSurveyPointIndices = std::move(newSurvey);
+  }
+
+  EnsureAttrCounts(cmd);
+  BumpCadGpuCache(cmd);
+
+  const int total = (int)(cmd.selection.size() + cmd.selectedSurveyPointIndices.size());
+  char msg[128];
+  std::snprintf(msg, sizeof(msg), "QUICKSELECT — %d item%s selected.", total, total == 1 ? "" : "s");
+  log.push_back(msg);
+}
 void StartQuickSelectCommand(AppCommandState& st, std::vector<std::string>& log) {
   st.showQuickSelectWindow = true;
   log.push_back("QUICKSELECT — filter entities by type and property.");

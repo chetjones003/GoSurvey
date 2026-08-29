@@ -1,0 +1,24 @@
+# Issue 03 — importing state-plane points into a FRESH drawing lost up to 0.123 ft per point.
+#
+# The importer narrowed each coordinate to float while the document origin was still 0, so the
+# subtraction was `worldE - 0` and the cast happened at full state-plane magnitude. Near 2.4e6 a
+# float steps by 0.25, so every coordinate snapped to that grid. The rebase that already ran after
+# the loop could not help: by then the low bits were gone.
+#
+# This transcript is only possible because EXPORT POINTS is now driven (issue 06, gap 2). Before
+# that the CSV round trip could not be expressed at all, which is why this sat unmeasured end to end
+# for three probes.
+#
+# Note what does NOT catch this: the imported points are finite, correctly counted and correctly
+# strided, so CHECK and every EXPECT count pass either way. The round trip is the oracle.
+
+NEW
+IMPORT POINTS samples/state-plane-points.csv
+EXPECT SURVEYPOINTS 5
+
+# Straight back out. If the import narrowed at magnitude, these differ from the input in the
+# hundredths — 0.123 ft was the measured worst case on a real 40-point topo.
+EXPORT POINTS %OUT%/state-plane-roundtrip.csv
+EXPECT SAMEFILE %OUT%/state-plane-roundtrip.csv samples/state-plane-points-expected.csv
+
+CHECK ALL

@@ -1,0 +1,40 @@
+# Issue 08 — JOIN and OVERKILL skipped surfaces without saying so.
+#
+# A TIN surface is display-only and derived, so refusing to act on it is CORRECT. REQ-068 / ADR-036
+# require the refusal to be VISIBLE, and req068-surface-selection's own header says why: a transform
+# that quietly skipped the surface looks identical to one that moved it and rebuilt, right up until
+# the user notices their surface did not change and cannot find out why.
+#
+# MOVE does this well. JOIN already did it for FEATURE LINES — count, reason, same shape — and simply
+# had no equivalent branch for its neighbour Surface in the same enum. OVERKILL reported skipping
+# nothing of any kind: grep -cE "ignored|excluded|skipped" over its whole body returned 0.
+
+OPEN samples/surface-demo.gs
+CMD SURFACECREATE Test EG, Existing Ground
+EXPECT SURFACES 1
+
+# --- OVERKILL says what it did not examine ------------------------------------------------------
+# "nothing to clean up" on a drawing with surfaces could be read as "your surfaces are clean" when
+# they were never looked at.
+CMD OVERKILL
+EXPECT LOG "not examined"
+EXPECT SURFACES 1
+
+# --- JOIN names the surface it left out ---------------------------------------------------------
+# Two joinable lines plus a surface in one selection: real work is done, so before this the user got
+# "JOIN - created 1 polyline(s)" and no hint that one selected object was ignored.
+CMD LINE
+CMD 0,0
+CMD 100,0
+ESC
+CMD LINE
+CMD 100,0
+CMD 100,100
+ESC
+CMD JOIN
+BOX -500 -500 500 500
+CMD
+EXPECT LOG "ignored: a surface is derived"
+EXPECT SURFACES 1
+
+CHECK ALL

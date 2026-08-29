@@ -16,6 +16,7 @@
 //     difference REQ-203's "save a .gs and diff" condition exists to detect.
 
 #include "CadCommands.hpp"
+#include "CadCoordinateFrame.hpp"  // CadCoord::WorldFromLocal, for EXPECT VERTEX / EXPECT ELEVATION
 #include "DxfIo.hpp"
 #include "GsIo.hpp"
 #include "GsAnnotationJson.hpp"
@@ -423,18 +424,31 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // and the GUI's Import button is what fills these three fields and calls the importer. The
       // driver sets exactly those fields and calls exactly that function, so the path under test is
       // still the user's path — the window is a form, not logic.
+      // EXPORT POINTS drives the real SurveyCsvExportFile the same way the Export points panel
+      // does: set the fields its widgets bind to, then call it. DrawExportPointsPanel is the same
+      // shape as the import one — a path box, a column-order combo, a header checkbox and a button
+      // whose whole body is this call — so the argument above applies unchanged, and refusing only
+      // this direction made the CSV round trip inexpressible as a transcript.
+      //
+      // surveyExportCsvWriteHeader keeps its AppCommandState default deliberately, so a transcript
+      // exercises the file a user actually gets rather than a driver-only variant.
       if (verb == "EXPORT") {
-        Fail(run, "parse", "EXPORT POINTS is not driven; use IMPORT POINTS", sourceLine);
-        return false;
-      }
-      std::snprintf(run.st.surveyImportCsvPath, sizeof run.st.surveyImportCsvPath, "%s", path.c_str());
-      run.st.surveyImportCsvLayoutIdx = 0;  // P,N,E,Z,D — the layout every samples/ point file uses
-      // Skip a header row if there is one. The importer would otherwise reject it as an unparsable
-      // row and say so, which is correct behavior but reads as a failure in a transcript log.
-      run.st.surveyImportCsvSkipFirstRow = FirstRowLooksLikeHeader(path);
-      if (!SurveyCsvImportFile(run.st, run.log)) {
-        Fail(run, "io", "IMPORT POINTS failed: " + path, sourceLine);
-        return false;
+        std::snprintf(run.st.surveyExportCsvPath, sizeof run.st.surveyExportCsvPath, "%s", path.c_str());
+        run.st.surveyExportCsvLayoutIdx = 0;  // P,N,E,Z,D — the panel default
+        if (!SurveyCsvExportFile(run.st, run.log)) {
+          Fail(run, "io", "EXPORT POINTS failed: " + path, sourceLine);
+          return false;
+        }
+      } else {
+        std::snprintf(run.st.surveyImportCsvPath, sizeof run.st.surveyImportCsvPath, "%s", path.c_str());
+        run.st.surveyImportCsvLayoutIdx = 0;  // P,N,E,Z,D — the layout every samples/ point file uses
+        // Skip a header row if there is one. The importer would otherwise reject it as an unparsable
+        // row and say so, which is correct behavior but reads as a failure in a transcript log.
+        run.st.surveyImportCsvSkipFirstRow = FirstRowLooksLikeHeader(path);
+        if (!SurveyCsvImportFile(run.st, run.log)) {
+          Fail(run, "io", "IMPORT POINTS failed: " + path, sourceLine);
+          return false;
+        }
       }
     } else if (fmt == "DXF") {
       const bool ok = (verb == "EXPORT") ? ExportDxfFile(run.st, path.c_str(), run.log)
@@ -575,13 +589,32 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       // derive one from). CLICK subsumes TRIMPICK; TRIMPICK stays for the transcripts using it.
       SubmitTrimViewportPick(run.st, x, y, 1.f, run.log);
       break;
-    case ViewportClickRoute::HatchPick:
+    case ViewportClickRoute::HatchPick: {
+      // HATCH (REQ-043): trace the region under the click and fill it, exactly as CadUi's own
+      // HatchPick case does — same two calls, same order, same miss message. Until this existed no
+      // filled region could be created headless, so nothing about hatches had a transcript at all:
+      // not their rendering, not their Z, not their round trip through `.gs` or DXF.
+      //
+      // A miss deliberately leaves the command ACTIVE and logs rather than failing the step, because
+      // that is the behaviour under test (REQ-201 — nothing is placed when no closed boundary is
+      // found, and the user gets to click again). A transcript asserts the miss with EXPECT LOG.
+      std::vector<float> loop;
+      if (CadHatchTraceAt(run.st, x, y, &loop) && CadHatchCommitLoop(run.st, loop, run.log)) {
+        run.st.active = AppCommandState::Kind::None;
+        run.st.hatchPreviewValid = false;
+        run.st.hatchPreviewLoop.clear();
+      } else {
+        run.log.push_back(
+            "HATCH — no closed boundary found there; click inside a closed area (Esc to cancel).");
+      }
+      break;
+    }
     case ViewportClickRoute::PdfAttachInsertPoint:
-      Fail(run, "state",
-           "CLICK cannot drive this command yet (HATCH boundary tracing / PDFATTACH insertion are "
-           "not wired into the driver); add the route here when a transcript needs it",
-           sourceLine);
-      return false;
+      // PDFATTACH's insertion point is a plain coordinate, handed to the same entry point the GUI
+      // uses. No snapping is applied here for the same reason PICK applies none: a transcript has no
+      // viewport from which to derive a screen-space tolerance.
+      SubmitPdfAttachInsertPoint(run.st, static_cast<float>(x), static_cast<float>(y), run.log);
+      break;
     case ViewportClickRoute::Ignore:
       // The whole point of this verb: a command the UI does not route is a failure, not a no-op.
       Fail(run, "state",
@@ -907,6 +940,130 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         Fail(run, "expect",
              "ANNKIND: annotation " + std::to_string(ix) + " expected " + want + ", got " + got, sourceLine);
         return false;
+      }
+    } else if (what == "VERTEX" || what == "ELEVATION") {
+      // EXPECT VERTEX    <kind> <entity> <vertex> <x> <y> <z>   — one vertex, in WORLD coordinates
+      // EXPECT ELEVATION <kind> <entity> <z>                    — EVERY vertex of one entity, at z
+      //
+      // The oracle this suite was missing. Every other EXPECT counts entities, matches log text, or
+      // checks a structural invariant, and none of those can see a drawing whose coordinates are
+      // well-formed and wrong. `CheckDocumentInvariants` is a CORRUPTION oracle: a polyline with
+      // every Z replaced by 0 is correctly strided, entirely finite, unchanged in count and id, and
+      // so passes it — which is precisely how eight commands discarded elevation under a green
+      // suite.
+      //
+      // ELEVATION asserts the whole entity rather than one vertex on purpose: "this polyline is at
+      // 12" is the claim worth making, and it also catches a PARTIAL flattening that a single-vertex
+      // check would walk past.
+      //
+      // Storage is local in XY and absolute in Z (ADR-025 (b)), so XY is lifted back to world before
+      // comparing — otherwise expected numbers would silently depend on whether the drawing had been
+      // rebased. Compared with VPFRAME's relative tolerance, and for the reason its comment gives.
+      const bool wantVertex = (what == "VERTEX");
+      std::istringstream vs(arg);
+      std::string kind;
+      long ei = -1;
+      long vi = 0;
+      double wx = 0., wy = 0., wz = 0.;
+      const bool parsed = wantVertex ? static_cast<bool>(vs >> kind >> ei >> vi >> wx >> wy >> wz)
+                                     : static_cast<bool>(vs >> kind >> ei >> wz);
+      if (!parsed) {
+        Fail(run, "parse",
+             wantVertex ? "EXPECT VERTEX needs <kind> <entity> <vertex> <x> <y> <z>, got: " + arg
+                        : "EXPECT ELEVATION needs <kind> <entity> <z>, got: " + arg,
+             sourceLine);
+        return false;
+      }
+      kind = UpperAscii(kind);
+
+      // Collect the entity's vertices as (localX, localY, absoluteZ), whatever store it lives in.
+      std::vector<std::array<float, 3>> verts;
+      std::string why;
+      if (kind == "LINE") {
+        const size_t base = static_cast<size_t>(ei) * 6;
+        if (ei < 0 || base + 5 >= run.st.userLinesFlat.size())
+          why = "no line at index " + std::to_string(ei) + " (there are " +
+                std::to_string(run.st.userLinesFlat.size() / 6) + ")";
+        else
+          verts = {{{run.st.userLinesFlat[base], run.st.userLinesFlat[base + 1], run.st.userLinesFlat[base + 2]}},
+                   {{run.st.userLinesFlat[base + 3], run.st.userLinesFlat[base + 4], run.st.userLinesFlat[base + 5]}}};
+      } else if (kind == "POLYLINE") {
+        const size_t n = PolylineCountOf(run.st);
+        if (ei < 0 || static_cast<size_t>(ei) >= n)
+          why = "no polyline at index " + std::to_string(ei) + " (there are " + std::to_string(n) + ")";
+        else {
+          const int b = run.st.userPolylineOffsets[static_cast<size_t>(ei)];
+          const int e = run.st.userPolylineOffsets[static_cast<size_t>(ei) + 1];
+          for (int v = b; v < e; ++v) {
+            const size_t o = static_cast<size_t>(v) * 3;
+            if (o + 2 < run.st.userPolylineVerts.size())
+              verts.push_back({{run.st.userPolylineVerts[o], run.st.userPolylineVerts[o + 1],
+                                run.st.userPolylineVerts[o + 2]}});
+          }
+        }
+      } else if (kind == "CIRCLE") {
+        const size_t base = static_cast<size_t>(ei) * 4;
+        if (ei < 0 || base + 3 >= run.st.userCirclesCxCyZR.size())
+          why = "no circle at index " + std::to_string(ei) + " (there are " +
+                std::to_string(run.st.userCirclesCxCyZR.size() / 4) + ")";
+        else  // centre + elevation; the radius is not a coordinate
+          verts = {{{run.st.userCirclesCxCyZR[base], run.st.userCirclesCxCyZR[base + 1],
+                     run.st.userCirclesCxCyZR[base + 2]}}};
+      } else if (kind == "ARC") {
+        if (ei < 0 || static_cast<size_t>(ei) >= run.st.userArcs.size())
+          why = "no arc at index " + std::to_string(ei) + " (there are " +
+                std::to_string(run.st.userArcs.size()) + ")";
+        else {
+          const CadArc& a = run.st.userArcs[static_cast<size_t>(ei)];
+          verts = {{{a.cx, a.cy, a.z}}};
+        }
+      } else {
+        Fail(run, "parse", "EXPECT " + what + ": unknown kind " + kind + " (LINE/POLYLINE/CIRCLE/ARC)",
+             sourceLine);
+        return false;
+      }
+      if (!why.empty()) {
+        Fail(run, "expect", "EXPECT " + what + ": " + why, sourceLine);
+        return false;
+      }
+
+      auto near = [](double got, double want) {
+        return std::fabs(got - want) <= 1e-4 * std::max(1.0, std::fabs(want));
+      };
+      if (wantVertex) {
+        if (vi < 0 || static_cast<size_t>(vi) >= verts.size()) {
+          Fail(run, "expect",
+               "EXPECT VERTEX: " + kind + " " + std::to_string(ei) + " has no vertex " +
+                   std::to_string(vi) + " (it has " + std::to_string(verts.size()) + ")",
+               sourceLine);
+          return false;
+        }
+        const auto& v = verts[static_cast<size_t>(vi)];
+        double gx = 0., gy = 0.;
+        CadCoord::WorldFromLocal(run.st, v[0], v[1], &gx, &gy);
+        const double got[3] = {gx, gy, static_cast<double>(v[2])};
+        const double wantXYZ[3] = {wx, wy, wz};
+        const char* names[3] = {"x", "y", "z"};
+        for (int k = 0; k < 3; ++k) {
+          if (!near(got[k], wantXYZ[k])) {
+            char msg[224];
+            std::snprintf(msg, sizeof(msg), "EXPECT VERTEX %s %ld vertex %ld: %s is %.6f, expected %.6f",
+                          kind.c_str(), ei, vi, names[k], got[k], wantXYZ[k]);
+            Fail(run, "expect", msg, sourceLine);
+            return false;
+          }
+        }
+      } else {
+        for (size_t k = 0; k < verts.size(); ++k) {
+          if (!near(static_cast<double>(verts[k][2]), wz)) {
+            char msg[224];
+            std::snprintf(msg, sizeof(msg),
+                          "EXPECT ELEVATION %s %ld: vertex %zu is at z %.6f, expected %.6f",
+                          kind.c_str(), ei, k, static_cast<double>(verts[k][2]), wz);
+            Fail(run, "expect", msg, sourceLine);
+            return false;
+          }
+        }
       }
     } else if (what == "VPFRAME") {
       // EXPECT VPFRAME <centreX> <centreY> <scaleModelPerPaperIn> — the FLOATING viewport's framing

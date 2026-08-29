@@ -597,6 +597,71 @@ bool SurveyCsvImportFile(AppCommandState& st, std::vector<std::string>& log) {
   int imported = 0;
   int skipped = 0;
 
+  // Establish the document origin from the INCOMING ROWS before anything is narrowed to float
+  // (issue 03). On a fresh drawing `worldDocumentOriginX/Y` are still 0 when the cast below runs,
+  // so the subtraction is `worldE - 0` and the narrowing happens at full state-plane magnitude:
+  // near 2e6 a float steps by 0.125 and near 2.4e6 by 0.25, so every coordinate snapped to that
+  // grid. Measured on a real 40-point topo: 0.123 ft lost on the easting of 39 of 40 points, on a
+  // file given to a thousandth of a foot. The rebase that already runs after the loop cannot help,
+  // because by then the low bits are gone.
+  //
+  // Moving that existing rebase earlier does NOT work and was measured not to: it asks
+  // ComputeWorldExtents where the drawing is, and on a fresh drawing the points do not exist yet,
+  // so it correctly answers "nowhere" and returns without touching the origin. The origin has to
+  // come from the data being imported, which is the only thing that knows where the drawing is.
+  //
+  // This is the shape ImportDxfFile already uses and for the stated reason ("the origin has to be
+  // established before appendSegXF casts anything to float, which is the entire reason this block
+  // runs first"), including its fallback of pre-scanning the incoming data when no header extent is
+  // available — which is the condition the CSV path is permanently in.
+  //
+  // Cost is a second parse of the file. That is deliberate over buffering every parsed row: the
+  // import loop assigns auto-ids as it goes and skips duplicates against points it has already
+  // pushed, so hoisting the parse out of it would move that ordering-sensitive logic for a saving
+  // that is a few milliseconds on a file of any realistic size.
+  //
+  // The threshold is the shared kLargeCoordinateRebaseThreshold rather than the DXF entity
+  // pre-scan's own 1e4, so this agrees with the MaybeRebaseLargeCoordinates call after the loop —
+  // one rule for when a drawing is "far from the origin", not two that can disagree. (Whether 1e5
+  // is the right value at all is a separate question: at 5e4 a float already steps 0.0078 ft.)
+  if (st.worldDocumentOriginX == 0.0 && st.worldDocumentOriginY == 0.0) {
+    double mnE = 0., mxE = 0., mnN = 0., mxN = 0.;
+    bool anyRow = false;
+    std::string scanLine;
+    size_t scanNo = 0;
+    while (std::getline(f, scanLine)) {
+      ++scanNo;
+      if (st.surveyImportCsvSkipFirstRow && scanNo == 1)
+        continue;
+      if (Trim(scanLine).empty())
+        continue;
+      std::vector<std::string> scanCells = SplitCsvLine(scanLine);
+      int scanCounter = autoId;  // local: auto-ids handed out here are discarded with the scan
+      const ParseOutcome sp = ParseDataRow(scanCells, layout, hasId, hasId ? nullptr : &scanCounter);
+      if (!sp.ok)
+        continue;  // bad rows are reported by the real loop below, not twice
+      if (!anyRow) {
+        mnE = mxE = sp.worldE;
+        mnN = mxN = sp.worldN;
+        anyRow = true;
+      } else {
+        mnE = std::min(mnE, sp.worldE);
+        mxE = std::max(mxE, sp.worldE);
+        mnN = std::min(mnN, sp.worldN);
+        mxN = std::max(mxN, sp.worldN);
+      }
+    }
+    f.clear();
+    f.seekg(0);
+    if (anyRow) {
+      const double mag = std::max(std::max(std::fabs(mnE), std::fabs(mxE)),
+                                  std::max(std::fabs(mnN), std::fabs(mxN)));
+      // Centre of the incoming box, matching RebaseDrawingToLocalOrigin's pivot convention.
+      if (mag >= CadCoord::kLargeCoordinateRebaseThreshold)
+        CadCoord::ApplyDocumentOriginRebase(st, 0.5 * (mnE + mxE), 0.5 * (mnN + mxN), &log);
+    }
+  }
+
   while (std::getline(f, line)) {
     ++lineNo;
     if (st.surveyImportCsvSkipFirstRow && lineNo == 1)
