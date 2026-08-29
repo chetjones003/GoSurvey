@@ -1,4 +1,6 @@
 #include "CadUi.hpp"
+#include "CadUiChrome.hpp"
+#include "DevShellHooks.hpp"
 // REQ-141 Analyze ribbon + contour label overlay.
 #include "CadCoordinateFrame.hpp"
 #include "ViewCube.hpp"  // in-tree orientation widget (REQ-059)
@@ -58,9 +60,17 @@
 static void SubmitRibbonCommand(AppCommandState& cmd, std::vector<std::string>& log, const std::string& line) {
   assert(!line.empty());
   assert(line.size() < 4096);
+  DevShell_OnCommand(line.c_str());
   std::vector<char> buf(line.begin(), line.end());
   buf.push_back('\0');
   ProcessCommandLineSubmit(buf.data(), static_cast<int>(buf.size()), cmd, log);
+}
+
+static void UiSubmitViewportPick(AppCommandState& cmd, float x, float y, std::vector<std::string>& log,
+                                 bool windowSelectionSubtract = false, bool fenceLeftToRightWindowMode = false)
+{
+  DevShell_OnPick(x, y);
+  SubmitViewportPick(cmd, x, y, log, windowSelectionSubtract, fenceLeftToRightWindowMode);
 }
 
 // Render a sample string in a text style's font/bold/italic, fit into box [tl, tl+sz] (REQ-044). Shared by
@@ -264,42 +274,12 @@ static ImU32 HexU32(unsigned rgb, int a = 255) {
 // One instance, written by whichever ApplyCad*Theme() runs, read everywhere
 // else. Every theme entry point must fill EVERY field: a field left unwritten is
 // a piece of the previous theme still on screen after the user switches themes.
-struct UiChrome {
-  ImU32 bandFace;        // toolbar / ribbon strip background
-  ImU32 bandHilite;      // button bevel, light edge
-  ImU32 bandShadow;      // button bevel, dark edge; also the gripper's dark line
-  ImU32 bandSunken;      // pressed button face
-  ImU32 bandRaised;      // hovered button face
-  ImU32 statusBarFace;   // status bar window background
-  ImU32 statusStripFace; // the button strip inside it
-  ImU32 panelFill;       // fill under a property panel's last row
-  ImU32 propValueBg;     // recessed property VALUE cell
-  ImU32 headerFaceL;     // property section header bar, at rest, left of gradient
-  ImU32 headerFaceR;     // ... right of gradient (== left for a flat bar)
-  ImU32 headerHoverL;    // ... hovered
-  ImU32 headerHoverR;
-  ImU32 headerText;      // section header label
-  ImU32 headerEdgeTop;   // 1px edge along the bar's top (0 alpha = none)
-  ImU32 headerEdgeBot;   // 1px edge along its bottom
-  ImU32 headerGlyphBg;   // fill behind the collapse mark (box style only)
-  ImU32 headerGlyphEdge; // its outline (box style only)
-  ImU32 headerGlyph;     // the collapse mark itself
-  bool  headerBoxGlyph;  // true: classic [-]/[+] box; false: a disclosure triangle
-  ImU32 popupFace;       // command autocomplete popup background
-  ImU32 popupBorder;     // ... and its border
-  // Elevation. A flat palette has no bevels to lean on, so "this plate is above
-  // that surface" is carried by two marks: a 1px lit edge along the top of the
-  // raised plate, and a soft shadow the plate casts DOWN onto the surface below
-  // it. Zero alpha in either disables that half — which is how the classic
-  // theme, whose 3D look comes from its own bevels, opts out entirely.
-  ImU32 plateHilite;     // 1px lit edge along a raised plate's top
-  ImU32 plateShadow;     // cast shadow at full strength; fades to transparent
-  ImU32 windowShadow;    // halo around a FLOATING window, so it lifts off the shell
-  bool  axisBadges;      // draw the X/Y/Z badge on Properties coordinate rows
-  ImU32 axisX, axisY, axisZ; // badge fills
-  ImU32 axisText;        // badge letter
-};
 static UiChrome g_chrome;
+
+UiChrome& CadUiChrome()
+{
+  return g_chrome;
+}
 
 void ApplyCadDarkTheme() {
   // Hazel-editor look (REQ-081): a light-ish panel surface floating on a darker
@@ -493,6 +473,22 @@ void ApplyCadDarkTheme() {
   g_chrome.axisY           = ImGui::ColorConvertFloat4ToU32(success);
   g_chrome.axisZ           = ImGui::ColorConvertFloat4ToU32(info);
   g_chrome.axisText        = HexU32(0xF2F2F2);
+  g_chrome.ribbonPanelRule = IM_COL32(0, 0, 0, 26);
+  g_chrome.ribbonPanelTitle = HexU32(0xC7C7C7);
+  g_chrome.ribbonTabOn         = HexU32(0xE0AE5E);
+  g_chrome.ribbonTabOnHovered  = HexU32(0xF0C67C);
+  g_chrome.ribbonTabOnActive   = HexU32(0xC08F43);
+  g_chrome.ribbonTabOnText     = HexU32(0x161616);
+  g_chrome.ribbonCtxTab        = IM_COL32(0, 120, 215, 255);
+  g_chrome.ribbonCtxTabDim     = IM_COL32(0, 120, 215, 180);
+  g_chrome.ribbonCtxTabHovered = IM_COL32(30, 144, 255, 255);
+  g_chrome.ribbonCtxTabActive  = IM_COL32(0, 90, 180, 255);
+  g_chrome.ribbonCtxTabText    = IM_COL32(255, 255, 255, 255);
+  g_chrome.ribbonTabPadY       = 5.f;
+  g_chrome.ribbonTabStripGapY  = 4.f;
+  g_chrome.ribbonBottomGutter  = 12.f;
+  g_chrome.ribbonTitleH        = 20.f;
+  g_chrome.ribbonBodyFontScale = 0.80f;
 }
 
 void ApplyCadLightTheme() {
@@ -628,6 +624,22 @@ void ApplyCadLightTheme() {
   // REQ-081's "the Light theme renders exactly as it does today" wins here.
   g_chrome.axisBadges      = false;
   g_chrome.axisX = g_chrome.axisY = g_chrome.axisZ = g_chrome.axisText = 0;
+  g_chrome.ribbonPanelRule     = IM_COL32(0, 0, 0, 26);
+  g_chrome.ribbonPanelTitle    = IM_COL32(160, 160, 160, 255);
+  g_chrome.ribbonTabOn         = IM_COL32(59, 130, 246, 255);
+  g_chrome.ribbonTabOnHovered  = IM_COL32(79, 144, 250, 255);
+  g_chrome.ribbonTabOnActive   = IM_COL32(46, 110, 212, 255);
+  g_chrome.ribbonTabOnText     = IM_COL32(229, 231, 235, 255);
+  g_chrome.ribbonCtxTab        = IM_COL32(0, 120, 215, 255);
+  g_chrome.ribbonCtxTabDim     = IM_COL32(0, 120, 215, 180);
+  g_chrome.ribbonCtxTabHovered = IM_COL32(30, 144, 255, 255);
+  g_chrome.ribbonCtxTabActive  = IM_COL32(0, 90, 180, 255);
+  g_chrome.ribbonCtxTabText    = IM_COL32(255, 255, 255, 255);
+  g_chrome.ribbonTabPadY       = 5.f;
+  g_chrome.ribbonTabStripGapY  = 4.f;
+  g_chrome.ribbonBottomGutter  = 12.f;
+  g_chrome.ribbonTitleH        = 20.f;
+  g_chrome.ribbonBodyFontScale = 0.80f;
 }
 
 // ---------------------------------------------------------------------------
@@ -1398,13 +1410,12 @@ static void CollectAllDrawingLayers(const AppCommandState& cmd, std::vector<std:
 // constants in the classic theme's grays and so ignored the Dark theme entirely.
 
 // Height of the bottom title strip inside each ribbon panel (Civil 3D-style).
-constexpr float kRibbonTitleH = 20.f;
 // Carries the active panel's title from Begin to End (panels never nest).
 static const char* s_ribbonPanelTitle = nullptr;
 
 // Usable content height above the bottom title strip, for sizing buttons.
 static float RibbonPanelContentH(float panelH) {
-  return std::max(24.f, panelH - kRibbonTitleH);
+  return std::max(24.f, panelH - g_chrome.ribbonTitleH);
 }
 
 static void RibbonSectionBegin(const char* childId, const char* title, float width, float height) {
@@ -1434,22 +1445,21 @@ static void RibbonSectionEnd() {
   const char* title = s_ribbonPanelTitle ? s_ribbonPanelTitle : "";
   const ImVec2 ts = ImGui::CalcTextSize(title);
 
-  const float titleTop = wp.y + wh - kRibbonTitleH;
-  dl->AddLine(ImVec2(wp.x + 3.f, titleTop), ImVec2(wp.x + ww - 3.f, titleTop), IM_COL32(0, 0, 0, 26), 1.f);
+  const float titleTop = wp.y + wh - g_chrome.ribbonTitleH;
+  dl->AddLine(ImVec2(wp.x + 3.f, titleTop), ImVec2(wp.x + ww - 3.f, titleTop), g_chrome.ribbonPanelRule, 1.f);
 
-  const ImVec4 t4 = ImGui::GetStyleColorVec4(ImGuiCol_Text);
-  const ImVec4 d4 = ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled);
-  const ImU32 tcol = ImGui::GetColorU32(
-      ImVec4(t4.x * 0.5f + d4.x * 0.5f, t4.y * 0.5f + d4.y * 0.5f, t4.z * 0.5f + d4.z * 0.5f, 1.f));
+  const ImU32 tcol = g_chrome.ribbonPanelTitle;
 
   constexpr float chevSz = 3.f;
   constexpr float gap = 5.f;
   const float totalW = ts.x + gap + chevSz * 2.f;
-  const float tx = wp.x + (ww - totalW) * 0.5f;
-  const float ty = titleTop + (kRibbonTitleH - ts.y) * 0.5f;
+  float tx = wp.x + (ww - totalW) * 0.5f;
+  if (tx < wp.x + 3.f)
+    tx = wp.x + 3.f;
+  const float ty = titleTop + (g_chrome.ribbonTitleH - ts.y) * 0.5f;
   dl->AddText(ImVec2(tx, ty), tcol, title);
   const float cx = tx + ts.x + gap + chevSz;
-  const float cy = titleTop + kRibbonTitleH * 0.5f;
+  const float cy = titleTop + g_chrome.ribbonTitleH * 0.5f;
   dl->AddTriangleFilled(ImVec2(cx - chevSz, cy - chevSz * 0.55f), ImVec2(cx + chevSz, cy - chevSz * 0.55f),
                         ImVec2(cx, cy + chevSz * 0.75f), tcol);
 
@@ -3153,11 +3163,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // active tab reads the same way the active space tab already does, rather than a second style.
   // Extra vertical FramePadding (user GUI-pass feedback, 2026-08-25: tab text sat flush against
   // the button's bottom edge) plus a gap row below the strip so it doesn't crowd the panels.
-  constexpr float kRibbonTabFramePadY = 5.f;
-  constexpr float kRibbonTabStripH    = 18.f + kRibbonTabFramePadY * 2.f;
-  constexpr float kRibbonTabStripGapY = 4.f;
+  const float kRibbonTabStripH = 18.f + g_chrome.ribbonTabPadY * 2.f;
   {
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.f, kRibbonTabFramePadY));
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8.f, g_chrome.ribbonTabPadY));
     auto ribbonTab = [&](const char* label, int tabIdx) {
       const bool active = cmd.activeRibbonTab == tabIdx;
       PushModeToggleButtonColors(active, cmd.displayColorThemeIdx);
@@ -3208,16 +3216,17 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ImGui::SameLine(0, 2);
     }
     ImGui::PopStyleVar();
-    ImGui::Dummy(ImVec2(1.f, kRibbonTabStripGapY));  // gap between the tab strip and the panels below
+    ImGui::Dummy(ImVec2(1.f, g_chrome.ribbonTabStripGapY));
   }
+
+  ImGui::SetWindowFontScale(g_chrome.ribbonBodyFontScale);
 
   const ImGuiStyle& st = ImGui::GetStyle();
   // Gutter below the sections so the panel titles ("Draw", "Modify", …) are not
   // flush against the ribbon's bottom edge. WindowPadding cannot express this —
   // it is symmetric, and adding it at the top too would waste the band's height.
-  constexpr float kRibbonBottomGutter = 12.f;
-  const float panelH = height - kRibbonTabStripH - kRibbonTabStripGapY - st.WindowPadding.y * 2.f -
-                        kRibbonBottomGutter;
+  const float panelH = height - kRibbonTabStripH - g_chrome.ribbonTabStripGapY - st.WindowPadding.y * 2.f -
+                        g_chrome.ribbonBottomGutter;
   constexpr float kLayerPanelW = 500.f;
 
   // Civil 3D-style panel metrics: a button column fills the height above the
@@ -3236,14 +3245,23 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // (grid cells are already icon-only; a large button's label-below layout doesn't shrink further).
   bool curCompact = false;
   auto largeBtn = [&](const char* id, RibbonIconKind ic, const char* label) {
-    return RibbonButtonEx(id, ic, label, ImVec2(largeW, colH), RibbonLabel::Below);
+    const bool hit = RibbonButtonEx(id, ic, label, ImVec2(largeW, colH), RibbonLabel::Below);
+    if (hit)
+      DevShell_OnUi(id);
+    return hit;
   };
   auto smallBtn = [&](const char* id, RibbonIconKind ic, const char* label, float w) {
     const RibbonLabel mode = curCompact ? RibbonLabel::None : RibbonLabel::Right;
-    return RibbonButtonEx(id, ic, curCompact ? nullptr : label, ImVec2(curCompact ? rowH : w, rowH), mode);
+    const bool hit = RibbonButtonEx(id, ic, curCompact ? nullptr : label, ImVec2(curCompact ? rowH : w, rowH), mode);
+    if (hit)
+      DevShell_OnUi(id);
+    return hit;
   };
   auto gridBtn = [&](const char* id, RibbonIconKind ic) {
-    return RibbonButtonEx(id, ic, nullptr, ImVec2(gridCell, gridCell), RibbonLabel::None);
+    const bool hit = RibbonButtonEx(id, ic, nullptr, ImVec2(gridCell, gridCell), RibbonLabel::None);
+    if (hit)
+      DevShell_OnUi(id);
+    return hit;
   };
   // Column width = small icon + gap + the widest label in the column — or, compact, just the icon
   // (REQ-302 increment 2 Medium/Narrow: "switch button labels to icons," issue #83 strategy 3).
@@ -4609,6 +4627,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   }
 
   ImGui::EndChild();
+  ImGui::SetWindowFontScale(1.f);
   ImGui::PopStyleVar(2);
 }
 
@@ -7246,25 +7265,13 @@ namespace {
 static bool gPolarTrackingEnabled = false;
 
 void PushModeToggleButtonColors(bool on, int themeIdx) {
+  (void)themeIdx;
   if (!on)
     return;
-  if (themeIdx == 0) {
-    // Dark mode: the accent ladder, the same one that marks a selected tab, so
-    // "on" means one thing across the shell (REQ-081). Label is the seam tone
-    // rather than black — 8.96:1 on the accent fill.
-    ImGui::PushStyleColor(ImGuiCol_Button,        Hex(0xE0AE5E));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, Hex(0xF0C67C));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  Hex(0xC08F43));
-    ImGui::PushStyleColor(ImGuiCol_Text,          Hex(0x161616));
-  } else {
-    // Light mode: Primary Blue fills — clearly active against light gray
-    ImGui::PushStyleColor(ImGuiCol_Button,        ImVec4(0.231f, 0.510f, 0.965f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.310f, 0.565f, 0.980f, 1.f));
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImVec4(0.180f, 0.431f, 0.831f, 1.f));
-    // This theme's own text color, pushed only so both branches pop the same
-    // count — the light branch's appearance is unchanged.
-    ImGui::PushStyleColor(ImGuiCol_Text,          ImVec4(0.898f, 0.906f, 0.922f, 1.f));
-  }
+  ImGui::PushStyleColor(ImGuiCol_Button,        ImGui::ColorConvertU32ToFloat4(g_chrome.ribbonTabOn));
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImGui::ColorConvertU32ToFloat4(g_chrome.ribbonTabOnHovered));
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive,  ImGui::ColorConvertU32ToFloat4(g_chrome.ribbonTabOnActive));
+  ImGui::PushStyleColor(ImGuiCol_Text,          ImGui::ColorConvertU32ToFloat4(g_chrome.ribbonTabOnText));
 }
 
 void PopModeToggleButtonColors(bool on) {
@@ -8731,10 +8738,10 @@ void DrawCommandLinePanel(std::vector<std::string>& log, char* cmdBuf, int cmdBu
       cmdShowSug = false;
       s_cmdSugVisible = false;
       s_cmdHighlight.clear();
+      DevShell_OnCommand(cmdBuf);
       ProcessCommandLineSubmit(cmdBuf, cmdBufSize, cmd, log);
     }
   } else {
-    // Match the input box's vertical footprint so the footer hints below don't shift.
     ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("Command input follows the cursor on the drawing (viewport).");
   }
@@ -11288,10 +11295,10 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             BumpCadGpuCache(cmd);
             log.push_back("Grip edit committed.");
           } else if (cmd.active != AppCommandState::Kind::None) {
-            SubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log);
+            UiSubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log);
           } else if (cmd.selBoxWaitingSecond) {
             const bool fenceWindowMode = (mx - cmd.selBoxAnchorScreenX) > 3.f;  // L→R window, R→L crossing
-            SubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log,
+            UiSubmitViewportPick(cmd, static_cast<float>(curMX), static_cast<float>(curMY), log,
                                ImGui::GetIO().KeyShift, fenceWindowMode);
           } else if (TryBeginEntityGripAtLocal(cmd, static_cast<float>(curMX), static_cast<float>(curMY),
                                                gripTolWorld)) {
@@ -12069,7 +12076,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // Entity-pick commands (OFFSET, REQ-069's designators, REQ-103's LENGTHEN/EXTEND/BREAK):
       // the raw, unsnapped cursor position is what PickClosestCadEntity hit-tests against, not an
       // OSNAP-adjusted commit point.
-      SubmitViewportPick(cmd, rawPickX, rawPickY, log);
+      UiSubmitViewportPick(cmd, rawPickX, rawPickY, log);
       break;
     case ViewportClickRoute::PdfAttachInsertPoint:
       SubmitPdfAttachInsertPoint(cmd, commitX, commitY, log);
@@ -12091,14 +12098,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // Point-picking commands (draw commands, and every modify command past its selection
       // phase): the click is a coordinate, handed straight to the command state machine at the
       // OSNAP-adjusted commit point.
-      SubmitViewportPick(cmd, commitX, commitY, log);
+      UiSubmitViewportPick(cmd, commitX, commitY, log);
       break;
     case ViewportClickRoute::SelectionBox:
       // Fence: arm the first corner, or close the box on the second click.
       if (!cmd.selBoxWaitingSecond)
         BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
       else
-        SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
+        UiSubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
       break;
     case ViewportClickRoute::SelectionAccumulate: {
       // MOVE/COPY/SCALE/ROTATE/MIRROR/ALIGN/ARRAY's "select objects" step (this fix). A click on an
@@ -12114,7 +12121,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // exclusive/clear-on-pick semantics for annotations or survey points — those are idle-only
       // behaviors this accumulating multi-type selection has no use for.
       if (cmd.selBoxWaitingSecond) {
-        SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
+        UiSubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
         break;
       }
       bool handled = false;
@@ -12227,7 +12234,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     case ViewportClickRoute::IdleSelection: {
       bool handled = false;
       if (cmd.selBoxWaitingSecond) {
-        SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
+        UiSubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
         for (int svi : cmd.selectedSurveyPointIndices) {
           if (svi >= 0 && static_cast<size_t>(svi) < cmd.surveyPoints.size())
             SyncSurveyPointLinkedMtextSelection(cmd, svi);
@@ -12664,12 +12671,12 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           } else if (!cmd.selBoxWaitingSecond)
             BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
           else
-            SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
+            UiSubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
         } else {
           if (!cmd.selBoxWaitingSecond)
             BeginSelectionBoxCorner(cmd, wxPick, wyPick, mx, my);
           else
-            SubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
+            UiSubmitViewportPick(cmd, wxPick, wyPick, log, keyShift, fenceWindowMode);
         }
       }
       break;

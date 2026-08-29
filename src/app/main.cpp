@@ -24,6 +24,9 @@
 #include "AppIcon.hpp"
 #include "GsIo.hpp"
 #include "SplashScreen.hpp"
+#ifdef GOSURVEY_DEVELOPER_SHELL
+#include "DevShell.hpp"
+#endif
 #include "UserPrefs.hpp"
 #include "ImGuiLayout.hpp"
 #include "UpdateService.hpp"
@@ -255,6 +258,12 @@ int main()
 
   IMGUI_CHECKVERSION();
   ImGui::CreateContext();
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  ImGuiTestEngine* devEngine = nullptr;
+  DevShell_Create(&devEngine);
+  std::string devshellRunName;
+  const bool devshellCli = DevShell_ParseRunFlag(&devshellRunName);
+#endif
   ImGuiIO &io = ImGui::GetIO();
   io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
@@ -277,6 +286,10 @@ int main()
   // auto-load fired once, found nothing, and never looked again — the saved dock layout was
   // silently discarded every launch, which is what "my layout isn't respected" actually was.
   AppCommandState cmd;
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  if (devEngine)
+    DevShell_RegisterTests(devEngine, &cmd);
+#endif
   LoadUserStartupPrefs(cmd);
   const bool haveSavedDockIni = ImGuiLayout_ConfigureIniPath(cmd);
 
@@ -411,6 +424,9 @@ int main()
   // REQ-100 bench state that belongs to the loop rather than to the command layer.
   bool benchVsyncOff = false;
   double benchPrevTime = 0.0;
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  int devshellFrames = 0;
+#endif
 
   while (true)
   {
@@ -870,6 +886,12 @@ int main()
     DrawVolumeDashboardWindow(cmd, &cmdLog);  // REQ-073 amendment (TASK-095)
     DrawQuickProfileWindow(cmd, &cmdLog);     // REQ-145
     DrawFeatureLineElevationWindow(cmd, &cmdLog);  // REQ-088
+#ifdef GOSURVEY_DEVELOPER_SHELL
+    DevShell_Draw(cmd, cmdLog);
+    ++devshellFrames;
+    if (devshellCli && devshellFrames == 4 && devEngine)
+      DevShell_BeginCliRun(devEngine, window, devshellRunName.c_str());
+#endif
     DrawViewPointsPanel(cmd, cmdLog);
     DrawImportPointsPanel(cmd, cmdLog);
     DrawExportPointsPanel(cmd, cmdLog);
@@ -1167,6 +1189,9 @@ int main()
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
 
     glfwSwapBuffers(window);
+#ifdef GOSURVEY_DEVELOPER_SHELL
+    DevShell_PostSwap(devEngine);
+#endif
   }
 
   // Join any in-flight surface rebuild (REQ-069) here rather than leaving it to `cmd`'s destructor.
@@ -1183,11 +1208,19 @@ int main()
       ImGui::SaveIniSettingsToDisk(ioSave.IniFilename);
   }
 
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  int devshellExit = 0;
+  const bool devshellCliDone = DevShell_CliRunFinished(&devshellExit);
+  DevShell_Stop(devEngine);
+#endif
   ImGui_ImplOpenGL3_Shutdown();
   ImGui_ImplGlfw_Shutdown();
   CadUiClearMenuBarLogo();
   DestroyAppLogoGpu(&appLogo);
   ImGui::DestroyContext();
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  DevShell_DestroyContext(devEngine);
+#endif
 
   // Release PDF textures before GL context is destroyed.
   for (auto &att : cmd.pdfAttachments)
@@ -1203,5 +1236,9 @@ int main()
   PdfAttach_Shutdown();
   glfwDestroyWindow(window);
   glfwTerminate();
+#ifdef GOSURVEY_DEVELOPER_SHELL
+  if (devshellCliDone)
+    return devshellExit;
+#endif
   return 0;
 }

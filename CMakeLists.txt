@@ -44,6 +44,20 @@ find_package(OpenGL REQUIRED)
 
 include(FetchContent)
 
+# REQ-161 / ADR-040: Developer Shell is compile-gated. Release cannot turn it on.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+  set(_gosurvey_devshell_default ON)
+else()
+  set(_gosurvey_devshell_default OFF)
+endif()
+option(GOSURVEY_DEVELOPER_SHELL
+  "Debug-only Developer Shell + Dear ImGui Test Engine (REQ-161). Forced off for Release."
+  ${_gosurvey_devshell_default})
+if(CMAKE_BUILD_TYPE STREQUAL "Release" AND GOSURVEY_DEVELOPER_SHELL)
+  message(WARNING "REQ-161: GOSURVEY_DEVELOPER_SHELL forced OFF for CMAKE_BUILD_TYPE=Release")
+  set(GOSURVEY_DEVELOPER_SHELL OFF CACHE BOOL "" FORCE)
+endif()
+
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
@@ -78,6 +92,17 @@ FetchContent_Declare(glew
 )
 
 FetchContent_MakeAvailable(glfw imgui glew pdfium_binaries)
+
+if(GOSURVEY_DEVELOPER_SHELL)
+  # SOURCE_SUBDIR is the engine sources (no CMakeLists there), so MakeAvailable
+  # populates the pin without add_subdirectory of the upstream test-suite app (CMP0169).
+  FetchContent_Declare(imgui_test_engine
+    GIT_REPOSITORY https://github.com/ocornut/imgui_test_engine.git
+    GIT_TAG v1.92.9
+    SOURCE_SUBDIR imgui_test_engine
+  )
+  FetchContent_MakeAvailable(imgui_test_engine)
+endif()
 
 # Create an imported target for the pdfium DLL.
 add_library(pdfium SHARED IMPORTED)
@@ -134,16 +159,51 @@ target_compile_definitions(imgui_core PUBLIC
   IMGUI_DEFINE_MATH_OPERATORS
 )
 
-# The windowed application's backends. Linking this transitively brings in imgui_core and glfw, so
-# `imgui_backend` still means what it meant before this split and GoSurvey's link line is unchanged.
+if(GOSURVEY_DEVELOPER_SHELL)
+  set(_IMGUI_TE "${imgui_test_engine_SOURCE_DIR}/imgui_test_engine")
+  add_library(imgui_core_testengine STATIC
+    ${imgui_SOURCE_DIR}/imgui.cpp
+    ${imgui_SOURCE_DIR}/imgui_draw.cpp
+    ${imgui_SOURCE_DIR}/imgui_tables.cpp
+    ${imgui_SOURCE_DIR}/imgui_widgets.cpp
+    ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
+    ${_IMGUI_TE}/imgui_te_engine.cpp
+    ${_IMGUI_TE}/imgui_te_context.cpp
+    ${_IMGUI_TE}/imgui_te_coroutine.cpp
+    ${_IMGUI_TE}/imgui_te_exporters.cpp
+    ${_IMGUI_TE}/imgui_te_perftool.cpp
+    ${_IMGUI_TE}/imgui_te_ui.cpp
+    ${_IMGUI_TE}/imgui_te_utils.cpp
+    ${_IMGUI_TE}/imgui_capture_tool.cpp
+  )
+  target_include_directories(imgui_core_testengine PUBLIC
+    ${imgui_SOURCE_DIR}
+    ${imgui_SOURCE_DIR}/misc/cpp
+    ${_IMGUI_TE}
+    ${imgui_test_engine_SOURCE_DIR}
+    ${_IMGUI_TE}/thirdparty/Str
+  )
+  target_compile_definitions(imgui_core_testengine PUBLIC
+    IMGUI_DEFINE_MATH_OPERATORS
+    IMGUI_ENABLE_TEST_ENGINE
+    IMGUI_TEST_ENGINE_ENABLE_COROUTINE_STDTHREAD_IMPL=1
+  )
+  if(MSVC)
+    target_compile_options(imgui_core_testengine PRIVATE /W3)
+  endif()
+endif()
+
+# Backends need imgui headers; the executable links one imgui_core* implementation (ADR-040).
 add_library(imgui_backend STATIC
   ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
 )
 target_include_directories(imgui_backend PUBLIC
+  ${imgui_SOURCE_DIR}
   ${imgui_SOURCE_DIR}/backends
 )
-target_link_libraries(imgui_backend PUBLIC imgui_core glfw)
+target_compile_definitions(imgui_backend PUBLIC IMGUI_DEFINE_MATH_OPERATORS)
+target_link_libraries(imgui_backend PUBLIC glfw)
 
 # ---------------------------------------------------------------------------
 # Domain sources — shared by GoSurvey, gosurvey_headless, and GoSurveySnapTests
@@ -354,13 +414,26 @@ target_include_directories(GoSurvey PRIVATE
   ${CMAKE_BINARY_DIR}/generated
 )
 target_link_libraries(GoSurvey PRIVATE
-  gosurvey_domain
   imgui_backend
   glfw
   OpenGL::GL
   glew_static
   pdfium
 )
+target_include_directories(GoSurvey PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/devshell)
+if(GOSURVEY_DEVELOPER_SHELL)
+  # Domain objects must share the Test Engine ImGui ABI (ADR-040). Do not link gosurvey_domain
+  # (compiled against imgui_core without hooks) into the Debug windowed exe.
+  target_sources(GoSurvey PRIVATE ${GOSURVEY_DOMAIN_SOURCES})
+  target_sources(GoSurvey PRIVATE
+    src/devshell/DevShell.cpp
+    src/devshell/DevShellTests.cpp
+  )
+  target_compile_definitions(GoSurvey PRIVATE GOSURVEY_DEVELOPER_SHELL)
+  target_link_libraries(GoSurvey PRIVATE imgui_core_testengine)
+else()
+  target_link_libraries(GoSurvey PRIVATE gosurvey_domain)
+endif()
 if(WIN32)
   # winhttp + bcrypt: the REQ-077/078 update check's HTTPS fetch and SHA-256 (ADR-029 (e)).
   # Both ship with Windows, which is why this adds no third-party dependency under REQ-300.
@@ -790,6 +863,13 @@ if(GOSURVEY_BUILD_TESTS)
     target_compile_options(GoSurveySnapTests PRIVATE -Wall -Wextra)
   endif()
   catch_discover_tests(GoSurveySnapTests)
+
+  if(NOT GOSURVEY_DEVELOPER_SHELL)
+    add_test(NAME req161-release-no-devshell
+      COMMAND ${CMAKE_COMMAND}
+              -DGOSURVEY_EXE=$<TARGET_FILE:GoSurvey>
+              -P "${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/Req161ReleaseNoDevShell.cmake")
+  endif()
 
   # REQ-203: the transcript corpus runs on every push and a non-zero exit fails the build (REQ-202).
   # Registered here, inside GOSURVEY_BUILD_TESTS, because enable_testing() lives in this block —

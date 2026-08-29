@@ -3099,6 +3099,55 @@ requirements is a planning failure, not a sign of rigor.
                path. ACCEPTED. The panel's own rendering has no automated coverage and cannot
                while the driver has no window; that is mitigated by the routing, not solved.
 
+### REQ-161 — Developer Shell (Debug-only chrome tuner, activity log, GUI driver)
+- Purpose: let developers tune ImGui chrome live, see what the GUI and command path are doing, and
+           drive the **real** ImGui UI from code — without shipping any of that in Release
+- Priority: must
+- Type: functional
+- Statement: A **Developer Shell** exists only when CMake option `GOSURVEY_DEVELOPER_SHELL` is ON.
+  That option **defaults ON** if and only if `CMAKE_BUILD_TYPE` is `Debug`, and is **forced OFF**
+  for Release (and for any configuration that builds the shipped installer). It is a compile-time
+  gate, not a runtime hide.
+
+  When ON, the windowed `GoSurvey` binary:
+
+  - shows a Developer Shell (dockable ImGui window): **chrome tuner** that writes the existing
+    ADR-033 `UiChrome` instance and relevant `ImGuiStyle` metrics so padding, sizes, and chrome
+    colours change **this frame** with no rebuild;
+  - shows an **activity log** of discrete events: ribbon/tool/item activations, Test Engine
+    injected mouse/key, viewport **picks/clicks** (not GL draw calls), command-line input and
+    output / log lines;
+  - links **Dear ImGui Test Engine** (`imgui_test_engine/`, FetchContent, GIT_TAG pinned — REQ-200)
+    and compiles ImGui **for this executable only** with `IMGUI_ENABLE_TEST_ENGINE`. Registered
+    tests and a Debug-only CLI (`--devshell-run <test_name>`) queue and run those tests against
+    the live UI (full GUI driver).
+
+  When OFF (Release): `src/devshell/` is not a source of `GoSurvey`; Test Engine is not fetched
+  into that target's link line; `IMGUI_ENABLE_TEST_ENGINE` is not defined on any ImGui objects
+  that executable links; there is no Developer Shell menu/window.
+
+  **REQ-203 is unchanged:** `gosurvey_headless` never links Test Engine, never defines
+  `IMGUI_ENABLE_TEST_ENGINE`, and never includes `src/devshell/`. Domain/headless keep measuring
+  fonts through ImGui **core without** Test Engine hooks.
+
+  Activity logging must not run on the REQ-100 measured hot path as an unbounded per-primitive
+  stream. A one-line-per-frame “draw submitted” toggle may exist in the Shell, default **off**.
+- Acceptance:
+  - `ninja-release` `GoSurvey.exe`: `dumpbin /SYMBOLS` (or `/DEPENDENTS` plus strings) shows **no**
+    `ImGuiTestEngine`, **no** `DevShell`, **no** `GOSURVEY_DEVELOPER_SHELL` as a live feature —
+    proven by a ctest that fails if those symbols are present;
+  - `ninja-debug` with the option ON: Developer Shell is reachable; moving a chrome tuner control
+    changes on-screen chrome the same session;
+  - a Debug Test Engine script performs a ribbon/tool activation, a viewport click (or item click
+    that issues a pick), and command-line in/out; each appears as a **distinct log line**;
+  - `--devshell-run` of that script exits 0 with drawing/command state matching the same steps
+    done by hand (entity counts / command log), without requiring a human at the mouse;
+  - Release behaviour with the Shell absent matches today's app (commands, viewport, chrome).
+- Owner-layer: Application (flag, `main` wiring), UI (`src/devshell/`, chrome accessors), Build
+- Status: accepted (2026-08-29)
+- Revisions: 2026-08-29 — initial. D-2026-08-29-f, ADR-040. Amends the 2026-08-16 GUI-automation
+  anti-requirement for **Debug only**.
+
 ### REQ-089 — Surface rollover readout
 - Purpose:     the constant "what is this, and how high is it here" while working over a topo,
                answered without a click and without running a command
@@ -5324,6 +5373,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-151 | Commands | done (TASK-136) — arc breaklines; DESIGNATEBOUNDARY refuses arcs | accepted |
 | REQ-152 | util/Commands | done (TASK-136) — catchment mean Z; `[req152]` | accepted |
 | REQ-153 | UI/Commands | done (TASK-139) — contextual SURVEY Point(s) ribbon tab | accepted |
+| REQ-161 | Application/UI/Build | planned — Debug Developer Shell + Test Engine; Release `dumpbin` ctest; `--devshell-run` script | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |
@@ -5338,8 +5388,11 @@ requirements is a planning failure, not a sign of rigor.
 
 - "We do **not** require pluggable rendering backends — OpenGL only until a
   second backend is a real requirement (avoids speculative abstraction)."
-- We do **not** require automated testing of the rendered GUI — no UI-automation driver, no
-  screenshot diffing, no golden images. REQ-203 tests the Commands layer beneath the UI instead.
-  Pixel-level tests need an interactive desktop session, are flaky by construction, and mostly
-  exercise ImGui rather than GoSurvey. *(accepted 2026-08-16 alongside REQ-203; ADR-031 alt. (1).)*
+- We do **not** require screenshot diffing or golden images of the framebuffer. Pixel-level visual
+  tests stay out (flaky; they mostly exercise ImGui/GPU, not GoSurvey).
+- We do **not** require a UI-automation driver on **Release** or on `gosurvey_headless`. REQ-203
+  transcripts remain the CI-default, windowless command driver. **Debug-only** Dear ImGui Test
+  Engine + Developer Shell (REQ-161, ADR-040, D-2026-08-29-f) is the recorded exception: it drives
+  the real ImGui tree and is compile-excluded from Release. *(Anti-requirement amended 2026-08-29;
+  original “no UI-automation at all” accepted 2026-08-16 with ADR-031 alt. (1).)*
 - `<…>`
