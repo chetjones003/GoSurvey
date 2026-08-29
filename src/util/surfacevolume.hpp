@@ -14,7 +14,9 @@
 /// live recompute over two REQ-100-density surfaces (~200,000 triangles each) cannot afford
 /// `TinElevationAt`'s O(triangles) scan once per sample point.
 
+#include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 /// A per-TIN spatial index: triangles bucketed by their 2D (plan) bounding box into a uniform grid,
@@ -45,10 +47,12 @@ struct TinSpatialIndex {
 /// about what "inside" or "the elevation there" means.
 ///
 /// \param outZ receives the elevation; untouched when no triangle in the point's cell covers it.
+/// \param outTri when non-null, receives the covering triangle ordinal (`indices[ord*3]`).
 /// \returns true when a triangle covers the point.
 [[nodiscard]] bool TinElevationAtIndexed(const std::vector<float>& vertsXyz,
                                          const std::vector<std::uint32_t>& indices,
-                                         const TinSpatialIndex& index, double x, double y, double* outZ);
+                                         const TinSpatialIndex& index, double x, double y, double* outZ,
+                                         size_t* outTri = nullptr);
 
 /// The result of a REQ-073 volume comparison between a **Base** and a **Comparison** surface
 /// (ASSUMPTION-3, TASK-095: Civil 3D's own terms).
@@ -57,15 +61,19 @@ struct SurfaceVolumeResult {
   double fillFt3 = 0.0;  ///< Comparison above Base — material that would be ADDED reaching it.
   double netFt3 = 0.0;   ///< `fillFt3 - cutFt3`. Positive: net material must be brought in.
   double commonAreaFt2 = 0.0;
+  double cutAreaFt2 = 0.0;   ///< Plan area where Base sits above Comparison (REQ-146).
+  double fillAreaFt2 = 0.0;  ///< Plan area where Comparison sits above Base (REQ-146).
   /// False when the two surfaces have no common footprint at all — sampling is not attempted, and
   /// every other field is 0, rather than a number derived from no common area (REQ-073).
   bool overlapped = false;
 };
 
 /// Computes \ref SurfaceVolumeResult for a Base/Comparison pair by regular-grid sampling over their
-/// common footprint (ASSUMPTION-1/2, TASK-095): each sample point is queried against BOTH surfaces
-/// through their own \ref TinSpatialIndex, and a point covered by only one, or neither, contributes
-/// to neither the volume nor the reported common area.
+/// common footprint (ASSUMPTION-1/2, TASK-095). Each cell queries BOTH surfaces at its four corners
+/// through \ref TinSpatialIndex. Same-sign cells integrate as a prism; mixed-sign cells split on the
+/// ΔZ = 0 contour so cut and fill are accumulated separately (REQ-147). A cell whose corners are not
+/// all covered falls back to a centre sample. A point covered by only one surface, or neither,
+/// contributes to neither the volume nor the reported common area.
 ///
 /// A fast bounding-box-disjoint check runs first — two surfaces whose 2D extents do not even overlap
 /// cost nothing beyond that check, with no spatial index built and no sample taken.
@@ -81,9 +89,14 @@ struct SurfaceVolumeResult {
 /// Both outputs, when requested, contain geometry ONLY for cells covered by BOTH surfaces — "the
 /// cut/fill map... shows nothing outside the common area" (REQ-073) is then a property of what is
 /// generated, not of what the renderer remembers to clip.
+/// \param clipRingXy  when non-null and at least 3 vertices, sample cells whose **centres** fall
+///        outside this closed plan ring contribute neither volume nor common area (REQ-131). Coordinates
+///        must match \p baseVertsXyz / \p compVertsXyz (TIN local XY). Null or a short ring is "no clip"
+///        — today's full-overlap behaviour.
 [[nodiscard]] SurfaceVolumeResult ComputeSurfaceVolume(const std::vector<float>& baseVertsXyz,
                                                        const std::vector<std::uint32_t>& baseIndices,
                                                        const std::vector<float>& compVertsXyz,
                                                        const std::vector<std::uint32_t>& compIndices,
                                                        std::vector<float>* outCutTrianglesXyz = nullptr,
-                                                       std::vector<float>* outFillTrianglesXyz = nullptr);
+                                                       std::vector<float>* outFillTrianglesXyz = nullptr,
+                                                       const std::vector<std::pair<double, double>>* clipRingXy = nullptr);

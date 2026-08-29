@@ -12,6 +12,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 
+#include <memory>
+
 #include "CadCommands.hpp"
 #include "CadSnap.hpp"
 
@@ -145,4 +147,40 @@ TEST_CASE("FindBest onlyKind: no candidate of the armed kind means no snap at al
                                              /*exclude=*/{}, /*pickRay=*/nullptr, &onlyKind);
 
   CHECK_FALSE(hit.valid);
+}
+
+TEST_CASE("Surface snap interpolates the covering TIN and misses outside", "[CadSnap][req127]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = false;
+  st.objectSnapMidpoint = false;
+  st.objectSnapCenter = false;
+  st.objectSnapPerpendicular = false;
+  st.objectSnapSurveyPoint = false;
+  st.objectSnapGeometricCenter = false;
+  st.objectSnapIntersection = false;
+  st.objectSnapApparentIntersection = false;
+  st.objectSnapSurface = true;
+
+  auto tin = std::make_shared<CadTin>();
+  tin->vertsXyz = {0.f, 0.f, 100.f, 500.f, 0.f, 125.f, 500.f, 500.f, 135.f, 0.f, 500.f, 110.f};
+  tin->indices = {0, 1, 2, 0, 2, 3};
+  CadSurface surf;
+  surf.name = "EG";
+  surf.tin = tin;
+  st.cadSurfaces.push_back(std::move(surf));
+  EnsureAttrCounts(st);
+
+  const CadSnap::Hit hit = CadSnap::FindBest(250.0, 250.0, st, /*commandActive=*/true, kTol);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Surface);
+  CHECK(hit.x == Catch::Approx(250.f));
+  CHECK(hit.y == Catch::Approx(250.f));
+  CHECK(hit.z == Catch::Approx(117.5f).margin(0.01f));
+
+  const CadSnap::Hit miss = CadSnap::FindBest(1000.0, 1000.0, st, /*commandActive=*/true, kTol);
+  CHECK_FALSE(miss.valid);
+
+  st.objectSnapSurface = false;
+  const CadSnap::Hit off = CadSnap::FindBest(250.0, 250.0, st, /*commandActive=*/true, kTol);
+  CHECK_FALSE(off.valid);
 }

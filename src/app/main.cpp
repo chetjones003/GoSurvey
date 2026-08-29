@@ -413,11 +413,10 @@ int main()
   int fbH = 650;
 
   bool dockLayoutDone = haveSavedDockIni;
-  // 130 of tools + the 9px gutter DrawRibbonBar leaves under the panel titles,
-  // so the buttons keep the size they had before the gutter was added, plus the REQ-302 tab
-  // strip's own height and its gap row (kRibbonTabStripH + kRibbonTabStripGapY in CadUi.cpp) so
-  // panel content height is unaffected.
-  const float ribbonH = 139.f + 28.f + 4.f;
+  // 130 of tools + gutter under panel titles, plus the REQ-302 tab strip and gap
+  // (kRibbonTabStripH + kRibbonTabStripGapY). Extra 10px keeps two-line captions
+  // above the title strip after the Survey-tab label layout.
+  const float ribbonH = 139.f + 28.f + 4.f + 10.f;
   bool orthoEnabled = false;  // REQ-047: ORTHO is off by default (AutoCAD convention) — free-angle drawing
   bool gridVisible = false;
   // prevDrawingIdx lives in cmd — no local needed.
@@ -626,6 +625,11 @@ int main()
         CancelMtextRichEditor(cmd, &cmdLog);
         cmdBuf[0] = '\0';
       }
+      else if (cmd.tableCellEditorOpen)
+      {
+        CancelTableCellEditor(cmd);
+        cmdBuf[0] = '\0';
+      }
       else if (cmd.mtextGripMoveActive)
       {
         AbortMtextGripInteraction(cmd);
@@ -789,6 +793,7 @@ int main()
     ImGui::PopStyleVar(3);
 
     DrawPropertiesPanel(cmd, &cmdLog);
+    DrawToolspaceWindow(cmd, &cmdLog);
 
     // Keep documents vector in sync with the tab list.
     while (cmd.documents.size() < cmd.drawingTabs.size())
@@ -879,6 +884,7 @@ int main()
     DrawSurfaceManagerWindow(cmd, &cmdLog);
     DrawSurfaceStyleWindow(cmd, &cmdLog);
     DrawVolumeDashboardWindow(cmd, &cmdLog);  // REQ-073 amendment (TASK-095)
+    DrawQuickProfileWindow(cmd, &cmdLog);     // REQ-145
     DrawFeatureLineElevationWindow(cmd, &cmdLog);  // REQ-088
 #ifdef GOSURVEY_DEVELOPER_SHELL
     DevShell_Draw(cmd, cmdLog);
@@ -1097,6 +1103,11 @@ int main()
         }
       }
     }
+
+    // Viewport picks land during DrawDrawingViewport, which is AFTER the refresh at the top of
+    // the frame. WATERDROP/CATCHMENT write lastWaterDropPathXyz there; a second assemble pass
+    // (cache early-out, cheap) is what puts the preview in this frame's GL batches (REQ-133).
+    RefreshSurfaceDisplayGeometry(cmd);
 
     // Paper space (REQ-025) renders a blank sheet this increment; model geometry shows through
     // viewports in a later increment. The sheet outline itself is drawn as a UI overlay.

@@ -93,3 +93,14 @@ void GenerateContours(const std::vector<float>& vertsXyz, const std::vector<std:
 ///
 /// \p out is cleared first.
 void ContourLevels(double minZ, double maxZ, double interval, std::vector<double>* out);
+
+/// Chaikin corner-cutting on display polylines (REQ-138). \p passes is clamped to 0…5. Closed
+/// contours wrap; open contours keep their endpoints.
+void SmoothContoursChaikin(ContourResult* io, int passes);
+
+/// Positions along major-contour polylines at \p spacingFt (0 = none). Each output is x,y,z,text.
+struct ContourLabelPoint {
+  float x = 0.f, y = 0.f, z = 0.f;
+  double level = 0.0;
+};
+void CollectContourLabels(const ContourResult& major, double spacingFt, std::vector<ContourLabelPoint>* out);

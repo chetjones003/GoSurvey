@@ -50,6 +50,8 @@ TEST_CASE("Planar surfaces offset by a known constant report the hand-computed v
 
   REQUIRE(r.overlapped);
   CHECK_THAT(r.commonAreaFt2, WithinRel(10000.0, 1e-6));
+  CHECK_THAT(r.cutAreaFt2, WithinRel(10000.0, 1e-6));
+  CHECK_THAT(r.fillAreaFt2, WithinAbs(0.0, 1e-6));
   CHECK_THAT(r.cutFt3, WithinRel(100000.0, 1e-6));
   CHECK_THAT(r.fillFt3, WithinAbs(0.0, 1e-6));
   CHECK_THAT(r.netFt3, WithinRel(-100000.0, 1e-6));
@@ -67,7 +69,9 @@ TEST_CASE("The sign convention is Base-above-Comparison is CUT, the reverse is F
   REQUIRE(r.overlapped);
   const double expectedVol = 10.0 * (50.0 * 50.0);  // 25,000 ft^3
   CHECK_THAT(r.fillFt3, WithinRel(expectedVol, 1e-6));
+  CHECK_THAT(r.fillAreaFt2, WithinRel(2500.0, 1e-6));
   CHECK_THAT(r.cutFt3, WithinAbs(0.0, 1e-6));
+  CHECK_THAT(r.cutAreaFt2, WithinAbs(0.0, 1e-6));
   CHECK_THAT(r.netFt3, WithinRel(expectedVol, 1e-6));
 }
 
@@ -205,6 +209,68 @@ TEST_CASE("An empty triangulation yields an empty spatial index, not a crash", "
   CHECK(spIdx.empty());
   double z = 0.0;
   CHECK_FALSE(TinElevationAtIndexed(empty, emptyIdx, spIdx, 0.0, 0.0, &z));
+}
+
+TEST_CASE("A 5 ft pad clipped to 66x66 ft reports 21780 ft3 within 1 percent", "[volume][req131]") {
+  // Acceptance names 21,780 ft3 (806.67 yd3) = 5 ft x 4,356 ft2 (66 x 66), not 1 acre x 5 ft.
+  const FlatRect base = MakeFlatRect(0, 0, 200, 200, 105.f);
+  const FlatRect comp = MakeFlatRect(0, 0, 200, 200, 100.f);
+  const std::vector<std::pair<double, double>> clip{{0.0, 0.0}, {66.0, 0.0}, {66.0, 66.0}, {0.0, 66.0}};
+
+  const SurfaceVolumeResult r = ComputeSurfaceVolume(base.vertsXyz, base.indices, comp.vertsXyz,
+                                                     comp.indices, nullptr, nullptr, &clip);
+
+  REQUIRE(r.overlapped);
+  CHECK_THAT(r.cutFt3, WithinRel(21780.0, 0.01));
+  CHECK_THAT(r.fillFt3, WithinAbs(0.0, 1.0));
+  CHECK_THAT(r.commonAreaFt2, WithinRel(4356.0, 0.01));
+}
+
+TEST_CASE("A clip that misses both surfaces reports no overlap", "[volume][req131]") {
+  const FlatRect base = MakeFlatRect(0, 0, 50, 50, 10.f);
+  const FlatRect comp = MakeFlatRect(0, 0, 50, 50, 0.f);
+  const std::vector<std::pair<double, double>> clip{{1000.0, 1000.0}, {1010.0, 1000.0}, {1010.0, 1010.0},
+                                                    {1000.0, 1010.0}};
+
+  const SurfaceVolumeResult r = ComputeSurfaceVolume(base.vertsXyz, base.indices, comp.vertsXyz,
+                                                     comp.indices, nullptr, nullptr, &clip);
+  CHECK_FALSE(r.overlapped);
+  CHECK_THAT(r.cutFt3, WithinAbs(0.0, 1e-12));
+  CHECK_THAT(r.fillFt3, WithinAbs(0.0, 1e-12));
+}
+
+TEST_CASE("A plane crossing a flat reports equal cut and fill areas", "[volume][req146][req147]") {
+  // Base Z = X on [0,10]x[0,10], Comparison Z = 5. Cut where X>5, fill where X<5.
+  // Volume each side: 10 * ∫_0^5 u du = 125 ft3. Areas 50 ft2 each.
+  const std::vector<float> baseVerts = {
+      0.f, 0.f, 0.f,  10.f, 0.f, 10.f,  10.f, 10.f, 10.f,  0.f, 10.f, 0.f,
+  };
+  const std::vector<std::uint32_t> baseIdx = {0, 1, 2, 0, 2, 3};
+  const FlatRect comp = MakeFlatRect(0, 0, 10, 10, 5.f);
+
+  const SurfaceVolumeResult r =
+      ComputeSurfaceVolume(baseVerts, baseIdx, comp.vertsXyz, comp.indices);
+
+  REQUIRE(r.overlapped);
+  CHECK_THAT(r.commonAreaFt2, WithinRel(100.0, 0.02));
+  CHECK_THAT(r.cutAreaFt2, WithinRel(50.0, 0.05));
+  CHECK_THAT(r.fillAreaFt2, WithinRel(50.0, 0.05));
+  CHECK_THAT(r.cutFt3, WithinRel(125.0, 0.05));
+  CHECK_THAT(r.fillFt3, WithinRel(125.0, 0.05));
+  CHECK_THAT(r.netFt3, WithinAbs(0.0, 2.0));
+}
+
+TEST_CASE("Omitting the clip preserves full-overlap volume", "[volume][req131]") {
+  const FlatRect base = MakeFlatRect(0, 0, 100, 100, 110.f);
+  const FlatRect comp = MakeFlatRect(0, 0, 100, 100, 100.f);
+  const SurfaceVolumeResult full =
+      ComputeSurfaceVolume(base.vertsXyz, base.indices, comp.vertsXyz, comp.indices);
+  const SurfaceVolumeResult also =
+      ComputeSurfaceVolume(base.vertsXyz, base.indices, comp.vertsXyz, comp.indices, nullptr, nullptr,
+                           nullptr);
+  REQUIRE(full.overlapped);
+  CHECK_THAT(also.cutFt3, WithinAbs(full.cutFt3, 1e-9));
+  CHECK_THAT(also.commonAreaFt2, WithinAbs(full.commonAreaFt2, 1e-9));
 }
 
 // ---------------------------------------------------------------- performance guard

@@ -63,6 +63,10 @@ double TrianglePlaneSlopePct(const AnalysisTriangle& t);
 bool TriangleDownhillDirection(const AnalysisTriangle& t, double flatGradePct, double* outDx,
                                double* outDy);
 
+/// Downhill azimuth in degrees: 0 = +Y (northing), increasing toward +X (easting), in [0, 360).
+/// False (outputs untouched) when \ref TriangleDownhillDirection refuses the triangle.
+bool TriangleDownhillAspectDeg(const AnalysisTriangle& t, double flatGradePct, double* outDeg);
+
 /// The index of the band \p value falls in, given the bands' \p upperBounds — or -1 when it falls in
 /// none.
 ///

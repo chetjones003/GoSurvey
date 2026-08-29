@@ -1310,6 +1310,8 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
         got = static_cast<long>(run.st.userEllipses.size());
       else if (what == "ANNOTATIONS")
         got = static_cast<long>(run.st.cadAnnotations.size());
+      else if (what == "TABLES")
+        got = static_cast<long>(run.st.cadTables.size());
       else if (what == "SURVEYPOINTS")
         got = static_cast<long>(run.st.surveyPoints.size());
       // Not a geometry count: what the drawing currently considers picked. It is the only way to
@@ -1376,7 +1378,7 @@ bool ExecuteStep(Run& run, const std::string& raw, int sourceLine) {
       else {
         Fail(run, "parse",
              "EXPECT: unknown quantity " + what +
-                 " (LINES CIRCLES POLYLINES ARCS ELLIPSES ANNOTATIONS SURVEYPOINTS SELECTED"
+                 " (LINES CIRCLES POLYLINES ARCS ELLIPSES ANNOTATIONS TABLES SURVEYPOINTS SELECTED"
                  " SURFACES SELECTEDSURFACES SURFACEBORDERSEGS SURFACETRISEGS SURFACEMINORSEGS"
                  " EXTRACTMATCHESDISPLAY"
                  " SURFACEMAJORSEGS SURFACEBATCHES SURFACETINGEN SURFACEBANDTRIS SURFACEARROWSEGS"

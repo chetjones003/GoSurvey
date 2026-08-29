@@ -7,6 +7,7 @@
 #include "DxfEntityEmit.hpp"
 #include "MtextRichFormat.hpp"
 #include "TextStyle.hpp"
+#include "util/cadtable.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -2288,6 +2289,8 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     addLayerName(st.userCircleAttrs[i].layer);
   for (size_t i = 0; i < st.cadAnnotationAttrs.size(); ++i)
     addLayerName(st.cadAnnotationAttrs[i].layer.empty() ? std::string("0") : st.cadAnnotationAttrs[i].layer);
+  for (size_t i = 0; i < st.cadTableAttrs.size(); ++i)
+    addLayerName(st.cadTableAttrs[i].layer);
   // Polylines (#72) and filled regions (the same omission, unreported) — the two entity branches
   // added to the writer without being added here. Every layer this sweep misses is a layer some
   // entity's group 8 can name with no LAYER table row behind it: an invalid file, written silently.
@@ -2447,6 +2450,13 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
     CadAnnotationRoughBounds(an, st.modelUnitsPerPlottedInch, &amnX, &amnY, &amxX, &amxY);
     accExt(static_cast<double>(amnX), static_cast<double>(amnY));
     accExt(static_cast<double>(amxX), static_cast<double>(amxY));
+  }
+  for (const CadTable& t : st.cadTables) {
+    float tmnX = 0.f, tmnY = 0.f, tmxX = 0.f, tmxY = 0.f;
+    CadTableWorldAabb(t, &tmnX, &tmnY, &tmxX, &tmxY);
+    accExt(static_cast<double>(tmnX), static_cast<double>(tmnY));
+    accExt(static_cast<double>(tmxX), static_cast<double>(tmxY));
+    accExtZ(static_cast<double>(t.insZ));
   }
   for (const SurveyPoint& p : st.surveyPoints) {
     accExt(static_cast<double>(p.easting), static_cast<double>(p.northing));
@@ -3534,6 +3544,31 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       rec.rotationDeg = std::to_string(rotRad * (180.0 / kPi)); // DXF group 50 is DEGREES
       emitTextRecord(rec);
       ++nTextOut;
+    } else if (an.kind == CadAnnotation::Kind::Table && an.tableCols > 0) {
+      std::vector<CadTableCellRect> cells;
+      CadTableLayoutCells(an.boxMinX, an.boxMinY, an.boxMaxX, an.boxMaxY, an.tableCols, an.tableCells, &cells);
+      const double hWorld = static_cast<double>(CadAnnotationHeightWorld(an, st.modelUnitsPerPlottedInch));
+      for (size_t ci = 0; ci < cells.size() && ci < an.tableCells.size(); ++ci) {
+        char hb[24];
+        std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+        DxfTextRecord rec;
+        rec.handleHex = hb;
+        rec.ownerHandleHex = hBrModel;
+        rec.layer = layer;
+        rec.linetype = DxfExportEntityLtype6(at);
+        rec.colorAci = std::to_string(entAci);
+        rec.lineweight370 = dxfEntityLineweight370Str(at);
+        rec.hasTransparency = dxfTransparency440Str(EffectiveEntityTransparency01(at, annLyr),
+                                                    &rec.transparency440);
+        rec.x = std::to_string(worldX(cells[ci].x0));
+        rec.y = std::to_string(worldY(static_cast<float>(static_cast<double>(cells[ci].y1) - hWorld)));
+        rec.z = std::to_string(static_cast<double>(an.insZ));
+        rec.height = std::to_string(hWorld);
+        rec.text = sanitizeDxfText(an.tableCells[ci]);
+        rec.rotationDeg = "0";
+        emitTextRecord(rec);
+        ++nTextOut;
+      }
     } else if (an.kind == CadAnnotation::Kind::DimAligned || an.kind == CadAnnotation::Kind::DimLinear) {
       float sx1 = 0.f, sy1 = 0.f, sx2 = 0.f, sy2 = 0.f, tx = 0.f, ty = 0.f, nx = 0.f, ny = 0.f, meas = 0.f;
       if (!CadDimAnyGeometry(an, &sx1, &sy1, &sx2, &sy2, &tx, &ty, &nx, &ny, &meas))
@@ -3641,6 +3676,43 @@ bool ExportDxfFile_Impl(const AppCommandState& st, const char* pathUtf8, std::ve
       if (an.surveyPointLabelForId >= 0)
         emitPair(1001, "GOSURVEY");
       ++nMtextOut;
+    }
+  }
+
+  for (size_t ti = 0; ti < st.cadTables.size(); ++ti) {
+    const CadTable& t = st.cadTables[ti];
+    if (t.cols <= 0)
+      continue;
+    EntityAttributes at{};
+    if (ti < st.cadTableAttrs.size())
+      at = st.cadTableAttrs[ti];
+    const uint32_t rgb = AttrResolvedRgbPacked(at, layerRgbHint) & 0xFFFFFFu;
+    const int entAci = DxfNearestAciFromRgbPacked(rgb);
+    const std::string layer = at.layer.empty() ? std::string("0") : at.layer;
+    const CadLayerRow* tblLyr = FindLayerRowDxfExport(st, layer);
+    std::vector<CadTableCellRect> cells;
+    CadTableLayoutWorldCells(t, &cells);
+    const double hWorld = static_cast<double>(CadTableHeightWorld(t, st.modelUnitsPerPlottedInch));
+    const double rotDeg = static_cast<double>(t.rotationRad) * (180.0 / kPi);
+    for (size_t ci = 0; ci < cells.size() && ci < t.cells.size(); ++ci) {
+      char hb[24];
+      std::snprintf(hb, sizeof(hb), "%llX", static_cast<unsigned long long>(entHandle++));
+      DxfTextRecord rec;
+      rec.handleHex = hb;
+      rec.ownerHandleHex = hBrModel;
+      rec.layer = layer;
+      rec.linetype = DxfExportEntityLtype6(at);
+      rec.colorAci = std::to_string(entAci);
+      rec.lineweight370 = dxfEntityLineweight370Str(at);
+      rec.hasTransparency = dxfTransparency440Str(EffectiveEntityTransparency01(at, tblLyr), &rec.transparency440);
+      rec.x = std::to_string(worldX(cells[ci].x0));
+      rec.y = std::to_string(worldY(static_cast<float>(static_cast<double>(cells[ci].y1) - hWorld)));
+      rec.z = std::to_string(static_cast<double>(t.insZ));
+      rec.height = std::to_string(hWorld);
+      rec.text = sanitizeDxfText(t.cells[ci]);
+      rec.rotationDeg = std::to_string(rotDeg);
+      emitTextRecord(rec);
+      ++nTextOut;
     }
   }
 

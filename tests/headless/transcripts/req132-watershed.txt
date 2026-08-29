@@ -1,0 +1,31 @@
+# REQ-132 / REQ-133 / REQ-134 — watershed, water-drop, catchment (command layer).
+#
+# Catch2 WatershedTests pins the drain graph, plane drop, pit, and ridge-union catchment.
+# This transcript pins the COMMAND refusals and that WATERSHED reports basins on a live TIN.
+
+NEW
+
+CMD SURFACECREATE Empty
+CMD WATERSHED Empty
+EXPECT LOG "not built"
+CMD WATERDROP Empty, 0, 0
+EXPECT LOG "not built"
+CMD CATCHMENT Empty, 0, 0
+EXPECT LOG "not built"
+CMD SURFACEDELETE Empty
+
+OPEN samples/surface-demo.gs
+CMD SURFACECREATE EG, Existing Ground
+CMD WATERSHED EG
+EXPECT LOG "basin"
+CMD WATERDROP EG, -1e9, -1e9
+EXPECT LOG "outside surface"
+CMD CATCHMENT EG, -1e9, -1e9
+EXPECT LOG "outside surface"
+CMD WATERDROP EXTRACT
+EXPECT LOG "nothing to extract"
+CMD CATCHMENT EXTRACT
+EXPECT LOG "nothing to extract"
+CMD WATERSHED NoSuch
+EXPECT LOG "no surface named"
+CHECK ALL

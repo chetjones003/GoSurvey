@@ -1,0 +1,13 @@
+# REQ-070 — SURFSTYLE DETACH copies a shared style onto one surface so later edits of Standard
+# do not move both TINs. Shared-style edits remain the default (see req070-surface-styles-contours).
+
+OPEN samples/surface-demo.gs
+CMD SURFACECREATE Test EG, Existing Ground
+CMD SURFACECREATE Test EG2, Existing Ground
+EXPECT SURFACES 2
+CMD SURFSTYLE DETACH Test EG2
+EXPECT LOG "copied from"
+CMD SURFSTYLE SHOW Standard, triangles
+# Only Test EG still resolves Standard, so triangle edges are one surface's mesh.
+EXPECT SURFACETRISEGS 2946
+CHECK ALL

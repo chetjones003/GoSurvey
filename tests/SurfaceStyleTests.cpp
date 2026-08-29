@@ -131,6 +131,21 @@ TEST_CASE("An empty style name resolves to Standard", "[surface][req070][style]"
   CHECK(got->name == SurfaceStyles::kStandardName);
 }
 
+TEST_CASE("UniqueCopyName skips names already in the table", "[surface][req070][style]") {
+  auto styles = SurfaceStyles::DefaultSurfaceStyles();
+  CHECK(SurfaceStyles::UniqueCopyName(styles, "EG") == "EG");
+  styles.push_back(NamedStyle("EG"));
+  CHECK(SurfaceStyles::UniqueCopyName(styles, "EG") == "EG (2)");
+}
+
+TEST_CASE("CountSurfacesResolvingTo counts Standard fallback", "[surface][req070][style]") {
+  const auto styles = SurfaceStyles::DefaultSurfaceStyles();
+  std::vector<CadSurface> surfaces(2);
+  surfaces[0].name = "A";
+  surfaces[1].name = "B";
+  CHECK(SurfaceStyles::CountSurfacesResolvingTo(surfaces, styles, SurfaceStyles::kStandardName) == 2);
+}
+
 TEST_CASE("Resolving against an empty table yields nothing rather than a dangling read",
           "[surface][req070][style]") {
   // The table is never empty in a live drawing — SyncDrawingLayerTableWithGeometry guarantees

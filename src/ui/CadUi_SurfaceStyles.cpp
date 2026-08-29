@@ -289,14 +289,28 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
 
   ImGui::SetNextWindowSize(ImVec2(760, 520), ImGuiCond_FirstUseEver);
   bool open = cmd.showSurfaceStyleWindow;
-  if (!ImGui::Begin("Surface Style", &open)) {
+  const char* title = cmd.surfaceStyleUseSurfacesTitle ? "Surfaces" : "Surface Style";
+  if (!ImGui::Begin(title, &open)) {
     cmd.showSurfaceStyleWindow = open;
+    if (!open)
+      cmd.surfaceStyleUseSurfacesTitle = false;
     ImGui::End();
     return;
   }
   cmd.showSurfaceStyleWindow = open;
+  if (!open)
+    cmd.surfaceStyleUseSurfacesTitle = false;
 
   static int selIdx = 0;
+  if (!cmd.surfaceStyleEditorFocusName.empty()) {
+    for (size_t i = 0; i < cmd.surfaceStyles.size(); ++i) {
+      if (cmd.surfaceStyles[i].name == cmd.surfaceStyleEditorFocusName) {
+        selIdx = static_cast<int>(i);
+        break;
+      }
+    }
+    cmd.surfaceStyleEditorFocusName.clear();
+  }
   if (selIdx < 0 || selIdx >= static_cast<int>(cmd.surfaceStyles.size()))
     selIdx = 0;
 
@@ -393,9 +407,11 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
       ImGui::Separator();
       ImGui::Text("%d surface(s) draw with this style.", SurfacesUsing(cmd, s.name));
       ImGui::TextWrapped(
-          "Editing a style changes every surface using it. Contours, the border and the triangle "
-          "network are generated from the triangulation each time the style changes — they are never "
-          "objects in the drawing, are never saved to the file, and never appear in a selection. Use "
+          "Editing a style changes every surface using it. To change one surface only, open this "
+          "editor from that surface's Edit... button in the Surfaces panel (it copies the style "
+          "first when others still share it). Contours, the border and the triangle network are "
+          "generated from the triangulation each time the style changes — they are never objects "
+          "in the drawing, are never saved to the file, and never appear in a selection. Use "
           "EXTRACT to turn the displayed contours into real polylines.");
       ImGui::EndTabItem();
     }
@@ -433,7 +449,17 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
         ImGui::EndTable();
       }
       ImGui::Spacing();
-      ImGui::TextDisabled("Contour smoothing is not offered: GoSurvey draws linear contours only.");
+      ImGui::SetNextItemWidth(80.f);
+      if (ImGui::SliderInt("Smooth passes", &s.contourSmoothPasses, 0, 5))
+        changed = true;
+      ItemHelpTooltip("Chaikin corner-cutting on displayed contours only (0–5). Does not change the TIN.");
+      ImGui::SetNextItemWidth(120.f);
+      if (ImGui::InputDouble("Label spacing (ft)", &s.contourLabelSpacingFt, 0.0, 0.0, "%.2f")) {
+        if (s.contourLabelSpacingFt < 0.0)
+          s.contourLabelSpacingFt = 0.0;
+        changed = true;
+      }
+      ItemHelpTooltip("Spacing along major contours. 0 turns labels off. Labels are overlay text, not entities.");
       ImGui::EndTabItem();
     }
 
@@ -473,20 +499,24 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
     if (ImGui::BeginTabItem("Analysis")) {
       ImGui::Spacing();
       ImGui::SeparatorText("Banding");
-      static const char* kModeLabels[] = {"None", "Elevation", "Slope"};
+      static const char* kModeLabels[] = {"None", "Elevation", "Slope", "Direction", "Slope angle"};
       int modeIdx = static_cast<int>(s.analysisMode);
       ImGui::SetNextItemWidth(180.f);
-      if (ImGui::Combo("Type", &modeIdx, kModeLabels, 3)) {
+      if (ImGui::Combo("Type", &modeIdx, kModeLabels, 5)) {
         s.analysisMode = static_cast<SurfaceAnalysisMode>(modeIdx);
         changed = true;
       }
-      ItemHelpTooltip("Colours every triangle by its elevation or its slope, driven by the range "
-                      "table below. A triangle takes ONE colour — its centroid elevation, or its "
-                      "plane's grade — never a gradient across it.");
+      ItemHelpTooltip("Colours every triangle by None, Elevation (ft), Slope (%), Direction (deg), "
+                      "or Slope angle (deg), driven by the range table below. A triangle takes ONE "
+                      "colour — its centroid elevation, or its plane's grade or aspect — never a "
+                      "gradient across it.");
       if (s.analysisMode != SurfaceAnalysisMode::None) {
         ImGui::Spacing();
         const char* boundLabel =
-            s.analysisMode == SurfaceAnalysisMode::Elevation ? "Upper bound (ft)" : "Upper bound (%)";
+            s.analysisMode == SurfaceAnalysisMode::Elevation ? "Upper bound (ft)"
+            : s.analysisMode == SurfaceAnalysisMode::Direction ? "Upper bound (deg)"
+            : s.analysisMode == SurfaceAnalysisMode::SlopeAngle ? "Upper bound (deg)"
+                                                               : "Upper bound (%)";
         changed |= BandTableEditor("##bandtable", boundLabel, &s.bands);
         ImGui::Spacing();
         if (s.bands.empty())
@@ -601,13 +631,16 @@ void DrawSurfaceStyleWindow(AppCommandState& cmd, std::vector<std::string>* log)
   if (ImGui::Button("OK", ImVec2(bw, 0.f))) {
     BumpCadGpuCache(cmd);
     cmd.showSurfaceStyleWindow = false;
+    cmd.surfaceStyleUseSurfacesTitle = false;
   }
   ImGui::EndDisabled();
   if (!intervalsOk && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
     ImGui::SetTooltip("%s", intervalWhy.c_str());
   ImGui::SameLine();
-  if (ImGui::Button("Cancel", ImVec2(bw, 0.f)))
+  if (ImGui::Button("Cancel", ImVec2(bw, 0.f))) {
     cmd.showSurfaceStyleWindow = false;
+    cmd.surfaceStyleUseSurfacesTitle = false;
+  }
 
   if (deleteIdx >= 0 && deleteIdx < static_cast<int>(cmd.surfaceStyles.size())) {
     PushUndoSnapshot(cmd, "Delete surface style");
