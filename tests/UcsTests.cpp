@@ -376,3 +376,70 @@ TEST_CASE("Changing the UCS leaves world coordinates untouched", "[ucs]") {
     RequireVec(back, stored.x, stored.y, stored.z);
   }
 }
+
+// ---------------------------------------------------------------------------
+// UCS <axis> 2P — the angle taken from two picked points.
+// ---------------------------------------------------------------------------
+
+TEST_CASE("Two points give the angle of their direction in the Z rotation plane", "[ucs]") {
+  double deg = 0.0;
+  // Due east from the WCS origin is the reference direction for a rotation about Z, so zero.
+  REQUIRE(ucs::AngleInRotationPlaneDeg(Ucs{}, 'Z', Vec3{10.0, 0.0, 0.0}, &deg));
+  REQUIRE(deg == Approx(0.0));
+  // Due north is +90: Z spins X toward Y, so positive is toward +Y.
+  REQUIRE(ucs::AngleInRotationPlaneDeg(Ucs{}, 'Z', Vec3{0.0, 10.0, 0.0}, &deg));
+  REQUIRE(deg == Approx(90.0));
+  REQUIRE(ucs::AngleInRotationPlaneDeg(Ucs{}, 'Z', Vec3{10.0, 10.0, 0.0}, &deg));
+  REQUIRE(deg == Approx(45.0));
+  // Signed, not absolute — a line running south-east is negative, not 45.
+  REQUIRE(ucs::AngleInRotationPlaneDeg(Ucs{}, 'Z', Vec3{10.0, -10.0, 0.0}, &deg));
+  REQUIRE(deg == Approx(-45.0));
+}
+
+TEST_CASE("The measured angle is what makes the rotated X axis point along the picks", "[ucs]") {
+  // This is the property the feature actually promises: pick two points along a lot line, and the
+  // UCS X axis ends up running down that line. Feeding the measured angle back into the rotation
+  // is what has to produce that, so the two are tested together rather than separately.
+  const Vec3 dir{3.0, 4.0, 0.0};  // 3-4-5, so the axis lands on exact values
+  double deg = 0.0;
+  REQUIRE(ucs::AngleInRotationPlaneDeg(Ucs{}, 'Z', dir, &deg));
+  const Ucs turned = ucs::RotatedAboutZ(Ucs{}, deg);
+  RequireVec(turned.xAxis, 0.6, 0.8, 0.0);
+  REQUIRE(ucs::IsRightHandedOrthonormal(turned));
+}
+
+TEST_CASE("Two points measured in an already-rotated frame are relative to that frame", "[ucs]") {
+  // The angle is measured in the CURRENT UCS, not the world, so the rotations compose the way
+  // applying them one after another does. A frame already at 30 degrees, given a due-east pick,
+  // measures -30 - which turns it back to world-aligned rather than leaving it where it was.
+  const Ucs at30 = ucs::RotatedAboutZ(Ucs{}, 30.0);
+  double deg = 0.0;
+  REQUIRE(ucs::AngleInRotationPlaneDeg(at30, 'Z', Vec3{10.0, 0.0, 0.0}, &deg));
+  REQUIRE(deg == Approx(-30.0));
+  RequireVec(ucs::RotatedAboutZ(at30, deg).xAxis, 1.0, 0.0, 0.0);
+}
+
+TEST_CASE("Each axis measures in the plane its own rotation spins", "[ucs]") {
+  double deg = 0.0;
+  // X spins Y toward Z: measured from +Y, positive toward +Z.
+  REQUIRE(ucs::AngleInRotationPlaneDeg(Ucs{}, 'X', Vec3{0.0, 0.0, 5.0}, &deg));
+  REQUIRE(deg == Approx(90.0));
+  // Y spins Z toward X: measured from +Z, positive toward +X.
+  REQUIRE(ucs::AngleInRotationPlaneDeg(Ucs{}, 'Y', Vec3{5.0, 0.0, 0.0}, &deg));
+  REQUIRE(deg == Approx(90.0));
+}
+
+TEST_CASE("A direction with no component in the rotation plane is refused", "[ucs]") {
+  double deg = 123.0;
+  // Straight up defines no rotation ABOUT Z - there is no angle to measure, and any answer would
+  // be invented. The refusal leaves the caller's value alone (REQ-201).
+  REQUIRE_FALSE(ucs::AngleInRotationPlaneDeg(Ucs{}, 'Z', Vec3{0.0, 0.0, 10.0}, &deg));
+  REQUIRE(deg == Approx(123.0));
+  // Two coincident picks: no direction at all.
+  REQUIRE_FALSE(ucs::AngleInRotationPlaneDeg(Ucs{}, 'Z', Vec3{0.0, 0.0, 0.0}, &deg));
+  // The out-of-plane test scales with the picks rather than using a fixed distance, so a mile-long
+  // pick pair that is barely off-plane is still refused for the same reason a short one is.
+  REQUIRE_FALSE(ucs::AngleInRotationPlaneDeg(Ucs{}, 'Z', Vec3{1e-9, 0.0, 5280.0}, &deg));
+  // An unknown axis letter is refused rather than silently treated as Z.
+  REQUIRE_FALSE(ucs::AngleInRotationPlaneDeg(Ucs{}, 'Q', Vec3{1.0, 0.0, 0.0}, &deg));
+}

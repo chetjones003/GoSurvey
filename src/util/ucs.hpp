@@ -241,6 +241,44 @@ inline void SpinPair(Vec3* a, Vec3* b, double deg) {
   return r;
 }
 
+/// The angle of \p dir within the plane that `RotatedAbout<axis>` spins, in degrees.
+///
+/// This is the inverse of the three rotations above: feed the result back to `RotatedAbout<axis>`
+/// and that rotation's own reference axis ends up pointing along \p dir. So "make my UCS X axis run
+/// along this fence line" becomes two picks and no arithmetic by the user — which is the whole point,
+/// since a surveyor working to a lot line knows the line and not its bearing.
+///
+/// Each axis measures in the same pair, and the same order, that \ref detail::SpinPair uses for it,
+/// so the two can never disagree about which way is positive:
+///
+///   - `Z` spins X toward Y, so the angle is measured from the UCS +X, positive toward +Y
+///   - `X` spins Y toward Z, so it is measured from +Y, positive toward +Z
+///   - `Y` spins Z toward X, so it is measured from +Z, positive toward +X
+///
+/// Returns false when \p dir is degenerate, or lies (near enough) perpendicular to the rotation
+/// plane and so has no angle in it — two picks straight up the Z axis define no rotation about Z.
+/// A refusal is the honest outcome there: any angle at all would be invented (REQ-201).
+[[nodiscard]] inline bool AngleInRotationPlaneDeg(const Ucs& u, char axis, const Vec3& dir, double* outDeg) {
+  if (!outDeg)
+    return false;
+  Vec3 refAxis{}, towardAxis{};
+  switch (axis) {
+  case 'X': refAxis = u.yAxis; towardAxis = u.zAxis; break;
+  case 'Y': refAxis = u.zAxis; towardAxis = u.xAxis; break;
+  case 'Z': refAxis = u.xAxis; towardAxis = u.yAxis; break;
+  default: return false;
+  }
+  const double a = Dot(dir, refAxis);
+  const double b = Dot(dir, towardAxis);
+  // Compare the in-plane length against the whole vector's, so the test scales with the picks rather
+  // than against a fixed distance: two points a foot apart and two a mile apart get the same answer.
+  const double inPlane = std::sqrt(a * a + b * b);
+  if (inPlane < 1e-9 || inPlane < 1e-6 * ray3d::Length(dir))
+    return false;
+  *outDeg = std::atan2(b, a) / detail::kDegToRad;
+  return true;
+}
+
 // ---------------------------------------------------------------------------------------------
 // PLAN support.
 // ---------------------------------------------------------------------------------------------

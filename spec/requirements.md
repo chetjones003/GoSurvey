@@ -4865,6 +4865,14 @@ requirements is a planning failure, not a sign of rigor.
   `World` is reserved: it can be neither redefined nor deleted. Named definitions persist with the
   drawing.
 
+  **A rotation angle can be typed or measured.** At the `X` / `Y` / `Z` angle prompt, `2P` takes two
+  points — typed or clicked — and uses the angle of the direction between them, measured in the plane
+  that rotation spins and reported back so the user can see the number that was used. Feeding that
+  angle to the rotation is what aligns the axis with the picked direction, so "square my frame to this
+  lot line" is two picks rather than a bearing read off the drawing and typed back in. Two points that
+  define no angle in that plane (coincident, or perpendicular to it) are refused and the prompt stands
+  (REQ-201).
+
   **Coordinate entry is in the UCS.** Under a UCS rotated 45° about Z, `10,0` is ten units along the
   UCS X axis; `@dx,dy` is a delta along the UCS axes. Typed points accept `X,Y,Z` as well as `X,Y`,
   without which no tilted frame could be defined from the keyboard. Object snaps continue to resolve
@@ -4922,7 +4930,9 @@ requirements is a planning failure, not a sign of rigor.
 - Owner-layer: Commands (the frame, the commands, coordinate entry), Renderer (grid), UI (icon,
   readout), IO (`.gs` persistence)
 - Status: accepted (2026-08-28)
-- Revisions: 2026-08-28 — initial (D-2026-08-28-n); raised by chetjones003 as issue #126.
+- Revisions: 2026-08-28 — initial (D-2026-08-28-n); raised by chetjones003 as issue #126. 2026-08-29 — added `2P`
+  to the rotation-angle prompt (take the angle from two picked points), at the user's request during
+  hands-on testing of this branch.
 
 #### Not in this requirement — and why
 

@@ -1777,6 +1777,8 @@ struct AppCommandState {
     WaitXyPoint,         ///< after an X point: a point in the +Y half of the XY plane, or blank
     WaitRotationAngle,   ///< X / Y / Z: degrees, right-hand rule about \ref ucsRotationAxis
     WaitZAxisOrigin,     ///< ZAxis: the origin
+    WaitRotationAngleP1, ///< X/Y/Z + 2P: first point of the pair that defines the angle
+    WaitRotationAngleP2, ///< X/Y/Z + 2P: second point; the angle is p1->p2 in the rotation plane
     WaitZAxisPoint,      ///< ZAxis: a point on the positive Z
     WaitObjectPick,      ///< Object: click an entity to align to
     WaitNamedAction,     ///< Named: Save / Restore / Delete / ?
@@ -1794,6 +1796,10 @@ struct AppCommandState {
   /// the document origin rebased).
   ray3d::Vec3 ucsPendingOrigin{0.0, 0.0, 0.0};
   ray3d::Vec3 ucsPendingXAxisPoint{0.0, 0.0, 0.0};
+  /// First of the two picks that define a rotation angle (`UCS Z` then `2P`). Kept separate from the
+  /// two above because it means something different — not a corner of the new frame, but one end of
+  /// a direction being measured — and sharing a field would make that read as the same thing.
+  ray3d::Vec3 ucsAngleBasePoint{0.0, 0.0, 0.0};
 
   /// PLAN's own prompt phase. Kept separate from \ref ucsPhase so neither command can be nudged
   /// into the other's state machine.

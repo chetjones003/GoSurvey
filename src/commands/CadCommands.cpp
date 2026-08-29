@@ -23116,6 +23116,44 @@ static bool ParseUcsPromptPoint(const AppCommandState& st, const std::string& ra
   return true;
 }
 
+/// Apply a rotation of \p deg about \ref AppCommandState::ucsRotationAxis and close the command.
+///
+/// One place, because the angle now arrives by two routes — typed, or measured from two picks — and
+/// a second copy of this three-way branch is how the two would eventually disagree about what `Y`
+/// means.
+static void ApplyUcsRotation(AppCommandState& st, double deg, std::vector<std::string>& log) {
+  const ucs::Ucs next = (st.ucsRotationAxis == 'X')   ? ucs::RotatedAboutX(st.activeUcs, deg)
+                        : (st.ucsRotationAxis == 'Y') ? ucs::RotatedAboutY(st.activeUcs, deg)
+                                                      : ucs::RotatedAboutZ(st.activeUcs, deg);
+  SetActiveUcs(st, next, log);
+  EndUcsCommand(st);
+}
+
+/// Finish `UCS <axis>` + `2P`: measure the angle from \ref AppCommandState::ucsAngleBasePoint to
+/// \p p2 in the rotation's own plane, and apply it.
+///
+/// Reports the angle it derived. The user picked two points and never saw a number, so echoing the
+/// one that was used is what lets them notice a mis-pick — and it is the number they would type to
+/// repeat the frame later.
+static void CommitUcsRotationFromTwoPoints(AppCommandState& st, const ray3d::Vec3& p2,
+                                           std::vector<std::string>& log) {
+  const ray3d::Vec3 dir = ray3d::Sub(p2, st.ucsAngleBasePoint);
+  double deg = 0.0;
+  if (!ucs::AngleInRotationPlaneDeg(st.activeUcs, st.ucsRotationAxis, dir, &deg)) {
+    // Either the two picks coincide, or the direction lies out of the plane being rotated — two
+    // points straight up define no rotation about Z. Stay at the prompt so the second pick can be
+    // retaken rather than losing the whole command (REQ-201).
+    log.push_back(std::string("UCS - those two points define no angle in the ") + st.ucsRotationAxis +
+                  " rotation plane. Pick the second point again, or ESC.");
+    st.ucsPhase = AppCommandState::UcsPhase::WaitRotationAngleP2;
+    return;
+  }
+  char buf[96];
+  std::snprintf(buf, sizeof(buf), "UCS - angle from the two points: %.4f degrees.", deg);
+  log.push_back(buf);
+  ApplyUcsRotation(st, deg, log);
+}
+
 // Apply the Named sub-action once its name has been typed.
 static void ApplyUcsNamed(AppCommandState& st, const std::string& rawName, std::vector<std::string>& log) {
   const std::string name = StringUtil::trimCopy(rawName);
@@ -23226,7 +23264,7 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
         st.ucsRotationAxis = static_cast<char>(low[0] - 32);  // 'x' -> 'X'
         st.ucsPhase = AppCommandState::UcsPhase::WaitRotationAngle;
         log.push_back(std::string("Specify rotation angle about ") + st.ucsRotationAxis +
-                      " axis <0>:  (positive follows the right-hand rule)");
+                      " axis <0>: or [2P] to pick two points  (positive follows the right-hand rule)");
         return true;
       }
       if (low == "za" || low == "zaxis") {
@@ -23309,11 +23347,22 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
     }
 
     case AppCommandState::UcsPhase::WaitRotationAngle: {
+      // `2P` — take the angle from two picked points instead of a typed number. A surveyor working
+      // to a lot line or a building face knows the LINE, not its bearing; making them read a bearing
+      // off the drawing and type it back in is arithmetic the app can do exactly and they can only
+      // do approximately. Same keyword LINE and POLYLINE already use for "define this direction by
+      // picking", so it is one convention rather than a second one.
+      if (low == "2p" || low == "2") {
+        st.ucsPhase = AppCommandState::UcsPhase::WaitRotationAngleP1;
+        log.push_back("Specify first point of the angle:  (or ESC to cancel)");
+        return true;
+      }
       double deg = 0.0;
       if (!in.empty()) {
         std::istringstream iss(in);
         if (!(iss >> deg) || !(iss >> std::ws).eof()) {
-          log.push_back("UCS - enter a rotation angle in degrees (blank Enter for 0).");
+          log.push_back("UCS - enter a rotation angle in degrees, or 2P to pick two points "
+                        "(blank Enter for 0).");
           return true;
         }
       }
@@ -23321,11 +23370,29 @@ bool ProcessUcsCommandLine(AppCommandState& st, const std::string& line, std::ve
         log.push_back("UCS - the rotation angle must be a finite number.");
         return true;
       }
-      const ucs::Ucs next = (st.ucsRotationAxis == 'X')   ? ucs::RotatedAboutX(st.activeUcs, deg)
-                            : (st.ucsRotationAxis == 'Y') ? ucs::RotatedAboutY(st.activeUcs, deg)
-                                                          : ucs::RotatedAboutZ(st.activeUcs, deg);
-      SetActiveUcs(st, next, log);
-      EndUcsCommand(st);
+      ApplyUcsRotation(st, deg, log);
+      return true;
+    }
+
+    case AppCommandState::UcsPhase::WaitRotationAngleP1: {
+      ray3d::Vec3 p1;
+      if (!ParseUcsPromptPoint(st, in, &p1)) {
+        log.push_back("UCS - enter the first point of the angle (click, or type X,Y / X,Y,Z).");
+        return true;
+      }
+      st.ucsAngleBasePoint = p1;
+      st.ucsPhase = AppCommandState::UcsPhase::WaitRotationAngleP2;
+      log.push_back("Specify second point of the angle:");
+      return true;
+    }
+
+    case AppCommandState::UcsPhase::WaitRotationAngleP2: {
+      ray3d::Vec3 p2;
+      if (!ParseUcsPromptPoint(st, in, &p2)) {
+        log.push_back("UCS - enter the second point of the angle (click, or type X,Y / X,Y,Z).");
+        return true;
+      }
+      CommitUcsRotationFromTwoPoints(st, p2, log);
       return true;
     }
 
@@ -23422,6 +23489,17 @@ bool ProcessUcsViewportPick(AppCommandState& st, const ray3d::Vec3& worldPoint, 
       EndUcsCommand(st);
       return true;
     }
+    // The two picks that define a rotation angle. Clicking is the point of the option - a surveyor
+    // picks the ends of a lot line rather than typing its bearing - so these route exactly as the
+    // typed forms do, through the same commit helper.
+    case AppCommandState::UcsPhase::WaitRotationAngleP1:
+      st.ucsAngleBasePoint = worldPoint;
+      st.ucsPhase = AppCommandState::UcsPhase::WaitRotationAngleP2;
+      log.push_back("Specify second point of the angle:");
+      return true;
+    case AppCommandState::UcsPhase::WaitRotationAngleP2:
+      CommitUcsRotationFromTwoPoints(st, worldPoint, log);
+      return true;
     case AppCommandState::UcsPhase::WaitZAxisOrigin:
       st.ucsPendingOrigin = worldPoint;
       st.ucsPhase = AppCommandState::UcsPhase::WaitZAxisPoint;

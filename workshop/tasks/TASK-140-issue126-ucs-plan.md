@@ -134,6 +134,36 @@ rotated or tilted frame lands at the **world** position the frame implies. A cou
 happily when the line went somewhere else entirely, and the log echoes what was typed rather than
 where it ended up.
 
+
+**`2P` on the rotation-angle prompt, added 2026-08-29 from hands-on testing.** Nathan drove the
+branch and asked for it directly: *"to find an angle for your new ucs you should be able to type it
+in like we have now and define a new angle by picking two points."* The case is the everyday one —
+a surveyor squaring a frame to a lot line or a building face knows the LINE, not its bearing, and
+making them read a bearing off the drawing and type it back is arithmetic the app does exactly and
+they can only do approximately.
+
+`2P` was chosen over inventing a keyword because LINE and POLYLINE already use it for "define this
+direction by picking" (`A / 2P bearing lock`), so this is one convention rather than a second.
+
+The angle is measured in **the plane that rotation actually spins**, using the same axis pair and the
+same order as `detail::SpinPair` — Z measures from +X toward +Y, X from +Y toward +Z, Y from +Z toward
++X. Deriving it from the same pair is what stops the measurement and the rotation disagreeing about
+which way is positive; a second derivation is exactly how they would drift, which is the same trap
+`PlanViewAngles` was written to avoid.
+
+Both new phases route typed points and viewport clicks through one commit helper
+(`CommitUcsRotationFromTwoPoints`), and both the typed and measured angles reach the frame through
+one `ApplyUcsRotation`, so the three-way axis branch exists once.
+
+The derived angle is **echoed to the log**. The user picked two points and never saw a number; showing
+the one that was used is what lets a mis-pick be noticed, and it is the number they would type to
+repeat the frame later.
+
+Two picks that define no angle in the plane — coincident, or perpendicular to it, e.g. straight up
+under `UCS Z` — are refused and the prompt **stands at the second point** rather than dropping the
+whole command, so the pick can simply be retaken (REQ-201). The out-of-plane test scales with the
+picks' own length rather than a fixed distance, so a mile-long pair that is barely off-plane is
+refused for the same reason a short one is.
 ## 8. Technical debt
 ```
 DEBT-1: PLAN of a tilted UCS sets the view direction but not the in-plane rotation.
