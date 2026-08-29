@@ -1680,3 +1680,38 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   lambda-bodied content is unchanged. Manual GUI pass required at multiple window widths (this
   project's own no-UI-automation constraint, ADR-031) to confirm Medium/Narrow read correctly on
   screen, the same pattern increment 1's own GUI pass followed.
+
+### ADR-040 — Developer Shell: compile-gated Test Engine, split ImGui link, Debug-only UI   (2026-08-29, accepted)
+- Context: REQ-161 needs a live chrome tuner, an activity log, and a **full ImGui GUI driver** in
+  Debug, with **zero** of that in Release. ADR-031 forbids a `--headless` flag that keeps GLFW/GL on
+  the windowed binary's proof, and the 2026-08-16 anti-requirement forbade UI automation entirely.
+  Dear ImGui Test Engine requires `IMGUI_ENABLE_TEST_ENGINE` on the **same** `imgui.cpp` the window
+  links, which is incompatible with sharing one `imgui_core` (no hooks) between `GoSurvey` and
+  `gosurvey_headless` if Debug `GoSurvey` enables the define.
+- Decision:
+  (a) **CMake option `GOSURVEY_DEVELOPER_SHELL`.** Default ON iff `CMAKE_BUILD_TYPE` is Debug;
+      **forced OFF** for Release. Debug-only sources live under `src/devshell/` and are listed on
+      `GoSurvey` only when the option is ON. No runtime “hidden window” in Release.
+  (b) **Dear ImGui Test Engine** via FetchContent, **GIT_TAG pinned** (REQ-200), same three-question
+      policy as REQ-300. User recorded the Test Engine license as in-tier. `IMGUI_ENABLE_TEST_ENGINE`
+      is a compile definition on the Debug windowed ImGui objects only (`imgui_core_testengine`).
+  (c) **Two ImGui static libraries:** `imgui_core` (no Test Engine — headless, tests, Release
+      `GoSurvey`) and `imgui_core_testengine` (imgui sources + Test Engine sources, Debug `GoSurvey`
+      only). Debug `GoSurvey` links `imgui_core_testengine` **instead of** `imgui_core`. Never link
+      both into one image (duplicate `imgui.cpp`). Domain sources compiled into `GoSurvey` pick up
+      the Test Engine ABI through that executable's link line; headless compiles its own domain
+      objects against `imgui_core`.
+  (d) **Ownership:** Test Engine context and the activity log are owned by Application/`devshell`
+      and passed explicitly. No `DevShell::Get()`. Chrome tuner writes the existing ADR-033
+      `UiChrome` instance through accessors in the UI layer; it does not add a second palette.
+  (e) **Log stream is discrete events**, appended from command submit, Test Engine item actions,
+      and viewport pick entry points. Per-primitive viewport draw logging is out (REQ-100 / §11.7).
+  (f) **REQ-203 stands.** Headless transcripts stay the Release/CI command driver. `--devshell-run`
+      is Debug `GoSurvey` only.
+- Alternatives: **(1) In-tree mouse injection, no Test Engine** — declined by the user.
+  **(2) Runtime `#ifdef` hide with sources still in Release** — declined; leak risk.
+  **(3) Enable Test Engine hooks on shared `imgui_core` and stub them in Release** — declined;
+      hooks would still exist in the shipped imgui objects.
+  **(4) A `--headless` GUI on `GoSurvey.exe`** — still declined (ADR-031 (a)).
+- Consequences: REQ-161; FetchContent `imgui_test_engine`; Debug-only CLI; a Release ctest that
+  `dumpbin`s `GoSurvey.exe`. Screenshot golden images remain out of scope.

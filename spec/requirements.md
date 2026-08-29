@@ -3083,6 +3083,55 @@ requirements is a planning failure, not a sign of rigor.
                path. ACCEPTED. The panel's own rendering has no automated coverage and cannot
                while the driver has no window; that is mitigated by the routing, not solved.
 
+### REQ-161 — Developer Shell (Debug-only chrome tuner, activity log, GUI driver)
+- Purpose: let developers tune ImGui chrome live, see what the GUI and command path are doing, and
+           drive the **real** ImGui UI from code — without shipping any of that in Release
+- Priority: must
+- Type: functional
+- Statement: A **Developer Shell** exists only when CMake option `GOSURVEY_DEVELOPER_SHELL` is ON.
+  That option **defaults ON** if and only if `CMAKE_BUILD_TYPE` is `Debug`, and is **forced OFF**
+  for Release (and for any configuration that builds the shipped installer). It is a compile-time
+  gate, not a runtime hide.
+
+  When ON, the windowed `GoSurvey` binary:
+
+  - shows a Developer Shell (dockable ImGui window): **chrome tuner** that writes the existing
+    ADR-033 `UiChrome` instance and relevant `ImGuiStyle` metrics so padding, sizes, and chrome
+    colours change **this frame** with no rebuild;
+  - shows an **activity log** of discrete events: ribbon/tool/item activations, Test Engine
+    injected mouse/key, viewport **picks/clicks** (not GL draw calls), command-line input and
+    output / log lines;
+  - links **Dear ImGui Test Engine** (`imgui_test_engine/`, FetchContent, GIT_TAG pinned — REQ-200)
+    and compiles ImGui **for this executable only** with `IMGUI_ENABLE_TEST_ENGINE`. Registered
+    tests and a Debug-only CLI (`--devshell-run <test_name>`) queue and run those tests against
+    the live UI (full GUI driver).
+
+  When OFF (Release): `src/devshell/` is not a source of `GoSurvey`; Test Engine is not fetched
+  into that target's link line; `IMGUI_ENABLE_TEST_ENGINE` is not defined on any ImGui objects
+  that executable links; there is no Developer Shell menu/window.
+
+  **REQ-203 is unchanged:** `gosurvey_headless` never links Test Engine, never defines
+  `IMGUI_ENABLE_TEST_ENGINE`, and never includes `src/devshell/`. Domain/headless keep measuring
+  fonts through ImGui **core without** Test Engine hooks.
+
+  Activity logging must not run on the REQ-100 measured hot path as an unbounded per-primitive
+  stream. A one-line-per-frame “draw submitted” toggle may exist in the Shell, default **off**.
+- Acceptance:
+  - `ninja-release` `GoSurvey.exe`: `dumpbin /SYMBOLS` (or `/DEPENDENTS` plus strings) shows **no**
+    `ImGuiTestEngine`, **no** `DevShell`, **no** `GOSURVEY_DEVELOPER_SHELL` as a live feature —
+    proven by a ctest that fails if those symbols are present;
+  - `ninja-debug` with the option ON: Developer Shell is reachable; moving a chrome tuner control
+    changes on-screen chrome the same session;
+  - a Debug Test Engine script performs a ribbon/tool activation, a viewport click (or item click
+    that issues a pick), and command-line in/out; each appears as a **distinct log line**;
+  - `--devshell-run` of that script exits 0 with drawing/command state matching the same steps
+    done by hand (entity counts / command log), without requiring a human at the mouse;
+  - Release behaviour with the Shell absent matches today's app (commands, viewport, chrome).
+- Owner-layer: Application (flag, `main` wiring), UI (`src/devshell/`, chrome accessors), Build
+- Status: accepted (2026-08-29)
+- Revisions: 2026-08-29 — initial. D-2026-08-29-f, ADR-040. Amends the 2026-08-16 GUI-automation
+  anti-requirement for **Debug only**.
+
 ### REQ-089 — Surface rollover readout
 - Purpose:     the constant "what is this, and how high is it here" while working over a topo,
                answered without a click and without running a command
@@ -4725,6 +4774,7 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-121 | UI/Commands/Viewport | done (GitHub issue #91, D-2026-08-26-a + D-2026-08-26-d, TASK-115 + TASK-118). Mechanism: `ViewportIsObjectSelectionStep`, derived from `ViewportClickRouteFor`'s `default:`-less switch, so a command cannot be added and silently omitted — `ViewportPickPolicyTests [req121]` (4 cases: ALIGN's unsnapped corners — red before the fix; every selection step recognised; each exclusion asserted; DELETE/JOIN's route, with ZOOM and STRETCH left on the box route). Review follow-ups closed by TASK-118, re-derived while rebasing onto `beta` after issue #103 landed underneath it: rule (3)'s shared prompt was factually wrong for DELETE/JOIN — fixed by giving them D-2026-08-25-l's accumulate-until-Enter shape, covered by `headless.req121-delete-join-accumulate` (proven red on `beta`: the closing box erased, LINES 3 -> 2). Rule (1)'s reported second seam (the snap-OVERRIDE menu bypassing the gate) had its underlying mechanism replaced by #103 between the original review and this rebase — the "cursor jumps mid-selection" symptom no longer reproduces, because the override's consumption already sits behind the same `!ViewportIsObjectSelectionStep` gate the automatic snap uses; what remained was narrower (the menu could still be *opened*, arming a persistent lock off a selection-step pixel that then silently affected the next ordinary snap), and that is what TASK-118's rebase actually gates. The cursor/OSNAP/prompt rules themselves stay GUI-only — there is no headless equivalent for screen-space picking or for a drawn cursor — and both rounds were verified A/B against a control rather than by absence. Paper space is a STATED scope boundary, not coverage: its modify commands are pick-first, so no selection step exists there (GitHub issue #106 — closed by REQ-307, which gives MOVE/COPY/DELETE a real selection step for the one case that needed it, starting with nothing pre-selected). 634/634 ctest green post-rebase. One `CadSnapTests` case (issue #103, unrelated to this task) carried an em-dash in its Catch2 name that CTest's Windows discovery mangles into a filter matching nothing, reporting a false failure in CI on both this branch and unmodified `beta` (`425afa7`'s own CI run) — fixed here by renaming the test to plain ASCII rather than worked around, since it was blocking CI on every branch built from `beta`, not just this one | accepted |
 | REQ-122 | Commands | done (GitHub issue #88, D-2026-08-26-c, TASK-117) — **automated**, which REQ-120 could not be. The framing arithmetic was hoisted into `src/commands/ZoomFraming.hpp` (pure + header-only, the `OrthoConstrain.hpp`/`ViewportPickPolicy.hpp` precedent) so `tests/ZoomFramingTests.cpp` can reach it without a framebuffer: 11 Catch2 cases / 231 assertions covering centring, fit-at-any-aspect, the 8% margin, aspect binding, the one-unit floor on degenerate extents, invariance above the floor, refusal on non-finite input, finiteness across spans 1e-9..1e12, corner order, and null out-params. 3 of the 11 proven red against the old constants before the fix. TASK-113's DEBT-1 is unchanged and still open — `ProcessPendingViewportZoom` itself remains unreachable from the harness — but every guarantee #88 asks for now lives in tested code. The state-dependent halves (empty drawing, live parity with the gesture, middle-drag pan) verified in the GUI, measured off the status-bar readout rather than eyeballed: typed ZOOMEXTENTS and the middle double-click produce identical world coordinates to 4 dp at two screen points. 622/622 ctest green | accepted |
 | REQ-123 | Commands/UI | done (GitHub issue #100, D-2026-08-26-e, TASK-119) — **`headless.req123-viewport-zoom-extents`, the first zoom behaviour ever covered by a transcript.** TASK-113's DEBT-1 blocks the others on `ProcessPendingViewportZoom`'s `fbW <= 0` guard; this case needs no framebuffer (its aspect is the viewport's rect in paper inches) so it is handled ahead of that guard. 43 steps: the framing after ZE with hand-computed scales (13.5870 for an 8x4in viewport, 27.1739 for 4x4in — same drawing, different rect, different answer), each viewport independent of the other's zoom, and a layer frozen in the viewport excluded from the extents then restored when thawed. Proven red on `beta`: `expected centre 50, 10 scale 13.587; got 0, 0 scale 50` — the viewport's framing untouched at its creation defaults. Four new driver verbs (VIEWPORT / VPSELECT / CLAYER / VPFREEZE) and `EXPECT VPFRAME`, all REQ-203 gaps of the LAYOUT/CLIPCOPY shape. GUI pass confirmed the numbers against the live status bar (`VP 1" = 40.4'` vs 40.36 computed), the sheet unmoved, REQ-120's gesture working in a viewport for the first time, and middle-drag pan still confined to it. 632/633 ctest (the one failure is `beta`'s own — an em dash in a `CadSnapTests` TEST_CASE name breaks ctest's name round-trip; unrelated and pre-existing) | accepted |
+| REQ-161 | Application/UI/Build | planned — Debug Developer Shell + Test Engine; Release `dumpbin` ctest; `--devshell-run` script | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |
@@ -4739,8 +4789,11 @@ requirements is a planning failure, not a sign of rigor.
 
 - "We do **not** require pluggable rendering backends — OpenGL only until a
   second backend is a real requirement (avoids speculative abstraction)."
-- We do **not** require automated testing of the rendered GUI — no UI-automation driver, no
-  screenshot diffing, no golden images. REQ-203 tests the Commands layer beneath the UI instead.
-  Pixel-level tests need an interactive desktop session, are flaky by construction, and mostly
-  exercise ImGui rather than GoSurvey. *(accepted 2026-08-16 alongside REQ-203; ADR-031 alt. (1).)*
+- We do **not** require screenshot diffing or golden images of the framebuffer. Pixel-level visual
+  tests stay out (flaky; they mostly exercise ImGui/GPU, not GoSurvey).
+- We do **not** require a UI-automation driver on **Release** or on `gosurvey_headless`. REQ-203
+  transcripts remain the CI-default, windowless command driver. **Debug-only** Dear ImGui Test
+  Engine + Developer Shell (REQ-161, ADR-040, D-2026-08-29-f) is the recorded exception: it drives
+  the real ImGui tree and is compile-excluded from Release. *(Anti-requirement amended 2026-08-29;
+  original “no UI-automation at all” accepted 2026-08-16 with ADR-031 alt. (1).)*
 - `<…>`
