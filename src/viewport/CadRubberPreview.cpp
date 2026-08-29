@@ -316,12 +316,37 @@ void AppendCadDraftRubberLines(const AppCommandState& cmd, double curX, double c
         // One rubber: origin to cursor, which IS the X axis being defined.
         PushRubberSegViewRel(rubberLines, ox, oy, curXf, curYf, 0., 0., zc, zc);
       } else {
-        // The X axis is settled, so it is drawn solid-length from the origin, and the rubber shows
-        // the second direction the cursor is choosing. Both together are the frame.
+        // The X axis is settled, so it is drawn at its own length from the origin. The second arm
+        // is the Y AXIS THE CURSOR IS CHOOSING — not a rubber to the cursor itself.
+        //
+        // That distinction is the whole point: FromThreePoints takes the PERPENDICULAR component of
+        // the third pick as +Y, so the frame that commits depends only on which SIDE of the X axis
+        // the cursor is on, not how far along it. Drawing a line to the cursor would show an arm
+        // that swings as the cursor slides parallel to X while the committed frame does not move at
+        // all, and would give no hint that crossing the axis flips the frame over. Projecting out
+        // the perpendicular makes the preview flip exactly when the result flips.
         float xx = 0.f, xy = 0.f;
         localOf(cmd.ucsPendingXAxisPoint, &xx, &xy);
+        const float axx = xx - ox, axy = xy - oy;
+        const float alen = std::hypot(axx, axy);
         PushRubberSegViewRel(rubberLines, ox, oy, xx, xy, 0., 0., zc, zc);
-        PushRubberSegViewRel(rubberLines, ox, oy, curXf, curYf, 0., 0., zc, zc);
+        if (alen > 1e-9f) {
+          const float ux = axx / alen, uy = axy / alen;
+          const float vx = curXf - ox, vy = curYf - oy;
+          // Component of the cursor offset perpendicular to X: this is +Y, sign included.
+          const float dot = vx * ux + vy * uy;
+          float px = vx - dot * ux, py = vy - dot * uy;
+          const float plen = std::hypot(px, py);
+          // Dead on the axis defines no plane, so nothing is drawn rather than an arbitrary arm —
+          // the same case FromThreePoints refuses as collinear.
+          if (plen > 1e-6f) {
+            px /= plen;
+            py /= plen;
+            // Same length as the X arm, so the two read as one frame rather than as a long axis and
+            // a rubber band that happens to be near it.
+            PushRubberSegViewRel(rubberLines, ox, oy, ox + px * alen, oy + py * alen, 0., 0., zc, zc);
+          }
+        }
       }
     } else if (cmd.ucsPhase == UPh::WaitRotationAngleP1 || cmd.ucsPhase == UPh::WaitRotationAngleP2) {
       // `2P`: nothing to draw until the first point is down, then the rubber IS the direction whose

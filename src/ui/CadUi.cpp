@@ -15791,12 +15791,16 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
   }
 
   // ---- UCS icon (REQ-154) ------------------------------------------------------------------------
-  // Bottom-left, AutoCAD's corner, and model space only for the same reason the ViewCube is: a paper
-  // sheet is 2D (ADR-025 (g)) and has no coordinate frame to indicate.
+  // Drawn AT THE UCS ORIGIN, which is AutoCAD's UCSICON Origin behaviour and what a user reading a
+  // rotated frame actually wants: the icon then says where the frame IS, not merely which way it
+  // points. Model space only, like the ViewCube: a paper sheet has no coordinate frame.
   //
-  // Only the AXES are passed, so the icon sits in a fixed corner rather than at the UCS origin —
-  // which keeps it visible when the origin is off-screen, the case where knowing the frame matters
-  // most. It is purely an indicator: it has no hit region and swallows no clicks.
+  // It falls back to the bottom-left corner whenever the origin is off-screen or too near an edge
+  // to draw the whole triad. That fallback is not a nicety — an icon pinned to an origin you have
+  // panned away from is an icon you cannot see, and the frame matters most exactly then. AutoCAD
+  // does the same.
+  //
+  // Purely an indicator either way: no hit region, swallows no clicks.
   if (modelSpace && avail.x > 80.f && avail.y > 80.f) {
     constexpr float kUcsIconArm = 26.f;
     constexpr float kUcsIconInset = 46.f;
@@ -15804,16 +15808,43 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // one text line under the origin. A horizontal X arm (which is exactly the World case) puts
     // both at the root's own height.
     constexpr float kUcsIconDescent = 26.f;
-    float rootY = imgPos.y + avail.y - kUcsIconInset;
+
+    float iconX = imgPos.x + kUcsIconInset;
+    float iconY = imgPos.y + avail.y - kUcsIconInset;
     // Stay clear of the floating command bar (REQ-040). It is a separate window painted OVER this
     // viewport and shares the bottom-left corner, so without this the World icon's X arm and its
     // "W" are drawn underneath it — the icon hides exactly the frame it exists to name, and only
     // in World, because any rotation lifts both arms clear.
     if (cmd.cmdBarTopYPx > 0.f)
-      rootY = std::min(rootY, cmd.cmdBarTopYPx - kUcsIconDescent - 6.f);
-    rootY = std::max(rootY, imgPos.y + kUcsIconArm + 12.f);  // never climb out of the viewport
-    ucsicon::Draw(ImGui::GetWindowDrawList(), CadViewCamera(cmd), CadActiveUcsStorage(cmd),
-                  imgPos.x + kUcsIconInset, rootY, kUcsIconArm, CadUcsIsWorld(cmd));
+      iconY = std::min(iconY, cmd.cmdBarTopYPx - kUcsIconDescent - 6.f);
+    iconY = std::max(iconY, imgPos.y + kUcsIconArm + 12.f);  // never climb out of the viewport
+
+    // Project the frame's own origin. The stores are local in XY and the UCS is world (see
+    // CadActiveUcsStorage), so it is converted down before projecting rather than the camera being
+    // asked about a world point it does not use.
+    {
+      const ucs::Ucs frameStore = CadActiveUcsStorage(cmd);
+      float olx = 0.f, oly = 0.f;
+      CadCoord::LocalFromWorld(cmd, static_cast<float>(cmd.activeUcs.origin.x),
+                               static_cast<float>(cmd.activeUcs.origin.y), &olx, &oly);
+      float sx = 0.f, sy = 0.f;
+      CadViewCamera(cmd).WorldToScreen(static_cast<double>(olx), static_cast<double>(oly),
+                                       cmd.activeUcs.origin.z, avail.x, avail.y, &sx, &sy);
+      const float ax = imgPos.x + sx;
+      const float ay = imgPos.y + sy;
+      // Room for the arms, their labels and the "W" on every side before committing to the origin.
+      const float pad = kUcsIconArm + kUcsIconDescent + 8.f;
+      const bool fits = std::isfinite(ax) && std::isfinite(ay) && ax > imgPos.x + pad &&
+                        ax < imgPos.x + avail.x - pad && ay > imgPos.y + pad &&
+                        ay < imgPos.y + avail.y - pad &&
+                        (cmd.cmdBarTopYPx <= 0.f || ay < cmd.cmdBarTopYPx - pad);
+      if (fits) {
+        iconX = ax;
+        iconY = ay;
+      }
+      ucsicon::Draw(ImGui::GetWindowDrawList(), CadViewCamera(cmd), frameStore, iconX, iconY, kUcsIconArm,
+                    CadUcsIsWorld(cmd));
+    }
   }
 
   if (ImGui::BeginPopup("##drawing1_vp_ctx")) {
