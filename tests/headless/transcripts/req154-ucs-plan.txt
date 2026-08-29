@@ -407,3 +407,49 @@ ESC
 EXPECT LINEXYZ 0 0 0 0 89.1007 45.3990 0
 
 CHECK ALL
+
+# --- UCS Object: aligning the frame to an entity the user clicks --------------------------------
+# This option had NO transcript when it shipped, and it could not succeed: the pick was handed a
+# null out-distance pointer, which PickClosestCadEntity rejected before it looked at a single
+# entity. Every click, at every zoom, on every drawing, answered "no object found at that point".
+# The assertions below are on the resulting GEOMETRY rather than on the log, because a log line
+# only proves the message changed - it does not prove the frame is the one the line describes.
+NEW
+CMD LINE
+CMD 0,0
+CMD 100,50
+ESC
+EXPECT LINES 1
+
+# Click the midpoint. The nearer endpoint becomes the origin - equidistant resolves to the first,
+# so the frame is origin (0,0) with +X running toward (100,50): a unit X of (0.8944, 0.4472).
+CMD UCS
+EXPECT LOG "Specify origin of UCS"
+CMD OB
+EXPECT LOG "Select object to align UCS with"
+CLICK 50 25
+EXPECT LOG "UCS = origin (0.0000, 0.0000, 0.0000), X axis (0.8944, 0.4472, 0.0000)"
+
+# 10 units along the frame's own X is 10 units along the line it was aligned to.
+CMD LINE
+CMD 0,0
+CMD 10,0
+ESC
+EXPECT LINES 2
+EXPECT LINEXYZ 1 0 0 0 8.9443 4.4721 0
+
+# Clicking the OTHER end reverses the frame: origin at (100,50), +X back toward (0,0).
+CMD UCS
+CMD OB
+CLICK 95 47.5
+EXPECT LOG "UCS = origin (100.0000, 50.0000, 0.0000), X axis (-0.8944, -0.4472, 0.0000)"
+
+# A miss still reports honestly and leaves the command in its pick phase, so the next click works.
+CMD UCS
+CMD OB
+CLICK 900 900
+EXPECT LOG "UCS Object - no object found at that point"
+CLICK 50 25
+EXPECT LOG "UCS = origin (0.0000, 0.0000, 0.0000), X axis (0.8944, 0.4472, 0.0000)"
+
+CHECK ALL

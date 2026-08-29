@@ -190,6 +190,39 @@ struct Ucs {
   return Dot(out->yAxis, out->yAxis) > 0.5;
 }
 
+/// A frame whose X axis runs along \p dir, tilted as little as possible from the world XY plane.
+///
+/// This is what "align to this line" has to mean once the line can be a 3D one; AutoCAD's
+/// flat-drawing rule (X along the line, Z = the entity's extrusion) is the special case of it that
+/// a horizontal line produces.
+///
+/// Lives here rather than in the command file because the LIVE PREVIEW needs the same answer the
+/// commit does. A preview that derived the frame separately would eventually show one frame and
+/// commit another, which is worse than no preview.
+[[nodiscard]] inline bool AlignedToDirection(const Vec3& origin, const Vec3& dir, Ucs* out) {
+  if (!out)
+    return false;
+  const Vec3 x = Normalize(dir);
+  if (Dot(x, x) < 0.5)
+    return false;
+  // Z = world up with the along-X part removed. For a vertical line that is degenerate, so world
+  // north takes over - any perpendicular will do there, and picking a deterministic one keeps the
+  // result from depending on float noise.
+  Vec3 ref{0.0, 0.0, 1.0};
+  Vec3 z = Normalize(ray3d::Sub(ref, ray3d::Scale(x, Dot(ref, x))));
+  if (Dot(z, z) < 0.5) {
+    ref = Vec3{0.0, 1.0, 0.0};
+    z = Normalize(ray3d::Sub(ref, ray3d::Scale(x, Dot(ref, x))));
+    if (Dot(z, z) < 0.5)
+      return false;
+  }
+  out->origin = origin;
+  out->xAxis = x;
+  out->zAxis = z;
+  out->yAxis = Normalize(Cross(z, x));
+  return Dot(out->yAxis, out->yAxis) > 0.5;
+}
+
 /// Build a UCS from a (possibly imperfect) basis — used by `UCS View`, whose axes come from the
 /// camera. Gram-Schmidt against \p right, so a camera basis that is a hair off orthonormal from
 /// accumulated float error still yields an exactly orthonormal UCS.

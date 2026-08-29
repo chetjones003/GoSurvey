@@ -245,6 +245,63 @@ junk line was filtered out with `grep -vF` and the 152 lines of real work undern
 by name. **Compute the anchor line, assert it is non-empty, and use `awk` to rewrite rather than
 `sed -i` with an interpolated address** — an empty address is silently catastrophic in a way an empty
 pattern is not.
+## 7b. Second GUI pass, 2026-08-29 — the Coordinates ribbon panel, and a command option that could never succeed
+
+**What was added.** A **Coordinates** panel on the View tab, beside Named Views — AutoCAD's own name
+and position for it. Six buttons in three two-button columns (UCS / 3-Point, World / Previous,
+Object / Rotate Z) and a frame selector labelled "Coordinate system". Until this existed, every UCS
+option was reachable only by typing, which is a poor showing for a command whose whole job is to be
+switched in and out of constantly.
+
+Two things keep the panel from drifting from the command it names:
+
+- Every button submits its command **through the command line's own parser**
+  (`ProcessCommandLineSubmitStr`, a scratch-buffer wrapper over `ProcessCommandLineSubmit`) rather
+  than calling a commit helper directly. A button and its documented `Command bar:` line cannot
+  diverge, because they are the same string going through the same code. This is the DIMSTY-vs-UNITS
+  failure probe 36 found, designed out rather than watched for.
+- The panel's frame label and the ViewCube dropdown's both come from one `CadUcsFrameLabel`. Two
+  widgets naming the same frame must not be able to name it differently.
+
+**What the GUI pass then found: `UCS Object` had never worked, on any drawing, at any zoom.**
+
+Clicking a line at the `Select object to align UCS with:` prompt always answered
+`UCS Object - no object found at that point.` The pick was verified against a control: ordinary
+selection at the *same pixel* selected the line, so the click and its coordinates were fine.
+
+The cause is one argument. `UcsFromObjectPick` called
+
+```cpp
+PickClosestCadEntity(st, px, py, tol, &hit, nullptr)   // no out-distance wanted
+```
+
+and `PickClosestCadEntity` opens with `if (!out || !outDistSq) return false;` — it rejected the null
+**before it looked at a single entity**. Every other caller in the file passes a `float d2` it does
+not always use, so this contract was never load-bearing until UCS became the first caller to decline
+it. The option was dead on arrival: no tolerance, no zoom level and no drawing could make it succeed.
+
+**Fixed in both directions.** The caller passes a real `float`, and `outDistSq` is now genuinely
+optional — null is accepted and written to a local — so the next caller that only wants the entity
+cannot fall into the same hole. `CadCommands.hpp` documents it as optional.
+
+**Why nothing caught it.** `req154-ucs-plan.txt` had **no `UCS Object` steps at all**: the option
+went out with the command's own transcript never exercising it once. Six steps have been added, and
+they assert the resulting **geometry**, not the log — a line drawn 10 units along the new frame's X
+must land 10 units along the line the frame was aligned to (`EXPECT LINEXYZ 1 0 0 0 8.9443 4.4721 0`).
+A log assertion would only prove the message changed. Also covered: clicking the far end reverses the
+frame, and a miss still reports honestly and leaves the command in its pick phase.
+
+**Red-before, measured, not assumed.** With the `nullptr` restored and rebuilt, the transcript fails
+at step 292 / line 431 on exactly the new assertion; with the fix, 310 steps pass. The test catches
+the defect it was written for.
+
+**The self-inflicted incident, part two.** The `sed` lesson recorded above repeated itself with
+`perl`: `s/\Qif (!out)\E$/.../ ` matched **ten** functions, not the one intended, and nine unrelated
+guards were rewritten. The compiler caught it immediately (`'outDistSq': undeclared identifier` ×9)
+and the repair was mechanical — but the general rule stands and is now proven twice: **for a pattern
+that could plausibly appear more than once, locate the line, assert the occurrence count, and rewrite
+by index.** The repair script that fixed it does exactly that, and is the shape to reach for first.
+
 ## 8. Technical debt
 ```
 DEBT-1: PLAN of a tilted UCS sets the view direction but not the in-plane rotation.

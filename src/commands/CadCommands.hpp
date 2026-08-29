@@ -4054,6 +4054,7 @@ void CadTrimAppendCutLineRemovedPreview(const AppCommandState& st, float fenceP1
                                         float fenceP2y, float pickPreviewX, float pickPreviewY,
                                         std::vector<float>* previewLinesOut);
 /// Closest CAD entity within tolerance (later draw order wins on tie). False if none.
+/// \param outDistSq Optional: pass null when only the entity matters, not how near the pick was.
 /// \param pickRay When non-null AND valid, entities are measured against this world ray in 3D
 ///        instead of against \p wx,\p wy in plan (REQ-058). Pass it whenever the camera is
 ///        orbited: the ray crosses the work plane at one XY and an elevated entity at another, so

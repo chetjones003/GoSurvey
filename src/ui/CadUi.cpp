@@ -3097,6 +3097,35 @@ void PushModeToggleButtonColors(bool on, int themeIdx);
 void PopModeToggleButtonColors(bool on);
 }  // namespace
 
+/// Run a command exactly as if it had been typed.
+///
+/// ProcessCommandLineSubmit takes a mutable buffer because the real command line owns one; ribbon
+/// buttons have a literal. Copying into a scratch buffer here means every button goes through the
+/// SAME parser the keyboard does, so a button and its documented command can never drift apart —
+/// which is the DIMSTY-vs-UNITS failure this session already found once.
+static void ProcessCommandLineSubmitStr(AppCommandState& cmd, const char* text,
+                                        std::vector<std::string>& log) {
+  char buf[256];
+  std::snprintf(buf, sizeof(buf), "%s", text);
+  ProcessCommandLineSubmit(buf, static_cast<int>(sizeof(buf)), cmd, log);
+}
+
+/// What to call the active coordinate frame (REQ-154): "WCS", a saved name when the frame IS one of
+/// them, or "Unnamed" for a frame built but not saved.
+///
+/// Shared by the ViewCube dropdown and the Coordinates ribbon panel. Two widgets naming the same
+/// thing must not be able to name it differently — and "Unnamed" is AutoCAD's own word, carrying the
+/// useful hint that `UCS N S` would keep this frame.
+static std::string CadUcsFrameLabel(const AppCommandState& cmd) {
+  if (CadUcsIsWorld(cmd))
+    return "WCS";
+  for (const NamedUcs& n : cmd.ucsNamed) {
+    if (ucs::FramesMatch(n.frame, cmd.activeUcs))
+      return n.name;
+  }
+  return "Unnamed";
+}
+
 void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>& log) {
   ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6, 3));
   ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(5, 4));
@@ -3264,6 +3293,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // REQ-106. Sized to the longest thing the combo shows, so a saved view with a long name does not
   // reflow the ribbon every time it becomes active.
   const float namedViewComboW = ImGui::CalcTextSize("SW Isometric").x + 56.f;
+  // REQ-154. Sized to the widest label the frame combo shows.
+  const float ucsComboW = ImGui::CalcTextSize("Coordinate system").x + 30.f;
   // REQ-032 contextual ribbon: Layout tools in paper space, but the normal model ribbon while editing a
   // viewport in place (floating model space, REQ-036) so the draw/modify tools are available.
   const bool ribbonPaperSpace = cmd.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(cmd);
@@ -3275,6 +3306,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     float wEdit, wDraw, wMod, wAnnText, wAnnDim, wInq, wSrv, wAnalyze, wView, wLayout;
     float wInsert, wViewSettings, wOutExport, wOutPlot;  // REQ-302 increment 3
     float wNamedViews = 0.f;  // REQ-106
+    float wCoords = 0.f;      // REQ-154
   };
   auto computeTabWidths = [&](bool compact) {
     curCompact = compact;
@@ -3308,6 +3340,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     // REQ-106 Named Views: the combo carries the longest preset name, and two stacked buttons sit
     // beside it — the same shape AutoCAD's own Named Views panel uses.
     w.wNamedViews = 8.f + namedViewComboW + 4.f + colW({"New View", "Manager"});
+    // REQ-154 Coordinates: three two-button columns and the frame combo, AutoCAD's own grouping.
+    w.wCoords = 8.f + 3.f * (colW({"3-Point", "Object"}) + 4.f) + 8.f + ucsComboW;
     // REQ-302 increment 3: Plot/Batch Plot moved out to Output's "Plot" section — Layout keeps
     // only the viewport-authoring tools (Rect VP is a largeBtn placed outside colW; Poly VP is
     // the one column here).
@@ -4265,6 +4299,78 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         if (smallBtn("##RibbonViewMgr", RibbonIconKind::Layers, "Manager", cwv))
           cmd.showViewManagerWindow = true;
         RibbonItemHelp("View Manager — rename, restore and delete saved views.\nCommand bar: VIEW");
+        ImGui::EndGroup();
+      }
+      RibbonSectionEnd();
+    }});
+
+    // REQ-154 Coordinates. AutoCAD's own panel name and position — View tab, beside Named Views.
+    // The frame selector is duplicated from the one under the ViewCube on purpose: that one is where
+    // your eye already is while drawing, this one is where you go looking when you want to CHANGE
+    // frames. Both read their label from CadUcsFrameLabel so they cannot disagree.
+    ribbonSpecs.push_back({W.wCoords, M.wCoords, [&]() {
+      RibbonSectionBegin("RibbonSecCoords", "Coordinates", curCompact ? M.wCoords : W.wCoords, panelH);
+      {
+        const float cwc = colW({"3-Point", "Object"});
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonUcsCmd", RibbonIconKind::ZoomWindow, "UCS", cwc))
+          StartUcsCommand(cmd, log);
+        RibbonItemHelp("UCS — manages user coordinate systems.\n"
+                       "Pick an origin, then an X-axis point, then a point on the XY plane.\n"
+                       "Command bar: UCS");
+        if (smallBtn("##RibbonUcs3P", RibbonIconKind::ZoomWindow, "3-Point", cwc)) {
+          StartUcsCommand(cmd, log);  // the three-point form IS the bare command's default path
+        }
+        RibbonItemHelp("Define a frame from three picks: origin, +X direction, and a point on the\n"
+                       "+Y half of the plane.\nCommand bar: UCS then three points");
+        ImGui::EndGroup();
+
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonUcsWorld", RibbonIconKind::ZoomExtents, "World", cwc))
+          ProcessCommandLineSubmitStr(cmd, "UCS W", log);
+        RibbonItemHelp("Back to the World Coordinate System.\nCommand bar: UCS W");
+        if (smallBtn("##RibbonUcsPrev", RibbonIconKind::ZoomExtents, "Previous", cwc))
+          ProcessCommandLineSubmitStr(cmd, "UCS P", log);
+        RibbonItemHelp("Step back to the previous frame.\nCommand bar: UCS P");
+        ImGui::EndGroup();
+
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (smallBtn("##RibbonUcsObj", RibbonIconKind::Layers, "Object", cwc))
+          ProcessCommandLineSubmitStr(cmd, "UCS OB", log);
+        RibbonItemHelp("Align the frame to a picked line, arc, circle, ellipse or text.\nCommand bar: UCS OB");
+        if (smallBtn("##RibbonUcsZ", RibbonIconKind::Layers, "Rotate Z", cwc))
+          ProcessCommandLineSubmitStr(cmd, "UCS Z", log);
+        RibbonItemHelp("Spin the frame about its own Z axis. Type an angle, or 2P to take it from\n"
+                       "two picked points.\nCommand bar: UCS Z");
+        ImGui::EndGroup();
+
+        // The frame selector, same content as the ViewCube's.
+        ImGui::SameLine(0, 8);
+        ImGui::BeginGroup();
+        ImGui::TextUnformatted("Coordinate system");
+        const std::string frameLabel = CadUcsFrameLabel(cmd);
+        ImGui::SetNextItemWidth(ucsComboW);
+        if (ImGui::BeginCombo("##RibbonUcsPick", frameLabel.c_str(), ImGuiComboFlags_HeightLargest)) {
+          const bool isW = CadUcsIsWorld(cmd);
+          if (ImGui::Selectable("WCS", isW) && !isW)
+            SetActiveUcs(cmd, ucs::Ucs{}, log);
+          if (!cmd.ucsNamed.empty()) {
+            ImGui::Separator();
+            for (const NamedUcs& n : cmd.ucsNamed) {
+              const bool sel = !isW && ucs::FramesMatch(n.frame, cmd.activeUcs);
+              if (ImGui::Selectable(n.name.c_str(), sel) && !sel)
+                SetActiveUcs(cmd, n.frame, log);
+            }
+          }
+          ImGui::Separator();
+          if (ImGui::Selectable("New UCS..."))
+            StartUcsCommand(cmd, log);
+          ImGui::EndCombo();
+        }
+        RibbonItemHelp("The active coordinate system: WCS, a saved name, or Unnamed for a frame\n"
+                       "built but not saved. Save one with UCS N S <name>.");
         ImGui::EndGroup();
       }
       RibbonSectionEnd();
@@ -7927,6 +8033,7 @@ static bool CadUcsPolarPromptBase(const AppCommandState& cmd, ray3d::Vec3* baseW
 // AutoCAD-style "Specify … :" label for the dynamic-input point prompt (REQ-024).
 // Only meaningful when CommandExpectsPointEntry(cmd) is true. Multi-point chains
 // (LINE, POLYLINE) count the point being specified: first, second, third, …
+
 static std::string CadPointPromptLabel(const AppCommandState& cmd) {
   using K = AppCommandState::Kind;
   switch (cmd.active) {
@@ -15734,15 +15841,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     // otherwise "Unnamed" — AutoCAD's own word for a frame that has been built but not saved, and a
     // useful nudge that `UCS N S` would keep it.
     const bool isWorld = CadUcsIsWorld(cmd);
-    std::string activeName = isWorld ? "WCS" : "Unnamed";
-    if (!isWorld) {
-      for (const NamedUcs& n : cmd.ucsNamed) {
-        if (ucs::FramesMatch(n.frame, cmd.activeUcs)) {
-          activeName = n.name;
-          break;
-        }
-      }
-    }
+    const std::string activeName = CadUcsFrameLabel(cmd);
 
     const float dropW = std::max(84.f, ImGui::CalcTextSize(activeName.c_str()).x + 40.f);
     ImGui::SetNextWindowPos(ImVec2(viewCubeX + kViewCubeSize - dropW, viewCubeY + kViewCubeSize + 6.f),
@@ -15844,6 +15943,52 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       }
       ucsicon::Draw(ImGui::GetWindowDrawList(), CadViewCamera(cmd), frameStore, iconX, iconY, kUcsIconArm,
                     CadUcsIsWorld(cmd));
+    }
+
+    // Live preview of the frame BEING DEFINED (REQ-154), drawn at the origin already picked and
+    // oriented by what the cursor currently implies. This is the thing a user is actually deciding
+    // at these prompts — the rubber line says which DIRECTION, but only a labelled triad says which
+    // way X and Y will end up pointing, and that is the part that is easy to get backwards.
+    //
+    // Drawn in addition to the icon above, not instead of it: the icon is where the frame IS now,
+    // this is where it WOULD be. Seeing both is what makes the change legible.
+    //
+    // It derives its frame from ucs::AlignedToDirection and ucs::FromThreePoints — the same two
+    // functions the commit uses — so the preview cannot show one frame and commit another.
+    if (cmd.active == AppCommandState::Kind::Ucs && outCursorX && outCursorY) {
+      using UPh = AppCommandState::UcsPhase;
+      const bool xPhase = cmd.ucsPhase == UPh::WaitXAxisPoint;
+      const bool xyPhase = cmd.ucsPhase == UPh::WaitXyPoint;
+      if (xPhase || xyPhase) {
+        double cwx = 0.0, cwy = 0.0;
+        CadCoord::WorldFromLocal(cmd, static_cast<float>(*outCursorX), static_cast<float>(*outCursorY), &cwx, &cwy);
+        const ray3d::Vec3 cursorWorld{cwx, cwy, cmd.ucsPendingOrigin.z};
+        ucs::Ucs preview;
+        const bool built =
+            xPhase ? ucs::AlignedToDirection(cmd.ucsPendingOrigin, ray3d::Sub(cursorWorld, cmd.ucsPendingOrigin),
+                                             &preview)
+                   : ucs::FromThreePoints(cmd.ucsPendingOrigin, cmd.ucsPendingXAxisPoint, cursorWorld, &preview);
+        if (built) {
+          // Same local-space conversion the icon above uses: the stores are local in XY and the UCS
+          // is world, so the origin comes down before it is projected.
+          float plx = 0.f, ply = 0.f;
+          CadCoord::LocalFromWorld(cmd, static_cast<float>(cmd.ucsPendingOrigin.x),
+                                   static_cast<float>(cmd.ucsPendingOrigin.y), &plx, &ply);
+          float psx = 0.f, psy = 0.f;
+          CadViewCamera(cmd).WorldToScreen(static_cast<double>(plx), static_cast<double>(ply),
+                                           cmd.ucsPendingOrigin.z, avail.x, avail.y, &psx, &psy);
+          const float px = imgPos.x + psx;
+          const float py = imgPos.y + psy;
+          if (std::isfinite(px) && std::isfinite(py) && px > imgPos.x - 200.f &&
+              px < imgPos.x + avail.x + 200.f && py > imgPos.y - 200.f && py < imgPos.y + avail.y + 200.f) {
+            // The preview frame is expressed in WORLD; the icon draws from storage-local axes, and
+            // the two differ only by the document origin, which is a translation — so the axes carry
+            // over unchanged and only the origin needed converting.
+            ucsicon::Draw(ImGui::GetWindowDrawList(), CadViewCamera(cmd), preview, px, py, kUcsIconArm,
+                          /*isWorld=*/false);
+          }
+        }
+      }
     }
   }
 

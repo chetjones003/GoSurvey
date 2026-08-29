@@ -20569,8 +20569,14 @@ static double PickDistSqPointSegmentD(double px, double py, double ax, double ay
 
 bool PickClosestCadEntity(const AppCommandState& st, double wx, double wy, float tolWorld, SelectedEntity* out,
                           float* outDistSq, const ray3d::Ray* pickRay) {
-  if (!out || !outDistSq)
+  // \p outDistSq is optional: a caller that wants only the entity passes null. Rejecting null
+  // here is what made every `UCS Object` pick answer "no object found at that point" - the
+  // option could not succeed anywhere, at any zoom, on any drawing, under a green suite.
+  float unusedDistSq = 0.f;
+  if (!out)
     return false;
+  if (!outDistSq)
+    outDistSq = &unusedDistSq;
   const double tol2 = static_cast<double>(tolWorld) * static_cast<double>(tolWorld);
 
   // Distance metric (REQ-058). With no ray this is the historical plan-view XY distance, unchanged
@@ -23101,25 +23107,7 @@ void SetActiveUcs(AppCommandState& st, const ucs::Ucs& next, std::vector<std::st
 // be a 3D one; AutoCAD's flat-drawing rule (X along the line, Z = the entity's extrusion) is the
 // special case of it that a horizontal line produces.
 static bool UcsAlignedToDirection(const ray3d::Vec3& origin, const ray3d::Vec3& dir, ucs::Ucs* out) {
-  const ray3d::Vec3 x = ray3d::Normalize(dir);
-  if (ray3d::Dot(x, x) < 0.5)
-    return false;
-  // Z = world up with the along-X part removed. For a vertical line that is degenerate, so world
-  // north takes over - any perpendicular will do there, and picking a deterministic one keeps the
-  // result from depending on float noise.
-  ray3d::Vec3 ref{0.0, 0.0, 1.0};
-  ray3d::Vec3 z = ray3d::Normalize(ray3d::Sub(ref, ray3d::Scale(x, ray3d::Dot(ref, x))));
-  if (ray3d::Dot(z, z) < 0.5) {
-    ref = ray3d::Vec3{0.0, 1.0, 0.0};
-    z = ray3d::Normalize(ray3d::Sub(ref, ray3d::Scale(x, ray3d::Dot(ref, x))));
-    if (ray3d::Dot(z, z) < 0.5)
-      return false;
-  }
-  out->origin = origin;
-  out->xAxis = x;
-  out->zAxis = z;
-  out->yAxis = ray3d::Normalize(ray3d::Cross(z, x));
-  return ray3d::Dot(out->yAxis, out->yAxis) > 0.5;
+  return ucs::AlignedToDirection(origin, dir, out);
 }
 
 // Derive a UCS from the entity under \p pickWorld. Returns false, with a reason logged, for the
@@ -23132,7 +23120,8 @@ static bool UcsFromObjectPick(const AppCommandState& st, const ray3d::Vec3& pick
   CadCoord::LocalFromWorld(st, pickWorld.x, pickWorld.y, &px, &py);
   const float tol = CadOffsetEntityPickTolWorld(st);
   SelectedEntity hit{};
-  if (!PickClosestCadEntity(st, static_cast<double>(px), static_cast<double>(py), tol, &hit, nullptr)) {
+  float pickDistSq = 0.f;
+  if (!PickClosestCadEntity(st, static_cast<double>(px), static_cast<double>(py), tol, &hit, &pickDistSq)) {
     log.push_back("UCS Object - no object found at that point. Click a line, polyline, arc, circle, "
                   "ellipse or text.");
     return false;
