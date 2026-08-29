@@ -22,6 +22,12 @@ dev/win         text eol=lf
 dev/help        text eol=lf
 dev/_common.sh  text eol=lf
 
+# --- Byte-compared test fixtures: must match what the code WRITES, not the platform ---
+# regression-issue03 asserts the exported CSV is byte-identical to this file. The exporter emits LF,
+# so if git checks this out as CRLF the comparison fails on Windows for a reason that has nothing to
+# do with the coordinate precision the test exists to pin.
+samples/state-plane-points-expected.csv text eol=lf
+
 # --- Binary: never touch ---
 *.ico   binary
 *.png   binary
