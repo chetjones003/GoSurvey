@@ -171,6 +171,50 @@ inline ViewportClickRoute ViewportClickRouteFor(const AppCommandState& cmd) {
     return R::Ignore;
   }
 
+
+  // --- UCS: most phases take a point; Object takes an entity; the rest are typed only. ---
+  //
+  // REQ-154. Without this branch every UCS phase fell to the default and its clicks were discarded,
+  // so the whole mouse half of the command was dead — origin picks, the three-point form, ZAxis and
+  // Object included — while `PICK`-driven transcripts stayed green, because PICK calls
+  // SubmitViewportPick directly and never consults this table. That is the same way RECT,
+  // FEATURELINE and REQ-103's five modify commands each shipped ignoring real clicks; the CLICK verb
+  // exists to make it fail loudly instead, and it did.
+  //
+  // SnappedPointPick rather than a raw cursor because an object snap is exactly what a UCS pick
+  // wants: putting the origin on a real endpoint, or taking a rotation angle from the two ends of a
+  // line that is already drawn, is the case the command is for.
+  case K::Ucs: {
+    using UPh = AppCommandState::UcsPhase;
+    switch (cmd.ucsPhase) {
+    case UPh::WaitOriginOrOption:
+    case UPh::WaitXAxisPoint:
+    case UPh::WaitXyPoint:
+    case UPh::WaitRotationAngleP1:
+    case UPh::WaitRotationAngleP2:
+    case UPh::WaitZAxisOrigin:
+    case UPh::WaitZAxisPoint:
+      return R::SnappedPointPick;
+    // `Object` aligns the frame to an entity, so it needs the entity under the cursor rather than a
+    // coordinate — the same shape OFFSET and DESIGNATEBREAKLINE use.
+    case UPh::WaitObjectPick:
+      return R::RawEntityPick;
+    // Typed-only prompts. The rotation angle is a number or the `2P` keyword; Named wants an action
+    // letter and then a name. SubmitViewportPickImpl has no branch for any of them, so routing
+    // anything but Ignore would be a click that goes nowhere.
+    case UPh::Idle:
+    case UPh::WaitRotationAngle:
+    case UPh::WaitNamedAction:
+    case UPh::WaitNamedName:
+      return R::Ignore;
+    }
+    return R::Ignore;
+  }
+
+  // PLAN is keyword-only at every phase — an option letter, then possibly a UCS name. It moves the
+  // camera and never reads a coordinate, so a click has nothing to land on.
+  case K::Plan:
+    return R::Ignore;
   // --- DELETE / JOIN: select objects, ENTER to act on them. ---
   case K::Delete:
   case K::Join:

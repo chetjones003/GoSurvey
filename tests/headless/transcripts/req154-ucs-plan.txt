@@ -287,3 +287,50 @@ EXPECT LOG "Coordinate entry is now in this frame"
 CMD UCS
 CMD W
 CHECK ALL
+
+# --- Real viewport clicks, not PICK ------------------------------------------------------------
+# PICK calls SubmitViewportPick directly and never consults ViewportClickRouteFor, so a transcript
+# built only from PICK proves nothing about whether the mouse works. CLICK goes through the routing
+# layer the GUI uses. Until K::Ucs was added to that table every UCS click was discarded while these
+# same steps passed under PICK — the exact way RECT, FEATURELINE and REQ-103's five modify commands
+# each shipped mouse-dead. Every phase that accepts a point is clicked here at least once.
+
+NEW
+CMD UCS
+CMD W
+
+# Origin by click, then the X-axis and XY points by click: the three-point form, mouse only.
+CMD UCS
+CLICK 100 100
+EXPECT LOG "Specify point on positive portion of X axis"
+CLICK 200 100
+EXPECT LOG "Specify point on positive-Y portion"
+CLICK 200 200
+EXPECT LOG "Coordinate entry is now in this frame"
+
+CMD UCS
+CMD W
+
+# The rotation angle from two CLICKED points.
+CMD UCS
+CMD Z
+CMD 2P
+CLICK 0 0
+EXPECT LOG "Specify second point of the angle"
+CLICK 10 10
+EXPECT LOG "angle from the two points: 45.0000 degrees"
+
+CMD UCS
+CMD W
+
+# ZAxis, both points clicked.
+CMD UCS
+CMD ZA
+CLICK 0 0
+EXPECT LOG "Specify point on positive portion of Z axis"
+CLICK 50 0
+EXPECT LOG "Coordinate entry is now in this frame"
+
+CMD UCS
+CMD W
+CHECK ALL
