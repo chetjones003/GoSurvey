@@ -1,0 +1,34 @@
+# D-2026-08-29-b — FEATURELINE closes like POLYLINE (click start / Enter).
+#
+# Close is coincidence with the stored first vertex (same as REQ-118), not a snap flag.
+# Enter with no elevation prompt pending finishes open. Enter during the elevation prompt
+# still accepts the default Z (req087-feature-line-click-entry T4).
+
+NEW
+CMD FEATURELINE Closed
+CMD 0,0,10
+CMD 40,0,11
+CMD 40,30,12
+CMD 0,0
+EXPECT LOG "FEATURELINE closed"
+CHECK ALL
+
+CMD FEATURELINELIST
+EXPECT LOG "Feature line 1: "Closed""
+
+CMD LINE
+CMD 100,100
+CMD 200,100
+CHECK ALL
+
+NEW
+CMD FEATURELINE Opened
+CMD 0,0,5
+CMD 50,0,6
+CMD
+EXPECT LOG "FEATURELINE complete"
+CHECK ALL
+
+CMD FEATURELINELIST
+EXPECT LOG "Feature line 1: "Opened" — 2 vertices"
+CHECK ALL

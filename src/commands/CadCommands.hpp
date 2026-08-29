@@ -1149,6 +1149,8 @@ constexpr int kRibbonTabCount    = 7;
 constexpr int kRibbonTabSurfaceCtx = 7;
 /// REQ-153: contextual SURVEY Point(s) tab. Session-only, not a prefs slot.
 constexpr int kRibbonTabSurveyPointCtx = 8;
+/// D-2026-08-29-a: contextual Feature Line tab. Session-only, not a prefs slot.
+constexpr int kRibbonTabFeatureLineCtx = 9;
 
 struct AppCommandState {
   enum class Kind {
@@ -1824,6 +1826,9 @@ struct AppCommandState {
   std::vector<uint8_t> featureLineDraftElevPt;
   /// The name typed when FEATURELINE started, stamped on the line at commit.
   std::string featureLineDraftName;
+  std::string featureLineDraftStyle;
+  std::string featureLineDraftSite;
+  std::string featureLineDraftLayer;
 
   /// FEATURELINE two-phase vertex entry (TASK-082). A click supplies X and Y only, so the point is
   /// held here while the command prompts for its elevation — the difference between this and
@@ -1881,6 +1886,10 @@ struct AppCommandState {
   int ribbonTabBeforeSurveyPointCtx = 0;
   /// True while a survey-point selection has armed the SURVEY Point(s) contextual tab.
   bool surveyPointContextualRibbonArmed = false;
+  /// Permanent tab to restore when the last selected feature line is cleared (D-2026-08-29-a).
+  int ribbonTabBeforeFeatureLineCtx = 0;
+  /// True while a feature-line selection has armed the Feature Line contextual tab.
+  bool featureLineContextualRibbonArmed = false;
   /// REQ-077: update-check settings (enabled, channel, skipped version, throttle anchor).
   /// Only the persisted settings live here — the in-flight worker state is `update::UpdateState`,
   /// owned by the application loop, so `AppCommandState` gains no thread and stays copyable.
@@ -2626,6 +2635,10 @@ struct AppCommandState {
   bool showSurfacePropertiesWindow = false;
   int surfacePropertiesIndex = -1;
   bool showFeatureLineElevWindow = false;    ///< Feature line elevation editor (REQ-088).
+  /// Create Feature Lines dialog (Home ▸ Feature Line ▸ from objects). Session-only.
+  bool showCreateFeatureLinesWindow = false;
+  /// True = draw a new feature line after OK; false = convert selected objects (D-2026-08-29-b).
+  bool createFeatureLinesDrawMode = false;
   /// REQ-142 Toolspace (Prospector / Settings). Session-only; not written to `.gs`.
   enum class ToolspaceTab : int { Prospector = 0, Settings = 1 };
   bool showToolspaceWindow = true;

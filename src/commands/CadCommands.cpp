@@ -6323,6 +6323,9 @@ void ResetFeatureLineDraft(AppCommandState& st) {
   st.featureLineDraftElevPt.clear();
   st.featureLineDraftBulge.clear();
   st.featureLineDraftName.clear();
+  st.featureLineDraftStyle.clear();
+  st.featureLineDraftSite.clear();
+  st.featureLineDraftLayer.clear();
   st.featureLinePendingPoint = false;
   st.featureLinePendingX = st.featureLinePendingY = 0.f;
   st.featureLinePendingDefaultZ = 0.f;
@@ -17468,8 +17471,24 @@ void StartFeatureLineCommand(AppCommandState& st, const std::string& name, std::
   log.push_back("FEATURELINE" + (name.empty() ? std::string() : " \"" + name + "\"") +
                 " — click a point (you will be asked for its elevation), or type X,Y / X,Y,Z. "
                 "E marks the next point an elevation point. A then a through-point then the end draws an arc. "
-                "CLOSE/CL, END, ESC cancels.");
+                "Click the FIRST point to close, Enter to finish open. (CLOSE/CL, END still work.) ESC cancels.");
 }
+
+namespace {
+
+/// D-2026-08-29-b / REQ-118 shape: coincidence with the stored first vertex, not a snap flag.
+bool FeatureLineDraftClosesAt(const AppCommandState& st, float x, float y) {
+  assert(st.featureLineDraftVerts.size() < 10000000u);
+  assert(st.featureLineDraftVerts.size() % 3 == 0);
+  const size_t nvert = st.featureLineDraftVerts.size() / 3;
+  if (nvert < 3)
+    return false;
+  constexpr float kCloseEps = 1e-4f;
+  return std::fabs(x - st.featureLineDraftVerts[0]) <= kCloseEps &&
+         std::fabs(y - st.featureLineDraftVerts[1]) <= kCloseEps;
+}
+
+}  // namespace
 
 /// Appends one vertex to the feature-line draft. \p isElevPoint marks it an elevation point rather
 /// than a PI (ADR-035 (a)) — geometrically it lies on the line either way.
@@ -17477,6 +17496,12 @@ bool SubmitFeatureLineVertex(AppCommandState& st, float x, float y, bool isElevP
                              std::vector<std::string>& log) {
   if (st.active != AppCommandState::Kind::FeatureLine)
     return false;
+
+  if (!(st.featureLineDraftArcArmed && !st.featureLineDraftArcThroughValid) &&
+      FeatureLineDraftClosesAt(st, x, y)) {
+    CommitFeatureLineDraft(st, true, log);
+    return true;
+  }
 
   if (st.featureLineDraftArcArmed && !st.featureLineDraftArcThroughValid) {
     if (st.featureLineDraftVerts.size() < 3) {
@@ -17540,6 +17565,11 @@ bool SubmitFeatureLineVertex(AppCommandState& st, float x, float y, bool isElevP
 bool SubmitFeatureLinePoint(AppCommandState& st, float x, float y, std::vector<std::string>& log) {
   if (st.active != AppCommandState::Kind::FeatureLine)
     return false;
+
+  if (FeatureLineDraftClosesAt(st, x, y)) {
+    CommitFeatureLineDraft(st, true, log);
+    return true;
+  }
 
   // ASSUMPTION-1, in order. The snap override is CadCommitElevation's existing REQ-058 rule: an
   // object snap returns the object's real 3D point, and offering anything else as the default would
@@ -17605,8 +17635,12 @@ void CommitFeatureLineDraft(AppCommandState& st, bool closed, std::vector<std::s
   st.featureLineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
   CadFeatureLineInfo info;
   info.name = st.featureLineDraftName;
+  info.style = st.featureLineDraftStyle;
+  info.site = st.featureLineDraftSite;
   st.featureLineInfo.push_back(std::move(info));
   st.featureLineAttrs.push_back(MakeNewEntityAttrs(st));
+  if (!st.featureLineDraftLayer.empty() && !st.featureLineAttrs.empty())
+    st.featureLineAttrs.back().layer = st.featureLineDraftLayer;
   BumpCadGpuCache(st);
   st.active = AppCommandState::Kind::None;
   st.featureLineDraftVerts.clear();
@@ -24860,6 +24894,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       CommitFeatureLinePendingPoint(st, st.featureLinePendingDefaultZ, log);
       return;
     }
+    if (st.active == K::FeatureLine) {
+      const size_t nvert = st.featureLineDraftVerts.size() / 3;
+      if (nvert < 2)
+        log.push_back("FEATURELINE — need at least two vertices (use END to finish open).");
+      else
+        CommitFeatureLineDraft(st, /*closed=*/false, log);
+      return;
+    }
     if (st.active == K::Pan) {
       // Enter (or right-click in Enter mode) exits PAN; Esc exits via CancelActiveCommand.
       st.active = K::None;
@@ -27109,8 +27151,8 @@ const char* DrawingExtrasFooterHint(const AppCommandState& st) {
       return buf;
     }
     if (st.featureLineDraftVerts.empty())
-      return "FEATURELINE: First point — click or X,Y/X,Y,Z | [E] = elevation point | [CLOSE]/[END] | ESC cancel";
-    return "FEATURELINE: Next point — click or X,Y/X,Y,Z | [E] = elevation point | [CLOSE]/[END] | ESC cancel";
+      return "FEATURELINE: First point — click or X,Y/X,Y,Z | [E] = elevation point | click start to close, Enter open | ESC cancel";
+    return "FEATURELINE: Next point — click or X,Y/X,Y,Z | [E] = elevation point | click start to close, Enter open | ESC cancel";
   }
 
   if (st.active == K::Fillet) {

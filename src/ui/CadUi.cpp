@@ -1424,12 +1424,18 @@ static float RibbonPanelContentH(float panelH) {
   return std::max(24.f, panelH - kRibbonTitleH);
 }
 
+static float RibbonPanelTitleMinW(const char* title) {
+  assert(title != nullptr);
+  assert(title[0] != '\0');
+  return ImGui::CalcTextSize(title).x + 24.f;
+}
+
 static void RibbonSectionBegin(const char* childId, const char* title, float width, float height) {
   ImGui::BeginGroup();
   // Flat panel: same gray as the band, no border. Buttons float on a uniform
   // strip; the panel title is pinned at the bottom by RibbonSectionEnd.
   ImGui::PushStyleColor(ImGuiCol_ChildBg, g_chrome.bandFace);
-  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(4.f, 2.f));
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(6.f, 2.f));
   // NoScrollbar alone only hides the bar — a panel whose content is a hair wider than `width`
   // (rounding in colW(), an extra pixel of text) was still wheel-scrollable with no visible bar,
   // which is exactly what let the Survey panel keep scrolling after RibbonToolsLeft's own fix
@@ -1462,7 +1468,9 @@ static void RibbonSectionEnd() {
   constexpr float chevSz = 3.f;
   constexpr float gap = 5.f;
   const float totalW = ts.x + gap + chevSz * 2.f;
-  const float tx = wp.x + (ww - totalW) * 0.5f;
+  float tx = wp.x + (ww - totalW) * 0.5f;
+  if (tx < wp.x + 3.f)
+    tx = wp.x + 3.f;
   const float ty = titleTop + (kRibbonTitleH - ts.y) * 0.5f;
   dl->AddText(ImVec2(tx, ty), tcol, title);
   const float cx = tx + ts.x + gap + chevSz;
@@ -1563,6 +1571,8 @@ enum class RibbonIconKind : std::uint8_t {
   SvyRenumber,
   SvyLock,
   SvyUnlock,
+  FeatureLine,  // D-2026-08-29-c Home Create Design
+  Block,
 };
 
 static ImVec2 RibbonLerp(const ImVec2& a, const ImVec2& b, float u, float v) {
@@ -1662,6 +1672,48 @@ static void PaintRibbonIcon(ImDrawList* dl, const ImVec2& mn, const ImVec2& mx, 
     RibbonGripSquare(dl, v1, grip, acc, acc, t);
     RibbonGripSquare(dl, v2, grip, acc, acc, t);
     RibbonGripSquare(dl, v3, grip, acc, acc, t);
+    break;
+  }
+  case RibbonIconKind::FeatureLine: {
+    const ImVec2 v0 = RibbonLerp(mn, mx, 0.12f, 0.72f);
+    const ImVec2 v1 = RibbonLerp(mn, mx, 0.38f, 0.28f);
+    const ImVec2 v2 = RibbonLerp(mn, mx, 0.62f, 0.62f);
+    const ImVec2 v3 = RibbonLerp(mn, mx, 0.88f, 0.22f);
+    dl->AddLine(v0, v1, acc, t * 1.15f);
+    dl->AddLine(v1, v2, acc, t * 1.15f);
+    dl->AddLine(v2, v3, acc, t * 1.15f);
+    const float node = std::clamp(std::min(w, h) * 0.07f, 2.6f, 5.2f);
+    auto flNode = [&](ImVec2 p) {
+      dl->AddCircleFilled(p, node, IM_COL32(232, 236, 242, 255), 12);
+      dl->AddCircle(p, node, acc, 12, t);
+    };
+    flNode(v0);
+    flNode(v1);
+    flNode(v2);
+    flNode(v3);
+    break;
+  }
+  case RibbonIconKind::Block: {
+    const float s = std::min(w, h) * 0.22f;
+    const ImVec2 f0(c.x - s * 0.9f, c.y + s * 0.15f);
+    const ImVec2 f1(c.x + s * 0.35f, c.y + s * 0.55f);
+    const ImVec2 f2(c.x + s * 0.35f, c.y - s * 0.35f);
+    const ImVec2 f3(c.x - s * 0.9f, c.y - s * 0.75f);
+    const ImVec2 b0(f0.x + s * 0.55f, f0.y - s * 0.45f);
+    const ImVec2 b1(f1.x + s * 0.55f, f1.y - s * 0.45f);
+    const ImVec2 b2(f2.x + s * 0.55f, f2.y - s * 0.45f);
+    const ImVec2 b3(f3.x + s * 0.55f, f3.y - s * 0.45f);
+    dl->AddLine(f0, f1, col, t);
+    dl->AddLine(f1, f2, col, t);
+    dl->AddLine(f2, f3, col, t);
+    dl->AddLine(f3, f0, col, t);
+    dl->AddLine(f2, b2, col, t);
+    dl->AddLine(f3, b3, col, t);
+    dl->AddLine(f1, b1, col, t);
+    dl->AddLine(b1, b2, col, t);
+    dl->AddLine(b2, b3, col, t);
+    dl->AddLine(b3, b0, col, t);
+    dl->AddLine(b0, b1, col, t);
     break;
   }
   case RibbonIconKind::Arc: {
@@ -2635,17 +2687,19 @@ static const char* RibbonIconName(RibbonIconKind k) {
   case RibbonIconKind::SvyRenumber:    return "svyrenumber";
   case RibbonIconKind::SvyLock:        return "svylock";
   case RibbonIconKind::SvyUnlock:      return "svyunlock";
+  case RibbonIconKind::FeatureLine:    return "featureline";
+  case RibbonIconKind::Block:          return "block";
   }
   return "";
 }
 
-static ImTextureID g_ribbonIconTex[static_cast<int>(RibbonIconKind::SvyUnlock) + 1] = {};
+static ImTextureID g_ribbonIconTex[static_cast<int>(RibbonIconKind::Block) + 1] = {};
 static bool g_ribbonIconsLoaded = false;
 
 static void EnsureRibbonIconsLoaded() {
   if (g_ribbonIconsLoaded) return;
   g_ribbonIconsLoaded = true;  // attempt once; missing files fall back to vector art
-  for (int i = 0; i <= static_cast<int>(RibbonIconKind::SvyUnlock); ++i) {
+  for (int i = 0; i <= static_cast<int>(RibbonIconKind::Block); ++i) {
     const std::string nm = RibbonIconName(static_cast<RibbonIconKind>(i));
     if (nm.empty()) continue;
     const std::filesystem::path p =
@@ -2661,6 +2715,7 @@ static bool CommandIconKind(const std::string& upperName, RibbonIconKind* out) {
   struct M { const char* n; RibbonIconKind k; };
   static const M m[] = {
     {"LINE", RibbonIconKind::Line}, {"CIRCLE", RibbonIconKind::Circle}, {"POLYLINE", RibbonIconKind::Polyline},
+    {"FEATURELINE", RibbonIconKind::FeatureLine}, {"FL", RibbonIconKind::FeatureLine},
     {"RECT", RibbonIconKind::Rect},
     {"ARC", RibbonIconKind::Arc}, {"ELLIPSE", RibbonIconKind::Ellipse}, {"HATCH", RibbonIconKind::Hatch},
     {"TEXT", RibbonIconKind::Text},
@@ -3007,6 +3062,35 @@ static int FirstSelectedSurveyPointIndex(const AppCommandState& cmd) {
   return -1;
 }
 
+static int CountSelectedFeatureLines(const AppCommandState& cmd) {
+  const size_t n = cmd.featureLineInfo.size();
+  assert(n < 10000000u);
+  assert(cmd.selection.size() < 10000000u);
+  int count = 0;
+  for (const SelectedEntity& e : cmd.selection) {
+    if (e.type != SelectedEntity::Type::FeatureLine)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= n)
+      continue;
+    ++count;
+  }
+  return count;
+}
+
+static int FirstSelectedFeatureLineIndex(const AppCommandState& cmd) {
+  const size_t n = cmd.featureLineInfo.size();
+  assert(n < 10000000u);
+  assert(cmd.selection.size() < 10000000u);
+  for (const SelectedEntity& e : cmd.selection) {
+    if (e.type != SelectedEntity::Type::FeatureLine)
+      continue;
+    if (e.index < 0 || static_cast<size_t>(e.index) >= n)
+      continue;
+    return e.index;
+  }
+  return -1;
+}
+
 // REQ-302 increment 2 (ADR-038): measure-then-decide responsive breakpoints for the ribbon's own
 // per-tab sections, plus a shared overflow popup for whatever doesn't fit at Narrow.
 enum class RibbonBreakpoint { Wide, Medium, Narrow };
@@ -3019,6 +3103,7 @@ struct RibbonSectionSpec {
   float wideW = 0.f;
   float mediumW = 0.f;
   std::function<void()> render;
+  bool keepInline = false;  // never park in More (Home Draw / Modify / Clipboard)
 };
 
 struct RibbonFitResult {
@@ -3055,19 +3140,38 @@ static RibbonFitResult DecideRibbonFit(const std::vector<RibbonSectionSpec>& spe
     return r;
   }
   r.breakpoint = RibbonBreakpoint::Narrow;
-  float used = 0.f;
-  for (size_t i = 0; i < specs.size(); ++i) {
-    const float need = specs[i].mediumW + (r.inlineIdx.empty() ? 0.f : gap);
-    // The first section always renders inline even if it alone would overflow `availW`
-    // (TASK-105 ASSUMPTION-2) — an empty-looking tab with only a "More" button reads as broken.
-    if (r.inlineIdx.empty() || used + need <= availW) {
-      r.inlineIdx.push_back(i);
-      used += need;
-    } else {
-      r.overflowIdx.push_back(i);
-    }
-  }
   constexpr float kMoreW = 46.f;
+  std::vector<unsigned char> take(specs.size(), 0);
+  float used = 0.f;
+  auto addInline = [&](size_t i) {
+    assert(i < specs.size());
+    if (take[i] != 0)
+      return;
+    take[i] = 1;
+    used += specs[i].mediumW + (used > 0.f ? gap : 0.f);
+  };
+  for (size_t i = 0; i < specs.size(); ++i) {
+    if (specs[i].keepInline)
+      addInline(i);
+  }
+  for (size_t i = 0; i < specs.size(); ++i) {
+    if (take[i] != 0)
+      continue;
+    const float need = specs[i].mediumW + (used > 0.f ? gap : 0.f);
+    if (used + need + kMoreW + gap <= availW)
+      addInline(i);
+    else
+      r.overflowIdx.push_back(i);
+  }
+  if (take[0] == 0 && !specs.empty()) {
+    addInline(0);
+    r.overflowIdx.erase(std::remove(r.overflowIdx.begin(), r.overflowIdx.end(), size_t{0}),
+                        r.overflowIdx.end());
+  }
+  for (size_t i = 0; i < specs.size(); ++i) {
+    if (take[i] != 0)
+      r.inlineIdx.push_back(i);
+  }
   if (!r.overflowIdx.empty())
     used += kMoreW + gap;
   r.width = used;
@@ -3088,10 +3192,16 @@ static void RenderRibbonFit(const std::vector<RibbonSectionSpec>& specs, const R
     specs[fit.inlineIdx[k]].render();
   }
   if (!fit.overflowIdx.empty()) {
+    constexpr float kMoreW = 46.f;
+    const float rest = ImGui::GetContentRegionAvail().x - kMoreW - gap;
+    if (rest > 4.f) {
+      ImGui::SameLine(0, gap);
+      ImGui::Dummy(ImVec2(rest, 1.f));
+    }
     ImGui::SameLine(0, gap);
-    if (ImGui::Button("More", ImVec2(46.f, colH)))
+    if (ImGui::Button("More", ImVec2(kMoreW, colH)))
       ImGui::OpenPopup(morePopupId);
-    RibbonItemHelp("More — additional tools that don't fit at the current window width.");
+    RibbonItemHelp("More — additional Home tools that don't fit at the current window width.");
     if (ImGui::BeginPopup(morePopupId)) {
       curCompact = false;
       for (size_t k = 0; k < fit.overflowIdx.size(); ++k) {
@@ -3125,8 +3235,17 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   const bool ribbonPaperSpaceEarly =
       cmd.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(cmd);
   const int selSurfIdx = ribbonPaperSpaceEarly ? -1 : FirstSelectedSurfaceIndex(cmd);
+  std::string flQuickProfileSurf;
+  if (selSurfIdx >= 0)
+    flQuickProfileSurf = cmd.cadSurfaces[static_cast<size_t>(selSurfIdx)].name;
+  else if (!cmd.cadSurfaces.empty())
+    flQuickProfileSurf = cmd.cadSurfaces.front().name;
   const int nSvyPts = ribbonPaperSpaceEarly ? 0 : CountSelectedSurveyPoints(cmd);
   const bool hasSvyPts = nSvyPts > 0;
+  const int nFlSel = ribbonPaperSpaceEarly ? 0 : CountSelectedFeatureLines(cmd);
+  const bool hasFlSel = nFlSel > 0;
+  const int selFlIdxEarly = hasFlSel ? FirstSelectedFeatureLineIndex(cmd) : -1;
+  const int flRibbonNum = (selFlIdxEarly >= 0) ? selFlIdxEarly + 1 : 1;
   if (selSurfIdx >= 0) {
     if (!cmd.surfaceContextualRibbonArmed) {
       if (cmd.activeRibbonTab >= 0 && cmd.activeRibbonTab < kRibbonTabCount)
@@ -3141,6 +3260,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         prev = kRibbonTabHome;
       if (hasSvyPts)
         prev = kRibbonTabSurveyPointCtx;
+      else if (hasFlSel)
+        prev = kRibbonTabFeatureLineCtx;
       cmd.activeRibbonTab = prev;
     }
     cmd.surfaceContextualRibbonArmed = false;
@@ -3160,9 +3281,32 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         prev = kRibbonTabHome;
       if (selSurfIdx >= 0)
         prev = kRibbonTabSurfaceCtx;
+      else if (hasFlSel)
+        prev = kRibbonTabFeatureLineCtx;
       cmd.activeRibbonTab = prev;
     }
     cmd.surveyPointContextualRibbonArmed = false;
+  }
+  if (hasFlSel) {
+    if (!cmd.featureLineContextualRibbonArmed) {
+      if (cmd.activeRibbonTab >= 0 && cmd.activeRibbonTab < kRibbonTabCount)
+        cmd.ribbonTabBeforeFeatureLineCtx = cmd.activeRibbonTab;
+      if (cmd.activeRibbonTab != kRibbonTabSurfaceCtx && cmd.activeRibbonTab != kRibbonTabSurveyPointCtx)
+        cmd.activeRibbonTab = kRibbonTabFeatureLineCtx;
+      cmd.featureLineContextualRibbonArmed = true;
+    }
+  } else if (cmd.featureLineContextualRibbonArmed) {
+    if (cmd.activeRibbonTab == kRibbonTabFeatureLineCtx) {
+      int prev = cmd.ribbonTabBeforeFeatureLineCtx;
+      if (prev < 0 || prev >= kRibbonTabCount)
+        prev = kRibbonTabHome;
+      if (selSurfIdx >= 0)
+        prev = kRibbonTabSurfaceCtx;
+      else if (hasSvyPts)
+        prev = kRibbonTabSurveyPointCtx;
+      cmd.activeRibbonTab = prev;
+    }
+    cmd.featureLineContextualRibbonArmed = false;
   }
 
   // REQ-302 tab strip: Home/Insert/Annotate/View/Manage/Output/Survey. Reuses the Model/Layout
@@ -3224,9 +3368,36 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       ImGui::PopStyleColor(4);
       ImGui::SameLine(0, 2);
     }
+    if (hasFlSel) {
+      char flTab[160];
+      const int fxi = FirstSelectedFeatureLineIndex(cmd);
+      if (nFlSel == 1 && fxi >= 0) {
+        const std::string& nm = cmd.featureLineInfo[static_cast<size_t>(fxi)].name;
+        if (!nm.empty())
+          std::snprintf(flTab, sizeof(flTab), "Feature Line: %s", nm.c_str());
+        else
+          std::snprintf(flTab, sizeof(flTab), "Feature Line");
+      } else {
+        std::snprintf(flTab, sizeof(flTab), "Feature Lines");
+      }
+      const bool flOn = cmd.activeRibbonTab == kRibbonTabFeatureLineCtx;
+      ImGui::PushStyleColor(ImGuiCol_Button,        IM_COL32(0, 120, 215, flOn ? 255 : 180));
+      ImGui::PushStyleColor(ImGuiCol_ButtonHovered, IM_COL32(30, 144, 255, 255));
+      ImGui::PushStyleColor(ImGuiCol_ButtonActive,  IM_COL32(0, 90, 180, 255));
+      ImGui::PushStyleColor(ImGuiCol_Text,          IM_COL32(255, 255, 255, 255));
+      if (ImGui::Button(flTab, ImVec2(0.f, kRibbonTabStripH)))
+        cmd.activeRibbonTab = kRibbonTabFeatureLineCtx;
+      ImGui::PopStyleColor(4);
+      ImGui::SameLine(0, 2);
+    }
     ImGui::PopStyleVar();
     ImGui::Dummy(ImVec2(1.f, kRibbonTabStripGapY));  // gap between the tab strip and the panels below
   }
+
+  // D-2026-08-29-e: Civil Home has more panels than the 16 px UI face can label. Scale the ribbon
+  // body (not the tab strip) so captions and section titles fit.
+  constexpr float kRibbonBodyFontScale = 0.80f;
+  ImGui::SetWindowFontScale(kRibbonBodyFontScale);
 
   const ImGuiStyle& st = ImGui::GetStyle();
   // Gutter below the sections so the panel titles ("Draw", "Modify", …) are not
@@ -3235,7 +3406,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   constexpr float kRibbonBottomGutter = 12.f;
   const float panelH = height - kRibbonTabStripH - kRibbonTabStripGapY - st.WindowPadding.y * 2.f -
                         kRibbonBottomGutter;
-  constexpr float kLayerPanelW = 500.f;
+  const float kLayerPanelW = (cmd.activeRibbonTab == kRibbonTabFeatureLineCtx) ? 280.f
+                           : (cmd.activeRibbonTab == kRibbonTabHome)            ? 250.f
+                                                                                : 500.f;
 
   // Civil 3D-style panel metrics: a button column fills the height above the
   // bottom title; small labeled buttons stack 3 to a column; the icon grid
@@ -3247,6 +3420,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   constexpr float kTsLargeW = 76.f;
   auto belowW = [&](const char* label) { return RibbonBelowButtonWidth(label, kTsLargeW); };
   auto capW = [&](const char* caption) { return std::max(kTsLargeW, RibbonMaxLineWidth(caption) + 16.f); };
+  auto panelW = [&](float content, const char* title) {
+    return std::max(content, RibbonPanelTitleMinW(title));
+  };
 
   // REQ-302 increment 2 (ADR-038 (a)): `curCompact` is read by colW()/smallBtn() below — Medium
   // metrics are simply "the same button code, with this flag true." largeBtn/gridBtn are unaffected
@@ -3292,7 +3468,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     curCompact = compact;
     RibbonTabWidths w{};
     w.wEdit = 8.f + largeW + 4.f + colW({"Copy", "Undo", "Redo"});
-    w.wDraw = 8.f + gridCell * 4.f + 4.f * 3.f;  // grid buttons are already icon-only — no Medium delta
+    w.wDraw = 8.f + gridCell * 4.f + 4.f * 3.f;  // D-2026-08-29-d: Civil Home Draw 2×4 grid
     // Four columns: a small-button column is 3 tall (colH), so a 4th item in one BeginGroup is
     // clipped by the child window's own bounds — the same "fourth needs its own column" rule
     // Inquiry/Survey below already follow. Join/Mirror/Lengthen exactly fills one column;
@@ -3322,7 +3498,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     // the one column here).
     w.wLayout = 8.f + largeW + 4.f + colW({"Poly VP"});
     // REQ-302 increment 3 (content audit): Insert/View/Output real content.
-    w.wInsert = 8.f + colW({"Import DXF", "Import DWG"});
+    w.wInsert = 8.f + colW({"Import DXF", "Import DWG", "PDF Attach"});
     w.wViewSettings = 8.f + colW({"Settings"});
     w.wOutExport = 8.f + colW({"Export DXF", "Export DWG"});
     w.wOutPlot = 8.f + largeW + 4.f + colW({"Batch"});  // same shape Layout's Plot/Batch used to be
@@ -3340,88 +3516,214 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   const float secGap = 8.f;
   std::vector<RibbonSectionSpec> ribbonSpecs;
 
-  // REQ-302: Edit/Draw/Modify/Layout are the Home tab's content — no change to any of their own
-  // conditions or bodies below, only the tab gate wrapped around them.
+  // D-2026-08-29-d: Civil 3D Home chrome (Palettes … Clipboard). NYI stays visible + disabled.
   if (cmd.activeRibbonTab == kRibbonTabHome) {
-    ribbonSpecs.push_back({W.wEdit, M.wEdit, [&]() {
-      RibbonSectionBegin("RibbonSecUndo", "Edit", curCompact ? M.wEdit : W.wEdit, panelH);
-      {
-        const bool canUndo = CanUndo(cmd);
-        const bool canRedo = CanRedo(cmd);
-        const bool hasSelection = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty();
-        const bool hasClipboard = !cmd.clipboard.empty();
-        const float cw = colW({"Copy", "Undo", "Redo"});
-
-        if (!hasClipboard)
-          ImGui::BeginDisabled();
-        if (largeBtn("##RibbonClipPaste", RibbonIconKind::ClipboardPaste, "Paste"))
-          StartPasteCommand(cmd, log);
-        if (!hasClipboard)
-          ImGui::EndDisabled();
-        RibbonItemHelp("Paste (Ctrl+V) — place clipboard objects at cursor position.\nRight-click Edit menu for Paste at Original Coordinates.",
-                       hasClipboard ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
-
+    if (!ribbonPaperSpace) {
+      const float palGrid = gridCell;
+      const float wTsBtn = capW("Toolspace");
+      const float wPal = panelW(8.f + wTsBtn + 4.f + palGrid * 2.f + 4.f + 8.f, "Palettes");
+      ribbonSpecs.push_back({wPal, wPal, [&]() {
+        RibbonSectionBegin("RibbonSecHomePalettes", "Palettes", wPal, panelH);
+        if (RibbonButtonEx("##HomeToolspace", RibbonIconKind::Layers, "Toolspace", ImVec2(wTsBtn, colH),
+                           RibbonLabel::Below))
+          cmd.showToolspaceWindow = true;
+        RibbonItemHelp("Toolspace — drawing explorer (Prospector and Settings).\nCommand bar: TOOLSPACE");
         ImGui::SameLine(0, 4);
         ImGui::BeginGroup();
-        if (!hasSelection)
-          ImGui::BeginDisabled();
-        if (smallBtn("##RibbonClipCopy", RibbonIconKind::ClipboardCopy, "Copy", cw))
-          CopySelectionToClipboard(cmd, log);
-        if (!hasSelection)
-          ImGui::EndDisabled();
-        RibbonItemHelp("Copy (Ctrl+C) — copy selected objects to clipboard.\nPaste later with Ctrl+V or the Paste button.",
-                       hasSelection ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
-        if (!canUndo)
-          ImGui::BeginDisabled();
-        if (smallBtn("##RibbonUndo", RibbonIconKind::Undo, "Undo", cw))
-          DoUndo(cmd, log);
-        if (!canUndo)
-          ImGui::EndDisabled();
-        RibbonItemHelp("Undo (Ctrl+Z) — restore previous state.", canUndo ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
-        if (!canRedo)
-          ImGui::BeginDisabled();
-        if (smallBtn("##RibbonRedo", RibbonIconKind::Redo, "Redo", cw))
-          DoRedo(cmd, log);
-        if (!canRedo)
-          ImGui::EndDisabled();
-        RibbonItemHelp("Redo (Ctrl+Shift+Z) — restore next state.", canRedo ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+        if (gridBtn("##HomePaletteProps", RibbonIconKind::SurfPropsHand))
+          cmd.pendingPropertiesFocus = true;
+        RibbonItemHelp("Properties — the side Properties panel.");
+        ImGui::SameLine(0, 4);
+        ImGui::BeginDisabled();
+        (void)gridBtn("##HomePaletteSheet", RibbonIconKind::SurfDoc);
+        ImGui::EndDisabled();
+        RibbonItemHelp("Sheet Set Manager — not implemented yet.", ImGuiHoveredFlags_AllowWhenDisabled);
+        ImGui::BeginDisabled();
+        (void)gridBtn("##HomePaletteSurvey", RibbonIconKind::SvyTripod);
+        ImGui::EndDisabled();
+        RibbonItemHelp("Survey palette — not implemented yet.", ImGuiHoveredFlags_AllowWhenDisabled);
+        ImGui::SameLine(0, 4);
+        ImGui::BeginDisabled();
+        (void)gridBtn("##HomePaletteToolbox", RibbonIconKind::SurfGrading);
+        ImGui::EndDisabled();
+        RibbonItemHelp("Toolbox — not implemented yet.", ImGuiHoveredFlags_AllowWhenDisabled);
         ImGui::EndGroup();
-      }
-      RibbonSectionEnd();
-    }});
+        RibbonSectionEnd();
+      }});
+
+      const float wExpl = panelW(8.f + capW("Project\nExplorer") + 8.f, "Explore");
+      ribbonSpecs.push_back({wExpl, wExpl, [&]() {
+        const float w = capW("Project\nExplorer");
+        RibbonSectionBegin("RibbonSecHomeExplore", "Explore", wExpl, panelH);
+        RibbonNyiButton("##HomeProjExpl", RibbonIconKind::SurfDataShortcut, "Project\nExplorer", ImVec2(w, colH),
+                        RibbonLabel::Below);
+        RibbonSectionEnd();
+      }});
+
+      const float wOpt = panelW(8.f + capW("Grading\nOptimization") + 8.f, "Optimize");
+      ribbonSpecs.push_back({wOpt, wOpt, [&]() {
+        const float w = capW("Grading\nOptimization");
+        RibbonSectionBegin("RibbonSecHomeOptimize", "Optimize", wOpt, panelH);
+        RibbonNyiButton("##HomeGradeOpt", RibbonIconKind::SurfGrading, "Grading\nOptimization", ImVec2(w, colH),
+                        RibbonLabel::Below);
+        RibbonSectionEnd();
+      }});
+
+      const float wGd = panelW(8.f + colW({"Points", "Surfaces", "Traverse"}) + 8.f, "Create Ground Data");
+      ribbonSpecs.push_back({wGd, wGd, [&]() {
+        const float cell = colW({"Points", "Surfaces", "Traverse"});
+        RibbonSectionBegin("RibbonSecHomeGround", "Create Ground Data", wGd, panelH);
+        ImGui::BeginGroup();
+        if (smallBtn("##HomePoints", RibbonIconKind::SurveyPoint, "Points", cell))
+          ImGui::OpenPopup("##HomePointsMenu");
+        RibbonItemHelp("Points — create, import, or group survey points.");
+        if (ImGui::BeginPopup("##HomePointsMenu")) {
+          if (ImGui::MenuItem("Create Points"))
+            StartCreatePointsCommand(cmd, log);
+          if (ImGui::MenuItem("Import Points"))
+            StartImportPointsCommand(cmd, log);
+          if (ImGui::MenuItem("Point Groups"))
+            cmd.showPointGroupManagerWindow = true;
+          if (ImGui::MenuItem("Edit/List Points"))
+            SubmitRibbonCommand(cmd, log, "VIEWPOINTS");
+          ImGui::EndPopup();
+        }
+        if (smallBtn("##HomeSurfaces", RibbonIconKind::SurfAddData, "Surfaces", cell))
+          ImGui::OpenPopup("##HomeSurfacesMenu");
+        RibbonItemHelp("Surfaces — create a TIN or open the Surfaces window.");
+        if (ImGui::BeginPopup("##HomeSurfacesMenu")) {
+          if (ImGui::MenuItem("Create Surface"))
+            cmd.showCreateSurfaceWindow = true;
+          if (ImGui::MenuItem("Surfaces"))
+            cmd.showSurfaceManagerWindow = true;
+          ImGui::EndPopup();
+        }
+        if (smallBtn("##HomeTraverse", RibbonIconKind::Traverse, "Traverse", cell))
+          cmd.showTraverseEditorWindow = true;
+        RibbonItemHelp("Traverse — the traverse editor.");
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+
+      const float cDes0 = colW({"Parcel", "Feature Line", "Grading"});
+      const float cDes1 = colW({"Alignment", "Profile", "Corridor"});
+      const float cDes2 = colW({"Intersections", "Assembly", "Pipe Network"});
+      const float cDes3 = colW({"Pond", "Underground Storage", "Channel"});
+      const float wDes = panelW(8.f + cDes0 + 4.f + cDes1 + 4.f + cDes2 + 4.f + cDes3 + 8.f, "Create Design");
+      ribbonSpecs.push_back({wDes, wDes, [&]() {
+        const float a = colW({"Parcel", "Feature Line", "Grading"});
+        const float b = colW({"Alignment", "Profile", "Corridor"});
+        const float c = colW({"Intersections", "Assembly", "Pipe Network"});
+        const float d = colW({"Pond", "Underground Storage", "Channel"});
+        RibbonSectionBegin("RibbonSecHomeDesign", "Create Design", wDes, panelH);
+        ImGui::BeginGroup();
+        RibbonNyiButton("##HomeParcel", RibbonIconKind::Rect, "Parcel", ImVec2(a, rowH), RibbonLabel::Right);
+        if (smallBtn("##HomeFeatLine", RibbonIconKind::FeatureLine, "Feature Line", a))
+          ImGui::OpenPopup("##HomeFeatLineMenu");
+        RibbonItemHelp("Feature Line — create by drawing, or from selected objects.\nCommand bar: FEATURELINE / FLFROM");
+        if (ImGui::BeginPopup("##HomeFeatLineMenu")) {
+          if (ImGui::MenuItem("Create Feature Line")) {
+            cmd.createFeatureLinesDrawMode = true;
+            cmd.showCreateFeatureLinesWindow = true;
+          }
+          if (ImGui::MenuItem("Create Feature Lines from Objects")) {
+            cmd.createFeatureLinesDrawMode = false;
+            cmd.showCreateFeatureLinesWindow = true;
+          }
+          ImGui::BeginDisabled();
+          ImGui::MenuItem("Create Feature Lines from Alignment");
+          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Create Feature Lines from Alignment — not implemented yet.");
+          ImGui::MenuItem("Create Feature Line from Corridor");
+          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Create Feature Line from Corridor — not implemented yet.");
+          ImGui::MenuItem("Create Feature Line from Stepped Offset");
+          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Create Feature Line from Stepped Offset — not implemented yet.");
+          ImGui::EndDisabled();
+          ImGui::EndPopup();
+        }
+        RibbonNyiButton("##HomeGrading", RibbonIconKind::SurfGrading, "Grading", ImVec2(a, rowH), RibbonLabel::Right);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        RibbonNyiButton("##HomeAlign", RibbonIconKind::Polyline, "Alignment", ImVec2(b, rowH), RibbonLabel::Right);
+        RibbonNyiButton("##HomeProfile", RibbonIconKind::SurfProfile, "Profile", ImVec2(b, rowH), RibbonLabel::Right);
+        RibbonNyiButton("##HomeCorridor", RibbonIconKind::SurfDrape, "Corridor", ImVec2(b, rowH), RibbonLabel::Right);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        RibbonNyiButton("##HomeXsect", RibbonIconKind::Join, "Intersections", ImVec2(c, rowH), RibbonLabel::Right);
+        RibbonNyiButton("##HomeAssy", RibbonIconKind::SurfExtract, "Assembly", ImVec2(c, rowH), RibbonLabel::Right);
+        RibbonNyiButton("##HomePipes", RibbonIconKind::Offset, "Pipe Network", ImVec2(c, rowH), RibbonLabel::Right);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        RibbonNyiButton("##HomePond", RibbonIconKind::Circle, "Pond", ImVec2(d, rowH), RibbonLabel::Right);
+        RibbonNyiButton("##HomeUgStor", RibbonIconKind::Block, "Underground Storage", ImVec2(d, rowH),
+                        RibbonLabel::Right);
+        RibbonNyiButton("##HomeChannel", RibbonIconKind::Arc, "Channel", ImVec2(d, rowH), RibbonLabel::Right);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+
+      const float wProf = panelW(8.f + colW({"Profile View", "Sample Lines", "Section Views"}) + 8.f,
+                                "Profile & Section Views");
+      ribbonSpecs.push_back({wProf, wProf, [&]() {
+        const float cell = colW({"Profile View", "Sample Lines", "Section Views"});
+        RibbonSectionBegin("RibbonSecHomeProfSec", "Profile & Section Views", wProf, panelH);
+        ImGui::BeginGroup();
+        if (smallBtn("##HomeProfView", RibbonIconKind::SurfQuickProfile, "Profile View", cell))
+          ImGui::OpenPopup("##HomeProfViewMenu");
+        RibbonItemHelp("Profile View — Quick Profile samples a surface along two plan points.");
+        if (ImGui::BeginPopup("##HomeProfViewMenu")) {
+          if (ImGui::MenuItem("Quick Profile")) {
+            if (!cmd.cadSurfaces.empty())
+              StartQuickProfileCommand(cmd, cmd.cadSurfaces[0].name, log);
+            else
+              SubmitRibbonCommand(cmd, log, "QUICKPROFILE");
+          }
+          ImGui::BeginDisabled();
+          ImGui::MenuItem("Create Profile View");
+          if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("Create Profile View — not implemented yet.");
+          ImGui::EndDisabled();
+          ImGui::EndPopup();
+        }
+        RibbonNyiButton("##HomeSampleLn", RibbonIconKind::Line, "Sample Lines", ImVec2(cell, rowH), RibbonLabel::Right);
+        RibbonNyiButton("##HomeSectViews", RibbonIconKind::SurfProfile, "Section Views", ImVec2(cell, rowH),
+                        RibbonLabel::Right);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
 
     if (!ribbonPaperSpace) {
-      ribbonSpecs.push_back({W.wDraw, M.wDraw, [&]() {
-        RibbonSectionBegin("RibbonSecDraw", "Draw", curCompact ? M.wDraw : W.wDraw, panelH);
+      const float wDrawW = panelW(W.wDraw, "Draw");
+      const float wDrawM = panelW(M.wDraw, "Draw");
+      ribbonSpecs.push_back({wDrawW, wDrawM, [&]() {
+        RibbonSectionBegin("RibbonSecDraw", "Draw", curCompact ? wDrawM : wDrawW, panelH);
         {
           if (gridBtn("##RibbonLine", RibbonIconKind::Line))
             StartLineCommand(cmd, log);
           RibbonItemHelp("Line — draw straight segments between points.\nCommand bar: LINE or L");
           ImGui::SameLine(0, 4);
-          if (gridBtn("##RibbonCircle", RibbonIconKind::Circle))
-            StartCircleCommand(cmd, log);
-          RibbonItemHelp("Circle — center point and radius.\nCommand bar: CIRCLE or C");
-          ImGui::SameLine(0, 4);
           if (gridBtn("##RibbonPLine", RibbonIconKind::Polyline))
             StartPolylineCommand(cmd, log);
           RibbonItemHelp("Polyline — chain of segments; optional close.\nCommand bar: POLYLINE or PL");
           ImGui::SameLine(0, 4);
-          if (gridBtn("##RibbonFeatureLine", RibbonIconKind::Polyline))
-            StartFeatureLineCommand(cmd, "", log);
-          RibbonItemHelp("Feature Line — 3D design linework with per-vertex elevations.\nCommand bar: FEATURELINE or FL");
-          ImGui::SameLine(0, 4);
-          if (gridBtn("##RibbonFlFrom", RibbonIconKind::Polyline))
-            SubmitRibbonCommand(cmd, log, "FEATURELINESFROMOBJECTS");
-          RibbonItemHelp("Create feature lines from selected lines, arcs, or polylines.\nCommand bar: FLFROM / FEATURELINESFROMOBJECTS");
-          ImGui::SameLine(0, 4);
-          if (gridBtn("##RibbonRect", RibbonIconKind::Rect))
-            StartRectCommand(cmd, log);
-          RibbonItemHelp("Rectangle — two opposite corners; stored as a closed polyline.\nCommand bar: RECT, RECTANG or RECTANGLE");
+          if (gridBtn("##RibbonCircle", RibbonIconKind::Circle))
+            StartCircleCommand(cmd, log);
+          RibbonItemHelp("Circle — center point and radius.\nCommand bar: CIRCLE or C");
           ImGui::SameLine(0, 4);
           if (gridBtn("##RibbonArc", RibbonIconKind::Arc))
             StartArcCommand(cmd, log);
           RibbonItemHelp("Arc — three-point arc (start, mid, end).\nCommand bar: ARC");
-          if (gridBtn("##RibbonEllipse", RibbonIconKind::Ellipse))  // wraps to the second row
+          if (gridBtn("##RibbonRect", RibbonIconKind::Rect))
+            StartRectCommand(cmd, log);
+          RibbonItemHelp("Rectangle — two opposite corners; stored as a closed polyline.\nCommand bar: RECT, RECTANG or RECTANGLE");
+          ImGui::SameLine(0, 4);
+          if (gridBtn("##RibbonEllipse", RibbonIconKind::Ellipse))
             StartEllipseCommand(cmd, log);
           RibbonItemHelp("Ellipse — center, axis endpoint, then ratio on command line.\nCommand bar: ELLIPSE or EL");
           ImGui::SameLine(0, 4);
@@ -3429,15 +3731,19 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
             StartHatchCommand(cmd, log);
           RibbonItemHelp("Hatch — pick an internal point to fill a closed area.\nCommand bar: HATCH or H");
           ImGui::SameLine(0, 4);
-          if (gridBtn("##RibbonPdfAttach", RibbonIconKind::PdfAttach))
-            StartPdfAttachCommand(cmd, log);
-          RibbonItemHelp("PDF Attach — attach a PDF page as a raster underlay with snap recognition.\nCommand bar: PDFATTACH");
+          ImGui::BeginDisabled();
+          (void)gridBtn("##RibbonBlock", RibbonIconKind::Block);
+          ImGui::EndDisabled();
+          RibbonItemHelp("Block — not implemented yet.", ImGuiHoveredFlags_AllowWhenDisabled);
         }
         RibbonSectionEnd();
-      }});
+      }, true});
 
-      ribbonSpecs.push_back({W.wMod, M.wMod, [&]() {
-        RibbonSectionBegin("RibbonSecModify", "Modify", curCompact ? M.wMod : W.wMod, panelH);
+      const float wModH = panelW(M.wMod, "Modify");
+      ribbonSpecs.push_back({wModH, wModH, [&]() {
+        const bool savedCompact = curCompact;
+        curCompact = true;
+        RibbonSectionBegin("RibbonSecModify", "Modify", wModH, panelH);
         {
           if (largeBtn("##RibbonMove", RibbonIconKind::Move, "Move"))
             StartMoveCommand(cmd, log);
@@ -3535,7 +3841,8 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           ImGui::EndGroup();
         }
         RibbonSectionEnd();
-      }});
+        curCompact = savedCompact;
+      }, true});
     } else {
       // Layout contextual ribbon (REQ-032): paper-space viewport-authoring tools. Plot/Batch Plot
       // moved to the Output tab's "Plot" section (REQ-302 increment 3, D-2026-08-25-h) — this
@@ -3559,6 +3866,76 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
         RibbonSectionEnd();
       }});
     } // if (!ribbonPaperSpace) — Draw/Modify vs Layout
+
+    {
+      const float wClip = panelW(8.f + largeW + 4.f + colW({"Cut", "Copy", "Match Properties"}) + 4.f +
+                                     colW({"Undo", "Redo"}) + 16.f,
+                                 "Clipboard");
+      ribbonSpecs.push_back({wClip, wClip, [&]() {
+        const bool savedCompact = curCompact;
+        curCompact = false;
+        const float cCut = colW({"Cut", "Copy", "Match Properties"});
+        const float cHist = colW({"Undo", "Redo"});
+        RibbonSectionBegin("RibbonSecHomeClip", "Clipboard", wClip, panelH);
+        const bool hasSelection = !cmd.selection.empty() || !cmd.selectedSurveyPointIndices.empty() ||
+                                  !cmd.selectedPaperEntities.empty();
+        const bool hasClipboard = !cmd.clipboard.empty();
+        if (!hasClipboard)
+          ImGui::BeginDisabled();
+        if (largeBtn("##RibbonClipPaste", RibbonIconKind::ClipboardPaste, "Paste"))
+          StartPasteCommand(cmd, log);
+        if (!hasClipboard)
+          ImGui::EndDisabled();
+        RibbonItemHelp("Paste (Ctrl+V) — place clipboard objects at cursor position.",
+                       hasClipboard ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (!hasSelection)
+          ImGui::BeginDisabled();
+        if (smallBtn("##RibbonClipCut", RibbonIconKind::Erase, "Cut", cCut)) {
+          CopySelectionToClipboard(cmd, log);
+          StartDeleteCommand(cmd, log);
+        }
+        if (!hasSelection)
+          ImGui::EndDisabled();
+        RibbonItemHelp("Cut — copy the selection to the clipboard, then erase it.",
+                       hasSelection ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+        if (!hasSelection)
+          ImGui::BeginDisabled();
+        if (smallBtn("##RibbonClipCopy", RibbonIconKind::ClipboardCopy, "Copy", cCut))
+          CopySelectionToClipboard(cmd, log);
+        if (!hasSelection)
+          ImGui::EndDisabled();
+        RibbonItemHelp("Copy (Ctrl+C) — copy selected objects to clipboard.",
+                       hasSelection ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+        RibbonNyiButton("##RibbonMatchProp", RibbonIconKind::SurfPropsHand, "Match Properties", ImVec2(cCut, rowH),
+                        RibbonLabel::Right);
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        const bool canUndo = CanUndo(cmd);
+        const bool canRedo = CanRedo(cmd);
+        if (!canUndo)
+          ImGui::BeginDisabled();
+        if (smallBtn("##RibbonUndo", RibbonIconKind::Undo, "Undo", cHist))
+          DoUndo(cmd, log);
+        if (!canUndo)
+          ImGui::EndDisabled();
+        RibbonItemHelp("Undo (Ctrl+Z) — restore previous state.",
+                       canUndo ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+        if (!canRedo)
+          ImGui::BeginDisabled();
+        if (smallBtn("##RibbonRedo", RibbonIconKind::Redo, "Redo", cHist))
+          DoRedo(cmd, log);
+        if (!canRedo)
+          ImGui::EndDisabled();
+        RibbonItemHelp("Redo (Ctrl+Shift+Z) — restore next state.",
+                       canRedo ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+        curCompact = savedCompact;
+      }, true});
+    }
   } // if (activeRibbonTab == kRibbonTabHome)
 
   // REQ-302: Annotate tab. Unchanged condition (model space only, same as before this task).
@@ -4182,7 +4559,256 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     }
   } // kRibbonTabSurveyPointCtx
 
+  // D-2026-08-29-a: contextual Feature Line tab. Widths include panel titles so labels are not
+  // clipped; content is packed so Launch Pad stays on the strip instead of falling into More.
+  if (cmd.activeRibbonTab == kRibbonTabFeatureLineCtx && !ribbonPaperSpace && hasFlSel) {
+    auto flPanelW = [&](float content, const char* title) {
+      return std::max(content, ImGui::CalcTextSize(title).x + 24.f);
+    };
+
+    {
+      const float inner = 8.f + capW("Add\nLabels") + 4.f + capW("Add\nTables") + 4.f + capW("Renumber\nTags") + 8.f;
+      const float wSec = flPanelW(inner, "Labels & Tables");
+      ribbonSpecs.push_back({wSec, wSec, [&]() {
+        const float wAddLabels = capW("Add\nLabels");
+        const float wAddTables = capW("Add\nTables");
+        const float wRenumber = capW("Renumber\nTags");
+        RibbonSectionBegin("RibbonSecFlLabels", "Labels & Tables",
+                           flPanelW(8.f + wAddLabels + 4.f + wAddTables + 4.f + wRenumber + 8.f, "Labels & Tables"),
+                           panelH);
+        RibbonNyiButton("##FlAddLabels", RibbonIconKind::SurfLabel, "Add\nLabels", ImVec2(wAddLabels, colH),
+                        RibbonLabel::Below);
+        ImGui::SameLine(0, 4);
+        RibbonNyiButton("##FlAddTables", RibbonIconKind::SurfLegend, "Add\nTables", ImVec2(wAddTables, colH),
+                        RibbonLabel::Below);
+        ImGui::SameLine(0, 4);
+        RibbonNyiButton("##FlRenumber", RibbonIconKind::SvyRenumber, "Renumber\nTags", ImVec2(wRenumber, colH),
+                        RibbonLabel::Below);
+        RibbonSectionEnd();
+      }});
+    }
+
+    {
+      const float wP = capW("Properties");
+      const float wI = capW("Isolate\nObjects");
+      const float wGen = flPanelW(8.f + wP + 4.f + wI + 8.f, "General Tools");
+      ribbonSpecs.push_back({wGen, wGen, [&]() {
+        const float wProps = capW("Properties");
+        const float wIso = capW("Isolate\nObjects");
+        RibbonSectionBegin("RibbonSecFlGen", "General Tools",
+                           flPanelW(8.f + wProps + 4.f + wIso + 8.f, "General Tools"), panelH);
+        if (RibbonButtonEx("##FlProps", RibbonIconKind::SurfPropsHand, "Properties", ImVec2(wProps, colH),
+                           RibbonLabel::Below))
+          cmd.pendingPropertiesFocus = true;
+        RibbonItemHelp("Properties — the side Properties panel for the selected feature line.");
+        ImGui::SameLine(0, 4);
+        if (RibbonButtonEx("##FlIsolate", RibbonIconKind::SurfIsolate, "Isolate\nObjects", ImVec2(wIso, colH),
+                           RibbonLabel::Below))
+          ImGui::OpenPopup("##FlIsolateMenu");
+        RibbonItemHelp("Isolate Objects — isolate, hide, or end isolation (REQ-084).");
+        if (ImGui::BeginPopup("##FlIsolateMenu")) {
+          if (ImGui::MenuItem("Isolate Objects"))
+            IsolateSelectedObjects(cmd, log);
+          if (ImGui::MenuItem("Hide Objects"))
+            HideSelectedObjects(cmd, log);
+          if (ImGui::MenuItem("End Object Isolation", nullptr, false, !cmd.hiddenEntityIds.empty()))
+            EndObjectIsolation(cmd, log);
+          ImGui::EndPopup();
+        }
+        RibbonSectionEnd();
+      }});
+    }
+
+    {
+      const float a0 = capW("Feature Line\nProperties");
+      const float b0 = capW("Edit\nGeometry");
+      const float c0 = capW("Edit\nElevations");
+      const float wMod = flPanelW(8.f + a0 + 4.f + b0 + 4.f + c0 + 8.f, "Modify");
+      ribbonSpecs.push_back({wMod, wMod, [&]() {
+        const float a = capW("Feature Line\nProperties");
+        const float b = capW("Edit\nGeometry");
+        const float c = capW("Edit\nElevations");
+        RibbonSectionBegin("RibbonSecFlMod", "Modify", flPanelW(8.f + a + 4.f + b + 4.f + c + 8.f, "Modify"),
+                           panelH);
+        if (RibbonButtonEx("##FlFlProps", RibbonIconKind::SurfDoc, "Feature Line\nProperties", ImVec2(a, colH),
+                           RibbonLabel::Below))
+          SubmitRibbonCommand(cmd, log, "FLPROPERTIES " + std::to_string(flRibbonNum));
+        RibbonItemHelp("Feature Line Properties — name, length, min/max grade.\nCommand bar: FLPROPERTIES");
+        ImGui::SameLine(0, 4);
+        if (RibbonButtonEx("##FlEditGeom", RibbonIconKind::Rect, "Edit\nGeometry", ImVec2(b, colH),
+                           RibbonLabel::Below))
+          ImGui::OpenPopup("##FlEditGeomMenu");
+        RibbonItemHelp("Edit Geometry — join, break, offset, fillet, trim, or extend.");
+        if (ImGui::BeginPopup("##FlEditGeomMenu")) {
+          if (ImGui::MenuItem("Join"))
+            StartJoinCommand(cmd, log);
+          if (ImGui::MenuItem("Break"))
+            StartBreakCommand(cmd, log);
+          if (ImGui::MenuItem("Offset"))
+            StartOffsetCommand(cmd, log);
+          if (ImGui::MenuItem("Fillet"))
+            StartFilletCommand(cmd, log);
+          if (ImGui::MenuItem("Trim"))
+            StartTrimCommand(cmd, log);
+          if (ImGui::MenuItem("Extend"))
+            StartExtendCommand(cmd, log);
+          const bool hasSurf = !cmd.cadSurfaces.empty();
+          if (!hasSurf)
+            ImGui::BeginDisabled();
+          if (ImGui::BeginMenu("Add to Surface as Breakline", hasSurf)) {
+            for (const CadSurface& s : cmd.cadSurfaces) {
+              if (ImGui::MenuItem(s.name.c_str()))
+                StartDesignateBreaklineCommand(cmd, s.name, log);
+            }
+            ImGui::EndMenu();
+          }
+          if (!hasSurf)
+            ImGui::EndDisabled();
+          ImGui::EndPopup();
+        }
+        ImGui::SameLine(0, 4);
+        if (RibbonButtonEx("##FlEditElev", RibbonIconKind::SurfEdit, "Edit\nElevations", ImVec2(c, colH),
+                           RibbonLabel::Below)) {
+          if (selFlIdxEarly >= 0)
+            cmd.featureLineElevIndex = selFlIdxEarly;
+          cmd.showFeatureLineElevWindow = true;
+        }
+        RibbonItemHelp("Edit Elevations — open the elevation editor.\nCommand bar: FLELEVEDIT");
+        RibbonSectionEnd();
+      }});
+    }
+
+    {
+      const float a0 = capW("Insert\nPI");
+      const float b0 = capW("Delete\nPI");
+      const float gw = gridCell * 3.f + 4.f * 2.f;
+      const float wGeom = flPanelW(8.f + a0 + 4.f + b0 + 4.f + gw + 8.f, "Edit Geometry");
+      ribbonSpecs.push_back({wGeom, wGeom, [&]() {
+        const float a = capW("Insert\nPI");
+        const float b = capW("Delete\nPI");
+        const float g = gridCell * 3.f + 4.f * 2.f;
+        RibbonSectionBegin("RibbonSecFlGeom", "Edit Geometry",
+                           flPanelW(8.f + a + 4.f + b + 4.f + g + 8.f, "Edit Geometry"), panelH);
+        RibbonNyiButton("##FlInsPi", RibbonIconKind::Join, "Insert\nPI", ImVec2(a, colH), RibbonLabel::Below);
+        ImGui::SameLine(0, 4);
+        RibbonNyiButton("##FlDelPi", RibbonIconKind::Erase, "Delete\nPI", ImVec2(b, colH), RibbonLabel::Below);
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        if (gridBtn("##FlJoin", RibbonIconKind::Join))
+          StartJoinCommand(cmd, log);
+        RibbonItemHelp("Join — merge two feature lines at a shared end.\nCommand bar: JOIN");
+        ImGui::SameLine(0, 4);
+        if (gridBtn("##FlBreak", RibbonIconKind::Break))
+          StartBreakCommand(cmd, log);
+        RibbonItemHelp("Break — split an object at two points.\nCommand bar: BREAK");
+        ImGui::SameLine(0, 4);
+        if (gridBtn("##FlOffset", RibbonIconKind::Offset))
+          StartOffsetCommand(cmd, log);
+        RibbonItemHelp("Offset — parallel copy of the feature line.\nCommand bar: OFFSET");
+        if (gridBtn("##FlFillet", RibbonIconKind::Fillet))
+          StartFilletCommand(cmd, log);
+        RibbonItemHelp("Fillet — tangent arc at a corner.\nCommand bar: FILLET");
+        ImGui::SameLine(0, 4);
+        if (gridBtn("##FlTrim", RibbonIconKind::Trim))
+          StartTrimCommand(cmd, log);
+        RibbonItemHelp("Trim — shorten to a cutting edge.\nCommand bar: TRIM");
+        ImGui::SameLine(0, 4);
+        if (gridBtn("##FlExtend", RibbonIconKind::Extend))
+          StartExtendCommand(cmd, log);
+        RibbonItemHelp("Extend — stretch to a boundary.\nCommand bar: EXTEND");
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
+
+    {
+      const float a0 = capW("Elevation\nEditor");
+      const float b0 = capW("Insert Elev\nPoint");
+      const float c0 = capW("Delete Elev\nPoint");
+      const float wEl = flPanelW(8.f + a0 + 4.f + b0 + 4.f + c0 + 8.f, "Edit Elevations");
+      ribbonSpecs.push_back({wEl, wEl, [&]() {
+        const float a = capW("Elevation\nEditor");
+        const float b = capW("Insert Elev\nPoint");
+        const float c = capW("Delete Elev\nPoint");
+        RibbonSectionBegin("RibbonSecFlElev", "Edit Elevations",
+                           flPanelW(8.f + a + 4.f + b + 4.f + c + 8.f, "Edit Elevations"), panelH);
+        if (RibbonButtonEx("##FlElevEd", RibbonIconKind::SurfVolumes, "Elevation\nEditor", ImVec2(a, colH),
+                           RibbonLabel::Below)) {
+          if (selFlIdxEarly >= 0)
+            cmd.featureLineElevIndex = selFlIdxEarly;
+          cmd.showFeatureLineElevWindow = true;
+        }
+        RibbonItemHelp("Elevation Editor — station/elevation table.\nCommand bar: FLELEVEDIT");
+        ImGui::SameLine(0, 4);
+        if (RibbonButtonEx("##FlInsElev", RibbonIconKind::Join, "Insert Elev\nPoint", ImVec2(b, colH),
+                           RibbonLabel::Below)) {
+          if (selFlIdxEarly >= 0)
+            cmd.featureLineElevIndex = selFlIdxEarly;
+          cmd.showFeatureLineElevWindow = true;
+        }
+        RibbonItemHelp("Insert Elevation Point — use the elevation editor (FLELEV INSERT).");
+        ImGui::SameLine(0, 4);
+        if (RibbonButtonEx("##FlDelElev", RibbonIconKind::Erase, "Delete Elev\nPoint", ImVec2(c, colH),
+                           RibbonLabel::Below)) {
+          if (selFlIdxEarly >= 0)
+            cmd.featureLineElevIndex = selFlIdxEarly;
+          cmd.showFeatureLineElevWindow = true;
+        }
+        RibbonItemHelp("Delete Elevation Point — use the elevation editor (FLELEV DELETE).");
+        RibbonSectionEnd();
+      }});
+    }
+
+    {
+      const float wAn = flPanelW(8.f + capW("Drive") + 8.f, "Analyze");
+      ribbonSpecs.push_back({wAn, wAn, [&]() {
+        const float wD = capW("Drive");
+        RibbonSectionBegin("RibbonSecFlAnalyze", "Analyze", flPanelW(8.f + wD + 8.f, "Analyze"), panelH);
+        RibbonNyiButton("##FlDrive", RibbonIconKind::SurfInquiry, "Drive", ImVec2(wD, colH), RibbonLabel::Below);
+        RibbonSectionEnd();
+      }});
+    }
+
+    {
+      const float c1 = colW({"Quick Profile", "Create Surface"});
+      const float c2 = colW({"Grading Tools", "Corridor"});
+      const float wLaunch = flPanelW(8.f + c1 + 4.f + c2 + 8.f, "Launch Pad");
+      ribbonSpecs.push_back({wLaunch, wLaunch, [&]() {
+        const float a = colW({"Quick Profile", "Create Surface"});
+        const float b = colW({"Grading Tools", "Corridor"});
+        RibbonSectionBegin("RibbonSecFlLaunch", "Launch Pad",
+                           flPanelW(8.f + a + 4.f + b + 8.f, "Launch Pad"), panelH);
+        ImGui::BeginGroup();
+        const bool canQp = !flQuickProfileSurf.empty();
+        if (!canQp)
+          ImGui::BeginDisabled();
+        if (smallBtn("##FlQProfile", RibbonIconKind::SurfQuickProfile, "Quick Profile", a))
+          StartQuickProfileCommand(cmd, flQuickProfileSurf, log);
+        if (!canQp)
+          ImGui::EndDisabled();
+        RibbonItemHelp(canQp ? "Quick Profile — sample a surface along two plan points.\nCommand bar: QUICKPROFILE"
+                             : "Quick Profile — create a surface first.",
+                       canQp ? ImGuiHoveredFlags_None : ImGuiHoveredFlags_AllowWhenDisabled);
+        if (smallBtn("##FlCreateSurf", RibbonIconKind::SurfAddData, "Create Surface", a))
+          cmd.showCreateSurfaceWindow = true;
+        RibbonItemHelp("Create Surface — TIN, grid, corridor, or volume type.");
+        ImGui::EndGroup();
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        RibbonNyiButton("##FlGradeTools", RibbonIconKind::SurfGrading, "Grading Tools",
+                        ImVec2(curCompact ? rowH : b, rowH),
+                        curCompact ? RibbonLabel::None : RibbonLabel::Right);
+        RibbonNyiButton("##FlCorridor", RibbonIconKind::SurfAddData, "Corridor",
+                        ImVec2(curCompact ? rowH : b, rowH),
+                        curCompact ? RibbonLabel::None : RibbonLabel::Right);
+        ImGui::EndGroup();
+        RibbonSectionEnd();
+      }});
+    }
+  } // kRibbonTabFeatureLineCtx
+
   // REQ-302: View tab.
+
   if (cmd.activeRibbonTab == kRibbonTabView) {
     ribbonSpecs.push_back({W.wView, M.wView, [&]() {
       RibbonSectionBegin("RibbonSecView", "View", curCompact ? M.wView : W.wView, panelH);
@@ -4241,7 +4867,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       {
         static char ribbonDxfPath[4096]{};
         static char ribbonDwgPath[4096]{};
-        const float cw = colW({"Import DXF", "Import DWG"});
+        const float cw = colW({"Import DXF", "Import DWG", "PDF Attach"});
         ImGui::BeginGroup();
         if (smallBtn("##RibbonImportDxf", RibbonIconKind::PdfAttach, "Import DXF", cw)) {
           if (BrowseOpenFileDxfUtf8(ribbonDxfPath, sizeof(ribbonDxfPath)))
@@ -4265,6 +4891,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           else if (conv.available() && ImGui::IsItemHovered())
             ImGui::SetTooltip("Using %s", conv.displayName.c_str());
         }
+        if (smallBtn("##RibbonPdfAttach", RibbonIconKind::PdfAttach, "PDF Attach", cw))
+          StartPdfAttachCommand(cmd, log);
+        RibbonItemHelp("PDF Attach — attach a PDF page as a raster underlay with snap recognition.\nCommand bar: PDFATTACH");
         ImGui::EndGroup();
       }
       RibbonSectionEnd();
@@ -4335,7 +4964,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // RibbonToolsLeft's BeginChild needs a size.
   const float availForTools = std::max(largeW, ImGui::GetContentRegionAvail().x - st.ItemSpacing.x - kLayerPanelW);
   const RibbonFitResult ribbonFit = DecideRibbonFit(ribbonSpecs, availForTools, secGap);
-  const float ribbonToolsW = ribbonSpecs.empty() ? largeW : ribbonFit.width;
+  const float ribbonToolsW = ribbonSpecs.empty() ? largeW : availForTools;
 
   ImGui::PushStyleColor(ImGuiCol_ChildBg, g_chrome.bandFace);
   ImGui::BeginChild("RibbonToolsLeft", ImVec2(ribbonToolsW, panelH), false,
@@ -4633,6 +5262,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
       dl->AddLine(ImVec2(mn.x, mx.y - 0.5f), ImVec2(mx.x, mx.y - 0.5f), g_chrome.bandShadow, 1.f);
   }
 
+  ImGui::SetWindowFontScale(1.f);
   ImGui::EndChild();
   ImGui::PopStyleVar(2);
 }
@@ -7208,10 +7838,10 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     }
   }
 
-  if (nFl == 0 && (nLine > 0 || nArc > 0 || nPoly > 0) && log) {
+  if (nFl == 0 && (nLine > 0 || nArc > 0 || nPoly > 0)) {
     if (ImGui::Button("Create feature line from objects")) {
-      char tmp[48] = "FEATURELINESFROMOBJECTS";
-      ProcessCommandLineSubmit(tmp, static_cast<int>(sizeof(tmp)), cmd, *log);
+      cmd.createFeatureLinesDrawMode = false;
+      cmd.showCreateFeatureLinesWindow = true;
     }
   }
 

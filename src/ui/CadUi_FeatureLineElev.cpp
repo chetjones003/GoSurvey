@@ -21,9 +21,12 @@
 #include "CadCommands.hpp"
 
 #include <imgui.h>
+#include <imgui_stdlib.h>
 
+#include <cassert>
 #include <cmath>
 #include <cstdio>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -268,4 +271,244 @@ void DrawFeatureLineElevationWindow(AppCommandState& cmd, std::vector<std::strin
 
   if (!pending.empty())
     RunFlElev(cmd, log, flNumber, pending);
+}
+
+namespace {
+
+std::string FlCreateCmdToken(std::string s) {
+  assert(s.size() < 4096);
+  for (char& c : s) {
+    if (c == ' ' || c == '\t')
+      c = '_';
+  }
+  return s;
+}
+
+std::string FirstConvertibleSourceLayer(const AppCommandState& cmd) {
+  assert(cmd.selection.size() < 10000000u);
+  for (const SelectedEntity& e : cmd.selection) {
+    if (e.type == SelectedEntity::Type::LineSeg && e.index >= 0 &&
+        static_cast<size_t>(e.index) < cmd.userLineAttrs.size())
+      return cmd.userLineAttrs[static_cast<size_t>(e.index)].layer;
+    if (e.type == SelectedEntity::Type::Arc && e.index >= 0 &&
+        static_cast<size_t>(e.index) < cmd.userArcAttrs.size())
+      return cmd.userArcAttrs[static_cast<size_t>(e.index)].layer;
+    if (e.type == SelectedEntity::Type::Polyline && e.index >= 0 &&
+        static_cast<size_t>(e.index) < cmd.userPolylineAttrs.size())
+      return cmd.userPolylineAttrs[static_cast<size_t>(e.index)].layer;
+  }
+  return cmd.currentLayer.empty() ? std::string("0") : cmd.currentLayer;
+}
+
+bool SelectionHasConvertibleLinework(const AppCommandState& cmd) {
+  assert(cmd.selection.size() < 10000000u);
+  for (const SelectedEntity& e : cmd.selection) {
+    if (e.type == SelectedEntity::Type::LineSeg || e.type == SelectedEntity::Type::Arc ||
+        e.type == SelectedEntity::Type::Polyline)
+      return true;
+  }
+  return false;
+}
+
+}  // namespace
+
+void DrawCreateFeatureLinesWindow(AppCommandState& cmd, std::vector<std::string>* log) {
+  assert(cmd.featureLineInfo.size() < 10000000u);
+  static bool wasShown = false;
+  static std::string site = "Survey Site";
+  static bool useName = false;
+  static std::string name = "Feature 1";
+  static bool useStyle = true;
+  static std::string style = "3";
+  static int layerMode = 0;  // 0 named, 1 current, 2 entity
+  static std::string namedLayer = "C-TOPO-FEAT";
+  static bool eraseExisting = false;
+  static bool assignElevations = false;
+  static std::string fromSurf;
+  static bool weedPoints = false;
+
+  if (cmd.showCreateFeatureLinesWindow && !wasShown) {
+    site = "Survey Site";
+    for (const CadFeatureLineInfo& inf : cmd.featureLineInfo) {
+      if (!inf.site.empty()) {
+        site = inf.site;
+        break;
+      }
+    }
+    useName = false;
+    name = "Feature " + std::to_string(static_cast<int>(cmd.featureLineInfo.size()) + 1);
+    useStyle = true;
+    style = "3";
+    layerMode = 0;
+    namedLayer = "C-TOPO-FEAT";
+    eraseExisting = false;
+    assignElevations = false;
+    fromSurf = cmd.cadSurfaces.empty() ? std::string() : cmd.cadSurfaces.front().name;
+    weedPoints = false;
+  }
+  wasShown = cmd.showCreateFeatureLinesWindow;
+  if (!cmd.showCreateFeatureLinesWindow)
+    return;
+
+  std::vector<std::string> discard;
+  if (!log)
+    log = &discard;
+
+  ImGui::SetNextWindowSize(ImVec2(420.f, 520.f), ImGuiCond_FirstUseEver);
+  bool open = cmd.showCreateFeatureLinesWindow;
+  const char* title = cmd.createFeatureLinesDrawMode ? "Create Feature Line" : "Create Feature Lines";
+  if (!ImGui::Begin(title, &open, ImGuiWindowFlags_NoCollapse)) {
+    cmd.showCreateFeatureLinesWindow = open;
+    ImGui::End();
+    return;
+  }
+  cmd.showCreateFeatureLinesWindow = open;
+  if (!open) {
+    ImGui::End();
+    return;
+  }
+
+  ImGui::TextUnformatted("Site:");
+  ImGui::SetNextItemWidth(-1.f);
+  if (ImGui::BeginCombo("##flsite", site.empty() ? "(none)" : site.c_str())) {
+    std::set<std::string> sites;
+    sites.insert("Survey Site");
+    for (const CadFeatureLineInfo& inf : cmd.featureLineInfo) {
+      if (!inf.site.empty())
+        sites.insert(inf.site);
+    }
+    for (const std::string& s : sites) {
+      const bool sel = (s == site);
+      if (ImGui::Selectable(s.c_str(), sel))
+        site = s;
+      if (sel)
+        ImGui::SetItemDefaultFocus();
+    }
+    ImGui::EndCombo();
+  }
+  ImGui::SetNextItemWidth(-1.f);
+  ImGui::InputText("##flsitetxt", &site);
+
+  ImGui::Separator();
+  ImGui::Checkbox("Name", &useName);
+  if (!useName)
+    ImGui::BeginDisabled();
+  ImGui::SetNextItemWidth(-1.f);
+  ImGui::InputText("##flname", &name);
+  if (!useName)
+    ImGui::EndDisabled();
+
+  ImGui::Checkbox("Style", &useStyle);
+  if (!useStyle)
+    ImGui::BeginDisabled();
+  ImGui::SetNextItemWidth(-1.f);
+  ImGui::InputText("##flstyle", &style);
+  if (!useStyle)
+    ImGui::EndDisabled();
+
+  ImGui::Separator();
+  ImGui::TextUnformatted("Layer");
+  if (ImGui::RadioButton("##laynamed", layerMode == 0))
+    layerMode = 0;
+  ImGui::SameLine();
+  if (layerMode != 0)
+    ImGui::BeginDisabled();
+  ImGui::SetNextItemWidth(-80.f);
+  ImGui::InputText("##flayer", &namedLayer);
+  if (layerMode != 0)
+    ImGui::EndDisabled();
+  if (ImGui::RadioButton("Use current layer", layerMode == 1))
+    layerMode = 1;
+  const bool canEntityLayer = !cmd.createFeatureLinesDrawMode && SelectionHasConvertibleLinework(cmd);
+  if (!canEntityLayer)
+    ImGui::BeginDisabled();
+  if (ImGui::RadioButton("Use selected entity layer", layerMode == 2))
+    layerMode = 2;
+  if (!canEntityLayer)
+    ImGui::EndDisabled();
+
+  ImGui::Separator();
+  if (!cmd.createFeatureLinesDrawMode) {
+  ImGui::TextUnformatted("Conversion options");
+  ImGui::Checkbox("Erase existing entities", &eraseExisting);
+  ImGui::Checkbox("Assign elevations", &assignElevations);
+  if (!assignElevations)
+    ImGui::BeginDisabled();
+  ImGui::SetNextItemWidth(-1.f);
+  const char* surfPreview = fromSurf.empty() ? "(select surface)" : fromSurf.c_str();
+  if (ImGui::BeginCombo("##flfromsurf", surfPreview)) {
+    for (const CadSurface& s : cmd.cadSurfaces) {
+      const bool sel = (s.name == fromSurf);
+      if (ImGui::Selectable(s.name.c_str(), sel))
+        fromSurf = s.name;
+      if (sel)
+        ImGui::SetItemDefaultFocus();
+    }
+    ImGui::EndCombo();
+  }
+  if (!assignElevations)
+    ImGui::EndDisabled();
+  ImGui::BeginDisabled();
+  ImGui::Checkbox("Weed points", &weedPoints);
+  ImGui::EndDisabled();
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    ImGui::SetTooltip("Weed points — not implemented yet.");
+  }
+
+  ImGui::Separator();
+  if (ImGui::Button("OK", ImVec2(90.f, 0.f))) {
+    std::string layerTok;
+    if (layerMode == 0)
+      layerTok = namedLayer;
+    else if (layerMode == 1)
+      layerTok = cmd.currentLayer.empty() ? std::string("0") : cmd.currentLayer;
+    else
+      layerTok = FirstConvertibleSourceLayer(cmd);
+    if (cmd.createFeatureLinesDrawMode) {
+      const std::string nm = (useName && !name.empty()) ? name : std::string();
+      StartFeatureLineCommand(cmd, nm, *log);
+      cmd.featureLineDraftStyle = (useStyle && !style.empty()) ? style : std::string();
+      cmd.featureLineDraftSite = site;
+      cmd.featureLineDraftLayer = layerTok;
+      cmd.showCreateFeatureLinesWindow = false;
+    } else {
+    std::string line = "FEATURELINESFROMOBJECTS";
+    if (useName && !name.empty()) {
+      line += " ";
+      line += name;
+    }
+    line += eraseExisting ? " ERASE" : " KEEP";
+    if (useStyle && !style.empty()) {
+      line += " STYLE=";
+      line += FlCreateCmdToken(style);
+    }
+    if (!layerTok.empty()) {
+      line += " LAYER=";
+      line += FlCreateCmdToken(layerTok);
+    }
+    if (!site.empty()) {
+      line += " SITE=";
+      line += FlCreateCmdToken(site);
+    }
+    if (assignElevations && !fromSurf.empty()) {
+      line += " FROMSURF ";
+      line += FlCreateCmdToken(fromSurf);
+    }
+    std::vector<char> buf(line.begin(), line.end());
+    buf.push_back('\0');
+    ProcessCommandLineSubmit(buf.data(), static_cast<int>(buf.size()), cmd, *log);
+    cmd.showCreateFeatureLinesWindow = false;
+    }
+  }
+  ImGui::SameLine();
+  if (ImGui::Button("Cancel", ImVec2(90.f, 0.f)))
+    cmd.showCreateFeatureLinesWindow = false;
+  ImGui::SameLine();
+  ImGui::BeginDisabled();
+  ImGui::Button("Help", ImVec2(90.f, 0.f));
+  ImGui::EndDisabled();
+  if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    ImGui::SetTooltip("Help — not implemented yet.");
+
+  ImGui::End();
 }

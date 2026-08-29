@@ -33,7 +33,13 @@ if errorlevel 1 (
 
 :configured
 
-rem Configure only when the build tree is missing; otherwise reuse it.
+rem Configure when the cache is missing, or when Ninja's rules file is gone.
+rem A failed cmake run (for example without vcvars) can leave CMakeCache.txt
+rem while wiping CMakeFiles\rules.ninja; ninja then errors on include.
+if exist "build\CMakeCache.txt" if not exist "build\CMakeFiles\rules.ninja" (
+  echo WARNING: incomplete Ninja build tree; reconfiguring.
+  del /q "build\CMakeCache.txt" >nul 2>&1
+)
 if not exist "build\CMakeCache.txt" (
   cmake --preset ninja-release
   if errorlevel 1 exit /b 1

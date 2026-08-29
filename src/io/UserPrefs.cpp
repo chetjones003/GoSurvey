@@ -397,6 +397,8 @@ bool SaveUserStartupPrefs(const AppCommandState& st) {
       tab = st.ribbonTabBeforeSurfaceCtx;
     if (tab == kRibbonTabSurveyPointCtx)
       tab = st.ribbonTabBeforeSurveyPointCtx;
+    if (tab == kRibbonTabFeatureLineCtx)
+      tab = st.ribbonTabBeforeFeatureLineCtx;
     s["activeRibbonTab"] = std::clamp(tab, 0, kRibbonTabCount - 1);
   }
   s["filletRadius"] = st.filletRadius;

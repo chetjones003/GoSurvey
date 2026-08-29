@@ -108,6 +108,8 @@ void DrawQuickProfileWindow(AppCommandState& cmd, std::vector<std::string>* log 
 /// Feature line elevation editor (REQ-088). Every edit routes through the FLELEV command line, so
 /// the panel and the REQ-203 driver exercise the same code.
 void DrawFeatureLineElevationWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+/// Create Feature Lines dialog (D-2026-08-29-a). Submits FEATURELINESFROMOBJECTS (REQ-154).
+void DrawCreateFeatureLinesWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
 /// Modal after COPY when survey points were selected — duplicate ID policy for new survey rows.
 void DrawCopySurveyDuplicateModal(AppCommandState& cmd, std::vector<std::string>& log);

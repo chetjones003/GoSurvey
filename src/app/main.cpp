@@ -870,6 +870,7 @@ int main()
     DrawVolumeDashboardWindow(cmd, &cmdLog);  // REQ-073 amendment (TASK-095)
     DrawQuickProfileWindow(cmd, &cmdLog);     // REQ-145
     DrawFeatureLineElevationWindow(cmd, &cmdLog);  // REQ-088
+    DrawCreateFeatureLinesWindow(cmd, &cmdLog);    // D-2026-08-29-a / REQ-154
     DrawViewPointsPanel(cmd, cmdLog);
     DrawImportPointsPanel(cmd, cmdLog);
     DrawExportPointsPanel(cmd, cmdLog);

@@ -718,6 +718,11 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
     Consider(&acc, wx, wy, cmd.polylineDraftVerts[0], cmd.polylineDraftVerts[1], Kind::Endpoint,
              tolWorld, cmd.polylineDraftVerts[2]);
   }
+  if (cmd.active == AppCommandState::Kind::FeatureLine && wantEndpoint &&
+      cmd.featureLineDraftVerts.size() >= 9) {
+    Consider(&acc, wx, wy, cmd.featureLineDraftVerts[0], cmd.featureLineDraftVerts[1], Kind::Endpoint,
+             tolWorld, cmd.featureLineDraftVerts[2]);
+  }
 
   const auto& L = cmd.userLinesFlat;
   if (L.size() % 6 == 0) {
