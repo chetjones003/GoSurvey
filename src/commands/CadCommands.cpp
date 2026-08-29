@@ -77,6 +77,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.activeUcs              = cmd.activeUcs;
   doc.ucsPrevious            = cmd.ucsPrevious;
   doc.ucsNamed               = cmd.ucsNamed;
+  doc.namedViews             = cmd.namedViews;
+  doc.activeViewName         = cmd.activeViewName;
   doc.ucsFollow              = cmd.ucsFollow;
   doc.worldDocumentOriginX   = cmd.worldDocumentOriginX;
   doc.worldDocumentOriginY   = cmd.worldDocumentOriginY;
@@ -141,6 +143,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.activeUcs                  = doc.activeUcs;  // per-drawing coordinate system (REQ-154)
   cmd.ucsPrevious                = doc.ucsPrevious;
   cmd.ucsNamed                   = doc.ucsNamed;
+  cmd.namedViews                 = doc.namedViews;
+  cmd.activeViewName             = doc.activeViewName;
   cmd.ucsFollow                  = doc.ucsFollow;
   cmd.worldDocumentOriginX       = doc.worldDocumentOriginX;
   cmd.worldDocumentOriginY       = doc.worldDocumentOriginY;
@@ -6153,6 +6157,7 @@ const CmdEntry kRegistry[] = {
     {"overkill",     "ok", "Remove duplicate geometry"},
     {"align",        "al", "Align objects to others"},
     {"quickselect",  "qs", "Select by object properties"},
+    {"view", "v, ddview", "Named views: VIEW [Save/Restore/Delete/?] <name>, or VIEW alone for the View Manager"},
     {"paste",        "", "Paste from clipboard"},
     {"pasteorig",    "po", "Paste at original coordinates"},
     {"mview",        "rectviewport, rectvp", "Rectangular paper-space viewport (two clicks)"},
@@ -19325,6 +19330,8 @@ void ClearCadGeometry(AppCommandState& st) {
   st.ucsPrevious.clear();
   st.ucsNamed.clear();
   st.ucsFollow = false;
+  st.namedViews.clear();
+  st.activeViewName.clear();
   // A cleared drawing is a new drawing: its id space restarts. Ids are unique *within* a drawing
   // (REQ-076), not globally, and every entity that could have held one is about to be erased. A
   // `.gs` load overwrites this from the file immediately after clearing.
@@ -22854,6 +22861,172 @@ const NamedUcs* FindNamedUcs(const AppCommandState& st, const std::string& name)
   return nullptr;
 }
 
+// ================================================================================================
+// Named views (REQ-106)
+//
+// The same shape as the UCS's Named option deliberately: one lookup helper, case-insensitive match,
+// a reserved refusal, and Save / Restore / Delete / ? on one prompt. A user who has learned
+// `UCS N S <name>` already knows `VIEW S <name>`, and there is one convention in the app rather
+// than two that differ in small ways.
+// ================================================================================================
+
+const NamedView* FindNamedView(const AppCommandState& st, const std::string& name) {
+  const std::string want = StringUtil::toLowerAsciiCopy(StringUtil::trimCopy(name));
+  for (const NamedView& v : st.namedViews) {
+    if (StringUtil::toLowerAsciiCopy(v.name) == want)
+      return &v;
+  }
+  return nullptr;
+}
+
+/// The saved view the camera is CURRENTLY sitting in, or nullptr for "Unsaved View".
+///
+/// Derived every time rather than remembered. A stored "active view name" goes stale the moment the
+/// user pans, zooms or orbits — the label would then name a view the camera has already left, which
+/// is worse than saying nothing, because the whole point of the word "Unsaved" is to tell you that
+/// what you are looking at would be lost.
+///
+/// Compares everything a restore would set, the UCS included: a view whose camera matches but whose
+/// frame does not is not the view you saved, because the coordinates you type in it differ.
+const NamedView* CurrentNamedView(const AppCommandState& st) {
+  constexpr double kPanTol = 1e-6;
+  constexpr float kAngTol = 1e-3f;
+  for (const NamedView& v : st.namedViews) {
+    if (std::fabs(v.panX - st.viewportPanX) > kPanTol || std::fabs(v.panY - st.viewportPanY) > kPanTol ||
+        std::fabs(v.panZ - st.viewportPanZ) > kPanTol)
+      continue;
+    if (std::fabs(v.zoom - st.viewportZoom) > 1e-6f)
+      continue;
+    if (std::fabs(v.azimuthDeg - st.viewportAzimuthDeg) > kAngTol ||
+        std::fabs(v.elevationDeg - st.viewportElevationDeg) > kAngTol)
+      continue;
+    if (!ucs::FramesMatch(v.ucs, st.activeUcs))
+      continue;
+    return &v;
+  }
+  return nullptr;
+}
+
+/// Capture the live camera and frame as a view record.
+///
+/// Reads the same four fields `CadViewCamera` builds its Camera from, so a saved view and the live
+/// view cannot disagree about what they mean.
+NamedView CaptureCurrentView(const AppCommandState& st, const std::string& name) {
+  NamedView v;
+  v.name = name;
+  v.panX = st.viewportPanX;
+  v.panY = st.viewportPanY;
+  v.panZ = st.viewportPanZ;
+  v.zoom = st.viewportZoom;
+  v.azimuthDeg = st.viewportAzimuthDeg;
+  v.elevationDeg = st.viewportElevationDeg;
+  v.ucs = st.activeUcs;
+  return v;
+}
+
+/// Put the camera and frame back, and remember which view we are now sitting in.
+///
+/// The orientation eases rather than snapping (REQ-059's rule for the ViewCube, and for the same
+/// reason: a hard jump makes it easy to lose track of which way the model turned). Pan and zoom are
+/// set directly — there is no animation for those anywhere else in the app, and inventing one here
+/// would be a second convention.
+void RestoreNamedView(AppCommandState& st, const NamedView& v, std::vector<std::string>& log) {
+  st.viewportPanX = v.panX;
+  st.viewportPanY = v.panY;
+  st.viewportPanZ = v.panZ;
+  st.viewportZoom = v.zoom;
+  // The UCS goes back too (REQ-106): a view saved while working to a lot line is not restored if
+  // the camera returns but the coordinate frame does not, because the numbers you type afterwards
+  // would mean something different from the ones you typed when you saved it.
+  SetActiveUcs(st, v.ucs, log);
+  CadStartViewAnimation(st, v.azimuthDeg, v.elevationDeg);
+  st.activeViewName = v.name;
+  log.push_back("VIEW - restored " + v.name + ".");
+}
+
+void ListNamedViews(const AppCommandState& st, std::vector<std::string>& log) {
+  if (st.namedViews.empty()) {
+    log.push_back("VIEW - no saved views in this drawing.");
+    return;
+  }
+  std::string s = "VIEW - saved views:";
+  for (const NamedView& v : st.namedViews)
+    s += " " + v.name + ";";
+  log.push_back(s);
+}
+
+/// `VIEW` — save, restore, delete and list named views (REQ-106).
+///
+/// Inline-only, like `UCSFOLLOW` and unlike `UCS`: every form is one line, so there is no prompt
+/// state machine to get stuck in. `VIEW` alone opens the View Manager, which is where the dialog
+/// half of REQ-106's "a VIEW command/dialog" lives.
+bool ProcessViewCommandLine(AppCommandState& st, const std::string& rest, std::vector<std::string>& log) {
+  std::istringstream iss(StringUtil::trimCopy(rest));
+  std::string opt;
+  if (!(iss >> opt)) {
+    st.showViewManagerWindow = true;
+    log.push_back("VIEW - View Manager opened.");
+    return true;
+  }
+  const std::string low = StringUtil::toLowerAsciiCopy(opt);
+  std::string name;
+  std::getline(iss, name);
+  name = StringUtil::trimCopy(name);
+
+  if (low == "?" || low == "l" || low == "list") {
+    ListNamedViews(st, log);
+    return true;
+  }
+  if (low == "s" || low == "save") {
+    if (name.empty()) {
+      log.push_back("VIEW - name the view: VIEW S <name>.");
+      return true;
+    }
+    // Overwriting by name is deliberate and matches `UCS N S`: a view is a bookmark, and re-saving
+    // one you are standing in is the ordinary way to move it.
+    for (NamedView& v : st.namedViews) {
+      if (StringUtil::toLowerAsciiCopy(v.name) == StringUtil::toLowerAsciiCopy(name)) {
+        const std::string keep = v.name;
+        v = CaptureCurrentView(st, keep);
+        st.activeViewName = keep;
+        log.push_back("VIEW - " + keep + " updated to the current view.");
+        return true;
+      }
+    }
+    st.namedViews.push_back(CaptureCurrentView(st, name));
+    st.activeViewName = name;
+    log.push_back("VIEW - saved as " + name + ".");
+    return true;
+  }
+  if (low == "r" || low == "restore") {
+    const NamedView* v = FindNamedView(st, name);
+    if (!v) {
+      log.push_back("VIEW - there is no saved view named " + name + ".");
+      return true;
+    }
+    RestoreNamedView(st, *v, log);
+    return true;
+  }
+  if (low == "d" || low == "delete") {
+    for (size_t i = 0; i < st.namedViews.size(); ++i) {
+      if (StringUtil::toLowerAsciiCopy(st.namedViews[i].name) == StringUtil::toLowerAsciiCopy(name)) {
+        // Deleting the view you are standing in leaves the camera exactly where it is and drops the
+        // name — the view becomes "Unsaved View", which is true, rather than moving the drawing.
+        if (StringUtil::toLowerAsciiCopy(st.activeViewName) == StringUtil::toLowerAsciiCopy(name))
+          st.activeViewName.clear();
+        log.push_back("VIEW - " + st.namedViews[i].name + " deleted.");
+        st.namedViews.erase(st.namedViews.begin() + static_cast<std::ptrdiff_t>(i));
+        return true;
+      }
+    }
+    log.push_back("VIEW - there is no saved view named " + name + ".");
+    return true;
+  }
+  log.push_back("VIEW - unrecognised option. VIEW [Save/Restore/Delete/?] <name>, or VIEW alone for "
+                "the View Manager.");
+  return true;
+}
+
 ray3d::Vec3 ConstrainToUcsOrtho(const ucs::Ucs& frame, const ray3d::Vec3& anchor, const ray3d::Vec3& target) {
   // ORTHO means "square with the axes" - and once a UCS exists, that means the UCS's axes, not the
   // world's (REQ-047 under REQ-154). Measure the offset in the frame, keep the dominant in-plane
@@ -25181,6 +25354,14 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       } else {
         log.push_back("UCSFOLLOW — enter 0 or 1.");
       }
+      return;
+    }
+    // VIEW (REQ-106) — inline in every form, so it never leaves a prompt open. Placed beside UCS
+    // because they are the same shape: a frame/view is saved, restored and deleted by name.
+    if (plotTok == "view" || plotTok == "v" || plotTok == "ddview") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      ProcessViewCommandLine(st, rest, log);
       return;
     }
     if (plotTok == "ucs" || plotTok == "plan") {

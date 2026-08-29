@@ -3261,6 +3261,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   // Visual-style combo width measured from its longest option text, not a guessed constant — a
   // hardcoded 132px clipped "2D Wireframe" (user GUI-pass feedback, 2026-08-25).
   const float visualStyleComboW = ImGui::CalcTextSize("2D Wireframe").x + 40.f;
+  // REQ-106. Sized to the longest thing the combo shows, so a saved view with a long name does not
+  // reflow the ribbon every time it becomes active.
+  const float namedViewComboW = ImGui::CalcTextSize("SW Isometric").x + 56.f;
   // REQ-032 contextual ribbon: Layout tools in paper space, but the normal model ribbon while editing a
   // viewport in place (floating model space, REQ-036) so the draw/modify tools are available.
   const bool ribbonPaperSpace = cmd.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(cmd);
@@ -3271,6 +3274,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
   struct RibbonTabWidths {
     float wEdit, wDraw, wMod, wAnnText, wAnnDim, wInq, wSrv, wAnalyze, wView, wLayout;
     float wInsert, wViewSettings, wOutExport, wOutPlot;  // REQ-302 increment 3
+    float wNamedViews = 0.f;  // REQ-106
   };
   auto computeTabWidths = [&](bool compact) {
     curCompact = compact;
@@ -3301,6 +3305,9 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
     w.wAnalyze = 8.f + colW({"Slope", "Dir", "Arrows"}) + 4.f + colW({"Catch", "Stats", "Rebuild"}) + 4.f +
                  colW({"Breakln", "Contour", "Boundry"}) + 4.f + colW({"Vol Surf", "Props"});
     w.wView = 8.f + colW({"Extents", "Window"}) + 8.f + visualStyleComboW;  // REQ-064
+    // REQ-106 Named Views: the combo carries the longest preset name, and two stacked buttons sit
+    // beside it — the same shape AutoCAD's own Named Views panel uses.
+    w.wNamedViews = 8.f + namedViewComboW + 4.f + colW({"New View", "Manager"});
     // REQ-302 increment 3: Plot/Batch Plot moved out to Output's "Plot" section — Layout keeps
     // only the viewport-authoring tools (Rect VP is a largeBtn placed outside colW; Poly VP is
     // the one column here).
@@ -4194,6 +4201,75 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
 
     // REQ-302 increment 3 (content audit, D-2026-08-25-h): Settings placed on View per the user's
     // explicit decision — same window the View menu's "Settings..." item already opens.
+    // REQ-106 Named Views. AutoCAD puts this on the View tab beside the viewport tools, and the
+    // combo does double duty there: it NAMES the current view and it is how you change it.
+    ribbonSpecs.push_back({W.wNamedViews, M.wNamedViews, [&]() {
+      RibbonSectionBegin("RibbonSecNamedViews", "Named Views",
+                         curCompact ? M.wNamedViews : W.wNamedViews, panelH);
+      {
+        ImGui::BeginGroup();
+        // "Unsaved View" whenever the camera does not correspond to a saved one — AutoCAD's own
+        // wording, and a statement about the CAMERA rather than about unsaved drawing edits.
+        const NamedView* curView = CurrentNamedView(cmd);
+        const std::string label = curView ? curView->name : std::string("Unsaved View");
+        ImGui::SetNextItemWidth(namedViewComboW);
+        // HeightLargest so all ten orientations, the saved views and View Manager are visible at once.
+        // The default height scrolls at eight, which hides the four isometrics behind a scrollbar -
+        // and a preset list you have to scroll is slower than the ViewCube it is meant to complement.
+        if (ImGui::BeginCombo("##RibbonNamedView", label.c_str(), ImGuiComboFlags_HeightLargest)) {
+          // The ten standard orientations. Angles come from the ViewCube's own face table and its
+          // isometric constant rather than a second copy — the two widgets must agree about where
+          // "Front" is, and a duplicated table is how they would stop agreeing.
+          struct Preset { const char* name; float az; float el; };
+          static const Preset kPresets[] = {
+              {"Top", 0.f, 90.f},      {"Bottom", 0.f, -90.f},
+              {"Left", 270.f, 0.f},    {"Right", 90.f, 0.f},
+              {"Front", 0.f, 0.f},     {"Back", 180.f, 0.f},
+              {"SW Isometric", 45.f, viewcube::kIsometricElevationDeg},
+              {"SE Isometric", 315.f, viewcube::kIsometricElevationDeg},
+              {"NE Isometric", 135.f, viewcube::kIsometricElevationDeg},
+              {"NW Isometric", 225.f, viewcube::kIsometricElevationDeg},
+          };
+          for (const Preset& p : kPresets) {
+            if (ImGui::Selectable(p.name)) {
+              // Orientation only: a preset says which way you are looking, not where you are or how
+              // far. Keeping pan and zoom is what makes "show me this from the SW" usable without
+              // losing the part of the drawing you were working on.
+              CadStartViewAnimation(cmd, p.az, p.el);
+            }
+          }
+          if (!cmd.namedViews.empty()) {
+            ImGui::Separator();
+            for (const NamedView& v : cmd.namedViews) {
+              const bool sel = (curView && curView->name == v.name);
+              if (ImGui::Selectable(v.name.c_str(), sel))
+                RestoreNamedView(cmd, v, log);
+            }
+          }
+          ImGui::Separator();
+          if (ImGui::Selectable("View Manager..."))
+            cmd.showViewManagerWindow = true;
+          ImGui::EndCombo();
+        }
+        RibbonItemHelp("Named views (REQ-106). The ten standard orientations, then any views saved in\n"
+                       "this drawing. A saved view restores the camera AND the coordinate frame.\n"
+                       "Command bar: VIEW [Save/Restore/Delete/?] <name>");
+        ImGui::EndGroup();
+
+        ImGui::SameLine(0, 4);
+        ImGui::BeginGroup();
+        const float cwv = colW({"New View", "Manager"});
+        if (smallBtn("##RibbonNewView", RibbonIconKind::ZoomWindow, "New View", cwv))
+          cmd.showViewManagerNewPrompt = true;
+        RibbonItemHelp("Save the current camera and coordinate frame under a name.\nCommand bar: VIEW S <name>");
+        if (smallBtn("##RibbonViewMgr", RibbonIconKind::Layers, "Manager", cwv))
+          cmd.showViewManagerWindow = true;
+        RibbonItemHelp("View Manager — rename, restore and delete saved views.\nCommand bar: VIEW");
+        ImGui::EndGroup();
+      }
+      RibbonSectionEnd();
+    }});
+
     ribbonSpecs.push_back({W.wViewSettings, M.wViewSettings, [&]() {
       RibbonSectionBegin("RibbonSecViewSettings", "Settings", curCompact ? M.wViewSettings : W.wViewSettings, panelH);
       {
@@ -17047,6 +17123,111 @@ void DrawDimStyleWindow(AppCommandState& cmd, std::vector<std::string>* log) {
   if (ImGui::Button("Cancel", ImVec2(bw, 0))) {
     cmd.showDimStyleDialog = false;
   }
+  ImGui::End();
+}
+
+// REQ-106 — the View Manager, the dialog half of "a VIEW command/dialog".
+//
+// Deliberately small: list, restore, delete, and save-the-current-view. Everything it does is
+// something `VIEW` can do from the command line, and it calls the same functions — so the dialog
+// cannot drift from the command, which is the failure the DIMSTY/UNITS pair already shows is real.
+void DrawViewManagerWindow(AppCommandState& cmd, std::vector<std::string>* log) {
+  std::vector<std::string> discard;
+  if (!log)
+    log = &discard;
+
+  // The New View prompt is its own tiny modal so the ribbon button is one click to a name box,
+  // rather than opening the manager and hunting for a button.
+  if (cmd.showViewManagerNewPrompt) {
+    ImGui::OpenPopup("New View");
+    cmd.showViewManagerNewPrompt = false;
+    cmd.newViewNameBuf[0] = '\0';
+  }
+  if (ImGui::BeginPopupModal("New View", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+    ImGui::TextUnformatted("Save the current camera and coordinate frame as:");
+    ImGui::SetNextItemWidth(260.f);
+    const bool entered = ImGui::InputText("##newviewname", cmd.newViewNameBuf, sizeof(cmd.newViewNameBuf),
+                                          ImGuiInputTextFlags_EnterReturnsTrue);
+    const bool named = cmd.newViewNameBuf[0] != '\0';
+    ImGui::BeginDisabled(!named);
+    const bool okd = ImGui::Button("Save", ImVec2(90.f, 0.f));
+    ImGui::EndDisabled();
+    if ((entered || okd) && named) {
+      ProcessViewCommandLine(cmd, std::string("S ") + cmd.newViewNameBuf, *log);
+      ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel", ImVec2(90.f, 0.f)))
+      ImGui::CloseCurrentPopup();
+    ImGui::EndPopup();
+  }
+
+  if (!cmd.showViewManagerWindow)
+    return;
+  ImGui::SetNextWindowSize(ImVec2(520.f, 380.f), ImGuiCond_FirstUseEver);
+  bool open = cmd.showViewManagerWindow;
+  if (!ImGui::Begin("View Manager", &open)) {
+    ImGui::End();
+    cmd.showViewManagerWindow = open;
+    return;
+  }
+  cmd.showViewManagerWindow = open;
+
+  const NamedView* curView = CurrentNamedView(cmd);
+  ImGui::TextUnformatted(curView ? ("Current view: " + curView->name).c_str() : "Current view: Unsaved View");
+  ImGui::Separator();
+
+  if (cmd.namedViews.empty()) {
+    ImGui::TextDisabled("No saved views in this drawing.");
+  } else {
+    // Delete is deferred to after the loop: erasing from the vector being iterated is how a manager
+    // dialog gets a crash that only reproduces when you delete the entry you are looking at.
+    int deleteIdx = -1;
+    if (ImGui::BeginTable("##viewsTable", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerH)) {
+      ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+      ImGui::TableSetupColumn("Orientation", ImGuiTableColumnFlags_WidthFixed, 130.f);
+      ImGui::TableSetupColumn("Frame", ImGuiTableColumnFlags_WidthFixed, 70.f);
+      ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed, 150.f);
+      ImGui::TableHeadersRow();
+      for (size_t i = 0; i < cmd.namedViews.size(); ++i) {
+        const NamedView& v = cmd.namedViews[i];
+        ImGui::TableNextRow();
+        ImGui::PushID(static_cast<int>(i));
+        ImGui::TableNextColumn();
+        const bool isCur = (curView && curView->name == v.name);
+        if (isCur)
+          ImGui::TextColored(ImVec4(0.55f, 0.80f, 1.f, 1.f), "%s", v.name.c_str());
+        else
+          ImGui::TextUnformatted(v.name.c_str());
+        ImGui::TableNextColumn();
+        ImGui::Text("az %.1f  el %.1f", v.azimuthDeg, v.elevationDeg);
+        ImGui::TableNextColumn();
+        // Saying WCS vs UCS matters: it is the half of a restore a user does not otherwise see, and
+        // the half that changes what their next typed coordinate means.
+        ImGui::TextUnformatted(ucs::IsWorld(v.ucs) ? "WCS" : "UCS");
+        ImGui::TableNextColumn();
+        if (ImGui::SmallButton("Restore"))
+          RestoreNamedView(cmd, v, *log);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Update"))
+          ProcessViewCommandLine(cmd, std::string("S ") + v.name, *log);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Delete"))
+          deleteIdx = static_cast<int>(i);
+        ImGui::PopID();
+      }
+      ImGui::EndTable();
+    }
+    if (deleteIdx >= 0)
+      ProcessViewCommandLine(cmd, std::string("D ") + cmd.namedViews[static_cast<size_t>(deleteIdx)].name, *log);
+  }
+
+  ImGui::Separator();
+  if (ImGui::Button("New View...", ImVec2(120.f, 0.f)))
+    cmd.showViewManagerNewPrompt = true;
+  ImGui::SameLine();
+  if (ImGui::Button("Close", ImVec2(90.f, 0.f)))
+    cmd.showViewManagerWindow = false;
   ImGui::End();
 }
 

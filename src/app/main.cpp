@@ -862,6 +862,7 @@ int main()
     DrawRightClickCustomizationDialog(cmd, &cmdLog);  // REQ-084 (a)
     ImGuiLayout_DrawLayoutPopups(cmd, cmdLog);
     DrawLayerManagerWindow(cmd, &cmdLog);
+    DrawViewManagerWindow(cmd, &cmdLog);
     DrawTextStyleManagerWindow(cmd, &cmdLog);
     DrawDimStyleWindow(cmd, &cmdLog);
     DrawPointGroupManagerWindow(cmd, &cmdLog);

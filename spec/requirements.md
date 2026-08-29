@@ -3598,11 +3598,35 @@ requirements is a planning failure, not a sign of rigor.
 - Priority: could
 - Type: functional
 - Statement: Add ZOOM PREVIOUS (pan/zoom/orbit history), named views (save/restore a camera state by name), a VIEW command/dialog to manage them, and one-click NE/NW/SE/SW isometric presets.
+
+  **A named view records the camera's inputs and the active frame** — pan, zoom, azimuth, elevation
+  and the UCS — not a derived matrix, so a saved view cannot mean something different from what the
+  live view would do with the same numbers. The UCS travels with it because a view restored without
+  its frame puts the camera back but changes what the next typed coordinate means.
+
+  `VIEW [Save/Restore/Delete/?] <name>` is inline in every form, and `VIEW` alone opens the View
+  Manager. The option letters and the case-insensitive name matching deliberately mirror `UCS Named`,
+  so learning one teaches the other.
+
+  **The View tab carries a Named Views panel**: a combo naming the current view — the saved name when
+  the camera and frame match one, `Unsaved View` otherwise — listing the ten standard orientations
+  (Top / Bottom / Left / Right / Front / Back and the four isometrics), then this drawing's saved
+  views, then the View Manager. The orientation presets set direction only, keeping pan and zoom,
+  because "show me this from the south-west" should not also move what you were looking at. Their
+  angles come from the ViewCube's own face table and isometric constant, not a second copy.
+
+  Which view is current is **derived** from the live camera each time, never stored as a flag: a
+  remembered name goes stale the moment the user pans, and a label naming a view you have already
+  left is worse than no label, since `Unsaved View` is precisely the warning that what you see would
+  be lost.
 - Acceptance (sketch): ZOOM PREVIOUS steps back through recent view changes; a named view restores camera position/target/UCS exactly; isometric presets set the standard 3D-isometric angle in one action. DVIEW and multiple simultaneous model-space viewports are noted as open scope questions, not committed here, given their size.
 - Owner-layer: UI/Renderer
-- Status: proposed
-- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i)
-
+- Status: **partially delivered** (2026-08-29) — named views, the `VIEW` command, the View Manager
+  and the ten orientation presets are built and persist in `.gs`. **ZOOM PREVIOUS is NOT built**, so
+  this requirement is not closed; the view-history half remains as originally catalogued.
+- Revisions: 2026-08-23 — catalogued (D-2026-08-23-i). 2026-08-29 — named views, VIEW, the View
+  Manager and the orientation presets delivered at the user's request during hands-on testing;
+  Statement expanded to describe what was built. ZOOM PREVIOUS deliberately left out of that pass.
 ### REQ-107 — Block support (foundational)
 - Purpose: GoSurvey has no block/insert mechanism, which blocks title-block reuse, standard symbols, and any future TABLE/annotation work; DWG export always explodes geometry for exactly this reason
 - Priority: should

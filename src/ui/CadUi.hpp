@@ -85,6 +85,8 @@ void DrawExportPointsPanel(AppCommandState& cmd, std::vector<std::string>& log);
 void DrawSurveyReportsPanel(AppCommandState& cmd);
 
 void DrawLayerManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
+/// View Manager (REQ-106) — list, restore, update and delete named views, plus the New View prompt.
+void DrawViewManagerWindow(AppCommandState& cmd, std::vector<std::string>* log = nullptr);
 
 /// Text style manager (STYLE, REQ-044): create / rename / delete / edit named text styles. Editing a
 /// style re-bakes its referencing, non-overridden text (live reference); "Standard" cannot be deleted.

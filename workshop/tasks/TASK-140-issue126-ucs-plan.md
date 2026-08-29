@@ -198,6 +198,53 @@ ViewCube against the viewport's right edge and a popup growing rightward ran und
 Neither of those two is reachable by any transcript — they are placement, and this repo has no
 render-comparison harness (DEBT-3). Both were found by driving the GUI and reading the capture, which
 is the second time in two days that pass has caught something the suite could not.
+
+**Named views (REQ-106) added 2026-08-29 — a SECOND requirement in this PR, at the user's explicit
+direction.** This is worth recording plainly because it breaks the one-PR-per-issue rule the user set
+on 2026-08-26. It was raised before starting: named views are REQ-106, catalogued 2026-08-23, not
+issue #126's REQ-154, and the recommendation was a separate branch and PR. The user chose to add it
+here anyway ("just add it to 129 dont worry about making it a seperate pr"). So issue #126 closes
+carrying work it never asked for, and chetjones003 reviews two features in one thread. Recorded, not
+argued.
+
+**What was built, and what deliberately was not.** REQ-106 has four parts: ZOOM PREVIOUS, named
+views, a VIEW command/dialog, and isometric presets. Three are built. **ZOOM PREVIOUS is not** — it
+needs a view history that nothing in the app keeps, and it was neither asked for nor implied by the
+screenshots. REQ-106's Status is therefore **partially delivered**, not accepted: closing it would
+claim a view-history feature that does not exist, which is precisely the REQ-064 failure mode this
+same PR already had to escalate (§5a of TASK-141).
+
+**A view is the camera's inputs, not a matrix.** `NamedView` stores pan/zoom/azimuth/elevation — the
+same four fields `CadViewCamera` builds a `Camera` from — plus the UCS. Storing a derived matrix
+would let a saved view mean something the live view with the same numbers would not.
+
+**The UCS travels with the view**, which is REQ-106's own acceptance wording ("camera
+position/target/UCS exactly") and the half worth testing hardest: a restore that returns the camera
+but leaves the frame behind looks correct and silently changes what the user's next typed coordinate
+means. The transcript pins it by drawing in the restored frame and asserting the world position.
+
+**Which view is "current" is DERIVED, never stored.** The first cut kept an `activeViewName` string,
+and the GUI pass caught it lying: the fixture saved a view, changed the UCS, and the ribbon still
+claimed the old name. A remembered name goes stale the moment the user pans. `CurrentNamedView`
+compares the live camera and frame against each saved view instead, so `Unsaved View` appears exactly
+when it is true — and that phrase is the whole point, being the warning that what is on screen would
+be lost.
+
+**One convention, not two.** `VIEW`'s Save / Restore / Delete / `?` options, its case-insensitive
+matching, and its overwrite-on-resave all mirror `UCS Named` deliberately. The preset angles come
+from the ViewCube's own face table and `kIsometricElevationDeg` rather than a second copy — the combo
+and the cube must agree about where "Front" is, and a duplicated table is how they would stop
+agreeing. The View Manager dialog calls `ProcessViewCommandLine` for every action it performs, so the
+dialog cannot drift from the command; that is the exact DIMSTY-vs-UNITS failure this session's
+probe 36 found in the dimension code.
+
+**A self-inflicted incident worth recording.** A `sed` whose line-address variable came back empty
+degraded to "append after EVERY line" and inserted the same registry entry 28,002 times into
+`CadCommands.cpp`. `git diff --stat` showed insertions only, which is what made it recoverable: the
+junk line was filtered out with `grep -vF` and the 152 lines of real work underneath verified present
+by name. **Compute the anchor line, assert it is non-empty, and use `awk` to rewrite rather than
+`sed -i` with an interpolated address** — an empty address is silently catastrophic in a way an empty
+pattern is not.
 ## 8. Technical debt
 ```
 DEBT-1: PLAN of a tilted UCS sets the view direction but not the in-plane rotation.

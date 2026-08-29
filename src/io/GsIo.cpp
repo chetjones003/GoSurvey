@@ -892,6 +892,30 @@ json BuildRoot(const AppCommandState& st) {
     }
     view["namedUcs"] = std::move(named);
   }
+  // Named views (REQ-106), additive and omitted when empty for the same reason as the keys above: a
+  // drawing that never saved a view serializes byte-for-byte as it did before this existed, so no
+  // format-version bump is needed (the ADR-020 (d) / ADR-025 (g) precedent).
+  if (!st.namedViews.empty()) {
+    json views = json::array();
+    for (const NamedView& v : st.namedViews) {
+      json e;
+      e["name"] = v.name;
+      e["panX"] = v.panX;
+      e["panY"] = v.panY;
+      if (v.panZ != 0.0)
+        e["panZ"] = v.panZ;
+      e["zoom"] = v.zoom;
+      e["azimuthDeg"] = v.azimuthDeg;
+      e["elevationDeg"] = v.elevationDeg;
+      // The frame rides with the view (REQ-106). Omitted at World so the common case stays compact.
+      if (!ucs::IsWorld(v.ucs))
+        e["ucs"] = writeUcs(v.ucs);
+      views.push_back(std::move(e));
+    }
+    view["namedViews"] = std::move(views);
+  }
+  if (!st.activeViewName.empty())
+    view["activeViewName"] = st.activeViewName;
   doc["view"] = std::move(view);
 
   root["document"] = std::move(doc);
@@ -2017,6 +2041,40 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
         st.ucsNamed.push_back(std::move(n));
       }
     }
+
+    // Named views (REQ-106). A view whose numbers are not finite is DISCARDED rather than loaded:
+    // restoring it would send the camera somewhere it cannot come back from, and losing one saved
+    // bookmark is a far smaller harm than a drawing you cannot look at (REQ-201).
+    st.namedViews.clear();
+    const auto nvIt = view.find("namedViews");
+    if (nvIt != view.end() && nvIt->is_array()) {
+      for (const auto& entry : *nvIt) {
+        if (!entry.is_object())
+          continue;
+        NamedView v;
+        v.name = entry.value("name", std::string());
+        if (v.name.empty())
+          continue;
+        v.panX = entry.value("panX", 0.0);
+        v.panY = entry.value("panY", 0.0);
+        v.panZ = entry.value("panZ", 0.0);
+        v.zoom = entry.value("zoom", 1.f);
+        v.azimuthDeg = entry.value("azimuthDeg", 0.f);
+        v.elevationDeg = std::clamp(entry.value("elevationDeg", 90.f), -90.f, 90.f);
+        if (!std::isfinite(v.panX) || !std::isfinite(v.panY) || !std::isfinite(v.panZ) ||
+            !std::isfinite(v.zoom) || v.zoom <= 0.f || !std::isfinite(v.azimuthDeg))
+          continue;
+        const auto vu = entry.find("ucs");
+        if (vu != entry.end() && vu->is_object() && !readUcs(*vu, &v.ucs))
+          v.ucs = ucs::Ucs{};  // a broken frame falls back to World, as the active one does
+        st.namedViews.push_back(std::move(v));
+      }
+    }
+    st.activeViewName = view.value("activeViewName", std::string());
+    // A name that no longer resolves is dropped rather than shown: the ribbon would otherwise claim
+    // the camera is sitting in a view the drawing does not contain.
+    if (!st.activeViewName.empty() && !FindNamedView(st, st.activeViewName))
+      st.activeViewName.clear();
   } else {
     const int fbW = std::max(st.viewportLastFbW, 1);
     const int fbH = std::max(st.viewportLastFbH, 1);

@@ -914,6 +914,29 @@ struct NamedUcs {
   ucs::Ucs frame;
 };
 
+/// One saved view (REQ-106): where the camera is, which way it looks, and which coordinate frame
+/// was active.
+///
+/// The UCS is part of the record, not an afterthought — REQ-106's acceptance says a named view
+/// "restores camera position/target/UCS exactly". A view saved while working to a lot line is
+/// useless if restoring it puts the camera back but leaves you in the world frame, because the
+/// coordinates you then type mean something different from the ones you typed when you saved it.
+///
+/// Pan/zoom/azimuth/elevation are exactly the four things `AppCommandState` uses to build a
+/// `Camera` (see CadViewCamera), so this stores the camera's inputs rather than a derived matrix —
+/// one source of truth, and a saved view cannot drift from what the live view would do with the
+/// same numbers.
+struct NamedView {
+  std::string name;  ///< As typed, for display; matched case-insensitively, like NamedUcs.
+  double panX = 0.0;
+  double panY = 0.0;
+  double panZ = 0.0;
+  float zoom = 1.f;
+  float azimuthDeg = 0.f;
+  float elevationDeg = 90.f;
+  ucs::Ucs ucs;
+};
+
 /// How many previous UCSs `UCS Previous` can step back through.
 ///
 /// Bounded rather than unbounded because the stack is pushed on every UCS change and would
@@ -935,6 +958,8 @@ struct DrawingDocument {
   ucs::Ucs activeUcs;
   std::vector<ucs::Ucs> ucsPrevious;
   std::vector<NamedUcs> ucsNamed;
+  std::vector<NamedView> namedViews;
+  std::string activeViewName;
   bool ucsFollow = false;
   double worldDocumentOriginX = 0.0;
   double worldDocumentOriginY = 0.0;
@@ -1761,6 +1786,11 @@ struct AppCommandState {
   /// Saved UCS definitions (`UCS Named`), persisted with the drawing. "World" is reserved and is
   /// never stored here — it is always available and can never be redefined or deleted.
   std::vector<NamedUcs> ucsNamed;
+  /// Saved views for this drawing (REQ-106), and which one the view currently matches. The name is
+  /// empty whenever the camera has been moved since a restore — that is the "Unsaved View" the
+  /// ribbon shows, and it is a statement about the CAMERA, not about whether the drawing is dirty.
+  std::vector<NamedView> namedViews;
+  std::string activeViewName;
 
   /// UCSFOLLOW: when set, any change to \ref activeUcs immediately switches the view to a PLAN view
   /// of the new UCS. 0 leaves the camera alone. Per drawing tab, which is as per-viewport as this
@@ -2714,6 +2744,13 @@ struct AppCommandState {
   /// REQ-142 Toolspace (Prospector / Settings). Session-only; not written to `.gs`.
   enum class ToolspaceTab : int { Prospector = 0, Settings = 1 };
   bool showToolspaceWindow = true;
+  /// View Manager (REQ-106) — the dialog half of "a VIEW command/dialog". Session-only, like the
+  /// other manager windows: which panels are open is not a property of the drawing.
+  bool showViewManagerWindow = false;
+  /// The New View name prompt, raised from the ribbon button. Separate from the manager window so
+  /// "save what I am looking at" stays one click rather than opening a dialog to find a button.
+  bool showViewManagerNewPrompt = false;
+  char newViewNameBuf[96] = {};
   ToolspaceTab toolspaceTab = ToolspaceTab::Prospector;
   /// Which feature line the elevation editor is showing, 0-based. Held here rather than as a static
   /// in the panel so that opening the editor from a selected feature line can aim it, and so it
@@ -3885,6 +3922,15 @@ void ApplyPlanViewOf(AppCommandState& st, const ucs::Ucs& frame, std::vector<std
 
 /// Find a saved UCS by name, case-insensitively. Returns nullptr when there is none.
 const NamedUcs* FindNamedUcs(const AppCommandState& st, const std::string& name);
+
+/// Named views (REQ-106). Same shape as the UCS Named helpers above, deliberately.
+const NamedView* FindNamedView(const AppCommandState& st, const std::string& name);
+/// The saved view the camera is currently in, or nullptr — derived, never remembered.
+const NamedView* CurrentNamedView(const AppCommandState& st);
+NamedView CaptureCurrentView(const AppCommandState& st, const std::string& name);
+void RestoreNamedView(AppCommandState& st, const NamedView& v, std::vector<std::string>& log);
+void ListNamedViews(const AppCommandState& st, std::vector<std::string>& log);
+bool ProcessViewCommandLine(AppCommandState& st, const std::string& rest, std::vector<std::string>& log);
 
 /// Apply ORTHO in the active UCS's axes rather than the world's (REQ-047 under REQ-154).
 ///
