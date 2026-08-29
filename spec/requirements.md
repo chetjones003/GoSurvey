@@ -3099,6 +3099,129 @@ requirements is a planning failure, not a sign of rigor.
                path. ACCEPTED. The panel's own rendering has no automated coverage and cannot
                while the driver has no window; that is mitigated by the routing, not solved.
 
+### REQ-154 — Create feature lines from objects (GitHub issue #118)
+- Purpose: convert existing linework into named feature lines without redrawing
+- Priority: must
+- Type: functional
+- Statement: `FEATURELINESFROMOBJECTS` (`FLFROM`) converts selected **lines, arcs, 2D polylines,
+  and 3D polylines** into `EntityKind::FeatureLine` objects. Each conversion copies plan X/Y and
+  vertex Z (arcs become two vertices plus a bulge — REQ-155). Options: name, layer (current layer
+  if omitted), erase or retain the source (`ERASE` / `KEEP`, default KEEP). Empty or ineligible
+  selection is a named refusal (REQ-201). Xrefs are out of scope (the drawing has none).
+- Acceptance:
+  - converting a two-point line yields a two-vertex open feature line with the same XYZ within
+    REQ-101;
+  - converting a closed polyline yields a closed feature line with the same vertex count;
+  - converting an arc stores a true-arc bulge (not a chord-only line);
+  - `ERASE` removes the source; `KEEP` leaves it;
+  - a selection of only circles is a named refusal and adds no feature line.
+- Owner-layer: Commands, Domain
+- Status: accepted (2026-08-28)
+- Revisions: 2026-08-28 — D-2026-08-28-n (issue #118).
+
+### REQ-155 — Feature-line circular arcs as bulge
+- Purpose: curved feature-line segments without tessellating the stored geometry
+- Priority: must
+- Type: functional
+- Statement: Each feature-line vertex carries an outgoing **bulge** (`featureLineBulge`, 0 = straight).
+  The stored chain is PI/elevation-point vertices only. Display, object snap, and TIN breakline
+  sampling may tessellate with a bounded chord count; that tessellation is not written back.
+  Elevation along an arc interpolates linearly in parameter *t* along the sweep (Z at the two
+  endpoints).
+- Acceptance:
+  - a 90° quarter-circle bulge survives `.gs` load with the same bulge within 1e-6;
+  - a TIN breakline taken from that arc is not a single chord (more than two constraint vertices);
+  - a zero bulge is a straight 3D segment.
+- Owner-layer: Domain, IO, Renderer, Commands
+- Status: accepted (2026-08-28)
+
+### REQ-156 — Feature-line grips, PI edit, and properties
+- Purpose: inspect and grip-edit a feature line like other entities
+- Priority: must
+- Type: functional
+- Statement: Selected feature-line vertices (PIs and elevation points) are grip-editable in plan
+  (Z unchanged by a grip, matching polylines). `FLINSERTPI` inserts a PI on a segment without
+  changing other elevations. `FLDELETEPI` removes a non-endpoint PI (open line) or any PI that
+  leaves ≥2 vertices (closed: ≥3). `FLPROPERTIES` / the Properties panel reports name, layer,
+  style, site, closed, plan length, start/end/min/max elevation, min/max grade, geometry vs
+  elevation-point counts, and surface relationship. Named lines remain listed by `FEATURELINELIST`.
+- Acceptance:
+  - a grip move of one PI changes only that vertex's X/Y;
+  - `FLINSERTPI` increases vertex count by one;
+  - `FLDELETEPI` on an elevation point uses the same path as `FLELEV DELETE`;
+  - `FLPROPERTIES 1` names the line and reports its vertex count.
+- Owner-layer: UI, Commands
+- Status: accepted (2026-08-28)
+
+### REQ-157 — Join, break, offset, and fillet feature lines
+- Purpose: the Civil 3D modify set issue #118 names, with defined elevations
+- Priority: must
+- Type: functional
+- Statement: `JOINFEATURELINES` (`FLJOIN`) concatenates two open feature lines whose endpoints
+  coincide within REQ-101 (order/orientation may reverse one chain). `BREAKFEATURELINE` (`FLBREAK`)
+  splits an open line at a plan point on a segment into two feature lines. `OFFSETFEATURELINE` /
+  OFFSET on a feature line builds a plan-offset copy (polyline OFFSET algorithm); elevations copy
+  1:1 when vertex counts match, else the first vertex's Z. `FILLETFEATURELINE` (`FLFILLET`) fillets
+  a straight–straight corner with a bulge arc of the given radius; a corner that is already bulged
+  or too tight is a named refusal.
+- Acceptance:
+  - joining two collinear 2-vertex lines at a shared end yields one 3-vertex line;
+  - breaking a 3-vertex line at the middle vertex yields two 2-vertex lines;
+  - offsetting a 2-vertex line by 10 ft produces a parallel copy 10 ft away in plan;
+  - filleting a right-angle 3-vertex line with a positive radius inserts a non-zero bulge.
+- Owner-layer: Commands
+- Status: accepted (2026-08-28)
+
+### REQ-158 — Feature-line object snaps
+- Purpose: snap to the 3D feature line, not the work-plane elevation
+- Priority: must
+- Type: functional
+- Statement: Endpoint, midpoint, nearest, intersection, and perpendicular snaps consider feature
+  lines. Elevation-point vertices are Endpoint (and listed as elevation points). Nearest on a bulge
+  segment returns a point on the arc with interpolated Z. Hover/ID of a snap reports that Z.
+- Acceptance:
+  - endpoint snap on a feature-line end returns that vertex's Z;
+  - nearest on a sloped straight segment at mid-station returns the linearly interpolated Z within
+    REQ-101.
+- Owner-layer: Viewport (CadSnap)
+- Status: accepted (2026-08-28)
+
+### REQ-159 — Elevations from surface and relative feature lines
+- Purpose: drape a feature line on a TIN, or hold an offset as the TIN moves
+- Priority: must
+- Type: functional
+- Statement: `FLELEV <n> FROMSURF <surface>` sets each vertex Z from the named surface (optional
+  `INSERT` adds elevation points where the plan chain crosses TIN edges, sampled at the same step
+  as Quick Profile). `FLELEV <n> RELATIVE <surface>` stores per-vertex offsets `Z − surfaceZ` so
+  current elevations are preserved, then keeps `Z = surfaceZ + offset` when that surface rebuilds.
+  A feature line that is a **breakline of the same surface** cannot be relative to it (named
+  refusal). Missing surface or a miss at a vertex is a named refusal for that vertex; other vertices
+  still apply. Absolute remains the default mode.
+- Acceptance:
+  - FROMSURF on a planar TIN at Z=100 sets all draped vertices to 100 ± REQ-101;
+  - RELATIVE with a +1.5 offset tracks a surface rebuild that raises the TIN by 2 ft (feature line
+    rises 2 ft, offset unchanged);
+  - RELATIVE to a surface that lists this feature line as a breakline is refused and does not
+    change mode.
+- Owner-layer: Commands, Domain, IO
+- Status: accepted (2026-08-28)
+
+### REQ-160 — High/low points and Feature Line UI commands
+- Purpose: find grade breaks; make the command set reachable
+- Priority: must
+- Type: functional
+- Statement: `FLHIGHLOW <n>` lists interior vertices where grade-in and grade-out have opposite
+  sign. `FLHIGHLOW <n> INSERT` inserts an elevation point at each such vertex if it is not already
+  flagged. Home Draw gains Create Feature Line; Home/Survey Modify expose From Objects, elevations,
+  join/break/offset/fillet, and add-as-breakline via existing `DESIGNATEBREAKLINE`. All of those
+  commands remain on the command line (REQ-203).
+- Acceptance:
+  - a peak vertex (up then down) is listed as HIGH;
+  - INSERT flags that vertex as an elevation point if it was a PI;
+  - FEATURELINE and FLFROM remain invokable with no window.
+- Owner-layer: Commands, UI
+- Status: accepted (2026-08-28)
+
 ### REQ-089 — Surface rollover readout
 - Purpose:     the constant "what is this, and how high is it here" while working over a topo,
                answered without a click and without running a command
@@ -5324,6 +5447,13 @@ requirements is a planning failure, not a sign of rigor.
 | REQ-151 | Commands | done (TASK-136) — arc breaklines; DESIGNATEBOUNDARY refuses arcs | accepted |
 | REQ-152 | util/Commands | done (TASK-136) — catchment mean Z; `[req152]` | accepted |
 | REQ-153 | UI/Commands | done (TASK-139) — contextual SURVEY Point(s) ribbon tab | accepted |
+| REQ-154 | Commands | TASK-140 — `headless.req154-fl-from-objects`; FeatureLineGeomTests [req154] | accepted |
+| REQ-155 | Domain/IO | TASK-140 — FeatureLineGeomTests [req155]; `.gs` bulge round-trip transcript | accepted |
+| REQ-156 | UI/Commands | TASK-140 — grips + FLPROPERTIES transcript | accepted |
+| REQ-157 | Commands | TASK-140 — `headless.req157-fl-modify` | accepted |
+| REQ-158 | Viewport | TASK-140 — CadSnapTests [req158] | accepted |
+| REQ-159 | Commands | TASK-140 — `headless.req159-fl-surface-elev` | accepted |
+| REQ-160 | Commands/UI | TASK-140 — FeatureLineGeomTests [req160] + ribbon wiring | accepted |
 | REQ-302 | UI/IO | done — all 3 increments delivered (GitHub issue #83). Increment 1 (tab infrastructure) done, TASK-104, amended once from GUI-pass feedback (D-2026-08-25-d). Increment 2 (responsive layout engine) done, TASK-105/ADR-038, user confirmed with no findings (D-2026-08-25-g). Increment 3 (content audit) done, TASK-106, D-2026-08-25-h/i — corrected this requirement's own speculative Statement text (no blocks/xrefs/point clouds/standards exist), relocated Import DXF/DWG to Insert, Settings to View, Export DXF/DWG + Plot/Batch Plot to Output (moved off Home); Manage tab intentionally left empty, nothing exists to relocate there. User confirmed the increment 3 manual GUI pass with no findings. 541/541 Catch2 test cases and 591/591 headless transcripts green throughout | accepted |
 | REQ-303 | Commands/Viewport | done (GitHub issue #80, D-2026-08-25-j, TASK-108). Click-to-close (start-point Endpoint snap + exact-equality intercept in `SubmitViewportPickImpl`) and blank-Enter-to-end (`ProcessCommandLineSubmit`) both call the existing `CommitPolylineDraft`/typed-keyword gate logic verbatim, plus REQ-118's `CancelSegmentAnglePick`/`ResetSegmentAngleLock` cleanup folded in during the master→beta merge (D-2026-08-25-l). Paper-space parity inherited from TASK-107, not reimplemented. 541/541 Catch2 test cases, 52/52 headless transcripts green (53 registered, 1 pre-existing disabled; 2 new since TASK-107: this task's plus TASK-107's own). New transcript proven red-before/green-after. Manual GUI pass (hover-glyph feedback) pending — this session cannot simulate mouse hover | accepted |
 | REQ-304 | Commands/UI | done (GitHub issue #82, D-2026-08-25-k, TASK-110). Full `AppCommandState::Kind` audit against `CommandInputHint`/its FooterHint delegates found 10 uncovered Kinds; `Pan`/`Orbit` are by-design exclusions (dedicated hand cursor, no typed value — REQ-045/REQ-084 (c)); the other 8 (`FeatureLine`, `Fillet`, `Chamfer`, `PdfAttach`, `Hatch`, `VpFreeze`, `VpThaw`, `Elev`) fixed by extending the existing `DrawingExtrasFooterHint` delegate, which already fed both the command-line hint and the cursor prompt from one call — no new mechanism. 593/593 Catch2 + headless regression green, unchanged pass count. Manual GUI pass (visual/wording confirmation of the 8 new hint strings) pending — this session cannot simulate mouse hover | accepted |

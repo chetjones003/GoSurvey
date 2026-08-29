@@ -394,6 +394,8 @@ AppCommandState FeatureLineDrawing() {
   st.featureLineOffsets = {0, 3};
   st.featureLineClosed = {0};
   st.featureLineElevPt = {0, 1, 0};
+  st.featureLineBulge = {0.f, 0.f, 0.f};
+  st.featureLineRelOffset = {0.f, 0.f, 0.f};
   st.featureLineInfo.resize(1);
   st.featureLineAttrs.resize(1);
   st.featureLineAttrs[0].id = 900;

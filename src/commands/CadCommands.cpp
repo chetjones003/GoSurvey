@@ -18,6 +18,7 @@
 #include "util/tinvolume.hpp"      // REQ-136
 #include "util/gridsurface.hpp"    // REQ-137
 #include "util/surfacequery.hpp"   // REQ-137
+#include "util/featurelinegeom.hpp"  // REQ-154…160
 #include "util/curveintersect.hpp"  // REQ-062 analytic intersections; EXTEND (TASK-096) reuses this over TRIM's tessellation
 #include "io/SurveyCsv.hpp"  // REQ-086: a surface reads its linked point files through the REQ-083 parser
 #include "util/gltfimport.hpp"
@@ -90,6 +91,8 @@ void SaveDocumentToSnapshot(AppCommandState& cmd, int idx) {
   doc.featureLineVerts       = cmd.featureLineVerts;
   doc.featureLineClosed      = cmd.featureLineClosed;
   doc.featureLineElevPt      = cmd.featureLineElevPt;
+  doc.featureLineBulge       = cmd.featureLineBulge;
+  doc.featureLineRelOffset   = cmd.featureLineRelOffset;
   doc.featureLineInfo        = cmd.featureLineInfo;
   doc.featureLineAttrs       = cmd.featureLineAttrs;
   doc.cadAnnotations         = cmd.cadAnnotations;
@@ -154,6 +157,8 @@ void RestoreDocumentFromSnapshot(AppCommandState& cmd, int idx) {
   cmd.featureLineVerts           = doc.featureLineVerts;
   cmd.featureLineClosed          = doc.featureLineClosed;
   cmd.featureLineElevPt          = doc.featureLineElevPt;
+  cmd.featureLineBulge           = doc.featureLineBulge;
+  cmd.featureLineRelOffset       = doc.featureLineRelOffset;
   cmd.featureLineInfo            = doc.featureLineInfo;
   cmd.featureLineAttrs           = doc.featureLineAttrs;
   cmd.cadAnnotations             = doc.cadAnnotations;
@@ -1101,6 +1106,20 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
       }
       break;
     }
+    case SelectedEntity::Type::FeatureLine: {
+      const int nf = cmd.featureLineOffsets.size() > 0 ? static_cast<int>(cmd.featureLineOffsets.size() - 1) : 0;
+      if (sel.index >= 0 && sel.index < nf) {
+        const int startV = cmd.featureLineOffsets[static_cast<size_t>(sel.index)];
+        const int endV = cmd.featureLineOffsets[static_cast<size_t>(sel.index + 1)];
+        for (int vi = 0; vi < endV - startV; ++vi) {
+          const size_t xIdx = static_cast<size_t>(startV + vi) * 3;
+          if (xIdx + 1 >= cmd.featureLineVerts.size())
+            break;
+          tryGrip(sel, cmd.featureLineVerts[xIdx], cmd.featureLineVerts[xIdx + 1], vi);
+        }
+      }
+      break;
+    }
     case SelectedEntity::Type::Arc: {
       if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
         const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
@@ -1157,6 +1176,14 @@ bool TryBeginEntityGripAtLocal(AppCommandState& cmd, float lx, float ly, float t
     cmd.entityGripOrigPolylineXIdx = static_cast<int>(xIdx);
     cmd.entityGripOrigPolyVertX = cmd.userPolylineVerts[xIdx];
     cmd.entityGripOrigPolyVertY = cmd.userPolylineVerts[xIdx + 1];
+    break;
+  }
+  case SelectedEntity::Type::FeatureLine: {
+    const int startV = cmd.featureLineOffsets[static_cast<size_t>(bestSel.index)];
+    const size_t xIdx = static_cast<size_t>(startV + bestWhich) * 3;
+    cmd.entityGripOrigPolylineXIdx = static_cast<int>(xIdx);
+    cmd.entityGripOrigPolyVertX = cmd.featureLineVerts[xIdx];
+    cmd.entityGripOrigPolyVertY = cmd.featureLineVerts[xIdx + 1];
     break;
   }
   case SelectedEntity::Type::Arc: {
@@ -1344,6 +1371,8 @@ static DrawingGeometrySnapshot CaptureGeometrySnapshot(const AppCommandState& st
   snap.featureLineVerts     = st.featureLineVerts;
   snap.featureLineClosed    = st.featureLineClosed;
   snap.featureLineElevPt    = st.featureLineElevPt;
+  snap.featureLineBulge     = st.featureLineBulge;
+  snap.featureLineRelOffset = st.featureLineRelOffset;
   snap.featureLineInfo      = st.featureLineInfo;
   snap.featureLineAttrs     = st.featureLineAttrs;
   snap.cadAnnotations       = st.cadAnnotations;
@@ -1384,6 +1413,8 @@ static void RestoreGeometrySnapshot(AppCommandState& st, const DrawingGeometrySn
   st.featureLineVerts     = snap.featureLineVerts;
   st.featureLineClosed    = snap.featureLineClosed;
   st.featureLineElevPt    = snap.featureLineElevPt;
+  st.featureLineBulge     = snap.featureLineBulge;
+  st.featureLineRelOffset = snap.featureLineRelOffset;
   st.featureLineInfo      = snap.featureLineInfo;
   st.featureLineAttrs     = snap.featureLineAttrs;
   st.cadAnnotations       = snap.cadAnnotations;
@@ -2220,9 +2251,19 @@ bool ResolveDefinitionChain(const AppCommandState& st, std::uint64_t id, bool re
       const size_t base = static_cast<size_t>(v) * 3;
       if (base + 2 >= st.featureLineVerts.size())
         return false;
-      out.verts.push_back({static_cast<double>(st.featureLineVerts[base + 0]) + st.worldDocumentOriginX,
-                           static_cast<double>(st.featureLineVerts[base + 1]) + st.worldDocumentOriginY,
-                           static_cast<double>(st.featureLineVerts[base + 2])});
+      const int ib = (v + 1 == vEnd) ? (closed ? vBegin : -1) : v + 1;
+      if (ib < 0)
+        continue;
+      const size_t b2 = static_cast<size_t>(ib) * 3;
+      const float bulge = (static_cast<size_t>(v) < st.featureLineBulge.size()) ? st.featureLineBulge[static_cast<size_t>(v)] : 0.f;
+      std::vector<flgeom::Vec3> tess;
+      flgeom::TessellateBulgeSegment(st.featureLineVerts[base], st.featureLineVerts[base + 1],
+                                     st.featureLineVerts[base + 2], st.featureLineVerts[b2],
+                                     st.featureLineVerts[b2 + 1], st.featureLineVerts[b2 + 2], bulge, &tess, true);
+      const size_t start = out.verts.empty() ? 0 : 1;
+      for (size_t ti = start; ti < tess.size(); ++ti) {
+        out.verts.push_back({tess[ti].x + st.worldDocumentOriginX, tess[ti].y + st.worldDocumentOriginY, tess[ti].z});
+      }
     }
     out.closed = closed;
     return true;
@@ -2972,6 +3013,8 @@ void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log) {
           msg += " " + std::to_string(r.constraintsUnresolved) + " constraint edge(s) could not be enforced.";
         log.push_back(msg);
         MarkVolumeSurfacesDirtyForParent(st, surface.name);
+        RefreshRelativeFeatureLineElevations(st);
+        BumpCadGpuCache(st);
       } else {
         // No partial surface; the previous triangulation (if any) is left alone (REQ-001).
         surface.lastBuildMessage = r.ok() ? "Boundaries left no surface." : r.message;
@@ -5085,6 +5128,8 @@ void RunWaterDropCommand(AppCommandState& st, const std::string& args, std::vect
       st.featureLineVerts.insert(st.featureLineVerts.end(), st.lastWaterDropPathXyz.begin(),
                                  st.lastWaterDropPathXyz.end());
       st.featureLineElevPt.insert(st.featureLineElevPt.end(), nvert, static_cast<uint8_t>(0));
+      st.featureLineBulge.insert(st.featureLineBulge.end(), nvert, 0.f);
+      st.featureLineRelOffset.insert(st.featureLineRelOffset.end(), nvert, 0.f);
       st.featureLineOffsets.push_back(baseVert + static_cast<int>(nvert));
       st.featureLineClosed.push_back(0);
       CadFeatureLineInfo info;
@@ -5986,6 +6031,7 @@ namespace CadCmdGeom {
 } // namespace CadCmdGeom
 
 void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log);
+static bool OffsetFeatureLineByIndex(AppCommandState& st, int fi, float signedD, std::vector<std::string>& log);
 
 namespace {
 
@@ -6046,6 +6092,17 @@ const CmdEntry kRegistry[] = {
     {"3dpoly", "3dp, 3dpolyline", "Draw a polyline whose vertices each carry their own elevation"},
     {"featureline", "fl", "Draw a feature line: named 3D linework with per-vertex elevations (REQ-087)"},
     {"featurelinelist", "fllist", "List every feature line and its vertices"},
+    {"featurelinesfromobjects", "flfrom, createfeaturelines", "Create feature lines from lines, arcs, or polylines"},
+    {"flproperties", "featurelineproperties", "Report feature-line properties"},
+    {"joinfeaturelines", "fljoin", "Join two feature lines at coinciding endpoints"},
+    {"breakfeatureline", "flbreak", "Break a feature line at an interior vertex"},
+    {"offsetfeatureline", "floffset", "Offset a feature line in plan"},
+    {"filletfeatureline", "flfillet", "Fillet a feature-line corner"},
+    {"flinsertpi", "", "Insert a PI on a feature line"},
+    {"fldeletepi", "", "Delete a feature-line PI"},
+    {"flhighlow", "", "List or flag high/low grade breaks"},
+    {"setfeatureelevation", "", "Set one feature-line point elevation"},
+    {"setfeaturegrade", "", "Set grade ahead of a feature-line point"},
     {"rect", "rectang, rectangle", "Draw a rectangle (two opposite corners)"},
     {"trimstate", "", "TRIM mode: 0 = draw a line to trim (default), 1 = pick cutting edges"},
     {"bench", "",
@@ -6264,11 +6321,14 @@ void ResetPolylineDraft(AppCommandState& st) {
 void ResetFeatureLineDraft(AppCommandState& st) {
   st.featureLineDraftVerts.clear();
   st.featureLineDraftElevPt.clear();
+  st.featureLineDraftBulge.clear();
   st.featureLineDraftName.clear();
   st.featureLinePendingPoint = false;
   st.featureLinePendingX = st.featureLinePendingY = 0.f;
   st.featureLinePendingDefaultZ = 0.f;
   st.featureLineNextIsElevPoint = false;
+  st.featureLineDraftArcArmed = false;
+  st.featureLineDraftArcThroughValid = false;
 }
 
 void ResetArcDraft(AppCommandState& st) {
@@ -7555,6 +7615,12 @@ static void AppendFeatureLineCopy(AppCommandState& st, int fi, int v0, int v1, X
     st.featureLineElevPt.push_back(static_cast<size_t>(vi) < st.featureLineElevPt.size()
                                        ? st.featureLineElevPt[static_cast<size_t>(vi)]
                                        : static_cast<uint8_t>(0));
+    st.featureLineBulge.push_back(static_cast<size_t>(vi) < st.featureLineBulge.size()
+                                     ? st.featureLineBulge[static_cast<size_t>(vi)]
+                                     : 0.f);
+    st.featureLineRelOffset.push_back(static_cast<size_t>(vi) < st.featureLineRelOffset.size()
+                                         ? st.featureLineRelOffset[static_cast<size_t>(vi)]
+                                         : 0.f);
   }
   st.featureLineOffsets.push_back(baseVert + nv);
   st.featureLineClosed.push_back(static_cast<size_t>(fi) < st.featureLineClosed.size()
@@ -10464,6 +10530,9 @@ static bool CommitOffsetSigned(AppCommandState& st, float signedD, std::vector<s
   case SelectedEntity::Type::Polyline:
     ok = CommitOffsetPolyline(st, e.index, signedD, log);
     break;
+  case SelectedEntity::Type::FeatureLine:
+    ok = OffsetFeatureLineByIndex(st, e.index, signedD, log);
+    break;
   default:
     log.push_back("OFFSET — unsupported entity type.");
     return false;
@@ -10514,7 +10583,8 @@ static void HandleOffsetThroughPick(AppCommandState& st, float px, float py, std
     break;
   }
   case SelectedEntity::Type::Polyline:
-    log.push_back("OFFSET — polyline: type a distance, then pick a side (through-click not supported).");
+  case SelectedEntity::Type::FeatureLine:
+    log.push_back("OFFSET — polyline / feature line: type a distance, then pick a side (through-click not supported).");
     return;
   case SelectedEntity::Type::Ellipse:
     log.push_back("OFFSET — ellipse: type a distance, then pick a side (through-click not supported).");
@@ -10566,8 +10636,34 @@ static void HandleOffsetSidePick(AppCommandState& st, float px, float py, std::v
     break;
   }
   case SelectedEntity::Type::Ellipse:
+  case SelectedEntity::Type::FeatureLine:
   case SelectedEntity::Type::Polyline: {
-    if (e.type == SelectedEntity::Type::Polyline) {
+    if (e.type == SelectedEntity::Type::FeatureLine) {
+      const int fi = e.index;
+      if (fi >= 0 && static_cast<size_t>(fi + 1) < st.featureLineOffsets.size()) {
+        const int v0 = st.featureLineOffsets[static_cast<size_t>(fi)];
+        const int v1 = st.featureLineOffsets[static_cast<size_t>(fi + 1)];
+        float best = 1e30f;
+        float bestS = 1.f;
+        for (int vi = v0; vi + 1 < v1; ++vi) {
+          const float ax = st.featureLineVerts[static_cast<size_t>(vi * 3)];
+          const float ay = st.featureLineVerts[static_cast<size_t>(vi * 3 + 1)];
+          const float bx = st.featureLineVerts[static_cast<size_t>((vi + 1) * 3)];
+          const float by = st.featureLineVerts[static_cast<size_t>((vi + 1) * 3 + 1)];
+          float qx = 0.f, qy = 0.f;
+          ClosestPointOnSegment(ax, ay, bx, by, px, py, &qx, &qy);
+          const float sd = SignedSideLine(ax, ay, bx, by, px, py);
+          const float dx = px - qx;
+          const float dy = py - qy;
+          const float dist2 = dx * dx + dy * dy;
+          if (dist2 < best) {
+            best = dist2;
+            bestS = sd >= 0.f ? 1.f : -1.f;
+          }
+        }
+        sgn = bestS;
+      }
+    } else if (e.type == SelectedEntity::Type::Polyline) {
       const int pi = e.index;
       if (pi >= 0 && static_cast<size_t>(pi + 1) < st.userPolylineOffsets.size()) {
         const int v0 = st.userPolylineOffsets[static_cast<size_t>(pi)];
@@ -10646,21 +10742,7 @@ static void HandleOffsetViewportPick(AppCommandState& st, float wx, float wy, st
       log.push_back("OFFSET — nothing under cursor; try again.");
       return;
     }
-    // REQ-087 / REQ-201. A feature line is pickable (it has to be, to select and move), so without
-    // this it would be accepted here and then dropped silently by CommitOffsetSigned's `default:`.
-    // Refusing is not a limitation we are hiding — offsetting a 3D chain has no defined answer for
-    // what elevation the offset copy carries, and neither REQ-087 nor REQ-088 supplies one, so the
-    // Workshop does not get to pick one (CLAUDE.md layer rule 3). Stays in the select phase.
-    if (hit.type == SelectedEntity::Type::FeatureLine) {
-      log.push_back("OFFSET — 1 feature line ignored: offsetting one has no defined elevation for "
-                    "the new line. Pick a line, circle, arc, ellipse, or polyline.");
-      return;
-    }
-    // REQ-068 / ADR-036 (c) — the same reasoning, one kind later. A surface became pickable, so
-    // without this it would be accepted here and then dropped by CommitOffsetSigned's `default:`,
-    // leaving the user having picked something and watched nothing happen. There is also no answer
-    // to offer: "offset a surface" would mean a second surface at a vertical or normal displacement,
-    // which is a grading operation no requirement defines.
+    // REQ-157: feature lines offset in plan; elevations copy with the vertex chain (ADR-035 (i)).
     if (hit.type == SelectedEntity::Type::Surface) {
       log.push_back("OFFSET — 1 surface ignored: a surface cannot be offset. Pick a line, circle, "
                     "arc, ellipse, or polyline.");
@@ -11561,6 +11643,72 @@ void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
                                        : std::string("\xE2\x80\x94");
     out->push_back(std::move(row));
   }
+}
+
+bool ClosestFeatureLinePoint(const AppCommandState& st, double wx, double wy, float tolWorld, int* outFi,
+                             float* outX, float* outY, float* outZ) {
+  if (!outX || !outY || !outZ)
+    return false;
+  const int n = st.featureLineOffsets.size() > 0 ? static_cast<int>(st.featureLineOffsets.size()) - 1 : 0;
+  float bestD2 = tolWorld * tolWorld;
+  bool hit = false;
+  int bestFi = -1;
+  float bx = 0.f, by = 0.f, bz = 0.f;
+  const float px = static_cast<float>(wx);
+  const float py = static_cast<float>(wy);
+  for (int fi = 0; fi < n; ++fi) {
+    const int v0 = st.featureLineOffsets[static_cast<size_t>(fi)];
+    const int v1 = st.featureLineOffsets[static_cast<size_t>(fi + 1)];
+    const bool closed =
+        static_cast<size_t>(fi) < st.featureLineClosed.size() && st.featureLineClosed[static_cast<size_t>(fi)];
+    const int nv = v1 - v0;
+    if (nv < 2)
+      continue;
+    const int nEdges = closed ? nv : nv - 1;
+    for (int e = 0; e < nEdges; ++e) {
+      const int ia = v0 + e;
+      const int ib = v0 + ((e + 1) % nv);
+      const size_t a = static_cast<size_t>(ia) * 3;
+      const size_t b = static_cast<size_t>(ib) * 3;
+      if (b + 2 >= st.featureLineVerts.size())
+        break;
+      const float bu =
+          (static_cast<size_t>(ia) < st.featureLineBulge.size()) ? st.featureLineBulge[static_cast<size_t>(ia)] : 0.f;
+      std::vector<flgeom::Vec3> tess;
+      flgeom::TessellateBulgeSegment(st.featureLineVerts[a], st.featureLineVerts[a + 1], st.featureLineVerts[a + 2],
+                                     st.featureLineVerts[b], st.featureLineVerts[b + 1], st.featureLineVerts[b + 2],
+                                     bu, &tess, true);
+      for (size_t k = 0; k + 1 < tess.size(); ++k) {
+        const float ax = static_cast<float>(tess[k].x), ay = static_cast<float>(tess[k].y),
+                    az = static_cast<float>(tess[k].z);
+        const float cx = static_cast<float>(tess[k + 1].x), cy = static_cast<float>(tess[k + 1].y),
+                    cz = static_cast<float>(tess[k + 1].z);
+        const float vx = cx - ax, vy = cy - ay;
+        const float len2 = vx * vx + vy * vy;
+        float t = 0.f;
+        if (len2 > 1.e-18f)
+          t = std::clamp(((px - ax) * vx + (py - ay) * vy) / len2, 0.f, 1.f);
+        const float qx = ax + t * vx, qy = ay + t * vy, qz = az + t * (cz - az);
+        const float d2 = (px - qx) * (px - qx) + (py - qy) * (py - qy);
+        if (d2 <= bestD2) {
+          bestD2 = d2;
+          hit = true;
+          bestFi = fi;
+          bx = qx;
+          by = qy;
+          bz = qz;
+        }
+      }
+    }
+  }
+  if (!hit)
+    return false;
+  if (outFi)
+    *outFi = bestFi;
+  *outX = bx;
+  *outY = by;
+  *outZ = bz;
+  return true;
 }
 
 bool SurfaceSnapElevation(const AppCommandState& st, double x, double y, float* outZ) {
@@ -13494,6 +13642,8 @@ static void ApplyBreakToEntity(AppCommandState& st, const SelectedEntity& e, con
   }
 }
 
+static bool BreakFeatureLineAtVertex(AppCommandState& st, int fi, int localVertex, std::vector<std::string>& log);
+
 void StartBreakCommand(AppCommandState& st, std::vector<std::string>& log) {
   using K = AppCommandState::Kind;
   if (st.activeSpaceIndex != kModelSpaceIndex && !InFloatingModelSpace(st)) {  // paper routing (REQ-103 step 4)
@@ -13533,8 +13683,9 @@ void HandleBreakViewportPick(AppCommandState& st, float wx, float wy, std::vecto
       return;
     }
     if (hit.type == SelectedEntity::Type::FeatureLine) {
-      log.push_back("BREAK — 1 feature line ignored: a feature line cannot be broken. Pick a line, "
-                    "circle, arc, or polyline.");
+      st.breakEntity = hit;
+      st.breakPhase = BP::SelectSecondPoint;
+      log.push_back("BREAK — pick an interior vertex on the feature line.");
       return;
     }
     if (hit.type == SelectedEntity::Type::Surface) {
@@ -13551,6 +13702,39 @@ void HandleBreakViewportPick(AppCommandState& st, float wx, float wy, std::vecto
     st.breakP1 = p1;
     st.breakPhase = BP::SelectSecondPoint;
     log.push_back("BREAK — specify second break point:");
+    return;
+  }
+
+  if (st.breakEntity.type == SelectedEntity::Type::FeatureLine) {
+    const int fi = st.breakEntity.index;
+    if (fi < 0 || static_cast<size_t>(fi + 1) >= st.featureLineOffsets.size()) {
+      log.push_back("BREAK — feature line is no longer valid.");
+      st.breakPhase = BP::SelectFirstPoint;
+      return;
+    }
+    const int v0 = st.featureLineOffsets[static_cast<size_t>(fi)];
+    const int v1 = st.featureLineOffsets[static_cast<size_t>(fi + 1)];
+    int bestLocal = -1;
+    float bestD2 = 1e30f;
+    for (int v = v0 + 1; v < v1 - 1; ++v) {
+      const size_t k = static_cast<size_t>(v) * 3;
+      if (k + 1 >= st.featureLineVerts.size())
+        break;
+      const float dx = wx - st.featureLineVerts[k];
+      const float dy = wy - st.featureLineVerts[k + 1];
+      const float d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {
+        bestD2 = d2;
+        bestLocal = v - v0;
+      }
+    }
+    if (bestLocal < 0) {
+      log.push_back("BREAK — pick an interior vertex.");
+      return;
+    }
+    BreakFeatureLineAtVertex(st, fi, bestLocal, log);
+    st.breakPhase = BP::SelectFirstPoint;
+    st.breakEntity = SelectedEntity{};
     return;
   }
 
@@ -17283,7 +17467,8 @@ void StartFeatureLineCommand(AppCommandState& st, const std::string& name, std::
   st.polylineTypedZRelative = false;
   log.push_back("FEATURELINE" + (name.empty() ? std::string() : " \"" + name + "\"") +
                 " — click a point (you will be asked for its elevation), or type X,Y / X,Y,Z. "
-                "E marks the next point an elevation point. CLOSE/CL, END, ESC cancels.");
+                "E marks the next point an elevation point. A then a through-point then the end draws an arc. "
+                "CLOSE/CL, END, ESC cancels.");
 }
 
 /// Appends one vertex to the feature-line draft. \p isElevPoint marks it an elevation point rather
@@ -17292,6 +17477,26 @@ bool SubmitFeatureLineVertex(AppCommandState& st, float x, float y, bool isElevP
                              std::vector<std::string>& log) {
   if (st.active != AppCommandState::Kind::FeatureLine)
     return false;
+
+  if (st.featureLineDraftArcArmed && !st.featureLineDraftArcThroughValid) {
+    if (st.featureLineDraftVerts.size() < 3) {
+      log.push_back("FEATURELINE — A needs a start point first.");
+      st.featureLineDraftArcArmed = false;
+      return false;
+    }
+    float vz = CadCommitElevation(st);
+    if (st.polylineTypedZValid) {
+      vz = st.polylineTypedZRelative ? st.anchorZ + st.polylineTypedZ : st.polylineTypedZ;
+      st.polylineTypedZValid = false;
+      st.polylineTypedZRelative = false;
+    }
+    st.featureLineDraftArcThroughX = x;
+    st.featureLineDraftArcThroughY = y;
+    st.featureLineDraftArcThroughZ = vz;
+    st.featureLineDraftArcThroughValid = true;
+    log.push_back("FEATURELINE — arc through-point recorded; specify the end point.");
+    return true;
+  }
 
   float vz = CadCommitElevation(st);
   if (st.polylineTypedZValid) {
@@ -17303,6 +17508,18 @@ bool SubmitFeatureLineVertex(AppCommandState& st, float x, float y, bool isElevP
   st.featureLineDraftVerts.push_back(y);
   st.featureLineDraftVerts.push_back(vz);
   st.featureLineDraftElevPt.push_back(isElevPoint ? 1u : 0u);
+  st.featureLineDraftBulge.push_back(0.f);
+  if (st.featureLineDraftArcThroughValid && st.featureLineDraftVerts.size() >= 6) {
+    const size_t n = st.featureLineDraftVerts.size() / 3;
+    const size_t prev = n - 2;
+    const size_t pb = prev * 3;
+    const float bulge = flgeom::BulgeThrough(
+        st.featureLineDraftVerts[pb], st.featureLineDraftVerts[pb + 1], st.featureLineDraftArcThroughX,
+        st.featureLineDraftArcThroughY, x, y);
+    st.featureLineDraftBulge[prev] = bulge;
+    st.featureLineDraftArcThroughValid = false;
+    st.featureLineDraftArcArmed = false;
+  }
   st.anchorX = x;
   st.anchorY = y;
   st.anchorZ = vz;
@@ -17380,6 +17597,10 @@ void CommitFeatureLineDraft(AppCommandState& st, bool closed, std::vector<std::s
                              st.featureLineDraftVerts.end());
   st.featureLineElevPt.insert(st.featureLineElevPt.end(), st.featureLineDraftElevPt.begin(),
                               st.featureLineDraftElevPt.end());
+  std::vector<float> draftBu = st.featureLineDraftBulge;
+  draftBu.resize(nvert, 0.f);
+  st.featureLineBulge.insert(st.featureLineBulge.end(), draftBu.begin(), draftBu.end());
+  st.featureLineRelOffset.insert(st.featureLineRelOffset.end(), nvert, 0.f);
   st.featureLineOffsets.push_back(baseVert + static_cast<int>(nvert));
   st.featureLineClosed.push_back(static_cast<uint8_t>(closed ? 1 : 0));
   CadFeatureLineInfo info;
@@ -17390,6 +17611,7 @@ void CommitFeatureLineDraft(AppCommandState& st, bool closed, std::vector<std::s
   st.active = AppCommandState::Kind::None;
   st.featureLineDraftVerts.clear();
   st.featureLineDraftElevPt.clear();
+  st.featureLineDraftBulge.clear();
   st.featureLineDraftName.clear();
   log.push_back(std::string("FEATURELINE ") + (closed ? "closed" : "complete") + " — " +
                 std::to_string(nvert) + " vertices.");
@@ -17693,6 +17915,13 @@ bool InsertFeatureLineElevationPoint(AppCommandState& st, int flNumber, double s
           st.featureLineElevPt.resize(static_cast<size_t>(at), 0);
         st.featureLineElevPt.insert(st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(at),
                                     static_cast<uint8_t>(1));
+        if (st.featureLineBulge.size() < static_cast<size_t>(at))
+          st.featureLineBulge.resize(static_cast<size_t>(at), 0.f);
+        st.featureLineBulge.insert(st.featureLineBulge.begin() + static_cast<std::ptrdiff_t>(at), 0.f);
+        if (st.featureLineRelOffset.size() < static_cast<size_t>(at))
+          st.featureLineRelOffset.resize(static_cast<size_t>(at), 0.f);
+        st.featureLineRelOffset.insert(st.featureLineRelOffset.begin() + static_cast<std::ptrdiff_t>(at),
+                                       0.f);
         // Every feature line after this one starts a vertex later.
         for (size_t k = static_cast<size_t>(fi) + 1; k < st.featureLineOffsets.size(); ++k)
           st.featureLineOffsets[k] += 1;
@@ -17729,6 +17958,10 @@ bool DeleteFeatureLineElevationPoint(AppCommandState& st, int flNumber, int poin
             st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(at) * 3,
             st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(at + 1) * 3);
         st.featureLineElevPt.erase(st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(at));
+        if (static_cast<size_t>(at) < st.featureLineBulge.size())
+          st.featureLineBulge.erase(st.featureLineBulge.begin() + static_cast<std::ptrdiff_t>(at));
+        if (static_cast<size_t>(at) < st.featureLineRelOffset.size())
+          st.featureLineRelOffset.erase(st.featureLineRelOffset.begin() + static_cast<std::ptrdiff_t>(at));
         for (size_t k = static_cast<size_t>(fi) + 1; k < st.featureLineOffsets.size(); ++k)
           st.featureLineOffsets[k] -= 1;
         log.push_back("FLELEV — feature line " + std::to_string(flNumber) + ": elevation point " +
@@ -18486,6 +18719,20 @@ void EnsureAttrCounts(AppCommandState& st) {
     st.userPolylineAttrs.push_back(MakeNewEntityAttrs(st));
     grew = true;
   }
+  const size_t nfl = st.featureLineOffsets.size() > 0 ? st.featureLineOffsets.size() - 1 : 0;
+  while (st.featureLineAttrs.size() < nfl) {
+    st.featureLineAttrs.push_back(MakeNewEntityAttrs(st));
+    grew = true;
+  }
+  const size_t nvFl = st.featureLineVerts.size() / 3;
+  if (st.featureLineBulge.size() != nvFl) {
+    st.featureLineBulge.resize(nvFl, 0.f);
+    grew = true;
+  }
+  if (st.featureLineRelOffset.size() != nvFl) {
+    st.featureLineRelOffset.resize(nvFl, 0.f);
+    grew = true;
+  }
   const size_t na = st.cadAnnotations.size();
   while (st.cadAnnotationAttrs.size() < na) {
     st.cadAnnotationAttrs.push_back(MakeNewEntityAttrs(st));
@@ -18518,6 +18765,8 @@ static void CollectLayersUsedInDrawing(const AppCommandState& st, std::set<std::
   for (const auto& a : st.userEllAttrs)
     add(a.layer);
   for (const auto& a : st.userPolylineAttrs)
+    add(a.layer);
+  for (const auto& a : st.featureLineAttrs)
     add(a.layer);
   for (const auto& a : st.cadAnnotationAttrs)
     add(a.layer);
@@ -18979,6 +19228,71 @@ void ApplyEntityGripPoint(AppCommandState& st, float x, float y) {
     st.userPolylineVerts[xIdx + 1] = y;
     return;
   }
+  case SelectedEntity::Type::FeatureLine: {
+    const int nf = st.featureLineOffsets.size() > 0 ? static_cast<int>(st.featureLineOffsets.size() - 1) : 0;
+    if (idx >= nf)
+      return;
+    const int startV = st.featureLineOffsets[static_cast<size_t>(idx)];
+    const int globalV = startV + st.entityGripWhich;
+    const size_t xIdx = static_cast<size_t>(globalV) * 3;
+    if (xIdx + 1 >= st.featureLineVerts.size())
+      return;
+    st.featureLineVerts[xIdx] = x;
+    st.featureLineVerts[xIdx + 1] = y;
+    const int v0 = startV;
+    const int v1 = st.featureLineOffsets[static_cast<size_t>(idx + 1)];
+    const int local = st.entityGripWhich;
+    const bool isElev = static_cast<size_t>(globalV) < st.featureLineElevPt.size() &&
+                        st.featureLineElevPt[static_cast<size_t>(globalV)] != 0;
+    if (isElev) {
+      int prevPi = local - 1;
+      while (prevPi >= 0) {
+        const int gv = v0 + prevPi;
+        if (!(static_cast<size_t>(gv) < st.featureLineElevPt.size() && st.featureLineElevPt[static_cast<size_t>(gv)]))
+          break;
+        --prevPi;
+      }
+      int nextPi = local + 1;
+      while (v0 + nextPi < v1) {
+        const int gv = v0 + nextPi;
+        if (!(static_cast<size_t>(gv) < st.featureLineElevPt.size() && st.featureLineElevPt[static_cast<size_t>(gv)]))
+          break;
+        ++nextPi;
+      }
+      if (prevPi >= 0 && v0 + nextPi < v1) {
+        const size_t a = static_cast<size_t>(v0 + prevPi) * 3;
+        const size_t b = static_cast<size_t>(v0 + nextPi) * 3;
+        const float bu = (static_cast<size_t>(v0 + prevPi) < st.featureLineBulge.size())
+                             ? st.featureLineBulge[static_cast<size_t>(v0 + prevPi)]
+                             : 0.f;
+        std::vector<flgeom::Vec3> tess;
+        flgeom::TessellateBulgeSegment(st.featureLineVerts[a], st.featureLineVerts[a + 1], st.featureLineVerts[a + 2],
+                                       st.featureLineVerts[b], st.featureLineVerts[b + 1], st.featureLineVerts[b + 2],
+                                       bu, &tess, true);
+        float bestD2 = 1.e30f;
+        float qx = x, qy = y;
+        for (size_t k = 0; k + 1 < tess.size(); ++k) {
+          const float ax = static_cast<float>(tess[k].x), ay = static_cast<float>(tess[k].y);
+          const float cx = static_cast<float>(tess[k + 1].x), cy = static_cast<float>(tess[k + 1].y);
+          const float vx = cx - ax, vy = cy - ay;
+          const float len2 = vx * vx + vy * vy;
+          float t = 0.f;
+          if (len2 > 1.e-18f)
+            t = std::clamp(((x - ax) * vx + (y - ay) * vy) / len2, 0.f, 1.f);
+          const float px = ax + t * vx, py = ay + t * vy;
+          const float d2 = (x - px) * (x - px) + (y - py) * (y - py);
+          if (d2 < bestD2) {
+            bestD2 = d2;
+            qx = px;
+            qy = py;
+          }
+        }
+        st.featureLineVerts[xIdx] = qx;
+        st.featureLineVerts[xIdx + 1] = qy;
+      }
+    }
+    return;
+  }
   case SelectedEntity::Type::Arc: {
     if (static_cast<size_t>(idx) >= st.userArcs.size())
       return;
@@ -19046,6 +19360,7 @@ EntityAttributes SelectSimilarAttrsOf(const AppCommandState& st, const SelectedE
   case SelectedEntity::Type::LineSeg:    return pick(st.userLineAttrs, e.index);
   case SelectedEntity::Type::Circle:     return pick(st.userCircleAttrs, e.index);
   case SelectedEntity::Type::Polyline:   return pick(st.userPolylineAttrs, e.index);
+  case SelectedEntity::Type::FeatureLine: return pick(st.featureLineAttrs, e.index);
   case SelectedEntity::Type::Arc:        return pick(st.userArcAttrs, e.index);
   case SelectedEntity::Type::Ellipse:    return pick(st.userEllAttrs, e.index);
   case SelectedEntity::Type::Annotation: return pick(st.cadAnnotationAttrs, e.index);
@@ -19307,6 +19622,12 @@ static void EraseFeatureLineByIndex(AppCommandState& st, int fi) {
   if (static_cast<size_t>(b) <= st.featureLineElevPt.size())
     st.featureLineElevPt.erase(st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(a),
                                st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(b));
+  if (static_cast<size_t>(b) <= st.featureLineBulge.size())
+    st.featureLineBulge.erase(st.featureLineBulge.begin() + static_cast<std::ptrdiff_t>(a),
+                              st.featureLineBulge.begin() + static_cast<std::ptrdiff_t>(b));
+  if (static_cast<size_t>(b) <= st.featureLineRelOffset.size())
+    st.featureLineRelOffset.erase(st.featureLineRelOffset.begin() + static_cast<std::ptrdiff_t>(a),
+                                  st.featureLineRelOffset.begin() + static_cast<std::ptrdiff_t>(b));
   std::vector<int> newOff;
   newOff.reserve(static_cast<size_t>(std::max(0, nfl - 1) + 1));
   newOff.push_back(0);
@@ -19328,6 +19649,716 @@ static void EraseFeatureLineByIndex(AppCommandState& st, int fi) {
     st.featureLineInfo.erase(st.featureLineInfo.begin() + static_cast<std::ptrdiff_t>(fi));
   if (static_cast<size_t>(fi) < st.featureLineAttrs.size())
     st.featureLineAttrs.erase(st.featureLineAttrs.begin() + static_cast<std::ptrdiff_t>(fi));
+}
+
+static void SyncFeatureLineSidecars(AppCommandState& st) {
+  const size_t n = st.featureLineVerts.size() / 3;
+  if (st.featureLineBulge.size() != n)
+    st.featureLineBulge.resize(n, 0.f);
+  if (st.featureLineRelOffset.size() != n)
+    st.featureLineRelOffset.resize(n, 0.f);
+}
+
+static void AppendNewFeatureLine(AppCommandState& st, const std::vector<float>& xyz, const std::vector<float>& bulge,
+                                 const std::vector<uint8_t>& elevPt, bool closed, CadFeatureLineInfo info) {
+  const size_t nvert = xyz.size() / 3;
+  if (nvert < 2)
+    return;
+  if (st.featureLineOffsets.empty())
+    st.featureLineOffsets.push_back(0);
+  const int baseVert = st.featureLineOffsets.back();
+  st.featureLineVerts.insert(st.featureLineVerts.end(), xyz.begin(), xyz.end());
+  std::vector<uint8_t> flags = elevPt;
+  flags.resize(nvert, 0);
+  st.featureLineElevPt.insert(st.featureLineElevPt.end(), flags.begin(), flags.end());
+  std::vector<float> bu = bulge;
+  bu.resize(nvert, 0.f);
+  st.featureLineBulge.insert(st.featureLineBulge.end(), bu.begin(), bu.end());
+  st.featureLineRelOffset.insert(st.featureLineRelOffset.end(), nvert, 0.f);
+  st.featureLineOffsets.push_back(baseVert + static_cast<int>(nvert));
+  st.featureLineClosed.push_back(closed ? 1u : 0u);
+  st.featureLineInfo.push_back(std::move(info));
+  st.featureLineAttrs.push_back(MakeNewEntityAttrs(st));
+}
+
+static int FeatureLineCount(const AppCommandState& st) {
+  return st.featureLineOffsets.size() > 0 ? static_cast<int>(st.featureLineOffsets.size()) - 1 : 0;
+}
+
+static bool ResolveFeatureLineIndex(const AppCommandState& st, const std::string& tok, int* fiZero,
+                                    std::vector<std::string>& log, const char* cmdName) {
+  if (!fiZero || !cmdName)
+    return false;
+  char* end = nullptr;
+  const long n = std::strtol(tok.c_str(), &end, 10);
+  if (end && *end == '\0' && n >= 1) {
+    *fiZero = static_cast<int>(n) - 1;
+    if (*fiZero < 0 || *fiZero >= FeatureLineCount(st)) {
+      log.push_back(std::string(cmdName) + " — no feature line " + tok + ".");
+      return false;
+    }
+    return true;
+  }
+  const std::string want = StringUtil::toLowerAsciiCopy(tok);
+  for (int i = 0; i < FeatureLineCount(st); ++i) {
+    if (static_cast<size_t>(i) >= st.featureLineInfo.size())
+      continue;
+    if (StringUtil::toLowerAsciiCopy(st.featureLineInfo[static_cast<size_t>(i)].name) == want) {
+      *fiZero = i;
+      return true;
+    }
+  }
+  log.push_back(std::string(cmdName) + " — no feature line named \"" + tok + "\".");
+  return false;
+}
+
+static bool FeatureLineIsBreaklineOf(const AppCommandState& st, int fi, const std::string& surfaceName) {
+  const int si = FindSurfaceIndex(st, surfaceName);
+  if (si < 0 || fi < 0 || static_cast<size_t>(fi) >= st.featureLineAttrs.size())
+    return false;
+  const std::uint64_t id = st.featureLineAttrs[static_cast<size_t>(fi)].id;
+  const CadSurface& s = st.cadSurfaces[static_cast<size_t>(si)];
+  for (const CadSurfaceBreakline& b : s.breaklines) {
+    if (b.entityId == id)
+      return true;
+  }
+  return false;
+}
+
+static bool ApplyFeatureLineFromSurf(AppCommandState& st, int fi, const std::string& surfName, bool insertPts,
+                                     std::vector<std::string>& log);
+
+static bool ConvertSelectionToFeatureLines(AppCommandState& st, const std::string& name, bool eraseSource,
+                                           const std::string& style, const std::string& layer,
+                                           const std::string& site, const std::string& fromSurf,
+                                           std::vector<std::string>& log) {
+  int converted = 0;
+  std::vector<SelectedEntity> sources = st.selection;
+  std::vector<SelectedEntity> toErase;
+  for (const SelectedEntity& e : sources) {
+    CadFeatureLineInfo info;
+    info.name = name;
+    info.style = style;
+    info.site = site;
+    if (e.type == SelectedEntity::Type::LineSeg) {
+      const size_t k = static_cast<size_t>(e.index) * 6;
+      if (k + 5 >= st.userLinesFlat.size())
+        continue;
+      std::vector<float> xyz = {st.userLinesFlat[k],     st.userLinesFlat[k + 1], st.userLinesFlat[k + 2],
+                                st.userLinesFlat[k + 3], st.userLinesFlat[k + 4], st.userLinesFlat[k + 5]};
+      AppendNewFeatureLine(st, xyz, {}, {}, false, info);
+      if (!layer.empty() && !st.featureLineAttrs.empty())
+        st.featureLineAttrs.back().layer = layer;
+      ++converted;
+      toErase.push_back(e);
+    } else if (e.type == SelectedEntity::Type::Arc) {
+      if (e.index < 0 || static_cast<size_t>(e.index) >= st.userArcs.size())
+        continue;
+      const CadArc& a = st.userArcs[static_cast<size_t>(e.index)];
+      const float x0 = a.cx + a.r * std::cos(a.startRad);
+      const float y0 = a.cy + a.r * std::sin(a.startRad);
+      const float x1 = a.cx + a.r * std::cos(a.startRad + a.sweepRad);
+      const float y1 = a.cy + a.r * std::sin(a.startRad + a.sweepRad);
+      std::vector<float> xyz = {x0, y0, a.z, x1, y1, a.z};
+      std::vector<float> bulge = {flgeom::BulgeFromSweepRad(static_cast<double>(a.sweepRad)), 0.f};
+      AppendNewFeatureLine(st, xyz, bulge, {}, false, info);
+      if (!layer.empty() && !st.featureLineAttrs.empty())
+        st.featureLineAttrs.back().layer = layer;
+      ++converted;
+      toErase.push_back(e);
+    } else if (e.type == SelectedEntity::Type::Polyline) {
+      int v0 = 0, v1 = 0;
+      if (e.index < 0 || static_cast<size_t>(e.index + 1) >= st.userPolylineOffsets.size())
+        continue;
+      v0 = st.userPolylineOffsets[static_cast<size_t>(e.index)];
+      v1 = st.userPolylineOffsets[static_cast<size_t>(e.index + 1)];
+      if (v1 - v0 < 2)
+        continue;
+      std::vector<float> xyz(st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+                             st.userPolylineVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+      const bool closed =
+          static_cast<size_t>(e.index) < st.userPolylineClosed.size() && st.userPolylineClosed[static_cast<size_t>(e.index)];
+      AppendNewFeatureLine(st, xyz, {}, {}, closed, info);
+      if (!layer.empty() && !st.featureLineAttrs.empty())
+        st.featureLineAttrs.back().layer = layer;
+      ++converted;
+      toErase.push_back(e);
+    }
+  }
+  if (converted == 0) {
+    log.push_back("FEATURELINESFROMOBJECTS — select a line, arc, or polyline first.");
+    return false;
+  }
+  if (eraseSource) {
+    st.selection = toErase;
+    ExecuteDeleteSelection(st, log, false);
+  }
+  if (!fromSurf.empty()) {
+    const int n = FeatureLineCount(st);
+    for (int k = 0; k < converted; ++k)
+      ApplyFeatureLineFromSurf(st, n - converted + k, fromSurf, false, log);
+  }
+  char buf[96];
+  std::snprintf(buf, sizeof(buf), "FEATURELINESFROMOBJECTS — created %d feature line(s).", converted);
+  log.push_back(buf);
+  BumpCadGpuCache(st);
+  return true;
+}
+
+static bool OffsetFeatureLineByIndex(AppCommandState& st, int fi, float signedD, std::vector<std::string>& log) {
+  int v0 = 0, v1 = 0;
+  if (!FeatureLineRange(st, fi, &v0, &v1)) {
+    log.push_back("OFFSETFEATURELINE — no such feature line.");
+    return false;
+  }
+  const bool closed = static_cast<size_t>(fi) < st.featureLineClosed.size() && st.featureLineClosed[static_cast<size_t>(fi)];
+  std::vector<flgeom::Vec3> out;
+  if (!flgeom::OffsetChainXy(st.featureLineVerts, v0, v1, closed, signedD, &out)) {
+    log.push_back("OFFSETFEATURELINE — could not build offset.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Offset feature line");
+  std::vector<float> xyz;
+  xyz.reserve(out.size() * 3);
+  for (const flgeom::Vec3& p : out) {
+    xyz.push_back(static_cast<float>(p.x));
+    xyz.push_back(static_cast<float>(p.y));
+    xyz.push_back(static_cast<float>(p.z));
+  }
+  CadFeatureLineInfo info = (static_cast<size_t>(fi) < st.featureLineInfo.size()) ? st.featureLineInfo[static_cast<size_t>(fi)]
+                                                                                : CadFeatureLineInfo{};
+  if (!info.name.empty())
+    info.name += " offset";
+  std::vector<float> bu;
+  if (static_cast<int>(out.size()) == (v1 - v0) && static_cast<size_t>(v1) <= st.featureLineBulge.size())
+    bu.assign(st.featureLineBulge.begin() + v0, st.featureLineBulge.begin() + v1);
+  std::vector<uint8_t> ep;
+  if (static_cast<int>(out.size()) == (v1 - v0) && static_cast<size_t>(v1) <= st.featureLineElevPt.size())
+    ep.assign(st.featureLineElevPt.begin() + v0, st.featureLineElevPt.begin() + v1);
+  AppendNewFeatureLine(st, xyz, bu, ep, closed, info);
+  BumpCadGpuCache(st);
+  log.push_back("OFFSETFEATURELINE — created offset copy.");
+  return true;
+}
+
+static void CopyFeatureLineSlice(const AppCommandState& st, int v0, int v1, bool reverse, bool skipFirst,
+                                 std::vector<float>* xyz, std::vector<float>* bulge, std::vector<uint8_t>* elev) {
+  const int n = v1 - v0;
+  if (n < 1 || !xyz || !bulge || !elev)
+    return;
+  std::vector<float> vxyz;
+  std::vector<float> vbu;
+  std::vector<uint8_t> vel;
+  vxyz.reserve(static_cast<size_t>(n) * 3);
+  vbu.reserve(static_cast<size_t>(n));
+  vel.reserve(static_cast<size_t>(n));
+  for (int v = v0; v < v1; ++v) {
+    const size_t k = static_cast<size_t>(v) * 3;
+    vxyz.push_back(st.featureLineVerts[k]);
+    vxyz.push_back(st.featureLineVerts[k + 1]);
+    vxyz.push_back(st.featureLineVerts[k + 2]);
+    vbu.push_back(static_cast<size_t>(v) < st.featureLineBulge.size() ? st.featureLineBulge[static_cast<size_t>(v)]
+                                                                     : 0.f);
+    vel.push_back(static_cast<size_t>(v) < st.featureLineElevPt.size() ? st.featureLineElevPt[static_cast<size_t>(v)]
+                                                                      : 0);
+  }
+  if (reverse) {
+    std::vector<float> rx;
+    rx.reserve(vxyz.size());
+    for (int i = n - 1; i >= 0; --i) {
+      const size_t k = static_cast<size_t>(i) * 3;
+      rx.push_back(vxyz[k]);
+      rx.push_back(vxyz[k + 1]);
+      rx.push_back(vxyz[k + 2]);
+    }
+    vxyz = std::move(rx);
+    std::reverse(vel.begin(), vel.end());
+    flgeom::ReverseOpenBulges(&vbu, n);
+  }
+  const int start = skipFirst ? 1 : 0;
+  if (start >= n)
+    return;
+  if (skipFirst && !xyz->empty() && !bulge->empty()) {
+    bulge->back() = vbu[0];
+  }
+  for (int i = start; i < n; ++i) {
+    const size_t k = static_cast<size_t>(i) * 3;
+    xyz->push_back(vxyz[k]);
+    xyz->push_back(vxyz[k + 1]);
+    xyz->push_back(vxyz[k + 2]);
+    bulge->push_back(vbu[static_cast<size_t>(i)]);
+    elev->push_back(vel[static_cast<size_t>(i)]);
+  }
+}
+
+static bool JoinTwoFeatureLines(AppCommandState& st, int a, int b, std::vector<std::string>& log) {
+  int a0 = 0, a1 = 0, b0 = 0, b1 = 0;
+  if (!FeatureLineRange(st, a, &a0, &a1) || !FeatureLineRange(st, b, &b0, &b1)) {
+    log.push_back("JOINFEATURELINES — need two valid feature lines.");
+    return false;
+  }
+  if (static_cast<size_t>(a) < st.featureLineClosed.size() && st.featureLineClosed[static_cast<size_t>(a)]) {
+    log.push_back("JOINFEATURELINES — a closed feature line cannot be joined.");
+    return false;
+  }
+  if (static_cast<size_t>(b) < st.featureLineClosed.size() && st.featureLineClosed[static_cast<size_t>(b)]) {
+    log.push_back("JOINFEATURELINES — a closed feature line cannot be joined.");
+    return false;
+  }
+  auto endPt = [&](int v) {
+    const size_t k = static_cast<size_t>(v) * 3;
+    return std::pair<float, float>{st.featureLineVerts[k], st.featureLineVerts[k + 1]};
+  };
+  const auto aStart = endPt(a0), aEnd = endPt(a1 - 1), bStart = endPt(b0), bEnd = endPt(b1 - 1);
+  const double tol = 0.01;
+  auto near = [&](std::pair<float, float> p, std::pair<float, float> q) {
+    return flgeom::PlanDist(p.first, p.second, q.first, q.second) <= tol;
+  };
+  std::vector<float> xyz, bulge;
+  std::vector<uint8_t> elev;
+  bool ok = false;
+  if (near(aEnd, bStart)) {
+    CopyFeatureLineSlice(st, a0, a1, false, false, &xyz, &bulge, &elev);
+    CopyFeatureLineSlice(st, b0, b1, false, true, &xyz, &bulge, &elev);
+    ok = true;
+  } else if (near(aEnd, bEnd)) {
+    CopyFeatureLineSlice(st, a0, a1, false, false, &xyz, &bulge, &elev);
+    CopyFeatureLineSlice(st, b0, b1, true, true, &xyz, &bulge, &elev);
+    ok = true;
+  } else if (near(aStart, bEnd)) {
+    CopyFeatureLineSlice(st, b0, b1, false, false, &xyz, &bulge, &elev);
+    CopyFeatureLineSlice(st, a0, a1, false, true, &xyz, &bulge, &elev);
+    ok = true;
+  } else if (near(aStart, bStart)) {
+    CopyFeatureLineSlice(st, a0, a1, true, false, &xyz, &bulge, &elev);
+    CopyFeatureLineSlice(st, b0, b1, false, true, &xyz, &bulge, &elev);
+    ok = true;
+  }
+  if (!ok) {
+    log.push_back("JOINFEATURELINES — endpoints do not coincide.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Join feature lines");
+  CadFeatureLineInfo info = (static_cast<size_t>(a) < st.featureLineInfo.size()) ? st.featureLineInfo[static_cast<size_t>(a)]
+                                                                               : CadFeatureLineInfo{};
+  const int hi = std::max(a, b);
+  const int lo = std::min(a, b);
+  EraseFeatureLineByIndex(st, hi);
+  EraseFeatureLineByIndex(st, lo);
+  AppendNewFeatureLine(st, xyz, bulge, elev, false, info);
+  BumpCadGpuCache(st);
+  log.push_back("JOINFEATURELINES — joined into one feature line.");
+  return true;
+}
+
+static bool BreakFeatureLineAtVertex(AppCommandState& st, int fi, int localVertex, std::vector<std::string>& log) {
+  int v0 = 0, v1 = 0;
+  if (!FeatureLineRange(st, fi, &v0, &v1))
+    return false;
+  const int n = v1 - v0;
+  if (localVertex <= 0 || localVertex >= n - 1) {
+    log.push_back("BREAKFEATURELINE — break at an interior vertex.");
+    return false;
+  }
+  if (static_cast<size_t>(fi) < st.featureLineClosed.size() && st.featureLineClosed[static_cast<size_t>(fi)]) {
+    log.push_back("BREAKFEATURELINE — a closed feature line cannot be broken this way.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Break feature line");
+  std::vector<float> left(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(v0) * 3,
+                          st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(v0 + localVertex + 1) * 3);
+  std::vector<float> right(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(v0 + localVertex) * 3,
+                           st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(v1) * 3);
+  std::vector<float> leftBu, rightBu;
+  std::vector<uint8_t> leftEp, rightEp;
+  if (static_cast<size_t>(v1) <= st.featureLineBulge.size()) {
+    leftBu.assign(st.featureLineBulge.begin() + v0, st.featureLineBulge.begin() + v0 + localVertex + 1);
+    rightBu.assign(st.featureLineBulge.begin() + v0 + localVertex, st.featureLineBulge.begin() + v1);
+  }
+  if (static_cast<size_t>(v1) <= st.featureLineElevPt.size()) {
+    leftEp.assign(st.featureLineElevPt.begin() + v0, st.featureLineElevPt.begin() + v0 + localVertex + 1);
+    rightEp.assign(st.featureLineElevPt.begin() + v0 + localVertex, st.featureLineElevPt.begin() + v1);
+  }
+  CadFeatureLineInfo info = (static_cast<size_t>(fi) < st.featureLineInfo.size()) ? st.featureLineInfo[static_cast<size_t>(fi)]
+                                                                               : CadFeatureLineInfo{};
+  EraseFeatureLineByIndex(st, fi);
+  AppendNewFeatureLine(st, left, leftBu, leftEp, false, info);
+  AppendNewFeatureLine(st, right, rightBu, rightEp, false, info);
+  BumpCadGpuCache(st);
+  log.push_back("BREAKFEATURELINE — split into two feature lines.");
+  return true;
+}
+
+static bool FilletFeatureLineCorner(AppCommandState& st, int fi, int localVertex, float radius,
+                                    std::vector<std::string>& log) {
+  int v0 = 0, v1 = 0;
+  if (!FeatureLineRange(st, fi, &v0, &v1) || radius <= 0.f) {
+    log.push_back("FILLETFEATURELINE — need a feature line and a positive radius.");
+    return false;
+  }
+  const int n = v1 - v0;
+  if (localVertex <= 0 || localVertex >= n - 1) {
+    log.push_back("FILLETFEATURELINE — pick an interior corner.");
+    return false;
+  }
+  const size_t ia = static_cast<size_t>(v0 + localVertex - 1) * 3;
+  const size_t ib = static_cast<size_t>(v0 + localVertex) * 3;
+  const size_t ic = static_cast<size_t>(v0 + localVertex + 1) * 3;
+  const float ax = st.featureLineVerts[ia], ay = st.featureLineVerts[ia + 1];
+  const float bx = st.featureLineVerts[ib], by = st.featureLineVerts[ib + 1];
+  const float cx = st.featureLineVerts[ic], cy = st.featureLineVerts[ic + 1];
+  const float l1 = std::hypot(bx - ax, by - ay);
+  const float l2 = std::hypot(cx - bx, cy - by);
+  if (l1 < radius || l2 < radius) {
+    log.push_back("FILLETFEATURELINE — radius is larger than an adjacent segment.");
+    return false;
+  }
+  const float ux = (ax - bx) / l1, uy = (ay - by) / l1;
+  const float vx = (cx - bx) / l2, vy = (cy - by) / l2;
+  const float t1x = bx + ux * radius, t1y = by + uy * radius;
+  const float t2x = bx + vx * radius, t2y = by + vy * radius;
+  const float cross = ux * vy - uy * vx;
+  const float bulge = flgeom::BulgeFromSweepRad(std::atan2(cross, ux * vx + uy * vy));
+  PushUndoSnapshot(st, "Fillet feature line");
+  st.featureLineVerts[ib] = t1x;
+  st.featureLineVerts[ib + 1] = t1y;
+  const float t2z = st.featureLineVerts[ic + 2];
+  const float mid[3] = {t2x, t2y, t2z};
+  st.featureLineVerts.insert(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(v0 + localVertex + 1) * 3,
+                             mid, mid + 3);
+  st.featureLineElevPt.insert(st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(v0 + localVertex + 1),
+                              static_cast<uint8_t>(0));
+  st.featureLineBulge.insert(st.featureLineBulge.begin() + static_cast<std::ptrdiff_t>(v0 + localVertex + 1), 0.f);
+  st.featureLineRelOffset.insert(st.featureLineRelOffset.begin() + static_cast<std::ptrdiff_t>(v0 + localVertex + 1),
+                                 0.f);
+  if (static_cast<size_t>(v0 + localVertex) < st.featureLineBulge.size())
+    st.featureLineBulge[static_cast<size_t>(v0 + localVertex)] = bulge;
+  for (size_t k = static_cast<size_t>(fi) + 1; k < st.featureLineOffsets.size(); ++k)
+    st.featureLineOffsets[k] += 1;
+  BumpCadGpuCache(st);
+  log.push_back("FILLETFEATURELINE — corner filleted.");
+  return true;
+}
+
+static bool ApplyFeatureLineFromSurf(AppCommandState& st, int fi, const std::string& surfName, bool insertPts,
+                                     std::vector<std::string>& log) {
+  int v0 = 0, v1 = 0;
+  if (!FeatureLineRange(st, fi, &v0, &v1)) {
+    log.push_back("FLELEV FROMSURF — no such feature line.");
+    return false;
+  }
+  const int si = FindSurfaceIndex(st, surfName);
+  if (si < 0) {
+    log.push_back("FLELEV FROMSURF — no surface named \"" + surfName + "\".");
+    return false;
+  }
+  const CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
+  if (!surf.tin) {
+    log.push_back("FLELEV FROMSURF — surface is not built.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Feature line elevations from surface");
+  int missed = 0;
+  for (int v = v0; v < v1; ++v) {
+    const size_t k = static_cast<size_t>(v) * 3;
+    double z = 0.0;
+    if (TinElevationAt(surf.tin->vertsXyz, surf.tin->indices, st.featureLineVerts[k],
+                       st.featureLineVerts[k + 1], &z))
+      st.featureLineVerts[k + 2] = static_cast<float>(z);
+    else
+      ++missed;
+  }
+  if (insertPts && v1 - v0 >= 2) {
+    const CadSurface& surfIns = st.cadSurfaces[static_cast<size_t>(si)];
+    std::vector<flgeom::TinCrossing> crosses;
+    double sta = 0.0;
+    for (int v = v0; v + 1 < v1; ++v) {
+      const size_t a = static_cast<size_t>(v) * 3;
+      const size_t b = static_cast<size_t>(v + 1) * 3;
+      const float bu =
+          (static_cast<size_t>(v) < st.featureLineBulge.size()) ? st.featureLineBulge[static_cast<size_t>(v)] : 0.f;
+      std::vector<flgeom::Vec3> tess;
+      flgeom::TessellateBulgeSegment(st.featureLineVerts[a], st.featureLineVerts[a + 1], st.featureLineVerts[a + 2],
+                                     st.featureLineVerts[b], st.featureLineVerts[b + 1], st.featureLineVerts[b + 2],
+                                     bu, &tess, true);
+      for (size_t k = 0; k + 1 < tess.size(); ++k) {
+        std::vector<flgeom::TinCrossing> hit;
+        flgeom::TinEdgeCrossings(surfIns.tin->vertsXyz, surfIns.tin->indices, tess[k].x, tess[k].y, tess[k + 1].x,
+                                 tess[k + 1].y, &hit);
+        const double chord = flgeom::PlanDist(tess[k].x, tess[k].y, tess[k + 1].x, tess[k + 1].y);
+        for (flgeom::TinCrossing& c : hit) {
+          c.station += sta;
+          crosses.push_back(c);
+        }
+        sta += chord;
+      }
+    }
+    std::sort(crosses.begin(), crosses.end(),
+              [](const flgeom::TinCrossing& p, const flgeom::TinCrossing& q) { return p.station > q.station; });
+    const int flNum = fi + 1;
+    int inserted = 0;
+    for (const flgeom::TinCrossing& c : crosses) {
+      double z = 0.0;
+      if (!TinElevationAt(surfIns.tin->vertsXyz, surfIns.tin->indices, static_cast<float>(c.x),
+                          static_cast<float>(c.y), &z))
+        continue;
+      std::vector<std::string> ign;
+      if (InsertFeatureLineElevationPoint(st, flNum, c.station, static_cast<float>(z), ign))
+        ++inserted;
+    }
+    if (inserted > 0) {
+      log.push_back("FLELEV FROMSURF — inserted " + std::to_string(inserted) +
+                    " elevation point(s) at TIN crossings.");
+    }
+  }
+  if (static_cast<size_t>(fi) < st.featureLineInfo.size()) {
+    st.featureLineInfo[static_cast<size_t>(fi)].elevMode = CadFeatureLineInfo::ElevMode::Absolute;
+    st.featureLineInfo[static_cast<size_t>(fi)].relativeSurface.clear();
+  }
+  BumpCadGpuCache(st);
+  log.push_back("FLELEV FROMSURF — applied surface elevations" +
+                (missed ? (" (" + std::to_string(missed) + " miss(es)).") : std::string(".")));
+  return true;
+}
+
+static bool ApplyFeatureLineRelative(AppCommandState& st, int fi, const std::string& surfName,
+                                     std::vector<std::string>& log) {
+  int v0 = 0, v1 = 0;
+  if (!FeatureLineRange(st, fi, &v0, &v1)) {
+    log.push_back("FLELEV RELATIVE — no such feature line.");
+    return false;
+  }
+  if (FeatureLineIsBreaklineOf(st, fi, surfName)) {
+    log.push_back("FLELEV RELATIVE — refused: that feature line is a breakline of the same surface.");
+    return false;
+  }
+  const int si = FindSurfaceIndex(st, surfName);
+  if (si < 0) {
+    log.push_back("FLELEV RELATIVE — no surface named \"" + surfName + "\".");
+    return false;
+  }
+  const CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
+  if (!surf.tin) {
+    log.push_back("FLELEV RELATIVE — surface is not built.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Feature line relative elevations");
+  SyncFeatureLineSidecars(st);
+  for (int v = v0; v < v1; ++v) {
+    const size_t k = static_cast<size_t>(v) * 3;
+    double z = 0.0;
+    const bool hit = TinElevationAt(surf.tin->vertsXyz, surf.tin->indices, st.featureLineVerts[k],
+                                    st.featureLineVerts[k + 1], &z);
+    st.featureLineRelOffset[static_cast<size_t>(v)] =
+        hit ? (st.featureLineVerts[k + 2] - static_cast<float>(z)) : 0.f;
+  }
+  st.featureLineInfo[static_cast<size_t>(fi)].elevMode = CadFeatureLineInfo::ElevMode::Relative;
+  st.featureLineInfo[static_cast<size_t>(fi)].relativeSurface = surfName;
+  BumpCadGpuCache(st);
+  log.push_back("FLELEV RELATIVE — offsets stored; elevations preserved.");
+  return true;
+}
+
+void RefreshRelativeFeatureLineElevations(AppCommandState& st) {
+  SyncFeatureLineSidecars(st);
+  const int n = FeatureLineCount(st);
+  for (int fi = 0; fi < n; ++fi) {
+    if (static_cast<size_t>(fi) >= st.featureLineInfo.size())
+      continue;
+    const CadFeatureLineInfo& info = st.featureLineInfo[static_cast<size_t>(fi)];
+    if (info.elevMode != CadFeatureLineInfo::ElevMode::Relative || info.relativeSurface.empty())
+      continue;
+    const int si = FindSurfaceIndex(st, info.relativeSurface);
+    if (si < 0 || !st.cadSurfaces[static_cast<size_t>(si)].tin)
+      continue;
+    int v0 = 0, v1 = 0;
+    if (!FeatureLineRange(st, fi, &v0, &v1))
+      continue;
+    const CadSurface& surf = st.cadSurfaces[static_cast<size_t>(si)];
+    for (int v = v0; v < v1; ++v) {
+      const size_t k = static_cast<size_t>(v) * 3;
+      double z = 0.0;
+      if (TinElevationAt(surf.tin->vertsXyz, surf.tin->indices, st.featureLineVerts[k], st.featureLineVerts[k + 1],
+                         &z))
+        st.featureLineVerts[k + 2] = static_cast<float>(z) + st.featureLineRelOffset[static_cast<size_t>(v)];
+    }
+  }
+}
+
+static void ReportFeatureLineProperties(const AppCommandState& st, int flNumber, std::vector<std::string>& log) {
+  const int fi = flNumber - 1;
+  int v0 = 0, v1 = 0;
+  if (!FeatureLineRange(st, fi, &v0, &v1)) {
+    log.push_back("FLPROPERTIES — no feature line " + std::to_string(flNumber) + ".");
+    return;
+  }
+  const CadFeatureLineInfo info =
+      static_cast<size_t>(fi) < st.featureLineInfo.size() ? st.featureLineInfo[static_cast<size_t>(fi)]
+                                                        : CadFeatureLineInfo{};
+  const bool closed =
+      static_cast<size_t>(fi) < st.featureLineClosed.size() && st.featureLineClosed[static_cast<size_t>(fi)];
+  int elevN = 0;
+  float zMin = st.featureLineVerts[static_cast<size_t>(v0) * 3 + 2];
+  float zMax = zMin;
+  for (int v = v0; v < v1; ++v) {
+    if (static_cast<size_t>(v) < st.featureLineElevPt.size() && st.featureLineElevPt[static_cast<size_t>(v)])
+      ++elevN;
+    const float z = st.featureLineVerts[static_cast<size_t>(v) * 3 + 2];
+    zMin = std::min(zMin, z);
+    zMax = std::max(zMax, z);
+  }
+  const double len = flgeom::PlanLength(st.featureLineVerts, v0, v1, st.featureLineBulge, closed);
+  double gMin = 0.0, gMax = 0.0;
+  bool haveG = false;
+  const int nv = v1 - v0;
+  const int nEdges = closed ? nv : nv - 1;
+  for (int e = 0; e < nEdges; ++e) {
+    const int ia = v0 + e;
+    const int ib = v0 + ((e + 1) % nv);
+    const size_t a = static_cast<size_t>(ia) * 3, b = static_cast<size_t>(ib) * 3;
+    const float bu = (static_cast<size_t>(ia) < st.featureLineBulge.size()) ? st.featureLineBulge[static_cast<size_t>(ia)] : 0.f;
+    double run = flgeom::PlanDist(st.featureLineVerts[a], st.featureLineVerts[a + 1], st.featureLineVerts[b],
+                                  st.featureLineVerts[b + 1]);
+    if (std::fabs(static_cast<double>(bu)) >= 1.0e-12) {
+      double cx = 0.0, cy = 0.0, r = 0.0, a0 = 0.0, sw = 0.0;
+      flgeom::ArcCenterFromBulge(st.featureLineVerts[a], st.featureLineVerts[a + 1], st.featureLineVerts[b],
+                                 st.featureLineVerts[b + 1], bu, &cx, &cy, &r, &a0, &sw);
+      run = std::fabs(r * sw);
+    }
+    const double rise = static_cast<double>(st.featureLineVerts[b + 2] - st.featureLineVerts[a + 2]);
+    const double g = flgeom::GradePercent(run, rise);
+    if (!haveG) {
+      gMin = gMax = g;
+      haveG = true;
+    } else {
+      gMin = std::min(gMin, g);
+      gMax = std::max(gMax, g);
+    }
+  }
+  char buf[320];
+  std::snprintf(buf, sizeof(buf),
+                "FLPROPERTIES %d \"%s\" style=\"%s\" site=\"%s\" %s verts=%d elevPts=%d length=%.3f "
+                "z=%.3f..%.3f startZ=%.3f endZ=%.3f grade=%.2f..%.2f%% relative=%s",
+                flNumber, info.name.c_str(), info.style.c_str(), info.site.c_str(), closed ? "closed" : "open",
+                v1 - v0, elevN, len, static_cast<double>(zMin), static_cast<double>(zMax),
+                static_cast<double>(st.featureLineVerts[static_cast<size_t>(v0) * 3 + 2]),
+                static_cast<double>(st.featureLineVerts[static_cast<size_t>(v1 - 1) * 3 + 2]), gMin, gMax,
+                info.relativeSurface.empty() ? "(none)" : info.relativeSurface.c_str());
+  log.push_back(buf);
+}
+
+static bool InsertFeatureLinePi(AppCommandState& st, int fi, float x, float y, std::vector<std::string>& log) {
+  int v0 = 0, v1 = 0;
+  if (!FeatureLineRange(st, fi, &v0, &v1)) {
+    log.push_back("FLINSERTPI — no such feature line.");
+    return false;
+  }
+  int bestSeg = -1;
+  double bestD = 1.0e300;
+  float nx = x, ny = y, nz = 0.f;
+  for (int v = v0; v + 1 < v1; ++v) {
+    const size_t a = static_cast<size_t>(v) * 3;
+    const size_t b = static_cast<size_t>(v + 1) * 3;
+    const float ax = st.featureLineVerts[a], ay = st.featureLineVerts[a + 1];
+    const float bx = st.featureLineVerts[b], by = st.featureLineVerts[b + 1];
+    const float vx = bx - ax, vy = by - ay;
+    const float len2 = vx * vx + vy * vy;
+    float t = 0.f;
+    if (len2 > 1.e-12f)
+      t = std::clamp(((x - ax) * vx + (y - ay) * vy) / len2, 0.f, 1.f);
+    const float px = ax + t * vx, py = ay + t * vy;
+    const double d = flgeom::PlanDist(x, y, px, py);
+    if (d < bestD) {
+      bestD = d;
+      bestSeg = v;
+      nx = px;
+      ny = py;
+      nz = st.featureLineVerts[a + 2] + t * (st.featureLineVerts[b + 2] - st.featureLineVerts[a + 2]);
+    }
+  }
+  if (bestSeg < 0) {
+    log.push_back("FLINSERTPI — no segment.");
+    return false;
+  }
+  PushUndoSnapshot(st, "Insert feature-line PI");
+  const int at = bestSeg + 1;
+  const float vert[3] = {nx, ny, nz};
+  st.featureLineVerts.insert(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(at) * 3, vert, vert + 3);
+  st.featureLineElevPt.insert(st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(at), static_cast<uint8_t>(0));
+  st.featureLineBulge.insert(st.featureLineBulge.begin() + static_cast<std::ptrdiff_t>(at), 0.f);
+  st.featureLineRelOffset.insert(st.featureLineRelOffset.begin() + static_cast<std::ptrdiff_t>(at), 0.f);
+  for (size_t k = static_cast<size_t>(fi) + 1; k < st.featureLineOffsets.size(); ++k)
+    st.featureLineOffsets[k] += 1;
+  BumpCadGpuCache(st);
+  log.push_back("FLINSERTPI — inserted a PI.");
+  return true;
+}
+
+static bool DeleteFeatureLinePi(AppCommandState& st, int flNumber, int pointNumber, std::vector<std::string>& log) {
+  const int fi = flNumber - 1;
+  int v0 = 0, v1 = 0;
+  if (!FeatureLineRange(st, fi, &v0, &v1)) {
+    log.push_back("FLDELETEPI — no such feature line.");
+    return false;
+  }
+  const int n = v1 - v0;
+  const int atLocal = pointNumber - 1;
+  const bool closed =
+      static_cast<size_t>(fi) < st.featureLineClosed.size() && st.featureLineClosed[static_cast<size_t>(fi)];
+  if (atLocal < 0 || atLocal >= n) {
+    log.push_back("FLDELETEPI — point out of range.");
+    return false;
+  }
+  if (!closed && (atLocal == 0 || atLocal == n - 1)) {
+    log.push_back("FLDELETEPI — cannot delete an endpoint of an open feature line.");
+    return false;
+  }
+  if ((closed && n <= 3) || (!closed && n <= 2)) {
+    log.push_back("FLDELETEPI — not enough vertices would remain.");
+    return false;
+  }
+  const int at = v0 + atLocal;
+  if (static_cast<size_t>(at) < st.featureLineElevPt.size() && st.featureLineElevPt[static_cast<size_t>(at)])
+    return DeleteFeatureLineElevationPoint(st, flNumber, pointNumber, log);
+  PushUndoSnapshot(st, "Delete feature-line PI");
+  st.featureLineVerts.erase(st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(at) * 3,
+                            st.featureLineVerts.begin() + static_cast<std::ptrdiff_t>(at + 1) * 3);
+  if (static_cast<size_t>(at) < st.featureLineElevPt.size())
+    st.featureLineElevPt.erase(st.featureLineElevPt.begin() + static_cast<std::ptrdiff_t>(at));
+  if (static_cast<size_t>(at) < st.featureLineBulge.size())
+    st.featureLineBulge.erase(st.featureLineBulge.begin() + static_cast<std::ptrdiff_t>(at));
+  if (static_cast<size_t>(at) < st.featureLineRelOffset.size())
+    st.featureLineRelOffset.erase(st.featureLineRelOffset.begin() + static_cast<std::ptrdiff_t>(at));
+  for (size_t k = static_cast<size_t>(fi) + 1; k < st.featureLineOffsets.size(); ++k)
+    st.featureLineOffsets[k] -= 1;
+  BumpCadGpuCache(st);
+  log.push_back("FLDELETEPI — deleted PI " + std::to_string(pointNumber) + ".");
+  return true;
+}
+
+static void ListOrInsertHighLow(AppCommandState& st, int fi, bool insert, std::vector<std::string>& log) {
+  int v0 = 0, v1 = 0;
+  if (!FeatureLineRange(st, fi, &v0, &v1)) {
+    log.push_back("FLHIGHLOW — no such feature line.");
+    return;
+  }
+  std::vector<flgeom::HighLowHit> hits;
+  flgeom::FindHighLow(st.featureLineVerts, v0, v1, &hits);
+  if (hits.empty()) {
+    log.push_back("FLHIGHLOW — no high/low grade breaks.");
+    return;
+  }
+  if (insert)
+    PushUndoSnapshot(st, "Feature line high/low flags");
+  for (const flgeom::HighLowHit& h : hits) {
+    const int at = v0 + h.afterVertex;
+    log.push_back(std::string("FLHIGHLOW — ") + (h.isHigh ? "HIGH" : "LOW") + " at point " +
+                  std::to_string(h.afterVertex + 1) + " station " + std::to_string(h.station));
+    if (insert && static_cast<size_t>(at) < st.featureLineElevPt.size())
+      st.featureLineElevPt[static_cast<size_t>(at)] = 1;
+  }
+  if (insert)
+    BumpCadGpuCache(st);
 }
 
 void EraseCadAnnotationAtIndex(AppCommandState& st, size_t annIndex) {
@@ -19455,10 +20486,11 @@ void ApplyLinkedSurveyForAnnotationPick(AppCommandState& st, int annIndex, bool 
   }
 }
 
-void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log) {
+void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log, bool pushUndo) {
   if (st.selection.empty())
     return;
-  PushUndoSnapshot(st, "Delete");
+  if (pushUndo)
+    PushUndoSnapshot(st, "Delete");
   std::set<int> lineIx;
   std::set<int> circIx;
   std::set<int> annIx;
@@ -21444,14 +22476,25 @@ bool SubmitTrimViewportPick(AppCommandState& st, float wx, float wy, float tolWo
 }
 
 void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
-  PushUndoSnapshot(st, "Join");
   using ST = SelectedEntity::Type;
 
-  // REQ-087 / REQ-201. Feature lines in the selection are skipped by the edge walk below, and until
-  // now that skip was silent — the user would see "JOIN — 2 edges joined" on a selection of three
-  // objects and have no way to learn which one was left out. Joining two feature lines is not
-  // merely unimplemented: it is undefined, because the shared endpoint would need one elevation and
-  // the two lines each supply their own, and nothing in REQ-087 or REQ-088 says which wins.
+  int flA = -1, flB = -1, nfl = 0;
+  for (const auto& se : st.selection) {
+    if (se.type == ST::FeatureLine) {
+      ++nfl;
+      if (flA < 0)
+        flA = se.index;
+      else if (flB < 0)
+        flB = se.index;
+    }
+  }
+  if (nfl == 2 && st.selection.size() == 2) {
+    JoinTwoFeatureLines(st, flA, flB, log);
+    return;
+  }
+
+  PushUndoSnapshot(st, "Join");
+
   int featureLinesSkipped = 0;
   for (const auto& se : st.selection)
     if (se.type == ST::FeatureLine)
@@ -21459,7 +22502,7 @@ void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log) {
   if (featureLinesSkipped > 0)
     log.push_back("JOIN — " + std::to_string(featureLinesSkipped) + " feature line" +
                   (featureLinesSkipped == 1 ? "" : "s") +
-                  " ignored: joining feature lines has no defined elevation at the shared end.");
+                  " ignored: select exactly two feature lines, or use JOINFEATURELINES.");
 
   struct Edge {
     float x0, y0, x1, y1;
@@ -24315,6 +25358,192 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
       }
       return;
     }
+    if (plotTok == "featurelinesfromobjects" || plotTok == "flfrom" || plotTok == "createfeaturelines") {
+      std::string rest;
+      std::getline(issIdle, rest);
+      rest = StringUtil::trimCopy(rest);
+      bool erase = false;
+      std::string name, style, layer, site, fromSurf;
+      std::istringstream rs(rest);
+      std::string tok;
+      while (rs >> tok) {
+        const std::string low = StringUtil::toLowerAsciiCopy(tok);
+        if (low == "erase")
+          erase = true;
+        else if (low == "keep")
+          erase = false;
+        else if (low.rfind("style=", 0) == 0)
+          style = tok.substr(6);
+        else if (low.rfind("layer=", 0) == 0)
+          layer = tok.substr(6);
+        else if (low.rfind("site=", 0) == 0)
+          site = tok.substr(5);
+        else if (low == "fromsurf" || low == "fromsurface")
+          rs >> fromSurf;
+        else {
+          if (!name.empty())
+            name += " ";
+          name += tok;
+        }
+      }
+      PushUndoSnapshot(st, "Create feature lines from objects");
+      ConvertSelectionToFeatureLines(st, name, erase, style, layer, site, fromSurf, log);
+      return;
+    }
+    if (plotTok == "flproperties" || plotTok == "featurelineproperties") {
+      std::string which;
+      if (!(issIdle >> which)) {
+        log.push_back("FLPROPERTIES — usage: FLPROPERTIES <n|name>.");
+        return;
+      }
+      int fi = 0;
+      if (!ResolveFeatureLineIndex(st, which, &fi, log, "FLPROPERTIES"))
+        return;
+      ReportFeatureLineProperties(st, fi + 1, log);
+      return;
+    }
+    if (plotTok == "joinfeaturelines" || plotTok == "fljoin") {
+      std::string ta, tb;
+      if (!(issIdle >> ta >> tb)) {
+        log.push_back("JOINFEATURELINES — usage: JOINFEATURELINES <n|name> <m|name>.");
+        return;
+      }
+      int a = 0, b = 0;
+      if (!ResolveFeatureLineIndex(st, ta, &a, log, "JOINFEATURELINES") ||
+          !ResolveFeatureLineIndex(st, tb, &b, log, "JOINFEATURELINES"))
+        return;
+      JoinTwoFeatureLines(st, a, b, log);
+      return;
+    }
+    if (plotTok == "breakfeatureline" || plotTok == "flbreak") {
+      int n = 0, pt = 0;
+      if (!(issIdle >> n >> pt)) {
+        log.push_back("BREAKFEATURELINE — usage: BREAKFEATURELINE <n> <interior point #>.");
+        return;
+      }
+      BreakFeatureLineAtVertex(st, n - 1, pt - 1, log);
+      return;
+    }
+    if (plotTok == "offsetfeatureline" || plotTok == "floffset") {
+      int n = 0;
+      float d = 0.f;
+      if (!(issIdle >> n >> d)) {
+        log.push_back("OFFSETFEATURELINE — usage: OFFSETFEATURELINE <n> <distance>.");
+        return;
+      }
+      OffsetFeatureLineByIndex(st, n - 1, d, log);
+      return;
+    }
+    if (plotTok == "filletfeatureline" || plotTok == "flfillet") {
+      int n = 0, pt = 0;
+      float r = 0.f;
+      if (!(issIdle >> n >> pt >> r)) {
+        log.push_back("FILLETFEATURELINE — usage: FILLETFEATURELINE <n> <corner point #> <radius>.");
+        return;
+      }
+      FilletFeatureLineCorner(st, n - 1, pt - 1, r, log);
+      return;
+    }
+    if (plotTok == "flarc" || plotTok == "flsetbulge") {
+      std::string which;
+      int seg = 0;
+      if (!(issIdle >> which >> seg)) {
+        log.push_back("FLARC — usage: FLARC <n|name> <segment #> [REVERSE | <bulge>].");
+        return;
+      }
+      int fi = 0;
+      if (!ResolveFeatureLineIndex(st, which, &fi, log, "FLARC"))
+        return;
+      int v0 = 0, v1 = 0;
+      if (!FeatureLineRange(st, fi, &v0, &v1) || seg < 1 || v0 + seg >= v1) {
+        log.push_back("FLARC — segment is out of range.");
+        return;
+      }
+      const int at = v0 + seg - 1;
+      std::string opt;
+      issIdle >> opt;
+      const std::string optLow = StringUtil::toLowerAsciiCopy(opt);
+      float bulgeVal = 0.f;
+      enum class ArcAct { Reverse, Set, Quarter };
+      ArcAct act = ArcAct::Quarter;
+      if (optLow == "reverse") {
+        act = ArcAct::Reverse;
+      } else if (!opt.empty()) {
+        char* end = nullptr;
+        bulgeVal = static_cast<float>(std::strtod(opt.c_str(), &end));
+        if (!end || *end != '\0') {
+          log.push_back("FLARC — bulge must be a number, or REVERSE.");
+          return;
+        }
+        act = ArcAct::Set;
+      }
+      PushUndoSnapshot(st, "Feature line arc");
+      SyncFeatureLineSidecars(st);
+      if (act == ArcAct::Reverse) {
+        if (static_cast<size_t>(at) < st.featureLineBulge.size())
+          st.featureLineBulge[static_cast<size_t>(at)] = -st.featureLineBulge[static_cast<size_t>(at)];
+        log.push_back("FLARC — segment direction reversed.");
+      } else if (act == ArcAct::Set) {
+        st.featureLineBulge[static_cast<size_t>(at)] = bulgeVal;
+        log.push_back("FLARC — bulge set.");
+      } else {
+        st.featureLineBulge[static_cast<size_t>(at)] = flgeom::BulgeFromSweepRad(1.5707963267948966);
+        log.push_back("FLARC — converted to a 90-degree arc.");
+      }
+      BumpCadGpuCache(st);
+      return;
+    }
+    if (plotTok == "flinsertpi") {
+      int n = 0;
+      float x = 0.f, y = 0.f;
+      if (!(issIdle >> n >> x >> y)) {
+        log.push_back("FLINSERTPI — usage: FLINSERTPI <n> <x> <y>.");
+        return;
+      }
+      InsertFeatureLinePi(st, n - 1, x, y, log);
+      return;
+    }
+    if (plotTok == "fldeletepi") {
+      int n = 0, pt = 0;
+      if (!(issIdle >> n >> pt)) {
+        log.push_back("FLDELETEPI — usage: FLDELETEPI <n> <point #>.");
+        return;
+      }
+      DeleteFeatureLinePi(st, n, pt, log);
+      return;
+    }
+    if (plotTok == "flhighlow") {
+      int n = 0;
+      if (!(issIdle >> n)) {
+        log.push_back("FLHIGHLOW — usage: FLHIGHLOW <n> [INSERT].");
+        return;
+      }
+      std::string opt;
+      issIdle >> opt;
+      const bool ins = StringUtil::toLowerAsciiCopy(opt) == "insert";
+      ListOrInsertHighLow(st, n - 1, ins, log);
+      return;
+    }
+    if (plotTok == "setfeatureelevation") {
+      int n = 0, pt = 0;
+      float z = 0.f;
+      if (!(issIdle >> n >> pt >> z)) {
+        log.push_back("SETFEATUREELEVATION — usage: SETFEATUREELEVATION <n> <point> <elev>.");
+        return;
+      }
+      SetFeatureLinePointElevation(st, n, pt, z, log);
+      return;
+    }
+    if (plotTok == "setfeaturegrade") {
+      int n = 0, pt = 0;
+      double g = 0.0;
+      if (!(issIdle >> n >> pt >> g)) {
+        log.push_back("SETFEATUREGRADE — usage: SETFEATUREGRADE <n> <point> <percent>.");
+        return;
+      }
+      SetFeatureLineGradeAhead(st, n, pt, g, log);
+      return;
+    }
     // REQ-088 — the elevation editor's whole command surface. One verb with sub-actions rather than
     // seven top-level words, following UNDESIGNATE's shape:
     //
@@ -24354,12 +25583,16 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     if (plotTok == "flelev" || plotTok == "featurelineelev") {
       std::istringstream& fe = issIdle;  // the verb is already consumed
-      int flNum = 0;
-      if (!(fe >> flNum)) {
+      std::string flTok;
+      if (!(fe >> flTok)) {
         log.push_back("FLELEV — usage: FLELEV <feature line #> [SET|GRADEAHEAD|GRADEBACK|RAISE|"
-                      "INSERT|DELETE ...]. FLELEV <n> alone lists the table.");
+                      "INSERT|DELETE|FROMSURF|RELATIVE|REF ...]. FLELEV <n> alone lists the table.");
         return;
       }
+      int fi = 0;
+      if (!ResolveFeatureLineIndex(st, flTok, &fi, log, "FLELEV"))
+        return;
+      const int flNum = fi + 1;
       std::string sub;
       if (!(fe >> sub)) {
         std::vector<FeatureLineElevRow> rows;
@@ -24435,8 +25668,49 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
         InsertFeatureLineElevationPoint(st, flNum, station, static_cast<float>(elev), log);
         return;
       }
+      if (sub == "fromsurf" || sub == "fromsurface") {
+        std::string rest;
+        std::getline(fe, rest);
+        rest = StringUtil::trimCopy(rest);
+        bool insertPts = false;
+        const std::string low = StringUtil::toLowerAsciiCopy(rest);
+        if (low.size() >= 6 && low.compare(low.size() - 6, 6, "insert") == 0) {
+          insertPts = true;
+          rest = StringUtil::trimCopy(rest.substr(0, rest.size() - 6));
+        }
+        ApplyFeatureLineFromSurf(st, flNum - 1, rest, insertPts, log);
+        return;
+      }
+      if (sub == "relative") {
+        std::string rest;
+        std::getline(fe, rest);
+        ApplyFeatureLineRelative(st, flNum - 1, StringUtil::trimCopy(rest), log);
+        return;
+      }
+      if (sub == "ref") {
+        int pt = 0;
+        std::string srcTok;
+        int srcPt = 0;
+        if (!(fe >> pt >> srcTok >> srcPt)) {
+          log.push_back("FLELEV — REF needs <point> <source feature line> <source point>.");
+          return;
+        }
+        int srcFi = 0;
+        if (!ResolveFeatureLineIndex(st, srcTok, &srcFi, log, "FLELEV"))
+          return;
+        int sv0 = 0, sv1 = 0;
+        if (!FeatureLineRange(st, srcFi, &sv0, &sv1) || srcPt < 1 || sv0 + srcPt > sv1) {
+          log.push_back("FLELEV — source point is out of range.");
+          return;
+        }
+        const float z = st.featureLineVerts[static_cast<size_t>(sv0 + srcPt - 1) * 3 + 2];
+        SetFeatureLinePointElevation(st, flNum, pt, z, log);
+        log.push_back("FLELEV REF — copied elevation from feature line " + std::to_string(srcFi + 1) +
+                      " point " + std::to_string(srcPt) + ".");
+        return;
+      }
       log.push_back("FLELEV — unknown option \"" + sub +
-                    "\". Use SET, GRADEAHEAD, GRADEBACK, RAISE, INSERT, or DELETE.");
+                    "\". Use SET, GRADEAHEAD, GRADEBACK, RAISE, INSERT, DELETE, FROMSURF, RELATIVE, or REF.");
       return;
     }
     // Surface definition commands (REQ-068/069). Each reads the WHOLE remainder of the line — names
@@ -25031,6 +26305,16 @@ void ProcessCommandLineSubmit(char* cmdBuf, int cmdBufSize, AppCommandState& st,
     }
     if (lowFl == "end") {
       CommitFeatureLineDraft(st, false, log);
+      return;
+    }
+    if (lowFl == "a") {
+      if (st.featureLineDraftVerts.size() < 3) {
+        log.push_back("FEATURELINE — A needs a start point first.");
+        return;
+      }
+      st.featureLineDraftArcArmed = true;
+      st.featureLineDraftArcThroughValid = false;
+      log.push_back("FEATURELINE — arc: specify a through-point, then the end.");
       return;
     }
     bool nextIsElevPoint = false;

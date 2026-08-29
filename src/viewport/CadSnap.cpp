@@ -3,6 +3,7 @@
 #include "SurveyPoints.hpp"
 #include "geom2d.hpp"
 #include "util/curveintersect.hpp"
+#include "util/featurelinegeom.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -37,6 +38,55 @@ constexpr float kHugePickDistSq = 1.e30f;
   const float dx = px - qx;
   const float dy = py - qy;
   return dx * dx + dy * dy;
+}
+
+void ClosestOnSeg3(float px, float py, float ax, float ay, float az, float bx, float by, float bz, float* qx,
+                   float* qy, float* qz) {
+  const float vx = bx - ax;
+  const float vy = by - ay;
+  const float len2 = vx * vx + vy * vy;
+  float t = 0.f;
+  if (len2 > 1.e-18f)
+    t = std::clamp(((px - ax) * vx + (py - ay) * vy) / len2, 0.f, 1.f);
+  *qx = ax + t * vx;
+  *qy = ay + t * vy;
+  *qz = az + t * (bz - az);
+}
+
+template <typename Fn>
+void ForEachFeatureLineTessEdge(const AppCommandState& cmd, Fn&& fn) {
+  const int n =
+      cmd.featureLineOffsets.size() > 0 ? static_cast<int>(cmd.featureLineOffsets.size()) - 1 : 0;
+  for (int fi = 0; fi < n; ++fi) {
+    const int v0 = cmd.featureLineOffsets[static_cast<size_t>(fi)];
+    const int v1 = cmd.featureLineOffsets[static_cast<size_t>(fi + 1)];
+    const bool closed =
+        static_cast<size_t>(fi) < cmd.featureLineClosed.size() && cmd.featureLineClosed[static_cast<size_t>(fi)];
+    const int nv = v1 - v0;
+    if (nv < 2)
+      continue;
+    const int nEdges = closed ? nv : nv - 1;
+    for (int e = 0; e < nEdges; ++e) {
+      const int ia = v0 + e;
+      const int ib = v0 + ((e + 1) % nv);
+      const size_t a = static_cast<size_t>(ia) * 3;
+      const size_t b = static_cast<size_t>(ib) * 3;
+      if (b + 2 >= cmd.featureLineVerts.size())
+        break;
+      const float bu =
+          (static_cast<size_t>(ia) < cmd.featureLineBulge.size()) ? cmd.featureLineBulge[static_cast<size_t>(ia)]
+                                                                : 0.f;
+      std::vector<flgeom::Vec3> tess;
+      flgeom::TessellateBulgeSegment(cmd.featureLineVerts[a], cmd.featureLineVerts[a + 1], cmd.featureLineVerts[a + 2],
+                                     cmd.featureLineVerts[b], cmd.featureLineVerts[b + 1], cmd.featureLineVerts[b + 2],
+                                     bu, &tess, true);
+      for (size_t k = 0; k + 1 < tess.size(); ++k) {
+        fn(static_cast<float>(tess[k].x), static_cast<float>(tess[k].y), static_cast<float>(tess[k].z),
+           static_cast<float>(tess[k + 1].x), static_cast<float>(tess[k + 1].y),
+           static_cast<float>(tess[k + 1].z));
+      }
+    }
+  }
 }
 
 [[nodiscard]] float MinDistSqToSurveyMarker(float wx, float wy, float e, float n, float halfArmWorld) {
@@ -406,6 +456,17 @@ void GatherNearCursor(const AppCommandState& cmd, double wx, double wy, double t
       addEdge(v1 - 1, v0);
   }
 
+  ForEachFeatureLineTessEdge(cmd, [&](float ax, float ay, float az, float bx, float by, float bz) {
+    IsectSeg s{ax, ay, az, bx, by, bz};
+    const double mx = 0.5 * (s.x0 + s.x1);
+    const double my = 0.5 * (s.y0 + s.y1);
+    const double mz = 0.5 * (s.z0 + s.z1);
+    const double r = 0.5 * std::sqrt((s.x1 - s.x0) * (s.x1 - s.x0) + (s.y1 - s.y0) * (s.y1 - s.y0) +
+                                     (s.z1 - s.z0) * (s.z1 - s.z0));
+    if (NearCursor(ray, wx, wy, mx, my, mz, r, tol))
+      segs->push_back(s);
+  });
+
   const auto& C = cmd.userCirclesCxCyZR;
   if (C.size() % 4 == 0) {
     for (size_t i = 0; i + 3 < C.size(); i += 4) {
@@ -635,6 +696,7 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
   const bool wantSurveyPoint = want(Kind::SurveyCenter, cmd.objectSnapSurveyPoint);
   const bool wantPerpendicular = want(Kind::Perpendicular, cmd.objectSnapPerpendicular);
   const bool wantSurface = want(Kind::Surface, cmd.objectSnapSurface);
+  const bool wantNearest = want(Kind::Nearest, cmd.objectSnapNearest);
 
   float refPx = 0.f;
   float refPy = 0.f;
@@ -674,6 +736,11 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       }
       if (wantMidpoint)
         Consider(&acc, wx, wy, 0.5f * (x0 + x1), 0.5f * (y0 + y1), Kind::Midpoint, tolWorld, 0.5f * (z0 + z1));
+      if (wantNearest) {
+        float qx = 0.f, qy = 0.f, qz = 0.f;
+        ClosestOnSeg3(static_cast<float>(wx), static_cast<float>(wy), x0, y0, z0, x1, y1, z1, &qx, &qy, &qz);
+        Consider(&acc, wx, wy, qx, qy, Kind::Nearest, tolWorld, qz);
+      }
       if (havePerpRef)
         AppendPerpendicularFromRef(refPx, refPy, wx, wy, x0, y0, x1, y1, tolWorld, &acc, z0, z1);
     }
@@ -713,6 +780,11 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       }
       if (wantMidpoint)
         Consider(&acc, wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld, 0.5f * (az + bz));
+      if (wantNearest) {
+        float qx = 0.f, qy = 0.f, qz = 0.f;
+        ClosestOnSeg3(static_cast<float>(wx), static_cast<float>(wy), ax, ay, az, bx, by, bz, &qx, &qy, &qz);
+        Consider(&acc, wx, wy, qx, qy, Kind::Nearest, tolWorld, qz);
+      }
       if (havePerpRef)
         AppendPerpendicularFromRef(refPx, refPy, wx, wy, ax, ay, bx, by, tolWorld, &acc, az, bz);
     };
@@ -731,6 +803,22 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       }
     }
   }
+
+  ForEachFeatureLineTessEdge(cmd, [&](float ax, float ay, float az, float bx, float by, float bz) {
+    if (wantEndpoint) {
+      Consider(&acc, wx, wy, ax, ay, Kind::Endpoint, tolWorld, az);
+      Consider(&acc, wx, wy, bx, by, Kind::Endpoint, tolWorld, bz);
+    }
+    if (wantMidpoint)
+      Consider(&acc, wx, wy, 0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, tolWorld, 0.5f * (az + bz));
+    if (wantNearest) {
+      float qx = 0.f, qy = 0.f, qz = 0.f;
+      ClosestOnSeg3(static_cast<float>(wx), static_cast<float>(wy), ax, ay, az, bx, by, bz, &qx, &qy, &qz);
+      Consider(&acc, wx, wy, qx, qy, Kind::Nearest, tolWorld, qz);
+    }
+    if (havePerpRef)
+      AppendPerpendicularFromRef(refPx, refPy, wx, wy, ax, ay, bx, by, tolWorld, &acc, az, bz);
+  });
 
   // REQ-303 (issue #80): while POLYLINE/3DPOLY is actively drawing (they share one state machine —
   // polylineDraft3d only changes the label and Z handling), its own start point is offered as an
@@ -778,6 +866,12 @@ Hit FindBest(double wx, double wy, const AppCommandState& cmd, bool commandActiv
       if (wantMidpoint)
         Consider(&acc, wx, wy, static_cast<float>(0.5 * (x0 + x1)), static_cast<float>(0.5 * (y0 + y1)), Kind::Midpoint,
                  tolWorld, a.z);  // the arc's plane, same as its endpoint candidates above
+      if (wantNearest) {
+        float qx = 0.f, qy = 0.f, qz = 0.f;
+        ClosestOnSeg3(static_cast<float>(wx), static_cast<float>(wy), static_cast<float>(x0), static_cast<float>(y0),
+                      a.z, static_cast<float>(x1), static_cast<float>(y1), a.z, &qx, &qy, &qz);
+        Consider(&acc, wx, wy, qx, qy, Kind::Nearest, tolWorld, qz);
+      }
       if (havePerpRef)
         AppendPerpendicularFromRef(refPx, refPy, wx, wy, static_cast<float>(x0), static_cast<float>(y0),
                                    static_cast<float>(x1), static_cast<float>(y1), tolWorld, &acc, a.z, a.z);
@@ -1105,6 +1199,11 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       if (closed && v1 - v0 >= 2)
         pushEdge(v1 - 1, v0);
     }
+    ForEachFeatureLineTessEdge(cmd, [&](float ax, float ay, float az, float bx, float by, float bz) {
+      PushSnapPickerEntry(ax, ay, Kind::Endpoint, sortWorldX, sortWorldY, out, az);
+      PushSnapPickerEntry(bx, by, Kind::Endpoint, sortWorldX, sortWorldY, out, bz);
+      (void)by;
+    });
     for (const CadArc& a : cmd.userArcs) {
       if (a.r <= 1e-6f)
         continue;
@@ -1149,6 +1248,10 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       if (closed && v1 - v0 >= 2)
         pushEdgeMid(v1 - 1, v0);
     }
+    ForEachFeatureLineTessEdge(cmd, [&](float ax, float ay, float az, float bx, float by, float bz) {
+      PushSnapPickerEntry(0.5f * (ax + bx), 0.5f * (ay + by), Kind::Midpoint, sortWorldX, sortWorldY, out,
+                          0.5f * (az + bz));
+    });
     constexpr int kArcSnapSeg = 24;
     for (const CadArc& a : cmd.userArcs) {
       if (a.r <= 1e-6f || kArcSnapSeg < 1)
@@ -1245,6 +1348,9 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       if (closed && v1 - v0 >= 2)
         pushEdgePerp(v1 - 1, v0);
     }
+    ForEachFeatureLineTessEdge(cmd, [&](float ax, float ay, float az, float bx, float by, float bz) {
+      PushPerpFootEntry(refPx, refPy, ax, ay, bx, by, sortWorldX, sortWorldY, out, az, bz);
+    });
     constexpr int kArcSnapSeg = 24;
     for (const CadArc& a : cmd.userArcs) {
       if (a.r <= 1e-6f || kArcSnapSeg < 1)
@@ -1340,6 +1446,23 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
       PushSnapPickerEntry(sortWorldX, sortWorldY, Kind::Surface, sortWorldX, sortWorldY, out, z);
     break;
   }
+  case Kind::Nearest: {
+    ForEachFeatureLineTessEdge(cmd, [&](float ax, float ay, float az, float bx, float by, float bz) {
+      float qx = 0.f, qy = 0.f, qz = 0.f;
+      ClosestOnSeg3(sortWorldX, sortWorldY, ax, ay, az, bx, by, bz, &qx, &qy, &qz);
+      PushSnapPickerEntry(qx, qy, Kind::Nearest, sortWorldX, sortWorldY, out, qz);
+    });
+    const auto& Ln = cmd.userLinesFlat;
+    if (Ln.size() % 6 == 0) {
+      for (size_t i = 0; i + 5 < Ln.size(); i += 6) {
+        float qx = 0.f, qy = 0.f, qz = 0.f;
+        ClosestOnSeg3(sortWorldX, sortWorldY, Ln[i], Ln[i + 1], Ln[i + 2], Ln[i + 3], Ln[i + 4], Ln[i + 5], &qx,
+                      &qy, &qz);
+        PushSnapPickerEntry(qx, qy, Kind::Nearest, sortWorldX, sortWorldY, out, qz);
+      }
+    }
+    break;
+  }
   }
   SortDedupeSnapPicker(out);
 }
@@ -1385,6 +1508,18 @@ Hit FindGripSnap(double wx, double wy, const AppCommandState& cmd, float tolWorl
           if (xIdx + 2 >= cmd.userPolylineVerts.size()) break;
           gripCandidate(cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1],
                         cmd.userPolylineVerts[xIdx + 2]);
+        }
+      }
+    } else if (sel.type == SelectedEntity::Type::FeatureLine) {
+      const int nf = static_cast<int>(cmd.featureLineOffsets.size() > 0 ? cmd.featureLineOffsets.size() - 1 : 0);
+      if (sel.index >= 0 && sel.index < nf) {
+        const int startV = cmd.featureLineOffsets[static_cast<size_t>(sel.index)];
+        const int endV = cmd.featureLineOffsets[static_cast<size_t>(sel.index + 1)];
+        for (int vi = 0; vi < endV - startV; ++vi) {
+          const size_t xIdx = static_cast<size_t>(startV + vi) * 3;
+          if (xIdx + 2 >= cmd.featureLineVerts.size())
+            break;
+          gripCandidate(cmd.featureLineVerts[xIdx], cmd.featureLineVerts[xIdx + 1], cmd.featureLineVerts[xIdx + 2]);
         }
       }
     } else if (sel.type == SelectedEntity::Type::Arc) {

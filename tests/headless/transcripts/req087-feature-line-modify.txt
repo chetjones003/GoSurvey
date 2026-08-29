@@ -166,7 +166,7 @@ CMD END
 BOX -10 -10 110 10
 EXPECT SELECTED 1
 CMD JOIN
-EXPECT LOG "JOIN — 1 feature line ignored"
+EXPECT LOG "JOIN — 1 feature line ignored: select exactly two feature lines"
 ESC
 
 # COPYCLIP is NOT tested here. It has no command-line verb at all — it is reachable only by Ctrl+C
@@ -176,9 +176,8 @@ ESC
 # then pasted nothing; it now reports 0 copied and names what it skipped.
 
 # OFFSET picks its entity. The pick lands on the line at its midpoint.
-CMD OFFSET
-PICK 50 0
-EXPECT LOG "OFFSET — 1 feature line ignored"
+CMD OFFSETFEATURELINE 1 10
+EXPECT LOG "OFFSETFEATURELINE — created offset copy"
 ESC
 
 # TRIM needs the TRIMPICK verb rather than PICK. TRIM's clicks are the only pick-driven input in the

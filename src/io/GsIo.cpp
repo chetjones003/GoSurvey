@@ -525,6 +525,8 @@ json BuildRoot(const AppCommandState& st) {
   // them, and the reader guards on that.
   doc["featureLineOffsets"] = st.featureLineOffsets;
   doc["featureLineVerts"] = st.featureLineVerts;
+  doc["featureLineBulge"] = st.featureLineBulge;
+  doc["featureLineRelOffset"] = st.featureLineRelOffset;
   json flClosed = json::array();
   for (uint8_t c : st.featureLineClosed)
     flClosed.push_back(static_cast<int>(c));
@@ -538,6 +540,10 @@ json BuildRoot(const AppCommandState& st) {
     json o;
     o["name"] = i.name;
     o["description"] = i.description;
+    o["style"] = i.style;
+    o["site"] = i.site;
+    o["elevMode"] = static_cast<int>(i.elevMode);
+    o["relativeSurface"] = i.relativeSurface;
     flInfo.push_back(std::move(o));
   }
   doc["featureLineInfo"] = std::move(flInfo);
@@ -911,6 +917,7 @@ json BuildRoot(const AppCommandState& st) {
   settings["objectSnapIntersection"] = st.objectSnapIntersection;
   settings["objectSnapApparentIntersection"] = st.objectSnapApparentIntersection;
   settings["objectSnapSurface"] = st.objectSnapSurface;
+  settings["objectSnapNearest"] = st.objectSnapNearest;
   settings["objectSnapAperturePx"] = st.objectSnapAperturePx;
   settings["objectSnapGlyphHalfPx"] = st.objectSnapGlyphHalfPx;
 
@@ -1091,6 +1098,7 @@ void ApplySettingsFromJson(AppCommandState& st, const json& s) {
   b(s, "objectSnapIntersection", &st.objectSnapIntersection);
   b(s, "objectSnapApparentIntersection", &st.objectSnapApparentIntersection);
   b(s, "objectSnapSurface", &st.objectSnapSurface);
+  b(s, "objectSnapNearest", &st.objectSnapNearest);
   num(s, "objectSnapAperturePx", &st.objectSnapAperturePx);
   num(s, "objectSnapGlyphHalfPx", &st.objectSnapGlyphHalfPx);
   st.objectSnapAperturePx = std::clamp(st.objectSnapAperturePx, 4.f, 64.f);
@@ -1525,6 +1533,8 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   st.featureLineVerts.clear();
   st.featureLineClosed.clear();
   st.featureLineElevPt.clear();
+  st.featureLineBulge.clear();
+  st.featureLineRelOffset.clear();
   st.featureLineInfo.clear();
   st.featureLineAttrs.clear();
   if (doc.contains("featureLineOffsets") && doc["featureLineOffsets"].is_array())
@@ -1539,18 +1549,36 @@ void ApplyDocumentFromJson(AppCommandState& st, const json& doc, std::vector<std
   if (doc.contains("featureLineElevPt") && doc["featureLineElevPt"].is_array())
     for (const auto& v : doc["featureLineElevPt"])
       st.featureLineElevPt.push_back(static_cast<uint8_t>(std::clamp(v.get<int>(), 0, 1)));
+  if (doc.contains("featureLineBulge") && doc["featureLineBulge"].is_array())
+    for (const auto& v : doc["featureLineBulge"])
+      st.featureLineBulge.push_back(v.get<float>());
+  if (doc.contains("featureLineRelOffset") && doc["featureLineRelOffset"].is_array())
+    for (const auto& v : doc["featureLineRelOffset"])
+      st.featureLineRelOffset.push_back(v.get<float>());
   if (doc.contains("featureLineInfo") && doc["featureLineInfo"].is_array())
     for (const auto& o : doc["featureLineInfo"]) {
       CadFeatureLineInfo i;
       if (o.is_object()) {
         i.name = o.value("name", std::string());
         i.description = o.value("description", std::string());
+        i.style = o.value("style", std::string());
+        i.site = o.value("site", std::string());
+        i.relativeSurface = o.value("relativeSurface", std::string());
+        const int em = o.value("elevMode", 0);
+        i.elevMode = (em == 1) ? CadFeatureLineInfo::ElevMode::Relative : CadFeatureLineInfo::ElevMode::Absolute;
       }
       st.featureLineInfo.push_back(std::move(i));
     }
   if (doc.contains("featureLineAttrs") && doc["featureLineAttrs"].is_array())
     for (const auto& o : doc["featureLineAttrs"])
       st.featureLineAttrs.push_back(EntityAttributesFromJson(o));
+  {
+    const size_t nv = st.featureLineVerts.size() / 3;
+    if (st.featureLineBulge.size() != nv)
+      st.featureLineBulge.resize(nv, 0.f);
+    if (st.featureLineRelOffset.size() != nv)
+      st.featureLineRelOffset.resize(nv, 0.f);
+  }
 
   st.cadAnnotations.clear();
   for (const auto& o : doc["annotations"])

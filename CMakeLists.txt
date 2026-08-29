@@ -601,6 +601,7 @@ if(GOSURVEY_BUILD_TESTS)
     tests/TinVolumeTests.cpp
     tests/Issue119SurfaceTests.cpp
     tests/SurfaceProfileTests.cpp
+    tests/FeatureLineGeomTests.cpp
     # REQ-070 surface style table (ADR-036 (d)). Header-only and pure, so it needs no source entry
     # below. Three of REQ-070's five acceptance conditions — the deleted-style fallback, the legacy
     # empty-name fallback, and the rejection of a major interval that is not a whole multiple of the

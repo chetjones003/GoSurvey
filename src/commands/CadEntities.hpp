@@ -481,6 +481,11 @@ struct CadSurfaceBreakline {
 struct CadFeatureLineInfo {
   std::string name;         ///< What the user called it. Not required to be unique.
   std::string description;
+  std::string style;        ///< Style name string (REQ-156); empty = default.
+  std::string site;         ///< Site / group label (REQ-156).
+  enum class ElevMode : std::uint8_t { Absolute = 0, Relative = 1 };
+  ElevMode elevMode = ElevMode::Absolute;  ///< REQ-159
+  std::string relativeSurface;             ///< Named TIN when Relative.
 };
 
 /// One row of a feature line's elevation table (REQ-088).

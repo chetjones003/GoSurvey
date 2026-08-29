@@ -1354,8 +1354,16 @@ Resolves the SPEC GAP raised by TASK-056 §3. **Supersedes (b) and (c) above.**
   grade ahead are all derived from the vertex chain on demand. Storing a grade would create a second
   source of truth for the same elevation, and the two would disagree the moment geometry moved.
   (f) **Not in this ADR and not designed for:** feature lines from an alignment, from a corridor, or
-  from a stepped offset; grading objects; feature line styles beyond a name; weeding and supplementing
-  factors. `Create Feature Line` and `Create Feature Lines from Objects` are the two creation paths.
+  from a stepped offset; grading objects; a style *table* beyond a name string; weeding and
+  supplementing factors. Labels are a follow-up. `Create Feature Line` and `Create Feature Lines from
+  Objects` are the two creation paths.
+  (h) **Curved segments are bulge, not tessellated vertices** (D-2026-08-28-n / REQ-155). Parallel
+  `featureLineBulge` (one float per vertex, outgoing segment; 0 = line). Tessellation is a consumer
+  view (render, snap nearest, TIN constraints) with a bounded chord count.
+  (i) **OFFSET, JOIN, BREAK and FILLET handle FeatureLine** (D-2026-08-28-n / REQ-157), reversing the
+  TASK-079 named refusals now that issue #118 supplies the missing elevation/join rules.
+  (j) **Relative elevations are per-vertex offsets** (D-2026-08-28-n / REQ-159) in
+  `featureLineRelOffset`, parallel to vertices. Mode and surface name live on `CadFeatureLineInfo`.
 - (g) **The plan geometry lives in its own store** — `featureLineVerts` / `featureLineOffsets` /
   `featureLineClosed` / `featureLineAttrs`, behind a ninth `EntityKind::FeatureLine`. **Decided by the
   user 2026-08-19 with the measurement below in front of them**, after this ADR recommended the

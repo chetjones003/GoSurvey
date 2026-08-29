@@ -999,6 +999,7 @@ int main()
     ext.featureLineOffsets = &cmd.featureLineOffsets;
     ext.featureLineClosed = &cmd.featureLineClosed;
     ext.featureLineAttrs = &cmd.featureLineAttrs;
+    ext.featureLineBulge = &cmd.featureLineBulge;
     ext.drawingLayers = &cmd.drawingLayerTable;
     ext.hiddenEntityIds = &cmd.hiddenEntityIds;  // object isolation (REQ-084 (d) / ADR-034)
 

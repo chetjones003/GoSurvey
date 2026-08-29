@@ -19,7 +19,9 @@ enum class Kind {
   /// points differ, the one nearer the camera is returned (REQ-062).
   ApparentIntersection,
   Grip,
-  Surface
+  Surface,
+  /// Closest point on an edge (REQ-158 / issue #118). Weaker than Endpoint/Midpoint so vertices win.
+  Nearest
 };
 
 struct Hit {
@@ -97,6 +99,8 @@ void GatherAllSnapsOfKind(Kind kind, float sortWorldX, float sortWorldY, const A
     return 0;
   case Kind::Surface:
     return 0;  ///< Weaker than endpoints so vertices still win (REQ-127).
+  case Kind::Nearest:
+    return 0;  ///< Closest point on an edge; vertices still win via Endpoint/Midpoint.
   case Kind::Grip:
     return 4; ///< Beats all geometry snaps; no glyph is drawn for this kind.
   }

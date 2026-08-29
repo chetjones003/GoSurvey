@@ -706,6 +706,23 @@ static void DrawSurfaceRolloverReadout(const AppCommandState& cmd) {
   ImGui::EndTooltip();
 }
 
+static void DrawFeatureLineRolloverReadout(const AppCommandState& cmd) {
+  if (!cmd.featureLineHoverValid)
+    return;
+  if (!ImGui::BeginTooltip())
+    return;
+  ImGui::TextUnformatted("Feature Line");
+  ImGui::Spacing();
+  const float valueX = ImGui::CalcTextSize("Elevation").x + ImGui::GetStyle().ItemSpacing.x * 2.f;
+  ImGui::TextDisabled("Name");
+  ImGui::SameLine(valueX);
+  ImGui::TextUnformatted(cmd.featureLineHoverName.empty() ? "(unnamed)" : cmd.featureLineHoverName.c_str());
+  ImGui::TextDisabled("Elevation");
+  ImGui::SameLine(valueX);
+  ImGui::TextUnformatted(cmd.featureLineHoverElevation.c_str());
+  ImGui::EndTooltip();
+}
+
 // ---------------------------------------------------------------------------
 // REQ-072 analysis legend (TASK-086 §6 (4))
 // ---------------------------------------------------------------------------
@@ -3389,6 +3406,14 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
             StartPolylineCommand(cmd, log);
           RibbonItemHelp("Polyline — chain of segments; optional close.\nCommand bar: POLYLINE or PL");
           ImGui::SameLine(0, 4);
+          if (gridBtn("##RibbonFeatureLine", RibbonIconKind::Polyline))
+            StartFeatureLineCommand(cmd, "", log);
+          RibbonItemHelp("Feature Line — 3D design linework with per-vertex elevations.\nCommand bar: FEATURELINE or FL");
+          ImGui::SameLine(0, 4);
+          if (gridBtn("##RibbonFlFrom", RibbonIconKind::Polyline))
+            SubmitRibbonCommand(cmd, log, "FEATURELINESFROMOBJECTS");
+          RibbonItemHelp("Create feature lines from selected lines, arcs, or polylines.\nCommand bar: FLFROM / FEATURELINESFROMOBJECTS");
+          ImGui::SameLine(0, 4);
           if (gridBtn("##RibbonRect", RibbonIconKind::Rect))
             StartRectCommand(cmd, log);
           RibbonItemHelp("Rectangle — two opposite corners; stored as a closed polyline.\nCommand bar: RECT, RECTANG or RECTANGLE");
@@ -3446,7 +3471,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           if (smallBtn("##RibbonOffset", RibbonIconKind::Offset, "Offset", c2))
             StartOffsetCommand(cmd, log);
           RibbonItemHelp(
-              "Offset — parallel lines, concentric circles/arcs, offset polylines and ellipses.\nCommand bar: OFFSET or O");
+              "Offset — parallel lines, concentric circles/arcs, offset polylines, ellipses, and feature lines.\nCommand bar: OFFSET or O");
           ImGui::EndGroup();
 
           ImGui::SameLine(0, 4);
@@ -3454,7 +3479,7 @@ void DrawRibbonBar(float height, AppCommandState& cmd, std::vector<std::string>&
           ImGui::BeginGroup();
           if (smallBtn("##RibbonJoin", RibbonIconKind::Join, "Join", c3))
             StartJoinCommand(cmd, log);
-          RibbonItemHelp("Join — merge colinear line segments.\nCommand bar: JOIN or J");
+          RibbonItemHelp("Join — merge colinear line segments, or two feature lines at a shared end.\nCommand bar: JOIN or J");
           if (smallBtn("##RibbonMirror", RibbonIconKind::Mirror, "Mirror", c3))
             StartMirrorCommand(cmd, log);
           RibbonItemHelp("Mirror — flip selection across a mirror line.\nCommand bar: MIRROR or MI");
@@ -4702,6 +4727,16 @@ const EntityAttributes& PolylineAttr(const AppCommandState& cmd, int idx) {
   return cmd.userPolylineAttrs[u];
 }
 
+const EntityAttributes& FeatureLineAttr(const AppCommandState& cmd, int idx) {
+  static const EntityAttributes kDef{};
+  if (idx < 0)
+    return kDef;
+  const size_t u = static_cast<size_t>(idx);
+  if (u >= cmd.featureLineAttrs.size())
+    return kDef;
+  return cmd.featureLineAttrs[u];
+}
+
 const EntityAttributes& AnnAttr(const AppCommandState& cmd, int idx) {
   static const EntityAttributes kDef{};
   if (idx < 0)
@@ -4833,6 +4868,17 @@ void CollectGeneralAttrs(const AppCommandState& cmd, const std::vector<SelectedE
       if (e.index < 0 || e.index >= np)
         continue;
       const EntityAttributes& a = PolylineAttr(cmd, e.index);
+      layers->push_back(a.layer);
+      colors->push_back(a.color);
+      ltypes->push_back(a.linetype);
+      lws->push_back(a.lineweightMm);
+      trans->push_back(a.transparency);
+    } else if (e.type == SelectedEntity::Type::FeatureLine) {
+      const int nf =
+          static_cast<int>(cmd.featureLineOffsets.size() > 0 ? cmd.featureLineOffsets.size() - 1 : 0);
+      if (e.index < 0 || e.index >= nf)
+        continue;
+      const EntityAttributes& a = FeatureLineAttr(cmd, e.index);
       layers->push_back(a.layer);
       colors->push_back(a.color);
       ltypes->push_back(a.linetype);
@@ -5154,6 +5200,12 @@ void ApplyLayerToSelection(AppCommandState& cmd, const std::string& v) {
       if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
         continue;
       cmd.userPolylineAttrs[static_cast<size_t>(e.index)].layer = v;
+    } else if (e.type == SelectedEntity::Type::FeatureLine) {
+      const int nf =
+          static_cast<int>(cmd.featureLineOffsets.size() > 0 ? cmd.featureLineOffsets.size() - 1 : 0);
+      if (e.index < 0 || e.index >= nf || static_cast<size_t>(e.index) >= cmd.featureLineAttrs.size())
+        continue;
+      cmd.featureLineAttrs[static_cast<size_t>(e.index)].layer = v;
     }
   }
   SyncDrawingLayerTableWithGeometry(cmd);
@@ -5202,6 +5254,12 @@ void ApplyColorToSelection(AppCommandState& cmd, const std::string& v) {
       if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
         continue;
       cmd.userPolylineAttrs[static_cast<size_t>(e.index)].color = v;
+    } else if (e.type == SelectedEntity::Type::FeatureLine) {
+      const int nf =
+          static_cast<int>(cmd.featureLineOffsets.size() > 0 ? cmd.featureLineOffsets.size() - 1 : 0);
+      if (e.index < 0 || e.index >= nf || static_cast<size_t>(e.index) >= cmd.featureLineAttrs.size())
+        continue;
+      cmd.featureLineAttrs[static_cast<size_t>(e.index)].color = v;
     }
   }
   BumpCadGpuCache(cmd);
@@ -5249,6 +5307,12 @@ void ApplyLinetypeToSelection(AppCommandState& cmd, const std::string& v) {
       if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
         continue;
       cmd.userPolylineAttrs[static_cast<size_t>(e.index)].linetype = v;
+    } else if (e.type == SelectedEntity::Type::FeatureLine) {
+      const int nf =
+          static_cast<int>(cmd.featureLineOffsets.size() > 0 ? cmd.featureLineOffsets.size() - 1 : 0);
+      if (e.index < 0 || e.index >= nf || static_cast<size_t>(e.index) >= cmd.featureLineAttrs.size())
+        continue;
+      cmd.featureLineAttrs[static_cast<size_t>(e.index)].linetype = v;
     }
   }
   BumpCadGpuCache(cmd);
@@ -5295,6 +5359,12 @@ void ApplyLineweightToSelection(AppCommandState& cmd, float mm) {
       if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
         continue;
       cmd.userPolylineAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
+    } else if (e.type == SelectedEntity::Type::FeatureLine) {
+      const int nf =
+          static_cast<int>(cmd.featureLineOffsets.size() > 0 ? cmd.featureLineOffsets.size() - 1 : 0);
+      if (e.index < 0 || e.index >= nf || static_cast<size_t>(e.index) >= cmd.featureLineAttrs.size())
+        continue;
+      cmd.featureLineAttrs[static_cast<size_t>(e.index)].lineweightMm = stored;
     }
   }
   BumpCadGpuCache(cmd);
@@ -5341,6 +5411,12 @@ void ApplyTransparencyToSelection(AppCommandState& cmd, float a) {
       if (e.index < 0 || e.index >= np || static_cast<size_t>(e.index) >= cmd.userPolylineAttrs.size())
         continue;
       cmd.userPolylineAttrs[static_cast<size_t>(e.index)].transparency = stored;
+    } else if (e.type == SelectedEntity::Type::FeatureLine) {
+      const int nf =
+          static_cast<int>(cmd.featureLineOffsets.size() > 0 ? cmd.featureLineOffsets.size() - 1 : 0);
+      if (e.index < 0 || e.index >= nf || static_cast<size_t>(e.index) >= cmd.featureLineAttrs.size())
+        continue;
+      cmd.featureLineAttrs[static_cast<size_t>(e.index)].transparency = stored;
     }
   }
   BumpCadGpuCache(cmd);
@@ -7015,12 +7091,23 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   int nPdf  = 0;
   int nSurf = 0;
   int firstSurfIx = -1;
+  int nFl = 0;
+  int firstFlIx = -1;
+  int nPoly = 0;
+  int nArc = 0;
   for (const auto& e : sel) {
     if      (e.type == SelectedEntity::Type::LineSeg)    ++nLine;
     else if (e.type == SelectedEntity::Type::Circle)     ++nCirc;
     else if (e.type == SelectedEntity::Type::Annotation) ++nAnn;
     else if (e.type == SelectedEntity::Type::Table) ++nTable;
     else if (e.type == SelectedEntity::Type::PdfUnderlay)++nPdf;
+    else if (e.type == SelectedEntity::Type::Polyline) ++nPoly;
+    else if (e.type == SelectedEntity::Type::Arc) ++nArc;
+    else if (e.type == SelectedEntity::Type::FeatureLine) {
+      ++nFl;
+      if (firstFlIx < 0)
+        firstFlIx = e.index;
+    }
     else if (e.type == SelectedEntity::Type::Surface) {
       ++nSurf;
       if (firstSurfIx < 0)
@@ -7054,6 +7141,10 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
     ImGui::TextDisabled("%d surfaces", nSurf);
   else if (nSurf == 1)
     ImGui::TextDisabled("TIN Surface");
+  else if (nFl > 1)
+    ImGui::TextDisabled("%d feature lines", nFl);
+  else if (nFl == 1)
+    ImGui::TextDisabled("Feature Line");
   else if (nAnn == 1) {
     int ix = -1;
     for (const auto& e : sel) {
@@ -7079,6 +7170,50 @@ void DrawPropertiesPanel(AppCommandState& cmd, std::vector<std::string>* log) {
   ImGui::Separator();
 
   DrawEditableGeneralSection(cmd, sel);
+
+  if (nFl == 1 && firstFlIx >= 0 && static_cast<size_t>(firstFlIx) < cmd.featureLineInfo.size()) {
+    CadFeatureLineInfo& inf = cmd.featureLineInfo[static_cast<size_t>(firstFlIx)];
+    ImGui::Separator();
+    ImGui::TextUnformatted("Feature line");
+    char nameBuf[128];
+    std::snprintf(nameBuf, sizeof(nameBuf), "%s", inf.name.c_str());
+    if (ImGui::InputText("Name", nameBuf, sizeof(nameBuf)))
+      inf.name = nameBuf;
+    char styleBuf[64];
+    std::snprintf(styleBuf, sizeof(styleBuf), "%s", inf.style.c_str());
+    if (ImGui::InputText("Style", styleBuf, sizeof(styleBuf)))
+      inf.style = styleBuf;
+    char siteBuf[64];
+    std::snprintf(siteBuf, sizeof(siteBuf), "%s", inf.site.c_str());
+    if (ImGui::InputText("Site", siteBuf, sizeof(siteBuf)))
+      inf.site = siteBuf;
+    if (static_cast<size_t>(firstFlIx) < cmd.featureLineAttrs.size()) {
+      char layerBuf[64];
+      std::snprintf(layerBuf, sizeof(layerBuf), "%s", cmd.featureLineAttrs[static_cast<size_t>(firstFlIx)].layer.c_str());
+      if (ImGui::InputText("Layer", layerBuf, sizeof(layerBuf)))
+        cmd.featureLineAttrs[static_cast<size_t>(firstFlIx)].layer = layerBuf;
+    }
+    ImGui::Text("Elevations: %s", inf.elevMode == CadFeatureLineInfo::ElevMode::Relative ? "relative" : "absolute");
+    if (ImGui::Button("Elevation editor")) {
+      cmd.featureLineElevIndex = firstFlIx;
+      cmd.showFeatureLineElevWindow = true;
+    }
+    if (log) {
+      ImGui::SameLine();
+      if (ImGui::Button("FL Properties")) {
+        char tmp[64];
+        std::snprintf(tmp, sizeof(tmp), "FLPROPERTIES %d", firstFlIx + 1);
+        ProcessCommandLineSubmit(tmp, static_cast<int>(sizeof(tmp)), cmd, *log);
+      }
+    }
+  }
+
+  if (nFl == 0 && (nLine > 0 || nArc > 0 || nPoly > 0) && log) {
+    if (ImGui::Button("Create feature line from objects")) {
+      char tmp[48] = "FEATURELINESFROMOBJECTS";
+      ProcessCommandLineSubmit(tmp, static_cast<int>(sizeof(tmp)), cmd, *log);
+    }
+  }
 
   // TIN surface (REQ-068 / ADR-036 (b)). Read-only by design: everything below is DERIVED from the
   // definition, so an editable field here would be a second source of truth that the next rebuild
@@ -8100,6 +8235,7 @@ void DrawCadStatusBarStrip(AppCommandState& cmd, double cursorX, double cursorY,
         ImGui::Checkbox("Intersection", &cmd.objectSnapIntersection);
         ImGui::Checkbox("Apparent intersection", &cmd.objectSnapApparentIntersection);
         ImGui::Checkbox("Surface elevation", &cmd.objectSnapSurface);
+        ImGui::Checkbox("Nearest", &cmd.objectSnapNearest);
         ImGui::EndPopup();
       }
       ImGui::SameLine(0, sp);
@@ -10149,6 +10285,8 @@ static const char* SnapKindLabelForUi(CadSnap::Kind k) {
     return "Apparent int";
   case CadSnap::Kind::Surface:
     return "Surface";
+  case CadSnap::Kind::Nearest:
+    return "Nearest";
   case CadSnap::Kind::Grip:
     return "Grip";
   }
@@ -11759,13 +11897,29 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
     if (surfaceReadoutAllowed) {
       const HoverDwellTick tick = UpdateHoverDwell(&cmd.surfaceHoverDwell, mx, my, nowSec,
                                                    kSurfaceRolloverMoveTolPx, kSurfaceRolloverDwellSec);
-      if (tick.moved)
-        cmd.surfaceHoverRows.clear();  // the latched text is about a place the cursor has left
-      else if (tick.elapsed)
+      if (tick.moved) {
+        cmd.surfaceHoverRows.clear();
+        cmd.featureLineHoverValid = false;
+      } else if (tick.elapsed) {
         BuildSurfaceHoverRows(cmd, rawX, rawY, &cmd.surfaceHoverRows);
+        int fi = -1;
+        float hx = 0.f, hy = 0.f, hz = 0.f;
+        const float hoverTol = CadHoverEntityPickTolWorld(cmd);
+        if (ClosestFeatureLinePoint(cmd, rawX, rawY, hoverTol, &fi, &hx, &hy, &hz)) {
+          cmd.featureLineHoverValid = true;
+          cmd.featureLineHoverName =
+              (fi >= 0 && static_cast<size_t>(fi) < cmd.featureLineInfo.size()) ? cmd.featureLineInfo[static_cast<size_t>(fi)].name
+                                                                               : std::string();
+          cmd.featureLineHoverElevation = FormatLinear(static_cast<double>(hz), cmd.displayLinearPrecision);
+        } else {
+          cmd.featureLineHoverValid = false;
+        }
+      }
       const bool onPoint = cmd.viewportHoverSurveyPointIndex >= 0;
       if (onPoint && tick.settled)
         DrawSurveyPointRolloverReadout(cmd, cmd.viewportHoverSurveyPointIndex);
+      else if (cmd.featureLineHoverValid && tick.settled)
+        DrawFeatureLineRolloverReadout(cmd);
       else
         DrawSurfaceRolloverReadout(cmd);
     } else {
@@ -11773,6 +11927,7 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       // the timer rather than merely leaving it, so coming back costs a fresh dwell instead of
       // firing instantly on a timer that kept running while the readout was hidden.
       cmd.surfaceHoverRows.clear();
+      cmd.featureLineHoverValid = false;
       ResetHoverDwell(&cmd.surfaceHoverDwell, mx, my, nowSec);
     }
   }
@@ -11904,6 +12059,14 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
           static_cast<size_t>(cmd.entityGripOrigPolylineXIdx + 1) < cmd.userPolylineVerts.size()) {
         cmd.userPolylineVerts[static_cast<size_t>(cmd.entityGripOrigPolylineXIdx)] = cmd.entityGripOrigPolyVertX;
         cmd.userPolylineVerts[static_cast<size_t>(cmd.entityGripOrigPolylineXIdx) + 1] = cmd.entityGripOrigPolyVertY;
+      }
+      break;
+    }
+    case SelectedEntity::Type::FeatureLine: {
+      if (cmd.entityGripOrigPolylineXIdx >= 0 &&
+          static_cast<size_t>(cmd.entityGripOrigPolylineXIdx + 1) < cmd.featureLineVerts.size()) {
+        cmd.featureLineVerts[static_cast<size_t>(cmd.entityGripOrigPolylineXIdx)] = cmd.entityGripOrigPolyVertX;
+        cmd.featureLineVerts[static_cast<size_t>(cmd.entityGripOrigPolylineXIdx) + 1] = cmd.entityGripOrigPolyVertY;
       }
       break;
     }
@@ -12385,6 +12548,21 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             }
             break;
           }
+          case SelectedEntity::Type::FeatureLine: {
+            const int nf = cmd.featureLineOffsets.size() > 0 ? static_cast<int>(cmd.featureLineOffsets.size() - 1) : 0;
+            if (sel.index >= 0 && sel.index < nf) {
+              const int startV = cmd.featureLineOffsets[static_cast<size_t>(sel.index)];
+              const int endV = cmd.featureLineOffsets[static_cast<size_t>(sel.index + 1)];
+              for (int vi = 0; vi < endV - startV; ++vi) {
+                const size_t xIdx = static_cast<size_t>(startV + vi) * 3;
+                if (xIdx + 2 >= cmd.featureLineVerts.size())
+                  break;
+                tryGrip(sel, cmd.featureLineVerts[xIdx], cmd.featureLineVerts[xIdx + 1],
+                        cmd.featureLineVerts[xIdx + 2], vi);
+              }
+            }
+            break;
+          }
           case SelectedEntity::Type::Arc: {
             if (sel.index >= 0 && static_cast<size_t>(sel.index) < cmd.userArcs.size()) {
               const CadArc& a = cmd.userArcs[static_cast<size_t>(sel.index)];
@@ -12449,6 +12627,15 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
             cmd.entityGripOrigPolylineXIdx = static_cast<int>(xIdx);
             cmd.entityGripOrigPolyVertX    = cmd.userPolylineVerts[xIdx];
             cmd.entityGripOrigPolyVertY    = cmd.userPolylineVerts[xIdx + 1];
+            break;
+          }
+          case SelectedEntity::Type::FeatureLine: {
+            const int startV = cmd.featureLineOffsets[static_cast<size_t>(bestSel.index)];
+            const int globalV = startV + bestWhich;
+            const size_t xIdx = static_cast<size_t>(globalV) * 3;
+            cmd.entityGripOrigPolylineXIdx = static_cast<int>(xIdx);
+            cmd.entityGripOrigPolyVertX = cmd.featureLineVerts[xIdx];
+            cmd.entityGripOrigPolyVertY = cmd.featureLineVerts[xIdx + 1];
             break;
           }
           case SelectedEntity::Type::Arc: {
@@ -13284,6 +13471,20 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
                 if (xIdx + 1 >= cmd.userPolylineVerts.size())
                   break;
                 drawGrip(cmd.userPolylineVerts[xIdx], cmd.userPolylineVerts[xIdx + 1], hot(vi2));
+              }
+            }
+            break;
+          }
+          case SelectedEntity::Type::FeatureLine: {
+            const int nf = cmd.featureLineOffsets.size() > 0 ? static_cast<int>(cmd.featureLineOffsets.size() - 1) : 0;
+            if (sel.index >= 0 && sel.index < nf) {
+              const int startV = cmd.featureLineOffsets[static_cast<size_t>(sel.index)];
+              const int endV = cmd.featureLineOffsets[static_cast<size_t>(sel.index + 1)];
+              for (int vi2 = 0; vi2 < endV - startV; ++vi2) {
+                const size_t xIdx = static_cast<size_t>(startV + vi2) * 3;
+                if (xIdx + 1 >= cmd.featureLineVerts.size())
+                  break;
+                drawGrip(cmd.featureLineVerts[xIdx], cmd.featureLineVerts[xIdx + 1], hot(vi2));
               }
             }
             break;
@@ -15656,6 +15857,8 @@ void DrawDrawingViewport(unsigned int viewportTextureId, AppCommandState& cmd, s
       armOverride(CadSnap::Kind::ApparentIntersection);
     if (ImGui::Selectable("Surface"))
       armOverride(CadSnap::Kind::Surface);
+    if (ImGui::Selectable("Nearest"))
+      armOverride(CadSnap::Kind::Nearest);
     ImGui::EndPopup();
   }
 

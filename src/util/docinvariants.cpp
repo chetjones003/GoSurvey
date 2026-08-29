@@ -223,6 +223,16 @@ void CheckDocumentInvariants(const AppCommandState& st, std::vector<InvariantVio
               " flags but featureLineVerts holds " + std::to_string(vertexCount) +
               " vertices; the flag array is per vertex");
     }
+    if (st.featureLineBulge.size() != static_cast<size_t>(vertexCount)) {
+      Add(out, docinv::kFeatureLineOffsets,
+          "featureLineBulge holds " + std::to_string(st.featureLineBulge.size()) +
+              " values but featureLineVerts holds " + std::to_string(vertexCount) + " vertices");
+    }
+    if (st.featureLineRelOffset.size() != static_cast<size_t>(vertexCount)) {
+      Add(out, docinv::kFeatureLineOffsets,
+          "featureLineRelOffset holds " + std::to_string(st.featureLineRelOffset.size()) +
+              " values but featureLineVerts holds " + std::to_string(vertexCount) + " vertices");
+    }
 
     int prev = 0;
     for (size_t i = 0; i < st.featureLineOffsets.size(); ++i) {

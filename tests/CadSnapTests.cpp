@@ -184,3 +184,45 @@ TEST_CASE("Surface snap interpolates the covering TIN and misses outside", "[Cad
   const CadSnap::Hit off = CadSnap::FindBest(250.0, 250.0, st, /*commandActive=*/true, kTol);
   CHECK_FALSE(off.valid);
 }
+
+TEST_CASE("FindBest snaps a feature-line endpoint", "[CadSnap][req158]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = true;
+  st.featureLineOffsets = {0, 2};
+  st.featureLineVerts = {0.f, 0.f, 10.f, 100.f, 0.f, 12.f};
+  st.featureLineClosed = {0};
+  st.featureLineElevPt = {0, 0};
+  st.featureLineBulge = {0.f, 0.f};
+  st.featureLineRelOffset = {0.f, 0.f};
+  st.featureLineInfo.push_back({});
+  st.featureLineAttrs.push_back({});
+
+  const CadSnap::Hit hit = CadSnap::FindBest(0.0, 0.0, st, /*commandActive=*/true, kTol);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Endpoint);
+  CHECK(hit.x == Catch::Approx(0.f));
+  CHECK(hit.y == Catch::Approx(0.f));
+  CHECK(hit.z == Catch::Approx(10.f));
+}
+
+TEST_CASE("FindBest nearest snap on a feature-line segment", "[CadSnap][req158]") {
+  AppCommandState st;
+  st.objectSnapEndpoint = false;
+  st.objectSnapMidpoint = false;
+  st.objectSnapNearest = true;
+  st.featureLineOffsets = {0, 2};
+  st.featureLineVerts = {0.f, 0.f, 10.f, 100.f, 0.f, 12.f};
+  st.featureLineClosed = {0};
+  st.featureLineElevPt = {0, 0};
+  st.featureLineBulge = {0.f, 0.f};
+  st.featureLineRelOffset = {0.f, 0.f};
+  st.featureLineInfo.push_back({});
+  st.featureLineAttrs.push_back({});
+
+  const CadSnap::Hit hit = CadSnap::FindBest(40.0, 1.0, st, /*commandActive=*/true, kTol);
+  REQUIRE(hit.valid);
+  CHECK(hit.kind == Kind::Nearest);
+  CHECK(hit.x == Catch::Approx(40.f).margin(0.2f));
+  CHECK(hit.y == Catch::Approx(0.f).margin(0.2f));
+  CHECK(hit.z == Catch::Approx(10.8f).margin(0.2f));
+}

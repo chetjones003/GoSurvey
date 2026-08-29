@@ -3,6 +3,7 @@
 #include "CadLinetype.hpp"
 #include "CadSnap.hpp"
 #include "geom2d.hpp"
+#include "util/featurelinegeom.hpp"
 
 #include <GL/glew.h>
 
@@ -255,7 +256,7 @@ void AppendChainEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput&
                         const std::vector<float>* V, const std::vector<int>* O,
                         const std::vector<uint8_t>* Cl, const std::vector<EntityAttributes>* At,
                         float defR, float defG, float defB, float dashPatScale, double viewAnchorX,
-                        double viewAnchorY) {
+                        double viewAnchorY, const std::vector<float>* bulge = nullptr) {
   if (!V || !O || O->size() < 2)
     return;
   const int np = static_cast<int>(O->size()) - 1;
@@ -263,8 +264,6 @@ void AppendChainEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput&
     EntityAttributes attr{};
     if (At && static_cast<size_t>(pi) < At->size())
       attr = (*At)[static_cast<size_t>(pi)];
-    // REQ-084 (d): a polyline isolated out is not drawn. Read from `eg` rather than a parameter —
-    // the hidden set travels with the extended geometry it describes.
     if (CadEntityIdHidden(eg.hiddenEntityIds, attr.id))
       continue;
     const CadLayerRow* lr = LookupLayerRowCi(eg.drawingLayers, attr.layer.empty() ? std::string("0") : attr.layer);
@@ -280,16 +279,33 @@ void AppendChainEdgesVc(std::vector<float>& out, const CadExtendedGeometryInput&
     const int nv = v1 - v0;
     if (nv < 2)
       continue;
-    std::vector<float> xy(static_cast<size_t>(nv * 2));
-    std::vector<float> zs(static_cast<size_t>(nv));
-    for (int k = 0; k < nv; ++k) {
-      const int vi = v0 + k;
-      WorldToViewRelativeFloat(static_cast<double>((*V)[static_cast<size_t>(vi * 3 + 0)]),
-                               static_cast<double>((*V)[static_cast<size_t>(vi * 3 + 1)]), viewAnchorX,
-                               viewAnchorY, &xy[static_cast<size_t>(k * 2)], &xy[static_cast<size_t>(k * 2 + 1)]);
-      zs[static_cast<size_t>(k)] = (*V)[static_cast<size_t>(vi * 3 + 2)];  // absolute, not view-relative (ADR-025 D2)
+    std::vector<float> xy;
+    std::vector<float> zs;
+    const int nEdges = closed ? nv : nv - 1;
+    bool includeStart = true;
+    for (int e = 0; e < nEdges; ++e) {
+      const int ia = v0 + e;
+      const int ib = v0 + ((e + 1) % nv);
+      const size_t a = static_cast<size_t>(ia) * 3;
+      const size_t b = static_cast<size_t>(ib) * 3;
+      const float bu =
+          (bulge && static_cast<size_t>(ia) < bulge->size()) ? (*bulge)[static_cast<size_t>(ia)] : 0.f;
+      std::vector<flgeom::Vec3> tess;
+      flgeom::TessellateBulgeSegment((*V)[a], (*V)[a + 1], (*V)[a + 2], (*V)[b], (*V)[b + 1], (*V)[b + 2], bu,
+                                     &tess, includeStart);
+      includeStart = false;
+      for (const flgeom::Vec3& p : tess) {
+        float vx = 0.f, vy = 0.f;
+        WorldToViewRelativeFloat(p.x, p.y, viewAnchorX, viewAnchorY, &vx, &vy);
+        xy.push_back(vx);
+        xy.push_back(vy);
+        zs.push_back(static_cast<float>(p.z));
+      }
     }
-    CadTessellateLinetypeChainVc(xy.data(), nv, 0.f, closed, lt, dashPatScale, rgba, &out, zs.data());
+    const int npts = static_cast<int>(zs.size());
+    if (npts < 2)
+      continue;
+    CadTessellateLinetypeChainVc(xy.data(), npts, 0.f, closed, lt, dashPatScale, rgba, &out, zs.data());
   }
 }
 
@@ -1549,13 +1565,24 @@ void ViewportRenderer::RenderScene(const Camera& cam, int fbWidth, int fbHeight,
               LookupLayerRowCi(drawingLayers, attr0.layer.empty() ? std::string("0") : attr0.layer);
           maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr0, lr0)));
           AppendChainEdgesVc(cpuVcLines_, *extended, V, O, Cl, At, kLineDefaultR, kLineDefaultG,
-                             kLineDefaultB, dashPatScale, viewAnchorX, viewAnchorY);
+                             kLineDefaultB, dashPatScale, viewAnchorX, viewAnchorY, nullptr);
           lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
         };
         appendChainStore(extended->polylineVerts, extended->polylineOffsets, extended->polylineClosed,
                          extended->polylineAttrs);
-        appendChainStore(extended->featureLineVerts, extended->featureLineOffsets,
-                         extended->featureLineClosed, extended->featureLineAttrs);
+        if (CadChainHasEntities(extended->featureLineVerts, extended->featureLineOffsets)) {
+          const int vb = static_cast<int>(cpuVcLines_.size() / 7);
+          EntityAttributes attr0{};
+          if (extended->featureLineAttrs && !extended->featureLineAttrs->empty())
+            attr0 = (*extended->featureLineAttrs)[0];
+          const CadLayerRow* lr0 =
+              LookupLayerRowCi(drawingLayers, attr0.layer.empty() ? std::string("0") : attr0.layer);
+          maybeSplitLineBatch(vb, LineweightMmToDevicePx(EffectiveEntityLineweightMm(attr0, lr0)));
+          AppendChainEdgesVc(cpuVcLines_, *extended, extended->featureLineVerts, extended->featureLineOffsets,
+                             extended->featureLineClosed, extended->featureLineAttrs, kLineDefaultR, kLineDefaultG,
+                             kLineDefaultB, dashPatScale, viewAnchorX, viewAnchorY, extended->featureLineBulge);
+          lineVertTotal = static_cast<int>(cpuVcLines_.size() / 7);
+        }
         if (lineVertTotal > lineBatchStart && lineBatchPx >= 0.f)
           vcLineBatches_.push_back(VcLineBatch{lineBatchStart, lineVertTotal - lineBatchStart, lineBatchPx});
       }

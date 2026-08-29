@@ -475,6 +475,8 @@ static void DrawSettingsDraftingTab(AppCommandState& cmd) {
   ImGui::Checkbox("Surface elevation (interpolated TIN at the cursor)", &cmd.objectSnapSurface);
   ItemHelpTooltip("Snaps to the covering visible surface's triangle plane at the cursor (REQ-127). "
                   "Weaker than endpoints so vertices still win. Off: no surface snap.");
+  ImGui::Checkbox("Nearest (closest point on an edge)", &cmd.objectSnapNearest);
+  ItemHelpTooltip("Snaps to the closest point on a line, polyline, arc, or feature line.");
   ImGui::Separator();
   ImGui::TextWrapped(
       "With a command active (LINE, CIRCLE, …), Shift+right-click anywhere on the drawing: choose a snap type, "

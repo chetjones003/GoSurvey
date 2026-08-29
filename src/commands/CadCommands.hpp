@@ -703,6 +703,7 @@ struct CadExtendedGeometryInput {
   const std::vector<int>* featureLineOffsets = nullptr;
   const std::vector<uint8_t>* featureLineClosed = nullptr;
   const std::vector<EntityAttributes>* featureLineAttrs = nullptr;
+  const std::vector<float>* featureLineBulge = nullptr;  ///< REQ-155 display tessellation only
   const std::vector<CadLayerRow>* drawingLayers = nullptr;
   /// Sorted stable entity ids hidden by object isolation (REQ-084 (d), ADR-034); nullptr or empty
   /// means nothing is hidden. Carried here rather than as another `RenderScene` parameter — that
@@ -865,6 +866,8 @@ struct DrawingGeometrySnapshot {
   std::vector<float>              featureLineVerts;
   std::vector<uint8_t>            featureLineClosed;
   std::vector<uint8_t>            featureLineElevPt;
+  std::vector<float>              featureLineBulge;
+  std::vector<float>              featureLineRelOffset;
   std::vector<CadFeatureLineInfo> featureLineInfo;
   std::vector<EntityAttributes>   featureLineAttrs;
   std::vector<CadAnnotation>    cadAnnotations;
@@ -933,6 +936,8 @@ struct DrawingDocument {
   std::vector<float>              featureLineVerts;
   std::vector<uint8_t>            featureLineClosed;
   std::vector<uint8_t>            featureLineElevPt;
+  std::vector<float>              featureLineBulge;
+  std::vector<float>              featureLineRelOffset;
   std::vector<CadFeatureLineInfo> featureLineInfo;
   std::vector<EntityAttributes>   featureLineAttrs;
   std::vector<CadAnnotation>    cadAnnotations;
@@ -1531,6 +1536,7 @@ struct AppCommandState {
   /// as in AutoCAD: it fires on objects that do not touch, which is surprising unless asked for.
   bool objectSnapApparentIntersection = false;
   bool objectSnapSurface = true;
+  bool objectSnapNearest = true;
   /// Screen-space aperture (pixels) for object snap tolerance and related viewport picks.
   float objectSnapAperturePx = 14.f;
   /// Half-size in screen pixels for green object-snap glyphs (square / triangle / circle overlay).
@@ -1808,6 +1814,8 @@ struct AppCommandState {
   std::vector<float> featureLineVerts;
   std::vector<uint8_t> featureLineClosed;
   std::vector<uint8_t> featureLineElevPt;
+  std::vector<float> featureLineBulge;      ///< REQ-155: outgoing bulge per vertex (0 = line)
+  std::vector<float> featureLineRelOffset;  ///< REQ-159: Z − surfaceZ when Relative
   std::vector<CadFeatureLineInfo> featureLineInfo;
   std::vector<EntityAttributes> featureLineAttrs;
 
@@ -1833,6 +1841,17 @@ struct AppCommandState {
   /// worked, `E` had to be followed by coordinates on the same line; with a click supplying them,
   /// the flag has to survive until the click arrives.
   bool featureLineNextIsElevPoint = false;
+  /// During FEATURELINE, `A` arms a two-click arc: through-point then end (REQ-155).
+  bool featureLineDraftArcArmed = false;
+  bool featureLineDraftArcThroughValid = false;
+  float featureLineDraftArcThroughX = 0.f;
+  float featureLineDraftArcThroughY = 0.f;
+  float featureLineDraftArcThroughZ = 0.f;
+  std::vector<float> featureLineDraftBulge;
+  /// Rollover (issue #118): latched when the cursor rests on a feature line.
+  bool featureLineHoverValid = false;
+  std::string featureLineHoverName;
+  std::string featureLineHoverElevation;
 
   /// POLYLINE command draft — XYZ vertices (two or more before commit).
   std::vector<float> polylineDraftVerts;
@@ -3297,6 +3316,10 @@ enum class SurfaceState { Current, Stale, Rebuilding };
 void BuildSurfaceHoverRows(const AppCommandState& st, double x, double y,
                            std::vector<SurfaceHoverRow>* out);
 
+/// Closest 3D point on a feature line's tessellated path within \p tolWorld (issue #118 hover / nearest).
+[[nodiscard]] bool ClosestFeatureLinePoint(const AppCommandState& st, double wx, double wy, float tolWorld,
+                                           int* outFi, float* outX, float* outY, float* outZ);
+
 /// REQ-127: interpolated Z of the last covering visible surface at plan (x,y), or false if none.
 [[nodiscard]] bool SurfaceSnapElevation(const AppCommandState& st, double x, double y, float* outZ);
 
@@ -3348,6 +3371,9 @@ void EraseSurfaceAtIndex(AppCommandState& st, size_t index);
 /// is what makes a single command that touches N points, or N surfaces, coalesce to at most one
 /// rebuild per surface rather than N.
 void TickSurfaceRebuilds(AppCommandState& st, std::vector<std::string>& log);
+
+/// REQ-159: re-apply surface Z + stored offsets on every feature line in Relative mode.
+void RefreshRelativeFeatureLineElevations(AppCommandState& st);
 
 /// Advances the Volume Dashboard's own live recompute (REQ-073 amendment, TASK-095). Call every
 /// frame, after \ref TickSurfaceRebuilds so a surface that finished rebuilding this frame is already
@@ -3806,7 +3832,7 @@ void EraseCadAnnotationAtIndex(AppCommandState& st, size_t annIndex);
 void DeleteSelectedSurveyPoints(AppCommandState& st, std::vector<std::string>& log);
 void SyncSurveyPointLinkedMtextSelection(AppCommandState& st, int surveyPointIndex);
 void ApplyLinkedSurveyForAnnotationPick(AppCommandState& st, int annIndex, bool keyShift);
-void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log);
+void ExecuteDeleteSelection(AppCommandState& st, std::vector<std::string>& log, bool pushUndo = true);
 /// Join selected lines / polylines at coincident endpoints into polylines (window-select like DELETE).
 void ExecuteJoinSelection(AppCommandState& st, std::vector<std::string>& log);
 /// OVERKILL — remove zero-length segments, exact duplicates, collinear overlapping/contiguous lines
